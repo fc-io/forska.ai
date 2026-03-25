@@ -1,34 +1,29 @@
 import {Elysia, t} from 'elysia'
 
-import {requireUserAuth} from '../utils/authGuard.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {humanAssessmentRoutesGetOverview} from './HumanAssessmentRoutes/humanAssessmentRoutesGetOverview.ts'
 import {humanAssessmentRoutesGetOverviewBothProjects} from './HumanAssessmentRoutes/humanAssessmentRoutesGetOverviewBothProjects.ts'
-import {humanAssessmentRoutesGetOverviewBothUsers} from './HumanAssessmentRoutes/humanAssessmentRoutesGetOverviewBothUsers.ts'
 import {humanAssessmentRoutesPostInit} from './HumanAssessmentRoutes/humanAssessmentRoutesPostInit.ts'
 import {humanAssessmentRoutesPostSubmit} from './HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.ts'
+import {assertProjectIsActive} from './projectsRoutes/projectAccessGuard.ts'
 
 export const humanAssessmentRoutes = new Elysia()
   .use(withErrorHandler())
   .use(
     new Elysia()
-      .use(requireUserAuth())
       .get('/api/humanassessment/overview', async ({request, set}) => {
         return humanAssessmentRoutesGetOverview({request, set})
       })
       .get('/api/humanassessment/overview-both-projects', async ({request, set}) => {
         return humanAssessmentRoutesGetOverviewBothProjects({request, set})
-      })
-      .get('/api/humanassessment/overview-both-users', async ({request, set}) => {
-        return humanAssessmentRoutesGetOverviewBothUsers({request, set})
       }),
   )
   .use(
     new Elysia()
-      .use(requireUserAuth())
       .post(
         '/api/humanassessment/init',
         async ({body, set}) => {
+          await assertProjectIsActive(body.projectId)
           return humanAssessmentRoutesPostInit({body, set})
         },
         {body: t.Object({projectId: t.String()})},
@@ -36,6 +31,7 @@ export const humanAssessmentRoutes = new Elysia()
       .post(
         '/api/humanassessment/submit',
         async ({body, set}) => {
+          await assertProjectIsActive(body.projectId)
           return humanAssessmentRoutesPostSubmit({body, set})
         },
         {

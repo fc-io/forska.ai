@@ -1,6 +1,6 @@
-import {env} from '../../utils/env.ts'
 import {workerLoadBalancer} from '../../utils/workerLoadBalancer.ts'
 import {ConnectionError, isCircuitOpen} from './connectionHealth.ts'
+import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 
 type RequestSlot = {baseURL: string; release: () => void}
@@ -8,13 +8,12 @@ type RequestSlot = {baseURL: string; release: () => void}
 type RequestWaiter<T> = {resolve: (value: T) => void; reject: (error: unknown) => void}
 
 type FallbackWaiter = RequestWaiter<RequestSlot> & {baseURL: string}
+type WorkerWaiter = RequestWaiter<RequestSlot> & {workerUrls: string[]}
 
 type JobRequestState = {inFlight: number; pendingPersistedAttempts: number}
 
-const DEFAULT_CODEX_MAX_INFLIGHT = 1
-
 const codexWaiters: RequestWaiter<() => void>[] = []
-const workerWaiters: RequestWaiter<RequestSlot>[] = []
+const workerWaiters: WorkerWaiter[] = []
 const fallbackWaiters: FallbackWaiter[] = []
 const jobRequestStates = new Map<string, JobRequestState>()
 
@@ -26,12 +25,6 @@ const normalizeProvider = (value: string | null | undefined): string => {
     .trim()
     .toLowerCase()
   return v.length > 0 ? v : 'unknown'
-}
-
-const getCodexMaxInflight = (): number => {
-  const raw = Number(process.env.CODEX_MAX_INFLIGHT)
-  const normalized = Number.isFinite(raw) ? Math.trunc(raw) : 0
-  return normalized > 0 ? normalized : DEFAULT_CODEX_MAX_INFLIGHT
 }
 
 const getNonCodexCapacity = () => {
@@ -66,14 +59,14 @@ const markRequestFinished = (judgmentsJobId: string): void => {
   trimJobRequestState(judgmentsJobId)
 }
 
-const buildWorkerCircuitError = (): ConnectionError => {
-  const firstWorker = env.WORKER_URLS[0]
+const buildWorkerCircuitError = (workerUrls: string[]): ConnectionError => {
+  const firstWorker = workerUrls[0]
   const baseURL = firstWorker ? `${firstWorker}/v1` : 'worker://unavailable'
   return new ConnectionError('All inference workers blocked by circuit breaker', baseURL)
 }
 
-const hasHealthyWorker = (): boolean => {
-  return env.WORKER_URLS.some((url) => {
+const hasHealthyWorker = (workerUrls: string[]): boolean => {
+  return workerUrls.some((url) => {
     return !isCircuitOpen(`${url}/v1`)
   })
 }
@@ -121,9 +114,10 @@ const buildWorkerSlot = (workerUrl: string): RequestSlot => {
   }
 }
 
-const tryAcquireWorkerSlot = (): RequestSlot | null => {
+const tryAcquireWorkerSlot = (workerUrls: string[]): RequestSlot | null => {
   const workerUrl = workerLoadBalancer.acquireWorkerUrl({
     maxActiveRequests: getNonCodexCapacity().perWorkerMaxInflightRequests,
+    workerUrls,
     canUse: (url) => {
       return !isCircuitOpen(`${url}/v1`)
     },
@@ -134,7 +128,7 @@ const tryAcquireWorkerSlot = (): RequestSlot | null => {
 
 const drainWorkerWaiters = (): void => {
   const waiter = workerWaiters[0]
-  const slot = waiter ? tryAcquireWorkerSlot() : null
+  const slot = waiter ? tryAcquireWorkerSlot(waiter.workerUrls) : null
 
   if (waiter && slot) {
     workerWaiters.shift()
@@ -142,21 +136,21 @@ const drainWorkerWaiters = (): void => {
     drainWorkerWaiters()
   }
 
-  if (waiter && !slot && !hasHealthyWorker()) {
+  if (waiter && !slot && !hasHealthyWorker(waiter.workerUrls)) {
     workerWaiters.shift()
-    waiter.reject(buildWorkerCircuitError())
+    waiter.reject(buildWorkerCircuitError(waiter.workerUrls))
     drainWorkerWaiters()
   }
 }
 
-const acquireWorkerSlot = async (): Promise<RequestSlot> => {
-  const slot = tryAcquireWorkerSlot()
+const acquireWorkerSlot = async (workerUrls: string[]): Promise<RequestSlot> => {
+  const slot = tryAcquireWorkerSlot(workerUrls)
 
   if (slot) return slot
-  if (!hasHealthyWorker()) throw buildWorkerCircuitError()
+  if (!hasHealthyWorker(workerUrls)) throw buildWorkerCircuitError(workerUrls)
 
   return new Promise((resolve, reject) => {
-    workerWaiters.push({resolve, reject})
+    workerWaiters.push({reject, resolve, workerUrls})
   })
 }
 
@@ -216,16 +210,18 @@ const acquireFallbackSlot = async (baseURL: string): Promise<RequestSlot> => {
 const acquireRequestSlot = async ({
   provider,
   fallbackBaseURL,
+  workerUrls,
 }: {
   provider: string | null | undefined
   fallbackBaseURL: string
+  workerUrls: string[]
 }): Promise<RequestSlot> => {
   return normalizeProvider(provider) === 'codex'
     ? acquireCodexRelease().then((release) => {
         return {baseURL: fallbackBaseURL, release}
       })
-    : env.WORKER_URLS.length > 0
-      ? acquireWorkerSlot()
+    : workerUrls.length > 0
+      ? acquireWorkerSlot(workerUrls)
       : acquireFallbackSlot(fallbackBaseURL)
 }
 
@@ -247,10 +243,11 @@ export const withJudgmentRequest = async <T>(
     judgmentsJobId,
     provider,
     fallbackBaseURL,
-  }: {judgmentsJobId: string; provider: string | null | undefined; fallbackBaseURL: string},
+    workerUrls,
+  }: {judgmentsJobId: string; provider: string | null | undefined; fallbackBaseURL: string; workerUrls: string[]},
   run: (baseURL: string) => Promise<T>,
 ): Promise<T> => {
-  const slot = await acquireRequestSlot({provider, fallbackBaseURL})
+  const slot = await acquireRequestSlot({fallbackBaseURL, provider, workerUrls})
   markRequestStarted(judgmentsJobId)
 
   try {

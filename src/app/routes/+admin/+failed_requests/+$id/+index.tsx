@@ -37,8 +37,6 @@ type FailedRequest = {
   failedRequests: number | null
   failedRequestsDetails: FailedRequestDetailItem[] | null
   totalTokens: number
-  userId: string | null
-  sessionId: string | null
   requests: number
   successfulRequests: number | null
 }
@@ -127,6 +125,7 @@ const FailedRequestDetail = () => {
       },
       enabled: Boolean(id()),
       retry: false,
+      staleTime: 5 * 60 * 1000,
     }
   })
 
@@ -241,7 +240,7 @@ const FailedRequestDetail = () => {
                                   <Show when={request().projectId} fallback={detail.articleId}>
                                     <Link
                                       // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
-                                      to={`/projects/${request().projectId}/reviews/${detail.articleId}` as any}
+                                      to={`/projects/${request().projectId}/reviews-llm/${detail.articleId}` as any}
                                       class="text-blue-600 hover:underline"
                                     >
                                       {detail.articleId}

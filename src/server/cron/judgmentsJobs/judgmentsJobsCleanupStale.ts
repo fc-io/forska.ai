@@ -1,10 +1,13 @@
-import {lt} from 'drizzle-orm'
-import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
+import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
+import {getTimestampLiteral} from '../../services/appQueryHelpers.ts'
+import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 
-import * as schema from '../../../db/schema.ts'
-
-export const judgmentsJobsCleanupStale = async (db: PostgresJsDatabase<typeof schema>): Promise<void> => {
+export const judgmentsJobsCleanupStale = async (): Promise<void> => {
   const sixteenMinutesAgo = new Date(Date.now() - 16 * 60 * 1000)
 
-  await db.delete(schema.judgmentsJobsPrompts).where(lt(schema.judgmentsJobsPrompts.updatedAt, sixteenMinutesAgo))
+  await getJudgmentJobSqliteService().reapStaleOutboxClaims({staleBefore: sixteenMinutesAgo})
+  await getAppDatabaseService().run(`
+    DELETE FROM app.judgment_job_prompt
+    WHERE updated_at < ${getTimestampLiteral(sixteenMinutesAgo)}
+  `)
 }

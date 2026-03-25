@@ -1,46 +1,51 @@
-// import {cookie} from '@elysiajs/cookie'
-import {eq} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {user} from '../../../auth-schema'
-import {localUserId} from '../../utils/localUser.ts'
-import {requireUserAuth} from '../utils/authGuard.ts'
-import {getDatabase} from '../utils/getDatabase.ts'
+import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
+import {readLocalAppSettings, updateLocalAppSettings} from '../utils/localAppSettings.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
+
+const getNullableString = (value: string | null): string | null => {
+  const normalized = String(value ?? '').trim()
+
+  return normalized === '' ? null : normalized
+}
+
+const getLocalUserSettings = async () => {
+  const userConfig = await getUserConfigQueryService().getOrCreateUserConfig()
+  const localAppSettings = readLocalAppSettings()
+
+  return {...userConfig, codexBin: localAppSettings.codexBin, duckdbBin: localAppSettings.duckdbBin}
+}
 
 export const usersRoutes = new Elysia()
   .use(withErrorHandler())
-  .use(
-    new Elysia().use(requireUserAuth()).get('/api/users', async () => {
-      const db = getDatabase()
-      const users = await db.select().from(user).orderBy(user.createdAt)
-      return {data: users}
-    }),
-  )
-  .use(
-    new Elysia().use(requireUserAuth()).patch(
-      '/api/users/:id',
-      async ({params, body, set}) => {
-        const sessionUserId = localUserId
-        if (sessionUserId !== params.id) {
-          set.status = 403
-          return {data: null, error: 'You are not allowed to update this user'}
-        }
+  .get('/api/users', async () => {
+    return {data: [await getLocalUserSettings()]}
+  })
+  .patch(
+    '/api/users',
+    async ({body}) => {
+      const localAppSettings = updateLocalAppSettings({
+        codexBin: getNullableString(body.codexBin),
+        duckdbBin: getNullableString(body.duckdbBin),
+      })
+      const userConfig = await getUserConfigQueryService().updateUserConfig({
+        email: body.email,
+        fullTextConversionModelId: getNullableString(body.fullTextConversionModelId),
+        name: body.name,
+        unpaywallEmail: getNullableString(body.unpaywallEmail),
+      })
 
-        const db = getDatabase()
-        const [updatedUser] = await db
-          .update(user)
-          .set({name: body.name, updatedAt: new Date()})
-          .where(eq(user.id, sessionUserId))
-          .returning()
-
-        if (!updatedUser) {
-          set.status = 404
-          return {data: null, error: 'User not found'}
-        }
-
-        return {data: updatedUser}
-      },
-      {body: t.Object({name: t.String()})},
-    ),
+      return {data: {...userConfig, codexBin: localAppSettings.codexBin, duckdbBin: localAppSettings.duckdbBin}}
+    },
+    {
+      body: t.Object({
+        codexBin: t.Union([t.String(), t.Null()]),
+        duckdbBin: t.Union([t.String(), t.Null()]),
+        email: t.String(),
+        fullTextConversionModelId: t.Union([t.String(), t.Null()]),
+        name: t.String(),
+        unpaywallEmail: t.Union([t.String(), t.Null()]),
+      }),
+    },
   )

@@ -1,106 +1,153 @@
-import {and, count, desc, eq, inArray, isNull, or, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {
-  articleRouteLink,
-  articles,
-  importRoute as importRouteTable,
-  judgments,
-  models,
-  projectArticles,
-  projectRouteLink,
-  projects,
-  prompts,
-} from '../../db/schema.ts'
 import {selectArticleIdsByFilterOlap} from '../../services/olap/selectArticleIdsOlap.ts'
+import {getArticleSourceMetadata, getOriginalDoi, normalizeDoi} from '../../utils/articleSourceMetadata.ts'
+import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {
+  escapeSqlString,
+  getDateValue,
+  getJsonValue,
+  getProjectScopeClause,
+  getQuotedStringList,
+  getSqlLiteral,
+  getTimestampLiteral,
+} from '../services/appQueryHelpers.ts'
+import {getAppQueryService} from '../services/getAppQueryService.ts'
 import {getPdfFetchJob, startPdfFetchJob} from '../services/pdfFetchJobs.ts'
-import {requireUserAuth} from '../utils/authGuard.ts'
-import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
+
+type ArticleJudgmentRow = {
+  judgmentId: string
+  judgmentCreatedAt: unknown
+  judgmentUpdatedAt: unknown
+  judgmentDeletedAt: unknown
+  judgmentArticleId: string
+  judgmentModelId: string
+  judgmentPromptId: string
+  judgmentProjectId: string | null
+  judgmentUseTitle: boolean | null
+  judgmentUseAbstract: boolean | null
+  judgmentUseFulltext: boolean | null
+  judgmentUseFulltextNoImages: boolean | null
+  judgmentChunkingStrategy: string | null
+  judgmentIsAnswered: boolean | null
+  judgmentAnsweredOriginal: string | null
+  judgmentAnsweredOriginalAsArray: unknown
+  judgmentConfidenceOriginal: number | null
+  judgmentExplanation: string | null
+  judgmentQuotes: unknown
+  judgmentSnapshotProjectId: string | null
+  judgmentSnapshotProjectModelName: string | null
+  promptOriginalText: string
+  promptHeading: string | null
+  modelName: string | null
+  modelProvider: string | null
+  modelVersion: string | null
+}
+
+const getArticleJudgmentValue = (row: ArticleJudgmentRow) => {
+  const answeredOriginalAsArray = getJsonValue(row.judgmentAnsweredOriginalAsArray)
+  const quotes = getJsonValue(row.judgmentQuotes)
+
+  return {
+    id: row.judgmentId,
+    createdAt: getDateValue(row.judgmentCreatedAt),
+    updatedAt: getDateValue(row.judgmentUpdatedAt),
+    deletedAt: getDateValue(row.judgmentDeletedAt),
+    articleId: row.judgmentArticleId,
+    modelId: row.judgmentModelId,
+    promptId: row.judgmentPromptId,
+    projectId: row.judgmentProjectId,
+    useTitle: row.judgmentUseTitle ?? true,
+    useAbstract: row.judgmentUseAbstract ?? true,
+    useFulltext: row.judgmentUseFulltext ?? false,
+    useFulltextNoImages: row.judgmentUseFulltextNoImages ?? false,
+    chunkingStrategy: row.judgmentChunkingStrategy,
+    isAnswered: row.judgmentIsAnswered ?? false,
+    answeredOriginal: row.judgmentAnsweredOriginal,
+    answeredOriginalAsArray: Array.isArray(answeredOriginalAsArray)
+      ? answeredOriginalAsArray.filter((value): value is string => {
+          return typeof value === 'string'
+        })
+      : null,
+    confidenceOriginal: row.judgmentConfidenceOriginal ?? 50,
+    explanation: row.judgmentExplanation,
+    quotes: Array.isArray(quotes) ? quotes : [],
+    snapshotProjectId: row.judgmentSnapshotProjectId,
+    snapshotProjectModelName: row.judgmentSnapshotProjectModelName,
+    prompt: {originalText: row.promptOriginalText, promptHeading: row.promptHeading},
+    modelName: row.modelName,
+    modelProvider: row.modelProvider,
+    modelVersion: row.modelVersion,
+  }
+}
 
 export const articlesRoutes = new Elysia()
   .use(withErrorHandler())
-  .use(requireUserAuth())
-  .get('/api/unassessed-count', async () => {
-    const db = getDatabase()
-    const result = await db
-      .select({count: count()})
-      .from(articles)
-      .leftJoin(judgments, eq(articles.id, judgments.articleId))
-      .where(isNull(judgments.id))
-
-    return {count: result[0]?.count || 0}
-  })
-  .get('/api/articles/stats', async () => {
-    const db = getDatabase()
-
-    const [totalRow] = await db.select({count: count()}).from(articles)
-
-    // Count by linked import routes (via article_route_link)
-    const linkedCounts = await db
-      .select({importRoute: importRouteTable.route, importRouteName: importRouteTable.name, count: count()})
-      .from(articles)
-      .innerJoin(articleRouteLink, eq(articleRouteLink.articleId, articles.id))
-      .innerJoin(importRouteTable, eq(importRouteTable.id, articleRouteLink.importRouteId))
-      .groupBy(importRouteTable.route, importRouteTable.name)
-
-    // Count articles with NO import_route link via NOT EXISTS
-    const [{count: withoutImportRoute = 0} = {count: 0}] = await db
-      .select({count: sql<number>`COUNT(*)`.as('count')})
-      .from(articles).where(sql`NOT EXISTS (
-        ${db
-          .select({exists: sql`1`})
-          .from(articleRouteLink)
-          .where(eq(articleRouteLink.articleId, articles.id))
-          .limit(1)}
-      )`)
-
-    // Return totals (overall, by route, and without a link)
-    return {total: totalRow?.count ?? 0, byImportRoute: linkedCounts, withoutImportRoute}
-  })
   .get('/api/articles/conversion-stats', async () => {
-    const db = getDatabase()
+    const [[totalFailedRow], lastFailedRows] = await Promise.all([
+      getAppDatabaseService().queryJson<{count: number}>(`
+        SELECT COUNT(*) AS count
+        FROM app.article
+        WHERE full_text_conversion_status = 'failed'
+      `),
+      getAppDatabaseService().queryJson<{
+        id: string
+        articleId: string | null
+        title: string
+        error: string | null
+        attempts: number | null
+        updatedAt: unknown
+      }>(`
+        SELECT
+          id,
+          article_id AS articleId,
+          article_title AS title,
+          full_text_conversion_error AS error,
+          full_text_conversion_attempts AS attempts,
+          updated_at AS updatedAt
+        FROM app.article
+        WHERE full_text_conversion_status = 'failed'
+        ORDER BY updated_at DESC
+        LIMIT 10
+      `),
+    ])
 
-    const [totalFailedRow] = await db
-      .select({count: count()})
-      .from(articles)
-      .where(eq(articles.fullTextConversionStatus, 'failed'))
-
-    const lastFailed = await db
-      .select({
-        id: articles.id,
-        articleId: articles.articleId,
-        title: articles.articleTitle,
-        error: articles.fullTextConversionError,
-        attempts: articles.fullTextConversionAttempts,
-        updatedAt: articles.updatedAt,
-      })
-      .from(articles)
-      .where(eq(articles.fullTextConversionStatus, 'failed'))
-      .orderBy(desc(articles.updatedAt))
-      .limit(10)
+    const lastFailed = lastFailedRows.map((row) => {
+      return {...row, updatedAt: getDateValue(row.updatedAt)}
+    })
 
     return {lastFailed, totalFailed: totalFailedRow?.count ?? 0}
   })
   .post('/api/articles/conversion-reset', async () => {
-    const db = getDatabase()
-
-    await db
-      .update(articles)
-      .set({fullTextConversionStatus: null, fullTextConversionAttempts: 0, fullTextConversionError: null})
-      .where(eq(articles.fullTextConversionStatus, 'failed'))
+    await getAppDatabaseService().run(`
+      UPDATE app.article
+      SET full_text_conversion_status = NULL,
+          full_text_conversion_attempts = 0,
+          full_text_conversion_error = NULL,
+          updated_at = current_timestamp
+      WHERE full_text_conversion_status = 'failed'
+    `)
 
     return {success: true}
   })
   .post('/api/articles/pdf-fetch-reset', () => {
-    const db = getDatabase()
-
-    void db
-      .update(articles)
-      .set({fullTextFetchedAt: null, fullTextPDF: null, fullTextSource: null, fullTextOriginalFormat: null})
-      .where(sql`${articles.fullTextPDF} LIKE 'assets/article_pdfs/%' AND ${articles.fullTextPdfUploadedBy} IS NULL`)
-      .then((result) => {
-        console.log(`[pdf-fetch-reset] Reset ${result.rowCount ?? 0} articles`)
+    void getAppDatabaseService()
+      .run(
+        `
+        UPDATE app.article
+        SET full_text_fetched_at = NULL,
+            full_text_pdf = NULL,
+            full_text_source = NULL,
+            full_text_original_format = NULL,
+            updated_at = current_timestamp
+        WHERE full_text_pdf LIKE 'assets/article_pdfs/%'
+          AND full_text_source IS NOT NULL
+          AND full_text_source != 'user_upload'
+      `,
+      )
+      .then(() => {
+        console.log('[pdf-fetch-reset] Reset fetched article PDFs')
       })
 
     return {success: true, message: 'Reset started in background'}
@@ -158,22 +205,11 @@ export const articlesRoutes = new Elysia()
   .post(
     '/api/articles/pdf-fetch-by-project',
     async ({body, set}) => {
-      const db = getDatabase()
       const fromDate = body.from ? new Date(`${body.from}T00:00:00.000Z`) : null
       const toDate = body.to ? new Date(`${body.to}T23:59:59.999Z`) : null
       const searchTitle = typeof body.search === 'string' ? body.search.trim() : ''
 
-      const [[projectBounds], projectImportRoutes] = await Promise.all([
-        db
-          .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo})
-          .from(projects)
-          .where(eq(projects.id, body.projectId))
-          .limit(1),
-        db
-          .select({importRouteId: projectRouteLink.importRouteId})
-          .from(projectRouteLink)
-          .where(eq(projectRouteLink.projectId, body.projectId)),
-      ])
+      const projectBounds = await getAppQueryService().getProjectReviewConfig(body.projectId)
 
       if (!projectBounds) {
         throw new Error('Project not found')
@@ -193,54 +229,24 @@ export const articlesRoutes = new Elysia()
         return projectBounds.dateTo ?? toDate
       })()
 
-      const importRouteIds = projectImportRoutes.map((r) => {
-        return r.importRouteId
+      const whereParts = [
+        getProjectScopeClause({
+          articleAlias: 'a',
+          importRouteIds: projectBounds.importRouteIds,
+          projectId: body.projectId,
+        }),
+        effectiveFromDate ? `a.article_created_at >= ${getTimestampLiteral(effectiveFromDate)}` : null,
+        effectiveToDate ? `a.article_created_at <= ${getTimestampLiteral(effectiveToDate)}` : null,
+        searchTitle ? `LOWER(COALESCE(a.article_title, '')) LIKE LOWER('%${escapeSqlString(searchTitle)}%')` : null,
+      ].filter((part): part is string => {
+        return part !== null
       })
 
-      const scopeParts: Array<ReturnType<typeof sql>> = []
-
-      if (importRouteIds.length > 0) {
-        const routeIdArray = sql.join(
-          importRouteIds.map((r) => {
-            return sql`${r}::uuid`
-          }),
-          sql`,`,
-        )
-
-        scopeParts.push(
-          sql`EXISTS (
-            SELECT 1 FROM ${articleRouteLink} arl
-            WHERE arl."article_id" = ${articles.id}
-              AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
-          )`,
-        )
-      }
-
-      scopeParts.push(
-        sql`EXISTS (
-          SELECT 1 FROM ${projectArticles} pa
-          WHERE pa."article_id" = ${articles.id}
-            AND pa."project_id" = ${body.projectId}::uuid
-        )`,
-      )
-
-      const scopeCondition = scopeParts.length > 1 ? or(...scopeParts) : scopeParts[0]
-
-      const dateParts: Array<ReturnType<typeof sql>> = []
-      if (effectiveFromDate) {
-        dateParts.push(sql`${articles.articleCreatedAt} >= ${effectiveFromDate}`)
-      }
-      if (effectiveToDate) {
-        dateParts.push(sql`${articles.articleCreatedAt} <= ${effectiveToDate}`)
-      }
-
-      const searchPart = searchTitle ? sql`${articles.articleTitle} ILIKE ${'%' + searchTitle + '%'}` : null
-      const whereParts = [scopeCondition, ...dateParts, ...(searchPart ? [searchPart] : [])]
-
-      const idRows = await db
-        .select({id: articles.id})
-        .from(articles)
-        .where(and(...whereParts))
+      const idRows = await getAppDatabaseService().queryJson<{id: string}>(`
+        SELECT a.id AS id
+        FROM app.article a
+        WHERE ${whereParts.join(' AND ')}
+      `)
 
       const articleIds = idRows.map((r) => {
         return r.id
@@ -274,116 +280,163 @@ export const articlesRoutes = new Elysia()
     {params: t.Object({jobId: t.String()})},
   )
   .get('/api/articles/latest', async () => {
-    const db = getDatabase()
+    const rows = await getAppDatabaseService().queryJson<{
+      id: string
+      articleId: string | null
+      articleTitle: string
+      articleAuthors: unknown
+      articleCreatedAt: unknown
+    }>(`
+      SELECT
+        id,
+        article_id AS articleId,
+        article_title AS articleTitle,
+        TO_JSON(article_authors) AS articleAuthors,
+        article_created_at AS articleCreatedAt
+      FROM app.article
+      ORDER BY COALESCE(article_created_at, created_at) DESC, created_at DESC, id DESC
+      LIMIT 200
+    `)
 
-    // Fetch articles with their latest judgments
-    const data = await db
-      .select({
-        id: articles.id,
-        articleId: articles.articleId,
-        articleTitle: articles.articleTitle,
-        articleAuthors: articles.articleAuthors,
-        articleCreatedAt: articles.articleCreatedAt,
-        // We'll need to aggregate judgments in a subquery or join
-        // For now, returning article data
-      })
-      .from(articles)
-      .orderBy(
-        sql`COALESCE(${articles.articleCreatedAt}, ${articles.createdAt}) DESC, ${articles.createdAt} DESC, ${articles.id} DESC`,
-      )
-      .limit(200)
+    const data = rows.map((row) => {
+      const articleAuthors = getJsonValue(row.articleAuthors)
+      return {
+        id: row.id,
+        articleId: row.articleId,
+        articleTitle: row.articleTitle,
+        articleAuthors: Array.isArray(articleAuthors)
+          ? articleAuthors.filter((value): value is string => {
+              return typeof value === 'string'
+            })
+          : null,
+        articleCreatedAt: getDateValue(row.articleCreatedAt),
+      }
+    })
 
     return {data}
   })
   .post(
     '/api/articles/batch-upsert',
     async ({body}) => {
-      const db = getDatabase()
       const {entries} = body
-
-      const articlesToUpsert = entries.map((entry) => {
-        return {
+      const normalizedEntries = entries.map((entry) => {
+        const doi = normalizeDoi(entry.doi) ?? getOriginalDoi(entry.original_data)
+        const sourceMetadata = getArticleSourceMetadata({
           articleId: entry.article_id,
-          articleTitle: entry.article_title,
-          articleSummary: entry.article_summary,
-          articleAuthors: entry.article_authors,
-          articleUpdatedAt: new Date(entry.article_updated_at),
-          articleCreatedAt: new Date(entry.article_created_at),
-          articleVersion: parseInt(entry.article_version),
-          arxivId: entry.arxiv_id,
-          pubmedId: entry.pubmed_id,
           importRoute: entry.import_route,
-          originalData: entry.original_data as unknown,
-        }
-      })
-
-      const inserted = await db
-        .insert(articles)
-        .values(articlesToUpsert)
-        .onConflictDoUpdate({
-          target: articles.articleId,
-          set: {
-            articleTitle: sql`EXCLUDED.article_title`,
-            articleSummary: sql`EXCLUDED.article_summary`,
-            articleAuthors: sql`EXCLUDED.article_authors`,
-            articleUpdatedAt: sql`EXCLUDED.article_updated_at`,
-            articleVersion: sql`EXCLUDED.article_version`,
-            arxivId: sql`EXCLUDED.arxiv_id`,
-            pubmedId: sql`EXCLUDED.pubmed_id`,
-            importRoute: sql`EXCLUDED.import_route`,
-            originalData: sql`EXCLUDED.original_data`,
-            updatedAt: sql`CURRENT_TIMESTAMP`,
-          },
+          originalData: entry.original_data,
         })
-        .returning({id: articles.id, articleId: articles.articleId})
 
-      // Link articles to import routes in article_route_link
-      const articleIds = inserted.map((r) => {
-        return r.articleId
+        return {...entry, doi, sourceMetadata}
       })
 
-      const articleIdToRoute = new Map(
-        entries.map((e) => {
-          return [e.article_id, e.import_route]
-        }),
-      )
-      const routeList = Array.from(
-        new Set(
-          entries
-            .map((e) => {
-              return e.import_route
+      await getAppDatabaseService().transaction(async (tx) => {
+        const updatedAt = new Date()
+        const inserted = await tx.queryJson<{id: string; articleId: string | null}>(`
+          INSERT INTO app.article (
+            id,
+            article_id,
+            article_title,
+            article_summary,
+            article_authors,
+            article_updated_at,
+            article_created_at,
+            article_version,
+            arxiv_id,
+            doi,
+            pubmed_id,
+            import_route,
+            source_metadata,
+            updated_at
+          )
+          VALUES ${normalizedEntries
+            .map((entry) => {
+              return `(${[
+                crypto.randomUUID(),
+                entry.article_id,
+                entry.article_title,
+                entry.article_summary,
+                entry.article_authors,
+                new Date(entry.article_updated_at),
+                new Date(entry.article_created_at),
+                Number.parseInt(entry.article_version, 10),
+                entry.arxiv_id ?? null,
+                entry.doi ?? null,
+                entry.pubmed_id ?? null,
+                entry.import_route,
+                entry.sourceMetadata,
+                updatedAt,
+              ]
+                .map((value) => {
+                  return getSqlLiteral(value)
+                })
+                .join(', ')})`
             })
-            .filter(Boolean),
-        ),
-      )
+            .join(', ')}
+          ON CONFLICT(article_id) DO UPDATE SET
+            article_title = EXCLUDED.article_title,
+            article_summary = EXCLUDED.article_summary,
+            article_authors = EXCLUDED.article_authors,
+            article_updated_at = EXCLUDED.article_updated_at,
+            article_version = EXCLUDED.article_version,
+            arxiv_id = EXCLUDED.arxiv_id,
+            doi = EXCLUDED.doi,
+            pubmed_id = EXCLUDED.pubmed_id,
+            import_route = EXCLUDED.import_route,
+            source_metadata = EXCLUDED.source_metadata,
+            updated_at = ${getTimestampLiteral(updatedAt)}
+          RETURNING id, article_id AS articleId
+        `)
 
-      if (routeList.length > 0 && articleIds.length > 0) {
-        const importRoutes = await db
-          .select({id: importRouteTable.id, route: importRouteTable.route})
-          .from(importRouteTable)
-          .where(inArray(importRouteTable.route, routeList))
-
-        const routeMap = new Map(
-          importRoutes.map((r) => {
-            return [r.route, r.id]
+        const articleIdToRoute = new Map(
+          normalizedEntries.map((entry) => {
+            return [entry.article_id, entry.import_route]
           }),
         )
+        const routeList = Array.from(
+          new Set(
+            normalizedEntries
+              .map((entry) => {
+                return entry.import_route
+              })
+              .filter((route): route is string => {
+                return typeof route === 'string' && route.trim() !== ''
+              }),
+          ),
+        )
 
-        const links: {articleId: string; importRouteId: string}[] = []
-        for (const a of inserted) {
-          if (!a.articleId) continue
-          const route = articleIdToRoute.get(a.articleId)
-          if (typeof route !== 'string') continue
-          const importRouteId = routeMap.get(route)
-          if (importRouteId) {
-            links.push({articleId: a.id, importRouteId})
+        if (routeList.length > 0 && inserted.length > 0) {
+          const importRoutes = await tx.queryJson<{id: string; route: string}>(`
+            SELECT id, route
+            FROM app.import_route
+            WHERE route IN (${getQuotedStringList(routeList).join(', ')})
+          `)
+          const routeMap = new Map(
+            importRoutes.map((route) => {
+              return [route.route, route.id]
+            }),
+          )
+          const linkValues = inserted
+            .map((article) => {
+              const route = article.articleId ? articleIdToRoute.get(article.articleId) : null
+              const importRouteId = typeof route === 'string' ? routeMap.get(route) : null
+              return importRouteId
+                ? `(${getQuotedStringList([crypto.randomUUID(), article.id, importRouteId]).join(', ')}, current_timestamp, current_timestamp)`
+                : null
+            })
+            .filter((value): value is string => {
+              return value !== null
+            })
+
+          if (linkValues.length > 0) {
+            await tx.run(`
+              INSERT INTO app.article_import_route (id, article_id, import_route_id, created_at, updated_at)
+              VALUES ${linkValues.join(', ')}
+              ON CONFLICT(article_id, import_route_id) DO NOTHING
+            `)
           }
         }
-
-        if (links.length > 0) {
-          await db.insert(articleRouteLink).values(links).onConflictDoNothing()
-        }
-      }
+      })
 
       return {success: true, count: entries.length}
     },
@@ -399,6 +452,7 @@ export const articlesRoutes = new Elysia()
             article_created_at: t.String(),
             article_version: t.String(),
             arxiv_id: t.Optional(t.String()),
+            doi: t.Optional(t.String()),
             pubmed_id: t.Optional(t.String()),
             import_route: t.String(),
             original_data: t.Optional(t.Any()),
@@ -410,7 +464,6 @@ export const articlesRoutes = new Elysia()
   .get(
     '/api/articles/search',
     async ({query}) => {
-      const db = getDatabase()
       const {q} = query
 
       if (!q || q.trim() === '') {
@@ -420,62 +473,103 @@ export const articlesRoutes = new Elysia()
       const searchTerm = q.trim()
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(searchTerm)
 
-      const whereClause = isUuid
-        ? sql`${articles.id} = ${searchTerm} OR ${articles.articleId} = ${searchTerm} OR ${articles.articleTitle} ILIKE ${'%' + searchTerm + '%'}`
-        : sql`${articles.articleId} = ${searchTerm} OR ${articles.articleTitle} ILIKE ${'%' + searchTerm + '%'}`
-
-      const searchResults = await db
-        .select()
-        .from(articles)
-        .where(whereClause)
-        .orderBy(
-          sql`
+      const searchResults = await getAppDatabaseService().queryJson<{
+        id: string
+        createdAt: unknown
+        articleId: string | null
+        articleTitle: string
+        articleAuthors: unknown
+      }>(`
+        SELECT
+          id,
+          created_at AS createdAt,
+          article_id AS articleId,
+          article_title AS articleTitle,
+          TO_JSON(article_authors) AS articleAuthors
+        FROM app.article
+        WHERE ${isUuid ? `id = '${escapeSqlString(searchTerm)}' OR` : ''}
+          article_id = '${escapeSqlString(searchTerm)}'
+          OR LOWER(COALESCE(article_title, '')) LIKE LOWER('%${escapeSqlString(searchTerm)}%')
+        ORDER BY
           CASE
-            WHEN ${isUuid ? sql`${articles.id} = ${searchTerm}` : sql`FALSE`} THEN 0
-            WHEN ${articles.articleId} = ${searchTerm} THEN 1
+            WHEN ${isUuid ? `id = '${escapeSqlString(searchTerm)}'` : 'FALSE'} THEN 0
+            WHEN article_id = '${escapeSqlString(searchTerm)}' THEN 1
             ELSE 2
           END,
-          ${articles.articleTitle} ASC
-        `,
-        )
-        .limit(50)
+          article_title ASC
+        LIMIT 50
+      `)
 
-      return {data: searchResults}
+      const data = searchResults.map((row) => {
+        const articleAuthors = getJsonValue(row.articleAuthors)
+        return {
+          id: row.id,
+          createdAt: getDateValue(row.createdAt),
+          articleId: row.articleId,
+          articleTitle: row.articleTitle,
+          articleAuthors: Array.isArray(articleAuthors)
+            ? articleAuthors.filter((value): value is string => {
+                return typeof value === 'string'
+              })
+            : null,
+        }
+      })
+
+      return {data}
     },
     {query: t.Object({q: t.String()})},
   )
   .get(
     '/api/articles/:id',
     async ({params}) => {
-      const db = getDatabase()
       const {id} = params
 
-      // Get the article
-      const [article] = await db.select().from(articles).where(eq(articles.id, id)).limit(1)
+      const [article] = await getAppQueryService().getFullArticlesByIds([id])
 
       if (!article) {
         throw new Error('Article not found')
       }
 
-      // Get all judgments for this article (Cross-Project / Admin View)
-      const allArticleJudgments = await db
-        .select({
-          judgment: judgments,
-          prompt: prompts,
-          modelName: models.modelName,
-          modelProvider: models.provider,
-          modelVersion: models.version,
-        })
-        .from(judgments)
-        .innerJoin(prompts, eq(judgments.promptId, prompts.id))
-        .leftJoin(models, eq(judgments.modelId, models.id))
-        .where(eq(judgments.articleId, id))
+      const allArticleJudgments = await getAppDatabaseService().queryJson<ArticleJudgmentRow>(`
+        SELECT
+          j.id AS judgmentId,
+          j.created_at AS judgmentCreatedAt,
+          j.updated_at AS judgmentUpdatedAt,
+          j.deleted_at AS judgmentDeletedAt,
+          j.article_id AS judgmentArticleId,
+          j.model_id AS judgmentModelId,
+          j.prompt_id AS judgmentPromptId,
+          j.project_id AS judgmentProjectId,
+          j.use_title AS judgmentUseTitle,
+          j.use_abstract AS judgmentUseAbstract,
+          j.use_fulltext AS judgmentUseFulltext,
+          j.use_fulltext_no_images AS judgmentUseFulltextNoImages,
+          j.chunking_strategy AS judgmentChunkingStrategy,
+          j.is_answered AS judgmentIsAnswered,
+          j.answered_original AS judgmentAnsweredOriginal,
+          TO_JSON(j.answered_original_as_array) AS judgmentAnsweredOriginalAsArray,
+          j.confidence_original AS judgmentConfidenceOriginal,
+          j.explanation AS judgmentExplanation,
+          TO_JSON(j.quotes) AS judgmentQuotes,
+          j.snapshot_project_id AS judgmentSnapshotProjectId,
+          j.snapshot_project_model_name AS judgmentSnapshotProjectModelName,
+          p.original_text AS promptOriginalText,
+          p.prompt_heading AS promptHeading,
+          COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
+          pc.provider_kind AS modelProvider,
+          m.variant AS modelVersion
+        FROM app.judgment j
+        INNER JOIN app.prompt p ON j.prompt_id = p.id
+        LEFT JOIN app.model m ON j.model_id = m.id
+        LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+        WHERE j.article_id = '${escapeSqlString(id)}'
+        ORDER BY j.created_at DESC NULLS LAST, j.id ASC
+      `)
 
-      const allJudgments = allArticleJudgments.map(({judgment, prompt, modelName, modelProvider, modelVersion}) => {
-        return {...judgment, prompt, modelName, modelProvider, modelVersion}
+      const allJudgments = allArticleJudgments.map((row) => {
+        return getArticleJudgmentValue(row)
       })
 
-      // Resolve project names for snapshotProjectId when present
       const snapshotProjectIds = Array.from(
         new Set(
           allJudgments
@@ -489,10 +583,11 @@ export const articlesRoutes = new Elysia()
       )
       const projectNameRows =
         snapshotProjectIds.length > 0
-          ? await db
-              .select({id: projects.id, name: projects.name})
-              .from(projects)
-              .where(inArray(projects.id, snapshotProjectIds))
+          ? await getAppDatabaseService().queryJson<{id: string; name: string}>(`
+              SELECT id, name
+              FROM app.project
+              WHERE id IN (${getQuotedStringList(snapshotProjectIds).join(', ')})
+            `)
           : []
       const projectsById = projectNameRows.reduce<Record<string, {name: string}>>((acc, row) => {
         acc[row.id] = {name: row.name}
@@ -506,23 +601,34 @@ export const articlesRoutes = new Elysia()
   .delete(
     '/api/articles/:id',
     async ({params}) => {
-      const db = getDatabase()
       const {id} = params
 
-      const [article] = await db.select({id: articles.id}).from(articles).where(eq(articles.id, id)).limit(1)
+      const [article] = await getAppDatabaseService().queryJson<{id: string}>(`
+        SELECT id
+        FROM app.article
+        WHERE id = '${escapeSqlString(id)}'
+        LIMIT 1
+      `)
 
       if (!article) {
         throw new Error('Article not found')
       }
 
-      const [judgmentRow] = await db.select({count: count()}).from(judgments).where(eq(judgments.articleId, id))
+      const [judgmentRow] = await getAppDatabaseService().queryJson<{count: number}>(`
+        SELECT COUNT(*) AS count
+        FROM app.judgment
+        WHERE article_id = '${escapeSqlString(id)}'
+      `)
 
       const judgmentCount = judgmentRow?.count ?? 0
       if (judgmentCount > 0) {
         throw new Error(`Cannot delete article with ${judgmentCount} judgments`)
       }
 
-      await db.delete(articles).where(eq(articles.id, id))
+      await getAppDatabaseService().run(`
+        DELETE FROM app.article
+        WHERE id = '${escapeSqlString(id)}'
+      `)
       return {success: true, id}
     },
     {params: t.Object({id: t.String()})},

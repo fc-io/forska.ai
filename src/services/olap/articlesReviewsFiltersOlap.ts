@@ -1,22 +1,13 @@
 import type {NumericFilterResult} from '../../server/routes/projectsRoutes/articlesReviewsFiltersNumeric.ts'
-import type {ClickHouseFilterParams, ClickHouseFilterResult} from '../clickhouse/articlesReviewsFiltersClickHouse.ts'
-import {
-  getDatabaseBasedFiltersFromClickHouse,
-  getNumericFiltersFromClickHouse,
-} from '../clickhouse/articlesReviewsFiltersClickHouse.ts'
-import {getOlapDb} from './olapDb.ts'
-import {rejectDuckdbNotImplemented} from './rejectDuckdbNotImplemented.ts'
+import {getDatabaseBasedFiltersFromDuckdb, getNumericFiltersFromDuckdb} from './duckdbOlap.ts'
+import type {DatabaseFilterParams, DatabaseFilterResult} from './olapTypes.ts'
 
-export type {ClickHouseFilterParams, ClickHouseFilterResult}
+export type {DatabaseFilterParams, DatabaseFilterResult}
 
-export const getDatabaseBasedFiltersFromOlap = (params: ClickHouseFilterParams): Promise<ClickHouseFilterResult[]> => {
-  return getOlapDb() === 'duckdb'
-    ? rejectDuckdbNotImplemented('getDatabaseBasedFilters')
-    : getDatabaseBasedFiltersFromClickHouse(params)
+export const getDatabaseBasedFiltersFromOlap = (params: DatabaseFilterParams): Promise<DatabaseFilterResult[]> => {
+  return getDatabaseBasedFiltersFromDuckdb(params)
 }
 
-export const getNumericFiltersFromOlap = (params: ClickHouseFilterParams): Promise<NumericFilterResult[]> => {
-  return getOlapDb() === 'duckdb'
-    ? rejectDuckdbNotImplemented('getNumericFilters')
-    : getNumericFiltersFromClickHouse(params)
+export const getNumericFiltersFromOlap = (params: DatabaseFilterParams): Promise<NumericFilterResult[]> => {
+  return getNumericFiltersFromDuckdb(params)
 }

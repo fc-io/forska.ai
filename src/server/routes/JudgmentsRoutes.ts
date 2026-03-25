@@ -1,77 +1,81 @@
-import {and, eq} from 'drizzle-orm'
 import {Elysia} from 'elysia'
 
-import {models} from '../../db/schema.ts'
-import {requireUserAuth} from '../utils/authGuard.ts'
-import {env} from '../utils/env.ts'
-import {getDatabase} from '../utils/getDatabase.ts'
+import {createProviderConnection} from '../providers/providerConnectionRepository.ts'
+import {getManualProviderModelMetadata} from '../providers/providerModelMetadata.ts'
+import {createProviderModel} from '../providers/providerModelRepository.ts'
+import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {normalizeProviderKind} from '../services/providerCatalog.ts'
 
-type ModelRow = typeof models.$inferSelect
-
-const normalizeWorkerUrls = (urls: string[] | null | undefined): string[] => {
-  return Array.from(
-    new Set(
-      (urls ?? [])
-        .map((url) => {
-          return url.trim()
-        })
-        .filter((url) => {
-          return url.length > 0
-        }),
-    ),
-  )
+type ModelRow = {
+  id: string
+  name: string
+  provider: string | null
+  baseURL: string | null
+  modelName: string | null
+  metadataJson: unknown
+  version: string | null
+  createdAt: string | null
+  updatedAt: string | null
 }
 
-const envWorkerUrls = normalizeWorkerUrls(env.WORKER_URLS)
-
-const syncWorkerUrls = async (db: ReturnType<typeof getDatabase>, modelRow: ModelRow | undefined | null) => {
-  if (!modelRow) return modelRow
-  if (envWorkerUrls.length === 0) return modelRow
-  const existing = normalizeWorkerUrls(modelRow.workerUrls)
-  const differs =
-    existing.length !== envWorkerUrls.length
-    || envWorkerUrls.some((url) => {
-      return !existing.includes(url)
-    })
-  if (!differs) return modelRow
-  const [updated] = await db
-    .update(models)
-    .set({workerUrls: envWorkerUrls})
-    .where(eq(models.id, modelRow.id))
-    .returning()
-  return updated ?? modelRow
-}
-
-export const judgmentsRoutes = new Elysia().use(requireUserAuth()).get('/api/judgments/model', async ({query}) => {
+export const judgmentsRoutes = new Elysia().get('/api/judgments/model', async ({query}) => {
   try {
-    const db = getDatabase()
     const modelName = query.name || 'Qwen3-32B-FP8'
-    const provider = query.provider || 'SGLang'
+    const providerKind = normalizeProviderKind(query.provider || 'SGLang')
     const baseURL = query.baseURL || 'http://localhost:30000/v1'
 
-    // Check if model exists
-    const [existingModel] = await db
-      .select()
-      .from(models)
-      .where(and(eq(models.name, modelName), eq(models.provider, provider), eq(models.baseURL, baseURL)))
-      .limit(1)
+    const [existingModel] = await getAppDatabaseService().queryJson<ModelRow>(`
+      SELECT
+        m.id,
+        m.name,
+        pc.provider_kind AS provider,
+        pc.base_url AS baseURL,
+        m.remote_model_id AS modelName,
+        TO_JSON(m.metadata_json) AS metadataJson,
+        m.variant AS version,
+        m.created_at AS createdAt,
+        m.updated_at AS updatedAt
+      FROM app.model m
+      INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+      WHERE m.name = ${getSqlLiteral(modelName)}
+        AND pc.provider_kind = ${getSqlLiteral(providerKind)}
+        AND pc.base_url = ${getSqlLiteral(baseURL)}
+      LIMIT 1
+    `)
 
     const persistedModel =
       existingModel
-      ?? (
-        await db
-          .insert(models)
-          .values({name: modelName, provider, baseURL, modelName: '/models/Qwen3-32B-FP8', version: '1.0.0'})
-          .returning()
-      )[0]
+      ?? (await (async () => {
+        const connection = await createProviderConnection({
+          authMode: baseURL ? 'none' : null,
+          baseURL,
+          config: {manualWorkerUrls: [], workerUrlMode: 'manual'},
+          label: modelName,
+          providerKind,
+          secretRef: null,
+        })
 
-    if (!persistedModel) {
-      throw new Error('Failed to ensure model record')
-    }
+        return createProviderModel({
+          connection,
+          displayName: modelName,
+          metadataJson: getManualProviderModelMetadata({
+            displayName: modelName,
+            modelName: '/models/Qwen3-32B-FP8',
+            providerKind,
+            remoteModelId: '/models/Qwen3-32B-FP8',
+            variant: '1.0.0',
+            version: '1.0.0',
+          }),
+          modelName: '/models/Qwen3-32B-FP8',
+          remoteModelId: '/models/Qwen3-32B-FP8',
+          source: 'manual',
+          variant: '1.0.0',
+          version: '1.0.0',
+        })
+      })())
 
-    const syncedModel = await syncWorkerUrls(db, persistedModel)
-
-    return {success: true, data: syncedModel}
+    return {success: true, data: persistedModel}
   } catch (error) {
     console.error('Error getting/creating model:', error)
     return {success: false, error: 'Failed to get/create model'}

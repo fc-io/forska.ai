@@ -1,13 +1,7 @@
-import {env} from './env.ts'
-
 const activeRequests = new Map<string, number>()
 
-const getWorkerUrls = (): string[] => {
-  return env.WORKER_URLS
-}
-
-const ensureWorkersInitialized = (): void => {
-  return getWorkerUrls().forEach((url) => {
+const ensureWorkersInitialized = (workerUrls: string[]): void => {
+  return workerUrls.forEach((url) => {
     if (!activeRequests.has(url)) {
       activeRequests.set(url, 0)
     }
@@ -16,14 +10,16 @@ const ensureWorkersInitialized = (): void => {
 
 const getEligibleWorkers = ({
   maxActiveRequests,
+  workerUrls,
   canUse,
 }: {
   maxActiveRequests: number
+  workerUrls: string[]
   canUse?: (url: string) => boolean
 }): string[] => {
-  ensureWorkersInitialized()
+  ensureWorkersInitialized(workerUrls)
 
-  return getWorkerUrls().filter((url) => {
+  return workerUrls.filter((url) => {
     const active = activeRequests.get(url) || 0
     const allowedByPredicate = canUse ? canUse(url) : true
     return allowedByPredicate && active < maxActiveRequests
@@ -47,8 +43,8 @@ export const workerLoadBalancer = {
    * Gets a worker URL with the fewest active requests.
    * Increments the active request count for the selected worker.
    */
-  getWorkerUrl: (): string | null => {
-    const workerUrls = getWorkerUrls()
+  getWorkerUrl: (workerUrls: string[]): string | null => {
+    ensureWorkersInitialized(workerUrls)
     const selectedWorker = workerUrls.length === 0 ? null : getLeastBusyWorker(workerUrls)
 
     if (!selectedWorker) return null
@@ -60,12 +56,14 @@ export const workerLoadBalancer = {
 
   acquireWorkerUrl: ({
     maxActiveRequests,
+    workerUrls,
     canUse,
   }: {
     maxActiveRequests: number
+    workerUrls: string[]
     canUse?: (url: string) => boolean
   }): string | null => {
-    const eligibleWorkers = getEligibleWorkers({maxActiveRequests, canUse})
+    const eligibleWorkers = getEligibleWorkers({canUse, maxActiveRequests, workerUrls})
     const selectedWorker = eligibleWorkers.length === 0 ? null : getLeastBusyWorker(eligibleWorkers)
 
     if (!selectedWorker) return null

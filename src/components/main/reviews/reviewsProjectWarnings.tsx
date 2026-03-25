@@ -2,94 +2,139 @@ import {useQuery} from '@tanstack/solid-query'
 import {Link} from '@tanstack/solid-router'
 import {createMemo, Show} from 'solid-js'
 
-import {apiClient} from '../../../services/apiClient.ts'
-import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
+import {createReviewsWarningsQueryOptions} from './reviewsWarningsQuery.ts'
 
-type ReviewsHealthData = {
-  projectId: string
-  enabledPromptCount: number
-  scope: {
-    curatedArticleCount: number
-    importRoutes: string[]
-    importRouteArticlesCount: number
-    postgresArticlesInScope: number
-  }
-  clickhouse:
-    | {ok: true; skipped: boolean; routeArticlesInScope: number; curatedArticlesInScope: number | null}
-    | {ok: false; error: string; routeArticlesInScope: number; curatedArticlesInScope: number | null}
+const formatQueuedAt = (value: string | null) => {
+  const parsed = value ? new Date(value) : null
+
+  return parsed === null || Number.isNaN(parsed.getTime())
+    ? null
+    : new Intl.DateTimeFormat(undefined, {dateStyle: 'medium', timeStyle: 'short'}).format(parsed)
 }
 
-export const ReviewsProjectWarnings = (props: {projectId: string; showClickhouse?: boolean}) => {
-  const query = useQuery(() => {
-    return {
-      queryKey: ['project-reviews-health', props.projectId],
-      queryFn: async () => {
-        const response = await apiClient.api.projectsreviewshealth.post({projectId: props.projectId})
-        const data = handleApiResponse(response, 'Failed to check project health')
-        return data.data as unknown as ReviewsHealthData
-      },
-      refetchOnWindowFocus: false,
-      staleTime: 1000 * 60,
-    }
+const getPendingRefreshLabel = (pendingRefreshCount: number) => {
+  return pendingRefreshCount === 1 ? '1 refresh job pending' : `${pendingRefreshCount} refresh jobs pending`
+}
+
+const getIndexingBannerTitle = (params: {
+  pendingArticleRefreshCount: number
+  pendingProjectRefreshCount: number
+  status: 'not-needed' | 'ready' | 'refreshing' | 'stale'
+}) => {
+  return params.status === 'stale'
+    ? 'Review index is catching up'
+    : params.pendingArticleRefreshCount > 0 && params.pendingProjectRefreshCount === 0
+      ? 'New judgments are still being incorporated'
+      : 'Review indexing in progress'
+}
+
+const getIndexingBannerBody = (params: {
+  pendingArticleRefreshCount: number
+  pendingProjectRefreshCount: number
+  status: 'not-needed' | 'ready' | 'refreshing' | 'stale'
+}) => {
+  return params.status === 'stale'
+    ? 'This project has scoped articles, but the review index is missing or stale. Review lists may stay empty until the writer rebuilds the project.'
+    : params.pendingProjectRefreshCount > 0 && params.pendingArticleRefreshCount > 0
+      ? 'This project is still rebuilding its review index and folding in newly produced judgments. Counts and article lists may change until the backlog clears.'
+      : params.pendingProjectRefreshCount > 0
+        ? 'This project has scoped articles, but the review index is still updating in the background. Review lists may look partial or empty until indexing finishes.'
+        : "New judgments are still being folded into this project's review index. Counts and article lists may change until the backlog clears."
+}
+
+const getPendingRefreshMetaLabel = (params: {
+  pendingArticleRefreshCount: number
+  pendingProjectRefreshCount: number
+}) => {
+  const segments = [
+    params.pendingProjectRefreshCount > 0
+      ? getPendingRefreshLabel(params.pendingProjectRefreshCount)
+          .replace('refresh job', 'project refresh')
+          .replace('refresh jobs', 'project refreshes')
+      : null,
+    params.pendingArticleRefreshCount > 0
+      ? params.pendingArticleRefreshCount === 1
+        ? '1 article judgment refresh pending'
+        : `${params.pendingArticleRefreshCount} article judgment refreshes pending`
+      : null,
+  ].filter((value): value is string => {
+    return value !== null
   })
 
-  const healthData = () => {
+  return segments.join(' and ')
+}
+
+export const ReviewsProjectWarnings = (props: {projectId: string}) => {
+  const query = useQuery(() => {
+    return createReviewsWarningsQueryOptions(props.projectId)
+  })
+
+  const warningsData = () => {
     return query.isSuccess ? (query.data ?? null) : null
   }
 
   const noEnabledPrompts = createMemo(() => {
-    return (healthData()?.enabledPromptCount ?? 0) === 0
+    return (warningsData()?.enabledPromptCount ?? 0) === 0
   })
 
   const noArticlesInProject = createMemo(() => {
-    const data = healthData()
+    const data = warningsData()
     if (!data) return false
 
     const hasEnabledPrompts = data.enabledPromptCount > 0
-    const hasAnyArticlesInScope = data.scope.postgresArticlesInScope > 0
+    const hasAnyArticlesInScope = data.scope.hasAnyArticlesInScope
     return hasEnabledPrompts && !hasAnyArticlesInScope
   })
 
-  const clickhouseUnavailable = createMemo(() => {
-    if (!props.showClickhouse) {
-      return false
-    }
-    const data = healthData()
-    return data ? data.clickhouse.ok === false : false
+  const showIndexingBanner = createMemo(() => {
+    const status = warningsData()?.indexing.status ?? 'ready'
+
+    return status === 'refreshing' || status === 'stale'
   })
 
-  const clickhouseMissingArticles = createMemo(() => {
-    if (!props.showClickhouse) {
-      return false
-    }
-    const data = healthData()
-    if (!data || data.clickhouse.ok === false) return false
+  const indexingBannerTone = createMemo(() => {
+    return warningsData()?.indexing.status === 'stale'
+      ? 'bg-orange-50 border-orange-200 text-orange-900'
+      : 'bg-sky-50 border-sky-200 text-sky-900'
+  })
 
-    if (data.clickhouse.skipped) {
-      return false
-    }
+  const indexingBannerTitle = createMemo(() => {
+    const data = warningsData()
+    return !data ? 'Review indexing in progress' : getIndexingBannerTitle(data.indexing)
+  })
 
-    const hasEnabledPrompts = data.enabledPromptCount > 0
-    const hasAnyArticlesInScope = data.scope.postgresArticlesInScope > 0
-    if (!hasEnabledPrompts || !hasAnyArticlesInScope) {
-      return false
-    }
+  const indexingBannerBody = createMemo(() => {
+    const data = warningsData()
+    return !data
+      ? 'This project has scoped articles, but the review index is still updating in the background. Review lists may look partial or empty until indexing finishes.'
+      : getIndexingBannerBody(data.indexing)
+  })
 
-    const routeMissing =
-      data.scope.importRouteArticlesCount > 0
-      && data.clickhouse.routeArticlesInScope < data.scope.importRouteArticlesCount
+  const indexingBannerMeta = createMemo(() => {
+    const data = warningsData()
+    if (!data || data.indexing.pendingRefreshCount === 0) return null
 
-    const curatedMissing =
-      data.scope.curatedArticleCount > 0
-      && data.clickhouse.curatedArticlesInScope !== null
-      && data.clickhouse.curatedArticlesInScope < data.scope.curatedArticleCount
+    const queuedAtLabel = formatQueuedAt(data.indexing.oldestQueuedAt)
+    const pendingLabel = getPendingRefreshMetaLabel(data.indexing)
 
-    return routeMissing || curatedMissing
+    return queuedAtLabel ? `${pendingLabel} since ${queuedAtLabel}` : pendingLabel
   })
 
   return (
-    <Show when={healthData()}>
+    <Show when={warningsData()}>
       <div class="space-y-3">
+        <Show when={showIndexingBanner()}>
+          <div class={`rounded-lg border p-4 ${indexingBannerTone()}`}>
+            <p class="font-medium">{indexingBannerTitle()}</p>
+            <p class="mt-1 text-sm opacity-90">{indexingBannerBody()}</p>
+            <Show when={indexingBannerMeta()}>
+              {(meta) => {
+                return <p class="mt-2 text-xs opacity-75">{meta()}</p>
+              }}
+            </Show>
+          </div>
+        </Show>
+
         <Show when={noEnabledPrompts()}>
           <div class="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
             <div class="flex items-start justify-between gap-3">
@@ -117,34 +162,6 @@ export const ReviewsProjectWarnings = (props: {projectId: string; showClickhouse
               This project has no scoped articles (no individually imported articles, and no import routes with any
               matching articles).
             </p>
-          </div>
-        </Show>
-
-        <Show when={clickhouseUnavailable()}>
-          <div class="p-4 bg-red-50 border border-red-200 rounded-lg">
-            <p class="font-medium text-red-800">ClickHouse unavailable</p>
-            <p class="text-sm text-red-700 mt-1">The reviews lists use ClickHouse. It failed to respond.</p>
-            <p class="text-xs text-red-700 mt-2 font-mono break-all">
-              {(healthData()?.clickhouse as {error?: string}).error}
-            </p>
-          </div>
-        </Show>
-
-        <Show when={clickhouseMissingArticles()}>
-          <div class="p-4 bg-red-50 border border-red-200 rounded-lg">
-            <p class="font-medium text-red-800">ClickHouse missing articles</p>
-            <p class="text-sm text-red-700 mt-1">
-              Articles exist in Postgres for this project, but ClickHouse appears to be missing them, so "Assessed by
-              LLM" and "Unassessed" can show empty.
-            </p>
-            <div class="text-xs text-red-700 mt-2">
-              <span class="font-mono">PG scoped:</span> {healthData()?.scope.postgresArticlesInScope.toLocaleString()}{' '}
-              <span class="font-mono">CH routes:</span> {healthData()?.clickhouse.routeArticlesInScope.toLocaleString()}{' '}
-              <Show when={healthData()?.clickhouse.curatedArticlesInScope !== null}>
-                <span class="font-mono">CH curated:</span>{' '}
-                {healthData()?.clickhouse.curatedArticlesInScope?.toLocaleString()}
-              </Show>
-            </div>
           </div>
         </Show>
       </div>

@@ -48,8 +48,8 @@ bun run src/llmServer/index.ts \
   --config config/hpc_alvis.json \
   --config config/hpc_dis.json
 
-# Or with optional env file (for LLM_RUNNER_AUTH_TOKEN shared secret):
-bun --env-file=.env.local run src/llmServer/index.ts \
+# Or with inline shell env (for LLM_RUNNER_AUTH_TOKEN shared secret):
+LLM_RUNNER_AUTH_TOKEN=token bun run src/llmServer/index.ts \
   --config config/hpc_mn5.json \
   --config config/hpc_alvis.json \
   --config config/hpc_dis.json
@@ -70,7 +70,7 @@ Additional fields to add to existing schema:
   - tunnel creation (often `acc`)
 - How to launch SGLang:
   - reference to an `SBATCH_FILE` already on the cluster (or repo-relative file to upload)
-  - which env vars/exports to pass (`SGLANG_MODEL`, `SGLANG_PORT`, `TP_SIZE`, etc.)
+  - which shell env vars/exports to pass (`SGLANG_MODEL`, `SGLANG_PORT`, `TP_SIZE`, etc.)
 - Transfer behavior for runs:
   - `autoTransfer` (default false): pull model/container from Hugging Face on initiating node + rsync to HPC only when true
   - `autoTransfer=false`: require artifacts already present on target HPC
@@ -81,7 +81,7 @@ Additional fields to add to existing schema:
 
 ### sbatch scripts as source of truth (parseable config)
 
-**Approach**: Keep sbatch scripts as the canonical source of truth. Make them parseable by llm-runner using a standardized `FORSKA_*` env var defaults block.
+**Approach**: Keep sbatch scripts as the canonical source of truth. Make them parseable by llm-runner using a standardized `FORSKA_*` shell env defaults block.
 
 **Key insight**: The `: "${VAR:=default}"` bash pattern serves dual purpose:
 

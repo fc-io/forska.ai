@@ -3,9 +3,10 @@ import {spawn} from 'node:child_process'
 import {cron} from '@elysiajs/cron'
 import {Elysia} from 'elysia'
 
-import * as schema from '../../db/schema.ts'
-// Unused import removed: env
-import {getDatabase} from '../utils/getDatabase.ts'
+import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {inferenceRuntimeConfig} from '../utils/getInferenceRuntimeConfig.ts'
+import {isExpectedWriterRoleLossError, shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
 
 type NvidiaSmiSample = {
   ts: Date
@@ -113,29 +114,14 @@ const parseNvidiaSmiCsv = (csv: string, ts: Date, instanceId: string): NvidiaSmi
     })
 }
 
-const _normalizeWorkerUrls = (urls: string[] | null | undefined): string[] => {
-  return Array.from(
-    new Set(
-      (urls ?? [])
-        .map((url) => {
-          return url.trim()
-        })
-        .filter((url) => {
-          return url.length > 0
-        }),
-    ),
-  )
-}
-
 // Extract host from worker URL (e.g., http://10.2.101.73:30000 -> 10.2.101.73)
 const extractHostFromUrl = (url: string): string | null => {
   const match = url.match(/https?:\/\/([^:/]+)/)
   return match?.[1] ?? null
 }
 
-// Get SSH jump host from env (optional, for remote HPC access)
 const getSSHJumpHost = (): string | null => {
-  return process.env.NVIDIA_SMI_SSH_JUMP_HOST?.trim() || null
+  return inferenceRuntimeConfig.sshJumpHost
 }
 
 const pollNvidiaSmiForWorker = async (
@@ -195,35 +181,14 @@ const pollNvidiaSmiForWorker = async (
   return parseNvidiaSmiCsv(result.stdout, ts, displayInstanceId)
 }
 
-// Parse worker URLs from NVIDIA_SMI_WORKER_URLS env (remote IPs, not localhost tunnels)
 const getNvidiaSmiWorkerUrls = (): string[] => {
-  const raw = process.env.NVIDIA_SMI_WORKER_URLS?.trim() || ''
-  if (!raw) return []
-  return raw
-    .split(',')
-    .map((url) => {
-      return url.trim()
-    })
-    .filter((url) => {
-      return url.length > 0
-    })
+  return inferenceRuntimeConfig.remoteWorkerUrls
 }
 
-// Parse local worker URLs for display (matching LLM metrics page)
 const getNvidiaSmiWorkerUrlsLocal = (): string[] => {
-  const raw = process.env.NVIDIA_SMI_WORKER_URLS_LOCAL?.trim() || ''
-  if (!raw) return []
-  return raw
-    .split(',')
-    .map((url) => {
-      return url.trim()
-    })
-    .filter((url) => {
-      return url.length > 0
-    })
+  return inferenceRuntimeConfig.displayWorkerUrls
 }
 
-// Build mapping from remote worker URL to local worker URL (1:1 positional mapping)
 const buildRemoteToLocalMapping = (): Map<string, string> => {
   const remoteUrls = getNvidiaSmiWorkerUrls()
   const localUrls = getNvidiaSmiWorkerUrlsLocal()
@@ -241,6 +206,10 @@ const buildRemoteToLocalMapping = (): Map<string, string> => {
 }
 
 const pollNvidiaSmi = async (): Promise<void> => {
+  if (!shouldCurrentServerRunWriterWork()) {
+    return
+  }
+
   const workerUrls = getNvidiaSmiWorkerUrls()
 
   // If no worker URLs configured, skip polling
@@ -266,14 +235,59 @@ const pollNvidiaSmi = async (): Promise<void> => {
     allSamples.push(...samples)
   }
 
-  if (allSamples.length === 0) return
+  if (allSamples.length === 0 || !shouldCurrentServerRunWriterWork()) return
 
-  const db = getDatabase()
-  await db
-    .insert(schema.nvidiaSmi)
-    .values(allSamples)
+  await getAppDatabaseService()
+    .run(
+      `
+      INSERT INTO app.nvidia_smi (
+        id,
+        ts,
+        instance_id,
+        gpu_index,
+        gpu_uuid,
+        gpu_name,
+        temperature_gpu,
+        utilization_gpu,
+        utilization_memory,
+        memory_total_mib,
+        memory_used_mib,
+        power_draw_watts,
+        power_limit_watts,
+        fan_speed,
+        pstate
+      )
+      VALUES ${allSamples
+        .map((sample) => {
+          return `(${[
+            crypto.randomUUID(),
+            sample.ts,
+            sample.instanceId,
+            sample.gpuIndex,
+            sample.gpuUuid,
+            sample.gpuName,
+            sample.temperatureGpu,
+            sample.utilizationGpu,
+            sample.utilizationMemory,
+            sample.memoryTotalMiB,
+            sample.memoryUsedMiB,
+            sample.powerDrawWatts,
+            sample.powerLimitWatts,
+            sample.fanSpeed,
+            sample.pstate,
+          ]
+            .map((value) => {
+              return getSqlLiteral(value)
+            })
+            .join(', ')})`
+        })
+        .join(', ')}
+    `,
+    )
     .catch((error) => {
-      console.error('[nvidia-smi] db insert failed', error)
+      if (!isExpectedWriterRoleLossError(error)) {
+        console.error('[nvidia-smi] db insert failed', error)
+      }
     })
 }
 

@@ -1,9 +1,9 @@
 import {type} from 'arktype'
 import {XMLParser} from 'fast-xml-parser'
 
-import {articles as articlesSchema} from '../../db/schema.ts'
+import type {ArticleRecord} from '../../db/schemaTypes.ts'
 
-type ArticleInsert = typeof articlesSchema.$inferInsert
+type ArticleInsert = ArticleRecord
 
 type ArticlesUpsertPayload = {
   article_id: string

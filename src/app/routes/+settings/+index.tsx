@@ -1,415 +1,260 @@
-import {useQuery} from '@tanstack/solid-query'
+import {createMutation, useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
-import {createEffect, createSignal, onCleanup, Show} from 'solid-js'
+import {createEffect, createSignal, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient'
-import {fetchSession} from '../../../services/fetchSession'
-import {updateUserProfile} from '../../../services/usersService'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
-import {authClient} from '../../lib/auth-client'
 
-type CodexCliStatus = {ok: boolean; loggedIn: boolean; method: 'chatgpt' | 'api-key' | null; raw: string}
-
-type CodexStatus = {codexBin: string; cli: CodexCliStatus; appServerReady: boolean; message: string}
-
-type CodexStatusResponse = {data: CodexStatus; error: null}
-
-type CodexDeviceLoginJob = {
+type LocalUser = {
   id: string
-  state: 'running' | 'completed' | 'failed'
-  startedAt: string
-  finishedAt: string | null
-  exitCode: number | null
-  signal: string | null
-  output: string[]
-  deviceUrl: string | null
-  deviceCode: string | null
-  error: string | null
+  name: string
+  email: string
+  role?: string | null
+  fullTextConversionModelId?: string | null
+  unpaywallEmail?: string | null
+  duckdbBin?: string | null
+  codexBin?: string | null
+}
+type UsersResponse = {data: LocalUser[]}
+type StoredModel = {displayName?: string | null; enabled: boolean; id: string; name: string; provider: string}
+type UpdateLocalUserInput = {
+  email: string
+  name: string
+  fullTextConversionModelId: string
+  unpaywallEmail: string
+  duckdbBin: string
+  codexBin: string
+}
+type UpdateUserResponse = {data: LocalUser}
+type StoredModelsResponse = {data: StoredModel[]}
+
+const fetchLocalUser = async (): Promise<LocalUser | null> => {
+  const response = await apiClient.api.users.get()
+  const result = handleApiResponse<UsersResponse>(response, 'Failed to load local user')
+  return result.data?.[0] ?? null
 }
 
-type StartCodexLoginResponse = {data: {started: boolean; job: CodexDeviceLoginJob | null; message: string}; error: null}
-type CodexLoginJobResponse = {data: CodexDeviceLoginJob; error: null}
+const fetchStoredModels = async (): Promise<StoredModel[]> => {
+  const response = await apiClient.api.models.stored.get()
+  const result = handleApiResponse<StoredModelsResponse>(response, 'Failed to load stored models')
+
+  return result.data ?? []
+}
+
+const getNullableString = (value: string): string | null => {
+  const normalized = value.trim()
+
+  return normalized === '' ? null : normalized
+}
+
+const updateLocalUser = async (input: UpdateLocalUserInput): Promise<LocalUser> => {
+  const response = await apiClient.api.users.patch({
+    codexBin: getNullableString(input.codexBin),
+    duckdbBin: getNullableString(input.duckdbBin),
+    email: input.email,
+    fullTextConversionModelId: getNullableString(input.fullTextConversionModelId),
+    name: input.name,
+    unpaywallEmail: getNullableString(input.unpaywallEmail),
+  })
+  const result = handleApiResponse<UpdateUserResponse>(response, 'Failed to save settings')
+
+  return result.data
+}
 
 const Settings = () => {
   const [displayName, setDisplayName] = createSignal('')
-  const [isSavingProfile, setIsSavingProfile] = createSignal(false)
-  const [saveError, setSaveError] = createSignal('')
-  const [saveSuccess, setSaveSuccess] = createSignal('')
-  const sessionQuery = useQuery(() => {
-    return {queryKey: ['session'], queryFn: fetchSession}
+  const [profileEmail, setProfileEmail] = createSignal('')
+  const [fullTextConversionModelId, setFullTextConversionModelId] = createSignal('')
+  const [unpaywallEmail, setUnpaywallEmail] = createSignal('')
+  const [duckdbBin, setDuckdbBin] = createSignal('')
+  const [codexBin, setCodexBin] = createSignal('')
+  const localUserQuery = useQuery(() => {
+    return {queryKey: ['local-user'], queryFn: fetchLocalUser, staleTime: 5 * 60 * 1000, refetchOnWindowFocus: false}
   })
-
-  const codexStatusQuery = useQuery(() => {
+  const storedModelsQuery = useQuery(() => {
     return {
-      queryKey: ['codex-status'],
-      queryFn: async () => {
-        const response = await apiClient.api.models.codex.status.get()
-        const result = handleApiResponse<CodexStatusResponse>(
-          response as unknown as {data?: CodexStatusResponse; error?: unknown; status?: number},
-          'Failed to load Codex status',
-        )
-        return result.data
+      queryKey: ['stored-models'],
+      queryFn: fetchStoredModels,
+      staleTime: 5 * 60 * 1000,
+      refetchOnWindowFocus: false,
+    }
+  })
+  const updateLocalUserMutation = createMutation(() => {
+    return {
+      mutationFn: updateLocalUser,
+      onSuccess: (user: LocalUser) => {
+        setDisplayName(user.name)
+        setProfileEmail(user.email)
+        setFullTextConversionModelId(user.fullTextConversionModelId ?? '')
+        setUnpaywallEmail(user.unpaywallEmail ?? '')
+        setDuckdbBin(user.duckdbBin ?? '')
+        setCodexBin(user.codexBin ?? '')
+        void localUserQuery.refetch()
       },
-      staleTime: 1000 * 10,
-      refetchOnWindowFocus: true,
     }
   })
 
-  const [codexLoginJobId, setCodexLoginJobId] = createSignal<string | null>(null)
-  const [codexLoginJob, setCodexLoginJob] = createSignal<CodexDeviceLoginJob | null>(null)
-  const [isStartingCodexLogin, setIsStartingCodexLogin] = createSignal(false)
-  const [codexLoginError, setCodexLoginError] = createSignal('')
-
-  const fetchCodexLoginJob = async (jobId: string): Promise<CodexDeviceLoginJob> => {
-    const response = await apiClient.api.models.codex.login({jobId}).get()
-    const result = handleApiResponse<CodexLoginJobResponse>(
-      response as unknown as {data?: CodexLoginJobResponse; error?: unknown; status?: number},
-      'Failed to fetch Codex login job',
-    )
-    return result.data
-  }
-
   createEffect(() => {
-    const jobId = codexLoginJobId()
-    const job = codexLoginJob()
-    const isRunning = Boolean(jobId && job?.state === 'running')
-    if (!jobId || !isRunning) return
+    setDisplayName(localUserQuery.data?.name ?? '')
+    setProfileEmail(localUserQuery.data?.email ?? '')
+    setFullTextConversionModelId(localUserQuery.data?.fullTextConversionModelId ?? '')
+    setUnpaywallEmail(localUserQuery.data?.unpaywallEmail ?? '')
+    setDuckdbBin(localUserQuery.data?.duckdbBin ?? '')
+    setCodexBin(localUserQuery.data?.codexBin ?? '')
+  })
 
-    const interval = setInterval(() => {
-      void fetchCodexLoginJob(jobId)
-        .then((updated) => {
-          setCodexLoginJob(updated)
-          if (updated.state !== 'running') {
-            void codexStatusQuery.refetch()
-          }
-        })
-        .catch((error) => {
-          setCodexLoginError(error instanceof Error ? error.message : 'Failed to fetch Codex login job')
-        })
-    }, 1_000)
-
-    onCleanup(() => {
-      clearInterval(interval)
+  const fullTextConversionModels = () => {
+    return (storedModelsQuery.data ?? []).filter((model) => {
+      return model.enabled && model.provider === 'docling'
     })
-  })
-
-  const startCodexLogin = async () => {
-    setIsStartingCodexLogin(true)
-    setCodexLoginError('')
-    try {
-      const response = await apiClient.api.models.codex.login.post()
-      const result = handleApiResponse<StartCodexLoginResponse>(
-        response as unknown as {data?: StartCodexLoginResponse; error?: unknown; status?: number},
-        'Failed to start Codex login',
-      )
-      const job = result.data.job
-      if (!job) {
-        void codexStatusQuery.refetch()
-        setIsStartingCodexLogin(false)
-        return
-      }
-
-      setCodexLoginJobId(job.id)
-      setCodexLoginJob(job)
-    } catch (error) {
-      setCodexLoginError(error instanceof Error ? error.message : 'Failed to start Codex login')
-    } finally {
-      setIsStartingCodexLogin(false)
-    }
   }
 
-  createEffect(() => {
-    const sessionName = sessionQuery.data?.user?.name ?? ''
-    setDisplayName(sessionName)
-  })
-
-  const handleSaveProfile = async () => {
-    const userId = sessionQuery.data?.user?.id
-    const currentName = sessionQuery.data?.user?.name ?? ''
-    const trimmedDisplayName = displayName().trim()
-
-    if (!userId) {
-      setSaveError('Unable to update profile right now.')
-      setSaveSuccess('')
-      return
-    }
-
-    if (!trimmedDisplayName) {
-      setSaveError('Display name cannot be empty.')
-      setSaveSuccess('')
-      return
-    }
-
-    if (trimmedDisplayName === currentName) {
-      setSaveError('')
-      setSaveSuccess('No changes to save.')
-      return
-    }
-
-    setIsSavingProfile(true)
-    setSaveError('')
-    setSaveSuccess('')
-
-    await updateUserProfile(userId, trimmedDisplayName)
-      .then(() => {
-        setSaveSuccess('Profile updated successfully.')
-        setDisplayName(trimmedDisplayName)
-        return sessionQuery.refetch()
-      })
-      .catch((error) => {
-        setSaveError(error instanceof Error ? error.message : 'Failed to update profile.')
-      })
-
-    setIsSavingProfile(false)
-  }
-
-  const [currentPassword, setCurrentPassword] = createSignal('')
-  const [newPassword, setNewPassword] = createSignal('')
-  const [confirmNewPassword, setConfirmNewPassword] = createSignal('')
-  const [isChangingPassword, setIsChangingPassword] = createSignal(false)
-  const [passwordError, setPasswordError] = createSignal('')
-  const [passwordSuccess, setPasswordSuccess] = createSignal('')
-
-  const handleChangePassword = async () => {
-    const current = currentPassword()
-    const newPass = newPassword()
-    const confirmPass = confirmNewPassword()
-
-    if (!current || !newPass || !confirmPass) {
-      setPasswordError('All fields are required.')
-      setPasswordSuccess('')
-      return
-    }
-
-    if (newPass !== confirmPass) {
-      setPasswordError('New passwords do not match.')
-      setPasswordSuccess('')
-      return
-    }
-
-    if (newPass.length < 8) {
-      setPasswordError('Password must be at least 8 characters long.')
-      setPasswordSuccess('')
-      return
-    }
-
-    setIsChangingPassword(true)
-    setPasswordError('')
-    setPasswordSuccess('')
-
-    try {
-      const {error} = await authClient.changePassword({
-        currentPassword: current,
-        newPassword: newPass,
-        revokeOtherSessions: true,
-      })
-
-      if (error) {
-        throw error
-      }
-
-      setPasswordSuccess('Password changed successfully.')
-      setCurrentPassword('')
-      setNewPassword('')
-      setConfirmNewPassword('')
-    } catch (error) {
-      setPasswordError(error instanceof Error ? error.message : 'Failed to change password.')
-    } finally {
-      setIsChangingPassword(false)
-    }
-  }
-
-  const isChangePasswordDisabled = () => {
-    return isChangingPassword() || !currentPassword() || !newPassword() || !confirmNewPassword()
-  }
-
-  const isSaveDisabled = () => {
-    const currentName = sessionQuery.data?.user?.name ?? ''
-    return isSavingProfile() || !displayName().trim() || displayName().trim() === currentName
+  const isProfileDirty = () => {
+    return (
+      displayName().trim() !== (localUserQuery.data?.name ?? '').trim()
+      || profileEmail().trim() !== (localUserQuery.data?.email ?? '').trim()
+      || fullTextConversionModelId().trim() !== (localUserQuery.data?.fullTextConversionModelId ?? '').trim()
+      || unpaywallEmail().trim() !== (localUserQuery.data?.unpaywallEmail ?? '').trim()
+      || duckdbBin().trim() !== (localUserQuery.data?.duckdbBin ?? '').trim()
+      || codexBin().trim() !== (localUserQuery.data?.codexBin ?? '').trim()
+    )
   }
 
   return (
     <div class="p-6 max-w-4xl mx-auto">
-      <h1 class="text-3xl font-bold mb-6">User Settings</h1>
+      <h1 class="text-3xl font-bold mb-6">Settings</h1>
 
       <div class="space-y-6">
         <div class="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
-          <h2 class="text-xl font-semibold text-gray-900 mb-4">Profile</h2>
-          <div class="space-y-4">
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">Email</label>
-              <input
-                type="email"
-                value={sessionQuery.data?.user?.email || ''}
-                readonly
-                class="w-full px-3 py-3 border border-gray-300 rounded-md bg-gray-50 text-gray-500"
-              />
-            </div>
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">Display Name</label>
-              <input
-                type="text"
-                value={displayName()}
-                onInput={(event) => {
-                  return setDisplayName(event.currentTarget.value)
-                }}
-                class="w-full px-3 py-3 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-              />
-              {saveError() && <p class="mt-2 text-sm text-red-600">{saveError()}</p>}
-              {saveSuccess() && !saveError() && <p class="mt-2 text-sm text-green-600">{saveSuccess()}</p>}
-            </div>
-          </div>
-        </div>
-
-        <div class="flex gap-4">
-          <button
-            class="px-4 py-3 bg-blue-600 text-white rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
-            disabled={isSaveDisabled()}
-            onClick={() => {
-              void handleSaveProfile()
-            }}
-          >
-            {isSavingProfile() ? 'Saving...' : 'Save Changes'}
-          </button>
-        </div>
-
-        <div class="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
-          <h2 class="text-xl font-semibold text-gray-900 mb-4">Change Password</h2>
-          <div class="space-y-4">
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">Current Password</label>
-              <input
-                type="password"
-                value={currentPassword()}
-                onInput={(event) => {
-                  return setCurrentPassword(event.currentTarget.value)
-                }}
-                class="w-full px-3 py-3 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-              />
-            </div>
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">New Password</label>
-              <input
-                type="password"
-                value={newPassword()}
-                onInput={(event) => {
-                  return setNewPassword(event.currentTarget.value)
-                }}
-                class="w-full px-3 py-3 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-              />
-            </div>
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">Confirm New Password</label>
-              <input
-                type="password"
-                value={confirmNewPassword()}
-                onInput={(event) => {
-                  return setConfirmNewPassword(event.currentTarget.value)
-                }}
-                class="w-full px-3 py-3 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-              />
-            </div>
-
-            {passwordError() && <p class="mt-2 text-sm text-red-600">{passwordError()}</p>}
-            {passwordSuccess() && !passwordError() && <p class="mt-2 text-sm text-green-600">{passwordSuccess()}</p>}
-
-            <div class="pt-2">
+          <h2 class="text-xl font-semibold text-gray-900 mb-4">Local profile</h2>
+          <Show when={localUserQuery.isLoading}>
+            <p class="text-sm text-gray-600">Loading local profile...</p>
+          </Show>
+          <Show when={localUserQuery.isError}>
+            <p class="text-sm text-red-600">
+              {localUserQuery.error instanceof Error ? localUserQuery.error.message : 'Failed to load local profile'}
+            </p>
+          </Show>
+          <Show when={!localUserQuery.isLoading && !localUserQuery.isError}>
+            <div class="space-y-4">
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Email</label>
+                <input
+                  type="email"
+                  value={profileEmail()}
+                  onInput={(event) => {
+                    setProfileEmail(event.currentTarget.value)
+                  }}
+                  class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900"
+                />
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Display Name</label>
+                <input
+                  type="text"
+                  value={displayName()}
+                  onInput={(event) => {
+                    setDisplayName(event.currentTarget.value)
+                  }}
+                  class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
+                />
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">PDF Conversion Model</label>
+                <select
+                  value={fullTextConversionModelId()}
+                  onInput={(event) => {
+                    setFullTextConversionModelId(event.currentTarget.value)
+                  }}
+                  class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
+                >
+                  <option value="">No PDF conversion model selected</option>
+                  <For each={fullTextConversionModels()}>
+                    {(model) => {
+                      return <option value={model.id}>{model.displayName ?? model.name}</option>
+                    }}
+                  </For>
+                </select>
+                <p class="mt-2 text-xs text-gray-500">
+                  Choose a Docling provider model for PDF conversion. Manage endpoints and models on the Providers page.
+                </p>
+              </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Unpaywall Email</label>
+                <input
+                  type="email"
+                  value={unpaywallEmail()}
+                  onInput={(event) => {
+                    setUnpaywallEmail(event.currentTarget.value)
+                  }}
+                  class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
+                />
+                <p class="mt-2 text-xs text-gray-500">
+                  Used when fetching PDFs from Unpaywall. Stored in local app config.
+                </p>
+              </div>
+              <div class="pt-2 border-t border-gray-200">
+                <h3 class="text-sm font-semibold text-gray-900 mb-3">Advanced</h3>
+                <div class="space-y-4">
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">DuckDB Binary</label>
+                    <input
+                      type="text"
+                      value={duckdbBin()}
+                      onInput={(event) => {
+                        setDuckdbBin(event.currentTarget.value)
+                      }}
+                      class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
+                    />
+                    <p class="mt-2 text-xs text-gray-500">
+                      Optional override for the DuckDB CLI binary. Leave empty to use `duckdb` on PATH.
+                    </p>
+                  </div>
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Codex Binary</label>
+                    <input
+                      type="text"
+                      value={codexBin()}
+                      onInput={(event) => {
+                        setCodexBin(event.currentTarget.value)
+                      }}
+                      class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
+                    />
+                    <p class="mt-2 text-xs text-gray-500">
+                      Optional override for the Codex CLI binary. Leave empty to auto-detect it.
+                    </p>
+                  </div>
+                  <p class="text-xs text-gray-500">Binary changes apply on the next server restart.</p>
+                </div>
+              </div>
+              <Show when={updateLocalUserMutation.isError}>
+                <p class="text-sm text-red-600">
+                  {updateLocalUserMutation.error instanceof Error
+                    ? updateLocalUserMutation.error.message
+                    : 'Failed to save profile'}
+                </p>
+              </Show>
+              <Show when={updateLocalUserMutation.isSuccess && !isProfileDirty()}>
+                <p class="text-sm text-green-700">Saved.</p>
+              </Show>
               <button
-                class="px-4 py-3 bg-blue-600 text-white rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
-                disabled={isChangePasswordDisabled()}
+                class="w-full sm:w-auto px-4 py-3 bg-blue-600 text-white rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+                disabled={updateLocalUserMutation.isPending || !isProfileDirty()}
                 onClick={() => {
-                  void handleChangePassword()
+                  updateLocalUserMutation.mutate({
+                    codexBin: codexBin(),
+                    duckdbBin: duckdbBin(),
+                    email: profileEmail(),
+                    fullTextConversionModelId: fullTextConversionModelId(),
+                    name: displayName(),
+                    unpaywallEmail: unpaywallEmail(),
+                  })
                 }}
               >
-                {isChangingPassword() ? 'Changing Password...' : 'Change Password'}
+                {updateLocalUserMutation.isPending ? 'Saving...' : 'Save Settings'}
               </button>
             </div>
-          </div>
-        </div>
-
-        <div class="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
-          <h2 class="text-xl font-semibold text-gray-900 mb-4">Codex</h2>
-          <div class="space-y-3">
-            <Show when={codexStatusQuery.isLoading}>
-              <p class="text-sm text-gray-600">Checking Codex status...</p>
-            </Show>
-            <Show when={codexStatusQuery.isError}>
-              <p class="text-sm text-red-600">
-                {codexStatusQuery.error instanceof Error
-                  ? codexStatusQuery.error.message
-                  : 'Failed to load Codex status'}
-              </p>
-            </Show>
-            <Show when={!codexStatusQuery.isLoading && !codexStatusQuery.isError && codexStatusQuery.data}>
-              <div class="text-sm text-gray-700">
-                <span class="font-medium">Login:</span>{' '}
-                <span class={codexStatusQuery.data?.cli.loggedIn ? 'text-green-700' : 'text-amber-700'}>
-                  {codexStatusQuery.data?.cli.loggedIn
-                    ? `Logged in${codexStatusQuery.data?.cli.method ? ` (${codexStatusQuery.data?.cli.method})` : ''}`
-                    : 'Not logged in'}
-                </span>
-              </div>
-              <div class="text-sm text-gray-700">
-                <span class="font-medium">App-server:</span>{' '}
-                <span class={codexStatusQuery.data?.appServerReady ? 'text-green-700' : 'text-amber-700'}>
-                  {codexStatusQuery.data?.appServerReady ? 'Ready' : 'Not ready'}
-                </span>
-              </div>
-              <p class="text-xs text-gray-600 font-mono break-all">{codexStatusQuery.data?.codexBin}</p>
-              <p class="text-xs text-gray-600">{codexStatusQuery.data?.message}</p>
-
-              <Show when={!codexStatusQuery.data?.cli.loggedIn}>
-                <button
-                  class="mt-2 px-4 py-3 bg-blue-600 text-white rounded-md shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 text-sm font-medium disabled:opacity-60 disabled:cursor-not-allowed"
-                  disabled={isStartingCodexLogin()}
-                  onClick={() => {
-                    void startCodexLogin()
-                  }}
-                >
-                  {isStartingCodexLogin() ? 'Starting Codex Login...' : 'Sign in to Codex'}
-                </button>
-              </Show>
-
-              <Show when={codexLoginError()}>
-                <p class="text-sm text-red-600">{codexLoginError()}</p>
-              </Show>
-
-              <Show when={codexLoginJob()}>
-                <div class="mt-3 border border-gray-200 rounded-md bg-gray-50 p-4">
-                  <p class="text-sm font-medium text-gray-900 mb-2">Device login</p>
-                  <Show when={codexLoginJob()?.deviceUrl}>
-                    <p class="text-sm text-gray-700">
-                      Open:{' '}
-                      <a
-                        class="text-blue-700 underline"
-                        href={codexLoginJob()?.deviceUrl ?? '#'}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {codexLoginJob()?.deviceUrl}
-                      </a>
-                    </p>
-                  </Show>
-                  <Show when={codexLoginJob()?.deviceCode}>
-                    <p class="text-sm text-gray-700">
-                      Code: <span class="font-mono">{codexLoginJob()?.deviceCode}</span>
-                    </p>
-                  </Show>
-
-                  <pre class="mt-3 text-xs whitespace-pre-wrap font-mono text-gray-800">
-                    {codexLoginJob()?.output.join('\n')}
-                  </pre>
-
-                  <Show when={codexLoginJob()?.state === 'completed'}>
-                    <p class="mt-2 text-sm text-green-700">Login complete. Refreshing status...</p>
-                  </Show>
-                  <Show when={codexLoginJob()?.state === 'failed'}>
-                    <p class="mt-2 text-sm text-red-700">Login failed: {codexLoginJob()?.error ?? 'Unknown error'}</p>
-                  </Show>
-                </div>
-              </Show>
-            </Show>
-          </div>
+          </Show>
         </div>
       </div>
     </div>

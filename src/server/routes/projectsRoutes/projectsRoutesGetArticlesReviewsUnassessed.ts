@@ -1,15 +1,12 @@
-import {desc, eq, inArray} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles, projectRouteLink, projects} from '../../../db/schema.ts'
 import {getUnassessedArticlesFromOlap} from '../../../services/olap/unassessedArticlesOlap.ts'
-import {getDatabase} from '../../utils/getDatabase.ts'
+import {getAppQueryService} from '../../services/getAppQueryService.ts'
+import {assertProjectIsActive} from './projectAccessGuard.ts'
 
 export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
   '/api/articlesreviewsunassessed',
   async ({body}) => {
-    const db = getDatabase()
-
     const page = parseInt(body?.page || '1', 10)
     const limit = parseInt(body?.limit || '100', 10)
     const offset = (page - 1) * limit
@@ -17,25 +14,9 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
     const fromDate = body.from ? new Date(`${body.from}T00:00:00.000Z`) : null
     const toDate = body.to ? new Date(`${body.to}T23:59:59.999Z`) : null
 
-    const [[projectBounds], projectImportRoutes] = await Promise.all([
-      db
-        .select({
-          dateFrom: projects.dateFrom,
-          dateTo: projects.dateTo,
-          modelId: projects.modelId,
-          useTitle: projects.useTitle,
-          useAbstract: projects.useAbstract,
-          useFulltext: projects.useFulltext,
-          useFulltextNoImages: projects.useFulltextNoImages,
-        })
-        .from(projects)
-        .where(eq(projects.id, body.projectId))
-        .limit(1),
-      db
-        .select({importRouteId: projectRouteLink.importRouteId})
-        .from(projectRouteLink)
-        .where(eq(projectRouteLink.projectId, body.projectId)),
-    ])
+    await assertProjectIsActive(body.projectId)
+
+    const projectBounds = await getAppQueryService().getProjectReviewConfig(body.projectId)
 
     if (!projectBounds?.modelId) {
       return {data: [], totalCount: 0, page, limit, totalPages: 0}
@@ -55,16 +36,12 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
       return projectBounds.dateTo ?? toDate
     })()
 
-    const importRouteIds = projectImportRoutes.map((r) => {
-      return r.importRouteId
-    })
-
-    const {articles: unassessedFromCH, totalCount} = await getUnassessedArticlesFromOlap({
+    const {articles: unassessedArticles, totalCount} = await getUnassessedArticlesFromOlap({
       projectId: body.projectId,
       projectModelId: projectBounds.modelId,
       projectDateFrom: effectiveFromDate,
       projectDateTo: effectiveToDate,
-      importRouteIds,
+      importRouteIds: projectBounds.importRouteIds,
       useTitle: projectBounds.useTitle ?? true,
       useAbstract: projectBounds.useAbstract ?? true,
       useFulltext: projectBounds.useFulltext ?? false,
@@ -74,19 +51,15 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
       search: searchTitle || undefined,
     })
 
-    if (unassessedFromCH.length === 0) {
+    if (unassessedArticles.length === 0) {
       return {data: [], totalCount, page, limit, totalPages: Math.ceil(totalCount / limit)}
     }
 
-    const articleIds = unassessedFromCH.map((a) => {
+    const articleIds = unassessedArticles.map((a) => {
       return a.id
     })
 
-    const fullArticles = await db
-      .select()
-      .from(articles)
-      .where(inArray(articles.id, articleIds))
-      .orderBy(desc(articles.articleCreatedAt))
+    const fullArticles = await getAppQueryService().getFullArticlesByIds(articleIds)
 
     const articleOrder = new Map(
       articleIds.map((id, idx) => {

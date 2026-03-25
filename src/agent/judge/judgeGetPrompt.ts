@@ -1,4 +1,4 @@
-import * as schema from '../../db/schema.ts'
+import type {ArticleRecord} from '../../db/schemaTypes.ts'
 import {rateLimitedLogger} from '../../server/utils/rateLimitedLogger'
 
 const DANGEROUS_TEXT_START = '<DANGEROUS_TEXT_START>'
@@ -82,7 +82,7 @@ output_type: ${prompt.type}
   }, '')
 }
 
-type ArticleType = typeof schema.articles.$inferSelect
+type ArticleType = ArticleRecord
 
 export type JudgePromptResult = {prompt: string; shortIdMapping: ShortIdMapping}
 

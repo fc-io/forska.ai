@@ -1,6 +1,7 @@
-import {and, eq} from 'drizzle-orm'
-
-import {judgments, models, projects} from '../../db/schema.ts'
+import type {JudgmentChunkingStrategy} from '../../db/schemaTypes.ts'
+import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
+import {escapeSqlString, getSqlLiteral} from '../../server/services/appQueryHelpers.ts'
+import {getDuckdbMartRefreshService} from '../../server/services/getDuckdbMartRefreshService.ts'
 import {getShortIdForPrompt, type ShortIdMapping} from './judgeGetPrompt.ts'
 import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
 
@@ -25,35 +26,37 @@ export const judgeStoreJudgment = async (
   promptIds: string[] | undefined,
   projectId: string | undefined,
   shortIdMapping: ShortIdMapping,
-  chunkingStrategy: (typeof judgments.$inferInsert)['chunkingStrategy'] = null,
+  chunkingStrategy: JudgmentChunkingStrategy | null = null,
 ): Promise<void> => {
   try {
     if (!modelId || !promptIds || promptIds.length === 0) {
       console.error('Warning: No modelId/promptIds provided, judgment not stored to database')
       return
     }
-    const {getDatabase} = await import('../../server/utils/getDatabase.ts')
-    const db = getDatabase()
     // Prepare snapshot context (best-effort)
     const [projectRow] =
       projectId && projectId.length > 0
-        ? await db
-            .select({
-              id: projects.id,
-              ownerId: projects.ownerId,
-              useTitle: projects.useTitle,
-              useAbstract: projects.useAbstract,
-              useFulltext: projects.useFulltext,
-            })
-            .from(projects)
-            .where(eq(projects.id, projectId))
-            .limit(1)
+        ? await getAppDatabaseService().queryJson<{
+            id: string
+            useTitle: boolean
+            useAbstract: boolean
+            useFulltext: boolean
+          }>(`
+            SELECT id, use_title AS useTitle, use_abstract AS useAbstract, use_fulltext AS useFulltext
+            FROM app.project
+            WHERE id = '${escapeSqlString(projectId)}'
+            LIMIT 1
+          `)
         : [null]
-    const [modelRow] = await db
-      .select({modelName: models.modelName, provider: models.provider})
-      .from(models)
-      .where(eq(models.id, modelId))
-      .limit(1)
+    const [modelRow] = await getAppDatabaseService().queryJson<{modelName: string | null; provider: string | null}>(`
+      SELECT
+        COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
+        pc.provider_kind AS provider
+      FROM app.model m
+      LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+      WHERE m.id = '${escapeSqlString(modelId)}'
+      LIMIT 1
+    `)
     const snapshotValues = {
       snapshotProjectId: projectRow?.id ?? null,
       snapshotProjectModelName: modelRow?.modelName ?? null,
@@ -75,60 +78,82 @@ export const judgeStoreJudgment = async (
       // console.log(answeredOriginalAsArray)
       // ('test^^^a7aa21e8-d4e6-4e60-b39e-732085c56b00---explanation')
       // "test^^^a7aa21e8-d4e6-4e60-b39e-732085c56b00---quotes"
-      const existing = await db
-        .select({id: judgments.id})
-        .from(judgments)
-        .where(
-          and(eq(judgments.articleId, articleId), eq(judgments.modelId, modelId), eq(judgments.promptId, promptId)),
-        )
-        .limit(1)
+      const existing = await getAppDatabaseService().queryJson<{id: string}>(`
+        SELECT id
+        FROM app.judgment
+        WHERE article_id = '${escapeSqlString(articleId)}'
+          AND model_id = '${escapeSqlString(modelId)}'
+          AND prompt_id = '${escapeSqlString(promptId)}'
+        LIMIT 1
+      `)
 
       const existingRow = existing[0]
       if (existingRow) {
         const existingId = existingRow.id
-        const [updated] = await db
-          .update(judgments)
-          .set({
-            isAnswered: true,
-            answeredOriginal,
-            answeredOriginalAsArray,
-            confidenceOriginal: 50,
-            explanation: answeredExplanation || null,
-            quotes: answeredQuotes || null,
-            chunkingStrategy,
-            updatedAt: new Date(),
-          })
-          .where(eq(judgments.id, existingId))
-          .returning()
+        const [updated] = await getAppDatabaseService().queryJson<{id: string}>(`
+          UPDATE app.judgment
+          SET is_answered = TRUE,
+              answered_original = ${getSqlLiteral(answeredOriginal)},
+              answered_original_as_array = ${getSqlLiteral(answeredOriginalAsArray)},
+              confidence_original = 50,
+              explanation = ${getSqlLiteral(answeredExplanation || null)},
+              quotes = ${getSqlLiteral(answeredQuotes)},
+              chunking_strategy = ${getSqlLiteral(chunkingStrategy)},
+              updated_at = current_timestamp
+          WHERE id = '${escapeSqlString(existingId)}'
+          RETURNING id
+        `)
         return updated
       }
 
-      const [inserted] = await db
-        .insert(judgments)
-        .values({
-          articleId,
-          modelId,
-          promptId,
-          isAnswered: true,
-          answeredOriginal,
-          answeredOriginalAsArray,
-          confidenceOriginal: 50,
-          explanation: answeredExplanation || null,
-          quotes: answeredQuotes || null,
-          chunkingStrategy,
-          // Snapshots (kept for cross-project display)
-          snapshotProjectId: snapshotValues.snapshotProjectId,
-          snapshotProjectModelName: snapshotValues.snapshotProjectModelName,
-        })
-        .returning()
+      const [inserted] = await getAppDatabaseService().queryJson<{id: string}>(`
+        INSERT INTO app.judgment (
+          id,
+          article_id,
+          model_id,
+          prompt_id,
+          is_answered,
+          answered_original,
+          answered_original_as_array,
+          confidence_original,
+          explanation,
+          quotes,
+          chunking_strategy,
+          snapshot_project_id,
+          snapshot_project_model_name
+        )
+        VALUES (
+          '${escapeSqlString(crypto.randomUUID())}',
+          '${escapeSqlString(articleId)}',
+          '${escapeSqlString(modelId)}',
+          '${escapeSqlString(promptId)}',
+          TRUE,
+          ${getSqlLiteral(answeredOriginal)},
+          ${getSqlLiteral(answeredOriginalAsArray)},
+          50,
+          ${getSqlLiteral(answeredExplanation || null)},
+          ${getSqlLiteral(answeredQuotes)},
+          ${getSqlLiteral(chunkingStrategy)},
+          ${getSqlLiteral(snapshotValues.snapshotProjectId)},
+          ${getSqlLiteral(snapshotValues.snapshotProjectModelName)}
+        )
+        RETURNING id
+      `)
       return inserted
     })
     // why is this here?
     const results = await Promise.allSettled(storePromises)
+    const successfulResults = results.filter((result): result is PromiseFulfilledResult<{id: string} | undefined> => {
+      return result.status === 'fulfilled'
+    })
 
     const failedResults = results.filter((r): r is PromiseRejectedResult => {
       return r.status === 'rejected'
     })
+
+    if (successfulResults.length > 0) {
+      await getDuckdbMartRefreshService().queueJudgmentArticleRefresh(articleId, 'judgeStoreJudgment')
+    }
 
     if (failedResults.length > 0) {
       console.error(

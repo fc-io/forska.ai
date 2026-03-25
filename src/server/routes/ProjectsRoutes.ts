@@ -1,32 +1,26 @@
-import {and, asc, desc, eq, inArray, isNull, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
+import {assertSelectableProviderModelId} from '../providers/providerModelRepository.ts'
+import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
-  importRoute as importRouteTable,
-  judgments,
-  judgmentsHuman,
-  judgmentsJobs,
-  models,
-  projectArticles,
-  projectPrompts,
-  projectRouteLink,
-  projects,
-  prompts,
-} from '../../db/schema.ts'
-import {localUserId} from '../../utils/localUser.ts'
-import {requireUserAuth} from '../utils/authGuard.ts'
+  escapeSqlString,
+  getDateValue,
+  getQuotedStringList,
+  getSqlLiteral,
+  getTimestampLiteral,
+} from '../services/appQueryHelpers.ts'
+import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
-import {getDatabase} from '../utils/getDatabase.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
+import {assertProjectIsActive, getProjectAccess} from './projectsRoutes/projectAccessGuard.ts'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'
 import {projectsRoutesGetArticlesReviewsBoth} from './projectsRoutes/projectsRoutesGetArticlesReviewsBoth.ts'
-import {projectsRoutesGetArticlesReviewsClickHouse} from './projectsRoutes/projectsRoutesGetArticlesReviewsClickHouse.ts'
 import {projectsRoutesGetArticlesReviewsCount} from './projectsRoutes/projectsRoutesGetArticlesReviewsCount.ts'
 import {projectsRoutesGetArticlesReviewsFilters} from './projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts'
 import {projectsRoutesGetArticlesReviewsHuman} from './projectsRoutes/projectsRoutesGetArticlesReviewsHuman.ts'
 import {projectsRoutesGetArticlesReviewsHumanFilters} from './projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.ts'
 import {projectsRoutesGetArticlesReviewsUnassessed} from './projectsRoutes/projectsRoutesGetArticlesReviewsUnassessed.ts'
-import {projectsRoutesGetReviewsHealth} from './projectsRoutes/projectsRoutesGetReviewsHealth.ts'
+import {projectsRoutesGetReviewsWarnings} from './projectsRoutes/projectsRoutesGetReviewsWarnings.ts'
 import {projectsRoutesPostArticleReviewDetails} from './projectsRoutes/projectsRoutesPostArticleReviewDetails.ts'
 
 const parseOptionalDate = (value?: string | null) => {
@@ -47,40 +41,144 @@ const parseOptionalDate = (value?: string | null) => {
   return parsedDate
 }
 
-const _getOrphanPromptIds = async (tx: ReturnType<typeof getDatabase>, promptIds: string[]) => {
-  if (promptIds.length === 0) {
-    return []
+type AppQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
+type AppTx = AppQueryRunner & {run: (statement: string) => Promise<void>}
+
+type ProjectRow = {
+  id: string
+  name: string
+  description: string | null
+  engine: string | null
+  modelId: string
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  dateFrom: unknown
+  dateTo: unknown
+  archived: boolean
+  createdAt: unknown
+  updatedAt: unknown
+}
+
+const getProjectValue = (row: ProjectRow) => {
+  return {
+    ...row,
+    dateFrom: getDateValue(row.dateFrom),
+    dateTo: getDateValue(row.dateTo),
+    createdAt: getDateValue(row.createdAt),
+    updatedAt: getDateValue(row.updatedAt),
+  }
+}
+
+const getProjectRowSql = (projectId: string) => {
+  return `
+    SELECT
+      id,
+      name,
+      description,
+      engine,
+      model_id AS modelId,
+      use_title AS useTitle,
+      use_abstract AS useAbstract,
+      use_fulltext AS useFulltext,
+      use_fulltext_no_images AS useFulltextNoImages,
+      date_from AS dateFrom,
+      date_to AS dateTo,
+      archived,
+      created_at AS createdAt,
+      updated_at AS updatedAt
+    FROM app.project
+    WHERE id = '${escapeSqlString(projectId)}'
+    LIMIT 1
+  `
+}
+
+const getProjectRow = async (db: AppQueryRunner, projectId: string) => {
+  const [project] = await db.queryJson<ProjectRow>(getProjectRowSql(projectId))
+  return project ?? null
+}
+
+const updateProjectTx = async (tx: AppTx, params: {projectId: string; updateParts: string[]}) => {
+  await tx.run(`
+    UPDATE app.project
+    SET ${params.updateParts.join(', ')}
+    WHERE id = '${escapeSqlString(params.projectId)}'
+  `)
+
+  return getProjectRow(tx, params.projectId)
+}
+
+const getPromptIdByHashTx = async (tx: AppTx, contentHash: string) => {
+  const [row] = await tx.queryJson<{id: string}>(`
+    SELECT id
+    FROM app.prompt
+    WHERE content_hash = '${escapeSqlString(contentHash)}'
+    LIMIT 1
+  `)
+
+  return row?.id ?? null
+}
+
+const getOrCreatePromptIdTx = async (
+  tx: AppTx,
+  params: {originalText: string; promptHeading: string | null; type: string | null; contentHash: string},
+) => {
+  const existingPromptId = await getPromptIdByHashTx(tx, params.contentHash)
+
+  if (existingPromptId) {
+    return existingPromptId
   }
 
-  const linkedToProjects = await tx
-    .select({promptId: projectPrompts.promptId})
-    .from(projectPrompts)
-    .where(inArray(projectPrompts.promptId, promptIds))
+  const [insertedPrompt] = await tx.queryJson<{id: string}>(`
+    INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash)
+    VALUES (
+      '${escapeSqlString(crypto.randomUUID())}',
+      ${getSqlLiteral(params.originalText)},
+      NULL,
+      ${getSqlLiteral(params.promptHeading)},
+      ${getSqlLiteral(params.type)},
+      '${escapeSqlString(params.contentHash)}'
+    )
+    ON CONFLICT(content_hash) DO NOTHING
+    RETURNING id
+  `)
 
-  const usedInJudgments = await tx
-    .select({promptId: judgments.promptId})
-    .from(judgments)
-    .where(inArray(judgments.promptId, promptIds))
+  return insertedPrompt?.id ?? (await getPromptIdByHashTx(tx, params.contentHash))
+}
 
-  const usedInHumanJudgments = await tx
-    .select({promptId: judgmentsHuman.promptId})
-    .from(judgmentsHuman)
-    .where(inArray(judgmentsHuman.promptId, promptIds))
-
-  const usedPromptIds = new Set(
-    [...linkedToProjects, ...usedInJudgments, ...usedInHumanJudgments].map((row) => {
-      return row.promptId
-    }),
-  )
-
-  return promptIds.filter((id) => {
-    return !usedPromptIds.has(id)
-  })
+const upsertProjectPromptTx = async (
+  tx: AppTx,
+  params: {
+    projectId: string
+    promptId: string
+    order: number
+    archived: boolean
+    enabled: boolean
+    originProjectId: string | null
+  },
+) => {
+  await tx.run(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, enabled, origin_project_id)
+    VALUES (
+      '${escapeSqlString(crypto.randomUUID())}',
+      '${escapeSqlString(params.projectId)}',
+      '${escapeSqlString(params.promptId)}',
+      ${params.order},
+      ${params.archived ? 'TRUE' : 'FALSE'},
+      ${params.enabled ? 'TRUE' : 'FALSE'},
+      ${getSqlLiteral(params.originProjectId)}
+    )
+    ON CONFLICT(project_id, prompt_id) DO UPDATE SET
+      prompt_order = EXCLUDED.prompt_order,
+      archived = EXCLUDED.archived,
+      enabled = EXCLUDED.enabled,
+      updated_at = now()
+  `)
 }
 
 export const projectsRoutes = new Elysia()
   .use(withErrorHandler())
-  .use(requireUserAuth())
   .use(projectsRoutesGetArticlesReviews)
   .use(projectsRoutesGetArticlesReviewsCount)
   .use(projectsRoutesGetArticlesReviewsBoth)
@@ -89,131 +187,304 @@ export const projectsRoutes = new Elysia()
   .use(projectsRoutesGetArticlesReviewsFilters)
   .use(projectsRoutesGetArticlesReviewsHumanFilters)
   .use(projectsRoutesPostArticleReviewDetails)
-  .use(projectsRoutesGetArticlesReviewsClickHouse)
-  .use(projectsRoutesGetReviewsHealth)
+  .use(projectsRoutesGetReviewsWarnings)
   .use(
-    new Elysia().use(requireUserAuth()).get('/api/projects-without-jobs', async () => {
-      const db = getDatabase()
-      const rows = await db
-        .select({id: projects.id, name: projects.name, description: projects.description})
-        .from(projects)
-        .leftJoin(judgmentsJobs, eq(judgmentsJobs.projectId, projects.id))
-        .where(isNull(judgmentsJobs.id))
-        .orderBy(desc(projects.createdAt))
+    new Elysia().get('/api/projects-without-jobs', async () => {
+      const rows = await getAppDatabaseService().queryJson<{id: string; name: string; description: string | null}>(`
+        SELECT p.id AS id, p.name AS name, p.description AS description
+        FROM app.project p
+        LEFT JOIN app.judgment_job jj ON jj.project_id = p.id
+        WHERE jj.id IS NULL
+        ORDER BY p.created_at DESC
+      `)
 
       return {data: rows}
     }),
   )
   .get('/api/projects', async () => {
-    const db = getDatabase()
-    // Filter out archived projects by default
-    const projectsList = await db
-      .select({project: projects, modelName: models.modelName})
-      .from(projects)
-      .leftJoin(models, eq(projects.modelId, models.id))
-      .where(eq(projects.archived, false))
-      .orderBy(asc(projects.name))
-
-    const projectsWithModelName = projectsList.map(({project, modelName}) => {
-      return {...project, modelName}
-    })
+    const projectsWithModelName = await getAppDatabaseService()
+      .queryJson<{
+        id: string
+        name: string
+        description: string | null
+        engine: string | null
+        modelId: string
+        useTitle: boolean
+        useAbstract: boolean
+        useFulltext: boolean
+        useFulltextNoImages: boolean
+        dateFrom: unknown
+        dateTo: unknown
+        archived: boolean
+        createdAt: unknown
+        updatedAt: unknown
+        modelName: string | null
+      }>(
+        `
+      SELECT
+        p.id AS id,
+        p.name AS name,
+        p.description AS description,
+        p.engine AS engine,
+        p.model_id AS modelId,
+        p.use_title AS useTitle,
+        p.use_abstract AS useAbstract,
+        p.use_fulltext AS useFulltext,
+        p.use_fulltext_no_images AS useFulltextNoImages,
+        p.date_from AS dateFrom,
+        p.date_to AS dateTo,
+        p.archived AS archived,
+        p.created_at AS createdAt,
+        p.updated_at AS updatedAt,
+        COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName
+      FROM app.project p
+      LEFT JOIN app.model m ON p.model_id = m.id
+      WHERE p.archived = FALSE
+      ORDER BY p.name ASC
+    `,
+      )
+      .then((rows) => {
+        return rows.map((row) => {
+          return {
+            ...row,
+            dateFrom: getDateValue(row.dateFrom),
+            dateTo: getDateValue(row.dateTo),
+            createdAt: getDateValue(row.createdAt),
+            updatedAt: getDateValue(row.updatedAt),
+          }
+        })
+      })
 
     return {data: projectsWithModelName}
   })
   .get('/api/projects/archived', async () => {
-    const db = getDatabase()
-    // Return only archived projects
-    const projectsList = await db
-      .select({project: projects, modelName: models.modelName})
-      .from(projects)
-      .leftJoin(models, eq(projects.modelId, models.id))
-      .where(eq(projects.archived, true))
-      .orderBy(desc(projects.createdAt))
-
-    const projectsWithModelName = projectsList.map(({project, modelName}) => {
-      return {...project, modelName}
-    })
+    const projectsWithModelName = await getAppDatabaseService()
+      .queryJson<{
+        id: string
+        name: string
+        description: string | null
+        engine: string | null
+        modelId: string
+        useTitle: boolean
+        useAbstract: boolean
+        useFulltext: boolean
+        useFulltextNoImages: boolean
+        dateFrom: unknown
+        dateTo: unknown
+        archived: boolean
+        createdAt: unknown
+        updatedAt: unknown
+        modelName: string | null
+      }>(
+        `
+      SELECT
+        p.id AS id,
+        p.name AS name,
+        p.description AS description,
+        p.engine AS engine,
+        p.model_id AS modelId,
+        p.use_title AS useTitle,
+        p.use_abstract AS useAbstract,
+        p.use_fulltext AS useFulltext,
+        p.use_fulltext_no_images AS useFulltextNoImages,
+        p.date_from AS dateFrom,
+        p.date_to AS dateTo,
+        p.archived AS archived,
+        p.created_at AS createdAt,
+        p.updated_at AS updatedAt,
+        COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName
+      FROM app.project p
+      LEFT JOIN app.model m ON p.model_id = m.id
+      WHERE p.archived = TRUE
+      ORDER BY p.created_at DESC
+    `,
+      )
+      .then((rows) => {
+        return rows.map((row) => {
+          return {
+            ...row,
+            dateFrom: getDateValue(row.dateFrom),
+            dateTo: getDateValue(row.dateTo),
+            createdAt: getDateValue(row.createdAt),
+            updatedAt: getDateValue(row.updatedAt),
+          }
+        })
+      })
 
     return {data: projectsWithModelName}
   })
-  .get('/api/projects/:id', async ({params}) => {
-    const db = getDatabase()
-    const [project] = await db.select().from(projects).where(eq(projects.id, params.id)).limit(1)
+  .get('/api/projects/:id/access', async ({params}) => {
+    const project = await getProjectAccess(params.id)
 
     if (!project) {
       throw new Error('Project not found')
     }
 
-    const projectPromptsList = await db
-      .select({
-        id: prompts.id,
-        originalText: prompts.originalText,
-        transformedText: prompts.transformedText,
-        promptHeading: prompts.promptHeading,
-        order: projectPrompts.order,
-        archived: projectPrompts.archived,
-        promptArchived: prompts.archived,
-        type: prompts.type,
-        enabled: projectPrompts.enabled,
-        originProjectId: projectPrompts.originProjectId,
-        contentHash: prompts.contentHash,
-        createdAt: prompts.createdAt,
+    return {data: project}
+  })
+  .get('/api/projects/:id', async ({params}) => {
+    await assertProjectIsActive(params.id)
+
+    const [project] = await getAppDatabaseService()
+      .queryJson<{
+        id: string
+        name: string
+        description: string | null
+        engine: string | null
+        modelId: string
+        useTitle: boolean
+        useAbstract: boolean
+        useFulltext: boolean
+        useFulltextNoImages: boolean
+        dateFrom: unknown
+        dateTo: unknown
+        archived: boolean
+        createdAt: unknown
+        updatedAt: unknown
+      }>(
+        `
+      SELECT
+        id,
+        name,
+        description,
+        engine,
+        model_id AS modelId,
+        use_title AS useTitle,
+        use_abstract AS useAbstract,
+        use_fulltext AS useFulltext,
+        use_fulltext_no_images AS useFulltextNoImages,
+        date_from AS dateFrom,
+        date_to AS dateTo,
+        archived,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+      FROM app.project
+      WHERE id = '${escapeSqlString(params.id)}'
+      LIMIT 1
+    `,
+      )
+      .then((rows) => {
+        return rows.map((row) => {
+          return {
+            ...row,
+            dateFrom: getDateValue(row.dateFrom),
+            dateTo: getDateValue(row.dateTo),
+            createdAt: getDateValue(row.createdAt),
+            updatedAt: getDateValue(row.updatedAt),
+          }
+        })
       })
-      .from(projectPrompts)
-      .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
-      .where(eq(projectPrompts.projectId, params.id))
-      .orderBy(projectPrompts.order)
 
-    // All non-archived prompts not already linked to this project
-    const importablePrompts = await db
-      .select({
-        id: prompts.id,
-        originalText: prompts.originalText,
-        transformedText: prompts.transformedText,
-        promptHeading: prompts.promptHeading,
-        order: sql<number>`NULL`,
-        archived: sql<boolean>`FALSE`,
-        promptArchived: prompts.archived,
-        type: prompts.type,
-        enabled: sql<boolean>`FALSE`,
-        originProjectId: sql<string>`NULL`,
-        contentHash: prompts.contentHash,
-        createdAt: prompts.createdAt,
-      })
-      .from(prompts)
-      .leftJoin(projectPrompts, and(eq(projectPrompts.projectId, params.id), eq(projectPrompts.promptId, prompts.id)))
-      .where(and(isNull(projectPrompts.id), eq(prompts.archived, false)))
+    if (!project) {
+      throw new Error('Project not found')
+    }
 
-    const promptsCombined = [...projectPromptsList, ...importablePrompts]
+    const [projectPromptsList, importablePrompts, existingJob, projectModelRows, linkedImportRoutes] =
+      await Promise.all([
+        getAppDatabaseService().queryJson<{
+          id: string
+          originalText: string
+          transformedText: string | null
+          promptHeading: string | null
+          order: number | null
+          archived: boolean
+          promptArchived: boolean
+          type: string | null
+          enabled: boolean
+          originProjectId: string | null
+          contentHash: string | null
+          createdAt: unknown
+        }>(`
+        SELECT
+          p.id AS id,
+          p.original_text AS originalText,
+          p.transformed_text AS transformedText,
+          p.prompt_heading AS promptHeading,
+          pp.prompt_order AS "order",
+          pp.archived AS archived,
+          p.archived AS promptArchived,
+          p.type AS type,
+          pp.enabled AS enabled,
+          pp.origin_project_id AS originProjectId,
+          p.content_hash AS contentHash,
+          p.created_at AS createdAt
+        FROM app.project_prompt pp
+        INNER JOIN app.prompt p ON pp.prompt_id = p.id
+        WHERE pp.project_id = '${escapeSqlString(params.id)}'
+        ORDER BY pp.prompt_order ASC NULLS LAST
+      `),
+        getAppDatabaseService().queryJson<{
+          id: string
+          originalText: string
+          transformedText: string | null
+          promptHeading: string | null
+          order: number | null
+          archived: boolean
+          promptArchived: boolean
+          type: string | null
+          enabled: boolean
+          originProjectId: string | null
+          contentHash: string | null
+          createdAt: unknown
+        }>(`
+        SELECT
+          p.id AS id,
+          p.original_text AS originalText,
+          p.transformed_text AS transformedText,
+          p.prompt_heading AS promptHeading,
+          NULL AS "order",
+          FALSE AS archived,
+          p.archived AS promptArchived,
+          p.type AS type,
+          FALSE AS enabled,
+          NULL AS originProjectId,
+          p.content_hash AS contentHash,
+          p.created_at AS createdAt
+        FROM app.prompt p
+        LEFT JOIN app.project_prompt pp ON pp.project_id = '${escapeSqlString(params.id)}' AND pp.prompt_id = p.id
+        WHERE pp.id IS NULL
+          AND p.archived = FALSE
+      `),
+        getAppDatabaseService().queryJson<{id: string}>(`
+        SELECT id
+        FROM app.judgment_job
+        WHERE project_id = '${escapeSqlString(params.id)}'
+        LIMIT 1
+      `),
+        getAppDatabaseService().queryJson<{
+          id: string
+          name: string
+          provider: string | null
+          modelName: string | null
+          baseURL: string | null
+          version: string | null
+        }>(`
+        SELECT
+          m.id AS id,
+          COALESCE(m.display_name, m.name, m.remote_model_id) AS name,
+          pc.provider_kind AS provider,
+          m.remote_model_id AS modelName,
+          pc.base_url AS baseURL,
+          m.variant AS version
+        FROM app.model m
+        LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+        WHERE m.id = '${escapeSqlString(project.modelId)}'
+        LIMIT 1
+      `),
+        getAppDatabaseService().queryJson<{route: string; name: string | null}>(`
+        SELECT ir.route AS route, ir.name AS name
+        FROM app.project_import_route pir
+        INNER JOIN app.import_route ir ON pir.import_route_id = ir.id
+        WHERE pir.project_id = '${escapeSqlString(params.id)}'
+      `),
+      ])
 
-    // Lock projects for editing if a judgment job exists for the project
-    const existingJob = await db
-      .select({id: judgmentsJobs.id})
-      .from(judgmentsJobs)
-      .where(eq(judgmentsJobs.projectId, params.id))
-      .limit(1)
+    const promptsCombined = [...projectPromptsList, ...importablePrompts].map((row) => {
+      return {...row, createdAt: getDateValue(row.createdAt)}
+    })
+
     const hasJudgedArticles = existingJob.length > 0
-
-    // Fetch selected model for this project
-    const [projectModel] = await db
-      .select({
-        id: models.id,
-        name: models.name,
-        provider: models.provider,
-        modelName: models.modelName,
-        baseURL: models.baseURL,
-        version: models.version,
-      })
-      .from(models)
-      .where(eq(models.id, project.modelId))
-      .limit(1)
-
-    // Fetch linked import routes for this project via projectRouteLink
-    const linkedImportRoutes = await db
-      .select({route: importRouteTable.route, name: importRouteTable.name})
-      .from(projectRouteLink)
-      .innerJoin(importRouteTable, eq(projectRouteLink.importRouteId, importRouteTable.id))
-      .where(eq(projectRouteLink.projectId, params.id))
+    const [projectModel] = projectModelRows
 
     const importRoutes = linkedImportRoutes.map((r) => {
       return r.route
@@ -238,181 +509,181 @@ export const projectsRoutes = new Elysia()
   .post(
     '/api/projects',
     async ({body}) => {
-      const db = getDatabase()
-
       const dateFrom = parseOptionalDate(body.dateFrom)
       const dateTo = parseOptionalDate(body.dateTo)
       if (dateFrom && dateTo && dateFrom > dateTo) {
         throw new Error('date_from must be on or before date_to')
       }
 
-      const [validModel] = await db.select({id: models.id}).from(models).where(eq(models.id, body.modelId)).limit(1)
-
-      if (!validModel) {
-        throw new Error('Selected model does not exist')
-      }
+      await assertSelectableProviderModelId(getAppDatabaseService(), {
+        errorMessage: 'Selected model does not exist or is disabled',
+        modelId: body.modelId,
+      })
 
       // Validate mutual exclusivity of useFulltext and useFulltextNoImages
       if (body.useFulltext && body.useFulltextNoImages) {
         throw new Error('Cannot enable both "Use Full Text" and "Use Full Text (No Images)" at the same time')
       }
 
-      // Create project
-      const [newProject] = await db
-        .insert(projects)
-        .values({
-          name: body.name,
-          description: body.description || null,
-          ownerId: body.ownerId,
-          modelId: body.modelId,
-          useTitle: body.useTitle ?? true,
-          useAbstract: body.useAbstract ?? true,
-          useFulltext: body.useFulltext ?? false,
-          useFulltextNoImages: body.useFulltextNoImages ?? false,
-          dateFrom,
-          dateTo,
-        })
-        .returning()
+      const newProject = (await getAppDatabaseService().transaction(async (tx) => {
+        const newProjectId = crypto.randomUUID()
+        const [createdProject] = await tx.queryJson<{
+          id: string
+          name: string
+          description: string | null
+          engine: string | null
+          modelId: string
+          useTitle: boolean
+          useAbstract: boolean
+          useFulltext: boolean
+          useFulltextNoImages: boolean
+          dateFrom: unknown
+          dateTo: unknown
+          archived: boolean
+          createdAt: unknown
+          updatedAt: unknown
+        }>(`
+          INSERT INTO app.project (
+            id,
+            name,
+            description,
+            model_id,
+            use_title,
+            use_abstract,
+            use_fulltext,
+            use_fulltext_no_images,
+            date_from,
+            date_to
+          )
+          VALUES (
+            '${escapeSqlString(newProjectId)}',
+            ${getSqlLiteral(body.name)},
+            ${getSqlLiteral(body.description || null)},
+            '${escapeSqlString(body.modelId)}',
+            ${(body.useTitle ?? true) ? 'TRUE' : 'FALSE'},
+            ${(body.useAbstract ?? true) ? 'TRUE' : 'FALSE'},
+            ${(body.useFulltext ?? false) ? 'TRUE' : 'FALSE'},
+            ${(body.useFulltextNoImages ?? false) ? 'TRUE' : 'FALSE'},
+            ${dateFrom ? getTimestampLiteral(dateFrom) : 'NULL'},
+            ${dateTo ? getTimestampLiteral(dateTo) : 'NULL'}
+          )
+          RETURNING
+            id,
+            name,
+            description,
+            engine,
+            model_id AS modelId,
+            use_title AS useTitle,
+            use_abstract AS useAbstract,
+            use_fulltext AS useFulltext,
+            use_fulltext_no_images AS useFulltextNoImages,
+            date_from AS dateFrom,
+            date_to AS dateTo,
+            archived,
+            created_at AS createdAt,
+            updated_at AS updatedAt
+        `)
 
-      // Create prompts associations if provided (global immutable prompts; upsert by hash incl metadata)
-      if (newProject && body.prompts && body.prompts.length > 0) {
-        const submittedPrompts = (
-          body.prompts as Array<string | {content: string; promptHeading?: string; type?: string; order: number}>
-        ).filter((p) => {
-          return typeof p === 'string' ? p.trim() !== '' : (p.content ?? '').trim() !== ''
-        })
-        for (let index = 0; index < submittedPrompts.length; index++) {
-          const prompt = submittedPrompts[index] as
-            | string
-            | {content: string; promptHeading?: string; type?: string; order: number}
-          const content = typeof prompt === 'string' ? prompt : prompt.content
-          const heading = typeof prompt === 'object' ? prompt.promptHeading || null : null
-          const typeVal = typeof prompt === 'object' ? prompt.type || null : null
-          const orderVal = typeof prompt === 'object' && prompt.order !== undefined ? prompt.order : index
+        if (!createdProject) {
+          throw new Error('Failed to create project')
+        }
 
-          const contentHash = computePromptContentHash(content, null, heading, typeVal)
-          const existingByHash = await db
-            .select({id: prompts.id})
-            .from(prompts)
-            .where(eq(prompts.contentHash, contentHash))
-            .limit(1)
+        if (body.prompts && body.prompts.length > 0) {
+          const submittedPrompts = (
+            body.prompts as Array<string | {content: string; promptHeading?: string; type?: string; order: number}>
+          ).filter((prompt) => {
+            return typeof prompt === 'string' ? prompt.trim() !== '' : (prompt.content ?? '').trim() !== ''
+          })
 
-          const promptId = await (async () => {
-            if (existingByHash[0]?.id) {
-              return existingByHash[0].id
-            }
-            const inserted = await db
-              .insert(prompts)
-              .values({
-                originalText: content,
-                transformedText: null,
-                promptHeading: heading,
-                type: typeVal,
-                contentHash,
-                ownerId: body.ownerId,
-              })
-              .onConflictDoNothing({target: prompts.contentHash})
-              .returning({id: prompts.id})
-            if (inserted[0]?.id) {
-              return inserted[0].id
-            }
-            const [fallbackPrompt] = await db
-              .select({id: prompts.id})
-              .from(prompts)
-              .where(eq(prompts.contentHash, contentHash))
-              .limit(1)
-            if (!fallbackPrompt) {
+          for (let index = 0; index < submittedPrompts.length; index++) {
+            const prompt = submittedPrompts[index] as
+              | string
+              | {content: string; promptHeading?: string; type?: string; order: number}
+            const content = typeof prompt === 'string' ? prompt : prompt.content
+            const heading = typeof prompt === 'object' ? prompt.promptHeading || null : null
+            const typeVal = typeof prompt === 'object' ? prompt.type || null : null
+            const orderVal = typeof prompt === 'object' && prompt.order !== undefined ? prompt.order : index
+            const contentHash = computePromptContentHash(content, null, heading, typeVal)
+            const promptId = await getOrCreatePromptIdTx(tx, {
+              originalText: content,
+              promptHeading: heading,
+              type: typeVal,
+              contentHash,
+            })
+
+            if (!promptId) {
               throw new Error('Prompt not found after insert')
             }
-            return fallbackPrompt.id
-          })()
 
-          await db
-            .insert(projectPrompts)
-            .values({
-              projectId: newProject.id,
+            await upsertProjectPromptTx(tx, {
+              projectId: createdProject.id,
               promptId,
               order: orderVal,
               archived: false,
               enabled: true,
-              originProjectId: newProject.id,
+              originProjectId: createdProject.id,
             })
-            .onConflictDoUpdate({
-              target: [projectPrompts.projectId, projectPrompts.promptId],
-              set: {
-                order: sql`EXCLUDED."order"`,
-                archived: sql`EXCLUDED.archived`,
-                enabled: sql`EXCLUDED.enabled`,
-                updatedAt: sql`CURRENT_TIMESTAMP`,
-              },
-            })
-        }
-      }
-
-      // Link existing prompts to the project (by prompt ID)
-      if (newProject && body.existingPromptIds && body.existingPromptIds.length > 0) {
-        for (const existing of body.existingPromptIds) {
-          const [existingPrompt] = await db
-            .select({id: prompts.id})
-            .from(prompts)
-            .where(eq(prompts.id, existing.originalId))
-            .limit(1)
-
-          if (!existingPrompt) {
-            throw new Error(`Existing prompt not found: ${existing.originalId}`)
           }
+        }
 
-          await db
-            .insert(projectPrompts)
-            .values({
-              projectId: newProject.id,
+        if (body.existingPromptIds && body.existingPromptIds.length > 0) {
+          for (const existing of body.existingPromptIds) {
+            const [existingPrompt] = await tx.queryJson<{id: string}>(`
+              SELECT id
+              FROM app.prompt
+              WHERE id = '${escapeSqlString(existing.originalId)}'
+              LIMIT 1
+            `)
+
+            if (!existingPrompt) {
+              throw new Error(`Existing prompt not found: ${existing.originalId}`)
+            }
+
+            await upsertProjectPromptTx(tx, {
+              projectId: createdProject.id,
               promptId: existing.originalId,
               order: existing.order,
               archived: false,
               enabled: true,
               originProjectId: null,
             })
-            .onConflictDoUpdate({
-              target: [projectPrompts.projectId, projectPrompts.promptId],
-              set: {
-                order: sql`EXCLUDED."order"`,
-                archived: sql`EXCLUDED.archived`,
-                enabled: sql`EXCLUDED.enabled`,
-                updatedAt: sql`CURRENT_TIMESTAMP`,
-              },
-            })
+          }
         }
-      }
 
-      // Link selected import routes to the project
-      if (newProject && body.importRoutes && body.importRoutes.length > 0) {
         const selectedRoutes = Array.from(
           new Set(
-            body.importRoutes.filter((r) => {
-              return typeof r === 'string' && r.trim() !== ''
+            (body.importRoutes ?? []).filter((route) => {
+              return typeof route === 'string' && route.trim() !== ''
             }),
           ),
         )
 
         if (selectedRoutes.length > 0) {
-          const routeRows = await db
-            .select({id: importRouteTable.id, route: importRouteTable.route})
-            .from(importRouteTable)
-            .where(inArray(importRouteTable.route, selectedRoutes))
+          const routeRows = await tx.queryJson<{id: string; route: string}>(`
+            SELECT id, route
+            FROM app.import_route
+            WHERE route IN (${getQuotedStringList(selectedRoutes).join(', ')})
+          `)
 
           if (routeRows.length !== selectedRoutes.length) {
             throw new Error('One or more selected import routes are invalid')
           }
 
-          await db.insert(projectRouteLink).values(
-            routeRows.map((r) => {
-              return {projectId: newProject.id, importRouteId: r.id}
-            }),
-          )
+          await tx.run(`
+            INSERT INTO app.project_import_route (id, project_id, import_route_id)
+            VALUES ${routeRows
+              .map((row) => {
+                return `(${getQuotedStringList([crypto.randomUUID(), createdProject.id, row.id]).join(', ')})`
+              })
+              .join(', ')}
+            ON CONFLICT(project_id, import_route_id) DO NOTHING
+          `)
         }
-      }
 
-      // Linking datasources to projects removed
+        return getProjectValue(createdProject)
+      })) as ReturnType<typeof getProjectValue>
+
+      await getDuckdbMartRefreshService().queueProjectRefresh(newProject.id, 'ProjectsRoutes.post')
 
       return {data: newProject}
     },
@@ -420,7 +691,6 @@ export const projectsRoutes = new Elysia()
       body: t.Object({
         name: t.String(),
         description: t.Optional(t.String()),
-        ownerId: t.String(),
         modelId: t.String(),
         dateFrom: t.Optional(t.String()),
         dateTo: t.Optional(t.String()),
@@ -449,43 +719,49 @@ export const projectsRoutes = new Elysia()
   .patch(
     '/api/projects/:id',
     async ({params, body}) => {
-      const db = getDatabase()
-      // Disallow edits when a judgments job exists for this project
-      const [job] = await db
-        .select({id: judgmentsJobs.id})
-        .from(judgmentsJobs)
-        .where(eq(judgmentsJobs.projectId, params.id))
-        .limit(1)
+      await assertProjectIsActive(params.id)
+
+      const [job] = await getAppDatabaseService().queryJson<{id: string}>(`
+        SELECT id
+        FROM app.judgment_job
+        WHERE project_id = '${escapeSqlString(params.id)}'
+        LIMIT 1
+      `)
       if (job?.id) {
         throw new Error('Project is locked: a judgment job exists for this project')
       }
 
-      const updateData: Partial<typeof projects.$inferInsert> = {updatedAt: new Date()}
-      if (body.name !== undefined) updateData.name = body.name
-      if (body.description !== undefined) updateData.description = body.description
+      const updateParts = [
+        `updated_at = current_timestamp`,
+        body.name !== undefined ? `name = ${getSqlLiteral(body.name)}` : null,
+        body.description !== undefined ? `description = ${getSqlLiteral(body.description)}` : null,
+      ].filter((part): part is string => {
+        return part !== null
+      })
 
-      const [updatedProject] = await db.update(projects).set(updateData).where(eq(projects.id, params.id)).returning()
+      const updatedProject = (await getAppDatabaseService().transaction(async (tx) => {
+        return updateProjectTx(tx, {projectId: params.id, updateParts})
+      })) as ProjectRow | null
 
       if (!updatedProject) {
         throw new Error('Project not found')
       }
 
-      return {data: updatedProject}
+      return {data: getProjectValue(updatedProject)}
     },
     {body: t.Object({name: t.Optional(t.String()), description: t.Optional(t.Union([t.String(), t.Null()]))})},
   )
   .patch(
     '/api/projects/:id/edit',
     async ({params, body}) => {
-      const sessionUserId = localUserId
+      await assertProjectIsActive(params.id)
 
-      const db = getDatabase()
-      // Disallow edits when a judgments job exists for this project
-      const [job] = await db
-        .select({id: judgmentsJobs.id})
-        .from(judgmentsJobs)
-        .where(eq(judgmentsJobs.projectId, params.id))
-        .limit(1)
+      const [job] = await getAppDatabaseService().queryJson<{id: string}>(`
+        SELECT id
+        FROM app.judgment_job
+        WHERE project_id = '${escapeSqlString(params.id)}'
+        LIMIT 1
+      `)
       if (job?.id) {
         throw new Error('Project is locked: a judgment job exists for this project')
       }
@@ -496,317 +772,299 @@ export const projectsRoutes = new Elysia()
         throw new Error('date_from must be on or before date_to')
       }
 
-      // Start a transaction to ensure data consistency
-      const result = await db.transaction(async (tx) => {
-        // Update project details
-        const updateData: Partial<typeof projects.$inferInsert> = {updatedAt: new Date()}
-        if (body.name !== undefined) updateData.name = body.name
-        if (body.description !== undefined) updateData.description = body.description
-        if (parsedDateFrom !== undefined) updateData.dateFrom = parsedDateFrom
-        if (parsedDateTo !== undefined) updateData.dateTo = parsedDateTo
-        if (body.modelId !== undefined) {
-          const [validModel] = await tx.select({id: models.id}).from(models).where(eq(models.id, body.modelId)).limit(1)
-          if (!validModel) {
-            throw new Error('Selected model does not exist')
-          }
-          updateData.modelId = body.modelId
-        }
-        if (body.useTitle !== undefined) updateData.useTitle = body.useTitle
-        if (body.useAbstract !== undefined) updateData.useAbstract = body.useAbstract
-        if (body.useFulltext !== undefined) updateData.useFulltext = body.useFulltext
-        if (body.useFulltextNoImages !== undefined) updateData.useFulltextNoImages = body.useFulltextNoImages
+      const result = await getAppDatabaseService().transaction(async (tx) => {
+        const [currentProject] = await tx.queryJson<{
+          id: string
+          useTitle: boolean
+          useAbstract: boolean
+          useFulltext: boolean
+          useFulltextNoImages: boolean
+        }>(`
+          SELECT
+            id,
+            use_title AS useTitle,
+            use_abstract AS useAbstract,
+            use_fulltext AS useFulltext,
+            use_fulltext_no_images AS useFulltextNoImages
+          FROM app.project
+          WHERE id = '${escapeSqlString(params.id)}'
+          LIMIT 1
+        `)
 
-        // Validate mutual exclusivity (check both incoming values and existing DB values)
-        const finalUseFulltext = body.useFulltext ?? updateData.useFulltext
-        const finalUseFulltextNoImages = body.useFulltextNoImages ?? updateData.useFulltextNoImages
+        if (!currentProject) {
+          throw new Error('Project not found')
+        }
+
+        if (body.modelId !== undefined) {
+          await assertSelectableProviderModelId(tx, {
+            errorMessage: 'Selected model does not exist or is disabled',
+            modelId: body.modelId,
+          })
+        }
+
+        const finalUseFulltext = body.useFulltext ?? currentProject.useFulltext
+        const finalUseFulltextNoImages = body.useFulltextNoImages ?? currentProject.useFulltextNoImages
         if (finalUseFulltext && finalUseFulltextNoImages) {
           throw new Error('Cannot enable both "Use Full Text" and "Use Full Text (No Images)" at the same time')
         }
 
-        const [updatedProject] = await tx.update(projects).set(updateData).where(eq(projects.id, params.id)).returning()
+        const updateParts = [
+          `updated_at = current_timestamp`,
+          body.name !== undefined ? `name = ${getSqlLiteral(body.name)}` : null,
+          body.description !== undefined ? `description = ${getSqlLiteral(body.description)}` : null,
+          parsedDateFrom !== undefined ? `date_from = ${getSqlLiteral(parsedDateFrom)}` : null,
+          parsedDateTo !== undefined ? `date_to = ${getSqlLiteral(parsedDateTo)}` : null,
+          body.modelId !== undefined ? `model_id = ${getSqlLiteral(body.modelId)}` : null,
+          body.useTitle !== undefined ? `use_title = ${body.useTitle ? 'TRUE' : 'FALSE'}` : null,
+          body.useAbstract !== undefined ? `use_abstract = ${body.useAbstract ? 'TRUE' : 'FALSE'}` : null,
+          body.useFulltext !== undefined ? `use_fulltext = ${body.useFulltext ? 'TRUE' : 'FALSE'}` : null,
+          body.useFulltextNoImages !== undefined
+            ? `use_fulltext_no_images = ${body.useFulltextNoImages ? 'TRUE' : 'FALSE'}`
+            : null,
+        ].filter((part): part is string => {
+          return part !== null
+        })
+
+        const updatedProject = await updateProjectTx(tx, {projectId: params.id, updateParts})
 
         if (!updatedProject) {
           throw new Error('Project not found')
         }
 
-        // No longer need provider/modelName for prompt hashing
-
-        // Handle prompts updates against associations (immutable prompts)
         if (body.prompts !== undefined) {
-          const submitted = body.prompts.filter((p) => {
-            return (p.originalText ?? '').trim() !== ''
+          const submitted = body.prompts.filter((prompt) => {
+            return (prompt.originalText ?? '').trim() !== ''
           })
-          // Existing associations (include originProjectId to preserve it for imported prompts)
-          const existing = await tx
-            .select({
-              id: projectPrompts.id,
-              promptId: projectPrompts.promptId,
-              originProjectId: projectPrompts.originProjectId,
-            })
-            .from(projectPrompts)
-            .where(eq(projectPrompts.projectId, params.id))
+          const existing = await tx.queryJson<{
+            id: string
+            promptId: string
+            originProjectId: string | null
+            archived: boolean
+            enabled: boolean
+          }>(`
+            SELECT
+              id,
+              prompt_id AS promptId,
+              origin_project_id AS originProjectId,
+              archived,
+              enabled
+            FROM app.project_prompt
+            WHERE project_id = '${escapeSqlString(params.id)}'
+          `)
 
           const existingPromptIds = new Set(
-            existing.map((p) => {
-              return p.promptId
-            }),
-          )
-          const existingOriginMap = new Map(
-            existing.map((p) => {
-              return [p.promptId, p.originProjectId]
+            existing.map((prompt) => {
+              return prompt.promptId
             }),
           )
           const receivedOriginalIds = new Set(
             submitted
-              .map((p) => {
-                return p.originalId
+              .map((prompt) => {
+                return prompt.originalId
               })
               .filter((id): id is string => {
                 return typeof id === 'string'
               }),
           )
-
-          // Delete associations removed by client
-          const toDeleteAssoc = existing.filter((e) => {
-            return !receivedOriginalIds.has(e.promptId)
+          const toDeleteAssoc = existing.filter((entry) => {
+            return !receivedOriginalIds.has(entry.promptId)
           })
+
           if (toDeleteAssoc.length > 0) {
-            await tx.delete(projectPrompts).where(
-              sql`${projectPrompts.projectId} = ${params.id} AND ${projectPrompts.promptId} = ANY(ARRAY[${sql.join(
-                toDeleteAssoc.map((e) => {
-                  return sql`${e.promptId}::uuid`
-                }),
-                sql`,`,
-              )}] )`,
-            )
+            await tx.run(`
+              DELETE FROM app.project_prompt
+              WHERE project_id = '${escapeSqlString(params.id)}'
+                AND prompt_id IN (${getQuotedStringList(
+                  toDeleteAssoc.map((entry) => {
+                    return entry.promptId
+                  }),
+                ).join(', ')})
+            `)
           }
 
-          // Upsert associations and prompt rows (works for both existing and importable prompts)
-          for (const p of submitted) {
-            const orderVal = p.order
-            const archivedVal = typeof p.archived === 'boolean' ? p.archived : undefined
-            const enabledVal = typeof p.enabled === 'boolean' ? p.enabled : undefined
+          for (const prompt of submitted) {
+            const order = prompt.order
+            const archived = typeof prompt.archived === 'boolean' ? prompt.archived : undefined
+            const enabled = typeof prompt.enabled === 'boolean' ? prompt.enabled : undefined
 
-            // Resolve association
-            let targetPromptId: string
-            if (p.originalId) {
-              const isAlreadyAssociated = existingPromptIds.has(p.originalId)
-              // Avoid creating disabled associations for importables that weren't enabled
-              if (!isAlreadyAssociated && enabledVal !== true) {
+            if (prompt.originalId) {
+              const isAlreadyAssociated = existingPromptIds.has(prompt.originalId)
+              if (!isAlreadyAssociated && enabled !== true) {
                 continue
               }
-              // Associate exactly the clicked prompt ID; do not canonicalize by content hash
-              const [existingPrompt] = await tx.select().from(prompts).where(eq(prompts.id, p.originalId)).limit(1)
+
+              const [existingPrompt] = await tx.queryJson<{
+                id: string
+                originalText: string
+                promptHeading: string | null
+                type: string | null
+              }>(`
+                SELECT
+                  id,
+                  original_text AS originalText,
+                  prompt_heading AS promptHeading,
+                  type
+                FROM app.prompt
+                WHERE id = '${escapeSqlString(prompt.originalId)}'
+                LIMIT 1
+              `)
+
               if (!existingPrompt) {
                 throw new Error('Prompt not found')
               }
 
-              // Check if text or metadata changed - if so, create a new prompt
-              const textChanged = existingPrompt.originalText !== p.originalText
+              const textChanged = existingPrompt.originalText !== prompt.originalText
               const metaChanged =
-                (p.promptHeading !== undefined && p.promptHeading !== (existingPrompt.promptHeading ?? null))
-                || (p.type !== undefined && p.type !== (existingPrompt.type ?? null))
+                (prompt.promptHeading !== undefined && prompt.promptHeading !== (existingPrompt.promptHeading ?? null))
+                || (prompt.type !== undefined && prompt.type !== (existingPrompt.type ?? null))
+
+              const targetPromptId =
+                textChanged || metaChanged
+                  ? await getOrCreatePromptIdTx(tx, {
+                      originalText: prompt.originalText,
+                      promptHeading: prompt.promptHeading || null,
+                      type: prompt.type || null,
+                      contentHash: computePromptContentHash(
+                        prompt.originalText,
+                        null,
+                        prompt.promptHeading || null,
+                        prompt.type || null,
+                      ),
+                    })
+                  : prompt.originalId
+
+              if (!targetPromptId) {
+                throw new Error('Prompt not found after insert')
+              }
 
               if (textChanged || metaChanged) {
-                // Create a new prompt with the new text/metadata
-                const headingVal = p.promptHeading || null
-                const typeVal = p.type || null
-                const h4b = computePromptContentHash(p.originalText, null, headingVal, typeVal)
-                const found = await tx
-                  .select({id: prompts.id})
-                  .from(prompts)
-                  .where(eq(prompts.contentHash, h4b))
-                  .limit(1)
-                targetPromptId = await (async () => {
-                  if (found[0]?.id) {
-                    return found[0].id
-                  }
-                  const inserted = await tx
-                    .insert(prompts)
-                    .values({
-                      originalText: p.originalText,
-                      transformedText: null,
-                      promptHeading: headingVal,
-                      type: typeVal,
-                      contentHash: h4b,
-                      ownerId: sessionUserId,
-                    })
-                    .onConflictDoNothing({target: prompts.contentHash})
-                    .returning({id: prompts.id})
-                  if (inserted[0]?.id) {
-                    return inserted[0].id
-                  }
-                  const [fallbackPrompt] = await tx
-                    .select({id: prompts.id})
-                    .from(prompts)
-                    .where(eq(prompts.contentHash, h4b))
-                    .limit(1)
-                  if (!fallbackPrompt) {
-                    throw new Error('Prompt not found after insert')
-                  }
-                  return fallbackPrompt.id
-                })()
-
-                // Delete the old association (will be replaced with new prompt association below)
-                await tx
-                  .delete(projectPrompts)
-                  .where(and(eq(projectPrompts.projectId, params.id), eq(projectPrompts.promptId, p.originalId)))
-              } else {
-                targetPromptId = p.originalId
+                await tx.run(`
+                  DELETE FROM app.project_prompt
+                  WHERE project_id = '${escapeSqlString(params.id)}'
+                    AND prompt_id = '${escapeSqlString(prompt.originalId)}'
+                `)
               }
 
-              // Preserve originProjectId for imported prompts
-              // First check if this project already has an association (use its originProjectId)
-              // If not, look up the original origin from any other project that has this prompt
-              // Only use current project ID for brand new prompts with no prior associations anywhere
-              const promptId = p.originalId
-              const existingOrigin = existingOriginMap.get(promptId)
-              const resolvedOriginProjectId = await (async () => {
-                if (existingOrigin !== undefined) {
-                  return existingOrigin
-                }
-                // Look up the original originProjectId from any existing association
-                const [anyExisting] = await tx
-                  .select({originProjectId: projectPrompts.originProjectId})
-                  .from(projectPrompts)
-                  .where(eq(projectPrompts.promptId, promptId))
-                  .limit(1)
-                return anyExisting?.originProjectId ?? params.id
-              })()
+              const currentAssociation = existing.find((entry) => {
+                return entry.promptId === prompt.originalId
+              })
+              const [originProjectRow] =
+                currentAssociation?.originProjectId !== undefined
+                  ? [null]
+                  : await tx.queryJson<{originProjectId: string | null}>(`
+                    SELECT origin_project_id AS originProjectId
+                    FROM app.project_prompt
+                    WHERE prompt_id = '${escapeSqlString(prompt.originalId)}'
+                    LIMIT 1
+                  `)
 
-              const insertValues = {
+              await upsertProjectPromptTx(tx, {
                 projectId: params.id,
                 promptId: targetPromptId,
-                order: orderVal,
-                originProjectId: resolvedOriginProjectId,
-                ...(archivedVal !== undefined ? {archived: archivedVal} : {}),
-                ...(enabledVal !== undefined ? {enabled: enabledVal} : {}),
-              }
-
-              const setValues = {
-                order: sql`EXCLUDED."order"`,
-                updatedAt: sql`CURRENT_TIMESTAMP`,
-                ...(archivedVal !== undefined ? {archived: sql`EXCLUDED.archived`} : {}),
-                ...(enabledVal !== undefined ? {enabled: sql`EXCLUDED.enabled`} : {}),
-              }
-
-              await tx
-                .insert(projectPrompts)
-                .values(insertValues)
-                .onConflictDoUpdate({target: [projectPrompts.projectId, projectPrompts.promptId], set: setValues})
+                order,
+                archived: archived ?? currentAssociation?.archived ?? false,
+                enabled: enabled ?? currentAssociation?.enabled ?? true,
+                originProjectId: currentAssociation?.originProjectId ?? originProjectRow?.originProjectId ?? params.id,
+              })
             } else {
-              const headingVal = p.promptHeading || null
-              const typeVal = p.type || null
-              const h4b = computePromptContentHash(p.originalText, null, headingVal, typeVal)
-              const found = await tx.select({id: prompts.id}).from(prompts).where(eq(prompts.contentHash, h4b)).limit(1)
-              targetPromptId = await (async () => {
-                if (found[0]?.id) {
-                  return found[0].id
-                }
-                const inserted = await tx
-                  .insert(prompts)
-                  .values({
-                    originalText: p.originalText,
-                    transformedText: null,
-                    promptHeading: headingVal,
-                    type: typeVal,
-                    contentHash: h4b,
-                    ownerId: sessionUserId,
-                  })
-                  .onConflictDoNothing({target: prompts.contentHash})
-                  .returning({id: prompts.id})
-                if (inserted[0]?.id) {
-                  return inserted[0].id
-                }
-                const [fallbackPrompt] = await tx
-                  .select({id: prompts.id})
-                  .from(prompts)
-                  .where(eq(prompts.contentHash, h4b))
-                  .limit(1)
-                if (!fallbackPrompt) {
-                  throw new Error('Prompt not found after insert')
-                }
-                return fallbackPrompt.id
-              })()
+              const targetPromptId = await getOrCreatePromptIdTx(tx, {
+                originalText: prompt.originalText,
+                promptHeading: prompt.promptHeading || null,
+                type: prompt.type || null,
+                contentHash: computePromptContentHash(
+                  prompt.originalText,
+                  null,
+                  prompt.promptHeading || null,
+                  prompt.type || null,
+                ),
+              })
 
-              const insertValues = {
+              if (!targetPromptId) {
+                throw new Error('Prompt not found after insert')
+              }
+
+              await upsertProjectPromptTx(tx, {
                 projectId: params.id,
                 promptId: targetPromptId,
-                order: orderVal,
+                order,
+                archived: archived ?? false,
+                enabled: enabled ?? true,
                 originProjectId: params.id,
-                ...(archivedVal !== undefined ? {archived: archivedVal} : {}),
-                ...(enabledVal !== undefined ? {enabled: enabledVal} : {}),
-              }
-
-              const setValues = {
-                order: sql`EXCLUDED."order"`,
-                updatedAt: sql`CURRENT_TIMESTAMP`,
-                ...(archivedVal !== undefined ? {archived: sql`EXCLUDED.archived`} : {}),
-                ...(enabledVal !== undefined ? {enabled: sql`EXCLUDED.enabled`} : {}),
-              }
-
-              await tx
-                .insert(projectPrompts)
-                .values(insertValues)
-                .onConflictDoUpdate({target: [projectPrompts.projectId, projectPrompts.promptId], set: setValues})
+              })
             }
           }
         }
 
-        // If only the model changed, do not remap existing prompt associations
-
-        // Update import route links if provided
         if (body.importRoutes !== undefined) {
           const selectedRoutes = Array.from(
             new Set(
-              body.importRoutes.filter((r) => {
-                return typeof r === 'string' && r.trim() !== ''
+              body.importRoutes.filter((route) => {
+                return typeof route === 'string' && route.trim() !== ''
               }),
             ),
           )
 
-          // Clear existing links then (re)insert selected
-          await tx.delete(projectRouteLink).where(eq(projectRouteLink.projectId, params.id))
+          await tx.run(`
+            DELETE FROM app.project_import_route
+            WHERE project_id = '${escapeSqlString(params.id)}'
+          `)
 
           if (selectedRoutes.length > 0) {
-            const routeRows = await tx
-              .select({id: importRouteTable.id, route: importRouteTable.route})
-              .from(importRouteTable)
-              .where(inArray(importRouteTable.route, selectedRoutes))
+            const routeRows = await tx.queryJson<{id: string; route: string}>(`
+              SELECT id, route
+              FROM app.import_route
+              WHERE route IN (${getQuotedStringList(selectedRoutes).join(', ')})
+            `)
 
             if (routeRows.length !== selectedRoutes.length) {
               throw new Error('One or more selected import routes are invalid')
             }
 
-            await tx.insert(projectRouteLink).values(
-              routeRows.map((r) => {
-                return {projectId: params.id, importRouteId: r.id}
-              }),
-            )
+            await tx.run(`
+              INSERT INTO app.project_import_route (id, project_id, import_route_id)
+              VALUES ${routeRows
+                .map((route) => {
+                  return `(${getQuotedStringList([crypto.randomUUID(), params.id, route.id]).join(', ')})`
+                })
+                .join(', ')}
+              ON CONFLICT(project_id, import_route_id) DO NOTHING
+            `)
           }
         }
 
-        // Fetch updated prompts
-        const updatedPrompts = await tx
-          .select({
-            id: prompts.id,
-            originalText: prompts.originalText,
-            transformedText: prompts.transformedText,
-            promptHeading: prompts.promptHeading,
-            order: projectPrompts.order,
-            archived: projectPrompts.archived,
-            promptArchived: prompts.archived,
-            type: prompts.type,
-            enabled: projectPrompts.enabled,
-            originProjectId: projectPrompts.originProjectId,
-          })
-          .from(projectPrompts)
-          .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
-          .where(eq(projectPrompts.projectId, params.id))
-          .orderBy(projectPrompts.order)
+        const updatedPrompts = await tx.queryJson<{
+          id: string
+          originalText: string
+          transformedText: string | null
+          promptHeading: string | null
+          order: number | null
+          archived: boolean
+          promptArchived: boolean
+          type: string | null
+          enabled: boolean
+          originProjectId: string | null
+        }>(`
+          SELECT
+            p.id AS id,
+            p.original_text AS originalText,
+            p.transformed_text AS transformedText,
+            p.prompt_heading AS promptHeading,
+            pp.prompt_order AS "order",
+            pp.archived AS archived,
+            p.archived AS promptArchived,
+            p.type AS type,
+            pp.enabled AS enabled,
+            pp.origin_project_id AS originProjectId
+          FROM app.project_prompt pp
+          INNER JOIN app.prompt p ON pp.prompt_id = p.id
+          WHERE pp.project_id = '${escapeSqlString(params.id)}'
+          ORDER BY pp.prompt_order ASC NULLS LAST
+        `)
 
-        return {project: updatedProject, prompts: updatedPrompts}
+        return {project: getProjectValue(updatedProject), prompts: updatedPrompts}
       })
+
+      await getDuckdbMartRefreshService().queueProjectRefresh(params.id, 'ProjectsRoutes.edit')
 
       return {data: result}
     },
@@ -839,111 +1097,227 @@ export const projectsRoutes = new Elysia()
     },
   )
   .delete('/api/projects/:id', async ({params}) => {
-    const db = getDatabase()
-    // Archive the project instead of deleting it
-    const [archivedProject] = await db
-      .update(projects)
-      .set({archived: true, updatedAt: new Date()})
-      .where(eq(projects.id, params.id))
-      .returning()
+    await assertProjectIsActive(params.id)
+
+    const archivedProject = await getAppDatabaseService().transaction(async (tx) => {
+      return updateProjectTx(tx, {
+        projectId: params.id,
+        updateParts: ['archived = TRUE', 'updated_at = current_timestamp'],
+      })
+    })
 
     if (!archivedProject) {
       throw new Error('Project not found')
     }
 
+    await getDuckdbMartRefreshService().queueProjectRefresh(params.id, 'ProjectsRoutes.archive')
+
     return {success: true}
   })
   .post('/api/projects/:id/unarchive', async ({params}) => {
-    const db = getDatabase()
-    const [unarchivedProject] = await db
-      .update(projects)
-      .set({archived: false, updatedAt: new Date()})
-      .where(eq(projects.id, params.id))
-      .returning()
+    const unarchivedProject = await getAppDatabaseService().transaction(async (tx) => {
+      return updateProjectTx(tx, {
+        projectId: params.id,
+        updateParts: ['archived = FALSE', 'updated_at = current_timestamp'],
+      })
+    })
 
     if (!unarchivedProject) {
       throw new Error('Project not found')
     }
 
+    await getDuckdbMartRefreshService().queueProjectRefresh(params.id, 'ProjectsRoutes.unarchive')
+
     return {success: true}
   })
   .post('/api/projects/:id/clone', async ({params}) => {
-    const db = getDatabase()
+    await assertProjectIsActive(params.id)
 
-    // Fetch source project
-    const [sourceProject] = await db.select().from(projects).where(eq(projects.id, params.id)).limit(1)
+    const [sourceProject] = await getAppDatabaseService()
+      .queryJson<{
+        id: string
+        name: string
+        description: string | null
+        engine: string | null
+        modelId: string
+        useTitle: boolean
+        useAbstract: boolean
+        useFulltext: boolean
+        useFulltextNoImages: boolean
+        dateFrom: unknown
+        dateTo: unknown
+      }>(
+        `
+      SELECT
+        id,
+        name,
+        description,
+        engine,
+        model_id AS modelId,
+        use_title AS useTitle,
+        use_abstract AS useAbstract,
+        use_fulltext AS useFulltext,
+        use_fulltext_no_images AS useFulltextNoImages,
+        date_from AS dateFrom,
+        date_to AS dateTo
+      FROM app.project
+      WHERE id = '${escapeSqlString(params.id)}'
+      LIMIT 1
+    `,
+      )
+      .then((rows) => {
+        return rows.map((row) => {
+          return {...row, dateFrom: getDateValue(row.dateFrom), dateTo: getDateValue(row.dateTo)}
+        })
+      })
 
     if (!sourceProject) {
       throw new Error('Project not found')
     }
 
-    // Clone within a transaction
-    const result = await db.transaction(async (tx) => {
-      // Create the cloned project with a " - Copy" suffix
-      const [clonedProject] = await tx
-        .insert(projects)
-        .values({
-          name: `${sourceProject.name} - Copy`,
-          description: sourceProject.description,
-          ownerId: sourceProject.ownerId,
-          engine: sourceProject.engine,
-          modelId: sourceProject.modelId,
-          useTitle: sourceProject.useTitle,
-          useAbstract: sourceProject.useAbstract,
-          useFulltext: sourceProject.useFulltext,
-          useFulltextNoImages: sourceProject.useFulltextNoImages,
-          dateFrom: sourceProject.dateFrom,
-          dateTo: sourceProject.dateTo,
-          archived: false,
-        })
-        .returning()
+    await assertSelectableProviderModelId(getAppDatabaseService(), {
+      errorMessage: 'Source project model does not exist or is disabled',
+      modelId: sourceProject.modelId,
+    })
+
+    const result = (await getAppDatabaseService().transaction(async (tx) => {
+      const clonedProjectId = crypto.randomUUID()
+      const [clonedProject] = await tx.queryJson<{
+        id: string
+        name: string
+        description: string | null
+        engine: string | null
+        modelId: string
+        useTitle: boolean
+        useAbstract: boolean
+        useFulltext: boolean
+        useFulltextNoImages: boolean
+        dateFrom: unknown
+        dateTo: unknown
+        archived: boolean
+        createdAt: unknown
+        updatedAt: unknown
+      }>(`
+        INSERT INTO app.project (
+          id,
+          name,
+          description,
+          engine,
+          model_id,
+          use_title,
+          use_abstract,
+          use_fulltext,
+          use_fulltext_no_images,
+          date_from,
+          date_to,
+          archived
+        )
+        VALUES (
+          '${escapeSqlString(clonedProjectId)}',
+          ${getSqlLiteral(`${sourceProject.name} - Copy`)},
+          ${getSqlLiteral(sourceProject.description)},
+          ${getSqlLiteral(sourceProject.engine)},
+          '${escapeSqlString(sourceProject.modelId)}',
+          ${sourceProject.useTitle ? 'TRUE' : 'FALSE'},
+          ${sourceProject.useAbstract ? 'TRUE' : 'FALSE'},
+          ${sourceProject.useFulltext ? 'TRUE' : 'FALSE'},
+          ${sourceProject.useFulltextNoImages ? 'TRUE' : 'FALSE'},
+          ${sourceProject.dateFrom ? getTimestampLiteral(sourceProject.dateFrom) : 'NULL'},
+          ${sourceProject.dateTo ? getTimestampLiteral(sourceProject.dateTo) : 'NULL'},
+          FALSE
+        )
+        RETURNING
+          id,
+          name,
+          description,
+          engine,
+          model_id AS modelId,
+          use_title AS useTitle,
+          use_abstract AS useAbstract,
+          use_fulltext AS useFulltext,
+          use_fulltext_no_images AS useFulltextNoImages,
+          date_from AS dateFrom,
+          date_to AS dateTo,
+          archived,
+          created_at AS createdAt,
+          updated_at AS updatedAt
+      `)
 
       if (!clonedProject) {
         throw new Error('Failed to create cloned project')
       }
 
-      // Clone project prompts associations
-      const sourcePrompts = await tx.select().from(projectPrompts).where(eq(projectPrompts.projectId, params.id))
+      const [sourcePrompts, sourceRouteLinks, sourceArticles] = await Promise.all([
+        tx.queryJson<{promptId: string; order: number | null; archived: boolean; enabled: boolean}>(`
+          SELECT
+            prompt_id AS promptId,
+            prompt_order AS "order",
+            archived,
+            enabled
+          FROM app.project_prompt
+          WHERE project_id = '${escapeSqlString(params.id)}'
+        `),
+        tx.queryJson<{importRouteId: string}>(`
+          SELECT import_route_id AS importRouteId
+          FROM app.project_import_route
+          WHERE project_id = '${escapeSqlString(params.id)}'
+        `),
+        tx.queryJson<{articleId: string}>(`
+          SELECT article_id AS articleId
+          FROM app.project_article
+          WHERE project_id = '${escapeSqlString(params.id)}'
+        `),
+      ])
 
       if (sourcePrompts.length > 0) {
-        await tx.insert(projectPrompts).values(
-          sourcePrompts.map((p) => {
-            return {
-              projectId: clonedProject.id,
-              promptId: p.promptId,
-              order: p.order,
-              archived: p.archived,
-              enabled: p.enabled,
-              originProjectId: clonedProject.id,
-            }
-          }),
-        )
+        await tx.run(`
+          INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, enabled, origin_project_id)
+          VALUES ${sourcePrompts
+            .map((prompt) => {
+              return `(${[
+                crypto.randomUUID(),
+                clonedProject.id,
+                prompt.promptId,
+                prompt.order,
+                prompt.archived,
+                prompt.enabled,
+                clonedProject.id,
+              ]
+                .map((value) => {
+                  return getSqlLiteral(value)
+                })
+                .join(', ')})`
+            })
+            .join(', ')}
+        `)
       }
-
-      // Clone import route links
-      const sourceRouteLinks = await tx.select().from(projectRouteLink).where(eq(projectRouteLink.projectId, params.id))
 
       if (sourceRouteLinks.length > 0) {
-        await tx.insert(projectRouteLink).values(
-          sourceRouteLinks.map((link) => {
-            return {projectId: clonedProject.id, importRouteId: link.importRouteId}
-          }),
-        )
+        await tx.run(`
+          INSERT INTO app.project_import_route (id, project_id, import_route_id)
+          VALUES ${sourceRouteLinks
+            .map((link) => {
+              return `(${getQuotedStringList([crypto.randomUUID(), clonedProject.id, link.importRouteId]).join(', ')})`
+            })
+            .join(', ')}
+        `)
       }
-
-      // Clone project articles (curated articles)
-      const sourceArticles = await tx.select().from(projectArticles).where(eq(projectArticles.projectId, params.id))
 
       if (sourceArticles.length > 0) {
-        await tx.insert(projectArticles).values(
-          sourceArticles.map((article) => {
-            return {projectId: clonedProject.id, articleId: article.articleId, importedFromProjectId: params.id}
-          }),
-        )
+        await tx.run(`
+          INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
+          VALUES ${sourceArticles
+            .map((article) => {
+              return `(${getQuotedStringList([crypto.randomUUID(), clonedProject.id, article.articleId, params.id]).join(', ')})`
+            })
+            .join(', ')}
+        `)
       }
 
-      return clonedProject
-    })
+      return getProjectValue(clonedProject)
+    })) as ReturnType<typeof getProjectValue>
+
+    await getDuckdbMartRefreshService().queueProjectRefresh(result.id, 'ProjectsRoutes.clone')
 
     return {data: result}
   })

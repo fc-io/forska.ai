@@ -1,11 +1,8 @@
-import {and, desc, eq, gte, lte, sum} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {session} from '../../../auth-schema.ts'
-import {tokenUse} from '../../db/schema.ts'
-import {requireUserAuth} from '../utils/authGuard.ts'
-import {env} from '../utils/env.ts'
-import {getDatabase} from '../utils/getDatabase.ts'
+import {getDateValue} from '../services/appQueryHelpers.ts'
+import {getTokenUseQueryService} from '../services/tokenUseQueryService.ts'
+import {inferenceRuntimeConfig} from '../utils/getInferenceRuntimeConfig.ts'
 import {tokensRoutesGetFailedRequestById} from './tokensRoutes/tokensRoutesGetFailedRequestById.ts'
 import {tokensRoutesGetFailedRequests} from './tokensRoutes/tokensRoutesGetFailedRequests.ts'
 import {tokensRoutesGetTimeline} from './tokensRoutes/tokensRoutesGetTimeline.ts'
@@ -14,53 +11,38 @@ import {tokensRoutesGetTimelineAllJobsStats} from './tokensRoutes/tokensRoutesGe
 import {tokensRoutesGetTimelineStats} from './tokensRoutes/tokensRoutesGetTimelineStats.ts'
 
 export const tokensRoutes = new Elysia()
-  .use(requireUserAuth())
   .post(
     '/api/tokens/usage',
     async ({body}) => {
       try {
-        const db = getDatabase()
-
-        // Get userId from sessionId
-        const [sessionData] = await db
-          .select({userId: session.userId})
-          .from(session)
-          .where(eq(session.id, body.sessionId))
-          .limit(1)
-
-        const [result] = await db
-          .insert(tokenUse)
-          .values({
-            userId: sessionData?.userId ?? null,
-            sessionId: body.sessionId,
-            // GPU + parallelism metadata
-            gpuNnodes: env.GPU_NNODES,
-            gpuGpusPerNode: env.GPU_GPUS_PER_NODE,
-            gpuTotalGpus: env.GPU_TOTAL_GPUS,
-            tpSize: env.TP_SIZE,
-            dpSize: env.DP_SIZE,
-            gpuShape: env.GPU_SHAPE ?? null,
-            sglangMaxRunningRequests: env.SGLANG_MAX_RUNNING_REQUESTS,
-            sglangModel: env.SGLANG_MODEL ?? null,
-            requests: body.requests,
-            totalPromptTokens: body.totalPromptTokens,
-            totalCompletionTokens: body.totalCompletionTokens,
-            totalTokens: body.totalTokens,
-            successfulRequests: body.successfulRequests ?? null,
-            failedRequests: body.failedRequests ?? null,
-            hasFailedRequests: body.hasFailedRequests ?? false,
-            failedRequestsDetails: body.failedRequestsDetails ?? null,
-            totalSuccessPromptTokens: body.totalSuccessPromptTokens ?? null,
-            totalSuccessCompletionTokens: body.totalSuccessCompletionTokens ?? null,
-            totalSuccessTokens: body.totalSuccessTokens ?? null,
-            totalFailedPromptTokens: body.totalFailedPromptTokens ?? null,
-            totalFailedCompletionTokens: body.totalFailedCompletionTokens ?? null,
-            totalFailedTokens: body.totalFailedTokens ?? null,
-            startedAt: body.startedAt ? new Date(body.startedAt) : undefined,
-            finishedAt: body.finishedAt ? new Date(body.finishedAt) : undefined,
-            duration: body.duration,
-          })
-          .returning()
+        const result = await getTokenUseQueryService().insertTokenUse({
+          judgment_job_id: body.judgmentsJobId ?? null,
+          gpu_nnodes: inferenceRuntimeConfig.gpuNnodes,
+          gpu_gpus_per_node: inferenceRuntimeConfig.gpuGpusPerNode,
+          gpu_total_gpus: inferenceRuntimeConfig.gpuTotalGpus,
+          tp_size: inferenceRuntimeConfig.tpSize,
+          dp_size: inferenceRuntimeConfig.dpSize,
+          gpu_shape: inferenceRuntimeConfig.gpuShape,
+          sglang_max_running_requests: inferenceRuntimeConfig.sglangMaxRunningRequests,
+          sglang_model: body.sglangModel ?? null,
+          requests: body.requests,
+          total_prompt_tokens: body.totalPromptTokens,
+          total_completion_tokens: body.totalCompletionTokens,
+          total_tokens: body.totalTokens,
+          successful_requests: body.successfulRequests ?? null,
+          failed_requests: body.failedRequests ?? null,
+          has_failed_requests: body.hasFailedRequests ?? false,
+          failed_requests_details: body.failedRequestsDetails ?? null,
+          total_success_prompt_tokens: body.totalSuccessPromptTokens ?? null,
+          total_success_completion_tokens: body.totalSuccessCompletionTokens ?? null,
+          total_success_tokens: body.totalSuccessTokens ?? null,
+          total_failed_prompt_tokens: body.totalFailedPromptTokens ?? null,
+          total_failed_completion_tokens: body.totalFailedCompletionTokens ?? null,
+          total_failed_tokens: body.totalFailedTokens ?? null,
+          started_at: getDateValue(body.startedAt),
+          finished_at: getDateValue(body.finishedAt),
+          duration: body.duration,
+        })
 
         return {success: true, data: result}
       } catch (error) {
@@ -70,7 +52,8 @@ export const tokensRoutes = new Elysia()
     },
     {
       body: t.Object({
-        sessionId: t.String(),
+        judgmentsJobId: t.Optional(t.String()),
+        sglangModel: t.Optional(t.String()),
         requests: t.Number(),
         totalPromptTokens: t.Number(),
         totalCompletionTokens: t.Number(),
@@ -93,24 +76,7 @@ export const tokensRoutes = new Elysia()
   )
   .get('/api/tokens/largest-per-request', async () => {
     try {
-      const db = getDatabase()
-
-      const rows = await db
-        .select({
-          id: tokenUse.id,
-          createdAt: tokenUse.createdAt,
-          updatedAt: tokenUse.updatedAt,
-          judgmentsJobId: tokenUse.judgmentsJobId,
-          requests: tokenUse.requests,
-          totalPromptTokens: tokenUse.totalPromptTokens,
-          totalCompletionTokens: tokenUse.totalCompletionTokens,
-          totalTokens: tokenUse.totalTokens,
-          duration: tokenUse.duration,
-        })
-        .from(tokenUse)
-        .where(eq(tokenUse.requests, 1))
-        .orderBy(desc(tokenUse.totalPromptTokens))
-        .limit(5)
+      const rows = await getTokenUseQueryService().getLargestSingleRequestRows('total_prompt_tokens')
 
       return {data: rows}
     } catch (error) {
@@ -120,24 +86,7 @@ export const tokensRoutes = new Elysia()
   })
   .get('/api/tokens/largest-completion-per-request', async () => {
     try {
-      const db = getDatabase()
-
-      const rows = await db
-        .select({
-          id: tokenUse.id,
-          createdAt: tokenUse.createdAt,
-          updatedAt: tokenUse.updatedAt,
-          judgmentsJobId: tokenUse.judgmentsJobId,
-          requests: tokenUse.requests,
-          totalPromptTokens: tokenUse.totalPromptTokens,
-          totalCompletionTokens: tokenUse.totalCompletionTokens,
-          totalTokens: tokenUse.totalTokens,
-          duration: tokenUse.duration,
-        })
-        .from(tokenUse)
-        .where(eq(tokenUse.requests, 1))
-        .orderBy(desc(tokenUse.totalCompletionTokens))
-        .limit(5)
+      const rows = await getTokenUseQueryService().getLargestSingleRequestRows('total_completion_tokens')
 
       return {data: rows}
     } catch (error) {
@@ -149,36 +98,7 @@ export const tokensRoutes = new Elysia()
     '/api/tokens',
     async ({query}) => {
       try {
-        const db = getDatabase()
-
-        // Build where conditions based on query params
-        const conditions = []
-
-        if (query.startTime) {
-          conditions.push(gte(tokenUse.createdAt, new Date(query.startTime)))
-        }
-
-        if (query.endTime) {
-          conditions.push(lte(tokenUse.createdAt, new Date(query.endTime)))
-        }
-
-        const whereClause = conditions.length > 0 ? and(...conditions) : undefined
-
-        const result = await db
-          .select({
-            totalPromptTokens: sum(tokenUse.totalPromptTokens),
-            totalCompletionTokens: sum(tokenUse.totalCompletionTokens),
-            totalTokens: sum(tokenUse.totalTokens),
-          })
-          .from(tokenUse)
-          .where(whereClause)
-
-        const row = result[0]
-        return {
-          totalPromptTokens: row?.totalPromptTokens ? Number(row.totalPromptTokens) : 0,
-          totalCompletionTokens: row?.totalCompletionTokens ? Number(row.totalCompletionTokens) : 0,
-          totalTokens: row?.totalTokens ? Number(row.totalTokens) : 0,
-        }
+        return await getTokenUseQueryService().getTotals({startTime: query.startTime, endTime: query.endTime})
       } catch (error) {
         console.error('Error fetching token usage:', error)
         return {totalPromptTokens: 0, totalCompletionTokens: 0, totalTokens: 0, error: 'Failed to fetch token usage'}

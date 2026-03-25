@@ -1,18 +1,15 @@
 import {Elysia, t} from 'elysia'
 
-import {requireUserAuth} from '../utils/authGuard.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {dataSourcesImportRoutesPostArxiv} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostArxiv.ts'
 import {dataSourcesImportRoutesPostBiorxiv} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostBiorxiv.ts'
 import {dataSourcesImportRoutesPostEuropePmcPpr} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostEuropePmcPpr.ts'
 import {dataSourcesImportRoutesPostFhirEhrPatients} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostFhirEhrPatients.ts'
 import {dataSourcesImportRoutesPostMedrxiv} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostMedrxiv.ts'
-import {dataSourcesImportRoutesPostOpenalex} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostOpenalex.ts'
 import {dataSourcesImportRoutesPostPubmed} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostPubmed.ts'
 
 export const dataSourcesImportRoutes = new Elysia()
   .use(withErrorHandler())
-  .use(requireUserAuth())
   .post(
     '/api/datasources/import/arxiv',
     async ({body}) => {
@@ -45,13 +42,6 @@ export const dataSourcesImportRoutes = new Elysia()
     '/api/datasources/import/europe-pmc-ppr',
     async ({body}) => {
       return await dataSourcesImportRoutesPostEuropePmcPpr(body)
-    },
-    {body: t.Object({id: t.String()})},
-  )
-  .post(
-    '/api/datasources/import/openalex',
-    async ({body}) => {
-      return await dataSourcesImportRoutesPostOpenalex(body)
     },
     {body: t.Object({id: t.String()})},
   )

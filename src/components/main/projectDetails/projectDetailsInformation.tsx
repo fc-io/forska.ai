@@ -1,11 +1,13 @@
 import {format} from 'date-fns'
 import {createMemo, For, Show} from 'solid-js'
 
-interface ProjectDetailsInformationProject {
+import {RuntimeModelNotice} from '../runtimeModelNotice.tsx'
+
+type ProjectDetailsInformationProject = {
   id: string
   name: string
-  createdAt: Date | string
-  updatedAt: Date | string
+  createdAt: Date | string | null
+  updatedAt: Date | string | null
   description: string | null
   dateFrom: Date | string | null
   dateTo: Date | string | null
@@ -20,6 +22,7 @@ type ProjectDetailsInformationProps = {
   importRoutes: string[]
   importRouteNamesByRoute?: Record<string, string | null>
   model?: {id: string; name: string; provider?: string | null; modelName?: string | null} | null
+  modelRuntimeNotice?: {message: string; tone: 'info' | 'warning'} | null
 }
 
 const parseDate = (value: Date | string | null) => {
@@ -104,7 +107,10 @@ export const ProjectDetailsInformation = (props: ProjectDetailsInformationProps)
         </div>
         <div class="flex gap-2 items-start">
           <label class="text-sm font-medium text-muted-foreground">Model:</label>
-          <p class="text-sm">{modelName()}</p>
+          <div>
+            <p class="text-sm">{modelName()}</p>
+            <RuntimeModelNotice class="mt-2" notice={props.modelRuntimeNotice} />
+          </div>
         </div>
       </div>
       <div class="flex gap-2 items-start">

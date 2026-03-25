@@ -1,48 +1,9 @@
 import {format} from 'date-fns'
 import {createMemo, Match, Show, splitProps, Switch} from 'solid-js'
 
-type OriginalFullTextUrl = {
-  url: string
-  site: string | null
-  availability: string | null
-  availabilityCode: string | null
-}
+import {type ArticleSourceLink, getArticleSourceMetadataValue} from '../../../../utils/articleSourceMetadata.ts'
 
-const isRecord = (value: unknown): value is Record<string, unknown> => {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-const getStringField = (value: Record<string, unknown>, key: string) => {
-  const candidate = value[key]
-  return typeof candidate === 'string' ? candidate : null
-}
-
-const getOriginalFullTextUrls = (originalData: unknown): OriginalFullTextUrl[] => {
-  const fullTextUrlList = isRecord(originalData) ? originalData.fullTextUrlList : null
-  const fullTextUrl = isRecord(fullTextUrlList) ? fullTextUrlList.fullTextUrl : null
-  const entries = Array.isArray(fullTextUrl) ? fullTextUrl : fullTextUrl ? [fullTextUrl] : []
-
-  return entries
-    .map((entry): OriginalFullTextUrl | null => {
-      const record = isRecord(entry) ? entry : null
-      const url = record ? getStringField(record, 'url') : null
-
-      return url
-        ? {
-            url,
-            site: record ? getStringField(record, 'site') : null,
-            availability: record ? getStringField(record, 'availability') : null,
-            availabilityCode: record ? getStringField(record, 'availabilityCode') : null,
-          }
-        : null
-    })
-    .filter((v): v is OriginalFullTextUrl => {
-      return v !== null
-    })
-    .slice(0, 25)
-}
-
-const isSubscriptionRequired = (url: OriginalFullTextUrl) => {
+const isSubscriptionRequired = (url: ArticleSourceLink) => {
   const code = url.availabilityCode ?? ''
   const availability = (url.availability ?? '').toLowerCase()
   return code === 'S' || availability.includes('subscription')
@@ -59,9 +20,9 @@ export const ReviewsArticlesPdfCell = (props: {
   fullTextPDF: unknown
   fullTextFetchedAt?: unknown
   fullTextConversionStatus?: unknown
-  originalData?: unknown
+  sourceMetadata?: unknown
 }) => {
-  const [local] = splitProps(props, ['fullTextPDF', 'fullTextFetchedAt', 'fullTextConversionStatus', 'originalData'])
+  const [local] = splitProps(props, ['fullTextPDF', 'fullTextFetchedAt', 'fullTextConversionStatus', 'sourceMetadata'])
   const view = createMemo(() => {
     const pdfValue = local.fullTextPDF
     const pdf = typeof pdfValue === 'string' ? pdfValue : ''
@@ -71,7 +32,9 @@ export const ReviewsArticlesPdfCell = (props: {
     const conversionStatusValue = local.fullTextConversionStatus
     const conversionStatus = typeof conversionStatusValue === 'string' ? conversionStatusValue.trim() : ''
     const isConverted = conversionStatus.toLowerCase() === 'success'
-    const subscriptionRequiredFullTextUrls = getOriginalFullTextUrls(local.originalData).filter(isSubscriptionRequired)
+    const subscriptionRequiredFullTextUrls = (
+      getArticleSourceMetadataValue(local.sourceMetadata)?.fullTextLinks ?? []
+    ).filter(isSubscriptionRequired)
     const subscriptionText = subscriptionRequiredFullTextUrls[0]?.site
       ? `Requires subscription (${subscriptionRequiredFullTextUrls[0]?.site ?? ''})`
       : subscriptionRequiredFullTextUrls.length

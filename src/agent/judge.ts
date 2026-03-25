@@ -1,7 +1,4 @@
-import OpenAI from 'openai'
-import type {ChatCompletionMessage} from 'openai/resources/chat/completions'
-
-import * as schema from '../db/schema.ts'
+import type {ArticleRecord} from '../db/schemaTypes.ts'
 import {
   ConnectionError,
   isConnectionError,
@@ -9,7 +6,8 @@ import {
   recordConnectionSuccess,
 } from '../server/cron/judgmentsJobs/connectionHealth.ts'
 import {withJudgmentRequest} from '../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
-import {getCodexAppServerClient} from '../server/utils/getCodexAppServerClient.ts'
+import {invokeStoredProviderModel} from '../server/providers/providerInvocationService.ts'
+import {inferenceRuntimeConfig} from '../server/utils/getInferenceRuntimeConfig.ts'
 import {rateLimitedLogger} from '../server/utils/rateLimitedLogger.ts'
 import {
   chunkArticleText,
@@ -33,14 +31,12 @@ import {
 } from './judge/parseSinglePromptJudgment.ts'
 import {storeSinglePromptJudgment} from './judge/storeSinglePromptJudgment.ts'
 
-const openAIClients = new Map<string, OpenAI>()
-
 type ModelConfigInput = {
   modelId: string
   modelName: string
   baseURL: string
   provider: string | null
-  version: string | null
+  workerUrls: string[]
 }
 
 const loggedFirstJudgeRequestByJobId = new Map<string, true>()
@@ -60,8 +56,9 @@ const truncateForLog = (text: string, maxChars: number): {text: string; original
 }
 
 const getFirstRequestPreviewChars = (): number => {
-  const fromEnv = Number(process.env.JUDGE_FIRST_REQUEST_PREVIEW_CHARS)
-  return Number.isFinite(fromEnv) && fromEnv > 0 ? Math.floor(fromEnv) : 4000
+  return inferenceRuntimeConfig.judgeFirstRequestPreviewChars > 0
+    ? inferenceRuntimeConfig.judgeFirstRequestPreviewChars
+    : 4000
 }
 
 const logFirstJudgeRequest = ({
@@ -89,7 +86,7 @@ const logFirstJudgeRequest = ({
   const previewChars = getFirstRequestPreviewChars()
   const userPromptPreview = truncateForLog(userPrompt, previewChars)
   const systemPromptPreview = truncateForLog(systemPrompt, previewChars)
-  const shouldLogFullPrompt = process.env.JUDGE_FIRST_REQUEST_LOG_FULL === 'true'
+  const shouldLogFullPrompt = inferenceRuntimeConfig.judgeFirstRequestLogFull
 
   const messages = {system: systemPromptPreview.text, user: userPromptPreview.text}
 
@@ -146,29 +143,6 @@ const logFirstJudgeRequestIfNeeded = ({
       })
 }
 
-type AssistantMessageShape = {
-  role: 'assistant'
-  content: string
-  tool_calls?: ChatCompletionMessage['tool_calls']
-  reasoning_content?: string
-}
-
-const getOpenAIClient = (baseURL: string): OpenAI => {
-  const existingClient = openAIClients.get(baseURL)
-  if (existingClient) {
-    return existingClient
-  }
-  const client = new OpenAI({
-    apiKey: 'fake_key',
-    dangerouslyAllowBrowser: true,
-    baseURL,
-    timeout: 900_000, // 15 minutes
-    maxRetries: 0, // Handle retries at application level
-  })
-  openAIClients.set(baseURL, client)
-  return client
-}
-
 /**
  * Normalize model name for the OpenAI API request.
  * - HuggingFace IDs (e.g., "XiaomiMiMo/MiMo-V2-Flash") pass through unchanged
@@ -182,19 +156,6 @@ const normalizeModelName = (name: string): string => {
     return `/${name}`
   }
   return name
-}
-
-const hasReasoningContent = (
-  message: ChatCompletionMessage,
-): message is ChatCompletionMessage & {reasoning_content: string} => {
-  return typeof (message as {reasoning_content?: unknown}).reasoning_content === 'string'
-}
-
-const normalizeProvider = (value: string | null | undefined): string => {
-  const v = String(value ?? '')
-    .trim()
-    .toLowerCase()
-  return v.length > 0 ? v : 'unknown'
 }
 
 const DANGEROUS_TEXT_START = '<DANGEROUS_TEXT_START>'
@@ -234,20 +195,6 @@ const getSinglePromptEvidenceOutputSchema = (): unknown => {
     properties: {facts: {type: 'array', items: {type: 'string'}}, quotes: {type: 'array', items: {type: 'string'}}},
     required: ['facts', 'quotes'],
     additionalProperties: false,
-  }
-}
-
-const formatAssistantMessage = (message: ChatCompletionMessage): AssistantMessageShape => {
-  const reasoningContent = hasReasoningContent(message) ? message.reasoning_content : null
-  const textContent = typeof message.content === 'string' ? message.content : ''
-  const content = textContent || reasoningContent || ''
-  const toolCalls = message.tool_calls && message.tool_calls.length > 0 ? message.tool_calls : undefined
-
-  return {
-    role: 'assistant',
-    content,
-    ...(toolCalls ? {tool_calls: toolCalls} : {}),
-    ...(reasoningContent ? {reasoning_content: reasoningContent} : {}),
   }
 }
 
@@ -355,7 +302,7 @@ const storeTokenUseAndThrowConnectionError = async ({
   throw new ConnectionError(`Failed to connect to inference server: ${errorMessage}`, baseURL)
 }
 
-type ArticlesType = (typeof schema.articles.$inferSelect)[]
+type ArticlesType = ArticleRecord[]
 
 const isFhirEhrPatientArticle = (article: ArticlesType[number]): boolean => {
   const articleId = article.articleId ?? ''
@@ -396,73 +343,44 @@ type GeneratedPromptResponse = {
  */
 const generateSinglePromptResponse = async ({
   judgmentsJobId,
+  modelId,
   prompt,
   systemPrompt,
   baseURL,
-  modelName,
   provider,
-  version,
+  workerUrls,
   outputSchema,
 }: {
   judgmentsJobId: string
+  modelId: string
   prompt: string
   systemPrompt: string
   baseURL: string
-  modelName: string
   provider: string | null
-  version: string | null
+  workerUrls: string[]
   outputSchema: unknown
 }): Promise<GeneratedPromptResponse> => {
-  const providerNormalized = normalizeProvider(provider)
-  return withJudgmentRequest({judgmentsJobId, provider, fallbackBaseURL: baseURL}, async (requestBaseURL) => {
-    if (providerNormalized === 'codex') {
+  return withJudgmentRequest(
+    {judgmentsJobId, provider, fallbackBaseURL: baseURL, workerUrls},
+    async (requestBaseURL) => {
       try {
-        const client = getCodexAppServerClient()
-        const combined = `${systemPrompt}\n\n${prompt}`
-        const result = await client.runJsonTurn({
-          model: modelName,
-          effort: version,
-          inputText: combined,
+        const result = await invokeStoredProviderModel({
+          baseURLOverride: requestBaseURL,
+          maxCompletionTokens: MAX_COMPLETION_TOKENS,
+          modelId,
           outputSchema,
-          timeoutMs: 900_000,
+          prompt,
+          systemPrompt,
+          temperature: 0.2,
         })
-        return {
-          text: result.text,
-          usage: {promptTokens: 0, completionTokens: 0, totalTokens: 0},
-          baseURL: requestBaseURL,
-        }
+
+        return {...result, baseURL: requestBaseURL}
       } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error)
-        throw new Error(`Connection error: codex app-server: ${msg}`)
+        const message = error instanceof Error ? error.message : String(error)
+        throw new ConnectionError(message, requestBaseURL)
       }
-    }
-
-    const client = getOpenAIClient(requestBaseURL)
-    const modelToUse = normalizeModelName(modelName)
-    const response = await client.chat.completions.create({
-      model: modelToUse,
-      messages: [
-        {role: 'system', content: systemPrompt},
-        {role: 'user', content: prompt},
-      ],
-      max_completion_tokens: MAX_COMPLETION_TOKENS,
-      temperature: 0.2,
-    })
-
-    const message = response.choices[0]?.message
-    if (!message) throw new Error('No message in response')
-    const assistantMessage = formatAssistantMessage(message)
-
-    return {
-      text: assistantMessage.content,
-      usage: {
-        promptTokens: response.usage?.prompt_tokens || 0,
-        completionTokens: response.usage?.completion_tokens || 0,
-        totalTokens: response.usage?.total_tokens || 0,
-      },
-      baseURL: requestBaseURL,
-    }
-  })
+    },
+  )
 }
 
 const shouldIncludeFullText = (contentSettings: ContentSettings): boolean => {
@@ -546,9 +464,7 @@ const getMaxUserPromptChars = ({
 }
 
 const getChunkParallelLimit = (chunkCount: number): number => {
-  const raw = Number(process.env.JUDGE_CHUNK_MAX_PARALLEL)
-  const normalized = Number.isFinite(raw) ? Math.trunc(raw) : 0
-  const configured = normalized > 0 ? normalized : 4
+  const configured = inferenceRuntimeConfig.judgeChunkMaxParallel > 0 ? inferenceRuntimeConfig.judgeChunkMaxParallel : 4
   return Math.max(1, Math.min(chunkCount, configured))
 }
 
@@ -658,6 +574,7 @@ const fitChunkedFinalPromptToBudget = ({
 export const judgeSinglePrompt = async ({
   article,
   prompt,
+  queueRecordId,
   sessionId,
   judgmentsJobId,
   modelConfig,
@@ -667,6 +584,7 @@ export const judgeSinglePrompt = async ({
 }: {
   article: ArticlesType[number]
   prompt: SinglePromptInput
+  queueRecordId: string
   sessionId: string | null
   judgmentsJobId: string
   modelConfig: ModelConfigInput
@@ -674,7 +592,7 @@ export const judgeSinglePrompt = async ({
   projectId: string
   contentSettings: ContentSettings
 }): Promise<void> => {
-  const {baseURL, modelName, modelId, provider, version} = modelConfig
+  const {baseURL, modelName, modelId, provider, workerUrls} = modelConfig
 
   const tokenUse: JudgeTokenUsageEntry[] = []
   const startedAt = new Date().toISOString()
@@ -706,7 +624,6 @@ export const judgeSinglePrompt = async ({
 
     let userPrompt = basePrompt
     let attempts = 0
-    let lastError: string | null = null
     let lastResponse = ''
 
     while (attempts <= MAX_RETRIES) {
@@ -717,12 +634,12 @@ export const judgeSinglePrompt = async ({
       try {
         currentResponse = await generateSinglePromptResponse({
           judgmentsJobId,
+          modelId,
           prompt: userPrompt,
           systemPrompt,
           baseURL,
-          modelName,
           provider,
-          version,
+          workerUrls,
           outputSchema: getSinglePromptOutputSchema(),
         })
 
@@ -730,7 +647,9 @@ export const judgeSinglePrompt = async ({
 
         await storeSinglePromptJudgment({
           article,
+          judgmentsJobId,
           promptId: prompt.id,
+          queueRecordId,
           modelId,
           projectId,
           judgment,
@@ -824,14 +743,13 @@ export const judgeSinglePrompt = async ({
         })
         errorCount += 1
 
-        lastError = errorMessage
         lastResponse = responseText
 
         if (attempts < MAX_RETRIES) {
-          userPrompt = buildRetryPrompt(basePrompt, lastError, lastResponse)
+          userPrompt = buildRetryPrompt(basePrompt, errorMessage, lastResponse)
         } else {
           abortCount += 1
-          console.error(`${article.id} | Prompt ${prompt.id} | Aborting: ${lastError}`)
+          console.error(`${article.id} | Prompt ${prompt.id} | Aborting: ${errorMessage}`)
         }
       }
     }
@@ -921,7 +839,6 @@ export const judgeSinglePrompt = async ({
 
           let attempts = 0
           let userPrompt = baseEvidencePrompt
-          let lastError: string | null = null
           let lastResponse = ''
           let evidence: {facts: string[]; quotes: string[]} | null = null
 
@@ -933,12 +850,12 @@ export const judgeSinglePrompt = async ({
             try {
               currentResponse = await generateSinglePromptResponse({
                 judgmentsJobId,
+                modelId,
                 prompt: userPrompt,
                 systemPrompt: evidenceSystemPrompt,
                 baseURL,
-                modelName,
                 provider,
-                version,
+                workerUrls,
                 outputSchema: evidenceOutputSchema,
               })
 
@@ -1027,14 +944,13 @@ export const judgeSinglePrompt = async ({
               })
               errorCount += 1
 
-              lastError = errorMessage
               lastResponse = responseText
 
               if (attempts < MAX_RETRIES) {
-                userPrompt = buildRetryPrompt(baseEvidencePrompt, lastError, lastResponse)
+                userPrompt = buildRetryPrompt(baseEvidencePrompt, errorMessage, lastResponse)
               } else {
                 abortCount += 1
-                console.error(`${article.id} | Prompt ${prompt.id} | Aborting evidence chunk: ${lastError}`)
+                console.error(`${article.id} | Prompt ${prompt.id} | Aborting evidence chunk: ${errorMessage}`)
               }
 
               if (connectionFailure) {
@@ -1137,12 +1053,12 @@ export const judgeSinglePrompt = async ({
         try {
           currentResponse = await generateSinglePromptResponse({
             judgmentsJobId,
+            modelId,
             prompt: finalUserPrompt,
             systemPrompt,
             baseURL,
-            modelName,
             provider,
-            version,
+            workerUrls,
             outputSchema: getSinglePromptOutputSchema(),
           })
 
@@ -1187,7 +1103,9 @@ export const judgeSinglePrompt = async ({
 
           await storeSinglePromptJudgment({
             article,
+            judgmentsJobId,
             promptId: prompt.id,
+            queueRecordId,
             modelId,
             projectId,
             judgment: judgmentToStore,

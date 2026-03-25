@@ -177,3 +177,7 @@ export const startCodexDeviceAuthLogin = (): CodexDeviceLoginJob => {
 export const getCodexDeviceAuthLoginJob = (id: string): CodexDeviceLoginJob | null => {
   return currentJob?.id === id ? currentJob : null
 }
+
+export const getCurrentCodexDeviceAuthLoginJob = (): CodexDeviceLoginJob | null => {
+  return currentJob
+}

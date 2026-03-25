@@ -5,7 +5,7 @@ import type {Accessor, Setter} from 'solid-js'
 import {For, Show} from 'solid-js'
 
 import {getArticleUrl} from '../../../../app/utils/getArticleUrl.ts'
-import type {articles, judgmentsHuman} from '../../../../db/schema.ts'
+import type {ArticleRecord, JudgmentHumanRecord} from '../../../../db/schemaTypes.ts'
 import {getJournalDisplayTitleForArticle} from '../../../../utils/getJournalDisplayTitleForArticle.ts'
 import {ReviewsArticlesPdfCell} from './reviewsArticlesPdfCell.tsx'
 
@@ -17,9 +17,9 @@ declare module '@tanstack/solid-table' {
   }
 }
 
-type HumanJudgmentType = typeof judgmentsHuman.$inferSelect
+type HumanJudgmentType = JudgmentHumanRecord
 
-type ArticleWithHumanJudgments = Omit<typeof articles.$inferSelect, 'judgments'> & {judgments: Array<HumanJudgmentType>}
+type ArticleWithHumanJudgments = Omit<ArticleRecord, 'judgments'> & {judgments: Array<HumanJudgmentType>}
 
 interface ReviewsArticlesHumanTableProps {
   articles: ArticleWithHumanJudgments[]
@@ -148,7 +148,7 @@ const columns: ColumnDef<ArticleWithHumanJudgments, unknown>[] = [
           fullTextConversionStatus={
             (info.row.original as {fullTextConversionStatus?: unknown}).fullTextConversionStatus
           }
-          originalData={(info.row.original as {originalData?: unknown}).originalData}
+          sourceMetadata={(info.row.original as {sourceMetadata?: unknown}).sourceMetadata}
         />
       )
     },

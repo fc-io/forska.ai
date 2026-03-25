@@ -1,6 +1,6 @@
 import {Client} from 'pg'
 
-import {env} from '../server/utils/env.ts'
+import {getDatabaseUrl} from './getDatabaseUrl.ts'
 
 const tablesWithUpdatedAt = [
   'articles',
@@ -15,14 +15,8 @@ const tablesWithUpdatedAt = [
   'judgments',
   'judgments_human',
   'token_use',
-  // Review-related tables
-  'reviews',
   'judgment_assessments',
-  // Auth tables
   'user',
-  'session',
-  'account',
-  'verification',
 ]
 
 const createOrReplaceFunctionSQL = `
@@ -45,7 +39,7 @@ FOR EACH ROW EXECUTE FUNCTION set_updated_at_timestamp();`
 }
 
 const run = async (): Promise<void> => {
-  const client = new Client({connectionString: env.DATABASE_URL})
+  const client = new Client({connectionString: getDatabaseUrl()})
   await client.connect()
 
   try {

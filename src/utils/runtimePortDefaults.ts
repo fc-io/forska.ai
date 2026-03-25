@@ -1,0 +1,3 @@
+export const DEFAULT_VITE_PORT = 3000
+export const DEFAULT_API_SERVER_PORT = 3001
+export const DEFAULT_APP_SERVER_PORT = 8080

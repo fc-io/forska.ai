@@ -1,23 +1,21 @@
-import {and, desc, eq, gte, inArray, lte, or, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
+import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {
-  articleRouteLink,
-  articles,
-  judgmentsHuman,
-  projectArticles,
-  projectPrompts,
-  projectRouteLink,
-  projects,
-  prompts,
-} from '../../../db/schema.ts'
-import {getDatabase} from '../../utils/getDatabase.ts'
+  escapeSqlString,
+  getDateValue,
+  getProjectScopeClause,
+  getQuotedStringList,
+  getTimestampLiteral,
+} from '../../services/appQueryHelpers.ts'
+import {getAppQueryService} from '../../services/getAppQueryService.ts'
+import {assertProjectIsActive} from './projectAccessGuard.ts'
 
 export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
   '/api/articlesreviewshuman',
   async ({body}) => {
     try {
-      const db = getDatabase()
+      await assertProjectIsActive(body.projectId)
 
       const page = parseInt(body?.page || '1', 10)
       const limit = parseInt(body?.limit || '100', 10)
@@ -27,13 +25,15 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
       const toDate = body.to ? new Date(`${body.to}T23:59:59.999Z`) : null
       const searchTitle = typeof body.search === 'string' ? body.search.trim() : ''
 
-      // Get prompts for the project (ordered)
-      const projectPromptRows = await db
-        .select({id: prompts.id, order: projectPrompts.order})
-        .from(projectPrompts)
-        .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
-        .where(and(eq(projectPrompts.projectId, body.projectId), eq(projectPrompts.enabled, true)))
-        .orderBy(projectPrompts.order)
+      const projectPromptRows = await getAppDatabaseService().queryJson<{id: string; order: number | null}>(`
+        SELECT p.id AS id, pp.prompt_order AS "order"
+        FROM app.project_prompt pp
+        INNER JOIN app.prompt p ON p.id = pp.prompt_id
+        WHERE pp.project_id = '${escapeSqlString(body.projectId)}'
+          AND pp.enabled = TRUE
+        ORDER BY pp.prompt_order ASC NULLS LAST, p.created_at ASC
+      `)
+
       if (projectPromptRows.length === 0) {
         return {data: [], totalCount: 0, page, limit, totalPages: 0}
       }
@@ -42,21 +42,15 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
         return p.id
       })
 
-      // OPTIMIZATION: Start from the small judgmentsHuman table instead of the large articles table.
-      // Step 1: Find all article IDs that are fully assessed by at least one human user.
-      //         "Fully assessed" = a single user has answered ALL project prompts for that article.
-      const fullyAssessedArticleIdsQuery = await db
-        .select({articleId: judgmentsHuman.articleId})
-        .from(judgmentsHuman)
-        .where(
-          and(
-            eq(judgmentsHuman.projectId, body.projectId),
-            eq(judgmentsHuman.isAnswered, true),
-            inArray(judgmentsHuman.promptId, promptIds),
-          ),
-        )
-        .groupBy(judgmentsHuman.articleId, judgmentsHuman.user)
-        .having(sql`COUNT(DISTINCT ${judgmentsHuman.promptId}) = ${promptIds.length}`)
+      const fullyAssessedArticleIdsQuery = await getAppDatabaseService().queryJson<{articleId: string}>(`
+        SELECT article_id AS articleId
+        FROM app.judgment_human
+        WHERE project_id = '${escapeSqlString(body.projectId)}'
+          AND is_answered = TRUE
+          AND prompt_id IN (${getQuotedStringList(promptIds).join(', ')})
+        GROUP BY article_id
+        HAVING COUNT(DISTINCT prompt_id) = ${promptIds.length}
+      `)
 
       const fullyAssessedArticleIds = [
         ...new Set(
@@ -71,7 +65,6 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
         return {data: [], totalCount: 0, page, limit, totalPages: 0}
       }
 
-      // Step 2: Apply prompt-specific answer filters (if any) to narrow down the article set
       const promptFilters = Object.entries(body.prompts || {}).map(([key, values]) => {
         return [key, Array.isArray(values) ? values : [String(values)]] as const
       })
@@ -79,17 +72,13 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
       let candidateArticleIds = fullyAssessedArticleIds
 
       for (const [promptId, answers] of promptFilters) {
-        // Find articles in candidateArticleIds that have a matching human answer for this prompt
-        const matchingArticles = await db
-          .select({articleId: judgmentsHuman.articleId})
-          .from(judgmentsHuman)
-          .where(
-            and(
-              inArray(judgmentsHuman.articleId, candidateArticleIds),
-              eq(judgmentsHuman.promptId, promptId),
-              inArray(judgmentsHuman.answer, answers),
-            ),
-          )
+        const matchingArticles = await getAppDatabaseService().queryJson<{articleId: string}>(`
+          SELECT article_id AS articleId
+          FROM app.judgment_human
+          WHERE article_id IN (${getQuotedStringList(candidateArticleIds).join(', ')})
+            AND prompt_id = '${escapeSqlString(promptId)}'
+            AND answer IN (${getQuotedStringList(answers).join(', ')})
+        `)
         candidateArticleIds = [
           ...new Set(
             matchingArticles.map((r) => {
@@ -102,99 +91,71 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
         }
       }
 
-      // Step 3: Get project bounds and import routes for article scoping
-      const [projectBounds] = await db
-        .select({dateFrom: projects.dateFrom, dateTo: projects.dateTo})
-        .from(projects)
-        .where(eq(projects.id, body.projectId))
-        .limit(1)
-
-      const projectImportRoutes = await db
-        .select({importRouteId: projectRouteLink.importRouteId})
-        .from(projectRouteLink)
-        .where(eq(projectRouteLink.projectId, body.projectId))
-
-      const routeIdArray =
-        projectImportRoutes.length > 0
-          ? sql.join(
-              projectImportRoutes.map((r) => {
-                return sql`${r.importRouteId}::uuid`
-              }),
-              sql`,`,
-            )
-          : null
-
-      const hasMatchingImportRoute =
-        routeIdArray !== null
-          ? sql`EXISTS (
-              SELECT 1 FROM ${articleRouteLink} arl
-              WHERE arl."article_id" = ${articles.id}
-                AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
-            )`
-          : null
-      const hasProjectArticle = sql`EXISTS (
-        SELECT 1 FROM ${projectArticles} pa
-        WHERE pa."article_id" = ${articles.id}
-          AND pa."project_id" = ${body.projectId}::uuid
-      )`
-
-      // Step 4: Build final WHERE conditions for articles (using the pre-filtered candidate IDs)
-      const whereParts: Array<ReturnType<typeof sql>> = [inArray(articles.id, candidateArticleIds)]
-      // Scope to project's import routes or curated project articles
-      if (hasMatchingImportRoute) {
-        const scopeCondition = or(hasMatchingImportRoute, hasProjectArticle)
-        if (scopeCondition) {
-          whereParts.push(scopeCondition)
-        }
-      } else {
-        whereParts.push(hasProjectArticle)
-      }
-
-      if (projectBounds?.dateFrom) {
-        whereParts.push(gte(articles.articleCreatedAt, projectBounds.dateFrom))
-      }
-      if (projectBounds?.dateTo) {
-        whereParts.push(lte(articles.articleCreatedAt, projectBounds.dateTo))
-      }
-      if (fromDate) {
-        whereParts.push(gte(articles.articleCreatedAt, fromDate))
-      }
-      if (toDate) {
-        whereParts.push(lte(articles.articleCreatedAt, toDate))
-      }
-      if (searchTitle) {
-        whereParts.push(sql`${articles.articleTitle} ILIKE ${'%' + searchTitle + '%'}`)
-      }
-
-      const combinedWhereCondition = whereParts.length > 1 ? and(...whereParts) : whereParts[0]
-
-      // Count total distinct articles (now much faster since we're filtering by candidateArticleIds)
-      const countQuery = await db
-        .select({count: sql<number>`COUNT(DISTINCT ${articles.id})`.as('count')})
-        .from(articles)
-        .where(combinedWhereCondition)
-
-      const totalCount = countQuery[0]?.count ?? 0
-
-      // Fetch paginated list
-      const articlesWithHumanJudgments = await db
-        .select({article: articles})
-        .from(articles)
-        .where(combinedWhereCondition)
-        .orderBy(desc(articles.articleCreatedAt))
-        .limit(limit)
-        .offset(offset)
-
-      const articleIds = articlesWithHumanJudgments.map((a) => {
-        return a.article.id
+      const projectConfig = await getAppQueryService().getProjectReviewConfig(body.projectId)
+      const whereParts = [
+        `a.id IN (${getQuotedStringList(candidateArticleIds).join(', ')})`,
+        getProjectScopeClause({
+          articleAlias: 'a',
+          importRouteIds: projectConfig?.importRouteIds ?? [],
+          projectId: body.projectId,
+        }),
+        projectConfig?.dateFrom ? `a.article_created_at >= ${getTimestampLiteral(projectConfig.dateFrom)}` : null,
+        projectConfig?.dateTo ? `a.article_created_at <= ${getTimestampLiteral(projectConfig.dateTo)}` : null,
+        fromDate ? `a.article_created_at >= ${getTimestampLiteral(fromDate)}` : null,
+        toDate ? `a.article_created_at <= ${getTimestampLiteral(toDate)}` : null,
+        searchTitle ? `LOWER(COALESCE(a.article_title, '')) LIKE LOWER('%${escapeSqlString(searchTitle)}%')` : null,
+      ].filter((part): part is string => {
+        return part !== null
       })
 
+      const [countRows, pageArticleIdRows] = await Promise.all([
+        getAppDatabaseService().queryJson<{count: number}>(`
+          SELECT COUNT(*) AS count
+          FROM app.article a
+          WHERE ${whereParts.join(' AND ')}
+        `),
+        getAppDatabaseService().queryJson<{id: string}>(`
+          SELECT a.id AS id
+          FROM app.article a
+          WHERE ${whereParts.join(' AND ')}
+          ORDER BY a.article_created_at DESC NULLS LAST, a.id ASC
+          LIMIT ${limit}
+          OFFSET ${offset}
+        `),
+      ])
+
+      const totalCount = Number(countRows[0]?.count ?? 0)
+      const articleIds = pageArticleIdRows.map((row) => {
+        return row.id
+      })
+      const articlesWithHumanJudgments = await getAppQueryService().getFullArticlesByIds(articleIds)
       const allHumanJudgments =
         articleIds.length > 0
-          ? await db
-              .select()
-              .from(judgmentsHuman)
-              .where(and(inArray(judgmentsHuman.articleId, articleIds), inArray(judgmentsHuman.promptId, promptIds)))
+          ? await getAppDatabaseService().queryJson<{
+              id: string
+              createdAt: unknown
+              updatedAt: unknown
+              articleId: string
+              promptId: string
+              isAnswered: boolean
+              answer: string | null
+              comment: string | null
+              projectId: string
+            }>(`
+              SELECT
+                id,
+                created_at AS createdAt,
+                updated_at AS updatedAt,
+                article_id AS articleId,
+                prompt_id AS promptId,
+                is_answered AS isAnswered,
+                answer,
+                comment,
+                project_id AS projectId
+              FROM app.judgment_human
+              WHERE article_id IN (${getQuotedStringList(articleIds).join(', ')})
+                AND prompt_id IN (${getQuotedStringList(promptIds).join(', ')})
+            `)
           : []
 
       const judgmentsByArticle = allHumanJudgments.reduce(
@@ -214,20 +175,34 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
         {} as Record<string, number>,
       )
 
-      const result = articlesWithHumanJudgments.map(({article}) => {
-        const unsorted = judgmentsByArticle[article.id] || []
+      const articleOrder = new Map(
+        articleIds.map((id, index) => {
+          return [id, index]
+        }),
+      )
+      const sortedArticles = [...articlesWithHumanJudgments].sort((left, right) => {
+        return (
+          (articleOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER)
+          - (articleOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER)
+        )
+      })
+      const result = sortedArticles.map((article) => {
+        const unsorted = (judgmentsByArticle[article.id] || []).map((judgment) => {
+          return {...judgment, createdAt: getDateValue(judgment.createdAt), updatedAt: getDateValue(judgment.updatedAt)}
+        })
         const sorted = [...unsorted].sort((a, b) => {
           const ao = promptOrderMap[a.promptId] ?? Number.MAX_SAFE_INTEGER
           const bo = promptOrderMap[b.promptId] ?? Number.MAX_SAFE_INTEGER
           return ao - bo
         })
+
         return {...article, judgments: sorted}
       })
 
       return {data: result, totalCount, page, limit, totalPages: Math.ceil(totalCount / limit)}
     } catch (error) {
       console.error('Error fetching human articles reviews:', error)
-      throw new Error(error instanceof Error ? error.message : 'Failed to fetch human articles reviews')
+      throw new Error(error instanceof Error ? error.message : 'Failed to fetch human articles reviews', {cause: error})
     }
   },
   {

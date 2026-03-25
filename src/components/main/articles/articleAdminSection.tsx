@@ -15,7 +15,7 @@ type PdfFetchAttempt = {
   details?: string
 }
 
-type OriginalFullTextUrl = {
+type FullTextLink = {
   url: string
   site: string | null
   availability: string | null
@@ -53,7 +53,6 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
     if (prev === 'pending' && conversionStatus === 'success') {
       setConversionJustCompleted(true)
       void queryClient.invalidateQueries({queryKey: ['article-details', props.articleId]})
-      void queryClient.invalidateQueries({queryKey: ['import-route-stats-article-details', props.articleId]})
       void queryClient.invalidateQueries({queryKey: ['article-review-details']})
     }
 
@@ -80,7 +79,6 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
         void queryClient.invalidateQueries({queryKey: ['article-admin-info', props.articleId]})
         // Also invalidate the main article query in case it's being used
         void queryClient.invalidateQueries({queryKey: ['article-details', props.articleId]})
-        void queryClient.invalidateQueries({queryKey: ['import-route-stats-article-details', props.articleId]})
         void queryClient.invalidateQueries({queryKey: ['article-review-details']})
       },
     }
@@ -98,7 +96,6 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
         void queryClient.invalidateQueries({queryKey: ['article-admin-info', props.articleId]})
         // Also invalidate the main article query in case it's being used
         void queryClient.invalidateQueries({queryKey: ['article-details', props.articleId]})
-        void queryClient.invalidateQueries({queryKey: ['import-route-stats-article-details', props.articleId]})
         void queryClient.invalidateQueries({queryKey: ['article-review-details']})
       },
     }
@@ -113,7 +110,6 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
       onSuccess: () => {
         void queryClient.invalidateQueries({queryKey: ['article-admin-info', props.articleId]})
         void queryClient.invalidateQueries({queryKey: ['article-details', props.articleId]})
-        void queryClient.invalidateQueries({queryKey: ['import-route-stats-article-details', props.articleId]})
         void queryClient.invalidateQueries({queryKey: ['article-review-details']})
       },
     }
@@ -224,14 +220,16 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
                   </Show>
                 </div>
 
-                <Show when={article().uploaderName}>
-                  <div class="text-xs">
-                    <span class="font-medium text-amber-800">Uploaded By:</span>
-                    <span class="ml-2 text-amber-700 bg-purple-100 px-1.5 py-0.5 rounded">
-                      {article().uploaderName}
-                    </span>
-                  </div>
-                </Show>
+                <div class="text-xs">
+                  <span class="font-medium text-amber-800">PDF Source:</span>
+                  <span class="ml-2 text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">
+                    {article().fullTextSource === 'user_upload'
+                      ? 'Manual upload'
+                      : article().fullTextSource
+                        ? `Fetched (${article().fullTextSource})`
+                        : 'Not available'}
+                  </span>
+                </div>
 
                 <Show when={article().fullTextConversionStatus}>
                   <div class="text-xs">
@@ -349,19 +347,13 @@ export const ArticleAdminSection = (props: ArticleAdminSectionProps) => {
                         <Show
                           when={
                             !fetchPdfMutation.data?.fullTextPDF
-                            && (fetchPdfMutation.data as {originalFullTextUrls?: OriginalFullTextUrl[]})
-                              ?.originalFullTextUrls?.length
+                            && (fetchPdfMutation.data as {fullTextLinks?: FullTextLink[]})?.fullTextLinks?.length
                           }
                         >
                           <div class="bg-white/50 rounded p-2 mt-2">
-                            <div class="text-xs font-medium text-amber-800 mb-1.5">Original full-text URLs:</div>
+                            <div class="text-xs font-medium text-amber-800 mb-1.5">Full-text links:</div>
                             <div class="space-y-1.5">
-                              <For
-                                each={
-                                  (fetchPdfMutation.data as {originalFullTextUrls: OriginalFullTextUrl[]})
-                                    .originalFullTextUrls
-                                }
-                              >
+                              <For each={(fetchPdfMutation.data as {fullTextLinks: FullTextLink[]}).fullTextLinks}>
                                 {(link) => {
                                   return (
                                     <div class="text-xs p-1.5 rounded bg-gray-100 text-gray-700">

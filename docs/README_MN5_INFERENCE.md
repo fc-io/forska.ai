@@ -185,14 +185,17 @@ ssh -N -L 30000:acc020:30000 alog
 
 Once the tunnel is established, the SGLang server is accessible at `http://localhost:30000`.
 
-### Configure forska.ai to Use MN5
+### Configure Forska to Use MN5
 
-Update your environment or configuration to point to the MN5 inference endpoint:
+If you want the local API server to pick up launcher/runtime metadata, start it with:
 
 ```bash
-# .env or environment variable
-INFERENCE_URL=http://localhost:30000/v1
+bun run mn5:dev:server
 ```
+
+Then configure the provider/model in Forska at `/admin/models` to use the tunnel endpoint, for example `http://localhost:30000/v1`.
+
+Do not add a global inference URL to env files for normal app use.
 
 ### OpenAI-Compatible API
 

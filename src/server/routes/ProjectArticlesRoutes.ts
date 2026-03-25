@@ -1,43 +1,47 @@
-import {and, desc, eq, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles, projectArticles, projects} from '../../db/schema.ts'
+import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {escapeSqlString} from '../services/appQueryHelpers.ts'
+import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
 import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
-import {requireUserAuth} from '../utils/authGuard.ts'
-import {getDatabase} from '../utils/getDatabase.ts'
 
 export const projectArticlesRoutes = new Elysia()
-  .use(requireUserAuth())
   .get(
     '/api/projects/:id/articles',
     async ({params, query}) => {
-      const db = getDatabase()
       const {id: projectId} = params
       const page = parseInt(query.page || '1', 10)
       const limit = parseInt(query.limit || '10', 10)
       const offset = (page - 1) * limit
 
-      const totalCountResult = await db
-        .select({count: sql<number>`COUNT(*)`.as('count')})
-        .from(projectArticles)
-        .where(eq(projectArticles.projectId, projectId))
+      const [[countRow], rows] = await Promise.all([
+        getAppDatabaseService().queryJson<{count: number}>(`
+          SELECT COUNT(*) AS count
+          FROM app.project_article
+          WHERE project_id = '${escapeSqlString(projectId)}'
+        `),
+        getAppDatabaseService().queryJson<{
+          id: string
+          articleTitle: string
+          importedFromProjectId: string | null
+          importedFromProjectName: string | null
+        }>(`
+          SELECT
+            a.id AS id,
+            a.article_title AS articleTitle,
+            pa.imported_from_project_id AS importedFromProjectId,
+            p.name AS importedFromProjectName
+          FROM app.project_article pa
+          INNER JOIN app.article a ON pa.article_id = a.id
+          LEFT JOIN app.project p ON pa.imported_from_project_id = p.id
+          WHERE pa.project_id = '${escapeSqlString(projectId)}'
+          ORDER BY a.created_at DESC, a.id DESC
+          LIMIT ${limit}
+          OFFSET ${offset}
+        `),
+      ])
 
-      const totalCount = totalCountResult?.[0]?.count ?? 0
-
-      const rows = await db
-        .select({
-          id: articles.id,
-          articleTitle: articles.articleTitle,
-          importedFromProjectId: projectArticles.importedFromProjectId,
-          importedFromProjectName: projects.name,
-        })
-        .from(projectArticles)
-        .innerJoin(articles, eq(projectArticles.articleId, articles.id))
-        .leftJoin(projects, eq(projectArticles.importedFromProjectId, projects.id))
-        .where(eq(projectArticles.projectId, projectId))
-        .orderBy(desc(articles.createdAt), desc(articles.id))
-        .limit(limit)
-        .offset(offset)
+      const totalCount = countRow?.count ?? 0
 
       return {articles: rows, totalCount, page, limit, totalPages: Math.ceil(totalCount / limit)}
     },
@@ -64,12 +68,14 @@ export const projectArticlesRoutes = new Elysia()
     },
   )
   .delete('/api/projects/:id/articles/:articleId', async ({params}) => {
-    const db = getDatabase()
     const {id: projectId, articleId} = params
 
-    await db
-      .delete(projectArticles)
-      .where(and(eq(projectArticles.projectId, projectId), eq(projectArticles.articleId, articleId)))
+    await getAppDatabaseService().run(`
+      DELETE FROM app.project_article
+      WHERE project_id = '${escapeSqlString(projectId)}'
+        AND article_id = '${escapeSqlString(articleId)}'
+    `)
+    await getDuckdbMartRefreshService().queueProjectRefresh(projectId, 'ProjectArticlesRoutes.delete')
 
     return {success: true}
   })

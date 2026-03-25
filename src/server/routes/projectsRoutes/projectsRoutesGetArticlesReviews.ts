@@ -1,20 +1,8 @@
-/**
- * Articles reviews API endpoint - ClickHouse implementation.
- *
- * This is the Phase 6 implementation using ClickHouse for dramatically faster
- * GROUP BY + ORDER BY + HAVING queries on judgment data.
- *
- * Performance improvement: ~50s (PostgreSQL) -> ~2s (ClickHouse)
- *
- * Uses PostgreSQL only for project metadata (prompts, routes, curated articles).
- * All judgment data is queried from ClickHouse.
- */
-import {inArray} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles} from '../../../db/schema.ts'
 import {queryArticlesReviewsFromOlap} from '../../../services/olap/articlesReviewsOlap.ts'
-import {getDatabase} from '../../utils/getDatabase.ts'
+import {getAppQueryService} from '../../services/getAppQueryService.ts'
+import {assertProjectIsActive} from './projectAccessGuard.ts'
 
 export const projectsRoutesGetArticlesReviews = new Elysia().post(
   '/api/articlesreviews',
@@ -33,7 +21,10 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       const page = parseInt(body?.page ?? '1', 10)
       const limit = parseInt(body?.limit ?? '100', 10)
 
+      await assertProjectIsActive(body.projectId)
+
       const result = await queryArticlesReviewsFromOlap({
+        cursor: body.cursor,
         projectId: body.projectId,
         page,
         limit,
@@ -43,28 +34,19 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         prompts: body.prompts,
       })
 
-      const db = getDatabase()
+      const hasInlineHydration = result.data.every((article) => {
+        return Object.hasOwn(article, 'articleId')
+      })
+
+      if (hasInlineHydration) {
+        console.log(`[Articles Reviews API] Returning ${result.data.length} articles`)
+        return result
+      }
+
       const articleIds = result.data.map((a) => {
         return a.id
       })
-      const fullTextRows =
-        articleIds.length > 0
-          ? await db
-              .select({
-                id: articles.id,
-                articleTitle: articles.articleTitle,
-                articleCreatedAt: articles.articleCreatedAt,
-                articleUpdatedAt: articles.articleUpdatedAt,
-                articleId: articles.articleId,
-                url: articles.url,
-                fullTextPDF: articles.fullTextPDF,
-                fullTextFetchedAt: articles.fullTextFetchedAt,
-                fullTextConversionStatus: articles.fullTextConversionStatus,
-                originalData: articles.originalData,
-              })
-              .from(articles)
-              .where(inArray(articles.id, articleIds))
-          : []
+      const fullTextRows = await getAppQueryService().getReviewHydrationRows(articleIds)
       const fullTextById = fullTextRows.reduce(
         (acc, row) => {
           return {...acc, [row.id]: row}
@@ -78,12 +60,13 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
           articleTitle: fullText ? fullText.articleTitle : article.articleTitle,
           articleCreatedAt: fullText ? fullText.articleCreatedAt : article.articleCreatedAt,
           articleUpdatedAt: fullText ? fullText.articleUpdatedAt : article.articleUpdatedAt,
+          journalTitle: fullText?.sourceMetadata?.journalTitle ?? article.journalTitle,
           articleId: fullText?.articleId ?? null,
           url: fullText?.url ?? null,
           fullTextPDF: fullText?.fullTextPDF ?? null,
           fullTextFetchedAt: fullText?.fullTextFetchedAt ?? null,
           fullTextConversionStatus: fullText?.fullTextConversionStatus ?? null,
-          originalData: fullText?.originalData ?? null,
+          sourceMetadata: fullText?.sourceMetadata ?? null,
         }
       })
 
@@ -92,11 +75,12 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       return {...result, data}
     } catch (error) {
       console.error('[Articles Reviews API] Error:', error)
-      throw new Error(error instanceof Error ? error.message : 'Failed to fetch articles reviews')
+      throw new Error(error instanceof Error ? error.message : 'Failed to fetch articles reviews', {cause: error})
     }
   },
   {
     body: t.Object({
+      cursor: t.Optional(t.String()),
       from: t.Optional(t.String()),
       limit: t.String(),
       page: t.String(),

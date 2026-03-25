@@ -1,10 +1,10 @@
 import {randomUUID} from 'node:crypto'
 
-import {eq, inArray} from 'drizzle-orm'
-
-import * as schema from '../../db/schema.ts'
+import type {ArticleRecord} from '../../db/schemaTypes.ts'
+import {type ArticleSourceMetadata, getArticleSourceMetadataValue} from '../../utils/articleSourceMetadata.ts'
 import {fetchPdfForArticle} from '../cron/fullTextJobs/fetchPdfForArticle.ts'
-import {getDatabase} from '../utils/getDatabase.ts'
+import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {escapeSqlString, getQuotedStringList, getSqlLiteral, getTimestampLiteral} from '../services/appQueryHelpers.ts'
 
 type PdfFetchJobStatus = 'queued' | 'running' | 'completed' | 'failed'
 
@@ -51,11 +51,8 @@ const mutateJob = (jobId: string, update: (job: PdfFetchJob) => void) => {
   if (job) update(job)
 }
 
-const shouldSkipRow = (
-  row: Pick<typeof schema.articles.$inferSelect, 'fullTextPDF' | 'fullTextPdfUploadedBy'>,
-  forceRefetch: boolean,
-): boolean => {
-  const hasUploadedPdf = Boolean(row.fullTextPdfUploadedBy)
+const shouldSkipRow = (row: Pick<ArticleRecord, 'fullTextPDF' | 'fullTextSource'>, forceRefetch: boolean): boolean => {
+  const hasUploadedPdf = row.fullTextSource === 'user_upload'
   const hasPdf = Boolean(row.fullTextPDF)
   return !forceRefetch && (hasUploadedPdf || hasPdf)
 }
@@ -73,7 +70,6 @@ const buildUpdateForAttempt = (result: Awaited<ReturnType<typeof fetchPdfForArti
         fullTextConversionError: null,
         fullText: null,
         fullTextHtml: null,
-        fullTextPdfUploadedBy: null,
       }
     : base
 }
@@ -119,51 +115,92 @@ const processAttemptError = (jobId: string, error: unknown) => {
   })
 }
 
-const fetchAndStoreForRow = async (
-  jobId: string,
-  row: Pick<typeof schema.articles.$inferSelect, 'id' | 'arxivId' | 'originalData'>,
-): Promise<void> => {
-  const db = getDatabase()
-  const result = await fetchPdfForArticle({arxivId: row.arxivId, originalData: row.originalData}).catch((error) => {
+type PdfFetchRow = Pick<ArticleRecord, 'id' | 'arxivId' | 'doi'> & {sourceMetadata: ArticleSourceMetadata | null}
+
+const fetchAndStoreForRow = async (jobId: string, row: PdfFetchRow): Promise<void> => {
+  const result = await fetchPdfForArticle({
+    arxivId: row.arxivId,
+    doi: row.doi,
+    sourceMetadata: row.sourceMetadata,
+  }).catch((error) => {
     return Promise.reject(error)
   })
 
   const update = buildUpdateForAttempt(result)
-  await db.update(schema.articles).set(update).where(eq(schema.articles.id, row.id))
+  const updateParts = Object.entries(update).map(([key, value]) => {
+    const columnNameMap: Record<string, string> = {
+      fullTextFetchedAt: 'full_text_fetched_at',
+      fullTextPDF: 'full_text_pdf',
+      fullTextSource: 'full_text_source',
+      fullTextOriginalFormat: 'full_text_original_format',
+      fullTextConversionStatus: 'full_text_conversion_status',
+      fullTextConversionAttempts: 'full_text_conversion_attempts',
+      fullTextConversionError: 'full_text_conversion_error',
+      fullText: 'full_text',
+      fullTextHtml: 'full_text_html',
+    }
+    return `${columnNameMap[key] ?? key} = ${getSqlLiteral(value)}`
+  })
+  await getAppDatabaseService().run(`
+    UPDATE app.article
+    SET ${updateParts.join(', ')},
+        updated_at = ${getTimestampLiteral(new Date())}
+    WHERE id = '${escapeSqlString(row.id)}'
+  `)
   processAttemptResult(jobId, result)
 }
 
-const fetchAndStoreForRowSafe = async (
-  jobId: string,
-  row: Pick<typeof schema.articles.$inferSelect, 'id' | 'arxivId' | 'originalData'>,
-): Promise<void> => {
+const fetchAndStoreForRowSafe = async (jobId: string, row: PdfFetchRow): Promise<void> => {
   const run = async () => {
     await fetchAndStoreForRow(jobId, row)
   }
 
   return run().catch(async (error) => {
-    const db = getDatabase()
     const update = buildUpdateForAttempt(null)
-    await db.update(schema.articles).set(update).where(eq(schema.articles.id, row.id))
+    const updateParts = Object.entries(update).map(([key, value]) => {
+      const columnNameMap: Record<string, string> = {
+        fullTextFetchedAt: 'full_text_fetched_at',
+        fullTextPDF: 'full_text_pdf',
+        fullTextSource: 'full_text_source',
+        fullTextOriginalFormat: 'full_text_original_format',
+      }
+      return `${columnNameMap[key] ?? key} = ${getSqlLiteral(value)}`
+    })
+    await getAppDatabaseService().run(`
+      UPDATE app.article
+      SET ${updateParts.join(', ')},
+          updated_at = ${getTimestampLiteral(new Date())}
+      WHERE id = '${escapeSqlString(row.id)}'
+    `)
     processAttemptError(jobId, error)
   })
 }
 
 const processChunk = async (jobId: string, ids: string[], forceRefetch: boolean): Promise<void> => {
-  const db = getDatabase()
-  const rows = await db
-    .select({
-      id: schema.articles.id,
-      arxivId: schema.articles.arxivId,
-      originalData: schema.articles.originalData,
-      fullTextPDF: schema.articles.fullTextPDF,
-      fullTextPdfUploadedBy: schema.articles.fullTextPdfUploadedBy,
-    })
-    .from(schema.articles)
-    .where(inArray(schema.articles.id, ids))
+  const rows = await getAppDatabaseService().queryJson<{
+    id: string
+    arxivId: string | null
+    doi: string | null
+    sourceMetadata: unknown
+    fullTextPDF: string | null
+    fullTextSource: string | null
+  }>(`
+    SELECT
+      id,
+      arxiv_id AS arxivId,
+      doi,
+      TO_JSON(source_metadata) AS sourceMetadata,
+      full_text_pdf AS fullTextPDF,
+      full_text_source AS fullTextSource
+    FROM app.article
+    WHERE id IN (${getQuotedStringList(ids).join(', ')})
+  `)
+  const normalizedRows = rows.map((row) => {
+    return {...row, sourceMetadata: getArticleSourceMetadataValue(row.sourceMetadata)}
+  })
 
   const foundIds = new Set(
-    rows.map((r) => {
+    normalizedRows.map((r) => {
       return r.id
     }),
   )
@@ -172,7 +209,7 @@ const processChunk = async (jobId: string, ids: string[], forceRefetch: boolean)
     return acc + (foundIds.has(id) ? 0 : 1)
   }, 0)
 
-  const rowsToAttempt = rows.filter((r) => {
+  const rowsToAttempt = normalizedRows.filter((r) => {
     return !shouldSkipRow(r, forceRefetch)
   })
 

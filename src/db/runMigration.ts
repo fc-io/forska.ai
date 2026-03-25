@@ -2,10 +2,10 @@ import {readFileSync} from 'fs'
 import {join} from 'path'
 import {Client} from 'pg'
 
-import {env} from '../server/utils/env.ts'
+import {getDatabaseUrl} from './getDatabaseUrl.ts'
 
 const runMigration = async (): Promise<void> => {
-  const client = new Client({connectionString: env.DATABASE_URL})
+  const client = new Client({connectionString: getDatabaseUrl()})
   await client.connect()
 
   try {

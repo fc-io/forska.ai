@@ -1,12 +1,15 @@
-import {Menu} from '@ark-ui/solid'
 import {useQuery} from '@tanstack/solid-query'
 import {Link, useLocation} from '@tanstack/solid-router'
 import {createMemo, createSignal, onCleanup, onMount, Show} from 'solid-js'
 
-import {apiClient} from '../services/apiClient'
-import type {User} from '../types/user'
-
-type NavigationProps = {user: User | undefined; onSignOut: () => void}
+import type {LlmMetricsSummary, LlmStatusRow} from '../utils/llmStatusQuery'
+import {
+  fetchLlmStatus,
+  getLlmMetricsSummary,
+  getLlmStatusRefetchInterval,
+  llmStatusQueryKey,
+} from '../utils/llmStatusQuery'
+import {fetchWriterConnections, writerConnectionsQueryKey} from '../utils/writerConnectionsQuery'
 
 const isEventTargetWithinElement = (target: EventTarget | null, element: HTMLElement | undefined) => {
   return target instanceof Node && !!element && element.contains(target)
@@ -24,34 +27,6 @@ const isEditableTarget = (target: EventTarget | null) => {
 const isF13KeyDownEvent = (event: KeyboardEvent) => {
   return event.code === 'F13' || event.key === 'F13'
 }
-
-const getAvatarLabel = (user: User | undefined) => {
-  const defaultLabel = 'U'
-  if (!user) {
-    return defaultLabel
-  }
-  const trimmedName = user.name?.trim()
-  if (trimmedName) {
-    return trimmedName
-      .split(/\s+/)
-      .filter((part) => {
-        return part.length > 0
-      })
-      .map((part) => {
-        return part[0] ?? ''
-      })
-      .join('')
-      .slice(0, 2)
-      .toUpperCase()
-  }
-  const trimmedEmail = user.email?.trim()
-  if (trimmedEmail) {
-    return trimmedEmail.slice(0, 2).toUpperCase()
-  }
-  return defaultLabel
-}
-
-type LlmMetricsSummary = {waiting: number; running: number; lastUpdate: Date | null}
 
 type LlmMetricsIndicator = {waiting: number; running: number; lastUpdate: Date | null; isFresh: boolean}
 
@@ -72,53 +47,8 @@ const getLlmMetricsIndicatorTitle = (isFresh: boolean) => {
     : 'Waiting / Running requests across all workers (no metrics update in last 3m)'
 }
 
-const getLlmMetricsRefetchInterval = (_pathname: string) => {
-  return 30 * 1000
-}
-
-const fetchLlmMetricsSummary = async (): Promise<LlmMetricsSummary | null> => {
-  const response = await apiClient.api.llmstatus.get()
-  if (response.error) {
-    return null
-  }
-  const entries = response.data?.data ?? []
-  const latestByInstance = new Map<string, {waiting: number; running: number; ts: Date | null}>()
-  for (const row of entries) {
-    const instanceId = typeof row.instanceId === 'string' ? row.instanceId : ''
-    if (!latestByInstance.has(instanceId)) {
-      const ts = row.ts ? new Date(row.ts as string | number | Date) : null
-      latestByInstance.set(instanceId, {
-        waiting: (row.numQueueReqs as number | null) ?? 0,
-        running: (row.numRunningReqs as number | null) ?? 0,
-        ts: ts && !isNaN(ts.getTime()) ? ts : null,
-      })
-    }
-  }
-  const values = [...latestByInstance.values()]
-  const totalWaiting = values.reduce((sum, v) => {
-    return sum + v.waiting
-  }, 0)
-  const totalRunning = values.reduce((sum, v) => {
-    return sum + v.running
-  }, 0)
-  const timestamps = values
-    .map((v) => {
-      return v.ts
-    })
-    .filter((t): t is Date => {
-      return t !== null
-    })
-  const lastUpdate =
-    timestamps.length > 0
-      ? new Date(
-          Math.max(
-            ...timestamps.map((t) => {
-              return t.getTime()
-            }),
-          ),
-        )
-      : null
-  return {waiting: totalWaiting, running: totalRunning, lastUpdate}
+const getLlmMetricsRefetchInterval = (pathname: string, rows: LlmStatusRow[]) => {
+  return pathname.startsWith('/admin/llm') ? false : getLlmStatusRefetchInterval(rows)
 }
 
 const formatLastUpdate = (date: Date | null): string => {
@@ -136,7 +66,7 @@ const formatLastUpdate = (date: Date | null): string => {
   return `Updated ${dateStr} ${time}`
 }
 
-export const Navigation = (props: NavigationProps) => {
+export const Navigation = () => {
   const [isAdminMenuOpen, setIsAdminMenuOpen] = createSignal(false)
   let adminMenuTriggerElement: HTMLDivElement | undefined
   let adminMenuElement: HTMLDivElement | undefined
@@ -144,20 +74,47 @@ export const Navigation = (props: NavigationProps) => {
 
   const llmMetricsQuery = useQuery(() => {
     return {
-      queryKey: ['llm-metrics-summary'],
-      queryFn: fetchLlmMetricsSummary,
-      refetchInterval: getLlmMetricsRefetchInterval(location().pathname),
-      enabled: Boolean(props.user),
+      queryKey: llmStatusQueryKey,
+      queryFn: fetchLlmStatus,
+      refetchInterval: (query) => {
+        const rows = Array.isArray(query.state.data) ? query.state.data : []
+        return getLlmMetricsRefetchInterval(location().pathname, rows)
+      },
       suspense: false,
     }
   })
 
   const llmMetrics = () => {
-    return llmMetricsQuery.data ?? null
+    return getLlmMetricsSummary(llmMetricsQuery.data ?? [])
   }
+
+  const writerConnectionsQuery = useQuery(() => {
+    return {
+      queryKey: writerConnectionsQueryKey,
+      queryFn: fetchWriterConnections,
+      refetchInterval: 15_000,
+      refetchOnReconnect: true,
+      refetchOnWindowFocus: true,
+      suspense: false,
+    }
+  })
 
   const llmMetricsIndicator = createMemo(() => {
     return getLlmMetricsIndicator(llmMetrics(), Date.now())
+  })
+
+  const writerWarning = createMemo(() => {
+    return (
+      writerConnectionsQuery.data?.warnings.find((warning) => {
+        return warning.kind !== 'write-failure'
+      }) ?? null
+    )
+  })
+
+  const writerWarningClass = createMemo(() => {
+    return writerWarning()?.severity === 'error'
+      ? 'border-red-200 bg-red-50 text-red-800'
+      : 'border-amber-200 bg-amber-50 text-amber-800'
   })
 
   const closeAdminMenu = () => {
@@ -211,10 +168,6 @@ export const Navigation = (props: NavigationProps) => {
       return
     }
 
-    if (!props.user) {
-      return
-    }
-
     event.preventDefault()
     toggleAdminMenu()
   }
@@ -229,6 +182,20 @@ export const Navigation = (props: NavigationProps) => {
 
   return (
     <nav class="relative bg-white shadow-sm border-b border-gray-200">
+      <Show when={writerWarning()}>
+        {(warning) => {
+          return (
+            <div class={`border-b px-4 py-2 text-sm ${writerWarningClass()}`}>
+              <div class="mx-auto flex max-w-7xl items-center justify-between gap-4 sm:px-2 lg:px-4">
+                <div>{warning().message}</div>
+                <Link to="/admin/writer-connections" class="shrink-0 font-semibold underline underline-offset-2">
+                  Writer status
+                </Link>
+              </div>
+            </div>
+          )
+        }}
+      </Show>
       <div class="px-4 sm:px-6 lg:px-8">
         <div class="flex justify-between h-16">
           <div class="flex items-center space-x-8">
@@ -256,77 +223,50 @@ export const Navigation = (props: NavigationProps) => {
             >
               Article Search
             </Link>
+            <Link
+              to="/settings"
+              class="text-gray-900 hover:text-blue-600 px-3 py-2 text-sm font-medium [&.active]:text-blue-600 [&.active]:font-semibold"
+            >
+              Settings
+            </Link>
           </div>
           <div class="flex items-center space-x-4">
-            <Show when={props.user}>
-              <div
-                class="flex flex-col items-end px-2 py-1"
-                title={getLlmMetricsIndicatorTitle(llmMetricsIndicator().isFresh)}
-              >
-                <div class={`text-sm font-medium ${llmMetricsIndicator().isFresh ? 'text-gray-700' : 'text-red-600'}`}>
-                  {llmMetricsIndicator().waiting}/{llmMetricsIndicator().running}
-                </div>
-                <div class={`text-xs ${llmMetricsIndicator().isFresh ? 'text-gray-400' : 'text-red-400'}`}>
-                  {formatLastUpdate(llmMetricsIndicator().lastUpdate)}
-                </div>
+            <div
+              class="flex flex-col items-end px-2 py-1"
+              title={getLlmMetricsIndicatorTitle(llmMetricsIndicator().isFresh)}
+            >
+              <div class={`text-sm font-medium ${llmMetricsIndicator().isFresh ? 'text-gray-700' : 'text-red-600'}`}>
+                {llmMetricsIndicator().waiting}/{llmMetricsIndicator().running}
               </div>
-              <div
-                ref={(element) => {
-                  adminMenuTriggerElement = element
-                }}
-                class="group -mx-2 mr-4 flex h-full cursor-pointer select-none items-center px-2"
-                role="button"
-                tabIndex={0}
-                aria-haspopup="true"
-                aria-expanded={isAdminMenuOpen()}
-                onPointerEnter={handleAdminMenuTriggerPointerEnter}
-                onPointerLeave={handleAdminMenuTriggerPointerLeave}
-                onClick={toggleAdminMenu}
-              >
-                <div
-                  class={`rounded-md px-3 py-2 text-sm font-medium text-gray-700 group-hover:bg-stone-100 group-hover:text-gray-900 ${
-                    isAdminMenuOpen() ? 'bg-stone-100 text-gray-900' : ''
-                  }`}
-                >
-                  Admin
-                </div>
+              <div class={`text-xs ${llmMetricsIndicator().isFresh ? 'text-gray-400' : 'text-red-400'}`}>
+                {formatLastUpdate(llmMetricsIndicator().lastUpdate)}
               </div>
-            </Show>
-            <Show when={props.user}>
-              <Menu.Root lazyMount unmountOnExit positioning={{placement: 'bottom-end'}}>
-                <Menu.Trigger class="inline-flex items-center justify-center w-9 h-9 rounded-full bg-gray-200 text-sm font-semibold text-gray-700 hover:bg-gray-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500">
-                  <span aria-hidden="true">{getAvatarLabel(props.user)}</span>
-                  <span class="sr-only">Open user menu</span>
-                </Menu.Trigger>
-                <Menu.Positioner>
-                  <Menu.Content class="mt-2 w-40 rounded-md bg-white py-2 shadow-lg ring-1 ring-black ring-opacity-5 focus:outline-none">
-                    <Menu.Item id="settings" value="settings" class="p-0">
-                      <Link
-                        to="/settings"
-                        class="block w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
-                      >
-                        Settings
-                      </Link>
-                    </Menu.Item>
-                    <Menu.Item id="sign-out" value="sign-out" class="p-0">
-                      <Link
-                        to="/login"
-                        class="block w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
-                        onClick={() => {
-                          props.onSignOut()
-                        }}
-                      >
-                        Sign Out
-                      </Link>
-                    </Menu.Item>
-                  </Menu.Content>
-                </Menu.Positioner>
-              </Menu.Root>
-            </Show>
+            </div>
+            <div
+              ref={(element) => {
+                adminMenuTriggerElement = element
+              }}
+              class="group -mx-2 mr-4 flex h-full cursor-pointer select-none items-center px-2"
+              role="button"
+              tabIndex={0}
+              aria-haspopup="true"
+              aria-expanded={isAdminMenuOpen()}
+              onPointerEnter={handleAdminMenuTriggerPointerEnter}
+              onPointerLeave={handleAdminMenuTriggerPointerLeave}
+              onClick={toggleAdminMenu}
+            >
+              <div
+                class={`rounded-md px-3 py-2 text-sm font-medium text-gray-700 group-hover:bg-stone-100 group-hover:text-gray-900 ${
+                  isAdminMenuOpen() ? 'bg-stone-100 text-gray-900' : ''
+                }`}
+              >
+                Admin
+              </div>
+            </div>
           </div>
         </div>
       </div>
-      <Show when={props.user && isAdminMenuOpen()}>
+      <Show when={isAdminMenuOpen()}>
         <div
           ref={(element) => {
             adminMenuElement = element
@@ -346,28 +286,7 @@ export const Navigation = (props: NavigationProps) => {
                       class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
                       onClick={closeAdminMenu}
                     >
-                      Assessments
-                    </Link>
-                    <Link
-                      to="/admin/datasources"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      Data Sources
-                    </Link>
-                    <Link
-                      to="/admin/latest-articles"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      Latest Articles
-                    </Link>
-                    <Link
-                      to="/admin/import-route-stats"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      Import Route Stats
+                      Human Assessments
                     </Link>
                     <Link
                       to="/admin/pdf-conversions"
@@ -410,25 +329,18 @@ export const Navigation = (props: NavigationProps) => {
                       Failed Requests
                     </Link>
                     <Link
-                      to="/admin/sync-stats"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      Sync Stats
-                    </Link>
-                    <Link
-                      to="/admin/diagnose-unassessed"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      Diagnose Unassessed
-                    </Link>
-                    <Link
                       to="/admin/setup_stats"
                       class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
                       onClick={closeAdminMenu}
                     >
                       Setup/Stats
+                    </Link>
+                    <Link
+                      to="/admin/duckdb-append"
+                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                      onClick={closeAdminMenu}
+                    >
+                      DuckDB Append Metrics
                     </Link>
                   </div>
                 </div>
@@ -436,25 +348,32 @@ export const Navigation = (props: NavigationProps) => {
                   <div class="text-xs font-semibold uppercase tracking-wide text-gray-500">Admin</div>
                   <div class="flex flex-col gap-1">
                     <Link
-                      to="/admin/users"
+                      to="/admin/datasources"
                       class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
                       onClick={closeAdminMenu}
                     >
-                      Users
+                      Data Sources
+                    </Link>
+                    <Link
+                      to={'/providers' as never}
+                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                      onClick={closeAdminMenu}
+                    >
+                      Providers
+                    </Link>
+                    <Link
+                      to="/admin/writer-connections"
+                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
+                      onClick={closeAdminMenu}
+                    >
+                      Writer Connections
                     </Link>
                     <Link
                       to="/admin/prompts/deduplicate"
                       class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
                       onClick={closeAdminMenu}
                     >
-                      Prompts
-                    </Link>
-                    <Link
-                      to="/admin/aa-models"
-                      class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
-                      onClick={closeAdminMenu}
-                    >
-                      AI Models
+                      Conflicting prompts and judgments
                     </Link>
                   </div>
                 </div>

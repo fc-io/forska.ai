@@ -1,18 +1,21 @@
+import {useQuery, useQueryClient} from '@tanstack/solid-query'
 import {Link} from '@tanstack/solid-router'
 import {format} from 'date-fns'
 import {createMemo, createSignal, For, Show} from 'solid-js'
 
+import {fetchProviderConnections} from '../../app/routes/+admin/+models/providerConnectionsClient.ts'
 import {createJudgmentsJob} from '../../services/judgmentsJobsService'
 import type {fetchProjects} from '../../services/projectsService'
 import {cloneProject, unarchiveProject} from '../../services/projectsService'
+import {getSglangRuntimeModelNotice} from '../../utils/getSglangRuntimeModelNotice.ts'
 import {Button} from '../ui/button'
+import {RuntimeModelNotice} from './runtimeModelNotice.tsx'
 
 type Project = Awaited<ReturnType<typeof fetchProjects>>[number]
 
 interface IndexProjectsGridProps {
   projects: Project[]
   isArchived?: boolean
-  onUnarchive?: () => void
 }
 
 const getProjectModelLabel = (project: Project) => {
@@ -28,15 +31,60 @@ const getProjectContentUsedLabel = (project: Project) => {
   return parts.length > 0 ? parts.join(', ') : 'none'
 }
 
+const getActionErrorMessage = (error: unknown, fallback: string) => {
+  return error instanceof Error && error.message.trim().length > 0 ? error.message : fallback
+}
+
 export const ProjectsGrid = (props: IndexProjectsGridProps) => {
+  const queryClient = useQueryClient()
+  const providerConnectionsQuery = useQuery(() => {
+    return {
+      queryKey: ['provider-connections', 'projects-grid', props.isArchived ? 'archived' : 'active'],
+      queryFn: fetchProviderConnections,
+      staleTime: 60 * 1000,
+      suspense: false,
+    }
+  })
   const sortedProjects = createMemo(() => {
     return [...props.projects].sort((a, b) => {
       return a.name.localeCompare(b.name)
     })
   })
+  const providerModelById = createMemo(() => {
+    return new Map(
+      (providerConnectionsQuery.data?.connections ?? []).flatMap((connection) => {
+        return connection.models.map((model) => {
+          return [model.id, model] as const
+        })
+      }),
+    )
+  })
+  const getProjectRuntimeNotice = (project: Project) => {
+    const providerModel = providerModelById().get(project.modelId)
+
+    return props.isArchived || !providerModel
+      ? null
+      : getSglangRuntimeModelNotice({
+          candidateModelNames: [providerModel.remoteModelId, providerModel.modelName],
+          getMismatchMessage: (runtimeLabel) => {
+            return `Active SGLang runtime model: ${runtimeLabel}. Starting a job will be blocked until it matches this project's model.`
+          },
+          providerKind: providerModel.provider,
+          runtime: providerConnectionsQuery.data?.runtime ?? null,
+        })
+  }
 
   const [creatingJobs, setCreatingJobs] = createSignal<Set<string>>(new Set())
+  const [createJobErrors, setCreateJobErrors] = createSignal<Record<string, string>>({})
+  const clearCreateJobError = (projectId: string) => {
+    setCreateJobErrors((prev) => {
+      const {[projectId]: _removed, ...rest} = prev
+
+      return rest
+    })
+  }
   const handleCreateJudgmentsJob = async (projectId: string) => {
+    clearCreateJobError(projectId)
     setCreatingJobs((prev) => {
       return new Set([...prev, projectId])
     })
@@ -45,6 +93,9 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
       console.log('Judgments job created:', job)
     } catch (error) {
       console.error('Failed to create judgments job:', error)
+      setCreateJobErrors((prev) => {
+        return {...prev, [projectId]: getActionErrorMessage(error, 'Failed to create judgments job')}
+      })
     } finally {
       setCreatingJobs((prev) => {
         const next = new Set(prev)
@@ -81,9 +132,8 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
       return new Set([...prev, projectId])
     })
     try {
-      await unarchiveProject(projectId)
+      await unarchiveProject(queryClient, projectId)
       console.log('Project unarchived:', projectId)
-      props.onUnarchive?.()
     } catch (error) {
       console.error('Failed to unarchive project:', error)
     } finally {
@@ -124,7 +174,7 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                       </span>
                     </Show>
                     <span class="text-sm text-muted-foreground">
-                      Created: {format(project.createdAt, 'yyyy-MM-dd HH:mm')}
+                      Created: {project.createdAt ? format(project.createdAt, 'yyyy-MM-dd HH:mm') : 'Unknown'}
                     </span>
                   </div>
                 </div>
@@ -135,91 +185,103 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                       : project.description}
                   </p>
                 )}
-                <div class="flex gap-2">
-                  <Show when={props.isArchived}>
-                    <Button
-                      size="sm"
-                      class="px-3 py-1 text-sm"
-                      disabled={unarchivingProjects().has(project.id)}
-                      onClick={() => {
-                        void handleUnarchiveProject(project.id)
-                      }}
-                    >
-                      {unarchivingProjects().has(project.id) ? 'Unarchiving...' : 'Unarchive'}
-                    </Button>
-                  </Show>
-                  <Button
-                    as={Link}
-                    to="/projects/$id"
-                    params={{id: project.id} as never}
-                    variant="outline"
-                    size="sm"
-                    class="px-3 py-1 text-sm"
-                  >
-                    Project Details
-                  </Button>
-                  <Button
-                    as={Link}
-                    to="/projects/$id/reviews"
-                    params={{id: project.id} as never}
-                    variant="outline"
-                    size="sm"
-                    class="px-3 py-1 text-sm"
-                  >
-                    Project Reviews
-                  </Button>
-                  <Button
-                    as={Link}
-                    to="/projects/$id/humanAssessment"
-                    params={{id: project.id} as never}
-                    variant="outline"
-                    size="sm"
-                    class="px-3 py-1 text-sm"
-                  >
-                    Human Assessment
-                  </Button>
-                  <Button
-                    as={Link}
-                    to="/projects/$id/edit"
-                    params={{id: project.id} as never}
-                    size="sm"
-                    variant="outline"
-                    class="px-3 py-1 text-sm"
-                  >
-                    Edit
-                  </Button>
-                  <Button
-                    as={Link}
-                    to="/projects/$id/export"
-                    params={{id: project.id} as never}
-                    size="sm"
-                    variant="outline"
-                    class="px-3 py-1 text-sm"
-                  >
-                    Export data
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    class="px-3 py-1 text-sm"
-                    disabled={cloningProjects().has(project.id)}
-                    onClick={() => {
-                      void handleCloneProject(project.id)
+                <RuntimeModelNotice class="mb-4" notice={getProjectRuntimeNotice(project)} />
+                <div class="flex flex-col gap-3">
+                  <div class="flex gap-2">
+                    <Show when={props.isArchived}>
+                      <Button
+                        size="sm"
+                        class="px-3 py-1 text-sm"
+                        disabled={unarchivingProjects().has(project.id)}
+                        onClick={() => {
+                          void handleUnarchiveProject(project.id)
+                        }}
+                      >
+                        {unarchivingProjects().has(project.id) ? 'Unarchiving...' : 'Unarchive'}
+                      </Button>
+                    </Show>
+                    <Show when={!props.isArchived}>
+                      <Button
+                        as={Link}
+                        to="/projects/$id"
+                        params={{id: project.id} as never}
+                        variant="outline"
+                        size="sm"
+                        class="px-3 py-1 text-sm"
+                      >
+                        Project Details
+                      </Button>
+                      <Button
+                        as={Link}
+                        to="/projects/$id/reviews"
+                        params={{id: project.id} as never}
+                        variant="outline"
+                        size="sm"
+                        class="px-3 py-1 text-sm"
+                      >
+                        Project Reviews
+                      </Button>
+                      <Button
+                        as={Link}
+                        to="/projects/$id/humanAssessment"
+                        params={{id: project.id} as never}
+                        variant="outline"
+                        size="sm"
+                        class="px-3 py-1 text-sm"
+                      >
+                        Human Assessment
+                      </Button>
+                      <Button
+                        as={Link}
+                        to="/projects/$id/edit"
+                        params={{id: project.id} as never}
+                        size="sm"
+                        variant="outline"
+                        class="px-3 py-1 text-sm"
+                      >
+                        Edit
+                      </Button>
+                      <Button
+                        as={Link}
+                        to="/projects/$id/export"
+                        params={{id: project.id} as never}
+                        size="sm"
+                        variant="outline"
+                        class="px-3 py-1 text-sm"
+                      >
+                        Export data
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        class="px-3 py-1 text-sm"
+                        disabled={cloningProjects().has(project.id)}
+                        onClick={() => {
+                          void handleCloneProject(project.id)
+                        }}
+                      >
+                        {cloningProjects().has(project.id) ? 'Cloning...' : 'Clone Project'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        class="px-3 py-1 text-sm"
+                        disabled={creatingJobs().has(project.id)}
+                        onClick={() => {
+                          void handleCreateJudgmentsJob(project.id)
+                        }}
+                      >
+                        {creatingJobs().has(project.id) ? 'Creating...' : 'Start Judgments Job'}
+                      </Button>
+                    </Show>
+                  </div>
+                  <Show when={createJobErrors()[project.id]}>
+                    {(message) => {
+                      return (
+                        <div class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                          {message()}
+                        </div>
+                      )
                     }}
-                  >
-                    {cloningProjects().has(project.id) ? 'Cloning...' : 'Clone Project'}
-                  </Button>
-                  <Show when={!props.isArchived}>
-                    <Button
-                      size="sm"
-                      class="px-3 py-1 text-sm"
-                      disabled={creatingJobs().has(project.id)}
-                      onClick={() => {
-                        void handleCreateJudgmentsJob(project.id)
-                      }}
-                    >
-                      {creatingJobs().has(project.id) ? 'Creating...' : 'Start Judgments Job'}
-                    </Button>
                   </Show>
                 </div>
               </div>

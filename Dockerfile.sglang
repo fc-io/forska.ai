@@ -1,0 +1,13 @@
+ARG SGLANG_BASE_IMAGE=lmsysorg/sglang:v0.5.9
+FROM ${SGLANG_BASE_IMAGE}
+
+ARG TRANSFORMERS_REF=fc9137225880a9d03f130634c20f9dbe36a7b8bf
+
+RUN python -m pip install --no-cache-dir --upgrade --upgrade-strategy eager "https://github.com/huggingface/transformers/archive/${TRANSFORMERS_REF}.zip"
+
+RUN python - <<'PY'
+from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
+
+assert 'qwen3_5_moe' in CONFIG_MAPPING_NAMES
+print(CONFIG_MAPPING_NAMES['qwen3_5_moe'])
+PY

@@ -1,71 +1,15 @@
 import {format} from 'date-fns'
-import {and, count, eq, gte, lte, sql} from 'drizzle-orm'
 
 import {startMedrxivHarvest} from '../../../agent/startMedrxivHarvest.ts'
-import {articleRouteLink, articles, dataSource, importRoute as importRouteTable} from '../../../db/schema.ts'
-import {getDatabase} from '../../utils/getDatabase.ts'
+import {getDataSourceQueryService} from '../../services/dataSourceQueryService.ts'
 import {createCursorUpdater} from './dataSourcesImportCursor.ts'
 
-type Database = ReturnType<typeof getDatabase>
-type DataSourceRecord = typeof dataSource.$inferSelect
-
-const fetchDataSourceById = async (db: Database, id: string): Promise<DataSourceRecord> => {
-  const [record] = await db.select().from(dataSource).where(eq(dataSource.id, id)).limit(1)
+export const dataSourcesImportRoutesPostMedrxiv = async (body: {id: string}) => {
+  const dataSourceQueryService = getDataSourceQueryService()
+  const record = await dataSourceQueryService.getDataSourceById(body.id)
   if (!record) {
     throw new Error('Data source not found')
   }
-  return record
-}
-
-const countArticlesInRange = async (db: Database, route: string, record: DataSourceRecord): Promise<number> => {
-  const linkedExists = sql`EXISTS (
-    SELECT 1 FROM ${articleRouteLink} arl
-    JOIN ${importRouteTable} ir ON ir.id = arl."import_route_id"
-    WHERE arl."article_id" = ${articles.id} AND ir."route" = ${route}
-  )`
-
-  const base = linkedExists
-  const hasFrom = Boolean(record.dateFrom)
-  const hasTo = Boolean(record.dateTo)
-  const where =
-    hasFrom && hasTo
-      ? and(
-          base,
-          gte(articles.articleCreatedAt, record.dateFrom as Date),
-          lte(articles.articleCreatedAt, record.dateTo as Date),
-        )
-      : hasFrom
-        ? and(base, gte(articles.articleCreatedAt, record.dateFrom as Date))
-        : hasTo
-          ? and(base, lte(articles.articleCreatedAt, record.dateTo as Date))
-          : base
-  const [countResult] = await db.select({value: count()}).from(articles).where(where)
-  const rawValue = countResult?.value ?? 0
-  return typeof rawValue === 'number' ? rawValue : Number(rawValue)
-}
-
-const updateDataSourceAfterImport = async (
-  db: Database,
-  id: string,
-  importedCount: number,
-): Promise<DataSourceRecord> => {
-  const updatedAt = new Date()
-  const [updated] = await db
-    .update(dataSource)
-    .set({lastImportAt: updatedAt, itemsAfterLastImport: importedCount, cursor: null, updatedAt})
-    .where(eq(dataSource.id, id))
-    .returning()
-
-  if (!updated) {
-    throw new Error('Data source not found')
-  }
-
-  return updated
-}
-
-export const dataSourcesImportRoutesPostMedrxiv = async (body: {id: string}) => {
-  const db = getDatabase()
-  const record = await fetchDataSourceById(db, body.id)
   const importRoute = record.importRoute ?? '/api/datasources/import/medrxiv'
   const fromDate = record.dateFrom ? format(record.dateFrom, 'yyyy-MM-dd') : '2020-01-01'
   const now = new Date()
@@ -77,10 +21,18 @@ export const dataSourcesImportRoutesPostMedrxiv = async (body: {id: string}) => 
   if (!record.dateTo) {
     console.warn('dataSourcesImportRoutesPostMedrxiv – To date is good to have')
   }
-  const saveCursor = createCursorUpdater(db, record.id)
+  const saveCursor = createCursorUpdater(record.id)
   await startMedrxivHarvest({fromDate, toDate, importRoute, cursor: record.cursor ?? null, onCursorUpdate: saveCursor})
-  const importedCount = await countArticlesInRange(db, importRoute, record)
-  const updatedDataSource = await updateDataSourceAfterImport(db, record.id, importedCount)
+  const importedCount = await dataSourceQueryService.countArticlesLinkedToImportRoute({
+    route: importRoute,
+    dateFrom: record.dateFrom,
+    dateTo: record.dateTo,
+  })
+  const updatedDataSource = await dataSourceQueryService.updateDataSourceAfterImport({
+    id: record.id,
+    importedCount,
+    cursor: null,
+  })
 
   return {success: true, data: updatedDataSource}
 }

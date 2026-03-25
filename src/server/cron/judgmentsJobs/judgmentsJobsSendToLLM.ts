@@ -1,13 +1,14 @@
-import {and, count, eq, inArray} from 'drizzle-orm'
-import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
-
-import * as schema from '../../../db/schema.ts'
+import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
+import {getQuotedStringList} from '../../services/appQueryHelpers.ts'
 import {rateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {ConnectionError} from './connectionHealth.ts'
+import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
-import type {judgmentsJobsGetRunningJobs} from './judgmentsJobsGetRunningJobs.ts'
+import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
+import {filterRunningJobsByRuntimeMatch, type RunningJudgmentJob} from './judgmentsJobsGetRunningJobs.ts'
 import {getAndUpdateReadyPrompts, type PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 import {processPromptWithLLM} from './judgmentsJobsSendToLLM/processPromptWithLLM.ts'
+import {requeueAbandonedSentPrompts} from './requeueAbandonedSentPrompts.ts'
 
 const shuffle = <T>(items: T[]): T[] => {
   return items
@@ -33,29 +34,71 @@ const isCodexJob = (job: {modelProvider: string | null}): boolean => {
   return normalizeProvider(job.modelProvider) === 'codex'
 }
 
-const getCodexMaxInflight = (): number => {
-  const raw = Number(process.env.CODEX_MAX_INFLIGHT)
-  const n = Number.isFinite(raw) ? Math.trunc(raw) : 0
-  return n > 0 ? n : 1
-}
-
-const getReadyCountsByJob = async (
-  db: PostgresJsDatabase<typeof schema>,
-  jobIds: string[],
-): Promise<Map<string, number>> => {
+const getReadyCountsByJob = async (jobIds: string[]): Promise<Map<string, number>> => {
   const hasJobs = jobIds.length > 0
   if (!hasJobs) return new Map()
 
-  const readyCounts = await db
-    .select({jobId: schema.judgmentsJobsPrompts.jobId, ready: count()})
-    .from(schema.judgmentsJobsPrompts)
-    .where(and(eq(schema.judgmentsJobsPrompts.status, 'ready'), inArray(schema.judgmentsJobsPrompts.jobId, jobIds)))
-    .groupBy(schema.judgmentsJobsPrompts.jobId)
+  const sqliteService = getJudgmentJobSqliteService()
+  const sqliteJobIds = jobIds.filter((jobId) => {
+    return sqliteService.hasJob(jobId)
+  })
+  const duckdbJobIds = jobIds.filter((jobId) => {
+    return !sqliteService.hasJob(jobId)
+  })
+
+  const sqlitePairs = await Promise.all(
+    sqliteJobIds.map(async (jobId) => {
+      return [jobId, await sqliteService.getReadyCount(jobId)] as const
+    }),
+  )
+
+  const readyCounts =
+    duckdbJobIds.length === 0
+      ? []
+      : await getAppDatabaseService().queryJson<{jobId: string; ready: number}>(`
+          SELECT job_id AS jobId, COUNT(*) AS ready
+          FROM app.judgment_job_prompt
+          WHERE status = 'ready'
+            AND job_id IN (${getQuotedStringList(duckdbJobIds).join(', ')})
+          GROUP BY job_id
+        `)
 
   const pairs = readyCounts.map((row) => {
     return [row.jobId, Number(row.ready)] as const
   })
-  return new Map(pairs)
+  return new Map([...pairs, ...sqlitePairs])
+}
+
+const requeueRejectedPrompts = async (prompts: PromptToProcess[]) => {
+  const sqliteService = getJudgmentJobSqliteService()
+  const sqlitePrompts = prompts.filter((prompt) => {
+    return sqliteService.hasJob(prompt.jobId)
+  })
+  const duckdbPrompts = prompts.filter((prompt) => {
+    return !sqliteService.hasJob(prompt.jobId)
+  })
+
+  await Promise.all(
+    sqlitePrompts.map((prompt) => {
+      return sqliteService.markPromptAsRetry(prompt.jobId, prompt.recordId)
+    }),
+  )
+
+  const rejectedRecordIds = duckdbPrompts.map((prompt) => {
+    return prompt.recordId
+  })
+
+  if (rejectedRecordIds.length === 0) {
+    return
+  }
+
+  await getAppDatabaseService().run(`
+    UPDATE app.judgment_job_prompt
+    SET status = 'ready',
+        sent_at = NULL,
+        updated_at = current_timestamp
+    WHERE id IN (${getQuotedStringList(rejectedRecordIds).join(', ')})
+  `)
 }
 
 const getRequestsToSendByJob = <T extends {id: string}>(
@@ -123,10 +166,7 @@ const getRequestsToSendByJob = <T extends {id: string}>(
   })
 }
 
-const processPrompts = async (
-  db: PostgresJsDatabase<typeof schema>,
-  prompts: PromptToProcess[],
-): Promise<{connectionErrors: number}> => {
+const processPrompts = async (prompts: PromptToProcess[]): Promise<{connectionErrors: number}> => {
   const results = await Promise.allSettled(
     prompts.map(async (prompt) => {
       // Add random jitter (0-1000ms) to desynchronize requests and effectively smooth out
@@ -135,7 +175,7 @@ const processPrompts = async (
       await new Promise((resolve) => {
         setTimeout(resolve, jitterMs)
       })
-      return processPromptWithLLM(db, prompt)
+      return processPromptWithLLM(prompt)
     }),
   )
 
@@ -145,13 +185,22 @@ const processPrompts = async (
   const rejected = results.filter((r) => {
     return r.status === 'rejected'
   })
+  const rejectedPrompts = results.flatMap((result, index) => {
+    return result.status === 'rejected'
+      ? [prompts[index]].filter((prompt): prompt is PromptToProcess => {
+          return Boolean(prompt)
+        })
+      : []
+  })
 
-  // Count connection errors specifically
   const connectionErrors = rejected.filter((r) => {
     return r.reason instanceof ConnectionError
   }).length
+  const rejectedErrorSamples = rejected.slice(0, 3).map((result) => {
+    const reason: unknown = result.reason
+    return reason instanceof Error ? reason.message : String(reason)
+  })
 
-  // Always log batch completion stats
   console.log('[llm] Batch complete:', {
     claimedPrompts: prompts.length,
     fulfilled: fulfilled.length,
@@ -162,28 +211,91 @@ const processPrompts = async (
   if (rejected.length > 0) {
     rateLimitedLogger.error(
       'llm:processing-errors',
-      `send to LLM: processing errors ${JSON.stringify({rejected: rejected.length, connectionErrors, total: results.length})}`,
+      `send to LLM: processing errors ${JSON.stringify({rejected: rejected.length, connectionErrors, total: results.length, rejectedErrorSamples})}`,
     )
+
+    const rejectedRecordIds = rejectedPrompts.map((prompt) => {
+      return prompt.recordId
+    })
+
+    if (rejectedRecordIds.length > 0) {
+      await requeueRejectedPrompts(rejectedPrompts).catch((error: unknown) => {
+        const safeError =
+          error instanceof Error
+            ? {name: error.name, message: error.message, stack: error.stack}
+            : {message: String(error)}
+
+        console.error('[llm] Failed to requeue rejected prompts', {
+          error: safeError,
+          rejectedRecordCount: rejectedRecordIds.length,
+        })
+      })
+    }
   }
 
   return {connectionErrors}
 }
 
-const getNumberOfPromptsInFlight = async (db: PostgresJsDatabase<typeof schema>, jobIds: string[]): Promise<number> => {
+const getNumberOfPromptsInFlight = async (jobIds: string[]): Promise<number> => {
   if (jobIds.length === 0) return 0
-  const result = await db
-    .select({count: count()})
-    .from(schema.judgmentsJobsPrompts)
-    .where(and(eq(schema.judgmentsJobsPrompts.status, 'sent'), inArray(schema.judgmentsJobsPrompts.jobId, jobIds)))
 
-  return result[0]?.count || 0
+  const sqliteService = getJudgmentJobSqliteService()
+  const sqliteJobIds = jobIds.filter((jobId) => {
+    return sqliteService.hasJob(jobId)
+  })
+  const duckdbJobIds = jobIds.filter((jobId) => {
+    return !sqliteService.hasJob(jobId)
+  })
+  const sqliteCounts = await Promise.all(
+    sqliteJobIds.map((jobId) => {
+      return sqliteService.getInFlightCount(jobId)
+    }),
+  )
+  const sqliteCount = sqliteCounts.reduce((sum, count) => {
+    return sum + count
+  }, 0)
+  const duckdbCount =
+    duckdbJobIds.length === 0
+      ? 0
+      : Number(
+          (
+            await getAppDatabaseService().queryJson<{count: number}>(`
+              SELECT COUNT(*) AS count
+              FROM app.judgment_job_prompt
+              WHERE status = 'sent'
+                AND job_id IN (${getQuotedStringList(duckdbJobIds).join(', ')})
+            `)
+          )[0]?.count || 0,
+        )
+
+  return sqliteCount + duckdbCount
 }
 
 let isRunningJudgmentsJobsSendToLLM = false
 
+export const requeueAndFilterRunningJobs = async ({
+  allJobs,
+  filterJobs = filterRunningJobsByRuntimeMatch,
+  requeueSentPrompts = requeueAbandonedSentPrompts,
+  serverJobId,
+}: {
+  allJobs: RunningJudgmentJob[]
+  filterJobs?: (jobs: RunningJudgmentJob[]) => Promise<RunningJudgmentJob[]>
+  requeueSentPrompts?: (params: {jobIds: string[]; serverJobId: string}) => Promise<number>
+  serverJobId: string
+}): Promise<RunningJudgmentJob[]> => {
+  await requeueSentPrompts({
+    jobIds: allJobs.map((job) => {
+      return job.id
+    }),
+    serverJobId,
+  })
+
+  return filterJobs(allJobs)
+}
+
 const sendToLLMForJobs = async (
-  db: PostgresJsDatabase<typeof schema>,
-  jobs: Awaited<ReturnType<typeof judgmentsJobsGetRunningJobs>>,
+  jobs: RunningJudgmentJob[],
   serverJobId: string,
   capacity: {maxInflight: number; maxBurst: number; workerCount: number},
   label: 'codex' | 'non-codex',
@@ -193,10 +305,10 @@ const sendToLLMForJobs = async (
   const jobIds = jobs.map((job) => {
     return job.id
   })
-  const promptsInFlight = await getNumberOfPromptsInFlight(db, jobIds)
+  const promptsInFlight = await getNumberOfPromptsInFlight(jobIds)
   const deficit = Math.max(0, capacity.maxInflight - promptsInFlight)
   const requestsToSend = Math.min(deficit, capacity.maxBurst)
-  const readyCounts = await getReadyCountsByJob(db, jobIds)
+  const readyCounts = await getReadyCountsByJob(jobIds)
 
   if (requestsToSend > 0 || promptsInFlight > capacity.maxInflight * 0.9) {
     const readyCountsObj = Object.fromEntries(readyCounts)
@@ -222,19 +334,36 @@ const sendToLLMForJobs = async (
     }),
   )
 
-  const promptsToProcess = await Promise.allSettled(
+  const promptClaimResults = await Promise.allSettled(
     requestsToSendByJob.map(({job, limit}) => {
-      return getAndUpdateReadyPrompts(db, serverJobId, job.id, limit)
+      return getAndUpdateReadyPrompts(serverJobId, job.id, limit)
     }),
-  ).then((results) => {
-    return results
-      .filter((result) => {
-        return result.status === 'fulfilled'
+  )
+
+  promptClaimResults.forEach((result, index) => {
+    if (result.status === 'rejected') {
+      const request = requestsToSendByJob[index]
+      const reason: unknown = result.reason
+      const safeError =
+        reason instanceof Error
+          ? {name: reason.name, message: reason.message, stack: reason.stack}
+          : {message: String(reason)}
+
+      console.error(`[capacity:${label}] failed to claim prompts`, {
+        error: safeError,
+        jobId: request?.job.id,
+        requested: request?.limit,
       })
-      .map((result) => {
-        return result.value
-      })
+    }
   })
+
+  const promptsToProcess = promptClaimResults
+    .filter((result) => {
+      return result.status === 'fulfilled'
+    })
+    .map((result) => {
+      return result.value
+    })
 
   const totalPromptsFetched = promptsToProcess.reduce((sum, arr) => {
     return sum + arr.length
@@ -246,7 +375,7 @@ const sendToLLMForJobs = async (
   promptsToProcess.map((prompts) => {
     void (async () => {
       if (prompts.length > 0) {
-        await processPrompts(db, prompts)
+        await processPrompts(prompts)
       }
     })().catch((error) => {
       const safeError =
@@ -258,17 +387,15 @@ const sendToLLMForJobs = async (
   })
 }
 
-export const judgmentsJobsSendToLLM = async (
-  db: PostgresJsDatabase<typeof schema>,
-  allJobs: Awaited<ReturnType<typeof judgmentsJobsGetRunningJobs>>,
-  serverJobId: string,
-): Promise<void> => {
+export const judgmentsJobsSendToLLM = async (allJobs: RunningJudgmentJob[], serverJobId: string): Promise<void> => {
   if (isRunningJudgmentsJobsSendToLLM) return
   isRunningJudgmentsJobsSendToLLM = true
 
   try {
-    const codexJobs = allJobs.filter(isCodexJob)
-    const nonCodexJobs = allJobs.filter((job) => {
+    const sendableJobs = await requeueAndFilterRunningJobs({allJobs, serverJobId})
+
+    const codexJobs = sendableJobs.filter(isCodexJob)
+    const nonCodexJobs = sendableJobs.filter((job) => {
       return !isCodexJob(job)
     })
 
@@ -276,8 +403,8 @@ export const judgmentsJobsSendToLLM = async (
     const codexMaxInflight = getCodexMaxInflight()
     const codexCapacity = {maxInflight: codexMaxInflight, maxBurst: codexMaxInflight, workerCount: codexMaxInflight}
 
-    await sendToLLMForJobs(db, nonCodexJobs, serverJobId, nonCodexCapacity, 'non-codex')
-    await sendToLLMForJobs(db, codexJobs, serverJobId, codexCapacity, 'codex')
+    await sendToLLMForJobs(nonCodexJobs, serverJobId, nonCodexCapacity, 'non-codex')
+    await sendToLLMForJobs(codexJobs, serverJobId, codexCapacity, 'codex')
   } finally {
     isRunningJudgmentsJobsSendToLLM = false
   }

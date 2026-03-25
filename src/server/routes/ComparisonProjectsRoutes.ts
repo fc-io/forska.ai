@@ -1,30 +1,19 @@
-import {and, asc, desc, eq, gte, ilike, inArray, lte, or, SQL, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
+import {assertSelectableProviderModelIds} from '../providers/providerModelRepository.ts'
+import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import * as appQueryHelpers from '../services/appQueryHelpers.ts'
 import {
-  articleRouteLink,
-  articles,
-  comparisonProject,
-  comparisonProjectPrompt,
-  comparisonProjectRouteLink,
-  importRoute as importRouteTable,
-  judgments,
-  judgmentsHuman,
-  models,
-  projectArticles,
-  projectPrompts,
-  projectRouteLink,
-  projects,
-  prompts,
-} from '../../db/schema.ts'
-import {localUserId} from '../../utils/localUser.ts'
-import {getDatabase} from '../utils/getDatabase.ts'
+  getJudgmentDisplayAnswer,
+  getNormalizedJudgmentAnswerKey,
+  hasAnyJudgmentAnswer,
+} from '../utils/judgmentAnswers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
 type PromptSelection = {promptId: string; order: number}
-type Database = ReturnType<typeof getDatabase>
-type DatabaseTransaction = Parameters<Parameters<Database['transaction']>[0]>[0]
-type DatabaseClient = Database | DatabaseTransaction
+type AppDatabaseService = ReturnType<typeof getAppDatabaseService>
+type AppTx = Parameters<AppDatabaseService['transaction']>[0] extends (runner: infer T) => Promise<unknown> ? T : never
+type AppQueryRunner = Pick<AppTx, 'queryJson'>
 type ComparisonProjectContentVariant = {
   key: string
   label: string
@@ -76,13 +65,7 @@ type ComparisonProjectLlmRow = {
   useFulltext: boolean
   useFulltextNoImages: boolean
 }
-type ComparisonProjectHumanRow = {
-  articleId: string
-  promptId: string
-  userId: string
-  answer: string | null
-  updatedAt: Date | null
-}
+type ComparisonProjectHumanRow = {articleId: string; promptId: string; answer: string | null; updatedAt: Date | null}
 type ComparisonProjectSourcePrompt = {id: string; promptHeading: string | null; order: number}
 type ComparisonProjectSourceImportRoute = {route: string; name: string | null}
 type ComparisonProjectSource = {
@@ -105,6 +88,176 @@ type ComparisonProjectEditPrompt = {
   type: string | null
   createdAt: Date
   archived: boolean
+}
+type ComparisonProjectRecordRow = {
+  id: string
+  name: string
+  description: string | null
+  modelIds: unknown
+  compareWithHumans: boolean
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  dateFrom: unknown
+  dateTo: unknown
+  archived: boolean
+  createdAt: unknown
+  updatedAt: unknown
+}
+
+const comparisonProjectTable = 'app.comparison_project'
+const comparisonProjectPromptTable = 'app.comparison_project_prompt'
+const comparisonProjectImportRouteTable = 'app.comparison_project_import_route'
+const promptTable = 'app.prompt'
+const importRouteTable = 'app.import_route'
+const projectTable = 'app.project'
+const projectPromptTable = 'app.project_prompt'
+const projectImportRouteTable = 'app.project_import_route'
+const projectArticleTable = 'app.project_article'
+const modelTable = 'app.model'
+const articleTable = 'app.article'
+const articleImportRouteTable = 'app.article_import_route'
+const judgmentTable = 'app.judgment'
+const judgmentHumanTable = 'app.judgment_human'
+const appDatabaseService = getAppDatabaseService()
+const {getDateValue, getJsonValue, getQuotedStringList, getSqlLiteral} = appQueryHelpers
+
+const getRequiredDateValue = (value: unknown) => {
+  const parsedDate = getDateValue(value)
+  return parsedDate ?? new Date(0)
+}
+
+const getStringArrayRowValue = <TRow extends Record<string, unknown>>(row: TRow, key: keyof TRow) => {
+  const value = getJsonValue(row[key])
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => {
+        return typeof entry === 'string'
+      })
+    : null
+}
+
+const getBooleanLiteral = (value: boolean) => {
+  return value ? 'TRUE' : 'FALSE'
+}
+
+const getInClause = (values: string[]) => {
+  return getQuotedStringList(values).join(', ')
+}
+
+const getTrimmedTextExistsClause = (column: string) => {
+  return `NULLIF(TRIM(COALESCE(${column}, '')), '') IS NOT NULL`
+}
+
+const getCaseInsensitiveContainsClause = (column: string, searchValue: string) => {
+  return `LOWER(COALESCE(${column}, '')) LIKE LOWER(${getSqlLiteral(`%${searchValue}%`)})`
+}
+
+const getArticleMatchesImportRouteClause = (articleAlias: string, routeIds: string[]) => {
+  return routeIds.length === 0
+    ? null
+    : `EXISTS (
+        SELECT 1
+        FROM ${articleImportRouteTable} air
+        WHERE air.article_id = ${articleAlias}.id
+          AND air.import_route_id IN (${getInClause(routeIds)})
+      )`
+}
+
+const getArticleMatchesProjectClause = (articleAlias: string, projectId: string | null) => {
+  return !projectId
+    ? null
+    : `EXISTS (
+        SELECT 1
+        FROM ${projectArticleTable} pa
+        WHERE pa.article_id = ${articleAlias}.id
+          AND pa.project_id = ${getSqlLiteral(projectId)}
+      )`
+}
+
+const getArticleInScopeClause = (articleAlias: string, routeIds: string[], projectId: string | null) => {
+  const importRouteClause = getArticleMatchesImportRouteClause(articleAlias, routeIds)
+  const projectClause = getArticleMatchesProjectClause(articleAlias, projectId)
+  return importRouteClause && projectClause
+    ? `(${importRouteClause} OR ${projectClause})`
+    : (importRouteClause ?? projectClause)
+}
+
+const getWhereClause = (conditions: Array<string | null | undefined>) => {
+  const filteredConditions = conditions.filter((condition): condition is string => {
+    return Boolean(condition)
+  })
+  return filteredConditions.length > 0 ? `WHERE ${filteredConditions.join('\n  AND ')}` : ''
+}
+
+const getContentVariantClause = (tableAlias: string, contentVariant: ComparisonProjectContentVariant) => {
+  return `(
+    ${tableAlias}.use_title = ${getBooleanLiteral(contentVariant.useTitle)}
+    AND ${tableAlias}.use_abstract = ${getBooleanLiteral(contentVariant.useAbstract)}
+    AND ${tableAlias}.use_fulltext = ${getBooleanLiteral(contentVariant.useFulltext)}
+    AND ${tableAlias}.use_fulltext_no_images = ${getBooleanLiteral(contentVariant.useFulltextNoImages)}
+  )`
+}
+
+const getComparisonProjectContentClause = (tableAlias: string, contentVariants: ComparisonProjectContentVariant[]) => {
+  return contentVariants.length === 0
+    ? null
+    : `(${contentVariants
+        .map((contentVariant) => {
+          return getContentVariantClause(tableAlias, contentVariant)
+        })
+        .join(' OR ')})`
+}
+
+const getComparisonProjectRecordValue = (row: ComparisonProjectRecordRow) => {
+  return {
+    ...row,
+    modelIds: getStringArrayRowValue(row, 'modelIds'),
+    dateFrom: getDateValue(row.dateFrom),
+    dateTo: getDateValue(row.dateTo),
+    createdAt: getRequiredDateValue(row.createdAt),
+    updatedAt: getRequiredDateValue(row.updatedAt),
+  }
+}
+
+const getComparisonProjectRecordSql = (comparisonProjectId: string) => {
+  return `
+    SELECT
+      id,
+      name,
+      description,
+      model_ids AS modelIds,
+      compare_with_humans AS compareWithHumans,
+      use_title AS useTitle,
+      use_abstract AS useAbstract,
+      use_fulltext AS useFulltext,
+      use_fulltext_no_images AS useFulltextNoImages,
+      date_from AS dateFrom,
+      date_to AS dateTo,
+      archived,
+      created_at AS createdAt,
+      updated_at AS updatedAt
+    FROM ${comparisonProjectTable}
+    WHERE id = ${getSqlLiteral(comparisonProjectId)}
+    LIMIT 1
+  `
+}
+
+const getComparisonProjectRecord = async (db: AppQueryRunner, comparisonProjectId: string) => {
+  const [comparisonProjectRow] = await db.queryJson<ComparisonProjectRecordRow>(
+    getComparisonProjectRecordSql(comparisonProjectId),
+  )
+  return comparisonProjectRow ?? null
+}
+
+const updateComparisonProjectTx = async (tx: AppTx, params: {comparisonProjectId: string; setParts: string[]}) => {
+  await tx.run(`
+    UPDATE ${comparisonProjectTable}
+    SET ${params.setParts.join(', ')}
+    WHERE id = ${getSqlLiteral(params.comparisonProjectId)}
+  `)
+
+  return getComparisonProjectRecord(tx, params.comparisonProjectId)
 }
 
 const isDefined = <T>(value: T | null | undefined): value is T => {
@@ -274,38 +427,6 @@ const getComparisonProjectContentVariants = (settings: {
   ].filter(isDefined)
 }
 
-const getComparisonProjectContentCondition = (contentVariants: ComparisonProjectContentVariant[]) => {
-  const conditions = contentVariants.map((contentVariant) => {
-    return and(
-      eq(judgments.useTitle, contentVariant.useTitle),
-      eq(judgments.useAbstract, contentVariant.useAbstract),
-      eq(judgments.useFulltext, contentVariant.useFulltext),
-      eq(judgments.useFulltextNoImages, contentVariant.useFulltextNoImages),
-    )
-  })
-
-  return conditions.length > 0 ? or(...conditions) : null
-}
-
-const getComparisonProjectContentConditionSql = (
-  tableAlias: string,
-  contentVariants: ComparisonProjectContentVariant[],
-) => {
-  const getColumn = (columnName: string) => {
-    return sql.raw(`${tableAlias}."${columnName}"`)
-  }
-  const conditions = contentVariants.map((contentVariant) => {
-    return sql`(
-      ${getColumn('use_title')} = ${contentVariant.useTitle}
-      AND ${getColumn('use_abstract')} = ${contentVariant.useAbstract}
-      AND ${getColumn('use_fulltext')} = ${contentVariant.useFulltext}
-      AND ${getColumn('use_fulltext_no_images')} = ${contentVariant.useFulltextNoImages}
-    )`
-  })
-
-  return conditions.length > 1 ? sql`(${sql.join(conditions, sql` OR `)})` : (conditions[0] ?? null)
-}
-
 const getColumnId = (kind: 'llm' | 'human', promptId: string, modelId?: string | null, contentKey?: string | null) => {
   return kind === 'human' ? `human:${promptId}` : `llm:${modelId}:${contentKey ?? 'default'}:${promptId}`
 }
@@ -327,89 +448,80 @@ const getModelSelectionId = (modelRow: {
     : modelRow.id
 }
 
-const getUuidArraySql = (values: string[]) => {
-  if (values.length === 0) {
-    return null
-  }
-
-  return sql.join(
-    values.map((value) => {
-      return sql`${value}::uuid`
-    }),
-    sql`,`,
-  )
-}
-
-const getComparisonProjectPromptCounts = (db: Database) => {
-  return db
-    .select({
-      comparisonProjectId: comparisonProjectPrompt.comparisonProjectId,
-      promptCount: sql<number>`count(*)::int`.as('prompt_count'),
-    })
-    .from(comparisonProjectPrompt)
-    .groupBy(comparisonProjectPrompt.comparisonProjectId)
-    .as('comparison_project_prompt_counts')
-}
-
-const getComparisonProjectRouteCounts = (db: Database) => {
-  return db
-    .select({
-      comparisonProjectId: comparisonProjectRouteLink.comparisonProjectId,
-      routeCount: sql<number>`count(*)::int`.as('route_count'),
-    })
-    .from(comparisonProjectRouteLink)
-    .groupBy(comparisonProjectRouteLink.comparisonProjectId)
-    .as('comparison_project_route_counts')
-}
-
 const getComparisonProjectsList = async (archived: boolean) => {
-  const db = getDatabase()
-  const promptCounts = getComparisonProjectPromptCounts(db)
-  const routeCounts = getComparisonProjectRouteCounts(db)
-  const orderByClause = archived ? desc(comparisonProject.createdAt) : asc(comparisonProject.name)
+  const rows = await appDatabaseService.queryJson<{
+    id: string
+    name: string
+    description: string | null
+    compareWithHumans: boolean
+    useTitle: boolean
+    useAbstract: boolean
+    useFulltext: boolean
+    useFulltextNoImages: boolean
+    dateFrom: unknown
+    dateTo: unknown
+    archived: boolean
+    createdAt: unknown
+    promptCount: number
+    routeCount: number
+  }>(`
+    SELECT
+      cp.id AS id,
+      cp.name AS name,
+      cp.description AS description,
+      cp.compare_with_humans AS compareWithHumans,
+      cp.use_title AS useTitle,
+      cp.use_abstract AS useAbstract,
+      cp.use_fulltext AS useFulltext,
+      cp.use_fulltext_no_images AS useFulltextNoImages,
+      cp.date_from AS dateFrom,
+      cp.date_to AS dateTo,
+      cp.archived AS archived,
+      cp.created_at AS createdAt,
+      COALESCE(prompt_counts.promptCount, 0) AS promptCount,
+      COALESCE(route_counts.routeCount, 0) AS routeCount
+    FROM ${comparisonProjectTable} cp
+    LEFT JOIN (
+      SELECT comparison_project_id AS comparisonProjectId, COUNT(*) AS promptCount
+      FROM ${comparisonProjectPromptTable}
+      GROUP BY comparison_project_id
+    ) prompt_counts ON prompt_counts.comparisonProjectId = cp.id
+    LEFT JOIN (
+      SELECT comparison_project_id AS comparisonProjectId, COUNT(*) AS routeCount
+      FROM ${comparisonProjectImportRouteTable}
+      GROUP BY comparison_project_id
+    ) route_counts ON route_counts.comparisonProjectId = cp.id
+    WHERE cp.archived = ${getBooleanLiteral(archived)}
+    ORDER BY ${archived ? 'cp.created_at DESC' : 'cp.name ASC'}
+  `)
 
-  return db
-    .select({
-      id: comparisonProject.id,
-      name: comparisonProject.name,
-      description: comparisonProject.description,
-      compareWithHumans: comparisonProject.compareWithHumans,
-      useTitle: comparisonProject.useTitle,
-      useAbstract: comparisonProject.useAbstract,
-      useFulltext: comparisonProject.useFulltext,
-      useFulltextNoImages: comparisonProject.useFulltextNoImages,
-      dateFrom: comparisonProject.dateFrom,
-      dateTo: comparisonProject.dateTo,
-      archived: comparisonProject.archived,
-      createdAt: comparisonProject.createdAt,
-      promptCount: sql<number>`COALESCE(${promptCounts.promptCount}, 0)`,
-      routeCount: sql<number>`COALESCE(${routeCounts.routeCount}, 0)`,
-    })
-    .from(comparisonProject)
-    .leftJoin(promptCounts, eq(promptCounts.comparisonProjectId, comparisonProject.id))
-    .leftJoin(routeCounts, eq(routeCounts.comparisonProjectId, comparisonProject.id))
-    .where(eq(comparisonProject.archived, archived))
-    .orderBy(orderByClause)
+  return rows.map((row) => {
+    return {
+      ...row,
+      dateFrom: getDateValue(row.dateFrom),
+      dateTo: getDateValue(row.dateTo),
+      createdAt: getDateValue(row.createdAt),
+    }
+  })
 }
 
 const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]> => {
-  const db = getDatabase()
-  const projectRows = await db
-    .select({
-      id: projects.id,
-      name: projects.name,
-      description: projects.description,
-      modelId: projects.modelId,
-      modelName: models.name,
-      useTitle: projects.useTitle,
-      useAbstract: projects.useAbstract,
-      useFulltext: projects.useFulltext,
-      useFulltextNoImages: projects.useFulltextNoImages,
-    })
-    .from(projects)
-    .innerJoin(models, eq(models.id, projects.modelId))
-    .where(eq(projects.archived, false))
-    .orderBy(asc(projects.name))
+  const projectRows = await appDatabaseService.queryJson<ComparisonProjectSource>(`
+    SELECT
+      p.id AS id,
+      p.name AS name,
+      p.description AS description,
+      p.model_id AS modelId,
+      COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
+      p.use_title AS useTitle,
+      p.use_abstract AS useAbstract,
+      p.use_fulltext AS useFulltext,
+      p.use_fulltext_no_images AS useFulltextNoImages
+    FROM ${projectTable} p
+    INNER JOIN ${modelTable} m ON m.id = p.model_id
+    WHERE p.archived = FALSE
+    ORDER BY p.name ASC
+  `)
 
   if (projectRows.length === 0) {
     return []
@@ -419,23 +531,33 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
     return projectRow.id
   })
   const [promptRows, routeRows] = await Promise.all([
-    db
-      .select({
-        projectId: projectPrompts.projectId,
-        promptId: prompts.id,
-        promptHeading: prompts.promptHeading,
-        order: projectPrompts.order,
-      })
-      .from(projectPrompts)
-      .innerJoin(prompts, eq(prompts.id, projectPrompts.promptId))
-      .where(and(inArray(projectPrompts.projectId, projectIds), eq(projectPrompts.enabled, true)))
-      .orderBy(asc(projectPrompts.projectId), asc(projectPrompts.order), asc(prompts.createdAt)),
-    db
-      .select({projectId: projectRouteLink.projectId, route: importRouteTable.route, name: importRouteTable.name})
-      .from(projectRouteLink)
-      .innerJoin(importRouteTable, eq(projectRouteLink.importRouteId, importRouteTable.id))
-      .where(inArray(projectRouteLink.projectId, projectIds))
-      .orderBy(asc(projectRouteLink.projectId), asc(importRouteTable.route)),
+    appDatabaseService.queryJson<{
+      projectId: string
+      promptId: string
+      promptHeading: string | null
+      order: number | null
+    }>(`
+      SELECT
+        pp.project_id AS projectId,
+        p.id AS promptId,
+        p.prompt_heading AS promptHeading,
+        pp.prompt_order AS "order"
+      FROM ${projectPromptTable} pp
+      INNER JOIN ${promptTable} p ON p.id = pp.prompt_id
+      WHERE pp.project_id IN (${getInClause(projectIds)})
+        AND pp.enabled = TRUE
+      ORDER BY pp.project_id ASC, pp.prompt_order ASC, p.created_at ASC
+    `),
+    appDatabaseService.queryJson<{projectId: string; route: string; name: string | null}>(`
+      SELECT
+        pir.project_id AS projectId,
+        ir.route AS route,
+        ir.name AS name
+      FROM ${projectImportRouteTable} pir
+      INNER JOIN ${importRouteTable} ir ON ir.id = pir.import_route_id
+      WHERE pir.project_id IN (${getInClause(projectIds)})
+      ORDER BY pir.project_id ASC, ir.route ASC
+    `),
   ])
   const promptRowsByProjectId = promptRows.reduce<Map<string, typeof promptRows>>((rowMap, promptRow) => {
     const currentRows = rowMap.get(promptRow.projectId) ?? []
@@ -515,35 +637,50 @@ const getInferredSourceProjectId = async (
     return null
   }
 
-  const db = getDatabase()
-  const candidateProjects = await db
-    .select({id: projects.id, name: projects.name, dateFrom: projects.dateFrom, dateTo: projects.dateTo})
-    .from(projects)
-    .where(
-      and(
-        eq(projects.useTitle, comparisonProjectRow.useTitle),
-        eq(projects.useAbstract, comparisonProjectRow.useAbstract),
-        eq(projects.useFulltext, comparisonProjectRow.useFulltext),
-        eq(projects.useFulltextNoImages, comparisonProjectRow.useFulltextNoImages),
-      ),
-    )
+  const candidateProjects = await appDatabaseService.queryJson<{
+    id: string
+    name: string
+    dateFrom: unknown
+    dateTo: unknown
+  }>(`
+    SELECT
+      id,
+      name,
+      date_from AS dateFrom,
+      date_to AS dateTo
+    FROM ${projectTable}
+    WHERE use_title = ${getBooleanLiteral(comparisonProjectRow.useTitle)}
+      AND use_abstract = ${getBooleanLiteral(comparisonProjectRow.useAbstract)}
+      AND use_fulltext = ${getBooleanLiteral(comparisonProjectRow.useFulltext)}
+      AND use_fulltext_no_images = ${getBooleanLiteral(comparisonProjectRow.useFulltextNoImages)}
+  `)
+  const normalizedCandidateProjects = candidateProjects.map((candidateProject) => {
+    return {
+      ...candidateProject,
+      dateFrom: getDateValue(candidateProject.dateFrom),
+      dateTo: getDateValue(candidateProject.dateTo),
+    }
+  })
 
-  if (candidateProjects.length === 0) {
+  if (normalizedCandidateProjects.length === 0) {
     return null
   }
 
-  const candidateProjectIds = candidateProjects.map((candidateProject) => {
+  const candidateProjectIds = normalizedCandidateProjects.map((candidateProject) => {
     return candidateProject.id
   })
   const [candidatePromptRows, candidateRouteRows] = await Promise.all([
-    db
-      .select({projectId: projectPrompts.projectId, promptId: projectPrompts.promptId})
-      .from(projectPrompts)
-      .where(and(inArray(projectPrompts.projectId, candidateProjectIds), eq(projectPrompts.enabled, true))),
-    db
-      .select({projectId: projectRouteLink.projectId, importRouteId: projectRouteLink.importRouteId})
-      .from(projectRouteLink)
-      .where(inArray(projectRouteLink.projectId, candidateProjectIds)),
+    appDatabaseService.queryJson<{projectId: string; promptId: string}>(`
+      SELECT project_id AS projectId, prompt_id AS promptId
+      FROM ${projectPromptTable}
+      WHERE project_id IN (${getInClause(candidateProjectIds)})
+        AND enabled = TRUE
+    `),
+    appDatabaseService.queryJson<{projectId: string; importRouteId: string}>(`
+      SELECT project_id AS projectId, import_route_id AS importRouteId
+      FROM ${projectImportRouteTable}
+      WHERE project_id IN (${getInClause(candidateProjectIds)})
+    `),
   ])
   const promptIdsByProjectId = candidatePromptRows.reduce<Map<string, string[]>>((rowMap, promptRow) => {
     const currentPromptIds = rowMap.get(promptRow.projectId) ?? []
@@ -560,7 +697,7 @@ const getInferredSourceProjectId = async (
   const comparisonPromptIds = promptConfigs.map((promptConfig) => {
     return promptConfig.id
   })
-  const exactCandidates = candidateProjects.filter((candidateProject) => {
+  const exactCandidates = normalizedCandidateProjects.filter((candidateProject) => {
     const candidatePromptIds = promptIdsByProjectId.get(candidateProject.id) ?? []
     const candidateRouteIds = routeIdsByProjectId.get(candidateProject.id) ?? []
 
@@ -600,32 +737,14 @@ const getArticleScopeConditions = (
   sourceProjectId: string | null,
   searchTitle?: string | null,
 ) => {
-  const routeIdArray = getUuidArraySql(routeIds)
   const trimmedSearchTitle = searchTitle?.trim() ?? ''
-  const scopeConditions = [
-    routeIdArray
-      ? sql`EXISTS (
-          SELECT 1 FROM ${articleRouteLink} arl
-          WHERE arl."article_id" = ${articles.id}
-            AND arl."import_route_id" = ANY(ARRAY[${routeIdArray}])
-        )`
-      : null,
-    sourceProjectId
-      ? sql`EXISTS (
-          SELECT 1 FROM ${projectArticles} pa
-          WHERE pa."article_id" = ${articles.id}
-            AND pa."project_id" = ${sourceProjectId}::uuid
-        )`
-      : null,
-  ].filter(isDefined)
-  const scopeCondition =
-    scopeConditions.length > 1 ? or(...scopeConditions) : scopeConditions.length === 1 ? scopeConditions[0] : null
+  const scopeCondition = getArticleInScopeClause('a', routeIds, sourceProjectId)
 
   return [
     scopeCondition,
-    dateFrom ? gte(articles.articleCreatedAt, dateFrom) : null,
-    dateTo ? lte(articles.articleCreatedAt, dateTo) : null,
-    trimmedSearchTitle ? ilike(articles.articleTitle, `%${trimmedSearchTitle}%`) : null,
+    dateFrom ? `a.article_created_at >= ${getSqlLiteral(dateFrom)}` : null,
+    dateTo ? `a.article_created_at <= ${getSqlLiteral(dateTo)}` : null,
+    trimmedSearchTitle ? getCaseInsensitiveContainsClause('a.article_title', trimmedSearchTitle) : null,
   ].filter(isDefined)
 }
 
@@ -640,14 +759,14 @@ const getComparisonProjectModels = async (
   promptIds: string[],
   importRouteIds: string[],
 ) => {
-  const db = getDatabase()
   const selectedModelIds = comparisonProjectRow.modelIds ?? []
 
   if (selectedModelIds.length > 0) {
-    const modelRows = await db
-      .select({id: models.id, name: models.name})
-      .from(models)
-      .where(inArray(models.id, selectedModelIds))
+    const modelRows = await appDatabaseService.queryJson<ComparisonProjectModelConfig>(`
+      SELECT id, name
+      FROM ${modelTable}
+      WHERE id IN (${getInClause(selectedModelIds)})
+    `)
     const orderLookup = selectedModelIds.reduce<Record<string, number>>((acc, modelId, index) => {
       return {...acc, [modelId]: index}
     }, {})
@@ -661,7 +780,7 @@ const getComparisonProjectModels = async (
     return []
   }
 
-  const contentCondition = getComparisonProjectContentCondition(comparisonProjectRow.contentVariants)
+  const contentCondition = getComparisonProjectContentClause('j', comparisonProjectRow.contentVariants)
 
   if (!contentCondition) {
     return []
@@ -673,21 +792,20 @@ const getComparisonProjectModels = async (
     comparisonProjectRow.dateTo,
     comparisonProjectRow.sourceProjectId,
   )
-  const queryConditions = [
-    inArray(judgments.promptId, promptIds),
-    contentCondition,
-    sql`${judgments.deletedAt} IS NULL`,
-    ...articleScopeConditions,
-  ]
-
-  return db
-    .select({id: models.id, name: models.name})
-    .from(judgments)
-    .innerJoin(models, eq(models.id, judgments.modelId))
-    .innerJoin(articles, eq(articles.id, judgments.articleId))
-    .where(and(...queryConditions))
-    .groupBy(models.id, models.name)
-    .orderBy(asc(models.name))
+  return appDatabaseService.queryJson<ComparisonProjectModelConfig>(`
+    SELECT m.id AS id, m.name AS name
+    FROM ${judgmentTable} j
+    INNER JOIN ${modelTable} m ON m.id = j.model_id
+    INNER JOIN ${articleTable} a ON a.id = j.article_id
+    ${getWhereClause([
+      `j.prompt_id IN (${getInClause(promptIds)})`,
+      'j.deleted_at IS NULL',
+      contentCondition,
+      ...articleScopeConditions,
+    ])}
+    GROUP BY m.id, m.name
+    ORDER BY m.name ASC
+  `)
 }
 
 const getComparisonProjectColumns = (
@@ -729,42 +847,64 @@ const getComparisonProjectColumns = (
 }
 
 const getComparisonProjectScope = async (comparisonProjectId: string): Promise<ComparisonProjectScope | null> => {
-  const db = getDatabase()
-  const [comparisonProjectRow] = await db
-    .select({
-      id: comparisonProject.id,
-      name: comparisonProject.name,
-      description: comparisonProject.description,
-      compareWithHumans: comparisonProject.compareWithHumans,
-      useTitle: comparisonProject.useTitle,
-      useAbstract: comparisonProject.useAbstract,
-      useFulltext: comparisonProject.useFulltext,
-      useFulltextNoImages: comparisonProject.useFulltextNoImages,
-      dateFrom: comparisonProject.dateFrom,
-      dateTo: comparisonProject.dateTo,
-      archived: comparisonProject.archived,
-      createdAt: comparisonProject.createdAt,
-      modelIds: comparisonProject.modelIds,
-    })
-    .from(comparisonProject)
-    .where(eq(comparisonProject.id, comparisonProjectId))
-    .limit(1)
+  const [comparisonProjectRow] = await appDatabaseService.queryJson<{
+    id: string
+    name: string
+    description: string | null
+    compareWithHumans: boolean
+    useTitle: boolean
+    useAbstract: boolean
+    useFulltext: boolean
+    useFulltextNoImages: boolean
+    dateFrom: unknown
+    dateTo: unknown
+    archived: boolean
+    createdAt: unknown
+    modelIds: unknown
+  }>(`
+    SELECT
+      id,
+      name,
+      description,
+      compare_with_humans AS compareWithHumans,
+      use_title AS useTitle,
+      use_abstract AS useAbstract,
+      use_fulltext AS useFulltext,
+      use_fulltext_no_images AS useFulltextNoImages,
+      date_from AS dateFrom,
+      date_to AS dateTo,
+      archived,
+      created_at AS createdAt,
+      model_ids AS modelIds
+    FROM ${comparisonProjectTable}
+    WHERE id = ${getSqlLiteral(comparisonProjectId)}
+    LIMIT 1
+  `)
 
   if (!comparisonProjectRow) {
     return null
   }
 
+  const normalizedComparisonProjectRow = {
+    ...comparisonProjectRow,
+    dateFrom: getDateValue(comparisonProjectRow.dateFrom),
+    dateTo: getDateValue(comparisonProjectRow.dateTo),
+    createdAt: getRequiredDateValue(comparisonProjectRow.createdAt),
+    modelIds: getStringArrayRowValue(comparisonProjectRow, 'modelIds'),
+  }
   const [promptRows, routeRows] = await Promise.all([
-    db
-      .select({id: prompts.id, promptHeading: prompts.promptHeading, order: comparisonProjectPrompt.order})
-      .from(comparisonProjectPrompt)
-      .innerJoin(prompts, eq(prompts.id, comparisonProjectPrompt.promptId))
-      .where(eq(comparisonProjectPrompt.comparisonProjectId, comparisonProjectId))
-      .orderBy(asc(comparisonProjectPrompt.order), asc(prompts.createdAt)),
-    db
-      .select({importRouteId: comparisonProjectRouteLink.importRouteId})
-      .from(comparisonProjectRouteLink)
-      .where(eq(comparisonProjectRouteLink.comparisonProjectId, comparisonProjectId)),
+    appDatabaseService.queryJson<{id: string; promptHeading: string | null; order: number | null}>(`
+      SELECT p.id AS id, p.prompt_heading AS promptHeading, cpp.prompt_order AS "order"
+      FROM ${comparisonProjectPromptTable} cpp
+      INNER JOIN ${promptTable} p ON p.id = cpp.prompt_id
+      WHERE cpp.comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
+      ORDER BY cpp.prompt_order ASC, p.created_at ASC
+    `),
+    appDatabaseService.queryJson<{importRouteId: string}>(`
+      SELECT import_route_id AS importRouteId
+      FROM ${comparisonProjectImportRouteTable}
+      WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
+    `),
   ])
 
   const promptConfigs = promptRows.map<ComparisonProjectPromptConfig>((promptRow, index) => {
@@ -780,10 +920,14 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
   const importRouteIds = routeRows.map((routeRow) => {
     return routeRow.importRouteId
   })
-  const sourceProjectId = await getInferredSourceProjectId(comparisonProjectRow, promptConfigs, importRouteIds)
-  const contentVariants = getComparisonProjectContentVariants(comparisonProjectRow)
+  const sourceProjectId = await getInferredSourceProjectId(
+    normalizedComparisonProjectRow,
+    promptConfigs,
+    importRouteIds,
+  )
+  const contentVariants = getComparisonProjectContentVariants(normalizedComparisonProjectRow)
   const modelRows = await getComparisonProjectModels(
-    {...comparisonProjectRow, sourceProjectId, contentVariants},
+    {...normalizedComparisonProjectRow, sourceProjectId, contentVariants},
     promptConfigs.map((prompt) => {
       return prompt.id
     }),
@@ -793,11 +937,11 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
     promptConfigs,
     modelRows,
     contentVariants,
-    comparisonProjectRow.compareWithHumans,
+    normalizedComparisonProjectRow.compareWithHumans,
   )
 
   return {
-    ...comparisonProjectRow,
+    ...normalizedComparisonProjectRow,
     sourceProjectId,
     contentVariants,
     prompts: promptConfigs,
@@ -808,35 +952,61 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
 }
 
 const getComparisonProjectEditFormData = async (comparisonProjectId: string) => {
-  const db = getDatabase()
-  const [comparisonProjectRow] = await db
-    .select({
-      id: comparisonProject.id,
-      name: comparisonProject.name,
-      description: comparisonProject.description,
-      compareWithHumans: comparisonProject.compareWithHumans,
-      updatedAt: comparisonProject.updatedAt,
-      modelIds: comparisonProject.modelIds,
-      useTitle: comparisonProject.useTitle,
-      useAbstract: comparisonProject.useAbstract,
-      useFulltext: comparisonProject.useFulltext,
-      useFulltextNoImages: comparisonProject.useFulltextNoImages,
-    })
-    .from(comparisonProject)
-    .where(eq(comparisonProject.id, comparisonProjectId))
-    .limit(1)
+  const [comparisonProjectRow] = await appDatabaseService.queryJson<{
+    id: string
+    name: string
+    description: string | null
+    compareWithHumans: boolean
+    updatedAt: unknown
+    modelIds: unknown
+    useTitle: boolean
+    useAbstract: boolean
+    useFulltext: boolean
+    useFulltextNoImages: boolean
+  }>(`
+    SELECT
+      id,
+      name,
+      description,
+      compare_with_humans AS compareWithHumans,
+      updated_at AS updatedAt,
+      model_ids AS modelIds,
+      use_title AS useTitle,
+      use_abstract AS useAbstract,
+      use_fulltext AS useFulltext,
+      use_fulltext_no_images AS useFulltextNoImages
+    FROM ${comparisonProjectTable}
+    WHERE id = ${getSqlLiteral(comparisonProjectId)}
+    LIMIT 1
+  `)
 
   if (!comparisonProjectRow) {
     return null
   }
 
-  const configuredModelIds = comparisonProjectRow.modelIds ?? []
+  const normalizedComparisonProjectRow = {
+    ...comparisonProjectRow,
+    updatedAt: getDateValue(comparisonProjectRow.updatedAt),
+    modelIds: getStringArrayRowValue(comparisonProjectRow, 'modelIds'),
+  }
+  const configuredModelIds = normalizedComparisonProjectRow.modelIds ?? []
   const configuredModelRows =
     configuredModelIds.length > 0
-      ? await db
-          .select({id: models.id, provider: models.provider, modelName: models.modelName, version: models.version})
-          .from(models)
-          .where(inArray(models.id, configuredModelIds))
+      ? await appDatabaseService.queryJson<{
+          id: string
+          provider: string | null
+          modelName: string | null
+          version: string | null
+        }>(`
+          SELECT
+            m.id AS id,
+            pc.provider_kind AS provider,
+            m.remote_model_id AS modelName,
+            m.variant AS version
+          FROM ${modelTable} m
+          LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+          WHERE id IN (${getInClause(configuredModelIds)})
+        `)
       : []
   const modelRowsById = configuredModelRows.reduce<Map<string, (typeof configuredModelRows)[number]>>(
     (rowMap, modelRow) => {
@@ -847,40 +1017,61 @@ const getComparisonProjectEditFormData = async (comparisonProjectId: string) => 
   )
 
   const [selectedPromptRows, availablePromptRows] = await Promise.all([
-    db
-      .select({
-        id: prompts.id,
-        originalText: prompts.originalText,
-        promptHeading: prompts.promptHeading,
-        type: prompts.type,
-        createdAt: prompts.createdAt,
-        archived: prompts.archived,
-        order: comparisonProjectPrompt.order,
-      })
-      .from(comparisonProjectPrompt)
-      .innerJoin(prompts, eq(prompts.id, comparisonProjectPrompt.promptId))
-      .where(eq(comparisonProjectPrompt.comparisonProjectId, comparisonProjectId))
-      .orderBy(asc(comparisonProjectPrompt.order), asc(prompts.createdAt)),
-    db
-      .select({
-        id: prompts.id,
-        originalText: prompts.originalText,
-        promptHeading: prompts.promptHeading,
-        type: prompts.type,
-        createdAt: prompts.createdAt,
-        archived: prompts.archived,
-      })
-      .from(prompts)
-      .where(eq(prompts.archived, false))
-      .orderBy(desc(prompts.createdAt)),
+    appDatabaseService.queryJson<{
+      id: string
+      originalText: string
+      promptHeading: string | null
+      type: string | null
+      createdAt: unknown
+      archived: boolean
+      order: number | null
+    }>(`
+      SELECT
+        p.id AS id,
+        p.original_text AS originalText,
+        p.prompt_heading AS promptHeading,
+        p.type AS type,
+        p.created_at AS createdAt,
+        p.archived AS archived,
+        cpp.prompt_order AS "order"
+      FROM ${comparisonProjectPromptTable} cpp
+      INNER JOIN ${promptTable} p ON p.id = cpp.prompt_id
+      WHERE cpp.comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
+      ORDER BY cpp.prompt_order ASC, p.created_at ASC
+    `),
+    appDatabaseService.queryJson<{
+      id: string
+      originalText: string
+      promptHeading: string | null
+      type: string | null
+      createdAt: unknown
+      archived: boolean
+    }>(`
+      SELECT
+        id,
+        original_text AS originalText,
+        prompt_heading AS promptHeading,
+        type,
+        created_at AS createdAt,
+        archived
+      FROM ${promptTable}
+      WHERE archived = FALSE
+      ORDER BY created_at DESC
+    `),
   ])
+  const normalizedSelectedPromptRows = selectedPromptRows.map((promptRow) => {
+    return {...promptRow, createdAt: getRequiredDateValue(promptRow.createdAt)}
+  })
+  const normalizedAvailablePromptRows = availablePromptRows.map((promptRow) => {
+    return {...promptRow, createdAt: getRequiredDateValue(promptRow.createdAt)}
+  })
   const selectedPromptIds = new Set(
-    selectedPromptRows.map((promptRow) => {
+    normalizedSelectedPromptRows.map((promptRow) => {
       return promptRow.id
     }),
   )
   const availablePrompts = [
-    ...selectedPromptRows.map<ComparisonProjectEditPrompt>((promptRow) => {
+    ...normalizedSelectedPromptRows.map<ComparisonProjectEditPrompt>((promptRow) => {
       return {
         id: promptRow.id,
         originalText: promptRow.originalText,
@@ -890,7 +1081,7 @@ const getComparisonProjectEditFormData = async (comparisonProjectId: string) => 
         archived: promptRow.archived,
       }
     }),
-    ...availablePromptRows
+    ...normalizedAvailablePromptRows
       .filter((promptRow) => {
         return !selectedPromptIds.has(promptRow.id)
       })
@@ -907,242 +1098,94 @@ const getComparisonProjectEditFormData = async (comparisonProjectId: string) => 
   ]
 
   return {
-    ...comparisonProjectRow,
+    ...normalizedComparisonProjectRow,
     selectedModelIds: configuredModelIds
       .map((modelId) => {
         const modelRow = modelRowsById.get(modelId)
         return modelRow ? getModelSelectionId(modelRow) : modelId
       })
       .filter(Boolean),
-    promptSelections: selectedPromptRows.map((promptRow, index) => {
+    promptSelections: normalizedSelectedPromptRows.map((promptRow, index) => {
       return {promptId: promptRow.id, order: promptRow.order ?? index}
     }),
     availablePrompts,
   }
 }
 
-const getComparisonProjectLlmExistsCondition = (scope: ComparisonProjectScope) => {
-  const promptIdArray = getUuidArraySql(
-    scope.prompts.map((prompt) => {
-      return prompt.id
-    }),
-  )
-  const modelIdArray = getUuidArraySql(
-    scope.models.map((model) => {
-      return model.id
-    }),
-  )
-  const contentCondition = getComparisonProjectContentConditionSql('j', scope.contentVariants)
-
-  if (!promptIdArray || !modelIdArray || !contentCondition) {
-    return null
-  }
-
-  return sql`EXISTS (
-    SELECT 1 FROM ${judgments} j
-    WHERE j."article_id" = ${articles.id}
-      AND j."deleted_at" IS NULL
-      AND j."prompt_id" = ANY(ARRAY[${promptIdArray}])
-      AND j."model_id" = ANY(ARRAY[${modelIdArray}])
-      AND ${contentCondition}
-      AND (
-        NULLIF(BTRIM(j."answered_original"), '') IS NOT NULL
-        OR COALESCE(array_length(j."answered_original_as_array", 1), 0) > 0
-      )
-  )`
+const getRowsByArticleId = <T extends {articleId: string}>(rows: T[]) => {
+  return rows.reduce<Map<string, T[]>>((rowMap, row) => {
+    const currentRows = rowMap.get(row.articleId) ?? []
+    currentRows.push(row)
+    rowMap.set(row.articleId, currentRows)
+    return rowMap
+  }, new Map<string, T[]>())
 }
 
-const getComparisonProjectHumanExistsCondition = (scope: ComparisonProjectScope) => {
-  const promptIdArray = getUuidArraySql(
-    scope.prompts.map((prompt) => {
-      return prompt.id
-    }),
-  )
-
-  if (!promptIdArray || !scope.compareWithHumans) {
-    return null
-  }
-
-  return sql`EXISTS (
-    SELECT 1 FROM ${judgmentsHuman} jh
-    WHERE jh."article_id" = ${articles.id}
-      AND jh."prompt_id" = ANY(ARRAY[${promptIdArray}])
-      AND jh."is_answered" = true
-      AND NULLIF(BTRIM(jh."answer"), '') IS NOT NULL
-  )`
-}
-
-const getComparisonProjectMinimumAnsweredPromptsCondition = (
-  scope: ComparisonProjectScope,
-  minimumAnsweredPrompts: number,
+const getComparisonProjectAnsweredPromptIds = (
+  llmRows: ComparisonProjectLlmRow[],
+  humanRows: ComparisonProjectHumanRow[],
 ) => {
-  const promptIdArray = getUuidArraySql(
-    scope.prompts.map((prompt) => {
-      return prompt.id
-    }),
-  )
-  const modelIdArray = getUuidArraySql(
-    scope.models.map((model) => {
-      return model.id
-    }),
-  )
-  const llmContentCondition = getComparisonProjectContentConditionSql('j', scope.contentVariants)
-  const llmAnsweredPromptsQuery =
-    modelIdArray && llmContentCondition
-      ? sql`
-        SELECT j."prompt_id" AS prompt_id
-        FROM ${judgments} j
-        WHERE j."article_id" = ${articles.id}
-          AND j."deleted_at" IS NULL
-          AND j."prompt_id" = ANY(ARRAY[${promptIdArray}])
-          AND j."model_id" = ANY(ARRAY[${modelIdArray}])
-          AND ${llmContentCondition}
-          AND (
-            NULLIF(BTRIM(j."answered_original"), '') IS NOT NULL
-            OR COALESCE(array_length(j."answered_original_as_array", 1), 0) > 0
-          )
-      `
-      : null
-  const humanAnsweredPromptsQuery = scope.compareWithHumans
-    ? sql`
-        SELECT jh."prompt_id" AS prompt_id
-        FROM ${judgmentsHuman} jh
-        WHERE jh."article_id" = ${articles.id}
-          AND jh."prompt_id" = ANY(ARRAY[${promptIdArray}])
-          AND jh."is_answered" = true
-          AND NULLIF(BTRIM(jh."answer"), '') IS NOT NULL
-      `
-    : null
-  const answeredPromptsQueries = [llmAnsweredPromptsQuery, humanAnsweredPromptsQuery].filter(isDefined)
+  const answeredPromptIds = new Set<string>()
 
-  if (!promptIdArray || answeredPromptsQueries.length === 0) {
-    return null
-  }
-
-  return sql`(
-    SELECT COUNT(DISTINCT answered_prompts.prompt_id)::int
-    FROM (${sql.join(answeredPromptsQueries, sql` UNION `)}) AS answered_prompts
-  ) >= ${minimumAnsweredPrompts}`
-}
-
-const getComparisonProjectAllShownColumnsAnsweredCondition = (scope: ComparisonProjectScope) => {
-  const promptIdArray = getUuidArraySql(
-    scope.prompts.map((prompt) => {
-      return prompt.id
-    }),
-  )
-  const modelIdArray = getUuidArraySql(
-    scope.models.map((model) => {
-      return model.id
-    }),
-  )
-  const llmContentCondition = getComparisonProjectContentConditionSql('j', scope.contentVariants)
-
-  if (!promptIdArray || !modelIdArray || !llmContentCondition || scope.contentVariants.length === 0) {
-    return null
-  }
-
-  const requiredLlmColumnCount = scope.prompts.length * scope.models.length * scope.contentVariants.length
-  const llmColumnsCondition = sql`(
-    SELECT COUNT(DISTINCT (j."prompt_id", j."model_id", j."use_title", j."use_abstract", j."use_fulltext", j."use_fulltext_no_images"))::int
-    FROM ${judgments} j
-    WHERE j."article_id" = ${articles.id}
-      AND j."deleted_at" IS NULL
-      AND j."prompt_id" = ANY(ARRAY[${promptIdArray}])
-      AND j."model_id" = ANY(ARRAY[${modelIdArray}])
-      AND ${llmContentCondition}
-      AND (
-        NULLIF(BTRIM(j."answered_original"), '') IS NOT NULL
-        OR COALESCE(array_length(j."answered_original_as_array", 1), 0) > 0
-      )
-  ) = ${requiredLlmColumnCount}`
-  const humanColumnsCondition = scope.compareWithHumans
-    ? sql`(
-        SELECT COUNT(DISTINCT jh."prompt_id")::int
-        FROM ${judgmentsHuman} jh
-        WHERE jh."article_id" = ${articles.id}
-          AND jh."prompt_id" = ANY(ARRAY[${promptIdArray}])
-          AND jh."is_answered" = true
-          AND NULLIF(BTRIM(jh."answer"), '') IS NOT NULL
-      ) = ${scope.prompts.length}`
-    : null
-
-  return humanColumnsCondition ? and(llmColumnsCondition, humanColumnsCondition) : llmColumnsCondition
-}
-
-const getComparisonProjectModelDifferenceCondition = (scope: ComparisonProjectScope) => {
-  const promptIdArray = getUuidArraySql(
-    scope.prompts.map((prompt) => {
-      return prompt.id
-    }),
-  )
-  const modelIdArray = getUuidArraySql(
-    scope.models.map((model) => {
-      return model.id
-    }),
-  )
-  const contentCondition = getComparisonProjectContentConditionSql('j', scope.contentVariants)
-
-  if (!promptIdArray || !modelIdArray || !contentCondition || scope.models.length * scope.contentVariants.length < 2) {
-    return sql`false`
-  }
-
-  return sql`EXISTS (
-    SELECT 1
-    FROM ${judgments} j
-    WHERE j."article_id" = ${articles.id}
-      AND j."deleted_at" IS NULL
-      AND j."prompt_id" = ANY(ARRAY[${promptIdArray}])
-      AND j."model_id" = ANY(ARRAY[${modelIdArray}])
-      AND ${contentCondition}
-      AND (
-        NULLIF(BTRIM(j."answered_original"), '') IS NOT NULL
-        OR COALESCE(array_length(j."answered_original_as_array", 1), 0) > 0
-      )
-    GROUP BY j."prompt_id"
-    HAVING COUNT(
-      DISTINCT LOWER(
-        BTRIM(
-          CASE
-            WHEN COALESCE(array_length(j."answered_original_as_array", 1), 0) > 0
-              THEN array_to_string(j."answered_original_as_array", E'\n')
-            ELSE j."answered_original"
-          END
-        )
-      )
-    ) > 1
-  )`
-}
-
-const parseAnswerArrayFromString = (value: string | null) => {
-  const trimmedValue = value?.trim() ?? ''
-
-  if (!trimmedValue.startsWith('[')) {
-    return null
-  }
-
-  try {
-    const parsedValue = JSON.parse(trimmedValue) as unknown
-
-    return Array.isArray(parsedValue)
-      ? parsedValue.filter((item): item is string => {
-          return typeof item === 'string' && item.trim() !== ''
-        })
-      : null
-  } catch {
-    return null
-  }
-}
-
-const getDisplayAnswer = (answeredOriginal: string | null, answeredOriginalAsArray?: string[] | null) => {
-  const arrayValues = (answeredOriginalAsArray ?? []).filter((value) => {
-    return value.trim() !== ''
+  llmRows.forEach((row) => {
+    if (hasAnyJudgmentAnswer(row)) {
+      answeredPromptIds.add(row.promptId)
+    }
   })
-  const parsedArrayValues = parseAnswerArrayFromString(answeredOriginal) ?? []
-  const values = arrayValues.length > 0 ? arrayValues : parsedArrayValues
-  const trimmedValue = answeredOriginal?.trim() ?? ''
+  humanRows.forEach((row) => {
+    if ((row.answer?.trim() ?? '') !== '') {
+      answeredPromptIds.add(row.promptId)
+    }
+  })
 
-  return values.length > 0 ? values.join('\n') : trimmedValue || null
+  return answeredPromptIds
+}
+
+const hasValue = (value: string | null | undefined) => {
+  return (value?.trim() ?? '') !== ''
+}
+
+const getComparisonProjectRequiredColumnIds = (
+  scope: ComparisonProjectScope,
+  kind: ComparisonProjectJudgmentsColumn['kind'],
+) => {
+  return new Set(
+    scope.columns
+      .filter((column) => {
+        return column.kind === kind
+      })
+      .map((column) => {
+        return column.id
+      }),
+  )
+}
+
+const getHasAllRequiredColumns = (
+  cellMap: Record<string, string | null> | undefined,
+  requiredColumnIds: Set<string>,
+) => {
+  return Array.from(requiredColumnIds).every((columnId) => {
+    return hasValue(cellMap?.[columnId])
+  })
+}
+
+const getComparisonProjectHasModelDifference = (rows: ComparisonProjectLlmRow[]) => {
+  const answersByPromptId = rows.reduce<Map<string, Set<string>>>((rowMap, row) => {
+    const normalizedAnswer = getNormalizedJudgmentAnswerKey(row)
+
+    if (!normalizedAnswer) {
+      return rowMap
+    }
+
+    const currentAnswers = rowMap.get(row.promptId) ?? new Set<string>()
+    currentAnswers.add(normalizedAnswer)
+    rowMap.set(row.promptId, currentAnswers)
+    return rowMap
+  }, new Map<string, Set<string>>())
+
+  return Array.from(answersByPromptId.values()).some((answers) => {
+    return answers.size > 1
+  })
 }
 
 const getComparisonProjectLlmRows = async (scope: ComparisonProjectScope, articleIds: string[]) => {
@@ -1157,39 +1200,50 @@ const getComparisonProjectLlmRows = async (scope: ComparisonProjectScope, articl
     return []
   }
 
-  const db = getDatabase()
-  const contentCondition = getComparisonProjectContentCondition(scope.contentVariants)
+  const contentCondition = getComparisonProjectContentClause('j', scope.contentVariants)
 
   if (!contentCondition) {
     return []
   }
 
-  return db
-    .select({
-      articleId: judgments.articleId,
-      promptId: judgments.promptId,
-      modelId: judgments.modelId,
-      answeredOriginal: judgments.answeredOriginal,
-      answeredOriginalAsArray: judgments.answeredOriginalAsArray,
-      useTitle: judgments.useTitle,
-      useAbstract: judgments.useAbstract,
-      useFulltext: judgments.useFulltext,
-      useFulltextNoImages: judgments.useFulltextNoImages,
+  const rows = await appDatabaseService.queryJson<{
+    articleId: string
+    promptId: string
+    modelId: string
+    answeredOriginal: string | null
+    answeredOriginalAsArray: unknown
+    useTitle: boolean
+    useAbstract: boolean
+    useFulltext: boolean
+    useFulltextNoImages: boolean
+  }>(`
+    SELECT
+      article_id AS articleId,
+      prompt_id AS promptId,
+      model_id AS modelId,
+      answered_original AS answeredOriginal,
+      answered_original_as_array AS answeredOriginalAsArray,
+      use_title AS useTitle,
+      use_abstract AS useAbstract,
+      use_fulltext AS useFulltext,
+      use_fulltext_no_images AS useFulltextNoImages
+    FROM ${judgmentTable} j
+    ${getWhereClause([
+      `j.article_id IN (${getInClause(articleIds)})`,
+      `j.prompt_id IN (${getInClause(promptIds)})`,
+      `j.model_id IN (${getInClause(modelIds)})`,
+      'j.deleted_at IS NULL',
+      contentCondition,
+    ])}
+  `)
+
+  return rows
+    .map<ComparisonProjectLlmRow>((row) => {
+      return {...row, answeredOriginalAsArray: getStringArrayRowValue(row, 'answeredOriginalAsArray')}
     })
-    .from(judgments)
-    .where(
-      and(
-        inArray(judgments.articleId, articleIds),
-        inArray(judgments.promptId, promptIds),
-        inArray(judgments.modelId, modelIds),
-        contentCondition,
-        sql`${judgments.deletedAt} IS NULL`,
-        sql`(
-          NULLIF(BTRIM(${judgments.answeredOriginal}), '') IS NOT NULL
-          OR COALESCE(array_length(${judgments.answeredOriginalAsArray}, 1), 0) > 0
-        )`,
-      ),
-    )
+    .filter((row) => {
+      return hasAnyJudgmentAnswer(row)
+    })
 }
 
 const getComparisonProjectHumanRows = async (scope: ComparisonProjectScope, articleIds: string[]) => {
@@ -1201,25 +1255,27 @@ const getComparisonProjectHumanRows = async (scope: ComparisonProjectScope, arti
     return []
   }
 
-  const db = getDatabase()
+  const rows = await appDatabaseService.queryJson<{
+    articleId: string
+    promptId: string
+    answer: string | null
+    updatedAt: unknown
+  }>(`
+    SELECT
+      article_id AS articleId,
+      prompt_id AS promptId,
+      answer AS answer,
+      updated_at AS updatedAt
+    FROM ${judgmentHumanTable}
+    WHERE article_id IN (${getInClause(articleIds)})
+      AND prompt_id IN (${getInClause(promptIds)})
+      AND is_answered = TRUE
+      AND ${getTrimmedTextExistsClause('answer')}
+  `)
 
-  return db
-    .select({
-      articleId: judgmentsHuman.articleId,
-      promptId: judgmentsHuman.promptId,
-      userId: judgmentsHuman.user,
-      answer: judgmentsHuman.answer,
-      updatedAt: judgmentsHuman.updatedAt,
-    })
-    .from(judgmentsHuman)
-    .where(
-      and(
-        inArray(judgmentsHuman.articleId, articleIds),
-        inArray(judgmentsHuman.promptId, promptIds),
-        eq(judgmentsHuman.isAnswered, true),
-        sql`NULLIF(BTRIM(${judgmentsHuman.answer}), '') IS NOT NULL`,
-      ),
-    )
+  return rows.map((row) => {
+    return {...row, updatedAt: getDateValue(row.updatedAt)}
+  })
 }
 
 const getComparisonProjectLlmCells = (rows: ComparisonProjectLlmRow[]) => {
@@ -1227,19 +1283,13 @@ const getComparisonProjectLlmCells = (rows: ComparisonProjectLlmRow[]) => {
     const articleCells = articleMap[row.articleId] ?? {}
     const columnId = getColumnId('llm', row.promptId, row.modelId, getComparisonProjectContentKey(row))
 
-    return {
-      ...articleMap,
-      [row.articleId]: {
-        ...articleCells,
-        [columnId]: getDisplayAnswer(row.answeredOriginal, row.answeredOriginalAsArray),
-      },
-    }
+    return {...articleMap, [row.articleId]: {...articleCells, [columnId]: getJudgmentDisplayAnswer(row)}}
   }, {})
 }
 
 const getComparisonProjectHumanCells = (rows: ComparisonProjectHumanRow[]) => {
   const latestRows = rows.reduce<Map<string, ComparisonProjectHumanRow>>((rowMap, row) => {
-    const key = `${row.articleId}:${row.userId}:${row.promptId}`
+    const key = `${row.articleId}:${row.promptId}`
     const existingRow = rowMap.get(key)
 
     if (!existingRow || (row.updatedAt?.getTime() ?? 0) > (existingRow.updatedAt?.getTime() ?? 0)) {
@@ -1286,51 +1336,6 @@ const getComparisonProjectHumanCells = (rows: ComparisonProjectHumanRow[]) => {
   )
 }
 
-const getComparisonProjectDefaultLlmJudgmentsPage = async (
-  scope: ComparisonProjectScope,
-  page: number,
-  limit: number,
-  articleScopeConditions: SQL<unknown>[],
-) => {
-  const llmExistsCondition = getComparisonProjectLlmExistsCondition(scope)
-
-  if (!llmExistsCondition) {
-    return {data: [], totalCount: 0, page: 1, limit, totalPages: 0}
-  }
-
-  const db = getDatabase()
-  const whereConditions = [...articleScopeConditions, llmExistsCondition]
-  const whereCondition = whereConditions.length > 1 ? and(...whereConditions) : whereConditions[0]
-  const safePage = Math.max(page, 1)
-  const offset = (safePage - 1) * limit
-  const pageArticlesWithExtra = await db
-    .select({id: articles.id, articleTitle: articles.articleTitle, articleCreatedAt: articles.articleCreatedAt})
-    .from(articles)
-    .where(whereCondition)
-    .orderBy(desc(articles.articleCreatedAt), asc(articles.articleTitle), asc(articles.id))
-    .limit(limit + 1)
-    .offset(offset)
-  const hasMore = pageArticlesWithExtra.length > limit
-  const pageArticles = hasMore ? pageArticlesWithExtra.slice(0, limit) : pageArticlesWithExtra
-  const articleIds = pageArticles.map((article) => {
-    return article.id
-  })
-  const llmRows = await getComparisonProjectLlmRows(scope, articleIds)
-  const llmCellsByArticle = getComparisonProjectLlmCells(llmRows)
-  const data = pageArticles.map((article) => {
-    return {
-      id: article.id,
-      articleTitle: article.articleTitle,
-      articleCreatedAt: article.articleCreatedAt,
-      cells: llmCellsByArticle[article.id] ?? {},
-    }
-  })
-  const totalCount = offset + pageArticles.length + (hasMore ? 1 : 0)
-  const totalPages = hasMore ? safePage + 1 : safePage
-
-  return {data, totalCount, page: safePage, limit, totalPages}
-}
-
 const getComparisonProjectJudgmentsPage = async (
   scope: ComparisonProjectScope,
   page: number,
@@ -1349,64 +1354,55 @@ const getComparisonProjectJudgmentsPage = async (
     scope.dateTo,
     scope.sourceProjectId,
   )
-  const useDefaultLlmPath =
-    !scope.compareWithHumans && !hideSparseRows && !showOnlyFullyAnsweredPrompts && !showOnlyModelDifferences
 
-  if (useDefaultLlmPath) {
-    return getComparisonProjectDefaultLlmJudgmentsPage(scope, page, limit, articleScopeConditions)
-  }
-
-  const db = getDatabase()
-  const llmExistsCondition = getComparisonProjectLlmExistsCondition(scope)
-  const humanExistsCondition = getComparisonProjectHumanExistsCondition(scope)
-  const minimumAnsweredPromptsCondition = hideSparseRows
-    ? getComparisonProjectMinimumAnsweredPromptsCondition(scope, 2)
-    : null
-  const fullyAnsweredPromptsCondition = showOnlyFullyAnsweredPrompts
-    ? getComparisonProjectAllShownColumnsAnsweredCondition(scope)
-    : null
-  const modelDifferenceCondition = showOnlyModelDifferences ? getComparisonProjectModelDifferenceCondition(scope) : null
-  const articleDataCondition =
-    llmExistsCondition && humanExistsCondition
-      ? or(llmExistsCondition, humanExistsCondition)
-      : (llmExistsCondition ?? humanExistsCondition)
-
-  if (!articleDataCondition) {
-    return {data: [], totalCount: 0, page: 1, limit, totalPages: 0}
-  }
-
-  const whereConditions = [
-    ...articleScopeConditions,
-    articleDataCondition,
-    minimumAnsweredPromptsCondition,
-    fullyAnsweredPromptsCondition,
-    modelDifferenceCondition,
-  ].filter(isDefined)
-  const whereCondition = whereConditions.length > 1 ? and(...whereConditions) : whereConditions[0]
-  const [countRow] = await db
-    .select({count: sql<number>`count(*)::int`.as('count')})
-    .from(articles)
-    .where(whereCondition)
-  const totalCount = countRow?.count ?? 0
-  const totalPages = totalCount > 0 ? Math.ceil(totalCount / limit) : 0
-  const safePage = totalPages > 0 ? Math.min(Math.max(page, 1), totalPages) : 1
-  const offset = (safePage - 1) * limit
-  const pageArticles = await db
-    .select({id: articles.id, articleTitle: articles.articleTitle, articleCreatedAt: articles.articleCreatedAt})
-    .from(articles)
-    .where(whereCondition)
-    .orderBy(desc(articles.articleCreatedAt), asc(articles.articleTitle), asc(articles.id))
-    .limit(limit)
-    .offset(offset)
-  const articleIds = pageArticles.map((article) => {
+  const scopedArticles = await appDatabaseService
+    .queryJson<{id: string; articleTitle: string; articleCreatedAt: unknown}>(
+      `
+      SELECT id, article_title AS articleTitle, article_created_at AS articleCreatedAt
+      FROM ${articleTable} a
+      ${getWhereClause(articleScopeConditions)}
+      ORDER BY a.article_created_at DESC, a.article_title ASC, a.id ASC
+    `,
+    )
+    .then((rows) => {
+      return rows.map((row) => {
+        return {...row, articleCreatedAt: getDateValue(row.articleCreatedAt)}
+      })
+    })
+  const articleIds = scopedArticles.map((article) => {
     return article.id
   })
   const [llmRows, humanRows] = await Promise.all([
     getComparisonProjectLlmRows(scope, articleIds),
     getComparisonProjectHumanRows(scope, articleIds),
   ])
+  const llmRowsByArticle = getRowsByArticleId(llmRows)
+  const humanRowsByArticle = getRowsByArticleId(humanRows)
   const llmCellsByArticle = getComparisonProjectLlmCells(llmRows)
   const humanCellsByArticle = getComparisonProjectHumanCells(humanRows)
+  const requiredLlmColumnIds = getComparisonProjectRequiredColumnIds(scope, 'llm')
+  const requiredHumanColumnIds = getComparisonProjectRequiredColumnIds(scope, 'human')
+  const filteredArticles = scopedArticles.filter((article) => {
+    const articleLlmRows = llmRowsByArticle.get(article.id) ?? []
+    const articleHumanRows = humanRowsByArticle.get(article.id) ?? []
+    const hasArticleData = articleLlmRows.length > 0 || articleHumanRows.length > 0
+    const answeredPromptIds = getComparisonProjectAnsweredPromptIds(articleLlmRows, articleHumanRows)
+    const hasAllLlmColumns = getHasAllRequiredColumns(llmCellsByArticle[article.id], requiredLlmColumnIds)
+    const hasAllHumanColumns = getHasAllRequiredColumns(humanCellsByArticle[article.id], requiredHumanColumnIds)
+    const hasModelDifference = getComparisonProjectHasModelDifference(articleLlmRows)
+
+    return (
+      hasArticleData
+      && (!hideSparseRows || answeredPromptIds.size >= 2)
+      && (!showOnlyFullyAnsweredPrompts || (hasAllLlmColumns && hasAllHumanColumns))
+      && (!showOnlyModelDifferences || hasModelDifference)
+    )
+  })
+  const totalCount = filteredArticles.length
+  const totalPages = totalCount > 0 ? Math.ceil(totalCount / limit) : 0
+  const safePage = totalPages > 0 ? Math.min(Math.max(page, 1), totalPages) : 1
+  const offset = (safePage - 1) * limit
+  const pageArticles = filteredArticles.slice(offset, offset + limit)
   const data = pageArticles.map((article) => {
     return {
       id: article.id,
@@ -1420,7 +1416,7 @@ const getComparisonProjectJudgmentsPage = async (
 }
 
 const insertComparisonProjectPromptLinks = async (
-  tx: DatabaseClient,
+  tx: AppTx,
   comparisonProjectId: string,
   promptSelections: PromptSelection[],
 ) => {
@@ -1432,60 +1428,192 @@ const insertComparisonProjectPromptLinks = async (
     return
   }
 
-  const promptRows = await tx.select({id: prompts.id}).from(prompts).where(inArray(prompts.id, promptIds))
+  const promptRows = await tx.queryJson<{id: string}>(`
+    SELECT id
+    FROM ${promptTable}
+    WHERE id IN (${getInClause(promptIds)})
+  `)
 
   if (promptRows.length !== promptIds.length) {
     throw new Error('One or more selected prompts are invalid')
   }
 
-  await tx.insert(comparisonProjectPrompt).values(
-    promptSelections.map((selection) => {
-      return {comparisonProjectId, promptId: selection.promptId, order: selection.order}
-    }),
-  )
+  const [currentPromptSelection] = promptSelections
+
+  if (!currentPromptSelection) {
+    return
+  }
+
+  await tx.run(`
+    INSERT INTO ${comparisonProjectPromptTable} (id, comparison_project_id, prompt_id, prompt_order)
+    VALUES (
+      ${getSqlLiteral(crypto.randomUUID())},
+      ${getSqlLiteral(comparisonProjectId)},
+      ${getSqlLiteral(currentPromptSelection.promptId)},
+      ${currentPromptSelection.order}
+    )
+  `)
+
+  return insertComparisonProjectPromptLinks(tx, comparisonProjectId, promptSelections.slice(1))
 }
 
-const insertComparisonProjectRouteLinks = async (
-  tx: DatabaseClient,
-  comparisonProjectId: string,
-  importRoutes: string[],
-) => {
+const insertComparisonProjectRouteLinks = async (tx: AppTx, comparisonProjectId: string, importRoutes: string[]) => {
   if (importRoutes.length === 0) {
     return
   }
 
-  const routeRows = await tx
-    .select({id: importRouteTable.id, route: importRouteTable.route})
-    .from(importRouteTable)
-    .where(inArray(importRouteTable.route, importRoutes))
+  const routeRows = await tx.queryJson<{id: string; route: string}>(`
+    SELECT id, route
+    FROM ${importRouteTable}
+    WHERE route IN (${getInClause(importRoutes)})
+  `)
 
   if (routeRows.length !== importRoutes.length) {
     throw new Error('One or more selected import routes are invalid')
   }
 
-  await tx.insert(comparisonProjectRouteLink).values(
-    routeRows.map((routeRow) => {
-      return {comparisonProjectId, importRouteId: routeRow.id}
+  const [currentRouteRow] = routeRows
+
+  if (!currentRouteRow) {
+    return
+  }
+
+  await tx.run(`
+    INSERT INTO ${comparisonProjectImportRouteTable} (id, comparison_project_id, import_route_id)
+    VALUES (
+      ${getSqlLiteral(crypto.randomUUID())},
+      ${getSqlLiteral(comparisonProjectId)},
+      ${getSqlLiteral(currentRouteRow.id)}
+    )
+  `)
+
+  return insertComparisonProjectRouteLinks(
+    tx,
+    comparisonProjectId,
+    routeRows.slice(1).map((routeRow) => {
+      return routeRow.route
     }),
   )
 }
 
-const getValidatedModelIds = async (tx: DatabaseClient, modelIds: string[]) => {
+const getValidatedModelIds = async (db: AppQueryRunner, modelIds: string[]) => {
   if (modelIds.length === 0) {
     return null
   }
 
-  const modelRows = await tx.select({id: models.id}).from(models).where(inArray(models.id, modelIds))
+  return assertSelectableProviderModelIds(db, {
+    errorMessage: 'One or more selected models do not exist or are disabled',
+    modelIds,
+  })
+}
 
-  if (modelRows.length !== modelIds.length) {
-    throw new Error('One or more selected models are invalid')
+const getValidatedPromptSelections = async (db: AppQueryRunner, promptSelections: PromptSelection[]) => {
+  const uniquePromptSelections = getUniquePromptSelections(promptSelections)
+
+  if (uniquePromptSelections.length === 0) {
+    return uniquePromptSelections
   }
 
-  return modelIds
+  const promptRows = await db.queryJson<{id: string}>(`
+    SELECT id
+    FROM ${promptTable}
+    WHERE id IN (${getInClause(
+      uniquePromptSelections.map((promptSelection) => {
+        return promptSelection.promptId
+      }),
+    )})
+  `)
+
+  if (promptRows.length !== uniquePromptSelections.length) {
+    throw new Error('One or more selected prompts are invalid')
+  }
+
+  return uniquePromptSelections
+}
+
+const hasSameStringArrayValue = (left: string[] | null, right: string[] | null) => {
+  return JSON.stringify(left ?? []) === JSON.stringify(right ?? [])
+}
+
+const getDuckdbStringArrayValue = (value: unknown) => {
+  if (Array.isArray(value)) {
+    return value.filter((entry): entry is string => {
+      return typeof entry === 'string'
+    })
+  }
+
+  if (typeof value !== 'string') {
+    return null
+  }
+
+  const trimmedValue = value.trim()
+
+  if (trimmedValue === '[]') {
+    return []
+  }
+
+  if (!trimmedValue.startsWith('[') || !trimmedValue.endsWith(']')) {
+    return null
+  }
+
+  return trimmedValue
+    .slice(1, -1)
+    .split(',')
+    .map((part) => {
+      return part.trim()
+    })
+    .filter((part) => {
+      return part !== ''
+    })
+}
+
+const updateComparisonProjectWithModelIdsChange = async (params: {
+  comparisonProjectId: string
+  setParts: string[]
+  promptSelections: PromptSelection[]
+}) => {
+  const tempRouteTable = `temp_comparison_project_import_route_${crypto.randomUUID().replaceAll('-', '_')}`
+  await appDatabaseService.run(`
+    CREATE TEMP TABLE ${tempRouteTable} AS
+    SELECT id, import_route_id AS importRouteId
+    FROM ${comparisonProjectImportRouteTable}
+    WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+  `)
+
+  await appDatabaseService.transaction(async (tx) => {
+    await tx.run(`
+      DELETE FROM ${comparisonProjectPromptTable}
+      WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+    `)
+    await tx.run(`
+      DELETE FROM ${comparisonProjectImportRouteTable}
+      WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+    `)
+  })
+
+  await appDatabaseService.transaction(async (tx) => {
+    await updateComparisonProjectTx(tx, {comparisonProjectId: params.comparisonProjectId, setParts: params.setParts})
+  })
+
+  await appDatabaseService.transaction(async (tx) => {
+    await tx.run(`
+      INSERT INTO ${comparisonProjectImportRouteTable} (id, comparison_project_id, import_route_id)
+      SELECT
+        id,
+        ${getSqlLiteral(params.comparisonProjectId)},
+        importRouteId
+      FROM ${tempRouteTable}
+    `)
+    await insertComparisonProjectPromptLinks(tx, params.comparisonProjectId, params.promptSelections)
+  })
+
+  await appDatabaseService.run(`DROP TABLE ${tempRouteTable}`)
+
+  return getComparisonProjectRecord(appDatabaseService, params.comparisonProjectId)
 }
 
 const createComparisonProjectRecord = async (
-  tx: DatabaseClient,
+  tx: AppTx,
   body: {
     name: string
     description?: string | null
@@ -1519,22 +1647,64 @@ const createComparisonProjectRecord = async (
   const validatedModelIds = await getValidatedModelIds(tx, getUniqueStringValues(body.modelIds ?? []))
   const uniquePromptSelections = getUniquePromptSelections(body.promptSelections ?? [])
   const uniqueImportRoutes = getUniqueStringValues(body.importRoutes ?? [])
-  const [newComparisonProject] = await tx
-    .insert(comparisonProject)
-    .values({
-      name: body.name,
-      description: body.description?.trim() || null,
-      ownerId: localUserId,
-      modelIds: validatedModelIds,
-      compareWithHumans: body.compareWithHumans ?? false,
-      useTitle,
-      useAbstract,
-      useFulltext,
-      useFulltextNoImages,
-      dateFrom,
-      dateTo,
-    })
-    .returning()
+  const [newComparisonProject] = await tx.queryJson<{
+    id: string
+    name: string
+    description: string | null
+    modelIds: unknown
+    compareWithHumans: boolean
+    useTitle: boolean
+    useAbstract: boolean
+    useFulltext: boolean
+    useFulltextNoImages: boolean
+    dateFrom: unknown
+    dateTo: unknown
+    archived: boolean
+    createdAt: unknown
+    updatedAt: unknown
+  }>(`
+    INSERT INTO ${comparisonProjectTable} (
+      id,
+      name,
+      description,
+      model_ids,
+      compare_with_humans,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      date_from,
+      date_to
+    )
+    VALUES (
+      ${getSqlLiteral(crypto.randomUUID())},
+      ${getSqlLiteral(body.name)},
+      ${getSqlLiteral(body.description?.trim() || null)},
+      ${getSqlLiteral(validatedModelIds)},
+      ${getBooleanLiteral(body.compareWithHumans ?? false)},
+      ${getBooleanLiteral(useTitle)},
+      ${getBooleanLiteral(useAbstract)},
+      ${getBooleanLiteral(useFulltext)},
+      ${getBooleanLiteral(useFulltextNoImages)},
+      ${getSqlLiteral(dateFrom)},
+      ${getSqlLiteral(dateTo)}
+    )
+    RETURNING
+      id,
+      name,
+      description,
+      model_ids AS modelIds,
+      compare_with_humans AS compareWithHumans,
+      use_title AS useTitle,
+      use_abstract AS useAbstract,
+      use_fulltext AS useFulltext,
+      use_fulltext_no_images AS useFulltextNoImages,
+      date_from AS dateFrom,
+      date_to AS dateTo,
+      archived,
+      created_at AS createdAt,
+      updated_at AS updatedAt
+  `)
 
   if (!newComparisonProject) {
     throw new Error('Failed to create comparison project')
@@ -1543,7 +1713,7 @@ const createComparisonProjectRecord = async (
   await insertComparisonProjectPromptLinks(tx, newComparisonProject.id, uniquePromptSelections)
   await insertComparisonProjectRouteLinks(tx, newComparisonProject.id, uniqueImportRoutes)
 
-  return newComparisonProject
+  return getComparisonProjectRecordValue(newComparisonProject)
 }
 
 export const comparisonProjectsRoutes = new Elysia()
@@ -1576,8 +1746,7 @@ export const comparisonProjectsRoutes = new Elysia()
         throw new Error('Source project not found')
       }
 
-      const db = getDatabase()
-      const createdComparisonProject = await db.transaction(async (tx) => {
+      const createdComparisonProject = await appDatabaseService.transaction(async (tx) => {
         return createComparisonProjectRecord(tx, {
           name: body.name,
           description: body.description,
@@ -1673,8 +1842,7 @@ export const comparisonProjectsRoutes = new Elysia()
     '/api/comparison-projects',
     async (context) => {
       const {body} = context
-      const db = getDatabase()
-      const createdComparisonProject = await db.transaction(async (tx) => {
+      const createdComparisonProject = await appDatabaseService.transaction(async (tx) => {
         return createComparisonProjectRecord(tx, body)
       })
 
@@ -1701,7 +1869,6 @@ export const comparisonProjectsRoutes = new Elysia()
     '/api/comparison-projects/:id',
     async (context) => {
       const {params, body, set} = context
-      const db = getDatabase()
       const existingComparisonProject = await getComparisonProjectEditFormData(params.id)
 
       if (!existingComparisonProject) {
@@ -1709,44 +1876,72 @@ export const comparisonProjectsRoutes = new Elysia()
         return {data: null, error: 'Comparison project not found'}
       }
 
-      const updatedComparisonProject = await db.transaction(async (tx) => {
-        const useTitle = body.useTitle
-        const useAbstract = body.useAbstract
-        const useFulltext = body.useFulltext
-        const useFulltextNoImages = body.useFulltextNoImages
+      const useTitle = body.useTitle
+      const useAbstract = body.useAbstract
+      const useFulltext = body.useFulltext
+      const useFulltextNoImages = body.useFulltextNoImages
 
-        if (!useTitle && !useAbstract && !useFulltext && !useFulltextNoImages) {
-          throw new Error('Select at least one article content option to compare')
-        }
+      if (!useTitle && !useAbstract && !useFulltext && !useFulltextNoImages) {
+        throw new Error('Select at least one article content option to compare')
+      }
 
-        const validatedModelIds = await getValidatedModelIds(tx, getUniqueStringValues(body.modelIds ?? []))
-        const [updatedComparisonProjectRow] = await tx
-          .update(comparisonProject)
-          .set({
-            name: body.name,
-            description: body.description?.trim() || null,
-            compareWithHumans: body.compareWithHumans,
-            modelIds: validatedModelIds,
-            useTitle,
-            useAbstract,
-            useFulltext,
-            useFulltextNoImages,
-            updatedAt: new Date(),
+      const validatedModelIds = await getValidatedModelIds(
+        appDatabaseService,
+        getUniqueStringValues(body.modelIds ?? []),
+      )
+      const [existingModelIdsRow] = await appDatabaseService.queryJson<{modelIds: unknown}>(`
+        SELECT model_ids AS modelIds
+        FROM ${comparisonProjectTable}
+        WHERE id = ${getSqlLiteral(params.id)}
+        LIMIT 1
+      `)
+      const existingModelIds = getDuckdbStringArrayValue(existingModelIdsRow?.modelIds)
+      const validatedPromptSelections = await getValidatedPromptSelections(appDatabaseService, body.promptSelections)
+      const baseSetParts = [
+        `name = ${getSqlLiteral(body.name)}`,
+        `description = ${getSqlLiteral(body.description?.trim() || null)}`,
+        `compare_with_humans = ${getBooleanLiteral(body.compareWithHumans)}`,
+        `use_title = ${getBooleanLiteral(useTitle)}`,
+        `use_abstract = ${getBooleanLiteral(useAbstract)}`,
+        `use_fulltext = ${getBooleanLiteral(useFulltext)}`,
+        `use_fulltext_no_images = ${getBooleanLiteral(useFulltextNoImages)}`,
+        `updated_at = current_timestamp`,
+      ]
+      const hasModelIdsChange = !hasSameStringArrayValue(validatedModelIds, existingModelIds)
+      const setParts = hasModelIdsChange
+        ? [...baseSetParts, `model_ids = ${getSqlLiteral(validatedModelIds)}`]
+        : baseSetParts
+
+      const updatedComparisonProjectRow = hasModelIdsChange
+        ? await updateComparisonProjectWithModelIdsChange({
+            comparisonProjectId: params.id,
+            setParts,
+            promptSelections: validatedPromptSelections,
           })
-          .where(eq(comparisonProject.id, params.id))
-          .returning()
+        : ((await appDatabaseService.transaction(async (tx) => {
+            const updatedComparisonProjectRecord = await updateComparisonProjectTx(tx, {
+              comparisonProjectId: params.id,
+              setParts,
+            })
 
-        if (!updatedComparisonProjectRow) {
-          throw new Error('Comparison project not found')
-        }
+            if (!updatedComparisonProjectRecord) {
+              throw new Error('Comparison project not found')
+            }
 
-        await tx.delete(comparisonProjectPrompt).where(eq(comparisonProjectPrompt.comparisonProjectId, params.id))
-        await insertComparisonProjectPromptLinks(tx, params.id, getUniquePromptSelections(body.promptSelections))
+            await tx.run(`
+              DELETE FROM ${comparisonProjectPromptTable}
+              WHERE comparison_project_id = ${getSqlLiteral(params.id)}
+            `)
+            await insertComparisonProjectPromptLinks(tx, params.id, validatedPromptSelections)
 
-        return updatedComparisonProjectRow
-      })
+            return updatedComparisonProjectRecord
+          })) as ComparisonProjectRecordRow | null)
 
-      return {data: updatedComparisonProject}
+      if (!updatedComparisonProjectRow) {
+        throw new Error('Comparison project not found')
+      }
+
+      return {data: getComparisonProjectRecordValue(updatedComparisonProjectRow)}
     },
     {
       body: t.Object({
@@ -1764,12 +1959,12 @@ export const comparisonProjectsRoutes = new Elysia()
   )
   .delete('/api/comparison-projects/:id', async (context) => {
     const {params, set} = context
-    const db = getDatabase()
-    const [archivedComparisonProject] = await db
-      .update(comparisonProject)
-      .set({archived: true, updatedAt: new Date()})
-      .where(eq(comparisonProject.id, params.id))
-      .returning()
+    const archivedComparisonProject = await appDatabaseService.transaction(async (tx) => {
+      return updateComparisonProjectTx(tx, {
+        comparisonProjectId: params.id,
+        setParts: ['archived = TRUE', 'updated_at = current_timestamp'],
+      })
+    })
 
     if (!archivedComparisonProject) {
       set.status = 404
@@ -1780,12 +1975,12 @@ export const comparisonProjectsRoutes = new Elysia()
   })
   .post('/api/comparison-projects/:id/unarchive', async (context) => {
     const {params, set} = context
-    const db = getDatabase()
-    const [unarchivedComparisonProject] = await db
-      .update(comparisonProject)
-      .set({archived: false, updatedAt: new Date()})
-      .where(eq(comparisonProject.id, params.id))
-      .returning()
+    const unarchivedComparisonProject = await appDatabaseService.transaction(async (tx) => {
+      return updateComparisonProjectTx(tx, {
+        comparisonProjectId: params.id,
+        setParts: ['archived = FALSE', 'updated_at = current_timestamp'],
+      })
+    })
 
     if (!unarchivedComparisonProject) {
       set.status = 404

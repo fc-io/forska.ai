@@ -15,6 +15,7 @@ const AdminUnexpectedAnswersPromptList = () => {
         return fetchProjectWithPrompts(projectId)
       },
       refetchOnWindowFocus: false,
+      staleTime: 5 * 60 * 1000,
     }
   })
 

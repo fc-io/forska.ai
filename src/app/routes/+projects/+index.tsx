@@ -8,7 +8,7 @@ import {fetchProjects} from '../../../services/projectsService'
 
 export const ProjectsPage = () => {
   const projects = useQuery(() => {
-    return {queryKey: ['projects'], queryFn: fetchProjects}
+    return {queryKey: ['projects'], queryFn: fetchProjects, staleTime: 5 * 60 * 1000}
   })
 
   return (

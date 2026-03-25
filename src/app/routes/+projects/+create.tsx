@@ -1,12 +1,15 @@
-import {useQuery} from '@tanstack/solid-query'
+import {type QueryClient, useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {createEffect, createMemo, createSignal, For, Show, Suspense} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
+import {RuntimeModelNotice} from '../../../components/main/runtimeModelNotice.tsx'
 import {Button} from '../../../components/ui/button'
 import {apiClient} from '../../../services/apiClient'
-import {fetchSession} from '../../../services/fetchSession'
+import type {fetchProjects} from '../../../services/projectsService.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
+import {getSglangRuntimeModelNotice} from '../../../utils/getSglangRuntimeModelNotice.ts'
+import {fetchProviderConnections} from '../+admin/+models/providerConnectionsClient.ts'
 
 type PromptItem = {id: string; content: string; promptHeading: string; type: string}
 
@@ -39,8 +42,50 @@ type ModelOption = {id: string; name: string; provider: string | null; modelName
 type ModelsResponse = {data: ModelOption[]}
 
 type EnsureModelResponse = {data: {modelId: string}; error: null}
+type ProjectListItem = Awaited<ReturnType<typeof fetchProjects>>[number]
+type CreatedProject = Omit<ProjectListItem, 'modelName'>
 
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
+
+const buildCreatedProjectListItem = (createdProject: CreatedProject, modelName: string): ProjectListItem => {
+  return {...createdProject, modelName}
+}
+
+const getProjectsCacheValue = (value: unknown): ProjectListItem[] | null => {
+  return Array.isArray(value) ? (value as ProjectListItem[]) : null
+}
+
+const sortProjectsByName = (projects: ProjectListItem[]): ProjectListItem[] => {
+  return [...projects].sort((left, right) => {
+    return left.name.localeCompare(right.name)
+  })
+}
+
+const upsertCreatedProject = (projects: ProjectListItem[], createdProject: ProjectListItem): ProjectListItem[] => {
+  return sortProjectsByName([
+    createdProject,
+    ...projects.filter((project) => {
+      return project.id !== createdProject.id
+    }),
+  ])
+}
+
+const syncCreatedProjectCaches = (
+  queryClient: QueryClient,
+  createdProject: CreatedProject,
+  modelName: string,
+): void => {
+  queryClient.setQueryData(['projects'], (previous: unknown) => {
+    const projects = getProjectsCacheValue(previous)
+
+    return projects === null
+      ? previous
+      : upsertCreatedProject(projects, buildCreatedProjectListItem(createdProject, modelName))
+  })
+
+  void queryClient.invalidateQueries({queryKey: ['projects']})
+  void queryClient.invalidateQueries({queryKey: ['projects', 'archived']})
+}
 
 const parseDateInput = (value: string): ParsedDateResult => {
   const trimmedValue = value.trim()
@@ -59,13 +104,6 @@ const parseDateInput = (value: string): ParsedDateResult => {
 }
 
 const CreateProject = () => {
-  const sessionQuery = useQuery(() => {
-    return {
-      queryKey: ['session'],
-      queryFn: fetchSession,
-      staleTime: 1000 * 60 * 5, // Consider data fresh for 5 minutes
-    }
-  })
   const importRoutesQuery = useQuery(() => {
     return {
       queryKey: ['importroutes'],
@@ -91,6 +129,14 @@ const CreateProject = () => {
       staleTime: 1000 * 60 * 5,
     }
   })
+  const providerConnectionsQuery = useQuery(() => {
+    return {
+      queryKey: ['provider-connections', 'project-create'],
+      queryFn: fetchProviderConnections,
+      staleTime: 60 * 1000,
+      suspense: false,
+    }
+  })
   const existingPromptsQuery = useQuery(() => {
     return {
       queryKey: ['prompts'],
@@ -107,6 +153,7 @@ const CreateProject = () => {
     await modelsQuery.refetch()
   }
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [projectName, setProjectName] = createSignal('')
   const [description, setDescription] = createSignal('')
   const [selectedModelId, setSelectedModelId] = createSignal('')
@@ -152,6 +199,34 @@ const CreateProject = () => {
 
     return [...hpcSorted, ...codexInApiOrder]
   }
+
+  const selectedProviderModel = createMemo(() => {
+    const selectedId = selectedModelId()
+
+    return (
+      providerConnectionsQuery.data?.connections
+        .flatMap((connection) => {
+          return connection.models
+        })
+        .find((model) => {
+          return model.id === selectedId
+        }) ?? null
+    )
+  })
+
+  const selectedModelRuntimeWarning = createMemo(() => {
+    const selectedModel = selectedProviderModel()
+    return !selectedModel
+      ? null
+      : getSglangRuntimeModelNotice({
+          candidateModelNames: [selectedModel.remoteModelId, selectedModel.modelName],
+          getMismatchMessage: (runtimeLabel) => {
+            return `Active SGLang runtime model: ${runtimeLabel}. Starting a job will be blocked until it matches the selected project model.`
+          },
+          providerKind: selectedModel.provider,
+          runtime: providerConnectionsQuery.data?.runtime ?? null,
+        })
+  })
 
   createEffect(() => {
     const models = availableModels()
@@ -238,7 +313,7 @@ const CreateProject = () => {
     importRoutes: string[],
     startDate?: string,
     endDate?: string,
-  ) => {
+  ): Promise<CreatedProject> => {
     // Filter valid new prompts
     const validPrompts = promptItems
       .filter((prompt) => {
@@ -262,14 +337,9 @@ const CreateProject = () => {
         return {originalId: p.id, order: validPrompts.length + index}
       })
 
-    if (!sessionQuery.data?.user.id) {
-      throw new Error('User must be authenticated to create a project')
-    }
-
     const response = await apiClient.api.projects.post({
       name,
       description: description.trim() || undefined,
-      ownerId: sessionQuery.data.user.id,
       modelId,
       prompts: validPrompts,
       existingPromptIds: enabledExistingPrompts,
@@ -338,7 +408,7 @@ const CreateProject = () => {
             })()
           : selected.id
 
-      await createProject(
+      const createdProject = await createProject(
         projectName(),
         description(),
         ensuredModelId,
@@ -348,7 +418,8 @@ const CreateProject = () => {
         startDateResult.normalized ?? undefined,
         endDateResult.normalized ?? undefined,
       )
-      // Navigate back to projects page on success
+
+      syncCreatedProjectCaches(queryClient, createdProject, selected.name)
       void navigate({to: '/projects'})
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred'
@@ -407,6 +478,7 @@ const CreateProject = () => {
                   </For>
                 </select>
               </Show>
+              <RuntimeModelNotice class="mt-3" notice={selectedModelRuntimeWarning()} />
               <Show when={!modelsQuery.isLoading && !modelsQuery.isError && availableModels().length === 0}>
                 <div class="flex items-center justify-between gap-3">
                   <p class="text-sm text-muted-foreground">No models available.</p>

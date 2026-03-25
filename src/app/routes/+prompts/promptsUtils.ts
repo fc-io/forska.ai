@@ -10,7 +10,6 @@ export type PromptListItem = {
   type: string | null
   createdAt: string | Date
   updatedAt: string | Date
-  ownerId: string
   archived: boolean
 }
 

@@ -231,34 +231,17 @@ curl http://localhost:30000/v1/chat/completions \
 
 ## Step 7: Configure Local API Server
 
-For the forska.ai API server to process judgments, it needs to know which model is running.
+The local Forska API server no longer needs a global `SGLANG_MODEL` env var to process judgments.
 
-### Set `SGLANG_MODEL` environment variable
-
-The server filters jobs to only process projects using the current model. Set this **before** starting your API server:
-
-**Option A: Add to `.env.local`** (persistent):
+### Start the local API server
 
 ```bash
-# In your .env.local file
-SGLANG_MODEL=openai/gpt-oss-120b
+bun run dev:server
 ```
 
-**Option B: Set inline** (temporary):
+### Verify the provider/model matches the running runtime
 
-```bash
-SGLANG_MODEL=openai/gpt-oss-120b bun run dev:server
-```
-
-> **Note**: If `SGLANG_MODEL` is not set, the server will **not process any judgment jobs** and will log a warning:
->
-> ```
-> [getRunningJobs] WARNING: SGLANG_MODEL not set. No jobs will be processed.
-> ```
-
-### Verify the model matches
-
-The value of `SGLANG_MODEL` must match what the inference server is using (`--served-model-name`). With the default sbatch configuration, both use `openai/gpt-oss-120b`.
+Make sure the provider/model configuration inside Forska matches what the inference server is using (`--served-model-name`). With the default sbatch configuration, that is `openai/gpt-oss-120b`.
 
 ---
 

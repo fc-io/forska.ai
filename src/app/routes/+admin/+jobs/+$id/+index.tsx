@@ -3,6 +3,7 @@ import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {formatDate} from 'date-fns'
 import {createSignal, For, Show, Suspense} from 'solid-js'
 
+import {RuntimeModelNotice} from '../../../../../components/main/runtimeModelNotice.tsx'
 import {TokenUsageTimeline} from '../../../../../components/TokenUsageTimeline'
 import {apiClient} from '../../../../../services/apiClient.ts'
 import {
@@ -11,7 +12,14 @@ import {
   pauseJudgmentsJob,
   startJudgmentsJob,
 } from '../../../../../services/judgmentsJobsService'
+import {fetchProjectWithPrompts} from '../../../../../services/projectsService'
 import {handleApiResponse} from '../../../../../services/utils/handleApiResponse'
+import {getSglangRuntimeModelNotice} from '../../../../../utils/getSglangRuntimeModelNotice.ts'
+import {fetchProviderConnections} from '../../../+admin/+models/providerConnectionsClient.ts'
+
+const getActionErrorMessage = (error: unknown, fallback: string) => {
+  return error instanceof Error && error.message.trim().length > 0 ? error.message : fallback
+}
 
 const getStatusColor = (status: string | null) => {
   switch (status) {
@@ -21,8 +29,7 @@ const getStatusColor = (status: string | null) => {
       return 'bg-blue-100 text-blue-800 border-blue-200'
     case 'failed':
       return 'bg-red-100 text-red-800 border-red-200'
-    case 'paused_by_user':
-    case 'paused_by_admin':
+    case 'paused':
       return 'bg-yellow-100 text-yellow-800 border-yellow-200'
     case 'not_started':
       return 'bg-gray-100 text-gray-800 border-gray-200'
@@ -38,7 +45,7 @@ const getStatusColor = (status: string | null) => {
 
 const formatStatus = (status: string | null) => {
   if (!status) return 'Unknown'
-  if (status === 'paused_by_admin' || status === 'paused_by_user') return 'Paused'
+  if (status === 'paused') return 'Paused'
   return status
     .split('_')
     .map((word) => {
@@ -63,11 +70,23 @@ type JobData = {
   totalTokenUsage?: {totalTokens?: number; totalPromptTokens?: number; totalCompletionTokens?: number}
   promptStats?: {ready?: number; sent?: number; judged?: number; skipped?: number}
   requestStats?: {inFlight?: number; attempts?: number}
+  judgingRuntime?: {enabled?: boolean; reason?: string | null}
   error?: string[]
 }
 
 const shouldShowFulltextSkippedFromJob = (job: unknown) => {
   return isRecord(job) ? Boolean(job.useFulltext || job.useFulltextNoImages) : false
+}
+
+const activeJudgmentsJobStatuses = new Set([
+  'not_started',
+  'running',
+  'waiting_on_db_connection',
+  'waiting_on_llm_connection',
+])
+
+const getJudgmentsJobRefetchInterval = (status: string | null | undefined) => {
+  return activeJudgmentsJobStatuses.has(status ?? '') ? 1000 * 30 : false
 }
 
 const TokenUsageTimelinePanelFallback = () => {
@@ -84,6 +103,8 @@ const AdminJudgmentJobDetail = () => {
   const params = Route.useParams()
   const navigate = useNavigate()
   const [isDeleting, setIsDeleting] = createSignal(false)
+  const [isStarting, setIsStarting] = createSignal(false)
+  const [actionError, setActionError] = createSignal('')
 
   const id = () => {
     return params().id
@@ -97,7 +118,33 @@ const AdminJudgmentJobDetail = () => {
 
         return response
       },
-      refetchInterval: 1000 * 30, // Refresh every 30 seconds
+      refetchInterval: (query: {state: {data?: unknown}}) => {
+        const status =
+          isRecord(query.state.data) && typeof query.state.data.status === 'string' ? query.state.data.status : null
+        return getJudgmentsJobRefetchInterval(status)
+      },
+      refetchOnWindowFocus: true,
+      suspense: false,
+    }
+  })
+  const projectDetailsQuery = useQuery(() => {
+    const projectId = job.data?.projectId ?? ''
+
+    return {
+      queryKey: ['project', projectId, 'with-prompts', 'job-detail'],
+      queryFn: () => {
+        return fetchProjectWithPrompts(projectId)
+      },
+      enabled: projectId.length > 0,
+      staleTime: 5 * 60 * 1000,
+      suspense: false,
+    }
+  })
+  const providerConnectionsQuery = useQuery(() => {
+    return {
+      queryKey: ['provider-connections', 'job-detail', id()],
+      queryFn: fetchProviderConnections,
+      staleTime: 60 * 1000,
       suspense: false,
     }
   })
@@ -105,7 +152,8 @@ const AdminJudgmentJobDetail = () => {
     return {
       queryKey: ['judgments-job-unassessed-count', id()],
       enabled: Boolean(id()),
-      refetchInterval: 1000 * 30,
+      refetchInterval: getJudgmentsJobRefetchInterval(job.data?.status ?? null),
+      refetchOnWindowFocus: true,
       suspense: false,
       queryFn: async () => {
         const response = await apiClient.api['judgmentsjobs-unassessed-count'].get({query: {jobId: id()}})
@@ -114,6 +162,19 @@ const AdminJudgmentJobDetail = () => {
       },
     }
   })
+  const handleStartJob = async (jobId: string) => {
+    setActionError('')
+    setIsStarting(true)
+
+    try {
+      await startJudgmentsJob(jobId)
+      await job.refetch()
+    } catch (error) {
+      setActionError(getActionErrorMessage(error, 'Failed to start job'))
+    } finally {
+      setIsStarting(false)
+    }
+  }
   // console.log('job.data:', job.data?.unassessedArticlesCount)
   // console.log('job.data type:', typeof job, Array.isArray(job))
 
@@ -178,6 +239,37 @@ const AdminJudgmentJobDetail = () => {
             const shouldShowFulltextSkipped = () => {
               return shouldShowFulltextSkippedFromJob(data())
             }
+            const projectModel = () => {
+              const modelId = projectDetailsQuery.data?.model?.id
+
+              return modelId
+                ? (providerConnectionsQuery.data?.connections
+                    .flatMap((connection) => {
+                      return connection.models
+                    })
+                    .find((candidate) => {
+                      return candidate.id === modelId
+                    }) ?? null)
+                : null
+            }
+            const runtimeModelNotice = () => {
+              const providerModel = projectModel()
+
+              return providerModel
+                ? getSglangRuntimeModelNotice({
+                    candidateModelNames: [providerModel.remoteModelId, providerModel.modelName],
+                    getMismatchMessage: (runtimeLabel) => {
+                      return `Active SGLang runtime model: ${runtimeLabel}. Starting this job will be blocked until it matches the project's model.`
+                    },
+                    providerKind: providerModel.provider,
+                    runtime: providerConnectionsQuery.data?.runtime ?? null,
+                  })
+                : null
+            }
+            const judgingRuntimeWarning = () => {
+              const runtime = data()?.judgingRuntime
+              return runtime?.enabled === false ? (runtime.reason ?? 'Judging is disabled for this server.') : null
+            }
             const jobQueueGridClass = () => {
               return `grid gap-4 ${shouldShowFulltextSkipped() ? 'grid-cols-4' : 'grid-cols-3'}`
             }
@@ -237,6 +329,16 @@ const AdminJudgmentJobDetail = () => {
                       </p>
                     </div>
                   </div>
+                  <RuntimeModelNotice class="mt-4" notice={runtimeModelNotice()} />
+                  <Show when={judgingRuntimeWarning()}>
+                    {(warning) => {
+                      return (
+                        <div class="mt-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                          {warning()}
+                        </div>
+                      )
+                    }}
+                  </Show>
 
                   <div class="mt-6 pt-6 border-t border-gray-200">
                     <h3 class="text-sm font-medium text-gray-900 mb-3">Project</h3>
@@ -247,9 +349,9 @@ const AdminJudgmentJobDetail = () => {
                           when={shouldLinkToUnassessedArticles()}
                           fallback={<p class="font-medium">{formattedUnassessedArticlesCount()}</p>}
                         >
-                          <Link to={unassessedArticlesLink()} class="font-medium text-blue-600 hover:text-blue-800">
+                          <a href={unassessedArticlesLink()} class="font-medium text-blue-600 hover:text-blue-800">
                             {formattedUnassessedArticlesCount()}
-                          </Link>
+                          </a>
                         </Show>
                       </Show>
                     </div>
@@ -350,60 +452,71 @@ const AdminJudgmentJobDetail = () => {
 
                 <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
                   <h2 class="text-lg font-semibold mb-4">Actions</h2>
-                  <div class="flex gap-3">
-                    <Show when={data()?.status === 'running'}>
+                  <div class="flex flex-col gap-3">
+                    <div class="flex gap-3">
+                      <Show when={data()?.status === 'running'}>
+                        <button
+                          class="px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700"
+                          onClick={() => {
+                            const jobId = data()?.id
+                            if (jobId) {
+                              void pauseJudgmentsJob(jobId).then(() => {
+                                return job.refetch()
+                              })
+                            }
+                          }}
+                        >
+                          Pause Job
+                        </button>
+                      </Show>
+                      <Show when={data()?.status === 'paused'}>
+                        <button
+                          class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                          disabled={isStarting()}
+                          onClick={() => {
+                            const jobId = data()?.id
+                            if (jobId) {
+                              return void handleStartJob(jobId)
+                            }
+                          }}
+                        >
+                          {isStarting() ? 'Starting...' : 'Start Job'}
+                        </button>
+                      </Show>
+                      <Show when={data()?.status === 'failed'}>
+                        <button class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Retry Job</button>
+                      </Show>
                       <button
-                        class="px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700"
+                        class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={isDeleting()}
                         onClick={() => {
                           const jobId = data()?.id
-                          if (jobId) {
-                            void pauseJudgmentsJob(jobId).then(() => {
-                              return job.refetch()
+                          if (!jobId) return
+                          if (!confirm('Are you sure you want to delete this job? This action cannot be undone.'))
+                            return
+                          setIsDeleting(true)
+                          deleteJudgmentsJob(jobId)
+                            .then(() => {
+                              void navigate({to: '/admin/jobs'})
                             })
-                          }
+                            .catch((error) => {
+                              console.error('Failed to delete job:', error)
+                              setIsDeleting(false)
+                            })
                         }}
                       >
-                        Pause Job
+                        {isDeleting() ? 'Deleting...' : 'Delete Job'}
                       </button>
-                    </Show>
-                    <Show when={data()?.status === 'paused_by_admin' || data()?.status === 'paused_by_user'}>
-                      <button
-                        class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
-                        onClick={() => {
-                          const jobId = data()?.id
-                          if (jobId) {
-                            void startJudgmentsJob(jobId).then(() => {
-                              return job.refetch()
-                            })
-                          }
-                        }}
-                      >
-                        Start Job
-                      </button>
-                    </Show>
-                    <Show when={data()?.status === 'failed'}>
-                      <button class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Retry Job</button>
-                    </Show>
-                    <button
-                      class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                      disabled={isDeleting()}
-                      onClick={() => {
-                        const jobId = data()?.id
-                        if (!jobId) return
-                        if (!confirm('Are you sure you want to delete this job? This action cannot be undone.')) return
-                        setIsDeleting(true)
-                        deleteJudgmentsJob(jobId)
-                          .then(() => {
-                            void navigate({to: '/admin/jobs'})
-                          })
-                          .catch((error) => {
-                            console.error('Failed to delete job:', error)
-                            setIsDeleting(false)
-                          })
+                    </div>
+                    <Show when={actionError()}>
+                      {(message) => {
+                        return (
+                          <div class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                            {message()}
+                          </div>
+                        )
                       }}
-                    >
-                      {isDeleting() ? 'Deleting...' : 'Delete Job'}
-                    </button>
+                    </Show>
                   </div>
                 </div>
               </>

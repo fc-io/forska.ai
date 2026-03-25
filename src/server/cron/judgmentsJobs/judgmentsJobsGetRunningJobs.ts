@@ -1,62 +1,73 @@
-import {and, eq, or, sql} from 'drizzle-orm'
-import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
+import {getStoredProviderModelRuntimeMatch} from '../../providers/providerRuntimeModelGuard.ts'
+import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
+import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 
-import * as schema from '../../../db/schema.ts'
-import {env} from '../../utils/env.ts'
+const runningJobsLogger = createRateLimitedLogger({windowMs: 30_000})
 
-// Track if we've already logged the SGLANG_MODEL message
-let hasLoggedSglangModel = false
+export type RunningJudgmentJob = {
+  id: string
+  modelId: string
+  modelName: string | null
+  modelProvider: string | null
+  projectId: string
+}
 
-/**
- * Get running judgment jobs, filtered to only include projects
- * that use the model currently running on the inference server.
- *
- * This prevents sending requests for projects that use a different model
- * than what's configured in SGLANG_MODEL, avoiding unnecessary errors.
- */
-export const judgmentsJobsGetRunningJobs = (db: PostgresJsDatabase<typeof schema>) => {
-  const sglangModel = env.SGLANG_MODEL
+const getRunningJobsFromDatabase = async (): Promise<RunningJudgmentJob[]> => {
+  return getAppDatabaseService().queryJson<RunningJudgmentJob>(`
+    SELECT
+      jj.id AS id,
+      jj.project_id AS projectId,
+      pc.provider_kind AS modelProvider,
+      m.id AS modelId,
+      m.remote_model_id AS modelName
+    FROM app.judgment_job jj
+    INNER JOIN app.project p ON jj.project_id = p.id
+    INNER JOIN app.model m ON p.model_id = m.id
+    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    WHERE jj.status = 'running'
+      AND p.archived = FALSE
+      AND COALESCE(m.enabled, TRUE) = TRUE
+      AND COALESCE(pc.enabled, TRUE) = TRUE
+  `)
+}
 
-  const hasSglang = Boolean(sglangModel && sglangModel !== 'not set')
+export const filterRunningJobsByRuntimeMatch = async (
+  jobs: RunningJudgmentJob[],
+  getRuntimeMatch: typeof getStoredProviderModelRuntimeMatch = getStoredProviderModelRuntimeMatch,
+): Promise<RunningJudgmentJob[]> => {
+  const results = await Promise.all(
+    jobs.map(async (job) => {
+      const runtimeMatch = await getRuntimeMatch({modelId: job.modelId})
+      return {job, runtimeMatch}
+    }),
+  )
 
-  if (!hasSglang && !hasLoggedSglangModel) {
-    console.warn('[getRunningJobs] SGLANG_MODEL not set; non-codex jobs will not run')
-    hasLoggedSglangModel = true
-  }
+  return results.flatMap(({job, runtimeMatch}) => {
+    if (runtimeMatch.ok) {
+      return [job]
+    }
 
-  // SGLANG_MODEL should be a full HuggingFace ID (e.g., "XiaomiMiMo/MiMo-V2-Flash")
-  // For backward compatibility, also match against lowercase and basename variants
-  const sglangModelLower = hasSglang ? String(sglangModel).toLowerCase() : ''
-  const sglangModelBaseName = hasSglang ? (String(sglangModel).split('/').pop() ?? String(sglangModel)) : ''
-
-  if (hasSglang && !hasLoggedSglangModel) {
-    console.log(`[getRunningJobs] Filtering non-codex jobs for SGLANG_MODEL: ${String(sglangModel)}`)
-    hasLoggedSglangModel = true
-  }
-
-  const nonCodexModelCondition = hasSglang
-    ? or(
-        eq(schema.models.modelName, String(sglangModel)),
-        eq(schema.models.modelName, sglangModelLower),
-        eq(schema.models.modelName, sglangModelBaseName),
-      )
-    : sql`false`
-
-  return db
-    .select({
-      id: schema.judgmentsJobs.id,
-      projectId: schema.judgmentsJobs.projectId,
-      modelProvider: schema.models.provider,
-      modelName: schema.models.modelName,
-    })
-    .from(schema.judgmentsJobs)
-    .innerJoin(schema.projects, eq(schema.judgmentsJobs.projectId, schema.projects.id))
-    .innerJoin(schema.models, eq(schema.projects.modelId, schema.models.id))
-    .where(
-      and(
-        eq(schema.judgmentsJobs.status, 'running'),
-        eq(schema.projects.archived, false),
-        or(eq(schema.models.provider, 'codex'), nonCodexModelCondition),
-      ),
+    runningJobsLogger.warn(
+      `judgments-job-runtime-mismatch:${job.id}`,
+      '[judgments] skipping running job because provider runtime is unavailable or mismatched',
+      {
+        jobId: job.id,
+        message: runtimeMatch.message,
+        modelId: job.modelId,
+        modelName: job.modelName,
+        provider: job.modelProvider,
+        projectId: job.projectId,
+      },
     )
+
+    return []
+  })
+}
+
+export const judgmentsJobsGetRunningJobs = async ({
+  applyRuntimeMatchFilter = true,
+}: {applyRuntimeMatchFilter?: boolean} = {}) => {
+  const jobs = await getRunningJobsFromDatabase()
+
+  return applyRuntimeMatchFilter ? filterRunningJobsByRuntimeMatch(jobs) : jobs
 }

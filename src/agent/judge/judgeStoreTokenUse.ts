@@ -1,9 +1,6 @@
-import {eq} from 'drizzle-orm'
-
-import {session} from '../../../auth-schema.ts'
-import {tokenUse} from '../../db/schema.ts'
 import {markJudgmentRequestsPersisted} from '../../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
-import {env} from '../../server/utils/env.ts'
+import {getTokenUseQueryService} from '../../server/services/tokenUseQueryService.ts'
+import {inferenceRuntimeConfig} from '../../server/utils/getInferenceRuntimeConfig.ts'
 import {apiClient} from '../../services/apiClient.ts'
 
 export type JudgeTokenUsageEntry = {
@@ -79,6 +76,7 @@ const isConnectionError = (error: string | null): boolean => {
 }
 
 type TokenUseTotals = {
+  modelName: string | null
   totalRequests: number
   totalPromptTokens: number
   totalCompletionTokens: number
@@ -99,53 +97,49 @@ const isServerEnvironment = (): boolean => {
   return typeof window === 'undefined' || typeof Bun !== 'undefined'
 }
 
+const getStoredModelName = (tokenUseEntries: JudgeTokenUsageEntry[]): string | null => {
+  return tokenUseEntries.reduce<string | null>((resolved, entry) => {
+    const normalized = String(entry.modelName ?? '').trim()
+
+    return resolved ?? (normalized === '' ? null : normalized)
+  }, null)
+}
+
 const storeTokenUseDirectly = async (
   totalTokenUse: TokenUseTotals,
-  sessionId: string | null,
+  _sessionId: string | null,
   {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
   judgmentsJobId?: string,
 ): Promise<void> => {
-  const {getDatabase} = await import('../../server/utils/getDatabase.ts')
-  const db = getDatabase()
-
-  const [sessionData] = sessionId
-    ? await db.select({userId: session.userId}).from(session).where(eq(session.id, sessionId)).limit(1)
-    : [null]
-
-  const [result] = await db
-    .insert(tokenUse)
-    .values({
-      userId: sessionData?.userId ?? null,
-      sessionId,
-      judgmentsJobId: judgmentsJobId ?? null,
-      gpuNnodes: env.GPU_NNODES,
-      gpuGpusPerNode: env.GPU_GPUS_PER_NODE,
-      gpuTotalGpus: env.GPU_TOTAL_GPUS,
-      tpSize: env.TP_SIZE,
-      dpSize: env.DP_SIZE,
-      gpuShape: env.GPU_SHAPE ?? null,
-      sglangMaxRunningRequests: env.SGLANG_MAX_RUNNING_REQUESTS,
-      sglangModel: env.SGLANG_MODEL ?? null,
-      requests: totalTokenUse.totalRequests,
-      totalPromptTokens: totalTokenUse.totalPromptTokens,
-      totalCompletionTokens: totalTokenUse.totalCompletionTokens,
-      totalTokens: totalTokenUse.totalTokens,
-      successfulRequests: totalTokenUse.successfulRequests,
-      failedRequests: totalTokenUse.failedRequests,
-      hasFailedRequests: totalTokenUse.hasFailedRequests,
-      failedRequestsDetails:
-        totalTokenUse.failedRequestsDetails.length > 0 ? totalTokenUse.failedRequestsDetails : null,
-      totalSuccessPromptTokens: totalTokenUse.totalSuccessPromptTokens,
-      totalSuccessCompletionTokens: totalTokenUse.totalSuccessCompletionTokens,
-      totalSuccessTokens: totalTokenUse.totalSuccessTokens,
-      totalFailedPromptTokens: totalTokenUse.totalFailedPromptTokens,
-      totalFailedCompletionTokens: totalTokenUse.totalFailedCompletionTokens,
-      totalFailedTokens: totalTokenUse.totalFailedTokens,
-      startedAt: new Date(startedAt),
-      finishedAt: new Date(finishedAt),
-      duration: Math.round(duration),
-    })
-    .returning()
+  const result = await getTokenUseQueryService().insertTokenUse({
+    judgment_job_id: judgmentsJobId ?? null,
+    gpu_nnodes: inferenceRuntimeConfig.gpuNnodes,
+    gpu_gpus_per_node: inferenceRuntimeConfig.gpuGpusPerNode,
+    gpu_total_gpus: inferenceRuntimeConfig.gpuTotalGpus,
+    tp_size: inferenceRuntimeConfig.tpSize,
+    dp_size: inferenceRuntimeConfig.dpSize,
+    gpu_shape: inferenceRuntimeConfig.gpuShape,
+    sglang_max_running_requests: inferenceRuntimeConfig.sglangMaxRunningRequests,
+    sglang_model: totalTokenUse.modelName,
+    requests: totalTokenUse.totalRequests,
+    total_prompt_tokens: totalTokenUse.totalPromptTokens,
+    total_completion_tokens: totalTokenUse.totalCompletionTokens,
+    total_tokens: totalTokenUse.totalTokens,
+    successful_requests: totalTokenUse.successfulRequests,
+    failed_requests: totalTokenUse.failedRequests,
+    has_failed_requests: totalTokenUse.hasFailedRequests,
+    failed_requests_details:
+      totalTokenUse.failedRequestsDetails.length > 0 ? totalTokenUse.failedRequestsDetails : null,
+    total_success_prompt_tokens: totalTokenUse.totalSuccessPromptTokens,
+    total_success_completion_tokens: totalTokenUse.totalSuccessCompletionTokens,
+    total_success_tokens: totalTokenUse.totalSuccessTokens,
+    total_failed_prompt_tokens: totalTokenUse.totalFailedPromptTokens,
+    total_failed_completion_tokens: totalTokenUse.totalFailedCompletionTokens,
+    total_failed_tokens: totalTokenUse.totalFailedTokens,
+    started_at: new Date(startedAt),
+    finished_at: new Date(finishedAt),
+    duration: Math.round(duration),
+  })
 
   if (!result) {
     throw new Error('Failed to store token usage in database')
@@ -154,11 +148,12 @@ const storeTokenUseDirectly = async (
 
 const storeTokenUseViaAPI = async (
   totalTokenUse: TokenUseTotals,
-  sessionId: string,
+  judgmentsJobId: string,
   {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
 ): Promise<void> => {
   const response = await apiClient.api.tokens.usage.post({
-    sessionId,
+    judgmentsJobId,
+    sglangModel: totalTokenUse.modelName ?? undefined,
     requests: totalTokenUse.totalRequests,
     totalPromptTokens: totalTokenUse.totalPromptTokens,
     totalCompletionTokens: totalTokenUse.totalCompletionTokens,
@@ -356,6 +351,7 @@ export const buildTokenUseTotals = (tokenUseEntries: JudgeTokenUsageEntry[]): To
   const hasFailedRequests = failedRequestsDetails.length > 0
 
   return {
+    modelName: getStoredModelName(tokenUseEntries),
     totalRequests: totals.totalRequests,
     totalPromptTokens: totals.totalPromptTokens,
     totalCompletionTokens: totals.totalCompletionTokens,
@@ -375,7 +371,7 @@ export const buildTokenUseTotals = (tokenUseEntries: JudgeTokenUsageEntry[]): To
 
 export const judgeStoreTokenUse = async (
   tokenUseEntries: JudgeTokenUsageEntry[],
-  sessionId: string | null,
+  _sessionId: string | null,
   {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
   judgmentsJobId: string,
 ): Promise<void> => {
@@ -384,10 +380,7 @@ export const judgeStoreTokenUse = async (
   if (isServerEnvironment()) {
     await storeTokenUseDirectly(totalTokenUse, null, {startedAt, finishedAt, duration}, judgmentsJobId)
   } else {
-    if (!sessionId) {
-      throw new Error('sessionId is required when running in client environment')
-    }
-    await storeTokenUseViaAPI(totalTokenUse, sessionId, {startedAt, finishedAt, duration})
+    await storeTokenUseViaAPI(totalTokenUse, judgmentsJobId, {startedAt, finishedAt, duration})
   }
 
   markJudgmentRequestsPersisted(judgmentsJobId, totalTokenUse.totalRequests)

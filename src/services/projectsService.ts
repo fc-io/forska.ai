@@ -1,4 +1,9 @@
+import type {QueryClient} from '@tanstack/solid-query'
+
 import {apiClient} from './apiClient.ts'
+import {handleApiResponse} from './utils/handleApiResponse.ts'
+
+export type ProjectAccess = {id: string; name: string; archived: boolean}
 
 export const fetchProjects = async () => {
   const response = await apiClient.api.projects.get()
@@ -22,33 +27,38 @@ export const fetchArchivedProjects = async () => {
   return response.data?.data ?? []
 }
 
-export const archiveProject = async (projectId: string): Promise<void> => {
-  try {
-    const response = await apiClient.api.projects({id: projectId}).delete()
-
-    if (response.error || !response.data?.success) {
-      console.error('Error archiving project:', response.error)
-      throw new Error('Failed to archive project')
-    }
-  } catch (err) {
-    console.error('Error archiving project:', err)
-    throw err
-  }
+const invalidateProjectsQueries = async (queryClient: QueryClient): Promise<void> => {
+  await Promise.all([
+    queryClient.invalidateQueries({queryKey: ['projects']}),
+    queryClient.invalidateQueries({queryKey: ['projects', 'archived']}),
+  ])
 }
 
-export const unarchiveProject = async (projectId: string): Promise<void> => {
+export const archiveProject = async (queryClient: QueryClient, projectId: string): Promise<void> => {
+  const response = await apiClient.api.projects({id: projectId}).delete()
+
+  if (response.error || !response.data?.success) {
+    console.error('Error archiving project:', response.error)
+    throw new Error('Failed to archive project')
+  }
+
+  await invalidateProjectsQueries(queryClient)
+}
+
+export const unarchiveProject = async (queryClient: QueryClient, projectId: string): Promise<void> => {
   const response = await apiClient.api.projects({id: projectId}).unarchive.post()
 
   if (response.error || !response.data?.success) {
     console.error('Error unarchiving project:', response.error)
     throw new Error('Failed to unarchive project')
   }
+
+  await invalidateProjectsQueries(queryClient)
 }
 
 export const createProject = async (
   name: string,
   description: string | null,
-  ownerId: string,
   modelId: string,
   promptTexts: string[],
 ) => {
@@ -56,7 +66,6 @@ export const createProject = async (
     const response = await apiClient.api.projects.post({
       name,
       description: description || undefined,
-      ownerId,
       modelId,
       prompts: promptTexts.length > 0 ? promptTexts : undefined,
     })
@@ -107,6 +116,17 @@ export const fetchProjectWithPrompts = async (projectId: string) => {
     return response.data.data
   } catch (err) {
     console.error('Error fetching project with prompts:', err)
+    throw err
+  }
+}
+
+export const fetchProjectAccess = async (projectId: string): Promise<ProjectAccess> => {
+  try {
+    const response = await apiClient.api.projects({id: projectId}).access.get()
+
+    return handleApiResponse<{data: ProjectAccess}>(response, 'Failed to fetch project access').data
+  } catch (err) {
+    console.error('Error fetching project access:', err)
     throw err
   }
 }

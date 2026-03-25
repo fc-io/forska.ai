@@ -1,8 +1,10 @@
-import {and, desc, eq} from 'drizzle-orm'
-import type {PostgresJsDatabase} from 'drizzle-orm/postgres-js'
-
-import * as schema from '../../../db/schema.ts'
-import {env} from '../../utils/env.ts'
+import {getProviderConnectionConfigFromJson} from '../../providers/providerDbUtils.ts'
+import {
+  getProviderConnectionEffectiveBaseURL,
+  getProviderConnectionWorkerState,
+} from '../../providers/providerRuntimeState.ts'
+import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
+import {escapeSqlString, getDateValue, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {getSGLangMetrics} from './judgmentsJobsAdjustBatchSize/getSGLangMetrics.ts'
 
@@ -10,24 +12,35 @@ const ema = (prev: number | null | undefined, cur: number, alpha: number): numbe
   return prev == null ? cur : alpha * cur + (1 - alpha) * prev
 }
 
-const getLatestStatus = async (
-  db: PostgresJsDatabase<typeof schema>,
-  engine: 'vllm' | 'sglang',
-  instanceId: string,
-  modelName: string,
-) => {
-  const rows = await db
-    .select()
-    .from(schema.llmStatus)
-    .where(
-      and(
-        eq(schema.llmStatus.engine, engine),
-        eq(schema.llmStatus.instanceId, instanceId),
-        eq(schema.llmStatus.modelName, modelName),
-      ),
-    )
-    .orderBy(desc(schema.llmStatus.ts))
-    .limit(1)
+const getLatestStatus = async (engine: 'vllm' | 'sglang', instanceId: string, modelName: string) => {
+  const rows = await getAppDatabaseService().queryJson<{
+    ts: unknown
+    promptTokensTotal: number | null
+    generationTokensTotal: number | null
+    numRequestsTotal: number | null
+    prefillTps: number | null
+    genTps: number | null
+    targetGenTps: number | null
+    targetPrefillTps: number | null
+    lastAction: string | null
+  }>(`
+    SELECT
+      ts,
+      prompt_tokens_total AS promptTokensTotal,
+      generation_tokens_total AS generationTokensTotal,
+      num_requests_total AS numRequestsTotal,
+      prefill_tps AS prefillTps,
+      gen_tps AS genTps,
+      target_gen_tps AS targetGenTps,
+      target_prefill_tps AS targetPrefillTps,
+      last_action AS lastAction
+    FROM app.llm_status
+    WHERE engine = '${escapeSqlString(engine)}'
+      AND instance_id = '${escapeSqlString(instanceId)}'
+      AND model_name = '${escapeSqlString(modelName)}'
+    ORDER BY ts DESC
+    LIMIT 1
+  `)
   return rows[0]
 }
 
@@ -53,43 +66,69 @@ const safetyTriggered = (waiting: number, running: number): boolean => {
   return waiting > 4 * thr
 }
 
-const normalizeWorkerUrls = (urls: string[] | null | undefined): string[] => {
-  return Array.from(
-    new Set(
-      (urls ?? [])
-        .map((url) => {
-          return url.trim()
-        })
-        .filter((url) => {
-          return url.length > 0
-        }),
-    ),
-  )
-}
-
 const mergeWorkerLists = (existing: string[], incoming: string[]): string[] => {
   return Array.from(new Set([...existing, ...incoming]))
 }
 
-const fallbackWorkerUrls = normalizeWorkerUrls(env.WORKER_URLS)
+const getProviderRuntime = ({
+  baseURL,
+  providerConfigJson,
+  providerKind,
+}: {
+  baseURL: string | null
+  providerConfigJson: unknown
+  providerKind: string | null
+}): {baseURL: string | null; workerUrls: string[]} => {
+  const config = getProviderConnectionConfigFromJson({providerKind, value: providerConfigJson})
+  const workerState = getProviderConnectionWorkerState({config, providerKind})
+
+  return {
+    baseURL: getProviderConnectionEffectiveBaseURL({baseURL, config, providerKind}),
+    workerUrls: workerState.effectiveWorkerUrls,
+  }
+}
 
 // Generic LLM status ingestion targeting the new llm_status table.
 // Initially feeds engine='vllm' using the existing vLLM metrics adapter.
-export const judgmentsJobsCheckLLMStatus = async (db: PostgresJsDatabase<typeof schema>) => {
-  const runningJobConfigs = await db
-    .select({modelName: schema.models.modelName, baseURL: schema.models.baseURL, workerUrls: schema.models.workerUrls})
-    .from(schema.judgmentsJobs)
-    .leftJoin(schema.projects, eq(schema.judgmentsJobs.projectId, schema.projects.id))
-    .leftJoin(schema.models, eq(schema.projects.modelId, schema.models.id))
-    .where(eq(schema.judgmentsJobs.status, 'running'))
+export const judgmentsJobsCheckLLMStatus = async () => {
+  const runningJobConfigs = await getAppDatabaseService().queryJson<{
+    providerKind: string | null
+    modelName: string | null
+    baseURL: string | null
+    providerConfigJson: unknown
+  }>(`
+    SELECT
+      pc.provider_kind AS providerKind,
+      m.remote_model_id AS modelName,
+      pc.base_url AS baseURL,
+      TO_JSON(pc.config_json) AS providerConfigJson
+    FROM app.judgment_job jj
+    LEFT JOIN app.project p ON jj.project_id = p.id
+    LEFT JOIN app.model m ON p.model_id = m.id
+    INNER JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    WHERE jj.status = 'running'
+  `)
   const validConfigs = runningJobConfigs.filter((r) => {
-    return !!r.baseURL
+    return (
+      String(r.providerKind ?? '')
+        .trim()
+        .toLowerCase() === 'sglang'
+      && !!getProviderRuntime({
+        baseURL: r.baseURL,
+        providerConfigJson: r.providerConfigJson,
+        providerKind: r.providerKind,
+      }).baseURL
+    )
   })
   const baseUrlToConfig = validConfigs.reduce((acc, cfg) => {
-    const baseURL = String(cfg.baseURL)
-    const workerUrls = normalizeWorkerUrls(cfg.workerUrls)
+    const runtime = getProviderRuntime({
+      baseURL: cfg.baseURL,
+      providerConfigJson: cfg.providerConfigJson,
+      providerKind: cfg.providerKind,
+    })
+    const baseURL = String(runtime.baseURL)
     const existing = acc.get(baseURL)
-    const mergedWorkers = existing ? mergeWorkerLists(existing.workerUrls, workerUrls) : workerUrls
+    const mergedWorkers = existing ? mergeWorkerLists(existing.workerUrls, runtime.workerUrls) : runtime.workerUrls
     const modelName = existing?.modelName ?? cfg.modelName ?? 'unknown'
     acc.set(baseURL, {modelName, workerUrls: mergedWorkers})
     return acc
@@ -97,8 +136,7 @@ export const judgmentsJobsCheckLLMStatus = async (db: PostgresJsDatabase<typeof 
   if (baseUrlToConfig.size === 0) return
 
   for (const [baseURL, config] of baseUrlToConfig.entries()) {
-    const preferredWorkers = config.workerUrls.length > 0 ? config.workerUrls : fallbackWorkerUrls
-    const targetWorkers = (preferredWorkers.length > 0 ? preferredWorkers : [baseURL])
+    const targetWorkers = (config.workerUrls.length > 0 ? config.workerUrls : [baseURL])
       .map((url) => {
         return url.trim()
       })
@@ -111,7 +149,7 @@ export const judgmentsJobsCheckLLMStatus = async (db: PostgresJsDatabase<typeof 
 
     for (const workerUrl of targetWorkers) {
       const instanceId = workerUrl
-      const prev = await getLatestStatus(db, engine, instanceId, modelName)
+      const prev = await getLatestStatus(engine, instanceId, modelName)
 
       const m = await getSGLangMetrics(workerUrl)
       const promptTokensTotal = m.promptTokensTotal
@@ -126,7 +164,7 @@ export const judgmentsJobsCheckLLMStatus = async (db: PostgresJsDatabase<typeof 
               prefill: Number(prev.promptTokensTotal ?? 0),
               gen: Number(prev.generationTokensTotal ?? 0),
               success: Number(prev.numRequestsTotal ?? 0),
-              ts: new Date(prev.ts),
+              ts: getDateValue(prev.ts) ?? new Date(),
             }
           : undefined,
         {prefill: promptTokensTotal, gen: generationTokensTotal, success: numRequestsTotal, ts: new Date()},
@@ -235,7 +273,105 @@ export const judgmentsJobsCheckLLMStatus = async (db: PostgresJsDatabase<typeof 
         queueTimeSeconds: m.queueTimeSeconds ?? null,
       }
 
-      await db.insert(schema.llmStatus).values(llmStatusData)
+      await getAppDatabaseService().run(`
+        INSERT INTO app.llm_status (
+          id,
+          engine,
+          instance_id,
+          model_name,
+          engine_version,
+          gpu_type,
+          gpu_count,
+          poll_ms,
+          prompt_tokens_total,
+          generation_tokens_total,
+          num_requests_total,
+          cached_tokens_total,
+          num_retractions_count,
+          num_queue_reqs,
+          num_running_reqs,
+          num_grammar_queue_reqs,
+          num_running_reqs_offline_batch,
+          num_prefill_prealloc_queue_reqs,
+          num_prefill_inflight_queue_reqs,
+          num_decode_prealloc_queue_reqs,
+          num_decode_transfer_queue_reqs,
+          gen_throughput,
+          token_usage,
+          utilization,
+          cache_hit_rate,
+          spec_accept_rate,
+          spec_accept_length,
+          is_cuda_graph,
+          swa_token_usage,
+          mamba_usage,
+          pending_prealloc_token_usage,
+          kv_transfer_speed_gb_s,
+          kv_transfer_latency_ms,
+          kv_transfer_bootstrap_ms,
+          kv_transfer_alloc_ms,
+          prefill_tps,
+          gen_tps,
+          rps,
+          target_gen_tps,
+          target_prefill_tps,
+          in_flight,
+          max_in_flight,
+          time_to_first_token_seconds,
+          e2e_request_latency_seconds,
+          inter_token_latency_seconds,
+          per_stage_req_latency_seconds,
+          queue_time_seconds
+        ) VALUES (
+          ${getSqlLiteral(crypto.randomUUID())},
+          ${getSqlLiteral(llmStatusData.engine)},
+          ${getSqlLiteral(llmStatusData.instanceId)},
+          ${getSqlLiteral(llmStatusData.modelName)},
+          ${getSqlLiteral(llmStatusData.engineVersion)},
+          ${getSqlLiteral(llmStatusData.gpuType)},
+          ${getSqlLiteral(llmStatusData.gpuCount)},
+          ${getSqlLiteral(llmStatusData.pollMs)},
+          ${getSqlLiteral(llmStatusData.promptTokensTotal)},
+          ${getSqlLiteral(llmStatusData.generationTokensTotal)},
+          ${getSqlLiteral(llmStatusData.numRequestsTotal)},
+          ${getSqlLiteral(llmStatusData.cachedTokensTotal)},
+          ${getSqlLiteral(llmStatusData.numRetractionsCount)},
+          ${getSqlLiteral(llmStatusData.numQueueReqs)},
+          ${getSqlLiteral(llmStatusData.numRunningReqs)},
+          ${getSqlLiteral(llmStatusData.numGrammarQueueReqs)},
+          ${getSqlLiteral(llmStatusData.numRunningReqsOfflineBatch)},
+          ${getSqlLiteral(llmStatusData.numPrefillPreallocQueueReqs)},
+          ${getSqlLiteral(llmStatusData.numPrefillInflightQueueReqs)},
+          ${getSqlLiteral(llmStatusData.numDecodePreallocQueueReqs)},
+          ${getSqlLiteral(llmStatusData.numDecodeTransferQueueReqs)},
+          ${getSqlLiteral(llmStatusData.genThroughput)},
+          ${getSqlLiteral(llmStatusData.tokenUsage)},
+          ${getSqlLiteral(llmStatusData.utilization)},
+          ${getSqlLiteral(llmStatusData.cacheHitRate)},
+          ${getSqlLiteral(llmStatusData.specAcceptRate)},
+          ${getSqlLiteral(llmStatusData.specAcceptLength)},
+          ${getSqlLiteral(llmStatusData.isCudaGraph)},
+          ${getSqlLiteral(llmStatusData.swaTokenUsage)},
+          ${getSqlLiteral(llmStatusData.mambaUsage)},
+          ${getSqlLiteral(llmStatusData.pendingPreallocTokenUsage)},
+          ${getSqlLiteral(llmStatusData.kvTransferSpeedGbS)},
+          ${getSqlLiteral(llmStatusData.kvTransferLatencyMs)},
+          ${getSqlLiteral(llmStatusData.kvTransferBootstrapMs)},
+          ${getSqlLiteral(llmStatusData.kvTransferAllocMs)},
+          ${getSqlLiteral(llmStatusData.prefillTps)},
+          ${getSqlLiteral(llmStatusData.genTps)},
+          ${getSqlLiteral(llmStatusData.rps)},
+          ${getSqlLiteral(llmStatusData.targetGenTps)},
+          ${getSqlLiteral(llmStatusData.targetPrefillTps)},
+          ${getSqlLiteral(llmStatusData.inFlight)},
+          ${getSqlLiteral(llmStatusData.maxInFlight)},
+          ${getSqlLiteral(llmStatusData.timeToFirstTokenSeconds)},
+          ${getSqlLiteral(llmStatusData.e2eRequestLatencySeconds)},
+          ${getSqlLiteral(llmStatusData.interTokenLatencySeconds)},
+          ${getSqlLiteral(llmStatusData.perStageReqLatencySeconds)},
+          ${getSqlLiteral(llmStatusData.queueTimeSeconds)}
+        )
+      `)
     }
   }
 }

@@ -13,14 +13,26 @@ const EuropePmcAuthor = type({
   'collectiveName?': 'string',
 })
 const EuropePmcAuthorList = type({'author?': EuropePmcAuthor.or(EuropePmcAuthor.array())})
+const EuropePmcFullTextUrl = type({
+  'availability?': 'string',
+  'availabilityCode?': 'string',
+  'documentStyle?': 'string',
+  'site?': 'string',
+  'url?': 'string',
+})
+const EuropePmcFullTextUrlList = type({'fullTextUrl?': EuropePmcFullTextUrl.or(EuropePmcFullTextUrl.array())})
 const EuropePmcItem = type({
   'id?': 'string | number',
   source: 'string',
   'pmid?': 'string | number',
+  'doi?': 'string',
   'title?': 'unknown',
   'authorString?': 'string',
   'authorList?': EuropePmcAuthorList,
   'abstractText?': 'string',
+  'journalTitle?': 'string',
+  'journalInfo?': 'unknown',
+  'fullTextUrlList?': EuropePmcFullTextUrlList,
   'firstPublicationDate?': 'string',
   'pubYear?': 'string | number',
   'pubMonth?': 'string | number',
@@ -135,6 +147,18 @@ const extractTitle = (t: unknown): string => {
   return ''
 }
 
+const normalizeDoi = (value: unknown): string | undefined => {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  const lower = raw.toLowerCase()
+  const prefixes = ['https://doi.org/', 'http://doi.org/', 'https://dx.doi.org/', 'http://dx.doi.org/', 'doi:']
+  const prefix = prefixes.find((candidate) => {
+    return lower.startsWith(candidate)
+  })
+  const normalized = prefix ? raw.slice(prefix.length).trim() : raw
+
+  return normalized === '' ? undefined : normalized
+}
+
 const buildQuery = (from: string, to: string): string => {
   const a = from.replaceAll('/', '-')
   const b = to.replaceAll('/', '-')
@@ -236,6 +260,7 @@ const toDatabaseEntry = (it: typeof EuropePmcItem.infer, importRoute: string) =>
   const createdAt = it.firstPublicationDate
     ? toIsoFromDateString(it.firstPublicationDate)
     : toIsoDate(it.pubYear, it.pubMonth, it.pubDay)
+  const doi = normalizeDoi(it.doi)
   return {
     article_id: `pmid:${pmid}`,
     article_title: extractTitle(it.title),
@@ -244,11 +269,14 @@ const toDatabaseEntry = (it: typeof EuropePmcItem.infer, importRoute: string) =>
     article_created_at: createdAt,
     article_updated_at: createdAt,
     article_version: '1',
+    ...(doi ? {doi} : {}),
     pubmed_id: pmid,
     import_route: importRoute,
     original_data: it,
   }
 }
+
+export const pubmedHarvestToDatabaseEntry = toDatabaseEntry
 
 const harvestPage = async (
   query: string,

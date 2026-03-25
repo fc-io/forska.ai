@@ -43,13 +43,7 @@ export const ArchivedProjectsPage = () => {
         </Show>
 
         <Show when={!projects.isError && (projects.data?.length ?? 0) > 0}>
-          <ProjectsGrid
-            projects={projects.data ?? []}
-            isArchived
-            onUnarchive={() => {
-              void projects.refetch()
-            }}
-          />
+          <ProjectsGrid projects={projects.data ?? []} isArchived />
         </Show>
       </Show>
     </div>

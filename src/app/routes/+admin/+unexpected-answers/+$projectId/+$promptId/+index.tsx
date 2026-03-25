@@ -68,6 +68,7 @@ const AdminUnexpectedAnswersPromptDetail = () => {
         return fetchUnexpectedAnswersForPrompt(projectId, promptId)
       },
       refetchOnWindowFocus: false,
+      staleTime: 5 * 60 * 1000,
     }
   })
 

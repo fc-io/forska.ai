@@ -1,26 +1,17 @@
+import {countArticlesReviewsFromDuckdb, queryArticlesReviewsFromDuckdb} from './duckdbOlap.ts'
 import type {
   ArticlesReviewsCountParams,
   ArticlesReviewsCountResponse,
   ArticlesReviewsParams,
   ArticlesReviewsResponse,
-} from '../clickhouse/articlesReviewsClickHouse.ts'
-import {
-  countArticlesReviewsFromClickHouse,
-  queryArticlesReviewsFromClickHouse,
-} from '../clickhouse/articlesReviewsClickHouse.ts'
-import {getOlapDb} from './olapDb.ts'
-import {rejectDuckdbNotImplemented} from './rejectDuckdbNotImplemented.ts'
+} from './olapTypes.ts'
 
 export const queryArticlesReviewsFromOlap = (params: ArticlesReviewsParams): Promise<ArticlesReviewsResponse> => {
-  return getOlapDb() === 'duckdb'
-    ? rejectDuckdbNotImplemented('queryArticlesReviews')
-    : queryArticlesReviewsFromClickHouse(params)
+  return queryArticlesReviewsFromDuckdb(params)
 }
 
 export const countArticlesReviewsFromOlap = (
   params: ArticlesReviewsCountParams,
 ): Promise<ArticlesReviewsCountResponse> => {
-  return getOlapDb() === 'duckdb'
-    ? rejectDuckdbNotImplemented('countArticlesReviews')
-    : countArticlesReviewsFromClickHouse(params)
+  return countArticlesReviewsFromDuckdb(params)
 }

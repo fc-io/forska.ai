@@ -1,10 +1,9 @@
 import {type as arktype} from 'arktype'
-import {and, eq, inArray} from 'drizzle-orm'
 import type {Context} from 'elysia'
 
-import {judgmentsHuman, projectPrompts, prompts} from '../../../db/schema.ts'
-import {localUserId} from '../../../utils/localUser.ts'
-import {getDatabase} from '../../utils/getDatabase.ts'
+import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
+import {escapeSqlString, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {getDuckdbMartRefreshService} from '../../services/getDuckdbMartRefreshService.ts'
 
 export const humanAssessmentRoutesPostSubmit = async ({
   body,
@@ -13,29 +12,23 @@ export const humanAssessmentRoutesPostSubmit = async ({
   body: {projectId: string; answers: Array<{judgmentHumanId: string; answer: string; comment?: string}>}
   set: Context['set']
 }) => {
-  const db = getDatabase()
-  const sessionUserId = localUserId
-
-  const pending = await db
-    .select({
-      id: judgmentsHuman.id,
-      promptId: judgmentsHuman.promptId,
-      articleId: judgmentsHuman.articleId,
-      type: prompts.type,
-    })
-    .from(judgmentsHuman)
-    .innerJoin(prompts, eq(judgmentsHuman.promptId, prompts.id))
-    .innerJoin(
-      projectPrompts,
-      and(eq(projectPrompts.promptId, prompts.id), eq(projectPrompts.projectId, body.projectId)),
-    )
-    .where(
-      and(
-        eq(judgmentsHuman.projectId, body.projectId),
-        eq(judgmentsHuman.user, sessionUserId),
-        eq(judgmentsHuman.isAnswered, false),
-      ),
-    )
+  const pending = await getAppDatabaseService().queryJson<{
+    id: string
+    promptId: string
+    articleId: string
+    type: string | null
+  }>(`
+    SELECT
+      jh.id AS id,
+      jh.prompt_id AS promptId,
+      jh.article_id AS articleId,
+      p.type AS type
+    FROM app.judgment_human jh
+    INNER JOIN app.prompt p ON jh.prompt_id = p.id
+    INNER JOIN app.project_prompt pp ON pp.prompt_id = p.id AND pp.project_id = '${escapeSqlString(body.projectId)}'
+    WHERE jh.project_id = '${escapeSqlString(body.projectId)}'
+      AND jh.is_answered = FALSE
+  `)
 
   if (pending.length === 0) {
     set.status = 400
@@ -127,42 +120,44 @@ export const humanAssessmentRoutesPostSubmit = async ({
   }
 
   const idsToUpdate = Array.from(submittedIds)
+  const rows = await getAppDatabaseService().queryJson<{id: string}>(`
+    SELECT id
+    FROM app.judgment_human
+    WHERE id IN (${getQuotedStringList(idsToUpdate).join(', ')})
+      AND project_id = '${escapeSqlString(body.projectId)}'
+      AND is_answered = FALSE
+  `)
 
-  await db.transaction(async (tx) => {
-    const rows = await tx
-      .select({id: judgmentsHuman.id})
-      .from(judgmentsHuman)
-      .where(
-        and(
-          inArray(judgmentsHuman.id, idsToUpdate),
-          eq(judgmentsHuman.user, sessionUserId),
-          eq(judgmentsHuman.projectId, body.projectId),
-          eq(judgmentsHuman.isAnswered, false),
-        ),
-      )
+  if (rows.length !== idsToUpdate.length) {
+    throw new Error('One or more submitted answers could not be validated for update')
+  }
 
-    if (rows.length !== idsToUpdate.length) {
-      throw new Error('One or more submitted answers could not be validated for update')
-    }
-
-    for (const id of idsToUpdate) {
+  const updatedAt = new Date()
+  const answerCase = idsToUpdate
+    .map((id) => {
       const payload = byId[id]
       const raw = payload?.answer
       const value = typeof raw === 'string' ? raw : raw == null ? '' : String(raw)
       const preparedAnswer = value.trim() === '' ? null : value
-      const comment = payload?.comment ?? null
-      await tx
-        .update(judgmentsHuman)
-        .set({answer: preparedAnswer, isAnswered: true, comment, updatedAt: new Date()})
-        .where(
-          and(
-            eq(judgmentsHuman.id, id),
-            eq(judgmentsHuman.user, sessionUserId),
-            eq(judgmentsHuman.projectId, body.projectId),
-          ),
-        )
-    }
-  })
+      return `WHEN id = '${escapeSqlString(id)}' THEN ${getSqlLiteral(preparedAnswer)}`
+    })
+    .join(' ')
+  const commentCase = idsToUpdate
+    .map((id) => {
+      return `WHEN id = '${escapeSqlString(id)}' THEN ${getSqlLiteral(byId[id]?.comment ?? null)}`
+    })
+    .join(' ')
+  await getAppDatabaseService().run(`
+    UPDATE app.judgment_human
+    SET answer = CASE ${answerCase} ELSE answer END,
+        comment = CASE ${commentCase} ELSE comment END,
+        is_answered = TRUE,
+        updated_at = ${getSqlLiteral(updatedAt)}
+    WHERE id IN (${getQuotedStringList(idsToUpdate).join(', ')})
+      AND project_id = '${escapeSqlString(body.projectId)}'
+      AND is_answered = FALSE
+  `)
+  await getDuckdbMartRefreshService().queueProjectRefresh(body.projectId, 'humanAssessmentRoutesPostSubmit')
 
   return {data: {updated: idsToUpdate.length}}
 }

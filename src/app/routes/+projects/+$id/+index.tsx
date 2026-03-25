@@ -1,4 +1,4 @@
-import {useQuery} from '@tanstack/solid-query'
+import {useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {format} from 'date-fns'
 import {createSignal, Match, Suspense, Switch} from 'solid-js'
@@ -8,18 +8,39 @@ import {ProjectDetailsInformation} from '../../../../components/main/projectDeta
 import {ProjectDetailsPrompts} from '../../../../components/main/projects/projectDetailsPrompts'
 import {Button} from '../../../../components/ui/button'
 import {archiveProject, fetchProjectWithPrompts} from '../../../../services/projectsService'
+import {getSglangRuntimeModelNotice} from '../../../../utils/getSglangRuntimeModelNotice.ts'
+import {fetchProviderConnections} from '../../+admin/+models/providerConnectionsClient.ts'
+import {useArchivedProjectRedirect, useProjectAccessQuery} from '../projectAccessGuard'
+
 const ProjectDetail = () => {
   const params = Route.useParams()
   const projectId = (params() as {id: string}).id
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [archivingProject, setArchivingProject] = createSignal(false)
+  const projectAccessQuery = useProjectAccessQuery(() => {
+    return projectId
+  })
+
+  useArchivedProjectRedirect(projectAccessQuery)
+
   const projectData = useQuery(() => {
     return {
       queryKey: ['project', projectId, 'with-prompts'],
       queryFn: () => {
         return fetchProjectWithPrompts(projectId)
       },
-      refetchOnWindowFocus: true,
+      enabled: projectAccessQuery.data !== undefined && !projectAccessQuery.data.archived,
+      refetchOnWindowFocus: false,
+      staleTime: 5 * 60 * 1000,
+    }
+  })
+  const providerConnectionsQuery = useQuery(() => {
+    return {
+      queryKey: ['provider-connections', 'project-detail', projectId],
+      queryFn: fetchProviderConnections,
+      staleTime: 60 * 1000,
+      suspense: false,
     }
   })
 
@@ -40,7 +61,7 @@ const ProjectDetail = () => {
 
     setArchivingProject(true)
     try {
-      await archiveProject(projectId)
+      await archiveProject(queryClient, projectId)
       void navigate({to: '/projects'})
     } catch (error) {
       console.error('Failed to archive project:', error)
@@ -86,6 +107,17 @@ const ProjectDetail = () => {
 
       {/* Main Content */}
       <Switch>
+        <Match when={projectAccessQuery.isLoading || projectAccessQuery.data?.archived}>
+          <div class="text-center py-8">Loading project details...</div>
+        </Match>
+        <Match when={projectAccessQuery.isError}>
+          <div class="text-center py-8 text-red-600">
+            Error loading project:{' '}
+            {projectAccessQuery.error instanceof Error
+              ? projectAccessQuery.error.message
+              : String(projectAccessQuery.error)}
+          </div>
+        </Match>
         <Match when={projectData.isLoading}>
           <div class="text-center py-8">Loading project details...</div>
         </Match>
@@ -99,6 +131,25 @@ const ProjectDetail = () => {
           {(data) => {
             const result = data()
             const {project, prompts: rawPrompts, model} = result
+            const providerModel = model?.id
+              ? (providerConnectionsQuery.data?.connections
+                  .flatMap((connection) => {
+                    return connection.models
+                  })
+                  .find((candidate) => {
+                    return candidate.id === model.id
+                  }) ?? null)
+              : null
+            const modelRuntimeNotice = providerModel
+              ? getSglangRuntimeModelNotice({
+                  candidateModelNames: [providerModel.remoteModelId, providerModel.modelName],
+                  getMismatchMessage: (runtimeLabel) => {
+                    return `Active SGLang runtime model: ${runtimeLabel}. Starting a job will be blocked until it matches this project's model.`
+                  },
+                  providerKind: providerModel.provider,
+                  runtime: providerConnectionsQuery.data?.runtime ?? null,
+                })
+              : null
             const importRoutes = Array.isArray((result as {importRoutes?: unknown}).importRoutes)
               ? (result as {importRoutes: string[]}).importRoutes
               : []
@@ -112,8 +163,8 @@ const ProjectDetail = () => {
 
             type RawPrompt = {
               id: string
-              createdAt?: Date
-              updatedAt?: Date
+              createdAt?: Date | null
+              updatedAt?: Date | null
               originalText: string
               transformedText: string | null
               promptHeading: string | null
@@ -166,6 +217,7 @@ const ProjectDetail = () => {
                     importRoutes={importRoutes}
                     importRouteNamesByRoute={importRouteNamesByRoute}
                     model={model}
+                    modelRuntimeNotice={modelRuntimeNotice}
                   />
                 </Suspense>
 

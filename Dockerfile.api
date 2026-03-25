@@ -19,7 +19,6 @@ RUN --mount=type=cache,target=/root/.bun \
 
 # Include project files needed for build
 COPY tsconfig.json ./
-COPY auth-schema.ts ./
 COPY src ./src
 
 ENV NODE_ENV=production

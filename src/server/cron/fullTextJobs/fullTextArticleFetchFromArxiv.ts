@@ -1,7 +1,7 @@
 import {mkdir, writeFile} from 'fs/promises'
 import path from 'path'
 
-import * as schema from '../../../db/schema.ts'
+import type {ArticleRecord} from '../../../db/schemaTypes.ts'
 import {sleep} from '../../../utils/sleep.ts'
 import type {PdfFetchAttemptResult} from './pdfFetchTypes.ts'
 
@@ -54,7 +54,7 @@ const arxivRateLimit = (() => {
 
 export const fullTextArticleFetchFromArxiv = async ({
   arxivId,
-}: Pick<typeof schema.articles.$inferSelect, 'arxivId' | 'originalData'>): Promise<PdfFetchAttemptResult> => {
+}: Pick<ArticleRecord, 'arxivId'>): Promise<PdfFetchAttemptResult> => {
   // Check if arXiv ID is available
   if (!arxivId) {
     return {source: SOURCE_NAME, tried: false, success: false, reason: 'No arXiv ID found in article data'}

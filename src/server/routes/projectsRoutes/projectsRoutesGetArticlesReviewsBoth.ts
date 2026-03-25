@@ -1,21 +1,16 @@
-import {inArray} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {articles} from '../../../db/schema.ts'
 import {queryArticlesReviewsBothFromOlap} from '../../../services/olap/articlesReviewsBothOlap.ts'
-import {getDatabase} from '../../utils/getDatabase.ts'
+import {getAppQueryService} from '../../services/getAppQueryService.ts'
+import {assertProjectIsActive} from './projectAccessGuard.ts'
 
-/**
- * GET articles that have BOTH LLM and human assessments for all project prompts.
- *
- * Uses ClickHouse for LLM judgment queries (fast aggregation)
- * and PostgreSQL for human judgment queries (smaller dataset).
- */
 export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
   '/api/articlesreviewsboth',
   async ({body}) => {
     const page = parseInt(body?.page || '1', 10)
     const limit = parseInt(body?.limit || '100', 10)
+
+    await assertProjectIsActive(body.projectId)
 
     const result = await queryArticlesReviewsBothFromOlap({
       projectId: body.projectId,
@@ -27,28 +22,10 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
       prompts: body.prompts,
     })
 
-    const db = getDatabase()
     const articleIds = result.data.map((a) => {
       return a.id
     })
-    const fullTextRows =
-      articleIds.length > 0
-        ? await db
-            .select({
-              id: articles.id,
-              articleTitle: articles.articleTitle,
-              articleCreatedAt: articles.articleCreatedAt,
-              articleUpdatedAt: articles.articleUpdatedAt,
-              articleId: articles.articleId,
-              url: articles.url,
-              fullTextPDF: articles.fullTextPDF,
-              fullTextFetchedAt: articles.fullTextFetchedAt,
-              fullTextConversionStatus: articles.fullTextConversionStatus,
-              originalData: articles.originalData,
-            })
-            .from(articles)
-            .where(inArray(articles.id, articleIds))
-        : []
+    const fullTextRows = await getAppQueryService().getReviewHydrationRows(articleIds)
     const fullTextById = fullTextRows.reduce(
       (acc, row) => {
         return {...acc, [row.id]: row}
@@ -70,7 +47,7 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
         fullTextPDF: fullText?.fullTextPDF ?? null,
         fullTextFetchedAt: fullText?.fullTextFetchedAt ?? null,
         fullTextConversionStatus: fullText?.fullTextConversionStatus ?? null,
-        originalData: fullText?.originalData ?? null,
+        sourceMetadata: fullText?.sourceMetadata ?? (article as {sourceMetadata?: unknown}).sourceMetadata ?? null,
         judgments: article.judgments.map((j) => {
           return {
             id: j.id,

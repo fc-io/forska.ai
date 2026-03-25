@@ -1,9 +1,7 @@
-import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {createSignal, Show} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient.ts'
-import {fetchSession} from '../../../../services/fetchSession.ts'
 
 type ParsedDateResult = {date: Date | null; normalized: string | null; error: string | null}
 
@@ -26,10 +24,6 @@ const parseDateInput = (value: string): ParsedDateResult => {
 }
 
 const AdminCreateDataSource = () => {
-  const sessionQuery = useQuery(() => {
-    return {queryKey: ['session'], queryFn: fetchSession}
-  })
-
   const navigate = useNavigate()
 
   const [title, setTitle] = createSignal('')
@@ -63,12 +57,6 @@ const AdminCreateDataSource = () => {
       return
     }
 
-    const ownerId = sessionQuery.data?.user?.id
-    if (!ownerId) {
-      setError('You must be signed in to create a data source')
-      return
-    }
-
     setIsSaving(true)
 
     try {
@@ -78,7 +66,6 @@ const AdminCreateDataSource = () => {
         importRoute: importRoute().trim() === '' ? undefined : importRoute(),
         dateFrom: startDateResult.normalized ?? undefined,
         dateTo: endDateResult.normalized ?? undefined,
-        ownerId,
       })
 
       if (response.error || !response.data?.data) {
@@ -108,116 +95,104 @@ const AdminCreateDataSource = () => {
           </Link>
         </div>
 
-        <Show when={sessionQuery.isLoading}>
-          <p class="text-sm text-gray-500">Checking permissions...</p>
-        </Show>
+        <form
+          class="space-y-6"
+          onSubmit={(e) => {
+            return void handleSubmit(e)
+          }}
+        >
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-2">Title</label>
+            <input
+              type="text"
+              value={title()}
+              onInput={(event) => {
+                setTitle(event.currentTarget.value)
+              }}
+              required
+              class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
 
-        <Show when={sessionQuery.isError}>
-          <p class="text-sm text-red-600">
-            Failed to load session: {sessionQuery.error instanceof Error ? sessionQuery.error.message : 'Unknown error'}
-          </p>
-        </Show>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-2">Description</label>
+            <textarea
+              value={description()}
+              onInput={(event) => {
+                setDescription(event.currentTarget.value)
+              }}
+              rows={4}
+              class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
 
-        <Show when={!sessionQuery.isLoading && !sessionQuery.isError}>
-          <form
-            class="space-y-6"
-            onSubmit={(e) => {
-              return void handleSubmit(e)
-            }}
-          >
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">Title</label>
-              <input
-                type="text"
-                value={title()}
-                onInput={(event) => {
-                  setTitle(event.currentTarget.value)
-                }}
-                required
-                class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-2">Import Route</label>
+            <input
+              type="text"
+              value={importRoute()}
+              onInput={(event) => {
+                setImportRoute(event.currentTarget.value)
+              }}
+              placeholder="/api/datasources/import/arxiv or ... or fhir:sample-bulk-fhir-datasets-100-patients (maps to assets/sample-bulk-fhir-datasets-100-patients)"
+              class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+            />
+          </div>
+
+          <div>
+            <p class="block text-sm font-medium mb-2">Date Range</p>
+            <div class="grid grid-cols-2 gap-4">
+              <label class="flex flex-col text-sm font-medium gap-1">
+                <span>Date From</span>
+                <input
+                  type="text"
+                  value={dateFrom()}
+                  onInput={(event) => {
+                    setDateFrom(event.currentTarget.value)
+                  }}
+                  placeholder="YYYY-MM-DD"
+                  class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                />
+              </label>
+              <label class="flex flex-col text-sm font-medium gap-1">
+                <span>Date To</span>
+                <input
+                  type="text"
+                  value={dateTo()}
+                  onInput={(event) => {
+                    setDateTo(event.currentTarget.value)
+                  }}
+                  placeholder="YYYY-MM-DD"
+                  class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                />
+              </label>
             </div>
+          </div>
 
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">Description</label>
-              <textarea
-                value={description()}
-                onInput={(event) => {
-                  setDescription(event.currentTarget.value)
-                }}
-                rows={4}
-                class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
+          <Show when={error()}>
+            <p class="text-sm text-red-600">{error()}</p>
+          </Show>
 
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">Import Route</label>
-              <input
-                type="text"
-                value={importRoute()}
-                onInput={(event) => {
-                  setImportRoute(event.currentTarget.value)
-                }}
-                placeholder="/api/datasources/import/arxiv or ... or fhir:sample-bulk-fhir-datasets-100-patients (maps to assets/sample-bulk-fhir-datasets-100-patients)"
-                class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
-              />
-            </div>
+          <Show when={successMessage()}>
+            <p class="text-sm text-green-600">{successMessage()}</p>
+          </Show>
 
-            <div>
-              <p class="block text-sm font-medium mb-2">Date Range</p>
-              <div class="grid grid-cols-2 gap-4">
-                <label class="flex flex-col text-sm font-medium gap-1">
-                  <span>Date From</span>
-                  <input
-                    type="text"
-                    value={dateFrom()}
-                    onInput={(event) => {
-                      setDateFrom(event.currentTarget.value)
-                    }}
-                    placeholder="YYYY-MM-DD"
-                    class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                  />
-                </label>
-                <label class="flex flex-col text-sm font-medium gap-1">
-                  <span>Date To</span>
-                  <input
-                    type="text"
-                    value={dateTo()}
-                    onInput={(event) => {
-                      setDateTo(event.currentTarget.value)
-                    }}
-                    placeholder="YYYY-MM-DD"
-                    class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                  />
-                </label>
-              </div>
-            </div>
-
-            <Show when={error()}>
-              <p class="text-sm text-red-600">{error()}</p>
-            </Show>
-
-            <Show when={successMessage()}>
-              <p class="text-sm text-green-600">{successMessage()}</p>
-            </Show>
-
-            <div class="flex items-center gap-3">
-              <button
-                type="submit"
-                class="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                disabled={isSaving()}
-              >
-                {isSaving() ? 'Creating...' : 'Create Data Source'}
-              </button>
-              <Link
-                to="/admin/datasources"
-                class="px-4 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
-              >
-                Cancel
-              </Link>
-            </div>
-          </form>
-        </Show>
+          <div class="flex items-center gap-3">
+            <button
+              type="submit"
+              class="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              disabled={isSaving()}
+            >
+              {isSaving() ? 'Creating...' : 'Create Data Source'}
+            </button>
+            <Link
+              to="/admin/datasources"
+              class="px-4 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+              Cancel
+            </Link>
+          </div>
+        </form>
       </div>
     </div>
   )

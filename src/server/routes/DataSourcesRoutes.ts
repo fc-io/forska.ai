@@ -1,11 +1,25 @@
-import {desc, eq, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {user} from '../../../auth-schema'
-import {dataSource, dataSourceAccess} from '../../db/schema.ts'
-import {requireUserAuth} from '../utils/authGuard.ts'
-import {getDatabase} from '../utils/getDatabase.ts'
+import {getAppDatabaseService} from '../services/appDatabaseService.ts'
+import {escapeSqlString, getDateValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
+
+type AppDatabaseService = ReturnType<typeof getAppDatabaseService>
+type AppTx = Parameters<AppDatabaseService['transaction']>[0] extends (runner: infer T) => Promise<unknown> ? T : never
+type AppQueryRunner = Pick<AppTx, 'queryJson'>
+type DataSourceRow = {
+  id: string
+  title: string
+  description: string | null
+  importRoute: string | null
+  lastImportAt: unknown
+  itemsAfterLastImport: number | null
+  createdAt: unknown
+  updatedAt: unknown
+  dateFrom: unknown
+  dateTo: unknown
+  archived: boolean
+}
 
 const parseOptionalDate = (value?: string | null) => {
   if (!value) {
@@ -25,128 +39,195 @@ const parseOptionalDate = (value?: string | null) => {
   return parsedDate
 }
 
-const dataSourceListSelection = {
-  id: dataSource.id,
-  title: dataSource.title,
-  description: dataSource.description,
-  createdAt: dataSource.createdAt,
-  updatedAt: dataSource.updatedAt,
-  dateFrom: dataSource.dateFrom,
-  dateTo: dataSource.dateTo,
-  lastImportAt: dataSource.lastImportAt,
-  itemsAfterLastImport: dataSource.itemsAfterLastImport,
-  importRoute: dataSource.importRoute,
-  ownerId: dataSource.ownerId,
-  ownerName: user.name,
-  ownerEmail: user.email,
-  accessCount: sql<number>`COUNT(DISTINCT ${dataSourceAccess.userId})`.as('access_count'),
+const normalizeDataSourceRow = <TRow extends Record<string, unknown>>(row: TRow) => {
+  return {
+    ...row,
+    createdAt: getDateValue(row['createdAt']),
+    updatedAt: getDateValue(row['updatedAt']),
+    dateFrom: getDateValue(row['dateFrom']),
+    dateTo: getDateValue(row['dateTo']),
+    lastImportAt: getDateValue(row['lastImportAt']),
+  }
 }
 
-const dataSourceListGroupBy = [
-  dataSource.id,
-  dataSource.title,
-  dataSource.description,
-  dataSource.createdAt,
-  dataSource.updatedAt,
-  dataSource.dateFrom,
-  dataSource.dateTo,
-  dataSource.lastImportAt,
-  dataSource.itemsAfterLastImport,
-  dataSource.importRoute,
-  dataSource.ownerId,
-  user.name,
-  user.email,
-]
+const getDataSourceRowSql = (dataSourceId: string) => {
+  return `
+    SELECT
+      id,
+      title,
+      description,
+      import_route AS importRoute,
+      last_import_at AS lastImportAt,
+      items_after_last_import AS itemsAfterLastImport,
+      created_at AS createdAt,
+      updated_at AS updatedAt,
+      date_from AS dateFrom,
+      date_to AS dateTo,
+      archived
+    FROM app.data_source
+    WHERE id = '${escapeSqlString(dataSourceId)}'
+    LIMIT 1
+  `
+}
+
+const getDataSourceRow = async (db: AppQueryRunner, dataSourceId: string) => {
+  const [row] = await db.queryJson<DataSourceRow>(getDataSourceRowSql(dataSourceId))
+  return row ?? null
+}
+
+const updateDataSourceTx = async (tx: AppTx, params: {dataSourceId: string; updateParts: string[]}) => {
+  await tx.run(`
+    UPDATE app.data_source
+    SET ${params.updateParts.join(', ')}
+    WHERE id = '${escapeSqlString(params.dataSourceId)}'
+  `)
+
+  return getDataSourceRow(tx, params.dataSourceId)
+}
 
 export const dataSourcesRoutes = new Elysia()
   .use(withErrorHandler())
-  .use(requireUserAuth())
   .get('/api/datasources', async () => {
-    const db = getDatabase()
-
-    const dataSources = await db
-      .select(dataSourceListSelection)
-      .from(dataSource)
-      .leftJoin(user, eq(dataSource.ownerId, user.id))
-      .leftJoin(dataSourceAccess, eq(dataSource.id, dataSourceAccess.dataSourceId))
-      .where(eq(dataSource.archived, false))
-      .groupBy(...dataSourceListGroupBy)
-      .orderBy(desc(dataSource.createdAt))
-
-    return {
-      data: dataSources.map((entry) => {
-        return {...entry, accessCount: entry.accessCount ?? 0}
-      }),
-    }
+    const rows = await getAppDatabaseService().queryJson<{
+      id: string
+      title: string
+      description: string | null
+      createdAt: unknown
+      updatedAt: unknown
+      dateFrom: unknown
+      dateTo: unknown
+      lastImportAt: unknown
+      itemsAfterLastImport: number | null
+      importRoute: string | null
+    }>(`
+      SELECT
+        id,
+        title,
+        description,
+        created_at AS createdAt,
+        updated_at AS updatedAt,
+        date_from AS dateFrom,
+        date_to AS dateTo,
+        last_import_at AS lastImportAt,
+        items_after_last_import AS itemsAfterLastImport,
+        import_route AS importRoute
+      FROM app.data_source
+      WHERE archived = FALSE
+      ORDER BY created_at DESC
+    `)
+    return {data: rows.map(normalizeDataSourceRow)}
   })
   .get('/api/datasources/archived', async () => {
-    const db = getDatabase()
-
-    const dataSources = await db
-      .select(dataSourceListSelection)
-      .from(dataSource)
-      .leftJoin(user, eq(dataSource.ownerId, user.id))
-      .leftJoin(dataSourceAccess, eq(dataSource.id, dataSourceAccess.dataSourceId))
-      .where(eq(dataSource.archived, true))
-      .groupBy(...dataSourceListGroupBy)
-      .orderBy(desc(dataSource.createdAt))
-
-    return {
-      data: dataSources.map((entry) => {
-        return {...entry, accessCount: entry.accessCount ?? 0}
-      }),
-    }
+    const rows = await getAppDatabaseService().queryJson<{
+      id: string
+      title: string
+      description: string | null
+      createdAt: unknown
+      updatedAt: unknown
+      dateFrom: unknown
+      dateTo: unknown
+      lastImportAt: unknown
+      itemsAfterLastImport: number | null
+      importRoute: string | null
+    }>(`
+      SELECT
+        id,
+        title,
+        description,
+        created_at AS createdAt,
+        updated_at AS updatedAt,
+        date_from AS dateFrom,
+        date_to AS dateTo,
+        last_import_at AS lastImportAt,
+        items_after_last_import AS itemsAfterLastImport,
+        import_route AS importRoute
+      FROM app.data_source
+      WHERE archived = TRUE
+      ORDER BY created_at DESC
+    `)
+    return {data: rows.map(normalizeDataSourceRow)}
   })
   .get('/api/datasources/:id', async ({params}) => {
-    const db = getDatabase()
-
-    const [entry] = await db
-      .select({
-        id: dataSource.id,
-        title: dataSource.title,
-        description: dataSource.description,
-        importRoute: dataSource.importRoute,
-        lastImportAt: dataSource.lastImportAt,
-        itemsAfterLastImport: dataSource.itemsAfterLastImport,
-        createdAt: dataSource.createdAt,
-        updatedAt: dataSource.updatedAt,
-        dateFrom: dataSource.dateFrom,
-        dateTo: dataSource.dateTo,
-      })
-      .from(dataSource)
-      .where(eq(dataSource.id, params.id))
-      .limit(1)
+    const [entry] = await getAppDatabaseService().queryJson<{
+      id: string
+      title: string
+      description: string | null
+      importRoute: string | null
+      lastImportAt: unknown
+      itemsAfterLastImport: number | null
+      createdAt: unknown
+      updatedAt: unknown
+      dateFrom: unknown
+      dateTo: unknown
+    }>(`
+      SELECT
+        id,
+        title,
+        description,
+        import_route AS importRoute,
+        last_import_at AS lastImportAt,
+        items_after_last_import AS itemsAfterLastImport,
+        created_at AS createdAt,
+        updated_at AS updatedAt,
+        date_from AS dateFrom,
+        date_to AS dateTo
+      FROM app.data_source
+      WHERE id = '${escapeSqlString(params.id)}'
+      LIMIT 1
+    `)
 
     if (!entry) {
       throw new Error('Data source not found')
     }
 
-    return {data: entry}
+    return {data: normalizeDataSourceRow(entry)}
   })
   .post(
     '/api/datasources',
     async ({body}) => {
-      const db = getDatabase()
-
       const dateFrom = parseOptionalDate(body.dateFrom)
       const dateTo = parseOptionalDate(body.dateTo)
       if (dateFrom && dateTo && dateFrom > dateTo) {
         throw new Error('date_from must be on or before date_to')
       }
 
-      const [created] = await db
-        .insert(dataSource)
-        .values({
-          title: body.title,
-          description: body.description ?? null,
-          importRoute: body.importRoute ?? null,
-          dateFrom,
-          dateTo,
-          ownerId: body.ownerId,
-        })
-        .returning()
+      const [created] = await getAppDatabaseService().queryJson<{
+        id: string
+        title: string
+        description: string | null
+        importRoute: string | null
+        lastImportAt: unknown
+        itemsAfterLastImport: number | null
+        createdAt: unknown
+        updatedAt: unknown
+        dateFrom: unknown
+        dateTo: unknown
+        archived: boolean
+      }>(`
+        INSERT INTO app.data_source (id, title, description, import_route, date_from, date_to)
+        VALUES (
+          '${escapeSqlString(crypto.randomUUID())}',
+          ${getSqlLiteral(body.title)},
+          ${getSqlLiteral(body.description ?? null)},
+          ${getSqlLiteral(body.importRoute ?? null)},
+          ${getSqlLiteral(dateFrom)},
+          ${getSqlLiteral(dateTo)}
+        )
+        RETURNING
+          id,
+          title,
+          description,
+          import_route AS importRoute,
+          last_import_at AS lastImportAt,
+          items_after_last_import AS itemsAfterLastImport,
+          created_at AS createdAt,
+          updated_at AS updatedAt,
+          date_from AS dateFrom,
+          date_to AS dateTo,
+          archived
+      `)
 
-      return {data: created}
+      return {data: created ? normalizeDataSourceRow(created) : null}
     },
     {
       body: t.Object({
@@ -155,36 +236,38 @@ export const dataSourcesRoutes = new Elysia()
         importRoute: t.Optional(t.String()),
         dateFrom: t.Optional(t.String()),
         dateTo: t.Optional(t.String()),
-        ownerId: t.String(),
       }),
     },
   )
   .patch(
     '/api/datasources/:id',
     async ({params, body}) => {
-      const db = getDatabase()
-
-      const updateData: Partial<typeof dataSource.$inferInsert> = {updatedAt: new Date()}
-
-      if (body.title !== undefined) updateData.title = body.title
-      if (body.description !== undefined) updateData.description = body.description
-      if (body.importRoute !== undefined) updateData.importRoute = body.importRoute
-      if (body.archived !== undefined) updateData.archived = body.archived
       const parsedDateFrom = body.dateFrom === undefined ? undefined : parseOptionalDate(body.dateFrom)
       const parsedDateTo = body.dateTo === undefined ? undefined : parseOptionalDate(body.dateTo)
       if (parsedDateFrom && parsedDateTo && parsedDateFrom > parsedDateTo) {
         throw new Error('date_from must be on or before date_to')
       }
-      if (parsedDateFrom !== undefined) updateData.dateFrom = parsedDateFrom
-      if (parsedDateTo !== undefined) updateData.dateTo = parsedDateTo
+      const updateParts = [
+        `updated_at = current_timestamp`,
+        body.title !== undefined ? `title = ${getSqlLiteral(body.title)}` : null,
+        body.description !== undefined ? `description = ${getSqlLiteral(body.description)}` : null,
+        body.importRoute !== undefined ? `import_route = ${getSqlLiteral(body.importRoute)}` : null,
+        body.archived !== undefined ? `archived = ${body.archived ? 'TRUE' : 'FALSE'}` : null,
+        parsedDateFrom !== undefined ? `date_from = ${getSqlLiteral(parsedDateFrom)}` : null,
+        parsedDateTo !== undefined ? `date_to = ${getSqlLiteral(parsedDateTo)}` : null,
+      ].filter((part): part is string => {
+        return part !== null
+      })
 
-      const [updated] = await db.update(dataSource).set(updateData).where(eq(dataSource.id, params.id)).returning()
+      const updated = await getAppDatabaseService().transaction(async (tx) => {
+        return updateDataSourceTx(tx, {dataSourceId: params.id, updateParts})
+      })
 
       if (!updated) {
         throw new Error('Data source not found')
       }
 
-      return {data: updated}
+      return {data: normalizeDataSourceRow(updated)}
     },
     {
       body: t.Object({
@@ -198,13 +281,12 @@ export const dataSourcesRoutes = new Elysia()
     },
   )
   .delete('/api/datasources/:id', async ({params}) => {
-    const db = getDatabase()
-
-    const [archived] = await db
-      .update(dataSource)
-      .set({archived: true, updatedAt: new Date()})
-      .where(eq(dataSource.id, params.id))
-      .returning({id: dataSource.id})
+    const archived = await getAppDatabaseService().transaction(async (tx) => {
+      return updateDataSourceTx(tx, {
+        dataSourceId: params.id,
+        updateParts: ['archived = TRUE', 'updated_at = current_timestamp'],
+      })
+    })
 
     if (!archived) {
       throw new Error('Data source not found')

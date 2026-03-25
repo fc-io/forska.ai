@@ -2138,7 +2138,7 @@ const stripLeadingBucketDateLine = ({text, bucketDate}: {text: string; bucketDat
   const isDateBucket = /^\d{4}-\d{2}-\d{2}$/.test(bucketDate)
   const bucketPattern = isDateBucket ? new RegExp(`^${bucketDate}(?:\\s*[:\\-]\\s*)?$`) : null
   const isBucketLine = bucketPattern ? bucketPattern.test(first) : false
-  const isIsoDateLine = /^\d{4}-\d{2}-\d{2}(?:\s*[:\-]\s*)?$/.test(first)
+  const isIsoDateLine = /^\d{4}-\d{2}-\d{2}(?:\s*[:-]\s*)?$/.test(first)
   const shouldStrip = isBucketLine || isIsoDateLine
 
   return shouldStrip ? rest : text

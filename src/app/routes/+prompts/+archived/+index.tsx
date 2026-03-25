@@ -46,7 +46,7 @@ const updatePromptArchivedState = (
 export const ArchivedPromptsPage = () => {
   const queryClient = useQueryClient()
   const promptsQuery = useQuery(() => {
-    return {queryKey: ['prompts', 'archived'], queryFn: fetchArchivedPrompts}
+    return {queryKey: ['prompts', 'archived'], queryFn: fetchArchivedPrompts, staleTime: 5 * 60 * 1000}
   })
   const [pendingPromptId, setPendingPromptId] = createSignal<string | null>(null)
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null)
@@ -102,7 +102,7 @@ export const ArchivedPromptsPage = () => {
                           </Show>
                         </div>
                         <div class="mt-1 text-xs text-muted-foreground">
-                          Created {formatPromptTimestamp(prompt.createdAt)} • Owner {prompt.ownerId.slice(0, 8)}
+                          Created {formatPromptTimestamp(prompt.createdAt)}
                         </div>
                       </div>
                       <Button

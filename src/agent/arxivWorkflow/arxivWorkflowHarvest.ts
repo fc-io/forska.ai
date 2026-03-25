@@ -226,7 +226,7 @@ const fetchRecords = async (arxivQueryUrl: string): Promise<typeof arxivFeedSche
     // debugger
     return result
   } catch (error) {
-    throw new Error(`Schema validation failed: ${String(error)}`)
+    throw new Error(`Schema validation failed: ${String(error)}`, {cause: error})
   }
 }
 

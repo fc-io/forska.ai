@@ -1,8 +1,6 @@
 import {type} from 'arktype'
-import {inArray, sql} from 'drizzle-orm'
 
-import {articleRouteLink, articles, importRoute as importRouteTable} from '../db/schema.ts'
-import {getDatabase} from '../server/utils/getDatabase.ts'
+import {storeImportedArticles} from '../server/services/articleImportStoreService.ts'
 
 const DatabaseItem = type({
   article_id: 'string',
@@ -12,6 +10,7 @@ const DatabaseItem = type({
   article_updated_at: 'string',
   article_created_at: 'string',
   article_version: 'string',
+  'doi?': 'string',
   pubmed_id: 'string',
   import_route: 'string',
   'original_data?': 'unknown',
@@ -28,131 +27,23 @@ const batchEntries = <T>(records: T[], batchSize: number): T[][] => {
 }
 
 const storeBatch = async (batch: DatabaseEntry[]): Promise<void> => {
-  const db = getDatabase()
-
-  const articlesToUpsert = batch.map((entry) => {
-    return {
-      articleId: entry.article_id,
-      articleTitle: entry.article_title,
-      articleSummary: entry.article_summary,
-      articleAuthors: entry.article_authors,
-      articleUpdatedAt: new Date(entry.article_updated_at),
-      articleCreatedAt: new Date(entry.article_created_at),
-      articleVersion: Number.parseInt(entry.article_version, 10),
-      pubmedId: entry.pubmed_id,
-      originalData: entry.original_data,
-      importRoute: entry.import_route,
-    }
-  })
-
-  const upserted = await db
-    .insert(articles)
-    .values(articlesToUpsert)
-    .onConflictDoUpdate({
-      target: articles.articleId,
-      set: {
-        articleTitle: sql`EXCLUDED.article_title`,
-        articleSummary: sql`EXCLUDED.article_summary`,
-        articleAuthors: sql`EXCLUDED.article_authors`,
-        articleUpdatedAt: sql`EXCLUDED.article_updated_at`,
-        articleVersion: sql`EXCLUDED.article_version`,
-        pubmedId: sql`EXCLUDED.pubmed_id`,
-        originalData: sql`EXCLUDED.original_data`,
-        importRoute: sql`EXCLUDED.import_route`,
-        updatedAt: sql`CURRENT_TIMESTAMP`,
-      },
-    })
-    .returning({id: articles.id, articleId: articles.articleId})
-
-  // Build a map of articleId -> importRoute from batch
-  const articleIdToRoute = new Map(
-    batch.map((e) => {
-      return [e.article_id, e.import_route]
+  await storeImportedArticles(
+    batch.map((entry) => {
+      return {
+        articleId: entry.article_id,
+        articleTitle: entry.article_title,
+        articleSummary: entry.article_summary,
+        articleAuthors: entry.article_authors,
+        articleUpdatedAt: new Date(entry.article_updated_at),
+        articleCreatedAt: new Date(entry.article_created_at),
+        articleVersion: Number.parseInt(entry.article_version, 10),
+        doi: entry.doi,
+        pubmedId: entry.pubmed_id,
+        originalData: entry.original_data,
+        importRoute: entry.import_route,
+      }
     }),
   )
-
-  // Ensure import routes exist, fetch their ids
-  const routeSet = new Set(
-    batch
-      .map((e) => {
-        return e.import_route
-      })
-      .filter((v) => {
-        return Boolean(v && v.trim())
-      }),
-  )
-  const routeList = Array.from(routeSet)
-
-  if (routeList.length === 0 || upserted.length === 0) {
-    return
-  }
-
-  const existingRoutes = await db
-    .select({id: importRouteTable.id, route: importRouteTable.route})
-    .from(importRouteTable)
-    .where(inArray(importRouteTable.route, routeList))
-
-  const existingSet = new Set(
-    existingRoutes.map((r) => {
-      return r.route
-    }),
-  )
-  const missingRoutes = routeList.filter((r) => {
-    return !existingSet.has(r)
-  })
-
-  if (missingRoutes.length > 0) {
-    await db
-      .insert(importRouteTable)
-      .values(
-        missingRoutes.map((route) => {
-          return {route, name: route, active: true}
-        }),
-      )
-      .onConflictDoNothing()
-  }
-
-  const allRoutes = await db
-    .select({id: importRouteTable.id, route: importRouteTable.route})
-    .from(importRouteTable)
-    .where(inArray(importRouteTable.route, routeList))
-
-  const routeMap = new Map(
-    allRoutes.map((r) => {
-      return [r.route, r.id]
-    }),
-  )
-
-  // Resolve DB article ids for linking
-  const articleIds = upserted
-    .map((r) => {
-      return r.articleId
-    })
-    .filter((id): id is string => {
-      return id !== null
-    })
-  const dbArticles =
-    articleIds.length === 0
-      ? []
-      : await db
-          .select({id: articles.id, articleId: articles.articleId})
-          .from(articles)
-          .where(inArray(articles.articleId, articleIds))
-
-  const links = dbArticles
-    .map((a) => {
-      const articleIdValue = a.articleId
-      const route = articleIdValue ? articleIdToRoute.get(articleIdValue) : undefined
-      const routeId = route ? routeMap.get(route) : undefined
-      return routeId ? {articleId: a.id, importRouteId: routeId} : null
-    })
-    .filter((v): v is {articleId: string; importRouteId: string} => {
-      return v !== null
-    })
-
-  if (links.length > 0) {
-    await db.insert(articleRouteLink).values(links).onConflictDoNothing()
-  }
 }
 
 export const pubmedWorkflowStoreEntries = async (entries: DatabaseEntry[]): Promise<void> => {
@@ -160,7 +51,7 @@ export const pubmedWorkflowStoreEntries = async (entries: DatabaseEntry[]): Prom
     try {
       return DatabaseItem.assert(e)
     } catch (err) {
-      throw new Error(`Validation failed for PubMed entry ${i}: ${String(err)}`)
+      throw new Error(`Validation failed for PubMed entry ${i}: ${String(err)}`, {cause: err})
     }
   })
 

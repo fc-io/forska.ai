@@ -1,23 +1,20 @@
-import {and, eq, inArray, isNull, or, sql} from 'drizzle-orm'
 import {Elysia, t} from 'elysia'
 
-import {user} from '../../../../auth-schema.ts'
-import {
-  articles,
-  judgmentAssessments,
-  judgments,
-  judgmentsHuman,
-  models,
-  projectPrompts,
-  projects,
-  prompts,
-  reviews,
-} from '../../../db/schema.ts'
-import {getDatabase} from '../../utils/getDatabase.ts'
+import type {
+  JudgmentAssessmentRecord,
+  JudgmentChunkingStrategy,
+  JudgmentRecord,
+  PromptRecord,
+} from '../../../db/schemaTypes.ts'
+import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
+import {escapeSqlString, getDateValue, getJsonValue, getQuotedStringList} from '../../services/appQueryHelpers.ts'
+import {getAppQueryService} from '../../services/getAppQueryService.ts'
+import {getSystemActor} from '../../utils/getSystemActor.ts'
+import {assertProjectIsActive} from './projectAccessGuard.ts'
 
-type JudgmentWithPromptAndAssessments = typeof judgments.$inferSelect & {
-  prompt: typeof prompts.$inferSelect
-  assessments: Array<typeof judgmentAssessments.$inferSelect>
+type JudgmentWithPromptAndAssessments = JudgmentRecord & {
+  prompt: Pick<PromptRecord, 'originalText' | 'promptHeading'>
+  assessments: Array<JudgmentAssessmentRecord>
   modelName?: string | null
   modelProvider?: string | null
   modelVersion?: string | null
@@ -29,9 +26,9 @@ type PlaceholderJudgment = {
   answeredOriginal: 'not answered'
   confidenceOriginal: null
   explanation: null
-  quotes: (typeof judgments.$inferSelect)['quotes']
-  prompt: Pick<typeof prompts.$inferSelect, 'originalText' | 'promptHeading'>
-  assessments: Array<typeof judgmentAssessments.$inferSelect>
+  quotes: JudgmentRecord['quotes']
+  prompt: Pick<PromptRecord, 'originalText' | 'promptHeading'>
+  assessments: Array<JudgmentAssessmentRecord>
   createdAt: null
   modelName?: string | null
   modelProvider?: string | null
@@ -40,107 +37,340 @@ type PlaceholderJudgment = {
 
 type ReviewJudgment = JudgmentWithPromptAndAssessments | PlaceholderJudgment
 
+type ArticleJudgmentRow = {
+  judgmentId: string
+  judgmentCreatedAt: unknown
+  judgmentUpdatedAt: unknown
+  judgmentDeletedAt: unknown
+  judgmentArticleId: string
+  judgmentModelId: string
+  judgmentPromptId: string
+  judgmentProjectId: string | null
+  judgmentUseTitle: boolean | null
+  judgmentUseAbstract: boolean | null
+  judgmentUseFulltext: boolean | null
+  judgmentUseFulltextNoImages: boolean | null
+  judgmentChunkingStrategy: string | null
+  judgmentIsAnswered: boolean | null
+  judgmentAnsweredOriginal: string | null
+  judgmentAnsweredOriginalAsArray: unknown
+  judgmentConfidenceOriginal: number | null
+  judgmentExplanation: string | null
+  judgmentQuotes: unknown
+  judgmentSnapshotProjectId: string | null
+  judgmentSnapshotProjectModelName: string | null
+  promptOriginalText: string
+  promptHeading: string | null
+  modelName: string | null
+  modelProvider: string | null
+  modelVersion: string | null
+}
+
+type ProjectReviewConfig = {
+  modelId: string | null
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+}
+
+type ProjectReviewDetailJudgmentRow = {
+  judgmentId: string
+  judgmentCreatedAt: unknown
+  judgmentUpdatedAt: unknown
+  judgmentArticleId: string
+  judgmentModelId: string
+  judgmentPromptId: string
+  judgmentProjectId: string | null
+  judgmentUseTitle: boolean
+  judgmentUseAbstract: boolean
+  judgmentUseFulltext: boolean
+  judgmentUseFulltextNoImages: boolean
+  judgmentChunkingStrategy: string | null
+  judgmentIsAnswered: boolean
+  judgmentAnsweredOriginal: string | null
+  judgmentAnsweredOriginalAsArray: unknown
+  judgmentConfidenceOriginal: number | null
+  judgmentExplanation: string | null
+  judgmentQuotes: unknown
+  judgmentSnapshotProjectId: string | null
+  judgmentSnapshotProjectModelName: string | null
+  promptOriginalText: string
+  promptHeading: string | null
+  modelName: string | null
+  modelProvider: string | null
+  modelVersion: string | null
+}
+
+type ProjectPromptRow = {
+  id: string
+  originalText: string
+  promptHeading: string | null
+  order: number | null
+  type: string | null
+  enabled: boolean | null
+  originProjectId: string | null
+}
+
+type ReviewJudgmentDetail = {
+  judgment: JudgmentRecord
+  prompt: Pick<PromptRecord, 'originalText' | 'promptHeading'>
+  modelName: string | null
+  modelProvider: string | null
+  modelVersion: string | null
+}
+
+type AssessmentRow = {
+  id: string
+  judgmentId: string
+  assessmentIsCorrect: boolean | null
+  assessmentComment: string | null
+  createdAt: unknown
+  updatedAt: unknown
+}
+
+const getPromptValue = (row: {promptOriginalText: string; promptHeading: string | null}) => {
+  return {originalText: row.promptOriginalText, promptHeading: row.promptHeading}
+}
+
+const getProjectReviewDetailJudgmentRows = async (params: {
+  projectId: string
+  articleId: string
+}): Promise<ProjectReviewDetailJudgmentRow[]> => {
+  const rows = await getAppDatabaseService().queryJson<ProjectReviewDetailJudgmentRow>(`
+    SELECT
+      j.judgment_id AS judgmentId,
+      jf.created_at AS judgmentCreatedAt,
+      jf.updated_at AS judgmentUpdatedAt,
+      jf.article_id AS judgmentArticleId,
+      jf.model_id AS judgmentModelId,
+      jf.prompt_id AS judgmentPromptId,
+      jf.project_id AS judgmentProjectId,
+      jf.use_title AS judgmentUseTitle,
+      jf.use_abstract AS judgmentUseAbstract,
+      jf.use_fulltext AS judgmentUseFulltext,
+      jf.use_fulltext_no_images AS judgmentUseFulltextNoImages,
+      jf.chunking_strategy AS judgmentChunkingStrategy,
+      jf.is_answered AS judgmentIsAnswered,
+      jf.answered_original AS judgmentAnsweredOriginal,
+      TO_JSON(jf.answered_original_as_array) AS judgmentAnsweredOriginalAsArray,
+      jf.confidence_original AS judgmentConfidenceOriginal,
+      jf.explanation AS judgmentExplanation,
+      TO_JSON(jf.quotes) AS judgmentQuotes,
+      jf.snapshot_project_id AS judgmentSnapshotProjectId,
+      jf.snapshot_project_model_name AS judgmentSnapshotProjectModelName,
+      p.original_text AS promptOriginalText,
+      p.prompt_heading AS promptHeading,
+      COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
+      pc.provider_kind AS modelProvider,
+      m.variant AS modelVersion
+    FROM mart.review_article_judgment_detail j
+    INNER JOIN mart.judgment_fact jf ON jf.judgment_id = j.judgment_id
+    INNER JOIN app.prompt p ON p.id = jf.prompt_id
+    LEFT JOIN app.model m ON m.id = jf.model_id
+    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    WHERE j.project_id = '${escapeSqlString(params.projectId)}'
+      AND j.article_id = '${escapeSqlString(params.articleId)}'
+    ORDER BY j.prompt_order ASC NULLS LAST, j.created_at DESC NULLS LAST, j.judgment_id ASC
+  `)
+
+  return rows
+}
+
+const getArticleJudgmentRows = async (articleId: string): Promise<ArticleJudgmentRow[]> => {
+  const rows = await getAppDatabaseService().queryJson<ArticleJudgmentRow>(`
+    SELECT
+      j.id AS judgmentId,
+      j.created_at AS judgmentCreatedAt,
+      j.updated_at AS judgmentUpdatedAt,
+      j.deleted_at AS judgmentDeletedAt,
+      j.article_id AS judgmentArticleId,
+      j.model_id AS judgmentModelId,
+      j.prompt_id AS judgmentPromptId,
+      j.project_id AS judgmentProjectId,
+      j.use_title AS judgmentUseTitle,
+      j.use_abstract AS judgmentUseAbstract,
+      j.use_fulltext AS judgmentUseFulltext,
+      j.use_fulltext_no_images AS judgmentUseFulltextNoImages,
+      j.chunking_strategy AS judgmentChunkingStrategy,
+      j.is_answered AS judgmentIsAnswered,
+      j.answered_original AS judgmentAnsweredOriginal,
+      TO_JSON(j.answered_original_as_array) AS judgmentAnsweredOriginalAsArray,
+      j.confidence_original AS judgmentConfidenceOriginal,
+      j.explanation AS judgmentExplanation,
+      TO_JSON(j.quotes) AS judgmentQuotes,
+      j.snapshot_project_id AS judgmentSnapshotProjectId,
+      j.snapshot_project_model_name AS judgmentSnapshotProjectModelName,
+      p.original_text AS promptOriginalText,
+      p.prompt_heading AS promptHeading,
+      COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
+      pc.provider_kind AS modelProvider,
+      m.variant AS modelVersion
+    FROM app.judgment j
+    INNER JOIN app.prompt p ON j.prompt_id = p.id
+    LEFT JOIN app.model m ON j.model_id = m.id
+    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    WHERE j.article_id = '${escapeSqlString(articleId)}'
+      AND j.deleted_at IS NULL
+    ORDER BY j.created_at DESC NULLS LAST, j.id ASC
+  `)
+
+  return rows
+}
+
+const getJudgmentValue = (row: ArticleJudgmentRow): JudgmentRecord => {
+  const answeredOriginalAsArray = getJsonValue(row.judgmentAnsweredOriginalAsArray)
+  const quotes = getJsonValue(row.judgmentQuotes)
+  return {
+    id: row.judgmentId,
+    createdAt: getDateValue(row.judgmentCreatedAt) ?? new Date(0),
+    updatedAt: getDateValue(row.judgmentUpdatedAt) ?? new Date(0),
+    deletedAt: getDateValue(row.judgmentDeletedAt),
+    articleId: row.judgmentArticleId,
+    modelId: row.judgmentModelId,
+    promptId: row.judgmentPromptId,
+    projectId: row.judgmentProjectId,
+    useTitle: row.judgmentUseTitle ?? true,
+    useAbstract: row.judgmentUseAbstract ?? true,
+    useFulltext: row.judgmentUseFulltext ?? false,
+    useFulltextNoImages: row.judgmentUseFulltextNoImages ?? false,
+    chunkingStrategy: row.judgmentChunkingStrategy as JudgmentChunkingStrategy,
+    isAnswered: row.judgmentIsAnswered ?? false,
+    answeredOriginal: row.judgmentAnsweredOriginal,
+    answeredOriginalAsArray: Array.isArray(answeredOriginalAsArray)
+      ? answeredOriginalAsArray.filter((value): value is string => {
+          return typeof value === 'string'
+        })
+      : (null as JudgmentRecord['answeredOriginalAsArray']),
+    confidenceOriginal: row.judgmentConfidenceOriginal ?? 50,
+    explanation: row.judgmentExplanation,
+    quotes: Array.isArray(quotes) ? quotes : [],
+    snapshotProjectId: row.judgmentSnapshotProjectId,
+    snapshotProjectModelName: row.judgmentSnapshotProjectModelName,
+  }
+}
+
+const getProjectReviewDetailJudgmentValue = (row: ProjectReviewDetailJudgmentRow): JudgmentRecord => {
+  const answeredOriginalAsArray = getJsonValue(row.judgmentAnsweredOriginalAsArray)
+  const quotes = getJsonValue(row.judgmentQuotes)
+
+  return {
+    id: row.judgmentId,
+    createdAt: getDateValue(row.judgmentCreatedAt) ?? new Date(0),
+    updatedAt: getDateValue(row.judgmentUpdatedAt) ?? new Date(0),
+    deletedAt: null,
+    articleId: row.judgmentArticleId,
+    modelId: row.judgmentModelId,
+    promptId: row.judgmentPromptId,
+    projectId: row.judgmentProjectId,
+    useTitle: row.judgmentUseTitle,
+    useAbstract: row.judgmentUseAbstract,
+    useFulltext: row.judgmentUseFulltext,
+    useFulltextNoImages: row.judgmentUseFulltextNoImages,
+    chunkingStrategy: row.judgmentChunkingStrategy as JudgmentChunkingStrategy,
+    isAnswered: row.judgmentIsAnswered,
+    answeredOriginal: row.judgmentAnsweredOriginal,
+    answeredOriginalAsArray: Array.isArray(answeredOriginalAsArray)
+      ? answeredOriginalAsArray.filter((value): value is string => {
+          return typeof value === 'string'
+        })
+      : null,
+    confidenceOriginal: row.judgmentConfidenceOriginal,
+    explanation: row.judgmentExplanation,
+    quotes: Array.isArray(quotes) ? quotes : [],
+    snapshotProjectId: row.judgmentSnapshotProjectId,
+    snapshotProjectModelName: row.judgmentSnapshotProjectModelName,
+  }
+}
+
+const getMatchesProjectReviewConfig = (params: {row: ArticleJudgmentRow; projectReviewConfig: ProjectReviewConfig}) => {
+  return (
+    (params.projectReviewConfig.modelId === null || params.row.judgmentModelId === params.projectReviewConfig.modelId)
+    && (params.row.judgmentUseTitle ?? true) === params.projectReviewConfig.useTitle
+    && (params.row.judgmentUseAbstract ?? true) === params.projectReviewConfig.useAbstract
+    && (params.row.judgmentUseFulltext ?? false) === params.projectReviewConfig.useFulltext
+    && (params.row.judgmentUseFulltextNoImages ?? false) === params.projectReviewConfig.useFulltextNoImages
+  )
+}
+
+const getAssessmentValue = (row: {
+  id: string
+  judgmentId: string
+  assessmentIsCorrect: boolean | null
+  assessmentComment: string | null
+  createdAt: unknown
+  updatedAt: unknown
+}): JudgmentAssessmentRecord => {
+  return {
+    id: row.id,
+    judgmentId: row.judgmentId,
+    assessmentIsCorrect: row.assessmentIsCorrect ?? false,
+    assessmentComment: row.assessmentComment,
+    createdAt: getDateValue(row.createdAt) ?? new Date(0),
+    updatedAt: getDateValue(row.updatedAt) ?? new Date(0),
+  }
+}
+
 export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
   '/api/projectsreview',
   async ({body}) => {
     try {
-      const db = getDatabase()
       const {projectId, articleId} = body
 
-      // Get the article
-      const [article] = await db.select().from(articles).where(eq(articles.id, articleId)).limit(1)
+      await assertProjectIsActive(projectId)
+
+      const [article] = await getAppQueryService().getFullArticlesByIds([articleId])
 
       if (!article) {
         throw new Error('Article not found')
       }
 
-      // Get the review for this article in this project
-      const [review] = await db
-        .select()
-        .from(reviews)
-        .where(and(eq(reviews.articleId, articleId), eq(reviews.projectId, projectId)))
-        .limit(1)
+      const projectPromptRowsPromise: Promise<ProjectPromptRow[]> = getAppDatabaseService()
+        .queryJson<ProjectPromptRow>(`
+          SELECT
+            p.id AS id,
+            p.original_text AS originalText,
+            p.prompt_heading AS promptHeading,
+            pp.prompt_order AS "order",
+            p.type AS type,
+            pp.enabled AS enabled,
+            pp.origin_project_id AS originProjectId
+          FROM app.project_prompt pp
+          INNER JOIN app.prompt p ON p.id = pp.prompt_id
+          WHERE pp.project_id = '${escapeSqlString(projectId)}'
+          ORDER BY pp.prompt_order ASC NULLS LAST, p.created_at ASC
+        `)
+      const projectReviewConfigPromise: Promise<ProjectReviewConfig | null> =
+        getAppQueryService().getProjectReviewConfig(projectId)
+      const allArticleJudgmentsPromise: Promise<ArticleJudgmentRow[]> = getArticleJudgmentRows(articleId)
+      const projectReviewDetailJudgmentRowsPromise: Promise<ProjectReviewDetailJudgmentRow[]> =
+        getProjectReviewDetailJudgmentRows({projectId, articleId})
+      const [projectPromptRows, projectReviewConfig, allArticleJudgments, projectReviewDetailJudgmentRows]: [
+        ProjectPromptRow[],
+        ProjectReviewConfig | null,
+        ArticleJudgmentRow[],
+        ProjectReviewDetailJudgmentRow[],
+      ] = await Promise.all([
+        projectPromptRowsPromise,
+        projectReviewConfigPromise,
+        allArticleJudgmentsPromise,
+        projectReviewDetailJudgmentRowsPromise,
+      ])
 
-      // Get all prompts for this project (association)
-      const projectPromptRows = await db
-        .select({
-          id: prompts.id,
-          originalText: prompts.originalText,
-          promptHeading: prompts.promptHeading,
-          order: projectPrompts.order,
-          type: prompts.type,
-          enabled: projectPrompts.enabled,
-          originProjectId: projectPrompts.originProjectId,
-        })
-        .from(projectPrompts)
-        .innerJoin(prompts, eq(projectPrompts.promptId, prompts.id))
-        .where(eq(projectPrompts.projectId, projectId))
-        .orderBy(projectPrompts.order)
+      if (!projectReviewConfig) {
+        throw new Error('Project not found')
+      }
 
-      // Get all judgments for this article that belong to prompts from this project
       const promptIds = projectPromptRows.map((p) => {
         return p.id
       })
-      const articleJudgments =
-        promptIds.length > 0
-          ? await db
-              .select({
-                judgment: judgments,
-                prompt: prompts,
-                modelName: models.modelName,
-                modelProvider: models.provider,
-                modelVersion: models.version,
-              })
-              .from(judgments)
-              .innerJoin(prompts, eq(judgments.promptId, prompts.id))
-              .innerJoin(projectPrompts, eq(projectPrompts.promptId, prompts.id))
-              .leftJoin(models, eq(judgments.modelId, models.id))
-              .where(
-                and(
-                  eq(judgments.articleId, articleId),
-                  eq(projectPrompts.projectId, projectId),
-                  eq(projectPrompts.enabled, true), // Only enabled prompts in LLM assessment
-                ),
-              )
-              .orderBy(projectPrompts.order)
-          : []
-
-      // Get judgment assessments for these judgments
-      const judgmentIds = articleJudgments.map((j) => {
-        return j.judgment.id
-      })
-      const assessments =
-        judgmentIds.length > 0
-          ? await db.select().from(judgmentAssessments).where(inArray(judgmentAssessments.judgmentId, judgmentIds))
-          : []
-
-      // Group assessments by judgment ID
-      const assessmentsByJudgment = assessments.reduce<Record<string, Array<typeof judgmentAssessments.$inferSelect>>>(
-        (acc, assessment) => {
-          const judgmentAssessments = acc[assessment.judgmentId] ?? []
-          return {...acc, [assessment.judgmentId]: [...judgmentAssessments, assessment]}
-        },
-        {},
-      )
-
-      // Combine judgments with their assessments and prompts (limited to this project's ENABLED prompts)
-      const judgmentsWithDetails: ReviewJudgment[] = articleJudgments.map(
-        ({judgment, prompt, modelName, modelProvider, modelVersion}) => {
-          const judgmentAssessments = assessmentsByJudgment[judgment.id] ?? []
-          return {...judgment, prompt, assessments: judgmentAssessments, modelName, modelProvider, modelVersion}
-        },
-      )
-
-      // Add placeholders for enabled prompts with no LLM judgment yet
-      // If there are judgments for a prompt, do NOT add a placeholder for that prompt
       const enabledPromptRows = projectPromptRows.filter((p) => {
         return p.enabled === true
       })
-      const presentPromptIds = new Set(
-        articleJudgments.map(({judgment}) => {
-          return judgment.promptId
-        }),
-      )
+      const enabledPromptIds = enabledPromptRows.map((p) => {
+        return p.id
+      })
+      const enabledPromptIdSet = new Set(enabledPromptIds)
       const promptOrderMap = projectPromptRows.reduce(
         (acc, p, idx) => {
           const ord = p.order ?? idx
@@ -148,6 +378,87 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
           return acc
         },
         {} as Record<string, number>,
+      )
+      const appScopedArticleJudgments: ArticleJudgmentRow[] = allArticleJudgments.filter((row) => {
+        return enabledPromptIdSet.has(row.judgmentPromptId) && getMatchesProjectReviewConfig({row, projectReviewConfig})
+      })
+      const projectReviewDetailJudgmentDetails: ReviewJudgmentDetail[] = projectReviewDetailJudgmentRows.map((row) => {
+        return {
+          judgment: getProjectReviewDetailJudgmentValue(row),
+          prompt: getPromptValue(row),
+          modelName: row.modelName,
+          modelProvider: row.modelProvider,
+          modelVersion: row.modelVersion,
+        }
+      })
+      const projectReviewDetailJudgmentIdSet = new Set<string>(
+        projectReviewDetailJudgmentDetails.map((detail) => {
+          return detail.judgment.id
+        }),
+      )
+      const fallbackAppJudgmentDetails: ReviewJudgmentDetail[] = appScopedArticleJudgments
+        .filter((row) => {
+          return !projectReviewDetailJudgmentIdSet.has(row.judgmentId)
+        })
+        .map((row) => {
+          return {
+            judgment: getJudgmentValue(row),
+            prompt: getPromptValue(row),
+            modelName: row.modelName,
+            modelProvider: row.modelProvider,
+            modelVersion: row.modelVersion,
+          }
+        })
+      const articleJudgments: ReviewJudgmentDetail[] = [
+        ...projectReviewDetailJudgmentDetails,
+        ...fallbackAppJudgmentDetails,
+      ]
+
+      const judgmentIds: string[] = articleJudgments.map((j) => {
+        return j.judgment.id
+      })
+      const assessments: AssessmentRow[] =
+        judgmentIds.length > 0
+          ? await getAppDatabaseService().queryJson<AssessmentRow>(`
+              SELECT
+                id,
+                judgment_id AS judgmentId,
+                assessment_is_correct AS assessmentIsCorrect,
+                assessment_comment AS assessmentComment,
+                created_at AS createdAt,
+                updated_at AS updatedAt
+              FROM app.judgment_assessment
+              WHERE judgment_id IN (${getQuotedStringList(judgmentIds).join(', ')})
+            `)
+          : []
+      const normalizedAssessments = assessments.map((assessment) => {
+        return getAssessmentValue(assessment)
+      })
+
+      const assessmentsByJudgment = normalizedAssessments.reduce<Record<string, Array<JudgmentAssessmentRecord>>>(
+        (acc, assessment) => {
+          const judgmentAssessments = acc[assessment.judgmentId] ?? []
+          return {...acc, [assessment.judgmentId]: [...judgmentAssessments, assessment]}
+        },
+        {},
+      )
+
+      const judgmentsWithDetails: ReviewJudgment[] = articleJudgments.map((row) => {
+        const judgmentAssessments = assessmentsByJudgment[row.judgment.id] ?? []
+        return {
+          ...row.judgment,
+          prompt: row.prompt,
+          assessments: judgmentAssessments,
+          modelName: row.modelName,
+          modelProvider: row.modelProvider,
+          modelVersion: row.modelVersion,
+        }
+      })
+
+      const presentPromptIds = new Set(
+        articleJudgments.map((judgment) => {
+          return judgment.judgment.promptId
+        }),
       )
 
       const placeholders: PlaceholderJudgment[] = enabledPromptRows
@@ -161,57 +472,38 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
             answeredOriginal: 'not answered',
             confidenceOriginal: null,
             explanation: null,
-            quotes: [] as (typeof judgments.$inferSelect)['quotes'],
+            quotes: [] as JudgmentRecord['quotes'],
             prompt: {originalText: p.originalText, promptHeading: p.promptHeading},
-            assessments: [] as Array<typeof judgmentAssessments.$inferSelect>,
+            assessments: [] as Array<JudgmentAssessmentRecord>,
             createdAt: null,
           }
         })
 
       const judgmentsWithPlaceholders: ReviewJudgment[] = [...judgmentsWithDetails, ...placeholders]
 
-      // Ensure stable ordering by project prompt order
       judgmentsWithPlaceholders.sort((a, b) => {
         const ao = promptOrderMap[a.promptId] ?? Number.MAX_SAFE_INTEGER
         const bo = promptOrderMap[b.promptId] ?? Number.MAX_SAFE_INTEGER
         if (ao !== bo) return ao - bo
-        // Secondary: newer first if timestamps exist
         const at = a.createdAt ? new Date(a.createdAt).getTime() : 0
         const bt = b.createdAt ? new Date(b.createdAt).getTime() : 0
         return bt - at
       })
 
-      // Cross-project:
-      // - Include LLM judgments whose prompts are NOT linked to this project (anti-join)
-      // - Include LLM judgments for imported prompts that are linked but DISABLED in this project
-      //   (imported = origin_project_id IS NULL, enabled = false)
-      const allArticleJudgments = await db
-        .select({
-          judgment: judgments,
-          prompt: prompts,
-          modelName: models.modelName,
-          modelProvider: models.provider,
-          modelVersion: models.version,
+      const judgmentIdSet = new Set(judgmentIds)
+      const allJudgments = allArticleJudgments
+        .filter((row) => {
+          return !judgmentIdSet.has(row.judgmentId)
         })
-        .from(judgments)
-        .innerJoin(prompts, eq(judgments.promptId, prompts.id))
-        .leftJoin(projectPrompts, and(eq(projectPrompts.promptId, prompts.id), eq(projectPrompts.projectId, projectId)))
-        .leftJoin(models, eq(judgments.modelId, models.id))
-        .where(
-          and(
-            eq(judgments.articleId, articleId),
-            or(
-              // Not linked to this project at all
-              isNull(projectPrompts.id),
-              // Linked but disabled, and imported (not created by this project)
-              and(eq(projectPrompts.enabled, false), isNull(projectPrompts.originProjectId)),
-            ),
-          ),
-        )
-
-      const allJudgments = allArticleJudgments.map(({judgment, prompt, modelName, modelProvider, modelVersion}) => {
-        return {...judgment, prompt, modelName, modelProvider, modelVersion}
-      })
+        .map((row) => {
+          return {
+            ...getJudgmentValue(row),
+            prompt: getPromptValue(row),
+            modelName: row.modelName,
+            modelProvider: row.modelProvider,
+            modelVersion: row.modelVersion,
+          }
+        })
 
       // Resolve project names for snapshotProjectId when present
       const snapshotProjectIds = Array.from(
@@ -227,110 +519,88 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       )
       const projectNameRows =
         snapshotProjectIds.length > 0
-          ? await db
-              .select({id: projects.id, name: projects.name})
-              .from(projects)
-              .where(inArray(projects.id, snapshotProjectIds))
+          ? await getAppDatabaseService().queryJson<{id: string; name: string}>(`
+              SELECT id, name
+              FROM app.project
+              WHERE id IN (${getQuotedStringList(snapshotProjectIds).join(', ')})
+            `)
           : []
       const projectsById = projectNameRows.reduce<Record<string, {name: string}>>((acc, row) => {
         acc[row.id] = {name: row.name}
         return acc
       }, {})
 
-      // Fetch human judgments for this article within this project, grouped by user
-      const humanRows = await db
-        .select({
-          userId: judgmentsHuman.user,
-          userName: user.name,
-          judgmentId: judgmentsHuman.id,
-          promptId: judgmentsHuman.promptId,
-          answer: judgmentsHuman.answer,
-          comment: judgmentsHuman.comment,
-          promptOriginalText: prompts.originalText,
-          promptOrder: projectPrompts.order,
-        })
-        .from(judgmentsHuman)
-        .innerJoin(user, eq(user.id, judgmentsHuman.user))
-        .innerJoin(prompts, eq(prompts.id, judgmentsHuman.promptId))
-        .innerJoin(
-          projectPrompts,
-          and(eq(projectPrompts.promptId, prompts.id), eq(projectPrompts.projectId, projectId)),
-        )
-        .where(
-          and(
-            eq(judgmentsHuman.articleId, articleId),
-            eq(judgmentsHuman.projectId, projectId),
-            eq(judgmentsHuman.isAnswered, true),
-          ),
-        )
-        .orderBy(user.name, projectPrompts.order)
+      const systemActor = getSystemActor()
 
-      const humanByUser = humanRows.reduce(
-        (acc, row) => {
-          const current = acc[row.userId] ?? {
-            userId: row.userId,
-            userName: row.userName,
-            judgments: [] as Array<{
-              id: string
-              prompt: {originalText: string}
-              answer: string | null
-              comment: string | null
-            }>,
-          }
-          const next = {
-            id: row.judgmentId,
-            prompt: {originalText: row.promptOriginalText},
-            answer: row.answer,
-            comment: row.comment,
-          }
-          return {...acc, [row.userId]: {...current, judgments: [...current.judgments, next]}}
-        },
-        {} as Record<
-          string,
-          {
-            userId: string
-            userName: string
-            judgments: Array<{
-              id: string
-              prompt: {originalText: string}
-              answer: string | null
-              comment: string | null
-            }>
-          }
-        >,
-      )
+      const humanRows = await getAppDatabaseService().queryJson<{
+        judgmentId: string
+        promptId: string
+        answer: string | null
+        comment: string | null
+        promptOriginalText: string
+        promptOrder: number | null
+      }>(`
+        SELECT
+          jh.id AS judgmentId,
+          jh.prompt_id AS promptId,
+          jh.answer AS answer,
+          jh.comment AS comment,
+          p.original_text AS promptOriginalText,
+          pp.prompt_order AS promptOrder
+        FROM app.judgment_human jh
+        INNER JOIN app.prompt p ON p.id = jh.prompt_id
+        INNER JOIN app.project_prompt pp
+          ON pp.prompt_id = p.id
+         AND pp.project_id = '${escapeSqlString(projectId)}'
+        WHERE jh.article_id = '${escapeSqlString(articleId)}'
+          AND jh.project_id = '${escapeSqlString(projectId)}'
+          AND jh.is_answered = TRUE
+        ORDER BY pp.prompt_order ASC NULLS LAST, jh.updated_at DESC NULLS LAST
+      `)
 
-      const humanAssessmentsByUser = Object.values(humanByUser)
+      const humanAssessmentsByUser =
+        humanRows.length === 0
+          ? []
+          : [
+              {
+                userId: systemActor.id,
+                userName: systemActor.name,
+                judgments: humanRows.map((row) => {
+                  return {
+                    id: row.judgmentId,
+                    prompt: {originalText: row.promptOriginalText},
+                    answer: row.answer,
+                    comment: row.comment,
+                  }
+                }),
+              },
+            ]
 
-      // Cross-project human answers aggregated by prompt for users who answered all prompts for this project
-      // Replicates the logic used in articlesreviewsboth but scoped to a single article
-      // Now includes user display names so UI can show "UserName: Answer"
       let humanAnswersByPrompt: Record<string, Array<{userName: string; answer: string}>> | undefined = undefined
       if (promptIds.length > 0) {
-        type HumanRow = {
+        type HumanRow = {articleId: string; promptId: string; answer: string | null; updatedAt: Date | null}
+        const rows = await getAppDatabaseService().queryJson<{
           articleId: string
-          userId: string
           promptId: string
           answer: string | null
-          updatedAt: Date | null
-          userName: string
-        }
-        const rows: HumanRow[] = await db
-          .select({
-            articleId: judgmentsHuman.articleId,
-            userId: judgmentsHuman.user,
-            promptId: judgmentsHuman.promptId,
-            answer: judgmentsHuman.answer,
-            updatedAt: judgmentsHuman.updatedAt,
-            userName: user.name,
-          })
-          .from(judgmentsHuman)
-          .innerJoin(user, eq(user.id, judgmentsHuman.user))
-          .where(and(eq(judgmentsHuman.articleId, articleId), sql`${judgmentsHuman.answer} IS NOT NULL`))
+          updatedAt: unknown
+        }>(`
+          SELECT
+            article_id AS articleId,
+            prompt_id AS promptId,
+            answer,
+            updated_at AS updatedAt
+          FROM app.judgment_human
+          WHERE article_id = '${escapeSqlString(articleId)}'
+            AND answer IS NOT NULL
+        `)
+        const normalizedRows: HumanRow[] = rows.map((row) => {
+          return {...row, updatedAt: getDateValue(row.updatedAt)}
+        })
 
-        // Deduplicate by latest updatedAt for (articleId, userId, promptId)
-        const latest = rows.reduce((acc, row) => {
-          const key = `${row.articleId}::${row.userId}::${row.promptId}`
+        // Deduplicate by latest updatedAt for (articleId, promptId)
+        const latest = normalizedRows.reduce((acc, row) => {
+          const key = `${row.articleId}::${row.promptId}`
           const existing = acc.get(key)
           if (!existing || (row.updatedAt?.getTime() || 0) > (existing.updatedAt?.getTime() || 0)) {
             acc.set(key, row)
@@ -338,36 +608,20 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
           return acc
         }, new Map<string, HumanRow>())
 
-        // Group rows by user and check coverage
-        const byUser = new Map<string, HumanRow[]>()
-        for (const r of latest.values()) {
-          const arr = byUser.get(r.userId) || []
-          arr.push(r)
-          byUser.set(r.userId, arr)
-        }
+        const latestRows = Array.from(latest.values())
+        const covered = new Set(
+          latestRows.map((row) => {
+            return row.promptId
+          }),
+        )
 
-        const qualifyingUsers: string[] = []
-        for (const [uid, rowsArr] of byUser.entries()) {
-          const covered = new Set(
-            rowsArr.map((r) => {
-              return r.promptId
-            }),
-          )
-          if (covered.size === promptIds.length) {
-            qualifyingUsers.push(uid)
-          }
-        }
-
-        if (qualifyingUsers.length > 0) {
+        if (covered.size === promptIds.length) {
           const map: Record<string, Array<{userName: string; answer: string}>> = {}
           for (const pid of promptIds) map[pid] = []
-          for (const uid of qualifyingUsers) {
-            const rowsArr = byUser.get(uid) || []
-            for (const r of rowsArr) {
-              const arr = map[r.promptId]
-              if (r.answer !== null && r.answer !== undefined && arr) {
-                arr.push({userName: r.userName, answer: r.answer})
-              }
+          for (const row of latestRows) {
+            const arr = map[row.promptId]
+            if (row.answer !== null && row.answer !== undefined && arr) {
+              arr.push({userName: systemActor.name, answer: row.answer})
             }
           }
           humanAnswersByPrompt = map
@@ -376,7 +630,6 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
 
       return {
         article,
-        review,
         prompts: projectPromptRows,
         judgments: judgmentsWithPlaceholders,
         // Cross-project extras
@@ -387,7 +640,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       }
     } catch (error) {
       console.error('Error fetching article review details:', error)
-      throw new Error(error instanceof Error ? error.message : 'Failed to fetch article review details')
+      throw new Error(error instanceof Error ? error.message : 'Failed to fetch article review details', {cause: error})
     }
   },
   {body: t.Object({projectId: t.String(), articleId: t.String()})},

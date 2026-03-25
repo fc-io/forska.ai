@@ -5,17 +5,14 @@ import {fullTextConversionJobsCron} from './cron/fullTextConversionJobs.ts'
 import {fullTextJobsCron} from './cron/fullTextJobs.ts'
 import {judgmentsJobsCron} from './cron/judgmentsJobs.ts'
 import {nvidiaSmiCron} from './cron/nvidiaSmi.ts'
-import {aaModelsRoutes} from './routes/AaModelsRoutes'
-import {adminClickhouseHealthRoutes} from './routes/AdminClickhouseHealthRoutes.ts'
-import {adminImportRouteStatsRoutes} from './routes/AdminImportRouteStatsRoutes.ts'
 import {adminInvestigateRoutes} from './routes/AdminInvestigateRoutes.ts'
-import {adminSyncStatsRoutes} from './routes/AdminSyncStatsRoutes.ts'
+import {apiProxyRoutes} from './routes/ApiProxyRoutes.ts'
 import {articleAdminRoutes} from './routes/ArticleAdminRoutes.ts'
 import {articlesRoutes} from './routes/ArticlesRoutes.ts'
-import {authRoutes} from './routes/AuthRoutes.ts'
 import {comparisonProjectsRoutes} from './routes/ComparisonProjectsRoutes.ts'
 import {dataSourcesImportRoutes} from './routes/DataSourcesImportRoutes.ts'
 import {dataSourcesRoutes} from './routes/DataSourcesRoutes.ts'
+import {duckdbStudioRoutes} from './routes/DuckdbStudioRoutes.ts'
 import {humanAssessmentRoutes} from './routes/HumanAssessmentRoutes.ts'
 import {importRoutes} from './routes/ImportRoutes.ts'
 import {judgmentsJobsRoutes} from './routes/JudgmentsJobsRoutes.ts'
@@ -31,11 +28,30 @@ import {promptsRoutes} from './routes/PromptsRoutes.ts'
 import {subprojectsRoutes} from './routes/SubprojectsRoutes.ts'
 import {tokensRoutes} from './routes/TokensRoutes'
 import {usersRoutes} from './routes/UsersRoutes'
+import {writerConnectionsRoutes} from './routes/WriterConnectionsRoutes.ts'
 import {getCodexCliLoginStatus} from './utils/codexCliAuth.ts'
 import {env} from './utils/env'
+import {getAppServerRuntimeConfig} from './utils/getAppServerRuntimeConfig.ts'
 import {warmCodexAppServer} from './utils/getCodexAppServerClient.ts'
+import {inferenceRuntimeConfig} from './utils/getInferenceRuntimeConfig.ts'
+import {startMartRefreshDrainHeartbeat} from './utils/martRefreshDrainHeartbeat.ts'
+import {shouldServerRoleMountWriterCrons} from './utils/serverRole.ts'
+import {
+  getCurrentServerRole,
+  initializeServerRuntimeRole,
+  shouldCurrentServerRunWriterWork,
+  startServerRuntimeRoleMonitor,
+} from './utils/serverRuntimeRole.ts'
+import {startWriterConnectionHeartbeat} from './utils/writerConnectionHeartbeat.ts'
 
-const allowedOrigins = [`http://localhost:${env.VITE_PORT}`, `http://localhost:${process.env.PROD_SERVER ?? 8080}`]
+const appServerRuntimeConfig = getAppServerRuntimeConfig()
+const allowedOrigins = [`http://localhost:${env.VITE_PORT}`, `http://localhost:${appServerRuntimeConfig.port}`]
+const shouldMountWriterCrons = shouldServerRoleMountWriterCrons(env.SERVER_ROLE)
+const writerCronRoutes = shouldMountWriterCrons
+  ? new Elysia().use(fullTextJobsCron).use(fullTextConversionJobsCron).use(judgmentsJobsCron).use(nvidiaSmiCron)
+  : new Elysia()
+
+await initializeServerRuntimeRole()
 
 const _app = new Elysia()
   .use(
@@ -46,15 +62,10 @@ const _app = new Elysia()
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     }),
   )
-  .use(fullTextJobsCron)
-  .use(fullTextConversionJobsCron)
-  .use(judgmentsJobsCron)
-  .use(nvidiaSmiCron)
-  .use(authRoutes)
-  .use(adminClickhouseHealthRoutes)
+  .use(apiProxyRoutes)
+  .use(writerConnectionsRoutes)
+  .use(writerCronRoutes)
   .use(adminInvestigateRoutes)
-  .use(adminImportRouteStatsRoutes)
-  .use(adminSyncStatsRoutes)
   .use(comparisonProjectsRoutes)
   .use(judgmentsJobsRoutes)
   .use(articlesRoutes)
@@ -70,31 +81,37 @@ const _app = new Elysia()
   .use(importRoutes)
   .use(dataSourcesRoutes)
   .use(dataSourcesImportRoutes)
+  .use(duckdbStudioRoutes)
   .use(tokensRoutes)
   .use(usersRoutes)
   .use(llmStatusRoutes)
   .use(nvidiaSmiRoutes)
   .use(subprojectsRoutes)
-  .use(aaModelsRoutes)
   .listen({port: env.API_SERVER_PORT, idleTimeout: 255})
 
 console.log(
-  `🦊 Elysia is running on :${env.API_SERVER_PORT} (nodes=${env.GPU_NNODES}, gpus/node=${env.GPU_GPUS_PER_NODE}, total_gpus=${env.GPU_TOTAL_GPUS}, shape=${env.GPU_SHAPE}, tp=${env.TP_SIZE}, pp=${env.PP_SIZE}, dp=${env.DP_SIZE}, SGLANG_MAX_RUNNING_REQUESTS=${env.SGLANG_MAX_RUNNING_REQUESTS}, SGLANG_API_MAX_INFLIGHT_REQUESTS=${env.SGLANG_API_MAX_INFLIGHT_REQUESTS}, SGLANG_CONTEXT_LENGTH=${env.SGLANG_CONTEXT_LENGTH}, BUN_CONFIG_MAX_HTTP_REQUESTS=${process.env.BUN_CONFIG_MAX_HTTP_REQUESTS})`,
+  `🦊 Elysia is running on :${env.API_SERVER_PORT} (nodes=${inferenceRuntimeConfig.gpuNnodes}, gpus/node=${inferenceRuntimeConfig.gpuGpusPerNode}, total_gpus=${inferenceRuntimeConfig.gpuTotalGpus}, shape=${inferenceRuntimeConfig.gpuShape ?? 'not set'}, tp=${inferenceRuntimeConfig.tpSize}, pp=${inferenceRuntimeConfig.ppSize}, dp=${inferenceRuntimeConfig.dpSize}, SGLANG_MAX_RUNNING_REQUESTS=${inferenceRuntimeConfig.sglangMaxRunningRequests}, SGLANG_API_MAX_INFLIGHT_REQUESTS=${inferenceRuntimeConfig.sglangApiMaxInflightRequests}, BUN_CONFIG_MAX_HTTP_REQUESTS=${inferenceRuntimeConfig.bunConfigMaxHttpRequests ?? 'not set'})`,
 )
+console.log(
+  `[server] configured_role=${env.SERVER_ROLE} role=${getCurrentServerRole()} duckdb_writer=${shouldCurrentServerRunWriterWork()}`,
+)
+startServerRuntimeRoleMonitor()
+startWriterConnectionHeartbeat()
+startMartRefreshDrainHeartbeat()
 
 void warmCodexAppServer()
 
 void getCodexCliLoginStatus().then((status) => {
   if (!status.ok) {
     console.warn(
-      '[codex] CLI not available. Install @openai/codex and/or set CODEX_BIN. Then visit /settings to connect.',
+      '[codex] CLI not available. Install @openai/codex and/or configure the Codex binary in Settings. Then visit /providers to connect.',
     )
     return
   }
 
   if (!status.loggedIn) {
     console.log(
-      `[codex] Not logged in. Run \`codex login\` or open http://localhost:${env.VITE_PORT}/settings to start device login.`,
+      `[codex] Not logged in. Run \`codex login\` or open http://localhost:${env.VITE_PORT}/providers to start device login.`,
     )
     return
   }

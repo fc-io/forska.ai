@@ -1,8 +1,9 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
 import {formatDate, formatDistanceToNow} from 'date-fns'
-import {createMemo, For, Show, Suspense} from 'solid-js'
+import {createMemo, createSignal, For, Show, Suspense} from 'solid-js'
 
+import {RuntimeModelNotice} from '../../../../components/main/runtimeModelNotice.tsx'
 import {TokenUsageTimeline} from '../../../../components/TokenUsageTimeline'
 import {
   fetchJudgmentsJobs,
@@ -10,6 +11,13 @@ import {
   pauseJudgmentsJob,
   startJudgmentsJob,
 } from '../../../../services/judgmentsJobsService'
+import {fetchProjects} from '../../../../services/projectsService'
+import {getSglangRuntimeModelNotice} from '../../../../utils/getSglangRuntimeModelNotice.ts'
+import {fetchProviderConnections} from '../+models/providerConnectionsClient.ts'
+
+const getActionErrorMessage = (error: unknown, fallback: string) => {
+  return error instanceof Error && error.message.trim().length > 0 ? error.message : fallback
+}
 
 const getStatusColor = (status: string | null) => {
   switch (status) {
@@ -19,8 +27,7 @@ const getStatusColor = (status: string | null) => {
       return 'bg-blue-100 text-blue-800'
     case 'failed':
       return 'bg-red-100 text-red-800'
-    case 'paused_by_user':
-    case 'paused_by_admin':
+    case 'paused':
       return 'bg-yellow-100 text-yellow-800'
     case 'not_started':
       return 'bg-gray-100 text-gray-800'
@@ -36,7 +43,7 @@ const getStatusColor = (status: string | null) => {
 
 const formatStatus = (status: string | null) => {
   if (!status) return 'Unknown'
-  if (status === 'paused_by_admin' || status === 'paused_by_user') return 'Paused'
+  if (status === 'paused') return 'Paused'
   return status
     .split('_')
     .map((word) => {
@@ -66,12 +73,41 @@ const TokenUsageTimelineCardFallback = () => {
 const judgmentsJobsQueryKey = ['judgments-jobs'] as const
 const tokenUsageQueryKey = ['total-token-usage'] as const
 
+const activeJudgmentsJobStatuses = new Set([
+  'not_started',
+  'running',
+  'waiting_on_db_connection',
+  'waiting_on_llm_connection',
+])
+
+const isActiveJudgmentsJobStatus = (status: string | null | undefined) => {
+  return activeJudgmentsJobStatuses.has(status ?? '')
+}
+
+const getJudgmentsJobsRefetchInterval = (jobs: Awaited<ReturnType<typeof fetchJudgmentsJobs>> | undefined) => {
+  return jobs?.some((job) => {
+    return isActiveJudgmentsJobStatus(job.status)
+  })
+    ? 30 * 1000
+    : 60 * 1000
+}
+
 const getJudgmentsJobsQuery = () => {
-  return {queryKey: judgmentsJobsQueryKey, queryFn: fetchJudgmentsJobs, refetchInterval: 30000}
+  return {
+    queryKey: judgmentsJobsQueryKey,
+    queryFn: fetchJudgmentsJobs,
+    refetchInterval: (query: {state: {data?: unknown}}) => {
+      const jobs = Array.isArray(query.state.data)
+        ? (query.state.data as Awaited<ReturnType<typeof fetchJudgmentsJobs>>)
+        : undefined
+      return getJudgmentsJobsRefetchInterval(jobs)
+    },
+    refetchOnWindowFocus: true,
+  }
 }
 
 const getTokenUsageQuery = () => {
-  return {queryKey: tokenUsageQueryKey, queryFn: getTotalTokenUsage, refetchInterval: 30000}
+  return {queryKey: tokenUsageQueryKey, queryFn: getTotalTokenUsage, refetchInterval: 30000, refetchOnWindowFocus: true}
 }
 
 const TokenUsageSummaryFallback = () => {
@@ -193,6 +229,78 @@ const JudgmentsJobsTableFallback = () => {
 
 const JudgmentsJobsTable = () => {
   const jobs = useQuery(getJudgmentsJobsQuery)
+  const [startingJobs, setStartingJobs] = createSignal<Set<string>>(new Set())
+  const [startJobErrors, setStartJobErrors] = createSignal<Record<string, string>>({})
+  const projects = useQuery(() => {
+    return {queryKey: ['projects'], queryFn: fetchProjects, staleTime: 5 * 60 * 1000, suspense: false}
+  })
+  const providerConnections = useQuery(() => {
+    return {
+      queryKey: ['provider-connections', 'admin-jobs'],
+      queryFn: fetchProviderConnections,
+      staleTime: 60 * 1000,
+      suspense: false,
+    }
+  })
+  const projectById = createMemo(() => {
+    return new Map(
+      (projects.data ?? []).map((project) => {
+        return [project.id, project] as const
+      }),
+    )
+  })
+  const providerModelById = createMemo(() => {
+    return new Map(
+      (providerConnections.data?.connections ?? []).flatMap((connection) => {
+        return connection.models.map((model) => {
+          return [model.id, model] as const
+        })
+      }),
+    )
+  })
+  const getJobRuntimeNotice = (job: {projectId: string}) => {
+    const project = projectById().get(job.projectId)
+    const providerModel = project ? providerModelById().get(project.modelId) : null
+
+    return providerModel
+      ? getSglangRuntimeModelNotice({
+          candidateModelNames: [providerModel.remoteModelId, providerModel.modelName],
+          getMismatchMessage: (runtimeLabel) => {
+            return `Active SGLang runtime model: ${runtimeLabel}. Starting this job will be blocked until it matches the project's model.`
+          },
+          providerKind: providerModel.provider,
+          runtime: providerConnections.data?.runtime ?? null,
+        })
+      : null
+  }
+  const clearStartJobError = (jobId: string) => {
+    setStartJobErrors((prev) => {
+      const {[jobId]: _removed, ...rest} = prev
+
+      return rest
+    })
+  }
+  const handleStartJob = async (jobId: string) => {
+    clearStartJobError(jobId)
+    setStartingJobs((prev) => {
+      return new Set([...prev, jobId])
+    })
+
+    try {
+      await startJudgmentsJob(jobId)
+      await jobs.refetch()
+    } catch (error) {
+      setStartJobErrors((prev) => {
+        return {...prev, [jobId]: getActionErrorMessage(error, 'Failed to start job')}
+      })
+    } finally {
+      setStartingJobs((prev) => {
+        const next = new Set(prev)
+        next.delete(jobId)
+        return next
+      })
+    }
+  }
 
   return (
     <div class="space-y-4">
@@ -275,14 +383,17 @@ const JudgmentsJobsTable = () => {
                             {job.id.slice(0, 8)}...
                           </Link>
                         </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                          <Link
-                            to="/admin/jobs/$id"
-                            params={{id: job.id}}
-                            class="text-blue-600 hover:text-blue-800 hover:underline"
-                          >
-                            {job.projectName || 'Unknown Project'}
-                          </Link>
+                        <td class="px-6 py-4 text-sm text-gray-900">
+                          <div class="space-y-2">
+                            <Link
+                              to="/admin/jobs/$id"
+                              params={{id: job.id}}
+                              class="text-blue-600 hover:text-blue-800 hover:underline"
+                            >
+                              {job.projectName || 'Unknown Project'}
+                            </Link>
+                            <RuntimeModelNotice notice={getJobRuntimeNotice(job)} />
+                          </div>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm">
                           <span
@@ -299,34 +410,44 @@ const JudgmentsJobsTable = () => {
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                           {job.updatedAt ? formatDate(new Date(job.updatedAt), 'yyyy-MM-dd HH:mm') : 'N/A'}
                         </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                          <div class="flex gap-2">
-                            <Show when={job.status === 'running'}>
-                              <button
-                                class="text-sm text-yellow-600 hover:text-yellow-800"
-                                onClick={() => {
-                                  void pauseJudgmentsJob(job.id).then(() => {
-                                    return void jobs.refetch()
-                                  })
-                                }}
-                              >
-                                Pause
-                              </button>
-                            </Show>
-                            <Show when={job.status === 'paused_by_admin' || job.status === 'paused_by_user'}>
-                              <button
-                                class="text-sm text-green-600 hover:text-green-800"
-                                onClick={() => {
-                                  void startJudgmentsJob(job.id).then(() => {
-                                    return void jobs.refetch()
-                                  })
-                                }}
-                              >
-                                Start
-                              </button>
-                            </Show>
-                            <Show when={job.status === 'failed'}>
-                              <button class="text-sm text-blue-600 hover:text-blue-800">Retry</button>
+                        <td class="px-6 py-4 text-sm text-gray-900">
+                          <div class="flex flex-col gap-2">
+                            <div class="flex gap-2">
+                              <Show when={job.status === 'running'}>
+                                <button
+                                  class="text-sm text-yellow-600 hover:text-yellow-800"
+                                  onClick={() => {
+                                    void pauseJudgmentsJob(job.id).then(() => {
+                                      return void jobs.refetch()
+                                    })
+                                  }}
+                                >
+                                  Pause
+                                </button>
+                              </Show>
+                              <Show when={job.status === 'paused'}>
+                                <button
+                                  class="text-sm text-green-600 hover:text-green-800"
+                                  disabled={startingJobs().has(job.id)}
+                                  onClick={() => {
+                                    return void handleStartJob(job.id)
+                                  }}
+                                >
+                                  {startingJobs().has(job.id) ? 'Starting...' : 'Start'}
+                                </button>
+                              </Show>
+                              <Show when={job.status === 'failed'}>
+                                <button class="text-sm text-blue-600 hover:text-blue-800">Retry</button>
+                              </Show>
+                            </div>
+                            <Show when={startJobErrors()[job.id]}>
+                              {(message) => {
+                                return (
+                                  <div class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                                    {message()}
+                                  </div>
+                                )
+                              }}
                             </Show>
                           </div>
                         </td>
@@ -348,6 +469,12 @@ const AdminJobs = () => {
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
       <div class="flex justify-between items-center mb-6">
         <h1 class="text-2xl font-bold">Judgment Jobs</h1>
+        <Link
+          to="/admin/duckdb-append"
+          class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-100"
+        >
+          DuckDB Append Metrics
+        </Link>
       </div>
 
       <div class="mb-6">
