@@ -2,9 +2,23 @@ import {expect, mock, test} from 'bun:test'
 
 import {filterRunningJobsByRuntimeMatch, type RunningJudgmentJob} from './judgmentsJobsGetRunningJobs.ts'
 
+const getJob = (id: string): RunningJudgmentJob => {
+  return {
+    id,
+    modelId: `${id}-model`,
+    modelName: 'Qwen/Qwen3.5-35B-A3B',
+    modelProvider: 'sglang',
+    projectId: `${id}-project`,
+  }
+}
+
 test('filterRunningJobsByRuntimeMatch filters out jobs with runtime mismatch', async () => {
   const getRuntimeMatch = mock(async ({modelId}: {modelId: string}) => {
-    return {message: modelId === 'model-mismatch' ? 'runtime mismatch' : null, ok: modelId !== 'model-mismatch'}
+    return {
+      message: modelId === 'model-mismatch' ? 'runtime mismatch' : null,
+      ok: modelId !== 'model-mismatch',
+      reason: modelId === 'model-mismatch' ? ('runtime-mismatch' as const) : null,
+    }
   })
   const jobs: RunningJudgmentJob[] = [
     {
@@ -31,4 +45,58 @@ test('filterRunningJobsByRuntimeMatch filters out jobs with runtime mismatch', a
     }),
   ).toEqual(['job-ok'])
   expect(getRuntimeMatch).toHaveBeenCalledTimes(2)
+})
+
+test('filterRunningJobsByRuntimeMatch logs when the runtime is unreachable', async () => {
+  const getRuntimeMatch = mock(async () => {
+    return {
+      message:
+        'Could not reach the configured SGLang runtime at http://127.0.0.1:30000/v1, so Forska could not confirm it serves Qwen/Qwen3.5-35B-A3B. Connection error.',
+      ok: false,
+      reason: 'runtime-unreachable' as const,
+    }
+  })
+  const originalWarn = console.warn
+  const warn = mock((_message: unknown, _details: unknown) => {})
+
+  console.warn = warn as typeof console.warn
+
+  try {
+    const filtered = await filterRunningJobsByRuntimeMatch([getJob('job-unreachable')], getRuntimeMatch)
+
+    expect(filtered).toEqual([])
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0]?.[0]).toBe('[judgments] skipping running job because the SGLang runtime is unreachable')
+    expect(warn.mock.calls[0]?.[1]).toMatchObject({reason: 'runtime-unreachable'})
+  } finally {
+    console.warn = originalWarn
+  }
+})
+
+test('filterRunningJobsByRuntimeMatch logs when the runtime is serving a different model', async () => {
+  const getRuntimeMatch = mock(async () => {
+    return {
+      message:
+        'Configured SGLang runtime at http://127.0.0.1:30000/v1 is serving other-model, but the project expects Qwen/Qwen3.5-35B-A3B.',
+      ok: false,
+      reason: 'runtime-mismatch' as const,
+    }
+  })
+  const originalWarn = console.warn
+  const warn = mock((_message: unknown, _details: unknown) => {})
+
+  console.warn = warn as typeof console.warn
+
+  try {
+    const filtered = await filterRunningJobsByRuntimeMatch([getJob('job-mismatch-log')], getRuntimeMatch)
+
+    expect(filtered).toEqual([])
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0]?.[0]).toBe(
+      '[judgments] skipping running job because the SGLang runtime is serving a different model',
+    )
+    expect(warn.mock.calls[0]?.[1]).toMatchObject({reason: 'runtime-mismatch'})
+  } finally {
+    console.warn = originalWarn
+  }
 })

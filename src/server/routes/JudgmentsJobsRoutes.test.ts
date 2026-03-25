@@ -17,7 +17,7 @@ const providerRuntimeModelGuardModulePath = new URL('../providers/providerRuntim
 const state = {
   assertStoredProviderModelRuntimeMatch: mock(async (_input: {modelId: string}) => {}),
   getStoredProviderModelRuntimeMatch: mock(async (_input: {modelId: string}) => {
-    return {message: null, ok: true}
+    return {message: null, ok: true, reason: null}
   }),
 }
 
@@ -71,7 +71,7 @@ afterAll(async () => {
 afterEach(() => {
   state.assertStoredProviderModelRuntimeMatch.mockImplementation(async (_input: {modelId: string}) => {})
   state.getStoredProviderModelRuntimeMatch.mockImplementation(async (_input: {modelId: string}) => {
-    return {message: null, ok: true}
+    return {message: null, ok: true, reason: null}
   })
 })
 

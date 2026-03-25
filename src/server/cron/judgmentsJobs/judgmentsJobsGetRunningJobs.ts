@@ -4,6 +4,26 @@ import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 
 const runningJobsLogger = createRateLimitedLogger({windowMs: 30_000})
 
+const getRuntimeCheckFailureLogMessage = ({
+  provider,
+  reason,
+}: {
+  provider: string | null
+  reason: Awaited<ReturnType<typeof getStoredProviderModelRuntimeMatch>>['reason']
+}): string => {
+  const runtimeLabel = provider === 'sglang' ? 'SGLang runtime' : 'provider runtime'
+
+  return reason === 'runtime-unreachable'
+    ? `[judgments] skipping running job because the ${runtimeLabel} is unreachable`
+    : reason === 'runtime-mismatch'
+      ? `[judgments] skipping running job because the ${runtimeLabel} is serving a different model`
+      : reason === 'runtime-model-unavailable'
+        ? `[judgments] skipping running job because the ${runtimeLabel} did not report which model it serves`
+        : reason === 'missing-stored-model'
+          ? '[judgments] skipping running job because the project model is missing a remote model id'
+          : `[judgments] skipping running job because the ${runtimeLabel} could not be verified`
+}
+
 export type RunningJudgmentJob = {
   id: string
   modelId: string
@@ -48,8 +68,8 @@ export const filterRunningJobsByRuntimeMatch = async (
     }
 
     runningJobsLogger.warn(
-      `judgments-job-runtime-mismatch:${job.id}`,
-      '[judgments] skipping running job because provider runtime is unavailable or mismatched',
+      `judgments-job-runtime-check-failed:${job.id}`,
+      getRuntimeCheckFailureLogMessage({provider: job.modelProvider, reason: runtimeMatch.reason}),
       {
         jobId: job.id,
         message: runtimeMatch.message,
@@ -57,6 +77,7 @@ export const filterRunningJobsByRuntimeMatch = async (
         modelName: job.modelName,
         provider: job.modelProvider,
         projectId: job.projectId,
+        reason: runtimeMatch.reason,
       },
     )
 

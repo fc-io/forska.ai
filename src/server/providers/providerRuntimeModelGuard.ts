@@ -6,7 +6,18 @@ import {requireProviderRegistryEntry} from './providerRegistry.ts'
 import {discoverOpenAICompatibleRuntimeModel} from './providerRuntimeDiscovery.ts'
 import {type ProviderListedModel, type ProviderModelRecord} from './providerTypes.ts'
 
-type StoredProviderModelRuntimeMatch = {message: string | null; ok: boolean}
+type StoredProviderModelRuntimeMatchReason =
+  | 'missing-stored-model'
+  | 'runtime-mismatch'
+  | 'runtime-model-unavailable'
+  | 'runtime-unreachable'
+  | 'runtime-verification-failed'
+
+type StoredProviderModelRuntimeMatch = {
+  message: string | null
+  ok: boolean
+  reason: StoredProviderModelRuntimeMatchReason | null
+}
 
 const runtimeMatchCacheMs = 10_000
 
@@ -72,15 +83,78 @@ const getModelNamesLabel = (modelNames: string[]): string => {
   return modelNames.join(', ')
 }
 
+const getExpectedModelNamesLabel = (modelNames: string[]): string => {
+  return modelNames.length === 1 ? getModelNamesLabel(modelNames) : `one of ${getModelNamesLabel(modelNames)}`
+}
+
+const getErrorMessage = (error: unknown): string | null => {
+  return getTrimmedValue(error instanceof Error ? error.message : String(error))
+}
+
+const getMessageDetailSuffix = (detail: string | null): string => {
+  return detail ? ` ${detail}` : ''
+}
+
+const hasConnectionErrorMarker = ({
+  errorName,
+  message,
+}: {
+  errorName: string | null
+  message: string | null
+}): boolean => {
+  const normalizedMessage = String(message ?? '').toLowerCase()
+
+  return (
+    normalizedMessage.includes('connection error')
+    || normalizedMessage.includes('connect')
+    || normalizedMessage.includes('econnrefused')
+    || normalizedMessage.includes('econnreset')
+    || normalizedMessage.includes('enotfound')
+    || normalizedMessage.includes('etimedout')
+    || normalizedMessage.includes('timeout')
+    || normalizedMessage.includes('socket')
+    || normalizedMessage.includes('network')
+    || normalizedMessage.includes('fetch failed')
+    || normalizedMessage.includes('bad gateway')
+    || normalizedMessage.includes('service unavailable')
+    || normalizedMessage.includes('gateway timeout')
+    || normalizedMessage.includes('unable to connect')
+    || errorName === 'AbortError'
+    || errorName === 'APIConnectionError'
+    || errorName === 'ConnectionError'
+    || errorName === 'TypeError'
+  )
+}
+
+const isConnectionError = (error: unknown): boolean => {
+  return error instanceof Error
+    ? hasConnectionErrorMarker({errorName: error.name, message: error.message})
+    : hasConnectionErrorMarker({errorName: null, message: String(error)})
+}
+
+const getFailedRuntimeMatch = ({
+  message,
+  reason,
+}: {
+  message: string
+  reason: StoredProviderModelRuntimeMatchReason
+}): StoredProviderModelRuntimeMatch => {
+  return {message, ok: false, reason}
+}
+
+const getSuccessfulRuntimeMatch = (): StoredProviderModelRuntimeMatch => {
+  return {message: null, ok: true, reason: null}
+}
+
 const getMissingStoredModelNamesMessage = (): string => {
-  return 'Selected project model is missing a remote model id'
+  return 'Project model is missing a remote model id.'
 }
 
 const getMissingRuntimeModelNamesMessage = (baseURL: string | null, storedModelNames: string[]): string => {
   const resolvedBaseURL = getTrimmedValue(baseURL)
   const targetLabel = resolvedBaseURL ? ` at ${resolvedBaseURL}` : ''
 
-  return `Could not verify the active SGLang model${targetLabel}. Expected ${getModelNamesLabel(storedModelNames)}.`
+  return `Connected to the configured SGLang runtime${targetLabel}, but it did not report which model it serves. Expected ${getExpectedModelNamesLabel(storedModelNames)}.`
 }
 
 const getRuntimeMismatchMessage = ({
@@ -95,15 +169,27 @@ const getRuntimeMismatchMessage = ({
   const resolvedBaseURL = getTrimmedValue(baseURL)
   const targetLabel = resolvedBaseURL ? ` at ${resolvedBaseURL}` : ''
 
-  return `Project model ${getModelNamesLabel(storedModelNames)} does not match the active SGLang runtime${targetLabel}. Runtime reports ${getModelNamesLabel(runtimeModelNames)}.`
+  return `Configured SGLang runtime${targetLabel} is serving ${getModelNamesLabel(runtimeModelNames)}, but the project expects ${getExpectedModelNamesLabel(storedModelNames)}.`
 }
 
-const getRuntimeVerificationFailureMessage = (baseURL: string | null, error: unknown): string => {
+const getRuntimeUnreachableMessage = (baseURL: string | null, storedModelNames: string[], error: unknown): string => {
   const resolvedBaseURL = getTrimmedValue(baseURL)
   const targetLabel = resolvedBaseURL ? ` at ${resolvedBaseURL}` : ''
-  const message = error instanceof Error ? error.message : String(error)
+  const detail = getErrorMessage(error)
 
-  return `Failed to verify the active SGLang model${targetLabel}: ${message}`
+  return `Could not reach the configured SGLang runtime${targetLabel}, so Forska could not confirm it serves ${getExpectedModelNamesLabel(storedModelNames)}.${getMessageDetailSuffix(detail)}`
+}
+
+const getRuntimeVerificationFailureMessage = (
+  baseURL: string | null,
+  storedModelNames: string[],
+  error: unknown,
+): string => {
+  const resolvedBaseURL = getTrimmedValue(baseURL)
+  const targetLabel = resolvedBaseURL ? ` at ${resolvedBaseURL}` : ''
+  const detail = getErrorMessage(error)
+
+  return `Could not confirm the configured SGLang runtime${targetLabel} serves ${getExpectedModelNamesLabel(storedModelNames)}.${getMessageDetailSuffix(detail)}`
 }
 
 const getStoredProviderRuntimeContext = async (
@@ -133,13 +219,13 @@ const getStoredProviderModelRuntimeMatchUncached = async ({
   }
 
   if (connection.providerKind !== 'sglang') {
-    return {message: null, ok: true}
+    return getSuccessfulRuntimeMatch()
   }
 
   const storedModelNames = getStoredModelNames(model)
 
   if (storedModelNames.length === 0) {
-    return {message: getMissingStoredModelNamesMessage(), ok: false}
+    return getFailedRuntimeMatch({message: getMissingStoredModelNamesMessage(), reason: 'missing-stored-model'})
   }
 
   try {
@@ -155,19 +241,30 @@ const getStoredProviderModelRuntimeMatchUncached = async ({
     const runtimeModelNames = getRuntimeModelNames({listedModels, runtimeMetadata})
 
     return runtimeModelNames.length === 0
-      ? {message: getMissingRuntimeModelNamesMessage(runtimeCredentials.baseURL, storedModelNames), ok: false}
+      ? getFailedRuntimeMatch({
+          message: getMissingRuntimeModelNamesMessage(runtimeCredentials.baseURL, storedModelNames),
+          reason: 'runtime-model-unavailable',
+        })
       : hasRuntimeModelMatch({runtimeModelNames, storedModelNames})
-        ? {message: null, ok: true}
-        : {
+        ? getSuccessfulRuntimeMatch()
+        : getFailedRuntimeMatch({
             message: getRuntimeMismatchMessage({
               baseURL: runtimeCredentials.baseURL,
               runtimeModelNames,
               storedModelNames,
             }),
-            ok: false,
-          }
+            reason: 'runtime-mismatch',
+          })
   } catch (error) {
-    return {message: getRuntimeVerificationFailureMessage(connection.baseURL, error), ok: false}
+    return isConnectionError(error)
+      ? getFailedRuntimeMatch({
+          message: getRuntimeUnreachableMessage(connection.baseURL, storedModelNames, error),
+          reason: 'runtime-unreachable',
+        })
+      : getFailedRuntimeMatch({
+          message: getRuntimeVerificationFailureMessage(connection.baseURL, storedModelNames, error),
+          reason: 'runtime-verification-failed',
+        })
   }
 }
 
@@ -192,6 +289,6 @@ export const assertStoredProviderModelRuntimeMatch = async ({modelId}: {modelId:
   const result = await getStoredProviderModelRuntimeMatch({modelId})
 
   if (!result.ok) {
-    throw new HttpError(400, result.message ?? 'Failed to verify the active SGLang model')
+    throw new HttpError(400, result.message ?? 'Could not confirm the configured SGLang runtime model')
   }
 }
