@@ -6,7 +6,7 @@ import {join} from 'node:path'
 import {expect, test} from 'bun:test'
 import {Effect} from 'effect'
 
-import {acquireDuckdbOwnerLease, type DuckdbOwnerLeaseMetadata} from './duckdbOwnerLease.ts'
+import {acquireDuckdbOwnerLease, isDuckdbOwnerLeaseProcessAlive, type DuckdbOwnerLeaseMetadata} from './duckdbOwnerLease.ts'
 
 const createLeasePaths = () => {
   const tempDirectory = mkdtempSync('/tmp/f1-duckdb-owner-lease-')
@@ -241,6 +241,36 @@ test('writer does not reclaim stale foreign lease without matching machine finge
     expect((acquireLeaseError as Error).message).toContain('DuckDB writer lease is held by')
   } finally {
     rmSync(tempDirectory, {force: true, recursive: true})
+  }
+})
+
+test('writer treats EPERM pid checks as an active process', () => {
+  const originalKill = process.kill
+  const seenCalls: Array<[number, number | undefined]> = []
+
+  process.kill = ((pid: number, signal?: number) => {
+    seenCalls.push([pid, signal])
+    const error = new Error('Operation not permitted') as Error & {code?: string}
+    error.code = 'EPERM'
+    throw error
+  }) as typeof process.kill
+
+  try {
+    const isAlive = isDuckdbOwnerLeaseProcessAlive({
+      acquiredAt: '2026-03-01T00:00:00.000Z',
+      apiServerPort: 3999,
+      databasePath: '/tmp/eprem-test.duckdb',
+      heartbeatAt: '2026-03-01T00:00:00.000Z',
+      hostname: hostname(),
+      leaseId: 'foreign-eperm-lease-id',
+      pid: 999_999,
+      serverRole: 'writer',
+    })
+
+    expect(isAlive).toBe(true)
+    expect(seenCalls).toContainEqual([999_999, 0])
+  } finally {
+    process.kill = originalKill
   }
 })
 

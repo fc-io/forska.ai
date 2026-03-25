@@ -66,6 +66,10 @@ const getRetriedProxyResponse = async (request: Request, currentWriterUrl: strin
   return retriedRequest === null ? null : fetch(retriedRequest)
 }
 
+const getWriterProxyUnavailableResponse = () => {
+  return Response.json({data: null, error: 'Writer proxy target unavailable'}, {status: 502})
+}
+
 const forwardApiRequestToWriter = async (request: Request): Promise<Response | null> => {
   if (!shouldCurrentServerProxyApiToWriter()) {
     return null
@@ -85,7 +89,7 @@ const forwardApiRequestToWriter = async (request: Request): Promise<Response | n
   }
 
   const proxiedRequest = getWriterProxyRequest(request, writerUrl)
-  const retryRequest = request.method === 'GET' || request.method === 'HEAD' ? request : request.clone()
+  const shouldRetryProxyRequest = request.method === 'GET' || request.method === 'HEAD'
 
   if (proxiedRequest === null) {
     return null
@@ -94,7 +98,11 @@ const forwardApiRequestToWriter = async (request: Request): Promise<Response | n
   try {
     return await fetch(proxiedRequest)
   } catch {
-    return getRetriedProxyResponse(retryRequest, writerUrl)
+    if (!shouldRetryProxyRequest) {
+      return getWriterProxyUnavailableResponse()
+    }
+
+    return (await getRetriedProxyResponse(request, writerUrl)) ?? getWriterProxyUnavailableResponse()
   }
 }
 

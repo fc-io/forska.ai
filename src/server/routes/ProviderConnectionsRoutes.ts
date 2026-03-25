@@ -144,36 +144,41 @@ export const providerConnectionsRoutes = new Elysia()
         ? null
         : getResolvedProviderBaseURL({baseURL: getTrimmedValue(body.baseURL), providerKind})
       const label = getProviderConnectionLabel({label: body.label, providerKind})
+      const config = getProviderConnectionConfig({
+        manualWorkerUrls: getSubmittedManualWorkerUrls(body),
+        providerKind,
+        workerUrlMode: getTrimmedValue(body.workerUrlMode),
+      })
       const connection = await createProviderConnection({
         authMode: getProviderConnectionAuthMode({baseURL, providerKind, secretRef: null}),
         baseURL,
-        config: getProviderConnectionConfig({
-          manualWorkerUrls: getSubmittedManualWorkerUrls(body),
-          providerKind,
-          workerUrlMode: getTrimmedValue(body.workerUrlMode),
-        }),
+        config,
         label,
         providerKind,
         secretRef: null,
       })
-      const secretRef = apiKey ? await storeProviderSecret({connectionId: connection.id, secret: apiKey}) : null
-      const savedConnection = secretRef
-        ? await updateProviderConnection({
-            authMode: getProviderConnectionAuthMode({baseURL, providerKind, secretRef}),
-            baseURL,
-            config: getProviderConnectionConfig({
-              manualWorkerUrls: getSubmittedManualWorkerUrls(body),
-              providerKind,
-              workerUrlMode: getTrimmedValue(body.workerUrlMode),
-            }),
-            enabled: connection.enabled,
-            id: connection.id,
-            label,
-            secretRef,
-          })
-        : connection
 
-      return {data: {connection: getPublicProviderConnectionPayload({...savedConnection, models: []})}, error: null}
+      try {
+        const secretRef = apiKey ? await storeProviderSecret({connectionId: connection.id, secret: apiKey}) : null
+        const savedConnection = secretRef
+          ? await updateProviderConnection({
+              authMode: getProviderConnectionAuthMode({baseURL, providerKind, secretRef}),
+              baseURL,
+              config,
+              enabled: connection.enabled,
+              id: connection.id,
+              label,
+              secretRef,
+            })
+          : connection
+
+        return {data: {connection: getPublicProviderConnectionPayload({...savedConnection, models: []})}, error: null}
+      } catch (error) {
+        await deleteProviderConnection(connection.id).catch(() => {
+          return null
+        })
+        throw error
+      }
     },
     {
       body: t.Object({

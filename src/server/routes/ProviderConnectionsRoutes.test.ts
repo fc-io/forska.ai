@@ -253,6 +253,30 @@ test('provider connections route creates a provider connection', async () => {
   expect(state.storeProviderSecret).toHaveBeenCalledTimes(1)
 })
 
+test('provider connections route rolls back the connection if secret storage fails', async () => {
+  state.createProviderConnection.mockClear()
+  state.deleteProviderConnection.mockClear()
+  state.storeProviderSecret.mockImplementationOnce(async () => {
+    throw new Error('Keychain unavailable')
+  })
+
+  const app = await loadRoutes()
+  const response = await app.handle(
+    new Request('http://localhost/api/provider-connections', {
+      body: JSON.stringify({apiKey: 'test-key', label: 'OpenRouter', providerKind: 'openrouter'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const bodyText = await response.text()
+
+  expect(response.status).toBe(500)
+  expect(bodyText).toContain('Keychain unavailable')
+  expect(state.createProviderConnection).toHaveBeenCalledTimes(1)
+  expect(state.deleteProviderConnection).toHaveBeenCalledTimes(1)
+  expect(state.deleteProviderConnection).toHaveBeenCalledWith('connection-1')
+})
+
 test('provider auth begin route returns lifecycle state', async () => {
   state.beginProviderAuth.mockClear()
   const app = await loadRoutes()
