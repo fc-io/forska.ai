@@ -104,10 +104,7 @@ test('duckdb service treats empty interactive json output as an empty row set', 
             await closeDuckdbService()
           `,
         ],
-        {
-          cwd: process.cwd(),
-          env: {...process.env, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer'},
-        },
+        {cwd: process.cwd(), env: {...process.env, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer'}},
       ),
     )
 

@@ -7,10 +7,7 @@ const writerConnectionsModulePath = new URL('../utils/writerConnections.ts', imp
 
 const originalFetch = globalThis.fetch
 
-const state = {
-  shouldProxy: true,
-  writerUrls: ['http://writer-1:34991'],
-}
+const state = {shouldProxy: true, writerUrls: ['http://writer-1:34991']}
 
 const getCurrentServerWriterUrl = mock(async () => {
   if (state.writerUrls.length === 0) {
