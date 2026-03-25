@@ -34,6 +34,7 @@ import {env} from './utils/env'
 import {getAppServerRuntimeConfig} from './utils/getAppServerRuntimeConfig.ts'
 import {warmCodexAppServer} from './utils/getCodexAppServerClient.ts'
 import {inferenceRuntimeConfig} from './utils/getInferenceRuntimeConfig.ts'
+import {startMartRefreshDrainHeartbeat} from './utils/martRefreshDrainHeartbeat.ts'
 import {shouldServerRoleMountWriterCrons} from './utils/serverRole.ts'
 import {
   getCurrentServerRole,
@@ -96,6 +97,7 @@ console.log(
 )
 startServerRuntimeRoleMonitor()
 startWriterConnectionHeartbeat()
+startMartRefreshDrainHeartbeat()
 
 void warmCodexAppServer()
 

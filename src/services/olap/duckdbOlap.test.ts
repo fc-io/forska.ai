@@ -275,6 +275,7 @@ test('queryArticlesReviewsFromDuckdb emits nextCursor on rollup fallback path', 
     getProjectRows('model-1'),
     getScopeRouteRows(),
     [],
+    [{projectId: 'project-1'}],
     [
       {
         id: 'article-1',
@@ -315,8 +316,62 @@ test('queryArticlesReviewsFromDuckdb emits nextCursor on rollup fallback path', 
     }),
   ).toEqual(['article-1'])
   expect(typeof firstPage.nextCursor).toBe('string')
-  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_rollup r')
-  expect(duckdbRunnerMockRef.current.queries[4]).toContain('LIMIT 2')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_rollup r')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('LIMIT 2')
+})
+
+test('queryArticlesReviewsFromDuckdb falls back to app judgments when review rollup rows are missing', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [],
+    [],
+    [
+      {
+        id: 'article-1',
+        articleTitle: 'Article 1',
+        articleCreatedAt: '2024-01-02T00:00:00.000Z',
+        articleUpdatedAt: '2024-01-03T00:00:00.000Z',
+        sourceMetadata: {
+          journalTitle: 'Journal 1',
+          preprintSource: null,
+          preprintHostLabel: null,
+          isPreprint: false,
+          fullTextLinks: [],
+        },
+      },
+      {
+        id: 'article-2',
+        articleTitle: 'Article 2',
+        articleCreatedAt: '2024-01-01T00:00:00.000Z',
+        articleUpdatedAt: '2024-01-02T00:00:00.000Z',
+        sourceMetadata: {
+          journalTitle: 'Journal 2',
+          preprintSource: null,
+          preprintHostLabel: null,
+          isPreprint: false,
+          fullTextLinks: [],
+        },
+      },
+    ],
+    [
+      getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-1'}),
+      getDuckdbJudgmentRow({id: 'judgment-2', articleId: 'article-2', promptId: 'prompt-1'}),
+    ],
+  ])
+
+  const {queryArticlesReviewsFromDuckdb} = await loadDuckdbOlap()
+  const firstPage = await queryArticlesReviewsFromDuckdb({projectId: 'project-1', page: 1, limit: 1})
+
+  expect(
+    firstPage.data.map((row) => {
+      return row.id
+    }),
+  ).toEqual(['article-1'])
+  expect(typeof firstPage.nextCursor).toBe('string')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.judgment j')
+  expect(duckdbRunnerMockRef.current.queries[5]).not.toContain('FROM mart.review_article_rollup r')
 })
 
 test('queryArticlesReviewsFromDuckdb uses candidate/display serving marts when they exist', async () => {
@@ -449,11 +504,30 @@ test('countArticlesReviewsFromDuckdb counts rows when project modelId is null', 
   expect(duckdbRunnerMockRef.current.queries[3]).not.toContain('j.model_id =')
 })
 
+test('countArticlesReviewsFromDuckdb falls back to app judgments when review rollup rows are missing', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [],
+    [],
+    [{totalCount: 2}],
+  ])
+
+  const {countArticlesReviewsFromDuckdb} = await loadDuckdbOlap()
+  const result = await countArticlesReviewsFromDuckdb({projectId: 'project-1', limit: 10})
+
+  expect(result).toEqual({totalCount: 2, totalPages: 1})
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.judgment j')
+  expect(duckdbRunnerMockRef.current.queries[5]).not.toContain('FROM mart.review_article_rollup r')
+})
+
 test('getUnassessedCountFromDuckdb uses a count-only rollup query', async () => {
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [{projectId: 'project-1'}],
     [{totalCount: 3}],
   ])
 
@@ -471,10 +545,69 @@ test('getUnassessedCountFromDuckdb uses a count-only rollup query', async () => 
   })
 
   expect(result).toBe(3)
-  expect(duckdbRunnerMockRef.current.queries).toHaveLength(4)
-  expect(duckdbRunnerMockRef.current.queries[3]).toContain('SELECT COUNT(*) AS totalCount')
-  expect(duckdbRunnerMockRef.current.queries[3]).toContain('FROM mart.review_article_rollup r')
-  expect(duckdbRunnerMockRef.current.queries[3]).not.toContain('TO_JSON(r.llm_judged_prompt_ids)')
+  expect(duckdbRunnerMockRef.current.queries).toHaveLength(5)
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('SELECT COUNT(*) AS totalCount')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_rollup r')
+  expect(duckdbRunnerMockRef.current.queries[4]).not.toContain('TO_JSON(r.llm_judged_prompt_ids)')
+})
+
+test('getUnassessedArticlesFromDuckdb falls back to app judgments when review rollup rows are missing', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [],
+    [getDuckdbScopedArticleRow({id: 'article-1'}), getDuckdbScopedArticleRow({id: 'article-2'})],
+    [getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-1'})],
+  ])
+
+  const {getUnassessedArticlesFromDuckdb} = await loadDuckdbOlap()
+  const result = await getUnassessedArticlesFromDuckdb({
+    projectId: 'project-1',
+    projectModelId: 'model-1',
+    projectDateFrom: null,
+    projectDateTo: null,
+    importRouteIds: ['route-1'],
+    useTitle: true,
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    limit: 10,
+    offset: 0,
+  })
+
+  expect(result.totalCount).toBe(1)
+  expect(
+    result.articles.map((article) => {
+      return article.id
+    }),
+  ).toEqual(['article-2'])
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.article a')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.judgment j')
+})
+
+test('getUnassessedPairsFromDuckdb falls back to app judgments when review rollup rows are missing', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [],
+    [getDuckdbScopedArticleRow({id: 'article-1'})],
+    [],
+  ])
+
+  const {getUnassessedPairsFromDuckdb} = await loadDuckdbOlap()
+  const result = await getUnassessedPairsFromDuckdb({
+    projectId: 'project-1',
+    jobId: 'job-1',
+    numberOfPromptsToGet: 10,
+    cursor: null,
+  })
+
+  expect(result.promptEntries).toEqual([{articleId: 'article-1', promptId: 'prompt-1'}])
+  expect(result.nextCursor?.lastArticleId).toBe('article-1')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.article a')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.judgment j')
 })
 
 test('getDatabaseBasedFiltersFromDuckdb returns values when project modelId is null', async () => {

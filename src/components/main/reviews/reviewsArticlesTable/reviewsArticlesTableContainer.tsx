@@ -1,10 +1,11 @@
 import {useQuery} from '@tanstack/solid-query'
 import type {Accessor, Setter} from 'solid-js'
-import {createEffect, createSignal, Show} from 'solid-js'
+import {createEffect, createMemo, createSignal, Show} from 'solid-js'
 
 import {createArticlesReviewsCountQueryOptions} from '../../projects/projectsArticlesReviewsCountQuery.ts'
 import {createArticlesReviewsQueryOptions} from '../../projects/projectsArticlesReviewsQuery.ts'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
+import {createReviewsWarningsQueryOptions} from '../reviewsWarningsQuery.ts'
 import {type ArticleWithJudgments, ReviewsArticlesTable} from './reviewsArticlesTable.tsx'
 
 const formatThousandSeparatedNumber = (value: number) => {
@@ -112,6 +113,9 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
       enabled: props.initialized() && articlesQuery.isSuccess && !articlesQuery.isFetching,
     }
   })
+  const warningsQuery = useQuery(() => {
+    return createReviewsWarningsQueryOptions(props.projectId)
+  })
 
   // Helper to get count values from either the count query or fall back to data response
   const totalCount = () => {
@@ -121,6 +125,37 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
     return countQuery.isSuccess ? (countQuery.data?.totalPages ?? 0) : null
   }
   const useCursorPagination = true
+  const hasPromptFilters = createMemo(() => {
+    return Object.keys(props.promptFilters()).some((key) => {
+      const value = props.promptFilters()[key]
+      return Array.isArray(value) && value.length > 0
+    })
+  })
+  const emptyState = createMemo(() => {
+    const warningsData = warningsQuery.data
+
+    return warningsData?.indexing.status === 'refreshing' && warningsData.scope.hasAnyArticlesInScope
+      ? {
+          description:
+            'This project has scoped articles, but the review index is still updating. Articles with judgments may appear here soon.',
+          title: 'Review indexing in progress',
+        }
+      : warningsData?.indexing.status === 'stale' && warningsData.scope.hasAnyArticlesInScope
+        ? {
+            description:
+              'This project has scoped articles, but the review index is missing or stale. Results may stay empty until the writer rebuilds the review index.',
+            title: 'Review index is catching up',
+          }
+        : hasPromptFilters()
+          ? {
+              description: 'Try clearing one or more prompt filters or widening the date range.',
+              title: 'No articles found for these filters',
+            }
+          : {
+              description: 'No articles in this project have matching LLM judgments yet.',
+              title: 'No articles found with judgments',
+            }
+  })
 
   const loadedArticles = () => {
     const pageCount = props.currentPage()
@@ -185,10 +220,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
             </h3>
             <p class="text-sm text-gray-600">
               Showing articles that have been judged by at least one prompt in this project
-              {Object.keys(props.promptFilters()).some((k) => {
-                const v = props.promptFilters()[k]
-                return Array.isArray(v) && v.length > 0
-              }) && <span> (with filters applied)</span>}
+              {hasPromptFilters() && <span> (with filters applied)</span>}
             </p>
           </div>
 
@@ -232,12 +264,9 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
           <Show
             when={loadedArticles().length > 0}
             fallback={
-              <div class="p-8 text-center text-gray-500">
-                No articles found with judgments
-                {Object.keys(props.promptFilters()).some((k) => {
-                  const v = props.promptFilters()[k]
-                  return Array.isArray(v) && v.length > 0
-                }) && ' for the selected filters'}
+              <div class="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center">
+                <p class="font-medium text-slate-800">{emptyState().title}</p>
+                <p class="mt-2 text-sm text-slate-600">{emptyState().description}</p>
               </div>
             }
           >

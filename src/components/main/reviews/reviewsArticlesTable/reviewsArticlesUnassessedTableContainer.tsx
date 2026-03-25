@@ -1,9 +1,10 @@
 import {useQuery} from '@tanstack/solid-query'
 import type {Accessor, Setter} from 'solid-js'
-import {createEffect, createSignal, Show, Suspense} from 'solid-js'
+import {createEffect, createMemo, createSignal, Show, Suspense} from 'solid-js'
 
 import {createArticlesUnassessedQueryOptions} from '../../projects/projectsArticlesUnassessedQuery.ts'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
+import {createReviewsWarningsQueryOptions} from '../reviewsWarningsQuery.ts'
 import {ReviewsArticlesTable} from './reviewsArticlesTable.tsx'
 
 const formatThousandSeparatedNumber = (value: number) => {
@@ -43,6 +44,37 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
       props.toDate,
       props.searchTitle,
     )
+  })
+  const warningsQuery = useQuery(() => {
+    return createReviewsWarningsQueryOptions(props.projectId)
+  })
+  const hasFilters = createMemo(() => {
+    return Boolean(props.fromDate().trim() || props.toDate().trim() || (props.searchTitle() || '').trim())
+  })
+  const emptyState = createMemo(() => {
+    const warningsData = warningsQuery.data
+
+    return warningsData?.indexing.status === 'refreshing' && warningsData.scope.hasAnyArticlesInScope
+      ? {
+          description:
+            'This project has scoped articles, but the review index is still updating. The unassessed list may appear empty until indexing finishes.',
+          title: 'Review indexing in progress',
+        }
+      : warningsData?.indexing.status === 'stale' && warningsData.scope.hasAnyArticlesInScope
+        ? {
+            description:
+              'This project has scoped articles, but the review index is missing or stale. Unassessed results may stay empty until the writer rebuilds the review index.',
+            title: 'Review index is catching up',
+          }
+        : hasFilters()
+          ? {
+              description: 'Try widening the date range or clearing the title search.',
+              title: 'No unassessed articles match these filters',
+            }
+          : {
+              description: 'Every scoped article already has the required LLM judgments for this project.',
+              title: 'No unassessed articles found',
+            }
   })
 
   return (
@@ -105,7 +137,12 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
 
                 <Show
                   when={response().data.length > 0}
-                  fallback={<div class="p-8 text-center text-gray-500">No unassessed articles found</div>}
+                  fallback={
+                    <div class="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center">
+                      <p class="font-medium text-slate-800">{emptyState().title}</p>
+                      <p class="mt-2 text-sm text-slate-600">{emptyState().description}</p>
+                    </div>
+                  }
                 >
                   <ReviewsArticlesTable
                     projectId={props.projectId}
