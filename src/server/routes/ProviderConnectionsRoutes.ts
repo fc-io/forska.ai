@@ -217,26 +217,47 @@ export const providerConnectionsRoutes = new Elysia()
         providerKind: existing.providerKind,
         workerUrlMode: getTrimmedValue(body.workerUrlMode) ?? existing.config.workerUrlMode,
       })
-      const clearedSecretRef = body.clearSecret ? null : existing.secretRef
+      const shouldClearExistingSecret = body.clearSecret === true
+      const nextStoredApiKey = getTrimmedValue(body.apiKey)
+      const secretRef = nextStoredApiKey
+        ? await storeProviderSecret({connectionId: existing.id, secret: nextStoredApiKey})
+        : shouldClearExistingSecret
+          ? null
+          : existing.secretRef
 
-      if (body.clearSecret && existing.secretRef) {
-        await deleteProviderSecret(existing.secretRef)
+      try {
+        const updated = await updateProviderConnection({
+          authMode: getProviderConnectionAuthMode({baseURL: nextBaseURL, providerKind: existing.providerKind, secretRef}),
+          baseURL: nextBaseURL,
+          config: nextConfig,
+          enabled: body.enabled ?? existing.enabled,
+          id: existing.id,
+          label: nextLabel,
+          secretRef,
+        })
+
+        if (nextStoredApiKey && existing.secretRef && existing.secretRef !== secretRef) {
+          await deleteProviderSecret(existing.secretRef).catch(() => {
+            return null
+          })
+        }
+
+        if (shouldClearExistingSecret && existing.secretRef && existing.secretRef !== secretRef) {
+          await deleteProviderSecret(existing.secretRef).catch(() => {
+            return null
+          })
+        }
+
+        return {data: {connection: getPublicProviderConnectionPayload(updated)}, error: null}
+      } catch (error) {
+        if (nextStoredApiKey && secretRef) {
+          await deleteProviderSecret(secretRef).catch(() => {
+            return null
+          })
+        }
+
+        throw error
       }
-
-      const secretRef = getTrimmedValue(body.apiKey)
-        ? await storeProviderSecret({connectionId: existing.id, secret: body.apiKey as string})
-        : clearedSecretRef
-      const updated = await updateProviderConnection({
-        authMode: getProviderConnectionAuthMode({baseURL: nextBaseURL, providerKind: existing.providerKind, secretRef}),
-        baseURL: nextBaseURL,
-        config: nextConfig,
-        enabled: body.enabled ?? existing.enabled,
-        id: existing.id,
-        label: nextLabel,
-        secretRef,
-      })
-
-      return {data: {connection: getPublicProviderConnectionPayload(updated)}, error: null}
     },
     {
       body: t.Object({

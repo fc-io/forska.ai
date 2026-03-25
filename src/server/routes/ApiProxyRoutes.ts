@@ -54,16 +54,21 @@ const getWriterProxyRequest = (request: Request, writerUrl: string) => {
 const getRetriedProxyResponse = async (request: Request, currentWriterUrl: string) => {
   const nextWriterUrl = await getCurrentServerWriterUrl()
 
-  if (nextWriterUrl === null) {
+  if (nextWriterUrl === null || nextWriterUrl === currentWriterUrl) {
     return null
   }
 
-  if (nextWriterUrl === currentWriterUrl) {
-    throw new Error('Writer proxy target unavailable after retry')
+  const retriedRequest = getWriterProxyRequest(request, nextWriterUrl)
+
+  if (retriedRequest === null) {
+    return null
   }
 
-  const retriedRequest = getWriterProxyRequest(request, nextWriterUrl)
-  return retriedRequest === null ? null : fetch(retriedRequest)
+  try {
+    return await fetch(retriedRequest)
+  } catch {
+    return null
+  }
 }
 
 const getWriterProxyUnavailableResponse = () => {

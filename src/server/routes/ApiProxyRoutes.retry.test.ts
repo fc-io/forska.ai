@@ -99,3 +99,19 @@ test('api proxy does not retry non-idempotent POST requests after a transport fa
   expect(body.error).toContain('Writer proxy target unavailable')
   expect(fetchMock).toHaveBeenCalledTimes(1)
 })
+
+test('api proxy returns 502 when GET retry resolves to the same writer target', async () => {
+  const app = await loadRoutes()
+  const fetchMock = mock(async (_request: Request | URL | string) => {
+    throw new Error('writer unavailable')
+  })
+  globalThis.fetch = fetchMock as typeof fetch
+  state.writerUrls = ['http://writer-1:34991']
+
+  const response = await app.handle(new Request('http://localhost/api/example', {method: 'GET'}))
+  const body = (await response.json()) as {data: null; error: string}
+
+  expect(response.status).toBe(502)
+  expect(body.error).toContain('Writer proxy target unavailable')
+  expect(fetchMock).toHaveBeenCalledTimes(1)
+})

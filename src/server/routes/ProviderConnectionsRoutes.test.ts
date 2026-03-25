@@ -327,6 +327,52 @@ test('provider connections route disables a provider connection', async () => {
   expect(state.updateProviderConnection).toHaveBeenCalledTimes(1)
 })
 
+test('provider connections route defers deleting the existing secret until update succeeds', async () => {
+  state.deleteProviderSecret.mockClear()
+  state.updateProviderConnection.mockClear()
+  state.updateProviderConnection.mockImplementationOnce(async (_input: unknown) => {
+    throw new Error('Database unavailable')
+  })
+
+  const app = await loadRoutes()
+  const response = await app.handle(
+    new Request('http://localhost/api/provider-connections/connection-1', {
+      body: JSON.stringify({clearSecret: true, label: 'OpenRouter'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const bodyText = await response.text()
+
+  expect(response.status).toBe(500)
+  expect(bodyText).toContain('Database unavailable')
+  expect(state.updateProviderConnection).toHaveBeenCalledTimes(1)
+  expect(state.deleteProviderSecret).not.toHaveBeenCalled()
+})
+
+test('provider connections route removes the replaced secret only after a successful update', async () => {
+  state.deleteProviderSecret.mockClear()
+  state.storeProviderSecret.mockClear()
+  state.updateProviderConnection.mockClear()
+  state.storeProviderSecret.mockImplementationOnce(async () => {
+    return 'keychain:provider-connection:new-secret'
+  })
+
+  const app = await loadRoutes()
+  const response = await app.handle(
+    new Request('http://localhost/api/provider-connections/connection-1', {
+      body: JSON.stringify({apiKey: 'new-secret', label: 'OpenRouter'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+
+  expect(response.status).toBe(200)
+  expect(state.storeProviderSecret).toHaveBeenCalledTimes(1)
+  expect(state.updateProviderConnection).toHaveBeenCalledTimes(1)
+  expect(state.deleteProviderSecret).toHaveBeenCalledWith('keychain:provider-connection:test')
+})
+
 test('provider connections route removes a provider connection', async () => {
   state.deleteProviderConnection.mockClear()
   state.deleteProviderSecret.mockClear()
