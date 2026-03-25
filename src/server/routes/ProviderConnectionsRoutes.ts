@@ -227,7 +227,11 @@ export const providerConnectionsRoutes = new Elysia()
 
       try {
         const updated = await updateProviderConnection({
-          authMode: getProviderConnectionAuthMode({baseURL: nextBaseURL, providerKind: existing.providerKind, secretRef}),
+          authMode: getProviderConnectionAuthMode({
+            baseURL: nextBaseURL,
+            providerKind: existing.providerKind,
+            secretRef,
+          }),
           baseURL: nextBaseURL,
           config: nextConfig,
           enabled: body.enabled ?? existing.enabled,

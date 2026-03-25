@@ -6,7 +6,11 @@ import {join} from 'node:path'
 import {expect, test} from 'bun:test'
 import {Effect} from 'effect'
 
-import {acquireDuckdbOwnerLease, isDuckdbOwnerLeaseProcessAlive, type DuckdbOwnerLeaseMetadata} from './duckdbOwnerLease.ts'
+import {
+  acquireDuckdbOwnerLease,
+  type DuckdbOwnerLeaseMetadata,
+  isDuckdbOwnerLeaseProcessAlive,
+} from './duckdbOwnerLease.ts'
 
 const createLeasePaths = () => {
   const tempDirectory = mkdtempSync('/tmp/f1-duckdb-owner-lease-')
@@ -186,16 +190,15 @@ test('writer reclaims stale macOS local-hostname lease in a reduced PATH environ
           console.log(JSON.stringify(nextLease))
         `,
       ],
-      {
-        cwd: process.cwd(),
-        env: {...process.env, PATH: '/usr/bin:/bin'},
-        stderr: 'pipe',
-        stdout: 'pipe',
-      },
+      {cwd: process.cwd(), env: {...process.env, PATH: '/usr/bin:/bin'}, stderr: 'pipe', stdout: 'pipe'},
     )
 
-    const stdout = Buffer.from(result.stdout ?? []).toString().trim()
-    const stderr = Buffer.from(result.stderr ?? []).toString().trim()
+    const stdout = Buffer.from(result.stdout ?? [])
+      .toString()
+      .trim()
+    const stderr = Buffer.from(result.stderr ?? [])
+      .toString()
+      .trim()
 
     if (result.exitCode !== 0) {
       throw new Error(stderr || stdout || 'Expected reduced-PATH lease reclaim subprocess to succeed')
@@ -245,7 +248,7 @@ test('writer does not reclaim stale foreign lease without matching machine finge
 })
 
 test('writer treats EPERM pid checks as an active process', () => {
-  const originalKill = process.kill
+  const originalKill = process.kill.bind(process)
   const seenCalls: Array<[number, number | undefined]> = []
 
   process.kill = ((pid: number, signal?: number) => {
