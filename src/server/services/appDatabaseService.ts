@@ -7,6 +7,8 @@ import {
   getDuckdbAppendRuntimeMetrics,
   getDuckdbRuntimeConfig,
   runDuckdbAppendJsonQuery,
+  runDuckdbBackgroundJsonQuery,
+  runDuckdbBackgroundStatement,
   runDuckdbJsonQuery,
   runDuckdbMaintenance,
   runDuckdbStatement,
@@ -198,9 +200,15 @@ const appDatabaseService = {
     })
   },
   queryJson: runDuckdbJsonQuery,
+  queryJsonBackground: runDuckdbBackgroundJsonQuery,
   run: async (statement: string) => {
     await withWriterWriteTracking('run', () => {
       return runDuckdbStatement(statement)
+    })
+  },
+  runBackground: async (statement: string) => {
+    await withWriterWriteTracking('runBackground', () => {
+      return runDuckdbBackgroundStatement(statement)
     })
   },
   transaction: async (operation: Parameters<typeof runDuckdbTransaction>[0]) => {

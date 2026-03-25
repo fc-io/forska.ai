@@ -1,5 +1,6 @@
 import {Elysia, t} from 'elysia'
 
+import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {
   getWriterConnectionsOverview,
@@ -22,7 +23,16 @@ export const writerConnectionsRoutes = new Elysia()
     recordWriterConnectionProxy(request.headers, new URL(request.url).pathname)
   })
   .get('/api/writer_connections', async () => {
-    return {data: await getWriterConnectionsOverview()}
+    return {
+      data: {
+        ...(await getWriterConnectionsOverview()),
+        martRefresh: {
+          ...getDuckdbMartRefreshService().getDebugSnapshot(),
+          progress: getDuckdbMartRefreshService().getProgressSnapshot(),
+          throughput: getDuckdbMartRefreshService().getThroughputSnapshot(),
+        },
+      },
+    }
   })
   .post(
     '/api/writer_connections/heartbeat',

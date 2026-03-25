@@ -30,6 +30,7 @@ IMPORTANT: On the client/app – use import {useQuery} from '@tanstack/solid-que
 IMPORTANT: only have secrets and values we need to change from outside the app in shell env or secret files.
 IMPORTANT: Keep filenames camelCase, even for TSX/JSX React components.
 IMPORTANT: Never run DuckDB without an explicit memory cap. Use `SET memory_limit = '20GB'` as the default for direct DuckDB CLI/manual work unless a smaller limit is needed.
+IMPORTANT: If you start a local server/process for debugging, stop it before finishing or replying.
 Do not rely on `.env` files for normal dev. Pass shell env inline/exported when needed. Use process.env instead of Bun's env functionality to stay compatible with ordinary Node.
 
 ## File structure

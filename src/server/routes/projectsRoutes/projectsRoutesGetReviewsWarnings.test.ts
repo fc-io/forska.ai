@@ -1,6 +1,6 @@
 import {rmSync} from 'node:fs'
 
-import {afterAll, beforeAll, expect, test} from 'bun:test'
+import {afterAll, afterEach, beforeAll, expect, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 const tempDbPath = `/tmp/f1-project-reviews-warnings-${process.pid}-${Date.now()}.duckdb`
@@ -14,10 +14,16 @@ type ReviewsWarningsResponse = {
   data: {
     enabledPromptCount: number
     indexing: {
+      inFlightArticleRefreshCount: number
+      inFlightProjectRefreshCount: number
+      inFlightRefreshCount: number
       oldestQueuedAt: string | null
       pendingArticleRefreshCount: number
       pendingProjectRefreshCount: number
       pendingRefreshCount: number
+      queuedArticleRefreshCount: number
+      queuedProjectRefreshCount: number
+      queuedRefreshCount: number
       status: string
     }
     projectId: string
@@ -25,9 +31,19 @@ type ReviewsWarningsResponse = {
   }
 }
 
+type MartRefreshProgressSnapshot = {
+  claimedQueuedArticleIds: string[]
+  claimedQueuedProjectIds: string[]
+  processingArticleIds: string[]
+  processingProjectIds: string[]
+}
+
 let app: {handle: (request: Request) => Promise<Response>} | null = null
 let closeDatabase: (() => Promise<void>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
+let resetProgressSnapshotForTests: (() => void) | null = null
+let setAutoDrainEnabledForTests: ((enabled: boolean) => void) | null = null
+let setProgressSnapshotForTests: ((snapshot: MartRefreshProgressSnapshot) => void) | null = null
 
 const insertProjectFixture = async (projectId: string) => {
   if (!runDatabase) {
@@ -86,12 +102,14 @@ beforeAll(async () => {
     {getAppDatabaseService},
     {resetDuckdbServiceForTests},
     {resetServerRuntimeRoleForTests},
+    {getDuckdbMartRefreshService},
     {projectsRoutesGetReviewsWarnings},
   ] = await Promise.all([
     import('../../../db/migrateDuckdb.ts'),
     import('../../services/appDatabaseService.ts'),
     import('../../utils/duckdbService.ts'),
     import('../../utils/serverRuntimeRole.ts'),
+    import('../../services/getDuckdbMartRefreshService.ts'),
     import('./projectsRoutesGetReviewsWarnings.ts'),
   ])
 
@@ -108,10 +126,25 @@ beforeAll(async () => {
   runDatabase = (statement: string) => {
     return database.run(statement)
   }
+  resetProgressSnapshotForTests = () => {
+    getDuckdbMartRefreshService().resetProgressSnapshotForTests()
+  }
+  setAutoDrainEnabledForTests = (enabled) => {
+    getDuckdbMartRefreshService().setAutoDrainEnabledForTests(enabled)
+  }
+  setProgressSnapshotForTests = (snapshot) => {
+    getDuckdbMartRefreshService().setProgressSnapshotForTests(snapshot)
+  }
+  setAutoDrainEnabledForTests(false)
   app = new Elysia().use(projectsRoutesGetReviewsWarnings)
 })
 
+afterEach(() => {
+  resetProgressSnapshotForTests?.()
+})
+
 afterAll(async () => {
+  setAutoDrainEnabledForTests?.(true)
   await closeDatabase?.()
   rmSync(tempDbPath, {force: true})
   rmSync(`${tempDbPath}.writer.history.json`, {force: true})
@@ -136,8 +169,14 @@ test('reviews warnings report refreshing when a project refresh is queued', asyn
   expect(response.status).toBe(200)
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
   expect(body.data.enabledPromptCount).toBe(1)
+  expect(body.data.indexing.queuedProjectRefreshCount).toBe(1)
+  expect(body.data.indexing.inFlightProjectRefreshCount).toBe(0)
   expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
+  expect(body.data.indexing.queuedArticleRefreshCount).toBe(0)
+  expect(body.data.indexing.inFlightArticleRefreshCount).toBe(0)
   expect(body.data.indexing.pendingArticleRefreshCount).toBe(0)
+  expect(body.data.indexing.queuedRefreshCount).toBe(1)
+  expect(body.data.indexing.inFlightRefreshCount).toBe(0)
   expect(body.data.indexing.pendingRefreshCount).toBe(1)
   expect(body.data.indexing.status).toBe('refreshing')
 })
@@ -159,9 +198,88 @@ test('reviews warnings report refreshing when article judgment refreshes are que
 
   expect(response.status).toBe(200)
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
+  expect(body.data.indexing.queuedProjectRefreshCount).toBe(0)
+  expect(body.data.indexing.inFlightProjectRefreshCount).toBe(0)
   expect(body.data.indexing.pendingProjectRefreshCount).toBe(0)
+  expect(body.data.indexing.queuedArticleRefreshCount).toBe(1)
+  expect(body.data.indexing.inFlightArticleRefreshCount).toBe(0)
   expect(body.data.indexing.pendingArticleRefreshCount).toBe(1)
+  expect(body.data.indexing.queuedRefreshCount).toBe(1)
+  expect(body.data.indexing.inFlightRefreshCount).toBe(0)
   expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.status).toBe('refreshing')
+})
+
+test('reviews warnings ignore completed mart refresh rows', async () => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const projectId = 'project-completed-refresh-warning'
+
+  await insertProjectFixture(projectId)
+  await runDatabase(`
+    INSERT INTO app.mart_refresh_queue (
+      id,
+      refresh_scope,
+      project_id,
+      article_id,
+      project_key,
+      article_key,
+      reason,
+      completed_at
+    )
+    VALUES
+      ('queue-project-${projectId}', 'project', '${projectId}', NULL, '${projectId}', '', 'test-project-completed', NOW()),
+      ('queue-article-${projectId}', 'judgment_article', NULL, 'article-${projectId}', '', 'article-${projectId}', 'test-article-completed', NOW())
+  `)
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.queuedProjectRefreshCount).toBe(0)
+  expect(body.data.indexing.inFlightProjectRefreshCount).toBe(0)
+  expect(body.data.indexing.pendingProjectRefreshCount).toBe(0)
+  expect(body.data.indexing.queuedArticleRefreshCount).toBe(0)
+  expect(body.data.indexing.inFlightArticleRefreshCount).toBe(0)
+  expect(body.data.indexing.pendingArticleRefreshCount).toBe(0)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+})
+
+test('reviews warnings report claimed refreshes as processing instead of queued', async () => {
+  if (!runDatabase || !setProgressSnapshotForTests) {
+    throw new Error('Test dependencies not initialized')
+  }
+
+  const projectId = 'project-inflight-warning'
+
+  await insertProjectFixture(projectId)
+  await runDatabase(`
+    INSERT INTO app.mart_refresh_queue (id, refresh_scope, project_id, article_id, project_key, article_key, reason)
+    VALUES
+      ('queue-project-${projectId}', 'project', '${projectId}', NULL, '${projectId}', '', 'test-project-processing'),
+      ('queue-article-${projectId}', 'judgment_article', NULL, 'article-${projectId}', '', 'article-${projectId}', 'test-article-processing')
+  `)
+  setProgressSnapshotForTests({
+    claimedQueuedArticleIds: [`article-${projectId}`],
+    claimedQueuedProjectIds: [projectId],
+    processingArticleIds: [`article-${projectId}`],
+    processingProjectIds: [projectId],
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
+  expect(body.data.indexing.queuedProjectRefreshCount).toBe(0)
+  expect(body.data.indexing.inFlightProjectRefreshCount).toBe(1)
+  expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
+  expect(body.data.indexing.queuedArticleRefreshCount).toBe(0)
+  expect(body.data.indexing.inFlightArticleRefreshCount).toBe(1)
+  expect(body.data.indexing.pendingArticleRefreshCount).toBe(1)
+  expect(body.data.indexing.queuedRefreshCount).toBe(0)
+  expect(body.data.indexing.inFlightRefreshCount).toBe(2)
+  expect(body.data.indexing.pendingRefreshCount).toBe(2)
   expect(body.data.indexing.status).toBe('refreshing')
 })
 

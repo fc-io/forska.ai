@@ -4,10 +4,18 @@ import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
 export type ReviewsWarningsData = {
   enabledPromptCount: number
   indexing: {
+    articleRefreshesPerMinute: number | null
+    inFlightArticleRefreshCount: number
+    inFlightProjectRefreshCount: number
+    inFlightRefreshCount: number
     oldestQueuedAt: string | null
     pendingArticleRefreshCount: number
     pendingProjectRefreshCount: number
     pendingRefreshCount: number
+    projectRefreshesPerMinute: number | null
+    queuedArticleRefreshCount: number
+    queuedProjectRefreshCount: number
+    queuedRefreshCount: number
     status: 'not-needed' | 'ready' | 'refreshing' | 'stale'
   }
   projectId: string

@@ -14,7 +14,7 @@ const formatQueuedAt = (value: string | null) => {
 }
 
 const getPendingRefreshLabel = (pendingRefreshCount: number) => {
-  return pendingRefreshCount === 1 ? '1 refresh job pending' : `${pendingRefreshCount} refresh jobs pending`
+  return pendingRefreshCount === 1 ? '1 refresh job outstanding' : `${pendingRefreshCount} refresh jobs outstanding`
 }
 
 const getIndexingBannerTitle = (params: {
@@ -55,8 +55,8 @@ const getPendingRefreshMetaLabel = (params: {
       : null,
     params.pendingArticleRefreshCount > 0
       ? params.pendingArticleRefreshCount === 1
-        ? '1 article judgment refresh pending'
-        : `${params.pendingArticleRefreshCount} article judgment refreshes pending`
+        ? '1 article judgment refresh outstanding'
+        : `${params.pendingArticleRefreshCount} article judgment refreshes outstanding`
       : null,
   ].filter((value): value is string => {
     return value !== null

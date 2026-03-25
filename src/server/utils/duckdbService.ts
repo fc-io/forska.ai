@@ -50,6 +50,8 @@ type DuckdbServiceState = {
   appendTotalBatchesCompleted: number
   appendTotalBatchesStarted: number
   appendTotalDurationMs: number
+  backgroundConnection: DuckDBConnection | null
+  backgroundQueue: Promise<void>
   controlConnection: DuckDBConnection | null
   duckdbInstance: DuckDBInstance | null
   duckdbQueue: Promise<void>
@@ -96,6 +98,8 @@ const getDuckdbServiceState = () => {
     appendTotalBatchesCompleted: 0,
     appendTotalBatchesStarted: 0,
     appendTotalDurationMs: 0,
+    backgroundConnection: null,
+    backgroundQueue: Promise.resolve(),
     controlConnection: null,
     duckdbInstance: null,
     duckdbQueue: Promise.resolve(),
@@ -227,6 +231,8 @@ const resetDuckdbRuntimeState = () => {
   duckdbServiceState.appendTotalBatchesCompleted = 0
   duckdbServiceState.appendTotalBatchesStarted = 0
   duckdbServiceState.appendTotalDurationMs = 0
+  duckdbServiceState.backgroundConnection = null
+  duckdbServiceState.backgroundQueue = Promise.resolve()
   duckdbServiceState.controlConnection = null
   duckdbServiceState.duckdbInstance = null
   duckdbServiceState.duckdbQueue = Promise.resolve()
@@ -251,6 +257,14 @@ const getDuckdbAppendConnection = (laneIndex: number) => {
   }
 
   return appendConnection
+}
+
+const getDuckdbBackgroundConnection = () => {
+  if (duckdbServiceState.backgroundConnection === null) {
+    throw new Error('DuckDB background connection not started')
+  }
+
+  return duckdbServiceState.backgroundConnection
 }
 
 const createDuckdbAppendBarrier = (): DuckdbAppendBarrier => {
@@ -282,12 +296,17 @@ const waitForDuckdbAppendQueues = async (): Promise<void> => {
   await Promise.all(getDuckdbAppendQueueSnapshot())
 }
 
+const waitForDuckdbBackgroundQueue = async (): Promise<void> => {
+  await duckdbServiceState.backgroundQueue
+}
+
 const withDuckdbAppendBarrier = async <T>(work: () => Promise<T>): Promise<T> => {
   const appendBarrier = createDuckdbAppendBarrier()
   duckdbServiceState.appendBarrier = appendBarrier
 
   try {
     await waitForDuckdbAppendQueues()
+    await waitForDuckdbBackgroundQueue()
     return await work()
   } finally {
     duckdbServiceState.appendBarrier =
@@ -333,6 +352,7 @@ const getAppendConnectionCloseErrors = (appendConnections: DuckDBConnection[]): 
 const closeDuckdbServiceWithoutBarrier = async () => {
   const activeConnection = duckdbServiceState.controlConnection
   const activeAppendConnections = [...duckdbServiceState.appendConnections]
+  const activeBackgroundConnection = duckdbServiceState.backgroundConnection
   const activeInstance = duckdbServiceState.duckdbInstance
 
   resetDuckdbRuntimeState()
@@ -347,6 +367,14 @@ const closeDuckdbServiceWithoutBarrier = async () => {
           },
     ),
     ...getAppendConnectionCloseErrors(activeAppendConnections),
+    getCloseSyncError(
+      activeBackgroundConnection === null
+        ? null
+        : () => {
+            activeBackgroundConnection.interrupt()
+            activeBackgroundConnection.closeSync()
+          },
+    ),
     getCloseSyncError(
       activeInstance === null
         ? null
@@ -402,6 +430,7 @@ const createDuckdbInstance = async (runtimeConfig: DuckdbRuntimeConfig) => {
 
 const cleanupFailedDuckdbStart = async (params: {
   appendConnections: DuckDBConnection[]
+  backgroundConnection: DuckDBConnection | null
   controlConnection: DuckDBConnection | null
   duckdbInstance: DuckDBInstance | null
 }) => {
@@ -420,6 +449,19 @@ const cleanupFailedDuckdbStart = async (params: {
           },
     ),
     ...getAppendConnectionCloseErrors(params.appendConnections),
+    getCloseSyncError(
+      params.backgroundConnection === null
+        ? null
+        : () => {
+            const backgroundConnection = params.backgroundConnection
+
+            if (backgroundConnection === null) {
+              return
+            }
+
+            backgroundConnection.closeSync()
+          },
+    ),
     getCloseSyncError(
       params.duckdbInstance === null
         ? null
@@ -465,6 +507,7 @@ const startDuckdbProcess = async (): Promise<DuckDBConnection> => {
 
   const runtimeConfig = ensureDuckdbRuntimeDirectories(getDuckdbRuntimeConfigValue())
   let appendConnections: DuckDBConnection[] = []
+  let backgroundConnection: DuckDBConnection | null = null
   let controlConnection: DuckDBConnection | null = null
   let duckdbInstance: DuckDBInstance | null = null
 
@@ -488,11 +531,14 @@ const startDuckdbProcess = async (): Promise<DuckDBConnection> => {
     duckdbInstance = await createDuckdbInstance(runtimeConfig)
     controlConnection = await duckdbInstance.connect()
     await createAppendConnections(appendLaneCount)
+    backgroundConnection = await duckdbInstance.connect()
 
     duckdbServiceState.appendConnections = appendConnections
     duckdbServiceState.appendQueues = getInitialDuckdbAppendQueues(appendLaneCount)
     duckdbServiceState.appendPendingCountByLane = getInitialDuckdbAppendLaneMetrics(appendLaneCount)
     duckdbServiceState.appendMaxQueueDepthByLane = getInitialDuckdbAppendLaneMetrics(appendLaneCount)
+    duckdbServiceState.backgroundConnection = backgroundConnection
+    duckdbServiceState.backgroundQueue = Promise.resolve()
     duckdbServiceState.controlConnection = controlConnection
     duckdbServiceState.duckdbInstance = duckdbInstance
     duckdbServiceState.nextAppendLaneIndex = 0
@@ -500,7 +546,12 @@ const startDuckdbProcess = async (): Promise<DuckDBConnection> => {
 
     return controlConnection
   } catch (error) {
-    const cleanupError = await cleanupFailedDuckdbStart({appendConnections, controlConnection, duckdbInstance})
+    const cleanupError = await cleanupFailedDuckdbStart({
+      appendConnections,
+      backgroundConnection,
+      controlConnection,
+      duckdbInstance,
+    })
     throw cleanupError === null ? error : getChainedDuckdbError(error, cleanupError, 'startup cleanup failed')
   }
 }
@@ -509,7 +560,8 @@ const ensureStartedDuckdbProcess = async () => {
   const appendLaneCount = getDuckdbRuntimeConfigValue().appendLaneCount
 
   if (
-    duckdbServiceState.controlConnection
+    duckdbServiceState.backgroundConnection
+    && duckdbServiceState.controlConnection
     && duckdbServiceState.duckdbInstance
     && duckdbServiceState.appendConnections.length === appendLaneCount
   ) {
@@ -530,6 +582,19 @@ const ensureStartedDuckdbProcess = async () => {
 const enqueueDuckdbWork = async <T>(work: () => Promise<T>): Promise<T> => {
   const queuedWork = duckdbServiceState.duckdbQueue.then(work)
   duckdbServiceState.duckdbQueue = queuedWork.then(
+    () => {
+      return undefined
+    },
+    () => {
+      return undefined
+    },
+  )
+  return queuedWork
+}
+
+const enqueueDuckdbBackgroundWork = async <T>(work: () => Promise<T>): Promise<T> => {
+  const queuedWork = duckdbServiceState.backgroundQueue.then(work)
+  duckdbServiceState.backgroundQueue = queuedWork.then(
     () => {
       return undefined
     },
@@ -728,6 +793,14 @@ const runDuckdbStatementDirect = async (statement: string) => {
   await runDuckdbStatementsDirect(getDuckdbConnection(), splitDuckdbStatements(statement))
 }
 
+const runDuckdbBackgroundJsonQueryDirect = async <T>(statement: string): Promise<T[]> => {
+  return runDuckdbStatementsAndReadLastDirect<T>(getDuckdbBackgroundConnection(), splitDuckdbStatements(statement))
+}
+
+const runDuckdbBackgroundStatementDirect = async (statement: string) => {
+  await runDuckdbStatementsDirect(getDuckdbBackgroundConnection(), splitDuckdbStatements(statement))
+}
+
 const getDuckdbRollbackError = async (): Promise<Error | null> => {
   try {
     await runDuckdbStatementDirect('ROLLBACK')
@@ -800,6 +873,28 @@ export const runDuckdbStatement = async (statement: string) => {
     return enqueueDuckdbWork(async () => {
       await ensureStartedDuckdbProcess()
       await runDuckdbStatementDirect(statement)
+    })
+  })
+}
+
+export const runDuckdbBackgroundJsonQuery = async <T>(statement: string): Promise<T[]> => {
+  return withNormalizedDuckdbError(() => {
+    return waitForDuckdbAppendBarrier().then(() => {
+      return enqueueDuckdbBackgroundWork(async () => {
+        await ensureStartedDuckdbProcess()
+        return runDuckdbBackgroundJsonQueryDirect<T>(statement)
+      })
+    })
+  })
+}
+
+export const runDuckdbBackgroundStatement = async (statement: string) => {
+  await withNormalizedDuckdbError(() => {
+    return waitForDuckdbAppendBarrier().then(() => {
+      return enqueueDuckdbBackgroundWork(async () => {
+        await ensureStartedDuckdbProcess()
+        await runDuckdbBackgroundStatementDirect(statement)
+      })
     })
   })
 }

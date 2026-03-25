@@ -2,6 +2,8 @@ import {rmSync} from 'node:fs'
 
 import {expect, test} from 'bun:test'
 
+type MartRefreshServiceModule = typeof import('./getDuckdbMartRefreshService.ts')
+
 const removeFileIfExists = (filePath: string) => {
   rmSync(filePath, {force: true, recursive: true})
 }
@@ -43,7 +45,7 @@ test('mart refresh keeps a requeue that arrives during drain', () => {
 
               return {
                 ...service,
-                run: async (statement) => {
+                runBackground: async (statement) => {
                   if (statement.includes('DELETE FROM mart.judgment_fact') && statement.includes('article-requeue-test')) {
                     refreshRuns += 1
 
@@ -53,7 +55,7 @@ test('mart refresh keeps a requeue that arrives during drain', () => {
                     }
                   }
 
-                  return service.run(statement)
+                  return service.runBackground(statement)
                 },
               }
             },
@@ -93,11 +95,17 @@ test('mart refresh keeps a requeue that arrives during drain', () => {
         await martRefreshService.flush()
 
         const [queueRow] = await database.queryJson(\`
-          SELECT COUNT(*) AS count
+          SELECT
+            COUNT(*) AS totalCount,
+            SUM(CASE WHEN completed_at IS NULL THEN 1 ELSE 0 END) AS queuedCount
           FROM app.mart_refresh_queue
         \`)
 
-        console.log(JSON.stringify({queueCount: Number(queueRow?.count ?? 0), refreshRuns}))
+        console.log(JSON.stringify({
+          queuedCount: Number(queueRow?.queuedCount ?? 0),
+          refreshRuns,
+          totalCount: Number(queueRow?.totalCount ?? 0),
+        }))
         await database.close()
       `,
     ],
@@ -120,10 +128,295 @@ test('mart refresh keeps a requeue that arrives during drain', () => {
       )
     }
 
-    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {queueCount: number; refreshRuns: number}
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      queuedCount: number
+      refreshRuns: number
+      totalCount: number
+    }
 
-    expect(result.queueCount).toBe(0)
+    expect(result.queuedCount).toBe(0)
     expect(result.refreshRuns).toBe(2)
+    expect(result.totalCount).toBe(2)
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+  }
+})
+
+test('mart refresh clears multiple queued project rebuilds in one drain', () => {
+  const duckdbPath = `/tmp/f1-mart-refresh-project-delete-${Date.now()}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+          VALUES
+            ('connection-project-delete-a', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1'),
+            ('connection-project-delete-b', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+        \`)
+        await database.run(\`
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+          VALUES
+            ('model-project-delete-a', 'connection-project-delete-a', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE),
+            ('model-project-delete-b', 'connection-project-delete-b', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+          VALUES
+            ('project-delete-a', 'Project Delete A', 'model-project-delete-a', TRUE, TRUE, FALSE, FALSE),
+            ('project-delete-b', 'Project Delete B', 'model-project-delete-b', TRUE, TRUE, FALSE, FALSE)
+        \`)
+
+        const martRefreshService = (await import(martRefreshServiceModulePath + '?project-delete=' + Date.now())).getDuckdbMartRefreshService()
+
+        await martRefreshService.queueProjectRefresh('project-delete-a', 'project-delete-test-a')
+        await martRefreshService.queueProjectRefresh('project-delete-b', 'project-delete-test-b')
+        await martRefreshService.flush()
+
+        const [queueRow] = await database.queryJson(\`
+          SELECT
+            COUNT(*) AS totalCount,
+            SUM(CASE WHEN completed_at IS NULL THEN 1 ELSE 0 END) AS queuedCount
+          FROM app.mart_refresh_queue
+        \`)
+
+        console.log(JSON.stringify({
+          queuedCount: Number(queueRow?.queuedCount ?? 0),
+          totalCount: Number(queueRow?.totalCount ?? 0),
+        }))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(
+        runScript.stderr.toString() || runScript.stdout.toString() || 'Mart project delete regression test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {queuedCount: number; totalCount: number}
+
+    expect(result.queuedCount).toBe(0)
+    expect(result.totalCount).toBe(2)
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+  }
+})
+
+test('mart refresh task query orders by epoch(created_at) to avoid empty oldest-first reads', async () => {
+  const martRefreshServiceModulePath = new URL(
+    './src/server/services/getDuckdbMartRefreshService.ts',
+    'file://' + process.cwd() + '/',
+  ).pathname
+  const martRefreshServiceModule = (await import(
+    `${martRefreshServiceModulePath}?queued-sql=${Date.now()}`
+  )) as MartRefreshServiceModule
+  const martRefreshService = martRefreshServiceModule.getDuckdbMartRefreshService()
+
+  expect(martRefreshService.getQueuedTasksSqlForTests()).toContain('ORDER BY EPOCH(created_at) ASC, id ASC')
+})
+
+test('mart refresh runs project rebuild statements on the background database connection', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        let queueActive = true
+        let backgroundRunCount = 0
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                queryJson: async (statement) => {
+                  return statement.includes("column_name = 'refresh_generation'")
+                    ? [{count: 1}]
+                    : statement.includes("column_name = 'completed_at'")
+                      ? [{count: 1}]
+                      : statement.includes('WHERE refresh_generation IS NULL')
+                        ? [{count: 0}]
+                        : statement.includes('SELECT COUNT(*) AS count')
+                          ? [{count: queueActive ? 1 : 0}]
+                          : statement.includes('FROM app.mart_refresh_queue')
+                            ? queueActive
+                              ? [{
+                                  articleId: null,
+                                  id: 'project-task',
+                                  projectId: 'project-background-test',
+                                  refreshGeneration: 0,
+                                  refreshScope: 'project',
+                                }]
+                              : []
+                            : []
+                },
+                queryJsonBackground: async () => {
+                  return []
+                },
+                run: async (statement) => {
+                  if (statement.includes('DELETE FROM mart.project_scope_article')) {
+                    throw new Error('project refresh ran on control connection')
+                  }
+
+                  if (statement.includes('SET completed_at = NOW()')) {
+                    queueActive = false
+                  }
+                },
+                runBackground: async (statement) => {
+                  if (statement.includes('DELETE FROM mart.project_scope_article')) {
+                    backgroundRunCount += 1
+                  }
+                },
+              }
+            },
+          }
+        })
+
+        const martRefreshService = (await import(martRefreshServiceModulePath + '?background=' + Date.now())).getDuckdbMartRefreshService()
+
+        await martRefreshService.flush()
+        console.log(JSON.stringify({backgroundRunCount, queueActive}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'Mart background connection regression test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    backgroundRunCount: number
+    queueActive: boolean
+  }
+
+  expect(result.backgroundRunCount).toBeGreaterThan(0)
+  expect(result.queueActive).toBe(false)
+})
+
+test('mart refresh skips schema repair writes when refresh_generation already exists', () => {
+  const duckdbPath = `/tmp/f1-mart-refresh-generation-ready-${Date.now()}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        const actualAppDatabaseModule = await import(appDatabaseServiceModulePath + '?actual=' + Date.now())
+        let schemaRepairRuns = 0
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            ...actualAppDatabaseModule,
+            getAppDatabaseService: () => {
+              const service = actualAppDatabaseModule.getAppDatabaseService()
+
+              return {
+                ...service,
+                run: async (statement) => {
+                  if (statement.includes('ALTER TABLE app.mart_refresh_queue ADD COLUMN IF NOT EXISTS refresh_generation')) {
+                    schemaRepairRuns += 1
+                  }
+
+                  return service.run(statement)
+                },
+              }
+            },
+          }
+        })
+
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+
+        await migrateDuckdb()
+
+        const database = actualAppDatabaseModule.getAppDatabaseService()
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+          VALUES ('connection-generation-ready-test', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+        \`)
+        await database.run(\`
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+          VALUES ('model-generation-ready-test', 'connection-generation-ready-test', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+          VALUES ('project-generation-ready-test', 'Generation Ready Test Project', 'model-generation-ready-test', TRUE, TRUE, FALSE, FALSE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.article (id, article_title)
+          VALUES ('article-generation-ready-test', 'Generation Ready Test Article')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_article (id, project_id, article_id)
+          VALUES ('project-article-generation-ready-test', 'project-generation-ready-test', 'article-generation-ready-test')
+        \`)
+
+        const martRefreshService = (await import(martRefreshServiceModulePath + '?generation-ready=' + Date.now())).getDuckdbMartRefreshService()
+
+        await martRefreshService.queueJudgmentArticleRefresh('article-generation-ready-test', 'generation-ready-test')
+        await martRefreshService.flush()
+
+        console.log(JSON.stringify({schemaRepairRuns}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(
+        runScript.stderr.toString() || runScript.stdout.toString() || 'Mart generation-ready regression test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {schemaRepairRuns: number}
+
+    expect(result.schemaRepairRuns).toBe(0)
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.writer.lock`)
@@ -164,7 +457,7 @@ test('mart refresh yields between drain passes after exceeding the time budget',
 
               return {
                 ...service,
-                run: async (statement) => {
+                runBackground: async (statement) => {
                   if (statement.includes('DELETE FROM mart.judgment_fact') && statement.includes('article-yield-test-')) {
                     delayedRefreshRuns += 1
 
@@ -176,7 +469,7 @@ test('mart refresh yields between drain passes after exceeding the time budget',
                     }
                   }
 
-                  return service.run(statement)
+                  return service.runBackground(statement)
                 },
               }
             },
@@ -222,11 +515,18 @@ test('mart refresh yields between drain passes after exceeding the time budget',
         await martRefreshService.flush()
 
         const [queueRow] = await database.queryJson(\`
-          SELECT COUNT(*) AS count
+          SELECT
+            COUNT(*) AS totalCount,
+            SUM(CASE WHEN completed_at IS NULL THEN 1 ELSE 0 END) AS queuedCount
           FROM app.mart_refresh_queue
         \`)
 
-        console.log(JSON.stringify({delayedRefreshRuns, queueCount: Number(queueRow?.count ?? 0), zeroDelayYieldCount}))
+        console.log(JSON.stringify({
+          delayedRefreshRuns,
+          queuedCount: Number(queueRow?.queuedCount ?? 0),
+          totalCount: Number(queueRow?.totalCount ?? 0),
+          zeroDelayYieldCount,
+        }))
         await database.close()
         globalThis.setTimeout = originalSetTimeout
       `,
@@ -250,13 +550,145 @@ test('mart refresh yields between drain passes after exceeding the time budget',
 
     const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
       delayedRefreshRuns: number
-      queueCount: number
+      queuedCount: number
+      totalCount: number
       zeroDelayYieldCount: number
     }
 
     expect(result.delayedRefreshRuns).toBe(5)
-    expect(result.queueCount).toBe(0)
+    expect(result.queuedCount).toBe(0)
+    expect(result.totalCount).toBe(6)
     expect(result.zeroDelayYieldCount).toBeGreaterThanOrEqual(1)
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+  }
+})
+
+test('mart refresh deletes article tasks before a delayed project rebuild finishes', () => {
+  const duckdbPath = `/tmp/f1-mart-refresh-article-drain-${Date.now()}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        const actualAppDatabaseModule = await import(appDatabaseServiceModulePath + '?actual=' + Date.now())
+        let hasDelayedProjectRefresh = false
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            ...actualAppDatabaseModule,
+            getAppDatabaseService: () => {
+              const service = actualAppDatabaseModule.getAppDatabaseService()
+
+              return {
+                ...service,
+                runBackground: async (statement) => {
+                  if (
+                    !hasDelayedProjectRefresh
+                    && statement.includes('DELETE FROM mart.project_scope_article')
+                    && statement.includes('project-article-drain-test')
+                  ) {
+                    hasDelayedProjectRefresh = true
+                    await new Promise((resolve) => {
+                      setTimeout(resolve, 250)
+                    })
+                  }
+
+                  return service.runBackground(statement)
+                },
+              }
+            },
+          }
+        })
+
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+
+        await migrateDuckdb()
+
+        const database = actualAppDatabaseModule.getAppDatabaseService()
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+          VALUES ('connection-article-drain-test', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+        \`)
+        await database.run(\`
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+          VALUES ('model-article-drain-test', 'connection-article-drain-test', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+          VALUES ('project-article-drain-test', 'Article Drain Test Project', 'model-article-drain-test', TRUE, TRUE, FALSE, FALSE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.article (id, article_title)
+          VALUES ('article-article-drain-test', 'Article Drain Test Article')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_article (id, project_id, article_id)
+          VALUES ('project-article-link-drain-test', 'project-article-drain-test', 'article-article-drain-test')
+        \`)
+
+        const martRefreshService = (await import(martRefreshServiceModulePath + '?article-drain=' + Date.now())).getDuckdbMartRefreshService()
+
+        await martRefreshService.queueJudgmentArticleRefresh('article-article-drain-test', 'article-drain-test')
+        const flushPromise = martRefreshService.flush()
+
+        await new Promise((resolve) => {
+          setTimeout(resolve, 75)
+        })
+
+        const queueRows = await database.queryJson(\`
+          SELECT refresh_scope AS refreshScope, COUNT(*) AS count
+          FROM app.mart_refresh_queue
+          WHERE completed_at IS NULL
+          GROUP BY refresh_scope
+          ORDER BY refresh_scope
+        \`)
+        const progress = martRefreshService.getProgressSnapshot()
+
+        await flushPromise
+
+        console.log(JSON.stringify({
+          progress,
+          queueRows: queueRows.map((row) => {
+            return {count: Number(row.count ?? 0), refreshScope: row.refreshScope}
+          }),
+        }))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(
+        runScript.stderr.toString() || runScript.stdout.toString() || 'Mart article drain regression test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      progress: {processingArticleIds: string[]; processingProjectIds: string[]}
+      queueRows: Array<{count: number; refreshScope: string}>
+    }
+
+    expect(result.progress.processingArticleIds).toEqual([])
+    expect(result.queueRows).toEqual([{count: 1, refreshScope: 'project'}])
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.writer.lock`)
