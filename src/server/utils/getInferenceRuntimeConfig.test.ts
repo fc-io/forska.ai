@@ -17,7 +17,7 @@ test('getInferenceRuntimeConfig applies runtime defaults', () => {
   expect(runtimeConfig.sglangApiMaxInflightRequests).toBe(0)
   expect(runtimeConfig.sglangApiMaxBurstRequests).toBe(0)
   expect(runtimeConfig.codexMaxInflight).toBe(0)
-  expect(runtimeConfig.judgmentsReadyTargetMultiplier).toBe(10)
+  expect(runtimeConfig.judgmentsReadyTargetMultiplier).toBe(2)
   expect(runtimeConfig.judgmentsAddToQueueMaxBatchSize).toBe(10000)
   expect(runtimeConfig.judgeFirstRequestPreviewChars).toBe(0)
   expect(runtimeConfig.judgeFirstRequestLogFull).toBe(false)

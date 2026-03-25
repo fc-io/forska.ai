@@ -116,6 +116,65 @@ test('claims and requeues prompts from the per-job SQLite queue', async () => {
   expect(await service.getInFlightCount(jobId)).toBe(0)
 })
 
+test('limits SQLite ready inserts to the requested deficit while skipping duplicates', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-limit-${Date.now()}`
+  const modelId = `model-limit-${Date.now()}`
+  const projectId = `project-limit-${Date.now()}`
+  const jobId = `job-limit-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Queue Limit Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+
+  expect(
+    await service.addReadyPrompts(
+      jobId,
+      [
+        {articleId: 'article-limit-1', promptId: 'prompt-limit-1'},
+        {articleId: 'article-limit-2', promptId: 'prompt-limit-2'},
+        {articleId: 'article-limit-3', promptId: 'prompt-limit-3'},
+      ],
+      'server-a',
+      2,
+    ),
+  ).toBe(2)
+  expect(await service.getReadyCount(jobId)).toBe(2)
+
+  expect(
+    await service.addReadyPrompts(
+      jobId,
+      [
+        {articleId: 'article-limit-1', promptId: 'prompt-limit-1'},
+        {articleId: 'article-limit-4', promptId: 'prompt-limit-4'},
+        {articleId: 'article-limit-5', promptId: 'prompt-limit-5'},
+      ],
+      'server-a',
+      1,
+    ),
+  ).toBe(1)
+  expect(await service.getReadyCount(jobId)).toBe(3)
+})
+
 test('claims, reaps, releases, and completes outbox batches', async () => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')

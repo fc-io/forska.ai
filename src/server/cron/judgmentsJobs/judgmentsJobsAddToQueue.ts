@@ -194,6 +194,22 @@ const getSqliteWindowSize = (readyDeficit: number, addToQueueMaxBatchSize: numbe
   )
 }
 
+const getInsertedReadyCount = async ({
+  filteredEntries,
+  jobId,
+  readyDeficit,
+  serverJobId,
+  sqliteService,
+}: {
+  filteredEntries: PromptQueueEntry[]
+  jobId: string
+  readyDeficit: number
+  serverJobId: string
+  sqliteService: ReturnType<typeof getJudgmentJobSqliteService>
+}) => {
+  return sqliteService.addReadyPrompts(jobId, filteredEntries, serverJobId, readyDeficit)
+}
+
 const hasSqliteExhaustedCooldown = (exhaustedAt: Date | null) => {
   return exhaustedAt ? Date.now() - exhaustedAt.getTime() < sqliteScanExhaustedCooldownMs : false
 }
@@ -262,7 +278,7 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
     const promptData = await judgmentsJobsCronGetPrompts(job.projectId, job.id, requestedWindowSize, cursor)
     const filteredEntries = await filterAlreadyJudged(promptData.promptEntries, jobConfig)
 
-    await sqliteService.addReadyPrompts(job.id, filteredEntries, serverJobId)
+    await getInsertedReadyCount({filteredEntries, jobId: job.id, readyDeficit, serverJobId, sqliteService})
 
     const nextReadyCount = await sqliteService.getReadyCount(job.id)
     const nextScanState = promptData.nextCursor

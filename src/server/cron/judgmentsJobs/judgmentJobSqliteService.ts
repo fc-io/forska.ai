@@ -720,13 +720,22 @@ const claimPendingOutboxBatchForJobIds = async ({
 }
 
 const sqliteService = {
-  addReadyPrompts: async (jobId: string, promptEntries: QueuePromptInsert[], serverJobId: string) => {
-    return withOwnedJobDatabase(
+  addReadyPrompts: async (
+    jobId: string,
+    promptEntries: QueuePromptInsert[],
+    serverJobId: string,
+    maxInserted = Number.POSITIVE_INFINITY,
+  ): Promise<number> => {
+    const insertedCount = await withOwnedJobDatabase(
       jobId,
       false,
       (database) => {
-        if (promptEntries.length === 0) {
-          return
+        const normalizedMaxInserted = Number.isFinite(maxInserted)
+          ? Math.max(0, Math.floor(maxInserted))
+          : Number.POSITIVE_INFINITY
+
+        if (promptEntries.length === 0 || normalizedMaxInserted === 0) {
+          return 0
         }
 
         const insert = database.query(`
@@ -743,14 +752,24 @@ const sqliteService = {
       `)
         const now = new Date().toISOString()
 
-        database.transaction((entries: QueuePromptInsert[]) => {
-          entries.forEach((entry) => {
-            insert.run(randomUUID(), jobId, entry.articleId, entry.promptId, serverJobId, now, now)
-          })
+        return database.transaction((entries: QueuePromptInsert[]) => {
+          return entries.reduce((count, entry) => {
+            if (count >= normalizedMaxInserted) {
+              return count
+            }
+
+            const result = insert.run(randomUUID(), jobId, entry.articleId, entry.promptId, serverJobId, now, now) as {
+              changes?: number
+            }
+
+            return count + (result.changes === 1 ? 1 : 0)
+          }, 0)
         })(promptEntries)
       },
       serverJobId,
     )
+
+    return insertedCount ?? 0
   },
   claimReadyPrompts: async (jobId: string, serverJobId: string, limit: number): Promise<QueuePromptClaim[]> => {
     const claimed = await withOwnedJobDatabase(

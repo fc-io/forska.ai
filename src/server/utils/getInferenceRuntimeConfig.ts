@@ -114,7 +114,7 @@ export const getInferenceRuntimeConfig = ({
     }),
     judgmentsReadyTargetMultiplier: getFirstConfiguredValue({
       envValues,
-      fallback: '10',
+      fallback: '2',
       keys: ['JUDGMENTS_READY_TARGET_MULTIPLIER'],
     }),
     localWorkerUrls: getFirstConfiguredValue({
