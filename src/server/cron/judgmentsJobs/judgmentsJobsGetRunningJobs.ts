@@ -12,6 +12,25 @@ export type RunningJudgmentJob = {
   projectId: string
 }
 
+const getRunningJobsFromDatabase = async (): Promise<RunningJudgmentJob[]> => {
+  return getAppDatabaseService().queryJson<RunningJudgmentJob>(`
+    SELECT
+      jj.id AS id,
+      jj.project_id AS projectId,
+      pc.provider_kind AS modelProvider,
+      m.id AS modelId,
+      m.remote_model_id AS modelName
+    FROM app.judgment_job jj
+    INNER JOIN app.project p ON jj.project_id = p.id
+    INNER JOIN app.model m ON p.model_id = m.id
+    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    WHERE jj.status = 'running'
+      AND p.archived = FALSE
+      AND COALESCE(m.enabled, TRUE) = TRUE
+      AND COALESCE(pc.enabled, TRUE) = TRUE
+  `)
+}
+
 export const filterRunningJobsByRuntimeMatch = async (
   jobs: RunningJudgmentJob[],
   getRuntimeMatch: typeof getStoredProviderModelRuntimeMatch = getStoredProviderModelRuntimeMatch,
@@ -45,29 +64,10 @@ export const filterRunningJobsByRuntimeMatch = async (
   })
 }
 
-export const judgmentsJobsGetRunningJobs = async () => {
-  const jobs = await getAppDatabaseService().queryJson<{
-    id: string
-    modelId: string
-    modelName: string | null
-    modelProvider: string | null
-    projectId: string
-  }>(`
-    SELECT
-      jj.id AS id,
-      jj.project_id AS projectId,
-      pc.provider_kind AS modelProvider,
-      m.id AS modelId,
-      m.remote_model_id AS modelName
-    FROM app.judgment_job jj
-    INNER JOIN app.project p ON jj.project_id = p.id
-    INNER JOIN app.model m ON p.model_id = m.id
-    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
-    WHERE jj.status = 'running'
-      AND p.archived = FALSE
-      AND COALESCE(m.enabled, TRUE) = TRUE
-      AND COALESCE(pc.enabled, TRUE) = TRUE
-  `)
+export const judgmentsJobsGetRunningJobs = async ({
+  applyRuntimeMatchFilter = true,
+}: {applyRuntimeMatchFilter?: boolean} = {}) => {
+  const jobs = await getRunningJobsFromDatabase()
 
-  return filterRunningJobsByRuntimeMatch(jobs)
+  return applyRuntimeMatchFilter ? filterRunningJobsByRuntimeMatch(jobs) : jobs
 }

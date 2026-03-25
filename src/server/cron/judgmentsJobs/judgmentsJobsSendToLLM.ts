@@ -5,7 +5,7 @@ import {ConnectionError} from './connectionHealth.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
-import type {judgmentsJobsGetRunningJobs} from './judgmentsJobsGetRunningJobs.ts'
+import {filterRunningJobsByRuntimeMatch, type RunningJudgmentJob} from './judgmentsJobsGetRunningJobs.ts'
 import {getAndUpdateReadyPrompts, type PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 import {processPromptWithLLM} from './judgmentsJobsSendToLLM/processPromptWithLLM.ts'
 import {requeueAbandonedSentPrompts} from './requeueAbandonedSentPrompts.ts'
@@ -273,8 +273,29 @@ const getNumberOfPromptsInFlight = async (jobIds: string[]): Promise<number> => 
 
 let isRunningJudgmentsJobsSendToLLM = false
 
+export const requeueAndFilterRunningJobs = async ({
+  allJobs,
+  filterJobs = filterRunningJobsByRuntimeMatch,
+  requeueSentPrompts = requeueAbandonedSentPrompts,
+  serverJobId,
+}: {
+  allJobs: RunningJudgmentJob[]
+  filterJobs?: (jobs: RunningJudgmentJob[]) => Promise<RunningJudgmentJob[]>
+  requeueSentPrompts?: (params: {jobIds: string[]; serverJobId: string}) => Promise<number>
+  serverJobId: string
+}): Promise<RunningJudgmentJob[]> => {
+  await requeueSentPrompts({
+    jobIds: allJobs.map((job) => {
+      return job.id
+    }),
+    serverJobId,
+  })
+
+  return filterJobs(allJobs)
+}
+
 const sendToLLMForJobs = async (
-  jobs: Awaited<ReturnType<typeof judgmentsJobsGetRunningJobs>>,
+  jobs: RunningJudgmentJob[],
   serverJobId: string,
   capacity: {maxInflight: number; maxBurst: number; workerCount: number},
   label: 'codex' | 'non-codex',
@@ -366,23 +387,15 @@ const sendToLLMForJobs = async (
   })
 }
 
-export const judgmentsJobsSendToLLM = async (
-  allJobs: Awaited<ReturnType<typeof judgmentsJobsGetRunningJobs>>,
-  serverJobId: string,
-): Promise<void> => {
+export const judgmentsJobsSendToLLM = async (allJobs: RunningJudgmentJob[], serverJobId: string): Promise<void> => {
   if (isRunningJudgmentsJobsSendToLLM) return
   isRunningJudgmentsJobsSendToLLM = true
 
   try {
-    await requeueAbandonedSentPrompts({
-      jobIds: allJobs.map((job) => {
-        return job.id
-      }),
-      serverJobId,
-    })
+    const sendableJobs = await requeueAndFilterRunningJobs({allJobs, serverJobId})
 
-    const codexJobs = allJobs.filter(isCodexJob)
-    const nonCodexJobs = allJobs.filter((job) => {
+    const codexJobs = sendableJobs.filter(isCodexJob)
+    const nonCodexJobs = sendableJobs.filter((job) => {
       return !isCodexJob(job)
     })
 

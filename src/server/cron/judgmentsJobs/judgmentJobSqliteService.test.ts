@@ -1,7 +1,9 @@
-import {rmSync} from 'node:fs'
+import {existsSync, rmSync} from 'node:fs'
 import {dirname, join} from 'node:path'
 
 import {afterAll, beforeAll, expect, test} from 'bun:test'
+
+import {getJudgmentJobLeasePath} from './judgmentJobPaths.ts'
 
 const tempDbPath = `/tmp/f1-judgment-job-sqlite-service-${process.pid}-${Date.now()}.duckdb`
 const tempJobDir = join(dirname(tempDbPath), 'judgment-jobs')
@@ -217,4 +219,60 @@ test('claims, reaps, releases, and completes outbox batches', async () => {
   expect(thirdClaim?.rows).toHaveLength(1)
   expect(await service.completeOutboxClaim({claimId: thirdClaim?.claim.claimId ?? '', jobId})).toBe(1)
   expect(await service.getUnexportedOutboxCount(jobId)).toBe(0)
+})
+
+test('syncOwnedLeases releases only inactive SQLite job leases', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-sync-${Date.now()}`
+  const modelId = `model-sync-${Date.now()}`
+  const firstProjectId = `project-sync-a-${Date.now()}`
+  const firstJobId = `job-sync-a-${Date.now()}`
+  const secondProjectId = `project-sync-b-${Date.now()}`
+  const secondJobId = `job-sync-b-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${firstProjectId}', 'SQLite Lease Sync A', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${secondProjectId}', 'SQLite Lease Sync B', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${firstJobId}', '${firstProjectId}', 'running')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${secondJobId}', '${secondProjectId}', 'running')
+  `)
+
+  await service.initializeJob(firstJobId)
+  await service.initializeJob(secondJobId)
+  await service.ensureOwnedLease(firstJobId, 'server-a')
+  await service.ensureOwnedLease(secondJobId, 'server-a')
+
+  expect(service.hasOwnedLease(firstJobId)).toBe(true)
+  expect(service.hasOwnedLease(secondJobId)).toBe(true)
+  expect(existsSync(getJudgmentJobLeasePath(firstJobId))).toBe(true)
+  expect(existsSync(getJudgmentJobLeasePath(secondJobId))).toBe(true)
+
+  await service.syncOwnedLeases([firstJobId])
+
+  expect(service.hasOwnedLease(firstJobId)).toBe(true)
+  expect(service.hasOwnedLease(secondJobId)).toBe(false)
+  expect(existsSync(getJudgmentJobLeasePath(firstJobId))).toBe(true)
+  expect(existsSync(getJudgmentJobLeasePath(secondJobId))).toBe(false)
 })

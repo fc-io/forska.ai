@@ -66,7 +66,7 @@ const runAddToQueue = async (): Promise<void> => {
 const sendToLLM = async (): Promise<void> => {
   if (!shouldRunJudgingCron()) return
   try {
-    const runningJobs = await judgmentsJobsGetRunningJobs()
+    const runningJobs = await judgmentsJobsGetRunningJobs({applyRuntimeMatchFilter: false})
     await getJudgmentJobSqliteService().syncOwnedLeases(
       runningJobs.map((job) => {
         return job.id

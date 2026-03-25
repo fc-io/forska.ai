@@ -5,6 +5,7 @@ import {Database} from 'bun:sqlite'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue} from '../../services/appQueryHelpers.ts'
+import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {registerWriterDemotionHandler} from '../../utils/serverRuntimeRole.ts'
 import type {JobCursor} from './jobCursorStore.ts'
 import {
@@ -152,6 +153,7 @@ const openDatabases = new Map<string, Database>()
 const ownedJobLeases = new Map<string, JudgmentJobLease>()
 const ownedJobLeaseOperationCounts = new Map<string, number>()
 const judgmentJobLeaseHeartbeatIntervalMs = 5_000
+const judgmentJobLeaseLogger = createRateLimitedLogger({windowMs: 30_000})
 let judgmentJobLeaseHeartbeatStarted = false
 
 export class JudgmentJobLeaseError extends Error {
@@ -209,7 +211,7 @@ const heartbeatOwnedJobLease = async (jobId: string) => {
     ownedJobLeases.set(jobId, nextLease)
   } catch (error) {
     releaseOwnedJobLeaseState(jobId)
-    console.warn('[judgments] lost SQLite job lease heartbeat', {
+    judgmentJobLeaseLogger.warn(`judgments:lease-heartbeat:${jobId}`, '[judgments] lost SQLite job lease heartbeat', {
       error: error instanceof Error ? error.message : String(error),
       jobId,
     })

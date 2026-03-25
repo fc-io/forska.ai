@@ -403,7 +403,7 @@ const addToQueueForJob = async (params: AddToQueueJobParams): Promise<void> => {
 }
 
 export const judgmentsJobsAddToQueue = async (serverJobId: string): Promise<void> => {
-  const runningJobs = await judgmentsJobsGetRunningJobs()
+  const runningJobs = await judgmentsJobsGetRunningJobs({applyRuntimeMatchFilter: false})
   await getJudgmentJobSqliteService().syncOwnedLeases(
     runningJobs.map((job) => {
       return job.id
