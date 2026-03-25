@@ -52,8 +52,8 @@
 - [x] run lint
 - [x] run targeted tests
 - [x] build app
-- [ ] commit
-- [ ] open PR
+- [x] commit
+- [x] open PR
 
 ## Validation notes
 
