@@ -791,6 +791,208 @@ const getProjectRefreshSql = (projectId: string) => {
       GROUP BY fact.project_id, fact.prompt_id, dict.answer_id;
       COMMIT;
     `,
+    `
+      BEGIN TRANSACTION;
+      INSERT INTO app.project_review_serving_generation (
+        project_id,
+        active_generation,
+        generation_updated_at
+      )
+      VALUES (
+        ${projectLiteral},
+        0,
+        current_timestamp
+      )
+      ON CONFLICT(project_id) DO NOTHING;
+      DELETE FROM mart.review_article_serving
+      WHERE project_id = ${projectLiteral}
+        AND generation = (
+          SELECT active_generation + 1
+          FROM app.project_review_serving_generation
+          WHERE project_id = ${projectLiteral}
+        );
+      DELETE FROM mart.review_article_filter_member
+      WHERE project_id = ${projectLiteral}
+        AND generation = (
+          SELECT active_generation + 1
+          FROM app.project_review_serving_generation
+          WHERE project_id = ${projectLiteral}
+        );
+      DELETE FROM mart.review_article_serving_detail
+      WHERE project_id = ${projectLiteral}
+        AND generation = (
+          SELECT active_generation + 1
+          FROM app.project_review_serving_generation
+          WHERE project_id = ${projectLiteral}
+        );
+      INSERT INTO mart.review_article_serving (
+        project_id,
+        generation,
+        article_id,
+        article_created_at,
+        article_updated_at,
+        article_title,
+        article_external_id,
+        journal_title,
+        url,
+        full_text_pdf,
+        full_text_fetched_at,
+        full_text_conversion_status,
+        source_metadata,
+        has_all_llm_judgments,
+        llm_judged_prompt_count,
+        llm_judged_prompt_ids,
+        enabled_prompt_count,
+        human_answered_prompt_count,
+        human_answered_prompt_ids,
+        has_all_human_answers,
+        review_opened,
+        review_sections_completed,
+        latest_llm_created_at,
+        latest_human_updated_at,
+        latest_review_updated_at,
+        serving_updated_at
+      )
+      SELECT
+        rollup.project_id,
+        (
+          SELECT active_generation + 1
+          FROM app.project_review_serving_generation
+          WHERE project_id = ${projectLiteral}
+        ) AS generation,
+        rollup.article_id,
+        rollup.article_created_at,
+        rollup.article_updated_at,
+        article.article_title,
+        article.article_id,
+        json_extract_string(article.source_metadata, '$.journalTitle'),
+        article.url,
+        article.full_text_pdf,
+        article.full_text_fetched_at,
+        article.full_text_conversion_status,
+        article.source_metadata,
+        rollup.has_all_llm_judgments,
+        rollup.llm_judged_prompt_count,
+        rollup.llm_judged_prompt_ids,
+        rollup.enabled_prompt_count,
+        rollup.human_answered_prompt_count,
+        rollup.human_answered_prompt_ids,
+        rollup.has_all_human_answers,
+        rollup.review_opened,
+        rollup.review_sections_completed,
+        rollup.latest_llm_created_at,
+        rollup.latest_human_updated_at,
+        rollup.latest_review_updated_at,
+        current_timestamp
+      FROM mart.review_article_rollup rollup
+      INNER JOIN app.article article ON article.id = rollup.article_id
+      WHERE rollup.project_id = ${projectLiteral};
+      INSERT INTO mart.review_article_filter_member (
+        project_id,
+        generation,
+        prompt_id,
+        answer_id,
+        article_id,
+        article_created_at,
+        numeric_answer_value,
+        member_updated_at
+      )
+      SELECT DISTINCT
+        fact.project_id,
+        (
+          SELECT active_generation + 1
+          FROM app.project_review_serving_generation
+          WHERE project_id = ${projectLiteral}
+        ) AS generation,
+        fact.prompt_id,
+        dict.answer_id,
+        fact.article_id,
+        rollup.article_created_at,
+        dict.numeric_answer_value,
+        current_timestamp
+      FROM mart.prompt_answer_fact fact
+      INNER JOIN app.review_answer_dictionary dict
+        ON dict.project_id = fact.project_id
+       AND dict.prompt_id = fact.prompt_id
+       AND dict.answer_value = fact.answer_value
+      INNER JOIN mart.review_article_rollup rollup
+        ON rollup.project_id = fact.project_id
+       AND rollup.article_id = fact.article_id
+      WHERE fact.project_id = ${projectLiteral};
+      INSERT INTO mart.review_article_serving_detail (
+        project_id,
+        generation,
+        article_id,
+        prompt_id,
+        prompt_order,
+        judgment_id,
+        created_at,
+        article_created_at,
+        article_updated_at,
+        model_id,
+        answered_original,
+        answered_original_as_array,
+        detail_updated_at
+      )
+      SELECT
+        scope_article.project_id,
+        (
+          SELECT active_generation + 1
+          FROM app.project_review_serving_generation
+          WHERE project_id = ${projectLiteral}
+        ) AS generation,
+        judgment_fact.article_id,
+        judgment_fact.prompt_id,
+        project_prompt.prompt_order,
+        judgment_fact.judgment_id,
+        judgment_fact.created_at,
+        judgment_fact.article_created_at,
+        judgment_fact.article_updated_at,
+        judgment_fact.model_id,
+        judgment_fact.answered_original,
+        judgment_fact.answered_original_as_array,
+        current_timestamp
+      FROM mart.project_scope_article scope_article
+      INNER JOIN app.project project ON project.id = scope_article.project_id
+      INNER JOIN app.project_prompt project_prompt
+        ON project_prompt.project_id = scope_article.project_id
+       AND project_prompt.enabled = TRUE
+      INNER JOIN mart.judgment_fact judgment_fact
+        ON judgment_fact.article_id = scope_article.article_id
+       AND judgment_fact.prompt_id = project_prompt.prompt_id
+       AND judgment_fact.model_id = project.model_id
+       AND judgment_fact.use_title = project.use_title
+       AND judgment_fact.use_abstract = project.use_abstract
+       AND judgment_fact.use_fulltext = project.use_fulltext
+       AND judgment_fact.use_fulltext_no_images = project.use_fulltext_no_images
+      WHERE scope_article.project_id = ${projectLiteral};
+      UPDATE app.project_review_serving_generation
+      SET active_generation = active_generation + 1,
+          generation_updated_at = current_timestamp
+      WHERE project_id = ${projectLiteral};
+      DELETE FROM mart.review_article_filter_member
+      WHERE project_id = ${projectLiteral}
+        AND generation < (
+          SELECT active_generation - 1
+          FROM app.project_review_serving_generation
+          WHERE project_id = ${projectLiteral}
+        );
+      DELETE FROM mart.review_article_serving
+      WHERE project_id = ${projectLiteral}
+        AND generation < (
+          SELECT active_generation - 1
+          FROM app.project_review_serving_generation
+          WHERE project_id = ${projectLiteral}
+        );
+      DELETE FROM mart.review_article_serving_detail
+      WHERE project_id = ${projectLiteral}
+        AND generation < (
+          SELECT active_generation - 1
+          FROM app.project_review_serving_generation
+          WHERE project_id = ${projectLiteral}
+        );
+      COMMIT;
+    `,
   ]
 }
 
@@ -950,6 +1152,559 @@ const getImpactedProjectIdsForArticle = async (articleId: string) => {
   })
 }
 
+const getHasActiveProjectReviewServingGeneration = async (projectId: string) => {
+  const rows = await queryMartRefreshBackgroundJson<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.project_review_serving_generation
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND active_generation > 0
+  `)
+
+  return Number(rows[0]?.count ?? 0) > 0
+}
+
+const getProjectArticleServingRefreshSql = (projectId: string, articleId: string) => {
+  const projectLiteral = getSqlLiteral(projectId)
+  const articleLiteral = getSqlLiteral(articleId)
+
+  return `
+    BEGIN TRANSACTION;
+    INSERT INTO app.review_answer_dictionary (
+      project_id,
+      prompt_id,
+      answer_id,
+      answer_value,
+      numeric_answer_value,
+      dictionary_updated_at
+    )
+    WITH article_scope AS (
+      SELECT
+        aggregated_scope.project_id,
+        aggregated_scope.article_id,
+        aggregated_scope.in_curated_scope,
+        aggregated_scope.in_route_scope,
+        article.article_created_at,
+        article.article_updated_at
+      FROM (
+        SELECT
+          combined_scope.project_id,
+          combined_scope.article_id,
+          COALESCE(BOOL_OR(combined_scope.in_curated_scope), FALSE) AS in_curated_scope,
+          COALESCE(BOOL_OR(combined_scope.in_route_scope), FALSE) AS in_route_scope
+        FROM (
+          SELECT
+            pir.project_id,
+            air.article_id,
+            FALSE AS in_curated_scope,
+            TRUE AS in_route_scope
+          FROM app.project_import_route pir
+          INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
+          WHERE pir.project_id = ${projectLiteral}
+            AND air.article_id = ${articleLiteral}
+          UNION ALL
+          SELECT
+            pa.project_id,
+            pa.article_id,
+            TRUE AS in_curated_scope,
+            FALSE AS in_route_scope
+          FROM app.project_article pa
+          WHERE pa.project_id = ${projectLiteral}
+            AND pa.article_id = ${articleLiteral}
+        ) combined_scope
+        GROUP BY combined_scope.project_id, combined_scope.article_id
+      ) aggregated_scope
+      INNER JOIN app.project project
+        ON project.id = aggregated_scope.project_id
+       AND project.archived = FALSE
+      INNER JOIN app.article article ON article.id = aggregated_scope.article_id
+    ),
+    enabled_project_prompt AS (
+      SELECT project_id, prompt_id
+      FROM app.project_prompt
+      WHERE enabled = TRUE
+        AND project_id = ${projectLiteral}
+    ),
+    eligible_project_judgment AS (
+      SELECT
+        article_scope.project_id,
+        judgment_fact.prompt_id,
+        judgment_fact.normalized_answers
+      FROM article_scope
+      INNER JOIN app.project project ON project.id = article_scope.project_id
+      INNER JOIN enabled_project_prompt enabled_prompt
+        ON enabled_prompt.project_id = article_scope.project_id
+      INNER JOIN mart.judgment_fact judgment_fact
+        ON judgment_fact.article_id = article_scope.article_id
+       AND judgment_fact.prompt_id = enabled_prompt.prompt_id
+       AND judgment_fact.model_id = project.model_id
+       AND judgment_fact.use_title = project.use_title
+       AND judgment_fact.use_abstract = project.use_abstract
+       AND judgment_fact.use_fulltext = project.use_fulltext
+       AND judgment_fact.use_fulltext_no_images = project.use_fulltext_no_images
+    ),
+    answer_values AS (
+      SELECT DISTINCT
+        eligible_project_judgment.project_id,
+        eligible_project_judgment.prompt_id,
+        TRIM(answer.answer_value) AS answer_value
+      FROM eligible_project_judgment,
+        UNNEST(eligible_project_judgment.normalized_answers) AS answer(answer_value)
+      WHERE eligible_project_judgment.normalized_answers IS NOT NULL
+        AND ARRAY_LENGTH(eligible_project_judgment.normalized_answers) > 0
+        AND NULLIF(TRIM(answer.answer_value), '') IS NOT NULL
+    ),
+    missing_answer_values AS (
+      SELECT answer_values.project_id, answer_values.prompt_id, answer_values.answer_value
+      FROM answer_values
+      LEFT JOIN app.review_answer_dictionary dictionary
+        ON dictionary.project_id = answer_values.project_id
+       AND dictionary.prompt_id = answer_values.prompt_id
+       AND dictionary.answer_value = answer_values.answer_value
+      WHERE dictionary.answer_id IS NULL
+    ),
+    current_answer_id AS (
+      SELECT
+        project_id,
+        prompt_id,
+        COALESCE(MAX(answer_id), 0) AS max_answer_id
+      FROM app.review_answer_dictionary
+      WHERE project_id = ${projectLiteral}
+      GROUP BY project_id, prompt_id
+    )
+    SELECT
+      missing_answer_values.project_id,
+      missing_answer_values.prompt_id,
+      COALESCE(current_answer_id.max_answer_id, 0)
+        + ROW_NUMBER() OVER (
+          PARTITION BY missing_answer_values.project_id, missing_answer_values.prompt_id
+          ORDER BY missing_answer_values.answer_value ASC
+        ) AS answer_id,
+      missing_answer_values.answer_value,
+      TRY_CAST(missing_answer_values.answer_value AS BIGINT),
+      current_timestamp
+    FROM missing_answer_values
+    LEFT JOIN current_answer_id
+      ON current_answer_id.project_id = missing_answer_values.project_id
+     AND current_answer_id.prompt_id = missing_answer_values.prompt_id;
+
+    DELETE FROM mart.review_article_filter_member
+    WHERE project_id = ${projectLiteral}
+      AND article_id = ${articleLiteral}
+      AND generation = (
+        SELECT active_generation
+        FROM app.project_review_serving_generation
+        WHERE project_id = ${projectLiteral}
+      );
+
+    DELETE FROM mart.review_article_serving
+    WHERE project_id = ${projectLiteral}
+      AND article_id = ${articleLiteral}
+      AND generation = (
+        SELECT active_generation
+        FROM app.project_review_serving_generation
+        WHERE project_id = ${projectLiteral}
+      );
+
+    INSERT INTO mart.review_article_serving (
+      project_id,
+      generation,
+      article_id,
+      article_created_at,
+      article_updated_at,
+      article_title,
+      article_external_id,
+      journal_title,
+      url,
+      full_text_pdf,
+      full_text_fetched_at,
+      full_text_conversion_status,
+      source_metadata,
+      has_all_llm_judgments,
+      llm_judged_prompt_count,
+      llm_judged_prompt_ids,
+      enabled_prompt_count,
+      human_answered_prompt_count,
+      human_answered_prompt_ids,
+      has_all_human_answers,
+      review_opened,
+      review_sections_completed,
+      latest_llm_created_at,
+      latest_human_updated_at,
+      latest_review_updated_at,
+      serving_updated_at
+    )
+    WITH article_scope AS (
+      SELECT
+        aggregated_scope.project_id,
+        aggregated_scope.article_id,
+        aggregated_scope.in_curated_scope,
+        aggregated_scope.in_route_scope,
+        article.article_created_at,
+        article.article_updated_at
+      FROM (
+        SELECT
+          combined_scope.project_id,
+          combined_scope.article_id,
+          COALESCE(BOOL_OR(combined_scope.in_curated_scope), FALSE) AS in_curated_scope,
+          COALESCE(BOOL_OR(combined_scope.in_route_scope), FALSE) AS in_route_scope
+        FROM (
+          SELECT
+            pir.project_id,
+            air.article_id,
+            FALSE AS in_curated_scope,
+            TRUE AS in_route_scope
+          FROM app.project_import_route pir
+          INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
+          WHERE pir.project_id = ${projectLiteral}
+            AND air.article_id = ${articleLiteral}
+          UNION ALL
+          SELECT
+            pa.project_id,
+            pa.article_id,
+            TRUE AS in_curated_scope,
+            FALSE AS in_route_scope
+          FROM app.project_article pa
+          WHERE pa.project_id = ${projectLiteral}
+            AND pa.article_id = ${articleLiteral}
+        ) combined_scope
+        GROUP BY combined_scope.project_id, combined_scope.article_id
+      ) aggregated_scope
+      INNER JOIN app.project project
+        ON project.id = aggregated_scope.project_id
+       AND project.archived = FALSE
+      INNER JOIN app.article article ON article.id = aggregated_scope.article_id
+    ),
+    enabled_project_prompt AS (
+      SELECT project_id, prompt_id
+      FROM app.project_prompt
+      WHERE enabled = TRUE
+        AND project_id = ${projectLiteral}
+    ),
+    enabled_project_prompt_count AS (
+      SELECT project_id, COUNT(*) AS enabled_prompt_count
+      FROM enabled_project_prompt
+      GROUP BY project_id
+    ),
+    llm_project_prompt AS (
+      SELECT
+        article_scope.project_id,
+        judgment_fact.article_id,
+        judgment_fact.prompt_id,
+        MAX(judgment_fact.created_at) AS latest_llm_created_at
+      FROM article_scope
+      INNER JOIN app.project project ON project.id = article_scope.project_id
+      INNER JOIN enabled_project_prompt enabled_prompt
+        ON enabled_prompt.project_id = article_scope.project_id
+      INNER JOIN mart.judgment_fact judgment_fact
+        ON judgment_fact.article_id = article_scope.article_id
+       AND judgment_fact.prompt_id = enabled_prompt.prompt_id
+       AND judgment_fact.model_id = project.model_id
+       AND judgment_fact.use_title = project.use_title
+       AND judgment_fact.use_abstract = project.use_abstract
+       AND judgment_fact.use_fulltext = project.use_fulltext
+       AND judgment_fact.use_fulltext_no_images = project.use_fulltext_no_images
+      GROUP BY article_scope.project_id, judgment_fact.article_id, judgment_fact.prompt_id
+    ),
+    llm_project_rollup AS (
+      SELECT
+        project_id,
+        article_id,
+        COUNT(DISTINCT prompt_id) AS llm_judged_prompt_count,
+        LIST(DISTINCT prompt_id) AS llm_judged_prompt_ids,
+        MAX(latest_llm_created_at) AS latest_llm_created_at
+      FROM llm_project_prompt
+      GROUP BY project_id, article_id
+    ),
+    human_project_prompt AS (
+      SELECT
+        judgment_human.project_id,
+        judgment_human.article_id,
+        judgment_human.prompt_id,
+        MAX(judgment_human.updated_at) AS latest_human_updated_at
+      FROM app.judgment_human judgment_human
+      INNER JOIN enabled_project_prompt enabled_prompt
+        ON enabled_prompt.project_id = judgment_human.project_id
+       AND enabled_prompt.prompt_id = judgment_human.prompt_id
+      WHERE judgment_human.project_id = ${projectLiteral}
+        AND judgment_human.article_id = ${articleLiteral}
+        AND judgment_human.is_answered = TRUE
+        AND NULLIF(TRIM(COALESCE(judgment_human.answer, '')), '') IS NOT NULL
+      GROUP BY judgment_human.project_id, judgment_human.article_id, judgment_human.prompt_id
+    ),
+    human_project_rollup AS (
+      SELECT
+        project_id,
+        article_id,
+        COUNT(DISTINCT prompt_id) AS human_answered_prompt_count,
+        LIST(DISTINCT prompt_id) AS human_answered_prompt_ids,
+        MAX(latest_human_updated_at) AS latest_human_updated_at
+      FROM human_project_prompt
+      GROUP BY project_id, article_id
+    ),
+    review_state AS (
+      SELECT
+        review.project_id,
+        review.article_id,
+        MAX(review.updated_at) AS latest_review_updated_at,
+        COALESCE(BOOL_OR(review.opened), FALSE) AS review_opened,
+        MAX(
+          CAST(review.reviewed_title AS INTEGER)
+          + CAST(review.reviewed_abstract AS INTEGER)
+          + CAST(review.reviewed_intro AS INTEGER)
+          + CAST(review.reviewed_method AS INTEGER)
+          + CAST(review.reviewed_results AS INTEGER)
+          + CAST(review.reviewed_discussion AS INTEGER)
+          + CAST(review.reviewed_conclusion AS INTEGER)
+          + CAST(review.reviewed_appendix AS INTEGER)
+          + CAST(review.reviewed_other AS INTEGER)
+        ) AS review_sections_completed
+      FROM app.review review
+      WHERE review.project_id = ${projectLiteral}
+        AND review.article_id = ${articleLiteral}
+      GROUP BY review.project_id, review.article_id
+    )
+    SELECT
+      article_scope.project_id,
+      (
+        SELECT active_generation
+        FROM app.project_review_serving_generation
+        WHERE project_id = ${projectLiteral}
+      ) AS generation,
+      article_scope.article_id,
+      article_scope.article_created_at,
+      article_scope.article_updated_at,
+      article.article_title,
+      article.article_id,
+      json_extract_string(article.source_metadata, '$.journalTitle'),
+      article.url,
+      article.full_text_pdf,
+      article.full_text_fetched_at,
+      article.full_text_conversion_status,
+      article.source_metadata,
+      COALESCE(prompt_count.enabled_prompt_count, 0) > 0
+        AND COALESCE(llm_rollup.llm_judged_prompt_count, 0) = COALESCE(prompt_count.enabled_prompt_count, 0),
+      COALESCE(llm_rollup.llm_judged_prompt_count, 0),
+      llm_rollup.llm_judged_prompt_ids,
+      COALESCE(prompt_count.enabled_prompt_count, 0),
+      COALESCE(human_rollup.human_answered_prompt_count, 0),
+      human_rollup.human_answered_prompt_ids,
+      COALESCE(prompt_count.enabled_prompt_count, 0) > 0
+        AND COALESCE(human_rollup.human_answered_prompt_count, 0) = COALESCE(prompt_count.enabled_prompt_count, 0),
+      COALESCE(review_state.review_opened, FALSE),
+      COALESCE(review_state.review_sections_completed, 0),
+      llm_rollup.latest_llm_created_at,
+      human_rollup.latest_human_updated_at,
+      review_state.latest_review_updated_at,
+      current_timestamp
+    FROM article_scope
+    INNER JOIN app.article article ON article.id = article_scope.article_id
+    LEFT JOIN enabled_project_prompt_count prompt_count ON prompt_count.project_id = article_scope.project_id
+    LEFT JOIN llm_project_rollup llm_rollup
+      ON llm_rollup.project_id = article_scope.project_id
+     AND llm_rollup.article_id = article_scope.article_id
+    LEFT JOIN human_project_rollup human_rollup
+      ON human_rollup.project_id = article_scope.project_id
+     AND human_rollup.article_id = article_scope.article_id
+    LEFT JOIN review_state
+      ON review_state.project_id = article_scope.project_id
+     AND review_state.article_id = article_scope.article_id;
+
+    INSERT INTO mart.review_article_filter_member (
+      project_id,
+      generation,
+      prompt_id,
+      answer_id,
+      article_id,
+      article_created_at,
+      numeric_answer_value,
+      member_updated_at
+    )
+    WITH article_scope AS (
+      SELECT aggregated_scope.project_id, aggregated_scope.article_id, article.article_created_at
+      FROM (
+        SELECT combined_scope.project_id, combined_scope.article_id
+        FROM (
+          SELECT pir.project_id, air.article_id
+          FROM app.project_import_route pir
+          INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
+          WHERE pir.project_id = ${projectLiteral}
+            AND air.article_id = ${articleLiteral}
+          UNION ALL
+          SELECT pa.project_id, pa.article_id
+          FROM app.project_article pa
+          WHERE pa.project_id = ${projectLiteral}
+            AND pa.article_id = ${articleLiteral}
+        ) combined_scope
+        GROUP BY combined_scope.project_id, combined_scope.article_id
+      ) aggregated_scope
+      INNER JOIN app.project project
+        ON project.id = aggregated_scope.project_id
+       AND project.archived = FALSE
+      INNER JOIN app.article article ON article.id = aggregated_scope.article_id
+    ),
+    enabled_project_prompt AS (
+      SELECT project_id, prompt_id
+      FROM app.project_prompt
+      WHERE enabled = TRUE
+        AND project_id = ${projectLiteral}
+    ),
+    eligible_project_judgment AS (
+      SELECT
+        article_scope.project_id,
+        article_scope.article_id,
+        article_scope.article_created_at,
+        judgment_fact.prompt_id,
+        judgment_fact.normalized_answers
+      FROM article_scope
+      INNER JOIN app.project project ON project.id = article_scope.project_id
+      INNER JOIN enabled_project_prompt enabled_prompt
+        ON enabled_prompt.project_id = article_scope.project_id
+      INNER JOIN mart.judgment_fact judgment_fact
+        ON judgment_fact.article_id = article_scope.article_id
+       AND judgment_fact.prompt_id = enabled_prompt.prompt_id
+       AND judgment_fact.model_id = project.model_id
+       AND judgment_fact.use_title = project.use_title
+       AND judgment_fact.use_abstract = project.use_abstract
+       AND judgment_fact.use_fulltext = project.use_fulltext
+       AND judgment_fact.use_fulltext_no_images = project.use_fulltext_no_images
+    )
+    SELECT DISTINCT
+      eligible_project_judgment.project_id,
+      (
+        SELECT active_generation
+        FROM app.project_review_serving_generation
+        WHERE project_id = ${projectLiteral}
+      ) AS generation,
+      eligible_project_judgment.prompt_id,
+      dictionary.answer_id,
+      eligible_project_judgment.article_id,
+      eligible_project_judgment.article_created_at,
+      dictionary.numeric_answer_value,
+      current_timestamp
+    FROM eligible_project_judgment,
+      UNNEST(eligible_project_judgment.normalized_answers) AS answer(answer_value)
+    INNER JOIN app.review_answer_dictionary dictionary
+      ON dictionary.project_id = eligible_project_judgment.project_id
+     AND dictionary.prompt_id = eligible_project_judgment.prompt_id
+     AND dictionary.answer_value = TRIM(answer.answer_value)
+    WHERE eligible_project_judgment.normalized_answers IS NOT NULL
+      AND ARRAY_LENGTH(eligible_project_judgment.normalized_answers) > 0
+      AND NULLIF(TRIM(answer.answer_value), '') IS NOT NULL;
+
+    DELETE FROM mart.review_article_serving_detail
+    WHERE project_id = ${projectLiteral}
+      AND article_id = ${articleLiteral}
+      AND generation = (
+        SELECT active_generation
+        FROM app.project_review_serving_generation
+        WHERE project_id = ${projectLiteral}
+      );
+
+    INSERT INTO mart.review_article_serving_detail (
+      project_id,
+      generation,
+      article_id,
+      prompt_id,
+      prompt_order,
+      judgment_id,
+      created_at,
+      article_created_at,
+      article_updated_at,
+      model_id,
+      answered_original,
+      answered_original_as_array,
+      detail_updated_at
+    )
+    WITH article_scope AS (
+      SELECT aggregated_scope.project_id, aggregated_scope.article_id, article.article_created_at, article.article_updated_at
+      FROM (
+        SELECT combined_scope.project_id, combined_scope.article_id
+        FROM (
+          SELECT pir.project_id, air.article_id
+          FROM app.project_import_route pir
+          INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
+          WHERE pir.project_id = ${projectLiteral}
+            AND air.article_id = ${articleLiteral}
+          UNION ALL
+          SELECT pa.project_id, pa.article_id
+          FROM app.project_article pa
+          WHERE pa.project_id = ${projectLiteral}
+            AND pa.article_id = ${articleLiteral}
+        ) combined_scope
+        GROUP BY combined_scope.project_id, combined_scope.article_id
+      ) aggregated_scope
+      INNER JOIN app.project project
+        ON project.id = aggregated_scope.project_id
+       AND project.archived = FALSE
+      INNER JOIN app.article article ON article.id = aggregated_scope.article_id
+    )
+    SELECT
+      article_scope.project_id,
+      (
+        SELECT active_generation
+        FROM app.project_review_serving_generation
+        WHERE project_id = ${projectLiteral}
+      ) AS generation,
+      judgment_fact.article_id,
+      judgment_fact.prompt_id,
+      project_prompt.prompt_order,
+      judgment_fact.judgment_id,
+      judgment_fact.created_at,
+      judgment_fact.article_created_at,
+      judgment_fact.article_updated_at,
+      judgment_fact.model_id,
+      judgment_fact.answered_original,
+      judgment_fact.answered_original_as_array,
+      current_timestamp
+    FROM article_scope
+    INNER JOIN app.project project ON project.id = article_scope.project_id
+    INNER JOIN app.project_prompt project_prompt
+      ON project_prompt.project_id = article_scope.project_id
+     AND project_prompt.enabled = TRUE
+    INNER JOIN mart.judgment_fact judgment_fact
+     ON judgment_fact.article_id = article_scope.article_id
+     AND judgment_fact.prompt_id = project_prompt.prompt_id
+     AND judgment_fact.model_id = project.model_id
+     AND judgment_fact.use_title = project.use_title
+     AND judgment_fact.use_abstract = project.use_abstract
+     AND judgment_fact.use_fulltext = project.use_fulltext
+     AND judgment_fact.use_fulltext_no_images = project.use_fulltext_no_images;
+    COMMIT;
+  `
+}
+
+const refreshProjectArticleServing = async (projectId: string, articleId: string): Promise<void> => {
+  return (await getHasActiveProjectReviewServingGeneration(projectId))
+    ? runMartRefreshBackgroundStatement(getProjectArticleServingRefreshSql(projectId, articleId)).then(() => {
+        return yieldToEventLoop()
+      })
+    : refreshProject(projectId)
+}
+
+const refreshProjectsForArticle = async (projectIds: string[], articleId: string): Promise<void> => {
+  const [currentProjectId = ''] = projectIds
+
+  if (!currentProjectId) {
+    return
+  }
+
+  await refreshProjectArticleServing(currentProjectId, articleId)
+  return refreshProjectsForArticle(projectIds.slice(1), articleId)
+}
+
+const refreshQueuedArticleTasks = async (articleIds: string[]): Promise<void> => {
+  const [currentArticleId = ''] = articleIds
+
+  if (!currentArticleId) {
+    return
+  }
+
+  await refreshJudgmentArticle(currentArticleId)
+  await refreshProjectsForArticle(await getImpactedProjectIdsForArticle(currentArticleId), currentArticleId)
+  setProcessingArticleRefreshes(articleIds.slice(1))
+  return refreshQueuedArticleTasks(articleIds.slice(1))
+}
+
 const refreshProject = async (projectId: string) => {
   const statements = getProjectRefreshSql(projectId)
   const [currentStatement = ''] = statements
@@ -979,21 +1734,6 @@ const refreshJudgmentArticle = async (articleId: string) => {
   await runMartRefreshBackgroundStatement(getJudgmentArticleRefreshSql(articleId))
   await yieldToEventLoop()
   recordArticleRefreshCompletion()
-}
-
-const collectImpactedProjectIds = async (articleIds: string[], projectIds: Set<string>): Promise<Set<string>> => {
-  const [currentArticleId = ''] = articleIds
-
-  if (!currentArticleId) {
-    return projectIds
-  }
-
-  await refreshJudgmentArticle(currentArticleId)
-  const nextProjectIds = new Set([...projectIds, ...(await getImpactedProjectIdsForArticle(currentArticleId))])
-  setProcessingArticleRefreshes(articleIds.slice(1))
-  setProcessingProjectRefreshes(Array.from(nextProjectIds))
-
-  return collectImpactedProjectIds(articleIds.slice(1), nextProjectIds)
 }
 
 const refreshProjects = async (projectIds: string[]): Promise<void> => {
@@ -1036,13 +1776,8 @@ const processQueuedMartRefreshPass = async (): Promise<boolean> => {
   setClaimedQueuedRefreshes(claimedQueuedArticleIds, claimedQueuedProjectIds)
 
   try {
-    const impactedProjectIds = await collectImpactedProjectIds(claimedQueuedArticleIds, new Set())
-    const projectIdsToQueue = Array.from(impactedProjectIds).filter((projectId) => {
-      return !claimedQueuedProjectIds.includes(projectId)
-    })
-
+    await refreshQueuedArticleTasks(claimedQueuedArticleIds)
     await completeQueuedTasks(queuedArticleTasks)
-    await queueProjectRefreshes(projectIdsToQueue, 'martRefreshArticleDrain')
     setMartRefreshProgressSnapshot({
       claimedQueuedArticleIds: [],
       claimedQueuedProjectIds,

@@ -136,7 +136,7 @@ test('mart refresh keeps a requeue that arrives during drain', () => {
 
     expect(result.queuedCount).toBe(0)
     expect(result.refreshRuns).toBe(2)
-    expect(result.totalCount).toBe(2)
+    expect(result.totalCount).toBe(1)
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.writer.lock`)
@@ -487,6 +487,172 @@ test('mart refresh runs project rebuild statements on the background database co
   expect(result.queueActive).toBe(false)
 })
 
+test('mart refresh populates review article serving v3 tables', () => {
+  const duckdbPath = `/tmp/f1-mart-refresh-serving-v3-${Date.now()}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts')
+
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+          VALUES ('connection-serving-v3-test', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+        \`)
+        await database.run(\`
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+          VALUES ('model-serving-v3-test', 'connection-serving-v3-test', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+          VALUES ('project-serving-v3-test', 'Serving V3 Project', 'model-serving-v3-test', TRUE, TRUE, FALSE, FALSE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.prompt (id, original_text, content_hash)
+          VALUES ('prompt-serving-v3-test', 'Prompt body', 'hash-serving-v3-test')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+          VALUES ('project-prompt-serving-v3-test', 'project-serving-v3-test', 'prompt-serving-v3-test', 1, TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.article (id, article_title, article_created_at, article_updated_at, article_id)
+          VALUES (
+            'article-serving-v3-test',
+            'Serving V3 Article',
+            '2024-01-02T00:00:00.000Z',
+            '2024-01-03T00:00:00.000Z',
+            'external-serving-v3-test'
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_article (id, project_id, article_id)
+          VALUES ('project-article-serving-v3-test', 'project-serving-v3-test', 'article-serving-v3-test')
+        \`)
+        await database.run(\`
+          INSERT INTO app.judgment (
+            id,
+            article_id,
+            prompt_id,
+            model_id,
+            use_title,
+            use_abstract,
+            use_fulltext,
+            use_fulltext_no_images,
+            is_answered,
+            answered_original,
+            answered_original_as_array,
+            confidence_original
+          )
+          VALUES (
+            'judgment-serving-v3-test',
+            'article-serving-v3-test',
+            'prompt-serving-v3-test',
+            'model-serving-v3-test',
+            TRUE,
+            TRUE,
+            FALSE,
+            FALSE,
+            TRUE,
+            'yes',
+            ['yes'],
+            90
+          )
+        \`)
+
+        const martRefreshService = getDuckdbMartRefreshService()
+
+        await martRefreshService.queueJudgmentArticleRefresh('article-serving-v3-test', 'serving-v3-test')
+        await martRefreshService.flush()
+
+        const [generationRow] = await database.queryJson(\`
+          SELECT active_generation AS activeGeneration
+          FROM app.project_review_serving_generation
+          WHERE project_id = 'project-serving-v3-test'
+        \`)
+        const servingRows = await database.queryJson(\`
+          SELECT article_id AS articleId, has_all_llm_judgments AS hasAllLlmJudgments
+          FROM mart.review_article_serving
+          WHERE project_id = 'project-serving-v3-test'
+            AND generation = 1
+          ORDER BY article_id ASC
+        \`)
+        const filterRows = await database.queryJson(\`
+          SELECT prompt_id AS promptId, article_id AS articleId
+          FROM mart.review_article_filter_member
+          WHERE project_id = 'project-serving-v3-test'
+            AND generation = 1
+          ORDER BY prompt_id ASC, article_id ASC
+        \`)
+        const detailRows = await database.queryJson(\`
+          SELECT prompt_id AS promptId, article_id AS articleId, judgment_id AS judgmentId
+          FROM mart.review_article_serving_detail
+          WHERE project_id = 'project-serving-v3-test'
+            AND generation = 1
+          ORDER BY prompt_id ASC, article_id ASC
+        \`)
+
+        console.log(JSON.stringify({
+          activeGeneration: Number(generationRow?.activeGeneration ?? 0),
+          detailRows,
+          filterRows,
+          servingRows,
+        }))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(
+        runScript.stderr.toString()
+          || runScript.stdout.toString()
+          || 'Mart review article serving v3 regression test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      activeGeneration: number
+      detailRows: Array<{articleId: string; judgmentId: string; promptId: string}>
+      filterRows: Array<{articleId: string; promptId: string}>
+      servingRows: Array<{articleId: string; hasAllLlmJudgments: boolean}>
+    }
+
+    expect(result.activeGeneration).toBe(1)
+    expect(result.servingRows).toEqual([{articleId: 'article-serving-v3-test', hasAllLlmJudgments: true}])
+    expect(result.filterRows).toEqual([{articleId: 'article-serving-v3-test', promptId: 'prompt-serving-v3-test'}])
+    expect(result.detailRows).toEqual([
+      {
+        articleId: 'article-serving-v3-test',
+        judgmentId: 'judgment-serving-v3-test',
+        promptId: 'prompt-serving-v3-test',
+      },
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+  }
+})
+
 test('mart refresh skips schema repair writes when refresh_generation already exists', () => {
   const duckdbPath = `/tmp/f1-mart-refresh-generation-ready-${Date.now()}.duckdb`
   const runScript = globalThis.Bun.spawnSync(
@@ -719,7 +885,7 @@ test('mart refresh yields between drain passes after exceeding the time budget',
 
     expect(result.delayedRefreshRuns).toBe(5)
     expect(result.queuedCount).toBe(0)
-    expect(result.totalCount).toBe(6)
+    expect(result.totalCount).toBe(5)
     expect(result.zeroDelayYieldCount).toBeGreaterThanOrEqual(1)
   } finally {
     removeFileIfExists(duckdbPath)
@@ -849,8 +1015,8 @@ test('mart refresh deletes article tasks before a delayed project rebuild finish
       queueRows: Array<{count: number; refreshScope: string}>
     }
 
-    expect(result.progress.processingArticleIds).toEqual([])
-    expect(result.queueRows).toEqual([{count: 1, refreshScope: 'project'}])
+    expect(result.progress.processingArticleIds).toEqual(['article-article-drain-test'])
+    expect(result.queueRows).toEqual([{count: 1, refreshScope: 'judgment_article'}])
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.writer.lock`)

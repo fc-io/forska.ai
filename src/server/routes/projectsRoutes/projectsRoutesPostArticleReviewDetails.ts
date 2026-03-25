@@ -138,13 +138,18 @@ const getProjectReviewDetailJudgmentRows = async (params: {
   articleId: string
 }): Promise<ProjectReviewDetailJudgmentRow[]> => {
   const rows = await getAppDatabaseService().queryJson<ProjectReviewDetailJudgmentRow>(`
+    WITH active_generation AS (
+      SELECT project_id AS projectId, active_generation AS generation
+      FROM app.project_review_serving_generation
+      WHERE project_id = '${escapeSqlString(params.projectId)}'
+    )
     SELECT
       j.judgment_id AS judgmentId,
-      jf.created_at AS judgmentCreatedAt,
+      j.created_at AS judgmentCreatedAt,
       jf.updated_at AS judgmentUpdatedAt,
-      jf.article_id AS judgmentArticleId,
-      jf.model_id AS judgmentModelId,
-      jf.prompt_id AS judgmentPromptId,
+      j.article_id AS judgmentArticleId,
+      j.model_id AS judgmentModelId,
+      j.prompt_id AS judgmentPromptId,
       jf.project_id AS judgmentProjectId,
       jf.use_title AS judgmentUseTitle,
       jf.use_abstract AS judgmentUseAbstract,
@@ -152,8 +157,8 @@ const getProjectReviewDetailJudgmentRows = async (params: {
       jf.use_fulltext_no_images AS judgmentUseFulltextNoImages,
       jf.chunking_strategy AS judgmentChunkingStrategy,
       jf.is_answered AS judgmentIsAnswered,
-      jf.answered_original AS judgmentAnsweredOriginal,
-      TO_JSON(jf.answered_original_as_array) AS judgmentAnsweredOriginalAsArray,
+      j.answered_original AS judgmentAnsweredOriginal,
+      TO_JSON(j.answered_original_as_array) AS judgmentAnsweredOriginalAsArray,
       jf.confidence_original AS judgmentConfidenceOriginal,
       jf.explanation AS judgmentExplanation,
       TO_JSON(jf.quotes) AS judgmentQuotes,
@@ -164,7 +169,10 @@ const getProjectReviewDetailJudgmentRows = async (params: {
       COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
       pc.provider_kind AS modelProvider,
       m.variant AS modelVersion
-    FROM mart.review_article_judgment_detail j
+    FROM mart.review_article_serving_detail j
+    INNER JOIN active_generation active
+      ON active.projectId = j.project_id
+     AND active.generation = j.generation
     INNER JOIN mart.judgment_fact jf ON jf.judgment_id = j.judgment_id
     INNER JOIN app.prompt p ON p.id = jf.prompt_id
     LEFT JOIN app.model m ON m.id = jf.model_id

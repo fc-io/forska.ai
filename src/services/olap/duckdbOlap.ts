@@ -647,6 +647,586 @@ const getDuckdbCandidatePostingSelection = (scope: ProjectOlapScope, prompts?: R
   }
 }
 
+const getDuckdbServingPostingSelection = (scope: ProjectOlapScope, prompts?: Record<string, string[]>) => {
+  const promptFilters = getPromptFilterEntries(prompts)
+
+  if (promptFilters.length === 0) {
+    return null
+  }
+
+  const promptTypeById = getDuckdbPromptTypeById(scope)
+  const dictionaryConditions = promptFilters
+    .map(([promptId, answeredValues]) => {
+      const promptType = promptTypeById[promptId]
+      const isNumericPrompt = promptType ? isNumericType(promptType) : false
+
+      if (!isNumericPrompt) {
+        return `(d.prompt_id = ${getDuckdbSqlString(promptId)} AND d.answer_value IN (${getDuckdbSqlStringList(answeredValues).join(', ')}))`
+      }
+
+      const parsedFilters = answeredValues.reduce<{
+        binRanges: Array<{min: number; max: number}>
+        specialValues: string[]
+      }>(
+        (filters, value) => {
+          if (!value.startsWith('bin:')) {
+            return {...filters, specialValues: [...filters.specialValues, value]}
+          }
+
+          const [, minRaw = '', maxRaw = ''] = value.split(':')
+          const min = Number.parseInt(minRaw, 10)
+          const max = Number.parseInt(maxRaw, 10)
+
+          return Number.isNaN(min) || Number.isNaN(max)
+            ? filters
+            : {...filters, binRanges: [...filters.binRanges, {min, max}]}
+        },
+        {binRanges: [], specialValues: []},
+      )
+      const numericCondition =
+        parsedFilters.binRanges.length === 0
+          ? null
+          : `(${parsedFilters.binRanges
+              .map((range) => {
+                return `(d.numeric_answer_value >= ${range.min} AND d.numeric_answer_value <= ${range.max})`
+              })
+              .join(' OR ')})`
+      const specialCondition =
+        parsedFilters.specialValues.length === 0
+          ? null
+          : `d.answer_value IN (${getDuckdbSqlStringList(parsedFilters.specialValues).join(', ')})`
+      const answerCondition = [numericCondition, specialCondition].filter((part): part is string => {
+        return part !== null
+      })
+
+      return answerCondition.length === 0
+        ? null
+        : `(d.prompt_id = ${getDuckdbSqlString(promptId)} AND (${answerCondition.join(' OR ')}))`
+    })
+    .filter((part): part is string => {
+      return part !== null
+    })
+
+  if (dictionaryConditions.length === 0) {
+    return null
+  }
+
+  return {
+    promptCount: promptFilters.length,
+    sql: `
+      selected_answers AS (
+        SELECT d.prompt_id, d.answer_id
+        FROM app.review_answer_dictionary d
+        WHERE d.project_id = ${getDuckdbSqlString(scope.projectId)}
+          AND (${dictionaryConditions.join(' OR ')})
+      ),
+      matched_article_id AS (
+        SELECT member.article_id AS articleId
+        FROM mart.review_article_filter_member member
+        INNER JOIN active_generation active
+          ON active.projectId = member.project_id
+         AND active.generation = member.generation
+        INNER JOIN selected_answers
+          ON selected_answers.prompt_id = member.prompt_id
+         AND selected_answers.answer_id = member.answer_id
+        WHERE member.project_id = ${getDuckdbSqlString(scope.projectId)}
+        GROUP BY member.article_id
+        HAVING COUNT(DISTINCT member.prompt_id) = ${promptFilters.length}
+      )
+    `,
+  }
+}
+
+const getDuckdbServingBaseWhereParts = (params: {
+  scope: ProjectOlapScope
+  from?: string | null
+  to?: string | null
+  search?: string | null
+  cursor?: string | null
+}) => {
+  const requestFromDate = parseDateFromInput(params.from, 'T00:00:00.000Z')
+  const requestToDate = parseDateFromInput(params.to, 'T23:59:59.999Z')
+  const effectiveFromDate = getEffectiveFromDate(params.scope.dateFrom, requestFromDate)
+  const effectiveToDate = getEffectiveToDate(params.scope.dateTo, requestToDate)
+  const trimmedSearch = params.search?.trim() ?? ''
+  const decodedCursor = decodeReviewPageCursor(params.cursor)
+
+  return [
+    `s.project_id = ${getDuckdbSqlString(params.scope.projectId)}`,
+    effectiveFromDate ? `s.article_created_at >= ${getDuckdbTimestampLiteral(effectiveFromDate)}` : null,
+    effectiveToDate ? `s.article_created_at <= ${getDuckdbTimestampLiteral(effectiveToDate)}` : null,
+    trimmedSearch
+      ? `LOWER(COALESCE(s.article_title, '')) LIKE LOWER(${getDuckdbSqlString(`%${trimmedSearch}%`)})`
+      : null,
+    decodedCursor
+      ? `(
+          COALESCE(s.article_created_at, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') < ${
+            decodedCursor.articleCreatedAt
+              ? getDuckdbTimestampLiteral(new Date(decodedCursor.articleCreatedAt))
+              : `TIMESTAMPTZ '0001-01-01T00:00:00.000Z'`
+          }
+          OR (
+            COALESCE(s.article_created_at, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') = ${
+              decodedCursor.articleCreatedAt
+                ? getDuckdbTimestampLiteral(new Date(decodedCursor.articleCreatedAt))
+                : `TIMESTAMPTZ '0001-01-01T00:00:00.000Z'`
+            }
+            AND s.article_id > ${getDuckdbSqlString(decodedCursor.articleId)}
+          )
+        )`
+      : null,
+  ].filter((part): part is string => {
+    return part !== null
+  })
+}
+
+const getDuckdbServingWhereParts = (params: {
+  scope: ProjectOlapScope
+  from?: string | null
+  to?: string | null
+  search?: string | null
+  cursor?: string | null
+}) => {
+  return [...getDuckdbServingBaseWhereParts(params), 's.has_all_llm_judgments = TRUE']
+}
+
+const getDuckdbServingReviewWhereParts = (params: {
+  scope: ProjectOlapScope
+  from?: string | null
+  to?: string | null
+  search?: string | null
+  requireAllHumanAnswers?: boolean
+  requireAllLlmJudgments?: boolean
+  requireIncompleteLlm?: boolean
+}) => {
+  return [
+    ...getDuckdbServingBaseWhereParts(params),
+    params.requireAllLlmJudgments ? 's.has_all_llm_judgments = TRUE' : null,
+    params.requireAllHumanAnswers ? 's.has_all_human_answers = TRUE' : null,
+    params.requireIncompleteLlm ? 's.has_all_llm_judgments = FALSE' : null,
+  ].filter((part): part is string => {
+    return part !== null
+  })
+}
+
+const getReviewedPageRowsFromServingMart = async (params: {
+  scope: ProjectOlapScope
+  page: number
+  limit: number
+  from?: string | null
+  to?: string | null
+  search?: string | null
+  cursor?: string | null
+  prompts?: Record<string, string[]>
+}) => {
+  const whereParts = getDuckdbServingWhereParts(params)
+  const offset = params.cursor ? 0 : Math.max(params.page - 1, 0) * params.limit
+  const postingSelection = getDuckdbServingPostingSelection(params.scope, params.prompts)
+  const withPrefix = `WITH active_generation AS (
+        SELECT project_id AS projectId, active_generation AS generation
+        FROM app.project_review_serving_generation
+        WHERE project_id = ${getDuckdbSqlString(params.scope.projectId)}
+      )`
+  const withClause = postingSelection ? `${withPrefix}, ${postingSelection.sql}` : withPrefix
+  const joinClause = postingSelection ? 'INNER JOIN matched_article_id matched ON matched.articleId = s.article_id' : ''
+  const rows = await runDuckdbJsonQuery<{
+    articleCreatedAt: unknown
+    articleExternalId: string | null
+    articleId: string
+    articleTitle: string
+    articleUpdatedAt: unknown
+    fullTextConversionStatus: string | null
+    fullTextFetchedAt: unknown
+    fullTextPDF: string | null
+    sourceMetadata: unknown
+    url: string | null
+  }>(`
+    ${withClause}
+    SELECT
+      s.article_id AS articleId,
+      s.article_external_id AS articleExternalId,
+      s.article_title AS articleTitle,
+      s.article_created_at AS articleCreatedAt,
+      s.article_updated_at AS articleUpdatedAt,
+      s.url AS url,
+      s.full_text_pdf AS fullTextPDF,
+      s.full_text_fetched_at AS fullTextFetchedAt,
+      s.full_text_conversion_status AS fullTextConversionStatus,
+      s.source_metadata AS sourceMetadata
+    FROM mart.review_article_serving s
+    INNER JOIN active_generation active
+      ON active.projectId = s.project_id
+     AND active.generation = s.generation
+    ${joinClause}
+    WHERE ${whereParts.join(' AND ')}
+    ORDER BY COALESCE(s.article_created_at, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') DESC, s.article_id ASC
+    LIMIT ${params.limit + 1}
+    OFFSET ${offset}
+  `)
+  const hasMore = rows.length > params.limit
+  const pageRows = rows.slice(0, params.limit)
+  const lastRow = pageRows[pageRows.length - 1]
+
+  return {
+    nextCursor:
+      hasMore && lastRow
+        ? encodeReviewPageCursor({
+            articleCreatedAt: getDuckdbDateValue(lastRow.articleCreatedAt)?.toISOString() ?? null,
+            articleId: lastRow.articleId,
+          })
+        : null,
+    rows: pageRows.map((row) => {
+      const sourceMetadata = getDuckdbArticleSourceMetadata(row.sourceMetadata)
+
+      return {
+        articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
+        articleId: row.articleExternalId,
+        articleTitle: row.articleTitle,
+        articleUpdatedAt: getDuckdbDateValue(row.articleUpdatedAt),
+        fullTextConversionStatus: row.fullTextConversionStatus,
+        fullTextFetchedAt: getDuckdbDateValue(row.fullTextFetchedAt),
+        fullTextPDF: row.fullTextPDF,
+        id: row.articleId,
+        journalTitle: sourceMetadata.journalTitle,
+        sourceMetadata,
+        url: row.url,
+      }
+    }),
+  }
+}
+
+const countReviewedServingRows = async (params: {
+  scope: ProjectOlapScope
+  from?: string | null
+  to?: string | null
+  search?: string | null
+  prompts?: Record<string, string[]>
+}) => {
+  const whereParts = getDuckdbServingWhereParts({...params, cursor: null})
+  const postingSelection = getDuckdbServingPostingSelection(params.scope, params.prompts)
+  const withPrefix = `WITH active_generation AS (
+        SELECT project_id AS projectId, active_generation AS generation
+        FROM app.project_review_serving_generation
+        WHERE project_id = ${getDuckdbSqlString(params.scope.projectId)}
+      )`
+  const withClause = postingSelection ? `${withPrefix}, ${postingSelection.sql}` : withPrefix
+  const joinClause = postingSelection ? 'INNER JOIN matched_article_id matched ON matched.articleId = s.article_id' : ''
+  const rows = await runDuckdbJsonQuery<{totalCount: number}>(`
+    ${withClause}
+    SELECT COUNT(*) AS totalCount
+    FROM mart.review_article_serving s
+    INNER JOIN active_generation active
+      ON active.projectId = s.project_id
+     AND active.generation = s.generation
+    ${joinClause}
+    WHERE ${whereParts.join(' AND ')}
+  `)
+
+  return Number(rows[0]?.totalCount ?? 0)
+}
+
+const getBothPageRowsFromServing = async (params: {
+  scope: ProjectOlapScope
+  page: number
+  limit: number
+  from?: string | null
+  to?: string | null
+  search?: string | null
+  prompts?: Record<string, string[]>
+}) => {
+  const offset = Math.max(params.page - 1, 0) * params.limit
+  const whereParts = getDuckdbServingReviewWhereParts({
+    ...params,
+    requireAllHumanAnswers: true,
+    requireAllLlmJudgments: true,
+  })
+  const postingSelection = getDuckdbServingPostingSelection(params.scope, params.prompts)
+  const withPrefix = `WITH active_generation AS (
+      SELECT project_id AS projectId, active_generation AS generation
+      FROM app.project_review_serving_generation
+      WHERE project_id = ${getDuckdbSqlString(params.scope.projectId)}
+    )`
+  const withClause = postingSelection ? `${withPrefix}, ${postingSelection.sql}` : withPrefix
+  const joinClause = postingSelection ? 'INNER JOIN matched_article_id matched ON matched.articleId = s.article_id' : ''
+  const countRows = await runDuckdbJsonQuery<{totalCount: number}>(`
+    ${withClause}
+    SELECT COUNT(*) AS totalCount
+    FROM mart.review_article_serving s
+    INNER JOIN active_generation active
+      ON active.projectId = s.project_id
+     AND active.generation = s.generation
+    ${joinClause}
+    WHERE ${whereParts.join(' AND ')}
+  `)
+  const totalCount = Number(countRows[0]?.totalCount ?? 0)
+  const rows = await runDuckdbJsonQuery<{
+    articleCreatedAt: unknown
+    articleId: string
+    articleTitle: string
+    articleUpdatedAt: unknown
+    sourceMetadata: unknown
+  }>(`
+    ${withClause}
+    SELECT
+      s.article_id AS articleId,
+      s.article_title AS articleTitle,
+      s.article_created_at AS articleCreatedAt,
+      s.article_updated_at AS articleUpdatedAt,
+      s.source_metadata AS sourceMetadata
+    FROM mart.review_article_serving s
+    INNER JOIN active_generation active
+      ON active.projectId = s.project_id
+     AND active.generation = s.generation
+    ${joinClause}
+    WHERE ${whereParts.join(' AND ')}
+    ORDER BY COALESCE(s.article_created_at, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') DESC, s.article_id ASC
+    LIMIT ${params.limit}
+    OFFSET ${offset}
+  `)
+
+  return {
+    rows: rows.map((row) => {
+      return {
+        articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
+        articleUpdatedAt: getDuckdbDateValue(row.articleUpdatedAt),
+        id: row.articleId,
+        articleTitle: row.articleTitle,
+        sourceMetadata: getDuckdbArticleSourceMetadata(row.sourceMetadata),
+      }
+    }),
+    totalCount,
+  }
+}
+
+const countUnassessedRowsFromServing = async (params: {
+  scope: ProjectOlapScope
+  from?: string | null
+  to?: string | null
+  search?: string | null
+}) => {
+  const whereParts = getDuckdbServingReviewWhereParts({...params, requireIncompleteLlm: true})
+  const rows = await runDuckdbJsonQuery<{totalCount: number}>(`
+    WITH active_generation AS (
+      SELECT project_id AS projectId, active_generation AS generation
+      FROM app.project_review_serving_generation
+      WHERE project_id = ${getDuckdbSqlString(params.scope.projectId)}
+    )
+    SELECT COUNT(*) AS totalCount
+    FROM mart.review_article_serving s
+    INNER JOIN active_generation active
+      ON active.projectId = s.project_id
+     AND active.generation = s.generation
+    WHERE ${whereParts.join(' AND ')}
+  `)
+
+  return Number(rows[0]?.totalCount ?? 0)
+}
+
+const getUnassessedRowsFromServing = async (params: {
+  scope: ProjectOlapScope
+  limit?: number
+  offset?: number
+  from?: string | null
+  to?: string | null
+  search?: string | null
+}) => {
+  const totalCount = await countUnassessedRowsFromServing(params)
+  const whereParts = getDuckdbServingReviewWhereParts({...params, requireIncompleteLlm: true})
+  const limitClause = params.limit == null ? '' : `LIMIT ${params.limit}`
+  const offsetClause = params.offset == null ? '' : `OFFSET ${params.offset}`
+  const rows = await runDuckdbJsonQuery<{
+    articleCreatedAt: unknown
+    articleId: string
+    articleTitle: string
+    articleUpdatedAt: unknown
+    llmJudgedPromptIds: unknown
+  }>(`
+    WITH active_generation AS (
+      SELECT project_id AS projectId, active_generation AS generation
+      FROM app.project_review_serving_generation
+      WHERE project_id = ${getDuckdbSqlString(params.scope.projectId)}
+    )
+    SELECT
+      s.article_id AS articleId,
+      s.article_title AS articleTitle,
+      s.article_created_at AS articleCreatedAt,
+      s.article_updated_at AS articleUpdatedAt,
+      TO_JSON(s.llm_judged_prompt_ids) AS llmJudgedPromptIds
+    FROM mart.review_article_serving s
+    INNER JOIN active_generation active
+      ON active.projectId = s.project_id
+     AND active.generation = s.generation
+    WHERE ${whereParts.join(' AND ')}
+    ORDER BY COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') DESC, s.article_id DESC
+    ${limitClause}
+    ${offsetClause}
+  `)
+
+  return {
+    rows: rows.map((row) => {
+      return {
+        id: row.articleId,
+        articleId: row.articleId,
+        articleTitle: row.articleTitle,
+        articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
+        articleUpdatedAt: getDuckdbDateValue(row.articleUpdatedAt),
+        llmJudgedPromptIds: getDuckdbStringArrayValue(row.llmJudgedPromptIds),
+      }
+    }),
+    totalCount,
+  }
+}
+
+const getUnassessedCandidateRowsFromServing = async (params: {
+  scope: ProjectOlapScope
+  cursor: PaginationCursor | null
+  limit: number
+}) => {
+  const whereParts = getDuckdbServingReviewWhereParts({...params, requireIncompleteLlm: true})
+  const cursorClause = params.cursor
+    ? `(
+        COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') < ${getDuckdbTimestampLiteral(params.cursor.lastDate)}
+        OR (
+          COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') = ${getDuckdbTimestampLiteral(params.cursor.lastDate)}
+          AND s.article_id < ${getDuckdbSqlString(params.cursor.lastArticleId)}
+        )
+      )`
+    : null
+  const rows = await runDuckdbJsonQuery<{
+    articleCreatedAt: unknown
+    articleId: string
+    articleUpdatedAt: unknown
+    llmJudgedPromptIds: unknown
+  }>(`
+    WITH active_generation AS (
+      SELECT project_id AS projectId, active_generation AS generation
+      FROM app.project_review_serving_generation
+      WHERE project_id = ${getDuckdbSqlString(params.scope.projectId)}
+    )
+    SELECT
+      s.article_id AS articleId,
+      s.article_created_at AS articleCreatedAt,
+      s.article_updated_at AS articleUpdatedAt,
+      TO_JSON(s.llm_judged_prompt_ids) AS llmJudgedPromptIds
+    FROM mart.review_article_serving s
+    INNER JOIN active_generation active
+      ON active.projectId = s.project_id
+     AND active.generation = s.generation
+    WHERE ${[...whereParts, cursorClause]
+      .filter((part): part is string => {
+        return part !== null
+      })
+      .join(' AND ')}
+    ORDER BY COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') DESC, s.article_id DESC
+    LIMIT ${params.limit + 1}
+  `)
+
+  return {
+    hasMore: rows.length > params.limit,
+    rows: rows.slice(0, params.limit).map((row) => {
+      return {
+        articleId: row.articleId,
+        articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
+        articleUpdatedAt: getDuckdbDateValue(row.articleUpdatedAt),
+        llmJudgedPromptIds: getDuckdbStringArrayValue(row.llmJudgedPromptIds),
+      }
+    }),
+  }
+}
+
+const getReviewedArticleIdsFromServing = async (params: {
+  scope: ProjectOlapScope
+  from?: string | null
+  to?: string | null
+  search?: string | null
+  prompts?: Record<string, string[]>
+  requireAllHumanAnswers?: boolean
+}) => {
+  const whereParts = getDuckdbServingReviewWhereParts({
+    ...params,
+    requireAllLlmJudgments: true,
+    requireAllHumanAnswers: params.requireAllHumanAnswers,
+  })
+  const postingSelection = getDuckdbServingPostingSelection(params.scope, params.prompts)
+  const withPrefix = `WITH active_generation AS (
+        SELECT project_id AS projectId, active_generation AS generation
+        FROM app.project_review_serving_generation
+        WHERE project_id = ${getDuckdbSqlString(params.scope.projectId)}
+      )`
+  const withClause = postingSelection ? `${withPrefix}, ${postingSelection.sql}` : withPrefix
+  const joinClause = postingSelection ? 'INNER JOIN matched_article_id matched ON matched.articleId = s.article_id' : ''
+  const rows = await runDuckdbJsonQuery<{articleId: string}>(`
+    ${withClause}
+    SELECT s.article_id AS articleId
+    FROM mart.review_article_serving s
+    INNER JOIN active_generation active
+      ON active.projectId = s.project_id
+     AND active.generation = s.generation
+    ${joinClause}
+    WHERE ${whereParts.join(' AND ')}
+    ORDER BY COALESCE(s.article_created_at, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') DESC, s.article_id ASC
+  `)
+
+  return rows.map((row) => {
+    return row.articleId
+  })
+}
+
+const getHumanReviewedArticleIdsFromServing = async (params: {
+  scope: ProjectOlapScope
+  from?: string | null
+  to?: string | null
+  search?: string | null
+}) => {
+  const whereParts = getDuckdbServingReviewWhereParts({...params, requireAllHumanAnswers: true})
+  const rows = await runDuckdbJsonQuery<{articleId: string}>(`
+    WITH active_generation AS (
+      SELECT project_id AS projectId, active_generation AS generation
+      FROM app.project_review_serving_generation
+      WHERE project_id = ${getDuckdbSqlString(params.scope.projectId)}
+    )
+    SELECT s.article_id AS articleId
+    FROM mart.review_article_serving s
+    INNER JOIN active_generation active
+      ON active.projectId = s.project_id
+     AND active.generation = s.generation
+    WHERE ${whereParts.join(' AND ')}
+    ORDER BY COALESCE(s.article_created_at, TIMESTAMPTZ '0001-01-01T00:00:00.000Z') DESC, s.article_id ASC
+  `)
+
+  return rows.map((row) => {
+    return row.articleId
+  })
+}
+
+const getHasReviewArticleServingRows = async (projectId: string) => {
+  const rows = await runDuckdbJsonQuery<{projectId: string}>(`
+    SELECT generation.project_id AS projectId
+    FROM app.project_review_serving_generation generation
+    INNER JOIN mart.review_article_serving serving
+      ON serving.project_id = generation.project_id
+     AND serving.generation = generation.active_generation
+    WHERE generation.project_id = ${getDuckdbSqlString(projectId)}
+    LIMIT 1
+  `)
+
+  return rows.length > 0
+}
+
+const getHasReviewArticleFilterMemberRows = async (projectId: string) => {
+  const rows = await runDuckdbJsonQuery<{projectId: string}>(`
+    SELECT generation.project_id AS projectId
+    FROM app.project_review_serving_generation generation
+    INNER JOIN mart.review_article_filter_member member
+      ON member.project_id = generation.project_id
+     AND member.generation = generation.active_generation
+    WHERE generation.project_id = ${getDuckdbSqlString(projectId)}
+    LIMIT 1
+  `)
+
+  return rows.length > 0
+}
+
 const getReviewedPageRowsFromCandidateMart = async (params: {
   scope: ProjectOlapScope
   page: number
@@ -800,9 +1380,12 @@ const getHasReviewArticleFilterPostingRows = async (projectId: string) => {
 
 const getHasReviewArticleJudgmentDetailRows = async (projectId: string) => {
   const rows = await runDuckdbJsonQuery<{projectId: string}>(`
-    SELECT project_id AS projectId
-    FROM mart.review_article_judgment_detail
-    WHERE project_id = ${getDuckdbSqlString(projectId)}
+    SELECT generation.project_id AS projectId
+    FROM app.project_review_serving_generation generation
+    INNER JOIN mart.review_article_serving_detail detail
+      ON detail.project_id = generation.project_id
+     AND detail.generation = generation.active_generation
+    WHERE generation.project_id = ${getDuckdbSqlString(projectId)}
     LIMIT 1
   `)
 
@@ -988,6 +1571,11 @@ const getLlmJudgmentRowsFromReviewDetailMart = async (
     answeredOriginal: string | null
     answeredOriginalAsArray: unknown
   }>(`
+    WITH active_generation AS (
+      SELECT project_id AS projectId, active_generation AS generation
+      FROM app.project_review_serving_generation
+      WHERE project_id = ${getDuckdbSqlString(scope.projectId)}
+    )
     SELECT
       j.judgment_id AS id,
       j.created_at AS createdAt,
@@ -1000,7 +1588,10 @@ const getLlmJudgmentRowsFromReviewDetailMart = async (
       j.model_id AS modelId,
       j.answered_original AS answeredOriginal,
       TO_JSON(j.answered_original_as_array) AS answeredOriginalAsArray
-    FROM mart.review_article_judgment_detail j
+    FROM mart.review_article_serving_detail j
+    INNER JOIN active_generation active
+      ON active.projectId = j.project_id
+     AND active.generation = j.generation
     INNER JOIN app.article article ON article.id = j.article_id
     WHERE j.project_id = ${getDuckdbSqlString(scope.projectId)}
       AND j.article_id IN (${getDuckdbSqlStringList(articleIds).join(', ')})
@@ -1897,6 +2488,53 @@ export const queryArticlesReviewsFromDuckdb = async (
   }
 
   const hasPromptFilters = getHasPromptFilters(params.prompts)
+  const canUseServingV3 =
+    scope.modelId
+    && (await getHasReviewArticleServingRows(scope.projectId))
+    && (!hasPromptFilters || (await getHasReviewArticleFilterMemberRows(scope.projectId)))
+
+  if (canUseServingV3) {
+    const pageResult = await getReviewedPageRowsFromServingMart({...params, scope})
+    const llmJudgmentRows = await getJudgmentRowsForReviews(
+      scope,
+      pageResult.rows.map((article) => {
+        return article.id
+      }),
+    )
+    const llmJudgmentsByArticle = groupByArticleId(llmJudgmentRows)
+    const data = pageResult.rows.map((article) => {
+      const judgmentsForArticle = getJudgmentRowsSorted(
+        llmJudgmentsByArticle.get(article.id) ?? [],
+        scope.promptOrderMap,
+      )
+      return {
+        id: article.id,
+        articleTitle: article.articleTitle,
+        articleCreatedAt: article.articleCreatedAt,
+        articleUpdatedAt: article.articleUpdatedAt,
+        articleId: article.articleId,
+        url: article.url,
+        fullTextPDF: article.fullTextPDF,
+        fullTextFetchedAt: article.fullTextFetchedAt,
+        fullTextConversionStatus: article.fullTextConversionStatus,
+        judgments: judgmentsForArticle,
+        judgedPromptIds: getJudgedPromptIds(judgmentsForArticle, scope.promptOrderMap),
+        isFullyJudged: true,
+        journalTitle: article.journalTitle,
+        sourceMetadata: article.sourceMetadata,
+      }
+    })
+
+    return {
+      data,
+      totalCount: null,
+      page: params.page,
+      limit: params.limit,
+      totalPages: null,
+      nextCursor: pageResult.nextCursor,
+    }
+  }
+
   const canUseServingV2 =
     scope.modelId
     && (await getHasReviewArticleCandidateRows(scope.projectId))
@@ -2024,6 +2662,16 @@ export const countArticlesReviewsFromDuckdb = async (
   }
 
   const hasPromptFilters = getHasPromptFilters(params.prompts)
+  const canUseServingV3 =
+    scope.modelId
+    && (await getHasReviewArticleServingRows(scope.projectId))
+    && (!hasPromptFilters || (await getHasReviewArticleFilterMemberRows(scope.projectId)))
+
+  if (canUseServingV3) {
+    const totalCount = await countReviewedServingRows({...params, scope})
+    return {totalCount, totalPages: Math.ceil(totalCount / params.limit)}
+  }
+
   const canUseServingV2 =
     scope.modelId
     && (await getHasReviewArticleCandidateRows(scope.projectId))
@@ -2050,6 +2698,42 @@ export const queryArticlesReviewsBothFromDuckdb = async (
 
   if (!scope || scope.promptIds.length === 0) {
     return {data: [], totalCount: 0, page: params.page, limit: params.limit, totalPages: 0}
+  }
+
+  if (scope.modelId && (await getHasReviewArticleServingRows(scope.projectId))) {
+    const {rows: pageArticles, totalCount} = await getBothPageRowsFromServing({...params, scope})
+    const totalPages = totalCount > 0 ? Math.ceil(totalCount / params.limit) : 0
+    const llmJudgmentsByArticle = groupByArticleId(
+      await getJudgmentRowsForReviews(
+        scope,
+        pageArticles.map((article) => {
+          return article.id
+        }),
+      ),
+    )
+    const humanRowsByArticle = getHumanRowsByArticleId(
+      await getHumanAnswerRows(
+        scope,
+        pageArticles.map((article) => {
+          return article.id
+        }),
+      ),
+    )
+    const data = pageArticles.map((article) => {
+      return {
+        id: article.id,
+        articleTitle: article.articleTitle,
+        articleCreatedAt: article.articleCreatedAt,
+        articleUpdatedAt: article.articleUpdatedAt,
+        judgments: getJudgmentRowsSorted(llmJudgmentsByArticle.get(article.id) ?? [], scope.promptOrderMap),
+        humanAnswersByPrompt:
+          getHumanAnswersByPrompt(scope.promptIds, humanRowsByArticle.get(article.id) ?? []) ?? undefined,
+        journalTitle: article.sourceMetadata.journalTitle,
+        sourceMetadata: article.sourceMetadata,
+      }
+    })
+
+    return {data, totalCount, page: params.page, limit: params.limit, totalPages}
   }
 
   if (scope.modelId) {
@@ -2190,6 +2874,65 @@ export const getDatabaseBasedFiltersFromDuckdb = async (
   const promptIds = databasePrompts.map((prompt) => {
     return prompt.promptId
   })
+
+  if (await getHasReviewArticleFilterMemberRows(params.projectId)) {
+    const whereParts = [
+      `member.project_id = ${getDuckdbSqlString(params.projectId)}`,
+      `member.prompt_id IN (${getDuckdbSqlStringList(promptIds).join(', ')})`,
+      params.fromDate ? `serving.article_created_at >= ${getDuckdbTimestampLiteral(params.fromDate)}` : null,
+      params.toDate ? `serving.article_created_at <= ${getDuckdbTimestampLiteral(params.toDate)}` : null,
+      params.searchTitle.trim()
+        ? `LOWER(COALESCE(serving.article_title, '')) LIKE LOWER(${getDuckdbSqlString(`%${params.searchTitle.trim()}%`)})`
+        : null,
+    ].filter((part): part is string => {
+      return part !== null
+    })
+
+    try {
+      const rows = await runDuckdbJsonQuery<{promptId: string; answerValue: string}>(`
+        WITH active_generation AS (
+          SELECT project_id AS projectId, active_generation AS generation
+          FROM app.project_review_serving_generation
+          WHERE project_id = ${getDuckdbSqlString(params.projectId)}
+        )
+        SELECT
+          member.prompt_id AS promptId,
+          dictionary.answer_value AS answerValue
+        FROM mart.review_article_filter_member member
+        INNER JOIN active_generation active
+          ON active.projectId = member.project_id
+         AND active.generation = member.generation
+        INNER JOIN mart.review_article_serving serving
+          ON serving.project_id = member.project_id
+         AND serving.generation = member.generation
+         AND serving.article_id = member.article_id
+        INNER JOIN app.review_answer_dictionary dictionary
+          ON dictionary.project_id = member.project_id
+         AND dictionary.prompt_id = member.prompt_id
+         AND dictionary.answer_id = member.answer_id
+        WHERE ${whereParts.join(' AND ')}
+        GROUP BY member.prompt_id, dictionary.answer_value
+        ORDER BY member.prompt_id ASC, dictionary.answer_value ASC
+      `)
+      const valuesByPromptId = rows.reduce<Map<string, Set<string>>>((rowMap, row) => {
+        const currentValues = rowMap.get(row.promptId) ?? new Set<string>()
+        currentValues.add(row.answerValue)
+        rowMap.set(row.promptId, currentValues)
+        return rowMap
+      }, new Map<string, Set<string>>())
+
+      return databasePrompts.map((prompt) => {
+        const values = Array.from(valuesByPromptId.get(prompt.promptId) ?? []).sort((left, right) => {
+          return left.localeCompare(right)
+        })
+        return {promptId: prompt.promptId, promptName: prompt.promptName, answeredOriginalValues: values}
+      })
+    } catch (error) {
+      console.error('[duckdbOlap] Failed to build database filters from review article filter members:', error)
+      return databasePrompts
+    }
+  }
+
   const whereParts = [
     `paf.project_id = ${getDuckdbSqlString(params.projectId)}`,
     `paf.prompt_id IN (${getDuckdbSqlStringList(promptIds).join(', ')})`,
@@ -2287,6 +3030,69 @@ export const getNumericFiltersFromDuckdb = async (params: DatabaseFilterParams):
   const promptIds = numericPrompts.map((prompt) => {
     return prompt.promptId
   })
+
+  if (await getHasReviewArticleFilterMemberRows(params.projectId)) {
+    const whereParts = [
+      `member.project_id = ${getDuckdbSqlString(params.projectId)}`,
+      `member.prompt_id IN (${getDuckdbSqlStringList(promptIds).join(', ')})`,
+      params.fromDate ? `serving.article_created_at >= ${getDuckdbTimestampLiteral(params.fromDate)}` : null,
+      params.toDate ? `serving.article_created_at <= ${getDuckdbTimestampLiteral(params.toDate)}` : null,
+      params.searchTitle.trim()
+        ? `LOWER(COALESCE(serving.article_title, '')) LIKE LOWER(${getDuckdbSqlString(`%${params.searchTitle.trim()}%`)})`
+        : null,
+    ].filter((part): part is string => {
+      return part !== null
+    })
+    try {
+      const rows = await runDuckdbJsonQuery<{promptId: string; answerValue: string}>(`
+        WITH active_generation AS (
+          SELECT project_id AS projectId, active_generation AS generation
+          FROM app.project_review_serving_generation
+          WHERE project_id = ${getDuckdbSqlString(params.projectId)}
+        )
+        SELECT
+          member.prompt_id AS promptId,
+          dictionary.answer_value AS answerValue
+        FROM mart.review_article_filter_member member
+        INNER JOIN active_generation active
+          ON active.projectId = member.project_id
+         AND active.generation = member.generation
+        INNER JOIN mart.review_article_serving serving
+          ON serving.project_id = member.project_id
+         AND serving.generation = member.generation
+         AND serving.article_id = member.article_id
+        INNER JOIN app.review_answer_dictionary dictionary
+          ON dictionary.project_id = member.project_id
+         AND dictionary.prompt_id = member.prompt_id
+         AND dictionary.answer_id = member.answer_id
+        WHERE ${whereParts.join(' AND ')}
+      `)
+      const valuesByPromptId = rows.reduce<Map<string, Set<number>>>((rowMap, row) => {
+        const parsedValue = getStrictIntegerValue(row.answerValue)
+        const currentValues = rowMap.get(row.promptId) ?? new Set<number>()
+
+        if (parsedValue !== null) {
+          currentValues.add(parsedValue)
+        }
+
+        rowMap.set(row.promptId, currentValues)
+        return rowMap
+      }, new Map<string, Set<number>>())
+
+      return numericPrompts.map((prompt) => {
+        return buildNumericFilterResultFromValues(
+          prompt.promptId,
+          prompt.promptName,
+          Array.from(valuesByPromptId.get(prompt.promptId) ?? []),
+          prompt.specialValues ?? [],
+        )
+      })
+    } catch (error) {
+      console.error('[duckdbOlap] Failed to build numeric filters from review article filter members:', error)
+      return numericPrompts
+    }
+  }
+
   const whereParts = [
     `paf.project_id = ${getDuckdbSqlString(params.projectId)}`,
     `paf.prompt_id IN (${getDuckdbSqlStringList(promptIds).join(', ')})`,
@@ -2340,6 +3146,14 @@ export const getUnassessedCountFromDuckdb = async (params: UnassessedCountParams
     return 0
   }
 
+  if (await getHasReviewArticleServingRows(scope.projectId)) {
+    return countUnassessedRowsFromServing({
+      scope,
+      from: params.projectDateFrom ? params.projectDateFrom.toISOString().slice(0, 10) : null,
+      to: params.projectDateTo ? params.projectDateTo.toISOString().slice(0, 10) : null,
+    })
+  }
+
   if (await getHasReviewArticleRollupRows(scope.projectId)) {
     return countUnassessedRowsFromRollup({
       scope,
@@ -2364,6 +3178,30 @@ export const getUnassessedArticlesFromDuckdb = async (
 
   if (!scope || scope.promptIds.length === 0 || !scope.modelId) {
     return {articles: [], totalCount: 0}
+  }
+
+  if (await getHasReviewArticleServingRows(scope.projectId)) {
+    const servingResult = await getUnassessedRowsFromServing({
+      scope,
+      limit: params.limit,
+      offset: params.offset,
+      from: params.projectDateFrom ? params.projectDateFrom.toISOString().slice(0, 10) : null,
+      to: params.projectDateTo ? params.projectDateTo.toISOString().slice(0, 10) : null,
+      search: params.search,
+    })
+
+    return {
+      articles: servingResult.rows.map((article) => {
+        return {
+          id: article.id,
+          articleId: article.articleId,
+          articleTitle: article.articleTitle,
+          articleCreatedAt: article.articleCreatedAt,
+          articleUpdatedAt: article.articleUpdatedAt,
+        }
+      }),
+      totalCount: servingResult.totalCount,
+    }
   }
 
   const hasRollupRows = await getHasReviewArticleRollupRows(scope.projectId)
@@ -2428,29 +3266,34 @@ export const getUnassessedPairsFromDuckdb = async (params: UnassessedPairsParams
   }
 
   const candidateLimit = getCandidateArticlesLimit(params.numberOfPromptsToGet)
-  const candidateResult = (await getHasReviewArticleRollupRows(scope.projectId))
-    ? await getUnassessedCandidateRowsFromRollup({scope, cursor: params.cursor, limit: candidateLimit})
-    : await getUnassessedArticleRows({scope}).then(({scopedArticles, llmJudgmentsByArticle}) => {
-        const cursor = params.cursor
-        const filteredArticles = cursor
-          ? scopedArticles.filter((article) => {
-              return getMatchesUnassessedCursor(article, cursor)
-            })
-          : scopedArticles
-        const limitedArticles = filteredArticles.slice(0, candidateLimit + 1)
+  const candidateResult = (await getHasReviewArticleServingRows(scope.projectId))
+    ? await getUnassessedCandidateRowsFromServing({scope, cursor: params.cursor, limit: candidateLimit})
+    : (await getHasReviewArticleRollupRows(scope.projectId))
+      ? await getUnassessedCandidateRowsFromRollup({scope, cursor: params.cursor, limit: candidateLimit})
+      : await getUnassessedArticleRows({scope}).then(({scopedArticles, llmJudgmentsByArticle}) => {
+          const cursor = params.cursor
+          const filteredArticles = cursor
+            ? scopedArticles.filter((article) => {
+                return getMatchesUnassessedCursor(article, cursor)
+              })
+            : scopedArticles
+          const limitedArticles = filteredArticles.slice(0, candidateLimit + 1)
 
-        return {
-          hasMore: limitedArticles.length > candidateLimit,
-          rows: limitedArticles.slice(0, candidateLimit).map((article) => {
-            return {
-              articleId: article.id,
-              articleCreatedAt: article.articleCreatedAt,
-              articleUpdatedAt: article.articleUpdatedAt,
-              llmJudgedPromptIds: getJudgedPromptIds(llmJudgmentsByArticle.get(article.id) ?? [], scope.promptOrderMap),
-            }
-          }),
-        }
-      })
+          return {
+            hasMore: limitedArticles.length > candidateLimit,
+            rows: limitedArticles.slice(0, candidateLimit).map((article) => {
+              return {
+                articleId: article.id,
+                articleCreatedAt: article.articleCreatedAt,
+                articleUpdatedAt: article.articleUpdatedAt,
+                llmJudgedPromptIds: getJudgedPromptIds(
+                  llmJudgmentsByArticle.get(article.id) ?? [],
+                  scope.promptOrderMap,
+                ),
+              }
+            }),
+          }
+        })
   const candidateArticles = candidateResult.rows
   const promptEntries = candidateArticles.flatMap<PromptQueueEntry>((article) => {
     const presentPromptIds = new Set(article.llmJudgedPromptIds)
@@ -2492,6 +3335,10 @@ const getHumanReviewedArticleIdsFromDuckdb = async (params: {
   to?: string | null
   search?: string | null
 }) => {
+  if (params.scope.modelId && (await getHasReviewArticleServingRows(params.scope.projectId))) {
+    return getHumanReviewedArticleIdsFromServing(params)
+  }
+
   const scopedArticles = await getScopedArticles({...params, orderBy: 'created'})
   const humanRowsByArticle = getHumanRowsByArticleId(
     await getHumanAnswerRows(
@@ -2526,10 +3373,34 @@ export const selectArticleIdsByFilterDuckdb = async (...args: SelectArticleIdsAr
   }
 
   if (listType === 'human') {
-    return getHumanReviewedArticleIdsFromRollup({scope, from, to, search})
+    return scope.modelId && (await getHasReviewArticleServingRows(scope.projectId))
+      ? getHumanReviewedArticleIdsFromServing({scope, from, to, search})
+      : getHumanReviewedArticleIdsFromRollup({scope, from, to, search})
   }
 
   if (scope.modelId) {
+    if (await getHasReviewArticleServingRows(scope.projectId)) {
+      if (listType === 'llm') {
+        return getReviewedArticleIdsFromServing({scope, from, to, search, prompts: promptsFilter})
+      }
+
+      if (listType === 'unassessed') {
+        const {rows} = await getUnassessedRowsFromServing({scope, from, to, search})
+        return rows.map((article) => {
+          return article.id
+        })
+      }
+
+      return getReviewedArticleIdsFromServing({
+        scope,
+        from,
+        to,
+        search,
+        prompts: promptsFilter,
+        requireAllHumanAnswers: true,
+      })
+    }
+
     if (listType === 'llm') {
       return getReviewedArticleIdsFromRollup({scope, from, to, search, prompts: promptsFilter})
     }

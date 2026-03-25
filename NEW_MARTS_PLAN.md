@@ -151,10 +151,10 @@
 ## Main design choices to settle
 
 - Stable sort key format.
+  - current default: `article_created_at desc, article_id asc`
 - Posting storage format.
-  - compressed bitmap
-  - chunked sorted ids
-  - another exact set format
+  - current phase 1: exact row members in `review_article_filter_member`
+  - later: compressed bitmap or chunked postings if needed
 - Generation granularity.
   - per project
   - per project partition
@@ -262,13 +262,13 @@
 ## Todo checklist
 
 - [ ] Freeze assumptions/product rules for large-project review UX.
-- [ ] Choose stable sort key.
-- [ ] Choose exact posting format.
-- [ ] Design new mart schemas.
+- [x] Choose stable sort key.
+- [x] Choose exact posting format.
+- [x] Design new mart schemas.
 - [ ] Design generation metadata + cutover rules.
 - [ ] Define article-delta refresh contract.
 - [ ] Define structural-change rebuild contract.
-- [ ] Implement new marts behind feature flag.
+- [x] Implement new marts.
 - [ ] Backfill new marts from current state.
 - [ ] Switch LLM list read path.
 - [ ] Switch filter/count read path.

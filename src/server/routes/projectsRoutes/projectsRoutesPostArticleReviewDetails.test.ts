@@ -191,7 +191,7 @@ test('project review details merges detail mart rows, raw fallback rows, and pla
   queryJsonRef.current = async (statement) => {
     return statement.includes('FROM app.project_prompt pp')
       ? [getPromptRow('prompt-1', 0), getPromptRow('prompt-2', 1), getPromptRow('prompt-3', 2)]
-      : statement.includes('FROM mart.review_article_judgment_detail j')
+      : statement.includes('FROM mart.review_article_serving_detail j')
         ? [getProjectReviewDetailJudgmentRow({judgmentId: 'judgment-detail', judgmentPromptId: 'prompt-1'})]
         : statement.includes('FROM app.judgment j')
           ? [

@@ -230,11 +230,49 @@ test('queryArticlesReviewsFromDuckdb keeps reviewed rows when project modelId is
   expect(duckdbRunnerMockRef.current.queries[4]).not.toContain('j.model_id =')
 })
 
+test('queryArticlesReviewsFromDuckdb uses new serving mart when rows exist', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [
+      {
+        articleId: 'article-1',
+        articleExternalId: 'external-1',
+        articleTitle: 'Article 1',
+        articleCreatedAt: '2024-01-02T00:00:00.000Z',
+        articleUpdatedAt: '2024-01-03T00:00:00.000Z',
+        fullTextConversionStatus: null,
+        fullTextFetchedAt: null,
+        fullTextPDF: null,
+        sourceMetadata: {
+          journalTitle: 'Journal 1',
+          preprintSource: null,
+          preprintHostLabel: null,
+          isPreprint: false,
+          fullTextLinks: [],
+        },
+        url: null,
+      },
+    ],
+    [],
+    [getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-1'})],
+  ])
+
+  const {queryArticlesReviewsFromDuckdb} = await loadDuckdbOlap()
+  const result = await queryArticlesReviewsFromDuckdb({projectId: 'project-1', page: 1, limit: 10})
+
+  expect(result.data[0]?.id).toBe('article-1')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_serving s')
+})
+
 test('queryArticlesReviewsFromDuckdb emits nextCursor on candidate/display serving path', async () => {
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [{projectId: 'project-1'}],
     [
       {
@@ -275,8 +313,8 @@ test('queryArticlesReviewsFromDuckdb emits nextCursor on candidate/display servi
     }),
   ).toEqual(['article-1'])
   expect(typeof firstPage.nextCursor).toBe('string')
-  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_candidate c')
-  expect(duckdbRunnerMockRef.current.queries[4]).toContain(
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_candidate c')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain(
     'INNER JOIN app.article article ON article.id = page_ids.articleId',
   )
 })
@@ -286,6 +324,7 @@ test('queryArticlesReviewsFromDuckdb emits nextCursor on rollup fallback path', 
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [],
     [{projectId: 'project-1'}],
     [
@@ -328,8 +367,8 @@ test('queryArticlesReviewsFromDuckdb emits nextCursor on rollup fallback path', 
     }),
   ).toEqual(['article-1'])
   expect(typeof firstPage.nextCursor).toBe('string')
-  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_rollup r')
-  expect(duckdbRunnerMockRef.current.queries[5]).toContain('LIMIT 2')
+  expect(duckdbRunnerMockRef.current.queries[6]).toContain('FROM mart.review_article_rollup r')
+  expect(duckdbRunnerMockRef.current.queries[6]).toContain('LIMIT 2')
 })
 
 test('queryArticlesReviewsFromDuckdb falls back to app judgments when review rollup rows are missing', async () => {
@@ -337,6 +376,7 @@ test('queryArticlesReviewsFromDuckdb falls back to app judgments when review rol
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [],
     [],
     [
@@ -382,8 +422,8 @@ test('queryArticlesReviewsFromDuckdb falls back to app judgments when review rol
     }),
   ).toEqual(['article-1'])
   expect(typeof firstPage.nextCursor).toBe('string')
-  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.judgment j')
-  expect(duckdbRunnerMockRef.current.queries[5]).not.toContain('FROM mart.review_article_rollup r')
+  expect(duckdbRunnerMockRef.current.queries[6]).toContain('FROM app.judgment j')
+  expect(duckdbRunnerMockRef.current.queries[6]).not.toContain('FROM mart.review_article_rollup r')
 })
 
 test('queryArticlesReviewsFromDuckdb uses candidate/display serving marts when they exist', async () => {
@@ -391,6 +431,7 @@ test('queryArticlesReviewsFromDuckdb uses candidate/display serving marts when t
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [{projectId: 'project-1'}],
     [
       {
@@ -439,11 +480,11 @@ test('queryArticlesReviewsFromDuckdb uses candidate/display serving marts when t
       return row.id
     }),
   ).toEqual(['article-1'])
-  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_candidate c')
-  expect(duckdbRunnerMockRef.current.queries[4]).toContain(
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_candidate c')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain(
     'INNER JOIN app.article article ON article.id = page_ids.articleId',
   )
-  expect(duckdbRunnerMockRef.current.queries[6]).toContain('FROM mart.review_article_judgment_detail j')
+  expect(duckdbRunnerMockRef.current.queries[7]).toContain('FROM mart.review_article_serving_detail j')
   expect(result.data[0]?.sourceMetadata).toEqual({
     journalTitle: null,
     preprintSource: 'ppr',
@@ -458,6 +499,7 @@ test('queryArticlesReviewsFromDuckdb uses filter posting mart when available', a
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [{projectId: 'project-1'}],
     [{projectId: 'project-1'}],
     [
@@ -496,9 +538,9 @@ test('queryArticlesReviewsFromDuckdb uses filter posting mart when available', a
   const {queryArticlesReviewsFromDuckdb} = await loadDuckdbOlap()
   await queryArticlesReviewsFromDuckdb({projectId: 'project-1', page: 1, limit: 10, prompts: {'prompt-1': ['yes']}})
 
-  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.review_answer_dictionary d')
-  expect(duckdbRunnerMockRef.current.queries[5]).toContain('mart.review_article_filter_posting posting')
-  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_candidate c')
+  expect(duckdbRunnerMockRef.current.queries[6]).toContain('FROM app.review_answer_dictionary d')
+  expect(duckdbRunnerMockRef.current.queries[6]).toContain('mart.review_article_filter_posting posting')
+  expect(duckdbRunnerMockRef.current.queries[6]).toContain('FROM mart.review_article_candidate c')
 })
 
 test('countArticlesReviewsFromDuckdb counts rows when project modelId is null', async () => {
@@ -523,6 +565,7 @@ test('countArticlesReviewsFromDuckdb falls back to app judgments when review rol
     getScopeRouteRows(),
     [],
     [],
+    [],
     [{totalCount: 2}],
   ])
 
@@ -530,8 +573,30 @@ test('countArticlesReviewsFromDuckdb falls back to app judgments when review rol
   const result = await countArticlesReviewsFromDuckdb({projectId: 'project-1', limit: 10})
 
   expect(result).toEqual({totalCount: 2, totalPages: 1})
-  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.judgment j')
-  expect(duckdbRunnerMockRef.current.queries[5]).not.toContain('FROM mart.review_article_rollup r')
+  expect(duckdbRunnerMockRef.current.queries[6]).toContain('FROM app.judgment j')
+  expect(duckdbRunnerMockRef.current.queries[6]).not.toContain('FROM mart.review_article_rollup r')
+})
+
+test('countArticlesReviewsFromDuckdb uses new serving filter members when rows exist', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [{projectId: 'project-1'}],
+    [{totalCount: 2}],
+  ])
+
+  const {countArticlesReviewsFromDuckdb} = await loadDuckdbOlap()
+  const result = await countArticlesReviewsFromDuckdb({
+    projectId: 'project-1',
+    limit: 10,
+    prompts: {'prompt-1': ['yes']},
+  })
+
+  expect(result).toEqual({totalCount: 2, totalPages: 1})
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_filter_member member')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_serving s')
 })
 
 test('getUnassessedCountFromDuckdb uses a count-only rollup query', async () => {
@@ -539,6 +604,7 @@ test('getUnassessedCountFromDuckdb uses a count-only rollup query', async () => 
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [{projectId: 'project-1'}],
     [{totalCount: 3}],
   ])
@@ -557,10 +623,10 @@ test('getUnassessedCountFromDuckdb uses a count-only rollup query', async () => 
   })
 
   expect(result).toBe(3)
-  expect(duckdbRunnerMockRef.current.queries).toHaveLength(5)
-  expect(duckdbRunnerMockRef.current.queries[4]).toContain('SELECT COUNT(*) AS totalCount')
-  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_rollup r')
-  expect(duckdbRunnerMockRef.current.queries[4]).not.toContain('TO_JSON(r.llm_judged_prompt_ids)')
+  expect(duckdbRunnerMockRef.current.queries).toHaveLength(6)
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('SELECT COUNT(*) AS totalCount')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_rollup r')
+  expect(duckdbRunnerMockRef.current.queries[5]).not.toContain('TO_JSON(r.llm_judged_prompt_ids)')
 })
 
 test('getUnassessedArticlesFromDuckdb falls back to app judgments when review rollup rows are missing', async () => {
@@ -568,6 +634,7 @@ test('getUnassessedArticlesFromDuckdb falls back to app judgments when review ro
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [],
     [getDuckdbScopedArticleRow({id: 'article-1'}), getDuckdbScopedArticleRow({id: 'article-2'})],
     [getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-1'})],
@@ -594,8 +661,8 @@ test('getUnassessedArticlesFromDuckdb falls back to app judgments when review ro
       return article.id
     }),
   ).toEqual(['article-2'])
-  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.article a')
-  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.judgment j')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.article a')
+  expect(duckdbRunnerMockRef.current.queries[6]).toContain('FROM app.judgment j')
 })
 
 test('getUnassessedPairsFromDuckdb falls back to app judgments when review rollup rows are missing', async () => {
@@ -603,6 +670,7 @@ test('getUnassessedPairsFromDuckdb falls back to app judgments when review rollu
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [],
     [getDuckdbScopedArticleRow({id: 'article-1'})],
     [],
@@ -618,8 +686,8 @@ test('getUnassessedPairsFromDuckdb falls back to app judgments when review rollu
 
   expect(result.promptEntries).toEqual([{articleId: 'article-1', promptId: 'prompt-1'}])
   expect(result.nextCursor?.lastArticleId).toBe('article-1')
-  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.article a')
-  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.judgment j')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.article a')
+  expect(duckdbRunnerMockRef.current.queries[6]).toContain('FROM app.judgment j')
 })
 
 test('getDatabaseBasedFiltersFromDuckdb returns values when project modelId is null', async () => {
@@ -675,6 +743,7 @@ test('getDatabaseBasedFiltersFromDuckdb uses prompt answer fact for model projec
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [{promptId: 'prompt-1', answerValue: 'alpha'}],
   ])
 
@@ -688,7 +757,7 @@ test('getDatabaseBasedFiltersFromDuckdb uses prompt answer fact for model projec
   })
 
   expect(result).toEqual([{promptId: 'prompt-1', promptName: 'Prompt 1', answeredOriginalValues: ['alpha']}])
-  expect(duckdbRunnerMockRef.current.queries[3]).toContain('FROM mart.prompt_answer_fact paf')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.prompt_answer_fact paf')
 })
 
 test('getDatabaseBasedFiltersFromDuckdb returns empty values on query error', async () => {
@@ -696,6 +765,7 @@ test('getDatabaseBasedFiltersFromDuckdb returns empty values on query error', as
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     new Error('db exploded'),
   ])
 
@@ -716,6 +786,7 @@ test('getNumericFiltersFromDuckdb ignores non-integer values', async () => {
     [{id: 'prompt-1', order: 0, promptHeading: 'Prompt 1', originalText: 'Prompt 1', type: 'string.integer'}],
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [
       {promptId: 'prompt-1', answerValue: '10'},
       {promptId: 'prompt-1', answerValue: '10.5'},
@@ -745,6 +816,7 @@ test('getNumericFiltersFromDuckdb uses prompt answer fact for model projects', a
     [{id: 'prompt-1', order: 0, promptHeading: 'Prompt 1', originalText: 'Prompt 1', type: 'string.integer'}],
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [{promptId: 'prompt-1', answerValue: '10'}],
   ])
 
@@ -762,7 +834,7 @@ test('getNumericFiltersFromDuckdb uses prompt answer fact for model projects', a
       return bin.label
     }),
   ).toEqual(['10'])
-  expect(duckdbRunnerMockRef.current.queries[3]).toContain('FROM mart.prompt_answer_fact paf')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.prompt_answer_fact paf')
 })
 
 test('getNumericFiltersFromDuckdb returns empty bins on query error', async () => {
@@ -770,6 +842,7 @@ test('getNumericFiltersFromDuckdb returns empty bins on query error', async () =
     [{id: 'prompt-1', order: 0, promptHeading: 'Prompt 1', originalText: 'Prompt 1', type: 'string.integer'}],
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     new Error('db exploded'),
   ])
 
@@ -840,6 +913,7 @@ test('queryArticlesReviewsBothFromDuckdb echoes requested page when it is out of
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [{totalCount: 1}],
     [],
   ])
@@ -858,6 +932,7 @@ test('queryArticlesReviewsBothFromDuckdb keeps null articleCreatedAt rows last',
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [{totalCount: 2}],
     [
       getDuckdbScopedArticleRow({
@@ -916,6 +991,7 @@ test('queryArticlesReviewsBothFromDuckdb uses rollup queries for model projects'
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [{totalCount: 1}],
     [
       {
@@ -940,8 +1016,44 @@ test('queryArticlesReviewsBothFromDuckdb uses rollup queries for model projects'
   const result = await queryArticlesReviewsBothFromDuckdb({projectId: 'project-1', page: 1, limit: 10})
 
   expect(result.totalCount).toBe(1)
-  expect(duckdbRunnerMockRef.current.queries[3]).toContain('FROM mart.review_article_rollup r')
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_rollup r')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_rollup r')
+})
+
+test('queryArticlesReviewsBothFromDuckdb uses review article serving when rows exist', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [{totalCount: 1}],
+    [
+      {
+        articleCreatedAt: '2024-01-02T00:00:00.000Z',
+        articleId: 'article-1',
+        articleTitle: 'Article 1',
+        articleUpdatedAt: '2024-01-03T00:00:00.000Z',
+        sourceMetadata: {
+          journalTitle: 'Journal 1',
+          preprintSource: null,
+          preprintHostLabel: null,
+          isPreprint: false,
+          fullTextLinks: [],
+        },
+      },
+    ],
+    [{projectId: 'project-1'}],
+    [getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-1'})],
+    [getDuckdbHumanAnswerRow({articleId: 'article-1', promptId: 'prompt-1'})],
+  ])
+
+  const {queryArticlesReviewsBothFromDuckdb} = await loadDuckdbOlap()
+  const result = await queryArticlesReviewsBothFromDuckdb({projectId: 'project-1', page: 1, limit: 10})
+
+  expect(result.totalCount).toBe(1)
+  expect(result.data[0]?.id).toBe('article-1')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_serving s')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_serving s')
 })
 
 test('getUnassessedPairsFromDuckdb returns empty when project modelId is missing', async () => {
@@ -963,6 +1075,7 @@ test('selectArticleIdsByFilterDuckdb human ignores prompt filters like legacy ol
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [{articleId: 'article-1'}],
   ])
 
@@ -970,7 +1083,7 @@ test('selectArticleIdsByFilterDuckdb human ignores prompt filters like legacy ol
   const result = await selectArticleIdsByFilterDuckdb('project-1', 'human', {['prompt-1']: ['yes']})
 
   expect(result).toEqual(['article-1'])
-  expect(duckdbRunnerMockRef.current.queries[3]).toContain('FROM mart.review_article_rollup r')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_rollup r')
 })
 
 test('selectArticleIdsByFilterDuckdb both applies prompt filters only to llm rows', async () => {
@@ -978,6 +1091,7 @@ test('selectArticleIdsByFilterDuckdb both applies prompt filters only to llm row
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [{articleId: 'article-1'}],
   ])
 
@@ -985,7 +1099,7 @@ test('selectArticleIdsByFilterDuckdb both applies prompt filters only to llm row
   const result = await selectArticleIdsByFilterDuckdb('project-1', 'both', {['prompt-1']: ['yes']})
 
   expect(result).toEqual(['article-1'])
-  expect(duckdbRunnerMockRef.current.queries[3]).toContain('FROM mart.review_article_rollup r')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_rollup r')
 })
 
 test('selectArticleIdsByFilterDuckdb unassessed uses rollup for model projects', async () => {
@@ -993,6 +1107,7 @@ test('selectArticleIdsByFilterDuckdb unassessed uses rollup for model projects',
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [{totalCount: 1}],
     [
       {
@@ -1010,7 +1125,7 @@ test('selectArticleIdsByFilterDuckdb unassessed uses rollup for model projects',
   const result = await selectArticleIdsByFilterDuckdb('project-1', 'unassessed')
 
   expect(result).toEqual(['article-1'])
-  expect(duckdbRunnerMockRef.current.queries[3]).toContain('FROM mart.review_article_rollup r')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_rollup r')
 })
 
 test('selectArticleIdsByFilterDuckdb llm uses rollup for model projects', async () => {
@@ -1018,6 +1133,7 @@ test('selectArticleIdsByFilterDuckdb llm uses rollup for model projects', async 
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [{articleId: 'article-1'}],
   ])
 
@@ -1025,7 +1141,23 @@ test('selectArticleIdsByFilterDuckdb llm uses rollup for model projects', async 
   const result = await selectArticleIdsByFilterDuckdb('project-1', 'llm')
 
   expect(result).toEqual(['article-1'])
-  expect(duckdbRunnerMockRef.current.queries[3]).toContain('FROM mart.review_article_rollup r')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_rollup r')
+})
+
+test('selectArticleIdsByFilterDuckdb llm uses review article serving when rows exist', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [{articleId: 'article-1'}],
+  ])
+
+  const {selectArticleIdsByFilterDuckdb} = await loadDuckdbOlap()
+  const result = await selectArticleIdsByFilterDuckdb('project-1', 'llm')
+
+  expect(result).toEqual(['article-1'])
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_serving s')
 })
 
 test('selectArticleIdsByFilterDuckdb keeps llm selection working when project modelId is null', async () => {
@@ -1083,6 +1215,7 @@ test('queryArticlesReviewsFromDuckdb keeps core row output aligned across candid
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [{projectId: 'project-1'}],
     [
       {
@@ -1108,6 +1241,7 @@ test('queryArticlesReviewsFromDuckdb keeps core row output aligned across candid
     getProjectRows('model-1'),
     getScopeRouteRows(),
     [],
+    [],
     [{projectId: 'project-1'}],
     [
       {
@@ -1132,6 +1266,7 @@ test('queryArticlesReviewsFromDuckdb keeps core row output aligned across candid
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [],
     [],
     [
@@ -1164,6 +1299,7 @@ test('countArticlesReviewsFromDuckdb keeps counts aligned across candidate, roll
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [{projectId: 'project-1'}],
     [{totalCount: 2}],
   ])
@@ -1174,6 +1310,7 @@ test('countArticlesReviewsFromDuckdb keeps counts aligned across candidate, roll
     getProjectRows('model-1'),
     getScopeRouteRows(),
     [],
+    [],
     [{projectId: 'project-1'}],
     [{totalCount: 2}],
   ])
@@ -1183,6 +1320,7 @@ test('countArticlesReviewsFromDuckdb keeps counts aligned across candidate, roll
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [],
     [],
     [{totalCount: 2}],
@@ -1201,6 +1339,7 @@ test('getUnassessedArticlesFromDuckdb keeps rows aligned across rollup and raw p
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [{projectId: 'project-1'}],
     [{totalCount: 1}],
     [
@@ -1233,6 +1372,7 @@ test('getUnassessedArticlesFromDuckdb keeps rows aligned across rollup and raw p
     getProjectRows('model-1'),
     getScopeRouteRows(),
     [],
+    [],
     [
       getDuckdbScopedArticleRow({id: 'article-1'}),
       getDuckdbScopedArticleRow({id: 'article-2', articleTitle: 'Article 2'}),
@@ -1258,6 +1398,46 @@ test('getUnassessedArticlesFromDuckdb keeps rows aligned across rollup and raw p
   expect(getNormalizedUnassessedRows(rollupResult.articles)).toEqual(getNormalizedUnassessedRows(rawResult.articles))
 })
 
+test('getUnassessedArticlesFromDuckdb uses review article serving when rows exist', async () => {
+  const {getUnassessedArticlesFromDuckdb} = await loadDuckdbOlap()
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [{totalCount: 1}],
+    [
+      {
+        articleCreatedAt: '2024-01-01T00:00:00.000Z',
+        articleId: 'article-2',
+        articleTitle: 'Article 2',
+        articleUpdatedAt: '2024-01-02T00:00:00.000Z',
+        llmJudgedPromptIds: [],
+      },
+    ],
+  ])
+
+  const result = await getUnassessedArticlesFromDuckdb({
+    projectId: 'project-1',
+    projectModelId: 'model-1',
+    projectDateFrom: null,
+    projectDateTo: null,
+    importRouteIds: ['route-1'],
+    useTitle: true,
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    limit: 10,
+    offset: 0,
+  })
+
+  expect(result.totalCount).toBe(1)
+  expect(result.articles[0]?.id).toBe('article-2')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_serving s')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_serving s')
+})
+
 test('getUnassessedPairsFromDuckdb keeps prompt entries aligned across rollup and raw paths', async () => {
   const {getUnassessedPairsFromDuckdb} = await loadDuckdbOlap()
 
@@ -1265,6 +1445,7 @@ test('getUnassessedPairsFromDuckdb keeps prompt entries aligned across rollup an
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [],
     [{projectId: 'project-1'}],
     [
       {
@@ -1287,6 +1468,7 @@ test('getUnassessedPairsFromDuckdb keeps prompt entries aligned across rollup an
     getProjectRows('model-1'),
     getScopeRouteRows(),
     [],
+    [],
     [getDuckdbScopedArticleRow({id: 'article-1', articleUpdatedAt: '2024-01-02T00:00:00.000Z'})],
     [],
   ])
@@ -1307,6 +1489,7 @@ test('getDatabaseBasedFiltersFromDuckdb keeps values aligned across prompt answe
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [{projectId: 'project-1'}],
     [
       {promptId: 'prompt-1', answerValue: 'alpha'},
       {promptId: 'prompt-1', answerValue: 'beta'},
@@ -1341,6 +1524,29 @@ test('getDatabaseBasedFiltersFromDuckdb keeps values aligned across prompt answe
   expect(martResult).toEqual(rawResult)
 })
 
+test('getDatabaseBasedFiltersFromDuckdb uses review article filter members when rows exist', async () => {
+  const {getDatabaseBasedFiltersFromDuckdb} = await loadDuckdbOlap()
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [{promptId: 'prompt-1', answerValue: 'alpha'}],
+  ])
+
+  const result = await getDatabaseBasedFiltersFromDuckdb({
+    projectId: 'project-1',
+    prompts: [getPromptFilter({strategy: 'database'})],
+    fromDate: null,
+    toDate: null,
+    searchTitle: '',
+  })
+
+  expect(result).toEqual([{promptId: 'prompt-1', promptName: 'Prompt 1', answeredOriginalValues: ['alpha']}])
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_filter_member member')
+})
+
 test('getNumericFiltersFromDuckdb keeps bins aligned across prompt answer fact and raw fallback paths', async () => {
   const numericPrompt = {
     id: 'prompt-1',
@@ -1355,6 +1561,7 @@ test('getNumericFiltersFromDuckdb keeps bins aligned across prompt answer fact a
     [numericPrompt],
     getProjectRows('model-1'),
     getScopeRouteRows(),
+    [{projectId: 'project-1'}],
     [
       {promptId: 'prompt-1', answerValue: '10'},
       {promptId: 'prompt-1', answerValue: '-3'},
