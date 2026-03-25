@@ -6,7 +6,29 @@ import {createSignal, For, Show} from 'solid-js'
 import {Button} from '../../../../components/ui/button'
 import {apiClient} from '../../../../services/apiClient.ts'
 
-const fetchDataSources = async () => {
+type StructuredFileConfig = {
+  assetPath: string
+  boundaryDisplayPath: string
+  boundaryPointer: string
+  format: 'json' | 'xml'
+  sourceFileName: string
+}
+
+type DataSourceListItem = {
+  id: string
+  title: string
+  description: string | null
+  createdAt: string
+  updatedAt: string
+  dateFrom: string | null
+  dateTo: string | null
+  lastImportAt: string | null
+  itemsAfterLastImport: number
+  importRoute: string | null
+  structuredFileConfig: StructuredFileConfig | null
+}
+
+const fetchDataSources = async (): Promise<DataSourceListItem[]> => {
   const response = await apiClient.api.datasources.get()
 
   if (response.error) {
@@ -28,6 +50,7 @@ const fetchDataSources = async () => {
       lastImportAt: entry.lastImportAt ? String(entry.lastImportAt) : null,
       itemsAfterLastImport: entry.itemsAfterLastImport ?? 0,
       importRoute: entry.importRoute ?? null,
+      structuredFileConfig: entry.structuredFileConfig ?? null,
     }
   })
 }
@@ -42,6 +65,49 @@ const archiveDataSource = async (id: string) => {
     throw new Error('Failed to archive data source')
   }
   return response.data
+}
+
+const postImportAndRefetch = async (
+  request: Promise<{data?: {success?: boolean}; error?: unknown}>,
+  refetch: () => Promise<unknown>,
+) => {
+  const response = await request
+
+  if (response.error || !response.data?.success) {
+    console.error('Failed to start import', response.error)
+    throw new Error('Failed to start import')
+  }
+
+  await refetch()
+}
+
+const startDataSourceImport = async (entry: DataSourceListItem, refetch: () => Promise<unknown>) => {
+  if (entry.structuredFileConfig) {
+    return await postImportAndRefetch(apiClient.api.datasources.import['structured-file'].post({id: entry.id}), refetch)
+  }
+  if (entry.importRoute?.startsWith('fhir:')) {
+    return await postImportAndRefetch(
+      apiClient.api.datasources.import['fhir-ehr-patients'].post({id: entry.id}),
+      refetch,
+    )
+  }
+  if (entry.importRoute === '/api/datasources/import/arxiv') {
+    return await postImportAndRefetch(apiClient.api.datasources.import.arxiv.post({id: entry.id}), refetch)
+  }
+  if (entry.importRoute === '/api/datasources/import/biorxiv') {
+    return await postImportAndRefetch(apiClient.api.datasources.import.biorxiv.post({id: entry.id}), refetch)
+  }
+  if (entry.importRoute === '/api/datasources/import/medrxiv') {
+    return await postImportAndRefetch(apiClient.api.datasources.import.medrxiv.post({id: entry.id}), refetch)
+  }
+  if (entry.importRoute === '/api/datasources/import/pubmed') {
+    return await postImportAndRefetch(apiClient.api.datasources.import.pubmed.post({id: entry.id}), refetch)
+  }
+  if (entry.importRoute === '/api/datasources/import/europe-pmc-ppr') {
+    return await postImportAndRefetch(apiClient.api.datasources.import['europe-pmc-ppr'].post({id: entry.id}), refetch)
+  }
+
+  throw new Error(`Unknown import route: ${entry.importRoute}`)
 }
 
 const AdminDataSources = () => {
@@ -74,6 +140,7 @@ const AdminDataSources = () => {
           term === ''
           || entry.title.toLowerCase().includes(term)
           || (entry.description?.toLowerCase().includes(term) ?? false)
+          || (entry.structuredFileConfig?.sourceFileName.toLowerCase().includes(term) ?? false)
 
         return matchesSearch
       })
@@ -84,12 +151,18 @@ const AdminDataSources = () => {
 
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
-      <div class="flex justify-between items-center mb-6">
+      <div class="flex justify-between items-center mb-6 gap-4">
         <h1 class="text-2xl font-bold">Data Sources</h1>
-        <div class="flex gap-2">
+        <div class="flex gap-2 flex-wrap justify-end">
           <Button as={Link} to="/admin/datasources/archived" variant="outline" size="sm">
             Archived
           </Button>
+          <Link
+            to="/admin/datasources/structured-file-import"
+            class="px-4 py-2 rounded-md border border-blue-200 bg-blue-50 text-blue-700 text-sm font-medium hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            Import XML/JSON
+          </Link>
           <Link
             to="/admin/datasources/create"
             class="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -173,7 +246,7 @@ const AdminDataSources = () => {
                 <For each={filteredDataSources()}>
                   {(entry) => {
                     return (
-                      <tr class="hover:bg-gray-50">
+                      <tr class="hover:bg-gray-50 align-top">
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                           <div>
                             <div class="font-medium text-gray-900">{entry.title}</div>
@@ -209,10 +282,26 @@ const AdminDataSources = () => {
                               <span class="font-medium text-gray-700">Route:</span>{' '}
                               <span class="font-mono">{entry.importRoute ?? 'Not configured'}</span>
                             </div>
+                            <Show when={entry.structuredFileConfig}>
+                              <div class="pt-2 space-y-1 text-sm text-gray-500">
+                                <div>
+                                  <span class="font-medium text-gray-700">File:</span>{' '}
+                                  {entry.structuredFileConfig?.sourceFileName}
+                                </div>
+                                <div>
+                                  <span class="font-medium text-gray-700">Format:</span>{' '}
+                                  {entry.structuredFileConfig?.format.toUpperCase()}
+                                </div>
+                                <div>
+                                  <span class="font-medium text-gray-700">Boundary:</span>{' '}
+                                  <span class="font-mono">{entry.structuredFileConfig?.boundaryDisplayPath}</span>
+                                </div>
+                              </div>
+                            </Show>
                           </div>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                          <div class="flex items-center gap-3">
+                          <div class="flex items-center gap-3 flex-wrap">
                             <Link
                               to="/admin/datasources/$id/edit"
                               params={{id: entry.id}}
@@ -220,89 +309,16 @@ const AdminDataSources = () => {
                             >
                               Edit
                             </Link>
-                            <Show when={entry.importRoute}>
+                            <Show when={entry.importRoute || entry.structuredFileConfig}>
                               <button
                                 type="button"
                                 onClick={() => {
-                                  if (entry.importRoute?.startsWith('fhir:')) {
-                                    void apiClient.api.datasources.import['fhir-ehr-patients']
-                                      .post({id: entry.id})
-                                      .then((response) => {
-                                        if (response.error || !response.data?.success) {
-                                          console.error('Failed to start import', response.error)
-                                          alert('Failed to start import')
-                                          return
-                                        }
-                                        void dataSourcesQuery.refetch()
-                                      })
-                                    return
-                                  }
-                                  if (entry.importRoute === '/api/datasources/import/arxiv') {
-                                    void apiClient.api.datasources.import.arxiv
-                                      .post({id: entry.id})
-                                      .then((response) => {
-                                        if (response.error || !response.data?.success) {
-                                          console.error('Failed to start import', response.error)
-                                          alert('Failed to start import')
-                                          return
-                                        }
-                                        void dataSourcesQuery.refetch()
-                                      })
-                                    return
-                                  }
-                                  if (entry.importRoute === '/api/datasources/import/biorxiv') {
-                                    void apiClient.api.datasources.import.biorxiv
-                                      .post({id: entry.id})
-                                      .then((response) => {
-                                        if (response.error || !response.data?.success) {
-                                          console.error('Failed to start import', response.error)
-                                          alert('Failed to start import')
-                                          return
-                                        }
-                                        void dataSourcesQuery.refetch()
-                                      })
-                                    return
-                                  }
-                                  if (entry.importRoute === '/api/datasources/import/medrxiv') {
-                                    void apiClient.api.datasources.import.medrxiv
-                                      .post({id: entry.id})
-                                      .then((response) => {
-                                        if (response.error || !response.data?.success) {
-                                          console.error('Failed to start import', response.error)
-                                          alert('Failed to start import')
-                                          return
-                                        }
-                                        void dataSourcesQuery.refetch()
-                                      })
-                                    return
-                                  }
-                                  if (entry.importRoute === '/api/datasources/import/pubmed') {
-                                    void apiClient.api.datasources.import.pubmed
-                                      .post({id: entry.id})
-                                      .then((response) => {
-                                        if (response.error || !response.data?.success) {
-                                          console.error('Failed to start import', response.error)
-                                          alert('Failed to start import')
-                                          return
-                                        }
-                                        void dataSourcesQuery.refetch()
-                                      })
-                                    return
-                                  }
-                                  if (entry.importRoute === '/api/datasources/import/europe-pmc-ppr') {
-                                    void apiClient.api.datasources.import['europe-pmc-ppr']
-                                      .post({id: entry.id})
-                                      .then((response) => {
-                                        if (response.error || !response.data?.success) {
-                                          console.error('Failed to start import', response.error)
-                                          alert('Failed to start import')
-                                          return
-                                        }
-                                        void dataSourcesQuery.refetch()
-                                      })
-                                    return
-                                  }
-                                  alert(`Unknown import route: ${entry.importRoute}`)
+                                  void startDataSourceImport(entry, () => {
+                                    return dataSourcesQuery.refetch()
+                                  }).catch((error) => {
+                                    console.error('Failed to start import', error)
+                                    alert(error instanceof Error ? error.message : 'Failed to start import')
+                                  })
                                 }}
                                 class="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
                               >

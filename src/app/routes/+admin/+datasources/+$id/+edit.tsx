@@ -4,6 +4,14 @@ import {createEffect, createSignal, Show} from 'solid-js'
 
 import {apiClient} from '../../../../../services/apiClient.ts'
 
+type StructuredFileConfig = {
+  assetPath: string
+  boundaryDisplayPath: string
+  boundaryPointer: string
+  format: 'json' | 'xml'
+  sourceFileName: string
+}
+
 type AdminDataSourceDetail = {
   id: string
   title: string
@@ -15,6 +23,7 @@ type AdminDataSourceDetail = {
   updatedAt: string
   dateFrom: string | null
   dateTo: string | null
+  structuredFileConfig: StructuredFileConfig | null
 }
 
 const fetchDataSourceById = async (id: string): Promise<AdminDataSourceDetail> => {
@@ -42,6 +51,7 @@ const fetchDataSourceById = async (id: string): Promise<AdminDataSourceDetail> =
     updatedAt: String(entry.updatedAt),
     dateFrom: entry.dateFrom ? String(entry.dateFrom) : null,
     dateTo: entry.dateTo ? String(entry.dateTo) : null,
+    structuredFileConfig: entry.structuredFileConfig ?? null,
   }
 }
 
@@ -79,6 +89,7 @@ const updateDataSource = async (
     updatedAt: String(entry.updatedAt),
     dateFrom: entry.dateFrom ? String(entry.dateFrom) : null,
     dateTo: entry.dateTo ? String(entry.dateTo) : null,
+    structuredFileConfig: entry.structuredFileConfig ?? null,
   }
 }
 
@@ -279,6 +290,31 @@ const AdminEditDataSource = () => {
                 class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
               />
             </div>
+
+            <Show when={dataSourceQuery.data?.structuredFileConfig}>
+              <div class="rounded-md border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900 space-y-1">
+                <div>
+                  <span class="font-medium">Structured file:</span>{' '}
+                  {dataSourceQuery.data?.structuredFileConfig?.sourceFileName}
+                </div>
+                <div>
+                  <span class="font-medium">Format:</span>{' '}
+                  {dataSourceQuery.data?.structuredFileConfig?.format.toUpperCase()}
+                </div>
+                <div>
+                  <span class="font-medium">Boundary:</span>{' '}
+                  <span class="font-mono">{dataSourceQuery.data?.structuredFileConfig?.boundaryDisplayPath}</span>
+                </div>
+                <div class="pt-2">
+                  <Link
+                    to="/admin/datasources/structured-file-import"
+                    class="text-blue-700 hover:text-blue-900 underline"
+                  >
+                    Import a new XML/JSON file
+                  </Link>
+                </div>
+              </div>
+            </Show>
 
             <div>
               <p class="block text-sm font-medium mb-2">Date Range</p>
