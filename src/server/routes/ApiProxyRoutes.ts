@@ -1,3 +1,5 @@
+import {hostname} from 'node:os'
+
 import {Elysia} from 'elysia'
 
 import {env} from '../utils/env.ts'
@@ -5,10 +7,32 @@ import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {getCurrentServerWriterUrl, shouldCurrentServerProxyApiToWriter} from '../utils/serverRuntimeRole.ts'
 import {getWriterConnectionProxyHeaders} from '../utils/writerConnections.ts'
 
-const localWriterOrigins = new Set([
-  `http://127.0.0.1:${env.API_SERVER_PORT}`,
-  `http://localhost:${env.API_SERVER_PORT}`,
-])
+const getCurrentServerHostAliases = () => {
+  const aliases = new Set(['127.0.0.1', '0.0.0.0', 'localhost', '::1'])
+  const currentHostname = hostname().trim().toLowerCase()
+
+  if (currentHostname !== '') {
+    aliases.add(currentHostname)
+
+    if (currentHostname.endsWith('.local')) {
+      aliases.add(currentHostname.slice(0, -'.local'.length))
+    } else {
+      aliases.add(`${currentHostname}.local`)
+    }
+  }
+
+  return aliases
+}
+
+const currentServerHostAliases = getCurrentServerHostAliases()
+
+const isCurrentServerWriterUrl = (writerUrl: string) => {
+  const parsedWriterUrl = new URL(writerUrl)
+  const isSamePort = parsedWriterUrl.port === String(env.API_SERVER_PORT)
+  const normalizedHostname = parsedWriterUrl.hostname.trim().toLowerCase()
+
+  return isSamePort && currentServerHostAliases.has(normalizedHostname)
+}
 
 const getWriterProxyRequest = (request: Request, writerUrl: string) => {
   const requestUrl = new URL(request.url)
@@ -53,8 +77,11 @@ const forwardApiRequestToWriter = async (request: Request): Promise<Response | n
     return null
   }
 
-  if (localWriterOrigins.has(new URL(writerUrl).origin)) {
-    throw new Error(`Writer proxy target must not point to this same API server (${writerUrl})`)
+  if (isCurrentServerWriterUrl(writerUrl)) {
+    return Response.json(
+      {data: null, error: `Writer proxy target must not point to this same API server (${writerUrl})`},
+      {status: 500},
+    )
   }
 
   const proxiedRequest = getWriterProxyRequest(request, writerUrl)

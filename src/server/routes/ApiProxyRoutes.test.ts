@@ -1,4 +1,5 @@
 import {existsSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
+import {hostname} from 'node:os'
 
 import {expect, test} from 'bun:test'
 
@@ -122,6 +123,74 @@ test('api role proxies API requests to writer server', async () => {
     await stopServer(writerServer)
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.writer.lock`)
+  }
+})
+
+test('api role rejects self-proxy writer URLs that point at the same port via a different local alias', async () => {
+  const apiPort = 34990
+  const duckdbPath = `/tmp/f1-api-self-proxy-${Date.now()}.duckdb`
+  const apiServer = startServer({
+    API_SERVER_PORT: String(apiPort),
+    DUCKDB_PATH: duckdbPath,
+    RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+    RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+    SERVER_ROLE: 'api',
+    SERVER_WRITER_URL: `http://0.0.0.0:${apiPort}`,
+    VITE_PORT: '4310',
+  })
+
+  try {
+    await waitForServer(apiPort, 10_000)
+
+    const response = await fetch(`http://127.0.0.1:${apiPort}/api/writer_connections`, {
+      signal: AbortSignal.timeout(5_000),
+    })
+    const body = (await response.json()) as {error?: string}
+
+    expect(response.ok).toBe(false)
+    expect(body.error ?? '').toContain('Writer proxy target must not point to this same API server')
+  } finally {
+    await stopServer(apiServer)
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+  }
+})
+
+test('api role rejects self-proxy writer URLs that use the machine hostname alias', async () => {
+  const apiPort = 34989
+  const duckdbPath = `/tmp/f1-api-self-proxy-hostname-${Date.now()}.duckdb`
+  const machineHostname = hostname().trim()
+
+  if (machineHostname === '') {
+    return
+  }
+
+  const apiServer = startServer({
+    API_SERVER_PORT: String(apiPort),
+    DUCKDB_PATH: duckdbPath,
+    RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+    RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+    SERVER_ROLE: 'api',
+    SERVER_WRITER_URL: `http://${machineHostname}:${apiPort}`,
+    VITE_PORT: '4309',
+  })
+
+  try {
+    await waitForServer(apiPort, 10_000)
+
+    const response = await fetch(`http://127.0.0.1:${apiPort}/api/writer_connections`, {
+      signal: AbortSignal.timeout(5_000),
+    })
+    const body = (await response.json()) as {error?: string}
+
+    expect(response.ok).toBe(false)
+    expect(body.error ?? '').toContain('Writer proxy target must not point to this same API server')
+  } finally {
+    await stopServer(apiServer)
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.writer.history.json`)
   }
 })
 
