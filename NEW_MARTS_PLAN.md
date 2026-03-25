@@ -25,6 +25,42 @@
   - read path coupled to `article_seq` / `article_seq_list`
 - Result: huge projects make queue slow, refresh expensive, request pressure high.
 
+## Current read paths today
+
+- LLM list/count:
+  - `candidate + filter_posting + judgment_detail` fast path
+  - then `review_article_rollup`
+  - then raw `app.article + app.judgment`
+- Unassessed list/count/pairs:
+  - `review_article_rollup`
+  - then raw `app.article + app.judgment`
+- Review details:
+  - `review_article_judgment_detail`
+  - then missing rows from raw `app.judgment`
+- Human tab:
+  - raw `app.judgment_human`
+- Both tab:
+  - `review_article_rollup` for model projects
+  - raw path only when project has no model
+- Database/numeric filter options:
+  - `prompt_answer_fact` for model projects
+  - raw path only when project has no model
+- Bulk article selection by filter:
+  - `review_article_rollup` for model projects
+  - raw path only when project has no model
+
+## Current fallback today
+
+- Yes:
+  - LLM list/count
+  - unassessed list/count/pairs
+  - review details partial hydration
+- No or weak:
+  - both tab for normal model projects
+  - model-project filter option building
+  - bulk article selection/export on model projects
+- New marts should keep fast exact reads, but also keep a clear degraded path while backfill/indexing is incomplete.
+
 ## Direction
 
 - Target: true incremental serving marts.
@@ -166,6 +202,63 @@
 - Query planner behavior on very large posting intersections must be profiled.
 - Dual-write migration period adds complexity.
 
+## Test gaps to close
+
+- Add parity tests for every list type:
+  - llm
+  - human
+  - both
+  - unassessed
+- Add parity tests for every read mode:
+  - new marts
+  - old marts
+  - no marts / degraded fallback
+- Add tests for exact parity between old and new results:
+  - row ids
+  - ordering
+  - counts
+  - prompt filters
+  - date filters
+  - search filters
+- Add tests for review detail hydration parity:
+  - full detail mart present
+  - partial detail mart present
+  - detail mart absent
+- Add tests for bulk selection parity:
+  - llm
+  - both
+  - unassessed
+  - export/add-to-project style flows
+- Add tests for filter-option parity:
+  - database filters
+  - numeric filters
+  - empty-state behavior while indexing incomplete
+- Add tests for incremental writes:
+  - article changed
+  - article enters scope
+  - article leaves scope
+  - prompt enabled/disabled
+  - model/config change
+  - import-route change
+- Add tests for generation behavior:
+  - readers never see mixed generations
+  - cutover atomic
+  - rollback to previous generation possible
+  - old generation cleanup safe
+- Add tests for postings correctness:
+  - exact intersections
+  - exact counts
+  - deletions/tombstones
+  - duplicate answers / multi-answer judgments
+- Add tests for queue/drain behavior:
+  - article delta does not trigger full rebuild unless required
+  - giant project does not starve smaller project forever
+  - DB-backed requests stay responsive during refresh
+- Add one large-project perf smoke test:
+  - fast first page
+  - fast filtered first page
+  - exact count eventually returns
+
 ## Todo checklist
 
 - [ ] Freeze assumptions/product rules for large-project review UX.
@@ -181,5 +274,23 @@
 - [ ] Switch filter/count read path.
 - [ ] Switch review detail read path.
 - [ ] Add queue/debug visibility for new refresh model.
+- [ ] Write parity tests for llm/human/both/unassessed against old vs new marts.
+- [ ] Write degraded-path tests for no-mart / partial-mart states.
+- [ ] Write generation cutover tests.
+- [ ] Write incremental update tests for article/scope/prompt/model changes.
+- [ ] Write posting exactness tests.
+- [ ] Write bulk-selection/export parity tests.
+- [ ] Write large-project perf smoke tests.
 - [ ] Benchmark on giant projects.
 - [ ] Remove old dense ordinal/posting path.
+
+## Weak or missing today
+
+- LLM list/count has layered fallback today.
+- Unassessed has layered fallback today.
+- Review details has partial fallback today.
+- Human tab is raw-table based today.
+- Both tab lacks a strong degraded path for normal model projects.
+- Model-project database/numeric filter options are mart-dependent today.
+- Model-project bulk article selection/export is mart-dependent today.
+- New marts rollout needs explicit degraded-path behavior, not just happy-path parity.
