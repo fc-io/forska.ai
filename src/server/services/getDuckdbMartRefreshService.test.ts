@@ -238,7 +238,169 @@ test('mart refresh task query orders by epoch(created_at) to avoid empty oldest-
   )) as MartRefreshServiceModule
   const martRefreshService = martRefreshServiceModule.getDuckdbMartRefreshService()
 
-  expect(martRefreshService.getQueuedTasksSqlForTests()).toContain('ORDER BY EPOCH(created_at) ASC, id ASC')
+  expect(martRefreshService.getQueuedArticleTasksSqlForTests()).toContain('ORDER BY EPOCH(created_at) ASC, id ASC')
+  expect(martRefreshService.getQueuedProjectTasksSqlForTests()).toContain(
+    'ORDER BY COALESCE(project_scope_size.scopeCount, 0) ASC',
+  )
+})
+
+test('mart refresh prioritizes smaller queued project rebuilds ahead of larger ones', () => {
+  const duckdbPath = `/tmp/f1-mart-refresh-project-priority-${Date.now()}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        const actualAppDatabaseModule = await import(appDatabaseServiceModulePath + '?actual=' + Date.now())
+        const projectRefreshOrder = []
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            ...actualAppDatabaseModule,
+            getAppDatabaseService: () => {
+              const service = actualAppDatabaseModule.getAppDatabaseService()
+
+              return {
+                ...service,
+                runBackground: async (statement) => {
+                  if (statement.includes('DELETE FROM mart.project_scope_article')) {
+                    projectRefreshOrder.push(
+                      statement.includes('project-small-priority-test')
+                        ? 'small'
+                        : statement.includes('project-large-priority-test')
+                          ? 'large'
+                          : 'unknown',
+                    )
+                  }
+
+                  return service.runBackground(statement)
+                },
+              }
+            },
+          }
+        })
+
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+
+        await migrateDuckdb()
+
+        const database = actualAppDatabaseModule.getAppDatabaseService()
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+          VALUES ('connection-project-priority-test', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+        \`)
+        await database.run(\`
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+          VALUES ('model-project-priority-test', 'connection-project-priority-test', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+          VALUES
+            ('project-large-priority-test', 'Large Priority Project', 'model-project-priority-test', TRUE, TRUE, FALSE, FALSE),
+            ('project-small-priority-test', 'Small Priority Project', 'model-project-priority-test', TRUE, TRUE, FALSE, FALSE)
+        \`)
+
+        for (const index of [0, 1, 2]) {
+          await database.run(\`
+            INSERT INTO app.article (id, article_title)
+            VALUES ('article-large-priority-test-\${index}', 'Large Priority Article \${index}')
+          \`)
+          await database.run(\`
+            INSERT INTO app.project_article (id, project_id, article_id)
+            VALUES ('project-large-priority-link-\${index}', 'project-large-priority-test', 'article-large-priority-test-\${index}')
+          \`)
+          await database.run(\`
+            INSERT INTO mart.project_scope_article (
+              project_id,
+              article_id,
+              in_curated_scope,
+              in_route_scope,
+              article_created_at,
+              article_updated_at
+            )
+            VALUES (
+              'project-large-priority-test',
+              'article-large-priority-test-\${index}',
+              TRUE,
+              FALSE,
+              current_timestamp,
+              current_timestamp
+            )
+          \`)
+        }
+
+        await database.run(\`
+          INSERT INTO app.article (id, article_title)
+          VALUES ('article-small-priority-test-0', 'Small Priority Article 0')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_article (id, project_id, article_id)
+          VALUES ('project-small-priority-link-0', 'project-small-priority-test', 'article-small-priority-test-0')
+        \`)
+        await database.run(\`
+          INSERT INTO mart.project_scope_article (
+            project_id,
+            article_id,
+            in_curated_scope,
+            in_route_scope,
+            article_created_at,
+            article_updated_at
+          )
+          VALUES (
+            'project-small-priority-test',
+            'article-small-priority-test-0',
+            TRUE,
+            FALSE,
+            current_timestamp,
+            current_timestamp
+          )
+        \`)
+
+        const martRefreshService = (await import(martRefreshServiceModulePath + '?priority=' + Date.now())).getDuckdbMartRefreshService()
+
+        await martRefreshService.queueProjectRefresh('project-large-priority-test', 'large-project-priority-test')
+        await new Promise((resolve) => {
+          setTimeout(resolve, 10)
+        })
+        await martRefreshService.queueProjectRefresh('project-small-priority-test', 'small-project-priority-test')
+        await martRefreshService.flush()
+
+        console.log(JSON.stringify({projectRefreshOrder}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(
+        runScript.stderr.toString() || runScript.stdout.toString() || 'Mart project priority regression test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {projectRefreshOrder: string[]}
+
+    expect(result.projectRefreshOrder).toEqual(['small', 'large'])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+  }
 })
 
 test('mart refresh runs project rebuild statements on the background database connection', () => {

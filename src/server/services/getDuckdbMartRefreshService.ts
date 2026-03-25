@@ -84,8 +84,9 @@ let martRefreshProgressSnapshot = getEmptyMartRefreshProgressSnapshot()
 let martRefreshArticleCompletionTimes: number[] = []
 let martRefreshProjectCompletionTimes: number[] = []
 
-const martRefreshBatchLimit = 4
+const martRefreshArticleBatchLimit = 4
 const martRefreshDrainBudgetMs = 100
+const martRefreshProjectBatchLimit = 1
 const martRefreshRetryDelayMs = 5000
 const martRefreshScheduleDelayMs = 250
 const martRefreshThroughputWindowMs = 15_000
@@ -251,7 +252,7 @@ const verifyMartRefreshQueueCompletedAtColumn = async () => {
   return (await getHasMartRefreshQueueCompletedAtColumn()) ? undefined : repairMartRefreshQueueCompletedAtColumn()
 }
 
-const getQueuedTasksSql = () => {
+const getQueuedArticleTasksSql = () => {
   return `
     SELECT
       id,
@@ -261,8 +262,44 @@ const getQueuedTasksSql = () => {
       COALESCE(refresh_generation, 0) AS refreshGeneration
     FROM app.mart_refresh_queue
     WHERE completed_at IS NULL
+      AND refresh_scope = 'judgment_article'
     ORDER BY EPOCH(created_at) ASC, id ASC
-    LIMIT ${martRefreshBatchLimit}
+    LIMIT ${martRefreshArticleBatchLimit}
+  `
+}
+
+const getQueuedProjectTasksSql = () => {
+  return `
+    WITH queued_project_task AS (
+      SELECT
+        id,
+        refresh_scope AS refreshScope,
+        project_id AS projectId,
+        article_id AS articleId,
+        created_at AS createdAt,
+        COALESCE(refresh_generation, 0) AS refreshGeneration
+      FROM app.mart_refresh_queue
+      WHERE completed_at IS NULL
+        AND refresh_scope = 'project'
+    ),
+    project_scope_size AS (
+      SELECT
+        project_scope_article.project_id AS projectId,
+        COUNT(*) AS scopeCount
+      FROM mart.project_scope_article project_scope_article
+      INNER JOIN queued_project_task ON queued_project_task.projectId = project_scope_article.project_id
+      GROUP BY project_scope_article.project_id
+    )
+    SELECT
+      queued_project_task.id,
+      queued_project_task.refreshScope,
+      queued_project_task.projectId,
+      queued_project_task.articleId,
+      queued_project_task.refreshGeneration
+    FROM queued_project_task
+    LEFT JOIN project_scope_size ON project_scope_size.projectId = queued_project_task.projectId
+    ORDER BY COALESCE(project_scope_size.scopeCount, 0) ASC, EPOCH(queued_project_task.createdAt) ASC, queued_project_task.id ASC
+    LIMIT ${martRefreshProjectBatchLimit}
   `
 }
 
@@ -832,9 +869,14 @@ const getJudgmentArticleRefreshSql = (articleId: string) => {
   `
 }
 
-const getQueuedTasks = async () => {
+const getQueuedArticleTasks = async () => {
   await ensureMartRefreshQueueSchema()
-  return getAppDatabaseService().queryJson<MartRefreshTaskRow>(getQueuedTasksSql())
+  return getAppDatabaseService().queryJson<MartRefreshTaskRow>(getQueuedArticleTasksSql())
+}
+
+const getQueuedProjectTasks = async () => {
+  await ensureMartRefreshQueueSchema()
+  return getAppDatabaseService().queryJson<MartRefreshTaskRow>(getQueuedProjectTasksSql())
 }
 
 const getHasQueuedTasks = async () => {
@@ -877,12 +919,6 @@ const getUniqueValues = (values: Array<string | null | undefined>) => {
       }),
     ),
   )
-}
-
-const getQueuedTasksForScope = (queuedTasks: MartRefreshTaskRow[], refreshScope: MartRefreshScope) => {
-  return queuedTasks.filter((task) => {
-    return task.refreshScope === refreshScope
-  })
 }
 
 const queryMartRefreshBackgroundJson = async <T>(statement: string): Promise<T[]> => {
@@ -977,7 +1013,8 @@ const processQueuedMartRefreshPass = async (): Promise<boolean> => {
     lastPassStartedAt: new Date().toISOString(),
     passCount: martRefreshDebugSnapshot.passCount + 1,
   })
-  const queuedTasks = await getQueuedTasks()
+  const [queuedArticleTasks, queuedProjectTasks] = await Promise.all([getQueuedArticleTasks(), getQueuedProjectTasks()])
+  const queuedTasks = [...queuedArticleTasks, ...queuedProjectTasks]
   updateMartRefreshDebugSnapshot({lastQueuedTaskCount: queuedTasks.length})
 
   if (queuedTasks.length === 0) {
@@ -985,8 +1022,6 @@ const processQueuedMartRefreshPass = async (): Promise<boolean> => {
     return false
   }
 
-  const queuedArticleTasks = getQueuedTasksForScope(queuedTasks, 'judgment_article')
-  const queuedProjectTasks = getQueuedTasksForScope(queuedTasks, 'project')
   const claimedQueuedArticleIds = getUniqueValues(
     queuedArticleTasks.map((task) => {
       return task.articleId
@@ -1245,10 +1280,11 @@ const queueJudgmentArticleRefreshesByPromptIds = async (promptIds: string[], rea
 const duckdbMartRefreshService = {
   ensureQueueSchema: ensureMartRefreshQueueSchema,
   flush: flushQueuedMartRefreshes,
+  getQueuedArticleTasksSqlForTests: getQueuedArticleTasksSql,
+  getQueuedProjectTasksSqlForTests: getQueuedProjectTasksSql,
   isAutoDrainEnabled: isMartRefreshAutoDrainEnabled,
   getDebugSnapshot: getMartRefreshDebugSnapshot,
   getProgressSnapshot: getMartRefreshProgressSnapshot,
-  getQueuedTasksSqlForTests: getQueuedTasksSql,
   getThroughputSnapshot: getMartRefreshThroughputSnapshot,
   queueJudgmentArticleRefresh: async (articleId: string, reason: string) => {
     await queueJudgmentArticleRefreshes([articleId], reason)
