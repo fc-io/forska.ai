@@ -50,6 +50,13 @@ const normalizeLlmStatusTimestamp = (value: unknown): Date | null => {
   return null
 }
 
+const normalizeLlmStatusNumber = (value: unknown): number | null => {
+  const parsed =
+    typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : Number.NaN
+
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 export const fetchLlmStatus = async (): Promise<LlmStatusRow[]> => {
   const response = await apiClient.api.llmstatus.get()
 
@@ -65,21 +72,21 @@ export const fetchLlmStatus = async (): Promise<LlmStatusRow[]> => {
       instanceId: typeof row.instanceId === 'string' ? row.instanceId : '',
       modelName: typeof row.modelName === 'string' ? row.modelName : '',
       engineVersion: (row.engineVersion as string | null) ?? null,
-      prefillTps: (row.prefillTps as number | null) ?? null,
-      genTps: (row.genTps as number | null) ?? null,
-      rps: (row.rps as number | null) ?? null,
-      numQueueReqs: (row.numQueueReqs as number | null) ?? null,
-      numRunningReqs: (row.numRunningReqs as number | null) ?? null,
-      numGrammarQueueReqs: (row.numGrammarQueueReqs as number | null) ?? null,
-      numRunningReqsOfflineBatch: (row.numRunningReqsOfflineBatch as number | null) ?? null,
-      numPrefillPreallocQueueReqs: (row.numPrefillPreallocQueueReqs as number | null) ?? null,
-      numPrefillInflightQueueReqs: (row.numPrefillInflightQueueReqs as number | null) ?? null,
-      numDecodePreallocQueueReqs: (row.numDecodePreallocQueueReqs as number | null) ?? null,
-      numDecodeTransferQueueReqs: (row.numDecodeTransferQueueReqs as number | null) ?? null,
-      utilization: (row.utilization as number | null) ?? null,
-      cacheHitRate: (row.cacheHitRate as number | null) ?? null,
-      inFlight: (row.inFlight as number | null) ?? null,
-      maxInFlight: (row.maxInFlight as number | null) ?? null,
+      prefillTps: normalizeLlmStatusNumber(row.prefillTps),
+      genTps: normalizeLlmStatusNumber(row.genTps),
+      rps: normalizeLlmStatusNumber(row.rps),
+      numQueueReqs: normalizeLlmStatusNumber(row.numQueueReqs),
+      numRunningReqs: normalizeLlmStatusNumber(row.numRunningReqs),
+      numGrammarQueueReqs: normalizeLlmStatusNumber(row.numGrammarQueueReqs),
+      numRunningReqsOfflineBatch: normalizeLlmStatusNumber(row.numRunningReqsOfflineBatch),
+      numPrefillPreallocQueueReqs: normalizeLlmStatusNumber(row.numPrefillPreallocQueueReqs),
+      numPrefillInflightQueueReqs: normalizeLlmStatusNumber(row.numPrefillInflightQueueReqs),
+      numDecodePreallocQueueReqs: normalizeLlmStatusNumber(row.numDecodePreallocQueueReqs),
+      numDecodeTransferQueueReqs: normalizeLlmStatusNumber(row.numDecodeTransferQueueReqs),
+      utilization: normalizeLlmStatusNumber(row.utilization),
+      cacheHitRate: normalizeLlmStatusNumber(row.cacheHitRate),
+      inFlight: normalizeLlmStatusNumber(row.inFlight),
+      maxInFlight: normalizeLlmStatusNumber(row.maxInFlight),
     }
   })
 }
@@ -110,10 +117,10 @@ export const getLlmMetricsSummary = (rows: LlmStatusRow[]): LlmMetricsSummary | 
   }
 
   const waiting = latestRows.reduce((sum, row) => {
-    return sum + (row.numQueueReqs ?? 0)
+    return sum + (normalizeLlmStatusNumber(row.numQueueReqs) ?? 0)
   }, 0)
   const running = latestRows.reduce((sum, row) => {
-    return sum + (row.numRunningReqs ?? 0)
+    return sum + (normalizeLlmStatusNumber(row.numRunningReqs) ?? 0)
   }, 0)
   const timestamps = getLlmStatusTimestamps(latestRows)
   const lastUpdate =
@@ -131,7 +138,9 @@ export const getLlmMetricsSummary = (rows: LlmStatusRow[]): LlmMetricsSummary | 
 }
 
 const isLlmStatusActive = (row: LlmStatusRow) => {
-  return (row.numQueueReqs ?? 0) > 0 || (row.numRunningReqs ?? 0) > 0
+  return (
+    (normalizeLlmStatusNumber(row.numQueueReqs) ?? 0) > 0 || (normalizeLlmStatusNumber(row.numRunningReqs) ?? 0) > 0
+  )
 }
 
 export const getLlmStatusRefetchInterval = (rows: LlmStatusRow[]) => {
