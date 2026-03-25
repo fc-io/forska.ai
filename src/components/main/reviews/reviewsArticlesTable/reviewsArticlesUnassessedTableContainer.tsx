@@ -3,6 +3,7 @@ import type {Accessor, Setter} from 'solid-js'
 import {createEffect, createMemo, createSignal, Show, Suspense} from 'solid-js'
 
 import {createArticlesUnassessedQueryOptions} from '../../projects/projectsArticlesUnassessedQuery.ts'
+import {ReviewsIndexingProgress} from '../reviewsIndexingProgress.tsx'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
 import {createReviewsWarningsQueryOptions} from '../reviewsWarningsQuery.ts'
 import {ReviewsArticlesTable} from './reviewsArticlesTable.tsx'
@@ -147,6 +148,11 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
                     <div class="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center">
                       <p class="font-medium text-slate-800">{emptyState().title}</p>
                       <p class="mt-2 text-sm text-slate-600">{emptyState().description}</p>
+                      <Show when={warningsQuery.data?.scope.hasAnyArticlesInScope ? warningsQuery.data.indexing : null}>
+                        {(indexing) => {
+                          return <ReviewsIndexingProgress indexing={indexing()} compact />
+                        }}
+                      </Show>
                     </div>
                   }
                 >

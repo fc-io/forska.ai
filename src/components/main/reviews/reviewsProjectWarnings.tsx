@@ -2,6 +2,7 @@ import {useQuery} from '@tanstack/solid-query'
 import {Link} from '@tanstack/solid-router'
 import {createMemo, Show} from 'solid-js'
 
+import {ReviewsIndexingProgress} from './reviewsIndexingProgress.tsx'
 import {createReviewsWarningsQueryOptions} from './reviewsWarningsQuery.ts'
 
 const formatQueuedAt = (value: string | null) => {
@@ -127,6 +128,11 @@ export const ReviewsProjectWarnings = (props: {projectId: string}) => {
           <div class={`rounded-lg border p-4 ${indexingBannerTone()}`}>
             <p class="font-medium">{indexingBannerTitle()}</p>
             <p class="mt-1 text-sm opacity-90">{indexingBannerBody()}</p>
+            <Show when={warningsData()?.indexing ?? null}>
+              {(indexing) => {
+                return <ReviewsIndexingProgress indexing={indexing()} />
+              }}
+            </Show>
             <Show when={indexingBannerMeta()}>
               {(meta) => {
                 return <p class="mt-2 text-xs opacity-75">{meta()}</p>

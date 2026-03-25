@@ -4,6 +4,7 @@ import {createEffect, createMemo, createSignal, Show} from 'solid-js'
 
 import {createArticlesReviewsCountQueryOptions} from '../../projects/projectsArticlesReviewsCountQuery.ts'
 import {createArticlesReviewsQueryOptions} from '../../projects/projectsArticlesReviewsQuery.ts'
+import {ReviewsIndexingProgress} from '../reviewsIndexingProgress.tsx'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
 import {createReviewsWarningsQueryOptions} from '../reviewsWarningsQuery.ts'
 import {type ArticleWithJudgments, ReviewsArticlesTable} from './reviewsArticlesTable.tsx'
@@ -273,6 +274,11 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
               <div class="rounded-lg border border-slate-200 bg-slate-50 p-8 text-center">
                 <p class="font-medium text-slate-800">{emptyState().title}</p>
                 <p class="mt-2 text-sm text-slate-600">{emptyState().description}</p>
+                <Show when={warningsQuery.data?.scope.hasAnyArticlesInScope ? warningsQuery.data.indexing : null}>
+                  {(indexing) => {
+                    return <ReviewsIndexingProgress indexing={indexing()} compact />
+                  }}
+                </Show>
               </div>
             }
           >
