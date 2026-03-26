@@ -62,6 +62,10 @@ test('analyzeStructuredFileUpload finds JSON array boundaries', async () => {
 
   expect(result.upload.format).toBe('json')
   expect(result.candidates[0]).toMatchObject({count: 2, displayPath: '$.items[]', pointer: '/items'})
+  expect(result.candidates[0]?.samplePreview).toBe(`{
+  "id": "1",
+  "title": "Alpha"
+}`)
 })
 
 test('analyzeStructuredFileUpload finds XML repeated element boundaries', async () => {

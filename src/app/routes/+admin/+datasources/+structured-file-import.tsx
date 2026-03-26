@@ -263,9 +263,12 @@ const AdminStructuredFileImport = () => {
                               <Show when={candidate.sampleKeys.length > 0}>
                                 <p class="text-xs text-gray-600">Keys: {candidate.sampleKeys.join(', ')}</p>
                               </Show>
-                              <pre class="text-xs text-gray-600 whitespace-pre-wrap break-words bg-gray-50 rounded-md p-3 border border-gray-100">
-                                {candidate.samplePreview}
-                              </pre>
+                              <div class="space-y-1">
+                                <p class="text-xs font-medium text-gray-700">Example element</p>
+                                <pre class="max-h-80 overflow-auto text-xs text-gray-600 whitespace-pre-wrap break-words bg-gray-50 rounded-md p-3 border border-gray-100">
+                                  {candidate.samplePreview}
+                                </pre>
+                              </div>
                             </div>
                           </div>
                         </label>

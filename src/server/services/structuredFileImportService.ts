@@ -351,7 +351,7 @@ const getBoundaryCandidate = (items: unknown[], segments: string[]): StructuredB
     displayPath: getDisplayPath(segments),
     count: items.length,
     sampleKeys: getSampleKeys(sampleItem),
-    samplePreview: getShortText(getPrettyStructuredValue(sampleItem), 280),
+    samplePreview: getPrettyStructuredValue(sampleItem),
   }
 }
 
