@@ -1,0 +1,171 @@
+{
+  "name": "SQLite Judgment Queue Phase 1 Closeout",
+  "description": "Finish the SQLite-backed OLTP judgment queue rollout by moving residual cursor state into per-job SQLite, adding visibility-aware import and cleanup behavior, and covering the remaining crash and contention gaps.",
+  "branchName": "ralph/sqlite-judgment-queue-phase-1-closeout",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Finalize SQLite job_scan_state as the active cursor source",
+      "description": "As a maintainer, I want each SQLite-backed job to persist its full scan cursor and visibility state locally so active queue scanning no longer depends on DuckDB cursor fields.",
+      "acceptanceCriteria": [
+        "`job_scan_state` stores the active cursor fields together with `scan_epoch` and `last_project_refresh_ack_seq` for SQLite-backed jobs.",
+        "The SQLite scan-state service reads and writes cursor, exhaustion, scan epoch, and visibility watermark values without losing existing cursor data.",
+        "SQLite-backed prompt top-up uses `job_scan_state` as its cursor source of truth and does not require `app.judgment_job` cursor fields during scanning.",
+        "bun run lint passes",
+        "bun test passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Make SQLite outbox import replay-safe after partial success",
+      "description": "As a maintainer, I want the SQLite outbox importer to recover cleanly when DuckDB commit succeeds before SQLite export acknowledgement so replay never duplicates judgments or strands claimed rows.",
+      "acceptanceCriteria": [
+        "Re-running the importer after DuckDB insert success but before SQLite ack does not create duplicate `app.judgment` rows for the same natural key.",
+        "Claimed outbox rows can be completed idempotently after replay so partially successful batches do not remain stuck in claimed state.",
+        "Importer failure before DuckDB commit still leaves affected outbox rows retryable on the next import attempt.",
+        "bun run lint passes",
+        "bun test passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Acknowledge mart visibility watermarks back to SQLite",
+      "description": "As a maintainer, I want each job to record how far DuckDB and mart refreshes have become visible so queue wrap and cleanup decisions can wait for durable read visibility.",
+      "acceptanceCriteria": [
+        "After imported judgments become visible to the mart refresh path, SQLite records a per-job `last_project_refresh_ack_seq` watermark.",
+        "The stored visibility watermark only moves forward and is tied to imported `outbox_seq` values for the affected job.",
+        "Jobs without completed visibility acknowledgement keep their previous watermark instead of advancing optimistically.",
+        "bun run lint passes",
+        "bun test passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Gate cursor wrap on visibility acknowledgement",
+      "description": "As a maintainer, I want exhausted SQLite scans to wrap only after prior exports are visible in DuckDB so the top-up path cannot re-enqueue already judged prompt pairs.",
+      "acceptanceCriteria": [
+        "A SQLite-backed job wraps its scan cursor to the start only when the visibility watermark covers the exported work from the completed pass.",
+        "`scan_epoch` increments exactly once when a full scan pass legitimately wraps back to the start.",
+        "Jobs whose visibility watermark is behind remain exhausted instead of re-enqueueing previously exported prompt pairs.",
+        "bun run lint passes",
+        "bun test passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-003"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Prune exported rows only after visibility acknowledgement",
+      "description": "As a maintainer, I want retention cleanup to remove only rows that are already visible through DuckDB and marts so cleanup cannot break dedupe or force stale re-enqueue.",
+      "acceptanceCriteria": [
+        "Retention cleanup deletes exported `judgment_outbox` rows only when their `outbox_seq` is at or below the job visibility watermark.",
+        "Retention cleanup deletes terminal `queue_prompt` rows only after the corresponding exported work is visibility-acked.",
+        "Cleanup runs in bounded batches and leaves newer or unacked rows untouched.",
+        "bun run lint passes",
+        "bun test passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-003"
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Delete drained per-job SQLite databases only after full drain",
+      "description": "As a maintainer, I want per-job SQLite files removed only after queue work, outbox export, and visibility-gated cleanup are finished so finished jobs leave no residue without risking data loss.",
+      "acceptanceCriteria": [
+        "Drained-job cleanup removes or archives the per-job SQLite DB and lease sidecar only when the job has no active queue rows and no pending visibility-gated outbox data.",
+        "Active or partially drained SQLite-backed jobs remain on disk and continue to serve retries or cleanup work.",
+        "Legacy DuckDB-backed jobs keep their existing cleanup behavior during rollout.",
+        "bun run lint passes",
+        "bun test passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-005"
+      ]
+    },
+    {
+      "id": "US-007",
+      "title": "Add duplicate-claim contention coverage for SQLite queues",
+      "description": "As a maintainer, I want a regression test for competing writers so the SQLite claim path proves each prompt pair can only be claimed once under contention.",
+      "acceptanceCriteria": [
+        "Add a test where competing writers race to claim ready rows for the same SQLite-backed job.",
+        "The test proves each `(job_id, article_id, prompt_id)` pair is claimed at most once.",
+        "The test exercises the lease or transaction behavior used by the production SQLite claim path.",
+        "bun run lint passes",
+        "bun test passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-008",
+      "title": "Add crash-replay coverage for SQLite outbox import",
+      "description": "As a maintainer, I want a regression test for importer replay so crashes between DuckDB commit and SQLite acknowledgement cannot silently duplicate or strand judgments.",
+      "acceptanceCriteria": [
+        "Add a test that simulates DuckDB commit succeeding before SQLite export acknowledgement completes.",
+        "Re-running the importer in the test does not duplicate `app.judgment` rows and eventually clears the affected outbox work.",
+        "The test asserts the replay path preserves the same dedupe guarantees as the normal import path.",
+        "bun run lint passes",
+        "bun test passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-009",
+      "title": "Add drain-then-delete lifecycle coverage for job cleanup",
+      "description": "As a maintainer, I want a regression test for job cleanup so SQLite job files disappear only after export, visibility acknowledgement, and retention cleanup have fully drained.",
+      "acceptanceCriteria": [
+        "Add a test that covers job completion, visibility acknowledgement, retention cleanup, and final SQLite DB deletion or archival.",
+        "The test proves cleanup does not remove the job DB while export or visibility drain is still incomplete.",
+        "The test proves the SQLite DB and lease sidecar disappear only after the job is fully drained.",
+        "bun run lint passes",
+        "bun test passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-005",
+        "US-006"
+      ]
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-03-26T14:08:35.589Z"
+  }
+}
