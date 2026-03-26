@@ -240,6 +240,16 @@ test('stores full SQLite scan state without clearing existing cursor fields', as
     lastProjectRefreshAckSeq: 23,
     scanEpoch: 2,
   })
+
+  await service.setLastProjectRefreshAckSeq(jobId, 19)
+  await service.setScanState(jobId, {lastProjectRefreshAckSeq: 11})
+
+  expect(await service.getScanState(jobId)).toEqual({
+    cursor: {lastArticleId: 'seed-article', lastDate: seededCursorDate},
+    exhaustedAt: updatedExhaustedAt,
+    lastProjectRefreshAckSeq: 23,
+    scanEpoch: 2,
+  })
 })
 
 test('claims, reaps, releases, and completes outbox batches', async () => {

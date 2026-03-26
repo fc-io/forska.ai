@@ -250,6 +250,12 @@ const queueRefreshesForEntries = async (entries: JudgmentJobSqliteOutboxEntry[])
   await getDuckdbMartRefreshService().queueJudgmentArticleRefreshes(articleIds, 'sqliteJudgmentOutboxImport')
 }
 
+const getLastImportedOutboxSeq = (entries: JudgmentJobSqliteOutboxEntry[]) => {
+  return entries.reduce<number | null>((maxOutboxSeq, entry) => {
+    return maxOutboxSeq == null ? entry.outboxSeq : Math.max(maxOutboxSeq, entry.outboxSeq)
+  }, null)
+}
+
 const claimPendingOutboxBatchForJobIds = async ({
   claimedBy,
   jobIds,
@@ -355,6 +361,7 @@ export const importJudgmentJobSqliteOutboxBatch = async ({
   try {
     const {discardedEntries, importableEntries} = await partitionImportableEntries(rows)
     const {missingEntries} = await partitionExistingJudgments(importableEntries)
+    const lastImportedOutboxSeq = getLastImportedOutboxSeq(importableEntries)
 
     await sqliteService.completeClaimedOutboxRows({
       claimId: claim.claimId,
@@ -370,7 +377,12 @@ export const importJudgmentJobSqliteOutboxBatch = async ({
       throw new Error(`Failed to replay SQLite judgment outbox claim ${claim.claimId}`)
     }
 
-    await queueRefreshesForEntries(importableEntries)
+    if (importableEntries.length > 0) {
+      await queueRefreshesForEntries(importableEntries)
+      await getDuckdbMartRefreshService().flush()
+      await sqliteService.setLastProjectRefreshAckSeq(claim.jobId, lastImportedOutboxSeq)
+    }
+
     await sqliteService.completeOutboxClaim({claimId: claim.claimId, jobId: claim.jobId})
     return importableEntries.length
   } catch (error) {

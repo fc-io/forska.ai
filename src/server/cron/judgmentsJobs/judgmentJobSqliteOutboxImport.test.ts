@@ -543,3 +543,151 @@ test('releases claimed SQLite outbox batches for retry when DuckDB insert fails 
   expect(Number(rows[0]?.count ?? 0)).toBe(1)
   expect(await service.getUnexportedOutboxCount(jobId)).toBe(0)
 })
+
+test('records the last project refresh acknowledgement seq after mart visibility completes', async () => {
+  if (!runDatabase || !sqliteService || !importOutboxBatch || !storeSinglePromptJudgment) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-ack-${Date.now()}`
+  const modelId = `model-ack-${Date.now()}`
+  const projectId = `project-ack-${Date.now()}`
+  const jobId = `job-ack-${Date.now()}`
+  const promptId = `prompt-ack-${Date.now()}`
+  const articleId = `article-ack-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Import Ack Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES ('${promptId}', 'Prompt', '${promptId}-hash')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('${articleId}', 'Article')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
+
+  const [claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt')
+  }
+
+  await storeSinglePromptJudgment({
+    article: {id: articleId} as ArticleRecord,
+    judgmentsJobId: jobId,
+    promptId,
+    queueRecordId: claimedPrompt.recordId,
+    modelId,
+    projectId,
+    judgment: {answer: 'yes', explanation: 'because', quotes: ['quote']},
+    chunkingStrategy: null,
+  })
+
+  const [pendingOutboxRow] = await service.getPendingOutboxBatch({maxBytes: 1024 * 1024, maxRows: 10})
+
+  expect(await importOutboxBatch()).toBe(1)
+  expect((await service.getScanState(jobId)).lastProjectRefreshAckSeq).toBe(pendingOutboxRow?.outboxSeq ?? null)
+})
+
+test('keeps the previous refresh acknowledgement seq when mart visibility acknowledgement fails', async () => {
+  if (!runDatabase || !sqliteService || !importOutboxBatch || !storeSinglePromptJudgment) {
+    throw new Error('Test database not initialized')
+  }
+
+  const {getDuckdbMartRefreshService} = await import('../../services/getDuckdbMartRefreshService.ts')
+  const martRefreshService = getDuckdbMartRefreshService()
+  const originalFlush = martRefreshService.flush
+  const service = sqliteService()
+  const connectionId = `connection-ack-fail-${Date.now()}`
+  const modelId = `model-ack-fail-${Date.now()}`
+  const projectId = `project-ack-fail-${Date.now()}`
+  const jobId = `job-ack-fail-${Date.now()}`
+  const promptId = `prompt-ack-fail-${Date.now()}`
+  const articleId = `article-ack-fail-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Import Ack Failure Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES ('${promptId}', 'Prompt', '${promptId}-hash')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('${articleId}', 'Article')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.setLastProjectRefreshAckSeq(jobId, 0)
+  await service.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
+
+  const [claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt')
+  }
+
+  await storeSinglePromptJudgment({
+    article: {id: articleId} as ArticleRecord,
+    judgmentsJobId: jobId,
+    promptId,
+    queueRecordId: claimedPrompt.recordId,
+    modelId,
+    projectId,
+    judgment: {answer: 'yes', explanation: 'because', quotes: ['quote']},
+    chunkingStrategy: null,
+  })
+
+  const [pendingOutboxRow] = await service.getPendingOutboxBatch({maxBytes: 1024 * 1024, maxRows: 10})
+  martRefreshService.flush = async () => {
+    throw new Error('refresh visibility failed')
+  }
+
+  try {
+    await importOutboxBatch()
+    throw new Error('Expected mart refresh acknowledgement failure')
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error)
+    expect(error instanceof Error ? error.message : '').toBe('refresh visibility failed')
+  } finally {
+    martRefreshService.flush = originalFlush
+  }
+
+  expect((await service.getScanState(jobId)).lastProjectRefreshAckSeq).toBe(0)
+  expect(await service.getUnexportedOutboxCount(jobId)).toBe(1)
+
+  expect(await importOutboxBatch()).toBe(1)
+  expect((await service.getScanState(jobId)).lastProjectRefreshAckSeq).toBe(pendingOutboxRow?.outboxSeq ?? null)
+})

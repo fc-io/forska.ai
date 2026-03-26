@@ -501,6 +501,10 @@ const getStoredScanState = (database: Database, jobId: string) => {
   return getJobScanState(row)
 }
 
+const getForwardOnlyAckSeq = (currentAckSeq: number | null, nextAckSeq: number | null) => {
+  return nextAckSeq == null ? currentAckSeq : currentAckSeq == null ? nextAckSeq : Math.max(currentAckSeq, nextAckSeq)
+}
+
 const getExistingOutboxJobIds = (jobId?: string) => {
   return jobId
     ? [jobId].filter((value) => {
@@ -1658,6 +1662,11 @@ const sqliteService = {
   setLastProjectRefreshAckSeq: async (jobId: string, lastProjectRefreshAckSeq: number | null) => {
     return withOwnedJobDatabase(jobId, false, (database) => {
       const now = new Date().toISOString()
+      const nextAckSeq = getForwardOnlyAckSeq(
+        getStoredScanState(database, jobId).lastProjectRefreshAckSeq,
+        lastProjectRefreshAckSeq,
+      )
+
       database
         .query(
           `
@@ -1667,7 +1676,7 @@ const sqliteService = {
         WHERE job_id = ?
       `,
         )
-        .run(lastProjectRefreshAckSeq, now, jobId)
+        .run(nextAckSeq, now, jobId)
     })
   },
   setScanState: async (jobId: string, state: JobScanStateUpdate) => {
@@ -1678,7 +1687,7 @@ const sqliteService = {
         cursor: Object.hasOwn(state, 'cursor') ? (state.cursor ?? null) : currentState.cursor,
         exhaustedAt: Object.hasOwn(state, 'exhaustedAt') ? (state.exhaustedAt ?? null) : currentState.exhaustedAt,
         lastProjectRefreshAckSeq: Object.hasOwn(state, 'lastProjectRefreshAckSeq')
-          ? (state.lastProjectRefreshAckSeq ?? null)
+          ? getForwardOnlyAckSeq(currentState.lastProjectRefreshAckSeq, state.lastProjectRefreshAckSeq ?? null)
           : currentState.lastProjectRefreshAckSeq,
         scanEpoch: state.scanEpoch ?? currentState.scanEpoch,
       } satisfies JobScanState
