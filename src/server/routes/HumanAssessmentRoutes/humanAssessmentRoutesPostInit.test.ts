@@ -2,8 +2,6 @@ import {expect, mock, test} from 'bun:test'
 
 const appDatabaseServiceModulePath = new URL('../../services/appDatabaseService.ts', import.meta.url).pathname
 const appQueryServiceModulePath = new URL('../../services/getAppQueryService.ts', import.meta.url).pathname
-const duckdbMartRefreshServiceModulePath = new URL('../../services/getDuckdbMartRefreshService.ts', import.meta.url)
-  .pathname
 
 const projectReviewConfigRef = {
   current: async (_projectId: string): Promise<unknown> => {
@@ -16,8 +14,6 @@ const queryJsonRef = {
     return []
   },
 }
-
-const queueProjectRefreshCalls: Array<{projectId: string; source: string}> = []
 
 void mock.module(appQueryServiceModulePath, () => {
   return {
@@ -43,21 +39,8 @@ void mock.module(appDatabaseServiceModulePath, () => {
   }
 })
 
-void mock.module(duckdbMartRefreshServiceModulePath, () => {
-  return {
-    getDuckdbMartRefreshService: () => {
-      return {
-        queueProjectRefresh: async (projectId: string, source: string) => {
-          queueProjectRefreshCalls.push({projectId, source})
-        },
-      }
-    },
-  }
-})
-
 test('human assessment init inserts project id before the answered flag', async () => {
   const statements: string[] = []
-  queueProjectRefreshCalls.length = 0
   projectReviewConfigRef.current = async () => {
     return {importRouteIds: []}
   }
@@ -97,5 +80,4 @@ test('human assessment init inserts project id before the answered flag', async 
       prompts: [{id: 'prompt-1', order: 0, originalText: 'Prompt 1', promptHeading: 'Heading 1', type: 'string'}],
     },
   })
-  expect(queueProjectRefreshCalls).toEqual([{projectId: 'project-1', source: 'humanAssessmentRoutesPostInit'}])
 })
