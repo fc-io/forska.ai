@@ -1,10 +1,12 @@
 import {afterAll, afterEach, beforeAll, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 import {rmSync} from 'fs'
+import {dirname, join} from 'path'
 
 import {HttpError} from '../utils/httpError.ts'
 
 const tempDbPath = `/tmp/f1-judgments-jobs-routes-${process.pid}-${Date.now()}.duckdb`
+const tempJobDir = join(dirname(tempDbPath), 'judgment-jobs')
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath
@@ -64,8 +66,14 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+
+  await getJudgmentJobSqliteService().closeAll()
   await closeDatabase?.()
   rmSync(tempDbPath, {force: true})
+  rmSync(`${tempDbPath}.writer.history.json`, {force: true})
+  rmSync(`${tempDbPath}.writer.lock`, {force: true})
+  rmSync(tempJobDir, {force: true, recursive: true})
 })
 
 afterEach(() => {
@@ -223,6 +231,75 @@ test('pausing an existing judgments job succeeds when queued prompts reference t
 
   expect(response.status).toBe(200)
   expect(body).toContain('paused')
+})
+
+test('reads SQLite-backed skipped prompt stats separately from judged prompts', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const sqliteService = getJudgmentJobSqliteService()
+  const projectId = `sqlite-stats-project-${Date.now()}`
+  const modelId = `sqlite-stats-model-${Date.now()}`
+  const connectionId = `sqlite-stats-connection-${Date.now()}`
+  const jobId = `sqlite-stats-job-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(
+    jobId,
+    [
+      {articleId: `sqlite-stats-article-ready-${Date.now()}`, promptId: `sqlite-stats-prompt-ready-${Date.now()}`},
+      {articleId: `sqlite-stats-article-judged-${Date.now()}`, promptId: `sqlite-stats-prompt-judged-${Date.now()}`},
+      {articleId: `sqlite-stats-article-skipped-${Date.now()}`, promptId: `sqlite-stats-prompt-skipped-${Date.now()}`},
+      {articleId: `sqlite-stats-article-sent-${Date.now()}`, promptId: `sqlite-stats-prompt-sent-${Date.now()}`},
+    ],
+    'server-a',
+  )
+
+  const [judgedPrompt, skippedPrompt, sentPrompt] = await sqliteService.claimReadyPrompts(jobId, 'server-a', 3)
+
+  if (!judgedPrompt || !skippedPrompt || !sentPrompt) {
+    throw new Error('Failed to claim SQLite queue prompts for stats test')
+  }
+
+  await sqliteService.recordJudgmentSuccess(jobId, {
+    answeredOriginal: 'yes',
+    answeredOriginalAsArray: ['yes'],
+    articleId: judgedPrompt.articleId,
+    chunkingStrategy: null,
+    confidenceOriginal: 50,
+    createdAt: new Date(),
+    explanation: 'because',
+    isAnswered: true,
+    judgmentId: `sqlite-stats-judgment-${Date.now()}`,
+    modelId,
+    projectId,
+    promptId: judgedPrompt.promptId,
+    queuePromptId: judgedPrompt.recordId,
+    quotes: ['quote'],
+    rawResponseJson: {answer: 'yes'},
+    snapshotProjectId: projectId,
+    snapshotProjectModelName: 'Qwen 122B',
+    updatedAt: new Date(),
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
+  await sqliteService.markPromptAsSkipped(jobId, skippedPrompt.recordId, 'no_fulltext')
+
+  const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
+  const body = (await response.json()) as {promptStats: {judged: number; ready: number; sent: number; skipped: number}}
+
+  expect(response.status).toBe(200)
+  expect(body.promptStats).toEqual({judged: 1, ready: 1, sent: 1, skipped: 1})
 })
 
 test('deleting an existing judgments job succeeds when prompts and token usage reference the job', async () => {

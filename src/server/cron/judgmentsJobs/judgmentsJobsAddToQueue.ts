@@ -4,10 +4,15 @@ import {inferenceRuntimeConfig} from '../../utils/getInferenceRuntimeConfig.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
-import {clearJobCursor, setJobCursor} from './jobCursorStore.ts'
 import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from './judgmentJobSqliteService.ts'
 import {judgmentsJobsCronGetPrompts} from './judgmentsJobsCronGetPrompts.ts'
 import {judgmentsJobsGetRunningJobs} from './judgmentsJobsGetRunningJobs.ts'
+import {
+  clearLegacyJobCursor,
+  getLegacyJobCursor,
+  setLegacyJobCursor,
+  syncLegacyJobCursors,
+} from './legacyJobCursorStore.ts'
 
 type Job = Awaited<ReturnType<typeof judgmentsJobsGetRunningJobs>>[number]
 
@@ -161,7 +166,8 @@ const addPromptsToQueue = async (
 }
 
 const fetchPromptsForJob = async (job: Job, numberOfPromptsToGet: number) => {
-  const promptData = await judgmentsJobsCronGetPrompts(job.projectId, job.id, numberOfPromptsToGet)
+  const cursor = await getLegacyJobCursor(job.id)
+  const promptData = await judgmentsJobsCronGetPrompts(job.projectId, job.id, numberOfPromptsToGet, cursor)
   return {...promptData, job}
 }
 
@@ -169,7 +175,7 @@ const updateJobCursorAfterFetch = async (
   jobId: string,
   nextCursor: Awaited<ReturnType<typeof judgmentsJobsCronGetPrompts>>['nextCursor'],
 ): Promise<void> => {
-  return nextCursor ? setJobCursor(jobId, nextCursor) : clearJobCursor(jobId)
+  return nextCursor ? setLegacyJobCursor(jobId, nextCursor) : clearLegacyJobCursor(jobId)
 }
 
 const getNewPromptsForJob = async (job: Job, readyTargetPerJob: number, addToQueueMaxBatchSize: number) => {
@@ -464,10 +470,21 @@ const addToQueueForJob = async (params: AddToQueueJobParams): Promise<void> => {
 
 export const judgmentsJobsAddToQueue = async (serverJobId: string): Promise<void> => {
   const runningJobs = await judgmentsJobsGetRunningJobs({applyRuntimeMatchFilter: false})
-  await getJudgmentJobSqliteService().syncOwnedLeases(
+  const sqliteService = getJudgmentJobSqliteService()
+
+  await sqliteService.syncOwnedLeases(
     runningJobs.map((job) => {
       return job.id
     }),
+  )
+  await syncLegacyJobCursors(
+    runningJobs
+      .filter((job) => {
+        return !sqliteService.hasJob(job.id)
+      })
+      .map((job) => {
+        return job.id
+      }),
   )
   const codexJobs = runningJobs.filter(isCodexJob)
   const nonCodexJobs = runningJobs.filter((job) => {

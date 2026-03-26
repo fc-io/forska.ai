@@ -1373,9 +1373,11 @@ const sqliteService = {
         return database
           .query(
             `
-          SELECT status, COUNT(*) AS count
+          SELECT
+            CASE WHEN status = 'judged' AND terminal_kind = 'skipped' THEN 'skipped' ELSE status END AS status,
+            COUNT(*) AS count
           FROM queue_prompt
-          GROUP BY status
+          GROUP BY CASE WHEN status = 'judged' AND terminal_kind = 'skipped' THEN 'skipped' ELSE status END
         `,
           )
           .all() as QueueCountRow[]

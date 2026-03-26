@@ -1,0 +1,85 @@
+{
+  "name": "XML/JSON Import Judgment Prompt",
+  "description": "Add a dedicated judgment prompt for XML/JSON structured imports and cover prompt constants plus prompt-selection routing with regression tests.",
+  "branchName": "ralph/xml-json-import-judgment-prompt",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add structured-import judgment prompt constants",
+      "description": "As a maintainer, I want dedicated normal and evidence system prompt constants for XML/JSON structured imports so imported records are no longer framed as scientific articles during judgment.",
+      "acceptanceCriteria": [
+        "Add `src/agent/judge/judgeSinglePromptSystemPromptStructuredImport.ts` with the structured-import prompt text from `IMPORT_PLAN.md`.",
+        "Add `src/agent/judge/judgeSinglePromptEvidenceSystemPromptStructuredImport.ts` with matching evidence-extraction framing for structured XML/JSON imports.",
+        "The new prompt constants keep the existing JSON response shape and escaping instructions unchanged.",
+        "`bun test src/agent/judge/judgePromptSelection.test.ts` passes",
+        "`bun test src/agent/judge/judgePromptConstants.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-002",
+      "title": "Route structured imports to the correct system prompts",
+      "description": "As a maintainer, I want prompt-selection logic to choose article, patient, or structured-import prompts from article metadata so each record type gets the correct judgment framing in normal and chunked modes.",
+      "acceptanceCriteria": [
+        "Extract or export pure prompt-selection helpers from `src/agent/judge.ts` so routing can be tested without invoking full judgment execution.",
+        "Prompt selection uses the existing patient path for FHIR records and the new structured-import path for records with `fullTextSource === 'structured_file_import'` or compatible imported-file routing metadata.",
+        "`judgeSinglePrompt` uses the same routing split for both the normal system prompt and the chunked evidence system prompt.",
+        "`bun test src/agent/judge/judgePromptSelection.test.ts` passes",
+        "`bun test src/agent/judge/judgePromptConstants.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Lock prompt constant text with regression tests",
+      "description": "As a maintainer, I want exact-value tests for article, patient, and structured-import prompt constants so future edits cannot silently change judgment framing.",
+      "acceptanceCriteria": [
+        "Add `src/agent/judge/judgePromptConstants.test.ts` with exact-value assertions for existing article and patient normal prompts.",
+        "The same test file covers existing article and patient evidence prompts plus the new structured-import normal and evidence prompts.",
+        "The tests assert the structured-import prompt text matches the wording in `IMPORT_PLAN.md`.",
+        "`bun test src/agent/judge/judgePromptSelection.test.ts` passes",
+        "`bun test src/agent/judge/judgePromptConstants.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Add prompt-selection matrix tests",
+      "description": "As a maintainer, I want focused selection tests for scientific articles, FHIR patients, and structured imports so prompt routing stays correct as article sources evolve.",
+      "acceptanceCriteria": [
+        "Add `src/agent/judge/judgePromptSelection.test.ts` covering prompt selection for a normal scientific article, a FHIR patient record, and a structured XML/JSON import.",
+        "The test matrix covers both normal system prompt selection and evidence system prompt selection.",
+        "The structured-import assertions prove routing works from article metadata without running an end-to-end judgment request.",
+        "`bun test src/agent/judge/judgePromptSelection.test.ts` passes",
+        "`bun test src/agent/judge/judgePromptConstants.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002"
+      ]
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-03-26T15:58:38.382Z"
+  }
+}

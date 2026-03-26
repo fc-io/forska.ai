@@ -3,7 +3,7 @@ import {writeFile} from 'node:fs/promises'
 import {hostname} from 'node:os'
 import {dirname, join} from 'node:path'
 
-import {afterAll, beforeAll, expect, test} from 'bun:test'
+import {afterAll, afterEach, beforeAll, expect, test} from 'bun:test'
 
 import type {ArticleRecord} from '../../../db/schemaTypes.ts'
 
@@ -80,6 +80,11 @@ afterAll(async () => {
   rmSync(tempJobDir, {force: true, recursive: true})
 })
 
+afterEach(async () => {
+  await sqliteService?.().closeAll()
+  rmSync(tempJobDir, {force: true, recursive: true})
+})
+
 test('imports SQLite-backed judgments into DuckDB in batches', async () => {
   if (!runDatabase || !queryDatabase || !sqliteService || !importOutboxBatch || !storeSinglePromptJudgment) {
     throw new Error('Test database not initialized')
@@ -150,7 +155,7 @@ test('imports SQLite-backed judgments into DuckDB in batches', async () => {
   `)
 
   expect(rows).toHaveLength(1)
-  expect((await service.getPendingOutboxBatch({maxBytes: 1024 * 1024, maxRows: 10})).length).toBe(0)
+  expect((await service.getPendingOutboxBatch({jobId, maxBytes: 1024 * 1024, maxRows: 10})).length).toBe(0)
 })
 
 test('drops orphaned SQLite-backed judgments when the article no longer exists', async () => {
@@ -329,7 +334,9 @@ test('skips lease-blocked SQLite jobs and imports the next available outbox batc
   `)
 
   expect(rows).toHaveLength(1)
-  expect((await service.getPendingOutboxBatch({maxBytes: 1024 * 1024, maxRows: 10})).length).toBe(0)
+  expect(
+    (await service.getPendingOutboxBatch({jobId: importableJobId, maxBytes: 1024 * 1024, maxRows: 10})).length,
+  ).toBe(0)
 })
 
 test('replays a SQLite outbox batch after crashing between DuckDB commit and SQLite acknowledgement', async () => {
@@ -496,20 +503,21 @@ test('releases claimed SQLite outbox batches for retry when DuckDB insert fails 
     chunkingStrategy: null,
   })
 
-  database.appendJudgments = async () => {
-    throw new Error('append failed before commit')
-  }
-
   try {
+    database.appendJudgments = async () => {
+      throw new Error('append failed before commit')
+    }
+
     await importOutboxBatch()
     throw new Error('Expected outbox import failure')
   } catch (error) {
     expect(error).toBeInstanceOf(Error)
     expect(error instanceof Error ? error.message : '').toBe('append failed before commit')
+  } finally {
+    database.appendJudgments = originalAppendJudgments
   }
 
-  database.appendJudgments = originalAppendJudgments
-
+  expect(await service.getUnexportedOutboxCount(jobId)).toBe(1)
   expect(await importOutboxBatch()).toBe(1)
 
   const rows = await queryDatabase<{count: number}>(`

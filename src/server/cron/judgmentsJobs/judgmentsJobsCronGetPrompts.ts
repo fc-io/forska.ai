@@ -1,6 +1,6 @@
 import {getUnassessedPairsFromOlap} from '../../../services/olap/unassessedArticlesOlap.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {escapeSqlString, getDateValue} from '../../services/appQueryHelpers.ts'
+import {escapeSqlString} from '../../services/appQueryHelpers.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import type {JobCursor} from './judgmentJobSqliteService.ts'
 
@@ -9,18 +9,6 @@ export type PromptQueueEntry = {articleId: string; promptId: string}
 export type QueuePromptsResult = {promptEntries: PromptQueueEntry[]; nextCursor: JobCursor | null}
 
 const getPromptsLogger = createRateLimitedLogger({windowMs: 30_000})
-
-const getStoredJobCursor = async (jobId: string): Promise<JobCursor | null> => {
-  const [row] = await getAppDatabaseService().queryJson<{lastDate: unknown; lastArticleId: string | null}>(`
-    SELECT cursor_last_created_at AS lastDate, cursor_last_article_id AS lastArticleId
-    FROM app.judgment_job
-    WHERE id = '${escapeSqlString(jobId)}'
-    LIMIT 1
-  `)
-  const lastDate = getDateValue(row?.lastDate)
-  const lastArticleId = row?.lastArticleId ?? null
-  return lastDate && lastArticleId ? {lastDate, lastArticleId} : null
-}
 
 /**
  * Gets prompts (article × prompt pairs) that need to be judged for a project.
@@ -32,7 +20,7 @@ export const judgmentsJobsCronGetPrompts = async (
   projectId: string,
   jobId: string,
   numberOfPromptsToGet: number,
-  cursorOverride?: JobCursor | null,
+  cursor: JobCursor | null = null,
 ): Promise<QueuePromptsResult> => {
   const [projectResult, enabledPromptCount] = await Promise.all([
     getAppDatabaseService().queryJson<{id: string; archived: boolean}>(`
@@ -84,7 +72,6 @@ export const judgmentsJobsCronGetPrompts = async (
     return {promptEntries: [], nextCursor: null}
   }
 
-  const cursor = cursorOverride === undefined ? await getStoredJobCursor(jobId) : cursorOverride
   const cursorSummary = cursor
     ? {lastDate: cursor.lastDate.toISOString(), lastArticleId: cursor.lastArticleId.slice(0, 8)}
     : null

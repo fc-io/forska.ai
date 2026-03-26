@@ -5,6 +5,7 @@ import {getDefaultJudgmentServerJobId} from '../cron/judgmentsJobs/judgmentJobSe
 import {flushJudgmentJobSqliteOutbox} from '../cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts'
 import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {getJudgmentRequestStats} from '../cron/judgmentsJobs/judgmentsRequestRuntime.ts'
+import {clearLegacyJobCursor} from '../cron/judgmentsJobs/legacyJobCursorStore.ts'
 import {assertStoredProviderModelRuntimeMatch} from '../providers/providerRuntimeModelGuard.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
@@ -577,21 +578,15 @@ export const judgmentsJobsRoutes = new Elysia()
           `)
         }
 
-        if (shouldClearQueue) {
-          await tx.run(`
-            UPDATE app.judgment_job
-            SET cursor_last_created_at = NULL,
-                cursor_last_article_id = NULL,
-                updated_at = current_timestamp
-            WHERE id = '${escapeSqlString(params.id)}'
-          `)
-        }
-
         return getJudgmentJobMutationState(tx, params.id)
       })) as JudgmentJobMutationState | null
 
       if (body.status === 'paused' && hasSqliteJob) {
         await sqliteService.clearActiveQueue(params.id)
+      }
+
+      if (body.status && body.status !== 'running' && !hasSqliteJob) {
+        await clearLegacyJobCursor(params.id)
       }
 
       if (hasSqliteJob && body.status && body.status !== 'running') {
@@ -651,6 +646,7 @@ export const judgmentsJobsRoutes = new Elysia()
         await flushJudgmentJobSqliteOutbox({claimedBy: judgmentJobServerId, jobId: params.id})
         await sqliteService.deleteJob(params.id)
       } else {
+        await clearLegacyJobCursor(params.id)
         await getAppDatabaseService().run(`
           DELETE FROM app.judgment_job_prompt
           WHERE job_id = '${escapeSqlString(params.id)}'

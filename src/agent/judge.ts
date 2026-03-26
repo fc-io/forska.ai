@@ -17,10 +17,11 @@ import {
 } from './judge/judgeChunking.ts'
 import type {ContentSettings} from './judge/judgeGetPrompt.ts'
 import {judgeGetSinglePrompt} from './judge/judgeGetPrompt.ts'
-import {SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT} from './judge/judgeSinglePromptEvidenceSystemPrompt.ts'
-import {SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_PATIENT} from './judge/judgeSinglePromptEvidenceSystemPromptPatient.ts'
-import {SINGLE_PROMPT_SYSTEM_PROMPT} from './judge/judgeSinglePromptSystemPrompt.ts'
-import {SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT} from './judge/judgeSinglePromptSystemPromptPatient.ts'
+import {
+  getSinglePromptEvidenceSystemPromptForArticle,
+  getSinglePromptSystemPromptForArticle,
+  isFhirEhrPatientArticle,
+} from './judge/judgePromptSelection.ts'
 import {judgeStoreTokenUse, type JudgeTokenUsageEntry} from './judge/judgeStoreTokenUse.ts'
 import {mapAsyncWithConcurrency} from './judge/mapAsyncWithConcurrency.ts'
 import {parseSinglePromptEvidence} from './judge/parseSinglePromptEvidence.ts'
@@ -303,22 +304,6 @@ const storeTokenUseAndThrowConnectionError = async ({
 }
 
 type ArticlesType = ArticleRecord[]
-
-const isFhirEhrPatientArticle = (article: ArticlesType[number]): boolean => {
-  const articleId = article.articleId ?? ''
-  const importRoute = article.importRoute ?? ''
-  return articleId.startsWith('fhir:') || importRoute.startsWith('fhir:')
-}
-
-const getSinglePromptSystemPromptForArticle = (article: ArticlesType[number]): string => {
-  return isFhirEhrPatientArticle(article) ? SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT : SINGLE_PROMPT_SYSTEM_PROMPT
-}
-
-const getSinglePromptEvidenceSystemPromptForArticle = (article: ArticlesType[number]): string => {
-  return isFhirEhrPatientArticle(article)
-    ? SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_PATIENT
-    : SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT
-}
 
 let abortCount = 0
 let successCount = 0
