@@ -58,6 +58,34 @@ Open the local URL printed by Vite. Default local dev ports: app `3000`, API `30
 
 Do not create or edit `.env` files for normal local dev. Configure providers/models in the UI. For one-off machine-local overrides, pass shell env inline with the command.
 
+## Local llama.cpp / llama-server
+
+- Install `llama.cpp` / `llama-server`: [install guide](https://github.com/ggml-org/llama.cpp/blob/master/docs/install.md), [releases](https://github.com/ggml-org/llama.cpp/releases), or [build from source](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md)
+- Model: [Qwen/Qwen3-4B-GGUF](https://huggingface.co/Qwen/Qwen3-4B-GGUF) and [files](https://huggingface.co/Qwen/Qwen3-4B-GGUF/tree/main). `-hf Qwen/Qwen3-4B-GGUF:Q4_K_M` downloads the GGUF into the Hugging Face cache automatically, so manual download is optional.
+
+Run locally:
+
+```bash
+llama-server -hf Qwen/Qwen3-4B-GGUF:Q4_K_M --jinja --reasoning-format deepseek -c 8192 --temp 0.6 --top-k 20 --top-p 0.95 --min-p 0
+```
+
+Default `llama-server` port is `8080`, so Forska should usually point at `http://127.0.0.1:8080/v1`.
+
+Optional check:
+
+```bash
+curl http://127.0.0.1:8080/v1/models
+```
+
+In the Forska UI:
+
+- Open `/providers`
+- Click `Add Provider`
+- Choose `LM Studio` for a local OpenAI-compatible endpoint, set base URL to `http://127.0.0.1:8080/v1`, then create the provider
+- Open that provider, click `Test`, then `Sync Models`
+- Enable the discovered Qwen model and click `Save Models`
+- If sync does not find the model, use `Add Model` and paste the model id returned by `/v1/models` into `Remote Model ID`
+
 More local runtime notes: [RUN LOCAL](./docs/README_RUN_LOCAL.md)
 
 ## Run remotely on HPC:

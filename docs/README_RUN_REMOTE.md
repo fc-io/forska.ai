@@ -173,7 +173,8 @@ curl http://localhost:30001/v1/chat/completions \
 Optional local app flow:
 
 - `bun run alvis:dev:server` starts the local API server using the Alvis tunnel plus runtime metadata from the job log
-- configure the provider/model in Forska at `/admin/models` to point at the local tunnel/runtime
+- in Forska `/providers`, add or open an `SGLang` provider, point it at the local tunnel/runtime, then `Test` and `Sync Models`
+- enable the model you want and `Save Models`
 - `bun run dev:app` starts the local app against that local API server
 
 ## Related Docs

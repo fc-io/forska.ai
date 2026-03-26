@@ -56,7 +56,10 @@ VITE_SERVER_API=http://localhost:3004 bun run dev:app
 
 ## 4) Configure the app in the UI
 
-- Add providers/models in `/admin/models`
+- Open `/providers`
+- Add provider connections there
+- Open each provider, then `Test` and `Sync Models` or `Add Model`
+- Enable the models you want and click `Save Models`
 - Set user-facing app settings in Forska Settings
 - Keep core product behavior in the app, not env files
 
@@ -68,7 +71,7 @@ bun run alvis:dev:server
 bun run mn5:dev:server
 ```
 
-Those launch helpers pass short-lived runtime metadata to the local API server. The provider/model still belongs in `/admin/models`.
+Those launch helpers pass short-lived runtime metadata to the local API server. The provider connection and model still belong in `/providers`.
 
 ## 6) Optional Docling
 

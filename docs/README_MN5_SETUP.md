@@ -317,7 +317,7 @@ Once the tunnel is established, start the local API server with runtime metadata
 bun run mn5:dev:server
 ```
 
-Then configure the provider/model in Forska at `/admin/models` to use the tunnel endpoint, for example `http://localhost:30000/v1`.
+Then in Forska `/providers`, add or open an `SGLang` provider with base URL `http://localhost:30000/v1`, click `Test`, `Sync Models`, enable the model you want, and `Save Models`.
 
 Do not add a global inference URL to env files for normal app use.
 
