@@ -26,12 +26,22 @@
 - Legacy DuckDB queue still exists for old jobs during rollout.
 - Biggest gaps: visibility-watermark cleanup, full legacy queue removal, a few crash/race tests.
 
+## Remaining implementation checklist
+
+- [ ] Finalize `job_scan_state` so it tracks the full cursor shape, `scan_epoch`, and a per-job visibility watermark.
+- [ ] Gate cursor wrap and dedupe-row pruning on DuckDB/mart visibility so stale reads cannot re-enqueue already exported work.
+- [ ] Finish retention cleanup for exported outbox rows, terminal queue rows, and drained per-job SQLite DBs.
+- [ ] Harden importer replay semantics when DuckDB commit succeeds before SQLite export ack.
+- [ ] Add the missing contention, crash-replay, and drain/delete tests.
+- [ ] Decide whether remaining cursor state should stay in DuckDB or move local once the hot-path migration settles.
+- [ ] Decide whether running different jobs on different writers is still a post-phase-1 goal.
+
 ## Why This Split
 
-- [ ] Current contention is mostly the mutable queue path, not the final analytics path.
-- [ ] `ready`/`sent` are transient operational states and already expire/requeue today.
-- [ ] Final judgments are the durable fact; they can safely wait on disk until DuckDB is ready to ingest them.
-- [ ] Per-job embedded state removes write contention across jobs without giving up an embedded architecture.
+- Current contention is mostly the mutable queue path, not the final analytics path.
+- `ready`/`sent` are transient operational states and already expire/requeue today.
+- Final judgments are the durable fact; they can safely wait on disk until DuckDB is ready to ingest them.
+- Per-job embedded state removes write contention across jobs without giving up an embedded architecture.
 
 ## Storage Layout
 
@@ -39,7 +49,7 @@
 - [x] Keep one sidecar lease file per job, for example `.../oltp/judgmentsJobs/<jobId>.lease.json`.
 - [x] Open each job DB only from the process that holds that job lease.
 - [x] Configure job DBs with `WAL`, `busy_timeout`, and durable sync settings appropriate for final judgment persistence.
-- [ ] Delete or archive the whole job DB only after its outbox is fully imported into DuckDB.
+- Delete or archive the whole job DB only after its outbox is fully imported into DuckDB.
 
 ## SQLite Schema
 
@@ -50,17 +60,17 @@
 
 ### `job_scan_state`
 
-- [ ] Columns: `job_id PRIMARY KEY`, `cursor_last_date`, `cursor_last_article_id`, `scan_epoch`, `exhausted_at`, `last_project_refresh_ack_seq`, `updated_at`.
+- Columns: `job_id PRIMARY KEY`, `cursor_last_date`, `cursor_last_article_id`, `scan_epoch`, `exhausted_at`, `last_project_refresh_ack_seq`, `updated_at`.
 - [x] The cursor tracks the last article scanned from DuckDB, not the last prompt successfully inserted into SQLite.
-- [ ] `scan_epoch` increments only when a full pass wraps back to the start.
-- [ ] `last_project_refresh_ack_seq` is the watermark proving DuckDB marts have incorporated exported judgments up through a given outbox sequence.
+- `scan_epoch` increments only when a full pass wraps back to the start.
+- `last_project_refresh_ack_seq` is the watermark proving DuckDB marts have incorporated exported judgments up through a given outbox sequence.
 
 ### `queue_prompt`
 
 - [x] Columns: `id`, `job_id`, `article_id`, `prompt_id`, `status`, `terminal_kind`, `skip_reason`, `server_id`, `claim_id`, `sent_at`, `judged_at`, `created_at`, `updated_at`.
 - [x] Unique key: `(job_id, article_id, prompt_id)`.
 - [x] Index for claim path: `(status, created_at, article_id)`.
-- [ ] Optional ordering columns can be cached locally later if the current fulltext-first ordering still matters.
+- Optional ordering columns can be cached locally later if the current fulltext-first ordering still matters.
 
 ### `judgment_outbox`
 
@@ -76,7 +86,7 @@
 - [x] Lease metadata should include `leaseId`, `hostname`, `pid`, `port`, `heartbeatAt`.
 - [x] Stale takeover is allowed only after heartbeat timeout plus owner health failure.
 - [x] Duplicate processing is prevented by a combination of one active job owner plus the SQLite unique key on `(job_id, article_id, prompt_id)`.
-- [ ] Allowing different jobs to run on different writers can come later; it is not required for the first lease-enforcement cut.
+- Allowing different jobs to run on different writers can come later; it is not required for the first lease-enforcement cut.
 
 ## Write Path
 
@@ -97,7 +107,7 @@
 - [x] Repeated top-up runs for the same job must be safe: if the pair is already `ready`, `sent`, or `judged` in the job DB, the insert is ignored.
 - [x] Continue scanning successive DuckDB windows until either the ready deficit is filled or the current scan pass is exhausted.
 - [x] Only wrap the cursor to the start after a full pass reaches exhaustion; do not restart from the top on every top-up cycle.
-- [ ] When a wrap is needed, do it only after DuckDB visibility has caught up enough that previously exported judgments will no longer be returned as unassessed.
+- When a wrap is needed, do it only after DuckDB visibility has caught up enough that previously exported judgments will no longer be returned as unassessed.
 - [x] Stop writing new `ready` rows into DuckDB for SQLite-backed jobs.
 
 ### Claim (`ready -> sent`)
@@ -122,17 +132,17 @@
 - [x] Insert the batch into DuckDB `app.judgment` in one transaction using idempotent insert semantics (`ON CONFLICT DO NOTHING` or equivalent).
 - [x] Queue mart refresh work for affected `project_id` / `article_id` pairs after a successful DuckDB insert batch.
 - [x] Only after the DuckDB transaction succeeds, mark those outbox rows `exported_at` back in SQLite.
-- [ ] After the corresponding mart refresh completes, acknowledge a per-job/project visibility watermark back to SQLite so old dedupe rows can be pruned without risking re-enqueue from stale DuckDB reads.
-- [ ] If the importer crashes after DuckDB commit but before SQLite ack, replay the same batch safely via idempotent judgment inserts.
+- After the corresponding mart refresh completes, acknowledge a per-job/project visibility watermark back to SQLite so old dedupe rows can be pruned without risking re-enqueue from stale DuckDB reads.
+- If the importer crashes after DuckDB commit but before SQLite ack, replay the same batch safely via idempotent judgment inserts.
 
 ## Retention And Cleanup
 
-- [ ] Keep `ready` and `sent` rows only while the job is active.
-- [ ] Keep each `queue_prompt` row present through the full `ready -> sent -> judged` lifecycle so it continues to block duplicate re-enqueue while DuckDB is still missing that judgment.
-- [ ] Keep `judged` rows and exported outbox rows until DuckDB import and mart visibility are both confirmed for their outbox sequence.
-- [ ] After the visibility watermark passes a row, delete exported outbox rows and terminal `queue_prompt` rows in batches.
-- [ ] After job completion and full outbox drain, delete or archive the whole job SQLite file.
-- [ ] Keep legacy cleanup for DuckDB-backed jobs until all jobs are migrated.
+- Keep `ready` and `sent` rows only while the job is active.
+- Keep each `queue_prompt` row present through the full `ready -> sent -> judged` lifecycle so it continues to block duplicate re-enqueue while DuckDB is still missing that judgment.
+- Keep `judged` rows and exported outbox rows until DuckDB import and mart visibility are both confirmed for their outbox sequence.
+- After the visibility watermark passes a row, delete exported outbox rows and terminal `queue_prompt` rows in batches.
+- After job completion and full outbox drain, delete or archive the whole job SQLite file.
+- Keep legacy cleanup for DuckDB-backed jobs until all jobs are migrated.
 
 ## API Changes
 
@@ -146,26 +156,26 @@
 - [x] Switch all newly created jobs to the SQLite queue path immediately.
 - [x] Leave already-running legacy jobs on the current DuckDB queue path until they finish.
 - [x] Remove DuckDB writes for `app.judgment_job_prompt` on SQLite-backed jobs as part of the first cutover.
-- [ ] Revisit moving cursor state out of DuckDB only if its writes remain noisy after the hot queue path is gone.
+- Revisit moving cursor state out of DuckDB only if its writes remain noisy after the hot queue path is gone.
 
 ## Tests
 
-- [ ] No duplicate claim for the same `(job_id, article_id, prompt_id)` under two competing writers.
+- No duplicate claim for the same `(job_id, article_id, prompt_id)` under two competing writers.
 - [x] Stale `sent` rows requeue correctly after lease loss / timeout.
 - [x] Successful judgment is durable in SQLite before DuckDB import.
-- [ ] Import replay after crash does not duplicate DuckDB judgments.
+- Import replay after crash does not duplicate DuckDB judgments.
 - [x] Imported judgments trigger the expected mart refresh path.
-- [ ] Job DB is deleted only after the outbox is drained.
+- Job DB is deleted only after the outbox is drained.
 - [x] Legacy DuckDB-backed jobs remain readable during rollout.
 
 ## Done When
 
 - [x] `ready -> sent -> judged` no longer writes through the live DuckDB queue path for newly created jobs.
-- [ ] Different jobs can be processed by different writers concurrently using embedded storage.
+- Different jobs can be processed by different writers concurrently using embedded storage.
 - [x] Final judgments survive writer crashes before DuckDB ingestion.
 - [x] DuckDB receives judgments in bounded idempotent batches instead of one write per prompt.
 - [x] Job status APIs remain accurate during the SQLite-to-DuckDB lag window.
 
 ## Keep In Reserve
 
-- [ ] If SQLite still proves too constraining, the next embedded fallback is the same per-job ownership model with append-only segment files plus a DuckDB importer, but SQLite is the first attempt because it gives claims, uniques, and recovery with much less custom machinery.
+- If SQLite still proves too constraining, the next embedded fallback is the same per-job ownership model with append-only segment files plus a DuckDB importer, but SQLite is the first attempt because it gives claims, uniques, and recovery with much less custom machinery.
