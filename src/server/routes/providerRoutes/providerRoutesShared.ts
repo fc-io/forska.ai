@@ -18,20 +18,30 @@ export const getProviderConnectionLabel = ({
 }
 
 export const getProviderConnectionConfig = ({
+  llamaCppMode,
   manualWorkerUrls,
   providerKind,
   workerUrlMode,
 }: {
+  llamaCppMode?: string | null
   manualWorkerUrls: string[] | null | undefined
   providerKind: string
   workerUrlMode?: string | null
 }) => {
   const normalizedManualWorkerUrls = normalizeWorkerUrls(manualWorkerUrls)
+  const normalizedLlamaCppMode =
+    providerKind === 'llamacpp' && getTrimmedValue(llamaCppMode) === 'cli' ? ('cli' as const) : undefined
 
-  return {
-    manualWorkerUrls: normalizedManualWorkerUrls,
-    workerUrlMode: getWorkerUrlMode({manualWorkerUrls: normalizedManualWorkerUrls, providerKind, workerUrlMode}),
-  }
+  return normalizedLlamaCppMode
+    ? {
+        llamaCppMode: normalizedLlamaCppMode,
+        manualWorkerUrls: normalizedManualWorkerUrls,
+        workerUrlMode: getWorkerUrlMode({manualWorkerUrls: normalizedManualWorkerUrls, providerKind, workerUrlMode}),
+      }
+    : {
+        manualWorkerUrls: normalizedManualWorkerUrls,
+        workerUrlMode: getWorkerUrlMode({manualWorkerUrls: normalizedManualWorkerUrls, providerKind, workerUrlMode}),
+      }
 }
 
 export const getPublicProviderConnection = <T extends {secretRef: string | null}>(connection: T) => {

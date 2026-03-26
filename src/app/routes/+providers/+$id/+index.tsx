@@ -21,7 +21,6 @@ import {
   fetchProviderConnections,
   formatTimestamp,
   getNullableTrimmedValue,
-  getProviderCatalogLabel,
   getProviderModelContextLength,
   getProviderModelDiscoverySource,
   getProviderModelReasoningEfforts,
@@ -41,6 +40,12 @@ import {
   updateProviderModel,
 } from '../../+admin/+models/providerConnectionsClient.ts'
 import {getConnectionApiKeyUiState} from '../../+admin/+models/providerUiState.ts'
+import {
+  getProviderCatalogOptions,
+  getProviderDisplayLabel,
+  getProviderSelectionKind,
+  shouldHideProviderBaseURLField,
+} from '../providerCatalogUi.ts'
 
 type ConnectionFormState = {
   apiKey: string
@@ -296,6 +301,10 @@ const ProviderDetailPage = () => {
     return providerConnectionsQuery.data?.catalog ?? []
   }
 
+  const catalogOptions = () => {
+    return getProviderCatalogOptions(catalog())
+  }
+
   const runtime = () => {
     return providerConnectionsQuery.data?.runtime ?? null
   }
@@ -308,12 +317,15 @@ const ProviderDetailPage = () => {
     )
   }
 
-  const activeCatalogEntry = () => {
+  const activeCatalogOption = () => {
     const connection = selectedConnection()
 
     return (
-      catalog().find((entry) => {
-        return entry.kind === connection?.providerKind
+      catalogOptions().find((entry) => {
+        return (
+          entry.selectedKind
+          === getProviderSelectionKind({config: connection?.config, providerKind: connection?.providerKind})
+        )
       }) ?? null
     )
   }
@@ -339,8 +351,12 @@ const ProviderDetailPage = () => {
       : false
   }
 
-  const getConnectionProviderLabel = (providerKind: string) => {
-    return getProviderCatalogLabel(catalog(), providerKind)
+  const getConnectionProviderLabel = (connection: ProviderConnection) => {
+    return getProviderDisplayLabel({
+      catalog: catalog(),
+      config: connection.config,
+      providerKind: connection.providerKind,
+    })
   }
 
   const codexStatusQuery = useQuery(() => {
@@ -426,6 +442,7 @@ const ProviderDetailPage = () => {
         enabled: connectionForm.enabled,
         id: connection.id,
         label: connectionForm.label,
+        llamaCppMode: connection.config.llamaCppMode,
         manualWorkerUrls: getWorkerUrlsFromInputValue(connectionForm.manualWorkerUrls),
         workerUrlMode: connectionForm.workerUrlMode,
       })
@@ -451,6 +468,7 @@ const ProviderDetailPage = () => {
         enabled: connection.enabled,
         id: connection.id,
         label: connection.label,
+        llamaCppMode: connection.config.llamaCppMode,
         manualWorkerUrls: connection.config.manualWorkerUrls,
         workerUrlMode: connection.config.workerUrlMode,
       })
@@ -757,7 +775,8 @@ const ProviderDetailPage = () => {
           <div>
             <p class="text-sm font-medium uppercase tracking-wide text-gray-500">Provider</p>
             <h1 class="text-2xl font-bold text-gray-900">
-              {selectedConnection()?.label ?? getConnectionProviderLabel(connectionForm.providerKind)}
+              {selectedConnection()?.label
+                ?? getProviderDisplayLabel({catalog: catalog(), providerKind: connectionForm.providerKind})}
             </h1>
             <p class="text-sm text-gray-500">
               Manage provider settings here, then choose which models stay enabled for this provider.
@@ -827,7 +846,7 @@ const ProviderDetailPage = () => {
                         </p>
                       </div>
                       <span class="rounded-full bg-gray-100 px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-gray-600">
-                        {getConnectionProviderLabel(connection().providerKind)}
+                        {getConnectionProviderLabel(connection())}
                       </span>
                     </div>
 
@@ -857,13 +876,19 @@ const ProviderDetailPage = () => {
                         onWorkerUrlsChange={(value) => {
                           setConnectionForm('manualWorkerUrls', value)
                         }}
-                        providerLabel={activeCatalogEntry()?.label ?? connection().providerKind}
+                        providerLabel={activeCatalogOption()?.label ?? getConnectionProviderLabel(connection())}
                         runtimeWorkerUrls={activeRuntimeWorkerUrls()}
                         secretStatus={getProviderSecretStatus(connection())}
                         showApiKeyField={shouldShowConnectionApiKeyField()}
+                        showBaseURLField={
+                          !shouldHideProviderBaseURLField({
+                            config: connection().config,
+                            providerKind: connection().providerKind,
+                          })
+                        }
                         showEnabledToggle={true}
                         supportsRuntimeWorkerUrls={supportsRuntimeWorkerUrls(connection().providerKind)}
-                        supportsWorkerUrls={Boolean(activeCatalogEntry()?.supportsWorkerUrls)}
+                        supportsWorkerUrls={Boolean(activeCatalogOption()?.supportsWorkerUrls)}
                         values={connectionForm}
                       />
 
@@ -917,7 +942,7 @@ const ProviderDetailPage = () => {
                         </button>
                         <button
                           class="rounded-md border border-gray-300 px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
-                          disabled={syncConnectionMutation.isPending || !activeCatalogEntry()?.supportsDiscovery}
+                          disabled={syncConnectionMutation.isPending || !activeCatalogOption()?.supportsDiscovery}
                           onClick={() => {
                             return void runConnectionSync()
                           }}

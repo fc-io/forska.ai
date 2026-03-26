@@ -6,6 +6,7 @@ import {
   type ProviderConnectionConfig,
   type ProviderConnectionForAdmin,
   type ProviderConnectionRecord,
+  type ProviderLlamaCppMode,
   type ProviderModelRecord,
 } from './providerTypes.ts'
 import {getDefaultWorkerUrlMode, getWorkerUrlMode, normalizeWorkerUrls} from './providerWorkerUtils.ts'
@@ -57,6 +58,16 @@ export const getTrimmedValue = (value: string | null | undefined): string | null
   return normalized === '' ? null : normalized
 }
 
+const getLlamaCppMode = ({
+  providerKind,
+  value,
+}: {
+  providerKind: string | null | undefined
+  value: unknown
+}): ProviderLlamaCppMode | undefined => {
+  return providerKind === 'llamacpp' && value === 'cli' ? 'cli' : undefined
+}
+
 const normalizeModelIds = (value: unknown): string[] => {
   return Array.isArray(value)
     ? Array.from(
@@ -101,8 +112,14 @@ export const getProviderConnectionConfigFromJson = ({
     typeof parsed === 'object' && parsed !== null && 'disabledModelIds' in parsed
       ? normalizeModelIds((parsed as {disabledModelIds?: unknown}).disabledModelIds)
       : []
+  const llamaCppMode =
+    typeof parsed === 'object' && parsed !== null && 'llamaCppMode' in parsed
+      ? getLlamaCppMode({providerKind, value: (parsed as {llamaCppMode?: unknown}).llamaCppMode})
+      : undefined
 
-  return {archived, disabledModelIds, manualWorkerUrls, workerUrlMode}
+  return llamaCppMode
+    ? {archived, disabledModelIds, llamaCppMode, manualWorkerUrls, workerUrlMode}
+    : {archived, disabledModelIds, manualWorkerUrls, workerUrlMode}
 }
 
 export const getPersistedProviderConnectionConfigValue = ({
@@ -117,14 +134,18 @@ export const getPersistedProviderConnectionConfigValue = ({
   const defaultWorkerUrlMode = getDefaultWorkerUrlMode({manualWorkerUrls, providerKind})
   const archived = config.archived === true
   const disabledModelIds = normalizeModelIds(config.disabledModelIds)
+  const llamaCppMode = getLlamaCppMode({providerKind, value: config.llamaCppMode})
 
   return !archived
     && disabledModelIds.length === 0
+    && !llamaCppMode
     && manualWorkerUrls.length === 0
     && workerUrlMode === defaultWorkerUrlMode
     && workerUrlMode === 'manual'
     ? null
-    : {archived, disabledModelIds, manualWorkerUrls, workerUrlMode}
+    : llamaCppMode
+      ? {archived, disabledModelIds, llamaCppMode, manualWorkerUrls, workerUrlMode}
+      : {archived, disabledModelIds, manualWorkerUrls, workerUrlMode}
 }
 
 export const getJsonSqlLiteral = (value: unknown): string => {

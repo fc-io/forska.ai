@@ -10,12 +10,14 @@ export type ProviderTransportFamily =
   | 'openai-chat'
   | 'openai-responses'
 
+export type ProviderLlamaCppMode = 'cli' | 'server'
 export type ProviderWorkerUrlMode = 'manual' | 'runtime'
 export type ProviderWorkerSource = 'manual' | 'none' | 'runtime'
 
 export type ProviderConnectionConfig = {
   archived?: boolean
   disabledModelIds?: string[]
+  llamaCppMode?: ProviderLlamaCppMode
   manualWorkerUrls: string[]
   workerUrlMode: ProviderWorkerUrlMode
 }

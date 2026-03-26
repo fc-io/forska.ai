@@ -7,7 +7,6 @@ import {
   deleteProviderConnection,
   fetchProviderConnections,
   formatTimestamp,
-  getProviderCatalogLabel,
   getProviderSecretStatus,
   getWorkerSourceLabel,
   type ProviderConnection,
@@ -16,6 +15,7 @@ import {
   testProviderConnectionApi,
   updateProviderConnection,
 } from '../+admin/+models/providerConnectionsClient.ts'
+import {getProviderDisplayLabel} from './providerCatalogUi.ts'
 
 const AdminModels = () => {
   const providerConnectionsQuery = useQuery(() => {
@@ -83,8 +83,12 @@ const AdminModels = () => {
     return providerConnectionsQuery.data?.catalog ?? []
   }
 
-  const getConnectionProviderLabel = (providerKind: string) => {
-    return getProviderCatalogLabel(catalog(), providerKind)
+  const getConnectionProviderLabel = (connection: ProviderConnection) => {
+    return getProviderDisplayLabel({
+      catalog: catalog(),
+      config: connection.config,
+      providerKind: connection.providerKind,
+    })
   }
 
   const supportsConnectionDiscovery = (connection: ProviderConnection) => {
@@ -105,6 +109,7 @@ const AdminModels = () => {
         enabled: !connection.enabled,
         id: connection.id,
         label: connection.label,
+        llamaCppMode: connection.config.llamaCppMode,
         manualWorkerUrls: connection.config.manualWorkerUrls,
         workerUrlMode: connection.config.workerUrlMode,
       })
@@ -230,7 +235,7 @@ const AdminModels = () => {
                             <div class="flex flex-wrap items-center gap-2">
                               <h3 class="text-base font-semibold text-gray-900">{connection.label}</h3>
                               <span class="rounded-full bg-white px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-gray-500">
-                                {getConnectionProviderLabel(connection.providerKind)}
+                                {getConnectionProviderLabel(connection)}
                               </span>
                               <span
                                 class={`rounded-full px-2 py-1 text-[11px] font-medium uppercase tracking-wide ${connection.enabled ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600'}`}

@@ -18,11 +18,11 @@ import {
   getWorkerUrlsFromInputValue,
   type ProviderAuthLifecyclePayload,
   type ProviderAuthLifecycleResult,
-  type ProviderCatalogEntry,
   type ProviderConnection,
   supportsRuntimeWorkerUrls,
 } from '../+admin/+models/providerConnectionsClient.ts'
 import {getCodexOnboardingUiState} from '../+admin/+models/providerUiState.ts'
+import {getProviderCatalogOptions, type ProviderCatalogOption} from './providerCatalogUi.ts'
 
 type ConnectionFormState = {
   apiKey: string
@@ -36,30 +36,7 @@ type ConnectionFormState = {
 }
 
 type CodexAuthProviderState = Partial<CodexStatus> & {job?: CodexDeviceLoginJob | null}
-type ProviderCatalogOption = ProviderCatalogEntry & {hideBaseURLField?: boolean; selectedKind: string}
 type ProviderConnectionsPayload = Awaited<ReturnType<typeof fetchProviderConnections>>
-
-const getProviderCatalogOptions = (catalog: ProviderCatalogEntry[]): ProviderCatalogOption[] => {
-  return catalog.flatMap((entry) => {
-    return entry.kind === 'llamacpp'
-      ? [
-          {
-            ...entry,
-            description: 'Local llama.cpp CLI using the built-in local default endpoint',
-            hideBaseURLField: true,
-            label: 'llama.cpp CLI',
-            selectedKind: 'llamacpp-cli',
-          },
-          {
-            ...entry,
-            description: 'Local llama-server OpenAI-compatible endpoint',
-            label: 'llama.cpp Server',
-            selectedKind: 'llamacpp-server',
-          },
-        ]
-      : [{...entry, selectedKind: entry.kind}]
-  })
-}
 
 const getProviderConnectionsCacheValue = (value: unknown): ProviderConnectionsPayload | null => {
   return typeof value === 'object' && value !== null && Array.isArray((value as ProviderConnectionsPayload).connections)
@@ -351,6 +328,12 @@ const AddProviderPage = () => {
         apiKey: authResult.payload?.secretValue ?? (getTrimmedValue(connectionForm.apiKey) || undefined),
         baseURL: getNullableTrimmedValue(connectionForm.baseURL),
         label: connectionForm.label,
+        llamaCppMode:
+          connectionForm.providerKind === 'llamacpp'
+            ? connectionForm.providerSelectionKind === 'llamacpp-cli'
+              ? 'cli'
+              : 'server'
+            : undefined,
         manualWorkerUrls: getWorkerUrlsFromInputValue(connectionForm.manualWorkerUrls),
         providerKind: connectionForm.providerKind,
         workerUrlMode: connectionForm.workerUrlMode,

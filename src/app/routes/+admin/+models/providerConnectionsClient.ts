@@ -21,6 +21,13 @@ export type ProviderConnectionWorkerState = {
   workerSource: 'manual' | 'none' | 'runtime'
 }
 
+export type ProviderLlamaCppMode = 'cli' | 'server'
+export type ProviderConnectionConfig = {
+  llamaCppMode?: ProviderLlamaCppMode
+  manualWorkerUrls: string[]
+  workerUrlMode: 'manual' | 'runtime'
+}
+
 export type ProviderModel = {
   baseURL: string | null
   createdAt: string | Date | null
@@ -42,7 +49,7 @@ export type ProviderModel = {
 export type ProviderConnection = {
   authMode: string | null
   baseURL: string | null
-  config: {manualWorkerUrls: string[]; workerUrlMode: 'manual' | 'runtime'}
+  config: ProviderConnectionConfig
   createdAt: string | Date | null
   enabled: boolean
   hasSecret: boolean
@@ -159,6 +166,7 @@ export const createProviderConnection = async (input: {
   apiKey?: string
   baseURL?: string | null
   label?: string
+  llamaCppMode?: ProviderLlamaCppMode
   manualWorkerUrls?: string[]
   providerKind: string
   workerUrlMode?: 'manual' | 'runtime'
@@ -179,6 +187,7 @@ export const updateProviderConnection = async (input: {
   enabled?: boolean
   id: string
   label?: string
+  llamaCppMode?: ProviderLlamaCppMode
   manualWorkerUrls?: string[]
   workerUrlMode?: 'manual' | 'runtime'
 }) => {
@@ -188,6 +197,7 @@ export const updateProviderConnection = async (input: {
     clearSecret: input.clearSecret,
     enabled: input.enabled,
     label: input.label,
+    llamaCppMode: input.llamaCppMode,
     manualWorkerUrls: input.manualWorkerUrls,
     workerUrlMode: input.workerUrlMode,
   })

@@ -45,7 +45,7 @@ const getSubmittedManualWorkerUrls = ({
 
 const getPublicProviderConnectionPayload = <
   T extends {
-    config: {manualWorkerUrls: string[]; workerUrlMode: 'manual' | 'runtime'}
+    config: {llamaCppMode?: 'cli' | 'server'; manualWorkerUrls: string[]; workerUrlMode: 'manual' | 'runtime'}
     providerKind: string
     secretRef: string | null
   },
@@ -145,6 +145,7 @@ export const providerConnectionsRoutes = new Elysia()
         : getResolvedProviderBaseURL({baseURL: getTrimmedValue(body.baseURL), providerKind})
       const label = getProviderConnectionLabel({label: body.label, providerKind})
       const config = getProviderConnectionConfig({
+        llamaCppMode: getTrimmedValue(body.llamaCppMode),
         manualWorkerUrls: getSubmittedManualWorkerUrls(body),
         providerKind,
         workerUrlMode: getTrimmedValue(body.workerUrlMode),
@@ -185,6 +186,7 @@ export const providerConnectionsRoutes = new Elysia()
         apiKey: t.Optional(t.String()),
         baseURL: t.Optional(t.Union([t.String(), t.Null()])),
         label: t.Optional(t.String()),
+        llamaCppMode: t.Optional(t.Union([t.Literal('cli'), t.Literal('server')])),
         manualWorkerUrls: t.Optional(t.Array(t.String())),
         providerKind: t.String(),
         workerUrls: t.Optional(t.Array(t.String())),
@@ -213,6 +215,7 @@ export const providerConnectionsRoutes = new Elysia()
         providerKind: existing.providerKind,
       })
       const nextConfig = getProviderConnectionConfig({
+        llamaCppMode: getTrimmedValue(body.llamaCppMode) ?? existing.config.llamaCppMode,
         manualWorkerUrls: getSubmittedManualWorkerUrls(body) ?? existing.config.manualWorkerUrls,
         providerKind: existing.providerKind,
         workerUrlMode: getTrimmedValue(body.workerUrlMode) ?? existing.config.workerUrlMode,
@@ -270,6 +273,7 @@ export const providerConnectionsRoutes = new Elysia()
         clearSecret: t.Optional(t.Boolean()),
         enabled: t.Optional(t.Boolean()),
         label: t.Optional(t.String()),
+        llamaCppMode: t.Optional(t.Union([t.Literal('cli'), t.Literal('server')])),
         manualWorkerUrls: t.Optional(t.Array(t.String())),
         workerUrls: t.Optional(t.Array(t.String())),
         workerUrlMode: t.Optional(t.Union([t.Literal('manual'), t.Literal('runtime')])),

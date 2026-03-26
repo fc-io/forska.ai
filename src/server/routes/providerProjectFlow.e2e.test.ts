@@ -116,14 +116,14 @@ test('provider to model to project flow works through routes', async () => {
   expect(storedProjectPrompt?.originalText).toBe('Screen for relevance')
 })
 
-test('llama.cpp provider connection uses the local default base URL with no saved worker URLs', async () => {
+test('llama.cpp cli provider connection stores cli mode and uses the local default base URL', async () => {
   if (!app || !queryDatabase) {
     throw new Error('Test app not initialized')
   }
 
   const createConnectionResponse = await app.handle(
     new Request('http://localhost/api/provider-connections', {
-      body: JSON.stringify({label: 'Local llama.cpp', providerKind: 'llamacpp'}),
+      body: JSON.stringify({label: 'Local llama.cpp CLI', llamaCppMode: 'cli', providerKind: 'llamacpp'}),
       headers: {'content-type': 'application/json'},
       method: 'POST',
     }),
@@ -136,6 +136,7 @@ test('llama.cpp provider connection uses the local default base URL with no save
         config: {
           archived?: boolean
           disabledModelIds?: string[]
+          llamaCppMode?: 'cli' | 'server'
           manualWorkerUrls: string[]
           workerUrlMode: 'manual' | 'runtime'
         }
@@ -157,6 +158,7 @@ test('llama.cpp provider connection uses the local default base URL with no save
   expect(createConnectionBody.data.connection.config).toEqual({
     archived: false,
     disabledModelIds: [],
+    llamaCppMode: 'cli',
     manualWorkerUrls: [],
     workerUrlMode: 'manual',
   })
@@ -186,9 +188,61 @@ test('llama.cpp provider connection uses the local default base URL with no save
   expect(storedConnection).toEqual({
     authMode: 'none',
     baseURL: 'http://127.0.0.1:8080',
-    configJson: null,
+    configJson:
+      '{"archived":false,"disabledModelIds":[],"llamaCppMode":"cli","manualWorkerUrls":[],"workerUrlMode":"manual"}',
     providerKind: 'llamacpp',
   })
+})
+
+test('llama.cpp server provider connection keeps the local default base URL without extra config', async () => {
+  if (!app || !queryDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const createConnectionResponse = await app.handle(
+    new Request('http://localhost/api/provider-connections', {
+      body: JSON.stringify({label: 'Local llama.cpp Server', llamaCppMode: 'server', providerKind: 'llamacpp'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const createConnectionBody = (await createConnectionResponse.json()) as {
+    data: {
+      connection: {
+        authMode: string | null
+        baseURL: string | null
+        config: {
+          archived?: boolean
+          disabledModelIds?: string[]
+          llamaCppMode?: 'cli' | 'server'
+          manualWorkerUrls: string[]
+          workerUrlMode: 'manual' | 'runtime'
+        }
+        id: string
+        providerKind: string
+      }
+    }
+  }
+
+  expect(createConnectionResponse.status).toBe(200)
+  expect(createConnectionBody.data.connection.providerKind).toBe('llamacpp')
+  expect(createConnectionBody.data.connection.baseURL).toBe('http://127.0.0.1:8080')
+  expect(createConnectionBody.data.connection.config).toEqual({
+    archived: false,
+    disabledModelIds: [],
+    manualWorkerUrls: [],
+    workerUrlMode: 'manual',
+  })
+
+  const connectionId = createConnectionBody.data.connection.id
+  const [storedConnection] = await queryDatabase<{configJson: string | null}>(`
+    SELECT CAST(config_json AS VARCHAR) AS configJson
+    FROM app.provider_connection
+    WHERE id = '${connectionId}'
+    LIMIT 1
+  `)
+
+  expect(storedConnection?.configJson).toBeNull()
 })
 
 test('provider connection delete removes an unreferenced connection and its models', async () => {
