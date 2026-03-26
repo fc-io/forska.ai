@@ -36,6 +36,32 @@
 - [ ] Decide whether remaining cursor state should stay in DuckDB or move local once the hot-path migration settles.
 - [ ] Decide whether running different jobs on different writers is still a post-phase-1 goal.
 
+## Suggested implementation order
+
+1. Lock the remaining phase-1 decisions.
+   - Decide whether multi-writer-by-job is still a real follow-on goal.
+   - Decide whether the remaining cursor state stays in DuckDB for now or should move local in the same pass.
+2. Finalize `job_scan_state`.
+   - Add the final cursor shape, `scan_epoch`, and `last_project_refresh_ack_seq`.
+   - Keep state updates atomic with top-up/import paths.
+3. Add the visibility-ack path.
+   - After DuckDB import and mart refresh visibility, write the per-job watermark back to SQLite.
+   - Make the importer safe to replay if DuckDB commit wins before SQLite export ack.
+4. Gate wrap and pruning on visibility.
+   - Only wrap the scan cursor when visibility has caught up.
+   - Only prune exported outbox rows and terminal queue rows after the watermark passes them.
+5. Finish retention cleanup.
+   - Batch-delete exported outbox rows and terminal queue rows.
+   - Delete or archive the per-job SQLite DB only after full drain.
+   - Keep legacy DuckDB cleanup for old jobs until rollout fully ends.
+6. Add the missing tests in dependency order.
+   - Competing-writer duplicate-claim test.
+   - Import replay-after-crash test.
+   - Drain-then-delete lifecycle test.
+7. Revisit post-phase-1 scope.
+   - Re-evaluate whether different jobs should run on different writers.
+   - Re-evaluate whether any residual cursor state should still move local once the rollout is stable.
+
 ## Why This Split
 
 - Current contention is mostly the mutable queue path, not the final analytics path.
