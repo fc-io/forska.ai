@@ -73,5 +73,6 @@ Desktop.ini
 !.cursor/rules/
 
 .tanstack/
+.ralph-tui/
 drizzle
 ./CLAUDE.local.md
