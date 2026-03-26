@@ -1,9 +1,11 @@
-import {rmSync} from 'node:fs'
+import {mkdirSync, readdirSync, rmSync} from 'node:fs'
 import path from 'node:path'
 
 import {afterEach, expect, mock, test} from 'bun:test'
 
 const articleImportStoreServiceModulePath = new URL('./articleImportStoreService.ts', import.meta.url).pathname
+
+type StructuredFileImportServiceModule = typeof import('./structuredFileImportService.ts')
 
 const storedRowsRef: {current: Array<Array<Record<string, unknown>>>} = {current: []}
 const createdAssetPathsRef: {current: string[]} = {current: []}
@@ -25,10 +27,31 @@ const trackAssetPath = (assetPath: string) => {
   createdAssetPathsRef.current.push(path.resolve(process.cwd(), assetPath))
 }
 
+const structuredFileImportDirectory = path.resolve(process.cwd(), 'assets/structured_file_imports')
+
+const getMatchingStructuredImportFiles = (suffix: string) => {
+  mkdirSync(structuredFileImportDirectory, {recursive: true})
+
+  return readdirSync(structuredFileImportDirectory).filter((fileName) => {
+    return fileName.endsWith(suffix)
+  })
+}
+
+const removeMatchingStructuredImportFiles = (suffix: string) => {
+  getMatchingStructuredImportFiles(suffix).forEach((fileName) => {
+    rmSync(path.join(structuredFileImportDirectory, fileName), {force: true})
+  })
+}
+
 const getStoredRows = () => {
   return storedRowsRef.current.flatMap((batch) => {
     return batch
   })
+}
+
+const loadStructuredFileImportService = async (): Promise<StructuredFileImportServiceModule> => {
+  const moduleUnknown: unknown = await import(`./structuredFileImportService.ts?test=${Date.now()}-${Math.random()}`)
+  return moduleUnknown as StructuredFileImportServiceModule
 }
 
 afterEach(() => {
@@ -40,7 +63,7 @@ afterEach(() => {
 })
 
 test('analyzeStructuredFileUpload finds JSON array boundaries', async () => {
-  const {analyzeStructuredFileUpload} = await import('./structuredFileImportService.ts')
+  const {analyzeStructuredFileUpload} = await loadStructuredFileImportService()
 
   const result = await analyzeStructuredFileUpload(
     new File(
@@ -69,7 +92,7 @@ test('analyzeStructuredFileUpload finds JSON array boundaries', async () => {
 })
 
 test('analyzeStructuredFileUpload finds XML repeated element boundaries', async () => {
-  const {analyzeStructuredFileUpload} = await import('./structuredFileImportService.ts')
+  const {analyzeStructuredFileUpload} = await loadStructuredFileImportService()
 
   const result = await analyzeStructuredFileUpload(
     new File(
@@ -86,7 +109,7 @@ test('analyzeStructuredFileUpload finds XML repeated element boundaries', async 
 })
 
 test('analyzeStructuredFileUpload only returns root-resolvable boundary paths', async () => {
-  const {analyzeStructuredFileUpload} = await import('./structuredFileImportService.ts')
+  const {analyzeStructuredFileUpload} = await loadStructuredFileImportService()
 
   const result = await analyzeStructuredFileUpload(
     new File(
@@ -106,9 +129,47 @@ test('analyzeStructuredFileUpload only returns root-resolvable boundary paths', 
   expect(result.candidates[0]).toMatchObject({count: 2, displayPath: '$[]', pointer: ''})
 })
 
+test('analyzeStructuredFileUpload deletes staged uploads when parsing fails', async () => {
+  const {analyzeStructuredFileUpload} = await loadStructuredFileImportService()
+  const fileNameSuffix = 'invalid-structured-upload.json'
+
+  removeMatchingStructuredImportFiles(fileNameSuffix)
+
+  let error: Error | null = null
+
+  try {
+    await analyzeStructuredFileUpload(new File(['{"records": ['], fileNameSuffix, {type: 'application/json'}))
+  } catch (caughtError) {
+    error = caughtError instanceof Error ? caughtError : new Error(String(caughtError))
+  }
+
+  expect(error).toBeInstanceOf(Error)
+  expect(getMatchingStructuredImportFiles(fileNameSuffix)).toHaveLength(0)
+})
+
+test('analyzeStructuredFileUpload deletes staged uploads when no repeating boundary is found', async () => {
+  const {analyzeStructuredFileUpload} = await loadStructuredFileImportService()
+  const fileNameSuffix = 'no-boundary-upload.json'
+
+  removeMatchingStructuredImportFiles(fileNameSuffix)
+
+  let error: Error | null = null
+
+  try {
+    await analyzeStructuredFileUpload(
+      new File([JSON.stringify({record: {id: '1'}})], fileNameSuffix, {type: 'application/json'}),
+    )
+  } catch (caughtError) {
+    error = caughtError instanceof Error ? caughtError : new Error(String(caughtError))
+  }
+
+  expect(error?.message).toBe('No repeating boundary found in file')
+  expect(getMatchingStructuredImportFiles(fileNameSuffix)).toHaveLength(0)
+})
+
 test('importStructuredFileFromConfig builds article rows from selected boundary', async () => {
   const {analyzeStructuredFileUpload, buildStructuredFileImportConfig, importStructuredFileFromConfig} =
-    await import('./structuredFileImportService.ts')
+    await loadStructuredFileImportService()
 
   const analysis = await analyzeStructuredFileUpload(
     new File(
@@ -172,7 +233,7 @@ test('importStructuredFileFromConfig builds article rows from selected boundary'
 
 test('importStructuredFileFromConfig keeps long explicit ids distinct', async () => {
   const {analyzeStructuredFileUpload, buildStructuredFileImportConfig, importStructuredFileFromConfig} =
-    await import('./structuredFileImportService.ts')
+    await loadStructuredFileImportService()
   const sharedPrefix = 'long-id-'.repeat(30)
   const analysis = await analyzeStructuredFileUpload(
     new File(

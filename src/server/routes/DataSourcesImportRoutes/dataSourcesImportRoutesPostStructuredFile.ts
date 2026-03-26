@@ -27,7 +27,7 @@ export const dataSourcesImportRoutesPostStructuredFile = async ({
     return {data: null, error: 'Data source is not configured for structured file import'}
   }
 
-  const importRoute = dataSource.importRoute ?? `structured-file:${dataSource.id}`
+  const importRoute = `structured-file:${dataSource.id}`
   const result = await importStructuredFileFromConfig({config, dataSourceTitle: dataSource.title, importRoute})
   const updated = await getDataSourceQueryService().updateDataSourceAfterImport({
     cursor: dataSource.cursor,
