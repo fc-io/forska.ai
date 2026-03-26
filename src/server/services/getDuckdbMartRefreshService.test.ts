@@ -487,6 +487,247 @@ test('mart refresh runs project rebuild statements on the background database co
   expect(result.queueActive).toBe(false)
 })
 
+test('mart refresh repairs review_article_rollup before running a project rebuild', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        let queueActive = true
+        const events = []
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                queryJson: async (statement) => {
+                  return statement.includes("column_name = 'refresh_generation'")
+                    ? [{count: 1}]
+                    : statement.includes("column_name = 'completed_at'")
+                      ? [{count: 1}]
+                      : statement.includes("table_name = 'review_article_rollup'")
+                        ? [{count: 1}]
+                        : statement.includes('WHERE refresh_generation IS NULL')
+                          ? [{count: 0}]
+                          : statement.includes('SELECT COUNT(*) AS count')
+                            ? [{count: queueActive ? 1 : 0}]
+                            : statement.includes('FROM app.mart_refresh_queue')
+                              ? queueActive
+                                ? [{
+                                    articleId: null,
+                                    id: 'project-task',
+                                    projectId: 'project-rollup-repair-test',
+                                    refreshGeneration: 0,
+                                    refreshScope: 'project',
+                                  }]
+                                : []
+                              : []
+                },
+                queryJsonBackground: async () => {
+                  return []
+                },
+                run: async (statement) => {
+                  if (statement.includes('DROP TABLE IF EXISTS mart.review_article_rollup_repair')) {
+                    events.push('repair:drop-scratch')
+                  }
+
+                  if (statement.includes('CREATE TABLE mart.review_article_rollup_repair AS')) {
+                    events.push('repair:copy-existing')
+                  }
+
+                  if (statement.includes('DROP TABLE mart.review_article_rollup')) {
+                    events.push('repair:drop-live')
+                  }
+
+                  if (statement.includes('CREATE TABLE mart.review_article_rollup (')) {
+                    events.push('repair:create-live')
+                  }
+
+                  if (statement.includes('CREATE INDEX idx_mart_review_article_rollup_project_id')) {
+                    events.push('repair:create-index')
+                  }
+
+                  if (
+                    statement.includes('INSERT INTO mart.review_article_rollup')
+                    && statement.includes('FROM mart.review_article_rollup_repair')
+                  ) {
+                    events.push('repair:restore-rows')
+                  }
+
+                  if (statement.includes('SET completed_at = NOW()')) {
+                    queueActive = false
+                  }
+                },
+                runBackground: async (statement) => {
+                  if (statement.includes('DELETE FROM mart.project_scope_article')) {
+                    events.push('refresh:project-scope')
+                  }
+                },
+              }
+            },
+          }
+        })
+
+        const martRefreshService = (await import(martRefreshServiceModulePath + '?rollup-repair=' + Date.now())).getDuckdbMartRefreshService()
+
+        await martRefreshService.flush()
+        console.log(JSON.stringify({events, queueActive}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Mart review_article_rollup repair regression test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {events: string[]; queueActive: boolean}
+
+  expect(result.events).toContain('repair:create-live')
+  expect(result.events).toContain('repair:create-index')
+  expect(result.events).toContain('refresh:project-scope')
+  expect(result.events.indexOf('repair:create-live')).toBeLessThan(result.events.indexOf('refresh:project-scope'))
+  expect(result.queueActive).toBe(false)
+})
+
+test('mart refresh retries cleanly after a failed background transaction poisons the connection', () => {
+  const duckdbPath = `/tmp/f1-mart-refresh-background-rollback-${Date.now()}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        const actualAppDatabaseModule = await import(appDatabaseServiceModulePath + '?actual=' + Date.now())
+        let shouldFailBackgroundRefresh = true
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            ...actualAppDatabaseModule,
+            getAppDatabaseService: () => {
+              const service = actualAppDatabaseModule.getAppDatabaseService()
+
+              return {
+                ...service,
+                runBackground: async (statement) => {
+                  if (
+                    shouldFailBackgroundRefresh
+                    && statement.includes('DELETE FROM mart.judgment_fact')
+                    && statement.includes('article-background-rollback-test')
+                  ) {
+                    shouldFailBackgroundRefresh = false
+                    return service.runBackground(\`
+                      BEGIN TRANSACTION;
+                      DELETE FROM mart.judgment_fact
+                      WHERE article_id = 'article-background-rollback-test';
+                      SELECT *
+                      FROM app.missing_background_rollback_table;
+                      COMMIT;
+                    \`)
+                  }
+
+                  return service.runBackground(statement)
+                },
+              }
+            },
+          }
+        })
+
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+
+        await migrateDuckdb()
+
+        const database = actualAppDatabaseModule.getAppDatabaseService()
+
+        await database.run(\`
+          INSERT INTO app.article (id, article_title)
+          VALUES ('article-background-rollback-test', 'Background Rollback Test Article')
+        \`)
+
+        const martRefreshService = (await import(martRefreshServiceModulePath + '?background-rollback=' + Date.now())).getDuckdbMartRefreshService()
+
+        await martRefreshService.queueJudgmentArticleRefresh('article-background-rollback-test', 'background-rollback-test')
+        const failureText = await martRefreshService.flush().then(
+          () => 'no failure',
+          (error) => error instanceof Error ? error.message : String(error),
+        )
+
+        const [queuedAfterFailure] = await database.queryJson(\`
+          SELECT COUNT(*) AS count
+          FROM app.mart_refresh_queue
+          WHERE completed_at IS NULL
+        \`)
+
+        const retryText = await martRefreshService.flush().then(
+          () => 'ok',
+          (error) => error instanceof Error ? error.message : String(error),
+        )
+
+        const [queuedAfterRetry] = await database.queryJson(\`
+          SELECT COUNT(*) AS count
+          FROM app.mart_refresh_queue
+          WHERE completed_at IS NULL
+        \`)
+
+        console.log(JSON.stringify({
+          failureText,
+          queuedAfterFailure: Number(queuedAfterFailure?.count ?? 0),
+          queuedAfterRetry: Number(queuedAfterRetry?.count ?? 0),
+          retryText,
+        }))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(
+        runScript.stderr.toString()
+          || runScript.stdout.toString()
+          || 'Mart background rollback recovery regression test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      failureText: string
+      queuedAfterFailure: number
+      queuedAfterRetry: number
+      retryText: string
+    }
+
+    expect(result.failureText).toContain('missing_background_rollback_table')
+    expect(result.queuedAfterFailure).toBe(1)
+    expect(result.retryText).toBe('ok')
+    expect(result.queuedAfterRetry).toBe(0)
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+  }
+}, 20_000)
+
 test('mart refresh populates review article serving v3 tables', () => {
   const duckdbPath = `/tmp/f1-mart-refresh-serving-v3-${Date.now()}.duckdb`
   const runScript = globalThis.Bun.spawnSync(
