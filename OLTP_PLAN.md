@@ -26,23 +26,28 @@
 - Legacy DuckDB queue still exists for old jobs during rollout.
 - Biggest gaps: visibility-watermark cleanup, full legacy queue removal, a few crash/race tests.
 
+## Locked decisions
+
+- `job_scan_state` becomes the source of truth for cursor state in this phase; move the remaining DuckDB cursor path local now.
+- Multi-writer-by-job stays out of scope for phase 1; keep one writer/import owner and revisit only after rollout stabilizes.
+
 ## Remaining implementation checklist
 
 - [ ] Finalize `job_scan_state` so it tracks the full cursor shape, `scan_epoch`, and a per-job visibility watermark.
+- [ ] Move the remaining DuckDB cursor path local now and retire `jobCursorStore` / `app.judgment_job` cursor writes once active jobs are migrated.
 - [ ] Gate cursor wrap and dedupe-row pruning on DuckDB/mart visibility so stale reads cannot re-enqueue already exported work.
 - [ ] Finish retention cleanup for exported outbox rows, terminal queue rows, and drained per-job SQLite DBs.
 - [ ] Harden importer replay semantics when DuckDB commit succeeds before SQLite export ack.
 - [ ] Add the missing contention, crash-replay, and drain/delete tests.
-- [ ] Decide whether remaining cursor state should stay in DuckDB or move local once the hot-path migration settles.
-- [ ] Decide whether running different jobs on different writers is still a post-phase-1 goal.
 
 ## Suggested implementation order
 
-1. Lock the remaining phase-1 decisions.
-   - Decide whether multi-writer-by-job is still a real follow-on goal.
-   - Decide whether the remaining cursor state stays in DuckDB for now or should move local in the same pass.
-2. Finalize `job_scan_state`.
+1. Lock the phase-1 scope.
+   - `job_scan_state` is the cursor source of truth going forward.
+   - Multi-writer-by-job stays out of scope for this phase.
+2. Finalize and migrate `job_scan_state`.
    - Add the final cursor shape, `scan_epoch`, and `last_project_refresh_ack_seq`.
+   - Move the remaining DuckDB cursor path local and remove `jobCursorStore` from active queue paths.
    - Keep state updates atomic with top-up/import paths.
 3. Add the visibility-ack path.
    - After DuckDB import and mart refresh visibility, write the per-job watermark back to SQLite.
@@ -58,9 +63,8 @@
    - Competing-writer duplicate-claim test.
    - Import replay-after-crash test.
    - Drain-then-delete lifecycle test.
-7. Revisit post-phase-1 scope.
-   - Re-evaluate whether different jobs should run on different writers.
-   - Re-evaluate whether any residual cursor state should still move local once the rollout is stable.
+7. Revisit post-phase-1 scope only after rollout stabilizes.
+   - Re-evaluate multi-writer-by-job only if one writer actually becomes the bottleneck.
 
 ## Why This Split
 
@@ -112,7 +116,7 @@
 - [x] Lease metadata should include `leaseId`, `hostname`, `pid`, `port`, `heartbeatAt`.
 - [x] Stale takeover is allowed only after heartbeat timeout plus owner health failure.
 - [x] Duplicate processing is prevented by a combination of one active job owner plus the SQLite unique key on `(job_id, article_id, prompt_id)`.
-- Allowing different jobs to run on different writers can come later; it is not required for the first lease-enforcement cut.
+- Different jobs do not run on different writers in phase 1; one writer/import owner stays explicit until rollout is stable.
 
 ## Write Path
 
@@ -182,7 +186,7 @@
 - [x] Switch all newly created jobs to the SQLite queue path immediately.
 - [x] Leave already-running legacy jobs on the current DuckDB queue path until they finish.
 - [x] Remove DuckDB writes for `app.judgment_job_prompt` on SQLite-backed jobs as part of the first cutover.
-- Revisit moving cursor state out of DuckDB only if its writes remain noisy after the hot queue path is gone.
+- Move the remaining cursor path out of DuckDB in this rollout; remove `jobCursorStore` and old cursor writes once active jobs are migrated.
 
 ## Tests
 
@@ -197,7 +201,8 @@
 ## Done When
 
 - [x] `ready -> sent -> judged` no longer writes through the live DuckDB queue path for newly created jobs.
-- Different jobs can be processed by different writers concurrently using embedded storage.
+- Residual cursor state for active jobs no longer depends on DuckDB.
+- Phase 1 keeps one writer/import owner explicitly; multi-writer-by-job stays deferred.
 - [x] Final judgments survive writer crashes before DuckDB ingestion.
 - [x] DuckDB receives judgments in bounded idempotent batches instead of one write per prompt.
 - [x] Job status APIs remain accurate during the SQLite-to-DuckDB lag window.
