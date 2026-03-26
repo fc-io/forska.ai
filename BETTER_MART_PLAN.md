@@ -50,14 +50,20 @@
 - Soft-delete + `delete_generation` semantics can still block replay/reinsert.
 - One long mart statement can still block reads on the control lane.
 
+## Status now
+
+- Landed: node-api runtime, append lanes, outbox claims, quiet barrier.
+- Landed: mart queue `refresh_generation` guard against lost requeues.
+- Still open: `/api/projects` responsiveness proof, project-level coalescing polish, throughput benchmarks.
+
 ## Acceptance
 
-- [ ] No child-process DuckDB runtime on the normal server path.
+- [x] No child-process DuckDB runtime on the normal server path.
 - [ ] `/api/projects` stays responsive during import and mart drain.
-- [ ] Mart queue does not lose requeues during active drain.
+- [x] Mart queue does not lose requeues during active drain.
 - [ ] Outbox throughput materially improves.
-- [ ] No duplicate or partial `app.judgment` imports from one claim.
-- [ ] Writer demotion, snapshot, checkpoint, shutdown stay safe.
+- [x] No duplicate or partial `app.judgment` imports from one claim.
+- [x] Writer demotion, snapshot, checkpoint, shutdown stay safe.
 - [ ] Mart queue depth trends down under steady-state load.
 
 ## Verify

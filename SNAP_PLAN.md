@@ -6,6 +6,12 @@
 - move heavy OLAP reads to short-lived snapshot readers
 - reuse snapshot for 5-10s; avoid per-request snapshot creation
 
+## Status now
+
+- snapshot helper + writer snapshot route exist
+- `db:studio` already uses snapshot UI
+- heavy OLAP routes still run on the live app DB path
+
 ## Good snapshot candidates
 
 - `/api/judgmentsjobs-unassessed-count` - stale-tolerant count, already cached

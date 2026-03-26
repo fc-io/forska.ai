@@ -2,20 +2,20 @@
 
 ## Goal
 
-- [ ] Make live DuckDB single-owner.
-- [ ] Let multiple Forska processes run without lock churn.
-- [ ] Auto elect one writer on one machine.
-- [ ] Keep DuckDB UI usable.
+- [x] Make live DuckDB single-owner.
+- [x] Let multiple Forska processes run without lock churn.
+- [x] Auto elect one writer on one machine.
+- [x] Keep DuckDB UI usable.
 
 ## Hard Rules
 
-- [ ] One process owns writable `DUCKDB_PATH`.
-- [ ] Non-owner processes never open the live file, even read-only.
-- [ ] Only owner mounts DB-writing cron from `src/server/index.ts`.
-- [ ] Route DB-backed reads/writes through owner; do not rely on open-close-per-query retries.
-- [ ] `auto` becomes default; manual roles stay as override/debug mode.
-- [ ] DuckDB UI never opens the live file writable while owner is up.
-- [ ] Do not store the writer lease inside the live DuckDB file.
+- [x] One process owns writable `DUCKDB_PATH`.
+- [x] Non-owner processes never open the live file, even read-only.
+- [x] Only owner mounts DB-writing cron from `src/server/index.ts`.
+- [x] Route DB-backed reads/writes through owner; do not rely on open-close-per-query retries.
+- [x] `auto` becomes default; manual roles stay as override/debug mode.
+- [x] DuckDB UI never opens the live file writable while owner is up.
+- [x] Do not store the writer lease inside the live DuckDB file.
 
 ## Current Caveats
 
@@ -26,19 +26,19 @@
 
 ## Why
 
-- [ ] `src/server/utils/duckdbService.ts` keeps one warm child per Bun process; second process means second lock attempt.
-- [ ] `src/server/index.ts` mounts cron in every server today.
-- [ ] `src/server/cron/fullTextJobs.ts` and `src/server/cron/fullTextConversionJobs.ts` can double-pick work.
-- [ ] `src/server/cron/judgmentsJobs/jobCursorStore.ts` updates cursors without ownership checks.
-- [ ] `scripts/dbStudio.ts` opens the database directly.
+- [x] `src/server/utils/duckdbService.ts` no longer relies on child-process lock churn on the normal path.
+- [x] `src/server/index.ts` no longer mounts cron in every server.
+- [ ] `src/server/cron/fullTextJobs.ts` and `src/server/cron/fullTextConversionJobs.ts` can still double-pick work.
+- [ ] `src/server/cron/judgmentsJobs/jobCursorStore.ts` still updates cursors without ownership checks.
+- [x] `scripts/dbStudio.ts` now opens a snapshot, not the live DB.
 
 ## Target Model
 
-- [ ] `auto`: default; race for lease, become `writer` or `api`.
-- [ ] `writer`: manual override; owns DuckDB, runs cron, serves snapshots, runs maintenance.
-- [ ] `api`: manual override/debug; no local DuckDB, proxies `/api/*` to current `writer`.
+- [x] `auto`: default; race for lease, become `writer` or `api`.
+- [x] `writer`: manual override; owns DuckDB, runs cron, serves snapshots, runs maintenance.
+- [x] `api`: manual override/debug; no local DuckDB, proxies `/api/*` to current `writer`.
 - [ ] `worker`: optional; either DB-free or talks to `writer`.
-- [ ] `dev-single`: one-process local mode.
+- [x] `dev-single`: one-process local mode.
 
 ## Phase 0 - Effect First
 
@@ -78,9 +78,9 @@
 ## Phase 4 - Cron And Script Ownership
 
 - [x] Mount `judgmentsJobsCron`, `fullTextJobsCron`, `fullTextConversionJobsCron`, and `nvidiaSmiCron` only in `writer`.
-- [ ] Keep current env flags as sub-toggles, not as ownership.
+- [x] Keep current env flags as sub-toggles, not as ownership.
 - [x] Log role and writer status at boot.
-- [ ] Mark migrations, imports, rebuilds, and maintenance scripts as `writer`-only or maintenance-only.
+- [x] Mark migrations, imports, rebuilds, and maintenance scripts as `writer`-only or maintenance-only.
 
 ## Phase 5 - Work Claims
 
@@ -126,14 +126,14 @@
 - [ ] Add test: full-text and judgment claim paths stay single-owner.
 - [x] Add test: writer connections endpoint shows follower api process.
 - [x] Add test: UI snapshot path works while writer is live.
-- [ ] Add test: stale lease recovery after unclean exit.
+- [x] Add test: stale lease recovery after unclean exit.
 
 ## Done When
 
-- [ ] Starting a second server never spawns a second live DuckDB child for the same DB.
+- [x] Starting a second server never spawns a second live DuckDB child for the same DB.
 - [x] `auto` elects one writer on one machine.
 - [x] Writer handoff works after writer exit.
-- [ ] Multiple Forska API processes can run together.
+- [x] Multiple Forska API processes can run together.
 - [ ] All DB-backed cron/work is single-owner or explicitly claimed.
-- [ ] DuckDB UI works via snapshot without stopping the app.
+- [x] DuckDB UI works via snapshot without stopping the app.
 - [ ] Live maintenance UI is explicit, not accidental.

@@ -10,13 +10,13 @@
 
 - [ ] Adopt one rule: if a setting should survive restart and a normal user may reasonably change it, it should not live in shell env.
 - [ ] Adopt one rule: shell env is allowed only for bootstrap, ports, local file paths, background-job toggles, machine-specific endpoints, and secrets.
-- [x] Route all remaining env reads through one typed boundary; remove scattered direct `process.env` reads from app runtime code.
+- [ ] Route remaining env reads through one typed boundary; remove scattered direct `process.env` reads from app runtime code.
 
 ## Current Env Audit
 
 - [x] Split current env keys into three buckets: keep in env, move to persisted config, delete.
 - [x] Audit the direct `process.env` reads outside `src/server/utils/env.ts`.
-- [x] Remove or centralize those direct `process.env` reads.
+- [ ] Remove or centralize remaining direct `process.env` reads.
 - [x] Mark legacy old-stack script envs separately so they do not block app-first cleanup.
 - Remaining script env users kept separate: launcher/operator scripts `scripts/alvisCommon.ts`, `scripts/alvisSglangPull.ts`, `scripts/sbatchPut.ts`; legacy old-stack `scripts/env.ts`, `scripts/dbReindexAll.ts`, `scripts/dbRepairAllIndexes.ts`, `scripts/dbRepairJudgmentsIndex.ts`, `src/db/getDatabaseUrl.ts`.
 
@@ -27,7 +27,7 @@
 - [x] Remove global `WORKER_URLS` as product config; only keep short-lived runtime wiring if a launcher still needs to pass discovered URLs.
 - [x] Remove global env usage for `SGLANG_MODEL`, `SGLANG_CONTEXT_LENGTH`, and `CODEX_CONTEXT_LENGTH`.
 - [x] Prefer deriving model identity/capabilities from provider/runtime discovery; only persist per-model/per-provider capability data when discovery is missing.
-- [x] Remove raw `process.env` reads in judgment scheduling/runtime code.
+- [ ] Remove raw `process.env` reads in judgment scheduling/runtime code.
 - [x] Move `DUCKDB_BIN` and `CODEX_BIN` out of env; treat them as advanced user settings.
 - [x] Treat provider base URLs/auth refs/worker URLs for local-manual providers as product config in DuckDB, not machine env.
 - [x] Replace `DOCLING_SERVE_URL` with provider/model-backed PDF conversion config.
@@ -60,7 +60,7 @@
 - [x] Prefer deriving `SGLANG_MODEL` from launch/runtime/provider state rather than storing one global value.
 - [x] Prefer deriving context lengths from runtime/provider capabilities; persist per-model/per-provider fallback values only when discovery is unavailable.
 - [x] Decide whether `GPU_NNODES`, `GPU_GPUS_PER_NODE`, `GPU_TOTAL_GPUS`, `TP_SIZE`, `PP_SIZE`, `DP_SIZE`, `GPU_SHAPE`, and `SGLANG_MAX_RUNNING_REQUESTS` stay env/runtime metadata or move to discovered/persisted runtime state.
-- [x] Move `CODEX_MAX_INFLIGHT` and similar judgment-scheduler knobs out of raw `process.env`.
+- [ ] Move `CODEX_MAX_INFLIGHT` and similar judgment-scheduler knobs out of raw `process.env`.
 - [x] Update job scheduling and token logging to read the chosen config source instead of env.
 
 ## Keep As Env
@@ -72,9 +72,10 @@
 
 ## Cleanup Direct Env Usage
 
-- [x] Remove direct `process.env` reads in judgment scheduling/runtime code and replace them with typed config reads.
+- [ ] Remove direct `process.env` reads in judgment scheduling/runtime code and replace them with typed config reads.
 - [x] Remove direct `process.env` reads in `src/appServer.ts` that belong in a clearer runtime config layer.
 - [x] Move binary override envs such as `DUCKDB_BIN` and `CODEX_BIN` into advanced app/user settings.
+- [ ] Remove remaining user-facing env guidance for binary overrides.
 - [x] Derive or generate `HOSTNAME`, `SERVER_JOB_ID`, and related process identity values instead of treating them as user-set env config.
 
 ## Migration And Rollout

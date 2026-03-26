@@ -3,9 +3,9 @@
 ## Goal
 
 - Add first-class provider support like OpenCode / OpenClaw / Hermes Agent.
-- First pass providers: `openai`, `codex`, `anthropic`, `google`, `openrouter`, `ollama`, `llmstudio`, `sglang`, `vllm`.
-- Replace the raw table view on `src/app/routes/+admin/+models/+index.tsx` with real connect / enable / add flows.
-- Do a clean break. No backwards-compat layer.
+- First pass providers: `openai`, `codex`, `docling`, `anthropic`, `google`, `openrouter`, `ollama`, `llmstudio`, `sglang`, `vllm`.
+- Use provider-first connect / enable / add flows on `src/app/routes/+providers/+index.tsx` and `src/app/routes/+providers/+add-provider.tsx`.
+- Long term: no backwards-compat layer. Short term: keep the legacy Codex `/api/models/*` bridge until remaining clients move.
 
 ## Core Decision
 
@@ -84,6 +84,7 @@
 
 - `openai`: API key, optional base URL, model discovery + manual add.
 - `codex`: CLI/app-server auth, status, device login, model discovery incl reasoning variants.
+- `docling`: base URL, no secret by default, manual connection for PDF conversion.
 - `anthropic`: API key, model discovery + manual add.
 - `google`: API key, model discovery + manual add.
 - `openrouter`: API key, default OpenRouter base URL, model discovery + manual add.
@@ -454,10 +455,12 @@
 
 ### UI modules
 
-- [x] `src/app/routes/+admin/+models/+index.tsx`
-  - provider management + model management for existing connections
-- [x] `src/app/routes/+admin/+models/+add-provider.tsx`
+- [x] `src/app/routes/+providers/+index.tsx`
+  - provider management list
+- [x] `src/app/routes/+providers/+add-provider.tsx`
   - provider onboarding only
+- [x] `src/app/routes/+providers/+$id/+index.tsx`
+  - provider detail + model management
 - [x] `src/app/routes/+admin/+models/providerConnectionsClient.ts`
   - shared client-side provider API helpers and catalog labels
 - [x] provider-specific UI fragments under `src/app/routes/+admin/+models/`
@@ -699,11 +702,11 @@
 - [x] Resolve runtime credentials from provider connection, not model row
 - [x] Route health/usage reads through provider services everywhere for the current runtime path.
 
-### Ticket 8 - Finish admin UI split
+### Ticket 8 - Finish provider UI split
 
 - [x] Keep add-provider onboarding separate from model management
 - [x] Add provider-specific form fragments
-- [x] Make all existing provider/model actions use the new route surface only
+- [ ] Move remaining provider/model actions off the legacy `/api/models/*` bridge
 
 ### Ticket 9 - Remove legacy assumptions
 
@@ -728,11 +731,11 @@
 - [x] Provider connect/test/sync/manual-add all run through shared services
 - [x] Add-provider and model-management flows remain separate in UI and API
 
-## Models Page UX
+## Providers Page UX
 
-- Repurpose `src/app/routes/+admin/+models/+index.tsx` into a provider-first page.
-- Provider onboarding now lives on `src/app/routes/+admin/+models/+add-provider.tsx`.
-- `src/app/routes/+admin/+models/+index.tsx` is the management page for existing connections and their models.
+- `src/app/routes/+providers/+index.tsx` is the provider-first management page.
+- Provider onboarding now lives on `src/app/routes/+providers/+add-provider.tsx`.
+- `src/app/routes/+providers/+$id/+index.tsx` is the detail page for one connection and its models.
 - Connected providers section:
   - label
   - provider kind
@@ -752,7 +755,7 @@
   - show discovered vs manual
   - enable / disable per model
   - show remote model id + variant
-- Move the existing Codex connect UI from `src/app/routes/+settings/+index.tsx` into this page.
+- Codex connect UX now lives on provider pages, not settings.
 - Keep raw debug data, if needed, as a secondary admin panel. Not the primary UI.
 
 ## API Surface
@@ -765,6 +768,7 @@
 - `POST /api/provider-connections/:id/models` for manual add
 - `PATCH /api/models/:id`
 - Keep provider-specific routes only where transport needs it, e.g. Codex login/status.
+- Legacy bridge still exists for now: `/api/models/codex/*`, `/api/models/ensure`.
 
 ## Phases
 
@@ -785,7 +789,7 @@
 
 ### 3. UI
 
-- Rebuild `src/app/routes/+admin/+models/+index.tsx` around provider management.
+- Rebuild provider UI around `src/app/routes/+providers/+index.tsx` and `src/app/routes/+providers/+$id/+index.tsx`.
 - Move Codex login there.
 - Add provider forms, status, sync, manual add, model toggles.
 
@@ -803,7 +807,7 @@
 
 ## Done When
 
-- A user can add any supported provider from the add-provider flow and then manage it from the Models page.
+- A user can add any supported provider from the add-provider flow and then manage it from the Providers page.
 - One provider connection can expose many models without duplicated auth/config.
 - Projects still pick one `app.model` row.
 - Provider auth/config is not stored on user config or repeated on models.

@@ -6,7 +6,16 @@
 - Lease semantics stay unchanged.
 - `app.judgment` import is the only append-lane write path.
 
+## Status now
+
+- PR 2-3: done.
+- PR 4: mostly done; true one-refresh-per-project/pass still open.
+- PR 5-9: mostly done; remaining polish is counters, prepared inserts, extra hardening tests.
+- PR 10: not started.
+
 ## PR 1 - Baseline and counters
+
+- Status: partial.
 
 ### Schema
 
@@ -34,6 +43,8 @@
 
 ## PR 2 - Node-api spike
 
+- Status: done.
+
 ### Schema
 
 - None.
@@ -60,6 +71,8 @@
 - `bun test src/server/utils/duckdbServiceNodeApiSpike.test.ts`
 
 ## PR 3 - Embedded control lane parity
+
+- Status: done.
 
 ### Schema
 
@@ -99,6 +112,8 @@
 - Snapshot/checkpoint still work.
 
 ## PR 4 - Mart queue correctness + coalescing
+
+- Status: partial.
 
 ### Schema
 
@@ -150,6 +165,8 @@ type MartRefreshTaskRow = {
 
 ## PR 5 - Time-budgeted mart drain
 
+- Status: done.
+
 ### Schema
 
 - None.
@@ -180,6 +197,8 @@ yieldToEventLoop: () => Promise<void>
 - `/api/projects` stays responsive while backlog drains.
 
 ## PR 6 - SQLite outbox claiming
+
+- Status: done.
 
 ### Schema
 
@@ -233,6 +252,8 @@ reapStaleOutboxClaims: (args: {staleBefore: Date; jobId?: string}) => Promise<nu
 - Stale claims return to pending.
 
 ## PR 7 - Append lane pool
+
+- Status: partial.
 
 ### Schema
 
@@ -298,6 +319,8 @@ appendJudgments: (rows: JudgmentInsertRow[]) => Promise<AppendResult>
 
 ## PR 8 - Move importer to claims + append lanes
 
+- Status: done.
+
 ### Schema
 
 - None.
@@ -336,6 +359,8 @@ flushJudgmentJobSqliteOutbox: (args?: {claimedBy?: string; jobId?: string}) => P
 - No partial-success claim leaks.
 
 ## PR 9 - Quiet barrier + hardening
+
+- Status: partial.
 
 ### Schema
 
@@ -380,6 +405,8 @@ withDuckdbQuietBarrier: <T>(label: string, work: () => Promise<T>) => Promise<T>
 - Snapshot/checkpoint/shutdown are safe with append lanes active.
 
 ## PR 10 - Optional appender
+
+- Status: not started.
 
 ### Schema
 

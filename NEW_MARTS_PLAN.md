@@ -77,11 +77,12 @@
 - Yes:
   - LLM list/count
   - unassessed list/count/pairs
+  - both tab
   - review details partial hydration
-- No or weak:
-  - both tab for normal model projects
   - model-project filter option building
   - bulk article selection/export on model projects
+- Still weak:
+  - explicit degraded-path UX while backfill/indexing is incomplete
 - New marts should keep fast exact reads, but also keep a clear degraded path while backfill/indexing is incomplete.
 
 ## Direction
@@ -211,7 +212,7 @@
 - Switch LLM review list to new serving rows + postings.
 - Switch counts.
 - Switch details.
-- Keep old read path behind fallback flag.
+- Keep raw/no-mart fallback where serving rows are absent.
 
 ### Phase 4 - Structural rebuild path
 
@@ -298,7 +299,7 @@
 - [x] Choose stable sort key.
 - [x] Choose exact posting format.
 - [x] Design new mart schemas.
-- [ ] Design generation metadata + cutover rules.
+- [x] Design generation metadata + cutover rules.
 - [x] Define article-delta refresh contract.
 - [ ] Define structural-change rebuild contract.
 - [x] Implement new marts.
@@ -306,7 +307,7 @@
 - [x] Switch LLM list read path.
 - [x] Switch filter/count read path.
 - [x] Switch review detail read path.
-- [ ] Add queue/debug visibility for new refresh model.
+- [x] Add queue/debug visibility for new refresh model.
 - [x] Write parity tests for llm/human/both/unassessed against old vs new marts.
 - [ ] Write degraded-path tests for no-mart / partial-mart states.
 - [x] Write generation cutover tests.
@@ -321,7 +322,8 @@
 
 - Human tab is still raw-table based.
 - No dedicated automatic/on-startup backfill job yet.
+- Some parity coverage is still not exhaustive for export/filter/order edges.
 - Structural-change rebuild rules are not fully formalized.
-- Generation rollback/cutover/cleanup hardening is not finished.
+- Generation cleanup/rollback hardening is not finished.
 - Explicit degraded-path behavior is still weaker than it should be.
 - Perf smoke/benchmark coverage is still missing.
