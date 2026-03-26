@@ -476,50 +476,6 @@ const getProjectRefreshSql = (projectId: string) => {
     `,
     `
       BEGIN TRANSACTION;
-      DELETE FROM mart.review_article_judgment_detail WHERE project_id = ${projectLiteral};
-      INSERT INTO mart.review_article_judgment_detail (
-        project_id,
-        article_id,
-        prompt_id,
-        prompt_order,
-        judgment_id,
-        created_at,
-        article_created_at,
-        article_updated_at,
-        model_id,
-        answered_original,
-        answered_original_as_array
-      )
-      SELECT
-        scope_article.project_id,
-        judgment_fact.article_id,
-        judgment_fact.prompt_id,
-        project_prompt.prompt_order,
-        judgment_fact.judgment_id,
-        judgment_fact.created_at,
-        judgment_fact.article_created_at,
-        judgment_fact.article_updated_at,
-        judgment_fact.model_id,
-        judgment_fact.answered_original,
-        judgment_fact.answered_original_as_array
-      FROM mart.project_scope_article scope_article
-      INNER JOIN app.project project ON project.id = scope_article.project_id
-      INNER JOIN app.project_prompt project_prompt
-        ON project_prompt.project_id = scope_article.project_id
-       AND project_prompt.enabled = TRUE
-      INNER JOIN mart.judgment_fact judgment_fact
-        ON judgment_fact.article_id = scope_article.article_id
-       AND judgment_fact.prompt_id = project_prompt.prompt_id
-       AND judgment_fact.model_id = project.model_id
-       AND judgment_fact.use_title = project.use_title
-       AND judgment_fact.use_abstract = project.use_abstract
-       AND judgment_fact.use_fulltext = project.use_fulltext
-       AND judgment_fact.use_fulltext_no_images = project.use_fulltext_no_images
-      WHERE scope_article.project_id = ${projectLiteral};
-      COMMIT;
-    `,
-    `
-      BEGIN TRANSACTION;
       DELETE FROM app.review_answer_dictionary WHERE project_id = ${projectLiteral};
       INSERT INTO app.review_answer_dictionary (
         project_id,
@@ -710,85 +666,6 @@ const getProjectRefreshSql = (projectId: string) => {
         ON review_state.project_id = scope_article.project_id
        AND review_state.article_id = scope_article.article_id
       WHERE scope_article.project_id = ${projectLiteral};
-      COMMIT;
-    `,
-    `
-      BEGIN TRANSACTION;
-      DELETE FROM app.project_article_ordinal WHERE project_id = ${projectLiteral};
-      INSERT INTO app.project_article_ordinal (
-        project_id,
-        article_id,
-        article_seq,
-        ordinal_updated_at
-      )
-      SELECT
-        project_id,
-        article_id,
-        ROW_NUMBER() OVER (ORDER BY article_created_at DESC NULLS LAST, article_id ASC) AS article_seq,
-        current_timestamp
-      FROM mart.review_article_rollup
-      WHERE project_id = ${projectLiteral};
-      COMMIT;
-    `,
-    `
-      BEGIN TRANSACTION;
-      DELETE FROM mart.review_article_candidate WHERE project_id = ${projectLiteral};
-      INSERT INTO mart.review_article_candidate (
-        project_id,
-        article_id,
-        article_seq,
-        article_created_at,
-        article_updated_at,
-        has_all_llm_judgments,
-        llm_judged_prompt_count,
-        enabled_prompt_count,
-        candidate_updated_at
-      )
-      SELECT
-        rollup.project_id,
-        rollup.article_id,
-        ordinal.article_seq,
-        rollup.article_created_at,
-        rollup.article_updated_at,
-        rollup.has_all_llm_judgments,
-        rollup.llm_judged_prompt_count,
-        rollup.enabled_prompt_count,
-        current_timestamp
-      FROM mart.review_article_rollup rollup
-      INNER JOIN app.project_article_ordinal ordinal
-        ON ordinal.project_id = rollup.project_id
-       AND ordinal.article_id = rollup.article_id
-      WHERE rollup.project_id = ${projectLiteral};
-      COMMIT;
-    `,
-    `
-      BEGIN TRANSACTION;
-      DELETE FROM mart.review_article_filter_posting WHERE project_id = ${projectLiteral};
-      INSERT INTO mart.review_article_filter_posting (
-        project_id,
-        prompt_id,
-        answer_id,
-        article_seq_list,
-        article_count,
-        posting_updated_at
-      )
-      SELECT
-        fact.project_id,
-        fact.prompt_id,
-        dict.answer_id,
-        LIST(ordinal.article_seq ORDER BY ordinal.article_seq ASC) AS article_seq_list,
-        COUNT(*) AS article_count,
-        current_timestamp
-      FROM mart.prompt_answer_fact fact
-      INNER JOIN app.review_answer_dictionary dict
-        ON dict.project_id = fact.project_id
-       AND dict.prompt_id = fact.prompt_id
-       AND dict.answer_value = fact.answer_value
-      INNER JOIN app.project_article_ordinal ordinal
-        ON ordinal.project_id = fact.project_id
-       AND ordinal.article_id = fact.article_id
-      WHERE fact.project_id = ${projectLiteral}
-      GROUP BY fact.project_id, fact.prompt_id, dict.answer_id;
       COMMIT;
     `,
     `

@@ -25,28 +25,54 @@
   - read path coupled to `article_seq` / `article_seq_list`
 - Result: huge projects make queue slow, refresh expensive, request pressure high.
 
-## Current read paths today
+## Status now
+
+- Implemented:
+  - `app.project_review_serving_generation`
+  - `mart.review_article_serving`
+  - `mart.review_article_filter_member`
+  - `mart.review_article_serving_detail`
+- Full project refresh now writes next-generation serving/filter/detail marts and flips active generation.
+- Article-delta refresh now updates serving/filter/detail marts for impacted `(project, article)` rows.
+- New marts are now the primary path when present for:
+  - llm list/count
+  - both list/count
+  - unassessed list/count/pairs
+  - database/numeric filter options
+  - bulk article selection
+  - review details
+- Old dense read fallbacks still exist in code, but old dense mart rebuild is no longer the primary runtime path.
+- Backfill command now exists: `bun run db:duck:backfill-review-serving-v3`
+- Warnings now treat `review_article_serving` as the ready signal.
+- Generation retention/failure tests now exist.
+
+## Current read paths now
 
 - LLM list/count:
-  - `candidate + filter_posting + judgment_detail` fast path
+  - `review_article_serving + review_article_filter_member + review_article_serving_detail` primary path
+  - then `candidate + filter_posting + judgment_detail`
   - then `review_article_rollup`
   - then raw `app.article + app.judgment`
 - Unassessed list/count/pairs:
+  - `review_article_serving` primary path
   - `review_article_rollup`
   - then raw `app.article + app.judgment`
 - Review details:
-  - `review_article_judgment_detail`
+  - `review_article_serving_detail`
   - then missing rows from raw `app.judgment`
 - Human tab:
   - raw `app.judgment_human`
 - Both tab:
-  - `review_article_rollup` for model projects
+  - `review_article_serving + review_article_serving_detail` for model projects
+  - then `review_article_rollup`
   - raw path only when project has no model
 - Database/numeric filter options:
-  - `prompt_answer_fact` for model projects
+  - `review_article_filter_member` for model projects
+  - then `prompt_answer_fact`
   - raw path only when project has no model
 - Bulk article selection by filter:
-  - `review_article_rollup` for model projects
+  - `review_article_serving + review_article_filter_member` for model projects
+  - then `review_article_rollup`
   - raw path only when project has no model
 
 ## Current fallback today
@@ -166,6 +192,8 @@
 
 ### Phase 1 - Add new marts beside old
 
+- Status: mostly done
+
 - Add new serving row mart.
 - Add new posting mart.
 - Add generation tables.
@@ -173,11 +201,15 @@
 
 ### Phase 2 - Incremental writer path
 
+- Status: partial
+
 - Change mart refresh queue/job model to article-delta updates first.
 - Write new marts incrementally.
 - Keep old marts as fallback.
 
 ### Phase 3 - Read-path cutover
+
+- Status: mostly done
 
 - Switch LLM review list to new serving rows + postings.
 - Switch counts.
@@ -186,10 +218,14 @@
 
 ### Phase 4 - Structural rebuild path
 
+- Status: partial
+
 - Rework full project rebuild to write new generations only.
 - Remove old dense ordinal/posting path.
 
 ### Phase 5 - Cleanup
+
+- Status: not started
 
 - Delete `project_article_ordinal` if no longer needed.
 - Delete old `review_article_candidate` / old posting shape if replaced.
@@ -266,31 +302,30 @@
 - [x] Choose exact posting format.
 - [x] Design new mart schemas.
 - [ ] Design generation metadata + cutover rules.
-- [ ] Define article-delta refresh contract.
+- [x] Define article-delta refresh contract.
 - [ ] Define structural-change rebuild contract.
 - [x] Implement new marts.
-- [ ] Backfill new marts from current state.
-- [ ] Switch LLM list read path.
-- [ ] Switch filter/count read path.
-- [ ] Switch review detail read path.
+- [x] Backfill new marts from current state.
+- [x] Switch LLM list read path.
+- [x] Switch filter/count read path.
+- [x] Switch review detail read path.
 - [ ] Add queue/debug visibility for new refresh model.
-- [ ] Write parity tests for llm/human/both/unassessed against old vs new marts.
+- [x] Write parity tests for llm/human/both/unassessed against old vs new marts.
 - [ ] Write degraded-path tests for no-mart / partial-mart states.
-- [ ] Write generation cutover tests.
+- [x] Write generation cutover tests.
 - [ ] Write incremental update tests for article/scope/prompt/model changes.
 - [ ] Write posting exactness tests.
-- [ ] Write bulk-selection/export parity tests.
+- [x] Write bulk-selection/export parity tests.
 - [ ] Write large-project perf smoke tests.
 - [ ] Benchmark on giant projects.
-- [ ] Remove old dense ordinal/posting path.
+- [x] Remove old dense ordinal/posting path from runtime rebuilds.
 
-## Weak or missing today
+## Still missing
 
-- LLM list/count has layered fallback today.
-- Unassessed has layered fallback today.
-- Review details has partial fallback today.
-- Human tab is raw-table based today.
-- Both tab lacks a strong degraded path for normal model projects.
-- Model-project database/numeric filter options are mart-dependent today.
-- Model-project bulk article selection/export is mart-dependent today.
-- New marts rollout needs explicit degraded-path behavior, not just happy-path parity.
+- Human tab is still raw-table based.
+- No dedicated automatic/on-startup backfill job yet.
+- Structural-change rebuild rules are not fully formalized.
+- Generation rollback/cutover/cleanup hardening is not finished.
+- Old dense read fallback code still exists.
+- Explicit degraded-path behavior is still weaker than it should be.
+- Perf smoke/benchmark coverage is still missing.

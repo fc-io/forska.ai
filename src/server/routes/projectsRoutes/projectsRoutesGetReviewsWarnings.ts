@@ -121,11 +121,14 @@ const getOldestQueuedAt = (...values: Array<string | null>) => {
   }, null)
 }
 
-const getHasReviewRollupRows = async (projectId: string): Promise<boolean> => {
+const getHasReviewServingRows = async (projectId: string): Promise<boolean> => {
   const rows = await getAppDatabaseService().queryJson<{projectId: string}>(`
-    SELECT project_id AS projectId
-    FROM mart.review_article_rollup
-    WHERE project_id = '${escapeSqlString(projectId)}'
+    SELECT generation.project_id AS projectId
+    FROM app.project_review_serving_generation generation
+    INNER JOIN mart.review_article_serving serving
+      ON serving.project_id = generation.project_id
+     AND serving.generation = generation.active_generation
+    WHERE generation.project_id = '${escapeSqlString(projectId)}'
     LIMIT 1
   `)
 
@@ -186,7 +189,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       hasRouteArticles,
       pendingProjectRefreshInfo,
       pendingArticleRefreshInfo,
-      hasReviewRollupRows,
+      hasReviewServingRows,
       claimedQueuedArticleRefreshCount,
       inFlightArticleRefreshCount,
     ] = await Promise.all([
@@ -195,7 +198,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       getHasRouteArticles(projectId),
       getPendingProjectRefreshInfo(projectId),
       getPendingArticleRefreshInfo(projectId),
-      getHasReviewRollupRows(projectId),
+      getHasReviewServingRows(projectId),
       getScopedArticleRefreshCount(projectId, progressSnapshot.claimedQueuedArticleIds),
       getScopedArticleRefreshCount(projectId, progressSnapshot.processingArticleIds),
     ])
@@ -221,7 +224,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const indexingStatus = getReviewsIndexingStatus({
       enabledPromptCount,
       hasAnyArticlesInScope,
-      hasReviewRollupRows,
+      hasReviewRollupRows: hasReviewServingRows,
       pendingRefreshCount,
     })
 

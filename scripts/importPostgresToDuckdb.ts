@@ -6,7 +6,7 @@ import {Client} from 'pg'
 
 import {migrateDuckdb} from '../src/db/migrateDuckdb.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
-import {getDuckdbMartService} from '../src/server/services/getDuckdbMartService.ts'
+import {getDuckdbMartRefreshService} from '../src/server/services/getDuckdbMartRefreshService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 import {env} from '../src/server/utils/env.ts'
 import {localUserDefaults} from '../src/utils/localUser.ts'
@@ -1222,6 +1222,32 @@ const getMartCounts = async () => {
   }, {})
 }
 
+const getActiveProjectIds = async () => {
+  const rows = await getAppDatabaseService().queryJson<{id: string}>(`
+    SELECT id
+    FROM app.project
+    WHERE archived = FALSE
+    ORDER BY id ASC
+  `)
+
+  return rows.map((row) => {
+    return row.id
+  })
+}
+
+const backfillReviewServingProjects = async (projectIds: string[], index = 0): Promise<void> => {
+  const currentProjectId = projectIds[index]
+
+  if (!currentProjectId) {
+    return
+  }
+
+  console.log(`[import:duckdb] rebuilding review serving ${index + 1}/${projectIds.length} ${currentProjectId}`)
+  await getDuckdbMartRefreshService().queueProjectRefresh(currentProjectId, 'importPostgresToDuckdb')
+  await getDuckdbMartRefreshService().flush()
+  return backfillReviewServingProjects(projectIds, index + 1)
+}
+
 const importSelectedTables = async (
   client: Client,
   configs: TableConfig[],
@@ -1313,7 +1339,7 @@ const importPostgresToDuckdb = async () => {
     )
     const userBootstrap = await bootstrapLocalUser(client)
     if (options.rebuildMarts) {
-      await getDuckdbMartService().rebuildAll()
+      await backfillReviewServingProjects(await getActiveProjectIds())
     }
     const martCounts = options.rebuildMarts ? await getMartCounts() : null
     const completedReport = {

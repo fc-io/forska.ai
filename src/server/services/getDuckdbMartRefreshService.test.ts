@@ -653,6 +653,302 @@ test('mart refresh populates review article serving v3 tables', () => {
   }
 })
 
+test('mart refresh keeps the previous serving generation during the next rebuild', () => {
+  const duckdbPath = `/tmp/f1-mart-refresh-serving-generations-${Date.now()}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts')
+
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+          VALUES ('connection-serving-generation-test', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+        \`)
+        await database.run(\`
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+          VALUES ('model-serving-generation-test', 'connection-serving-generation-test', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+          VALUES ('project-serving-generation-test', 'Serving Generation Project', 'model-serving-generation-test', TRUE, TRUE, FALSE, FALSE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.prompt (id, original_text, content_hash)
+          VALUES ('prompt-serving-generation-test', 'Prompt body', 'hash-serving-generation-test')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+          VALUES ('project-prompt-serving-generation-test', 'project-serving-generation-test', 'prompt-serving-generation-test', 1, TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.article (id, article_title, article_created_at, article_updated_at, article_id)
+          VALUES ('article-serving-generation-test', 'Serving Generation Article', '2024-01-02T00:00:00.000Z', '2024-01-03T00:00:00.000Z', 'external-serving-generation-test')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_article (id, project_id, article_id)
+          VALUES ('project-article-serving-generation-test', 'project-serving-generation-test', 'article-serving-generation-test')
+        \`)
+        await database.run(\`
+          INSERT INTO app.judgment (
+            id,
+            article_id,
+            prompt_id,
+            model_id,
+            use_title,
+            use_abstract,
+            use_fulltext,
+            use_fulltext_no_images,
+            is_answered,
+            answered_original,
+            answered_original_as_array,
+            confidence_original
+          )
+          VALUES (
+            'judgment-serving-generation-test',
+            'article-serving-generation-test',
+            'prompt-serving-generation-test',
+            'model-serving-generation-test',
+            TRUE,
+            TRUE,
+            FALSE,
+            FALSE,
+            TRUE,
+            'yes',
+            ['yes'],
+            90
+          )
+        \`)
+
+        const martRefreshService = getDuckdbMartRefreshService()
+
+        await martRefreshService.queueProjectRefresh('project-serving-generation-test', 'generation-test-1')
+        await martRefreshService.flush()
+        await martRefreshService.queueProjectRefresh('project-serving-generation-test', 'generation-test-2')
+        await martRefreshService.flush()
+
+        const [generationRow] = await database.queryJson(\`
+          SELECT active_generation AS activeGeneration
+          FROM app.project_review_serving_generation
+          WHERE project_id = 'project-serving-generation-test'
+        \`)
+        const generationRows = await database.queryJson(\`
+          SELECT generation, COUNT(*) AS count
+          FROM mart.review_article_serving
+          WHERE project_id = 'project-serving-generation-test'
+          GROUP BY generation
+          ORDER BY generation ASC
+        \`)
+
+        console.log(JSON.stringify({
+          activeGeneration: Number(generationRow?.activeGeneration ?? 0),
+          generationRows: generationRows.map((row) => {
+            return {count: Number(row.count ?? 0), generation: Number(row.generation ?? 0)}
+          }),
+        }))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(
+        runScript.stderr.toString() || runScript.stdout.toString() || 'Mart serving generation retention test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      activeGeneration: number
+      generationRows: Array<{count: number; generation: number}>
+    }
+
+    expect(result.activeGeneration).toBe(2)
+    expect(result.generationRows).toEqual([
+      {count: 1, generation: 1},
+      {count: 1, generation: 2},
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+  }
+}, 20_000)
+
+test('mart refresh does not advance serving generation when rebuild fails', () => {
+  const duckdbPath = `/tmp/f1-mart-refresh-serving-failure-${Date.now()}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        const actualAppDatabaseModule = await import(appDatabaseServiceModulePath + '?actual=' + Date.now())
+        let shouldFailServingRefresh = false
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            ...actualAppDatabaseModule,
+            getAppDatabaseService: () => {
+              const service = actualAppDatabaseModule.getAppDatabaseService()
+
+              return {
+                ...service,
+                runBackground: async (statement) => {
+                  if (shouldFailServingRefresh && statement.includes('INSERT INTO mart.review_article_serving (')) {
+                    throw new Error('simulated serving generation failure')
+                  }
+
+                  return service.runBackground(statement)
+                },
+              }
+            },
+          }
+        })
+
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+
+        await migrateDuckdb()
+
+        const database = actualAppDatabaseModule.getAppDatabaseService()
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+          VALUES ('connection-serving-failure-test', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+        \`)
+        await database.run(\`
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+          VALUES ('model-serving-failure-test', 'connection-serving-failure-test', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+          VALUES ('project-serving-failure-test', 'Serving Failure Project', 'model-serving-failure-test', TRUE, TRUE, FALSE, FALSE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.prompt (id, original_text, content_hash)
+          VALUES ('prompt-serving-failure-test', 'Prompt body', 'hash-serving-failure-test')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+          VALUES ('project-prompt-serving-failure-test', 'project-serving-failure-test', 'prompt-serving-failure-test', 1, TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.article (id, article_title, article_created_at, article_updated_at, article_id)
+          VALUES ('article-serving-failure-test', 'Serving Failure Article', '2024-01-02T00:00:00.000Z', '2024-01-03T00:00:00.000Z', 'external-serving-failure-test')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_article (id, project_id, article_id)
+          VALUES ('project-article-serving-failure-test', 'project-serving-failure-test', 'article-serving-failure-test')
+        \`)
+        await database.run(\`
+          INSERT INTO app.judgment (
+            id,
+            article_id,
+            prompt_id,
+            model_id,
+            use_title,
+            use_abstract,
+            use_fulltext,
+            use_fulltext_no_images,
+            is_answered,
+            answered_original,
+            answered_original_as_array,
+            confidence_original
+          )
+          VALUES (
+            'judgment-serving-failure-test',
+            'article-serving-failure-test',
+            'prompt-serving-failure-test',
+            'model-serving-failure-test',
+            TRUE,
+            TRUE,
+            FALSE,
+            FALSE,
+            TRUE,
+            'yes',
+            ['yes'],
+            90
+          )
+        \`)
+
+        const martRefreshService = (await import(martRefreshServiceModulePath + '?serving-failure=' + Date.now())).getDuckdbMartRefreshService()
+
+        await martRefreshService.queueProjectRefresh('project-serving-failure-test', 'serving-failure-1')
+        await martRefreshService.flush()
+        shouldFailServingRefresh = true
+        await martRefreshService.queueProjectRefresh('project-serving-failure-test', 'serving-failure-2')
+        const failureText = await martRefreshService.flush().then(
+          () => 'no failure',
+          (error) => error instanceof Error ? error.message : String(error),
+        )
+
+        const [generationRow] = await database.queryJson(\`
+          SELECT active_generation AS activeGeneration
+          FROM app.project_review_serving_generation
+          WHERE project_id = 'project-serving-failure-test'
+        \`)
+
+        console.log(JSON.stringify({
+          activeGeneration: Number(generationRow?.activeGeneration ?? 0),
+          failureText,
+        }))
+        await database.close()
+        process.exit(0)
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(
+        runScript.stderr.toString() || runScript.stdout.toString() || 'Mart serving generation failure test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      activeGeneration: number
+      failureText: string
+    }
+
+    expect(result.activeGeneration).toBe(1)
+    expect(result.failureText).toContain('simulated serving generation failure')
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+  }
+}, 20_000)
+
 test('mart refresh skips schema repair writes when refresh_generation already exists', () => {
   const duckdbPath = `/tmp/f1-mart-refresh-generation-ready-${Date.now()}.duckdb`
   const runScript = globalThis.Bun.spawnSync(
