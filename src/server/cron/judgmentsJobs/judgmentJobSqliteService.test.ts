@@ -1,4 +1,4 @@
-import {existsSync, rmSync} from 'node:fs'
+import {existsSync, rmSync, writeFileSync} from 'node:fs'
 import {dirname, join} from 'node:path'
 
 import {afterAll, beforeAll, expect, test} from 'bun:test'
@@ -17,6 +17,32 @@ process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 let closeDatabase: (() => Promise<void>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 let sqliteService: Awaited<typeof import('./judgmentJobSqliteService.ts')>['getJudgmentJobSqliteService'] | null = null
+
+const waitForPaths = async (paths: string[], timeoutMs: number): Promise<void> => {
+  const startedAt = Date.now()
+
+  const check = async (): Promise<void> => {
+    if (
+      paths.every((path) => {
+        return existsSync(path)
+      })
+    ) {
+      return
+    }
+
+    if (Date.now() - startedAt >= timeoutMs) {
+      throw new Error(`Timed out waiting for ${paths.join(', ')}`)
+    }
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20)
+    })
+
+    return check()
+  }
+
+  return check()
+}
 
 beforeAll(async () => {
   const [
@@ -174,6 +200,209 @@ test('limits SQLite ready inserts to the requested deficit while skipping duplic
   ).toBe(1)
   expect(await service.getReadyCount(jobId)).toBe(3)
 })
+
+test('claims each SQLite prompt pair at most once under competing writers', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-contention-${Date.now()}`
+  const modelId = `model-contention-${Date.now()}`
+  const projectId = `project-contention-${Date.now()}`
+  const jobId = `job-contention-${Date.now()}`
+  const workerCount = 4
+  const promptPairs = Array.from({length: 12}, (_value, index) => {
+    return {articleId: `article-contention-${index + 1}`, promptId: `prompt-contention-${index + 1}`}
+  })
+  const syncDir = join(dirname(tempDbPath), `judgment-job-sqlite-contention-${jobId}`)
+  const startPath = join(syncDir, 'start')
+  const readyPaths = Array.from({length: workerCount}, (_value, index) => {
+    return join(syncDir, `worker-${index}.ready`)
+  })
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Queue Contention Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(jobId, promptPairs, 'server-seed')
+
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+
+  const workerScript = `
+    import {existsSync, mkdirSync, writeFileSync} from 'node:fs'
+    import {dirname} from 'node:path'
+    import {randomUUID} from 'node:crypto'
+    import {Database} from 'bun:sqlite'
+
+    const sqlitePath = process.env.SQLITE_PATH
+    const readyPath = process.env.SQLITE_READY_PATH
+    const startPath = process.env.SQLITE_START_PATH
+    const workerId = process.env.SQLITE_WORKER_ID
+
+    if (!sqlitePath || !readyPath || !startPath || !workerId) {
+      throw new Error('Missing SQLite worker env')
+    }
+
+    const waitForStart = () => {
+      return existsSync(startPath)
+        ? Promise.resolve()
+        : new Promise((resolve) => {
+            setTimeout(() => resolve(waitForStart()), 10)
+          })
+    }
+
+    mkdirSync(dirname(readyPath), {recursive: true})
+    writeFileSync(readyPath, 'ready')
+    await waitForStart()
+
+    const database = new Database(sqlitePath)
+    database.exec(\`
+      PRAGMA journal_mode = WAL;
+      PRAGMA foreign_keys = ON;
+      PRAGMA synchronous = FULL;
+      PRAGMA busy_timeout = 5000;
+    \`)
+    const selectReady = database.query(\`
+      SELECT id, article_id AS articleId, prompt_id AS promptId
+      FROM queue_prompt
+      WHERE status = 'ready'
+      ORDER BY created_at ASC, id ASC
+      LIMIT 1
+    \`)
+    const markSent = database.query(\`
+      UPDATE queue_prompt
+      SET status = 'sent',
+          sent_at = ?,
+          updated_at = ?,
+          server_id = ?,
+          claim_id = ?
+      WHERE id = ?
+        AND status = 'ready'
+    \`)
+    const waitForRetry = () => {
+      return new Promise((resolve) => {
+        setTimeout(resolve, 5)
+      })
+    }
+    const claimOnePrompt = async () => {
+      try {
+        return database.transaction(() => {
+          const now = new Date().toISOString()
+          const row = selectReady.get() as {articleId: string; id: string; promptId: string} | null
+
+          if (!row) {
+            return []
+          }
+
+          const result = markSent.run(now, now, workerId, randomUUID(), row.id) as {changes?: number}
+
+          return result.changes === 1 ? [{articleId: row.articleId, promptId: row.promptId}] : []
+        })()
+      } catch (error) {
+        const isBusyError = error instanceof Error && 'code' in error && error.code === 'SQLITE_BUSY'
+
+        if (isBusyError) {
+          await waitForRetry()
+          return claimOnePrompt()
+        }
+
+        throw error
+      }
+    }
+    const claimUntilEmpty = async (claims) => {
+      const nextClaims = await claimOnePrompt()
+      return nextClaims.length === 0 ? claims : claimUntilEmpty([...claims, ...nextClaims])
+    }
+
+    const claims = await claimUntilEmpty([])
+    database.close()
+    process.stdout.write(JSON.stringify({claims}))
+  `
+
+  const workers = readyPaths.map((readyPath, index) => {
+    return globalThis.Bun.spawn(['bun', '-e', workerScript], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        SQLITE_PATH: sqlitePath,
+        SQLITE_READY_PATH: readyPath,
+        SQLITE_START_PATH: startPath,
+        SQLITE_WORKER_ID: `writer-${index + 1}`,
+      },
+      stderr: 'pipe',
+      stdout: 'pipe',
+    })
+  })
+
+  try {
+    await waitForPaths(readyPaths, 15_000)
+
+    writeFileSync(startPath, 'start')
+
+    const results = await Promise.all(
+      workers.map(async (worker) => {
+        const exitCode = await worker.exited
+        const stdout = await new Response(worker.stdout).text()
+        const stderr = await new Response(worker.stderr).text()
+
+        return {exitCode, stderr, stdout}
+      }),
+    )
+
+    results.forEach(({exitCode, stderr}) => {
+      if (exitCode !== 0 || stderr !== '') {
+        throw new Error(`SQLite contention worker failed: exit=${exitCode} stderr=${stderr}`)
+      }
+    })
+
+    const claims = results.flatMap(({stdout}) => {
+      return (JSON.parse(stdout) as {claims: Array<{articleId: string; promptId: string}>}).claims
+    })
+    const uniqueClaims = new Set(
+      claims.map((claim) => {
+        return `${jobId}:${claim.articleId}:${claim.promptId}`
+      }),
+    )
+    const expectedClaims = new Set(
+      promptPairs.map((pair) => {
+        return `${jobId}:${pair.articleId}:${pair.promptId}`
+      }),
+    )
+
+    expect(claims).toHaveLength(promptPairs.length)
+    expect(uniqueClaims.size).toBe(promptPairs.length)
+    expect(uniqueClaims).toEqual(expectedClaims)
+    expect(await service.getReadyCount(jobId)).toBe(0)
+    expect(await service.getInFlightCount(jobId)).toBe(promptPairs.length)
+  } finally {
+    workers.forEach((worker) => {
+      if (worker.exitCode === null) {
+        worker.kill('SIGTERM')
+      }
+    })
+    await Promise.all(
+      workers.map(async (worker) => {
+        return worker.exitCode === null ? worker.exited.catch(() => {}) : undefined
+      }),
+    )
+    rmSync(syncDir, {force: true, recursive: true})
+  }
+}, 20_000)
 
 test('stores full SQLite scan state without clearing existing cursor fields', async () => {
   if (!runDatabase || !sqliteService) {
