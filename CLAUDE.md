@@ -5,6 +5,7 @@ alwaysApply: true
 ## Important
 
 IMPORTANT: when writing plans or md files in general; be extremely concise. Sacrifice grammar for the sake of concision.
+IMPORTANT: For any plan/PRD/task breakdown, always include explicit Quality Gates. Make them concrete, minimal, pass/fail, and repo-native. Use only relevant gates for the work: `bun run lint`, targeted `bun test`/`bun test <file>`, `bun run build` for UI, `bun run db:mig` for schema work, and browser verification for UI flows when relevant.
 IMPORTANT: Please don't create postgres migration files for me. Prefer the existing DuckDB SQL migration flow (`bun db:mig`) when schema changes are needed.
 IMPORTANT: We use Eden/RPC so derive the types from the API when possible and don't make up new types.
 IMPORTANT: I don't like try, catch, finally, throw. Only use when absolutely necessary.
