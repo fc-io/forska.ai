@@ -123,10 +123,10 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
     const articleId = randomArticle.id
 
     const inserted = await getAppDatabaseService().queryJson<{id: string; promptId: string}>(`
-      INSERT INTO app.judgment_human (article_id, prompt_id, is_answered, answer, comment, project_id)
+      INSERT INTO app.judgment_human (id, article_id, prompt_id, project_id, is_answered, answer, comment)
       VALUES ${projectPromptRows
         .map((prompt) => {
-          return `(${getQuotedStringList([articleId, prompt.id, body.projectId]).join(', ')}, FALSE, NULL, NULL)`
+          return `(${getQuotedStringList([crypto.randomUUID(), articleId, prompt.id, body.projectId]).join(', ')}, FALSE, NULL, NULL)`
         })
         .join(', ')}
       RETURNING id, prompt_id AS promptId
