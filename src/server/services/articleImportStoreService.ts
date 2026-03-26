@@ -149,7 +149,7 @@ const getArticleUpdateAssignments = (includedKeys: PersistedArticleKey[]) => {
       const columnName = articleColumnMap[key]
       return `${columnName} = EXCLUDED.${columnName}`
     })
-    .concat('updated_at = current_timestamp')
+    .concat('updated_at = NOW()')
     .join(', ')
 }
 
