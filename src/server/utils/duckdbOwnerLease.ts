@@ -287,7 +287,7 @@ const removeLeasePath = (leasePath: string) => {
   }).pipe(Effect.asVoid)
 }
 
-const isDuckdbOwnerLeaseOwnedByCurrentProcess = (metadata: DuckdbOwnerLeaseMetadata) => {
+export const isDuckdbOwnerLeaseOwnedByCurrentProcess = (metadata: DuckdbOwnerLeaseMetadata) => {
   return isLeaseOwnedByCurrentMachine(metadata) && metadata.pid === process.pid
 }
 

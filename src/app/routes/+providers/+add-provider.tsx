@@ -31,11 +31,35 @@ type ConnectionFormState = {
   label: string
   manualWorkerUrls: string
   providerKind: string
+  providerSelectionKind: string
   workerUrlMode: 'manual' | 'runtime'
 }
 
 type CodexAuthProviderState = Partial<CodexStatus> & {job?: CodexDeviceLoginJob | null}
+type ProviderCatalogOption = ProviderCatalogEntry & {hideBaseURLField?: boolean; selectedKind: string}
 type ProviderConnectionsPayload = Awaited<ReturnType<typeof fetchProviderConnections>>
+
+const getProviderCatalogOptions = (catalog: ProviderCatalogEntry[]): ProviderCatalogOption[] => {
+  return catalog.flatMap((entry) => {
+    return entry.kind === 'llamacpp'
+      ? [
+          {
+            ...entry,
+            description: 'Local llama.cpp CLI using the built-in local default endpoint',
+            hideBaseURLField: true,
+            label: 'llama.cpp CLI',
+            selectedKind: 'llamacpp-cli',
+          },
+          {
+            ...entry,
+            description: 'Local llama-server OpenAI-compatible endpoint',
+            label: 'llama.cpp Server',
+            selectedKind: 'llamacpp-server',
+          },
+        ]
+      : [{...entry, selectedKind: entry.kind}]
+  })
+}
 
 const getProviderConnectionsCacheValue = (value: unknown): ProviderConnectionsPayload | null => {
   return typeof value === 'object' && value !== null && Array.isArray((value as ProviderConnectionsPayload).connections)
@@ -84,14 +108,15 @@ const syncCreatedProviderConnectionCache = (queryClient: QueryClient, createdCon
   void queryClient.invalidateQueries({queryKey: ['provider-connections']})
 }
 
-const getConnectionFormState = (catalogEntry: ProviderCatalogEntry | null): ConnectionFormState => {
+const getConnectionFormState = (catalogEntry: ProviderCatalogOption | null): ConnectionFormState => {
   return {
     apiKey: '',
-    baseURL: catalogEntry?.defaultBaseURL ?? '',
+    baseURL: catalogEntry?.hideBaseURLField ? '' : (catalogEntry?.defaultBaseURL ?? ''),
     enabled: true,
     label: catalogEntry?.label ?? '',
     manualWorkerUrls: '',
     providerKind: catalogEntry?.kind ?? 'openai',
+    providerSelectionKind: catalogEntry?.selectedKind ?? catalogEntry?.kind ?? 'openai',
     workerUrlMode: supportsRuntimeWorkerUrls(catalogEntry?.kind) ? 'runtime' : 'manual',
   }
 }
@@ -143,6 +168,10 @@ const AddProviderPage = () => {
     return providerConnectionsQuery.data?.catalog ?? []
   }
 
+  const catalogOptions = () => {
+    return getProviderCatalogOptions(catalog())
+  }
+
   const connections = () => {
     return providerConnectionsQuery.data?.connections ?? []
   }
@@ -151,10 +180,10 @@ const AddProviderPage = () => {
     return providerConnectionsQuery.data?.runtime ?? null
   }
 
-  const activeCatalogEntry = () => {
+  const activeCatalogOption = () => {
     return (
-      catalog().find((entry) => {
-        return entry.kind === connectionForm.providerKind
+      catalogOptions().find((entry) => {
+        return entry.selectedKind === connectionForm.providerSelectionKind
       }) ?? null
     )
   }
@@ -209,7 +238,7 @@ const AddProviderPage = () => {
     }).canCreateProvider
   }
 
-  const selectCatalogEntry = (entry: ProviderCatalogEntry) => {
+  const selectCatalogEntry = (entry: ProviderCatalogOption) => {
     setPageError('')
     setAuthError('')
     setProviderAuth(null)
@@ -260,15 +289,15 @@ const AddProviderPage = () => {
   }
 
   createEffect(() => {
-    const firstEntry = catalog()[0] ?? null
+    const firstEntry = catalogOptions()[0] ?? null
 
     if (!firstEntry) {
       return
     }
 
     if (
-      !catalog().some((entry) => {
-        return entry.kind === connectionForm.providerKind
+      !catalogOptions().some((entry) => {
+        return entry.selectedKind === connectionForm.providerSelectionKind
       })
     ) {
       setConnectionForm(getConnectionFormState(firstEntry))
@@ -276,7 +305,7 @@ const AddProviderPage = () => {
   })
 
   createEffect(() => {
-    if (!activeCatalogEntry()) {
+    if (!activeCatalogOption()) {
       return
     }
 
@@ -394,12 +423,12 @@ const AddProviderPage = () => {
                 </p>
               </div>
               <div class="grid gap-3 md:grid-cols-2">
-                <For each={catalog()}>
+                <For each={catalogOptions()}>
                   {(entry) => {
                     return (
                       <button
                         class={`rounded-xl border px-4 py-4 text-left transition ${
-                          connectionForm.providerKind === entry.kind
+                          connectionForm.providerSelectionKind === entry.selectedKind
                             ? 'border-blue-500 bg-blue-50 shadow-sm'
                             : 'border-gray-200 bg-gray-50 hover:border-gray-300 hover:bg-white'
                         }`}
@@ -435,7 +464,7 @@ const AddProviderPage = () => {
                 <div class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
                   <div class="mb-4">
                     <h2 class="text-lg font-semibold text-gray-900">
-                      Connect {activeCatalogEntry()?.label ?? 'Provider'}
+                      Connect {activeCatalogOption()?.label ?? 'Provider'}
                     </h2>
                     <p class="text-sm text-gray-500">
                       This creates the provider connection. You will add or sync models afterward.
@@ -476,11 +505,12 @@ const AddProviderPage = () => {
                       onWorkerUrlsChange={(value) => {
                         setConnectionForm('manualWorkerUrls', value)
                       }}
-                      providerLabel={activeCatalogEntry()?.label ?? connectionForm.providerKind}
+                      providerLabel={activeCatalogOption()?.label ?? connectionForm.providerSelectionKind}
                       runtimeWorkerUrls={activeRuntimeWorkerUrls()}
                       showApiKeyField={shouldShowApiKeyField()}
+                      showBaseURLField={!activeCatalogOption()?.hideBaseURLField}
                       supportsRuntimeWorkerUrls={supportsRuntimeWorkerUrls(connectionForm.providerKind)}
-                      supportsWorkerUrls={Boolean(activeCatalogEntry()?.supportsWorkerUrls)}
+                      supportsWorkerUrls={Boolean(activeCatalogOption()?.supportsWorkerUrls)}
                       values={connectionForm}
                     />
 

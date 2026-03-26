@@ -676,7 +676,10 @@ test('getUnassessedPairsFromDuckdb falls back to raw judgments when serving rows
   expect(result.promptEntries).toEqual([{articleId: 'article-1', promptId: 'prompt-1'}])
   expect(result.nextCursor?.lastArticleId).toBe('article-1')
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.article a')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('LIMIT 1001')
   expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.judgment j')
+  expect(duckdbRunnerMockRef.current.queries[5]).not.toContain('TO_JSON')
+  expect(duckdbRunnerMockRef.current.queries[5]).not.toContain('explanation')
 })
 
 test('getDatabaseBasedFiltersFromDuckdb returns values when project modelId is null', async () => {

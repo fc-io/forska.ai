@@ -23,6 +23,7 @@ export type OpenAICompatibleProviderFormProps = {
   runtimeWorkerUrls?: string[]
   secretStatus?: string
   showApiKeyField?: boolean
+  showBaseURLField?: boolean
   showEnabledToggle?: boolean
   supportsRuntimeWorkerUrls?: boolean
   supportsWorkerUrls?: boolean
@@ -41,7 +42,9 @@ export const OpenAICompatibleProviderForm = (props: OpenAICompatibleProviderForm
     <>
       <ProviderReadonlyField label="Provider" value={props.providerLabel} />
       <ProviderTextField label="Connection Label" onInput={props.onLabelChange} type="text" value={props.value.label} />
-      <ProviderTextField label="Base URL" onInput={props.onBaseURLChange} type="text" value={props.value.baseURL} />
+      <Show when={props.showBaseURLField ?? true}>
+        <ProviderTextField label="Base URL" onInput={props.onBaseURLChange} type="text" value={props.value.baseURL} />
+      </Show>
       <Show when={props.supportsRuntimeWorkerUrls && props.onWorkerUrlModeChange}>
         <div>
           <label class="mb-2 block text-sm font-medium text-gray-700">Worker URL Source</label>

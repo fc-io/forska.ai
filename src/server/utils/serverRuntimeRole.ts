@@ -4,6 +4,7 @@ import {
   acquireDuckdbOwnerLease,
   type DuckdbOwnerLease,
   getDuckdbOwnerLeaseWriterUrl,
+  isDuckdbOwnerLeaseOwnedByCurrentProcess,
   isDuckdbOwnerLeaseProcessAlive,
   isDuckdbOwnerLeaseStale,
   readDuckdbOwnerLease,
@@ -190,6 +191,27 @@ const promoteAutoServerToWriter = async (reason: string, takeoverLeaseId?: strin
   }
 }
 
+const resumeAutoWriterLeaseForCurrentProcess = async () => {
+  const currentLease = await Effect.runPromise(
+    acquireDuckdbOwnerLease({
+      apiServerPort: getRuntimeEnv().API_SERVER_PORT,
+      databasePath: getRuntimeEnv().DUCKDB_PATH,
+      serverRole: 'writer',
+    }),
+  )
+
+  serverRuntimeState.currentLease = currentLease
+  setCurrentServerRole('writer')
+  setLastKnownWriterUrl(getCurrentServerUrl())
+  clearUnresponsiveWriterWarnings()
+  autoServerRoleLogger.force(
+    'server-role:writer-resume',
+    '[server] auto writer resumed from existing same-process lease',
+    'log',
+    {apiServerPort: getRuntimeEnv().API_SERVER_PORT, pid: process.pid},
+  )
+}
+
 const refreshAutoWriterLease = async () => {
   if (serverRuntimeState.currentLease === null) {
     await promoteAutoServerToWriter('writer-missing-lease')
@@ -212,6 +234,12 @@ const refreshAutoWriterLease = async () => {
 
 const refreshAutoFollowerRole = async () => {
   const currentLease = await Effect.runPromise(readDuckdbOwnerLease(getRuntimeEnv().DUCKDB_PATH))
+
+  if (currentLease !== null && isDuckdbOwnerLeaseOwnedByCurrentProcess(currentLease)) {
+    await resumeAutoWriterLeaseForCurrentProcess()
+    return
+  }
+
   const shouldPromoteForDeadWriter = currentLease !== null && !isDuckdbOwnerLeaseProcessAlive(currentLease)
   const shouldPromoteForStaleWriter = currentLease !== null && (await shouldPromoteForStaleWriterLease(currentLease))
 

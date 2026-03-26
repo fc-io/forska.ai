@@ -3,6 +3,7 @@ import {createAnthropicAdapter} from './adapters/anthropicAdapter.ts'
 import {createCodexAdapter} from './adapters/codexAdapter.ts'
 import {createDoclingAdapter} from './adapters/doclingAdapter.ts'
 import {createGoogleAdapter} from './adapters/googleAdapter.ts'
+import {createLlamacppAdapter} from './adapters/llamacppAdapter.ts'
 import {createLlmstudioAdapter} from './adapters/llmstudioAdapter.ts'
 import {createOllamaAdapter} from './adapters/ollamaAdapter.ts'
 import {createOpenAIAdapter} from './adapters/openaiAdapter.ts'
@@ -36,36 +37,38 @@ const createProviderDefinition = (catalog: ProviderCatalogEntry): ProviderDefini
                 ? createOllamaAdapter(catalog)
                 : catalog.kind === 'llmstudio'
                   ? createLlmstudioAdapter(catalog)
-                  : catalog.kind === 'sglang'
-                    ? createSglangAdapter(catalog)
-                    : catalog.kind === 'vllm'
-                      ? createVllmAdapter(catalog)
-                      : {
-                          beginAuth: async () => {
-                            return getUnsupportedProviderAuthResult(catalog.label)
-                          },
-                          catalog,
-                          finishAuth: async () => {
-                            return getUnsupportedProviderAuthResult(catalog.label)
-                          },
-                          health: async () => {
-                            throw new Error(`No provider adapter registered for ${catalog.kind}`)
-                          },
-                          invoke: async () => {
-                            throw new Error(`No provider adapter registered for ${catalog.kind}`)
-                          },
-                          kind: catalog.kind,
-                          listModels: async () => {
-                            throw new Error(`No provider adapter registered for ${catalog.kind}`)
-                          },
-                          resolveRuntimeCredentials: async () => {
-                            throw new Error(`No provider adapter registered for ${catalog.kind}`)
-                          },
-                          testConnection: async () => {
-                            throw new Error(`No provider adapter registered for ${catalog.kind}`)
-                          },
-                          transportFamily: 'openai-chat',
-                        }
+                  : catalog.kind === 'llamacpp'
+                    ? createLlamacppAdapter(catalog)
+                    : catalog.kind === 'sglang'
+                      ? createSglangAdapter(catalog)
+                      : catalog.kind === 'vllm'
+                        ? createVllmAdapter(catalog)
+                        : {
+                            beginAuth: async () => {
+                              return getUnsupportedProviderAuthResult(catalog.label)
+                            },
+                            catalog,
+                            finishAuth: async () => {
+                              return getUnsupportedProviderAuthResult(catalog.label)
+                            },
+                            health: async () => {
+                              throw new Error(`No provider adapter registered for ${catalog.kind}`)
+                            },
+                            invoke: async () => {
+                              throw new Error(`No provider adapter registered for ${catalog.kind}`)
+                            },
+                            kind: catalog.kind,
+                            listModels: async () => {
+                              throw new Error(`No provider adapter registered for ${catalog.kind}`)
+                            },
+                            resolveRuntimeCredentials: async () => {
+                              throw new Error(`No provider adapter registered for ${catalog.kind}`)
+                            },
+                            testConnection: async () => {
+                              throw new Error(`No provider adapter registered for ${catalog.kind}`)
+                            },
+                            transportFamily: 'openai-chat',
+                          }
 }
 
 const providerDefinitions = getProviderCatalog().map((entry) => {

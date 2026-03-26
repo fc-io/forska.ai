@@ -7,6 +7,7 @@ export type ProviderKind =
   | 'openrouter'
   | 'ollama'
   | 'llmstudio'
+  | 'llamacpp'
   | 'sglang'
   | 'vllm'
   | 'unknown'
@@ -95,6 +96,15 @@ const providerCatalogEntries: ProviderCatalogEntry[] = [
     supportsWorkerUrls: true,
   },
   {
+    defaultBaseURL: 'http://127.0.0.1:8080',
+    description: 'Local llama.cpp llama-server OpenAI-compatible endpoint',
+    kind: 'llamacpp',
+    label: 'llama.cpp / llama-server',
+    requiresApiKey: false,
+    supportsDiscovery: true,
+    supportsWorkerUrls: false,
+  },
+  {
     defaultBaseURL: 'http://127.0.0.1:30000/v1',
     description: 'SGLang OpenAI-compatible endpoint',
     kind: 'sglang',
@@ -159,5 +169,5 @@ export const isGoogleProvider = (providerKind: string | null | undefined): boole
 export const isOpenAICompatibleProvider = (providerKind: string | null | undefined): boolean => {
   const normalized = normalizeProviderKind(providerKind)
 
-  return ['openai', 'openrouter', 'ollama', 'llmstudio', 'sglang', 'vllm'].includes(normalized)
+  return ['openai', 'openrouter', 'ollama', 'llmstudio', 'llamacpp', 'sglang', 'vllm'].includes(normalized)
 }

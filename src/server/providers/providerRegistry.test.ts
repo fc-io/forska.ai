@@ -14,6 +14,7 @@ test('provider registry returns explicit adapters for OpenAI-compatible provider
   expect(requireProviderRegistryEntry('openrouter').transportFamily).toBe('openai-chat')
   expect(requireProviderRegistryEntry('ollama').transportFamily).toBe('ollama-native-discovery')
   expect(requireProviderRegistryEntry('llmstudio').transportFamily).toBe('openai-chat')
+  expect(requireProviderRegistryEntry('llamacpp').transportFamily).toBe('openai-chat')
   expect(requireProviderRegistryEntry('sglang').transportFamily).toBe('openai-chat')
   expect(requireProviderRegistryEntry('vllm').transportFamily).toBe('openai-chat')
 })

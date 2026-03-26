@@ -31,6 +31,7 @@ export type ProviderConnectionFormProps = {
   runtimeWorkerUrls?: string[]
   secretStatus?: string
   showApiKeyField?: boolean
+  showBaseURLField?: boolean
   showEnabledToggle?: boolean
   supportsRuntimeWorkerUrls?: boolean
   supportsWorkerUrls?: boolean
@@ -113,6 +114,7 @@ export const ProviderConnectionForm = (props: ProviderConnectionFormProps) => {
           runtimeWorkerUrls={props.runtimeWorkerUrls}
           secretStatus={props.secretStatus}
           showApiKeyField={props.showApiKeyField}
+          showBaseURLField={props.showBaseURLField}
           showEnabledToggle={props.showEnabledToggle}
           supportsRuntimeWorkerUrls={props.supportsRuntimeWorkerUrls}
           supportsWorkerUrls={props.supportsWorkerUrls}
