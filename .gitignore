@@ -9,6 +9,7 @@ init-db/
 
 assets/article_pdfs/
 assets/article_pdfs
+assets/structured_file_imports/
 
 # Analytics infrastructure data (SeaweedFS, ClickHouse)
 data/
