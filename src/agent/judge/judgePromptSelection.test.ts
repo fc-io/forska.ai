@@ -12,6 +12,13 @@ import {SINGLE_PROMPT_SYSTEM_PROMPT} from './judgeSinglePromptSystemPrompt.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT} from './judgeSinglePromptSystemPromptPatient.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptSystemPromptStructuredImport.ts'
 
+type PromptSelectionCase = {
+  name: string
+  article: ArticleRecord
+  expectedSystemPrompt: string
+  expectedEvidenceSystemPrompt: string
+}
+
 const buildArticle = (overrides: Partial<ArticleRecord> = {}): ArticleRecord => {
   const now = new Date('2026-03-26T00:00:00.000Z')
   return {
@@ -53,43 +60,79 @@ const buildArticle = (overrides: Partial<ArticleRecord> = {}): ArticleRecord => 
   }
 }
 
+const expectPromptSelection = ({
+  article,
+  expectedSystemPrompt,
+  expectedEvidenceSystemPrompt,
+}: Omit<PromptSelectionCase, 'name'>) => {
+  expect(getSinglePromptSystemPromptForArticle(article)).toBe(expectedSystemPrompt)
+  expect(getSinglePromptEvidenceSystemPromptForArticle(article)).toBe(expectedEvidenceSystemPrompt)
+}
+
+const registerPromptSelectionCase = ({
+  name,
+  article,
+  expectedSystemPrompt,
+  expectedEvidenceSystemPrompt,
+}: PromptSelectionCase) => {
+  test(name, () => {
+    expectPromptSelection({article, expectedSystemPrompt, expectedEvidenceSystemPrompt})
+  })
+}
+
 describe('judge prompt selection', () => {
-  test('uses article prompts for scientific articles', () => {
-    const article = buildArticle()
+  ;[
+    {
+      name: 'uses article prompts for a scientific article',
+      article: buildArticle(),
+      expectedSystemPrompt: SINGLE_PROMPT_SYSTEM_PROMPT,
+      expectedEvidenceSystemPrompt: SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT,
+    },
+    {
+      name: 'uses patient prompts for a FHIR patient record',
+      article: buildArticle({articleId: 'fhir:patient-1'}),
+      expectedSystemPrompt: SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT,
+      expectedEvidenceSystemPrompt: SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_PATIENT,
+    },
+    {
+      name: 'uses structured import prompts for a structured XML record from metadata only',
+      article: buildArticle({importRoute: 'structured-file:registry-entry.xml'}),
+      expectedSystemPrompt: SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT,
+      expectedEvidenceSystemPrompt: SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_STRUCTURED_IMPORT,
+    },
+  ].map(registerPromptSelectionCase)
 
-    expect(getSinglePromptSystemPromptForArticle(article)).toBe(SINGLE_PROMPT_SYSTEM_PROMPT)
-    expect(getSinglePromptEvidenceSystemPromptForArticle(article)).toBe(SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT)
+  test('uses structured import prompts for a structured JSON import via fullTextSource metadata', () => {
+    const article = buildArticle({fullTextSource: 'structured_file_import', fullTextOriginalFormat: 'json'})
+
+    expectPromptSelection({
+      article,
+      expectedSystemPrompt: SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT,
+      expectedEvidenceSystemPrompt: SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_STRUCTURED_IMPORT,
+    })
   })
 
-  test('uses patient prompts for FHIR records', () => {
-    const article = buildArticle({articleId: 'fhir:patient-1'})
+  test('uses structured import prompts for imported-file JSON routes without judging the record', () => {
+    const article = buildArticle({
+      articleTitle: 'Structured JSON import',
+      importRoute: 'imported-file:upload.json',
+      sourceMetadata: JSON.stringify({assetPath: 'assets/structured_file_imports/upload.json'}),
+    })
 
-    expect(getSinglePromptSystemPromptForArticle(article)).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT)
-    expect(getSinglePromptEvidenceSystemPromptForArticle(article)).toBe(SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_PATIENT)
-  })
-
-  test('uses structured import prompts for structured file imports', () => {
-    const article = buildArticle({fullTextSource: 'structured_file_import'})
-
-    expect(getSinglePromptSystemPromptForArticle(article)).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT)
-    expect(getSinglePromptEvidenceSystemPromptForArticle(article)).toBe(
-      SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_STRUCTURED_IMPORT,
-    )
-  })
-
-  test('uses structured import prompts for imported-file routes', () => {
-    const article = buildArticle({importRoute: 'imported-file:upload.json'})
-
-    expect(getSinglePromptSystemPromptForArticle(article)).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT)
-    expect(getSinglePromptEvidenceSystemPromptForArticle(article)).toBe(
-      SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_STRUCTURED_IMPORT,
-    )
+    expectPromptSelection({
+      article,
+      expectedSystemPrompt: SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT,
+      expectedEvidenceSystemPrompt: SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_STRUCTURED_IMPORT,
+    })
   })
 
   test('prefers patient prompts over structured import fallback when route is FHIR', () => {
     const article = buildArticle({articleId: 'fhir:patient-1', fullTextSource: 'structured_file_import'})
 
-    expect(getSinglePromptSystemPromptForArticle(article)).toBe(SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT)
-    expect(getSinglePromptEvidenceSystemPromptForArticle(article)).toBe(SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_PATIENT)
+    expectPromptSelection({
+      article,
+      expectedSystemPrompt: SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT,
+      expectedEvidenceSystemPrompt: SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_PATIENT,
+    })
   })
 })
