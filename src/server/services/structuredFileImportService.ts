@@ -4,7 +4,12 @@ import path from 'node:path'
 
 import {XMLParser} from 'fast-xml-parser'
 
-import {type ArticleImportStoreRow, storeImportedArticles} from './articleImportStoreService.ts'
+import {
+  type ArticleImportStoreRow,
+  type ArticleImportStoreTx,
+  storeImportedArticles,
+  storeImportedArticlesWithTx,
+} from './articleImportStoreService.ts'
 
 type StructuredFileFormat = 'json' | 'xml'
 type StructuredBoundaryCandidate = {
@@ -28,6 +33,7 @@ type StructuredFileImportConfig = {
 type StructuredFileImportResult = {
   config: StructuredFileImportConfig
   stats: {itemCount: number; importedCount: number}
+  importRouteIds?: string[]
 }
 type StructuredFileItemContext = {
   index: number
@@ -271,7 +277,11 @@ const getItemIdentity = (value: unknown) => {
 }
 
 const getSafeIdentityPart = (value: string) => {
-  return encodeURIComponent(value).slice(0, 160)
+  const encodedValue = encodeURIComponent(value)
+
+  return encodedValue.length <= 160
+    ? encodedValue
+    : `${encodedValue.slice(0, 120)}-${createHash('sha256').update(encodedValue).digest('hex').slice(0, 24)}`
 }
 
 const getStructuredFileItemTitle = (context: StructuredFileItemContext) => {
@@ -347,20 +357,28 @@ const getBoundaryCandidate = (items: unknown[], segments: string[]): StructuredB
 
 const getBoundaryCandidates = (value: unknown, segments: string[] = []): StructuredBoundaryCandidate[] => {
   return Array.isArray(value)
-    ? [value.length > 1 ? getBoundaryCandidate(value, segments) : null]
-        .filter((entry): entry is StructuredBoundaryCandidate => {
-          return entry !== null
-        })
-        .concat(
-          value.flatMap((entry) => {
-            return getBoundaryCandidates(entry, segments)
-          }),
-        )
+    ? value.length > 1
+      ? [getBoundaryCandidate(value, segments)]
+      : []
     : isObjectRecord(value)
       ? Object.entries(value).flatMap(([key, entry]) => {
           return getBoundaryCandidates(entry, [...segments, key])
         })
       : []
+}
+
+const getUniqueBoundaryCandidates = (candidates: StructuredBoundaryCandidate[]) => {
+  return Array.from(
+    candidates
+      .reduce((candidateMap, candidate) => {
+        if (!candidateMap.has(candidate.pointer)) {
+          candidateMap.set(candidate.pointer, candidate)
+        }
+
+        return candidateMap
+      }, new Map<string, StructuredBoundaryCandidate>())
+      .values(),
+  )
 }
 
 const getParsedStructuredFile = (content: string, format: StructuredFileFormat): unknown => {
@@ -470,6 +488,7 @@ const getImportResultFromConfig = async (params: {
   config: StructuredFileImportConfig
   dataSourceTitle: string
   importRoute: string
+  tx?: ArticleImportStoreTx
 }): Promise<StructuredFileImportResult> => {
   const content = getStructuredFileContentFromAssetPath(params.config.assetPath)
   const parsedValue = getParsedStructuredFile(content, params.config.format)
@@ -486,6 +505,16 @@ const getImportResultFromConfig = async (params: {
     })
   })
 
+  if (params.tx) {
+    const importRefreshState = await storeImportedArticlesWithTx(params.tx, rows)
+
+    return {
+      config: params.config,
+      importRouteIds: importRefreshState.importRouteIds,
+      stats: {itemCount: rows.length, importedCount: rows.length},
+    }
+  }
+
   await storeImportedArticles(rows)
 
   return {config: params.config, stats: {itemCount: rows.length, importedCount: rows.length}}
@@ -496,7 +525,7 @@ export const analyzeStructuredFileUpload = async (
 ): Promise<StructuredFileAnalyzeResult> => {
   const storedUpload = await getStoredStructuredFileUpload(file)
   const parsedValue = getParsedStructuredFile(storedUpload.content, storedUpload.format)
-  const candidates = getBoundaryCandidates(parsedValue)
+  const candidates = getUniqueBoundaryCandidates(getBoundaryCandidates(parsedValue))
     .sort((left, right) => {
       return right.count - left.count || left.displayPath.localeCompare(right.displayPath)
     })
@@ -546,6 +575,7 @@ export const importStructuredFileFromConfig = async (params: {
   config: StructuredFileImportConfig
   dataSourceTitle: string
   importRoute: string
+  tx?: ArticleImportStoreTx
 }): Promise<StructuredFileImportResult> => {
   return await getImportResultFromConfig(params)
 }

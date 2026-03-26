@@ -3,7 +3,10 @@ import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
 import {getDuckdbMartRefreshService} from './getDuckdbMartRefreshService.ts'
 
-type AppTx = {queryJson: <T>(statement: string) => Promise<T[]>; run: (statement: string) => Promise<void>}
+export type ArticleImportStoreTx = {
+  queryJson: <T>(statement: string) => Promise<T[]>
+  run: (statement: string) => Promise<void>
+}
 
 type ArticleImportStoreRow = {
   articleId: string
@@ -150,7 +153,7 @@ const getArticleUpdateAssignments = (includedKeys: PersistedArticleKey[]) => {
     .join(', ')
 }
 
-const getImportRouteIds = async (tx: AppTx, routes: string[]) => {
+const getImportRouteIds = async (tx: ArticleImportStoreTx, routes: string[]) => {
   if (routes.length === 0) {
     return new Map<string, string>()
   }
@@ -168,7 +171,7 @@ const getImportRouteIds = async (tx: AppTx, routes: string[]) => {
   )
 }
 
-const ensureImportRoutes = async (tx: AppTx, routes: string[]) => {
+const ensureImportRoutes = async (tx: ArticleImportStoreTx, routes: string[]) => {
   if (routes.length === 0) {
     return new Map<string, string>()
   }
@@ -193,9 +196,9 @@ const ensureImportRoutes = async (tx: AppTx, routes: string[]) => {
   return getImportRouteIds(tx, routes)
 }
 
-export const storeImportedArticles = async (rows: ArticleImportStoreRow[]) => {
+const storeImportedArticlesInTx = async (tx: ArticleImportStoreTx, rows: ArticleImportStoreRow[]) => {
   if (rows.length === 0) {
-    return
+    return {importRouteIds: [] as string[]}
   }
 
   const normalizedRows = rows.map((row) => {
@@ -219,50 +222,60 @@ export const storeImportedArticles = async (rows: ArticleImportStoreRow[]) => {
       return articleColumnMap[key]
     }),
   ]
+  const upsertedArticles = await tx.queryJson<{id: string; articleId: string}>(`
+    INSERT INTO app.article (${columnNames.join(', ')})
+    VALUES ${getArticleInsertValues(normalizedRows, includedKeys)}
+    ON CONFLICT(article_id) DO UPDATE SET ${getArticleUpdateAssignments(includedKeys)}
+    RETURNING id, article_id AS articleId
+  `)
 
-  const importRefreshState = (await getAppDatabaseService().transaction(async (tx) => {
-    const upsertedArticles = await tx.queryJson<{id: string; articleId: string}>(`
-      INSERT INTO app.article (${columnNames.join(', ')})
-      VALUES ${getArticleInsertValues(normalizedRows, includedKeys)}
-      ON CONFLICT(article_id) DO UPDATE SET ${getArticleUpdateAssignments(includedKeys)}
-      RETURNING id, article_id AS articleId
+  const routeIdMap = await ensureImportRoutes(tx, routes)
+  const articleIdToRoute = new Map(
+    normalizedRows.map((row) => {
+      return [row.articleId, row.importRoute]
+    }),
+  )
+  const linkValues = upsertedArticles
+    .map((article) => {
+      const route = articleIdToRoute.get(article.articleId)
+      const importRouteId = route ? routeIdMap.get(route) : null
+      return importRouteId
+        ? `(${getQuotedStringList([crypto.randomUUID(), article.id, importRouteId]).join(', ')})`
+        : null
+    })
+    .filter((value): value is string => {
+      return value !== null
+    })
+
+  if (linkValues.length > 0) {
+    await tx.run(`
+      INSERT INTO app.article_import_route (id, article_id, import_route_id)
+      VALUES ${linkValues.join(', ')}
+      ON CONFLICT(article_id, import_route_id) DO NOTHING
     `)
+  }
 
-    const routeIdMap = await ensureImportRoutes(tx, routes)
-    const articleIdToRoute = new Map(
-      normalizedRows.map((row) => {
-        return [row.articleId, row.importRoute]
-      }),
-    )
-    const linkValues = upsertedArticles
-      .map((article) => {
-        const route = articleIdToRoute.get(article.articleId)
-        const importRouteId = route ? routeIdMap.get(route) : null
-        return importRouteId
-          ? `(${getQuotedStringList([crypto.randomUUID(), article.id, importRouteId]).join(', ')})`
-          : null
-      })
-      .filter((value): value is string => {
-        return value !== null
-      })
+  return {importRouteIds: Array.from(routeIdMap.values())}
+}
 
-    if (linkValues.length > 0) {
-      await tx.run(`
-        INSERT INTO app.article_import_route (id, article_id, import_route_id)
-        VALUES ${linkValues.join(', ')}
-        ON CONFLICT(article_id, import_route_id) DO NOTHING
-      `)
-    }
+export const queueImportedArticleRefreshes = async (importRouteIds: string[]) => {
+  if (importRouteIds.length === 0) {
+    return
+  }
 
-    return {importRouteIds: Array.from(routeIdMap.values())}
+  await getDuckdbMartRefreshService().queueProjectRefreshesByImportRouteIds(importRouteIds, 'articleImportStoreService')
+}
+
+export const storeImportedArticlesWithTx = async (tx: ArticleImportStoreTx, rows: ArticleImportStoreRow[]) => {
+  return await storeImportedArticlesInTx(tx, rows)
+}
+
+export const storeImportedArticles = async (rows: ArticleImportStoreRow[]) => {
+  const importRefreshState = (await getAppDatabaseService().transaction(async (tx) => {
+    return await storeImportedArticlesInTx(tx, rows)
   })) as {importRouteIds: string[]}
 
-  if (importRefreshState.importRouteIds.length > 0) {
-    await getDuckdbMartRefreshService().queueProjectRefreshesByImportRouteIds(
-      importRefreshState.importRouteIds,
-      'articleImportStoreService',
-    )
-  }
+  await queueImportedArticleRefreshes(importRefreshState.importRouteIds)
 }
 
 export type {ArticleImportStoreRow}
