@@ -1,4 +1,4 @@
-import {createMutation, useQuery} from '@tanstack/solid-query'
+import {createMutation, type QueryClient, useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {createEffect, createSignal, For, onCleanup, Show} from 'solid-js'
 import {createStore} from 'solid-js/store'
@@ -19,6 +19,7 @@ import {
   type ProviderAuthLifecyclePayload,
   type ProviderAuthLifecycleResult,
   type ProviderCatalogEntry,
+  type ProviderConnection,
   supportsRuntimeWorkerUrls,
 } from '../+admin/+models/providerConnectionsClient.ts'
 import {getCodexOnboardingUiState} from '../+admin/+models/providerUiState.ts'
@@ -34,6 +35,54 @@ type ConnectionFormState = {
 }
 
 type CodexAuthProviderState = Partial<CodexStatus> & {job?: CodexDeviceLoginJob | null}
+type ProviderConnectionsPayload = Awaited<ReturnType<typeof fetchProviderConnections>>
+
+const getProviderConnectionsCacheValue = (value: unknown): ProviderConnectionsPayload | null => {
+  return typeof value === 'object' && value !== null && Array.isArray((value as ProviderConnectionsPayload).connections)
+    ? (value as ProviderConnectionsPayload)
+    : null
+}
+
+const mergeCreatedProviderConnection = (
+  currentConnection: ProviderConnection,
+  createdConnection: ProviderConnection,
+): ProviderConnection => {
+  return {
+    ...currentConnection,
+    ...createdConnection,
+    models: createdConnection.models.length > 0 ? createdConnection.models : currentConnection.models,
+  }
+}
+
+const upsertCreatedProviderConnection = (
+  connections: ProviderConnection[],
+  createdConnection: ProviderConnection,
+): ProviderConnection[] => {
+  const existingConnection =
+    connections.find((connection) => {
+      return connection.id === createdConnection.id
+    }) ?? null
+
+  return existingConnection
+    ? connections.map((connection) => {
+        return connection.id === createdConnection.id
+          ? mergeCreatedProviderConnection(existingConnection, createdConnection)
+          : connection
+      })
+    : [...connections, createdConnection]
+}
+
+const syncCreatedProviderConnectionCache = (queryClient: QueryClient, createdConnection: ProviderConnection): void => {
+  queryClient.setQueryData(['provider-connections'], (previous: unknown) => {
+    const cachedValue = getProviderConnectionsCacheValue(previous)
+
+    return cachedValue === null
+      ? previous
+      : {...cachedValue, connections: upsertCreatedProviderConnection(cachedValue.connections, createdConnection)}
+  })
+
+  void queryClient.invalidateQueries({queryKey: ['provider-connections']})
+}
 
 const getConnectionFormState = (catalogEntry: ProviderCatalogEntry | null): ConnectionFormState => {
   return {
@@ -63,6 +112,7 @@ const getAuthMessageClass = (status: ProviderAuthLifecycleResult['status'] | nul
 
 const AddProviderPage = () => {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const providerConnectionsQuery = useQuery(() => {
     return {
       queryFn: fetchProviderConnections,
@@ -82,7 +132,8 @@ const AddProviderPage = () => {
   const createConnectionMutation = createMutation(() => {
     return {
       mutationFn: createProviderConnection,
-      onSuccess: () => {
+      onSuccess: (connection: ProviderConnection) => {
+        syncCreatedProviderConnectionCache(queryClient, connection)
         void navigate({to: '/providers/' as never})
       },
     }
