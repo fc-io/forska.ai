@@ -8,7 +8,6 @@ const judgmentsJobsAddToQueueModulePath = getModulePath('./src/server/cron/judgm
 const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
 const inferenceRuntimeConfigModulePath = getModulePath('./src/server/utils/getInferenceRuntimeConfig.ts')
 const judgmentJobSqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
-const legacyJobCursorStoreModulePath = getModulePath('./src/server/cron/judgmentsJobs/legacyJobCursorStore.ts')
 const judgmentsJobsCronGetPromptsModulePath = getModulePath(
   './src/server/cron/judgmentsJobs/judgmentsJobsCronGetPrompts.ts',
 )
@@ -20,7 +19,7 @@ type JudgmentsJobsAddToQueueModule = typeof import('./judgmentsJobsAddToQueue.ts
 
 type MockScanState = {
   cursor: null
-  exhaustedAt: Date
+  exhaustedAt: Date | null
   lastProjectRefreshAckSeq: number | null
   scanEpoch: number
   wrapVisibilityAckSeq: number | null
@@ -33,15 +32,9 @@ type MockSqliteService = {
   getReadyCount: () => Promise<number>
   getScanState: () => Promise<MockScanState>
   hasJob: () => boolean
+  initializeJob: () => Promise<void>
   setScanState: (jobId: string, state: Record<string, unknown>) => Promise<void>
   syncOwnedLeases: () => Promise<void>
-}
-
-type MockLegacyCursorStore = {
-  clearLegacyJobCursor: (jobId: string) => Promise<void>
-  getLegacyJobCursor: (jobId: string) => Promise<{lastArticleId: string; lastDate: Date} | null>
-  setLegacyJobCursor: (jobId: string, cursor: {lastArticleId: string; lastDate: Date}) => Promise<void>
-  syncLegacyJobCursors: (jobIds: string[]) => Promise<void>
 }
 
 const getRunningJob = () => {
@@ -65,29 +58,11 @@ const getExhaustedScanState = (
   }
 }
 
-const getDefaultLegacyCursorStore = (): MockLegacyCursorStore => {
-  return {
-    clearLegacyJobCursor: async (_jobId: string) => {
-      return undefined
-    },
-    getLegacyJobCursor: async (_jobId: string) => {
-      return null
-    },
-    setLegacyJobCursor: async (_jobId: string, _cursor: {lastArticleId: string; lastDate: Date}) => {
-      return undefined
-    },
-    syncLegacyJobCursors: async (_jobIds: string[]) => {
-      return undefined
-    },
-  }
-}
-
 const registerSharedMocks = (
   sqliteService: MockSqliteService,
   getPromptsCalls: {count: number},
   {
     getPromptsImpl,
-    legacyCursorStore = getDefaultLegacyCursorStore(),
   }: {
     getPromptsImpl?: (
       projectId: string,
@@ -98,7 +73,6 @@ const registerSharedMocks = (
       nextCursor: {lastArticleId: string; lastDate: Date} | null
       promptEntries: Array<{articleId: string; promptId: string}>
     }>
-    legacyCursorStore?: MockLegacyCursorStore
   } = {},
 ) => {
   void mock.module(appDatabaseServiceModulePath, () => {
@@ -106,11 +80,7 @@ const registerSharedMocks = (
       getAppDatabaseService: () => {
         return {
           queryJson: async <T>(statement: string): Promise<T[]> => {
-            return statement.includes('FROM app.judgment_job_prompt')
-              ? ([{count: 0}] as T[])
-              : statement.includes('FROM app.judgment_job jj')
-                ? [getJobConfigRow() as T]
-                : []
+            return statement.includes('FROM app.judgment_job jj') ? [getJobConfigRow() as T] : []
           },
           run: async (_statement: string): Promise<void> => {
             return undefined
@@ -129,9 +99,6 @@ const registerSharedMocks = (
         return sqliteService
       },
     }
-  })
-  void mock.module(legacyJobCursorStoreModulePath, () => {
-    return legacyCursorStore
   })
   void mock.module(judgmentsJobsCronGetPromptsModulePath, () => {
     return {
@@ -190,6 +157,9 @@ test('keeps exhausted SQLite jobs blocked when visibility watermark is behind', 
     hasJob: () => {
       return true
     },
+    initializeJob: async () => {
+      return undefined
+    },
     setScanState: async (jobId: string, state: Record<string, unknown>) => {
       setScanStateCalls.push({jobId, state})
     },
@@ -232,6 +202,9 @@ test('wraps exhausted SQLite jobs once visibility catches up and increments scan
     hasJob: () => {
       return true
     },
+    initializeJob: async () => {
+      return undefined
+    },
     setScanState: async (jobId: string, state: Record<string, unknown>) => {
       setScanStateCalls.push({jobId, state})
     },
@@ -261,13 +234,10 @@ test('wraps exhausted SQLite jobs once visibility catches up and increments scan
   expect(setScanStateCalls[1]?.state.exhaustedAt).toBeInstanceOf(Date)
 })
 
-test('uses local legacy cursor state for non-SQLite jobs', async () => {
+test('initializes missing SQLite job state before topping up the queue', async () => {
   const getPromptsCalls = {count: 0}
-  const startingCursor = {lastArticleId: 'article-0', lastDate: new Date('2025-01-01T00:00:00.000Z')}
-  const nextCursor = {lastArticleId: 'article-1', lastDate: new Date('2025-01-02T00:00:00.000Z')}
-  const receivedCursors: Array<{lastArticleId: string; lastDate: Date} | null | undefined> = []
-  const setCursorCalls: Array<{cursor: {lastArticleId: string; lastDate: Date}; jobId: string}> = []
-  const syncCalls: string[][] = []
+  const initializedJobIds: string[] = []
+  let hasJob = false
   const sqliteService: MockSqliteService = {
     addReadyPrompts: async () => {
       return 0
@@ -282,10 +252,14 @@ test('uses local legacy cursor state for non-SQLite jobs', async () => {
       return 0
     },
     getScanState: async () => {
-      return getExhaustedScanState(null, null)
+      return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
     },
     hasJob: () => {
-      return false
+      return hasJob
+    },
+    initializeJob: async () => {
+      hasJob = true
+      initializedJobIds.push('job-1')
     },
     setScanState: async (_jobId: string, _state: Record<string, unknown>) => {
       return undefined
@@ -295,35 +269,14 @@ test('uses local legacy cursor state for non-SQLite jobs', async () => {
     },
   }
 
-  registerSharedMocks(sqliteService, getPromptsCalls, {
-    getPromptsImpl: async (_projectId, _jobId, _numberOfPromptsToGet, cursor) => {
-      receivedCursors.push(cursor)
-      return {nextCursor, promptEntries: [{articleId: 'article-1', promptId: 'prompt-1'}]}
-    },
-    legacyCursorStore: {
-      clearLegacyJobCursor: async (_jobId: string) => {
-        return undefined
-      },
-      getLegacyJobCursor: async (_jobId: string) => {
-        return startingCursor
-      },
-      setLegacyJobCursor: async (jobId: string, cursor: {lastArticleId: string; lastDate: Date}) => {
-        setCursorCalls.push({cursor, jobId})
-      },
-      syncLegacyJobCursors: async (jobIds: string[]) => {
-        syncCalls.push(jobIds)
-      },
-    },
-  })
+  registerSharedMocks(sqliteService, getPromptsCalls)
 
   const module = (await import(
-    `${judgmentsJobsAddToQueueModulePath}?legacy-cursor=${Date.now()}`
+    `${judgmentsJobsAddToQueueModulePath}?initialize-sqlite=${Date.now()}`
   )) as JudgmentsJobsAddToQueueModule
 
   await module.judgmentsJobsAddToQueue('server-1')
 
+  expect(initializedJobIds).toEqual(['job-1'])
   expect(getPromptsCalls.count).toBe(1)
-  expect(syncCalls).toEqual([['job-1']])
-  expect(receivedCursors).toEqual([startingCursor])
-  expect(setCursorCalls).toEqual([{cursor: nextCursor, jobId: 'job-1'}])
 })

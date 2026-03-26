@@ -210,7 +210,6 @@ const importTableConfigs: TableConfig[] = [
     targetTable: 'judgment_job',
     transforms: {error: 'CASE WHEN __SOURCE__ IS NULL THEN NULL ELSE TO_JSON(__SOURCE__) END'},
   },
-  {batchSize: 5000, sourceTable: 'judgments_jobs_prompts', targetSchema: 'app', targetTable: 'judgment_job_prompt'},
   {
     batchSize: 5000,
     dedupeKey: ['project_id', 'article_id', 'prompt_id'],

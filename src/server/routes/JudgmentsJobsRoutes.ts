@@ -5,7 +5,6 @@ import {getDefaultJudgmentServerJobId} from '../cron/judgmentsJobs/judgmentJobSe
 import {flushJudgmentJobSqliteOutbox} from '../cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts'
 import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {getJudgmentRequestStats} from '../cron/judgmentsJobs/judgmentsRequestRuntime.ts'
-import {clearLegacyJobCursor} from '../cron/judgmentsJobs/legacyJobCursorStore.ts'
 import {assertStoredProviderModelRuntimeMatch} from '../providers/providerRuntimeModelGuard.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
@@ -320,14 +319,7 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({params}) => {
       const {job} = await getJobContext({jobId: params.id})
       const sqliteService = getJudgmentJobSqliteService()
-      const promptStatsPromise = sqliteService.hasJob(job.id)
-        ? sqliteService.getPromptStatusCounts(job.id)
-        : getAppDatabaseService().queryJson<{status: string; count: number}>(`
-            SELECT status, COUNT(*) AS count
-            FROM app.judgment_job_prompt
-            WHERE job_id = '${escapeSqlString(job.id)}'
-            GROUP BY status
-          `)
+      const promptStatsPromise = sqliteService.getPromptStatusCounts(job.id)
 
       const [promptStats, totalTokenUsage, tokenUsageRows] = await Promise.all([
         promptStatsPromise,
@@ -551,13 +543,16 @@ export const judgmentsJobsRoutes = new Elysia()
     '/api/judgmentsjobs/:id',
     async ({params, body}) => {
       const sqliteService = getJudgmentJobSqliteService()
-      const hasSqliteJob = sqliteService.hasJob(params.id)
 
       if (body.status === 'running') {
         assertJudgingRuntimeCanRun()
         const {projectModelId} = await getJobContext({jobId: params.id})
 
         await assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
+
+        if (!sqliteService.hasJob(params.id)) {
+          await sqliteService.initializeJob(params.id)
+        }
       }
 
       const updatedJob = (await getAppDatabaseService().transaction(async (tx) => {
@@ -569,27 +564,14 @@ export const judgmentsJobsRoutes = new Elysia()
           WHERE id = '${escapeSqlString(params.id)}'
         `)
 
-        const shouldClearQueue = body.status === 'paused'
-
-        if (shouldClearQueue && !hasSqliteJob) {
-          await tx.run(`
-            DELETE FROM app.judgment_job_prompt
-            WHERE job_id = '${escapeSqlString(params.id)}'
-          `)
-        }
-
         return getJudgmentJobMutationState(tx, params.id)
       })) as JudgmentJobMutationState | null
 
-      if (body.status === 'paused' && hasSqliteJob) {
+      if (body.status === 'paused') {
         await sqliteService.clearActiveQueue(params.id)
       }
 
-      if (body.status && body.status !== 'running' && !hasSqliteJob) {
-        await clearLegacyJobCursor(params.id)
-      }
-
-      if (hasSqliteJob && body.status && body.status !== 'running') {
+      if (body.status && body.status !== 'running') {
         await sqliteService.releaseOwnedLease(params.id)
       }
 
@@ -630,7 +612,6 @@ export const judgmentsJobsRoutes = new Elysia()
     '/api/judgmentsjobs/:id',
     async ({params}) => {
       const sqliteService = getJudgmentJobSqliteService()
-      const hasSqliteJob = sqliteService.hasJob(params.id)
       const [existingJob] = await getAppDatabaseService().queryJson<{id: string}>(`
         SELECT id
         FROM app.judgment_job
@@ -642,16 +623,8 @@ export const judgmentsJobsRoutes = new Elysia()
         throw new Error('Job not found')
       }
 
-      if (hasSqliteJob) {
-        await flushJudgmentJobSqliteOutbox({claimedBy: judgmentJobServerId, jobId: params.id})
-        await sqliteService.deleteJob(params.id)
-      } else {
-        await clearLegacyJobCursor(params.id)
-        await getAppDatabaseService().run(`
-          DELETE FROM app.judgment_job_prompt
-          WHERE job_id = '${escapeSqlString(params.id)}'
-        `)
-      }
+      await flushJudgmentJobSqliteOutbox({claimedBy: judgmentJobServerId, jobId: params.id})
+      await sqliteService.deleteJob(params.id)
 
       await getAppDatabaseService().run(`
         DELETE FROM app.token_use

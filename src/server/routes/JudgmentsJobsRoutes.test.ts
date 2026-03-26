@@ -114,29 +114,20 @@ const insertQueuedPromptFixture = async ({
   articleId,
   jobId,
   promptId,
-  queuedPromptId,
 }: {
   articleId: string
   jobId: string
   promptId: string
-  queuedPromptId: string
 }) => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
   }
 
-  await runDatabase(`
-    INSERT INTO app.prompt (id, original_text, content_hash)
-    VALUES ('${promptId}', 'Assess this article', '${promptId}-hash')
-  `)
-  await runDatabase(`
-    INSERT INTO app.article (id, article_title)
-    VALUES ('${articleId}', 'Test article')
-  `)
-  await runDatabase(`
-    INSERT INTO app.judgment_job_prompt (id, job_id, article_id, prompt_id, status)
-    VALUES ('${queuedPromptId}', '${jobId}', '${articleId}', '${promptId}', 'ready')
-  `)
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const sqliteService = getJudgmentJobSqliteService()
+
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
 }
 
 test('creating a judgments job fails when the runtime model check fails', async () => {
@@ -217,7 +208,6 @@ test('pausing an existing judgments job succeeds when queued prompts reference t
     articleId: `pause-article-${Date.now()}`,
     jobId,
     promptId: `pause-prompt-${Date.now()}`,
-    queuedPromptId: `pause-queue-${Date.now()}`,
   })
 
   const response = await app.handle(
@@ -321,7 +311,6 @@ test('deleting an existing judgments job succeeds when prompts and token usage r
     articleId: `delete-article-${Date.now()}`,
     jobId,
     promptId: `delete-prompt-${Date.now()}`,
-    queuedPromptId: `delete-queue-${Date.now()}`,
   })
   await runDatabase(`
     INSERT INTO app.token_use (id, judgment_job_id, requests, total_prompt_tokens, total_completion_tokens, total_tokens)

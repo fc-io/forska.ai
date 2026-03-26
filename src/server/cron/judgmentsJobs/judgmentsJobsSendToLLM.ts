@@ -1,5 +1,3 @@
-import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {getQuotedStringList} from '../../services/appQueryHelpers.ts'
 import {rateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {ConnectionError} from './connectionHealth.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
@@ -35,70 +33,24 @@ const isCodexJob = (job: {modelProvider: string | null}): boolean => {
 }
 
 const getReadyCountsByJob = async (jobIds: string[]): Promise<Map<string, number>> => {
-  const hasJobs = jobIds.length > 0
-  if (!hasJobs) return new Map()
-
   const sqliteService = getJudgmentJobSqliteService()
-  const sqliteJobIds = jobIds.filter((jobId) => {
-    return sqliteService.hasJob(jobId)
-  })
-  const duckdbJobIds = jobIds.filter((jobId) => {
-    return !sqliteService.hasJob(jobId)
-  })
-
-  const sqlitePairs = await Promise.all(
-    sqliteJobIds.map(async (jobId) => {
+  const pairs = await Promise.all(
+    jobIds.map(async (jobId) => {
       return [jobId, await sqliteService.getReadyCount(jobId)] as const
     }),
   )
 
-  const readyCounts =
-    duckdbJobIds.length === 0
-      ? []
-      : await getAppDatabaseService().queryJson<{jobId: string; ready: number}>(`
-          SELECT job_id AS jobId, COUNT(*) AS ready
-          FROM app.judgment_job_prompt
-          WHERE status = 'ready'
-            AND job_id IN (${getQuotedStringList(duckdbJobIds).join(', ')})
-          GROUP BY job_id
-        `)
-
-  const pairs = readyCounts.map((row) => {
-    return [row.jobId, Number(row.ready)] as const
-  })
-  return new Map([...pairs, ...sqlitePairs])
+  return new Map(pairs)
 }
 
 const requeueRejectedPrompts = async (prompts: PromptToProcess[]) => {
   const sqliteService = getJudgmentJobSqliteService()
-  const sqlitePrompts = prompts.filter((prompt) => {
-    return sqliteService.hasJob(prompt.jobId)
-  })
-  const duckdbPrompts = prompts.filter((prompt) => {
-    return !sqliteService.hasJob(prompt.jobId)
-  })
 
   await Promise.all(
-    sqlitePrompts.map((prompt) => {
+    prompts.map((prompt) => {
       return sqliteService.markPromptAsRetry(prompt.jobId, prompt.recordId)
     }),
   )
-
-  const rejectedRecordIds = duckdbPrompts.map((prompt) => {
-    return prompt.recordId
-  })
-
-  if (rejectedRecordIds.length === 0) {
-    return
-  }
-
-  await getAppDatabaseService().run(`
-    UPDATE app.judgment_job_prompt
-    SET status = 'ready',
-        sent_at = NULL,
-        updated_at = current_timestamp
-    WHERE id IN (${getQuotedStringList(rejectedRecordIds).join(', ')})
-  `)
 }
 
 const getRequestsToSendByJob = <T extends {id: string}>(
@@ -240,35 +192,15 @@ const getNumberOfPromptsInFlight = async (jobIds: string[]): Promise<number> => 
   if (jobIds.length === 0) return 0
 
   const sqliteService = getJudgmentJobSqliteService()
-  const sqliteJobIds = jobIds.filter((jobId) => {
-    return sqliteService.hasJob(jobId)
-  })
-  const duckdbJobIds = jobIds.filter((jobId) => {
-    return !sqliteService.hasJob(jobId)
-  })
   const sqliteCounts = await Promise.all(
-    sqliteJobIds.map((jobId) => {
+    jobIds.map((jobId) => {
       return sqliteService.getInFlightCount(jobId)
     }),
   )
-  const sqliteCount = sqliteCounts.reduce((sum, count) => {
+
+  return sqliteCounts.reduce((sum, count) => {
     return sum + count
   }, 0)
-  const duckdbCount =
-    duckdbJobIds.length === 0
-      ? 0
-      : Number(
-          (
-            await getAppDatabaseService().queryJson<{count: number}>(`
-              SELECT COUNT(*) AS count
-              FROM app.judgment_job_prompt
-              WHERE status = 'sent'
-                AND job_id IN (${getQuotedStringList(duckdbJobIds).join(', ')})
-            `)
-          )[0]?.count || 0,
-        )
-
-  return sqliteCount + duckdbCount
 }
 
 let isRunningJudgmentsJobsSendToLLM = false

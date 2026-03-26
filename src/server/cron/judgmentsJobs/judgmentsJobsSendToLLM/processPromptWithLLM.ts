@@ -3,7 +3,7 @@ import {JudgmentPersistenceError} from '../../../../agent/judge/storeSinglePromp
 import type {ArticleRecord, PublicationStatus} from '../../../../db/schemaTypes.ts'
 import {getProviderModelMetadataContextLength} from '../../../providers/providerModelMetadata.ts'
 import {getAppDatabaseService} from '../../../services/appDatabaseService.ts'
-import {escapeSqlString, getSqlLiteral} from '../../../services/appQueryHelpers.ts'
+import {escapeSqlString} from '../../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../../services/getAppQueryService.ts'
 import {ensureFullText} from '../../../utils/ensureFullText.ts'
 import {processFulltextForLLM} from '../../../utils/fulltextProcessing.ts'
@@ -136,20 +136,7 @@ const processSinglePrompt = async (
 }
 
 const markAsJudged = async (jobId: string, recordId: string): Promise<void> => {
-  const sqliteService = getJudgmentJobSqliteService()
-
-  if (sqliteService.hasJob(jobId)) {
-    await sqliteService.markPromptAsJudged(jobId, recordId)
-    return
-  }
-
-  await getAppDatabaseService().run(`
-    UPDATE app.judgment_job_prompt
-    SET status = 'judged',
-        judged_at = current_timestamp,
-        updated_at = current_timestamp
-    WHERE id = '${escapeSqlString(recordId)}'
-  `)
+  await getJudgmentJobSqliteService().markPromptAsJudged(jobId, recordId)
 }
 
 /**
@@ -157,19 +144,7 @@ const markAsJudged = async (jobId: string, recordId: string): Promise<void> => {
  * Used when connection errors occur - the prompt is not permanently failed.
  */
 const markAsRetry = async (jobId: string, recordId: string): Promise<void> => {
-  const sqliteService = getJudgmentJobSqliteService()
-
-  if (sqliteService.hasJob(jobId)) {
-    await sqliteService.markPromptAsRetry(jobId, recordId)
-    return
-  }
-
-  await getAppDatabaseService().run(`
-    UPDATE app.judgment_job_prompt
-    SET status = 'ready',
-        updated_at = current_timestamp
-    WHERE id = '${escapeSqlString(recordId)}'
-  `)
+  await getJudgmentJobSqliteService().markPromptAsRetry(jobId, recordId)
 }
 
 /**
@@ -181,20 +156,7 @@ const markAsSkipped = async (
   recordId: string,
   skipReason: 'no_fulltext' | 'conversion_failed' | 'fulltext_too_large',
 ): Promise<void> => {
-  const sqliteService = getJudgmentJobSqliteService()
-
-  if (sqliteService.hasJob(jobId)) {
-    await sqliteService.markPromptAsSkipped(jobId, recordId, skipReason)
-    return
-  }
-
-  await getAppDatabaseService().run(`
-    UPDATE app.judgment_job_prompt
-    SET status = 'skipped',
-        skip_reason = ${getSqlLiteral(skipReason)},
-        updated_at = current_timestamp
-    WHERE id = '${escapeSqlString(recordId)}'
-  `)
+  await getJudgmentJobSqliteService().markPromptAsSkipped(jobId, recordId, skipReason)
 }
 
 const preparePrompt = async (promptToProcess: PromptToProcess, modelContext: number): Promise<PreparedPrompt> => {

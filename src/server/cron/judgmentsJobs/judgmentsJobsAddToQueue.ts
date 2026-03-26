@@ -1,5 +1,5 @@
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {escapeSqlString, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {escapeSqlString, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {inferenceRuntimeConfig} from '../../utils/getInferenceRuntimeConfig.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
@@ -7,12 +7,6 @@ import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from './judgmentJobSqliteService.ts'
 import {judgmentsJobsCronGetPrompts} from './judgmentsJobsCronGetPrompts.ts'
 import {judgmentsJobsGetRunningJobs} from './judgmentsJobsGetRunningJobs.ts'
-import {
-  clearLegacyJobCursor,
-  getLegacyJobCursor,
-  setLegacyJobCursor,
-  syncLegacyJobCursors,
-} from './legacyJobCursorStore.ts'
 
 type Job = Awaited<ReturnType<typeof judgmentsJobsGetRunningJobs>>[number]
 
@@ -49,24 +43,6 @@ const isCodexJob = (job: Job): boolean => {
   return getJobProvider(job).trim().toLowerCase() === 'codex'
 }
 
-/** Counts the number of prompts in 'ready' status for a given job */
-const getCountOfReadyPrompts = async (jobId: string): Promise<number> => {
-  const sqliteService = getJudgmentJobSqliteService()
-
-  if (sqliteService.hasJob(jobId)) {
-    return sqliteService.getReadyCount(jobId)
-  }
-
-  const result = await getAppDatabaseService().queryJson<{count: number}>(`
-    SELECT COUNT(*) AS count
-    FROM app.judgment_job_prompt
-    WHERE status = 'ready'
-      AND job_id = '${escapeSqlString(jobId)}'
-  `)
-
-  return result[0]?.count ?? 0
-}
-
 const getPromptsToFetchCount = (
   readyCount: number,
   readyTargetPerJob: number,
@@ -77,9 +53,6 @@ const getPromptsToFetchCount = (
 }
 
 type PromptQueueEntry = {articleId: string; promptId: string}
-
-// Keep insert batches bounded to avoid oversized statements and parameter lists.
-const BATCH_INSERT_SIZE = 10000
 
 /** Filter out prompt entries that already have judgments in the app database */
 const filterAlreadyJudged = async (
@@ -100,7 +73,7 @@ const filterAlreadyJudged = async (
       WITH pairs(article_id, prompt_id) AS (
         VALUES ${batch
           .map((entry) => {
-            return `(${getQuotedStringList([entry.articleId, entry.promptId]).join(', ')})`
+            return `(${getSqlLiteral(entry.articleId)}, ${getSqlLiteral(entry.promptId)})`
           })
           .join(', ')}
       )
@@ -133,64 +106,6 @@ const filterAlreadyJudged = async (
   }
 
   return filtered
-}
-
-const addPromptsToQueue = async (
-  jobId: string,
-  promptEntries: PromptQueueEntry[],
-  serverJobId: string,
-): Promise<void> => {
-  if (promptEntries.length === 0) return
-
-  const sqliteService = getJudgmentJobSqliteService()
-
-  if (sqliteService.hasJob(jobId)) {
-    await sqliteService.addReadyPrompts(jobId, promptEntries, serverJobId)
-    return
-  }
-
-  // Chunk the entries to keep insert statements bounded
-  // Use onConflictDoNothing because queued entries may race with newly written judgments.
-  for (let i = 0; i < promptEntries.length; i += BATCH_INSERT_SIZE) {
-    const chunk = promptEntries.slice(i, i + BATCH_INSERT_SIZE)
-    await getAppDatabaseService().run(`
-      INSERT INTO app.judgment_job_prompt (id, job_id, article_id, prompt_id, status, server_id)
-      VALUES ${chunk
-        .map((entry) => {
-          return `(${getQuotedStringList([crypto.randomUUID(), jobId, entry.articleId, entry.promptId, 'ready', serverJobId]).join(', ')})`
-        })
-        .join(', ')}
-      ON CONFLICT(article_id, prompt_id, job_id) DO NOTHING
-    `)
-  }
-}
-
-const fetchPromptsForJob = async (job: Job, numberOfPromptsToGet: number) => {
-  const cursor = await getLegacyJobCursor(job.id)
-  const promptData = await judgmentsJobsCronGetPrompts(job.projectId, job.id, numberOfPromptsToGet, cursor)
-  return {...promptData, job}
-}
-
-const updateJobCursorAfterFetch = async (
-  jobId: string,
-  nextCursor: Awaited<ReturnType<typeof judgmentsJobsCronGetPrompts>>['nextCursor'],
-): Promise<void> => {
-  return nextCursor ? setLegacyJobCursor(jobId, nextCursor) : clearLegacyJobCursor(jobId)
-}
-
-const getNewPromptsForJob = async (job: Job, readyTargetPerJob: number, addToQueueMaxBatchSize: number) => {
-  const countOfReadyPrompts = await getCountOfReadyPrompts(job.id)
-  const promptsToFetchCount = getPromptsToFetchCount(countOfReadyPrompts, readyTargetPerJob, addToQueueMaxBatchSize)
-  const didFetch = promptsToFetchCount > 0
-  const result = didFetch ? await fetchPromptsForJob(job, promptsToFetchCount) : {promptEntries: [], nextCursor: null}
-  return {
-    promptEntries: result.promptEntries,
-    nextCursor: result.nextCursor,
-    didFetch,
-    job,
-    countOfReadyPrompts,
-    promptsToFetchCount,
-  }
 }
 
 const getSqliteWindowSize = (readyDeficit: number, addToQueueMaxBatchSize: number) => {
@@ -251,6 +166,10 @@ const hasWrapVisibility = ({
 const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void> => {
   const {job, readyTargetPerJob, addToQueueMaxBatchSize, serverJobId} = params
   const sqliteService = getJudgmentJobSqliteService()
+
+  if (!sqliteService.hasJob(job.id)) {
+    await sqliteService.initializeJob(job.id)
+  }
 
   try {
     await sqliteService.ensureOwnedLease(job.id, serverJobId)
@@ -381,91 +300,7 @@ const getJobConfig = async (jobId: string): Promise<JobConfig | null> => {
 type AddToQueueJobParams = {job: Job; readyTargetPerJob: number; addToQueueMaxBatchSize: number; serverJobId: string}
 
 const addToQueueForJob = async (params: AddToQueueJobParams): Promise<void> => {
-  const {job, readyTargetPerJob, addToQueueMaxBatchSize, serverJobId} = params
-  const sqliteService = getJudgmentJobSqliteService()
-
-  if (sqliteService.hasJob(job.id)) {
-    await topUpSqliteQueueForJob({job, readyTargetPerJob, addToQueueMaxBatchSize, serverJobId})
-    return
-  }
-
-  const getNewStartMs = Date.now()
-  const {countOfReadyPrompts, didFetch, nextCursor, promptEntries, promptsToFetchCount} = await getNewPromptsForJob(
-    job,
-    readyTargetPerJob,
-    addToQueueMaxBatchSize,
-  )
-  const getNewMs = Date.now() - getNewStartMs
-
-  if (promptsToFetchCount > 0 && promptEntries.length === 0) {
-    addToQueueLogger.warn(`addToQueue:job:${job.id}:empty`, '[addToQueue] got 0 pairs from olap', {
-      jobId: job.id,
-      projectId: job.projectId,
-      ready: countOfReadyPrompts,
-      readyTargetPerJob,
-      requested: promptsToFetchCount,
-      ms: getNewMs,
-    })
-  }
-
-  if (promptsToFetchCount > 0 || getNewMs > 5_000) {
-    addToQueueLogger.log(`addToQueue:job:${job.id}`, '[addToQueue] top-up check', {
-      jobId: job.id,
-      projectId: job.projectId,
-      ready: countOfReadyPrompts,
-      readyTargetPerJob,
-      requested: promptsToFetchCount,
-      fetched: promptEntries.length,
-      ms: getNewMs,
-    })
-  }
-
-  const jobConfig = await getJobConfig(job.id)
-  if (!jobConfig) {
-    console.error('[addToQueue] Job config not found for jobId:', job.id)
-    return
-  }
-
-  const filterStartMs = Date.now()
-  const filteredEntries = await filterAlreadyJudged(promptEntries, jobConfig)
-  const filterMs = Date.now() - filterStartMs
-
-  if (promptEntries.length > 0 && (filteredEntries.length === 0 || filterMs > 5_000)) {
-    addToQueueLogger.warn(`addToQueue:job:${job.id}:filtered`, '[addToQueue] filtered pairs', {
-      jobId: job.id,
-      projectId: job.projectId,
-      before: promptEntries.length,
-      after: filteredEntries.length,
-      ms: filterMs,
-    })
-  }
-
-  const insertStartMs = Date.now()
-  await addPromptsToQueue(job.id, filteredEntries, serverJobId)
-  const insertMs = Date.now() - insertStartMs
-
-  if (didFetch) {
-    const cursorUpdateStartMs = Date.now()
-    await updateJobCursorAfterFetch(job.id, nextCursor)
-    const cursorUpdateMs = Date.now() - cursorUpdateStartMs
-
-    if (cursorUpdateMs > 5_000) {
-      addToQueueLogger.warn(`addToQueue:job:${job.id}:cursor`, '[addToQueue] slow cursor update', {
-        jobId: job.id,
-        projectId: job.projectId,
-        ms: cursorUpdateMs,
-      })
-    }
-  }
-
-  if (filteredEntries.length > 0 && insertMs > 5_000) {
-    addToQueueLogger.warn(`addToQueue:job:${job.id}:insert`, '[addToQueue] slow insert', {
-      jobId: job.id,
-      projectId: job.projectId,
-      attempted: filteredEntries.length,
-      ms: insertMs,
-    })
-  }
+  return topUpSqliteQueueForJob(params)
 }
 
 export const judgmentsJobsAddToQueue = async (serverJobId: string): Promise<void> => {
@@ -476,15 +311,6 @@ export const judgmentsJobsAddToQueue = async (serverJobId: string): Promise<void
     runningJobs.map((job) => {
       return job.id
     }),
-  )
-  await syncLegacyJobCursors(
-    runningJobs
-      .filter((job) => {
-        return !sqliteService.hasJob(job.id)
-      })
-      .map((job) => {
-        return job.id
-      }),
   )
   const codexJobs = runningJobs.filter(isCodexJob)
   const nonCodexJobs = runningJobs.filter((job) => {

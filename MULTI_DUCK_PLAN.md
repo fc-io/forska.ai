@@ -29,7 +29,7 @@
 - [x] `src/server/utils/duckdbService.ts` no longer relies on child-process lock churn on the normal path.
 - [x] `src/server/index.ts` no longer mounts cron in every server.
 - [ ] `src/server/cron/fullTextJobs.ts` and `src/server/cron/fullTextConversionJobs.ts` can still double-pick work.
-- [ ] `src/server/cron/judgmentsJobs/jobCursorStore.ts` still updates cursors without ownership checks.
+- [x] Judgments cursor state no longer writes through DuckDB; SQLite `job_scan_state` owns active cursor updates.
 - [x] `scripts/dbStudio.ts` now opens a snapshot, not the live DB.
 
 ## Target Model

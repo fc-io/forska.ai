@@ -23,8 +23,8 @@
 
 - New jobs create per-job SQLite DBs + sidecar leases.
 - SQLite-backed jobs already support top-up, claim, retry, skip, outbox import, visibility-gated pruning, and status reads.
-- Legacy DuckDB queue still exists for old jobs during rollout.
-- Remaining cleanup is mostly rollout-end work: delete the final legacy DuckDB queue path after old jobs are gone.
+- The active judgment queue path is now SQLite-only; the legacy DuckDB queue runtime path has been removed.
+- Rollout cleanup is complete; DuckDB only keeps the durable analytics and mart-serving side.
 
 ## Locked decisions
 
@@ -174,7 +174,7 @@
 - [x] Keep skipped `judged` rows until job deletion; DuckDB never imports a matching fact for them, so they remain the dedupe barrier.
 - [x] After the visibility watermark passes an exported row, delete exported outbox rows and the matching judged `queue_prompt` rows in batches.
 - [x] After job completion and full outbox drain, delete or archive the whole job SQLite file.
-- [x] Keep legacy cleanup for DuckDB-backed jobs until all jobs are migrated.
+- [x] Retire the legacy DuckDB queue cleanup path once rollout is complete.
 
 ## API Changes
 
@@ -186,25 +186,26 @@
 ## Migration Path
 
 - [x] Switch all newly created jobs to the SQLite queue path immediately.
-- [x] Leave already-running legacy jobs on the current DuckDB queue path until they finish.
+- [x] Drain the last legacy DuckDB-backed jobs before removing the fallback path.
 - [x] Remove DuckDB writes for `app.judgment_job_prompt` on SQLite-backed jobs as part of the first cutover.
 - [x] Move the remaining cursor path out of DuckDB in this rollout; remove `jobCursorStore` and old cursor writes once active jobs are migrated.
+- [x] Remove the remaining DuckDB queue runtime path after rollout cleanup.
 
 ## Tests
 
-- No duplicate claim for the same `(job_id, article_id, prompt_id)` under two competing writers.
+- [x] No duplicate claim for the same `(job_id, article_id, prompt_id)` under two competing writers.
 - [x] Stale `sent` rows requeue correctly after lease loss / timeout.
 - [x] Successful judgment is durable in SQLite before DuckDB import.
-- Import replay after crash does not duplicate DuckDB judgments.
+- [x] Import replay after crash does not duplicate DuckDB judgments.
 - [x] Imported judgments trigger the expected mart refresh path.
-- Job DB is deleted only after the outbox is drained.
-- [x] Legacy DuckDB-backed jobs remain readable during rollout.
+- [x] Job DB is deleted only after the outbox is drained.
+- [x] Legacy DuckDB-backed jobs remained readable during rollout before rollout cleanup removed that fallback.
 
 ## Done When
 
 - [x] `ready -> sent -> judged` no longer writes through the live DuckDB queue path for newly created jobs.
 - [x] Residual cursor state for active jobs no longer depends on DuckDB.
-- Phase 1 keeps one writer/import owner explicitly; multi-writer-by-job stays deferred.
+- [x] Phase 1 keeps one writer/import owner explicitly; multi-writer-by-job stays deferred.
 - [x] Final judgments survive writer crashes before DuckDB ingestion.
 - [x] DuckDB receives judgments in bounded idempotent batches instead of one write per prompt.
 - [x] Job status APIs remain accurate during the SQLite-to-DuckDB lag window.
