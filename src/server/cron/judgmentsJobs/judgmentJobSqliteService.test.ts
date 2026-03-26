@@ -1002,6 +1002,114 @@ test('keeps completed SQLite jobs on disk while visibility-gated outbox data rem
   expect(existsSync(getJudgmentJobSqlitePath(jobId))).toBe(true)
 })
 
+test('keeps completed SQLite jobs on disk until export, visibility ack, and retention cleanup all drain', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-drain-lifecycle-${Date.now()}`
+  const modelId = `model-drain-lifecycle-${Date.now()}`
+  const projectId = `project-drain-lifecycle-${Date.now()}`
+  const jobId = `job-drain-lifecycle-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Drain Lifecycle Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'completed')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(
+    jobId,
+    [{articleId: 'article-drain-lifecycle', promptId: 'prompt-drain-lifecycle'}],
+    'server-a',
+  )
+
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+  const leasePath = getJudgmentJobLeasePath(jobId)
+  const [claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt for drain lifecycle test')
+  }
+
+  await service.recordJudgmentSuccess(jobId, {
+    answeredOriginal: 'yes',
+    answeredOriginalAsArray: ['yes'],
+    articleId: claimedPrompt.articleId,
+    chunkingStrategy: null,
+    confidenceOriginal: 50,
+    createdAt: new Date(),
+    explanation: 'because',
+    isAnswered: true,
+    judgmentId: `judgment-drain-lifecycle-${Date.now()}`,
+    modelId,
+    projectId,
+    promptId: claimedPrompt.promptId,
+    queuePromptId: claimedPrompt.recordId,
+    quotes: ['quote'],
+    rawResponseJson: {answer: 'yes'},
+    snapshotProjectId: projectId,
+    snapshotProjectModelName: 'Qwen 35B',
+    updatedAt: new Date(),
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
+
+  expect(await service.getOutboxCount(jobId)).toBe(1)
+  expect(await service.hasLocalJudgment(jobId, claimedPrompt.articleId, claimedPrompt.promptId)).toBe(true)
+  expect(await service.deleteDrainedJobs({jobId})).toEqual([])
+  expect(existsSync(sqlitePath)).toBe(true)
+  expect(existsSync(leasePath)).toBe(true)
+
+  const claimedOutboxBatch = await service.claimPendingOutboxBatch({
+    claimedBy: 'server-a',
+    jobId,
+    maxBytes: 1024 * 1024,
+    maxRows: 10,
+  })
+  const outboxSeq = claimedOutboxBatch?.rows[0]?.outboxSeq ?? null
+
+  await service.completeOutboxClaim({claimId: claimedOutboxBatch?.claim.claimId ?? '', jobId})
+
+  expect(await service.getOutboxCount(jobId)).toBe(1)
+  expect(await service.deleteDrainedJobs({jobId})).toEqual([])
+  expect(existsSync(sqlitePath)).toBe(true)
+  expect(existsSync(leasePath)).toBe(true)
+
+  await service.setLastProjectRefreshAckSeq(jobId, outboxSeq)
+
+  expect(await service.getOutboxCount(jobId)).toBe(1)
+  expect(await service.hasLocalJudgment(jobId, claimedPrompt.articleId, claimedPrompt.promptId)).toBe(true)
+  expect(await service.deleteDrainedJobs({jobId})).toEqual([])
+  expect(existsSync(sqlitePath)).toBe(true)
+  expect(existsSync(leasePath)).toBe(true)
+
+  expect(await service.pruneVisibilityAckedRetention({jobId, maxRows: 10})).toEqual({
+    outboxRowsDeleted: 1,
+    queuePromptRowsDeleted: 1,
+  })
+  expect(await service.getOutboxCount(jobId)).toBe(0)
+  expect(await service.hasLocalJudgment(jobId, claimedPrompt.articleId, claimedPrompt.promptId)).toBe(false)
+  expect(await service.deleteDrainedJobs({jobId})).toEqual([jobId])
+  expect(existsSync(sqlitePath)).toBe(false)
+  expect(existsSync(leasePath)).toBe(false)
+})
+
 test('syncOwnedLeases releases only inactive SQLite job leases', async () => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')

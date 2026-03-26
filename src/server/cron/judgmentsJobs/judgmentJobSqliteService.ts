@@ -562,25 +562,14 @@ const getActiveQueueRowCount = (database: Database) => {
   return Number(row?.count ?? 0)
 }
 
-const getPendingVisibilityOutboxCount = (database: Database, jobId: string) => {
-  const lastProjectRefreshAckSeq = getStoredScanState(database, jobId).lastProjectRefreshAckSeq
-  const row = database
-    .query(
-      `
-        SELECT COUNT(*) AS count
-        FROM judgment_outbox
-        WHERE exported_at IS NULL
-           OR ? IS NULL
-           OR outbox_seq > ?
-      `,
-    )
-    .get(lastProjectRefreshAckSeq, lastProjectRefreshAckSeq) as {count: number} | null
+const getRetainedOutboxCount = (database: Database) => {
+  const row = database.query(`SELECT COUNT(*) AS count FROM judgment_outbox`).get() as {count: number} | null
 
   return Number(row?.count ?? 0)
 }
 
-const isDrainedSqliteJob = (database: Database, jobId: string) => {
-  return getActiveQueueRowCount(database) === 0 && getPendingVisibilityOutboxCount(database, jobId) === 0
+const isDrainedSqliteJob = (database: Database, _jobId: string) => {
+  return getActiveQueueRowCount(database) === 0 && getRetainedOutboxCount(database) === 0
 }
 
 const deleteDrainedSqliteJobs = async ({
