@@ -171,6 +171,8 @@ type SqliteTableInfoRow = {name: string}
 
 type JudgmentJobSqliteClaimedOutboxBatch = {claim: JudgmentJobSqliteOutboxClaim; rows: JudgmentJobSqliteOutboxEntry[]}
 
+type ClaimedOutboxRow = {claimId: string; rowCount: number}
+
 const openDatabases = new Map<string, Database>()
 const ownedJobLeases = new Map<string, JudgmentJobLease>()
 const ownedJobLeaseOperationCounts = new Map<string, number>()
@@ -721,6 +723,61 @@ const getClaimableOutboxRows = (database: Database, limit: number) => {
     .all(limit) as OutboxRow[]
 }
 
+const getClaimedOutboxRows = (database: Database, claimId: string) => {
+  return database
+    .query(
+      `
+        SELECT
+          outbox_seq AS outboxSeq,
+          job_id AS jobId,
+          queue_prompt_id AS queuePromptId,
+          judgment_id AS judgmentId,
+          article_id AS articleId,
+          prompt_id AS promptId,
+          model_id AS modelId,
+          project_id AS projectId,
+          snapshot_project_id AS snapshotProjectId,
+          snapshot_project_model_name AS snapshotProjectModelName,
+          use_title AS useTitle,
+          use_abstract AS useAbstract,
+          use_fulltext AS useFulltext,
+          use_fulltext_no_images AS useFulltextNoImages,
+          chunking_strategy AS chunkingStrategy,
+          answered_original AS answeredOriginal,
+          answered_original_as_array AS answeredOriginalAsArray,
+          confidence_original AS confidenceOriginal,
+          explanation,
+          quotes_json AS quotesJson,
+          raw_response_json AS rawResponseJson,
+          created_at AS createdAt,
+          updated_at AS updatedAt
+        FROM judgment_outbox
+        WHERE exported_at IS NULL
+          AND export_claim_id = ?
+        ORDER BY outbox_seq ASC
+      `,
+    )
+    .all(claimId) as OutboxRow[]
+}
+
+const getOldestClaimedOutboxRow = (database: Database) => {
+  return database
+    .query(
+      `
+        SELECT
+          export_claim_id AS claimId,
+          COUNT(*) AS rowCount
+        FROM judgment_outbox
+        WHERE exported_at IS NULL
+          AND export_claim_id IS NOT NULL
+        GROUP BY export_claim_id
+        ORDER BY MIN(COALESCE(export_claimed_at, created_at)) ASC, MIN(outbox_seq) ASC
+        LIMIT 1
+      `,
+    )
+    .get() as ClaimedOutboxRow | null
+}
+
 const getOutboxPlaceholders = (outboxSeqs: number[]) => {
   return outboxSeqs.map(() => {
     return '?'
@@ -790,6 +847,30 @@ const claimPendingOutboxBatchForJob = async ({
       })()
     },
     claimedBy,
+  )
+}
+
+const getClaimedOutboxBatchForJob = async ({
+  jobId,
+  serverJobId,
+}: {
+  jobId: string
+  serverJobId?: string
+}): Promise<JudgmentJobSqliteClaimedOutboxBatch | null> => {
+  return withOwnedJobDatabase(
+    jobId,
+    false,
+    (database) => {
+      const claimedRow = getOldestClaimedOutboxRow(database)
+
+      return claimedRow
+        ? {
+            claim: {claimId: claimedRow.claimId, jobId, rowCount: Number(claimedRow.rowCount)},
+            rows: getClaimedOutboxRows(database, claimedRow.claimId).map(getOutboxEntry),
+          }
+        : null
+    },
+    serverJobId,
   )
 }
 
@@ -1058,6 +1139,9 @@ const sqliteService = {
     maxRows: number
   }) => {
     return claimPendingOutboxBatchForJobIds({claimedBy, jobIds: getExistingOutboxJobIds(jobId), maxBytes, maxRows})
+  },
+  getClaimedOutboxBatch: async ({jobId, serverJobId}: {jobId: string; serverJobId?: string}) => {
+    return getClaimedOutboxBatchForJob({jobId, serverJobId})
   },
   getPromptStatusCounts: async (jobId: string): Promise<QueueCountRow[]> => {
     return (

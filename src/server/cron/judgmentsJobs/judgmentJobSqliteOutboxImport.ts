@@ -1,5 +1,5 @@
 import {getAppDatabaseService, type JudgmentInsertRow} from '../../services/appDatabaseService.ts'
-import {getQuotedStringList} from '../../services/appQueryHelpers.ts'
+import {getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getDuckdbMartRefreshService} from '../../services/getDuckdbMartRefreshService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
@@ -21,6 +21,16 @@ type JudgmentOutboxForeignKeys = {
   modelIds: Set<string>
   projectIds: Set<string>
   promptIds: Set<string>
+}
+
+type JudgmentNaturalKeyRow = {
+  articleId: string
+  modelId: string
+  promptId: string
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
 }
 
 const getJudgmentInsertRows = (entries: JudgmentJobSqliteOutboxEntry[]): JudgmentInsertRow[] => {
@@ -52,6 +62,82 @@ const getJudgmentInsertRows = (entries: JudgmentJobSqliteOutboxEntry[]): Judgmen
 
 const getUniqueValues = (values: string[]) => {
   return Array.from(new Set(values))
+}
+
+const getJudgmentNaturalKey = ({
+  articleId,
+  modelId,
+  promptId,
+  useAbstract,
+  useFulltext,
+  useFulltextNoImages,
+  useTitle,
+}: JudgmentNaturalKeyRow) => {
+  return [
+    articleId,
+    promptId,
+    modelId,
+    String(useTitle),
+    String(useAbstract),
+    String(useFulltext),
+    String(useFulltextNoImages),
+  ].join('|')
+}
+
+const getJudgmentNaturalKeyPredicate = (entry: JudgmentJobSqliteOutboxEntry) => {
+  return `(
+    article_id = ${getSqlLiteral(entry.articleId)}
+    AND prompt_id = ${getSqlLiteral(entry.promptId)}
+    AND model_id = ${getSqlLiteral(entry.modelId)}
+    AND use_title = ${getSqlLiteral(entry.useTitle)}
+    AND use_abstract = ${getSqlLiteral(entry.useAbstract)}
+    AND use_fulltext = ${getSqlLiteral(entry.useFulltext)}
+    AND use_fulltext_no_images = ${getSqlLiteral(entry.useFulltextNoImages)}
+    AND delete_generation = 0
+    AND deleted_at IS NULL
+  )`
+}
+
+const getExistingJudgmentNaturalKeys = async (entries: JudgmentJobSqliteOutboxEntry[]) => {
+  if (entries.length === 0) {
+    return new Set<string>()
+  }
+
+  const rows = await getAppDatabaseService().queryJson<JudgmentNaturalKeyRow>(`
+    SELECT
+      article_id AS articleId,
+      model_id AS modelId,
+      prompt_id AS promptId,
+      use_abstract AS useAbstract,
+      use_fulltext AS useFulltext,
+      use_fulltext_no_images AS useFulltextNoImages,
+      use_title AS useTitle
+    FROM app.judgment
+    WHERE ${entries
+      .map((entry) => {
+        return getJudgmentNaturalKeyPredicate(entry)
+      })
+      .join(' OR ')}
+  `)
+
+  return new Set(
+    rows.map((row) => {
+      return getJudgmentNaturalKey(row)
+    }),
+  )
+}
+
+const partitionExistingJudgments = async (entries: JudgmentJobSqliteOutboxEntry[]) => {
+  const existingNaturalKeys = await getExistingJudgmentNaturalKeys(entries)
+
+  return entries.reduce(
+    (state, entry) => {
+      return existingNaturalKeys.has(getJudgmentNaturalKey(entry))
+        ? {...state, existingEntries: [...state.existingEntries, entry]}
+        : {...state, missingEntries: [...state.missingEntries, entry]}
+    },
+    {existingEntries: [] as JudgmentJobSqliteOutboxEntry[], missingEntries: [] as JudgmentJobSqliteOutboxEntry[]},
+  )
 }
 
 const getExistingIds = async (
@@ -202,19 +288,63 @@ const claimPendingOutboxBatchForJobIds = async ({
   }
 }
 
+const getClaimedOutboxBatchForJobIds = async ({
+  claimedBy,
+  jobIds,
+}: {
+  claimedBy: string
+  jobIds: string[]
+}): Promise<ClaimedOutboxBatch> => {
+  const sqliteService = getJudgmentJobSqliteService()
+  const [currentJobId = ''] = jobIds
+
+  if (!currentJobId) {
+    return null
+  }
+
+  try {
+    const claimedBatch = await sqliteService.getClaimedOutboxBatch({jobId: currentJobId, serverJobId: claimedBy})
+
+    return claimedBatch ?? getClaimedOutboxBatchForJobIds({claimedBy, jobIds: jobIds.slice(1)})
+  } catch (error) {
+    if (error instanceof JudgmentJobLeaseError) {
+      judgmentOutboxImportLogger.log(
+        `recoverJudgments:lease:${currentJobId}`,
+        '[recoverJudgments] skipped SQLite job because this process does not own the job lease',
+        {jobId: currentJobId},
+      )
+
+      return getClaimedOutboxBatchForJobIds({claimedBy, jobIds: jobIds.slice(1)})
+    }
+
+    throw error
+  }
+}
+
+const getImportBatch = async ({claimedBy, jobId}: {claimedBy: string; jobId?: string}) => {
+  const sqliteService = getJudgmentJobSqliteService()
+  const claimedBatch = jobId
+    ? await sqliteService.getClaimedOutboxBatch({jobId, serverJobId: claimedBy})
+    : await getClaimedOutboxBatchForJobIds({claimedBy, jobIds: sqliteService.listJobIds().sort()})
+
+  return claimedBatch
+    ? claimedBatch
+    : jobId
+      ? await sqliteService.claimPendingOutboxBatch({
+          claimedBy,
+          jobId,
+          maxBytes: judgmentOutboxBatchMaxBytes,
+          maxRows: judgmentOutboxBatchMaxRows,
+        })
+      : await claimPendingOutboxBatchForJobIds({claimedBy, jobIds: sqliteService.listJobIds().sort()})
+}
+
 export const importJudgmentJobSqliteOutboxBatch = async ({
   claimedBy = getDefaultJudgmentServerJobId(),
   jobId,
 }: {claimedBy?: string; jobId?: string} = {}): Promise<number> => {
   const sqliteService = getJudgmentJobSqliteService()
-  const claimedBatch = jobId
-    ? await sqliteService.claimPendingOutboxBatch({
-        claimedBy,
-        jobId,
-        maxBytes: judgmentOutboxBatchMaxBytes,
-        maxRows: judgmentOutboxBatchMaxRows,
-      })
-    : await claimPendingOutboxBatchForJobIds({claimedBy, jobIds: sqliteService.listJobIds().sort()})
+  const claimedBatch = await getImportBatch({claimedBy, jobId})
 
   if (!claimedBatch) {
     return 0
@@ -224,6 +354,7 @@ export const importJudgmentJobSqliteOutboxBatch = async ({
 
   try {
     const {discardedEntries, importableEntries} = await partitionImportableEntries(rows)
+    const {missingEntries} = await partitionExistingJudgments(importableEntries)
 
     await sqliteService.completeClaimedOutboxRows({
       claimId: claim.claimId,
@@ -232,7 +363,13 @@ export const importJudgmentJobSqliteOutboxBatch = async ({
         return {errorMessage, outboxSeq: entry.outboxSeq}
       }),
     })
-    await insertOutboxEntriesIntoDuckdb(importableEntries)
+    await insertOutboxEntriesIntoDuckdb(missingEntries)
+    const {missingEntries: remainingEntries} = await partitionExistingJudgments(importableEntries)
+
+    if (remainingEntries.length > 0) {
+      throw new Error(`Failed to replay SQLite judgment outbox claim ${claim.claimId}`)
+    }
+
     await queueRefreshesForEntries(importableEntries)
     await sqliteService.completeOutboxClaim({claimId: claim.claimId, jobId: claim.jobId})
     return importableEntries.length

@@ -17,6 +17,9 @@ process.env.RUN_SERVER_JUDGING = 'false'
 process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 
 let closeDatabase: (() => Promise<void>) | null = null
+let getAppDatabaseService:
+  | Awaited<typeof import('../../services/appDatabaseService.ts')>['getAppDatabaseService']
+  | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 let importOutboxBatch: (() => Promise<number>) | null = null
@@ -28,7 +31,7 @@ let storeSinglePromptJudgment:
 beforeAll(async () => {
   const [
     {migrateDuckdb},
-    {getAppDatabaseService},
+    {getAppDatabaseService: getDatabaseService},
     {resetDuckdbServiceForTests},
     {resetServerRuntimeRoleForTests},
     sqliteModule,
@@ -49,7 +52,7 @@ beforeAll(async () => {
 
   await migrateDuckdb()
 
-  const database = getAppDatabaseService()
+  const database = getDatabaseService()
 
   closeDatabase = () => {
     return database.close()
@@ -57,6 +60,7 @@ beforeAll(async () => {
   queryDatabase = (statement: string) => {
     return database.queryJson(statement)
   }
+  getAppDatabaseService = getDatabaseService
   runDatabase = (statement: string) => {
     return database.run(statement)
   }
@@ -326,4 +330,216 @@ test('skips lease-blocked SQLite jobs and imports the next available outbox batc
 
   expect(rows).toHaveLength(1)
   expect((await service.getPendingOutboxBatch({maxBytes: 1024 * 1024, maxRows: 10})).length).toBe(0)
+})
+
+test('replays a claimed SQLite outbox batch without duplicating judgments after DuckDB commit', async () => {
+  if (
+    !getAppDatabaseService
+    || !runDatabase
+    || !queryDatabase
+    || !sqliteService
+    || !importOutboxBatch
+    || !storeSinglePromptJudgment
+  ) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-replay-${Date.now()}`
+  const modelId = `model-replay-${Date.now()}`
+  const projectId = `project-replay-${Date.now()}`
+  const jobId = `job-replay-${Date.now()}`
+  const promptId = `prompt-replay-${Date.now()}`
+  const articleId = `article-replay-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Import Replay Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES ('${promptId}', 'Prompt', '${promptId}-hash')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('${articleId}', 'Article')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
+
+  const [claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt')
+  }
+
+  await storeSinglePromptJudgment({
+    article: {id: articleId} as ArticleRecord,
+    judgmentsJobId: jobId,
+    promptId,
+    queueRecordId: claimedPrompt.recordId,
+    modelId,
+    projectId,
+    judgment: {answer: 'yes', explanation: 'because', quotes: ['quote']},
+    chunkingStrategy: null,
+  })
+
+  const claimedBatch = await service.claimPendingOutboxBatch({
+    claimedBy: 'server-a',
+    jobId,
+    maxBytes: 1024 * 1024,
+    maxRows: 10,
+  })
+
+  if (!claimedBatch) {
+    throw new Error('Failed to claim SQLite outbox batch')
+  }
+
+  await getAppDatabaseService().appendJudgments(
+    claimedBatch.rows.map((entry) => {
+      return {
+        answeredOriginal: entry.answeredOriginal,
+        answeredOriginalAsArray: entry.answeredOriginalAsArray,
+        articleId: entry.articleId,
+        chunkingStrategy: entry.chunkingStrategy,
+        confidenceOriginal: entry.confidenceOriginal,
+        createdAt: entry.createdAt,
+        explanation: entry.explanation,
+        id: entry.judgmentId,
+        isAnswered: entry.isAnswered,
+        modelId: entry.modelId,
+        projectId: entry.projectId,
+        promptId: entry.promptId,
+        quotes: entry.quotes,
+        snapshotProjectId: entry.snapshotProjectId,
+        snapshotProjectModelName: entry.snapshotProjectModelName,
+        updatedAt: entry.updatedAt,
+        useAbstract: entry.useAbstract,
+        useFulltext: entry.useFulltext,
+        useFulltextNoImages: entry.useFulltextNoImages,
+        useTitle: entry.useTitle,
+      }
+    }),
+  )
+
+  expect(await importOutboxBatch()).toBe(1)
+
+  const rows = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.judgment
+    WHERE article_id = '${articleId}'
+      AND prompt_id = '${promptId}'
+      AND model_id = '${modelId}'
+  `)
+
+  expect(Number(rows[0]?.count ?? 0)).toBe(1)
+  expect(await service.getUnexportedOutboxCount(jobId)).toBe(0)
+})
+
+test('releases claimed SQLite outbox batches for retry when DuckDB insert fails before commit', async () => {
+  if (
+    !getAppDatabaseService
+    || !runDatabase
+    || !queryDatabase
+    || !sqliteService
+    || !importOutboxBatch
+    || !storeSinglePromptJudgment
+  ) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const database = getAppDatabaseService()
+  const originalAppendJudgments = database.appendJudgments
+  const connectionId = `connection-retry-${Date.now()}`
+  const modelId = `model-retry-${Date.now()}`
+  const projectId = `project-retry-${Date.now()}`
+  const jobId = `job-retry-${Date.now()}`
+  const promptId = `prompt-retry-${Date.now()}`
+  const articleId = `article-retry-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Import Retry Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES ('${promptId}', 'Prompt', '${promptId}-hash')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('${articleId}', 'Article')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
+
+  const [claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt')
+  }
+
+  await storeSinglePromptJudgment({
+    article: {id: articleId} as ArticleRecord,
+    judgmentsJobId: jobId,
+    promptId,
+    queueRecordId: claimedPrompt.recordId,
+    modelId,
+    projectId,
+    judgment: {answer: 'yes', explanation: 'because', quotes: ['quote']},
+    chunkingStrategy: null,
+  })
+
+  database.appendJudgments = async () => {
+    throw new Error('append failed before commit')
+  }
+
+  try {
+    await importOutboxBatch()
+    throw new Error('Expected outbox import failure')
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error)
+    expect(error instanceof Error ? error.message : '').toBe('append failed before commit')
+  }
+
+  database.appendJudgments = originalAppendJudgments
+
+  expect(await importOutboxBatch()).toBe(1)
+
+  const rows = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.judgment
+    WHERE article_id = '${articleId}'
+      AND prompt_id = '${promptId}'
+      AND model_id = '${modelId}'
+  `)
+
+  expect(Number(rows[0]?.count ?? 0)).toBe(1)
+  expect(await service.getUnexportedOutboxCount(jobId)).toBe(0)
 })
