@@ -5,6 +5,7 @@ import {
 } from '../../server/routes/projectsRoutes/articlesReviewsFiltersNumeric.ts'
 import {isNumericType} from '../../server/routes/projectsRoutes/articlesReviewsFiltersUtils.ts'
 import {hasMatchingJudgmentAnswer} from '../../server/utils/judgmentAnswers.ts'
+import {createRateLimitedLogger} from '../../server/utils/rateLimitedLogger.ts'
 import {
   type ArticleSourceMetadata,
   emptyArticleSourceMetadata,
@@ -71,6 +72,14 @@ type ScopedArticleRow = {
 }
 
 type HumanAnswerRow = {articleId: string; promptId: string; answer: string | null; updatedAt: Date | null}
+type UnassessedCandidateRow = {
+  articleId: string
+  articleCreatedAt: Date | null
+  articleUpdatedAt: Date | null
+  llmJudgedPromptIds: string[]
+}
+
+const rawFallbackQueueLogger = createRateLimitedLogger({windowMs: 30_000})
 
 const getPromptFilters = (promptsFilter?: Record<string, string[]>) => {
   return Object.entries(promptsFilter ?? {}).filter(([, answers]) => {
@@ -186,6 +195,10 @@ const getDuckdbJsonValue = (value: unknown): unknown => {
   } catch {
     return value
   }
+}
+
+const getPaginationCursorSummary = (cursor: PaginationCursor | null) => {
+  return cursor ? {lastArticleId: cursor.lastArticleId.slice(0, 8), lastDate: cursor.lastDate.toISOString()} : null
 }
 
 const getDuckdbArticleSourceMetadata = (sourceMetadata: unknown) => {
@@ -1738,61 +1751,54 @@ const getLlmJudgedPromptRows = async (
 }
 
 const getRawUnassessedCandidateRows = async (params: {
+  jobId: string
   cursor: PaginationCursor | null
   limit: number
   scope: ProjectOlapScope
-}): Promise<{
-  hasMore: boolean
-  rows: Array<{
-    articleId: string
-    articleCreatedAt: Date | null
-    articleUpdatedAt: Date | null
-    llmJudgedPromptIds: string[]
-  }>
-}> => {
+}): Promise<{hasMore: boolean; rows: UnassessedCandidateRow[]}> => {
   const normalizedLimit = Math.max(1, Math.trunc(params.limit))
+  const startedAtMs = Date.now()
+
+  rawFallbackQueueLogger.log(`getPrompts:raw-fallback:${params.jobId}:start`, '[getPrompts] raw fallback scan start', {
+    candidateLimit: normalizedLimit,
+    cursor: getPaginationCursorSummary(params.cursor),
+    jobId: params.jobId,
+    projectId: params.scope.projectId,
+  })
 
   const collectWindow = async ({
     collectedRows,
     cursor,
+    scannedArticleCount,
+    totalJudgedPromptRows,
+    windowsScanned,
   }: {
-    collectedRows: Array<{
-      articleId: string
-      articleCreatedAt: Date | null
-      articleUpdatedAt: Date | null
-      llmJudgedPromptIds: string[]
-    }>
+    collectedRows: UnassessedCandidateRow[]
     cursor: PaginationCursor | null
-  }): Promise<{
-    hasMore: boolean
-    rows: Array<{
-      articleId: string
-      articleCreatedAt: Date | null
-      articleUpdatedAt: Date | null
-      llmJudgedPromptIds: string[]
-    }>
-  }> => {
+    scannedArticleCount: number
+    totalJudgedPromptRows: number
+    windowsScanned: number
+  }): Promise<{hasMore: boolean; rows: UnassessedCandidateRow[]}> => {
     const remainingLimit = normalizedLimit - collectedRows.length
+    const articleWindowStartedAtMs = Date.now()
     const articleWindow = await getScopedActivityArticleWindow({
       scope: params.scope,
       cursor,
       limit: Math.min(rawUnassessedArticleWindowSize, remainingLimit),
     })
+    const articleWindowMs = Date.now() - articleWindowStartedAtMs
+    const judgmentQueryStartedAtMs = Date.now()
     const llmJudgedPromptRows = await getLlmJudgedPromptRows(
       params.scope,
       articleWindow.rows.map((article) => {
         return article.id
       }),
     )
+    const judgmentQueryMs = Date.now() - judgmentQueryStartedAtMs
     const llmJudgmentsByArticle = groupByArticleId(llmJudgedPromptRows)
     const nextCollectedRows = [
       ...collectedRows,
-      ...articleWindow.rows.flatMap<{
-        articleId: string
-        articleCreatedAt: Date | null
-        articleUpdatedAt: Date | null
-        llmJudgedPromptIds: string[]
-      }>((article) => {
+      ...articleWindow.rows.flatMap<UnassessedCandidateRow>((article) => {
         const articleJudgments = llmJudgmentsByArticle.get(article.id) ?? []
 
         return !getHasAllProjectPrompts(params.scope.promptIds, articleJudgments)
@@ -1807,17 +1813,70 @@ const getRawUnassessedCandidateRows = async (params: {
           : []
       }),
     ]
+    const nextScannedArticleCount = scannedArticleCount + articleWindow.rows.length
+    const nextTotalJudgedPromptRows = totalJudgedPromptRows + llmJudgedPromptRows.length
+    const nextWindowsScanned = windowsScanned + 1
     const lastWindowArticle = articleWindow.rows[articleWindow.rows.length - 1] ?? null
     const nextCursor = lastWindowArticle
       ? {lastArticleId: lastWindowArticle.id, lastDate: getActivityDate(lastWindowArticle)}
       : null
 
-    return nextCollectedRows.length >= normalizedLimit || !articleWindow.hasMore || nextCursor === null
-      ? {hasMore: articleWindow.hasMore, rows: nextCollectedRows}
-      : collectWindow({collectedRows: nextCollectedRows, cursor: nextCursor})
+    if (articleWindowMs > 1_000 || judgmentQueryMs > 1_000) {
+      rawFallbackQueueLogger.warn(
+        `getPrompts:raw-fallback:${params.jobId}:slow-window`,
+        '[getPrompts] raw fallback slow window',
+        {
+          articleWindowMs,
+          articlesScannedInWindow: articleWindow.rows.length,
+          collectedCandidates: nextCollectedRows.length,
+          cursor: getPaginationCursorSummary(cursor),
+          hasMore: articleWindow.hasMore,
+          jobId: params.jobId,
+          judgedPromptRowsInWindow: llmJudgedPromptRows.length,
+          judgmentQueryMs,
+          projectId: params.scope.projectId,
+          windowsScanned: nextWindowsScanned,
+        },
+      )
+    }
+
+    if (nextCollectedRows.length >= normalizedLimit || !articleWindow.hasMore || nextCursor === null) {
+      rawFallbackQueueLogger.log(
+        `getPrompts:raw-fallback:${params.jobId}:complete`,
+        '[getPrompts] raw fallback scan complete',
+        {
+          candidateLimit: normalizedLimit,
+          candidateRows: nextCollectedRows.length,
+          durationMs: Date.now() - startedAtMs,
+          finalCursor: getPaginationCursorSummary(nextCursor),
+          hasMore: articleWindow.hasMore,
+          jobId: params.jobId,
+          projectId: params.scope.projectId,
+          scannedArticles: nextScannedArticleCount,
+          totalJudgedPromptRows: nextTotalJudgedPromptRows,
+          windowsScanned: nextWindowsScanned,
+        },
+      )
+
+      return {hasMore: articleWindow.hasMore, rows: nextCollectedRows}
+    }
+
+    return collectWindow({
+      collectedRows: nextCollectedRows,
+      cursor: nextCursor,
+      scannedArticleCount: nextScannedArticleCount,
+      totalJudgedPromptRows: nextTotalJudgedPromptRows,
+      windowsScanned: nextWindowsScanned,
+    })
   }
 
-  return collectWindow({collectedRows: [], cursor: params.cursor})
+  return collectWindow({
+    collectedRows: [],
+    cursor: params.cursor,
+    scannedArticleCount: 0,
+    totalJudgedPromptRows: 0,
+    windowsScanned: 0,
+  })
 }
 
 const getHumanAnswerRows = async (scope: ProjectOlapScope, articleIds: string[]): Promise<HumanAnswerRow[]> => {
@@ -2529,9 +2588,10 @@ export const getUnassessedPairsFromDuckdb = async (params: UnassessedPairsParams
   }
 
   const candidateLimit = getCandidateArticlesLimit(params.numberOfPromptsToGet)
-  const candidateResult = await ((await getHasReviewArticleServingRows(scope.projectId))
+  const hasServingRows = await getHasReviewArticleServingRows(scope.projectId)
+  const candidateResult = await (hasServingRows
     ? getUnassessedCandidateRowsFromServing({scope, cursor: params.cursor, limit: candidateLimit})
-    : getRawUnassessedCandidateRows({scope, cursor: params.cursor, limit: candidateLimit}))
+    : getRawUnassessedCandidateRows({jobId: params.jobId, scope, cursor: params.cursor, limit: candidateLimit}))
   const candidateArticles = candidateResult.rows
   const promptEntries = candidateArticles.flatMap<PromptQueueEntry>((article) => {
     const presentPromptIds = new Set(article.llmJudgedPromptIds)
@@ -2552,6 +2612,35 @@ export const getUnassessedPairsFromDuckdb = async (params: UnassessedPairsParams
     : candidateResult.hasMore
       ? (candidateArticles[candidateArticles.length - 1] ?? null)
       : null
+
+  if (!hasServingRows) {
+    rawFallbackQueueLogger.log(
+      `getPrompts:raw-fallback:${params.jobId}:prompt-result`,
+      '[getPrompts] raw fallback prompt result',
+      {
+        candidateArticles: candidateArticles.length,
+        candidateLimit,
+        cursor: getPaginationCursorSummary(params.cursor),
+        hasMore: candidateResult.hasMore,
+        jobId: params.jobId,
+        nextCursor: getPaginationCursorSummary(
+          nextCursorArticle
+            ? {
+                lastArticleId: nextCursorArticle.articleId,
+                lastDate:
+                  nextCursorArticle.articleUpdatedAt
+                  ?? nextCursorArticle.articleCreatedAt
+                  ?? new Date('1970-01-01T00:00:00.000Z'),
+              }
+            : null,
+        ),
+        projectId: params.projectId,
+        promptEntriesBeforeLimit: promptEntries.length,
+        promptEntriesReturned: limitedPromptEntries.length,
+        requestedPromptEntries: params.numberOfPromptsToGet,
+      },
+    )
+  }
 
   return {
     promptEntries: limitedPromptEntries,
