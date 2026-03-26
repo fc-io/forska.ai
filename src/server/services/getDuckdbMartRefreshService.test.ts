@@ -653,6 +653,165 @@ test('mart refresh populates review article serving v3 tables', () => {
   }
 })
 
+test('mart refresh updates serving rows incrementally after a judgment answer changes', () => {
+  const duckdbPath = `/tmp/f1-mart-refresh-serving-incremental-${Date.now()}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts')
+
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+          VALUES ('connection-serving-incremental-test', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+        \`)
+        await database.run(\`
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+          VALUES ('model-serving-incremental-test', 'connection-serving-incremental-test', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+          VALUES ('project-serving-incremental-test', 'Serving Incremental Project', 'model-serving-incremental-test', TRUE, TRUE, FALSE, FALSE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.prompt (id, original_text, content_hash)
+          VALUES ('prompt-serving-incremental-test', 'Prompt body', 'hash-serving-incremental-test')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+          VALUES ('project-prompt-serving-incremental-test', 'project-serving-incremental-test', 'prompt-serving-incremental-test', 1, TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.article (id, article_title, article_created_at, article_updated_at, article_id)
+          VALUES ('article-serving-incremental-test', 'Serving Incremental Article', '2024-01-02T00:00:00.000Z', '2024-01-03T00:00:00.000Z', 'external-serving-incremental-test')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_article (id, project_id, article_id)
+          VALUES ('project-article-serving-incremental-test', 'project-serving-incremental-test', 'article-serving-incremental-test')
+        \`)
+        await database.run(\`
+          INSERT INTO app.judgment (
+            id,
+            article_id,
+            prompt_id,
+            model_id,
+            use_title,
+            use_abstract,
+            use_fulltext,
+            use_fulltext_no_images,
+            is_answered,
+            answered_original,
+            answered_original_as_array,
+            confidence_original
+          )
+          VALUES (
+            'judgment-serving-incremental-test',
+            'article-serving-incremental-test',
+            'prompt-serving-incremental-test',
+            'model-serving-incremental-test',
+            TRUE,
+            TRUE,
+            FALSE,
+            FALSE,
+            TRUE,
+            'yes',
+            ['yes'],
+            90
+          )
+        \`)
+
+        const martRefreshService = getDuckdbMartRefreshService()
+
+        await martRefreshService.queueJudgmentArticleRefresh('article-serving-incremental-test', 'serving-incremental-initial')
+        await martRefreshService.flush()
+
+        await database.run(\`
+          UPDATE app.judgment
+          SET answered_original = 'no',
+              answered_original_as_array = ['no'],
+              updated_at = current_timestamp
+          WHERE id = 'judgment-serving-incremental-test'
+        \`)
+
+        await martRefreshService.queueJudgmentArticleRefresh('article-serving-incremental-test', 'serving-incremental-update')
+        await martRefreshService.flush()
+
+        const [generationRow] = await database.queryJson(\`
+          SELECT active_generation AS activeGeneration
+          FROM app.project_review_serving_generation
+          WHERE project_id = 'project-serving-incremental-test'
+        \`)
+        const filterRows = await database.queryJson(\`
+          SELECT dictionary.answer_value AS answerValue
+          FROM mart.review_article_filter_member member
+          INNER JOIN app.review_answer_dictionary dictionary
+            ON dictionary.project_id = member.project_id
+           AND dictionary.prompt_id = member.prompt_id
+           AND dictionary.answer_id = member.answer_id
+          WHERE member.project_id = 'project-serving-incremental-test'
+            AND member.article_id = 'article-serving-incremental-test'
+            AND member.generation = 1
+          ORDER BY dictionary.answer_value ASC
+        \`)
+        const detailRows = await database.queryJson(\`
+          SELECT answered_original AS answeredOriginal
+          FROM mart.review_article_serving_detail
+          WHERE project_id = 'project-serving-incremental-test'
+            AND article_id = 'article-serving-incremental-test'
+            AND generation = 1
+          ORDER BY created_at DESC
+        \`)
+
+        console.log(JSON.stringify({
+          activeGeneration: Number(generationRow?.activeGeneration ?? 0),
+          detailRows,
+          filterRows,
+        }))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(
+        runScript.stderr.toString() || runScript.stdout.toString() || 'Mart serving incremental update test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      activeGeneration: number
+      detailRows: Array<{answeredOriginal: string}>
+      filterRows: Array<{answerValue: string}>
+    }
+
+    expect(result.activeGeneration).toBe(1)
+    expect(result.filterRows).toEqual([{answerValue: 'no'}])
+    expect(result.detailRows).toEqual([{answeredOriginal: 'no'}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+  }
+})
+
 test('mart refresh keeps the previous serving generation during the next rebuild', () => {
   const duckdbPath = `/tmp/f1-mart-refresh-serving-generations-${Date.now()}.duckdb`
   const runScript = globalThis.Bun.spawnSync(

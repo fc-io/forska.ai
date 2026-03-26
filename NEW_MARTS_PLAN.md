@@ -41,21 +41,20 @@
   - database/numeric filter options
   - bulk article selection
   - review details
-- Old dense read fallbacks still exist in code, but old dense mart rebuild is no longer the primary runtime path.
+- Old dense mart rebuild path is removed.
+- Old dense review read fallback path is removed.
 - Backfill command now exists: `bun run db:duck:backfill-review-serving-v3`
 - Warnings now treat `review_article_serving` as the ready signal.
 - Generation retention/failure tests now exist.
+- Incremental serving update test exists for judgment answer changes.
 
 ## Current read paths now
 
 - LLM list/count:
   - `review_article_serving + review_article_filter_member + review_article_serving_detail` primary path
-  - then `candidate + filter_posting + judgment_detail`
-  - then `review_article_rollup`
   - then raw `app.article + app.judgment`
 - Unassessed list/count/pairs:
   - `review_article_serving` primary path
-  - `review_article_rollup`
   - then raw `app.article + app.judgment`
 - Review details:
   - `review_article_serving_detail`
@@ -64,7 +63,6 @@
   - raw `app.judgment_human`
 - Both tab:
   - `review_article_serving + review_article_serving_detail` for model projects
-  - then `review_article_rollup`
   - raw path only when project has no model
 - Database/numeric filter options:
   - `review_article_filter_member` for model projects
@@ -72,7 +70,6 @@
   - raw path only when project has no model
 - Bulk article selection by filter:
   - `review_article_serving + review_article_filter_member` for model projects
-  - then `review_article_rollup`
   - raw path only when project has no model
 
 ## Current fallback today
@@ -326,6 +323,5 @@
 - No dedicated automatic/on-startup backfill job yet.
 - Structural-change rebuild rules are not fully formalized.
 - Generation rollback/cutover/cleanup hardening is not finished.
-- Old dense read fallback code still exists.
 - Explicit degraded-path behavior is still weaker than it should be.
 - Perf smoke/benchmark coverage is still missing.
