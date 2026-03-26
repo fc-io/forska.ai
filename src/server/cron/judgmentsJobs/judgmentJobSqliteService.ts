@@ -7,7 +7,6 @@ import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue} from '../../services/appQueryHelpers.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {registerWriterDemotionHandler} from '../../utils/serverRuntimeRole.ts'
-import type {JobCursor} from './jobCursorStore.ts'
 import {
   acquireJudgmentJobLease,
   type JudgmentJobLease,
@@ -18,6 +17,8 @@ import {getJudgmentJobLeasePath, getJudgmentJobSqliteJobIds, getJudgmentJobSqlit
 import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
 
 type JobInfoRow = {
+  cursorLastArticleId: string | null
+  cursorLastDate: unknown
   createdAt: unknown
   jobId: string
   modelBaseUrl: string | null
@@ -37,6 +38,7 @@ type JobInfoRow = {
 
 export type JudgmentJobSqliteInfo = {
   createdAt: Date
+  cursor: JobCursor | null
   jobId: string
   modelBaseUrl: string | null
   modelId: string
@@ -52,6 +54,8 @@ export type JudgmentJobSqliteInfo = {
   useFulltextNoImages: boolean
   useTitle: boolean
 }
+
+export type JobCursor = {lastDate: Date; lastArticleId: string}
 
 type QueueCountRow = {count: number; status: string}
 
@@ -141,9 +145,27 @@ export type JudgmentJobSqliteOutboxEntry = {
 
 export type JudgmentJobSqliteOutboxClaim = {claimId: string; jobId: string; rowCount: number}
 
-type ScanStateRow = {cursorLastArticleId: string | null; cursorLastDate: string | null; exhaustedAt: string | null}
+type ScanStateRow = {
+  cursorLastArticleId: string | null
+  cursorLastDate: string | null
+  exhaustedAt: string | null
+  lastProjectRefreshAckSeq: number | null
+  scanEpoch: number | null
+}
 
-type JobScanState = {cursor: JobCursor | null; exhaustedAt: Date | null}
+type JobScanState = {
+  cursor: JobCursor | null
+  exhaustedAt: Date | null
+  lastProjectRefreshAckSeq: number | null
+  scanEpoch: number
+}
+
+type JobScanStateUpdate = {
+  cursor?: JobCursor | null
+  exhaustedAt?: Date | null
+  lastProjectRefreshAckSeq?: number | null
+  scanEpoch?: number
+}
 
 type SqliteTableInfoRow = {name: string}
 
@@ -276,7 +298,9 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       job_id TEXT PRIMARY KEY,
       cursor_last_date TEXT,
       cursor_last_article_id TEXT,
+      scan_epoch INTEGER NOT NULL DEFAULT 0,
       exhausted_at TEXT,
+      last_project_refresh_ack_seq INTEGER,
       updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS queue_prompt (
@@ -333,6 +357,7 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       ON judgment_outbox(exported_at, outbox_seq);
   `)
 
+  ensureJobScanStateSchema(database)
   ensureOutboxClaimSchema(database)
 
   openDatabases.set(jobId, database)
@@ -379,6 +404,11 @@ const outboxClaimColumns = [
   {name: 'export_claimed_by', sql: 'TEXT'},
 ] as const
 
+const jobScanStateColumns = [
+  {name: 'scan_epoch', sql: 'INTEGER NOT NULL DEFAULT 0'},
+  {name: 'last_project_refresh_ack_seq', sql: 'INTEGER'},
+] as const
+
 const addMissingOutboxClaimColumns = (
   database: Database,
   columns: ReadonlyArray<(typeof outboxClaimColumns)[number]>,
@@ -391,6 +421,20 @@ const addMissingOutboxClaimColumns = (
 
   database.exec(`ALTER TABLE judgment_outbox ADD COLUMN ${currentColumn.name} ${currentColumn.sql}`)
   return addMissingOutboxClaimColumns(database, columns.slice(1))
+}
+
+const addMissingJobScanStateColumns = (
+  database: Database,
+  columns: ReadonlyArray<(typeof jobScanStateColumns)[number]>,
+): void => {
+  const [currentColumn] = columns
+
+  if (!currentColumn) {
+    return
+  }
+
+  database.exec(`ALTER TABLE job_scan_state ADD COLUMN ${currentColumn.name} ${currentColumn.sql}`)
+  return addMissingJobScanStateColumns(database, columns.slice(1))
 }
 
 const ensureOutboxClaimSchema = (database: Database) => {
@@ -408,6 +452,51 @@ const ensureOutboxClaimSchema = (database: Database) => {
     CREATE INDEX IF NOT EXISTS idx_judgment_outbox_claim
       ON judgment_outbox(exported_at, export_claimed_at, outbox_seq)
   `)
+}
+
+const getJobScanState = (row: ScanStateRow | null | undefined): JobScanState => {
+  const lastDate = getDateValue(row?.cursorLastDate)
+  const exhaustedAt = getDateValue(row?.exhaustedAt)
+
+  return {
+    cursor: lastDate && row?.cursorLastArticleId ? {lastArticleId: row.cursorLastArticleId, lastDate} : null,
+    exhaustedAt,
+    lastProjectRefreshAckSeq: row?.lastProjectRefreshAckSeq == null ? null : Number(row.lastProjectRefreshAckSeq),
+    scanEpoch: Number(row?.scanEpoch ?? 0),
+  }
+}
+
+const ensureJobScanStateSchema = (database: Database) => {
+  const existingColumnNames = new Set(
+    (database.query(`PRAGMA table_info('job_scan_state')`).all() as SqliteTableInfoRow[]).map((row) => {
+      return row.name
+    }),
+  )
+  const missingColumns = jobScanStateColumns.filter((column) => {
+    return !existingColumnNames.has(column.name)
+  })
+
+  addMissingJobScanStateColumns(database, missingColumns)
+}
+
+const getStoredScanState = (database: Database, jobId: string) => {
+  const row = database
+    .query(
+      `
+        SELECT
+          cursor_last_date AS cursorLastDate,
+          cursor_last_article_id AS cursorLastArticleId,
+          exhausted_at AS exhaustedAt,
+          scan_epoch AS scanEpoch,
+          last_project_refresh_ack_seq AS lastProjectRefreshAckSeq
+        FROM job_scan_state
+        WHERE job_id = ?
+        LIMIT 1
+      `,
+    )
+    .get(jobId) as ScanStateRow | null
+
+  return getJobScanState(row)
 }
 
 const getExistingOutboxJobIds = (jobId?: string) => {
@@ -477,6 +566,8 @@ const getJobInfoForInitialization = async (jobId: string): Promise<JudgmentJobSq
       jj.id AS jobId,
       jj.project_id AS projectId,
       jj.created_at AS createdAt,
+      jj.cursor_last_created_at AS cursorLastDate,
+      jj.cursor_last_article_id AS cursorLastArticleId,
       p.model_id AS modelId,
       pc.secret_ref AS modelSecretRef,
       COALESCE(pc.provider_kind, 'unknown') AS modelProvider,
@@ -498,6 +589,7 @@ const getJobInfoForInitialization = async (jobId: string): Promise<JudgmentJobSq
   `)
 
   const createdAt = getDateValue(row?.createdAt)
+  const cursorLastDate = getDateValue(row?.cursorLastDate)
 
   if (!row?.projectId || !row.modelId || !row.modelName || !createdAt) {
     throw new Error(`Failed to initialize SQLite judgments job state for ${jobId}`)
@@ -505,6 +597,10 @@ const getJobInfoForInitialization = async (jobId: string): Promise<JudgmentJobSq
 
   return {
     createdAt,
+    cursor:
+      cursorLastDate && row.cursorLastArticleId
+        ? {lastArticleId: row.cursorLastArticleId, lastDate: cursorLastDate}
+        : null,
     jobId: row.jobId,
     modelBaseUrl: row.modelBaseUrl ?? null,
     modelId: row.modelId,
@@ -825,6 +921,7 @@ const sqliteService = {
           UPDATE job_scan_state
           SET cursor_last_date = NULL,
               cursor_last_article_id = NULL,
+              scan_epoch = 0,
               exhausted_at = NULL,
               updated_at = ?
           WHERE job_id = ?
@@ -911,6 +1008,7 @@ const sqliteService = {
         return row && createdAt
           ? {
               createdAt,
+              cursor: null,
               jobId: row.jobId,
               modelBaseUrl: row.modelBaseUrl,
               modelId: row.modelId,
@@ -990,27 +1088,8 @@ const sqliteService = {
   getScanState: async (jobId: string): Promise<JobScanState> => {
     return (
       withJobDatabase(jobId, false, (database) => {
-        const row = database
-          .query(
-            `
-          SELECT
-            cursor_last_date AS cursorLastDate,
-            cursor_last_article_id AS cursorLastArticleId,
-            exhausted_at AS exhaustedAt
-          FROM job_scan_state
-          WHERE job_id = ?
-          LIMIT 1
-        `,
-          )
-          .get(jobId) as ScanStateRow | null
-        const lastDate = getDateValue(row?.cursorLastDate)
-        const exhaustedAt = getDateValue(row?.exhaustedAt)
-
-        return {
-          cursor: lastDate && row?.cursorLastArticleId ? {lastArticleId: row.cursorLastArticleId, lastDate} : null,
-          exhaustedAt,
-        }
-      }) ?? {cursor: null, exhaustedAt: null}
+        return getStoredScanState(database, jobId)
+      }) ?? {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0}
     )
   },
   getUnexportedOutboxCount: async (jobId: string): Promise<number> => {
@@ -1099,12 +1178,14 @@ const sqliteService = {
             job_id,
             cursor_last_date,
             cursor_last_article_id,
+            scan_epoch,
             exhausted_at,
+            last_project_refresh_ack_seq,
             updated_at
-          ) VALUES (?, NULL, NULL, NULL, ?)
+          ) VALUES (?, ?, ?, 0, NULL, NULL, ?)
         `,
           )
-          .run(jobId, createdAt)
+          .run(jobId, jobInfo.cursor?.lastDate.toISOString() ?? null, jobInfo.cursor?.lastArticleId ?? null, createdAt)
       })()
     })
   },
@@ -1490,24 +1571,53 @@ const sqliteService = {
         .run(exhaustedAt?.toISOString() ?? null, now, jobId)
     })
   },
-  setScanState: async (jobId: string, state: JobScanState) => {
+  setLastProjectRefreshAckSeq: async (jobId: string, lastProjectRefreshAckSeq: number | null) => {
     return withOwnedJobDatabase(jobId, false, (database) => {
       const now = new Date().toISOString()
       database
         .query(
           `
         UPDATE job_scan_state
+        SET last_project_refresh_ack_seq = ?,
+            updated_at = ?
+        WHERE job_id = ?
+      `,
+        )
+        .run(lastProjectRefreshAckSeq, now, jobId)
+    })
+  },
+  setScanState: async (jobId: string, state: JobScanStateUpdate) => {
+    return withOwnedJobDatabase(jobId, false, (database) => {
+      const now = new Date().toISOString()
+      const currentState = getStoredScanState(database, jobId)
+      const nextState = {
+        cursor: Object.hasOwn(state, 'cursor') ? (state.cursor ?? null) : currentState.cursor,
+        exhaustedAt: Object.hasOwn(state, 'exhaustedAt') ? (state.exhaustedAt ?? null) : currentState.exhaustedAt,
+        lastProjectRefreshAckSeq: Object.hasOwn(state, 'lastProjectRefreshAckSeq')
+          ? (state.lastProjectRefreshAckSeq ?? null)
+          : currentState.lastProjectRefreshAckSeq,
+        scanEpoch: state.scanEpoch ?? currentState.scanEpoch,
+      } satisfies JobScanState
+
+      database
+        .query(
+          `
+        UPDATE job_scan_state
         SET cursor_last_date = ?,
             cursor_last_article_id = ?,
+            scan_epoch = ?,
             exhausted_at = ?,
+            last_project_refresh_ack_seq = ?,
             updated_at = ?
         WHERE job_id = ?
       `,
         )
         .run(
-          state.cursor?.lastDate.toISOString() ?? null,
-          state.cursor?.lastArticleId ?? null,
-          state.exhaustedAt?.toISOString() ?? null,
+          nextState.cursor?.lastDate.toISOString() ?? null,
+          nextState.cursor?.lastArticleId ?? null,
+          nextState.scanEpoch,
+          nextState.exhaustedAt?.toISOString() ?? null,
+          nextState.lastProjectRefreshAckSeq,
           now,
           jobId,
         )

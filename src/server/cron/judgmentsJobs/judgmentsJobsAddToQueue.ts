@@ -255,7 +255,7 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
 
   const baseCursor = scanState.exhaustedAt ? null : scanState.cursor
   const initializeScanState = scanState.exhaustedAt
-    ? sqliteService.setScanState(job.id, {cursor: null, exhaustedAt: null})
+    ? sqliteService.setScanState(job.id, {cursor: null, exhaustedAt: null, scanEpoch: scanState.scanEpoch + 1})
     : Promise.resolve()
 
   await initializeScanState

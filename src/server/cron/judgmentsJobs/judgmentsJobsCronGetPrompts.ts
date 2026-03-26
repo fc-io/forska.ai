@@ -2,7 +2,7 @@ import {getUnassessedPairsFromOlap} from '../../../services/olap/unassessedArtic
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue} from '../../services/appQueryHelpers.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
-import type {JobCursor} from './jobCursorStore.ts'
+import type {JobCursor} from './judgmentJobSqliteService.ts'
 
 export type PromptQueueEntry = {articleId: string; promptId: string}
 

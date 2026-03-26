@@ -175,6 +175,73 @@ test('limits SQLite ready inserts to the requested deficit while skipping duplic
   expect(await service.getReadyCount(jobId)).toBe(3)
 })
 
+test('stores full SQLite scan state without clearing existing cursor fields', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-scan-${Date.now()}`
+  const modelId = `model-scan-${Date.now()}`
+  const projectId = `project-scan-${Date.now()}`
+  const jobId = `job-scan-${Date.now()}`
+  const seededCursorDate = new Date('2025-01-02T03:04:05.000Z')
+  const updatedExhaustedAt = new Date('2025-01-03T03:04:05.000Z')
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Scan State Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, cursor_last_created_at, cursor_last_article_id)
+    VALUES ('${jobId}', '${projectId}', 'running', '${seededCursorDate.toISOString()}', 'seed-article')
+  `)
+
+  await service.initializeJob(jobId)
+
+  expect(await service.getScanState(jobId)).toEqual({
+    cursor: {lastArticleId: 'seed-article', lastDate: seededCursorDate},
+    exhaustedAt: null,
+    lastProjectRefreshAckSeq: null,
+    scanEpoch: 0,
+  })
+
+  await service.setScanState(jobId, {lastProjectRefreshAckSeq: 17, scanEpoch: 2})
+
+  expect(await service.getScanState(jobId)).toEqual({
+    cursor: {lastArticleId: 'seed-article', lastDate: seededCursorDate},
+    exhaustedAt: null,
+    lastProjectRefreshAckSeq: 17,
+    scanEpoch: 2,
+  })
+
+  await service.setExhaustedAt(jobId, updatedExhaustedAt)
+
+  expect(await service.getScanState(jobId)).toEqual({
+    cursor: {lastArticleId: 'seed-article', lastDate: seededCursorDate},
+    exhaustedAt: updatedExhaustedAt,
+    lastProjectRefreshAckSeq: 17,
+    scanEpoch: 2,
+  })
+
+  await service.setLastProjectRefreshAckSeq(jobId, 23)
+
+  expect(await service.getScanState(jobId)).toEqual({
+    cursor: {lastArticleId: 'seed-article', lastDate: seededCursorDate},
+    exhaustedAt: updatedExhaustedAt,
+    lastProjectRefreshAckSeq: 23,
+    scanEpoch: 2,
+  })
+})
+
 test('claims, reaps, releases, and completes outbox batches', async () => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')
