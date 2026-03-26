@@ -3,6 +3,7 @@ import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {
   type DatabaseQueryRunner,
+  type DatabaseRunner,
   getJsonSqlLiteral,
   getProviderConnectionConfigFromJson,
   getProviderModelRecordFromRow,
@@ -45,15 +46,17 @@ const getProviderModelRows = async ({enabledOnly}: {enabledOnly: boolean}): Prom
 }
 
 const getExistingProviderModelId = async ({
+  databaseRunner,
   providerConnectionId,
   remoteModelId,
   variant,
 }: {
+  databaseRunner: DatabaseQueryRunner
   providerConnectionId: string
   remoteModelId: string
   variant: string | null
 }): Promise<string | null> => {
-  const [existing] = await getAppDatabaseService().queryJson<{id: string}>(`
+  const [existing] = await databaseRunner.queryJson<{id: string}>(`
     SELECT id
     FROM app.model
     WHERE provider_connection_id = ${getSqlLiteral(providerConnectionId)}
@@ -125,10 +128,12 @@ const updateProviderConnectionDisabledModelIds = async ({
 
 const upsertDiscoveredProviderModelsRecursively = async ({
   connection,
+  databaseRunner,
   discoveredModels,
   processed,
 }: {
   connection: ProviderConnectionRecord
+  databaseRunner: DatabaseRunner
   discoveredModels: ProviderListedModel[]
   processed: ProviderModelRecord[]
 }): Promise<ProviderModelRecord[]> => {
@@ -152,8 +157,13 @@ const upsertDiscoveredProviderModelsRecursively = async ({
     providerKind: connection.providerKind,
     source: 'provider',
   })
-  const existingId = await getExistingProviderModelId({providerConnectionId: connection.id, remoteModelId, variant})
-  const [saved] = await getAppDatabaseService().queryJson<ProviderModelRow>(
+  const existingId = await getExistingProviderModelId({
+    databaseRunner,
+    providerConnectionId: connection.id,
+    remoteModelId,
+    variant,
+  })
+  const [saved] = await databaseRunner.queryJson<ProviderModelRow>(
     existingId
       ? getProviderModelReturnQuery(`
         UPDATE app.model
@@ -194,6 +204,7 @@ const upsertDiscoveredProviderModelsRecursively = async ({
 
   return upsertDiscoveredProviderModelsRecursively({
     connection,
+    databaseRunner,
     discoveredModels: rest,
     processed: saved ? [...processed, getProviderModelRecordFromRow(saved)] : processed,
   })
@@ -336,8 +347,13 @@ export const upsertDiscoveredModels = async ({
   connection: ProviderConnectionRecord
   models: ProviderListedModel[]
 }): Promise<ProviderModelRecord[]> => {
-  return (await getAppDatabaseService().transaction(async () => {
-    return upsertDiscoveredProviderModelsRecursively({connection, discoveredModels: models, processed: []})
+  return (await getAppDatabaseService().transaction(async (databaseRunner) => {
+    return upsertDiscoveredProviderModelsRecursively({
+      connection,
+      databaseRunner,
+      discoveredModels: models,
+      processed: [],
+    })
   })) as ProviderModelRecord[]
 }
 

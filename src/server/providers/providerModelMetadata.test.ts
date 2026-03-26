@@ -105,3 +105,25 @@ test('persisted provider model metadata strips any extra top-level raw payload',
   expect('raw' in (persisted as Record<string, unknown>)).toBe(false)
   expect(getProviderModelMetadataContextLength(persisted)).toBe(128000)
 })
+
+test('normalized provider model metadata prefers real context keys over unrelated numeric fields', () => {
+  const metadata = getNormalizedProviderModelMetadata({
+    listedModel: {
+      displayName: 'Qwen/Qwen3-4B-GGUF:Q4_K_M',
+      metadataJson: null,
+      modelName: 'Qwen/Qwen3-4B-GGUF:Q4_K_M',
+      remoteModelId: 'Qwen/Qwen3-4B-GGUF:Q4_K_M',
+      variant: null,
+      version: null,
+    },
+    providerKind: 'llmstudio',
+    rawMetadata: {
+      created: 1774528734,
+      data: [{created: 1774528734, id: 'Qwen/Qwen3-4B-GGUF:Q4_K_M', meta: {n_ctx_train: 40960}, object: 'model'}],
+      object: 'list',
+    },
+    source: 'provider',
+  })
+
+  expect(getProviderModelMetadataContextLength(metadata)).toBe(40960)
+})
