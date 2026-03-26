@@ -78,6 +78,8 @@ let martRefreshQueueCompletedAtColumnReady: Promise<void> | null = null
 let martRefreshQueueCompletedAtColumnVerified = false
 let martRefreshQueueGenerationColumnReady: Promise<void> | null = null
 let martRefreshQueueGenerationColumnVerified = false
+let martRefreshReviewArticleRollupReady: Promise<void> | null = null
+let martRefreshReviewArticleRollupVerified = false
 let martRefreshAutoDrainEnabled = true
 let martRefreshDebugSnapshot = getEmptyMartRefreshDebugSnapshot()
 let martRefreshProgressSnapshot = getEmptyMartRefreshProgressSnapshot()
@@ -352,6 +354,97 @@ const ensureMartRefreshQueueCompletedAtColumn = async (): Promise<void> => {
 const ensureMartRefreshQueueSchema = async (): Promise<void> => {
   await ensureMartRefreshQueueGenerationColumn()
   return ensureMartRefreshQueueCompletedAtColumn()
+}
+
+const hasReviewArticleRollupTable = async () => {
+  const rows = await getAppDatabaseService().queryJson<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM information_schema.tables
+    WHERE table_schema = 'mart'
+      AND table_name = 'review_article_rollup'
+  `)
+
+  return Number(rows[0]?.count ?? 0) > 0
+}
+
+const createReviewArticleRollupTable = async () => {
+  await getAppDatabaseService().run(`
+    CREATE TABLE mart.review_article_rollup (
+      project_id VARCHAR NOT NULL,
+      article_id VARCHAR NOT NULL,
+      article_created_at TIMESTAMPTZ,
+      article_updated_at TIMESTAMPTZ,
+      enabled_prompt_count INTEGER NOT NULL,
+      llm_judged_prompt_count INTEGER NOT NULL,
+      human_answered_prompt_count INTEGER NOT NULL,
+      llm_judged_prompt_ids VARCHAR[],
+      human_answered_prompt_ids VARCHAR[],
+      has_all_llm_judgments BOOLEAN NOT NULL,
+      has_all_human_answers BOOLEAN NOT NULL,
+      in_curated_scope BOOLEAN NOT NULL,
+      in_route_scope BOOLEAN NOT NULL,
+      review_opened BOOLEAN NOT NULL,
+      review_sections_completed INTEGER NOT NULL,
+      latest_llm_created_at TIMESTAMPTZ,
+      latest_human_updated_at TIMESTAMPTZ,
+      latest_review_updated_at TIMESTAMPTZ,
+      rollup_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      PRIMARY KEY(project_id, article_id)
+    )
+  `)
+  await getAppDatabaseService().run(`
+    CREATE INDEX idx_mart_review_article_rollup_project_id
+    ON mart.review_article_rollup(project_id, has_all_llm_judgments, article_created_at, article_id)
+  `)
+}
+
+const rebuildReviewArticleRollupTable = async (): Promise<void> => {
+  const tableExists = await hasReviewArticleRollupTable()
+
+  console.warn('[duckdbMartRefresh] rebuilding mart.review_article_rollup to recover from poisoned inserts')
+  await getAppDatabaseService().run('DROP TABLE IF EXISTS mart.review_article_rollup_repair')
+
+  if (tableExists) {
+    await getAppDatabaseService().run(`
+      CREATE TABLE mart.review_article_rollup_repair AS
+      SELECT *
+      FROM mart.review_article_rollup
+    `)
+    await getAppDatabaseService().run('DROP INDEX IF EXISTS idx_mart_review_article_rollup_project_id')
+    await getAppDatabaseService().run('DROP TABLE mart.review_article_rollup')
+  }
+
+  await createReviewArticleRollupTable()
+
+  if (tableExists) {
+    await getAppDatabaseService().run(`
+      INSERT INTO mart.review_article_rollup
+      SELECT *
+      FROM mart.review_article_rollup_repair
+    `)
+    await getAppDatabaseService().run('DROP TABLE mart.review_article_rollup_repair')
+  }
+}
+
+const ensureReviewArticleRollupTable = async (): Promise<void> => {
+  if (martRefreshReviewArticleRollupVerified) {
+    return
+  }
+
+  if (martRefreshReviewArticleRollupReady) {
+    return martRefreshReviewArticleRollupReady
+  }
+
+  martRefreshReviewArticleRollupReady = rebuildReviewArticleRollupTable()
+    .then(() => {
+      martRefreshReviewArticleRollupVerified = true
+    })
+    .catch((error) => {
+      martRefreshReviewArticleRollupReady = null
+      return Promise.reject(error)
+    })
+
+  return martRefreshReviewArticleRollupReady
 }
 
 const getProjectRefreshSql = (projectId: string) => {
@@ -1008,8 +1101,56 @@ const queryMartRefreshBackgroundJson = async <T>(statement: string): Promise<T[]
   return getAppDatabaseService().queryJsonBackground<T>(statement)
 }
 
+const getNormalizedMartRefreshError = (error: unknown): Error => {
+  return error instanceof Error ? error : new Error(String(error))
+}
+
+const getChainedMartRefreshError = (error: unknown, nextError: unknown, context: string): Error => {
+  const normalizedError = getNormalizedMartRefreshError(error)
+  const normalizedNextError = getNormalizedMartRefreshError(nextError)
+  const combinedMessage =
+    normalizedNextError.message === normalizedError.message
+      ? normalizedError.message
+      : `${normalizedError.message} -- ${context}: ${normalizedNextError.message}`
+
+  return combinedMessage === normalizedError.message ? normalizedError : new Error(combinedMessage)
+}
+
+const hasMartRefreshExplicitTransaction = (statement: string) => {
+  const normalizedStatement = statement.toUpperCase()
+
+  return normalizedStatement.includes('BEGIN TRANSACTION') || normalizedStatement.includes('START TRANSACTION')
+}
+
+const shouldAttemptMartRefreshBackgroundRollback = (statement: string, error: unknown) => {
+  const normalizedError = getNormalizedMartRefreshError(error)
+
+  return (
+    hasMartRefreshExplicitTransaction(statement)
+    || normalizedError.message.includes('Current transaction is aborted')
+    || normalizedError.message.includes('please ROLLBACK')
+  )
+}
+
+const getMartRefreshBackgroundRollbackError = async (): Promise<Error | null> => {
+  try {
+    await getAppDatabaseService().runBackground('ROLLBACK')
+    return null
+  } catch (error) {
+    return getNormalizedMartRefreshError(error)
+  }
+}
+
 const runMartRefreshBackgroundStatement = async (statement: string) => {
-  await getAppDatabaseService().runBackground(statement)
+  try {
+    await getAppDatabaseService().runBackground(statement)
+  } catch (error) {
+    const rollbackError = shouldAttemptMartRefreshBackgroundRollback(statement, error)
+      ? await getMartRefreshBackgroundRollbackError()
+      : null
+
+    throw rollbackError === null ? error : getChainedMartRefreshError(error, rollbackError, 'rollback failed')
+  }
 }
 
 const getImpactedProjectIdsForArticle = async (articleId: string) => {
@@ -1587,6 +1728,8 @@ const refreshQueuedArticleTasks = async (articleIds: string[]): Promise<void> =>
 }
 
 const refreshProject = async (projectId: string) => {
+  await ensureReviewArticleRollupTable()
+
   const statements = getProjectRefreshSql(projectId)
   const [currentStatement = ''] = statements
 
@@ -1920,6 +2063,8 @@ const duckdbMartRefreshService = {
     martRefreshQueueCompletedAtColumnVerified = false
     martRefreshQueueGenerationColumnReady = null
     martRefreshQueueGenerationColumnVerified = false
+    martRefreshReviewArticleRollupReady = null
+    martRefreshReviewArticleRollupVerified = false
     resetMartRefreshDebugSnapshot()
     setMartRefreshAutoDrainEnabled(true)
     resetMartRefreshProgressSnapshot()
