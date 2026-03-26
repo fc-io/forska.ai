@@ -372,6 +372,240 @@ test('claims, reaps, releases, and completes outbox batches', async () => {
   expect(await service.getUnexportedOutboxCount(jobId)).toBe(0)
 })
 
+test('prunes only visibility-acked exported outbox rows in bounded batches', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-retention-${Date.now()}`
+  const modelId = `model-retention-${Date.now()}`
+  const projectId = `project-retention-${Date.now()}`
+  const jobId = `job-retention-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Retention Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(
+    jobId,
+    [
+      {articleId: 'article-retention-1', promptId: 'prompt-retention-1'},
+      {articleId: 'article-retention-2', promptId: 'prompt-retention-2'},
+      {articleId: 'article-retention-3', promptId: 'prompt-retention-3'},
+    ],
+    'server-a',
+  )
+
+  const claimedPrompts = await service.claimReadyPrompts(jobId, 'server-a', 3)
+
+  await Promise.all(
+    claimedPrompts.map((claimedPrompt, index) => {
+      const suffix = index + 1
+
+      return service.recordJudgmentSuccess(jobId, {
+        answeredOriginal: 'yes',
+        answeredOriginalAsArray: ['yes'],
+        articleId: claimedPrompt.articleId,
+        chunkingStrategy: null,
+        confidenceOriginal: 50,
+        createdAt: new Date(),
+        explanation: 'because',
+        isAnswered: true,
+        judgmentId: `judgment-retention-${suffix}-${Date.now()}`,
+        modelId,
+        projectId,
+        promptId: claimedPrompt.promptId,
+        queuePromptId: claimedPrompt.recordId,
+        quotes: ['quote'],
+        rawResponseJson: {answer: 'yes'},
+        snapshotProjectId: projectId,
+        snapshotProjectModelName: 'Qwen 35B',
+        updatedAt: new Date(),
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+        useTitle: true,
+      })
+    }),
+  )
+
+  const claimedOutboxBatch = await service.claimPendingOutboxBatch({
+    claimedBy: 'server-a',
+    jobId,
+    maxBytes: 1024 * 1024,
+    maxRows: 10,
+  })
+  const outboxSeqsByPromptId = new Map(
+    (claimedOutboxBatch?.rows ?? []).map((row) => {
+      return [row.queuePromptId, row.outboxSeq]
+    }),
+  )
+  const ackedOutboxSeq = claimedPrompts[1] ? (outboxSeqsByPromptId.get(claimedPrompts[1].recordId) ?? null) : null
+  const newestOutboxSeq = claimedPrompts[2] ? (outboxSeqsByPromptId.get(claimedPrompts[2].recordId) ?? null) : null
+
+  await service.completeOutboxClaim({claimId: claimedOutboxBatch?.claim.claimId ?? '', jobId})
+  await service.setLastProjectRefreshAckSeq(jobId, ackedOutboxSeq)
+
+  expect(await service.getOutboxCount(jobId)).toBe(3)
+
+  const firstPrune = await service.pruneVisibilityAckedRetention({jobId, maxRows: 1})
+
+  expect(firstPrune).toEqual({outboxRowsDeleted: 1, queuePromptRowsDeleted: 1})
+  expect(await service.getOutboxCount(jobId)).toBe(2)
+  expect(
+    (await service.getPromptStatusCounts(jobId)).find((row) => {
+      return row.status === 'judged'
+    })?.count ?? 0,
+  ).toBe(2)
+
+  const secondPrune = await service.pruneVisibilityAckedRetention({jobId, maxRows: 10})
+
+  expect(secondPrune).toEqual({outboxRowsDeleted: 1, queuePromptRowsDeleted: 1})
+  expect(await service.getOutboxCount(jobId)).toBe(1)
+  expect(await service.getMaxOutboxSeq(jobId)).toBe(newestOutboxSeq)
+  expect(
+    (await service.getPromptStatusCounts(jobId)).find((row) => {
+      return row.status === 'judged'
+    })?.count ?? 0,
+  ).toBe(1)
+})
+
+test('keeps skipped and unacked prompt rows during visibility-acked retention cleanup', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-retention-skip-${Date.now()}`
+  const modelId = `model-retention-skip-${Date.now()}`
+  const projectId = `project-retention-skip-${Date.now()}`
+  const jobId = `job-retention-skip-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Retention Skip Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(
+    jobId,
+    [
+      {articleId: 'article-retention-acked', promptId: 'prompt-retention-acked'},
+      {articleId: 'article-retention-skipped', promptId: 'prompt-retention-skipped'},
+      {articleId: 'article-retention-unacked', promptId: 'prompt-retention-unacked'},
+    ],
+    'server-a',
+  )
+
+  const claimedPrompts = await service.claimReadyPrompts(jobId, 'server-a', 3)
+  const ackedPrompt = claimedPrompts[0]
+  const skippedPrompt = claimedPrompts[1]
+  const unackedPrompt = claimedPrompts[2]
+
+  if (!ackedPrompt || !skippedPrompt || !unackedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompts for retention cleanup test')
+  }
+
+  await service.recordJudgmentSuccess(jobId, {
+    answeredOriginal: 'yes',
+    answeredOriginalAsArray: ['yes'],
+    articleId: ackedPrompt.articleId,
+    chunkingStrategy: null,
+    confidenceOriginal: 50,
+    createdAt: new Date(),
+    explanation: 'because',
+    isAnswered: true,
+    judgmentId: `judgment-retention-acked-${Date.now()}`,
+    modelId,
+    projectId,
+    promptId: ackedPrompt.promptId,
+    queuePromptId: ackedPrompt.recordId,
+    quotes: ['quote'],
+    rawResponseJson: {answer: 'yes'},
+    snapshotProjectId: projectId,
+    snapshotProjectModelName: 'Qwen 35B',
+    updatedAt: new Date(),
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
+  await service.markPromptAsSkipped(jobId, skippedPrompt.recordId, 'no_fulltext')
+  await service.recordJudgmentSuccess(jobId, {
+    answeredOriginal: 'yes',
+    answeredOriginalAsArray: ['yes'],
+    articleId: unackedPrompt.articleId,
+    chunkingStrategy: null,
+    confidenceOriginal: 50,
+    createdAt: new Date(),
+    explanation: 'because',
+    isAnswered: true,
+    judgmentId: `judgment-retention-unacked-${Date.now()}`,
+    modelId,
+    projectId,
+    promptId: unackedPrompt.promptId,
+    queuePromptId: unackedPrompt.recordId,
+    quotes: ['quote'],
+    rawResponseJson: {answer: 'yes'},
+    snapshotProjectId: projectId,
+    snapshotProjectModelName: 'Qwen 35B',
+    updatedAt: new Date(),
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
+
+  const claimedOutboxBatch = await service.claimPendingOutboxBatch({
+    claimedBy: 'server-a',
+    jobId,
+    maxBytes: 1024 * 1024,
+    maxRows: 10,
+  })
+  const ackedOutboxSeq = (claimedOutboxBatch?.rows ?? []).find((row) => {
+    return row.queuePromptId === ackedPrompt.recordId
+  })?.outboxSeq
+
+  await service.completeOutboxClaim({claimId: claimedOutboxBatch?.claim.claimId ?? '', jobId})
+  await service.setLastProjectRefreshAckSeq(jobId, ackedOutboxSeq ?? null)
+
+  expect(await service.pruneVisibilityAckedRetention({jobId, maxRows: 10})).toEqual({
+    outboxRowsDeleted: 1,
+    queuePromptRowsDeleted: 1,
+  })
+  expect(await service.hasLocalJudgment(jobId, ackedPrompt.articleId, ackedPrompt.promptId)).toBe(false)
+  expect(await service.hasLocalJudgment(jobId, skippedPrompt.articleId, skippedPrompt.promptId)).toBe(true)
+  expect(await service.hasLocalJudgment(jobId, unackedPrompt.articleId, unackedPrompt.promptId)).toBe(true)
+  expect(await service.getOutboxCount(jobId)).toBe(1)
+})
+
 test('syncOwnedLeases releases only inactive SQLite job leases', async () => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')

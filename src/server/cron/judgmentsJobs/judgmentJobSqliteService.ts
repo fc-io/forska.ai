@@ -176,6 +176,10 @@ type JudgmentJobSqliteClaimedOutboxBatch = {claim: JudgmentJobSqliteOutboxClaim;
 
 type ClaimedOutboxRow = {claimId: string; rowCount: number}
 
+type RetentionEligibleOutboxRow = {outboxSeq: number; queuePromptId: string}
+
+type RetentionPruneResult = {outboxRowsDeleted: number; queuePromptRowsDeleted: number}
+
 const openDatabases = new Map<string, Database>()
 const ownedJobLeases = new Map<string, JudgmentJobLease>()
 const ownedJobLeaseOperationCounts = new Map<string, number>()
@@ -518,6 +522,40 @@ const getExistingOutboxJobIds = (jobId?: string) => {
         return existsSync(getJudgmentJobSqlitePath(value))
       })
     : getJudgmentJobSqliteJobIds()
+}
+
+const emptyRetentionPruneResult = (): RetentionPruneResult => {
+  return {outboxRowsDeleted: 0, queuePromptRowsDeleted: 0}
+}
+
+const addRetentionPruneResults = (left: RetentionPruneResult, right: RetentionPruneResult): RetentionPruneResult => {
+  return {
+    outboxRowsDeleted: left.outboxRowsDeleted + right.outboxRowsDeleted,
+    queuePromptRowsDeleted: left.queuePromptRowsDeleted + right.queuePromptRowsDeleted,
+  }
+}
+
+const getSqlPlaceholders = (count: number) => {
+  return Array.from({length: count}, () => {
+    return '?'
+  })
+}
+
+const getVisibilityAckedOutboxRows = (database: Database, visibilityAckSeq: number, limit: number) => {
+  return database
+    .query(
+      `
+        SELECT
+          outbox_seq AS outboxSeq,
+          queue_prompt_id AS queuePromptId
+        FROM judgment_outbox
+        WHERE exported_at IS NOT NULL
+          AND outbox_seq <= ?
+        ORDER BY outbox_seq ASC
+        LIMIT ?
+      `,
+    )
+    .all(visibilityAckSeq, limit) as RetentionEligibleOutboxRow[]
 }
 
 const getOutboxEntry = (row: OutboxRow) => {
@@ -907,6 +945,92 @@ const claimPendingOutboxBatchForJobIds = async ({
   return claimedBatch ?? claimPendingOutboxBatchForJobIds({claimedBy, jobIds: jobIds.slice(1), maxBytes, maxRows})
 }
 
+const pruneVisibilityAckedRetentionForJob = async ({
+  jobId,
+  maxRows,
+  serverJobId,
+}: {
+  jobId: string
+  maxRows: number
+  serverJobId?: string
+}): Promise<RetentionPruneResult> => {
+  return (
+    (await withOwnedJobDatabase(
+      jobId,
+      false,
+      (database) => {
+        const visibilityAckSeq = getStoredScanState(database, jobId).lastProjectRefreshAckSeq
+
+        if (visibilityAckSeq == null || maxRows <= 0) {
+          return emptyRetentionPruneResult()
+        }
+
+        return database.transaction((ackSeq: number) => {
+          const eligibleRows = getVisibilityAckedOutboxRows(database, ackSeq, maxRows)
+
+          if (eligibleRows.length === 0) {
+            return emptyRetentionPruneResult()
+          }
+
+          const outboxSeqs = eligibleRows.map((row) => {
+            return row.outboxSeq
+          })
+          const queuePromptIds = eligibleRows.map((row) => {
+            return row.queuePromptId
+          })
+          const outboxPlaceholders = getSqlPlaceholders(outboxSeqs.length)
+          const queuePromptPlaceholders = getSqlPlaceholders(queuePromptIds.length)
+          const queuePromptDelete = database.query(`
+            DELETE FROM queue_prompt
+            WHERE id IN (${queuePromptPlaceholders.join(', ')})
+              AND status = 'judged'
+          `)
+          const outboxDelete = database.query(`
+            DELETE FROM judgment_outbox
+            WHERE outbox_seq IN (${outboxPlaceholders.join(', ')})
+              AND exported_at IS NOT NULL
+              AND outbox_seq <= ?
+          `)
+          const queuePromptResult = queuePromptDelete.run(...queuePromptIds) as {changes?: number}
+          const outboxResult = outboxDelete.run(...outboxSeqs, ackSeq) as {changes?: number}
+
+          return {
+            outboxRowsDeleted: Number(outboxResult.changes ?? 0),
+            queuePromptRowsDeleted: Number(queuePromptResult.changes ?? 0),
+          }
+        })(visibilityAckSeq)
+      },
+      serverJobId,
+    )) ?? emptyRetentionPruneResult()
+  )
+}
+
+const pruneVisibilityAckedRetentionForJobIds = async ({
+  jobIds,
+  maxRows,
+  serverJobId,
+}: {
+  jobIds: string[]
+  maxRows: number
+  serverJobId?: string
+}): Promise<RetentionPruneResult> => {
+  const [currentJobId = ''] = jobIds
+
+  if (!currentJobId || maxRows <= 0) {
+    return emptyRetentionPruneResult()
+  }
+
+  const currentResult = await pruneVisibilityAckedRetentionForJob({jobId: currentJobId, maxRows, serverJobId})
+  const remainingRows = maxRows - currentResult.outboxRowsDeleted
+
+  return remainingRows <= 0
+    ? currentResult
+    : addRetentionPruneResults(
+        currentResult,
+        await pruneVisibilityAckedRetentionForJobIds({jobIds: jobIds.slice(1), maxRows: remainingRows, serverJobId}),
+      )
+}
+
 const sqliteService = {
   addReadyPrompts: async (
     jobId: string,
@@ -1196,6 +1320,15 @@ const sqliteService = {
 
         return row?.maxOutboxSeq == null ? null : Number(row.maxOutboxSeq)
       }) ?? null
+    )
+  },
+  getOutboxCount: async (jobId: string): Promise<number> => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        const row = database.query(`SELECT COUNT(*) AS count FROM judgment_outbox`).get() as {count: number} | null
+
+        return Number(row?.count ?? 0)
+      }) ?? 0
     )
   },
   getUnexportedOutboxCount: async (jobId: string): Promise<number> => {
@@ -1738,6 +1871,23 @@ const sqliteService = {
           now,
           jobId,
         )
+    })
+  },
+  pruneVisibilityAckedRetention: async ({
+    jobId,
+    maxRows,
+    serverJobId,
+  }: {
+    jobId?: string
+    maxRows: number
+    serverJobId?: string
+  }) => {
+    const normalizedMaxRows = Number.isFinite(maxRows) ? Math.max(0, Math.floor(maxRows)) : 0
+
+    return pruneVisibilityAckedRetentionForJobIds({
+      jobIds: getExistingOutboxJobIds(jobId),
+      maxRows: normalizedMaxRows,
+      serverJobId,
     })
   },
 }
