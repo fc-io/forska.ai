@@ -53,6 +53,12 @@ const contextWindowKeys = [
   'max_model_len',
   'maxSeqLen',
   'max_seq_len',
+  'maxPositionEmbeddings',
+  'max_position_embeddings',
+  'nCtxTrain',
+  'n_ctx_train',
+  'numCtx',
+  'num_ctx',
 ] as const
 
 const outputWindowKeys = [
@@ -91,14 +97,17 @@ const getContextWindowFromKeys = (record: Record<string, unknown>, keys: readonl
   }, null)
 }
 
-const getContextWindowFromMetadata = (value: unknown): ProviderModelContextWindow => {
+const getContextWindowFromMetadata = (
+  value: unknown,
+  {allowScalarFallback = true}: {allowScalarFallback?: boolean} = {},
+): ProviderModelContextWindow => {
   const record = getJsonRecord(value)
   const arrayValue = Array.isArray(value) ? value : null
 
   return arrayValue
     ? arrayValue.reduce<ProviderModelContextWindow>(
         (resolved, entry) => {
-          const nested = getContextWindowFromMetadata(entry)
+          const nested = getContextWindowFromMetadata(entry, {allowScalarFallback: false})
 
           return {
             inputTokens: resolved.inputTokens ?? nested.inputTokens,
@@ -111,7 +120,7 @@ const getContextWindowFromMetadata = (value: unknown): ProviderModelContextWindo
     : record
       ? Object.values(record).reduce<ProviderModelContextWindow>(
           (resolved, entry) => {
-            const nested = getContextWindowFromMetadata(entry)
+            const nested = getContextWindowFromMetadata(entry, {allowScalarFallback: false})
 
             return {
               inputTokens:
@@ -124,7 +133,9 @@ const getContextWindowFromMetadata = (value: unknown): ProviderModelContextWindo
           },
           {inputTokens: null, outputTokens: null, totalTokens: null},
         )
-      : {inputTokens: getPositiveInteger(value), outputTokens: null, totalTokens: getPositiveInteger(value)}
+      : allowScalarFallback
+        ? {inputTokens: getPositiveInteger(value), outputTokens: null, totalTokens: getPositiveInteger(value)}
+        : {inputTokens: null, outputTokens: null, totalTokens: null}
 }
 
 const getReasoningEffortsFromEntry = (value: unknown): string[] => {
