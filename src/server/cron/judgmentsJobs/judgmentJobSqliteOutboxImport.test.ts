@@ -332,19 +332,13 @@ test('skips lease-blocked SQLite jobs and imports the next available outbox batc
   expect((await service.getPendingOutboxBatch({maxBytes: 1024 * 1024, maxRows: 10})).length).toBe(0)
 })
 
-test('replays a claimed SQLite outbox batch without duplicating judgments after DuckDB commit', async () => {
-  if (
-    !getAppDatabaseService
-    || !runDatabase
-    || !queryDatabase
-    || !sqliteService
-    || !importOutboxBatch
-    || !storeSinglePromptJudgment
-  ) {
+test('replays a SQLite outbox batch after crashing between DuckDB commit and SQLite acknowledgement', async () => {
+  if (!runDatabase || !queryDatabase || !sqliteService || !importOutboxBatch || !storeSinglePromptJudgment) {
     throw new Error('Test database not initialized')
   }
 
   const service = sqliteService()
+  const originalCompleteOutboxClaim = service.completeOutboxClaim
   const connectionId = `connection-replay-${Date.now()}`
   const modelId = `model-replay-${Date.now()}`
   const projectId = `project-replay-${Date.now()}`
@@ -397,44 +391,30 @@ test('replays a claimed SQLite outbox batch without duplicating judgments after 
     chunkingStrategy: null,
   })
 
-  const claimedBatch = await service.claimPendingOutboxBatch({
-    claimedBy: 'server-a',
-    jobId,
-    maxBytes: 1024 * 1024,
-    maxRows: 10,
-  })
-
-  if (!claimedBatch) {
-    throw new Error('Failed to claim SQLite outbox batch')
+  service.completeOutboxClaim = async () => {
+    throw new Error('sqlite acknowledgement crashed')
   }
 
-  await getAppDatabaseService().appendJudgments(
-    claimedBatch.rows.map((entry) => {
-      return {
-        answeredOriginal: entry.answeredOriginal,
-        answeredOriginalAsArray: entry.answeredOriginalAsArray,
-        articleId: entry.articleId,
-        chunkingStrategy: entry.chunkingStrategy,
-        confidenceOriginal: entry.confidenceOriginal,
-        createdAt: entry.createdAt,
-        explanation: entry.explanation,
-        id: entry.judgmentId,
-        isAnswered: entry.isAnswered,
-        modelId: entry.modelId,
-        projectId: entry.projectId,
-        promptId: entry.promptId,
-        quotes: entry.quotes,
-        snapshotProjectId: entry.snapshotProjectId,
-        snapshotProjectModelName: entry.snapshotProjectModelName,
-        updatedAt: entry.updatedAt,
-        useAbstract: entry.useAbstract,
-        useFulltext: entry.useFulltext,
-        useFulltextNoImages: entry.useFulltextNoImages,
-        useTitle: entry.useTitle,
-      }
-    }),
-  )
+  try {
+    await importOutboxBatch()
+    throw new Error('Expected SQLite acknowledgement crash')
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error)
+    expect(error instanceof Error ? error.message : '').toBe('sqlite acknowledgement crashed')
+  } finally {
+    service.completeOutboxClaim = originalCompleteOutboxClaim
+  }
 
+  const rowsAfterCrash = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.judgment
+    WHERE article_id = '${articleId}'
+      AND prompt_id = '${promptId}'
+      AND model_id = '${modelId}'
+  `)
+
+  expect(Number(rowsAfterCrash[0]?.count ?? 0)).toBe(1)
+  expect(await service.getUnexportedOutboxCount(jobId)).toBe(1)
   expect(await importOutboxBatch()).toBe(1)
 
   const rows = await queryDatabase<{count: number}>(`
