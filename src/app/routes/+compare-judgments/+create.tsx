@@ -6,6 +6,7 @@ import {Button} from '../../../components/ui/button'
 import {apiClient} from '../../../services/apiClient'
 import {createComparisonProject, type CreateComparisonProjectInput} from '../../../services/comparisonProjectsService'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
+import {isImportedFileRoute} from '../../../utils/importRouteUtils.ts'
 
 type ExistingPrompt = {
   id: string
@@ -293,7 +294,10 @@ const CreateCompareJudgmentsPage = () => {
                 <For each={importRoutesQuery.data ?? []}>
                   {(importRoute) => {
                     const displayName = importRoute.name?.trim() ? importRoute.name : importRoute.route
-                    const showRouteHint = Boolean(importRoute.name?.trim()) && importRoute.name !== importRoute.route
+                    const showRouteHint =
+                      Boolean(importRoute.name?.trim())
+                      && importRoute.name !== importRoute.route
+                      && !isImportedFileRoute(importRoute.route)
 
                     return (
                       <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer hover:bg-muted/40">

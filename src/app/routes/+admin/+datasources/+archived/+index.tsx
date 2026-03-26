@@ -6,6 +6,14 @@ import {createSignal, For, Show} from 'solid-js'
 import {Button} from '../../../../../components/ui/button'
 import {apiClient} from '../../../../../services/apiClient.ts'
 
+type StructuredFileConfig = {
+  assetPath: string
+  boundaryDisplayPath: string
+  boundaryPointer: string
+  format: 'json' | 'xml'
+  sourceFileName: string
+}
+
 const formatImportTimestamp = (value: string | null) => {
   return value ? formatDate(new Date(value), 'yyyy-MM-dd HH:mm') : 'Never imported'
 }
@@ -32,6 +40,7 @@ const fetchArchivedDataSources = async () => {
       lastImportAt: entry.lastImportAt ? String(entry.lastImportAt) : null,
       itemsAfterLastImport: entry.itemsAfterLastImport ?? 0,
       importRoute: entry.importRoute ?? null,
+      structuredFileConfig: (entry.structuredFileConfig ?? null) as StructuredFileConfig | null,
     }
   })
 }
@@ -140,10 +149,12 @@ const ArchivedDataSources = () => {
                             <span class="font-medium text-gray-700">Items After Import:</span>{' '}
                             {entry.itemsAfterLastImport.toLocaleString()}
                           </div>
-                          <div class="text-sm text-gray-500">
-                            <span class="font-medium text-gray-700">Route:</span>{' '}
-                            <span class="font-mono">{entry.importRoute ?? 'Not configured'}</span>
-                          </div>
+                          <Show when={!entry.structuredFileConfig}>
+                            <div class="text-sm text-gray-500">
+                              <span class="font-medium text-gray-700">Route:</span>{' '}
+                              <span class="font-mono">{entry.importRoute ?? 'Not configured'}</span>
+                            </div>
+                          </Show>
                         </div>
                       </td>
                       <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">

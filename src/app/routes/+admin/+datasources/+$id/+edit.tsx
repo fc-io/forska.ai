@@ -132,6 +132,9 @@ const AdminEditDataSource = () => {
   const [showArchiveConfirm, setShowArchiveConfirm] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
   const [successMessage, setSuccessMessage] = createSignal<string | null>(null)
+  const isStructuredFileDataSource = () => {
+    return Boolean(dataSourceQuery.data?.structuredFileConfig)
+  }
 
   const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
   const parseDateInput = (value: string): {date: Date | null; normalized: string | null; error: string | null} => {
@@ -237,7 +240,9 @@ const AdminEditDataSource = () => {
     <div class="min-h-screen bg-gray-50 p-6">
       <div class="max-w-3xl mx-auto bg-white border border-gray-200 rounded-lg shadow-sm p-6">
         <div class="mb-4 flex items-center justify-between">
-          <h1 class="text-2xl font-bold text-gray-900">Edit Data Source</h1>
+          <h1 class="text-2xl font-bold text-gray-900">
+            {isStructuredFileDataSource() ? 'Imported XML / JSON Source' : 'Edit Data Source'}
+          </h1>
           <Link to="/admin/datasources" class="text-sm text-blue-600 hover:text-blue-800">
             Back to Data Sources
           </Link>
@@ -253,43 +258,66 @@ const AdminEditDataSource = () => {
 
         <Show when={dataSourceQuery.data}>
           <form class="space-y-6" onSubmit={handleSubmit}>
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">Title</label>
-              <input
-                type="text"
-                value={title()}
-                onInput={(event) => {
-                  setTitle(event.currentTarget.value)
-                }}
-                required
-                class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
+            <Show
+              when={!isStructuredFileDataSource()}
+              fallback={
+                <div class="space-y-4">
+                  <div class="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                    Imported XML/JSON data sources are frozen after creation and can only be archived.
+                  </div>
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Title</label>
+                    <div class="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900">
+                      {title()}
+                    </div>
+                  </div>
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Description</label>
+                    <div class="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900 min-h-24 whitespace-pre-wrap">
+                      {description() || 'No description'}
+                    </div>
+                  </div>
+                </div>
+              }
+            >
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Title</label>
+                <input
+                  type="text"
+                  value={title()}
+                  onInput={(event) => {
+                    setTitle(event.currentTarget.value)
+                  }}
+                  required
+                  class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
 
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">Description</label>
-              <textarea
-                value={description()}
-                onInput={(event) => {
-                  setDescription(event.currentTarget.value)
-                }}
-                rows={4}
-                class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Description</label>
+                <textarea
+                  value={description()}
+                  onInput={(event) => {
+                    setDescription(event.currentTarget.value)
+                  }}
+                  rows={4}
+                  class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
 
-            <div>
-              <label class="block text-sm font-medium text-gray-700 mb-2">Import Route</label>
-              <input
-                type="text"
-                value={importRoute()}
-                onInput={(event) => {
-                  setImportRoute(event.currentTarget.value)
-                }}
-                placeholder="/api/imports/example"
-                class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
-              />
-            </div>
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Import Route</label>
+                <input
+                  type="text"
+                  value={importRoute()}
+                  onInput={(event) => {
+                    setImportRoute(event.currentTarget.value)
+                  }}
+                  placeholder="/api/imports/example"
+                  class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
+                />
+              </div>
+            </Show>
 
             <Show when={dataSourceQuery.data?.structuredFileConfig}>
               <div class="rounded-md border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900 space-y-1">
@@ -305,46 +333,57 @@ const AdminEditDataSource = () => {
                   <span class="font-medium">Boundary:</span>{' '}
                   <span class="font-mono">{dataSourceQuery.data?.structuredFileConfig?.boundaryDisplayPath}</span>
                 </div>
-                <div class="pt-2">
-                  <Link
-                    to="/admin/datasources/structured-file-import"
-                    class="text-blue-700 hover:text-blue-900 underline"
-                  >
-                    Import a new XML/JSON file
-                  </Link>
-                </div>
               </div>
             </Show>
 
-            <div>
-              <p class="block text-sm font-medium mb-2">Date Range</p>
-              <div class="grid grid-cols-2 gap-4">
-                <label class="flex flex-col text-sm font-medium gap-1">
-                  <span>Date From</span>
-                  <input
-                    type="text"
-                    value={dateFrom()}
-                    onInput={(event) => {
-                      setDateFrom(event.currentTarget.value)
-                    }}
-                    placeholder="YYYY-MM-DD"
-                    class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                  />
-                </label>
-                <label class="flex flex-col text-sm font-medium gap-1">
-                  <span>Date To</span>
-                  <input
-                    type="text"
-                    value={dateTo()}
-                    onInput={(event) => {
-                      setDateTo(event.currentTarget.value)
-                    }}
-                    placeholder="YYYY-MM-DD"
-                    class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                  />
-                </label>
+            <Show
+              when={!isStructuredFileDataSource()}
+              fallback={
+                <div>
+                  <p class="block text-sm font-medium mb-2">Date Range</p>
+                  <div class="grid grid-cols-2 gap-4 text-sm text-gray-600">
+                    <div>
+                      <div class="font-medium text-gray-700">Date From</div>
+                      <div>{dateFrom() || 'Not set'}</div>
+                    </div>
+                    <div>
+                      <div class="font-medium text-gray-700">Date To</div>
+                      <div>{dateTo() || 'Not set'}</div>
+                    </div>
+                  </div>
+                </div>
+              }
+            >
+              <div>
+                <p class="block text-sm font-medium mb-2">Date Range</p>
+                <div class="grid grid-cols-2 gap-4">
+                  <label class="flex flex-col text-sm font-medium gap-1">
+                    <span>Date From</span>
+                    <input
+                      type="text"
+                      value={dateFrom()}
+                      onInput={(event) => {
+                        setDateFrom(event.currentTarget.value)
+                      }}
+                      placeholder="YYYY-MM-DD"
+                      class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                    />
+                  </label>
+                  <label class="flex flex-col text-sm font-medium gap-1">
+                    <span>Date To</span>
+                    <input
+                      type="text"
+                      value={dateTo()}
+                      onInput={(event) => {
+                        setDateTo(event.currentTarget.value)
+                      }}
+                      placeholder="YYYY-MM-DD"
+                      class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
+                    />
+                  </label>
+                </div>
               </div>
-            </div>
+            </Show>
 
             <Show when={error()}>
               <p class="text-sm text-red-600">{error()}</p>
@@ -355,13 +394,15 @@ const AdminEditDataSource = () => {
             </Show>
 
             <div class="flex items-center gap-3">
-              <button
-                type="submit"
-                class="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                disabled={isSaving()}
-              >
-                {isSaving() ? 'Saving...' : 'Save Changes'}
-              </button>
+              <Show when={!isStructuredFileDataSource()}>
+                <button
+                  type="submit"
+                  class="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  disabled={isSaving()}
+                >
+                  {isSaving() ? 'Saving...' : 'Save Changes'}
+                </button>
+              </Show>
               <Link
                 to="/admin/datasources"
                 class="px-4 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"

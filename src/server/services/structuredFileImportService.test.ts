@@ -209,23 +209,23 @@ test('importStructuredFileFromConfig builds article rows from selected boundary'
       sourceFileName: analysis.upload.sourceFileName,
     }),
     dataSourceTitle: 'Structured import',
-    importRoute: 'structured-file:test-datasource',
+    importRoute: 'imported-file:test-datasource',
   })
 
   expect(result.stats).toEqual({itemCount: 2, importedCount: 2})
   expect(getStoredRows()).toHaveLength(2)
   expect(getStoredRows()[0]).toMatchObject({
     articleAuthors: ['Alice Example'],
-    articleId: 'structured-file:test-datasource:item-1',
+    articleId: 'imported-file:test-datasource:item-1',
     articleSummary: 'Alpha summary',
     articleTitle: 'Alpha title',
     fullTextConversionStatus: 'success',
     fullTextOriginalFormat: 'json',
-    importRoute: 'structured-file:test-datasource',
+    importRoute: 'imported-file:test-datasource',
   })
   expect(getStoredRows()[1]).toMatchObject({
     articleAuthors: ['Bob Example'],
-    articleId: 'structured-file:test-datasource:item-2',
+    articleId: 'imported-file:test-datasource:item-2',
     articleSummary: 'Beta summary',
     articleTitle: 'Beta title',
   })
@@ -261,13 +261,13 @@ test('importStructuredFileFromConfig keeps long explicit ids distinct', async ()
       sourceFileName: analysis.upload.sourceFileName,
     }),
     dataSourceTitle: 'Structured import',
-    importRoute: 'structured-file:test-datasource',
+    importRoute: 'imported-file:test-datasource',
   })
 
   const storedRows = getStoredRows()
 
   expect(storedRows).toHaveLength(2)
   expect(storedRows[0]?.articleId).not.toBe(storedRows[1]?.articleId)
-  expect(storedRows[0]?.articleId).toMatch(/^structured-file:test-datasource:/)
-  expect(storedRows[1]?.articleId).toMatch(/^structured-file:test-datasource:/)
+  expect(storedRows[0]?.articleId).toMatch(/^imported-file:test-datasource:/)
+  expect(storedRows[1]?.articleId).toMatch(/^imported-file:test-datasource:/)
 })

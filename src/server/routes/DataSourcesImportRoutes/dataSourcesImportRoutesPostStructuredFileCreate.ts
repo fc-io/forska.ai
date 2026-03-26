@@ -1,5 +1,6 @@
 import {randomUUID} from 'node:crypto'
 
+import {getImportedFileImportRoute} from '../../../utils/importRouteUtils.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
 import {queueImportedArticleRefreshes} from '../../services/articleImportStoreService.ts'
@@ -22,7 +23,13 @@ export const dataSourcesImportRoutesPostStructuredFileCreate = async (body: {
   boundaryDisplayPath: string
 }) => {
   const dataSourceId = randomUUID()
-  const importRoute = `structured-file:${dataSourceId}`
+  const title = body.title.trim()
+
+  if (!title) {
+    throw new Error('Title is required')
+  }
+
+  const importRoute = getImportedFileImportRoute(title)
   const config = buildStructuredFileImportConfig({
     assetPath: body.assetPath,
     boundaryDisplayPath: body.boundaryDisplayPath,
@@ -32,19 +39,36 @@ export const dataSourcesImportRoutesPostStructuredFileCreate = async (body: {
   })
   const cursor = getStructuredFileImportCursor(config)
   const result = (await getAppDatabaseService().transaction(async (tx) => {
+    const [existingRoute] = await tx.queryJson<{id: string}>(`
+      SELECT id
+      FROM app.import_route
+      WHERE route = ${getSqlLiteral(importRoute)}
+      LIMIT 1
+    `)
+
+    if (existingRoute) {
+      throw new Error('An imported XML/JSON datasource with this title already exists')
+    }
+
     await tx.run(`
       INSERT INTO app.data_source (id, title, description, import_route, cursor)
       VALUES (
         '${escapeSqlString(dataSourceId)}',
-        ${getSqlLiteral(body.title)},
+        ${getSqlLiteral(title)},
         ${getSqlLiteral(body.description?.trim() ? body.description : null)},
         ${getSqlLiteral(importRoute)},
         ${getSqlLiteral(cursor)}
       )
     `)
 
-    const importResult = await importStructuredFileFromConfig({config, dataSourceTitle: body.title, importRoute, tx})
+    const importResult = await importStructuredFileFromConfig({config, dataSourceTitle: title, importRoute, tx})
     const updatedAt = new Date()
+
+    await tx.run(`
+      UPDATE app.import_route
+      SET name = ${getSqlLiteral(title)}
+      WHERE route = ${getSqlLiteral(importRoute)}
+    `)
 
     await tx.run(`
       UPDATE app.data_source

@@ -53,6 +53,19 @@ const getSafeStructuredFileImportConfig = (cursorValue: unknown) => {
   }
 }
 
+const hasMutableDataSourceChanges = (body: {
+  title?: string
+  description?: string | null
+  importRoute?: string | null
+  dateFrom?: string | null
+  dateTo?: string | null
+  archived?: boolean
+}) => {
+  return [body.title, body.description, body.importRoute, body.dateFrom, body.dateTo].some((value) => {
+    return value !== undefined
+  })
+}
+
 const normalizeDataSourceRow = <TRow extends Record<string, unknown>>(row: TRow) => {
   const {cursor, ...safeRow} = row
 
@@ -266,6 +279,16 @@ export const dataSourcesRoutes = new Elysia()
   .patch(
     '/api/datasources/:id',
     async ({params, body}) => {
+      const existing = await getDataSourceRow(getAppDatabaseService(), params.id)
+
+      if (!existing) {
+        throw new Error('Data source not found')
+      }
+
+      if (getSafeStructuredFileImportConfig(existing.cursor) && hasMutableDataSourceChanges(body)) {
+        throw new Error('Imported XML/JSON data sources are immutable and can only be archived')
+      }
+
       const parsedDateFrom = body.dateFrom === undefined ? undefined : parseOptionalDate(body.dateFrom)
       const parsedDateTo = body.dateTo === undefined ? undefined : parseOptionalDate(body.dateTo)
       if (parsedDateFrom && parsedDateTo && parsedDateFrom > parsedDateTo) {
@@ -283,9 +306,9 @@ export const dataSourcesRoutes = new Elysia()
         return part !== null
       })
 
-      const updated = await getAppDatabaseService().transaction(async (tx) => {
+      const updated = (await getAppDatabaseService().transaction(async (tx) => {
         return updateDataSourceTx(tx, {dataSourceId: params.id, updateParts})
-      })
+      })) as DataSourceRow | null
 
       if (!updated) {
         throw new Error('Data source not found')
@@ -305,12 +328,12 @@ export const dataSourcesRoutes = new Elysia()
     },
   )
   .delete('/api/datasources/:id', async ({params}) => {
-    const archived: DataSourceRow | null = await getAppDatabaseService().transaction(async (tx) => {
+    const archived = (await getAppDatabaseService().transaction(async (tx) => {
       return updateDataSourceTx(tx, {
         dataSourceId: params.id,
         updateParts: ['archived = TRUE', 'updated_at = current_timestamp'],
       })
-    })
+    })) as DataSourceRow | null
 
     if (!archived) {
       throw new Error('Data source not found')

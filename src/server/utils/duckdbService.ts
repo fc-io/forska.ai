@@ -66,6 +66,11 @@ type EffectFiberFailure = {
   failure?: {cause?: unknown; error?: unknown; message?: string}
 }
 
+const duckdbStartupRetryableErrorFragments = [
+  'Failure while replaying WAL file',
+  'Calling DatabaseManager::GetDefaultDatabase with no default database set',
+]
+
 declare global {
   var __forskaDuckdbServiceState: DuckdbServiceState | undefined
 }
@@ -209,6 +214,14 @@ const getChainedDuckdbError = (error: unknown, nextError: unknown, context: stri
       : `${normalizedError.message} -- ${context}: ${normalizedNextError.message}`
 
   return combinedMessage === normalizedError.message ? normalizedError : new Error(combinedMessage)
+}
+
+const isDuckdbStartupRetryableError = (error: unknown) => {
+  const message = getNormalizedDuckdbError(error).message
+
+  return duckdbStartupRetryableErrorFragments.some((fragment) => {
+    return message.includes(fragment)
+  })
 }
 
 const withNormalizedDuckdbError = async <T>(work: () => Promise<T>): Promise<T> => {
@@ -425,7 +438,7 @@ const registerDuckdbShutdownHooks = () => {
 }
 
 const createDuckdbInstance = async (runtimeConfig: DuckdbRuntimeConfig) => {
-  return DuckDBInstance.fromCache(runtimeConfig.databasePath, getDuckdbInstanceOptions(runtimeConfig))
+  return DuckDBInstance.create(runtimeConfig.databasePath, getDuckdbInstanceOptions(runtimeConfig))
 }
 
 const cleanupFailedDuckdbStart = async (params: {
@@ -572,9 +585,18 @@ const ensureStartedDuckdbProcess = async () => {
     return duckdbServiceState.startupPromise
   }
 
-  duckdbServiceState.startupPromise = startDuckdbProcess().finally(() => {
-    duckdbServiceState.startupPromise = null
-  })
+  duckdbServiceState.startupPromise = startDuckdbProcess()
+    .catch(async (error) => {
+      if (!isDuckdbStartupRetryableError(error)) {
+        throw error
+      }
+
+      console.warn('[duckdb] retrying startup after recoverable initialization failure', error)
+      return startDuckdbProcess()
+    })
+    .finally(() => {
+      duckdbServiceState.startupPromise = null
+    })
 
   return duckdbServiceState.startupPromise
 }

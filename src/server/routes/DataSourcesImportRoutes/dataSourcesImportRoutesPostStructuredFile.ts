@@ -1,10 +1,7 @@
 import type {Context} from 'elysia'
 
 import {getDataSourceQueryService} from '../../services/dataSourceQueryService.ts'
-import {
-  getStructuredFileImportConfig,
-  importStructuredFileFromConfig,
-} from '../../services/structuredFileImportService.ts'
+import {getStructuredFileImportConfig} from '../../services/structuredFileImportService.ts'
 
 export const dataSourcesImportRoutesPostStructuredFile = async ({
   body,
@@ -27,14 +24,6 @@ export const dataSourcesImportRoutesPostStructuredFile = async ({
     return {data: null, error: 'Data source is not configured for structured file import'}
   }
 
-  const importRoute = `structured-file:${dataSource.id}`
-  const result = await importStructuredFileFromConfig({config, dataSourceTitle: dataSource.title, importRoute})
-  const updated = await getDataSourceQueryService().updateDataSourceAfterImport({
-    cursor: dataSource.cursor,
-    id: dataSource.id,
-    importRoute,
-    importedCount: result.stats.importedCount,
-  })
-
-  return {success: true, data: {dataSource: updated, stats: result.stats, structuredFileConfig: config}}
+  set.status = 400
+  return {data: null, error: 'Imported XML/JSON data sources are immutable and can only be archived'}
 }

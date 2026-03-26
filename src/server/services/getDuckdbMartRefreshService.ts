@@ -225,17 +225,21 @@ const getHasNullMartRefreshQueueGenerationRows = async (): Promise<boolean> => {
 
 const repairMartRefreshQueueGenerationColumn = async () => {
   await getAppDatabaseService().run(`
-    ALTER TABLE app.mart_refresh_queue ADD COLUMN IF NOT EXISTS refresh_generation BIGINT DEFAULT 0;
+    ALTER TABLE app.mart_refresh_queue ADD COLUMN IF NOT EXISTS refresh_generation BIGINT;
     UPDATE app.mart_refresh_queue
     SET refresh_generation = 0
     WHERE refresh_generation IS NULL;
   `)
+
+  await getAppDatabaseService().maintenance('checkpoint')
 }
 
 const repairMartRefreshQueueCompletedAtColumn = async () => {
   await getAppDatabaseService().run(`
     ALTER TABLE app.mart_refresh_queue ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
   `)
+
+  await getAppDatabaseService().maintenance('checkpoint')
 }
 
 const verifyMartRefreshQueueGenerationColumn = async () => {
@@ -1739,6 +1743,7 @@ const queueMartRefreshTasks = async (tasks: QueueMartRefreshTask[]) => {
       article_id,
       project_key,
       article_key,
+      refresh_generation,
       reason,
       created_at,
       updated_at
@@ -1747,7 +1752,7 @@ const queueMartRefreshTasks = async (tasks: QueueMartRefreshTask[]) => {
       .map((task) => {
         const projectId = task.projectId ?? null
         const articleId = task.articleId ?? null
-        return `(${getQuotedStringList([randomUUID(), task.refreshScope]).join(', ')}, ${getSqlLiteral(projectId)}, ${getSqlLiteral(articleId)}, ${getSqlLiteral(projectId ?? '')}, ${getSqlLiteral(articleId ?? '')}, ${getSqlLiteral(task.reason)}, NOW(), NOW())`
+        return `(${getQuotedStringList([randomUUID(), task.refreshScope]).join(', ')}, ${getSqlLiteral(projectId)}, ${getSqlLiteral(articleId)}, ${getSqlLiteral(projectId ?? '')}, ${getSqlLiteral(articleId ?? '')}, 0, ${getSqlLiteral(task.reason)}, NOW(), NOW())`
       })
       .join(', ')}
     ON CONFLICT(refresh_scope, project_key, article_key) DO UPDATE SET
@@ -1756,7 +1761,7 @@ const queueMartRefreshTasks = async (tasks: QueueMartRefreshTask[]) => {
         WHEN app.mart_refresh_queue.completed_at IS NULL THEN app.mart_refresh_queue.created_at
         ELSE NOW()
       END,
-      refresh_generation = app.mart_refresh_queue.refresh_generation + 1,
+      refresh_generation = COALESCE(app.mart_refresh_queue.refresh_generation, 0) + 1,
       reason = excluded.reason,
       updated_at = NOW()
   `)

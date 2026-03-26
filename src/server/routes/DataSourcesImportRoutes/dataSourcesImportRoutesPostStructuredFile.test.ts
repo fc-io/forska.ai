@@ -1,28 +1,6 @@
 import {expect, test} from 'bun:test'
 
-type StructuredFileConfig = {
-  assetPath: string
-  boundaryDisplayPath: string
-  boundaryPointer: string
-  format: 'json'
-  kind: 'structured_file'
-  sourceFileName: string
-  version: 1
-}
-
-type ReimportRouteResult = {
-  importCall: {config: StructuredFileConfig; dataSourceTitle: string; importRoute: string}
-  result: {
-    data: {
-      dataSource: {id: string; importRoute: string; itemsAfterLastImport: number; title: string}
-      stats: {itemCount: number; importedCount: number}
-      structuredFileConfig: StructuredFileConfig
-    }
-    success: boolean
-  }
-  setStatus: number
-  updateCall: {cursor: string; id: string; importRoute: string; importedCount: number}
-}
+type StructuredFileReimportBlockedResult = {result: {data: null; error: string}; setStatus: number}
 
 const getLastJsonLine = (stdout: string) => {
   return (
@@ -38,7 +16,7 @@ const getLastJsonLine = (stdout: string) => {
   )
 }
 
-test('structured file reimport uses the stable datasource-derived route', () => {
+test('structured file reimport is blocked because imported files are immutable', () => {
   const runRoute = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -48,21 +26,6 @@ test('structured file reimport uses the stable datasource-derived route', () => 
 
         const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
         const structuredFileImportServiceModulePath = new URL('./src/server/services/structuredFileImportService.ts', 'file://' + process.cwd() + '/').pathname
-
-        const structuredFileConfig = {
-          assetPath: 'assets/structured_file_imports/upload.json',
-          boundaryDisplayPath: '$.records[]',
-          boundaryPointer: '/records',
-          format: 'json',
-          kind: 'structured_file',
-          sourceFileName: 'upload.json',
-          version: 1,
-        }
-
-        const state = {
-          importCall: null,
-          updateCall: null,
-        }
 
         void mock.module(dataSourceQueryServiceModulePath, () => {
           return {
@@ -77,20 +40,11 @@ test('structured file reimport uses the stable datasource-derived route', () => 
                     dateTo: null,
                     description: 'Created from upload',
                     id,
-                    importRoute: 'edited-import-route',
+                    importRoute: 'imported-file:Created datasource',
                     itemsAfterLastImport: 2,
                     lastImportAt: new Date('2026-01-02T00:00:00.000Z'),
                     title: 'Created datasource',
                     updatedAt: new Date('2026-01-02T00:00:00.000Z'),
-                  }
-                },
-                updateDataSourceAfterImport: async (params) => {
-                  state.updateCall = params
-                  return {
-                    id: params.id,
-                    importRoute: params.importRoute ?? null,
-                    itemsAfterLastImport: params.importedCount,
-                    title: 'Created datasource',
                   }
                 },
               }
@@ -101,14 +55,17 @@ test('structured file reimport uses the stable datasource-derived route', () => 
         void mock.module(structuredFileImportServiceModulePath, () => {
           return {
             getStructuredFileImportConfig: (cursor) => {
-              return cursor === 'cursor-json' ? structuredFileConfig : null
-            },
-            importStructuredFileFromConfig: async (params) => {
-              state.importCall = params
-              return {
-                config: {kind: 'structured_file', version: 1},
-                stats: {itemCount: 2, importedCount: 2},
-              }
+              return cursor === 'cursor-json'
+                ? {
+                    assetPath: 'assets/structured_file_imports/upload.json',
+                    boundaryDisplayPath: '$.records[]',
+                    boundaryPointer: '/records',
+                    format: 'json',
+                    kind: 'structured_file',
+                    sourceFileName: 'upload.json',
+                    version: 1,
+                  }
+                : null
             },
           }
         })
@@ -119,7 +76,7 @@ test('structured file reimport uses the stable datasource-derived route', () => 
 
         const set = {status: 200}
         const result = await dataSourcesImportRoutesPostStructuredFile({body: {id: 'datasource-1'}, set})
-        console.log(JSON.stringify({importCall: state.importCall, result, setStatus: set.status, updateCall: state.updateCall}))
+        console.log(JSON.stringify({result, setStatus: set.status}))
       `,
     ],
     {cwd: process.cwd(), env: process.env},
@@ -129,47 +86,11 @@ test('structured file reimport uses the stable datasource-derived route', () => 
     throw new Error(runRoute.stderr.toString() || runRoute.stdout.toString() || 'Structured file reimport test failed')
   }
 
-  const parsed = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as ReimportRouteResult
+  const parsed = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as StructuredFileReimportBlockedResult
 
-  expect(parsed.setStatus).toBe(200)
-  expect(parsed.importCall).toEqual({
-    config: {
-      assetPath: 'assets/structured_file_imports/upload.json',
-      boundaryDisplayPath: '$.records[]',
-      boundaryPointer: '/records',
-      format: 'json',
-      kind: 'structured_file',
-      sourceFileName: 'upload.json',
-      version: 1,
-    },
-    dataSourceTitle: 'Created datasource',
-    importRoute: 'structured-file:datasource-1',
-  })
-  expect(parsed.updateCall).toEqual({
-    cursor: 'cursor-json',
-    id: 'datasource-1',
-    importRoute: 'structured-file:datasource-1',
-    importedCount: 2,
-  })
+  expect(parsed.setStatus).toBe(400)
   expect(parsed.result).toEqual({
-    success: true,
-    data: {
-      dataSource: {
-        id: 'datasource-1',
-        importRoute: 'structured-file:datasource-1',
-        itemsAfterLastImport: 2,
-        title: 'Created datasource',
-      },
-      stats: {itemCount: 2, importedCount: 2},
-      structuredFileConfig: {
-        assetPath: 'assets/structured_file_imports/upload.json',
-        boundaryDisplayPath: '$.records[]',
-        boundaryPointer: '/records',
-        format: 'json',
-        kind: 'structured_file',
-        sourceFileName: 'upload.json',
-        version: 1,
-      },
-    },
+    data: null,
+    error: 'Imported XML/JSON data sources are immutable and can only be archived',
   })
 })

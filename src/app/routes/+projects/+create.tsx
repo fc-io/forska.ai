@@ -9,6 +9,7 @@ import {apiClient} from '../../../services/apiClient'
 import type {fetchProjects} from '../../../services/projectsService.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 import {getSglangRuntimeModelNotice} from '../../../utils/getSglangRuntimeModelNotice.ts'
+import {isImportedFileRoute} from '../../../utils/importRouteUtils.ts'
 import {fetchProviderConnections} from '../+admin/+models/providerConnectionsClient.ts'
 
 type PromptItem = {id: string; content: string; promptHeading: string; type: string}
@@ -585,7 +586,7 @@ const CreateProject = () => {
                     {(r) => {
                       const name = r.name?.trim() ?? ''
                       const displayName = name ? name : r.route
-                      const showRouteHint = Boolean(name) && name !== r.route
+                      const showRouteHint = Boolean(name) && name !== r.route && !isImportedFileRoute(r.route)
                       return (
                         <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer">
                           <input

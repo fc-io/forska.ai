@@ -92,7 +92,7 @@ test('structured file datasource create runs import inside a transaction and que
                     dateTo: null,
                     description: 'Created from upload',
                     id,
-                    importRoute: 'structured-file:' + id,
+                    importRoute: 'imported-file:Created datasource',
                     itemsAfterLastImport: 2,
                     lastImportAt: new Date('2026-01-02T00:00:00.000Z'),
                     title: 'Created datasource',
@@ -162,11 +162,13 @@ test('structured file datasource create runs import inside a transaction and que
 
   expect(parsed.transactionCallCount).toBe(1)
   expect(parsed.importCallHasTx).toBe(true)
-  expect(parsed.txStatements).toHaveLength(2)
+  expect(parsed.txStatements).toHaveLength(3)
   expect(parsed.queueCalls).toEqual([['route-1']])
   expect(parsed.getDataSourceCallCount).toBe(1)
   expect(parsed.result.success).toBe(true)
   expect(parsed.result.data.stats).toEqual({itemCount: 2, importedCount: 2})
+  expect(parsed.txStatements[1]).toContain('UPDATE app.import_route')
+  expect(parsed.txStatements[1]).toContain("'Created datasource'")
 })
 
 test('structured file datasource create does not queue refreshes when the transactional import fails', () => {

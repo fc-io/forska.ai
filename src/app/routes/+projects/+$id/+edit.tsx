@@ -10,6 +10,7 @@ import {apiClient} from '../../../../services/apiClient'
 import {fetchProjectWithPrompts} from '../../../../services/projectsService'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
 import {getSglangRuntimeModelNotice} from '../../../../utils/getSglangRuntimeModelNotice.ts'
+import {isImportedFileRoute} from '../../../../utils/importRouteUtils.ts'
 import {fetchProviderConnections} from '../../+admin/+models/providerConnectionsClient.ts'
 import {useArchivedProjectRedirect, useProjectAccessQuery} from '../projectAccessGuard'
 
@@ -861,7 +862,7 @@ const EditProject = (): JSX.Element => {
                         {(r) => {
                           const name = r.name?.trim() ?? ''
                           const displayName = name ? name : r.route
-                          const showRouteHint = Boolean(name) && name !== r.route
+                          const showRouteHint = Boolean(name) && name !== r.route && !isImportedFileRoute(r.route)
                           return (
                             <label
                               class={`flex items-start gap-3 border rounded-md p-3 cursor-pointer ${isLocked() ? 'opacity-60' : 'border-input'}`}

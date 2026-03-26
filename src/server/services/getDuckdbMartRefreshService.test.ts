@@ -1207,6 +1207,74 @@ test('mart refresh skips schema repair writes when refresh_generation already ex
   }
 })
 
+test('mart refresh schema repair avoids ALTER COLUMN defaults and checkpoints after repair', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const state = {maintenanceCalls: [], runStatements: []}
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                maintenance: async (command) => {
+                  state.maintenanceCalls.push(command)
+                },
+                queryJson: async (statement) => {
+                  return statement.includes("column_name = 'refresh_generation'")
+                    ? [{count: 0}]
+                    : statement.includes("column_name = 'completed_at'")
+                      ? [{count: 0}]
+                      : statement.includes('WHERE refresh_generation IS NULL')
+                        ? [{count: 0}]
+                        : []
+                },
+                queryJsonBackground: async () => [],
+                run: async (statement) => {
+                  state.runStatements.push(statement)
+                },
+                runBackground: async () => {},
+                transaction: async (work) => {
+                  return work({queryJson: async () => [], run: async () => {}})
+                },
+              }
+            },
+          }
+        })
+
+        const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts?schema-repair=' + Date.now())
+        const service = getDuckdbMartRefreshService()
+        await service.queueJudgmentArticleRefresh('article-id', 'schema-repair-test')
+        console.log(JSON.stringify(state))
+      `,
+    ],
+    {cwd: process.cwd(), env: process.env},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'Mart schema repair regression test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    maintenanceCalls: string[]
+    runStatements: string[]
+  }
+
+  expect(result.maintenanceCalls).toEqual(['checkpoint', 'checkpoint'])
+  expect(result.runStatements[0]).toContain('ADD COLUMN IF NOT EXISTS refresh_generation BIGINT;')
+  expect(result.runStatements[0]).not.toContain('DEFAULT 0')
+  expect(result.runStatements[1]).toContain('ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;')
+  expect(result.runStatements[2]).toContain('INSERT INTO app.mart_refresh_queue')
+  expect(result.runStatements[2]).toContain('refresh_generation')
+})
+
 test('mart refresh yields between drain passes after exceeding the time budget', () => {
   const duckdbPath = `/tmp/f1-mart-refresh-yield-${Date.now()}.duckdb`
   const runScript = globalThis.Bun.spawnSync(

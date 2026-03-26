@@ -5,6 +5,7 @@ import {createSignal, For, Show} from 'solid-js'
 
 import {Button} from '../../../../components/ui/button'
 import {apiClient} from '../../../../services/apiClient.ts'
+import {isImportedFileRoute} from '../../../../utils/importRouteUtils.ts'
 
 type StructuredFileConfig = {
   assetPath: string
@@ -68,7 +69,7 @@ const archiveDataSource = async (id: string) => {
 }
 
 const postImportAndRefetch = async (
-  request: Promise<{data?: {success?: boolean}; error?: unknown}>,
+  request: Promise<{data?: {success?: boolean} | null; error?: unknown}>,
   refetch: () => Promise<unknown>,
 ) => {
   const response = await request
@@ -81,30 +82,49 @@ const postImportAndRefetch = async (
   await refetch()
 }
 
+const getImportRequest = (request: Promise<unknown>) => {
+  return request as Promise<{data?: {success?: boolean} | null; error?: unknown}>
+}
+
 const startDataSourceImport = async (entry: DataSourceListItem, refetch: () => Promise<unknown>) => {
   if (entry.structuredFileConfig) {
-    return await postImportAndRefetch(apiClient.api.datasources.import['structured-file'].post({id: entry.id}), refetch)
+    throw new Error('Imported XML/JSON data sources are immutable and can only be archived')
   }
   if (entry.importRoute?.startsWith('fhir:')) {
     return await postImportAndRefetch(
-      apiClient.api.datasources.import['fhir-ehr-patients'].post({id: entry.id}),
+      getImportRequest(apiClient.api.datasources.import['fhir-ehr-patients'].post({id: entry.id})),
       refetch,
     )
   }
   if (entry.importRoute === '/api/datasources/import/arxiv') {
-    return await postImportAndRefetch(apiClient.api.datasources.import.arxiv.post({id: entry.id}), refetch)
+    return await postImportAndRefetch(
+      getImportRequest(apiClient.api.datasources.import.arxiv.post({id: entry.id})),
+      refetch,
+    )
   }
   if (entry.importRoute === '/api/datasources/import/biorxiv') {
-    return await postImportAndRefetch(apiClient.api.datasources.import.biorxiv.post({id: entry.id}), refetch)
+    return await postImportAndRefetch(
+      getImportRequest(apiClient.api.datasources.import.biorxiv.post({id: entry.id})),
+      refetch,
+    )
   }
   if (entry.importRoute === '/api/datasources/import/medrxiv') {
-    return await postImportAndRefetch(apiClient.api.datasources.import.medrxiv.post({id: entry.id}), refetch)
+    return await postImportAndRefetch(
+      getImportRequest(apiClient.api.datasources.import.medrxiv.post({id: entry.id})),
+      refetch,
+    )
   }
   if (entry.importRoute === '/api/datasources/import/pubmed') {
-    return await postImportAndRefetch(apiClient.api.datasources.import.pubmed.post({id: entry.id}), refetch)
+    return await postImportAndRefetch(
+      getImportRequest(apiClient.api.datasources.import.pubmed.post({id: entry.id})),
+      refetch,
+    )
   }
   if (entry.importRoute === '/api/datasources/import/europe-pmc-ppr') {
-    return await postImportAndRefetch(apiClient.api.datasources.import['europe-pmc-ppr'].post({id: entry.id}), refetch)
+    return await postImportAndRefetch(
+      getImportRequest(apiClient.api.datasources.import['europe-pmc-ppr'].post({id: entry.id})),
+      refetch,
+    )
   }
 
   throw new Error(`Unknown import route: ${entry.importRoute}`)
@@ -278,10 +298,12 @@ const AdminDataSources = () => {
                               <span class="font-medium text-gray-700">Items After Import:</span>{' '}
                               {entry.itemsAfterLastImport.toLocaleString()}
                             </div>
-                            <div class="text-sm text-gray-500">
-                              <span class="font-medium text-gray-700">Route:</span>{' '}
-                              <span class="font-mono">{entry.importRoute ?? 'Not configured'}</span>
-                            </div>
+                            <Show when={!entry.structuredFileConfig}>
+                              <div class="text-sm text-gray-500">
+                                <span class="font-medium text-gray-700">Route:</span>{' '}
+                                <span class="font-mono">{entry.importRoute ?? 'Not configured'}</span>
+                              </div>
+                            </Show>
                             <Show when={entry.structuredFileConfig}>
                               <div class="pt-2 space-y-1 text-sm text-gray-500">
                                 <div>
@@ -307,9 +329,9 @@ const AdminDataSources = () => {
                               params={{id: entry.id}}
                               class="px-3 py-1.5 rounded-md border border-gray-200 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
                             >
-                              Edit
+                              {entry.structuredFileConfig || isImportedFileRoute(entry.importRoute) ? 'View' : 'Edit'}
                             </Link>
-                            <Show when={entry.importRoute || entry.structuredFileConfig}>
+                            <Show when={entry.importRoute && !entry.structuredFileConfig}>
                               <button
                                 type="button"
                                 onClick={() => {

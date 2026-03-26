@@ -1,6 +1,7 @@
 import {format} from 'date-fns'
 import {createMemo, For, Show} from 'solid-js'
 
+import {isImportedFileRoute} from '../../../utils/importRouteUtils.ts'
 import {RuntimeModelNotice} from '../runtimeModelNotice.tsx'
 
 type ProjectDetailsInformationProject = {
@@ -159,7 +160,7 @@ export const ProjectDetailsInformation = (props: ProjectDetailsInformationProps)
                 const name = props.importRouteNamesByRoute?.[route] ?? null
                 const trimmedName = name?.trim() ?? ''
                 const displayName = trimmedName ? trimmedName : route
-                const showRouteHint = Boolean(trimmedName) && trimmedName !== route
+                const showRouteHint = Boolean(trimmedName) && trimmedName !== route && !isImportedFileRoute(route)
                 return (
                   <li class="text-gray-900">
                     <div class="font-medium break-all">{displayName}</div>

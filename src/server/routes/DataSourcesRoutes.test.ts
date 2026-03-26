@@ -86,7 +86,7 @@ const runDataSourcesRoute = (url: string) => {
           dateTo: null,
           description: 'Created from upload',
           id: 'datasource-1',
-          importRoute: 'structured-file:datasource-1',
+          importRoute: 'imported-file:Created datasource',
           itemsAfterLastImport: 2,
           lastImportAt: '2026-01-02T00:00:00.000Z',
           title: 'Created datasource',
@@ -148,6 +148,7 @@ test('datasource list responses omit raw cursor while including structured file 
   }
 
   expect(parsed.status).toBe(200)
+  expect(parsed.body.data).toHaveLength(1)
   expect(parsed.body).toEqual({
     data: [
       {
@@ -157,7 +158,7 @@ test('datasource list responses omit raw cursor while including structured file 
         dateTo: null,
         description: 'Created from upload',
         id: 'datasource-1',
-        importRoute: 'structured-file:datasource-1',
+        importRoute: 'imported-file:Created datasource',
         itemsAfterLastImport: 2,
         lastImportAt: '2026-01-02T00:00:00.000Z',
         structuredFileConfig,
@@ -166,7 +167,7 @@ test('datasource list responses omit raw cursor while including structured file 
       },
     ],
   })
-  expect(Object.hasOwn(parsed.body.data[0], 'cursor')).toBe(false)
+  expect(Object.hasOwn(parsed.body.data[0] as object, 'cursor')).toBe(false)
 })
 
 test('datasource detail responses omit raw cursor while including structured file config', () => {
@@ -189,7 +190,7 @@ test('datasource detail responses omit raw cursor while including structured fil
       dateTo: null,
       description: 'Created from upload',
       id: 'datasource-1',
-      importRoute: 'structured-file:datasource-1',
+      importRoute: 'imported-file:Created datasource',
       itemsAfterLastImport: 2,
       lastImportAt: '2026-01-02T00:00:00.000Z',
       structuredFileConfig,
@@ -198,4 +199,79 @@ test('datasource detail responses omit raw cursor while including structured fil
     },
   })
   expect(Object.hasOwn(parsed.body.data, 'cursor')).toBe(false)
+})
+
+test('structured file datasource patch rejects non-archive edits', () => {
+  const runRoute = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+        const {Elysia} = await import('elysia')
+
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+
+        const row = {
+          archived: false,
+          createdAt: '2026-01-01T00:00:00.000Z',
+          cursor: ${JSON.stringify(JSON.stringify(structuredFileConfig))},
+          dateFrom: null,
+          dateTo: null,
+          description: 'Created from upload',
+          id: 'datasource-1',
+          importRoute: 'imported-file:Created datasource',
+          itemsAfterLastImport: 2,
+          lastImportAt: '2026-01-02T00:00:00.000Z',
+          title: 'Created datasource',
+          updatedAt: '2026-01-02T00:00:00.000Z',
+        }
+
+        const state = {transactionCallCount: 0}
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                queryJson: async () => [row],
+                run: async () => {},
+                transaction: async () => {
+                  state.transactionCallCount += 1
+                  throw new Error('transaction should not be used')
+                },
+              }
+            },
+          }
+        })
+
+        const {dataSourcesRoutes} = await import('./src/server/routes/DataSourcesRoutes.ts?test=' + Date.now())
+        const app = new Elysia().use(dataSourcesRoutes)
+        const response = await app.handle(
+          new Request('http://localhost/api/datasources/datasource-1', {
+            method: 'PATCH',
+            headers: {'content-type': 'application/json'},
+            body: JSON.stringify({title: 'Edited title'}),
+          }),
+        )
+        console.log(JSON.stringify({body: await response.text(), status: response.status, transactionCallCount: state.transactionCallCount}))
+      `,
+    ],
+    {cwd: process.cwd(), env: process.env},
+  )
+
+  if (runRoute.exitCode !== 0) {
+    throw new Error(
+      runRoute.stderr.toString() || runRoute.stdout.toString() || 'Datasource patch rejection test failed',
+    )
+  }
+
+  const parsed = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
+    body: string
+    status: number
+    transactionCallCount: number
+  }
+
+  expect(parsed.status).toBe(500)
+  expect(parsed.body).toContain('Imported XML/JSON data sources are immutable and can only be archived')
+  expect(parsed.transactionCallCount).toBe(0)
 })
