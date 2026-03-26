@@ -10,8 +10,13 @@ const createdAssetPathsRef: {current: string[]} = {current: []}
 
 void mock.module(articleImportStoreServiceModulePath, () => {
   return {
+    queueImportedArticleRefreshes: async (_importRouteIds: string[]) => {},
     storeImportedArticles: async (rows: Array<Record<string, unknown>>) => {
       storedRowsRef.current.push(rows)
+    },
+    storeImportedArticlesWithTx: async (_tx: unknown, rows: Array<Record<string, unknown>>) => {
+      storedRowsRef.current.push(rows)
+      return {importRouteIds: []}
     },
   }
 })
@@ -76,6 +81,27 @@ test('analyzeStructuredFileUpload finds XML repeated element boundaries', async 
   expect(result.candidates[0]).toMatchObject({count: 2, displayPath: '$.root.record[]', pointer: '/root/record'})
 })
 
+test('analyzeStructuredFileUpload only returns root-resolvable boundary paths', async () => {
+  const {analyzeStructuredFileUpload} = await import('./structuredFileImportService.ts')
+
+  const result = await analyzeStructuredFileUpload(
+    new File(
+      [JSON.stringify([{records: [{id: '1'}, {id: '2'}]}, {records: [{id: '3'}, {id: '4'}]}])],
+      'nested-records.json',
+      {type: 'application/json'},
+    ),
+  )
+
+  trackAssetPath(result.upload.assetPath)
+
+  expect(
+    result.candidates.map((candidate) => {
+      return candidate.pointer
+    }),
+  ).toEqual([''])
+  expect(result.candidates[0]).toMatchObject({count: 2, displayPath: '$[]', pointer: ''})
+})
+
 test('importStructuredFileFromConfig builds article rows from selected boundary', async () => {
   const {analyzeStructuredFileUpload, buildStructuredFileImportConfig, importStructuredFileFromConfig} =
     await import('./structuredFileImportService.ts')
@@ -138,4 +164,45 @@ test('importStructuredFileFromConfig builds article rows from selected boundary'
     articleSummary: 'Beta summary',
     articleTitle: 'Beta title',
   })
+})
+
+test('importStructuredFileFromConfig keeps long explicit ids distinct', async () => {
+  const {analyzeStructuredFileUpload, buildStructuredFileImportConfig, importStructuredFileFromConfig} =
+    await import('./structuredFileImportService.ts')
+  const sharedPrefix = 'long-id-'.repeat(30)
+  const analysis = await analyzeStructuredFileUpload(
+    new File(
+      [
+        JSON.stringify({
+          records: [
+            {id: `${sharedPrefix}alpha`, title: 'Alpha title'},
+            {id: `${sharedPrefix}beta`, title: 'Beta title'},
+          ],
+        }),
+      ],
+      'long-ids.json',
+      {type: 'application/json'},
+    ),
+  )
+
+  trackAssetPath(analysis.upload.assetPath)
+
+  await importStructuredFileFromConfig({
+    config: buildStructuredFileImportConfig({
+      assetPath: analysis.upload.assetPath,
+      boundaryDisplayPath: '$.records[]',
+      boundaryPointer: '/records',
+      format: analysis.upload.format,
+      sourceFileName: analysis.upload.sourceFileName,
+    }),
+    dataSourceTitle: 'Structured import',
+    importRoute: 'structured-file:test-datasource',
+  })
+
+  const storedRows = getStoredRows()
+
+  expect(storedRows).toHaveLength(2)
+  expect(storedRows[0]?.articleId).not.toBe(storedRows[1]?.articleId)
+  expect(storedRows[0]?.articleId).toMatch(/^structured-file:test-datasource:/)
+  expect(storedRows[1]?.articleId).toMatch(/^structured-file:test-datasource:/)
 })
