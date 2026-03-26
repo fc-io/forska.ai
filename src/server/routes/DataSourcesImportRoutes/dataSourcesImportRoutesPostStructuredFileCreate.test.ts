@@ -1,154 +1,280 @@
-import {expect, mock, test} from 'bun:test'
+import {expect, test} from 'bun:test'
 
-const articleImportStoreServiceModulePath = new URL('../../services/articleImportStoreService.ts', import.meta.url)
-  .pathname
-const appDatabaseServiceModulePath = new URL('../../services/appDatabaseService.ts', import.meta.url).pathname
-const dataSourceQueryServiceModulePath = new URL('../../services/dataSourceQueryService.ts', import.meta.url).pathname
-const structuredFileImportServiceModulePath = new URL('../../services/structuredFileImportService.ts', import.meta.url)
-  .pathname
-
-const state = {
-  getDataSourceById: mock(async (id: string) => {
-    return {
-      archived: false,
-      createdAt: new Date('2026-01-01T00:00:00.000Z'),
-      cursor: 'cursor-json',
-      dateFrom: null,
-      dateTo: null,
-      description: 'Created from upload',
-      id,
-      importRoute: `structured-file:${id}`,
-      itemsAfterLastImport: 2,
-      lastImportAt: new Date('2026-01-02T00:00:00.000Z'),
-      title: 'Created datasource',
-      updatedAt: new Date('2026-01-02T00:00:00.000Z'),
-    }
-  }),
-  importStructuredFileFromConfig: mock(async (params: {tx?: unknown}) => {
-    return {
-      config: {kind: 'structured_file', version: 1},
-      importRouteIds: ['route-1'],
-      stats: {itemCount: 2, importedCount: 2},
-      tx: params.tx,
-    }
-  }),
-  queueImportedArticleRefreshes: mock(async (_importRouteIds: string[]) => {}),
-  transaction: mock(
-    async (
-      work: (tx: {
-        queryJson: <T>(_statement: string) => Promise<T[]>
-        run: (statement: string) => Promise<void>
-      }) => Promise<unknown>,
-    ) => {
-      const tx = {
-        queryJson: async <T>(_statement: string) => {
-          return [] as T[]
-        },
-        run: async (statement: string) => {
-          state.txStatements.push(statement)
-        },
-      }
-
-      return await work(tx)
-    },
-  ),
-  txStatements: [] as string[],
+type StructuredFileCreateSuccessResult = {
+  getDataSourceCallCount: number
+  importCallHasTx: boolean
+  queueCalls: string[][]
+  result: {data: {stats: {itemCount: number; importedCount: number}}; success: boolean}
+  transactionCallCount: number
+  txStatements: string[]
 }
 
-void mock.module(articleImportStoreServiceModulePath, () => {
-  return {queueImportedArticleRefreshes: state.queueImportedArticleRefreshes}
-})
-
-void mock.module(appDatabaseServiceModulePath, () => {
-  return {
-    getAppDatabaseService: () => {
-      return {transaction: state.transaction}
-    },
-  }
-})
-
-void mock.module(dataSourceQueryServiceModulePath, () => {
-  return {
-    getDataSourceQueryService: () => {
-      return {getDataSourceById: state.getDataSourceById}
-    },
-  }
-})
-
-void mock.module(structuredFileImportServiceModulePath, () => {
-  return {
-    buildStructuredFileImportConfig: (params: Record<string, unknown>) => {
-      return {kind: 'structured_file', version: 1, ...params}
-    },
-    getStructuredFileImportCursor: () => {
-      return 'cursor-json'
-    },
-    importStructuredFileFromConfig: state.importStructuredFileFromConfig,
-  }
-})
-
-const loadRoute = async () => {
-  const module = await import('./dataSourcesImportRoutesPostStructuredFileCreate.ts')
-  return module.dataSourcesImportRoutesPostStructuredFileCreate
+type StructuredFileCreateFailureResult = {
+  errorMessage: string | null
+  getDataSourceCallCount: number
+  queueCalls: string[][]
+  transactionCallCount: number
 }
 
-test('structured file datasource create runs import inside a transaction and queues refreshes after commit', async () => {
-  state.getDataSourceById.mockClear()
-  state.importStructuredFileFromConfig.mockClear()
-  state.queueImportedArticleRefreshes.mockClear()
-  state.transaction.mockClear()
-  state.txStatements = []
+const getLastJsonLine = (stdout: string) => {
+  return (
+    stdout
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line !== ''
+      })
+      .at(-1) ?? ''
+  )
+}
 
-  const route = await loadRoute()
-  const result = await route({
-    assetPath: 'assets/structured_file_imports/upload.json',
-    boundaryDisplayPath: '$.records[]',
-    boundaryPointer: '/records',
-    description: 'Created from upload',
-    format: 'json',
-    sourceFileName: 'records.json',
-    title: 'Created datasource',
-  })
+test('structured file datasource create runs import inside a transaction and queues refreshes after commit', () => {
+  const runRoute = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
 
-  expect(state.transaction).toHaveBeenCalledTimes(1)
-  expect(state.importStructuredFileFromConfig).toHaveBeenCalledTimes(1)
-  expect(state.importStructuredFileFromConfig.mock.calls[0]?.[0]?.tx).toBeDefined()
-  expect(state.txStatements).toHaveLength(2)
-  expect(state.queueImportedArticleRefreshes).toHaveBeenCalledWith(['route-1'])
-  expect(state.getDataSourceById).toHaveBeenCalledTimes(1)
-  expect(result.success).toBe(true)
-  expect(result.data.stats).toEqual({itemCount: 2, importedCount: 2})
-})
+        const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').pathname
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
+        const structuredFileImportServiceModulePath = new URL('./src/server/services/structuredFileImportService.ts', 'file://' + process.cwd() + '/').pathname
 
-test('structured file datasource create does not queue refreshes when the transactional import fails', async () => {
-  state.getDataSourceById.mockClear()
-  state.queueImportedArticleRefreshes.mockClear()
-  state.transaction.mockClear()
-  state.txStatements = []
-  state.importStructuredFileFromConfig.mockImplementationOnce(async () => {
-    throw new Error('boom')
-  })
+        const state = {
+          getDataSourceCallCount: 0,
+          importCallHasTx: false,
+          queueCalls: [],
+          transactionCallCount: 0,
+          txStatements: [],
+        }
 
-  const route = await loadRoute()
+        void mock.module(articleImportStoreServiceModulePath, () => {
+          return {
+            queueImportedArticleRefreshes: async (importRouteIds) => {
+              state.queueCalls.push(importRouteIds)
+            },
+          }
+        })
 
-  let error: Error | null = null
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                transaction: async (work) => {
+                  state.transactionCallCount += 1
+                  const tx = {
+                    queryJson: async () => [],
+                    run: async (statement) => {
+                      state.txStatements.push(statement)
+                    },
+                  }
+                  return await work(tx)
+                },
+              }
+            },
+          }
+        })
 
-  try {
-    await route({
-      assetPath: 'assets/structured_file_imports/upload.json',
-      boundaryDisplayPath: '$.records[]',
-      boundaryPointer: '/records',
-      description: 'Created from upload',
-      format: 'json',
-      sourceFileName: 'records.json',
-      title: 'Created datasource',
-    })
-  } catch (caughtError) {
-    error = caughtError instanceof Error ? caughtError : new Error(String(caughtError))
+        void mock.module(dataSourceQueryServiceModulePath, () => {
+          return {
+            getDataSourceQueryService: () => {
+              return {
+                getDataSourceById: async (id) => {
+                  state.getDataSourceCallCount += 1
+                  return {
+                    archived: false,
+                    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+                    cursor: 'cursor-json',
+                    dateFrom: null,
+                    dateTo: null,
+                    description: 'Created from upload',
+                    id,
+                    importRoute: 'structured-file:' + id,
+                    itemsAfterLastImport: 2,
+                    lastImportAt: new Date('2026-01-02T00:00:00.000Z'),
+                    title: 'Created datasource',
+                    updatedAt: new Date('2026-01-02T00:00:00.000Z'),
+                  }
+                },
+              }
+            },
+          }
+        })
+
+        void mock.module(structuredFileImportServiceModulePath, () => {
+          return {
+            buildStructuredFileImportConfig: (params) => {
+              return {kind: 'structured_file', version: 1, ...params}
+            },
+            getStructuredFileImportCursor: () => {
+              return 'cursor-json'
+            },
+            importStructuredFileFromConfig: async (params) => {
+              state.importCallHasTx = Boolean(params.tx)
+              return {
+                config: {kind: 'structured_file', version: 1},
+                importRouteIds: ['route-1'],
+                stats: {itemCount: 2, importedCount: 2},
+              }
+            },
+          }
+        })
+
+        const {dataSourcesImportRoutesPostStructuredFileCreate} = await import(
+          './src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostStructuredFileCreate.ts?test=' + Date.now(),
+        )
+
+        const result = await dataSourcesImportRoutesPostStructuredFileCreate({
+          assetPath: 'assets/structured_file_imports/upload.json',
+          boundaryDisplayPath: '$.records[]',
+          boundaryPointer: '/records',
+          description: 'Created from upload',
+          format: 'json',
+          sourceFileName: 'records.json',
+          title: 'Created datasource',
+        })
+
+        console.log(
+          JSON.stringify({
+            getDataSourceCallCount: state.getDataSourceCallCount,
+            importCallHasTx: state.importCallHasTx,
+            queueCalls: state.queueCalls,
+            result,
+            transactionCallCount: state.transactionCallCount,
+            txStatements: state.txStatements,
+          }),
+        )
+      `,
+    ],
+    {cwd: process.cwd(), env: process.env},
+  )
+
+  if (runRoute.exitCode !== 0) {
+    throw new Error(
+      runRoute.stderr.toString() || runRoute.stdout.toString() || 'Structured file create success test failed',
+    )
   }
 
-  expect(error?.message).toBe('boom')
-  expect(state.transaction).toHaveBeenCalledTimes(1)
-  expect(state.queueImportedArticleRefreshes).not.toHaveBeenCalled()
-  expect(state.getDataSourceById).not.toHaveBeenCalled()
+  const parsed = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as StructuredFileCreateSuccessResult
+
+  expect(parsed.transactionCallCount).toBe(1)
+  expect(parsed.importCallHasTx).toBe(true)
+  expect(parsed.txStatements).toHaveLength(2)
+  expect(parsed.queueCalls).toEqual([['route-1']])
+  expect(parsed.getDataSourceCallCount).toBe(1)
+  expect(parsed.result.success).toBe(true)
+  expect(parsed.result.data.stats).toEqual({itemCount: 2, importedCount: 2})
+})
+
+test('structured file datasource create does not queue refreshes when the transactional import fails', () => {
+  const runRoute = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').pathname
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
+        const structuredFileImportServiceModulePath = new URL('./src/server/services/structuredFileImportService.ts', 'file://' + process.cwd() + '/').pathname
+
+        const state = {
+          errorMessage: null,
+          getDataSourceCallCount: 0,
+          queueCalls: [],
+          transactionCallCount: 0,
+        }
+
+        void mock.module(articleImportStoreServiceModulePath, () => {
+          return {
+            queueImportedArticleRefreshes: async (importRouteIds) => {
+              state.queueCalls.push(importRouteIds)
+            },
+          }
+        })
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                transaction: async (work) => {
+                  state.transactionCallCount += 1
+                  const tx = {
+                    queryJson: async () => [],
+                    run: async () => {},
+                  }
+                  return await work(tx)
+                },
+              }
+            },
+          }
+        })
+
+        void mock.module(dataSourceQueryServiceModulePath, () => {
+          return {
+            getDataSourceQueryService: () => {
+              return {
+                getDataSourceById: async () => {
+                  state.getDataSourceCallCount += 1
+                  return null
+                },
+              }
+            },
+          }
+        })
+
+        void mock.module(structuredFileImportServiceModulePath, () => {
+          return {
+            buildStructuredFileImportConfig: (params) => {
+              return {kind: 'structured_file', version: 1, ...params}
+            },
+            getStructuredFileImportCursor: () => {
+              return 'cursor-json'
+            },
+            importStructuredFileFromConfig: async () => {
+              throw new Error('boom')
+            },
+          }
+        })
+
+        const {dataSourcesImportRoutesPostStructuredFileCreate} = await import(
+          './src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostStructuredFileCreate.ts?test=' + Date.now(),
+        )
+
+        try {
+          await dataSourcesImportRoutesPostStructuredFileCreate({
+            assetPath: 'assets/structured_file_imports/upload.json',
+            boundaryDisplayPath: '$.records[]',
+            boundaryPointer: '/records',
+            description: 'Created from upload',
+            format: 'json',
+            sourceFileName: 'records.json',
+            title: 'Created datasource',
+          })
+        } catch (error) {
+          state.errorMessage = error instanceof Error ? error.message : String(error)
+        }
+
+        console.log(JSON.stringify(state))
+      `,
+    ],
+    {cwd: process.cwd(), env: process.env},
+  )
+
+  if (runRoute.exitCode !== 0) {
+    throw new Error(
+      runRoute.stderr.toString() || runRoute.stdout.toString() || 'Structured file create failure test failed',
+    )
+  }
+
+  const parsed = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as StructuredFileCreateFailureResult
+
+  expect(parsed.errorMessage).toBe('boom')
+  expect(parsed.transactionCallCount).toBe(1)
+  expect(parsed.queueCalls).toEqual([])
+  expect(parsed.getDataSourceCallCount).toBe(0)
 })

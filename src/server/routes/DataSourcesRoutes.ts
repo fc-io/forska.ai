@@ -54,14 +54,16 @@ const getSafeStructuredFileImportConfig = (cursorValue: unknown) => {
 }
 
 const normalizeDataSourceRow = <TRow extends Record<string, unknown>>(row: TRow) => {
+  const {cursor, ...safeRow} = row
+
   return {
-    ...row,
+    ...safeRow,
     createdAt: getDateValue(row['createdAt']),
     updatedAt: getDateValue(row['updatedAt']),
     dateFrom: getDateValue(row['dateFrom']),
     dateTo: getDateValue(row['dateTo']),
     lastImportAt: getDateValue(row['lastImportAt']),
-    structuredFileConfig: getSafeStructuredFileImportConfig(row['cursor']),
+    structuredFileConfig: getSafeStructuredFileImportConfig(cursor),
   }
 }
 

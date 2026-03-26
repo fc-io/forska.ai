@@ -1,5 +1,5 @@
 import {createHash, randomUUID} from 'node:crypto'
-import {mkdirSync, readFileSync, writeFileSync} from 'node:fs'
+import {mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 import path from 'node:path'
 
 import {XMLParser} from 'fast-xml-parser'
@@ -424,6 +424,16 @@ const getStructuredFileContentFromAssetPath = (assetPath: string) => {
   return readFileSync(absolutePath, 'utf8')
 }
 
+const deleteStructuredFileAsset = (assetPath: string) => {
+  const absolutePath = getStructuredFileAbsolutePath(assetPath)
+
+  if (!absolutePath) {
+    return
+  }
+
+  rmSync(absolutePath, {force: true})
+}
+
 const getPointerSegments = (pointer: string) => {
   return pointer === ''
     ? []
@@ -524,24 +534,30 @@ export const analyzeStructuredFileUpload = async (
   file: StructuredFileUploadInput,
 ): Promise<StructuredFileAnalyzeResult> => {
   const storedUpload = await getStoredStructuredFileUpload(file)
-  const parsedValue = getParsedStructuredFile(storedUpload.content, storedUpload.format)
-  const candidates = getUniqueBoundaryCandidates(getBoundaryCandidates(parsedValue))
-    .sort((left, right) => {
-      return right.count - left.count || left.displayPath.localeCompare(right.displayPath)
-    })
-    .slice(0, 50)
 
-  if (candidates.length === 0) {
-    throw new Error('No repeating boundary found in file')
-  }
+  try {
+    const parsedValue = getParsedStructuredFile(storedUpload.content, storedUpload.format)
+    const candidates = getUniqueBoundaryCandidates(getBoundaryCandidates(parsedValue))
+      .sort((left, right) => {
+        return right.count - left.count || left.displayPath.localeCompare(right.displayPath)
+      })
+      .slice(0, 50)
 
-  return {
-    candidates,
-    upload: {
-      assetPath: storedUpload.assetPath,
-      format: storedUpload.format,
-      sourceFileName: storedUpload.sourceFileName,
-    },
+    if (candidates.length === 0) {
+      throw new Error('No repeating boundary found in file')
+    }
+
+    return {
+      candidates,
+      upload: {
+        assetPath: storedUpload.assetPath,
+        format: storedUpload.format,
+        sourceFileName: storedUpload.sourceFileName,
+      },
+    }
+  } catch (error) {
+    deleteStructuredFileAsset(storedUpload.assetPath)
+    throw error
   }
 }
 
