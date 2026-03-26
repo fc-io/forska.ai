@@ -4,7 +4,7 @@ import {existsSync, rmSync} from 'node:fs'
 import {Database} from 'bun:sqlite'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {escapeSqlString, getDateValue} from '../../services/appQueryHelpers.ts'
+import {escapeSqlString, getDateValue, getQuotedStringList} from '../../services/appQueryHelpers.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {registerWriterDemotionHandler} from '../../utils/serverRuntimeRole.ts'
 import {
@@ -179,6 +179,8 @@ type ClaimedOutboxRow = {claimId: string; rowCount: number}
 type RetentionEligibleOutboxRow = {outboxSeq: number; queuePromptId: string}
 
 type RetentionPruneResult = {outboxRowsDeleted: number; queuePromptRowsDeleted: number}
+
+type JudgmentJobStatusRow = {id: string}
 
 const openDatabases = new Map<string, Database>()
 const ownedJobLeases = new Map<string, JudgmentJobLease>()
@@ -522,6 +524,102 @@ const getExistingOutboxJobIds = (jobId?: string) => {
         return existsSync(getJudgmentJobSqlitePath(value))
       })
     : getJudgmentJobSqliteJobIds()
+}
+
+const sqliteCleanupTerminalStatuses = ['completed', 'project_removed'] as const
+
+const deleteJobFiles = (jobId: string) => {
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+
+  rmSync(sqlitePath, {force: true})
+  rmSync(`${sqlitePath}-shm`, {force: true})
+  rmSync(`${sqlitePath}-wal`, {force: true})
+  rmSync(getJudgmentJobLeasePath(jobId), {force: true})
+}
+
+const getDrainedSqliteCleanupCandidateJobIds = async (jobId?: string) => {
+  const existingJobIds = getExistingOutboxJobIds(jobId)
+
+  return existingJobIds.length === 0
+    ? []
+    : (
+        await getAppDatabaseService().queryJson<JudgmentJobStatusRow>(`
+          SELECT id
+          FROM app.judgment_job
+          WHERE id IN (${getQuotedStringList(existingJobIds).join(', ')})
+            AND status IN (${getQuotedStringList([...sqliteCleanupTerminalStatuses]).join(', ')})
+        `)
+      ).map((row) => {
+        return row.id
+      })
+}
+
+const getActiveQueueRowCount = (database: Database) => {
+  const row = database.query(`SELECT COUNT(*) AS count FROM queue_prompt WHERE status IN ('ready', 'sent')`).get() as {
+    count: number
+  } | null
+
+  return Number(row?.count ?? 0)
+}
+
+const getPendingVisibilityOutboxCount = (database: Database, jobId: string) => {
+  const lastProjectRefreshAckSeq = getStoredScanState(database, jobId).lastProjectRefreshAckSeq
+  const row = database
+    .query(
+      `
+        SELECT COUNT(*) AS count
+        FROM judgment_outbox
+        WHERE exported_at IS NULL
+           OR ? IS NULL
+           OR outbox_seq > ?
+      `,
+    )
+    .get(lastProjectRefreshAckSeq, lastProjectRefreshAckSeq) as {count: number} | null
+
+  return Number(row?.count ?? 0)
+}
+
+const isDrainedSqliteJob = (database: Database, jobId: string) => {
+  return getActiveQueueRowCount(database) === 0 && getPendingVisibilityOutboxCount(database, jobId) === 0
+}
+
+const deleteDrainedSqliteJobs = async ({
+  jobIds,
+  serverJobId,
+}: {
+  jobIds: string[]
+  serverJobId?: string
+}): Promise<string[]> => {
+  const [currentJobId = ''] = jobIds
+
+  if (!currentJobId) {
+    return []
+  }
+
+  try {
+    const shouldDelete = await withOwnedJobDatabase(
+      currentJobId,
+      false,
+      (database) => {
+        return isDrainedSqliteJob(database, currentJobId)
+      },
+      serverJobId,
+    )
+
+    if (!shouldDelete) {
+      return deleteDrainedSqliteJobs({jobIds: jobIds.slice(1), serverJobId})
+    }
+
+    await ensureOwnedJobLease(currentJobId, serverJobId)
+    await releaseOwnedJobLease(currentJobId)
+    deleteJobFiles(currentJobId)
+
+    return [currentJobId, ...(await deleteDrainedSqliteJobs({jobIds: jobIds.slice(1), serverJobId}))]
+  } catch (error) {
+    return error instanceof JudgmentJobLeaseError
+      ? deleteDrainedSqliteJobs({jobIds: jobIds.slice(1), serverJobId})
+      : Promise.reject(error)
+  }
 }
 
 const emptyRetentionPruneResult = (): RetentionPruneResult => {
@@ -1161,8 +1259,10 @@ const sqliteService = {
     await ensureOwnedJobLease(jobId)
     await releaseOwnedJobLease(jobId)
 
-    rmSync(getJudgmentJobSqlitePath(jobId), {force: true})
-    rmSync(getJudgmentJobLeasePath(jobId), {force: true})
+    deleteJobFiles(jobId)
+  },
+  deleteDrainedJobs: async ({jobId, serverJobId}: {jobId?: string; serverJobId?: string} = {}) => {
+    return deleteDrainedSqliteJobs({jobIds: await getDrainedSqliteCleanupCandidateJobIds(jobId), serverJobId})
   },
   getInFlightCount: async (jobId: string): Promise<number> => {
     return (

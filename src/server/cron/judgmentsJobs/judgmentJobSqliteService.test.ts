@@ -3,7 +3,7 @@ import {dirname, join} from 'node:path'
 
 import {afterAll, beforeAll, expect, test} from 'bun:test'
 
-import {getJudgmentJobLeasePath} from './judgmentJobPaths.ts'
+import {getJudgmentJobLeasePath, getJudgmentJobSqlitePath} from './judgmentJobPaths.ts'
 
 const tempDbPath = `/tmp/f1-judgment-job-sqlite-service-${process.pid}-${Date.now()}.duckdb`
 const tempJobDir = join(dirname(tempDbPath), 'judgment-jobs')
@@ -604,6 +604,173 @@ test('keeps skipped and unacked prompt rows during visibility-acked retention cl
   expect(await service.hasLocalJudgment(jobId, skippedPrompt.articleId, skippedPrompt.promptId)).toBe(true)
   expect(await service.hasLocalJudgment(jobId, unackedPrompt.articleId, unackedPrompt.promptId)).toBe(true)
   expect(await service.getOutboxCount(jobId)).toBe(1)
+})
+
+test('deletes drained completed SQLite jobs after visibility cleanup finishes', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-drained-delete-${Date.now()}`
+  const modelId = `model-drained-delete-${Date.now()}`
+  const projectId = `project-drained-delete-${Date.now()}`
+  const jobId = `job-drained-delete-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Drained Delete Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'completed')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(
+    jobId,
+    [
+      {articleId: 'article-drained-acked', promptId: 'prompt-drained-acked'},
+      {articleId: 'article-drained-skipped', promptId: 'prompt-drained-skipped'},
+    ],
+    'server-a',
+  )
+
+  const claimedPrompts = await service.claimReadyPrompts(jobId, 'server-a', 2)
+  const ackedPrompt = claimedPrompts[0]
+  const skippedPrompt = claimedPrompts[1]
+
+  if (!ackedPrompt || !skippedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompts for drained delete test')
+  }
+
+  await service.recordJudgmentSuccess(jobId, {
+    answeredOriginal: 'yes',
+    answeredOriginalAsArray: ['yes'],
+    articleId: ackedPrompt.articleId,
+    chunkingStrategy: null,
+    confidenceOriginal: 50,
+    createdAt: new Date(),
+    explanation: 'because',
+    isAnswered: true,
+    judgmentId: `judgment-drained-acked-${Date.now()}`,
+    modelId,
+    projectId,
+    promptId: ackedPrompt.promptId,
+    queuePromptId: ackedPrompt.recordId,
+    quotes: ['quote'],
+    rawResponseJson: {answer: 'yes'},
+    snapshotProjectId: projectId,
+    snapshotProjectModelName: 'Qwen 35B',
+    updatedAt: new Date(),
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
+  await service.markPromptAsSkipped(jobId, skippedPrompt.recordId, 'no_fulltext')
+
+  const claimedOutboxBatch = await service.claimPendingOutboxBatch({
+    claimedBy: 'server-a',
+    jobId,
+    maxBytes: 1024 * 1024,
+    maxRows: 10,
+  })
+  const ackedOutboxSeq = claimedOutboxBatch?.rows[0]?.outboxSeq ?? null
+
+  await service.completeOutboxClaim({claimId: claimedOutboxBatch?.claim.claimId ?? '', jobId})
+  await service.setLastProjectRefreshAckSeq(jobId, ackedOutboxSeq)
+  await service.pruneVisibilityAckedRetention({jobId, maxRows: 10})
+
+  expect(existsSync(getJudgmentJobSqlitePath(jobId))).toBe(true)
+  expect(existsSync(getJudgmentJobLeasePath(jobId))).toBe(true)
+  expect(await service.deleteDrainedJobs({jobId})).toEqual([jobId])
+  expect(existsSync(getJudgmentJobSqlitePath(jobId))).toBe(false)
+  expect(existsSync(getJudgmentJobLeasePath(jobId))).toBe(false)
+})
+
+test('keeps completed SQLite jobs on disk while visibility-gated outbox data remains', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-drained-keep-${Date.now()}`
+  const modelId = `model-drained-keep-${Date.now()}`
+  const projectId = `project-drained-keep-${Date.now()}`
+  const jobId = `job-drained-keep-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Drained Keep Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'completed')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(
+    jobId,
+    [{articleId: 'article-drained-pending', promptId: 'prompt-drained-pending'}],
+    'server-a',
+  )
+
+  const [claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt for drained keep test')
+  }
+
+  await service.recordJudgmentSuccess(jobId, {
+    answeredOriginal: 'yes',
+    answeredOriginalAsArray: ['yes'],
+    articleId: claimedPrompt.articleId,
+    chunkingStrategy: null,
+    confidenceOriginal: 50,
+    createdAt: new Date(),
+    explanation: 'because',
+    isAnswered: true,
+    judgmentId: `judgment-drained-pending-${Date.now()}`,
+    modelId,
+    projectId,
+    promptId: claimedPrompt.promptId,
+    queuePromptId: claimedPrompt.recordId,
+    quotes: ['quote'],
+    rawResponseJson: {answer: 'yes'},
+    snapshotProjectId: projectId,
+    snapshotProjectModelName: 'Qwen 35B',
+    updatedAt: new Date(),
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
+  await service.claimPendingOutboxBatch({claimedBy: 'server-a', jobId, maxBytes: 1024 * 1024, maxRows: 10})
+  await service.completeOutboxClaim({
+    claimId: (await service.getClaimedOutboxBatch({jobId, serverJobId: 'server-a'}))?.claim.claimId ?? '',
+    jobId,
+  })
+
+  expect(await service.getOutboxCount(jobId)).toBe(1)
+  expect(await service.deleteDrainedJobs({jobId})).toEqual([])
+  expect(existsSync(getJudgmentJobSqlitePath(jobId))).toBe(true)
 })
 
 test('syncOwnedLeases releases only inactive SQLite job leases', async () => {
