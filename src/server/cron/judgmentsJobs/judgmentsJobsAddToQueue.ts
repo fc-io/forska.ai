@@ -214,6 +214,34 @@ const hasSqliteExhaustedCooldown = (exhaustedAt: Date | null) => {
   return exhaustedAt ? Date.now() - exhaustedAt.getTime() < sqliteScanExhaustedCooldownMs : false
 }
 
+const getWrapVisibilityAckSeq = ({
+  lastProjectRefreshAckSeq,
+  maxOutboxSeq,
+}: {
+  lastProjectRefreshAckSeq: number | null
+  maxOutboxSeq: number | null
+}) => {
+  return lastProjectRefreshAckSeq == null
+    ? maxOutboxSeq
+    : maxOutboxSeq == null
+      ? lastProjectRefreshAckSeq
+      : Math.max(lastProjectRefreshAckSeq, maxOutboxSeq)
+}
+
+const hasWrapVisibility = ({
+  lastProjectRefreshAckSeq,
+  wrapVisibilityAckSeq,
+}: {
+  lastProjectRefreshAckSeq: number | null
+  wrapVisibilityAckSeq: number | null
+}) => {
+  return wrapVisibilityAckSeq == null
+    ? true
+    : lastProjectRefreshAckSeq == null
+      ? false
+      : lastProjectRefreshAckSeq >= wrapVisibilityAckSeq
+}
+
 const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void> => {
   const {job, readyTargetPerJob, addToQueueMaxBatchSize, serverJobId} = params
   const sqliteService = getJudgmentJobSqliteService()
@@ -253,9 +281,18 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
     return
   }
 
+  if (scanState.exhaustedAt && !hasWrapVisibility(scanState)) {
+    return
+  }
+
   const baseCursor = scanState.exhaustedAt ? null : scanState.cursor
   const initializeScanState = scanState.exhaustedAt
-    ? sqliteService.setScanState(job.id, {cursor: null, exhaustedAt: null, scanEpoch: scanState.scanEpoch + 1})
+    ? sqliteService.setScanState(job.id, {
+        cursor: null,
+        exhaustedAt: null,
+        scanEpoch: scanState.scanEpoch + 1,
+        wrapVisibilityAckSeq: null,
+      })
     : Promise.resolve()
 
   await initializeScanState
@@ -282,8 +319,15 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
 
     const nextReadyCount = await sqliteService.getReadyCount(job.id)
     const nextScanState = promptData.nextCursor
-      ? {cursor: promptData.nextCursor, exhaustedAt: null}
-      : {cursor: null, exhaustedAt: new Date()}
+      ? {cursor: promptData.nextCursor, exhaustedAt: null, wrapVisibilityAckSeq: null}
+      : {
+          cursor: null,
+          exhaustedAt: new Date(),
+          wrapVisibilityAckSeq: getWrapVisibilityAckSeq({
+            lastProjectRefreshAckSeq: scanState.lastProjectRefreshAckSeq,
+            maxOutboxSeq: await sqliteService.getMaxOutboxSeq(job.id),
+          }),
+        }
 
     await sqliteService.setScanState(job.id, nextScanState)
 

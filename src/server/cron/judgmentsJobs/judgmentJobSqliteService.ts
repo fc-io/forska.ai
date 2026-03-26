@@ -151,6 +151,7 @@ type ScanStateRow = {
   exhaustedAt: string | null
   lastProjectRefreshAckSeq: number | null
   scanEpoch: number | null
+  wrapVisibilityAckSeq: number | null
 }
 
 type JobScanState = {
@@ -158,6 +159,7 @@ type JobScanState = {
   exhaustedAt: Date | null
   lastProjectRefreshAckSeq: number | null
   scanEpoch: number
+  wrapVisibilityAckSeq: number | null
 }
 
 type JobScanStateUpdate = {
@@ -165,6 +167,7 @@ type JobScanStateUpdate = {
   exhaustedAt?: Date | null
   lastProjectRefreshAckSeq?: number | null
   scanEpoch?: number
+  wrapVisibilityAckSeq?: number | null
 }
 
 type SqliteTableInfoRow = {name: string}
@@ -303,6 +306,7 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       scan_epoch INTEGER NOT NULL DEFAULT 0,
       exhausted_at TEXT,
       last_project_refresh_ack_seq INTEGER,
+      wrap_visibility_ack_seq INTEGER,
       updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS queue_prompt (
@@ -409,6 +413,7 @@ const outboxClaimColumns = [
 const jobScanStateColumns = [
   {name: 'scan_epoch', sql: 'INTEGER NOT NULL DEFAULT 0'},
   {name: 'last_project_refresh_ack_seq', sql: 'INTEGER'},
+  {name: 'wrap_visibility_ack_seq', sql: 'INTEGER'},
 ] as const
 
 const addMissingOutboxClaimColumns = (
@@ -465,6 +470,7 @@ const getJobScanState = (row: ScanStateRow | null | undefined): JobScanState => 
     exhaustedAt,
     lastProjectRefreshAckSeq: row?.lastProjectRefreshAckSeq == null ? null : Number(row.lastProjectRefreshAckSeq),
     scanEpoch: Number(row?.scanEpoch ?? 0),
+    wrapVisibilityAckSeq: row?.wrapVisibilityAckSeq == null ? null : Number(row.wrapVisibilityAckSeq),
   }
 }
 
@@ -490,7 +496,8 @@ const getStoredScanState = (database: Database, jobId: string) => {
           cursor_last_article_id AS cursorLastArticleId,
           exhausted_at AS exhaustedAt,
           scan_epoch AS scanEpoch,
-          last_project_refresh_ack_seq AS lastProjectRefreshAckSeq
+          last_project_refresh_ack_seq AS lastProjectRefreshAckSeq,
+          wrap_visibility_ack_seq AS wrapVisibilityAckSeq
         FROM job_scan_state
         WHERE job_id = ?
         LIMIT 1
@@ -1177,7 +1184,18 @@ const sqliteService = {
     return (
       withJobDatabase(jobId, false, (database) => {
         return getStoredScanState(database, jobId)
-      }) ?? {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0}
+      }) ?? {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
+    )
+  },
+  getMaxOutboxSeq: async (jobId: string): Promise<number | null> => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        const row = database.query(`SELECT MAX(outbox_seq) AS maxOutboxSeq FROM judgment_outbox`).get() as {
+          maxOutboxSeq: number | null
+        } | null
+
+        return row?.maxOutboxSeq == null ? null : Number(row.maxOutboxSeq)
+      }) ?? null
     )
   },
   getUnexportedOutboxCount: async (jobId: string): Promise<number> => {
@@ -1269,8 +1287,9 @@ const sqliteService = {
             scan_epoch,
             exhausted_at,
             last_project_refresh_ack_seq,
+            wrap_visibility_ack_seq,
             updated_at
-          ) VALUES (?, ?, ?, 0, NULL, NULL, ?)
+          ) VALUES (?, ?, ?, 0, NULL, NULL, NULL, ?)
         `,
           )
           .run(jobId, jobInfo.cursor?.lastDate.toISOString() ?? null, jobInfo.cursor?.lastArticleId ?? null, createdAt)
@@ -1690,6 +1709,9 @@ const sqliteService = {
           ? getForwardOnlyAckSeq(currentState.lastProjectRefreshAckSeq, state.lastProjectRefreshAckSeq ?? null)
           : currentState.lastProjectRefreshAckSeq,
         scanEpoch: state.scanEpoch ?? currentState.scanEpoch,
+        wrapVisibilityAckSeq: Object.hasOwn(state, 'wrapVisibilityAckSeq')
+          ? (state.wrapVisibilityAckSeq ?? null)
+          : currentState.wrapVisibilityAckSeq,
       } satisfies JobScanState
 
       database
@@ -1701,6 +1723,7 @@ const sqliteService = {
             scan_epoch = ?,
             exhausted_at = ?,
             last_project_refresh_ack_seq = ?,
+            wrap_visibility_ack_seq = ?,
             updated_at = ?
         WHERE job_id = ?
       `,
@@ -1711,6 +1734,7 @@ const sqliteService = {
           nextState.scanEpoch,
           nextState.exhaustedAt?.toISOString() ?? null,
           nextState.lastProjectRefreshAckSeq,
+          nextState.wrapVisibilityAckSeq,
           now,
           jobId,
         )

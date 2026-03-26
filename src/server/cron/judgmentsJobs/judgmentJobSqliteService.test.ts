@@ -212,15 +212,17 @@ test('stores full SQLite scan state without clearing existing cursor fields', as
     exhaustedAt: null,
     lastProjectRefreshAckSeq: null,
     scanEpoch: 0,
+    wrapVisibilityAckSeq: null,
   })
 
-  await service.setScanState(jobId, {lastProjectRefreshAckSeq: 17, scanEpoch: 2})
+  await service.setScanState(jobId, {lastProjectRefreshAckSeq: 17, scanEpoch: 2, wrapVisibilityAckSeq: 19})
 
   expect(await service.getScanState(jobId)).toEqual({
     cursor: {lastArticleId: 'seed-article', lastDate: seededCursorDate},
     exhaustedAt: null,
     lastProjectRefreshAckSeq: 17,
     scanEpoch: 2,
+    wrapVisibilityAckSeq: 19,
   })
 
   await service.setExhaustedAt(jobId, updatedExhaustedAt)
@@ -230,6 +232,7 @@ test('stores full SQLite scan state without clearing existing cursor fields', as
     exhaustedAt: updatedExhaustedAt,
     lastProjectRefreshAckSeq: 17,
     scanEpoch: 2,
+    wrapVisibilityAckSeq: 19,
   })
 
   await service.setLastProjectRefreshAckSeq(jobId, 23)
@@ -239,6 +242,7 @@ test('stores full SQLite scan state without clearing existing cursor fields', as
     exhaustedAt: updatedExhaustedAt,
     lastProjectRefreshAckSeq: 23,
     scanEpoch: 2,
+    wrapVisibilityAckSeq: 19,
   })
 
   await service.setLastProjectRefreshAckSeq(jobId, 19)
@@ -249,6 +253,17 @@ test('stores full SQLite scan state without clearing existing cursor fields', as
     exhaustedAt: updatedExhaustedAt,
     lastProjectRefreshAckSeq: 23,
     scanEpoch: 2,
+    wrapVisibilityAckSeq: 19,
+  })
+
+  await service.setScanState(jobId, {wrapVisibilityAckSeq: null})
+
+  expect(await service.getScanState(jobId)).toEqual({
+    cursor: {lastArticleId: 'seed-article', lastDate: seededCursorDate},
+    exhaustedAt: updatedExhaustedAt,
+    lastProjectRefreshAckSeq: 23,
+    scanEpoch: 2,
+    wrapVisibilityAckSeq: null,
   })
 })
 
