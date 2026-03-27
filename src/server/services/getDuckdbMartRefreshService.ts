@@ -78,6 +78,8 @@ let martRefreshQueueCompletedAtColumnReady: Promise<void> | null = null
 let martRefreshQueueCompletedAtColumnVerified = false
 let martRefreshQueueGenerationColumnReady: Promise<void> | null = null
 let martRefreshQueueGenerationColumnVerified = false
+let martRefreshKnownNoopQueueRowsReady: Promise<void> | null = null
+let martRefreshKnownNoopQueueRowsVerified = false
 let martRefreshReviewArticleRollupReady: Promise<void> | null = null
 let martRefreshReviewArticleRollupVerified = false
 let martRefreshAutoDrainEnabled = true
@@ -93,6 +95,7 @@ const martRefreshRetryDelayMs = 5000
 const martRefreshScheduleDelayMs = 250
 const martRefreshThroughputWindowMs = 15_000
 const martRefreshYieldDelayMs = 0
+const knownNoopProjectRefreshReasons = ['humanAssessmentRoutesPostInit']
 
 const getMartRefreshProgressSnapshot = (): MartRefreshProgressSnapshot => {
   return copyMartRefreshProgressSnapshot(martRefreshProgressSnapshot)
@@ -356,20 +359,47 @@ const ensureMartRefreshQueueSchema = async (): Promise<void> => {
   return ensureMartRefreshQueueCompletedAtColumn()
 }
 
-const hasReviewArticleRollupTable = async () => {
-  const rows = await getAppDatabaseService().queryJson<{count: number}>(`
-    SELECT COUNT(*) AS count
-    FROM information_schema.tables
-    WHERE table_schema = 'mart'
-      AND table_name = 'review_article_rollup'
-  `)
+const pruneKnownNoopQueuedProjectRefreshes = async (): Promise<void> => {
+  if (knownNoopProjectRefreshReasons.length === 0) {
+    return
+  }
 
-  return Number(rows[0]?.count ?? 0) > 0
+  await ensureMartRefreshQueueSchema()
+
+  return getAppDatabaseService().run(`
+    UPDATE app.mart_refresh_queue
+    SET completed_at = NOW(),
+        updated_at = NOW()
+    WHERE completed_at IS NULL
+      AND refresh_scope = 'project'
+      AND reason IN (${getQuotedStringList(knownNoopProjectRefreshReasons).join(', ')})
+  `)
+}
+
+const ensureKnownNoopQueuedProjectRefreshesPruned = async (): Promise<void> => {
+  if (martRefreshKnownNoopQueueRowsVerified) {
+    return
+  }
+
+  if (martRefreshKnownNoopQueueRowsReady) {
+    return martRefreshKnownNoopQueueRowsReady
+  }
+
+  martRefreshKnownNoopQueueRowsReady = pruneKnownNoopQueuedProjectRefreshes()
+    .then(() => {
+      martRefreshKnownNoopQueueRowsVerified = true
+    })
+    .catch((error) => {
+      martRefreshKnownNoopQueueRowsReady = null
+      return Promise.reject(error)
+    })
+
+  return martRefreshKnownNoopQueueRowsReady
 }
 
 const createReviewArticleRollupTable = async () => {
   await getAppDatabaseService().run(`
-    CREATE TABLE mart.review_article_rollup (
+    CREATE TABLE IF NOT EXISTS mart.review_article_rollup (
       project_id VARCHAR NOT NULL,
       article_id VARCHAR NOT NULL,
       article_created_at TIMESTAMPTZ,
@@ -393,37 +423,9 @@ const createReviewArticleRollupTable = async () => {
     )
   `)
   await getAppDatabaseService().run(`
-    CREATE INDEX idx_mart_review_article_rollup_project_id
+    CREATE INDEX IF NOT EXISTS idx_mart_review_article_rollup_project_id
     ON mart.review_article_rollup(project_id, has_all_llm_judgments, article_created_at, article_id)
   `)
-}
-
-const rebuildReviewArticleRollupTable = async (): Promise<void> => {
-  const tableExists = await hasReviewArticleRollupTable()
-
-  console.warn('[duckdbMartRefresh] rebuilding mart.review_article_rollup to recover from poisoned inserts')
-  await getAppDatabaseService().run('DROP TABLE IF EXISTS mart.review_article_rollup_repair')
-
-  if (tableExists) {
-    await getAppDatabaseService().run(`
-      CREATE TABLE mart.review_article_rollup_repair AS
-      SELECT *
-      FROM mart.review_article_rollup
-    `)
-    await getAppDatabaseService().run('DROP INDEX IF EXISTS idx_mart_review_article_rollup_project_id')
-    await getAppDatabaseService().run('DROP TABLE mart.review_article_rollup')
-  }
-
-  await createReviewArticleRollupTable()
-
-  if (tableExists) {
-    await getAppDatabaseService().run(`
-      INSERT INTO mart.review_article_rollup
-      SELECT *
-      FROM mart.review_article_rollup_repair
-    `)
-    await getAppDatabaseService().run('DROP TABLE mart.review_article_rollup_repair')
-  }
 }
 
 const ensureReviewArticleRollupTable = async (): Promise<void> => {
@@ -435,7 +437,7 @@ const ensureReviewArticleRollupTable = async (): Promise<void> => {
     return martRefreshReviewArticleRollupReady
   }
 
-  martRefreshReviewArticleRollupReady = rebuildReviewArticleRollupTable()
+  martRefreshReviewArticleRollupReady = createReviewArticleRollupTable()
     .then(() => {
       martRefreshReviewArticleRollupVerified = true
     })
@@ -1777,6 +1779,7 @@ const processQueuedMartRefreshPass = async (): Promise<boolean> => {
     lastPassStartedAt: new Date().toISOString(),
     passCount: martRefreshDebugSnapshot.passCount + 1,
   })
+  await ensureKnownNoopQueuedProjectRefreshesPruned()
   const [queuedArticleTasks, queuedProjectTasks] = await Promise.all([getQueuedArticleTasks(), getQueuedProjectTasks()])
   const queuedTasks = [...queuedArticleTasks, ...queuedProjectTasks]
   updateMartRefreshDebugSnapshot({lastQueuedTaskCount: queuedTasks.length})
@@ -2063,6 +2066,8 @@ const duckdbMartRefreshService = {
     martRefreshQueueCompletedAtColumnVerified = false
     martRefreshQueueGenerationColumnReady = null
     martRefreshQueueGenerationColumnVerified = false
+    martRefreshKnownNoopQueueRowsReady = null
+    martRefreshKnownNoopQueueRowsVerified = false
     martRefreshReviewArticleRollupReady = null
     martRefreshReviewArticleRollupVerified = false
     resetMartRefreshDebugSnapshot()

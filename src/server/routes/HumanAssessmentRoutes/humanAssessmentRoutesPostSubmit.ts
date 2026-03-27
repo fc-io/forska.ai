@@ -48,6 +48,8 @@ export const humanAssessmentRoutesPostSubmit = async ({
     return {data: null, error: 'Multiple pending articles detected; please refresh and try again'}
   }
 
+  const [currentArticleId = ''] = articleIds
+
   const requiredPending = pending.filter((p) => {
     return !(p.type ?? '').toLowerCase().includes('null')
   })
@@ -157,7 +159,7 @@ export const humanAssessmentRoutesPostSubmit = async ({
       AND project_id = '${escapeSqlString(body.projectId)}'
       AND is_answered = FALSE
   `)
-  await getDuckdbMartRefreshService().queueProjectRefresh(body.projectId, 'humanAssessmentRoutesPostSubmit')
+  await getDuckdbMartRefreshService().queueJudgmentArticleRefresh(currentArticleId, 'humanAssessmentRoutesPostSubmit')
 
   return {data: {updated: idsToUpdate.length}}
 }

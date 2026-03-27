@@ -228,6 +228,81 @@ test('mart refresh clears multiple queued project rebuilds in one drain', () => 
   }
 })
 
+test('mart refresh prunes known noop project rebuilds before draining', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        let queueActive = true
+        const events = []
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                queryJson: async (statement) => {
+                  return statement.includes("column_name = 'refresh_generation'")
+                    ? [{count: 1}]
+                    : statement.includes("column_name = 'completed_at'")
+                      ? [{count: 1}]
+                      : statement.includes('SELECT COUNT(*) AS count')
+                        ? [{count: queueActive ? 1 : 0}]
+                        : statement.includes('FROM app.mart_refresh_queue')
+                          ? queueActive
+                            ? [{
+                                articleId: null,
+                                id: 'project-known-noop-test',
+                                projectId: 'project-known-noop-test',
+                                refreshGeneration: 0,
+                                refreshScope: 'project',
+                              }]
+                            : []
+                          : []
+                },
+                run: async (statement) => {
+                  if (statement.includes("reason IN ('humanAssessmentRoutesPostInit')")) {
+                    events.push('cleanup:known-noop')
+                    queueActive = false
+                  }
+                },
+                maintenance: async () => {},
+                runBackground: async (statement) => {
+                  if (statement.includes('DELETE FROM mart.project_scope_article')) {
+                    events.push('refresh:project-scope')
+                  }
+                },
+              }
+            },
+          }
+        })
+
+        const martRefreshService = (await import(martRefreshServiceModulePath + '?known-noop=' + Date.now())).getDuckdbMartRefreshService()
+
+        await martRefreshService.flush()
+        console.log(JSON.stringify({events, queueActive}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'Mart known noop prune regression test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {events: string[]; queueActive: boolean}
+
+  expect(result.events).toContain('cleanup:known-noop')
+  expect(result.events).not.toContain('refresh:project-scope')
+  expect(result.queueActive).toBe(false)
+})
+
 test('mart refresh task query orders by epoch(created_at) to avoid empty oldest-first reads', async () => {
   const martRefreshServiceModulePath = new URL(
     './src/server/services/getDuckdbMartRefreshService.ts',
@@ -449,7 +524,10 @@ test('mart refresh runs project rebuild statements on the background database co
                     throw new Error('project refresh ran on control connection')
                   }
 
-                  if (statement.includes('SET completed_at = NOW()')) {
+                  if (
+                    statement.includes('SET completed_at = NOW()')
+                    && !statement.includes("reason IN ('humanAssessmentRoutesPostInit')")
+                  ) {
                     queueActive = false
                   }
                 },
@@ -487,7 +565,7 @@ test('mart refresh runs project rebuild statements on the background database co
   expect(result.queueActive).toBe(false)
 })
 
-test('mart refresh repairs review_article_rollup before running a project rebuild', () => {
+test('mart refresh ensures review_article_rollup exists without rebuilding it before a project refresh', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -509,56 +587,38 @@ test('mart refresh repairs review_article_rollup before running a project rebuil
                     ? [{count: 1}]
                     : statement.includes("column_name = 'completed_at'")
                       ? [{count: 1}]
-                      : statement.includes("table_name = 'review_article_rollup'")
-                        ? [{count: 1}]
-                        : statement.includes('WHERE refresh_generation IS NULL')
-                          ? [{count: 0}]
-                          : statement.includes('SELECT COUNT(*) AS count')
-                            ? [{count: queueActive ? 1 : 0}]
-                            : statement.includes('FROM app.mart_refresh_queue')
-                              ? queueActive
-                                ? [{
-                                    articleId: null,
-                                    id: 'project-task',
-                                    projectId: 'project-rollup-repair-test',
-                                    refreshGeneration: 0,
-                                    refreshScope: 'project',
-                                  }]
-                                : []
+                      : statement.includes('WHERE refresh_generation IS NULL')
+                        ? [{count: 0}]
+                        : statement.includes('SELECT COUNT(*) AS count')
+                          ? [{count: queueActive ? 1 : 0}]
+                          : statement.includes('FROM app.mart_refresh_queue')
+                            ? queueActive
+                              ? [{
+                                  articleId: null,
+                                  id: 'project-task',
+                                  projectId: 'project-rollup-repair-test',
+                                  refreshGeneration: 0,
+                                  refreshScope: 'project',
+                                }]
                               : []
+                            : []
                 },
                 queryJsonBackground: async () => {
                   return []
                 },
                 run: async (statement) => {
-                  if (statement.includes('DROP TABLE IF EXISTS mart.review_article_rollup_repair')) {
-                    events.push('repair:drop-scratch')
+                  if (statement.includes('CREATE TABLE IF NOT EXISTS mart.review_article_rollup (')) {
+                    events.push('rollup:ensure-table')
                   }
 
-                  if (statement.includes('CREATE TABLE mart.review_article_rollup_repair AS')) {
-                    events.push('repair:copy-existing')
-                  }
-
-                  if (statement.includes('DROP TABLE mart.review_article_rollup')) {
-                    events.push('repair:drop-live')
-                  }
-
-                  if (statement.includes('CREATE TABLE mart.review_article_rollup (')) {
-                    events.push('repair:create-live')
-                  }
-
-                  if (statement.includes('CREATE INDEX idx_mart_review_article_rollup_project_id')) {
-                    events.push('repair:create-index')
+                  if (statement.includes('CREATE INDEX IF NOT EXISTS idx_mart_review_article_rollup_project_id')) {
+                    events.push('rollup:ensure-index')
                   }
 
                   if (
-                    statement.includes('INSERT INTO mart.review_article_rollup')
-                    && statement.includes('FROM mart.review_article_rollup_repair')
+                    statement.includes('SET completed_at = NOW()')
+                    && !statement.includes("reason IN ('humanAssessmentRoutesPostInit')")
                   ) {
-                    events.push('repair:restore-rows')
-                  }
-
-                  if (statement.includes('SET completed_at = NOW()')) {
                     queueActive = false
                   }
                 },
@@ -585,16 +645,20 @@ test('mart refresh repairs review_article_rollup before running a project rebuil
     throw new Error(
       runScript.stderr.toString()
         || runScript.stdout.toString()
-        || 'Mart review_article_rollup repair regression test failed',
+        || 'Mart review_article_rollup ensure regression test failed',
     )
   }
 
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {events: string[]; queueActive: boolean}
 
-  expect(result.events).toContain('repair:create-live')
-  expect(result.events).toContain('repair:create-index')
+  expect(result.events).toContain('rollup:ensure-table')
+  expect(result.events).toContain('rollup:ensure-index')
   expect(result.events).toContain('refresh:project-scope')
-  expect(result.events.indexOf('repair:create-live')).toBeLessThan(result.events.indexOf('refresh:project-scope'))
+  expect(result.events.indexOf('rollup:ensure-table')).toBeLessThan(result.events.indexOf('refresh:project-scope'))
+  expect(result.events).not.toContain('repair:drop-scratch')
+  expect(result.events).not.toContain('repair:copy-existing')
+  expect(result.events).not.toContain('repair:drop-live')
+  expect(result.events).not.toContain('repair:restore-rows')
   expect(result.queueActive).toBe(false)
 })
 
