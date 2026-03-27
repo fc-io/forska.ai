@@ -431,6 +431,165 @@ test('mart refresh rebuilds large projects in article batches', () => {
   expect(result.queueActive).toBe(false)
 })
 
+test('mart refresh purges archived projects in article batches', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        let queueActive = true
+        const events = []
+        const firstBatch = [
+          {articleCreatedAt: null, articleId: 'article-1'},
+          {articleCreatedAt: null, articleId: 'article-2'},
+        ]
+        const secondBatch = [{articleCreatedAt: null, articleId: 'article-3'}]
+
+        const getBatchRows = (statement) => {
+          const hasSecondCursor = statement.includes("article_id > 'article-2'")
+          const hasFinalCursor = statement.includes("article_id > 'article-3'")
+
+          return hasFinalCursor ? [] : hasSecondCursor ? secondBatch : firstBatch
+        }
+
+        const recordDeleteEvent = (label, statement) => {
+          const hasFirstBatch = statement.includes("'article-1'") && statement.includes("'article-2'")
+          const hasSecondBatch = statement.includes("'article-3'")
+
+          if (hasFirstBatch) {
+            events.push(label + ':batch-1')
+          }
+
+          if (hasSecondBatch) {
+            events.push(label + ':batch-2')
+          }
+        }
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                queryJson: async (statement) => {
+                  return statement.includes("column_name = 'refresh_generation'")
+                    ? [{count: 1}]
+                    : statement.includes("column_name = 'completed_at'")
+                      ? [{count: 1}]
+                      : statement.includes('SELECT COUNT(*) AS count')
+                        ? [{count: queueActive ? 1 : 0}]
+                        : statement.includes('FROM app.mart_refresh_queue')
+                          ? queueActive
+                            ? [{
+                                articleId: null,
+                                id: 'project-archive-task',
+                                projectId: 'project-archive-batch-test',
+                                refreshGeneration: 0,
+                                refreshScope: 'project',
+                              }]
+                            : []
+                          : []
+                },
+                queryJsonBackground: async (statement) => {
+                  return statement.includes('SELECT archived AS archived')
+                    ? [{archived: true}]
+                    : statement.includes('FROM mart.') && statement.includes('article_id AS articleId')
+                      ? getBatchRows(statement)
+                      : []
+                },
+                run: async (statement) => {
+                  if (statement.includes('CREATE TABLE IF NOT EXISTS mart.review_article_rollup (')) {
+                    events.push('rollup:ensure-table')
+                  }
+
+                  if (statement.includes('CREATE INDEX IF NOT EXISTS idx_mart_review_article_rollup_project_id')) {
+                    events.push('rollup:ensure-index')
+                  }
+
+                  if (
+                    statement.includes('SET completed_at = NOW()')
+                    && !statement.includes("reason IN ('humanAssessmentRoutesPostInit')")
+                  ) {
+                    queueActive = false
+                  }
+                },
+                maintenance: async () => {},
+                runBackground: async (statement) => {
+                  if (statement.includes('DELETE FROM mart.review_article_serving_detail')) {
+                    recordDeleteEvent('serving-detail', statement)
+                  }
+
+                  if (statement.includes('DELETE FROM mart.review_article_filter_member')) {
+                    recordDeleteEvent('filter-member', statement)
+                  }
+
+                  if (statement.includes('DELETE FROM mart.review_article_serving')) {
+                    recordDeleteEvent('serving', statement)
+                  }
+
+                  if (statement.includes('DELETE FROM mart.review_article_rollup')) {
+                    recordDeleteEvent('rollup', statement)
+                  }
+
+                  if (statement.includes('DELETE FROM mart.review_article_filter_row')) {
+                    recordDeleteEvent('filter-row', statement)
+                  }
+
+                  if (statement.includes('DELETE FROM mart.prompt_answer_fact')) {
+                    recordDeleteEvent('prompt', statement)
+                  }
+
+                  if (statement.includes('DELETE FROM mart.project_scope_article')) {
+                    recordDeleteEvent('scope', statement)
+                  }
+
+                  if (statement.includes('DELETE FROM app.review_answer_dictionary')) {
+                    events.push('dictionary:purged')
+                  }
+
+                  if (statement.includes('DELETE FROM app.project_review_serving_generation')) {
+                    events.push('generation:purged')
+                  }
+                },
+              }
+            },
+          }
+        })
+
+        const martRefreshService = (await import(martRefreshServiceModulePath + '?project-archive-batch=' + Date.now())).getDuckdbMartRefreshService()
+
+        await martRefreshService.flush()
+        console.log(JSON.stringify({events, queueActive}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Mart archived project purge regression test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {events: string[]; queueActive: boolean}
+
+  expect(result.events).toContain('serving-detail:batch-1')
+  expect(result.events).toContain('serving-detail:batch-2')
+  expect(result.events).toContain('serving:batch-1')
+  expect(result.events).toContain('serving:batch-2')
+  expect(result.events).toContain('rollup:batch-1')
+  expect(result.events).toContain('rollup:batch-2')
+  expect(result.events).toContain('scope:batch-1')
+  expect(result.events).toContain('scope:batch-2')
+  expect(result.events).toContain('dictionary:purged')
+  expect(result.events).toContain('generation:purged')
+  expect(result.queueActive).toBe(false)
+})
+
 test('mart refresh prunes known noop project rebuilds before draining', () => {
   const runScript = globalThis.Bun.spawnSync(
     [

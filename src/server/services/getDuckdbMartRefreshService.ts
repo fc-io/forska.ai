@@ -627,6 +627,49 @@ const getProjectScopeBatchSql = (projectId: string, cursor: ProjectRefreshBatchC
   `
 }
 
+const getProjectTableArticleBatchSql = ({
+  cursor,
+  projectId,
+  tableName,
+}: {
+  cursor: ProjectRefreshBatchCursor | null
+  projectId: string
+  tableName: string
+}) => {
+  const projectLiteral = getSqlLiteral(projectId)
+
+  return `
+    SELECT DISTINCT
+      article_id AS articleId,
+      NULL AS articleCreatedAt
+    FROM ${tableName}
+    WHERE project_id = ${projectLiteral}
+      ${getProjectRefreshBatchCursorWhereSql({articleCreatedAtColumn: 'NULL', articleIdColumn: 'article_id', cursor})}
+    ORDER BY ${getProjectRefreshBatchOrderSql({articleCreatedAtColumn: 'NULL', articleIdColumn: 'article_id'})}
+    LIMIT ${martRefreshProjectRebuildArticleBatchSize}
+  `
+}
+
+const getProjectTableDeleteBatchSql = ({
+  articleIds,
+  projectId,
+  tableName,
+}: {
+  articleIds: string[]
+  projectId: string
+  tableName: string
+}) => {
+  const projectLiteral = getSqlLiteral(projectId)
+
+  return `
+    BEGIN TRANSACTION;
+    DELETE FROM ${tableName}
+    WHERE project_id = ${projectLiteral}
+      AND article_id IN (${getProjectRefreshArticleIdsSql(articleIds)});
+    COMMIT;
+  `
+}
+
 const getProjectPromptAnswerFactResetSql = (projectId: string) => {
   const projectLiteral = getSqlLiteral(projectId)
 
@@ -1381,6 +1424,17 @@ const getHasActiveProjectReviewServingGeneration = async (projectId: string) => 
   return Number(rows[0]?.count ?? 0) > 0
 }
 
+const getProjectIsArchived = async (projectId: string) => {
+  const [projectRow] = await queryMartRefreshBackgroundJson<{archived: boolean}>(`
+    SELECT archived AS archived
+    FROM app.project
+    WHERE id = ${getSqlLiteral(projectId)}
+    LIMIT 1
+  `)
+
+  return Boolean(projectRow?.archived)
+}
+
 const getProjectScopeSourceBatchRows = async (
   projectId: string,
   cursor: ProjectRefreshBatchCursor | null,
@@ -1393,6 +1447,20 @@ const getProjectScopeBatchRows = async (
   cursor: ProjectRefreshBatchCursor | null,
 ): Promise<ProjectRefreshBatchRow[]> => {
   return queryMartRefreshBackgroundJson<ProjectRefreshBatchRow>(getProjectScopeBatchSql(projectId, cursor))
+}
+
+const getProjectTableArticleBatchRows = async ({
+  cursor,
+  projectId,
+  tableName,
+}: {
+  cursor: ProjectRefreshBatchCursor | null
+  projectId: string
+  tableName: string
+}): Promise<ProjectRefreshBatchRow[]> => {
+  return queryMartRefreshBackgroundJson<ProjectRefreshBatchRow>(
+    getProjectTableArticleBatchSql({cursor, projectId, tableName}),
+  )
 }
 
 const refreshProjectScopeBatches = async (
@@ -1483,6 +1551,49 @@ const rebuildProjectReviewServing = async (projectId: string): Promise<void> => 
     projectId,
   })
   return runMartRefreshBackgroundStatement(getProjectReviewServingFinalizeSql(projectId))
+}
+
+const deleteProjectTableArticleBatches = async ({
+  cursor = null,
+  projectId,
+  tableName,
+}: {
+  cursor?: ProjectRefreshBatchCursor | null
+  projectId: string
+  tableName: string
+}): Promise<void> => {
+  const batchRows = await getProjectTableArticleBatchRows({cursor, projectId, tableName})
+  const articleIds = getProjectRefreshBatchArticleIds(batchRows)
+
+  return articleIds.length === 0
+    ? Promise.resolve()
+    : runMartRefreshBackgroundStatement(getProjectTableDeleteBatchSql({articleIds, projectId, tableName}))
+        .then(() => {
+          return yieldToEventLoop()
+        })
+        .then(() => {
+          return deleteProjectTableArticleBatches({
+            cursor: getProjectRefreshBatchCursor(batchRows),
+            projectId,
+            tableName,
+          })
+        })
+}
+
+const purgeArchivedProjectMartData = async (projectId: string): Promise<void> => {
+  await deleteProjectTableArticleBatches({projectId, tableName: 'mart.review_article_serving_detail'})
+  await deleteProjectTableArticleBatches({projectId, tableName: 'mart.review_article_filter_member'})
+  await deleteProjectTableArticleBatches({projectId, tableName: 'mart.review_article_serving'})
+  await deleteProjectTableArticleBatches({projectId, tableName: 'mart.review_article_rollup'})
+  await deleteProjectTableArticleBatches({projectId, tableName: 'mart.review_article_filter_row'})
+  await deleteProjectTableArticleBatches({projectId, tableName: 'mart.prompt_answer_fact'})
+  await deleteProjectTableArticleBatches({projectId, tableName: 'mart.project_scope_article'})
+  await runMartRefreshBackgroundStatement(`
+    BEGIN TRANSACTION;
+    DELETE FROM app.review_answer_dictionary WHERE project_id = ${getSqlLiteral(projectId)};
+    DELETE FROM app.project_review_serving_generation WHERE project_id = ${getSqlLiteral(projectId)};
+    COMMIT;
+  `)
 }
 
 const getProjectArticleServingRefreshSql = (projectId: string, articleId: string) => {
@@ -2029,6 +2140,11 @@ const refreshQueuedArticleTasks = async (articleIds: string[]): Promise<void> =>
 
 const refreshProject = async (projectId: string) => {
   await ensureReviewArticleRollupTable()
+
+  if (await getProjectIsArchived(projectId)) {
+    await purgeArchivedProjectMartData(projectId)
+    return recordProjectRefreshCompletion()
+  }
 
   await rebuildProjectScope(projectId)
   await rebuildProjectPromptAnswerFact(projectId)
