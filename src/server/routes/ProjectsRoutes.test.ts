@@ -1,6 +1,6 @@
 import {rmSync} from 'node:fs'
 
-import {afterAll, beforeAll, expect, test} from 'bun:test'
+import {afterAll, afterEach, beforeAll, expect, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 const tempDbPath = `/tmp/f1-projects-routes-${process.pid}-${Date.now()}.duckdb`
@@ -43,6 +43,48 @@ const insertProjectFixture = async ({
   `)
 }
 
+const insertAdditionalModelFixture = async ({connectionId, modelId}: {connectionId: string; modelId: string}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-32B-A10B', 'Qwen/Qwen3.5-32B-A10B', 'Qwen 32B', 'manual', TRUE)
+  `)
+}
+
+const insertProjectReferencesFixture = async ({
+  projectId,
+  promptId,
+  routeId,
+}: {
+  projectId: string
+  promptId: string
+  routeId: string
+}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES ('${promptId}', 'Does this item match?', '${promptId}-hash')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled, archived, origin_project_id)
+    VALUES ('${projectId}-project-prompt', '${projectId}', '${promptId}', 1, TRUE, FALSE, '${projectId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.import_route (id, route, name, active)
+    VALUES ('${routeId}', '${routeId}-route', '${routeId} route', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_import_route (id, project_id, import_route_id)
+    VALUES ('${projectId}-project-import-route', '${projectId}', '${routeId}')
+  `)
+}
+
 const rebuildMartRefreshQueueWithoutGeneration = async () => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
@@ -59,6 +101,7 @@ const rebuildMartRefreshQueueWithoutGeneration = async () => {
       article_key VARCHAR NOT NULL DEFAULT '',
       reason VARCHAR,
       created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      completed_at TIMESTAMPTZ,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
       UNIQUE(refresh_scope, project_key, article_key)
     );
@@ -105,10 +148,134 @@ beforeAll(async () => {
   app = new Elysia().use(projectsRoutes)
 })
 
+afterEach(async () => {
+  const {getDuckdbMartRefreshService} = await import('../services/getDuckdbMartRefreshService.ts')
+  getDuckdbMartRefreshService().resetProgressSnapshotForTests()
+})
+
 afterAll(async () => {
   await flushMartRefreshes?.()
   await closeDatabase?.()
   rmSync(tempDbPath, {force: true})
+})
+
+test('edit route ignores unchanged model updates when the project already has referencing rows', async () => {
+  if (!app || !queryDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-noop-model-connection'
+  const modelId = 'edit-noop-model-primary'
+  const projectId = 'edit-noop-model-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertProjectReferencesFixture({
+    projectId,
+    promptId: 'edit-noop-model-prompt',
+    routeId: 'edit-noop-model-route',
+  })
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({modelId, name: 'Updated Project Name'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {data?: {project?: {modelId?: string; name?: string}}; error?: string | null}
+
+  expect(response.status).toBe(200)
+  expect(body.data?.project?.modelId).toBe(modelId)
+  expect(body.data?.project?.name).toBe('Updated Project Name')
+
+  const [storedProject] = await queryDatabase<{modelId: string; name: string}>(`
+    SELECT model_id AS modelId, name
+    FROM app.project
+    WHERE id = '${projectId}'
+    LIMIT 1
+  `)
+
+  expect(storedProject).toEqual({modelId, name: 'Updated Project Name'})
+
+  await flushMartRefreshes()
+})
+
+test('edit route returns a clear 400 when changing model on a referenced project would hit DuckDB FK limitations', async () => {
+  if (!app || !queryDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-change-model-blocked-connection'
+  const projectId = 'edit-change-model-blocked-project'
+  const originalModelId = 'edit-change-model-blocked-model-primary'
+  const replacementModelId = 'edit-change-model-blocked-model-secondary'
+
+  await insertProjectFixture({connectionId, modelId: originalModelId, projectId})
+  await insertAdditionalModelFixture({connectionId, modelId: replacementModelId})
+  await insertProjectReferencesFixture({
+    projectId,
+    promptId: 'edit-change-model-blocked-prompt',
+    routeId: 'edit-change-model-blocked-route',
+  })
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({modelId: replacementModelId}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const bodyText = await response.text()
+
+  expect(response.status).toBe(400)
+  expect(bodyText).toContain('Changing the project model is currently blocked by DuckDB foreign key limitations')
+
+  const [storedProject] = await queryDatabase<{modelId: string}>(`
+    SELECT model_id AS modelId
+    FROM app.project
+    WHERE id = '${projectId}'
+    LIMIT 1
+  `)
+
+  expect(storedProject?.modelId).toBe(originalModelId)
+})
+
+test('edit route still allows changing model when the project has no referencing rows', async () => {
+  if (!app || !queryDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-change-model-clean-connection'
+  const projectId = 'edit-change-model-clean-project'
+  const originalModelId = 'edit-change-model-clean-model-primary'
+  const replacementModelId = 'edit-change-model-clean-model-secondary'
+
+  await insertProjectFixture({connectionId, modelId: originalModelId, projectId})
+  await insertAdditionalModelFixture({connectionId, modelId: replacementModelId})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({modelId: replacementModelId, name: 'Model Changed Project'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {data?: {project?: {modelId?: string; name?: string}}; error?: string | null}
+
+  expect(response.status).toBe(200)
+  expect(body.data?.project?.modelId).toBe(replacementModelId)
+  expect(body.data?.project?.name).toBe('Model Changed Project')
+
+  const [storedProject] = await queryDatabase<{modelId: string; name: string}>(`
+    SELECT model_id AS modelId, name
+    FROM app.project
+    WHERE id = '${projectId}'
+    LIMIT 1
+  `)
+
+  expect(storedProject).toEqual({modelId: replacementModelId, name: 'Model Changed Project'})
+
+  await flushMartRefreshes()
 })
 
 test('archive route repairs stale mart refresh queue schema before queueing refresh work', async () => {

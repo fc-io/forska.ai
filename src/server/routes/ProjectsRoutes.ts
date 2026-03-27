@@ -11,6 +11,7 @@ import {
 } from '../services/appQueryHelpers.ts'
 import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
+import {HttpError} from '../utils/httpError.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {assertProjectIsActive, getProjectAccess} from './projectsRoutes/projectAccessGuard.ts'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'
@@ -107,6 +108,59 @@ const updateProjectTx = async (tx: AppTx, params: {projectId: string; updatePart
   `)
 
   return getProjectRow(tx, params.projectId)
+}
+
+const assertProjectModelCanChangeTx = async (tx: AppTx, projectId: string) => {
+  const [row] = await tx.queryJson<{hasReferences: boolean}>(`
+    SELECT (
+      EXISTS(
+        SELECT 1
+        FROM app.project_prompt
+        WHERE project_id = '${escapeSqlString(projectId)}'
+           OR origin_project_id = '${escapeSqlString(projectId)}'
+      )
+      OR EXISTS(
+        SELECT 1
+        FROM app.project_import_route
+        WHERE project_id = '${escapeSqlString(projectId)}'
+      )
+      OR EXISTS(
+        SELECT 1
+        FROM app.project_article
+        WHERE project_id = '${escapeSqlString(projectId)}'
+           OR imported_from_project_id = '${escapeSqlString(projectId)}'
+      )
+      OR EXISTS(
+        SELECT 1
+        FROM app.judgment_job
+        WHERE project_id = '${escapeSqlString(projectId)}'
+      )
+      OR EXISTS(
+        SELECT 1
+        FROM app.judgment
+        WHERE project_id = '${escapeSqlString(projectId)}'
+      )
+      OR EXISTS(
+        SELECT 1
+        FROM app.judgment_human
+        WHERE project_id = '${escapeSqlString(projectId)}'
+      )
+      OR EXISTS(
+        SELECT 1
+        FROM app.review
+        WHERE project_id = '${escapeSqlString(projectId)}'
+      )
+    ) AS hasReferences
+  `)
+
+  if (!row?.hasReferences) {
+    return
+  }
+
+  throw new HttpError(
+    400,
+    'Changing the project model is currently blocked by DuckDB foreign key limitations once the project has related records. Edit other fields without changing the model, or clone/create a new project with the desired model.',
+  )
 }
 
 const getPromptIdByHashTx = async (tx: AppTx, contentHash: string) => {
@@ -775,6 +829,7 @@ export const projectsRoutes = new Elysia()
       const result = await getAppDatabaseService().transaction(async (tx) => {
         const [currentProject] = await tx.queryJson<{
           id: string
+          modelId: string
           useTitle: boolean
           useAbstract: boolean
           useFulltext: boolean
@@ -782,6 +837,7 @@ export const projectsRoutes = new Elysia()
         }>(`
           SELECT
             id,
+            model_id AS modelId,
             use_title AS useTitle,
             use_abstract AS useAbstract,
             use_fulltext AS useFulltext,
@@ -795,11 +851,14 @@ export const projectsRoutes = new Elysia()
           throw new Error('Project not found')
         }
 
-        if (body.modelId !== undefined) {
+        const nextModelId = body.modelId ?? undefined
+        const shouldUpdateModelId = nextModelId !== undefined && nextModelId !== currentProject.modelId
+        if (shouldUpdateModelId && nextModelId) {
           await assertSelectableProviderModelId(tx, {
             errorMessage: 'Selected model does not exist or is disabled',
-            modelId: body.modelId,
+            modelId: nextModelId,
           })
+          await assertProjectModelCanChangeTx(tx, params.id)
         }
 
         const finalUseFulltext = body.useFulltext ?? currentProject.useFulltext
@@ -814,7 +873,7 @@ export const projectsRoutes = new Elysia()
           body.description !== undefined ? `description = ${getSqlLiteral(body.description)}` : null,
           parsedDateFrom !== undefined ? `date_from = ${getSqlLiteral(parsedDateFrom)}` : null,
           parsedDateTo !== undefined ? `date_to = ${getSqlLiteral(parsedDateTo)}` : null,
-          body.modelId !== undefined ? `model_id = ${getSqlLiteral(body.modelId)}` : null,
+          shouldUpdateModelId && nextModelId ? `model_id = ${getSqlLiteral(nextModelId)}` : null,
           body.useTitle !== undefined ? `use_title = ${body.useTitle ? 'TRUE' : 'FALSE'}` : null,
           body.useAbstract !== undefined ? `use_abstract = ${body.useAbstract ? 'TRUE' : 'FALSE'}` : null,
           body.useFulltext !== undefined ? `use_fulltext = ${body.useFulltext ? 'TRUE' : 'FALSE'}` : null,
