@@ -44,6 +44,12 @@ const parseOptionalDate = (value?: string | null) => {
 type AppQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
 type AppTx = AppQueryRunner & {run: (statement: string) => Promise<void>}
 
+type ProjectReferenceDetachSpec = {sourceTable: string; tempTable: string; whereClause: string}
+type ProjectReferenceDetachPlan = {
+  deleteSpecs: ProjectReferenceDetachSpec[]
+  restoreSpecs: ProjectReferenceDetachSpec[]
+}
+
 type ProjectRow = {
   id: string
   name: string
@@ -107,6 +113,151 @@ const updateProjectTx = async (tx: AppTx, params: {projectId: string; updatePart
   `)
 
   return getProjectRow(tx, params.projectId)
+}
+
+const runTxStatements = async (tx: AppTx, statements: string[]) => {
+  return statements.reduce<Promise<void>>((promise, statement) => {
+    return promise.then(() => {
+      return tx.run(statement)
+    })
+  }, Promise.resolve())
+}
+
+const runAppStatements = async (statements: string[]) => {
+  return statements.length === 0 ? undefined : getAppDatabaseService().run(statements.join(';\n'))
+}
+
+const getProjectReferenceDetachPlan = (projectId: string): ProjectReferenceDetachPlan => {
+  const projectLiteral = getSqlLiteral(projectId)
+  const suffix = crypto.randomUUID().replaceAll('-', '_')
+  const getTempTable = (tableName: string) => {
+    return `temp_project_update_${tableName}_${suffix}`
+  }
+
+  const projectPromptSpec = {
+    sourceTable: 'app.project_prompt',
+    tempTable: getTempTable('project_prompt'),
+    whereClause: `project_id = ${projectLiteral} OR origin_project_id = ${projectLiteral}`,
+  }
+  const projectImportRouteSpec = {
+    sourceTable: 'app.project_import_route',
+    tempTable: getTempTable('project_import_route'),
+    whereClause: `project_id = ${projectLiteral}`,
+  }
+  const projectArticleSpec = {
+    sourceTable: 'app.project_article',
+    tempTable: getTempTable('project_article'),
+    whereClause: `project_id = ${projectLiteral} OR imported_from_project_id = ${projectLiteral}`,
+  }
+  const judgmentSpec = {
+    sourceTable: 'app.judgment',
+    tempTable: getTempTable('judgment'),
+    whereClause: `project_id = ${projectLiteral}`,
+  }
+  const judgmentAssessmentSpec = {
+    sourceTable: 'app.judgment_assessment',
+    tempTable: getTempTable('judgment_assessment'),
+    whereClause: `judgment_id IN (SELECT id FROM app.judgment WHERE project_id = ${projectLiteral})`,
+  }
+  const judgmentHumanSpec = {
+    sourceTable: 'app.judgment_human',
+    tempTable: getTempTable('judgment_human'),
+    whereClause: `project_id = ${projectLiteral}`,
+  }
+  const reviewSpec = {
+    sourceTable: 'app.review',
+    tempTable: getTempTable('review'),
+    whereClause: `project_id = ${projectLiteral}`,
+  }
+
+  return {
+    deleteSpecs: [
+      projectPromptSpec,
+      projectImportRouteSpec,
+      projectArticleSpec,
+      judgmentAssessmentSpec,
+      judgmentSpec,
+      judgmentHumanSpec,
+      reviewSpec,
+    ],
+    restoreSpecs: [
+      projectPromptSpec,
+      projectImportRouteSpec,
+      projectArticleSpec,
+      judgmentSpec,
+      judgmentAssessmentSpec,
+      judgmentHumanSpec,
+      reviewSpec,
+    ],
+  }
+}
+
+const getCreateDetachBackupStatement = (spec: ProjectReferenceDetachSpec) => {
+  return `
+    CREATE TEMP TABLE ${spec.tempTable} AS
+    SELECT *
+    FROM ${spec.sourceTable}
+    WHERE ${spec.whereClause}
+  `
+}
+
+const getDeleteDetachedReferencesStatement = (spec: ProjectReferenceDetachSpec) => {
+  return `
+    DELETE FROM ${spec.sourceTable}
+    WHERE ${spec.whereClause}
+  `
+}
+
+const getRestoreDetachedReferencesStatement = (spec: ProjectReferenceDetachSpec) => {
+  return `
+    INSERT INTO ${spec.sourceTable}
+    SELECT *
+    FROM ${spec.tempTable}
+  `
+}
+
+const getDropDetachBackupStatement = (spec: ProjectReferenceDetachSpec) => {
+  return `DROP TABLE ${spec.tempTable}`
+}
+
+const detachProjectReferencesForModelUpdate = async (projectId: string) => {
+  const detachPlan = getProjectReferenceDetachPlan(projectId)
+
+  await runAppStatements(
+    detachPlan.restoreSpecs.map((spec) => {
+      return getCreateDetachBackupStatement(spec)
+    }),
+  )
+  await runAppStatements(
+    detachPlan.deleteSpecs.map((spec) => {
+      return getDeleteDetachedReferencesStatement(spec)
+    }),
+  )
+
+  return detachPlan
+}
+
+const restoreDetachedProjectReferences = async (detachPlan: ProjectReferenceDetachPlan) => {
+  return runAppStatements([
+    ...detachPlan.restoreSpecs.map((spec) => {
+      return getRestoreDetachedReferencesStatement(spec)
+    }),
+    ...detachPlan.restoreSpecs.map((spec) => {
+      return getDropDetachBackupStatement(spec)
+    }),
+  ])
+}
+
+const runWithDetachedProjectReferenceRecovery = async <T>(
+  operation: () => Promise<T>,
+  detachPlan: ProjectReferenceDetachPlan,
+): Promise<T> => {
+  try {
+    return await operation()
+  } catch (error) {
+    await restoreDetachedProjectReferences(detachPlan)
+    throw error
+  }
 }
 
 const getPromptIdByHashTx = async (tx: AppTx, contentHash: string) => {
@@ -772,76 +923,91 @@ export const projectsRoutes = new Elysia()
         throw new Error('date_from must be on or before date_to')
       }
 
-      const result = await getAppDatabaseService().transaction(async (tx) => {
-        const [currentProject] = await tx.queryJson<{
-          id: string
-          useTitle: boolean
-          useAbstract: boolean
-          useFulltext: boolean
-          useFulltextNoImages: boolean
-        }>(`
-          SELECT
-            id,
-            use_title AS useTitle,
-            use_abstract AS useAbstract,
-            use_fulltext AS useFulltext,
-            use_fulltext_no_images AS useFulltextNoImages
-          FROM app.project
-          WHERE id = '${escapeSqlString(params.id)}'
-          LIMIT 1
-        `)
+      const [currentProject] = await getAppDatabaseService().queryJson<{
+        id: string
+        modelId: string
+        useTitle: boolean
+        useAbstract: boolean
+        useFulltext: boolean
+        useFulltextNoImages: boolean
+      }>(`
+        SELECT
+          id,
+          model_id AS modelId,
+          use_title AS useTitle,
+          use_abstract AS useAbstract,
+          use_fulltext AS useFulltext,
+          use_fulltext_no_images AS useFulltextNoImages
+        FROM app.project
+        WHERE id = '${escapeSqlString(params.id)}'
+        LIMIT 1
+      `)
 
-        if (!currentProject) {
-          throw new Error('Project not found')
-        }
+      if (!currentProject) {
+        throw new Error('Project not found')
+      }
 
-        if (body.modelId !== undefined) {
-          await assertSelectableProviderModelId(tx, {
-            errorMessage: 'Selected model does not exist or is disabled',
-            modelId: body.modelId,
+      const hasModelIdUpdate = body.modelId !== undefined && body.modelId !== currentProject.modelId
+      const detachPlan = hasModelIdUpdate ? await detachProjectReferencesForModelUpdate(params.id) : null
+
+      const runEditTransaction = () => {
+        return getAppDatabaseService().transaction(async (tx) => {
+          if (body.modelId !== undefined) {
+            await assertSelectableProviderModelId(tx, {
+              errorMessage: 'Selected model does not exist or is disabled',
+              modelId: body.modelId,
+            })
+          }
+
+          const finalUseFulltext = body.useFulltext ?? currentProject.useFulltext
+          const finalUseFulltextNoImages = body.useFulltextNoImages ?? currentProject.useFulltextNoImages
+          if (finalUseFulltext && finalUseFulltextNoImages) {
+            throw new Error('Cannot enable both "Use Full Text" and "Use Full Text (No Images)" at the same time')
+          }
+
+          const updateParts = [
+            `updated_at = current_timestamp`,
+            body.name !== undefined ? `name = ${getSqlLiteral(body.name)}` : null,
+            body.description !== undefined ? `description = ${getSqlLiteral(body.description)}` : null,
+            parsedDateFrom !== undefined ? `date_from = ${getSqlLiteral(parsedDateFrom)}` : null,
+            parsedDateTo !== undefined ? `date_to = ${getSqlLiteral(parsedDateTo)}` : null,
+            hasModelIdUpdate ? `model_id = ${getSqlLiteral(body.modelId)}` : null,
+            body.useTitle !== undefined ? `use_title = ${body.useTitle ? 'TRUE' : 'FALSE'}` : null,
+            body.useAbstract !== undefined ? `use_abstract = ${body.useAbstract ? 'TRUE' : 'FALSE'}` : null,
+            body.useFulltext !== undefined ? `use_fulltext = ${body.useFulltext ? 'TRUE' : 'FALSE'}` : null,
+            body.useFulltextNoImages !== undefined
+              ? `use_fulltext_no_images = ${body.useFulltextNoImages ? 'TRUE' : 'FALSE'}`
+              : null,
+          ].filter((part): part is string => {
+            return part !== null
           })
-        }
 
-        const finalUseFulltext = body.useFulltext ?? currentProject.useFulltext
-        const finalUseFulltextNoImages = body.useFulltextNoImages ?? currentProject.useFulltextNoImages
-        if (finalUseFulltext && finalUseFulltextNoImages) {
-          throw new Error('Cannot enable both "Use Full Text" and "Use Full Text (No Images)" at the same time')
-        }
+          const updatedProject = await updateProjectTx(tx, {projectId: params.id, updateParts})
 
-        const updateParts = [
-          `updated_at = current_timestamp`,
-          body.name !== undefined ? `name = ${getSqlLiteral(body.name)}` : null,
-          body.description !== undefined ? `description = ${getSqlLiteral(body.description)}` : null,
-          parsedDateFrom !== undefined ? `date_from = ${getSqlLiteral(parsedDateFrom)}` : null,
-          parsedDateTo !== undefined ? `date_to = ${getSqlLiteral(parsedDateTo)}` : null,
-          body.modelId !== undefined ? `model_id = ${getSqlLiteral(body.modelId)}` : null,
-          body.useTitle !== undefined ? `use_title = ${body.useTitle ? 'TRUE' : 'FALSE'}` : null,
-          body.useAbstract !== undefined ? `use_abstract = ${body.useAbstract ? 'TRUE' : 'FALSE'}` : null,
-          body.useFulltext !== undefined ? `use_fulltext = ${body.useFulltext ? 'TRUE' : 'FALSE'}` : null,
-          body.useFulltextNoImages !== undefined
-            ? `use_fulltext_no_images = ${body.useFulltextNoImages ? 'TRUE' : 'FALSE'}`
-            : null,
-        ].filter((part): part is string => {
-          return part !== null
-        })
+          if (detachPlan) {
+            await runTxStatements(
+              tx,
+              detachPlan.restoreSpecs.map((spec) => {
+                return getRestoreDetachedReferencesStatement(spec)
+              }),
+            )
+          }
 
-        const updatedProject = await updateProjectTx(tx, {projectId: params.id, updateParts})
+          if (!updatedProject) {
+            throw new Error('Project not found')
+          }
 
-        if (!updatedProject) {
-          throw new Error('Project not found')
-        }
-
-        if (body.prompts !== undefined) {
-          const submitted = body.prompts.filter((prompt) => {
-            return (prompt.originalText ?? '').trim() !== ''
-          })
-          const existing = await tx.queryJson<{
-            id: string
-            promptId: string
-            originProjectId: string | null
-            archived: boolean
-            enabled: boolean
-          }>(`
+          if (body.prompts !== undefined) {
+            const submitted = body.prompts.filter((prompt) => {
+              return (prompt.originalText ?? '').trim() !== ''
+            })
+            const existing = await tx.queryJson<{
+              id: string
+              promptId: string
+              originProjectId: string | null
+              archived: boolean
+              enabled: boolean
+            }>(`
             SELECT
               id,
               prompt_id AS promptId,
@@ -852,26 +1018,26 @@ export const projectsRoutes = new Elysia()
             WHERE project_id = '${escapeSqlString(params.id)}'
           `)
 
-          const existingPromptIds = new Set(
-            existing.map((prompt) => {
-              return prompt.promptId
-            }),
-          )
-          const receivedOriginalIds = new Set(
-            submitted
-              .map((prompt) => {
-                return prompt.originalId
-              })
-              .filter((id): id is string => {
-                return typeof id === 'string'
+            const existingPromptIds = new Set(
+              existing.map((prompt) => {
+                return prompt.promptId
               }),
-          )
-          const toDeleteAssoc = existing.filter((entry) => {
-            return !receivedOriginalIds.has(entry.promptId)
-          })
+            )
+            const receivedOriginalIds = new Set(
+              submitted
+                .map((prompt) => {
+                  return prompt.originalId
+                })
+                .filter((id): id is string => {
+                  return typeof id === 'string'
+                }),
+            )
+            const toDeleteAssoc = existing.filter((entry) => {
+              return !receivedOriginalIds.has(entry.promptId)
+            })
 
-          if (toDeleteAssoc.length > 0) {
-            await tx.run(`
+            if (toDeleteAssoc.length > 0) {
+              await tx.run(`
               DELETE FROM app.project_prompt
               WHERE project_id = '${escapeSqlString(params.id)}'
                 AND prompt_id IN (${getQuotedStringList(
@@ -880,25 +1046,25 @@ export const projectsRoutes = new Elysia()
                   }),
                 ).join(', ')})
             `)
-          }
+            }
 
-          for (const prompt of submitted) {
-            const order = prompt.order
-            const archived = typeof prompt.archived === 'boolean' ? prompt.archived : undefined
-            const enabled = typeof prompt.enabled === 'boolean' ? prompt.enabled : undefined
+            for (const prompt of submitted) {
+              const order = prompt.order
+              const archived = typeof prompt.archived === 'boolean' ? prompt.archived : undefined
+              const enabled = typeof prompt.enabled === 'boolean' ? prompt.enabled : undefined
 
-            if (prompt.originalId) {
-              const isAlreadyAssociated = existingPromptIds.has(prompt.originalId)
-              if (!isAlreadyAssociated && enabled !== true) {
-                continue
-              }
+              if (prompt.originalId) {
+                const isAlreadyAssociated = existingPromptIds.has(prompt.originalId)
+                if (!isAlreadyAssociated && enabled !== true) {
+                  continue
+                }
 
-              const [existingPrompt] = await tx.queryJson<{
-                id: string
-                originalText: string
-                promptHeading: string | null
-                type: string | null
-              }>(`
+                const [existingPrompt] = await tx.queryJson<{
+                  id: string
+                  originalText: string
+                  promptHeading: string | null
+                  type: string | null
+                }>(`
                 SELECT
                   id,
                   original_text AS originalText,
@@ -909,118 +1075,120 @@ export const projectsRoutes = new Elysia()
                 LIMIT 1
               `)
 
-              if (!existingPrompt) {
-                throw new Error('Prompt not found')
-              }
+                if (!existingPrompt) {
+                  throw new Error('Prompt not found')
+                }
 
-              const textChanged = existingPrompt.originalText !== prompt.originalText
-              const metaChanged =
-                (prompt.promptHeading !== undefined && prompt.promptHeading !== (existingPrompt.promptHeading ?? null))
-                || (prompt.type !== undefined && prompt.type !== (existingPrompt.type ?? null))
+                const textChanged = existingPrompt.originalText !== prompt.originalText
+                const metaChanged =
+                  (prompt.promptHeading !== undefined
+                    && prompt.promptHeading !== (existingPrompt.promptHeading ?? null))
+                  || (prompt.type !== undefined && prompt.type !== (existingPrompt.type ?? null))
 
-              const targetPromptId =
-                textChanged || metaChanged
-                  ? await getOrCreatePromptIdTx(tx, {
-                      originalText: prompt.originalText,
-                      promptHeading: prompt.promptHeading || null,
-                      type: prompt.type || null,
-                      contentHash: computePromptContentHash(
-                        prompt.originalText,
-                        null,
-                        prompt.promptHeading || null,
-                        prompt.type || null,
-                      ),
-                    })
-                  : prompt.originalId
+                const targetPromptId =
+                  textChanged || metaChanged
+                    ? await getOrCreatePromptIdTx(tx, {
+                        originalText: prompt.originalText,
+                        promptHeading: prompt.promptHeading || null,
+                        type: prompt.type || null,
+                        contentHash: computePromptContentHash(
+                          prompt.originalText,
+                          null,
+                          prompt.promptHeading || null,
+                          prompt.type || null,
+                        ),
+                      })
+                    : prompt.originalId
 
-              if (!targetPromptId) {
-                throw new Error('Prompt not found after insert')
-              }
+                if (!targetPromptId) {
+                  throw new Error('Prompt not found after insert')
+                }
 
-              if (textChanged || metaChanged) {
-                await tx.run(`
+                if (textChanged || metaChanged) {
+                  await tx.run(`
                   DELETE FROM app.project_prompt
                   WHERE project_id = '${escapeSqlString(params.id)}'
                     AND prompt_id = '${escapeSqlString(prompt.originalId)}'
                 `)
-              }
+                }
 
-              const currentAssociation = existing.find((entry) => {
-                return entry.promptId === prompt.originalId
-              })
-              const [originProjectRow] =
-                currentAssociation?.originProjectId !== undefined
-                  ? [null]
-                  : await tx.queryJson<{originProjectId: string | null}>(`
+                const currentAssociation = existing.find((entry) => {
+                  return entry.promptId === prompt.originalId
+                })
+                const [originProjectRow] =
+                  currentAssociation?.originProjectId !== undefined
+                    ? [null]
+                    : await tx.queryJson<{originProjectId: string | null}>(`
                     SELECT origin_project_id AS originProjectId
                     FROM app.project_prompt
                     WHERE prompt_id = '${escapeSqlString(prompt.originalId)}'
                     LIMIT 1
                   `)
 
-              await upsertProjectPromptTx(tx, {
-                projectId: params.id,
-                promptId: targetPromptId,
-                order,
-                archived: archived ?? currentAssociation?.archived ?? false,
-                enabled: enabled ?? currentAssociation?.enabled ?? true,
-                originProjectId: currentAssociation?.originProjectId ?? originProjectRow?.originProjectId ?? params.id,
-              })
-            } else {
-              const targetPromptId = await getOrCreatePromptIdTx(tx, {
-                originalText: prompt.originalText,
-                promptHeading: prompt.promptHeading || null,
-                type: prompt.type || null,
-                contentHash: computePromptContentHash(
-                  prompt.originalText,
-                  null,
-                  prompt.promptHeading || null,
-                  prompt.type || null,
-                ),
-              })
+                await upsertProjectPromptTx(tx, {
+                  projectId: params.id,
+                  promptId: targetPromptId,
+                  order,
+                  archived: archived ?? currentAssociation?.archived ?? false,
+                  enabled: enabled ?? currentAssociation?.enabled ?? true,
+                  originProjectId:
+                    currentAssociation?.originProjectId ?? originProjectRow?.originProjectId ?? params.id,
+                })
+              } else {
+                const targetPromptId = await getOrCreatePromptIdTx(tx, {
+                  originalText: prompt.originalText,
+                  promptHeading: prompt.promptHeading || null,
+                  type: prompt.type || null,
+                  contentHash: computePromptContentHash(
+                    prompt.originalText,
+                    null,
+                    prompt.promptHeading || null,
+                    prompt.type || null,
+                  ),
+                })
 
-              if (!targetPromptId) {
-                throw new Error('Prompt not found after insert')
+                if (!targetPromptId) {
+                  throw new Error('Prompt not found after insert')
+                }
+
+                await upsertProjectPromptTx(tx, {
+                  projectId: params.id,
+                  promptId: targetPromptId,
+                  order,
+                  archived: archived ?? false,
+                  enabled: enabled ?? true,
+                  originProjectId: params.id,
+                })
               }
-
-              await upsertProjectPromptTx(tx, {
-                projectId: params.id,
-                promptId: targetPromptId,
-                order,
-                archived: archived ?? false,
-                enabled: enabled ?? true,
-                originProjectId: params.id,
-              })
             }
           }
-        }
 
-        if (body.importRoutes !== undefined) {
-          const selectedRoutes = Array.from(
-            new Set(
-              body.importRoutes.filter((route) => {
-                return typeof route === 'string' && route.trim() !== ''
-              }),
-            ),
-          )
+          if (body.importRoutes !== undefined) {
+            const selectedRoutes = Array.from(
+              new Set(
+                body.importRoutes.filter((route) => {
+                  return typeof route === 'string' && route.trim() !== ''
+                }),
+              ),
+            )
 
-          await tx.run(`
+            await tx.run(`
             DELETE FROM app.project_import_route
             WHERE project_id = '${escapeSqlString(params.id)}'
           `)
 
-          if (selectedRoutes.length > 0) {
-            const routeRows = await tx.queryJson<{id: string; route: string}>(`
+            if (selectedRoutes.length > 0) {
+              const routeRows = await tx.queryJson<{id: string; route: string}>(`
               SELECT id, route
               FROM app.import_route
               WHERE route IN (${getQuotedStringList(selectedRoutes).join(', ')})
             `)
 
-            if (routeRows.length !== selectedRoutes.length) {
-              throw new Error('One or more selected import routes are invalid')
-            }
+              if (routeRows.length !== selectedRoutes.length) {
+                throw new Error('One or more selected import routes are invalid')
+              }
 
-            await tx.run(`
+              await tx.run(`
               INSERT INTO app.project_import_route (id, project_id, import_route_id)
               VALUES ${routeRows
                 .map((route) => {
@@ -1029,21 +1197,21 @@ export const projectsRoutes = new Elysia()
                 .join(', ')}
               ON CONFLICT(project_id, import_route_id) DO NOTHING
             `)
+            }
           }
-        }
 
-        const updatedPrompts = await tx.queryJson<{
-          id: string
-          originalText: string
-          transformedText: string | null
-          promptHeading: string | null
-          order: number | null
-          archived: boolean
-          promptArchived: boolean
-          type: string | null
-          enabled: boolean
-          originProjectId: string | null
-        }>(`
+          const updatedPrompts = await tx.queryJson<{
+            id: string
+            originalText: string
+            transformedText: string | null
+            promptHeading: string | null
+            order: number | null
+            archived: boolean
+            promptArchived: boolean
+            type: string | null
+            enabled: boolean
+            originProjectId: string | null
+          }>(`
           SELECT
             p.id AS id,
             p.original_text AS originalText,
@@ -1061,8 +1229,22 @@ export const projectsRoutes = new Elysia()
           ORDER BY pp.prompt_order ASC NULLS LAST
         `)
 
-        return {project: getProjectValue(updatedProject), prompts: updatedPrompts}
-      })
+          if (detachPlan) {
+            await runTxStatements(
+              tx,
+              detachPlan.restoreSpecs.map((spec) => {
+                return getDropDetachBackupStatement(spec)
+              }),
+            )
+          }
+
+          return {project: getProjectValue(updatedProject), prompts: updatedPrompts}
+        })
+      }
+
+      const result = detachPlan
+        ? await runWithDetachedProjectReferenceRecovery(runEditTransaction, detachPlan)
+        : await runEditTransaction()
 
       await getDuckdbMartRefreshService().queueProjectRefresh(params.id, 'ProjectsRoutes.edit')
 

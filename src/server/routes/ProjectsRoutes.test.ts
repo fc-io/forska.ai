@@ -155,3 +155,125 @@ test('archive route repairs stale mart refresh queue schema before queueing refr
 
   await flushMartRefreshes()
 })
+
+test('edit route accepts full client payload when the model is unchanged', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-same-model-connection'
+  const modelId = 'edit-same-model'
+  const projectId = 'edit-same-model-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('edit-same-model-article', 'Edit same model article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('edit-same-model-project-article', '${projectId}', 'edit-same-model-article')
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        name: 'Updated project name',
+        description: null,
+        prompts: [],
+        dateFrom: null,
+        dateTo: null,
+        modelId,
+        importRoutes: [],
+        useTitle: true,
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {data: {project: {modelId: string; name: string}}}
+
+  expect(response.status).toBe(200)
+  expect(body.data.project.modelId).toBe(modelId)
+  expect(body.data.project.name).toBe('Updated project name')
+
+  const [storedProjectArticle] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.project_article
+    WHERE project_id = '${projectId}'
+  `)
+
+  expect(Number(storedProjectArticle?.count ?? 0)).toBe(1)
+
+  await flushMartRefreshes()
+})
+
+test('edit route can change the model for a populated project', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-switch-model-connection'
+  const initialModelId = 'edit-switch-model-initial'
+  const nextModelId = 'edit-switch-model-next'
+  const projectId = 'edit-switch-model-project'
+
+  await insertProjectFixture({connectionId, modelId: initialModelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${nextModelId}', '${connectionId}', 'Qwen/Qwen3.5-32B', 'Qwen/Qwen3.5-32B', 'Qwen 32B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('edit-switch-model-article', 'Edit switch model article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('edit-switch-model-project-article', '${projectId}', 'edit-switch-model-article')
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        name: 'Project with switched model',
+        description: null,
+        prompts: [],
+        dateFrom: null,
+        dateTo: null,
+        modelId: nextModelId,
+        importRoutes: [],
+        useTitle: true,
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {data: {project: {modelId: string; name: string}}}
+
+  expect(response.status).toBe(200)
+  expect(body.data.project.modelId).toBe(nextModelId)
+  expect(body.data.project.name).toBe('Project with switched model')
+
+  const [storedProject] = await queryDatabase<{modelId: string}>(`
+    SELECT model_id AS modelId
+    FROM app.project
+    WHERE id = '${projectId}'
+    LIMIT 1
+  `)
+  const [storedProjectArticle] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.project_article
+    WHERE project_id = '${projectId}'
+  `)
+
+  expect(storedProject?.modelId).toBe(nextModelId)
+  expect(Number(storedProjectArticle?.count ?? 0)).toBe(1)
+
+  await flushMartRefreshes()
+})
