@@ -332,7 +332,7 @@ const failForNonOwnerRole = (serverRole: ServerRole) => {
 const failForActiveLease = (metadata: DuckdbOwnerLeaseMetadata) => {
   return Effect.fail(
     new Error(
-      `DuckDB writer lease is held by ${getLeaseOwnerText(metadata)} since ${metadata.acquiredAt}. Stop that process or use SERVER_ROLE=writer/dev-single there only.`,
+      `DuckDB writer lease is held by ${getLeaseOwnerText(metadata)} since ${metadata.acquiredAt}. Stop that process or use SERVER_ROLE=writer/worker/dev-single there only.`,
     ),
   )
 }

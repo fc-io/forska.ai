@@ -14,9 +14,13 @@ const martRefreshDrainHeartbeatModulePath = getModulePath('./src/server/utils/ma
 const martRefreshServiceModulePath = getModulePath('./src/server/services/getDuckdbMartRefreshService.ts')
 const serverRuntimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
 type MartRefreshDrainHeartbeatModule = typeof import('./martRefreshDrainHeartbeat.ts')
+type ServerRuntimeRoleModule = typeof import('./serverRuntimeRole.ts')
 
 test('startMartRefreshDrainHeartbeat flushes immediately when writer work is enabled', async () => {
   let flushCount = 0
+  const actualServerRuntimeRoleModule = (await import(
+    `${serverRuntimeRoleModulePath}?actual=${Date.now()}`
+  )) as ServerRuntimeRoleModule
 
   void mock.module(martRefreshServiceModulePath, () => {
     return {
@@ -31,6 +35,7 @@ test('startMartRefreshDrainHeartbeat flushes immediately when writer work is ena
   })
   void mock.module(serverRuntimeRoleModulePath, () => {
     return {
+      ...actualServerRuntimeRoleModule,
       shouldCurrentServerRunWriterWork: () => {
         return true
       },
@@ -53,6 +58,9 @@ test('startMartRefreshDrainHeartbeat flushes immediately when writer work is ena
 test('startMartRefreshDrainHeartbeat begins flushing after the server becomes writer', async () => {
   let flushCount = 0
   let shouldRunWriterWork = false
+  const actualServerRuntimeRoleModule = (await import(
+    `${serverRuntimeRoleModulePath}?actual=${Date.now()}`
+  )) as ServerRuntimeRoleModule
 
   void mock.module(martRefreshServiceModulePath, () => {
     return {
@@ -67,6 +75,7 @@ test('startMartRefreshDrainHeartbeat begins flushing after the server becomes wr
   })
   void mock.module(serverRuntimeRoleModulePath, () => {
     return {
+      ...actualServerRuntimeRoleModule,
       shouldCurrentServerRunWriterWork: () => {
         return shouldRunWriterWork
       },

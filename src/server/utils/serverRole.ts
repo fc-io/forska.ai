@@ -12,7 +12,7 @@ export const isAutoServerRole = (serverRole: ServerRole) => {
 }
 
 export const canServerRoleOwnDuckdb = (serverRole: ServerRole) => {
-  return serverRole === 'writer' || serverRole === 'dev-single'
+  return serverRole === 'writer' || serverRole === 'worker' || serverRole === 'dev-single'
 }
 
 export const shouldServerRoleMountWriterCrons = (serverRole: ServerRole) => {

@@ -20,7 +20,7 @@ const getServerEnv = () => {
 }
 
 const startServer = () => {
-  serverProcess = spawn(['bun', 'run', 'src/server/index.ts'], {
+  serverProcess = spawn(['bun', 'scripts/startServerStack.ts'], {
     cwd: process.cwd(),
     env: getServerEnv(),
     stderr: 'inherit',

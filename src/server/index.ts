@@ -53,6 +53,8 @@ const writerCronRoutes = shouldMountWriterCrons
 
 await initializeServerRuntimeRole()
 
+const shouldWarmCodex = getCurrentServerRole() !== 'worker'
+
 const _app = new Elysia()
   .use(
     cors({
@@ -99,25 +101,29 @@ startServerRuntimeRoleMonitor()
 startWriterConnectionHeartbeat()
 startMartRefreshDrainHeartbeat()
 
-void warmCodexAppServer()
+if (shouldWarmCodex) {
+  void warmCodexAppServer()
+}
 
-void getCodexCliLoginStatus().then((status) => {
-  if (!status.ok) {
-    console.warn(
-      '[codex] CLI not available. Install @openai/codex and/or configure the Codex binary in Settings. Then visit /providers to connect.',
-    )
-    return
-  }
+if (shouldWarmCodex) {
+  void getCodexCliLoginStatus().then((status) => {
+    if (!status.ok) {
+      console.warn(
+        '[codex] CLI not available. Install @openai/codex and/or configure the Codex binary in Settings. Then visit /providers to connect.',
+      )
+      return
+    }
 
-  if (!status.loggedIn) {
-    console.log(
-      `[codex] Not logged in. Run \`codex login\` or open http://localhost:${env.VITE_PORT}/providers to start device login.`,
-    )
-    return
-  }
+    if (!status.loggedIn) {
+      console.log(
+        `[codex] Not logged in. Run \`codex login\` or open http://localhost:${env.VITE_PORT}/providers to start device login.`,
+      )
+      return
+    }
 
-  const method = status.method ?? 'unknown'
-  console.log(`[codex] Logged in (${method}).`)
-})
+    const method = status.method ?? 'unknown'
+    console.log(`[codex] Logged in (${method}).`)
+  })
+}
 
 export type App = typeof _app
