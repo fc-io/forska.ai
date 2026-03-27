@@ -301,6 +301,10 @@ const getMatchesProjectReviewConfig = (params: {row: ArticleJudgmentRow; project
   )
 }
 
+const getMatchesProjectReviewSource = (params: {projectId: string; row: ArticleJudgmentRow}) => {
+  return (params.row.judgmentProjectId ?? params.row.judgmentSnapshotProjectId) === params.projectId
+}
+
 const getAssessmentValue = (row: {
   id: string
   judgmentId: string
@@ -388,7 +392,11 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         {} as Record<string, number>,
       )
       const appScopedArticleJudgments: ArticleJudgmentRow[] = allArticleJudgments.filter((row) => {
-        return enabledPromptIdSet.has(row.judgmentPromptId) && getMatchesProjectReviewConfig({row, projectReviewConfig})
+        return (
+          enabledPromptIdSet.has(row.judgmentPromptId)
+          && getMatchesProjectReviewSource({projectId, row})
+          && getMatchesProjectReviewConfig({row, projectReviewConfig})
+        )
       })
       const projectReviewDetailJudgmentDetails: ReviewJudgmentDetail[] = projectReviewDetailJudgmentRows.map((row) => {
         return {
