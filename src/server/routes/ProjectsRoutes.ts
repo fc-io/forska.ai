@@ -10,7 +10,6 @@ import {
   getTimestampLiteral,
 } from '../services/appQueryHelpers.ts'
 import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
-import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {assertProjectIsActive, getProjectAccess} from './projectsRoutes/projectAccessGuard.ts'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'
@@ -258,44 +257,6 @@ const runWithDetachedProjectReferenceRecovery = async <T>(
     await restoreDetachedProjectReferences(detachPlan)
     throw error
   }
-}
-
-const getPromptIdByHashTx = async (tx: AppTx, contentHash: string) => {
-  const [row] = await tx.queryJson<{id: string}>(`
-    SELECT id
-    FROM app.prompt
-    WHERE content_hash = '${escapeSqlString(contentHash)}'
-    LIMIT 1
-  `)
-
-  return row?.id ?? null
-}
-
-const getOrCreatePromptIdTx = async (
-  tx: AppTx,
-  params: {originalText: string; promptHeading: string | null; type: string | null; contentHash: string},
-) => {
-  const existingPromptId = await getPromptIdByHashTx(tx, params.contentHash)
-
-  if (existingPromptId) {
-    return existingPromptId
-  }
-
-  const [insertedPrompt] = await tx.queryJson<{id: string}>(`
-    INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash)
-    VALUES (
-      '${escapeSqlString(crypto.randomUUID())}',
-      ${getSqlLiteral(params.originalText)},
-      NULL,
-      ${getSqlLiteral(params.promptHeading)},
-      ${getSqlLiteral(params.type)},
-      '${escapeSqlString(params.contentHash)}'
-    )
-    ON CONFLICT(content_hash) DO NOTHING
-    RETURNING id
-  `)
-
-  return insertedPrompt?.id ?? (await getPromptIdByHashTx(tx, params.contentHash))
 }
 
 const createDetachedPromptTx = async (
@@ -791,12 +752,12 @@ export const projectsRoutes = new Elysia()
             const heading = typeof prompt === 'object' ? prompt.promptHeading || null : null
             const typeVal = typeof prompt === 'object' ? prompt.type || null : null
             const orderVal = typeof prompt === 'object' && prompt.order !== undefined ? prompt.order : index
-            const contentHash = computePromptContentHash(content, null, heading, typeVal)
-            const promptId = await getOrCreatePromptIdTx(tx, {
+            const promptId = await createDetachedPromptTx(tx, {
               originalText: content,
+              transformedText: null,
               promptHeading: heading,
               type: typeVal,
-              contentHash,
+              archived: false,
             })
 
             if (!promptId) {
@@ -1101,12 +1062,14 @@ export const projectsRoutes = new Elysia()
                   originalText: string
                   promptHeading: string | null
                   type: string | null
+                  promptArchived: boolean
                 }>(`
                 SELECT
                   id,
                   original_text AS originalText,
                   prompt_heading AS promptHeading,
-                  type
+                  type,
+                  archived AS promptArchived
                 FROM app.prompt
                 WHERE id = '${escapeSqlString(prompt.originalId)}'
                 LIMIT 1
@@ -1124,16 +1087,12 @@ export const projectsRoutes = new Elysia()
 
                 const targetPromptId =
                   textChanged || metaChanged
-                    ? await getOrCreatePromptIdTx(tx, {
+                    ? await createDetachedPromptTx(tx, {
                         originalText: prompt.originalText,
+                        transformedText: null,
                         promptHeading: prompt.promptHeading || null,
                         type: prompt.type || null,
-                        contentHash: computePromptContentHash(
-                          prompt.originalText,
-                          null,
-                          prompt.promptHeading || null,
-                          prompt.type || null,
-                        ),
+                        archived: existingPrompt.promptArchived,
                       })
                     : prompt.originalId
 
@@ -1169,19 +1128,17 @@ export const projectsRoutes = new Elysia()
                   archived: archived ?? currentAssociation?.archived ?? false,
                   enabled: enabled ?? currentAssociation?.enabled ?? true,
                   originProjectId:
-                    currentAssociation?.originProjectId ?? originProjectRow?.originProjectId ?? params.id,
+                    textChanged || metaChanged
+                      ? params.id
+                      : (currentAssociation?.originProjectId ?? originProjectRow?.originProjectId ?? params.id),
                 })
               } else {
-                const targetPromptId = await getOrCreatePromptIdTx(tx, {
+                const targetPromptId = await createDetachedPromptTx(tx, {
                   originalText: prompt.originalText,
+                  transformedText: null,
                   promptHeading: prompt.promptHeading || null,
                   type: prompt.type || null,
-                  contentHash: computePromptContentHash(
-                    prompt.originalText,
-                    null,
-                    prompt.promptHeading || null,
-                    prompt.type || null,
-                  ),
+                  archived: false,
                 })
 
                 if (!targetPromptId) {

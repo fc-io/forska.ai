@@ -502,3 +502,129 @@ test('editing a cloned project model leaves the source project model unchanged',
 
   await flushMartRefreshes()
 })
+
+test('create route detaches owned prompts from existing global prompt ids', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'create-detach-connection'
+  const modelId = 'create-detach-model'
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-122B-A10B', 'Qwen/Qwen3.5-122B-A10B', 'Qwen 122B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, prompt_heading, type, content_hash)
+    VALUES ('create-detach-existing-prompt', 'Shared prompt text', 'shared', 'string', 'create-detach-shared-hash')
+  `)
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projects', {
+      body: JSON.stringify({name: 'Detached create project', modelId, prompts: ['Shared prompt text']}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {data: {id: string}}
+  const projectId = body.data.id
+
+  expect(response.status).toBe(200)
+
+  const [promptRow] = await queryDatabase<{
+    contentHash: string | null
+    originProjectId: string | null
+    promptId: string
+  }>(`
+    SELECT p.id AS promptId, p.content_hash AS contentHash, pp.origin_project_id AS originProjectId
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON p.id = pp.prompt_id
+    WHERE pp.project_id = '${projectId}'
+    LIMIT 1
+  `)
+
+  expect(promptRow?.promptId).not.toBe('create-detach-existing-prompt')
+  expect(promptRow?.contentHash).toBe(null)
+  expect(promptRow?.originProjectId).toBe(projectId)
+
+  await flushMartRefreshes()
+})
+
+test('edit route detaches changed owned prompts from matching global prompt ids', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-detach-connection'
+  const modelId = 'edit-detach-model'
+  const projectId = 'edit-detach-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertProjectPromptFixture({
+    contentHash: 'edit-detach-original-hash',
+    originProjectId: projectId,
+    originalText: 'Original owned prompt',
+    projectId,
+    projectPromptId: 'edit-detach-project-prompt',
+    promptId: 'edit-detach-owned-prompt',
+  })
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, prompt_heading, type, content_hash)
+    VALUES ('edit-detach-existing-prompt', 'Shared prompt text', 'shared', 'string', 'edit-detach-shared-hash')
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        name: 'Edited detached project',
+        description: null,
+        prompts: [
+          {
+            originalId: 'edit-detach-owned-prompt',
+            originalText: 'Shared prompt text',
+            promptHeading: 'shared',
+            type: 'string',
+            order: 0,
+            enabled: true,
+          },
+        ],
+        dateFrom: null,
+        dateTo: null,
+        modelId,
+        importRoutes: [],
+        useTitle: true,
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+
+  expect(response.status).toBe(200)
+
+  const [promptRow] = await queryDatabase<{
+    contentHash: string | null
+    originProjectId: string | null
+    promptId: string
+  }>(`
+    SELECT p.id AS promptId, p.content_hash AS contentHash, pp.origin_project_id AS originProjectId
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON p.id = pp.prompt_id
+    WHERE pp.project_id = '${projectId}'
+    LIMIT 1
+  `)
+
+  expect(promptRow?.promptId).not.toBe('edit-detach-owned-prompt')
+  expect(promptRow?.promptId).not.toBe('edit-detach-existing-prompt')
+  expect(promptRow?.contentHash).toBe(null)
+  expect(promptRow?.originProjectId).toBe(projectId)
+
+  await flushMartRefreshes()
+})
