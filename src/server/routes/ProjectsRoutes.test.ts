@@ -16,6 +16,10 @@ let flushMartRefreshes: (() => Promise<void>) | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 
+const getSqlLiteral = (value: string | null) => {
+  return value === null ? 'NULL' : `'${value.replaceAll("'", "''")}'`
+}
+
 const insertProjectFixture = async ({
   connectionId,
   modelId,
@@ -40,6 +44,65 @@ const insertProjectFixture = async ({
   await runDatabase(`
     INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
     VALUES ('${projectId}', 'Archive Regression Project', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+}
+
+const insertProjectPromptFixture = async ({
+  archived = false,
+  contentHash,
+  enabled = true,
+  order = 0,
+  originProjectId,
+  originalText,
+  projectId,
+  projectPromptId,
+  promptArchived = false,
+  promptHeading = null,
+  promptId,
+  transformedText = null,
+  type = null,
+}: {
+  archived?: boolean
+  contentHash: string
+  enabled?: boolean
+  order?: number
+  originProjectId: string | null
+  originalText: string
+  projectId: string
+  projectPromptId: string
+  promptArchived?: boolean
+  promptHeading?: string | null
+  promptId: string
+  transformedText?: string | null
+  type?: string | null
+}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived)
+    VALUES (
+      '${promptId}',
+      ${getSqlLiteral(originalText)},
+      ${getSqlLiteral(transformedText)},
+      ${getSqlLiteral(promptHeading)},
+      ${getSqlLiteral(type)},
+      '${contentHash}',
+      ${promptArchived ? 'TRUE' : 'FALSE'}
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, enabled, origin_project_id)
+    VALUES (
+      '${projectPromptId}',
+      '${projectId}',
+      '${promptId}',
+      ${order},
+      ${archived ? 'TRUE' : 'FALSE'},
+      ${enabled ? 'TRUE' : 'FALSE'},
+      ${originProjectId === null ? 'NULL' : `'${originProjectId}'`}
+    )
   `)
 }
 
@@ -274,6 +337,168 @@ test('edit route can change the model for a populated project', async () => {
 
   expect(storedProject?.modelId).toBe(nextModelId)
   expect(Number(storedProjectArticle?.count ?? 0)).toBe(1)
+
+  await flushMartRefreshes()
+})
+
+test('clone route detaches prompt ids and hides duplicate importable prompts', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'clone-detach-connection'
+  const modelId = 'clone-detach-model'
+  const projectId = 'clone-detach-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertProjectPromptFixture({
+    contentHash: 'clone-detach-hash-ai',
+    order: 0,
+    originProjectId: projectId,
+    originalText: 'Is this about AI?',
+    projectId,
+    projectPromptId: 'clone-detach-project-prompt-ai',
+    promptHeading: 'ai',
+    promptId: 'clone-detach-prompt-ai',
+    type: 'string',
+  })
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, prompt_heading, type, content_hash)
+    VALUES ('clone-detach-prompt-unrelated', 'Unrelated prompt', 'other', 'string', 'clone-detach-hash-unrelated')
+  `)
+
+  const cloneResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/clone`, {method: 'POST'}),
+  )
+  const cloneBody = (await cloneResponse.json()) as {data: {id: string}}
+  const clonedProjectId = cloneBody.data.id
+
+  expect(cloneResponse.status).toBe(200)
+
+  const sourcePromptRows = await queryDatabase<{
+    contentHash: string | null
+    originalText: string
+    originProjectId: string | null
+    promptHeading: string | null
+    promptId: string
+  }>(`
+    SELECT
+      p.id AS promptId,
+      p.original_text AS originalText,
+      p.prompt_heading AS promptHeading,
+      p.content_hash AS contentHash,
+      pp.origin_project_id AS originProjectId
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON p.id = pp.prompt_id
+    WHERE pp.project_id = '${projectId}'
+  `)
+  const clonedPromptRows = await queryDatabase<{
+    contentHash: string | null
+    originalText: string
+    originProjectId: string | null
+    promptHeading: string | null
+    promptId: string
+  }>(`
+    SELECT
+      p.id AS promptId,
+      p.original_text AS originalText,
+      p.prompt_heading AS promptHeading,
+      p.content_hash AS contentHash,
+      pp.origin_project_id AS originProjectId
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON p.id = pp.prompt_id
+    WHERE pp.project_id = '${clonedProjectId}'
+  `)
+
+  expect(sourcePromptRows.length).toBe(1)
+  expect(clonedPromptRows.length).toBe(1)
+  expect(clonedPromptRows[0]?.promptId).not.toBe(sourcePromptRows[0]?.promptId)
+  expect(clonedPromptRows[0]?.originalText).toBe(sourcePromptRows[0]?.originalText)
+  expect(clonedPromptRows[0]?.promptHeading).toBe(sourcePromptRows[0]?.promptHeading)
+  expect(clonedPromptRows[0]?.contentHash).toBe(null)
+  expect(clonedPromptRows[0]?.originProjectId).toBe(clonedProjectId)
+
+  const detailsResponse = await app.handle(new Request(`http://localhost/api/projects/${clonedProjectId}`))
+  const detailsBody = (await detailsResponse.json()) as {
+    data: {prompts: Array<{id: string; originalText: string; originProjectId: string | null}>}
+  }
+  const matchingPrompts = detailsBody.data.prompts.filter((prompt) => {
+    return prompt.originalText === 'Is this about AI?'
+  })
+  const unrelatedPrompts = detailsBody.data.prompts.filter((prompt) => {
+    return prompt.originalText === 'Unrelated prompt'
+  })
+
+  expect(detailsResponse.status).toBe(200)
+  expect(matchingPrompts.length).toBe(1)
+  expect(matchingPrompts[0]?.originProjectId).toBe(clonedProjectId)
+  expect(unrelatedPrompts.length).toBe(1)
+  expect(unrelatedPrompts[0]?.originProjectId).toBe(null)
+
+  await flushMartRefreshes()
+})
+
+test('editing a cloned project model leaves the source project model unchanged', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'clone-edit-model-connection'
+  const initialModelId = 'clone-edit-model-initial'
+  const nextModelId = 'clone-edit-model-next'
+  const projectId = 'clone-edit-model-project'
+
+  await insertProjectFixture({connectionId, modelId: initialModelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${nextModelId}', '${connectionId}', 'Qwen/Qwen3.5-32B', 'Qwen/Qwen3.5-32B', 'Qwen 32B', 'manual', TRUE)
+  `)
+
+  const cloneResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/clone`, {method: 'POST'}),
+  )
+  const cloneBody = (await cloneResponse.json()) as {data: {id: string}}
+  const clonedProjectId = cloneBody.data.id
+
+  expect(cloneResponse.status).toBe(200)
+
+  const editResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${clonedProjectId}/edit`, {
+      body: JSON.stringify({
+        name: 'Detached clone with new model',
+        description: null,
+        prompts: [],
+        dateFrom: null,
+        dateTo: null,
+        modelId: nextModelId,
+        importRoutes: [],
+        useTitle: true,
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+
+  expect(editResponse.status).toBe(200)
+
+  const storedProjects = await queryDatabase<{id: string; modelId: string}>(`
+    SELECT id, model_id AS modelId
+    FROM app.project
+    WHERE id IN ('${projectId}', '${clonedProjectId}')
+    ORDER BY id
+  `)
+  const sourceProject = storedProjects.find((project) => {
+    return project.id === projectId
+  })
+  const clonedProject = storedProjects.find((project) => {
+    return project.id === clonedProjectId
+  })
+
+  expect(sourceProject?.modelId).toBe(initialModelId)
+  expect(clonedProject?.modelId).toBe(nextModelId)
 
   await flushMartRefreshes()
 })

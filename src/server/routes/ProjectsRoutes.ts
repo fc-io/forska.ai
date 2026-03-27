@@ -298,6 +298,33 @@ const getOrCreatePromptIdTx = async (
   return insertedPrompt?.id ?? (await getPromptIdByHashTx(tx, params.contentHash))
 }
 
+const createDetachedPromptTx = async (
+  tx: AppTx,
+  params: {
+    originalText: string
+    transformedText: string | null
+    promptHeading: string | null
+    type: string | null
+    archived: boolean
+  },
+) => {
+  const [insertedPrompt] = await tx.queryJson<{id: string}>(`
+    INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived)
+    VALUES (
+      '${escapeSqlString(crypto.randomUUID())}',
+      ${getSqlLiteral(params.originalText)},
+      ${getSqlLiteral(params.transformedText)},
+      ${getSqlLiteral(params.promptHeading)},
+      ${getSqlLiteral(params.type)},
+      NULL,
+      ${params.archived ? 'TRUE' : 'FALSE'}
+    )
+    RETURNING id
+  `)
+
+  return insertedPrompt?.id ?? null
+}
+
 const upsertProjectPromptTx = async (
   tx: AppTx,
   params: {
@@ -595,6 +622,16 @@ export const projectsRoutes = new Elysia()
         LEFT JOIN app.project_prompt pp ON pp.project_id = '${escapeSqlString(params.id)}' AND pp.prompt_id = p.id
         WHERE pp.id IS NULL
           AND p.archived = FALSE
+          AND NOT EXISTS (
+            SELECT 1
+            FROM app.project_prompt linked_pp
+            INNER JOIN app.prompt linked_prompt ON linked_prompt.id = linked_pp.prompt_id
+            WHERE linked_pp.project_id = '${escapeSqlString(params.id)}'
+              AND linked_prompt.original_text = p.original_text
+              AND COALESCE(linked_prompt.transformed_text, '') = COALESCE(p.transformed_text, '')
+              AND COALESCE(linked_prompt.prompt_heading, '') = COALESCE(p.prompt_heading, '')
+              AND COALESCE(linked_prompt.type, '') = COALESCE(p.type, '')
+          )
       `),
         getAppDatabaseService().queryJson<{id: string}>(`
         SELECT id
@@ -1430,14 +1467,29 @@ export const projectsRoutes = new Elysia()
       }
 
       const [sourcePrompts, sourceRouteLinks, sourceArticles] = await Promise.all([
-        tx.queryJson<{promptId: string; order: number | null; archived: boolean; enabled: boolean}>(`
+        tx.queryJson<{
+          order: number | null
+          archived: boolean
+          enabled: boolean
+          originalText: string
+          transformedText: string | null
+          promptHeading: string | null
+          type: string | null
+          promptArchived: boolean
+        }>(`
           SELECT
-            prompt_id AS promptId,
-            prompt_order AS "order",
-            archived,
-            enabled
-          FROM app.project_prompt
-          WHERE project_id = '${escapeSqlString(params.id)}'
+            pp.prompt_order AS "order",
+            pp.archived AS archived,
+            pp.enabled AS enabled,
+            p.original_text AS originalText,
+            p.transformed_text AS transformedText,
+            p.prompt_heading AS promptHeading,
+            p.type AS type,
+            p.archived AS promptArchived
+          FROM app.project_prompt pp
+          INNER JOIN app.prompt p ON p.id = pp.prompt_id
+          WHERE pp.project_id = '${escapeSqlString(params.id)}'
+          ORDER BY pp.prompt_order ASC NULLS LAST
         `),
         tx.queryJson<{importRouteId: string}>(`
           SELECT import_route_id AS importRouteId
@@ -1452,26 +1504,28 @@ export const projectsRoutes = new Elysia()
       ])
 
       if (sourcePrompts.length > 0) {
-        await tx.run(`
-          INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, enabled, origin_project_id)
-          VALUES ${sourcePrompts
-            .map((prompt) => {
-              return `(${[
-                crypto.randomUUID(),
-                clonedProject.id,
-                prompt.promptId,
-                prompt.order,
-                prompt.archived,
-                prompt.enabled,
-                clonedProject.id,
-              ]
-                .map((value) => {
-                  return getSqlLiteral(value)
-                })
-                .join(', ')})`
-            })
-            .join(', ')}
-        `)
+        for (const prompt of sourcePrompts) {
+          const detachedPromptId = await createDetachedPromptTx(tx, {
+            originalText: prompt.originalText,
+            transformedText: prompt.transformedText,
+            promptHeading: prompt.promptHeading,
+            type: prompt.type,
+            archived: prompt.promptArchived,
+          })
+
+          if (!detachedPromptId) {
+            throw new Error('Failed to create detached cloned prompt')
+          }
+
+          await upsertProjectPromptTx(tx, {
+            projectId: clonedProject.id,
+            promptId: detachedPromptId,
+            order: prompt.order ?? 0,
+            archived: prompt.archived,
+            enabled: prompt.enabled,
+            originProjectId: clonedProject.id,
+          })
+        }
       }
 
       if (sourceRouteLinks.length > 0) {
