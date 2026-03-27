@@ -5,21 +5,38 @@ import {getBackgroundServerEnv, getBackgroundServerStackConfig} from '../src/ser
 type ManagedRole = 'api' | 'worker'
 type ServerProcess = Subprocess<'ignore', 'inherit', 'inherit'>
 
+type ManagedServerState = {
+  apiProcess: ServerProcess | null
+  apiReadyPromise: Promise<void> | null
+  shuttingDown: boolean
+  workerProcess: ServerProcess | null
+  workerReadyPromise: Promise<void> | null
+}
+
+const restartDelayMs = 1_000
 const startupTimeoutMs = 20_000
 const writerPollIntervalMs = 250
 
-const getServerCommand = () => {
-  return ['bun', 'run', 'src/server/index.ts']
+const config = getBackgroundServerStackConfig(process.env)
+
+if (config.apiPort === config.workerPort) {
+  throw new Error(`API port ${config.apiPort} must differ from background writer port ${config.workerPort}`)
 }
 
-const startServerProcess = (role: ManagedRole): ServerProcess => {
-  return spawn(getServerCommand(), {
-    cwd: process.cwd(),
-    env: getBackgroundServerEnv({baseEnv: process.env, role}),
-    stderr: 'inherit',
-    stdin: 'ignore',
-    stdout: 'inherit',
-  })
+console.log(
+  `[server:stack] api_port=${config.apiPort} worker_port=${config.workerPort} worker_duckdb_memory_limit=${config.workerDuckdbMemoryLimit}`,
+)
+
+const managedServerState: ManagedServerState = {
+  apiProcess: null,
+  apiReadyPromise: null,
+  shuttingDown: false,
+  workerProcess: null,
+  workerReadyPromise: null,
+}
+
+const getServerCommand = () => {
+  return ['bun', 'run', 'src/server/index.ts']
 }
 
 const waitFor = async (ms: number) => {
@@ -37,22 +54,48 @@ const isWriterReady = async (writerUrl: string) => {
   }
 }
 
-const waitForWriter = async (writerUrl: string) => {
-  const deadlineMs = Date.now() + startupTimeoutMs
+const waitForWriter = async (writerUrl: string, deadlineMs = Date.now() + startupTimeoutMs): Promise<void> => {
+  return Date.now() >= deadlineMs
+    ? Promise.reject(new Error(`Timed out waiting for background writer at ${writerUrl}`))
+    : (await isWriterReady(writerUrl))
+      ? Promise.resolve()
+      : waitFor(writerPollIntervalMs).then(() => {
+          return waitForWriter(writerUrl, deadlineMs)
+        })
+}
 
-  while (Date.now() < deadlineMs) {
-    if (await isWriterReady(writerUrl)) {
-      return
-    }
+const isServerProcessRunning = (serverProcess: ServerProcess | null): serverProcess is ServerProcess => {
+  return serverProcess !== null && serverProcess.exitCode === null
+}
 
-    await waitFor(writerPollIntervalMs)
+const getManagedServerProcess = (role: ManagedRole) => {
+  return role === 'api' ? managedServerState.apiProcess : managedServerState.workerProcess
+}
+
+const setManagedServerProcess = (role: ManagedRole, serverProcess: ServerProcess | null) => {
+  if (role === 'api') {
+    managedServerState.apiProcess = serverProcess
+    return
   }
 
-  throw new Error(`Timed out waiting for background writer at ${writerUrl}`)
+  managedServerState.workerProcess = serverProcess
+}
+
+const startServerProcess = (role: ManagedRole): ServerProcess => {
+  const serverProcess = spawn(getServerCommand(), {
+    cwd: process.cwd(),
+    env: getBackgroundServerEnv({baseEnv: process.env, role}),
+    stderr: 'inherit',
+    stdin: 'ignore',
+    stdout: 'inherit',
+  })
+
+  console.log(`[server:stack] started ${role} pid=${serverProcess.pid ?? 'unknown'}`)
+  return serverProcess
 }
 
 const stopServerProcess = async (serverProcess: ServerProcess | null) => {
-  if (serverProcess === null || serverProcess.exitCode !== null) {
+  if (!isServerProcessRunning(serverProcess)) {
     return
   }
 
@@ -65,25 +108,100 @@ const stopServerProcess = async (serverProcess: ServerProcess | null) => {
   }
 }
 
-const config = getBackgroundServerStackConfig(process.env)
-
-if (config.apiPort === config.workerPort) {
-  throw new Error(`API port ${config.apiPort} must differ from background writer port ${config.workerPort}`)
-}
-
-console.log(`[server:stack] api_port=${config.apiPort} worker_port=${config.workerPort}`)
-
-let workerProcess: ServerProcess | null = null
-let apiProcess: ServerProcess | null = null
-let shuttingDown = false
-
-const shutdown = async (exitCode = 0) => {
-  if (shuttingDown) {
+const stopManagedServerProcess = async (role: ManagedRole, serverProcess = getManagedServerProcess(role)) => {
+  if (serverProcess === null) {
     return
   }
 
-  shuttingDown = true
-  await Promise.all([stopServerProcess(apiProcess), stopServerProcess(workerProcess)])
+  if (getManagedServerProcess(role) === serverProcess) {
+    setManagedServerProcess(role, null)
+  }
+
+  await stopServerProcess(serverProcess)
+}
+
+const ensureManagedServerProcess = (role: ManagedRole): ServerProcess => {
+  const currentProcess = getManagedServerProcess(role)
+
+  if (isServerProcessRunning(currentProcess)) {
+    return currentProcess
+  }
+
+  const nextProcess = startServerProcess(role)
+  setManagedServerProcess(role, nextProcess)
+  void monitorManagedServerExit(role, nextProcess)
+  return nextProcess
+}
+
+const ensureWorkerReadyAttempt = async (): Promise<void> => {
+  const workerProcess = ensureManagedServerProcess('worker')
+
+  try {
+    return await waitForWriter(config.writerUrl)
+  } catch (error) {
+    console.error('[server:stack] worker did not become ready; restarting', error)
+    await stopManagedServerProcess('worker', workerProcess)
+    await waitFor(restartDelayMs)
+    return ensureWorkerReadyAttempt()
+  }
+}
+
+const ensureWorkerReady = () => {
+  if (managedServerState.workerReadyPromise) {
+    return managedServerState.workerReadyPromise
+  }
+
+  managedServerState.workerReadyPromise = ensureWorkerReadyAttempt().finally(() => {
+    managedServerState.workerReadyPromise = null
+  })
+
+  return managedServerState.workerReadyPromise
+}
+
+const ensureApiReadyAttempt = async (): Promise<void> => {
+  await ensureWorkerReady()
+  ensureManagedServerProcess('api')
+}
+
+const ensureApiReady = () => {
+  if (managedServerState.apiReadyPromise) {
+    return managedServerState.apiReadyPromise
+  }
+
+  managedServerState.apiReadyPromise = ensureApiReadyAttempt().finally(() => {
+    managedServerState.apiReadyPromise = null
+  })
+
+  return managedServerState.apiReadyPromise
+}
+
+const monitorManagedServerExit = async (role: ManagedRole, serverProcess: ServerProcess): Promise<void> => {
+  const exitCode = await serverProcess.exited.catch(() => {
+    return null
+  })
+
+  if (managedServerState.shuttingDown || getManagedServerProcess(role) !== serverProcess) {
+    return
+  }
+
+  setManagedServerProcess(role, null)
+  console.error(`[server:stack] ${role} exited with code ${String(exitCode)}; restarting`)
+  await waitFor(restartDelayMs)
+
+  return role === 'worker'
+    ? ensureWorkerReady().then(() => {
+        return ensureApiReady()
+      })
+    : ensureApiReady()
+}
+
+const shutdown = async (exitCode = 0) => {
+  if (managedServerState.shuttingDown) {
+    return
+  }
+
+  managedServerState.shuttingDown = true
+  await Promise.all([stopManagedServerProcess('api'), stopManagedServerProcess('worker')])
   process.exit(exitCode)
 }
 
@@ -96,24 +214,9 @@ process.on('SIGTERM', () => {
 })
 
 try {
-  workerProcess = startServerProcess('worker')
-  await waitForWriter(config.writerUrl)
-  apiProcess = startServerProcess('api')
-
-  const firstExit = await Promise.race([
-    workerProcess.exited.then((exitCode) => {
-      return {exitCode, role: 'worker' as const}
-    }),
-    apiProcess.exited.then((exitCode) => {
-      return {exitCode, role: 'api' as const}
-    }),
-  ])
-
-  if (!shuttingDown) {
-    console.error(`[server:stack] ${firstExit.role} exited with code ${String(firstExit.exitCode)}`)
-  }
-
-  await shutdown(firstExit.exitCode ?? 1)
+  await ensureWorkerReady()
+  await ensureApiReady()
+  await new Promise(() => {})
 } catch (error) {
   console.error('[server:stack] failed to start', error)
   await shutdown(1)
