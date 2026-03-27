@@ -200,6 +200,39 @@ test('edit route ignores unchanged model updates when the project already has re
   await flushMartRefreshes()
 })
 
+test('edit route rejects an empty model id instead of silently skipping it', async () => {
+  if (!app || !queryDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-empty-model-connection'
+  const modelId = 'edit-empty-model-primary'
+  const projectId = 'edit-empty-model-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({modelId: ''}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const bodyText = await response.text()
+
+  expect(response.status).toBe(500)
+  expect(bodyText).toContain('Selected model does not exist or is disabled')
+
+  const [storedProject] = await queryDatabase<{modelId: string}>(`
+    SELECT model_id AS modelId
+    FROM app.project
+    WHERE id = '${projectId}'
+    LIMIT 1
+  `)
+
+  expect(storedProject?.modelId).toBe(modelId)
+})
+
 test('edit route returns a clear 400 when changing model on a referenced project would hit DuckDB FK limitations', async () => {
   if (!app || !queryDatabase) {
     throw new Error('Test app not initialized')

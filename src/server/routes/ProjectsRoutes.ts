@@ -852,12 +852,15 @@ export const projectsRoutes = new Elysia()
         }
 
         const nextModelId = body.modelId ?? undefined
-        const shouldUpdateModelId = nextModelId !== undefined && nextModelId !== currentProject.modelId
-        if (shouldUpdateModelId && nextModelId) {
+        if (nextModelId !== undefined) {
           await assertSelectableProviderModelId(tx, {
             errorMessage: 'Selected model does not exist or is disabled',
             modelId: nextModelId,
           })
+        }
+
+        const shouldUpdateModelId = nextModelId !== undefined && nextModelId !== currentProject.modelId
+        if (shouldUpdateModelId) {
           await assertProjectModelCanChangeTx(tx, params.id)
         }
 
