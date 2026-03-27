@@ -20,6 +20,10 @@ const getDuckdbSqlString = (value: string) => {
   return `'${value.replaceAll("'", "''")}'`
 }
 
+const getJudgmentProjectClause = (projectId = 'project-1') => {
+  return `COALESCE(j.project_id, j.snapshot_project_id) = ${getDuckdbSqlString(projectId)}`
+}
+
 const getPromptFilter = (
   overrides: Partial<{
     promptId: string
@@ -121,6 +125,8 @@ const getDuckdbJudgmentRow = (
     articleImportRoute: string | null
     promptId: string
     modelId: string
+    projectId: string | null
+    snapshotProjectId: string | null
     answeredOriginal: string | null
     answeredOriginalAsArray: unknown
     explanation: string | null
@@ -137,6 +143,8 @@ const getDuckdbJudgmentRow = (
     articleImportRoute: 'articleImportRoute' in overrides ? overrides.articleImportRoute : null,
     promptId: overrides.promptId ?? 'prompt-1',
     modelId: overrides.modelId ?? 'model-1',
+    projectId: 'projectId' in overrides ? overrides.projectId : 'project-1',
+    snapshotProjectId: 'snapshotProjectId' in overrides ? overrides.snapshotProjectId : 'project-1',
     answeredOriginal: 'answeredOriginal' in overrides ? overrides.answeredOriginal : 'yes',
     answeredOriginalAsArray: 'answeredOriginalAsArray' in overrides ? overrides.answeredOriginalAsArray : null,
     explanation: 'explanation' in overrides ? overrides.explanation : null,
@@ -279,6 +287,7 @@ test('queryArticlesReviewsFromDuckdb uses new serving mart when rows exist', asy
 
   expect(result.data[0]?.id).toBe('article-1')
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_serving s')
+  expect(duckdbRunnerMockRef.current.queries[6]).toContain(getJudgmentProjectClause())
 })
 
 test('queryArticlesReviewsFromDuckdb emits nextCursor on review article serving path', async () => {
@@ -429,6 +438,7 @@ test('queryArticlesReviewsFromDuckdb falls back to raw judgments when serving ro
   ).toEqual(['article-1'])
   expect(typeof firstPage.nextCursor).toBe('string')
   expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.judgment j')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain(getJudgmentProjectClause())
   expect(duckdbRunnerMockRef.current.queries[5]).not.toContain('FROM mart.review_article_rollup r')
 })
 
@@ -573,6 +583,7 @@ test('countArticlesReviewsFromDuckdb falls back to raw judgments when serving ro
 
   expect(result).toEqual({totalCount: 2, totalPages: 1})
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.judgment j')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain(getJudgmentProjectClause())
   expect(duckdbRunnerMockRef.current.queries[4]).not.toContain('FROM mart.review_article_rollup r')
 })
 
@@ -1159,6 +1170,7 @@ test('selectArticleIdsByFilterDuckdb llm uses raw rows when serving rows are mis
 
   expect(result).toEqual(['article-1'])
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.article a')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain(getJudgmentProjectClause())
 })
 
 test('selectArticleIdsByFilterDuckdb llm uses review article serving when rows exist', async () => {
@@ -1241,6 +1253,7 @@ test('selectArticleIdsByFilterDuckdb keeps llm selection working when project mo
 
   expect(result).toEqual(['article-1'])
   expect(duckdbRunnerMockRef.current.queries[4]).not.toContain('j.model_id =')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain(getJudgmentProjectClause())
 })
 
 test('queryArticlesReviewsFromDuckdb keeps core row output aligned across serving and raw paths', async () => {

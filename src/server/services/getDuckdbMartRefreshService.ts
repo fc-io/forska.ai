@@ -513,6 +513,10 @@ const getProjectRefreshArticleIdsSql = (articleIds: string[]) => {
   return getQuotedStringList(articleIds).join(', ')
 }
 
+const getJudgmentFactProjectJoinSql = (judgmentAlias: string, projectExpression: string) => {
+  return `COALESCE(${judgmentAlias}.project_id, ${judgmentAlias}.snapshot_project_id) = ${projectExpression}`
+}
+
 const getProjectScopeResetSql = (projectId: string) => {
   const projectLiteral = getSqlLiteral(projectId)
 
@@ -718,6 +722,7 @@ const getProjectPromptAnswerFactBatchInsertSql = (projectId: string, articleIds:
       INNER JOIN mart.judgment_fact judgment_fact
         ON judgment_fact.article_id = scope_article.article_id
        AND judgment_fact.prompt_id = project_prompt.prompt_id
+       AND ${getJudgmentFactProjectJoinSql('judgment_fact', 'scope_article.project_id')}
        AND judgment_fact.model_id = project.model_id
        AND judgment_fact.use_title = project.use_title
        AND judgment_fact.use_abstract = project.use_abstract
@@ -874,6 +879,7 @@ const getProjectReviewArticleRollupBatchInsertSql = (projectId: string, articleI
       INNER JOIN mart.judgment_fact judgment_fact
         ON judgment_fact.article_id = scope_article.article_id
        AND judgment_fact.prompt_id = enabled_prompt.prompt_id
+       AND ${getJudgmentFactProjectJoinSql('judgment_fact', 'scope_article.project_id')}
        AND judgment_fact.model_id = project.model_id
        AND judgment_fact.use_title = project.use_title
        AND judgment_fact.use_abstract = project.use_abstract
@@ -1164,6 +1170,7 @@ const getProjectReviewServingBatchSql = (projectId: string, articleIds: string[]
     INNER JOIN mart.judgment_fact judgment_fact
       ON judgment_fact.article_id = scope_article.article_id
      AND judgment_fact.prompt_id = project_prompt.prompt_id
+     AND ${getJudgmentFactProjectJoinSql('judgment_fact', 'scope_article.project_id')}
      AND judgment_fact.model_id = project.model_id
      AND judgment_fact.use_title = project.use_title
      AND judgment_fact.use_abstract = project.use_abstract
@@ -1669,6 +1676,7 @@ const getProjectArticleServingRefreshSql = (projectId: string, articleId: string
       INNER JOIN mart.judgment_fact judgment_fact
         ON judgment_fact.article_id = article_scope.article_id
        AND judgment_fact.prompt_id = enabled_prompt.prompt_id
+       AND ${getJudgmentFactProjectJoinSql('judgment_fact', 'article_scope.project_id')}
        AND judgment_fact.model_id = project.model_id
        AND judgment_fact.use_title = project.use_title
        AND judgment_fact.use_abstract = project.use_abstract
@@ -1831,6 +1839,7 @@ const getProjectArticleServingRefreshSql = (projectId: string, articleId: string
       INNER JOIN mart.judgment_fact judgment_fact
         ON judgment_fact.article_id = article_scope.article_id
        AND judgment_fact.prompt_id = enabled_prompt.prompt_id
+       AND ${getJudgmentFactProjectJoinSql('judgment_fact', 'article_scope.project_id')}
        AND judgment_fact.model_id = project.model_id
        AND judgment_fact.use_title = project.use_title
        AND judgment_fact.use_abstract = project.use_abstract
@@ -1995,6 +2004,7 @@ const getProjectArticleServingRefreshSql = (projectId: string, articleId: string
       INNER JOIN mart.judgment_fact judgment_fact
         ON judgment_fact.article_id = article_scope.article_id
        AND judgment_fact.prompt_id = enabled_prompt.prompt_id
+       AND ${getJudgmentFactProjectJoinSql('judgment_fact', 'article_scope.project_id')}
        AND judgment_fact.model_id = project.model_id
        AND judgment_fact.use_title = project.use_title
        AND judgment_fact.use_abstract = project.use_abstract
@@ -2097,6 +2107,7 @@ const getProjectArticleServingRefreshSql = (projectId: string, articleId: string
     INNER JOIN mart.judgment_fact judgment_fact
      ON judgment_fact.article_id = article_scope.article_id
      AND judgment_fact.prompt_id = project_prompt.prompt_id
+     AND ${getJudgmentFactProjectJoinSql('judgment_fact', 'article_scope.project_id')}
      AND judgment_fact.model_id = project.model_id
      AND judgment_fact.use_title = project.use_title
      AND judgment_fact.use_abstract = project.use_abstract

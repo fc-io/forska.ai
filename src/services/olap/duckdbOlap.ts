@@ -81,6 +81,10 @@ type UnassessedCandidateRow = {
 
 const rawFallbackQueueLogger = createRateLimitedLogger({windowMs: 30_000})
 
+const getDuckdbJudgmentProjectWhereClause = (params: {judgmentAlias: string; projectId: string}) => {
+  return `COALESCE(${params.judgmentAlias}.project_id, ${params.judgmentAlias}.snapshot_project_id) = ${getDuckdbSqlString(params.projectId)}`
+}
+
 const getPromptFilters = (promptsFilter?: Record<string, string[]>) => {
   return Object.entries(promptsFilter ?? {}).filter(([, answers]) => {
     return Array.isArray(answers) && answers.length > 0
@@ -989,6 +993,7 @@ const getLlmJudgmentRowsFromMart = async (
   const whereParts = [
     `j.article_id IN (${getDuckdbSqlStringList(articleIds).join(', ')})`,
     `j.prompt_id IN (${getDuckdbSqlStringList(scope.promptIds).join(', ')})`,
+    getDuckdbJudgmentProjectWhereClause({judgmentAlias: 'j', projectId: scope.projectId}),
     scope.modelId ? `j.model_id = ${getDuckdbSqlString(scope.modelId)}` : null,
     `j.use_title = ${getDuckdbSqlBoolean(scope.useTitle)}`,
     `j.use_abstract = ${getDuckdbSqlBoolean(scope.useAbstract)}`,
@@ -1133,6 +1138,7 @@ const getDuckdbReviewedArticlesQuerySections = (params: {
   })
   const judgmentsWhereParts = [
     `j.prompt_id IN (${getDuckdbSqlStringList(params.scope.promptIds).join(', ')})`,
+    getDuckdbJudgmentProjectWhereClause({judgmentAlias: 'j', projectId: params.scope.projectId}),
     params.scope.modelId ? `j.model_id = ${getDuckdbSqlString(params.scope.modelId)}` : null,
     `j.use_title = ${getDuckdbSqlBoolean(params.scope.useTitle)}`,
     `j.use_abstract = ${getDuckdbSqlBoolean(params.scope.useAbstract)}`,
@@ -1673,6 +1679,7 @@ const getLlmJudgmentRows = async (scope: ProjectOlapScope, articleIds: string[])
   const whereParts = [
     `j.article_id IN (${getDuckdbSqlStringList(articleIds).join(', ')})`,
     `j.prompt_id IN (${getDuckdbSqlStringList(scope.promptIds).join(', ')})`,
+    getDuckdbJudgmentProjectWhereClause({judgmentAlias: 'j', projectId: scope.projectId}),
     scope.modelId ? `j.model_id = ${getDuckdbSqlString(scope.modelId)}` : null,
     `j.use_title = ${getDuckdbSqlBoolean(scope.useTitle)}`,
     `j.use_abstract = ${getDuckdbSqlBoolean(scope.useAbstract)}`,
@@ -1748,6 +1755,7 @@ const getLlmJudgedPromptRows = async (
     FROM app.judgment j
     WHERE j.article_id IN (${getDuckdbSqlStringList(articleIds).join(', ')})
       AND j.prompt_id IN (${getDuckdbSqlStringList(scope.promptIds).join(', ')})
+      AND ${getDuckdbJudgmentProjectWhereClause({judgmentAlias: 'j', projectId: scope.projectId})}
       AND j.model_id = ${getDuckdbSqlString(scope.modelId ?? '')}
       AND j.use_title = ${getDuckdbSqlBoolean(scope.useTitle)}
       AND j.use_abstract = ${getDuckdbSqlBoolean(scope.useAbstract)}
