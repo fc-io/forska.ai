@@ -452,9 +452,7 @@ test('mart refresh purges archived projects in row batches', () => {
             ? 'mart.review_article_serving_detail'
             : statement.includes('FROM mart.review_article_filter_member')
               ? 'mart.review_article_filter_member'
-              : statement.includes('FROM mart.review_article_serving')
-                ? 'mart.review_article_serving'
-                : statement.includes('FROM mart.review_article_rollup')
+            : statement.includes('FROM mart.review_article_rollup')
                   ? 'mart.review_article_rollup'
                   : statement.includes('FROM mart.review_article_filter_row')
                     ? 'mart.review_article_filter_row'
@@ -543,11 +541,24 @@ test('mart refresh purges archived projects in row batches', () => {
                     recordDeleteEvent('filter-member', statement)
                   }
 
-                  if (
-                    statement.includes('DELETE FROM mart.review_article_serving')
-                    && !statement.includes('DELETE FROM mart.review_article_serving_detail')
-                  ) {
-                    recordDeleteEvent('serving', statement)
+                  if (statement.includes('CREATE TABLE mart.review_article_serving_project_purge_rewrite AS')) {
+                    events.push('serving:rewrite-created')
+                  }
+
+                  if (statement.includes('ADD PRIMARY KEY(project_id, generation, article_id)')) {
+                    events.push('serving:rewrite-primary-key')
+                  }
+
+                  if (statement.includes('DROP TABLE mart.review_article_serving')) {
+                    events.push('serving:rewrite-drop-old')
+                  }
+
+                  if (statement.includes('CREATE INDEX idx_mart_review_article_serving_order')) {
+                    events.push('serving:rewrite-index')
+                  }
+
+                  if (statement.includes('RENAME TO review_article_serving')) {
+                    events.push('serving:rewrite-swap')
                   }
 
                   if (statement.includes('DELETE FROM mart.review_article_rollup')) {
@@ -600,8 +611,11 @@ test('mart refresh purges archived projects in row batches', () => {
 
   expect(result.events).toContain('serving-detail:batch-1')
   expect(result.events).toContain('serving-detail:batch-2')
-  expect(result.events).toContain('serving:batch-1')
-  expect(result.events).toContain('serving:batch-2')
+  expect(result.events).toContain('serving:rewrite-created')
+  expect(result.events).toContain('serving:rewrite-primary-key')
+  expect(result.events).toContain('serving:rewrite-drop-old')
+  expect(result.events).toContain('serving:rewrite-index')
+  expect(result.events).toContain('serving:rewrite-swap')
   expect(result.events).toContain('rollup:batch-1')
   expect(result.events).toContain('rollup:batch-2')
   expect(result.events).toContain('scope:batch-1')
@@ -611,7 +625,7 @@ test('mart refresh purges archived projects in row batches', () => {
   expect(result.queueActive).toBe(false)
 })
 
-test('mart refresh splits archived purge batches after an index delete failure', () => {
+test('mart refresh splits non-serving archived purge batches after an index delete failure', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -622,7 +636,7 @@ test('mart refresh splits archived purge batches after an index delete failure',
         const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
         const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
         let queueActive = true
-        let servingBatchQueryCount = 0
+        let rollupBatchQueryCount = 0
         let failedLargeDelete = false
         const events = []
 
@@ -654,10 +668,10 @@ test('mart refresh splits archived purge batches after an index delete failure',
                     ? [{archived: true}]
                     : statement.includes('FROM mart.review_article_serving_detail') && statement.includes('rowid AS rowId')
                       ? []
-                      : statement.includes('FROM mart.review_article_serving') && statement.includes('rowid AS rowId')
+                      : statement.includes('FROM mart.review_article_rollup') && statement.includes('rowid AS rowId')
                       ? (() => {
-                          servingBatchQueryCount += 1
-                          return servingBatchQueryCount === 1
+                          rollupBatchQueryCount += 1
+                          return rollupBatchQueryCount === 1
                             ? Array.from({length: 10}, (_unused, index) => {
                                 return {rowId: index + 1}
                               })
@@ -676,8 +690,7 @@ test('mart refresh splits archived purge batches after an index delete failure',
                 maintenance: async () => {},
                 runBackground: async (statement) => {
                   if (
-                    statement.includes('DELETE FROM mart.review_article_serving')
-                    && !statement.includes('DELETE FROM mart.review_article_serving_detail')
+                    statement.includes('DELETE FROM mart.review_article_rollup')
                   ) {
                     if (!failedLargeDelete && statement.includes('rowid IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)')) {
                       failedLargeDelete = true
@@ -687,12 +700,16 @@ test('mart refresh splits archived purge batches after an index delete failure',
                     }
 
                     if (statement.includes('rowid IN (1, 2, 3, 4, 5)')) {
-                      events.push('serving:split-left')
+                      events.push('rollup:split-left')
                     }
 
                     if (statement.includes('rowid IN (6, 7, 8, 9, 10)')) {
-                      events.push('serving:split-right')
+                      events.push('rollup:split-right')
                     }
+                  }
+
+                  if (statement.includes('CREATE TABLE mart.review_article_serving_project_purge_rewrite AS')) {
+                    events.push('serving:rewrite-created')
                   }
                 },
               }
@@ -727,13 +744,14 @@ test('mart refresh splits archived purge batches after an index delete failure',
   }
 
   expect(result.failedLargeDelete).toBe(true)
-  expect(result.events).toContain('serving:split-left')
-  expect(result.events).toContain('serving:split-right')
+  expect(result.events).toContain('rollup:split-left')
+  expect(result.events).toContain('rollup:split-right')
+  expect(result.events).toContain('serving:rewrite-created')
   expect(result.result).toBe('ok')
   expect(result.queueActive).toBe(false)
 })
 
-test('mart refresh purges review_article_serving one row at a time', () => {
+test('mart refresh rewrites review_article_serving during archived purge', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -744,7 +762,7 @@ test('mart refresh purges review_article_serving one row at a time', () => {
         const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
         const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
         let queueActive = true
-        const limits = []
+        const statements = []
 
         void mock.module(appDatabaseServiceModulePath, () => {
           return {
@@ -770,24 +788,9 @@ test('mart refresh purges review_article_serving one row at a time', () => {
                           : []
                 },
                 queryJsonBackground: async (statement) => {
-                  if (statement.includes('SELECT archived AS archived')) {
-                    return [{archived: true}]
-                  }
-
-                  if (statement.includes('FROM mart.review_article_serving_detail') && statement.includes('rowid AS rowId')) {
-                    return []
-                  }
-
-                  if (
-                    statement.includes('FROM mart.review_article_serving')
-                    && !statement.includes('FROM mart.review_article_serving_detail')
-                    && statement.includes('rowid AS rowId')
-                  ) {
-                    limits.push(statement.includes('LIMIT 1') ? '1' : 'missing')
-                    return limits.length === 1 ? [{rowId: 1}] : []
-                  }
-
-                  return []
+                  return statement.includes('SELECT archived AS archived')
+                    ? [{archived: true}]
+                    : []
                 },
                 run: async (statement) => {
                   if (
@@ -798,15 +801,17 @@ test('mart refresh purges review_article_serving one row at a time', () => {
                   }
                 },
                 maintenance: async () => {},
-                runBackground: async () => {},
+                runBackground: async (statement) => {
+                  statements.push(statement)
+                },
               }
             },
           }
         })
 
-        const martRefreshService = (await import(martRefreshServiceModulePath + '?single-row-serving=' + Date.now())).getDuckdbMartRefreshService()
+        const martRefreshService = (await import(martRefreshServiceModulePath + '?rewrite-serving=' + Date.now())).getDuckdbMartRefreshService()
         await martRefreshService.flush()
-        console.log(JSON.stringify({limits, queueActive}))
+        console.log(JSON.stringify({queueActive, statements}))
       `,
     ],
     {cwd: process.cwd(), env: {...process.env}},
@@ -814,15 +819,35 @@ test('mart refresh purges review_article_serving one row at a time', () => {
 
   if (runScript.exitCode !== 0) {
     throw new Error(
-      runScript.stderr.toString()
-        || runScript.stdout.toString()
-        || 'Mart serving single-row purge regression test failed',
+      runScript.stderr.toString() || runScript.stdout.toString() || 'Mart serving rewrite purge regression test failed',
     )
   }
 
-  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {limits: string[]; queueActive: boolean}
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    queueActive: boolean
+    statements: string[]
+  }
 
-  expect(result.limits).toContain('1')
+  expect(
+    result.statements.some((statement) => {
+      return statement.includes('CREATE TABLE mart.review_article_serving_project_purge_rewrite AS')
+    }),
+  ).toBe(true)
+  expect(
+    result.statements.some((statement) => {
+      return statement.includes('ADD PRIMARY KEY(project_id, generation, article_id)')
+    }),
+  ).toBe(true)
+  expect(
+    result.statements.some((statement) => {
+      return statement.includes('CREATE INDEX idx_mart_review_article_serving_order')
+    }),
+  ).toBe(true)
+  expect(
+    result.statements.some((statement) => {
+      return statement.includes('DELETE FROM mart.review_article_serving\n    WHERE rowid IN')
+    }),
+  ).toBe(false)
   expect(result.queueActive).toBe(false)
 })
 

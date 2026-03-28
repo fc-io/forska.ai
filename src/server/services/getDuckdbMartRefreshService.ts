@@ -113,6 +113,8 @@ const knownNoopProjectRefreshReasons = ['humanAssessmentRoutesPostInit']
 const martRefreshBatchEpochSql = "TIMESTAMPTZ '1970-01-01T00:00:00.000Z'"
 const martRefreshProjectPurgeRetryableErrorFragment = 'Failed to delete all rows from index'
 const martRefreshProjectSingleRowPurgeTables = ['mart.review_article_serving']
+const martReviewArticleServingPurgeReplacementTableName = 'mart.review_article_serving_project_purge_rewrite'
+const martReviewArticleServingOrderIndexName = 'idx_mart_review_article_serving_order'
 
 const getMartRefreshProgressSnapshot = (): MartRefreshProgressSnapshot => {
   return copyMartRefreshProgressSnapshot(martRefreshProgressSnapshot)
@@ -669,6 +671,25 @@ const getProjectTablePurgeDeleteSql = ({
         return getSqlLiteral(rowId)
       })
       .join(', ')});
+    COMMIT;
+  `
+}
+
+const getReviewArticleServingRewritePurgeSql = (projectId: string) => {
+  const projectLiteral = getSqlLiteral(projectId)
+
+  return `
+    BEGIN TRANSACTION;
+    CREATE TABLE ${martReviewArticleServingPurgeReplacementTableName} AS
+    SELECT *
+    FROM mart.review_article_serving
+    WHERE project_id != ${projectLiteral};
+    ALTER TABLE ${martReviewArticleServingPurgeReplacementTableName}
+    ADD PRIMARY KEY(project_id, generation, article_id);
+    DROP TABLE mart.review_article_serving;
+    ALTER TABLE ${martReviewArticleServingPurgeReplacementTableName} RENAME TO review_article_serving;
+    CREATE INDEX ${martReviewArticleServingOrderIndexName}
+    ON mart.review_article_serving(project_id, generation, has_all_llm_judgments, article_created_at, article_id);
     COMMIT;
   `
 }
@@ -1608,10 +1629,14 @@ const deleteProjectTablePurgeBatches = async ({
         })
 }
 
+const purgeArchivedProjectReviewArticleServing = async (projectId: string): Promise<void> => {
+  return runMartRefreshBackgroundStatement(getReviewArticleServingRewritePurgeSql(projectId))
+}
+
 const purgeArchivedProjectMartData = async (projectId: string): Promise<void> => {
   await deleteProjectTablePurgeBatches({projectId, tableName: 'mart.review_article_serving_detail'})
   await deleteProjectTablePurgeBatches({projectId, tableName: 'mart.review_article_filter_member'})
-  await deleteProjectTablePurgeBatches({projectId, tableName: 'mart.review_article_serving'})
+  await purgeArchivedProjectReviewArticleServing(projectId)
   await deleteProjectTablePurgeBatches({projectId, tableName: 'mart.review_article_rollup'})
   await deleteProjectTablePurgeBatches({projectId, tableName: 'mart.review_article_filter_row'})
   await deleteProjectTablePurgeBatches({projectId, tableName: 'mart.prompt_answer_fact'})
