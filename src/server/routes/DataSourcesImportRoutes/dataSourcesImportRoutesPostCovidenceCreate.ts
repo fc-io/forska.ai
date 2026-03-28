@@ -1,0 +1,60 @@
+import {randomUUID} from 'node:crypto'
+
+import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
+import {escapeSqlString, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {
+  buildCovidencePackageConfig,
+  deleteCovidencePackageFiles,
+  getCovidencePackageCursor,
+  storeCovidencePackageFiles,
+} from '../../services/covidenceImportService.ts'
+import {getDataSourceQueryService} from '../../services/dataSourceQueryService.ts'
+
+type CovidenceImportMode = 'title_abstract' | 'full_text'
+type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
+type CovidencePackageUploadInput = Blob & {name?: string; type?: string}
+
+export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
+  title: string
+  description?: string
+  mode: CovidenceImportMode
+  files: Array<{file: CovidencePackageUploadInput; fileRole: CovidenceFileRole}>
+}) => {
+  const dataSourceId = randomUUID()
+  const title = body.title.trim()
+
+  if (!title) {
+    throw new Error('Title is required')
+  }
+
+  const storedFiles = await storeCovidencePackageFiles({datasourceId: dataSourceId, files: body.files})
+  const config = buildCovidencePackageConfig({files: storedFiles, mode: body.mode})
+  const cursor = getCovidencePackageCursor(config)
+  const importRoute = `covidence:${dataSourceId}`
+
+  await getAppDatabaseService()
+    .transaction(async (tx) => {
+      await tx.run(`
+        INSERT INTO app.data_source (id, title, description, import_route, cursor)
+        VALUES (
+          '${escapeSqlString(dataSourceId)}',
+          ${getSqlLiteral(title)},
+          ${getSqlLiteral(body.description?.trim() ? body.description : null)},
+          ${getSqlLiteral(importRoute)},
+          ${getSqlLiteral(cursor)}
+        )
+      `)
+    })
+    .catch(async (error) => {
+      deleteCovidencePackageFiles(dataSourceId)
+      throw error
+    })
+
+  const dataSource = await getDataSourceQueryService().getDataSourceById(dataSourceId)
+
+  if (!dataSource) {
+    throw new Error('Data source not found after Covidence import create')
+  }
+
+  return {success: true, data: {covidencePackageConfig: config, dataSource}}
+}

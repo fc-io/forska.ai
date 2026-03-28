@@ -1,7 +1,7 @@
 {
   "name": "Covidence Datasource Import",
-  "branchName": "ralph/covidence-datasource-import",
   "description": "Import Covidence screening packages as datasource-backed projects with reused prompts and seeded human judgments for title/abstract and full-text workflows.",
+  "branchName": "ralph/covidence-datasource-import",
   "userStories": [
     {
       "id": "US-001",
@@ -17,9 +17,10 @@
         "`bun run build` passes"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "",
-      "dependsOn": []
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-002",
@@ -37,7 +38,9 @@
       "priority": 2,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001"]
+      "dependsOn": [
+        "US-001"
+      ]
     },
     {
       "id": "US-003",
@@ -55,7 +58,9 @@
       "priority": 3,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001"]
+      "dependsOn": [
+        "US-001"
+      ]
     },
     {
       "id": "US-004",
@@ -73,7 +78,10 @@
       "priority": 4,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-002", "US-003"]
+      "dependsOn": [
+        "US-002",
+        "US-003"
+      ]
     },
     {
       "id": "US-005",
@@ -91,7 +99,9 @@
       "priority": 5,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-004"]
+      "dependsOn": [
+        "US-004"
+      ]
     },
     {
       "id": "US-006",
@@ -109,7 +119,11 @@
       "priority": 6,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001", "US-004", "US-005"]
+      "dependsOn": [
+        "US-001",
+        "US-004",
+        "US-005"
+      ]
     },
     {
       "id": "US-007",
@@ -145,7 +159,10 @@
       "priority": 8,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-006", "US-007"]
+      "dependsOn": [
+        "US-006",
+        "US-007"
+      ]
     },
     {
       "id": "US-009",
@@ -163,7 +180,9 @@
       "priority": 9,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-008"]
+      "dependsOn": [
+        "US-008"
+      ]
     },
     {
       "id": "US-010",
@@ -181,7 +200,10 @@
       "priority": 10,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-006", "US-007"]
+      "dependsOn": [
+        "US-006",
+        "US-007"
+      ]
     },
     {
       "id": "US-011",
@@ -199,7 +221,9 @@
       "priority": 11,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-010"]
+      "dependsOn": [
+        "US-010"
+      ]
     },
     {
       "id": "US-012",
@@ -217,7 +241,11 @@
       "priority": 12,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-008", "US-010", "US-011"]
+      "dependsOn": [
+        "US-008",
+        "US-010",
+        "US-011"
+      ]
     },
     {
       "id": "US-013",
@@ -236,7 +264,12 @@
       "priority": 13,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-005", "US-008", "US-010", "US-012"]
+      "dependsOn": [
+        "US-005",
+        "US-008",
+        "US-010",
+        "US-012"
+      ]
     },
     {
       "id": "US-014",
@@ -255,7 +288,13 @@
       "priority": 14,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-012", "US-013"]
+      "dependsOn": [
+        "US-012",
+        "US-013"
+      ]
     }
-  ]
+  ],
+  "metadata": {
+    "updatedAt": "2026-03-28T13:36:35.039Z"
+  }
 }
