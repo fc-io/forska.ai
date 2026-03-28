@@ -151,6 +151,7 @@ type CovidenceProjectRecord = {
   useTitle: boolean
 }
 type CovidenceHumanJudgmentSeed = {answer: 'no' | 'yes' | null; articleExternalId: string; isAnswered: boolean}
+type CovidenceProjectScopeSeed = {articleExternalId: string}
 
 const covidenceImportFolder = path.resolve(process.cwd(), 'assets/covidence_imports')
 const covidenceImportPathPrefix = 'assets/covidence_imports'
@@ -1206,6 +1207,16 @@ const getCovidenceHumanJudgmentSeeds = (params: {config: CovidencePackageConfig;
   })
 }
 
+const getCovidenceFullTextProjectScopeSeeds = (params: {config: CovidencePackageConfig; importRoute: string}) => {
+  return getCovidencePackageRowsFromConfig(params.config).candidates.flatMap<CovidenceProjectScopeSeed>((candidate) => {
+    return candidate.stageMembership.full_text
+      || candidate.stageMembership.excluded
+      || candidate.stageMembership.included
+      ? [{articleExternalId: `${params.importRoute}:${getSafeIdentityPart(candidate.articleKey)}`}]
+      : []
+  })
+}
+
 const getCovidenceEnabledProjectPromptIds = async (params: {projectId: string; tx?: CovidenceProjectTx}) => {
   return await getCovidenceProjectQueryRunner(params.tx).queryJson<{promptId: string}>(`
     SELECT prompt_id AS promptId
@@ -1223,6 +1234,16 @@ const getChunkedCovidenceHumanJudgmentSeeds = (
   return seeds.length <= chunkSize
     ? [seeds]
     : [seeds.slice(0, chunkSize), ...getChunkedCovidenceHumanJudgmentSeeds(seeds.slice(chunkSize), chunkSize)]
+}
+
+const getCovidenceInternalArticleIds = async (params: {articleExternalIds: string[]; tx?: CovidenceProjectTx}) => {
+  return params.articleExternalIds.length === 0
+    ? []
+    : await getCovidenceProjectQueryRunner(params.tx).queryJson<{articleExternalId: string; articleId: string}>(`
+        SELECT article_id AS articleExternalId, id AS articleId
+        FROM app.article
+        WHERE article_id IN (${getQuotedStringList(params.articleExternalIds).join(', ')})
+      `)
 }
 
 const syncCovidenceSeededProjectArticles = async (params: {
@@ -1423,6 +1444,38 @@ export const getOrCreateCovidenceProject = async (params: {
   return {created: true, id: projectId, modelId, name: params.title, ...settings}
 }
 
+export const syncCovidenceProjectScopeFromConfig = async (params: {
+  config: CovidencePackageConfig
+  importRoute: string
+  projectId?: string | null
+  tx?: CovidenceProjectTx
+}) => {
+  if (params.config.mode !== 'full_text') {
+    return
+  }
+
+  const project = params.projectId
+    ? ({id: params.projectId} as Pick<CovidenceProjectRecord, 'id'>)
+    : await getCovidenceProjectByImportRoute({importRoute: params.importRoute, tx: params.tx})
+
+  if (!project) {
+    return
+  }
+
+  const scopeSeeds = getCovidenceFullTextProjectScopeSeeds({config: params.config, importRoute: params.importRoute})
+  const articleRows = await getCovidenceInternalArticleIds({
+    articleExternalIds: scopeSeeds.map((scopeSeed) => {
+      return scopeSeed.articleExternalId
+    }),
+    tx: params.tx,
+  })
+  const articleIds = articleRows.map((articleRow) => {
+    return articleRow.articleId
+  })
+
+  await syncCovidenceSeededProjectArticles({articleIds, projectId: project.id, tx: params.tx})
+}
+
 export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
   config: CovidencePackageConfig
   importRoute: string
@@ -1451,18 +1504,12 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
     return
   }
 
-  const articleRows = await getCovidenceProjectQueryRunner(params.tx).queryJson<{
-    articleExternalId: string
-    articleId: string
-  }>(`
-    SELECT article_id AS articleExternalId, id AS articleId
-    FROM app.article
-    WHERE article_id IN (${getQuotedStringList(
-      judgmentSeeds.map((judgmentSeed) => {
-        return judgmentSeed.articleExternalId
-      }),
-    ).join(', ')})
-  `)
+  const articleRows = await getCovidenceInternalArticleIds({
+    articleExternalIds: judgmentSeeds.map((judgmentSeed) => {
+      return judgmentSeed.articleExternalId
+    }),
+    tx: params.tx,
+  })
   const articleIdByExternalId = new Map(
     articleRows.map((articleRow) => {
       return [articleRow.articleExternalId, articleRow.articleId]

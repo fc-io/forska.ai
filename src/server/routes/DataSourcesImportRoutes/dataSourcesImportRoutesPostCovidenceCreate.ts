@@ -12,6 +12,7 @@ import {
   importCovidencePackageFromConfig,
   seedCovidenceHumanJudgmentsFromConfig,
   storeCovidencePackageFiles,
+  syncCovidenceProjectScopeFromConfig,
 } from '../../services/covidenceImportService.ts'
 import {getDataSourceQueryService} from '../../services/dataSourceQueryService.ts'
 import {getDuckdbMartRefreshService} from '../../services/getDuckdbMartRefreshService.ts'
@@ -88,17 +89,15 @@ export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
         WHERE id = '${escapeSqlString(dataSourceId)}'
       `)
 
-      const covidenceProject =
-        body.mode === 'title_abstract'
-          ? await getOrCreateCovidenceProject({
-              importRoute,
-              mode: body.mode,
-              promptId: covidencePrompt?.id ?? null,
-              title,
-              tx,
-            })
-          : null
+      const covidenceProject = await getOrCreateCovidenceProject({
+        importRoute,
+        mode: body.mode,
+        promptId: covidencePrompt?.id ?? null,
+        title,
+        tx,
+      })
 
+      await syncCovidenceProjectScopeFromConfig({config, importRoute, projectId: covidenceProject.id, tx})
       await seedCovidenceHumanJudgmentsFromConfig({config, importRoute, projectId: covidenceProject?.id ?? null, tx})
 
       return {...importResult, covidenceProject, covidencePrompt}

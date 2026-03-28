@@ -9,6 +9,7 @@ import {
   getCovidencePackageCursor,
   importCovidencePackageFromConfig,
   seedCovidenceHumanJudgmentsFromConfig,
+  syncCovidenceProjectScopeFromConfig,
 } from '../../services/covidenceImportService.ts'
 import {getDataSourceQueryService} from '../../services/dataSourceQueryService.ts'
 import {getDuckdbMartRefreshService} from '../../services/getDuckdbMartRefreshService.ts'
@@ -31,10 +32,14 @@ export const dataSourcesImportRoutesPostCovidence = async ({body, set}: {body: {
   const importRoute = `covidence:${dataSource.id}`
   const cursor = getCovidencePackageCursor(config)
   const result = (await getAppDatabaseService().transaction(async (tx) => {
-    await clearCovidenceSeededHumanJudgments({importRoute, tx})
+    if (config.mode === 'title_abstract') {
+      await clearCovidenceSeededHumanJudgments({importRoute, tx})
+    }
+
     const importResult = await importCovidencePackageFromConfig({config, datasourceId: dataSource.id, importRoute, tx})
     const updatedAt = new Date()
 
+    await syncCovidenceProjectScopeFromConfig({config, importRoute, tx})
     await seedCovidenceHumanJudgmentsFromConfig({config, importRoute, tx})
 
     await tx.run(`
