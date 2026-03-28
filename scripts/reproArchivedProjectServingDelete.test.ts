@@ -5,13 +5,42 @@ import {join} from 'node:path'
 import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
+import {getServingTableRemediationPath} from './reproArchivedProjectServingDelete.ts'
+
 const projectRoot = process.cwd()
 
 type HarnessResult = {
   batchQuery: string
   deleteAttempt: {error: string | null; ok: boolean}
   deleteStatement: string
+  operations: {
+    projectDelete: {
+      batchQuery: string | null
+      deleteAttempt: {error: string | null; ok: boolean}
+      deleteStatement: string
+      rowCountAfter: number | null
+      rowIds: string[]
+      rowSample: Array<Record<string, unknown>>
+      status: string
+    }
+    rewriteProbe: {
+      retainedRowCount: number | null
+      rewriteAttempt: {error: string | null; ok: boolean}
+      rewriteStatement: string
+      status: string
+    }
+    singleRowDelete: {
+      batchQuery: string
+      deleteAttempt: {error: string | null; ok: boolean}
+      deleteStatement: string
+      rowCountAfter: number | null
+      rowIds: string[]
+      rowSample: Array<Record<string, unknown>>
+      status: string
+    }
+  }
   projectId: string
+  remediationPath: string
   retainedSnapshot: boolean
   rowCount: number
   rowIds: string[]
@@ -83,7 +112,38 @@ const runHarness = (duckdbPath: string) => {
   return JSON.parse(result.stdout.toString()) as HarnessResult
 }
 
-test('archive serving repro harness captures project, table, and delete shape on repeat runs', async () => {
+test('serving table remediation path switches to rewrite when single-row delete fails', () => {
+  const remediationPath = getServingTableRemediationPath({
+    projectDelete: {
+      batchQuery: null,
+      deleteAttempt: {error: 'project delete failed', ok: false},
+      deleteStatement: 'DELETE FROM mart.review_article_serving WHERE project_id = ...',
+      rowCountAfter: null,
+      rowIds: [],
+      rowSample: [],
+      status: 'project-delete-failed',
+    },
+    rewriteProbe: {
+      retainedRowCount: 42,
+      rewriteAttempt: {error: null, ok: true},
+      rewriteStatement: 'CREATE OR REPLACE TABLE mart.review_article_serving_rewrite_probe AS ...',
+      status: 'rewrite-probe-succeeded',
+    },
+    singleRowDelete: {
+      batchQuery: 'SELECT rowid AS rowId FROM mart.review_article_serving LIMIT 1',
+      deleteAttempt: {error: 'single row failed', ok: false},
+      deleteStatement: 'DELETE FROM mart.review_article_serving WHERE rowid IN (1)',
+      rowCountAfter: null,
+      rowIds: ['1'],
+      rowSample: [{project_id: 'archived-project-repro'}],
+      status: 'single-row-delete-failed',
+    },
+  })
+
+  expect(remediationPath).toBe('rewrite-serving-table')
+})
+
+test('archive serving repro harness captures delete and rewrite probe results on repeat runs', async () => {
   const workingDirectory = mkdtempSync(join(tmpdir(), 'f1-archive-serving-repro-'))
   const duckdbPath = join(workingDirectory, 'archive-serving.duckdb')
 
@@ -98,10 +158,21 @@ test('archive serving repro harness captures project, table, and delete shape on
     expect(firstRun.batchQuery).toContain('LIMIT 1')
     expect(firstRun.deleteStatement).toContain('DELETE FROM mart.review_article_serving')
     expect(firstRun.deleteAttempt.ok).toBe(true)
+    expect(firstRun.operations.singleRowDelete.deleteAttempt.ok).toBe(true)
+    expect(firstRun.operations.singleRowDelete.rowCountAfter).toBe(0)
+    expect(firstRun.operations.projectDelete.deleteAttempt.ok).toBe(true)
+    expect(firstRun.operations.projectDelete.deleteStatement).toContain("WHERE project_id = 'archived-project-repro'")
+    expect(firstRun.operations.projectDelete.rowCountAfter).toBe(0)
+    expect(firstRun.operations.rewriteProbe.rewriteAttempt.ok).toBe(true)
+    expect(firstRun.operations.rewriteProbe.rewriteStatement).toContain('CREATE OR REPLACE TABLE')
+    expect(firstRun.operations.rewriteProbe.retainedRowCount).toBe(1)
+    expect(firstRun.remediationPath).toBe('keep-single-row-purge')
     expect(firstRun.rowIds).toHaveLength(1)
     expect(firstRun.rowSample[0]?.project_id).toBe('archived-project-repro')
     expect(secondRun.projectId).toBe('archived-project-repro')
     expect(secondRun.rowIds).toEqual(firstRun.rowIds)
+    expect(secondRun.operations.projectDelete.rowCountAfter).toBe(firstRun.operations.projectDelete.rowCountAfter)
+    expect(secondRun.operations.rewriteProbe.retainedRowCount).toBe(firstRun.operations.rewriteProbe.retainedRowCount)
     expect(existsSync(firstRun.snapshotPath)).toBe(false)
   } finally {
     rmSync(workingDirectory, {force: true, recursive: true})

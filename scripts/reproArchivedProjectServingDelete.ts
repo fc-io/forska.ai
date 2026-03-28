@@ -1,3 +1,5 @@
+import {cpSync, existsSync, rmSync} from 'node:fs'
+
 import {DuckDBConnection, DuckDBInstance} from '@duckdb/node-api'
 
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
@@ -5,12 +7,36 @@ import {getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 
 const targetTableName = 'mart.review_article_serving'
+const rewriteProbeTableName = 'mart.review_article_serving_rewrite_probe'
 const defaultDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT ?? '20GB'
 
 type JsonRow = Record<string, unknown>
 type ArchivedProjectRow = {projectId: string; rowCount: number}
 type BatchRow = {rowId: bigint | number | string}
+type CountRow = {rowCount: bigint | number | string}
 type SnapshotStatementResult = {error: string | null; ok: boolean}
+type ReproOperationName = 'projectDelete' | 'rewriteProbe' | 'singleRowDelete'
+type ReproRemediationPath = 'keep-single-row-purge' | 'manual-investigation-required' | 'rewrite-serving-table'
+type ReproDeleteOperationResult = {
+  batchQuery: string | null
+  deleteAttempt: SnapshotStatementResult
+  deleteStatement: string
+  rowCountAfter: number | null
+  rowIds: string[]
+  rowSample: JsonRow[]
+  status: string
+}
+type ReproRewriteOperationResult = {
+  retainedRowCount: number | null
+  rewriteAttempt: SnapshotStatementResult
+  rewriteStatement: string
+  status: string
+}
+type ReproOperationResults = {
+  projectDelete: ReproDeleteOperationResult
+  rewriteProbe: ReproRewriteOperationResult
+  singleRowDelete: ReproDeleteOperationResult
+}
 
 const getArgValue = (flag: string) => {
   const args = process.argv.slice(2)
@@ -23,6 +49,21 @@ const getArgValue = (flag: string) => {
 
 const hasArg = (flag: string) => {
   return process.argv.slice(2).includes(flag)
+}
+
+const deleteSnapshotFile = (snapshotPath: string) => {
+  return [
+    snapshotPath,
+    `${snapshotPath}.wal`,
+    `${snapshotPath}.writer.history.json`,
+    `${snapshotPath}.writer.lock`,
+  ].map((filePath) => {
+    return existsSync(filePath) ? rmSync(filePath, {force: true, recursive: true}) : null
+  })
+}
+
+const getScratchSnapshotPath = (snapshotPath: string, operationName: ReproOperationName) => {
+  return `${snapshotPath}.${operationName}.probe`
 }
 
 const withSnapshotConnection = async <T>({
@@ -73,6 +114,29 @@ const runSnapshotStatement = async (snapshotPath: string, statement: string): Pr
       }
     },
   })
+}
+
+const withScratchSnapshot = async <T>({
+  keepSnapshot,
+  operationName,
+  snapshotPath,
+  work,
+}: {
+  keepSnapshot: boolean
+  operationName: ReproOperationName
+  snapshotPath: string
+  work: (scratchSnapshotPath: string) => Promise<T>
+}) => {
+  const scratchSnapshotPath = getScratchSnapshotPath(snapshotPath, operationName)
+  cpSync(snapshotPath, scratchSnapshotPath)
+
+  try {
+    return await work(scratchSnapshotPath)
+  } finally {
+    if (!keepSnapshot) {
+      deleteSnapshotFile(scratchSnapshotPath)
+    }
+  }
 }
 
 const getArchivedProjectQuerySql = (projectId: string | null) => {
@@ -130,7 +194,173 @@ const getPurgeDeleteSql = (rowIds: Array<bigint | number | string>) => {
   `
 }
 
-const runReproArchivedProjectServingDelete = async () => {
+const getProjectDeleteSql = (projectId: string) => {
+  return `
+    BEGIN TRANSACTION;
+    DELETE FROM ${targetTableName}
+    WHERE project_id = ${getSqlLiteral(projectId)};
+    COMMIT;
+  `
+}
+
+const getProjectRowCountSql = (projectId: string) => {
+  return `
+    SELECT COUNT(*) AS rowCount
+    FROM ${targetTableName}
+    WHERE project_id = ${getSqlLiteral(projectId)}
+  `
+}
+
+const getRewriteProbeSql = (projectId: string) => {
+  return `
+    BEGIN TRANSACTION;
+    CREATE OR REPLACE TABLE ${rewriteProbeTableName} AS
+    SELECT *
+    FROM ${targetTableName}
+    WHERE project_id != ${getSqlLiteral(projectId)};
+    COMMIT;
+  `
+}
+
+const getRewriteProbeCountSql = () => {
+  return `
+    SELECT COUNT(*) AS rowCount
+    FROM ${rewriteProbeTableName}
+  `
+}
+
+const getNumberValue = (value: bigint | number | string | null | undefined) => {
+  return value === null || value === undefined ? null : Number(value)
+}
+
+const getRowCount = async (snapshotPath: string, statement: string) => {
+  const countRows = await querySnapshotJson<CountRow>(snapshotPath, statement)
+  return getNumberValue(countRows[0]?.rowCount)
+}
+
+const getSingleRowDeleteStatus = (deleteAttempt: SnapshotStatementResult) => {
+  return deleteAttempt.ok ? 'single-row-delete-succeeded' : 'single-row-delete-failed'
+}
+
+const getProjectDeleteStatus = (deleteAttempt: SnapshotStatementResult) => {
+  return deleteAttempt.ok ? 'project-delete-succeeded' : 'project-delete-failed'
+}
+
+const getRewriteProbeStatus = (rewriteAttempt: SnapshotStatementResult) => {
+  return rewriteAttempt.ok ? 'rewrite-probe-succeeded' : 'rewrite-probe-failed'
+}
+
+export const getServingTableRemediationPath = (results: ReproOperationResults): ReproRemediationPath => {
+  return !results.singleRowDelete.deleteAttempt.ok && results.rewriteProbe.rewriteAttempt.ok
+    ? 'rewrite-serving-table'
+    : results.singleRowDelete.deleteAttempt.ok
+      ? 'keep-single-row-purge'
+      : 'manual-investigation-required'
+}
+
+const runSingleRowDeleteProbe = async ({
+  keepSnapshot,
+  projectId,
+  snapshotPath,
+}: {
+  keepSnapshot: boolean
+  projectId: string
+  snapshotPath: string
+}): Promise<ReproDeleteOperationResult> => {
+  return withScratchSnapshot({
+    keepSnapshot,
+    operationName: 'singleRowDelete',
+    snapshotPath,
+    work: async (scratchSnapshotPath) => {
+      const batchQuery = getPurgeBatchSql(projectId)
+      const batchRows = await querySnapshotJson<BatchRow>(scratchSnapshotPath, batchQuery)
+      const rowIds = batchRows.map((row) => {
+        return row.rowId
+      })
+      const rowSample =
+        rowIds.length === 0
+          ? []
+          : await querySnapshotJson<JsonRow>(scratchSnapshotPath, getPurgeBatchRowSampleSql(rowIds))
+      const deleteStatement = getPurgeDeleteSql(rowIds)
+      const deleteAttempt = await runSnapshotStatement(scratchSnapshotPath, deleteStatement)
+      const rowCountAfter = deleteAttempt.ok
+        ? await getRowCount(scratchSnapshotPath, getProjectRowCountSql(projectId))
+        : null
+
+      return {
+        batchQuery,
+        deleteAttempt,
+        deleteStatement,
+        rowCountAfter,
+        rowIds: rowIds.map((rowId) => {
+          return String(rowId)
+        }),
+        rowSample,
+        status: getSingleRowDeleteStatus(deleteAttempt),
+      }
+    },
+  })
+}
+
+const runProjectDeleteProbe = async ({
+  keepSnapshot,
+  projectId,
+  snapshotPath,
+}: {
+  keepSnapshot: boolean
+  projectId: string
+  snapshotPath: string
+}): Promise<ReproDeleteOperationResult> => {
+  return withScratchSnapshot({
+    keepSnapshot,
+    operationName: 'projectDelete',
+    snapshotPath,
+    work: async (scratchSnapshotPath) => {
+      const deleteStatement = getProjectDeleteSql(projectId)
+      const deleteAttempt = await runSnapshotStatement(scratchSnapshotPath, deleteStatement)
+      const rowCountAfter = deleteAttempt.ok
+        ? await getRowCount(scratchSnapshotPath, getProjectRowCountSql(projectId))
+        : null
+
+      return {
+        batchQuery: null,
+        deleteAttempt,
+        deleteStatement,
+        rowCountAfter,
+        rowIds: [],
+        rowSample: [],
+        status: getProjectDeleteStatus(deleteAttempt),
+      }
+    },
+  })
+}
+
+const runRewriteProbe = async ({
+  keepSnapshot,
+  projectId,
+  snapshotPath,
+}: {
+  keepSnapshot: boolean
+  projectId: string
+  snapshotPath: string
+}): Promise<ReproRewriteOperationResult> => {
+  return withScratchSnapshot({
+    keepSnapshot,
+    operationName: 'rewriteProbe',
+    snapshotPath,
+    work: async (scratchSnapshotPath) => {
+      const rewriteStatement = getRewriteProbeSql(projectId)
+      const rewriteAttempt = await runSnapshotStatement(scratchSnapshotPath, rewriteStatement)
+      const retainedRowCount = rewriteAttempt.ok
+        ? await getRowCount(scratchSnapshotPath, getRewriteProbeCountSql())
+        : null
+
+      return {retainedRowCount, rewriteAttempt, rewriteStatement, status: getRewriteProbeStatus(rewriteAttempt)}
+    },
+  })
+}
+
+export const runReproArchivedProjectServingDelete = async () => {
   const requestedProjectId = getArgValue('--project-id')
   const keepSnapshot = hasArg('--keep-snapshot')
 
@@ -149,11 +379,13 @@ const runReproArchivedProjectServingDelete = async () => {
             batchQuery: null,
             deleteAttempt: null,
             deleteStatement: null,
+            operations: null,
             projectId: requestedProjectId,
+            remediationPath: null,
             retainedSnapshot: keepSnapshot,
             rowCount: 0,
-            rowSample: [],
             rowIds: [],
+            rowSample: [],
             snapshotPath: snapshot.snapshotPath,
             status: 'no-archived-project-serving-rows',
             tableName: targetTableName,
@@ -166,33 +398,39 @@ const runReproArchivedProjectServingDelete = async () => {
       return keepSnapshot ? Promise.resolve() : getAppDatabaseService().deleteSnapshot(snapshot.snapshotPath)
     }
 
-    const batchQuery = getPurgeBatchSql(targetProject.projectId)
-    const batchRows = await querySnapshotJson<BatchRow>(snapshot.snapshotPath, batchQuery)
-    const rowIds = batchRows.map((row) => {
-      return row.rowId
+    const singleRowDelete = await runSingleRowDeleteProbe({
+      keepSnapshot,
+      projectId: targetProject.projectId,
+      snapshotPath: snapshot.snapshotPath,
     })
-    const rowSample =
-      rowIds.length === 0
-        ? []
-        : await querySnapshotJson<JsonRow>(snapshot.snapshotPath, getPurgeBatchRowSampleSql(rowIds))
-    const deleteStatement = getPurgeDeleteSql(rowIds)
-    const deleteAttempt = await runSnapshotStatement(snapshot.snapshotPath, deleteStatement)
+    const projectDelete = await runProjectDeleteProbe({
+      keepSnapshot,
+      projectId: targetProject.projectId,
+      snapshotPath: snapshot.snapshotPath,
+    })
+    const rewriteProbe = await runRewriteProbe({
+      keepSnapshot,
+      projectId: targetProject.projectId,
+      snapshotPath: snapshot.snapshotPath,
+    })
+    const operations = {projectDelete, rewriteProbe, singleRowDelete}
+    const remediationPath = getServingTableRemediationPath(operations)
 
     console.log(
       JSON.stringify(
         {
-          batchQuery,
-          deleteAttempt,
-          deleteStatement,
+          batchQuery: singleRowDelete.batchQuery,
+          deleteAttempt: singleRowDelete.deleteAttempt,
+          deleteStatement: singleRowDelete.deleteStatement,
+          operations,
           projectId: targetProject.projectId,
+          remediationPath,
           retainedSnapshot: keepSnapshot,
           rowCount: Number(targetProject.rowCount ?? 0),
-          rowSample,
-          rowIds: rowIds.map((rowId) => {
-            return String(rowId)
-          }),
+          rowIds: singleRowDelete.rowIds,
+          rowSample: singleRowDelete.rowSample,
           snapshotPath: snapshot.snapshotPath,
-          status: deleteAttempt.ok ? 'delete-succeeded-on-snapshot' : 'delete-failed-on-snapshot',
+          status: remediationPath,
           tableName: targetTableName,
         },
         null,
