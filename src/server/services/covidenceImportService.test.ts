@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto'
-import {existsSync} from 'node:fs'
+import {existsSync, unlinkSync} from 'node:fs'
 import path from 'node:path'
 
 import {afterEach, expect, test} from 'bun:test'
@@ -182,6 +182,155 @@ test('deleteCovidencePackageFiles removes the datasource package folder', async 
   }
 
   expect(existsSync(path.resolve(process.cwd(), firstStoredFile.assetPath))).toBe(false)
+})
+
+test('importCovidencePackageFromConfig stores merged articles with raw metadata on the Covidence route', async () => {
+  const duckdbPath = `/tmp/f1-covidence-import-${Date.now()}.duckdb`
+  const datasourceId = `covidence-import-${Date.now()}`
+  const importRoute = `covidence:${datasourceId}`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, covidenceImportService] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/covidenceImportService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const datasourceId = ${JSON.stringify(datasourceId)}
+        const importRoute = 'covidence:' + datasourceId
+        const createConfig = async (allContent, irrelevantContent) => {
+          const files = await covidenceImportService.storeCovidencePackageFiles({
+            datasourceId,
+            files: [
+              {file: new File([allContent], 'all.csv', {type: 'text/csv'}), fileRole: 'all'},
+              {file: new File([irrelevantContent], 'irrelevant.csv', {type: 'text/csv'}), fileRole: 'irrelevant'},
+              {file: new File(['Title,Authors,Year,DOI\\nStudy A,"Doe, Jane",2024,10.1000/alpha\\n'], 'full_text.csv', {type: 'text/csv'}), fileRole: 'full_text'},
+            ],
+          })
+
+          return covidenceImportService.buildCovidencePackageConfig({files, mode: 'title_abstract'})
+        }
+
+        const config = await createConfig(
+          'Title,Authors,Abstract,Year,DOI,Tags,Notes\\nStudy A,"Doe, Jane",Summary A,2024,10.1000/alpha,tag-a,first note\\nStudy B,"Roe, John",Summary B,2023,10.1000/beta,tag-b,second note\\n',
+          'Title,Authors,Year,DOI\\nStudy B,"Roe, John",2023,10.1000/beta\\n',
+        )
+
+        await database.transaction(async (tx) => {
+          await covidenceImportService.importCovidencePackageFromConfig({config, datasourceId, importRoute, tx})
+        })
+
+        const articles = await database.queryJson(\`
+          SELECT
+            article_id AS articleId,
+            article_title AS articleTitle,
+            article_summary AS articleSummary,
+            doi,
+            pubmed_id AS pubmedId,
+            TO_JSON(original_data) AS originalData,
+            TO_JSON(source_metadata) AS sourceMetadata
+          FROM app.article
+          WHERE article_id LIKE '${importRoute}:%'
+          ORDER BY article_id
+        \`)
+        const linkedArticles = await database.queryJson(\`
+          SELECT COUNT(*)::INTEGER AS count
+          FROM app.article_import_route air
+          INNER JOIN app.import_route ir ON ir.id = air.import_route_id
+          WHERE ir.route = '${importRoute}'
+        \`)
+        const normalizedArticles = articles.map((article) => {
+          return {
+            ...article,
+            originalData: typeof article.originalData === 'string' ? JSON.parse(article.originalData) : article.originalData,
+            sourceMetadata:
+              typeof article.sourceMetadata === 'string' ? JSON.parse(article.sourceMetadata) : article.sourceMetadata,
+          }
+        })
+
+        console.log(JSON.stringify({articles: normalizedArticles, linkedArticles}))
+        covidenceImportService.deleteCovidencePackageFiles(datasourceId)
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39993',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39994',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to import Covidence package')
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      articles: Array<{
+        articleId: string
+        articleSummary: string | null
+        articleTitle: string
+        doi: string | null
+        originalData: {covidence: {citation: {title: string}; sourceRows: Array<{sourceFileName: string}>}}
+        pubmedId: string | null
+        sourceMetadata: {covidence: {mode: string; stageMembership: Record<string, boolean>}}
+      }>
+      linkedArticles: Array<{count: number}>
+    }
+
+    expect(parsed.articles).toHaveLength(2)
+    expect(parsed.linkedArticles[0]?.count).toBe(2)
+    expect(parsed.articles[0]?.articleId).toContain(`${importRoute}:`)
+    expect(parsed.articles[0]?.articleTitle).toBe('Study A')
+    expect(parsed.articles[0]?.articleSummary).toBe('Summary A')
+    expect(parsed.articles[0]?.doi).toBe('10.1000/alpha')
+    expect(parsed.articles[0]?.originalData.covidence.citation.title).toBe('Study A')
+    expect(parsed.articles[0]?.originalData.covidence.sourceRows).toHaveLength(2)
+    expect(parsed.articles[0]?.sourceMetadata.covidence.mode).toBe('title_abstract')
+    expect(parsed.articles[0]?.sourceMetadata.covidence.stageMembership).toEqual({
+      all: true,
+      excluded: false,
+      full_text: true,
+      included: false,
+      irrelevant: false,
+    })
+    expect(parsed.articles[1]?.articleTitle).toBe('Study B')
+  } finally {
+    deleteCovidencePackageFiles(datasourceId)
+    ;[duckdbPath, `${duckdbPath}.wal`, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(
+      (filePath) => {
+        if (existsSync(filePath)) {
+          unlinkSync(filePath)
+        }
+
+        return filePath
+      },
+    )
+  }
 })
 
 test('parseCovidenceCsvReferenceRows keeps citation metadata and source file roles across Covidence csv lists', () => {

@@ -3,7 +3,9 @@ import {Elysia, t} from 'elysia'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {dataSourcesImportRoutesPostArxiv} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostArxiv.ts'
 import {dataSourcesImportRoutesPostBiorxiv} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostBiorxiv.ts'
+import {dataSourcesImportRoutesPostCovidence} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.ts'
 import {dataSourcesImportRoutesPostCovidenceAnalyze} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceAnalyze.ts'
+import {dataSourcesImportRoutesPostCovidenceCreate} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.ts'
 import {dataSourcesImportRoutesPostEuropePmcPpr} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostEuropePmcPpr.ts'
 import {dataSourcesImportRoutesPostFhirEhrPatients} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostFhirEhrPatients.ts'
 import {dataSourcesImportRoutesPostMedrxiv} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostMedrxiv.ts'
@@ -36,6 +38,38 @@ export const dataSourcesImportRoutes = new Elysia()
         ),
       }),
     },
+  )
+  .post(
+    '/api/datasources/import/covidence-create',
+    async ({body}) => {
+      return await dataSourcesImportRoutesPostCovidenceCreate(body)
+    },
+    {
+      body: t.Object({
+        title: t.String(),
+        description: t.Optional(t.String()),
+        mode: t.Union([t.Literal('title_abstract'), t.Literal('full_text')]),
+        files: t.Array(
+          t.Object({
+            file: t.File(),
+            fileRole: t.Union([
+              t.Literal('all'),
+              t.Literal('irrelevant'),
+              t.Literal('full_text'),
+              t.Literal('excluded'),
+              t.Literal('included'),
+            ]),
+          }),
+        ),
+      }),
+    },
+  )
+  .post(
+    '/api/datasources/import/covidence',
+    async ({body, set}) => {
+      return await dataSourcesImportRoutesPostCovidence({body, set})
+    },
+    {body: t.Object({id: t.String()})},
   )
   .post(
     '/api/datasources/import/arxiv',

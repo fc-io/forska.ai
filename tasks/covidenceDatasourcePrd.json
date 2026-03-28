@@ -121,13 +121,14 @@
         "`bun run build` passes"
       ],
       "priority": 6,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-001",
         "US-004",
         "US-005"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-007",
@@ -299,6 +300,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-03-28T14:07:15.624Z"
+    "updatedAt": "2026-03-28T14:20:31.955Z"
   }
 }

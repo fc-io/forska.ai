@@ -3,6 +3,7 @@ import {expect, test} from 'bun:test'
 type CovidenceCreateSuccessResult = {
   deleteCalls: string[]
   getDataSourceCallCount: number
+  queueCalls: string[][]
   result: {
     data: {covidencePackageConfig: {kind: 'covidence_import'; mode: 'title_abstract'; version: 1}}
     success: boolean
@@ -42,16 +43,26 @@ test('Covidence datasource create stores package files and persists cursor confi
         const {mock} = await import('bun:test')
 
         const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').pathname
         const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
         const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
 
         const state = {
           deleteCalls: [],
           getDataSourceCallCount: 0,
+          queueCalls: [],
           storedFileCalls: [],
           transactionCallCount: 0,
           txStatements: [],
         }
+
+        void mock.module(articleImportStoreServiceModulePath, () => {
+          return {
+            queueImportedArticleRefreshes: async (importRouteIds) => {
+              state.queueCalls.push(importRouteIds)
+            },
+          }
+        })
 
         void mock.module(appDatabaseServiceModulePath, () => {
           return {
@@ -80,6 +91,9 @@ test('Covidence datasource create stores package files and persists cursor confi
             },
             getCovidencePackageCursor: (config) => {
               return JSON.stringify(config)
+            },
+            importCovidencePackageFromConfig: async () => {
+              return {importRouteIds: ['route-1'], stats: {importedCount: 2, itemCount: 2}}
             },
             storeCovidencePackageFiles: async (params) => {
               state.storedFileCalls.push({
@@ -173,11 +187,14 @@ test('Covidence datasource create stores package files and persists cursor confi
     {fileName: 'irrelevant.csv', fileRole: 'irrelevant'},
     {fileName: 'full_text.ris', fileRole: 'full_text'},
   ])
-  expect(parsed.txStatements).toHaveLength(1)
+  expect(parsed.txStatements).toHaveLength(3)
   expect(parsed.txStatements[0]).toContain('INSERT INTO app.data_source')
-  expect(parsed.txStatements[0]).toContain('covidence:')
-  expect(parsed.txStatements[0]).toContain('covidence_import')
+  expect(parsed.txStatements[1]).toContain('UPDATE app.import_route')
+  expect(parsed.txStatements[2]).toContain('items_after_last_import = 2')
+  expect(parsed.txStatements[2]).toContain('covidence:')
+  expect(parsed.txStatements[2]).toContain('covidence_import')
   expect(parsed.deleteCalls).toEqual([])
+  expect(parsed.queueCalls).toEqual([['route-1']])
   expect(parsed.getDataSourceCallCount).toBe(1)
   expect(parsed.result.success).toBe(true)
   expect(parsed.result.data.covidencePackageConfig).toMatchObject({
@@ -196,6 +213,7 @@ test('Covidence datasource create deletes stored files when the transaction fail
         const {mock} = await import('bun:test')
 
         const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').pathname
         const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
         const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
 
@@ -205,6 +223,12 @@ test('Covidence datasource create deletes stored files when the transaction fail
           getDataSourceCallCount: 0,
           transactionCallCount: 0,
         }
+
+        void mock.module(articleImportStoreServiceModulePath, () => {
+          return {
+            queueImportedArticleRefreshes: async () => {},
+          }
+        })
 
         void mock.module(appDatabaseServiceModulePath, () => {
           return {
@@ -229,6 +253,9 @@ test('Covidence datasource create deletes stored files when the transaction fail
             },
             getCovidencePackageCursor: (config) => {
               return JSON.stringify(config)
+            },
+            importCovidencePackageFromConfig: async () => {
+              return {importRouteIds: ['route-1'], stats: {importedCount: 2, itemCount: 2}}
             },
             storeCovidencePackageFiles: async (params) => {
               return [

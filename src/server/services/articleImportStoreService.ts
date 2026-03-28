@@ -52,6 +52,7 @@ const articleColumnMap = {
   doi: 'doi',
   pubmedId: 'pubmed_id',
   url: 'url',
+  originalData: 'original_data',
   sourceMetadata: 'source_metadata',
   fullText: 'full_text',
   fullTextHtml: 'full_text_html',
@@ -85,6 +86,7 @@ const optionalArticleKeys = [
   'doi',
   'pubmedId',
   'url',
+  'originalData',
   'sourceMetadata',
   'fullText',
   'fullTextHtml',
@@ -140,14 +142,14 @@ const getArticleInsertValues = (rows: ArticleImportStoreRow[], includedKeys: Per
     .join(', ')
 }
 
-const getArticleUpdateAssignments = (includedKeys: PersistedArticleKey[]) => {
+const getArticleMergeAssignments = (includedKeys: PersistedArticleKey[]) => {
   return includedKeys
     .filter((key) => {
       return key !== 'articleId'
     })
     .map((key) => {
       const columnName = articleColumnMap[key]
-      return `${columnName} = EXCLUDED.${columnName}`
+      return `${columnName} = source.${columnName}`
     })
     .concat('updated_at = NOW()')
     .join(', ')
@@ -222,11 +224,28 @@ const storeImportedArticlesInTx = async (tx: ArticleImportStoreTx, rows: Article
       return articleColumnMap[key]
     }),
   ]
+  await tx.run(`
+    MERGE INTO app.article AS target
+    USING (VALUES ${getArticleInsertValues(normalizedRows, includedKeys)}) AS source (${columnNames.join(', ')})
+    ON target.article_id = source.article_id
+    WHEN MATCHED THEN
+      UPDATE SET ${getArticleMergeAssignments(includedKeys)}
+    WHEN NOT MATCHED THEN
+      INSERT (${columnNames.join(', ')})
+      VALUES (${columnNames
+        .map((columnName) => {
+          return `source.${columnName}`
+        })
+        .join(', ')})
+  `)
   const upsertedArticles = await tx.queryJson<{id: string; articleId: string}>(`
-    INSERT INTO app.article (${columnNames.join(', ')})
-    VALUES ${getArticleInsertValues(normalizedRows, includedKeys)}
-    ON CONFLICT(article_id) DO UPDATE SET ${getArticleUpdateAssignments(includedKeys)}
-    RETURNING id, article_id AS articleId
+    SELECT id, article_id AS articleId
+    FROM app.article
+    WHERE article_id IN (${getQuotedStringList(
+      normalizedRows.map((row) => {
+        return row.articleId
+      }),
+    ).join(', ')})
   `)
 
   const routeIdMap = await ensureImportRoutes(tx, routes)
@@ -258,6 +277,38 @@ const storeImportedArticlesInTx = async (tx: ArticleImportStoreTx, rows: Article
   return {importRouteIds: Array.from(routeIdMap.values())}
 }
 
+const clearImportRouteLinks = async (tx: ArticleImportStoreTx, importRouteId: string) => {
+  await tx.run(`
+    DELETE FROM app.article_import_route
+    WHERE import_route_id = ${getSqlLiteral(importRouteId)}
+  `)
+}
+
+const syncImportedArticlesInTx = async (params: {
+  importRoute: string
+  rows: ArticleImportStoreRow[]
+  tx: ArticleImportStoreTx
+}) => {
+  const importRoute = params.importRoute.trim()
+  const routes = importRoute === '' ? [] : [importRoute]
+  const routeIdMap = await ensureImportRoutes(params.tx, routes)
+  const importRouteId = routeIdMap.get(importRoute)
+
+  if (importRouteId) {
+    await clearImportRouteLinks(params.tx, importRouteId)
+  }
+
+  const importRefreshState =
+    params.rows.length > 0 ? await storeImportedArticlesInTx(params.tx, params.rows) : {importRouteIds: [] as string[]}
+
+  return {
+    importRouteIds:
+      importRouteId && !importRefreshState.importRouteIds.includes(importRouteId)
+        ? [...importRefreshState.importRouteIds, importRouteId]
+        : importRefreshState.importRouteIds,
+  }
+}
+
 export const queueImportedArticleRefreshes = async (importRouteIds: string[]) => {
   if (importRouteIds.length === 0) {
     return
@@ -268,6 +319,14 @@ export const queueImportedArticleRefreshes = async (importRouteIds: string[]) =>
 
 export const storeImportedArticlesWithTx = async (tx: ArticleImportStoreTx, rows: ArticleImportStoreRow[]) => {
   return await storeImportedArticlesInTx(tx, rows)
+}
+
+export const syncImportedArticlesWithTx = async (params: {
+  importRoute: string
+  rows: ArticleImportStoreRow[]
+  tx: ArticleImportStoreTx
+}) => {
+  return await syncImportedArticlesInTx(params)
 }
 
 export const storeImportedArticles = async (rows: ArticleImportStoreRow[]) => {

@@ -3,6 +3,12 @@ import {mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 import path from 'node:path'
 
 import {normalizeDoi} from '../../utils/articleSourceMetadata.ts'
+import {
+  type ArticleImportStoreRow,
+  type ArticleImportStoreTx,
+  storeImportedArticles,
+  syncImportedArticlesWithTx,
+} from './articleImportStoreService.ts'
 
 type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
@@ -116,6 +122,11 @@ type CovidenceAnalyzeError = {
   warnings?: CovidenceReferenceMergeResult['warnings']
 }
 type CovidenceAnalyzeResponse = {data: CovidenceAnalyzeResult; ok: true} | {error: CovidenceAnalyzeError; ok: false}
+type CovidenceImportResult = {
+  config: CovidencePackageConfig
+  importRouteIds?: string[]
+  stats: {importedCount: number; itemCount: number}
+}
 
 const covidenceImportFolder = path.resolve(process.cwd(), 'assets/covidence_imports')
 const covidenceImportPathPrefix = 'assets/covidence_imports'
@@ -414,6 +425,14 @@ const getCovidenceRisParseError = (params: {
 
 const getSanitizedFileName = (fileName: string) => {
   return fileName.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'upload'
+}
+
+const getSafeIdentityPart = (value: string) => {
+  const encodedValue = encodeURIComponent(value)
+
+  return encodedValue.length <= 160
+    ? encodedValue
+    : `${encodedValue.slice(0, 120)}-${createHash('sha256').update(encodedValue).digest('hex').slice(0, 24)}`
 }
 
 const getNormalizedCovidenceHeader = (header: string) => {
@@ -918,6 +937,137 @@ const getCovidencePackageAbsolutePath = (assetPath: string) => {
   return absolutePath.startsWith(allowedPrefix) ? absolutePath : null
 }
 
+const getCovidencePackageRowsFromConfig = (config: CovidencePackageConfig) => {
+  const parsedRows = config.files.map((file) => {
+    return parseCovidenceReferenceRows({
+      content: getCovidencePackageFileContent(file.assetPath),
+      fileRole: file.fileRole,
+      format: file.format,
+      sourceFileName: file.sourceFileName,
+    })
+  })
+  const parseFailure = parsedRows.find((result) => {
+    return result.ok === false
+  })
+
+  if (parseFailure && parseFailure.ok === false) {
+    throw new Error(parseFailure.error.message)
+  }
+
+  return mergeCovidenceReferenceRows(
+    parsedRows.flatMap((result) => {
+      return result.ok ? result.rows : []
+    }),
+  )
+}
+
+const getCovidenceImportOriginalData = (candidate: CovidenceMergedArticleCandidate) => {
+  return {
+    covidence: {
+      articleKey: candidate.articleKey,
+      articleKeySource: candidate.articleKeySource,
+      citation: candidate.citation,
+      exclusionReasons: candidate.exclusionReasons,
+      notes: candidate.notes,
+      sourceRows: candidate.sourceRows.map((row) => {
+        return {
+          citation: row.citation,
+          exclusionReason: row.exclusionReason,
+          fileRole: row.fileRole,
+          notes: row.notes,
+          rowNumber: row.rowNumber,
+          sourceFileName: row.sourceFileName,
+          tags: row.tags,
+        }
+      }),
+      stageMembership: candidate.stageMembership,
+      tags: candidate.tags,
+    },
+  }
+}
+
+const getCovidenceImportSourceMetadata = (params: {
+  candidate: CovidenceMergedArticleCandidate
+  config: CovidencePackageConfig
+}) => {
+  return {
+    covidence: {
+      articleKey: params.candidate.articleKey,
+      articleKeySource: params.candidate.articleKeySource,
+      files: params.config.files.map((file) => {
+        return {
+          assetPath: file.assetPath,
+          fileRole: file.fileRole,
+          format: file.format,
+          sourceFileName: file.sourceFileName,
+        }
+      }),
+      mode: params.config.mode,
+      sourceFileNames: params.candidate.sourceRows.map((row) => {
+        return row.sourceFileName
+      }),
+      stageMembership: params.candidate.stageMembership,
+      tags: params.candidate.tags,
+    },
+  }
+}
+
+const getCovidenceImportRows = (params: {
+  config: CovidencePackageConfig
+  importRoute: string
+}): ArticleImportStoreRow[] => {
+  const mergedResult = getCovidencePackageRowsFromConfig(params.config)
+
+  return mergedResult.candidates.map((candidate) => {
+    const articleId = `${params.importRoute}:${getSafeIdentityPart(candidate.articleKey)}`
+    const originalData = getCovidenceImportOriginalData(candidate)
+
+    return {
+      articleAuthors: candidate.citation.authors
+        ? candidate.citation.authors
+            .split(';')
+            .map((author) => {
+              return author.trim()
+            })
+            .filter((author) => {
+              return author !== ''
+            })
+        : null,
+      articleId,
+      articleSummary: candidate.citation.abstract ?? null,
+      articleTitle: candidate.citation.title?.trim() || `Covidence article ${candidate.articleKey}`,
+      doi: normalizeDoi(candidate.citation.doi),
+      importRoute: params.importRoute,
+      originalData,
+      pubmedId: getCovidenceCitationValue(candidate.citation, covidencePmidKeys),
+      sourceMetadata: getCovidenceImportSourceMetadata({candidate, config: params.config}),
+      url: candidate.citation.url ?? null,
+    }
+  })
+}
+
+const getCovidenceImportResultFromConfig = async (params: {
+  config: CovidencePackageConfig
+  importRoute: string
+  tx?: ArticleImportStoreTx
+}): Promise<CovidenceImportResult> => {
+  const rows = getCovidenceImportRows(params)
+
+  if (params.tx) {
+    const importRefreshState = await syncImportedArticlesWithTx({importRoute: params.importRoute, rows, tx: params.tx})
+
+    return {
+      config: params.config,
+      importRouteIds: importRefreshState.importRouteIds,
+      stats: {importedCount: rows.length, itemCount: rows.length},
+    }
+  }
+
+  await storeImportedArticles(rows)
+
+  return {config: params.config, stats: {importedCount: rows.length, itemCount: rows.length}}
+}
+
 export const buildCovidencePackageConfig = (params: {
   mode: CovidenceImportMode
   files: CovidencePackageFile[]
@@ -1335,4 +1485,17 @@ export const analyzeCovidencePackageFiles = async (params: {
 
 export const deleteCovidencePackageFiles = (datasourceId: string) => {
   rmSync(getCovidencePackageFolder(datasourceId), {force: true, recursive: true})
+}
+
+export const importCovidencePackageFromConfig = async (params: {
+  config: CovidencePackageConfig
+  datasourceId: string
+  importRoute: string
+  tx?: ArticleImportStoreTx
+}) => {
+  return await getCovidenceImportResultFromConfig({
+    config: params.config,
+    importRoute: params.importRoute,
+    tx: params.tx,
+  })
 }
