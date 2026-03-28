@@ -9,6 +9,7 @@ import {
   getCovidencePackageConfig,
   getCovidencePackageCursor,
   getCovidencePackageFileContent,
+  parseCovidenceCsvReferenceRows,
   storeCovidencePackageFiles,
 } from './covidenceImportService.ts'
 
@@ -174,4 +175,149 @@ test('deleteCovidencePackageFiles removes the datasource package folder', async 
   }
 
   expect(existsSync(path.resolve(process.cwd(), firstStoredFile.assetPath))).toBe(false)
+})
+
+test('parseCovidenceCsvReferenceRows keeps citation metadata and source file roles across Covidence csv lists', () => {
+  const csvContent = [
+    'Title,Authors,Abstract,Year,Tags,Notes,Reason for exclusion',
+    'Study A,"Doe, Jane",A summary,2024,"tag one; tag two",Keep this,Wrong population',
+  ].join('\n')
+
+  const parsedRows = (['all', 'irrelevant', 'full_text', 'excluded', 'included'] as const).map((fileRole) => {
+    return parseCovidenceCsvReferenceRows({
+      content: csvContent,
+      fileRole,
+      format: 'csv',
+      sourceFileName: `${fileRole}.csv`,
+    })
+  })
+
+  expect(parsedRows).toEqual([
+    {
+      ok: true,
+      rows: [
+        {
+          citation: {abstract: 'A summary', authors: 'Doe, Jane', title: 'Study A', year: '2024'},
+          exclusionReason: 'Wrong population',
+          fileRole: 'all',
+          notes: 'Keep this',
+          rowNumber: 2,
+          sourceFileName: 'all.csv',
+          tags: ['tag one', 'tag two'],
+        },
+      ],
+    },
+    {
+      ok: true,
+      rows: [
+        {
+          citation: {abstract: 'A summary', authors: 'Doe, Jane', title: 'Study A', year: '2024'},
+          exclusionReason: 'Wrong population',
+          fileRole: 'irrelevant',
+          notes: 'Keep this',
+          rowNumber: 2,
+          sourceFileName: 'irrelevant.csv',
+          tags: ['tag one', 'tag two'],
+        },
+      ],
+    },
+    {
+      ok: true,
+      rows: [
+        {
+          citation: {abstract: 'A summary', authors: 'Doe, Jane', title: 'Study A', year: '2024'},
+          exclusionReason: 'Wrong population',
+          fileRole: 'full_text',
+          notes: 'Keep this',
+          rowNumber: 2,
+          sourceFileName: 'full_text.csv',
+          tags: ['tag one', 'tag two'],
+        },
+      ],
+    },
+    {
+      ok: true,
+      rows: [
+        {
+          citation: {abstract: 'A summary', authors: 'Doe, Jane', title: 'Study A', year: '2024'},
+          exclusionReason: 'Wrong population',
+          fileRole: 'excluded',
+          notes: 'Keep this',
+          rowNumber: 2,
+          sourceFileName: 'excluded.csv',
+          tags: ['tag one', 'tag two'],
+        },
+      ],
+    },
+    {
+      ok: true,
+      rows: [
+        {
+          citation: {abstract: 'A summary', authors: 'Doe, Jane', title: 'Study A', year: '2024'},
+          exclusionReason: 'Wrong population',
+          fileRole: 'included',
+          notes: 'Keep this',
+          rowNumber: 2,
+          sourceFileName: 'included.csv',
+          tags: ['tag one', 'tag two'],
+        },
+      ],
+    },
+  ])
+})
+
+test('parseCovidenceCsvReferenceRows returns stable parse errors for malformed or unsupported inputs', () => {
+  expect(
+    parseCovidenceCsvReferenceRows({
+      content: 'TY  - JOUR\nER  - \n',
+      fileRole: 'full_text',
+      format: 'ris',
+      sourceFileName: 'full_text.ris',
+    }),
+  ).toEqual({
+    error: {
+      code: 'unsupported_format',
+      fileRole: 'full_text',
+      message: "Covidence reference parsing only supports CSV inputs, got 'ris'",
+      rowNumber: null,
+      sourceFileName: 'full_text.ris',
+    },
+    ok: false,
+  })
+
+  expect(
+    parseCovidenceCsvReferenceRows({
+      content: 'Title,Authors\n"broken',
+      fileRole: 'all',
+      format: 'csv',
+      sourceFileName: 'all.csv',
+    }),
+  ).toEqual({
+    error: {
+      code: 'malformed_csv',
+      fileRole: 'all',
+      message: 'Covidence CSV has an unclosed quoted field',
+      rowNumber: null,
+      sourceFileName: 'all.csv',
+    },
+    ok: false,
+  })
+
+  expect(
+    parseCovidenceCsvReferenceRows({
+      content: 'Title,Authors\nStudy A',
+      fileRole: 'excluded',
+      format: 'csv',
+      sourceFileName: 'excluded.csv',
+    }),
+  ).toEqual({
+    error: {
+      code: 'row_length_mismatch',
+      fileRole: 'excluded',
+      message: 'Covidence CSV row 2 has 1 fields; expected 2',
+      rowNumber: 2,
+      sourceFileName: 'excluded.csv',
+    },
+    ok: false,
+  })
 })
