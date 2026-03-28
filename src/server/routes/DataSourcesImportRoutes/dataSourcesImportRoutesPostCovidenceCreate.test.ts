@@ -3,11 +3,14 @@ import {expect, test} from 'bun:test'
 type CovidenceCreateSuccessResult = {
   deleteCalls: string[]
   getDataSourceCallCount: number
+  martQueueCalls?: Array<{importRouteIds: string[]; reason: string}>
+  projectCalls?: Array<{importRoute: string; mode: string; promptId: string | null; title: string}>
   promptCalls?: Array<{answerSet: string; exclusionCriteria: string; inclusionCriteria: string; mode: string}>
   queueCalls: string[][]
   result: {
     data: {
       covidencePackageConfig: {kind: 'covidence_import'; mode: 'title_abstract'; version: 1}
+      covidenceProject?: {created: boolean; id: string; name: string} | null
       covidencePrompt?: {created: boolean; id: string; promptHeading: string; type: string} | null
     }
     success: boolean
@@ -50,10 +53,13 @@ test('Covidence datasource create stores package files and persists cursor confi
         const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').pathname
         const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
         const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
+        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
 
         const state = {
           deleteCalls: [],
           getDataSourceCallCount: 0,
+          martQueueCalls: [],
+          projectCalls: [],
           queueCalls: [],
           storedFileCalls: [],
           transactionCallCount: 0,
@@ -64,6 +70,18 @@ test('Covidence datasource create stores package files and persists cursor confi
           return {
             queueImportedArticleRefreshes: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
+            },
+          }
+        })
+
+        void mock.module(duckdbMartRefreshServiceModulePath, () => {
+          return {
+            getDuckdbMartRefreshService: () => {
+              return {
+                queueProjectRefreshesByImportRouteIds: async (importRouteIds, reason) => {
+                  state.martQueueCalls.push({importRouteIds, reason})
+                },
+              }
             },
           }
         })
@@ -95,6 +113,19 @@ test('Covidence datasource create stores package files and persists cursor confi
             },
             getCovidencePackageCursor: (config) => {
               return JSON.stringify(config)
+            },
+            getOrCreateCovidenceProject: async (params) => {
+              state.projectCalls.push({...params, tx: undefined})
+              return {
+                created: true,
+                id: 'project-created',
+                modelId: 'model-default',
+                name: params.title,
+                useAbstract: true,
+                useFulltext: false,
+                useFulltextNoImages: false,
+                useTitle: true,
+              }
             },
             getOrCreateCovidencePrompt: async () => {
               return null
@@ -201,6 +232,12 @@ test('Covidence datasource create stores package files and persists cursor confi
   expect(parsed.txStatements[2]).toContain('covidence:')
   expect(parsed.txStatements[2]).toContain('covidence_import')
   expect(parsed.deleteCalls).toEqual([])
+  expect(parsed.projectCalls).toHaveLength(1)
+  expect(parsed.projectCalls?.[0]?.importRoute).toContain('covidence:')
+  expect(parsed.projectCalls?.[0]?.mode).toBe('title_abstract')
+  expect(parsed.projectCalls?.[0]?.promptId).toBeNull()
+  expect(parsed.projectCalls?.[0]?.title).toBe('Created datasource')
+  expect(parsed.martQueueCalls).toEqual([{importRouteIds: ['route-1'], reason: 'covidenceCreateImportRouteRefresh'}])
   expect(parsed.queueCalls).toEqual([['route-1']])
   expect(parsed.getDataSourceCallCount).toBe(1)
   expect(parsed.result.success).toBe(true)
@@ -208,6 +245,11 @@ test('Covidence datasource create stores package files and persists cursor confi
     kind: 'covidence_import',
     mode: 'title_abstract',
     version: 1,
+  })
+  expect(parsed.result.data.covidenceProject).toMatchObject({
+    created: true,
+    id: 'project-created',
+    name: 'Created datasource',
   })
 })
 
@@ -223,6 +265,7 @@ test('Covidence datasource create deletes stored files when the transaction fail
         const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').pathname
         const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
         const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
+        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
 
         const state = {
           deleteCalls: [],
@@ -234,6 +277,16 @@ test('Covidence datasource create deletes stored files when the transaction fail
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
             queueImportedArticleRefreshes: async () => {},
+          }
+        })
+
+        void mock.module(duckdbMartRefreshServiceModulePath, () => {
+          return {
+            getDuckdbMartRefreshService: () => {
+              return {
+                queueProjectRefreshesByImportRouteIds: async () => {},
+              }
+            },
           }
         })
 
@@ -260,6 +313,9 @@ test('Covidence datasource create deletes stored files when the transaction fail
             },
             getCovidencePackageCursor: (config) => {
               return JSON.stringify(config)
+            },
+            getOrCreateCovidenceProject: async () => {
+              return null
             },
             getOrCreateCovidencePrompt: async () => {
               return null
@@ -353,10 +409,13 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
         const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').pathname
         const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
         const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
+        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
 
         const state = {
           deleteCalls: [],
           getDataSourceCallCount: 0,
+          martQueueCalls: [],
+          projectCalls: [],
           promptCalls: [],
           queueCalls: [],
           storedFileCalls: [],
@@ -368,6 +427,18 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
           return {
             queueImportedArticleRefreshes: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
+            },
+          }
+        })
+
+        void mock.module(duckdbMartRefreshServiceModulePath, () => {
+          return {
+            getDuckdbMartRefreshService: () => {
+              return {
+                queueProjectRefreshesByImportRouteIds: async (importRouteIds, reason) => {
+                  state.martQueueCalls.push({importRouteIds, reason})
+                },
+              }
             },
           }
         })
@@ -400,6 +471,19 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
             },
             getCovidencePackageCursor: (config) => {
               return JSON.stringify(config)
+            },
+            getOrCreateCovidenceProject: async (params) => {
+              state.projectCalls.push({...params, tx: undefined})
+              return {
+                created: true,
+                id: 'project-created',
+                modelId: 'model-default',
+                name: params.title,
+                useAbstract: true,
+                useFulltext: false,
+                useFulltextNoImages: false,
+                useTitle: true,
+              }
             },
             getOrCreateCovidencePrompt: async (params) => {
               state.promptCalls.push({...params, tx: undefined})
@@ -510,6 +594,17 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
       mode: 'title_abstract',
     },
   ])
+  expect(parsed.projectCalls).toHaveLength(1)
+  expect(parsed.projectCalls?.[0]?.importRoute).toContain('covidence:')
+  expect(parsed.projectCalls?.[0]?.mode).toBe('title_abstract')
+  expect(parsed.projectCalls?.[0]?.promptId).toBe('prompt-existing')
+  expect(parsed.projectCalls?.[0]?.title).toBe('Created datasource')
+  expect(parsed.martQueueCalls).toEqual([{importRouteIds: ['route-1'], reason: 'covidenceCreateImportRouteRefresh'}])
+  expect(parsed.result.data.covidenceProject).toMatchObject({
+    created: true,
+    id: 'project-created',
+    name: 'Created datasource',
+  })
   expect(parsed.result.data.covidencePrompt).toMatchObject({
     created: false,
     id: 'prompt-existing',

@@ -9,6 +9,7 @@ import {
   importCovidencePackageFromConfig,
 } from '../../services/covidenceImportService.ts'
 import {getDataSourceQueryService} from '../../services/dataSourceQueryService.ts'
+import {getDuckdbMartRefreshService} from '../../services/getDuckdbMartRefreshService.ts'
 
 export const dataSourcesImportRoutesPostCovidence = async ({body, set}: {body: {id: string}; set: Context['set']}) => {
   const dataSource = await getDataSourceQueryService().getDataSourceById(body.id)
@@ -51,6 +52,10 @@ export const dataSourcesImportRoutesPostCovidence = async ({body, set}: {body: {
   })) as Awaited<ReturnType<typeof importCovidencePackageFromConfig>>
 
   await queueImportedArticleRefreshes(result.importRouteIds ?? [])
+  await getDuckdbMartRefreshService().queueProjectRefreshesByImportRouteIds(
+    result.importRouteIds ?? [],
+    'covidenceImportRouteRefresh',
+  )
 
   return {success: true, data: await getDataSourceQueryService().getDataSourceById(dataSource.id), stats: result.stats}
 }

@@ -1,6 +1,7 @@
 import {expect, test} from 'bun:test'
 
 type CovidenceReimportResult = {
+  martQueueCalls?: Array<{importRouteIds: string[]; reason: string}>
   queueCalls: string[][]
   result: {
     data: {id: string} | null
@@ -38,13 +39,26 @@ test('Covidence reimport reloads config and updates the existing datasource rout
         const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
         const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
         const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
+        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
 
-        const state = {queueCalls: [], txStatements: []}
+        const state = {martQueueCalls: [], queueCalls: [], txStatements: []}
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
             queueImportedArticleRefreshes: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
+            },
+          }
+        })
+
+        void mock.module(duckdbMartRefreshServiceModulePath, () => {
+          return {
+            getDuckdbMartRefreshService: () => {
+              return {
+                queueProjectRefreshesByImportRouteIds: async (importRouteIds, reason) => {
+                  state.martQueueCalls.push({importRouteIds, reason})
+                },
+              }
             },
           }
         })
@@ -112,7 +126,7 @@ test('Covidence reimport reloads config and updates the existing datasource rout
 
         const set = {status: 200}
         const result = await dataSourcesImportRoutesPostCovidence({body: {id: 'datasource-1'}, set})
-        console.log(JSON.stringify({queueCalls: state.queueCalls, result, setStatus: set.status, txStatements: state.txStatements}))
+        console.log(JSON.stringify({martQueueCalls: state.martQueueCalls, queueCalls: state.queueCalls, result, setStatus: set.status, txStatements: state.txStatements}))
       `,
     ],
     {cwd: process.cwd(), env: process.env},
@@ -129,6 +143,7 @@ test('Covidence reimport reloads config and updates the existing datasource rout
   expect(parsed.txStatements[0]).toContain('UPDATE app.import_route')
   expect(parsed.txStatements[1]).toContain("WHERE id = 'datasource-1'")
   expect(parsed.txStatements[1]).toContain('items_after_last_import = 3')
+  expect(parsed.martQueueCalls).toEqual([{importRouteIds: ['route-1'], reason: 'covidenceImportRouteRefresh'}])
   expect(parsed.queueCalls).toEqual([['route-1']])
   expect(parsed.result.success).toBe(true)
   expect((parsed.result.data as {id: string} | null)?.id).toBe('datasource-1')

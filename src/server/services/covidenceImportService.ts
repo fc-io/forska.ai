@@ -3,6 +3,7 @@ import {mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 import path from 'node:path'
 
 import {normalizeDoi} from '../../utils/articleSourceMetadata.ts'
+import {listSelectableProviderModels} from '../providers/providerModelRepository.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from './appQueryHelpers.ts'
@@ -18,6 +19,7 @@ type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'incl
 type CovidenceFileFormat = 'csv' | 'ris'
 type CovidencePromptAnswerSet = 'yes|no' | 'yes|no|unsure' | 'yes_no' | 'yes_no_unsure'
 type CovidencePromptTx = {queryJson: <TRow extends Record<string, unknown>>(statement: string) => Promise<TRow[]>}
+type CovidenceProjectTx = CovidencePromptTx & {run: (statement: string) => Promise<void>}
 type CovidenceCsvParseErrorCode =
   | 'duplicate_header'
   | 'empty_file'
@@ -138,6 +140,16 @@ type CovidencePromptDefinition = {
   type: "'yes' | 'no'" | "'yes' | 'no' | 'unsure'"
 }
 type CovidencePromptRecord = CovidencePromptDefinition & {created: boolean; id: string}
+type CovidenceProjectRecord = {
+  created: boolean
+  id: string
+  modelId: string
+  name: string
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
 
 const covidenceImportFolder = path.resolve(process.cwd(), 'assets/covidence_imports')
 const covidenceImportPathPrefix = 'assets/covidence_imports'
@@ -149,6 +161,13 @@ const covidencePromptQuestionByMode = {
   full_text: 'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
   title_abstract: 'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
 } as const satisfies Record<CovidenceImportMode, string>
+const covidenceProjectSettingsByMode = {
+  full_text: {useAbstract: true, useFulltext: true, useFulltextNoImages: false, useTitle: true},
+  title_abstract: {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
+} as const satisfies Record<
+  CovidenceImportMode,
+  {useAbstract: boolean; useFulltext: boolean; useFulltextNoImages: boolean; useTitle: boolean}
+>
 const titleAbstractRoles: CovidenceFileRole[] = ['all', 'irrelevant', 'full_text']
 const fullTextRoles: CovidenceFileRole[] = ['all', 'irrelevant', 'full_text', 'excluded', 'included']
 const covidenceTagKeys = new Set(['tag', 'tags'])
@@ -258,6 +277,52 @@ const getCovidencePromptType = (answerSet: CovidencePromptAnswerSet): CovidenceP
 
 const getCovidencePromptQueryRunner = (tx?: CovidencePromptTx) => {
   return tx ?? getAppDatabaseService()
+}
+
+const getCovidenceProjectQueryRunner = (tx?: CovidenceProjectTx) => {
+  return tx ?? getAppDatabaseService()
+}
+
+const getCovidenceProjectSettings = (mode: CovidenceImportMode) => {
+  return covidenceProjectSettingsByMode[mode]
+}
+
+const getDefaultCovidenceProjectModelId = async () => {
+  const [model] = await listSelectableProviderModels()
+
+  if (!model) {
+    throw new Error('No selectable model available for Covidence project')
+  }
+
+  return model.id
+}
+
+const getCovidenceProjectByImportRoute = async (params: {importRoute: string; tx?: CovidenceProjectTx}) => {
+  const [project] = await getCovidenceProjectQueryRunner(params.tx).queryJson<{
+    id: string
+    modelId: string
+    name: string
+    useAbstract: boolean
+    useFulltext: boolean
+    useFulltextNoImages: boolean
+    useTitle: boolean
+  }>(`
+    SELECT
+      p.id AS id,
+      p.model_id AS modelId,
+      p.name AS name,
+      p.use_abstract AS useAbstract,
+      p.use_fulltext AS useFulltext,
+      p.use_fulltext_no_images AS useFulltextNoImages,
+      p.use_title AS useTitle
+    FROM app.project_import_route pir
+    INNER JOIN app.import_route ir ON ir.id = pir.import_route_id
+    INNER JOIN app.project p ON p.id = pir.project_id
+    WHERE ir.route = ${getSqlLiteral(params.importRoute)}
+    LIMIT 1
+  `)
+
+  return project ?? null
 }
 
 const getNormalizedCovidenceMatchValue = (value: string | null) => {
@@ -1190,6 +1255,105 @@ export const getOrCreateCovidencePrompt = async (params: {
   }
 
   return {...promptDefinition, created: true, id: insertedPrompt.id}
+}
+
+export const getOrCreateCovidenceProject = async (params: {
+  importRoute: string
+  mode: CovidenceImportMode
+  promptId?: string | null
+  title: string
+  tx?: CovidenceProjectTx
+}): Promise<CovidenceProjectRecord> => {
+  const existingProject = await getCovidenceProjectByImportRoute(params)
+  const queryRunner = getCovidenceProjectQueryRunner(params.tx)
+
+  if (existingProject) {
+    if (params.promptId) {
+      await queryRunner.run(`
+        INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, enabled, origin_project_id)
+        VALUES (
+          '${escapeSqlString(globalThis.crypto.randomUUID())}',
+          '${escapeSqlString(existingProject.id)}',
+          '${escapeSqlString(params.promptId)}',
+          0,
+          FALSE,
+          TRUE,
+          NULL
+        )
+        ON CONFLICT(project_id, prompt_id) DO UPDATE SET
+          prompt_order = EXCLUDED.prompt_order,
+          archived = FALSE,
+          enabled = TRUE,
+          updated_at = now()
+      `)
+    }
+
+    return {...existingProject, created: false}
+  }
+
+  const [importRouteRow] = await queryRunner.queryJson<{id: string}>(`
+    SELECT id
+    FROM app.import_route
+    WHERE route = ${getSqlLiteral(params.importRoute)}
+    LIMIT 1
+  `)
+
+  if (!importRouteRow) {
+    throw new Error('Covidence import route not found for project creation')
+  }
+
+  const settings = getCovidenceProjectSettings(params.mode)
+  const projectId = globalThis.crypto.randomUUID()
+  const modelId = await getDefaultCovidenceProjectModelId()
+
+  await queryRunner.run(`
+    INSERT INTO app.project (
+      id,
+      name,
+      model_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images
+    )
+    VALUES (
+      '${escapeSqlString(projectId)}',
+      ${getSqlLiteral(params.title)},
+      '${escapeSqlString(modelId)}',
+      ${settings.useTitle ? 'TRUE' : 'FALSE'},
+      ${settings.useAbstract ? 'TRUE' : 'FALSE'},
+      ${settings.useFulltext ? 'TRUE' : 'FALSE'},
+      ${settings.useFulltextNoImages ? 'TRUE' : 'FALSE'}
+    )
+  `)
+
+  await queryRunner.run(`
+    INSERT INTO app.project_import_route (id, project_id, import_route_id)
+    VALUES (
+      '${escapeSqlString(globalThis.crypto.randomUUID())}',
+      '${escapeSqlString(projectId)}',
+      '${escapeSqlString(importRouteRow.id)}'
+    )
+    ON CONFLICT(project_id, import_route_id) DO NOTHING
+  `)
+
+  if (params.promptId) {
+    await queryRunner.run(`
+      INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, enabled, origin_project_id)
+      VALUES (
+        '${escapeSqlString(globalThis.crypto.randomUUID())}',
+        '${escapeSqlString(projectId)}',
+        '${escapeSqlString(params.promptId)}',
+        0,
+        FALSE,
+        TRUE,
+        NULL
+      )
+      ON CONFLICT(project_id, prompt_id) DO NOTHING
+    `)
+  }
+
+  return {created: true, id: projectId, modelId, name: params.title, ...settings}
 }
 
 export const getCovidencePackageConfig = (cursor: string | null) => {
