@@ -1,7 +1,7 @@
 {
   "name": "DuckDB Archive Error Plan",
-  "branchName": "ralph/duckdb-archive-error-plan",
   "description": "Stop archived-project refresh from poisoning DuckDB during mart purge and do not call the work finished until the server stack starts cleanly and its output stays free of the recurring fatal invalidation error.",
+  "branchName": "ralph/duckdb-archive-error-plan",
   "userStories": [
     {
       "id": "US-001",
@@ -15,9 +15,10 @@
         "Relevant `bunx eslint` command for touched files passes"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "",
-      "dependsOn": []
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-002",
@@ -33,7 +34,9 @@
       "priority": 2,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001"]
+      "dependsOn": [
+        "US-001"
+      ]
     },
     {
       "id": "US-003",
@@ -49,7 +52,9 @@
       "priority": 3,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-002"]
+      "dependsOn": [
+        "US-002"
+      ]
     },
     {
       "id": "US-004",
@@ -65,7 +70,9 @@
       "priority": 4,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-003"]
+      "dependsOn": [
+        "US-003"
+      ]
     },
     {
       "id": "US-005",
@@ -81,7 +88,9 @@
       "priority": 5,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-002"]
+      "dependsOn": [
+        "US-002"
+      ]
     },
     {
       "id": "US-006",
@@ -97,7 +106,10 @@
       "priority": 6,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-004", "US-005"]
+      "dependsOn": [
+        "US-004",
+        "US-005"
+      ]
     },
     {
       "id": "US-007",
@@ -113,7 +125,10 @@
       "priority": 7,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-004", "US-005"]
+      "dependsOn": [
+        "US-004",
+        "US-005"
+      ]
     },
     {
       "id": "US-008",
@@ -130,7 +145,13 @@
       "priority": 8,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-006", "US-007"]
+      "dependsOn": [
+        "US-006",
+        "US-007"
+      ]
     }
-  ]
+  ],
+  "metadata": {
+    "updatedAt": "2026-03-28T10:30:04.378Z"
+  }
 }
