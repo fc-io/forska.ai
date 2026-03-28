@@ -273,14 +273,15 @@
         "Browser verification: import 1 `title_abstract` package and 1 `full_text` package; datasource exists; project exists; prompt reused or created correctly; seeded human judgments match Covidence decisions; reimport does not duplicate prompt or project."
       ],
       "priority": 13,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-005",
         "US-008",
         "US-010",
         "US-012"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-014",
@@ -306,6 +307,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-03-28T15:19:53.310Z"
+    "updatedAt": "2026-03-28T15:28:22.069Z"
   }
 }

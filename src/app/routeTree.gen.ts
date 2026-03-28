@@ -30,6 +30,7 @@ import { Route as ArticlesIdFulltextRouteImport } from './routes/+articles/+$id/
 import { Route as AdminPromptsDeduplicateRouteImport } from './routes/+admin/+prompts/+deduplicate'
 import { Route as AdminDatasourcesStructuredFileImportRouteImport } from './routes/+admin/+datasources/+structured-file-import'
 import { Route as AdminDatasourcesCreateRouteImport } from './routes/+admin/+datasources/+create'
+import { Route as AdminDatasourcesCovidenceImportRouteImport } from './routes/+admin/+datasources/+covidence-import'
 import { Route as ProvidersIdIndexRouteImport } from './routes/+providers/+$id/+index'
 import { Route as PromptsArchivedIndexRouteImport } from './routes/+prompts/+archived/+index'
 import { Route as ProjectsArchivedIndexRouteImport } from './routes/+projects/+archived/+index'
@@ -176,6 +177,12 @@ const AdminDatasourcesCreateRoute = AdminDatasourcesCreateRouteImport.update({
   path: '/admin/datasources/create',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminDatasourcesCovidenceImportRoute =
+  AdminDatasourcesCovidenceImportRouteImport.update({
+    id: '/admin/datasources/covidence-import',
+    path: '/admin/datasources/covidence-import',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ProvidersIdIndexRoute = ProvidersIdIndexRouteImport.update({
   id: '/providers/$id/',
   path: '/providers/$id/',
@@ -409,6 +416,7 @@ export interface FileRoutesByFullPath {
   '/projects/archived/': typeof ProjectsArchivedIndexRoute
   '/prompts/archived/': typeof PromptsArchivedIndexRoute
   '/providers/$id/': typeof ProvidersIdIndexRoute
+  '/admin/datasources/covidence-import': typeof AdminDatasourcesCovidenceImportRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/datasources/structured-file-import': typeof AdminDatasourcesStructuredFileImportRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
@@ -468,6 +476,7 @@ export interface FileRoutesByTo {
   '/projects/archived': typeof ProjectsArchivedIndexRoute
   '/prompts/archived': typeof PromptsArchivedIndexRoute
   '/providers/$id': typeof ProvidersIdIndexRoute
+  '/admin/datasources/covidence-import': typeof AdminDatasourcesCovidenceImportRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/datasources/structured-file-import': typeof AdminDatasourcesStructuredFileImportRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
@@ -528,6 +537,7 @@ export interface FileRoutesById {
   '/projects/archived/': typeof ProjectsArchivedIndexRoute
   '/prompts/archived/': typeof PromptsArchivedIndexRoute
   '/providers/$id/': typeof ProvidersIdIndexRoute
+  '/admin/datasources/covidence-import': typeof AdminDatasourcesCovidenceImportRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/datasources/structured-file-import': typeof AdminDatasourcesStructuredFileImportRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
@@ -589,6 +599,7 @@ export interface FileRouteTypes {
     | '/projects/archived/'
     | '/prompts/archived/'
     | '/providers/$id/'
+    | '/admin/datasources/covidence-import'
     | '/admin/datasources/create'
     | '/admin/datasources/structured-file-import'
     | '/admin/prompts/deduplicate'
@@ -648,6 +659,7 @@ export interface FileRouteTypes {
     | '/projects/archived'
     | '/prompts/archived'
     | '/providers/$id'
+    | '/admin/datasources/covidence-import'
     | '/admin/datasources/create'
     | '/admin/datasources/structured-file-import'
     | '/admin/prompts/deduplicate'
@@ -707,6 +719,7 @@ export interface FileRouteTypes {
     | '/projects/archived/'
     | '/prompts/archived/'
     | '/providers/$id/'
+    | '/admin/datasources/covidence-import'
     | '/admin/datasources/create'
     | '/admin/datasources/structured-file-import'
     | '/admin/prompts/deduplicate'
@@ -767,6 +780,7 @@ export interface RootRouteChildren {
   ProjectsArchivedIndexRoute: typeof ProjectsArchivedIndexRoute
   PromptsArchivedIndexRoute: typeof PromptsArchivedIndexRoute
   ProvidersIdIndexRoute: typeof ProvidersIdIndexRoute
+  AdminDatasourcesCovidenceImportRoute: typeof AdminDatasourcesCovidenceImportRoute
   AdminDatasourcesCreateRoute: typeof AdminDatasourcesCreateRoute
   AdminDatasourcesStructuredFileImportRoute: typeof AdminDatasourcesStructuredFileImportRoute
   AdminPromptsDeduplicateRoute: typeof AdminPromptsDeduplicateRoute
@@ -941,6 +955,13 @@ declare module '@tanstack/solid-router' {
       path: '/admin/datasources/create'
       fullPath: '/admin/datasources/create'
       preLoaderRoute: typeof AdminDatasourcesCreateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/datasources/covidence-import': {
+      id: '/admin/datasources/covidence-import'
+      path: '/admin/datasources/covidence-import'
+      fullPath: '/admin/datasources/covidence-import'
+      preLoaderRoute: typeof AdminDatasourcesCovidenceImportRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/providers/$id/': {
@@ -1232,6 +1253,7 @@ const rootRouteChildren: RootRouteChildren = {
   ProjectsArchivedIndexRoute: ProjectsArchivedIndexRoute,
   PromptsArchivedIndexRoute: PromptsArchivedIndexRoute,
   ProvidersIdIndexRoute: ProvidersIdIndexRoute,
+  AdminDatasourcesCovidenceImportRoute: AdminDatasourcesCovidenceImportRoute,
   AdminDatasourcesCreateRoute: AdminDatasourcesCreateRoute,
   AdminDatasourcesStructuredFileImportRoute:
     AdminDatasourcesStructuredFileImportRoute,

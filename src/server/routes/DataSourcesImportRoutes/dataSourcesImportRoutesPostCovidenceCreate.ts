@@ -25,6 +25,7 @@ type CovidencePackageUploadInput = Blob & {name?: string; type?: string}
 export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
   title: string
   description?: string
+  modelId?: string
   answerSet?: CovidencePromptAnswerSet
   exclusionCriteria?: string
   inclusionCriteria?: string
@@ -91,6 +92,7 @@ export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
 
       const covidenceProject = await getOrCreateCovidenceProject({
         importRoute,
+        modelId: body.modelId,
         mode: body.mode,
         promptId: covidencePrompt?.id ?? null,
         title,

@@ -1374,6 +1374,7 @@ export const getOrCreateCovidencePrompt = async (params: {
 
 export const getOrCreateCovidenceProject = async (params: {
   importRoute: string
+  modelId?: string
   mode: CovidenceImportMode
   promptId?: string | null
   title: string
@@ -1419,7 +1420,7 @@ export const getOrCreateCovidenceProject = async (params: {
 
   const settings = getCovidenceProjectSettings(params.mode)
   const projectId = globalThis.crypto.randomUUID()
-  const modelId = await getDefaultCovidenceProjectModelId()
+  const modelId = params.modelId ?? (await getDefaultCovidenceProjectModelId())
 
   await queryRunner.run(`
     INSERT INTO app.project (

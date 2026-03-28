@@ -48,6 +48,7 @@ export const dataSourcesImportRoutes = new Elysia()
       body: t.Object({
         title: t.String(),
         description: t.Optional(t.String()),
+        modelId: t.Optional(t.String()),
         answerSet: t.Optional(
           t.Union([t.Literal('yes|no'), t.Literal('yes|no|unsure'), t.Literal('yes_no'), t.Literal('yes_no_unsure')]),
         ),

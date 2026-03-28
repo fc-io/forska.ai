@@ -184,6 +184,12 @@ const AdminDataSources = () => {
             Import XML/JSON
           </Link>
           <Link
+            to="/admin/datasources/covidence-import"
+            class="px-4 py-2 rounded-md border border-amber-200 bg-amber-50 text-amber-700 text-sm font-medium hover:bg-amber-100 focus:outline-none focus:ring-2 focus:ring-amber-500"
+          >
+            Import Covidence
+          </Link>
+          <Link
             to="/admin/datasources/create"
             class="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
