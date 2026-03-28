@@ -510,8 +510,123 @@ test('delete archived route removes archived project rows and keeps cross-projec
     VALUES ('delete-archived-refresh-queue', 'project', '${sourceProjectId}', '${sourceProjectId}', '')
   `)
   await runDatabase(`
+    INSERT INTO app.review_answer_dictionary (
+      project_id,
+      prompt_id,
+      answer_id,
+      answer_value,
+      numeric_answer_value
+    ) VALUES (
+      '${sourceProjectId}',
+      '${promptId}',
+      1,
+      'yes',
+      1
+    )
+  `)
+  await runDatabase(`
     INSERT INTO app.project_review_serving_generation (project_id, active_generation)
     VALUES ('${sourceProjectId}', 3)
+  `)
+  await runDatabase(`
+    INSERT INTO mart.project_scope_article (
+      project_id,
+      article_id,
+      in_curated_scope,
+      in_route_scope,
+      article_created_at,
+      article_updated_at
+    ) VALUES (
+      '${sourceProjectId}',
+      '${articleId}',
+      TRUE,
+      TRUE,
+      TIMESTAMPTZ '2025-09-09 00:00:00+00',
+      NULL
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO mart.prompt_answer_fact (
+      project_id,
+      article_id,
+      prompt_id,
+      judgment_id,
+      model_id,
+      answer_value,
+      answered_original,
+      article_created_at,
+      article_updated_at,
+      judgment_created_at
+    ) VALUES (
+      '${sourceProjectId}',
+      '${articleId}',
+      '${promptId}',
+      'delete-archived-judgment',
+      'delete-archived-source-model',
+      'yes',
+      'yes',
+      TIMESTAMPTZ '2025-09-09 00:00:00+00',
+      NULL,
+      current_timestamp
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO mart.review_article_rollup (
+      project_id,
+      article_id,
+      article_created_at,
+      article_updated_at,
+      enabled_prompt_count,
+      llm_judged_prompt_count,
+      human_answered_prompt_count,
+      llm_judged_prompt_ids,
+      human_answered_prompt_ids,
+      has_all_llm_judgments,
+      has_all_human_answers,
+      in_curated_scope,
+      in_route_scope,
+      review_opened,
+      review_sections_completed,
+      latest_llm_created_at,
+      latest_human_updated_at,
+      latest_review_updated_at,
+      rollup_updated_at
+    ) VALUES (
+      '${sourceProjectId}',
+      '${articleId}',
+      TIMESTAMPTZ '2025-09-09 00:00:00+00',
+      NULL,
+      1,
+      1,
+      1,
+      ['${promptId}'],
+      ['${promptId}'],
+      TRUE,
+      TRUE,
+      TRUE,
+      TRUE,
+      TRUE,
+      7,
+      current_timestamp,
+      current_timestamp,
+      current_timestamp,
+      current_timestamp
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO mart.review_article_filter_row (
+      project_id,
+      article_id,
+      prompt_id,
+      answer_value,
+      numeric_answer_value
+    ) VALUES (
+      '${sourceProjectId}',
+      '${articleId}',
+      '${promptId}',
+      'yes',
+      1
+    )
   `)
   await runDatabase(`
     INSERT INTO mart.review_article_serving (
@@ -673,9 +788,34 @@ test('delete archived route removes archived project rows and keeps cross-projec
     FROM app.mart_refresh_queue
     WHERE project_id = '${sourceProjectId}'
   `)
+  const [reviewAnswerDictionaryRowCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.review_answer_dictionary
+    WHERE project_id = '${sourceProjectId}'
+  `)
   const [servingGenerationRowCount] = await queryDatabase<{count: number}>(`
     SELECT COUNT(*) AS count
     FROM app.project_review_serving_generation
+    WHERE project_id = '${sourceProjectId}'
+  `)
+  const [projectScopeArticleRowCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM mart.project_scope_article
+    WHERE project_id = '${sourceProjectId}'
+  `)
+  const [promptAnswerFactRowCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM mart.prompt_answer_fact
+    WHERE project_id = '${sourceProjectId}'
+  `)
+  const [rollupRowCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM mart.review_article_rollup
+    WHERE project_id = '${sourceProjectId}'
+  `)
+  const [filterRowRowCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM mart.review_article_filter_row
     WHERE project_id = '${sourceProjectId}'
   `)
   const [servingRowCount] = await queryDatabase<{count: number}>(`
@@ -726,7 +866,12 @@ test('delete archived route removes archived project rows and keeps cross-projec
   expect(Number(judgmentJobRowCount?.count ?? 0)).toBe(0)
   expect(Number(tokenUseRowCount?.count ?? 0)).toBe(0)
   expect(Number(martRefreshQueueRowCount?.count ?? 0)).toBe(0)
+  expect(Number(reviewAnswerDictionaryRowCount?.count ?? 0)).toBe(0)
   expect(Number(servingGenerationRowCount?.count ?? 0)).toBe(0)
+  expect(Number(projectScopeArticleRowCount?.count ?? 0)).toBe(0)
+  expect(Number(promptAnswerFactRowCount?.count ?? 0)).toBe(0)
+  expect(Number(rollupRowCount?.count ?? 0)).toBe(0)
+  expect(Number(filterRowRowCount?.count ?? 0)).toBe(0)
   expect(Number(servingRowCount?.count ?? 0)).toBe(0)
   expect(Number(filterMemberRowCount?.count ?? 0)).toBe(0)
   expect(Number(servingDetailRowCount?.count ?? 0)).toBe(0)

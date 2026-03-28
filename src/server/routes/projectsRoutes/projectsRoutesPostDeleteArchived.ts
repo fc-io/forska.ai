@@ -2,6 +2,7 @@ import {Elysia, t} from 'elysia'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getQuotedStringList} from '../../services/appQueryHelpers.ts'
+import {archivedProjectMartTableNames} from '../../services/getDuckdbMartRefreshService.ts'
 
 type AppTx = {queryJson: <T>(statement: string) => Promise<T[]>; run: (statement: string) => Promise<void>}
 
@@ -223,6 +224,15 @@ const getProjectIdsSql = (projectIds: string[]) => {
 
 const getTempTableName = (prefix: string) => {
   return `temp_${prefix}_${crypto.randomUUID().replaceAll('-', '_')}`
+}
+
+const getArchivedProjectPurgeStatements = (projectIdsSql: string) => {
+  return archivedProjectMartTableNames.map((tableName) => {
+    return `
+      DELETE FROM ${tableName}
+      WHERE project_id IN (${projectIdsSql})
+    `
+  })
 }
 
 const hasTableTx = async (tx: AppTx, params: {schema: string; table: string}) => {
@@ -493,21 +503,14 @@ const deleteArchivedProjectsTx = async (tx: AppTx, projectIds: string[]) => {
       WHERE project_id IN (${projectIdsSql})
     `,
     `
+      DELETE FROM app.review_answer_dictionary
+      WHERE project_id IN (${projectIdsSql})
+    `,
+    `
       DELETE FROM app.project_review_serving_generation
       WHERE project_id IN (${projectIdsSql})
     `,
-    `
-      DELETE FROM mart.review_article_filter_member
-      WHERE project_id IN (${projectIdsSql})
-    `,
-    `
-      DELETE FROM mart.review_article_serving_detail
-      WHERE project_id IN (${projectIdsSql})
-    `,
-    `
-      DELETE FROM mart.review_article_serving
-      WHERE project_id IN (${projectIdsSql})
-    `,
+    ...getArchivedProjectPurgeStatements(projectIdsSql),
     `
       DELETE FROM app.project
       WHERE id IN (${projectIdsSql})

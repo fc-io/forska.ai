@@ -1867,14 +1867,22 @@ const purgeArchivedProjectMartTable = async ({
     : deleteProjectTablePurgeBatches({projectId, tableName})
 }
 
+export const archivedProjectMartTableNames = [
+  'mart.review_article_serving_detail',
+  'mart.review_article_filter_member',
+  'mart.review_article_serving',
+  'mart.review_article_rollup',
+  'mart.review_article_filter_row',
+  'mart.prompt_answer_fact',
+  'mart.project_scope_article',
+]
+
 const purgeArchivedProjectMartData = async (projectId: string): Promise<void> => {
-  await purgeArchivedProjectMartTable({projectId, tableName: 'mart.review_article_serving_detail'})
-  await purgeArchivedProjectMartTable({projectId, tableName: 'mart.review_article_filter_member'})
-  await purgeArchivedProjectMartTable({projectId, tableName: 'mart.review_article_serving'})
-  await purgeArchivedProjectMartTable({projectId, tableName: 'mart.review_article_rollup'})
-  await purgeArchivedProjectMartTable({projectId, tableName: 'mart.review_article_filter_row'})
-  await purgeArchivedProjectMartTable({projectId, tableName: 'mart.prompt_answer_fact'})
-  await purgeArchivedProjectMartTable({projectId, tableName: 'mart.project_scope_article'})
+  await archivedProjectMartTableNames.reduce<Promise<void>>((promise, tableName) => {
+    return promise.then(() => {
+      return purgeArchivedProjectMartTable({projectId, tableName})
+    })
+  }, Promise.resolve())
   await runMartRefreshBackgroundStatement(`
     BEGIN TRANSACTION;
     DELETE FROM app.review_answer_dictionary WHERE project_id = ${getSqlLiteral(projectId)};
