@@ -7,6 +7,7 @@ import {afterEach, expect, test} from 'bun:test'
 import {
   analyzeCovidencePackageFiles,
   buildCovidencePackageConfig,
+  buildCovidencePromptDefinition,
   deleteCovidencePackageFiles,
   getCovidencePackageConfig,
   getCovidencePackageCursor,
@@ -182,6 +183,176 @@ test('deleteCovidencePackageFiles removes the datasource package folder', async 
   }
 
   expect(existsSync(path.resolve(process.cwd(), firstStoredFile.assetPath))).toBe(false)
+})
+
+test('Covidence prompt definition builds stage-specific text and reuses matching prompts', async () => {
+  expect(
+    buildCovidencePromptDefinition({
+      answerSet: 'yes|no|unsure',
+      exclusionCriteria: 'Case reports\nEditorials',
+      inclusionCriteria: 'Adults with confirmed disease',
+      mode: 'title_abstract',
+    }),
+  ).toEqual({
+    originalText: [
+      'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
+      '',
+      'Allowed answers: yes, no, unsure',
+      '',
+      'Inclusion:',
+      'Adults with confirmed disease',
+      '',
+      'Exclusion:',
+      'Case reports\nEditorials',
+    ].join('\n'),
+    promptHeading: 'Covidence title/abstract screening',
+    type: "'yes' | 'no' | 'unsure'",
+  })
+
+  expect(
+    buildCovidencePromptDefinition({
+      answerSet: 'yes|no',
+      exclusionCriteria: 'Animal studies',
+      inclusionCriteria: 'Randomized trials',
+      mode: 'full_text',
+    }),
+  ).toEqual({
+    originalText: [
+      'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
+      '',
+      'Allowed answers: yes, no',
+      '',
+      'Inclusion:',
+      'Randomized trials',
+      '',
+      'Exclusion:',
+      'Animal studies',
+    ].join('\n'),
+    promptHeading: 'Covidence full-text screening',
+    type: "'yes' | 'no'",
+  })
+
+  const duckdbPath = `/tmp/f1-covidence-prompt-${Date.now()}.duckdb`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, covidenceImportService, {getSqlLiteral}, {computePromptContentHash}] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/covidenceImportService.ts'),
+          import('./src/server/services/appQueryHelpers.ts'),
+          import('./src/server/utils/computePromptContentHash.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const definition = covidenceImportService.buildCovidencePromptDefinition({
+          answerSet: 'yes|no|unsure',
+          exclusionCriteria: 'Case reports',
+          inclusionCriteria: 'Adults with confirmed disease',
+          mode: 'title_abstract',
+        })
+        const contentHash = computePromptContentHash(definition.originalText, null, definition.promptHeading, definition.type)
+
+        await database.run(\`
+          INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived)
+          VALUES (
+            'prompt-existing',
+            \${getSqlLiteral(definition.originalText)},
+            NULL,
+            \${getSqlLiteral(definition.promptHeading)},
+            \${getSqlLiteral(definition.type)},
+            \${getSqlLiteral(contentHash)},
+            FALSE
+          )
+        \`)
+
+        const reusedPrompt = await covidenceImportService.getOrCreateCovidencePrompt({
+          answerSet: 'yes|no|unsure',
+          exclusionCriteria: 'Case reports',
+          inclusionCriteria: 'Adults with confirmed disease',
+          mode: 'title_abstract',
+        })
+        const createdPrompt = await covidenceImportService.getOrCreateCovidencePrompt({
+          answerSet: 'yes|no',
+          exclusionCriteria: 'Case reports',
+          inclusionCriteria: 'Adults with confirmed disease',
+          mode: 'title_abstract',
+        })
+        const promptRows = await database.queryJson(\`
+          SELECT id, prompt_heading AS promptHeading, type, original_text AS originalText
+          FROM app.prompt
+          ORDER BY created_at ASC, id ASC
+        \`)
+
+        console.log(JSON.stringify({createdPrompt, promptRows, reusedPrompt}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39995',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39996',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to create or reuse Covidence prompt',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      createdPrompt: {created: boolean; id: string; type: string}
+      promptRows: Array<{id: string; originalText: string; promptHeading: string; type: string}>
+      reusedPrompt: {created: boolean; id: string; type: string}
+    }
+
+    expect(parsed.reusedPrompt).toMatchObject({
+      created: false,
+      id: 'prompt-existing',
+      promptHeading: 'Covidence title/abstract screening',
+      type: "'yes' | 'no' | 'unsure'",
+    })
+    expect(parsed.createdPrompt.created).toBe(true)
+    expect(parsed.createdPrompt.id).not.toBe('prompt-existing')
+    expect(parsed.createdPrompt.type).toBe("'yes' | 'no'")
+    expect(parsed.promptRows).toHaveLength(2)
+    expect(parsed.promptRows[0]?.id).toBe('prompt-existing')
+    expect(parsed.promptRows[1]?.promptHeading).toBe('Covidence title/abstract screening')
+  } finally {
+    ;[duckdbPath, `${duckdbPath}.wal`, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(
+      (filePath) => {
+        if (existsSync(filePath)) {
+          unlinkSync(filePath)
+        }
+
+        return filePath
+      },
+    )
+  }
 })
 
 test('importCovidencePackageFromConfig stores merged articles with raw metadata on the Covidence route', async () => {

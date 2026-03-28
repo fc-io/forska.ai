@@ -7,6 +7,7 @@ import {
   buildCovidencePackageConfig,
   deleteCovidencePackageFiles,
   getCovidencePackageCursor,
+  getOrCreateCovidencePrompt,
   importCovidencePackageFromConfig,
   storeCovidencePackageFiles,
 } from '../../services/covidenceImportService.ts'
@@ -14,11 +15,15 @@ import {getDataSourceQueryService} from '../../services/dataSourceQueryService.t
 
 type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
+type CovidencePromptAnswerSet = 'yes|no' | 'yes|no|unsure' | 'yes_no' | 'yes_no_unsure'
 type CovidencePackageUploadInput = Blob & {name?: string; type?: string}
 
 export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
   title: string
   description?: string
+  answerSet?: CovidencePromptAnswerSet
+  exclusionCriteria?: string
+  inclusionCriteria?: string
   mode: CovidenceImportMode
   files: Array<{file: CovidencePackageUploadInput; fileRole: CovidenceFileRole}>
 }) => {
@@ -33,8 +38,23 @@ export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
   const config = buildCovidencePackageConfig({files: storedFiles, mode: body.mode})
   const cursor = getCovidencePackageCursor(config)
   const importRoute = `covidence:${dataSourceId}`
+  const covidencePromptInput =
+    typeof body.answerSet === 'string'
+    && typeof body.inclusionCriteria === 'string'
+    && typeof body.exclusionCriteria === 'string'
+      ? {
+          answerSet: body.answerSet,
+          exclusionCriteria: body.exclusionCriteria,
+          inclusionCriteria: body.inclusionCriteria,
+          mode: body.mode,
+        }
+      : null
   const result = (await getAppDatabaseService()
     .transaction(async (tx) => {
+      const covidencePrompt = covidencePromptInput
+        ? await getOrCreateCovidencePrompt({...covidencePromptInput, tx})
+        : null
+
       await tx.run(`
         INSERT INTO app.data_source (id, title, description, import_route, cursor)
         VALUES (
@@ -65,7 +85,7 @@ export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
         WHERE id = '${escapeSqlString(dataSourceId)}'
       `)
 
-      return importResult
+      return {...importResult, covidencePrompt}
     })
     .catch(async (error) => {
       deleteCovidencePackageFiles(dataSourceId)
@@ -80,5 +100,13 @@ export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
     throw new Error('Data source not found after Covidence import create')
   }
 
-  return {success: true, data: {covidencePackageConfig: config, dataSource, stats: result.stats}}
+  return {
+    success: true,
+    data: {
+      covidencePackageConfig: config,
+      covidencePrompt: 'covidencePrompt' in result ? result.covidencePrompt : null,
+      dataSource,
+      stats: result.stats,
+    },
+  }
 }

@@ -3,6 +3,9 @@ import {mkdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 import path from 'node:path'
 
 import {normalizeDoi} from '../../utils/articleSourceMetadata.ts'
+import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
+import {getAppDatabaseService} from './appDatabaseService.ts'
+import {escapeSqlString, getSqlLiteral} from './appQueryHelpers.ts'
 import {
   type ArticleImportStoreRow,
   type ArticleImportStoreTx,
@@ -13,6 +16,8 @@ import {
 type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
 type CovidenceFileFormat = 'csv' | 'ris'
+type CovidencePromptAnswerSet = 'yes|no' | 'yes|no|unsure' | 'yes_no' | 'yes_no_unsure'
+type CovidencePromptTx = {queryJson: <TRow extends Record<string, unknown>>(statement: string) => Promise<TRow[]>}
 type CovidenceCsvParseErrorCode =
   | 'duplicate_header'
   | 'empty_file'
@@ -127,9 +132,23 @@ type CovidenceImportResult = {
   importRouteIds?: string[]
   stats: {importedCount: number; itemCount: number}
 }
+type CovidencePromptDefinition = {
+  originalText: string
+  promptHeading: string
+  type: "'yes' | 'no'" | "'yes' | 'no' | 'unsure'"
+}
+type CovidencePromptRecord = CovidencePromptDefinition & {created: boolean; id: string}
 
 const covidenceImportFolder = path.resolve(process.cwd(), 'assets/covidence_imports')
 const covidenceImportPathPrefix = 'assets/covidence_imports'
+const covidencePromptHeadingByMode = {
+  full_text: 'Covidence full-text screening',
+  title_abstract: 'Covidence title/abstract screening',
+} as const satisfies Record<CovidenceImportMode, string>
+const covidencePromptQuestionByMode = {
+  full_text: 'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
+  title_abstract: 'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
+} as const satisfies Record<CovidenceImportMode, string>
 const titleAbstractRoles: CovidenceFileRole[] = ['all', 'irrelevant', 'full_text']
 const fullTextRoles: CovidenceFileRole[] = ['all', 'irrelevant', 'full_text', 'excluded', 'included']
 const covidenceTagKeys = new Set(['tag', 'tags'])
@@ -203,6 +222,43 @@ const emptyCovidenceRoleCounts = {
   included: 0,
   irrelevant: 0,
 } as const satisfies Record<CovidenceFileRole, number>
+
+const getCovidencePromptAnswerValues = (answerSet: CovidencePromptAnswerSet) => {
+  return answerSet === 'yes|no|unsure' || answerSet === 'yes_no_unsure' ? ['yes', 'no', 'unsure'] : ['yes', 'no']
+}
+
+const getCovidencePromptCriteriaText = (criteria: string) => {
+  const trimmedCriteria = criteria.trim()
+
+  return trimmedCriteria === '' ? '(none provided)' : trimmedCriteria
+}
+
+const getCovidencePromptText = (params: {
+  answerSet: CovidencePromptAnswerSet
+  exclusionCriteria: string
+  inclusionCriteria: string
+  mode: CovidenceImportMode
+}) => {
+  const allowedAnswers = getCovidencePromptAnswerValues(params.answerSet).join(', ')
+
+  return [
+    covidencePromptQuestionByMode[params.mode],
+    '',
+    `Allowed answers: ${allowedAnswers}`,
+    '',
+    `Inclusion:\n${getCovidencePromptCriteriaText(params.inclusionCriteria)}`,
+    '',
+    `Exclusion:\n${getCovidencePromptCriteriaText(params.exclusionCriteria)}`,
+  ].join('\n')
+}
+
+const getCovidencePromptType = (answerSet: CovidencePromptAnswerSet): CovidencePromptDefinition['type'] => {
+  return answerSet === 'yes|no|unsure' || answerSet === 'yes_no_unsure' ? "'yes' | 'no' | 'unsure'" : "'yes' | 'no'"
+}
+
+const getCovidencePromptQueryRunner = (tx?: CovidencePromptTx) => {
+  return tx ?? getAppDatabaseService()
+}
 
 const getNormalizedCovidenceMatchValue = (value: string | null) => {
   return value ? value.trim().toLowerCase().replace(/\s+/g, ' ') : null
@@ -1073,6 +1129,67 @@ export const buildCovidencePackageConfig = (params: {
   files: CovidencePackageFile[]
 }): CovidencePackageConfig => {
   return {kind: 'covidence_import', version: 1, mode: params.mode, files: getValidatedCovidencePackageFiles(params)}
+}
+
+export const buildCovidencePromptDefinition = (params: {
+  answerSet: CovidencePromptAnswerSet
+  exclusionCriteria: string
+  inclusionCriteria: string
+  mode: CovidenceImportMode
+}): CovidencePromptDefinition => {
+  return {
+    originalText: getCovidencePromptText(params),
+    promptHeading: covidencePromptHeadingByMode[params.mode],
+    type: getCovidencePromptType(params.answerSet),
+  }
+}
+
+export const getOrCreateCovidencePrompt = async (params: {
+  answerSet: CovidencePromptAnswerSet
+  exclusionCriteria: string
+  inclusionCriteria: string
+  mode: CovidenceImportMode
+  tx?: CovidencePromptTx
+}): Promise<CovidencePromptRecord> => {
+  const promptDefinition = buildCovidencePromptDefinition(params)
+  const contentHash = computePromptContentHash(
+    promptDefinition.originalText,
+    null,
+    promptDefinition.promptHeading,
+    promptDefinition.type,
+  )
+  const queryRunner = getCovidencePromptQueryRunner(params.tx)
+  const [existingPrompt] = await queryRunner.queryJson<{id: string}>(`
+    SELECT id
+    FROM app.prompt
+    WHERE content_hash = ${getSqlLiteral(contentHash)}
+      AND archived = FALSE
+    LIMIT 1
+  `)
+
+  if (existingPrompt) {
+    return {...promptDefinition, created: false, id: existingPrompt.id}
+  }
+
+  const [insertedPrompt] = await queryRunner.queryJson<{id: string}>(`
+    INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived)
+    VALUES (
+      '${escapeSqlString(globalThis.crypto.randomUUID())}',
+      ${getSqlLiteral(promptDefinition.originalText)},
+      NULL,
+      ${getSqlLiteral(promptDefinition.promptHeading)},
+      ${getSqlLiteral(promptDefinition.type)},
+      ${getSqlLiteral(contentHash)},
+      FALSE
+    )
+    RETURNING id
+  `)
+
+  if (!insertedPrompt) {
+    throw new Error('Failed to create Covidence prompt')
+  }
+
+  return {...promptDefinition, created: true, id: insertedPrompt.id}
 }
 
 export const getCovidencePackageConfig = (cursor: string | null) => {
