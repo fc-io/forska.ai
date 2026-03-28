@@ -541,11 +541,11 @@ test('mart refresh purges archived projects in row batches', () => {
                     recordDeleteEvent('filter-member', statement)
                   }
 
-                  if (statement.includes('CREATE TABLE mart.review_article_serving_project_purge_rewrite AS')) {
+                  if (statement.includes('CREATE TABLE mart.review_article_serving_project_purge_rewrite')) {
                     events.push('serving:rewrite-created')
                   }
 
-                  if (statement.includes('ADD PRIMARY KEY(project_id, generation, article_id)')) {
+                  if (statement.includes('PRIMARY KEY(project_id, generation, article_id)')) {
                     events.push('serving:rewrite-primary-key')
                   }
 
@@ -553,8 +553,12 @@ test('mart refresh purges archived projects in row batches', () => {
                     events.push('serving:rewrite-drop-old')
                   }
 
-                  if (statement.includes('CREATE INDEX idx_mart_review_article_serving_order')) {
+                  if (statement.includes('CREATE INDEX IF NOT EXISTS idx_mart_review_article_serving_order')) {
                     events.push('serving:rewrite-index')
+                  }
+
+                  if (statement.includes('INSERT INTO mart.review_article_serving_project_purge_rewrite')) {
+                    events.push('serving:rewrite-batch')
                   }
 
                   if (statement.includes('RENAME TO review_article_serving')) {
@@ -613,6 +617,7 @@ test('mart refresh purges archived projects in row batches', () => {
   expect(result.events).toContain('serving-detail:batch-2')
   expect(result.events).toContain('serving:rewrite-created')
   expect(result.events).toContain('serving:rewrite-primary-key')
+  expect(result.events).toContain('serving:rewrite-batch')
   expect(result.events).toContain('serving:rewrite-drop-old')
   expect(result.events).toContain('serving:rewrite-index')
   expect(result.events).toContain('serving:rewrite-swap')
@@ -708,7 +713,7 @@ test('mart refresh splits non-serving archived purge batches after an index dele
                     }
                   }
 
-                  if (statement.includes('CREATE TABLE mart.review_article_serving_project_purge_rewrite AS')) {
+                  if (statement.includes('CREATE TABLE mart.review_article_serving_project_purge_rewrite')) {
                     events.push('serving:rewrite-created')
                   }
                 },
@@ -922,6 +927,7 @@ test('mart refresh completes archived purge without retrying the serving row del
         const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
         const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
         let queueActive = true
+        let servingRewriteBatchQueryCount = 0
         let servingDeleteAttempted = false
         const statements = []
 
@@ -951,6 +957,13 @@ test('mart refresh completes archived purge without retrying the serving row del
                 queryJsonBackground: async (statement) => {
                   return statement.includes('SELECT archived AS archived')
                     ? [{archived: true}]
+                    : statement.includes('FROM mart.review_article_serving')
+                      && !statement.includes('FROM mart.review_article_serving_detail')
+                      && statement.includes('rowid AS rowId')
+                      ? (() => {
+                          servingRewriteBatchQueryCount += 1
+                          return servingRewriteBatchQueryCount === 1 ? [{rowId: 1}] : []
+                        })()
                     : []
                 },
                 run: async (statement) => {
@@ -963,7 +976,11 @@ test('mart refresh completes archived purge without retrying the serving row del
                 },
                 maintenance: async () => {},
                 runBackground: async (statement) => {
-                  if (statement.includes('DELETE FROM mart.review_article_serving') && statement.includes('rowid IN')) {
+                  if (
+                    statement.includes('DELETE FROM mart.review_article_serving')
+                    && !statement.includes('DELETE FROM mart.review_article_serving_detail')
+                    && statement.includes('rowid IN')
+                  ) {
                     servingDeleteAttempted = true
                     throw new Error(
                       'FATAL Error: Failed: database has been invalidated because of a previous fatal error. The database must be restarted prior to being used again. Original error: "Invalid Input Error: Failed to delete all rows from index. Only deleted 4 out of 10 rows."',
@@ -1003,17 +1020,30 @@ test('mart refresh completes archived purge without retrying the serving row del
 
   expect(
     result.statements.some((statement) => {
-      return statement.includes('CREATE TABLE mart.review_article_serving_project_purge_rewrite AS')
+      return statement.includes('CREATE TABLE mart.review_article_serving_project_purge_rewrite')
     }),
   ).toBe(true)
   expect(
     result.statements.some((statement) => {
-      return statement.includes('ADD PRIMARY KEY(project_id, generation, article_id)')
+      return statement.includes('PRIMARY KEY(project_id, generation, article_id)')
     }),
   ).toBe(true)
   expect(
     result.statements.some((statement) => {
-      return statement.includes('CREATE INDEX idx_mart_review_article_serving_order')
+      return statement.includes('CREATE INDEX IF NOT EXISTS idx_mart_review_article_serving_order')
+    }),
+  ).toBe(true)
+  expect(
+    result.statements.some((statement) => {
+      return statement.includes('INSERT INTO mart.review_article_serving_project_purge_rewrite')
+    }),
+  ).toBe(true)
+  expect(
+    result.statements.some((statement) => {
+      return (
+        statement.includes('INSERT INTO mart.review_article_serving_project_purge_rewrite')
+        && statement.includes('SELECT\n      project_id')
+      )
     }),
   ).toBe(true)
   expect(
@@ -1024,6 +1054,113 @@ test('mart refresh completes archived purge without retrying the serving row del
   expect(result.servingDeleteAttempted).toBe(false)
   expect(result.result).toBe('ok')
   expect(result.queueActive).toBe(false)
+})
+
+test('mart refresh does not attempt rollback after archived serving rewrite commit failure', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        let queueActive = true
+        let rollbackCount = 0
+        let servingRewriteBatchQueryCount = 0
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                queryJson: async (statement) => {
+                  return statement.includes("column_name = 'refresh_generation'")
+                    ? [{count: 1}]
+                    : statement.includes("column_name = 'completed_at'")
+                      ? [{count: 1}]
+                      : statement.includes('SELECT COUNT(*) AS count')
+                        ? [{count: queueActive ? 1 : 0}]
+                        : statement.includes('FROM app.mart_refresh_queue')
+                          ? queueActive
+                            ? [{
+                                articleId: null,
+                                id: 'project-archive-commit-memory-task',
+                                projectId: 'project-archive-commit-memory-test',
+                                refreshGeneration: 0,
+                                refreshScope: 'project',
+                              }]
+                            : []
+                          : []
+                },
+                queryJsonBackground: async (statement) => {
+                  return statement.includes('SELECT archived AS archived')
+                    ? [{archived: true}]
+                    : statement.includes('FROM mart.review_article_serving')
+                      && !statement.includes('FROM mart.review_article_serving_detail')
+                      && statement.includes('rowid AS rowId')
+                      ? (() => {
+                          servingRewriteBatchQueryCount += 1
+                          return servingRewriteBatchQueryCount === 1 ? [{rowId: 1}] : []
+                        })()
+                      : []
+                },
+                run: async (statement) => {
+                  if (
+                    statement.includes('SET completed_at = NOW()')
+                    && !statement.includes("reason IN ('humanAssessmentRoutesPostInit')")
+                  ) {
+                    queueActive = false
+                  }
+                },
+                maintenance: async () => {},
+                runBackground: async (statement) => {
+                  if (statement === 'ROLLBACK') {
+                    rollbackCount += 1
+                    throw new Error('TransactionContext Error: cannot rollback - no transaction is active')
+                  }
+
+                  if (statement.includes('INSERT INTO mart.review_article_serving_project_purge_rewrite')) {
+                    throw new Error(
+                      'TransactionContext Error: Failed to commit: failed to pin block of size 256.0 KiB (3.7 GiB/3.7 GiB used)',
+                    )
+                  }
+                },
+              }
+            },
+          }
+        })
+
+        const martRefreshService = (await import(martRefreshServiceModulePath + '?rewrite-commit-failure=' + Date.now())).getDuckdbMartRefreshService()
+        const failureText = await martRefreshService.flush().then(
+          () => 'ok',
+          (error) => error instanceof Error ? error.message : String(error),
+        )
+        console.log(JSON.stringify({failureText, queueActive, rollbackCount}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Mart commit failure cleanup regression test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    failureText: string
+    queueActive: boolean
+    rollbackCount: number
+  }
+
+  expect(result.failureText).toContain('Failed to commit: failed to pin block')
+  expect(result.failureText).not.toContain('rollback failed')
+  expect(result.failureText).not.toContain('cannot rollback - no transaction is active')
+  expect(result.rollbackCount).toBe(0)
+  expect(result.queueActive).toBe(true)
 })
 
 test('mart refresh prunes known noop project rebuilds before draining', () => {

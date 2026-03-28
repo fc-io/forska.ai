@@ -21,6 +21,8 @@ type ProjectPurgeBatchRow = {rowId: bigint | number | string}
 
 type ArchivedProjectMartPurgeMode = 'delete_batches' | 'rewrite'
 
+type ReviewArticleServingRewriteBatchCursor = {rowId: bigint | number | string}
+
 type ProjectRefreshScopeBatchRow = ProjectRefreshBatchRow & {
   articleUpdatedAt: Date | string | null
   inCuratedScope: boolean
@@ -107,6 +109,7 @@ const martRefreshDrainBudgetMs = 100
 const martRefreshProjectBatchLimit = 1
 const martRefreshProjectPurgeRowBatchSize = 10
 const martRefreshProjectRebuildArticleBatchSize = 20_000
+const martReviewArticleServingRewriteBatchSize = 1_000
 const martRefreshRetryDelayMs = 5000
 const martRefreshScheduleDelayMs = 250
 const martRefreshThroughputWindowMs = 15_000
@@ -679,20 +682,145 @@ const getProjectTablePurgeDeleteSql = ({
   `
 }
 
-const getReviewArticleServingRewritePurgeSql = (projectId: string) => {
+const getReviewArticleServingRewritePurgeSetupSql = () => {
+  return `
+    BEGIN TRANSACTION;
+    DROP TABLE IF EXISTS ${martReviewArticleServingPurgeReplacementTableName};
+    CREATE TABLE ${martReviewArticleServingPurgeReplacementTableName} (
+      project_id VARCHAR NOT NULL,
+      generation BIGINT NOT NULL,
+      article_id VARCHAR NOT NULL,
+      article_created_at TIMESTAMPTZ,
+      article_updated_at TIMESTAMPTZ,
+      article_title VARCHAR NOT NULL,
+      article_external_id VARCHAR,
+      journal_title VARCHAR,
+      url VARCHAR,
+      full_text_pdf VARCHAR,
+      full_text_fetched_at TIMESTAMPTZ,
+      full_text_conversion_status VARCHAR,
+      source_metadata JSON,
+      has_all_llm_judgments BOOLEAN NOT NULL,
+      llm_judged_prompt_count INTEGER NOT NULL,
+      llm_judged_prompt_ids VARCHAR[],
+      enabled_prompt_count INTEGER NOT NULL,
+      human_answered_prompt_count INTEGER NOT NULL,
+      human_answered_prompt_ids VARCHAR[],
+      has_all_human_answers BOOLEAN NOT NULL,
+      review_opened BOOLEAN NOT NULL,
+      review_sections_completed INTEGER NOT NULL,
+      latest_llm_created_at TIMESTAMPTZ,
+      latest_human_updated_at TIMESTAMPTZ,
+      latest_review_updated_at TIMESTAMPTZ,
+      serving_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      PRIMARY KEY(project_id, generation, article_id)
+    );
+    COMMIT;
+  `
+}
+
+const getReviewArticleServingRewriteCopyBatchSql = ({
+  cursor,
+  projectId,
+}: {
+  cursor: ReviewArticleServingRewriteBatchCursor | null
+  projectId: string
+}) => {
   const projectLiteral = getSqlLiteral(projectId)
 
   return `
-    BEGIN TRANSACTION;
-    CREATE TABLE ${martReviewArticleServingPurgeReplacementTableName} AS
-    SELECT *
+    SELECT
+      rowid AS rowId
     FROM mart.review_article_serving
-    WHERE project_id != ${projectLiteral};
-    ALTER TABLE ${martReviewArticleServingPurgeReplacementTableName}
-    ADD PRIMARY KEY(project_id, generation, article_id);
+    WHERE project_id != ${projectLiteral}
+      ${cursor === null ? '' : `AND rowid > ${getSqlLiteral(cursor.rowId)}`}
+    ORDER BY rowid ASC
+    LIMIT ${martReviewArticleServingRewriteBatchSize}
+  `
+}
+
+const getReviewArticleServingRewriteBatchInsertSql = (rowIds: Array<bigint | number | string>) => {
+  return `
+    BEGIN TRANSACTION;
+    INSERT INTO ${martReviewArticleServingPurgeReplacementTableName}
+    (
+      project_id,
+      generation,
+      article_id,
+      article_created_at,
+      article_updated_at,
+      article_title,
+      article_external_id,
+      journal_title,
+      url,
+      full_text_pdf,
+      full_text_fetched_at,
+      full_text_conversion_status,
+      source_metadata,
+      has_all_llm_judgments,
+      llm_judged_prompt_count,
+      llm_judged_prompt_ids,
+      enabled_prompt_count,
+      human_answered_prompt_count,
+      human_answered_prompt_ids,
+      has_all_human_answers,
+      review_opened,
+      review_sections_completed,
+      latest_llm_created_at,
+      latest_human_updated_at,
+      latest_review_updated_at,
+      serving_updated_at
+    )
+    SELECT
+      project_id,
+      generation,
+      article_id,
+      article_created_at,
+      article_updated_at,
+      article_title,
+      article_external_id,
+      journal_title,
+      url,
+      full_text_pdf,
+      full_text_fetched_at,
+      full_text_conversion_status,
+      source_metadata,
+      has_all_llm_judgments,
+      llm_judged_prompt_count,
+      llm_judged_prompt_ids,
+      enabled_prompt_count,
+      human_answered_prompt_count,
+      human_answered_prompt_ids,
+      has_all_human_answers,
+      review_opened,
+      review_sections_completed,
+      latest_llm_created_at,
+      latest_human_updated_at,
+      latest_review_updated_at,
+      serving_updated_at
+    FROM mart.review_article_serving
+    WHERE rowid IN (${rowIds
+      .map((rowId) => {
+        return getSqlLiteral(rowId)
+      })
+      .join(', ')});
+    COMMIT;
+  `
+}
+
+const getReviewArticleServingRewritePurgeFinalizeSql = () => {
+  return `
+    BEGIN TRANSACTION;
     DROP TABLE mart.review_article_serving;
     ALTER TABLE ${martReviewArticleServingPurgeReplacementTableName} RENAME TO review_article_serving;
-    CREATE INDEX ${martReviewArticleServingOrderIndexName}
+    COMMIT;
+  `
+}
+
+const getReviewArticleServingRewritePurgeIndexSql = () => {
+  return `
+    BEGIN TRANSACTION;
+    CREATE INDEX IF NOT EXISTS ${martReviewArticleServingOrderIndexName}
     ON mart.review_article_serving(project_id, generation, has_all_llm_judgments, article_created_at, article_id);
     COMMIT;
   `
@@ -1413,6 +1541,10 @@ const isMartRefreshFatalInvalidationError = (error: unknown) => {
   })
 }
 
+const isMartRefreshCommitFailureError = (error: unknown) => {
+  return getNormalizedMartRefreshError(error).message.includes('Failed to commit:')
+}
+
 const getChainedMartRefreshError = (error: unknown, nextError: unknown, context: string): Error => {
   const normalizedError = getNormalizedMartRefreshError(error)
   const normalizedNextError = getNormalizedMartRefreshError(nextError)
@@ -1435,6 +1567,7 @@ const shouldAttemptMartRefreshBackgroundRollback = (statement: string, error: un
 
   return (
     !isMartRefreshFatalInvalidationError(normalizedError)
+    && !isMartRefreshCommitFailureError(normalizedError)
     && (hasMartRefreshExplicitTransaction(statement)
       || normalizedError.message.includes('Current transaction is aborted')
       || normalizedError.message.includes('please ROLLBACK'))
@@ -1548,6 +1681,18 @@ const getProjectTablePurgeBatchRows = async ({
   return queryMartRefreshBackgroundJson<ProjectPurgeBatchRow>(getProjectTablePurgeBatchSql({projectId, tableName}))
 }
 
+const getReviewArticleServingRewriteBatchRows = async ({
+  cursor,
+  projectId,
+}: {
+  cursor: ReviewArticleServingRewriteBatchCursor | null
+  projectId: string
+}): Promise<ProjectPurgeBatchRow[]> => {
+  return queryMartRefreshBackgroundJson<ProjectPurgeBatchRow>(
+    getReviewArticleServingRewriteCopyBatchSql({cursor, projectId}),
+  )
+}
+
 const refreshProjectScopeBatches = async (
   projectId: string,
   cursor: ProjectRefreshBatchCursor | null = null,
@@ -1638,6 +1783,37 @@ const rebuildProjectReviewServing = async (projectId: string): Promise<void> => 
   return runMartRefreshBackgroundStatement(getProjectReviewServingFinalizeSql(projectId))
 }
 
+const copyReviewArticleServingRewriteBatches = async ({
+  cursor = null,
+  projectId,
+}: {
+  cursor?: ReviewArticleServingRewriteBatchCursor | null
+  projectId: string
+}): Promise<void> => {
+  const batchRows = await getReviewArticleServingRewriteBatchRows({cursor, projectId})
+  const rowIds = batchRows.map((row) => {
+    return row.rowId
+  })
+  const [lastBatchRow] = batchRows.slice(-1)
+
+  return rowIds.length === 0
+    ? Promise.resolve()
+    : runMartRefreshBackgroundStatement(getReviewArticleServingRewriteBatchInsertSql(rowIds))
+        .then(() => {
+          return yieldToEventLoop()
+        })
+        .then(() => {
+          return copyReviewArticleServingRewriteBatches({cursor: lastBatchRow ?? null, projectId})
+        })
+}
+
+const rewriteReviewArticleServingForArchivedProject = async (projectId: string): Promise<void> => {
+  await runMartRefreshBackgroundStatement(getReviewArticleServingRewritePurgeSetupSql())
+  await copyReviewArticleServingRewriteBatches({projectId})
+  await runMartRefreshBackgroundStatement(getReviewArticleServingRewritePurgeFinalizeSql())
+  return runMartRefreshBackgroundStatement(getReviewArticleServingRewritePurgeIndexSql())
+}
+
 const deleteProjectTablePurgeRowIds = async ({
   rowIds,
   tableName,
@@ -1687,7 +1863,7 @@ const purgeArchivedProjectMartTable = async ({
   tableName: string
 }): Promise<void> => {
   return getArchivedProjectMartPurgeMode(tableName) === 'rewrite'
-    ? runMartRefreshBackgroundStatement(getReviewArticleServingRewritePurgeSql(projectId))
+    ? rewriteReviewArticleServingForArchivedProject(projectId)
     : deleteProjectTablePurgeBatches({projectId, tableName})
 }
 
