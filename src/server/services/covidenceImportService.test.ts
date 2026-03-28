@@ -10,6 +10,7 @@ import {
   getCovidencePackageCursor,
   getCovidencePackageFileContent,
   parseCovidenceCsvReferenceRows,
+  parseCovidenceReferenceRows,
   storeCovidencePackageFiles,
 } from './covidenceImportService.ts'
 
@@ -317,6 +318,200 @@ test('parseCovidenceCsvReferenceRows returns stable parse errors for malformed o
       message: 'Covidence CSV row 2 has 1 fields; expected 2',
       rowNumber: 2,
       sourceFileName: 'excluded.csv',
+    },
+    ok: false,
+  })
+})
+
+test('parseCovidenceReferenceRows parses Covidence RIS rows into the same downstream shape across file roles', () => {
+  const risContent = [
+    'TY  - JOUR',
+    'TI  - Study A',
+    'AB  - A summary',
+    'AU  - Doe, Jane',
+    'AU  - Roe, John',
+    'DO  - 10.1000/example',
+    'PMID  - 123456',
+    'UR  - https://example.com/study-a',
+    'KW  - tag one',
+    'KW  - tag two',
+    'N1  - Keep this',
+    'LB  - included_source',
+    'ID  - covidence-1',
+    'ER  - ',
+  ].join('\n')
+
+  const parsedRows = (['all', 'irrelevant', 'full_text', 'excluded', 'included'] as const).map((fileRole) => {
+    return parseCovidenceReferenceRows({
+      content: risContent,
+      fileRole,
+      format: 'ris',
+      sourceFileName: `${fileRole}.ris`,
+    })
+  })
+
+  expect(parsedRows).toEqual([
+    {
+      ok: true,
+      rows: [
+        {
+          citation: {
+            authors: 'Doe, Jane; Roe, John',
+            doi: '10.1000/example',
+            keywords: 'tag one; tag two',
+            pmid: '123456',
+            reference_id: 'covidence-1',
+            reference_type: 'JOUR',
+            source_role: 'included_source',
+            title: 'Study A',
+            abstract: 'A summary',
+            url: 'https://example.com/study-a',
+          },
+          exclusionReason: null,
+          fileRole: 'all',
+          notes: 'Keep this',
+          rowNumber: 1,
+          sourceFileName: 'all.ris',
+          tags: ['tag one', 'tag two'],
+        },
+      ],
+    },
+    {
+      ok: true,
+      rows: [
+        {
+          citation: {
+            authors: 'Doe, Jane; Roe, John',
+            doi: '10.1000/example',
+            keywords: 'tag one; tag two',
+            pmid: '123456',
+            reference_id: 'covidence-1',
+            reference_type: 'JOUR',
+            source_role: 'included_source',
+            title: 'Study A',
+            abstract: 'A summary',
+            url: 'https://example.com/study-a',
+          },
+          exclusionReason: null,
+          fileRole: 'irrelevant',
+          notes: 'Keep this',
+          rowNumber: 1,
+          sourceFileName: 'irrelevant.ris',
+          tags: ['tag one', 'tag two'],
+        },
+      ],
+    },
+    {
+      ok: true,
+      rows: [
+        {
+          citation: {
+            authors: 'Doe, Jane; Roe, John',
+            doi: '10.1000/example',
+            keywords: 'tag one; tag two',
+            pmid: '123456',
+            reference_id: 'covidence-1',
+            reference_type: 'JOUR',
+            source_role: 'included_source',
+            title: 'Study A',
+            abstract: 'A summary',
+            url: 'https://example.com/study-a',
+          },
+          exclusionReason: null,
+          fileRole: 'full_text',
+          notes: 'Keep this',
+          rowNumber: 1,
+          sourceFileName: 'full_text.ris',
+          tags: ['tag one', 'tag two'],
+        },
+      ],
+    },
+    {
+      ok: true,
+      rows: [
+        {
+          citation: {
+            authors: 'Doe, Jane; Roe, John',
+            doi: '10.1000/example',
+            keywords: 'tag one; tag two',
+            pmid: '123456',
+            reference_id: 'covidence-1',
+            reference_type: 'JOUR',
+            source_role: 'included_source',
+            title: 'Study A',
+            abstract: 'A summary',
+            url: 'https://example.com/study-a',
+          },
+          exclusionReason: null,
+          fileRole: 'excluded',
+          notes: 'Keep this',
+          rowNumber: 1,
+          sourceFileName: 'excluded.ris',
+          tags: ['tag one', 'tag two'],
+        },
+      ],
+    },
+    {
+      ok: true,
+      rows: [
+        {
+          citation: {
+            authors: 'Doe, Jane; Roe, John',
+            doi: '10.1000/example',
+            keywords: 'tag one; tag two',
+            pmid: '123456',
+            reference_id: 'covidence-1',
+            reference_type: 'JOUR',
+            source_role: 'included_source',
+            title: 'Study A',
+            abstract: 'A summary',
+            url: 'https://example.com/study-a',
+          },
+          exclusionReason: null,
+          fileRole: 'included',
+          notes: 'Keep this',
+          rowNumber: 1,
+          sourceFileName: 'included.ris',
+          tags: ['tag one', 'tag two'],
+        },
+      ],
+    },
+  ])
+})
+
+test('parseCovidenceReferenceRows returns stable RIS parse errors for malformed inputs', () => {
+  expect(
+    parseCovidenceReferenceRows({
+      content: 'TY  - JOUR\nTI  - Broken\n',
+      fileRole: 'full_text',
+      format: 'ris',
+      sourceFileName: 'full_text.ris',
+    }),
+  ).toEqual({
+    error: {
+      code: 'malformed_ris',
+      fileRole: 'full_text',
+      message: 'Covidence RIS is missing a terminating ER field',
+      rowNumber: null,
+      sourceFileName: 'full_text.ris',
+    },
+    ok: false,
+  })
+
+  expect(
+    parseCovidenceReferenceRows({
+      content: 'Not RIS\nER  - \n',
+      fileRole: 'all',
+      format: 'ris',
+      sourceFileName: 'all.ris',
+    }),
+  ).toEqual({
+    error: {
+      code: 'malformed_ris',
+      fileRole: 'all',
+      message: 'Covidence RIS line 1 is not a valid RIS field',
+      rowNumber: 1,
+      sourceFileName: 'all.ris',
     },
     ok: false,
   })

@@ -9,6 +9,7 @@ type CovidenceCsvParseErrorCode =
   | 'empty_file'
   | 'header_required'
   | 'malformed_csv'
+  | 'malformed_ris'
   | 'row_length_mismatch'
   | 'unsupported_format'
 type CovidencePackageFile = {
@@ -35,6 +36,9 @@ type CovidenceCsvParseError = {
 }
 type CovidenceCsvParseResult = {ok: true; rows: CovidenceReferenceRow[]} | {error: CovidenceCsvParseError; ok: false}
 type CovidenceCsvHeaderResult = {normalizedHeaders: string[]; ok: true} | {error: CovidenceCsvParseError; ok: false}
+type CovidenceRisRecordParseResult =
+  | {ok: true; records: Array<Record<string, string[]>>}
+  | {error: CovidenceCsvParseError; ok: false}
 type CovidencePackageConfig = {
   kind: 'covidence_import'
   version: 1
@@ -55,6 +59,48 @@ const covidenceExclusionReasonKeys = new Set([
   'reason_for_exclusion',
   'reason_for_exclusions',
 ])
+const covidenceRisTitleKeys = ['ti', 't1', 'ct']
+const covidenceRisAbstractKeys = ['ab', 'n2']
+const covidenceRisAuthorKeys = ['au', 'a1', 'a2', 'a3', 'a4']
+const covidenceRisDoiKeys = ['do']
+const covidenceRisPmidKeys = ['pmid', 'an']
+const covidenceRisUrlKeys = ['ur', 'l1', 'l2', 'l3', 'l4']
+const covidenceRisNoteKeys = ['n1']
+const covidenceRisTagKeys = ['kw']
+const covidenceRisFieldNames = {
+  a1: 'primary_author',
+  a2: 'secondary_author',
+  a3: 'tertiary_author',
+  a4: 'subsidiary_author',
+  ab: 'abstract',
+  an: 'pmid',
+  au: 'authors',
+  c7: 'article_number',
+  ct: 'title',
+  da: 'date',
+  do: 'doi',
+  id: 'reference_id',
+  ja: 'journal_abbreviation',
+  jf: 'journal',
+  jo: 'journal',
+  kw: 'keywords',
+  l1: 'url',
+  l2: 'url',
+  l3: 'url',
+  l4: 'url',
+  lb: 'source_role',
+  m3: 'source_role',
+  n1: 'notes',
+  n2: 'abstract',
+  pmid: 'pmid',
+  py: 'publication_year',
+  t1: 'title',
+  t2: 'secondary_title',
+  ti: 'title',
+  ty: 'reference_type',
+  ur: 'url',
+  y1: 'publication_date',
+} as const satisfies Record<string, string>
 
 const getCovidenceCsvParseError = (params: {
   code: CovidenceCsvParseErrorCode
@@ -93,6 +139,18 @@ const getCovidenceCsvHeaderError = (params: {
     : {normalizedHeaders: [], ok: true}
 }
 
+const getCovidenceRisParseError = (params: {
+  code: CovidenceCsvParseErrorCode
+  fileRole: CovidenceFileRole
+  message: string
+  rowNumber?: number | null
+  sourceFileName: string
+}): CovidenceRisRecordParseResult => {
+  const errorResult = getCovidenceCsvParseError(params)
+
+  return isCovidenceCsvParseFailure(errorResult) ? {error: errorResult.error, ok: false} : {ok: true, records: []}
+}
+
 const getSanitizedFileName = (fileName: string) => {
   return fileName.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'upload'
 }
@@ -120,6 +178,198 @@ const getCovidenceTags = (value: string | null) => {
     .filter((part, index, parts) => {
       return part !== '' && parts.indexOf(part) === index
     })
+}
+
+const getCovidenceCitationFieldsFromEntries = (entries: Array<[string, string | null]>) => {
+  return entries.reduce<Record<string, string | null>>((citation, [key, value]) => {
+    return covidenceTagKeys.has(key) || covidenceNoteKeys.has(key) || covidenceExclusionReasonKeys.has(key)
+      ? citation
+      : {...citation, [key]: value}
+  }, {})
+}
+
+const getNormalizedCovidenceRisTag = (tag: string) => {
+  return tag.trim().toLowerCase()
+}
+
+const getCovidenceRisFieldName = (tag: string) => {
+  return covidenceRisFieldNames[tag as keyof typeof covidenceRisFieldNames] ?? getNormalizedCovidenceHeader(tag)
+}
+
+const getCovidenceRisFieldValues = (fields: Record<string, string[]>, keys: string[]) => {
+  return keys.flatMap((key) => {
+    return fields[key] ?? []
+  })
+}
+
+const getCovidenceRisSingleValue = (fields: Record<string, string[]>, keys: string[]) => {
+  return (
+    getCovidenceRisFieldValues(fields, keys).find((value) => {
+      return value !== ''
+    }) ?? null
+  )
+}
+
+const getCovidenceRisJoinedValue = (fields: Record<string, string[]>, keys: string[]) => {
+  const values = getCovidenceRisFieldValues(fields, keys)
+
+  return values.length > 0 ? values.join('; ') : null
+}
+
+const getCovidenceRisEntries = (fields: Record<string, string[]>) => {
+  const normalizedEntries = Object.entries(fields).flatMap(([tag, values]) => {
+    const fieldName = getCovidenceRisFieldName(tag)
+    const normalizedValue = values.length > 0 ? values.join('; ') : null
+
+    return normalizedValue === null ? [] : ([[fieldName, normalizedValue]] as Array<[string, string | null]>)
+  })
+  const preferredEntries: Array<[string, string | null]> = [
+    ['title', getCovidenceRisSingleValue(fields, covidenceRisTitleKeys)],
+    ['abstract', getCovidenceRisSingleValue(fields, covidenceRisAbstractKeys)],
+    ['authors', getCovidenceRisJoinedValue(fields, covidenceRisAuthorKeys)],
+    ['doi', getCovidenceRisSingleValue(fields, covidenceRisDoiKeys)],
+    ['pmid', getCovidenceRisSingleValue(fields, covidenceRisPmidKeys)],
+    ['url', getCovidenceRisSingleValue(fields, covidenceRisUrlKeys)],
+  ]
+  const preferredKeys = new Set(
+    preferredEntries.flatMap(([key, value]) => {
+      return value === null ? [] : [key]
+    }),
+  )
+
+  return [
+    ...preferredEntries.filter(([, value]) => {
+      return value !== null
+    }),
+    ...normalizedEntries.filter(([key]) => {
+      return !preferredKeys.has(key)
+    }),
+  ]
+}
+
+const getParsedCovidenceRisRecords = (params: {
+  content: string
+  fileRole: CovidenceFileRole
+  sourceFileName: string
+}): CovidenceRisRecordParseResult => {
+  const normalizedContent = params.content.replace(/^\uFEFF/, '')
+  const trimmedContent = normalizedContent.trim()
+
+  if (trimmedContent === '') {
+    return getCovidenceRisParseError({
+      code: 'empty_file',
+      fileRole: params.fileRole,
+      message: 'Covidence RIS is empty',
+      sourceFileName: params.sourceFileName,
+    })
+  }
+
+  const lines = normalizedContent.split(/\r?\n/)
+  const state = lines.reduce(
+    (currentState, line, index) => {
+      const trimmedLine = line.trimEnd()
+      const match = trimmedLine.match(/^([A-Z0-9]{2,})\s*-\s?(.*)$/)
+
+      if (trimmedLine.trim() === '') {
+        return currentState
+      }
+
+      if (match) {
+        const normalizedTag = getNormalizedCovidenceRisTag(match[1] ?? '')
+        const value = getNormalizedCovidenceCellValue(match[2] ?? '') ?? ''
+        const updatedRecord =
+          normalizedTag === 'er'
+            ? currentState.currentRecord
+            : {
+                ...currentState.currentRecord,
+                [normalizedTag]: [...(currentState.currentRecord[normalizedTag] ?? []), value],
+              }
+
+        return normalizedTag === 'er'
+          ? {
+              currentRecord: {},
+              currentTag: null,
+              malformedLineIndex: currentState.malformedLineIndex,
+              records: [...currentState.records, updatedRecord],
+            }
+          : {
+              currentRecord: updatedRecord,
+              currentTag: normalizedTag,
+              malformedLineIndex: currentState.malformedLineIndex,
+              records: currentState.records,
+            }
+      }
+
+      return currentState.currentTag
+        ? {
+            currentRecord: {
+              ...currentState.currentRecord,
+              [currentState.currentTag]: [
+                ...(currentState.currentRecord[currentState.currentTag] ?? []).slice(0, -1),
+                `${(currentState.currentRecord[currentState.currentTag] ?? []).at(-1) ?? ''}\n${line.trim()}`.trim(),
+              ],
+            },
+            currentTag: currentState.currentTag,
+            malformedLineIndex: currentState.malformedLineIndex,
+            records: currentState.records,
+          }
+        : {...currentState, malformedLineIndex: currentState.malformedLineIndex ?? index}
+    },
+    {
+      currentRecord: {} as Record<string, string[]>,
+      currentTag: null as string | null,
+      malformedLineIndex: null as number | null,
+      records: [] as Array<Record<string, string[]>>,
+    },
+  )
+
+  if (state.malformedLineIndex !== null) {
+    return getCovidenceRisParseError({
+      code: 'malformed_ris',
+      fileRole: params.fileRole,
+      message: `Covidence RIS line ${state.malformedLineIndex + 1} is not a valid RIS field`,
+      rowNumber: state.malformedLineIndex + 1,
+      sourceFileName: params.sourceFileName,
+    })
+  }
+
+  if (Object.keys(state.currentRecord).length > 0) {
+    return getCovidenceRisParseError({
+      code: 'malformed_ris',
+      fileRole: params.fileRole,
+      message: 'Covidence RIS is missing a terminating ER field',
+      sourceFileName: params.sourceFileName,
+    })
+  }
+
+  return state.records.length === 0
+    ? getCovidenceRisParseError({
+        code: 'empty_file',
+        fileRole: params.fileRole,
+        message: 'Covidence RIS is empty',
+        sourceFileName: params.sourceFileName,
+      })
+    : {ok: true, records: state.records}
+}
+
+const getCovidenceReferenceRowFromEntries = (params: {
+  citationEntries: Array<[string, string | null]>
+  exclusionReason: string | null
+  fileRole: CovidenceFileRole
+  notes: string | null
+  rowNumber: number
+  sourceFileName: string
+  tags: string[]
+}): CovidenceReferenceRow => {
+  return {
+    citation: getCovidenceCitationFieldsFromEntries(params.citationEntries),
+    exclusionReason: params.exclusionReason,
+    fileRole: params.fileRole,
+    notes: params.notes,
+    rowNumber: params.rowNumber,
+    sourceFileName: params.sourceFileName,
+    tags: params.tags,
+  }
 }
 
 const getParsedCovidenceCsvRows = (content: string) => {
@@ -201,13 +451,11 @@ const getCovidenceCsvHeaders = (params: {
 }
 
 const getCovidenceCitationFields = (headers: string[], values: string[]) => {
-  return headers.reduce<Record<string, string | null>>((citation, header, index) => {
-    const value = getNormalizedCovidenceCellValue(values[index] ?? '')
-
-    return covidenceTagKeys.has(header) || covidenceNoteKeys.has(header) || covidenceExclusionReasonKeys.has(header)
-      ? citation
-      : {...citation, [header]: value}
-  }, {})
+  return getCovidenceCitationFieldsFromEntries(
+    headers.map((header, index) => {
+      return [header, getNormalizedCovidenceCellValue(values[index] ?? '')] as [string, string | null]
+    }),
+  )
 }
 
 const getCovidenceReferenceRow = (params: {
@@ -224,8 +472,8 @@ const getCovidenceReferenceRow = (params: {
     return {...row, [header]: normalizedValues[index] ?? null}
   }, {})
 
-  return {
-    citation: getCovidenceCitationFields(params.normalizedHeaders, params.values),
+  return getCovidenceReferenceRowFromEntries({
+    citationEntries: Object.entries(getCovidenceCitationFields(params.normalizedHeaders, params.values)),
     exclusionReason:
       params.normalizedHeaders
         .map((header) => {
@@ -248,7 +496,7 @@ const getCovidenceReferenceRow = (params: {
     tags: params.normalizedHeaders.flatMap((header) => {
       return covidenceTagKeys.has(header) ? getCovidenceTags(rowEntries[header] ?? null) : []
     }),
-  }
+  })
 }
 
 const getCovidenceFileFormatFromName = (fileName: string) => {
@@ -418,7 +666,7 @@ export const getCovidencePackageFileContent = (assetPath: string) => {
   return readFileSync(absolutePath, 'utf8')
 }
 
-export const parseCovidenceCsvReferenceRows = (params: {
+const parseCovidenceCsvReferenceRowsInternal = (params: {
   content: string
   fileRole: CovidenceFileRole
   format: CovidenceFileFormat
@@ -514,6 +762,63 @@ export const parseCovidenceCsvReferenceRows = (params: {
       })
     }),
   }
+}
+
+const parseCovidenceRisReferenceRows = (params: {
+  content: string
+  fileRole: CovidenceFileRole
+  format: CovidenceFileFormat
+  sourceFileName: string
+}): CovidenceCsvParseResult => {
+  if (params.format !== 'ris') {
+    return getCovidenceCsvParseError({
+      code: 'unsupported_format',
+      fileRole: params.fileRole,
+      message: `Covidence reference parsing only supports RIS inputs, got '${params.format}'`,
+      sourceFileName: params.sourceFileName,
+    })
+  }
+
+  const parsedRecords = getParsedCovidenceRisRecords(params)
+
+  if (parsedRecords.ok === false) {
+    return parsedRecords
+  }
+
+  return {
+    ok: true,
+    rows: parsedRecords.records.map((fields, index) => {
+      return getCovidenceReferenceRowFromEntries({
+        citationEntries: getCovidenceRisEntries(fields),
+        exclusionReason: null,
+        fileRole: params.fileRole,
+        notes: getCovidenceRisSingleValue(fields, covidenceRisNoteKeys),
+        rowNumber: index + 1,
+        sourceFileName: params.sourceFileName,
+        tags: getCovidenceRisFieldValues(fields, covidenceRisTagKeys),
+      })
+    }),
+  }
+}
+
+export const parseCovidenceReferenceRows = (params: {
+  content: string
+  fileRole: CovidenceFileRole
+  format: CovidenceFileFormat
+  sourceFileName: string
+}): CovidenceCsvParseResult => {
+  return params.format === 'csv'
+    ? parseCovidenceCsvReferenceRowsInternal(params)
+    : parseCovidenceRisReferenceRows(params)
+}
+
+export const parseCovidenceCsvReferenceRows = (params: {
+  content: string
+  fileRole: CovidenceFileRole
+  format: CovidenceFileFormat
+  sourceFileName: string
+}) => {
+  return parseCovidenceCsvReferenceRowsInternal(params)
 }
 
 export const deleteCovidencePackageFiles = (datasourceId: string) => {
