@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
-import {createEffect, createSignal, Show} from 'solid-js'
+import {createEffect, createSignal, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../../../services/apiClient.ts'
 
@@ -12,8 +12,24 @@ type StructuredFileConfig = {
   sourceFileName: string
 }
 
+type CovidenceFileConfig = {
+  assetPath: string
+  fileRole: 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
+  format: 'csv' | 'ris'
+  sourceFileName: string
+}
+
+type CovidencePackageConfig = {
+  files: CovidenceFileConfig[]
+  kind: 'covidence_import'
+  mode: 'full_text' | 'title_abstract'
+  version: 1
+}
+
 type AdminDataSourceDetail = {
+  covidencePackageConfig: CovidencePackageConfig | null
   id: string
+  immutable: boolean
   title: string
   description: string | null
   importRoute: string | null
@@ -23,7 +39,28 @@ type AdminDataSourceDetail = {
   updatedAt: string
   dateFrom: string | null
   dateTo: string | null
+  linkedProjectId: string | null
+  linkedPromptIds: string[]
+  reimportable: boolean
   structuredFileConfig: StructuredFileConfig | null
+}
+
+const covidenceModeLabels = {full_text: 'Full-text screening', title_abstract: 'Title / abstract screening'} as const
+
+const covidenceFileRoleLabels = {
+  all: 'All references',
+  excluded: 'Excluded',
+  full_text: 'Full text',
+  included: 'Included',
+  irrelevant: 'Irrelevant',
+} as const
+
+const isCovidenceDataSource = (dataSource: AdminDataSourceDetail | null | undefined) => {
+  return Boolean(dataSource?.covidencePackageConfig)
+}
+
+const isImmutableDataSource = (dataSource: AdminDataSourceDetail | null | undefined) => {
+  return Boolean(dataSource?.immutable)
 }
 
 const fetchDataSourceById = async (id: string): Promise<AdminDataSourceDetail> => {
@@ -41,7 +78,9 @@ const fetchDataSourceById = async (id: string): Promise<AdminDataSourceDetail> =
   const entry = response.data.data
 
   return {
+    covidencePackageConfig: entry.covidencePackageConfig ?? null,
     id: entry.id,
+    immutable: entry.immutable ?? false,
     title: entry.title,
     description: entry.description ?? null,
     importRoute: entry.importRoute ?? null,
@@ -51,6 +90,9 @@ const fetchDataSourceById = async (id: string): Promise<AdminDataSourceDetail> =
     updatedAt: String(entry.updatedAt),
     dateFrom: entry.dateFrom ? String(entry.dateFrom) : null,
     dateTo: entry.dateTo ? String(entry.dateTo) : null,
+    linkedProjectId: entry.linkedProjectId ?? null,
+    linkedPromptIds: entry.linkedPromptIds ?? [],
+    reimportable: entry.reimportable ?? false,
     structuredFileConfig: entry.structuredFileConfig ?? null,
   }
 }
@@ -79,7 +121,9 @@ const updateDataSource = async (
   const entry = response.data.data
 
   return {
+    covidencePackageConfig: entry.covidencePackageConfig ?? null,
     id: entry.id,
+    immutable: entry.immutable ?? false,
     title: entry.title,
     description: entry.description ?? null,
     importRoute: entry.importRoute ?? null,
@@ -89,7 +133,19 @@ const updateDataSource = async (
     updatedAt: String(entry.updatedAt),
     dateFrom: entry.dateFrom ? String(entry.dateFrom) : null,
     dateTo: entry.dateTo ? String(entry.dateTo) : null,
+    linkedProjectId: entry.linkedProjectId ?? null,
+    linkedPromptIds: entry.linkedPromptIds ?? [],
+    reimportable: entry.reimportable ?? false,
     structuredFileConfig: entry.structuredFileConfig ?? null,
+  }
+}
+
+const reimportCovidenceDataSource = async (id: string): Promise<void> => {
+  const response = await apiClient.api.datasources.import.covidence.post({id})
+
+  if (response.error || !response.data?.success) {
+    console.error('Error reimporting Covidence data source:', response.error)
+    throw new Error('Failed to reimport Covidence data source')
   }
 }
 
@@ -129,11 +185,15 @@ const AdminEditDataSource = () => {
   const [dateTo, setDateTo] = createSignal('')
   const [isSaving, setIsSaving] = createSignal(false)
   const [isArchiving, setIsArchiving] = createSignal(false)
+  const [isReimporting, setIsReimporting] = createSignal(false)
   const [showArchiveConfirm, setShowArchiveConfirm] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
   const [successMessage, setSuccessMessage] = createSignal<string | null>(null)
   const isStructuredFileDataSource = () => {
     return Boolean(dataSourceQuery.data?.structuredFileConfig)
+  }
+  const isCovidenceImportDataSource = () => {
+    return isCovidenceDataSource(dataSourceQuery.data)
   }
 
   const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
@@ -236,12 +296,35 @@ const AdminEditDataSource = () => {
       })
   }
 
+  const handleCovidenceReimport = () => {
+    setError(null)
+    setSuccessMessage(null)
+    setIsReimporting(true)
+
+    void reimportCovidenceDataSource(dataSourceId())
+      .then(() => {
+        setIsReimporting(false)
+        setSuccessMessage('Covidence package reimported successfully.')
+        return dataSourceQuery.refetch()
+      })
+      .catch((reimportError) => {
+        const message =
+          reimportError instanceof Error ? reimportError.message : 'Failed to reimport Covidence data source'
+        setError(message)
+        setIsReimporting(false)
+      })
+  }
+
   return (
     <div class="min-h-screen bg-gray-50 p-6">
       <div class="max-w-3xl mx-auto bg-white border border-gray-200 rounded-lg shadow-sm p-6">
         <div class="mb-4 flex items-center justify-between">
           <h1 class="text-2xl font-bold text-gray-900">
-            {isStructuredFileDataSource() ? 'Imported XML / JSON Source' : 'Edit Data Source'}
+            {isCovidenceImportDataSource()
+              ? 'Imported Covidence Source'
+              : isStructuredFileDataSource()
+                ? 'Imported XML / JSON Source'
+                : 'Edit Data Source'}
           </h1>
           <Link to="/admin/datasources" class="text-sm text-blue-600 hover:text-blue-800">
             Back to Data Sources
@@ -259,12 +342,22 @@ const AdminEditDataSource = () => {
         <Show when={dataSourceQuery.data}>
           <form class="space-y-6" onSubmit={handleSubmit}>
             <Show
-              when={!isStructuredFileDataSource()}
+              when={!isImmutableDataSource(dataSourceQuery.data)}
               fallback={
                 <div class="space-y-4">
-                  <div class="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-                    Imported XML/JSON data sources are frozen after creation and can only be archived.
-                  </div>
+                  <Show
+                    when={isCovidenceImportDataSource()}
+                    fallback={
+                      <div class="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                        Imported XML/JSON data sources are frozen after creation and can only be archived.
+                      </div>
+                    }
+                  >
+                    <div class="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                      Imported Covidence data sources are managed by package metadata. Reimport to refresh articles,
+                      linked project scope, and seeded human judgments.
+                    </div>
+                  </Show>
                   <div>
                     <label class="block text-sm font-medium text-gray-700 mb-2">Title</label>
                     <div class="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-900">
@@ -319,6 +412,71 @@ const AdminEditDataSource = () => {
               </div>
             </Show>
 
+            <Show when={dataSourceQuery.data?.covidencePackageConfig}>
+              <div class="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950 space-y-3">
+                <div>
+                  <span class="font-medium">Package mode:</span>{' '}
+                  {covidenceModeLabels[dataSourceQuery.data?.covidencePackageConfig?.mode ?? 'title_abstract']}
+                </div>
+                <div>
+                  <span class="font-medium">Linked project:</span>{' '}
+                  <Show
+                    when={dataSourceQuery.data?.linkedProjectId}
+                    fallback={<span class="text-amber-900">No linked project</span>}
+                  >
+                    <Link
+                      to="/projects/$id/edit"
+                      params={{id: dataSourceQuery.data?.linkedProjectId ?? ''}}
+                      class="text-blue-700 hover:text-blue-900"
+                    >
+                      {dataSourceQuery.data?.linkedProjectId}
+                    </Link>
+                  </Show>
+                </div>
+                <div class="space-y-2">
+                  <div>
+                    <span class="font-medium">Linked prompt:</span>{' '}
+                    {dataSourceQuery.data?.linkedPromptIds.length ? null : (
+                      <span class="text-amber-900">No linked prompt</span>
+                    )}
+                  </div>
+                  <Show when={(dataSourceQuery.data?.linkedPromptIds.length ?? 0) > 0}>
+                    <div class="flex flex-wrap gap-2">
+                      <For each={dataSourceQuery.data?.linkedPromptIds ?? []}>
+                        {(promptId) => {
+                          return (
+                            <span class="rounded-full border border-amber-300 bg-white px-3 py-1 text-xs font-medium text-amber-900">
+                              {promptId}
+                            </span>
+                          )
+                        }}
+                      </For>
+                    </div>
+                  </Show>
+                </div>
+                <div class="space-y-2">
+                  <div>
+                    <span class="font-medium">Imported source files:</span>
+                  </div>
+                  <div class="space-y-2">
+                    <For each={dataSourceQuery.data?.covidencePackageConfig?.files ?? []}>
+                      {(file) => {
+                        return (
+                          <div class="rounded-md border border-amber-100 bg-white px-3 py-2 text-sm text-amber-950">
+                            <span class="font-medium">{covidenceFileRoleLabels[file.fileRole]}</span>
+                            {' · '}
+                            {file.sourceFileName}
+                            {' · '}
+                            {file.format.toUpperCase()}
+                          </div>
+                        )
+                      }}
+                    </For>
+                  </div>
+                </div>
+              </div>
+            </Show>
+
             <Show when={dataSourceQuery.data?.structuredFileConfig}>
               <div class="rounded-md border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900 space-y-1">
                 <div>
@@ -337,7 +495,7 @@ const AdminEditDataSource = () => {
             </Show>
 
             <Show
-              when={!isStructuredFileDataSource()}
+              when={!isImmutableDataSource(dataSourceQuery.data)}
               fallback={
                 <div>
                   <p class="block text-sm font-medium mb-2">Date Range</p>
@@ -394,13 +552,23 @@ const AdminEditDataSource = () => {
             </Show>
 
             <div class="flex items-center gap-3">
-              <Show when={!isStructuredFileDataSource()}>
+              <Show when={!isImmutableDataSource(dataSourceQuery.data)}>
                 <button
                   type="submit"
                   class="px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   disabled={isSaving()}
                 >
                   {isSaving() ? 'Saving...' : 'Save Changes'}
+                </button>
+              </Show>
+              <Show when={dataSourceQuery.data?.reimportable}>
+                <button
+                  type="button"
+                  onClick={handleCovidenceReimport}
+                  class="px-4 py-2 rounded-md bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                  disabled={isReimporting()}
+                >
+                  {isReimporting() ? 'Reimporting...' : 'Reimport Covidence Package'}
                 </button>
               </Show>
               <Link

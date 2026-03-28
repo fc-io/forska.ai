@@ -5,7 +5,6 @@ import {createSignal, For, Show} from 'solid-js'
 
 import {Button} from '../../../../components/ui/button'
 import {apiClient} from '../../../../services/apiClient.ts'
-import {isImportedFileRoute} from '../../../../utils/importRouteUtils.ts'
 
 type StructuredFileConfig = {
   assetPath: string
@@ -15,8 +14,24 @@ type StructuredFileConfig = {
   sourceFileName: string
 }
 
+type CovidenceFileConfig = {
+  assetPath: string
+  fileRole: 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
+  format: 'csv' | 'ris'
+  sourceFileName: string
+}
+
+type CovidencePackageConfig = {
+  files: CovidenceFileConfig[]
+  kind: 'covidence_import'
+  mode: 'full_text' | 'title_abstract'
+  version: 1
+}
+
 type DataSourceListItem = {
+  covidencePackageConfig: CovidencePackageConfig | null
   id: string
+  immutable: boolean
   title: string
   description: string | null
   createdAt: string
@@ -26,7 +41,16 @@ type DataSourceListItem = {
   lastImportAt: string | null
   itemsAfterLastImport: number
   importRoute: string | null
+  linkedProjectId: string | null
+  linkedPromptIds: string[]
+  reimportable: boolean
   structuredFileConfig: StructuredFileConfig | null
+}
+
+const covidenceModeLabels = {full_text: 'Full-text screening', title_abstract: 'Title / abstract screening'} as const
+
+const isImmutableDataSource = (entry: DataSourceListItem) => {
+  return entry.immutable
 }
 
 const fetchDataSources = async (): Promise<DataSourceListItem[]> => {
@@ -41,7 +65,9 @@ const fetchDataSources = async (): Promise<DataSourceListItem[]> => {
 
   return entries.map((entry) => {
     return {
+      covidencePackageConfig: entry.covidencePackageConfig ?? null,
       id: entry.id,
+      immutable: entry.immutable ?? false,
       title: entry.title,
       description: entry.description ?? null,
       createdAt: String(entry.createdAt),
@@ -51,6 +77,9 @@ const fetchDataSources = async (): Promise<DataSourceListItem[]> => {
       lastImportAt: entry.lastImportAt ? String(entry.lastImportAt) : null,
       itemsAfterLastImport: entry.itemsAfterLastImport ?? 0,
       importRoute: entry.importRoute ?? null,
+      linkedProjectId: entry.linkedProjectId ?? null,
+      linkedPromptIds: entry.linkedPromptIds ?? [],
+      reimportable: entry.reimportable ?? false,
       structuredFileConfig: entry.structuredFileConfig ?? null,
     }
   })
@@ -87,8 +116,14 @@ const getImportRequest = (request: Promise<unknown>) => {
 }
 
 const startDataSourceImport = async (entry: DataSourceListItem, refetch: () => Promise<unknown>) => {
-  if (entry.structuredFileConfig) {
-    throw new Error('Imported XML/JSON data sources are immutable and can only be archived')
+  if (entry.reimportable) {
+    return await postImportAndRefetch(
+      getImportRequest(apiClient.api.datasources.import.covidence.post({id: entry.id})),
+      refetch,
+    )
+  }
+  if (isImmutableDataSource(entry)) {
+    throw new Error('Imported datasources are immutable and can only be reimported or archived')
   }
   if (entry.importRoute?.startsWith('fhir:')) {
     return await postImportAndRefetch(
@@ -304,6 +339,22 @@ const AdminDataSources = () => {
                               <span class="font-medium text-gray-700">Items After Import:</span>{' '}
                               {entry.itemsAfterLastImport.toLocaleString()}
                             </div>
+                            <Show when={entry.covidencePackageConfig}>
+                              <div class="pt-2 space-y-1 text-sm text-gray-500">
+                                <div>
+                                  <span class="font-medium text-gray-700">Package:</span>{' '}
+                                  {covidenceModeLabels[entry.covidencePackageConfig?.mode ?? 'title_abstract']}
+                                </div>
+                                <div>
+                                  <span class="font-medium text-gray-700">Linked Project:</span>{' '}
+                                  {entry.linkedProjectId ?? 'Not linked'}
+                                </div>
+                                <div>
+                                  <span class="font-medium text-gray-700">Linked Prompts:</span>{' '}
+                                  {entry.linkedPromptIds.length > 0 ? entry.linkedPromptIds.length : 'None'}
+                                </div>
+                              </div>
+                            </Show>
                             <Show when={!entry.structuredFileConfig}>
                               <div class="text-sm text-gray-500">
                                 <span class="font-medium text-gray-700">Route:</span>{' '}
@@ -335,9 +386,9 @@ const AdminDataSources = () => {
                               params={{id: entry.id}}
                               class="px-3 py-1.5 rounded-md border border-gray-200 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
                             >
-                              {entry.structuredFileConfig || isImportedFileRoute(entry.importRoute) ? 'View' : 'Edit'}
+                              {isImmutableDataSource(entry) ? 'View' : 'Edit'}
                             </Link>
-                            <Show when={entry.importRoute && !entry.structuredFileConfig}>
+                            <Show when={entry.importRoute && !entry.reimportable && !isImmutableDataSource(entry)}>
                               <button
                                 type="button"
                                 onClick={() => {
@@ -351,6 +402,26 @@ const AdminDataSources = () => {
                                 class="px-3 py-1.5 rounded-md bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
                               >
                                 New Import
+                              </button>
+                            </Show>
+                            <Show when={entry.reimportable}>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void startDataSourceImport(entry, () => {
+                                    return dataSourcesQuery.refetch()
+                                  }).catch((error) => {
+                                    console.error('Failed to reimport Covidence datasource', error)
+                                    alert(
+                                      error instanceof Error
+                                        ? error.message
+                                        : 'Failed to reimport Covidence datasource',
+                                    )
+                                  })
+                                }}
+                                class="px-3 py-1.5 rounded-md bg-amber-600 text-white text-sm font-medium hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-1"
+                              >
+                                Reimport
                               </button>
                             </Show>
                             <button
