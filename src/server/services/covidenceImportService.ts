@@ -6,7 +6,7 @@ import {normalizeDoi} from '../../utils/articleSourceMetadata.ts'
 import {listSelectableProviderModels} from '../providers/providerModelRepository.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
-import {escapeSqlString, getSqlLiteral} from './appQueryHelpers.ts'
+import {escapeSqlString, getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
 import {
   type ArticleImportStoreRow,
   type ArticleImportStoreTx,
@@ -150,6 +150,7 @@ type CovidenceProjectRecord = {
   useFulltextNoImages: boolean
   useTitle: boolean
 }
+type CovidenceHumanJudgmentSeed = {answer: 'no' | 'yes' | null; articleExternalId: string; isAnswered: boolean}
 
 const covidenceImportFolder = path.resolve(process.cwd(), 'assets/covidence_imports')
 const covidenceImportPathPrefix = 'assets/covidence_imports'
@@ -1189,6 +1190,72 @@ const getCovidenceImportResultFromConfig = async (params: {
   return {config: params.config, stats: {importedCount: rows.length, itemCount: rows.length}}
 }
 
+const getCovidenceHumanJudgmentAnswer = (stageMembership: Record<CovidenceFileRole, boolean>) => {
+  return stageMembership.irrelevant ? 'no' : stageMembership.full_text ? 'yes' : null
+}
+
+const getCovidenceHumanJudgmentSeeds = (params: {config: CovidencePackageConfig; importRoute: string}) => {
+  return getCovidencePackageRowsFromConfig(params.config).candidates.map<CovidenceHumanJudgmentSeed>((candidate) => {
+    const answer = getCovidenceHumanJudgmentAnswer(candidate.stageMembership)
+
+    return {
+      answer,
+      articleExternalId: `${params.importRoute}:${getSafeIdentityPart(candidate.articleKey)}`,
+      isAnswered: answer !== null,
+    }
+  })
+}
+
+const getCovidenceEnabledProjectPromptIds = async (params: {projectId: string; tx?: CovidenceProjectTx}) => {
+  return await getCovidenceProjectQueryRunner(params.tx).queryJson<{promptId: string}>(`
+    SELECT prompt_id AS promptId
+    FROM app.project_prompt
+    WHERE project_id = ${getSqlLiteral(params.projectId)}
+      AND archived = FALSE
+      AND enabled = TRUE
+  `)
+}
+
+const getChunkedCovidenceHumanJudgmentSeeds = (
+  seeds: CovidenceHumanJudgmentSeed[],
+  chunkSize: number,
+): CovidenceHumanJudgmentSeed[][] => {
+  return seeds.length <= chunkSize
+    ? [seeds]
+    : [seeds.slice(0, chunkSize), ...getChunkedCovidenceHumanJudgmentSeeds(seeds.slice(chunkSize), chunkSize)]
+}
+
+const syncCovidenceSeededProjectArticles = async (params: {
+  articleIds: string[]
+  projectId: string
+  tx?: CovidenceProjectTx
+}) => {
+  const queryRunner = getCovidenceProjectQueryRunner(params.tx)
+
+  await queryRunner.run(`
+    DELETE FROM app.project_article
+    WHERE project_id = ${getSqlLiteral(params.projectId)}
+      AND imported_from_project_id = ${getSqlLiteral(params.projectId)}
+      ${
+        params.articleIds.length > 0
+          ? `AND article_id NOT IN (${getQuotedStringList(params.articleIds).join(', ')})`
+          : ''
+      }
+  `)
+
+  return params.articleIds.length === 0
+    ? undefined
+    : await queryRunner.run(`
+        INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
+        VALUES ${params.articleIds
+          .map((articleId) => {
+            return `(${getQuotedStringList([globalThis.crypto.randomUUID(), params.projectId, articleId, params.projectId]).join(', ')})`
+          })
+          .join(', ')}
+        ON CONFLICT(project_id, article_id) DO NOTHING
+      `)
+}
+
 export const buildCovidencePackageConfig = (params: {
   mode: CovidenceImportMode
   files: CovidencePackageFile[]
@@ -1354,6 +1421,119 @@ export const getOrCreateCovidenceProject = async (params: {
   }
 
   return {created: true, id: projectId, modelId, name: params.title, ...settings}
+}
+
+export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
+  config: CovidencePackageConfig
+  importRoute: string
+  projectId?: string | null
+  tx?: CovidenceProjectTx
+}) => {
+  if (params.config.mode !== 'title_abstract') {
+    return
+  }
+
+  const project = params.projectId
+    ? ({id: params.projectId} as Pick<CovidenceProjectRecord, 'id'>)
+    : await getCovidenceProjectByImportRoute({importRoute: params.importRoute, tx: params.tx})
+
+  if (!project) {
+    return
+  }
+
+  const promptRows = await getCovidenceEnabledProjectPromptIds({projectId: project.id, tx: params.tx})
+  const promptIds = promptRows.map((promptRow) => {
+    return promptRow.promptId
+  })
+  const judgmentSeeds = getCovidenceHumanJudgmentSeeds({config: params.config, importRoute: params.importRoute})
+
+  if (promptIds.length === 0 || judgmentSeeds.length === 0) {
+    return
+  }
+
+  const articleRows = await getCovidenceProjectQueryRunner(params.tx).queryJson<{
+    articleExternalId: string
+    articleId: string
+  }>(`
+    SELECT article_id AS articleExternalId, id AS articleId
+    FROM app.article
+    WHERE article_id IN (${getQuotedStringList(
+      judgmentSeeds.map((judgmentSeed) => {
+        return judgmentSeed.articleExternalId
+      }),
+    ).join(', ')})
+  `)
+  const articleIdByExternalId = new Map(
+    articleRows.map((articleRow) => {
+      return [articleRow.articleExternalId, articleRow.articleId]
+    }),
+  )
+  const articleIds = judgmentSeeds.flatMap((judgmentSeed) => {
+    const articleId = articleIdByExternalId.get(judgmentSeed.articleExternalId)
+
+    return articleId ? [articleId] : []
+  })
+
+  if (articleRows.length === 0) {
+    return
+  }
+
+  const queryRunner = getCovidenceProjectQueryRunner(params.tx)
+  await syncCovidenceSeededProjectArticles({articleIds, projectId: project.id, tx: params.tx})
+  await getChunkedCovidenceHumanJudgmentSeeds(judgmentSeeds, 500).reduce<Promise<void>>(
+    (previousRun, judgmentSeedChunk) => {
+      return previousRun.then(() => {
+        const insertValues = promptIds
+          .flatMap((promptId) => {
+            return judgmentSeedChunk.map((judgmentSeed) => {
+              const articleId = articleIdByExternalId.get(judgmentSeed.articleExternalId)
+
+              return articleId
+                ? `(${getQuotedStringList([globalThis.crypto.randomUUID(), project.id, articleId, promptId]).join(', ')}, ${getSqlLiteral(judgmentSeed.isAnswered)}, ${getSqlLiteral(judgmentSeed.answer)}, NULL)`
+                : null
+            })
+          })
+          .filter((value): value is string => {
+            return value !== null
+          })
+          .join(', ')
+
+        return insertValues === ''
+          ? Promise.resolve()
+          : queryRunner.run(`
+      INSERT INTO app.judgment_human (id, project_id, article_id, prompt_id, is_answered, answer, comment)
+      VALUES ${insertValues}
+      ON CONFLICT(project_id, article_id, prompt_id) DO UPDATE SET
+        is_answered = EXCLUDED.is_answered,
+        answer = EXCLUDED.answer,
+        comment = EXCLUDED.comment,
+        updated_at = now()
+    `)
+      })
+    },
+    Promise.resolve(),
+  )
+}
+
+export const clearCovidenceSeededHumanJudgments = async (params: {importRoute: string; tx?: CovidenceProjectTx}) => {
+  const project = await getCovidenceProjectByImportRoute({importRoute: params.importRoute, tx: params.tx})
+
+  if (!project) {
+    return
+  }
+
+  const queryRunner = getCovidenceProjectQueryRunner(params.tx)
+
+  await queryRunner.run(`
+    DELETE FROM app.judgment_human
+    WHERE project_id = ${getSqlLiteral(project.id)}
+  `)
+
+  await queryRunner.run(`
+    DELETE FROM app.project_article
+    WHERE project_id = ${getSqlLiteral(project.id)}
+      AND imported_from_project_id = ${getSqlLiteral(project.id)}
+  `)
 }
 
 export const getCovidencePackageConfig = (cursor: string | null) => {

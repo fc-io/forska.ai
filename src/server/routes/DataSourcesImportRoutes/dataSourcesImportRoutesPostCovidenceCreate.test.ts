@@ -7,6 +7,7 @@ type CovidenceCreateSuccessResult = {
   projectCalls?: Array<{importRoute: string; mode: string; promptId: string | null; title: string}>
   promptCalls?: Array<{answerSet: string; exclusionCriteria: string; inclusionCriteria: string; mode: string}>
   queueCalls: string[][]
+  seedCalls?: Array<{importRoute: string; mode: string; projectId: string | null}>
   result: {
     data: {
       covidencePackageConfig: {kind: 'covidence_import'; mode: 'title_abstract'; version: 1}
@@ -61,6 +62,7 @@ test('Covidence datasource create stores package files and persists cursor confi
           martQueueCalls: [],
           projectCalls: [],
           queueCalls: [],
+          seedCalls: [],
           storedFileCalls: [],
           transactionCallCount: 0,
           txStatements: [],
@@ -132,6 +134,9 @@ test('Covidence datasource create stores package files and persists cursor confi
             },
             importCovidencePackageFromConfig: async () => {
               return {importRouteIds: ['route-1'], stats: {importedCount: 2, itemCount: 2}}
+            },
+            seedCovidenceHumanJudgmentsFromConfig: async (params) => {
+              state.seedCalls.push({importRoute: params.importRoute, mode: params.config.mode, projectId: params.projectId ?? null})
             },
             storeCovidencePackageFiles: async (params) => {
               state.storedFileCalls.push({
@@ -237,6 +242,10 @@ test('Covidence datasource create stores package files and persists cursor confi
   expect(parsed.projectCalls?.[0]?.mode).toBe('title_abstract')
   expect(parsed.projectCalls?.[0]?.promptId).toBeNull()
   expect(parsed.projectCalls?.[0]?.title).toBe('Created datasource')
+  expect(parsed.seedCalls).toHaveLength(1)
+  expect(parsed.seedCalls?.[0]?.importRoute).toContain('covidence:')
+  expect(parsed.seedCalls?.[0]?.mode).toBe('title_abstract')
+  expect(parsed.seedCalls?.[0]?.projectId).toBe('project-created')
   expect(parsed.martQueueCalls).toEqual([{importRouteIds: ['route-1'], reason: 'covidenceCreateImportRouteRefresh'}])
   expect(parsed.queueCalls).toEqual([['route-1']])
   expect(parsed.getDataSourceCallCount).toBe(1)
@@ -323,6 +332,7 @@ test('Covidence datasource create deletes stored files when the transaction fail
             importCovidencePackageFromConfig: async () => {
               return {importRouteIds: ['route-1'], stats: {importedCount: 2, itemCount: 2}}
             },
+            seedCovidenceHumanJudgmentsFromConfig: async () => {},
             storeCovidencePackageFiles: async (params) => {
               return [
                 {
@@ -418,6 +428,7 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
           projectCalls: [],
           promptCalls: [],
           queueCalls: [],
+          seedCalls: [],
           storedFileCalls: [],
           transactionCallCount: 0,
           txStatements: [],
@@ -497,6 +508,9 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
             },
             importCovidencePackageFromConfig: async () => {
               return {importRouteIds: ['route-1'], stats: {importedCount: 2, itemCount: 2}}
+            },
+            seedCovidenceHumanJudgmentsFromConfig: async (params) => {
+              state.seedCalls.push({importRoute: params.importRoute, mode: params.config.mode, projectId: params.projectId ?? null})
             },
             storeCovidencePackageFiles: async (params) => {
               state.storedFileCalls.push({
@@ -599,6 +613,10 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
   expect(parsed.projectCalls?.[0]?.mode).toBe('title_abstract')
   expect(parsed.projectCalls?.[0]?.promptId).toBe('prompt-existing')
   expect(parsed.projectCalls?.[0]?.title).toBe('Created datasource')
+  expect(parsed.seedCalls).toHaveLength(1)
+  expect(parsed.seedCalls?.[0]?.importRoute).toContain('covidence:')
+  expect(parsed.seedCalls?.[0]?.mode).toBe('title_abstract')
+  expect(parsed.seedCalls?.[0]?.projectId).toBe('project-created')
   expect(parsed.martQueueCalls).toEqual([{importRouteIds: ['route-1'], reason: 'covidenceCreateImportRouteRefresh'}])
   expect(parsed.result.data.covidenceProject).toMatchObject({
     created: true,

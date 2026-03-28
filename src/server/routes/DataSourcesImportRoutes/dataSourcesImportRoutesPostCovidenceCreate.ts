@@ -10,6 +10,7 @@ import {
   getOrCreateCovidenceProject,
   getOrCreateCovidencePrompt,
   importCovidencePackageFromConfig,
+  seedCovidenceHumanJudgmentsFromConfig,
   storeCovidencePackageFiles,
 } from '../../services/covidenceImportService.ts'
 import {getDataSourceQueryService} from '../../services/dataSourceQueryService.ts'
@@ -97,6 +98,8 @@ export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
               tx,
             })
           : null
+
+      await seedCovidenceHumanJudgmentsFromConfig({config, importRoute, projectId: covidenceProject?.id ?? null, tx})
 
       return {...importResult, covidenceProject, covidencePrompt}
     })

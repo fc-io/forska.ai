@@ -538,6 +538,189 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
   }
 })
 
+test('seedCovidenceHumanJudgmentsFromConfig upserts answered and unanswered title/abstract judgments idempotently', async () => {
+  const duckdbPath = `/tmp/f1-covidence-human-seed-${Date.now()}.duckdb`
+  const datasourceId = `covidence-human-seed-${Date.now()}`
+  const importRoute = `covidence:${datasourceId}`
+  datasourceIdsToDelete.add(datasourceId)
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, covidenceImportService] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/covidenceImportService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const datasourceId = ${JSON.stringify(datasourceId)}
+        const importRoute = ${JSON.stringify(importRoute)}
+        const createConfig = async (allContent, irrelevantContent, fullTextContent) => {
+          const files = await covidenceImportService.storeCovidencePackageFiles({
+            datasourceId,
+            files: [
+              {file: new File([allContent], 'all.csv', {type: 'text/csv'}), fileRole: 'all'},
+              {file: new File([irrelevantContent], 'irrelevant.csv', {type: 'text/csv'}), fileRole: 'irrelevant'},
+              {file: new File([fullTextContent], 'full_text.csv', {type: 'text/csv'}), fileRole: 'full_text'},
+            ],
+          })
+
+          return covidenceImportService.buildCovidencePackageConfig({files, mode: 'title_abstract'})
+        }
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, label, provider_kind, enabled)
+          VALUES ('pc-covidence-seed', 'Covidence provider', 'openai-compatible', TRUE);
+
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, enabled)
+          VALUES ('model-covidence-seed', 'pc-covidence-seed', 'gpt-covidence', 'gpt-covidence', TRUE);
+
+          INSERT INTO app.import_route (id, route, name, active)
+          VALUES ('route-covidence-seed', '${importRoute}', '${importRoute}', TRUE);
+        \`)
+
+        const prompt = await covidenceImportService.getOrCreateCovidencePrompt({
+          answerSet: 'yes|no|unsure',
+          exclusionCriteria: 'Case reports',
+          inclusionCriteria: 'Adults with confirmed disease',
+          mode: 'title_abstract',
+        })
+        const project = await covidenceImportService.getOrCreateCovidenceProject({
+          importRoute,
+          mode: 'title_abstract',
+          promptId: prompt.id,
+          title: 'Covidence seeded project',
+        })
+
+        const firstConfig = await createConfig(
+          'Title,Authors,Year,DOI\\nStudy A,"Doe, Jane",2024,10.1000/alpha\\nStudy B,"Roe, John",2023,10.1000/beta\\nStudy C,"Lane, Kim",2022,10.1000/gamma\\n',
+          'Title,Authors,Year,DOI\\nStudy B,"Roe, John",2023,10.1000/beta\\n',
+          'Title,Authors,Year,DOI\\nStudy A,"Doe, Jane",2024,10.1000/alpha\\n',
+        )
+
+        await database.transaction(async (tx) => {
+          await covidenceImportService.importCovidencePackageFromConfig({config: firstConfig, datasourceId, importRoute, tx})
+          await covidenceImportService.seedCovidenceHumanJudgmentsFromConfig({config: firstConfig, importRoute, projectId: project.id, tx})
+        })
+
+        const secondConfig = await createConfig(
+          'Title,Authors,Year,DOI\\nStudy A,"Doe, Jane",2024,10.1000/alpha\\nStudy B,"Roe, John",2023,10.1000/beta\\nStudy C,"Lane, Kim",2022,10.1000/gamma\\n',
+          'Title,Authors,Year,DOI\\nStudy C,"Lane, Kim",2022,10.1000/gamma\\n',
+          'Title,Authors,Year,DOI\\nStudy A,"Doe, Jane",2024,10.1000/alpha\\n',
+        )
+
+        await covidenceImportService.seedCovidenceHumanJudgmentsFromConfig({
+          config: secondConfig,
+          importRoute,
+          projectId: project.id,
+        })
+
+        const judgmentRows = await database.queryJson(\`
+          SELECT
+            a.article_id AS articleExternalId,
+            a.article_title AS articleTitle,
+            jh.article_id AS articleId,
+            jh.is_answered AS isAnswered,
+            jh.answer AS answer,
+            jh.comment AS comment,
+            jh.prompt_id AS promptId
+          FROM app.judgment_human jh
+          INNER JOIN app.article a ON a.id = jh.article_id
+          WHERE jh.project_id = '\${project.id}'
+          ORDER BY a.article_title ASC, jh.prompt_id ASC
+        \`)
+
+        console.log(JSON.stringify({judgmentRows, projectId: project.id, promptId: prompt.id}))
+        covidenceImportService.deleteCovidencePackageFiles(datasourceId)
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39997',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39998',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to seed Covidence human judgments',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      judgmentRows: Array<{
+        answer: string | null
+        articleExternalId: string
+        articleId: string
+        articleTitle: string
+        comment: string | null
+        isAnswered: boolean
+        promptId: string
+      }>
+      projectId: string
+      promptId: string
+    }
+
+    expect(parsed.judgmentRows).toHaveLength(3)
+    expect(parsed.judgmentRows[0]?.answer).toBe('yes')
+    expect(parsed.judgmentRows[0]?.articleExternalId).toContain(`${importRoute}:`)
+    expect(typeof parsed.judgmentRows[0]?.articleId).toBe('string')
+    expect(parsed.judgmentRows[0]?.articleTitle).toBe('Study A')
+    expect(parsed.judgmentRows[0]?.comment).toBeNull()
+    expect(parsed.judgmentRows[0]?.isAnswered).toBe(true)
+    expect(parsed.judgmentRows[0]?.promptId).toBe(parsed.promptId)
+    expect(parsed.judgmentRows[1]?.answer).toBeNull()
+    expect(parsed.judgmentRows[1]?.articleExternalId).toContain(`${importRoute}:`)
+    expect(typeof parsed.judgmentRows[1]?.articleId).toBe('string')
+    expect(parsed.judgmentRows[1]?.articleTitle).toBe('Study B')
+    expect(parsed.judgmentRows[1]?.comment).toBeNull()
+    expect(parsed.judgmentRows[1]?.isAnswered).toBe(false)
+    expect(parsed.judgmentRows[1]?.promptId).toBe(parsed.promptId)
+    expect(parsed.judgmentRows[2]?.answer).toBe('no')
+    expect(parsed.judgmentRows[2]?.articleExternalId).toContain(`${importRoute}:`)
+    expect(typeof parsed.judgmentRows[2]?.articleId).toBe('string')
+    expect(parsed.judgmentRows[2]?.articleTitle).toBe('Study C')
+    expect(parsed.judgmentRows[2]?.comment).toBeNull()
+    expect(parsed.judgmentRows[2]?.isAnswered).toBe(true)
+    expect(parsed.judgmentRows[2]?.promptId).toBe(parsed.promptId)
+  } finally {
+    deleteCovidencePackageFiles(datasourceId)
+    ;[duckdbPath, `${duckdbPath}.wal`, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(
+      (filePath) => {
+        if (existsSync(filePath)) {
+          unlinkSync(filePath)
+        }
+
+        return filePath
+      },
+    )
+  }
+})
+
 test('importCovidencePackageFromConfig stores merged articles with raw metadata on the Covidence route', async () => {
   const duckdbPath = `/tmp/f1-covidence-import-${Date.now()}.duckdb`
   const datasourceId = `covidence-import-${Date.now()}`
