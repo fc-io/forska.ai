@@ -2,6 +2,7 @@ import {Elysia, t} from 'elysia'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getCovidencePackageConfig} from '../services/covidenceImportService.ts'
 import {getStructuredFileImportConfig} from '../services/structuredFileImportService.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
@@ -21,6 +22,19 @@ type DataSourceRow = {
   dateFrom: unknown
   dateTo: unknown
   archived: boolean
+}
+
+type CovidenceProjectLinkRow = {importRoute: string; projectId: string}
+type CovidencePromptLinkRow = {importRoute: string; promptId: string}
+type StructuredFileConfig = NonNullable<ReturnType<typeof getSafeStructuredFileImportConfig>>
+type CovidencePackageConfig = NonNullable<ReturnType<typeof getSafeCovidencePackageConfig>>
+type DataSourceImportState = {
+  covidencePackageConfig: CovidencePackageConfig | null
+  immutable: boolean
+  linkedProjectId: string | null
+  linkedPromptIds: string[]
+  reimportable: boolean
+  structuredFileConfig: StructuredFileConfig | null
 }
 
 const parseOptionalDate = (value?: string | null) => {
@@ -53,6 +67,10 @@ const getSafeStructuredFileImportConfig = (cursorValue: unknown) => {
   }
 }
 
+const getSafeCovidencePackageConfig = (cursorValue: unknown) => {
+  return typeof cursorValue === 'string' ? getCovidencePackageConfig(cursorValue) : null
+}
+
 const hasMutableDataSourceChanges = (body: {
   title?: string
   description?: string | null
@@ -66,18 +84,124 @@ const hasMutableDataSourceChanges = (body: {
   })
 }
 
-const normalizeDataSourceRow = <TRow extends Record<string, unknown>>(row: TRow) => {
+const getCovidenceProjectIdByImportRoute = async (db: AppQueryRunner, importRoutes: string[]) => {
+  const rows =
+    importRoutes.length === 0
+      ? []
+      : await db.queryJson<CovidenceProjectLinkRow>(`
+        SELECT
+          ir.route AS importRoute,
+          pir.project_id AS projectId
+        FROM app.project_import_route pir
+        INNER JOIN app.import_route ir ON ir.id = pir.import_route_id
+        WHERE ir.route IN (${importRoutes
+          .map((importRoute) => {
+            return getSqlLiteral(importRoute)
+          })
+          .join(', ')})
+      `)
+
+  return new Map(
+    rows.map((row) => {
+      return [row.importRoute, row.projectId]
+    }),
+  )
+}
+
+const getCovidencePromptIdsByImportRoute = async (db: AppQueryRunner, importRoutes: string[]) => {
+  const rows =
+    importRoutes.length === 0
+      ? []
+      : await db.queryJson<CovidencePromptLinkRow>(`
+        SELECT
+          ir.route AS importRoute,
+          pp.prompt_id AS promptId
+        FROM app.project_import_route pir
+        INNER JOIN app.import_route ir ON ir.id = pir.import_route_id
+        INNER JOIN app.project_prompt pp ON pp.project_id = pir.project_id
+        WHERE ir.route IN (${importRoutes
+          .map((importRoute) => {
+            return getSqlLiteral(importRoute)
+          })
+          .join(', ')})
+          AND pp.archived = FALSE
+          AND pp.enabled = TRUE
+        ORDER BY pp.prompt_order ASC, pp.prompt_id ASC
+      `)
+
+  return rows.reduce<Map<string, string[]>>((promptIdsByImportRoute, row) => {
+    const existingPromptIds = promptIdsByImportRoute.get(row.importRoute) ?? []
+
+    promptIdsByImportRoute.set(row.importRoute, [...existingPromptIds, row.promptId])
+
+    return promptIdsByImportRoute
+  }, new Map())
+}
+
+const getDataSourceImportState = (params: {
+  covidenceProjectIdByImportRoute: Map<string, string>
+  covidencePromptIdsByImportRoute: Map<string, string[]>
+  importRoute: string | null
+  cursor: string | null
+}): DataSourceImportState => {
+  const structuredFileConfig = getSafeStructuredFileImportConfig(params.cursor)
+  const covidencePackageConfig = getSafeCovidencePackageConfig(params.cursor)
+  const linkedProjectId =
+    covidencePackageConfig && params.importRoute
+      ? (params.covidenceProjectIdByImportRoute.get(params.importRoute) ?? null)
+      : null
+  const linkedPromptIds =
+    covidencePackageConfig && params.importRoute
+      ? (params.covidencePromptIdsByImportRoute.get(params.importRoute) ?? [])
+      : []
+
+  return {
+    covidencePackageConfig,
+    immutable: Boolean(structuredFileConfig || covidencePackageConfig),
+    linkedProjectId,
+    linkedPromptIds,
+    reimportable: Boolean(covidencePackageConfig),
+    structuredFileConfig,
+  }
+}
+
+const normalizeDataSourceRow = <TRow extends Record<string, unknown>>(
+  row: TRow,
+  importState: DataSourceImportState,
+) => {
   const {cursor, ...safeRow} = row
 
   return {
     ...safeRow,
+    ...importState,
     createdAt: getDateValue(row['createdAt']),
     updatedAt: getDateValue(row['updatedAt']),
     dateFrom: getDateValue(row['dateFrom']),
     dateTo: getDateValue(row['dateTo']),
     lastImportAt: getDateValue(row['lastImportAt']),
-    structuredFileConfig: getSafeStructuredFileImportConfig(cursor),
   }
+}
+
+const normalizeDataSourceRows = async <TRow extends DataSourceRow>(db: AppQueryRunner, rows: TRow[]) => {
+  const covidenceImportRoutes = rows.flatMap((row) => {
+    return row.importRoute && getSafeCovidencePackageConfig(row.cursor) ? [row.importRoute] : []
+  })
+  const [covidenceProjectIdByImportRoute, covidencePromptIdsByImportRoute] = await Promise.all([
+    getCovidenceProjectIdByImportRoute(db, covidenceImportRoutes),
+    getCovidencePromptIdsByImportRoute(db, covidenceImportRoutes),
+  ])
+
+  return rows.map((row) => {
+    return normalizeDataSourceRow(
+      row,
+      getDataSourceImportState({
+        covidenceProjectIdByImportRoute,
+        covidencePromptIdsByImportRoute,
+        cursor: row.cursor,
+        importRoute: row.importRoute,
+      }),
+    )
+  })
 }
 
 const getDataSourceRowSql = (dataSourceId: string) => {
@@ -120,6 +244,7 @@ export const dataSourcesRoutes = new Elysia()
   .use(withErrorHandler())
   .get('/api/datasources', async () => {
     const rows = await getAppDatabaseService().queryJson<{
+      archived: boolean
       id: string
       title: string
       description: string | null
@@ -143,15 +268,17 @@ export const dataSourcesRoutes = new Elysia()
         last_import_at AS lastImportAt,
         items_after_last_import AS itemsAfterLastImport,
         import_route AS importRoute,
-        cursor
+        cursor,
+        archived
       FROM app.data_source
       WHERE archived = FALSE
       ORDER BY created_at DESC
     `)
-    return {data: rows.map(normalizeDataSourceRow)}
+    return {data: await normalizeDataSourceRows(getAppDatabaseService(), rows)}
   })
   .get('/api/datasources/archived', async () => {
     const rows = await getAppDatabaseService().queryJson<{
+      archived: boolean
       id: string
       title: string
       description: string | null
@@ -175,15 +302,17 @@ export const dataSourcesRoutes = new Elysia()
         last_import_at AS lastImportAt,
         items_after_last_import AS itemsAfterLastImport,
         import_route AS importRoute,
-        cursor
+        cursor,
+        archived
       FROM app.data_source
       WHERE archived = TRUE
       ORDER BY created_at DESC
     `)
-    return {data: rows.map(normalizeDataSourceRow)}
+    return {data: await normalizeDataSourceRows(getAppDatabaseService(), rows)}
   })
   .get('/api/datasources/:id', async ({params}) => {
     const [entry] = await getAppDatabaseService().queryJson<{
+      archived: boolean
       id: string
       title: string
       description: string | null
@@ -207,7 +336,8 @@ export const dataSourcesRoutes = new Elysia()
         created_at AS createdAt,
         updated_at AS updatedAt,
         date_from AS dateFrom,
-        date_to AS dateTo
+        date_to AS dateTo,
+        archived
       FROM app.data_source
       WHERE id = '${escapeSqlString(params.id)}'
       LIMIT 1
@@ -217,7 +347,9 @@ export const dataSourcesRoutes = new Elysia()
       throw new Error('Data source not found')
     }
 
-    return {data: normalizeDataSourceRow(entry)}
+    const [normalizedEntry] = await normalizeDataSourceRows(getAppDatabaseService(), [entry])
+
+    return {data: normalizedEntry}
   })
   .post(
     '/api/datasources',
@@ -264,7 +396,18 @@ export const dataSourcesRoutes = new Elysia()
           archived
       `)
 
-      return {data: created ? normalizeDataSourceRow(created) : null}
+      return {
+        data: created
+          ? normalizeDataSourceRow(created, {
+              covidencePackageConfig: null,
+              immutable: false,
+              linkedProjectId: null,
+              linkedPromptIds: [],
+              reimportable: false,
+              structuredFileConfig: null,
+            })
+          : null,
+      }
     },
     {
       body: t.Object({
@@ -285,7 +428,10 @@ export const dataSourcesRoutes = new Elysia()
         throw new Error('Data source not found')
       }
 
-      if (getSafeStructuredFileImportConfig(existing.cursor) && hasMutableDataSourceChanges(body)) {
+      if (
+        (getSafeStructuredFileImportConfig(existing.cursor) || getSafeCovidencePackageConfig(existing.cursor))
+        && hasMutableDataSourceChanges(body)
+      ) {
         throw new Error('Imported XML/JSON data sources are immutable and can only be archived')
       }
 
@@ -314,7 +460,9 @@ export const dataSourcesRoutes = new Elysia()
         throw new Error('Data source not found')
       }
 
-      return {data: normalizeDataSourceRow(updated)}
+      const [normalizedUpdated] = await normalizeDataSourceRows(getAppDatabaseService(), [updated])
+
+      return {data: normalizedUpdated}
     },
     {
       body: t.Object({
