@@ -5,6 +5,7 @@ import path from 'node:path'
 import {afterEach, expect, test} from 'bun:test'
 
 import {
+  analyzeCovidencePackageFiles,
   buildCovidencePackageConfig,
   deleteCovidencePackageFiles,
   getCovidencePackageConfig,
@@ -744,4 +745,128 @@ test('mergeCovidenceReferenceRows uses all rows as canonical metadata and report
       sourceFileName: 'excluded.csv',
     },
   ])
+})
+
+test('analyzeCovidencePackageFiles returns detected roles counts warnings and sample merged rows', async () => {
+  const result = await analyzeCovidencePackageFiles({
+    files: [
+      {
+        file: new File(['Title,Authors,Year,DOI\nStudy A,"Doe, Jane",2024,10.1000/alpha\n'], 'all.csv', {
+          type: 'text/csv',
+        }),
+        fileRole: 'all',
+      },
+      {
+        file: new File(['Title,Authors,Year,DOI\nStudy A,"Doe, Jane",2024,10.1000/alpha\n'], 'full_text.csv', {
+          type: 'text/csv',
+        }),
+        fileRole: 'full_text',
+      },
+      {
+        file: new File(['Title,Authors,Year,DOI\nMissing Match,"Roe, John",2023,10.1000/missing\n'], 'irrelevant.csv', {
+          type: 'text/csv',
+        }),
+        fileRole: 'irrelevant',
+      },
+    ],
+    mode: 'title_abstract',
+  })
+
+  expect(result.ok).toBe(true)
+
+  if (result.ok === false) {
+    throw new Error('Expected Covidence analyze success')
+  }
+
+  expect(result.data.mode).toBe('title_abstract')
+  expect(result.data.detectedFiles).toEqual([
+    {fileRole: 'all', format: 'csv', rowCount: 1, sourceFileName: 'all.csv'},
+    {fileRole: 'irrelevant', format: 'csv', rowCount: 1, sourceFileName: 'irrelevant.csv'},
+    {fileRole: 'full_text', format: 'csv', rowCount: 1, sourceFileName: 'full_text.csv'},
+  ])
+  expect(result.data.counts).toEqual({
+    conflictingStageMembershipCount: 0,
+    fileCount: 3,
+    filesByRole: {all: 1, excluded: 0, full_text: 1, included: 0, irrelevant: 1},
+    mergedRowCount: 1,
+    missingMatchCount: 1,
+    rowCount: 3,
+    rowsByRole: {all: 1, excluded: 0, full_text: 1, included: 0, irrelevant: 1},
+  })
+  expect(result.data.warnings.missingMatches).toEqual([
+    {
+      articleKey: 'doi:10.1000/missing',
+      articleKeySource: 'doi',
+      fileRole: 'irrelevant',
+      rowNumber: 2,
+      sourceFileName: 'irrelevant.csv',
+    },
+  ])
+  expect(result.data.warnings.conflictingStageMemberships).toEqual([])
+  expect(result.data.sampleMergedRows).toEqual([
+    {
+      articleKey: 'doi:10.1000/alpha',
+      articleKeySource: 'doi',
+      citation: {authors: 'Doe, Jane', doi: '10.1000/alpha', title: 'Study A', year: '2024'},
+      exclusionReasons: [],
+      notes: [],
+      stageMembership: {all: true, excluded: false, full_text: true, included: false, irrelevant: false},
+      tags: [],
+    },
+  ])
+})
+
+test('analyzeCovidencePackageFiles rejects missing required files for the selected mode', async () => {
+  const result = await analyzeCovidencePackageFiles({
+    files: [
+      {file: new File(['Title\nStudy A\n'], 'all.csv', {type: 'text/csv'}), fileRole: 'all'},
+      {file: new File(['Title\nStudy A\n'], 'full_text.csv', {type: 'text/csv'}), fileRole: 'full_text'},
+    ],
+    mode: 'title_abstract',
+  })
+
+  expect(result).toEqual({
+    error: {
+      code: 'invalid_file_roles',
+      message: 'Invalid Covidence package file roles: missing required files: irrelevant',
+    },
+    ok: false,
+  })
+})
+
+test('analyzeCovidencePackageFiles rejects mutually exclusive stage memberships', async () => {
+  const result = await analyzeCovidencePackageFiles({
+    files: [
+      {
+        file: new File(['Title,Authors,Year,DOI\nStudy A,"Doe, Jane",2024,10.1000/alpha\n'], 'all.csv', {
+          type: 'text/csv',
+        }),
+        fileRole: 'all',
+      },
+      {
+        file: new File(['Title,Authors,Year,DOI\nStudy A,"Doe, Jane",2024,10.1000/alpha\n'], 'irrelevant.csv', {
+          type: 'text/csv',
+        }),
+        fileRole: 'irrelevant',
+      },
+      {
+        file: new File(['Title,Authors,Year,DOI\nStudy A,"Doe, Jane",2024,10.1000/alpha\n'], 'full_text.csv', {
+          type: 'text/csv',
+        }),
+        fileRole: 'full_text',
+      },
+    ],
+    mode: 'title_abstract',
+  })
+
+  expect(result.ok).toBe(false)
+
+  if (result.ok) {
+    throw new Error('Expected Covidence analyze conflict failure')
+  }
+
+  expect(result.error.code).toBe('conflicting_stage_memberships')
+  expect(result.error.message).toBe('Covidence package has mutually exclusive stage memberships')
+  expect(result.error.warnings?.conflictingStageMemberships).toHaveLength(1)
+  expect(result.error.warnings?.missingMatches).toEqual([])
 })

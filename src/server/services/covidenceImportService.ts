@@ -82,6 +82,40 @@ type CovidencePackageConfig = {
   files: CovidencePackageFile[]
 }
 type CovidencePackageUploadInput = Blob & {name?: string; type?: string}
+type CovidenceAnalyzeUploadFile = {file: CovidencePackageUploadInput; fileRole: CovidenceFileRole}
+type CovidenceAnalyzeDetectedFile = {
+  fileRole: CovidenceFileRole
+  format: CovidenceFileFormat
+  rowCount: number
+  sourceFileName: string
+}
+type CovidenceAnalyzeSampleRow = Pick<
+  CovidenceMergedArticleCandidate,
+  'articleKey' | 'articleKeySource' | 'citation' | 'exclusionReasons' | 'notes' | 'stageMembership' | 'tags'
+>
+type CovidenceAnalyzeCounts = {
+  conflictingStageMembershipCount: number
+  fileCount: number
+  filesByRole: Record<CovidenceFileRole, number>
+  mergedRowCount: number
+  missingMatchCount: number
+  rowCount: number
+  rowsByRole: Record<CovidenceFileRole, number>
+}
+type CovidenceAnalyzeResult = {
+  counts: CovidenceAnalyzeCounts
+  detectedFiles: CovidenceAnalyzeDetectedFile[]
+  mode: CovidenceImportMode
+  sampleMergedRows: CovidenceAnalyzeSampleRow[]
+  warnings: CovidenceReferenceMergeResult['warnings']
+}
+type CovidenceAnalyzeError = {
+  code: 'conflicting_stage_memberships' | 'invalid_file_roles' | 'invalid_upload' | 'parse_error' | 'unsupported_format'
+  message: string
+  parseError?: CovidenceCsvParseError
+  warnings?: CovidenceReferenceMergeResult['warnings']
+}
+type CovidenceAnalyzeResponse = {data: CovidenceAnalyzeResult; ok: true} | {error: CovidenceAnalyzeError; ok: false}
 
 const covidenceImportFolder = path.resolve(process.cwd(), 'assets/covidence_imports')
 const covidenceImportPathPrefix = 'assets/covidence_imports'
@@ -151,6 +185,13 @@ const covidenceConflictingStageRoleGroups = [
   ['irrelevant', 'full_text'],
   ['excluded', 'included'],
 ] as const satisfies CovidenceFileRole[][]
+const emptyCovidenceRoleCounts = {
+  all: 0,
+  excluded: 0,
+  full_text: 0,
+  included: 0,
+  irrelevant: 0,
+} as const satisfies Record<CovidenceFileRole, number>
 
 const getNormalizedCovidenceMatchValue = (value: string | null) => {
   return value ? value.trim().toLowerCase().replace(/\s+/g, ' ') : null
@@ -736,24 +777,66 @@ const getSortedCovidencePackageFiles = (mode: CovidenceImportMode, files: Covide
   })
 }
 
+const getCovidenceFileRoleValidationMessage = (params: {fileRoles: CovidenceFileRole[]; mode: CovidenceImportMode}) => {
+  const allowedRoles = getAllowedRoles(params.mode)
+  const uniqueRoles = Array.from(new Set(params.fileRoles))
+  const duplicateRoles = uniqueRoles.filter((fileRole) => {
+    return (
+      params.fileRoles.filter((candidateRole) => {
+        return candidateRole === fileRole
+      }).length > 1
+    )
+  })
+  const disallowedRoles = uniqueRoles.filter((fileRole) => {
+    return !allowedRoles.includes(fileRole)
+  })
+  const missingRoles = allowedRoles.filter((fileRole) => {
+    return !uniqueRoles.includes(fileRole)
+  })
+  const messageParts = [
+    missingRoles.length > 0 ? `missing required files: ${missingRoles.join(', ')}` : null,
+    duplicateRoles.length > 0 ? `duplicate file roles: ${duplicateRoles.join(', ')}` : null,
+    disallowedRoles.length > 0 ? `roles not allowed for ${params.mode}: ${disallowedRoles.join(', ')}` : null,
+  ].filter((messagePart): messagePart is string => {
+    return messagePart !== null
+  })
+
+  return messageParts.length > 0 ? `Invalid Covidence package file roles: ${messageParts.join('; ')}` : null
+}
+
+const getSortedCovidenceAnalyzeFiles = <T extends {fileRole: CovidenceFileRole}>(
+  mode: CovidenceImportMode,
+  files: T[],
+) => {
+  const roleOrder = getAllowedRoles(mode)
+
+  return [...files].sort((left, right) => {
+    return roleOrder.indexOf(left.fileRole) - roleOrder.indexOf(right.fileRole)
+  })
+}
+
+const getCovidenceRoleCounts = <T extends {fileRole: CovidenceFileRole}>(values: T[]) => {
+  return values.reduce<Record<CovidenceFileRole, number>>(
+    (counts, value) => {
+      return {...counts, [value.fileRole]: counts[value.fileRole] + 1}
+    },
+    {...emptyCovidenceRoleCounts},
+  )
+}
+
 const getValidatedCovidencePackageFiles = (params: {
   mode: CovidenceImportMode
   files: CovidencePackageFile[]
 }): CovidencePackageFile[] => {
-  const allowedRoles = getAllowedRoles(params.mode)
-  const fileRoles = params.files.map((file) => {
-    return file.fileRole
-  })
-  const hasOnlyAllowedRoles = fileRoles.every((fileRole) => {
-    return allowedRoles.includes(fileRole)
-  })
-  const uniqueRoles = new Set(fileRoles)
-  const hasAllRequiredRoles = allowedRoles.every((fileRole) => {
-    return uniqueRoles.has(fileRole)
+  const validationMessage = getCovidenceFileRoleValidationMessage({
+    fileRoles: params.files.map((file) => {
+      return file.fileRole
+    }),
+    mode: params.mode,
   })
 
-  if (!hasOnlyAllowedRoles || uniqueRoles.size !== params.files.length || !hasAllRequiredRoles) {
-    throw new Error('Invalid Covidence package file roles for mode')
+  if (validationMessage) {
+    throw new Error(validationMessage)
   }
 
   return getSortedCovidencePackageFiles(params.mode, params.files)
@@ -1105,6 +1188,149 @@ export const parseCovidenceCsvReferenceRows = (params: {
   sourceFileName: string
 }) => {
   return parseCovidenceCsvReferenceRowsInternal(params)
+}
+
+export const analyzeCovidencePackageFiles = async (params: {
+  files: CovidenceAnalyzeUploadFile[]
+  mode: CovidenceImportMode
+}): Promise<CovidenceAnalyzeResponse> => {
+  const uploads = params.files.filter((file) => {
+    return file.file instanceof Blob
+  })
+  const fileRoleValidationMessage =
+    uploads.length === params.files.length
+      ? getCovidenceFileRoleValidationMessage({
+          fileRoles: uploads.map((file) => {
+            return file.fileRole
+          }),
+          mode: params.mode,
+        })
+      : null
+  const uploadValidationMessage =
+    uploads.length === params.files.length ? null : 'Covidence analyze requires valid uploaded files'
+
+  if (uploadValidationMessage || fileRoleValidationMessage) {
+    return {
+      error: {
+        code: uploadValidationMessage ? 'invalid_upload' : 'invalid_file_roles',
+        message: uploadValidationMessage ?? fileRoleValidationMessage ?? 'Invalid Covidence analyze input',
+      },
+      ok: false,
+    }
+  }
+
+  const filesWithContent = await Promise.all(
+    getSortedCovidenceAnalyzeFiles(params.mode, uploads).map(async ({file, fileRole}) => {
+      const sourceFileName = file.name?.trim() || `${fileRole}.upload`
+      const format = getCovidenceFileFormatFromName(sourceFileName)
+
+      return {content: await file.text(), fileRole, format, sourceFileName}
+    }),
+  )
+  const invalidFormatFile = filesWithContent.find((file) => {
+    return file.format === null
+  })
+
+  if (invalidFormatFile) {
+    return {
+      error: {
+        code: 'unsupported_format',
+        message: `Only Covidence CSV and RIS files are supported, got '${invalidFormatFile.sourceFileName}'`,
+      },
+      ok: false,
+    }
+  }
+
+  const validFormatFiles = filesWithContent.filter((file): file is typeof file & {format: CovidenceFileFormat} => {
+    return file.format !== null
+  })
+
+  const parsedFiles = validFormatFiles.map((file) => {
+    const parsedResult = parseCovidenceReferenceRows({
+      content: file.content,
+      fileRole: file.fileRole,
+      format: file.format,
+      sourceFileName: file.sourceFileName,
+    })
+
+    return {file, parsedResult}
+  })
+  const parseFailure = parsedFiles.find((entry) => {
+    return entry.parsedResult.ok === false
+  })
+
+  if (parseFailure && parseFailure.parsedResult.ok === false) {
+    return {
+      error: {
+        code: 'parse_error',
+        message: parseFailure.parsedResult.error.message,
+        parseError: parseFailure.parsedResult.error,
+      },
+      ok: false,
+    }
+  }
+
+  const detectedFiles = parsedFiles.flatMap((entry) => {
+    return entry.parsedResult.ok
+      ? [
+          {
+            fileRole: entry.file.fileRole,
+            format: entry.file.format,
+            rowCount: entry.parsedResult.rows.length,
+            sourceFileName: entry.file.sourceFileName,
+          },
+        ]
+      : []
+  })
+  const mergedResult = mergeCovidenceReferenceRows(
+    parsedFiles.flatMap((entry) => {
+      return entry.parsedResult.ok ? entry.parsedResult.rows : []
+    }),
+  )
+
+  return mergedResult.warnings.conflictingStageMemberships.length > 0
+    ? {
+        error: {
+          code: 'conflicting_stage_memberships',
+          message: 'Covidence package has mutually exclusive stage memberships',
+          warnings: mergedResult.warnings,
+        },
+        ok: false,
+      }
+    : {
+        data: {
+          counts: {
+            conflictingStageMembershipCount: mergedResult.warnings.conflictingStageMemberships.length,
+            fileCount: detectedFiles.length,
+            filesByRole: getCovidenceRoleCounts(detectedFiles),
+            mergedRowCount: mergedResult.candidates.length,
+            missingMatchCount: mergedResult.warnings.missingMatches.length,
+            rowCount: detectedFiles.reduce((count, file) => {
+              return count + file.rowCount
+            }, 0),
+            rowsByRole: getCovidenceRoleCounts(
+              parsedFiles.flatMap((entry) => {
+                return entry.parsedResult.ok ? entry.parsedResult.rows : []
+              }),
+            ),
+          },
+          detectedFiles,
+          mode: params.mode,
+          sampleMergedRows: mergedResult.candidates.slice(0, 5).map((candidate) => {
+            return {
+              articleKey: candidate.articleKey,
+              articleKeySource: candidate.articleKeySource,
+              citation: candidate.citation,
+              exclusionReasons: candidate.exclusionReasons,
+              notes: candidate.notes,
+              stageMembership: candidate.stageMembership,
+              tags: candidate.tags,
+            }
+          }),
+          warnings: mergedResult.warnings,
+        },
+        ok: true,
+      }
 }
 
 export const deleteCovidencePackageFiles = (datasourceId: string) => {

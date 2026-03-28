@@ -3,6 +3,7 @@ import {Elysia, t} from 'elysia'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {dataSourcesImportRoutesPostArxiv} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostArxiv.ts'
 import {dataSourcesImportRoutesPostBiorxiv} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostBiorxiv.ts'
+import {dataSourcesImportRoutesPostCovidenceAnalyze} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceAnalyze.ts'
 import {dataSourcesImportRoutesPostEuropePmcPpr} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostEuropePmcPpr.ts'
 import {dataSourcesImportRoutesPostFhirEhrPatients} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostFhirEhrPatients.ts'
 import {dataSourcesImportRoutesPostMedrxiv} from './DataSourcesImportRoutes/dataSourcesImportRoutesPostMedrxiv.ts'
@@ -13,6 +14,29 @@ import {dataSourcesImportRoutesPostStructuredFileCreate} from './DataSourcesImpo
 
 export const dataSourcesImportRoutes = new Elysia()
   .use(withErrorHandler())
+  .post(
+    '/api/datasources/import/covidence-analyze',
+    async ({body, set}) => {
+      return await dataSourcesImportRoutesPostCovidenceAnalyze({body, set})
+    },
+    {
+      body: t.Object({
+        mode: t.Union([t.Literal('title_abstract'), t.Literal('full_text')]),
+        files: t.Array(
+          t.Object({
+            file: t.File(),
+            fileRole: t.Union([
+              t.Literal('all'),
+              t.Literal('irrelevant'),
+              t.Literal('full_text'),
+              t.Literal('excluded'),
+              t.Literal('included'),
+            ]),
+          }),
+        ),
+      }),
+    },
+  )
   .post(
     '/api/datasources/import/arxiv',
     async ({body}) => {
