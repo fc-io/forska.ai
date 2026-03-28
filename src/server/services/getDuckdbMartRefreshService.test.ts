@@ -695,7 +695,7 @@ test('mart refresh splits non-serving archived purge batches after an index dele
                     if (!failedLargeDelete && statement.includes('rowid IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)')) {
                       failedLargeDelete = true
                       throw new Error(
-                        'FATAL Error: Failed: database has been invalidated because of a previous fatal error. The database must be restarted prior to being used again. Original error: "Invalid Input Error: Failed to delete all rows from index. Only deleted 4 out of 10 rows."',
+                        'Invalid Input Error: Failed to delete all rows from index. Only deleted 4 out of 10 rows.',
                       )
                     }
 
@@ -748,6 +748,153 @@ test('mart refresh splits non-serving archived purge batches after an index dele
   expect(result.events).toContain('rollup:split-right')
   expect(result.events).toContain('serving:rewrite-created')
   expect(result.result).toBe('ok')
+  expect(result.queueActive).toBe(false)
+})
+
+test('mart refresh restarts after fatal archived purge invalidation without rollback or split retries', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        let closeCount = 0
+        let queueActive = true
+        let rollbackCount = 0
+        let rollupBatchQueryCount = 0
+        let shouldFailLargeDelete = true
+        let splitRetryCount = 0
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                close: async () => {
+                  closeCount += 1
+                },
+                queryJson: async (statement) => {
+                  return statement.includes("column_name = 'refresh_generation'")
+                    ? [{count: 1}]
+                    : statement.includes("column_name = 'completed_at'")
+                      ? [{count: 1}]
+                      : statement.includes('SELECT COUNT(*) AS count')
+                        ? [{count: queueActive ? 1 : 0}]
+                        : statement.includes('FROM app.mart_refresh_queue')
+                          ? queueActive
+                            ? [{
+                                articleId: null,
+                                id: 'project-archive-fatal-task',
+                                projectId: 'project-archive-fatal-test',
+                                refreshGeneration: 0,
+                                refreshScope: 'project',
+                              }]
+                            : []
+                          : []
+                },
+                queryJsonBackground: async (statement) => {
+                  return statement.includes('SELECT archived AS archived')
+                    ? [{archived: true}]
+                    : statement.includes('FROM mart.review_article_rollup') && statement.includes('rowid AS rowId')
+                      ? (() => {
+                          rollupBatchQueryCount += 1
+
+                          return rollupBatchQueryCount <= 2
+                            ? Array.from({length: 10}, (_unused, index) => {
+                                return {rowId: index + 1}
+                              })
+                            : []
+                        })()
+                      : []
+                },
+                run: async (statement) => {
+                  if (
+                    statement.includes('SET completed_at = NOW()')
+                    && !statement.includes("reason IN ('humanAssessmentRoutesPostInit')")
+                  ) {
+                    queueActive = false
+                  }
+                },
+                maintenance: async () => {},
+                runBackground: async (statement) => {
+                  if (statement === 'ROLLBACK') {
+                    rollbackCount += 1
+                  }
+
+                  if (
+                    statement.includes('DELETE FROM mart.review_article_rollup')
+                    && statement.includes('rowid IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)')
+                    && shouldFailLargeDelete
+                  ) {
+                    shouldFailLargeDelete = false
+                    throw new Error(
+                      'FATAL Error: Failed: database has been invalidated because of a previous fatal error. The database must be restarted prior to being used again. Original error: "Invalid Input Error: Failed to delete all rows from index. Only deleted 4 out of 10 rows."',
+                    )
+                  }
+
+                  if (
+                    statement.includes('DELETE FROM mart.review_article_rollup')
+                    && (
+                      statement.includes('rowid IN (1, 2, 3, 4, 5)')
+                      || statement.includes('rowid IN (6, 7, 8, 9, 10)')
+                    )
+                  ) {
+                    splitRetryCount += 1
+                  }
+                },
+              }
+            },
+          }
+        })
+
+        const martRefreshService = (await import(martRefreshServiceModulePath + '?project-archive-fatal=' + Date.now())).getDuckdbMartRefreshService()
+        const failureText = await martRefreshService.flush().then(
+          () => 'ok',
+          (error) => error instanceof Error ? error.message : String(error),
+        )
+        const retryText = await martRefreshService.flush().then(
+          () => 'ok',
+          (error) => error instanceof Error ? error.message : String(error),
+        )
+        console.log(JSON.stringify({
+          closeCount,
+          failureText,
+          queueActive,
+          retryText,
+          rollbackCount,
+          splitRetryCount,
+        }))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Mart archived purge fatal restart regression test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    closeCount: number
+    failureText: string
+    queueActive: boolean
+    retryText: string
+    rollbackCount: number
+    splitRetryCount: number
+  }
+
+  expect(result.closeCount).toBe(1)
+  expect(result.failureText).toContain('Failed to delete all rows from index')
+  expect(result.failureText).not.toContain('rollback failed')
+  expect(result.failureText).not.toContain('cannot rollback')
+  expect(result.rollbackCount).toBe(0)
+  expect(result.splitRetryCount).toBe(0)
+  expect(result.retryText).toBe('ok')
   expect(result.queueActive).toBe(false)
 })
 

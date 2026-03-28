@@ -116,6 +116,10 @@ const martRefreshBatchEpochSql = "TIMESTAMPTZ '1970-01-01T00:00:00.000Z'"
 const martRefreshProjectPurgeRetryableErrorFragment = 'Failed to delete all rows from index'
 const martReviewArticleServingPurgeReplacementTableName = 'mart.review_article_serving_project_purge_rewrite'
 const martReviewArticleServingOrderIndexName = 'idx_mart_review_article_serving_order'
+const martRefreshFatalInvalidationErrorFragments = [
+  'database has been invalidated because of a previous fatal error',
+  'must be restarted prior to being used again',
+]
 
 const getMartRefreshProgressSnapshot = (): MartRefreshProgressSnapshot => {
   return copyMartRefreshProgressSnapshot(martRefreshProgressSnapshot)
@@ -703,7 +707,7 @@ const getProjectPurgeDeleteRetryParts = (rowIds: Array<bigint | number | string>
 const isProjectPurgeDeleteRetryableError = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error)
 
-  return message.includes(martRefreshProjectPurgeRetryableErrorFragment)
+  return message.includes(martRefreshProjectPurgeRetryableErrorFragment) && !isMartRefreshFatalInvalidationError(error)
 }
 
 const getProjectPromptAnswerFactResetSql = (projectId: string) => {
@@ -1383,6 +1387,14 @@ const getNormalizedMartRefreshError = (error: unknown): Error => {
   return error instanceof Error ? error : new Error(String(error))
 }
 
+const isMartRefreshFatalInvalidationError = (error: unknown) => {
+  const message = getNormalizedMartRefreshError(error).message
+
+  return martRefreshFatalInvalidationErrorFragments.some((fragment) => {
+    return message.includes(fragment)
+  })
+}
+
 const getChainedMartRefreshError = (error: unknown, nextError: unknown, context: string): Error => {
   const normalizedError = getNormalizedMartRefreshError(error)
   const normalizedNextError = getNormalizedMartRefreshError(nextError)
@@ -1404,9 +1416,10 @@ const shouldAttemptMartRefreshBackgroundRollback = (statement: string, error: un
   const normalizedError = getNormalizedMartRefreshError(error)
 
   return (
-    hasMartRefreshExplicitTransaction(statement)
-    || normalizedError.message.includes('Current transaction is aborted')
-    || normalizedError.message.includes('please ROLLBACK')
+    !isMartRefreshFatalInvalidationError(normalizedError)
+    && (hasMartRefreshExplicitTransaction(statement)
+      || normalizedError.message.includes('Current transaction is aborted')
+      || normalizedError.message.includes('please ROLLBACK'))
   )
 }
 
@@ -1419,15 +1432,34 @@ const getMartRefreshBackgroundRollbackError = async (): Promise<Error | null> =>
   }
 }
 
+const getMartRefreshBackgroundRestartError = async (): Promise<Error | null> => {
+  try {
+    await getAppDatabaseService().close()
+    return null
+  } catch (error) {
+    return getNormalizedMartRefreshError(error)
+  }
+}
+
 const runMartRefreshBackgroundStatement = async (statement: string) => {
   try {
     await getAppDatabaseService().runBackground(statement)
   } catch (error) {
-    const rollbackError = shouldAttemptMartRefreshBackgroundRollback(statement, error)
-      ? await getMartRefreshBackgroundRollbackError()
-      : null
+    const normalizedError = getNormalizedMartRefreshError(error)
+    const isFatalInvalidationError = isMartRefreshFatalInvalidationError(normalizedError)
+    const followOnError = isFatalInvalidationError
+      ? await getMartRefreshBackgroundRestartError()
+      : shouldAttemptMartRefreshBackgroundRollback(statement, normalizedError)
+        ? await getMartRefreshBackgroundRollbackError()
+        : null
 
-    throw rollbackError === null ? error : getChainedMartRefreshError(error, rollbackError, 'rollback failed')
+    throw followOnError === null
+      ? normalizedError
+      : getChainedMartRefreshError(
+          normalizedError,
+          followOnError,
+          isFatalInvalidationError ? 'runtime restart failed' : 'rollback failed',
+        )
   }
 }
 
