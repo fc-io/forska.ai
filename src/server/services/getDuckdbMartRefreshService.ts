@@ -19,6 +19,8 @@ type ProjectRefreshBatchRow = {articleCreatedAt: Date | string | null; articleId
 
 type ProjectPurgeBatchRow = {rowId: bigint | number | string}
 
+type ArchivedProjectMartPurgeMode = 'delete_batches' | 'rewrite'
+
 type ProjectRefreshScopeBatchRow = ProjectRefreshBatchRow & {
   articleUpdatedAt: Date | string | null
   inCuratedScope: boolean
@@ -112,7 +114,6 @@ const martRefreshYieldDelayMs = 0
 const knownNoopProjectRefreshReasons = ['humanAssessmentRoutesPostInit']
 const martRefreshBatchEpochSql = "TIMESTAMPTZ '1970-01-01T00:00:00.000Z'"
 const martRefreshProjectPurgeRetryableErrorFragment = 'Failed to delete all rows from index'
-const martRefreshProjectSingleRowPurgeTables = ['mart.review_article_serving']
 const martReviewArticleServingPurgeReplacementTableName = 'mart.review_article_serving_project_purge_rewrite'
 const martReviewArticleServingOrderIndexName = 'idx_mart_review_article_serving_order'
 
@@ -638,13 +639,12 @@ const getProjectScopeBatchSql = (projectId: string, cursor: ProjectRefreshBatchC
   `
 }
 
-const getProjectTablePurgeBatchSize = (tableName: string) => {
-  return martRefreshProjectSingleRowPurgeTables.includes(tableName) ? 1 : martRefreshProjectPurgeRowBatchSize
+const getArchivedProjectMartPurgeMode = (tableName: string): ArchivedProjectMartPurgeMode => {
+  return tableName === 'mart.review_article_serving' ? 'rewrite' : 'delete_batches'
 }
 
 const getProjectTablePurgeBatchSql = ({projectId, tableName}: {projectId: string; tableName: string}) => {
   const projectLiteral = getSqlLiteral(projectId)
-  const batchSize = getProjectTablePurgeBatchSize(tableName)
 
   return `
     SELECT
@@ -652,7 +652,7 @@ const getProjectTablePurgeBatchSql = ({projectId, tableName}: {projectId: string
     FROM ${tableName}
     WHERE project_id = ${projectLiteral}
     ORDER BY rowid ASC
-    LIMIT ${batchSize}
+    LIMIT ${martRefreshProjectPurgeRowBatchSize}
   `
 }
 
@@ -1629,18 +1629,26 @@ const deleteProjectTablePurgeBatches = async ({
         })
 }
 
-const purgeArchivedProjectReviewArticleServing = async (projectId: string): Promise<void> => {
-  return runMartRefreshBackgroundStatement(getReviewArticleServingRewritePurgeSql(projectId))
+const purgeArchivedProjectMartTable = async ({
+  projectId,
+  tableName,
+}: {
+  projectId: string
+  tableName: string
+}): Promise<void> => {
+  return getArchivedProjectMartPurgeMode(tableName) === 'rewrite'
+    ? runMartRefreshBackgroundStatement(getReviewArticleServingRewritePurgeSql(projectId))
+    : deleteProjectTablePurgeBatches({projectId, tableName})
 }
 
 const purgeArchivedProjectMartData = async (projectId: string): Promise<void> => {
-  await deleteProjectTablePurgeBatches({projectId, tableName: 'mart.review_article_serving_detail'})
-  await deleteProjectTablePurgeBatches({projectId, tableName: 'mart.review_article_filter_member'})
-  await purgeArchivedProjectReviewArticleServing(projectId)
-  await deleteProjectTablePurgeBatches({projectId, tableName: 'mart.review_article_rollup'})
-  await deleteProjectTablePurgeBatches({projectId, tableName: 'mart.review_article_filter_row'})
-  await deleteProjectTablePurgeBatches({projectId, tableName: 'mart.prompt_answer_fact'})
-  await deleteProjectTablePurgeBatches({projectId, tableName: 'mart.project_scope_article'})
+  await purgeArchivedProjectMartTable({projectId, tableName: 'mart.review_article_serving_detail'})
+  await purgeArchivedProjectMartTable({projectId, tableName: 'mart.review_article_filter_member'})
+  await purgeArchivedProjectMartTable({projectId, tableName: 'mart.review_article_serving'})
+  await purgeArchivedProjectMartTable({projectId, tableName: 'mart.review_article_rollup'})
+  await purgeArchivedProjectMartTable({projectId, tableName: 'mart.review_article_filter_row'})
+  await purgeArchivedProjectMartTable({projectId, tableName: 'mart.prompt_answer_fact'})
+  await purgeArchivedProjectMartTable({projectId, tableName: 'mart.project_scope_article'})
   await runMartRefreshBackgroundStatement(`
     BEGIN TRANSACTION;
     DELETE FROM app.review_answer_dictionary WHERE project_id = ${getSqlLiteral(projectId)};

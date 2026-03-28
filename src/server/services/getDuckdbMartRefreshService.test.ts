@@ -751,7 +751,7 @@ test('mart refresh splits non-serving archived purge batches after an index dele
   expect(result.queueActive).toBe(false)
 })
 
-test('mart refresh rewrites review_article_serving during archived purge', () => {
+test('mart refresh completes archived purge without retrying the serving row delete path', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -762,6 +762,7 @@ test('mart refresh rewrites review_article_serving during archived purge', () =>
         const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
         const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
         let queueActive = true
+        let servingDeleteAttempted = false
         const statements = []
 
         void mock.module(appDatabaseServiceModulePath, () => {
@@ -802,6 +803,13 @@ test('mart refresh rewrites review_article_serving during archived purge', () =>
                 },
                 maintenance: async () => {},
                 runBackground: async (statement) => {
+                  if (statement.includes('DELETE FROM mart.review_article_serving') && statement.includes('rowid IN')) {
+                    servingDeleteAttempted = true
+                    throw new Error(
+                      'FATAL Error: Failed: database has been invalidated because of a previous fatal error. The database must be restarted prior to being used again. Original error: "Invalid Input Error: Failed to delete all rows from index. Only deleted 4 out of 10 rows."',
+                    )
+                  }
+
                   statements.push(statement)
                 },
               }
@@ -810,8 +818,11 @@ test('mart refresh rewrites review_article_serving during archived purge', () =>
         })
 
         const martRefreshService = (await import(martRefreshServiceModulePath + '?rewrite-serving=' + Date.now())).getDuckdbMartRefreshService()
-        await martRefreshService.flush()
-        console.log(JSON.stringify({queueActive, statements}))
+        const result = await martRefreshService.flush().then(
+          () => 'ok',
+          (error) => error instanceof Error ? error.message : String(error),
+        )
+        console.log(JSON.stringify({queueActive, result, servingDeleteAttempted, statements}))
       `,
     ],
     {cwd: process.cwd(), env: {...process.env}},
@@ -825,6 +836,8 @@ test('mart refresh rewrites review_article_serving during archived purge', () =>
 
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
     queueActive: boolean
+    result: string
+    servingDeleteAttempted: boolean
     statements: string[]
   }
 
@@ -848,6 +861,8 @@ test('mart refresh rewrites review_article_serving during archived purge', () =>
       return statement.includes('DELETE FROM mart.review_article_serving\n    WHERE rowid IN')
     }),
   ).toBe(false)
+  expect(result.servingDeleteAttempted).toBe(false)
+  expect(result.result).toBe('ok')
   expect(result.queueActive).toBe(false)
 })
 
