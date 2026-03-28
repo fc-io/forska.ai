@@ -1337,6 +1337,24 @@ const getQueuedProjectTasks = async () => {
   return getAppDatabaseService().queryJson<MartRefreshTaskRow>(getQueuedProjectTasksSql())
 }
 
+const getQueuedProjectTasksForProject = async (projectId: string) => {
+  await ensureMartRefreshQueueSchema()
+
+  return getAppDatabaseService().queryJson<MartRefreshTaskRow>(`
+    SELECT
+      id,
+      refresh_scope AS refreshScope,
+      project_id AS projectId,
+      article_id AS articleId,
+      COALESCE(refresh_generation, 0) AS refreshGeneration
+    FROM app.mart_refresh_queue
+    WHERE completed_at IS NULL
+      AND refresh_scope = 'project'
+      AND project_id = ${getSqlLiteral(projectId)}
+    ORDER BY EPOCH(created_at) ASC, id ASC
+  `)
+}
+
 const getHasQueuedTasks = async () => {
   await ensureMartRefreshQueueSchema()
   const rows = await getAppDatabaseService().queryJson<{count: number}>(`
@@ -2440,6 +2458,33 @@ export const flushQueuedMartRefreshes = async (): Promise<void> => {
   return martRefreshDrainPromise
 }
 
+const recoverQueuedArchivedProjectRefresh = async (projectId: string) => {
+  const queuedProjectTasks = await getQueuedProjectTasksForProject(projectId)
+
+  if (queuedProjectTasks.length === 0) {
+    return {completedTaskCount: 0, projectId}
+  }
+
+  if (!(await getProjectIsArchived(projectId))) {
+    throw new Error(`Queued archived-project recovery requires an archived project: ${projectId}`)
+  }
+
+  setMartRefreshProgressSnapshot({
+    claimedQueuedArticleIds: [],
+    claimedQueuedProjectIds: [projectId],
+    processingArticleIds: [],
+    processingProjectIds: [projectId],
+  })
+
+  try {
+    await refreshProjects([projectId])
+    await completeQueuedTasks(queuedProjectTasks)
+    return {completedTaskCount: queuedProjectTasks.length, projectId}
+  } finally {
+    resetMartRefreshProgressSnapshot()
+  }
+}
+
 const queueProjectRefreshes = async (projectIds: string[], reason: string) => {
   return queueMartRefreshTasks(
     getUniqueValues(projectIds).map((projectId) => {
@@ -2557,6 +2602,7 @@ const duckdbMartRefreshService = {
   queueProjectRefreshes,
   queueProjectRefreshesByImportRouteIds,
   queueProjectRefreshesByPromptIds,
+  recoverQueuedArchivedProjectRefresh,
   resetProgressSnapshotForTests: () => {
     martRefreshQueueCompletedAtColumnReady = null
     martRefreshQueueCompletedAtColumnVerified = false

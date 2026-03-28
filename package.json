@@ -44,6 +44,7 @@
     "db:duck:rebuild-marts": "bun scripts/backfillReviewServingV3.ts",
     "db:duck:backfill-review-serving-v3": "bun scripts/backfillReviewServingV3.ts",
     "db:duck:purge-archived-marts": "bun scripts/purgeArchivedProjectMarts.ts",
+    "db:duck:recover-archived-refresh-queue": "bun scripts/recoverArchivedProjectRefreshQueue.ts",
     "db:duck:backfill-source-metadata": "bun scripts/backfillArticleSourceMetadata.ts",
     "db:duck:backfill-ppr-host-labels": "bun scripts/backfillPprHostLabels.ts",
     "db:studio": "bun scripts/dbStudio.ts",
