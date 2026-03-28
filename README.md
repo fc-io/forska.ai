@@ -58,6 +58,30 @@ Open the local URL printed by Vite. Default local dev ports: app `3000`, API `30
 
 Do not create or edit `.env` files for normal local dev. Configure providers/models in the UI. For one-off machine-local overrides, pass shell env inline with the command.
 
+If you want a branch/worktree to run beside your main repo, pass custom ports inline:
+
+```bash
+# terminal 1
+VITE_PORT=3100 API_SERVER_PORT=3101 bun run dev:server
+
+# terminal 2
+VITE_PORT=3100 API_SERVER_PORT=3101 bun run dev:app
+```
+
+If you use the built app server too:
+
+```bash
+API_SERVER_PORT=3101 APP_SERVER_PORT=8180 bun run start
+```
+
+Or export once per shell:
+
+```bash
+export VITE_PORT=3100
+export API_SERVER_PORT=3101
+export APP_SERVER_PORT=8180
+```
+
 ## Local llama.cpp / llama-server
 
 - Install `llama.cpp` / `llama-server`: [install guide](https://github.com/ggml-org/llama.cpp/blob/master/docs/install.md), [releases](https://github.com/ggml-org/llama.cpp/releases), or [build from source](https://github.com/ggml-org/llama.cpp/blob/master/docs/build.md)

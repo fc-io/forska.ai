@@ -42,10 +42,34 @@ Open the local URL printed by Vite. Default local dev ports: app `3000`, API `30
 
 Do not create or edit `.env` files for normal local dev.
 
+If you want a branch/worktree to run beside your main repo, pass custom ports inline:
+
+```bash
+# terminal 1
+VITE_PORT=3100 API_SERVER_PORT=3101 bun run dev:server
+
+# terminal 2
+VITE_PORT=3100 API_SERVER_PORT=3101 bun run dev:app
+```
+
 If you need a machine-local override, pass it inline:
 
 ```bash
 DUCKDB_PATH=~/forska/forska.duckdb bun run dev:server
+```
+
+If you use the built app server too:
+
+```bash
+API_SERVER_PORT=3101 APP_SERVER_PORT=8180 bun run start
+```
+
+Or export once per shell:
+
+```bash
+export VITE_PORT=3100
+export API_SERVER_PORT=3101
+export APP_SERVER_PORT=8180
 ```
 
 Optional direct-origin frontend override:
