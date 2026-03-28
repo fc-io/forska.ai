@@ -94,14 +94,15 @@
         "Verify in browser `/projects/archived` select, delete, refresh, confirm deleted projects are gone"
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-004"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     }
   ],
   "metadata": {
-    "updatedAt": "2026-03-28T20:59:17.433Z"
+    "updatedAt": "2026-03-28T21:03:26.904Z"
   }
 }

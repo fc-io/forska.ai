@@ -1,11 +1,15 @@
 import {type QueryClient, useQueryClient} from '@tanstack/solid-query'
 import {type ColumnDef, createSolidTable, flexRender, getCoreRowModel} from '@tanstack/solid-table'
 import {format} from 'date-fns'
-import {type Accessor, createMemo, createSignal, For, type Setter} from 'solid-js'
+import {type Accessor, createEffect, createMemo, createSignal, For, type Setter, Show} from 'solid-js'
 
 import {Button} from '../../../../components/ui/button'
 import {Table, TableBody, TableCell, TableHead, TableHeader, TableRow} from '../../../../components/ui/table'
-import {type fetchArchivedProjects, unarchiveProject} from '../../../../services/projectsService'
+import {
+  deleteArchivedProjects,
+  type fetchArchivedProjects,
+  unarchiveProject,
+} from '../../../../services/projectsService'
 
 type ArchivedProject = Awaited<ReturnType<typeof fetchArchivedProjects>>[number]
 
@@ -13,8 +17,82 @@ type ArchivedProjectsTableProps = {projects: ArchivedProject[]}
 
 type ArchivedProjectsTableColumnsParams = {
   queryClient: QueryClient
+  allSelected: Accessor<boolean>
+  someSelected: Accessor<boolean>
+  toggleCurrentPageSelection: (checked: boolean) => void
+  rowSelection: Accessor<Record<string, boolean>>
   unarchivingProjectIds: Accessor<Set<string>>
   setUnarchivingProjectIds: Setter<Set<string>>
+}
+
+const getSelectedRowIds = (rowIds: string[], rowSelection: Record<string, boolean>) => {
+  return rowIds.filter((rowId) => {
+    return Boolean(rowSelection[rowId])
+  })
+}
+
+const getDeleteConfirmationMessage = (selectedCount: number) => {
+  const projectLabel = selectedCount === 1 ? 'project' : 'projects'
+
+  return `Delete ${selectedCount} selected archived ${projectLabel}? This delete is permanent and cannot restore the project.`
+}
+
+const mergeCurrentPageSelection = (rowIds: string[], checked: boolean, rowSelection: Record<string, boolean>) => {
+  return checked
+    ? rowIds.reduce<Record<string, boolean>>((next, rowId) => {
+        return {...next, [rowId]: true}
+      }, rowSelection)
+    : rowIds.reduce<Record<string, boolean>>((next, rowId) => {
+        const {[rowId]: _removed, ...rest} = next
+        return rest
+      }, rowSelection)
+}
+
+const filterSelectionToCurrentRows = (rowIds: string[], rowSelection: Record<string, boolean>) => {
+  return rowIds.reduce<Record<string, boolean>>((next, rowId) => {
+    return rowSelection[rowId] ? {...next, [rowId]: true} : next
+  }, {})
+}
+
+const selectionMatchesCurrentRows = (current: Record<string, boolean>, next: Record<string, boolean>) => {
+  const currentKeys = Object.keys(current).sort()
+  const nextKeys = Object.keys(next).sort()
+
+  return (
+    currentKeys.length === nextKeys.length
+    && currentKeys.every((key, index) => {
+      return key === nextKeys[index]
+    })
+  )
+}
+
+const SelectionHeaderCheckbox = (props: {
+  allSelected: Accessor<boolean>
+  someSelected: Accessor<boolean>
+  toggleCurrentPageSelection: (checked: boolean) => void
+}) => {
+  let input: HTMLInputElement | undefined
+
+  createEffect(() => {
+    if (input) {
+      input.indeterminate = props.someSelected()
+    }
+  })
+
+  return (
+    <input
+      ref={(element) => {
+        input = element
+      }}
+      type="checkbox"
+      aria-label="Select all archived projects on this page"
+      class="size-4"
+      checked={props.allSelected()}
+      onChange={(event) => {
+        props.toggleCurrentPageSelection(event.currentTarget.checked)
+      }}
+    />
+  )
 }
 
 const getProjectModelLabel = (project: ArchivedProject) => {
@@ -78,6 +156,37 @@ const getArchivedProjectsColumns = (
   params: ArchivedProjectsTableColumnsParams,
 ): ColumnDef<ArchivedProject, unknown>[] => {
   return [
+    {
+      id: 'select',
+      header: () => {
+        return (
+          <SelectionHeaderCheckbox
+            allSelected={params.allSelected}
+            someSelected={params.someSelected}
+            toggleCurrentPageSelection={params.toggleCurrentPageSelection}
+          />
+        )
+      },
+      size: 52,
+      minSize: 52,
+      cell: (info) => {
+        const project = info.row.original
+        const isSelected = () => {
+          return Boolean(params.rowSelection()[project.id])
+        }
+
+        return (
+          <input
+            type="checkbox"
+            class="size-4"
+            checked={isSelected()}
+            onChange={(event) => {
+              info.row.toggleSelected(event.currentTarget.checked)
+            }}
+          />
+        )
+      },
+    },
     {
       accessorKey: 'name',
       header: 'Project',
@@ -170,23 +279,98 @@ const getArchivedProjectsColumns = (
 
 export const ArchivedProjectsTable = (props: ArchivedProjectsTableProps) => {
   const queryClient = useQueryClient()
+  const [rowSelection, setRowSelection] = createSignal<Record<string, boolean>>({})
   const [unarchivingProjectIds, setUnarchivingProjectIds] = createSignal<Set<string>>(new Set())
+  const [isDeletingSelected, setIsDeletingSelected] = createSignal(false)
   const sortedProjects = createMemo(() => {
     return [...props.projects].sort((a, b) => {
       return a.name.localeCompare(b.name)
     })
   })
-  const columns = getArchivedProjectsColumns({queryClient, unarchivingProjectIds, setUnarchivingProjectIds})
+  const currentPageRowIds = createMemo(() => {
+    return sortedProjects().map((project) => {
+      return project.id
+    })
+  })
+  const selectedProjectIds = createMemo(() => {
+    return getSelectedRowIds(currentPageRowIds(), rowSelection())
+  })
+  const selectedCount = createMemo(() => {
+    return selectedProjectIds().length
+  })
+  const allSelected = createMemo(() => {
+    return currentPageRowIds().length > 0 && selectedCount() === currentPageRowIds().length
+  })
+  const someSelected = createMemo(() => {
+    return selectedCount() > 0 && !allSelected()
+  })
+  const toggleCurrentPageSelection = (checked: boolean) => {
+    setRowSelection((current) => {
+      return mergeCurrentPageSelection(currentPageRowIds(), checked, current)
+    })
+  }
+  createEffect(() => {
+    const currentSelection = rowSelection()
+    const nextSelection = filterSelectionToCurrentRows(currentPageRowIds(), rowSelection())
+
+    if (!selectionMatchesCurrentRows(currentSelection, nextSelection)) {
+      setRowSelection(nextSelection)
+    }
+  })
+  const columns = getArchivedProjectsColumns({
+    queryClient,
+    allSelected,
+    someSelected,
+    toggleCurrentPageSelection,
+    rowSelection,
+    unarchivingProjectIds,
+    setUnarchivingProjectIds,
+  })
   const table = createSolidTable({
     get data() {
       return sortedProjects()
     },
     columns,
     getCoreRowModel: getCoreRowModel(),
+    enableRowSelection: true,
+    enableMultiRowSelection: true,
     getRowId: (row) => {
       return row.id
     },
+    get state() {
+      return {rowSelection: rowSelection()}
+    },
+    onRowSelectionChange: (updater) => {
+      const current = rowSelection()
+      const next = typeof updater === 'function' ? (updater as (old: unknown) => unknown)(current) : updater
+      setRowSelection((next || {}) as Record<string, boolean>)
+    },
   })
+
+  const handleDeleteSelectedProjects = () => {
+    if (!selectedCount()) {
+      return
+    }
+
+    const confirmed = globalThis.confirm(getDeleteConfirmationMessage(selectedCount()))
+
+    if (!confirmed) {
+      return
+    }
+
+    setIsDeletingSelected(true)
+    void deleteArchivedProjects(queryClient, selectedProjectIds())
+      .then(() => {
+        setRowSelection({})
+      })
+      .catch((error) => {
+        console.error('Failed to delete archived projects:', error)
+        alert(`Failed to delete archived projects: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      })
+      .finally(() => {
+        setIsDeletingSelected(false)
+      })
+  }
 
   return (
     <div class="w-full overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -202,6 +386,19 @@ export const ArchivedProjectsTable = (props: ArchivedProjectsTableProps) => {
             {sortedProjects().length} {sortedProjects().length === 1 ? 'project' : 'projects'}
           </span>
         </div>
+        <Show when={selectedCount() > 0}>
+          <div class="mt-3 flex flex-col gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+            <span class="text-sm font-medium text-red-900">{selectedCount()} selected on this page</span>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={isDeletingSelected()}
+              onClick={handleDeleteSelectedProjects}
+            >
+              {isDeletingSelected() ? 'Deleting...' : 'Delete selected'}
+            </Button>
+          </div>
+        </Show>
       </div>
       <Table class="min-w-[1100px] w-full">
         <TableHeader class="bg-gray-50/80">
@@ -238,7 +435,11 @@ export const ArchivedProjectsTable = (props: ArchivedProjectsTableProps) => {
                       return (
                         <TableCell
                           class={
-                            cell.column.id === 'actions' ? 'px-4 py-4 text-right align-middle' : 'px-4 py-4 align-top'
+                            cell.column.id === 'actions'
+                              ? 'px-4 py-4 text-right align-middle'
+                              : cell.column.id === 'select'
+                                ? 'px-4 py-4 align-middle'
+                                : 'px-4 py-4 align-top'
                           }
                           style={{width: `${cell.column.getSize()}px`}}
                         >
