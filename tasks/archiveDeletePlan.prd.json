@@ -1,0 +1,92 @@
+{
+  "name": "Archived Project Permanent Delete",
+  "branchName": "ralph/archived-project-delete",
+  "description": "Add bulk permanent delete for archived projects on `/projects/archived` while preserving shared article, prompt, and judgment data.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Make judgment_human project links nullable",
+      "description": "As a developer, I want `app.judgment_human.project_id` to allow `NULL` so that archived projects can be deleted without removing preserved human judgments.",
+      "acceptanceCriteria": [
+        "Add a DuckDB migration that makes `app.judgment_human.project_id` nullable",
+        "The updated schema supports preserved `app.judgment_human` rows with `project_id = NULL`",
+        "`bun run lint` passes",
+        "`bun run db:mig` passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Add archived-project delete route and core cleanup",
+      "description": "As a maintainer, I want a bulk archived-project delete API so that only archived projects can be permanently removed together with their project-owned operational data.",
+      "acceptanceCriteria": [
+        "Add `POST /api/projects/delete-archived` with body `{projectIds: string[]}`",
+        "Reject requests that include active projects or projects with non-terminal `app.judgment_job` rows",
+        "Delete project-owned rows for `app.token_use`, `app.judgment_job_prompt`, `app.judgment_job`, `app.review`, `app.project_import_route`, `app.project_article`, `app.project_prompt`, `app.mart_refresh_queue`, and `app.project` in a transaction",
+        "Add route tests proving active projects are rejected and archived projects can be deleted",
+        "`bun run lint` passes",
+        "`bun run db:mig` passes",
+        "`bun test src/server/routes/ProjectsRoutes.test.ts` passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-003",
+      "title": "Preserve shared records during archived delete",
+      "description": "As a maintainer, I want archived-project deletion to preserve judgments and clean surviving provenance references so that permanent deletes do not destroy shared data.",
+      "acceptanceCriteria": [
+        "Null `app.project_article.imported_from_project_id` and `app.project_prompt.origin_project_id` when they point at deleted projects",
+        "Preserve `app.judgment` and `app.judgment_human` rows by setting `project_id = NULL` during archived-project delete",
+        "Purge project-scoped cache and mart rows using the same table set as `purgeArchivedProjectMartData`",
+        "Extend route tests to cover provenance nulling, preserved judgments, and mart/cache cleanup",
+        "`bun run lint` passes",
+        "`bun run db:mig` passes",
+        "`bun test src/server/routes/ProjectsRoutes.test.ts` passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-002"]
+    },
+    {
+      "id": "US-004",
+      "title": "Add archived-project bulk delete client helper",
+      "description": "As a developer, I want a client helper for archived-project bulk delete so that the archived projects screen can call the new API and refresh project queries consistently.",
+      "acceptanceCriteria": [
+        "Add `deleteArchivedProjects(queryClient, projectIds)` in `src/services/projectsService.ts`",
+        "Call the new archived-project delete route with `{projectIds}` using the repo's existing client API pattern",
+        "Invalidate `['projects']` and `['projects', 'archived']` after success and surface server errors using existing app patterns",
+        "`bun run lint` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003"]
+    },
+    {
+      "id": "US-005",
+      "title": "Add bulk delete UI to archived projects table",
+      "description": "As a user, I want to select archived projects on `/projects/archived` and delete them in bulk so that I can permanently remove projects that I no longer need.",
+      "acceptanceCriteria": [
+        "Update `src/app/routes/+projects/+archived/archivedProjectsTable.tsx` to use the reviews-table selection pattern with a checkbox column and select-all control",
+        "Show a top action bar with selected-count text and a destructive `Delete selected` action only when at least one current-page row is selected",
+        "Keep the row-level `Unarchive` action and use confirmation copy that says the delete is permanent and cannot restore the project",
+        "Clear selection after successful delete and keep selection scoped to the current archived page rows",
+        "`bun run lint` passes",
+        "`bun run build` passes",
+        "Verify in browser `/projects/archived` select, delete, refresh, confirm deleted projects are gone"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-004"]
+    }
+  ]
+}
