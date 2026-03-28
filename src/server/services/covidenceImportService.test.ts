@@ -1,3 +1,4 @@
+import {createHash} from 'node:crypto'
 import {existsSync} from 'node:fs'
 import path from 'node:path'
 
@@ -9,12 +10,16 @@ import {
   getCovidencePackageConfig,
   getCovidencePackageCursor,
   getCovidencePackageFileContent,
+  mergeCovidenceReferenceRows,
   parseCovidenceCsvReferenceRows,
   parseCovidenceReferenceRows,
   storeCovidencePackageFiles,
 } from './covidenceImportService.ts'
 
 const datasourceIdsToDelete = new Set<string>()
+const getCovidenceFallbackHash = (value: string) => {
+  return createHash('sha256').update(value).digest('hex')
+}
 
 afterEach(() => {
   Array.from(datasourceIdsToDelete).map((datasourceId) => {
@@ -515,4 +520,228 @@ test('parseCovidenceReferenceRows returns stable RIS parse errors for malformed 
     },
     ok: false,
   })
+})
+
+test('mergeCovidenceReferenceRows uses all rows as canonical metadata and reports conflicts and missing matches', () => {
+  const merged = mergeCovidenceReferenceRows([
+    {
+      citation: {
+        authors: 'Doe, Jane',
+        doi: 'https://doi.org/10.1000/Alpha',
+        title: 'Canonical DOI title',
+        year: '2024',
+      },
+      exclusionReason: null,
+      fileRole: 'all',
+      notes: null,
+      rowNumber: 2,
+      sourceFileName: 'all.ris',
+      tags: ['all-tag'],
+    },
+    {
+      citation: {authors: 'Doe, Jane', doi: '10.1000/alpha', title: 'Overlay DOI title', year: '2024'},
+      exclusionReason: null,
+      fileRole: 'irrelevant',
+      notes: 'irrelevant note',
+      rowNumber: 3,
+      sourceFileName: 'irrelevant.csv',
+      tags: ['irrelevant-tag'],
+    },
+    {
+      citation: {authors: 'Doe, Jane', doi: 'doi:10.1000/alpha', title: 'Second overlay DOI title', year: '2024'},
+      exclusionReason: null,
+      fileRole: 'full_text',
+      notes: 'full text note',
+      rowNumber: 4,
+      sourceFileName: 'full_text.csv',
+      tags: ['full-text-tag'],
+    },
+    {
+      citation: {authors: 'Roe, John', pmid: '12345', title: 'Canonical PMID title', year: '2021'},
+      exclusionReason: null,
+      fileRole: 'all',
+      notes: null,
+      rowNumber: 5,
+      sourceFileName: 'all.ris',
+      tags: [],
+    },
+    {
+      citation: {authors: 'Roe, John', pmid: '12345', title: 'Overlay PMID title', year: '2021'},
+      exclusionReason: null,
+      fileRole: 'full_text',
+      notes: 'pmid note',
+      rowNumber: 6,
+      sourceFileName: 'full_text.csv',
+      tags: ['pmid-tag'],
+    },
+    {
+      citation: {authors: 'Lane, Kim', reference_id: 'cov-3', title: 'Canonical ref title', year: '2020'},
+      exclusionReason: null,
+      fileRole: 'all',
+      notes: null,
+      rowNumber: 7,
+      sourceFileName: 'all.ris',
+      tags: [],
+    },
+    {
+      citation: {authors: 'Lane, Kim', reference_id: 'COV-3', title: 'Overlay ref title', year: '2020'},
+      exclusionReason: null,
+      fileRole: 'included',
+      notes: 'included note',
+      rowNumber: 8,
+      sourceFileName: 'included.csv',
+      tags: ['included-tag'],
+    },
+    {
+      citation: {authors: 'Smith, Pat; Roe, John', title: 'Fallback title', year: '2019'},
+      exclusionReason: null,
+      fileRole: 'all',
+      notes: null,
+      rowNumber: 9,
+      sourceFileName: 'all.csv',
+      tags: [],
+    },
+    {
+      citation: {authors: 'Smith, Pat', title: 'Fallback title', year: '2019'},
+      exclusionReason: 'No outcome',
+      fileRole: 'excluded',
+      notes: 'excluded note',
+      rowNumber: 10,
+      sourceFileName: 'excluded.csv',
+      tags: ['excluded-tag'],
+    },
+    {
+      citation: {authors: 'Smith, Pat', title: 'Fallback title', year: '2019'},
+      exclusionReason: null,
+      fileRole: 'included',
+      notes: 'included fallback note',
+      rowNumber: 11,
+      sourceFileName: 'included.csv',
+      tags: ['included-fallback-tag'],
+    },
+    {
+      citation: {authors: 'Missing, Match', doi: '10.9999/missing', title: 'Missing canonical', year: '2022'},
+      exclusionReason: null,
+      fileRole: 'excluded',
+      notes: 'missing note',
+      rowNumber: 12,
+      sourceFileName: 'excluded.csv',
+      tags: ['missing-tag'],
+    },
+  ])
+
+  expect(
+    merged.candidates.map((candidate) => {
+      return {
+        articleKey: candidate.articleKey,
+        articleKeySource: candidate.articleKeySource,
+        citation: candidate.citation,
+        exclusionReasons: candidate.exclusionReasons,
+        notes: candidate.notes,
+        stageMembership: candidate.stageMembership,
+        tags: candidate.tags,
+      }
+    }),
+  ).toEqual([
+    {
+      articleKey: 'doi:10.1000/alpha',
+      articleKeySource: 'doi',
+      citation: {
+        authors: 'Doe, Jane',
+        doi: 'https://doi.org/10.1000/Alpha',
+        title: 'Canonical DOI title',
+        year: '2024',
+      },
+      exclusionReasons: [],
+      notes: ['irrelevant note', 'full text note'],
+      stageMembership: {all: true, excluded: false, full_text: true, included: false, irrelevant: true},
+      tags: ['all-tag', 'irrelevant-tag', 'full-text-tag'],
+    },
+    {
+      articleKey: 'pmid:12345',
+      articleKeySource: 'pmid',
+      citation: {authors: 'Roe, John', pmid: '12345', title: 'Canonical PMID title', year: '2021'},
+      exclusionReasons: [],
+      notes: ['pmid note'],
+      stageMembership: {all: true, excluded: false, full_text: true, included: false, irrelevant: false},
+      tags: ['pmid-tag'],
+    },
+    {
+      articleKey: 'reference_id:cov-3',
+      articleKeySource: 'reference_id',
+      citation: {authors: 'Lane, Kim', reference_id: 'cov-3', title: 'Canonical ref title', year: '2020'},
+      exclusionReasons: [],
+      notes: ['included note'],
+      stageMembership: {all: true, excluded: false, full_text: false, included: true, irrelevant: false},
+      tags: ['included-tag'],
+    },
+    {
+      articleKey: `title_year_first_author:${getCovidenceFallbackHash('fallback title|2019|smith pat')}`,
+      articleKeySource: 'title_year_first_author',
+      citation: {authors: 'Smith, Pat; Roe, John', title: 'Fallback title', year: '2019'},
+      exclusionReasons: ['No outcome'],
+      notes: ['excluded note', 'included fallback note'],
+      stageMembership: {all: true, excluded: true, full_text: false, included: true, irrelevant: false},
+      tags: ['excluded-tag', 'included-fallback-tag'],
+    },
+  ])
+  expect(merged.warnings.conflictingStageMemberships).toEqual([
+    {
+      articleKey: 'doi:10.1000/alpha',
+      conflictingFileRoles: ['irrelevant', 'full_text'],
+      sourceRows: [
+        {
+          citation: {authors: 'Doe, Jane', doi: '10.1000/alpha', title: 'Overlay DOI title', year: '2024'},
+          exclusionReason: null,
+          fileRole: 'irrelevant',
+          notes: 'irrelevant note',
+          rowNumber: 3,
+          sourceFileName: 'irrelevant.csv',
+          tags: ['irrelevant-tag'],
+        },
+        {
+          citation: {authors: 'Doe, Jane', doi: 'doi:10.1000/alpha', title: 'Second overlay DOI title', year: '2024'},
+          exclusionReason: null,
+          fileRole: 'full_text',
+          notes: 'full text note',
+          rowNumber: 4,
+          sourceFileName: 'full_text.csv',
+          tags: ['full-text-tag'],
+        },
+      ],
+    },
+    {
+      articleKey: `title_year_first_author:${getCovidenceFallbackHash('fallback title|2019|smith pat')}`,
+      conflictingFileRoles: ['excluded', 'included'],
+      sourceRows: [
+        {
+          citation: {authors: 'Smith, Pat', title: 'Fallback title', year: '2019'},
+          exclusionReason: 'No outcome',
+          fileRole: 'excluded',
+          notes: 'excluded note',
+          rowNumber: 10,
+          sourceFileName: 'excluded.csv',
+          tags: ['excluded-tag'],
+        },
+        {
+          citation: {authors: 'Smith, Pat', title: 'Fallback title', year: '2019'},
+          exclusionReason: null,
+          fileRole: 'included',
+          notes: 'included fallback note',
+          rowNumber: 11,
+          sourceFileName: 'included.csv',
+          tags: ['included-fallback-tag'],
+        },
+      ],
+    },
+  ])
+  expect(merged.warnings.missingMatches).toEqual([
+    {
+      articleKey: 'doi:10.9999/missing',
+      articleKeySource: 'doi',
+      fileRole: 'excluded',
+      rowNumber: 12,
+      sourceFileName: 'excluded.csv',
+    },
+  ])
 })
