@@ -1,0 +1,261 @@
+{
+  "name": "Covidence Datasource Import",
+  "branchName": "ralph/covidence-datasource-import",
+  "description": "Import Covidence screening packages as datasource-backed projects with reused prompts and seeded human judgments for title/abstract and full-text workflows.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add Covidence package config and asset storage helpers",
+      "description": "As a maintainer, I want Covidence imports to persist their package files and cursor config so datasource create and reimport can use a stable package definition.",
+      "acceptanceCriteria": [
+        "Add Covidence package config helpers that store mode, file roles, and saved asset paths in `data_source.cursor`.",
+        "Save uploaded package files under `assets/covidence_imports/<datasourceId>/` with path validation suitable for reimport.",
+        "The helpers support both `title_abstract` and `full_text` modes without inventing a second persistence format.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Parse Covidence CSV exports into labeled reference rows",
+      "description": "As a maintainer, I want CSV Covidence exports parsed into a consistent reference shape so later merge and import steps can treat file roles uniformly.",
+      "acceptanceCriteria": [
+        "Parse Covidence reference CSV files into rows that preserve citation metadata plus tags, notes, and exclusion reasons when present.",
+        "Support labeled file roles for `all`, `irrelevant`, `full_text`, `excluded`, and `included` without losing the source-role information.",
+        "Return stable parse errors for malformed or unsupported CSV inputs instead of silently dropping rows.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-003",
+      "title": "Parse Covidence RIS exports into labeled reference rows",
+      "description": "As a maintainer, I want RIS Covidence exports parsed into the same reference shape as CSV so either export format can drive the screening import flow.",
+      "acceptanceCriteria": [
+        "Parse Covidence RIS files into normalized citation rows with title, abstract, authors, DOI, PMID, URL, notes, and source-role information when present.",
+        "Support labeled file roles for `all`, `irrelevant`, `full_text`, `excluded`, and `included` in RIS packages.",
+        "RIS parsing produces the same downstream row contract used by the CSV parser so later merge logic is format-agnostic.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-004",
+      "title": "Merge labeled Covidence files into normalized article candidates",
+      "description": "As a maintainer, I want rows from multiple Covidence files merged by a stable article key so one canonical article record can carry screening-stage overlays and warnings.",
+      "acceptanceCriteria": [
+        "Merge labeled rows with stable key priority `DOI -> PMID -> Covidence/reference id -> normalized title+year+first-author hash`.",
+        "Use the `all` file as the canonical metadata source while stage files overlay membership, tags, notes, and exclusion reasons.",
+        "The merge result reports conflicting stage memberships and missing matches for analysis instead of hiding them.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-002", "US-003"]
+    },
+    {
+      "id": "US-005",
+      "title": "Add Covidence analyze route for multi-file packages",
+      "description": "As an admin, I want to analyze a Covidence package before importing so I can confirm file roles, row coverage, and merge warnings before creating a datasource.",
+      "acceptanceCriteria": [
+        "Add `POST /api/datasources/import/covidence-analyze` for multi-file Covidence uploads.",
+        "The analyze response returns mode, detected file roles, counts, warnings, and sample merged rows without persisting a datasource.",
+        "Analyze rejects invalid mode/file-role combinations such as missing required files or mutually exclusive membership conflicts that make the package unusable.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-004"]
+    },
+    {
+      "id": "US-006",
+      "title": "Persist merged Covidence packages as datasource article imports",
+      "description": "As a maintainer, I want Covidence package create and reimport to persist normalized articles on a stable import route so the datasource always reflects the merged package state.",
+      "acceptanceCriteria": [
+        "Add `POST /api/datasources/import/covidence-create` and `POST /api/datasources/import/covidence` using import routes shaped as `covidence:<datasourceId>`.",
+        "Create stores all merged package articles as `ArticleImportStoreRow` values while preserving raw package metadata in `originalData` and `sourceMetadata`.",
+        "Reimport reloads the saved package config and updates the existing datasource/import route idempotently instead of creating duplicates.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001", "US-004", "US-005"]
+    },
+    {
+      "id": "US-007",
+      "title": "Reuse or create Covidence prompts from screening criteria",
+      "description": "As an admin, I want the import flow to reuse or create the right screening prompt from inclusion and exclusion criteria so each Covidence project starts with the expected judgment question.",
+      "acceptanceCriteria": [
+        "Build prompt text for `title_abstract` and `full_text` modes with the stage-specific question, allowed answers, and `Inclusion:` / `Exclusion:` blocks.",
+        "Set prompt type to `'yes' | 'no'` or `'yes' | 'no' | 'unsure'` from the selected answer set.",
+        "Reuse an existing prompt when content, heading, and type already match; only create a new prompt when no existing prompt matches.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-008",
+      "title": "Create or reuse title/abstract projects linked to Covidence routes",
+      "description": "As an admin, I want a `title_abstract` import to create or reuse a project linked to the Covidence import route so the screening package is immediately ready for review.",
+      "acceptanceCriteria": [
+        "A `title_abstract` import creates or reuses one project for the datasource instead of leaving project setup to a manual follow-up step.",
+        "The project links to the Covidence import route and attaches the reused or created screening prompt.",
+        "The created project defaults to title and abstract review settings that match the screening stage input collected in the import flow.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-006", "US-007"]
+    },
+    {
+      "id": "US-009",
+      "title": "Seed title/abstract human judgments from Covidence decisions",
+      "description": "As an admin, I want `title_abstract` imports to seed human judgments from Covidence outcomes so irrelevant and full-text decisions appear immediately in the project.",
+      "acceptanceCriteria": [
+        "Seed answered `judgment_human` rows for the created or reused title/abstract project using `irrelevant -> no` and `full_text -> yes`.",
+        "Rows without a Covidence decision remain unanswered so human or LLM review can still assess them later.",
+        "Reimport updates or preserves the same seeded human judgments idempotently instead of duplicating answers for the same project/article/prompt combination.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-008"]
+    },
+    {
+      "id": "US-010",
+      "title": "Create or reuse full-text projects with the correct article scope",
+      "description": "As an admin, I want a `full_text` import to create or reuse a project scoped to the full-text stage so final screening starts from the right article set.",
+      "acceptanceCriteria": [
+        "A `full_text` import creates or reuses one project for the datasource and links the selected prompt plus the Covidence import route.",
+        "The project scope defaults to articles that reached full-text review: `full_text ∪ excluded ∪ included`.",
+        "The project reuses the existing datasource/package state on reimport instead of creating a second project for the same Covidence package.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-006", "US-007"]
+    },
+    {
+      "id": "US-011",
+      "title": "Seed full-text human judgments from included and excluded exports",
+      "description": "As an admin, I want `full_text` imports to seed included and excluded decisions so final-screening projects start with the existing Covidence outcomes already recorded.",
+      "acceptanceCriteria": [
+        "Seed answered `judgment_human` rows for the created or reused full-text project using `excluded -> no` and `included -> yes`.",
+        "If the prompt allows `unsure`, the import still seeds only `yes` and `no` answers from Covidence and leaves all other rows unanswered.",
+        "Reimport updates or preserves the same seeded full-text judgments idempotently for the same project/article/prompt combination.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-010"]
+    },
+    {
+      "id": "US-012",
+      "title": "Expose Covidence datasource metadata and linked entities through APIs",
+      "description": "As an admin, I want datasource APIs to expose Covidence package details plus linked project and prompt information so the UI can render immutable imports and reimport controls.",
+      "acceptanceCriteria": [
+        "Datasource list and detail responses expose Covidence package config together with linked project and linked prompt identifiers needed by the admin UI.",
+        "Covidence-backed datasources are marked immutable in the same way as other imported-file datasources except for archive and reimport actions.",
+        "API responses expose enough state for the UI to distinguish `title_abstract` and `full_text` imports without re-parsing cursor JSON on the client.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-008", "US-010", "US-011"]
+    },
+    {
+      "id": "US-013",
+      "title": "Build the admin Covidence multi-file import page",
+      "description": "As an admin, I want a dedicated Covidence import page so I can choose a mode, upload the required files, preview merge results, and submit criteria-driven project creation in one flow.",
+      "acceptanceCriteria": [
+        "Add `src/app/routes/+admin/+datasources/+covidence-import.tsx` with mode selection, multi-file upload, analyze preview, criteria fields, answer-set selection, project name, and model selection.",
+        "The page calls the analyze and create endpoints and shows validation or merge warnings before import.",
+        "Submitting the form creates the datasource/project flow for the chosen mode and navigates to the imported datasource or linked project context.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes",
+        "Browser verification: import 1 `title_abstract` package and 1 `full_text` package; datasource exists; project exists; prompt reused or created correctly; seeded human judgments match Covidence decisions; reimport does not duplicate prompt or project."
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-005", "US-008", "US-010", "US-012"]
+    },
+    {
+      "id": "US-014",
+      "title": "Wire Covidence datasource list, edit, and reimport UI affordances",
+      "description": "As an admin, I want Covidence datasources to appear with the right entry points and immutable state so imported screening packages can be revisited and reimported safely.",
+      "acceptanceCriteria": [
+        "Add a Covidence import CTA from the datasource list and a reimport action for Covidence-backed datasources.",
+        "The datasource edit view shows Covidence package mode, linked project, linked prompt, and immutable imported-source messaging.",
+        "UI affordances use API-provided Covidence metadata instead of re-deriving state from route strings or raw cursor parsing.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes",
+        "Browser verification: import 1 `title_abstract` package and 1 `full_text` package; datasource exists; project exists; prompt reused or created correctly; seeded human judgments match Covidence decisions; reimport does not duplicate prompt or project."
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-012", "US-013"]
+    }
+  ]
+}
