@@ -69,16 +69,122 @@ const seedArchiveServingDatabase = async (duckdbPath: string) => {
       project_id VARCHAR NOT NULL,
       generation BIGINT NOT NULL,
       article_id VARCHAR NOT NULL,
-      article_title VARCHAR NOT NULL
+      article_created_at TIMESTAMPTZ,
+      article_updated_at TIMESTAMPTZ,
+      article_title VARCHAR NOT NULL,
+      article_external_id VARCHAR,
+      journal_title VARCHAR,
+      url VARCHAR,
+      full_text_pdf VARCHAR,
+      full_text_fetched_at TIMESTAMPTZ,
+      full_text_conversion_status VARCHAR,
+      source_metadata JSON,
+      has_all_llm_judgments BOOLEAN NOT NULL,
+      llm_judged_prompt_count INTEGER NOT NULL,
+      llm_judged_prompt_ids VARCHAR[],
+      enabled_prompt_count INTEGER NOT NULL,
+      human_answered_prompt_count INTEGER NOT NULL,
+      human_answered_prompt_ids VARCHAR[],
+      has_all_human_answers BOOLEAN NOT NULL,
+      review_opened BOOLEAN NOT NULL,
+      review_sections_completed INTEGER NOT NULL,
+      latest_llm_created_at TIMESTAMPTZ,
+      latest_human_updated_at TIMESTAMPTZ,
+      latest_review_updated_at TIMESTAMPTZ,
+      serving_updated_at TIMESTAMPTZ NOT NULL,
+      PRIMARY KEY(project_id, generation, article_id)
     );
+    CREATE INDEX idx_mart_review_article_serving_order
+    ON mart.review_article_serving(project_id, generation, has_all_llm_judgments, article_created_at, article_id);
     INSERT INTO app.project (id, archived)
     VALUES
       ('archived-project-repro', TRUE),
       ('active-project-control', FALSE);
-    INSERT INTO mart.review_article_serving (project_id, generation, article_id, article_title)
+    INSERT INTO mart.review_article_serving (
+      project_id,
+      generation,
+      article_id,
+      article_created_at,
+      article_updated_at,
+      article_title,
+      article_external_id,
+      journal_title,
+      url,
+      full_text_pdf,
+      full_text_fetched_at,
+      full_text_conversion_status,
+      source_metadata,
+      has_all_llm_judgments,
+      llm_judged_prompt_count,
+      llm_judged_prompt_ids,
+      enabled_prompt_count,
+      human_answered_prompt_count,
+      human_answered_prompt_ids,
+      has_all_human_answers,
+      review_opened,
+      review_sections_completed,
+      latest_llm_created_at,
+      latest_human_updated_at,
+      latest_review_updated_at,
+      serving_updated_at
+    )
     VALUES
-      ('archived-project-repro', 7, 'article-001', 'Archived article'),
-      ('active-project-control', 1, 'article-002', 'Active article');
+      (
+        'archived-project-repro',
+        7,
+        'article-001',
+        TIMESTAMPTZ '2024-02-03T04:05:06.000Z',
+        TIMESTAMPTZ '2024-02-04T05:06:07.000Z',
+        'Archived article',
+        'EXT-001',
+        'Journal of Archive Failures',
+        'https://example.com/archive-article',
+        's3://bucket/archive-article.pdf',
+        TIMESTAMPTZ '2024-02-05T06:07:08.000Z',
+        'success',
+        '{"journalTitle":"Journal of Archive Failures","source":"failure-log"}',
+        TRUE,
+        3,
+        ['prompt-a', 'prompt-b', 'prompt-c'],
+        3,
+        1,
+        ['prompt-a'],
+        FALSE,
+        TRUE,
+        6,
+        TIMESTAMPTZ '2024-02-06T07:08:09.000Z',
+        TIMESTAMPTZ '2024-02-07T08:09:10.000Z',
+        TIMESTAMPTZ '2024-02-08T09:10:11.000Z',
+        TIMESTAMPTZ '2024-02-09T10:11:12.000Z'
+      ),
+      (
+        'active-project-control',
+        1,
+        'article-002',
+        TIMESTAMPTZ '2024-03-01T00:00:00.000Z',
+        TIMESTAMPTZ '2024-03-01T00:00:00.000Z',
+        'Active article',
+        'EXT-002',
+        'Journal of Controls',
+        'https://example.com/active-article',
+        NULL,
+        NULL,
+        NULL,
+        '{"journalTitle":"Journal of Controls","source":"control-row"}',
+        FALSE,
+        0,
+        NULL,
+        2,
+        0,
+        NULL,
+        FALSE,
+        FALSE,
+        0,
+        NULL,
+        NULL,
+        NULL,
+        TIMESTAMPTZ '2024-03-01T00:00:00.000Z'
+      );
   `
   const duckdbInstance = await DuckDBInstance.create(duckdbPath, {memory_limit: '20GB'})
   const connection = await duckdbInstance.connect()
@@ -168,9 +274,38 @@ test('archive serving repro harness captures delete and rewrite probe results on
     expect(firstRun.operations.rewriteProbe.retainedRowCount).toBe(1)
     expect(firstRun.remediationPath).toBe('keep-single-row-purge')
     expect(firstRun.rowIds).toHaveLength(1)
-    expect(firstRun.rowSample[0]?.project_id).toBe('archived-project-repro')
+    expect(firstRun.rowSample[0]).toEqual({
+      article_created_at: '2024-02-03 05:05:06+01',
+      article_external_id: 'EXT-001',
+      article_id: 'article-001',
+      article_title: 'Archived article',
+      article_updated_at: '2024-02-04 06:06:07+01',
+      enabled_prompt_count: 3,
+      full_text_conversion_status: 'success',
+      full_text_fetched_at: '2024-02-05 07:07:08+01',
+      full_text_pdf: 's3://bucket/archive-article.pdf',
+      generation: '7',
+      has_all_human_answers: false,
+      has_all_llm_judgments: true,
+      human_answered_prompt_count: 1,
+      human_answered_prompt_ids: ['prompt-a'],
+      journal_title: 'Journal of Archive Failures',
+      latest_human_updated_at: '2024-02-07 09:09:10+01',
+      latest_llm_created_at: '2024-02-06 08:08:09+01',
+      latest_review_updated_at: '2024-02-08 10:10:11+01',
+      llm_judged_prompt_count: 3,
+      llm_judged_prompt_ids: ['prompt-a', 'prompt-b', 'prompt-c'],
+      project_id: 'archived-project-repro',
+      review_opened: true,
+      review_sections_completed: 6,
+      rowId: firstRun.rowIds[0],
+      serving_updated_at: '2024-02-09 11:11:12+01',
+      source_metadata: '{"journalTitle":"Journal of Archive Failures","source":"failure-log"}',
+      url: 'https://example.com/archive-article',
+    })
     expect(secondRun.projectId).toBe('archived-project-repro')
     expect(secondRun.rowIds).toEqual(firstRun.rowIds)
+    expect(secondRun.rowSample).toEqual(firstRun.rowSample)
     expect(secondRun.operations.projectDelete.rowCountAfter).toBe(firstRun.operations.projectDelete.rowCountAfter)
     expect(secondRun.operations.rewriteProbe.retainedRowCount).toBe(firstRun.operations.rewriteProbe.retainedRowCount)
     expect(existsSync(firstRun.snapshotPath)).toBe(false)

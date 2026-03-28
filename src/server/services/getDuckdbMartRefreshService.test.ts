@@ -751,7 +751,7 @@ test('mart refresh splits non-serving archived purge batches after an index dele
   expect(result.queueActive).toBe(false)
 })
 
-test('mart refresh restarts after fatal archived purge invalidation without rollback or split retries', () => {
+test('mart refresh retries the same archived purge task after fatal invalidation without rollback or split retries', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -762,6 +762,8 @@ test('mart refresh restarts after fatal archived purge invalidation without roll
         const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
         const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
         let closeCount = 0
+        let completedTaskCount = 0
+        let queuedTaskReadCount = 0
         let queueActive = true
         let rollbackCount = 0
         let rollupBatchQueryCount = 0
@@ -784,13 +786,17 @@ test('mart refresh restarts after fatal archived purge invalidation without roll
                         ? [{count: queueActive ? 1 : 0}]
                         : statement.includes('FROM app.mart_refresh_queue')
                           ? queueActive
-                            ? [{
-                                articleId: null,
-                                id: 'project-archive-fatal-task',
-                                projectId: 'project-archive-fatal-test',
-                                refreshGeneration: 0,
-                                refreshScope: 'project',
-                              }]
+                            ? (() => {
+                                queuedTaskReadCount += 1
+
+                                return [{
+                                  articleId: null,
+                                  id: 'project-archive-fatal-task',
+                                  projectId: 'project-archive-fatal-test',
+                                  refreshGeneration: 0,
+                                  refreshScope: 'project',
+                                }]
+                              })()
                             : []
                           : []
                 },
@@ -814,6 +820,7 @@ test('mart refresh restarts after fatal archived purge invalidation without roll
                     statement.includes('SET completed_at = NOW()')
                     && !statement.includes("reason IN ('humanAssessmentRoutesPostInit')")
                   ) {
+                    completedTaskCount += 1
                     queueActive = false
                   }
                 },
@@ -860,7 +867,9 @@ test('mart refresh restarts after fatal archived purge invalidation without roll
         )
         console.log(JSON.stringify({
           closeCount,
+          completedTaskCount,
           failureText,
+          queuedTaskReadCount,
           queueActive,
           retryText,
           rollbackCount,
@@ -881,7 +890,9 @@ test('mart refresh restarts after fatal archived purge invalidation without roll
 
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
     closeCount: number
+    completedTaskCount: number
     failureText: string
+    queuedTaskReadCount: number
     queueActive: boolean
     retryText: string
     rollbackCount: number
@@ -889,9 +900,11 @@ test('mart refresh restarts after fatal archived purge invalidation without roll
   }
 
   expect(result.closeCount).toBe(1)
+  expect(result.completedTaskCount).toBe(1)
   expect(result.failureText).toContain('Failed to delete all rows from index')
   expect(result.failureText).not.toContain('rollback failed')
   expect(result.failureText).not.toContain('cannot rollback')
+  expect(result.queuedTaskReadCount).toBe(2)
   expect(result.rollbackCount).toBe(0)
   expect(result.splitRetryCount).toBe(0)
   expect(result.retryText).toBe('ok')
