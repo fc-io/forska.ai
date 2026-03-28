@@ -431,6 +431,165 @@ test('mart refresh rebuilds large projects in article batches', () => {
   expect(result.queueActive).toBe(false)
 })
 
+test('mart refresh purges archived projects in article batches', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        let queueActive = true
+        const events = []
+        const firstBatch = [
+          {articleCreatedAt: null, articleId: 'article-1'},
+          {articleCreatedAt: null, articleId: 'article-2'},
+        ]
+        const secondBatch = [{articleCreatedAt: null, articleId: 'article-3'}]
+
+        const getBatchRows = (statement) => {
+          const hasSecondCursor = statement.includes("article_id > 'article-2'")
+          const hasFinalCursor = statement.includes("article_id > 'article-3'")
+
+          return hasFinalCursor ? [] : hasSecondCursor ? secondBatch : firstBatch
+        }
+
+        const recordDeleteEvent = (label, statement) => {
+          const hasFirstBatch = statement.includes("'article-1'") && statement.includes("'article-2'")
+          const hasSecondBatch = statement.includes("'article-3'")
+
+          if (hasFirstBatch) {
+            events.push(label + ':batch-1')
+          }
+
+          if (hasSecondBatch) {
+            events.push(label + ':batch-2')
+          }
+        }
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                queryJson: async (statement) => {
+                  return statement.includes("column_name = 'refresh_generation'")
+                    ? [{count: 1}]
+                    : statement.includes("column_name = 'completed_at'")
+                      ? [{count: 1}]
+                      : statement.includes('SELECT COUNT(*) AS count')
+                        ? [{count: queueActive ? 1 : 0}]
+                        : statement.includes('FROM app.mart_refresh_queue')
+                          ? queueActive
+                            ? [{
+                                articleId: null,
+                                id: 'project-archive-task',
+                                projectId: 'project-archive-batch-test',
+                                refreshGeneration: 0,
+                                refreshScope: 'project',
+                              }]
+                            : []
+                          : []
+                },
+                queryJsonBackground: async (statement) => {
+                  return statement.includes('SELECT archived AS archived')
+                    ? [{archived: true}]
+                    : statement.includes('FROM mart.') && statement.includes('article_id AS articleId')
+                      ? getBatchRows(statement)
+                      : []
+                },
+                run: async (statement) => {
+                  if (statement.includes('CREATE TABLE IF NOT EXISTS mart.review_article_rollup (')) {
+                    events.push('rollup:ensure-table')
+                  }
+
+                  if (statement.includes('CREATE INDEX IF NOT EXISTS idx_mart_review_article_rollup_project_id')) {
+                    events.push('rollup:ensure-index')
+                  }
+
+                  if (
+                    statement.includes('SET completed_at = NOW()')
+                    && !statement.includes("reason IN ('humanAssessmentRoutesPostInit')")
+                  ) {
+                    queueActive = false
+                  }
+                },
+                maintenance: async () => {},
+                runBackground: async (statement) => {
+                  if (statement.includes('DELETE FROM mart.review_article_serving_detail')) {
+                    recordDeleteEvent('serving-detail', statement)
+                  }
+
+                  if (statement.includes('DELETE FROM mart.review_article_filter_member')) {
+                    recordDeleteEvent('filter-member', statement)
+                  }
+
+                  if (statement.includes('DELETE FROM mart.review_article_serving')) {
+                    recordDeleteEvent('serving', statement)
+                  }
+
+                  if (statement.includes('DELETE FROM mart.review_article_rollup')) {
+                    recordDeleteEvent('rollup', statement)
+                  }
+
+                  if (statement.includes('DELETE FROM mart.review_article_filter_row')) {
+                    recordDeleteEvent('filter-row', statement)
+                  }
+
+                  if (statement.includes('DELETE FROM mart.prompt_answer_fact')) {
+                    recordDeleteEvent('prompt', statement)
+                  }
+
+                  if (statement.includes('DELETE FROM mart.project_scope_article')) {
+                    recordDeleteEvent('scope', statement)
+                  }
+
+                  if (statement.includes('DELETE FROM app.review_answer_dictionary')) {
+                    events.push('dictionary:purged')
+                  }
+
+                  if (statement.includes('DELETE FROM app.project_review_serving_generation')) {
+                    events.push('generation:purged')
+                  }
+                },
+              }
+            },
+          }
+        })
+
+        const martRefreshService = (await import(martRefreshServiceModulePath + '?project-archive-batch=' + Date.now())).getDuckdbMartRefreshService()
+
+        await martRefreshService.flush()
+        console.log(JSON.stringify({events, queueActive}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Mart archived project purge regression test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {events: string[]; queueActive: boolean}
+
+  expect(result.events).toContain('serving-detail:batch-1')
+  expect(result.events).toContain('serving-detail:batch-2')
+  expect(result.events).toContain('serving:batch-1')
+  expect(result.events).toContain('serving:batch-2')
+  expect(result.events).toContain('rollup:batch-1')
+  expect(result.events).toContain('rollup:batch-2')
+  expect(result.events).toContain('scope:batch-1')
+  expect(result.events).toContain('scope:batch-2')
+  expect(result.events).toContain('dictionary:purged')
+  expect(result.events).toContain('generation:purged')
+  expect(result.queueActive).toBe(false)
+})
+
 test('mart refresh prunes known noop project rebuilds before draining', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
@@ -1050,6 +1209,8 @@ test('mart refresh populates review article serving v3 tables', () => {
             article_id,
             prompt_id,
             model_id,
+            project_id,
+            snapshot_project_id,
             use_title,
             use_abstract,
             use_fulltext,
@@ -1064,6 +1225,8 @@ test('mart refresh populates review article serving v3 tables', () => {
             'article-serving-v3-test',
             'prompt-serving-v3-test',
             'model-serving-v3-test',
+            'project-serving-v3-test',
+            'project-serving-v3-test',
             TRUE,
             TRUE,
             FALSE,
@@ -1210,6 +1373,8 @@ test('mart refresh updates serving rows incrementally after a judgment answer ch
             article_id,
             prompt_id,
             model_id,
+            project_id,
+            snapshot_project_id,
             use_title,
             use_abstract,
             use_fulltext,
@@ -1224,6 +1389,8 @@ test('mart refresh updates serving rows incrementally after a judgment answer ch
             'article-serving-incremental-test',
             'prompt-serving-incremental-test',
             'model-serving-incremental-test',
+            'project-serving-incremental-test',
+            'project-serving-incremental-test',
             TRUE,
             TRUE,
             FALSE,
@@ -1320,6 +1487,224 @@ test('mart refresh updates serving rows incrementally after a judgment answer ch
   }
 })
 
+test('mart refresh keeps serving marts scoped to the originating judgment project', () => {
+  const duckdbPath = `/tmp/f1-mart-refresh-project-scoped-judgments-${Date.now()}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts')
+
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+          VALUES ('connection-project-scoped-test', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+        \`)
+        await database.run(\`
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+          VALUES (
+            'model-project-scoped-test',
+            'connection-project-scoped-test',
+            'Qwen/Qwen3.5-35B-A3B',
+            'Qwen/Qwen3.5-35B-A3B',
+            'Qwen 35B',
+            'manual',
+            TRUE
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+          VALUES (
+            'project-cross-project-target',
+            'Cross Project Target',
+            'model-project-scoped-test',
+            TRUE,
+            TRUE,
+            FALSE,
+            FALSE
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+          VALUES (
+            'project-cross-project-source',
+            'Cross Project Source',
+            'model-project-scoped-test',
+            TRUE,
+            TRUE,
+            FALSE,
+            FALSE
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO app.prompt (id, original_text, content_hash)
+          VALUES ('prompt-cross-project-test', 'Prompt body', 'hash-cross-project-test')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+          VALUES
+            ('project-prompt-cross-project-target', 'project-cross-project-target', 'prompt-cross-project-test', 1, TRUE),
+            ('project-prompt-cross-project-source', 'project-cross-project-source', 'prompt-cross-project-test', 1, TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.article (id, article_title, article_created_at, article_updated_at, article_id)
+          VALUES (
+            'article-cross-project-test',
+            'Cross Project Article',
+            '2024-01-02T00:00:00.000Z',
+            '2024-01-03T00:00:00.000Z',
+            'external-cross-project-test'
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_article (id, project_id, article_id)
+          VALUES
+            ('project-article-cross-project-target', 'project-cross-project-target', 'article-cross-project-test'),
+            ('project-article-cross-project-source', 'project-cross-project-source', 'article-cross-project-test')
+        \`)
+
+        const martRefreshService = getDuckdbMartRefreshService()
+
+        await martRefreshService.queueProjectRefresh('project-cross-project-target', 'project-scope-init')
+        await martRefreshService.flush()
+
+        await database.run(\`
+          INSERT INTO app.judgment (
+            id,
+            article_id,
+            prompt_id,
+            model_id,
+            project_id,
+            snapshot_project_id,
+            use_title,
+            use_abstract,
+            use_fulltext,
+            use_fulltext_no_images,
+            is_answered,
+            answered_original,
+            answered_original_as_array,
+            confidence_original
+          )
+          VALUES (
+            'judgment-cross-project-source',
+            'article-cross-project-test',
+            'prompt-cross-project-test',
+            'model-project-scoped-test',
+            'project-cross-project-source',
+            'project-cross-project-source',
+            TRUE,
+            TRUE,
+            FALSE,
+            FALSE,
+            TRUE,
+            'yes',
+            ['yes'],
+            90
+          )
+        \`)
+
+        await martRefreshService.queueJudgmentArticleRefresh('article-cross-project-test', 'cross-project-judgment')
+        await martRefreshService.flush()
+
+        await martRefreshService.queueProjectRefresh('project-cross-project-target', 'project-scope-rebuild')
+        await martRefreshService.flush()
+
+        const [counts] = await database.queryJson(\`
+          SELECT
+            (SELECT active_generation FROM app.project_review_serving_generation WHERE project_id = 'project-cross-project-target') AS targetActiveGeneration,
+            (SELECT COUNT(*) FROM mart.prompt_answer_fact WHERE project_id = 'project-cross-project-target') AS targetPromptAnswerCount,
+            (SELECT COUNT(*) FROM mart.review_article_filter_member WHERE project_id = 'project-cross-project-target') AS targetFilterCount,
+            (
+              SELECT COUNT(*)
+              FROM mart.review_article_serving
+              WHERE project_id = 'project-cross-project-target'
+                AND COALESCE(llm_judged_prompt_count, 0) > 0
+            ) AS targetReviewedServingCount,
+            (SELECT COUNT(*) FROM mart.review_article_serving_detail WHERE project_id = 'project-cross-project-target') AS targetDetailCount,
+            (SELECT active_generation FROM app.project_review_serving_generation WHERE project_id = 'project-cross-project-source') AS sourceActiveGeneration,
+            (SELECT COUNT(*) FROM mart.prompt_answer_fact WHERE project_id = 'project-cross-project-source') AS sourcePromptAnswerCount,
+            (SELECT COUNT(*) FROM mart.review_article_filter_member WHERE project_id = 'project-cross-project-source') AS sourceFilterCount,
+            (
+              SELECT COUNT(*)
+              FROM mart.review_article_serving
+              WHERE project_id = 'project-cross-project-source'
+                AND COALESCE(llm_judged_prompt_count, 0) > 0
+            ) AS sourceReviewedServingCount,
+            (SELECT COUNT(*) FROM mart.review_article_serving_detail WHERE project_id = 'project-cross-project-source') AS sourceDetailCount
+        \`)
+
+        console.log(JSON.stringify({
+          sourceActiveGeneration: Number(counts?.sourceActiveGeneration ?? 0),
+          sourceDetailCount: Number(counts?.sourceDetailCount ?? 0),
+          sourceFilterCount: Number(counts?.sourceFilterCount ?? 0),
+          sourcePromptAnswerCount: Number(counts?.sourcePromptAnswerCount ?? 0),
+          sourceReviewedServingCount: Number(counts?.sourceReviewedServingCount ?? 0),
+          targetActiveGeneration: Number(counts?.targetActiveGeneration ?? 0),
+          targetDetailCount: Number(counts?.targetDetailCount ?? 0),
+          targetFilterCount: Number(counts?.targetFilterCount ?? 0),
+          targetPromptAnswerCount: Number(counts?.targetPromptAnswerCount ?? 0),
+          targetReviewedServingCount: Number(counts?.targetReviewedServingCount ?? 0),
+        }))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(
+        runScript.stderr.toString()
+          || runScript.stdout.toString()
+          || 'Mart project-scoped judgment regression test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      sourceActiveGeneration: number
+      sourceDetailCount: number
+      sourceFilterCount: number
+      sourcePromptAnswerCount: number
+      sourceReviewedServingCount: number
+      targetActiveGeneration: number
+      targetDetailCount: number
+      targetFilterCount: number
+      targetPromptAnswerCount: number
+      targetReviewedServingCount: number
+    }
+
+    expect(result.targetActiveGeneration).toBe(2)
+    expect(result.targetPromptAnswerCount).toBe(0)
+    expect(result.targetFilterCount).toBe(0)
+    expect(result.targetReviewedServingCount).toBe(0)
+    expect(result.targetDetailCount).toBe(0)
+    expect(result.sourceActiveGeneration).toBe(1)
+    expect(result.sourcePromptAnswerCount).toBe(1)
+    expect(result.sourceFilterCount).toBe(1)
+    expect(result.sourceReviewedServingCount).toBe(1)
+    expect(result.sourceDetailCount).toBe(1)
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+  }
+})
+
 test('mart refresh keeps the previous serving generation during the next rebuild', () => {
   const duckdbPath = `/tmp/f1-mart-refresh-serving-generations-${Date.now()}.duckdb`
   const runScript = globalThis.Bun.spawnSync(
@@ -1369,6 +1754,8 @@ test('mart refresh keeps the previous serving generation during the next rebuild
             article_id,
             prompt_id,
             model_id,
+            project_id,
+            snapshot_project_id,
             use_title,
             use_abstract,
             use_fulltext,
@@ -1383,6 +1770,8 @@ test('mart refresh keeps the previous serving generation during the next rebuild
             'article-serving-generation-test',
             'prompt-serving-generation-test',
             'model-serving-generation-test',
+            'project-serving-generation-test',
+            'project-serving-generation-test',
             TRUE,
             TRUE,
             FALSE,
@@ -1533,6 +1922,8 @@ test('mart refresh does not advance serving generation when rebuild fails', () =
             article_id,
             prompt_id,
             model_id,
+            project_id,
+            snapshot_project_id,
             use_title,
             use_abstract,
             use_fulltext,
@@ -1547,6 +1938,8 @@ test('mart refresh does not advance serving generation when rebuild fails', () =
             'article-serving-failure-test',
             'prompt-serving-failure-test',
             'model-serving-failure-test',
+            'project-serving-failure-test',
+            'project-serving-failure-test',
             TRUE,
             TRUE,
             FALSE,

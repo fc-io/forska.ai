@@ -513,6 +513,10 @@ const getProjectRefreshArticleIdsSql = (articleIds: string[]) => {
   return getQuotedStringList(articleIds).join(', ')
 }
 
+const getJudgmentFactProjectJoinSql = (judgmentAlias: string, projectExpression: string) => {
+  return `COALESCE(${judgmentAlias}.project_id, ${judgmentAlias}.snapshot_project_id) = ${projectExpression}`
+}
+
 const getProjectScopeResetSql = (projectId: string) => {
   const projectLiteral = getSqlLiteral(projectId)
 
@@ -627,6 +631,49 @@ const getProjectScopeBatchSql = (projectId: string, cursor: ProjectRefreshBatchC
   `
 }
 
+const getProjectTableArticleBatchSql = ({
+  cursor,
+  projectId,
+  tableName,
+}: {
+  cursor: ProjectRefreshBatchCursor | null
+  projectId: string
+  tableName: string
+}) => {
+  const projectLiteral = getSqlLiteral(projectId)
+
+  return `
+    SELECT DISTINCT
+      article_id AS articleId,
+      NULL AS articleCreatedAt
+    FROM ${tableName}
+    WHERE project_id = ${projectLiteral}
+      ${getProjectRefreshBatchCursorWhereSql({articleCreatedAtColumn: 'NULL', articleIdColumn: 'article_id', cursor})}
+    ORDER BY ${getProjectRefreshBatchOrderSql({articleCreatedAtColumn: 'NULL', articleIdColumn: 'article_id'})}
+    LIMIT ${martRefreshProjectRebuildArticleBatchSize}
+  `
+}
+
+const getProjectTableDeleteBatchSql = ({
+  articleIds,
+  projectId,
+  tableName,
+}: {
+  articleIds: string[]
+  projectId: string
+  tableName: string
+}) => {
+  const projectLiteral = getSqlLiteral(projectId)
+
+  return `
+    BEGIN TRANSACTION;
+    DELETE FROM ${tableName}
+    WHERE project_id = ${projectLiteral}
+      AND article_id IN (${getProjectRefreshArticleIdsSql(articleIds)});
+    COMMIT;
+  `
+}
+
 const getProjectPromptAnswerFactResetSql = (projectId: string) => {
   const projectLiteral = getSqlLiteral(projectId)
 
@@ -675,6 +722,7 @@ const getProjectPromptAnswerFactBatchInsertSql = (projectId: string, articleIds:
       INNER JOIN mart.judgment_fact judgment_fact
         ON judgment_fact.article_id = scope_article.article_id
        AND judgment_fact.prompt_id = project_prompt.prompt_id
+       AND ${getJudgmentFactProjectJoinSql('judgment_fact', 'scope_article.project_id')}
        AND judgment_fact.model_id = project.model_id
        AND judgment_fact.use_title = project.use_title
        AND judgment_fact.use_abstract = project.use_abstract
@@ -831,6 +879,7 @@ const getProjectReviewArticleRollupBatchInsertSql = (projectId: string, articleI
       INNER JOIN mart.judgment_fact judgment_fact
         ON judgment_fact.article_id = scope_article.article_id
        AND judgment_fact.prompt_id = enabled_prompt.prompt_id
+       AND ${getJudgmentFactProjectJoinSql('judgment_fact', 'scope_article.project_id')}
        AND judgment_fact.model_id = project.model_id
        AND judgment_fact.use_title = project.use_title
        AND judgment_fact.use_abstract = project.use_abstract
@@ -1121,6 +1170,7 @@ const getProjectReviewServingBatchSql = (projectId: string, articleIds: string[]
     INNER JOIN mart.judgment_fact judgment_fact
       ON judgment_fact.article_id = scope_article.article_id
      AND judgment_fact.prompt_id = project_prompt.prompt_id
+     AND ${getJudgmentFactProjectJoinSql('judgment_fact', 'scope_article.project_id')}
      AND judgment_fact.model_id = project.model_id
      AND judgment_fact.use_title = project.use_title
      AND judgment_fact.use_abstract = project.use_abstract
@@ -1381,6 +1431,17 @@ const getHasActiveProjectReviewServingGeneration = async (projectId: string) => 
   return Number(rows[0]?.count ?? 0) > 0
 }
 
+const getProjectIsArchived = async (projectId: string) => {
+  const [projectRow] = await queryMartRefreshBackgroundJson<{archived: boolean}>(`
+    SELECT archived AS archived
+    FROM app.project
+    WHERE id = ${getSqlLiteral(projectId)}
+    LIMIT 1
+  `)
+
+  return Boolean(projectRow?.archived)
+}
+
 const getProjectScopeSourceBatchRows = async (
   projectId: string,
   cursor: ProjectRefreshBatchCursor | null,
@@ -1393,6 +1454,20 @@ const getProjectScopeBatchRows = async (
   cursor: ProjectRefreshBatchCursor | null,
 ): Promise<ProjectRefreshBatchRow[]> => {
   return queryMartRefreshBackgroundJson<ProjectRefreshBatchRow>(getProjectScopeBatchSql(projectId, cursor))
+}
+
+const getProjectTableArticleBatchRows = async ({
+  cursor,
+  projectId,
+  tableName,
+}: {
+  cursor: ProjectRefreshBatchCursor | null
+  projectId: string
+  tableName: string
+}): Promise<ProjectRefreshBatchRow[]> => {
+  return queryMartRefreshBackgroundJson<ProjectRefreshBatchRow>(
+    getProjectTableArticleBatchSql({cursor, projectId, tableName}),
+  )
 }
 
 const refreshProjectScopeBatches = async (
@@ -1485,6 +1560,49 @@ const rebuildProjectReviewServing = async (projectId: string): Promise<void> => 
   return runMartRefreshBackgroundStatement(getProjectReviewServingFinalizeSql(projectId))
 }
 
+const deleteProjectTableArticleBatches = async ({
+  cursor = null,
+  projectId,
+  tableName,
+}: {
+  cursor?: ProjectRefreshBatchCursor | null
+  projectId: string
+  tableName: string
+}): Promise<void> => {
+  const batchRows = await getProjectTableArticleBatchRows({cursor, projectId, tableName})
+  const articleIds = getProjectRefreshBatchArticleIds(batchRows)
+
+  return articleIds.length === 0
+    ? Promise.resolve()
+    : runMartRefreshBackgroundStatement(getProjectTableDeleteBatchSql({articleIds, projectId, tableName}))
+        .then(() => {
+          return yieldToEventLoop()
+        })
+        .then(() => {
+          return deleteProjectTableArticleBatches({
+            cursor: getProjectRefreshBatchCursor(batchRows),
+            projectId,
+            tableName,
+          })
+        })
+}
+
+const purgeArchivedProjectMartData = async (projectId: string): Promise<void> => {
+  await deleteProjectTableArticleBatches({projectId, tableName: 'mart.review_article_serving_detail'})
+  await deleteProjectTableArticleBatches({projectId, tableName: 'mart.review_article_filter_member'})
+  await deleteProjectTableArticleBatches({projectId, tableName: 'mart.review_article_serving'})
+  await deleteProjectTableArticleBatches({projectId, tableName: 'mart.review_article_rollup'})
+  await deleteProjectTableArticleBatches({projectId, tableName: 'mart.review_article_filter_row'})
+  await deleteProjectTableArticleBatches({projectId, tableName: 'mart.prompt_answer_fact'})
+  await deleteProjectTableArticleBatches({projectId, tableName: 'mart.project_scope_article'})
+  await runMartRefreshBackgroundStatement(`
+    BEGIN TRANSACTION;
+    DELETE FROM app.review_answer_dictionary WHERE project_id = ${getSqlLiteral(projectId)};
+    DELETE FROM app.project_review_serving_generation WHERE project_id = ${getSqlLiteral(projectId)};
+    COMMIT;
+  `)
+}
+
 const getProjectArticleServingRefreshSql = (projectId: string, articleId: string) => {
   const projectLiteral = getSqlLiteral(projectId)
   const articleLiteral = getSqlLiteral(articleId)
@@ -1558,6 +1676,7 @@ const getProjectArticleServingRefreshSql = (projectId: string, articleId: string
       INNER JOIN mart.judgment_fact judgment_fact
         ON judgment_fact.article_id = article_scope.article_id
        AND judgment_fact.prompt_id = enabled_prompt.prompt_id
+       AND ${getJudgmentFactProjectJoinSql('judgment_fact', 'article_scope.project_id')}
        AND judgment_fact.model_id = project.model_id
        AND judgment_fact.use_title = project.use_title
        AND judgment_fact.use_abstract = project.use_abstract
@@ -1720,6 +1839,7 @@ const getProjectArticleServingRefreshSql = (projectId: string, articleId: string
       INNER JOIN mart.judgment_fact judgment_fact
         ON judgment_fact.article_id = article_scope.article_id
        AND judgment_fact.prompt_id = enabled_prompt.prompt_id
+       AND ${getJudgmentFactProjectJoinSql('judgment_fact', 'article_scope.project_id')}
        AND judgment_fact.model_id = project.model_id
        AND judgment_fact.use_title = project.use_title
        AND judgment_fact.use_abstract = project.use_abstract
@@ -1884,6 +2004,7 @@ const getProjectArticleServingRefreshSql = (projectId: string, articleId: string
       INNER JOIN mart.judgment_fact judgment_fact
         ON judgment_fact.article_id = article_scope.article_id
        AND judgment_fact.prompt_id = enabled_prompt.prompt_id
+       AND ${getJudgmentFactProjectJoinSql('judgment_fact', 'article_scope.project_id')}
        AND judgment_fact.model_id = project.model_id
        AND judgment_fact.use_title = project.use_title
        AND judgment_fact.use_abstract = project.use_abstract
@@ -1986,6 +2107,7 @@ const getProjectArticleServingRefreshSql = (projectId: string, articleId: string
     INNER JOIN mart.judgment_fact judgment_fact
      ON judgment_fact.article_id = article_scope.article_id
      AND judgment_fact.prompt_id = project_prompt.prompt_id
+     AND ${getJudgmentFactProjectJoinSql('judgment_fact', 'article_scope.project_id')}
      AND judgment_fact.model_id = project.model_id
      AND judgment_fact.use_title = project.use_title
      AND judgment_fact.use_abstract = project.use_abstract
@@ -2029,6 +2151,11 @@ const refreshQueuedArticleTasks = async (articleIds: string[]): Promise<void> =>
 
 const refreshProject = async (projectId: string) => {
   await ensureReviewArticleRollupTable()
+
+  if (await getProjectIsArchived(projectId)) {
+    await purgeArchivedProjectMartData(projectId)
+    return recordProjectRefreshCompletion()
+  }
 
   await rebuildProjectScope(projectId)
   await rebuildProjectPromptAnswerFact(projectId)

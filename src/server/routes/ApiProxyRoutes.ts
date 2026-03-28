@@ -7,6 +7,18 @@ import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {getCurrentServerWriterUrl, shouldCurrentServerProxyApiToWriter} from '../utils/serverRuntimeRole.ts'
 import {getWriterConnectionProxyHeaders} from '../utils/writerConnections.ts'
 
+type WriterProxyRequestTemplate = {
+  body: ArrayBuffer | null
+  headers: Headers
+  method: string
+  pathname: string
+  search: string
+}
+
+const writerProxyRetryDelayMs = 250
+const writerProxyRetryTimeoutMs = 4000
+const writerProxyRetryableMethods = new Set(['DELETE', 'GET', 'HEAD', 'OPTIONS', 'PUT'])
+
 const getCurrentServerHostAliases = () => {
   const aliases = new Set(['127.0.0.1', '0.0.0.0', 'localhost', '::1'])
   const currentHostname = hostname().trim().toLowerCase()
@@ -34,7 +46,13 @@ const isCurrentServerWriterUrl = (writerUrl: string) => {
   return isSamePort && currentServerHostAliases.has(normalizedHostname)
 }
 
-const getWriterProxyRequest = (request: Request, writerUrl: string) => {
+const waitForWriterProxyRetry = async () => {
+  await new Promise((resolve) => {
+    setTimeout(resolve, writerProxyRetryDelayMs)
+  })
+}
+
+const getWriterProxyRequestTemplate = async (request: Request): Promise<WriterProxyRequestTemplate | null> => {
   const requestUrl = new URL(request.url)
   const requestHeaders = new Headers({
     ...Object.fromEntries(request.headers.entries()),
@@ -42,33 +60,44 @@ const getWriterProxyRequest = (request: Request, writerUrl: string) => {
   })
   const hasRequestBody = request.method !== 'GET' && request.method !== 'HEAD'
 
-  return requestUrl.pathname.startsWith('/api/')
-    ? new Request(`${writerUrl}${requestUrl.pathname}${requestUrl.search}`, {
-        body: hasRequestBody ? request.body : undefined,
+  return !requestUrl.pathname.startsWith('/api/')
+    ? null
+    : {
+        body: hasRequestBody ? await request.clone().arrayBuffer() : null,
         headers: requestHeaders,
         method: request.method,
-      })
-    : null
+        pathname: requestUrl.pathname,
+        search: requestUrl.search,
+      }
 }
 
-const getRetriedProxyResponse = async (request: Request, currentWriterUrl: string) => {
-  const nextWriterUrl = await getCurrentServerWriterUrl()
+const getWriterProxyRequest = (requestTemplate: WriterProxyRequestTemplate, writerUrl: string) => {
+  return new Request(`${writerUrl}${requestTemplate.pathname}${requestTemplate.search}`, {
+    body: requestTemplate.body === null ? undefined : requestTemplate.body.slice(0),
+    headers: requestTemplate.headers,
+    method: requestTemplate.method,
+  })
+}
 
-  if (nextWriterUrl === null || nextWriterUrl === currentWriterUrl) {
-    return null
+const fetchWriterProxyResponse = async (requestTemplate: WriterProxyRequestTemplate, writerUrl: string) => {
+  return fetch(getWriterProxyRequest(requestTemplate, writerUrl))
+}
+
+const getRetriedProxyResponse = async (requestTemplate: WriterProxyRequestTemplate, currentWriterUrl: string) => {
+  const deadlineMs = Date.now() + writerProxyRetryTimeoutMs
+
+  while (Date.now() < deadlineMs) {
+    await waitForWriterProxyRetry()
+
+    try {
+      const nextWriterUrl = (await getCurrentServerWriterUrl()) ?? currentWriterUrl
+      return await fetchWriterProxyResponse(requestTemplate, nextWriterUrl)
+    } catch {
+      continue
+    }
   }
 
-  const retriedRequest = getWriterProxyRequest(request, nextWriterUrl)
-
-  if (retriedRequest === null) {
-    return null
-  }
-
-  try {
-    return await fetch(retriedRequest)
-  } catch {
-    return null
-  }
+  return null
 }
 
 const getWriterProxyUnavailableResponse = () => {
@@ -86,6 +115,8 @@ const forwardApiRequestToWriter = async (request: Request): Promise<Response | n
     return null
   }
 
+  const requestTemplate = await getWriterProxyRequestTemplate(request)
+
   if (isCurrentServerWriterUrl(writerUrl)) {
     return Response.json(
       {data: null, error: `Writer proxy target must not point to this same API server (${writerUrl})`},
@@ -93,21 +124,20 @@ const forwardApiRequestToWriter = async (request: Request): Promise<Response | n
     )
   }
 
-  const proxiedRequest = getWriterProxyRequest(request, writerUrl)
-  const shouldRetryProxyRequest = request.method === 'GET' || request.method === 'HEAD'
-
-  if (proxiedRequest === null) {
+  if (requestTemplate === null) {
     return null
   }
 
+  const shouldRetryProxyRequest = writerProxyRetryableMethods.has(requestTemplate.method)
+
   try {
-    return await fetch(proxiedRequest)
+    return await fetchWriterProxyResponse(requestTemplate, writerUrl)
   } catch {
     if (!shouldRetryProxyRequest) {
       return getWriterProxyUnavailableResponse()
     }
 
-    return (await getRetriedProxyResponse(request, writerUrl)) ?? getWriterProxyUnavailableResponse()
+    return (await getRetriedProxyResponse(requestTemplate, writerUrl)) ?? getWriterProxyUnavailableResponse()
   }
 }
 

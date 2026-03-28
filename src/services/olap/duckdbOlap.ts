@@ -81,6 +81,10 @@ type UnassessedCandidateRow = {
 
 const rawFallbackQueueLogger = createRateLimitedLogger({windowMs: 30_000})
 
+const getDuckdbJudgmentProjectWhereClause = (params: {judgmentAlias: string; projectId: string}) => {
+  return `COALESCE(${params.judgmentAlias}.project_id, ${params.judgmentAlias}.snapshot_project_id) = ${getDuckdbSqlString(params.projectId)}`
+}
+
 const getPromptFilters = (promptsFilter?: Record<string, string[]>) => {
   return Object.entries(promptsFilter ?? {}).filter(([, answers]) => {
     return Array.isArray(answers) && answers.length > 0
@@ -511,7 +515,7 @@ const getDuckdbServingWhereParts = (params: {
   search?: string | null
   cursor?: string | null
 }) => {
-  return [...getDuckdbServingBaseWhereParts(params), 's.has_all_llm_judgments = TRUE']
+  return getDuckdbServingReviewWhereParts({...params, requireAnyLlmJudgments: true})
 }
 
 const getDuckdbServingReviewWhereParts = (params: {
@@ -521,11 +525,16 @@ const getDuckdbServingReviewWhereParts = (params: {
   search?: string | null
   requireAllHumanAnswers?: boolean
   requireAllLlmJudgments?: boolean
+  requireAnyLlmJudgments?: boolean
   requireIncompleteLlm?: boolean
 }) => {
   return [
     ...getDuckdbServingBaseWhereParts(params),
-    params.requireAllLlmJudgments ? 's.has_all_llm_judgments = TRUE' : null,
+    params.requireAllLlmJudgments
+      ? 's.has_all_llm_judgments = TRUE'
+      : params.requireAnyLlmJudgments
+        ? 'COALESCE(s.llm_judged_prompt_count, 0) > 0'
+        : null,
     params.requireAllHumanAnswers ? 's.has_all_human_answers = TRUE' : null,
     params.requireIncompleteLlm ? 's.has_all_llm_judgments = FALSE' : null,
   ].filter((part): part is string => {
@@ -865,10 +874,12 @@ const getReviewedArticleIdsFromServing = async (params: {
   search?: string | null
   prompts?: Record<string, string[]>
   requireAllHumanAnswers?: boolean
+  requireAllLlmJudgments?: boolean
 }) => {
   const whereParts = getDuckdbServingReviewWhereParts({
     ...params,
-    requireAllLlmJudgments: true,
+    requireAllLlmJudgments: params.requireAllLlmJudgments,
+    requireAnyLlmJudgments: !params.requireAllLlmJudgments,
     requireAllHumanAnswers: params.requireAllHumanAnswers,
   })
   const postingSelection = getDuckdbServingPostingSelection(params.scope, params.prompts)
@@ -982,6 +993,7 @@ const getLlmJudgmentRowsFromMart = async (
   const whereParts = [
     `j.article_id IN (${getDuckdbSqlStringList(articleIds).join(', ')})`,
     `j.prompt_id IN (${getDuckdbSqlStringList(scope.promptIds).join(', ')})`,
+    getDuckdbJudgmentProjectWhereClause({judgmentAlias: 'j', projectId: scope.projectId}),
     scope.modelId ? `j.model_id = ${getDuckdbSqlString(scope.modelId)}` : null,
     `j.use_title = ${getDuckdbSqlBoolean(scope.useTitle)}`,
     `j.use_abstract = ${getDuckdbSqlBoolean(scope.useAbstract)}`,
@@ -1126,6 +1138,7 @@ const getDuckdbReviewedArticlesQuerySections = (params: {
   })
   const judgmentsWhereParts = [
     `j.prompt_id IN (${getDuckdbSqlStringList(params.scope.promptIds).join(', ')})`,
+    getDuckdbJudgmentProjectWhereClause({judgmentAlias: 'j', projectId: params.scope.projectId}),
     params.scope.modelId ? `j.model_id = ${getDuckdbSqlString(params.scope.modelId)}` : null,
     `j.use_title = ${getDuckdbSqlBoolean(params.scope.useTitle)}`,
     `j.use_abstract = ${getDuckdbSqlBoolean(params.scope.useAbstract)}`,
@@ -1136,7 +1149,7 @@ const getDuckdbReviewedArticlesQuerySections = (params: {
     return part !== null
   })
   const havingParts = [
-    `COUNT(DISTINCT j.prompt_id) = ${params.scope.promptIds.length}`,
+    'COUNT(DISTINCT j.prompt_id) > 0',
     ...getDuckdbReviewedPromptHavingParts(params.scope, params.prompts),
   ]
 
@@ -1666,6 +1679,7 @@ const getLlmJudgmentRows = async (scope: ProjectOlapScope, articleIds: string[])
   const whereParts = [
     `j.article_id IN (${getDuckdbSqlStringList(articleIds).join(', ')})`,
     `j.prompt_id IN (${getDuckdbSqlStringList(scope.promptIds).join(', ')})`,
+    getDuckdbJudgmentProjectWhereClause({judgmentAlias: 'j', projectId: scope.projectId}),
     scope.modelId ? `j.model_id = ${getDuckdbSqlString(scope.modelId)}` : null,
     `j.use_title = ${getDuckdbSqlBoolean(scope.useTitle)}`,
     `j.use_abstract = ${getDuckdbSqlBoolean(scope.useAbstract)}`,
@@ -1741,6 +1755,7 @@ const getLlmJudgedPromptRows = async (
     FROM app.judgment j
     WHERE j.article_id IN (${getDuckdbSqlStringList(articleIds).join(', ')})
       AND j.prompt_id IN (${getDuckdbSqlStringList(scope.promptIds).join(', ')})
+      AND ${getDuckdbJudgmentProjectWhereClause({judgmentAlias: 'j', projectId: scope.projectId})}
       AND j.model_id = ${getDuckdbSqlString(scope.modelId ?? '')}
       AND j.use_title = ${getDuckdbSqlBoolean(scope.useTitle)}
       AND j.use_abstract = ${getDuckdbSqlBoolean(scope.useAbstract)}
@@ -1913,6 +1928,7 @@ const getLlmReviewedArticleRows = async (params: {
   to?: string | null
   search?: string | null
   prompts?: Record<string, string[]>
+  requireAllLlmJudgments?: boolean
 }) => {
   const scopedArticles = await getScopedArticles({...params, orderBy: 'created'})
   const llmJudgmentRows = await getLlmJudgmentRows(
@@ -1925,10 +1941,11 @@ const getLlmReviewedArticleRows = async (params: {
   const promptFilters = getPromptFilters(params.prompts)
   const filteredArticles = scopedArticles.filter((article) => {
     const articleJudgments = llmJudgmentsByArticle.get(article.id) ?? []
-    return (
-      getHasAllProjectPrompts(params.scope.promptIds, articleJudgments)
-      && getMatchesPromptFilters(articleJudgments, promptFilters)
-    )
+    const hasRequiredLlmJudgments = params.requireAllLlmJudgments
+      ? getHasAllProjectPrompts(params.scope.promptIds, articleJudgments)
+      : articleJudgments.length > 0
+
+    return hasRequiredLlmJudgments && getMatchesPromptFilters(articleJudgments, promptFilters)
   })
 
   return {scopedArticles: filteredArticles, llmJudgmentsByArticle}
@@ -1985,6 +2002,8 @@ export const queryArticlesReviewsFromDuckdb = async (
         llmJudgmentsByArticle.get(article.id) ?? [],
         scope.promptOrderMap,
       )
+      const judgedPromptIds = getJudgedPromptIds(judgmentsForArticle, scope.promptOrderMap)
+
       return {
         id: article.id,
         articleTitle: article.articleTitle,
@@ -1996,8 +2015,8 @@ export const queryArticlesReviewsFromDuckdb = async (
         fullTextFetchedAt: article.fullTextFetchedAt,
         fullTextConversionStatus: article.fullTextConversionStatus,
         judgments: judgmentsForArticle,
-        judgedPromptIds: getJudgedPromptIds(judgmentsForArticle, scope.promptOrderMap),
-        isFullyJudged: true,
+        judgedPromptIds,
+        isFullyJudged: judgedPromptIds.length === scope.promptIds.length,
         journalTitle: article.journalTitle,
         sourceMetadata: article.sourceMetadata,
       }
@@ -2023,14 +2042,16 @@ export const queryArticlesReviewsFromDuckdb = async (
   const llmJudgmentsByArticle = groupByArticleId(llmJudgmentRows)
   const data = pageResult.rows.map((article) => {
     const judgmentsForArticle = getJudgmentRowsSorted(llmJudgmentsByArticle.get(article.id) ?? [], scope.promptOrderMap)
+    const judgedPromptIds = getJudgedPromptIds(judgmentsForArticle, scope.promptOrderMap)
+
     return {
       id: article.id,
       articleTitle: article.articleTitle,
       articleCreatedAt: article.articleCreatedAt,
       articleUpdatedAt: article.articleUpdatedAt,
       judgments: judgmentsForArticle,
-      judgedPromptIds: getJudgedPromptIds(judgmentsForArticle, scope.promptOrderMap),
-      isFullyJudged: true,
+      judgedPromptIds,
+      isFullyJudged: judgedPromptIds.length === scope.promptIds.length,
       journalTitle: article.sourceMetadata.journalTitle,
       sourceMetadata: article.sourceMetadata,
     }
@@ -2115,7 +2136,11 @@ export const queryArticlesReviewsBothFromDuckdb = async (
     return {data, totalCount, page: params.page, limit: params.limit, totalPages}
   }
 
-  const {scopedArticles, llmJudgmentsByArticle} = await getLlmReviewedArticleRows({...params, scope})
+  const {scopedArticles, llmJudgmentsByArticle} = await getLlmReviewedArticleRows({
+    ...params,
+    scope,
+    requireAllLlmJudgments: true,
+  })
   const humanRowsByArticle = getHumanRowsByArticleId(
     await getHumanAnswerRows(
       scope,
@@ -2124,19 +2149,13 @@ export const queryArticlesReviewsBothFromDuckdb = async (
       }),
     ),
   )
-  const promptFilters = getPromptFilters(params.prompts)
   const filteredArticles = scopedArticles.filter((article) => {
-    const llmRows = llmJudgmentsByArticle.get(article.id) ?? []
     const humanRows = humanRowsByArticle.get(article.id) ?? []
-    return (
-      getHasAllProjectPrompts(scope.promptIds, llmRows)
-      && getMatchesPromptFilters(llmRows, promptFilters)
-      && getHasAllProjectPrompts(
-        scope.promptIds,
-        humanRows.filter((row) => {
-          return getHasHumanAnswer(row.answer)
-        }),
-      )
+    return getHasAllProjectPrompts(
+      scope.promptIds,
+      humanRows.filter((row) => {
+        return getHasHumanAnswer(row.answer)
+      }),
     )
   })
   const totalCount = filteredArticles.length
@@ -2721,6 +2740,7 @@ export const selectArticleIdsByFilterDuckdb = async (...args: SelectArticleIdsAr
         search,
         prompts: promptsFilter,
         requireAllHumanAnswers: true,
+        requireAllLlmJudgments: true,
       })
     }
 
@@ -2738,7 +2758,14 @@ export const selectArticleIdsByFilterDuckdb = async (...args: SelectArticleIdsAr
       })
     }
 
-    const {scopedArticles} = await getLlmReviewedArticleRows({scope, from, to, search, prompts: promptsFilter})
+    const {scopedArticles} = await getLlmReviewedArticleRows({
+      scope,
+      from,
+      to,
+      search,
+      prompts: promptsFilter,
+      requireAllLlmJudgments: true,
+    })
     const humanArticleIds = new Set(await getHumanReviewedArticleIdsFromDuckdbRaw({scope, from, to, search}))
 
     return scopedArticles
@@ -2764,7 +2791,14 @@ export const selectArticleIdsByFilterDuckdb = async (...args: SelectArticleIdsAr
     })
   }
 
-  const {scopedArticles} = await getLlmReviewedArticleRows({scope, from, to, search, prompts: promptsFilter})
+  const {scopedArticles} = await getLlmReviewedArticleRows({
+    scope,
+    from,
+    to,
+    search,
+    prompts: promptsFilter,
+    requireAllLlmJudgments: true,
+  })
   const humanArticleIds = new Set(await getHumanReviewedArticleIdsFromDuckdbRaw({scope, from, to, search}))
 
   return scopedArticles

@@ -4,7 +4,6 @@ import {assertSelectableProviderModelId} from '../providers/providerModelReposit
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
 import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
-import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {hasMatchingJudgmentAnswer} from '../utils/judgmentAnswers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
@@ -42,13 +41,37 @@ type PromptRow = {
   originalText: string
   transformedText: string | null
   type: string | null
-  contentHash: string | null
+  archived: boolean
 }
 
 const chunk = <T>(arr: T[], size: number): T[][] => {
   const out: T[][] = []
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))
   return out
+}
+
+const createDetachedPrompt = async (params: {
+  archived: boolean
+  originalText: string
+  promptHeading: string | null
+  transformedText: string | null
+  type: string | null
+}) => {
+  const [prompt] = await appDatabaseService.queryJson<{id: string}>(`
+    INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived)
+    VALUES (
+      '${appQueryHelpers.escapeSqlString(crypto.randomUUID())}',
+      ${appQueryHelpers.getSqlLiteral(params.originalText)},
+      ${appQueryHelpers.getSqlLiteral(params.transformedText)},
+      ${appQueryHelpers.getSqlLiteral(params.promptHeading)},
+      ${appQueryHelpers.getSqlLiteral(params.type)},
+      NULL,
+      ${params.archived ? 'TRUE' : 'FALSE'}
+    )
+    RETURNING id
+  `)
+
+  return prompt?.id ?? null
 }
 
 const getProjectArticleWhereClause = (params: {
@@ -240,6 +263,7 @@ export const subprojectsRoutes = new Elysia()
         modelId: body.modelId,
       })
 
+      const newProjectId = crypto.randomUUID()
       const [newProject] = await appDatabaseService.queryJson<{
         id: string
         name: string
@@ -253,6 +277,7 @@ export const subprojectsRoutes = new Elysia()
         dateTo: unknown
       }>(`
         INSERT INTO app.project (
+          id,
           name,
           description,
           model_id,
@@ -263,6 +288,7 @@ export const subprojectsRoutes = new Elysia()
           date_to
         )
         VALUES (
+          '${appQueryHelpers.escapeSqlString(newProjectId)}',
           ${appQueryHelpers.getSqlLiteral(body.name)},
           ${appQueryHelpers.getSqlLiteral(body.description || null)},
           ${appQueryHelpers.getSqlLiteral(body.modelId)},
@@ -302,32 +328,28 @@ export const subprojectsRoutes = new Elysia()
             original_text AS originalText,
             transformed_text AS transformedText,
             type,
-            content_hash AS contentHash
+            archived
           FROM app.prompt
           WHERE id IN (${appQueryHelpers.getQuotedStringList(promptIds).join(', ')})
         `)
 
         let orderIndex = 0
         for (const prompt of promptDetails) {
-          const contentHash = computePromptContentHash(
-            prompt.originalText,
-            prompt.transformedText,
-            prompt.promptHeading,
-            prompt.type,
-          )
-          const [existingByHash] =
-            contentHash !== prompt.contentHash
-              ? await appDatabaseService.queryJson<{id: string}>(`
-                  SELECT id
-                  FROM app.prompt
-                  WHERE content_hash = ${appQueryHelpers.getSqlLiteral(contentHash)}
-                  LIMIT 1
-                `)
-              : []
-          const targetPromptId = existingByHash?.id ?? prompt.id
+          const targetPromptId = await createDetachedPrompt({
+            archived: prompt.archived,
+            originalText: prompt.originalText,
+            promptHeading: prompt.promptHeading,
+            transformedText: prompt.transformedText,
+            type: prompt.type,
+          })
+
+          if (!targetPromptId) {
+            throw new Error('Failed to create detached subproject prompt')
+          }
 
           await appDatabaseService.run(`
             INSERT INTO app.project_prompt (
+              id,
               project_id,
               prompt_id,
               prompt_order,
@@ -336,6 +358,7 @@ export const subprojectsRoutes = new Elysia()
               origin_project_id
             )
             VALUES (
+              '${appQueryHelpers.escapeSqlString(crypto.randomUUID())}',
               '${appQueryHelpers.escapeSqlString(newProject.id)}',
               '${appQueryHelpers.escapeSqlString(targetPromptId)}',
               ${orderIndex},
@@ -506,10 +529,10 @@ export const subprojectsRoutes = new Elysia()
           }
 
           await tx.run(`
-            INSERT INTO app.project_article (project_id, article_id, imported_from_project_id)
+            INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
             VALUES ${idsChunk
               .map((articleId) => {
-                return `('${appQueryHelpers.escapeSqlString(newProject.id)}', '${appQueryHelpers.escapeSqlString(articleId)}', NULL)`
+                return `('${appQueryHelpers.escapeSqlString(crypto.randomUUID())}', '${appQueryHelpers.escapeSqlString(newProject.id)}', '${appQueryHelpers.escapeSqlString(articleId)}', NULL)`
               })
               .join(', ')}
             ON CONFLICT DO NOTHING

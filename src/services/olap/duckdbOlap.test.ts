@@ -20,6 +20,10 @@ const getDuckdbSqlString = (value: string) => {
   return `'${value.replaceAll("'", "''")}'`
 }
 
+const getJudgmentProjectClause = (projectId = 'project-1') => {
+  return `COALESCE(j.project_id, j.snapshot_project_id) = ${getDuckdbSqlString(projectId)}`
+}
+
 const getPromptFilter = (
   overrides: Partial<{
     promptId: string
@@ -47,6 +51,13 @@ const getPromptRowsWithTie = () => {
   return [
     {id: 'prompt-1', order: 0, promptHeading: 'Prompt 1', originalText: 'Prompt 1', type: 'string'},
     {id: 'prompt-2', order: 0, promptHeading: 'Prompt 2', originalText: 'Prompt 2', type: 'string'},
+  ]
+}
+
+const getPromptRowsWithTwoPrompts = () => {
+  return [
+    {id: 'prompt-1', order: 0, promptHeading: 'Prompt 1', originalText: 'Prompt 1', type: 'string'},
+    {id: 'prompt-2', order: 1, promptHeading: 'Prompt 2', originalText: 'Prompt 2', type: 'string'},
   ]
 }
 
@@ -114,6 +125,8 @@ const getDuckdbJudgmentRow = (
     articleImportRoute: string | null
     promptId: string
     modelId: string
+    projectId: string | null
+    snapshotProjectId: string | null
     answeredOriginal: string | null
     answeredOriginalAsArray: unknown
     explanation: string | null
@@ -130,6 +143,8 @@ const getDuckdbJudgmentRow = (
     articleImportRoute: 'articleImportRoute' in overrides ? overrides.articleImportRoute : null,
     promptId: overrides.promptId ?? 'prompt-1',
     modelId: overrides.modelId ?? 'model-1',
+    projectId: 'projectId' in overrides ? overrides.projectId : 'project-1',
+    snapshotProjectId: 'snapshotProjectId' in overrides ? overrides.snapshotProjectId : 'project-1',
     answeredOriginal: 'answeredOriginal' in overrides ? overrides.answeredOriginal : 'yes',
     answeredOriginalAsArray: 'answeredOriginalAsArray' in overrides ? overrides.answeredOriginalAsArray : null,
     explanation: 'explanation' in overrides ? overrides.explanation : null,
@@ -171,9 +186,16 @@ const loadDuckdbOlap = () => {
   return import('./duckdbOlap.ts')
 }
 
-const getNormalizedReviewRows = (rows: Array<{id: string; articleTitle: string | null; judgedPromptIds: string[]}>) => {
+const getNormalizedReviewRows = (
+  rows: Array<{id: string; articleTitle: string | null; judgedPromptIds: string[]; isFullyJudged: boolean}>,
+) => {
   return rows.map((row) => {
-    return {id: row.id, articleTitle: row.articleTitle, judgedPromptIds: row.judgedPromptIds}
+    return {
+      id: row.id,
+      articleTitle: row.articleTitle,
+      judgedPromptIds: row.judgedPromptIds,
+      isFullyJudged: row.isFullyJudged,
+    }
   })
 }
 
@@ -265,6 +287,7 @@ test('queryArticlesReviewsFromDuckdb uses new serving mart when rows exist', asy
 
   expect(result.data[0]?.id).toBe('article-1')
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_serving s')
+  expect(duckdbRunnerMockRef.current.queries[6]).toContain(getJudgmentProjectClause())
 })
 
 test('queryArticlesReviewsFromDuckdb emits nextCursor on review article serving path', async () => {
@@ -415,6 +438,7 @@ test('queryArticlesReviewsFromDuckdb falls back to raw judgments when serving ro
   ).toEqual(['article-1'])
   expect(typeof firstPage.nextCursor).toBe('string')
   expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.judgment j')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain(getJudgmentProjectClause())
   expect(duckdbRunnerMockRef.current.queries[5]).not.toContain('FROM mart.review_article_rollup r')
 })
 
@@ -559,6 +583,7 @@ test('countArticlesReviewsFromDuckdb falls back to raw judgments when serving ro
 
   expect(result).toEqual({totalCount: 2, totalPages: 1})
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.judgment j')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain(getJudgmentProjectClause())
   expect(duckdbRunnerMockRef.current.queries[4]).not.toContain('FROM mart.review_article_rollup r')
 })
 
@@ -1083,6 +1108,27 @@ test('selectArticleIdsByFilterDuckdb both uses raw rows when serving rows are mi
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.article a')
 })
 
+test('selectArticleIdsByFilterDuckdb both excludes partially judged llm rows when serving rows are missing', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [],
+    [getDuckdbScopedArticleRow({id: 'article-1'})],
+    [getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-1'})],
+    [getDuckdbScopedArticleRow({id: 'article-1'})],
+    [
+      getDuckdbHumanAnswerRow({articleId: 'article-1', promptId: 'prompt-1'}),
+      getDuckdbHumanAnswerRow({articleId: 'article-1', promptId: 'prompt-2'}),
+    ],
+  ])
+
+  const {selectArticleIdsByFilterDuckdb} = await loadDuckdbOlap()
+  const result = await selectArticleIdsByFilterDuckdb('project-1', 'both', {['prompt-1']: ['yes']})
+
+  expect(result).toEqual([])
+})
+
 test('selectArticleIdsByFilterDuckdb unassessed uses raw rows when serving rows are missing', async () => {
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
     getPromptRows(),
@@ -1111,7 +1157,7 @@ test('selectArticleIdsByFilterDuckdb unassessed uses raw rows when serving rows 
 
 test('selectArticleIdsByFilterDuckdb llm uses raw rows when serving rows are missing', async () => {
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
-    getPromptRows(),
+    getPromptRowsWithTwoPrompts(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
     [],
@@ -1124,11 +1170,12 @@ test('selectArticleIdsByFilterDuckdb llm uses raw rows when serving rows are mis
 
   expect(result).toEqual(['article-1'])
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.article a')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain(getJudgmentProjectClause())
 })
 
 test('selectArticleIdsByFilterDuckdb llm uses review article serving when rows exist', async () => {
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
-    getPromptRows(),
+    getPromptRowsWithTwoPrompts(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
     [{projectId: 'project-1'}],
@@ -1140,6 +1187,24 @@ test('selectArticleIdsByFilterDuckdb llm uses review article serving when rows e
 
   expect(result).toEqual(['article-1'])
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_serving s')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('COALESCE(s.llm_judged_prompt_count, 0) > 0')
+})
+
+test('selectArticleIdsByFilterDuckdb both keeps complete llm requirement on serving path', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [{articleId: 'article-1'}],
+  ])
+
+  const {selectArticleIdsByFilterDuckdb} = await loadDuckdbOlap()
+  const result = await selectArticleIdsByFilterDuckdb('project-1', 'both', {['prompt-1']: ['yes']})
+
+  expect(result).toEqual(['article-1'])
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('s.has_all_llm_judgments = TRUE')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('s.has_all_human_answers = TRUE')
 })
 
 test('selectArticleIdsByFilterDuckdb keeps llm selection working when project modelId is null', async () => {
@@ -1188,13 +1253,14 @@ test('selectArticleIdsByFilterDuckdb keeps llm selection working when project mo
 
   expect(result).toEqual(['article-1'])
   expect(duckdbRunnerMockRef.current.queries[4]).not.toContain('j.model_id =')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain(getJudgmentProjectClause())
 })
 
 test('queryArticlesReviewsFromDuckdb keeps core row output aligned across serving and raw paths', async () => {
   const {queryArticlesReviewsFromDuckdb} = await loadDuckdbOlap()
 
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
-    getPromptRows(),
+    getPromptRowsWithTwoPrompts(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
     [{projectId: 'project-1'}],
@@ -1216,9 +1282,10 @@ test('queryArticlesReviewsFromDuckdb keeps core row output aligned across servin
     [getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-1'})],
   ])
   const servingResult = await queryArticlesReviewsFromDuckdb({projectId: 'project-1', page: 1, limit: 10})
+  const servingReviewQuery = duckdbRunnerMockRef.current.queries[4]
 
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
-    getPromptRows(),
+    getPromptRowsWithTwoPrompts(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
     [],
@@ -1242,31 +1309,39 @@ test('queryArticlesReviewsFromDuckdb keeps core row output aligned across servin
   const rawResult = await queryArticlesReviewsFromDuckdb({projectId: 'project-1', page: 1, limit: 10})
 
   expect(getNormalizedReviewRows(servingResult.data)).toEqual(getNormalizedReviewRows(rawResult.data))
+  expect(servingResult.data[0]?.isFullyJudged).toBe(false)
+  expect(rawResult.data[0]?.isFullyJudged).toBe(false)
+  expect(servingReviewQuery).toContain('COALESCE(s.llm_judged_prompt_count, 0) > 0')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('COUNT(DISTINCT j.prompt_id) > 0')
+  expect(duckdbRunnerMockRef.current.queries[4]).not.toContain('COUNT(DISTINCT j.prompt_id) = 2')
 })
 
 test('countArticlesReviewsFromDuckdb keeps counts aligned across serving and raw paths', async () => {
   const {countArticlesReviewsFromDuckdb} = await loadDuckdbOlap()
 
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
-    getPromptRows(),
+    getPromptRowsWithTwoPrompts(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
     [{projectId: 'project-1'}],
-    [{totalCount: 2}],
+    [{totalCount: 1}],
   ])
   const servingResult = await countArticlesReviewsFromDuckdb({projectId: 'project-1', limit: 10})
+  const servingCountQuery = duckdbRunnerMockRef.current.queries[4]
 
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
-    getPromptRows(),
+    getPromptRowsWithTwoPrompts(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
     [],
-    [{totalCount: 2}],
+    [{totalCount: 1}],
   ])
   const rawResult = await countArticlesReviewsFromDuckdb({projectId: 'project-1', limit: 10})
 
-  expect(servingResult).toEqual({totalCount: 2, totalPages: 1})
+  expect(servingResult).toEqual({totalCount: 1, totalPages: 1})
   expect(rawResult).toEqual(servingResult)
+  expect(servingCountQuery).toContain('COALESCE(s.llm_judged_prompt_count, 0) > 0')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('COUNT(DISTINCT j.prompt_id) > 0')
 })
 
 test('getUnassessedArticlesFromDuckdb keeps rows aligned across serving and raw paths', async () => {

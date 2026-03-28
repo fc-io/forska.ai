@@ -229,3 +229,42 @@ test('project review details merges detail mart rows, raw fallback rows, and pla
     }),
   ).toEqual(['assessment-1'])
 })
+
+test('project review details keeps cross-project raw judgments out of the main fallback list', async () => {
+  fullArticlesByIdsRef.current = async () => {
+    return [{articleTitle: 'Article 1', id: 'article-1'}]
+  }
+  projectReviewConfigRef.current = async () => {
+    return {modelId: 'model-1', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+  }
+  queryJsonRef.current = async (statement) => {
+    return statement.includes('FROM app.project_prompt pp')
+      ? [getPromptRow('prompt-1', 0)]
+      : statement.includes('FROM app.judgment j')
+        ? [
+            getArticleJudgmentRow({judgmentId: 'judgment-project', judgmentPromptId: 'prompt-1'}),
+            getArticleJudgmentRow({
+              judgmentId: 'judgment-cross-project',
+              judgmentProjectId: 'project-other',
+              judgmentSnapshotProjectId: 'project-other',
+              judgmentPromptId: 'prompt-1',
+            }),
+          ]
+        : []
+  }
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as {allJudgments: Array<{id: string}>; judgments: Array<{id: string}>}
+
+  expect(response.status).toBe(200)
+  expect(
+    body.judgments.map((judgment) => {
+      return judgment.id
+    }),
+  ).toEqual(['judgment-project'])
+  expect(
+    body.allJudgments.map((judgment) => {
+      return judgment.id
+    }),
+  ).toEqual(['judgment-cross-project'])
+})

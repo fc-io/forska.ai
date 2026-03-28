@@ -1,101 +1,161 @@
-import {expect, mock, test} from 'bun:test'
+import {expect, test} from 'bun:test'
 
-const getModulePath = (relativePath: string) => {
-  return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
-}
+const getLastJsonLine = (value: string) => {
+  const lines = value
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => {
+      return line.trim()
+    })
+    .filter((line) => {
+      return line.startsWith('{') && line.endsWith('}')
+    })
 
-const waitFor = async (ms: number) => {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms)
-  })
-}
+  const [lastLine = ''] = lines.slice(-1)
 
-const martRefreshDrainHeartbeatModulePath = getModulePath('./src/server/utils/martRefreshDrainHeartbeat.ts')
-const martRefreshServiceModulePath = getModulePath('./src/server/services/getDuckdbMartRefreshService.ts')
-const serverRuntimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
-type MartRefreshDrainHeartbeatModule = typeof import('./martRefreshDrainHeartbeat.ts')
-type ServerRuntimeRoleModule = typeof import('./serverRuntimeRole.ts')
-
-test('startMartRefreshDrainHeartbeat flushes immediately when writer work is enabled', async () => {
-  let flushCount = 0
-  const actualServerRuntimeRoleModule = (await import(
-    `${serverRuntimeRoleModulePath}?actual=${Date.now()}`
-  )) as ServerRuntimeRoleModule
-
-  void mock.module(martRefreshServiceModulePath, () => {
-    return {
-      getDuckdbMartRefreshService: () => {
-        return {
-          flush: async () => {
-            flushCount += 1
-          },
-        }
-      },
-    }
-  })
-  void mock.module(serverRuntimeRoleModulePath, () => {
-    return {
-      ...actualServerRuntimeRoleModule,
-      shouldCurrentServerRunWriterWork: () => {
-        return true
-      },
-    }
-  })
-
-  const martRefreshDrainHeartbeatModule = (await import(
-    `${martRefreshDrainHeartbeatModulePath}?writer=${Date.now()}`
-  )) as MartRefreshDrainHeartbeatModule
-  const stop = martRefreshDrainHeartbeatModule.startMartRefreshDrainHeartbeat({intervalMs: 50})
-
-  try {
-    await waitFor(20)
-    expect(flushCount).toBeGreaterThanOrEqual(1)
-  } finally {
-    stop()
+  if (lastLine === '') {
+    throw new Error(`Expected JSON output but received: ${value}`)
   }
+
+  return lastLine
+}
+
+test('startMartRefreshDrainHeartbeat flushes immediately when writer work is enabled', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const martRefreshDrainHeartbeatModulePath = getModulePath('./src/server/utils/martRefreshDrainHeartbeat.ts')
+        const martRefreshServiceModulePath = getModulePath('./src/server/services/getDuckdbMartRefreshService.ts')
+        const serverRuntimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        let flushCount = 0
+        const actualServerRuntimeRoleModule = await import(serverRuntimeRoleModulePath + '?actual=' + Date.now())
+
+        void mock.module(martRefreshServiceModulePath, () => {
+          return {
+            getDuckdbMartRefreshService: () => {
+              return {
+                flush: async () => {
+                  flushCount += 1
+                },
+              }
+            },
+          }
+        })
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            ...actualServerRuntimeRoleModule,
+            shouldCurrentServerRunWriterWork: () => {
+              return true
+            },
+          }
+        })
+
+        const {startMartRefreshDrainHeartbeat} = await import(martRefreshDrainHeartbeatModulePath + '?writer=' + Date.now())
+        const stop = startMartRefreshDrainHeartbeat({intervalMs: 50})
+
+        try {
+          await new Promise((resolve) => {
+            setTimeout(resolve, 20)
+          })
+          console.log(JSON.stringify({flushCount}))
+        } finally {
+          stop()
+        }
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'Mart refresh heartbeat writer test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {flushCount: number}
+
+  expect(result.flushCount).toBeGreaterThanOrEqual(1)
 })
 
-test('startMartRefreshDrainHeartbeat begins flushing after the server becomes writer', async () => {
-  let flushCount = 0
-  let shouldRunWriterWork = false
-  const actualServerRuntimeRoleModule = (await import(
-    `${serverRuntimeRoleModulePath}?actual=${Date.now()}`
-  )) as ServerRuntimeRoleModule
+test('startMartRefreshDrainHeartbeat begins flushing after the server becomes writer', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
 
-  void mock.module(martRefreshServiceModulePath, () => {
-    return {
-      getDuckdbMartRefreshService: () => {
-        return {
-          flush: async () => {
-            flushCount += 1
-          },
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
         }
-      },
-    }
-  })
-  void mock.module(serverRuntimeRoleModulePath, () => {
-    return {
-      ...actualServerRuntimeRoleModule,
-      shouldCurrentServerRunWriterWork: () => {
-        return shouldRunWriterWork
-      },
-    }
-  })
 
-  const martRefreshDrainHeartbeatModule = (await import(
-    `${martRefreshDrainHeartbeatModulePath}?promotion=${Date.now()}`
-  )) as MartRefreshDrainHeartbeatModule
-  const stop = martRefreshDrainHeartbeatModule.startMartRefreshDrainHeartbeat({intervalMs: 10})
+        const martRefreshDrainHeartbeatModulePath = getModulePath('./src/server/utils/martRefreshDrainHeartbeat.ts')
+        const martRefreshServiceModulePath = getModulePath('./src/server/services/getDuckdbMartRefreshService.ts')
+        const serverRuntimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        let flushCount = 0
+        let shouldRunWriterWork = false
+        const actualServerRuntimeRoleModule = await import(serverRuntimeRoleModulePath + '?actual=' + Date.now())
 
-  try {
-    await waitFor(25)
-    expect(flushCount).toBe(0)
+        void mock.module(martRefreshServiceModulePath, () => {
+          return {
+            getDuckdbMartRefreshService: () => {
+              return {
+                flush: async () => {
+                  flushCount += 1
+                },
+              }
+            },
+          }
+        })
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            ...actualServerRuntimeRoleModule,
+            shouldCurrentServerRunWriterWork: () => {
+              return shouldRunWriterWork
+            },
+          }
+        })
 
-    shouldRunWriterWork = true
+        const {startMartRefreshDrainHeartbeat} = await import(martRefreshDrainHeartbeatModulePath + '?promotion=' + Date.now())
+        const stop = startMartRefreshDrainHeartbeat({intervalMs: 10})
 
-    await waitFor(30)
-    expect(flushCount).toBeGreaterThanOrEqual(1)
-  } finally {
-    stop()
+        try {
+          await new Promise((resolve) => {
+            setTimeout(resolve, 25)
+          })
+          const beforePromotionFlushCount = flushCount
+          shouldRunWriterWork = true
+          await new Promise((resolve) => {
+            setTimeout(resolve, 30)
+          })
+          console.log(JSON.stringify({beforePromotionFlushCount, flushCount}))
+        } finally {
+          stop()
+        }
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'Mart refresh heartbeat promotion test failed',
+    )
   }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    beforePromotionFlushCount: number
+    flushCount: number
+  }
+
+  expect(result.beforePromotionFlushCount).toBe(0)
+  expect(result.flushCount).toBeGreaterThanOrEqual(1)
 })

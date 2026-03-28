@@ -16,6 +16,10 @@ let flushMartRefreshes: (() => Promise<void>) | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 
+const getSqlLiteral = (value: string | null) => {
+  return value === null ? 'NULL' : `'${value.replaceAll("'", "''")}'`
+}
+
 const insertProjectFixture = async ({
   connectionId,
   modelId,
@@ -43,6 +47,65 @@ const insertProjectFixture = async ({
   `)
 }
 
+const insertProjectPromptFixture = async ({
+  archived = false,
+  contentHash,
+  enabled = true,
+  order = 0,
+  originProjectId,
+  originalText,
+  projectId,
+  projectPromptId,
+  promptArchived = false,
+  promptHeading = null,
+  promptId,
+  transformedText = null,
+  type = null,
+}: {
+  archived?: boolean
+  contentHash: string
+  enabled?: boolean
+  order?: number
+  originProjectId: string | null
+  originalText: string
+  projectId: string
+  projectPromptId: string
+  promptArchived?: boolean
+  promptHeading?: string | null
+  promptId: string
+  transformedText?: string | null
+  type?: string | null
+}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived)
+    VALUES (
+      '${promptId}',
+      ${getSqlLiteral(originalText)},
+      ${getSqlLiteral(transformedText)},
+      ${getSqlLiteral(promptHeading)},
+      ${getSqlLiteral(type)},
+      '${contentHash}',
+      ${promptArchived ? 'TRUE' : 'FALSE'}
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, enabled, origin_project_id)
+    VALUES (
+      '${projectPromptId}',
+      '${projectId}',
+      '${promptId}',
+      ${order},
+      ${archived ? 'TRUE' : 'FALSE'},
+      ${enabled ? 'TRUE' : 'FALSE'},
+      ${originProjectId === null ? 'NULL' : `'${originProjectId}'`}
+    )
+  `)
+}
+
 const insertAdditionalModelFixture = async ({connectionId, modelId}: {connectionId: string; modelId: string}) => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
@@ -67,14 +130,14 @@ const insertProjectReferencesFixture = async ({
     throw new Error('Database not initialized')
   }
 
-  await runDatabase(`
-    INSERT INTO app.prompt (id, original_text, content_hash)
-    VALUES ('${promptId}', 'Does this item match?', '${promptId}-hash')
-  `)
-  await runDatabase(`
-    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled, archived, origin_project_id)
-    VALUES ('${projectId}-project-prompt', '${projectId}', '${promptId}', 1, TRUE, FALSE, '${projectId}')
-  `)
+  await insertProjectPromptFixture({
+    contentHash: `${promptId}-hash`,
+    originProjectId: projectId,
+    originalText: 'Does this item match?',
+    projectId,
+    projectPromptId: `${projectId}-project-prompt`,
+    promptId,
+  })
   await runDatabase(`
     INSERT INTO app.import_route (id, route, name, active)
     VALUES ('${routeId}', '${routeId}-route', '${routeId} route', TRUE)
@@ -101,7 +164,6 @@ const rebuildMartRefreshQueueWithoutGeneration = async () => {
       article_key VARCHAR NOT NULL DEFAULT '',
       reason VARCHAR,
       created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-      completed_at TIMESTAMPTZ,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
       UNIQUE(refresh_scope, project_key, article_key)
     );
@@ -159,158 +221,6 @@ afterAll(async () => {
   rmSync(tempDbPath, {force: true})
 })
 
-test('edit route ignores unchanged model updates when the project already has referencing rows', async () => {
-  if (!app || !queryDatabase || !flushMartRefreshes) {
-    throw new Error('Test app not initialized')
-  }
-
-  const connectionId = 'edit-noop-model-connection'
-  const modelId = 'edit-noop-model-primary'
-  const projectId = 'edit-noop-model-project'
-
-  await insertProjectFixture({connectionId, modelId, projectId})
-  await insertProjectReferencesFixture({
-    projectId,
-    promptId: 'edit-noop-model-prompt',
-    routeId: 'edit-noop-model-route',
-  })
-
-  const response = await app.handle(
-    new Request(`http://localhost/api/projects/${projectId}/edit`, {
-      body: JSON.stringify({modelId, name: 'Updated Project Name'}),
-      headers: {'content-type': 'application/json'},
-      method: 'PATCH',
-    }),
-  )
-  const body = (await response.json()) as {data?: {project?: {modelId?: string; name?: string}}; error?: string | null}
-
-  expect(response.status).toBe(200)
-  expect(body.data?.project?.modelId).toBe(modelId)
-  expect(body.data?.project?.name).toBe('Updated Project Name')
-
-  const [storedProject] = await queryDatabase<{modelId: string; name: string}>(`
-    SELECT model_id AS modelId, name
-    FROM app.project
-    WHERE id = '${projectId}'
-    LIMIT 1
-  `)
-
-  expect(storedProject).toEqual({modelId, name: 'Updated Project Name'})
-
-  await flushMartRefreshes()
-})
-
-test('edit route rejects an empty model id instead of silently skipping it', async () => {
-  if (!app || !queryDatabase) {
-    throw new Error('Test app not initialized')
-  }
-
-  const connectionId = 'edit-empty-model-connection'
-  const modelId = 'edit-empty-model-primary'
-  const projectId = 'edit-empty-model-project'
-
-  await insertProjectFixture({connectionId, modelId, projectId})
-
-  const response = await app.handle(
-    new Request(`http://localhost/api/projects/${projectId}/edit`, {
-      body: JSON.stringify({modelId: ''}),
-      headers: {'content-type': 'application/json'},
-      method: 'PATCH',
-    }),
-  )
-  const bodyText = await response.text()
-
-  expect(response.status).toBe(500)
-  expect(bodyText).toContain('Selected model does not exist or is disabled')
-
-  const [storedProject] = await queryDatabase<{modelId: string}>(`
-    SELECT model_id AS modelId
-    FROM app.project
-    WHERE id = '${projectId}'
-    LIMIT 1
-  `)
-
-  expect(storedProject?.modelId).toBe(modelId)
-})
-
-test('edit route returns a clear 400 when changing model on a referenced project would hit DuckDB FK limitations', async () => {
-  if (!app || !queryDatabase) {
-    throw new Error('Test app not initialized')
-  }
-
-  const connectionId = 'edit-change-model-blocked-connection'
-  const projectId = 'edit-change-model-blocked-project'
-  const originalModelId = 'edit-change-model-blocked-model-primary'
-  const replacementModelId = 'edit-change-model-blocked-model-secondary'
-
-  await insertProjectFixture({connectionId, modelId: originalModelId, projectId})
-  await insertAdditionalModelFixture({connectionId, modelId: replacementModelId})
-  await insertProjectReferencesFixture({
-    projectId,
-    promptId: 'edit-change-model-blocked-prompt',
-    routeId: 'edit-change-model-blocked-route',
-  })
-
-  const response = await app.handle(
-    new Request(`http://localhost/api/projects/${projectId}/edit`, {
-      body: JSON.stringify({modelId: replacementModelId}),
-      headers: {'content-type': 'application/json'},
-      method: 'PATCH',
-    }),
-  )
-  const bodyText = await response.text()
-
-  expect(response.status).toBe(400)
-  expect(bodyText).toContain('Changing the project model is currently blocked by DuckDB foreign key limitations')
-
-  const [storedProject] = await queryDatabase<{modelId: string}>(`
-    SELECT model_id AS modelId
-    FROM app.project
-    WHERE id = '${projectId}'
-    LIMIT 1
-  `)
-
-  expect(storedProject?.modelId).toBe(originalModelId)
-})
-
-test('edit route still allows changing model when the project has no referencing rows', async () => {
-  if (!app || !queryDatabase || !flushMartRefreshes) {
-    throw new Error('Test app not initialized')
-  }
-
-  const connectionId = 'edit-change-model-clean-connection'
-  const projectId = 'edit-change-model-clean-project'
-  const originalModelId = 'edit-change-model-clean-model-primary'
-  const replacementModelId = 'edit-change-model-clean-model-secondary'
-
-  await insertProjectFixture({connectionId, modelId: originalModelId, projectId})
-  await insertAdditionalModelFixture({connectionId, modelId: replacementModelId})
-
-  const response = await app.handle(
-    new Request(`http://localhost/api/projects/${projectId}/edit`, {
-      body: JSON.stringify({modelId: replacementModelId, name: 'Model Changed Project'}),
-      headers: {'content-type': 'application/json'},
-      method: 'PATCH',
-    }),
-  )
-  const body = (await response.json()) as {data?: {project?: {modelId?: string; name?: string}}; error?: string | null}
-
-  expect(response.status).toBe(200)
-  expect(body.data?.project?.modelId).toBe(replacementModelId)
-  expect(body.data?.project?.name).toBe('Model Changed Project')
-
-  const [storedProject] = await queryDatabase<{modelId: string; name: string}>(`
-    SELECT model_id AS modelId, name
-    FROM app.project
-    WHERE id = '${projectId}'
-    LIMIT 1
-  `)
-
-  expect(storedProject).toEqual({modelId: replacementModelId, name: 'Model Changed Project'})
-
-  await flushMartRefreshes()
-})
-
 test('archive route repairs stale mart refresh queue schema before queueing refresh work', async () => {
   if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')
@@ -352,6 +262,513 @@ test('archive route repairs stale mart refresh queue schema before queueing refr
   expect(storedProject?.archived).toBe(true)
   expect(queueColumn?.columnName).toBe('refresh_generation')
   expect(Number(queuedRefresh?.count ?? 0)).toBe(1)
+
+  await flushMartRefreshes()
+})
+
+test('edit route accepts full client payload when the model is unchanged', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-same-model-connection'
+  const modelId = 'edit-same-model'
+  const projectId = 'edit-same-model-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('edit-same-model-article', 'Edit same model article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('edit-same-model-project-article', '${projectId}', 'edit-same-model-article')
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        name: 'Updated project name',
+        description: null,
+        prompts: [],
+        dateFrom: null,
+        dateTo: null,
+        modelId,
+        importRoutes: [],
+        useTitle: true,
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {data: {project: {modelId: string; name: string}}}
+
+  expect(response.status).toBe(200)
+  expect(body.data.project.modelId).toBe(modelId)
+  expect(body.data.project.name).toBe('Updated project name')
+
+  const [storedProjectArticle] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.project_article
+    WHERE project_id = '${projectId}'
+  `)
+
+  expect(Number(storedProjectArticle?.count ?? 0)).toBe(1)
+
+  await flushMartRefreshes()
+})
+
+test('edit route can change the model for a populated project', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-switch-model-connection'
+  const initialModelId = 'edit-switch-model-initial'
+  const nextModelId = 'edit-switch-model-next'
+  const projectId = 'edit-switch-model-project'
+
+  await insertProjectFixture({connectionId, modelId: initialModelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${nextModelId}', '${connectionId}', 'Qwen/Qwen3.5-32B', 'Qwen/Qwen3.5-32B', 'Qwen 32B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('edit-switch-model-article', 'Edit switch model article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('edit-switch-model-project-article', '${projectId}', 'edit-switch-model-article')
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        name: 'Project with switched model',
+        description: null,
+        prompts: [],
+        dateFrom: null,
+        dateTo: null,
+        modelId: nextModelId,
+        importRoutes: [],
+        useTitle: true,
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {data: {project: {modelId: string; name: string}}}
+
+  expect(response.status).toBe(200)
+  expect(body.data.project.modelId).toBe(nextModelId)
+  expect(body.data.project.name).toBe('Project with switched model')
+
+  const [storedProject] = await queryDatabase<{modelId: string}>(`
+    SELECT model_id AS modelId
+    FROM app.project
+    WHERE id = '${projectId}'
+    LIMIT 1
+  `)
+  const [storedProjectArticle] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.project_article
+    WHERE project_id = '${projectId}'
+  `)
+
+  expect(storedProject?.modelId).toBe(nextModelId)
+  expect(Number(storedProjectArticle?.count ?? 0)).toBe(1)
+
+  await flushMartRefreshes()
+})
+
+test('edit route can change the model when prompt and import-route references exist', async () => {
+  if (!app || !queryDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-switch-model-linked-connection'
+  const initialModelId = 'edit-switch-model-linked-initial'
+  const nextModelId = 'edit-switch-model-linked-next'
+  const projectId = 'edit-switch-model-linked-project'
+  const promptId = 'edit-switch-model-linked-prompt'
+  const routeId = 'edit-switch-model-linked-route'
+
+  await insertProjectFixture({connectionId, modelId: initialModelId, projectId})
+  await insertAdditionalModelFixture({connectionId, modelId: nextModelId})
+  await insertProjectReferencesFixture({projectId, promptId, routeId})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        name: 'Project with linked refs switched model',
+        modelId: nextModelId,
+        prompts: [
+          {archived: false, enabled: true, order: 0, originalId: promptId, originalText: 'Does this item match?'},
+        ],
+        importRoutes: [`${routeId}-route`],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {data: {project: {modelId: string; name: string}}}
+
+  expect(response.status).toBe(200)
+  expect(body.data.project.modelId).toBe(nextModelId)
+  expect(body.data.project.name).toBe('Project with linked refs switched model')
+
+  const [storedProject] = await queryDatabase<{modelId: string}>(`
+    SELECT model_id AS modelId
+    FROM app.project
+    WHERE id = '${projectId}'
+    LIMIT 1
+  `)
+  const [storedProjectPrompt] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.project_prompt
+    WHERE project_id = '${projectId}'
+      AND prompt_id = '${promptId}'
+      AND origin_project_id = '${projectId}'
+  `)
+  const [storedProjectImportRoute] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.project_import_route pir
+    INNER JOIN app.import_route ir ON ir.id = pir.import_route_id
+    WHERE pir.project_id = '${projectId}'
+      AND ir.route = '${routeId}-route'
+  `)
+
+  expect(storedProject?.modelId).toBe(nextModelId)
+  expect(Number(storedProjectPrompt?.count ?? 0)).toBe(1)
+  expect(Number(storedProjectImportRoute?.count ?? 0)).toBe(1)
+
+  await flushMartRefreshes()
+})
+
+test('edit route rejects an empty model id', async () => {
+  if (!app || !queryDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-empty-model-connection'
+  const modelId = 'edit-empty-model-primary'
+  const projectId = 'edit-empty-model-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({modelId: ''}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const bodyText = await response.text()
+
+  expect(response.status).toBe(500)
+  expect(bodyText).toContain('Selected model does not exist or is disabled')
+
+  const [storedProject] = await queryDatabase<{modelId: string}>(`
+    SELECT model_id AS modelId
+    FROM app.project
+    WHERE id = '${projectId}'
+    LIMIT 1
+  `)
+
+  expect(storedProject?.modelId).toBe(modelId)
+})
+
+test('clone route detaches prompt ids and hides duplicate importable prompts', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'clone-detach-connection'
+  const modelId = 'clone-detach-model'
+  const projectId = 'clone-detach-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertProjectPromptFixture({
+    contentHash: 'clone-detach-hash-ai',
+    order: 0,
+    originProjectId: projectId,
+    originalText: 'Is this about AI?',
+    projectId,
+    projectPromptId: 'clone-detach-project-prompt-ai',
+    promptHeading: 'ai',
+    promptId: 'clone-detach-prompt-ai',
+    type: 'string',
+  })
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, prompt_heading, type, content_hash)
+    VALUES ('clone-detach-prompt-unrelated', 'Unrelated prompt', 'other', 'string', 'clone-detach-hash-unrelated')
+  `)
+
+  const cloneResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/clone`, {method: 'POST'}),
+  )
+  const cloneBody = (await cloneResponse.json()) as {data: {id: string}}
+  const clonedProjectId = cloneBody.data.id
+
+  expect(cloneResponse.status).toBe(200)
+
+  const sourcePromptRows = await queryDatabase<{
+    contentHash: string | null
+    originalText: string
+    originProjectId: string | null
+    promptHeading: string | null
+    promptId: string
+  }>(`
+    SELECT
+      p.id AS promptId,
+      p.original_text AS originalText,
+      p.prompt_heading AS promptHeading,
+      p.content_hash AS contentHash,
+      pp.origin_project_id AS originProjectId
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON p.id = pp.prompt_id
+    WHERE pp.project_id = '${projectId}'
+  `)
+  const clonedPromptRows = await queryDatabase<{
+    contentHash: string | null
+    originalText: string
+    originProjectId: string | null
+    promptHeading: string | null
+    promptId: string
+  }>(`
+    SELECT
+      p.id AS promptId,
+      p.original_text AS originalText,
+      p.prompt_heading AS promptHeading,
+      p.content_hash AS contentHash,
+      pp.origin_project_id AS originProjectId
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON p.id = pp.prompt_id
+    WHERE pp.project_id = '${clonedProjectId}'
+  `)
+
+  expect(sourcePromptRows.length).toBe(1)
+  expect(clonedPromptRows.length).toBe(1)
+  expect(clonedPromptRows[0]?.promptId).not.toBe(sourcePromptRows[0]?.promptId)
+  expect(clonedPromptRows[0]?.originalText).toBe(sourcePromptRows[0]?.originalText)
+  expect(clonedPromptRows[0]?.promptHeading).toBe(sourcePromptRows[0]?.promptHeading)
+  expect(clonedPromptRows[0]?.contentHash).toBe(null)
+  expect(clonedPromptRows[0]?.originProjectId).toBe(clonedProjectId)
+
+  const detailsResponse = await app.handle(new Request(`http://localhost/api/projects/${clonedProjectId}`))
+  const detailsBody = (await detailsResponse.json()) as {
+    data: {prompts: Array<{id: string; originalText: string; originProjectId: string | null}>}
+  }
+  const matchingPrompts = detailsBody.data.prompts.filter((prompt) => {
+    return prompt.originalText === 'Is this about AI?'
+  })
+  const unrelatedPrompts = detailsBody.data.prompts.filter((prompt) => {
+    return prompt.originalText === 'Unrelated prompt'
+  })
+
+  expect(detailsResponse.status).toBe(200)
+  expect(matchingPrompts.length).toBe(1)
+  expect(matchingPrompts[0]?.originProjectId).toBe(clonedProjectId)
+  expect(unrelatedPrompts.length).toBe(1)
+  expect(unrelatedPrompts[0]?.originProjectId).toBe(null)
+
+  await flushMartRefreshes()
+})
+
+test('editing a cloned project model leaves the source project model unchanged', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'clone-edit-model-connection'
+  const initialModelId = 'clone-edit-model-initial'
+  const nextModelId = 'clone-edit-model-next'
+  const projectId = 'clone-edit-model-project'
+
+  await insertProjectFixture({connectionId, modelId: initialModelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${nextModelId}', '${connectionId}', 'Qwen/Qwen3.5-32B', 'Qwen/Qwen3.5-32B', 'Qwen 32B', 'manual', TRUE)
+  `)
+
+  const cloneResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/clone`, {method: 'POST'}),
+  )
+  const cloneBody = (await cloneResponse.json()) as {data: {id: string}}
+  const clonedProjectId = cloneBody.data.id
+
+  expect(cloneResponse.status).toBe(200)
+
+  const editResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${clonedProjectId}/edit`, {
+      body: JSON.stringify({
+        name: 'Detached clone with new model',
+        description: null,
+        prompts: [],
+        dateFrom: null,
+        dateTo: null,
+        modelId: nextModelId,
+        importRoutes: [],
+        useTitle: true,
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+
+  expect(editResponse.status).toBe(200)
+
+  const storedProjects = await queryDatabase<{id: string; modelId: string}>(`
+    SELECT id, model_id AS modelId
+    FROM app.project
+    WHERE id IN ('${projectId}', '${clonedProjectId}')
+    ORDER BY id
+  `)
+  const sourceProject = storedProjects.find((project) => {
+    return project.id === projectId
+  })
+  const clonedProject = storedProjects.find((project) => {
+    return project.id === clonedProjectId
+  })
+
+  expect(sourceProject?.modelId).toBe(initialModelId)
+  expect(clonedProject?.modelId).toBe(nextModelId)
+
+  await flushMartRefreshes()
+})
+
+test('create route detaches owned prompts from existing global prompt ids', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'create-detach-connection'
+  const modelId = 'create-detach-model'
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-122B-A10B', 'Qwen/Qwen3.5-122B-A10B', 'Qwen 122B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, prompt_heading, type, content_hash)
+    VALUES ('create-detach-existing-prompt', 'Shared prompt text', 'shared', 'string', 'create-detach-shared-hash')
+  `)
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projects', {
+      body: JSON.stringify({name: 'Detached create project', modelId, prompts: ['Shared prompt text']}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {data: {id: string}}
+  const projectId = body.data.id
+
+  expect(response.status).toBe(200)
+
+  const [promptRow] = await queryDatabase<{
+    contentHash: string | null
+    originProjectId: string | null
+    promptId: string
+  }>(`
+    SELECT p.id AS promptId, p.content_hash AS contentHash, pp.origin_project_id AS originProjectId
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON p.id = pp.prompt_id
+    WHERE pp.project_id = '${projectId}'
+    LIMIT 1
+  `)
+
+  expect(promptRow?.promptId).not.toBe('create-detach-existing-prompt')
+  expect(promptRow?.contentHash).toBe(null)
+  expect(promptRow?.originProjectId).toBe(projectId)
+
+  await flushMartRefreshes()
+})
+
+test('edit route detaches changed owned prompts from matching global prompt ids', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-detach-connection'
+  const modelId = 'edit-detach-model'
+  const projectId = 'edit-detach-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertProjectPromptFixture({
+    contentHash: 'edit-detach-original-hash',
+    originProjectId: projectId,
+    originalText: 'Original owned prompt',
+    projectId,
+    projectPromptId: 'edit-detach-project-prompt',
+    promptId: 'edit-detach-owned-prompt',
+  })
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, prompt_heading, type, content_hash)
+    VALUES ('edit-detach-existing-prompt', 'Shared prompt text', 'shared', 'string', 'edit-detach-shared-hash')
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        name: 'Edited detached project',
+        description: null,
+        prompts: [
+          {
+            originalId: 'edit-detach-owned-prompt',
+            originalText: 'Shared prompt text',
+            promptHeading: 'shared',
+            type: 'string',
+            order: 0,
+            enabled: true,
+          },
+        ],
+        dateFrom: null,
+        dateTo: null,
+        modelId,
+        importRoutes: [],
+        useTitle: true,
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+
+  expect(response.status).toBe(200)
+
+  const [promptRow] = await queryDatabase<{
+    contentHash: string | null
+    originProjectId: string | null
+    promptId: string
+  }>(`
+    SELECT p.id AS promptId, p.content_hash AS contentHash, pp.origin_project_id AS originProjectId
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON p.id = pp.prompt_id
+    WHERE pp.project_id = '${projectId}'
+    LIMIT 1
+  `)
+
+  expect(promptRow?.promptId).not.toBe('edit-detach-owned-prompt')
+  expect(promptRow?.promptId).not.toBe('edit-detach-existing-prompt')
+  expect(promptRow?.contentHash).toBe(null)
+  expect(promptRow?.originProjectId).toBe(projectId)
 
   await flushMartRefreshes()
 })
