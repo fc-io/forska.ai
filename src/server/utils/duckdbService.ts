@@ -70,6 +70,10 @@ const duckdbStartupRetryableErrorFragments = [
   'Failure while replaying WAL file',
   'Calling DatabaseManager::GetDefaultDatabase with no default database set',
 ]
+const duckdbRestartRequiredErrorFragments = [
+  'database has been invalidated because of a previous fatal error',
+  'must be restarted prior to being used again',
+]
 
 declare global {
   var __forskaDuckdbServiceState: DuckdbServiceState | undefined
@@ -216,6 +220,36 @@ const getChainedDuckdbError = (error: unknown, nextError: unknown, context: stri
   return combinedMessage === normalizedError.message ? normalizedError : new Error(combinedMessage)
 }
 
+let duckdbFatalRecoveryPromise: Promise<void> | null = null
+
+const isDuckdbRestartRequiredError = (error: unknown) => {
+  const message = getNormalizedDuckdbError(error).message
+
+  return duckdbRestartRequiredErrorFragments.some((fragment) => {
+    return message.includes(fragment)
+  })
+}
+
+const recoverDuckdbRuntimeAfterFatalError = async (error: unknown) => {
+  if (duckdbFatalRecoveryPromise !== null) {
+    return duckdbFatalRecoveryPromise
+  }
+
+  const normalizedError = getNormalizedDuckdbError(error)
+
+  console.warn('[duckdb] restarting embedded runtime after fatal invalidation', normalizedError)
+
+  duckdbFatalRecoveryPromise = closeDuckdbServiceDirect()
+    .catch((closeError) => {
+      console.warn('[duckdb] failed to close embedded runtime during fatal recovery', closeError)
+    })
+    .finally(() => {
+      duckdbFatalRecoveryPromise = null
+    })
+
+  return duckdbFatalRecoveryPromise
+}
+
 const isDuckdbStartupRetryableError = (error: unknown) => {
   const message = getNormalizedDuckdbError(error).message
 
@@ -224,11 +258,23 @@ const isDuckdbStartupRetryableError = (error: unknown) => {
   })
 }
 
-const withNormalizedDuckdbError = async <T>(work: () => Promise<T>): Promise<T> => {
+const withNormalizedDuckdbError = async <T>(work: () => Promise<T>, canRetryAfterRestart = true): Promise<T> => {
   try {
     return await work()
   } catch (error) {
-    throw getNormalizedDuckdbError(error)
+    const normalizedError = getNormalizedDuckdbError(error)
+
+    if (!canRetryAfterRestart || !isDuckdbRestartRequiredError(normalizedError)) {
+      throw normalizedError
+    }
+
+    await recoverDuckdbRuntimeAfterFatalError(normalizedError)
+
+    try {
+      return await work()
+    } catch (retryError) {
+      throw getChainedDuckdbError(normalizedError, retryError, 'restart retry failed')
+    }
   }
 }
 

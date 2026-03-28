@@ -17,6 +17,8 @@ type ProjectRefreshBatchCursor = {articleCreatedAt: Date | string | null; articl
 
 type ProjectRefreshBatchRow = {articleCreatedAt: Date | string | null; articleId: string}
 
+type ProjectPurgeBatchRow = {rowId: bigint | number | string}
+
 type ProjectRefreshScopeBatchRow = ProjectRefreshBatchRow & {
   articleUpdatedAt: Date | string | null
   inCuratedScope: boolean
@@ -101,6 +103,7 @@ let martRefreshProjectCompletionTimes: number[] = []
 const martRefreshArticleBatchLimit = 4
 const martRefreshDrainBudgetMs = 100
 const martRefreshProjectBatchLimit = 1
+const martRefreshProjectPurgeRowBatchSize = 10
 const martRefreshProjectRebuildArticleBatchSize = 20_000
 const martRefreshRetryDelayMs = 5000
 const martRefreshScheduleDelayMs = 250
@@ -108,6 +111,8 @@ const martRefreshThroughputWindowMs = 15_000
 const martRefreshYieldDelayMs = 0
 const knownNoopProjectRefreshReasons = ['humanAssessmentRoutesPostInit']
 const martRefreshBatchEpochSql = "TIMESTAMPTZ '1970-01-01T00:00:00.000Z'"
+const martRefreshProjectPurgeRetryableErrorFragment = 'Failed to delete all rows from index'
+const martRefreshProjectSingleRowPurgeTables = ['mart.review_article_serving']
 
 const getMartRefreshProgressSnapshot = (): MartRefreshProgressSnapshot => {
   return copyMartRefreshProgressSnapshot(martRefreshProgressSnapshot)
@@ -631,47 +636,53 @@ const getProjectScopeBatchSql = (projectId: string, cursor: ProjectRefreshBatchC
   `
 }
 
-const getProjectTableArticleBatchSql = ({
-  cursor,
-  projectId,
-  tableName,
-}: {
-  cursor: ProjectRefreshBatchCursor | null
-  projectId: string
-  tableName: string
-}) => {
+const getProjectTablePurgeBatchSize = (tableName: string) => {
+  return martRefreshProjectSingleRowPurgeTables.includes(tableName) ? 1 : martRefreshProjectPurgeRowBatchSize
+}
+
+const getProjectTablePurgeBatchSql = ({projectId, tableName}: {projectId: string; tableName: string}) => {
   const projectLiteral = getSqlLiteral(projectId)
+  const batchSize = getProjectTablePurgeBatchSize(tableName)
 
   return `
-    SELECT DISTINCT
-      article_id AS articleId,
-      NULL AS articleCreatedAt
+    SELECT
+      rowid AS rowId
     FROM ${tableName}
     WHERE project_id = ${projectLiteral}
-      ${getProjectRefreshBatchCursorWhereSql({articleCreatedAtColumn: 'NULL', articleIdColumn: 'article_id', cursor})}
-    ORDER BY ${getProjectRefreshBatchOrderSql({articleCreatedAtColumn: 'NULL', articleIdColumn: 'article_id'})}
-    LIMIT ${martRefreshProjectRebuildArticleBatchSize}
+    ORDER BY rowid ASC
+    LIMIT ${batchSize}
   `
 }
 
-const getProjectTableDeleteBatchSql = ({
-  articleIds,
-  projectId,
+const getProjectTablePurgeDeleteSql = ({
+  rowIds,
   tableName,
 }: {
-  articleIds: string[]
-  projectId: string
+  rowIds: Array<bigint | number | string>
   tableName: string
 }) => {
-  const projectLiteral = getSqlLiteral(projectId)
-
   return `
     BEGIN TRANSACTION;
     DELETE FROM ${tableName}
-    WHERE project_id = ${projectLiteral}
-      AND article_id IN (${getProjectRefreshArticleIdsSql(articleIds)});
+    WHERE rowid IN (${rowIds
+      .map((rowId) => {
+        return getSqlLiteral(rowId)
+      })
+      .join(', ')});
     COMMIT;
   `
+}
+
+const getProjectPurgeDeleteRetryParts = (rowIds: Array<bigint | number | string>) => {
+  const middleIndex = Math.ceil(rowIds.length / 2)
+
+  return [rowIds.slice(0, middleIndex), rowIds.slice(middleIndex)] as const
+}
+
+const isProjectPurgeDeleteRetryableError = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error)
+
+  return message.includes(martRefreshProjectPurgeRetryableErrorFragment)
 }
 
 const getProjectPromptAnswerFactResetSql = (projectId: string) => {
@@ -1456,18 +1467,14 @@ const getProjectScopeBatchRows = async (
   return queryMartRefreshBackgroundJson<ProjectRefreshBatchRow>(getProjectScopeBatchSql(projectId, cursor))
 }
 
-const getProjectTableArticleBatchRows = async ({
-  cursor,
+const getProjectTablePurgeBatchRows = async ({
   projectId,
   tableName,
 }: {
-  cursor: ProjectRefreshBatchCursor | null
   projectId: string
   tableName: string
-}): Promise<ProjectRefreshBatchRow[]> => {
-  return queryMartRefreshBackgroundJson<ProjectRefreshBatchRow>(
-    getProjectTableArticleBatchSql({cursor, projectId, tableName}),
-  )
+}): Promise<ProjectPurgeBatchRow[]> => {
+  return queryMartRefreshBackgroundJson<ProjectPurgeBatchRow>(getProjectTablePurgeBatchSql({projectId, tableName}))
 }
 
 const refreshProjectScopeBatches = async (
@@ -1560,41 +1567,55 @@ const rebuildProjectReviewServing = async (projectId: string): Promise<void> => 
   return runMartRefreshBackgroundStatement(getProjectReviewServingFinalizeSql(projectId))
 }
 
-const deleteProjectTableArticleBatches = async ({
-  cursor = null,
+const deleteProjectTablePurgeRowIds = async ({
+  rowIds,
+  tableName,
+}: {
+  rowIds: Array<bigint | number | string>
+  tableName: string
+}): Promise<void> => {
+  return rowIds.length === 0
+    ? Promise.resolve()
+    : runMartRefreshBackgroundStatement(getProjectTablePurgeDeleteSql({rowIds, tableName})).catch((error) => {
+        return !isProjectPurgeDeleteRetryableError(error) || rowIds.length === 1
+          ? Promise.reject(error)
+          : deleteProjectTablePurgeRowIds({rowIds: getProjectPurgeDeleteRetryParts(rowIds)[0], tableName}).then(() => {
+              return deleteProjectTablePurgeRowIds({rowIds: getProjectPurgeDeleteRetryParts(rowIds)[1], tableName})
+            })
+      })
+}
+
+const deleteProjectTablePurgeBatches = async ({
   projectId,
   tableName,
 }: {
-  cursor?: ProjectRefreshBatchCursor | null
   projectId: string
   tableName: string
 }): Promise<void> => {
-  const batchRows = await getProjectTableArticleBatchRows({cursor, projectId, tableName})
-  const articleIds = getProjectRefreshBatchArticleIds(batchRows)
+  const batchRows = await getProjectTablePurgeBatchRows({projectId, tableName})
+  const rowIds = batchRows.map((row) => {
+    return row.rowId
+  })
 
-  return articleIds.length === 0
+  return rowIds.length === 0
     ? Promise.resolve()
-    : runMartRefreshBackgroundStatement(getProjectTableDeleteBatchSql({articleIds, projectId, tableName}))
+    : deleteProjectTablePurgeRowIds({rowIds, tableName})
         .then(() => {
           return yieldToEventLoop()
         })
         .then(() => {
-          return deleteProjectTableArticleBatches({
-            cursor: getProjectRefreshBatchCursor(batchRows),
-            projectId,
-            tableName,
-          })
+          return deleteProjectTablePurgeBatches({projectId, tableName})
         })
 }
 
 const purgeArchivedProjectMartData = async (projectId: string): Promise<void> => {
-  await deleteProjectTableArticleBatches({projectId, tableName: 'mart.review_article_serving_detail'})
-  await deleteProjectTableArticleBatches({projectId, tableName: 'mart.review_article_filter_member'})
-  await deleteProjectTableArticleBatches({projectId, tableName: 'mart.review_article_serving'})
-  await deleteProjectTableArticleBatches({projectId, tableName: 'mart.review_article_rollup'})
-  await deleteProjectTableArticleBatches({projectId, tableName: 'mart.review_article_filter_row'})
-  await deleteProjectTableArticleBatches({projectId, tableName: 'mart.prompt_answer_fact'})
-  await deleteProjectTableArticleBatches({projectId, tableName: 'mart.project_scope_article'})
+  await deleteProjectTablePurgeBatches({projectId, tableName: 'mart.review_article_serving_detail'})
+  await deleteProjectTablePurgeBatches({projectId, tableName: 'mart.review_article_filter_member'})
+  await deleteProjectTablePurgeBatches({projectId, tableName: 'mart.review_article_serving'})
+  await deleteProjectTablePurgeBatches({projectId, tableName: 'mart.review_article_rollup'})
+  await deleteProjectTablePurgeBatches({projectId, tableName: 'mart.review_article_filter_row'})
+  await deleteProjectTablePurgeBatches({projectId, tableName: 'mart.prompt_answer_fact'})
+  await deleteProjectTablePurgeBatches({projectId, tableName: 'mart.project_scope_article'})
   await runMartRefreshBackgroundStatement(`
     BEGIN TRANSACTION;
     DELETE FROM app.review_answer_dictionary WHERE project_id = ${getSqlLiteral(projectId)};

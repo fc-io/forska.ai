@@ -1,0 +1,136 @@
+{
+  "name": "DuckDB Archive Error Plan",
+  "branchName": "ralph/duckdb-archive-error-plan",
+  "description": "Stop archived-project refresh from poisoning DuckDB during mart purge and do not call the work finished until the server stack starts cleanly and its output stays free of the recurring fatal invalidation error.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Build a direct archive purge repro harness",
+      "description": "As a developer, I want a direct reproduction path for the archived purge failure so that I can debug the bad delete without waiting on the background queue.",
+      "acceptanceCriteria": [
+        "Add a focused script or test harness that targets the archived-project purge path outside the running server stack",
+        "The harness captures the failing project, table, and delete shape for `mart.review_article_serving`",
+        "The harness can be run repeatedly without requiring the background mart refresh queue to trigger first",
+        "Relevant targeted `bun test` commands for touched archive-purge files pass",
+        "Relevant `bunx eslint` command for touched files passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Characterize which serving-table operations are safe",
+      "description": "As a developer, I want targeted experiments for single-row delete, project delete, and rewrite flows so that I can choose a remediation path based on the actual DuckDB failure mode.",
+      "acceptanceCriteria": [
+        "Extend the repro flow to exercise single-row delete, project-scoped delete, and rewrite-style operations against `mart.review_article_serving`",
+        "The results make it clear whether in-place deletes remain unsafe even at single-row granularity",
+        "The chosen remediation path is encoded in code or test expectations so follow-up work can depend on it",
+        "Relevant targeted `bun test` commands for touched archive-purge files pass",
+        "Relevant `bunx eslint` command for touched files passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-003",
+      "title": "Implement a safe purge strategy for review_article_serving",
+      "description": "As a developer, I want the archive purge for `mart.review_article_serving` to avoid unsafe in-place deletes so that archived projects no longer poison DuckDB.",
+      "acceptanceCriteria": [
+        "Replace the current failing purge approach for `mart.review_article_serving` with the safe strategy selected from the delete-mode experiments",
+        "If table rewrite is required, recreate the needed primary key and indexes before swapping the replacement table into service",
+        "The archive purge removes rows for the archived project without triggering `Failed to delete all rows from index` in the repro path",
+        "Relevant targeted `bun test` commands for touched archive-purge files pass",
+        "Relevant `bunx eslint` command for touched files passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-002"]
+    },
+    {
+      "id": "US-004",
+      "title": "Integrate the safe purge path into archived project refresh",
+      "description": "As a developer, I want archived project refresh to call the new safe purge path consistently so that queue-driven archive cleanup stops reintroducing the same DuckDB failure.",
+      "acceptanceCriteria": [
+        "Wire the safe serving purge into the archived project mart cleanup flow used by background refresh processing",
+        "Keep unaffected mart tables on a safe purge path without broad unrelated changes",
+        "Archived project refresh completes its purge phase in the targeted regression flow without requeueing because of the same serving-table delete error",
+        "Relevant targeted `bun test` commands for touched archive-purge files pass",
+        "Relevant `bunx eslint` command for touched files passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003"]
+    },
+    {
+      "id": "US-005",
+      "title": "Harden fatal invalidation and rollback handling",
+      "description": "As a developer, I want mart refresh to stop attempting misleading rollback or retry paths on an invalidated connection so that fatal DuckDB errors fail cleanly and recover predictably.",
+      "acceptanceCriteria": [
+        "Detect fatal invalidation in the mart refresh background transaction flow before issuing follow-on rollback work that cannot succeed",
+        "Avoid producing a final failure chain dominated by `TransactionContext Error: cannot rollback` when the real problem is the archive purge invalidation",
+        "Restart the embedded DuckDB runtime once on fatal invalidation and preserve the original purge failure context in the reported error",
+        "Relevant targeted `bun test` commands for touched archive-purge files pass",
+        "Relevant `bunx eslint` command for touched files passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-002"]
+    },
+    {
+      "id": "US-006",
+      "title": "Add regressions for the exact archive failure shape",
+      "description": "As a developer, I want regression coverage for the logged failing row shape and retry loop so that the archive purge bug stays fixed.",
+      "acceptanceCriteria": [
+        "Add a regression that exercises the same `mart.review_article_serving` row shape seen in the failure logs",
+        "Add a regression proving the queue does not remain permanently failing after a fatal invalidation during archive purge",
+        "Add regression coverage for the chosen safe purge implementation path",
+        "Relevant targeted `bun test` commands for touched archive-purge files pass",
+        "Relevant `bunx eslint` command for touched files passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-004", "US-005"]
+    },
+    {
+      "id": "US-007",
+      "title": "Recover poisoned local queue state safely",
+      "description": "As a developer, I want a safe local recovery path for the already-poisoned archived refresh task so that verification can proceed without a stale retry loop blocking the result.",
+      "acceptanceCriteria": [
+        "Add or document a one-off recovery flow that inspects the queued archived project refresh state",
+        "The recovery flow can safely purge or repair the failing archived project state without destructive unrelated database surgery",
+        "The flow confirms `app.mart_refresh_queue` no longer contains the broken retry loop for the archived project under test",
+        "Relevant targeted `bun test` commands for touched archive-purge files pass",
+        "Relevant `bunx eslint` command for touched files passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-004", "US-005"]
+    },
+    {
+      "id": "US-008",
+      "title": "Start the server stack and verify clean output",
+      "description": "As a developer, I want to start the full server stack and read its output through the refresh drain so that I can prove the archive purge error does not recur in the real runtime.",
+      "acceptanceCriteria": [
+        "Start the full local server stack with `bun run start:server` after the recovery work is in place",
+        "Read the live server output long enough for the background mart refresh drain to run",
+        "Confirm the output does not contain `Failed to delete all rows from index`, `database has been invalidated because of a previous fatal error`, `periodic queue drain failed`, or `failed to process refresh queue` during the verification run",
+        "If the archived-project refresh must be triggered manually, run it and continue reading output until that refresh completes without the DuckDB error",
+        "Relevant targeted `bun test` commands for touched archive-purge files pass",
+        "Relevant `bunx eslint` command for touched files passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-006", "US-007"]
+    }
+  ]
+}

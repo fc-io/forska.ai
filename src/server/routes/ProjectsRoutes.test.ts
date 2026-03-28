@@ -129,6 +129,83 @@ const rebuildMartRefreshQueueWithoutGeneration = async () => {
   `)
 }
 
+const insertReviewArticleServingFixtureRows = async ({
+  generation,
+  projectId,
+  rowCount,
+}: {
+  generation: number
+  projectId: string
+  rowCount: number
+}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const valuesSql = Array.from({length: rowCount}, (_unused, index) => {
+    const articleNumber = String(index + 1).padStart(3, '0')
+    return `(
+      '${projectId}',
+      ${generation},
+      'archive-serving-article-${articleNumber}',
+      TIMESTAMPTZ '2025-09-09 00:00:00+00',
+      NULL,
+      'Archive Serving Article ${articleNumber}',
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      FALSE,
+      0,
+      NULL,
+      0,
+      0,
+      NULL,
+      FALSE,
+      FALSE,
+      0,
+      NULL,
+      NULL,
+      NULL,
+      current_timestamp
+    )`
+  }).join(', ')
+
+  await runDatabase(`
+    INSERT INTO mart.review_article_serving (
+      project_id,
+      generation,
+      article_id,
+      article_created_at,
+      article_updated_at,
+      article_title,
+      article_external_id,
+      journal_title,
+      url,
+      full_text_pdf,
+      full_text_fetched_at,
+      full_text_conversion_status,
+      source_metadata,
+      has_all_llm_judgments,
+      llm_judged_prompt_count,
+      llm_judged_prompt_ids,
+      enabled_prompt_count,
+      human_answered_prompt_count,
+      human_answered_prompt_ids,
+      has_all_human_answers,
+      review_opened,
+      review_sections_completed,
+      latest_llm_created_at,
+      latest_human_updated_at,
+      latest_review_updated_at,
+      serving_updated_at
+    ) VALUES ${valuesSql}
+  `)
+}
+
 beforeAll(async () => {
   const [
     {migrateDuckdb},
@@ -217,6 +294,41 @@ test('archive route repairs stale mart refresh queue schema before queueing refr
   expect(Number(queuedRefresh?.count ?? 0)).toBe(1)
 
   await flushMartRefreshes()
+})
+
+test('archive route purges review article serving rows for archived projects', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = 'archive-project-serving-purge'
+
+  await insertProjectFixture({connectionId: 'archive-serving-connection', modelId: 'archive-serving-model', projectId})
+  await insertReviewArticleServingFixtureRows({generation: 2, projectId, rowCount: 398})
+  await runDatabase(`
+    INSERT INTO app.project_review_serving_generation (project_id, active_generation)
+    VALUES ('${projectId}', 1)
+  `)
+
+  const response = await app.handle(new Request(`http://localhost/api/projects/${projectId}`, {method: 'DELETE'}))
+
+  expect(response.status).toBe(200)
+
+  await flushMartRefreshes()
+
+  const [servingRowCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM mart.review_article_serving
+    WHERE project_id = '${projectId}'
+  `)
+  const [generationRowCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.project_review_serving_generation
+    WHERE project_id = '${projectId}'
+  `)
+
+  expect(Number(servingRowCount?.count ?? 0)).toBe(0)
+  expect(Number(generationRowCount?.count ?? 0)).toBe(0)
 })
 
 test('edit route accepts full client payload when the model is unchanged', async () => {

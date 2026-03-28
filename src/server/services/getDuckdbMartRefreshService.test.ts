@@ -431,7 +431,7 @@ test('mart refresh rebuilds large projects in article batches', () => {
   expect(result.queueActive).toBe(false)
 })
 
-test('mart refresh purges archived projects in article batches', () => {
+test('mart refresh purges archived projects in row batches', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -443,22 +443,40 @@ test('mart refresh purges archived projects in article batches', () => {
         const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
         let queueActive = true
         const events = []
-        const firstBatch = [
-          {articleCreatedAt: null, articleId: 'article-1'},
-          {articleCreatedAt: null, articleId: 'article-2'},
-        ]
-        const secondBatch = [{articleCreatedAt: null, articleId: 'article-3'}]
+        const firstBatch = [{rowId: 101}, {rowId: 102}]
+        const secondBatch = [{rowId: 103}]
+        const batchCallCounts = {}
+
+        const getBatchTableName = (statement) => {
+          return statement.includes('FROM mart.review_article_serving_detail')
+            ? 'mart.review_article_serving_detail'
+            : statement.includes('FROM mart.review_article_filter_member')
+              ? 'mart.review_article_filter_member'
+              : statement.includes('FROM mart.review_article_serving')
+                ? 'mart.review_article_serving'
+                : statement.includes('FROM mart.review_article_rollup')
+                  ? 'mart.review_article_rollup'
+                  : statement.includes('FROM mart.review_article_filter_row')
+                    ? 'mart.review_article_filter_row'
+                    : statement.includes('FROM mart.prompt_answer_fact')
+                      ? 'mart.prompt_answer_fact'
+                      : statement.includes('FROM mart.project_scope_article')
+                        ? 'mart.project_scope_article'
+                        : 'unknown'
+        }
 
         const getBatchRows = (statement) => {
-          const hasSecondCursor = statement.includes("article_id > 'article-2'")
-          const hasFinalCursor = statement.includes("article_id > 'article-3'")
+          const tableName = getBatchTableName(statement)
+          const nextCallCount = (batchCallCounts[tableName] ?? 0) + 1
 
-          return hasFinalCursor ? [] : hasSecondCursor ? secondBatch : firstBatch
+          batchCallCounts[tableName] = nextCallCount
+
+          return nextCallCount === 1 ? firstBatch : nextCallCount === 2 ? secondBatch : []
         }
 
         const recordDeleteEvent = (label, statement) => {
-          const hasFirstBatch = statement.includes("'article-1'") && statement.includes("'article-2'")
-          const hasSecondBatch = statement.includes("'article-3'")
+          const hasFirstBatch = statement.includes('101') && statement.includes('102')
+          const hasSecondBatch = statement.includes('103')
 
           if (hasFirstBatch) {
             events.push(label + ':batch-1')
@@ -495,7 +513,7 @@ test('mart refresh purges archived projects in article batches', () => {
                 queryJsonBackground: async (statement) => {
                   return statement.includes('SELECT archived AS archived')
                     ? [{archived: true}]
-                    : statement.includes('FROM mart.') && statement.includes('article_id AS articleId')
+                    : statement.includes('SELECT') && statement.includes('rowid AS rowId') && statement.includes('FROM mart.')
                       ? getBatchRows(statement)
                       : []
                 },
@@ -525,7 +543,10 @@ test('mart refresh purges archived projects in article batches', () => {
                     recordDeleteEvent('filter-member', statement)
                   }
 
-                  if (statement.includes('DELETE FROM mart.review_article_serving')) {
+                  if (
+                    statement.includes('DELETE FROM mart.review_article_serving')
+                    && !statement.includes('DELETE FROM mart.review_article_serving_detail')
+                  ) {
                     recordDeleteEvent('serving', statement)
                   }
 
@@ -587,6 +608,221 @@ test('mart refresh purges archived projects in article batches', () => {
   expect(result.events).toContain('scope:batch-2')
   expect(result.events).toContain('dictionary:purged')
   expect(result.events).toContain('generation:purged')
+  expect(result.queueActive).toBe(false)
+})
+
+test('mart refresh splits archived purge batches after an index delete failure', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        let queueActive = true
+        let servingBatchQueryCount = 0
+        let failedLargeDelete = false
+        const events = []
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                queryJson: async (statement) => {
+                  return statement.includes("column_name = 'refresh_generation'")
+                    ? [{count: 1}]
+                    : statement.includes("column_name = 'completed_at'")
+                      ? [{count: 1}]
+                      : statement.includes('SELECT COUNT(*) AS count')
+                        ? [{count: queueActive ? 1 : 0}]
+                        : statement.includes('FROM app.mart_refresh_queue')
+                          ? queueActive
+                            ? [{
+                                articleId: null,
+                                id: 'project-archive-split-task',
+                                projectId: 'project-archive-split-test',
+                                refreshGeneration: 0,
+                                refreshScope: 'project',
+                              }]
+                            : []
+                          : []
+                },
+                queryJsonBackground: async (statement) => {
+                  return statement.includes('SELECT archived AS archived')
+                    ? [{archived: true}]
+                    : statement.includes('FROM mart.review_article_serving_detail') && statement.includes('rowid AS rowId')
+                      ? []
+                      : statement.includes('FROM mart.review_article_serving') && statement.includes('rowid AS rowId')
+                      ? (() => {
+                          servingBatchQueryCount += 1
+                          return servingBatchQueryCount === 1
+                            ? Array.from({length: 10}, (_unused, index) => {
+                                return {rowId: index + 1}
+                              })
+                            : []
+                        })()
+                      : []
+                },
+                run: async (statement) => {
+                  if (
+                    statement.includes('SET completed_at = NOW()')
+                    && !statement.includes("reason IN ('humanAssessmentRoutesPostInit')")
+                  ) {
+                    queueActive = false
+                  }
+                },
+                maintenance: async () => {},
+                runBackground: async (statement) => {
+                  if (
+                    statement.includes('DELETE FROM mart.review_article_serving')
+                    && !statement.includes('DELETE FROM mart.review_article_serving_detail')
+                  ) {
+                    if (!failedLargeDelete && statement.includes('rowid IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)')) {
+                      failedLargeDelete = true
+                      throw new Error(
+                        'FATAL Error: Failed: database has been invalidated because of a previous fatal error. The database must be restarted prior to being used again. Original error: "Invalid Input Error: Failed to delete all rows from index. Only deleted 4 out of 10 rows."',
+                      )
+                    }
+
+                    if (statement.includes('rowid IN (1, 2, 3, 4, 5)')) {
+                      events.push('serving:split-left')
+                    }
+
+                    if (statement.includes('rowid IN (6, 7, 8, 9, 10)')) {
+                      events.push('serving:split-right')
+                    }
+                  }
+                },
+              }
+            },
+          }
+        })
+
+        const martRefreshService = (await import(martRefreshServiceModulePath + '?project-archive-split=' + Date.now())).getDuckdbMartRefreshService()
+        const result = await martRefreshService.flush().then(
+          () => 'ok',
+          (error) => error instanceof Error ? error.message : String(error),
+        )
+        console.log(JSON.stringify({events, failedLargeDelete, queueActive, result}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Mart archived purge split retry regression test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    events: string[]
+    failedLargeDelete: boolean
+    queueActive: boolean
+    result: string
+  }
+
+  expect(result.failedLargeDelete).toBe(true)
+  expect(result.events).toContain('serving:split-left')
+  expect(result.events).toContain('serving:split-right')
+  expect(result.result).toBe('ok')
+  expect(result.queueActive).toBe(false)
+})
+
+test('mart refresh purges review_article_serving one row at a time', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        let queueActive = true
+        const limits = []
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                queryJson: async (statement) => {
+                  return statement.includes("column_name = 'refresh_generation'")
+                    ? [{count: 1}]
+                    : statement.includes("column_name = 'completed_at'")
+                      ? [{count: 1}]
+                      : statement.includes('SELECT COUNT(*) AS count')
+                        ? [{count: queueActive ? 1 : 0}]
+                        : statement.includes('FROM app.mart_refresh_queue')
+                          ? queueActive
+                            ? [{
+                                articleId: null,
+                                id: 'project-archive-single-row-task',
+                                projectId: 'project-archive-single-row-test',
+                                refreshGeneration: 0,
+                                refreshScope: 'project',
+                              }]
+                            : []
+                          : []
+                },
+                queryJsonBackground: async (statement) => {
+                  if (statement.includes('SELECT archived AS archived')) {
+                    return [{archived: true}]
+                  }
+
+                  if (statement.includes('FROM mart.review_article_serving_detail') && statement.includes('rowid AS rowId')) {
+                    return []
+                  }
+
+                  if (
+                    statement.includes('FROM mart.review_article_serving')
+                    && !statement.includes('FROM mart.review_article_serving_detail')
+                    && statement.includes('rowid AS rowId')
+                  ) {
+                    limits.push(statement.includes('LIMIT 1') ? '1' : 'missing')
+                    return limits.length === 1 ? [{rowId: 1}] : []
+                  }
+
+                  return []
+                },
+                run: async (statement) => {
+                  if (
+                    statement.includes('SET completed_at = NOW()')
+                    && !statement.includes("reason IN ('humanAssessmentRoutesPostInit')")
+                  ) {
+                    queueActive = false
+                  }
+                },
+                maintenance: async () => {},
+                runBackground: async () => {},
+              }
+            },
+          }
+        })
+
+        const martRefreshService = (await import(martRefreshServiceModulePath + '?single-row-serving=' + Date.now())).getDuckdbMartRefreshService()
+        await martRefreshService.flush()
+        console.log(JSON.stringify({limits, queueActive}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Mart serving single-row purge regression test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {limits: string[]; queueActive: boolean}
+
+  expect(result.limits).toContain('1')
   expect(result.queueActive).toBe(false)
 })
 
