@@ -2,9 +2,9 @@ import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
 import {Show} from 'solid-js'
 
-import {ProjectsGrid} from '../../../../components/main/ProjectsGrid'
 import {Button} from '../../../../components/ui/button'
 import {fetchArchivedProjects} from '../../../../services/projectsService'
+import {ArchivedProjectsTable} from './archivedProjectsTable'
 
 export const ArchivedProjectsPage = () => {
   const projects = useQuery(() => {
@@ -13,27 +13,39 @@ export const ArchivedProjectsPage = () => {
 
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
-      <div class="flex justify-between items-center mb-6">
+      <div class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div class="flex items-center gap-4">
           <Button as={Link} to="/projects" variant="outline" size="sm">
             ← Back to Projects
           </Button>
-          <h1 class="text-2xl font-bold">Archived Projects</h1>
+          <div>
+            <h1 class="text-2xl font-bold text-gray-900">Archived Projects</h1>
+            <p class="mt-2 text-sm text-muted-foreground">
+              Archived projects are kept out of the active workspace until you unarchive them.
+            </p>
+          </div>
         </div>
       </div>
 
-      <Show when={!projects.isLoading} fallback={<div class="text-center py-8">Loading archived projects...</div>}>
+      <Show
+        when={!projects.isLoading}
+        fallback={
+          <div class="rounded-xl border border-gray-200 bg-white px-6 py-10 text-center">
+            Loading archived projects...
+          </div>
+        }
+      >
         <Show when={projects.isError}>
-          <div class="text-center py-8 text-red-600">
+          <div class="rounded-xl border border-red-200 bg-red-50 px-6 py-10 text-center text-red-600">
             Error loading archived projects:{' '}
             {projects.error instanceof Error ? projects.error.message : 'Unknown error'}
           </div>
         </Show>
 
         <Show when={!projects.isError && (projects.data?.length ?? 0) === 0}>
-          <div class="text-center py-12">
-            <h2 class="text-xl font-semibold mb-4">No archived projects</h2>
-            <p class="text-muted-foreground mb-6">
+          <div class="rounded-xl border border-gray-200 bg-white px-6 py-12 text-center">
+            <h2 class="mb-4 text-xl font-semibold">No archived projects</h2>
+            <p class="mb-6 text-muted-foreground">
               Projects that you archive will appear here. You can archive a project from its details page.
             </p>
             <Button as={Link} to="/projects">
@@ -43,7 +55,7 @@ export const ArchivedProjectsPage = () => {
         </Show>
 
         <Show when={!projects.isError && (projects.data?.length ?? 0) > 0}>
-          <ProjectsGrid projects={projects.data ?? []} isArchived />
+          <ArchivedProjectsTable projects={projects.data ?? []} />
         </Show>
       </Show>
     </div>
