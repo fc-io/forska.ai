@@ -238,7 +238,7 @@ test('Covidence reimport returns 400 when the datasource cursor is not a Coviden
   expect(parsed.result).toEqual({data: null, error: 'Data source is not configured for Covidence import'})
 })
 
-test('Covidence reimport keeps full-text projects scoped without clearing seeded human judgments', () => {
+test('Covidence reimport clears and reseeds full-text project judgments', () => {
   const runRoute = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -361,7 +361,7 @@ test('Covidence reimport keeps full-text projects scoped without clearing seeded
   const parsed = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as CovidenceReimportResult
 
   expect(parsed.setStatus).toBe(200)
-  expect(parsed.clearCalls).toEqual([])
+  expect(parsed.clearCalls).toEqual(['covidence:datasource-1'])
   expect(parsed.scopeCalls).toEqual([{importRoute: 'covidence:datasource-1', mode: 'full_text'}])
   expect(parsed.seedCalls).toEqual([{importRoute: 'covidence:datasource-1', mode: 'full_text'}])
   expect(parsed.martQueueCalls).toEqual([{importRouteIds: ['route-1'], reason: 'covidenceImportRouteRefresh'}])

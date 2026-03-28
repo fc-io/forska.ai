@@ -1191,20 +1191,47 @@ const getCovidenceImportResultFromConfig = async (params: {
   return {config: params.config, stats: {importedCount: rows.length, itemCount: rows.length}}
 }
 
-const getCovidenceHumanJudgmentAnswer = (stageMembership: Record<CovidenceFileRole, boolean>) => {
-  return stageMembership.irrelevant ? 'no' : stageMembership.full_text ? 'yes' : null
+const getCovidenceHumanJudgmentAnswer = (params: {
+  mode: CovidenceImportMode
+  stageMembership: Record<CovidenceFileRole, boolean>
+}) => {
+  return params.mode === 'title_abstract'
+    ? params.stageMembership.irrelevant
+      ? 'no'
+      : params.stageMembership.full_text
+        ? 'yes'
+        : null
+    : params.stageMembership.excluded
+      ? 'no'
+      : params.stageMembership.included
+        ? 'yes'
+        : null
 }
 
 const getCovidenceHumanJudgmentSeeds = (params: {config: CovidencePackageConfig; importRoute: string}) => {
-  return getCovidencePackageRowsFromConfig(params.config).candidates.map<CovidenceHumanJudgmentSeed>((candidate) => {
-    const answer = getCovidenceHumanJudgmentAnswer(candidate.stageMembership)
+  return getCovidencePackageRowsFromConfig(params.config).candidates.flatMap<CovidenceHumanJudgmentSeed>(
+    (candidate) => {
+      const includeCandidate =
+        params.config.mode === 'title_abstract'
+        || candidate.stageMembership.full_text
+        || candidate.stageMembership.excluded
+        || candidate.stageMembership.included
+      const answer = getCovidenceHumanJudgmentAnswer({
+        mode: params.config.mode,
+        stageMembership: candidate.stageMembership,
+      })
 
-    return {
-      answer,
-      articleExternalId: `${params.importRoute}:${getSafeIdentityPart(candidate.articleKey)}`,
-      isAnswered: answer !== null,
-    }
-  })
+      return includeCandidate
+        ? [
+            {
+              answer,
+              articleExternalId: `${params.importRoute}:${getSafeIdentityPart(candidate.articleKey)}`,
+              isAnswered: answer !== null,
+            },
+          ]
+        : []
+    },
+  )
 }
 
 const getCovidenceFullTextProjectScopeSeeds = (params: {config: CovidencePackageConfig; importRoute: string}) => {
@@ -1482,10 +1509,6 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
   projectId?: string | null
   tx?: CovidenceProjectTx
 }) => {
-  if (params.config.mode !== 'title_abstract') {
-    return
-  }
-
   const project = params.projectId
     ? ({id: params.projectId} as Pick<CovidenceProjectRecord, 'id'>)
     : await getCovidenceProjectByImportRoute({importRoute: params.importRoute, tx: params.tx})

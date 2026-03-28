@@ -943,6 +943,238 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts answered and unanswered titl
   }
 })
 
+test('seedCovidenceHumanJudgmentsFromConfig upserts full-text included and excluded judgments idempotently', async () => {
+  const duckdbPath = `/tmp/f1-covidence-full-text-human-seed-${Date.now()}.duckdb`
+  const datasourceId = `covidence-full-text-human-seed-${Date.now()}`
+  const importRoute = `covidence:${datasourceId}`
+  datasourceIdsToDelete.add(datasourceId)
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, covidenceImportService] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/covidenceImportService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const datasourceId = ${JSON.stringify(datasourceId)}
+        const importRoute = ${JSON.stringify(importRoute)}
+        const createConfig = async (allContent, irrelevantContent, fullTextContent, excludedContent, includedContent) => {
+          const files = await covidenceImportService.storeCovidencePackageFiles({
+            datasourceId,
+            files: [
+              {file: new File([allContent], 'all.csv', {type: 'text/csv'}), fileRole: 'all'},
+              {file: new File([irrelevantContent], 'irrelevant.csv', {type: 'text/csv'}), fileRole: 'irrelevant'},
+              {file: new File([fullTextContent], 'full_text.csv', {type: 'text/csv'}), fileRole: 'full_text'},
+              {file: new File([excludedContent], 'excluded.csv', {type: 'text/csv'}), fileRole: 'excluded'},
+              {file: new File([includedContent], 'included.csv', {type: 'text/csv'}), fileRole: 'included'},
+            ],
+          })
+
+          return covidenceImportService.buildCovidencePackageConfig({files, mode: 'full_text'})
+        }
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, label, provider_kind, enabled)
+          VALUES ('pc-covidence-full-text-seed', 'Covidence provider', 'openai-compatible', TRUE);
+
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, enabled)
+          VALUES ('model-covidence-full-text-seed', 'pc-covidence-full-text-seed', 'gpt-covidence', 'gpt-covidence', TRUE);
+
+          INSERT INTO app.import_route (id, route, name, active)
+          VALUES ('route-covidence-full-text-seed', '${importRoute}', '${importRoute}', TRUE);
+        \`)
+
+        const prompt = await covidenceImportService.getOrCreateCovidencePrompt({
+          answerSet: 'yes|no|unsure',
+          exclusionCriteria: 'Case reports',
+          inclusionCriteria: 'Adults with confirmed disease',
+          mode: 'full_text',
+        })
+        const project = await covidenceImportService.getOrCreateCovidenceProject({
+          importRoute,
+          mode: 'full_text',
+          promptId: prompt.id,
+          title: 'Covidence full-text seeded project',
+        })
+
+        const firstConfig = await createConfig(
+          'Title,Authors,Year,DOI\\nStudy A,"Doe, Jane",2024,10.1000/alpha\\nStudy B,"Roe, John",2023,10.1000/beta\\nStudy C,"Lane, Kim",2022,10.1000/gamma\\nStudy D,"Poe, Sam",2021,10.1000/delta\\n',
+          'Title,Authors,Year,DOI\\nStudy D,"Poe, Sam",2021,10.1000/delta\\n',
+          'Title,Authors,Year,DOI\\nStudy A,"Doe, Jane",2024,10.1000/alpha\\n',
+          'Title,Authors,Year,DOI,Reason for exclusion\\nStudy B,"Roe, John",2023,10.1000/beta,Wrong population\\n',
+          'Title,Authors,Year,DOI\\nStudy C,"Lane, Kim",2022,10.1000/gamma\\n',
+        )
+
+        await database.transaction(async (tx) => {
+          await covidenceImportService.importCovidencePackageFromConfig({config: firstConfig, datasourceId, importRoute, tx})
+          await covidenceImportService.syncCovidenceProjectScopeFromConfig({config: firstConfig, importRoute, projectId: project.id, tx})
+          await covidenceImportService.seedCovidenceHumanJudgmentsFromConfig({config: firstConfig, importRoute, projectId: project.id, tx})
+        })
+
+        const secondConfig = await createConfig(
+          'Title,Authors,Year,DOI\\nStudy A,"Doe, Jane",2024,10.1000/alpha\\nStudy B,"Roe, John",2023,10.1000/beta\\nStudy C,"Lane, Kim",2022,10.1000/gamma\\nStudy D,"Poe, Sam",2021,10.1000/delta\\n',
+          'Title,Authors,Year,DOI\\nStudy D,"Poe, Sam",2021,10.1000/delta\\n',
+          'Title,Authors,Year,DOI\\nStudy C,"Lane, Kim",2022,10.1000/gamma\\n',
+          'Title,Authors,Year,DOI,Reason for exclusion\\nStudy A,"Doe, Jane",2024,10.1000/alpha,Wrong comparator\\n',
+          'Title,Authors,Year,DOI\\nStudy B,"Roe, John",2023,10.1000/beta\\n',
+        )
+
+        await database.transaction(async (tx) => {
+          await covidenceImportService.syncCovidenceProjectScopeFromConfig({config: secondConfig, importRoute, projectId: project.id, tx})
+          await covidenceImportService.seedCovidenceHumanJudgmentsFromConfig({config: secondConfig, importRoute, projectId: project.id, tx})
+        })
+
+        const judgmentRows = await database.queryJson(\`
+          SELECT
+            a.article_id AS articleExternalId,
+            a.article_title AS articleTitle,
+            jh.article_id AS articleId,
+            jh.is_answered AS isAnswered,
+            jh.answer AS answer,
+            jh.comment AS comment,
+            jh.prompt_id AS promptId
+          FROM app.judgment_human jh
+          INNER JOIN app.article a ON a.id = jh.article_id
+          WHERE jh.project_id = '\${project.id}'
+          ORDER BY a.article_title ASC, jh.prompt_id ASC
+        \`)
+        const projectArticleRows = await database.queryJson(\`
+          SELECT
+            a.article_id AS articleExternalId,
+            a.article_title AS articleTitle,
+            pa.imported_from_project_id AS importedFromProjectId,
+            pa.project_id AS projectId
+          FROM app.project_article pa
+          INNER JOIN app.article a ON a.id = pa.article_id
+          WHERE pa.project_id = '\${project.id}'
+          ORDER BY a.article_title ASC
+        \`)
+
+        console.log(JSON.stringify({judgmentRows, projectArticleRows, projectId: project.id, promptId: prompt.id}))
+        covidenceImportService.deleteCovidencePackageFiles(datasourceId)
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39991',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39992',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to seed full-text Covidence human judgments',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      judgmentRows: Array<{
+        answer: string | null
+        articleExternalId: string
+        articleId: string
+        articleTitle: string
+        comment: string | null
+        isAnswered: boolean
+        promptId: string
+      }>
+      projectArticleRows: Array<{
+        articleExternalId: string
+        articleTitle: string
+        importedFromProjectId: string
+        projectId: string
+      }>
+      projectId: string
+      promptId: string
+    }
+
+    expect(parsed.judgmentRows).toHaveLength(3)
+    expect(parsed.judgmentRows[0]).toMatchObject({
+      answer: 'no',
+      articleExternalId: `${importRoute}:doi%3A10.1000%2Falpha`,
+      articleTitle: 'Study A',
+      comment: null,
+      isAnswered: true,
+      promptId: parsed.promptId,
+    })
+    expect(typeof parsed.judgmentRows[0]?.articleId).toBe('string')
+    expect(parsed.judgmentRows[1]).toMatchObject({
+      answer: 'yes',
+      articleExternalId: `${importRoute}:doi%3A10.1000%2Fbeta`,
+      articleTitle: 'Study B',
+      comment: null,
+      isAnswered: true,
+      promptId: parsed.promptId,
+    })
+    expect(typeof parsed.judgmentRows[1]?.articleId).toBe('string')
+    expect(parsed.judgmentRows[2]).toMatchObject({
+      answer: null,
+      articleExternalId: `${importRoute}:doi%3A10.1000%2Fgamma`,
+      articleTitle: 'Study C',
+      comment: null,
+      isAnswered: false,
+      promptId: parsed.promptId,
+    })
+    expect(typeof parsed.judgmentRows[2]?.articleId).toBe('string')
+    expect(parsed.projectArticleRows).toEqual([
+      {
+        articleExternalId: `${importRoute}:doi%3A10.1000%2Falpha`,
+        articleTitle: 'Study A',
+        importedFromProjectId: parsed.projectId,
+        projectId: parsed.projectId,
+      },
+      {
+        articleExternalId: `${importRoute}:doi%3A10.1000%2Fbeta`,
+        articleTitle: 'Study B',
+        importedFromProjectId: parsed.projectId,
+        projectId: parsed.projectId,
+      },
+      {
+        articleExternalId: `${importRoute}:doi%3A10.1000%2Fgamma`,
+        articleTitle: 'Study C',
+        importedFromProjectId: parsed.projectId,
+        projectId: parsed.projectId,
+      },
+    ])
+  } finally {
+    deleteCovidencePackageFiles(datasourceId)
+    ;[duckdbPath, `${duckdbPath}.wal`, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(
+      (filePath) => {
+        if (existsSync(filePath)) {
+          unlinkSync(filePath)
+        }
+
+        return filePath
+      },
+    )
+  }
+})
+
 test('importCovidencePackageFromConfig stores merged articles with raw metadata on the Covidence route', async () => {
   const duckdbPath = `/tmp/f1-covidence-import-${Date.now()}.duckdb`
   const datasourceId = `covidence-import-${Date.now()}`
