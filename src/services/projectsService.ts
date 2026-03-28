@@ -56,6 +56,17 @@ export const unarchiveProject = async (queryClient: QueryClient, projectId: stri
   await invalidateProjectsQueries(queryClient)
 }
 
+export const deleteArchivedProjects = async (queryClient: QueryClient, projectIds: string[]): Promise<void> => {
+  const response = await apiClient.api.projects['delete-archived'].post({projectIds})
+  const result = handleApiResponse(response, 'Failed to delete archived projects')
+
+  if (!result.success) {
+    throw new Error('Failed to delete archived projects')
+  }
+
+  await invalidateProjectsQueries(queryClient)
+}
+
 export const createProject = async (
   name: string,
   description: string | null,
