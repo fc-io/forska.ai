@@ -21,10 +21,12 @@ const getSqlLiteral = (value: string | null) => {
 }
 
 const insertProjectFixture = async ({
+  archived = false,
   connectionId,
   modelId,
   projectId,
 }: {
+  archived?: boolean
   connectionId: string
   modelId: string
   projectId: string
@@ -42,8 +44,8 @@ const insertProjectFixture = async ({
     VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-122B-A10B', 'Qwen/Qwen3.5-122B-A10B', 'Qwen 122B', 'manual', TRUE)
   `)
   await runDatabase(`
-    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
-    VALUES ('${projectId}', 'Archive Regression Project', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, archived)
+    VALUES ('${projectId}', 'Archive Regression Project', '${modelId}', TRUE, TRUE, FALSE, FALSE, ${archived ? 'TRUE' : 'FALSE'})
   `)
 }
 
@@ -329,6 +331,409 @@ test('archive route purges review article serving rows for archived projects', a
 
   expect(Number(servingRowCount?.count ?? 0)).toBe(0)
   expect(Number(generationRowCount?.count ?? 0)).toBe(0)
+})
+
+test('delete archived route rejects active projects', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = 'delete-archived-active-project'
+
+  await insertProjectFixture({
+    connectionId: 'delete-archived-active-connection',
+    modelId: 'delete-archived-active-model',
+    projectId,
+  })
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/delete-archived', {
+      body: JSON.stringify({projectIds: [projectId]}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const bodyText = await response.text()
+
+  expect(response.status).toBe(500)
+  expect(bodyText).toContain('Only archived projects can be deleted')
+
+  const [projectRow] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.project
+    WHERE id = '${projectId}'
+  `)
+
+  expect(Number(projectRow?.count ?? 0)).toBe(1)
+})
+
+test('delete archived route rejects projects with non-terminal judgment jobs', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = 'delete-archived-running-job-project'
+
+  await insertProjectFixture({
+    archived: true,
+    connectionId: 'delete-archived-running-job-connection',
+    modelId: 'delete-archived-running-job-model',
+    projectId,
+  })
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('delete-archived-running-job', '${projectId}', 'running')
+  `)
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/delete-archived', {
+      body: JSON.stringify({projectIds: [projectId]}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const bodyText = await response.text()
+
+  expect(response.status).toBe(500)
+  expect(bodyText).toContain('Archived project delete requires terminal judgment jobs')
+
+  const [projectRow] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.project
+    WHERE id = '${projectId}'
+  `)
+
+  expect(Number(projectRow?.count ?? 0)).toBe(1)
+})
+
+test('delete archived route removes archived project rows and keeps cross-project references detached', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const sourceProjectId = 'delete-archived-source-project'
+  const survivorProjectId = 'delete-archived-survivor-project'
+  const importRouteId = 'delete-archived-import-route'
+  const articleId = 'delete-archived-article'
+  const promptId = 'delete-archived-prompt'
+
+  await insertProjectFixture({
+    archived: true,
+    connectionId: 'delete-archived-source-connection',
+    modelId: 'delete-archived-source-model',
+    projectId: sourceProjectId,
+  })
+  await insertProjectFixture({
+    connectionId: 'delete-archived-survivor-connection',
+    modelId: 'delete-archived-survivor-model',
+    projectId: survivorProjectId,
+  })
+  await runDatabase(`
+    INSERT INTO app.import_route (id, route, name)
+    VALUES ('${importRouteId}', '/delete-archived-route', 'manual')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('${articleId}', 'Delete archived article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES ('${promptId}', 'Delete archived prompt', 'delete-archived-prompt-hash')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, origin_project_id)
+    VALUES
+      ('delete-archived-project-prompt-owned', '${sourceProjectId}', '${promptId}', 0, '${sourceProjectId}'),
+      ('delete-archived-project-prompt-survivor', '${survivorProjectId}', '${promptId}', 0, '${sourceProjectId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_import_route (id, project_id, import_route_id)
+    VALUES ('delete-archived-project-import-route', '${sourceProjectId}', '${importRouteId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
+    VALUES
+      ('delete-archived-project-article-owned', '${sourceProjectId}', '${articleId}', NULL),
+      ('delete-archived-project-article-survivor', '${survivorProjectId}', '${articleId}', '${sourceProjectId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.review (id, project_id, article_id, opened)
+    VALUES ('delete-archived-review', '${sourceProjectId}', '${articleId}', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('delete-archived-job', '${sourceProjectId}', 'completed')
+  `)
+  await runDatabase(`
+    INSERT INTO app.token_use (
+      id,
+      judgment_job_id,
+      requests,
+      total_prompt_tokens,
+      total_completion_tokens,
+      total_tokens
+    )
+    VALUES ('delete-archived-token-use', 'delete-archived-job', 1, 2, 3, 5)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      delete_generation
+    )
+    VALUES (
+      'delete-archived-judgment',
+      '${articleId}',
+      '${promptId}',
+      'delete-archived-source-model',
+      '${sourceProjectId}',
+      TRUE,
+      TRUE,
+      FALSE,
+      FALSE,
+      0
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_human (id, project_id, article_id, prompt_id, is_answered)
+    VALUES ('delete-archived-judgment-human', '${sourceProjectId}', '${articleId}', '${promptId}', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.mart_refresh_queue (id, refresh_scope, project_id, project_key, article_key)
+    VALUES ('delete-archived-refresh-queue', 'project', '${sourceProjectId}', '${sourceProjectId}', '')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_review_serving_generation (project_id, active_generation)
+    VALUES ('${sourceProjectId}', 3)
+  `)
+  await runDatabase(`
+    INSERT INTO mart.review_article_serving (
+      project_id,
+      generation,
+      article_id,
+      article_created_at,
+      article_updated_at,
+      article_title,
+      article_external_id,
+      journal_title,
+      url,
+      full_text_pdf,
+      full_text_fetched_at,
+      full_text_conversion_status,
+      source_metadata,
+      has_all_llm_judgments,
+      llm_judged_prompt_count,
+      llm_judged_prompt_ids,
+      enabled_prompt_count,
+      human_answered_prompt_count,
+      human_answered_prompt_ids,
+      has_all_human_answers,
+      review_opened,
+      review_sections_completed,
+      latest_llm_created_at,
+      latest_human_updated_at,
+      latest_review_updated_at,
+      serving_updated_at
+    ) VALUES (
+      '${sourceProjectId}',
+      3,
+      '${articleId}',
+      TIMESTAMPTZ '2025-09-09 00:00:00+00',
+      NULL,
+      'Delete archived article',
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      TRUE,
+      1,
+      ['${promptId}'],
+      1,
+      1,
+      ['${promptId}'],
+      TRUE,
+      TRUE,
+      7,
+      NULL,
+      NULL,
+      NULL,
+      current_timestamp
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO mart.review_article_filter_member (
+      project_id,
+      generation,
+      prompt_id,
+      answer_id,
+      article_id,
+      article_created_at,
+      numeric_answer_value
+    ) VALUES (
+      '${sourceProjectId}',
+      3,
+      '${promptId}',
+      1,
+      '${articleId}',
+      TIMESTAMPTZ '2025-09-09 00:00:00+00',
+      1
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO mart.review_article_serving_detail (
+      project_id,
+      generation,
+      article_id,
+      prompt_id,
+      prompt_order,
+      judgment_id,
+      created_at,
+      article_created_at,
+      article_updated_at,
+      model_id,
+      answered_original,
+      answered_original_as_array,
+      detail_updated_at
+    ) VALUES (
+      '${sourceProjectId}',
+      3,
+      '${articleId}',
+      '${promptId}',
+      0,
+      'delete-archived-judgment',
+      current_timestamp,
+      TIMESTAMPTZ '2025-09-09 00:00:00+00',
+      NULL,
+      'delete-archived-source-model',
+      'yes',
+      ['yes'],
+      current_timestamp
+    )
+  `)
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projects/delete-archived', {
+      body: JSON.stringify({projectIds: [sourceProjectId]}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {success: boolean}
+
+  expect(response.status).toBe(200)
+  expect(body.success).toBe(true)
+
+  const [projectRow] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.project
+    WHERE id = '${sourceProjectId}'
+  `)
+  const [projectPromptRowCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.project_prompt
+    WHERE project_id = '${sourceProjectId}'
+  `)
+  const [projectImportRouteRowCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.project_import_route
+    WHERE project_id = '${sourceProjectId}'
+  `)
+  const [projectArticleRowCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.project_article
+    WHERE project_id = '${sourceProjectId}'
+  `)
+  const [reviewRowCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.review
+    WHERE project_id = '${sourceProjectId}'
+  `)
+  const [judgmentJobRowCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.judgment_job
+    WHERE project_id = '${sourceProjectId}'
+  `)
+  const [tokenUseRowCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.token_use
+    WHERE judgment_job_id = 'delete-archived-job'
+  `)
+  const [martRefreshQueueRowCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.mart_refresh_queue
+    WHERE project_id = '${sourceProjectId}'
+  `)
+  const [servingGenerationRowCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.project_review_serving_generation
+    WHERE project_id = '${sourceProjectId}'
+  `)
+  const [servingRowCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM mart.review_article_serving
+    WHERE project_id = '${sourceProjectId}'
+  `)
+  const [filterMemberRowCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM mart.review_article_filter_member
+    WHERE project_id = '${sourceProjectId}'
+  `)
+  const [servingDetailRowCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM mart.review_article_serving_detail
+    WHERE project_id = '${sourceProjectId}'
+  `)
+  const [survivorPromptOrigin] = await queryDatabase<{originProjectId: string | null}>(`
+    SELECT origin_project_id AS originProjectId
+    FROM app.project_prompt
+    WHERE id = 'delete-archived-project-prompt-survivor'
+    LIMIT 1
+  `)
+  const [survivorArticleOrigin] = await queryDatabase<{importedFromProjectId: string | null}>(`
+    SELECT imported_from_project_id AS importedFromProjectId
+    FROM app.project_article
+    WHERE id = 'delete-archived-project-article-survivor'
+    LIMIT 1
+  `)
+  const [judgmentProjectId] = await queryDatabase<{projectId: string | null}>(`
+    SELECT project_id AS projectId
+    FROM app.judgment
+    WHERE id = 'delete-archived-judgment'
+    LIMIT 1
+  `)
+  const [judgmentHumanProjectId] = await queryDatabase<{projectId: string | null}>(`
+    SELECT project_id AS projectId
+    FROM app.judgment_human
+    WHERE id = 'delete-archived-judgment-human'
+    LIMIT 1
+  `)
+
+  expect(Number(projectRow?.count ?? 0)).toBe(0)
+  expect(Number(projectPromptRowCount?.count ?? 0)).toBe(0)
+  expect(Number(projectImportRouteRowCount?.count ?? 0)).toBe(0)
+  expect(Number(projectArticleRowCount?.count ?? 0)).toBe(0)
+  expect(Number(reviewRowCount?.count ?? 0)).toBe(0)
+  expect(Number(judgmentJobRowCount?.count ?? 0)).toBe(0)
+  expect(Number(tokenUseRowCount?.count ?? 0)).toBe(0)
+  expect(Number(martRefreshQueueRowCount?.count ?? 0)).toBe(0)
+  expect(Number(servingGenerationRowCount?.count ?? 0)).toBe(0)
+  expect(Number(servingRowCount?.count ?? 0)).toBe(0)
+  expect(Number(filterMemberRowCount?.count ?? 0)).toBe(0)
+  expect(Number(servingDetailRowCount?.count ?? 0)).toBe(0)
+  expect(survivorPromptOrigin?.originProjectId).toBe(null)
+  expect(survivorArticleOrigin?.importedFromProjectId).toBe(null)
+  expect(judgmentProjectId?.projectId).toBe(null)
+  expect(judgmentHumanProjectId?.projectId).toBe(null)
 })
 
 test('edit route accepts full client payload when the model is unchanged', async () => {

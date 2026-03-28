@@ -21,6 +21,7 @@ import {projectsRoutesGetArticlesReviewsHumanFilters} from './projectsRoutes/pro
 import {projectsRoutesGetArticlesReviewsUnassessed} from './projectsRoutes/projectsRoutesGetArticlesReviewsUnassessed.ts'
 import {projectsRoutesGetReviewsWarnings} from './projectsRoutes/projectsRoutesGetReviewsWarnings.ts'
 import {projectsRoutesPostArticleReviewDetails} from './projectsRoutes/projectsRoutesPostArticleReviewDetails.ts'
+import {projectsRoutesPostDeleteArchived} from './projectsRoutes/projectsRoutesPostDeleteArchived.ts'
 
 const parseOptionalDate = (value?: string | null) => {
   if (!value) {
@@ -326,6 +327,7 @@ export const projectsRoutes = new Elysia()
   .use(projectsRoutesGetArticlesReviewsFilters)
   .use(projectsRoutesGetArticlesReviewsHumanFilters)
   .use(projectsRoutesPostArticleReviewDetails)
+  .use(projectsRoutesPostDeleteArchived)
   .use(projectsRoutesGetReviewsWarnings)
   .use(
     new Elysia().get('/api/projects-without-jobs', async () => {
