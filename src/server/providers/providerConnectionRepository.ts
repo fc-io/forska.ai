@@ -3,6 +3,7 @@ import {getQuotedStringList, getSqlLiteral} from '../services/appQueryHelpers.ts
 import {getProviderCatalogEntry, type ProviderKind} from '../services/providerCatalog.ts'
 import {
   attachModelsToConnections,
+  type DatabaseRunner,
   getJsonSqlLiteral,
   getPersistedProviderConnectionConfigValue,
   getProviderConnectionRecordFromRow,
@@ -27,6 +28,13 @@ export type DeleteProviderConnectionResult = {
 }
 
 type ProviderConnectionDeleteTarget = {connectionIds: string[]; providerKind: ProviderKind}
+type ProviderConnectionUsage = {
+  comparisonProjectCount: number
+  judgmentCount: number
+  modelCount: number
+  projectCount: number
+}
+type DeleteProviderConnectionOptions = {afterModelCleanup?: () => Promise<void>}
 
 const isArchivedProviderConnection = (connection: ProviderConnectionRecord): boolean => {
   return connection.config.archived === true
@@ -125,21 +133,108 @@ const getProviderConnectionDeleteTarget = async (id: string): Promise<ProviderCo
   }
 }
 
-const archiveProviderConnections = async ({
-  connectionIds,
-  providerKind,
-}: ProviderConnectionDeleteTarget): Promise<void> => {
-  const connections = await Promise.all(
-    connectionIds.map(async (connectionId) => {
-      const connection = await getProviderConnectionRecordById(connectionId)
+const getProviderConnectionUsage = async (
+  databaseRunner: DatabaseRunner,
+  connectionIds: string[],
+): Promise<ProviderConnectionUsage | null> => {
+  const connectionIdsSql = getQuotedStringList(connectionIds).join(', ')
+  const [usage] = await databaseRunner.queryJson<ProviderConnectionUsage>(`
+    SELECT
+      (
+        SELECT COUNT(*)
+        FROM app.model m
+        WHERE m.provider_connection_id IN (${connectionIdsSql})
+      ) AS modelCount,
+      (
+        SELECT COUNT(*)
+        FROM app.project p
+        INNER JOIN app.model m ON p.model_id = m.id
+        WHERE m.provider_connection_id IN (${connectionIdsSql})
+      ) AS projectCount,
+      (
+        SELECT COUNT(*)
+        FROM app.judgment j
+        INNER JOIN app.model m ON j.model_id = m.id
+        WHERE m.provider_connection_id IN (${connectionIdsSql})
+      ) AS judgmentCount,
+      (
+        SELECT COUNT(*)
+        FROM app.comparison_project cp
+        WHERE EXISTS (
+          SELECT 1
+          FROM app.model m
+          WHERE m.provider_connection_id IN (${connectionIdsSql})
+            AND list_contains(cp.model_ids, m.id)
+        )
+      ) AS comparisonProjectCount
+  `)
 
-      if (!connection) {
-        throw new Error('Provider connection not found')
-      }
+  return usage ?? null
+}
 
-      return connection
-    }),
-  )
+const getProviderConnectionRecordsByIds = async (
+  databaseRunner: DatabaseRunner,
+  connectionIds: string[],
+): Promise<ProviderConnectionRecord[]> => {
+  const connectionIdsSql = getQuotedStringList(connectionIds).join(', ')
+  const rows = await databaseRunner.queryJson<ProviderConnectionRow>(`
+    SELECT
+      id,
+      provider_kind AS providerKind,
+      label,
+      enabled,
+      auth_mode AS authMode,
+      base_url AS baseURL,
+      TO_JSON(config_json) AS configJson,
+      secret_ref AS secretRef,
+      last_checked_at AS lastCheckedAt,
+      last_error AS lastError,
+      created_at AS createdAt,
+      updated_at AS updatedAt
+    FROM app.provider_connection
+    WHERE id IN (${connectionIdsSql})
+  `)
+
+  return rows.map(getProviderConnectionRecordFromRow)
+}
+
+const hasProviderConnectionDeleteUsage = (usage: ProviderConnectionUsage): boolean => {
+  return usage.projectCount > 0 || usage.judgmentCount > 0 || usage.comparisonProjectCount > 0
+}
+
+const getArchivedDeleteResult = (usage: ProviderConnectionUsage): DeleteProviderConnectionResult => {
+  return {
+    archived: true,
+    comparisonProjectCount: usage.comparisonProjectCount,
+    deleted: false,
+    deletedModelCount: usage.modelCount,
+    judgmentCount: usage.judgmentCount,
+    projectCount: usage.projectCount,
+  }
+}
+
+const getDeletedDeleteResult = (usage: ProviderConnectionUsage): DeleteProviderConnectionResult => {
+  return {
+    archived: false,
+    comparisonProjectCount: usage.comparisonProjectCount,
+    deleted: true,
+    deletedModelCount: usage.modelCount,
+    judgmentCount: usage.judgmentCount,
+    projectCount: usage.projectCount,
+  }
+}
+
+const archiveProviderConnections = async (
+  databaseRunner: DatabaseRunner,
+  {connectionIds, providerKind}: ProviderConnectionDeleteTarget,
+  {afterModelCleanup}: DeleteProviderConnectionOptions = {},
+): Promise<void> => {
+  const connections = await getProviderConnectionRecordsByIds(databaseRunner, connectionIds)
+
+  if (connections.length !== connectionIds.length) {
+    throw new Error('Provider connection not found')
+  }
+
   const connectionIdsSql = getQuotedStringList(connectionIds).join(', ')
   const configCaseSql = connections
     .map((connection) => {
@@ -152,20 +247,89 @@ const archiveProviderConnections = async ({
     })
     .join(' ')
 
-  await getAppDatabaseService().run(`
+  await databaseRunner.run(`
     UPDATE app.model
     SET enabled = FALSE,
         updated_at = current_timestamp
     WHERE provider_connection_id IN (${connectionIdsSql})
   `)
 
-  await getAppDatabaseService().run(`
+  await afterModelCleanup?.()
+
+  await databaseRunner.run(`
     UPDATE app.provider_connection
     SET enabled = FALSE,
         config_json = CASE id ${configCaseSql} ELSE config_json END,
         updated_at = current_timestamp
     WHERE id IN (${connectionIdsSql})
   `)
+}
+
+const deleteProviderConnections = async (
+  databaseRunner: DatabaseRunner,
+  connectionIds: string[],
+  {afterModelCleanup}: DeleteProviderConnectionOptions = {},
+): Promise<void> => {
+  const connectionIdsSql = getQuotedStringList(connectionIds).join(', ')
+
+  await databaseRunner.run(`
+    DELETE FROM app.model
+    WHERE provider_connection_id IN (${connectionIdsSql})
+  `)
+
+  await afterModelCleanup?.()
+
+  await databaseRunner.run(`
+    DELETE FROM app.provider_connection
+    WHERE id IN (${connectionIdsSql})
+  `)
+}
+
+const isForeignKeyConstraintError = (error: unknown): boolean => {
+  const errorMessage = error instanceof Error ? error.message : String(error)
+
+  return errorMessage.toLowerCase().includes('foreign key constraint')
+}
+
+const deleteProviderConnectionWithFallback = async (
+  deleteTarget: ProviderConnectionDeleteTarget,
+  options: DeleteProviderConnectionOptions = {},
+): Promise<DeleteProviderConnectionResult> => {
+  try {
+    return (await getAppDatabaseService().transaction(async (databaseRunner) => {
+      const usage = await getProviderConnectionUsage(databaseRunner, deleteTarget.connectionIds)
+
+      if (!usage) {
+        throw new Error('Provider connection not found')
+      }
+
+      if (hasProviderConnectionDeleteUsage(usage)) {
+        await archiveProviderConnections(databaseRunner, deleteTarget, options)
+
+        return getArchivedDeleteResult(usage)
+      }
+
+      await deleteProviderConnections(databaseRunner, deleteTarget.connectionIds, options)
+
+      return getDeletedDeleteResult(usage)
+    })) as DeleteProviderConnectionResult
+  } catch (error) {
+    if (!isForeignKeyConstraintError(error)) {
+      throw error
+    }
+
+    return (await getAppDatabaseService().transaction(async (databaseRunner) => {
+      const usage = await getProviderConnectionUsage(databaseRunner, deleteTarget.connectionIds)
+
+      if (!usage) {
+        throw new Error('Provider connection not found')
+      }
+
+      await archiveProviderConnections(databaseRunner, deleteTarget)
+
+      return getArchivedDeleteResult(usage)
+    })) as DeleteProviderConnectionResult
+  }
 }
 
 const getProviderConnectionRows = async (): Promise<ProviderConnectionRecord[]> => {
@@ -435,99 +599,13 @@ export const updateProviderConnection = async ({
   return updated ?? current
 }
 
-export const deleteProviderConnection = async (id: string): Promise<DeleteProviderConnectionResult> => {
+export const deleteProviderConnection = async (
+  id: string,
+  options: DeleteProviderConnectionOptions = {},
+): Promise<DeleteProviderConnectionResult> => {
   const deleteTarget = await getProviderConnectionDeleteTarget(id)
-  const connectionIdsSql = getQuotedStringList(deleteTarget.connectionIds).join(', ')
-  const [usage] = await getAppDatabaseService().queryJson<{
-    comparisonProjectCount: number
-    judgmentCount: number
-    modelCount: number
-    projectCount: number
-  }>(`
-    SELECT
-      (
-        SELECT COUNT(*)
-        FROM app.model m
-        WHERE m.provider_connection_id IN (${connectionIdsSql})
-      ) AS modelCount,
-      (
-        SELECT COUNT(*)
-        FROM app.project p
-        INNER JOIN app.model m ON p.model_id = m.id
-        WHERE m.provider_connection_id IN (${connectionIdsSql})
-      ) AS projectCount,
-      (
-        SELECT COUNT(*)
-        FROM app.judgment j
-        INNER JOIN app.model m ON j.model_id = m.id
-        WHERE m.provider_connection_id IN (${connectionIdsSql})
-      ) AS judgmentCount,
-      (
-        SELECT COUNT(*)
-        FROM app.comparison_project cp
-        WHERE EXISTS (
-          SELECT 1
-          FROM app.model m
-          WHERE m.provider_connection_id IN (${connectionIdsSql})
-            AND list_contains(cp.model_ids, m.id)
-        )
-      ) AS comparisonProjectCount
-  `)
 
-  if (!usage) {
-    throw new Error('Provider connection not found')
-  }
-
-  if (usage.projectCount > 0 || usage.judgmentCount > 0 || usage.comparisonProjectCount > 0) {
-    await archiveProviderConnections(deleteTarget)
-
-    return {
-      archived: true,
-      comparisonProjectCount: usage.comparisonProjectCount,
-      deleted: false,
-      deletedModelCount: usage.modelCount,
-      judgmentCount: usage.judgmentCount,
-      projectCount: usage.projectCount,
-    }
-  }
-
-  try {
-    await getAppDatabaseService().run(`
-      DELETE FROM app.model
-      WHERE provider_connection_id IN (${connectionIdsSql})
-    `)
-
-    await getAppDatabaseService().run(`
-      DELETE FROM app.provider_connection
-      WHERE id IN (${connectionIdsSql})
-    `)
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error)
-
-    if (errorMessage.toLowerCase().includes('foreign key constraint')) {
-      await archiveProviderConnections(deleteTarget)
-
-      return {
-        archived: true,
-        comparisonProjectCount: usage.comparisonProjectCount,
-        deleted: false,
-        deletedModelCount: usage.modelCount,
-        judgmentCount: usage.judgmentCount,
-        projectCount: usage.projectCount,
-      }
-    }
-
-    throw error
-  }
-
-  return {
-    archived: false,
-    comparisonProjectCount: usage.comparisonProjectCount,
-    deleted: true,
-    deletedModelCount: usage.modelCount,
-    judgmentCount: usage.judgmentCount,
-    projectCount: usage.projectCount,
-  }
+  return deleteProviderConnectionWithFallback(deleteTarget, options)
 }
 
 export const setProviderConnectionCheckState = async ({
