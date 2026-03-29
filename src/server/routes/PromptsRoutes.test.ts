@@ -58,6 +58,60 @@ const insertPromptFixture = async ({promptId}: {promptId: string}) => {
   `)
 }
 
+const insertProviderConnectionFixture = async ({connectionId}: {connectionId: string}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode)
+    VALUES ('${connectionId}', 'sglang', '${connectionId}', TRUE, 'none')
+  `)
+}
+
+const insertModelFixture = async ({connectionId, modelId}: {connectionId: string; modelId: string}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await insertProviderConnectionFixture({connectionId})
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', '${modelId}', '${modelId}', '${modelId}', 'manual', TRUE)
+  `)
+}
+
+const insertProjectFixture = async ({
+  connectionId,
+  modelId,
+  projectId,
+}: {
+  connectionId: string
+  modelId: string
+  projectId: string
+}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await insertModelFixture({connectionId, modelId})
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', '${projectId}', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+}
+
+const insertArticleFixture = async ({articleId}: {articleId: string}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('${articleId}', '${articleId}')
+  `)
+}
+
 const insertPromptMergeFixture = async ({
   keepPromptId,
   mergePromptId,
@@ -90,6 +144,77 @@ const insertComparisonProjectPromptFixture = async ({
   await runDatabase(`
     INSERT INTO app.comparison_project_prompt (id, comparison_project_id, prompt_id, prompt_order)
     VALUES ('${comparisonProjectId}-prompt-link', '${comparisonProjectId}', '${promptId}', 0)
+  `)
+}
+
+const insertJudgmentPromptCollisionFixture = async ({
+  articleId,
+  connectionId,
+  keepPromptId,
+  mergePromptId,
+  modelId,
+}: {
+  articleId: string
+  connectionId: string
+  keepPromptId: string
+  mergePromptId: string
+  modelId: string
+}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await insertPromptFixture({promptId: keepPromptId})
+  await insertPromptFixture({promptId: mergePromptId})
+  await insertModelFixture({connectionId, modelId})
+  await insertArticleFixture({articleId})
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      delete_generation,
+      is_answered,
+      explanation
+    ) VALUES
+      ('${keepPromptId}-judgment', '${articleId}', '${keepPromptId}', '${modelId}', TRUE, TRUE, FALSE, FALSE, 0, TRUE, 'keep'),
+      ('${mergePromptId}-judgment', '${articleId}', '${mergePromptId}', '${modelId}', TRUE, TRUE, FALSE, FALSE, 0, TRUE, 'merge')
+  `)
+}
+
+const insertHumanJudgmentPromptCollisionFixture = async ({
+  articleId,
+  connectionId,
+  keepPromptId,
+  mergePromptId,
+  modelId,
+  projectId,
+}: {
+  articleId: string
+  connectionId: string
+  keepPromptId: string
+  mergePromptId: string
+  modelId: string
+  projectId: string
+}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await insertPromptFixture({promptId: keepPromptId})
+  await insertPromptFixture({promptId: mergePromptId})
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertArticleFixture({articleId})
+  await runDatabase(`
+    INSERT INTO app.judgment_human (id, project_id, article_id, prompt_id, is_answered, answer)
+    VALUES
+      ('${keepPromptId}-judgment-human', '${projectId}', '${articleId}', '${keepPromptId}', TRUE, 'keep'),
+      ('${mergePromptId}-judgment-human', '${projectId}', '${articleId}', '${mergePromptId}', TRUE, 'merge')
   `)
 }
 
@@ -149,4 +274,81 @@ test('merging a prompt rewrites comparison project prompt references before dele
   expect(response.status).toBe(200)
   expect(remainingMergePrompt).toBeUndefined()
   expect(comparisonProjectPrompts).toEqual([{promptId: keepPromptId}])
+})
+
+test('merging a prompt deletes colliding judgment rows before rewriting prompt ids', async () => {
+  if (!app || !queryDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const keepPromptId = `keep-judgment-prompt-${Date.now()}`
+  const mergePromptId = `merge-judgment-prompt-${Date.now()}`
+  const articleId = `judgment-article-${Date.now()}`
+  const connectionId = `judgment-connection-${Date.now()}`
+  const modelId = `judgment-model-${Date.now()}`
+
+  await insertJudgmentPromptCollisionFixture({articleId, connectionId, keepPromptId, mergePromptId, modelId})
+
+  const response = await app.handle(
+    new Request('http://localhost/api/prompts/merge', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({keepPromptId, mergePromptIds: [mergePromptId]}),
+    }),
+  )
+  const body = (await response.json()) as {success?: boolean; error?: string}
+  const remainingJudgments = await queryDatabase<{id: string; promptId: string}>(`
+    SELECT id, prompt_id AS promptId
+    FROM app.judgment
+    WHERE article_id = '${articleId}'
+    ORDER BY id
+  `)
+
+  expect(response.status).toBe(200)
+  expect(body).toEqual({success: true})
+  expect(body.error).toBeUndefined()
+  expect(remainingJudgments).toEqual([{id: `${keepPromptId}-judgment`, promptId: keepPromptId}])
+})
+
+test('merging a prompt deletes colliding human judgment rows before rewriting prompt ids', async () => {
+  if (!app || !queryDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const keepPromptId = `keep-human-judgment-prompt-${Date.now()}`
+  const mergePromptId = `merge-human-judgment-prompt-${Date.now()}`
+  const articleId = `human-judgment-article-${Date.now()}`
+  const connectionId = `human-judgment-connection-${Date.now()}`
+  const modelId = `human-judgment-model-${Date.now()}`
+  const projectId = `human-judgment-project-${Date.now()}`
+
+  await insertHumanJudgmentPromptCollisionFixture({
+    articleId,
+    connectionId,
+    keepPromptId,
+    mergePromptId,
+    modelId,
+    projectId,
+  })
+
+  const response = await app.handle(
+    new Request('http://localhost/api/prompts/merge', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({keepPromptId, mergePromptIds: [mergePromptId]}),
+    }),
+  )
+  const body = (await response.json()) as {success?: boolean; error?: string}
+  const remainingHumanJudgments = await queryDatabase<{id: string; promptId: string}>(`
+    SELECT id, prompt_id AS promptId
+    FROM app.judgment_human
+    WHERE project_id = '${projectId}'
+      AND article_id = '${articleId}'
+    ORDER BY id
+  `)
+
+  expect(response.status).toBe(200)
+  expect(body).toEqual({success: true})
+  expect(body.error).toBeUndefined()
+  expect(remainingHumanJudgments).toEqual([{id: `${keepPromptId}-judgment-human`, promptId: keepPromptId}])
 })
