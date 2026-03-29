@@ -1,0 +1,130 @@
+import {afterEach, expect, mock, test} from 'bun:test'
+
+const providerConnectionRepositoryModulePath = new URL('./providerConnectionRepository.ts', import.meta.url).pathname
+const providerRuntimeDiscoveryModulePath = new URL('./providerRuntimeDiscovery.ts', import.meta.url).pathname
+const providerRuntimeRecordsModulePath = new URL('../../utils/providerRuntimeRecords.ts', import.meta.url).pathname
+
+const state = {
+  discoverOpenAICompatibleRuntimeModel: mock(async ({baseURL}: {baseURL: string}) => {
+    return {
+      baseURL,
+      contextLength: null,
+      modelName: 'Qwen/Qwen3',
+      modelNames: ['Qwen/Qwen3'],
+      raw: null,
+      servedModelName: null,
+    }
+  }),
+  getLatestActiveProviderRuntimeRecord: mock(() => {
+    return null
+  }),
+  listProviderConnections: mock(async (): Promise<unknown[]> => {
+    return []
+  }),
+}
+
+void mock.module(providerConnectionRepositoryModulePath, () => {
+  return {listProviderConnections: state.listProviderConnections}
+})
+
+void mock.module(providerRuntimeDiscoveryModulePath, () => {
+  return {
+    discoverOpenAICompatibleRuntimeModel: state.discoverOpenAICompatibleRuntimeModel,
+    supportsSavedLocalProviderProbe: (providerKind: string | null | undefined) => {
+      return ['ollama', 'llamacpp', 'llmstudio', 'sglang', 'vllm'].includes(String(providerKind ?? '').trim())
+    },
+  }
+})
+
+void mock.module(providerRuntimeRecordsModulePath, () => {
+  return {getLatestActiveProviderRuntimeRecord: state.getLatestActiveProviderRuntimeRecord}
+})
+
+const loadDetector = () => {
+  return import('./providerRuntimeDetector.ts')
+}
+
+afterEach(() => {
+  state.discoverOpenAICompatibleRuntimeModel.mockClear()
+  state.discoverOpenAICompatibleRuntimeModel.mockImplementation(async ({baseURL}: {baseURL: string}) => {
+    return {
+      baseURL,
+      contextLength: null,
+      modelName: 'Qwen/Qwen3',
+      modelNames: ['Qwen/Qwen3'],
+      raw: null,
+      servedModelName: null,
+    }
+  })
+  state.getLatestActiveProviderRuntimeRecord.mockReset()
+  state.getLatestActiveProviderRuntimeRecord.mockImplementation(() => {
+    return null
+  })
+  state.listProviderConnections.mockReset()
+  state.listProviderConnections.mockImplementation(async (): Promise<unknown[]> => {
+    return []
+  })
+
+  return loadDetector().then(({clearProviderRuntimeDetectorCache}) => {
+    clearProviderRuntimeDetectorCache()
+  })
+})
+
+test('detector probes saved manual worker urls for runtime-backed providers', async () => {
+  state.listProviderConnections.mockImplementationOnce(async () => {
+    return [
+      {
+        baseURL: null,
+        config: {manualWorkerUrls: ['http://127.0.0.1:30010'], workerUrlMode: 'manual'},
+        enabled: true,
+        providerKind: 'sglang',
+      },
+    ]
+  })
+  const {getDetectedProviderRuntimeSummary} = await loadDetector()
+
+  const summary = await getDetectedProviderRuntimeSummary({now: 100})
+
+  expect(state.discoverOpenAICompatibleRuntimeModel).toHaveBeenCalledWith({
+    baseURL: 'http://127.0.0.1:30010/v1',
+    providerKind: 'sglang',
+  })
+  expect(summary).toEqual({
+    activeModelNames: ['Qwen/Qwen3'],
+    providerKind: 'sglang',
+    workerUrls: ['http://127.0.0.1:30010'],
+  })
+})
+
+test('detector probes only saved local provider endpoints', async () => {
+  state.listProviderConnections.mockImplementationOnce(async () => {
+    return [
+      {
+        baseURL: 'https://api.openai.com/v1',
+        config: {manualWorkerUrls: ['http://127.0.0.1:30010'], workerUrlMode: 'manual'},
+        enabled: true,
+        providerKind: 'openai',
+      },
+      {
+        baseURL: 'http://127.0.0.1:1234/v1',
+        config: {manualWorkerUrls: [], workerUrlMode: 'manual'},
+        enabled: true,
+        providerKind: 'llmstudio',
+      },
+    ]
+  })
+  const {getDetectedProviderRuntimeSummary} = await loadDetector()
+
+  const summary = await getDetectedProviderRuntimeSummary({now: 100})
+
+  expect(state.discoverOpenAICompatibleRuntimeModel).toHaveBeenCalledTimes(1)
+  expect(state.discoverOpenAICompatibleRuntimeModel).toHaveBeenCalledWith({
+    baseURL: 'http://127.0.0.1:1234/v1',
+    providerKind: 'llmstudio',
+  })
+  expect(summary).toEqual({
+    activeModelNames: ['Qwen/Qwen3'],
+    providerKind: 'llmstudio',
+    workerUrls: ['http://127.0.0.1:1234'],
+  })
+})

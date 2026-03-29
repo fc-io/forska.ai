@@ -1,8 +1,8 @@
 import {getLatestActiveProviderRuntimeRecord, type ProviderRuntimeRecord} from '../../utils/providerRuntimeRecords.ts'
 import {listProviderConnections} from './providerConnectionRepository.ts'
-import {discoverOpenAICompatibleRuntimeModel} from './providerRuntimeDiscovery.ts'
+import {discoverOpenAICompatibleRuntimeModel, supportsSavedLocalProviderProbe} from './providerRuntimeDiscovery.ts'
 import {type ProviderRuntimeSummary} from './providerRuntimeState.ts'
-import {supportsRuntimeWorkerUrls} from './providerWorkerUtils.ts'
+import {normalizeWorkerUrls, supportsRuntimeWorkerUrls} from './providerWorkerUtils.ts'
 
 const healthyTtlMs = 120_000
 const failureBackoffBaseMs = 5_000
@@ -50,6 +50,12 @@ const getWorkerUrlFromBaseURL = (baseURL: string): string => {
   return normalizedBaseURL.endsWith('/v1') ? normalizedBaseURL.slice(0, -3) : normalizedBaseURL
 }
 
+const getBaseURLFromWorkerUrl = (workerUrl: string): string => {
+  const normalizedWorkerUrl = workerUrl.replace(/\/+$/, '')
+
+  return normalizedWorkerUrl.endsWith('/v1') ? normalizedWorkerUrl : `${normalizedWorkerUrl}/v1`
+}
+
 const getSummaryFromLauncherRecord = (record: ProviderRuntimeRecord): ProviderRuntimeSummary => {
   return {
     activeModelNames: getUniqueValues(record.activeModelNames),
@@ -91,13 +97,28 @@ const getSavedRuntimeCandidates = async (): Promise<DetectorCandidate[]> => {
     new Map(
       connections.flatMap((connection) => {
         const baseURL = getTrimmedValue(connection.baseURL)
+        const manualWorkerUrls = normalizeWorkerUrls(connection.config.manualWorkerUrls)
 
-        return connection.enabled && supportsRuntimeWorkerUrls(connection.providerKind) && baseURL
+        return connection.enabled && supportsSavedLocalProviderProbe(connection.providerKind)
           ? [
-              [
-                getDetectorCacheKey({baseURL, providerKind: connection.providerKind}),
-                {baseURL, providerKind: connection.providerKind, workerUrl: getWorkerUrlFromBaseURL(baseURL)},
-              ] as const,
+              ...(baseURL
+                ? [
+                    [
+                      getDetectorCacheKey({baseURL, providerKind: connection.providerKind}),
+                      {baseURL, providerKind: connection.providerKind, workerUrl: getWorkerUrlFromBaseURL(baseURL)},
+                    ] as const,
+                  ]
+                : []),
+              ...(supportsRuntimeWorkerUrls(connection.providerKind)
+                ? manualWorkerUrls.map((workerUrl) => {
+                    const workerBaseURL = getBaseURLFromWorkerUrl(workerUrl)
+
+                    return [
+                      getDetectorCacheKey({baseURL: workerBaseURL, providerKind: connection.providerKind}),
+                      {baseURL: workerBaseURL, providerKind: connection.providerKind, workerUrl},
+                    ] as const
+                  })
+                : []),
             ]
           : []
       }),
@@ -113,7 +134,7 @@ const probeCandidate = async ({baseURL, now, providerKind, workerUrl}: DetectorC
   const cacheKey = getDetectorCacheKey({baseURL, providerKind})
   const existing = detectorCache.get(cacheKey) ?? null
   const discovery = await discoverOpenAICompatibleRuntimeModel({baseURL, providerKind})
-  const modelNames = getUniqueValues([discovery?.modelName, discovery?.servedModelName])
+  const modelNames = getUniqueValues(discovery?.modelNames ?? [discovery?.modelName, discovery?.servedModelName])
   const nextEntry = discovery
     ? {
         failureCount: 0,
@@ -170,12 +191,13 @@ export const discoverProviderRuntimeModel = async ({
           modelName: cachedEntry.modelNames[0] ?? null,
           raw: null,
           servedModelName: cachedEntry.modelNames[1] ?? cachedEntry.modelNames[0] ?? null,
+          modelNames: cachedEntry.modelNames,
         }
       : existing && now < existing.nextCheckAt
         ? null
         : discoverOpenAICompatibleRuntimeModel({baseURL: resolvedBaseURL, providerKind: resolvedProviderKind}).then(
             (result) => {
-              const modelNames = getUniqueValues([result?.modelName, result?.servedModelName])
+              const modelNames = getUniqueValues(result?.modelNames ?? [result?.modelName, result?.servedModelName])
               const nextEntry = result
                 ? {
                     failureCount: 0,

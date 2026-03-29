@@ -62,6 +62,7 @@ const getRuntimeModelNames = ({
 }): string[] => {
   return getUniqueModelNames([
     ...getListedModelNames(listedModels),
+    ...(runtimeMetadata?.modelNames ?? []),
     runtimeMetadata?.modelName,
     runtimeMetadata?.servedModelName,
   ])

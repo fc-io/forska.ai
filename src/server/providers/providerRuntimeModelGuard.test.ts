@@ -110,7 +110,12 @@ void mock.module(providerRegistryModulePath, () => {
 })
 
 void mock.module(providerRuntimeDiscoveryModulePath, () => {
-  return {discoverOpenAICompatibleRuntimeModel: state.discoverOpenAICompatibleRuntimeModel}
+  return {
+    discoverOpenAICompatibleRuntimeModel: state.discoverOpenAICompatibleRuntimeModel,
+    supportsSavedLocalProviderProbe: (providerKind: string | null | undefined) => {
+      return ['ollama', 'llamacpp', 'llmstudio', 'sglang', 'vllm'].includes(String(providerKind ?? '').trim())
+    },
+  }
 })
 
 const loadGuard = () => {
