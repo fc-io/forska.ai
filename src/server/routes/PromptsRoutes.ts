@@ -17,6 +17,12 @@ type PromptRow = Pick<PromptRecord, 'id' | 'originalText' | 'transformedText' | 
 
 type PromptCollision = {hash: string; promptIds: string[]}
 type PromptHashUpdate = {id: string; hash: string}
+type PromptReferenceCounts = {
+  comparisonProjectCount: number
+  humanJudgmentCount: number
+  judgmentCount: number
+  projectCount: number
+}
 
 const withHashes = (rows: PromptRow[]) => {
   return rows.map((row) => {
@@ -79,6 +85,47 @@ const applyHashUpdates = async (updates: PromptHashUpdate[]) => {
 
 const normalizePromptListRow = <TRow extends Record<string, unknown>>(row: TRow) => {
   return {...row, createdAt: getDateValue(row['createdAt']), updatedAt: getDateValue(row['updatedAt'])}
+}
+
+const getPromptReferenceCounts = async (id: string): Promise<PromptReferenceCounts> => {
+  const [[projectCount], [comparisonProjectCount], [judgmentCount], [humanJudgmentCount]] = await Promise.all([
+    getAppDatabaseService().queryJson<{count: number}>(`
+      SELECT COUNT(*) AS count
+      FROM app.project_prompt
+      WHERE prompt_id = '${escapeSqlString(id)}'
+    `),
+    getAppDatabaseService().queryJson<{count: number}>(`
+      SELECT COUNT(*) AS count
+      FROM app.comparison_project_prompt
+      WHERE prompt_id = '${escapeSqlString(id)}'
+    `),
+    getAppDatabaseService().queryJson<{count: number}>(`
+      SELECT COUNT(*) AS count
+      FROM app.judgment
+      WHERE prompt_id = '${escapeSqlString(id)}'
+    `),
+    getAppDatabaseService().queryJson<{count: number}>(`
+      SELECT COUNT(*) AS count
+      FROM app.judgment_human
+      WHERE prompt_id = '${escapeSqlString(id)}'
+    `),
+  ])
+
+  return {
+    projectCount: Number(projectCount?.count ?? 0),
+    comparisonProjectCount: Number(comparisonProjectCount?.count ?? 0),
+    judgmentCount: Number(judgmentCount?.count ?? 0),
+    humanJudgmentCount: Number(humanJudgmentCount?.count ?? 0),
+  }
+}
+
+const hasPromptReferences = ({
+  comparisonProjectCount,
+  humanJudgmentCount,
+  judgmentCount,
+  projectCount,
+}: PromptReferenceCounts) => {
+  return projectCount > 0 || comparisonProjectCount > 0 || judgmentCount > 0 || humanJudgmentCount > 0
 }
 
 const promptsUserRoutes = new Elysia()
@@ -177,6 +224,7 @@ const promptsUserRoutes = new Elysia()
   )
 
 const promptsAdminRoutes = new Elysia()
+  .use(withErrorHandler())
   .get('/api/prompts/duplicates', async () => {
     const allPrompts = await getAppDatabaseService().queryJson<
       PromptRow & {archived: boolean; createdAt: unknown; updatedAt: unknown}
@@ -278,30 +326,17 @@ const promptsAdminRoutes = new Elysia()
 
     return {success: true, data: {updatedCount, skippedCollisions: collisions}}
   })
-  .delete('/api/prompts/:id', async ({params}) => {
+  .delete('/api/prompts/:id', async ({params, set}) => {
     const {id} = params
 
-    // Strict verification: Ensure no connections exist
-    const [[projectCount], [judgmentCount], [humanJudgmentCount]] = await Promise.all([
-      getAppDatabaseService().queryJson<{count: number}>(`
-        SELECT COUNT(*) AS count
-        FROM app.project_prompt
-        WHERE prompt_id = '${escapeSqlString(id)}'
-      `),
-      getAppDatabaseService().queryJson<{count: number}>(`
-        SELECT COUNT(*) AS count
-        FROM app.judgment
-        WHERE prompt_id = '${escapeSqlString(id)}'
-      `),
-      getAppDatabaseService().queryJson<{count: number}>(`
-        SELECT COUNT(*) AS count
-        FROM app.judgment_human
-        WHERE prompt_id = '${escapeSqlString(id)}'
-      `),
-    ])
+    const referenceCounts = await getPromptReferenceCounts(id)
 
-    if ((projectCount?.count ?? 0) > 0 || (judgmentCount?.count ?? 0) > 0 || (humanJudgmentCount?.count ?? 0) > 0) {
-      throw new Error('Prompt is not fully orphaned. It has existing connections.')
+    if (hasPromptReferences(referenceCounts)) {
+      set.status = 409
+      return {
+        data: null,
+        error: 'Prompt delete blocked. Remove project, comparison project, and judgment references first.',
+      }
     }
 
     await getAppDatabaseService().run(`
@@ -594,4 +629,4 @@ const promptsAdminRoutes = new Elysia()
     {body: t.Object({judgmentIds: t.Array(t.String())})},
   )
 
-export const promptsRoutes = new Elysia().use(promptsUserRoutes).use(promptsAdminRoutes)
+export const promptsRoutes = new Elysia().use(withErrorHandler()).use(promptsUserRoutes).use(promptsAdminRoutes)
