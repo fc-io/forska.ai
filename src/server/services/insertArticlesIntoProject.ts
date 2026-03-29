@@ -27,6 +27,7 @@ export const insertArticlesIntoProject = async (
   articleIdsInput: string[],
   importedFromProjectId?: string | null,
 ): Promise<InsertArticlesResult> => {
+  const database = getAppDatabaseService()
   const uniqueIds = Array.from(
     new Set(
       (Array.isArray(articleIdsInput) ? articleIdsInput : [articleIdsInput]).filter((v): v is string => {
@@ -53,7 +54,7 @@ export const insertArticlesIntoProject = async (
   const lookupBatchSize = 10000
   for (const idsChunk of chunk(uniqueIds, lookupBatchSize)) {
     if (idsChunk.length === 0) continue
-    const rows = await getAppDatabaseService().queryJson<{id: string}>(`
+    const rows = await database.queryJson<{id: string}>(`
       SELECT id
       FROM app.article
       WHERE id IN (${getQuotedStringList(idsChunk).join(', ')})
@@ -86,7 +87,7 @@ export const insertArticlesIntoProject = async (
   const existingAssocSet = new Set<string>()
   for (const idsChunk of chunk(validIds, lookupBatchSize)) {
     if (idsChunk.length === 0) continue
-    const rows = await getAppDatabaseService().queryJson<{articleId: string}>(`
+    const rows = await database.queryJson<{articleId: string}>(`
       SELECT article_id AS articleId
       FROM app.project_article
       WHERE project_id = '${escapeSqlString(projectId)}'
@@ -100,30 +101,16 @@ export const insertArticlesIntoProject = async (
     return !existingAssocSet.has(id)
   })
 
-  // Insert associations in chunks, ignoring duplicates just in case concurrent requests race
-  const batchSize = 1000
-  for (const idsChunk of chunk(toInsert, batchSize)) {
-    if (idsChunk.length === 0) continue
-    await getAppDatabaseService().run(`
-      INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
-      VALUES ${idsChunk
-        .map((articleId) => {
-          return `(${getQuotedStringList([crypto.randomUUID(), projectId, articleId]).join(', ')}, ${importedFromProjectId ? `'${escapeSqlString(importedFromProjectId)}'` : 'NULL'})`
-        })
-        .join(', ')}
-      ON CONFLICT(project_id, article_id) DO NOTHING
-    `)
-  }
-
   // Auto-link prompts that already have judgments (AI or human) for these articles
   let linkedPrompts = 0
+  let ensuredPromptIds: string[] = []
   if (validIds.length > 0) {
     // Query prompts with judgments in chunks to avoid parameter limits.
     const llmPromptIdSet = new Set<string>()
     const humanPromptIdSet = new Set<string>()
     for (const idsChunk of chunk(validIds, lookupBatchSize)) {
       if (idsChunk.length === 0) continue
-      const llmRows = await getAppDatabaseService().queryJson<{pid: string}>(`
+      const llmRows = await database.queryJson<{pid: string}>(`
         SELECT prompt_id AS pid
         FROM app.judgment
         WHERE article_id IN (${getQuotedStringList(idsChunk).join(', ')})
@@ -132,7 +119,7 @@ export const insertArticlesIntoProject = async (
       for (const r of llmRows) {
         if (r.pid) llmPromptIdSet.add(r.pid)
       }
-      const humanRows = await getAppDatabaseService().queryJson<{pid: string}>(`
+      const humanRows = await database.queryJson<{pid: string}>(`
         SELECT prompt_id AS pid
         FROM app.judgment_human
         WHERE article_id IN (${getQuotedStringList(idsChunk).join(', ')})
@@ -151,7 +138,7 @@ export const insertArticlesIntoProject = async (
 
     if (promptIds.length > 0) {
       // Exclude prompts already linked to this project
-      const existingProjectPromptRows = await getAppDatabaseService().queryJson<{pid: string}>(`
+      const existingProjectPromptRows = await database.queryJson<{pid: string}>(`
         SELECT prompt_id AS pid
         FROM app.project_prompt
         WHERE project_id = '${escapeSqlString(projectId)}'
@@ -167,34 +154,48 @@ export const insertArticlesIntoProject = async (
 
       if (toLink.length > 0) {
         // Ensure prompts exist, then link with default metadata
-        const ensurePrompts = await getAppDatabaseService().queryJson<{id: string}>(`
+        const ensurePrompts = await database.queryJson<{id: string}>(`
           SELECT id
           FROM app.prompt
           WHERE id IN (${getQuotedStringList(toLink).join(', ')})
         `)
-        const ensureIds = ensurePrompts.map((r) => {
+        ensuredPromptIds = ensurePrompts.map((r) => {
           return r.id
         })
-        if (ensureIds.length > 0) {
-          linkedPrompts = ensureIds.length
-          // Insert in chunks to be safe for very large prompt sets.
-          // Keep a contiguous order across chunks.
-          let orderIndex = 0
-          for (const promptChunk of chunk(ensureIds, 1000)) {
-            const values = promptChunk.map((pid, index) => {
-              return `(${getQuotedStringList([crypto.randomUUID(), projectId, pid]).join(', ')}, ${orderIndex + index}, FALSE, NULL, FALSE)`
-            })
-            orderIndex += promptChunk.length
-            await getAppDatabaseService().run(`
-              INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, origin_project_id, enabled)
-              VALUES ${values.join(', ')}
-              ON CONFLICT(project_id, prompt_id) DO NOTHING
-            `)
-          }
-        }
+        linkedPrompts = ensuredPromptIds.length
       }
     }
   }
+
+  const batchSize = 1000
+  await database.transaction(async (tx) => {
+    for (const idsChunk of chunk(toInsert, batchSize)) {
+      if (idsChunk.length === 0) continue
+      await tx.run(`
+        INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
+        VALUES ${idsChunk
+          .map((articleId) => {
+            return `(${getQuotedStringList([crypto.randomUUID(), projectId, articleId]).join(', ')}, ${importedFromProjectId ? `'${escapeSqlString(importedFromProjectId)}'` : 'NULL'})`
+          })
+          .join(', ')}
+        ON CONFLICT(project_id, article_id) DO NOTHING
+      `)
+    }
+
+    let orderIndex = 0
+    for (const promptChunk of chunk(ensuredPromptIds, batchSize)) {
+      if (promptChunk.length === 0) continue
+      const values = promptChunk.map((pid, index) => {
+        return `(${getQuotedStringList([crypto.randomUUID(), projectId, pid]).join(', ')}, ${orderIndex + index}, FALSE, NULL, FALSE)`
+      })
+      orderIndex += promptChunk.length
+      await tx.run(`
+        INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, origin_project_id, enabled)
+        VALUES ${values.join(', ')}
+        ON CONFLICT(project_id, prompt_id) DO NOTHING
+      `)
+    }
+  })
 
   if (toInsert.length > 0 || linkedPrompts > 0) {
     await getDuckdbMartRefreshService().queueProjectRefresh(projectId, 'insertArticlesIntoProject')

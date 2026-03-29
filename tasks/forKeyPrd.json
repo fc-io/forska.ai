@@ -92,9 +92,10 @@
         "`bun run lint` passes when the story changes TS, route, or service code."
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "",
-      "dependsOn": []
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-006",
@@ -215,6 +216,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-03-29T14:26:05.203Z"
+    "updatedAt": "2026-03-29T14:30:59.948Z"
   }
 }
