@@ -1496,6 +1496,29 @@ const insertComparisonProjectRouteLinks = async (tx: AppTx, comparisonProjectId:
   )
 }
 
+const insertComparisonProjectImportRouteRows = async (
+  tx: AppTx,
+  comparisonProjectId: string,
+  routeRows: Array<{id: string; importRouteId: string}>,
+) => {
+  const [currentRouteRow] = routeRows
+
+  if (!currentRouteRow) {
+    return
+  }
+
+  await tx.run(`
+    INSERT INTO ${comparisonProjectImportRouteTable} (id, comparison_project_id, import_route_id)
+    VALUES (
+      ${getSqlLiteral(currentRouteRow.id)},
+      ${getSqlLiteral(comparisonProjectId)},
+      ${getSqlLiteral(currentRouteRow.importRouteId)}
+    )
+  `)
+
+  return insertComparisonProjectImportRouteRows(tx, comparisonProjectId, routeRows.slice(1))
+}
+
 const getValidatedModelIds = async (db: AppQueryRunner, modelIds: string[]) => {
   if (modelIds.length === 0) {
     return null
@@ -1571,16 +1594,22 @@ const updateComparisonProjectWithModelIdsChange = async (params: {
   comparisonProjectId: string
   setParts: string[]
   promptSelections: PromptSelection[]
-}) => {
-  const tempRouteTable = `temp_comparison_project_import_route_${crypto.randomUUID().replaceAll('-', '_')}`
-  await appDatabaseService.run(`
-    CREATE TEMP TABLE ${tempRouteTable} AS
-    SELECT id, import_route_id AS importRouteId
-    FROM ${comparisonProjectImportRouteTable}
-    WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
-  `)
+}): Promise<ComparisonProjectRecordRow | null> => {
+  return appDatabaseService.transaction(async (tx) => {
+    const importRouteRows = await tx.queryJson<{id: string; importRouteId: string}>(`
+      SELECT id, import_route_id AS importRouteId
+      FROM ${comparisonProjectImportRouteTable}
+      WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+    `)
+    const updatedComparisonProjectRecord = await updateComparisonProjectTx(tx, {
+      comparisonProjectId: params.comparisonProjectId,
+      setParts: params.setParts,
+    })
 
-  await appDatabaseService.transaction(async (tx) => {
+    if (!updatedComparisonProjectRecord) {
+      throw new Error('Comparison project not found')
+    }
+
     await tx.run(`
       DELETE FROM ${comparisonProjectPromptTable}
       WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
@@ -1589,27 +1618,11 @@ const updateComparisonProjectWithModelIdsChange = async (params: {
       DELETE FROM ${comparisonProjectImportRouteTable}
       WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
     `)
-  })
-
-  await appDatabaseService.transaction(async (tx) => {
-    await updateComparisonProjectTx(tx, {comparisonProjectId: params.comparisonProjectId, setParts: params.setParts})
-  })
-
-  await appDatabaseService.transaction(async (tx) => {
-    await tx.run(`
-      INSERT INTO ${comparisonProjectImportRouteTable} (id, comparison_project_id, import_route_id)
-      SELECT
-        id,
-        ${getSqlLiteral(params.comparisonProjectId)},
-        importRouteId
-      FROM ${tempRouteTable}
-    `)
+    await insertComparisonProjectImportRouteRows(tx, params.comparisonProjectId, importRouteRows)
     await insertComparisonProjectPromptLinks(tx, params.comparisonProjectId, params.promptSelections)
-  })
 
-  await appDatabaseService.run(`DROP TABLE ${tempRouteTable}`)
-
-  return getComparisonProjectRecord(appDatabaseService, params.comparisonProjectId)
+    return updatedComparisonProjectRecord
+  }) as Promise<ComparisonProjectRecordRow | null>
 }
 
 const createComparisonProjectRecord = async (
