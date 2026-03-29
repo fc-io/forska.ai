@@ -1,218 +1,274 @@
-# Forska.ai — Agent Handbook
+# Forska.ai - Agent Handbook
 
-## Precedence
+## Commands
 
-1. Always read [`CLAUDE.md`](./CLAUDE.md) before touching the codebase — it contains non-negotiable style rules.
-2. If a more specific `AGENTS.md` exists deeper in the tree, defer to it for files you modify.
-
----
-
-## Build / Lint / Test Commands
+- Use Bun tooling by default.
 
 ```bash
-# Install dependencies (NEVER use npm/yarn/pnpm)
 bun install
-
-# Development servers
-bun run dev:server          # API (Elysia) with hot reload
-bun run dev:app             # SolidJS client (Vite)
-
-# Production build + preview
-bun run build               # Vite build
-bun run preview             # Serve built app
-
-# Linting (Prettier is integrated via eslint-plugin-prettier)
-bun run lint                # Check errors
-bun run lint:fix            # Auto-fix
-
-# Testing (Bun's built-in test runner)
-bun test                    # Run all tests
-bun test path/to/file.test.ts          # Single file
-bun test --watch            # Watch mode
-bun test --grep "pattern"   # Filter by name
-
-# Database (DuckDB-native runtime)
-bun run db:mig              # Apply SQL migrations
-bun run db:duck:mig         # Same as db:mig
-bun run db:duck:rebuild-marts # Rebuild DuckDB marts
+bun run dev:server
+bun run dev:app
+bun run build
+bun run lint
+bun run lint:fix
+bun test
+bun test path/to/file.test.ts
+bun run db:mig
+bun run db:duck:rebuild-marts
 ```
 
----
+## Plans And Reports
 
-## Repository Map
+- Be concise in plans and markdown.
+- For any plan, PRD, or task breakdown, include explicit Quality Gates. Keep
+  them concrete, minimal, pass/fail, and repo-native. Use only relevant gates:
+  `bun run lint`, targeted `bun test` or `bun test <file>`, `bun run build` for
+  UI, `bun run db:mig` for schema work, sometimes also relevant to read from the 
+  server or app output, and browser verification for UI flows
+  when relevant.
+- In PRs and commits, note touched layers: server, client, database, docs.
+- List commands you ran. If you skip an obvious command, say why.
+- Do not fix unrelated lint issues.
 
-| Path                        | Description                     |
-| --------------------------- | ------------------------------- |
-| `src/server/`               | Elysia API, routes in `routes/` |
-| `src/app/`                  | SolidJS client                  |
-| `src/components/`           | Shared UI components            |
-| `src/utils/`, `src/stores/` | Helpers, state                  |
-| `src/db/`                   | DB types, SQL migrations        |
-| `docs/`                     | Domain documentation            |
-| `scripts/`                  | CLI utilities, DB ops           |
+## File Structure
 
----
+- Keep filenames camelCase, including TSX and JSX.
+- If a file has one export, the filename should match it.
+- Components and helpers used by one file should live in a sibling subfolder
+  with the same owner name. Route folders are the exception.
+- When a component or its related utilities exceed 100 lines, extract them into
+  that subfolder.
 
-## Code Style Guidelines
-
-### General Principles
-
-- **Functional style** — prefer `map`, `filter`, `reduce` over `forEach`; avoid classes (use objects + pure functions)
-- **Arrow functions** — use function expressions: `const foo = () => { ... }`
-- **Named exports only** — `export const Foo = ...` (no `export default`)
-- **`const` over `let`** — if you reach for `let`, rethink the approach
-- **Recursion over loops** — Bun has proper tail-call optimization; avoid `while`/`for`
-- **Single return per function** — use ternary + helper functions: `return cond ? buildA(x) : buildB(x)`
-- **Avoid nested if/else** — split into separate functions
-- **No comments** — use descriptive function names instead
-- **Keep `debugger`/`console.log`** — don't remove unless explicitly asked
-
-### Ternary Patterns
-
-```ts
-// DO: single return with ternary
-return isValid ? processData(input) : handleError(input)
-
-// DON'T: ternary when one path is void
-// Instead: if (value) { return doThing(value) }
-
-// DON'T: statements after return
-```
-
-### TypeScript
-
-- **`type` over `interface`** — always prefer type aliases
-- **Infer types** — derive from Eden/RPC and local row builders where possible; avoid needless type duplication
-- **No shared type files** — keep types local to usage
-- **Explicit returns only for pure functions** — skip for DB-calling functions
-- **Unused vars** — prefix with `_` (e.g., `_unused`)
-
-### Imports (auto-sorted by eslint-plugin-simple-import-sort)
-
-```ts
-// 1. Node/Bun built-ins
-// 2. External packages
-// 3. Internal aliases (~/...)
-// 4. Relative parent (..)
-// 5. Relative same dir (.)
-```
-
-### File Structure
-
-- **Filenames**: camelCase, even for TSX (e.g., `subheaderSettingsPanel.tsx`)
-- **Single export** → filename matches exported name
-- **Subfolders for related code**: components used only by `foo.tsx` go in `foo/fooHelper.tsx`
-
-```
+```text
 src/components/main/
-├── subheader/
-│   ├── subheaderSettingsPanel/
-│   │   └── subheaderSettingsPanelDateRangePicker.tsx
-│   └── subheaderSettingsPanel.tsx
-└── subheader.tsx
+subheader.tsx
+subheader/
+subheaderSettingsPanel.tsx
+subheaderSettingsPanel/
+subheaderSettingsPanelDateRangePicker.tsx
 ```
 
----
+## Code Style
 
-## SolidJS Patterns
+- Prefer functional JavaScript. Use `map`, `filter`, and `reduce` over `forEach`. Avoid classes.
+- Prefer arrow function expressions.
+- Prefer named exports. Prefer `export const Foo = ...` over separate export blocks.
+- Prefer `const` over `let`.
+- Prefer recursion over `while` and `for` loops.
+- Prefer one return per function.
+- Avoid nested `if` and `else`.
+- Do not add comments.
+- Prefer not to declare functions inside components.
+- Prefer `Effect` for new non-trivial async and server flow so control flow, resources, retries, and failures stay explicit.
+- Prefer `Effect.gen` over long promise chains.
+- Prefer `Effect.acquireRelease` and `Scope` for resource lifetime and cleanup.
+- Prefer `Layer` and `Context` for wiring services.
+- Prefer `Schedule` for retries, polling, and backoff.
+- Keep pure transforms and very small local handlers as plain functions.
+- Prefer to handle errors and throws gracefully when easily possible.
+- Do not remove `debugger` or `console.log` unless explicitly asked.
 
-- Use `splitProps` when destructuring props to preserve reactivity
-- Prefer `createSignal` for simple state, `createStore` for nested
-- Use `createMemo` for expensive computations
-- Use `<Show>`, `<Switch>`/`<Match>` over ternary in JSX
-- Use `<For>`/`<Index>` instead of `.map()` for lists
-- Use `import { useQuery } from '@tanstack/solid-query'` (not `createQuery`)
-- Extract components >100 lines into subfolders
+## Ternary With Helpers
 
-### Reactivity Gotchas
+- Use case: exactly two mutually exclusive paths with no shared tail logic.
+- Prefer ending a function with a ternary: `return cond ? pathA(arg) : pathB(arg)` or `return cond ? value : pathB(arg)`.
+- Precompute shared inputs before the ternary.
+- Extract branches into small named helpers.
+- Both branches must return the same type.
+- Shortcuts like `return data ?? []` are good.
+- Avoid more than two branches, large inline expressions, shared post-branch logic, anonymous functions in the ternary, nested local helpers, anonymous functions longer than three lines, and pointless wrapper helpers.
+- Do not use ternary when one or both paths return `void`.
+- Do not place statements after a `return`.
+
+Do:
 
 ```ts
-// Stale: reading outside tracking context
-const v = count(); setInterval(() => console.log(v), 1000)
-// Fresh: read inside callback
-setInterval(() => console.log(count()), 1000)
-
-// Stale: destructuring props
-const { user } = props; return <span>{user.name}</span>
-// Fresh: access directly
-return <span>{props.user.name}</span>
+return cond ? buildA(x) : buildB(x)
+return cond ? value : buildB(x)
 ```
 
----
-
-## API / Routes
-
-- Route files: `src/server/routes/[resource]Routes.ts` (camelCase)
-- URL prefix: `/api/` + plural resource (e.g., `/api/projects`)
-- **Flat routes** — prefer POST + body over nested URL params
-- **Eden/RPC only** — never use `fetch` directly on client
-- Keep fetch logic local to `useQuery` calls; no services files
-- Extract handlers >15 lines to `[route]/[route]Handler.ts`
-
-### Elysia File Uploads
-
-`derive` middleware doesn't propagate for `t.File()` routes — fetch session from `request.headers` directly.
-
----
-
-## Database (DuckDB)
-
-- Use the server DuckDB services/helpers for DB access
-- Transactions for multi-table ops
-- **Singular table names** (e.g., `article`, not `articles`)
-- Apply migrations: `bun run db:mig`
-
-### Judgment Queries
-
-Always filter by model AND content settings:
+Don't create wrapper functions that do not add real behavior:
 
 ```ts
-const condition = and(
-  eq(judgments.modelId, project.modelId),
-  eq(judgments.useTitle, project.useTitle),
-  eq(judgments.useAbstract, project.useAbstract),
-  // ...
-)
+const applyCooldownAndEnd = async (now: number): Promise<void> => {
+  applyCooldown(now)
+  console.log('end send to LLM')
+}
 ```
 
----
-
-## Testing
-
-Tests use Bun's test runner with `bun:test`:
+Don't use ternary when only one path does work:
 
 ```ts
-import {test, expect, mock} from 'bun:test'
+const doThing = async (value): Promise<void> => {
+  const prompts = await doSomething()
 
-test('description', () => {
-  expect(actual).toBe(expected)
+  return value ? doSomethingElse(value) : Promise.resolve()
+}
+```
+
+Don't place statements after a return path:
+
+```ts
+const doThing = async (value): Promise<void> => {
+  if (!value) {
+    console.log('No value')
+    return
+  }
+  await processValue(value)
+}
+```
+
+Don't explain code with comments when function names can do it:
+
+```ts
+// Transform records to database format
+const transformedEntries = records.map((entry) => {
+  return transformEntry(entry, importRoute)
 })
 ```
 
-- Place tests adjacent to source: `foo.ts` → `foo.test.ts`
-- Use exact boundary conditions
-- Mock modules via `mock.module()`
+Instead:
 
----
+```ts
+const getEntriesInDatabaseFormat = (importRoute: string, entries: Entry[]) => {
+  return entries.map((entry) => {
+    return transformEntry(entry, importRoute)
+  })
+}
 
-## Error Handling
+const transformedEntries = getEntriesInDatabaseFormat(importRoute, entries)
+```
 
-- **Avoid try/catch/throw** — only when absolutely necessary
-- Handle errors gracefully with proper logging
-- Use ArkType for runtime validation at API boundaries
+## TypeScript
 
----
+- Prefer `type` over `interface`.
+- Prefer inferred and derived types from Eden/RPC and local helpers. Do not invent parallel types when existing contracts already define them.
+- Keep type definitions local.
+- If you add explicit return types, reserve them for pure non-DB functions.
+- Prefix intentionally unused vars with `_`.
+
+## Imports
+
+- Order imports as simple-import-sort expects: built-ins, external packages, internal aliases, parent relatives, same-directory relatives.
+
+## Client And UI
+
+- Layout-first UI: shell first, data later, no full-page spinner.
+- Do not add auth, session, user, or admin requirements unless explicitly asked. Default to no-auth single-user behavior.
+- Never suspend root `<Outlet />` or wrap an entire route in `<Suspense>`.
+- Keep headers, nav, and containers outside async boundaries.
+- For each `useQuery`, pick one loading model.
+- Either use `suspense:false` with explicit `isLoading` and `isError` UI and never treat `undefined` as empty state, or use `suspense:true` with a small local `<Suspense fallback=...>` around the first data read.
+- No `<Suspense>` without `fallback`.
+- Client network goes through TanStack Query and Eden. Use `fetch` only when streaming, upload, or download forces it, inside the function that needs it.
+- Use `splitProps` when destructuring props.
+- Use `<Show>` and `<Switch>`/`<Match>` over JSX ternary.
+- Use `<For>` and `<Index>` instead of `.map()` for lists.
+- Use `useQuery` from `@tanstack/solid-query`, not `createQuery`.
+
+## SolidJS Stale Data
+
+- A stale read is a non-tracked snapshot of a reactive value. The code does not re-run on change, so the UI shows old data until the reactive source is read inside a tracking context.
+- Common causes:
+
+1. Reading outside a tracking context.
+2. Destructuring props or stores.
+3. Capturing values instead of accessors.
+4. Async reads that are not tracked.
+5. Intentional stale-while-revalidate data during refetch.
+
+```ts
+// Stale
+const v = count()
+setInterval(() => console.log(v), 1000)
+
+// Fresh
+setInterval(() => console.log(count()), 1000)
+createEffect(() => console.log(count()))
+
+// Stale
+function User(p: {user: {name: string}}) {
+  const {user} = p
+  return <span>{user.name}</span>
+}
+
+// Fresh
+function User(props) {
+  return <span>{props.user.name}</span>
+}
+
+function UserWithAccessor(props) {
+  const user = () => props.user
+  return <span>{user().name}</span>
+}
+
+const [local] = splitProps(props, ['user'])
+```
+
+- Quick checks:
+
+1. If the UI is stale but `console.log(signal())` shows fresh values, the read likely happened outside an effect, memo, or JSX.
+2. If you destructured `props` or a store, switch back to direct reads, `splitProps`, or an accessor.
+3. If a timeout, interval, or promise holds old values, call the accessor inside the callback.
+4. If loader or resource data shows previous data during refetch, check loading state first. That can be expected behavior.
+
+## API And Routes
+
+- Route files use `src/server/routes/[resource]Routes.ts`.
+- Routes use `/api/` plus the plural resource name.
+- Prefer flat routes and request bodies over nested URL params.
+- Use Eden/RPC on the client. Avoid `fetch` unless streaming, upload, or download requires it.
+- Keep fetch logic local to the `useQuery` or mutation file. Do not create services files for it.
+- For `t.File()` routes, Elysia `derive` does not propagate auth context. Read the session from `request.headers` inside the handler.
+
+## Database
+
+- Do not create Postgres migrations. Use the existing DuckDB SQL migration flow.
+- Prefer the shared DuckDB services and helpers over ad hoc DB access.
+- For local DuckDB work, never open the live DB file directly. Use `bun run db:studio`, `bun run db:query:snapshot -- --sql="..."`, or maintenance scripts with no running writer.
+- For direct DuckDB CLI or manual work, always set a memory cap. Use `SET memory_limit = '20GB'` unless a smaller limit is needed.
+- Use transactions for multi-table operations.
+- Prefer `db.select()`, `db.insert()`, `db.update()`, and `db.delete()` over `db.execute()`.
+- Use singular table names.
+- Keep using the existing SQL migration files under `src/db/duckdbMigrations/`.
+
+### Judgment Queries
+
+- When querying judgments in a project context, always filter by model and content settings.
+- The unique constraint is `(articleId, promptId, modelId, useTitle, useAbstract, useFulltext, useFulltextNoImages) WHERE deletedAt IS NULL`.
+
+```ts
+const judgmentConfigCondition = and(
+  eq(judgments.modelId, project.modelId),
+  eq(judgments.useTitle, project.useTitle),
+  eq(judgments.useAbstract, project.useAbstract),
+  eq(judgments.useFulltext, project.useFulltext),
+  eq(judgments.useFulltextNoImages, project.useFulltextNoImages),
+)
+```
+
+```ts
+const judgmentConfigParts = projects.map((proj) => and(...))
+const judgmentConfigCondition = or(...judgmentConfigParts)
+```
+
+## Validation And Errors
+
+- Avoid `try`, `catch`, `finally`, and `throw` unless necessary.
+- Use ArkType for runtime validation at API boundaries.
+- Validate incoming request data before processing.
 
 ## Environment
 
-- Do not rely on `.env` files for normal dev; pass shell env only when needed
-- Use `process.env` (not Bun's `env`) for Node compatibility
-- Keep shell env use limited to runtime wiring, machine-local paths, and secrets
+- Do not rely on `.env` files for normal dev.
+- Use `process.env`, not Bun's env.
+- Keep secrets and values that must change outside the app in shell env or secret files.
+- Keep shell env use limited to runtime wiring, machine-local paths, and secrets.
+- If you start a local server or process for debugging, stop it before finishing or replying.
 
----
+## Testing
 
-## PR / Commit Expectations
-
-- Note which layers touched: server / client / database / docs
-- List all commands executed (even if skipped) with explanations
-- Don't fix unrelated lint issues
+- Place tests adjacent to the source file.
+- Use exact boundary conditions.
+- Use `bun test`.
+- Use `mock.module()` when mocking modules.
