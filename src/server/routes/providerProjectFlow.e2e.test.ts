@@ -116,6 +116,66 @@ test('provider to model to project flow works through routes', async () => {
   expect(storedProjectPrompt?.originalText).toBe('Screen for relevance')
 })
 
+test('provider connection patch updates a referenced connection', async () => {
+  if (!app || !queryDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const createConnectionResponse = await app.handle(
+    new Request('http://localhost/api/provider-connections', {
+      body: JSON.stringify({baseURL: 'http://127.0.0.1:1234/v1', label: 'LM Studio', providerKind: 'llmstudio'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const createConnectionBody = (await createConnectionResponse.json()) as {data: {connection: {id: string}}}
+
+  expect(createConnectionResponse.status).toBe(200)
+
+  const connectionId = createConnectionBody.data.connection.id
+  const addModelResponse = await app.handle(
+    new Request(`http://localhost/api/provider-connections/${connectionId}/models`, {
+      body: JSON.stringify({displayName: 'Local Model', remoteModelId: 'local-model'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+
+  expect(addModelResponse.status).toBe(200)
+
+  const patchConnectionResponse = await app.handle(
+    new Request(`http://localhost/api/provider-connections/${connectionId}`, {
+      body: JSON.stringify({
+        baseURL: 'http://127.0.0.1:4321/v1',
+        enabled: true,
+        label: 'LM Studio Updated',
+        manualWorkerUrls: [],
+        workerUrlMode: 'manual',
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const patchConnectionBody = (await patchConnectionResponse.json()) as {
+    data: {connection: {baseURL: string | null; label: string}}
+  }
+
+  expect(patchConnectionResponse.status).toBe(200)
+  expect(patchConnectionBody.data.connection.label).toBe('LM Studio Updated')
+  expect(patchConnectionBody.data.connection.baseURL).toBe('http://127.0.0.1:4321/v1')
+
+  const [storedConnection] = await queryDatabase<{baseURL: string | null; label: string}>(`
+    SELECT
+      base_url AS baseURL,
+      label
+    FROM app.provider_connection
+    WHERE id = '${connectionId}'
+    LIMIT 1
+  `)
+
+  expect(storedConnection).toEqual({baseURL: 'http://127.0.0.1:4321/v1', label: 'LM Studio Updated'})
+})
+
 test('llama.cpp cli provider connection stores cli mode and uses the local default base URL', async () => {
   if (!app || !queryDatabase) {
     throw new Error('Test app not initialized')
