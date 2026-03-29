@@ -1,6 +1,6 @@
 import './index.css'
 
-import {QueryClient, QueryClientProvider} from '@tanstack/solid-query'
+import {QueryClient} from '@tanstack/solid-query'
 import {render} from 'solid-js/web'
 
 import {Router} from './router'
@@ -12,10 +12,6 @@ const queryClient = new QueryClient({
 const rootElement = document.getElementById('root')
 if (rootElement && !rootElement.innerHTML) {
   render(() => {
-    return (
-      <QueryClientProvider client={queryClient}>
-        <Router />
-      </QueryClientProvider>
-    )
+    return <Router queryClient={queryClient} />
   }, rootElement)
 }

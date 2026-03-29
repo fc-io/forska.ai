@@ -1,6 +1,8 @@
+import {QueryClient} from '@tanstack/solid-query'
 import {createRouter, RouterProvider} from '@tanstack/solid-router'
 import type {JSX} from 'solid-js'
 
+import {buildRouterQueryClientWrap} from './routerQueryClientWrap'
 import {routeTree} from './routeTree.gen'
 
 const DefaultPending = (): JSX.Element => {
@@ -29,6 +31,8 @@ declare module '@tanstack/solid-router' {
   }
 }
 
-export const Router = (): JSX.Element => {
-  return <RouterProvider router={router} />
+type RouterProps = {queryClient: QueryClient}
+
+export const Router = (props: RouterProps): JSX.Element => {
+  return <RouterProvider router={router} Wrap={buildRouterQueryClientWrap(props.queryClient)} />
 }
