@@ -164,3 +164,14 @@
 - Deferred items in `FOR_KEY.md` are either fixed or explicitly accepted.
 - New FK-sensitive PRs follow these rules by default.
 - Constraint errors become rare and explainable, not recurring surprises.
+
+## FK-sensitive PR Checklist
+
+- [ ] Touches a hot parent? Add/update a temp-DB repro under live child refs.
+- [ ] Writes 2+ related tables? Keep it in one tx or explain why not.
+- [ ] Adds or changes a FK? Prove normal writes stay safe in DuckDB.
+- [ ] Adds a new child of `app.project`? Update archived-delete guard logic.
+- [ ] Introduces or changes a logical ref? Name the owner and validation point.
+- [ ] Uses a natural-key create path? Prefer DB uniqueness + upsert over select-then-insert.
+- [ ] Update `FOR_KEY.md` if the risk posture changed.
+- [ ] Run the relevant gates: `bun run lint`, targeted `bun test <file>`, `bun run db:mig` for schema work.

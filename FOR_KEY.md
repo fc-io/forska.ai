@@ -457,3 +457,20 @@ For each mutation route/job:
 - `src/server/routes/DataSourcesImportRoutes/**`: `data_source.import_route` is still a string ref and needs drift detection or normalization.
 - `src/server/cron/fullTextConversionJobs.ts`, `src/db/duckdbMigrations/0022_fullTextConversionModelConfig.sql`: `full_text_conversion_model_id` still needs runtime validation after later model deletes/rebuilds.
 - `src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts`: `app.llm_status` provider/model attribution remains logical only and needs shared-worker drift checks.
+
+## Future Guardrails
+
+- One user action -> one rollback-safe write flow. No child delete now / restore later across tx boundaries.
+- Treat hot parents as dangerous: `app.prompt`, `app.project`, `app.article`, `app.judgment`, `app.model`, `app.judgment_job`.
+- Any new update/delete path on a hot parent needs a temp-DB repro under live child refs.
+- Keep FKs selectively. No new hot-parent FK without a DuckDB repro proving normal writes stay safe.
+- If a FK is dropped, replace it with one owner write path, runtime validation, regression coverage, and a note here.
+- Prefer DB uniqueness + upsert-style flows over select-then-insert on natural keys.
+- Cleanup and rebuild flows must assert the live FK child inventory they handle.
+- Every logical ref needs one named owner and one validation layer.
+
+### Future Quality Gates
+
+- TS route/service/provider changes: `bun run lint` + targeted `bun test <file>`.
+- Schema changes: `bun run db:mig` + targeted migration-adjacent tests.
+- FK-sensitive parent updates/deletes: add or update one temp-DB repro proving safe behavior under live children.
