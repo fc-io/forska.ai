@@ -71,6 +71,34 @@ const getRemoteUrlsFromWorkerUrls = (workerUrls: string[]): string[] => {
   )
 }
 
+const getMatchedWorkerUrls = ({
+  savedWorkerUrls,
+  runtimeWorkerUrls,
+}: {
+  runtimeWorkerUrls: string[]
+  savedWorkerUrls: string[]
+}): string[] => {
+  return savedWorkerUrls.filter((workerUrl) => {
+    return runtimeWorkerUrls.includes(workerUrl)
+  })
+}
+
+const getMatchedModelNames = ({
+  runtimeModelNames,
+  savedModelIds,
+}: {
+  runtimeModelNames: string[]
+  savedModelIds: string[]
+}): string[] => {
+  return savedModelIds.filter((modelId) => {
+    return runtimeModelNames.includes(modelId)
+  })
+}
+
+const getUniqueReasons = (reasons: ProviderRuntimeMatch['reasons']): ProviderRuntimeMatch['reasons'] => {
+  return Array.from(new Set(reasons))
+}
+
 export const getProviderConnectionResolutionMode = ({
   config,
   providerKind,
@@ -160,50 +188,139 @@ export const getProviderConnectionRuntimeMatch = ({
   baseURL,
   config,
   providerKind,
+  savedModelIds = [],
   runtimeSummary,
 }: {
   baseURL: string | null | undefined
   config: ProviderConnectionConfig
   providerKind: string | null | undefined
+  savedModelIds?: string[]
   runtimeSummary?: ProviderRuntimeSummary
 }): ProviderRuntimeMatch => {
   const candidates = getProviderConnectionRuntimeCandidates({baseURL, config, providerKind, runtimeSummary})
   const resolutionMode = getProviderConnectionResolutionMode({config, providerKind})
-  const matchedCandidate =
-    candidates.find((candidate) => {
-      return candidate.status === 'matched'
-    }) ?? null
   const normalizedBaseURL = getTrimmedValue(baseURL)
+  const manualWorkerUrls = normalizeWorkerUrls(config.manualWorkerUrls)
   const runtimeCandidate = candidates.find((candidate) => {
     return candidate.source === 'detected-runtime'
   })
+  const runtimeModelNames = runtimeCandidate?.modelNames ?? []
+  const runtimeRemoteUrls = runtimeCandidate?.remoteUrls ?? []
+  const runtimeWorkerUrls = runtimeCandidate?.localUrls ?? []
+  const matchedWorkerUrls = getMatchedWorkerUrls({runtimeWorkerUrls, savedWorkerUrls: manualWorkerUrls})
+  const hasBaseUrlOverlap = normalizedBaseURL ? runtimeRemoteUrls.includes(normalizedBaseURL) : false
+  const hasWorkerUrlOverlap = matchedWorkerUrls.length > 0
+  const hasUrlOverlap = hasBaseUrlOverlap || hasWorkerUrlOverlap
+  const matchedModelNames = getMatchedModelNames({runtimeModelNames, savedModelIds: getUniqueValues(savedModelIds)})
+  const hasModelOverlap = matchedModelNames.length > 0
+  const hasSavedBaseUrlConflict = Boolean(normalizedBaseURL) && !hasBaseUrlOverlap && runtimeRemoteUrls.length > 0
+  const hasSavedWorkerConflict = manualWorkerUrls.length > 0 && !hasWorkerUrlOverlap && runtimeWorkerUrls.length > 0
 
-  return matchedCandidate
-    ? {
-        candidate: matchedCandidate,
-        localUrls: matchedCandidate.localUrls,
-        modelNames: matchedCandidate.modelNames,
-        reason: matchedCandidate.reason,
-        remoteUrls: matchedCandidate.remoteUrls,
-        resolutionMode,
-        source: matchedCandidate.source,
-        status: 'matched',
-      }
-    : {
-        candidate: null,
-        localUrls: [],
-        modelNames: runtimeCandidate?.modelNames ?? [],
-        reason:
-          resolutionMode === 'auto-detect'
-            ? (runtimeCandidate?.reason ?? 'runtime-provider-missing')
-            : normalizedBaseURL
-              ? 'manual-provider'
-              : 'no-saved-url',
-        remoteUrls: [],
-        resolutionMode,
-        source: 'none',
-        status: 'unavailable',
-      }
+  if (resolutionMode === 'manual') {
+    const manualCandidate =
+      candidates.find((candidate) => {
+        return candidate.status === 'matched'
+      }) ?? null
+    const reason = manualCandidate?.reason ?? (normalizedBaseURL ? 'manual-provider' : 'no-saved-url')
+    const effectiveWorkerUrls = manualCandidate?.source === 'saved-manual-worker' ? manualCandidate.localUrls : []
+
+    return {
+      candidate: manualCandidate,
+      detectedModelNames: runtimeModelNames,
+      effectiveBaseURL: normalizedBaseURL,
+      effectiveWorkerUrls,
+      localUrls: manualCandidate?.localUrls ?? [],
+      modelNames: runtimeModelNames,
+      reason,
+      reasons: getUniqueReasons(['manual-mode', reason]),
+      remoteUrls: manualCandidate?.remoteUrls ?? (normalizedBaseURL ? [normalizedBaseURL] : []),
+      resolutionMode,
+      source: manualCandidate?.source ?? 'none',
+      status: 'manual-only',
+    }
+  }
+
+  if (!runtimeCandidate || runtimeWorkerUrls.length === 0) {
+    const reason = runtimeCandidate?.reason ?? 'runtime-provider-missing'
+
+    return {
+      candidate: null,
+      detectedModelNames: runtimeModelNames,
+      effectiveBaseURL: normalizedBaseURL,
+      effectiveWorkerUrls: [],
+      localUrls: [],
+      modelNames: runtimeModelNames,
+      reason,
+      reasons: getUniqueReasons([reason]),
+      remoteUrls: [],
+      resolutionMode,
+      source: 'none',
+      status: 'unreachable',
+    }
+  }
+
+  if (!hasUrlOverlap) {
+    return {
+      candidate: null,
+      detectedModelNames: runtimeModelNames,
+      effectiveBaseURL: normalizedBaseURL,
+      effectiveWorkerUrls: [],
+      localUrls: [],
+      modelNames: runtimeModelNames,
+      reason:
+        runtimeRemoteUrls.length > 0 || runtimeWorkerUrls.length > 0 ? 'runtime-url-missing' : 'runtime-worker-missing',
+      reasons: getUniqueReasons([
+        runtimeCandidate.reason,
+        hasModelOverlap ? 'runtime-model-overlap' : 'runtime-url-missing',
+      ]),
+      remoteUrls: runtimeRemoteUrls,
+      resolutionMode,
+      source: 'none',
+      status: 'unreachable',
+    }
+  }
+
+  if (hasSavedBaseUrlConflict || hasSavedWorkerConflict) {
+    return {
+      candidate: runtimeCandidate,
+      detectedModelNames: runtimeModelNames,
+      effectiveBaseURL: normalizedBaseURL,
+      effectiveWorkerUrls: [],
+      localUrls: runtimeWorkerUrls,
+      modelNames: runtimeModelNames,
+      reason: 'runtime-url-conflict',
+      reasons: getUniqueReasons([
+        runtimeCandidate.reason,
+        hasBaseUrlOverlap ? 'runtime-base-url-overlap' : 'runtime-url-conflict',
+        hasWorkerUrlOverlap ? 'runtime-worker-url-overlap' : 'runtime-url-conflict',
+        hasModelOverlap ? 'runtime-model-overlap' : 'runtime-url-conflict',
+      ]),
+      remoteUrls: runtimeRemoteUrls,
+      resolutionMode,
+      source: 'none',
+      status: 'ambiguous',
+    }
+  }
+
+  return {
+    candidate: runtimeCandidate,
+    detectedModelNames: runtimeModelNames,
+    effectiveBaseURL: runtimeRemoteUrls[0] ?? normalizedBaseURL,
+    effectiveWorkerUrls: runtimeWorkerUrls,
+    localUrls: runtimeWorkerUrls,
+    modelNames: runtimeModelNames,
+    reason: 'runtime-auto-detect',
+    reasons: getUniqueReasons([
+      'runtime-auto-detect',
+      hasBaseUrlOverlap ? 'runtime-base-url-overlap' : 'runtime-auto-detect',
+      hasWorkerUrlOverlap ? 'runtime-worker-url-overlap' : 'runtime-auto-detect',
+      hasModelOverlap ? 'runtime-model-overlap' : 'runtime-auto-detect',
+    ]),
+    remoteUrls: runtimeRemoteUrls,
+    resolutionMode,
+    source: runtimeCandidate.source,
+    status: 'matched',
+  }
 }
 
 const getWorkerStateFromRuntimeMode = ({
@@ -213,9 +330,9 @@ const getWorkerStateFromRuntimeMode = ({
   match: ProviderRuntimeMatch
   runtimeWorkerUrls: string[]
 }): ProviderConnectionWorkerState => {
-  return match.source === 'detected-runtime'
+  return match.status === 'matched' && match.source === 'detected-runtime'
     ? {
-        effectiveWorkerUrls: match.localUrls,
+        effectiveWorkerUrls: match.effectiveWorkerUrls,
         match,
         resolutionMode: match.resolutionMode,
         runtimeWorkerUrls,
@@ -231,9 +348,9 @@ const getWorkerStateFromManualMode = ({
   match: ProviderRuntimeMatch
   runtimeWorkerUrls: string[]
 }): ProviderConnectionWorkerState => {
-  return match.source === 'saved-manual-worker'
+  return match.status === 'manual-only' && match.source === 'saved-manual-worker'
     ? {
-        effectiveWorkerUrls: match.localUrls,
+        effectiveWorkerUrls: match.effectiveWorkerUrls,
         match,
         resolutionMode: match.resolutionMode,
         runtimeWorkerUrls,
@@ -246,17 +363,19 @@ export const getProviderConnectionWorkerState = ({
   baseURL,
   config,
   providerKind,
+  savedModelIds,
   runtimeSummary,
 }: {
   baseURL?: string | null | undefined
   config: ProviderConnectionConfig
   providerKind: string | null | undefined
+  savedModelIds?: string[]
   runtimeSummary?: ProviderRuntimeSummary
 }): ProviderConnectionWorkerState => {
   const runtimeWorkerUrls = supportsRuntimeWorkerUrls(providerKind)
     ? getRuntimeWorkerUrlsForProvider({providerKind, runtimeSummary})
     : []
-  const match = getProviderConnectionRuntimeMatch({baseURL, config, providerKind, runtimeSummary})
+  const match = getProviderConnectionRuntimeMatch({baseURL, config, providerKind, runtimeSummary, savedModelIds})
 
   return match.resolutionMode === 'auto-detect'
     ? getWorkerStateFromRuntimeMode({match, runtimeWorkerUrls})
@@ -274,15 +393,16 @@ export const getProviderConnectionEffectiveBaseURL = ({
   baseURL,
   config,
   providerKind,
+  savedModelIds,
   runtimeSummary,
 }: {
   baseURL: string | null | undefined
   config: ProviderConnectionConfig
   providerKind: string | null | undefined
+  savedModelIds?: string[]
   runtimeSummary?: ProviderRuntimeSummary
 }): string | null => {
-  const runtimeMatch = getProviderConnectionRuntimeMatch({baseURL, config, providerKind, runtimeSummary})
-  const workerBaseURL = getTrimmedValue(runtimeMatch.remoteUrls[0])
+  const runtimeMatch = getProviderConnectionRuntimeMatch({baseURL, config, providerKind, runtimeSummary, savedModelIds})
 
-  return workerBaseURL ?? getTrimmedValue(baseURL)
+  return runtimeMatch.effectiveBaseURL
 }

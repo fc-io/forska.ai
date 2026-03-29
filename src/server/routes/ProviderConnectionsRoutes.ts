@@ -44,10 +44,19 @@ const getSubmittedManualWorkerUrls = ({
   return manualWorkerUrls ?? workerUrls
 }
 
+const getSavedModelIds = (models: Array<{modelName: string | null; remoteModelId: string | null}>): string[] => {
+  return models.flatMap((model) => {
+    return [model.remoteModelId, model.modelName].filter((value): value is string => {
+      return Boolean(value)
+    })
+  })
+}
+
 const getPublicProviderConnectionPayload = <
   T extends {
     baseURL: string | null
     config: {llamaCppMode?: 'cli' | 'server'; manualWorkerUrls: string[]; workerUrlMode: 'manual' | 'runtime'}
+    models?: Array<{modelName: string | null; remoteModelId: string | null}>
     providerKind: string
     secretRef: string | null
   },
@@ -60,6 +69,7 @@ const getPublicProviderConnectionPayload = <
       baseURL: connection.baseURL,
       config: connection.config,
       providerKind: connection.providerKind,
+      savedModelIds: getSavedModelIds(connection.models ?? []),
     }),
   }
 }
@@ -78,6 +88,7 @@ const getProviderConnectionsPayload = async () => {
           config: connection.config,
           providerKind: connection.providerKind,
           runtimeSummary: runtime,
+          savedModelIds: getSavedModelIds(connection.models),
         }),
       }
     }),

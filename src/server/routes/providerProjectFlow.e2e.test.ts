@@ -209,33 +209,49 @@ test('llama.cpp cli provider connection stores cli mode and uses the local defau
               localUrls: string[]
               modelNames: string[]
               reason:
+                | 'manual-mode'
                 | 'manual-base-url'
                 | 'manual-provider'
                 | 'manual-worker-url'
+                | 'runtime-base-url-overlap'
                 | 'no-saved-url'
                 | 'runtime-auto-detect'
+                | 'runtime-model-overlap'
                 | 'runtime-provider-mismatch'
                 | 'runtime-provider-missing'
+                | 'runtime-url-conflict'
+                | 'runtime-url-missing'
+                | 'runtime-worker-url-overlap'
                 | 'runtime-worker-missing'
               remoteUrls: string[]
               source: 'detected-runtime' | 'saved-base-url' | 'saved-manual-worker'
               status: 'available' | 'matched' | 'unavailable'
             } | null
+            detectedModelNames: string[]
+            effectiveBaseURL: string | null
+            effectiveWorkerUrls: string[]
             localUrls: string[]
             modelNames: string[]
             reason:
+              | 'manual-mode'
               | 'manual-base-url'
               | 'manual-provider'
               | 'manual-worker-url'
+              | 'runtime-base-url-overlap'
               | 'no-saved-url'
               | 'runtime-auto-detect'
+              | 'runtime-model-overlap'
               | 'runtime-provider-mismatch'
               | 'runtime-provider-missing'
+              | 'runtime-url-conflict'
+              | 'runtime-url-missing'
+              | 'runtime-worker-url-overlap'
               | 'runtime-worker-missing'
+            reasons: string[]
             remoteUrls: string[]
             resolutionMode: 'auto-detect' | 'manual'
             source: 'detected-runtime' | 'none' | 'saved-base-url' | 'saved-manual-worker'
-            status: 'matched' | 'unavailable'
+            status: 'ambiguous' | 'manual-only' | 'matched' | 'unreachable'
           }
           resolutionMode: 'auto-detect' | 'manual'
           runtimeWorkerUrls: string[]
@@ -267,13 +283,17 @@ test('llama.cpp cli provider connection stores cli mode and uses the local defau
         source: 'saved-base-url',
         status: 'matched',
       },
+      detectedModelNames: [],
+      effectiveBaseURL: 'http://127.0.0.1:8080',
+      effectiveWorkerUrls: [],
       localUrls: [],
       modelNames: [],
       reason: 'manual-base-url',
+      reasons: ['manual-mode', 'manual-base-url'],
       remoteUrls: ['http://127.0.0.1:8080'],
       resolutionMode: 'manual',
       source: 'saved-base-url',
-      status: 'matched',
+      status: 'manual-only',
     },
     resolutionMode: 'manual',
     runtimeWorkerUrls: [],

@@ -19,15 +19,21 @@ export type ProviderConnectionResolutionMode = 'auto-detect' | 'manual'
 export type ProviderRuntimeCandidateSource = 'detected-runtime' | 'saved-base-url' | 'saved-manual-worker'
 export type ProviderRuntimeCandidateStatus = 'available' | 'matched' | 'unavailable'
 export type ProviderRuntimeMatchSource = ProviderRuntimeCandidateSource | 'none'
-export type ProviderRuntimeMatchStatus = 'matched' | 'unavailable'
+export type ProviderRuntimeMatchStatus = 'ambiguous' | 'manual-only' | 'matched' | 'unreachable'
 export type ProviderRuntimeMatchReason =
+  | 'manual-mode'
   | 'manual-base-url'
   | 'manual-provider'
   | 'manual-worker-url'
+  | 'runtime-base-url-overlap'
   | 'no-saved-url'
   | 'runtime-auto-detect'
+  | 'runtime-model-overlap'
   | 'runtime-provider-mismatch'
   | 'runtime-provider-missing'
+  | 'runtime-url-conflict'
+  | 'runtime-url-missing'
+  | 'runtime-worker-url-overlap'
   | 'runtime-worker-missing'
 
 export type ProviderRuntimeCandidate = {
@@ -41,9 +47,13 @@ export type ProviderRuntimeCandidate = {
 
 export type ProviderRuntimeMatch = {
   candidate: ProviderRuntimeCandidate | null
+  detectedModelNames: string[]
+  effectiveBaseURL: string | null
+  effectiveWorkerUrls: string[]
   localUrls: string[]
   modelNames: string[]
   reason: ProviderRuntimeMatchReason
+  reasons: ProviderRuntimeMatchReason[]
   remoteUrls: string[]
   resolutionMode: ProviderConnectionResolutionMode
   source: ProviderRuntimeMatchSource
