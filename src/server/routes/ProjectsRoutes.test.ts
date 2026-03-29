@@ -406,6 +406,38 @@ test('delete archived route rejects projects with non-terminal judgment jobs', a
   expect(Number(projectRow?.count ?? 0)).toBe(1)
 })
 
+test('archived project cleanup FK inventory matches the live project FK graph', async () => {
+  const [{getAppDatabaseService}, {assertArchivedProjectCleanupProjectForeignKeysTx}] = await Promise.all([
+    import('../services/appDatabaseService.ts'),
+    import('./projectsRoutes/projectsRoutesPostDeleteArchivedProjectForeignKeys.ts'),
+  ])
+
+  await getAppDatabaseService().transaction(async (tx) => {
+    await assertArchivedProjectCleanupProjectForeignKeysTx(tx)
+  })
+})
+
+test('archived project cleanup FK inventory rejects schema drift before delete runs', async () => {
+  const [{assertArchivedProjectCleanupProjectForeignKeysTx, archivedProjectCleanupHandledProjectForeignKeys}] =
+    await Promise.all([import('./projectsRoutes/projectsRoutesPostDeleteArchivedProjectForeignKeys.ts')])
+
+  const tx = {
+    queryJson: async <T>() => {
+      return [
+        ...archivedProjectCleanupHandledProjectForeignKeys,
+        {columnName: 'project_id', schemaName: 'app', tableName: 'future_project_child'},
+      ] as T[]
+    },
+  }
+
+  const inventoryError = await assertArchivedProjectCleanupProjectForeignKeysTx(tx).catch((error) => {
+    return error as Error
+  })
+
+  expect(inventoryError).toBeInstanceOf(Error)
+  expect((inventoryError as Error).message).toContain('Archived project delete FK inventory drift')
+})
+
 test('delete archived route removes archived project rows and keeps cross-project references detached', async () => {
   if (!app || !queryDatabase || !runDatabase) {
     throw new Error('Test app not initialized')

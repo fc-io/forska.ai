@@ -3,6 +3,7 @@ import {Elysia, t} from 'elysia'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getQuotedStringList} from '../../services/appQueryHelpers.ts'
 import {archivedProjectMartTableNames} from '../../services/getDuckdbMartRefreshService.ts'
+import {assertArchivedProjectCleanupProjectForeignKeysTx} from './projectsRoutesPostDeleteArchivedProjectForeignKeys.ts'
 
 type AppTx = {queryJson: <T>(statement: string) => Promise<T[]>; run: (statement: string) => Promise<void>}
 
@@ -495,6 +496,7 @@ const rebuildProjectDeleteTablesTx = async (tx: AppTx, projectIds: string[]) => 
 const deleteArchivedProjectsTx = async (tx: AppTx, projectIds: string[]) => {
   const projectIdsSql = getProjectIdsSql(projectIds)
 
+  await assertArchivedProjectCleanupProjectForeignKeysTx(tx)
   await rebuildProjectDeleteTablesTx(tx, projectIds)
 
   return runStatements(tx, [
