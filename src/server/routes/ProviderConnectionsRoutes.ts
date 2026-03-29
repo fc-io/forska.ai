@@ -4,7 +4,7 @@ import {
   beginProviderAuth,
   finishProviderAuth,
   getProviderAuthConnection,
-  resolveProviderRuntimeCredentials,
+  resolveMatchedProviderRuntimeCredentials,
 } from '../providers/providerAuthService.ts'
 import {getProviderConnectionAuthMode, getResolvedProviderBaseURL} from '../providers/providerConnectionHelpers.ts'
 import {
@@ -347,14 +347,19 @@ export const providerConnectionsRoutes = new Elysia()
         return {data: null, error: 'Provider connection not found'}
       }
 
-      const result = await testProviderConnectionHealth(connection)
+      try {
+        const result = await testProviderConnectionHealth(connection)
 
-      if (!result.ok) {
+        if (!result.ok) {
+          set.status = 400
+          return {data: null, error: result.message}
+        }
+
+        return {data: {message: result.message, modelCount: result.modelCount}, error: null}
+      } catch (error) {
         set.status = 400
-        return {data: null, error: result.message}
+        return {data: null, error: error instanceof Error ? error.message : 'Provider connection test failed'}
       }
-
-      return {data: {message: result.message, modelCount: result.modelCount}, error: null}
     },
     {params: t.Object({id: t.String()})},
   )
@@ -368,11 +373,16 @@ export const providerConnectionsRoutes = new Elysia()
         return {data: null, error: 'Provider connection not found'}
       }
 
-      const definition = requireProviderRegistryEntry(connection.providerKind)
-      const runtimeCredentials = await resolveProviderRuntimeCredentials(connection)
-      const models = await definition.listModels({connection, runtimeCredentials})
+      try {
+        const definition = requireProviderRegistryEntry(connection.providerKind)
+        const runtimeCredentials = await resolveMatchedProviderRuntimeCredentials(connection)
+        const models = await definition.listModels({connection, runtimeCredentials})
 
-      return {data: {models}, error: null}
+        return {data: {models}, error: null}
+      } catch (error) {
+        set.status = 400
+        return {data: null, error: error instanceof Error ? error.message : 'Provider model discovery failed'}
+      }
     },
     {params: t.Object({id: t.String()})},
   )

@@ -3,6 +3,8 @@ import {expect, mock, test} from 'bun:test'
 const providerConnectionHelpersModulePath = new URL('./providerConnectionHelpers.ts', import.meta.url).pathname
 const providerConnectionRepositoryModulePath = new URL('./providerConnectionRepository.ts', import.meta.url).pathname
 const providerRegistryModulePath = new URL('./providerRegistry.ts', import.meta.url).pathname
+const providerRuntimeDetectorModulePath = new URL('./providerRuntimeDetector.ts', import.meta.url).pathname
+const providerRuntimeStateModulePath = new URL('./providerRuntimeState.ts', import.meta.url).pathname
 const providerSecretStoreModulePath = new URL('./providerSecretStore.ts', import.meta.url).pathname
 
 const state = {
@@ -36,6 +38,35 @@ const state = {
   readProviderSecret: mock(async (_secretRef: string | null | undefined) => {
     return null
   }),
+  getDetectedProviderRuntimeSummary: mock(async () => {
+    return {activeModelNames: [], providerKind: null, workerUrls: []}
+  }),
+  getProviderConnectionRuntimeMatch: mock((_input: unknown) => {
+    const candidate = {
+      localUrls: [] as string[],
+      modelNames: [] as string[],
+      reason: 'manual-base-url',
+      remoteUrls: ['https://api.example.com/v1'],
+      source: 'saved-base-url',
+      status: 'matched',
+    }
+
+    return {
+      candidate: candidate as typeof candidate | null,
+      detectedModelNames: [] as string[],
+      effectiveBaseURL: 'https://api.example.com/v1',
+      effectiveWorkerUrls: [] as string[],
+      localUrls: [] as string[],
+      modelNames: [] as string[],
+      reason: 'manual-base-url',
+      reasons: ['manual-mode', 'manual-base-url'],
+      remoteUrls: ['https://api.example.com/v1'],
+      resolutionMode: 'manual',
+      source: 'saved-base-url',
+      status: 'manual-only',
+    }
+  }),
+  markProviderRuntimeUsage: mock((_input: unknown) => {}),
   updateProviderConnection: mock(async (input: unknown) => {
     return {
       ...(input as object),
@@ -68,6 +99,17 @@ void mock.module(providerSecretStoreModulePath, () => {
     readProviderSecret: state.readProviderSecret,
     storeProviderSecret: state.storeProviderSecret,
   }
+})
+
+void mock.module(providerRuntimeDetectorModulePath, () => {
+  return {
+    getDetectedProviderRuntimeSummary: state.getDetectedProviderRuntimeSummary,
+    markProviderRuntimeUsage: state.markProviderRuntimeUsage,
+  }
+})
+
+void mock.module(providerRuntimeStateModulePath, () => {
+  return {getProviderConnectionRuntimeMatch: state.getProviderConnectionRuntimeMatch}
 })
 
 void mock.module(providerConnectionHelpersModulePath, () => {
@@ -124,4 +166,78 @@ test('finishProviderAuth persists secret and updates connection when auth comple
   expect(result.connection?.id).toBe('connection-1')
   expect(state.storeProviderSecret).toHaveBeenCalledTimes(1)
   expect(state.updateProviderConnection).toHaveBeenCalledTimes(1)
+})
+
+test('resolveMatchedProviderRuntimeCredentials keeps the matched effective runtime base URL', async () => {
+  state.getProviderConnectionRuntimeMatch.mockImplementationOnce((_input: unknown) => {
+    return {
+      candidate: {
+        localUrls: ['http://localhost:30001'],
+        modelNames: ['Qwen/Qwen3'],
+        reason: 'runtime-auto-detect',
+        remoteUrls: ['http://localhost:30001/v1'],
+        source: 'detected-runtime',
+        status: 'matched',
+      },
+      detectedModelNames: ['Qwen/Qwen3'],
+      effectiveBaseURL: 'http://localhost:30001/v1',
+      effectiveWorkerUrls: ['http://localhost:30001'],
+      localUrls: ['http://localhost:30001'],
+      modelNames: ['Qwen/Qwen3'],
+      reason: 'runtime-auto-detect',
+      reasons: ['runtime-auto-detect', 'runtime-base-url-overlap'],
+      remoteUrls: ['http://localhost:30001/v1'],
+      resolutionMode: 'auto-detect',
+      source: 'detected-runtime',
+      status: 'matched',
+    }
+  })
+  const service = await loadAuthService()
+  const connection = await service.getProviderAuthConnection('connection-1')
+
+  const credentials = connection ? await service.resolveMatchedProviderRuntimeCredentials(connection) : null
+
+  expect(credentials?.baseURL).toBe('http://localhost:30001/v1')
+  expect(state.markProviderRuntimeUsage).toHaveBeenCalledWith({
+    baseURL: 'http://localhost:30001/v1',
+    providerKind: 'openrouter',
+  })
+})
+
+test('resolveMatchedProviderRuntimeCredentials throws an actionable error for ambiguous auto-detect matches', async () => {
+  state.getProviderConnectionRuntimeMatch.mockImplementationOnce((_input: unknown) => {
+    return {
+      candidate: null,
+      detectedModelNames: ['Qwen/Qwen3'],
+      effectiveBaseURL: 'https://api.example.com/v1',
+      effectiveWorkerUrls: [] as string[],
+      localUrls: [] as string[],
+      modelNames: ['Qwen/Qwen3'],
+      reason: 'runtime-url-conflict',
+      reasons: ['runtime-auto-detect', 'runtime-url-conflict'],
+      remoteUrls: ['http://localhost:30001/v1'],
+      resolutionMode: 'auto-detect',
+      source: 'none',
+      status: 'ambiguous',
+    }
+  })
+  const service = await loadAuthService()
+  const connection = await service.getProviderAuthConnection('connection-1')
+  const getResolutionError = async () => {
+    if (!connection) {
+      throw new Error('Expected provider connection')
+    }
+
+    return service.resolveMatchedProviderRuntimeCredentials(connection)
+  }
+
+  try {
+    await getResolutionError()
+    throw new Error('Expected runtime resolution to fail')
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toBe(
+      'OpenRouter runtime selection is ambiguous at https://api.example.com/v1. Update the saved base URL or manual worker URLs so exactly one runtime matches this connection.',
+    )
+  }
 })

@@ -1,4 +1,4 @@
-import {resolveProviderRuntimeCredentials} from './providerAuthService.ts'
+import {resolveMatchedProviderRuntimeCredentials} from './providerAuthService.ts'
 import {getProviderConnection} from './providerConnectionRepository.ts'
 import {setProviderConnectionCheckState} from './providerConnectionRepository.ts'
 import {upsertDiscoveredModels} from './providerModelRepository.ts'
@@ -19,7 +19,7 @@ export const syncProviderConnectionModels = async (
   connection: ProviderConnectionRecord,
 ): Promise<ProviderSyncResult> => {
   const definition = requireProviderRegistryEntry(connection.providerKind)
-  const runtimeCredentials = await resolveProviderRuntimeCredentials(connection)
+  const runtimeCredentials = await resolveMatchedProviderRuntimeCredentials(connection)
 
   try {
     const discoveredModels = await definition.listModels({connection, runtimeCredentials})

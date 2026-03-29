@@ -2,15 +2,58 @@ import {type ProviderKind} from '../services/providerCatalog.ts'
 import {getProviderConnectionAuthMode} from './providerConnectionHelpers.ts'
 import {getProviderConnection, updateProviderConnection} from './providerConnectionRepository.ts'
 import {requireProviderRegistryEntry} from './providerRegistry.ts'
-import {markProviderRuntimeUsage} from './providerRuntimeDetector.ts'
-import {getProviderConnectionEffectiveBaseURL} from './providerRuntimeState.ts'
+import {getDetectedProviderRuntimeSummary, markProviderRuntimeUsage} from './providerRuntimeDetector.ts'
+import {getProviderConnectionRuntimeMatch} from './providerRuntimeState.ts'
 import {deleteProviderSecret, storeProviderSecret} from './providerSecretStore.ts'
 import {
   type ProviderAuthLifecyclePayload,
   type ProviderAuthLifecycleResult,
   type ProviderConnectionRecord,
   type ProviderRuntimeCredentials,
+  type ProviderRuntimeMatch,
 } from './providerTypes.ts'
+
+const getRuntimeMatchFailureMessage = ({label, match}: {label: string; match: ProviderRuntimeMatch}): string => {
+  const targetLabel = match.effectiveBaseURL ? ` at ${match.effectiveBaseURL}` : ''
+
+  return match.status === 'ambiguous'
+    ? `${label} runtime selection is ambiguous${targetLabel}. Update the saved base URL or manual worker URLs so exactly one runtime matches this connection.`
+    : match.reason === 'runtime-provider-mismatch'
+      ? `No active ${label} runtime matches this connection. Start a ${label} runtime or switch the connection to saved manual settings.`
+      : match.reason === 'runtime-url-missing'
+        ? `${label} runtime auto-detect found an active runtime, but it does not overlap this connection's saved base URL or manual worker URLs. Update the saved URLs or switch the connection to manual settings.`
+        : match.reason === 'runtime-worker-missing'
+          ? `${label} runtime auto-detect found a runtime without reachable worker URLs. Start the runtime with worker URLs exposed or switch the connection to manual settings.`
+          : `No active ${label} runtime matched this connection. Start the runtime or switch the connection to saved manual settings.`
+}
+
+const getResolvedProviderRuntimeCredentials = async ({
+  connection,
+  requireMatchedRuntime,
+}: {
+  connection: ProviderConnectionRecord
+  requireMatchedRuntime: boolean
+}): Promise<ProviderRuntimeCredentials> => {
+  const definition = requireProviderRegistryEntry(connection.providerKind)
+  const runtimeCredentials = await definition.resolveRuntimeCredentials({catalog: definition.catalog, connection})
+  const runtimeSummary = await getDetectedProviderRuntimeSummary()
+  const runtimeMatch = getProviderConnectionRuntimeMatch({
+    baseURL: runtimeCredentials.baseURL ?? connection.baseURL,
+    config: connection.config,
+    providerKind: connection.providerKind,
+    runtimeSummary,
+  })
+
+  if (requireMatchedRuntime && runtimeMatch.resolutionMode === 'auto-detect' && runtimeMatch.status !== 'matched') {
+    throw new Error(getRuntimeMatchFailureMessage({label: definition.catalog.label, match: runtimeMatch}))
+  }
+
+  const baseURL = runtimeMatch.effectiveBaseURL
+
+  markProviderRuntimeUsage({baseURL, providerKind: connection.providerKind})
+
+  return {...runtimeCredentials, baseURL}
+}
 
 const getUnsupportedAuthLifecycleResult = (providerKind: ProviderKind): ProviderAuthLifecycleResult => {
   return {
@@ -108,17 +151,13 @@ export const finishProviderAuth = async ({
 export const resolveProviderRuntimeCredentials = async (
   connection: ProviderConnectionRecord,
 ): Promise<ProviderRuntimeCredentials> => {
-  const definition = requireProviderRegistryEntry(connection.providerKind)
-  const runtimeCredentials = await definition.resolveRuntimeCredentials({catalog: definition.catalog, connection})
-  const baseURL = getProviderConnectionEffectiveBaseURL({
-    baseURL: runtimeCredentials.baseURL ?? connection.baseURL,
-    config: connection.config,
-    providerKind: connection.providerKind,
-  })
+  return getResolvedProviderRuntimeCredentials({connection, requireMatchedRuntime: false})
+}
 
-  markProviderRuntimeUsage({baseURL, providerKind: connection.providerKind})
-
-  return {...runtimeCredentials, baseURL}
+export const resolveMatchedProviderRuntimeCredentials = async (
+  connection: ProviderConnectionRecord,
+): Promise<ProviderRuntimeCredentials> => {
+  return getResolvedProviderRuntimeCredentials({connection, requireMatchedRuntime: true})
 }
 
 export const getProviderAuthService = () => {

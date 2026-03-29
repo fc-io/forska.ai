@@ -109,6 +109,9 @@ const state = {
   getProviderAuthConnection: mock(async (_connectionId: string | null | undefined) => {
     return null
   }),
+  resolveMatchedProviderRuntimeCredentials: mock(async (_connection: unknown) => {
+    return {apiKey: null, baseURL: 'https://api.example.com/v1', headers: {}, secretRef: null}
+  }),
   resolveProviderRuntimeCredentials: mock(async (_connection: unknown) => {
     return {apiKey: null, baseURL: 'https://api.example.com/v1', headers: {}, secretRef: null}
   }),
@@ -203,6 +206,7 @@ void mock.module(providerAuthServiceModulePath, () => {
     beginProviderAuth: state.beginProviderAuth,
     finishProviderAuth: state.finishProviderAuth,
     getProviderAuthConnection: state.getProviderAuthConnection,
+    resolveMatchedProviderRuntimeCredentials: state.resolveMatchedProviderRuntimeCredentials,
     resolveProviderRuntimeCredentials: state.resolveProviderRuntimeCredentials,
   }
 })
@@ -388,4 +392,40 @@ test('provider connections route removes a provider connection', async () => {
   expect(body.data.deletedModelCount).toBe(2)
   expect(state.deleteProviderConnection).toHaveBeenCalledTimes(1)
   expect(state.deleteProviderSecret).toHaveBeenCalledTimes(1)
+})
+
+test('provider connections route reports matched-runtime resolution errors for discovered models', async () => {
+  state.resolveMatchedProviderRuntimeCredentials.mockClear()
+  state.resolveMatchedProviderRuntimeCredentials.mockImplementationOnce(async (_connection: unknown) => {
+    throw new Error(
+      'OpenRouter runtime selection is ambiguous at https://api.example.com/v1. Update the saved base URL or manual worker URLs so exactly one runtime matches this connection.',
+    )
+  })
+  const app = await loadRoutes()
+  const response = await app.handle(
+    new Request('http://localhost/api/provider-connections/connection-1/discovered-models'),
+  )
+  const bodyText = await response.text()
+
+  expect(response.status).toBe(400)
+  expect(bodyText).toContain('runtime selection is ambiguous')
+  expect(state.resolveMatchedProviderRuntimeCredentials).toHaveBeenCalledTimes(1)
+})
+
+test('provider connections route reports matched-runtime resolution errors for connection tests', async () => {
+  state.testProviderConnectionHealth.mockClear()
+  state.testProviderConnectionHealth.mockImplementationOnce(async (_connection: unknown) => {
+    throw new Error(
+      "OpenRouter runtime auto-detect found an active runtime, but it does not overlap this connection's saved base URL or manual worker URLs. Update the saved URLs or switch the connection to manual settings.",
+    )
+  })
+  const app = await loadRoutes()
+  const response = await app.handle(
+    new Request('http://localhost/api/provider-connections/connection-1/test', {method: 'POST'}),
+  )
+  const bodyText = await response.text()
+
+  expect(response.status).toBe(400)
+  expect(bodyText).toContain('does not overlap this connection')
+  expect(state.testProviderConnectionHealth).toHaveBeenCalledTimes(1)
 })
