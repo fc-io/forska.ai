@@ -86,7 +86,7 @@ apptainer registry login --username "$GHCR_USER" oras://ghcr.io
 apptainer pull --arch amd64 "$STACK_ROOT/sglang_latest.sif" docker://ghcr.io/$GHCR_OWNER/sglang-server:$TAG
 ```
 
-The custom `sglang-server` image is needed because upstream `lmsysorg/sglang:*` still does not recognize `Qwen/Qwen3.5-35B-A3B`.
+The custom `sglang-server` image is needed because upstream `lmsysorg/sglang:*` still lags `Qwen3.5` support.
 
 ## Alvis Launch Commands
 
@@ -141,7 +141,7 @@ Default Alvis sbatch runtime metadata:
 
 - nodes: `1`
 - gpus per node: `A100fat:2`
-- model: `Qwen/Qwen3.5-35B-A3B`
+- model: `Qwen/Qwen3.5-27B`
 - one worker per GPU: `0`
 - TP size: `2`
 - DP size: `1`
@@ -165,7 +165,7 @@ OpenAI-compatible example:
 curl http://localhost:30001/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "Qwen/Qwen3.5-35B-A3B",
+    "model": "Qwen/Qwen3.5-27B",
     "messages": [{"role": "user", "content": "Say hello in one sentence."}]
   }'
 ```

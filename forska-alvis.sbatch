@@ -335,7 +335,7 @@ echo "[forska] topology: nodes=$NNODES, gpus/node=$GPUS_PER_NODE, total_gpus=$TO
 echo "[forska] sglang per-node: tp=$TP_SIZE, dp=$DP_SIZE (gpus_used_per_engine=$GPUS_PER_ENGINE)"
 echo "[forska] srun GPU args: ${SRUN_GPU_ARGS[*]}"
 
-export SGLANG_MODEL=${SGLANG_MODEL:-Qwen/Qwen3.5-35B-A3B}
+export SGLANG_MODEL=${SGLANG_MODEL:-Qwen/Qwen3.5-27B}
 export SGLANG_MAX_RUNNING_REQUESTS=${SGLANG_MAX_RUNNING_REQUESTS:-400}
 export SGLANG_API_MAX_INFLIGHT_REQUESTS=${SGLANG_API_MAX_INFLIGHT_REQUESTS:-0}
 export SGLANG_API_MAX_BURST_REQUESTS=${SGLANG_API_MAX_BURST_REQUESTS:-0}
