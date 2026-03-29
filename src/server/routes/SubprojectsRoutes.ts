@@ -8,6 +8,9 @@ import {hasMatchingJudgmentAnswer} from '../utils/judgmentAnswers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
 const appDatabaseService = getAppDatabaseService()
+type AppTx = Parameters<typeof appDatabaseService.transaction>[0] extends (runner: infer T) => Promise<unknown>
+  ? T
+  : never
 
 type ProjectWithPrompts = {
   id: string
@@ -50,14 +53,17 @@ const chunk = <T>(arr: T[], size: number): T[][] => {
   return out
 }
 
-const createDetachedPrompt = async (params: {
-  archived: boolean
-  originalText: string
-  promptHeading: string | null
-  transformedText: string | null
-  type: string | null
-}) => {
-  const [prompt] = await appDatabaseService.queryJson<{id: string}>(`
+const createDetachedPromptTx = async (
+  tx: AppTx,
+  params: {
+    archived: boolean
+    originalText: string
+    promptHeading: string | null
+    transformedText: string | null
+    type: string | null
+  },
+) => {
+  const [prompt] = await tx.queryJson<{id: string}>(`
     INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived)
     VALUES (
       '${appQueryHelpers.escapeSqlString(crypto.randomUUID())}',
@@ -72,6 +78,33 @@ const createDetachedPrompt = async (params: {
   `)
 
   return prompt?.id ?? null
+}
+
+const linkProjectPromptTx = async (
+  tx: AppTx,
+  params: {order: number; originProjectId: string; projectId: string; promptId: string},
+) => {
+  await tx.run(`
+    INSERT INTO app.project_prompt (
+      id,
+      project_id,
+      prompt_id,
+      prompt_order,
+      archived,
+      enabled,
+      origin_project_id
+    )
+    VALUES (
+      '${appQueryHelpers.escapeSqlString(crypto.randomUUID())}',
+      '${appQueryHelpers.escapeSqlString(params.projectId)}',
+      '${appQueryHelpers.escapeSqlString(params.promptId)}',
+      ${params.order},
+      FALSE,
+      TRUE,
+      '${appQueryHelpers.escapeSqlString(params.originProjectId)}'
+    )
+    ON CONFLICT DO NOTHING
+  `)
 }
 
 const getProjectArticleWhereClause = (params: {
@@ -263,167 +296,79 @@ export const subprojectsRoutes = new Elysia()
         modelId: body.modelId,
       })
 
-      const newProjectId = crypto.randomUUID()
-      const [newProject] = await appDatabaseService.queryJson<{
-        id: string
-        name: string
-        description: string | null
-        modelId: string
-        useTitle: boolean
-        useAbstract: boolean
-        useFulltext: boolean
-        useFulltextNoImages: boolean
-        dateFrom: unknown
-        dateTo: unknown
-      }>(`
-        INSERT INTO app.project (
-          id,
-          name,
-          description,
-          model_id,
-          use_title,
-          use_abstract,
-          use_fulltext,
-          date_from,
-          date_to
-        )
-        VALUES (
-          '${appQueryHelpers.escapeSqlString(newProjectId)}',
-          ${appQueryHelpers.getSqlLiteral(body.name)},
-          ${appQueryHelpers.getSqlLiteral(body.description || null)},
-          ${appQueryHelpers.getSqlLiteral(body.modelId)},
-          TRUE,
-          TRUE,
-          FALSE,
-          ${appQueryHelpers.getSqlLiteral(body.dateFrom ? new Date(body.dateFrom) : null)},
-          ${appQueryHelpers.getSqlLiteral(body.dateTo ? new Date(body.dateTo) : null)}
-        )
-        RETURNING
-          id,
-          name,
-          description,
-          model_id AS modelId,
-          use_title AS useTitle,
-          use_abstract AS useAbstract,
-          use_fulltext AS useFulltext,
-          use_fulltext_no_images AS useFulltextNoImages,
-          date_from AS dateFrom,
-          date_to AS dateTo
-      `)
-      if (!newProject) {
-        throw new Error('Failed to create project')
-      }
-
       const promptIdSet = body.promptSelections.reduce((set, selection) => {
         set.add(selection.promptId)
         return set
       }, new Set<string>())
       const promptIds = Array.from(promptIdSet)
+      const promptDetails =
+        promptIds.length === 0
+          ? []
+          : await appDatabaseService.queryJson<PromptRow>(`
+              SELECT
+                id,
+                prompt_heading AS promptHeading,
+                original_text AS originalText,
+                transformed_text AS transformedText,
+                type,
+                archived
+              FROM app.prompt
+              WHERE id IN (${appQueryHelpers.getQuotedStringList(promptIds).join(', ')})
+            `)
 
-      if (promptIds.length > 0) {
-        const promptDetails = await appDatabaseService.queryJson<PromptRow>(`
-          SELECT
-            id,
-            prompt_heading AS promptHeading,
-            original_text AS originalText,
-            transformed_text AS transformedText,
-            type,
-            archived
-          FROM app.prompt
-          WHERE id IN (${appQueryHelpers.getQuotedStringList(promptIds).join(', ')})
-        `)
+      const promptDetailsById = promptDetails.reduce<Map<string, PromptRow>>((map, prompt) => {
+        map.set(prompt.id, prompt)
+        return map
+      }, new Map<string, PromptRow>())
+      const orderedPromptDetails = promptIds.reduce<PromptRow[]>((result, promptId) => {
+        const prompt = promptDetailsById.get(promptId)
 
-        let orderIndex = 0
-        for (const prompt of promptDetails) {
-          const targetPromptId = await createDetachedPrompt({
-            archived: prompt.archived,
-            originalText: prompt.originalText,
-            promptHeading: prompt.promptHeading,
-            transformedText: prompt.transformedText,
-            type: prompt.type,
-          })
+        return prompt ? [...result, prompt] : result
+      }, [])
 
-          if (!targetPromptId) {
-            throw new Error('Failed to create detached subproject prompt')
-          }
-
-          await appDatabaseService.run(`
-            INSERT INTO app.project_prompt (
-              id,
-              project_id,
-              prompt_id,
-              prompt_order,
-              archived,
-              enabled,
-              origin_project_id
-            )
-            VALUES (
-              '${appQueryHelpers.escapeSqlString(crypto.randomUUID())}',
-              '${appQueryHelpers.escapeSqlString(newProject.id)}',
-              '${appQueryHelpers.escapeSqlString(targetPromptId)}',
-              ${orderIndex},
-              FALSE,
-              TRUE,
-              '${appQueryHelpers.escapeSqlString(newProject.id)}'
-            )
-            ON CONFLICT DO NOTHING
-          `)
-          orderIndex += 1
-        }
-      }
-
-      if (body.sourceProjectIds.length === 0) {
-        console.log('[subprojects] No source projects selected, no articles added')
-        await getDuckdbMartRefreshService().queueProjectRefresh(newProject.id, 'SubprojectsRoutes.post')
-        return {
-          data: {
-            project: {
-              ...newProject,
-              dateFrom: appQueryHelpers.getDateValue(newProject.dateFrom),
-              dateTo: appQueryHelpers.getDateValue(newProject.dateTo),
-            },
-            articleCount: 0,
-          },
-        }
-      }
-
-      const promptFilters = body.promptSelections.filter((selection) => {
-        return selection.types.length > 0
-      })
+      const promptFilters =
+        body.sourceProjectIds.length === 0
+          ? []
+          : body.promptSelections.filter((selection) => {
+              return selection.types.length > 0
+            })
       const allSelectedPromptIds = promptFilters.map((filter) => {
         return filter.promptId
       })
-      const [projectImportRoutes, projectBoundsRows] = await Promise.all([
-        appDatabaseService.queryJson<{projectId: string; importRouteId: string}>(`
-          SELECT
-            project_id AS projectId,
-            import_route_id AS importRouteId
-          FROM app.project_import_route
-          WHERE project_id IN (${appQueryHelpers.getQuotedStringList(body.sourceProjectIds).join(', ')})
-        `),
-        appDatabaseService.queryJson<{
-          id: string
-          dateFrom: unknown
-          dateTo: unknown
-          modelId: string | null
-          useTitle: boolean | null
-          useAbstract: boolean | null
-          useFulltext: boolean | null
-          useFulltextNoImages: boolean | null
-        }>(`
-          SELECT
-            id,
-            date_from AS dateFrom,
-            date_to AS dateTo,
-            model_id AS modelId,
-            use_title AS useTitle,
-            use_abstract AS useAbstract,
-            use_fulltext AS useFulltext,
-            use_fulltext_no_images AS useFulltextNoImages
-          FROM app.project
-          WHERE id IN (${appQueryHelpers.getQuotedStringList(body.sourceProjectIds).join(', ')})
-        `),
-      ])
+      const [projectImportRoutes, projectBoundsRows] =
+        body.sourceProjectIds.length === 0
+          ? [[], []]
+          : await Promise.all([
+              appDatabaseService.queryJson<{projectId: string; importRouteId: string}>(`
+                SELECT
+                  project_id AS projectId,
+                  import_route_id AS importRouteId
+                FROM app.project_import_route
+                WHERE project_id IN (${appQueryHelpers.getQuotedStringList(body.sourceProjectIds).join(', ')})
+              `),
+              appDatabaseService.queryJson<{
+                id: string
+                dateFrom: unknown
+                dateTo: unknown
+                modelId: string | null
+                useTitle: boolean | null
+                useAbstract: boolean | null
+                useFulltext: boolean | null
+                useFulltextNoImages: boolean | null
+              }>(`
+                SELECT
+                  id,
+                  date_from AS dateFrom,
+                  date_to AS dateTo,
+                  model_id AS modelId,
+                  use_title AS useTitle,
+                  use_abstract AS useAbstract,
+                  use_fulltext AS useFulltext,
+                  use_fulltext_no_images AS useFulltextNoImages
+                FROM app.project
+                WHERE id IN (${appQueryHelpers.getQuotedStringList(body.sourceProjectIds).join(', ')})
+              `),
+            ])
       const projectBounds = projectBoundsRows.map<ProjectBound>((row) => {
         return {
           id: row.id,
@@ -445,7 +390,7 @@ export const subprojectsRoutes = new Elysia()
       const promptIdsForMapping = allSelectedPromptIds.length > 0 ? Array.from(new Set(allSelectedPromptIds)) : []
       const promptIdsByProjectId = new Map<string, Set<string>>()
 
-      if (promptIdsForMapping.length > 0) {
+      if (body.sourceProjectIds.length > 0 && promptIdsForMapping.length > 0) {
         const projectPromptRows = await appDatabaseService.queryJson<{projectId: string; promptId: string}>(`
           SELECT
             project_id AS projectId,
@@ -521,8 +466,80 @@ export const subprojectsRoutes = new Elysia()
       )
 
       const batchSize = 5000
-      let insertedCount = 0
-      await appDatabaseService.transaction(async (tx) => {
+      const newProject = (await appDatabaseService.transaction(async (tx) => {
+        const newProjectId = crypto.randomUUID()
+        const [createdProject] = await tx.queryJson<{
+          id: string
+          name: string
+          description: string | null
+          modelId: string
+          useTitle: boolean
+          useAbstract: boolean
+          useFulltext: boolean
+          useFulltextNoImages: boolean
+          dateFrom: unknown
+          dateTo: unknown
+        }>(`
+          INSERT INTO app.project (
+            id,
+            name,
+            description,
+            model_id,
+            use_title,
+            use_abstract,
+            use_fulltext,
+            date_from,
+            date_to
+          )
+          VALUES (
+            '${appQueryHelpers.escapeSqlString(newProjectId)}',
+            ${appQueryHelpers.getSqlLiteral(body.name)},
+            ${appQueryHelpers.getSqlLiteral(body.description || null)},
+            ${appQueryHelpers.getSqlLiteral(body.modelId)},
+            TRUE,
+            TRUE,
+            FALSE,
+            ${appQueryHelpers.getSqlLiteral(body.dateFrom ? new Date(body.dateFrom) : null)},
+            ${appQueryHelpers.getSqlLiteral(body.dateTo ? new Date(body.dateTo) : null)}
+          )
+          RETURNING
+            id,
+            name,
+            description,
+            model_id AS modelId,
+            use_title AS useTitle,
+            use_abstract AS useAbstract,
+            use_fulltext AS useFulltext,
+            use_fulltext_no_images AS useFulltextNoImages,
+            date_from AS dateFrom,
+            date_to AS dateTo
+        `)
+
+        if (!createdProject) {
+          throw new Error('Failed to create project')
+        }
+
+        for (const [orderIndex, prompt] of orderedPromptDetails.entries()) {
+          const targetPromptId = await createDetachedPromptTx(tx, {
+            archived: prompt.archived,
+            originalText: prompt.originalText,
+            promptHeading: prompt.promptHeading,
+            transformedText: prompt.transformedText,
+            type: prompt.type,
+          })
+
+          if (!targetPromptId) {
+            throw new Error('Failed to create detached subproject prompt')
+          }
+
+          await linkProjectPromptTx(tx, {
+            order: orderIndex,
+            originProjectId: createdProject.id,
+            projectId: createdProject.id,
+            promptId: targetPromptId,
+          })
+        }
+
         for (const idsChunk of chunk(articleIds, batchSize)) {
           if (idsChunk.length === 0) {
             continue
@@ -532,16 +549,28 @@ export const subprojectsRoutes = new Elysia()
             INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
             VALUES ${idsChunk
               .map((articleId) => {
-                return `('${appQueryHelpers.escapeSqlString(crypto.randomUUID())}', '${appQueryHelpers.escapeSqlString(newProject.id)}', '${appQueryHelpers.escapeSqlString(articleId)}', NULL)`
+                return `('${appQueryHelpers.escapeSqlString(crypto.randomUUID())}', '${appQueryHelpers.escapeSqlString(createdProject.id)}', '${appQueryHelpers.escapeSqlString(articleId)}', NULL)`
               })
               .join(', ')}
             ON CONFLICT DO NOTHING
           `)
-          insertedCount += idsChunk.length
         }
-      })
 
-      console.log(`[subprojects] Inserted ${insertedCount} articles into project ${newProject.id}`)
+        return createdProject
+      })) as {
+        id: string
+        name: string
+        description: string | null
+        modelId: string
+        useTitle: boolean
+        useAbstract: boolean
+        useFulltext: boolean
+        useFulltextNoImages: boolean
+        dateFrom: unknown
+        dateTo: unknown
+      }
+
+      console.log(`[subprojects] Inserted ${articleIds.length} articles into project ${newProject.id}`)
 
       await getDuckdbMartRefreshService().queueProjectRefresh(newProject.id, 'SubprojectsRoutes.post')
 
