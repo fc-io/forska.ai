@@ -68,8 +68,11 @@ const getExistingProviderModelId = async ({
   return existing?.id ?? null
 }
 
-const getProviderModelRowById = async (id: string): Promise<ProviderModelRow | null> => {
-  const [row] = await getAppDatabaseService().queryJson<ProviderModelRow>(`
+const getProviderModelRowByIdWithRunner = async (
+  databaseRunner: DatabaseQueryRunner,
+  id: string,
+): Promise<ProviderModelRow | null> => {
+  const [row] = await databaseRunner.queryJson<ProviderModelRow>(`
     SELECT
       m.id,
       m.provider_connection_id AS providerConnectionId,
@@ -97,14 +100,20 @@ const getProviderModelRowById = async (id: string): Promise<ProviderModelRow | n
   return row ?? null
 }
 
+const getProviderModelRowById = async (id: string): Promise<ProviderModelRow | null> => {
+  return getProviderModelRowByIdWithRunner(getAppDatabaseService(), id)
+}
+
 const updateProviderConnectionDisabledModelIds = async ({
   connectionConfigJson,
+  databaseRunner,
   enabled,
   id,
   providerConnectionId,
   providerKind,
 }: {
   connectionConfigJson: unknown
+  databaseRunner: DatabaseRunner
   enabled: boolean
   id: string
   providerConnectionId: string
@@ -118,11 +127,35 @@ const updateProviderConnectionDisabledModelIds = async ({
       })
     : Array.from(new Set([...currentDisabledModelIds, id]))
 
-  await getAppDatabaseService().run(`
+  await databaseRunner.run(`
     UPDATE app.provider_connection
     SET config_json = ${getJsonSqlLiteral({...currentConfig, disabledModelIds: nextDisabledModelIds})},
         updated_at = current_timestamp
     WHERE id = ${getSqlLiteral(providerConnectionId)}
+  `)
+}
+
+const updateProviderModelRow = async ({
+  databaseRunner,
+  displayName,
+  enabled,
+  id,
+  variant,
+}: {
+  databaseRunner: DatabaseRunner
+  displayName: string
+  enabled: boolean
+  id: string
+  variant: string | null
+}): Promise<void> => {
+  await databaseRunner.run(`
+    UPDATE app.model
+    SET name = ${getSqlLiteral(displayName)},
+        display_name = ${getSqlLiteral(displayName)},
+        enabled = ${getSqlLiteral(enabled)},
+        variant = ${getSqlLiteral(variant)},
+        updated_at = current_timestamp
+    WHERE id = ${getSqlLiteral(id)}
   `)
 }
 
@@ -273,17 +306,10 @@ export const createProviderModel = async ({
   return getProviderModelRecordFromRow(created)
 }
 
-export const updateProviderModel = async ({
-  displayName,
-  enabled,
-  id,
-  variant,
-}: {
-  displayName: string
-  enabled: boolean
-  id: string
-  variant: string | null
-}): Promise<ProviderModelRecord> => {
+export const updateProviderModel = async (
+  {displayName, enabled, id, variant}: {displayName: string; enabled: boolean; id: string; variant: string | null},
+  {afterModelWrite}: {afterModelWrite?: () => Promise<void>} = {},
+): Promise<ProviderModelRecord> => {
   const currentRow = await getProviderModelRowById(id)
 
   if (!currentRow) {
@@ -295,49 +321,33 @@ export const updateProviderModel = async ({
   const variantChanged = variant !== currentModel.variant
   const enabledChanged = enabled !== currentModel.enabled
 
-  if (enabledChanged && currentRow.providerConnectionId) {
-    await updateProviderConnectionDisabledModelIds({
-      connectionConfigJson: currentRow.connectionConfigJson,
-      enabled,
-      id,
-      providerConnectionId: currentRow.providerConnectionId,
-      providerKind: currentRow.provider,
-    })
-
-    if (!displayNameChanged && !variantChanged) {
-      const refreshedRow = await getProviderModelRowById(id)
-
-      if (!refreshedRow) {
-        throw new Error('Provider model not found')
-      }
-
-      return getProviderModelRecordFromRow(refreshedRow)
-    }
-  }
-
   if (!enabledChanged && !displayNameChanged && !variantChanged) {
     return currentModel
   }
 
-  const [updated] = await getAppDatabaseService().queryJson<ProviderModelRow>(
-    getProviderModelReturnQuery(`
-      UPDATE app.model
-      SET name = ${getSqlLiteral(displayName)},
-          display_name = ${getSqlLiteral(displayName)},
-          enabled = ${getSqlLiteral(enabled)},
-          variant = ${getSqlLiteral(variant)},
-          updated_at = current_timestamp
-      WHERE id = ${getSqlLiteral(id)}
-    `),
-  )
+  const refreshedRow = (await getAppDatabaseService().transaction(async (databaseRunner) => {
+    await updateProviderModelRow({databaseRunner, displayName, enabled, id, variant})
 
-  if (!updated) {
+    if (enabledChanged && currentRow.providerConnectionId) {
+      await afterModelWrite?.()
+      await updateProviderConnectionDisabledModelIds({
+        connectionConfigJson: currentRow.connectionConfigJson,
+        databaseRunner,
+        enabled,
+        id,
+        providerConnectionId: currentRow.providerConnectionId,
+        providerKind: currentRow.provider,
+      })
+    }
+
+    return getProviderModelRowByIdWithRunner(databaseRunner, id)
+  })) as ProviderModelRow | null
+
+  if (!refreshedRow) {
     throw new Error('Provider model not found')
   }
 
-  const refreshedRow = await getProviderModelRowById(updated.id)
-
-  return refreshedRow ? getProviderModelRecordFromRow(refreshedRow) : getProviderModelRecordFromRow(updated)
+  return getProviderModelRecordFromRow(refreshedRow)
 }
 
 export const upsertDiscoveredModels = async ({

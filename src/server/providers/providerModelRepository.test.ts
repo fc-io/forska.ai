@@ -1,69 +1,74 @@
-import {expect, mock, test} from 'bun:test'
+import {afterAll, beforeAll, expect, test} from 'bun:test'
+import {rmSync} from 'fs'
 
-const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).pathname
+const tempDbPath = `/tmp/f1-provider-model-repository-upsert-${process.pid}-${Date.now()}.duckdb`
 
-const state = {
-  globalQueryJson: mock(async (_statement: string) => {
-    throw new Error('global queryJson should not be used inside upsertDiscoveredModels transaction')
-  }),
-  globalRun: mock(async (_statement: string) => {}),
-  transaction: mock(
-    async (
-      operation: (databaseRunner: {
-        queryJson: <T>(statement: string) => Promise<T[]>
-        run: (statement: string) => Promise<void>
-      }) => Promise<unknown>,
-    ) => {
-      return await operation({
-        queryJson: async <T>(statement: string) => {
-          if (statement.includes('SELECT id') && statement.includes('FROM app.model')) {
-            return [] as T[]
-          }
+process.env.SERVER_ROLE = 'dev-single'
+process.env.DUCKDB_PATH = tempDbPath
+process.env.API_SERVER_PORT = process.env.API_SERVER_PORT ?? '3001'
+process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 
-          if (statement.includes('INSERT INTO app.model')) {
-            return [
-              {
-                baseURL: null,
-                createdAt: null,
-                displayName: 'Qwen3-4B-Q4_K_M',
-                enabled: true,
-                id: 'model-1',
-                metadataJson: {providerKind: 'llmstudio'},
-                modelName: 'Qwen3-4B-Q4_K_M',
-                name: 'Qwen3-4B-Q4_K_M',
-                provider: null,
-                providerConnectionId: 'connection-1',
-                remoteModelId: 'Qwen3-4B-Q4_K_M',
-                source: 'discovered',
-                updatedAt: null,
-                variant: null,
-                version: null,
-              },
-            ] as T[]
-          }
+let closeDatabase: (() => Promise<void>) | null = null
+let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
+let runDatabase: ((statement: string) => Promise<void>) | null = null
+let upsertDiscoveredModels: typeof import('./providerModelRepository.ts').upsertDiscoveredModels
 
-          throw new Error(`Unexpected SQL in tx.queryJson: ${statement}`)
-        },
-        run: async (_statement: string) => {},
-      })
-    },
-  ),
-}
+beforeAll(async () => {
+  const [
+    {migrateDuckdb},
+    {getAppDatabaseService},
+    {resetDuckdbServiceForTests},
+    {resetServerRuntimeRoleForTests},
+    repository,
+  ] = await Promise.all([
+    import('../../db/migrateDuckdb.ts'),
+    import('../services/appDatabaseService.ts'),
+    import('../utils/duckdbService.ts'),
+    import('../utils/serverRuntimeRole.ts'),
+    import('./providerModelRepository.ts'),
+  ])
 
-void mock.module(appDatabaseServiceModulePath, () => {
-  return {
-    getAppDatabaseService: () => {
-      return {queryJson: state.globalQueryJson, run: state.globalRun, transaction: state.transaction}
-    },
+  resetDuckdbServiceForTests()
+  resetServerRuntimeRoleForTests()
+
+  await migrateDuckdb()
+
+  const database = getAppDatabaseService()
+
+  closeDatabase = () => {
+    return database.close()
   }
+  queryDatabase = (statement: string) => {
+    return database.queryJson(statement)
+  }
+  runDatabase = (statement: string) => {
+    return database.run(statement)
+  }
+  upsertDiscoveredModels = repository.upsertDiscoveredModels
 })
 
-test('upsertDiscoveredModels uses the transaction runner for sync queries and writes', async () => {
-  state.globalQueryJson.mockClear()
-  state.globalRun.mockClear()
-  state.transaction.mockClear()
+afterAll(async () => {
+  await closeDatabase?.()
+  rmSync(tempDbPath, {force: true})
+})
 
-  const {upsertDiscoveredModels} = await import('./providerModelRepository.ts')
+test('upsertDiscoveredModels persists discovered models through the transaction path', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, config_json)
+    VALUES (
+      'upsert-connection',
+      'llmstudio',
+      'LM Studio',
+      TRUE,
+      'none',
+      CAST('{"archived":false,"disabledModelIds":[],"manualWorkerUrls":[],"workerUrlMode":"manual"}' AS JSON)
+    )
+  `)
+
   const savedModels = await upsertDiscoveredModels({
     connection: {
       authMode: 'none',
@@ -72,7 +77,7 @@ test('upsertDiscoveredModels uses the transaction runner for sync queries and wr
       createdAt: null,
       enabled: true,
       hasSecret: false,
-      id: 'connection-1',
+      id: 'upsert-connection',
       label: 'LM Studio',
       lastCheckedAt: null,
       lastError: null,
@@ -92,12 +97,33 @@ test('upsertDiscoveredModels uses the transaction runner for sync queries and wr
     ],
   })
 
-  expect(state.transaction).toHaveBeenCalledTimes(1)
-  expect(state.globalQueryJson).not.toHaveBeenCalled()
+  const storedModels = await queryDatabase<{
+    displayName: string
+    providerConnectionId: string
+    remoteModelId: string
+    source: string
+  }>(`
+    SELECT
+      display_name AS displayName,
+      provider_connection_id AS providerConnectionId,
+      remote_model_id AS remoteModelId,
+      source
+    FROM app.model
+    WHERE provider_connection_id = 'upsert-connection'
+  `)
+
   expect(savedModels).toHaveLength(1)
   expect(savedModels[0]).toMatchObject({
     displayName: 'Qwen3-4B-Q4_K_M',
-    providerConnectionId: 'connection-1',
+    providerConnectionId: 'upsert-connection',
     remoteModelId: 'Qwen3-4B-Q4_K_M',
   })
+  expect(storedModels).toEqual([
+    {
+      displayName: 'Qwen3-4B-Q4_K_M',
+      providerConnectionId: 'upsert-connection',
+      remoteModelId: 'Qwen3-4B-Q4_K_M',
+      source: 'discovered',
+    },
+  ])
 })

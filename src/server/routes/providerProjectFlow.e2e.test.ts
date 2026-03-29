@@ -505,7 +505,7 @@ test('singleton codex delete is blocked when any codex model is still referenced
   ).toEqual([false, false])
 })
 
-test('referenced codex model can be deselected without mutating the model row', async () => {
+test('referenced codex model toggle keeps model row and provider config in sync', async () => {
   if (!app || !queryDatabase || !runDatabase) {
     throw new Error('Test app not initialized')
   }
@@ -557,6 +557,6 @@ test('referenced codex model can be deselected without mutating the model row', 
     LIMIT 1
   `)
 
-  expect(storedModel?.enabled).toBe(true)
+  expect(storedModel?.enabled).toBe(false)
   expect(storedConnectionConfig?.configJson).toContain('codex-model-toggle-model')
 })
