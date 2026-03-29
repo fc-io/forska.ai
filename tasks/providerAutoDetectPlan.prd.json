@@ -1,0 +1,218 @@
+{
+  "name": "Provider Auto Detect Plan",
+  "branchName": "ralph/provider-auto-detect",
+  "description": "Auto-detect live local and remote runtimes and bind them to matching saved provider connections so runtime resolution becomes per-connection instead of global by provider kind.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Define per-connection runtime candidate and match types",
+      "description": "As a maintainer, I want first-class runtime candidate and connection match shapes so provider resolution can move from global implicit runtime state to explicit per-connection matching.",
+      "acceptanceCriteria": [
+        "Add runtime candidate and runtime match types that carry source, status, local and remote URLs, model names, and match reasons.",
+        "Add a connection-level resolution concept or compatibility mapping so saved manual providers remain manual and legacy `workerUrlMode: \"runtime\"` can resolve through auto-detect semantics.",
+        "Saved `baseURL` and `manualWorkerUrls` remain the persisted source of truth and are not overwritten by detected runtime state.",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/providers/providerRuntimeModelGuard.test.ts passes",
+        "bun test src/server/providers/providerRuntimeState.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.test.ts passes",
+        "bun run lint passes",
+        "bun run build passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Persist launcher runtime records for Alvis and MN5",
+      "description": "As a maintainer, I want the Alvis and MN5 launchers to write local runtime records so the server can discover tunneled runtimes without special dev-server env injection.",
+      "acceptanceCriteria": [
+        "`alvis:launch*` and `mn5:launch` write or refresh a small local runtime metadata record with provider kind, model, local tunnel URLs, remote URLs, job id, and source cluster.",
+        "Launcher metadata is removed or marked stale when the runtime stops so dead jobs do not remain eligible for auto-adoption.",
+        "The runtime record format is stable enough for the server detector to load without SSHing into the scheduler on ordinary API requests.",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/providers/providerRuntimeModelGuard.test.ts passes",
+        "bun test src/server/providers/providerRuntimeState.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.test.ts passes",
+        "bun run lint passes",
+        "bun run build passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-003",
+      "title": "Add a low-frequency detector cache with TTL and backoff",
+      "description": "As a maintainer, I want runtime detection to be metadata-first and conservatively cached so Forska can discover live runtimes without aggressively pinging healthy models.",
+      "acceptanceCriteria": [
+        "Add a server-side detector service that caches healthy runtime detection longer and backs off after failures instead of probing on a tight loop.",
+        "The detector loads launcher metadata and saved provider settings before attempting live probes.",
+        "Active runtime usage can refresh candidate freshness so normal judging traffic reduces extra probe traffic.",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/providers/providerRuntimeModelGuard.test.ts passes",
+        "bun test src/server/providers/providerRuntimeState.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.test.ts passes",
+        "bun run lint passes",
+        "bun run build passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001", "US-002"]
+    },
+    {
+      "id": "US-004",
+      "title": "Probe saved local endpoints conservatively",
+      "description": "As a maintainer, I want the detector to probe only saved local provider endpoints so Forska can discover currently served models without scanning arbitrary ports.",
+      "acceptanceCriteria": [
+        "Local detection only probes saved `baseURL` or saved worker URLs for supported local/runtime-backed providers.",
+        "The detector records reachable status and served model names from `/v1/models` or provider-native discovery for matching candidates.",
+        "Local probing remains demand-driven or stale-driven rather than continuous background polling.",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/providers/providerRuntimeModelGuard.test.ts passes",
+        "bun test src/server/providers/providerRuntimeState.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.test.ts passes",
+        "bun run lint passes",
+        "bun run build passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003"]
+    },
+    {
+      "id": "US-005",
+      "title": "Match saved provider connections to detected runtimes",
+      "description": "As a maintainer, I want saved provider connections to auto-adopt only one strong runtime match so manual settings remain explicit and ambiguous runtimes are never chosen silently.",
+      "acceptanceCriteria": [
+        "Matching requires the same `providerKind` plus overlap on saved `baseURL` or saved `manualWorkerUrls` rather than provider kind alone.",
+        "Saved model ids can strengthen a candidate match but cannot override missing URL overlap by themselves.",
+        "The resolver returns `matched`, `manual-only`, `ambiguous`, or `unreachable` together with effective base URL, effective worker URLs, detected model names, and reasons.",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/providers/providerRuntimeModelGuard.test.ts passes",
+        "bun test src/server/providers/providerRuntimeState.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.test.ts passes",
+        "bun run lint passes",
+        "bun run build passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003", "US-004"]
+    },
+    {
+      "id": "US-006",
+      "title": "Use matched runtime in provider test and model sync",
+      "description": "As a maintainer, I want provider connection testing and model discovery to use the matched effective runtime so the Providers screen exercises the same resolved runtime that jobs will use.",
+      "acceptanceCriteria": [
+        "Connection test uses the matched effective runtime when exactly one strong match exists and otherwise falls back to saved manual settings or reports ambiguity clearly.",
+        "Discovered-model listing and sync use the matched effective runtime and return the models currently served there.",
+        "Ambiguous or unreachable matches surface actionable errors instead of silently choosing a candidate.",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/providers/providerRuntimeModelGuard.test.ts passes",
+        "bun test src/server/providers/providerRuntimeState.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.test.ts passes",
+        "bun run lint passes",
+        "bun run build passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-005"]
+    },
+    {
+      "id": "US-007",
+      "title": "Use matched runtime in runtime guard and judgment flows",
+      "description": "As a maintainer, I want judgment-job validation and send paths to resolve the matched provider runtime so remote tunneled models work through ordinary `dev:server` without global runtime env tricks.",
+      "acceptanceCriteria": [
+        "The provider runtime model guard validates against the matched effective runtime for the saved provider connection instead of the old global-by-kind snapshot.",
+        "Judgment job creation and prompt send paths resolve their effective base URL and worker URLs from the matched provider connection runtime.",
+        "A saved manual Alvis or MN5 provider can pass runtime validation and start judgments through the matched tunneled runtime without `alvis:dev:server` or `mn5:dev:server`.",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/providers/providerRuntimeModelGuard.test.ts passes",
+        "bun test src/server/providers/providerRuntimeState.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.test.ts passes",
+        "bun run lint passes",
+        "bun run build passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-005"]
+    },
+    {
+      "id": "US-008",
+      "title": "Expose detection and match state from the provider connections API",
+      "description": "As a maintainer, I want the provider connections API to return detection and match state so the UI and debugging flows can explain exactly which runtime a saved provider is using.",
+      "acceptanceCriteria": [
+        "`/api/provider-connections` returns per-connection match status, effective runtime URLs, detected model names, source metadata, and human-readable reasons.",
+        "The response remains compatible for existing provider-connection consumers that still need saved connection data.",
+        "The API can distinguish `matched local`, `matched Alvis`, `matched MN5`, `manual-only`, `ambiguous`, and `unreachable` states without rewriting the saved provider record.",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/providers/providerRuntimeModelGuard.test.ts passes",
+        "bun test src/server/providers/providerRuntimeState.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.test.ts passes",
+        "bun run lint passes",
+        "bun run build passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-005"]
+    },
+    {
+      "id": "US-009",
+      "title": "Show matched runtime status and detected models in the Providers UI",
+      "description": "As a user, I want the Providers page to show which live runtime each saved provider matches so I can understand whether Forska will use my local server, tunneled cluster job, or only the saved manual settings.",
+      "acceptanceCriteria": [
+        "The Providers UI shows per-connection states such as `matched local`, `matched Alvis`, `matched MN5`, `manual-only`, `ambiguous`, and `unreachable`.",
+        "The Providers UI shows the effective runtime URL or worker URLs together with detected served model names and match reasons.",
+        "Saved manual provider settings remain editable and visible without hidden rewriting when a runtime is matched.",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/providers/providerRuntimeModelGuard.test.ts passes",
+        "bun test src/server/providers/providerRuntimeState.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.test.ts passes",
+        "bun run lint passes",
+        "bun run build passes",
+        "Browser verify in `/providers`: local manual provider matches a live local runtime, manual Alvis or MN5 provider matches a live tunneled runtime, ambiguous match stays non-adopted and visible, and creating a judgment job succeeds through the matched runtime"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-008"]
+    },
+    {
+      "id": "US-010",
+      "title": "Demote global runtime env to a compatibility bridge",
+      "description": "As a maintainer, I want the old global `FORSKA_RUNTIME_*` flow to become a compatibility bridge so ordinary provider-aware runtime resolution works through `dev:server` without cluster-specific server modes.",
+      "acceptanceCriteria": [
+        "Per-connection runtime matching becomes the primary resolution path and the global `FORSKA_RUNTIME_*` path remains only as a compatibility bridge.",
+        "Ordinary `bun run dev:server` can resolve matched local or remote manual providers without requiring special `*:dev:server` startup for provider-aware judging.",
+        "Legacy global-runtime behavior remains covered well enough to avoid regressions during the transition away from implicit provider-kind-wide matching.",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/providers/providerRuntimeModelGuard.test.ts passes",
+        "bun test src/server/providers/providerRuntimeState.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.test.ts passes",
+        "bun run lint passes",
+        "bun run build passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-006", "US-007", "US-009"]
+    }
+  ]
+}
