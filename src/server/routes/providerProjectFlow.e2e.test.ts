@@ -204,6 +204,40 @@ test('llama.cpp cli provider connection stores cli mode and uses the local defau
         providerKind: string
         workerState: {
           effectiveWorkerUrls: string[]
+          match: {
+            candidate: {
+              localUrls: string[]
+              modelNames: string[]
+              reason:
+                | 'manual-base-url'
+                | 'manual-provider'
+                | 'manual-worker-url'
+                | 'no-saved-url'
+                | 'runtime-auto-detect'
+                | 'runtime-provider-mismatch'
+                | 'runtime-provider-missing'
+                | 'runtime-worker-missing'
+              remoteUrls: string[]
+              source: 'detected-runtime' | 'saved-base-url' | 'saved-manual-worker'
+              status: 'available' | 'matched' | 'unavailable'
+            } | null
+            localUrls: string[]
+            modelNames: string[]
+            reason:
+              | 'manual-base-url'
+              | 'manual-provider'
+              | 'manual-worker-url'
+              | 'no-saved-url'
+              | 'runtime-auto-detect'
+              | 'runtime-provider-mismatch'
+              | 'runtime-provider-missing'
+              | 'runtime-worker-missing'
+            remoteUrls: string[]
+            resolutionMode: 'auto-detect' | 'manual'
+            source: 'detected-runtime' | 'none' | 'saved-base-url' | 'saved-manual-worker'
+            status: 'matched' | 'unavailable'
+          }
+          resolutionMode: 'auto-detect' | 'manual'
           runtimeWorkerUrls: string[]
           workerSource: 'manual' | 'none' | 'runtime'
         }
@@ -224,6 +258,24 @@ test('llama.cpp cli provider connection stores cli mode and uses the local defau
   })
   expect(createConnectionBody.data.connection.workerState).toEqual({
     effectiveWorkerUrls: [],
+    match: {
+      candidate: {
+        localUrls: [],
+        modelNames: [],
+        reason: 'manual-base-url',
+        remoteUrls: ['http://127.0.0.1:8080'],
+        source: 'saved-base-url',
+        status: 'matched',
+      },
+      localUrls: [],
+      modelNames: [],
+      reason: 'manual-base-url',
+      remoteUrls: ['http://127.0.0.1:8080'],
+      resolutionMode: 'manual',
+      source: 'saved-base-url',
+      status: 'matched',
+    },
+    resolutionMode: 'manual',
     runtimeWorkerUrls: [],
     workerSource: 'none',
   })

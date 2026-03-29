@@ -45,6 +45,7 @@ const getSubmittedManualWorkerUrls = ({
 
 const getPublicProviderConnectionPayload = <
   T extends {
+    baseURL: string | null
     config: {llamaCppMode?: 'cli' | 'server'; manualWorkerUrls: string[]; workerUrlMode: 'manual' | 'runtime'}
     providerKind: string
     secretRef: string | null
@@ -54,7 +55,11 @@ const getPublicProviderConnectionPayload = <
 ) => {
   return {
     ...getPublicProviderConnection(connection),
-    workerState: getProviderConnectionWorkerState({config: connection.config, providerKind: connection.providerKind}),
+    workerState: getProviderConnectionWorkerState({
+      baseURL: connection.baseURL,
+      config: connection.config,
+      providerKind: connection.providerKind,
+    }),
   }
 }
 

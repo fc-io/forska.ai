@@ -15,8 +15,45 @@ export type ProviderCatalogEntry = {
 
 export type ProviderRuntimeSummary = {activeModelNames: string[]; providerKind: string | null; workerUrls: string[]}
 
+export type ProviderConnectionResolutionMode = 'auto-detect' | 'manual'
+export type ProviderRuntimeCandidateSource = 'detected-runtime' | 'saved-base-url' | 'saved-manual-worker'
+export type ProviderRuntimeCandidateStatus = 'available' | 'matched' | 'unavailable'
+export type ProviderRuntimeMatchSource = ProviderRuntimeCandidateSource | 'none'
+export type ProviderRuntimeMatchStatus = 'matched' | 'unavailable'
+export type ProviderRuntimeMatchReason =
+  | 'manual-base-url'
+  | 'manual-provider'
+  | 'manual-worker-url'
+  | 'no-saved-url'
+  | 'runtime-auto-detect'
+  | 'runtime-provider-mismatch'
+  | 'runtime-provider-missing'
+  | 'runtime-worker-missing'
+
+export type ProviderRuntimeCandidate = {
+  localUrls: string[]
+  modelNames: string[]
+  reason: ProviderRuntimeMatchReason
+  remoteUrls: string[]
+  source: ProviderRuntimeCandidateSource
+  status: ProviderRuntimeCandidateStatus
+}
+
+export type ProviderRuntimeMatch = {
+  candidate: ProviderRuntimeCandidate | null
+  localUrls: string[]
+  modelNames: string[]
+  reason: ProviderRuntimeMatchReason
+  remoteUrls: string[]
+  resolutionMode: ProviderConnectionResolutionMode
+  source: ProviderRuntimeMatchSource
+  status: ProviderRuntimeMatchStatus
+}
+
 export type ProviderConnectionWorkerState = {
   effectiveWorkerUrls: string[]
+  match: ProviderRuntimeMatch
+  resolutionMode: ProviderConnectionResolutionMode
   runtimeWorkerUrls: string[]
   workerSource: 'manual' | 'none' | 'runtime'
 }

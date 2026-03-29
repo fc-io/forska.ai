@@ -13,6 +13,40 @@ export type ProviderTransportFamily =
 export type ProviderLlamaCppMode = 'cli' | 'server'
 export type ProviderWorkerUrlMode = 'manual' | 'runtime'
 export type ProviderWorkerSource = 'manual' | 'none' | 'runtime'
+export type ProviderConnectionResolutionMode = 'auto-detect' | 'manual'
+export type ProviderRuntimeCandidateSource = 'detected-runtime' | 'saved-base-url' | 'saved-manual-worker'
+export type ProviderRuntimeCandidateStatus = 'available' | 'matched' | 'unavailable'
+export type ProviderRuntimeMatchSource = ProviderRuntimeCandidateSource | 'none'
+export type ProviderRuntimeMatchStatus = 'matched' | 'unavailable'
+export type ProviderRuntimeMatchReason =
+  | 'manual-base-url'
+  | 'manual-provider'
+  | 'manual-worker-url'
+  | 'no-saved-url'
+  | 'runtime-auto-detect'
+  | 'runtime-provider-mismatch'
+  | 'runtime-provider-missing'
+  | 'runtime-worker-missing'
+
+export type ProviderRuntimeCandidate = {
+  localUrls: string[]
+  modelNames: string[]
+  reason: ProviderRuntimeMatchReason
+  remoteUrls: string[]
+  source: ProviderRuntimeCandidateSource
+  status: ProviderRuntimeCandidateStatus
+}
+
+export type ProviderRuntimeMatch = {
+  candidate: ProviderRuntimeCandidate | null
+  localUrls: string[]
+  modelNames: string[]
+  reason: ProviderRuntimeMatchReason
+  remoteUrls: string[]
+  resolutionMode: ProviderConnectionResolutionMode
+  source: ProviderRuntimeMatchSource
+  status: ProviderRuntimeMatchStatus
+}
 
 export type ProviderConnectionConfig = {
   archived?: boolean
