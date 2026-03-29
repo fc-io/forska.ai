@@ -1,0 +1,194 @@
+{
+  "name": "DuckDB Foreign Key Audit and Hardening",
+  "branchName": "ralph/duckdb-foreign-key-hardening",
+  "description": "Finish the DuckDB foreign-key audit, add missing regression coverage, and harden the highest-confidence constraint and logical-reference failure paths across prompts, projects, providers, and maintenance cleanup flows.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Complete the remaining FK audit inventory",
+      "description": "As a maintainer, I want the FOR_KEY audit to cover the remaining unreviewed routes, jobs, and maintenance writers so the hardening plan does not miss hidden parent-child mutations.",
+      "acceptanceCriteria": [
+        "Audit the remaining unreviewed FK-sensitive surfaces, including `src/server/routes/HumanAssessmentRoutes/**`, remaining admin or cron writers, and maintenance-only rebuild paths that are not yet captured in `FOR_KEY.md`.",
+        "Update `FOR_KEY.md` with any new risks, coverage gaps, priorities, or accepted-risk notes discovered during the remaining audit pass.",
+        "The findings list in `FOR_KEY.md` clearly distinguishes confirmed bugs, likely bugs, logical-reference risks, and already-fixed items.",
+        "Relevant targeted `bun test` suites pass for the touched code paths.",
+        "`bun run db:mig` succeeds when the story changes schema.",
+        "`bun run lint` passes when the story changes TS, route, or service code."
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Block prompt delete when comparison projects still reference it",
+      "description": "As a maintainer, I want prompt deletion to detect `comparison_project_prompt` references up front so users get a clean blocked response instead of a raw DuckDB foreign-key failure.",
+      "acceptanceCriteria": [
+        "Deleting a prompt that is still referenced by `app.comparison_project_prompt` returns an intentional blocked response instead of surfacing a DuckDB constraint error.",
+        "The prompt delete dependency check includes `comparison_project_prompt` alongside the existing project and judgment reference checks.",
+        "Add a regression test that proves the prompt remains undeleted while a comparison project still references it.",
+        "Relevant targeted `bun test` suites pass for the touched code paths.",
+        "`bun run db:mig` succeeds when the story changes schema.",
+        "`bun run lint` passes when the story changes TS, route, or service code."
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-003",
+      "title": "Relink comparison-project prompts during prompt merge",
+      "description": "As a maintainer, I want prompt merge to rewrite `comparison_project_prompt` rows before deleting the merged prompt so comparison projects survive merges without DuckDB FK failures.",
+      "acceptanceCriteria": [
+        "Prompt merge rewrites `app.comparison_project_prompt` rows from the merged prompt id to the kept prompt id before deleting the merged prompt row.",
+        "Add a regression test that merges a prompt still referenced by a comparison project and completes without a foreign-key error.",
+        "The merged prompt row is deleted only after all comparison-project prompt references point at the kept prompt.",
+        "Relevant targeted `bun test` suites pass for the touched code paths.",
+        "`bun run db:mig` succeeds when the story changes schema.",
+        "`bun run lint` passes when the story changes TS, route, or service code."
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-002"]
+    },
+    {
+      "id": "US-004",
+      "title": "Handle prompt-merge collisions for judgment tables",
+      "description": "As a maintainer, I want prompt merge to resolve `judgment` and `judgment_human` natural-key collisions so merging prompts cannot fail on unique constraints or duplicate semantic rows.",
+      "acceptanceCriteria": [
+        "Prompt merge handles cases where updating `app.judgment.prompt_id` to the kept prompt would collide with an existing natural-key row.",
+        "Prompt merge handles cases where updating `app.judgment_human.prompt_id` to the kept prompt would collide with an existing natural-key row.",
+        "Add regression coverage for both collision shapes and assert the merge completes without surfacing a raw constraint error.",
+        "Relevant targeted `bun test` suites pass for the touched code paths.",
+        "`bun run db:mig` succeeds when the story changes schema.",
+        "`bun run lint` passes when the story changes TS, route, or service code."
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003"]
+    },
+    {
+      "id": "US-005",
+      "title": "Make project-article insertion atomic",
+      "description": "As a maintainer, I want `insertArticlesIntoProject` to apply article links and prompt autolinks atomically so partial writes cannot strand `project_article` rows when a later step fails.",
+      "acceptanceCriteria": [
+        "`src/server/services/insertArticlesIntoProject.ts` applies `project_article` and `project_prompt` writes in one transactional unit or an equivalent atomic flow.",
+        "A failure after the article-link step does not leave partially applied `project_article` rows behind.",
+        "Add regression coverage for the partial-failure path and the normal success path.",
+        "Relevant targeted `bun test` suites pass for the touched code paths.",
+        "`bun run db:mig` succeeds when the story changes schema.",
+        "`bun run lint` passes when the story changes TS, route, or service code."
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-006",
+      "title": "Make subproject creation rollback-safe",
+      "description": "As a maintainer, I want subproject creation to run as one rollback-safe flow so prompt creation, project creation, and article linking cannot leave partially created records when later steps fail.",
+      "acceptanceCriteria": [
+        "`src/server/routes/SubprojectsRoutes.ts` creates the subproject, detached prompts, prompt links, and article links in a single rollback-safe transaction or equivalent atomic flow.",
+        "A simulated failure during the later article-link phase does not leave behind a partially created subproject or detached prompt rows.",
+        "Add regression coverage for the rollback case and keep the existing prompt-detachment behavior intact.",
+        "Relevant targeted `bun test` suites pass for the touched code paths.",
+        "`bun run db:mig` succeeds when the story changes schema.",
+        "`bun run lint` passes when the story changes TS, route, or service code."
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-005"]
+    },
+    {
+      "id": "US-007",
+      "title": "Make comparison-project relinking atomic",
+      "description": "As a maintainer, I want comparison-project updates to relink prompts and import routes atomically so a mid-flight failure cannot leave missing links after a model-id change.",
+      "acceptanceCriteria": [
+        "The comparison-project update path keeps link deletion, parent update, and link restoration in one rollback-safe flow when `modelIds` change.",
+        "A simulated failure during relinking leaves the original comparison-project links intact.",
+        "Add regression coverage for the model-change relink failure path.",
+        "Relevant targeted `bun test` suites pass for the touched code paths.",
+        "`bun run db:mig` succeeds when the story changes schema.",
+        "`bun run lint` passes when the story changes TS, route, or service code."
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-008",
+      "title": "Make provider-model toggle writes atomic",
+      "description": "As a maintainer, I want model enabled-state changes to update both `app.model` and provider `config_json.disabledModelIds` atomically so a partial failure cannot corrupt logical provider state.",
+      "acceptanceCriteria": [
+        "`src/server/providers/providerModelRepository.ts` updates the model enabled flag and the provider connection disabled-model list in one rollback-safe transaction or equivalent atomic flow.",
+        "A simulated failure after one side of the dual write does not leave `app.model.enabled` and `config_json.disabledModelIds` out of sync.",
+        "Add DB-backed regression coverage for the normal toggle path and the partial-failure path.",
+        "Relevant targeted `bun test` suites pass for the touched code paths.",
+        "`bun run db:mig` succeeds when the story changes schema.",
+        "`bun run lint` passes when the story changes TS, route, or service code."
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-009",
+      "title": "Harden provider connection delete and archive after FK removal",
+      "description": "As a maintainer, I want provider-connection delete and archive flows to enforce logical integrity after the dropped FK so normal cleanup stays safe without relying on DuckDB to catch orphaned models.",
+      "acceptanceCriteria": [
+        "`src/server/providers/providerConnectionRepository.ts` performs provider connection usage checks and model or connection cleanup in a rollback-safe flow.",
+        "Add DB-backed regression coverage for referenced provider connections, unreferenced deletes, and archive fallback behavior after the dropped FK.",
+        "The delete or archive path does not leave orphaned `app.model.provider_connection_id` values behind.",
+        "Relevant targeted `bun test` suites pass for the touched code paths.",
+        "`bun run db:mig` succeeds when the story changes schema.",
+        "`bun run lint` passes when the story changes TS, route, or service code."
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-008"]
+    },
+    {
+      "id": "US-010",
+      "title": "Guard archived-project cleanup against FK drift",
+      "description": "As a maintainer, I want archived-project deletion to fail safely when new FK child tables are introduced so a future schema change cannot silently break the cleanup order.",
+      "acceptanceCriteria": [
+        "The archived-project cleanup path has an explicit guard, shared inventory, or equivalent check that keeps its handled `app.project` child tables in sync with the audited FK graph.",
+        "Add regression coverage or validation coverage proving the cleanup helper stays aligned with the current project-child FK inventory.",
+        "Existing archived-project delete behavior still passes with the new guard in place.",
+        "Relevant targeted `bun test` suites pass for the touched code paths.",
+        "`bun run db:mig` succeeds when the story changes schema.",
+        "`bun run lint` passes when the story changes TS, route, or service code."
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-011",
+      "title": "Publish the final FK findings and accepted risks",
+      "description": "As a maintainer, I want the FOR_KEY document to end with a concise final findings list so future work can see which FK risks were fixed, which remain intentional, and which still need follow-up.",
+      "acceptanceCriteria": [
+        "`FOR_KEY.md` ends with a concise findings section that lists fixed issues, accepted risks, deferred risks, and any remaining logical-reference checks.",
+        "The final findings section links each resolved or deferred item back to the relevant route, service, or migration path.",
+        "The final document reflects the results of the completed hardening stories and the remaining audit inventory.",
+        "Relevant targeted `bun test` suites pass for the touched code paths.",
+        "`bun run db:mig` succeeds when the story changes schema.",
+        "`bun run lint` passes when the story changes TS, route, or service code."
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001", "US-002", "US-003", "US-004", "US-005", "US-006", "US-007", "US-008", "US-009", "US-010"]
+    }
+  ]
+}
