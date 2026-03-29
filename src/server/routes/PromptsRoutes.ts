@@ -460,7 +460,62 @@ const promptsAdminRoutes = new Elysia()
             WHERE prompt_id = '${escapeSqlString(mergeId)}'
           `)
 
-          // 4. Delete the merged prompt
+          const comparisonProjectsUsingMerge = await tx.queryJson<{
+            comparisonProjectId: string
+            createdAt: unknown
+            id: string
+            promptOrder: number | null
+          }>(`
+            SELECT id,
+                   comparison_project_id AS comparisonProjectId,
+                   prompt_order AS promptOrder,
+                   created_at AS createdAt
+            FROM app.comparison_project_prompt
+            WHERE prompt_id = '${escapeSqlString(mergeId)}'
+          `)
+
+          for (const comparisonProject of comparisonProjectsUsingMerge) {
+            const existingComparisonProjectPrompt = await tx.queryJson<{id: string}>(`
+              SELECT id
+              FROM app.comparison_project_prompt
+              WHERE comparison_project_id = '${escapeSqlString(comparisonProject.comparisonProjectId)}'
+                AND prompt_id = '${escapeSqlString(keepPromptId)}'
+            `)
+
+            if (existingComparisonProjectPrompt.length > 0) {
+              await tx.run(`
+                DELETE FROM app.comparison_project_prompt
+                WHERE comparison_project_id = '${escapeSqlString(comparisonProject.comparisonProjectId)}'
+                  AND prompt_id = '${escapeSqlString(mergeId)}'
+              `)
+            } else {
+              await tx.run(`
+                DELETE FROM app.comparison_project_prompt
+                WHERE id = '${escapeSqlString(comparisonProject.id)}'
+              `)
+              await tx.run(`
+                INSERT INTO app.comparison_project_prompt (
+                  id,
+                  comparison_project_id,
+                  prompt_id,
+                  prompt_order,
+                  created_at,
+                  updated_at
+                ) VALUES (
+                  '${escapeSqlString(comparisonProject.id)}',
+                  '${escapeSqlString(comparisonProject.comparisonProjectId)}',
+                  '${escapeSqlString(keepPromptId)}',
+                  ${getSqlLiteral(comparisonProject.promptOrder)},
+                  ${getSqlLiteral(getDateValue(comparisonProject.createdAt))},
+                  current_timestamp
+                )
+              `)
+            }
+          }
+        }
+      })
+      await getAppDatabaseService().transaction(async (tx) => {
+        for (const mergeId of mergePromptIds) {
           await tx.run(`
             DELETE FROM app.prompt
             WHERE id = '${escapeSqlString(mergeId)}'

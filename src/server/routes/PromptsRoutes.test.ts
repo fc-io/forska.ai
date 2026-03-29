@@ -58,6 +58,20 @@ const insertPromptFixture = async ({promptId}: {promptId: string}) => {
   `)
 }
 
+const insertPromptMergeFixture = async ({
+  keepPromptId,
+  mergePromptId,
+  comparisonProjectId,
+}: {
+  keepPromptId: string
+  mergePromptId: string
+  comparisonProjectId: string
+}) => {
+  await insertPromptFixture({promptId: keepPromptId})
+  await insertPromptFixture({promptId: mergePromptId})
+  await insertComparisonProjectPromptFixture({comparisonProjectId, promptId: mergePromptId})
+}
+
 const insertComparisonProjectPromptFixture = async ({
   comparisonProjectId,
   promptId,
@@ -101,4 +115,38 @@ test('deleting a prompt is blocked when a comparison project still references it
   expect(response.status).toBe(409)
   expect(body.error).toBe('Prompt delete blocked. Remove project, comparison project, and judgment references first.')
   expect(remainingPrompt?.id).toBe(promptId)
+})
+
+test('merging a prompt rewrites comparison project prompt references before delete', async () => {
+  if (!app || !queryDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const keepPromptId = `keep-comparison-project-prompt-${Date.now()}`
+  const mergePromptId = `merge-comparison-project-prompt-${Date.now()}`
+  const comparisonProjectId = `merge-comparison-project-${Date.now()}`
+
+  await insertPromptMergeFixture({keepPromptId, mergePromptId, comparisonProjectId})
+
+  const response = await app.handle(
+    new Request('http://localhost/api/prompts/merge', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({keepPromptId, mergePromptIds: [mergePromptId]}),
+    }),
+  )
+  const [remainingMergePrompt] = await queryDatabase<{id: string}>(`
+    SELECT id
+    FROM app.prompt
+    WHERE id = '${mergePromptId}'
+  `)
+  const comparisonProjectPrompts = await queryDatabase<{promptId: string}>(`
+    SELECT prompt_id AS promptId
+    FROM app.comparison_project_prompt
+    WHERE comparison_project_id = '${comparisonProjectId}'
+  `)
+
+  expect(response.status).toBe(200)
+  expect(remainingMergePrompt).toBeUndefined()
+  expect(comparisonProjectPrompts).toEqual([{promptId: keepPromptId}])
 })
