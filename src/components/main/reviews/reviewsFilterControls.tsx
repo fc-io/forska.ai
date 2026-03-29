@@ -283,7 +283,7 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                               return (
                                 <Select.Item
                                   item={itemProps.item}
-                                  class="relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-muted data-[disabled]:opacity-50"
+                                  class="relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm text-slate-900 outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-slate-100 data-[disabled]:opacity-50"
                                 >
                                   <Select.ItemLabel class="truncate">{itemProps.item.rawValue.label}</Select.ItemLabel>
                                   <Select.ItemIndicator class="absolute right-2 flex h-3.5 w-3.5 items-center justify-center">
@@ -305,25 +305,22 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                             }}
                           >
                             <Select.Trigger
-                              class="group min-h-11 w-full rounded-md border border-input bg-background bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm shadow-sm transition-[box-shadow,background-color] flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[expanded]:ring-2 data-[expanded]:ring-ring"
+                              class="group flex min-h-11 w-full items-center gap-2 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm text-slate-900 shadow-sm transition-[box-shadow,background-color] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[expanded]:ring-2 data-[expanded]:ring-ring"
                               aria-label={promptFilter.promptName || `Prompt ${promptFilter.promptId}`}
                             >
                               <div class="flex flex-wrap gap-2 grow">
-                                <Show
-                                  when={current().length > 0}
-                                  fallback={<span class="text-muted-foreground">All</span>}
-                                >
+                                <Show when={current().length > 0} fallback={<span class="text-slate-500">All</span>}>
                                   <For each={current()}>
                                     {(val) => {
                                       const displayLabel = getDisplayLabel(promptFilter, val)
                                       return (
-                                        <span class="inline-flex items-center gap-1 rounded-md border border-input bg-muted/70 px-2 py-1 text-sm text-foreground">
+                                        <span class="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-slate-100 px-2 py-1 text-sm text-slate-900">
                                           <span class="truncate max-w-[10rem]" title={displayLabel}>
                                             {displayLabel}
                                           </span>
                                           <button
                                             type="button"
-                                            class="inline-flex size-4 items-center justify-center rounded hover:bg-muted-foreground/10"
+                                            class="inline-flex size-4 items-center justify-center rounded hover:bg-slate-200"
                                             aria-label={`Remove ${displayLabel}`}
                                             onClick={() => {
                                               const next = current().filter((v) => {
@@ -355,7 +352,7 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                               <div class="ml-auto flex items-center gap-1">
                                 <button
                                   type="button"
-                                  class="inline-flex size-6 items-center justify-center rounded hover:bg-muted-foreground/10"
+                                  class="inline-flex size-6 items-center justify-center rounded hover:bg-slate-200"
                                   title="Clear selection"
                                   aria-label="Clear selection"
                                   onClick={() => {
@@ -393,7 +390,7 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                               </div>
                             </Select.Trigger>
                             <Select.Portal>
-                              <Select.Content class="z-50 min-w-56 rounded-md border bg-popover bg-white dark:bg-neutral-900 p-1 text-popover-foreground shadow-xl outline-none">
+                              <Select.Content class="z-50 min-w-56 rounded-md border border-slate-300 bg-white p-1 text-slate-900 shadow-xl outline-none">
                                 <Select.Listbox class="max-h-60 overflow-auto outline-none" />
                               </Select.Content>
                             </Select.Portal>
