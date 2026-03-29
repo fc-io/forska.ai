@@ -2,6 +2,7 @@ import {type ProviderKind} from '../services/providerCatalog.ts'
 import {getProviderConnectionAuthMode} from './providerConnectionHelpers.ts'
 import {getProviderConnection, updateProviderConnection} from './providerConnectionRepository.ts'
 import {requireProviderRegistryEntry} from './providerRegistry.ts'
+import {markProviderRuntimeUsage} from './providerRuntimeDetector.ts'
 import {getProviderConnectionEffectiveBaseURL} from './providerRuntimeState.ts'
 import {deleteProviderSecret, storeProviderSecret} from './providerSecretStore.ts'
 import {
@@ -114,6 +115,8 @@ export const resolveProviderRuntimeCredentials = async (
     config: connection.config,
     providerKind: connection.providerKind,
   })
+
+  markProviderRuntimeUsage({baseURL, providerKind: connection.providerKind})
 
   return {...runtimeCredentials, baseURL}
 }

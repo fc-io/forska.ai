@@ -16,7 +16,8 @@ import {
 } from '../providers/providerConnectionRepository.ts'
 import {testProviderConnectionHealth} from '../providers/providerHealthService.ts'
 import {requireProviderRegistryEntry} from '../providers/providerRegistry.ts'
-import {getProviderConnectionWorkerState, getProviderRuntimeSummary} from '../providers/providerRuntimeState.ts'
+import {getDetectedProviderRuntimeSummary} from '../providers/providerRuntimeDetector.ts'
+import {getProviderConnectionWorkerState} from '../providers/providerRuntimeState.ts'
 import {deleteProviderSecret, storeProviderSecret} from '../providers/providerSecretStore.ts'
 import {type ProviderAuthLifecyclePayload} from '../providers/providerTypes.ts'
 import {
@@ -65,13 +66,22 @@ const getPublicProviderConnectionPayload = <
 
 const getProviderConnectionsPayload = async () => {
   const connections = await listProviderConnections()
+  const runtime = await getDetectedProviderRuntimeSummary()
 
   return {
     catalog: getProviderCatalog(),
     connections: connections.map((connection) => {
-      return getPublicProviderConnectionPayload(connection)
+      return {
+        ...getPublicProviderConnection(connection),
+        workerState: getProviderConnectionWorkerState({
+          baseURL: connection.baseURL,
+          config: connection.config,
+          providerKind: connection.providerKind,
+          runtimeSummary: runtime,
+        }),
+      }
     }),
-    runtime: getProviderRuntimeSummary(),
+    runtime,
   }
 }
 

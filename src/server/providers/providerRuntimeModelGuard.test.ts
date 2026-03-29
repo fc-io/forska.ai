@@ -2,6 +2,7 @@ import {afterEach, expect, mock, test} from 'bun:test'
 
 const providerAuthServiceModulePath = new URL('./providerAuthService.ts', import.meta.url).pathname
 const providerConnectionRepositoryModulePath = new URL('./providerConnectionRepository.ts', import.meta.url).pathname
+const providerRuntimeDetectorModulePath = new URL('./providerRuntimeDetector.ts', import.meta.url).pathname
 const providerModelRepositoryModulePath = new URL('./providerModelRepository.ts', import.meta.url).pathname
 const providerRegistryModulePath = new URL('./providerRegistry.ts', import.meta.url).pathname
 const providerRuntimeDiscoveryModulePath = new URL('./providerRuntimeDiscovery.ts', import.meta.url).pathname
@@ -21,6 +22,9 @@ const state = {
   }),
   getProviderConnectionForStoredModel: mock(async (_modelId: string) => {
     return {baseURL: defaultBaseURL, id: 'connection-1', providerKind: 'sglang'}
+  }),
+  listProviderConnections: mock(async () => {
+    return []
   }),
   getProviderModels: mock(async ([modelId]: string[]) => {
     return new Map([
@@ -57,6 +61,9 @@ const resetState = (): void => {
   state.getProviderConnectionForStoredModel.mockImplementation(async (_modelId: string) => {
     return {baseURL: defaultBaseURL, id: 'connection-1', providerKind: 'sglang'}
   })
+  state.listProviderConnections.mockImplementation(async () => {
+    return []
+  })
   state.getProviderModels.mockImplementation(async ([modelId]: string[]) => {
     return new Map([
       [modelId, {modelName: expectedModelName, providerConnectionId: 'connection-1', remoteModelId: expectedModelName}],
@@ -84,7 +91,10 @@ void mock.module(providerAuthServiceModulePath, () => {
 })
 
 void mock.module(providerConnectionRepositoryModulePath, () => {
-  return {getProviderConnectionForStoredModel: state.getProviderConnectionForStoredModel}
+  return {
+    getProviderConnectionForStoredModel: state.getProviderConnectionForStoredModel,
+    listProviderConnections: state.listProviderConnections,
+  }
 })
 
 void mock.module(providerModelRepositoryModulePath, () => {
@@ -109,6 +119,12 @@ const loadGuard = () => {
 
 afterEach(() => {
   resetState()
+
+  return (import(providerRuntimeDetectorModulePath) as Promise<{clearProviderRuntimeDetectorCache: () => void}>).then(
+    ({clearProviderRuntimeDetectorCache}) => {
+      clearProviderRuntimeDetectorCache()
+    },
+  )
 })
 
 test('getStoredProviderModelRuntimeMatch returns an unreachable-runtime message when SGLang cannot be reached', async () => {

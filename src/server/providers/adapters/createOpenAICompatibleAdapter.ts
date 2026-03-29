@@ -1,6 +1,6 @@
 import {type ProviderCatalogEntry} from '../../services/providerCatalog.ts'
 import {getNormalizedProviderModelMetadata} from '../providerModelMetadata.ts'
-import {discoverOpenAICompatibleRuntimeModel} from '../providerRuntimeDiscovery.ts'
+import {discoverProviderRuntimeModel} from '../providerRuntimeDetector.ts'
 import {
   type ProviderDefinition,
   type ProviderHealthResult,
@@ -46,7 +46,7 @@ const shouldUseRuntimeMetadata = ({
 }: {
   listedModel: ProviderListedModel
   modelCount: number
-  runtimeMetadata: Awaited<ReturnType<typeof discoverOpenAICompatibleRuntimeModel>>
+  runtimeMetadata: Awaited<ReturnType<typeof discoverProviderRuntimeModel>>
 }) => {
   const runtimeNames = [runtimeMetadata?.modelName, runtimeMetadata?.servedModelName].filter(
     (value): value is string => {
@@ -67,7 +67,7 @@ const getRuntimeOnlyListedModel = ({
   runtimeMetadata,
 }: {
   providerKind: ProviderCatalogEntry['kind']
-  runtimeMetadata: NonNullable<Awaited<ReturnType<typeof discoverOpenAICompatibleRuntimeModel>>>
+  runtimeMetadata: NonNullable<Awaited<ReturnType<typeof discoverProviderRuntimeModel>>>
 }): ProviderListedModel => {
   const runtimeModelName = runtimeMetadata.servedModelName ?? runtimeMetadata.modelName ?? 'runtime-model'
 
@@ -102,7 +102,7 @@ const getNormalizedListedModel = ({
 }: {
   listedModel: ProviderListedModel
   providerKind: ProviderCatalogEntry['kind']
-  runtimeMetadata?: Awaited<ReturnType<typeof discoverOpenAICompatibleRuntimeModel>>
+  runtimeMetadata?: Awaited<ReturnType<typeof discoverProviderRuntimeModel>>
   source: 'provider' | 'runtime'
 }): ProviderListedModel => {
   return {
@@ -128,7 +128,7 @@ export const createOpenAICompatibleAdapter = (
     apiKey: string | null
     baseURL: string | null
   }): Promise<ProviderListedModel[]> => {
-    const runtimeMetadata = await discoverOpenAICompatibleRuntimeModel({baseURL, providerKind: catalog.kind})
+    const runtimeMetadata = await discoverProviderRuntimeModel({baseURL, providerKind: catalog.kind})
     if (options.useNativeOllamaDiscovery) {
       try {
         const models = await listNativeOllamaModels({baseURL})

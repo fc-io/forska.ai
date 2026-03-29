@@ -3,7 +3,7 @@ import {resolveProviderRuntimeCredentials} from './providerAuthService.ts'
 import {getProviderConnectionForStoredModel} from './providerConnectionRepository.ts'
 import {getProviderModels} from './providerModelRepository.ts'
 import {requireProviderRegistryEntry} from './providerRegistry.ts'
-import {discoverOpenAICompatibleRuntimeModel} from './providerRuntimeDiscovery.ts'
+import {discoverProviderRuntimeModel} from './providerRuntimeDetector.ts'
 import {type ProviderListedModel, type ProviderModelRecord} from './providerTypes.ts'
 
 type StoredProviderModelRuntimeMatchReason =
@@ -58,7 +58,7 @@ const getRuntimeModelNames = ({
   runtimeMetadata,
 }: {
   listedModels: ProviderListedModel[]
-  runtimeMetadata: Awaited<ReturnType<typeof discoverOpenAICompatibleRuntimeModel>>
+  runtimeMetadata: Awaited<ReturnType<typeof discoverProviderRuntimeModel>>
 }): string[] => {
   return getUniqueModelNames([
     ...getListedModelNames(listedModels),
@@ -233,10 +233,7 @@ const getStoredProviderModelRuntimeMatchUncached = async ({
     const runtimeCredentials = await resolveProviderRuntimeCredentials(connection)
     const [listedModels, runtimeMetadata] = await Promise.all([
       definition.listModels({connection, runtimeCredentials}),
-      discoverOpenAICompatibleRuntimeModel({
-        baseURL: runtimeCredentials.baseURL,
-        providerKind: connection.providerKind,
-      }),
+      discoverProviderRuntimeModel({baseURL: runtimeCredentials.baseURL, providerKind: connection.providerKind}),
     ])
     const runtimeModelNames = getRuntimeModelNames({listedModels, runtimeMetadata})
 
