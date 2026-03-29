@@ -60,6 +60,12 @@ const formatModelVersionLabel = (request: {
   return suffix.length > 0 ? `${base} (${suffix})` : base
 }
 
+const getPromptIdsLabel = (detail: FailedRequestDetailItem): string => {
+  const promptIds = Array.isArray(detail.promptIds) ? detail.promptIds : []
+
+  return promptIds.length > 0 ? promptIds.join(', ') : 'N/A'
+}
+
 const fetchFailedRequest = async (id: string) => {
   console.log('Fetching failed request detail for id:', id)
   const response = await apiClient.api.tokens['failed-requests']({id}).get()
@@ -251,13 +257,13 @@ const FailedRequestDetail = () => {
                               <div class="sm:col-span-1">
                                 <dt class="text-sm font-medium text-gray-500">Prompt IDs</dt>
                                 <dd class="mt-1 text-sm text-gray-900">
-                                  <Show when={request().projectId} fallback={detail.promptIds.join(', ')}>
+                                  <Show when={request().projectId} fallback={getPromptIdsLabel(detail)}>
                                     <Link
                                       // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
                                       to={`/projects/${request().projectId}` as any}
                                       class="text-blue-600 hover:underline"
                                     >
-                                      {detail.promptIds.join(', ')}
+                                      {getPromptIdsLabel(detail)}
                                     </Link>
                                   </Show>
                                 </dd>

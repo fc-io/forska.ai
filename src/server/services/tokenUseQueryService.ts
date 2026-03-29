@@ -54,6 +54,34 @@ type TokenUseProjection = {
 }
 
 type ModelInfo = {provider: string | null; modelName: string | null; version: string | null}
+type FailedRequestDetailRecord = Record<string, unknown>
+
+const getFailedRequestDetailRecord = (value: unknown): FailedRequestDetailRecord | null => {
+  const parsedValue = typeof value === 'string' ? getJsonValue(value) : value
+
+  return parsedValue && typeof parsedValue === 'object' && !Array.isArray(parsedValue)
+    ? (parsedValue as FailedRequestDetailRecord)
+    : null
+}
+
+const getFailedRequestsDetailsValue = (value: unknown): TokenUseRecord['failedRequestsDetails'] => {
+  const parsedValue = getJsonValue(value)
+  const arrayValue = Array.isArray(parsedValue) ? (parsedValue as unknown[]) : null
+
+  return arrayValue
+    ? arrayValue.map<unknown>((entry) => {
+        return getFailedRequestDetailRecord(entry) ?? entry
+      })
+    : null
+}
+
+const getJsonLiteral = (value: unknown) => {
+  return value === null || value === undefined ? 'NULL' : `CAST(${getSqlLiteral(JSON.stringify(value))} AS JSON)`
+}
+
+const getTokenUseInsertLiteral = (column: string, value: unknown) => {
+  return column === 'failed_requests_details' ? getJsonLiteral(value) : getSqlLiteral(value)
+}
 
 const getTokenUseValue = (row: TokenUseRow): TokenUseRecord => {
   return {
@@ -79,7 +107,7 @@ const getTokenUseValue = (row: TokenUseRow): TokenUseRecord => {
     successfulRequests: row.successfulRequests,
     failedRequests: row.failedRequests,
     hasFailedRequests: row.hasFailedRequests ?? false,
-    failedRequestsDetails: getJsonValue(row.failedRequestsDetails) as TokenUseRecord['failedRequestsDetails'],
+    failedRequestsDetails: getFailedRequestsDetailsValue(row.failedRequestsDetails),
     totalSuccessPromptTokens: row.totalSuccessPromptTokens,
     totalSuccessCompletionTokens: row.totalSuccessCompletionTokens,
     totalSuccessTokens: row.totalSuccessTokens,
@@ -130,12 +158,11 @@ const getInsertTokenUseValues = (values: Record<string, unknown>) => {
 const insertTokenUse = async (values: Record<string, unknown>) => {
   const insertValues = getInsertTokenUseValues(values)
   const columns = Object.keys(insertValues)
-  const rowValues = Object.values(insertValues)
   const [row] = await getAppDatabaseService().queryJson<TokenUseRow>(`
     INSERT INTO app.token_use (${columns.join(', ')})
-    VALUES (${rowValues
-      .map((value) => {
-        return getSqlLiteral(value)
+    VALUES (${columns
+      .map((column) => {
+        return getTokenUseInsertLiteral(column, insertValues[column])
       })
       .join(', ')})
     RETURNING ${tokenUseSelectClause}
@@ -289,7 +316,7 @@ const getFailedRequestsRows = async (params: {limit: number; offset: number}) =>
     return {
       ...row,
       createdAt: getDateValue(row.createdAt),
-      failedRequestsDetails: getJsonValue(row.failedRequestsDetails),
+      failedRequestsDetails: getFailedRequestsDetailsValue(row.failedRequestsDetails),
     }
   })
 }
@@ -381,7 +408,11 @@ const getFailedRequestById = async (id: string) => {
   `)
 
   return row
-    ? {...row, createdAt: getDateValue(row.createdAt), failedRequestsDetails: getJsonValue(row.failedRequestsDetails)}
+    ? {
+        ...row,
+        createdAt: getDateValue(row.createdAt),
+        failedRequestsDetails: getFailedRequestsDetailsValue(row.failedRequestsDetails),
+      }
     : null
 }
 
