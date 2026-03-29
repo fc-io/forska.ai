@@ -1,6 +1,34 @@
 import {expect, test} from 'bun:test'
 
+import type {ProviderRuntimeRecord} from '../../utils/providerRuntimeRecords.ts'
 import {getInferenceRuntimeConfig} from './getInferenceRuntimeConfig.ts'
+
+const buildRuntimeRecord = (overrides: Partial<ProviderRuntimeRecord> = {}): ProviderRuntimeRecord => {
+  return {
+    activeModelNames: ['Qwen/Qwen3.5-122B-A10B'],
+    dpSize: 1,
+    gpuGpusPerNode: 4,
+    gpuNnodes: 2,
+    gpuShape: null,
+    jobId: '12345',
+    localWorkerUrls: ['http://localhost:30001'],
+    modelName: 'Qwen/Qwen3.5-122B-A10B',
+    ppSize: 1,
+    providerKind: 'sglang',
+    remoteWorkerUrls: ['http://10.0.0.1:30000', 'http://10.0.0.2:30000'],
+    sglangApiMaxBurstRequests: 64,
+    sglangApiMaxInflightRequests: 48,
+    sglangMaxRunningRequests: 32,
+    sourceCluster: 'alvis',
+    sshJumpHost: 'alvis2',
+    status: 'active',
+    stoppedAt: null,
+    tpSize: 8,
+    updatedAt: 10_000,
+    version: 1,
+    ...overrides,
+  }
+}
 
 test('getInferenceRuntimeConfig applies runtime defaults', () => {
   const runtimeConfig = getInferenceRuntimeConfig({envValues: {}})
@@ -89,4 +117,42 @@ test('getInferenceRuntimeConfig falls back to legacy runtime wiring names', () =
   expect(runtimeConfig.remoteWorkerUrls).toEqual(['http://10.1.0.1:30000'])
   expect(runtimeConfig.displayWorkerUrls).toEqual(['http://localhost:30001'])
   expect(runtimeConfig.sshJumpHost).toBe('alog')
+})
+
+test('getInferenceRuntimeConfig prefers an active launcher runtime record over env wiring', () => {
+  const runtimeConfig = getInferenceRuntimeConfig({
+    envValues: {
+      FORSKA_RUNTIME_ACTIVE_MODEL_NAMES: 'other/model',
+      FORSKA_RUNTIME_LOCAL_WORKER_URLS: 'http://localhost:39999',
+      FORSKA_RUNTIME_PROVIDER_KIND: 'vllm',
+      FORSKA_RUNTIME_REMOTE_WORKER_URLS: 'http://10.9.0.1:30000',
+    },
+    launcherRecords: [buildRuntimeRecord()],
+    now: 10_500,
+  })
+
+  expect(runtimeConfig.activeModelNames).toEqual(['Qwen/Qwen3.5-122B-A10B'])
+  expect(runtimeConfig.providerKind).toBe('sglang')
+  expect(runtimeConfig.remoteWorkerUrls).toEqual(['http://10.0.0.1:30000', 'http://10.0.0.2:30000'])
+  expect(runtimeConfig.displayWorkerUrls).toEqual(['http://localhost:30001', 'http://10.0.0.2:30000'])
+  expect(runtimeConfig.sshJumpHost).toBe('alvis2')
+})
+
+test('getInferenceRuntimeConfig ignores stopped and stale launcher runtime records', () => {
+  const runtimeConfig = getInferenceRuntimeConfig({
+    envValues: {
+      FORSKA_RUNTIME_ACTIVE_MODEL_NAMES: 'env/model',
+      FORSKA_RUNTIME_LOCAL_WORKER_URLS: 'http://localhost:35555',
+      FORSKA_RUNTIME_PROVIDER_KIND: 'sglang',
+      FORSKA_RUNTIME_REMOTE_WORKER_URLS: 'http://10.8.0.1:30000',
+    },
+    launcherRecords: [
+      buildRuntimeRecord({status: 'stopped', stoppedAt: 9_000, updatedAt: 9_000}),
+      buildRuntimeRecord({jobId: '99999', updatedAt: 0}),
+    ],
+    now: 31_000,
+  })
+
+  expect(runtimeConfig.activeModelNames).toEqual(['env/model'])
+  expect(runtimeConfig.displayWorkerUrls).toEqual(['http://localhost:35555'])
 })

@@ -1,6 +1,11 @@
 import {$, spawn} from 'bun'
 
 import {
+  createProviderRuntimeRecord,
+  markProviderRuntimeRecordStopped,
+  writeProviderRuntimeRecord,
+} from '../src/utils/providerRuntimeRecords.ts'
+import {
   ALVIS_HOST,
   ALVIS_JOB_NAME,
   ALVIS_ROOT,
@@ -35,6 +40,44 @@ type WorkerTunnelStatus = {worker: WorkerTunnel; tunnelReady: boolean; apiReady:
 let activeJobId: string | null = null
 const activeTunnelProcs: ReturnType<typeof spawn>[] = []
 let isShuttingDown = false
+
+const writeAlvisRuntimeRecord = async ({config, jobId}: {config: AlvisConfig; jobId: string}): Promise<void> => {
+  const workers = getWorkerTunnels(config)
+
+  await writeProviderRuntimeRecord(
+    createProviderRuntimeRecord({
+      activeModelNames: splitCsv(config.SGLANG_MODEL),
+      dpSize: Number(config.DP_SIZE),
+      gpuGpusPerNode: Number(config.GPUS_PER_NODE),
+      gpuNnodes: Number(config.NNODES),
+      gpuShape: null,
+      jobId,
+      localWorkerUrls: workers.map((worker) => {
+        return worker.localUrl
+      }),
+      ppSize: 1,
+      providerKind: 'sglang',
+      remoteWorkerUrls: workers.map((worker) => {
+        return worker.remoteUrl
+      }),
+      sglangApiMaxBurstRequests: Number(config.SGLANG_API_MAX_BURST_REQUESTS),
+      sglangApiMaxInflightRequests: Number(config.SGLANG_API_MAX_INFLIGHT_REQUESTS),
+      sglangMaxRunningRequests: Number(config.SGLANG_MAX_RUNNING_REQUESTS),
+      sourceCluster: 'alvis',
+      sshJumpHost: ALVIS_HOST,
+      status: 'active',
+      stoppedAt: null,
+      tpSize: Number(config.TP_SIZE),
+      updatedAt: Date.now(),
+    }),
+  )
+}
+
+const markAlvisRuntimeRecordStopped = async (jobId: string | null): Promise<void> => {
+  if (!jobId) return
+
+  await markProviderRuntimeRecordStopped({jobId, sourceCluster: 'alvis'})
+}
 
 const getWorkerCount = (config: AlvisConfig): number => {
   return splitCsv(config.WORKER_URLS).length
@@ -108,6 +151,7 @@ const setupSignalHandler = (): void => {
       }
     }
 
+    await markAlvisRuntimeRecordStopped(activeJobId)
     if (activeJobId) await cancelJob(activeJobId)
 
     log(`Exiting (${signal})`)
@@ -245,6 +289,7 @@ const exitIfJobNoLongerRunning = async (jobId: string): Promise<void> => {
   const status = await getJobStatus(jobId)
   if (status.state === 'RUNNING') return
 
+  await markAlvisRuntimeRecordStopped(jobId)
   console.error(`[alvis] Job ${jobId} is ${status.state}; check ${ALVIS_ROOT}/${ALVIS_JOB_NAME}-${jobId}.log`)
   process.exit(1)
 }
@@ -292,6 +337,7 @@ const monitorTunnelHealth = async (jobId: string): Promise<void> => {
   if (!config) {
     const status = await getJobStatus(jobId)
     if (status.state !== 'RUNNING') {
+      await markAlvisRuntimeRecordStopped(jobId)
       log(`Job ${jobId} is ${status.state}; exiting`)
       process.exit(0)
     }
@@ -306,6 +352,7 @@ const monitorTunnelHealth = async (jobId: string): Promise<void> => {
   })
 
   if (disconnectedWorkers.length === 0) {
+    await writeAlvisRuntimeRecord({config, jobId})
     await sleep(10_000)
     return monitorTunnelHealth(jobId)
   }
@@ -320,6 +367,7 @@ const monitorTunnelHealth = async (jobId: string): Promise<void> => {
 
   const status = await getJobStatus(jobId)
   if (status.state !== 'RUNNING') {
+    await markAlvisRuntimeRecordStopped(jobId)
     log(`Job ${jobId} is ${status.state}; exiting`)
     process.exit(0)
   }
@@ -408,6 +456,7 @@ const startWorkerTunnels = async (config: AlvisConfig, jobId: string, restartCou
       })
       .join(', ')}`,
   )
+  await writeAlvisRuntimeRecord({config, jobId})
   log(`Press Ctrl+C to disconnect and cancel job ${jobId}`)
 
   await monitorTunnelHealth(jobId)

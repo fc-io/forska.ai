@@ -3,8 +3,15 @@
  * Usage: bun run mn5:launch [--force] [--model <id>] [--large-context]
  */
 
-import {$, spawn} from 'bun'
 import {resolve} from 'path'
+
+import {$, spawn} from 'bun'
+
+import {
+  createProviderRuntimeRecord,
+  markProviderRuntimeRecordStopped,
+  writeProviderRuntimeRecord,
+} from '../src/utils/providerRuntimeRecords.ts'
 
 const MN5_ROOT = '/gpfs/projects/ehpc482/dev'
 const TLOG = 'tlog' // Transfer login
@@ -27,11 +34,115 @@ const LARGE_CONTEXT_JOB_NAME = 'forska-mn5-sglang-large-context'
 
 // Track the active job ID and tunnels for cleanup
 let activeJobId: string | null = null
+let activeJobName: string | null = null
 const activeTunnelProcs: ReturnType<typeof spawn>[] = []
 let isShuttingDown = false
 
+type MN5RuntimeConfig = {
+  DP_SIZE: string
+  GPUS_PER_NODE: string
+  NNODES: string
+  SGLANG_API_MAX_BURST_REQUESTS: string
+  SGLANG_API_MAX_INFLIGHT_REQUESTS: string
+  SGLANG_LOCAL_PORT_BASE: string
+  SGLANG_MAX_RUNNING_REQUESTS: string
+  SGLANG_MODEL: string
+  TP_SIZE: string
+  WORKER_URLS: string
+  WORKER_URLS_LOCAL: string
+}
+
 const log = (m: string): void => {
   console.log(`[mn5] ${m}`)
+}
+
+const splitCsv = (value: string | null | undefined): string[] => {
+  return String(value ?? '')
+    .split(',')
+    .map((part) => {
+      return part.trim()
+    })
+    .filter((part) => {
+      return part.length > 0
+    })
+}
+
+const readMn5RuntimeConfig = async (jobId: string): Promise<MN5RuntimeConfig | null> => {
+  if (!activeJobName) return null
+
+  const logPath = `${MN5_ROOT}/${activeJobName}-${jobId}.log`
+  const logContent = await $`ssh ${ALOG} "cat ${logPath} 2>/dev/null || echo ''"`.text()
+  const startMarker = '[mn5:config:start]'
+  const endMarker = '[mn5:config:end]'
+  const startIndex = logContent.indexOf(startMarker)
+  const endIndex = logContent.indexOf(endMarker)
+
+  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) return null
+
+  const configBlock = logContent.slice(startIndex + startMarker.length, endIndex)
+  const config = configBlock.split('\n').reduce<Partial<MN5RuntimeConfig>>((accumulator, line) => {
+    const trimmed = line.trim()
+    if (!trimmed || !trimmed.includes('=')) return accumulator
+
+    const [key, ...valueParts] = trimmed.split('=')
+    return key ? {...accumulator, [key.trim()]: valueParts.join('=').trim()} : accumulator
+  }, {})
+
+  return config.SGLANG_MODEL ? (config as MN5RuntimeConfig) : null
+}
+
+const writeMn5RuntimeRecord = async ({
+  allNodes,
+  jobId,
+  localPortBase,
+}: {
+  allNodes: string[]
+  jobId: string
+  localPortBase: number
+}): Promise<void> => {
+  const config = await readMn5RuntimeConfig(jobId)
+  const localWorkerUrls = splitCsv(config?.WORKER_URLS_LOCAL)
+  const remoteWorkerUrls = splitCsv(config?.WORKER_URLS)
+
+  await writeProviderRuntimeRecord(
+    createProviderRuntimeRecord({
+      activeModelNames: splitCsv(config?.SGLANG_MODEL),
+      dpSize: Number(config?.DP_SIZE ?? '0'),
+      gpuGpusPerNode: Number(config?.GPUS_PER_NODE ?? '0'),
+      gpuNnodes: Number(config?.NNODES ?? String(allNodes.length)),
+      gpuShape: null,
+      jobId,
+      localWorkerUrls:
+        localWorkerUrls.length > 0
+          ? localWorkerUrls
+          : allNodes.map((_, index) => {
+              return `http://localhost:${localPortBase + index}`
+            }),
+      ppSize: 1,
+      providerKind: 'sglang',
+      remoteWorkerUrls:
+        remoteWorkerUrls.length > 0
+          ? remoteWorkerUrls
+          : allNodes.map((node) => {
+              return `http://${node}:${REMOTE_CADDY_PORT}`
+            }),
+      sglangApiMaxBurstRequests: Number(config?.SGLANG_API_MAX_BURST_REQUESTS ?? '0'),
+      sglangApiMaxInflightRequests: Number(config?.SGLANG_API_MAX_INFLIGHT_REQUESTS ?? '0'),
+      sglangMaxRunningRequests: Number(config?.SGLANG_MAX_RUNNING_REQUESTS ?? '0'),
+      sourceCluster: 'mn5',
+      sshJumpHost: ALOG,
+      status: 'active',
+      stoppedAt: null,
+      tpSize: Number(config?.TP_SIZE ?? '0'),
+      updatedAt: Date.now(),
+    }),
+  )
+}
+
+const markMn5RuntimeRecordStopped = async (jobId: string | null): Promise<void> => {
+  if (!jobId) return
+
+  await markProviderRuntimeRecordStopped({jobId, sourceCluster: 'mn5'})
 }
 
 const cancelJob = async (jobId: string): Promise<void> => {
@@ -91,6 +202,7 @@ const setupSignalHandler = (): void => {
         // Ignore
       }
     }
+    await markMn5RuntimeRecordStopped(activeJobId)
     if (activeJobId) {
       await cancelJob(activeJobId)
     }
@@ -429,6 +541,7 @@ const monitorTunnelHealth = async (jobId: string, allNodes: string[], localPorts
   const allOk = failedPorts.length === 0
 
   if (allOk) {
+    await writeMn5RuntimeRecord({allNodes, jobId, localPortBase: localPorts[0] ?? LOCAL_PORT_BASE})
     await sleep(10_000)
     return monitorTunnelHealth(jobId, allNodes, localPorts)
   }
@@ -444,6 +557,7 @@ const monitorTunnelHealth = async (jobId: string, allNodes: string[], localPorts
   // Check job is still running
   const {state, nodeList} = await getJobStatus(jobId)
   if (state !== 'RUNNING') {
+    await markMn5RuntimeRecordStopped(jobId)
     log(`Job ${jobId} is ${state}; exiting`)
     await stopLocalCaddyContainer()
     process.exit(0)
@@ -570,6 +684,7 @@ const startMultiNodeTunnels = async (
     })
     .join(', ')
   log(`SGLang workers available at: ${workerUrls}`)
+  await writeMn5RuntimeRecord({allNodes, jobId, localPortBase})
   log(`Press Ctrl+C to disconnect and cancel job ${jobId}`)
 
   // Monitor tunnel health on ALL ports (not just the first one)
@@ -635,6 +750,7 @@ const main = async () => {
 
   const sbatchFile = largeContext ? LARGE_CONTEXT_SATCH_FILE : DEFAULT_SBATCH_FILE
   const jobName = largeContext ? LARGE_CONTEXT_JOB_NAME : DEFAULT_JOB_NAME
+  activeJobName = jobName
 
   // 1. Check for existing pending/running jobs
   log('Checking for existing jobs...')

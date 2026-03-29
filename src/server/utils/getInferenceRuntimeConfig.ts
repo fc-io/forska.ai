@@ -1,5 +1,11 @@
 import {type as arktype} from 'arktype'
 
+import {
+  getForskaRuntimeEnvFromRecord,
+  getLatestActiveProviderRuntimeRecord,
+  type ProviderRuntimeRecord,
+} from '../../utils/providerRuntimeRecords.ts'
+
 const inferenceRuntimeShape = arktype({
   activeModelNames: 'string | null | undefined',
   bunConfigMaxHttpRequests: 'string | null | undefined',
@@ -68,88 +74,123 @@ const getDisplayWorkerUrls = (remoteWorkerUrls: string[], localWorkerUrls: strin
 
 export const getInferenceRuntimeConfig = ({
   envValues = process.env,
-}: {envValues?: Record<string, string | undefined>} = {}) => {
+  launcherRecords,
+  now,
+}: {envValues?: Record<string, string | undefined>; launcherRecords?: ProviderRuntimeRecord[]; now?: number} = {}) => {
+  const activeLauncherRecord = getLatestActiveProviderRuntimeRecord({now, records: launcherRecords})
+  const mergedEnvValues = {
+    ...envValues,
+    ...(activeLauncherRecord ? getForskaRuntimeEnvFromRecord(activeLauncherRecord) : {}),
+  }
   const gpuNnodes = getFirstConfiguredValue({
-    envValues,
+    envValues: mergedEnvValues,
     fallback: '0',
     keys: ['FORSKA_RUNTIME_GPU_NNODES', 'GPU_NNODES'],
   })
   const gpuGpusPerNode = getFirstConfiguredValue({
-    envValues,
+    envValues: mergedEnvValues,
     fallback: '0',
     keys: ['FORSKA_RUNTIME_GPU_GPUS_PER_NODE', 'GPU_GPUS_PER_NODE'],
   })
   const parsed = inferenceRuntimeShape.assert({
-    activeModelNames: getFirstConfiguredValue({envValues, fallback: '', keys: ['FORSKA_RUNTIME_ACTIVE_MODEL_NAMES']}),
-    bunConfigMaxHttpRequests: getTrimmedValue(envValues.BUN_CONFIG_MAX_HTTP_REQUESTS),
-    codexMaxInflight: getFirstConfiguredValue({envValues, fallback: '0', keys: ['CODEX_MAX_INFLIGHT']}),
-    dpSize: getFirstConfiguredValue({envValues, fallback: '0', keys: ['FORSKA_RUNTIME_DP_SIZE', 'DP_SIZE']}),
+    activeModelNames: getFirstConfiguredValue({
+      envValues: mergedEnvValues,
+      fallback: '',
+      keys: ['FORSKA_RUNTIME_ACTIVE_MODEL_NAMES'],
+    }),
+    bunConfigMaxHttpRequests: getTrimmedValue(mergedEnvValues.BUN_CONFIG_MAX_HTTP_REQUESTS),
+    codexMaxInflight: getFirstConfiguredValue({
+      envValues: mergedEnvValues,
+      fallback: '0',
+      keys: ['CODEX_MAX_INFLIGHT'],
+    }),
+    dpSize: getFirstConfiguredValue({
+      envValues: mergedEnvValues,
+      fallback: '0',
+      keys: ['FORSKA_RUNTIME_DP_SIZE', 'DP_SIZE'],
+    }),
     gpuGpusPerNode,
     gpuNnodes,
     gpuShape: getFirstConfiguredValue({
-      envValues,
+      envValues: mergedEnvValues,
       fallback: 'not set',
       keys: ['FORSKA_RUNTIME_GPU_SHAPE', 'GPU_SHAPE'],
     }),
     gpuTotalGpus: getFirstConfiguredValue({
-      envValues,
+      envValues: mergedEnvValues,
       fallback: String(Number(gpuNnodes) * Number(gpuGpusPerNode) || 0),
       keys: ['FORSKA_RUNTIME_GPU_TOTAL_GPUS', 'GPU_TOTAL_GPUS'],
     }),
-    judgeChunkMaxParallel: getFirstConfiguredValue({envValues, fallback: '0', keys: ['JUDGE_CHUNK_MAX_PARALLEL']}),
+    judgeChunkMaxParallel: getFirstConfiguredValue({
+      envValues: mergedEnvValues,
+      fallback: '0',
+      keys: ['JUDGE_CHUNK_MAX_PARALLEL'],
+    }),
     judgeFirstRequestLogFull: getFirstConfiguredValue({
-      envValues,
+      envValues: mergedEnvValues,
       fallback: 'false',
       keys: ['JUDGE_FIRST_REQUEST_LOG_FULL'],
     }),
     judgeFirstRequestPreviewChars: getFirstConfiguredValue({
-      envValues,
+      envValues: mergedEnvValues,
       fallback: '0',
       keys: ['JUDGE_FIRST_REQUEST_PREVIEW_CHARS'],
     }),
     judgmentsAddToQueueMaxBatchSize: getFirstConfiguredValue({
-      envValues,
+      envValues: mergedEnvValues,
       fallback: '10000',
       keys: ['JUDGMENTS_ADD_TO_QUEUE_MAX_BATCH_SIZE'],
     }),
     judgmentsReadyTargetMultiplier: getFirstConfiguredValue({
-      envValues,
+      envValues: mergedEnvValues,
       fallback: '2',
       keys: ['JUDGMENTS_READY_TARGET_MULTIPLIER'],
     }),
     localWorkerUrls: getFirstConfiguredValue({
-      envValues,
+      envValues: mergedEnvValues,
       fallback: '',
       keys: ['FORSKA_RUNTIME_LOCAL_WORKER_URLS', 'NVIDIA_SMI_WORKER_URLS_LOCAL'],
     }),
-    ppSize: getFirstConfiguredValue({envValues, fallback: '0', keys: ['FORSKA_RUNTIME_PP_SIZE', 'PP_SIZE']}),
-    providerKind: getFirstConfiguredValue({envValues, fallback: '', keys: ['FORSKA_RUNTIME_PROVIDER_KIND']}),
+    ppSize: getFirstConfiguredValue({
+      envValues: mergedEnvValues,
+      fallback: '0',
+      keys: ['FORSKA_RUNTIME_PP_SIZE', 'PP_SIZE'],
+    }),
+    providerKind: getFirstConfiguredValue({
+      envValues: mergedEnvValues,
+      fallback: '',
+      keys: ['FORSKA_RUNTIME_PROVIDER_KIND'],
+    }),
     remoteWorkerUrls: getFirstConfiguredValue({
-      envValues,
+      envValues: mergedEnvValues,
       fallback: '',
       keys: ['FORSKA_RUNTIME_REMOTE_WORKER_URLS', 'NVIDIA_SMI_WORKER_URLS'],
     }),
     sglangApiMaxBurstRequests: getFirstConfiguredValue({
-      envValues,
+      envValues: mergedEnvValues,
       fallback: '0',
       keys: ['FORSKA_RUNTIME_SGLANG_API_MAX_BURST_REQUESTS', 'SGLANG_API_MAX_BURST_REQUESTS'],
     }),
     sglangApiMaxInflightRequests: getFirstConfiguredValue({
-      envValues,
+      envValues: mergedEnvValues,
       fallback: '0',
       keys: ['FORSKA_RUNTIME_SGLANG_API_MAX_INFLIGHT_REQUESTS', 'SGLANG_API_MAX_INFLIGHT_REQUESTS'],
     }),
     sglangMaxRunningRequests: getFirstConfiguredValue({
-      envValues,
+      envValues: mergedEnvValues,
       fallback: '0',
       keys: ['FORSKA_RUNTIME_SGLANG_MAX_RUNNING_REQUESTS', 'SGLANG_MAX_RUNNING_REQUESTS'],
     }),
     sshJumpHost: getFirstConfiguredValue({
-      envValues,
+      envValues: mergedEnvValues,
       fallback: '',
       keys: ['FORSKA_RUNTIME_SSH_JUMP_HOST', 'NVIDIA_SMI_SSH_JUMP_HOST'],
     }),
-    tpSize: getFirstConfiguredValue({envValues, fallback: '0', keys: ['FORSKA_RUNTIME_TP_SIZE', 'TP_SIZE']}),
+    tpSize: getFirstConfiguredValue({
+      envValues: mergedEnvValues,
+      fallback: '0',
+      keys: ['FORSKA_RUNTIME_TP_SIZE', 'TP_SIZE'],
+    }),
   })
   const remoteWorkerUrls = splitCsvValue(parsed.remoteWorkerUrls)
   const localWorkerUrls = splitCsvValue(parsed.localWorkerUrls)
