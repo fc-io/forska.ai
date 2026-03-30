@@ -1,7 +1,12 @@
 import {expect, mock, test} from 'bun:test'
 
 import type {RunningJudgmentJob} from './judgmentsJobsGetRunningJobs.ts'
-import {getCapacityBuckets, getEffectiveProviderCap, requeueAndFilterRunningJobs} from './judgmentsJobsSendToLLM.ts'
+import {
+  getCapacityBuckets,
+  getEffectiveProviderCap,
+  getRequestsToSendByProviderConnection,
+  requeueAndFilterRunningJobs,
+} from './judgmentsJobsSendToLLM.ts'
 
 test('requeues stale sent prompts before runtime filtering', async () => {
   const requeueSentPrompts = mock(async (_params: {jobIds: string[]; serverJobId: string}) => {
@@ -177,4 +182,128 @@ test('getEffectiveProviderCap prefers the saved provider override', () => {
       },
     }),
   ).toEqual({maxInflight: 2, usesFamilyDefault: false})
+})
+
+test('caps shared provider connections before splitting claims across jobs', () => {
+  const allocations = getRequestsToSendByProviderConnection({
+    getCodexDefaultMaxInflight: () => {
+      return 4
+    },
+    getNonCodexCapacity: () => {
+      return {maxBurst: 10, maxInflight: 10, workerCount: 1}
+    },
+    inFlightCounts: new Map([
+      ['job-shared-a', 5],
+      ['job-shared-b', 3],
+      ['job-independent', 0],
+    ]),
+    jobs: [
+      {
+        id: 'job-shared-a',
+        maxInflightRequests: null,
+        modelId: 'model-shared-a',
+        modelName: 'Model Shared A',
+        modelProvider: 'sglang',
+        projectId: 'project-shared-a',
+        providerConnectionId: 'connection-shared',
+      },
+      {
+        id: 'job-shared-b',
+        maxInflightRequests: null,
+        modelId: 'model-shared-b',
+        modelName: 'Model Shared B',
+        modelProvider: 'sglang',
+        projectId: 'project-shared-b',
+        providerConnectionId: 'connection-shared',
+      },
+      {
+        id: 'job-independent',
+        maxInflightRequests: null,
+        modelId: 'model-independent',
+        modelName: 'Model Independent',
+        modelProvider: 'sglang',
+        projectId: 'project-independent',
+        providerConnectionId: 'connection-independent',
+      },
+    ],
+    maxRequestsToSend: 20,
+    readyCounts: new Map([
+      ['job-shared-a', 4],
+      ['job-shared-b', 4],
+      ['job-independent', 5],
+    ]),
+  })
+
+  const limitsByConnection = new Map(
+    allocations.map((allocation) => {
+      return [
+        allocation.connectionId,
+        allocation.jobs.reduce((sum, job) => {
+          return sum + job.limit
+        }, 0),
+      ] as const
+    }),
+  )
+
+  expect(limitsByConnection.get('connection-shared')).toBe(2)
+  expect(limitsByConnection.get('connection-independent')).toBe(5)
+})
+
+test('lets different provider connections progress under a stricter shared bucket limit', () => {
+  const allocations = getRequestsToSendByProviderConnection({
+    getCodexDefaultMaxInflight: () => {
+      return 4
+    },
+    getNonCodexCapacity: () => {
+      return {maxBurst: 10, maxInflight: 10, workerCount: 1}
+    },
+    inFlightCounts: new Map([
+      ['job-a', 0],
+      ['job-b', 0],
+    ]),
+    jobs: [
+      {
+        id: 'job-a',
+        maxInflightRequests: null,
+        modelId: 'model-a',
+        modelName: 'Model A',
+        modelProvider: 'sglang',
+        projectId: 'project-a',
+        providerConnectionId: 'connection-a',
+      },
+      {
+        id: 'job-b',
+        maxInflightRequests: null,
+        modelId: 'model-b',
+        modelName: 'Model B',
+        modelProvider: 'sglang',
+        projectId: 'project-b',
+        providerConnectionId: 'connection-b',
+      },
+    ],
+    maxRequestsToSend: 2,
+    readyCounts: new Map([
+      ['job-a', 5],
+      ['job-b', 5],
+    ]),
+  })
+
+  expect(allocations).toHaveLength(2)
+  expect(
+    allocations.reduce((sum, allocation) => {
+      return (
+        sum
+        + allocation.jobs.reduce((jobSum, job) => {
+          return jobSum + job.limit
+        }, 0)
+      )
+    }, 0),
+  ).toBe(2)
+  expect(
+    allocations.every((allocation) => {
+      return allocation.jobs.some((job) => {
+        return job.limit > 0
+      })
+    }),
+  ).toBe(true)
 })

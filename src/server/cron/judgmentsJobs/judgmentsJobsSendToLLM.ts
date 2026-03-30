@@ -34,6 +34,8 @@ const isCodexJob = (job: {modelProvider: string | null}): boolean => {
 
 type Capacity = {maxInflight: number; maxBurst: number; workerCount: number}
 type CapacityBucket<T> = {capacity: Capacity; jobs: T[]; label: string}
+type JobRequestAllocation<T> = {job: T; limit: number}
+type ProviderConnectionRequestAllocation<T> = {connectionId: string; jobs: JobRequestAllocation<T>[]; limit: number}
 
 const getCapacityFromMaxInflight = (maxInflightRequests: number): Capacity => {
   const limit = Math.max(1, maxInflightRequests)
@@ -151,6 +153,17 @@ const getReadyCountsByJob = async (jobIds: string[]): Promise<Map<string, number
   return new Map(pairs)
 }
 
+const getInFlightCountsByJob = async (jobIds: string[]): Promise<Map<string, number>> => {
+  const sqliteService = getJudgmentJobSqliteService()
+  const pairs = await Promise.all(
+    jobIds.map(async (jobId) => {
+      return [jobId, await sqliteService.getInFlightCount(jobId)] as const
+    }),
+  )
+
+  return new Map(pairs)
+}
+
 const requeueRejectedPrompts = async (prompts: PromptToProcess[]) => {
   const sqliteService = getJudgmentJobSqliteService()
 
@@ -161,11 +174,11 @@ const requeueRejectedPrompts = async (prompts: PromptToProcess[]) => {
   )
 }
 
-const getRequestsToSendByJob = <T extends {id: string}>(
+export const getRequestsToSendByJob = <T extends {id: string}>(
   jobs: T[],
   requestsToSend: number,
   readyCounts: Map<string, number>,
-): {job: T; limit: number}[] => {
+): JobRequestAllocation<T>[] => {
   const shuffled = shuffle(jobs)
   const withReady = shuffled
     .map((job) => {
@@ -223,6 +236,75 @@ const getRequestsToSendByJob = <T extends {id: string}>(
 
   return merged.filter(({limit}) => {
     return limit > 0
+  })
+}
+
+export const getRequestsToSendByProviderConnection = <T extends RunningJudgmentJob>({
+  getCodexDefaultMaxInflight = getCodexMaxInflight,
+  getNonCodexCapacity = getJudgmentsCapacity,
+  jobs,
+  maxRequestsToSend,
+  inFlightCounts,
+  readyCounts,
+}: {
+  getCodexDefaultMaxInflight?: () => number
+  getNonCodexCapacity?: (runningJobCount: number) => Capacity
+  jobs: T[]
+  maxRequestsToSend: number
+  inFlightCounts: Map<string, number>
+  readyCounts: Map<string, number>
+}): ProviderConnectionRequestAllocation<T>[] => {
+  const connectionGroups = Array.from(
+    jobs.reduce((state, job) => {
+      const connectionId = job.providerConnectionId ?? job.id
+      return new Map(state).set(connectionId, [...(state.get(connectionId) ?? []), job])
+    }, new Map<string, T[]>()),
+  ).map(([connectionId, connectionJobs]) => {
+    const firstJob = connectionJobs[0]
+    if (!firstJob) return null
+
+    const providerCap = getEffectiveProviderCap({
+      getCodexDefaultMaxInflight,
+      getNonCodexCapacity,
+      job: firstJob,
+    }).maxInflight
+    const ready = connectionJobs.reduce((sum, job) => {
+      return sum + (readyCounts.get(job.id) ?? 0)
+    }, 0)
+    const promptsInFlight = connectionJobs.reduce((sum, job) => {
+      return sum + (inFlightCounts.get(job.id) ?? 0)
+    }, 0)
+
+    return {connectionId, jobs: connectionJobs, limit: Math.max(0, Math.min(ready, providerCap - promptsInFlight))}
+  })
+  const sendableConnectionGroups = connectionGroups.filter(
+    (group): group is {connectionId: string; jobs: T[]; limit: number} => {
+      return group !== null && group.limit > 0
+    },
+  )
+
+  if (sendableConnectionGroups.length === 0 || maxRequestsToSend <= 0) return []
+
+  const connectionLimits = getRequestsToSendByJob(
+    sendableConnectionGroups.map((group) => {
+      return {id: group.connectionId}
+    }),
+    maxRequestsToSend,
+    new Map(
+      sendableConnectionGroups.map((group) => {
+        return [group.connectionId, group.limit] as const
+      }),
+    ),
+  )
+
+  return connectionLimits.flatMap(({job: connection, limit}) => {
+    const connectionGroup = sendableConnectionGroups.find((group) => {
+      return group.connectionId === connection.id
+    })
+    if (!connectionGroup) return []
+
+    const jobLimits = getRequestsToSendByJob(connectionGroup.jobs, limit, readyCounts)
+    return jobLimits.length > 0 ? [{connectionId: connectionGroup.connectionId, jobs: jobLimits, limit}] : []
   })
 }
 
@@ -296,21 +378,6 @@ const processPrompts = async (prompts: PromptToProcess[]): Promise<{connectionEr
   return {connectionErrors}
 }
 
-const getNumberOfPromptsInFlight = async (jobIds: string[]): Promise<number> => {
-  if (jobIds.length === 0) return 0
-
-  const sqliteService = getJudgmentJobSqliteService()
-  const sqliteCounts = await Promise.all(
-    jobIds.map((jobId) => {
-      return sqliteService.getInFlightCount(jobId)
-    }),
-  )
-
-  return sqliteCounts.reduce((sum, count) => {
-    return sum + count
-  }, 0)
-}
-
 let isRunningJudgmentsJobsSendToLLM = false
 
 export const requeueAndFilterRunningJobs = async ({
@@ -345,7 +412,10 @@ const sendToLLMForJobs = async (
   const jobIds = jobs.map((job) => {
     return job.id
   })
-  const promptsInFlight = await getNumberOfPromptsInFlight(jobIds)
+  const inFlightCounts = await getInFlightCountsByJob(jobIds)
+  const promptsInFlight = Array.from(inFlightCounts.values()).reduce((sum, count) => {
+    return sum + count
+  }, 0)
   const deficit = Math.max(0, capacity.maxInflight - promptsInFlight)
   const requestsToSend = Math.min(deficit, capacity.maxBurst)
   const readyCounts = await getReadyCountsByJob(jobIds)
@@ -366,7 +436,14 @@ const sendToLLMForJobs = async (
 
   if (requestsToSend <= 0) return
 
-  const requestsToSendByJob = getRequestsToSendByJob(jobs, requestsToSend, readyCounts)
+  const requestsToSendByJob = getRequestsToSendByProviderConnection({
+    jobs,
+    maxRequestsToSend: requestsToSend,
+    inFlightCounts,
+    readyCounts,
+  }).flatMap(({jobs: connectionJobs}) => {
+    return connectionJobs
+  })
   console.log(
     `[capacity:${label}] requestsToSendByJob:`,
     requestsToSendByJob.map(({job, limit}) => {
