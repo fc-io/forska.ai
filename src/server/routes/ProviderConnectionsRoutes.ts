@@ -1,5 +1,7 @@
 import {Elysia, t} from 'elysia'
 
+import {getCodexMaxInflight} from '../cron/judgmentsJobs/getCodexMaxInflight.ts'
+import {getJudgmentsCapacity} from '../cron/judgmentsJobs/getJudgmentsCapacity.ts'
 import {
   beginProviderAuth,
   finishProviderAuth,
@@ -74,10 +76,23 @@ const getMaxInflightRequests = (value: number | null | undefined): number | null
   return value
 }
 
+const getEffectiveMaxInflightRequests = ({
+  maxInflightRequests,
+  providerKind,
+}: {
+  maxInflightRequests: number | null
+  providerKind: string
+}): number => {
+  return (
+    maxInflightRequests ?? (isCodexProvider(providerKind) ? getCodexMaxInflight() : getJudgmentsCapacity(1).maxInflight)
+  )
+}
+
 const getPublicProviderConnectionPayload = <
   T extends {
     baseURL: string | null
     config: {llamaCppMode?: 'cli' | 'server'; manualWorkerUrls: string[]; workerUrlMode: 'manual' | 'runtime'}
+    maxInflightRequests: number | null
     models?: Array<{modelName: string | null; remoteModelId: string | null}>
     providerKind: string
     secretRef: string | null
@@ -87,6 +102,7 @@ const getPublicProviderConnectionPayload = <
 ) => {
   return {
     ...getPublicProviderConnection(connection),
+    effectiveMaxInflightRequests: getEffectiveMaxInflightRequests(connection),
     workerState: getProviderConnectionWorkerState({
       baseURL: connection.baseURL,
       config: connection.config,
@@ -199,6 +215,7 @@ const getProviderConnectionsPayload = async () => {
     connections: connections.map((connection) => {
       return {
         ...getPublicProviderConnection(connection),
+        effectiveMaxInflightRequests: getEffectiveMaxInflightRequests(connection),
         runtimeState: getProviderConnectionRuntimeState({connection, runtimeSummaries}),
         workerState: getProviderConnectionWorkerState({
           baseURL: connection.baseURL,

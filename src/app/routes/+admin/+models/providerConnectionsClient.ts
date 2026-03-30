@@ -127,6 +127,7 @@ export type ProviderConnection = {
   config: ProviderConnectionConfig
   createdAt: string | Date | null
   enabled: boolean
+  effectiveMaxInflightRequests: number
   hasSecret: boolean
   id: string
   label: string
@@ -138,6 +139,25 @@ export type ProviderConnection = {
   runtimeState?: ProviderConnectionRuntimeState
   updatedAt: string | Date | null
   workerState: ProviderConnectionWorkerState
+}
+
+export const getProviderMaxInflightRequestsSourceLabel = ({
+  maxInflightRequests,
+  providerKind,
+}: Pick<ProviderConnection, 'maxInflightRequests' | 'providerKind'>) => {
+  return maxInflightRequests != null
+    ? 'saved provider setting'
+    : providerKind === 'codex'
+      ? 'CODEX_MAX_INFLIGHT default'
+      : 'runtime/global default'
+}
+
+export const formatProviderMaxInflightRequests = ({
+  effectiveMaxInflightRequests,
+  maxInflightRequests,
+  providerKind,
+}: Pick<ProviderConnection, 'effectiveMaxInflightRequests' | 'maxInflightRequests' | 'providerKind'>) => {
+  return `${effectiveMaxInflightRequests} (${getProviderMaxInflightRequestsSourceLabel({maxInflightRequests, providerKind})})`
 }
 
 export type ProviderListedModel = {

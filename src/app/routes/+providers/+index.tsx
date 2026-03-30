@@ -6,6 +6,7 @@ import {Button} from '../../../components/ui/button.tsx'
 import {
   deleteProviderConnection,
   fetchProviderConnections,
+  formatProviderMaxInflightRequests,
   formatTimestamp,
   getProviderSecretStatus,
   getWorkerSourceLabel,
@@ -250,6 +251,10 @@ const AdminModels = () => {
                               </div>
                               <div>
                                 <span class="font-medium text-gray-700">Auth:</span> {connection.authMode ?? '-'}
+                              </div>
+                              <div>
+                                <span class="font-medium text-gray-700">Current Prompts in Progress limit:</span>{' '}
+                                {formatProviderMaxInflightRequests(connection)}
                               </div>
                               <div>
                                 <span class="font-medium text-gray-700">Secret:</span>{' '}

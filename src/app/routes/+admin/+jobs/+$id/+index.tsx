@@ -15,7 +15,10 @@ import {
 import {fetchProjectWithPrompts} from '../../../../../services/projectsService'
 import {handleApiResponse} from '../../../../../services/utils/handleApiResponse'
 import {getSglangRuntimeModelNotice} from '../../../../../utils/getSglangRuntimeModelNotice.ts'
-import {fetchProviderConnections} from '../../../+admin/+models/providerConnectionsClient.ts'
+import {
+  fetchProviderConnections,
+  formatProviderMaxInflightRequests,
+} from '../../../+admin/+models/providerConnectionsClient.ts'
 
 const getActionErrorMessage = (error: unknown, fallback: string) => {
   return error instanceof Error && error.message.trim().length > 0 ? error.message : fallback
@@ -239,17 +242,25 @@ const AdminJudgmentJobDetail = () => {
             const shouldShowFulltextSkipped = () => {
               return shouldShowFulltextSkippedFromJob(data())
             }
-            const projectModel = () => {
+            const projectProviderConnection = () => {
               const modelId = projectDetailsQuery.data?.model?.id
 
               return modelId
-                ? (providerConnectionsQuery.data?.connections
-                    .flatMap((connection) => {
-                      return connection.models
-                    })
-                    .find((candidate) => {
+                ? (providerConnectionsQuery.data?.connections.find((connection) => {
+                    return connection.models.some((candidate) => {
                       return candidate.id === modelId
-                    }) ?? null)
+                    })
+                  }) ?? null)
+                : null
+            }
+            const projectModel = () => {
+              const modelId = projectDetailsQuery.data?.model?.id
+              const providerConnection = projectProviderConnection()
+
+              return modelId && providerConnection
+                ? (providerConnection.models.find((candidate) => {
+                    return candidate.id === modelId
+                  }) ?? null)
                 : null
             }
             const runtimeModelNotice = () => {
@@ -339,6 +350,55 @@ const AdminJudgmentJobDetail = () => {
                       )
                     }}
                   </Show>
+
+                  <div class="mt-6 pt-6 border-t border-gray-200">
+                    <h3 class="text-sm font-medium text-gray-900 mb-3">Provider</h3>
+                    <div class="grid grid-cols-2 gap-4">
+                      <div>
+                        <p class="text-sm text-gray-500">Connection</p>
+                        <Show
+                          when={!projectDetailsQuery.isLoading && !providerConnectionsQuery.isLoading}
+                          fallback={<p class="font-medium">Loading...</p>}
+                        >
+                          <Show
+                            when={projectProviderConnection()}
+                            fallback={<p class="font-medium">Unknown provider</p>}
+                          >
+                            {(connection) => {
+                              return (
+                                <a
+                                  class="font-medium text-blue-600 hover:text-blue-800 hover:underline"
+                                  href={`/providers/${connection().id}`}
+                                >
+                                  {connection().label}
+                                </a>
+                              )
+                            }}
+                          </Show>
+                        </Show>
+                      </div>
+                      <div>
+                        <p class="text-sm text-gray-500">Current Prompts in Progress limit</p>
+                        <Show
+                          when={!projectDetailsQuery.isLoading && !providerConnectionsQuery.isLoading}
+                          fallback={<p class="font-medium">Loading...</p>}
+                        >
+                          <Show when={projectProviderConnection()} fallback={<p class="font-medium">Unknown</p>}>
+                            {(connection) => {
+                              return (
+                                <>
+                                  <p class="font-medium">{formatProviderMaxInflightRequests(connection())}</p>
+                                  <p class="text-xs text-gray-500 mt-1">
+                                    Shared across jobs using this provider connection.
+                                  </p>
+                                </>
+                              )
+                            }}
+                          </Show>
+                        </Show>
+                      </div>
+                    </div>
+                  </div>
 
                   <div class="mt-6 pt-6 border-t border-gray-200">
                     <h3 class="text-sm font-medium text-gray-900 mb-3">Project</h3>

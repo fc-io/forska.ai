@@ -2,6 +2,9 @@ import {expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 const providerAuthServiceModulePath = new URL('../providers/providerAuthService.ts', import.meta.url).pathname
+const getCodexMaxInflightModulePath = new URL('../cron/judgmentsJobs/getCodexMaxInflight.ts', import.meta.url).pathname
+const getJudgmentsCapacityModulePath = new URL('../cron/judgmentsJobs/getJudgmentsCapacity.ts', import.meta.url)
+  .pathname
 const providerConnectionHelpersModulePath = new URL('../providers/providerConnectionHelpers.ts', import.meta.url)
   .pathname
 const providerConnectionRepositoryModulePath = new URL('../providers/providerConnectionRepository.ts', import.meta.url)
@@ -117,6 +120,22 @@ const state = {
   getProviderAuthConnection: mock(async (_connectionId: string | null | undefined) => {
     return null
   }),
+  getCodexMaxInflight: mock(() => {
+    return 4
+  }),
+  getJudgmentsCapacity: mock((_runningJobCount: number) => {
+    return {
+      addToQueueMaxBatchSize: 100,
+      maxBurst: 12,
+      maxInflight: 12,
+      perWorkerMaxBurstRequests: 12,
+      perWorkerMaxInflightRequests: 12,
+      perWorkerMaxRunningRequests: 12,
+      readyTargetPerJob: 24,
+      readyTargetTotal: 24,
+      workerCount: 1,
+    }
+  }),
   resolveMatchedProviderRuntimeCredentials: mock(async (_connection: unknown) => {
     return {apiKey: null, baseURL: 'https://api.example.com/v1', headers: {}, secretRef: null}
   }),
@@ -189,6 +208,14 @@ void mock.module(providerConnectionHelpersModulePath, () => {
   }
 })
 
+void mock.module(getCodexMaxInflightModulePath, () => {
+  return {getCodexMaxInflight: state.getCodexMaxInflight}
+})
+
+void mock.module(getJudgmentsCapacityModulePath, () => {
+  return {getJudgmentsCapacity: state.getJudgmentsCapacity}
+})
+
 void mock.module(providerCatalogModulePath, () => {
   return {
     getProviderCatalog: () => {
@@ -199,6 +226,15 @@ void mock.module(providerCatalogModulePath, () => {
           kind: 'openrouter',
           label: 'OpenRouter',
           requiresApiKey: true,
+          supportsDiscovery: true,
+          supportsWorkerUrls: false,
+        },
+        {
+          defaultBaseURL: null,
+          description: 'mock',
+          kind: 'codex',
+          label: 'Codex App',
+          requiresApiKey: false,
           supportsDiscovery: true,
           supportsWorkerUrls: false,
         },
@@ -215,13 +251,23 @@ void mock.module(providerCatalogModulePath, () => {
             supportsDiscovery: true,
             supportsWorkerUrls: false,
           }
-        : null
+        : providerKind === 'codex'
+          ? {
+              defaultBaseURL: null,
+              description: 'mock',
+              kind: 'codex',
+              label: 'Codex App',
+              requiresApiKey: false,
+              supportsDiscovery: true,
+              supportsWorkerUrls: false,
+            }
+          : null
     },
     isCodexProvider: (providerKind: string) => {
       return providerKind === 'codex'
     },
     normalizeProviderKind: (providerKind: string) => {
-      return providerKind as 'openrouter' | 'unknown'
+      return providerKind as 'codex' | 'openrouter' | 'unknown'
     },
   }
 })
@@ -469,6 +515,7 @@ test('provider connections list returns runtime state with display labels', asyn
   const body = (await response.json()) as {
     data: {
       connections: Array<{
+        effectiveMaxInflightRequests: number
         maxInflightRequests: number | null
         runtimeState: {
           detectedModelNames: string[]
@@ -492,6 +539,7 @@ test('provider connections list returns runtime state with display labels', asyn
   }
 
   expect(response.status).toBe(200)
+  expect(body.data.connections[0]?.effectiveMaxInflightRequests).toBe(6)
   expect(body.data.connections[0]?.maxInflightRequests).toBe(6)
   expect(body.data.connections[0]?.runtimeState).toEqual({
     detectedModelNames: ['Qwen/Qwen3'],
@@ -509,6 +557,38 @@ test('provider connections list returns runtime state with display labels', asyn
     statusLabel: 'matched Alvis',
   })
   expect(state.resolveProviderConnectionRuntimeMatchFromSummaries).toHaveBeenCalledTimes(1)
+})
+
+test('provider connections route exposes the current runtime/global inflight default when no override is saved', async () => {
+  state.listProviderConnections.mockImplementationOnce(async () => {
+    return [
+      {
+        authMode: 'api-key',
+        baseURL: 'https://api.example.com/v1',
+        config: {manualWorkerUrls: [], workerUrlMode: 'manual'},
+        createdAt: null,
+        enabled: true,
+        hasSecret: true,
+        id: 'connection-1',
+        label: 'Provider Connection',
+        lastCheckedAt: null,
+        lastError: null,
+        maxInflightRequests: null,
+        models: [],
+        providerKind: 'openrouter',
+        secretRef: 'keychain:provider-connection:test',
+        updatedAt: null,
+      },
+    ]
+  })
+
+  const app = await loadRoutes()
+  const response = await app.handle(new Request('http://localhost/api/provider-connections'))
+  const body = (await response.json()) as {data: {connections: Array<{effectiveMaxInflightRequests: number}>}}
+
+  expect(response.status).toBe(200)
+  expect(body.data.connections[0]?.effectiveMaxInflightRequests).toBe(12)
+  expect(state.getJudgmentsCapacity).toHaveBeenCalledWith(1)
 })
 
 test('provider connections route disables a provider connection', async () => {
