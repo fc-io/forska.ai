@@ -47,7 +47,13 @@ const getModelRuntime = async ({
   modelName: string | null
   providerKind: string
   providerConfigJson: unknown
-}): Promise<{baseURL: string | null; workerUrls: string[]}> => {
+}): Promise<{
+  baseURL: string | null
+  reason: string
+  resolutionMode: 'auto-detect' | 'manual'
+  status: 'ambiguous' | 'manual-only' | 'matched' | 'unreachable'
+  workerUrls: string[]
+}> => {
   const config = getProviderConnectionConfigFromJson({providerKind, value: providerConfigJson})
   const runtimeMatch = await resolveProviderConnectionRuntimeMatch({
     baseURL,
@@ -56,7 +62,15 @@ const getModelRuntime = async ({
     savedModelIds: modelName ? [modelName] : [],
   })
 
-  return {baseURL: runtimeMatch.effectiveBaseURL, workerUrls: runtimeMatch.effectiveWorkerUrls}
+  const shouldUseMatchedRuntime = runtimeMatch.resolutionMode === 'manual' || runtimeMatch.status === 'matched'
+
+  return {
+    baseURL: shouldUseMatchedRuntime ? runtimeMatch.effectiveBaseURL : null,
+    reason: runtimeMatch.reason,
+    resolutionMode: runtimeMatch.resolutionMode,
+    status: runtimeMatch.status,
+    workerUrls: shouldUseMatchedRuntime ? runtimeMatch.effectiveWorkerUrls : [],
+  }
 }
 
 const getSqliteReadyRows = async (serverJobId: string, jobId: string, limit: number): Promise<PromptToProcess[]> => {
@@ -88,10 +102,13 @@ const getSqliteReadyRows = async (serverJobId: string, jobId: string, limit: num
   })
 
   if (!isCodexProvider(provider) && !runtime.baseURL) {
-    console.error('Prompt missing required model baseURL:', {
+    console.error('Prompt missing required matched model baseURL:', {
       jobId,
       modelName: jobInfo.modelName,
       modelProvider: jobInfo.modelProvider,
+      runtimeMatchReason: runtime.reason,
+      runtimeResolutionMode: runtime.resolutionMode,
+      runtimeStatus: runtime.status,
     })
     return []
   }

@@ -201,6 +201,56 @@ test('limits SQLite ready inserts to the requested deficit while skipping duplic
   expect(await service.getReadyCount(jobId)).toBe(3)
 })
 
+test('getJobInfo refreshes provider runtime settings from the current model connection', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-refresh-${Date.now()}`
+  const modelId = `model-refresh-${Date.now()}`
+  const projectId = `project-refresh-${Date.now()}`
+  const jobId = `job-refresh-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url, config_json)
+    VALUES (
+      '${connectionId}',
+      'sglang',
+      'SGLang Refresh',
+      TRUE,
+      'none',
+      'http://127.0.0.1:30000/v1',
+      '{"manualWorkerUrls":[],"workerUrlMode":"runtime"}'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-27B', 'Qwen/Qwen3.5-27B', 'Qwen 27B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Queue Refresh Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  await runDatabase(`
+    UPDATE app.provider_connection
+    SET base_url = 'http://127.0.0.1:30001/v1',
+        config_json = '{"manualWorkerUrls":["http://127.0.0.1:30001"],"workerUrlMode":"runtime"}'
+    WHERE id = '${connectionId}'
+  `)
+
+  const jobInfo = await service.getJobInfo(jobId)
+
+  expect(jobInfo?.modelBaseUrl).toBe('http://127.0.0.1:30001/v1')
+  expect(jobInfo?.providerConfigJson).toEqual({manualWorkerUrls: ['http://127.0.0.1:30001'], workerUrlMode: 'runtime'})
+})
+
 test('claims each SQLite prompt pair at most once under competing writers', async () => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')

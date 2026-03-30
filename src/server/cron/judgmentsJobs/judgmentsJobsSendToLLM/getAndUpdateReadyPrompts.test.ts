@@ -89,8 +89,16 @@ test('claims ready rows from the per-job SQLite queue', async () => {
   const secondPromptId = `prompt-second-${Date.now()}`
 
   await runDatabase(`
-    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
-    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url, config_json)
+    VALUES (
+      '${connectionId}',
+      'sglang',
+      'SGLang',
+      TRUE,
+      'none',
+      'http://localhost:30001/v1',
+      '{"manualWorkerUrls":[],"workerUrlMode":"manual"}'
+    )
   `)
   await runDatabase(`
     INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)

@@ -12,6 +12,7 @@ test('runtime worker mode uses runtime worker urls only', () => {
     baseURL: 'http://127.0.0.1:30000/v1',
     config: {manualWorkerUrls: ['http://localhost:30010'], workerUrlMode: 'runtime'},
     providerKind: 'sglang',
+    runtimeSummary: {activeModelNames: [], providerKind: null, sourceMetadata: null, workerUrls: []},
   })
 
   expect(workerState.effectiveWorkerUrls).toEqual([])
@@ -99,6 +100,45 @@ test('runtime worker mode matches when the saved base url overlaps the detected 
   })
   expect(workerState.match.status).toBe('matched')
   expect(workerState.workerSource).toBe('runtime')
+})
+
+test('runtime worker mode treats localhost and 127.0.0.1 as the same detected runtime', () => {
+  const workerState = getProviderConnectionWorkerState({
+    baseURL: 'http://127.0.0.1:30001/v1',
+    config: {manualWorkerUrls: [], workerUrlMode: 'runtime'},
+    providerKind: 'sglang',
+    runtimeSummary: {
+      activeModelNames: ['Qwen/Qwen3.5-27B'],
+      providerKind: 'sglang',
+      sourceMetadata: {cluster: null, jobId: null, kind: 'local', label: 'local', sshJumpHost: null},
+      workerUrls: ['http://localhost:30001'],
+    },
+    savedModelIds: ['Qwen/Qwen3.5-27B'],
+  })
+
+  expect(workerState.match.status).toBe('matched')
+  expect(workerState.match.effectiveBaseURL).toBe('http://localhost:30001/v1')
+  expect(workerState.effectiveWorkerUrls).toEqual(['http://localhost:30001'])
+})
+
+test('runtime worker mode matches launcher remote urls and still uses local worker urls', () => {
+  const workerState = getProviderConnectionWorkerState({
+    baseURL: 'http://alvis4-39:30000/v1',
+    config: {manualWorkerUrls: [], workerUrlMode: 'runtime'},
+    providerKind: 'sglang',
+    runtimeSummary: {
+      activeModelNames: ['Qwen/Qwen3.5-27B'],
+      providerKind: 'sglang',
+      remoteWorkerUrls: ['http://alvis4-39:30000'],
+      sourceMetadata: {cluster: 'alvis', jobId: 'job-1', kind: 'launcher', label: 'Alvis', sshJumpHost: 'alvis2'},
+      workerUrls: ['http://localhost:30001'],
+    },
+    savedModelIds: ['Qwen/Qwen3.5-27B'],
+  })
+
+  expect(workerState.match.status).toBe('matched')
+  expect(workerState.match.effectiveBaseURL).toBe('http://localhost:30001/v1')
+  expect(workerState.effectiveWorkerUrls).toEqual(['http://localhost:30001'])
 })
 
 test('saved model ids strengthen a url match but cannot replace missing url overlap', () => {

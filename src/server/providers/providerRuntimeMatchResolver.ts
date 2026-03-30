@@ -2,6 +2,8 @@ import {getDetectedProviderRuntimeSummaries} from './providerRuntimeDetector.ts'
 import {getProviderConnectionRuntimeMatch, type ProviderRuntimeSummary} from './providerRuntimeState.ts'
 import {type ProviderConnectionConfig, type ProviderRuntimeMatch} from './providerTypes.ts'
 
+const loopbackHosts = new Set(['127.0.0.1', 'localhost', '::1', '[::1]'])
+
 const getUniqueReasons = (reasons: ProviderRuntimeMatch['reasons']): ProviderRuntimeMatch['reasons'] => {
   return Array.from(new Set(reasons))
 }
@@ -18,8 +20,37 @@ const getMatchPriority = (match: ProviderRuntimeMatch): number => {
           : 4
 }
 
+const getComparableUrl = (value: string | null | undefined): string | null => {
+  const normalizedValue = String(value ?? '').trim()
+
+  if (!normalizedValue) {
+    return null
+  }
+
+  try {
+    const parsed = new URL(normalizedValue)
+    const hostname = loopbackHosts.has(parsed.hostname.toLowerCase()) ? 'loopback' : parsed.hostname.toLowerCase()
+    const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80')
+    const pathname = parsed.pathname.replace(/\/+$/, '') || '/'
+
+    return `${parsed.protocol}//${hostname}:${port}${pathname}`
+  } catch {
+    return normalizedValue.replace(/\/+$/, '')
+  }
+}
+
 const getTargetSignature = (match: ProviderRuntimeMatch): string => {
-  return JSON.stringify({baseURL: match.effectiveBaseURL, workerUrls: match.effectiveWorkerUrls})
+  return JSON.stringify({
+    baseURL: getComparableUrl(match.effectiveBaseURL),
+    workerUrls: match.effectiveWorkerUrls
+      .map((workerUrl) => {
+        return getComparableUrl(workerUrl)
+      })
+      .filter((workerUrl): workerUrl is string => {
+        return Boolean(workerUrl)
+      })
+      .sort(),
+  })
 }
 
 const getAmbiguousMatch = (matches: ProviderRuntimeMatch[]): ProviderRuntimeMatch => {

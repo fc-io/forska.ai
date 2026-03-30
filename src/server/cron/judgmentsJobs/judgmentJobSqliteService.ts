@@ -36,6 +36,16 @@ type JobInfoRow = {
   useTitle: boolean | null
 }
 
+type LiveModelRuntimeRow = {
+  modelBaseUrl: string | null
+  modelMetadataJson: unknown
+  modelName: string | null
+  modelProvider: string | null
+  modelSecretRef: string | null
+  modelVersion: string | null
+  providerConfigJson: unknown
+}
+
 export type JudgmentJobSqliteInfo = {
   createdAt: Date
   cursor: JobCursor | null
@@ -762,6 +772,54 @@ const getJobInfoForInitialization = async (jobId: string): Promise<JudgmentJobSq
   }
 }
 
+const getLatestRuntimeInfoForModel = async (
+  modelId: string,
+): Promise<Pick<
+  JudgmentJobSqliteInfo,
+  | 'modelBaseUrl'
+  | 'modelMetadataJson'
+  | 'modelName'
+  | 'modelProvider'
+  | 'modelSecretRef'
+  | 'modelVersion'
+  | 'providerConfigJson'
+> | null> => {
+  const [row] = await getAppDatabaseService().queryJson<LiveModelRuntimeRow>(`
+    SELECT
+      pc.base_url AS modelBaseUrl,
+      TO_JSON(m.metadata_json) AS modelMetadataJson,
+      COALESCE(m.remote_model_id, m.name, m.display_name) AS modelName,
+      COALESCE(pc.provider_kind, 'unknown') AS modelProvider,
+      pc.secret_ref AS modelSecretRef,
+      m.variant AS modelVersion,
+      TO_JSON(pc.config_json) AS providerConfigJson
+    FROM app.model m
+    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    WHERE m.id = '${escapeSqlString(modelId)}'
+    LIMIT 1
+  `)
+
+  return row?.modelName
+    ? {
+        modelBaseUrl: row.modelBaseUrl ?? null,
+        modelMetadataJson:
+          parseJsonText(
+            typeof row.modelMetadataJson === 'string' ? row.modelMetadataJson : JSON.stringify(row.modelMetadataJson),
+          ) ?? null,
+        modelName: row.modelName,
+        modelProvider: row.modelProvider ?? 'unknown',
+        modelSecretRef: row.modelSecretRef ?? null,
+        modelVersion: row.modelVersion ?? null,
+        providerConfigJson:
+          parseJsonText(
+            typeof row.providerConfigJson === 'string'
+              ? row.providerConfigJson
+              : JSON.stringify(row.providerConfigJson),
+          ) ?? null,
+      }
+    : null
+}
+
 // This service currently enforces exclusive local ownership of a SQLite job.
 // It does not try to distribute one job across multiple servers yet.
 const ensureOwnedJobLease = async (jobId: string, serverJobId = getDefaultJudgmentServerJobId()) => {
@@ -1265,7 +1323,7 @@ const sqliteService = {
     )
   },
   getJobInfo: async (jobId: string): Promise<JudgmentJobSqliteInfo | null> => {
-    return (
+    const storedJobInfo =
       withJobDatabase(jobId, false, (database) => {
         const row = database
           .query(
@@ -1331,7 +1389,14 @@ const sqliteService = {
             }
           : null
       }) ?? null
-    )
+
+    if (!storedJobInfo) {
+      return null
+    }
+
+    const latestRuntimeInfo = await getLatestRuntimeInfoForModel(storedJobInfo.modelId)
+
+    return latestRuntimeInfo ? {...storedJobInfo, ...latestRuntimeInfo} : storedJobInfo
   },
   getPendingOutboxBatch: async ({jobId, maxBytes, maxRows}: {jobId?: string; maxBytes: number; maxRows: number}) => {
     const initialState = {bytes: 0, rows: [] as JudgmentJobSqliteOutboxEntry[]}

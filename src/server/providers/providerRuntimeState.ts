@@ -13,6 +13,7 @@ import {normalizeWorkerUrls, supportsRuntimeWorkerUrls} from './providerWorkerUt
 export type ProviderRuntimeSummary = {
   activeModelNames: string[]
   providerKind: string | null
+  remoteWorkerUrls?: string[]
   sourceMetadata: ProviderRuntimeSourceMetadata | null
   workerUrls: string[]
 }
@@ -37,6 +38,8 @@ const getRuntimeProviderKind = (): string | null => {
   return normalizedProviderKind === 'unknown' ? null : normalizedProviderKind
 }
 
+const loopbackHosts = new Set(['127.0.0.1', 'localhost', '::1', '[::1]'])
+
 const getUniqueValues = (values: Array<string | null | undefined>): string[] => {
   return Array.from(
     new Set(
@@ -49,12 +52,40 @@ const getUniqueValues = (values: Array<string | null | undefined>): string[] => 
   )
 }
 
+const getComparableUrl = (value: string | null | undefined): string | null => {
+  const normalizedValue = getTrimmedValue(value)
+
+  if (!normalizedValue) {
+    return null
+  }
+
+  try {
+    const parsed = new URL(normalizedValue)
+    const hostname = loopbackHosts.has(parsed.hostname.toLowerCase()) ? 'loopback' : parsed.hostname.toLowerCase()
+    const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80')
+    const pathname = parsed.pathname.replace(/\/+$/, '') || '/'
+
+    return `${parsed.protocol}//${hostname}:${port}${pathname}`
+  } catch {
+    return normalizedValue.replace(/\/+$/, '')
+  }
+}
+
+const getComparableUrls = (values: Array<string | null | undefined>): string[] => {
+  return getUniqueValues(
+    values.map((value) => {
+      return getComparableUrl(value)
+    }),
+  )
+}
+
 export const getProviderRuntimeSummary = (): ProviderRuntimeSummary => {
   const workerUrls = normalizeWorkerUrls(inferenceRuntimeConfig.displayWorkerUrls)
 
   return {
     activeModelNames: inferenceRuntimeConfig.activeModelNames,
     providerKind: getRuntimeProviderKind(),
+    remoteWorkerUrls: normalizeWorkerUrls(inferenceRuntimeConfig.remoteWorkerUrls),
     sourceMetadata: null,
     workerUrls,
   }
@@ -82,6 +113,17 @@ const getRemoteUrlsFromWorkerUrls = (workerUrls: string[]): string[] => {
   )
 }
 
+const getWorkerUrlsFromBaseUrls = (baseUrls: string[]): string[] => {
+  return getUniqueValues(
+    baseUrls.map((baseUrl) => {
+      const normalizedBaseUrl = getTrimmedValue(baseUrl)
+      const strippedBaseUrl = normalizedBaseUrl?.replace(/\/+$/, '') ?? null
+
+      return strippedBaseUrl?.endsWith('/v1') ? strippedBaseUrl.slice(0, -3) : strippedBaseUrl
+    }),
+  )
+}
+
 const getMatchedWorkerUrls = ({
   savedWorkerUrls,
   runtimeWorkerUrls,
@@ -89,8 +131,12 @@ const getMatchedWorkerUrls = ({
   runtimeWorkerUrls: string[]
   savedWorkerUrls: string[]
 }): string[] => {
+  const runtimeComparableUrls = new Set(getComparableUrls(runtimeWorkerUrls))
+
   return savedWorkerUrls.filter((workerUrl) => {
-    return runtimeWorkerUrls.includes(workerUrl)
+    const comparableWorkerUrl = getComparableUrl(workerUrl)
+
+    return comparableWorkerUrl ? runtimeComparableUrls.has(comparableWorkerUrl) : false
   })
 }
 
@@ -140,6 +186,8 @@ export const getProviderConnectionRuntimeCandidates = ({
   const activeRuntimeSummary = runtimeSummary ?? getProviderRuntimeSummary()
   const normalizedProviderKind = normalizeProviderKind(providerKind)
   const runtimeProviderKind = activeRuntimeSummary.providerKind
+  const runtimeRemoteWorkerUrls =
+    runtimeProviderKind === normalizedProviderKind ? normalizeWorkerUrls(activeRuntimeSummary.remoteWorkerUrls) : []
   const runtimeModelNames =
     runtimeProviderKind === normalizedProviderKind ? getUniqueValues(activeRuntimeSummary.activeModelNames) : []
 
@@ -183,7 +231,7 @@ export const getProviderConnectionRuntimeCandidates = ({
           : runtimeProviderKind
             ? 'runtime-provider-mismatch'
             : 'runtime-provider-missing',
-      remoteUrls: getRemoteUrlsFromWorkerUrls(runtimeWorkerUrls),
+      remoteUrls: getRemoteUrlsFromWorkerUrls([...runtimeWorkerUrls, ...runtimeRemoteWorkerUrls]),
       sourceMetadata: activeRuntimeSummary.sourceMetadata,
       source: 'detected-runtime',
       status:
@@ -221,8 +269,14 @@ export const getProviderConnectionRuntimeMatch = ({
   const runtimeModelNames = runtimeCandidate?.modelNames ?? []
   const runtimeRemoteUrls = runtimeCandidate?.remoteUrls ?? []
   const runtimeWorkerUrls = runtimeCandidate?.localUrls ?? []
-  const matchedWorkerUrls = getMatchedWorkerUrls({runtimeWorkerUrls, savedWorkerUrls: manualWorkerUrls})
-  const hasBaseUrlOverlap = normalizedBaseURL ? runtimeRemoteUrls.includes(normalizedBaseURL) : false
+  const matchableRuntimeWorkerUrls = getWorkerUrlsFromBaseUrls(runtimeRemoteUrls)
+  const matchedWorkerUrls = getMatchedWorkerUrls({
+    runtimeWorkerUrls: matchableRuntimeWorkerUrls,
+    savedWorkerUrls: manualWorkerUrls,
+  })
+  const runtimeComparableBaseUrls = new Set(getComparableUrls(runtimeRemoteUrls))
+  const comparableSavedBaseURL = getComparableUrl(normalizedBaseURL)
+  const hasBaseUrlOverlap = comparableSavedBaseURL ? runtimeComparableBaseUrls.has(comparableSavedBaseURL) : false
   const hasWorkerUrlOverlap = matchedWorkerUrls.length > 0
   const hasUrlOverlap = hasBaseUrlOverlap || hasWorkerUrlOverlap
   const matchedModelNames = getMatchedModelNames({runtimeModelNames, savedModelIds: getUniqueValues(savedModelIds)})

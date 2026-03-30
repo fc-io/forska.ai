@@ -91,6 +91,7 @@ const getSummaryFromLauncherRecord = (record: ProviderRuntimeRecord): ProviderRu
   return {
     activeModelNames: getUniqueValues(record.activeModelNames),
     providerKind: getTrimmedValue(record.providerKind),
+    remoteWorkerUrls: getUniqueValues(record.remoteWorkerUrls),
     sourceMetadata: getLauncherSourceMetadata(record),
     workerUrls: getUniqueValues(
       record.remoteWorkerUrls.map((_remoteWorkerUrl, index) => {
@@ -104,6 +105,7 @@ const getSummaryFromCacheEntry = (entry: DetectorCacheEntry): ProviderRuntimeSum
   return {
     activeModelNames: entry.modelNames,
     providerKind: entry.providerKind,
+    remoteWorkerUrls: [entry.workerUrl],
     sourceMetadata: getLocalSourceMetadata(),
     workerUrls: [entry.workerUrl],
   }
@@ -130,6 +132,7 @@ const getRuntimeSummarySignature = (summary: ProviderRuntimeSummary): string => 
   return JSON.stringify({
     activeModelNames: getUniqueValues(summary.activeModelNames),
     providerKind: getTrimmedValue(summary.providerKind),
+    remoteWorkerUrls: getUniqueValues(summary.remoteWorkerUrls ?? []),
     sourceMetadata: summary.sourceMetadata,
     workerUrls: getUniqueValues(summary.workerUrls),
   })
@@ -372,7 +375,15 @@ export const getDetectedProviderRuntimeSummary = async ({
 }: {launcherRecords?: ProviderRuntimeRecord[]; now?: number} = {}): Promise<ProviderRuntimeSummary> => {
   const summaries = await getDetectedProviderRuntimeSummaries({launcherRecords, now})
 
-  return summaries[0] ?? {activeModelNames: [], providerKind: null, sourceMetadata: null, workerUrls: []}
+  return (
+    summaries[0] ?? {
+      activeModelNames: [],
+      providerKind: null,
+      remoteWorkerUrls: [],
+      sourceMetadata: null,
+      workerUrls: [],
+    }
+  )
 }
 
 export const clearProviderRuntimeDetectorCache = (): void => {
