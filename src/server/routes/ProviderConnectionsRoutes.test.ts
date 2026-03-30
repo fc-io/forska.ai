@@ -15,6 +15,8 @@ const providerCatalogModulePath = new URL('../services/providerCatalog.ts', impo
 
 const state = {
   createProviderConnection: mock(async (input: unknown) => {
+    const typedInput = input as {maxInflightRequests?: number | null}
+
     return {
       ...(input as object),
       config: {manualWorkerUrls: [], workerUrlMode: 'manual'},
@@ -24,7 +26,7 @@ const state = {
       id: 'connection-1',
       lastCheckedAt: null,
       lastError: null,
-      maxInflightRequests: null,
+      maxInflightRequests: typedInput.maxInflightRequests ?? null,
       secretRef: null,
       updatedAt: null,
     }
@@ -284,6 +286,76 @@ test('provider connections route creates a provider connection', async () => {
   expect(state.storeProviderSecret).toHaveBeenCalledTimes(1)
 })
 
+test('provider connections route round-trips maxInflightRequests on create', async () => {
+  state.createProviderConnection.mockClear()
+  const app = await loadRoutes()
+  const response = await app.handle(
+    new Request('http://localhost/api/provider-connections', {
+      body: JSON.stringify({
+        apiKey: 'test-key',
+        label: 'OpenRouter',
+        maxInflightRequests: 3,
+        providerKind: 'openrouter',
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {data: {connection: {maxInflightRequests: number | null}}}
+
+  expect(response.status).toBe(200)
+  expect(body.data.connection.maxInflightRequests).toBe(3)
+  expect(state.createProviderConnection).toHaveBeenCalledWith(expect.objectContaining({maxInflightRequests: 3}))
+})
+
+test('provider connections route rejects invalid maxInflightRequests on create', async () => {
+  const app = await loadRoutes()
+
+  const zeroResponse = await app.handle(
+    new Request('http://localhost/api/provider-connections', {
+      body: JSON.stringify({
+        apiKey: 'test-key',
+        label: 'OpenRouter',
+        maxInflightRequests: 0,
+        providerKind: 'openrouter',
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const negativeResponse = await app.handle(
+    new Request('http://localhost/api/provider-connections', {
+      body: JSON.stringify({
+        apiKey: 'test-key',
+        label: 'OpenRouter',
+        maxInflightRequests: -1,
+        providerKind: 'openrouter',
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const decimalResponse = await app.handle(
+    new Request('http://localhost/api/provider-connections', {
+      body: JSON.stringify({
+        apiKey: 'test-key',
+        label: 'OpenRouter',
+        maxInflightRequests: 1.5,
+        providerKind: 'openrouter',
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+
+  expect(zeroResponse.status).toBe(400)
+  expect(await zeroResponse.text()).toBe('maxInflightRequests must be null or a positive integer')
+  expect(negativeResponse.status).toBe(400)
+  expect(await negativeResponse.text()).toBe('maxInflightRequests must be null or a positive integer')
+  expect(decimalResponse.status).toBe(400)
+  expect(await decimalResponse.text()).toBe('maxInflightRequests must be null or a positive integer')
+})
+
 test('provider connections route rolls back the connection if secret storage fails', async () => {
   state.createProviderConnection.mockClear()
   state.deleteProviderConnection.mockClear()
@@ -452,6 +524,22 @@ test('provider connections route disables a provider connection', async () => {
 
   expect(response.status).toBe(200)
   expect(state.updateProviderConnection).toHaveBeenCalledTimes(1)
+})
+
+test('provider connections route rejects invalid maxInflightRequests on update', async () => {
+  state.updateProviderConnection.mockClear()
+  const app = await loadRoutes()
+  const response = await app.handle(
+    new Request('http://localhost/api/provider-connections/connection-1', {
+      body: JSON.stringify({label: 'OpenRouter', maxInflightRequests: 2.2}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+
+  expect(response.status).toBe(400)
+  expect(await response.text()).toBe('maxInflightRequests must be null or a positive integer')
+  expect(state.updateProviderConnection).not.toHaveBeenCalled()
 })
 
 test('provider connections route defers deleting the existing secret until update succeeds', async () => {

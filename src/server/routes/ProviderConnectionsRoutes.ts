@@ -35,6 +35,7 @@ import {
   isCodexProvider,
   normalizeProviderKind,
 } from '../services/providerCatalog.ts'
+import {HttpError} from '../utils/httpError.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {
   getProviderConnectionConfig,
@@ -62,7 +63,15 @@ const getSavedModelIds = (models: Array<{modelName: string | null; remoteModelId
 }
 
 const getMaxInflightRequests = (value: number | null | undefined): number | null => {
-  return value === null || value === undefined ? null : Math.max(1, Math.trunc(value))
+  if (value === null || value === undefined) {
+    return null
+  }
+
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new HttpError(400, 'maxInflightRequests must be null or a positive integer')
+  }
+
+  return value
 }
 
 const getPublicProviderConnectionPayload = <
