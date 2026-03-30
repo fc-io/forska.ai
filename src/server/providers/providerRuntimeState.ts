@@ -5,11 +5,17 @@ import {
   type ProviderConnectionResolutionMode,
   type ProviderRuntimeCandidate,
   type ProviderRuntimeMatch,
+  type ProviderRuntimeSourceMetadata,
   type ProviderWorkerSource,
 } from './providerTypes.ts'
 import {normalizeWorkerUrls, supportsRuntimeWorkerUrls} from './providerWorkerUtils.ts'
 
-export type ProviderRuntimeSummary = {activeModelNames: string[]; providerKind: string | null; workerUrls: string[]}
+export type ProviderRuntimeSummary = {
+  activeModelNames: string[]
+  providerKind: string | null
+  sourceMetadata: ProviderRuntimeSourceMetadata | null
+  workerUrls: string[]
+}
 
 export type ProviderConnectionWorkerState = {
   effectiveWorkerUrls: string[]
@@ -46,7 +52,12 @@ const getUniqueValues = (values: Array<string | null | undefined>): string[] => 
 export const getProviderRuntimeSummary = (): ProviderRuntimeSummary => {
   const workerUrls = normalizeWorkerUrls(inferenceRuntimeConfig.displayWorkerUrls)
 
-  return {activeModelNames: inferenceRuntimeConfig.activeModelNames, providerKind: getRuntimeProviderKind(), workerUrls}
+  return {
+    activeModelNames: inferenceRuntimeConfig.activeModelNames,
+    providerKind: getRuntimeProviderKind(),
+    sourceMetadata: null,
+    workerUrls,
+  }
 }
 
 const getRuntimeWorkerUrlsForProvider = ({
@@ -138,6 +149,7 @@ export const getProviderConnectionRuntimeCandidates = ({
       modelNames: [],
       reason: 'manual-worker-url',
       remoteUrls: getRemoteUrlsFromWorkerUrls(manualWorkerUrls),
+      sourceMetadata: null,
       source: 'saved-manual-worker',
       status:
         resolutionMode === 'manual' && manualWorkerUrls.length > 0
@@ -151,6 +163,7 @@ export const getProviderConnectionRuntimeCandidates = ({
       modelNames: [],
       reason: 'manual-base-url',
       remoteUrls: normalizedBaseURL ? [normalizedBaseURL] : [],
+      sourceMetadata: null,
       source: 'saved-base-url',
       status:
         resolutionMode === 'manual' && manualWorkerUrls.length === 0 && normalizedBaseURL
@@ -171,6 +184,7 @@ export const getProviderConnectionRuntimeCandidates = ({
             ? 'runtime-provider-mismatch'
             : 'runtime-provider-missing',
       remoteUrls: getRemoteUrlsFromWorkerUrls(runtimeWorkerUrls),
+      sourceMetadata: activeRuntimeSummary.sourceMetadata,
       source: 'detected-runtime',
       status:
         resolutionMode === 'auto-detect'
@@ -235,6 +249,7 @@ export const getProviderConnectionRuntimeMatch = ({
       reasons: getUniqueReasons(['manual-mode', reason]),
       remoteUrls: manualCandidate?.remoteUrls ?? (normalizedBaseURL ? [normalizedBaseURL] : []),
       resolutionMode,
+      sourceMetadata: null,
       source: manualCandidate?.source ?? 'none',
       status: 'manual-only',
     }
@@ -254,6 +269,7 @@ export const getProviderConnectionRuntimeMatch = ({
       reasons: getUniqueReasons([reason]),
       remoteUrls: [],
       resolutionMode,
+      sourceMetadata: runtimeCandidate?.sourceMetadata ?? null,
       source: 'none',
       status: 'unreachable',
     }
@@ -275,6 +291,7 @@ export const getProviderConnectionRuntimeMatch = ({
       ]),
       remoteUrls: runtimeRemoteUrls,
       resolutionMode,
+      sourceMetadata: runtimeCandidate.sourceMetadata,
       source: 'none',
       status: 'unreachable',
     }
@@ -297,6 +314,7 @@ export const getProviderConnectionRuntimeMatch = ({
       ]),
       remoteUrls: runtimeRemoteUrls,
       resolutionMode,
+      sourceMetadata: runtimeCandidate.sourceMetadata,
       source: 'none',
       status: 'ambiguous',
     }
@@ -318,6 +336,7 @@ export const getProviderConnectionRuntimeMatch = ({
     ]),
     remoteUrls: runtimeRemoteUrls,
     resolutionMode,
+    sourceMetadata: runtimeCandidate.sourceMetadata,
     source: runtimeCandidate.source,
     status: 'matched',
   }

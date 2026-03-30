@@ -1,5 +1,5 @@
 import {getDetectedProviderRuntimeSummaries} from './providerRuntimeDetector.ts'
-import {getProviderConnectionRuntimeMatch} from './providerRuntimeState.ts'
+import {getProviderConnectionRuntimeMatch, type ProviderRuntimeSummary} from './providerRuntimeState.ts'
 import {type ProviderConnectionConfig, type ProviderRuntimeMatch} from './providerTypes.ts'
 
 const getUniqueReasons = (reasons: ProviderRuntimeMatch['reasons']): ProviderRuntimeMatch['reasons'] => {
@@ -41,24 +41,26 @@ const getAmbiguousMatch = (matches: ProviderRuntimeMatch[]): ProviderRuntimeMatc
         return [...match.reasons, 'runtime-url-conflict']
       }),
     ),
+    sourceMetadata: null,
     source: 'none',
     status: 'ambiguous',
   }
 }
 
-export const resolveProviderConnectionRuntimeMatch = async ({
+export const resolveProviderConnectionRuntimeMatchFromSummaries = ({
   baseURL,
   config,
   providerKind,
+  runtimeSummaries,
   savedModelIds = [],
 }: {
   baseURL: string | null | undefined
   config: ProviderConnectionConfig
   providerKind: string | null | undefined
+  runtimeSummaries: ProviderRuntimeSummary[]
   savedModelIds?: string[]
-}): Promise<ProviderRuntimeMatch> => {
-  const detectedSummaries = await getDetectedProviderRuntimeSummaries()
-  const matches = detectedSummaries.map((runtimeSummary) => {
+}): ProviderRuntimeMatch => {
+  const matches = runtimeSummaries.map((runtimeSummary) => {
     return getProviderConnectionRuntimeMatch({baseURL, config, providerKind, runtimeSummary, savedModelIds})
   })
   const matchedTargets = Array.from(
@@ -80,4 +82,26 @@ export const resolveProviderConnectionRuntimeMatch = async ({
       : (matches.sort((left, right) => {
           return getMatchPriority(left) - getMatchPriority(right)
         })[0] ?? getProviderConnectionRuntimeMatch({baseURL, config, providerKind, savedModelIds}))
+}
+
+export const resolveProviderConnectionRuntimeMatch = async ({
+  baseURL,
+  config,
+  providerKind,
+  savedModelIds = [],
+}: {
+  baseURL: string | null | undefined
+  config: ProviderConnectionConfig
+  providerKind: string | null | undefined
+  savedModelIds?: string[]
+}): Promise<ProviderRuntimeMatch> => {
+  const detectedSummaries = await getDetectedProviderRuntimeSummaries()
+
+  return resolveProviderConnectionRuntimeMatchFromSummaries({
+    baseURL,
+    config,
+    providerKind,
+    runtimeSummaries: detectedSummaries,
+    savedModelIds,
+  })
 }

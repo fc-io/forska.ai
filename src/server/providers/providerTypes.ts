@@ -18,6 +18,7 @@ export type ProviderRuntimeCandidateSource = 'detected-runtime' | 'saved-base-ur
 export type ProviderRuntimeCandidateStatus = 'available' | 'matched' | 'unavailable'
 export type ProviderRuntimeMatchSource = ProviderRuntimeCandidateSource | 'none'
 export type ProviderRuntimeMatchStatus = 'ambiguous' | 'manual-only' | 'matched' | 'unreachable'
+export type ProviderRuntimeSourceKind = 'launcher' | 'local'
 export type ProviderRuntimeMatchReason =
   | 'manual-mode'
   | 'manual-base-url'
@@ -34,11 +35,20 @@ export type ProviderRuntimeMatchReason =
   | 'runtime-worker-url-overlap'
   | 'runtime-worker-missing'
 
+export type ProviderRuntimeSourceMetadata = {
+  cluster: string | null
+  jobId: string | null
+  kind: ProviderRuntimeSourceKind
+  label: string
+  sshJumpHost: string | null
+}
+
 export type ProviderRuntimeCandidate = {
   localUrls: string[]
   modelNames: string[]
   reason: ProviderRuntimeMatchReason
   remoteUrls: string[]
+  sourceMetadata: ProviderRuntimeSourceMetadata | null
   source: ProviderRuntimeCandidateSource
   status: ProviderRuntimeCandidateStatus
 }
@@ -54,8 +64,21 @@ export type ProviderRuntimeMatch = {
   reasons: ProviderRuntimeMatchReason[]
   remoteUrls: string[]
   resolutionMode: ProviderConnectionResolutionMode
+  sourceMetadata: ProviderRuntimeSourceMetadata | null
   source: ProviderRuntimeMatchSource
   status: ProviderRuntimeMatchStatus
+}
+
+export type ProviderConnectionRuntimeState = {
+  detectedModelNames: string[]
+  effectiveBaseURL: string | null
+  effectiveWorkerUrls: string[]
+  reason: ProviderRuntimeMatchReason
+  reasonLabel: string
+  reasonLabels: string[]
+  sourceMetadata: ProviderRuntimeSourceMetadata | null
+  status: ProviderRuntimeMatchStatus
+  statusLabel: string
 }
 
 export type ProviderConnectionConfig = {

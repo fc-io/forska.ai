@@ -7,6 +7,8 @@ const providerConnectionHelpersModulePath = new URL('../providers/providerConnec
 const providerConnectionRepositoryModulePath = new URL('../providers/providerConnectionRepository.ts', import.meta.url)
   .pathname
 const providerHealthServiceModulePath = new URL('../providers/providerHealthService.ts', import.meta.url).pathname
+const providerRuntimeMatchResolverModulePath = new URL('../providers/providerRuntimeMatchResolver.ts', import.meta.url)
+  .pathname
 const providerRegistryModulePath = new URL('../providers/providerRegistry.ts', import.meta.url).pathname
 const providerSecretStoreModulePath = new URL('../providers/providerSecretStore.ts', import.meta.url).pathname
 const providerCatalogModulePath = new URL('../services/providerCatalog.ts', import.meta.url).pathname
@@ -112,6 +114,23 @@ const state = {
   resolveMatchedProviderRuntimeCredentials: mock(async (_connection: unknown) => {
     return {apiKey: null, baseURL: 'https://api.example.com/v1', headers: {}, secretRef: null}
   }),
+  resolveProviderConnectionRuntimeMatchFromSummaries: mock((_input: unknown): unknown => {
+    return {
+      candidate: null,
+      detectedModelNames: [],
+      effectiveBaseURL: 'https://api.example.com/v1',
+      effectiveWorkerUrls: [],
+      localUrls: [],
+      modelNames: [],
+      reason: 'manual-base-url',
+      reasons: ['manual-mode', 'manual-base-url'],
+      remoteUrls: ['https://api.example.com/v1'],
+      resolutionMode: 'manual',
+      sourceMetadata: null,
+      source: 'saved-base-url',
+      status: 'manual-only',
+    }
+  }),
   resolveProviderRuntimeCredentials: mock(async (_connection: unknown) => {
     return {apiKey: null, baseURL: 'https://api.example.com/v1', headers: {}, secretRef: null}
   }),
@@ -199,6 +218,10 @@ void mock.module(providerCatalogModulePath, () => {
       return providerKind as 'openrouter' | 'unknown'
     },
   }
+})
+
+void mock.module(providerRuntimeMatchResolverModulePath, () => {
+  return {resolveProviderConnectionRuntimeMatchFromSummaries: state.resolveProviderConnectionRuntimeMatchFromSummaries}
 })
 
 void mock.module(providerAuthServiceModulePath, () => {
@@ -314,6 +337,99 @@ test('provider auth finish route returns lifecycle completion', async () => {
   expect(body.data.result.status).toBe('complete')
   expect(body.data.result.connection.id).toBe('connection-1')
   expect(state.finishProviderAuth).toHaveBeenCalledTimes(1)
+})
+
+test('provider connections list returns runtime state with display labels', async () => {
+  state.resolveProviderConnectionRuntimeMatchFromSummaries.mockClear()
+  state.resolveProviderConnectionRuntimeMatchFromSummaries.mockImplementationOnce((_input: unknown): unknown => {
+    return {
+      candidate: {
+        localUrls: ['http://localhost:30020'],
+        modelNames: ['Qwen/Qwen3'],
+        reason: 'runtime-auto-detect',
+        remoteUrls: ['https://alvis-tunnel.example/v1'],
+        sourceMetadata: {cluster: 'alvis', jobId: 'job-123', kind: 'launcher', label: 'Alvis', sshJumpHost: 'alvis2'},
+        source: 'detected-runtime',
+        status: 'matched',
+      },
+      detectedModelNames: ['Qwen/Qwen3'],
+      effectiveBaseURL: 'https://alvis-tunnel.example/v1',
+      effectiveWorkerUrls: ['http://localhost:30020'],
+      localUrls: ['http://localhost:30020'],
+      modelNames: ['Qwen/Qwen3'],
+      reason: 'runtime-auto-detect',
+      reasons: ['runtime-auto-detect', 'runtime-base-url-overlap', 'runtime-model-overlap'],
+      remoteUrls: ['https://alvis-tunnel.example/v1'],
+      resolutionMode: 'auto-detect',
+      sourceMetadata: {cluster: 'alvis', jobId: 'job-123', kind: 'launcher', label: 'Alvis', sshJumpHost: 'alvis2'},
+      source: 'detected-runtime',
+      status: 'matched',
+    }
+  })
+  state.listProviderConnections.mockImplementationOnce((async () => {
+    return [
+      {
+        authMode: 'none',
+        baseURL: 'https://alvis-tunnel.example/v1',
+        config: {manualWorkerUrls: [], workerUrlMode: 'runtime'},
+        createdAt: null,
+        enabled: true,
+        hasSecret: false,
+        id: 'connection-1',
+        label: 'SGLang Alvis',
+        lastCheckedAt: null,
+        lastError: null,
+        models: [{modelName: 'Qwen/Qwen3', remoteModelId: 'Qwen/Qwen3'}],
+        providerKind: 'sglang',
+        secretRef: null,
+        updatedAt: null,
+      },
+    ]
+  }) as never)
+
+  const app = await loadRoutes()
+  const response = await app.handle(new Request('http://localhost/api/provider-connections'))
+  const body = (await response.json()) as {
+    data: {
+      connections: Array<{
+        runtimeState: {
+          detectedModelNames: string[]
+          effectiveBaseURL: string | null
+          effectiveWorkerUrls: string[]
+          reason: string
+          reasonLabel: string
+          reasonLabels: string[]
+          sourceMetadata: {
+            cluster: string | null
+            jobId: string | null
+            kind: string
+            label: string
+            sshJumpHost: string | null
+          } | null
+          status: string
+          statusLabel: string
+        }
+      }>
+    }
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.connections[0]?.runtimeState).toEqual({
+    detectedModelNames: ['Qwen/Qwen3'],
+    effectiveBaseURL: 'https://alvis-tunnel.example/v1',
+    effectiveWorkerUrls: ['http://localhost:30020'],
+    reason: 'runtime-auto-detect',
+    reasonLabel: 'Auto-detect matched the active Alvis runtime.',
+    reasonLabels: [
+      'Auto-detect matched the active Alvis runtime.',
+      'The saved base URL overlaps the detected runtime URL.',
+      'A saved model on this connection is currently served by the detected runtime.',
+    ],
+    sourceMetadata: {cluster: 'alvis', jobId: 'job-123', kind: 'launcher', label: 'Alvis', sshJumpHost: 'alvis2'},
+    status: 'matched',
+    statusLabel: 'matched Alvis',
+  })
+  expect(state.resolveProviderConnectionRuntimeMatchFromSummaries).toHaveBeenCalledTimes(1)
 })
 
 test('provider connections route disables a provider connection', async () => {

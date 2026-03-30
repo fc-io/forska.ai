@@ -6,6 +6,7 @@ import {
 import {listProviderConnections} from './providerConnectionRepository.ts'
 import {discoverOpenAICompatibleRuntimeModel, supportsSavedLocalProviderProbe} from './providerRuntimeDiscovery.ts'
 import {type ProviderRuntimeSummary} from './providerRuntimeState.ts'
+import {type ProviderRuntimeSourceMetadata} from './providerTypes.ts'
 import {normalizeWorkerUrls, supportsRuntimeWorkerUrls} from './providerWorkerUtils.ts'
 
 const healthyTtlMs = 120_000
@@ -60,10 +61,37 @@ const getBaseURLFromWorkerUrl = (workerUrl: string): string => {
   return normalizedWorkerUrl.endsWith('/v1') ? normalizedWorkerUrl : `${normalizedWorkerUrl}/v1`
 }
 
+const getRuntimeSourceLabel = (cluster: string | null | undefined): string => {
+  const normalizedCluster = getTrimmedValue(cluster)?.toLowerCase() ?? null
+
+  return normalizedCluster === 'alvis'
+    ? 'Alvis'
+    : normalizedCluster === 'mn5'
+      ? 'MN5'
+      : normalizedCluster
+        ? normalizedCluster.charAt(0).toUpperCase() + normalizedCluster.slice(1)
+        : 'local'
+}
+
+const getLocalSourceMetadata = (): ProviderRuntimeSourceMetadata => {
+  return {cluster: null, jobId: null, kind: 'local', label: 'local', sshJumpHost: null}
+}
+
+const getLauncherSourceMetadata = (record: ProviderRuntimeRecord): ProviderRuntimeSourceMetadata => {
+  return {
+    cluster: getTrimmedValue(record.sourceCluster),
+    jobId: getTrimmedValue(record.jobId),
+    kind: 'launcher',
+    label: getRuntimeSourceLabel(record.sourceCluster),
+    sshJumpHost: getTrimmedValue(record.sshJumpHost),
+  }
+}
+
 const getSummaryFromLauncherRecord = (record: ProviderRuntimeRecord): ProviderRuntimeSummary => {
   return {
     activeModelNames: getUniqueValues(record.activeModelNames),
     providerKind: getTrimmedValue(record.providerKind),
+    sourceMetadata: getLauncherSourceMetadata(record),
     workerUrls: getUniqueValues(
       record.remoteWorkerUrls.map((_remoteWorkerUrl, index) => {
         return record.localWorkerUrls[index] ?? record.remoteWorkerUrls[index]
@@ -73,7 +101,12 @@ const getSummaryFromLauncherRecord = (record: ProviderRuntimeRecord): ProviderRu
 }
 
 const getSummaryFromCacheEntry = (entry: DetectorCacheEntry): ProviderRuntimeSummary => {
-  return {activeModelNames: entry.modelNames, providerKind: entry.providerKind, workerUrls: [entry.workerUrl]}
+  return {
+    activeModelNames: entry.modelNames,
+    providerKind: entry.providerKind,
+    sourceMetadata: getLocalSourceMetadata(),
+    workerUrls: [entry.workerUrl],
+  }
 }
 
 const getSummaryFreshness = (entry: DetectorCacheEntry): number => {
@@ -97,6 +130,7 @@ const getRuntimeSummarySignature = (summary: ProviderRuntimeSummary): string => 
   return JSON.stringify({
     activeModelNames: getUniqueValues(summary.activeModelNames),
     providerKind: getTrimmedValue(summary.providerKind),
+    sourceMetadata: summary.sourceMetadata,
     workerUrls: getUniqueValues(summary.workerUrls),
   })
 }
@@ -338,7 +372,7 @@ export const getDetectedProviderRuntimeSummary = async ({
 }: {launcherRecords?: ProviderRuntimeRecord[]; now?: number} = {}): Promise<ProviderRuntimeSummary> => {
   const summaries = await getDetectedProviderRuntimeSummaries({launcherRecords, now})
 
-  return summaries[0] ?? {activeModelNames: [], providerKind: null, workerUrls: []}
+  return summaries[0] ?? {activeModelNames: [], providerKind: null, sourceMetadata: null, workerUrls: []}
 }
 
 export const clearProviderRuntimeDetectorCache = (): void => {

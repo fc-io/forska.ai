@@ -54,7 +54,12 @@ test('runtime worker mode uses runtime summary urls only when saved base url ove
     baseURL: 'http://127.0.0.1:30000/v1',
     config: {manualWorkerUrls: [], workerUrlMode: 'runtime'},
     providerKind: 'sglang',
-    runtimeSummary: {activeModelNames: [], providerKind: 'sglang', workerUrls: ['http://localhost:30001']},
+    runtimeSummary: {
+      activeModelNames: [],
+      providerKind: 'sglang',
+      sourceMetadata: null,
+      workerUrls: ['http://localhost:30001'],
+    },
   })
 
   expect(workerState.effectiveWorkerUrls).toEqual([])
@@ -68,7 +73,12 @@ test('runtime worker mode matches when the saved base url overlaps the detected 
     baseURL: 'http://localhost:30001/v1',
     config: {manualWorkerUrls: [], workerUrlMode: 'runtime'},
     providerKind: 'sglang',
-    runtimeSummary: {activeModelNames: ['Qwen/Qwen3'], providerKind: 'sglang', workerUrls: ['http://localhost:30001']},
+    runtimeSummary: {
+      activeModelNames: ['Qwen/Qwen3'],
+      providerKind: 'sglang',
+      sourceMetadata: {cluster: null, jobId: null, kind: 'local', label: 'local', sshJumpHost: null},
+      workerUrls: ['http://localhost:30001'],
+    },
     savedModelIds: ['Qwen/Qwen3'],
   })
 
@@ -80,6 +90,13 @@ test('runtime worker mode matches when the saved base url overlaps the detected 
     'runtime-base-url-overlap',
     'runtime-model-overlap',
   ])
+  expect(workerState.match.sourceMetadata).toEqual({
+    cluster: null,
+    jobId: null,
+    kind: 'local',
+    label: 'local',
+    sshJumpHost: null,
+  })
   expect(workerState.match.status).toBe('matched')
   expect(workerState.workerSource).toBe('runtime')
 })
@@ -89,7 +106,12 @@ test('saved model ids strengthen a url match but cannot replace missing url over
     baseURL: 'http://127.0.0.1:30000/v1',
     config: {manualWorkerUrls: [], workerUrlMode: 'runtime'},
     providerKind: 'sglang',
-    runtimeSummary: {activeModelNames: ['Qwen/Qwen3'], providerKind: 'sglang', workerUrls: ['http://localhost:30001']},
+    runtimeSummary: {
+      activeModelNames: ['Qwen/Qwen3'],
+      providerKind: 'sglang',
+      sourceMetadata: {cluster: null, jobId: null, kind: 'local', label: 'local', sshJumpHost: null},
+      workerUrls: ['http://localhost:30001'],
+    },
     savedModelIds: ['Qwen/Qwen3'],
   })
 
@@ -104,11 +126,23 @@ test('runtime worker mode is ambiguous when saved base and worker urls conflict'
     baseURL: 'http://localhost:30001/v1',
     config: {manualWorkerUrls: ['http://localhost:30002'], workerUrlMode: 'runtime'},
     providerKind: 'sglang',
-    runtimeSummary: {activeModelNames: ['Qwen/Qwen3'], providerKind: 'sglang', workerUrls: ['http://localhost:30001']},
+    runtimeSummary: {
+      activeModelNames: ['Qwen/Qwen3'],
+      providerKind: 'sglang',
+      sourceMetadata: {cluster: 'alvis', jobId: 'job-1', kind: 'launcher', label: 'Alvis', sshJumpHost: 'alvis2'},
+      workerUrls: ['http://localhost:30001'],
+    },
   })
 
   expect(workerState.effectiveWorkerUrls).toEqual([])
   expect(workerState.match.reason).toBe('runtime-url-conflict')
+  expect(workerState.match.sourceMetadata).toEqual({
+    cluster: 'alvis',
+    jobId: 'job-1',
+    kind: 'launcher',
+    label: 'Alvis',
+    sshJumpHost: 'alvis2',
+  })
   expect(workerState.match.status).toBe('ambiguous')
   expect(workerState.workerSource).toBe('none')
 })
@@ -136,7 +170,12 @@ test('runtime match keeps the saved base url as fallback source of truth', () =>
     baseURL: 'http://127.0.0.1:30000/v1',
     config: {manualWorkerUrls: [], workerUrlMode: 'runtime'},
     providerKind: 'sglang',
-    runtimeSummary: {activeModelNames: ['Qwen/Qwen3'], providerKind: 'vllm', workerUrls: ['http://localhost:30001']},
+    runtimeSummary: {
+      activeModelNames: ['Qwen/Qwen3'],
+      providerKind: 'vllm',
+      sourceMetadata: {cluster: 'mn5', jobId: 'job-2', kind: 'launcher', label: 'MN5', sshJumpHost: 'alog'},
+      workerUrls: ['http://localhost:30001'],
+    },
   })
 
   expect(runtimeMatch).toEqual({
@@ -150,6 +189,7 @@ test('runtime match keeps the saved base url as fallback source of truth', () =>
     reasons: ['runtime-provider-mismatch'],
     remoteUrls: [],
     resolutionMode: 'auto-detect',
+    sourceMetadata: {cluster: 'mn5', jobId: 'job-2', kind: 'launcher', label: 'MN5', sshJumpHost: 'alog'},
     source: 'none',
     status: 'unreachable',
   })
@@ -160,7 +200,12 @@ test('effective provider base url prefers runtime worker urls', () => {
     baseURL: 'http://127.0.0.1:30000/v1',
     config: {manualWorkerUrls: [], workerUrlMode: 'runtime'},
     providerKind: 'sglang',
-    runtimeSummary: {activeModelNames: [], providerKind: 'sglang', workerUrls: ['http://localhost:30001']},
+    runtimeSummary: {
+      activeModelNames: [],
+      providerKind: 'sglang',
+      sourceMetadata: null,
+      workerUrls: ['http://localhost:30001'],
+    },
   })
 
   expect(baseURL).toBe('http://127.0.0.1:30000/v1')
@@ -171,7 +216,12 @@ test('effective provider base url uses the matched runtime url when saved and de
     baseURL: 'http://localhost:30001/v1',
     config: {manualWorkerUrls: [], workerUrlMode: 'runtime'},
     providerKind: 'sglang',
-    runtimeSummary: {activeModelNames: [], providerKind: 'sglang', workerUrls: ['http://localhost:30001']},
+    runtimeSummary: {
+      activeModelNames: [],
+      providerKind: 'sglang',
+      sourceMetadata: null,
+      workerUrls: ['http://localhost:30001'],
+    },
   })
 
   expect(baseURL).toBe('http://localhost:30001/v1')
@@ -182,7 +232,12 @@ test('effective provider base url falls back to saved base url when no worker ur
     baseURL: 'http://127.0.0.1:30000/v1',
     config: {manualWorkerUrls: [], workerUrlMode: 'runtime'},
     providerKind: 'sglang',
-    runtimeSummary: {activeModelNames: [], providerKind: 'vllm', workerUrls: ['http://localhost:30001']},
+    runtimeSummary: {
+      activeModelNames: [],
+      providerKind: 'vllm',
+      sourceMetadata: null,
+      workerUrls: ['http://localhost:30001'],
+    },
   })
 
   expect(baseURL).toBe('http://127.0.0.1:30000/v1')

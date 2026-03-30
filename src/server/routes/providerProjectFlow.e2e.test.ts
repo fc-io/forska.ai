@@ -224,6 +224,13 @@ test('llama.cpp cli provider connection stores cli mode and uses the local defau
                 | 'runtime-worker-url-overlap'
                 | 'runtime-worker-missing'
               remoteUrls: string[]
+              sourceMetadata: {
+                cluster: string | null
+                jobId: string | null
+                kind: 'launcher' | 'local'
+                label: string
+                sshJumpHost: string | null
+              } | null
               source: 'detected-runtime' | 'saved-base-url' | 'saved-manual-worker'
               status: 'available' | 'matched' | 'unavailable'
             } | null
@@ -250,6 +257,13 @@ test('llama.cpp cli provider connection stores cli mode and uses the local defau
             reasons: string[]
             remoteUrls: string[]
             resolutionMode: 'auto-detect' | 'manual'
+            sourceMetadata: {
+              cluster: string | null
+              jobId: string | null
+              kind: 'launcher' | 'local'
+              label: string
+              sshJumpHost: string | null
+            } | null
             source: 'detected-runtime' | 'none' | 'saved-base-url' | 'saved-manual-worker'
             status: 'ambiguous' | 'manual-only' | 'matched' | 'unreachable'
           }
@@ -280,6 +294,7 @@ test('llama.cpp cli provider connection stores cli mode and uses the local defau
         modelNames: [],
         reason: 'manual-base-url',
         remoteUrls: ['http://127.0.0.1:8080'],
+        sourceMetadata: null,
         source: 'saved-base-url',
         status: 'matched',
       },
@@ -292,6 +307,7 @@ test('llama.cpp cli provider connection stores cli mode and uses the local defau
       reasons: ['manual-mode', 'manual-base-url'],
       remoteUrls: ['http://127.0.0.1:8080'],
       resolutionMode: 'manual',
+      sourceMetadata: null,
       source: 'saved-base-url',
       status: 'manual-only',
     },

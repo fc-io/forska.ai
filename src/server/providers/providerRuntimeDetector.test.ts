@@ -110,6 +110,7 @@ test('detector probes saved manual worker urls for runtime-backed providers', as
   expect(summary).toEqual({
     activeModelNames: ['Qwen/Qwen3'],
     providerKind: 'sglang',
+    sourceMetadata: {cluster: null, jobId: null, kind: 'local', label: 'local', sshJumpHost: null},
     workerUrls: ['http://127.0.0.1:30010'],
   })
 })
@@ -143,6 +144,7 @@ test('detector probes only saved local provider endpoints', async () => {
   expect(summary).toEqual({
     activeModelNames: ['Qwen/Qwen3'],
     providerKind: 'llmstudio',
+    sourceMetadata: {cluster: null, jobId: null, kind: 'local', label: 'local', sshJumpHost: null},
     workerUrls: ['http://127.0.0.1:1234'],
   })
 })
@@ -169,7 +171,17 @@ test('detector lists all detected runtime summaries for saved connections', asyn
   const summaries = await getDetectedProviderRuntimeSummaries({now: 100})
 
   expect(summaries).toEqual([
-    {activeModelNames: ['Qwen/Qwen3'], providerKind: 'llmstudio', workerUrls: ['http://127.0.0.1:1234']},
-    {activeModelNames: ['Qwen/Qwen3'], providerKind: 'sglang', workerUrls: ['http://127.0.0.1:30010']},
+    {
+      activeModelNames: ['Qwen/Qwen3'],
+      providerKind: 'llmstudio',
+      sourceMetadata: {cluster: null, jobId: null, kind: 'local', label: 'local', sshJumpHost: null},
+      workerUrls: ['http://127.0.0.1:1234'],
+    },
+    {
+      activeModelNames: ['Qwen/Qwen3'],
+      providerKind: 'sglang',
+      sourceMetadata: {cluster: null, jobId: null, kind: 'local', label: 'local', sshJumpHost: null},
+      workerUrls: ['http://127.0.0.1:30010'],
+    },
   ])
 })

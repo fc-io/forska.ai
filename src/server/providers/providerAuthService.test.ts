@@ -38,12 +38,13 @@ const state = {
   readProviderSecret: mock(async (_secretRef: string | null | undefined) => {
     return null
   }),
-  resolveProviderConnectionRuntimeMatch: mock(async (_input: unknown) => {
+  resolveProviderConnectionRuntimeMatch: mock(async (_input: unknown): Promise<unknown> => {
     const candidate = {
       localUrls: [] as string[],
       modelNames: [] as string[],
       reason: 'manual-base-url',
       remoteUrls: ['https://api.example.com/v1'],
+      sourceMetadata: null,
       source: 'saved-base-url',
       status: 'matched',
     }
@@ -59,6 +60,7 @@ const state = {
       reasons: ['manual-mode', 'manual-base-url'],
       remoteUrls: ['https://api.example.com/v1'],
       resolutionMode: 'manual',
+      sourceMetadata: null,
       source: 'saved-base-url',
       status: 'manual-only',
     }
@@ -170,6 +172,7 @@ test('resolveMatchedProviderRuntimeCredentials keeps the matched effective runti
         modelNames: ['Qwen/Qwen3'],
         reason: 'runtime-auto-detect',
         remoteUrls: ['http://localhost:30001/v1'],
+        sourceMetadata: {cluster: null, jobId: null, kind: 'local', label: 'local', sshJumpHost: null},
         source: 'detected-runtime',
         status: 'matched',
       },
@@ -182,6 +185,7 @@ test('resolveMatchedProviderRuntimeCredentials keeps the matched effective runti
       reasons: ['runtime-auto-detect', 'runtime-base-url-overlap'],
       remoteUrls: ['http://localhost:30001/v1'],
       resolutionMode: 'auto-detect',
+      sourceMetadata: {cluster: null, jobId: null, kind: 'local', label: 'local', sshJumpHost: null},
       source: 'detected-runtime',
       status: 'matched',
     }
@@ -211,6 +215,7 @@ test('resolveMatchedProviderRuntimeCredentials throws an actionable error for am
       reasons: ['runtime-auto-detect', 'runtime-url-conflict'],
       remoteUrls: ['http://localhost:30001/v1'],
       resolutionMode: 'auto-detect',
+      sourceMetadata: null,
       source: 'none',
       status: 'ambiguous',
     }
