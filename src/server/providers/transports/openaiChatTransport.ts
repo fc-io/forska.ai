@@ -8,6 +8,64 @@ import {
   getTrimmedValue,
 } from './providerTransportUtils.ts'
 
+type OpenAIChatCompletionRequest = {
+  extra_body?: {chat_template_kwargs: {enable_thinking: boolean}; top_k: number}
+  max_completion_tokens: number
+  messages: Array<{content: string; role: 'system' | 'user'}>
+  model: string
+  presence_penalty?: number
+  response_format: ReturnType<typeof getJsonSchemaResponseFormat>
+  temperature: number
+  top_p?: number
+}
+
+const qwen35ModelPattern = /^Qwen\/Qwen3\.5-/
+
+export const isQwen35Model = (modelName: string): boolean => {
+  return qwen35ModelPattern.test(modelName)
+}
+
+const getQwen35SamplingConfig = (): Pick<
+  OpenAIChatCompletionRequest,
+  'extra_body' | 'presence_penalty' | 'temperature' | 'top_p'
+> => {
+  return {
+    extra_body: {chat_template_kwargs: {enable_thinking: false}, top_k: 40},
+    presence_penalty: 2.0,
+    temperature: 1.0,
+    top_p: 1.0,
+  }
+}
+
+export const getOpenAIChatCompletionRequest = ({
+  maxCompletionTokens,
+  modelName,
+  outputSchema,
+  prompt,
+  systemPrompt,
+  temperature,
+}: {
+  maxCompletionTokens: number
+  modelName: string
+  outputSchema: unknown
+  prompt: string
+  systemPrompt: string
+  temperature: number
+}): OpenAIChatCompletionRequest => {
+  const defaultRequest = {
+    max_completion_tokens: maxCompletionTokens,
+    messages: [
+      {content: systemPrompt, role: 'system' as const},
+      {content: prompt, role: 'user' as const},
+    ],
+    model: modelName,
+    response_format: getJsonSchemaResponseFormat(outputSchema),
+    temperature,
+  }
+
+  return isQwen35Model(modelName) ? {...defaultRequest, ...getQwen35SamplingConfig()} : defaultRequest
+}
+
 export const listOpenAIChatModels = async ({
   apiKey,
   baseURL,
@@ -56,16 +114,16 @@ export const invokeOpenAIChatModel = async ({
 }): Promise<ProviderInvocationResult> => {
   const resolvedBaseURL = getRequiredBaseURL({baseURL, providerLabel: 'Provider'})
   const client = getOpenAIClient({apiKey, baseURL: resolvedBaseURL})
-  const response = await client.chat.completions.create({
-    max_completion_tokens: maxCompletionTokens,
-    messages: [
-      {content: systemPrompt, role: 'system'},
-      {content: prompt, role: 'user'},
-    ],
-    model: modelName,
-    response_format: getJsonSchemaResponseFormat(outputSchema),
-    temperature,
-  } as never)
+  const response = await client.chat.completions.create(
+    getOpenAIChatCompletionRequest({
+      maxCompletionTokens,
+      modelName,
+      outputSchema,
+      prompt,
+      systemPrompt,
+      temperature,
+    }) as never,
+  )
   const message = response.choices[0]?.message
 
   if (!message) {

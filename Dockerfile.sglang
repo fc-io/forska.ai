@@ -1,7 +1,10 @@
 ARG SGLANG_BASE_IMAGE=lmsysorg/sglang:v0.5.9
 FROM ${SGLANG_BASE_IMAGE}
 
+ARG SGLANG_REF=main
 ARG TRANSFORMERS_REF=fc9137225880a9d03f130634c20f9dbe36a7b8bf
+
+RUN python -m pip install --no-cache-dir --upgrade --upgrade-strategy eager "git+https://github.com/sgl-project/sglang.git@${SGLANG_REF}#subdirectory=python"
 
 RUN python -m pip install --no-cache-dir --upgrade --upgrade-strategy eager "https://github.com/huggingface/transformers/archive/${TRANSFORMERS_REF}.zip"
 

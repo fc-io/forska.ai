@@ -371,6 +371,18 @@ echo "[forska] model=$SGLANG_MODEL"
 echo "[forska] hf cache: $HF_HOME (downloads from Hugging Face on first run if missing)"
 echo "[forska] router=${SGLANG_ENABLE_ROUTER} worker_urls=$WORKER_URLS_CSV"
 
+export SGLANG_REASONING_PARSER=${SGLANG_REASONING_PARSER:-}
+if [[ "$SGLANG_MODEL" == Qwen/Qwen3.5-* && -z "$SGLANG_REASONING_PARSER" ]]; then
+  export SGLANG_REASONING_PARSER=qwen3
+fi
+
+PARSER_ARGS=()
+if [[ -n "${SGLANG_REASONING_PARSER:-}" ]]; then
+  PARSER_ARGS+=(--reasoning-parser "$SGLANG_REASONING_PARSER")
+fi
+
+echo "[forska] extra launch args: ${PARSER_ARGS[*]:-(none)}"
+
 if [[ "${SGLANG_ONE_WORKER_PER_GPU}" == "1" ]]; then
   echo "[forska] starting one SGLang worker per GPU"
   SGLANG_WORKER_DIR="$STACK_ROOT/.cache/sglang/${SLURM_JOB_ID:-manual}"
@@ -386,6 +398,10 @@ WORKER_PORT=$(( ${SGLANG_WORKER_PORT_BASE:-30001} + WORKER_IDX ))
 CONTEXT_ARGS=()
 if [[ "${SGLANG_CONTEXT_LENGTH:-0}" != "0" ]]; then
   CONTEXT_ARGS+=(--context-length "${SGLANG_CONTEXT_LENGTH}")
+fi
+PARSER_ARGS=()
+if [[ -n "${SGLANG_REASONING_PARSER:-}" ]]; then
+  PARSER_ARGS+=(--reasoning-parser "${SGLANG_REASONING_PARSER}")
 fi
 
 exec apptainer exec --cleanenv --nv \
@@ -409,6 +425,7 @@ exec apptainer exec --cleanenv --nv \
     --schedule-policy "$SGLANG_SCHEDULE_POLICY" \
     --enable-metrics \
     --download-dir /hf_cache \
+    "${PARSER_ARGS[@]}" \
     "${CONTEXT_ARGS[@]}"
 SGLANG_WORKER
 
@@ -445,6 +462,10 @@ CONTEXT_ARGS=()
 if [[ "${SGLANG_CONTEXT_LENGTH:-0}" != "0" ]]; then
   CONTEXT_ARGS+=(--context-length "${SGLANG_CONTEXT_LENGTH}")
 fi
+PARSER_ARGS=()
+if [[ -n "${SGLANG_REASONING_PARSER:-}" ]]; then
+  PARSER_ARGS+=(--reasoning-parser "${SGLANG_REASONING_PARSER}")
+fi
 
 exec apptainer exec --cleanenv --nv \
   --env HF_HOME=/hf_cache \
@@ -467,6 +488,7 @@ exec apptainer exec --cleanenv --nv \
     --schedule-policy "$SGLANG_SCHEDULE_POLICY" \
     --enable-metrics \
     --download-dir /hf_cache \
+    "${PARSER_ARGS[@]}" \
     "${CONTEXT_ARGS[@]}"
 SGLANG_WORKER
 
@@ -503,6 +525,7 @@ SGLANG_WORKER
         --schedule-policy "$SGLANG_SCHEDULE_POLICY" \
         --enable-metrics \
         --download-dir /hf_cache \
+        "${PARSER_ARGS[@]}" \
         "${CONTEXT_ARGS[@]}" \
       >"$LOG_DIR/sglang.log" 2>&1 &
     SGLANG_PID=$!
