@@ -122,6 +122,8 @@ const processSinglePrompt = async (
       modelName: promptToProcess.modelName,
       baseURL: promptToProcess.modelBaseUrl,
       provider: promptToProcess.modelProvider,
+      providerConnectionId: promptToProcess.providerConnectionId,
+      providerMaxInflightRequests: promptToProcess.providerMaxInflightRequests,
       workerUrls: promptToProcess.modelWorkerUrls,
     },
     modelContext,

@@ -7,15 +7,18 @@ type RequestSlot = {baseURL: string; release: () => void}
 
 type RequestWaiter<T> = {resolve: (value: T) => void; reject: (error: unknown) => void}
 
-type FallbackWaiter = RequestWaiter<RequestSlot> & {baseURL: string}
-type WorkerWaiter = RequestWaiter<RequestSlot> & {workerUrls: string[]}
+type ProviderRequestScope = {providerConnectionId: string | null; providerMaxInflightRequests: number | null}
+type FallbackWaiter = RequestWaiter<RequestSlot> & {baseURL: string; providerScope: ProviderRequestScope}
+type WorkerWaiter = RequestWaiter<RequestSlot> & {providerScope: ProviderRequestScope; workerUrls: string[]}
 
 type JobRequestState = {inFlight: number; pendingPersistedAttempts: number}
+type ProviderRequestState = {inFlight: number}
 
 const codexWaiters: RequestWaiter<() => void>[] = []
 const workerWaiters: WorkerWaiter[] = []
 const fallbackWaiters: FallbackWaiter[] = []
 const jobRequestStates = new Map<string, JobRequestState>()
+const providerRequestStates = new Map<string, ProviderRequestState>()
 
 let codexInFlight = 0
 let fallbackInFlight = 0
@@ -29,6 +32,51 @@ const normalizeProvider = (value: string | null | undefined): string => {
 
 const getNonCodexCapacity = () => {
   return getJudgmentsCapacity(1)
+}
+
+const getProviderRequestKey = ({providerConnectionId}: ProviderRequestScope): string | null => {
+  return providerConnectionId ? `provider:${providerConnectionId}` : null
+}
+
+const getProviderRequestState = (providerKey: string): ProviderRequestState => {
+  const existing = providerRequestStates.get(providerKey)
+  if (existing) return existing
+
+  const created = {inFlight: 0}
+  providerRequestStates.set(providerKey, created)
+  return created
+}
+
+const trimProviderRequestState = (providerKey: string): void => {
+  const state = providerRequestStates.get(providerKey)
+  if (state && state.inFlight === 0) {
+    providerRequestStates.delete(providerKey)
+  }
+}
+
+const acquireProviderRequestRelease = (providerScope: ProviderRequestScope): (() => void) | null => {
+  const providerKey = getProviderRequestKey(providerScope)
+  const maxInflight = providerScope.providerMaxInflightRequests
+
+  if (!providerKey || maxInflight == null) {
+    return () => {
+      return undefined
+    }
+  }
+
+  const state = getProviderRequestState(providerKey)
+  const normalizedMaxInflight = Math.max(1, maxInflight)
+
+  if (state.inFlight >= normalizedMaxInflight) {
+    return null
+  }
+
+  state.inFlight += 1
+
+  return () => {
+    state.inFlight = Math.max(0, state.inFlight - 1)
+    trimProviderRequestState(providerKey)
+  }
 }
 
 const getJobRequestState = (judgmentsJobId: string): JobRequestState => {
@@ -104,17 +152,32 @@ const acquireCodexRelease = async (): Promise<() => void> => {
   })
 }
 
-const buildWorkerSlot = (workerUrl: string): RequestSlot => {
+const drainProviderScopedWaiters = (): void => {
+  drainWorkerWaiters()
+  drainFallbackWaiters()
+}
+
+const buildWorkerSlot = (workerUrl: string, releaseProviderRequest: () => void): RequestSlot => {
   return {
     baseURL: `${workerUrl}/v1`,
     release: () => {
       workerLoadBalancer.releaseWorker(workerUrl)
-      drainWorkerWaiters()
+      releaseProviderRequest()
+      drainProviderScopedWaiters()
     },
   }
 }
 
-const tryAcquireWorkerSlot = (workerUrls: string[]): RequestSlot | null => {
+const tryAcquireWorkerSlot = ({
+  providerScope,
+  workerUrls,
+}: {
+  providerScope: ProviderRequestScope
+  workerUrls: string[]
+}): RequestSlot | null => {
+  const releaseProviderRequest = acquireProviderRequestRelease(providerScope)
+  if (!releaseProviderRequest) return null
+
   const workerUrl = workerLoadBalancer.acquireWorkerUrl({
     maxActiveRequests: getNonCodexCapacity().perWorkerMaxInflightRequests,
     workerUrls,
@@ -123,106 +186,146 @@ const tryAcquireWorkerSlot = (workerUrls: string[]): RequestSlot | null => {
     },
   })
 
-  return workerUrl ? buildWorkerSlot(workerUrl) : null
+  return workerUrl ? buildWorkerSlot(workerUrl, releaseProviderRequest) : (releaseProviderRequest(), null)
 }
 
 const drainWorkerWaiters = (): void => {
-  const waiter = workerWaiters[0]
-  const slot = waiter ? tryAcquireWorkerSlot(waiter.workerUrls) : null
+  const nextAction = workerWaiters.reduce<
+    {error: ConnectionError; index: number; type: 'reject'} | {index: number; slot: RequestSlot; type: 'resolve'} | null
+  >((state, waiter, index) => {
+    if (state) return state
 
-  if (waiter && slot) {
-    workerWaiters.shift()
-    waiter.resolve(slot)
-    drainWorkerWaiters()
-  }
+    if (!hasHealthyWorker(waiter.workerUrls)) {
+      return {error: buildWorkerCircuitError(waiter.workerUrls), index, type: 'reject'}
+    }
 
-  if (waiter && !slot && !hasHealthyWorker(waiter.workerUrls)) {
-    workerWaiters.shift()
-    waiter.reject(buildWorkerCircuitError(waiter.workerUrls))
-    drainWorkerWaiters()
-  }
+    const slot = tryAcquireWorkerSlot(waiter)
+    return slot ? {index, slot, type: 'resolve'} : null
+  }, null)
+
+  if (!nextAction) return
+
+  const [waiter] = workerWaiters.splice(nextAction.index, 1)
+  if (!waiter) return
+
+  return nextAction.type === 'resolve'
+    ? (waiter.resolve(nextAction.slot), drainWorkerWaiters())
+    : (waiter.reject(nextAction.error), drainWorkerWaiters())
 }
 
-const acquireWorkerSlot = async (workerUrls: string[]): Promise<RequestSlot> => {
-  const slot = tryAcquireWorkerSlot(workerUrls)
+const acquireWorkerSlot = async ({
+  providerScope,
+  workerUrls,
+}: {
+  providerScope: ProviderRequestScope
+  workerUrls: string[]
+}): Promise<RequestSlot> => {
+  const slot = tryAcquireWorkerSlot({providerScope, workerUrls})
 
   if (slot) return slot
   if (!hasHealthyWorker(workerUrls)) throw buildWorkerCircuitError(workerUrls)
 
   return new Promise((resolve, reject) => {
-    workerWaiters.push({reject, resolve, workerUrls})
+    workerWaiters.push({providerScope, reject, resolve, workerUrls})
   })
 }
 
-const drainFallbackWaiters = (): void => {
-  const waiter = fallbackWaiters[0]
+const tryAcquireFallbackSlot = ({
+  baseURL,
+  providerScope,
+}: {
+  baseURL: string
+  providerScope: ProviderRequestScope
+}): RequestSlot | null => {
+  const releaseProviderRequest = acquireProviderRequestRelease(providerScope)
   const maxInflight = getNonCodexCapacity().maxInflight
-  const canAcquire = Boolean(waiter) && fallbackInFlight < maxInflight
+  const canAcquireFallback = fallbackInFlight < maxInflight
 
-  return !waiter
-    ? undefined
-    : isCircuitOpen(waiter.baseURL)
-      ? (() => {
-          fallbackWaiters.shift()
-          waiter.reject(new ConnectionError('Inference server blocked by circuit breaker', waiter.baseURL))
-          drainFallbackWaiters()
-        })()
-      : canAcquire
-        ? (() => {
-            fallbackInFlight += 1
-            fallbackWaiters.shift()
-            waiter.resolve({
-              baseURL: waiter.baseURL,
-              release: () => {
-                fallbackInFlight = Math.max(0, fallbackInFlight - 1)
-                drainFallbackWaiters()
-              },
-            })
-            drainFallbackWaiters()
-          })()
-        : undefined
+  if (!releaseProviderRequest || !canAcquireFallback) {
+    return releaseProviderRequest ? (releaseProviderRequest(), null) : null
+  }
+
+  fallbackInFlight += 1
+
+  return {
+    baseURL,
+    release: () => {
+      fallbackInFlight = Math.max(0, fallbackInFlight - 1)
+      releaseProviderRequest()
+      drainProviderScopedWaiters()
+    },
+  }
 }
 
-const acquireFallbackSlot = async (baseURL: string): Promise<RequestSlot> => {
+const drainFallbackWaiters = (): void => {
+  const nextAction = fallbackWaiters.reduce<
+    {error: ConnectionError; index: number; type: 'reject'} | {index: number; slot: RequestSlot; type: 'resolve'} | null
+  >((state, waiter, index) => {
+    if (state) return state
+
+    if (isCircuitOpen(waiter.baseURL)) {
+      return {
+        error: new ConnectionError('Inference server blocked by circuit breaker', waiter.baseURL),
+        index,
+        type: 'reject',
+      }
+    }
+
+    const slot = tryAcquireFallbackSlot(waiter)
+    return slot ? {index, slot, type: 'resolve'} : null
+  }, null)
+
+  if (!nextAction) return
+
+  const [waiter] = fallbackWaiters.splice(nextAction.index, 1)
+  if (!waiter) return
+
+  return nextAction.type === 'resolve'
+    ? (waiter.resolve(nextAction.slot), drainFallbackWaiters())
+    : (waiter.reject(nextAction.error), drainFallbackWaiters())
+}
+
+const acquireFallbackSlot = async ({
+  baseURL,
+  providerScope,
+}: {
+  baseURL: string
+  providerScope: ProviderRequestScope
+}): Promise<RequestSlot> => {
   if (isCircuitOpen(baseURL)) {
     throw new ConnectionError('Inference server blocked by circuit breaker', baseURL)
   }
 
-  const maxInflight = getNonCodexCapacity().maxInflight
-  const canAcquire = fallbackInFlight < maxInflight
-
-  if (canAcquire) {
-    fallbackInFlight += 1
-    return {
-      baseURL,
-      release: () => {
-        fallbackInFlight = Math.max(0, fallbackInFlight - 1)
-        drainFallbackWaiters()
-      },
-    }
-  }
+  const slot = tryAcquireFallbackSlot({baseURL, providerScope})
+  if (slot) return slot
 
   return new Promise((resolve, reject) => {
-    fallbackWaiters.push({baseURL, resolve, reject})
+    fallbackWaiters.push({baseURL, providerScope, resolve, reject})
   })
 }
 
 const acquireRequestSlot = async ({
   provider,
   fallbackBaseURL,
+  providerConnectionId,
+  providerMaxInflightRequests,
   workerUrls,
 }: {
   provider: string | null | undefined
   fallbackBaseURL: string
+  providerConnectionId: string | null
+  providerMaxInflightRequests: number | null
   workerUrls: string[]
 }): Promise<RequestSlot> => {
+  const providerScope = {providerConnectionId, providerMaxInflightRequests}
+
   return normalizeProvider(provider) === 'codex'
     ? acquireCodexRelease().then((release) => {
         return {baseURL: fallbackBaseURL, release}
       })
     : workerUrls.length > 0
-      ? acquireWorkerSlot(workerUrls)
-      : acquireFallbackSlot(fallbackBaseURL)
+      ? acquireWorkerSlot({providerScope, workerUrls})
+      : acquireFallbackSlot({baseURL: fallbackBaseURL, providerScope})
 }
 
 export const getJudgmentRequestStats = (
@@ -243,11 +346,26 @@ export const withJudgmentRequest = async <T>(
     judgmentsJobId,
     provider,
     fallbackBaseURL,
+    providerConnectionId,
+    providerMaxInflightRequests,
     workerUrls,
-  }: {judgmentsJobId: string; provider: string | null | undefined; fallbackBaseURL: string; workerUrls: string[]},
+  }: {
+    judgmentsJobId: string
+    provider: string | null | undefined
+    fallbackBaseURL: string
+    providerConnectionId: string | null
+    providerMaxInflightRequests: number | null
+    workerUrls: string[]
+  },
   run: (baseURL: string) => Promise<T>,
 ): Promise<T> => {
-  const slot = await acquireRequestSlot({fallbackBaseURL, provider, workerUrls})
+  const slot = await acquireRequestSlot({
+    fallbackBaseURL,
+    provider,
+    providerConnectionId,
+    providerMaxInflightRequests,
+    workerUrls,
+  })
   markRequestStarted(judgmentsJobId)
 
   try {
@@ -256,4 +374,14 @@ export const withJudgmentRequest = async <T>(
     markRequestFinished(judgmentsJobId)
     slot.release()
   }
+}
+
+export const resetJudgmentRequestRuntimeForTests = (): void => {
+  codexWaiters.splice(0, codexWaiters.length)
+  workerWaiters.splice(0, workerWaiters.length)
+  fallbackWaiters.splice(0, fallbackWaiters.length)
+  jobRequestStates.clear()
+  providerRequestStates.clear()
+  codexInFlight = 0
+  fallbackInFlight = 0
 }

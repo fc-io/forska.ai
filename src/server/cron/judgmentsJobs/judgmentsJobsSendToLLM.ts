@@ -453,7 +453,10 @@ const sendToLLMForJobs = async (
 
   const promptClaimResults = await Promise.allSettled(
     requestsToSendByJob.map(({job, limit}) => {
-      return getAndUpdateReadyPrompts(serverJobId, job.id, limit)
+      return getAndUpdateReadyPrompts(serverJobId, job.id, limit, {
+        providerConnectionId: job.providerConnectionId,
+        providerMaxInflightRequests: getEffectiveProviderCap({job}).maxInflight,
+      })
     }),
   )
 
