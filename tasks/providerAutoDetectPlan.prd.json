@@ -213,11 +213,12 @@
         "Browser verify in `/providers`: local manual provider matches a live local runtime, manual Alvis or MN5 provider matches a live tunneled runtime, ambiguous match stays non-adopted and visible, and creating a judgment job succeeds through the matched runtime"
       ],
       "priority": 9,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-008"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-010",
@@ -246,6 +247,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-03-30T07:40:15.964Z"
+    "updatedAt": "2026-03-30T07:44:50.632Z"
   }
 }

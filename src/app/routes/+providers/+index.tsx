@@ -16,6 +16,7 @@ import {
   updateProviderConnection,
 } from '../+admin/+models/providerConnectionsClient.ts'
 import {getProviderDisplayLabel} from './providerCatalogUi.ts'
+import {ProviderRuntimeStateCard} from './providerRuntimeStateCard.tsx'
 
 const AdminModels = () => {
   const providerConnectionsQuery = useQuery(() => {
@@ -274,6 +275,7 @@ const AdminModels = () => {
                                 </div>
                               </Show>
                             </div>
+                            <ProviderRuntimeStateCard connection={connection} title="Runtime match" />
                             <Show when={connection.lastError}>
                               <p class="text-sm text-red-600">{connection.lastError}</p>
                             </Show>

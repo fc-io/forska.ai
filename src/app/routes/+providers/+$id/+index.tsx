@@ -46,6 +46,7 @@ import {
   getProviderSelectionKind,
   shouldHideProviderBaseURLField,
 } from '../providerCatalogUi.ts'
+import {ProviderRuntimeStateCard} from '../providerRuntimeStateCard.tsx'
 
 type ConnectionFormState = {
   apiKey: string
@@ -848,6 +849,10 @@ const ProviderDetailPage = () => {
                       <span class="rounded-full bg-gray-100 px-2 py-1 text-[11px] font-medium uppercase tracking-wide text-gray-600">
                         {getConnectionProviderLabel(connection())}
                       </span>
+                    </div>
+
+                    <div class="mb-4">
+                      <ProviderRuntimeStateCard connection={connection()} title="Matched runtime status" />
                     </div>
 
                     <div class="space-y-4">
