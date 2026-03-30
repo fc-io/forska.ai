@@ -1,7 +1,7 @@
 import {expect, mock, test} from 'bun:test'
 
 import type {RunningJudgmentJob} from './judgmentsJobsGetRunningJobs.ts'
-import {getCapacityBuckets, requeueAndFilterRunningJobs} from './judgmentsJobsSendToLLM.ts'
+import {getCapacityBuckets, getEffectiveProviderCap, requeueAndFilterRunningJobs} from './judgmentsJobsSendToLLM.ts'
 
 test('requeues stale sent prompts before runtime filtering', async () => {
   const requeueSentPrompts = mock(async (_params: {jobIds: string[]; serverJobId: string}) => {
@@ -111,4 +111,70 @@ test('groups jobs with saved provider inflight overrides by connection', () => {
     {capacity: {maxBurst: 10, maxInflight: 10, workerCount: 1}, jobIds: ['job-default-non-codex'], label: 'non-codex'},
     {capacity: {maxBurst: 4, maxInflight: 4, workerCount: 4}, jobIds: ['job-default-codex'], label: 'codex'},
   ])
+})
+
+test('getEffectiveProviderCap preserves codex family defaults when no override is saved', () => {
+  expect(
+    getEffectiveProviderCap({
+      getCodexDefaultMaxInflight: () => {
+        return 4
+      },
+      getNonCodexCapacity: () => {
+        return {maxBurst: 9, maxInflight: 9, workerCount: 3}
+      },
+      job: {
+        id: 'job-codex-default',
+        maxInflightRequests: null,
+        modelId: 'model-codex-default',
+        modelName: 'Model Codex Default',
+        modelProvider: 'codex',
+        projectId: 'project-codex-default',
+        providerConnectionId: 'connection-codex-default',
+      },
+    }),
+  ).toEqual({maxInflight: 4, usesFamilyDefault: true})
+})
+
+test('getEffectiveProviderCap preserves non-codex family defaults when no override is saved', () => {
+  expect(
+    getEffectiveProviderCap({
+      getCodexDefaultMaxInflight: () => {
+        return 4
+      },
+      getNonCodexCapacity: () => {
+        return {maxBurst: 9, maxInflight: 9, workerCount: 3}
+      },
+      job: {
+        id: 'job-provider-default',
+        maxInflightRequests: null,
+        modelId: 'model-provider-default',
+        modelName: 'Model Provider Default',
+        modelProvider: 'sglang',
+        projectId: 'project-provider-default',
+        providerConnectionId: 'connection-provider-default',
+      },
+    }),
+  ).toEqual({maxInflight: 9, usesFamilyDefault: true})
+})
+
+test('getEffectiveProviderCap prefers the saved provider override', () => {
+  expect(
+    getEffectiveProviderCap({
+      getCodexDefaultMaxInflight: () => {
+        return 4
+      },
+      getNonCodexCapacity: () => {
+        return {maxBurst: 9, maxInflight: 9, workerCount: 3}
+      },
+      job: {
+        id: 'job-provider-override',
+        maxInflightRequests: 2,
+        modelId: 'model-provider-override',
+        modelName: 'Model Provider Override',
+        modelProvider: 'sglang',
+        projectId: 'project-provider-override',
+        providerConnectionId: 'connection-provider-override',
+      },
+    }),
+  ).toEqual({maxInflight: 2, usesFamilyDefault: false})
 })

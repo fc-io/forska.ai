@@ -5,9 +5,11 @@ import {filterRunningJobsByRuntimeMatch, type RunningJudgmentJob} from './judgme
 const getJob = (id: string): RunningJudgmentJob => {
   return {
     id,
+    maxInflightRequests: null,
     modelId: `${id}-model`,
     modelName: 'Qwen/Qwen3.5-35B-A3B',
     modelProvider: 'sglang',
+    providerConnectionId: `${id}-connection`,
     projectId: `${id}-project`,
   }
 }
@@ -23,16 +25,20 @@ test('filterRunningJobsByRuntimeMatch filters out jobs with runtime mismatch', a
   const jobs: RunningJudgmentJob[] = [
     {
       id: 'job-ok',
+      maxInflightRequests: null,
       modelId: 'model-ok',
       modelName: 'Qwen/Qwen3.5-35B-A3B',
       modelProvider: 'sglang',
+      providerConnectionId: 'connection-ok',
       projectId: 'project-ok',
     },
     {
       id: 'job-mismatch',
+      maxInflightRequests: null,
       modelId: 'model-mismatch',
       modelName: 'Qwen/Qwen3.5-32B',
       modelProvider: 'sglang',
+      providerConnectionId: 'connection-mismatch',
       projectId: 'project-mismatch',
     },
   ]

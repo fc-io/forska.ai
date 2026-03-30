@@ -35,10 +35,42 @@ const isCodexJob = (job: {modelProvider: string | null}): boolean => {
 type Capacity = {maxInflight: number; maxBurst: number; workerCount: number}
 type CapacityBucket<T> = {capacity: Capacity; jobs: T[]; label: string}
 
-const getOverrideCapacity = (maxInflightRequests: number | null | undefined): Capacity => {
-  const limit = Math.max(1, maxInflightRequests ?? 1)
+const getCapacityFromMaxInflight = (maxInflightRequests: number): Capacity => {
+  const limit = Math.max(1, maxInflightRequests)
 
   return {maxBurst: limit, maxInflight: limit, workerCount: limit}
+}
+
+const getProviderFamilyDefaultMaxInflight = ({
+  getCodexDefaultMaxInflight,
+  getNonCodexCapacity,
+  job,
+}: {
+  getCodexDefaultMaxInflight: () => number
+  getNonCodexCapacity: (runningJobCount: number) => Capacity
+  job: RunningJudgmentJob
+}): number => {
+  return isCodexJob(job) ? getCodexDefaultMaxInflight() : getNonCodexCapacity(1).maxInflight
+}
+
+export const getEffectiveProviderCap = ({
+  getCodexDefaultMaxInflight = getCodexMaxInflight,
+  getNonCodexCapacity = getJudgmentsCapacity,
+  job,
+}: {
+  getCodexDefaultMaxInflight?: () => number
+  getNonCodexCapacity?: (runningJobCount: number) => Capacity
+  job: RunningJudgmentJob
+}): {maxInflight: number; usesFamilyDefault: boolean} => {
+  const savedMaxInflight = job.maxInflightRequests
+  const providerFamilyDefaultMaxInflight = getProviderFamilyDefaultMaxInflight({
+    getCodexDefaultMaxInflight,
+    getNonCodexCapacity,
+    job,
+  })
+  const maxInflight = Math.max(1, savedMaxInflight ?? providerFamilyDefaultMaxInflight)
+
+  return {maxInflight, usesFamilyDefault: savedMaxInflight == null}
 }
 
 export const getCapacityBuckets = ({
@@ -52,7 +84,8 @@ export const getCapacityBuckets = ({
 }): CapacityBucket<RunningJudgmentJob>[] => {
   const grouped = jobs.reduce(
     (state, job) => {
-      const connectionKey = job.maxInflightRequests != null ? (job.providerConnectionId ?? job.id) : null
+      const providerCap = getEffectiveProviderCap({getCodexDefaultMaxInflight, getNonCodexCapacity, job})
+      const connectionKey = providerCap.usesFamilyDefault ? null : (job.providerConnectionId ?? job.id)
 
       return connectionKey
         ? {
@@ -72,15 +105,22 @@ export const getCapacityBuckets = ({
       overriddenJobsByConnection: new Map<string, RunningJudgmentJob[]>(),
     },
   )
-  const connectionBuckets = Array.from(grouped.overriddenJobsByConnection.entries()).map(
-    ([connectionId, connectionJobs]) => {
+  const connectionBuckets = Array.from(grouped.overriddenJobsByConnection.entries())
+    .map(([connectionId, connectionJobs]) => {
+      const firstJob = connectionJobs[0]
+      if (!firstJob) return null
+
       return {
-        capacity: getOverrideCapacity(connectionJobs[0]?.maxInflightRequests),
+        capacity: getCapacityFromMaxInflight(
+          getEffectiveProviderCap({getCodexDefaultMaxInflight, getNonCodexCapacity, job: firstJob}).maxInflight,
+        ),
         jobs: connectionJobs,
-        label: `${isCodexJob(connectionJobs[0] ?? {modelProvider: null}) ? 'codex' : 'provider'}:${connectionId}`,
+        label: `${isCodexJob(firstJob ?? {modelProvider: null}) ? 'codex' : 'provider'}:${connectionId}`,
       }
-    },
-  )
+    })
+    .filter((bucket): bucket is CapacityBucket<RunningJudgmentJob> => {
+      return Boolean(bucket)
+    })
   const defaultCodexMaxInflight = getCodexDefaultMaxInflight()
   const defaultBuckets = [
     grouped.defaultNonCodexJobs.length > 0
@@ -91,15 +131,7 @@ export const getCapacityBuckets = ({
         }
       : null,
     grouped.defaultCodexJobs.length > 0
-      ? {
-          capacity: {
-            maxBurst: defaultCodexMaxInflight,
-            maxInflight: defaultCodexMaxInflight,
-            workerCount: defaultCodexMaxInflight,
-          },
-          jobs: grouped.defaultCodexJobs,
-          label: 'codex',
-        }
+      ? {capacity: getCapacityFromMaxInflight(defaultCodexMaxInflight), jobs: grouped.defaultCodexJobs, label: 'codex'}
       : null,
   ].filter((bucket): bucket is CapacityBucket<RunningJudgmentJob> => {
     return Boolean(bucket)
