@@ -195,6 +195,7 @@ const getCodexConnectionForEnsure = async () => {
         baseURL: null,
         config: {manualWorkerUrls: [], workerUrlMode: 'manual'},
         label: 'Codex',
+        maxInflightRequests: null,
         providerKind: 'codex',
         secretRef: null,
       })

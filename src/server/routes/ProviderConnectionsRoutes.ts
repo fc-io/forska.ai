@@ -61,6 +61,10 @@ const getSavedModelIds = (models: Array<{modelName: string | null; remoteModelId
   })
 }
 
+const getMaxInflightRequests = (value: number | null | undefined): number | null => {
+  return value === null || value === undefined ? null : Math.max(1, Math.trunc(value))
+}
+
 const getPublicProviderConnectionPayload = <
   T extends {
     baseURL: string | null
@@ -285,6 +289,7 @@ export const providerConnectionsRoutes = new Elysia()
         baseURL,
         config,
         label,
+        maxInflightRequests: getMaxInflightRequests(body.maxInflightRequests),
         providerKind,
         secretRef: null,
       })
@@ -299,6 +304,7 @@ export const providerConnectionsRoutes = new Elysia()
               enabled: connection.enabled,
               id: connection.id,
               label,
+              maxInflightRequests: connection.maxInflightRequests,
               secretRef,
             })
           : connection
@@ -318,6 +324,7 @@ export const providerConnectionsRoutes = new Elysia()
         label: t.Optional(t.String()),
         llamaCppMode: t.Optional(t.Union([t.Literal('cli'), t.Literal('server')])),
         manualWorkerUrls: t.Optional(t.Array(t.String())),
+        maxInflightRequests: t.Optional(t.Union([t.Number(), t.Null()])),
         providerKind: t.String(),
         workerUrls: t.Optional(t.Array(t.String())),
         workerUrlMode: t.Optional(t.Union([t.Literal('manual'), t.Literal('runtime')])),
@@ -370,6 +377,10 @@ export const providerConnectionsRoutes = new Elysia()
           enabled: body.enabled ?? existing.enabled,
           id: existing.id,
           label: nextLabel,
+          maxInflightRequests:
+            body.maxInflightRequests !== undefined
+              ? getMaxInflightRequests(body.maxInflightRequests)
+              : existing.maxInflightRequests,
           secretRef,
         })
 
@@ -405,6 +416,7 @@ export const providerConnectionsRoutes = new Elysia()
         label: t.Optional(t.String()),
         llamaCppMode: t.Optional(t.Union([t.Literal('cli'), t.Literal('server')])),
         manualWorkerUrls: t.Optional(t.Array(t.String())),
+        maxInflightRequests: t.Optional(t.Union([t.Number(), t.Null()])),
         workerUrls: t.Optional(t.Array(t.String())),
         workerUrlMode: t.Optional(t.Union([t.Literal('manual'), t.Literal('runtime')])),
       }),

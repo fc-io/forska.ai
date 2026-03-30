@@ -1,0 +1,173 @@
+{
+  "name": "Provider Inflight Limit Plan",
+  "description": "Add a provider-connection level API-server cap for Prompts in Progress so Forska can limit concurrency per provider, including Codex, independently of runtime or sbatch settings.",
+  "branchName": "ralph/provider-inflight-limit",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add provider connection inflight limit storage",
+      "description": "As a maintainer, I want provider connections to store a nullable max inflight limit so Forska can persist scheduler-owned concurrency caps separately from provider metadata or runtime state.",
+      "acceptanceCriteria": [
+        "Add a DuckDB migration for `app.provider_connection.max_inflight_requests` as a nullable column.",
+        "Thread `maxInflightRequests` through provider connection row, record, repository, and route payload types.",
+        "Existing provider connections continue to behave the same when the column is `NULL`.",
+        "bun run db:mig passes",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-002",
+      "title": "Persist and validate provider inflight limits via API",
+      "description": "As a maintainer, I want provider create and update routes to accept a nullable positive inflight limit so the saved scheduler cap can be managed through the provider API.",
+      "acceptanceCriteria": [
+        "`POST /api/provider-connections` and `PATCH /api/provider-connections/:id` accept `maxInflightRequests` as `NULL` or a positive integer.",
+        "The API rejects `0`, negative values, and non-integers with actionable validation errors.",
+        "Provider connection responses round-trip the saved `maxInflightRequests` value.",
+        "bun run db:mig passes",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Show the inflight limit in the Providers UI",
+      "description": "As a user, I want to edit a provider connection's Prompts in Progress limit from the Providers page so I can control Forska's API-server concurrency without touching runtime launch settings.",
+      "acceptanceCriteria": [
+        "Add a `Prompts in Progress limit` input to `src/app/routes/+providers/+$id/+index.tsx` for editable provider connections, including Codex App.",
+        "UI copy explains that an empty value uses the provider-family default, with Codex falling back to `CODEX_MAX_INFLIGHT` and runtime-backed providers falling back to current runtime or global capacity.",
+        "Saving and reloading the provider page preserves the configured or cleared value.",
+        "bun run db:mig passes",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts passes",
+        "bun run lint passes",
+        "Browser verify in `/providers/:id`: save a provider cap, leave it empty for default, confirm the saved value survives reload, verify a capped provider does not let `Prompts in Progress` exceed the configured value, and verify Codex uses the same field with its own default fallback"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Thread provider cap data into running job capacity logic",
+      "description": "As a maintainer, I want running judgment job capacity planning to know each job's provider connection and saved inflight cap so prompt scheduling can group work by provider connection.",
+      "acceptanceCriteria": [
+        "Running-job lookup includes `providerConnectionId` and the saved `maxInflightRequests` value needed for scheduling.",
+        "Add a helper that computes an effective provider cap from the saved provider value and the provider-family default behavior.",
+        "Leaving `maxInflightRequests` empty preserves today's capacity behavior for both Codex and non-Codex providers.",
+        "bun run db:mig passes",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Cap prompt claiming per provider connection",
+      "description": "As a maintainer, I want prompt claiming to respect provider-level inflight caps so multiple jobs sharing one provider connection cannot over-claim Prompts in Progress.",
+      "acceptanceCriteria": [
+        "Group running jobs by provider connection when computing prompt claim budgets in `src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.ts`.",
+        "Jobs sharing one provider connection cannot collectively claim beyond that provider's effective cap.",
+        "Different provider connections can still make progress independently while staying under stricter global limits.",
+        "bun run db:mig passes",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Enforce provider caps in request-slot scheduling",
+      "description": "As a maintainer, I want the request runtime to enforce provider-scoped inflight caps so worker-based and fallback requests cannot exceed the configured provider budget after prompts have been claimed.",
+      "acceptanceCriteria": [
+        "Pass provider connection identity and effective provider cap into `src/server/cron/judgmentsJobs/judgmentsRequestRuntime.ts`.",
+        "Maintain provider-scoped in-flight accounting for worker-based and fallback requests, with counts releasing correctly on success and failure.",
+        "Provider caps compose correctly with worker load balancing and circuit breaking instead of bypassing them.",
+        "bun run db:mig passes",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-005"
+      ]
+    },
+    {
+      "id": "US-007",
+      "title": "Apply the same provider cap setting to Codex",
+      "description": "As a maintainer, I want Codex App to use the same saved provider inflight setting so Forska has one provider-level concurrency control with a Codex-specific default fallback.",
+      "acceptanceCriteria": [
+        "The Codex provider connection uses the same saved `maxInflightRequests` field as other providers.",
+        "When the Codex field is empty, scheduling falls back to `CODEX_MAX_INFLIGHT`; when it is set, the saved value governs Codex prompt claiming and request-slot concurrency.",
+        "Codex behavior remains isolated from non-Codex provider defaults while still using the shared provider-level setting.",
+        "bun run db:mig passes",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002",
+        "US-005",
+        "US-006"
+      ]
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-03-30T12:08:38.113Z"
+  }
+}

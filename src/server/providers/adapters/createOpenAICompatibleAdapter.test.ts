@@ -57,6 +57,7 @@ const getOllamaConnectionInput = () => {
       label: 'Ollama',
       lastCheckedAt: null,
       lastError: null,
+      maxInflightRequests: null,
       providerKind: 'ollama' as const,
       secretRef: null,
       updatedAt: null,

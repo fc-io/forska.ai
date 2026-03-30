@@ -150,6 +150,7 @@ test('provider connection patch updates a referenced connection', async () => {
         enabled: true,
         label: 'LM Studio Updated',
         manualWorkerUrls: [],
+        maxInflightRequests: 4,
         workerUrlMode: 'manual',
       }),
       headers: {'content-type': 'application/json'},
@@ -157,23 +158,33 @@ test('provider connection patch updates a referenced connection', async () => {
     }),
   )
   const patchConnectionBody = (await patchConnectionResponse.json()) as {
-    data: {connection: {baseURL: string | null; label: string}}
+    data: {connection: {baseURL: string | null; label: string; maxInflightRequests: number | null}}
   }
 
   expect(patchConnectionResponse.status).toBe(200)
   expect(patchConnectionBody.data.connection.label).toBe('LM Studio Updated')
   expect(patchConnectionBody.data.connection.baseURL).toBe('http://127.0.0.1:4321/v1')
+  expect(patchConnectionBody.data.connection.maxInflightRequests).toBe(4)
 
-  const [storedConnection] = await queryDatabase<{baseURL: string | null; label: string}>(`
+  const [storedConnection] = await queryDatabase<{
+    baseURL: string | null
+    label: string
+    maxInflightRequests: number | null
+  }>(`
     SELECT
       base_url AS baseURL,
-      label
+      label,
+      max_inflight_requests AS maxInflightRequests
     FROM app.provider_connection
     WHERE id = '${connectionId}'
     LIMIT 1
   `)
 
-  expect(storedConnection).toEqual({baseURL: 'http://127.0.0.1:4321/v1', label: 'LM Studio Updated'})
+  expect(storedConnection).toEqual({
+    baseURL: 'http://127.0.0.1:4321/v1',
+    label: 'LM Studio Updated',
+    maxInflightRequests: 4,
+  })
 })
 
 test('llama.cpp cli provider connection stores cli mode and uses the local default base URL', async () => {
@@ -321,12 +332,14 @@ test('llama.cpp cli provider connection stores cli mode and uses the local defau
     authMode: string | null
     baseURL: string | null
     configJson: string | null
+    maxInflightRequests: number | null
     providerKind: string
   }>(`
     SELECT
       auth_mode AS authMode,
       base_url AS baseURL,
       CAST(config_json AS VARCHAR) AS configJson,
+      max_inflight_requests AS maxInflightRequests,
       provider_kind AS providerKind
     FROM app.provider_connection
     WHERE id = '${connectionId}'
@@ -338,6 +351,7 @@ test('llama.cpp cli provider connection stores cli mode and uses the local defau
     baseURL: 'http://127.0.0.1:8080',
     configJson:
       '{"archived":false,"disabledModelIds":[],"llamaCppMode":"cli","manualWorkerUrls":[],"workerUrlMode":"manual"}',
+    maxInflightRequests: null,
     providerKind: 'llamacpp',
   })
 })

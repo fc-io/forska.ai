@@ -81,6 +81,7 @@ test('upsertDiscoveredModels persists discovered models through the transaction 
       label: 'LM Studio',
       lastCheckedAt: null,
       lastError: null,
+      maxInflightRequests: null,
       providerKind: 'llmstudio',
       secretRef: null,
       updatedAt: null,

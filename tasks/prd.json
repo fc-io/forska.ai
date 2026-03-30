@@ -1,180 +1,221 @@
 {
-  "name": "SQLite Judgment Queue Phase 1 Closeout",
-  "description": "Finish the SQLite-backed OLTP judgment queue rollout by moving residual cursor state into per-job SQLite, adding visibility-aware import and cleanup behavior, and covering the remaining crash and contention gaps.",
-  "branchName": "ralph/sqlite-judgment-queue-phase-1-closeout",
+  "name": "Provider Auto Detect Plan",
+  "description": "Bind saved provider connections to matching live local or remote runtimes so provider resolution becomes per-connection instead of global by provider kind.",
+  "branchName": "ralph/provider-auto-detect",
   "userStories": [
     {
       "id": "US-001",
-      "title": "Finalize SQLite job_scan_state as the active cursor source",
-      "description": "As a maintainer, I want each SQLite-backed job to persist its full scan cursor and visibility state locally so active queue scanning no longer depends on DuckDB cursor fields.",
+      "title": "Define runtime candidate and match types",
+      "description": "As a maintainer, I want explicit runtime candidate and runtime match types so provider resolution can move from global implicit runtime state to per-connection matching.",
       "acceptanceCriteria": [
-        "`job_scan_state` stores the active cursor fields together with `scan_epoch` and `last_project_refresh_ack_seq` for SQLite-backed jobs.",
-        "The SQLite scan-state service reads and writes cursor, exhaustion, scan epoch, and visibility watermark values without losing existing cursor data.",
-        "SQLite-backed prompt top-up uses `job_scan_state` as its cursor source of truth and does not require `app.judgment_job` cursor fields during scanning.",
+        "Add runtime candidate and runtime match types that carry source, status, local and remote URLs, model names, and match reasons.",
+        "Add connection-level resolution semantics so saved manual providers remain manual and legacy `workerUrlMode: \"runtime\"` can resolve through auto-detect behavior.",
+        "Saved `baseURL` and `manualWorkerUrls` remain the persisted source of truth and are not overwritten by detected runtime state.",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/providers/providerRuntimeModelGuard.test.ts passes",
+        "bun test src/server/providers/providerRuntimeState.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.test.ts passes",
         "bun run lint passes",
-        "bun test passes"
+        "bun run build passes"
       ],
       "priority": 1,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [],
-      "completionNotes": "Completed by agent"
+      "dependsOn": []
     },
     {
       "id": "US-002",
-      "title": "Make SQLite outbox import replay-safe after partial success",
-      "description": "As a maintainer, I want the SQLite outbox importer to recover cleanly when DuckDB commit succeeds before SQLite export acknowledgement so replay never duplicates judgments or strands claimed rows.",
+      "title": "Persist launcher runtime records",
+      "description": "As a maintainer, I want the Alvis and MN5 launchers to write local runtime records so the server can discover tunneled runtimes without special dev-server env injection.",
       "acceptanceCriteria": [
-        "Re-running the importer after DuckDB insert success but before SQLite ack does not create duplicate `app.judgment` rows for the same natural key.",
-        "Claimed outbox rows can be completed idempotently after replay so partially successful batches do not remain stuck in claimed state.",
-        "Importer failure before DuckDB commit still leaves affected outbox rows retryable on the next import attempt.",
+        "`alvis:launch*` and `mn5:launch` write or refresh a local runtime metadata record with provider kind, model, local tunnel URLs, remote URLs, job id, and source cluster.",
+        "Launcher metadata is removed or marked stale when the runtime stops so dead jobs do not remain eligible for auto-adoption.",
+        "The runtime record format is stable enough for the server detector to load without SSHing into the scheduler on ordinary API requests.",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/providers/providerRuntimeModelGuard.test.ts passes",
+        "bun test src/server/providers/providerRuntimeState.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.test.ts passes",
         "bun run lint passes",
-        "bun test passes"
+        "bun run build passes"
       ],
       "priority": 2,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [
-        "US-001"
-      ],
-      "completionNotes": "Completed by agent"
+      "dependsOn": ["US-001"]
     },
     {
       "id": "US-003",
-      "title": "Acknowledge mart visibility watermarks back to SQLite",
-      "description": "As a maintainer, I want each job to record how far DuckDB and mart refreshes have become visible so queue wrap and cleanup decisions can wait for durable read visibility.",
+      "title": "Add low-frequency detector cache",
+      "description": "As a maintainer, I want runtime detection to be metadata-first and conservatively cached so Forska can discover live runtimes without aggressively pinging healthy models.",
       "acceptanceCriteria": [
-        "After imported judgments become visible to the mart refresh path, SQLite records a per-job `last_project_refresh_ack_seq` watermark.",
-        "The stored visibility watermark only moves forward and is tied to imported `outbox_seq` values for the affected job.",
-        "Jobs without completed visibility acknowledgement keep their previous watermark instead of advancing optimistically.",
+        "Add a server-side detector service that caches healthy runtime detection longer and backs off after failures instead of probing on a tight loop.",
+        "The detector loads launcher metadata and saved provider settings before attempting live probes.",
+        "Active runtime usage can refresh candidate freshness so normal judging traffic reduces extra probe traffic.",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/providers/providerRuntimeModelGuard.test.ts passes",
+        "bun test src/server/providers/providerRuntimeState.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.test.ts passes",
         "bun run lint passes",
-        "bun test passes"
+        "bun run build passes"
       ],
       "priority": 3,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [
-        "US-002"
-      ],
-      "completionNotes": "Completed by agent"
+      "dependsOn": ["US-001", "US-002"]
     },
     {
       "id": "US-004",
-      "title": "Gate cursor wrap on visibility acknowledgement",
-      "description": "As a maintainer, I want exhausted SQLite scans to wrap only after prior exports are visible in DuckDB so the top-up path cannot re-enqueue already judged prompt pairs.",
+      "title": "Probe saved local endpoints conservatively",
+      "description": "As a maintainer, I want the detector to probe only saved local provider endpoints so Forska can discover currently served models without scanning arbitrary ports.",
       "acceptanceCriteria": [
-        "A SQLite-backed job wraps its scan cursor to the start only when the visibility watermark covers the exported work from the completed pass.",
-        "`scan_epoch` increments exactly once when a full scan pass legitimately wraps back to the start.",
-        "Jobs whose visibility watermark is behind remain exhausted instead of re-enqueueing previously exported prompt pairs.",
+        "Local detection only probes saved `baseURL` or saved worker URLs for supported local/runtime-backed providers.",
+        "The detector records reachable status and served model names from `/v1/models` or provider-native discovery for matching candidates.",
+        "Local probing remains demand-driven or stale-driven rather than continuous background polling.",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/providers/providerRuntimeModelGuard.test.ts passes",
+        "bun test src/server/providers/providerRuntimeState.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.test.ts passes",
         "bun run lint passes",
-        "bun test passes"
+        "bun run build passes"
       ],
       "priority": 4,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [
-        "US-003"
-      ],
-      "completionNotes": "Completed by agent"
+      "dependsOn": ["US-003"]
     },
     {
       "id": "US-005",
-      "title": "Prune exported rows only after visibility acknowledgement",
-      "description": "As a maintainer, I want retention cleanup to remove only rows that are already visible through DuckDB and marts so cleanup cannot break dedupe or force stale re-enqueue.",
+      "title": "Match saved providers to detected runtimes",
+      "description": "As a maintainer, I want saved provider connections to auto-adopt only one strong runtime match so manual settings remain explicit and ambiguous runtimes are never chosen silently.",
       "acceptanceCriteria": [
-        "Retention cleanup deletes exported `judgment_outbox` rows only when their `outbox_seq` is at or below the job visibility watermark.",
-        "Retention cleanup deletes terminal `queue_prompt` rows only after the corresponding exported work is visibility-acked.",
-        "Cleanup runs in bounded batches and leaves newer or unacked rows untouched.",
+        "Matching requires the same `providerKind` plus overlap on saved `baseURL` or saved `manualWorkerUrls` rather than provider kind alone.",
+        "Saved model ids can strengthen a candidate match but cannot override missing URL overlap by themselves.",
+        "The resolver returns `matched`, `manual-only`, `ambiguous`, or `unreachable` together with effective base URL, effective worker URLs, detected model names, and reasons.",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/providers/providerRuntimeModelGuard.test.ts passes",
+        "bun test src/server/providers/providerRuntimeState.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.test.ts passes",
         "bun run lint passes",
-        "bun test passes"
+        "bun run build passes"
       ],
       "priority": 5,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [
-        "US-003"
-      ],
-      "completionNotes": "Completed by agent"
+      "dependsOn": ["US-003", "US-004"]
     },
     {
       "id": "US-006",
-      "title": "Delete drained per-job SQLite databases only after full drain",
-      "description": "As a maintainer, I want per-job SQLite files removed only after queue work, outbox export, and visibility-gated cleanup are finished so finished jobs leave no residue without risking data loss.",
+      "title": "Use matched runtime in provider test and sync",
+      "description": "As a maintainer, I want provider connection testing and model discovery to use the matched effective runtime so the Providers screen exercises the same resolved runtime that jobs will use.",
       "acceptanceCriteria": [
-        "Drained-job cleanup removes or archives the per-job SQLite DB and lease sidecar only when the job has no active queue rows and no pending visibility-gated outbox data.",
-        "Active or partially drained SQLite-backed jobs remain on disk and continue to serve retries or cleanup work.",
-        "Legacy DuckDB-backed jobs keep their existing cleanup behavior during rollout.",
+        "Connection test uses the matched effective runtime when exactly one strong match exists and otherwise falls back to saved manual settings or reports ambiguity clearly.",
+        "Discovered-model listing and sync use the matched effective runtime and return the models currently served there.",
+        "Ambiguous or unreachable matches surface actionable errors instead of silently choosing a candidate.",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/providers/providerRuntimeModelGuard.test.ts passes",
+        "bun test src/server/providers/providerRuntimeState.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.test.ts passes",
         "bun run lint passes",
-        "bun test passes"
+        "bun run build passes"
       ],
       "priority": 6,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [
-        "US-005"
-      ],
-      "completionNotes": "Completed by agent"
+      "dependsOn": ["US-005"]
     },
     {
       "id": "US-007",
-      "title": "Add duplicate-claim contention coverage for SQLite queues",
-      "description": "As a maintainer, I want a regression test for competing writers so the SQLite claim path proves each prompt pair can only be claimed once under contention.",
+      "title": "Use matched runtime in judgments and runtime guard",
+      "description": "As a maintainer, I want judgment-job validation and send paths to resolve the matched provider runtime so remote tunneled models work through ordinary `dev:server` without global runtime env tricks.",
       "acceptanceCriteria": [
-        "Add a test where competing writers race to claim ready rows for the same SQLite-backed job.",
-        "The test proves each `(job_id, article_id, prompt_id)` pair is claimed at most once.",
-        "The test exercises the lease or transaction behavior used by the production SQLite claim path.",
+        "The provider runtime model guard validates against the matched effective runtime for the saved provider connection instead of the old global-by-kind snapshot.",
+        "Judgment job creation and prompt send paths resolve their effective base URL and worker URLs from the matched provider connection runtime.",
+        "A saved manual Alvis or MN5 provider can pass runtime validation and start judgments through the matched tunneled runtime without `alvis:dev:server` or `mn5:dev:server`.",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/providers/providerRuntimeModelGuard.test.ts passes",
+        "bun test src/server/providers/providerRuntimeState.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.test.ts passes",
         "bun run lint passes",
-        "bun test passes"
+        "bun run build passes"
       ],
       "priority": 7,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [
-        "US-001"
-      ],
-      "completionNotes": "Completed by agent"
+      "dependsOn": ["US-005"]
     },
     {
       "id": "US-008",
-      "title": "Add crash-replay coverage for SQLite outbox import",
-      "description": "As a maintainer, I want a regression test for importer replay so crashes between DuckDB commit and SQLite acknowledgement cannot silently duplicate or strand judgments.",
+      "title": "Expose runtime match state from the provider API",
+      "description": "As a maintainer, I want the provider connections API to return detection and match state so the UI and debugging flows can explain exactly which runtime a saved provider is using.",
       "acceptanceCriteria": [
-        "Add a test that simulates DuckDB commit succeeding before SQLite export acknowledgement completes.",
-        "Re-running the importer in the test does not duplicate `app.judgment` rows and eventually clears the affected outbox work.",
-        "The test asserts the replay path preserves the same dedupe guarantees as the normal import path.",
+        "`/api/provider-connections` returns per-connection match status, effective runtime URLs, detected model names, source metadata, and human-readable reasons.",
+        "The response remains compatible for existing provider-connection consumers that still need saved connection data.",
+        "The API can distinguish `matched local`, `matched Alvis`, `matched MN5`, `manual-only`, `ambiguous`, and `unreachable` states without rewriting the saved provider record.",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/providers/providerRuntimeModelGuard.test.ts passes",
+        "bun test src/server/providers/providerRuntimeState.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.test.ts passes",
         "bun run lint passes",
-        "bun test passes"
+        "bun run build passes"
       ],
       "priority": 8,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [
-        "US-002"
-      ],
-      "completionNotes": "Completed by agent"
+      "dependsOn": ["US-005"]
     },
     {
       "id": "US-009",
-      "title": "Add drain-then-delete lifecycle coverage for job cleanup",
-      "description": "As a maintainer, I want a regression test for job cleanup so SQLite job files disappear only after export, visibility acknowledgement, and retention cleanup have fully drained.",
+      "title": "Show matched runtime status in the Providers UI",
+      "description": "As a user, I want the Providers page to show which live runtime each saved provider matches so I can understand whether Forska will use my local server, tunneled cluster job, or only the saved manual settings.",
       "acceptanceCriteria": [
-        "Add a test that covers job completion, visibility acknowledgement, retention cleanup, and final SQLite DB deletion or archival.",
-        "The test proves cleanup does not remove the job DB while export or visibility drain is still incomplete.",
-        "The test proves the SQLite DB and lease sidecar disappear only after the job is fully drained.",
+        "The Providers UI shows per-connection states such as `matched local`, `matched Alvis`, `matched MN5`, `manual-only`, `ambiguous`, and `unreachable`.",
+        "The Providers UI shows the effective runtime URL or worker URLs together with detected served model names and match reasons.",
+        "Saved manual provider settings remain editable and visible without hidden rewriting when a runtime is matched.",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/providers/providerRuntimeModelGuard.test.ts passes",
+        "bun test src/server/providers/providerRuntimeState.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.test.ts passes",
         "bun run lint passes",
-        "bun test passes"
+        "bun run build passes",
+        "Verify in browser: local manual provider matches a live local runtime",
+        "Verify in browser: manual Alvis or MN5 provider matches a live tunneled runtime",
+        "Verify in browser: ambiguous match stays non-adopted and visible",
+        "Verify in browser: creating a judgment job succeeds through the matched runtime"
       ],
       "priority": 9,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [
-        "US-005",
-        "US-006"
+      "dependsOn": ["US-008"]
+    },
+    {
+      "id": "US-010",
+      "title": "Demote global runtime env to compatibility mode",
+      "description": "As a maintainer, I want the old global `FORSKA_RUNTIME_*` flow to become a compatibility bridge so ordinary provider-aware runtime resolution works through `dev:server` without cluster-specific server modes.",
+      "acceptanceCriteria": [
+        "Per-connection runtime matching becomes the primary resolution path and the global `FORSKA_RUNTIME_*` path remains only as a compatibility bridge.",
+        "Ordinary `bun run dev:server` can resolve matched local or remote manual providers without requiring special `*:dev:server` startup for provider-aware judging.",
+        "Legacy global-runtime behavior remains covered well enough to avoid regressions during the transition away from implicit provider-kind-wide matching.",
+        "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
+        "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
+        "bun test src/server/providers/providerRuntimeModelGuard.test.ts passes",
+        "bun test src/server/providers/providerRuntimeState.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.test.ts passes",
+        "bun run lint passes",
+        "bun run build passes"
       ],
-      "completionNotes": "Completed by agent"
+      "priority": 10,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-006", "US-007", "US-009"]
     }
-  ],
-  "metadata": {
-    "updatedAt": "2026-03-26T15:15:00.491Z"
-  }
+  ]
 }

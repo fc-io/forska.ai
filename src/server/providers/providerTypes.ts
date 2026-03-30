@@ -100,6 +100,7 @@ export type ProviderConnectionRecord = {
   label: string
   lastCheckedAt: Date | null
   lastError: string | null
+  maxInflightRequests: number | null
   providerKind: ProviderKind
   secretRef: string | null
   updatedAt: Date | null

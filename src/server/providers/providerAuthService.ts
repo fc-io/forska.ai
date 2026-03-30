@@ -101,6 +101,7 @@ const getPersistedProviderAuthConnection = async ({
     enabled: connection.enabled,
     id: connection.id,
     label: connection.label,
+    maxInflightRequests: connection.maxInflightRequests,
     secretRef: nextSecretRef,
   })
 }

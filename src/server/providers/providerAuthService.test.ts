@@ -27,6 +27,7 @@ const state = {
       label: 'Provider Connection',
       lastCheckedAt: null,
       lastError: null,
+      maxInflightRequests: null,
       providerKind: 'openrouter',
       secretRef: null,
       updatedAt: null,

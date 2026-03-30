@@ -52,6 +52,7 @@ export const judgmentsRoutes = new Elysia().get('/api/judgments/model', async ({
           baseURL,
           config: {manualWorkerUrls: [], workerUrlMode: 'manual'},
           label: modelName,
+          maxInflightRequests: null,
           providerKind,
           secretRef: null,
         })

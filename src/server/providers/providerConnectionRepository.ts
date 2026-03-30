@@ -53,6 +53,7 @@ const getProviderConnectionRowsByKind = async (providerKind: ProviderKind): Prom
       enabled,
       auth_mode AS authMode,
       base_url AS baseURL,
+      max_inflight_requests AS maxInflightRequests,
       TO_JSON(config_json) AS configJson,
       secret_ref AS secretRef,
       last_checked_at AS lastCheckedAt,
@@ -185,6 +186,7 @@ const getProviderConnectionRecordsByIds = async (
       enabled,
       auth_mode AS authMode,
       base_url AS baseURL,
+      max_inflight_requests AS maxInflightRequests,
       TO_JSON(config_json) AS configJson,
       secret_ref AS secretRef,
       last_checked_at AS lastCheckedAt,
@@ -341,6 +343,7 @@ const getProviderConnectionRows = async (): Promise<ProviderConnectionRecord[]> 
       enabled,
       auth_mode AS authMode,
       base_url AS baseURL,
+      max_inflight_requests AS maxInflightRequests,
       TO_JSON(config_json) AS configJson,
       secret_ref AS secretRef,
       last_checked_at AS lastCheckedAt,
@@ -428,6 +431,7 @@ export const getProviderConnectionForStoredModel = async (
       pc.enabled AS enabled,
       pc.auth_mode AS authMode,
       pc.base_url AS baseURL,
+      pc.max_inflight_requests AS maxInflightRequests,
       TO_JSON(pc.config_json) AS configJson,
       pc.secret_ref AS secretRef,
       pc.last_checked_at AS lastCheckedAt,
@@ -456,6 +460,7 @@ export const getFirstEnabledProviderConnection = async (providerKind: ProviderKi
       enabled,
       auth_mode AS authMode,
       base_url AS baseURL,
+      max_inflight_requests AS maxInflightRequests,
       TO_JSON(config_json) AS configJson,
       secret_ref AS secretRef,
       last_checked_at AS lastCheckedAt,
@@ -477,6 +482,7 @@ export const createProviderConnection = async ({
   baseURL,
   config,
   label,
+  maxInflightRequests,
   providerKind,
   secretRef,
 }: {
@@ -484,6 +490,7 @@ export const createProviderConnection = async ({
   baseURL: string | null
   config: ProviderConnectionConfig
   label: string
+  maxInflightRequests: number | null
   providerKind: ProviderKind
   secretRef: string | null
 }): Promise<ProviderConnectionRecord> => {
@@ -504,6 +511,7 @@ export const createProviderConnection = async ({
       enabled,
       auth_mode,
       base_url,
+      max_inflight_requests,
       config_json,
       secret_ref
     )
@@ -514,6 +522,7 @@ export const createProviderConnection = async ({
       TRUE,
       ${getSqlLiteral(authMode)},
       ${getSqlLiteral(baseURL)},
+      ${getSqlLiteral(maxInflightRequests)},
       ${getJsonSqlLiteral(persistedConfig)},
       ${getSqlLiteral(secretRef)}
     )
@@ -524,6 +533,7 @@ export const createProviderConnection = async ({
       enabled,
       auth_mode AS authMode,
       base_url AS baseURL,
+      max_inflight_requests AS maxInflightRequests,
       TO_JSON(config_json) AS configJson,
       secret_ref AS secretRef,
       last_checked_at AS lastCheckedAt,
@@ -546,6 +556,7 @@ export const updateProviderConnection = async ({
   enabled,
   id,
   label,
+  maxInflightRequests,
   secretRef,
 }: {
   authMode: string | null
@@ -554,6 +565,7 @@ export const updateProviderConnection = async ({
   enabled: boolean
   id: string
   label: string
+  maxInflightRequests: number | null
   secretRef: string | null
 }): Promise<ProviderConnectionRecord> => {
   const current = await getProviderConnectionRecordById(id)
@@ -570,6 +582,7 @@ export const updateProviderConnection = async ({
           enabled = ${getSqlLiteral(enabled)},
           auth_mode = ${getSqlLiteral(authMode)},
           base_url = ${getSqlLiteral(baseURL)},
+          max_inflight_requests = ${getSqlLiteral(maxInflightRequests)},
           config_json = ${getJsonSqlLiteral(persistedConfig)},
           secret_ref = ${getSqlLiteral(secretRef)},
           updated_at = current_timestamp
@@ -581,6 +594,7 @@ export const updateProviderConnection = async ({
         enabled,
         auth_mode AS authMode,
         base_url AS baseURL,
+        max_inflight_requests AS maxInflightRequests,
         TO_JSON(config_json) AS configJson,
         secret_ref AS secretRef,
         last_checked_at AS lastCheckedAt,

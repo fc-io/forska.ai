@@ -27,6 +27,7 @@ export type ProviderConnectionRow = {
   label: string
   lastCheckedAt: unknown
   lastError: string | null
+  maxInflightRequests: unknown
   providerKind: string
   secretRef: string | null
   updatedAt: unknown
@@ -56,6 +57,12 @@ export const getTrimmedValue = (value: string | null | undefined): string | null
   const normalized = String(value ?? '').trim()
 
   return normalized === '' ? null : normalized
+}
+
+const getPositiveIntegerValue = (value: unknown): number | null => {
+  const numericValue = typeof value === 'number' ? value : Number(value)
+
+  return Number.isFinite(numericValue) && numericValue > 0 ? Math.trunc(numericValue) : null
 }
 
 const getLlamaCppMode = ({
@@ -168,6 +175,7 @@ export const getProviderConnectionRecordFromRow = (row: ProviderConnectionRow): 
     label: row.label,
     lastCheckedAt: getDateValue(row.lastCheckedAt),
     lastError: getTrimmedValue(row.lastError),
+    maxInflightRequests: getPositiveIntegerValue(row.maxInflightRequests),
     providerKind,
     secretRef,
     updatedAt: getDateValue(row.updatedAt),

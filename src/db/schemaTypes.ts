@@ -92,6 +92,7 @@ export type ProviderConnectionRecord = {
   enabled: boolean
   authMode: string | null
   baseURL: string | null
+  maxInflightRequests: number | null
   configJson: unknown
   secretRef: string | null
   lastCheckedAt: Date | null

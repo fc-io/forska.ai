@@ -24,6 +24,7 @@ const state = {
       id: 'connection-1',
       lastCheckedAt: null,
       lastError: null,
+      maxInflightRequests: null,
       secretRef: null,
       updatedAt: null,
     }
@@ -61,6 +62,7 @@ const state = {
           label: 'Provider Connection',
           lastCheckedAt: null,
           lastError: null,
+          maxInflightRequests: null,
           providerKind: 'openrouter',
           secretRef: 'keychain:provider-connection:test',
           updatedAt: null,
@@ -79,6 +81,7 @@ const state = {
         label: 'Provider Connection',
         lastCheckedAt: null,
         lastError: null,
+        maxInflightRequests: null,
         models: [],
         providerKind: 'openrouter',
         secretRef: 'keychain:provider-connection:test',
@@ -99,6 +102,7 @@ const state = {
         label: 'Provider Connection',
         lastCheckedAt: null,
         lastError: null,
+        maxInflightRequests: null,
         providerKind: 'openrouter',
         secretRef: 'keychain:provider-connection:test',
         updatedAt: null,
@@ -379,6 +383,7 @@ test('provider connections list returns runtime state with display labels', asyn
         label: 'SGLang Alvis',
         lastCheckedAt: null,
         lastError: null,
+        maxInflightRequests: 6,
         models: [{modelName: 'Qwen/Qwen3', remoteModelId: 'Qwen/Qwen3'}],
         providerKind: 'sglang',
         secretRef: null,
@@ -392,6 +397,7 @@ test('provider connections list returns runtime state with display labels', asyn
   const body = (await response.json()) as {
     data: {
       connections: Array<{
+        maxInflightRequests: number | null
         runtimeState: {
           detectedModelNames: string[]
           effectiveBaseURL: string | null
@@ -414,6 +420,7 @@ test('provider connections list returns runtime state with display labels', asyn
   }
 
   expect(response.status).toBe(200)
+  expect(body.data.connections[0]?.maxInflightRequests).toBe(6)
   expect(body.data.connections[0]?.runtimeState).toEqual({
     detectedModelNames: ['Qwen/Qwen3'],
     effectiveBaseURL: 'https://alvis-tunnel.example/v1',
