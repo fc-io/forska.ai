@@ -17,6 +17,7 @@ export type PromptToProcess = {
   modelBaseUrl: string
   providerConnectionId: string | null
   providerMaxInflightRequests: number | null
+  providerUsesFamilyDefault: boolean
   modelWorkerUrls: string[]
   useTitle: boolean
   useAbstract: boolean
@@ -130,6 +131,7 @@ const getSqliteReadyRows = async (serverJobId: string, jobId: string, limit: num
       modelVersion: jobInfo.modelVersion,
       providerConnectionId: null,
       providerMaxInflightRequests: null,
+      providerUsesFamilyDefault: true,
       modelWorkerUrls: runtime.workerUrls,
       projectId: jobInfo.projectId,
       useAbstract: jobInfo.useAbstract,
@@ -144,7 +146,11 @@ export const getAndUpdateReadyPrompts = async (
   serverJobId: string,
   jobId: string,
   limit: number,
-  requestRuntime: {providerConnectionId: string | null; providerMaxInflightRequests: number | null},
+  requestRuntime: {
+    providerConnectionId: string | null
+    providerMaxInflightRequests: number | null
+    providerUsesFamilyDefault: boolean
+  },
 ): Promise<PromptToProcess[]> => {
   const prompts = await getSqliteReadyRows(serverJobId, jobId, limit)
 

@@ -18,7 +18,11 @@ let getAndUpdateReadyPrompts:
       serverJobId: string,
       jobId: string,
       limit: number,
-      requestRuntime: {providerConnectionId: string | null; providerMaxInflightRequests: number | null},
+      requestRuntime: {
+        providerConnectionId: string | null
+        providerMaxInflightRequests: number | null
+        providerUsesFamilyDefault: boolean
+      },
     ) => Promise<
       Array<{
         articleId: string
@@ -26,6 +30,7 @@ let getAndUpdateReadyPrompts:
         modelId: string
         providerConnectionId: string | null
         providerMaxInflightRequests: number | null
+        providerUsesFamilyDefault: boolean
         projectId: string
         promptId: string
         recordId: string
@@ -129,6 +134,7 @@ test('claims ready rows from the per-job SQLite queue', async () => {
   const prompts = await getAndUpdateReadyPrompts('server-job-claim', jobId, 2, {
     providerConnectionId: connectionId,
     providerMaxInflightRequests: 3,
+    providerUsesFamilyDefault: false,
   })
 
   expect(prompts).toHaveLength(2)
@@ -156,6 +162,7 @@ test('claims ready rows from the per-job SQLite queue', async () => {
         && prompt.modelBaseUrl === 'http://localhost:30001/v1'
         && prompt.providerConnectionId === connectionId
         && prompt.providerMaxInflightRequests === 3
+        && prompt.providerUsesFamilyDefault === false
       )
     }),
   ).toBe(true)

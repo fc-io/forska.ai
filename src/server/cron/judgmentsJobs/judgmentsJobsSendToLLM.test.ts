@@ -249,6 +249,71 @@ test('caps shared provider connections before splitting claims across jobs', () 
   expect(limitsByConnection.get('connection-independent')).toBe(5)
 })
 
+test('caps shared codex provider connections by the saved override before splitting claims across jobs', () => {
+  const allocations = getRequestsToSendByProviderConnection({
+    getCodexDefaultMaxInflight: () => {
+      return 4
+    },
+    getNonCodexCapacity: () => {
+      return {maxBurst: 10, maxInflight: 10, workerCount: 1}
+    },
+    inFlightCounts: new Map([
+      ['job-codex-shared-a', 1],
+      ['job-codex-shared-b', 0],
+      ['job-codex-other', 0],
+    ]),
+    jobs: [
+      {
+        id: 'job-codex-shared-a',
+        maxInflightRequests: 2,
+        modelId: 'model-codex-shared-a',
+        modelName: 'Model Codex Shared A',
+        modelProvider: 'codex',
+        projectId: 'project-codex-shared-a',
+        providerConnectionId: 'connection-codex-shared',
+      },
+      {
+        id: 'job-codex-shared-b',
+        maxInflightRequests: 2,
+        modelId: 'model-codex-shared-b',
+        modelName: 'Model Codex Shared B',
+        modelProvider: 'codex',
+        projectId: 'project-codex-shared-b',
+        providerConnectionId: 'connection-codex-shared',
+      },
+      {
+        id: 'job-codex-other',
+        maxInflightRequests: null,
+        modelId: 'model-codex-other',
+        modelName: 'Model Codex Other',
+        modelProvider: 'codex',
+        projectId: 'project-codex-other',
+        providerConnectionId: 'connection-codex-other',
+      },
+    ],
+    maxRequestsToSend: 10,
+    readyCounts: new Map([
+      ['job-codex-shared-a', 4],
+      ['job-codex-shared-b', 4],
+      ['job-codex-other', 4],
+    ]),
+  })
+
+  const limitsByConnection = new Map(
+    allocations.map((allocation) => {
+      return [
+        allocation.connectionId,
+        allocation.jobs.reduce((sum, job) => {
+          return sum + job.limit
+        }, 0),
+      ] as const
+    }),
+  )
+
+  expect(limitsByConnection.get('connection-codex-shared')).toBe(1)
+  expect(limitsByConnection.get('connection-codex-other')).toBe(4)
+})
+
 test('lets different provider connections progress under a stricter shared bucket limit', () => {
   const allocations = getRequestsToSendByProviderConnection({
     getCodexDefaultMaxInflight: () => {

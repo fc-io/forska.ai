@@ -7,7 +7,12 @@ type RequestSlot = {baseURL: string; release: () => void}
 
 type RequestWaiter<T> = {resolve: (value: T) => void; reject: (error: unknown) => void}
 
-type ProviderRequestScope = {providerConnectionId: string | null; providerMaxInflightRequests: number | null}
+type ProviderRequestScope = {
+  providerConnectionId: string | null
+  providerMaxInflightRequests: number | null
+  providerUsesFamilyDefault: boolean
+}
+type CodexProviderWaiter = RequestWaiter<() => void> & {providerScope: ProviderRequestScope}
 type FallbackWaiter = RequestWaiter<RequestSlot> & {baseURL: string; providerScope: ProviderRequestScope}
 type WorkerWaiter = RequestWaiter<RequestSlot> & {providerScope: ProviderRequestScope; workerUrls: string[]}
 
@@ -15,6 +20,7 @@ type JobRequestState = {inFlight: number; pendingPersistedAttempts: number}
 type ProviderRequestState = {inFlight: number}
 
 const codexWaiters: RequestWaiter<() => void>[] = []
+const codexProviderWaiters: CodexProviderWaiter[] = []
 const workerWaiters: WorkerWaiter[] = []
 const fallbackWaiters: FallbackWaiter[] = []
 const jobRequestStates = new Map<string, JobRequestState>()
@@ -152,7 +158,49 @@ const acquireCodexRelease = async (): Promise<() => void> => {
   })
 }
 
+const drainCodexProviderWaiters = (): void => {
+  const nextAction = codexProviderWaiters.reduce<{index: number; release: () => void} | null>(
+    (state, waiter, index) => {
+      if (state) return state
+
+      const release = acquireProviderRequestRelease(waiter.providerScope)
+      return release ? {index, release} : null
+    },
+    null,
+  )
+
+  if (!nextAction) return
+
+  const [waiter] = codexProviderWaiters.splice(nextAction.index, 1)
+  if (!waiter) return
+
+  waiter.resolve(() => {
+    nextAction.release()
+    drainProviderScopedWaiters()
+  })
+  drainCodexProviderWaiters()
+}
+
+const acquireCodexProviderRelease = async (providerScope: ProviderRequestScope): Promise<() => void> => {
+  const release = acquireProviderRequestRelease(providerScope)
+  if (release) {
+    return () => {
+      release()
+      drainProviderScopedWaiters()
+    }
+  }
+
+  return new Promise((resolve, reject) => {
+    codexProviderWaiters.push({providerScope, reject, resolve})
+  })
+}
+
+const acquireCodexRequestRelease = async (providerScope: ProviderRequestScope): Promise<() => void> => {
+  return providerScope.providerUsesFamilyDefault ? acquireCodexRelease() : acquireCodexProviderRelease(providerScope)
+}
+
 const drainProviderScopedWaiters = (): void => {
+  drainCodexProviderWaiters()
   drainWorkerWaiters()
   drainFallbackWaiters()
 }
@@ -309,18 +357,20 @@ const acquireRequestSlot = async ({
   fallbackBaseURL,
   providerConnectionId,
   providerMaxInflightRequests,
+  providerUsesFamilyDefault,
   workerUrls,
 }: {
   provider: string | null | undefined
   fallbackBaseURL: string
   providerConnectionId: string | null
   providerMaxInflightRequests: number | null
+  providerUsesFamilyDefault: boolean
   workerUrls: string[]
 }): Promise<RequestSlot> => {
-  const providerScope = {providerConnectionId, providerMaxInflightRequests}
+  const providerScope = {providerConnectionId, providerMaxInflightRequests, providerUsesFamilyDefault}
 
   return normalizeProvider(provider) === 'codex'
-    ? acquireCodexRelease().then((release) => {
+    ? acquireCodexRequestRelease(providerScope).then((release) => {
         return {baseURL: fallbackBaseURL, release}
       })
     : workerUrls.length > 0
@@ -348,6 +398,7 @@ export const withJudgmentRequest = async <T>(
     fallbackBaseURL,
     providerConnectionId,
     providerMaxInflightRequests,
+    providerUsesFamilyDefault,
     workerUrls,
   }: {
     judgmentsJobId: string
@@ -355,6 +406,7 @@ export const withJudgmentRequest = async <T>(
     fallbackBaseURL: string
     providerConnectionId: string | null
     providerMaxInflightRequests: number | null
+    providerUsesFamilyDefault: boolean
     workerUrls: string[]
   },
   run: (baseURL: string) => Promise<T>,
@@ -364,6 +416,7 @@ export const withJudgmentRequest = async <T>(
     provider,
     providerConnectionId,
     providerMaxInflightRequests,
+    providerUsesFamilyDefault,
     workerUrls,
   })
   markRequestStarted(judgmentsJobId)
@@ -378,6 +431,7 @@ export const withJudgmentRequest = async <T>(
 
 export const resetJudgmentRequestRuntimeForTests = (): void => {
   codexWaiters.splice(0, codexWaiters.length)
+  codexProviderWaiters.splice(0, codexProviderWaiters.length)
   workerWaiters.splice(0, workerWaiters.length)
   fallbackWaiters.splice(0, fallbackWaiters.length)
   jobRequestStates.clear()

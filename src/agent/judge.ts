@@ -39,6 +39,7 @@ type ModelConfigInput = {
   provider: string | null
   providerConnectionId: string | null
   providerMaxInflightRequests: number | null
+  providerUsesFamilyDefault: boolean
   workerUrls: string[]
 }
 
@@ -337,6 +338,7 @@ const generateSinglePromptResponse = async ({
   provider,
   providerConnectionId,
   providerMaxInflightRequests,
+  providerUsesFamilyDefault,
   workerUrls,
   outputSchema,
 }: {
@@ -348,11 +350,20 @@ const generateSinglePromptResponse = async ({
   provider: string | null
   providerConnectionId: string | null
   providerMaxInflightRequests: number | null
+  providerUsesFamilyDefault: boolean
   workerUrls: string[]
   outputSchema: unknown
 }): Promise<GeneratedPromptResponse> => {
   return withJudgmentRequest(
-    {judgmentsJobId, provider, fallbackBaseURL: baseURL, providerConnectionId, providerMaxInflightRequests, workerUrls},
+    {
+      judgmentsJobId,
+      provider,
+      fallbackBaseURL: baseURL,
+      providerConnectionId,
+      providerMaxInflightRequests,
+      providerUsesFamilyDefault,
+      workerUrls,
+    },
     async (requestBaseURL) => {
       try {
         const result = await invokeStoredProviderModel({
@@ -583,8 +594,16 @@ export const judgeSinglePrompt = async ({
   projectId: string
   contentSettings: ContentSettings
 }): Promise<void> => {
-  const {baseURL, modelName, modelId, provider, providerConnectionId, providerMaxInflightRequests, workerUrls} =
-    modelConfig
+  const {
+    baseURL,
+    modelName,
+    modelId,
+    provider,
+    providerConnectionId,
+    providerMaxInflightRequests,
+    providerUsesFamilyDefault,
+    workerUrls,
+  } = modelConfig
 
   const tokenUse: JudgeTokenUsageEntry[] = []
   const startedAt = new Date().toISOString()
@@ -633,6 +652,7 @@ export const judgeSinglePrompt = async ({
           provider,
           providerConnectionId,
           providerMaxInflightRequests,
+          providerUsesFamilyDefault,
           workerUrls,
           outputSchema: getSinglePromptOutputSchema(),
         })
@@ -851,6 +871,7 @@ export const judgeSinglePrompt = async ({
                 provider,
                 providerConnectionId,
                 providerMaxInflightRequests,
+                providerUsesFamilyDefault,
                 workerUrls,
                 outputSchema: evidenceOutputSchema,
               })
@@ -1056,6 +1077,7 @@ export const judgeSinglePrompt = async ({
             provider,
             providerConnectionId,
             providerMaxInflightRequests,
+            providerUsesFamilyDefault,
             workerUrls,
             outputSchema: getSinglePromptOutputSchema(),
           })

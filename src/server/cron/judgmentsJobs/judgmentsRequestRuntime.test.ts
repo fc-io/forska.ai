@@ -36,6 +36,7 @@ test('fallback requests enforce provider caps and release after failure', async 
       fallbackBaseURL: 'http://fallback-runtime.test/v1',
       providerConnectionId: 'connection-shared',
       providerMaxInflightRequests: 1,
+      providerUsesFamilyDefault: false,
       workerUrls: [],
     },
     async () => {
@@ -57,6 +58,7 @@ test('fallback requests enforce provider caps and release after failure', async 
       fallbackBaseURL: 'http://fallback-runtime.test/v1',
       providerConnectionId: 'connection-shared',
       providerMaxInflightRequests: 1,
+      providerUsesFamilyDefault: false,
       workerUrls: [],
     },
     async () => {
@@ -88,6 +90,7 @@ test('worker requests enforce provider caps and release after success', async ()
       fallbackBaseURL: 'http://unused-runtime.test/v1',
       providerConnectionId: 'connection-worker-shared',
       providerMaxInflightRequests: 1,
+      providerUsesFamilyDefault: false,
       workerUrls: ['http://worker-runtime-a.test'],
     },
     async () => {
@@ -106,6 +109,7 @@ test('worker requests enforce provider caps and release after success', async ()
       fallbackBaseURL: 'http://unused-runtime.test/v1',
       providerConnectionId: 'connection-worker-shared',
       providerMaxInflightRequests: 1,
+      providerUsesFamilyDefault: false,
       workerUrls: ['http://worker-runtime-a.test'],
     },
     async () => {
@@ -120,7 +124,76 @@ test('worker requests enforce provider caps and release after success', async ()
       fallbackBaseURL: 'http://unused-runtime.test/v1',
       providerConnectionId: 'connection-worker-other',
       providerMaxInflightRequests: 1,
+      providerUsesFamilyDefault: false,
       workerUrls: ['http://worker-runtime-b.test'],
+    },
+    async () => {
+      thirdStarted = true
+    },
+  )
+
+  await flush()
+  expect(secondStarted).toBe(false)
+  expect(thirdStarted).toBe(true)
+
+  firstRelease.resolve()
+  await firstRequest
+  await flush()
+  await secondRequest
+  await thirdRequest
+
+  expect(secondStarted).toBe(true)
+})
+
+test('codex requests enforce saved provider caps per connection', async () => {
+  const firstRelease = createSignal()
+  let firstStarted = false
+  let secondStarted = false
+  let thirdStarted = false
+
+  const firstRequest = withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-codex-1',
+      provider: 'codex',
+      fallbackBaseURL: 'codex://app-server',
+      providerConnectionId: 'connection-codex-shared',
+      providerMaxInflightRequests: 1,
+      providerUsesFamilyDefault: false,
+      workerUrls: [],
+    },
+    async () => {
+      firstStarted = true
+      await firstRelease.promise
+    },
+  )
+
+  await flush()
+  expect(firstStarted).toBe(true)
+
+  const secondRequest = withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-codex-2',
+      provider: 'codex',
+      fallbackBaseURL: 'codex://app-server',
+      providerConnectionId: 'connection-codex-shared',
+      providerMaxInflightRequests: 1,
+      providerUsesFamilyDefault: false,
+      workerUrls: [],
+    },
+    async () => {
+      secondStarted = true
+    },
+  )
+
+  const thirdRequest = withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-codex-3',
+      provider: 'codex',
+      fallbackBaseURL: 'codex://app-server',
+      providerConnectionId: 'connection-codex-other',
+      providerMaxInflightRequests: 1,
+      providerUsesFamilyDefault: false,
+      workerUrls: [],
     },
     async () => {
       thirdStarted = true
