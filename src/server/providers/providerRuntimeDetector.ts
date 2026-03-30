@@ -1,4 +1,8 @@
-import {getLatestActiveProviderRuntimeRecord, type ProviderRuntimeRecord} from '../../utils/providerRuntimeRecords.ts'
+import {
+  getProviderRuntimeRecordStatus,
+  loadProviderRuntimeRecords,
+  type ProviderRuntimeRecord,
+} from '../../utils/providerRuntimeRecords.ts'
 import {listProviderConnections} from './providerConnectionRepository.ts'
 import {discoverOpenAICompatibleRuntimeModel, supportsSavedLocalProviderProbe} from './providerRuntimeDiscovery.ts'
 import {type ProviderRuntimeSummary} from './providerRuntimeState.ts'
@@ -74,6 +78,37 @@ const getSummaryFromCacheEntry = (entry: DetectorCacheEntry): ProviderRuntimeSum
 
 const getSummaryFreshness = (entry: DetectorCacheEntry): number => {
   return Math.max(entry.lastCheckedAt, entry.lastUsedAt ?? 0)
+}
+
+const getActiveLauncherRecords = ({
+  now = Date.now(),
+  records = loadProviderRuntimeRecords(),
+}: {now?: number; records?: ProviderRuntimeRecord[]} = {}): ProviderRuntimeRecord[] => {
+  return records
+    .filter((record) => {
+      return getProviderRuntimeRecordStatus({now, record}) === 'active'
+    })
+    .sort((left, right) => {
+      return right.updatedAt - left.updatedAt
+    })
+}
+
+const getRuntimeSummarySignature = (summary: ProviderRuntimeSummary): string => {
+  return JSON.stringify({
+    activeModelNames: getUniqueValues(summary.activeModelNames),
+    providerKind: getTrimmedValue(summary.providerKind),
+    workerUrls: getUniqueValues(summary.workerUrls),
+  })
+}
+
+const getUniqueRuntimeSummaries = (summaries: ProviderRuntimeSummary[]): ProviderRuntimeSummary[] => {
+  return Array.from(
+    new Map(
+      summaries.map((summary) => {
+        return [getRuntimeSummarySignature(summary), summary] as const
+      }),
+    ).values(),
+  )
 }
 
 const getCachedHealthyEntry = ({
@@ -260,50 +295,50 @@ export const markProviderRuntimeUsage = ({
   })
 }
 
+export const getDetectedProviderRuntimeSummaries = async ({
+  launcherRecords,
+  now = Date.now(),
+}: {launcherRecords?: ProviderRuntimeRecord[]; now?: number} = {}): Promise<ProviderRuntimeSummary[]> => {
+  const activeLauncherRecords = getActiveLauncherRecords({now, records: launcherRecords})
+  const launcherSummaries = activeLauncherRecords.map((record) => {
+    return getSummaryFromLauncherRecord(record)
+  })
+
+  const candidates = await getSavedRuntimeCandidates()
+  const detectorEntries = await Promise.all(
+    candidates.map(async (candidate) => {
+      const cachedEntry = getCachedHealthyEntry({...candidate, now})
+
+      if (cachedEntry) {
+        return cachedEntry
+      }
+
+      const existing = detectorCache.get(getDetectorCacheKey(candidate)) ?? null
+
+      return existing && now < existing.nextCheckAt ? null : probeCandidate({...candidate, now})
+    }),
+  )
+  const detectedSummaries = detectorEntries
+    .filter((entry): entry is DetectorCacheEntry => {
+      return Boolean(entry)
+    })
+    .sort((left, right) => {
+      return getSummaryFreshness(right) - getSummaryFreshness(left)
+    })
+    .map((entry) => {
+      return getSummaryFromCacheEntry(entry)
+    })
+
+  return getUniqueRuntimeSummaries([...launcherSummaries, ...detectedSummaries])
+}
+
 export const getDetectedProviderRuntimeSummary = async ({
   launcherRecords,
   now = Date.now(),
 }: {launcherRecords?: ProviderRuntimeRecord[]; now?: number} = {}): Promise<ProviderRuntimeSummary> => {
-  const launcherRecord = getLatestActiveProviderRuntimeRecord({now, records: launcherRecords})
+  const summaries = await getDetectedProviderRuntimeSummaries({launcherRecords, now})
 
-  if (launcherRecord) {
-    return getSummaryFromLauncherRecord(launcherRecord)
-  }
-
-  const candidates = await getSavedRuntimeCandidates()
-  const cachedEntries = candidates
-    .map((candidate) => {
-      return getCachedHealthyEntry({...candidate, now})
-    })
-    .filter((entry): entry is DetectorCacheEntry => {
-      return Boolean(entry)
-    })
-    .sort((left, right) => {
-      return getSummaryFreshness(right) - getSummaryFreshness(left)
-    })
-
-  if (cachedEntries[0]) {
-    return getSummaryFromCacheEntry(cachedEntries[0])
-  }
-
-  const probedEntries = await Promise.all(
-    candidates.flatMap((candidate) => {
-      const existing = detectorCache.get(getDetectorCacheKey(candidate)) ?? null
-
-      return existing && now < existing.nextCheckAt ? [] : [probeCandidate({...candidate, now})]
-    }),
-  )
-  const detectedEntry = probedEntries
-    .filter((entry): entry is DetectorCacheEntry => {
-      return Boolean(entry)
-    })
-    .sort((left, right) => {
-      return getSummaryFreshness(right) - getSummaryFreshness(left)
-    })[0]
-
-  return detectedEntry
-    ? getSummaryFromCacheEntry(detectedEntry)
-    : {activeModelNames: [], providerKind: null, workerUrls: []}
+  return summaries[0] ?? {activeModelNames: [], providerKind: null, workerUrls: []}
 }
 
 export const clearProviderRuntimeDetectorCache = (): void => {

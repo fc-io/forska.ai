@@ -80,7 +80,7 @@ const getProviderRuntime = ({
   providerKind: string | null
 }): {baseURL: string | null; workerUrls: string[]} => {
   const config = getProviderConnectionConfigFromJson({providerKind, value: providerConfigJson})
-  const workerState = getProviderConnectionWorkerState({config, providerKind})
+  const workerState = getProviderConnectionWorkerState({baseURL, config, providerKind})
 
   return {
     baseURL: getProviderConnectionEffectiveBaseURL({baseURL, config, providerKind}),

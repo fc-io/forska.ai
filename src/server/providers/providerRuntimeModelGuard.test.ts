@@ -21,7 +21,12 @@ const state = {
     }
   }),
   getProviderConnectionForStoredModel: mock(async (_modelId: string) => {
-    return {baseURL: defaultBaseURL, id: 'connection-1', providerKind: 'sglang'}
+    return {
+      baseURL: defaultBaseURL,
+      config: {manualWorkerUrls: [] as string[], workerUrlMode: 'runtime'},
+      id: 'connection-1',
+      providerKind: 'sglang',
+    }
   }),
   listProviderConnections: mock(async () => {
     return []
@@ -46,6 +51,9 @@ const state = {
   resolveProviderRuntimeCredentials: mock(async (_connection: unknown) => {
     return {apiKey: null, baseURL: defaultBaseURL, headers: {}, secretRef: null}
   }),
+  resolveMatchedProviderRuntimeCredentials: mock(async (_connection: unknown) => {
+    return {apiKey: null, baseURL: defaultBaseURL, headers: {}, secretRef: null}
+  }),
 }
 
 const resetState = (): void => {
@@ -59,7 +67,12 @@ const resetState = (): void => {
     }
   })
   state.getProviderConnectionForStoredModel.mockImplementation(async (_modelId: string) => {
-    return {baseURL: defaultBaseURL, id: 'connection-1', providerKind: 'sglang'}
+    return {
+      baseURL: defaultBaseURL,
+      config: {manualWorkerUrls: [] as string[], workerUrlMode: 'runtime'},
+      id: 'connection-1',
+      providerKind: 'sglang',
+    }
   })
   state.listProviderConnections.mockImplementation(async () => {
     return []
@@ -81,13 +94,13 @@ const resetState = (): void => {
       },
     ]
   })
-  state.resolveProviderRuntimeCredentials.mockImplementation(async (_connection: unknown) => {
+  state.resolveMatchedProviderRuntimeCredentials.mockImplementation(async (_connection: unknown) => {
     return {apiKey: null, baseURL: defaultBaseURL, headers: {}, secretRef: null}
   })
 }
 
 void mock.module(providerAuthServiceModulePath, () => {
-  return {resolveProviderRuntimeCredentials: state.resolveProviderRuntimeCredentials}
+  return {resolveMatchedProviderRuntimeCredentials: state.resolveMatchedProviderRuntimeCredentials}
 })
 
 void mock.module(providerConnectionRepositoryModulePath, () => {
@@ -174,4 +187,67 @@ test('getStoredProviderModelRuntimeMatch returns a mismatch message when SGLang 
     ok: false,
     reason: 'runtime-mismatch',
   })
+})
+
+test('getStoredProviderModelRuntimeMatch validates against the matched saved connection runtime', async () => {
+  state.getProviderConnectionForStoredModel.mockImplementationOnce(async (_modelId: string) => {
+    return {
+      baseURL: 'https://alvis-tunnel.example/v1',
+      config: {manualWorkerUrls: ['http://127.0.0.1:30020'], workerUrlMode: 'runtime'},
+      id: 'connection-1',
+      providerKind: 'sglang',
+    }
+  })
+  state.listProviderConnections.mockImplementationOnce((async () => {
+    return [
+      {
+        baseURL: 'https://other-runtime.example/v1',
+        config: {manualWorkerUrls: ['http://127.0.0.1:30010'], workerUrlMode: 'runtime'},
+        enabled: true,
+        providerKind: 'sglang',
+      },
+      {
+        baseURL: 'https://alvis-tunnel.example/v1',
+        config: {manualWorkerUrls: ['http://127.0.0.1:30020'], workerUrlMode: 'runtime'},
+        enabled: true,
+        providerKind: 'sglang',
+      },
+    ]
+  }) as never)
+  state.discoverOpenAICompatibleRuntimeModel.mockImplementation(async (input: unknown) => {
+    const {baseURL} = input as {baseURL: string}
+
+    return {
+      baseURL,
+      contextLength: null,
+      modelName: baseURL.includes('30020') ? expectedModelName : 'other-model',
+      modelNames: [baseURL.includes('30020') ? expectedModelName : 'other-model'],
+      raw: null,
+      servedModelName: null,
+    }
+  })
+  state.listModels.mockImplementationOnce(async (input: unknown) => {
+    const {runtimeCredentials} = input as {runtimeCredentials: {baseURL: string}}
+
+    expect(runtimeCredentials.baseURL).toBe('https://alvis-tunnel.example/v1')
+
+    return [
+      {
+        displayName: expectedModelName,
+        metadataJson: null,
+        modelName: expectedModelName,
+        remoteModelId: expectedModelName,
+        variant: null,
+        version: null,
+      },
+    ]
+  })
+  state.resolveMatchedProviderRuntimeCredentials.mockImplementationOnce(async (_connection: unknown) => {
+    return {apiKey: null, baseURL: 'https://alvis-tunnel.example/v1', headers: {}, secretRef: null}
+  })
+  const {getStoredProviderModelRuntimeMatch} = await loadGuard()
+
+  const result = await getStoredProviderModelRuntimeMatch({modelId: 'model-matched-runtime'})
+
+  expect(result).toEqual({message: null, ok: true, reason: null})
 })

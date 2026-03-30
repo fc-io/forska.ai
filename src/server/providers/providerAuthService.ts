@@ -2,8 +2,8 @@ import {type ProviderKind} from '../services/providerCatalog.ts'
 import {getProviderConnectionAuthMode} from './providerConnectionHelpers.ts'
 import {getProviderConnection, updateProviderConnection} from './providerConnectionRepository.ts'
 import {requireProviderRegistryEntry} from './providerRegistry.ts'
-import {getDetectedProviderRuntimeSummary, markProviderRuntimeUsage} from './providerRuntimeDetector.ts'
-import {getProviderConnectionRuntimeMatch} from './providerRuntimeState.ts'
+import {markProviderRuntimeUsage} from './providerRuntimeDetector.ts'
+import {resolveProviderConnectionRuntimeMatch} from './providerRuntimeMatchResolver.ts'
 import {deleteProviderSecret, storeProviderSecret} from './providerSecretStore.ts'
 import {
   type ProviderAuthLifecyclePayload,
@@ -36,12 +36,10 @@ const getResolvedProviderRuntimeCredentials = async ({
 }): Promise<ProviderRuntimeCredentials> => {
   const definition = requireProviderRegistryEntry(connection.providerKind)
   const runtimeCredentials = await definition.resolveRuntimeCredentials({catalog: definition.catalog, connection})
-  const runtimeSummary = await getDetectedProviderRuntimeSummary()
-  const runtimeMatch = getProviderConnectionRuntimeMatch({
+  const runtimeMatch = await resolveProviderConnectionRuntimeMatch({
     baseURL: runtimeCredentials.baseURL ?? connection.baseURL,
     config: connection.config,
     providerKind: connection.providerKind,
-    runtimeSummary,
   })
 
   if (requireMatchedRuntime && runtimeMatch.resolutionMode === 'auto-detect' && runtimeMatch.status !== 'matched') {

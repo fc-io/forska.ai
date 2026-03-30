@@ -18,6 +18,12 @@ const state = {
   getLatestActiveProviderRuntimeRecord: mock(() => {
     return null
   }),
+  getProviderRuntimeRecordStatus: mock(() => {
+    return 'stopped'
+  }),
+  loadProviderRuntimeRecords: mock(() => {
+    return []
+  }),
   listProviderConnections: mock(async (): Promise<unknown[]> => {
     return []
   }),
@@ -37,7 +43,11 @@ void mock.module(providerRuntimeDiscoveryModulePath, () => {
 })
 
 void mock.module(providerRuntimeRecordsModulePath, () => {
-  return {getLatestActiveProviderRuntimeRecord: state.getLatestActiveProviderRuntimeRecord}
+  return {
+    getLatestActiveProviderRuntimeRecord: state.getLatestActiveProviderRuntimeRecord,
+    getProviderRuntimeRecordStatus: state.getProviderRuntimeRecordStatus,
+    loadProviderRuntimeRecords: state.loadProviderRuntimeRecords,
+  }
 })
 
 const loadDetector = () => {
@@ -59,6 +69,14 @@ afterEach(() => {
   state.getLatestActiveProviderRuntimeRecord.mockReset()
   state.getLatestActiveProviderRuntimeRecord.mockImplementation(() => {
     return null
+  })
+  state.getProviderRuntimeRecordStatus.mockReset()
+  state.getProviderRuntimeRecordStatus.mockImplementation(() => {
+    return 'stopped'
+  })
+  state.loadProviderRuntimeRecords.mockReset()
+  state.loadProviderRuntimeRecords.mockImplementation(() => {
+    return []
   })
   state.listProviderConnections.mockReset()
   state.listProviderConnections.mockImplementation(async (): Promise<unknown[]> => {
@@ -127,4 +145,31 @@ test('detector probes only saved local provider endpoints', async () => {
     providerKind: 'llmstudio',
     workerUrls: ['http://127.0.0.1:1234'],
   })
+})
+
+test('detector lists all detected runtime summaries for saved connections', async () => {
+  state.listProviderConnections.mockImplementationOnce(async () => {
+    return [
+      {
+        baseURL: 'http://127.0.0.1:1234/v1',
+        config: {manualWorkerUrls: [], workerUrlMode: 'manual'},
+        enabled: true,
+        providerKind: 'llmstudio',
+      },
+      {
+        baseURL: null,
+        config: {manualWorkerUrls: ['http://127.0.0.1:30010'], workerUrlMode: 'manual'},
+        enabled: true,
+        providerKind: 'sglang',
+      },
+    ]
+  })
+  const {getDetectedProviderRuntimeSummaries} = await loadDetector()
+
+  const summaries = await getDetectedProviderRuntimeSummaries({now: 100})
+
+  expect(summaries).toEqual([
+    {activeModelNames: ['Qwen/Qwen3'], providerKind: 'llmstudio', workerUrls: ['http://127.0.0.1:1234']},
+    {activeModelNames: ['Qwen/Qwen3'], providerKind: 'sglang', workerUrls: ['http://127.0.0.1:30010']},
+  ])
 })

@@ -1,9 +1,10 @@
 import {HttpError} from '../utils/httpError.ts'
-import {resolveProviderRuntimeCredentials} from './providerAuthService.ts'
+import {resolveMatchedProviderRuntimeCredentials} from './providerAuthService.ts'
 import {getProviderConnectionForStoredModel} from './providerConnectionRepository.ts'
 import {getProviderModels} from './providerModelRepository.ts'
 import {requireProviderRegistryEntry} from './providerRegistry.ts'
 import {discoverProviderRuntimeModel} from './providerRuntimeDetector.ts'
+import {resolveProviderConnectionRuntimeMatch} from './providerRuntimeMatchResolver.ts'
 import {type ProviderListedModel, type ProviderModelRecord} from './providerTypes.ts'
 
 type StoredProviderModelRuntimeMatchReason =
@@ -229,38 +230,50 @@ const getStoredProviderModelRuntimeMatchUncached = async ({
     return getFailedRuntimeMatch({message: getMissingStoredModelNamesMessage(), reason: 'missing-stored-model'})
   }
 
+  const runtimeMatch = await resolveProviderConnectionRuntimeMatch({
+    baseURL: connection.baseURL,
+    config: connection.config,
+    providerKind: connection.providerKind,
+    savedModelIds: storedModelNames,
+  })
+
   try {
     const definition = requireProviderRegistryEntry(connection.providerKind)
-    const runtimeCredentials = await resolveProviderRuntimeCredentials(connection)
+    const runtimeCredentials = await resolveMatchedProviderRuntimeCredentials(connection)
+    const runtimeBaseURL = runtimeMatch.effectiveBaseURL ?? runtimeCredentials.baseURL
     const [listedModels, runtimeMetadata] = await Promise.all([
       definition.listModels({connection, runtimeCredentials}),
-      discoverProviderRuntimeModel({baseURL: runtimeCredentials.baseURL, providerKind: connection.providerKind}),
+      discoverProviderRuntimeModel({baseURL: runtimeBaseURL, providerKind: connection.providerKind}),
     ])
     const runtimeModelNames = getRuntimeModelNames({listedModels, runtimeMetadata})
 
     return runtimeModelNames.length === 0
       ? getFailedRuntimeMatch({
-          message: getMissingRuntimeModelNamesMessage(runtimeCredentials.baseURL, storedModelNames),
+          message: getMissingRuntimeModelNamesMessage(runtimeBaseURL, storedModelNames),
           reason: 'runtime-model-unavailable',
         })
       : hasRuntimeModelMatch({runtimeModelNames, storedModelNames})
         ? getSuccessfulRuntimeMatch()
         : getFailedRuntimeMatch({
-            message: getRuntimeMismatchMessage({
-              baseURL: runtimeCredentials.baseURL,
-              runtimeModelNames,
-              storedModelNames,
-            }),
+            message: getRuntimeMismatchMessage({baseURL: runtimeBaseURL, runtimeModelNames, storedModelNames}),
             reason: 'runtime-mismatch',
           })
   } catch (error) {
     return isConnectionError(error)
       ? getFailedRuntimeMatch({
-          message: getRuntimeUnreachableMessage(connection.baseURL, storedModelNames, error),
+          message: getRuntimeUnreachableMessage(
+            runtimeMatch.effectiveBaseURL ?? connection.baseURL,
+            storedModelNames,
+            error,
+          ),
           reason: 'runtime-unreachable',
         })
       : getFailedRuntimeMatch({
-          message: getRuntimeVerificationFailureMessage(connection.baseURL, storedModelNames, error),
+          message: getRuntimeVerificationFailureMessage(
+            runtimeMatch.effectiveBaseURL ?? connection.baseURL,
+            storedModelNames,
+            error,
+          ),
           reason: 'runtime-verification-failed',
         })
   }

@@ -4,7 +4,7 @@ const providerConnectionHelpersModulePath = new URL('./providerConnectionHelpers
 const providerConnectionRepositoryModulePath = new URL('./providerConnectionRepository.ts', import.meta.url).pathname
 const providerRegistryModulePath = new URL('./providerRegistry.ts', import.meta.url).pathname
 const providerRuntimeDetectorModulePath = new URL('./providerRuntimeDetector.ts', import.meta.url).pathname
-const providerRuntimeStateModulePath = new URL('./providerRuntimeState.ts', import.meta.url).pathname
+const providerRuntimeMatchResolverModulePath = new URL('./providerRuntimeMatchResolver.ts', import.meta.url).pathname
 const providerSecretStoreModulePath = new URL('./providerSecretStore.ts', import.meta.url).pathname
 
 const state = {
@@ -38,10 +38,7 @@ const state = {
   readProviderSecret: mock(async (_secretRef: string | null | undefined) => {
     return null
   }),
-  getDetectedProviderRuntimeSummary: mock(async () => {
-    return {activeModelNames: [], providerKind: null, workerUrls: []}
-  }),
-  getProviderConnectionRuntimeMatch: mock((_input: unknown) => {
+  resolveProviderConnectionRuntimeMatch: mock(async (_input: unknown) => {
     const candidate = {
       localUrls: [] as string[],
       modelNames: [] as string[],
@@ -102,14 +99,11 @@ void mock.module(providerSecretStoreModulePath, () => {
 })
 
 void mock.module(providerRuntimeDetectorModulePath, () => {
-  return {
-    getDetectedProviderRuntimeSummary: state.getDetectedProviderRuntimeSummary,
-    markProviderRuntimeUsage: state.markProviderRuntimeUsage,
-  }
+  return {markProviderRuntimeUsage: state.markProviderRuntimeUsage}
 })
 
-void mock.module(providerRuntimeStateModulePath, () => {
-  return {getProviderConnectionRuntimeMatch: state.getProviderConnectionRuntimeMatch}
+void mock.module(providerRuntimeMatchResolverModulePath, () => {
+  return {resolveProviderConnectionRuntimeMatch: state.resolveProviderConnectionRuntimeMatch}
 })
 
 void mock.module(providerConnectionHelpersModulePath, () => {
@@ -169,7 +163,7 @@ test('finishProviderAuth persists secret and updates connection when auth comple
 })
 
 test('resolveMatchedProviderRuntimeCredentials keeps the matched effective runtime base URL', async () => {
-  state.getProviderConnectionRuntimeMatch.mockImplementationOnce((_input: unknown) => {
+  state.resolveProviderConnectionRuntimeMatch.mockImplementationOnce(async (_input: unknown) => {
     return {
       candidate: {
         localUrls: ['http://localhost:30001'],
@@ -205,7 +199,7 @@ test('resolveMatchedProviderRuntimeCredentials keeps the matched effective runti
 })
 
 test('resolveMatchedProviderRuntimeCredentials throws an actionable error for ambiguous auto-detect matches', async () => {
-  state.getProviderConnectionRuntimeMatch.mockImplementationOnce((_input: unknown) => {
+  state.resolveProviderConnectionRuntimeMatch.mockImplementationOnce(async (_input: unknown) => {
     return {
       candidate: null,
       detectedModelNames: ['Qwen/Qwen3'],

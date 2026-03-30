@@ -1,8 +1,5 @@
 import {getProviderConnectionConfigFromJson} from '../../../providers/providerDbUtils.ts'
-import {
-  getProviderConnectionEffectiveBaseURL,
-  getProviderConnectionWorkerState,
-} from '../../../providers/providerRuntimeState.ts'
+import {resolveProviderConnectionRuntimeMatch} from '../../../providers/providerRuntimeMatchResolver.ts'
 import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from '../judgmentJobSqliteService.ts'
 
 export type PromptToProcess = {
@@ -40,22 +37,26 @@ const getCodexPlaceholderBaseUrl = (): string => {
   return 'codex://app-server'
 }
 
-const getModelRuntime = ({
+const getModelRuntime = async ({
   baseURL,
+  modelName,
   providerKind,
   providerConfigJson,
 }: {
   baseURL: string | null
+  modelName: string | null
   providerKind: string
   providerConfigJson: unknown
-}): {baseURL: string | null; workerUrls: string[]} => {
+}): Promise<{baseURL: string | null; workerUrls: string[]}> => {
   const config = getProviderConnectionConfigFromJson({providerKind, value: providerConfigJson})
-  const workerState = getProviderConnectionWorkerState({config, providerKind})
+  const runtimeMatch = await resolveProviderConnectionRuntimeMatch({
+    baseURL,
+    config,
+    providerKind,
+    savedModelIds: modelName ? [modelName] : [],
+  })
 
-  return {
-    baseURL: getProviderConnectionEffectiveBaseURL({baseURL, config, providerKind}),
-    workerUrls: workerState.effectiveWorkerUrls,
-  }
+  return {baseURL: runtimeMatch.effectiveBaseURL, workerUrls: runtimeMatch.effectiveWorkerUrls}
 }
 
 const getSqliteReadyRows = async (serverJobId: string, jobId: string, limit: number): Promise<PromptToProcess[]> => {
@@ -79,8 +80,9 @@ const getSqliteReadyRows = async (serverJobId: string, jobId: string, limit: num
   }
 
   const provider = normalizeProvider(jobInfo.modelProvider)
-  const runtime = getModelRuntime({
+  const runtime = await getModelRuntime({
     baseURL: jobInfo.modelBaseUrl,
+    modelName: jobInfo.modelName,
     providerConfigJson: jobInfo.providerConfigJson,
     providerKind: provider,
   })
