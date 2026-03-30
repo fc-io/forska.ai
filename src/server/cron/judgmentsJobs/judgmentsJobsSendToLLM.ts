@@ -32,6 +32,82 @@ const isCodexJob = (job: {modelProvider: string | null}): boolean => {
   return normalizeProvider(job.modelProvider) === 'codex'
 }
 
+type Capacity = {maxInflight: number; maxBurst: number; workerCount: number}
+type CapacityBucket<T> = {capacity: Capacity; jobs: T[]; label: string}
+
+const getOverrideCapacity = (maxInflightRequests: number | null | undefined): Capacity => {
+  const limit = Math.max(1, maxInflightRequests ?? 1)
+
+  return {maxBurst: limit, maxInflight: limit, workerCount: limit}
+}
+
+export const getCapacityBuckets = ({
+  getCodexDefaultMaxInflight = getCodexMaxInflight,
+  getNonCodexCapacity = getJudgmentsCapacity,
+  jobs,
+}: {
+  getCodexDefaultMaxInflight?: () => number
+  getNonCodexCapacity?: (runningJobCount: number) => Capacity
+  jobs: RunningJudgmentJob[]
+}): CapacityBucket<RunningJudgmentJob>[] => {
+  const grouped = jobs.reduce(
+    (state, job) => {
+      const connectionKey = job.maxInflightRequests != null ? (job.providerConnectionId ?? job.id) : null
+
+      return connectionKey
+        ? {
+            ...state,
+            overriddenJobsByConnection: new Map(state.overriddenJobsByConnection).set(connectionKey, [
+              ...(state.overriddenJobsByConnection.get(connectionKey) ?? []),
+              job,
+            ]),
+          }
+        : isCodexJob(job)
+          ? {...state, defaultCodexJobs: [...state.defaultCodexJobs, job]}
+          : {...state, defaultNonCodexJobs: [...state.defaultNonCodexJobs, job]}
+    },
+    {
+      defaultCodexJobs: [] as RunningJudgmentJob[],
+      defaultNonCodexJobs: [] as RunningJudgmentJob[],
+      overriddenJobsByConnection: new Map<string, RunningJudgmentJob[]>(),
+    },
+  )
+  const connectionBuckets = Array.from(grouped.overriddenJobsByConnection.entries()).map(
+    ([connectionId, connectionJobs]) => {
+      return {
+        capacity: getOverrideCapacity(connectionJobs[0]?.maxInflightRequests),
+        jobs: connectionJobs,
+        label: `${isCodexJob(connectionJobs[0] ?? {modelProvider: null}) ? 'codex' : 'provider'}:${connectionId}`,
+      }
+    },
+  )
+  const defaultCodexMaxInflight = getCodexDefaultMaxInflight()
+  const defaultBuckets = [
+    grouped.defaultNonCodexJobs.length > 0
+      ? {
+          capacity: getNonCodexCapacity(grouped.defaultNonCodexJobs.length),
+          jobs: grouped.defaultNonCodexJobs,
+          label: 'non-codex',
+        }
+      : null,
+    grouped.defaultCodexJobs.length > 0
+      ? {
+          capacity: {
+            maxBurst: defaultCodexMaxInflight,
+            maxInflight: defaultCodexMaxInflight,
+            workerCount: defaultCodexMaxInflight,
+          },
+          jobs: grouped.defaultCodexJobs,
+          label: 'codex',
+        }
+      : null,
+  ].filter((bucket): bucket is CapacityBucket<RunningJudgmentJob> => {
+    return Boolean(bucket)
+  })
+
+  return [...connectionBuckets, ...defaultBuckets]
+}
+
 const getReadyCountsByJob = async (jobIds: string[]): Promise<Map<string, number>> => {
   const sqliteService = getJudgmentJobSqliteService()
   const pairs = await Promise.all(
@@ -229,8 +305,8 @@ export const requeueAndFilterRunningJobs = async ({
 const sendToLLMForJobs = async (
   jobs: RunningJudgmentJob[],
   serverJobId: string,
-  capacity: {maxInflight: number; maxBurst: number; workerCount: number},
-  label: 'codex' | 'non-codex',
+  capacity: Capacity,
+  label: string,
 ): Promise<void> => {
   if (jobs.length === 0) return
 
@@ -325,18 +401,13 @@ export const judgmentsJobsSendToLLM = async (allJobs: RunningJudgmentJob[], serv
 
   try {
     const sendableJobs = await requeueAndFilterRunningJobs({allJobs, serverJobId})
+    const capacityBuckets = getCapacityBuckets({jobs: sendableJobs})
 
-    const codexJobs = sendableJobs.filter(isCodexJob)
-    const nonCodexJobs = sendableJobs.filter((job) => {
-      return !isCodexJob(job)
-    })
-
-    const nonCodexCapacity = getJudgmentsCapacity(nonCodexJobs.length)
-    const codexMaxInflight = getCodexMaxInflight()
-    const codexCapacity = {maxInflight: codexMaxInflight, maxBurst: codexMaxInflight, workerCount: codexMaxInflight}
-
-    await sendToLLMForJobs(nonCodexJobs, serverJobId, nonCodexCapacity, 'non-codex')
-    await sendToLLMForJobs(codexJobs, serverJobId, codexCapacity, 'codex')
+    await Promise.all(
+      capacityBuckets.map(({capacity, jobs, label}) => {
+        return sendToLLMForJobs(jobs, serverJobId, capacity, label)
+      }),
+    )
   } finally {
     isRunningJudgmentsJobsSendToLLM = false
   }

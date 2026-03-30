@@ -67,11 +67,12 @@
         "Browser verify in `/providers/:id`: save a provider cap, leave it empty for default, confirm the saved value survives reload, verify a capped provider does not let `Prompts in Progress` exceed the configured value, and verify Codex uses the same field with its own default fallback"
       ],
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-002"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-004",
@@ -169,6 +170,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-03-30T12:12:30.550Z"
+    "updatedAt": "2026-03-30T12:19:18.839Z"
   }
 }

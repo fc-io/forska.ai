@@ -132,6 +132,7 @@ export type ProviderConnection = {
   label: string
   lastCheckedAt: string | Date | null
   lastError: string | null
+  maxInflightRequests: number | null
   models: ProviderModel[]
   providerKind: string
   runtimeState?: ProviderConnectionRuntimeState
@@ -244,6 +245,7 @@ export const createProviderConnection = async (input: {
   label?: string
   llamaCppMode?: ProviderLlamaCppMode
   manualWorkerUrls?: string[]
+  maxInflightRequests?: number | null
   providerKind: string
   workerUrlMode?: 'manual' | 'runtime'
 }) => {
@@ -265,6 +267,7 @@ export const updateProviderConnection = async (input: {
   label?: string
   llamaCppMode?: ProviderLlamaCppMode
   manualWorkerUrls?: string[]
+  maxInflightRequests?: number | null
   workerUrlMode?: 'manual' | 'runtime'
 }) => {
   const response = await apiClient.api['provider-connections']({id: input.id}).patch({
@@ -275,6 +278,7 @@ export const updateProviderConnection = async (input: {
     label: input.label,
     llamaCppMode: input.llamaCppMode,
     manualWorkerUrls: input.manualWorkerUrls,
+    maxInflightRequests: input.maxInflightRequests,
     workerUrlMode: input.workerUrlMode,
   })
   const result = handleApiResponse<ProviderConnectionMutationResponse>(

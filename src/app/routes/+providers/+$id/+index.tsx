@@ -54,6 +54,7 @@ type ConnectionFormState = {
   enabled: boolean
   label: string
   manualWorkerUrls: string
+  maxInflightRequests: string
   providerKind: string
   workerUrlMode: 'manual' | 'runtime'
 }
@@ -73,6 +74,36 @@ const getNormalizedProviderKind = (value: string | null | undefined): string => 
   return String(value ?? '')
     .trim()
     .toLowerCase()
+}
+
+const getMaxInflightRequestsInputValue = (value: number | null | undefined): string => {
+  return value == null ? '' : String(value)
+}
+
+const getSubmittedMaxInflightRequests = (value: string): {error: string | null; value: number | null} => {
+  const normalized = value.trim()
+
+  if (normalized === '') {
+    return {error: null, value: null}
+  }
+
+  const parsed = Number(normalized)
+
+  return Number.isInteger(parsed) && parsed > 0
+    ? {error: null, value: parsed}
+    : {error: 'Prompts in Progress limit must be empty or a positive integer', value: null}
+}
+
+const getMaxInflightRequestsHelpText = (providerKind: string | null | undefined): string => {
+  const normalizedProviderKind = getNormalizedProviderKind(providerKind)
+  const isCodex = normalizedProviderKind === 'codex'
+  const isRuntimeBacked = ['ollama', 'llmstudio', 'llamacpp', 'sglang', 'vllm'].includes(normalizedProviderKind)
+
+  return isCodex
+    ? 'Leave empty to use the provider-family default. Codex App falls back to `CODEX_MAX_INFLIGHT`.'
+    : isRuntimeBacked
+      ? "Leave empty to use the provider-family default. Runtime-backed providers fall back to the current runtime capacity when available, or Forska's global capacity when no runtime-backed limit is active."
+      : "Leave empty to use the provider-family default. Codex App falls back to `CODEX_MAX_INFLIGHT`, and runtime-backed providers fall back to the current runtime capacity when available or Forska's global capacity."
 }
 
 const getProviderPageModelKey = ({
@@ -203,6 +234,7 @@ const getConnectionFormState = (connection: ProviderConnection | null): Connecti
     enabled: connection?.enabled ?? true,
     label: connection?.label ?? '',
     manualWorkerUrls: getWorkerUrlsInputValue(connection?.config.manualWorkerUrls ?? []),
+    maxInflightRequests: getMaxInflightRequestsInputValue(connection?.maxInflightRequests),
     providerKind: connection?.providerKind ?? 'openai',
     workerUrlMode: connection?.config.workerUrlMode ?? 'manual',
   }
@@ -436,6 +468,13 @@ const ProviderDetailPage = () => {
     setPageError('')
     setPageMessage('')
 
+    const maxInflightRequests = getSubmittedMaxInflightRequests(connectionForm.maxInflightRequests)
+
+    if (maxInflightRequests.error) {
+      setPageError(maxInflightRequests.error)
+      return
+    }
+
     try {
       await updateConnectionMutation.mutateAsync({
         apiKey: getTrimmedValue(connectionForm.apiKey) || undefined,
@@ -445,6 +484,7 @@ const ProviderDetailPage = () => {
         label: connectionForm.label,
         llamaCppMode: connection.config.llamaCppMode,
         manualWorkerUrls: getWorkerUrlsFromInputValue(connectionForm.manualWorkerUrls),
+        maxInflightRequests: maxInflightRequests.value,
         workerUrlMode: connectionForm.workerUrlMode,
       })
     } catch (error) {
@@ -896,6 +936,26 @@ const ProviderDetailPage = () => {
                         supportsWorkerUrls={Boolean(activeCatalogOption()?.supportsWorkerUrls)}
                         values={connectionForm}
                       />
+
+                      <div class="space-y-2 rounded-lg border border-gray-200 bg-gray-50 p-4">
+                        <label class="block text-sm font-medium text-gray-900" for="provider-max-inflight-requests">
+                          Prompts in Progress limit
+                        </label>
+                        <input
+                          class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                          id="provider-max-inflight-requests"
+                          inputMode="numeric"
+                          min="1"
+                          onInput={(event) => {
+                            setConnectionForm('maxInflightRequests', event.currentTarget.value)
+                          }}
+                          placeholder="Default"
+                          step="1"
+                          type="number"
+                          value={connectionForm.maxInflightRequests}
+                        />
+                        <p class="text-sm text-gray-600">{getMaxInflightRequestsHelpText(connection().providerKind)}</p>
+                      </div>
 
                       <Show
                         when={

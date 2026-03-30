@@ -26,9 +26,11 @@ const getRuntimeCheckFailureLogMessage = ({
 
 export type RunningJudgmentJob = {
   id: string
+  maxInflightRequests: number | null
   modelId: string
   modelName: string | null
   modelProvider: string | null
+  providerConnectionId: string | null
   projectId: string
 }
 
@@ -37,9 +39,11 @@ const getRunningJobsFromDatabase = async (): Promise<RunningJudgmentJob[]> => {
     SELECT
       jj.id AS id,
       jj.project_id AS projectId,
+      pc.max_inflight_requests AS maxInflightRequests,
       pc.provider_kind AS modelProvider,
       m.id AS modelId,
-      m.remote_model_id AS modelName
+      m.remote_model_id AS modelName,
+      m.provider_connection_id AS providerConnectionId
     FROM app.judgment_job jj
     INNER JOIN app.project p ON jj.project_id = p.id
     INNER JOIN app.model m ON p.model_id = m.id
