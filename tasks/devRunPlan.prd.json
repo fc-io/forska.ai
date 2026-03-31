@@ -1,7 +1,7 @@
 {
   "name": "Primary and Secondary Dev Runtime Profiles",
-  "branchName": "ralph/primary-secondary-dev-runtime-profiles",
   "description": "Make primary and secondary first-class local runtime profiles with isolated ports, DuckDB files, and judgment-job SQLite state.",
+  "branchName": "ralph/primary-secondary-dev-runtime-profiles",
   "userStories": [
     {
       "id": "US-001",
@@ -15,9 +15,10 @@
         "`bun test src/utils/runtimeProfile.test.ts` passes"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "",
-      "dependsOn": []
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-002",
@@ -34,7 +35,9 @@
       "priority": 2,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001"]
+      "dependsOn": [
+        "US-001"
+      ]
     },
     {
       "id": "US-003",
@@ -50,7 +53,9 @@
       "priority": 3,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001"]
+      "dependsOn": [
+        "US-001"
+      ]
     },
     {
       "id": "US-004",
@@ -65,7 +70,9 @@
       "priority": 4,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-003"]
+      "dependsOn": [
+        "US-003"
+      ]
     },
     {
       "id": "US-005",
@@ -81,7 +88,10 @@
       "priority": 5,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-003", "US-004"]
+      "dependsOn": [
+        "US-003",
+        "US-004"
+      ]
     },
     {
       "id": "US-006",
@@ -97,7 +107,10 @@
       "priority": 6,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-003", "US-004"]
+      "dependsOn": [
+        "US-003",
+        "US-004"
+      ]
     },
     {
       "id": "US-007",
@@ -112,7 +125,14 @@
       "priority": 7,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-004", "US-005", "US-006"]
+      "dependsOn": [
+        "US-004",
+        "US-005",
+        "US-006"
+      ]
     }
-  ]
+  ],
+  "metadata": {
+    "updatedAt": "2026-03-31T13:33:41.577Z"
+  }
 }
