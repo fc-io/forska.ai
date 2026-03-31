@@ -1087,6 +1087,75 @@ test('repair route recreates missing sqlite state for one quarantined job', asyn
   expect(body.data.preflight?.sqliteFileBytes).toBeGreaterThan(0)
 })
 
+test('repair route captures explicit system sqlite fallback results without changing normal repair flows', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `repair-fallback-project-${Date.now()}`
+  const modelId = `repair-fallback-model-${Date.now()}`
+  const connectionId = `repair-fallback-connection-${Date.now()}`
+  const jobId = `repair-fallback-job-${Date.now()}`
+  const {getJudgmentJobSqlitePath} = await import('../cron/judgmentsJobs/judgmentJobPaths.ts')
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+  const exportPath = `${sqlitePath}.repair-export.sql`
+  const originalSpawnSync = globalThis.Bun.spawnSync
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'paused', 'active')
+  `)
+
+  writeFileSync(sqlitePath, 'not a sqlite database')
+  globalThis.Bun.spawnSync = ((command: string[]) => {
+    return (command[2] ?? '') === '.dump'
+      ? {exitCode: 0, stderr: Buffer.from(''), stdout: Buffer.from('BEGIN TRANSACTION;\nCOMMIT;\n')}
+      : {exitCode: 0, stderr: Buffer.from(''), stdout: Buffer.from('ok\n')}
+  }) as typeof globalThis.Bun.spawnSync
+
+  try {
+    const response = await app.handle(
+      new Request(`http://localhost/api/judgmentsjobs/${jobId}/repair`, {
+        body: JSON.stringify({systemSqliteFallbackSteps: ['diagnostic', 'export']}),
+        headers: {'content-type': 'application/json'},
+        method: 'POST',
+      }),
+    )
+    const body = (await response.json()) as {
+      data: {
+        job: {storageState: string}
+        ok: boolean
+        systemSqliteFallback: {
+          requestedSteps: string[]
+          results: Array<{command: string[]; exportPath: string | null; ok: boolean; step: string}>
+        }
+      }
+    }
+
+    expect(response.status).toBe(200)
+    expect(body.data.ok).toBe(false)
+    expect(body.data.job.storageState).toBe('quarantined')
+    expect(body.data.systemSqliteFallback.requestedSteps).toEqual(['diagnostic', 'export'])
+    expect(
+      body.data.systemSqliteFallback.results.map((result) => {
+        return result.step
+      }),
+    ).toEqual(['diagnostic', 'export'])
+    expect(
+      body.data.systemSqliteFallback.results.every((result) => {
+        return result.ok && result.command[0] === 'sqlite3'
+      }),
+    ).toBe(true)
+    expect(body.data.systemSqliteFallback.results[1]?.exportPath).toBe(exportPath)
+    expect(existsSync(exportPath)).toBe(true)
+  } finally {
+    globalThis.Bun.spawnSync = originalSpawnSync
+    rmSync(exportPath, {force: true})
+    rmSync(sqlitePath, {force: true})
+  }
+})
+
 test('drain route only acts on the requested job and can finalize a drained sqlite job', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')

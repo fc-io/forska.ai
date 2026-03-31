@@ -267,6 +267,83 @@ test('isolated SQLite preflight fails when required schema is missing', async ()
   rmSync(sqlitePath, {force: true})
 })
 
+test('system sqlite fallback runs explicit diagnostic, checkpoint, and export steps for one job', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-system-fallback-${Date.now()}`
+  const modelId = `model-system-fallback-${Date.now()}`
+  const projectId = `project-system-fallback-${Date.now()}`
+  const jobId = `job-system-fallback-${Date.now()}`
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+  const exportPath = `${sqlitePath}.repair-export.sql`
+  const originalSpawnSync = globalThis.Bun.spawnSync
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite System Fallback Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'paused')
+  `)
+
+  await service.initializeJob(jobId)
+
+  globalThis.Bun.spawnSync = ((command: string[]) => {
+    const sql = command[2] ?? ''
+
+    return sql === '.dump'
+      ? {exitCode: 0, stderr: Buffer.from(''), stdout: Buffer.from('BEGIN TRANSACTION;\nCOMMIT;\n')}
+      : sql.includes('wal_checkpoint')
+        ? {exitCode: 0, stderr: Buffer.from(''), stdout: Buffer.from('0|0|0\n')}
+        : {exitCode: 0, stderr: Buffer.from(''), stdout: Buffer.from('ok\n42\n0\n0\n0\n')}
+  }) as typeof globalThis.Bun.spawnSync
+
+  try {
+    const results = await service.runSystemSqliteFallback({
+      jobId,
+      serverJobId: 'server-a',
+      steps: ['diagnostic', 'checkpoint', 'export'],
+    })
+
+    expect(
+      results.map((result) => {
+        return result.step
+      }),
+    ).toEqual(['diagnostic', 'checkpoint', 'export'])
+    expect(
+      results.every((result) => {
+        return result.command[0] === 'sqlite3'
+      }),
+    ).toBe(true)
+    expect(
+      results.every((result) => {
+        return result.command[1] === sqlitePath
+      }),
+    ).toBe(true)
+    expect(results[0]?.stdout).toContain('ok')
+    expect(results[1]?.stdout).toBe('0|0|0')
+    expect(results[2]?.exportPath).toBe(exportPath)
+    expect(results[2]?.exportBytes).toBeGreaterThan(0)
+    expect(existsSync(exportPath)).toBe(true)
+  } finally {
+    globalThis.Bun.spawnSync = originalSpawnSync
+    await service.closeAll()
+    rmSync(exportPath, {force: true})
+  }
+})
+
 test('limits SQLite ready inserts to the requested deficit while skipping duplicates', async () => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')

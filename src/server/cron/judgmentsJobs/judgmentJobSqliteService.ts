@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto'
-import {existsSync, rmSync, statSync} from 'node:fs'
+import {existsSync, rmSync, statSync, writeFileSync} from 'node:fs'
 
 import {Database} from 'bun:sqlite'
 
@@ -171,6 +171,21 @@ export type JudgmentJobSqlitePreflightSnapshot = {
   queueSampleCount: number
   sqliteFileBytes: number
   walBytes: number
+}
+
+export type JudgmentJobSystemSqliteFallbackStep = 'checkpoint' | 'diagnostic' | 'export'
+
+export type JudgmentJobSystemSqliteFallbackResult = {
+  command: string[]
+  exitCode: number
+  exportBytes: number | null
+  exportPath: string | null
+  ok: boolean
+  stderr: string
+  step: JudgmentJobSystemSqliteFallbackStep
+  stdout: string
+  walBytesAfter: number | null
+  walBytesBefore: number | null
 }
 
 type ScanStateRow = {
@@ -752,6 +767,68 @@ const getFileByteSize = (filePath: string) => {
 const getSqliteFileByteSize = (jobId: string) => {
   const sqlitePath = getJudgmentJobSqlitePath(jobId)
   return existsSync(sqlitePath) ? statSync(sqlitePath).size : null
+}
+
+const getSystemSqliteExportPath = (jobId: string) => {
+  return `${getJudgmentJobSqlitePath(jobId)}.repair-export.sql`
+}
+
+const decodeSpawnOutput = (output: Uint8Array | Buffer | string | null | undefined) => {
+  return typeof output === 'string' ? output : Buffer.from(output ?? []).toString('utf8')
+}
+
+const getSystemSqliteFallbackCommand = ({jobId, step}: {jobId: string; step: JudgmentJobSystemSqliteFallbackStep}) => {
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+
+  return step === 'diagnostic'
+    ? [
+        'sqlite3',
+        sqlitePath,
+        'PRAGMA quick_check; PRAGMA page_count; PRAGMA freelist_count; SELECT COUNT(*) AS queue_prompt_count FROM queue_prompt; SELECT COUNT(*) AS judgment_outbox_count FROM judgment_outbox;',
+      ]
+    : step === 'checkpoint'
+      ? ['sqlite3', sqlitePath, 'PRAGMA wal_checkpoint(TRUNCATE);']
+      : ['sqlite3', sqlitePath, '.dump']
+}
+
+const runSystemSqliteFallbackStep = ({
+  jobId,
+  step,
+}: {
+  jobId: string
+  step: JudgmentJobSystemSqliteFallbackStep
+}): JudgmentJobSystemSqliteFallbackResult => {
+  const command = getSystemSqliteFallbackCommand({jobId, step})
+  const exportPath = step === 'export' ? getSystemSqliteExportPath(jobId) : null
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+  const walPath = `${sqlitePath}-wal`
+  const walBytesBefore = existsSync(walPath) ? getFileByteSize(walPath) : null
+  const result = globalThis.Bun.spawnSync(command, {
+    cwd: process.cwd(),
+    env: {...process.env},
+    stderr: 'pipe',
+    stdout: 'pipe',
+  })
+  const stdout = decodeSpawnOutput(result.stdout).trim()
+  const stderr = decodeSpawnOutput(result.stderr).trim()
+  const ok = result.exitCode === 0
+
+  if (ok && exportPath) {
+    writeFileSync(exportPath, stdout)
+  }
+
+  return {
+    command,
+    exitCode: result.exitCode,
+    exportBytes: exportPath && ok ? getFileByteSize(exportPath) : null,
+    exportPath: exportPath && ok ? exportPath : null,
+    ok,
+    stderr,
+    step,
+    stdout,
+    walBytesAfter: step === 'checkpoint' && ok ? getFileByteSize(walPath) : walBytesBefore,
+    walBytesBefore,
+  }
 }
 
 const getEmptyHealthSnapshot = (): JudgmentJobSqliteHealthSnapshot => {
@@ -1899,6 +1976,27 @@ const sqliteService = {
   },
   hasJob: (jobId: string) => {
     return existsSync(getJudgmentJobSqlitePath(jobId))
+  },
+  runSystemSqliteFallback: async ({
+    jobId,
+    serverJobId,
+    steps,
+  }: {
+    jobId: string
+    serverJobId?: string
+    steps: JudgmentJobSystemSqliteFallbackStep[]
+  }): Promise<JudgmentJobSystemSqliteFallbackResult[]> => {
+    if (!existsSync(getJudgmentJobSqlitePath(jobId)) || steps.length === 0) {
+      return []
+    }
+
+    await ensureOwnedJobLease(jobId, serverJobId)
+    closeOpenDatabase(jobId)
+
+    return steps.reduce<Promise<JudgmentJobSystemSqliteFallbackResult[]>>(async (resultsPromise, step) => {
+      const results = await resultsPromise
+      return [...results, runSystemSqliteFallbackStep({jobId, step})]
+    }, Promise.resolve([]))
   },
   checkpointWal: async ({jobId, serverJobId}: {jobId: string; serverJobId?: string}) => {
     return (

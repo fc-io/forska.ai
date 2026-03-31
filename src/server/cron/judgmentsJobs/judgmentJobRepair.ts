@@ -3,7 +3,11 @@ import {getDateValue, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {HttpError} from '../../utils/httpError.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
 import {flushJudgmentJobSqliteOutbox} from './judgmentJobSqliteOutboxImport.ts'
-import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
+import {
+  getJudgmentJobSqliteService,
+  type JudgmentJobSystemSqliteFallbackResult,
+  type JudgmentJobSystemSqliteFallbackStep,
+} from './judgmentJobSqliteService.ts'
 
 export type JudgmentJobRepairAction = 'checkpoint' | 'drain' | 'preflight' | 'quarantine' | 'repair' | 'unquarantine'
 
@@ -46,6 +50,10 @@ type JudgmentJobRepairResult = {
   ok: boolean
   preflight: Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['runIsolatedPreflight']>> | null
   requestedBy: string
+  systemSqliteFallback: {
+    requestedSteps: JudgmentJobSystemSqliteFallbackStep[]
+    results: JudgmentJobSystemSqliteFallbackResult[]
+  }
 }
 
 type JobRepairActionInput = {
@@ -53,12 +61,14 @@ type JobRepairActionInput = {
   claimedBy?: string | null
   jobId: string
   reason?: string | null
+  systemSqliteFallbackSteps?: JudgmentJobSystemSqliteFallbackStep[] | null
 }
 type RepairActionOutcome = {
   changes: JudgmentJobRepairChanges
   message: string
   ok: boolean
   preflight?: Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['runIsolatedPreflight']>> | null
+  systemSqliteFallbackResults?: JudgmentJobSystemSqliteFallbackResult[]
 }
 type RetentionPruneResult = {outboxRowsDeleted: number; queuePromptRowsDeleted: number}
 type RawRepairJobRow = {
@@ -79,6 +89,11 @@ type RawRepairJobRow = {
 
 const defaultManualQuarantineReason = 'Manually quarantined by operator'
 const retentionPruneChunkSize = 1_000
+const allowedSystemSqliteFallbackSteps = new Set<JudgmentJobSystemSqliteFallbackStep>([
+  'checkpoint',
+  'diagnostic',
+  'export',
+])
 
 const getEmptyRepairChanges = (): JudgmentJobRepairChanges => {
   return {
@@ -145,6 +160,8 @@ const getRepairResult = async ({
   ok,
   preflight = null,
   requestedBy,
+  systemSqliteFallbackResults = [],
+  systemSqliteFallbackSteps = [],
 }: {
   action: JudgmentJobRepairAction
   changes: JudgmentJobRepairChanges
@@ -153,11 +170,79 @@ const getRepairResult = async ({
   ok: boolean
   preflight?: Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['runIsolatedPreflight']>> | null
   requestedBy: string
+  systemSqliteFallbackResults?: JudgmentJobSystemSqliteFallbackResult[]
+  systemSqliteFallbackSteps?: JudgmentJobSystemSqliteFallbackStep[]
 }): Promise<JudgmentJobRepairResult> => {
   const sqliteService = getJudgmentJobSqliteService()
-  const [job, liveSqlite] = await Promise.all([getRepairJob(jobId), sqliteService.getHealthSnapshot(jobId)])
+  const [jobResult, liveSqliteResult] = await Promise.allSettled([
+    getRepairJob(jobId),
+    sqliteService.getHealthSnapshot(jobId),
+  ])
+  const job = jobResult.status === 'fulfilled' ? jobResult.value : await getRepairJob(jobId)
+  const liveSqlite =
+    liveSqliteResult.status === 'fulfilled'
+      ? liveSqliteResult.value
+      : {
+          claimedOutboxCount: 0,
+          lastAckSeq: null,
+          oldestUnexportedAgeMs: null,
+          outboxRowCount: 0,
+          promptCounts: {judged: 0, ready: 0, sent: 0, skipped: 0},
+          retainedRowCount: 0,
+          sqliteFileBytes: null,
+          walBytes: 0,
+        }
 
-  return {action, changes, job, jobId, liveSqlite, message, ok, preflight, requestedBy}
+  return {
+    action,
+    changes,
+    job,
+    jobId,
+    liveSqlite,
+    message,
+    ok,
+    preflight,
+    requestedBy,
+    systemSqliteFallback: {requestedSteps: systemSqliteFallbackSteps, results: systemSqliteFallbackResults},
+  }
+}
+
+const normalizeSystemSqliteFallbackSteps = (steps: JudgmentJobSystemSqliteFallbackStep[] | null | undefined) => {
+  return [
+    ...new Set(
+      (steps ?? []).filter((step) => {
+        return allowedSystemSqliteFallbackSteps.has(step)
+      }),
+    ),
+  ]
+}
+
+const appendFallbackMessage = ({
+  baseMessage,
+  fallbackResults,
+}: {
+  baseMessage: string
+  fallbackResults: JudgmentJobSystemSqliteFallbackResult[]
+}) => {
+  const ranSteps = fallbackResults.map((result) => {
+    return result.step
+  })
+
+  return ranSteps.length === 0 ? baseMessage : `${baseMessage} System sqlite3 fallback ran: ${ranSteps.join(', ')}.`
+}
+
+const runSystemSqliteFallback = async ({
+  claimedBy,
+  jobId,
+  steps,
+}: {
+  claimedBy: string
+  jobId: string
+  steps: JudgmentJobSystemSqliteFallbackStep[]
+}) => {
+  return steps.length === 0
+    ? []
+    : getJudgmentJobSqliteService().runSystemSqliteFallback({jobId, serverJobId: claimedBy, steps})
 }
 
 const setJobQuarantine = async ({jobId, reason}: {jobId: string; reason: string}) => {
@@ -239,9 +324,11 @@ const runPreflightAction = async ({jobId}: {jobId: string}): Promise<RepairActio
 const runCheckpointAction = async ({
   claimedBy,
   jobId,
+  systemSqliteFallbackSteps,
 }: {
   claimedBy: string
   jobId: string
+  systemSqliteFallbackSteps: JudgmentJobSystemSqliteFallbackStep[]
 }): Promise<RepairActionOutcome> => {
   const sqliteService = getJudgmentJobSqliteService()
 
@@ -255,14 +342,25 @@ const runCheckpointAction = async ({
   }
 
   const checkpointed = await sqliteService.checkpointWal({jobId, serverJobId: claimedBy})
+  const systemSqliteFallbackResults = checkpointed
+    ? []
+    : await runSystemSqliteFallback({claimedBy, jobId, steps: systemSqliteFallbackSteps})
+  const fallbackCheckpointed = systemSqliteFallbackResults.some((result) => {
+    return result.step === 'checkpoint' && result.ok
+  })
+  const finalCheckpointed = checkpointed || fallbackCheckpointed
 
   return {
-    changes: {...getEmptyRepairChanges(), checkpointed},
-    message: checkpointed
-      ? `SQLite WAL checkpoint succeeded for ${jobId}`
-      : `SQLite WAL checkpoint could not complete for ${jobId}`,
-    ok: checkpointed,
+    changes: {...getEmptyRepairChanges(), checkpointed: finalCheckpointed},
+    message: appendFallbackMessage({
+      baseMessage: finalCheckpointed
+        ? `SQLite WAL checkpoint succeeded for ${jobId}`
+        : `SQLite WAL checkpoint could not complete for ${jobId}`,
+      fallbackResults: systemSqliteFallbackResults,
+    }),
+    ok: finalCheckpointed,
     preflight: null,
+    systemSqliteFallbackResults,
   }
 }
 
@@ -315,10 +413,12 @@ const runDrainAction = async ({
   claimedBy,
   job,
   jobId,
+  systemSqliteFallbackSteps,
 }: {
   claimedBy: string
   job: JudgmentJobRepairJobState
   jobId: string
+  systemSqliteFallbackSteps: JudgmentJobSystemSqliteFallbackStep[]
 }) => {
   const sqliteService = getJudgmentJobSqliteService()
 
@@ -346,8 +446,18 @@ const runDrainAction = async ({
 
   const importedOutboxRows = await flushJudgmentJobSqliteOutbox({claimedBy, jobId})
   const pruned = await pruneRetentionUntilStable({claimedBy, jobId})
-  const finalizedDrain = (await sqliteService.finalizeDrainingJobs({jobId, serverJobId: claimedBy})).includes(jobId)
-  const checkpointed = await sqliteService.checkpointWal({jobId, serverJobId: claimedBy})
+  const nativeFinalizedDrain = (await sqliteService.finalizeDrainingJobs({jobId, serverJobId: claimedBy})).includes(
+    jobId,
+  )
+  const nativeCheckpointed = await sqliteService.checkpointWal({jobId, serverJobId: claimedBy})
+  const systemSqliteFallbackResults = nativeCheckpointed
+    ? []
+    : await runSystemSqliteFallback({claimedBy, jobId, steps: systemSqliteFallbackSteps})
+  const fallbackCheckpointed = systemSqliteFallbackResults.some((result) => {
+    return result.step === 'checkpoint' && result.ok
+  })
+  const checkpointed = nativeCheckpointed || fallbackCheckpointed
+  const finalizedDrain = nativeFinalizedDrain
 
   return {
     changes: {
@@ -358,9 +468,13 @@ const runDrainAction = async ({
       prunedOutboxRows: pruned.outboxRowsDeleted,
       prunedQueueRows: pruned.queuePromptRowsDeleted,
     },
-    message: finalizedDrain ? `Drain cleanup completed for ${jobId}` : `Drain cleanup ran for ${jobId}`,
+    message: appendFallbackMessage({
+      baseMessage: finalizedDrain ? `Drain cleanup completed for ${jobId}` : `Drain cleanup ran for ${jobId}`,
+      fallbackResults: systemSqliteFallbackResults,
+    }),
     ok: true,
     preflight: null,
+    systemSqliteFallbackResults,
   }
 }
 
@@ -368,10 +482,12 @@ const runRepairAction = async ({
   claimedBy,
   job,
   jobId,
+  systemSqliteFallbackSteps,
 }: {
   claimedBy: string
   job: JudgmentJobRepairJobState
   jobId: string
+  systemSqliteFallbackSteps: JudgmentJobSystemSqliteFallbackStep[]
 }) => {
   const sqliteService = getJudgmentJobSqliteService()
   const initializedSqlite = !sqliteService.hasJob(jobId)
@@ -381,15 +497,27 @@ const runRepairAction = async ({
   }
 
   const preflightOutcome = await getPreflightOutcome(jobId)
+  const initialFallbackResults = preflightOutcome.ok
+    ? []
+    : await runSystemSqliteFallback({claimedBy, jobId, steps: systemSqliteFallbackSteps})
+  const fallbackCheckpointed = initialFallbackResults.some((result) => {
+    return result.step === 'checkpoint' && result.ok
+  })
+  const recoveredPreflightOutcome =
+    !preflightOutcome.ok && fallbackCheckpointed ? await getPreflightOutcome(jobId) : preflightOutcome
 
-  if (!preflightOutcome.ok) {
-    await setJobQuarantine({jobId, reason: preflightOutcome.message})
+  if (!recoveredPreflightOutcome.ok) {
+    await setJobQuarantine({jobId, reason: recoveredPreflightOutcome.message})
 
     return {
       changes: {...getEmptyRepairChanges(), initializedSqlite, quarantined: true},
-      message: preflightOutcome.message,
+      message: appendFallbackMessage({
+        baseMessage: recoveredPreflightOutcome.message,
+        fallbackResults: initialFallbackResults,
+      }),
       ok: false,
-      preflight: preflightOutcome.preflight,
+      preflight: recoveredPreflightOutcome.preflight,
+      systemSqliteFallbackResults: initialFallbackResults,
     }
   }
 
@@ -422,9 +550,13 @@ const runRepairAction = async ({
       requeuedSentPrompts,
       unquarantined: shouldUnquarantine,
     },
-    message: `Repair completed for ${jobId}`,
+    message: appendFallbackMessage({
+      baseMessage: `Repair completed for ${jobId}`,
+      fallbackResults: initialFallbackResults,
+    }),
     ok: true,
-    preflight: preflightOutcome.preflight,
+    preflight: recoveredPreflightOutcome.preflight,
+    systemSqliteFallbackResults: initialFallbackResults,
   }
 }
 
@@ -433,24 +565,40 @@ export const runJudgmentJobRepairAction = async ({
   claimedBy,
   jobId,
   reason,
+  systemSqliteFallbackSteps,
 }: JobRepairActionInput): Promise<JudgmentJobRepairResult> => {
   const requestedBy = claimedBy ?? getDefaultJudgmentServerJobId()
   const sqliteService = getJudgmentJobSqliteService()
   const job = await getRepairJob(jobId)
+  const normalizedFallbackSteps = normalizeSystemSqliteFallbackSteps(systemSqliteFallbackSteps)
 
   try {
     const outcome =
       action === 'preflight'
         ? await runPreflightAction({jobId})
         : action === 'checkpoint'
-          ? await runCheckpointAction({claimedBy: requestedBy, jobId})
+          ? await runCheckpointAction({
+              claimedBy: requestedBy,
+              jobId,
+              systemSqliteFallbackSteps: normalizedFallbackSteps,
+            })
           : action === 'quarantine'
             ? await runQuarantineAction({jobId, reason})
             : action === 'unquarantine'
               ? await runUnquarantineAction({jobId})
               : action === 'drain'
-                ? await runDrainAction({claimedBy: requestedBy, job, jobId})
-                : await runRepairAction({claimedBy: requestedBy, job, jobId})
+                ? await runDrainAction({
+                    claimedBy: requestedBy,
+                    job,
+                    jobId,
+                    systemSqliteFallbackSteps: normalizedFallbackSteps,
+                  })
+                : await runRepairAction({
+                    claimedBy: requestedBy,
+                    job,
+                    jobId,
+                    systemSqliteFallbackSteps: normalizedFallbackSteps,
+                  })
 
     return getRepairResult({
       action,
@@ -460,6 +608,8 @@ export const runJudgmentJobRepairAction = async ({
       ok: outcome.ok,
       preflight: outcome.preflight,
       requestedBy,
+      systemSqliteFallbackResults: outcome.systemSqliteFallbackResults,
+      systemSqliteFallbackSteps: normalizedFallbackSteps,
     })
   } finally {
     await sqliteService.releaseOwnedLease(jobId)

@@ -47,6 +47,21 @@ type JudgmentJobRepairResponse = {
   ok: boolean
   preflight: {ok: boolean} | null
   requestedBy: string
+  systemSqliteFallback: {
+    requestedSteps: Array<'checkpoint' | 'diagnostic' | 'export'>
+    results: Array<{
+      command: string[]
+      exitCode: number
+      exportBytes: number | null
+      exportPath: string | null
+      ok: boolean
+      stderr: string
+      step: 'checkpoint' | 'diagnostic' | 'export'
+      stdout: string
+      walBytesAfter: number | null
+      walBytesBefore: number | null
+    }>
+  }
 }
 
 const buildMissingJob = () => {

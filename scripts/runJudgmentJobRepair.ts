@@ -2,7 +2,10 @@ import {
   runJudgmentJobRepairAction,
   type JudgmentJobRepairAction,
 } from '../src/server/cron/judgmentsJobs/judgmentJobRepair.ts'
-import {getJudgmentJobSqliteService} from '../src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts'
+import {
+  getJudgmentJobSqliteService,
+  type JudgmentJobSystemSqliteFallbackStep,
+} from '../src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 
 type CliOptions = {
@@ -10,6 +13,7 @@ type CliOptions = {
   claimedBy: string | null
   jobId: string | null
   reason: string | null
+  systemSqliteFallbackSteps: JudgmentJobSystemSqliteFallbackStep[]
 }
 
 const repairActions = new Set<JudgmentJobRepairAction>([
@@ -20,6 +24,7 @@ const repairActions = new Set<JudgmentJobRepairAction>([
   'repair',
   'unquarantine',
 ])
+const systemSqliteFallbackSteps = new Set<JudgmentJobSystemSqliteFallbackStep>(['checkpoint', 'diagnostic', 'export'])
 
 const getArgValue = (names: string[]) => {
   const matchedArgument = process.argv.slice(2).find((argument) => {
@@ -33,6 +38,7 @@ const getArgValue = (names: string[]) => {
 
 const getCliOptions = (): CliOptions => {
   const rawAction = getArgValue(['--action'])
+  const rawSystemSqliteFallbackSteps = getArgValue(['--systemSqliteFallbackSteps', '--system-sqlite-fallback-steps'])
 
   return {
     action:
@@ -42,6 +48,12 @@ const getCliOptions = (): CliOptions => {
     claimedBy: getArgValue(['--claimedBy', '--claimed-by']),
     jobId: getArgValue(['--jobId', '--job-id']),
     reason: getArgValue(['--reason']),
+    systemSqliteFallbackSteps: [...new Set((rawSystemSqliteFallbackSteps ?? '').split(','))].flatMap((step) => {
+      const normalizedStep = step.trim()
+      return systemSqliteFallbackSteps.has(normalizedStep as JudgmentJobSystemSqliteFallbackStep)
+        ? [normalizedStep as JudgmentJobSystemSqliteFallbackStep]
+        : []
+    }),
   }
 }
 
@@ -60,6 +72,7 @@ export const runJudgmentJobRepair = async () => {
         error: 'Expected --jobId=<job-id> and --action=<preflight|drain|checkpoint|quarantine|unquarantine|repair>',
         jobId: options.jobId,
         status: 'failed',
+        systemSqliteFallbackSteps: options.systemSqliteFallbackSteps,
       }),
     )
 
@@ -74,6 +87,7 @@ export const runJudgmentJobRepair = async () => {
       claimedBy: options.claimedBy,
       jobId: options.jobId,
       reason: options.reason,
+      systemSqliteFallbackSteps: options.systemSqliteFallbackSteps,
     })
 
     process.exitCode = result.ok ? 0 : 1

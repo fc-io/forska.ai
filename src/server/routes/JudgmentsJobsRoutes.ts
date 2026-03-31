@@ -61,6 +61,9 @@ const unassessedCountTTLms = 10_000
 const staleImportThresholdMs = 15 * 60 * 1_000
 const largeWalThresholdBytes = 64 * 1_024 * 1_024
 const unassessedCountCache = new Map<string, UnassessedCountCacheValue>()
+const systemSqliteFallbackStepsSchema = t.Array(
+  t.Union([t.Literal('checkpoint'), t.Literal('diagnostic'), t.Literal('export')]),
+)
 const getUnassessedCountCacheKey = (
   projectId: string,
   projectModelId: string,
@@ -977,21 +980,47 @@ export const judgmentsJobsRoutes = new Elysia()
     '/api/judgmentsjobs/:id/drain',
     async ({params, body}) => {
       return {
-        data: await runJudgmentJobRepairAction({action: 'drain', claimedBy: body?.claimedBy, jobId: params.id}),
+        data: await runJudgmentJobRepairAction({
+          action: 'drain',
+          claimedBy: body?.claimedBy,
+          jobId: params.id,
+          systemSqliteFallbackSteps: body?.systemSqliteFallbackSteps,
+        }),
         error: null,
       }
     },
-    {params: t.Object({id: t.String()}), body: t.Optional(t.Object({claimedBy: t.Optional(t.String())}))},
+    {
+      params: t.Object({id: t.String()}),
+      body: t.Optional(
+        t.Object({
+          claimedBy: t.Optional(t.String()),
+          systemSqliteFallbackSteps: t.Optional(systemSqliteFallbackStepsSchema),
+        }),
+      ),
+    },
   )
   .post(
     '/api/judgmentsjobs/:id/checkpoint',
     async ({params, body}) => {
       return {
-        data: await runJudgmentJobRepairAction({action: 'checkpoint', claimedBy: body?.claimedBy, jobId: params.id}),
+        data: await runJudgmentJobRepairAction({
+          action: 'checkpoint',
+          claimedBy: body?.claimedBy,
+          jobId: params.id,
+          systemSqliteFallbackSteps: body?.systemSqliteFallbackSteps,
+        }),
         error: null,
       }
     },
-    {params: t.Object({id: t.String()}), body: t.Optional(t.Object({claimedBy: t.Optional(t.String())}))},
+    {
+      params: t.Object({id: t.String()}),
+      body: t.Optional(
+        t.Object({
+          claimedBy: t.Optional(t.String()),
+          systemSqliteFallbackSteps: t.Optional(systemSqliteFallbackStepsSchema),
+        }),
+      ),
+    },
   )
   .post(
     '/api/judgmentsjobs/:id/quarantine',
@@ -1014,11 +1043,24 @@ export const judgmentsJobsRoutes = new Elysia()
     '/api/judgmentsjobs/:id/repair',
     async ({params, body}) => {
       return {
-        data: await runJudgmentJobRepairAction({action: 'repair', claimedBy: body?.claimedBy, jobId: params.id}),
+        data: await runJudgmentJobRepairAction({
+          action: 'repair',
+          claimedBy: body?.claimedBy,
+          jobId: params.id,
+          systemSqliteFallbackSteps: body?.systemSqliteFallbackSteps,
+        }),
         error: null,
       }
     },
-    {params: t.Object({id: t.String()}), body: t.Optional(t.Object({claimedBy: t.Optional(t.String())}))},
+    {
+      params: t.Object({id: t.String()}),
+      body: t.Optional(
+        t.Object({
+          claimedBy: t.Optional(t.String()),
+          systemSqliteFallbackSteps: t.Optional(systemSqliteFallbackStepsSchema),
+        }),
+      ),
+    },
   )
   .delete(
     '/api/judgmentsjobs/:id',
