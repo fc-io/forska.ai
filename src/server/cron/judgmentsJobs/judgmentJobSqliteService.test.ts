@@ -651,6 +651,141 @@ test('claims, reaps, releases, and completes outbox batches', async () => {
   expect(await service.getUnexportedOutboxCount(jobId)).toBe(0)
 })
 
+test('computes a per-job SQLite health snapshot', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-health-${Date.now()}`
+  const modelId = `model-health-${Date.now()}`
+  const projectId = `project-health-${Date.now()}`
+  const jobId = `job-health-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Health Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(
+    jobId,
+    [
+      {articleId: 'article-health-ready', promptId: 'prompt-health-ready'},
+      {articleId: 'article-health-judged', promptId: 'prompt-health-judged'},
+      {articleId: 'article-health-skipped', promptId: 'prompt-health-skipped'},
+      {articleId: 'article-health-sent', promptId: 'prompt-health-sent'},
+    ],
+    'server-a',
+  )
+
+  const [judgedPrompt, skippedPrompt, sentPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 3)
+
+  if (!judgedPrompt || !skippedPrompt || !sentPrompt) {
+    throw new Error('Failed to claim SQLite queue prompts for health snapshot test')
+  }
+
+  await service.recordJudgmentSuccess(jobId, {
+    answeredOriginal: 'yes',
+    answeredOriginalAsArray: ['yes'],
+    articleId: judgedPrompt.articleId,
+    chunkingStrategy: null,
+    confidenceOriginal: 50,
+    createdAt: new Date(Date.now() - 1_000),
+    explanation: 'because',
+    isAnswered: true,
+    judgmentId: `judgment-health-${Date.now()}`,
+    modelId,
+    projectId,
+    promptId: judgedPrompt.promptId,
+    queuePromptId: judgedPrompt.recordId,
+    quotes: ['quote'],
+    rawResponseJson: {answer: 'yes'},
+    snapshotProjectId: projectId,
+    snapshotProjectModelName: 'Qwen 35B',
+    updatedAt: new Date(),
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
+  await service.markPromptAsSkipped(jobId, skippedPrompt.recordId, 'no_fulltext')
+
+  const claimedOutboxBatch = await service.claimPendingOutboxBatch({
+    claimedBy: 'server-a',
+    jobId,
+    maxBytes: 1024 * 1024,
+    maxRows: 10,
+  })
+  const lastAckSeq = claimedOutboxBatch?.rows[0]?.outboxSeq ?? null
+
+  await service.setLastProjectRefreshAckSeq(jobId, lastAckSeq)
+
+  const snapshot = await service.getHealthSnapshot(jobId)
+
+  expect(snapshot.sqliteFileBytes).not.toBeNull()
+  expect(snapshot.sqliteFileBytes ?? 0).toBeGreaterThan(0)
+  expect(snapshot.walBytes).toBeGreaterThanOrEqual(0)
+  expect(snapshot.outboxRowCount).toBe(1)
+  expect(snapshot.oldestUnexportedAgeMs).toBeGreaterThanOrEqual(0)
+  expect(snapshot.claimedOutboxCount).toBe(1)
+  expect(snapshot.promptCounts).toEqual({judged: 1, ready: 1, sent: 1, skipped: 1})
+  expect(snapshot.lastAckSeq).toBe(lastAckSeq)
+  expect(snapshot.retainedRowCount).toBe(4)
+})
+
+test('returns safe health snapshot defaults when the SQLite job db is missing', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-health-missing-${Date.now()}`
+  const modelId = `model-health-missing-${Date.now()}`
+  const projectId = `project-health-missing-${Date.now()}`
+  const jobId = `job-health-missing-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id)
+    VALUES ('${projectId}', 'SQLite Missing Health Test', '${modelId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  expect(await service.getHealthSnapshot(jobId)).toEqual({
+    claimedOutboxCount: 0,
+    lastAckSeq: null,
+    oldestUnexportedAgeMs: null,
+    outboxRowCount: 0,
+    promptCounts: {judged: 0, ready: 0, sent: 0, skipped: 0},
+    retainedRowCount: 0,
+    sqliteFileBytes: null,
+    walBytes: 0,
+  })
+})
+
 test('prunes only visibility-acked exported outbox rows in bounded batches', async () => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')

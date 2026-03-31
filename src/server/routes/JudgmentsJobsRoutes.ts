@@ -427,10 +427,10 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({params}) => {
       const {job} = await getJobContext({jobId: params.id})
       const sqliteService = getJudgmentJobSqliteService()
-      const promptStatsPromise = sqliteService.getPromptStatusCounts(job.id)
+      const sqliteHealthPromise = sqliteService.getHealthSnapshot(job.id)
 
-      const [promptStats, totalTokenUsage, tokenUsageRows] = await Promise.all([
-        promptStatsPromise,
+      const [sqliteHealth, totalTokenUsage, tokenUsageRows] = await Promise.all([
+        sqliteHealthPromise,
         getAppDatabaseService().queryJson<{
           totalTokens: number | null
           totalPromptTokens: number | null
@@ -476,20 +476,12 @@ export const judgmentsJobsRoutes = new Elysia()
         return createdAt ? [...acc, {...row, createdAt}] : acc
       }, [])
       const tokenUsagePerDay = aggregateTokenUsagePerDay(normalizedTokenUsageRows)
-
-      const stats = {ready: 0, sent: 0, judged: 0, skipped: 0}
       const requestRuntimeStats = getJudgmentRequestStats(job.id)
-
-      promptStats.forEach((stat) => {
-        if (stat.status === 'ready') stats.ready = stat.count
-        if (stat.status === 'sent') stats.sent = stat.count
-        if (stat.status === 'judged') stats.judged = stat.count
-        if (stat.status === 'skipped') stats.skipped = stat.count
-      })
 
       return {
         ...job,
-        promptStats: stats,
+        promptStats: sqliteHealth.promptCounts,
+        storageHealth: sqliteHealth,
         judgingRuntime: getJudgingRuntime(),
         totalTokenUsage: {
           totalTokens: Number(totalTokenUsage[0]?.totalTokens || 0),

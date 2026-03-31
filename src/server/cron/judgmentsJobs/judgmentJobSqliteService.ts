@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto'
-import {existsSync, rmSync} from 'node:fs'
+import {existsSync, rmSync, statSync} from 'node:fs'
 
 import {Database} from 'bun:sqlite'
 
@@ -154,6 +154,17 @@ export type JudgmentJobSqliteOutboxEntry = {
 }
 
 export type JudgmentJobSqliteOutboxClaim = {claimId: string; jobId: string; rowCount: number}
+
+export type JudgmentJobSqliteHealthSnapshot = {
+  claimedOutboxCount: number
+  lastAckSeq: number | null
+  oldestUnexportedAgeMs: number | null
+  outboxRowCount: number
+  promptCounts: {judged: number; ready: number; sent: number; skipped: number}
+  retainedRowCount: number
+  sqliteFileBytes: number | null
+  walBytes: number
+}
 
 type ScanStateRow = {
   cursorLastArticleId: string | null
@@ -536,6 +547,24 @@ const getExistingOutboxJobIds = (jobId?: string) => {
     : getJudgmentJobSqliteJobIds()
 }
 
+const getTrackedJudgmentJobIds = async (jobId?: string) => {
+  return jobId
+    ? getExistingOutboxJobIds(jobId)
+    : (
+        await getAppDatabaseService().queryJson<{id: string}>(`
+          SELECT id
+          FROM app.judgment_job
+          ORDER BY created_at ASC, id ASC
+        `)
+      )
+        .map((row) => {
+          return row.id
+        })
+        .filter((trackedJobId) => {
+          return existsSync(getJudgmentJobSqlitePath(trackedJobId))
+        })
+}
+
 const sqliteCleanupTerminalStatuses = ['completed', 'project_removed'] as const
 
 const deleteJobFiles = (jobId: string) => {
@@ -548,7 +577,7 @@ const deleteJobFiles = (jobId: string) => {
 }
 
 const getDrainedSqliteCleanupCandidateJobIds = async (jobId?: string) => {
-  const existingJobIds = getExistingOutboxJobIds(jobId)
+  const existingJobIds = await getTrackedJudgmentJobIds(jobId)
 
   return existingJobIds.length === 0
     ? []
@@ -576,6 +605,89 @@ const getRetainedOutboxCount = (database: Database) => {
   const row = database.query(`SELECT COUNT(*) AS count FROM judgment_outbox`).get() as {count: number} | null
 
   return Number(row?.count ?? 0)
+}
+
+const getClaimedOutboxCount = (database: Database) => {
+  const row = database
+    .query(
+      `
+      SELECT COUNT(*) AS count
+      FROM judgment_outbox
+      WHERE exported_at IS NULL
+        AND export_claim_id IS NOT NULL
+    `,
+    )
+    .get() as {count: number} | null
+
+  return Number(row?.count ?? 0)
+}
+
+const getOldestUnexportedAgeMs = (database: Database) => {
+  const row = database
+    .query(
+      `
+      SELECT MIN(created_at) AS createdAt
+      FROM judgment_outbox
+      WHERE exported_at IS NULL
+    `,
+    )
+    .get() as {createdAt: string | null} | null
+  const createdAt = getDateValue(row?.createdAt)
+
+  return createdAt ? Math.max(0, Date.now() - createdAt.getTime()) : null
+}
+
+const getRetainedQueueRowCount = (database: Database) => {
+  const row = database.query(`SELECT COUNT(*) AS count FROM queue_prompt`).get() as {count: number} | null
+
+  return Number(row?.count ?? 0)
+}
+
+const getPromptCounts = (database: Database) => {
+  const promptCounts = {judged: 0, ready: 0, sent: 0, skipped: 0}
+
+  ;(
+    database
+      .query(
+        `
+        SELECT
+          CASE WHEN status = 'judged' AND terminal_kind = 'skipped' THEN 'skipped' ELSE status END AS status,
+          COUNT(*) AS count
+        FROM queue_prompt
+        GROUP BY CASE WHEN status = 'judged' AND terminal_kind = 'skipped' THEN 'skipped' ELSE status END
+      `,
+      )
+      .all() as QueueCountRow[]
+  ).forEach((row) => {
+    if (row.status === 'ready') promptCounts.ready = Number(row.count)
+    if (row.status === 'sent') promptCounts.sent = Number(row.count)
+    if (row.status === 'judged') promptCounts.judged = Number(row.count)
+    if (row.status === 'skipped') promptCounts.skipped = Number(row.count)
+  })
+
+  return promptCounts
+}
+
+const getFileByteSize = (filePath: string) => {
+  return existsSync(filePath) ? statSync(filePath).size : 0
+}
+
+const getSqliteFileByteSize = (jobId: string) => {
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+  return existsSync(sqlitePath) ? statSync(sqlitePath).size : null
+}
+
+const getEmptyHealthSnapshot = (): JudgmentJobSqliteHealthSnapshot => {
+  return {
+    claimedOutboxCount: 0,
+    lastAckSeq: null,
+    oldestUnexportedAgeMs: null,
+    outboxRowCount: 0,
+    promptCounts: {judged: 0, ready: 0, sent: 0, skipped: 0},
+    retainedRowCount: 0,
+    sqliteFileBytes: null,
+    walBytes: 0,
+  }
 }
 
 const isDrainedSqliteJob = (database: Database, _jobId: string) => {
@@ -1400,8 +1512,9 @@ const sqliteService = {
   },
   getPendingOutboxBatch: async ({jobId, maxBytes, maxRows}: {jobId?: string; maxBytes: number; maxRows: number}) => {
     const initialState = {bytes: 0, rows: [] as JudgmentJobSqliteOutboxEntry[]}
+    const candidateJobIds = await getTrackedJudgmentJobIds(jobId)
 
-    return getExistingOutboxJobIds(jobId).reduce((state, currentJobId) => {
+    return candidateJobIds.reduce((state, currentJobId) => {
       if (state.rows.length >= maxRows || state.bytes >= maxBytes) {
         return state
       }
@@ -1427,7 +1540,12 @@ const sqliteService = {
     maxBytes: number
     maxRows: number
   }) => {
-    return claimPendingOutboxBatchForJobIds({claimedBy, jobIds: getExistingOutboxJobIds(jobId), maxBytes, maxRows})
+    return claimPendingOutboxBatchForJobIds({
+      claimedBy,
+      jobIds: await getTrackedJudgmentJobIds(jobId),
+      maxBytes,
+      maxRows,
+    })
   },
   getClaimedOutboxBatch: async ({jobId, serverJobId}: {jobId: string; serverJobId?: string}) => {
     return getClaimedOutboxBatchForJob({jobId, serverJobId})
@@ -1486,6 +1604,24 @@ const sqliteService = {
         return Number(row?.count ?? 0)
       }) ?? 0
     )
+  },
+  getHealthSnapshot: async (jobId: string): Promise<JudgmentJobSqliteHealthSnapshot> => {
+    const sqlitePath = getJudgmentJobSqlitePath(jobId)
+    const walPath = `${sqlitePath}-wal`
+    const liveSnapshot = withJobDatabase(jobId, false, (database) => {
+      return {
+        claimedOutboxCount: getClaimedOutboxCount(database),
+        lastAckSeq: getStoredScanState(database, jobId).lastProjectRefreshAckSeq,
+        oldestUnexportedAgeMs: getOldestUnexportedAgeMs(database),
+        outboxRowCount: getRetainedOutboxCount(database),
+        promptCounts: getPromptCounts(database),
+        retainedRowCount: getRetainedQueueRowCount(database),
+      }
+    })
+
+    return liveSnapshot
+      ? {...liveSnapshot, sqliteFileBytes: getSqliteFileByteSize(jobId), walBytes: getFileByteSize(walPath)}
+      : getEmptyHealthSnapshot()
   },
   getUnexportedOutboxCount: async (jobId: string): Promise<number> => {
     return (
@@ -2041,7 +2177,7 @@ const sqliteService = {
     const normalizedMaxRows = Number.isFinite(maxRows) ? Math.max(0, Math.floor(maxRows)) : 0
 
     return pruneVisibilityAckedRetentionForJobIds({
-      jobIds: getExistingOutboxJobIds(jobId),
+      jobIds: await getTrackedJudgmentJobIds(jobId),
       maxRows: normalizedMaxRows,
       serverJobId,
     })

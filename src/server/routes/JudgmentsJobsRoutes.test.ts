@@ -378,10 +378,72 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
   await sqliteService.markPromptAsSkipped(jobId, skippedPrompt.recordId, 'no_fulltext')
 
   const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
-  const body = (await response.json()) as {promptStats: {judged: number; ready: number; sent: number; skipped: number}}
+  const body = (await response.json()) as {
+    promptStats: {judged: number; ready: number; sent: number; skipped: number}
+    storageHealth: {
+      claimedOutboxCount: number
+      lastAckSeq: number | null
+      oldestUnexportedAgeMs: number | null
+      outboxRowCount: number
+      promptCounts: {judged: number; ready: number; sent: number; skipped: number}
+      retainedRowCount: number
+      sqliteFileBytes: number | null
+      walBytes: number
+    }
+  }
 
   expect(response.status).toBe(200)
   expect(body.promptStats).toEqual({judged: 1, ready: 1, sent: 1, skipped: 1})
+  expect(body.storageHealth.promptCounts).toEqual(body.promptStats)
+  expect(body.storageHealth.outboxRowCount).toBe(1)
+  expect(body.storageHealth.retainedRowCount).toBe(4)
+  expect(body.storageHealth.sqliteFileBytes).not.toBeNull()
+  expect(body.storageHealth.oldestUnexportedAgeMs).toBeGreaterThanOrEqual(0)
+})
+
+test('returns safe SQLite health values for jobs without a local sqlite db', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `sqlite-health-missing-project-${Date.now()}`
+  const modelId = `sqlite-health-missing-model-${Date.now()}`
+  const connectionId = `sqlite-health-missing-connection-${Date.now()}`
+  const jobId = `sqlite-health-missing-job-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
+  const body = (await response.json()) as {
+    promptStats: {judged: number; ready: number; sent: number; skipped: number}
+    storageHealth: {
+      claimedOutboxCount: number
+      lastAckSeq: number | null
+      oldestUnexportedAgeMs: number | null
+      outboxRowCount: number
+      promptCounts: {judged: number; ready: number; sent: number; skipped: number}
+      retainedRowCount: number
+      sqliteFileBytes: number | null
+      walBytes: number
+    }
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.promptStats).toEqual({judged: 0, ready: 0, sent: 0, skipped: 0})
+  expect(body.storageHealth).toEqual({
+    claimedOutboxCount: 0,
+    lastAckSeq: null,
+    oldestUnexportedAgeMs: null,
+    outboxRowCount: 0,
+    promptCounts: {judged: 0, ready: 0, sent: 0, skipped: 0},
+    retainedRowCount: 0,
+    sqliteFileBytes: null,
+    walBytes: 0,
+  })
 })
 
 test('deleting an existing judgments job succeeds when prompts and token usage reference the job', async () => {
