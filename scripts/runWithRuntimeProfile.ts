@@ -1,11 +1,49 @@
+import {getBackgroundServerEnv} from '../src/server/utils/backgroundServerStack.ts'
 import {mergeRuntimeProfileEnv, type RuntimeProfileName} from '../src/utils/runtimeProfile.ts'
 
-type RuntimeProfileMode = 'duckdb-migration'
+type RuntimeProfileMode = 'api-only-server' | 'duckdb-migration' | 'stacked-server' | 'worker-only-server'
+type RuntimeProfileServerRole = 'api' | 'worker'
 
 type RuntimeProfileCommandOptions = {mode: RuntimeProfileMode; profileName: RuntimeProfileName}
 
-const runtimeProfileModes: Record<RuntimeProfileMode, string[]> = {
-  'duckdb-migration': ['bun', 'src/db/migrateDuckdb.ts'],
+type RuntimeProfileCommandConfig = {
+  command: string[]
+  env: (commandOptions: RuntimeProfileCommandOptions) => Record<string, string | undefined>
+}
+
+const getRuntimeProfileBaseEnv = (profileName: RuntimeProfileName) => {
+  return mergeRuntimeProfileEnv({profileName})
+}
+
+const getRuntimeProfileServerEnv = ({profileName}: RuntimeProfileCommandOptions, role: RuntimeProfileServerRole) => {
+  return getBackgroundServerEnv({baseEnv: getRuntimeProfileBaseEnv(profileName), role})
+}
+
+const runtimeProfileModes: Record<RuntimeProfileMode, RuntimeProfileCommandConfig> = {
+  'api-only-server': {
+    command: ['bun', 'run', '--watch', 'src/server/index.ts'],
+    env: (commandOptions) => {
+      return getRuntimeProfileServerEnv(commandOptions, 'api')
+    },
+  },
+  'duckdb-migration': {
+    command: ['bun', 'src/db/migrateDuckdb.ts'],
+    env: ({profileName}) => {
+      return getRuntimeProfileBaseEnv(profileName)
+    },
+  },
+  'stacked-server': {
+    command: ['bun', 'scripts/devServerWatch.ts'],
+    env: ({profileName}) => {
+      return getRuntimeProfileBaseEnv(profileName)
+    },
+  },
+  'worker-only-server': {
+    command: ['bun', 'run', '--watch', 'src/server/index.ts'],
+    env: (commandOptions) => {
+      return getRuntimeProfileServerEnv(commandOptions, 'worker')
+    },
+  },
 }
 
 const getCliFlagValue = (flagName: string): string | null => {
@@ -27,11 +65,18 @@ const getProfileName = (): RuntimeProfileName => {
 const getMode = (): RuntimeProfileMode => {
   const mode = getCliFlagValue('--mode')
 
-  if (mode === 'duckdb-migration') {
+  if (
+    mode === 'api-only-server'
+    || mode === 'duckdb-migration'
+    || mode === 'stacked-server'
+    || mode === 'worker-only-server'
+  ) {
     return mode
   }
 
-  throw new Error(`Expected --mode duckdb-migration, received ${String(mode)}`)
+  throw new Error(
+    `Expected --mode api-only-server|duckdb-migration|stacked-server|worker-only-server, received ${String(mode)}`,
+  )
 }
 
 const getRuntimeProfileCommandOptions = (): RuntimeProfileCommandOptions => {
@@ -39,14 +84,18 @@ const getRuntimeProfileCommandOptions = (): RuntimeProfileCommandOptions => {
 }
 
 const getRuntimeProfileCommand = ({mode}: RuntimeProfileCommandOptions): string[] => {
-  return runtimeProfileModes[mode]
+  return runtimeProfileModes[mode].command
+}
+
+const getRuntimeProfileCommandEnv = (commandOptions: RuntimeProfileCommandOptions) => {
+  return runtimeProfileModes[commandOptions.mode].env(commandOptions)
 }
 
 const runWithRuntimeProfile = async () => {
   const commandOptions = getRuntimeProfileCommandOptions()
   const childProcess = globalThis.Bun.spawn(getRuntimeProfileCommand(commandOptions), {
     cwd: process.cwd(),
-    env: mergeRuntimeProfileEnv({profileName: commandOptions.profileName}),
+    env: getRuntimeProfileCommandEnv(commandOptions),
     stderr: 'inherit',
     stdin: 'inherit',
     stdout: 'inherit',
