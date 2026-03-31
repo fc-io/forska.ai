@@ -28,6 +28,25 @@ let storeSinglePromptJudgment:
   | (typeof import('../../../agent/judge/storeSinglePromptJudgment.ts'))['storeSinglePromptJudgment']
   | null = null
 
+const getLastJsonLine = (stdout: string) => {
+  const lines = stdout
+    .split('\n')
+    .map((line) => {
+      return line.trim()
+    })
+    .filter((line) => {
+      return line.startsWith('{') && line.endsWith('}')
+    })
+
+  const [lastLine = ''] = lines.slice(-1)
+
+  if (lastLine === '') {
+    throw new Error(`Expected JSON output but received: ${stdout}`)
+  }
+
+  return lastLine
+}
+
 beforeAll(async () => {
   const [
     {migrateDuckdb},
@@ -83,6 +102,90 @@ afterAll(async () => {
 afterEach(async () => {
   await sqliteService?.().closeAll()
   rmSync(tempJobDir, {force: true, recursive: true})
+})
+
+test('ignores orphaned and non-running SQLite job files during background import', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
+        const sqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
+        const importModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts')
+        let inspectedOrphanJob = false
+        let inspectedPausedJob = false
+        let inspectedTrackedJob = false
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                queryJson: async (statement) => {
+                  return statement.includes("status = 'running'") ? [{id: 'tracked-job'}] : []
+                },
+              }
+            },
+          }
+        })
+
+        void mock.module(sqliteServiceModulePath, () => {
+          return {
+            JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
+            getJudgmentJobSqliteService: () => {
+              return {
+                claimPendingOutboxBatch: async ({jobId}) => {
+                  inspectedOrphanJob ||= jobId === 'orphan-job'
+                  inspectedPausedJob ||= jobId === 'paused-job'
+                  inspectedTrackedJob ||= jobId === 'tracked-job'
+                  return null
+                },
+                getClaimedOutboxBatch: async ({jobId}) => {
+                  inspectedOrphanJob ||= jobId === 'orphan-job'
+                  inspectedPausedJob ||= jobId === 'paused-job'
+                  inspectedTrackedJob ||= jobId === 'tracked-job'
+                  return null
+                },
+                listJobIds: () => {
+                  return ['orphan-job', 'paused-job', 'tracked-job']
+                },
+              }
+            },
+          }
+        })
+
+        const {importJudgmentJobSqliteOutboxBatch} = await import(importModulePath + '?orphaned=' + Date.now())
+        const imported = await importJudgmentJobSqliteOutboxBatch({claimedBy: 'test-server'})
+
+        console.log(JSON.stringify({imported, inspectedOrphanJob, inspectedPausedJob, inspectedTrackedJob}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'SQLite orphaned job import regression test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    imported: number
+    inspectedOrphanJob: boolean
+    inspectedPausedJob: boolean
+    inspectedTrackedJob: boolean
+  }
+
+  expect(result.imported).toBe(0)
+  expect(result.inspectedOrphanJob).toBe(false)
+  expect(result.inspectedPausedJob).toBe(false)
+  expect(result.inspectedTrackedJob).toBe(true)
 })
 
 test('imports SQLite-backed judgments into DuckDB in batches', async () => {

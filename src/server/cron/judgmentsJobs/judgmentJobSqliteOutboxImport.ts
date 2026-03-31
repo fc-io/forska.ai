@@ -256,6 +256,23 @@ const getLastImportedOutboxSeq = (entries: JudgmentJobSqliteOutboxEntry[]) => {
   }, null)
 }
 
+const getImportCandidateJobIds = async (jobId?: string) => {
+  if (jobId) {
+    return [jobId]
+  }
+
+  const rows = await getAppDatabaseService().queryJson<{id: string}>(`
+    SELECT id
+    FROM app.judgment_job
+    WHERE status = 'running'
+    ORDER BY id ASC
+  `)
+
+  return rows.map((row) => {
+    return row.id
+  })
+}
+
 const claimPendingOutboxBatchForJobIds = async ({
   claimedBy,
   jobIds,
@@ -329,9 +346,10 @@ const getClaimedOutboxBatchForJobIds = async ({
 
 const getImportBatch = async ({claimedBy, jobId}: {claimedBy: string; jobId?: string}) => {
   const sqliteService = getJudgmentJobSqliteService()
+  const jobIds = await getImportCandidateJobIds(jobId)
   const claimedBatch = jobId
     ? await sqliteService.getClaimedOutboxBatch({jobId, serverJobId: claimedBy})
-    : await getClaimedOutboxBatchForJobIds({claimedBy, jobIds: sqliteService.listJobIds().sort()})
+    : await getClaimedOutboxBatchForJobIds({claimedBy, jobIds})
 
   return claimedBatch
     ? claimedBatch
@@ -342,7 +360,7 @@ const getImportBatch = async ({claimedBy, jobId}: {claimedBy: string; jobId?: st
           maxBytes: judgmentOutboxBatchMaxBytes,
           maxRows: judgmentOutboxBatchMaxRows,
         })
-      : await claimPendingOutboxBatchForJobIds({claimedBy, jobIds: sqliteService.listJobIds().sort()})
+      : await claimPendingOutboxBatchForJobIds({claimedBy, jobIds})
 }
 
 export const importJudgmentJobSqliteOutboxBatch = async ({
