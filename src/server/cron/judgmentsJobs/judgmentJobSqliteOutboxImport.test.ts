@@ -104,7 +104,7 @@ afterEach(async () => {
   rmSync(tempJobDir, {force: true, recursive: true})
 })
 
-test('ignores orphaned and non-running SQLite job files during background import', () => {
+test('background import selects candidate jobs from importable storage states', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -118,17 +118,19 @@ test('ignores orphaned and non-running SQLite job files during background import
 
         const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
         const sqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
-        const importModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts')
-        let inspectedOrphanJob = false
-        let inspectedPausedJob = false
-        let inspectedTrackedJob = false
+        const backgroundImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts')
+        const importedJobIds = []
+        let syncedLeaseJobIds = null
 
         void mock.module(appDatabaseServiceModulePath, () => {
           return {
             getAppDatabaseService: () => {
               return {
+                run: async () => {},
                 queryJson: async (statement) => {
-                  return statement.includes("status = 'running'") ? [{id: 'tracked-job'}] : []
+                  return statement.includes('storage_state IN')
+                    ? [{id: 'active-job'}, {id: 'draining-job'}]
+                    : []
                 },
               }
             },
@@ -137,33 +139,29 @@ test('ignores orphaned and non-running SQLite job files during background import
 
         void mock.module(sqliteServiceModulePath, () => {
           return {
-            JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
             getJudgmentJobSqliteService: () => {
               return {
-                claimPendingOutboxBatch: async ({jobId}) => {
-                  inspectedOrphanJob ||= jobId === 'orphan-job'
-                  inspectedPausedJob ||= jobId === 'paused-job'
-                  inspectedTrackedJob ||= jobId === 'tracked-job'
-                  return null
-                },
-                getClaimedOutboxBatch: async ({jobId}) => {
-                  inspectedOrphanJob ||= jobId === 'orphan-job'
-                  inspectedPausedJob ||= jobId === 'paused-job'
-                  inspectedTrackedJob ||= jobId === 'tracked-job'
-                  return null
-                },
-                listJobIds: () => {
-                  return ['orphan-job', 'paused-job', 'tracked-job']
+                syncOwnedLeases: async (jobIds) => {
+                  syncedLeaseJobIds = jobIds
                 },
               }
             },
           }
         })
 
-        const {importJudgmentJobSqliteOutboxBatch} = await import(importModulePath + '?orphaned=' + Date.now())
-        const imported = await importJudgmentJobSqliteOutboxBatch({claimedBy: 'test-server'})
+        globalThis.Bun.spawn = (cmd) => {
+          importedJobIds.push(cmd.find((arg) => arg.startsWith('--jobId='))?.slice('--jobId='.length) ?? null)
+          return {
+            exited: Promise.resolve(0),
+            stderr: new Blob(['']).stream(),
+            stdout: new Blob([JSON.stringify({status: 'ok'})]).stream(),
+          }
+        }
 
-        console.log(JSON.stringify({imported, inspectedOrphanJob, inspectedPausedJob, inspectedTrackedJob}))
+        const {runJudgmentJobSqliteBackgroundImport} = await import(backgroundImportModulePath + '?storage-states=' + Date.now())
+        const summary = await runJudgmentJobSqliteBackgroundImport({claimedBy: 'test-server'})
+
+        console.log(JSON.stringify({importedJobIds, summary, syncedLeaseJobIds}))
       `,
     ],
     {cwd: process.cwd(), env: {...process.env}},
@@ -176,16 +174,154 @@ test('ignores orphaned and non-running SQLite job files during background import
   }
 
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
-    imported: number
-    inspectedOrphanJob: boolean
-    inspectedPausedJob: boolean
-    inspectedTrackedJob: boolean
+    importedJobIds: string[]
+    summary: {attemptedCount: number; failedCount: number; skippedCount: number; succeededCount: number}
+    syncedLeaseJobIds: string[]
   }
 
-  expect(result.imported).toBe(0)
-  expect(result.inspectedOrphanJob).toBe(false)
-  expect(result.inspectedPausedJob).toBe(false)
-  expect(result.inspectedTrackedJob).toBe(true)
+  expect(result.importedJobIds).toEqual(['active-job', 'draining-job'])
+  expect(result.syncedLeaseJobIds).toEqual([])
+  expect(result.summary).toEqual({attemptedCount: 2, failedCount: 0, skippedCount: 0, succeededCount: 2})
+})
+
+test('background import records metadata, quarantines repeated failures, and continues other jobs', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
+        const sqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
+        const backgroundImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts')
+        const failureCounts = {'fail-job': 0, 'quarantine-job': 2}
+        const queryStatements = []
+        const runStatements = []
+        const spawnedJobIds = []
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                queryJson: async (statement) => {
+                  queryStatements.push(statement)
+
+                  if (statement.includes('storage_state IN')) {
+                    return [{id: 'fail-job'}, {id: 'success-job'}, {id: 'quarantine-job'}]
+                  }
+
+                  const matchedJobId = Object.keys(failureCounts).find((jobId) => {
+                    return statement.includes("WHERE id = '" + jobId + "'")
+                  })
+
+                  if (!matchedJobId) {
+                    return []
+                  }
+
+                  failureCounts[matchedJobId] += 1
+                  return [
+                    {
+                      importFailureCount: failureCounts[matchedJobId],
+                      storageState: failureCounts[matchedJobId] >= 3 ? 'quarantined' : 'active',
+                    },
+                  ]
+                },
+                run: async (statement) => {
+                  runStatements.push(statement)
+                },
+              }
+            },
+          }
+        })
+
+        void mock.module(sqliteServiceModulePath, () => {
+          return {
+            getJudgmentJobSqliteService: () => {
+              return {
+                syncOwnedLeases: async () => {},
+              }
+            },
+          }
+        })
+
+        globalThis.Bun.spawn = (cmd) => {
+          const jobId = cmd.find((arg) => arg.startsWith('--jobId='))?.slice('--jobId='.length) ?? ''
+          spawnedJobIds.push(jobId)
+
+          if (jobId === 'success-job') {
+            return {
+              exited: Promise.resolve(0),
+              stderr: new Blob(['']).stream(),
+              stdout: new Blob([JSON.stringify({status: 'ok'})]).stream(),
+            }
+          }
+
+          return {
+            exited: Promise.resolve(1),
+            stderr: new Blob(['']).stream(),
+            stdout: new Blob([JSON.stringify({error: jobId + ' exploded', status: 'failed'})]).stream(),
+          }
+        }
+
+        const {runJudgmentJobSqliteBackgroundImport} = await import(backgroundImportModulePath + '?metadata=' + Date.now())
+        const summary = await runJudgmentJobSqliteBackgroundImport({claimedBy: 'test-server'})
+
+        console.log(
+          JSON.stringify({failureCounts, queryStatements, runStatements, spawnedJobIds, summary}),
+        )
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'SQLite background import metadata regression test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    failureCounts: Record<string, number>
+    queryStatements: string[]
+    runStatements: string[]
+    spawnedJobIds: string[]
+    summary: {attemptedCount: number; failedCount: number; skippedCount: number; succeededCount: number}
+  }
+
+  expect(result.spawnedJobIds).toEqual(['fail-job', 'success-job', 'quarantine-job'])
+  expect(result.summary).toEqual({attemptedCount: 3, failedCount: 2, skippedCount: 0, succeededCount: 1})
+  expect(result.failureCounts).toEqual({'fail-job': 1, 'quarantine-job': 3})
+  expect(
+    result.runStatements.filter((statement) => {
+      return statement.includes('last_import_started_at')
+    }),
+  ).toHaveLength(3)
+  expect(
+    result.runStatements.some((statement) => {
+      return statement.includes("WHERE id = 'success-job'") && statement.includes('last_import_exit_code = 0')
+    }),
+  ).toBe(true)
+  expect(
+    result.queryStatements.some((statement) => {
+      return statement.includes("WHERE id = 'fail-job'") && statement.includes('last_import_exit_code = 1')
+    }),
+  ).toBe(true)
+  expect(
+    result.queryStatements.some((statement) => {
+      return (
+        statement.includes("WHERE id = 'quarantine-job'")
+        && statement.includes('storage_state = CASE')
+        && statement.includes("THEN 'quarantined'")
+      )
+    }),
+  ).toBe(true)
 })
 
 test('imports SQLite-backed judgments into DuckDB in batches', async () => {

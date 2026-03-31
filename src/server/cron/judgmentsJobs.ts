@@ -4,7 +4,7 @@ import {Elysia} from 'elysia'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {isExpectedWriterRoleLossError, shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentsJobs/judgmentJobServerIdentity.ts'
-import {importJudgmentJobSqliteOutboxBatch} from './judgmentsJobs/judgmentJobSqliteOutboxImport.ts'
+import {runJudgmentJobSqliteBackgroundImport} from './judgmentsJobs/judgmentJobSqliteBackgroundImport.ts'
 import {getJudgmentJobSqliteService} from './judgmentsJobs/judgmentJobSqliteService.ts'
 import {judgmentsJobsAddToQueue} from './judgmentsJobs/judgmentsJobsAddToQueue.ts'
 import {judgmentsJobsCheckLLMStatus} from './judgmentsJobs/judgmentsJobsCheckLLMStatus.ts'
@@ -85,7 +85,7 @@ const importJudgmentsCron = async (): Promise<void> => {
   isImportingJudgments = true
 
   try {
-    await importJudgmentJobSqliteOutboxBatch({claimedBy: serverJobId})
+    await runJudgmentJobSqliteBackgroundImport({claimedBy: serverJobId})
   } catch (err) {
     logJudgingCronError('[cron] importJudgmentsCron error:', err)
   } finally {

@@ -12,6 +12,7 @@ import {
 const judgmentOutboxBatchMaxRows = 100
 const judgmentOutboxBatchMaxBytes = 4 * 1024 * 1024
 const judgmentOutboxImportLogger = createRateLimitedLogger({windowMs: 30_000})
+const importableStorageStateLiterals = [getSqlLiteral('active'), getSqlLiteral('draining')].join(', ')
 
 type JudgmentOutboxDiscardedEntry = {entry: JudgmentJobSqliteOutboxEntry; errorMessage: string}
 type ClaimedOutboxBatch = Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['claimPendingOutboxBatch']>>
@@ -274,7 +275,7 @@ const getImportCandidateJobIds = async (jobId?: string) => {
   const rows = await getAppDatabaseService().queryJson<{id: string}>(`
     SELECT id
     FROM app.judgment_job
-    WHERE status = 'running'
+    WHERE storage_state IN (${importableStorageStateLiterals})
     ORDER BY id ASC
   `)
 
