@@ -33,11 +33,12 @@
         "`bun run db:mig:secondary` passes"
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-001"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-003",
@@ -133,6 +134,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-03-31T13:33:41.577Z"
+    "updatedAt": "2026-03-31T13:36:46.330Z"
   }
 }
