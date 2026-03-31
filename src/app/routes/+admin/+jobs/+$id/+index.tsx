@@ -64,6 +64,16 @@ const isRecord = (value: unknown): value is Record<string, unknown> => {
 type JobData = {
   id?: string
   status?: string | null
+  storageState?: string | null
+  quarantinedAt?: string | null
+  quarantineReason?: string | null
+  lastImportStartedAt?: string | null
+  lastImportCompletedAt?: string | null
+  lastImportErrorAt?: string | null
+  lastImportError?: string | null
+  lastImportExitCode?: number | null
+  importFailureCount?: number | null
+  pauseRequestedAt?: string | null
   projectId?: string
   projectName?: string
   createdAt?: string

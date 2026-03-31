@@ -223,6 +223,98 @@ test('pausing an existing judgments job succeeds when queued prompts reference t
   expect(body).toContain('paused')
 })
 
+test('judgment job routes expose storage health fields', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `storage-fields-project-${Date.now()}`
+  const modelId = `storage-fields-model-${Date.now()}`
+  const connectionId = `storage-fields-connection-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+
+  const createResponse = await app.handle(
+    new Request('http://localhost/api/judgmentsjobs', {
+      body: JSON.stringify({projectId}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const createBody = (await createResponse.json()) as {
+    data: {
+      jobId: string
+      storageState: string
+      quarantinedAt: string | null
+      quarantineReason: string | null
+      lastImportStartedAt: string | null
+      lastImportCompletedAt: string | null
+      lastImportErrorAt: string | null
+      lastImportError: string | null
+      lastImportExitCode: number | null
+      importFailureCount: number
+      pauseRequestedAt: string | null
+    }
+  }
+
+  expect(createResponse.status).toBe(200)
+  expect(createBody.data.storageState).toBe('active')
+  expect(createBody.data.quarantinedAt).toBeNull()
+  expect(createBody.data.quarantineReason).toBeNull()
+  expect(createBody.data.lastImportStartedAt).toBeNull()
+  expect(createBody.data.lastImportCompletedAt).toBeNull()
+  expect(createBody.data.lastImportErrorAt).toBeNull()
+  expect(createBody.data.lastImportError).toBeNull()
+  expect(createBody.data.lastImportExitCode).toBeNull()
+  expect(createBody.data.importFailureCount).toBe(0)
+  expect(createBody.data.pauseRequestedAt).toBeNull()
+
+  const detailsResponse = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${createBody.data.jobId}`))
+  const detailsBody = (await detailsResponse.json()) as {
+    storageState: string
+    quarantinedAt: string | null
+    quarantineReason: string | null
+    lastImportStartedAt: string | null
+    lastImportCompletedAt: string | null
+    lastImportErrorAt: string | null
+    lastImportError: string | null
+    lastImportExitCode: number | null
+    importFailureCount: number
+    pauseRequestedAt: string | null
+  }
+
+  expect(detailsResponse.status).toBe(200)
+  expect(detailsBody.storageState).toBe('active')
+  expect(detailsBody.importFailureCount).toBe(0)
+  expect(detailsBody.pauseRequestedAt).toBeNull()
+
+  const listResponse = await app.handle(new Request('http://localhost/api/judgmentsjobs'))
+  const listBody = (await listResponse.json()) as {
+    data: Array<{
+      id: string
+      storageState: string
+      quarantinedAt: string | null
+      quarantineReason: string | null
+      lastImportStartedAt: string | null
+      lastImportCompletedAt: string | null
+      lastImportErrorAt: string | null
+      lastImportError: string | null
+      lastImportExitCode: number | null
+      importFailureCount: number
+      pauseRequestedAt: string | null
+    }>
+  }
+
+  const listedJob = listBody.data.find((job) => {
+    return job.id === createBody.data.jobId
+  })
+
+  expect(listResponse.status).toBe(200)
+  expect(listedJob?.storageState).toBe('active')
+  expect(listedJob?.importFailureCount).toBe(0)
+  expect(listedJob?.pauseRequestedAt).toBeNull()
+})
+
 test('reads SQLite-backed skipped prompt stats separately from judged prompts', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')

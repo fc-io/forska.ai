@@ -28,7 +28,22 @@ type TokenUsageDaySummary = {
 
 const judgmentJobServerId = getDefaultJudgmentServerJobId()
 
-type JudgmentJobMutationState = {error: unknown; id: string; status: string; updatedAt: unknown}
+type JudgmentJobMutationState = {
+  error: unknown
+  id: string
+  status: string
+  storageState: string
+  quarantinedAt: unknown
+  quarantineReason: string | null
+  lastImportStartedAt: unknown
+  lastImportCompletedAt: unknown
+  lastImportErrorAt: unknown
+  lastImportError: string | null
+  lastImportExitCode: number | null
+  importFailureCount: number | null
+  pauseRequestedAt: unknown
+  updatedAt: unknown
+}
 type JudgmentJobMutationQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
 
 type UnassessedCountCacheValue = {value: number; expiresAt: number}
@@ -107,6 +122,16 @@ const getJobContext = async ({
     projectId: string
     status: string
     error: string[] | null
+    storageState: string
+    quarantinedAt: Date | null
+    quarantineReason: string | null
+    lastImportStartedAt: Date | null
+    lastImportCompletedAt: Date | null
+    lastImportErrorAt: Date | null
+    lastImportError: string | null
+    lastImportExitCode: number | null
+    importFailureCount: number
+    pauseRequestedAt: Date | null
     projectName: string | null
     useTitle: boolean
     useAbstract: boolean
@@ -126,6 +151,16 @@ const getJobContext = async ({
       projectId: string
       status: string
       error: unknown
+      storageState: string
+      quarantinedAt: unknown
+      quarantineReason: string | null
+      lastImportStartedAt: unknown
+      lastImportCompletedAt: unknown
+      lastImportErrorAt: unknown
+      lastImportError: string | null
+      lastImportExitCode: number | null
+      importFailureCount: number | null
+      pauseRequestedAt: unknown
       projectName: string | null
       projectModelId: string | null
       projectDateFrom: unknown
@@ -142,6 +177,16 @@ const getJobContext = async ({
         jj.project_id AS projectId,
         jj.status AS status,
         TO_JSON(jj.error) AS error,
+        jj.storage_state AS storageState,
+        jj.quarantined_at AS quarantinedAt,
+        jj.quarantine_reason AS quarantineReason,
+        jj.last_import_started_at AS lastImportStartedAt,
+        jj.last_import_completed_at AS lastImportCompletedAt,
+        jj.last_import_error_at AS lastImportErrorAt,
+        jj.last_import_error AS lastImportError,
+        jj.last_import_exit_code AS lastImportExitCode,
+        jj.import_failure_count AS importFailureCount,
+        jj.pause_requested_at AS pauseRequestedAt,
         p.name AS projectName,
         p.model_id AS projectModelId,
         p.date_from AS projectDateFrom,
@@ -185,6 +230,16 @@ const getJobContext = async ({
     createdAt: getDateValue(rest.createdAt) ?? new Date(0),
     updatedAt: getDateValue(rest.updatedAt) ?? new Date(0),
     error: getJsonValue(rest.error) as string[] | null,
+    storageState: rest.storageState,
+    quarantinedAt: getDateValue(rest.quarantinedAt),
+    quarantineReason: rest.quarantineReason,
+    lastImportStartedAt: getDateValue(rest.lastImportStartedAt),
+    lastImportCompletedAt: getDateValue(rest.lastImportCompletedAt),
+    lastImportErrorAt: getDateValue(rest.lastImportErrorAt),
+    lastImportError: rest.lastImportError,
+    lastImportExitCode: rest.lastImportExitCode,
+    importFailureCount: Number(rest.importFailureCount ?? 0),
+    pauseRequestedAt: getDateValue(rest.pauseRequestedAt),
     useTitle: projectUseTitle ?? true,
     useAbstract: projectUseAbstract ?? true,
     useFulltext: projectUseFulltext ?? false,
@@ -251,7 +306,21 @@ const getJudgmentJobMutationState = async (
   jobId: string,
 ): Promise<JudgmentJobMutationState | null> => {
   const [job] = await db.queryJson<JudgmentJobMutationState>(`
-    SELECT id, status, updated_at AS updatedAt, TO_JSON(error) AS error
+    SELECT
+      id,
+      status,
+      storage_state AS storageState,
+      quarantined_at AS quarantinedAt,
+      quarantine_reason AS quarantineReason,
+      last_import_started_at AS lastImportStartedAt,
+      last_import_completed_at AS lastImportCompletedAt,
+      last_import_error_at AS lastImportErrorAt,
+      last_import_error AS lastImportError,
+      last_import_exit_code AS lastImportExitCode,
+      import_failure_count AS importFailureCount,
+      pause_requested_at AS pauseRequestedAt,
+      updated_at AS updatedAt,
+      TO_JSON(error) AS error
     FROM app.judgment_job
     WHERE id = '${escapeSqlString(jobId)}'
     LIMIT 1
@@ -285,12 +354,36 @@ export const judgmentsJobsRoutes = new Elysia()
       const [job] = await getAppDatabaseService().queryJson<{
         id: string
         status: string
+        storageState: string
+        quarantinedAt: unknown
+        quarantineReason: string | null
+        lastImportStartedAt: unknown
+        lastImportCompletedAt: unknown
+        lastImportErrorAt: unknown
+        lastImportError: string | null
+        lastImportExitCode: number | null
+        importFailureCount: number | null
+        pauseRequestedAt: unknown
         createdAt: unknown
         projectId: string
       }>(`
         INSERT INTO app.judgment_job (id, project_id, status)
         VALUES (${getQuotedStringList([crypto.randomUUID(), body.projectId, 'running']).join(', ')})
-        RETURNING id, status, created_at AS createdAt, project_id AS projectId
+        RETURNING
+          id,
+          status,
+          storage_state AS storageState,
+          quarantined_at AS quarantinedAt,
+          quarantine_reason AS quarantineReason,
+          last_import_started_at AS lastImportStartedAt,
+          last_import_completed_at AS lastImportCompletedAt,
+          last_import_error_at AS lastImportErrorAt,
+          last_import_error AS lastImportError,
+          last_import_exit_code AS lastImportExitCode,
+          import_failure_count AS importFailureCount,
+          pause_requested_at AS pauseRequestedAt,
+          created_at AS createdAt,
+          project_id AS projectId
       `)
 
       if (!job) {
@@ -308,7 +401,22 @@ export const judgmentsJobsRoutes = new Elysia()
       }
 
       return {
-        data: {jobId: job.id, status: job.status, createdAt: job.createdAt, projectId: job.projectId},
+        data: {
+          jobId: job.id,
+          status: job.status,
+          storageState: job.storageState,
+          quarantinedAt: getDateValue(job.quarantinedAt),
+          quarantineReason: job.quarantineReason,
+          lastImportStartedAt: getDateValue(job.lastImportStartedAt),
+          lastImportCompletedAt: getDateValue(job.lastImportCompletedAt),
+          lastImportErrorAt: getDateValue(job.lastImportErrorAt),
+          lastImportError: job.lastImportError,
+          lastImportExitCode: job.lastImportExitCode,
+          importFailureCount: Number(job.importFailureCount ?? 0),
+          pauseRequestedAt: getDateValue(job.pauseRequestedAt),
+          createdAt: job.createdAt,
+          projectId: job.projectId,
+        },
         error: null,
       }
     },
@@ -489,6 +597,16 @@ export const judgmentsJobsRoutes = new Elysia()
       projectId: string
       status: string
       error: unknown
+      storageState: string
+      quarantinedAt: unknown
+      quarantineReason: string | null
+      lastImportStartedAt: unknown
+      lastImportCompletedAt: unknown
+      lastImportErrorAt: unknown
+      lastImportError: string | null
+      lastImportExitCode: number | null
+      importFailureCount: number | null
+      pauseRequestedAt: unknown
       projectName: string | null
     }>(`
       SELECT
@@ -498,6 +616,16 @@ export const judgmentsJobsRoutes = new Elysia()
         jj.project_id AS projectId,
         jj.status AS status,
         TO_JSON(jj.error) AS error,
+        jj.storage_state AS storageState,
+        jj.quarantined_at AS quarantinedAt,
+        jj.quarantine_reason AS quarantineReason,
+        jj.last_import_started_at AS lastImportStartedAt,
+        jj.last_import_completed_at AS lastImportCompletedAt,
+        jj.last_import_error_at AS lastImportErrorAt,
+        jj.last_import_error AS lastImportError,
+        jj.last_import_exit_code AS lastImportExitCode,
+        jj.import_failure_count AS importFailureCount,
+        jj.pause_requested_at AS pauseRequestedAt,
         p.name AS projectName
       FROM app.judgment_job jj
       INNER JOIN app.project p ON jj.project_id = p.id
@@ -512,6 +640,12 @@ export const judgmentsJobsRoutes = new Elysia()
           createdAt: getDateValue(job.createdAt),
           updatedAt: getDateValue(job.updatedAt),
           error: getJsonValue(job.error) as string[] | null,
+          quarantinedAt: getDateValue(job.quarantinedAt),
+          lastImportStartedAt: getDateValue(job.lastImportStartedAt),
+          lastImportCompletedAt: getDateValue(job.lastImportCompletedAt),
+          lastImportErrorAt: getDateValue(job.lastImportErrorAt),
+          importFailureCount: Number(job.importFailureCount ?? 0),
+          pauseRequestedAt: getDateValue(job.pauseRequestedAt),
         }
       }),
       error: null,
@@ -583,6 +717,16 @@ export const judgmentsJobsRoutes = new Elysia()
         data: {
           jobId: updatedJob.id,
           status: updatedJob.status,
+          storageState: updatedJob.storageState,
+          quarantinedAt: getDateValue(updatedJob.quarantinedAt),
+          quarantineReason: updatedJob.quarantineReason,
+          lastImportStartedAt: getDateValue(updatedJob.lastImportStartedAt),
+          lastImportCompletedAt: getDateValue(updatedJob.lastImportCompletedAt),
+          lastImportErrorAt: getDateValue(updatedJob.lastImportErrorAt),
+          lastImportError: updatedJob.lastImportError,
+          lastImportExitCode: updatedJob.lastImportExitCode,
+          importFailureCount: Number(updatedJob.importFailureCount ?? 0),
+          pauseRequestedAt: getDateValue(updatedJob.pauseRequestedAt),
           updatedAt: getDateValue(updatedJob.updatedAt),
           error: getJsonValue(updatedJob.error) as string[] | null,
         },

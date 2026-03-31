@@ -10,6 +10,8 @@ export type JudgmentsJobStatus =
   | 'completed'
   | 'project_removed'
 
+export type JudgmentsJobStorageState = 'missing' | 'active' | 'draining' | 'drained' | 'quarantined'
+
 export type JudgmentsJobsPromptsStatus =
   | 'ready'
   | 'sent'
@@ -197,6 +199,16 @@ export type JudgmentsJobRecord = {
   projectId: string
   status: JudgmentsJobStatus
   error: string[] | null
+  storageState: JudgmentsJobStorageState
+  quarantinedAt: Date | null
+  quarantineReason: string | null
+  lastImportStartedAt: Date | null
+  lastImportCompletedAt: Date | null
+  lastImportErrorAt: Date | null
+  lastImportError: string | null
+  lastImportExitCode: number | null
+  importFailureCount: number
+  pauseRequestedAt: Date | null
   sendToLLMBatchSize: number
   sendToLLMInterval: number
   cursorLastCreatedAt: Date | null
