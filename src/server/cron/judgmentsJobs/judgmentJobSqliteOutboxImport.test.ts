@@ -104,7 +104,7 @@ afterEach(async () => {
   rmSync(tempJobDir, {force: true, recursive: true})
 })
 
-test('background import selects candidate jobs from importable storage states', () => {
+test('background import selects active running jobs and draining jobs, but excludes paused active jobs', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -120,6 +120,7 @@ test('background import selects candidate jobs from importable storage states', 
         const sqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
         const backgroundImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts')
         const importedJobIds = []
+        const queryStatements = []
         let syncedLeaseJobIds = null
 
         void mock.module(appDatabaseServiceModulePath, () => {
@@ -128,7 +129,9 @@ test('background import selects candidate jobs from importable storage states', 
               return {
                 run: async () => {},
                 queryJson: async (statement) => {
-                  return statement.includes('storage_state IN')
+                  queryStatements.push(statement)
+
+                  return statement.includes("storage_state = 'draining'") && statement.includes('status IN')
                     ? [{id: 'active-job'}, {id: 'draining-job'}]
                     : []
                 },
@@ -161,7 +164,7 @@ test('background import selects candidate jobs from importable storage states', 
         const {runJudgmentJobSqliteBackgroundImport} = await import(backgroundImportModulePath + '?storage-states=' + Date.now())
         const summary = await runJudgmentJobSqliteBackgroundImport({claimedBy: 'test-server'})
 
-        console.log(JSON.stringify({importedJobIds, summary, syncedLeaseJobIds}))
+        console.log(JSON.stringify({importedJobIds, queryStatements, summary, syncedLeaseJobIds}))
       `,
     ],
     {cwd: process.cwd(), env: {...process.env}},
@@ -175,11 +178,23 @@ test('background import selects candidate jobs from importable storage states', 
 
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
     importedJobIds: string[]
+    queryStatements: string[]
     summary: {attemptedCount: number; failedCount: number; skippedCount: number; succeededCount: number}
     syncedLeaseJobIds: string[]
   }
 
   expect(result.importedJobIds).toEqual(['active-job', 'draining-job'])
+  expect(
+    result.queryStatements.some((statement) => {
+      return (
+        statement.includes("storage_state = 'active'")
+        && statement.includes("storage_state = 'draining'")
+        && statement.includes(
+          "status IN ('not_started', 'running', 'waiting_on_db_connection', 'waiting_on_llm_connection')",
+        )
+      )
+    }),
+  ).toBe(true)
   expect(result.syncedLeaseJobIds).toEqual([])
   expect(result.summary).toEqual({attemptedCount: 2, failedCount: 0, skippedCount: 0, succeededCount: 2})
 })
@@ -211,7 +226,7 @@ test('background import records metadata, quarantines repeated failures, and con
                 queryJson: async (statement) => {
                   queryStatements.push(statement)
 
-                  if (statement.includes('storage_state IN')) {
+                  if (statement.includes("storage_state = 'draining'") && statement.includes('status IN')) {
                     return [{id: 'fail-job'}, {id: 'success-job'}, {id: 'quarantine-job'}]
                   }
 

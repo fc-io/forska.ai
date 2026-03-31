@@ -1748,6 +1748,7 @@ const sqliteService = {
   deleteJob: async (jobId: string) => {
     await ensureOwnedJobLease(jobId)
     await releaseOwnedJobLease(jobId)
+    closeOpenDatabase(jobId)
 
     deleteJobFiles(jobId)
   },

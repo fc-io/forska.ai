@@ -1,11 +1,11 @@
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
+import {getImportableJudgmentJobWhereSql} from './judgmentJobImportScope.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 
 const judgmentJobSqliteBackgroundImportLogger = createRateLimitedLogger({windowMs: 30_000})
 const isolatedImportFailureThreshold = 3
-const importableStorageStateLiterals = [getSqlLiteral('active'), getSqlLiteral('draining')].join(', ')
 
 type IsolatedImportProcessResult = {errorMessage: string | null; exitCode: number}
 
@@ -13,7 +13,7 @@ const getImportableJudgmentJobIds = async () => {
   const rows = await getAppDatabaseService().queryJson<{id: string}>(`
     SELECT id
     FROM app.judgment_job
-    WHERE storage_state IN (${importableStorageStateLiterals})
+    WHERE ${getImportableJudgmentJobWhereSql()}
     ORDER BY id ASC
   `)
 
