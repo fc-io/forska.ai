@@ -364,7 +364,7 @@ test('claims each SQLite prompt pair at most once under competing writers', asyn
           return result.changes === 1 ? [{articleId: row.articleId, promptId: row.promptId}] : []
         })()
       } catch (error) {
-        const isBusyError = error instanceof Error && 'code' in error && error.code === 'SQLITE_BUSY'
+        const isBusyError = error instanceof Error && 'code' in error && ['SQLITE_BUSY', 'SQLITE_BUSY_SNAPSHOT'].includes(String(error.code))
 
         if (isBusyError) {
           await waitForRetry()
@@ -869,8 +869,18 @@ test('prunes only visibility-acked exported outbox rows in bounded batches', asy
       return [row.queuePromptId, row.outboxSeq]
     }),
   )
-  const ackedOutboxSeq = claimedPrompts[1] ? (outboxSeqsByPromptId.get(claimedPrompts[1].recordId) ?? null) : null
-  const newestOutboxSeq = claimedPrompts[2] ? (outboxSeqsByPromptId.get(claimedPrompts[2].recordId) ?? null) : null
+  const sortedOutboxSeqs = claimedPrompts
+    .map((claimedPrompt) => {
+      return outboxSeqsByPromptId.get(claimedPrompt.recordId) ?? null
+    })
+    .filter((outboxSeq): outboxSeq is number => {
+      return outboxSeq !== null
+    })
+    .sort((left, right) => {
+      return left - right
+    })
+  const ackedOutboxSeq = sortedOutboxSeqs[1] ?? null
+  const [newestOutboxSeq = null] = sortedOutboxSeqs.slice(-1)
 
   await service.completeOutboxClaim({claimId: claimedOutboxBatch?.claim.claimId ?? '', jobId})
   await service.setLastProjectRefreshAckSeq(jobId, ackedOutboxSeq)

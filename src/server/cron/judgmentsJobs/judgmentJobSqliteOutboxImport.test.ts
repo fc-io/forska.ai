@@ -782,3 +782,173 @@ test('keeps the previous refresh acknowledgement seq when mart visibility acknow
   expect(await importOutboxBatch()).toBe(1)
   expect((await service.getScanState(jobId)).lastProjectRefreshAckSeq).toBe(pendingOutboxRow?.outboxSeq ?? null)
 })
+
+test('single-job sqlite importer emits structured JSON success output', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
+        const sqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
+        const importModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts')
+        const scriptModulePath = getModulePath('./scripts/runJudgmentJobSqliteSingleJobImport.ts')
+
+        process.argv = [
+          'bun',
+          scriptModulePath,
+          '--jobId=test-job',
+          '--claimedBy=test-claimer',
+        ]
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                close: async () => {},
+              }
+            },
+          }
+        })
+
+        void mock.module(sqliteServiceModulePath, () => {
+          return {
+            getJudgmentJobSqliteService: () => {
+              return {
+                closeAll: async () => {},
+              }
+            },
+          }
+        })
+
+        void mock.module(importModulePath, () => {
+          return {
+            runJudgmentJobSqliteOutboxImportCycle: async () => {
+              return {
+                claimedBy: 'test-claimer',
+                discardedCount: 1,
+                duplicateCount: 2,
+                importedCount: 3,
+                jobId: 'test-job',
+                outboxClaimId: 'claim-1',
+                outboxRowCount: 6,
+                status: 'imported',
+              }
+            },
+          }
+        })
+
+        const {runJudgmentJobSqliteSingleJobImport} = await import(scriptModulePath + '?success=' + Date.now())
+        await runJudgmentJobSqliteSingleJobImport()
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'SQLite single-job importer success test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    claimedBy: string
+    cycleStatus: string
+    discardedCount: number
+    duplicateCount: number
+    importedCount: number
+    jobId: string
+    outboxClaimId: string
+    outboxRowCount: number
+    status: string
+  }
+
+  expect(result).toEqual({
+    claimedBy: 'test-claimer',
+    cycleStatus: 'imported',
+    discardedCount: 1,
+    duplicateCount: 2,
+    importedCount: 3,
+    jobId: 'test-job',
+    outboxClaimId: 'claim-1',
+    outboxRowCount: 6,
+    status: 'ok',
+  })
+})
+
+test('single-job sqlite importer emits structured JSON failure output and exits non-zero', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
+        const sqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
+        const importModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts')
+        const scriptModulePath = getModulePath('./scripts/runJudgmentJobSqliteSingleJobImport.ts')
+
+        process.argv = [
+          'bun',
+          scriptModulePath,
+          '--jobId=test-job',
+          '--claimedBy=test-claimer',
+        ]
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                close: async () => {},
+              }
+            },
+          }
+        })
+
+        void mock.module(sqliteServiceModulePath, () => {
+          return {
+            getJudgmentJobSqliteService: () => {
+              return {
+                closeAll: async () => {},
+              }
+            },
+          }
+        })
+
+        void mock.module(importModulePath, () => {
+          return {
+            runJudgmentJobSqliteOutboxImportCycle: async () => {
+              throw new Error('boom')
+            },
+          }
+        })
+
+        const {runJudgmentJobSqliteSingleJobImport} = await import(scriptModulePath + '?failure=' + Date.now())
+        await runJudgmentJobSqliteSingleJobImport()
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  expect(runScript.exitCode).toBe(1)
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    claimedBy: string
+    error: string
+    jobId: string
+    status: string
+  }
+
+  expect(result).toEqual({claimedBy: 'test-claimer', error: 'boom', jobId: 'test-job', status: 'failed'})
+})

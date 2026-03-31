@@ -15,6 +15,16 @@ const judgmentOutboxImportLogger = createRateLimitedLogger({windowMs: 30_000})
 
 type JudgmentOutboxDiscardedEntry = {entry: JudgmentJobSqliteOutboxEntry; errorMessage: string}
 type ClaimedOutboxBatch = Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['claimPendingOutboxBatch']>>
+export type JudgmentJobSqliteOutboxImportCycleResult = {
+  claimedBy: string
+  discardedCount: number
+  duplicateCount: number
+  importedCount: number
+  jobId: string | null
+  outboxClaimId: string | null
+  outboxRowCount: number
+  status: 'idle' | 'imported'
+}
 
 type JudgmentOutboxForeignKeys = {
   articleIds: Set<string>
@@ -363,15 +373,24 @@ const getImportBatch = async ({claimedBy, jobId}: {claimedBy: string; jobId?: st
       : await claimPendingOutboxBatchForJobIds({claimedBy, jobIds})
 }
 
-export const importJudgmentJobSqliteOutboxBatch = async ({
+export const runJudgmentJobSqliteOutboxImportCycle = async ({
   claimedBy = getDefaultJudgmentServerJobId(),
   jobId,
-}: {claimedBy?: string; jobId?: string} = {}): Promise<number> => {
+}: {claimedBy?: string; jobId?: string} = {}): Promise<JudgmentJobSqliteOutboxImportCycleResult> => {
   const sqliteService = getJudgmentJobSqliteService()
   const claimedBatch = await getImportBatch({claimedBy, jobId})
 
   if (!claimedBatch) {
-    return 0
+    return {
+      claimedBy,
+      discardedCount: 0,
+      duplicateCount: 0,
+      importedCount: 0,
+      jobId: jobId ?? null,
+      outboxClaimId: null,
+      outboxRowCount: 0,
+      status: 'idle',
+    }
   }
 
   const {claim, rows} = claimedBatch
@@ -379,6 +398,7 @@ export const importJudgmentJobSqliteOutboxBatch = async ({
   try {
     const {discardedEntries, importableEntries} = await partitionImportableEntries(rows)
     const {missingEntries} = await partitionExistingJudgments(importableEntries)
+    const duplicateCount = importableEntries.length - missingEntries.length
     const lastImportedOutboxSeq = getLastImportedOutboxSeq(importableEntries)
 
     await sqliteService.completeClaimedOutboxRows({
@@ -402,7 +422,17 @@ export const importJudgmentJobSqliteOutboxBatch = async ({
     }
 
     await sqliteService.completeOutboxClaim({claimId: claim.claimId, jobId: claim.jobId})
-    return importableEntries.length
+
+    return {
+      claimedBy,
+      discardedCount: discardedEntries.length,
+      duplicateCount,
+      importedCount: importableEntries.length,
+      jobId: claim.jobId,
+      outboxClaimId: claim.claimId,
+      outboxRowCount: claim.rowCount,
+      status: 'imported',
+    }
   } catch (error) {
     await sqliteService.releaseOutboxClaim({
       claimId: claim.claimId,
@@ -411,6 +441,13 @@ export const importJudgmentJobSqliteOutboxBatch = async ({
     })
     throw error
   }
+}
+
+export const importJudgmentJobSqliteOutboxBatch = async ({
+  claimedBy = getDefaultJudgmentServerJobId(),
+  jobId,
+}: {claimedBy?: string; jobId?: string} = {}): Promise<number> => {
+  return (await runJudgmentJobSqliteOutboxImportCycle({claimedBy, jobId})).importedCount
 }
 
 export const flushJudgmentJobSqliteOutbox = async ({
