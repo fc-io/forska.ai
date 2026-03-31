@@ -1,0 +1,118 @@
+{
+  "name": "Primary and Secondary Dev Runtime Profiles",
+  "branchName": "ralph/primary-secondary-dev-runtime-profiles",
+  "description": "Make primary and secondary first-class local runtime profiles with isolated ports, DuckDB files, and judgment-job SQLite state.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add the primary and secondary runtime profile source of truth",
+      "description": "As a developer, I want centralized runtime profile definitions so all launch commands derive the same ports and isolated data roots for primary and secondary.",
+      "acceptanceCriteria": [
+        "Add `src/utils/runtimeProfile.ts` with `primary` and `secondary` profile definitions.",
+        "Each profile defines `VITE_PORT`, `API_SERVER_PORT`, `BACKGROUND_WRITER_PORT`, `APP_SERVER_PORT`, and `DUCKDB_PATH` under `data/runtime/<profile>/forska.duckdb`.",
+        "Profile helpers expose merged env values for launchers while leaving runtime code env-driven.",
+        "Add focused tests for runtime profile mapping and env merging.",
+        "`bun test src/utils/runtimeProfile.test.ts` passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Add profile-aware migration runner and scripts",
+      "description": "As a developer, I want migrations to run through the selected runtime profile so primary and secondary always migrate separate DuckDB and SQLite roots.",
+      "acceptanceCriteria": [
+        "Add `scripts/runWithRuntimeProfile.ts` support for a DuckDB migration mode.",
+        "`db:mig` runs the primary profile and `db:mig:secondary` runs the secondary profile through the shared runner.",
+        "Primary and secondary migration runs resolve to different `DUCKDB_PATH` parents so `judgment-jobs` state also stays isolated.",
+        "`bun test src/utils/runtimeProfile.test.ts` passes",
+        "`bun run db:mig` passes",
+        "`bun run db:mig:secondary` passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-003",
+      "title": "Add profile-aware stacked and split server launcher modes",
+      "description": "As a developer, I want the shared runner to launch stacked, API-only, and worker-only server modes so both profiles can run side by side without manual env export.",
+      "acceptanceCriteria": [
+        "`scripts/runWithRuntimeProfile.ts` supports stacked server, API-only server, and worker-only server modes.",
+        "API-only server mode sets `SERVER_ROLE=api` and the matching profile `SERVER_WRITER_URL`.",
+        "Worker-only server mode sets `SERVER_ROLE=worker` with the matching profile ports and isolated data root.",
+        "`bun test src/utils/runtimeProfile.test.ts` passes",
+        "`bun test src/server/utils/backgroundServerStack.test.ts` passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-004",
+      "title": "Rewire primary and secondary server scripts to the shared runner",
+      "description": "As a developer, I want committed primary and secondary server scripts so I can start stacked or split server roles for either profile with stable commands.",
+      "acceptanceCriteria": [
+        "`package.json` rewires `dev:server`, `dev:server:api`, and `dev:server:worker` to the primary profile runner modes.",
+        "`package.json` adds `dev:secondary:server`, `dev:secondary:server:api`, and `dev:secondary:server:worker` using the secondary profile runner modes.",
+        "The server commands for each profile resolve to separate DuckDB files and separate `judgment-jobs` directories under `data/runtime/primary/` and `data/runtime/secondary/`.",
+        "`bun test src/server/utils/backgroundServerStack.test.ts` passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003"]
+    },
+    {
+      "id": "US-005",
+      "title": "Add profile-aware app dev commands",
+      "description": "As a developer, I want primary and secondary app dev commands so each Vite instance opens on the correct port and proxies to its matching API profile.",
+      "acceptanceCriteria": [
+        "`scripts/runWithRuntimeProfile.ts` supports an app dev mode.",
+        "`dev:app` launches the primary app dev profile and `dev:secondary:app` launches the secondary app dev profile.",
+        "The secondary app dev command proxies `/api` requests to the secondary API instead of the primary API.",
+        "`bun test src/utils/runtimeProfile.test.ts` passes",
+        "Verify in browser primary and secondary dev profiles run together with separate ports, separate DuckDB files, and separate `judgment-jobs` dirs"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003", "US-004"]
+    },
+    {
+      "id": "US-006",
+      "title": "Add profile-aware built app start commands",
+      "description": "As a developer, I want primary and secondary built app commands so each built app server talks to the matching API/server profile without manual env setup.",
+      "acceptanceCriteria": [
+        "`scripts/runWithRuntimeProfile.ts` supports the built app server mode used by `src/appServer.ts`.",
+        "`start` launches the primary built app profile and `start:secondary` launches the secondary built app profile.",
+        "The primary and secondary built app commands use the correct `APP_SERVER_PORT`, API target, and isolated data root for their profile.",
+        "`bun run build` passes",
+        "Verify in browser built `start` and `start:secondary` point at the correct API/profile"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003", "US-004"]
+    },
+    {
+      "id": "US-007",
+      "title": "Document the primary and secondary local run workflow",
+      "description": "As a teammate, I want the local run docs to explain primary and secondary commands so I can start isolated profiles without remembering manual env wiring.",
+      "acceptanceCriteria": [
+        "Update `README.md` and `docs/README_RUN_LOCAL.md` with the implicit primary commands and explicit secondary commands.",
+        "Document that DuckDB and judgment-job SQLite isolation comes from separate profile roots under `data/runtime/primary/` and `data/runtime/secondary/`.",
+        "Document stacked server commands, split API/worker commands, and built app commands for both profiles.",
+        "`bun run build` passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-004", "US-005", "US-006"]
+    }
+  ]
+}
