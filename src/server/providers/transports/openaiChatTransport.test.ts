@@ -23,8 +23,9 @@ test('uses Qwen3.5 non-thinking request settings for structured output', () => {
 
   expect(request.temperature).toBe(1.0)
   expect(request.top_p).toBe(1.0)
+  expect(request.top_k).toBe(40)
   expect(request.presence_penalty).toBe(2.0)
-  expect(request.extra_body).toEqual({chat_template_kwargs: {enable_thinking: false}, top_k: 40})
+  expect(request.chat_template_kwargs).toEqual({enable_thinking: false})
 })
 
 test('uses Qwen3.5 non-thinking request settings without org prefix', () => {
@@ -37,7 +38,8 @@ test('uses Qwen3.5 non-thinking request settings without org prefix', () => {
     temperature: 0.2,
   })
 
-  expect(request.extra_body).toEqual({chat_template_kwargs: {enable_thinking: false}, top_k: 40})
+  expect(request.top_k).toBe(40)
+  expect(request.chat_template_kwargs).toEqual({enable_thinking: false})
 })
 
 test('keeps default request settings for non-Qwen models', () => {
@@ -52,6 +54,7 @@ test('keeps default request settings for non-Qwen models', () => {
 
   expect(request.temperature).toBe(0.2)
   expect(request.top_p).toBeUndefined()
+  expect(request.top_k).toBeUndefined()
   expect(request.presence_penalty).toBeUndefined()
-  expect(request.extra_body).toBeUndefined()
+  expect(request.chat_template_kwargs).toBeUndefined()
 })

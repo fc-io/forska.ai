@@ -9,13 +9,14 @@ import {
 } from './providerTransportUtils.ts'
 
 type OpenAIChatCompletionRequest = {
-  extra_body?: {chat_template_kwargs: {enable_thinking: boolean}; top_k: number}
+  chat_template_kwargs?: {enable_thinking: boolean}
   max_completion_tokens: number
   messages: Array<{content: string; role: 'system' | 'user'}>
   model: string
   presence_penalty?: number
   response_format: ReturnType<typeof getJsonSchemaResponseFormat>
   temperature: number
+  top_k?: number
   top_p?: number
 }
 
@@ -27,12 +28,13 @@ export const isQwen35Model = (modelName: string): boolean => {
 
 const getQwen35SamplingConfig = (): Pick<
   OpenAIChatCompletionRequest,
-  'extra_body' | 'presence_penalty' | 'temperature' | 'top_p'
+  'chat_template_kwargs' | 'presence_penalty' | 'temperature' | 'top_k' | 'top_p'
 > => {
   return {
-    extra_body: {chat_template_kwargs: {enable_thinking: false}, top_k: 40},
+    chat_template_kwargs: {enable_thinking: false},
     presence_penalty: 2.0,
     temperature: 1.0,
+    top_k: 40,
     top_p: 1.0,
   }
 }
