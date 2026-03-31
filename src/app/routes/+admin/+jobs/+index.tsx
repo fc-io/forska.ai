@@ -5,79 +5,20 @@ import {createMemo, createSignal, For, Show, Suspense} from 'solid-js'
 
 import {RuntimeModelNotice} from '../../../../components/main/runtimeModelNotice.tsx'
 import {TokenUsageTimeline} from '../../../../components/TokenUsageTimeline'
-import {
-  fetchJudgmentsJobs,
-  getTotalTokenUsage,
-  pauseJudgmentsJob,
-  startJudgmentsJob,
-} from '../../../../services/judgmentsJobsService'
+import {getTotalTokenUsage, pauseJudgmentsJob, startJudgmentsJob} from '../../../../services/judgmentsJobsService'
 import {fetchProjects} from '../../../../services/projectsService'
 import {getSglangRuntimeModelNotice} from '../../../../utils/getSglangRuntimeModelNotice.ts'
 import {fetchProviderConnections} from '../+models/providerConnectionsClient.ts'
-
-const getActionErrorMessage = (error: unknown, fallback: string) => {
-  return error instanceof Error && error.message.trim().length > 0 ? error.message : fallback
-}
-
-const getStatusColor = (status: string | null) => {
-  switch (status) {
-    case 'completed':
-      return 'bg-green-100 text-green-800'
-    case 'running':
-      return 'bg-blue-100 text-blue-800'
-    case 'failed':
-      return 'bg-red-100 text-red-800'
-    case 'paused':
-      return 'bg-yellow-100 text-yellow-800'
-    case 'not_started':
-      return 'bg-gray-100 text-gray-800'
-    case 'waiting_on_llm_connection':
-    case 'waiting_on_db_connection':
-      return 'bg-orange-100 text-orange-800'
-    case 'project_removed':
-      return 'bg-purple-100 text-purple-800'
-    default:
-      return 'bg-gray-100 text-gray-800'
-  }
-}
-
-const formatStatus = (status: string | null) => {
-  if (!status) return 'Unknown'
-  if (status === 'paused') return 'Paused'
-  return status
-    .split('_')
-    .map((word) => {
-      return word.charAt(0).toUpperCase() + word.slice(1)
-    })
-    .join(' ')
-}
-
-const formatNumber = (num: number): string => {
-  return num.toLocaleString('en-US')
-}
-
-type JobHealthBadge = 'Healthy' | 'Draining' | 'Large WAL' | 'Quarantined' | 'Retained Outbox' | 'Stale Import'
-
-const getHealthBadgeColor = (badge: JobHealthBadge) => {
-  switch (badge) {
-    case 'Healthy':
-      return 'bg-green-50 text-green-700 ring-green-200'
-    case 'Draining':
-      return 'bg-amber-50 text-amber-700 ring-amber-200'
-    case 'Quarantined':
-      return 'bg-red-50 text-red-700 ring-red-200'
-    case 'Retained Outbox':
-      return 'bg-violet-50 text-violet-700 ring-violet-200'
-    case 'Large WAL':
-      return 'bg-orange-50 text-orange-700 ring-orange-200'
-    case 'Stale Import':
-      return 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-200'
-  }
-}
-
-const isHealthyBadge = (badge: JobHealthBadge) => {
-  return badge === 'Healthy'
-}
+import {
+  formatNumber,
+  formatStatus,
+  getActionErrorMessage,
+  getHealthBadgeColor,
+  getJudgmentsJobsQuery,
+  getStatusColor,
+  isHealthyBadge,
+  type JobHealthBadge,
+} from './jobsPageShared'
 
 const TokenUsageTimelineCardFallback = () => {
   return (
@@ -93,41 +34,7 @@ const TokenUsageTimelineCardFallback = () => {
   )
 }
 
-const judgmentsJobsQueryKey = ['judgments-jobs'] as const
 const tokenUsageQueryKey = ['total-token-usage'] as const
-
-type JudgmentsJobsData = Awaited<ReturnType<typeof fetchJudgmentsJobs>>
-
-const activeJudgmentsJobStatuses = new Set([
-  'not_started',
-  'running',
-  'waiting_on_db_connection',
-  'waiting_on_llm_connection',
-])
-
-const isActiveJudgmentsJobStatus = (status: string | null | undefined) => {
-  return activeJudgmentsJobStatuses.has(status ?? '')
-}
-
-const getJudgmentsJobsRefetchInterval = (jobs: JudgmentsJobsData | undefined) => {
-  return jobs?.some((job) => {
-    return isActiveJudgmentsJobStatus(job.status)
-  })
-    ? 30 * 1000
-    : 60 * 1000
-}
-
-const getJudgmentsJobsQuery = () => {
-  return {
-    queryKey: judgmentsJobsQueryKey,
-    queryFn: fetchJudgmentsJobs,
-    refetchInterval: (query: {state: {data?: unknown}}) => {
-      const jobs = Array.isArray(query.state.data) ? (query.state.data as JudgmentsJobsData) : undefined
-      return getJudgmentsJobsRefetchInterval(jobs)
-    },
-    refetchOnWindowFocus: true,
-  }
-}
 
 const getTokenUsageQuery = () => {
   return {queryKey: tokenUsageQueryKey, queryFn: getTotalTokenUsage, refetchInterval: 30000, refetchOnWindowFocus: true}
@@ -569,12 +476,20 @@ const AdminJobs = () => {
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
       <div class="flex justify-between items-center mb-6">
         <h1 class="text-2xl font-bold">Judgment Jobs</h1>
-        <Link
-          to="/admin/duckdb-append"
-          class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-100"
-        >
-          DuckDB Append Metrics
-        </Link>
+        <div class="flex items-center gap-3">
+          <a
+            href="/admin/jobs/health"
+            class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-900 shadow-sm hover:bg-amber-100"
+          >
+            Health Triage
+          </a>
+          <Link
+            to="/admin/duckdb-append"
+            class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-100"
+          >
+            DuckDB Append Metrics
+          </Link>
+        </div>
       </div>
 
       <div class="mb-6">

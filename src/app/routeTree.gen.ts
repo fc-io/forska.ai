@@ -28,6 +28,7 @@ import { Route as ProjectsIdEditRouteImport } from './routes/+projects/+$id/+edi
 import { Route as CompareJudgmentsIdEditRouteImport } from './routes/+compare-judgments/+$id/+edit'
 import { Route as ArticlesIdFulltextRouteImport } from './routes/+articles/+$id/+fulltext'
 import { Route as AdminPromptsDeduplicateRouteImport } from './routes/+admin/+prompts/+deduplicate'
+import { Route as AdminJobsHealthRouteImport } from './routes/+admin/+jobs/+health'
 import { Route as AdminDatasourcesStructuredFileImportRouteImport } from './routes/+admin/+datasources/+structured-file-import'
 import { Route as AdminDatasourcesCreateRouteImport } from './routes/+admin/+datasources/+create'
 import { Route as AdminDatasourcesCovidenceImportRouteImport } from './routes/+admin/+datasources/+covidence-import'
@@ -164,6 +165,11 @@ const ArticlesIdFulltextRoute = ArticlesIdFulltextRouteImport.update({
 const AdminPromptsDeduplicateRoute = AdminPromptsDeduplicateRouteImport.update({
   id: '/admin/prompts/deduplicate',
   path: '/admin/prompts/deduplicate',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminJobsHealthRoute = AdminJobsHealthRouteImport.update({
+  id: '/admin/jobs/health',
+  path: '/admin/jobs/health',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminDatasourcesStructuredFileImportRoute =
@@ -419,6 +425,7 @@ export interface FileRoutesByFullPath {
   '/admin/datasources/covidence-import': typeof AdminDatasourcesCovidenceImportRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/datasources/structured-file-import': typeof AdminDatasourcesStructuredFileImportRoute
+  '/admin/jobs/health': typeof AdminJobsHealthRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/articles/$id/fulltext': typeof ArticlesIdFulltextRoute
   '/compare-judgments/$id/edit': typeof CompareJudgmentsIdEditRoute
@@ -479,6 +486,7 @@ export interface FileRoutesByTo {
   '/admin/datasources/covidence-import': typeof AdminDatasourcesCovidenceImportRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/datasources/structured-file-import': typeof AdminDatasourcesStructuredFileImportRoute
+  '/admin/jobs/health': typeof AdminJobsHealthRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/articles/$id/fulltext': typeof ArticlesIdFulltextRoute
   '/compare-judgments/$id/edit': typeof CompareJudgmentsIdEditRoute
@@ -540,6 +548,7 @@ export interface FileRoutesById {
   '/admin/datasources/covidence-import': typeof AdminDatasourcesCovidenceImportRoute
   '/admin/datasources/create': typeof AdminDatasourcesCreateRoute
   '/admin/datasources/structured-file-import': typeof AdminDatasourcesStructuredFileImportRoute
+  '/admin/jobs/health': typeof AdminJobsHealthRoute
   '/admin/prompts/deduplicate': typeof AdminPromptsDeduplicateRoute
   '/articles/$id/fulltext': typeof ArticlesIdFulltextRoute
   '/compare-judgments/$id/edit': typeof CompareJudgmentsIdEditRoute
@@ -602,6 +611,7 @@ export interface FileRouteTypes {
     | '/admin/datasources/covidence-import'
     | '/admin/datasources/create'
     | '/admin/datasources/structured-file-import'
+    | '/admin/jobs/health'
     | '/admin/prompts/deduplicate'
     | '/articles/$id/fulltext'
     | '/compare-judgments/$id/edit'
@@ -662,6 +672,7 @@ export interface FileRouteTypes {
     | '/admin/datasources/covidence-import'
     | '/admin/datasources/create'
     | '/admin/datasources/structured-file-import'
+    | '/admin/jobs/health'
     | '/admin/prompts/deduplicate'
     | '/articles/$id/fulltext'
     | '/compare-judgments/$id/edit'
@@ -722,6 +733,7 @@ export interface FileRouteTypes {
     | '/admin/datasources/covidence-import'
     | '/admin/datasources/create'
     | '/admin/datasources/structured-file-import'
+    | '/admin/jobs/health'
     | '/admin/prompts/deduplicate'
     | '/articles/$id/fulltext'
     | '/compare-judgments/$id/edit'
@@ -783,6 +795,7 @@ export interface RootRouteChildren {
   AdminDatasourcesCovidenceImportRoute: typeof AdminDatasourcesCovidenceImportRoute
   AdminDatasourcesCreateRoute: typeof AdminDatasourcesCreateRoute
   AdminDatasourcesStructuredFileImportRoute: typeof AdminDatasourcesStructuredFileImportRoute
+  AdminJobsHealthRoute: typeof AdminJobsHealthRoute
   AdminPromptsDeduplicateRoute: typeof AdminPromptsDeduplicateRoute
   ArticlesIdFulltextRoute: typeof ArticlesIdFulltextRoute
   CompareJudgmentsIdEditRoute: typeof CompareJudgmentsIdEditRoute
@@ -941,6 +954,13 @@ declare module '@tanstack/solid-router' {
       path: '/admin/prompts/deduplicate'
       fullPath: '/admin/prompts/deduplicate'
       preLoaderRoute: typeof AdminPromptsDeduplicateRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/jobs/health': {
+      id: '/admin/jobs/health'
+      path: '/admin/jobs/health'
+      fullPath: '/admin/jobs/health'
+      preLoaderRoute: typeof AdminJobsHealthRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/datasources/structured-file-import': {
@@ -1257,6 +1277,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminDatasourcesCreateRoute: AdminDatasourcesCreateRoute,
   AdminDatasourcesStructuredFileImportRoute:
     AdminDatasourcesStructuredFileImportRoute,
+  AdminJobsHealthRoute: AdminJobsHealthRoute,
   AdminPromptsDeduplicateRoute: AdminPromptsDeduplicateRoute,
   ArticlesIdFulltextRoute: ArticlesIdFulltextRoute,
   CompareJudgmentsIdEditRoute: CompareJudgmentsIdEditRoute,

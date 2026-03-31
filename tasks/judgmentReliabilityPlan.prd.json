@@ -305,13 +305,14 @@
         "Browser verify `/admin/jobs/health`: filters work, risky jobs sort first, and repair actions produce visible state transitions"
       ],
       "priority": 12,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-003",
         "US-009",
         "US-010"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-013",
@@ -339,6 +340,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-03-31T11:22:47.770Z"
+    "updatedAt": "2026-03-31T11:32:46.787Z"
   }
 }
