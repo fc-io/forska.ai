@@ -1,6 +1,7 @@
 import {Elysia, t} from 'elysia'
 
 import {getUnassessedArticlesFromOlap, getUnassessedCountFromOlap} from '../../services/olap/unassessedArticlesOlap.ts'
+import {runJudgmentJobRepairAction} from '../cron/judgmentsJobs/judgmentJobRepair.ts'
 import {getDefaultJudgmentServerJobId} from '../cron/judgmentsJobs/judgmentJobServerIdentity.ts'
 import {flushJudgmentJobSqliteOutbox} from '../cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts'
 import {assertJudgmentJobCanRunSqlitePreflight} from '../cron/judgmentsJobs/judgmentJobSqlitePreflight.ts'
@@ -912,6 +913,60 @@ export const judgmentsJobsRoutes = new Elysia()
         error: t.Optional(t.Array(t.String())),
       }),
     },
+  )
+  .post(
+    '/api/judgmentsjobs/:id/preflight',
+    async ({params}) => {
+      return {data: await runJudgmentJobRepairAction({action: 'preflight', jobId: params.id}), error: null}
+    },
+    {params: t.Object({id: t.String()})},
+  )
+  .post(
+    '/api/judgmentsjobs/:id/drain',
+    async ({params, body}) => {
+      return {
+        data: await runJudgmentJobRepairAction({action: 'drain', claimedBy: body?.claimedBy, jobId: params.id}),
+        error: null,
+      }
+    },
+    {params: t.Object({id: t.String()}), body: t.Optional(t.Object({claimedBy: t.Optional(t.String())}))},
+  )
+  .post(
+    '/api/judgmentsjobs/:id/checkpoint',
+    async ({params, body}) => {
+      return {
+        data: await runJudgmentJobRepairAction({action: 'checkpoint', claimedBy: body?.claimedBy, jobId: params.id}),
+        error: null,
+      }
+    },
+    {params: t.Object({id: t.String()}), body: t.Optional(t.Object({claimedBy: t.Optional(t.String())}))},
+  )
+  .post(
+    '/api/judgmentsjobs/:id/quarantine',
+    async ({params, body}) => {
+      return {
+        data: await runJudgmentJobRepairAction({action: 'quarantine', jobId: params.id, reason: body?.reason}),
+        error: null,
+      }
+    },
+    {params: t.Object({id: t.String()}), body: t.Optional(t.Object({reason: t.Optional(t.String())}))},
+  )
+  .post(
+    '/api/judgmentsjobs/:id/unquarantine',
+    async ({params}) => {
+      return {data: await runJudgmentJobRepairAction({action: 'unquarantine', jobId: params.id}), error: null}
+    },
+    {params: t.Object({id: t.String()})},
+  )
+  .post(
+    '/api/judgmentsjobs/:id/repair',
+    async ({params, body}) => {
+      return {
+        data: await runJudgmentJobRepairAction({action: 'repair', claimedBy: body?.claimedBy, jobId: params.id}),
+        error: null,
+      }
+    },
+    {params: t.Object({id: t.String()}), body: t.Optional(t.Object({claimedBy: t.Optional(t.String())}))},
   )
   .delete(
     '/api/judgmentsjobs/:id',

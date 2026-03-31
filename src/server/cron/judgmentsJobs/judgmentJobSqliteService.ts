@@ -1900,6 +1900,18 @@ const sqliteService = {
   hasJob: (jobId: string) => {
     return existsSync(getJudgmentJobSqlitePath(jobId))
   },
+  checkpointWal: async ({jobId, serverJobId}: {jobId: string; serverJobId?: string}) => {
+    return (
+      (await withOwnedJobDatabase(
+        jobId,
+        false,
+        (database) => {
+          return runWalCheckpoint(database)
+        },
+        serverJobId,
+      )) ?? false
+    )
+  },
   runIsolatedPreflight: async (jobId: string): Promise<JudgmentJobSqlitePreflightSnapshot> => {
     return runIsolatedJudgmentJobSqlitePreflight(jobId)
   },

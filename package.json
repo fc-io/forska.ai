@@ -36,6 +36,7 @@
     "db:reindex-all": "bun scripts/dbReindexAll.ts",
     "db:repair-all-indexes": "bun scripts/dbRepairAllIndexes.ts",
     "db:judgment-job:sqlite-import": "bun scripts/runJudgmentJobSqliteSingleJobImport.ts",
+    "db:judgment-job:repair": "bun scripts/runJudgmentJobRepair.ts",
     "db:backfill-prompt-hash": "bun scripts/dbBackfillPromptHash.ts",
     "db:import:postgres-to-duckdb": "bun scripts/importPostgresToDuckdb.ts --clear",
     "db:import:postgres-to-duckdb:with-marts": "bun scripts/importPostgresToDuckdb.ts --clear --rebuild-marts",

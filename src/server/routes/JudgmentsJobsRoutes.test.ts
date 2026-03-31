@@ -890,6 +890,220 @@ test('judgment job health summary aggregates storage risk counts', async () => {
   })
 })
 
+test('repair action routes return structured preflight, quarantine, unquarantine, and checkpoint results', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const projectId = `repair-actions-project-${Date.now()}`
+  const modelId = `repair-actions-model-${Date.now()}`
+  const connectionId = `repair-actions-connection-${Date.now()}`
+  const jobId = `repair-actions-job-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'paused', 'active')
+  `)
+  await getJudgmentJobSqliteService().initializeJob(jobId)
+
+  const preflightResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/preflight`, {method: 'POST'}),
+  )
+  const preflightBody = (await preflightResponse.json()) as {
+    data: {action: string; jobId: string; ok: boolean; preflight: {sqliteFileBytes: number} | null}
+  }
+
+  expect(preflightResponse.status).toBe(200)
+  expect(preflightBody.data.action).toBe('preflight')
+  expect(preflightBody.data.jobId).toBe(jobId)
+  expect(preflightBody.data.ok).toBe(true)
+  expect(preflightBody.data.preflight?.sqliteFileBytes).toBeGreaterThan(0)
+
+  const quarantineResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/quarantine`, {
+      body: JSON.stringify({reason: 'operator quarantine'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const quarantineBody = (await quarantineResponse.json()) as {
+    data: {action: string; job: {quarantineReason: string | null; storageState: string}; ok: boolean}
+  }
+
+  expect(quarantineResponse.status).toBe(200)
+  expect(quarantineBody.data.action).toBe('quarantine')
+  expect(quarantineBody.data.ok).toBe(true)
+  expect(quarantineBody.data.job.storageState).toBe('quarantined')
+  expect(quarantineBody.data.job.quarantineReason).toBe('operator quarantine')
+
+  const unquarantineResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/unquarantine`, {method: 'POST'}),
+  )
+  const unquarantineBody = (await unquarantineResponse.json()) as {
+    data: {action: string; changes: {unquarantined: boolean}; job: {storageState: string}; ok: boolean}
+  }
+
+  expect(unquarantineResponse.status).toBe(200)
+  expect(unquarantineBody.data.action).toBe('unquarantine')
+  expect(unquarantineBody.data.ok).toBe(true)
+  expect(unquarantineBody.data.changes.unquarantined).toBe(true)
+  expect(unquarantineBody.data.job.storageState).toBe('active')
+
+  const checkpointResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/checkpoint`, {method: 'POST'}),
+  )
+  const checkpointBody = (await checkpointResponse.json()) as {
+    data: {action: string; changes: {checkpointed: boolean}; ok: boolean}
+  }
+
+  expect(checkpointResponse.status).toBe(200)
+  expect(checkpointBody.data.action).toBe('checkpoint')
+  expect(checkpointBody.data.ok).toBe(true)
+  expect(checkpointBody.data.changes.checkpointed).toBe(true)
+})
+
+test('repair route recreates missing sqlite state for one quarantined job', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `repair-route-project-${Date.now()}`
+  const modelId = `repair-route-model-${Date.now()}`
+  const connectionId = `repair-route-connection-${Date.now()}`
+  const jobId = `repair-route-job-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state, quarantined_at, quarantine_reason)
+    VALUES ('${jobId}', '${projectId}', 'failed', 'quarantined', current_timestamp, 'missing sqlite db')
+  `)
+
+  const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}/repair`, {method: 'POST'}))
+  const body = (await response.json()) as {
+    data: {
+      action: string
+      changes: {initializedSqlite: boolean; unquarantined: boolean}
+      job: {status: string; storageState: string}
+      ok: boolean
+      preflight: {sqliteFileBytes: number} | null
+    }
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.action).toBe('repair')
+  expect(body.data.ok).toBe(true)
+  expect(body.data.changes.initializedSqlite).toBe(true)
+  expect(body.data.changes.unquarantined).toBe(true)
+  expect(body.data.job.status).toBe('paused')
+  expect(body.data.job.storageState).toBe('active')
+  expect(body.data.preflight?.sqliteFileBytes).toBeGreaterThan(0)
+})
+
+test('drain route only acts on the requested job and can finalize a drained sqlite job', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const sqliteService = getJudgmentJobSqliteService()
+  const now = Date.now()
+  const firstProjectId = `drain-route-project-a-${now}`
+  const firstModelId = `drain-route-model-a-${now}`
+  const firstConnectionId = `drain-route-connection-a-${now}`
+  const firstJobId = `drain-route-job-a-${now}`
+  const secondProjectId = `drain-route-project-b-${now}`
+  const secondModelId = `drain-route-model-b-${now}`
+  const secondConnectionId = `drain-route-connection-b-${now}`
+  const secondJobId = `drain-route-job-b-${now}`
+
+  await insertProjectFixture({connectionId: firstConnectionId, modelId: firstModelId, projectId: firstProjectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${firstJobId}', '${firstProjectId}', 'completed', 'draining')
+  `)
+  await sqliteService.initializeJob(firstJobId)
+  await sqliteService.addReadyPrompts(
+    firstJobId,
+    [{articleId: `drain-route-article-a-${now}`, promptId: `drain-route-prompt-a-${now}`}],
+    'server-a',
+  )
+
+  const [claimedPrompt] = await sqliteService.claimReadyPrompts(firstJobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt for drain route test')
+  }
+
+  await sqliteService.recordJudgmentSuccess(firstJobId, {
+    answeredOriginal: 'yes',
+    answeredOriginalAsArray: ['yes'],
+    articleId: claimedPrompt.articleId,
+    chunkingStrategy: null,
+    confidenceOriginal: 80,
+    createdAt: new Date(),
+    explanation: 'drain route',
+    isAnswered: true,
+    judgmentId: `drain-route-judgment-a-${now}`,
+    modelId: firstModelId,
+    projectId: firstProjectId,
+    promptId: claimedPrompt.promptId,
+    queuePromptId: claimedPrompt.recordId,
+    quotes: ['quote'],
+    rawResponseJson: {answer: 'yes'},
+    snapshotProjectId: firstProjectId,
+    snapshotProjectModelName: 'Qwen 122B',
+    updatedAt: new Date(),
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
+
+  const claimedOutboxBatch = await sqliteService.claimPendingOutboxBatch({
+    claimedBy: 'server-a',
+    jobId: firstJobId,
+    maxBytes: 1024 * 1024,
+    maxRows: 10,
+  })
+
+  await sqliteService.completeOutboxClaim({claimId: claimedOutboxBatch?.claim.claimId ?? '', jobId: firstJobId})
+  await sqliteService.setLastProjectRefreshAckSeq(firstJobId, claimedOutboxBatch?.rows[0]?.outboxSeq ?? null)
+
+  await insertProjectFixture({connectionId: secondConnectionId, modelId: secondModelId, projectId: secondProjectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${secondJobId}', '${secondProjectId}', 'running', 'active')
+  `)
+  await sqliteService.initializeJob(secondJobId)
+  await sqliteService.addReadyPrompts(
+    secondJobId,
+    [{articleId: `drain-route-article-b-${now}`, promptId: `drain-route-prompt-b-${now}`}],
+    'server-a',
+  )
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${firstJobId}/drain`, {method: 'POST'}),
+  )
+  const body = (await response.json()) as {
+    data: {
+      action: string
+      changes: {finalizedDrain: boolean; prunedOutboxRows: number}
+      job: {storageState: string}
+      ok: boolean
+    }
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.action).toBe('drain')
+  expect(body.data.ok).toBe(true)
+  expect(body.data.changes.finalizedDrain).toBe(true)
+  expect(body.data.changes.prunedOutboxRows).toBe(1)
+  expect(body.data.job.storageState).toBe('drained')
+  expect(await sqliteService.getReadyCount(secondJobId)).toBe(1)
+})
+
 test('deleting an existing judgments job succeeds when prompts and token usage reference the job', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')
