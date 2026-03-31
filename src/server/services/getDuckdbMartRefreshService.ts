@@ -308,15 +308,18 @@ const getQueuedProjectTasksSql = () => {
   return `
     WITH queued_project_task AS (
       SELECT
-        id,
-        refresh_scope AS refreshScope,
-        project_id AS projectId,
-        article_id AS articleId,
-        created_at AS createdAt,
-        COALESCE(refresh_generation, 0) AS refreshGeneration
-      FROM app.mart_refresh_queue
-      WHERE completed_at IS NULL
-        AND refresh_scope = 'project'
+        queue.id,
+        queue.refresh_scope AS refreshScope,
+        queue.project_id AS projectId,
+        queue.article_id AS articleId,
+        queue.created_at AS createdAt,
+        COALESCE(queue.refresh_generation, 0) AS refreshGeneration
+      FROM app.mart_refresh_queue queue
+      INNER JOIN app.project project
+        ON project.id = queue.project_id
+       AND project.archived = FALSE
+      WHERE queue.completed_at IS NULL
+        AND queue.refresh_scope = 'project'
     ),
     project_scope_size AS (
       SELECT
@@ -1483,12 +1486,17 @@ const getQueuedProjectTasksForProject = async (projectId: string) => {
   `)
 }
 
-const getHasQueuedTasks = async () => {
+const getHasQueuedDrainableTasks = async () => {
   await ensureMartRefreshQueueSchema()
   const rows = await getAppDatabaseService().queryJson<{count: number}>(`
     SELECT COUNT(*) AS count
-    FROM app.mart_refresh_queue
-    WHERE completed_at IS NULL
+    FROM app.mart_refresh_queue queue
+    LEFT JOIN app.project project ON project.id = queue.project_id
+    WHERE queue.completed_at IS NULL
+      AND (
+        queue.refresh_scope = 'judgment_article'
+        OR (queue.refresh_scope = 'project' AND project.archived = FALSE)
+      )
   `)
 
   return Number(rows[0]?.count ?? 0) > 0
@@ -2512,7 +2520,7 @@ const processQueuedMartRefreshPass = async (): Promise<boolean> => {
     await refreshProjects(claimedQueuedProjectIds)
     await completeQueuedTasks(queuedProjectTasks)
 
-    const hasMoreQueuedTasks = await getHasQueuedTasks()
+    const hasMoreQueuedTasks = await getHasQueuedDrainableTasks()
 
     updateMartRefreshDebugSnapshot({
       lastHasMoreQueuedTasks: hasMoreQueuedTasks,
@@ -2634,7 +2642,7 @@ export const flushQueuedMartRefreshes = async (): Promise<void> => {
     martRefreshDrainPromise = null
     updateMartRefreshDebugSnapshot({drainPromiseActive: false})
 
-    if (await getHasQueuedTasks()) {
+    if (await getHasQueuedDrainableTasks()) {
       scheduleQueuedMartRefreshes()
     }
   })

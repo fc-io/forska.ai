@@ -431,7 +431,7 @@ test('mart refresh rebuilds large projects in article batches', () => {
   expect(result.queueActive).toBe(false)
 })
 
-test('mart refresh purges archived projects in row batches', () => {
+test('mart refresh recovers archived projects in row batches', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -596,7 +596,7 @@ test('mart refresh purges archived projects in row batches', () => {
 
         const martRefreshService = (await import(martRefreshServiceModulePath + '?project-archive-batch=' + Date.now())).getDuckdbMartRefreshService()
 
-        await martRefreshService.flush()
+        await martRefreshService.recoverQueuedArchivedProjectRefresh('project-archive-batch-test')
         console.log(JSON.stringify({events, queueActive}))
       `,
     ],
@@ -630,7 +630,7 @@ test('mart refresh purges archived projects in row batches', () => {
   expect(result.queueActive).toBe(false)
 })
 
-test('mart refresh splits non-serving archived purge batches after an index delete failure', () => {
+test('mart refresh recovery splits non-serving archived purge batches after an index delete failure', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -723,7 +723,7 @@ test('mart refresh splits non-serving archived purge batches after an index dele
         })
 
         const martRefreshService = (await import(martRefreshServiceModulePath + '?project-archive-split=' + Date.now())).getDuckdbMartRefreshService()
-        const result = await martRefreshService.flush().then(
+        const result = await martRefreshService.recoverQueuedArchivedProjectRefresh('project-archive-split-test').then(
           () => 'ok',
           (error) => error instanceof Error ? error.message : String(error),
         )
@@ -756,7 +756,7 @@ test('mart refresh splits non-serving archived purge batches after an index dele
   expect(result.queueActive).toBe(false)
 })
 
-test('mart refresh retries the same archived purge task after fatal invalidation without rollback or split retries', () => {
+test('mart refresh recovery retries the same archived purge task after fatal invalidation without rollback or split retries', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -862,11 +862,11 @@ test('mart refresh retries the same archived purge task after fatal invalidation
         })
 
         const martRefreshService = (await import(martRefreshServiceModulePath + '?project-archive-fatal=' + Date.now())).getDuckdbMartRefreshService()
-        const failureText = await martRefreshService.flush().then(
+        const failureText = await martRefreshService.recoverQueuedArchivedProjectRefresh('project-archive-fatal-test').then(
           () => 'ok',
           (error) => error instanceof Error ? error.message : String(error),
         )
-        const retryText = await martRefreshService.flush().then(
+        const retryText = await martRefreshService.recoverQueuedArchivedProjectRefresh('project-archive-fatal-test').then(
           () => 'ok',
           (error) => error instanceof Error ? error.message : String(error),
         )
@@ -916,7 +916,7 @@ test('mart refresh retries the same archived purge task after fatal invalidation
   expect(result.queueActive).toBe(false)
 })
 
-test('mart refresh completes archived purge without retrying the serving row delete path', () => {
+test('mart refresh recovery completes archived purge without retrying the serving row delete path', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -995,7 +995,7 @@ test('mart refresh completes archived purge without retrying the serving row del
         })
 
         const martRefreshService = (await import(martRefreshServiceModulePath + '?rewrite-serving=' + Date.now())).getDuckdbMartRefreshService()
-        const result = await martRefreshService.flush().then(
+        const result = await martRefreshService.recoverQueuedArchivedProjectRefresh('project-archive-single-row-test').then(
           () => 'ok',
           (error) => error instanceof Error ? error.message : String(error),
         )
@@ -1056,7 +1056,7 @@ test('mart refresh completes archived purge without retrying the serving row del
   expect(result.queueActive).toBe(false)
 })
 
-test('mart refresh does not attempt rollback after archived serving rewrite commit failure', () => {
+test('mart refresh recovery does not attempt rollback after archived serving rewrite commit failure', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -1132,7 +1132,7 @@ test('mart refresh does not attempt rollback after archived serving rewrite comm
         })
 
         const martRefreshService = (await import(martRefreshServiceModulePath + '?rewrite-commit-failure=' + Date.now())).getDuckdbMartRefreshService()
-        const failureText = await martRefreshService.flush().then(
+        const failureText = await martRefreshService.recoverQueuedArchivedProjectRefresh('project-archive-commit-memory-test').then(
           () => 'ok',
           (error) => error instanceof Error ? error.message : String(error),
         )
@@ -1252,6 +1252,115 @@ test('mart refresh task query orders by epoch(created_at) to avoid empty oldest-
   expect(martRefreshService.getQueuedProjectTasksSqlForTests()).toContain(
     'ORDER BY COALESCE(project_scope_size.scopeCount, 0) ASC',
   )
+  expect(martRefreshService.getQueuedProjectTasksSqlForTests()).toContain('project.archived = FALSE')
+})
+
+test('mart refresh flush keeps article draining moving past archived project cleanup backlog', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        let articleQueueActive = true
+        let projectRefreshAttempted = false
+        let archivedProjectTaskStillQueued = true
+        const events = []
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                queryJson: async (statement) => {
+                  return statement.includes("column_name = 'refresh_generation'")
+                    ? [{count: 1}]
+                    : statement.includes("column_name = 'completed_at'")
+                      ? [{count: 1}]
+                      : statement.includes('SELECT COUNT(*) AS count')
+                        ? [{count: articleQueueActive ? 1 : 0}]
+                        : statement.includes("refresh_scope = 'judgment_article'")
+                          ? articleQueueActive
+                            ? [{
+                                articleId: 'article-drain-test',
+                                id: 'article-drain-task',
+                                projectId: null,
+                                refreshGeneration: 0,
+                                refreshScope: 'judgment_article',
+                              }]
+                            : []
+                          : statement.includes("refresh_scope = 'project'")
+                            ? statement.includes('project.archived = FALSE')
+                              ? []
+                              : archivedProjectTaskStillQueued
+                                ? [{
+                                    articleId: null,
+                                    id: 'project-archive-task',
+                                    projectId: 'project-archive-test',
+                                    refreshGeneration: 0,
+                                    refreshScope: 'project',
+                                  }]
+                                : []
+                            : []
+                },
+                queryJsonBackground: async (statement) => {
+                  if (statement.includes('SELECT archived AS archived')) {
+                    projectRefreshAttempted = true
+                    return [{archived: true}]
+                  }
+
+                  return []
+                },
+                run: async (statement) => {
+                  if (statement.includes("WHERE id = 'article-drain-task'")) {
+                    articleQueueActive = false
+                  }
+
+                  if (statement.includes("WHERE id = 'project-archive-task'")) {
+                    archivedProjectTaskStillQueued = false
+                  }
+                },
+                maintenance: async () => {},
+                runBackground: async (statement) => {
+                  if (statement.includes("'article-drain-test'")) {
+                    events.push('article:refreshed')
+                  }
+                },
+              }
+            },
+          }
+        })
+
+        const martRefreshService = (await import(martRefreshServiceModulePath + '?archived-backlog=' + Date.now())).getDuckdbMartRefreshService()
+
+        await martRefreshService.flush()
+        console.log(JSON.stringify({archivedProjectTaskStillQueued, articleQueueActive, events, projectRefreshAttempted}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Mart refresh archived backlog regression test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    archivedProjectTaskStillQueued: boolean
+    articleQueueActive: boolean
+    events: string[]
+    projectRefreshAttempted: boolean
+  }
+
+  expect(result.articleQueueActive).toBe(false)
+  expect(result.archivedProjectTaskStillQueued).toBe(true)
+  expect(result.projectRefreshAttempted).toBe(false)
+  expect(result.events).toContain('article:refreshed')
 })
 
 test('mart refresh prioritizes smaller queued project rebuilds ahead of larger ones', () => {
