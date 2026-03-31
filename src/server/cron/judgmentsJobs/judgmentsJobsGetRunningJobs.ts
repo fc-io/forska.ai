@@ -54,6 +54,7 @@ const getRunningJobsFromDatabase = async (): Promise<RunningJudgmentJob[]> => {
     INNER JOIN app.model m ON p.model_id = m.id
     LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     WHERE jj.status = 'running'
+      AND jj.storage_state = 'active'
       AND p.archived = FALSE
       AND COALESCE(m.enabled, TRUE) = TRUE
       AND COALESCE(pc.enabled, TRUE) = TRUE

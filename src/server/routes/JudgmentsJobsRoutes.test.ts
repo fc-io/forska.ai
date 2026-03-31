@@ -1,6 +1,6 @@
 import {afterAll, afterEach, beforeAll, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
-import {rmSync, writeFileSync} from 'fs'
+import {existsSync, rmSync, writeFileSync} from 'fs'
 import {dirname, join} from 'path'
 
 import {HttpError} from '../utils/httpError.ts'
@@ -268,6 +268,36 @@ test('starting a quarantined judgments job returns an actionable error', async (
   expect(body).toContain('Repair or recreate the local SQLite job DB before starting or resuming it.')
 })
 
+test('starting a draining judgments job returns an actionable error', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `draining-start-project-${Date.now()}`
+  const modelId = `draining-start-model-${Date.now()}`
+  const connectionId = `draining-start-connection-${Date.now()}`
+  const jobId = `draining-start-job-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state, pause_requested_at)
+    VALUES ('${jobId}', '${projectId}', 'paused', 'draining', current_timestamp)
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}`, {
+      body: JSON.stringify({status: 'running'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = await response.text()
+
+  expect(response.status).toBe(409)
+  expect(body).toContain(`Job ${jobId} is draining.`)
+  expect(body).toContain('Wait for the local SQLite judgments to finish exporting before starting or resuming it.')
+})
+
 test('starting a job with a failing SQLite preflight quarantines it without starting', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')
@@ -352,6 +382,51 @@ test('pausing an existing judgments job succeeds when queued prompts reference t
 
   expect(response.status).toBe(200)
   expect(body).toContain('paused')
+})
+
+test('pausing a judgments job marks it draining, clears ready queue state, and releases the SQLite lease', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getJudgmentJobLeasePath} = await import('../cron/judgmentsJobs/judgmentJobPaths.ts')
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const sqliteService = getJudgmentJobSqliteService()
+  const projectId = `pause-drain-project-${Date.now()}`
+  const modelId = `pause-drain-model-${Date.now()}`
+  const connectionId = `pause-drain-connection-${Date.now()}`
+  const jobId = `pause-drain-job-${Date.now()}`
+  const articleId = `pause-drain-article-${Date.now()}`
+  const promptId = `pause-drain-prompt-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'running', 'active')
+  `)
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
+  await sqliteService.ensureOwnedLease(jobId, 'server-a')
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}`, {
+      body: JSON.stringify({status: 'paused'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {
+    data: {pauseRequestedAt: string | null; status: string; storageState: string}
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.status).toBe('paused')
+  expect(body.data.storageState).toBe('draining')
+  expect(body.data.pauseRequestedAt).not.toBeNull()
+  expect(await sqliteService.getReadyCount(jobId)).toBe(0)
+  expect(sqliteService.hasOwnedLease(jobId)).toBe(false)
+  expect(await sqliteService.getInFlightCount(jobId)).toBe(0)
+  expect(existsSync(getJudgmentJobLeasePath(jobId))).toBe(false)
 })
 
 test('judgment job routes expose storage health fields', async () => {

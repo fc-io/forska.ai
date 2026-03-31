@@ -17,6 +17,10 @@ const getQuarantinedJobErrorMessage = ({jobId, reason}: {jobId: string; reason: 
   return `Job ${jobId} is quarantined.${suffix} Repair or recreate the local SQLite job DB before starting or resuming it.`
 }
 
+const getDrainingJobErrorMessage = (jobId: string) => {
+  return `Job ${jobId} is draining. Wait for the local SQLite judgments to finish exporting before starting or resuming it.`
+}
+
 const quarantineJobForPreflightFailure = async ({errorMessage, jobId}: {errorMessage: string; jobId: string}) => {
   await getAppDatabaseService().run(`
     UPDATE app.judgment_job
@@ -78,6 +82,10 @@ export const assertJudgmentJobCanRunSqlitePreflight = async ({
 }) => {
   if (storageState === 'quarantined') {
     throw new HttpError(409, getQuarantinedJobErrorMessage({jobId, reason: quarantineReason}))
+  }
+
+  if (storageState === 'draining') {
+    throw new HttpError(409, getDrainingJobErrorMessage(jobId))
   }
 
   const sqliteService = getJudgmentJobSqliteService()

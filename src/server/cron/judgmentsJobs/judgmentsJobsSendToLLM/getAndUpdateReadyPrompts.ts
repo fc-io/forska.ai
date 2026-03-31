@@ -1,5 +1,7 @@
 import {getProviderConnectionConfigFromJson} from '../../../providers/providerDbUtils.ts'
 import {resolveProviderConnectionRuntimeMatch} from '../../../providers/providerRuntimeMatchResolver.ts'
+import {getAppDatabaseService} from '../../../services/appDatabaseService.ts'
+import {getSqlLiteral} from '../../../services/appQueryHelpers.ts'
 import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from '../judgmentJobSqliteService.ts'
 
 export type PromptToProcess = {
@@ -40,6 +42,19 @@ const getCodexPlaceholderBaseUrl = (): string => {
   return 'codex://app-server'
 }
 
+const isJobReadyToClaimPrompts = async (jobId: string): Promise<boolean> => {
+  const [job] = await getAppDatabaseService().queryJson<{id: string}>(`
+    SELECT id
+    FROM app.judgment_job
+    WHERE id = ${getSqlLiteral(jobId)}
+      AND status = 'running'
+      AND storage_state = 'active'
+    LIMIT 1
+  `)
+
+  return Boolean(job)
+}
+
 const getModelRuntime = async ({
   baseURL,
   modelName,
@@ -78,6 +93,10 @@ const getModelRuntime = async ({
 
 const getSqliteReadyRows = async (serverJobId: string, jobId: string, limit: number): Promise<PromptToProcess[]> => {
   const sqliteService = getJudgmentJobSqliteService()
+
+  if (!(await isJobReadyToClaimPrompts(jobId))) {
+    return []
+  }
 
   try {
     await sqliteService.ensureOwnedLease(jobId, serverJobId)

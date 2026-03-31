@@ -388,6 +388,14 @@ const getJudgmentJobMutationState = async (
   return job ?? null
 }
 
+const getJudgmentJobMutationStorageAssignments = (status?: string) => {
+  return status === 'paused'
+    ? "storage_state = 'draining', pause_requested_at = current_timestamp"
+    : status === 'running'
+      ? "storage_state = 'active', pause_requested_at = NULL"
+      : null
+}
+
 export const judgmentsJobsRoutes = new Elysia()
   .use(withErrorHandler())
   .post(
@@ -841,10 +849,12 @@ export const judgmentsJobsRoutes = new Elysia()
       }
 
       const updatedJob = (await getAppDatabaseService().transaction(async (tx) => {
+        const storageAssignments = getJudgmentJobMutationStorageAssignments(body.status)
         await tx.run(`
           UPDATE app.judgment_job
           SET status = ${getSqlLiteral(body.status)},
               error = ${getSqlLiteral(body.error ?? null)},
+              ${storageAssignments ? `${storageAssignments},` : ''}
               updated_at = current_timestamp
           WHERE id = '${escapeSqlString(params.id)}'
         `)
