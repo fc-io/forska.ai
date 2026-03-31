@@ -19,10 +19,10 @@ type OpenAIChatCompletionRequest = {
   top_p?: number
 }
 
-const qwen35ModelPattern = /^Qwen\/Qwen3\.5-/
+const qwen35ModelPattern = /(?:^|\/)qwen3\.5-/i
 
 export const isQwen35Model = (modelName: string): boolean => {
-  return qwen35ModelPattern.test(modelName)
+  return qwen35ModelPattern.test(modelName.trim())
 }
 
 const getQwen35SamplingConfig = (): Pick<

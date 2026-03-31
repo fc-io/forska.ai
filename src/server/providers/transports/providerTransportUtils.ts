@@ -78,22 +78,15 @@ export const getOpenAIClient = ({apiKey, baseURL}: {apiKey: string | null; baseU
 
 export const getOpenAIMessageText = (message: ChatCompletionMessage): string => {
   const parts = Array.isArray(message.content) ? (message.content as Array<{text?: unknown}>) : []
-  const textContent =
-    typeof message.content === 'string'
-      ? message.content
-      : parts.length > 0
-        ? parts
-            .map((part) => {
-              return typeof part.text === 'string' ? part.text : ''
-            })
-            .join('\n')
-        : ''
-  const reasoningContent =
-    typeof (message as {reasoning_content?: unknown}).reasoning_content === 'string'
-      ? ((message as {reasoning_content?: string}).reasoning_content ?? '')
+  return typeof message.content === 'string'
+    ? message.content
+    : parts.length > 0
+      ? parts
+          .map((part) => {
+            return typeof part.text === 'string' ? part.text : ''
+          })
+          .join('\n')
       : ''
-
-  return textContent || reasoningContent || ''
 }
 
 export const getOpenAICompatibleUsage = (
