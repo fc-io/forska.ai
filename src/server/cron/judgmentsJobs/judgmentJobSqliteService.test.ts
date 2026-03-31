@@ -16,6 +16,7 @@ process.env.RUN_SERVER_JUDGING = 'false'
 process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 
 let closeDatabase: (() => Promise<void>) | null = null
+let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 let sqliteService: Awaited<typeof import('./judgmentJobSqliteService.ts')>['getJudgmentJobSqliteService'] | null = null
 
@@ -69,6 +70,9 @@ beforeAll(async () => {
 
   closeDatabase = () => {
     return database.close()
+  }
+  queryDatabase = <T>(statement: string) => {
+    return database.queryJson<T>(statement)
   }
   runDatabase = (statement: string) => {
     return database.run(statement)
@@ -1151,8 +1155,8 @@ test('keeps skipped and unacked prompt rows during visibility-acked retention cl
   expect(await service.getOutboxCount(jobId)).toBe(1)
 })
 
-test('deletes drained completed SQLite jobs after visibility cleanup finishes', async () => {
-  if (!runDatabase || !sqliteService) {
+test('transitions draining SQLite jobs to drained only after retention cleanup and checkpointing finish', async () => {
+  if (!queryDatabase || !runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')
   }
 
@@ -1175,8 +1179,8 @@ test('deletes drained completed SQLite jobs after visibility cleanup finishes', 
     VALUES ('${projectId}', 'SQLite Drained Delete Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
   `)
   await runDatabase(`
-    INSERT INTO app.judgment_job (id, project_id, status)
-    VALUES ('${jobId}', '${projectId}', 'completed')
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'completed', 'draining')
   `)
 
   await service.initializeJob(jobId)
@@ -1233,8 +1237,26 @@ test('deletes drained completed SQLite jobs after visibility cleanup finishes', 
 
   await service.completeOutboxClaim({claimId: claimedOutboxBatch?.claim.claimId ?? '', jobId})
   await service.setLastProjectRefreshAckSeq(jobId, ackedOutboxSeq)
+
+  expect(await service.finalizeDrainingJobs({jobId})).toEqual([])
+  expect(
+    await queryDatabase<{storageState: string}>(`
+      SELECT storage_state AS storageState
+      FROM app.judgment_job
+      WHERE id = '${jobId}'
+    `),
+  ).toEqual([{storageState: 'draining'}])
+
   await service.pruneVisibilityAckedRetention({jobId, maxRows: 10})
 
+  expect(await service.finalizeDrainingJobs({jobId})).toEqual([jobId])
+  expect(
+    await queryDatabase<{storageState: string}>(`
+      SELECT storage_state AS storageState
+      FROM app.judgment_job
+      WHERE id = '${jobId}'
+    `),
+  ).toEqual([{storageState: 'drained'}])
   expect(existsSync(getJudgmentJobSqlitePath(jobId))).toBe(true)
   expect(existsSync(getJudgmentJobLeasePath(jobId))).toBe(true)
   expect(await service.deleteDrainedJobs({jobId})).toEqual([jobId])
@@ -1242,8 +1264,8 @@ test('deletes drained completed SQLite jobs after visibility cleanup finishes', 
   expect(existsSync(getJudgmentJobLeasePath(jobId))).toBe(false)
 })
 
-test('keeps completed SQLite jobs on disk while visibility-gated outbox data remains', async () => {
-  if (!runDatabase || !sqliteService) {
+test('retained outbox rows keep draining SQLite jobs out of drained state', async () => {
+  if (!queryDatabase || !runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')
   }
 
@@ -1266,8 +1288,8 @@ test('keeps completed SQLite jobs on disk while visibility-gated outbox data rem
     VALUES ('${projectId}', 'SQLite Drained Keep Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
   `)
   await runDatabase(`
-    INSERT INTO app.judgment_job (id, project_id, status)
-    VALUES ('${jobId}', '${projectId}', 'completed')
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'completed', 'draining')
   `)
 
   await service.initializeJob(jobId)
@@ -1314,12 +1336,20 @@ test('keeps completed SQLite jobs on disk while visibility-gated outbox data rem
   })
 
   expect(await service.getOutboxCount(jobId)).toBe(1)
+  expect(await service.finalizeDrainingJobs({jobId})).toEqual([])
+  expect(
+    await queryDatabase<{storageState: string}>(`
+      SELECT storage_state AS storageState
+      FROM app.judgment_job
+      WHERE id = '${jobId}'
+    `),
+  ).toEqual([{storageState: 'draining'}])
   expect(await service.deleteDrainedJobs({jobId})).toEqual([])
   expect(existsSync(getJudgmentJobSqlitePath(jobId))).toBe(true)
 })
 
-test('keeps completed SQLite jobs on disk until export, visibility ack, and retention cleanup all drain', async () => {
-  if (!runDatabase || !sqliteService) {
+test('deletes drained SQLite job files deterministically only after draining finalizes', async () => {
+  if (!queryDatabase || !runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')
   }
 
@@ -1342,8 +1372,8 @@ test('keeps completed SQLite jobs on disk until export, visibility ack, and rete
     VALUES ('${projectId}', 'SQLite Drain Lifecycle Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
   `)
   await runDatabase(`
-    INSERT INTO app.judgment_job (id, project_id, status)
-    VALUES ('${jobId}', '${projectId}', 'completed')
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'completed', 'draining')
   `)
 
   await service.initializeJob(jobId)
@@ -1388,6 +1418,7 @@ test('keeps completed SQLite jobs on disk until export, visibility ack, and rete
 
   expect(await service.getOutboxCount(jobId)).toBe(1)
   expect(await service.hasLocalJudgment(jobId, claimedPrompt.articleId, claimedPrompt.promptId)).toBe(true)
+  expect(await service.finalizeDrainingJobs({jobId})).toEqual([])
   expect(await service.deleteDrainedJobs({jobId})).toEqual([])
   expect(existsSync(sqlitePath)).toBe(true)
   expect(existsSync(leasePath)).toBe(true)
@@ -1403,6 +1434,7 @@ test('keeps completed SQLite jobs on disk until export, visibility ack, and rete
   await service.completeOutboxClaim({claimId: claimedOutboxBatch?.claim.claimId ?? '', jobId})
 
   expect(await service.getOutboxCount(jobId)).toBe(1)
+  expect(await service.finalizeDrainingJobs({jobId})).toEqual([])
   expect(await service.deleteDrainedJobs({jobId})).toEqual([])
   expect(existsSync(sqlitePath)).toBe(true)
   expect(existsSync(leasePath)).toBe(true)
@@ -1411,6 +1443,7 @@ test('keeps completed SQLite jobs on disk until export, visibility ack, and rete
 
   expect(await service.getOutboxCount(jobId)).toBe(1)
   expect(await service.hasLocalJudgment(jobId, claimedPrompt.articleId, claimedPrompt.promptId)).toBe(true)
+  expect(await service.finalizeDrainingJobs({jobId})).toEqual([])
   expect(await service.deleteDrainedJobs({jobId})).toEqual([])
   expect(existsSync(sqlitePath)).toBe(true)
   expect(existsSync(leasePath)).toBe(true)
@@ -1421,6 +1454,14 @@ test('keeps completed SQLite jobs on disk until export, visibility ack, and rete
   })
   expect(await service.getOutboxCount(jobId)).toBe(0)
   expect(await service.hasLocalJudgment(jobId, claimedPrompt.articleId, claimedPrompt.promptId)).toBe(false)
+  expect(await service.finalizeDrainingJobs({jobId})).toEqual([jobId])
+  expect(
+    await queryDatabase<{storageState: string}>(`
+      SELECT storage_state AS storageState
+      FROM app.judgment_job
+      WHERE id = '${jobId}'
+    `),
+  ).toEqual([{storageState: 'drained'}])
   expect(await service.deleteDrainedJobs({jobId})).toEqual([jobId])
   expect(existsSync(sqlitePath)).toBe(false)
   expect(existsSync(leasePath)).toBe(false)

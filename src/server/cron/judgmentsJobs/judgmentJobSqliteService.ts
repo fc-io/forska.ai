@@ -4,7 +4,7 @@ import {existsSync, rmSync, statSync} from 'node:fs'
 import {Database} from 'bun:sqlite'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {escapeSqlString, getDateValue, getQuotedStringList} from '../../services/appQueryHelpers.ts'
+import {escapeSqlString, getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {registerWriterDemotionHandler} from '../../utils/serverRuntimeRole.ts'
 import {
@@ -210,7 +210,9 @@ type RetentionEligibleOutboxRow = {outboxSeq: number; queuePromptId: string}
 
 type RetentionPruneResult = {outboxRowsDeleted: number; queuePromptRowsDeleted: number}
 
-type JudgmentJobStatusRow = {id: string}
+type JudgmentJobStorageRow = {id: string}
+
+type WalCheckpointRow = {busy: number; checkpointed: number; log: number}
 
 const openDatabases = new Map<string, Database>()
 const ownedJobLeases = new Map<string, JudgmentJobLease>()
@@ -644,18 +646,25 @@ const deleteJobFiles = (jobId: string) => {
   rmSync(getJudgmentJobLeasePath(jobId), {force: true})
 }
 
-const getDrainedSqliteCleanupCandidateJobIds = async (jobId?: string) => {
+const getSqliteCleanupCandidateJobIds = async ({
+  jobId,
+  storageState,
+}: {
+  jobId?: string
+  storageState: 'drained' | 'draining'
+}) => {
   const existingJobIds = await getTrackedJudgmentJobIds(jobId)
 
   return existingJobIds.length === 0
     ? []
     : (
-        await getAppDatabaseService().queryJson<JudgmentJobStatusRow>(`
-          SELECT id
-          FROM app.judgment_job
-          WHERE id IN (${getQuotedStringList(existingJobIds).join(', ')})
-            AND status IN (${getQuotedStringList([...sqliteCleanupTerminalStatuses]).join(', ')})
-        `)
+        await getAppDatabaseService().queryJson<JudgmentJobStorageRow>(`
+           SELECT id
+           FROM app.judgment_job
+           WHERE id IN (${getQuotedStringList(existingJobIds).join(', ')})
+             AND status IN (${getQuotedStringList([...sqliteCleanupTerminalStatuses]).join(', ')})
+             AND storage_state = ${getSqlLiteral(storageState)}
+         `)
       ).map((row) => {
         return row.id
       })
@@ -878,6 +887,67 @@ const isDrainedSqliteJob = (database: Database, _jobId: string) => {
   return getActiveQueueRowCount(database) === 0 && getRetainedOutboxCount(database) === 0
 }
 
+const runWalCheckpoint = (database: Database) => {
+  const row = database.query(`PRAGMA wal_checkpoint(TRUNCATE)`).get() as WalCheckpointRow | null
+
+  return Number(row?.busy ?? 1) === 0
+}
+
+const markJudgmentJobStorageState = async ({
+  fromStorageState,
+  jobId,
+  toStorageState,
+}: {
+  fromStorageState: string
+  jobId: string
+  toStorageState: string
+}) => {
+  await getAppDatabaseService().run(`
+    UPDATE app.judgment_job
+    SET storage_state = ${getSqlLiteral(toStorageState)},
+        updated_at = current_timestamp
+    WHERE id = ${getSqlLiteral(jobId)}
+      AND storage_state = ${getSqlLiteral(fromStorageState)}
+  `)
+}
+
+const finalizeDrainingSqliteJobs = async ({
+  jobIds,
+  serverJobId,
+}: {
+  jobIds: string[]
+  serverJobId?: string
+}): Promise<string[]> => {
+  const [currentJobId = ''] = jobIds
+
+  if (!currentJobId) {
+    return []
+  }
+
+  try {
+    const shouldMarkDrained = await withOwnedJobDatabase(
+      currentJobId,
+      false,
+      (database) => {
+        return isDrainedSqliteJob(database, currentJobId) && runWalCheckpoint(database)
+      },
+      serverJobId,
+    )
+
+    if (!shouldMarkDrained) {
+      return finalizeDrainingSqliteJobs({jobIds: jobIds.slice(1), serverJobId})
+    }
+
+    await markJudgmentJobStorageState({fromStorageState: 'draining', jobId: currentJobId, toStorageState: 'drained'})
+
+    return [currentJobId, ...(await finalizeDrainingSqliteJobs({jobIds: jobIds.slice(1), serverJobId}))]
+  } catch (error) {
+    return error instanceof JudgmentJobLeaseError
+      ? finalizeDrainingSqliteJobs({jobIds: jobIds.slice(1), serverJobId})
+      : Promise.reject(error)
+  }
+}
+
 const deleteDrainedSqliteJobs = async ({
   jobIds,
   serverJobId,
@@ -896,7 +966,7 @@ const deleteDrainedSqliteJobs = async ({
       currentJobId,
       false,
       (database) => {
-        return isDrainedSqliteJob(database, currentJobId)
+        return isDrainedSqliteJob(database, currentJobId) && runWalCheckpoint(database)
       },
       serverJobId,
     )
@@ -1605,7 +1675,16 @@ const sqliteService = {
     deleteJobFiles(jobId)
   },
   deleteDrainedJobs: async ({jobId, serverJobId}: {jobId?: string; serverJobId?: string} = {}) => {
-    return deleteDrainedSqliteJobs({jobIds: await getDrainedSqliteCleanupCandidateJobIds(jobId), serverJobId})
+    return deleteDrainedSqliteJobs({
+      jobIds: await getSqliteCleanupCandidateJobIds({jobId, storageState: 'drained'}),
+      serverJobId,
+    })
+  },
+  finalizeDrainingJobs: async ({jobId, serverJobId}: {jobId?: string; serverJobId?: string} = {}) => {
+    return finalizeDrainingSqliteJobs({
+      jobIds: await getSqliteCleanupCandidateJobIds({jobId, storageState: 'draining'}),
+      serverJobId,
+    })
   },
   getInFlightCount: async (jobId: string): Promise<number> => {
     return (
