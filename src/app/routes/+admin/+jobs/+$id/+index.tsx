@@ -10,6 +10,7 @@ import {
   deleteJudgmentsJob,
   getJudgmentsJobById,
   pauseJudgmentsJob,
+  runJudgmentsJobRepairAction,
   startJudgmentsJob,
 } from '../../../../../services/judgmentsJobsService'
 import {fetchProjectWithPrompts} from '../../../../../services/projectsService'
@@ -57,6 +58,28 @@ const formatStatus = (status: string | null) => {
     .join(' ')
 }
 
+const formatDateTime = (value: string | null | undefined) => {
+  return value ? formatDate(new Date(value), 'yyyy-MM-dd HH:mm:ss') : 'N/A'
+}
+
+const formatByteSize = (value: number | null | undefined) => {
+  if (value === null || value === undefined) return 'N/A'
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
+  if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`
+  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`
+}
+
+const formatDuration = (value: number | null | undefined) => {
+  if (value === null || value === undefined) return 'N/A'
+  const totalSeconds = Math.max(Math.floor(value / 1000), 0)
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+
+  return hours > 0 ? `${hours}h ${minutes}m ${seconds}s` : minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return Boolean(value && typeof value === 'object')
 }
@@ -83,9 +106,21 @@ type JobData = {
   totalTokenUsage?: {totalTokens?: number; totalPromptTokens?: number; totalCompletionTokens?: number}
   promptStats?: {ready?: number; sent?: number; judged?: number; skipped?: number}
   requestStats?: {inFlight?: number; attempts?: number}
+  storageHealth?: {
+    claimedOutboxCount?: number
+    lastAckSeq?: number | null
+    oldestUnexportedAgeMs?: number | null
+    outboxRowCount?: number
+    promptCounts?: {judged?: number; ready?: number; sent?: number; skipped?: number}
+    retainedRowCount?: number
+    sqliteFileBytes?: number | null
+    walBytes?: number
+  }
   judgingRuntime?: {enabled?: boolean; reason?: string | null}
   error?: string[]
 }
+
+type JobRepairAction = 'checkpoint' | 'drain' | 'preflight' | 'quarantine' | 'repair' | 'unquarantine'
 
 const shouldShowFulltextSkippedFromJob = (job: unknown) => {
   return isRecord(job) ? Boolean(job.useFulltext || job.useFulltextNoImages) : false
@@ -117,7 +152,9 @@ const AdminJudgmentJobDetail = () => {
   const navigate = useNavigate()
   const [isDeleting, setIsDeleting] = createSignal(false)
   const [isStarting, setIsStarting] = createSignal(false)
+  const [isRepairing, setIsRepairing] = createSignal<JobRepairAction | null>(null)
   const [actionError, setActionError] = createSignal('')
+  const [actionNotice, setActionNotice] = createSignal('')
 
   const id = () => {
     return params().id
@@ -177,6 +214,7 @@ const AdminJudgmentJobDetail = () => {
   })
   const handleStartJob = async (jobId: string) => {
     setActionError('')
+    setActionNotice('')
     setIsStarting(true)
 
     try {
@@ -186,6 +224,29 @@ const AdminJudgmentJobDetail = () => {
       setActionError(getActionErrorMessage(error, 'Failed to start job'))
     } finally {
       setIsStarting(false)
+    }
+  }
+  const handleRepairAction = async ({
+    action,
+    jobId,
+    reason,
+  }: {
+    action: JobRepairAction
+    jobId: string
+    reason?: string
+  }) => {
+    setActionError('')
+    setActionNotice('')
+    setIsRepairing(action)
+
+    try {
+      const result = await runJudgmentsJobRepairAction({action, jobId, reason})
+      await job.refetch()
+      setActionNotice(result.message)
+    } catch (error) {
+      setActionError(getActionErrorMessage(error, `Failed to ${action} local storage`))
+    } finally {
+      setIsRepairing(null)
     }
   }
   // console.log('job.data:', job.data?.unassessedArticlesCount)
@@ -251,6 +312,27 @@ const AdminJudgmentJobDetail = () => {
             }
             const shouldShowFulltextSkipped = () => {
               return shouldShowFulltextSkippedFromJob(data())
+            }
+            const storageHealth = () => {
+              return data()?.storageHealth
+            }
+            const resumeBlockedReason = () => {
+              return data()?.storageState === 'draining'
+                ? 'Resume is blocked while local storage is draining. Wait for drain cleanup to finish or run a targeted repair action.'
+                : data()?.storageState === 'quarantined'
+                  ? 'Resume is blocked while local storage is quarantined. Repair or unquarantine the local storage first.'
+                  : null
+            }
+            const isResumeBlocked = () => {
+              return Boolean(resumeBlockedReason())
+            }
+            const repairButtons = () => {
+              return [
+                {action: 'preflight', label: 'Run Preflight'},
+                {action: 'checkpoint', label: 'Checkpoint WAL'},
+                {action: 'drain', label: 'Drain Storage'},
+                {action: 'repair', label: 'Repair Storage'},
+              ] as const
             }
             const projectProviderConnection = () => {
               const modelId = projectDetailsQuery.data?.model?.id
@@ -495,6 +577,121 @@ const AdminJudgmentJobDetail = () => {
                   </div>
                 </Show>
 
+                <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
+                  <div class="flex items-start justify-between gap-4 mb-4">
+                    <div>
+                      <h2 class="text-lg font-semibold">Local Storage Health</h2>
+                      <p class="text-sm text-gray-500 mt-1">
+                        Live per-job SQLite state and targeted recovery controls.
+                      </p>
+                    </div>
+                    <span class="px-3 py-1 rounded-full text-sm font-medium border bg-gray-100 text-gray-800 border-gray-200">
+                      {formatStatus(data()?.storageState ?? null)}
+                    </span>
+                  </div>
+
+                  <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    <div class="bg-gray-50 rounded-lg p-4">
+                      <p class="text-sm text-gray-500">Storage State</p>
+                      <p class="font-medium mt-1">{formatStatus(data()?.storageState ?? null)}</p>
+                    </div>
+                    <div class="bg-gray-50 rounded-lg p-4">
+                      <p class="text-sm text-gray-500">SQLite Size</p>
+                      <p class="font-medium mt-1">{formatByteSize(storageHealth()?.sqliteFileBytes)}</p>
+                    </div>
+                    <div class="bg-gray-50 rounded-lg p-4">
+                      <p class="text-sm text-gray-500">WAL Size</p>
+                      <p class="font-medium mt-1">{formatByteSize(storageHealth()?.walBytes)}</p>
+                    </div>
+                    <div class="bg-gray-50 rounded-lg p-4">
+                      <p class="text-sm text-gray-500">Outbox Rows</p>
+                      <p class="font-medium mt-1">{storageHealth()?.outboxRowCount ?? 0}</p>
+                      <p class="text-xs text-gray-500 mt-1">
+                        Claimed: {storageHealth()?.claimedOutboxCount ?? 0} | Retained:{' '}
+                        {storageHealth()?.retainedRowCount ?? 0}
+                      </p>
+                    </div>
+                    <div class="bg-gray-50 rounded-lg p-4">
+                      <p class="text-sm text-gray-500">Oldest Unexported</p>
+                      <p class="font-medium mt-1">{formatDuration(storageHealth()?.oldestUnexportedAgeMs)}</p>
+                      <p class="text-xs text-gray-500 mt-1">Last ACK seq: {storageHealth()?.lastAckSeq ?? 'N/A'}</p>
+                    </div>
+                    <div class="bg-gray-50 rounded-lg p-4">
+                      <p class="text-sm text-gray-500">Import Failures</p>
+                      <p class="font-medium mt-1">{data()?.importFailureCount ?? 0}</p>
+                      <p class="text-xs text-gray-500 mt-1">Last exit code: {data()?.lastImportExitCode ?? 'N/A'}</p>
+                    </div>
+                    <div class="bg-gray-50 rounded-lg p-4">
+                      <p class="text-sm text-gray-500">Last Import Success</p>
+                      <p class="font-medium mt-1">{formatDateTime(data()?.lastImportCompletedAt)}</p>
+                      <p class="text-xs text-gray-500 mt-1">Started: {formatDateTime(data()?.lastImportStartedAt)}</p>
+                    </div>
+                    <div class="bg-gray-50 rounded-lg p-4 md:col-span-2 xl:col-span-1">
+                      <p class="text-sm text-gray-500">Last Import Failure</p>
+                      <p class="font-medium mt-1">{formatDateTime(data()?.lastImportErrorAt)}</p>
+                      <p class="text-xs text-gray-500 mt-1 break-words">
+                        {data()?.lastImportError ?? 'No recent import failure'}
+                      </p>
+                    </div>
+                    <div class="bg-gray-50 rounded-lg p-4 md:col-span-2 xl:col-span-1">
+                      <p class="text-sm text-gray-500">Quarantine Reason</p>
+                      <p class="font-medium mt-1 break-words">{data()?.quarantineReason ?? 'Not quarantined'}</p>
+                    </div>
+                  </div>
+
+                  <div class="mt-6 pt-6 border-t border-gray-200">
+                    <h3 class="text-sm font-medium text-gray-900 mb-3">Repair Actions</h3>
+                    <div class="flex flex-wrap gap-3">
+                      <For each={repairButtons()}>
+                        {(button) => {
+                          return (
+                            <button
+                              class="px-4 py-2 bg-slate-700 text-white rounded-md hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                              disabled={Boolean(isRepairing())}
+                              onClick={() => {
+                                const jobId = data()?.id
+                                if (jobId) {
+                                  return void handleRepairAction({action: button.action, jobId})
+                                }
+                              }}
+                            >
+                              {isRepairing() === button.action ? `${button.label}...` : button.label}
+                            </button>
+                          )
+                        }}
+                      </For>
+                      <Show when={data()?.storageState !== 'quarantined'}>
+                        <button
+                          class="px-4 py-2 bg-amber-600 text-white rounded-md hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                          disabled={Boolean(isRepairing())}
+                          onClick={() => {
+                            const jobId = data()?.id
+                            if (jobId) {
+                              return void handleRepairAction({action: 'quarantine', jobId})
+                            }
+                          }}
+                        >
+                          {isRepairing() === 'quarantine' ? 'Quarantining...' : 'Quarantine Job'}
+                        </button>
+                      </Show>
+                      <Show when={data()?.storageState === 'quarantined'}>
+                        <button
+                          class="px-4 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                          disabled={Boolean(isRepairing())}
+                          onClick={() => {
+                            const jobId = data()?.id
+                            if (jobId) {
+                              return void handleRepairAction({action: 'unquarantine', jobId})
+                            }
+                          }}
+                        >
+                          {isRepairing() === 'unquarantine' ? 'Removing Quarantine...' : 'Remove Quarantine'}
+                        </button>
+                      </Show>
+                    </div>
+                  </div>
+                </div>
+
                 <Show when={data()?.error && Array.isArray(data()?.error) && (data()?.error?.length ?? 0) > 0}>
                   <div class="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
                     <h2 class="text-lg font-semibold text-red-900 mb-2">Errors</h2>
@@ -542,7 +739,7 @@ const AdminJudgmentJobDetail = () => {
                       <Show when={data()?.status === 'paused'}>
                         <button
                           class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                          disabled={isStarting()}
+                          disabled={isStarting() || isResumeBlocked()}
                           onClick={() => {
                             const jobId = data()?.id
                             if (jobId) {
@@ -554,7 +751,18 @@ const AdminJudgmentJobDetail = () => {
                         </button>
                       </Show>
                       <Show when={data()?.status === 'failed'}>
-                        <button class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Retry Job</button>
+                        <button
+                          class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                          disabled={isStarting() || isResumeBlocked()}
+                          onClick={() => {
+                            const jobId = data()?.id
+                            if (jobId) {
+                              return void handleStartJob(jobId)
+                            }
+                          }}
+                        >
+                          {isStarting() ? 'Retrying...' : 'Retry Job'}
+                        </button>
                       </Show>
                       <button
                         class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -582,6 +790,24 @@ const AdminJudgmentJobDetail = () => {
                       {(message) => {
                         return (
                           <div class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                            {message()}
+                          </div>
+                        )
+                      }}
+                    </Show>
+                    <Show when={actionNotice()}>
+                      {(message) => {
+                        return (
+                          <div class="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
+                            {message()}
+                          </div>
+                        )
+                      }}
+                    </Show>
+                    <Show when={resumeBlockedReason()}>
+                      {(message) => {
+                        return (
+                          <div class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
                             {message()}
                           </div>
                         )

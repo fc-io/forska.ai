@@ -1,6 +1,54 @@
 import {apiClient} from './apiClient.ts'
 import {handleApiResponse} from './utils/handleApiResponse'
 
+export type JudgmentJobRepairAction = 'checkpoint' | 'drain' | 'preflight' | 'quarantine' | 'repair' | 'unquarantine'
+
+type JudgmentJobRepairResponse = {
+  action: JudgmentJobRepairAction
+  changes: {
+    checkpointed: boolean
+    finalizedDrain: boolean
+    importedOutboxRows: number
+    initializedSqlite: boolean
+    prunedOutboxRows: number
+    prunedQueueRows: number
+    quarantined: boolean
+    reapedOutboxClaims: number
+    requeuedSentPrompts: number
+    unquarantined: boolean
+  }
+  job: {
+    id: string
+    status: string
+    storageState: string
+    quarantinedAt: string | null
+    quarantineReason: string | null
+    lastImportStartedAt: string | null
+    lastImportCompletedAt: string | null
+    lastImportErrorAt: string | null
+    lastImportError: string | null
+    lastImportExitCode: number | null
+    importFailureCount: number
+    pauseRequestedAt: string | null
+    updatedAt: string | null
+  }
+  jobId: string
+  liveSqlite: {
+    claimedOutboxCount: number
+    lastAckSeq: number | null
+    oldestUnexportedAgeMs: number | null
+    outboxRowCount: number
+    promptCounts: {judged: number; ready: number; sent: number; skipped: number}
+    retainedRowCount: number
+    sqliteFileBytes: number | null
+    walBytes: number
+  }
+  message: string
+  ok: boolean
+  preflight: {ok: boolean} | null
+  requestedBy: string
+}
+
 const buildMissingJob = () => {
   return {
     id: 'not found',
@@ -86,4 +134,30 @@ export const getTotalTokenUsage = async () => {
   const response = await apiClient.api['judgmentsjobs-total-token-usage'].get()
   const result = handleApiResponse(response, 'Failed to fetch total token usage')
   return result?.data ?? {totalTokens: 0, totalPromptTokens: 0, totalCompletionTokens: 0}
+}
+
+export const runJudgmentsJobRepairAction = async ({
+  action,
+  jobId,
+  reason,
+}: {
+  action: JudgmentJobRepairAction
+  jobId: string
+  reason?: string
+}) => {
+  const response =
+    action === 'preflight'
+      ? await apiClient.api.judgmentsjobs({id: jobId}).preflight.post()
+      : action === 'drain'
+        ? await apiClient.api.judgmentsjobs({id: jobId}).drain.post({})
+        : action === 'checkpoint'
+          ? await apiClient.api.judgmentsjobs({id: jobId}).checkpoint.post({})
+          : action === 'quarantine'
+            ? await apiClient.api.judgmentsjobs({id: jobId}).quarantine.post({reason})
+            : action === 'unquarantine'
+              ? await apiClient.api.judgmentsjobs({id: jobId}).unquarantine.post()
+              : await apiClient.api.judgmentsjobs({id: jobId}).repair.post({})
+
+  const result = handleApiResponse(response, `Failed to ${action} local storage`)
+  return ('data' in result ? result.data : result) as JudgmentJobRepairResponse
 }

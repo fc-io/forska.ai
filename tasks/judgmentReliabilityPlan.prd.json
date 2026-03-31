@@ -278,12 +278,13 @@
         "Browser verify `/admin/jobs/$id`: storage-health card shows live state, quarantine or drain actions update the UI correctly, and resume is blocked when it should be"
       ],
       "priority": 11,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-003",
         "US-009"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-012",
@@ -338,6 +339,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-03-31T11:17:35.642Z"
+    "updatedAt": "2026-03-31T11:22:47.770Z"
   }
 }
