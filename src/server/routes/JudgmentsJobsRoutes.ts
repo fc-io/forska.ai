@@ -54,10 +54,12 @@ type JudgmentJobHealthAction =
   | 'repair_quarantine'
   | 'resume_outbox_import'
   | 'retry_stale_import'
+type JudgmentJobHealthBadge = 'Healthy' | 'Draining' | 'Large WAL' | 'Quarantined' | 'Retained Outbox' | 'Stale Import'
 
 type UnassessedCountCacheValue = {value: number; expiresAt: number}
 const unassessedCountTTLms = 10_000
 const staleImportThresholdMs = 15 * 60 * 1_000
+const largeWalThresholdBytes = 64 * 1_024 * 1_024
 const unassessedCountCache = new Map<string, UnassessedCountCacheValue>()
 const getUnassessedCountCacheKey = (
   projectId: string,
@@ -302,6 +304,50 @@ const isStaleImportJob = (
   return Boolean(startedAt && isImportInFlight(job) && now - startedAt.getTime() >= staleImportThresholdMs)
 }
 
+const hasRetainedOutbox = (
+  sqliteHealth: Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['getHealthSnapshot']>>,
+) => {
+  return sqliteHealth.outboxRowCount > 0 || sqliteHealth.claimedOutboxCount > 0
+}
+
+const hasLargeWal = (
+  sqliteHealth: Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['getHealthSnapshot']>>,
+) => {
+  return sqliteHealth.walBytes >= largeWalThresholdBytes
+}
+
+const getJobHealthBadges = ({
+  job,
+  sqliteHealth,
+}: {
+  job: {storageState: string; lastImportCompletedAt: Date | null; lastImportStartedAt: Date | null}
+  sqliteHealth: Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['getHealthSnapshot']>>
+}): JudgmentJobHealthBadge[] => {
+  const badges: JudgmentJobHealthBadge[] = []
+
+  if (job.storageState === 'quarantined') {
+    badges.push('Quarantined')
+  }
+
+  if (job.storageState === 'draining') {
+    badges.push('Draining')
+  }
+
+  if (isStaleImportJob(job)) {
+    badges.push('Stale Import')
+  }
+
+  if (hasRetainedOutbox(sqliteHealth)) {
+    badges.push('Retained Outbox')
+  }
+
+  if (hasLargeWal(sqliteHealth)) {
+    badges.push('Large WAL')
+  }
+
+  return badges.length > 0 ? badges : ['Healthy']
+}
+
 const getRecommendedHealthAction = ({
   job,
   sqliteHealth,
@@ -325,7 +371,7 @@ const getRecommendedHealthAction = ({
     return 'wait_for_drain'
   }
 
-  if (sqliteHealth.outboxRowCount > 0 || sqliteHealth.claimedOutboxCount > 0) {
+  if (hasRetainedOutbox(sqliteHealth)) {
     return 'resume_outbox_import'
   }
 
@@ -719,9 +765,10 @@ export const judgmentsJobsRoutes = new Elysia()
       ORDER BY jj.created_at ASC
     `)
 
-    return {
-      data: jobs.map((job) => {
-        return {
+    const sqliteService = getJudgmentJobSqliteService()
+    const jobsWithHealth = await Promise.all(
+      jobs.map(async (job) => {
+        const normalizedJob = {
           ...job,
           createdAt: getDateValue(job.createdAt),
           updatedAt: getDateValue(job.updatedAt),
@@ -733,9 +780,14 @@ export const judgmentsJobsRoutes = new Elysia()
           importFailureCount: Number(job.importFailureCount ?? 0),
           pauseRequestedAt: getDateValue(job.pauseRequestedAt),
         }
+        const sqliteHealth = await sqliteService.getHealthSnapshot(job.id)
+        const badges = getJobHealthBadges({job: normalizedJob, sqliteHealth})
+
+        return {...normalizedJob, health: {badges, isHealthy: badges.length === 1 && badges[0] === 'Healthy'}}
       }),
-      error: null,
-    }
+    )
+
+    return {data: jobsWithHealth, error: null}
   })
   .get('/api/judgmentsjobs-health', async () => {
     const jobs = await getAppDatabaseService().queryJson<{
@@ -797,7 +849,7 @@ export const judgmentsJobsRoutes = new Elysia()
           return job.storageState === 'quarantined'
         }).length,
         retainedOutbox: jobsWithHealth.filter(({sqliteHealth}) => {
-          return sqliteHealth.outboxRowCount > 0 || sqliteHealth.claimedOutboxCount > 0
+          return hasRetainedOutbox(sqliteHealth)
         }).length,
         staleImport: jobsWithHealth.filter(({job}) => {
           return isStaleImportJob(job)

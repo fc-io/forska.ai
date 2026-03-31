@@ -56,6 +56,29 @@ const formatNumber = (num: number): string => {
   return num.toLocaleString('en-US')
 }
 
+type JobHealthBadge = 'Healthy' | 'Draining' | 'Large WAL' | 'Quarantined' | 'Retained Outbox' | 'Stale Import'
+
+const getHealthBadgeColor = (badge: JobHealthBadge) => {
+  switch (badge) {
+    case 'Healthy':
+      return 'bg-green-50 text-green-700 ring-green-200'
+    case 'Draining':
+      return 'bg-amber-50 text-amber-700 ring-amber-200'
+    case 'Quarantined':
+      return 'bg-red-50 text-red-700 ring-red-200'
+    case 'Retained Outbox':
+      return 'bg-violet-50 text-violet-700 ring-violet-200'
+    case 'Large WAL':
+      return 'bg-orange-50 text-orange-700 ring-orange-200'
+    case 'Stale Import':
+      return 'bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-200'
+  }
+}
+
+const isHealthyBadge = (badge: JobHealthBadge) => {
+  return badge === 'Healthy'
+}
+
 const TokenUsageTimelineCardFallback = () => {
   return (
     <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
@@ -73,6 +96,8 @@ const TokenUsageTimelineCardFallback = () => {
 const judgmentsJobsQueryKey = ['judgments-jobs'] as const
 const tokenUsageQueryKey = ['total-token-usage'] as const
 
+type JudgmentsJobsData = Awaited<ReturnType<typeof fetchJudgmentsJobs>>
+
 const activeJudgmentsJobStatuses = new Set([
   'not_started',
   'running',
@@ -84,7 +109,7 @@ const isActiveJudgmentsJobStatus = (status: string | null | undefined) => {
   return activeJudgmentsJobStatuses.has(status ?? '')
 }
 
-const getJudgmentsJobsRefetchInterval = (jobs: Awaited<ReturnType<typeof fetchJudgmentsJobs>> | undefined) => {
+const getJudgmentsJobsRefetchInterval = (jobs: JudgmentsJobsData | undefined) => {
   return jobs?.some((job) => {
     return isActiveJudgmentsJobStatus(job.status)
   })
@@ -97,9 +122,7 @@ const getJudgmentsJobsQuery = () => {
     queryKey: judgmentsJobsQueryKey,
     queryFn: fetchJudgmentsJobs,
     refetchInterval: (query: {state: {data?: unknown}}) => {
-      const jobs = Array.isArray(query.state.data)
-        ? (query.state.data as Awaited<ReturnType<typeof fetchJudgmentsJobs>>)
-        : undefined
+      const jobs = Array.isArray(query.state.data) ? (query.state.data as JudgmentsJobsData) : undefined
       return getJudgmentsJobsRefetchInterval(jobs)
     },
     refetchOnWindowFocus: true,
@@ -177,6 +200,55 @@ const JudgmentsJobsCounts = () => {
   )
 }
 
+const HealthSummaryStripFallback = () => {
+  return (
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+      <div class="text-sm text-gray-400">Loading health summary...</div>
+    </div>
+  )
+}
+
+const HealthSummaryStrip = () => {
+  const jobs = useQuery(getJudgmentsJobsQuery)
+  const counts = createMemo(() => {
+    const data = jobs.data ?? []
+
+    return data.reduce(
+      (acc, job) => {
+        return {
+          draining: job.storageState === 'draining' ? acc.draining + 1 : acc.draining,
+          quarantined: job.storageState === 'quarantined' ? acc.quarantined + 1 : acc.quarantined,
+          retainedOutbox: job.health.badges.includes('Retained Outbox') ? acc.retainedOutbox + 1 : acc.retainedOutbox,
+          staleImport: job.health.badges.includes('Stale Import') ? acc.staleImport + 1 : acc.staleImport,
+        }
+      },
+      {draining: 0, quarantined: 0, retainedOutbox: 0, staleImport: 0},
+    )
+  })
+
+  return (
+    <Show when={!jobs.isLoading} fallback={<HealthSummaryStripFallback />}>
+      <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+        <div class="flex items-center gap-3 flex-wrap text-sm text-gray-600">
+          <span class="font-medium text-gray-900">Health Summary</span>
+          <span class="rounded-full bg-amber-50 px-3 py-1 text-amber-700 ring-1 ring-inset ring-amber-200">
+            {counts().draining} draining
+          </span>
+          <span class="rounded-full bg-red-50 px-3 py-1 text-red-700 ring-1 ring-inset ring-red-200">
+            {counts().quarantined} quarantined
+          </span>
+          <span class="rounded-full bg-violet-50 px-3 py-1 text-violet-700 ring-1 ring-inset ring-violet-200">
+            {counts().retainedOutbox} retained outbox
+          </span>
+          <span class="rounded-full bg-fuchsia-50 px-3 py-1 text-fuchsia-700 ring-1 ring-inset ring-fuchsia-200">
+            {counts().staleImport} stale import
+          </span>
+        </div>
+      </div>
+    </Show>
+  )
+}
+
 const JudgmentsJobsTableFallback = () => {
   return (
     <div>
@@ -188,6 +260,7 @@ const JudgmentsJobsTableFallback = () => {
               <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Job ID</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Project</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+              <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Health</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Updated</th>
               <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
@@ -206,6 +279,9 @@ const JudgmentsJobsTableFallback = () => {
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap">
                       <div class="h-4 w-16 animate-pulse rounded bg-gray-200" />
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                      <div class="h-4 w-32 animate-pulse rounded bg-gray-200" />
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap">
                       <div class="h-4 w-28 animate-pulse rounded bg-gray-200" />
@@ -354,6 +430,7 @@ const JudgmentsJobsTable = () => {
                     Project
                   </th>
                   <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                  <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Health</th>
                   <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Created
                   </th>
@@ -403,6 +480,29 @@ const JudgmentsJobsTable = () => {
                           >
                             {formatStatus(job.status)}
                           </span>
+                        </td>
+                        <td class="px-6 py-4 text-sm text-gray-900">
+                          <div class="flex flex-wrap gap-2">
+                            <For each={job.health.badges as JobHealthBadge[]}>
+                              {(badge) => {
+                                const badgeClass = `inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${getHealthBadgeColor(
+                                  badge,
+                                )}`
+
+                                return isHealthyBadge(badge) ? (
+                                  <span class={badgeClass}>{badge}</span>
+                                ) : (
+                                  <Link
+                                    to="/admin/jobs/$id"
+                                    params={{id: job.id}}
+                                    class={`${badgeClass} hover:opacity-80`}
+                                  >
+                                    {badge}
+                                  </Link>
+                                )
+                              }}
+                            </For>
+                          </div>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                           {job.createdAt ? formatDate(new Date(job.createdAt), 'yyyy-MM-dd HH:mm') : 'N/A'}
@@ -494,6 +594,10 @@ const AdminJobs = () => {
             </Suspense>
           </div>
         </div>
+
+        <Suspense fallback={<HealthSummaryStripFallback />}>
+          <HealthSummaryStrip />
+        </Suspense>
 
         <Suspense fallback={<JudgmentsJobsTableFallback />}>
           <JudgmentsJobsTable />

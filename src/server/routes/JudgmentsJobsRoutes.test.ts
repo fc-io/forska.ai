@@ -497,6 +497,7 @@ test('judgment job routes expose storage health fields', async () => {
   const listResponse = await app.handle(new Request('http://localhost/api/judgmentsjobs'))
   const listBody = (await listResponse.json()) as {
     data: Array<{
+      health: {badges: string[]; isHealthy: boolean}
       id: string
       storageState: string
       quarantinedAt: string | null
@@ -516,6 +517,7 @@ test('judgment job routes expose storage health fields', async () => {
   })
 
   expect(listResponse.status).toBe(200)
+  expect(listedJob?.health).toEqual({badges: ['Healthy'], isHealthy: true})
   expect(listedJob?.storageState).toBe('active')
   expect(listedJob?.importFailureCount).toBe(0)
   expect(listedJob?.pauseRequestedAt).toBeNull()
@@ -888,6 +890,90 @@ test('judgment job health summary aggregates storage risk counts', async () => {
     retainedOutbox: baselineBody.data.retainedOutbox + 1,
     staleImport: baselineBody.data.staleImport + 1,
   })
+})
+
+test('judgment jobs list includes inline health badges for risky jobs', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const now = Date.now()
+  const drainingProjectId = `list-health-draining-project-${now}`
+  const drainingModelId = `list-health-draining-model-${now}`
+  const drainingConnectionId = `list-health-draining-connection-${now}`
+  const drainingJobId = `list-health-draining-job-${now}`
+  const quarantinedProjectId = `list-health-quarantined-project-${now}`
+  const quarantinedModelId = `list-health-quarantined-model-${now}`
+  const quarantinedConnectionId = `list-health-quarantined-connection-${now}`
+  const quarantinedJobId = `list-health-quarantined-job-${now}`
+  const retainedProjectId = `list-health-retained-project-${now}`
+  const retainedModelId = `list-health-retained-model-${now}`
+  const retainedConnectionId = `list-health-retained-connection-${now}`
+  const retainedJobId = `list-health-retained-job-${now}`
+  const staleProjectId = `list-health-stale-project-${now}`
+  const staleModelId = `list-health-stale-model-${now}`
+  const staleConnectionId = `list-health-stale-connection-${now}`
+  const staleJobId = `list-health-stale-job-${now}`
+  const staleStartedAt = new Date(Date.now() - 16 * 60 * 1_000).toISOString()
+
+  await insertProjectFixture({
+    connectionId: drainingConnectionId,
+    modelId: drainingModelId,
+    projectId: drainingProjectId,
+  })
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${drainingJobId}', '${drainingProjectId}', 'completed', 'draining')
+  `)
+
+  await insertProjectFixture({
+    connectionId: quarantinedConnectionId,
+    modelId: quarantinedModelId,
+    projectId: quarantinedProjectId,
+  })
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state, quarantined_at, quarantine_reason)
+    VALUES ('${quarantinedJobId}', '${quarantinedProjectId}', 'failed', 'quarantined', '${new Date().toISOString()}', 'manual quarantine')
+  `)
+
+  await insertProjectFixture({
+    connectionId: retainedConnectionId,
+    modelId: retainedModelId,
+    projectId: retainedProjectId,
+  })
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${retainedJobId}', '${retainedProjectId}', 'running', 'active')
+  `)
+  await insertOutboxFixture({jobId: retainedJobId, modelId: retainedModelId, projectId: retainedProjectId})
+
+  await insertProjectFixture({connectionId: staleConnectionId, modelId: staleModelId, projectId: staleProjectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state, last_import_started_at)
+    VALUES ('${staleJobId}', '${staleProjectId}', 'running', 'active', '${staleStartedAt}')
+  `)
+
+  const response = await app.handle(new Request('http://localhost/api/judgmentsjobs'))
+  const body = (await response.json()) as {data: Array<{health: {badges: string[]; isHealthy: boolean}; id: string}>}
+
+  const drainingJob = body.data.find((job) => {
+    return job.id === drainingJobId
+  })
+  const quarantinedJob = body.data.find((job) => {
+    return job.id === quarantinedJobId
+  })
+  const retainedJob = body.data.find((job) => {
+    return job.id === retainedJobId
+  })
+  const staleJob = body.data.find((job) => {
+    return job.id === staleJobId
+  })
+
+  expect(response.status).toBe(200)
+  expect(drainingJob?.health).toEqual({badges: ['Draining'], isHealthy: false})
+  expect(quarantinedJob?.health).toEqual({badges: ['Quarantined'], isHealthy: false})
+  expect(retainedJob?.health).toEqual({badges: ['Retained Outbox'], isHealthy: false})
+  expect(staleJob?.health).toEqual({badges: ['Stale Import'], isHealthy: false})
 })
 
 test('repair action routes return structured preflight, quarantine, unquarantine, and checkpoint results', async () => {

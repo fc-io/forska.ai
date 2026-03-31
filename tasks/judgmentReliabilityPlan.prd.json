@@ -252,11 +252,12 @@
         "Browser verify `/admin/jobs`: health summary renders, non-healthy jobs are easy to spot, and links to details and health page work"
       ],
       "priority": 10,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-003"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-011",
@@ -337,6 +338,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-03-31T11:10:36.843Z"
+    "updatedAt": "2026-03-31T11:17:35.642Z"
   }
 }
