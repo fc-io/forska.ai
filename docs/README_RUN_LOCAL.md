@@ -24,44 +24,74 @@ bun install
 bun run db:mig
 ```
 
+Primary is implicit. Secondary is explicit:
+
+```bash
+bun run db:mig:secondary
+```
+
 ## 3) Start dev servers
 
-Terminal 1:
+Primary profile commands:
 
 ```bash
 bun run dev:server
-```
-
-Terminal 2:
-
-```bash
 bun run dev:app
 ```
 
-Open the local URL printed by Vite. Default local dev ports: app `3000`, API `3001`.
+Ports and storage:
 
-Do not create or edit `.env` files for normal local dev.
+- Primary app `3000`, API `3001`, writer `3002`
+- Primary runtime root `data/runtime/primary/`
 
-If you want a branch/worktree to run beside your main repo, pass custom ports inline:
+Secondary profile commands:
 
 ```bash
-# terminal 1
-VITE_PORT=3100 API_SERVER_PORT=3101 bun run dev:server
-
-# terminal 2
-VITE_PORT=3100 API_SERVER_PORT=3101 bun run dev:app
+bun run dev:secondary:server
+bun run dev:secondary:app
 ```
+
+Ports and storage:
+
+- Secondary app `3100`, API `3101`, writer `3102`
+- Secondary runtime root `data/runtime/secondary/`
+
+DuckDB and judgment-job SQLite isolation come from those separate profile roots. Each profile keeps its own `forska.duckdb` and adjacent runtime state under its own `data/runtime/<profile>/` directory.
+
+Split API and worker commands:
+
+```bash
+# primary
+bun run dev:server:api
+bun run dev:server:worker
+
+# secondary
+bun run dev:secondary:server:api
+bun run dev:secondary:server:worker
+```
+
+Built app commands:
+
+```bash
+# primary
+bun run start
+bun run start:server
+bun run start:app-server
+
+# secondary
+bun run start:secondary
+bun run start:secondary:server
+bun run start:secondary:app-server
+```
+
+Open the local URL printed by Vite for dev mode, or the app server URL for built mode.
+
+Do not create or edit `.env` files for normal local dev.
 
 If you need a machine-local override, pass it inline:
 
 ```bash
 DUCKDB_PATH=~/forska/forska.duckdb bun run dev:server
-```
-
-If you use the built app server too:
-
-```bash
-API_SERVER_PORT=3101 APP_SERVER_PORT=8180 bun run start
 ```
 
 Or export once per shell:
