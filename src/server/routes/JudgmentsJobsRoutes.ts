@@ -45,9 +45,17 @@ type JudgmentJobMutationState = {
   updatedAt: unknown
 }
 type JudgmentJobMutationQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
+type JudgmentJobHealthAction =
+  | 'none'
+  | 'repair_missing_sqlite'
+  | 'wait_for_drain'
+  | 'repair_quarantine'
+  | 'resume_outbox_import'
+  | 'retry_stale_import'
 
 type UnassessedCountCacheValue = {value: number; expiresAt: number}
 const unassessedCountTTLms = 10_000
+const staleImportThresholdMs = 15 * 60 * 1_000
 const unassessedCountCache = new Map<string, UnassessedCountCacheValue>()
 const getUnassessedCountCacheKey = (
   projectId: string,
@@ -276,6 +284,56 @@ const getProjectModelId = async (projectId: string): Promise<string> => {
   return project.modelId
 }
 
+const isImportInFlight = (job: {lastImportCompletedAt: Date | null; lastImportStartedAt: Date | null}) => {
+  const startedAt = job.lastImportStartedAt
+  const completedAt = job.lastImportCompletedAt
+
+  return Boolean(startedAt && (!completedAt || completedAt < startedAt))
+}
+
+const isStaleImportJob = (
+  job: {lastImportCompletedAt: Date | null; lastImportStartedAt: Date | null},
+  now = Date.now(),
+) => {
+  const startedAt = job.lastImportStartedAt
+
+  return Boolean(startedAt && isImportInFlight(job) && now - startedAt.getTime() >= staleImportThresholdMs)
+}
+
+const getRecommendedHealthAction = ({
+  job,
+  sqliteHealth,
+}: {
+  job: {storageState: string; lastImportCompletedAt: Date | null; lastImportStartedAt: Date | null}
+  sqliteHealth: Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['getHealthSnapshot']>>
+}): JudgmentJobHealthAction => {
+  if (job.storageState === 'quarantined') {
+    return 'repair_quarantine'
+  }
+
+  if (job.storageState === 'missing') {
+    return 'repair_missing_sqlite'
+  }
+
+  if (isStaleImportJob(job)) {
+    return 'retry_stale_import'
+  }
+
+  if (job.storageState === 'draining') {
+    return 'wait_for_drain'
+  }
+
+  if (sqliteHealth.outboxRowCount > 0 || sqliteHealth.claimedOutboxCount > 0) {
+    return 'resume_outbox_import'
+  }
+
+  return 'none'
+}
+
+const isHealthyJob = ({action, job}: {action: JudgmentJobHealthAction; job: {storageState: string}}) => {
+  return job.storageState === 'active' && action === 'none'
+}
+
 const assertProjectRuntimeModelMatch = async (projectId: string): Promise<void> => {
   const projectModelId = await getProjectModelId(projectId)
 
@@ -421,6 +479,32 @@ export const judgmentsJobsRoutes = new Elysia()
       }
     },
     {body: t.Object({projectId: t.String(), agentConfig: t.Optional(t.Any())})},
+  )
+  .get(
+    '/api/judgmentsjobs/:id/health',
+    async ({params}) => {
+      const {job} = await getJobContext({jobId: params.id})
+      const sqliteHealth = await getJudgmentJobSqliteService().getHealthSnapshot(job.id)
+      const recommendedNextAction = getRecommendedHealthAction({job, sqliteHealth})
+
+      return {
+        jobId: job.id,
+        storageState: job.storageState,
+        recommendedNextAction,
+        importMetadata: {
+          importFailureCount: job.importFailureCount,
+          lastImportCompletedAt: job.lastImportCompletedAt,
+          lastImportError: job.lastImportError,
+          lastImportErrorAt: job.lastImportErrorAt,
+          lastImportExitCode: job.lastImportExitCode,
+          lastImportStartedAt: job.lastImportStartedAt,
+          pauseRequestedAt: job.pauseRequestedAt,
+        },
+        quarantine: {quarantinedAt: job.quarantinedAt, quarantineReason: job.quarantineReason},
+        liveSqlite: sqliteHealth,
+      }
+    },
+    {params: t.Object({id: t.String()})},
   )
   .get(
     '/api/judgmentsjobs/:id',
@@ -640,6 +724,75 @@ export const judgmentsJobsRoutes = new Elysia()
           pauseRequestedAt: getDateValue(job.pauseRequestedAt),
         }
       }),
+      error: null,
+    }
+  })
+  .get('/api/judgmentsjobs-health', async () => {
+    const jobs = await getAppDatabaseService().queryJson<{
+      id: string
+      storageState: string
+      quarantinedAt: unknown
+      quarantineReason: string | null
+      lastImportStartedAt: unknown
+      lastImportCompletedAt: unknown
+      lastImportErrorAt: unknown
+      lastImportError: string | null
+      lastImportExitCode: number | null
+      importFailureCount: number | null
+      pauseRequestedAt: unknown
+    }>(`
+      SELECT
+        id,
+        storage_state AS storageState,
+        quarantined_at AS quarantinedAt,
+        quarantine_reason AS quarantineReason,
+        last_import_started_at AS lastImportStartedAt,
+        last_import_completed_at AS lastImportCompletedAt,
+        last_import_error_at AS lastImportErrorAt,
+        last_import_error AS lastImportError,
+        last_import_exit_code AS lastImportExitCode,
+        import_failure_count AS importFailureCount,
+        pause_requested_at AS pauseRequestedAt
+      FROM app.judgment_job
+      ORDER BY created_at ASC
+    `)
+    const sqliteService = getJudgmentJobSqliteService()
+    const jobsWithHealth = await Promise.all(
+      jobs.map(async (job) => {
+        const normalizedJob = {
+          ...job,
+          importFailureCount: Number(job.importFailureCount ?? 0),
+          lastImportCompletedAt: getDateValue(job.lastImportCompletedAt),
+          lastImportErrorAt: getDateValue(job.lastImportErrorAt),
+          lastImportStartedAt: getDateValue(job.lastImportStartedAt),
+          pauseRequestedAt: getDateValue(job.pauseRequestedAt),
+          quarantinedAt: getDateValue(job.quarantinedAt),
+        }
+        const sqliteHealth = await sqliteService.getHealthSnapshot(job.id)
+        const action = getRecommendedHealthAction({job: normalizedJob, sqliteHealth})
+
+        return {action, job: normalizedJob, sqliteHealth}
+      }),
+    )
+
+    return {
+      data: {
+        healthy: jobsWithHealth.filter(({action, job}) => {
+          return isHealthyJob({action, job})
+        }).length,
+        draining: jobsWithHealth.filter(({job}) => {
+          return job.storageState === 'draining'
+        }).length,
+        quarantined: jobsWithHealth.filter(({job}) => {
+          return job.storageState === 'quarantined'
+        }).length,
+        retainedOutbox: jobsWithHealth.filter(({sqliteHealth}) => {
+          return sqliteHealth.outboxRowCount > 0 || sqliteHealth.claimedOutboxCount > 0
+        }).length,
+        staleImport: jobsWithHealth.filter(({job}) => {
+          return isStaleImportJob(job)
+        }).length,
+      },
       error: null,
     }
   })

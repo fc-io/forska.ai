@@ -130,6 +130,55 @@ const insertQueuedPromptFixture = async ({
   await sqliteService.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
 }
 
+const insertOutboxFixture = async ({
+  jobId,
+  modelId,
+  projectId,
+}: {
+  jobId: string
+  modelId: string
+  projectId: string
+}) => {
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const sqliteService = getJudgmentJobSqliteService()
+  const articleId = `health-outbox-article-${Date.now()}`
+  const promptId = `health-outbox-prompt-${Date.now()}`
+
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
+
+  const [claimedPrompt] = await sqliteService.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt for health route test')
+  }
+
+  await sqliteService.recordJudgmentSuccess(jobId, {
+    answeredOriginal: 'yes',
+    answeredOriginalAsArray: ['yes'],
+    articleId: claimedPrompt.articleId,
+    chunkingStrategy: null,
+    confidenceOriginal: 80,
+    createdAt: new Date(),
+    explanation: 'because',
+    isAnswered: true,
+    judgmentId: `health-outbox-judgment-${Date.now()}`,
+    modelId,
+    projectId,
+    promptId: claimedPrompt.promptId,
+    queuePromptId: claimedPrompt.recordId,
+    quotes: ['quote'],
+    rawResponseJson: {answer: 'yes'},
+    snapshotProjectId: projectId,
+    snapshotProjectModelName: 'Qwen 122B',
+    updatedAt: new Date(),
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
+}
+
 test('creating a judgments job fails when the runtime model check fails', async () => {
   if (!app) {
     throw new Error('Test app not initialized')
@@ -443,6 +492,244 @@ test('returns safe SQLite health values for jobs without a local sqlite db', asy
     retainedRowCount: 0,
     sqliteFileBytes: null,
     walBytes: 0,
+  })
+})
+
+test('judgment job health route returns healthy job details', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `health-healthy-project-${Date.now()}`
+  const modelId = `health-healthy-model-${Date.now()}`
+  const connectionId = `health-healthy-connection-${Date.now()}`
+  const jobId = `health-healthy-job-${Date.now()}`
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'running', 'active')
+  `)
+  await getJudgmentJobSqliteService().initializeJob(jobId)
+
+  const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}/health`))
+  const body = (await response.json()) as {
+    jobId: string
+    storageState: string
+    recommendedNextAction: string
+    importMetadata: {importFailureCount: number; lastImportStartedAt: string | null}
+    liveSqlite: {
+      outboxRowCount: number
+      promptCounts: {judged: number; ready: number; sent: number; skipped: number}
+      sqliteFileBytes: number | null
+    }
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.jobId).toBe(jobId)
+  expect(body.storageState).toBe('active')
+  expect(body.recommendedNextAction).toBe('none')
+  expect(body.importMetadata.importFailureCount).toBe(0)
+  expect(body.importMetadata.lastImportStartedAt).toBeNull()
+  expect(body.liveSqlite.outboxRowCount).toBe(0)
+  expect(body.liveSqlite.promptCounts).toEqual({judged: 0, ready: 0, sent: 0, skipped: 0})
+  expect(body.liveSqlite.sqliteFileBytes).not.toBeNull()
+})
+
+test('judgment job health route returns missing job details', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `health-missing-project-${Date.now()}`
+  const modelId = `health-missing-model-${Date.now()}`
+  const connectionId = `health-missing-connection-${Date.now()}`
+  const jobId = `health-missing-job-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'running', 'missing')
+  `)
+
+  const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}/health`))
+  const body = (await response.json()) as {
+    storageState: string
+    recommendedNextAction: string
+    liveSqlite: {
+      claimedOutboxCount: number
+      lastAckSeq: number | null
+      oldestUnexportedAgeMs: number | null
+      outboxRowCount: number
+      promptCounts: {judged: number; ready: number; sent: number; skipped: number}
+      retainedRowCount: number
+      sqliteFileBytes: number | null
+      walBytes: number
+    }
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.storageState).toBe('missing')
+  expect(body.recommendedNextAction).toBe('repair_missing_sqlite')
+  expect(body.liveSqlite).toEqual({
+    claimedOutboxCount: 0,
+    lastAckSeq: null,
+    oldestUnexportedAgeMs: null,
+    outboxRowCount: 0,
+    promptCounts: {judged: 0, ready: 0, sent: 0, skipped: 0},
+    retainedRowCount: 0,
+    sqliteFileBytes: null,
+    walBytes: 0,
+  })
+})
+
+test('judgment job health route returns draining job details', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `health-draining-project-${Date.now()}`
+  const modelId = `health-draining-model-${Date.now()}`
+  const connectionId = `health-draining-connection-${Date.now()}`
+  const jobId = `health-draining-job-${Date.now()}`
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'completed', 'draining')
+  `)
+  await getJudgmentJobSqliteService().initializeJob(jobId)
+
+  const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}/health`))
+  const body = (await response.json()) as {storageState: string; recommendedNextAction: string}
+
+  expect(response.status).toBe(200)
+  expect(body.storageState).toBe('draining')
+  expect(body.recommendedNextAction).toBe('wait_for_drain')
+})
+
+test('judgment job health route returns quarantined job details', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `health-quarantined-project-${Date.now()}`
+  const modelId = `health-quarantined-model-${Date.now()}`
+  const connectionId = `health-quarantined-connection-${Date.now()}`
+  const jobId = `health-quarantined-job-${Date.now()}`
+  const quarantinedAt = new Date().toISOString()
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state, quarantined_at, quarantine_reason)
+    VALUES ('${jobId}', '${projectId}', 'failed', 'quarantined', '${quarantinedAt}', 'sqlite checksum mismatch')
+  `)
+
+  const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}/health`))
+  const body = (await response.json()) as {
+    storageState: string
+    recommendedNextAction: string
+    quarantine: {quarantineReason: string | null}
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.storageState).toBe('quarantined')
+  expect(body.recommendedNextAction).toBe('repair_quarantine')
+  expect(body.quarantine.quarantineReason).toBe('sqlite checksum mismatch')
+})
+
+test('judgment job health summary aggregates storage risk counts', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const baselineResponse = await app.handle(new Request('http://localhost/api/judgmentsjobs-health'))
+  const baselineBody = (await baselineResponse.json()) as {
+    data: {healthy: number; draining: number; quarantined: number; retainedOutbox: number; staleImport: number}
+  }
+
+  const now = Date.now()
+  const healthyProjectId = `health-summary-healthy-project-${now}`
+  const healthyModelId = `health-summary-healthy-model-${now}`
+  const healthyConnectionId = `health-summary-healthy-connection-${now}`
+  const healthyJobId = `health-summary-healthy-job-${now}`
+  const drainingProjectId = `health-summary-draining-project-${now}`
+  const drainingModelId = `health-summary-draining-model-${now}`
+  const drainingConnectionId = `health-summary-draining-connection-${now}`
+  const drainingJobId = `health-summary-draining-job-${now}`
+  const quarantinedProjectId = `health-summary-quarantined-project-${now}`
+  const quarantinedModelId = `health-summary-quarantined-model-${now}`
+  const quarantinedConnectionId = `health-summary-quarantined-connection-${now}`
+  const quarantinedJobId = `health-summary-quarantined-job-${now}`
+  const retainedProjectId = `health-summary-retained-project-${now}`
+  const retainedModelId = `health-summary-retained-model-${now}`
+  const retainedConnectionId = `health-summary-retained-connection-${now}`
+  const retainedJobId = `health-summary-retained-job-${now}`
+  const staleProjectId = `health-summary-stale-project-${now}`
+  const staleModelId = `health-summary-stale-model-${now}`
+  const staleConnectionId = `health-summary-stale-connection-${now}`
+  const staleJobId = `health-summary-stale-job-${now}`
+  const staleStartedAt = new Date(Date.now() - 16 * 60 * 1_000).toISOString()
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+
+  await insertProjectFixture({connectionId: healthyConnectionId, modelId: healthyModelId, projectId: healthyProjectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${healthyJobId}', '${healthyProjectId}', 'running', 'active')
+  `)
+  await getJudgmentJobSqliteService().initializeJob(healthyJobId)
+
+  await insertProjectFixture({
+    connectionId: drainingConnectionId,
+    modelId: drainingModelId,
+    projectId: drainingProjectId,
+  })
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${drainingJobId}', '${drainingProjectId}', 'completed', 'draining')
+  `)
+
+  await insertProjectFixture({
+    connectionId: quarantinedConnectionId,
+    modelId: quarantinedModelId,
+    projectId: quarantinedProjectId,
+  })
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state, quarantined_at, quarantine_reason)
+    VALUES ('${quarantinedJobId}', '${quarantinedProjectId}', 'failed', 'quarantined', '${new Date().toISOString()}', 'manual quarantine')
+  `)
+
+  await insertProjectFixture({
+    connectionId: retainedConnectionId,
+    modelId: retainedModelId,
+    projectId: retainedProjectId,
+  })
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${retainedJobId}', '${retainedProjectId}', 'running', 'active')
+  `)
+  await insertOutboxFixture({jobId: retainedJobId, modelId: retainedModelId, projectId: retainedProjectId})
+
+  await insertProjectFixture({connectionId: staleConnectionId, modelId: staleModelId, projectId: staleProjectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state, last_import_started_at)
+    VALUES ('${staleJobId}', '${staleProjectId}', 'running', 'active', '${staleStartedAt}')
+  `)
+
+  const response = await app.handle(new Request('http://localhost/api/judgmentsjobs-health'))
+  const body = (await response.json()) as {
+    data: {healthy: number; draining: number; quarantined: number; retainedOutbox: number; staleImport: number}
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data).toEqual({
+    healthy: baselineBody.data.healthy + 1,
+    draining: baselineBody.data.draining + 1,
+    quarantined: baselineBody.data.quarantined + 1,
+    retainedOutbox: baselineBody.data.retainedOutbox + 1,
+    staleImport: baselineBody.data.staleImport + 1,
   })
 })
 
