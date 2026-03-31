@@ -166,6 +166,13 @@ export type JudgmentJobSqliteHealthSnapshot = {
   walBytes: number
 }
 
+export type JudgmentJobSqlitePreflightSnapshot = {
+  outboxSampleCount: number
+  queueSampleCount: number
+  sqliteFileBytes: number
+  walBytes: number
+}
+
 type ScanStateRow = {
   cursorLastArticleId: string | null
   cursorLastDate: string | null
@@ -193,6 +200,8 @@ type JobScanStateUpdate = {
 
 type SqliteTableInfoRow = {name: string}
 
+type SqliteMasterRow = {name: string}
+
 type JudgmentJobSqliteClaimedOutboxBatch = {claim: JudgmentJobSqliteOutboxClaim; rows: JudgmentJobSqliteOutboxEntry[]}
 
 type ClaimedOutboxRow = {claimId: string; rowCount: number}
@@ -214,6 +223,13 @@ export class JudgmentJobLeaseError extends Error {
   constructor(message: string, options?: {cause?: unknown}) {
     super(message, options)
     this.name = 'JudgmentJobLeaseError'
+  }
+}
+
+export class JudgmentJobSqlitePreflightError extends Error {
+  constructor(message: string, options?: {cause?: unknown}) {
+    super(message, options)
+    this.name = 'JudgmentJobSqlitePreflightError'
   }
 }
 
@@ -436,6 +452,58 @@ const outboxClaimColumns = [
   {name: 'export_claimed_at', sql: 'TEXT'},
   {name: 'export_claimed_by', sql: 'TEXT'},
 ] as const
+
+const judgmentJobSqliteRequiredSchema = {
+  job_info: [
+    'job_id',
+    'project_id',
+    'model_id',
+    'model_name',
+    'model_provider',
+    'use_title',
+    'use_abstract',
+    'use_fulltext',
+    'use_fulltext_no_images',
+    'created_at',
+  ],
+  job_scan_state: [
+    'job_id',
+    'cursor_last_date',
+    'cursor_last_article_id',
+    'scan_epoch',
+    'exhausted_at',
+    'last_project_refresh_ack_seq',
+    'wrap_visibility_ack_seq',
+    'updated_at',
+  ],
+  queue_prompt: [
+    'id',
+    'job_id',
+    'article_id',
+    'prompt_id',
+    'status',
+    'server_id',
+    'claim_id',
+    'sent_at',
+    'created_at',
+    'updated_at',
+  ],
+  judgment_outbox: [
+    'outbox_seq',
+    'job_id',
+    'queue_prompt_id',
+    'judgment_id',
+    'article_id',
+    'prompt_id',
+    'model_id',
+    'created_at',
+    'updated_at',
+    'exported_at',
+    'export_claim_id',
+    'export_claimed_at',
+    'export_claimed_by',
+  ],
+} as const
 
 const jobScanStateColumns = [
   {name: 'scan_epoch', sql: 'INTEGER NOT NULL DEFAULT 0'},
@@ -687,6 +755,122 @@ const getEmptyHealthSnapshot = (): JudgmentJobSqliteHealthSnapshot => {
     retainedRowCount: 0,
     sqliteFileBytes: null,
     walBytes: 0,
+  }
+}
+
+const getExistingTableNames = (database: Database) => {
+  return new Set(
+    (database.query(`SELECT name FROM sqlite_master WHERE type = 'table'`).all() as SqliteMasterRow[]).map((row) => {
+      return row.name
+    }),
+  )
+}
+
+const getTableColumnNames = (database: Database, tableName: string) => {
+  return new Set(
+    (database.query(`PRAGMA table_info('${tableName}')`).all() as SqliteTableInfoRow[]).map((row) => {
+      return row.name
+    }),
+  )
+}
+
+const getJudgmentJobSqliteSchemaProblems = (database: Database) => {
+  const existingTables = getExistingTableNames(database)
+
+  return Object.entries(judgmentJobSqliteRequiredSchema).reduce<string[]>((problems, [tableName, requiredColumns]) => {
+    if (!existingTables.has(tableName)) {
+      return [...problems, `missing table ${tableName}`]
+    }
+
+    const existingColumns = getTableColumnNames(database, tableName)
+    const missingColumns = requiredColumns.filter((columnName) => {
+      return !existingColumns.has(columnName)
+    })
+
+    return missingColumns.length === 0
+      ? problems
+      : [...problems, `missing columns on ${tableName}: ${missingColumns.join(', ')}`]
+  }, [])
+}
+
+const getIsolatedPreflightSnapshot = (database: Database, jobId: string): JudgmentJobSqlitePreflightSnapshot => {
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+  const walPath = `${sqlitePath}-wal`
+  const schemaProblems = getJudgmentJobSqliteSchemaProblems(database)
+
+  if (schemaProblems.length > 0) {
+    throw new JudgmentJobSqlitePreflightError(
+      `SQLite job DB preflight failed for ${jobId}: ${schemaProblems.join('; ')}`,
+    )
+  }
+
+  const queueSampleCount = (
+    database
+      .query(
+        `
+          SELECT id
+          FROM queue_prompt
+          ORDER BY created_at ASC, id ASC
+          LIMIT 1
+        `,
+      )
+      .all() as Array<{id: string}>
+  ).length
+  const outboxSampleCount = (
+    database
+      .query(
+        `
+          SELECT outbox_seq
+          FROM judgment_outbox
+          ORDER BY outbox_seq ASC
+          LIMIT 1
+        `,
+      )
+      .all() as Array<{outboxSeq: number}>
+  ).length
+
+  database
+    .query(
+      `
+        SELECT job_id AS jobId
+        FROM job_scan_state
+        WHERE job_id = ?
+        LIMIT 1
+      `,
+    )
+    .get(jobId)
+
+  return {
+    outboxSampleCount,
+    queueSampleCount,
+    sqliteFileBytes: getFileByteSize(sqlitePath),
+    walBytes: getFileByteSize(walPath),
+  }
+}
+
+const runIsolatedJudgmentJobSqlitePreflight = (jobId: string): JudgmentJobSqlitePreflightSnapshot => {
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+
+  if (!existsSync(sqlitePath)) {
+    throw new JudgmentJobSqlitePreflightError(`SQLite job DB preflight failed for ${jobId}: SQLite DB is missing`)
+  }
+
+  let database: Database | null = null
+
+  try {
+    database = new Database(sqlitePath, {readonly: true})
+    database.exec(`
+      PRAGMA query_only = 1;
+      PRAGMA busy_timeout = 1000;
+    `)
+
+    return getIsolatedPreflightSnapshot(database, jobId)
+  } catch (error) {
+    throw error instanceof JudgmentJobSqlitePreflightError
+      ? error
+      : new JudgmentJobSqlitePreflightError(`SQLite job DB preflight failed for ${jobId}`, {cause: error})
+  } finally {
+    database?.close(false)
   }
 }
 
@@ -1636,6 +1820,9 @@ const sqliteService = {
   },
   hasJob: (jobId: string) => {
     return existsSync(getJudgmentJobSqlitePath(jobId))
+  },
+  runIsolatedPreflight: async (jobId: string): Promise<JudgmentJobSqlitePreflightSnapshot> => {
+    return runIsolatedJudgmentJobSqlitePreflight(jobId)
   },
   hasLocalJudgment: async (jobId: string, articleId: string, promptId: string): Promise<boolean> => {
     return (

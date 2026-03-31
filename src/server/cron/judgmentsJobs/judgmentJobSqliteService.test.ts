@@ -1,6 +1,7 @@
 import {existsSync, rmSync, writeFileSync} from 'node:fs'
 import {dirname, join} from 'node:path'
 
+import {Database} from 'bun:sqlite'
 import {afterAll, beforeAll, expect, test} from 'bun:test'
 
 import {getJudgmentJobLeasePath, getJudgmentJobSqlitePath} from './judgmentJobPaths.ts'
@@ -140,6 +141,126 @@ test('claims and requeues prompts from the per-job SQLite queue', async () => {
   expect(requeued).toBe(1)
   expect(await service.getReadyCount(jobId)).toBe(2)
   expect(await service.getInFlightCount(jobId)).toBe(0)
+})
+
+test('runs isolated SQLite preflight against queue and outbox state', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-preflight-${Date.now()}`
+  const modelId = `model-preflight-${Date.now()}`
+  const projectId = `project-preflight-${Date.now()}`
+  const jobId = `job-preflight-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Preflight Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(jobId, [{articleId: 'article-preflight', promptId: 'prompt-preflight'}], 'server-a')
+
+  const [claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Expected a claimed prompt for SQLite preflight test')
+  }
+
+  await service.recordJudgmentSuccess(jobId, {
+    answeredOriginal: 'yes',
+    answeredOriginalAsArray: ['yes'],
+    articleId: claimedPrompt.articleId,
+    chunkingStrategy: null,
+    confidenceOriginal: 90,
+    createdAt: new Date(),
+    explanation: 'preflight',
+    isAnswered: true,
+    judgmentId: `judgment-preflight-${Date.now()}`,
+    modelId,
+    projectId,
+    promptId: claimedPrompt.promptId,
+    queuePromptId: claimedPrompt.recordId,
+    quotes: ['quote'],
+    rawResponseJson: {answer: 'yes'},
+    snapshotProjectId: projectId,
+    snapshotProjectModelName: 'Qwen 35B',
+    updatedAt: new Date(),
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
+
+  const snapshot = await service.runIsolatedPreflight(jobId)
+
+  expect(snapshot.queueSampleCount).toBe(1)
+  expect(snapshot.outboxSampleCount).toBe(1)
+  expect(snapshot.sqliteFileBytes).toBeGreaterThan(0)
+  expect(snapshot.walBytes).toBeGreaterThanOrEqual(0)
+
+  await service.closeAll()
+})
+
+test('isolated SQLite preflight fails when required schema is missing', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-preflight-fail-${Date.now()}`
+  const modelId = `model-preflight-fail-${Date.now()}`
+  const projectId = `project-preflight-fail-${Date.now()}`
+  const jobId = `job-preflight-fail-${Date.now()}`
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Preflight Failure Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'paused')
+  `)
+
+  const malformedDatabase = new Database(sqlitePath, {create: true})
+  malformedDatabase.exec(`CREATE TABLE job_info (job_id TEXT PRIMARY KEY, created_at TEXT NOT NULL);`)
+  malformedDatabase.close(false)
+  const preflightError = await service
+    .runIsolatedPreflight(jobId)
+    .then(() => {
+      return null
+    })
+    .catch((error: unknown) => {
+      return error instanceof Error ? error : new Error(String(error))
+    })
+
+  expect(preflightError).toBeInstanceOf(Error)
+  expect(preflightError?.message).toContain('SQLite job DB preflight failed')
+
+  await service.closeAll()
+  rmSync(sqlitePath, {force: true})
 })
 
 test('limits SQLite ready inserts to the requested deficit while skipping duplicates', async () => {

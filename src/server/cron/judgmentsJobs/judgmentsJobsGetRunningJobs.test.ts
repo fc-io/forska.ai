@@ -9,8 +9,10 @@ const getJob = (id: string): RunningJudgmentJob => {
     modelId: `${id}-model`,
     modelName: 'Qwen/Qwen3.5-35B-A3B',
     modelProvider: 'sglang',
+    quarantineReason: null,
     providerConnectionId: `${id}-connection`,
     projectId: `${id}-project`,
+    storageState: 'active',
   }
 }
 
@@ -29,8 +31,10 @@ test('filterRunningJobsByRuntimeMatch filters out jobs with runtime mismatch', a
       modelId: 'model-ok',
       modelName: 'Qwen/Qwen3.5-35B-A3B',
       modelProvider: 'sglang',
+      quarantineReason: null,
       providerConnectionId: 'connection-ok',
       projectId: 'project-ok',
+      storageState: 'active',
     },
     {
       id: 'job-mismatch',
@@ -38,8 +42,10 @@ test('filterRunningJobsByRuntimeMatch filters out jobs with runtime mismatch', a
       modelId: 'model-mismatch',
       modelName: 'Qwen/Qwen3.5-32B',
       modelProvider: 'sglang',
+      quarantineReason: null,
       providerConnectionId: 'connection-mismatch',
       projectId: 'project-mismatch',
+      storageState: 'active',
     },
   ]
 

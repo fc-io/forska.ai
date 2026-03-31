@@ -1,6 +1,6 @@
 import {afterAll, afterEach, beforeAll, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
-import {rmSync} from 'fs'
+import {rmSync, writeFileSync} from 'fs'
 import {dirname, join} from 'path'
 
 import {HttpError} from '../utils/httpError.ts'
@@ -236,6 +236,88 @@ test('starting an existing judgments job fails when the runtime model check fail
 
   expect(response.status).toBe(400)
   expect(body).toContain('does not match the active SGLang runtime')
+})
+
+test('starting a quarantined judgments job returns an actionable error', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `quarantine-start-project-${Date.now()}`
+  const modelId = `quarantine-start-model-${Date.now()}`
+  const connectionId = `quarantine-start-connection-${Date.now()}`
+  const jobId = `quarantine-start-job-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state, quarantined_at, quarantine_reason)
+    VALUES ('${jobId}', '${projectId}', 'paused', 'quarantined', '${new Date().toISOString()}', 'sqlite checksum mismatch')
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}`, {
+      body: JSON.stringify({status: 'running'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = await response.text()
+
+  expect(response.status).toBe(409)
+  expect(body).toContain(`Job ${jobId} is quarantined.`)
+  expect(body).toContain('Repair or recreate the local SQLite job DB before starting or resuming it.')
+})
+
+test('starting a job with a failing SQLite preflight quarantines it without starting', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `preflight-start-project-${Date.now()}`
+  const modelId = `preflight-start-model-${Date.now()}`
+  const connectionId = `preflight-start-connection-${Date.now()}`
+  const jobId = `preflight-start-job-${Date.now()}`
+  const {getAppDatabaseService} = await import('../services/appDatabaseService.ts')
+  const {getJudgmentJobSqlitePath} = await import('../cron/judgmentsJobs/judgmentJobPaths.ts')
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'paused', 'active')
+  `)
+
+  writeFileSync(sqlitePath, 'not a sqlite database')
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}`, {
+      body: JSON.stringify({status: 'running'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = await response.text()
+  const [job] = await getAppDatabaseService().queryJson<{
+    quarantineReason: string | null
+    status: string
+    storageState: string
+  }>(`
+    SELECT
+      quarantine_reason AS quarantineReason,
+      status AS status,
+      storage_state AS storageState
+    FROM app.judgment_job
+    WHERE id = '${jobId}'
+    LIMIT 1
+  `)
+
+  expect(response.status).toBe(409)
+  expect(body).toContain(`Job ${jobId} is quarantined.`)
+  expect(job?.status).toBe('failed')
+  expect(job?.storageState).toBe('quarantined')
+  expect(job?.quarantineReason).toContain('SQLite job DB preflight failed')
+
+  rmSync(sqlitePath, {force: true})
 })
 
 test('pausing an existing judgments job succeeds when queued prompts reference the job', async () => {

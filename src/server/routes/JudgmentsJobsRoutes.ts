@@ -3,6 +3,7 @@ import {Elysia, t} from 'elysia'
 import {getUnassessedArticlesFromOlap, getUnassessedCountFromOlap} from '../../services/olap/unassessedArticlesOlap.ts'
 import {getDefaultJudgmentServerJobId} from '../cron/judgmentsJobs/judgmentJobServerIdentity.ts'
 import {flushJudgmentJobSqliteOutbox} from '../cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts'
+import {assertJudgmentJobCanRunSqlitePreflight} from '../cron/judgmentsJobs/judgmentJobSqlitePreflight.ts'
 import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {getJudgmentRequestStats} from '../cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {assertStoredProviderModelRuntimeMatch} from '../providers/providerRuntimeModelGuard.ts'
@@ -825,8 +826,13 @@ export const judgmentsJobsRoutes = new Elysia()
 
       if (body.status === 'running') {
         assertJudgingRuntimeCanRun()
-        const {projectModelId} = await getJobContext({jobId: params.id})
+        const {job, projectModelId} = await getJobContext({jobId: params.id})
 
+        await assertJudgmentJobCanRunSqlitePreflight({
+          jobId: params.id,
+          quarantineReason: job.quarantineReason,
+          storageState: job.storageState,
+        })
         await assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
 
         if (!sqliteService.hasJob(params.id)) {

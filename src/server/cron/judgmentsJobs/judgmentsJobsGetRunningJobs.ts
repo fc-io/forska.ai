@@ -1,6 +1,7 @@
 import {getStoredProviderModelRuntimeMatch} from '../../providers/providerRuntimeModelGuard.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
+import {filterRunningJobsBySqlitePreflight} from './judgmentJobSqlitePreflight.ts'
 
 const runningJobsLogger = createRateLimitedLogger({windowMs: 30_000})
 
@@ -30,8 +31,10 @@ export type RunningJudgmentJob = {
   modelId: string
   modelName: string | null
   modelProvider: string | null
+  quarantineReason: string | null
   providerConnectionId: string | null
   projectId: string
+  storageState: string
 }
 
 const getRunningJobsFromDatabase = async (): Promise<RunningJudgmentJob[]> => {
@@ -43,7 +46,9 @@ const getRunningJobsFromDatabase = async (): Promise<RunningJudgmentJob[]> => {
       pc.provider_kind AS modelProvider,
       m.id AS modelId,
       m.remote_model_id AS modelName,
-      m.provider_connection_id AS providerConnectionId
+      jj.quarantine_reason AS quarantineReason,
+      m.provider_connection_id AS providerConnectionId,
+      jj.storage_state AS storageState
     FROM app.judgment_job jj
     INNER JOIN app.project p ON jj.project_id = p.id
     INNER JOIN app.model m ON p.model_id = m.id
@@ -93,6 +98,7 @@ export const judgmentsJobsGetRunningJobs = async ({
   applyRuntimeMatchFilter = true,
 }: {applyRuntimeMatchFilter?: boolean} = {}) => {
   const jobs = await getRunningJobsFromDatabase()
+  const preflightedJobs = await filterRunningJobsBySqlitePreflight(jobs)
 
-  return applyRuntimeMatchFilter ? filterRunningJobsByRuntimeMatch(jobs) : jobs
+  return applyRuntimeMatchFilter ? filterRunningJobsByRuntimeMatch(preflightedJobs) : preflightedJobs
 }
