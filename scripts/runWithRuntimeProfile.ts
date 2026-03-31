@@ -1,7 +1,7 @@
 import {getBackgroundServerEnv} from '../src/server/utils/backgroundServerStack.ts'
 import {mergeRuntimeProfileEnv, type RuntimeProfileName} from '../src/utils/runtimeProfile.ts'
 
-type RuntimeProfileMode = 'api-only-server' | 'duckdb-migration' | 'stacked-server' | 'worker-only-server'
+type RuntimeProfileMode = 'api-only-server' | 'app' | 'duckdb-migration' | 'stacked-server' | 'worker-only-server'
 type RuntimeProfileServerRole = 'api' | 'worker'
 
 type RuntimeProfileCommandOptions = {mode: RuntimeProfileMode; profileName: RuntimeProfileName}
@@ -24,6 +24,12 @@ const runtimeProfileModes: Record<RuntimeProfileMode, RuntimeProfileCommandConfi
     command: ['bun', 'run', '--watch', 'src/server/index.ts'],
     env: (commandOptions) => {
       return getRuntimeProfileServerEnv(commandOptions, 'api')
+    },
+  },
+  app: {
+    command: ['bunx', '--bun', 'vite'],
+    env: ({profileName}) => {
+      return getRuntimeProfileBaseEnv(profileName)
     },
   },
   'duckdb-migration': {
@@ -67,6 +73,7 @@ const getMode = (): RuntimeProfileMode => {
 
   if (
     mode === 'api-only-server'
+    || mode === 'app'
     || mode === 'duckdb-migration'
     || mode === 'stacked-server'
     || mode === 'worker-only-server'
@@ -75,7 +82,7 @@ const getMode = (): RuntimeProfileMode => {
   }
 
   throw new Error(
-    `Expected --mode api-only-server|duckdb-migration|stacked-server|worker-only-server, received ${String(mode)}`,
+    `Expected --mode api-only-server|app|duckdb-migration|stacked-server|worker-only-server, received ${String(mode)}`,
   )
 }
 
