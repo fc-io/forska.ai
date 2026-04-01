@@ -7,6 +7,7 @@ import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
 import {
   getJudgmentJobSqliteService,
   JudgmentJobLeaseError,
+  type JudgmentJobSqliteClaimedOutboxBatch,
   type JudgmentJobSqliteOutboxEntry,
 } from './judgmentJobSqliteService.ts'
 
@@ -25,6 +26,15 @@ export type JudgmentJobSqliteOutboxImportCycleResult = {
   outboxClaimId: string | null
   outboxRowCount: number
   status: 'idle' | 'imported'
+}
+export type JudgmentJobRecoveredDiscardedOutboxRow = {errorMessage: string; jobId: string; outboxSeq: number}
+export type JudgmentJobRecoveredOutboxRow = {jobId: string; outboxSeq: number}
+export type JudgmentJobRecoveredOutboxImportResult = {
+  discardedRows: JudgmentJobRecoveredDiscardedOutboxRow[]
+  duplicateRows: JudgmentJobRecoveredOutboxRow[]
+  importedRows: JudgmentJobRecoveredOutboxRow[]
+  importableRows: JudgmentJobRecoveredOutboxRow[]
+  lastImportableOutboxSeqByJob: Record<string, number | null>
 }
 
 type JudgmentOutboxForeignKeys = {
@@ -267,6 +277,20 @@ const getLastImportedOutboxSeq = (entries: JudgmentJobSqliteOutboxEntry[]) => {
   }, null)
 }
 
+const getRecoveredOutboxRows = (entries: JudgmentJobSqliteOutboxEntry[]): JudgmentJobRecoveredOutboxRow[] => {
+  return entries.map((entry) => {
+    return {jobId: entry.jobId, outboxSeq: entry.outboxSeq}
+  })
+}
+
+const getLastImportableOutboxSeqByJob = (entries: JudgmentJobSqliteOutboxEntry[]) => {
+  return entries.reduce<Record<string, number | null>>((acc, entry) => {
+    const currentMax = acc[entry.jobId]
+
+    return {...acc, [entry.jobId]: currentMax == null ? entry.outboxSeq : Math.max(currentMax, entry.outboxSeq)}
+  }, {})
+}
+
 const getImportCandidateJobIds = async (jobId?: string) => {
   if (jobId) {
     return [jobId]
@@ -355,6 +379,25 @@ const getClaimedOutboxBatchForJobIds = async ({
   }
 }
 
+const getIdleCycleResult = ({
+  claimedBy,
+  jobId,
+}: {
+  claimedBy: string
+  jobId?: string
+}): JudgmentJobSqliteOutboxImportCycleResult => {
+  return {
+    claimedBy,
+    discardedCount: 0,
+    duplicateCount: 0,
+    importedCount: 0,
+    jobId: jobId ?? null,
+    outboxClaimId: null,
+    outboxRowCount: 0,
+    status: 'idle',
+  }
+}
+
 const getImportBatch = async ({claimedBy, jobId}: {claimedBy: string; jobId?: string}) => {
   const sqliteService = getJudgmentJobSqliteService()
   const jobIds = await getImportCandidateJobIds(jobId)
@@ -374,24 +417,58 @@ const getImportBatch = async ({claimedBy, jobId}: {claimedBy: string; jobId?: st
       : await claimPendingOutboxBatchForJobIds({claimedBy, jobIds})
 }
 
-export const runJudgmentJobSqliteOutboxImportCycle = async ({
+export const claimJudgmentJobSqliteImportBatch = async ({
   claimedBy = getDefaultJudgmentServerJobId(),
   jobId,
-}: {claimedBy?: string; jobId?: string} = {}): Promise<JudgmentJobSqliteOutboxImportCycleResult> => {
+}: {claimedBy?: string; jobId?: string} = {}): Promise<JudgmentJobSqliteClaimedOutboxBatch | null> => {
+  return getImportBatch({claimedBy, jobId})
+}
+
+export const importRecoveredJudgmentJobSqliteOutboxEntries = async (
+  entries: JudgmentJobSqliteOutboxEntry[],
+): Promise<JudgmentJobRecoveredOutboxImportResult> => {
+  const {discardedEntries, importableEntries} = await partitionImportableEntries(entries)
+  const {existingEntries, missingEntries} = await partitionExistingJudgments(importableEntries)
+
+  await insertOutboxEntriesIntoDuckdb(missingEntries)
+
+  const {missingEntries: remainingEntries} = await partitionExistingJudgments(importableEntries)
+
+  if (remainingEntries.length > 0) {
+    throw new Error(
+      `Failed to replay recovered SQLite judgment outbox rows for ${remainingEntries[0]?.jobId ?? 'unknown-job'}`,
+    )
+  }
+
+  if (importableEntries.length > 0) {
+    await queueRefreshesForEntries(importableEntries)
+    await getDuckdbMartRefreshService().flush()
+  }
+
+  return {
+    discardedRows: discardedEntries.map(({entry, errorMessage}) => {
+      return {errorMessage, jobId: entry.jobId, outboxSeq: entry.outboxSeq}
+    }),
+    duplicateRows: getRecoveredOutboxRows(existingEntries),
+    importedRows: getRecoveredOutboxRows(missingEntries),
+    importableRows: getRecoveredOutboxRows(importableEntries),
+    lastImportableOutboxSeqByJob: getLastImportableOutboxSeqByJob(importableEntries),
+  }
+}
+
+export const runJudgmentJobSqliteOutboxImportCycleForClaimedBatch = async ({
+  claimedBatch,
+  claimedBy,
+  requestedJobId,
+}: {
+  claimedBatch: JudgmentJobSqliteClaimedOutboxBatch | null
+  claimedBy: string
+  requestedJobId?: string
+}): Promise<JudgmentJobSqliteOutboxImportCycleResult> => {
   const sqliteService = getJudgmentJobSqliteService()
-  const claimedBatch = await getImportBatch({claimedBy, jobId})
 
   if (!claimedBatch) {
-    return {
-      claimedBy,
-      discardedCount: 0,
-      duplicateCount: 0,
-      importedCount: 0,
-      jobId: jobId ?? null,
-      outboxClaimId: null,
-      outboxRowCount: 0,
-      status: 'idle',
-    }
+    return getIdleCycleResult({claimedBy, jobId: requestedJobId})
   }
 
   const {claim, rows} = claimedBatch
@@ -442,6 +519,15 @@ export const runJudgmentJobSqliteOutboxImportCycle = async ({
     })
     throw error
   }
+}
+
+export const runJudgmentJobSqliteOutboxImportCycle = async ({
+  claimedBy = getDefaultJudgmentServerJobId(),
+  jobId,
+}: {claimedBy?: string; jobId?: string} = {}): Promise<JudgmentJobSqliteOutboxImportCycleResult> => {
+  const claimedBatch = await getImportBatch({claimedBy, jobId})
+
+  return runJudgmentJobSqliteOutboxImportCycleForClaimedBatch({claimedBatch, claimedBy, requestedJobId: jobId})
 }
 
 export const importJudgmentJobSqliteOutboxBatch = async ({

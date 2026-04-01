@@ -1,12 +1,13 @@
 import {
-  runJudgmentJobRepairAction,
   type JudgmentJobRepairAction,
+  runJudgmentJobRepairAction,
 } from '../src/server/cron/judgmentsJobs/judgmentJobRepair.ts'
 import {
   getJudgmentJobSqliteService,
   type JudgmentJobSystemSqliteFallbackStep,
 } from '../src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
+import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 
 type CliOptions = {
   action: JudgmentJobRepairAction | null
@@ -81,13 +82,19 @@ export const runJudgmentJobRepair = async () => {
     return
   }
 
+  const action = options.action
+  const jobId = options.jobId
+
   try {
-    const result = await runJudgmentJobRepairAction({
-      action: options.action,
-      claimedBy: options.claimedBy,
-      jobId: options.jobId,
-      reason: options.reason,
-      systemSqliteFallbackSteps: options.systemSqliteFallbackSteps,
+    const result = await withDuckdbMaintenanceAccess('judgment job repair', async () => {
+      return runJudgmentJobRepairAction({
+        action,
+        allowOfflineRepairForQuarantinedLocalState: true,
+        claimedBy: options.claimedBy,
+        jobId,
+        reason: options.reason,
+        systemSqliteFallbackSteps: options.systemSqliteFallbackSteps,
+      })
     })
 
     process.exitCode = result.ok ? 0 : 1
@@ -95,12 +102,7 @@ export const runJudgmentJobRepair = async () => {
   } catch (error) {
     process.exitCode = 1
     console.log(
-      JSON.stringify({
-        action: options.action,
-        error: error instanceof Error ? error.message : String(error),
-        jobId: options.jobId,
-        status: 'failed',
-      }),
+      JSON.stringify({action, error: error instanceof Error ? error.message : String(error), jobId, status: 'failed'}),
     )
   } finally {
     await closeResources()

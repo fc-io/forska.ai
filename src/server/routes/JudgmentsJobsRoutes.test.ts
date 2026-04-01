@@ -1,4 +1,5 @@
 import {afterAll, afterEach, beforeAll, expect, mock, test} from 'bun:test'
+import {Database} from 'bun:sqlite'
 import {Elysia} from 'elysia'
 import {existsSync, rmSync, writeFileSync} from 'fs'
 import {dirname, join} from 'path'
@@ -266,6 +267,61 @@ test('starting a quarantined judgments job returns an actionable error', async (
   expect(response.status).toBe(409)
   expect(body).toContain(`Job ${jobId} is quarantined.`)
   expect(body).toContain('Repair or recreate the local SQLite job DB before starting or resuming it.')
+})
+
+test('starting a judgments job quarantines corrupt SQLite state after isolated preflight fails', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `corrupt-start-project-${Date.now()}`
+  const modelId = `corrupt-start-model-${Date.now()}`
+  const connectionId = `corrupt-start-connection-${Date.now()}`
+  const jobId = `corrupt-start-job-${Date.now()}`
+  const {getJudgmentJobSqlitePath} = await import('../cron/judgmentsJobs/judgmentJobPaths.ts')
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const sqliteService = getJudgmentJobSqliteService()
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'paused')
+  `)
+
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.closeAll()
+
+  const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+
+  try {
+    sqliteDatabase.exec(`DROP TABLE queue_prompt`)
+  } finally {
+    sqliteDatabase.close(false)
+  }
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}`, {
+      body: JSON.stringify({status: 'running'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = await response.text()
+
+  expect(response.status).toBe(409)
+  expect(body).toContain('missing table queue_prompt')
+
+  const healthResponse = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}/health`))
+  const healthBody = (await healthResponse.json()) as {
+    quarantine: {quarantineReason: string | null}
+    recommendedNextAction: string
+    storageState: string
+  }
+
+  expect(healthResponse.status).toBe(200)
+  expect(healthBody.storageState).toBe('quarantined')
+  expect(healthBody.recommendedNextAction).toBe('repair_quarantine')
+  expect(healthBody.quarantine.quarantineReason).toContain('missing table queue_prompt')
 })
 
 test('starting a draining judgments job returns an actionable error', async () => {
@@ -806,7 +862,14 @@ test('judgment job health summary aggregates storage risk counts', async () => {
 
   const baselineResponse = await app.handle(new Request('http://localhost/api/judgmentsjobs-health'))
   const baselineBody = (await baselineResponse.json()) as {
-    data: {healthy: number; draining: number; quarantined: number; retainedOutbox: number; staleImport: number}
+    data: {
+      healthy: number
+      draining: number
+      offlineRepairRequired: number
+      quarantined: number
+      retainedOutbox: number
+      staleImport: number
+    }
   }
 
   const now = Date.now()
@@ -879,16 +942,78 @@ test('judgment job health summary aggregates storage risk counts', async () => {
 
   const response = await app.handle(new Request('http://localhost/api/judgmentsjobs-health'))
   const body = (await response.json()) as {
-    data: {healthy: number; draining: number; quarantined: number; retainedOutbox: number; staleImport: number}
+    data: {
+      healthy: number
+      draining: number
+      offlineRepairRequired: number
+      quarantined: number
+      retainedOutbox: number
+      staleImport: number
+    }
   }
 
   expect(response.status).toBe(200)
   expect(body.data).toEqual({
     healthy: baselineBody.data.healthy + 1,
     draining: baselineBody.data.draining + 1,
+    offlineRepairRequired: baselineBody.data.offlineRepairRequired,
     quarantined: baselineBody.data.quarantined + 1,
     retainedOutbox: baselineBody.data.retainedOutbox + 1,
     staleImport: baselineBody.data.staleImport + 1,
+  })
+})
+
+test('job detail exposes storage policy for safe live repair and offline-only recovery', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const now = Date.now()
+  const safeProjectId = `storage-policy-safe-project-${now}`
+  const safeModelId = `storage-policy-safe-model-${now}`
+  const safeConnectionId = `storage-policy-safe-connection-${now}`
+  const safeJobId = `storage-policy-safe-job-${now}`
+  const offlineProjectId = `storage-policy-offline-project-${now}`
+  const offlineModelId = `storage-policy-offline-model-${now}`
+  const offlineConnectionId = `storage-policy-offline-connection-${now}`
+  const offlineJobId = `storage-policy-offline-job-${now}`
+
+  await insertProjectFixture({connectionId: safeConnectionId, modelId: safeModelId, projectId: safeProjectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${safeJobId}', '${safeProjectId}', 'running', 'active')
+  `)
+  await getJudgmentJobSqliteService().initializeJob(safeJobId)
+
+  await insertProjectFixture({connectionId: offlineConnectionId, modelId: offlineModelId, projectId: offlineProjectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state, quarantined_at, quarantine_reason)
+    VALUES ('${offlineJobId}', '${offlineProjectId}', 'failed', 'quarantined', '${new Date().toISOString()}', 'manual quarantine')
+  `)
+  await getJudgmentJobSqliteService().initializeJob(offlineJobId)
+  await insertOutboxFixture({jobId: offlineJobId, modelId: offlineModelId, projectId: offlineProjectId})
+
+  const safeResponse = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${safeJobId}`))
+  const offlineResponse = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${offlineJobId}`))
+  const safeBody = (await safeResponse.json()) as {
+    storagePolicy: {hasLocalSqliteState: boolean; repairMode: string; startupHandling: string}
+  }
+  const offlineBody = (await offlineResponse.json()) as {
+    storagePolicy: {hasLocalSqliteState: boolean; repairMode: string; startupHandling: string}
+  }
+
+  expect(safeResponse.status).toBe(200)
+  expect(safeBody.storagePolicy).toEqual({
+    hasLocalSqliteState: true,
+    repairMode: 'safe_live_repair',
+    startupHandling: 'auto_drain',
+  })
+  expect(offlineResponse.status).toBe(200)
+  expect(offlineBody.storagePolicy).toEqual({
+    hasLocalSqliteState: true,
+    repairMode: 'offline_repair_required',
+    startupHandling: 'skip_offline_repair',
   })
 })
 

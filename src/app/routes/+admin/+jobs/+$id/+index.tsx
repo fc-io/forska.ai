@@ -80,6 +80,22 @@ const formatDuration = (value: number | null | undefined) => {
   return hours > 0 ? `${hours}h ${minutes}m ${seconds}s` : minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
 }
 
+const formatRepairMode = (value: 'none' | 'offline_repair_required' | 'safe_live_repair' | null | undefined) => {
+  return value === 'offline_repair_required'
+    ? 'Offline Repair Required'
+    : value === 'safe_live_repair'
+      ? 'Safe Live Repair'
+      : 'No Repair Needed'
+}
+
+const formatStartupHandling = (value: 'auto_drain' | 'idle' | 'skip_offline_repair' | null | undefined) => {
+  return value === 'auto_drain'
+    ? 'Auto-drain on worker start'
+    : value === 'skip_offline_repair'
+      ? 'Skip and keep quarantined'
+      : 'No startup action'
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return Boolean(value && typeof value === 'object')
 }
@@ -115,6 +131,11 @@ type JobData = {
     retainedRowCount?: number
     sqliteFileBytes?: number | null
     walBytes?: number
+  }
+  storagePolicy?: {
+    hasLocalSqliteState?: boolean
+    repairMode?: 'none' | 'offline_repair_required' | 'safe_live_repair'
+    startupHandling?: 'auto_drain' | 'idle' | 'skip_offline_repair'
   }
   judgingRuntime?: {enabled?: boolean; reason?: string | null}
   error?: string[]
@@ -316,6 +337,9 @@ const AdminJudgmentJobDetail = () => {
             const storageHealth = () => {
               return data()?.storageHealth
             }
+            const storagePolicy = () => {
+              return data()?.storagePolicy
+            }
             const resumeBlockedReason = () => {
               return data()?.storageState === 'draining'
                 ? 'Resume is blocked while local storage is draining. Wait for drain cleanup to finish or run a targeted repair action.'
@@ -326,6 +350,9 @@ const AdminJudgmentJobDetail = () => {
             const isResumeBlocked = () => {
               return Boolean(resumeBlockedReason())
             }
+            const isOfflineRepairOnly = () => {
+              return storagePolicy()?.repairMode === 'offline_repair_required'
+            }
             const repairButtons = () => {
               return [
                 {action: 'preflight', label: 'Run Preflight'},
@@ -333,6 +360,28 @@ const AdminJudgmentJobDetail = () => {
                 {action: 'drain', label: 'Drain Storage'},
                 {action: 'repair', label: 'Repair Storage'},
               ] as const
+            }
+            const isLiveRepairButtonDisabled = (action: JobRepairAction) => {
+              return isOfflineRepairOnly() && (action === 'drain' || action === 'repair')
+            }
+            const recoveryGuidance = () => {
+              const hasRetainedLocalState =
+                (storageHealth()?.outboxRowCount ?? 0) > 0
+                || (storageHealth()?.claimedOutboxCount ?? 0) > 0
+                || (storageHealth()?.retainedRowCount ?? 0) > 0
+
+              return isOfflineRepairOnly() && hasRetainedLocalState
+                ? {
+                    lines: [
+                      'Keep this job quarantined.',
+                      'Run Preflight if you want a safe read-only check that the SQLite job DB still opens.',
+                      'Live Repair and Live Drain are disabled because this job still has quarantined local SQLite state.',
+                      'Worker startup will skip this job instead of auto-draining it.',
+                      'Use offline repair after stopping the server stack, then remove quarantine only after that succeeds.',
+                    ],
+                    title: 'Recommended now',
+                  }
+                : null
             }
             const projectProviderConnection = () => {
               const modelId = projectDetailsQuery.data?.model?.id
@@ -596,6 +645,14 @@ const AdminJudgmentJobDetail = () => {
                       <p class="font-medium mt-1">{formatStatus(data()?.storageState ?? null)}</p>
                     </div>
                     <div class="bg-gray-50 rounded-lg p-4">
+                      <p class="text-sm text-gray-500">Repair Mode</p>
+                      <p class="font-medium mt-1">{formatRepairMode(storagePolicy()?.repairMode)}</p>
+                    </div>
+                    <div class="bg-gray-50 rounded-lg p-4">
+                      <p class="text-sm text-gray-500">Startup Handling</p>
+                      <p class="font-medium mt-1">{formatStartupHandling(storagePolicy()?.startupHandling)}</p>
+                    </div>
+                    <div class="bg-gray-50 rounded-lg p-4">
                       <p class="text-sm text-gray-500">SQLite Size</p>
                       <p class="font-medium mt-1">{formatByteSize(storageHealth()?.sqliteFileBytes)}</p>
                     </div>
@@ -640,6 +697,22 @@ const AdminJudgmentJobDetail = () => {
                   </div>
 
                   <div class="mt-6 pt-6 border-t border-gray-200">
+                    <Show when={recoveryGuidance()}>
+                      {(guidance) => {
+                        return (
+                          <div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                            <p class="font-medium">{guidance().title}</p>
+                            <ul class="mt-2 list-disc space-y-1 pl-5">
+                              <For each={guidance().lines}>
+                                {(line) => {
+                                  return <li>{line}</li>
+                                }}
+                              </For>
+                            </ul>
+                          </div>
+                        )
+                      }}
+                    </Show>
                     <h3 class="text-sm font-medium text-gray-900 mb-3">Repair Actions</h3>
                     <div class="flex flex-wrap gap-3">
                       <For each={repairButtons()}>
@@ -647,7 +720,7 @@ const AdminJudgmentJobDetail = () => {
                           return (
                             <button
                               class="px-4 py-2 bg-slate-700 text-white rounded-md hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
-                              disabled={Boolean(isRepairing())}
+                              disabled={Boolean(isRepairing()) || isLiveRepairButtonDisabled(button.action)}
                               onClick={() => {
                                 const jobId = data()?.id
                                 if (jobId) {
@@ -677,7 +750,7 @@ const AdminJudgmentJobDetail = () => {
                       <Show when={data()?.storageState === 'quarantined'}>
                         <button
                           class="px-4 py-2 bg-emerald-600 text-white rounded-md hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                          disabled={Boolean(isRepairing())}
+                          disabled={Boolean(isRepairing()) || isOfflineRepairOnly()}
                           onClick={() => {
                             const jobId = data()?.id
                             if (jobId) {

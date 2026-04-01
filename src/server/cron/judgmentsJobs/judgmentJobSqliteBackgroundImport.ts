@@ -2,12 +2,14 @@ import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getImportableJudgmentJobWhereSql} from './judgmentJobImportScope.ts'
+import {
+  isJudgmentJobSqliteIsolatedImportLeaseConflict,
+  runJudgmentJobSqliteIsolatedImportCycle,
+} from './judgmentJobSqliteIsolatedImport.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 
 const judgmentJobSqliteBackgroundImportLogger = createRateLimitedLogger({windowMs: 30_000})
 const isolatedImportFailureThreshold = 3
-
-type IsolatedImportProcessResult = {errorMessage: string | null; exitCode: number}
 
 const getImportableJudgmentJobIds = async () => {
   const rows = await getAppDatabaseService().queryJson<{id: string}>(`
@@ -20,73 +22,6 @@ const getImportableJudgmentJobIds = async () => {
   return rows.map((row) => {
     return row.id
   })
-}
-
-const getLastJsonLine = (output: string) => {
-  const lines = output
-    .split('\n')
-    .map((line) => {
-      return line.trim()
-    })
-    .filter((line) => {
-      return line.startsWith('{') && line.endsWith('}')
-    })
-
-  const [lastLine = ''] = lines.slice(-1)
-
-  return lastLine === '' ? null : lastLine
-}
-
-const getIsolatedImportErrorMessage = ({
-  exitCode,
-  stderr,
-  stdout,
-}: {
-  exitCode: number
-  stderr: string
-  stdout: string
-}) => {
-  const lastJsonLine = getLastJsonLine(stdout)
-  const parsed = lastJsonLine
-    ? (() => {
-        try {
-          return JSON.parse(lastJsonLine) as {error?: unknown; status?: unknown}
-        } catch (_error) {
-          return null
-        }
-      })()
-    : null
-
-  if (parsed?.status === 'failed' && typeof parsed.error === 'string' && parsed.error.trim() !== '') {
-    return parsed.error.trim()
-  }
-
-  const trimmedStderr = stderr.trim()
-  const trimmedStdout = stdout.trim()
-
-  return trimmedStderr || trimmedStdout || `SQLite importer exited with code ${exitCode}`
-}
-
-const runIsolatedImportForJob = async ({
-  claimedBy,
-  jobId,
-}: {
-  claimedBy: string
-  jobId: string
-}): Promise<IsolatedImportProcessResult> => {
-  const childProcess = globalThis.Bun.spawn(
-    ['bun', 'scripts/runJudgmentJobSqliteSingleJobImport.ts', `--jobId=${jobId}`, `--claimedBy=${claimedBy}`],
-    {cwd: process.cwd(), env: {...process.env}, stderr: 'pipe', stdout: 'pipe'},
-  )
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(childProcess.stdout).text(),
-    new Response(childProcess.stderr).text(),
-    childProcess.exited,
-  ])
-
-  return exitCode === 0
-    ? {errorMessage: null, exitCode}
-    : {errorMessage: getIsolatedImportErrorMessage({exitCode, stderr, stdout}), exitCode}
 }
 
 const recordImportStart = async (jobId: string) => {
@@ -157,10 +92,6 @@ const recordImportFailure = async ({
   `)
 }
 
-const isLeaseConflictError = (errorMessage: string) => {
-  return errorMessage.includes('SQLite job lease')
-}
-
 export const runJudgmentJobSqliteBackgroundImport = async ({claimedBy}: {claimedBy: string}) => {
   await getJudgmentJobSqliteService().syncOwnedLeases([])
 
@@ -171,14 +102,14 @@ export const runJudgmentJobSqliteBackgroundImport = async ({claimedBy}: {claimed
       const summary = await summaryPromise
       await recordImportStart(jobId)
 
-      const result = await runIsolatedImportForJob({claimedBy, jobId})
+      const result = await runJudgmentJobSqliteIsolatedImportCycle({claimedBy, jobId})
 
       if (result.errorMessage === null) {
         await recordImportSuccess({exitCode: result.exitCode, jobId})
         return {...summary, attemptedCount: summary.attemptedCount + 1, succeededCount: summary.succeededCount + 1}
       }
 
-      if (isLeaseConflictError(result.errorMessage)) {
+      if (isJudgmentJobSqliteIsolatedImportLeaseConflict(result.errorMessage)) {
         judgmentJobSqliteBackgroundImportLogger.log(
           `judgment-job-sqlite-background-import:lease:${jobId}`,
           '[judgment-job-sqlite-background-import] skipped job because the SQLite lease is busy',

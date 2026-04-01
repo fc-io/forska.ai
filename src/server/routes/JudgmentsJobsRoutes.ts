@@ -3,9 +3,18 @@ import {Elysia, t} from 'elysia'
 import {getUnassessedArticlesFromOlap, getUnassessedCountFromOlap} from '../../services/olap/unassessedArticlesOlap.ts'
 import {runJudgmentJobRepairAction} from '../cron/judgmentsJobs/judgmentJobRepair.ts'
 import {getDefaultJudgmentServerJobId} from '../cron/judgmentsJobs/judgmentJobServerIdentity.ts'
+import {
+  isJudgmentJobSqliteIsolatedImportLeaseConflict,
+  runJudgmentJobSqliteIsolatedFlush,
+} from '../cron/judgmentsJobs/judgmentJobSqliteIsolatedImport.ts'
 import {flushJudgmentJobSqliteOutbox} from '../cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts'
 import {assertJudgmentJobCanRunSqlitePreflight} from '../cron/judgmentsJobs/judgmentJobSqlitePreflight.ts'
 import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
+import {
+  getJudgmentJobRepairMode,
+  getJudgmentJobStartupHandling,
+  hasJudgmentJobLocalSqliteState,
+} from '../cron/judgmentsJobs/judgmentJobStoragePolicy.ts'
 import {getJudgmentRequestStats} from '../cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {assertStoredProviderModelRuntimeMatch} from '../providers/providerRuntimeModelGuard.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
@@ -49,12 +58,20 @@ type JudgmentJobMutationState = {
 type JudgmentJobMutationQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
 type JudgmentJobHealthAction =
   | 'none'
+  | 'repair_offline_required'
   | 'repair_missing_sqlite'
   | 'wait_for_drain'
   | 'repair_quarantine'
   | 'resume_outbox_import'
   | 'retry_stale_import'
-type JudgmentJobHealthBadge = 'Healthy' | 'Draining' | 'Large WAL' | 'Quarantined' | 'Retained Outbox' | 'Stale Import'
+type JudgmentJobHealthBadge =
+  | 'Healthy'
+  | 'Draining'
+  | 'Large WAL'
+  | 'Offline Repair'
+  | 'Quarantined'
+  | 'Retained Outbox'
+  | 'Stale Import'
 type JudgmentJobDeleteTx = {run: (statement: string) => Promise<void>}
 
 type UnassessedCountCacheValue = {value: number; expiresAt: number}
@@ -118,6 +135,7 @@ const rebuildTokenUseWithoutJobTx = async ({jobId, tx}: {jobId: string; tx: Judg
   await tx.run(`INSERT INTO app.token_use SELECT * FROM ${tempTableName}`)
   await tx.run(`DROP TABLE ${tempTableName}`)
 }
+
 const getUnassessedCountCacheKey = (
   projectId: string,
   projectModelId: string,
@@ -373,14 +391,35 @@ const hasLargeWal = (
   return sqliteHealth.walBytes >= largeWalThresholdBytes
 }
 
+const getStoragePolicy = ({
+  job,
+  sqliteHealth,
+}: {
+  job: {status: string; storageState: string}
+  sqliteHealth: Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['getHealthSnapshot']>>
+}) => {
+  const hasLocalSqliteState = hasJudgmentJobLocalSqliteState(sqliteHealth)
+
+  return {
+    hasLocalSqliteState,
+    repairMode: getJudgmentJobRepairMode({hasLocalSqliteState, job}),
+    startupHandling: getJudgmentJobStartupHandling({hasLocalSqliteState, job}),
+  }
+}
+
 const getJobHealthBadges = ({
   job,
   sqliteHealth,
 }: {
-  job: {storageState: string; lastImportCompletedAt: Date | null; lastImportStartedAt: Date | null}
+  job: {status: string; storageState: string; lastImportCompletedAt: Date | null; lastImportStartedAt: Date | null}
   sqliteHealth: Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['getHealthSnapshot']>>
 }): JudgmentJobHealthBadge[] => {
   const badges: JudgmentJobHealthBadge[] = []
+  const storagePolicy = getStoragePolicy({job, sqliteHealth})
+
+  if (storagePolicy.repairMode === 'offline_repair_required') {
+    badges.push('Offline Repair')
+  }
 
   if (job.storageState === 'quarantined') {
     badges.push('Quarantined')
@@ -409,9 +448,15 @@ const getRecommendedHealthAction = ({
   job,
   sqliteHealth,
 }: {
-  job: {storageState: string; lastImportCompletedAt: Date | null; lastImportStartedAt: Date | null}
+  job: {status: string; storageState: string; lastImportCompletedAt: Date | null; lastImportStartedAt: Date | null}
   sqliteHealth: Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['getHealthSnapshot']>>
 }): JudgmentJobHealthAction => {
+  const storagePolicy = getStoragePolicy({job, sqliteHealth})
+
+  if (storagePolicy.repairMode === 'offline_repair_required') {
+    return 'repair_offline_required'
+  }
+
   if (job.storageState === 'quarantined') {
     return 'repair_quarantine'
   }
@@ -563,7 +608,13 @@ export const judgmentsJobsRoutes = new Elysia()
 
       try {
         await getJudgmentJobSqliteService().initializeJob(job.id)
+        await getJudgmentJobSqliteService().runIsolatedPreflight(job.id)
       } catch (error) {
+        await getJudgmentJobSqliteService()
+          .deleteJob(job.id)
+          .catch(() => {
+            return undefined
+          })
         await getAppDatabaseService().run(`
           DELETE FROM app.judgment_job
           WHERE id = '${escapeSqlString(job.id)}'
@@ -598,11 +649,13 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({params}) => {
       const {job} = await getJobContext({jobId: params.id})
       const sqliteHealth = await getJudgmentJobSqliteService().getHealthSnapshot(job.id)
+      const storagePolicy = getStoragePolicy({job, sqliteHealth})
       const recommendedNextAction = getRecommendedHealthAction({job, sqliteHealth})
 
       return {
         jobId: job.id,
         storageState: job.storageState,
+        storagePolicy,
         recommendedNextAction,
         importMetadata: {
           importFailureCount: job.importFailureCount,
@@ -674,10 +727,12 @@ export const judgmentsJobsRoutes = new Elysia()
       }, [])
       const tokenUsagePerDay = aggregateTokenUsagePerDay(normalizedTokenUsageRows)
       const requestRuntimeStats = getJudgmentRequestStats(job.id)
+      const storagePolicy = getStoragePolicy({job, sqliteHealth})
 
       return {
         ...job,
         promptStats: sqliteHealth.promptCounts,
+        storagePolicy,
         storageHealth: sqliteHealth,
         judgingRuntime: getJudgingRuntime(),
         totalTokenUsage: {
@@ -849,6 +904,7 @@ export const judgmentsJobsRoutes = new Elysia()
   .get('/api/judgmentsjobs-health', async () => {
     const jobs = await getAppDatabaseService().queryJson<{
       id: string
+      status: string
       storageState: string
       quarantinedAt: unknown
       quarantineReason: string | null
@@ -862,6 +918,7 @@ export const judgmentsJobsRoutes = new Elysia()
     }>(`
       SELECT
         id,
+        status,
         storage_state AS storageState,
         quarantined_at AS quarantinedAt,
         quarantine_reason AS quarantineReason,
@@ -901,6 +958,9 @@ export const judgmentsJobsRoutes = new Elysia()
         }).length,
         draining: jobsWithHealth.filter(({job}) => {
           return job.storageState === 'draining'
+        }).length,
+        offlineRepairRequired: jobsWithHealth.filter(({action}) => {
+          return action === 'repair_offline_required'
         }).length,
         quarantined: jobsWithHealth.filter(({job}) => {
           return job.storageState === 'quarantined'
@@ -945,17 +1005,17 @@ export const judgmentsJobsRoutes = new Elysia()
       if (body.status === 'running') {
         assertJudgingRuntimeCanRun()
         const {job, projectModelId} = await getJobContext({jobId: params.id})
+        await assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
+
+        if (!sqliteService.hasJob(params.id)) {
+          await sqliteService.initializeJob(params.id)
+        }
 
         await assertJudgmentJobCanRunSqlitePreflight({
           jobId: params.id,
           quarantineReason: job.quarantineReason,
           storageState: job.storageState,
         })
-        await assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
-
-        if (!sqliteService.hasJob(params.id)) {
-          await sqliteService.initializeJob(params.id)
-        }
       }
 
       const updatedJob = (await getAppDatabaseService().transaction(async (tx) => {
@@ -1120,8 +1180,14 @@ export const judgmentsJobsRoutes = new Elysia()
     '/api/judgmentsjobs/:id',
     async ({params}) => {
       const sqliteService = getJudgmentJobSqliteService()
-      const [existingJob] = await getAppDatabaseService().queryJson<{id: string}>(`
+      const [existingJob] = await getAppDatabaseService().queryJson<{
+        id: string
+        quarantineReason: string | null
+        storageState: string
+      }>(`
         SELECT id
+             , storage_state AS storageState
+             , quarantine_reason AS quarantineReason
         FROM app.judgment_job
         WHERE id = '${escapeSqlString(params.id)}'
         LIMIT 1
@@ -1131,7 +1197,31 @@ export const judgmentsJobsRoutes = new Elysia()
         throw new Error('Job not found')
       }
 
-      await flushJudgmentJobSqliteOutbox({claimedBy: judgmentJobServerId, jobId: params.id})
+      const shouldUseCrashContainedDeleteFlush =
+        getJudgmentJobRepairMode({
+          hasLocalSqliteState: sqliteService.hasJob(params.id),
+          job: {status: 'failed', storageState: existingJob.storageState},
+        }) === 'offline_repair_required'
+
+      if (shouldUseCrashContainedDeleteFlush) {
+        const flushResult = await runJudgmentJobSqliteIsolatedFlush({claimedBy: judgmentJobServerId, jobId: params.id})
+
+        if (flushResult.errorMessage !== null) {
+          if (!isJudgmentJobSqliteIsolatedImportLeaseConflict(flushResult.errorMessage)) {
+            await runJudgmentJobRepairAction({action: 'quarantine', jobId: params.id, reason: flushResult.errorMessage})
+          }
+
+          throw new HttpError(
+            409,
+            `Delete Job stopped safely for ${params.id}: ${flushResult.errorMessage} Local SQLite data was left in place.`,
+          )
+        }
+      }
+
+      if (sqliteService.hasJob(params.id) && !shouldUseCrashContainedDeleteFlush) {
+        await flushJudgmentJobSqliteOutbox({claimedBy: judgmentJobServerId, jobId: params.id})
+      }
+
       await sqliteService.deleteJob(params.id)
 
       await getAppDatabaseService().transaction(async (tx) => {

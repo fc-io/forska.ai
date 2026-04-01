@@ -217,7 +217,10 @@ type SqliteTableInfoRow = {name: string}
 
 type SqliteMasterRow = {name: string}
 
-type JudgmentJobSqliteClaimedOutboxBatch = {claim: JudgmentJobSqliteOutboxClaim; rows: JudgmentJobSqliteOutboxEntry[]}
+export type JudgmentJobSqliteClaimedOutboxBatch = {
+  claim: JudgmentJobSqliteOutboxClaim
+  rows: JudgmentJobSqliteOutboxEntry[]
+}
 
 type ClaimedOutboxRow = {claimId: string; rowCount: number}
 

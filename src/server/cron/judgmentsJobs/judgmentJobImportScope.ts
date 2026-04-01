@@ -1,15 +1,9 @@
 import {getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
-
-const activeJudgmentJobImportStatuses = [
-  'not_started',
-  'running',
-  'waiting_on_db_connection',
-  'waiting_on_llm_connection',
-] as const
+import {judgmentJobAutoDrainStatuses} from './judgmentJobStoragePolicy.ts'
 
 const drainingStorageStateLiteral = getSqlLiteral('draining')
 const activeStorageStateLiteral = getSqlLiteral('active')
-const activeJudgmentJobImportStatusLiterals = getQuotedStringList([...activeJudgmentJobImportStatuses]).join(', ')
+const activeJudgmentJobImportStatusLiterals = getQuotedStringList([...judgmentJobAutoDrainStatuses]).join(', ')
 
 export const getImportableJudgmentJobWhereSql = () => {
   return `

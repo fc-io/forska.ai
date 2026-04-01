@@ -2,12 +2,13 @@ import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getDateValue, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {HttpError} from '../../utils/httpError.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
-import {flushJudgmentJobSqliteOutbox} from './judgmentJobSqliteOutboxImport.ts'
+import {runJudgmentJobSqliteIsolatedFlush} from './judgmentJobSqliteIsolatedImport.ts'
 import {
   getJudgmentJobSqliteService,
   type JudgmentJobSystemSqliteFallbackResult,
   type JudgmentJobSystemSqliteFallbackStep,
 } from './judgmentJobSqliteService.ts'
+import {getJudgmentJobRepairMode} from './judgmentJobStoragePolicy.ts'
 
 export type JudgmentJobRepairAction = 'checkpoint' | 'drain' | 'preflight' | 'quarantine' | 'repair' | 'unquarantine'
 
@@ -58,6 +59,7 @@ type JudgmentJobRepairResult = {
 
 type JobRepairActionInput = {
   action: JudgmentJobRepairAction
+  allowOfflineRepairForQuarantinedLocalState?: boolean
   claimedBy?: string | null
   jobId: string
   reason?: string | null
@@ -280,6 +282,18 @@ const markJobDraining = async (jobId: string) => {
   `)
 }
 
+const getRepairMode = ({hasLocalSqlite, job}: {hasLocalSqlite: boolean; job: JudgmentJobRepairJobState}) => {
+  return getJudgmentJobRepairMode({hasLocalSqliteState: hasLocalSqlite, job})
+}
+
+const runLiveSafeFlush = async ({claimedBy, jobId}: {claimedBy: string; jobId: string}) => {
+  const result = await runJudgmentJobSqliteIsolatedFlush({claimedBy, jobId})
+
+  return result.errorMessage === null
+    ? {errorMessage: null, importedOutboxRows: result.importedCount}
+    : {errorMessage: result.errorMessage, importedOutboxRows: result.importedCount}
+}
+
 const addPruneResults = (left: RetentionPruneResult, right: RetentionPruneResult): RetentionPruneResult => {
   return {
     outboxRowsDeleted: left.outboxRowsDeleted + right.outboxRowsDeleted,
@@ -434,7 +448,7 @@ const runDrainAction = async ({
   if (job.storageState === 'quarantined') {
     return {
       changes: getEmptyRepairChanges(),
-      message: `Job ${jobId} is quarantined. Repair or unquarantine it before draining.`,
+      message: `Job ${jobId} is quarantined. Live drain is disabled while local SQLite state is quarantined. Run offline repair first.`,
       ok: false,
       preflight: null,
     }
@@ -444,7 +458,18 @@ const runDrainAction = async ({
   await sqliteService.clearActiveQueue(jobId)
   await sqliteService.releaseOwnedLease(jobId)
 
-  const importedOutboxRows = await flushJudgmentJobSqliteOutbox({claimedBy, jobId})
+  const flushResult = await runLiveSafeFlush({claimedBy, jobId})
+
+  if (flushResult.errorMessage) {
+    return {
+      changes: {...getEmptyRepairChanges(), importedOutboxRows: flushResult.importedOutboxRows},
+      message: `Drain cleanup stopped safely for ${jobId}: ${flushResult.errorMessage}`,
+      ok: false,
+      preflight: null,
+    }
+  }
+
+  const importedOutboxRows = flushResult.importedOutboxRows
   const pruned = await pruneRetentionUntilStable({claimedBy, jobId})
   const nativeFinalizedDrain = (await sqliteService.finalizeDrainingJobs({jobId, serverJobId: claimedBy})).includes(
     jobId,
@@ -479,11 +504,13 @@ const runDrainAction = async ({
 }
 
 const runRepairAction = async ({
+  allowOfflineRepairForQuarantinedLocalState = false,
   claimedBy,
   job,
   jobId,
   systemSqliteFallbackSteps,
 }: {
+  allowOfflineRepairForQuarantinedLocalState?: boolean
   claimedBy: string
   job: JudgmentJobRepairJobState
   jobId: string
@@ -505,6 +532,7 @@ const runRepairAction = async ({
   })
   const recoveredPreflightOutcome =
     !preflightOutcome.ok && fallbackCheckpointed ? await getPreflightOutcome(jobId) : preflightOutcome
+  const repairMode = getRepairMode({hasLocalSqlite: !initializedSqlite, job})
 
   if (!recoveredPreflightOutcome.ok) {
     await setJobQuarantine({jobId, reason: recoveredPreflightOutcome.message})
@@ -521,13 +549,41 @@ const runRepairAction = async ({
     }
   }
 
-  const requeuedSentPrompts = await sqliteService.requeueAbandonedSentPrompts({
+  if (repairMode === 'offline_repair_required' && !allowOfflineRepairForQuarantinedLocalState) {
+    return {
+      changes: {...getEmptyRepairChanges(), initializedSqlite},
+      message:
+        `Live repair is disabled for ${jobId} because this quarantined job still has local SQLite state. `
+        + `Keep the job quarantined and run offline repair after stopping the server stack, for example: `
+        + `bun scripts/runJudgmentJobRepair.ts --action=repair --jobId=${jobId}`,
+      ok: false,
+      preflight: recoveredPreflightOutcome.preflight,
+      systemSqliteFallbackResults: initialFallbackResults,
+    }
+  }
+
+  await sqliteService.releaseOwnedLease(jobId)
+
+  const flushResult = await runLiveSafeFlush({claimedBy, jobId})
+
+  if (flushResult.errorMessage) {
+    return {
+      changes: {...getEmptyRepairChanges(), importedOutboxRows: flushResult.importedOutboxRows, initializedSqlite},
+      message: `Repair stopped safely for ${jobId}: ${flushResult.errorMessage}`,
+      ok: false,
+      preflight: recoveredPreflightOutcome.preflight,
+      systemSqliteFallbackResults: initialFallbackResults,
+    }
+  }
+
+  const requeuedSentPromptsCount = await sqliteService.requeueAbandonedSentPrompts({
     jobId,
     serverJobId: claimedBy,
     staleBefore: new Date(),
   })
-  const reapedOutboxClaims = await sqliteService.reapStaleOutboxClaims({jobId, staleBefore: new Date()})
-  const importedOutboxRows = await flushJudgmentJobSqliteOutbox({claimedBy, jobId})
+  const reapedOutboxClaimsCount = await sqliteService.reapStaleOutboxClaims({jobId, staleBefore: new Date()})
+
+  const importedOutboxRows = flushResult.importedOutboxRows
   const pruned = await pruneRetentionUntilStable({claimedBy, jobId})
   const finalizedDrain = (await sqliteService.finalizeDrainingJobs({jobId, serverJobId: claimedBy})).includes(jobId)
   const checkpointed = await sqliteService.checkpointWal({jobId, serverJobId: claimedBy})
@@ -546,8 +602,8 @@ const runRepairAction = async ({
       initializedSqlite,
       prunedOutboxRows: pruned.outboxRowsDeleted,
       prunedQueueRows: pruned.queuePromptRowsDeleted,
-      reapedOutboxClaims,
-      requeuedSentPrompts,
+      reapedOutboxClaims: reapedOutboxClaimsCount,
+      requeuedSentPrompts: requeuedSentPromptsCount,
       unquarantined: shouldUnquarantine,
     },
     message: appendFallbackMessage({
@@ -562,6 +618,7 @@ const runRepairAction = async ({
 
 export const runJudgmentJobRepairAction = async ({
   action,
+  allowOfflineRepairForQuarantinedLocalState,
   claimedBy,
   jobId,
   reason,
@@ -594,6 +651,7 @@ export const runJudgmentJobRepairAction = async ({
                     systemSqliteFallbackSteps: normalizedFallbackSteps,
                   })
                 : await runRepairAction({
+                    allowOfflineRepairForQuarantinedLocalState,
                     claimedBy: requestedBy,
                     job,
                     jobId,

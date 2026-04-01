@@ -1,9 +1,14 @@
+import {mkdir, readFile, unlink, writeFile} from 'node:fs/promises'
+import {tmpdir} from 'node:os'
+import {dirname, join} from 'node:path'
+
 import {spawn, type Subprocess} from 'bun'
 
 import {getBackgroundServerEnv, getBackgroundServerStackConfig} from '../src/server/utils/backgroundServerStack.ts'
 
 type ManagedRole = 'api' | 'worker'
 type ServerProcess = Subprocess<'ignore', 'inherit', 'inherit'>
+type ServerStackLockMetadata = {apiPort: number; cwd: string; pid: number; startedAt: string; workerPort: number}
 
 type ManagedServerState = {
   apiProcess: ServerProcess | null
@@ -18,6 +23,7 @@ const startupTimeoutMs = 20_000
 const writerPollIntervalMs = 250
 
 const config = getBackgroundServerStackConfig(process.env)
+const serverStackLockPath = join(tmpdir(), 'forska-server-stack', `${config.apiPort}-${config.workerPort}.lock.json`)
 
 if (config.apiPort === config.workerPort) {
   throw new Error(`API port ${config.apiPort} must differ from background writer port ${config.workerPort}`)
@@ -26,6 +32,85 @@ if (config.apiPort === config.workerPort) {
 console.log(
   `[server:stack] api_port=${config.apiPort} worker_port=${config.workerPort} worker_duckdb_memory_limit=${config.workerDuckdbMemoryLimit}`,
 )
+
+const isMissingFileError = (error: unknown) => {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT'
+}
+
+const isExistingFileError = (error: unknown) => {
+  return error instanceof Error && 'code' in error && error.code === 'EEXIST'
+}
+
+const isProcessAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+const readServerStackLock = async () => {
+  try {
+    return JSON.parse(await readFile(serverStackLockPath, 'utf8')) as ServerStackLockMetadata
+  } catch (error) {
+    return isMissingFileError(error) ? null : Promise.reject(error)
+  }
+}
+
+const releaseServerStackLock = async () => {
+  const currentLock = await readServerStackLock()
+
+  if (!currentLock || currentLock.pid !== process.pid) {
+    return
+  }
+
+  await unlink(serverStackLockPath).catch((error) => {
+    if (!isMissingFileError(error)) {
+      throw error
+    }
+  })
+}
+
+const acquireServerStackLock = async (): Promise<void> => {
+  const metadata = {
+    apiPort: config.apiPort,
+    cwd: process.cwd(),
+    pid: process.pid,
+    startedAt: new Date().toISOString(),
+    workerPort: config.workerPort,
+  } satisfies ServerStackLockMetadata
+
+  try {
+    await mkdir(dirname(serverStackLockPath), {recursive: true})
+    await writeFile(serverStackLockPath, JSON.stringify(metadata, null, 2), {flag: 'wx'})
+  } catch (error) {
+    if (!isExistingFileError(error)) {
+      throw error
+    }
+
+    const currentLock = await readServerStackLock()
+
+    if (!currentLock) {
+      return acquireServerStackLock()
+    }
+
+    if (!isProcessAlive(currentLock.pid)) {
+      await unlink(serverStackLockPath).catch((unlinkError) => {
+        if (!isMissingFileError(unlinkError)) {
+          throw unlinkError
+        }
+      })
+
+      return acquireServerStackLock()
+    }
+
+    throw new Error(
+      `Another server stack is already running for ports ${config.apiPort}/${config.workerPort} (pid=${currentLock.pid}, startedAt=${currentLock.startedAt}). Stop it before starting a new one.`,
+      {cause: error},
+    )
+  }
+}
 
 const managedServerState: ManagedServerState = {
   apiProcess: null,
@@ -202,6 +287,7 @@ const shutdown = async (exitCode = 0) => {
 
   managedServerState.shuttingDown = true
   await Promise.all([stopManagedServerProcess('api'), stopManagedServerProcess('worker')])
+  await releaseServerStackLock()
   process.exit(exitCode)
 }
 
@@ -214,6 +300,7 @@ process.on('SIGTERM', () => {
 })
 
 try {
+  await acquireServerStackLock()
   await ensureWorkerReady()
   await ensureApiReady()
   await new Promise(() => {})

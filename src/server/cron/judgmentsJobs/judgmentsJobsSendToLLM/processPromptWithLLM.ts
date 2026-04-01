@@ -56,6 +56,8 @@ type PreparedPrompt = {articleForJudging: ArticleRecord; prompt: PromptDefinitio
 type PromptPreparationWaiter = {resolve: (release: () => void) => void}
 
 const processPromptLogger = createRateLimitedLogger({windowMs: 30_000})
+const cachedArticleLookups = new Map<string, Promise<ArticleRecord | null>>()
+const cachedPromptLookups = new Map<string, Promise<PromptDefinition | null>>()
 
 const DEFAULT_MODEL_CONTEXT = 32768
 const promptPreparationMaxInFlight = 16
@@ -66,6 +68,82 @@ let promptPreparationInFlight = 0
 
 const getModelContext = (metadataJson: unknown): number => {
   return getProviderModelMetadataContextLength(metadataJson) ?? DEFAULT_MODEL_CONTEXT
+}
+
+const trimCachedLookups = <T>(cache: Map<string, Promise<T>>, maxSize: number): void => {
+  return cache.size <= maxSize
+    ? undefined
+    : (cache.delete(cache.keys().next().value as string), trimCachedLookups(cache, maxSize))
+}
+
+const withCachedLookup = async <T>(cache: Map<string, Promise<T>>, key: string, load: () => Promise<T>): Promise<T> => {
+  const existing = cache.get(key)
+
+  if (existing) {
+    return existing
+  }
+
+  const pending = load().catch((error) => {
+    cache.delete(key)
+    throw error
+  })
+
+  cache.set(key, pending)
+  trimCachedLookups(cache, 5000)
+
+  return pending
+}
+
+const getCachedArticle = async ({
+  articleId,
+  includeFullText,
+}: {
+  articleId: string
+  includeFullText: boolean
+}): Promise<ArticleRecord | null> => {
+  const cacheKey = `${articleId}:${includeFullText ? 'fulltext' : 'metadata'}`
+
+  return withCachedLookup(cachedArticleLookups, cacheKey, async () => {
+    const [article] = await getAppQueryService().getFullArticlesByIds([articleId], {includeFullText})
+
+    return article
+      ? ({
+          ...article,
+          createdAt: article.createdAt ?? new Date(0),
+          updatedAt: article.updatedAt ?? new Date(0),
+          publicationStatus: article.publicationStatus as PublicationStatus | null,
+        } as ArticleRecord)
+      : null
+  })
+}
+
+const getCachedPromptDefinition = async ({
+  projectId,
+  promptId,
+}: {
+  projectId: string
+  promptId: string
+}): Promise<PromptDefinition | null> => {
+  const cacheKey = `${projectId}:${promptId}`
+
+  return withCachedLookup(cachedPromptLookups, cacheKey, async () => {
+    const [prompt] = await getAppDatabaseService().queryJson<PromptDefinition>(`
+      SELECT
+        p.id AS id,
+        p.original_text AS originalText,
+        p.prompt_heading AS promptHeading,
+        pp.prompt_order AS "order",
+        p.type AS type
+      FROM app.prompt p
+      INNER JOIN app.project_prompt pp ON pp.prompt_id = p.id
+      WHERE p.id = '${escapeSqlString(promptId)}'
+        AND pp.project_id = '${escapeSqlString(projectId)}'
+        AND pp.enabled = TRUE
+      LIMIT 1
+    `)
+
+    return prompt ?? null
+  })
 }
 
 const releasePromptPreparationSlot = (): void => {
@@ -171,9 +249,7 @@ const preparePrompt = async (promptToProcess: PromptToProcess, modelContext: num
   }
 
   const needsFulltext = promptToProcess.useFulltext || promptToProcess.useFulltextNoImages
-  const [article] = await getAppQueryService().getFullArticlesByIds([promptToProcess.articleId], {
-    includeFullText: needsFulltext,
-  })
+  const article = await getCachedArticle({articleId: promptToProcess.articleId, includeFullText: needsFulltext})
 
   if (!article) {
     console.error('Article not found:', promptToProcess.articleId)
@@ -181,12 +257,7 @@ const preparePrompt = async (promptToProcess: PromptToProcess, modelContext: num
     return null
   }
 
-  let articleWithFulltext = {
-    ...article,
-    createdAt: article.createdAt ?? new Date(0),
-    updatedAt: article.updatedAt ?? new Date(0),
-    publicationStatus: article.publicationStatus as PublicationStatus | null,
-  } as ArticleRecord
+  let articleWithFulltext = article
 
   if (needsFulltext) {
     const result = await ensureFullText(articleWithFulltext, article.id)
@@ -228,20 +299,10 @@ const preparePrompt = async (promptToProcess: PromptToProcess, modelContext: num
   }
 
   const articleForJudging = needsFulltext ? articleWithFulltext : {...articleWithFulltext, fullText: null}
-  const [prompt] = await getAppDatabaseService().queryJson<PromptDefinition>(`
-    SELECT
-      p.id AS id,
-      p.original_text AS originalText,
-      p.prompt_heading AS promptHeading,
-      pp.prompt_order AS "order",
-      p.type AS type
-    FROM app.prompt p
-    INNER JOIN app.project_prompt pp ON pp.prompt_id = p.id
-    WHERE p.id = '${escapeSqlString(promptToProcess.promptId)}'
-      AND pp.project_id = '${escapeSqlString(promptToProcess.projectId)}'
-      AND pp.enabled = TRUE
-    LIMIT 1
-  `)
+  const prompt = await getCachedPromptDefinition({
+    projectId: promptToProcess.projectId,
+    promptId: promptToProcess.promptId,
+  })
 
   if (!prompt) {
     console.log('Prompt not found or not enabled:', promptToProcess.promptId)

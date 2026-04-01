@@ -142,6 +142,7 @@ test('background import selects active running jobs and draining jobs, but exclu
 
         void mock.module(sqliteServiceModulePath, () => {
           return {
+            JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
             getJudgmentJobSqliteService: () => {
               return {
                 syncOwnedLeases: async (jobIds) => {
@@ -157,7 +158,19 @@ test('background import selects active running jobs and draining jobs, but exclu
           return {
             exited: Promise.resolve(0),
             stderr: new Blob(['']).stream(),
-            stdout: new Blob([JSON.stringify({status: 'ok'})]).stream(),
+            stdout: new Blob([
+              JSON.stringify({
+                claimedBy: 'test-server',
+                cycleStatus: 'idle',
+                discardedCount: 0,
+                duplicateCount: 0,
+                importedCount: 0,
+                jobId: 'mock-job',
+                outboxClaimId: null,
+                outboxRowCount: 0,
+                status: 'ok',
+              }),
+            ]).stream(),
           }
         }
 
@@ -256,6 +269,7 @@ test('background import records metadata, quarantines repeated failures, and con
 
         void mock.module(sqliteServiceModulePath, () => {
           return {
+            JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
             getJudgmentJobSqliteService: () => {
               return {
                 syncOwnedLeases: async () => {},
@@ -272,7 +286,19 @@ test('background import records metadata, quarantines repeated failures, and con
             return {
               exited: Promise.resolve(0),
               stderr: new Blob(['']).stream(),
-              stdout: new Blob([JSON.stringify({status: 'ok'})]).stream(),
+              stdout: new Blob([
+                JSON.stringify({
+                  claimedBy: 'test-server',
+                  cycleStatus: 'idle',
+                  discardedCount: 0,
+                  duplicateCount: 0,
+                  importedCount: 0,
+                  jobId,
+                  outboxClaimId: null,
+                  outboxRowCount: 0,
+                  status: 'ok',
+                }),
+              ]).stream(),
             }
           }
 
