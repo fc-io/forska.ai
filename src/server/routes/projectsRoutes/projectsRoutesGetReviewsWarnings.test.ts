@@ -24,7 +24,7 @@ type ReviewsWarningsResponse = {
       queuedArticleRefreshCount: number
       queuedProjectRefreshCount: number
       queuedRefreshCount: number
-      status: string
+      status: 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
     }
     projectId: string
     scope: {hasAnyArticlesInScope: boolean}
@@ -36,6 +36,15 @@ type MartRefreshProgressSnapshot = {
   claimedQueuedProjectIds: string[]
   processingArticleIds: string[]
   processingProjectIds: string[]
+}
+
+type RefreshStateOverrides = {
+  dirtyToken?: number
+  lastCompletedRefreshToken?: number
+  lastFailedAt?: string | null
+  lastRequestedAt?: string | null
+  lastStartedAt?: string | null
+  refreshStatus?: 'failed' | 'idle' | 'running'
 }
 
 let app: {handle: (request: Request) => Promise<Response>} | null = null
@@ -77,6 +86,131 @@ const insertProjectFixture = async (projectId: string) => {
   await runDatabase(`
     INSERT INTO app.project_article (id, project_id, article_id)
     VALUES ('project-article-${projectId}', '${projectId}', 'article-${projectId}')
+  `)
+}
+
+const insertProjectRefreshState = async (projectId: string, overrides: RefreshStateOverrides = {}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const dirtyToken = overrides.dirtyToken ?? 1
+  const lastCompletedRefreshToken = overrides.lastCompletedRefreshToken ?? 0
+  const lastRequestedAt = overrides.lastRequestedAt ?? '2026-04-02T12:00:00.000Z'
+  const lastStartedAt = overrides.lastStartedAt ?? null
+  const lastFailedAt = overrides.lastFailedAt ?? null
+  const refreshStatus = overrides.refreshStatus ?? 'idle'
+
+  await runDatabase(`
+    INSERT INTO app.project_mart_refresh_state (
+      project_id,
+      dirty_token,
+      active_refresh_token,
+      last_completed_refresh_token,
+      last_requested_at,
+      refresh_status,
+      last_started_at,
+      last_failed_at
+    ) VALUES (
+      '${projectId}',
+      ${dirtyToken},
+      ${refreshStatus === 'running' ? dirtyToken : 0},
+      ${lastCompletedRefreshToken},
+      ${lastRequestedAt === null ? 'NULL' : `TIMESTAMPTZ '${lastRequestedAt}'`},
+      '${refreshStatus}',
+      ${lastStartedAt === null ? 'NULL' : `TIMESTAMPTZ '${lastStartedAt}'`},
+      ${lastFailedAt === null ? 'NULL' : `TIMESTAMPTZ '${lastFailedAt}'`}
+    )
+  `)
+}
+
+const insertDirtyArticleRefreshState = async (projectId: string, articleId: string, dirtyToken: number) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.project_mart_refresh_article_state (
+      project_id,
+      article_id,
+      first_dirty_token,
+      last_dirty_token,
+      updated_at
+    ) VALUES (
+      '${projectId}',
+      '${articleId}',
+      ${dirtyToken},
+      ${dirtyToken},
+      TIMESTAMPTZ '2026-04-02T12:01:00.000Z'
+    )
+  `)
+}
+
+const insertReviewServingRow = async (projectId: string, articleId: string) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.project_review_serving_generation (project_id, active_generation)
+    VALUES ('${projectId}', 1)
+  `)
+  await runDatabase(`
+    INSERT INTO mart.review_article_serving (
+      project_id,
+      generation,
+      article_id,
+      article_created_at,
+      article_updated_at,
+      article_title,
+      article_external_id,
+      journal_title,
+      url,
+      full_text_pdf,
+      full_text_fetched_at,
+      full_text_conversion_status,
+      source_metadata,
+      has_all_llm_judgments,
+      llm_judged_prompt_count,
+      llm_judged_prompt_ids,
+      enabled_prompt_count,
+      human_answered_prompt_count,
+      human_answered_prompt_ids,
+      has_all_human_answers,
+      review_opened,
+      review_sections_completed,
+      latest_llm_created_at,
+      latest_human_updated_at,
+      latest_review_updated_at,
+      serving_updated_at
+    ) VALUES (
+      '${projectId}',
+      1,
+      '${articleId}',
+      TIMESTAMPTZ '2026-04-02 12:00:00+00',
+      NULL,
+      'Indexed article',
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      FALSE,
+      0,
+      NULL,
+      1,
+      0,
+      NULL,
+      FALSE,
+      FALSE,
+      0,
+      NULL,
+      NULL,
+      NULL,
+      current_timestamp
+    )
   `)
 }
 
@@ -151,115 +285,38 @@ afterAll(async () => {
   rmSync(`${tempDbPath}.writer.lock`, {force: true})
 })
 
-test('reviews warnings report refreshing when a project refresh is queued', async () => {
-  if (!runDatabase) {
-    throw new Error('Database not initialized')
-  }
-
-  const projectId = 'project-refreshing-warning'
+test('reviews warnings report ready when serving rows are fresh', async () => {
+  const projectId = 'project-ready-warning'
 
   await insertProjectFixture(projectId)
-  await runDatabase(`
-    INSERT INTO app.mart_refresh_queue (id, refresh_scope, project_id, article_id, project_key, article_key, reason)
-    VALUES ('queue-${projectId}', 'project', '${projectId}', NULL, '${projectId}', '', 'test-refreshing')
-  `)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedRefreshToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, `article-${projectId}`)
 
   const {body, response} = await postWarningsRequest(projectId)
 
   expect(response.status).toBe(200)
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
   expect(body.data.enabledPromptCount).toBe(1)
-  expect(body.data.indexing.queuedProjectRefreshCount).toBe(1)
-  expect(body.data.indexing.inFlightProjectRefreshCount).toBe(0)
-  expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
-  expect(body.data.indexing.queuedArticleRefreshCount).toBe(0)
-  expect(body.data.indexing.inFlightArticleRefreshCount).toBe(0)
-  expect(body.data.indexing.pendingArticleRefreshCount).toBe(0)
-  expect(body.data.indexing.queuedRefreshCount).toBe(1)
-  expect(body.data.indexing.inFlightRefreshCount).toBe(0)
-  expect(body.data.indexing.pendingRefreshCount).toBe(1)
-  expect(body.data.indexing.status).toBe('refreshing')
-})
-
-test('reviews warnings report refreshing when article judgment refreshes are queued for scoped articles', async () => {
-  if (!runDatabase) {
-    throw new Error('Database not initialized')
-  }
-
-  const projectId = 'project-article-refresh-warning'
-
-  await insertProjectFixture(projectId)
-  await runDatabase(`
-    INSERT INTO app.mart_refresh_queue (id, refresh_scope, project_id, article_id, project_key, article_key, reason)
-    VALUES ('queue-${projectId}', 'judgment_article', NULL, 'article-${projectId}', '', 'article-${projectId}', 'test-article-refreshing')
-  `)
-
-  const {body, response} = await postWarningsRequest(projectId)
-
-  expect(response.status).toBe(200)
-  expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
-  expect(body.data.indexing.queuedProjectRefreshCount).toBe(0)
-  expect(body.data.indexing.inFlightProjectRefreshCount).toBe(0)
-  expect(body.data.indexing.pendingProjectRefreshCount).toBe(0)
-  expect(body.data.indexing.queuedArticleRefreshCount).toBe(1)
-  expect(body.data.indexing.inFlightArticleRefreshCount).toBe(0)
-  expect(body.data.indexing.pendingArticleRefreshCount).toBe(1)
-  expect(body.data.indexing.queuedRefreshCount).toBe(1)
-  expect(body.data.indexing.inFlightRefreshCount).toBe(0)
-  expect(body.data.indexing.pendingRefreshCount).toBe(1)
-  expect(body.data.indexing.status).toBe('refreshing')
-})
-
-test('reviews warnings ignore completed mart refresh rows', async () => {
-  if (!runDatabase) {
-    throw new Error('Database not initialized')
-  }
-
-  const projectId = 'project-completed-refresh-warning'
-
-  await insertProjectFixture(projectId)
-  await runDatabase(`
-    INSERT INTO app.mart_refresh_queue (
-      id,
-      refresh_scope,
-      project_id,
-      article_id,
-      project_key,
-      article_key,
-      reason,
-      completed_at
-    )
-    VALUES
-      ('queue-project-${projectId}', 'project', '${projectId}', NULL, '${projectId}', '', 'test-project-completed', NOW()),
-      ('queue-article-${projectId}', 'judgment_article', NULL, 'article-${projectId}', '', 'article-${projectId}', 'test-article-completed', NOW())
-  `)
-
-  const {body, response} = await postWarningsRequest(projectId)
-
-  expect(response.status).toBe(200)
-  expect(body.data.indexing.queuedProjectRefreshCount).toBe(0)
-  expect(body.data.indexing.inFlightProjectRefreshCount).toBe(0)
-  expect(body.data.indexing.pendingProjectRefreshCount).toBe(0)
-  expect(body.data.indexing.queuedArticleRefreshCount).toBe(0)
-  expect(body.data.indexing.inFlightArticleRefreshCount).toBe(0)
-  expect(body.data.indexing.pendingArticleRefreshCount).toBe(0)
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.status).toBe('ready')
 })
 
-test('reviews warnings report claimed refreshes as processing instead of queued', async () => {
+test('reviews warnings report refreshing from ledger and worker progress state', async () => {
   if (!runDatabase || !setProgressSnapshotForTests) {
     throw new Error('Test dependencies not initialized')
   }
 
-  const projectId = 'project-inflight-warning'
+  const projectId = 'project-refreshing-warning'
 
   await insertProjectFixture(projectId)
-  await runDatabase(`
-    INSERT INTO app.mart_refresh_queue (id, refresh_scope, project_id, article_id, project_key, article_key, reason)
-    VALUES
-      ('queue-project-${projectId}', 'project', '${projectId}', NULL, '${projectId}', '', 'test-project-processing'),
-      ('queue-article-${projectId}', 'judgment_article', NULL, 'article-${projectId}', '', 'article-${projectId}', 'test-article-processing')
-  `)
+  await insertProjectRefreshState(projectId, {
+    dirtyToken: 2,
+    lastCompletedRefreshToken: 1,
+    lastRequestedAt: '2026-04-02T12:00:00.000Z',
+    lastStartedAt: '2026-04-02T12:05:00.000Z',
+    refreshStatus: 'running',
+  })
+  await insertDirtyArticleRefreshState(projectId, `article-${projectId}`, 2)
   setProgressSnapshotForTests({
     claimedQueuedArticleIds: [`article-${projectId}`],
     claimedQueuedProjectIds: [projectId],
@@ -271,6 +328,7 @@ test('reviews warnings report claimed refreshes as processing instead of queued'
 
   expect(response.status).toBe(200)
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
+  expect(body.data.indexing.oldestQueuedAt).toBe('2026-04-02 12:00:00+00')
   expect(body.data.indexing.queuedProjectRefreshCount).toBe(0)
   expect(body.data.indexing.inFlightProjectRefreshCount).toBe(1)
   expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
@@ -294,4 +352,27 @@ test('reviews warnings report stale when scope exists but review rollups are mis
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
   expect(body.data.indexing.status).toBe('stale')
+})
+
+test('reviews warnings report failed when refresh work is still dirty after a failed attempt', async () => {
+  const projectId = 'project-failed-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {
+    dirtyToken: 3,
+    lastCompletedRefreshToken: 2,
+    lastFailedAt: '2026-04-02T12:07:00.000Z',
+    lastRequestedAt: '2026-04-02T12:00:00.000Z',
+    refreshStatus: 'failed',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.oldestQueuedAt).toBe('2026-04-02 12:00:00+00')
+  expect(body.data.indexing.queuedProjectRefreshCount).toBe(1)
+  expect(body.data.indexing.inFlightProjectRefreshCount).toBe(0)
+  expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.status).toBe('failed')
 })

@@ -20,27 +20,31 @@ const getPendingRefreshLabel = (pendingRefreshCount: number) => {
 const getIndexingBannerTitle = (params: {
   pendingArticleRefreshCount: number
   pendingProjectRefreshCount: number
-  status: 'not-needed' | 'ready' | 'refreshing' | 'stale'
+  status: 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
 }) => {
-  return params.status === 'stale'
-    ? 'Review index is catching up'
-    : params.pendingArticleRefreshCount > 0 && params.pendingProjectRefreshCount === 0
-      ? 'New judgments are still being incorporated'
-      : 'Review indexing in progress'
+  return params.status === 'failed'
+    ? 'Review indexing failed'
+    : params.status === 'stale'
+      ? 'Review index is catching up'
+      : params.pendingArticleRefreshCount > 0 && params.pendingProjectRefreshCount === 0
+        ? 'New judgments are still being incorporated'
+        : 'Review indexing in progress'
 }
 
 const getIndexingBannerBody = (params: {
   pendingArticleRefreshCount: number
   pendingProjectRefreshCount: number
-  status: 'not-needed' | 'ready' | 'refreshing' | 'stale'
+  status: 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
 }) => {
-  return params.status === 'stale'
-    ? 'This project has scoped articles, but the review index is missing or stale. Review lists may stay empty until the writer rebuilds the project.'
-    : params.pendingProjectRefreshCount > 0 && params.pendingArticleRefreshCount > 0
-      ? 'This project is still rebuilding its review index and folding in newly produced judgments. Counts and article lists may change until the backlog clears.'
-      : params.pendingProjectRefreshCount > 0
-        ? 'This project has scoped articles, but the review index is still updating in the background. Review lists may look partial or empty until indexing finishes.'
-        : "New judgments are still being folded into this project's review index. Counts and article lists may change until the backlog clears."
+  return params.status === 'failed'
+    ? 'The latest review index refresh failed, so review lists may be stale or incomplete until the writer retries the project.'
+    : params.status === 'stale'
+      ? 'This project has scoped articles, but the review index is missing or stale. Review lists may stay empty until the writer rebuilds the project.'
+      : params.pendingProjectRefreshCount > 0 && params.pendingArticleRefreshCount > 0
+        ? 'This project is still rebuilding its review index and folding in newly produced judgments. Counts and article lists may change until the backlog clears.'
+        : params.pendingProjectRefreshCount > 0
+          ? 'This project has scoped articles, but the review index is still updating in the background. Review lists may look partial or empty until indexing finishes.'
+          : "New judgments are still being folded into this project's review index. Counts and article lists may change until the backlog clears."
 }
 
 const getPendingRefreshMetaLabel = (params: {
@@ -90,13 +94,15 @@ export const ReviewsProjectWarnings = (props: {projectId: string}) => {
   const showIndexingBanner = createMemo(() => {
     const status = warningsData()?.indexing.status ?? 'ready'
 
-    return status === 'refreshing' || status === 'stale'
+    return status === 'failed' || status === 'refreshing' || status === 'stale'
   })
 
   const indexingBannerTone = createMemo(() => {
-    return warningsData()?.indexing.status === 'stale'
-      ? 'bg-orange-50 border-orange-200 text-orange-900'
-      : 'bg-sky-50 border-sky-200 text-sky-900'
+    return warningsData()?.indexing.status === 'failed'
+      ? 'bg-rose-50 border-rose-200 text-rose-900'
+      : warningsData()?.indexing.status === 'stale'
+        ? 'bg-orange-50 border-orange-200 text-orange-900'
+        : 'bg-sky-50 border-sky-200 text-sky-900'
   })
 
   const indexingBannerTitle = createMemo(() => {

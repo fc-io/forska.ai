@@ -67,11 +67,14 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
               'This project has scoped articles, but the review index is still updating. The unassessed list may appear empty until indexing finishes.',
             title: 'Review indexing in progress',
           }
-      : warningsData?.indexing.status === 'stale' && warningsData.scope.hasAnyArticlesInScope
+      : (warningsData?.indexing.status === 'failed' || warningsData?.indexing.status === 'stale')
+          && warningsData.scope.hasAnyArticlesInScope
         ? {
             description:
-              'This project has scoped articles, but the review index is missing or stale. Unassessed results may stay empty until the writer rebuilds the review index.',
-            title: 'Review index is catching up',
+              warningsData.indexing.status === 'failed'
+                ? 'The latest review refresh failed. Unassessed results may stay stale or incomplete until the writer retries the review index.'
+                : 'This project has scoped articles, but the review index is missing or stale. Unassessed results may stay empty until the writer rebuilds the review index.',
+            title: warningsData.indexing.status === 'failed' ? 'Review indexing failed' : 'Review index is catching up',
           }
         : hasFilters()
           ? {

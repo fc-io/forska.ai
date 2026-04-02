@@ -16,7 +16,7 @@ export type ReviewsWarningsData = {
     queuedArticleRefreshCount: number
     queuedProjectRefreshCount: number
     queuedRefreshCount: number
-    status: 'not-needed' | 'ready' | 'refreshing' | 'stale'
+    status: 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
   }
   projectId: string
   scope: {hasAnyArticlesInScope: boolean}

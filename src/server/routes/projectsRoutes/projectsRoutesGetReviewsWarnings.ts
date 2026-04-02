@@ -6,9 +6,19 @@ import {getDuckdbMartRefreshService} from '../../services/getDuckdbMartRefreshSe
 import {shouldCurrentServerRunWriterWork} from '../../utils/serverRuntimeRole.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
 
-type ReviewsIndexingStatus = 'not-needed' | 'ready' | 'refreshing' | 'stale'
+type ReviewsIndexingStatus = 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
+
+type ProjectMartRefreshStatus = 'failed' | 'idle' | 'running'
 
 type RefreshCountInfo = {oldestQueuedAt: string | null; queuedRefreshCount: number}
+
+type ProjectRefreshState = {
+  dirtyToken: number | null
+  isFresh: boolean
+  lastCompletedRefreshToken: number | null
+  lastRequestedAt: string | null
+  refreshStatus: ProjectMartRefreshStatus | null
+}
 
 const getEnabledPromptCount = async (projectId: string): Promise<number> => {
   const rows = await getAppDatabaseService().queryJson<{count: number}>(`
@@ -44,18 +54,29 @@ const getHasRouteArticles = async (projectId: string): Promise<boolean> => {
   return rows.length > 0
 }
 
-const getPendingProjectRefreshInfo = async (projectId: string): Promise<RefreshCountInfo> => {
-  const rows = await getAppDatabaseService().queryJson<{oldestQueuedAt: string | null; queuedRefreshCount: number}>(`
+const getProjectRefreshState = async (projectId: string): Promise<ProjectRefreshState> => {
+  const [row] = await getAppDatabaseService().queryJson<{
+    dirtyToken: number | null
+    lastCompletedRefreshToken: number | null
+    lastRequestedAt: string | null
+    refreshStatus: ProjectMartRefreshStatus | null
+  }>(`
     SELECT
-      MIN(created_at) AS oldestQueuedAt,
-      COUNT(*) AS queuedRefreshCount
-    FROM app.mart_refresh_queue
+      CAST(dirty_token AS INTEGER) AS dirtyToken,
+      CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+      last_requested_at AS lastRequestedAt,
+      refresh_status AS refreshStatus
+    FROM app.project_mart_refresh_state
     WHERE project_id = '${escapeSqlString(projectId)}'
-      AND completed_at IS NULL
+    LIMIT 1
   `)
-  const [row] = rows
 
-  return {oldestQueuedAt: row?.oldestQueuedAt ?? null, queuedRefreshCount: Number(row?.queuedRefreshCount ?? 0)}
+  const dirtyToken = row?.dirtyToken ?? null
+  const lastCompletedRefreshToken = row?.lastCompletedRefreshToken ?? null
+  const refreshStatus = row?.refreshStatus ?? null
+  const isFresh = dirtyToken === null || (lastCompletedRefreshToken !== null && lastCompletedRefreshToken >= dirtyToken)
+
+  return {dirtyToken, isFresh, lastCompletedRefreshToken, lastRequestedAt: row?.lastRequestedAt ?? null, refreshStatus}
 }
 
 const getPendingArticleRefreshInfo = async (projectId: string): Promise<RefreshCountInfo> => {
@@ -71,12 +92,18 @@ const getPendingArticleRefreshInfo = async (projectId: string): Promise<RefreshC
       WHERE pir.project_id = '${escapeSqlString(projectId)}'
     )
     SELECT
-      MIN(queue.created_at) AS oldestQueuedAt,
+      MIN(article_state.updated_at) AS oldestQueuedAt,
       COUNT(*) AS queuedRefreshCount
-    FROM app.mart_refresh_queue queue
-    INNER JOIN scoped_article ON scoped_article.articleId = queue.article_id
-    WHERE queue.refresh_scope = 'judgment_article'
-      AND queue.completed_at IS NULL
+    FROM app.project_mart_refresh_article_state article_state
+    INNER JOIN scoped_article ON scoped_article.articleId = article_state.article_id
+    LEFT JOIN app.project_mart_refresh_state refresh_state
+      ON refresh_state.project_id = article_state.project_id
+    WHERE article_state.project_id = '${escapeSqlString(projectId)}'
+      AND (
+        refresh_state.project_id IS NULL
+        OR refresh_state.last_completed_refresh_token IS NULL
+        OR CAST(article_state.last_dirty_token AS BIGINT) > CAST(refresh_state.last_completed_refresh_token AS BIGINT)
+      )
   `)
   const [row] = rows
 
@@ -125,10 +152,16 @@ const getHasReviewServingRows = async (projectId: string): Promise<boolean> => {
   const rows = await getAppDatabaseService().queryJson<{projectId: string}>(`
     SELECT generation.project_id AS projectId
     FROM app.project_review_serving_generation generation
+    LEFT JOIN app.project_mart_refresh_state refresh_state
+      ON refresh_state.project_id = generation.project_id
     INNER JOIN mart.review_article_serving serving
       ON serving.project_id = generation.project_id
      AND serving.generation = generation.active_generation
     WHERE generation.project_id = '${escapeSqlString(projectId)}'
+      AND (
+        refresh_state.project_id IS NULL
+        OR CAST(refresh_state.dirty_token AS BIGINT) <= CAST(refresh_state.last_completed_refresh_token AS BIGINT)
+      )
     LIMIT 1
   `)
 
@@ -159,6 +192,7 @@ const triggerMartRefreshDrain = (pendingRefreshCount: number) => {
 
 const getReviewsIndexingStatus = (params: {
   enabledPromptCount: number
+  hasFailedRefresh: boolean
   hasAnyArticlesInScope: boolean
   hasReviewRollupRows: boolean
   pendingRefreshCount: number
@@ -167,11 +201,13 @@ const getReviewsIndexingStatus = (params: {
 
   return !shouldIndexReviews
     ? 'not-needed'
-    : params.pendingRefreshCount > 0
-      ? 'refreshing'
-      : params.hasReviewRollupRows
-        ? 'ready'
-        : 'stale'
+    : params.hasFailedRefresh
+      ? 'failed'
+      : params.pendingRefreshCount > 0
+        ? 'refreshing'
+        : params.hasReviewRollupRows
+          ? 'ready'
+          : 'stale'
 }
 
 export const projectsRoutesGetReviewsWarnings = new Elysia().post(
@@ -180,41 +216,45 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const projectId = body.projectId
     await assertProjectIsActive(projectId)
     const martRefreshService = getDuckdbMartRefreshService()
-    await martRefreshService.ensureQueueSchema()
     const progressSnapshot = martRefreshService.getProgressSnapshot()
     const throughputSnapshot = martRefreshService.getThroughputSnapshot()
     const [
       enabledPromptCount,
       hasCuratedArticles,
       hasRouteArticles,
-      pendingProjectRefreshInfo,
+      projectRefreshState,
       pendingArticleRefreshInfo,
       hasReviewServingRows,
-      claimedQueuedArticleRefreshCount,
-      inFlightArticleRefreshCount,
+      processingArticleRefreshCount,
     ] = await Promise.all([
       getEnabledPromptCount(projectId),
       getHasCuratedArticles(projectId),
       getHasRouteArticles(projectId),
-      getPendingProjectRefreshInfo(projectId),
+      getProjectRefreshState(projectId),
       getPendingArticleRefreshInfo(projectId),
       getHasReviewServingRows(projectId),
-      getScopedArticleRefreshCount(projectId, progressSnapshot.claimedQueuedArticleIds),
       getScopedArticleRefreshCount(projectId, progressSnapshot.processingArticleIds),
     ])
-    const claimedQueuedProjectRefreshCount = getMatchingProjectRefreshCount(
-      projectId,
-      progressSnapshot.claimedQueuedProjectIds,
-    )
-    const inFlightProjectRefreshCount = getMatchingProjectRefreshCount(projectId, progressSnapshot.processingProjectIds)
-    const queuedProjectRefreshCount = getNonNegativeDifference(
-      pendingProjectRefreshInfo.queuedRefreshCount,
-      claimedQueuedProjectRefreshCount,
-    )
-    const queuedArticleRefreshCount = getNonNegativeDifference(
-      pendingArticleRefreshInfo.queuedRefreshCount,
-      claimedQueuedArticleRefreshCount,
-    )
+    const isProjectRunning =
+      !projectRefreshState.isFresh
+      && (projectRefreshState.refreshStatus === 'running'
+        || getMatchingProjectRefreshCount(projectId, progressSnapshot.processingProjectIds) > 0)
+    const inFlightProjectRefreshCount = isProjectRunning ? 1 : 0
+    const queuedProjectRefreshCount = projectRefreshState.isFresh
+      ? 0
+      : getNonNegativeDifference(1, inFlightProjectRefreshCount)
+    const inFlightArticleRefreshCount =
+      processingArticleRefreshCount > 0
+        ? processingArticleRefreshCount
+        : isProjectRunning
+          ? pendingArticleRefreshInfo.queuedRefreshCount
+          : 0
+    const queuedArticleRefreshCount =
+      processingArticleRefreshCount > 0
+        ? getNonNegativeDifference(pendingArticleRefreshInfo.queuedRefreshCount, processingArticleRefreshCount)
+        : isProjectRunning
+          ? 0
+          : pendingArticleRefreshInfo.queuedRefreshCount
     const pendingProjectRefreshCount = queuedProjectRefreshCount + inFlightProjectRefreshCount
     const pendingArticleRefreshCount = queuedArticleRefreshCount + inFlightArticleRefreshCount
     const queuedRefreshCount = queuedProjectRefreshCount + queuedArticleRefreshCount
@@ -223,6 +263,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const pendingRefreshCount = pendingProjectRefreshCount + pendingArticleRefreshCount
     const indexingStatus = getReviewsIndexingStatus({
       enabledPromptCount,
+      hasFailedRefresh: !projectRefreshState.isFresh && projectRefreshState.refreshStatus === 'failed',
       hasAnyArticlesInScope,
       hasReviewRollupRows: hasReviewServingRows,
       pendingRefreshCount,
@@ -241,7 +282,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
           inFlightProjectRefreshCount,
           inFlightRefreshCount,
           oldestQueuedAt: getOldestQueuedAt(
-            pendingProjectRefreshInfo.oldestQueuedAt,
+            projectRefreshState.isFresh ? null : projectRefreshState.lastRequestedAt,
             pendingArticleRefreshInfo.oldestQueuedAt,
           ),
           pendingArticleRefreshCount,

@@ -34,17 +34,24 @@ test('reviews warnings trigger mart refresh draining when backlog exists on a wr
             ? [{count: 1}]
             : statement.includes('FROM app.project_article') && statement.includes('LIMIT 1')
               ? [{articleId: 'article-trigger-test'}]
-              : statement.includes('FROM app.project_import_route') && statement.includes('LIMIT 1')
-                ? []
-                : statement.includes('MIN(created_at) AS oldestQueuedAt')
-                  ? [{oldestQueuedAt: '2026-03-25T12:00:00.000Z', queuedRefreshCount: 1}]
-                  : statement.includes('MIN(queue.created_at) AS oldestQueuedAt')
-                    ? [{oldestQueuedAt: null, queuedRefreshCount: 0}]
-                    : statement.includes('FROM mart.review_article_rollup')
-                      ? [{projectId: 'project-trigger-test'}]
-                      : statement.includes('FROM scoped_article')
-                        ? [{count: 0}]
-                        : []
+            : statement.includes('FROM app.project_import_route') && statement.includes('LIMIT 1')
+              ? []
+              : statement.includes('FROM app.project_mart_refresh_state') && statement.includes('LIMIT 1')
+                ? [
+                    {
+                      dirtyToken: 2,
+                      lastCompletedRefreshToken: 1,
+                      lastRequestedAt: '2026-03-25T12:00:00.000Z',
+                      refreshStatus: 'idle',
+                    },
+                  ]
+                : statement.includes('FROM app.project_mart_refresh_article_state article_state')
+                  ? [{oldestQueuedAt: null, queuedRefreshCount: 0}]
+                  : statement.includes('FROM mart.review_article_serving serving')
+                    ? []
+                    : statement.includes('FROM scoped_article')
+                      ? [{count: 0}]
+                      : []
         }
 
         const actualProjectAccessGuardModule = await import(projectAccessGuardModulePath + '?actual=' + Date.now())
@@ -64,11 +71,10 @@ test('reviews warnings trigger mart refresh draining when backlog exists on a wr
         void mock.module(martRefreshServiceModulePath, () => {
           return {
             getDuckdbMartRefreshService: () => {
-              return {
-                ensureQueueSchema: async () => {},
-                flush: async () => {
-                  flushCount += 1
-                },
+                return {
+                  flush: async () => {
+                    flushCount += 1
+                  },
                 isAutoDrainEnabled: () => {
                   return true
                 },
