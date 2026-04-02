@@ -177,23 +177,27 @@ const getDirtyProjectsForArticleIds = async (runner: RefreshStateRunner, article
   }
 
   const rows = await runner.queryJson<DirtyProjectArticleRow>(`
-    SELECT
-      project_article.project_id AS projectId,
-      project_article.article_id AS articleId
-    FROM app.project_article project_article
-    INNER JOIN app.project project ON project.id = project_article.project_id
-    WHERE project_article.article_id IN (${getQuotedStringList(uniqueArticleIds).join(', ')})
-      AND project.archived = FALSE
-    UNION
-    SELECT
-      project_import_route.project_id AS projectId,
-      article_import_route.article_id AS articleId
-    FROM app.article_import_route article_import_route
-    INNER JOIN app.project_import_route project_import_route
-      ON project_import_route.import_route_id = article_import_route.import_route_id
-    INNER JOIN app.project project ON project.id = project_import_route.project_id
-    WHERE article_import_route.article_id IN (${getQuotedStringList(uniqueArticleIds).join(', ')})
-      AND project.archived = FALSE
+    SELECT projectId, articleId
+    FROM (
+      SELECT
+        project_article.project_id AS projectId,
+        project_article.article_id AS articleId
+      FROM app.project_article project_article
+      INNER JOIN app.project project ON project.id = project_article.project_id
+      WHERE project_article.article_id IN (${getQuotedStringList(uniqueArticleIds).join(', ')})
+        AND project.archived = FALSE
+      UNION
+      SELECT
+        project_import_route.project_id AS projectId,
+        article_import_route.article_id AS articleId
+      FROM app.article_import_route article_import_route
+      INNER JOIN app.project_import_route project_import_route
+        ON project_import_route.import_route_id = article_import_route.import_route_id
+      INNER JOIN app.project project ON project.id = project_import_route.project_id
+      WHERE article_import_route.article_id IN (${getQuotedStringList(uniqueArticleIds).join(', ')})
+        AND project.archived = FALSE
+    ) resolved_projects
+    ORDER BY projectId ASC, articleId ASC
   `)
 
   return Array.from(

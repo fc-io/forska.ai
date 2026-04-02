@@ -1,7 +1,10 @@
 import {expect, mock, test} from 'bun:test'
 
 const appDatabaseServiceModulePath = new URL('../../services/appDatabaseService.ts', import.meta.url).pathname
-const martRefreshServiceModulePath = new URL('../../services/getDuckdbMartRefreshService.ts', import.meta.url).pathname
+const projectMartRefreshStateServiceModulePath = new URL(
+  '../../services/projectMartRefreshStateService.ts',
+  import.meta.url,
+).pathname
 
 const queryJsonRef = {
   current: async (_statement: string): Promise<unknown[]> => {
@@ -11,9 +14,21 @@ const queryJsonRef = {
 
 const runRef = {current: async (_statement: string): Promise<void> => {}}
 
-const queuedArticleRefreshesRef = {current: [] as Array<{articleId: string; reason: string}>}
+const transactionRef = {
+  current: async <T>(
+    operation: (tx: {queryJson: typeof queryJsonRef.current; run: typeof runRef.current}) => Promise<T>,
+  ) => {
+    return operation({queryJson: queryJsonRef.current, run: runRef.current})
+  },
+}
 
-const queuedProjectRefreshesRef = {current: [] as Array<{projectId: string; reason: string}>}
+const dirtyMarksRef = {
+  current: [] as Array<{
+    hasRunner: boolean
+    projects: Array<{articleIds?: string[]; projectId: string}>
+    reason: string | null | undefined
+  }>,
+}
 
 void mock.module(appDatabaseServiceModulePath, () => {
   return {
@@ -25,30 +40,37 @@ void mock.module(appDatabaseServiceModulePath, () => {
         run: (statement: string) => {
           return runRef.current(statement)
         },
+        transaction: (operation: Parameters<typeof transactionRef.current>[0]) => {
+          return transactionRef.current(operation)
+        },
       }
     },
   }
 })
 
-void mock.module(martRefreshServiceModulePath, () => {
+void mock.module(projectMartRefreshStateServiceModulePath, () => {
   return {
-    getDuckdbMartRefreshService: () => {
+    getProjectMartRefreshStateService: () => {
       return {
-        queueJudgmentArticleRefresh: async (articleId: string, reason: string) => {
-          queuedArticleRefreshesRef.current.push({articleId, reason})
-        },
-        queueProjectRefresh: async (projectId: string, reason: string) => {
-          queuedProjectRefreshesRef.current.push({projectId, reason})
+        markProjectsDirtyAtomically: async (params: {
+          projects: Array<{articleIds?: string[]; projectId: string}>
+          reason?: string | null
+          runner?: unknown
+        }) => {
+          dirtyMarksRef.current.push({
+            hasRunner: params.runner != null,
+            projects: params.projects,
+            reason: params.reason,
+          })
         },
       }
     },
   }
 })
 
-test('human assessment submit queues an article refresh for the pending article', async () => {
+test('human assessment submit marks the project dirty in the same transaction for the pending article', async () => {
   const statements: string[] = []
-  queuedArticleRefreshesRef.current = []
-  queuedProjectRefreshesRef.current = []
+  dirtyMarksRef.current = []
   queryJsonRef.current = async (statement) => {
     statements.push(statement)
 
@@ -60,6 +82,9 @@ test('human assessment submit queues an article refresh for the pending article'
   }
   runRef.current = async (statement) => {
     statements.push(statement)
+  }
+  transactionRef.current = async (operation) => {
+    return operation({queryJson: queryJsonRef.current, run: runRef.current})
   }
 
   const {humanAssessmentRoutesPostSubmit} = await import('./humanAssessmentRoutesPostSubmit.ts')
@@ -73,10 +98,13 @@ test('human assessment submit queues an article refresh for the pending article'
   })
 
   expect(response).toEqual({data: {updated: 1}})
-  expect(queuedArticleRefreshesRef.current).toEqual([
-    {articleId: 'article-1', reason: 'humanAssessmentRoutesPostSubmit'},
+  expect(dirtyMarksRef.current).toEqual([
+    {
+      hasRunner: true,
+      projects: [{articleIds: ['article-1'], projectId: 'project-1'}],
+      reason: 'humanAssessmentRoutesPostSubmit',
+    },
   ])
-  expect(queuedProjectRefreshesRef.current).toEqual([])
   expect(
     statements.some((statement) => {
       return statement.includes('UPDATE app.judgment_human') && statement.includes('is_answered = TRUE')

@@ -3,7 +3,7 @@ import type {Context} from 'elysia'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
-import {getDuckdbMartRefreshService} from '../../services/getDuckdbMartRefreshService.ts'
+import {getProjectMartRefreshStateService} from '../../services/projectMartRefreshStateService.ts'
 
 export const humanAssessmentRoutesPostSubmit = async ({
   body,
@@ -122,18 +122,6 @@ export const humanAssessmentRoutesPostSubmit = async ({
   }
 
   const idsToUpdate = Array.from(submittedIds)
-  const rows = await getAppDatabaseService().queryJson<{id: string}>(`
-    SELECT id
-    FROM app.judgment_human
-    WHERE id IN (${getQuotedStringList(idsToUpdate).join(', ')})
-      AND project_id = '${escapeSqlString(body.projectId)}'
-      AND is_answered = FALSE
-  `)
-
-  if (rows.length !== idsToUpdate.length) {
-    throw new Error('One or more submitted answers could not be validated for update')
-  }
-
   const updatedAt = new Date()
   const answerCase = idsToUpdate
     .map((id) => {
@@ -149,17 +137,36 @@ export const humanAssessmentRoutesPostSubmit = async ({
       return `WHEN id = '${escapeSqlString(id)}' THEN ${getSqlLiteral(byId[id]?.comment ?? null)}`
     })
     .join(' ')
-  await getAppDatabaseService().run(`
-    UPDATE app.judgment_human
-    SET answer = CASE ${answerCase} ELSE answer END,
-        comment = CASE ${commentCase} ELSE comment END,
-        is_answered = TRUE,
-        updated_at = ${getSqlLiteral(updatedAt)}
-    WHERE id IN (${getQuotedStringList(idsToUpdate).join(', ')})
-      AND project_id = '${escapeSqlString(body.projectId)}'
-      AND is_answered = FALSE
-  `)
-  await getDuckdbMartRefreshService().queueJudgmentArticleRefresh(currentArticleId, 'humanAssessmentRoutesPostSubmit')
+  await getAppDatabaseService().transaction(async (tx) => {
+    const rows = await tx.queryJson<{id: string}>(`
+      SELECT id
+      FROM app.judgment_human
+      WHERE id IN (${getQuotedStringList(idsToUpdate).join(', ')})
+        AND project_id = '${escapeSqlString(body.projectId)}'
+        AND is_answered = FALSE
+    `)
+
+    if (rows.length !== idsToUpdate.length) {
+      throw new Error('One or more submitted answers could not be validated for update')
+    }
+
+    await tx.run(`
+      UPDATE app.judgment_human
+      SET answer = CASE ${answerCase} ELSE answer END,
+          comment = CASE ${commentCase} ELSE comment END,
+          is_answered = TRUE,
+          updated_at = ${getSqlLiteral(updatedAt)}
+      WHERE id IN (${getQuotedStringList(idsToUpdate).join(', ')})
+        AND project_id = '${escapeSqlString(body.projectId)}'
+        AND is_answered = FALSE
+    `)
+
+    await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+      projects: [{articleIds: [currentArticleId], projectId: body.projectId}],
+      reason: 'humanAssessmentRoutesPostSubmit',
+      runner: tx,
+    })
+  })
 
   return {data: {updated: idsToUpdate.length}}
 }
