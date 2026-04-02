@@ -358,6 +358,8 @@ Files to inspect/update:
 
 Requirement:
 - any change affecting project scope, enabled prompts, model linkage, or review-serving semantics marks the affected projects dirty
+- prompt routes that merge prompts, invalidate judgments, or otherwise rewrite/delete `app.judgment` or `app.judgment_human` must also merge the affected article IDs into the unresolved article accumulator for all affected projects
+- do not treat these routes as “project dirty only” mutations when they change judgment-bearing articles; they must feed article-level fact refresh input as well
 
 ### Import pipeline / article membership changes
 Files to inspect/update:
@@ -458,8 +460,9 @@ Do not optimize concurrency until the system is stable.
 ### Phase 1: project-coalesced refresh with explicit judgment-fact stage
 
 For each claimed dirty project/token:
-1. refresh `mart.judgment_fact` for changed articles relevant to the token
-2. run `refreshProject(projectId)`
+1. resolve changed articles across the unresolved range `(last_completed_refresh_token, claimed_token]`
+2. refresh `mart.judgment_fact` for all articles in that unresolved range
+3. run `refreshProject(projectId)`
 
 This phase is intentionally correctness-first.
 It does not rely on the current mart queue fan-out design.
@@ -588,7 +591,7 @@ Step 4: Commit
 
 ### Task 4: Add project dirty marking API with cross-project fan-out
 
-Objective: Replace direct mart queue calls with project-dirty writes that resolve all affected projects.
+Objective: Replace direct mart queue calls with project-dirty writes that resolve all affected projects and preserve article-level fact refresh inputs.
 
 Files:
 - Modify: `src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts`
@@ -600,6 +603,7 @@ Files:
 - Modify: `src/server/services/insertArticlesIntoProject.ts`
 - Modify: `src/server/routes/ProjectArticlesRoutes.ts`
 - Modify: `src/server/routes/SubprojectsRoutes.ts`
+- Modify: `src/server/routes/PromptsRoutes.ts`
 - Modify: project/prompt/config mutation paths
 
 Step 1: Write failing tests that assert dirty-project marking occurs after:
@@ -607,6 +611,7 @@ Step 1: Write failing tests that assert dirty-project marking occurs after:
 - direct LLM judgments
 - human assessments
 - article membership changes
+- prompt merges / invalid-judgment flows that rewrite or delete judgments
 - prompt/project config changes
 
 Step 2: Implement cross-project impact resolution
@@ -634,7 +639,7 @@ Files:
 
 Step 1: Write failing tests for:
 - claims one dirty project
-- resolves changed articles for the claimed token
+- resolves changed articles for the unresolved range `(last_completed_refresh_token, claimed_token]`
 - rebuilds judgment facts first
 - runs `refreshProject(projectId)` second
 - marks success on completion
@@ -700,20 +705,26 @@ Step 4: Run tests
 Step 5: Commit
 - `git commit -m "feat: gate serving reads on ledger freshness and preserve warnings contract"`
 
-### Task 8: Retire legacy Bun/macOS mart queue workaround once replacement is live
+### Task 8: Retire legacy mart queue surface once replacement is live
 
-Objective: Remove the current workaround only after the new architecture is active.
+Objective: Remove the current workaround only after the new architecture is active and all queue-dependent runtime/recovery paths are migrated.
 
 Files:
 - Modify: `src/server/services/getDuckdbMartRefreshService.ts`
 - Modify: `src/server/utils/martRefreshDrainHeartbeat.ts`
-- Test: relevant mart refresh tests
+- Modify: `src/server/routes/projectsRoutes/projectsRoutesPostDeleteArchived.ts`
+- Modify: `scripts/recoverArchivedProjectRefreshQueue.ts`
+- Modify: `scripts/recoverJudgmentJobWithSystemSqlite.ts`
+- Modify: `scripts/recoverJudgmentJobWithSystemSqliteSqlImport.ts`
+- Test: relevant mart refresh tests and recovery/cleanup smoke tests
 
 Step 1: keep direct refresh primitives
-Step 2: remove obsolete queue-on-write assumptions
-Step 3: retain manual refresh APIs/scripts if still useful
-Step 4: commit
-- `git commit -m "refactor: retire legacy Bun mart queue workaround"`
+Step 2: migrate runtime archived-project cleanup away from `app.mart_refresh_queue`
+Step 3: migrate recovery/maintenance scripts that still read or write the old queue
+Step 4: remove obsolete queue-on-write assumptions
+Step 5: retain or replace manual refresh/recovery APIs/scripts if still useful
+Step 6: commit
+- `git commit -m "refactor: retire legacy mart queue surface"`
 
 ### Task 9: Optional phase-2 optimization for article-level incremental refresh
 
@@ -803,7 +814,7 @@ Concretely, phase 1 should be:
 - atomically bump each affected project’s dirty token and merge changed article IDs into its bounded unresolved article state
 - worker claims one project
 - worker loads unresolved article IDs for `(last_completed_refresh_token, claimed_token]`
-- worker runs article judgment-fact refresh for those articles
+- worker runs article judgment-fact refresh for all unresolved articles in that range
 - worker runs `refreshProject(projectId)`
 - worker marks `last_completed_refresh_token = claimed_token`
 - worker trims/clears resolved article dirtiness through `claimed_token`
