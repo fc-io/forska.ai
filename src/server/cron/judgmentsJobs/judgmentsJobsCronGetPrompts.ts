@@ -21,6 +21,7 @@ export const judgmentsJobsCronGetPrompts = async (
   jobId: string,
   numberOfPromptsToGet: number,
   cursor: JobCursor | null = null,
+  preferRawFallback = false,
 ): Promise<QueuePromptsResult> => {
   const [projectResult, enabledPromptCount] = await Promise.all([
     getAppDatabaseService().queryJson<{id: string; archived: boolean}>(`
@@ -89,7 +90,13 @@ export const judgmentsJobsCronGetPrompts = async (
     })
   }, slowLogMs)
 
-  const result = await getUnassessedPairsFromOlap({projectId, jobId, numberOfPromptsToGet, cursor}).finally(() => {
+  const result = await getUnassessedPairsFromOlap({
+    projectId,
+    jobId,
+    numberOfPromptsToGet,
+    cursor,
+    preferRawFallback,
+  }).finally(() => {
     clearTimeout(slowTimer)
   })
   const durationMs = Date.now() - startedAtMs

@@ -1978,6 +1978,45 @@ const sqliteService = {
       }) ?? 0
     )
   },
+  filterOutLocallyJudgedPrompts: async (
+    jobId: string,
+    entries: Array<{articleId: string; promptId: string}>,
+  ): Promise<Array<{articleId: string; promptId: string}>> => {
+    return entries.length === 0
+      ? []
+      : (withJobDatabase(jobId, false, (database) => {
+          const locallyJudgedPairs = database
+            .query(
+              `
+                  WITH pairs(article_id, prompt_id) AS (
+                    VALUES ${entries
+                      .map(() => {
+                        return '(?, ?)'
+                      })
+                      .join(', ')}
+                  )
+                  SELECT qp.article_id AS articleId, qp.prompt_id AS promptId
+                  FROM queue_prompt qp
+                  INNER JOIN pairs p ON p.article_id = qp.article_id AND p.prompt_id = qp.prompt_id
+                  WHERE qp.status = 'judged'
+                `,
+            )
+            .all(
+              ...entries.flatMap((entry) => {
+                return [entry.articleId, entry.promptId]
+              }),
+            ) as Array<{articleId: string; promptId: string}>
+          const locallyJudgedSet = new Set(
+            locallyJudgedPairs.map((entry) => {
+              return `${entry.articleId}:${entry.promptId}`
+            }),
+          )
+
+          return entries.filter((entry) => {
+            return !locallyJudgedSet.has(`${entry.articleId}:${entry.promptId}`)
+          })
+        }) ?? [])
+  },
   hasJob: (jobId: string) => {
     return existsSync(getJudgmentJobSqlitePath(jobId))
   },

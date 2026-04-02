@@ -320,8 +320,13 @@ test('starting a judgments job quarantines corrupt SQLite state after isolated p
 
   expect(healthResponse.status).toBe(200)
   expect(healthBody.storageState).toBe('quarantined')
-  expect(healthBody.recommendedNextAction).toBe('repair_quarantine')
+  expect(healthBody.recommendedNextAction).toBe('repair_offline_required')
   expect(healthBody.quarantine.quarantineReason).toContain('missing table queue_prompt')
+
+  rmSync(getJudgmentJobSqlitePath(jobId), {force: true})
+  rmSync(`${getJudgmentJobSqlitePath(jobId)}-shm`, {force: true})
+  rmSync(`${getJudgmentJobSqlitePath(jobId)}-wal`, {force: true})
+  await sqliteService.closeAll()
 })
 
 test('starting a draining judgments job returns an actionable error', async () => {

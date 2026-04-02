@@ -1,3 +1,5 @@
+import {spawn} from 'node:child_process'
+
 import {
   type JudgmentJobSqliteOutboxImportCycleResult,
   runJudgmentJobSqliteOutboxImportCycleForClaimedBatch,
@@ -145,15 +147,50 @@ export const runJudgmentJobSqliteIsolatedImportCycle = async ({
   claimedBy: string
   jobId: string
 }): Promise<JudgmentJobSqliteIsolatedImportProcessResult> => {
-  const childProcess = globalThis.Bun.spawn(
-    ['bun', 'scripts/runJudgmentJobSqliteSingleJobClaimExport.ts', `--jobId=${jobId}`, `--claimedBy=${claimedBy}`],
-    {cwd: process.cwd(), env: {...process.env}, stderr: 'pipe', stdout: 'pipe'},
+  const childProcess = spawn(
+    'bun',
+    ['scripts/runJudgmentJobSqliteSingleJobClaimExport.ts', `--jobId=${jobId}`, `--claimedBy=${claimedBy}`],
+    {cwd: process.cwd(), env: {...process.env}, stdio: ['ignore', 'pipe', 'pipe']},
   )
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(childProcess.stdout).text(),
-    new Response(childProcess.stderr).text(),
-    childProcess.exited,
-  ])
+
+  const stdoutPromise = new Promise<string>((resolve, reject) => {
+    let stdout = ''
+    childProcess.stdout?.setEncoding('utf8')
+    childProcess.stdout?.on('data', (chunk: string) => {
+      stdout += chunk
+    })
+    childProcess.stdout?.on('end', () => {
+      resolve(stdout)
+    })
+    childProcess.stdout?.on('error', reject)
+    if (!childProcess.stdout) {
+      resolve('')
+    }
+  })
+
+  const stderrPromise = new Promise<string>((resolve, reject) => {
+    let stderr = ''
+    childProcess.stderr?.setEncoding('utf8')
+    childProcess.stderr?.on('data', (chunk: string) => {
+      stderr += chunk
+    })
+    childProcess.stderr?.on('end', () => {
+      resolve(stderr)
+    })
+    childProcess.stderr?.on('error', reject)
+    if (!childProcess.stderr) {
+      resolve('')
+    }
+  })
+
+  const exitCodePromise = new Promise<number>((resolve, reject) => {
+    childProcess.on('exit', (code) => {
+      resolve(code ?? 1)
+    })
+    childProcess.on('error', reject)
+  })
+
+  const [stdout, stderr, exitCode] = await Promise.all([stdoutPromise, stderrPromise, exitCodePromise])
   const parsed = parseIsolatedImportOutput(stdout)
   const parsedStatus = parsed ? (parsed as {status?: unknown}).status : undefined
   const result = getCycleResult(parsed)

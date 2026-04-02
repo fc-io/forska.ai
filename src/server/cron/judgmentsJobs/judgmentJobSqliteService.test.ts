@@ -248,8 +248,14 @@ test('isolated SQLite preflight fails when required schema is missing', async ()
     VALUES ('${jobId}', '${projectId}', 'paused')
   `)
 
-  const malformedDatabase = new Database(sqlitePath, {create: true})
-  malformedDatabase.exec(`CREATE TABLE job_info (job_id TEXT PRIMARY KEY, created_at TEXT NOT NULL);`)
+  await service.initializeJob(jobId)
+  await service.closeAll()
+
+  const malformedDatabase = new Database(sqlitePath)
+  malformedDatabase.exec(`
+    DROP TABLE queue_prompt;
+    DROP TABLE judgment_outbox;
+  `)
   malformedDatabase.close(false)
   const preflightError = await service
     .runIsolatedPreflight(jobId)
@@ -986,91 +992,6 @@ test('returns safe health snapshot defaults when the SQLite job db is missing', 
     sqliteFileBytes: null,
     walBytes: 0,
   })
-})
-
-test('runs an isolated SQLite preflight and captures file sizes', async () => {
-  if (!runDatabase || !sqliteService) {
-    throw new Error('Test database not initialized')
-  }
-
-  const service = sqliteService()
-  const connectionId = `connection-preflight-${Date.now()}`
-  const modelId = `model-preflight-${Date.now()}`
-  const projectId = `project-preflight-${Date.now()}`
-  const jobId = `job-preflight-${Date.now()}`
-
-  await runDatabase(`
-    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
-    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
-  `)
-  await runDatabase(`
-    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
-    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
-  `)
-  await runDatabase(`
-    INSERT INTO app.project (id, name, model_id)
-    VALUES ('${projectId}', 'SQLite Preflight Test', '${modelId}')
-  `)
-  await runDatabase(`
-    INSERT INTO app.judgment_job (id, project_id, status)
-    VALUES ('${jobId}', '${projectId}', 'running')
-  `)
-
-  await service.initializeJob(jobId)
-  await service.addReadyPrompts(
-    jobId,
-    [{articleId: `article-${Date.now()}`, promptId: `prompt-${Date.now()}`}],
-    'server-a',
-  )
-
-  const snapshot = await service.runIsolatedPreflight(jobId)
-
-  expect(snapshot.queueSampleCount).toBe(1)
-  expect(snapshot.outboxSampleCount).toBe(0)
-  expect(snapshot.sqliteFileBytes).toBeGreaterThan(0)
-  expect(snapshot.walBytes).toBeGreaterThanOrEqual(0)
-})
-
-test('fails isolated SQLite preflight when required schema is missing', async () => {
-  if (!runDatabase || !sqliteService) {
-    throw new Error('Test database not initialized')
-  }
-
-  const service = sqliteService()
-  const connectionId = `connection-preflight-corrupt-${Date.now()}`
-  const modelId = `model-preflight-corrupt-${Date.now()}`
-  const projectId = `project-preflight-corrupt-${Date.now()}`
-  const jobId = `job-preflight-corrupt-${Date.now()}`
-
-  await runDatabase(`
-    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
-    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
-  `)
-  await runDatabase(`
-    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
-    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
-  `)
-  await runDatabase(`
-    INSERT INTO app.project (id, name, model_id)
-    VALUES ('${projectId}', 'SQLite Preflight Corrupt Test', '${modelId}')
-  `)
-  await runDatabase(`
-    INSERT INTO app.judgment_job (id, project_id, status)
-    VALUES ('${jobId}', '${projectId}', 'running')
-  `)
-
-  await service.initializeJob(jobId)
-  await service.closeAll()
-
-  const database = new Database(getJudgmentJobSqlitePath(jobId))
-
-  try {
-    database.exec(`DROP TABLE queue_prompt`)
-  } finally {
-    database.close(false)
-  }
-
-  await expect(service.runIsolatedPreflight(jobId)).rejects.toThrow('missing table queue_prompt')
 })
 
 test('prunes only visibility-acked exported outbox rows in bounded batches', async () => {

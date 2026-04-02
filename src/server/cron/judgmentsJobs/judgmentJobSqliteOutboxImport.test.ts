@@ -145,6 +145,7 @@ test('background import selects active running jobs and draining jobs, but exclu
             JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
             getJudgmentJobSqliteService: () => {
               return {
+                hasOwnedLease: () => false,
                 syncOwnedLeases: async (jobIds) => {
                   syncedLeaseJobIds = jobIds
                 },
@@ -272,6 +273,7 @@ test('background import records metadata, quarantines repeated failures, and con
             JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
             getJudgmentJobSqliteService: () => {
               return {
+                hasOwnedLease: () => false,
                 syncOwnedLeases: async () => {},
               }
             },
@@ -363,6 +365,106 @@ test('background import records metadata, quarantines repeated failures, and con
       )
     }),
   ).toBe(true)
+})
+
+test('background import releases an owned sqlite lease before using the isolated importer', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
+        const sqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
+        const isolatedImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteIsolatedImport.ts')
+        const backgroundImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts')
+        const releasedOwnedLeaseJobIds = []
+        const spawnedJobIds = []
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                queryJson: async (statement) => {
+                  return statement.includes("storage_state = 'draining'") && statement.includes('status IN')
+                    ? [{id: 'owned-job'}, {id: 'unowned-job'}]
+                    : []
+                },
+                run: async () => {},
+              }
+            },
+          }
+        })
+
+        void mock.module(sqliteServiceModulePath, () => {
+          return {
+            JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
+            getJudgmentJobSqliteService: () => {
+              return {
+                hasOwnedLease: (jobId) => jobId === 'owned-job',
+                releaseOwnedLease: async (jobId) => {
+                  releasedOwnedLeaseJobIds.push(jobId)
+                },
+                syncOwnedLeases: async () => {},
+              }
+            },
+          }
+        })
+
+        void mock.module(isolatedImportModulePath, () => {
+          return {
+            isJudgmentJobSqliteIsolatedImportLeaseConflict: () => false,
+            runJudgmentJobSqliteIsolatedImportCycle: async ({jobId}) => {
+              spawnedJobIds.push(jobId)
+              return {
+                errorMessage: null,
+                exitCode: 0,
+                result: {
+                  claimedBy: 'test-server',
+                  discardedCount: 0,
+                  duplicateCount: 0,
+                  importedCount: 0,
+                  jobId,
+                  outboxClaimId: null,
+                  outboxRowCount: 0,
+                  status: 'idle',
+                },
+              }
+            },
+          }
+        })
+
+        const {runJudgmentJobSqliteBackgroundImport} = await import(backgroundImportModulePath + '?owned-lease=' + Date.now())
+        const summary = await runJudgmentJobSqliteBackgroundImport({claimedBy: 'test-server'})
+
+        console.log(JSON.stringify({releasedOwnedLeaseJobIds, spawnedJobIds, summary}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'SQLite owned-lease background import regression test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    releasedOwnedLeaseJobIds: string[]
+    spawnedJobIds: string[]
+    summary: {attemptedCount: number; failedCount: number; skippedCount: number; succeededCount: number}
+  }
+
+  expect(result.releasedOwnedLeaseJobIds).toEqual(['owned-job'])
+  expect(result.spawnedJobIds).toEqual(['owned-job', 'unowned-job'])
+  expect(result.summary).toEqual({attemptedCount: 2, failedCount: 0, skippedCount: 0, succeededCount: 2})
 })
 
 test('imports SQLite-backed judgments into DuckDB in batches', async () => {

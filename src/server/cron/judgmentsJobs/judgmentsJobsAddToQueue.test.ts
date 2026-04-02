@@ -26,8 +26,17 @@ type MockScanState = {
 }
 
 type MockSqliteService = {
-  addReadyPrompts: () => Promise<number>
+  addReadyPrompts: (
+    jobId: string,
+    entries: Array<{articleId: string; promptId: string}>,
+    serverJobId: string,
+    readyDeficit: number,
+  ) => Promise<number>
   ensureOwnedLease: () => Promise<void>
+  filterOutLocallyJudgedPrompts: (
+    jobId: string,
+    entries: Array<{articleId: string; promptId: string}>,
+  ) => Promise<Array<{articleId: string; promptId: string}>>
   getMaxOutboxSeq: () => Promise<number | null>
   getReadyCount: () => Promise<number>
   getScanState: () => Promise<MockScanState>
@@ -69,6 +78,7 @@ const registerSharedMocks = (
       jobId: string,
       numberOfPromptsToGet: number,
       cursor?: {lastArticleId: string; lastDate: Date} | null,
+      preferRawFallback?: boolean,
     ) => Promise<{
       nextCursor: {lastArticleId: string; lastDate: Date} | null
       promptEntries: Array<{articleId: string; promptId: string}>
@@ -107,10 +117,11 @@ const registerSharedMocks = (
         jobId: string,
         numberOfPromptsToGet: number,
         cursor?: {lastArticleId: string; lastDate: Date} | null,
+        preferRawFallback?: boolean,
       ) => {
         getPromptsCalls.count += 1
         return getPromptsImpl
-          ? getPromptsImpl(projectId, jobId, numberOfPromptsToGet, cursor)
+          ? getPromptsImpl(projectId, jobId, numberOfPromptsToGet, cursor, preferRawFallback)
           : {nextCursor: null, promptEntries: []}
       },
     }
@@ -135,8 +146,9 @@ afterEach(() => {
   mock.restore()
 })
 
-test('keeps exhausted SQLite jobs blocked when visibility watermark is behind', async () => {
+test('uses raw OLAP fallback when exhausted SQLite jobs are waiting on mart visibility', async () => {
   const getPromptsCalls = {count: 0}
+  const preferRawFallbackValues: boolean[] = []
   const setScanStateCalls: Array<{jobId: string; state: Record<string, unknown>}> = []
   const sqliteService: MockSqliteService = {
     addReadyPrompts: async () => {
@@ -144,6 +156,9 @@ test('keeps exhausted SQLite jobs blocked when visibility watermark is behind', 
     },
     ensureOwnedLease: async () => {
       return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
     },
     getMaxOutboxSeq: async () => {
       return 12
@@ -168,7 +183,12 @@ test('keeps exhausted SQLite jobs blocked when visibility watermark is behind', 
     },
   }
 
-  registerSharedMocks(sqliteService, getPromptsCalls)
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    getPromptsImpl: async (_projectId, _jobId, _numberOfPromptsToGet, _cursor, preferRawFallback) => {
+      preferRawFallbackValues.push(Boolean(preferRawFallback))
+      return {nextCursor: null, promptEntries: []}
+    },
+  })
 
   const module = (await import(
     `${judgmentsJobsAddToQueueModulePath}?blocked=${Date.now()}`
@@ -176,8 +196,13 @@ test('keeps exhausted SQLite jobs blocked when visibility watermark is behind', 
 
   await module.judgmentsJobsAddToQueue('server-1')
 
-  expect(getPromptsCalls.count).toBe(0)
-  expect(setScanStateCalls).toHaveLength(0)
+  expect(getPromptsCalls.count).toBe(1)
+  expect(preferRawFallbackValues).toEqual([true])
+  expect(setScanStateCalls).toHaveLength(2)
+  expect(setScanStateCalls[0]).toEqual({
+    jobId: 'job-1',
+    state: {cursor: null, exhaustedAt: null, scanEpoch: 4, wrapVisibilityAckSeq: 12},
+  })
 })
 
 test('wraps exhausted SQLite jobs once visibility catches up and increments scan epoch once', async () => {
@@ -189,6 +214,9 @@ test('wraps exhausted SQLite jobs once visibility catches up and increments scan
     },
     ensureOwnedLease: async () => {
       return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
     },
     getMaxOutboxSeq: async () => {
       return 12
@@ -245,6 +273,9 @@ test('initializes missing SQLite job state before topping up the queue', async (
     ensureOwnedLease: async () => {
       return undefined
     },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
+    },
     getMaxOutboxSeq: async () => {
       return null
     },
@@ -279,4 +310,65 @@ test('initializes missing SQLite job state before topping up the queue', async (
 
   expect(initializedJobIds).toEqual(['job-1'])
   expect(getPromptsCalls.count).toBe(1)
+})
+
+test('filters out locally judged SQLite prompt pairs before adding ready prompts', async () => {
+  const getPromptsCalls = {count: 0}
+  const addReadyPromptsCalls: Array<Array<{articleId: string; promptId: string}>> = []
+  const sqliteService: MockSqliteService = {
+    addReadyPrompts: async (...args) => {
+      addReadyPromptsCalls.push(args[1] as Array<{articleId: string; promptId: string}>)
+      return 1
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries.filter((entry) => {
+        return entry.articleId !== 'article-local'
+      })
+    },
+    getMaxOutboxSeq: async () => {
+      return null
+    },
+    getReadyCount: async () => {
+      return 0
+    },
+    getScanState: async () => {
+      return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    setScanState: async () => {
+      return undefined
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    getPromptsImpl: async () => {
+      return {
+        nextCursor: null,
+        promptEntries: [
+          {articleId: 'article-local', promptId: 'prompt-1'},
+          {articleId: 'article-new', promptId: 'prompt-1'},
+        ],
+      }
+    },
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?filter-local-judged=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(getPromptsCalls.count).toBe(1)
+  expect(addReadyPromptsCalls).toEqual([[{articleId: 'article-new', promptId: 'prompt-1'}]])
 })

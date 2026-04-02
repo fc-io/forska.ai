@@ -2608,7 +2608,8 @@ export const getUnassessedPairsFromDuckdb = async (params: UnassessedPairsParams
 
   const candidateLimit = getCandidateArticlesLimit(params.numberOfPromptsToGet)
   const hasServingRows = await getHasReviewArticleServingRows(scope.projectId)
-  const candidateResult = await (hasServingRows
+  const useServingRows = hasServingRows && !params.preferRawFallback
+  const candidateResult = await (useServingRows
     ? getUnassessedCandidateRowsFromServing({scope, cursor: params.cursor, limit: candidateLimit})
     : getRawUnassessedCandidateRows({jobId: params.jobId, scope, cursor: params.cursor, limit: candidateLimit}))
   const candidateArticles = candidateResult.rows
@@ -2632,7 +2633,7 @@ export const getUnassessedPairsFromDuckdb = async (params: UnassessedPairsParams
       ? (candidateArticles[candidateArticles.length - 1] ?? null)
       : null
 
-  if (!hasServingRows) {
+  if (!useServingRows) {
     rawFallbackQueueLogger.log(
       `getPrompts:raw-fallback:${params.jobId}:prompt-result`,
       '[getPrompts] raw fallback prompt result',

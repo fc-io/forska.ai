@@ -41,6 +41,7 @@ let isImportingJudgments = false
 
 const runAddToQueue = async (): Promise<void> => {
   if (!shouldRunJudgingCron()) return
+  if (isImportingJudgments) return
 
   if (isAddingToQueue) {
     const runningForMs = addToQueueStartedAtMs ? Date.now() - addToQueueStartedAtMs : null
@@ -65,6 +66,7 @@ const runAddToQueue = async (): Promise<void> => {
 
 const sendToLLM = async (): Promise<void> => {
   if (!shouldRunJudgingCron()) return
+  if (isImportingJudgments) return
   try {
     const runningJobs = await judgmentsJobsGetRunningJobs({applyRuntimeMatchFilter: false})
     await getJudgmentJobSqliteService().syncOwnedLeases(

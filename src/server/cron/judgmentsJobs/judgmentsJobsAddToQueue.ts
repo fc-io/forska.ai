@@ -58,8 +58,11 @@ type PromptQueueEntry = {articleId: string; promptId: string}
 const filterAlreadyJudged = async (
   promptEntries: PromptQueueEntry[],
   jobConfig: JobConfig,
+  jobId: string,
 ): Promise<PromptQueueEntry[]> => {
   if (promptEntries.length === 0) return []
+
+  const sqliteService = getJudgmentJobSqliteService()
 
   // Check in batches to avoid query size limits
   const BATCH_SIZE = 1000
@@ -105,7 +108,14 @@ const filterAlreadyJudged = async (
     console.log(`[addToQueue] Filtered out ${skipped} already-judged entries after queue refresh`)
   }
 
-  return filtered
+  const filteredForLocalJudgments = await sqliteService.filterOutLocallyJudgedPrompts(jobId, filtered)
+
+  const locallySkipped = filtered.length - filteredForLocalJudgments.length
+  if (locallySkipped > 0) {
+    console.log(`[addToQueue] Filtered out ${locallySkipped} locally-judged SQLite entries after queue refresh`)
+  }
+
+  return filteredForLocalJudgments
 }
 
 const getSqliteWindowSize = (readyDeficit: number, addToQueueMaxBatchSize: number) => {
@@ -206,9 +216,7 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
     return
   }
 
-  if (scanState.exhaustedAt && !hasWrapVisibility(scanState)) {
-    return
-  }
+  const shouldForceRawFallback = !hasWrapVisibility(scanState)
 
   const baseCursor = scanState.exhaustedAt ? null : scanState.cursor
   const initializeScanState = scanState.exhaustedAt
@@ -216,7 +224,7 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
         cursor: null,
         exhaustedAt: null,
         scanEpoch: scanState.scanEpoch + 1,
-        wrapVisibilityAckSeq: null,
+        wrapVisibilityAckSeq: shouldForceRawFallback ? scanState.wrapVisibilityAckSeq : null,
       })
     : Promise.resolve()
 
@@ -237,14 +245,24 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
 
     const readyDeficit = Math.max(0, readyTargetPerJob - readyCount)
     const requestedWindowSize = getSqliteWindowSize(readyDeficit, addToQueueMaxBatchSize)
-    const promptData = await judgmentsJobsCronGetPrompts(job.projectId, job.id, requestedWindowSize, cursor)
-    const filteredEntries = await filterAlreadyJudged(promptData.promptEntries, jobConfig)
+    const promptData = await judgmentsJobsCronGetPrompts(
+      job.projectId,
+      job.id,
+      requestedWindowSize,
+      cursor,
+      shouldForceRawFallback,
+    )
+    const filteredEntries = await filterAlreadyJudged(promptData.promptEntries, jobConfig, job.id)
 
     await getInsertedReadyCount({filteredEntries, jobId: job.id, readyDeficit, serverJobId, sqliteService})
 
     const nextReadyCount = await sqliteService.getReadyCount(job.id)
     const nextScanState = promptData.nextCursor
-      ? {cursor: promptData.nextCursor, exhaustedAt: null, wrapVisibilityAckSeq: null}
+      ? {
+          cursor: promptData.nextCursor,
+          exhaustedAt: null,
+          wrapVisibilityAckSeq: shouldForceRawFallback ? scanState.wrapVisibilityAckSeq : null,
+        }
       : {
           cursor: null,
           exhaustedAt: new Date(),

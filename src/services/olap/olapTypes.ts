@@ -148,6 +148,7 @@ export type UnassessedPairsParams = {
   jobId: string
   numberOfPromptsToGet: number
   cursor: PaginationCursor | null
+  preferRawFallback?: boolean
 }
 
 export type UnassessedPairsResult = {promptEntries: PromptQueueEntry[]; nextCursor: PaginationCursor | null}
