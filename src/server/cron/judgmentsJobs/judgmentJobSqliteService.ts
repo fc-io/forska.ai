@@ -192,9 +192,9 @@ type ScanStateRow = {
   cursorLastArticleId: string | null
   cursorLastDate: string | null
   exhaustedAt: string | null
-  lastProjectRefreshAckSeq: number | null
+  lastProjectRefreshAckToken: number | null
   scanEpoch: number | null
-  wrapVisibilityAckSeq: number | null
+  wrapVisibilityAckToken: number | null
 }
 
 type JobScanState = {
@@ -368,8 +368,8 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       cursor_last_article_id TEXT,
       scan_epoch INTEGER NOT NULL DEFAULT 0,
       exhausted_at TEXT,
-      last_project_refresh_ack_seq INTEGER,
-      wrap_visibility_ack_seq INTEGER,
+      last_project_refresh_ack_token INTEGER,
+      wrap_visibility_ack_token INTEGER,
       updated_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS queue_prompt (
@@ -492,8 +492,8 @@ const judgmentJobSqliteRequiredSchema = {
     'cursor_last_article_id',
     'scan_epoch',
     'exhausted_at',
-    'last_project_refresh_ack_seq',
-    'wrap_visibility_ack_seq',
+    'last_project_refresh_ack_token',
+    'wrap_visibility_ack_token',
     'updated_at',
   ],
   queue_prompt: [
@@ -527,8 +527,13 @@ const judgmentJobSqliteRequiredSchema = {
 
 const jobScanStateColumns = [
   {name: 'scan_epoch', sql: 'INTEGER NOT NULL DEFAULT 0'},
-  {name: 'last_project_refresh_ack_seq', sql: 'INTEGER'},
-  {name: 'wrap_visibility_ack_seq', sql: 'INTEGER'},
+  {name: 'last_project_refresh_ack_token', sql: 'INTEGER'},
+  {name: 'wrap_visibility_ack_token', sql: 'INTEGER'},
+] as const
+
+const legacyJobScanStateAckColumns = [
+  {legacyName: 'last_project_refresh_ack_seq', nextName: 'last_project_refresh_ack_token'},
+  {legacyName: 'wrap_visibility_ack_seq', nextName: 'wrap_visibility_ack_token'},
 ] as const
 
 const addMissingOutboxClaimColumns = (
@@ -559,6 +564,57 @@ const addMissingJobScanStateColumns = (
   return addMissingJobScanStateColumns(database, columns.slice(1))
 }
 
+const renameLegacyJobScanStateAckColumns = (
+  database: Database,
+  columns: ReadonlyArray<(typeof legacyJobScanStateAckColumns)[number]>,
+  existingColumnNames: Set<string>,
+): void => {
+  const [currentColumn] = columns
+
+  if (!currentColumn) {
+    return
+  }
+
+  if (existingColumnNames.has(currentColumn.legacyName) && !existingColumnNames.has(currentColumn.nextName)) {
+    database.exec(`ALTER TABLE job_scan_state RENAME COLUMN ${currentColumn.legacyName} TO ${currentColumn.nextName}`)
+  }
+
+  return renameLegacyJobScanStateAckColumns(database, columns.slice(1), existingColumnNames)
+}
+
+const backfillJobScanStateAckTokens = (database: Database, existingColumnNames: Set<string>) => {
+  const hasRefreshAckColumns =
+    existingColumnNames.has('last_project_refresh_ack_seq') && existingColumnNames.has('last_project_refresh_ack_token')
+  const hasWrapAckColumns =
+    existingColumnNames.has('wrap_visibility_ack_seq') && existingColumnNames.has('wrap_visibility_ack_token')
+
+  if (!hasRefreshAckColumns && !hasWrapAckColumns) {
+    return
+  }
+
+  database.exec(`
+    UPDATE job_scan_state
+    SET last_project_refresh_ack_token = ${
+      hasRefreshAckColumns
+        ? `CASE
+             WHEN last_project_refresh_ack_token IS NULL THEN last_project_refresh_ack_seq
+             WHEN last_project_refresh_ack_seq IS NULL THEN last_project_refresh_ack_token
+             ELSE MAX(last_project_refresh_ack_token, last_project_refresh_ack_seq)
+           END`
+        : 'last_project_refresh_ack_token'
+    },
+        wrap_visibility_ack_token = ${
+          hasWrapAckColumns
+            ? `CASE
+                 WHEN wrap_visibility_ack_token IS NULL THEN wrap_visibility_ack_seq
+                 WHEN wrap_visibility_ack_seq IS NULL THEN wrap_visibility_ack_token
+                 ELSE MAX(wrap_visibility_ack_token, wrap_visibility_ack_seq)
+               END`
+            : 'wrap_visibility_ack_token'
+        }
+  `)
+}
+
 const ensureOutboxClaimSchema = (database: Database) => {
   const existingColumnNames = new Set(
     (database.query(`PRAGMA table_info('judgment_outbox')`).all() as SqliteTableInfoRow[]).map((row) => {
@@ -583,9 +639,9 @@ const getJobScanState = (row: ScanStateRow | null | undefined): JobScanState => 
   return {
     cursor: lastDate && row?.cursorLastArticleId ? {lastArticleId: row.cursorLastArticleId, lastDate} : null,
     exhaustedAt,
-    lastProjectRefreshAckSeq: row?.lastProjectRefreshAckSeq == null ? null : Number(row.lastProjectRefreshAckSeq),
+    lastProjectRefreshAckSeq: row?.lastProjectRefreshAckToken == null ? null : Number(row.lastProjectRefreshAckToken),
     scanEpoch: Number(row?.scanEpoch ?? 0),
-    wrapVisibilityAckSeq: row?.wrapVisibilityAckSeq == null ? null : Number(row.wrapVisibilityAckSeq),
+    wrapVisibilityAckSeq: row?.wrapVisibilityAckToken == null ? null : Number(row.wrapVisibilityAckToken),
   }
 }
 
@@ -595,11 +651,26 @@ const ensureJobScanStateSchema = (database: Database) => {
       return row.name
     }),
   )
+  renameLegacyJobScanStateAckColumns(database, legacyJobScanStateAckColumns, existingColumnNames)
+
+  const upgradedColumnNames = new Set(
+    (database.query(`PRAGMA table_info('job_scan_state')`).all() as SqliteTableInfoRow[]).map((row) => {
+      return row.name
+    }),
+  )
   const missingColumns = jobScanStateColumns.filter((column) => {
-    return !existingColumnNames.has(column.name)
+    return !upgradedColumnNames.has(column.name)
   })
 
   addMissingJobScanStateColumns(database, missingColumns)
+
+  const finalColumnNames = new Set(
+    (database.query(`PRAGMA table_info('job_scan_state')`).all() as SqliteTableInfoRow[]).map((row) => {
+      return row.name
+    }),
+  )
+
+  backfillJobScanStateAckTokens(database, finalColumnNames)
 }
 
 const getStoredScanState = (database: Database, jobId: string) => {
@@ -611,8 +682,8 @@ const getStoredScanState = (database: Database, jobId: string) => {
           cursor_last_article_id AS cursorLastArticleId,
           exhausted_at AS exhaustedAt,
           scan_epoch AS scanEpoch,
-          last_project_refresh_ack_seq AS lastProjectRefreshAckSeq,
-          wrap_visibility_ack_seq AS wrapVisibilityAckSeq
+          last_project_refresh_ack_token AS lastProjectRefreshAckToken,
+          wrap_visibility_ack_token AS wrapVisibilityAckToken
         FROM job_scan_state
         WHERE job_id = ?
         LIMIT 1
@@ -937,12 +1008,41 @@ const getIsolatedPreflightSnapshot = (database: Database, jobId: string): Judgme
   }
 }
 
+const upgradeJudgmentJobSqliteSchemaInPlace = (jobId: string) => {
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+  let database: Database | null = null
+
+  try {
+    database = new Database(sqlitePath)
+    database.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA foreign_keys = ON;
+      PRAGMA synchronous = FULL;
+      PRAGMA busy_timeout = 1000;
+    `)
+
+    const existingTables = getExistingTableNames(database)
+
+    if (existingTables.has('job_scan_state')) {
+      ensureJobScanStateSchema(database)
+    }
+
+    if (existingTables.has('judgment_outbox')) {
+      ensureOutboxClaimSchema(database)
+    }
+  } finally {
+    database?.close(false)
+  }
+}
+
 const runIsolatedJudgmentJobSqlitePreflight = (jobId: string): JudgmentJobSqlitePreflightSnapshot => {
   const sqlitePath = getJudgmentJobSqlitePath(jobId)
 
   if (!existsSync(sqlitePath)) {
     throw new JudgmentJobSqlitePreflightError(`SQLite job DB preflight failed for ${jobId}: SQLite DB is missing`)
   }
+
+  upgradeJudgmentJobSqliteSchemaInPlace(jobId)
 
   let database: Database | null = null
 
@@ -2130,8 +2230,8 @@ const sqliteService = {
             cursor_last_article_id,
             scan_epoch,
             exhausted_at,
-            last_project_refresh_ack_seq,
-            wrap_visibility_ack_seq,
+            last_project_refresh_ack_token,
+            wrap_visibility_ack_token,
             updated_at
           ) VALUES (?, ?, ?, 0, NULL, NULL, NULL, ?)
         `,
@@ -2534,7 +2634,7 @@ const sqliteService = {
         .query(
           `
         UPDATE job_scan_state
-        SET last_project_refresh_ack_seq = ?,
+        SET last_project_refresh_ack_token = ?,
             updated_at = ?
         WHERE job_id = ?
       `,
@@ -2566,8 +2666,8 @@ const sqliteService = {
             cursor_last_article_id = ?,
             scan_epoch = ?,
             exhausted_at = ?,
-            last_project_refresh_ack_seq = ?,
-            wrap_visibility_ack_seq = ?,
+            last_project_refresh_ack_token = ?,
+            wrap_visibility_ack_token = ?,
             updated_at = ?
         WHERE job_id = ?
       `,

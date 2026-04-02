@@ -754,6 +754,254 @@ test('stores full SQLite scan state without clearing existing cursor fields', as
   })
 })
 
+test('upgrades legacy job_scan_state ack columns in place without losing row data', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-scan-upgrade-${Date.now()}`
+  const modelId = `model-scan-upgrade-${Date.now()}`
+  const projectId = `project-scan-upgrade-${Date.now()}`
+  const jobId = `job-scan-upgrade-${Date.now()}`
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+  const legacyCursorDate = new Date('2025-02-02T03:04:05.000Z')
+  const legacyExhaustedAt = new Date('2025-02-03T03:04:05.000Z')
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Scan State Upgrade Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, cursor_last_created_at, cursor_last_article_id)
+    VALUES ('${jobId}', '${projectId}', 'running', '${legacyCursorDate.toISOString()}', 'legacy-article')
+  `)
+
+  const legacyDatabase = new Database(sqlitePath)
+  legacyDatabase.exec(`
+    CREATE TABLE job_scan_state (
+      job_id TEXT PRIMARY KEY,
+      cursor_last_date TEXT,
+      cursor_last_article_id TEXT,
+      scan_epoch INTEGER NOT NULL DEFAULT 0,
+      exhausted_at TEXT,
+      last_project_refresh_ack_seq INTEGER,
+      wrap_visibility_ack_seq INTEGER,
+      updated_at TEXT NOT NULL
+    );
+
+    INSERT INTO job_scan_state (
+      job_id,
+      cursor_last_date,
+      cursor_last_article_id,
+      scan_epoch,
+      exhausted_at,
+      last_project_refresh_ack_seq,
+      wrap_visibility_ack_seq,
+      updated_at
+    ) VALUES (
+      '${jobId}',
+      '${legacyCursorDate.toISOString()}',
+      'legacy-article',
+      7,
+      '${legacyExhaustedAt.toISOString()}',
+      41,
+      43,
+      '${legacyExhaustedAt.toISOString()}'
+    );
+  `)
+  legacyDatabase.close(false)
+
+  await service.initializeJob(jobId)
+
+  expect(await service.getScanState(jobId)).toEqual({
+    cursor: {lastArticleId: 'legacy-article', lastDate: legacyCursorDate},
+    exhaustedAt: legacyExhaustedAt,
+    lastProjectRefreshAckSeq: 41,
+    scanEpoch: 7,
+    wrapVisibilityAckSeq: 43,
+  })
+
+  await service.closeAll()
+
+  const upgradedDatabase = new Database(sqlitePath, {readonly: true})
+  const upgradedColumns = (
+    upgradedDatabase.query(`PRAGMA table_info('job_scan_state')`).all() as Array<{name: string}>
+  ).map((row) => {
+    return row.name
+  })
+  const upgradedRow = upgradedDatabase
+    .query(
+      `
+        SELECT
+          last_project_refresh_ack_token AS lastProjectRefreshAckToken,
+          wrap_visibility_ack_token AS wrapVisibilityAckToken,
+          cursor_last_article_id AS cursorLastArticleId,
+          scan_epoch AS scanEpoch
+        FROM job_scan_state
+        WHERE job_id = ?
+      `,
+    )
+    .get(jobId) as {
+    cursorLastArticleId: string
+    lastProjectRefreshAckToken: number | null
+    scanEpoch: number
+    wrapVisibilityAckToken: number | null
+  } | null
+  upgradedDatabase.close(false)
+
+  expect(upgradedColumns).toContain('last_project_refresh_ack_token')
+  expect(upgradedColumns).toContain('wrap_visibility_ack_token')
+  expect(upgradedColumns).not.toContain('last_project_refresh_ack_seq')
+  expect(upgradedColumns).not.toContain('wrap_visibility_ack_seq')
+  expect(upgradedRow).toEqual({
+    cursorLastArticleId: 'legacy-article',
+    lastProjectRefreshAckToken: 41,
+    scanEpoch: 7,
+    wrapVisibilityAckToken: 43,
+  })
+})
+
+test('isolated SQLite preflight upgrades legacy ack columns before readonly validation', async () => {
+  if (!sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const jobId = `job-preflight-upgrade-${Date.now()}`
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+  const createdAt = new Date('2025-02-04T03:04:05.000Z').toISOString()
+  const legacyDatabase = new Database(sqlitePath)
+
+  legacyDatabase.exec(`
+    CREATE TABLE job_info (
+      job_id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      model_name TEXT NOT NULL,
+      model_provider TEXT NOT NULL,
+      use_title INTEGER NOT NULL,
+      use_abstract INTEGER NOT NULL,
+      use_fulltext INTEGER NOT NULL,
+      use_fulltext_no_images INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE job_scan_state (
+      job_id TEXT PRIMARY KEY,
+      cursor_last_date TEXT,
+      cursor_last_article_id TEXT,
+      scan_epoch INTEGER NOT NULL DEFAULT 0,
+      exhausted_at TEXT,
+      last_project_refresh_ack_seq INTEGER,
+      wrap_visibility_ack_seq INTEGER,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE queue_prompt (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      article_id TEXT NOT NULL,
+      prompt_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      server_id TEXT,
+      claim_id TEXT,
+      sent_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE judgment_outbox (
+      outbox_seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id TEXT NOT NULL,
+      queue_prompt_id TEXT NOT NULL UNIQUE,
+      judgment_id TEXT NOT NULL UNIQUE,
+      article_id TEXT NOT NULL,
+      prompt_id TEXT NOT NULL,
+      model_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      exported_at TEXT
+    );
+
+    INSERT INTO job_info (
+      job_id,
+      project_id,
+      model_id,
+      model_name,
+      model_provider,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      created_at
+    ) VALUES ('${jobId}', 'project', 'model', 'Model', 'provider', 1, 1, 0, 0, '${createdAt}');
+
+    INSERT INTO job_scan_state (
+      job_id,
+      cursor_last_date,
+      cursor_last_article_id,
+      scan_epoch,
+      exhausted_at,
+      last_project_refresh_ack_seq,
+      wrap_visibility_ack_seq,
+      updated_at
+    ) VALUES ('${jobId}', '${createdAt}', 'legacy-article', 3, NULL, 11, 13, '${createdAt}');
+
+    INSERT INTO queue_prompt (
+      id,
+      job_id,
+      article_id,
+      prompt_id,
+      status,
+      server_id,
+      claim_id,
+      sent_at,
+      created_at,
+      updated_at
+    ) VALUES ('queue-1', '${jobId}', 'article-1', 'prompt-1', 'judged', NULL, NULL, NULL, '${createdAt}', '${createdAt}');
+
+    INSERT INTO judgment_outbox (
+      job_id,
+      queue_prompt_id,
+      judgment_id,
+      article_id,
+      prompt_id,
+      model_id,
+      created_at,
+      updated_at,
+      exported_at
+    ) VALUES ('${jobId}', 'queue-1', 'judgment-1', 'article-1', 'prompt-1', 'model', '${createdAt}', '${createdAt}', NULL);
+  `)
+  legacyDatabase.close(false)
+
+  const snapshot = await service.runIsolatedPreflight(jobId)
+
+  expect(snapshot.queueSampleCount).toBe(1)
+  expect(snapshot.outboxSampleCount).toBe(1)
+
+  const upgradedDatabase = new Database(sqlitePath, {readonly: true})
+  const upgradedColumns = (
+    upgradedDatabase.query(`PRAGMA table_info('job_scan_state')`).all() as Array<{name: string}>
+  ).map((row) => {
+    return row.name
+  })
+  upgradedDatabase.close(false)
+
+  expect(upgradedColumns).toContain('last_project_refresh_ack_token')
+  expect(upgradedColumns).toContain('wrap_visibility_ack_token')
+  expect(upgradedColumns).not.toContain('last_project_refresh_ack_seq')
+  expect(upgradedColumns).not.toContain('wrap_visibility_ack_seq')
+})
+
 test('claims, reaps, releases, and completes outbox batches', async () => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')
