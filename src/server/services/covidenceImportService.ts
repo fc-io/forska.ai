@@ -13,12 +13,13 @@ import {
   storeImportedArticles,
   syncImportedArticlesWithTx,
 } from './articleImportStoreService.ts'
+import {getProjectMartRefreshStateService} from './projectMartRefreshStateService.ts'
 
 type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
 type CovidenceFileFormat = 'csv' | 'ris'
 type CovidencePromptAnswerSet = 'yes|no' | 'yes|no|unsure' | 'yes_no' | 'yes_no_unsure'
-type CovidencePromptTx = {queryJson: <TRow extends Record<string, unknown>>(statement: string) => Promise<TRow[]>}
+type CovidencePromptTx = {queryJson: <TRow>(statement: string) => Promise<TRow[]>}
 type CovidenceProjectTx = CovidencePromptTx & {run: (statement: string) => Promise<void>}
 type CovidenceCsvParseErrorCode =
   | 'duplicate_header'
@@ -1279,6 +1280,21 @@ const syncCovidenceSeededProjectArticles = async (params: {
   tx?: CovidenceProjectTx
 }) => {
   const queryRunner = getCovidenceProjectQueryRunner(params.tx)
+  const currentArticleRows = await queryRunner.queryJson<{articleId: string}>(`
+    SELECT article_id AS articleId
+    FROM app.project_article
+    WHERE project_id = ${getSqlLiteral(params.projectId)}
+      AND imported_from_project_id = ${getSqlLiteral(params.projectId)}
+  `)
+  const currentArticleIds = currentArticleRows.map((articleRow) => {
+    return articleRow.articleId
+  })
+  const nextArticleIds = Array.from(new Set(params.articleIds))
+  const scopeChanged =
+    currentArticleIds.length !== nextArticleIds.length
+    || currentArticleIds.some((articleId) => {
+      return !nextArticleIds.includes(articleId)
+    })
 
   await queryRunner.run(`
     DELETE FROM app.project_article
@@ -1292,16 +1308,39 @@ const syncCovidenceSeededProjectArticles = async (params: {
   `)
 
   return params.articleIds.length === 0
-    ? undefined
-    : await queryRunner.run(`
-        INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
-        VALUES ${params.articleIds
-          .map((articleId) => {
-            return `(${getQuotedStringList([globalThis.crypto.randomUUID(), params.projectId, articleId, params.projectId]).join(', ')})`
-          })
-          .join(', ')}
-        ON CONFLICT(project_id, article_id) DO NOTHING
-      `)
+    ? scopeChanged
+      ? getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+          projects: [{articleIds: currentArticleIds, projectId: params.projectId}],
+          reason: 'syncCovidenceProjectScopeFromConfig',
+          runner: queryRunner,
+        })
+      : undefined
+    : await queryRunner
+        .run(
+          `
+          INSERT INTO app.project_article (id, project_id, article_id, imported_from_project_id)
+          VALUES ${params.articleIds
+            .map((articleId) => {
+              return `(${getQuotedStringList([globalThis.crypto.randomUUID(), params.projectId, articleId, params.projectId]).join(', ')})`
+            })
+            .join(', ')}
+          ON CONFLICT(project_id, article_id) DO NOTHING
+        `,
+        )
+        .then(() => {
+          return scopeChanged
+            ? getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+                projects: [
+                  {
+                    articleIds: Array.from(new Set([...currentArticleIds, ...nextArticleIds])),
+                    projectId: params.projectId,
+                  },
+                ],
+                reason: 'syncCovidenceProjectScopeFromConfig',
+                runner: queryRunner,
+              })
+            : undefined
+        })
 }
 
 export const buildCovidencePackageConfig = (params: {

@@ -623,8 +623,25 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
           INNER JOIN app.article a ON a.id = pa.article_id
           ORDER BY a.article_title ASC
         \`)
+        const refreshStateRows = await database.queryJson(\`
+          SELECT
+            project_id AS projectId,
+            CAST(dirty_token AS INTEGER) AS dirtyToken,
+            last_request_reason AS reason
+          FROM app.project_mart_refresh_state
+          ORDER BY project_id ASC
+        \`)
+        const refreshArticleStateRows = await database.queryJson(\`
+          SELECT
+            project_id AS projectId,
+            article_id AS articleId,
+            CAST(first_dirty_token AS INTEGER) AS firstDirtyToken,
+            CAST(last_dirty_token AS INTEGER) AS lastDirtyToken
+          FROM app.project_mart_refresh_article_state
+          ORDER BY article_id ASC
+        \`)
 
-        console.log(JSON.stringify({createdProject, projectArticleRows, projectRows, reusedProject}))
+        console.log(JSON.stringify({createdProject, projectArticleRows, projectRows, refreshArticleStateRows, refreshStateRows, reusedProject}))
         covidenceImportService.deleteCovidencePackageFiles(datasourceId)
         await database.close()
       `,
@@ -683,6 +700,13 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
         useFulltextNoImages: boolean
         useTitle: boolean
       }>
+      refreshArticleStateRows: Array<{
+        articleId: string
+        firstDirtyToken: number
+        lastDirtyToken: number
+        projectId: string
+      }>
+      refreshStateRows: Array<{dirtyToken: number; projectId: string; reason: string | null}>
       reusedProject: {
         created: boolean
         id: string
@@ -746,6 +770,15 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
         projectId: parsed.createdProject.id,
       },
     ])
+    expect(parsed.refreshStateRows).toEqual([
+      {dirtyToken: 1, projectId: parsed.createdProject.id, reason: 'syncCovidenceProjectScopeFromConfig'},
+    ])
+    expect(parsed.refreshArticleStateRows).toHaveLength(3)
+    expect(
+      parsed.refreshArticleStateRows.every((row) => {
+        return row.firstDirtyToken === 1 && row.lastDirtyToken === 1 && row.projectId === parsed.createdProject.id
+      }),
+    ).toBe(true)
   } finally {
     deleteCovidencePackageFiles(datasourceId)
     ;[duckdbPath, `${duckdbPath}.wal`, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(

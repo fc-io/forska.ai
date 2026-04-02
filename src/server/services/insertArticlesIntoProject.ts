@@ -1,6 +1,6 @@
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList} from './appQueryHelpers.ts'
-import {getDuckdbMartRefreshService} from './getDuckdbMartRefreshService.ts'
+import {getProjectMartRefreshStateService} from './projectMartRefreshStateService.ts'
 
 const chunk = <T>(arr: T[], size: number): T[][] => {
   const out: T[][] = []
@@ -195,11 +195,15 @@ export const insertArticlesIntoProject = async (
         ON CONFLICT(project_id, prompt_id) DO NOTHING
       `)
     }
-  })
 
-  if (toInsert.length > 0 || linkedPrompts > 0) {
-    await getDuckdbMartRefreshService().queueProjectRefresh(projectId, 'insertArticlesIntoProject')
-  }
+    if (toInsert.length > 0 || linkedPrompts > 0) {
+      await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+        projects: [{articleIds: validIds, projectId}],
+        reason: 'insertArticlesIntoProject',
+        runner: tx,
+      })
+    }
+  })
 
   return {
     projectId,

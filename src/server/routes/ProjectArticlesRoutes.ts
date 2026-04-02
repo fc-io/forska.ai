@@ -2,8 +2,8 @@ import {Elysia, t} from 'elysia'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {escapeSqlString} from '../services/appQueryHelpers.ts'
-import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
 import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
+import {getProjectMartRefreshStateService} from '../services/projectMartRefreshStateService.ts'
 
 export const projectArticlesRoutes = new Elysia()
   .get(
@@ -70,12 +70,31 @@ export const projectArticlesRoutes = new Elysia()
   .delete('/api/projects/:id/articles/:articleId', async ({params}) => {
     const {id: projectId, articleId} = params
 
-    await getAppDatabaseService().run(`
-      DELETE FROM app.project_article
-      WHERE project_id = '${escapeSqlString(projectId)}'
-        AND article_id = '${escapeSqlString(articleId)}'
-    `)
-    await getDuckdbMartRefreshService().queueProjectRefresh(projectId, 'ProjectArticlesRoutes.delete')
+    await getAppDatabaseService().transaction(async (tx) => {
+      const [existingProjectArticle] = await tx.queryJson<{articleId: string}>(`
+        SELECT article_id AS articleId
+        FROM app.project_article
+        WHERE project_id = '${escapeSqlString(projectId)}'
+          AND article_id = '${escapeSqlString(articleId)}'
+        LIMIT 1
+      `)
+
+      if (!existingProjectArticle) {
+        return
+      }
+
+      await tx.run(`
+        DELETE FROM app.project_article
+        WHERE project_id = '${escapeSqlString(projectId)}'
+          AND article_id = '${escapeSqlString(articleId)}'
+      `)
+
+      await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+        projects: [{articleIds: [articleId], projectId}],
+        reason: 'ProjectArticlesRoutes.delete',
+        runner: tx,
+      })
+    })
 
     return {success: true}
   })

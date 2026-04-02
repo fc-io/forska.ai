@@ -1,14 +1,19 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 
 const appDatabaseServiceModulePath = new URL('./appDatabaseService.ts', import.meta.url).pathname
-const duckdbMartRefreshServiceModulePath = new URL('./getDuckdbMartRefreshService.ts', import.meta.url).pathname
+const projectMartRefreshStateServiceModulePath = new URL('./projectMartRefreshStateService.ts', import.meta.url)
+  .pathname
 
 type MockDatabaseState = {
   committedProjectArticleStatements: string[]
   committedProjectPromptStatements: string[]
+  currentTransactionMarkProjectsDirtyCalls: Array<{
+    projects: Array<{articleIds?: string[]; projectId: string}>
+    reason: string | null
+  }> | null
   failProjectPromptInsert: boolean
+  markProjectsDirtyCalls: Array<{projects: Array<{articleIds?: string[]; projectId: string}>; reason: string | null}>
   queryJson: (statement: string) => Promise<unknown[]>
-  queueProjectRefreshCalls: Array<{projectId: string; reason: string}>
   rootRunStatements: string[]
   transactionCalls: number
 }
@@ -35,14 +40,27 @@ void mock.module(appDatabaseServiceModulePath, () => {
         run: async (statement: string) => {
           getMockDatabaseState().rootRunStatements.push(statement)
         },
-        transaction: async <T>(work: (runner: {run: (statement: string) => Promise<void>}) => Promise<T>) => {
+        transaction: async <T>(
+          work: (runner: {
+            queryJson: <TRow>(statement: string) => Promise<TRow[]>
+            run: (statement: string) => Promise<void>
+          }) => Promise<T>,
+        ) => {
           const state = getMockDatabaseState()
           const pendingProjectArticleStatements: string[] = []
           const pendingProjectPromptStatements: string[] = []
+          const pendingMarkProjectsDirtyCalls: Array<{
+            projects: Array<{articleIds?: string[]; projectId: string}>
+            reason: string | null
+          }> = []
 
           state.transactionCalls += 1
+          state.currentTransactionMarkProjectsDirtyCalls = pendingMarkProjectsDirtyCalls
 
           const result = await work({
+            queryJson: async <TRow>(statement: string) => {
+              return (await state.queryJson(statement)) as TRow[]
+            },
             run: async (statement: string) => {
               if (statement.includes('INSERT INTO app.project_article')) {
                 pendingProjectArticleStatements.push(statement)
@@ -60,6 +78,8 @@ void mock.module(appDatabaseServiceModulePath, () => {
 
           state.committedProjectArticleStatements.push(...pendingProjectArticleStatements)
           state.committedProjectPromptStatements.push(...pendingProjectPromptStatements)
+          state.markProjectsDirtyCalls.push(...pendingMarkProjectsDirtyCalls)
+          state.currentTransactionMarkProjectsDirtyCalls = null
 
           return result
         },
@@ -68,12 +88,21 @@ void mock.module(appDatabaseServiceModulePath, () => {
   }
 })
 
-void mock.module(duckdbMartRefreshServiceModulePath, () => {
+void mock.module(projectMartRefreshStateServiceModulePath, () => {
   return {
-    getDuckdbMartRefreshService: () => {
+    getProjectMartRefreshStateService: () => {
       return {
-        queueProjectRefresh: async (projectId: string, reason: string) => {
-          getMockDatabaseState().queueProjectRefreshCalls.push({projectId, reason})
+        markProjectsDirtyAtomically: async (params: {
+          projects: Array<{articleIds?: string[]; projectId: string}>
+          reason?: string | null
+          runner?: unknown
+        }) => {
+          const state = getMockDatabaseState()
+
+          state.currentTransactionMarkProjectsDirtyCalls?.push({
+            projects: params.projects,
+            reason: params.reason ?? null,
+          })
         },
       }
     },
@@ -84,7 +113,9 @@ const createMockDatabaseState = (options?: {failProjectPromptInsert?: boolean}):
   return {
     committedProjectArticleStatements: [],
     committedProjectPromptStatements: [],
+    currentTransactionMarkProjectsDirtyCalls: null,
     failProjectPromptInsert: options?.failProjectPromptInsert ?? false,
+    markProjectsDirtyCalls: [],
     queryJson: async (statement: string) => {
       if (statement.includes('FROM app.article')) {
         return [{id: 'article-1'}]
@@ -112,7 +143,6 @@ const createMockDatabaseState = (options?: {failProjectPromptInsert?: boolean}):
 
       throw new Error(`Unhandled query: ${statement}`)
     },
-    queueProjectRefreshCalls: [],
     rootRunStatements: [],
     transactionCalls: 0,
   }
@@ -149,7 +179,9 @@ test('insertArticlesIntoProject writes article and prompt links in one transacti
   expect(state.committedProjectArticleStatements[0]).toContain('INSERT INTO app.project_article')
   expect(state.committedProjectPromptStatements).toHaveLength(1)
   expect(state.committedProjectPromptStatements[0]).toContain('INSERT INTO app.project_prompt')
-  expect(state.queueProjectRefreshCalls).toEqual([{projectId: 'project-1', reason: 'insertArticlesIntoProject'}])
+  expect(state.markProjectsDirtyCalls).toEqual([
+    {projects: [{articleIds: ['article-1'], projectId: 'project-1'}], reason: 'insertArticlesIntoProject'},
+  ])
 })
 
 test('insertArticlesIntoProject rolls back project_article writes when prompt linking fails', async () => {
@@ -174,5 +206,5 @@ test('insertArticlesIntoProject rolls back project_article writes when prompt li
   expect(state.rootRunStatements).toHaveLength(0)
   expect(state.committedProjectArticleStatements).toHaveLength(0)
   expect(state.committedProjectPromptStatements).toHaveLength(0)
-  expect(state.queueProjectRefreshCalls).toHaveLength(0)
+  expect(state.markProjectsDirtyCalls).toHaveLength(0)
 })

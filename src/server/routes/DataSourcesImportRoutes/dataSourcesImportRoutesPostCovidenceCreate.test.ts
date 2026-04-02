@@ -255,7 +255,7 @@ test('Covidence datasource create stores package files and persists cursor confi
   expect(parsed.scopeCalls?.[0]?.importRoute).toContain('covidence:')
   expect(parsed.scopeCalls?.[0]?.mode).toBe('title_abstract')
   expect(parsed.scopeCalls?.[0]?.projectId).toBe('project-created')
-  expect(parsed.martQueueCalls).toEqual([{importRouteIds: ['route-1'], reason: 'covidenceCreateImportRouteRefresh'}])
+  expect(parsed.martQueueCalls).toEqual([])
   expect(parsed.queueCalls).toEqual([['route-1']])
   expect(parsed.getDataSourceCallCount).toBe(1)
   expect(parsed.result.success).toBe(true)
@@ -635,7 +635,7 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
   expect(parsed.scopeCalls?.[0]?.importRoute).toContain('covidence:')
   expect(parsed.scopeCalls?.[0]?.mode).toBe('title_abstract')
   expect(parsed.scopeCalls?.[0]?.projectId).toBe('project-created')
-  expect(parsed.martQueueCalls).toEqual([{importRouteIds: ['route-1'], reason: 'covidenceCreateImportRouteRefresh'}])
+  expect(parsed.martQueueCalls).toEqual([])
   expect(parsed.result.data.covidenceProject).toMatchObject({
     created: true,
     id: 'project-created',

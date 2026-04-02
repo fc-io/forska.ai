@@ -15,7 +15,6 @@ import {
   syncCovidenceProjectScopeFromConfig,
 } from '../../services/covidenceImportService.ts'
 import {getDataSourceQueryService} from '../../services/dataSourceQueryService.ts'
-import {getDuckdbMartRefreshService} from '../../services/getDuckdbMartRefreshService.ts'
 
 type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
@@ -110,10 +109,6 @@ export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
     })) as Awaited<ReturnType<typeof importCovidencePackageFromConfig>>
 
   await queueImportedArticleRefreshes(result.importRouteIds ?? [])
-  await getDuckdbMartRefreshService().queueProjectRefreshesByImportRouteIds(
-    result.importRouteIds ?? [],
-    'covidenceCreateImportRouteRefresh',
-  )
 
   const dataSource = await getDataSourceQueryService().getDataSourceById(dataSourceId)
 
