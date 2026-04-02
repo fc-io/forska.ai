@@ -112,6 +112,28 @@ const insertArticleFixture = async ({articleId}: {articleId: string}) => {
   `)
 }
 
+const insertProjectPromptFixture = async ({projectId, promptId}: {projectId: string; promptId: string}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, enabled, origin_project_id)
+    VALUES ('${projectId}-${promptId}-project-prompt', '${projectId}', '${promptId}', 0, FALSE, TRUE, '${projectId}')
+  `)
+}
+
+const insertProjectArticleFixture = async ({articleId, projectId}: {articleId: string; projectId: string}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('${projectId}-${articleId}-project-article', '${projectId}', '${articleId}')
+  `)
+}
+
 const insertPromptMergeFixture = async ({
   keepPromptId,
   mergePromptId,
@@ -210,6 +232,8 @@ const insertHumanJudgmentPromptCollisionFixture = async ({
   await insertPromptFixture({promptId: mergePromptId})
   await insertProjectFixture({connectionId, modelId, projectId})
   await insertArticleFixture({articleId})
+  await insertProjectPromptFixture({projectId, promptId: mergePromptId})
+  await insertProjectArticleFixture({articleId, projectId})
   await runDatabase(`
     INSERT INTO app.judgment_human (id, project_id, article_id, prompt_id, is_answered, answer)
     VALUES
@@ -346,9 +370,122 @@ test('merging a prompt deletes colliding human judgment rows before rewriting pr
       AND article_id = '${articleId}'
     ORDER BY id
   `)
+  const [refreshState] = await queryDatabase<{dirtyToken: number; projectId: string}>(`
+    SELECT project_id AS projectId, CAST(dirty_token AS INTEGER) AS dirtyToken
+    FROM app.project_mart_refresh_state
+    WHERE project_id = '${projectId}'
+    LIMIT 1
+  `)
+  const [refreshArticleState] = await queryDatabase<{
+    articleId: string
+    firstDirtyToken: number
+    lastDirtyToken: number
+    projectId: string
+  }>(`
+    SELECT
+      project_id AS projectId,
+      article_id AS articleId,
+      CAST(first_dirty_token AS INTEGER) AS firstDirtyToken,
+      CAST(last_dirty_token AS INTEGER) AS lastDirtyToken
+    FROM app.project_mart_refresh_article_state
+    WHERE project_id = '${projectId}'
+      AND article_id = '${articleId}'
+    LIMIT 1
+  `)
 
   expect(response.status).toBe(200)
   expect(body).toEqual({success: true})
   expect(body.error).toBeUndefined()
   expect(remainingHumanJudgments).toEqual([{id: `${keepPromptId}-judgment-human`, promptId: keepPromptId}])
+  expect(refreshState).toEqual({dirtyToken: 1, projectId})
+  expect(refreshArticleState).toEqual({articleId, firstDirtyToken: 1, lastDirtyToken: 1, projectId})
+})
+
+test('deleting invalid judgments records bounded article dirtiness for affected projects', async () => {
+  if (!app || !queryDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const promptId = `invalid-judgment-prompt-${Date.now()}`
+  const articleId = `invalid-judgment-article-${Date.now()}`
+  const connectionId = `invalid-judgment-connection-${Date.now()}`
+  const modelId = `invalid-judgment-model-${Date.now()}`
+  const projectId = `invalid-judgment-project-${Date.now()}`
+  const judgmentId = `invalid-judgment-${Date.now()}`
+
+  await insertPromptFixture({promptId})
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertArticleFixture({articleId})
+  await insertProjectPromptFixture({projectId, promptId})
+  await insertProjectArticleFixture({articleId, projectId})
+  await runDatabase?.(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      delete_generation,
+      is_answered,
+      answered_original
+    ) VALUES (
+      '${judgmentId}',
+      '${articleId}',
+      '${promptId}',
+      '${modelId}',
+      TRUE,
+      TRUE,
+      FALSE,
+      FALSE,
+      0,
+      TRUE,
+      'invalid'
+    )
+  `)
+
+  const response = await app.handle(
+    new Request('http://localhost/api/prompts/delete-invalid-judgments', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({judgmentIds: [judgmentId]}),
+    }),
+  )
+  const body = (await response.json()) as {data: {deletedCount: number}; success: boolean}
+  const [deletedJudgment] = await queryDatabase<{deletedAt: unknown}>(`
+    SELECT deleted_at AS deletedAt
+    FROM app.judgment
+    WHERE id = '${judgmentId}'
+    LIMIT 1
+  `)
+  const [refreshState] = await queryDatabase<{dirtyToken: number; projectId: string}>(`
+    SELECT project_id AS projectId, CAST(dirty_token AS INTEGER) AS dirtyToken
+    FROM app.project_mart_refresh_state
+    WHERE project_id = '${projectId}'
+    LIMIT 1
+  `)
+  const [refreshArticleState] = await queryDatabase<{
+    articleId: string
+    firstDirtyToken: number
+    lastDirtyToken: number
+    projectId: string
+  }>(`
+    SELECT
+      project_id AS projectId,
+      article_id AS articleId,
+      CAST(first_dirty_token AS INTEGER) AS firstDirtyToken,
+      CAST(last_dirty_token AS INTEGER) AS lastDirtyToken
+    FROM app.project_mart_refresh_article_state
+    WHERE project_id = '${projectId}'
+      AND article_id = '${articleId}'
+    LIMIT 1
+  `)
+
+  expect(response.status).toBe(200)
+  expect(body).toEqual({data: {deletedCount: 1}, success: true})
+  expect(deletedJudgment?.deletedAt).toBeTruthy()
+  expect(refreshState).toEqual({dirtyToken: 1, projectId})
+  expect(refreshArticleState).toEqual({articleId, firstDirtyToken: 1, lastDirtyToken: 1, projectId})
 })

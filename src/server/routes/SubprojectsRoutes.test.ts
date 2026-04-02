@@ -80,6 +80,21 @@ const insertProjectPromptFixture = async ({
   `)
 }
 
+const insertArticleFixture = async ({articleId, projectId}: {articleId: string; projectId: string}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('${articleId}', '${articleId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('${projectId}-${articleId}-project-article', '${projectId}', '${articleId}')
+  `)
+}
+
 beforeAll(async () => {
   const [
     {migrateDuckdb},
@@ -134,6 +149,7 @@ test('subproject route detaches selected prompt ids from source projects', async
   const modelId = 'subproject-detach-model'
   const sourceProjectId = 'subproject-detach-source-project'
   const sourcePromptId = 'subproject-detach-source-prompt'
+  const sourceArticleId = 'subproject-detach-source-article'
 
   await insertProjectFixture({connectionId, modelId, projectId: sourceProjectId})
   await insertProjectPromptFixture({
@@ -142,6 +158,7 @@ test('subproject route detaches selected prompt ids from source projects', async
     projectPromptId: 'subproject-detach-project-prompt',
     promptId: sourcePromptId,
   })
+  await insertArticleFixture({articleId: sourceArticleId, projectId: sourceProjectId})
 
   const response = await app.handle(
     new Request('http://localhost/api/subprojects', {
@@ -150,7 +167,7 @@ test('subproject route detaches selected prompt ids from source projects', async
         description: 'subproject description',
         modelId,
         promptSelections: [{promptId: sourcePromptId, types: []}],
-        sourceProjectIds: [],
+        sourceProjectIds: [sourceProjectId],
       }),
       headers: {'content-type': 'application/json'},
       method: 'POST',
@@ -185,12 +202,41 @@ test('subproject route detaches selected prompt ids from source projects', async
   const subprojectPrompt = rows.find((row) => {
     return row.projectId === subprojectId
   })
+  const [refreshState] = await queryDatabase<{dirtyToken: number; projectId: string}>(`
+    SELECT project_id AS projectId, CAST(dirty_token AS INTEGER) AS dirtyToken
+    FROM app.project_mart_refresh_state
+    WHERE project_id = '${subprojectId}'
+    LIMIT 1
+  `)
+  const [refreshArticleState] = await queryDatabase<{
+    articleId: string
+    firstDirtyToken: number
+    lastDirtyToken: number
+    projectId: string
+  }>(`
+    SELECT
+      project_id AS projectId,
+      article_id AS articleId,
+      CAST(first_dirty_token AS INTEGER) AS firstDirtyToken,
+      CAST(last_dirty_token AS INTEGER) AS lastDirtyToken
+    FROM app.project_mart_refresh_article_state
+    WHERE project_id = '${subprojectId}'
+      AND article_id = '${sourceArticleId}'
+    LIMIT 1
+  `)
 
   expect(sourcePrompt?.promptId).toBe(sourcePromptId)
   expect(subprojectPrompt?.promptId).not.toBe(sourcePromptId)
   expect(subprojectPrompt?.originalText).toBe(sourcePrompt?.originalText)
   expect(subprojectPrompt?.contentHash).toBe(null)
   expect(subprojectPrompt?.originProjectId).toBe(subprojectId)
+  expect(refreshState).toEqual({dirtyToken: 1, projectId: subprojectId})
+  expect(refreshArticleState).toEqual({
+    articleId: sourceArticleId,
+    firstDirtyToken: 1,
+    lastDirtyToken: 1,
+    projectId: subprojectId,
+  })
 
   await flushMartRefreshes()
 })

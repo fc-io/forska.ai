@@ -519,6 +519,14 @@ const deleteArchivedProjectsTx = async (tx: AppTx, projectIds: string[]) => {
       WHERE project_id IN (${projectIdsSql})
     `,
     `
+      DELETE FROM app.project_mart_refresh_article_state
+      WHERE project_id IN (${projectIdsSql})
+    `,
+    `
+      DELETE FROM app.project_mart_refresh_state
+      WHERE project_id IN (${projectIdsSql})
+    `,
+    `
       DELETE FROM app.project_review_serving_generation
       WHERE project_id IN (${projectIdsSql})
     `,

@@ -253,7 +253,7 @@ afterAll(async () => {
   rmSync(tempDbPath, {force: true})
 })
 
-test('archive route repairs stale mart refresh queue schema before queueing refresh work', async () => {
+test('archive route marks the archived project dirty without depending on the legacy queue', async () => {
   if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')
   }
@@ -277,28 +277,23 @@ test('archive route repairs stale mart refresh queue schema before queueing refr
     WHERE id = '${projectId}'
     LIMIT 1
   `)
-  const [queueColumn] = await queryDatabase<{columnName: string}>(`
-    SELECT column_name AS columnName
-    FROM information_schema.columns
-    WHERE table_schema = 'app'
-      AND table_name = 'mart_refresh_queue'
-      AND column_name = 'refresh_generation'
-    LIMIT 1
-  `)
-  const [queuedRefresh] = await queryDatabase<{count: number}>(`
-    SELECT COUNT(*) AS count
-    FROM app.mart_refresh_queue
+  const [refreshState] = await queryDatabase<{dirtyToken: number; projectId: string; reason: string | null}>(`
+    SELECT
+      project_id AS projectId,
+      CAST(dirty_token AS INTEGER) AS dirtyToken,
+      last_request_reason AS reason
+    FROM app.project_mart_refresh_state
     WHERE project_id = '${projectId}'
+    LIMIT 1
   `)
 
   expect(storedProject?.archived).toBe(true)
-  expect(queueColumn?.columnName).toBe('refresh_generation')
-  expect(Number(queuedRefresh?.count ?? 0)).toBe(1)
+  expect(refreshState).toEqual({dirtyToken: 1, projectId, reason: 'ProjectsRoutes.archive'})
 
   await flushMartRefreshes()
 })
 
-test('archive route purges review article serving rows for archived projects', async () => {
+test('archive route leaves downstream serving rows for refresh workers and records dirty state', async () => {
   if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')
   }
@@ -316,8 +311,6 @@ test('archive route purges review article serving rows for archived projects', a
 
   expect(response.status).toBe(200)
 
-  await flushMartRefreshes()
-
   const [servingRowCount] = await queryDatabase<{count: number}>(`
     SELECT COUNT(*) AS count
     FROM mart.review_article_serving
@@ -328,9 +321,21 @@ test('archive route purges review article serving rows for archived projects', a
     FROM app.project_review_serving_generation
     WHERE project_id = '${projectId}'
   `)
+  const [refreshState] = await queryDatabase<{dirtyToken: number; projectId: string; reason: string | null}>(`
+    SELECT
+      project_id AS projectId,
+      CAST(dirty_token AS INTEGER) AS dirtyToken,
+      last_request_reason AS reason
+    FROM app.project_mart_refresh_state
+    WHERE project_id = '${projectId}'
+    LIMIT 1
+  `)
 
-  expect(Number(servingRowCount?.count ?? 0)).toBe(0)
-  expect(Number(generationRowCount?.count ?? 0)).toBe(0)
+  expect(Number(servingRowCount?.count ?? 0)).toBe(398)
+  expect(Number(generationRowCount?.count ?? 0)).toBe(1)
+  expect(refreshState).toEqual({dirtyToken: 1, projectId, reason: 'ProjectsRoutes.archive'})
+
+  await flushMartRefreshes()
 })
 
 test('delete archived route rejects active projects', async () => {
@@ -962,8 +967,37 @@ test('edit route accepts full client payload when the model is unchanged', async
     FROM app.project_article
     WHERE project_id = '${projectId}'
   `)
+  const [refreshState] = await queryDatabase<{dirtyToken: number; projectId: string}>(`
+    SELECT project_id AS projectId, CAST(dirty_token AS INTEGER) AS dirtyToken
+    FROM app.project_mart_refresh_state
+    WHERE project_id = '${projectId}'
+    LIMIT 1
+  `)
+  const [refreshArticleState] = await queryDatabase<{
+    articleId: string
+    firstDirtyToken: number
+    lastDirtyToken: number
+    projectId: string
+  }>(`
+    SELECT
+      project_id AS projectId,
+      article_id AS articleId,
+      CAST(first_dirty_token AS INTEGER) AS firstDirtyToken,
+      CAST(last_dirty_token AS INTEGER) AS lastDirtyToken
+    FROM app.project_mart_refresh_article_state
+    WHERE project_id = '${projectId}'
+      AND article_id = 'edit-same-model-article'
+    LIMIT 1
+  `)
 
   expect(Number(storedProjectArticle?.count ?? 0)).toBe(1)
+  expect(refreshState).toEqual({dirtyToken: 1, projectId})
+  expect(refreshArticleState).toEqual({
+    articleId: 'edit-same-model-article',
+    firstDirtyToken: 1,
+    lastDirtyToken: 1,
+    projectId,
+  })
 
   await flushMartRefreshes()
 })

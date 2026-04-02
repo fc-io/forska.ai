@@ -10,6 +10,7 @@ import {
   getTimestampLiteral,
 } from '../services/appQueryHelpers.ts'
 import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
+import {getProjectMartRefreshStateService} from '../services/projectMartRefreshStateService.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {assertProjectIsActive, getProjectAccess} from './projectsRoutes/projectAccessGuard.ts'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'
@@ -164,6 +165,16 @@ const getProjectReferenceDetachPlan = (projectId: string): ProjectReferenceDetac
     tempTable: getTempTable('judgment_human'),
     whereClause: `project_id = ${projectLiteral}`,
   }
+  const projectMartRefreshStateSpec = {
+    sourceTable: 'app.project_mart_refresh_state',
+    tempTable: getTempTable('project_mart_refresh_state'),
+    whereClause: `project_id = ${projectLiteral}`,
+  }
+  const projectMartRefreshArticleStateSpec = {
+    sourceTable: 'app.project_mart_refresh_article_state',
+    tempTable: getTempTable('project_mart_refresh_article_state'),
+    whereClause: `project_id = ${projectLiteral}`,
+  }
   const reviewSpec = {
     sourceTable: 'app.review',
     tempTable: getTempTable('review'),
@@ -178,6 +189,8 @@ const getProjectReferenceDetachPlan = (projectId: string): ProjectReferenceDetac
       judgmentAssessmentSpec,
       judgmentSpec,
       judgmentHumanSpec,
+      projectMartRefreshArticleStateSpec,
+      projectMartRefreshStateSpec,
       reviewSpec,
     ],
     restoreSpecs: [
@@ -187,6 +200,8 @@ const getProjectReferenceDetachPlan = (projectId: string): ProjectReferenceDetac
       judgmentSpec,
       judgmentAssessmentSpec,
       judgmentHumanSpec,
+      projectMartRefreshStateSpec,
+      projectMartRefreshArticleStateSpec,
       reviewSpec,
     ],
   }
@@ -831,10 +846,18 @@ export const projectsRoutes = new Elysia()
           `)
         }
 
+        const dirtyProjects = await getProjectMartRefreshStateService().getDirtyProjectsForProjectIds(tx, [
+          createdProject.id,
+        ])
+
+        await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+          projects: dirtyProjects,
+          reason: 'ProjectsRoutes.post',
+          runner: tx,
+        })
+
         return getProjectValue(createdProject)
       })) as ReturnType<typeof getProjectValue>
-
-      await getDuckdbMartRefreshService().queueProjectRefresh(newProject.id, 'ProjectsRoutes.post')
 
       return {data: newProject}
     },
@@ -1234,6 +1257,14 @@ export const projectsRoutes = new Elysia()
             )
           }
 
+          const dirtyProjects = await getProjectMartRefreshStateService().getDirtyProjectsForProjectIds(tx, [params.id])
+
+          await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+            projects: dirtyProjects,
+            reason: 'ProjectsRoutes.edit',
+            runner: tx,
+          })
+
           return {project: getProjectValue(updatedProject), prompts: updatedPrompts}
         })
       }
@@ -1241,8 +1272,6 @@ export const projectsRoutes = new Elysia()
       const result = detachPlan
         ? await runWithDetachedProjectReferenceRecovery(runEditTransaction, detachPlan)
         : await runEditTransaction()
-
-      await getDuckdbMartRefreshService().queueProjectRefresh(params.id, 'ProjectsRoutes.edit')
 
       return {data: result}
     },
@@ -1278,10 +1307,20 @@ export const projectsRoutes = new Elysia()
     await assertProjectIsActive(params.id)
 
     const archivedProject = await getAppDatabaseService().transaction(async (tx) => {
-      return updateProjectTx(tx, {
+      const updatedProject = await updateProjectTx(tx, {
         projectId: params.id,
         updateParts: ['archived = TRUE', 'updated_at = current_timestamp'],
       })
+
+      if (updatedProject) {
+        await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+          projects: [{projectId: params.id}],
+          reason: 'ProjectsRoutes.archive',
+          runner: tx,
+        })
+      }
+
+      return updatedProject
     })
 
     if (!archivedProject) {
@@ -1294,10 +1333,20 @@ export const projectsRoutes = new Elysia()
   })
   .post('/api/projects/:id/unarchive', async ({params}) => {
     const unarchivedProject = await getAppDatabaseService().transaction(async (tx) => {
-      return updateProjectTx(tx, {
+      const updatedProject = await updateProjectTx(tx, {
         projectId: params.id,
         updateParts: ['archived = FALSE', 'updated_at = current_timestamp'],
       })
+
+      if (updatedProject) {
+        await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+          projects: [{projectId: params.id}],
+          reason: 'ProjectsRoutes.unarchive',
+          runner: tx,
+        })
+      }
+
+      return updatedProject
     })
 
     if (!unarchivedProject) {
@@ -1509,10 +1558,18 @@ export const projectsRoutes = new Elysia()
         `)
       }
 
+      const dirtyProjects = await getProjectMartRefreshStateService().getDirtyProjectsForProjectIds(tx, [
+        clonedProject.id,
+      ])
+
+      await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+        projects: dirtyProjects,
+        reason: 'ProjectsRoutes.clone',
+        runner: tx,
+      })
+
       return getProjectValue(clonedProject)
     })) as ReturnType<typeof getProjectValue>
-
-    await getDuckdbMartRefreshService().queueProjectRefresh(result.id, 'ProjectsRoutes.clone')
 
     return {data: result}
   })

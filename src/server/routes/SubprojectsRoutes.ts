@@ -3,7 +3,7 @@ import {Elysia, t} from 'elysia'
 import {assertSelectableProviderModelId} from '../providers/providerModelRepository.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
-import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
+import {getProjectMartRefreshStateService} from '../services/projectMartRefreshStateService.ts'
 import {hasMatchingJudgmentAnswer} from '../utils/judgmentAnswers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
@@ -556,6 +556,12 @@ export const subprojectsRoutes = new Elysia()
           `)
         }
 
+        await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+          projects: [{articleIds, projectId: createdProject.id}],
+          reason: 'SubprojectsRoutes.post',
+          runner: tx,
+        })
+
         return createdProject
       })) as {
         id: string
@@ -571,8 +577,6 @@ export const subprojectsRoutes = new Elysia()
       }
 
       console.log(`[subprojects] Inserted ${articleIds.length} articles into project ${newProject.id}`)
-
-      await getDuckdbMartRefreshService().queueProjectRefresh(newProject.id, 'SubprojectsRoutes.post')
 
       return {
         data: {

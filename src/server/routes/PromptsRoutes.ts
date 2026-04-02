@@ -9,7 +9,7 @@ import {
   getQuotedStringList,
   getSqlLiteral,
 } from '../services/appQueryHelpers'
-import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
+import {getProjectMartRefreshStateService} from '../services/projectMartRefreshStateService.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 
@@ -539,7 +539,15 @@ const promptsAdminRoutes = new Elysia()
     '/api/prompts/merge',
     async ({body}) => {
       const {keepPromptId, mergePromptIds} = body
+      const affectedPromptIds = [keepPromptId, ...mergePromptIds]
+
       await getAppDatabaseService().transaction(async (tx) => {
+        const affectedProjects = await tx.queryJson<{projectId: string}>(`
+          SELECT DISTINCT project_id AS projectId
+          FROM app.project_prompt
+          WHERE prompt_id IN (${getQuotedStringList(affectedPromptIds).join(', ')})
+        `)
+
         for (const mergeId of mergePromptIds) {
           // 1. Handle Project Prompts
           const projectsUsingMerge = await tx.queryJson<{projectId: string}>(`
@@ -645,7 +653,21 @@ const promptsAdminRoutes = new Elysia()
             }
           }
         }
+
+        const dirtyProjects = await getProjectMartRefreshStateService().getDirtyProjectsForProjectIds(
+          tx,
+          affectedProjects.map((project) => {
+            return project.projectId
+          }),
+        )
+
+        await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+          projects: dirtyProjects,
+          reason: 'PromptsRoutes.merge',
+          runner: tx,
+        })
       })
+
       await getAppDatabaseService().transaction(async (tx) => {
         for (const mergeId of mergePromptIds) {
           await tx.run(`
@@ -654,15 +676,6 @@ const promptsAdminRoutes = new Elysia()
           `)
         }
       })
-
-      await getDuckdbMartRefreshService().queueProjectRefreshesByPromptIds(
-        [keepPromptId, ...mergePromptIds],
-        'PromptsRoutes.merge',
-      )
-      await getDuckdbMartRefreshService().queueJudgmentArticleRefreshesByPromptIds(
-        [keepPromptId, ...mergePromptIds],
-        'PromptsRoutes.merge',
-      )
 
       return {success: true}
     },
@@ -799,17 +812,28 @@ const promptsAdminRoutes = new Elysia()
 
       const now = new Date()
 
-      await getAppDatabaseService().run(`
-        UPDATE app.judgment
-        SET deleted_at = ${getSqlLiteral(now)},
-            updated_at = ${getSqlLiteral(now)}
-        WHERE id IN (${getQuotedStringList(judgmentIds).join(', ')})
-      `)
+      await getAppDatabaseService().transaction(async (tx) => {
+        const affectedJudgments = await tx.queryJson<{articleId: string}>(`
+          SELECT DISTINCT article_id AS articleId
+          FROM app.judgment
+          WHERE id IN (${getQuotedStringList(judgmentIds).join(', ')})
+        `)
 
-      await getDuckdbMartRefreshService().queueJudgmentArticleRefreshesByJudgmentIds(
-        judgmentIds,
-        'PromptsRoutes.deleteInvalidJudgments',
-      )
+        await tx.run(`
+          UPDATE app.judgment
+          SET deleted_at = ${getSqlLiteral(now)},
+              updated_at = ${getSqlLiteral(now)}
+          WHERE id IN (${getQuotedStringList(judgmentIds).join(', ')})
+        `)
+
+        await getProjectMartRefreshStateService().markArticleProjectsDirtyAtomically({
+          articleIds: affectedJudgments.map((judgment) => {
+            return judgment.articleId
+          }),
+          reason: 'PromptsRoutes.deleteInvalidJudgments',
+          runner: tx,
+        })
+      })
 
       return {success: true, data: {deletedCount: judgmentIds.length}}
     },

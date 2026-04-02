@@ -26,6 +26,8 @@ type MarkedProjectDirtyState = {dirtyToken: number; projectId: string}
 
 type DirtyProjectArticleRow = {articleId: string; projectId: string}
 
+type DirtyProjectIdRow = {projectId: string}
+
 type ClaimDirtyProjectsParams = {leaseMs: number; limit: number; now?: Date; workerId: string}
 
 type ProjectRefreshClaim = {
@@ -214,6 +216,66 @@ const getDirtyProjectsForArticleIds = async (runner: RefreshStateRunner, article
       }, new Map<string, {articleIds: string[]; projectId: string}>())
       .values(),
   )
+}
+
+const getDirtyProjectsForProjectIds = async (runner: RefreshStateRunner, projectIds: string[]) => {
+  const uniqueProjectIds = getUniqueValues(projectIds)
+
+  if (uniqueProjectIds.length === 0) {
+    return []
+  }
+
+  const [projectRows, articleRows] = await Promise.all([
+    runner.queryJson<DirtyProjectIdRow>(`
+      SELECT id AS projectId
+      FROM app.project
+      WHERE id IN (${getQuotedStringList(uniqueProjectIds).join(', ')})
+        AND archived = FALSE
+      ORDER BY id ASC
+    `),
+    runner.queryJson<DirtyProjectArticleRow>(`
+      SELECT projectId, articleId
+      FROM (
+        SELECT
+          project_article.project_id AS projectId,
+          project_article.article_id AS articleId
+        FROM app.project_article project_article
+        INNER JOIN app.project project ON project.id = project_article.project_id
+        INNER JOIN app.article article ON article.id = project_article.article_id
+        WHERE project_article.project_id IN (${getQuotedStringList(uniqueProjectIds).join(', ')})
+          AND project.archived = FALSE
+          AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
+          AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
+        UNION
+        SELECT
+          project_import_route.project_id AS projectId,
+          article_import_route.article_id AS articleId
+        FROM app.article_import_route article_import_route
+        INNER JOIN app.project_import_route project_import_route
+          ON project_import_route.import_route_id = article_import_route.import_route_id
+        INNER JOIN app.project project ON project.id = project_import_route.project_id
+        INNER JOIN app.article article ON article.id = article_import_route.article_id
+        WHERE project_import_route.project_id IN (${getQuotedStringList(uniqueProjectIds).join(', ')})
+          AND project.archived = FALSE
+          AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
+          AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
+      ) scoped_articles
+      ORDER BY projectId ASC, articleId ASC
+    `),
+  ])
+
+  return projectRows.map((project) => {
+    return {
+      articleIds: articleRows
+        .filter((row) => {
+          return row.projectId === project.projectId
+        })
+        .map((row) => {
+          return row.articleId
+        }),
+      projectId: project.projectId,
+    }
+  })
 }
 
 const markProjectsDirtyAtomically = async ({
@@ -436,6 +498,7 @@ const projectMartRefreshStateService = {
   claimDirtyProjects,
   completeProjectRefresh,
   failProjectRefresh,
+  getDirtyProjectsForProjectIds,
   getDirtyArticlesForClaim,
   heartbeatClaim,
   markArticleProjectsDirtyAtomically,
@@ -451,6 +514,7 @@ export {
   completeProjectRefresh,
   failProjectRefresh,
   getDirtyArticlesForClaim,
+  getDirtyProjectsForProjectIds,
   heartbeatClaim,
   markArticleProjectsDirtyAtomically,
   markProjectsDirtyAtomically,
