@@ -16,21 +16,17 @@ const archivedProjectMartTables = [
 ] as const
 
 type ScriptOptions = {apply: boolean; help: boolean; projectId: string | null}
-type ArchivedQueuedProjectRow = {
-  completedAt: string | null
-  createdAt: string
+type ArchivedProjectNeedingRecoveryRow = {
+  lingeringMartRowCount: number
+  lingeringTableCount: number
   projectId: string
   projectName: string
-  queueRowId: string
-  reason: string
-  refreshGeneration: number
-  updatedAt: string
 }
 type ArchivedProjectMartCountRow = {rowCount: number; tableName: (typeof archivedProjectMartTables)[number]}
 type RecoveryReport = {
   apply: boolean
-  archivedQueuedProjectsAfter: ArchivedQueuedProjectRow[]
-  archivedQueuedProjectsBefore: ArchivedQueuedProjectRow[]
+  archivedProjectsNeedingRecoveryAfter: ArchivedProjectNeedingRecoveryRow[]
+  archivedProjectsNeedingRecoveryBefore: ArchivedProjectNeedingRecoveryRow[]
   completedTaskCount: number
   projectId: string | null
   projectMartRowsAfter: ArchivedProjectMartCountRow[]
@@ -51,37 +47,38 @@ const getScriptOptions = (): ScriptOptions => {
 
 const getUsageText = () => {
   return [
-    'Inspect queued archived project refresh rows:',
+    'Inspect archived projects with lingering mart rows:',
     '  bun scripts/recoverArchivedProjectRefreshQueue.ts',
     '',
     'Inspect one archived project:',
     '  bun scripts/recoverArchivedProjectRefreshQueue.ts --project-id=<project-id>',
     '',
-    'Repair one queued archived refresh and confirm the retry loop is gone:',
+    'Repair one archived project by purging lingering mart rows:',
     '  bun scripts/recoverArchivedProjectRefreshQueue.ts --project-id=<project-id> --apply',
   ].join('\n')
 }
 
-const getQueuedArchivedProjectRefreshRows = async (projectId: string | null) => {
-  const projectFilter = projectId === null ? '' : `AND queue.project_id = ${getSqlLiteral(projectId)}`
+const getArchivedProjectsNeedingRecovery = async (projectId: string | null) => {
+  const projectFilter = projectId === null ? '' : `AND project.id = ${getSqlLiteral(projectId)}`
+  const unionSql = archivedProjectMartTables
+    .map((tableName) => {
+      return `SELECT project_id AS projectId, COUNT(*) AS rowCount FROM ${tableName} GROUP BY project_id`
+    })
+    .join(' UNION ALL ')
 
-  return getAppDatabaseService().queryJson<ArchivedQueuedProjectRow>(`
+  return getAppDatabaseService().queryJson<ArchivedProjectNeedingRecoveryRow>(`
     SELECT
-      queue.id AS queueRowId,
-      queue.project_id AS projectId,
+      project.id AS projectId,
       project.name AS projectName,
-      queue.reason AS reason,
-      COALESCE(queue.refresh_generation, 0) AS refreshGeneration,
-      queue.created_at AS createdAt,
-      queue.updated_at AS updatedAt,
-      queue.completed_at AS completedAt
-    FROM app.mart_refresh_queue queue
-    INNER JOIN app.project project ON project.id = queue.project_id
-    WHERE queue.refresh_scope = 'project'
-      AND queue.completed_at IS NULL
+      CAST(SUM(project_rows.rowCount) AS INTEGER) AS lingeringMartRowCount,
+      CAST(COUNT(*) AS INTEGER) AS lingeringTableCount
+    FROM (${unionSql}) project_rows
+    INNER JOIN app.project project ON project.id = project_rows.projectId
+    WHERE project_rows.rowCount > 0
       AND project.archived = TRUE
       ${projectFilter}
-    ORDER BY EPOCH(queue.created_at) ASC, queue.id ASC
+    GROUP BY project.id, project.name
+    ORDER BY lingeringMartRowCount DESC, project.id ASC
   `)
 }
 
@@ -95,7 +92,7 @@ const getArchivedProjectMartRowCounts = async (projectId: string) => {
   )
 }
 
-const getSelectedProjectId = (options: ScriptOptions, rows: ArchivedQueuedProjectRow[]) => {
+const getSelectedProjectId = (options: ScriptOptions, rows: ArchivedProjectNeedingRecoveryRow[]) => {
   if (options.projectId) {
     return options.projectId
   }
@@ -111,25 +108,25 @@ const getSelectedProjectId = (options: ScriptOptions, rows: ArchivedQueuedProjec
   throw new Error(
     rows.length === 0
       ? 'No queued archived project refresh rows found. Nothing to recover.'
-      : 'Multiple queued archived project refresh rows found. Re-run with --project-id=<project-id> to recover one safely.',
+      : 'Multiple archived projects still have mart rows. Re-run with --project-id=<project-id> to recover one safely.',
   )
 }
 
 const runRecovery = async (options: ScriptOptions): Promise<RecoveryReport> => {
-  const archivedQueuedProjectsBefore = await getQueuedArchivedProjectRefreshRows(options.projectId)
-  const selectedProjectId = getSelectedProjectId(options, archivedQueuedProjectsBefore)
+  const archivedProjectsNeedingRecoveryBefore = await getArchivedProjectsNeedingRecovery(options.projectId)
+  const selectedProjectId = getSelectedProjectId(options, archivedProjectsNeedingRecoveryBefore)
   const projectMartRowsBefore = selectedProjectId ? await getArchivedProjectMartRowCounts(selectedProjectId) : []
   const completedTaskCount =
     !options.apply || selectedProjectId === null
       ? 0
       : (await getDuckdbMartRefreshService().recoverQueuedArchivedProjectRefresh(selectedProjectId)).completedTaskCount
-  const archivedQueuedProjectsAfter = await getQueuedArchivedProjectRefreshRows(options.projectId)
+  const archivedProjectsNeedingRecoveryAfter = await getArchivedProjectsNeedingRecovery(options.projectId)
   const projectMartRowsAfter = selectedProjectId ? await getArchivedProjectMartRowCounts(selectedProjectId) : []
 
   return {
     apply: options.apply,
-    archivedQueuedProjectsAfter,
-    archivedQueuedProjectsBefore,
+    archivedProjectsNeedingRecoveryAfter,
+    archivedProjectsNeedingRecoveryBefore,
     completedTaskCount,
     projectId: selectedProjectId,
     projectMartRowsAfter,

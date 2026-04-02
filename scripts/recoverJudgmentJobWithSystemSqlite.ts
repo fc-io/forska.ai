@@ -1,9 +1,9 @@
-import {randomUUID} from 'node:crypto'
 import {writeFile} from 'node:fs/promises'
 
 import {getJudgmentJobSqlitePath} from '../src/server/cron/judgmentsJobs/judgmentJobPaths.ts'
 import {getAppDatabaseService, type JudgmentInsertRow} from '../src/server/services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
+import {getProjectMartRefreshStateService} from '../src/server/services/projectMartRefreshStateService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 
 type CliOptions = {jobId: string | null}
@@ -364,33 +364,11 @@ const importRecoveredOutboxEntries = async (
       return
     }
 
-    await getAppDatabaseService().run(`
-      INSERT INTO app.mart_refresh_queue (
-        id,
-        refresh_scope,
-        project_id,
-        article_id,
-        project_key,
-        article_key,
-        refresh_generation,
-        reason,
-        created_at,
-        updated_at
-      ) VALUES ${articleIds
-        .map((articleId) => {
-          return `(${getQuotedStringList([randomUUID(), 'judgment_article']).join(', ')}, NULL, ${getSqlLiteral(articleId)}, '', ${getSqlLiteral(articleId)}, 0, 'systemSqliteRecovery', NOW(), NOW())`
-        })
-        .join(', ')}
-      ON CONFLICT(refresh_scope, project_key, article_key) DO UPDATE SET
-        completed_at = NULL,
-        created_at = CASE
-          WHEN app.mart_refresh_queue.completed_at IS NULL THEN app.mart_refresh_queue.created_at
-          ELSE NOW()
-        END,
-        refresh_generation = COALESCE(app.mart_refresh_queue.refresh_generation, 0) + 1,
-        reason = excluded.reason,
-        updated_at = NOW()
-    `)
+    await getProjectMartRefreshStateService().markArticleProjectsDirtyAtomically({
+      articleIds,
+      reason: 'systemSqliteRecovery',
+      requestedBy: 'recoverJudgmentJobWithSystemSqlite',
+    })
   }
 
   const importBatch = async (batch: JudgmentJobOutboxEntry[]): Promise<JudgmentJobRecoveredImportResult> => {
@@ -614,10 +592,10 @@ const getSqliteUpdateScript = ({
         ? ''
         : `
           UPDATE job_scan_state
-          SET last_project_refresh_ack_seq = CASE
-                WHEN last_project_refresh_ack_seq IS NULL OR last_project_refresh_ack_seq < ${ackSeq}
+          SET last_project_refresh_ack_token = CASE
+                WHEN last_project_refresh_ack_token IS NULL OR last_project_refresh_ack_token < ${ackSeq}
                   THEN ${ackSeq}
-                ELSE last_project_refresh_ack_seq
+                ELSE last_project_refresh_ack_token
               END,
               updated_at = ${getSqlLiteral(now)}
           WHERE job_id = ${getSqlLiteral(jobId)};
