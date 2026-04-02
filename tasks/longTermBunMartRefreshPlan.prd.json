@@ -1,0 +1,306 @@
+{
+  "name": "Long-Term Bun Mart Refresh Plan",
+  "branchName": "ralph/bun-mart-refresh-worker",
+  "description": "Restore automatic mart freshness for reviews, counts, warnings, and prompt queueing by replacing mart_refresh_queue with a durable project refresh ledger, bounded article dirtiness, and a worker-owned refresh pipeline.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add project mart refresh state ledger schema",
+      "description": "As a maintainer, I want `app.project_mart_refresh_state` to store dirty tokens, completion tokens, lease state, and refresh status so refresh orchestration has one durable project-level source of truth.",
+      "acceptanceCriteria": [
+        "Add a DuckDB migration for `app.project_mart_refresh_state` with project id, dirty token, active refresh token, completed refresh token, lease fields, status fields, and timestamps.",
+        "Expose the new table fields through the repo's schema typing so server services and tests can use them without parallel ad hoc types.",
+        "bun run db:mig passes",
+        "bun test src/server/services/projectMartRefreshStateService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Add bounded article dirtiness schema",
+      "description": "As a maintainer, I want bounded per-project article dirtiness storage so the worker can refresh unresolved judgment facts without recreating one row per event fanout.",
+      "acceptanceCriteria": [
+        "Add a DuckDB migration for `app.project_mart_refresh_article_state` with one row per `(project_id, article_id)` and token-range fields such as `first_dirty_token` and `last_dirty_token`.",
+        "The schema supports widening token ranges for repeated dirtiness instead of inserting one row per `(project, article, token)` event.",
+        "bun run db:mig passes",
+        "bun test src/server/services/projectMartRefreshStateService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-003",
+      "title": "Implement atomic project refresh state service",
+      "description": "As a maintainer, I want one service to atomically mark projects dirty, claim work, resolve unresolved articles, and complete or fail refreshes so refresh state cannot split across multiple partial writes.",
+      "acceptanceCriteria": [
+        "Implement `markProjectsDirtyAtomically`, `claimDirtyProjects`, `getDirtyArticlesForClaim`, `completeProjectRefresh`, and `failProjectRefresh` in `src/server/services/projectMartRefreshStateService.ts`.",
+        "Dirty-token bumping and article-dirtiness merging happen atomically per project, and completion trims resolved article state through the completed token.",
+        "Service tests cover repeated marks, lease expiry recovery, unresolved-range reads, completion trimming, and failure recording.",
+        "bun test src/server/services/projectMartRefreshStateService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001", "US-002"]
+    },
+    {
+      "id": "US-004",
+      "title": "Upgrade SQLite job scan state to token-based ack fields",
+      "description": "As a maintainer, I want per-job SQLite `job_scan_state` files to migrate in place from seq-based refresh acknowledgement fields to token-based fields so prompt queue visibility can follow the new ledger safely.",
+      "acceptanceCriteria": [
+        "Add an in-place upgrade path in `src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts` that migrates existing `job_scan_state` rows from `last_project_refresh_ack_seq` and `wrap_visibility_ack_seq` to token-based equivalents.",
+        "Older per-job SQLite DBs upgrade safely without delete-and-recreate semantics or data loss.",
+        "bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-005",
+      "title": "Mark dirty from judgment import and persistence paths",
+      "description": "As a maintainer, I want imported and directly persisted LLM judgments to mark all affected projects dirty so new judgments always feed the refresh ledger instead of relying on legacy queue writes.",
+      "acceptanceCriteria": [
+        "Replace direct mart queue writes in judgment import and direct judgment persistence paths with `markProjectsDirtyAtomically` or a durable outbox or reconciliation path when the same outer transaction is not available.",
+        "Changed article ids resolve to all active, non-archived affected projects before dirty state is recorded.",
+        "bun test src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.test.ts passes",
+        "bun test src/server/services/projectMartRefreshStateService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003"]
+    },
+    {
+      "id": "US-006",
+      "title": "Mark dirty from human assessment writes",
+      "description": "As a maintainer, I want human assessment updates to mark affected projects dirty in the same transaction boundary when possible so review completeness changes propagate automatically.",
+      "acceptanceCriteria": [
+        "Update human assessment write paths to resolve affected projects and record dirty state through `markProjectsDirtyAtomically` or a durable outbox or reconciliation record when the same outer transaction is not feasible.",
+        "Assessment updates that change review completeness or article review state feed the project ledger instead of queueing article refresh rows.",
+        "bun test src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.test.ts passes",
+        "bun test src/server/services/projectMartRefreshStateService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003"]
+    },
+    {
+      "id": "US-007",
+      "title": "Mark dirty from project and prompt configuration mutations",
+      "description": "As a maintainer, I want project and prompt mutations to record both project dirtiness and affected article ids when they rewrite judgments or scope so config changes rebuild the correct downstream marts.",
+      "acceptanceCriteria": [
+        "Update `ProjectsRoutes`, `PromptsRoutes`, and `SubprojectsRoutes` mutation paths to record dirty state through `markProjectsDirtyAtomically` or a durable outbox or reconciliation record.",
+        "Prompt merge and invalid-judgment flows merge affected article ids into bounded article dirtiness instead of treating these changes as project-dirty-only mutations.",
+        "bun test src/server/routes/PromptsRoutes.test.ts passes",
+        "bun test src/server/routes/ProjectsRoutes.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003", "US-002"]
+    },
+    {
+      "id": "US-008",
+      "title": "Mark dirty from membership and import-scope mutations",
+      "description": "As a maintainer, I want article membership and datasource scope changes to dirty the right projects so project scope updates no longer depend on mart queue writes.",
+      "acceptanceCriteria": [
+        "Update project-article membership and datasource import-scope mutation paths to record dirty state through `markProjectsDirtyAtomically` or a durable outbox or reconciliation record.",
+        "Membership and import-scope writes record dirty state in the same outer transaction where feasible.",
+        "bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.test.ts passes",
+        "bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003"]
+    },
+    {
+      "id": "US-009",
+      "title": "Build the core project mart refresh worker",
+      "description": "As a maintainer, I want a worker-owned claim and refresh loop so project refresh orchestration moves out of the hot API path and runs deterministically under the writer-role model.",
+      "acceptanceCriteria": [
+        "Add `src/server/workers/projectMartRefreshWorker.ts` and `scripts/runProjectMartRefreshWorker.ts` with a single-project-at-a-time claim loop.",
+        "For a claimed project, the worker loads unresolved article ids for `(last_completed_refresh_token, claimed_token]`, refreshes judgment facts first, runs `refreshProject(projectId)` second, and records completion or failure.",
+        "Worker tests cover claim, order of operations, success, failure, and expired-lease recovery.",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartRefreshStateService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-002", "US-003"]
+    },
+    {
+      "id": "US-010",
+      "title": "Publish token-based SQLite refresh ack with reconciliation",
+      "description": "As a maintainer, I want worker-owned token-based ack publication to update every relevant per-job SQLite DB and be replayable after crashes so prompt visibility and retention pruning stay correct.",
+      "acceptanceCriteria": [
+        "Implement token-based ack publication that fans out to every relevant per-job SQLite DB for a project instead of assuming one job per project.",
+        "Ack publication is idempotent, derived from ledger state, and replayable by reconciliation without rerunning the refresh pipeline.",
+        "Tests cover token ack fanout, replay after a simulated post-completion crash, and retention-pruning correctness when ack publication is replayed.",
+        "bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-004", "US-009"]
+    },
+    {
+      "id": "US-011",
+      "title": "Remove legacy seq-based ack writes from SQLite importer",
+      "description": "As a maintainer, I want the SQLite outbox importer to stop publishing seq-based refresh acknowledgement so the worker becomes the only source of truth for token-based refresh visibility.",
+      "acceptanceCriteria": [
+        "`src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts` no longer writes legacy seq-based refresh ack state after importing judgments.",
+        "The importer still imports judgments, records dirty state, and leaves token-based ack publication to the worker or reconciler.",
+        "bun test src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-005", "US-010"]
+    },
+    {
+      "id": "US-012",
+      "title": "Gate strict count and unassessed endpoints on ledger freshness",
+      "description": "As a maintainer, I want strict-correctness count and unassessed endpoints to bypass stale marts so behavior stays correct while refresh work is still running or recovering.",
+      "acceptanceCriteria": [
+        "Add freshness gating in `src/services/olap/duckdbOlap.ts` and `src/server/routes/JudgmentsJobsRoutes.ts` so strict count and unassessed endpoints use raw fallback or another non-stale path when ledger freshness is not satisfied.",
+        "Invalidate the unassessed-count cache when relevant dirty state is recorded and ensure the unassessed preview endpoint reflects freshness correctly.",
+        "bun test src/server/routes/JudgmentsJobsRoutes.test.ts passes",
+        "bun test src/services/olap/duckdbOlap*.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-009"]
+    },
+    {
+      "id": "US-013",
+      "title": "Migrate prompt queue visibility and pruning to token semantics",
+      "description": "As a maintainer, I want prompt queue builder visibility and SQLite retention pruning to use token-based ack state so queueing no longer depends on legacy seq watermarks.",
+      "acceptanceCriteria": [
+        "Update `judgmentsJobsCronGetPrompts.ts`, `judgmentsJobsAddToQueue.ts`, and `judgmentJobSqliteService.ts` to use token-based visibility and pruning semantics instead of seq-based ack semantics.",
+        "Prompt queue builder paths do not silently trust stale marts, and wrapped or raw scan visibility stays correct relative to completed refresh work.",
+        "bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-004", "US-010", "US-011"]
+    },
+    {
+      "id": "US-014",
+      "title": "Gate direct review-detail mart reads",
+      "description": "As a maintainer, I want the review detail route to avoid silently trusting stale `mart.review_article_serving_detail` rows so detail views follow the same freshness contract as the rest of review serving.",
+      "acceptanceCriteria": [
+        "Update `src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts` to prefer fresh serving detail rows and fall back or surface explicit freshness state when the ledger is stale or running.",
+        "Route tests prove review detail no longer silently trusts stale `mart.review_article_serving_detail` rows.",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-009"]
+    },
+    {
+      "id": "US-015",
+      "title": "Preserve reviews warnings backend contract on the new ledger",
+      "description": "As a maintainer, I want the reviews warnings route to map ledger and worker state into the existing warnings and progress contract so review pages keep a clear freshness signal during migration.",
+      "acceptanceCriteria": [
+        "Update `src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts` to produce stale, running, failed, and progress semantics from the new ledger and worker state.",
+        "Route tests cover ready, refreshing, stale, and failed warning states without depending on `app.mart_refresh_queue`.",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-009"]
+    },
+    {
+      "id": "US-016",
+      "title": "Update reviews warnings frontend to the ledger-backed contract",
+      "description": "As a user, I want review warning banners and progress UI to keep working during the refresh-worker migration so the page stays explicit about stale or rebuilding review data.",
+      "acceptanceCriteria": [
+        "Update `reviewsWarningsQuery.ts`, `reviewsIndexingProgress.tsx`, and `reviewsProjectWarnings.tsx` to consume the preserved or intentionally migrated warnings contract from the new backend route.",
+        "The UI still shows clear stale or running messaging and progress details on review pages when refresh work is incomplete.",
+        "bun run build passes",
+        "bun run lint passes",
+        "Verify in browser using dev-browser skill: review pages show correct stale or running warnings and progress after backend migration"
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-015"]
+    },
+    {
+      "id": "US-017",
+      "title": "Retire legacy runtime mart queue surfaces",
+      "description": "As a maintainer, I want the live API and worker runtime to stop depending on `app.mart_refresh_queue` so Bun/macOS no longer needs the old queue-disable workaround.",
+      "acceptanceCriteria": [
+        "Remove legacy queue-on-write and heartbeat runtime assumptions from `getDuckdbMartRefreshService.ts` and `martRefreshDrainHeartbeat.ts` while keeping direct refresh primitives that the new worker still needs.",
+        "Archived-project cleanup deletes the new refresh-state and bounded article-state rows instead of depending on `app.mart_refresh_queue` cleanup.",
+        "bun test src/server/routes/ProjectsRoutes.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 17,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-009", "US-010", "US-011", "US-012", "US-013", "US-014", "US-015"]
+    },
+    {
+      "id": "US-018",
+      "title": "Migrate recovery and maintenance scripts off the old queue",
+      "description": "As a maintainer, I want recovery and maintenance scripts to stop reading or writing the old mart queue so emergency and cleanup tooling remain usable after queue retirement.",
+      "acceptanceCriteria": [
+        "Update the archived-refresh and SQLite recovery scripts to use the new refresh state or replacement manual flows instead of `app.mart_refresh_queue`.",
+        "Recovery and cleanup smoke tests prove the scripts still operate after queue retirement.",
+        "bun run lint passes"
+      ],
+      "priority": 18,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-017"]
+    },
+    {
+      "id": "US-019",
+      "title": "Add incremental article-aware refresh routing",
+      "description": "As a maintainer, I want the stable worker to choose incremental article refreshes for small deltas so the system can reduce full-project rebuild cost without giving up correctness.",
+      "acceptanceCriteria": [
+        "Add threshold-based routing that chooses between full project refresh and `refreshJudgmentArticle(articleId)` plus `refreshProjectArticleServing(projectId, articleId)` for small deltas.",
+        "Correctness tests prove review pages, counts, warnings, and prompt queueing still match the full-refresh behavior after incremental routing is enabled.",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/services/olap/duckdbOlap*.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 19,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-009", "US-012", "US-013", "US-014", "US-015", "US-016", "US-017"]
+    }
+  ]
+}
