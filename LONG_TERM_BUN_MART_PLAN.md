@@ -182,24 +182,48 @@ Why this is better:
 - Makes staleness explicit and queryable.
 - Avoids the flawed assumption that current serving generation counters can stand in for write-side dirty counters.
 
-### Preserve article-level fact refresh dependency with a separate article dirtiness stage
+### Preserve article-level fact refresh dependency with unresolved-range semantics
 
 Project-level coalescing is the long-term correctness boundary for the review UI, but article-level judgment-fact refresh is still required before downstream project refreshes.
 
-So the long-term design should use two layers:
+The crucial constraint is this:
+- a worker claiming dirty token N cannot safely look only at article changes tagged exactly with N
+- it must satisfy all unresolved article changes in the range `(last_completed_refresh_token, claimed_token]`
+- otherwise a token N-1 judgment change could be skipped if token N is later only a project/config dirty mark
 
-1. Durable article dirtiness input
-- lightweight record of changed article IDs since the last completed refresh for a project’s current dirty token
-- can be implemented as either:
-  - `app.project_mart_refresh_article_dirty(project_id, article_id, dirty_token)`
-  - or a normalized side table keyed by project and token
+Therefore the design must use unresolved-range semantics, not “current token only” semantics.
 
-2. Coalesced project refresh state
+Long-term design layers:
+
+1. Coalesced project refresh state
 - `app.project_mart_refresh_state`
+- tracks dirty/completed tokens, lease state, status, timestamps
 
-Phase 1 simplification:
-- it is acceptable to store only project dirty rows if the worker resolves changed articles another way before refresh
-- but the plan must keep a real article judgment-fact refresh stage before project-serving rebuilds
+2. Bounded article-change accumulator for unresolved work
+- stores enough information for the worker to answer:
+  - “which articles changed for this project since `last_completed_refresh_token`?”
+- this must support the unresolved range `(last_completed_refresh_token, claimed_token]`
+
+Important design rule:
+- do not model this as an unbounded row-per-project/article/token fan-out table in the steady state
+- that would recreate the current write-amplification problem in a different table
+
+Preferred durable forms for the article accumulator:
+- `app.project_mart_refresh_article_state(project_id, article_id, first_dirty_token, last_dirty_token, updated_at)`
+  - one row per `(project_id, article_id)`
+  - updates widen the token range instead of inserting a new row per event
+- or a project-scoped aggregate payload if bounded safely (for example, chunked JSON blobs), but only if operationally simpler than the row-per-article range table
+
+Recommended phase-1 form:
+- use one row per `(project_id, article_id)` with token range columns
+- the worker resolves changed articles by querying rows where:
+  - `last_dirty_token > last_completed_refresh_token`
+  - and `first_dirty_token <= claimed_token`
+- after successful refresh completion for the claimed token, either:
+  - clear rows whose `last_dirty_token <= claimed_token`, or
+  - advance/trim their token range if newer dirtiness already exists
+
+This preserves correctness while keeping article dirtiness bounded and coalesced.
 
 ### Dedicated refresh worker
 
@@ -369,29 +393,49 @@ Requirement:
 ### Suggested service responsibilities
 
 `projectMartRefreshStateService.ts`
-- `markProjectsDirty({projectIds, reason, requestedBy})`
-- `recordDirtyArticlesForProjects({projectIds, articleIds, dirtyToken})` or equivalent helper
+- `markProjectsDirtyAtomically({projects, reason, requestedBy})`
+  - where each item can include:
+    - `projectId`
+    - `articleIds` to merge into the bounded unresolved article accumulator
+  - this must atomically:
+    1. bump each project’s `dirty_token`
+    2. merge/update article dirtiness for that exact project/token
+    3. invalidate strict-count caches as needed
 - `claimDirtyProjects({workerId, limit, leaseMs})`
 - `heartbeatClaim({projectId, workerId, leaseMs})`
+- `getDirtyArticlesForClaim({projectId, lastCompletedToken, claimedToken})`
 - `completeProjectRefresh({projectId, workerId, completedToken})`
+  - must also clear/trim resolved article dirtiness up to `completedToken`
 - `failProjectRefresh({projectId, workerId, error})`
 - `getProjectRefreshState(projectId)`
 - `listDirtyProjects()`
 - `invalidateProjectCaches(projectId)` for count caches as needed
 
+Important constraint:
+- do not split dirty-token bumping and article-dirtiness recording into two separate public calls
+- the API must be atomic per project so a crash/concurrent write cannot leave a project dirty with missing article delta metadata
+
 ### Suggested worker loop
 1. poll for dirty projects
 2. claim one project
-3. capture the target dirty token being satisfied
-4. resolve changed articles relevant to that token
-5. refresh judgment facts for changed articles
+3. capture:
+   - `claimed_token`
+   - `last_completed_refresh_token`
+4. resolve changed articles for the unresolved range:
+   - `(last_completed_refresh_token, claimed_token]`
+5. refresh judgment facts for all articles in that unresolved range
 6. refresh project-serving state
 7. on success:
-   - set `last_completed_refresh_token = claimed token`
+   - set `last_completed_refresh_token = claimed_token`
+   - clear/trim resolved article dirtiness through `claimed_token`
    - set status idle / complete timestamps
 8. on failure:
    - record error and backoff
 9. continue
+
+Important constraint:
+- the worker must never assume “articles tagged with claimed token only” is sufficient
+- it must satisfy the full unresolved token range before considering the project fresh
 
 ### Lease model
 Use DB-backed lease columns on the dirty-project row, not process-local state.
@@ -488,49 +532,59 @@ Step 4: Run tests
 Step 5: Commit
 - `git commit -m "feat: add project mart refresh state ledger"`
 
-### Task 2: Add article-dirty tracking for judgment-fact dependency
+### Task 2: Add bounded unresolved article tracking for judgment-fact dependency
 
-Objective: Preserve the upstream article refresh stage required before project-serving rebuilds.
+Objective: Preserve the upstream article refresh stage required before project-serving rebuilds without recreating one-row-per-event fan-out.
 
 Files:
-- Create/modify migration files for article-dirty state
+- Create/modify migration files for bounded article-dirty state
 - Create: service helpers in `projectMartRefreshStateService.ts`
 - Test: `src/server/services/projectMartRefreshStateService.test.ts`
 
 Step 1: Write failing tests for:
-- recording changed articles for a project/token
-- deduping repeated article marks
-- resolving dirty articles for a claimed token
+- atomically marking one project dirty while merging changed article IDs
+- atomically marking many projects dirty from one changed article fan-out
+- deduping repeated article marks into one `(project_id, article_id)` row
+- widening `first_dirty_token/last_dirty_token` instead of inserting a new row per event
+- resolving dirty articles for the unresolved range `(last_completed_token, claimed_token]`
+- trimming/clearing resolved article dirtiness after completion
 
 Step 2: Add schema/service implementation
+- preferred schema shape: one row per `(project_id, article_id)` with token range columns
+- explicitly avoid one row per `(project_id, article_id, dirty_token)` event in the steady state
 
 Step 3: Run tests
 
 Step 4: Commit
-- `git commit -m "feat: add article dirtiness tracking for mart refresh"`
+- `git commit -m "feat: add bounded article dirtiness tracking for mart refresh"`
 
 ### Task 3: Implement state service
 
-Objective: Wrap all dirty/claim/complete/fail operations in one service.
+Objective: Wrap all dirty/claim/complete/fail operations in one service with atomic per-project dirtying.
 
 Files:
 - Create: `src/server/services/projectMartRefreshStateService.ts`
 - Test: `src/server/services/projectMartRefreshStateService.test.ts`
 
 Step 1: Write failing tests for:
-- `markProjectsDirty`
-- `claimDirtyProjects`
+- `markProjectsDirtyAtomically`
+- per-project token assignment returned from one atomic call
 - lease expiry recovery
 - completion advancing refresh token
 - failure recording
 - cache invalidation hooks
+- no split-brain state when concurrent dirty marks occur during worker processing
 
 Step 2: Implement service
+- do not expose a public two-step API of “mark dirty” then “record article dirtiness”
+- either:
+  - make `markProjectsDirtyAtomically` perform both actions transactionally, or
+  - make it return a per-project token map and persist article dirtiness in that same transaction before commit
 
 Step 3: Run targeted tests
 
 Step 4: Commit
-- `git commit -m "feat: add project mart refresh state service"`
+- `git commit -m "feat: add atomic project mart refresh state service"`
 
 ### Task 4: Add project dirty marking API with cross-project fan-out
 
@@ -559,7 +613,10 @@ Step 2: Implement cross-project impact resolution
 - changed article -> all active, non-archived affected projects
 - changed project config -> affected project(s)
 
-Step 3: Invalidate strict-count caches when dirtying
+Step 3: Route all of those writes through `markProjectsDirtyAtomically`
+- atomically bump each affected project token
+- atomically merge bounded unresolved article dirtiness for each affected project
+- atomically invalidate strict-count caches as needed
 
 Step 4: Run tests
 
@@ -617,21 +674,24 @@ Step 4: Commit
 
 ### Task 7: Add read-side freshness checks and strict fallbacks
 
-Objective: Stop silently preferring stale marts and preserve correctness-sensitive endpoint contracts.
+Objective: Stop silently preferring stale marts and preserve correctness-sensitive endpoint contracts, including review detail routes that bypass `duckdbOlap.ts`.
 
 Files:
 - Modify: `src/services/olap/duckdbOlap.ts`
 - Modify: `src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts`
 - Modify: `src/server/routes/JudgmentsJobsRoutes.ts`
-- Test: review query tests / warnings tests / count tests
+- Modify: `src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts`
+- Test: review query tests / warnings tests / count tests / review-detail tests
 
 Step 1: Write failing tests for:
 - fresh project => mart fast path
 - stale/running project => warnings endpoint reflects progress state
 - strict count endpoints use raw fallback or bypass stale marts
+- review detail route does not silently trust stale `mart.review_article_serving_detail`
 - unassessed count cache invalidates when project/job becomes dirty
 
 Step 2: Implement freshness gating
+- cover both `duckdbOlap.ts` readers and direct review-detail readers
 
 Step 3: Preserve or migrate `projectsreviewswarnings` response shape deliberately
 
@@ -726,14 +786,37 @@ Smoke tests:
 
 ---
 
-## Recommendation
+## Reasonable Path Forward
 
-Implement this plan with project-level dirty coalescing plus an explicit article-fact refresh stage.
+The most reasonable long-term path is:
+
+1. Keep project-level coalescing as the primary orchestration boundary.
+2. Preserve a bounded article-change accumulator per project so `mart.judgment_fact` can be refreshed correctly before project-serving rebuilds.
+3. Use unresolved-range semantics `(last_completed_refresh_token, claimed_token]`, not “current token only” lookups.
+4. Make dirtying atomic per project: token bump + article-change merge + cache invalidation in one transaction.
+5. Run the refresh worker under the existing writer-ownership model.
+6. Start with correctness-first project rebuilds after article-fact refresh, then optimize later.
+
+Concretely, phase 1 should be:
+- mutation happens
+- resolve all affected projects
+- atomically bump each affected project’s dirty token and merge changed article IDs into its bounded unresolved article state
+- worker claims one project
+- worker loads unresolved article IDs for `(last_completed_refresh_token, claimed_token]`
+- worker runs article judgment-fact refresh for those articles
+- worker runs `refreshProject(projectId)`
+- worker marks `last_completed_refresh_token = claimed_token`
+- worker trims/clears resolved article dirtiness through `claimed_token`
 
 Why this is the right long-term architecture:
 - It matches the system’s real correctness boundary: projects must become fresh, but article judgment facts still feed the project-serving marts.
-- It removes the brittle one-row-per-event mart queue model.
+- It avoids the brittle one-row-per-event mart queue model.
+- It avoids replacing that queue with a new unbounded project/article/token fan-out table.
 - It gives you durable, observable refresh state.
 - It restores automatic updates for all critical review/count surfaces.
 - It preserves cross-project correctness for shared articles.
 - It creates a clean path to later article-level optimization without tying correctness to Bun/macOS-native behavior.
+
+## Recommendation
+
+Implement this plan with project-level dirty coalescing, bounded unresolved article tracking, and an explicit article-fact refresh stage.
