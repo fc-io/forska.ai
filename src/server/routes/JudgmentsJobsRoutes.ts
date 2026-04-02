@@ -75,6 +75,7 @@ type JudgmentJobHealthBadge =
 type JudgmentJobDeleteTx = {run: (statement: string) => Promise<void>}
 
 type UnassessedCountCacheValue = {value: number; expiresAt: number}
+type ProjectMartFreshnessState = {dirtyToken: number | null; isFresh: boolean; lastCompletedRefreshToken: number | null}
 const unassessedCountTTLms = 10_000
 const staleImportThresholdMs = 15 * 60 * 1_000
 const largeWalThresholdBytes = 64 * 1_024 * 1_024
@@ -146,12 +147,36 @@ const getUnassessedCountCacheKey = (
   useAbstract: boolean,
   useFulltext: boolean,
   useFulltextNoImages: boolean,
+  dirtyToken: number | null,
+  lastCompletedRefreshToken: number | null,
 ) => {
   const from = projectDateFrom ? projectDateFrom.toISOString() : ''
   const to = projectDateTo ? projectDateTo.toISOString() : ''
   const routes = importRouteIds.slice().sort().join(',')
   const content = `${useTitle}|${useAbstract}|${useFulltext}|${useFulltextNoImages}`
-  return `${projectId}|${projectModelId}|${from}|${to}|${routes}|${content}`
+  return `${projectId}|${projectModelId}|${from}|${to}|${routes}|${content}|${dirtyToken ?? 'null'}|${lastCompletedRefreshToken ?? 'null'}`
+}
+
+const getProjectMartFreshnessState = async (projectId: string): Promise<ProjectMartFreshnessState> => {
+  const [row] = await getAppDatabaseService().queryJson<{
+    dirtyToken: number | null
+    lastCompletedRefreshToken: number | null
+  }>(`
+    SELECT
+      CAST(dirty_token AS INTEGER) AS dirtyToken,
+      CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken
+    FROM app.project_mart_refresh_state
+    WHERE project_id = ${getSqlLiteral(projectId)}
+    LIMIT 1
+  `)
+  const dirtyToken = row?.dirtyToken ?? null
+  const lastCompletedRefreshToken = row?.lastCompletedRefreshToken ?? null
+
+  return {
+    dirtyToken,
+    isFresh: dirtyToken === null || (lastCompletedRefreshToken !== null && lastCompletedRefreshToken >= dirtyToken),
+    lastCompletedRefreshToken,
+  }
 }
 
 const getUtcDayKey = (value: Date) => {
@@ -761,6 +786,7 @@ export const judgmentsJobsRoutes = new Elysia()
       const {projectDateFrom, projectDateTo, importRouteIds, projectModelId, job} = await getJobContext({
         jobId: query.jobId,
       })
+      const freshness = await getProjectMartFreshnessState(job.projectId)
 
       const cacheKey = getUnassessedCountCacheKey(
         job.projectId,
@@ -772,10 +798,12 @@ export const judgmentsJobsRoutes = new Elysia()
         job.useAbstract,
         job.useFulltext,
         job.useFulltextNoImages,
+        freshness.dirtyToken,
+        freshness.lastCompletedRefreshToken,
       )
       const cached = unassessedCountCache.get(cacheKey)
       const now = Date.now()
-      if (cached && cached.expiresAt > now) {
+      if (freshness.isFresh && cached && cached.expiresAt > now) {
         return {count: cached.value}
       }
 
@@ -789,9 +817,12 @@ export const judgmentsJobsRoutes = new Elysia()
         useAbstract: job.useAbstract,
         useFulltext: job.useFulltext,
         useFulltextNoImages: job.useFulltextNoImages,
+        preferRawFallback: !freshness.isFresh,
       })
 
-      unassessedCountCache.set(cacheKey, {value: count, expiresAt: now + unassessedCountTTLms})
+      if (freshness.isFresh) {
+        unassessedCountCache.set(cacheKey, {value: count, expiresAt: now + unassessedCountTTLms})
+      }
 
       return {count}
     },
@@ -803,6 +834,7 @@ export const judgmentsJobsRoutes = new Elysia()
       const {projectDateFrom, projectDateTo, importRouteIds, projectModelId, job} = await getJobContext({
         jobId: query.jobId,
       })
+      const freshness = await getProjectMartFreshnessState(job.projectId)
 
       const {articles} = await getUnassessedArticlesFromOlap({
         projectId: job.projectId,
@@ -816,6 +848,7 @@ export const judgmentsJobsRoutes = new Elysia()
         useFulltextNoImages: job.useFulltextNoImages,
         limit: 100,
         offset: 0,
+        preferRawFallback: !freshness.isFresh,
       })
 
       const unassessedArticles = articles.map((a) => {

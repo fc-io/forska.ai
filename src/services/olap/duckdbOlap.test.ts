@@ -587,6 +587,23 @@ test('countArticlesReviewsFromDuckdb falls back to raw judgments when serving ro
   expect(duckdbRunnerMockRef.current.queries[4]).not.toContain('FROM mart.review_article_rollup r')
 })
 
+test('countArticlesReviewsFromDuckdb falls back to raw judgments when serving ledger freshness is stale', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [],
+    [{totalCount: 2}],
+  ])
+
+  const {countArticlesReviewsFromDuckdb} = await loadDuckdbOlap()
+  const result = await countArticlesReviewsFromDuckdb({projectId: 'project-1', limit: 10})
+
+  expect(result).toEqual({totalCount: 2, totalPages: 1})
+  expect(duckdbRunnerMockRef.current.queries[3]).toContain('LEFT JOIN app.project_mart_refresh_state refresh_state')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.judgment j')
+})
+
 test('countArticlesReviewsFromDuckdb uses new serving filter members when rows exist', async () => {
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
     getPromptRows(),
@@ -1452,6 +1469,41 @@ test('getUnassessedArticlesFromDuckdb uses review article serving when rows exis
   expect(result.articles[0]?.id).toBe('external-2')
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_serving s')
   expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_serving s')
+})
+
+test('getUnassessedArticlesFromDuckdb falls back to raw rows when raw fallback is preferred', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [
+      getDuckdbScopedArticleRow({id: 'article-1'}),
+      getDuckdbScopedArticleRow({id: 'article-2', articleId: 'external-2', articleTitle: 'Article 2'}),
+    ],
+    [getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-1'})],
+  ])
+
+  const {getUnassessedArticlesFromDuckdb} = await loadDuckdbOlap()
+  const result = await getUnassessedArticlesFromDuckdb({
+    projectId: 'project-1',
+    projectModelId: 'model-1',
+    projectDateFrom: null,
+    projectDateTo: null,
+    importRouteIds: ['route-1'],
+    useTitle: true,
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    limit: 10,
+    offset: 0,
+    preferRawFallback: true,
+  })
+
+  expect(result.totalCount).toBe(1)
+  expect(result.articles[0]?.id).toBe('article-2')
+  expect(duckdbRunnerMockRef.current.queries).toHaveLength(5)
+  expect(duckdbRunnerMockRef.current.queries[3]).toContain('FROM app.article a')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.judgment j')
 })
 
 test('getUnassessedPairsFromDuckdb keeps prompt entries aligned across serving and raw paths', async () => {

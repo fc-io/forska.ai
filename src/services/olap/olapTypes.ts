@@ -137,6 +137,7 @@ export type UnassessedCountParams = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  preferRawFallback?: boolean
 }
 
 export type UnassessedArticlesParams = UnassessedCountParams & {limit: number; offset: number; search?: string}

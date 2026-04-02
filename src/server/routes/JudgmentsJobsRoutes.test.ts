@@ -1,5 +1,5 @@
-import {afterAll, afterEach, beforeAll, expect, mock, test} from 'bun:test'
 import {Database} from 'bun:sqlite'
+import {afterAll, afterEach, beforeAll, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 import {existsSync, rmSync, writeFileSync} from 'fs'
 import {dirname, join} from 'path'
@@ -178,6 +178,103 @@ const insertOutboxFixture = async ({
     useFulltextNoImages: false,
     useTitle: true,
   })
+}
+
+const insertUnassessedServingFixture = async ({jobId, projectId}: {jobId: string; projectId: string}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const articleId = `unassessed-serving-article-${Date.now()}`
+  const promptId = `unassessed-serving-prompt-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'running', 'active')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_id, article_title, article_created_at, article_updated_at)
+    VALUES (
+      '${articleId}',
+      'external-${articleId}',
+      'Unassessed stale preview article',
+      TIMESTAMPTZ '2025-09-09 00:00:00+00',
+      TIMESTAMPTZ '2025-09-10 00:00:00+00'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES ('${promptId}', 'Unassessed prompt', '${promptId}-hash')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order)
+    VALUES ('project-prompt-${promptId}', '${projectId}', '${promptId}', 0)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('project-article-${articleId}', '${projectId}', '${articleId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_review_serving_generation (project_id, active_generation)
+    VALUES ('${projectId}', 1)
+  `)
+  await runDatabase(`
+    INSERT INTO mart.review_article_serving (
+      project_id,
+      generation,
+      article_id,
+      article_created_at,
+      article_updated_at,
+      article_title,
+      article_external_id,
+      journal_title,
+      url,
+      full_text_pdf,
+      full_text_fetched_at,
+      full_text_conversion_status,
+      source_metadata,
+      has_all_llm_judgments,
+      llm_judged_prompt_count,
+      llm_judged_prompt_ids,
+      enabled_prompt_count,
+      human_answered_prompt_count,
+      human_answered_prompt_ids,
+      has_all_human_answers,
+      review_opened,
+      review_sections_completed,
+      latest_llm_created_at,
+      latest_human_updated_at,
+      latest_review_updated_at,
+      serving_updated_at
+    ) VALUES (
+      '${projectId}',
+      1,
+      '${articleId}',
+      TIMESTAMPTZ '2025-09-09 00:00:00+00',
+      TIMESTAMPTZ '2025-09-10 00:00:00+00',
+      'Unassessed stale preview article',
+      'external-${articleId}',
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      TRUE,
+      1,
+      ['${promptId}'],
+      1,
+      0,
+      NULL,
+      FALSE,
+      FALSE,
+      0,
+      current_timestamp,
+      NULL,
+      NULL,
+      current_timestamp
+    )
+  `)
 }
 
 test('creating a judgments job fails when the runtime model check fails', async () => {
@@ -380,35 +477,37 @@ test('starting a job with a failing SQLite preflight quarantines it without star
 
   writeFileSync(sqlitePath, 'not a sqlite database')
 
-  const response = await app.handle(
-    new Request(`http://localhost/api/judgmentsjobs/${jobId}`, {
-      body: JSON.stringify({status: 'running'}),
-      headers: {'content-type': 'application/json'},
-      method: 'PATCH',
-    }),
-  )
-  const body = await response.text()
-  const [job] = await getAppDatabaseService().queryJson<{
-    quarantineReason: string | null
-    status: string
-    storageState: string
-  }>(`
-    SELECT
-      quarantine_reason AS quarantineReason,
-      status AS status,
-      storage_state AS storageState
-    FROM app.judgment_job
-    WHERE id = '${jobId}'
-    LIMIT 1
-  `)
+  try {
+    const response = await app.handle(
+      new Request(`http://localhost/api/judgmentsjobs/${jobId}`, {
+        body: JSON.stringify({status: 'running'}),
+        headers: {'content-type': 'application/json'},
+        method: 'PATCH',
+      }),
+    )
+    const body = await response.text()
+    const [job] = await getAppDatabaseService().queryJson<{
+      quarantineReason: string | null
+      status: string
+      storageState: string
+    }>(`
+      SELECT
+        quarantine_reason AS quarantineReason,
+        status AS status,
+        storage_state AS storageState
+      FROM app.judgment_job
+      WHERE id = '${jobId}'
+      LIMIT 1
+    `)
 
-  expect(response.status).toBe(409)
-  expect(body).toContain(`Job ${jobId} is quarantined.`)
-  expect(job?.status).toBe('failed')
-  expect(job?.storageState).toBe('quarantined')
-  expect(job?.quarantineReason).toContain('SQLite job DB preflight failed')
-
-  rmSync(sqlitePath, {force: true})
+    expect(response.status).toBe(409)
+    expect(body).toContain(`Job ${jobId} is quarantined.`)
+    expect(job?.status).toBe('failed')
+    expect(job?.storageState).toBe('quarantined')
+    expect(job?.quarantineReason).toContain('file is not a database')
+  } finally {
+    rmSync(sqlitePath, {force: true})
+  }
 })
 
 test('pausing an existing judgments job succeeds when queued prompts reference the job', async () => {
@@ -1387,6 +1486,53 @@ test('drain route only acts on the requested job and can finalize a drained sqli
   expect(body.data.changes.prunedOutboxRows).toBe(1)
   expect(body.data.job.storageState).toBe('drained')
   expect(await sqliteService.getReadyCount(secondJobId)).toBe(1)
+})
+
+test('unassessed endpoints bypass stale serving rows and invalidate cached counts after dirty state is recorded', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const now = Date.now()
+  const projectId = `unassessed-freshness-project-${now}`
+  const modelId = `unassessed-freshness-model-${now}`
+  const connectionId = `unassessed-freshness-connection-${now}`
+  const jobId = `unassessed-freshness-job-${now}`
+  const {getProjectMartRefreshStateService} = await import('../services/projectMartRefreshStateService.ts')
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertUnassessedServingFixture({jobId, projectId})
+
+  const freshCountResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs-unassessed-count?jobId=${jobId}`),
+  )
+  const freshCountBody = (await freshCountResponse.json()) as {count: number}
+
+  expect(freshCountResponse.status).toBe(200)
+  expect(freshCountBody.count).toBe(0)
+
+  await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+    projects: [{projectId}],
+    reason: 'JudgmentsJobsRoutes.test.unassessedFreshness',
+  })
+
+  const staleCountResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs-unassessed-count?jobId=${jobId}`),
+  )
+  const staleCountBody = (await staleCountResponse.json()) as {count: number}
+
+  expect(staleCountResponse.status).toBe(200)
+  expect(staleCountBody.count).toBe(1)
+
+  const previewResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs-unassessed-articles?jobId=${jobId}`),
+  )
+  const previewBody = (await previewResponse.json()) as {data: Array<{articleTitle: string; id: string}>; error: null}
+
+  expect(previewResponse.status).toBe(200)
+  expect(previewBody.error).toBeNull()
+  expect(previewBody.data).toHaveLength(1)
+  expect(previewBody.data[0]?.articleTitle).toBe('Unassessed stale preview article')
 })
 
 test('deleting an existing judgments job succeeds when prompts and token usage reference the job', async () => {
