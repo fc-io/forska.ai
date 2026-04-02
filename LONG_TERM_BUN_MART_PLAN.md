@@ -286,7 +286,9 @@ These must not silently serve stale marts:
 - `/api/articlesreviewscount`
 - `/api/judgmentsjobs-unassessed-count`
 - judgment prompt queue generation
-- any API driving decisions about what still needs judgment
+- `src/server/cron/judgmentsJobs/judgmentsJobsCronGetPrompts.ts`
+- `src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.ts`
+- any API or cron path driving decisions about what still needs judgment
 
 Required plan behavior:
 - if project freshness is stale/running, either:
@@ -340,6 +342,8 @@ Files to inspect/update:
 
 Requirement:
 - whenever a new LLM judgment is persisted, resolve all affected projects for the article and mark each affected project dirty
+- dirty marking must happen in the same outer transaction as the stale-causing write where feasible
+- if same-transaction dirtying is not feasible for a given path, that path must use a durable outbox / reconciliation mechanism so a crash cannot leave committed judgment writes with no dirty signal
 
 ### Human assessments / review answers
 Files to inspect/update:
@@ -348,6 +352,8 @@ Files to inspect/update:
 
 Requirement:
 - whenever human answers change review completeness or article review state, resolve affected projects and mark them dirty
+- dirty marking must happen in the same outer transaction as the stale-causing write where feasible
+- if same-transaction dirtying is not feasible, use a durable outbox / reconciliation mechanism so committed human-assessment writes cannot be orphaned from refresh state
 
 ### Project and prompt configuration changes
 Files to inspect/update:
@@ -413,9 +419,11 @@ Requirement:
 - `listDirtyProjects()`
 - `invalidateProjectCaches(projectId)` for count caches as needed
 
-Important constraint:
+Important constraints:
 - do not split dirty-token bumping and article-dirtiness recording into two separate public calls
 - the API must be atomic per project so a crash/concurrent write cannot leave a project dirty with missing article delta metadata
+- when called from stale-causing write paths, the service should be used inside the same outer transaction as the underlying mutation where feasible
+- if a write path cannot participate in that same transaction boundary, it must write to a durable outbox/reconciliation record in the same transaction as the underlying mutation so dirty-state recovery is guaranteed after crashes
 
 ### Suggested worker loop
 1. poll for dirty projects
@@ -577,12 +585,15 @@ Step 1: Write failing tests for:
 - failure recording
 - cache invalidation hooks
 - no split-brain state when concurrent dirty marks occur during worker processing
+- same-transaction dirtying for stale-causing writes where feasible
+- durable outbox/reconciliation coverage for write paths that cannot share the same transaction boundary
 
 Step 2: Implement service
 - do not expose a public two-step API of “mark dirty” then “record article dirtiness”
 - either:
   - make `markProjectsDirtyAtomically` perform both actions transactionally, or
   - make it return a per-project token map and persist article dirtiness in that same transaction before commit
+- define an explicit companion outbox/reconciliation path for any mutation surface that cannot call the dirty-marking service in the same outer transaction as the underlying write
 
 Step 3: Run targeted tests
 
@@ -686,17 +697,20 @@ Files:
 - Modify: `src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts`
 - Modify: `src/server/routes/JudgmentsJobsRoutes.ts`
 - Modify: `src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts`
-- Test: review query tests / warnings tests / count tests / review-detail tests
+- Modify: `src/server/cron/judgmentsJobs/judgmentsJobsCronGetPrompts.ts`
+- Modify: `src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.ts`
+- Test: review query tests / warnings tests / count tests / review-detail tests / prompt-queue tests
 
 Step 1: Write failing tests for:
 - fresh project => mart fast path
 - stale/running project => warnings endpoint reflects progress state
 - strict count endpoints use raw fallback or bypass stale marts
+- prompt queue generation paths do not silently trust stale marts
 - review detail route does not silently trust stale `mart.review_article_serving_detail`
 - unassessed count cache invalidates when project/job becomes dirty
 
 Step 2: Implement freshness gating
-- cover both `duckdbOlap.ts` readers and direct review-detail readers
+- cover `duckdbOlap.ts` readers, direct review-detail readers, and prompt-queue builder paths
 
 Step 3: Preserve or migrate `projectsreviewswarnings` response shape deliberately
 
@@ -720,6 +734,7 @@ Files:
 
 Step 1: keep direct refresh primitives
 Step 2: migrate runtime archived-project cleanup away from `app.mart_refresh_queue`
+- explicitly delete the new `app.project_mart_refresh_state` rows and bounded unresolved article-state rows for archived/deleted projects as part of cleanup
 Step 3: migrate recovery/maintenance scripts that still read or write the old queue
 Step 4: remove obsolete queue-on-write assumptions
 Step 5: retain or replace manual refresh/recovery APIs/scripts if still useful
