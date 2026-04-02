@@ -230,6 +230,8 @@ type RetentionPruneResult = {outboxRowsDeleted: number; queuePromptRowsDeleted: 
 
 type JudgmentJobStorageRow = {id: string}
 
+type ProjectRefreshAckStateRow = {lastCompletedRefreshToken: number | null; projectId: string}
+
 type WalCheckpointRow = {busy: number; checkpointed: number; log: number}
 
 const openDatabases = new Map<string, Database>()
@@ -722,6 +724,78 @@ const getTrackedJudgmentJobIds = async (jobId?: string) => {
         .filter((trackedJobId) => {
           return existsSync(getJudgmentJobSqlitePath(trackedJobId))
         })
+}
+
+const getTrackedJudgmentJobIdsForProject = async (projectId: string) => {
+  return (
+    await getAppDatabaseService().queryJson<{id: string}>(`
+      SELECT id
+      FROM app.judgment_job
+      WHERE project_id = ${getSqlLiteral(projectId)}
+      ORDER BY created_at ASC, id ASC
+    `)
+  )
+    .map((row) => {
+      return row.id
+    })
+    .filter((jobId) => {
+      return existsSync(getJudgmentJobSqlitePath(jobId))
+    })
+}
+
+const getTrackedProjectRefreshAckStates = async (projectId?: string) => {
+  const projectFilter = projectId ? `pmrs.project_id = ${getSqlLiteral(projectId)}` : 'TRUE'
+
+  return getAppDatabaseService().queryJson<ProjectRefreshAckStateRow>(`
+    SELECT
+      pmrs.project_id AS projectId,
+      CAST(pmrs.last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken
+    FROM app.project_mart_refresh_state pmrs
+    WHERE ${projectFilter}
+      AND EXISTS (
+        SELECT 1
+        FROM app.judgment_job jj
+        WHERE jj.project_id = pmrs.project_id
+      )
+    ORDER BY pmrs.project_id ASC
+  `)
+}
+
+const publishProjectRefreshAckForJobIds = async ({ackToken, jobIds}: {ackToken: number | null; jobIds: string[]}) => {
+  return jobIds.reduce<Promise<number>>(async (updatedCountPromise, currentJobId) => {
+    const updatedCount = await updatedCountPromise
+
+    await sqliteService.setLastProjectRefreshAckSeq(currentJobId, ackToken)
+
+    return updatedCount + 1
+  }, Promise.resolve(0))
+}
+
+const publishProjectRefreshAckForProject = async ({
+  ackToken,
+  projectId,
+}: {
+  ackToken: number | null
+  projectId: string
+}) => {
+  return publishProjectRefreshAckForJobIds({ackToken, jobIds: await getTrackedJudgmentJobIdsForProject(projectId)})
+}
+
+const reconcileProjectRefreshAcks = async ({projectId}: {projectId?: string} = {}) => {
+  return (await getTrackedProjectRefreshAckStates(projectId)).reduce<Promise<number>>(
+    async (updatedCountPromise, currentState) => {
+      const updatedCount = await updatedCountPromise
+
+      return (
+        updatedCount
+        + (await publishProjectRefreshAckForProject({
+          ackToken: currentState.lastCompletedRefreshToken,
+          projectId: currentState.projectId,
+        }))
+      )
+    },
+    Promise.resolve(0),
+  )
 }
 
 const sqliteCleanupTerminalStatuses = ['completed', 'project_removed'] as const
@@ -2641,6 +2715,12 @@ const sqliteService = {
         )
         .run(nextAckSeq, now, jobId)
     })
+  },
+  publishProjectRefreshAck: async ({ackToken, projectId}: {ackToken: number | null; projectId: string}) => {
+    return publishProjectRefreshAckForProject({ackToken, projectId})
+  },
+  reconcileProjectRefreshAcks: async ({projectId}: {projectId?: string} = {}) => {
+    return reconcileProjectRefreshAcks({projectId})
   },
   setScanState: async (jobId: string, state: JobScanStateUpdate) => {
     return withOwnedJobDatabase(jobId, false, (database) => {

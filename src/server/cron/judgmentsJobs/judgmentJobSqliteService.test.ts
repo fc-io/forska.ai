@@ -870,6 +870,130 @@ test('upgrades legacy job_scan_state ack columns in place without losing row dat
   })
 })
 
+test('publishes a refresh ack token to every tracked sqlite job for the same project', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-project-ack-${Date.now()}`
+  const modelId = `model-project-ack-${Date.now()}`
+  const projectId = `project-project-ack-${Date.now()}`
+  const firstJobId = `job-project-ack-a-${Date.now()}`
+  const secondJobId = `job-project-ack-b-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Project Ack Fanout Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${firstJobId}', '${projectId}', 'running')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${secondJobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(firstJobId)
+  await service.initializeJob(secondJobId)
+
+  expect(await service.publishProjectRefreshAck({ackToken: 17, projectId})).toBe(2)
+  expect((await service.getScanState(firstJobId)).lastProjectRefreshAckSeq).toBe(17)
+  expect((await service.getScanState(secondJobId)).lastProjectRefreshAckSeq).toBe(17)
+})
+
+test('reconciles sqlite refresh ack fanout from ledger state after a partial post-completion crash', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const {getProjectMartRefreshStateService} = await import('../../services/projectMartRefreshStateService.ts')
+  const refreshStateService = getProjectMartRefreshStateService()
+  const service = sqliteService()
+  const connectionId = `connection-project-ack-reconcile-${Date.now()}`
+  const modelId = `model-project-ack-reconcile-${Date.now()}`
+  const projectId = `project-project-ack-reconcile-${Date.now()}`
+  const firstJobId = `job-project-ack-reconcile-a-${Date.now()}`
+  const secondJobId = `job-project-ack-reconcile-b-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Project Ack Reconcile Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${firstJobId}', '${projectId}', 'running')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${secondJobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(firstJobId)
+  await service.initializeJob(secondJobId)
+
+  const [dirtyState] = await refreshStateService.markProjectsDirtyAtomically({projects: [{projectId}]})
+  const [claim] = await refreshStateService.claimDirtyProjects({
+    leaseMs: 1_000,
+    limit: 1,
+    workerId: 'worker-ack-reconcile',
+  })
+
+  expect(claim?.claimedToken).toBe(dirtyState?.dirtyToken)
+
+  await refreshStateService.completeProjectRefresh({
+    completedToken: dirtyState?.dirtyToken ?? 0,
+    projectId,
+    workerId: 'worker-ack-reconcile',
+  })
+
+  const originalSetLastProjectRefreshAckSeq = service.setLastProjectRefreshAckSeq
+  let publishCalls = 0
+  service.setLastProjectRefreshAckSeq = async (jobId: string, ackToken: number | null) => {
+    publishCalls += 1
+
+    if (publishCalls === 2) {
+      throw new Error('sqlite ack publish exploded')
+    }
+
+    return originalSetLastProjectRefreshAckSeq(jobId, ackToken)
+  }
+
+  try {
+    await service.publishProjectRefreshAck({ackToken: dirtyState?.dirtyToken ?? 0, projectId})
+    throw new Error('Expected sqlite ack publish failure')
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error)
+    expect(error instanceof Error ? error.message : '').toBe('sqlite ack publish exploded')
+  } finally {
+    service.setLastProjectRefreshAckSeq = originalSetLastProjectRefreshAckSeq
+  }
+
+  expect((await service.getScanState(firstJobId)).lastProjectRefreshAckSeq).toBe(dirtyState?.dirtyToken ?? 0)
+  expect((await service.getScanState(secondJobId)).lastProjectRefreshAckSeq).toBeNull()
+
+  expect(await service.reconcileProjectRefreshAcks({projectId})).toBe(2)
+  expect((await service.getScanState(firstJobId)).lastProjectRefreshAckSeq).toBe(dirtyState?.dirtyToken ?? 0)
+  expect((await service.getScanState(secondJobId)).lastProjectRefreshAckSeq).toBe(dirtyState?.dirtyToken ?? 0)
+})
+
 test('isolated SQLite preflight upgrades legacy ack columns before readonly validation', async () => {
   if (!sqliteService) {
     throw new Error('Test database not initialized')
@@ -1363,6 +1487,159 @@ test('prunes only visibility-acked exported outbox rows in bounded batches', asy
       return row.status === 'judged'
     })?.count ?? 0,
   ).toBe(1)
+})
+
+test('replayed ack publication unlocks retention pruning for every sqlite job in the project', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const {getProjectMartRefreshStateService} = await import('../../services/projectMartRefreshStateService.ts')
+  const refreshStateService = getProjectMartRefreshStateService()
+  const service = sqliteService()
+  const now = Date.now()
+  const connectionId = `connection-retention-replay-${now}`
+  const modelId = `model-retention-replay-${now}`
+  const projectId = `project-retention-replay-${now}`
+  const firstJobId = `job-retention-replay-a-${now}`
+  const secondJobId = `job-retention-replay-b-${now}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Retention Replay Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${firstJobId}', '${projectId}', 'running')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${secondJobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(firstJobId)
+  await service.initializeJob(secondJobId)
+  await service.addReadyPrompts(
+    firstJobId,
+    [{articleId: `article-retention-replay-a-${now}`, promptId: `prompt-retention-replay-a-${now}`}],
+    'server-a',
+  )
+  await service.addReadyPrompts(
+    secondJobId,
+    [{articleId: `article-retention-replay-b-${now}`, promptId: `prompt-retention-replay-b-${now}`}],
+    'server-a',
+  )
+
+  const [firstClaimedPrompt] = await service.claimReadyPrompts(firstJobId, 'server-a', 1)
+  const [secondClaimedPrompt] = await service.claimReadyPrompts(secondJobId, 'server-a', 1)
+
+  if (!firstClaimedPrompt || !secondClaimedPrompt) {
+    throw new Error('Expected claimed prompts for retention replay test')
+  }
+
+  await service.recordJudgmentSuccess(firstJobId, {
+    answeredOriginal: 'yes',
+    answeredOriginalAsArray: ['yes'],
+    articleId: firstClaimedPrompt.articleId,
+    chunkingStrategy: null,
+    confidenceOriginal: 50,
+    createdAt: new Date(),
+    explanation: 'because',
+    isAnswered: true,
+    judgmentId: `judgment-retention-replay-a-${now}`,
+    modelId,
+    projectId,
+    promptId: firstClaimedPrompt.promptId,
+    queuePromptId: firstClaimedPrompt.recordId,
+    quotes: ['quote'],
+    rawResponseJson: {answer: 'yes'},
+    snapshotProjectId: projectId,
+    snapshotProjectModelName: 'Qwen 35B',
+    updatedAt: new Date(),
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
+  await service.recordJudgmentSuccess(secondJobId, {
+    answeredOriginal: 'yes',
+    answeredOriginalAsArray: ['yes'],
+    articleId: secondClaimedPrompt.articleId,
+    chunkingStrategy: null,
+    confidenceOriginal: 50,
+    createdAt: new Date(),
+    explanation: 'because',
+    isAnswered: true,
+    judgmentId: `judgment-retention-replay-b-${now}`,
+    modelId,
+    projectId,
+    promptId: secondClaimedPrompt.promptId,
+    queuePromptId: secondClaimedPrompt.recordId,
+    quotes: ['quote'],
+    rawResponseJson: {answer: 'yes'},
+    snapshotProjectId: projectId,
+    snapshotProjectModelName: 'Qwen 35B',
+    updatedAt: new Date(),
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
+
+  const firstOutboxBatch = await service.claimPendingOutboxBatch({
+    claimedBy: 'server-a',
+    jobId: firstJobId,
+    maxBytes: 1024 * 1024,
+    maxRows: 10,
+  })
+  const secondOutboxBatch = await service.claimPendingOutboxBatch({
+    claimedBy: 'server-a',
+    jobId: secondJobId,
+    maxBytes: 1024 * 1024,
+    maxRows: 10,
+  })
+
+  await service.completeOutboxClaim({claimId: firstOutboxBatch?.claim.claimId ?? '', jobId: firstJobId})
+  await service.completeOutboxClaim({claimId: secondOutboxBatch?.claim.claimId ?? '', jobId: secondJobId})
+
+  const [dirtyState] = await refreshStateService.markProjectsDirtyAtomically({projects: [{projectId}]})
+  const [refreshClaim] = await refreshStateService.claimDirtyProjects({
+    leaseMs: 1_000,
+    limit: 1,
+    workerId: 'worker-retention-replay',
+  })
+
+  expect(refreshClaim?.claimedToken).toBe(dirtyState?.dirtyToken)
+
+  await refreshStateService.completeProjectRefresh({
+    completedToken: dirtyState?.dirtyToken ?? 0,
+    projectId,
+    workerId: 'worker-retention-replay',
+  })
+  await service.setLastProjectRefreshAckSeq(firstJobId, dirtyState?.dirtyToken ?? 0)
+
+  expect(await service.pruneVisibilityAckedRetention({jobId: firstJobId, maxRows: 10})).toEqual({
+    outboxRowsDeleted: 1,
+    queuePromptRowsDeleted: 1,
+  })
+  expect(await service.pruneVisibilityAckedRetention({jobId: secondJobId, maxRows: 10})).toEqual({
+    outboxRowsDeleted: 0,
+    queuePromptRowsDeleted: 0,
+  })
+
+  expect(await service.reconcileProjectRefreshAcks({projectId})).toBe(2)
+  expect(await service.pruneVisibilityAckedRetention({jobId: secondJobId, maxRows: 10})).toEqual({
+    outboxRowsDeleted: 1,
+    queuePromptRowsDeleted: 1,
+  })
 })
 
 test('keeps skipped and unacked prompt rows during visibility-acked retention cleanup', async () => {

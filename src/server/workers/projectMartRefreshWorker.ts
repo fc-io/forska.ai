@@ -1,6 +1,7 @@
 import {hostname} from 'node:os'
 
 import {sleep} from '../../utils/sleep.ts'
+import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
 import {
   getProjectMartRefreshStateService,
@@ -42,6 +43,10 @@ type ProjectMartRefreshRunnerService = {
 type ProjectMartRefreshWorkerDependencies = {
   refreshService: ProjectMartRefreshRunnerService
   sleep: typeof sleep
+  sqliteService: {
+    publishProjectRefreshAck: (params: {ackToken: number | null; projectId: string}) => Promise<number>
+    reconcileProjectRefreshAcks: (params?: {projectId?: string}) => Promise<number>
+  }
   stateService: ProjectMartRefreshStateWorkerService
 }
 
@@ -64,6 +69,7 @@ const defaultProjectMartRefreshWorkerPollIntervalMs = 2_000
 const defaultProjectMartRefreshWorkerDependencies: ProjectMartRefreshWorkerDependencies = {
   refreshService: getDuckdbMartRefreshService(),
   sleep,
+  sqliteService: getJudgmentJobSqliteService(),
   stateService: getProjectMartRefreshStateService(),
 }
 
@@ -132,6 +138,9 @@ export const runProjectMartRefreshWorkerCycle = async (
   dependencies: ProjectMartRefreshWorkerDependencies = defaultProjectMartRefreshWorkerDependencies,
 ): Promise<ProjectMartRefreshWorkerCycleResult> => {
   const workerId = options.workerId ?? getProjectMartRefreshWorkerId()
+
+  await dependencies.sqliteService.reconcileProjectRefreshAcks()
+
   const claim = await getClaimedProject(dependencies, {...options, workerId})
 
   if (claim === null) {
@@ -139,6 +148,7 @@ export const runProjectMartRefreshWorkerCycle = async (
   }
 
   const stopHeartbeat = startClaimHeartbeat(claim, dependencies, {...options, workerId})
+  let refreshCompleted = false
 
   try {
     const dirtyArticles = await dependencies.stateService.getDirtyArticlesForClaim({
@@ -160,9 +170,18 @@ export const runProjectMartRefreshWorkerCycle = async (
       projectId: claim.projectId,
       workerId,
     })
+    refreshCompleted = true
+    await dependencies.sqliteService.publishProjectRefreshAck({
+      ackToken: claim.claimedToken,
+      projectId: claim.projectId,
+    })
 
     return {claimedToken: claim.claimedToken, projectId: claim.projectId, status: 'completed', workerId}
   } catch (error) {
+    if (refreshCompleted) {
+      throw error
+    }
+
     const errorText = getErrorText(error)
 
     await dependencies.stateService.failProjectRefresh({

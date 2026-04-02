@@ -16,12 +16,15 @@ type ClaimPlan = {
 }
 
 const createWorkerTestContext = (params: {
+  ackPublishShouldThrow?: boolean
   articlesByProject?: Record<string, string[]>
   claims?: ClaimPlan[]
   onRefreshProject?: (projectId: string) => Promise<void>
+  reconciledProjectIds?: string[]
 }) => {
   const callLog: string[] = []
   const claims = [...(params.claims ?? [])]
+  const acknowledgedProjects: Array<{ackToken: number | null; projectId: string}> = []
   const completed: Array<{completedToken: number; projectId: string; workerId: string}> = []
   const failed: Array<{error: string; projectId: string; workerId: string}> = []
   const heartbeatCalls: Array<{leaseMs: number; projectId: string; workerId: string}> = []
@@ -72,9 +75,34 @@ const createWorkerTestContext = (params: {
       return params.onRefreshProject?.(projectId)
     }),
   }
-  const dependencies: ProjectMartRefreshWorkerDependencies = {refreshService, sleep: mock(async () => {}), stateService}
+  const remainingReconciledProjectIds = [...(params.reconciledProjectIds ?? [])]
+  const sqliteService = {
+    publishProjectRefreshAck: mock(async ({ackToken, projectId}: {ackToken: number | null; projectId: string}) => {
+      callLog.push(`ack:${projectId}:${ackToken ?? 'null'}`)
+      acknowledgedProjects.push({ackToken, projectId})
 
-  return {callLog, completed, dependencies, failed, heartbeatCalls}
+      if (params.ackPublishShouldThrow) {
+        throw new Error('sqlite ack publish exploded')
+      }
+
+      return 1
+    }),
+    reconcileProjectRefreshAcks: mock(async ({projectId}: {projectId?: string} = {}) => {
+      callLog.push(`reconcile:${projectId ?? 'all'}`)
+
+      return projectId
+        ? Number(remainingReconciledProjectIds.includes(projectId))
+        : remainingReconciledProjectIds.splice(0, remainingReconciledProjectIds.length).length
+    }),
+  }
+  const dependencies: ProjectMartRefreshWorkerDependencies = {
+    refreshService,
+    sleep: mock(async () => {}),
+    sqliteService,
+    stateService,
+  }
+
+  return {acknowledgedProjects, callLog, completed, dependencies, failed, heartbeatCalls}
 }
 
 beforeEach(() => {
@@ -104,8 +132,10 @@ test('claims at most one project per cycle', async () => {
   const result = await runProjectMartRefreshWorkerCycle({leaseMs: 2_000, workerId: 'worker-1'}, context.dependencies)
 
   expect(result).toEqual({claimedToken: 3, projectId: 'project-1', status: 'completed', workerId: 'worker-1'})
-  expect(context.callLog[0]).toBe('claim:worker-1:1:2000')
+  expect(context.callLog[0]).toBe('reconcile:all')
+  expect(context.callLog[1]).toBe('claim:worker-1:1:2000')
   expect(context.completed).toEqual([{completedToken: 3, projectId: 'project-1', workerId: 'worker-1'}])
+  expect(context.acknowledgedProjects).toEqual([{ackToken: 3, projectId: 'project-1'}])
 })
 
 test('refreshes judgment facts before the project rebuild', async () => {
@@ -125,12 +155,14 @@ test('refreshes judgment facts before the project rebuild', async () => {
   await runProjectMartRefreshWorkerCycle({workerId: 'worker-1'}, context.dependencies)
 
   expect(context.callLog).toEqual([
+    'reconcile:all',
     'claim:worker-1:1:30000',
     'load:project-1',
     'judgment:article-2',
     'judgment:article-1',
     'project:project-1',
     'complete:project-1:2',
+    'ack:project-1:2',
   ])
 })
 
@@ -162,6 +194,7 @@ test('records failures when a claimed refresh errors', async () => {
   })
   expect(context.failed).toEqual([{error: 'project refresh exploded', projectId: 'project-1', workerId: 'worker-1'}])
   expect(context.completed).toEqual([])
+  expect(context.acknowledgedProjects).toEqual([])
 })
 
 test('can process work reclaimed after an expired lease', async () => {
@@ -182,11 +215,13 @@ test('can process work reclaimed after an expired lease', async () => {
 
   expect(result).toEqual({claimedToken: 4, projectId: 'project-1', status: 'completed', workerId: 'worker-2'})
   expect(context.callLog).toEqual([
+    'reconcile:all',
     'claim:worker-2:1:5000',
     'load:project-1',
     'judgment:article-1',
     'project:project-1',
     'complete:project-1:4',
+    'ack:project-1:4',
   ])
 })
 
@@ -196,5 +231,40 @@ test('returns idle when nothing is claimable', async () => {
   const result = await runProjectMartRefreshWorkerCycle({workerId: 'worker-1'}, context.dependencies)
 
   expect(result).toEqual({projectId: null, status: 'idle', workerId: 'worker-1'})
-  expect(context.callLog).toEqual(['claim:worker-1:1:30000'])
+  expect(context.callLog).toEqual(['reconcile:all', 'claim:worker-1:1:30000'])
+})
+
+test('replays sqlite ack publication after a post-completion crash without rerunning refresh work', async () => {
+  const crashContext = createWorkerTestContext({
+    ackPublishShouldThrow: true,
+    articlesByProject: {'project-1': ['article-1']},
+    claims: [
+      {
+        claimedToken: 8,
+        lastCompletedToken: 7,
+        leaseExpiresAt: new Date('2026-04-02T13:40:30.000Z'),
+        projectId: 'project-1',
+        workerId: 'worker-1',
+      },
+    ],
+  })
+
+  try {
+    await runProjectMartRefreshWorkerCycle({workerId: 'worker-1'}, crashContext.dependencies)
+    throw new Error('Expected sqlite ack publish failure')
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error)
+    expect(error instanceof Error ? error.message : '').toBe('sqlite ack publish exploded')
+  }
+  expect(crashContext.completed).toEqual([{completedToken: 8, projectId: 'project-1', workerId: 'worker-1'}])
+  expect(crashContext.failed).toEqual([])
+
+  const reconcileContext = createWorkerTestContext({reconciledProjectIds: ['project-1']})
+
+  const result = await runProjectMartRefreshWorkerCycle({workerId: 'worker-1'}, reconcileContext.dependencies)
+
+  expect(result).toEqual({projectId: null, status: 'idle', workerId: 'worker-1'})
+  expect(reconcileContext.callLog).toEqual(['reconcile:all', 'claim:worker-1:1:30000'])
+  expect(reconcileContext.completed).toEqual([])
+  expect(reconcileContext.failed).toEqual([])
 })
