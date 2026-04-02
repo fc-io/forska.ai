@@ -327,6 +327,15 @@ export type ProjectMartRefreshStateRecord = {
   updatedAt: Date
 }
 
+export type ProjectMartRefreshArticleStateRecord = {
+  projectId: string
+  articleId: string
+  firstDirtyToken: number
+  lastDirtyToken: number
+  createdAt: Date
+  updatedAt: Date
+}
+
 export type TokenUseRecord = {
   id: string
   createdAt: Date
