@@ -366,6 +366,8 @@ Requirement:
 - any change affecting project scope, enabled prompts, model linkage, or review-serving semantics marks the affected projects dirty
 - prompt routes that merge prompts, invalidate judgments, or otherwise rewrite/delete `app.judgment` or `app.judgment_human` must also merge the affected article IDs into the unresolved article accumulator for all affected projects
 - do not treat these routes as “project dirty only” mutations when they change judgment-bearing articles; they must feed article-level fact refresh input as well
+- dirty marking should happen in the same outer transaction as the stale-causing mutation where feasible
+- if that transaction coupling is not feasible for a given mutation path, use a durable outbox/reconciliation record written in the same transaction as the mutation
 
 ### Import pipeline / article membership changes
 Files to inspect/update:
@@ -373,9 +375,12 @@ Files to inspect/update:
 - `src/server/services/insertArticlesIntoProject.ts`
 - `src/server/routes/ProjectArticlesRoutes.ts`
 - import routes / datasource import completion hooks
+- `src/server/routes/DataSourcesImportRoutes/*.ts`
 
 Requirement:
 - any change that alters which articles belong to a project marks the affected projects dirty
+- dirty marking should happen in the same outer transaction as the stale-causing membership/scope mutation where feasible
+- if that transaction coupling is not feasible, use a durable outbox/reconciliation record written in the same transaction as the membership/scope mutation
 
 ### Warnings/progress data migration surface
 Files to inspect/update:
@@ -414,6 +419,8 @@ Requirement:
 - `getDirtyArticlesForClaim({projectId, lastCompletedToken, claimedToken})`
 - `completeProjectRefresh({projectId, workerId, completedToken})`
   - must also clear/trim resolved article dirtiness up to `completedToken`
+- `publishProjectRefreshAck({projectId, completedToken})`
+  - updates the replacement SQLite/job ack state only after the dirty token is fully satisfied
 - `failProjectRefresh({projectId, workerId, error})`
 - `getProjectRefreshState(projectId)`
 - `listDirtyProjects()`
@@ -438,6 +445,7 @@ Important constraints:
 7. on success:
    - set `last_completed_refresh_token = claimed_token`
    - clear/trim resolved article dirtiness through `claimed_token`
+   - publish replacement SQLite/job refresh ack for the satisfied token where relevant
    - set status idle / complete timestamps
 8. on failure:
    - record error and backoff
@@ -492,7 +500,7 @@ After the worker is stable and correctness is proven:
 
 ---
 
-## SQLite Import Architecture Follow-up
+### SQLite Import Architecture Follow-up
 
 The current Bun/macOS stability work already reduced risk, but long-term architecture should also isolate import execution.
 
@@ -507,9 +515,23 @@ Long-term preferred shape:
 - mark affected projects dirty
 - let the mart refresh worker handle the rebuild
 
+Important prompt-queue / SQLite ack decision:
+- keep a replacement ack mechanism rather than removing it in phase 1
+- specifically, after a project’s claimed dirty token is fully satisfied, the refresh worker should publish a replacement ack back into SQLite job state for any affected judgment job(s)
+- this preserves existing prompt-queue semantics around refresh visibility and avoids forcing all prompt queue correctness onto raw fallback immediately
+
+Recommended shape:
+- replace or reinterpret `job_scan_state.last_project_refresh_ack_seq` as a worker-published refresh acknowledgement tied to the new ledger token model
+- the worker should update that ack only after:
+  1. unresolved article judgment-fact refresh succeeds
+  2. project refresh succeeds
+  3. the claimed dirty token is marked completed
+- long-term, this ack may become a token/epoch rather than a queue-seq concept, but the behavior should be preserved during migration
+
 This cleanly separates:
 - import correctness
 - review-serving freshness
+- prompt-queue refresh visibility
 - worker orchestration
 
 ---
@@ -622,6 +644,8 @@ Step 1: Write failing tests that assert dirty-project marking occurs after:
 - direct LLM judgments
 - human assessments
 - article membership changes
+- subproject creation / project clone / scope-copy paths
+- datasource/import-scope changes
 - prompt merges / invalid-judgment flows that rewrite or delete judgments
 - prompt/project config changes
 
@@ -706,6 +730,7 @@ Step 1: Write failing tests for:
 - stale/running project => warnings endpoint reflects progress state
 - strict count endpoints use raw fallback or bypass stale marts
 - prompt queue generation paths do not silently trust stale marts
+- replacement SQLite/job refresh ack updates only after worker completion of the satisfied dirty token
 - review detail route does not silently trust stale `mart.review_article_serving_detail`
 - unassessed count cache invalidates when project/job becomes dirty
 
