@@ -21,266 +21,569 @@ const getLastJsonLine = (stdout: string) => {
   return lines.at(-1) ?? ''
 }
 
-test('project mart refresh state migrations create typed bounded refresh schemas', () => {
-  const duckdbPath = `/tmp/f1-project-mart-refresh-state-${Date.now()}.duckdb`
-  const runScript = globalThis.Bun.spawnSync(
-    [
-      'bun',
-      '-e',
-      `
-        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
-        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+const getRefreshStateScript = (body: string) => {
+  return `
+    const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+    const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
 
-        await migrateDuckdb()
+    await migrateDuckdb()
 
-        const database = getAppDatabaseService()
+    const database = getAppDatabaseService()
 
-        await database.run(\`
-          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
-          VALUES ('refresh-state-connection', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
-        \`)
-        await database.run(\`
-          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
-          VALUES ('refresh-state-model', 'refresh-state-connection', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
-        \`)
-        await database.run(\`
-          INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
-          VALUES ('refresh-state-project', 'Refresh State Project', 'refresh-state-model', TRUE, TRUE, FALSE, FALSE)
-        \`)
-        await database.run(\`
-          INSERT INTO app.article (id, article_title)
-          VALUES ('refresh-state-article', 'Refresh State Article')
-        \`)
-        await database.run(\`
-          INSERT INTO app.project_mart_refresh_state (
-            project_id,
-            dirty_token,
-            active_refresh_token,
-            last_completed_refresh_token,
-            last_request_reason,
-            requested_by,
-            refresh_status,
-            last_started_at,
-            last_completed_at,
-            last_failed_at,
-            last_error,
-            worker_id,
-            lease_expires_at
-          ) VALUES (
-            'refresh-state-project',
-            7,
-            7,
-            5,
-            'judgment-import',
-            'worker-test',
-            'running',
-            TIMESTAMPTZ '2026-04-02 10:00:00+00',
-            TIMESTAMPTZ '2026-04-02 10:01:00+00',
-            TIMESTAMPTZ '2026-04-02 10:02:00+00',
-            'transient error',
-            'worker-1',
-            TIMESTAMPTZ '2026-04-02 10:05:00+00'
-          )
-        \`)
-        await database.run(\`
-          INSERT INTO app.project_mart_refresh_article_state (
-            project_id,
-            article_id,
-            first_dirty_token,
-            last_dirty_token
-          ) VALUES (
-            'refresh-state-project',
-            'refresh-state-article',
-            5,
-            7
-          )
-        \`)
-        await database.run(\`
-          UPDATE app.project_mart_refresh_article_state
-          SET
-            first_dirty_token = LEAST(first_dirty_token, 3),
-            last_dirty_token = GREATEST(last_dirty_token, 11),
-            updated_at = TIMESTAMPTZ '2026-04-02 10:06:00+00'
-          WHERE project_id = 'refresh-state-project'
-            AND article_id = 'refresh-state-article'
-        \`)
+    await database.run(\`
+      INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+      VALUES ('refresh-state-connection', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+    \`)
+    await database.run(\`
+      INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+      VALUES ('refresh-state-model', 'refresh-state-connection', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+    \`)
+    await database.run(\`
+      INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+      VALUES
+        ('refresh-project-1', 'Refresh Project 1', 'refresh-state-model', TRUE, TRUE, FALSE, FALSE),
+        ('refresh-project-2', 'Refresh Project 2', 'refresh-state-model', TRUE, TRUE, FALSE, FALSE)
+    \`)
+    await database.run(\`
+      INSERT INTO app.article (id, article_title)
+      VALUES
+        ('refresh-article-1', 'Refresh Article 1'),
+        ('refresh-article-2', 'Refresh Article 2')
+    \`)
 
-        const refreshStateColumns = await database.queryJson(\`
-          SELECT column_name AS columnName
-          FROM information_schema.columns
-          WHERE table_schema = 'app'
-            AND table_name = 'project_mart_refresh_state'
-          ORDER BY ordinal_position
-        \`)
-        const refreshStateIndexes = await database.queryJson(\`
-          SELECT index_name AS indexName
-          FROM duckdb_indexes()
-          WHERE schema_name = 'app'
-            AND table_name = 'project_mart_refresh_state'
-          ORDER BY index_name
-        \`)
-        const [row] = await database.queryJson(\`
-          SELECT
-            project_id AS projectId,
-            CAST(dirty_token AS INTEGER) AS dirtyToken,
-            CAST(active_refresh_token AS INTEGER) AS activeRefreshToken,
-            CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
-            last_requested_at AS lastRequestedAt,
-            last_request_reason AS lastRequestReason,
-            requested_by AS requestedBy,
-            refresh_status AS refreshStatus,
-            last_started_at AS lastStartedAt,
-            last_completed_at AS lastCompletedAt,
-            last_failed_at AS lastFailedAt,
-            last_error AS lastError,
-            worker_id AS workerId,
-            lease_expires_at AS leaseExpiresAt,
-            created_at AS createdAt,
-            updated_at AS updatedAt
-          FROM app.project_mart_refresh_state
-          WHERE project_id = 'refresh-state-project'
-          LIMIT 1
-        \`)
-        const articleStateColumns = await database.queryJson(\`
-          SELECT column_name AS columnName
-          FROM information_schema.columns
-          WHERE table_schema = 'app'
-            AND table_name = 'project_mart_refresh_article_state'
-          ORDER BY ordinal_position
-        \`)
-        const articleStateIndexes = await database.queryJson(\`
-          SELECT index_name AS indexName
-          FROM duckdb_indexes()
-          WHERE schema_name = 'app'
-            AND table_name = 'project_mart_refresh_article_state'
-          ORDER BY index_name
-        \`)
-        const [articleRow] = await database.queryJson(\`
-          SELECT
-            project_id AS projectId,
-            article_id AS articleId,
-            CAST(first_dirty_token AS INTEGER) AS firstDirtyToken,
-            CAST(last_dirty_token AS INTEGER) AS lastDirtyToken,
-            created_at AS createdAt,
-            updated_at AS updatedAt
-          FROM app.project_mart_refresh_article_state
-          WHERE project_id = 'refresh-state-project'
-            AND article_id = 'refresh-state-article'
-          LIMIT 1
-        \`)
-        const [articleStateCount] = await database.queryJson(\`
-          SELECT CAST(COUNT(*) AS INTEGER) AS rowCount
-          FROM app.project_mart_refresh_article_state
-          WHERE project_id = 'refresh-state-project'
-            AND article_id = 'refresh-state-article'
-        \`)
+    ${body}
+  `
+}
 
-        console.log(
-          JSON.stringify({
-            refreshStateColumns,
-            refreshStateIndexes,
-            row,
-            articleStateColumns,
-            articleStateIndexes,
-            articleRow,
-            articleStateCount,
-          }),
-        )
-        await database.close()
-      `,
-    ],
-    {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        API_SERVER_PORT: '3001',
-        DUCKDB_PATH: duckdbPath,
-        SERVER_ROLE: 'dev-single',
-        VITE_PORT: '3000',
-      },
+const runRefreshStateScript = <T>(body: string) => {
+  const duckdbPath = `/tmp/f1-project-mart-refresh-state-${Date.now()}-${Math.random().toString(16).slice(2)}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(['bun', '-e', getRefreshStateScript(body)], {
+    cwd: process.cwd(),
+    env: {
+      ...process.env,
+      API_SERVER_PORT: '3001',
+      DUCKDB_PATH: duckdbPath,
+      SERVER_ROLE: 'dev-single',
+      VITE_PORT: '3000',
     },
-  )
+  })
 
   try {
     if (runScript.exitCode !== 0) {
-      throw new Error(
-        runScript.stderr.toString() || runScript.stdout.toString() || 'Refresh state migration test failed',
-      )
+      throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'Refresh state test failed')
     }
 
-    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
-      refreshStateColumns: Array<{columnName: string}>
-      refreshStateIndexes: Array<{indexName: string}>
-      row: ProjectMartRefreshStateRecord
-      articleStateColumns: Array<{columnName: string}>
-      articleStateIndexes: Array<{indexName: string}>
-      articleRow: ProjectMartRefreshArticleStateRecord
-      articleStateCount: {rowCount: number}
-    }
-
-    expect(
-      result.refreshStateColumns.map((column) => {
-        return column.columnName
-      }),
-    ).toEqual([
-      'project_id',
-      'dirty_token',
-      'active_refresh_token',
-      'last_completed_refresh_token',
-      'last_requested_at',
-      'last_request_reason',
-      'requested_by',
-      'refresh_status',
-      'last_started_at',
-      'last_completed_at',
-      'last_failed_at',
-      'last_error',
-      'worker_id',
-      'lease_expires_at',
-      'created_at',
-      'updated_at',
-    ])
-    expect(
-      result.refreshStateIndexes.map((index) => {
-        return index.indexName
-      }),
-    ).toEqual(['idx_app_project_mart_refresh_state_claim', 'idx_app_project_mart_refresh_state_stale_work'])
-    expect(result.row.projectId).toBe('refresh-state-project')
-    expect(result.row.dirtyToken).toBe(7)
-    expect(result.row.activeRefreshToken).toBe(7)
-    expect(result.row.lastCompletedRefreshToken).toBe(5)
-    expect(result.row.lastRequestReason).toBe('judgment-import')
-    expect(result.row.requestedBy).toBe('worker-test')
-    expect(result.row.refreshStatus).toBe('running')
-    expect(result.row.lastError).toBe('transient error')
-    expect(result.row.workerId).toBe('worker-1')
-    expect(result.row.lastRequestedAt).toBeTruthy()
-    expect(result.row.lastStartedAt).toBeTruthy()
-    expect(result.row.lastCompletedAt).toBeTruthy()
-    expect(result.row.lastFailedAt).toBeTruthy()
-    expect(result.row.leaseExpiresAt).toBeTruthy()
-    expect(result.row.createdAt).toBeTruthy()
-    expect(result.row.updatedAt).toBeTruthy()
-    expect(
-      result.articleStateColumns.map((column) => {
-        return column.columnName
-      }),
-    ).toEqual(['project_id', 'article_id', 'first_dirty_token', 'last_dirty_token', 'created_at', 'updated_at'])
-    expect(
-      result.articleStateIndexes.map((index) => {
-        return index.indexName
-      }),
-    ).toEqual(['idx_app_project_mart_refresh_article_state_dirty_range'])
-    expect(result.articleStateCount.rowCount).toBe(1)
-    expect(result.articleRow.projectId).toBe('refresh-state-project')
-    expect(result.articleRow.articleId).toBe('refresh-state-article')
-    expect(result.articleRow.firstDirtyToken).toBe(3)
-    expect(result.articleRow.lastDirtyToken).toBe(11)
-    expect(result.articleRow.createdAt).toBeTruthy()
-    expect(result.articleRow.updatedAt).toBeTruthy()
+    return JSON.parse(getLastJsonLine(runScript.stdout.toString())) as T
   } finally {
     removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
     removeFileIfExists(`${duckdbPath}.writer.lock`)
     removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.tmp`)
+    removeFileIfExists(`${duckdbPath}.tmp/`)
+    removeFileIfExists('/tmp/duckdb-temp')
   }
+}
+
+test('project mart refresh state migrations create typed bounded refresh schemas', () => {
+  const result = runRefreshStateScript<{
+    articleRow: ProjectMartRefreshArticleStateRecord
+    articleStateColumns: Array<{columnName: string}>
+    articleStateCount: {rowCount: number}
+    articleStateIndexes: Array<{indexName: string}>
+    refreshStateColumns: Array<{columnName: string}>
+    refreshStateIndexes: Array<{indexName: string}>
+    row: ProjectMartRefreshStateRecord
+  }>(`
+    await database.run(\`
+      INSERT INTO app.project_mart_refresh_state (
+        project_id,
+        dirty_token,
+        active_refresh_token,
+        last_completed_refresh_token,
+        last_request_reason,
+        requested_by,
+        refresh_status,
+        last_started_at,
+        last_completed_at,
+        last_failed_at,
+        last_error,
+        worker_id,
+        lease_expires_at
+      ) VALUES (
+        'refresh-project-1',
+        7,
+        7,
+        5,
+        'judgment-import',
+        'worker-test',
+        'running',
+        TIMESTAMPTZ '2026-04-02 10:00:00+00',
+        TIMESTAMPTZ '2026-04-02 10:01:00+00',
+        TIMESTAMPTZ '2026-04-02 10:02:00+00',
+        'transient error',
+        'worker-1',
+        TIMESTAMPTZ '2026-04-02 10:05:00+00'
+      )
+    \`)
+    await database.run(\`
+      INSERT INTO app.project_mart_refresh_article_state (
+        project_id,
+        article_id,
+        first_dirty_token,
+        last_dirty_token
+      ) VALUES (
+        'refresh-project-1',
+        'refresh-article-1',
+        5,
+        7
+      )
+    \`)
+    await database.run(\`
+      UPDATE app.project_mart_refresh_article_state
+      SET
+        first_dirty_token = LEAST(first_dirty_token, 3),
+        last_dirty_token = GREATEST(last_dirty_token, 11),
+        updated_at = TIMESTAMPTZ '2026-04-02 10:06:00+00'
+      WHERE project_id = 'refresh-project-1'
+        AND article_id = 'refresh-article-1'
+    \`)
+
+    const refreshStateColumns = await database.queryJson(\`
+      SELECT column_name AS columnName
+      FROM information_schema.columns
+      WHERE table_schema = 'app'
+        AND table_name = 'project_mart_refresh_state'
+      ORDER BY ordinal_position
+    \`)
+    const refreshStateIndexes = await database.queryJson(\`
+      SELECT index_name AS indexName
+      FROM duckdb_indexes()
+      WHERE schema_name = 'app'
+        AND table_name = 'project_mart_refresh_state'
+      ORDER BY index_name
+    \`)
+    const [row] = await database.queryJson(\`
+      SELECT
+        project_id AS projectId,
+        CAST(dirty_token AS INTEGER) AS dirtyToken,
+        CAST(active_refresh_token AS INTEGER) AS activeRefreshToken,
+        CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+        last_requested_at AS lastRequestedAt,
+        last_request_reason AS lastRequestReason,
+        requested_by AS requestedBy,
+        refresh_status AS refreshStatus,
+        last_started_at AS lastStartedAt,
+        last_completed_at AS lastCompletedAt,
+        last_failed_at AS lastFailedAt,
+        last_error AS lastError,
+        worker_id AS workerId,
+        lease_expires_at AS leaseExpiresAt,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+      FROM app.project_mart_refresh_state
+      WHERE project_id = 'refresh-project-1'
+      LIMIT 1
+    \`)
+    const articleStateColumns = await database.queryJson(\`
+      SELECT column_name AS columnName
+      FROM information_schema.columns
+      WHERE table_schema = 'app'
+        AND table_name = 'project_mart_refresh_article_state'
+      ORDER BY ordinal_position
+    \`)
+    const articleStateIndexes = await database.queryJson(\`
+      SELECT index_name AS indexName
+      FROM duckdb_indexes()
+      WHERE schema_name = 'app'
+        AND table_name = 'project_mart_refresh_article_state'
+      ORDER BY index_name
+    \`)
+    const [articleRow] = await database.queryJson(\`
+      SELECT
+        project_id AS projectId,
+        article_id AS articleId,
+        CAST(first_dirty_token AS INTEGER) AS firstDirtyToken,
+        CAST(last_dirty_token AS INTEGER) AS lastDirtyToken,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+      FROM app.project_mart_refresh_article_state
+      WHERE project_id = 'refresh-project-1'
+        AND article_id = 'refresh-article-1'
+      LIMIT 1
+    \`)
+    const [articleStateCount] = await database.queryJson(\`
+      SELECT CAST(COUNT(*) AS INTEGER) AS rowCount
+      FROM app.project_mart_refresh_article_state
+      WHERE project_id = 'refresh-project-1'
+        AND article_id = 'refresh-article-1'
+    \`)
+
+    console.log(JSON.stringify({
+      articleRow,
+      articleStateColumns,
+      articleStateCount,
+      articleStateIndexes,
+      refreshStateColumns,
+      refreshStateIndexes,
+      row,
+    }))
+    await database.close()
+  `)
+
+  expect(
+    result.refreshStateColumns.map((column) => {
+      return column.columnName
+    }),
+  ).toEqual([
+    'project_id',
+    'dirty_token',
+    'active_refresh_token',
+    'last_completed_refresh_token',
+    'last_requested_at',
+    'last_request_reason',
+    'requested_by',
+    'refresh_status',
+    'last_started_at',
+    'last_completed_at',
+    'last_failed_at',
+    'last_error',
+    'worker_id',
+    'lease_expires_at',
+    'created_at',
+    'updated_at',
+  ])
+  expect(
+    result.refreshStateIndexes.map((index) => {
+      return index.indexName
+    }),
+  ).toEqual(['idx_app_project_mart_refresh_state_claim', 'idx_app_project_mart_refresh_state_stale_work'])
+  expect(result.row.projectId).toBe('refresh-project-1')
+  expect(result.row.dirtyToken).toBe(7)
+  expect(result.row.activeRefreshToken).toBe(7)
+  expect(result.row.lastCompletedRefreshToken).toBe(5)
+  expect(result.row.lastRequestReason).toBe('judgment-import')
+  expect(result.row.requestedBy).toBe('worker-test')
+  expect(result.row.refreshStatus).toBe('running')
+  expect(result.row.lastError).toBe('transient error')
+  expect(result.row.workerId).toBe('worker-1')
+  expect(result.row.lastRequestedAt).toBeTruthy()
+  expect(result.row.lastStartedAt).toBeTruthy()
+  expect(result.row.lastCompletedAt).toBeTruthy()
+  expect(result.row.lastFailedAt).toBeTruthy()
+  expect(result.row.leaseExpiresAt).toBeTruthy()
+  expect(result.row.createdAt).toBeTruthy()
+  expect(result.row.updatedAt).toBeTruthy()
+  expect(
+    result.articleStateColumns.map((column) => {
+      return column.columnName
+    }),
+  ).toEqual(['project_id', 'article_id', 'first_dirty_token', 'last_dirty_token', 'created_at', 'updated_at'])
+  expect(
+    result.articleStateIndexes.map((index) => {
+      return index.indexName
+    }),
+  ).toEqual(['idx_app_project_mart_refresh_article_state_dirty_range'])
+  expect(result.articleStateCount.rowCount).toBe(1)
+  expect(result.articleRow.projectId).toBe('refresh-project-1')
+  expect(result.articleRow.articleId).toBe('refresh-article-1')
+  expect(result.articleRow.firstDirtyToken).toBe(3)
+  expect(result.articleRow.lastDirtyToken).toBe(11)
+  expect(result.articleRow.createdAt).toBeTruthy()
+  expect(result.articleRow.updatedAt).toBeTruthy()
+})
+
+test('markProjectsDirtyAtomically bumps tokens once per project and merges unresolved article state', () => {
+  const result = runRefreshStateScript<{
+    articleRows: ProjectMartRefreshArticleStateRecord[]
+    marks: Array<{dirtyToken: number; projectId: string}>
+    secondMarks: Array<{dirtyToken: number; projectId: string}>
+    stateRows: ProjectMartRefreshStateRecord[]
+    unresolvedArticles: Array<{articleId: string}>
+  }>(`
+    const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
+
+    const service = getProjectMartRefreshStateService()
+    const marks = await service.markProjectsDirtyAtomically({
+      projects: [
+        {projectId: 'refresh-project-1', articleIds: ['refresh-article-1', 'refresh-article-1']},
+        {projectId: 'refresh-project-1', articleIds: ['refresh-article-2']},
+        {projectId: 'refresh-project-2', articleIds: ['refresh-article-1']},
+      ],
+      reason: 'judgment-import',
+      requestedBy: 'import-worker',
+      now: new Date('2026-04-02T10:00:00.000Z'),
+    })
+    const secondMarks = await service.markProjectsDirtyAtomically({
+      projects: [{projectId: 'refresh-project-1', articleIds: ['refresh-article-1']}],
+      reason: 'judgment-import',
+      requestedBy: 'import-worker',
+      now: new Date('2026-04-02T10:01:00.000Z'),
+    })
+    const stateRows = await database.queryJson(\`
+      SELECT
+        project_id AS projectId,
+        CAST(dirty_token AS INTEGER) AS dirtyToken,
+        CAST(active_refresh_token AS INTEGER) AS activeRefreshToken,
+        CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+        last_requested_at AS lastRequestedAt,
+        last_request_reason AS lastRequestReason,
+        requested_by AS requestedBy,
+        refresh_status AS refreshStatus,
+        last_started_at AS lastStartedAt,
+        last_completed_at AS lastCompletedAt,
+        last_failed_at AS lastFailedAt,
+        last_error AS lastError,
+        worker_id AS workerId,
+        lease_expires_at AS leaseExpiresAt,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+      FROM app.project_mart_refresh_state
+      ORDER BY project_id ASC
+    \`)
+    const articleRows = await database.queryJson(\`
+      SELECT
+        project_id AS projectId,
+        article_id AS articleId,
+        CAST(first_dirty_token AS INTEGER) AS firstDirtyToken,
+        CAST(last_dirty_token AS INTEGER) AS lastDirtyToken,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+      FROM app.project_mart_refresh_article_state
+      ORDER BY project_id ASC, article_id ASC
+    \`)
+    const unresolvedArticles = await service.getDirtyArticlesForClaim({
+      projectId: 'refresh-project-1',
+      lastCompletedToken: 0,
+      claimedToken: 2,
+    })
+
+    console.log(JSON.stringify({articleRows, marks, secondMarks, stateRows, unresolvedArticles}))
+    await database.close()
+  `)
+
+  expect(result.marks).toEqual([
+    {dirtyToken: 1, projectId: 'refresh-project-1'},
+    {dirtyToken: 1, projectId: 'refresh-project-2'},
+  ])
+  expect(result.secondMarks).toEqual([{dirtyToken: 2, projectId: 'refresh-project-1'}])
+  expect(
+    result.stateRows.map((row) => {
+      return {dirtyToken: row.dirtyToken, projectId: row.projectId}
+    }),
+  ).toEqual([
+    {dirtyToken: 2, projectId: 'refresh-project-1'},
+    {dirtyToken: 1, projectId: 'refresh-project-2'},
+  ])
+  expect(
+    result.articleRows.map((row) => {
+      return {
+        articleId: row.articleId,
+        firstDirtyToken: row.firstDirtyToken,
+        lastDirtyToken: row.lastDirtyToken,
+        projectId: row.projectId,
+      }
+    }),
+  ).toEqual([
+    {articleId: 'refresh-article-1', firstDirtyToken: 1, lastDirtyToken: 2, projectId: 'refresh-project-1'},
+    {articleId: 'refresh-article-2', firstDirtyToken: 1, lastDirtyToken: 1, projectId: 'refresh-project-1'},
+    {articleId: 'refresh-article-1', firstDirtyToken: 1, lastDirtyToken: 1, projectId: 'refresh-project-2'},
+  ])
+  expect(result.unresolvedArticles).toEqual([{articleId: 'refresh-article-1'}, {articleId: 'refresh-article-2'}])
+})
+
+test('claimDirtyProjects supports heartbeat extension and lease expiry recovery', () => {
+  const result = runRefreshStateScript<{
+    firstClaim: Array<{
+      claimedToken: number
+      lastCompletedToken: number
+      leaseExpiresAt: string
+      projectId: string
+      workerId: string
+    }>
+    heartbeat: {
+      claimedToken: number
+      lastCompletedToken: number
+      leaseExpiresAt: string
+      projectId: string
+      workerId: string
+    } | null
+    reclaimed: Array<{
+      claimedToken: number
+      lastCompletedToken: number
+      leaseExpiresAt: string
+      projectId: string
+      workerId: string
+    }>
+    skippedWhileLeaseValid: Array<{
+      claimedToken: number
+      lastCompletedToken: number
+      leaseExpiresAt: string
+      projectId: string
+      workerId: string
+    }>
+  }>(`
+    const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
+
+    const service = getProjectMartRefreshStateService()
+    await service.markProjectsDirtyAtomically({
+      projects: [{projectId: 'refresh-project-1', articleIds: ['refresh-article-1']}],
+      reason: 'project-update',
+      requestedBy: 'route-test',
+      now: new Date('2026-04-02T11:00:00.000Z'),
+    })
+
+    const firstClaim = await service.claimDirtyProjects({
+      workerId: 'worker-1',
+      limit: 1,
+      leaseMs: 1000,
+      now: new Date('2026-04-02T11:00:00.000Z'),
+    })
+    const heartbeat = await service.heartbeatClaim({
+      projectId: 'refresh-project-1',
+      workerId: 'worker-1',
+      leaseMs: 2000,
+      now: new Date('2026-04-02T11:00:00.500Z'),
+    })
+    const skippedWhileLeaseValid = await service.claimDirtyProjects({
+      workerId: 'worker-2',
+      limit: 1,
+      leaseMs: 1000,
+      now: new Date('2026-04-02T11:00:01.500Z'),
+    })
+    const reclaimed = await service.claimDirtyProjects({
+      workerId: 'worker-2',
+      limit: 1,
+      leaseMs: 1000,
+      now: new Date('2026-04-02T11:00:02.600Z'),
+    })
+
+    console.log(JSON.stringify({firstClaim, heartbeat, reclaimed, skippedWhileLeaseValid}))
+    await database.close()
+  `)
+
+  expect(result.firstClaim).toHaveLength(1)
+  expect(result.firstClaim[0]).toMatchObject({
+    claimedToken: 1,
+    lastCompletedToken: 0,
+    projectId: 'refresh-project-1',
+    workerId: 'worker-1',
+  })
+  expect(result.heartbeat).toMatchObject({
+    claimedToken: 1,
+    lastCompletedToken: 0,
+    projectId: 'refresh-project-1',
+    workerId: 'worker-1',
+  })
+  expect(new Date(result.heartbeat?.leaseExpiresAt ?? '').toISOString()).toBe('2026-04-02T11:00:02.500Z')
+  expect(result.skippedWhileLeaseValid).toEqual([])
+  expect(result.reclaimed).toHaveLength(1)
+  expect(result.reclaimed[0]).toMatchObject({
+    claimedToken: 1,
+    lastCompletedToken: 0,
+    projectId: 'refresh-project-1',
+    workerId: 'worker-2',
+  })
+})
+
+test('completeProjectRefresh trims resolved article state and failProjectRefresh records failures', () => {
+  const result = runRefreshStateScript<{
+    completedState: ProjectMartRefreshStateRecord | null
+    failedState: ProjectMartRefreshStateRecord | null
+    remainingArticlesAfterComplete: ProjectMartRefreshArticleStateRecord[]
+    unresolvedAfterComplete: Array<{articleId: string}>
+  }>(`
+    const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
+
+    const service = getProjectMartRefreshStateService()
+    await service.markProjectsDirtyAtomically({
+      projects: [{projectId: 'refresh-project-1', articleIds: ['refresh-article-1']}],
+      reason: 'project-update',
+      requestedBy: 'route-test',
+      now: new Date('2026-04-02T12:00:00.000Z'),
+    })
+
+    const [firstClaim] = await service.claimDirtyProjects({
+      workerId: 'worker-1',
+      limit: 1,
+      leaseMs: 5000,
+      now: new Date('2026-04-02T12:00:01.000Z'),
+    })
+
+    await service.markProjectsDirtyAtomically({
+      projects: [{projectId: 'refresh-project-1', articleIds: ['refresh-article-1', 'refresh-article-2']}],
+      reason: 'project-update',
+      requestedBy: 'route-test',
+      now: new Date('2026-04-02T12:00:02.000Z'),
+    })
+
+    const completedState = await service.completeProjectRefresh({
+      projectId: 'refresh-project-1',
+      workerId: 'worker-1',
+      completedToken: firstClaim.claimedToken,
+      now: new Date('2026-04-02T12:00:03.000Z'),
+    })
+    const remainingArticlesAfterComplete = await database.queryJson(\`
+      SELECT
+        project_id AS projectId,
+        article_id AS articleId,
+        CAST(first_dirty_token AS INTEGER) AS firstDirtyToken,
+        CAST(last_dirty_token AS INTEGER) AS lastDirtyToken,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+      FROM app.project_mart_refresh_article_state
+      WHERE project_id = 'refresh-project-1'
+      ORDER BY article_id ASC
+    \`)
+    const unresolvedAfterComplete = await service.getDirtyArticlesForClaim({
+      projectId: 'refresh-project-1',
+      lastCompletedToken: 1,
+      claimedToken: 2,
+    })
+    const [secondClaim] = await service.claimDirtyProjects({
+      workerId: 'worker-2',
+      limit: 1,
+      leaseMs: 5000,
+      now: new Date('2026-04-02T12:00:04.000Z'),
+    })
+    const failedState = await service.failProjectRefresh({
+      projectId: 'refresh-project-1',
+      workerId: 'worker-2',
+      error: 'refresh exploded',
+      now: new Date('2026-04-02T12:00:05.000Z'),
+    })
+
+    console.log(JSON.stringify({
+      completedState,
+      failedState,
+      remainingArticlesAfterComplete,
+      secondClaim,
+      unresolvedAfterComplete,
+    }))
+    await database.close()
+  `)
+
+  expect(result.completedState?.projectId).toBe('refresh-project-1')
+  expect(result.completedState?.dirtyToken).toBe(2)
+  expect(result.completedState?.lastCompletedRefreshToken).toBe(1)
+  expect(result.completedState?.activeRefreshToken).toBe(0)
+  expect(result.completedState?.refreshStatus).toBe('idle')
+  expect(result.completedState?.workerId).toBeNull()
+  expect(
+    result.remainingArticlesAfterComplete.map((row) => {
+      return {articleId: row.articleId, firstDirtyToken: row.firstDirtyToken, lastDirtyToken: row.lastDirtyToken}
+    }),
+  ).toEqual([
+    {articleId: 'refresh-article-1', firstDirtyToken: 2, lastDirtyToken: 2},
+    {articleId: 'refresh-article-2', firstDirtyToken: 2, lastDirtyToken: 2},
+  ])
+  expect(result.unresolvedAfterComplete).toEqual([{articleId: 'refresh-article-1'}, {articleId: 'refresh-article-2'}])
+  expect(result.failedState?.projectId).toBe('refresh-project-1')
+  expect(result.failedState?.dirtyToken).toBe(2)
+  expect(result.failedState?.lastCompletedRefreshToken).toBe(1)
+  expect(result.failedState?.activeRefreshToken).toBe(0)
+  expect(result.failedState?.refreshStatus).toBe('failed')
+  expect(result.failedState?.lastError).toBe('refresh exploded')
+  expect(result.failedState?.workerId).toBeNull()
+  expect(result.failedState?.lastFailedAt).toBeTruthy()
 })
