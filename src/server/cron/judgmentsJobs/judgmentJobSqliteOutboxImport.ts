@@ -275,12 +275,6 @@ const markRefreshStateDirtyForEntries = async (entries: JudgmentJobSqliteOutboxE
   })
 }
 
-const getLastImportedOutboxSeq = (entries: JudgmentJobSqliteOutboxEntry[]) => {
-  return entries.reduce<number | null>((maxOutboxSeq, entry) => {
-    return maxOutboxSeq == null ? entry.outboxSeq : Math.max(maxOutboxSeq, entry.outboxSeq)
-  }, null)
-}
-
 const getRecoveredOutboxRows = (entries: JudgmentJobSqliteOutboxEntry[]): JudgmentJobRecoveredOutboxRow[] => {
   return entries.map((entry) => {
     return {jobId: entry.jobId, outboxSeq: entry.outboxSeq}
@@ -480,7 +474,6 @@ export const runJudgmentJobSqliteOutboxImportCycleForClaimedBatch = async ({
     const {discardedEntries, importableEntries} = await partitionImportableEntries(rows)
     const {missingEntries} = await partitionExistingJudgments(importableEntries)
     const duplicateCount = importableEntries.length - missingEntries.length
-    const lastImportedOutboxSeq = getLastImportedOutboxSeq(importableEntries)
 
     await sqliteService.completeClaimedOutboxRows({
       claimId: claim.claimId,
@@ -498,7 +491,6 @@ export const runJudgmentJobSqliteOutboxImportCycleForClaimedBatch = async ({
 
     if (importableEntries.length > 0) {
       await markRefreshStateDirtyForEntries(importableEntries, claimedBy)
-      await sqliteService.setLastProjectRefreshAckSeq(claim.jobId, lastImportedOutboxSeq)
     }
 
     await sqliteService.completeOutboxClaim({claimId: claim.claimId, jobId: claim.jobId})

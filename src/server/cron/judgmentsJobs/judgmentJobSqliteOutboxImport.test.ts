@@ -930,7 +930,7 @@ test('releases claimed SQLite outbox batches for retry when DuckDB insert fails 
   expect(await service.getUnexportedOutboxCount(jobId)).toBe(0)
 })
 
-test('records the last project refresh acknowledgement seq after mart visibility completes', async () => {
+test('leaves refresh acknowledgement publication to the worker when mart visibility completes', async () => {
   if (!runDatabase || !sqliteService || !importOutboxBatch || !storeSinglePromptJudgment) {
     throw new Error('Test database not initialized')
   }
@@ -969,6 +969,7 @@ test('records the last project refresh acknowledgement seq after mart visibility
   `)
 
   await service.initializeJob(jobId)
+  await service.setLastProjectRefreshAckSeq(jobId, 0)
   await service.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
 
   const [claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
@@ -988,10 +989,8 @@ test('records the last project refresh acknowledgement seq after mart visibility
     chunkingStrategy: null,
   })
 
-  const [pendingOutboxRow] = await service.getPendingOutboxBatch({maxBytes: 1024 * 1024, maxRows: 10})
-
   expect(await importOutboxBatch()).toBe(1)
-  expect((await service.getScanState(jobId)).lastProjectRefreshAckSeq).toBe(pendingOutboxRow?.outboxSeq ?? null)
+  expect((await service.getScanState(jobId)).lastProjectRefreshAckSeq).toBe(0)
 })
 
 test('keeps the previous refresh acknowledgement seq when mart visibility acknowledgement fails', async () => {
@@ -1056,7 +1055,6 @@ test('keeps the previous refresh acknowledgement seq when mart visibility acknow
     chunkingStrategy: null,
   })
 
-  const [pendingOutboxRow] = await service.getPendingOutboxBatch({maxBytes: 1024 * 1024, maxRows: 10})
   refreshStateService.markArticleProjectsDirtyAtomically = async () => {
     throw new Error('refresh state dirty mark failed')
   }
@@ -1075,7 +1073,7 @@ test('keeps the previous refresh acknowledgement seq when mart visibility acknow
   expect(await service.getUnexportedOutboxCount(jobId)).toBe(1)
 
   expect(await importOutboxBatch()).toBe(1)
-  expect((await service.getScanState(jobId)).lastProjectRefreshAckSeq).toBe(pendingOutboxRow?.outboxSeq ?? null)
+  expect((await service.getScanState(jobId)).lastProjectRefreshAckSeq).toBe(0)
 })
 
 test('single-job sqlite importer emits structured JSON success output', () => {
