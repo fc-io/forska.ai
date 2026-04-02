@@ -103,12 +103,14 @@ let martRefreshDebugSnapshot = getEmptyMartRefreshDebugSnapshot()
 let martRefreshProgressSnapshot = getEmptyMartRefreshProgressSnapshot()
 let martRefreshArticleCompletionTimes: number[] = []
 let martRefreshProjectCompletionTimes: number[] = []
+let martRefreshQueueDisabledWarningLogged = false
 
 const martRefreshArticleBatchLimit = 4
 const martRefreshDrainBudgetMs = 100
 const martRefreshProjectBatchLimit = 1
 const martRefreshProjectPurgeRowBatchSize = 10
 const martRefreshProjectRebuildArticleBatchSize = 20_000
+const martRefreshQueueInsertBatchSize = 10
 const martReviewArticleServingRewriteBatchSize = 1_000
 const martRefreshRetryDelayMs = 5000
 const martRefreshScheduleDelayMs = 250
@@ -123,6 +125,21 @@ const martRefreshFatalInvalidationErrorFragments = [
   'database has been invalidated because of a previous fatal error',
   'must be restarted prior to being used again',
 ]
+
+const isBunMacOsMartRefreshUnsafe = () => {
+  return typeof process.versions.bun === 'string' && process.platform === 'darwin'
+}
+
+const warnMartRefreshQueueDisabled = () => {
+  if (martRefreshQueueDisabledWarningLogged) {
+    return
+  }
+
+  martRefreshQueueDisabledWarningLogged = true
+  console.warn(
+    '[duckdbMartRefresh] automatic mart refresh queueing is disabled on Bun/macOS due to reproducible native Bun crashes in this path; use manual refresh/rebuild commands instead.',
+  )
+}
 
 const getMartRefreshProgressSnapshot = (): MartRefreshProgressSnapshot => {
   return copyMartRefreshProgressSnapshot(martRefreshProgressSnapshot)
@@ -2585,40 +2602,50 @@ const queueMartRefreshTasks = async (tasks: QueueMartRefreshTask[]) => {
     return
   }
 
+  if (isBunMacOsMartRefreshUnsafe()) {
+    warnMartRefreshQueueDisabled()
+    return
+  }
+
   await ensureMartRefreshQueueSchema()
 
-  await getAppDatabaseService().run(`
-    INSERT INTO app.mart_refresh_queue (
-      id,
-      refresh_scope,
-      project_id,
-      article_id,
-      project_key,
-      article_key,
-      refresh_generation,
-      reason,
-      created_at,
-      updated_at
-    )
-    VALUES ${tasks
-      .map((task) => {
-        const projectId = task.projectId ?? null
-        const articleId = task.articleId ?? null
-        return `(${getQuotedStringList([randomUUID(), task.refreshScope]).join(', ')}, ${getSqlLiteral(projectId)}, ${getSqlLiteral(articleId)}, ${getSqlLiteral(projectId ?? '')}, ${getSqlLiteral(articleId ?? '')}, 0, ${getSqlLiteral(task.reason)}, NOW(), NOW())`
-      })
-      .join(', ')}
-    ON CONFLICT(refresh_scope, project_key, article_key) DO UPDATE SET
-      completed_at = NULL,
-      created_at = CASE
-        WHEN app.mart_refresh_queue.completed_at IS NULL THEN app.mart_refresh_queue.created_at
-        ELSE NOW()
-      END,
-      refresh_generation = COALESCE(app.mart_refresh_queue.refresh_generation, 0) + 1,
-      reason = excluded.reason,
-      updated_at = NOW()
-  `)
+  for (let index = 0; index < tasks.length; index += martRefreshQueueInsertBatchSize) {
+    const batch = tasks.slice(index, index + martRefreshQueueInsertBatchSize)
+    await getAppDatabaseService().run(`
+      INSERT INTO app.mart_refresh_queue (
+        id,
+        refresh_scope,
+        project_id,
+        article_id,
+        project_key,
+        article_key,
+        refresh_generation,
+        reason,
+        created_at,
+        updated_at
+      )
+      VALUES ${batch
+        .map((task) => {
+          const projectId = task.projectId ?? null
+          const articleId = task.articleId ?? null
+          return `(${getQuotedStringList([randomUUID(), task.refreshScope]).join(', ')}, ${getSqlLiteral(projectId)}, ${getSqlLiteral(articleId)}, ${getSqlLiteral(projectId ?? '')}, ${getSqlLiteral(articleId ?? '')}, 0, ${getSqlLiteral(task.reason)}, NOW(), NOW())`
+        })
+        .join(', ')}
+      ON CONFLICT(refresh_scope, project_key, article_key) DO UPDATE SET
+        completed_at = NULL,
+        created_at = CASE
+          WHEN app.mart_refresh_queue.completed_at IS NULL THEN app.mart_refresh_queue.created_at
+          ELSE NOW()
+        END,
+        refresh_generation = COALESCE(app.mart_refresh_queue.refresh_generation, 0) + 1,
+        reason = excluded.reason,
+        updated_at = NOW()
+    `)
+  }
 
-  scheduleQueuedMartRefreshes()
+  if (isMartRefreshAutoDrainEnabled()) {
+    await flushQueuedMartRefreshes()
+  }
 }
 
 export const flushQueuedMartRefreshes = async (): Promise<void> => {

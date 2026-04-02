@@ -256,6 +256,23 @@ const insertOutboxEntriesIntoDuckdb = async (entries: JudgmentJobSqliteOutboxEnt
 }
 
 const queueRefreshesForEntries = async (entries: JudgmentJobSqliteOutboxEntry[]) => {
+  const projectIds = Array.from(
+    new Set(
+      entries.flatMap((entry) => {
+        return entry.projectId ? [entry.projectId] : []
+      }),
+    ),
+  )
+
+  if (projectIds.length > 0) {
+    // Queue a project-scope refresh instead of one task per article. Large
+    // article fan-outs in this path have been triggering Bun/DuckDB crashes on
+    // macOS during mart_refresh_queue writes, while a single project refresh is
+    // semantically sufficient for imported judgment batches.
+    await getDuckdbMartRefreshService().queueProjectRefreshes(projectIds, 'sqliteJudgmentOutboxImport')
+    return
+  }
+
   const articleIds = Array.from(
     new Set(
       entries.map((entry) => {

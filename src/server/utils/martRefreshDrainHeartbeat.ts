@@ -6,6 +6,11 @@ type MartRefreshDrainHeartbeatOptions = {intervalMs?: number}
 
 const martRefreshDrainHeartbeatLogger = createRateLimitedLogger({windowMs: 30_000})
 const defaultMartRefreshDrainHeartbeatIntervalMs = 5_000
+let martRefreshDrainHeartbeatDisabledWarningLogged = false
+
+const isBunMacOsMartRefreshUnsafe = () => {
+  return typeof process.versions.bun === 'string' && process.platform === 'darwin'
+}
 
 const drainMartRefreshQueue = async () => {
   return shouldCurrentServerRunWriterWork() ? getDuckdbMartRefreshService().flush() : undefined
@@ -20,6 +25,16 @@ const logMartRefreshDrainError = (error: unknown) => {
 }
 
 export const startMartRefreshDrainHeartbeat = (options: MartRefreshDrainHeartbeatOptions = {}) => {
+  if (isBunMacOsMartRefreshUnsafe()) {
+    if (!martRefreshDrainHeartbeatDisabledWarningLogged) {
+      martRefreshDrainHeartbeatDisabledWarningLogged = true
+      console.warn(
+        '[duckdbMartRefresh] periodic mart refresh heartbeat is disabled on Bun/macOS due to reproducible native Bun crashes in this path.',
+      )
+    }
+    return () => {}
+  }
+
   const runDrain = () => {
     return void drainMartRefreshQueue().catch(logMartRefreshDrainError)
   }

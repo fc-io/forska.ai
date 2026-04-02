@@ -2,10 +2,7 @@ import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getImportableJudgmentJobWhereSql} from './judgmentJobImportScope.ts'
-import {
-  isJudgmentJobSqliteIsolatedImportLeaseConflict,
-  runJudgmentJobSqliteIsolatedImportCycle,
-} from './judgmentJobSqliteIsolatedImport.ts'
+import {runJudgmentJobSqliteOutboxImportCycle} from './judgmentJobSqliteOutboxImport.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 
 const judgmentJobSqliteBackgroundImportLogger = createRateLimitedLogger({windowMs: 30_000})
@@ -93,53 +90,49 @@ const recordImportFailure = async ({
 }
 
 export const runJudgmentJobSqliteBackgroundImport = async ({claimedBy}: {claimedBy: string}) => {
-  await getJudgmentJobSqliteService().syncOwnedLeases([])
+  const sqliteService = getJudgmentJobSqliteService()
 
-  const jobIds = await getImportableJudgmentJobIds()
+  await sqliteService.syncOwnedLeases([])
 
-  return jobIds.reduce(
-    async (summaryPromise, jobId) => {
-      const summary = await summaryPromise
-      await recordImportStart(jobId)
+  const [jobId = null] = await getImportableJudgmentJobIds()
 
-      const result = await runJudgmentJobSqliteIsolatedImportCycle({claimedBy, jobId})
+  if (!jobId) {
+    return {attemptedCount: 0, failedCount: 0, skippedCount: 0, succeededCount: 0}
+  }
 
-      if (result.errorMessage === null) {
-        await recordImportSuccess({exitCode: result.exitCode, jobId})
-        return {...summary, attemptedCount: summary.attemptedCount + 1, succeededCount: summary.succeededCount + 1}
-      }
+  await recordImportStart(jobId)
 
-      if (isJudgmentJobSqliteIsolatedImportLeaseConflict(result.errorMessage)) {
-        judgmentJobSqliteBackgroundImportLogger.log(
-          `judgment-job-sqlite-background-import:lease:${jobId}`,
-          '[judgment-job-sqlite-background-import] skipped job because the SQLite lease is busy',
-          {claimedBy, jobId},
-        )
-        await recordImportLeaseSkip(jobId)
-        return {...summary, attemptedCount: summary.attemptedCount + 1, skippedCount: summary.skippedCount + 1}
-      }
+  if (sqliteService.hasOwnedLease(jobId)) {
+    await sqliteService.releaseOwnedLease(jobId)
+  }
 
-      const [failureState] = await recordImportFailure({
-        errorMessage: result.errorMessage,
-        exitCode: result.exitCode,
+  try {
+    const result = await runJudgmentJobSqliteOutboxImportCycle({claimedBy, jobId})
+    await recordImportSuccess({exitCode: 0, jobId})
+    return result.status === 'idle'
+      ? {attemptedCount: 1, failedCount: 0, skippedCount: 1, succeededCount: 0}
+      : {attemptedCount: 1, failedCount: 0, skippedCount: 0, succeededCount: 1}
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    const [failureState] = await recordImportFailure({
+      errorMessage,
+      exitCode: 1,
+      jobId,
+    })
+
+    judgmentJobSqliteBackgroundImportLogger.warn(
+      `judgment-job-sqlite-background-import:failed:${jobId}`,
+      '[judgment-job-sqlite-background-import] importer failed',
+      {
+        claimedBy,
+        errorMessage,
+        exitCode: 1,
+        importFailureCount: failureState?.importFailureCount ?? null,
         jobId,
-      })
+        storageState: failureState?.storageState ?? null,
+      },
+    )
 
-      judgmentJobSqliteBackgroundImportLogger.warn(
-        `judgment-job-sqlite-background-import:failed:${jobId}`,
-        '[judgment-job-sqlite-background-import] isolated importer failed',
-        {
-          claimedBy,
-          errorMessage: result.errorMessage,
-          exitCode: result.exitCode,
-          importFailureCount: failureState?.importFailureCount ?? null,
-          jobId,
-          storageState: failureState?.storageState ?? null,
-        },
-      )
-
-      return {...summary, attemptedCount: summary.attemptedCount + 1, failedCount: summary.failedCount + 1}
-    },
-    Promise.resolve({attemptedCount: 0, failedCount: 0, skippedCount: 0, succeededCount: 0}),
-  )
+    return {attemptedCount: 1, failedCount: 1, skippedCount: 0, succeededCount: 0}
+  }
 }
