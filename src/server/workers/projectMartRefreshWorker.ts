@@ -38,6 +38,7 @@ type ProjectMartRefreshStateWorkerService = {
 type ProjectMartRefreshRunnerService = {
   refreshJudgmentArticle: (articleId: string) => Promise<void>
   refreshProject: (projectId: string) => Promise<void>
+  refreshProjectArticleServing: (projectId: string, articleId: string) => Promise<void>
 }
 
 type ProjectMartRefreshWorkerDependencies = {
@@ -50,7 +51,13 @@ type ProjectMartRefreshWorkerDependencies = {
   stateService: ProjectMartRefreshStateWorkerService
 }
 
-type ProjectMartRefreshWorkerCycleOptions = {heartbeatMs?: number; leaseMs?: number; now?: Date; workerId?: string}
+type ProjectMartRefreshWorkerCycleOptions = {
+  heartbeatMs?: number
+  incrementalArticleThreshold?: number
+  leaseMs?: number
+  now?: Date
+  workerId?: string
+}
 
 type ProjectMartRefreshWorkerLoopOptions = ProjectMartRefreshWorkerCycleOptions & {
   pollIntervalMs?: number
@@ -64,6 +71,7 @@ type ProjectMartRefreshWorkerCycleResult =
 
 const defaultProjectMartRefreshWorkerLeaseMs = 30_000
 const defaultProjectMartRefreshWorkerHeartbeatMs = 10_000
+const defaultProjectMartRefreshWorkerIncrementalArticleThreshold = 3
 const defaultProjectMartRefreshWorkerPollIntervalMs = 2_000
 
 const defaultProjectMartRefreshWorkerDependencies: ProjectMartRefreshWorkerDependencies = {
@@ -106,6 +114,26 @@ const refreshClaimArticles = async (
     : refreshService.refreshJudgmentArticle(articleId).then(() => {
         return refreshClaimArticles(articleIds.slice(1), refreshService)
       })
+}
+
+const refreshClaimArticlesIncrementally = async (
+  articleIds: string[],
+  projectId: string,
+  refreshService: ProjectMartRefreshRunnerService,
+): Promise<void> => {
+  const [articleId = ''] = articleIds
+
+  return articleId === ''
+    ? Promise.resolve()
+    : refreshService.refreshJudgmentArticle(articleId).then(() => {
+        return refreshService.refreshProjectArticleServing(projectId, articleId).then(() => {
+          return refreshClaimArticlesIncrementally(articleIds.slice(1), projectId, refreshService)
+        })
+      })
+}
+
+const shouldUseIncrementalArticleRefresh = (articleCount: number, threshold: number) => {
+  return articleCount > 0 && articleCount <= threshold
 }
 
 const getErrorText = (error: unknown) => {
@@ -156,14 +184,19 @@ export const runProjectMartRefreshWorkerCycle = async (
       lastCompletedToken: claim.lastCompletedToken,
       projectId: claim.projectId,
     })
+    const dirtyArticleIds = dirtyArticles.map((row) => {
+      return row.articleId
+    })
+    const incrementalArticleThreshold =
+      options.incrementalArticleThreshold ?? defaultProjectMartRefreshWorkerIncrementalArticleThreshold
 
-    await refreshClaimArticles(
-      dirtyArticles.map((row) => {
-        return row.articleId
-      }),
-      dependencies.refreshService,
-    )
-    await dependencies.refreshService.refreshProject(claim.projectId)
+    if (shouldUseIncrementalArticleRefresh(dirtyArticleIds.length, incrementalArticleThreshold)) {
+      await refreshClaimArticlesIncrementally(dirtyArticleIds, claim.projectId, dependencies.refreshService)
+    } else {
+      await refreshClaimArticles(dirtyArticleIds, dependencies.refreshService)
+      await dependencies.refreshService.refreshProject(claim.projectId)
+    }
+
     await dependencies.stateService.completeProjectRefresh({
       completedToken: claim.claimedToken,
       now: getWorkerNow(options.now),
@@ -216,6 +249,7 @@ export const runProjectMartRefreshWorker = async (
 
 export {
   defaultProjectMartRefreshWorkerHeartbeatMs,
+  defaultProjectMartRefreshWorkerIncrementalArticleThreshold,
   defaultProjectMartRefreshWorkerLeaseMs,
   defaultProjectMartRefreshWorkerPollIntervalMs,
   getProjectMartRefreshWorkerId,

@@ -1,6 +1,9 @@
+import {rmSync} from 'node:fs'
+
 import {beforeEach, expect, mock, test} from 'bun:test'
 
 import {
+  defaultProjectMartRefreshWorkerIncrementalArticleThreshold,
   type ProjectMartRefreshRunnerService,
   type ProjectMartRefreshStateWorkerService,
   type ProjectMartRefreshWorkerDependencies,
@@ -13,6 +16,16 @@ type ClaimPlan = {
   leaseExpiresAt: Date
   projectId: string
   workerId: string
+}
+
+const getLastJsonLine = (output: string) => {
+  return output
+    .trim()
+    .split('\n')
+    .reverse()
+    .find((line) => {
+      return line.trim().startsWith('{')
+    })
 }
 
 const createWorkerTestContext = (params: {
@@ -73,6 +86,9 @@ const createWorkerTestContext = (params: {
     refreshProject: mock(async (projectId: string) => {
       callLog.push(`project:${projectId}`)
       return params.onRefreshProject?.(projectId)
+    }),
+    refreshProjectArticleServing: mock(async (projectId: string, articleId: string) => {
+      callLog.push(`serving:${projectId}:${articleId}`)
     }),
   }
   const remainingReconciledProjectIds = [...(params.reconciledProjectIds ?? [])]
@@ -152,7 +168,7 @@ test('refreshes judgment facts before the project rebuild', async () => {
     ],
   })
 
-  await runProjectMartRefreshWorkerCycle({workerId: 'worker-1'}, context.dependencies)
+  await runProjectMartRefreshWorkerCycle({incrementalArticleThreshold: 0, workerId: 'worker-1'}, context.dependencies)
 
   expect(context.callLog).toEqual([
     'reconcile:all',
@@ -163,6 +179,65 @@ test('refreshes judgment facts before the project rebuild', async () => {
     'project:project-1',
     'complete:project-1:2',
     'ack:project-1:2',
+  ])
+})
+
+test('uses incremental article-aware refresh routing for small deltas', async () => {
+  const context = createWorkerTestContext({
+    articlesByProject: {'project-1': ['article-1', 'article-2']},
+    claims: [
+      {
+        claimedToken: 3,
+        lastCompletedToken: 2,
+        leaseExpiresAt: new Date('2026-04-02T13:10:30.000Z'),
+        projectId: 'project-1',
+        workerId: 'worker-1',
+      },
+    ],
+  })
+
+  await runProjectMartRefreshWorkerCycle({incrementalArticleThreshold: 2, workerId: 'worker-1'}, context.dependencies)
+
+  expect(context.callLog).toEqual([
+    'reconcile:all',
+    'claim:worker-1:1:30000',
+    'load:project-1',
+    'judgment:article-1',
+    'serving:project-1:article-1',
+    'judgment:article-2',
+    'serving:project-1:article-2',
+    'complete:project-1:3',
+    'ack:project-1:3',
+  ])
+})
+
+test('falls back to a full project refresh when the dirty-article delta exceeds the threshold', async () => {
+  const context = createWorkerTestContext({
+    articlesByProject: {'project-1': ['article-1', 'article-2', 'article-3', 'article-4']},
+    claims: [
+      {
+        claimedToken: 5,
+        lastCompletedToken: 4,
+        leaseExpiresAt: new Date('2026-04-02T13:10:30.000Z'),
+        projectId: 'project-1',
+        workerId: 'worker-1',
+      },
+    ],
+  })
+
+  await runProjectMartRefreshWorkerCycle({incrementalArticleThreshold: 3, workerId: 'worker-1'}, context.dependencies)
+
+  expect(context.callLog).toEqual([
+    'reconcile:all',
+    'claim:worker-1:1:30000',
+    'load:project-1',
+    'judgment:article-1',
+    'judgment:article-2',
+    'judgment:article-3',
+    'judgment:article-4',
+    'project:project-1',
+    'complete:project-1:5',
+    'ack:project-1:5',
   ])
 })
 
@@ -183,7 +258,10 @@ test('records failures when a claimed refresh errors', async () => {
     },
   })
 
-  const result = await runProjectMartRefreshWorkerCycle({workerId: 'worker-1'}, context.dependencies)
+  const result = await runProjectMartRefreshWorkerCycle(
+    {incrementalArticleThreshold: 0, workerId: 'worker-1'},
+    context.dependencies,
+  )
 
   expect(result).toEqual({
     claimedToken: 7,
@@ -211,7 +289,10 @@ test('can process work reclaimed after an expired lease', async () => {
     ],
   })
 
-  const result = await runProjectMartRefreshWorkerCycle({leaseMs: 5_000, workerId: 'worker-2'}, context.dependencies)
+  const result = await runProjectMartRefreshWorkerCycle(
+    {incrementalArticleThreshold: 0, leaseMs: 5_000, workerId: 'worker-2'},
+    context.dependencies,
+  )
 
   expect(result).toEqual({claimedToken: 4, projectId: 'project-1', status: 'completed', workerId: 'worker-2'})
   expect(context.callLog).toEqual([
@@ -267,4 +348,279 @@ test('replays sqlite ack publication after a post-completion crash without rerun
   expect(reconcileContext.callLog).toEqual(['reconcile:all', 'claim:worker-1:1:30000'])
   expect(reconcileContext.completed).toEqual([])
   expect(reconcileContext.failed).toEqual([])
+})
+
+test('incremental routing keeps review pages counts warnings and prompt queueing aligned with full refresh', () => {
+  const runWorkerMode = (duckdbPath: string, threshold: number) => {
+    const runScript = globalThis.Bun.spawnSync(
+      [
+        'bun',
+        '-e',
+        `
+          const {Elysia} = await import('elysia')
+          const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+          const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+          const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
+          const {projectsRoutesGetReviewsWarnings} = await import('./src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts')
+          const {judgmentsJobsCronGetPrompts} = await import('./src/server/cron/judgmentsJobs/judgmentsJobsCronGetPrompts.ts')
+          const {queryArticlesReviewsFromDuckdb, getUnassessedCountFromDuckdb} = await import('./src/services/olap/duckdbOlap.ts')
+          const {runProjectMartRefreshWorkerCycle} = await import('./src/server/workers/projectMartRefreshWorker.ts')
+
+          await migrateDuckdb()
+
+          const database = getAppDatabaseService()
+          const refreshStateService = getProjectMartRefreshStateService()
+
+          await database.run(\`
+            INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+            VALUES ('connection-worker-routing-test', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+          \`)
+          await database.run(\`
+            INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+            VALUES ('model-worker-routing-test', 'connection-worker-routing-test', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+          \`)
+          await database.run(\`
+            INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+            VALUES ('project-worker-routing-test', 'Worker Routing Project', 'model-worker-routing-test', TRUE, TRUE, FALSE, FALSE)
+          \`)
+          await database.run(\`
+            INSERT INTO app.prompt (id, original_text, content_hash)
+            VALUES
+              ('prompt-worker-routing-1', 'Prompt 1', 'hash-worker-routing-1'),
+              ('prompt-worker-routing-2', 'Prompt 2', 'hash-worker-routing-2')
+          \`)
+          await database.run(\`
+            INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+            VALUES
+              ('project-prompt-worker-routing-1', 'project-worker-routing-test', 'prompt-worker-routing-1', 1, TRUE),
+              ('project-prompt-worker-routing-2', 'project-worker-routing-test', 'prompt-worker-routing-2', 2, TRUE)
+          \`)
+          await database.run(\`
+            INSERT INTO app.article (id, article_title, article_created_at, article_updated_at, article_id)
+            VALUES
+              ('article-worker-routing-1', 'Worker Routing Article 1', '2024-01-02T00:00:00.000Z', '2024-01-03T00:00:00.000Z', 'external-worker-routing-1'),
+              ('article-worker-routing-2', 'Worker Routing Article 2', '2024-01-04T00:00:00.000Z', '2024-01-05T00:00:00.000Z', 'external-worker-routing-2')
+          \`)
+          await database.run(\`
+            INSERT INTO app.project_article (id, project_id, article_id)
+            VALUES
+              ('project-article-worker-routing-1', 'project-worker-routing-test', 'article-worker-routing-1'),
+              ('project-article-worker-routing-2', 'project-worker-routing-test', 'article-worker-routing-2')
+          \`)
+          await database.run(\`
+            INSERT INTO app.judgment (
+              id,
+              article_id,
+              prompt_id,
+              model_id,
+              project_id,
+              snapshot_project_id,
+              use_title,
+              use_abstract,
+              use_fulltext,
+              use_fulltext_no_images,
+              is_answered,
+              answered_original,
+              answered_original_as_array,
+              confidence_original
+            ) VALUES
+              (
+                'judgment-worker-routing-1a',
+                'article-worker-routing-1',
+                'prompt-worker-routing-1',
+                'model-worker-routing-test',
+                'project-worker-routing-test',
+                'project-worker-routing-test',
+                TRUE,
+                TRUE,
+                FALSE,
+                FALSE,
+                TRUE,
+                'yes',
+                ['yes'],
+                90
+              ),
+              (
+                'judgment-worker-routing-1b',
+                'article-worker-routing-1',
+                'prompt-worker-routing-2',
+                'model-worker-routing-test',
+                'project-worker-routing-test',
+                'project-worker-routing-test',
+                TRUE,
+                TRUE,
+                FALSE,
+                FALSE,
+                TRUE,
+                'maybe',
+                ['maybe'],
+                80
+              ),
+              (
+                'judgment-worker-routing-2a',
+                'article-worker-routing-2',
+                'prompt-worker-routing-1',
+                'model-worker-routing-test',
+                'project-worker-routing-test',
+                'project-worker-routing-test',
+                TRUE,
+                TRUE,
+                FALSE,
+                FALSE,
+                TRUE,
+                'no',
+                ['no'],
+                75
+              )
+          \`)
+
+          await refreshStateService.markProjectsDirtyAtomically({
+            projects: [{
+              articleIds: ['article-worker-routing-1', 'article-worker-routing-2'],
+              projectId: 'project-worker-routing-test',
+            }],
+            reason: 'projectMartRefreshWorker.test.initial',
+          })
+          await runProjectMartRefreshWorkerCycle({incrementalArticleThreshold: 0, workerId: 'worker-routing-initial'})
+
+          await database.run(\`
+            UPDATE app.judgment
+            SET answered_original = 'include',
+                answered_original_as_array = ['include'],
+                updated_at = current_timestamp
+            WHERE id = 'judgment-worker-routing-1a'
+          \`)
+
+          await refreshStateService.markProjectsDirtyAtomically({
+            projects: [{
+              articleIds: ['article-worker-routing-1'],
+              projectId: 'project-worker-routing-test',
+            }],
+            reason: 'projectMartRefreshWorker.test.delta',
+          })
+
+          await runProjectMartRefreshWorkerCycle({
+            incrementalArticleThreshold: Number(process.env.WORKER_INCREMENTAL_THRESHOLD ?? '0'),
+            workerId: 'worker-routing-delta',
+          })
+
+          const reviews = await queryArticlesReviewsFromDuckdb({limit: 10, page: 1, projectId: 'project-worker-routing-test'})
+          const unassessedCount = await getUnassessedCountFromDuckdb({jobId: 'job-worker-routing-test', projectId: 'project-worker-routing-test'})
+          const promptQueue = await judgmentsJobsCronGetPrompts('project-worker-routing-test', 'job-worker-routing-test', 10)
+
+          const app = new Elysia().use(projectsRoutesGetReviewsWarnings)
+          const warningsResponse = await app.handle(
+            new Request('http://localhost/api/projectsreviewswarnings', {
+              body: JSON.stringify({projectId: 'project-worker-routing-test'}),
+              headers: {'content-type': 'application/json'},
+              method: 'POST',
+            }),
+          )
+          const warningsResponseBody = await warningsResponse.json()
+          const warnings = warningsResponseBody.data
+          const [refreshState] = await database.queryJson(\`
+            SELECT
+              CAST(dirty_token AS INTEGER) AS dirtyToken,
+              CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+              refresh_status AS refreshStatus
+            FROM app.project_mart_refresh_state
+            WHERE project_id = 'project-worker-routing-test'
+            LIMIT 1
+          \`)
+
+          console.log(JSON.stringify({
+            promptEntries: promptQueue.promptEntries,
+            refreshState,
+            reviews: {
+              data: reviews.data.map((row) => {
+                return {
+                  id: row.id,
+                  isFullyJudged: row.isFullyJudged,
+                  judgedPromptIds: row.judgedPromptIds,
+                }
+              }),
+              totalCount: reviews.totalCount,
+            },
+            unassessedCount,
+            warnings: {
+              indexing: {
+                inFlightArticleRefreshCount: warnings.indexing.inFlightArticleRefreshCount,
+                inFlightProjectRefreshCount: warnings.indexing.inFlightProjectRefreshCount,
+                oldestQueuedAt: warnings.indexing.oldestQueuedAt,
+                queuedArticleRefreshCount: warnings.indexing.queuedArticleRefreshCount,
+                queuedProjectRefreshCount: warnings.indexing.queuedProjectRefreshCount,
+                queuedRefreshCount: warnings.indexing.queuedRefreshCount,
+                status: warnings.indexing.status,
+              },
+              warning: warnings.warning,
+            },
+          }))
+
+          await database.close()
+        `,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          API_SERVER_PORT: '3001',
+          DUCKDB_PATH: duckdbPath,
+          SERVER_ROLE: 'dev-single',
+          VITE_PORT: '3000',
+          WORKER_INCREMENTAL_THRESHOLD: String(threshold),
+        },
+      },
+    )
+
+    if (runScript.exitCode !== 0) {
+      throw new Error(
+        runScript.stderr.toString() || runScript.stdout.toString() || 'Worker incremental routing parity test failed',
+      )
+    }
+
+    const resultLine = getLastJsonLine(runScript.stdout.toString())
+
+    if (!resultLine) {
+      throw new Error(runScript.stdout.toString() || 'Missing JSON result from worker incremental routing test')
+    }
+
+    return JSON.parse(resultLine) as {
+      promptEntries: Array<{articleId: string; promptId: string}>
+      refreshState: {dirtyToken: number; lastCompletedRefreshToken: number; refreshStatus: string}
+      reviews: {data: Array<{id: string; isFullyJudged: boolean; judgedPromptIds: string[]}>; totalCount: number | null}
+      unassessedCount: number
+      warnings: unknown
+    }
+  }
+
+  const incrementalDuckdbPath = `/tmp/f1-worker-routing-incremental-${Date.now()}.duckdb`
+  const fullDuckdbPath = `/tmp/f1-worker-routing-full-${Date.now()}.duckdb`
+
+  try {
+    const incrementalResult = runWorkerMode(
+      incrementalDuckdbPath,
+      defaultProjectMartRefreshWorkerIncrementalArticleThreshold,
+    )
+    const fullRefreshResult = runWorkerMode(fullDuckdbPath, 0)
+
+    expect(incrementalResult).toEqual(fullRefreshResult)
+    expect(incrementalResult.reviews.data).toEqual([
+      {id: 'article-worker-routing-2', isFullyJudged: false, judgedPromptIds: ['prompt-worker-routing-1']},
+      {
+        id: 'article-worker-routing-1',
+        isFullyJudged: true,
+        judgedPromptIds: ['prompt-worker-routing-1', 'prompt-worker-routing-2'],
+      },
+    ])
+    expect(incrementalResult.unassessedCount).toBe(1)
+    expect(incrementalResult.promptEntries).toEqual([
+      {articleId: 'article-worker-routing-2', promptId: 'prompt-worker-routing-2'},
+    ])
+  } finally {
+    for (const path of [incrementalDuckdbPath, fullDuckdbPath]) {
+      rmSync(path, {force: true})
+      rmSync(`${path}.writer.lock`, {force: true})
+      rmSync(`${path}.writer.history.json`, {force: true})
+    }
+  }
 })

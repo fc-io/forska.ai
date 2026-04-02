@@ -2737,6 +2737,7 @@ const duckdbMartRefreshService = {
   recoverQueuedArchivedProjectRefresh,
   refreshJudgmentArticle,
   refreshProject,
+  refreshProjectArticleServing,
   resetProgressSnapshotForTests: () => {
     martRefreshQueueCompletedAtColumnReady = null
     martRefreshQueueCompletedAtColumnVerified = false
