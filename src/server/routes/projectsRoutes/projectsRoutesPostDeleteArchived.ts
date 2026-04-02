@@ -3,12 +3,16 @@ import {Elysia, t} from 'elysia'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getQuotedStringList} from '../../services/appQueryHelpers.ts'
 import {archivedProjectMartTableNames} from '../../services/getDuckdbMartRefreshService.ts'
-import {assertArchivedProjectCleanupProjectForeignKeysTx} from './projectsRoutesPostDeleteArchivedProjectForeignKeys.ts'
+import {
+  archivedProjectCleanupHandledProjectForeignKeys,
+  assertArchivedProjectCleanupProjectForeignKeysTx,
+} from './projectsRoutesPostDeleteArchivedProjectForeignKeys.ts'
 
 type AppTx = {queryJson: <T>(statement: string) => Promise<T[]>; run: (statement: string) => Promise<void>}
 
 type ProjectArchivedStateRow = {id: string; archived: boolean}
 type JudgmentJobStateRow = {projectId: string; status: string}
+type RemainingProjectForeignKeyRow = {columnName: string; count: number; tableName: string}
 
 const terminalJudgmentJobStatuses = ['completed', 'failed', 'project_removed']
 
@@ -208,6 +212,40 @@ const judgmentHumanCreateSql = `
     created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
     UNIQUE(project_id, article_id, prompt_id)
+  )
+`
+
+const projectMartRefreshStateCreateSql = `
+  CREATE TABLE app.project_mart_refresh_state (
+    project_id VARCHAR PRIMARY KEY REFERENCES app.project(id),
+    dirty_token BIGINT NOT NULL DEFAULT 0,
+    active_refresh_token BIGINT NOT NULL DEFAULT 0,
+    last_completed_refresh_token BIGINT NOT NULL DEFAULT 0,
+    last_requested_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    last_request_reason VARCHAR,
+    requested_by VARCHAR,
+    refresh_status VARCHAR NOT NULL DEFAULT 'idle',
+    last_started_at TIMESTAMPTZ,
+    last_completed_at TIMESTAMPTZ,
+    last_failed_at TIMESTAMPTZ,
+    last_error VARCHAR,
+    worker_id VARCHAR,
+    lease_expires_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+  )
+`
+
+const projectMartRefreshArticleStateCreateSql = `
+  CREATE TABLE app.project_mart_refresh_article_state (
+    project_id VARCHAR NOT NULL REFERENCES app.project(id),
+    article_id VARCHAR NOT NULL REFERENCES app.article(id),
+    first_dirty_token BIGINT NOT NULL,
+    last_dirty_token BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    PRIMARY KEY (project_id, article_id),
+    CHECK (first_dirty_token <= last_dirty_token)
   )
 `
 
@@ -416,6 +454,34 @@ const assertAllJudgmentJobsAreTerminal = async (projectIds: string[]) => {
   }
 }
 
+const assertNoRemainingProjectForeignKeysTx = async (tx: AppTx, projectIds: string[]) => {
+  const projectIdsSql = getProjectIdsSql(projectIds)
+  const rows = await Promise.all(
+    archivedProjectCleanupHandledProjectForeignKeys.map(async ({columnName, schemaName, tableName}) => {
+      const [row] = await tx.queryJson<RemainingProjectForeignKeyRow>(`
+        SELECT '${tableName}' AS tableName, '${columnName}' AS columnName, COUNT(*) AS count
+        FROM ${schemaName}.${tableName}
+        WHERE ${columnName} IN (${projectIdsSql})
+      `)
+
+      return row ?? {columnName, count: 0, tableName}
+    }),
+  )
+  const remainingRows = rows.filter((row) => {
+    return Number(row.count) > 0
+  })
+
+  if (remainingRows.length > 0) {
+    throw new Error(
+      `Archived project delete left project foreign key rows behind: ${remainingRows
+        .map((row) => {
+          return `${row.tableName}.${row.columnName}=${row.count}`
+        })
+        .join(', ')}`,
+    )
+  }
+}
+
 const rebuildProjectDeleteTablesTx = async (tx: AppTx, projectIds: string[]) => {
   const projectIdsSql = getProjectIdsSql(projectIds)
   const hasJudgmentJobPromptTable = await hasTableTx(tx, {schema: 'app', table: 'judgment_job_prompt'})
@@ -500,6 +566,28 @@ const rebuildProjectDeleteTablesTx = async (tx: AppTx, projectIds: string[]) => 
     tempPrefix: 'delete_archived_judgment_human',
   })
 
+  await rebuildTableTx(tx, {
+    createSql: projectMartRefreshArticleStateCreateSql,
+    selectSql: `
+      SELECT *
+      FROM app.project_mart_refresh_article_state
+      WHERE project_id NOT IN (${projectIdsSql})
+    `,
+    tableName: 'app.project_mart_refresh_article_state',
+    tempPrefix: 'delete_archived_project_mart_refresh_article_state',
+  })
+
+  await rebuildTableTx(tx, {
+    createSql: projectMartRefreshStateCreateSql,
+    selectSql: `
+      SELECT *
+      FROM app.project_mart_refresh_state
+      WHERE project_id NOT IN (${projectIdsSql})
+    `,
+    tableName: 'app.project_mart_refresh_state',
+    tempPrefix: 'delete_archived_project_mart_refresh_state',
+  })
+
   await rebuildJudgmentGroupTx(tx, projectIdsSql)
 }
 
@@ -508,22 +596,11 @@ const deleteArchivedProjectsTx = async (tx: AppTx, projectIds: string[]) => {
 
   await assertArchivedProjectCleanupProjectForeignKeysTx(tx)
   await rebuildProjectDeleteTablesTx(tx, projectIds)
+  await assertNoRemainingProjectForeignKeysTx(tx, projectIds)
 
   return runStatements(tx, [
     `
-      DELETE FROM app.mart_refresh_queue
-      WHERE project_id IN (${projectIdsSql})
-    `,
-    `
       DELETE FROM app.review_answer_dictionary
-      WHERE project_id IN (${projectIdsSql})
-    `,
-    `
-      DELETE FROM app.project_mart_refresh_article_state
-      WHERE project_id IN (${projectIdsSql})
-    `,
-    `
-      DELETE FROM app.project_mart_refresh_state
       WHERE project_id IN (${projectIdsSql})
     `,
     `

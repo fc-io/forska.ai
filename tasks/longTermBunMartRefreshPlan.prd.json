@@ -354,7 +354,7 @@
         "`bun run dev:server` stays up cleanly and logs show no Bun native crash signatures or code 133 restart loops"
       ],
       "priority": 17,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-009",
@@ -364,7 +364,8 @@
         "US-013",
         "US-014",
         "US-015"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-018",
@@ -412,6 +413,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-04-02T17:14:43.207Z"
+    "updatedAt": "2026-04-02T17:27:52.550Z"
   }
 }

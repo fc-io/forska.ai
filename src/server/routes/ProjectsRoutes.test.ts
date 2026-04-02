@@ -543,10 +543,6 @@ test('delete archived route removes archived project rows and keeps cross-projec
     VALUES ('delete-archived-judgment-human', '${sourceProjectId}', '${articleId}', '${promptId}', TRUE)
   `)
   await runDatabase(`
-    INSERT INTO app.mart_refresh_queue (id, refresh_scope, project_id, project_key, article_key)
-    VALUES ('delete-archived-refresh-queue', 'project', '${sourceProjectId}', '${sourceProjectId}', '')
-  `)
-  await runDatabase(`
     INSERT INTO app.review_answer_dictionary (
       project_id,
       prompt_id,
@@ -564,6 +560,36 @@ test('delete archived route removes archived project rows and keeps cross-projec
   await runDatabase(`
     INSERT INTO app.project_review_serving_generation (project_id, active_generation)
     VALUES ('${sourceProjectId}', 3)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_mart_refresh_state (
+      project_id,
+      dirty_token,
+      active_refresh_token,
+      last_completed_refresh_token,
+      refresh_status,
+      last_request_reason
+    ) VALUES (
+      '${sourceProjectId}',
+      7,
+      0,
+      5,
+      'stale',
+      'delete-archived-test'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_mart_refresh_article_state (
+      project_id,
+      article_id,
+      first_dirty_token,
+      last_dirty_token
+    ) VALUES (
+      '${sourceProjectId}',
+      '${articleId}',
+      6,
+      7
+    )
   `)
   await runDatabase(`
     INSERT INTO mart.project_scope_article (
@@ -780,9 +806,14 @@ test('delete archived route removes archived project rows and keeps cross-projec
       method: 'POST',
     }),
   )
-  const body = (await response.json()) as {success: boolean}
+  const bodyText = await response.text()
+
+  if (response.status !== 200) {
+    throw new Error(bodyText)
+  }
 
   expect(response.status).toBe(200)
+  const body = JSON.parse(bodyText) as {success: boolean}
   expect(body.success).toBe(true)
 
   const [projectRow] = await queryDatabase<{count: number}>(`
@@ -820,9 +851,14 @@ test('delete archived route removes archived project rows and keeps cross-projec
     FROM app.token_use
     WHERE judgment_job_id = 'delete-archived-job'
   `)
-  const [martRefreshQueueRowCount] = await queryDatabase<{count: number}>(`
+  const [projectRefreshStateRowCount] = await queryDatabase<{count: number}>(`
     SELECT COUNT(*) AS count
-    FROM app.mart_refresh_queue
+    FROM app.project_mart_refresh_state
+    WHERE project_id = '${sourceProjectId}'
+  `)
+  const [projectRefreshArticleStateRowCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.project_mart_refresh_article_state
     WHERE project_id = '${sourceProjectId}'
   `)
   const [reviewAnswerDictionaryRowCount] = await queryDatabase<{count: number}>(`
@@ -902,7 +938,8 @@ test('delete archived route removes archived project rows and keeps cross-projec
   expect(Number(reviewRowCount?.count ?? 0)).toBe(0)
   expect(Number(judgmentJobRowCount?.count ?? 0)).toBe(0)
   expect(Number(tokenUseRowCount?.count ?? 0)).toBe(0)
-  expect(Number(martRefreshQueueRowCount?.count ?? 0)).toBe(0)
+  expect(Number(projectRefreshStateRowCount?.count ?? 0)).toBe(0)
+  expect(Number(projectRefreshArticleStateRowCount?.count ?? 0)).toBe(0)
   expect(Number(reviewAnswerDictionaryRowCount?.count ?? 0)).toBe(0)
   expect(Number(servingGenerationRowCount?.count ?? 0)).toBe(0)
   expect(Number(projectScopeArticleRowCount?.count ?? 0)).toBe(0)

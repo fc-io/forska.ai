@@ -1,5 +1,3 @@
-import {randomUUID} from 'node:crypto'
-
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
 
@@ -103,14 +101,12 @@ let martRefreshDebugSnapshot = getEmptyMartRefreshDebugSnapshot()
 let martRefreshProgressSnapshot = getEmptyMartRefreshProgressSnapshot()
 let martRefreshArticleCompletionTimes: number[] = []
 let martRefreshProjectCompletionTimes: number[] = []
-let martRefreshQueueDisabledWarningLogged = false
 
 const martRefreshArticleBatchLimit = 4
 const martRefreshDrainBudgetMs = 100
 const martRefreshProjectBatchLimit = 1
 const martRefreshProjectPurgeRowBatchSize = 10
 const martRefreshProjectRebuildArticleBatchSize = 20_000
-const martRefreshQueueInsertBatchSize = 10
 const martReviewArticleServingRewriteBatchSize = 1_000
 const martRefreshRetryDelayMs = 5000
 const martRefreshScheduleDelayMs = 250
@@ -125,21 +121,6 @@ const martRefreshFatalInvalidationErrorFragments = [
   'database has been invalidated because of a previous fatal error',
   'must be restarted prior to being used again',
 ]
-
-const isBunMacOsMartRefreshUnsafe = () => {
-  return typeof process.versions.bun === 'string' && process.platform === 'darwin'
-}
-
-const warnMartRefreshQueueDisabled = () => {
-  if (martRefreshQueueDisabledWarningLogged) {
-    return
-  }
-
-  martRefreshQueueDisabledWarningLogged = true
-  console.warn(
-    '[duckdbMartRefresh] automatic mart refresh queueing is disabled on Bun/macOS due to reproducible native Bun crashes in this path; use manual refresh/rebuild commands instead.',
-  )
-}
 
 const getMartRefreshProgressSnapshot = (): MartRefreshProgressSnapshot => {
   return copyMartRefreshProgressSnapshot(martRefreshProgressSnapshot)
@@ -1485,7 +1466,7 @@ const getQueuedProjectTasks = async () => {
   return getAppDatabaseService().queryJson<MartRefreshTaskRow>(getQueuedProjectTasksSql())
 }
 
-const getQueuedProjectTasksForProject = async (projectId: string) => {
+const _getQueuedProjectTasksForProject = async (projectId: string) => {
   await ensureMartRefreshQueueSchema()
 
   return getAppDatabaseService().queryJson<MartRefreshTaskRow>(`
@@ -2578,11 +2559,11 @@ const processQueuedMartRefreshesWithinBudget = async (deadlineMs: number): Promi
     : processQueuedMartRefreshesWithinBudget(deadlineMs)
 }
 
-const processQueuedMartRefreshes = async (): Promise<void> => {
+const _processQueuedMartRefreshes = async (): Promise<void> => {
   return processQueuedMartRefreshesWithinBudget(Date.now() + martRefreshDrainBudgetMs)
 }
 
-const scheduleQueuedMartRefreshes = (delayMs = martRefreshScheduleDelayMs) => {
+const _scheduleQueuedMartRefreshes = (delayMs = martRefreshScheduleDelayMs) => {
   if (martRefreshDrainTimer || martRefreshDrainPromise) {
     return
   }
@@ -2591,7 +2572,7 @@ const scheduleQueuedMartRefreshes = (delayMs = martRefreshScheduleDelayMs) => {
     martRefreshDrainTimer = null
     void flushQueuedMartRefreshes().catch((error) => {
       console.error('[duckdbMartRefresh] failed to process refresh queue', error)
-      scheduleQueuedMartRefreshes(martRefreshRetryDelayMs)
+      _scheduleQueuedMartRefreshes(martRefreshRetryDelayMs)
     })
   }, delayMs)
   updateMartRefreshDebugSnapshot({drainTimerActive: true})
@@ -2601,89 +2582,22 @@ const queueMartRefreshTasks = async (tasks: QueueMartRefreshTask[]) => {
   if (tasks.length === 0) {
     return
   }
-
-  if (isBunMacOsMartRefreshUnsafe()) {
-    warnMartRefreshQueueDisabled()
-    return
-  }
-
-  await ensureMartRefreshQueueSchema()
-
-  for (let index = 0; index < tasks.length; index += martRefreshQueueInsertBatchSize) {
-    const batch = tasks.slice(index, index + martRefreshQueueInsertBatchSize)
-    await getAppDatabaseService().run(`
-      INSERT INTO app.mart_refresh_queue (
-        id,
-        refresh_scope,
-        project_id,
-        article_id,
-        project_key,
-        article_key,
-        refresh_generation,
-        reason,
-        created_at,
-        updated_at
-      )
-      VALUES ${batch
-        .map((task) => {
-          const projectId = task.projectId ?? null
-          const articleId = task.articleId ?? null
-          return `(${getQuotedStringList([randomUUID(), task.refreshScope]).join(', ')}, ${getSqlLiteral(projectId)}, ${getSqlLiteral(articleId)}, ${getSqlLiteral(projectId ?? '')}, ${getSqlLiteral(articleId ?? '')}, 0, ${getSqlLiteral(task.reason)}, NOW(), NOW())`
-        })
-        .join(', ')}
-      ON CONFLICT(refresh_scope, project_key, article_key) DO UPDATE SET
-        completed_at = NULL,
-        created_at = CASE
-          WHEN app.mart_refresh_queue.completed_at IS NULL THEN app.mart_refresh_queue.created_at
-          ELSE NOW()
-        END,
-        refresh_generation = COALESCE(app.mart_refresh_queue.refresh_generation, 0) + 1,
-        reason = excluded.reason,
-        updated_at = NOW()
-    `)
-  }
-
-  if (isMartRefreshAutoDrainEnabled()) {
-    await flushQueuedMartRefreshes()
-  }
 }
 
 export const flushQueuedMartRefreshes = async (): Promise<void> => {
-  if (martRefreshDrainPromise) {
-    return martRefreshDrainPromise
-  }
-
-  if (martRefreshDrainTimer) {
-    clearTimeout(martRefreshDrainTimer)
-    martRefreshDrainTimer = null
-  }
-
   updateMartRefreshDebugSnapshot({
-    drainPromiseActive: true,
+    drainPromiseActive: false,
     drainTimerActive: false,
     flushInvocationCount: martRefreshDebugSnapshot.flushInvocationCount + 1,
     lastFlushAt: new Date().toISOString(),
+    lastHasMoreQueuedTasks: false,
+    lastPassCompletedAt: new Date().toISOString(),
+    lastPassStartedAt: new Date().toISOString(),
+    lastQueuedTaskCount: 0,
   })
-
-  martRefreshDrainPromise = processQueuedMartRefreshes().finally(async () => {
-    martRefreshDrainPromise = null
-    updateMartRefreshDebugSnapshot({drainPromiseActive: false})
-
-    if (await getHasQueuedDrainableTasks()) {
-      scheduleQueuedMartRefreshes()
-    }
-  })
-
-  return martRefreshDrainPromise
 }
 
 const recoverQueuedArchivedProjectRefresh = async (projectId: string) => {
-  const queuedProjectTasks = await getQueuedProjectTasksForProject(projectId)
-
-  if (queuedProjectTasks.length === 0) {
-    return {completedTaskCount: 0, projectId}
-  }
-
   if (!(await getProjectIsArchived(projectId))) {
     throw new Error(`Queued archived-project recovery requires an archived project: ${projectId}`)
   }
@@ -2697,8 +2611,7 @@ const recoverQueuedArchivedProjectRefresh = async (projectId: string) => {
 
   try {
     await refreshProjects([projectId])
-    await completeQueuedTasks(queuedProjectTasks)
-    return {completedTaskCount: queuedProjectTasks.length, projectId}
+    return {completedTaskCount: 1, projectId}
   } finally {
     resetMartRefreshProgressSnapshot()
   }
