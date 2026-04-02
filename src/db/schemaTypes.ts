@@ -22,6 +22,7 @@ export type JudgmentsJobsPromptsSkipReason = 'no_fulltext' | 'conversion_failed'
 export type JudgmentChunkingStrategy = 'patient_h3_greedy' | 'article_heading_greedy' | 'article_paragraph_greedy'
 export type Engine = 'sglang' | 'vllm'
 export type ModelSource = 'discovered' | 'manual'
+export type ProjectMartRefreshStatus = 'idle' | 'running' | 'failed'
 
 export type UserRecord = {
   id: string
@@ -305,6 +306,25 @@ export type ProjectArticleRecord = {
   projectId: string
   importedFromProjectId: string | null
   articleId: string
+}
+
+export type ProjectMartRefreshStateRecord = {
+  projectId: string
+  dirtyToken: number
+  activeRefreshToken: number
+  lastCompletedRefreshToken: number
+  lastRequestedAt: Date
+  lastRequestReason: string | null
+  requestedBy: string | null
+  refreshStatus: ProjectMartRefreshStatus
+  lastStartedAt: Date | null
+  lastCompletedAt: Date | null
+  lastFailedAt: Date | null
+  lastError: string | null
+  workerId: string | null
+  leaseExpiresAt: Date | null
+  createdAt: Date
+  updatedAt: Date
 }
 
 export type TokenUseRecord = {

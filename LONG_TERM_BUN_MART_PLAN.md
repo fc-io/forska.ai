@@ -873,15 +873,24 @@ Smoke tests:
 - verify all affected project review pages and counts update automatically
 - verify unassessed count and prompt queue generation update automatically
 
-Required runtime quality gate:
+Required quality gate:
+- run targeted tests for the touched areas
+- run the broader relevant test suites
+- run `bun run lint`
+- run `bun run build`
 - run `bun run dev:server`
-- let it run long enough to exercise startup, watcher restart wiring, writer-role background work, and prompt-queue paths
+- let `bun run dev:server` run long enough to exercise startup, watcher restart wiring, writer-role background work, and prompt-queue paths
 - inspect terminal output and any generated logs for:
   - `panic: A C++ exception occurred`
   - `oh no: Bun has crashed`
   - worker exit / code 133 restart loops
   - repeated native crash reports / `bun.report` links
-- do not consider the implementation complete until this dev-server runtime smoke test stays up cleanly and log inspection shows no Bun native crash signatures
+- do not consider the implementation complete until:
+  - tests pass
+  - lint passes
+  - build passes
+  - the dev-server runtime smoke test stays up cleanly
+  - log inspection shows no Bun native crash signatures
 
 ---
 
