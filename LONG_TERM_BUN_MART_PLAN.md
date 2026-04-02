@@ -423,6 +423,9 @@ Requirement:
 - `publishProjectRefreshAck({projectId, completedToken})`
   - updates the replacement SQLite/job ack state only after the dirty token is fully satisfied
   - must publish both the replacement project-refresh ack token and the replacement wrap-visibility ack token where relevant
+  - must be idempotent and safely repeatable from ledger state
+  - must support a reconciliation path so if a worker crashes after marking the dirty token completed but before ack publication, missing ack state can be republished later without replaying the full refresh
+  - this reconciliation requirement matters not only for prompt-queue visibility but also for retention pruning of `queue_prompt` and `judgment_outbox`
 - `failProjectRefresh({projectId, workerId, error})`
 - `getProjectRefreshState(projectId)`
 - `listDirtyProjects()`
@@ -534,7 +537,9 @@ Recommended shape:
   1. unresolved article judgment-fact refresh succeeds
   2. project refresh succeeds
   3. the claimed dirty token is marked completed
+- ack publication must be idempotent and derivable from ledger state so it can be safely replayed by a reconciler after crashes
 - `wrap_visibility_ack_token` should be advanced in a way that preserves the existing operational intent: the queue builder must know whether wrapped/raw scan visibility is safe relative to completed mart refresh work, but it should no longer depend on legacy queue-seq watermarks
+- retention pruning that currently depends on ack progress must be migrated to consume the same token-based ack state or a reconciled derivative of it
 
 Migration rule:
 - explicitly migrate the logic in:
@@ -753,6 +758,8 @@ Step 1: Write failing tests for:
 - strict count endpoints use raw fallback or bypass stale marts
 - prompt queue generation paths do not silently trust stale marts
 - replacement SQLite/job refresh ack updates only after worker completion of the satisfied dirty token
+- ack publication is idempotent and can be replayed from ledger state after a simulated worker crash
+- retention-pruning decisions remain correct when ack publication is replayed by reconciliation
 - legacy per-job SQLite `job_scan_state` files upgrade in place from seq-based columns to token-based columns safely
 - review detail route does not silently trust stale `mart.review_article_serving_detail`
 - unassessed count cache invalidates when project/job becomes dirty
@@ -885,6 +892,7 @@ Concretely, phase 1 should be:
 - worker runs `refreshProject(projectId)`
 - worker marks `last_completed_refresh_token = claimed_token`
 - worker publishes replacement token-based job refresh visibility ack(s) for the satisfied token where relevant
+- if the worker crashes after token completion but before ack publication, a reconciler republishes the missing ack state from ledger state without rerunning the full refresh
 - worker trims/clears resolved article dirtiness through `claimed_token`
 
 Why this is the right long-term architecture:
