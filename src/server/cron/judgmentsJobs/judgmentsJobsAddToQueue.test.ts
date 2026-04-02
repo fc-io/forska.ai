@@ -37,7 +37,6 @@ type MockSqliteService = {
     jobId: string,
     entries: Array<{articleId: string; promptId: string}>,
   ) => Promise<Array<{articleId: string; promptId: string}>>
-  getMaxOutboxSeq: () => Promise<number | null>
   getReadyCount: () => Promise<number>
   getScanState: () => Promise<MockScanState>
   hasJob: () => boolean
@@ -72,6 +71,7 @@ const registerSharedMocks = (
   getPromptsCalls: {count: number},
   {
     getPromptsImpl,
+    projectDirtyToken = null,
   }: {
     getPromptsImpl?: (
       projectId: string,
@@ -83,6 +83,7 @@ const registerSharedMocks = (
       nextCursor: {lastArticleId: string; lastDate: Date} | null
       promptEntries: Array<{articleId: string; promptId: string}>
     }>
+    projectDirtyToken?: number | null
   } = {},
 ) => {
   void mock.module(appDatabaseServiceModulePath, () => {
@@ -90,7 +91,11 @@ const registerSharedMocks = (
       getAppDatabaseService: () => {
         return {
           queryJson: async <T>(statement: string): Promise<T[]> => {
-            return statement.includes('FROM app.judgment_job jj') ? [getJobConfigRow() as T] : []
+            return statement.includes('FROM app.project_mart_refresh_state pmrs')
+              ? [{dirtyToken: projectDirtyToken} as T]
+              : statement.includes('FROM app.judgment_job jj')
+                ? [getJobConfigRow() as T]
+                : []
           },
           run: async (_statement: string): Promise<void> => {
             return undefined
@@ -160,9 +165,6 @@ test('uses raw OLAP fallback when exhausted SQLite jobs are waiting on mart visi
     filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
       return entries
     },
-    getMaxOutboxSeq: async () => {
-      return 12
-    },
     getReadyCount: async () => {
       return 0
     },
@@ -188,6 +190,7 @@ test('uses raw OLAP fallback when exhausted SQLite jobs are waiting on mart visi
       preferRawFallbackValues.push(Boolean(preferRawFallback))
       return {nextCursor: null, promptEntries: []}
     },
+    projectDirtyToken: 12,
   })
 
   const module = (await import(
@@ -218,9 +221,6 @@ test('wraps exhausted SQLite jobs once visibility catches up and increments scan
     filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
       return entries
     },
-    getMaxOutboxSeq: async () => {
-      return 12
-    },
     getReadyCount: async () => {
       return 0
     },
@@ -241,7 +241,7 @@ test('wraps exhausted SQLite jobs once visibility catches up and increments scan
     },
   }
 
-  registerSharedMocks(sqliteService, getPromptsCalls)
+  registerSharedMocks(sqliteService, getPromptsCalls, {projectDirtyToken: 12})
 
   const module = (await import(
     `${judgmentsJobsAddToQueueModulePath}?wrapped=${Date.now()}`
@@ -275,9 +275,6 @@ test('initializes missing SQLite job state before topping up the queue', async (
     },
     filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
       return entries
-    },
-    getMaxOutboxSeq: async () => {
-      return null
     },
     getReadyCount: async () => {
       return 0
@@ -327,9 +324,6 @@ test('filters out locally judged SQLite prompt pairs before adding ready prompts
       return entries.filter((entry) => {
         return entry.articleId !== 'article-local'
       })
-    },
-    getMaxOutboxSeq: async () => {
-      return null
     },
     getReadyCount: async () => {
       return 0

@@ -232,6 +232,8 @@ type JudgmentJobStorageRow = {id: string}
 
 type ProjectRefreshAckStateRow = {lastCompletedRefreshToken: number | null; projectId: string}
 
+type ProjectRefreshVisibilityStateRow = {dirtyToken: number | null; lastCompletedRefreshToken: number | null}
+
 type WalCheckpointRow = {busy: number; checkpointed: number; log: number}
 
 const openDatabases = new Map<string, Database>()
@@ -1258,7 +1260,7 @@ const getSqlPlaceholders = (count: number) => {
   })
 }
 
-const getVisibilityAckedOutboxRows = (database: Database, visibilityAckSeq: number, limit: number) => {
+const getVisibilityAckedOutboxRows = (database: Database, limit: number) => {
   return database
     .query(
       `
@@ -1267,12 +1269,27 @@ const getVisibilityAckedOutboxRows = (database: Database, visibilityAckSeq: numb
           queue_prompt_id AS queuePromptId
         FROM judgment_outbox
         WHERE exported_at IS NOT NULL
-          AND outbox_seq <= ?
         ORDER BY outbox_seq ASC
         LIMIT ?
       `,
     )
-    .all(visibilityAckSeq, limit) as RetentionEligibleOutboxRow[]
+    .all(limit) as RetentionEligibleOutboxRow[]
+}
+
+const getProjectRefreshVisibilityStateForJob = async (
+  jobId: string,
+): Promise<ProjectRefreshVisibilityStateRow | null> => {
+  const [row] = await getAppDatabaseService().queryJson<ProjectRefreshVisibilityStateRow>(`
+    SELECT
+      CAST(pmrs.dirty_token AS INTEGER) AS dirtyToken,
+      CAST(pmrs.last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken
+    FROM app.judgment_job jj
+    INNER JOIN app.project_mart_refresh_state pmrs ON pmrs.project_id = jj.project_id
+    WHERE jj.id = ${getSqlLiteral(jobId)}
+    LIMIT 1
+  `)
+
+  return row ?? null
 }
 
 const getOutboxEntry = (row: OutboxRow) => {
@@ -1719,19 +1736,26 @@ const pruneVisibilityAckedRetentionForJob = async ({
   maxRows: number
   serverJobId?: string
 }): Promise<RetentionPruneResult> => {
+  const projectRefreshState = await getProjectRefreshVisibilityStateForJob(jobId)
+
   return (
     (await withOwnedJobDatabase(
       jobId,
       false,
       (database) => {
         const visibilityAckSeq = getStoredScanState(database, jobId).lastProjectRefreshAckSeq
+        const projectDirtyToken = projectRefreshState?.dirtyToken ?? null
 
         if (visibilityAckSeq == null || maxRows <= 0) {
           return emptyRetentionPruneResult()
         }
 
-        return database.transaction((ackSeq: number) => {
-          const eligibleRows = getVisibilityAckedOutboxRows(database, ackSeq, maxRows)
+        if (projectDirtyToken != null && visibilityAckSeq < projectDirtyToken) {
+          return emptyRetentionPruneResult()
+        }
+
+        return database.transaction(() => {
+          const eligibleRows = getVisibilityAckedOutboxRows(database, maxRows)
 
           if (eligibleRows.length === 0) {
             return emptyRetentionPruneResult()
@@ -1754,16 +1778,15 @@ const pruneVisibilityAckedRetentionForJob = async ({
             DELETE FROM judgment_outbox
             WHERE outbox_seq IN (${outboxPlaceholders.join(', ')})
               AND exported_at IS NOT NULL
-              AND outbox_seq <= ?
           `)
           const queuePromptResult = queuePromptDelete.run(...queuePromptIds) as {changes?: number}
-          const outboxResult = outboxDelete.run(...outboxSeqs, ackSeq) as {changes?: number}
+          const outboxResult = outboxDelete.run(...outboxSeqs) as {changes?: number}
 
           return {
             outboxRowsDeleted: Number(outboxResult.changes ?? 0),
             queuePromptRowsDeleted: Number(queuePromptResult.changes ?? 0),
           }
-        })(visibilityAckSeq)
+        })()
       },
       serverJobId,
     )) ?? emptyRetentionPruneResult()

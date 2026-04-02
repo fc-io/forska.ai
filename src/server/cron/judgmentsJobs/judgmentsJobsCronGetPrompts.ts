@@ -23,6 +23,7 @@ export const judgmentsJobsCronGetPrompts = async (
   cursor: JobCursor | null = null,
   preferRawFallback = false,
 ): Promise<QueuePromptsResult> => {
+  const shouldPreferRawFallback = Boolean(preferRawFallback)
   const [projectResult, enabledPromptCount] = await Promise.all([
     getAppDatabaseService().queryJson<{id: string; archived: boolean}>(`
       SELECT id, archived
@@ -95,7 +96,7 @@ export const judgmentsJobsCronGetPrompts = async (
     jobId,
     numberOfPromptsToGet,
     cursor,
-    preferRawFallback,
+    preferRawFallback: shouldPreferRawFallback,
   }).finally(() => {
     clearTimeout(slowTimer)
   })
@@ -116,6 +117,7 @@ export const judgmentsJobsCronGetPrompts = async (
       nextCursor: nextCursorSummary,
       cursorAction,
       durationMs,
+      preferRawFallback: shouldPreferRawFallback,
       olapDb: 'duckdb',
     })
   } else if (durationMs > 5_000) {
@@ -128,6 +130,7 @@ export const judgmentsJobsCronGetPrompts = async (
       nextCursor: nextCursorSummary,
       cursorAction,
       durationMs,
+      preferRawFallback: shouldPreferRawFallback,
       olapDb: 'duckdb',
     })
   }

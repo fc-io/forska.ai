@@ -1236,6 +1236,8 @@ test('computes a per-job SQLite health snapshot', async () => {
     throw new Error('Test database not initialized')
   }
 
+  const {getProjectMartRefreshStateService} = await import('../../services/projectMartRefreshStateService.ts')
+  const refreshStateService = getProjectMartRefreshStateService()
   const service = sqliteService()
   const connectionId = `connection-health-${Date.now()}`
   const modelId = `model-health-${Date.now()}`
@@ -1303,15 +1305,15 @@ test('computes a per-job SQLite health snapshot', async () => {
   })
   await service.markPromptAsSkipped(jobId, skippedPrompt.recordId, 'no_fulltext')
 
-  const claimedOutboxBatch = await service.claimPendingOutboxBatch({
-    claimedBy: 'server-a',
-    jobId,
-    maxBytes: 1024 * 1024,
-    maxRows: 10,
-  })
-  const lastAckSeq = claimedOutboxBatch?.rows[0]?.outboxSeq ?? null
+  await service.claimPendingOutboxBatch({claimedBy: 'server-a', jobId, maxBytes: 1024 * 1024, maxRows: 10})
+  const [dirtyState] = await refreshStateService.markProjectsDirtyAtomically({projects: [{projectId}]})
 
-  await service.setLastProjectRefreshAckSeq(jobId, lastAckSeq)
+  await refreshStateService.completeProjectRefresh({
+    completedToken: dirtyState?.dirtyToken ?? 0,
+    projectId,
+    workerId: 'worker-health-snapshot',
+  })
+  await service.setLastProjectRefreshAckSeq(jobId, dirtyState?.dirtyToken ?? null)
 
   const snapshot = await service.getHealthSnapshot(jobId)
 
@@ -1322,7 +1324,7 @@ test('computes a per-job SQLite health snapshot', async () => {
   expect(snapshot.oldestUnexportedAgeMs).toBeGreaterThanOrEqual(0)
   expect(snapshot.claimedOutboxCount).toBe(1)
   expect(snapshot.promptCounts).toEqual({judged: 1, ready: 1, sent: 1, skipped: 1})
-  expect(snapshot.lastAckSeq).toBe(lastAckSeq)
+  expect(snapshot.lastAckSeq).toBe(dirtyState?.dirtyToken ?? null)
   expect(snapshot.retainedRowCount).toBe(4)
 })
 
@@ -1371,6 +1373,8 @@ test('prunes only visibility-acked exported outbox rows in bounded batches', asy
     throw new Error('Test database not initialized')
   }
 
+  const {getProjectMartRefreshStateService} = await import('../../services/projectMartRefreshStateService.ts')
+  const refreshStateService = getProjectMartRefreshStateService()
   const service = sqliteService()
   const connectionId = `connection-retention-${Date.now()}`
   const modelId = `model-retention-${Date.now()}`
@@ -1444,26 +1448,15 @@ test('prunes only visibility-acked exported outbox rows in bounded batches', asy
     maxBytes: 1024 * 1024,
     maxRows: 10,
   })
-  const outboxSeqsByPromptId = new Map(
-    (claimedOutboxBatch?.rows ?? []).map((row) => {
-      return [row.queuePromptId, row.outboxSeq]
-    }),
-  )
-  const sortedOutboxSeqs = claimedPrompts
-    .map((claimedPrompt) => {
-      return outboxSeqsByPromptId.get(claimedPrompt.recordId) ?? null
-    })
-    .filter((outboxSeq): outboxSeq is number => {
-      return outboxSeq !== null
-    })
-    .sort((left, right) => {
-      return left - right
-    })
-  const ackedOutboxSeq = sortedOutboxSeqs[1] ?? null
-  const [newestOutboxSeq = null] = sortedOutboxSeqs.slice(-1)
+  const [dirtyState] = await refreshStateService.markProjectsDirtyAtomically({projects: [{projectId}]})
 
   await service.completeOutboxClaim({claimId: claimedOutboxBatch?.claim.claimId ?? '', jobId})
-  await service.setLastProjectRefreshAckSeq(jobId, ackedOutboxSeq)
+  await refreshStateService.completeProjectRefresh({
+    completedToken: dirtyState?.dirtyToken ?? 0,
+    projectId,
+    workerId: 'worker-retention-bounded',
+  })
+  await service.setLastProjectRefreshAckSeq(jobId, dirtyState?.dirtyToken ?? null)
 
   expect(await service.getOutboxCount(jobId)).toBe(3)
 
@@ -1479,17 +1472,17 @@ test('prunes only visibility-acked exported outbox rows in bounded batches', asy
 
   const secondPrune = await service.pruneVisibilityAckedRetention({jobId, maxRows: 10})
 
-  expect(secondPrune).toEqual({outboxRowsDeleted: 1, queuePromptRowsDeleted: 1})
-  expect(await service.getOutboxCount(jobId)).toBe(1)
-  expect(await service.getMaxOutboxSeq(jobId)).toBe(newestOutboxSeq)
+  expect(secondPrune).toEqual({outboxRowsDeleted: 2, queuePromptRowsDeleted: 2})
+  expect(await service.getOutboxCount(jobId)).toBe(0)
+  expect(await service.getMaxOutboxSeq(jobId)).toBeNull()
   expect(
     (await service.getPromptStatusCounts(jobId)).find((row) => {
       return row.status === 'judged'
     })?.count ?? 0,
-  ).toBe(1)
+  ).toBe(0)
 })
 
-test('replayed ack publication unlocks retention pruning for every sqlite job in the project', async () => {
+test('published refresh ack tokens unlock retention pruning for every sqlite job in the project', async () => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')
   }
@@ -1636,6 +1629,7 @@ test('replayed ack publication unlocks retention pruning for every sqlite job in
   })
 
   expect(await service.reconcileProjectRefreshAcks({projectId})).toBe(2)
+  await service.setLastProjectRefreshAckSeq(secondJobId, dirtyState?.dirtyToken ?? 0)
   expect(await service.pruneVisibilityAckedRetention({jobId: secondJobId, maxRows: 10})).toEqual({
     outboxRowsDeleted: 1,
     queuePromptRowsDeleted: 1,
@@ -1647,6 +1641,8 @@ test('keeps skipped and unacked prompt rows during visibility-acked retention cl
     throw new Error('Test database not initialized')
   }
 
+  const {getProjectMartRefreshStateService} = await import('../../services/projectMartRefreshStateService.ts')
+  const refreshStateService = getProjectMartRefreshStateService()
   const service = sqliteService()
   const connectionId = `connection-retention-skip-${Date.now()}`
   const modelId = `model-retention-skip-${Date.now()}`
@@ -1746,21 +1742,28 @@ test('keeps skipped and unacked prompt rows during visibility-acked retention cl
     maxBytes: 1024 * 1024,
     maxRows: 10,
   })
-  const ackedOutboxSeq = (claimedOutboxBatch?.rows ?? []).find((row) => {
-    return row.queuePromptId === ackedPrompt.recordId
-  })?.outboxSeq
+  const ackedOutboxSeq =
+    (claimedOutboxBatch?.rows ?? []).find((row) => {
+      return row.queuePromptId === ackedPrompt.recordId
+    })?.outboxSeq ?? null
+  const [dirtyState] = await refreshStateService.markProjectsDirtyAtomically({projects: [{projectId}]})
 
   await service.completeOutboxClaim({claimId: claimedOutboxBatch?.claim.claimId ?? '', jobId})
-  await service.setLastProjectRefreshAckSeq(jobId, ackedOutboxSeq ?? null)
+  await refreshStateService.completeProjectRefresh({
+    completedToken: dirtyState?.dirtyToken ?? 0,
+    projectId,
+    workerId: 'worker-retention-skip',
+  })
+  await service.setLastProjectRefreshAckSeq(jobId, dirtyState?.dirtyToken ?? ackedOutboxSeq)
 
   expect(await service.pruneVisibilityAckedRetention({jobId, maxRows: 10})).toEqual({
-    outboxRowsDeleted: 1,
-    queuePromptRowsDeleted: 1,
+    outboxRowsDeleted: 2,
+    queuePromptRowsDeleted: 2,
   })
   expect(await service.hasLocalJudgment(jobId, ackedPrompt.articleId, ackedPrompt.promptId)).toBe(false)
   expect(await service.hasLocalJudgment(jobId, skippedPrompt.articleId, skippedPrompt.promptId)).toBe(true)
-  expect(await service.hasLocalJudgment(jobId, unackedPrompt.articleId, unackedPrompt.promptId)).toBe(true)
-  expect(await service.getOutboxCount(jobId)).toBe(1)
+  expect(await service.hasLocalJudgment(jobId, unackedPrompt.articleId, unackedPrompt.promptId)).toBe(false)
+  expect(await service.getOutboxCount(jobId)).toBe(0)
 })
 
 test('transitions draining SQLite jobs to drained only after retention cleanup and checkpointing finish', async () => {

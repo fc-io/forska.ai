@@ -145,18 +145,26 @@ const hasSqliteExhaustedCooldown = (exhaustedAt: Date | null) => {
   return exhaustedAt ? Date.now() - exhaustedAt.getTime() < sqliteScanExhaustedCooldownMs : false
 }
 
-const getWrapVisibilityAckSeq = ({
+const getProjectDirtyToken = async (jobId: string): Promise<number | null> => {
+  const [row] = await getAppDatabaseService().queryJson<{dirtyToken: number | null}>(`
+    SELECT CAST(pmrs.dirty_token AS INTEGER) AS dirtyToken
+    FROM app.judgment_job jj
+    INNER JOIN app.project_mart_refresh_state pmrs ON pmrs.project_id = jj.project_id
+    WHERE jj.id = '${escapeSqlString(jobId)}'
+    LIMIT 1
+  `)
+
+  return row?.dirtyToken == null ? null : Number(row.dirtyToken)
+}
+
+const getWrapVisibilityToken = ({
   lastProjectRefreshAckSeq,
-  maxOutboxSeq,
+  projectDirtyToken,
 }: {
   lastProjectRefreshAckSeq: number | null
-  maxOutboxSeq: number | null
+  projectDirtyToken: number | null
 }) => {
-  return lastProjectRefreshAckSeq == null
-    ? maxOutboxSeq
-    : maxOutboxSeq == null
-      ? lastProjectRefreshAckSeq
-      : Math.max(lastProjectRefreshAckSeq, maxOutboxSeq)
+  return projectDirtyToken ?? lastProjectRefreshAckSeq
 }
 
 const hasWrapVisibility = ({
@@ -266,9 +274,9 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
       : {
           cursor: null,
           exhaustedAt: new Date(),
-          wrapVisibilityAckSeq: getWrapVisibilityAckSeq({
+          wrapVisibilityAckSeq: getWrapVisibilityToken({
             lastProjectRefreshAckSeq: scanState.lastProjectRefreshAckSeq,
-            maxOutboxSeq: await sqliteService.getMaxOutboxSeq(job.id),
+            projectDirtyToken: await getProjectDirtyToken(job.id),
           }),
         }
 
