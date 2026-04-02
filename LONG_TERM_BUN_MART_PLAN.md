@@ -421,6 +421,7 @@ Requirement:
   - must also clear/trim resolved article dirtiness up to `completedToken`
 - `publishProjectRefreshAck({projectId, completedToken})`
   - updates the replacement SQLite/job ack state only after the dirty token is fully satisfied
+  - must publish both the replacement project-refresh ack token and the replacement wrap-visibility ack token where relevant
 - `failProjectRefresh({projectId, workerId, error})`
 - `getProjectRefreshState(projectId)`
 - `listDirtyProjects()`
@@ -516,22 +517,35 @@ Long-term preferred shape:
 - let the mart refresh worker handle the rebuild
 
 Important prompt-queue / SQLite ack decision:
-- keep a replacement ack mechanism rather than removing it in phase 1
-- specifically, after a project’s claimed dirty token is fully satisfied, the refresh worker should publish a replacement ack back into SQLite job state for any affected judgment job(s)
-- this preserves existing prompt-queue semantics around refresh visibility and avoids forcing all prompt queue correctness onto raw fallback immediately
+- long term, do not preserve the legacy outbox-seq semantics exactly
+- instead, replace them with a token-based visibility model derived from the new refresh ledger
+- phase 1 should still keep an explicit worker-published ack concept so prompt queueing remains correct while the migration is in progress
 
 Recommended shape:
-- replace or reinterpret `job_scan_state.last_project_refresh_ack_seq` as a worker-published refresh acknowledgement tied to the new ledger token model
-- the worker should update that ack only after:
+- retire the old meaning of:
+  - `job_scan_state.last_project_refresh_ack_seq`
+  - `job_scan_state.wrap_visibility_ack_seq`
+- replace both with token-based fields owned by the new refresh worker / ledger integration, for example:
+  - `last_project_refresh_ack_token`
+  - `wrap_visibility_ack_token`
+- define visibility in terms of completed dirty tokens rather than imported outbox sequence numbers
+- the worker should update the replacement ack fields only after:
   1. unresolved article judgment-fact refresh succeeds
   2. project refresh succeeds
   3. the claimed dirty token is marked completed
-- long-term, this ack may become a token/epoch rather than a queue-seq concept, but the behavior should be preserved during migration
+- `wrap_visibility_ack_token` should be advanced in a way that preserves the existing operational intent: the queue builder must know whether wrapped/raw scan visibility is safe relative to completed mart refresh work, but it should no longer depend on legacy queue-seq watermarks
+
+Migration rule:
+- explicitly migrate the logic in:
+  - `src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts`
+  - `src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.ts`
+  - `src/server/cron/judgmentsJobs/judgmentsJobsCronGetPrompts.ts`
+- do not leave these files partially on seq-based semantics while the ledger uses token-based semantics
 
 This cleanly separates:
 - import correctness
 - review-serving freshness
-- prompt-queue refresh visibility
+- prompt-queue visibility semantics
 - worker orchestration
 
 ---
@@ -723,6 +737,7 @@ Files:
 - Modify: `src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts`
 - Modify: `src/server/cron/judgmentsJobs/judgmentsJobsCronGetPrompts.ts`
 - Modify: `src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.ts`
+- Modify: `src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts`
 - Test: review query tests / warnings tests / count tests / review-detail tests / prompt-queue tests
 
 Step 1: Write failing tests for:
@@ -793,6 +808,7 @@ The implementation is not complete until all of the following are true:
 - `/projects/$id/reviews-unassessed` removes/moves the article automatically
 - `/api/articlesreviewscount` reflects the change automatically
 - `/api/judgmentsjobs-unassessed-count` reflects the change automatically
+- `/api/judgmentsjobs-unassessed-articles` reflects the change automatically
 - prompt queue generation sees the article/prompt as freshly assessed
 
 2. After a human assessment update:
