@@ -24,6 +24,10 @@ const queryJsonRef = {
   },
 }
 
+const getFreshnessRow = (overrides: Partial<Record<string, unknown>> = {}) => {
+  return {dirtyToken: null, lastCompletedRefreshToken: null, refreshStatus: 'idle', ...overrides}
+}
+
 void mock.module(appQueryServiceModulePath, () => {
   return {
     getAppQueryService: () => {
@@ -165,9 +169,11 @@ test('project review details falls back to app judgments when detail mart rows a
   queryJsonRef.current = async (statement) => {
     return statement.includes('FROM app.project_prompt pp')
       ? [getPromptRow('prompt-1', 0)]
-      : statement.includes('FROM app.judgment j')
-        ? [getArticleJudgmentRow({judgmentId: 'judgment-fallback', judgmentPromptId: 'prompt-1'})]
-        : []
+      : statement.includes('FROM app.project_mart_refresh_state')
+        ? [getFreshnessRow()]
+        : statement.includes('FROM app.judgment j')
+          ? [getArticleJudgmentRow({judgmentId: 'judgment-fallback', judgmentPromptId: 'prompt-1'})]
+          : []
   }
 
   const response = await postReviewDetailsRequest()
@@ -191,25 +197,27 @@ test('project review details merges detail mart rows, raw fallback rows, and pla
   queryJsonRef.current = async (statement) => {
     return statement.includes('FROM app.project_prompt pp')
       ? [getPromptRow('prompt-1', 0), getPromptRow('prompt-2', 1), getPromptRow('prompt-3', 2)]
-      : statement.includes('FROM mart.review_article_serving_detail j')
-        ? [getProjectReviewDetailJudgmentRow({judgmentId: 'judgment-detail', judgmentPromptId: 'prompt-1'})]
-        : statement.includes('FROM app.judgment j')
-          ? [
-              getArticleJudgmentRow({judgmentId: 'judgment-detail', judgmentPromptId: 'prompt-1'}),
-              getArticleJudgmentRow({judgmentId: 'judgment-fallback', judgmentPromptId: 'prompt-2'}),
-            ]
-          : statement.includes('FROM app.judgment_assessment')
+      : statement.includes('FROM app.project_mart_refresh_state')
+        ? [getFreshnessRow()]
+        : statement.includes('FROM mart.review_article_serving_detail j')
+          ? [getProjectReviewDetailJudgmentRow({judgmentId: 'judgment-detail', judgmentPromptId: 'prompt-1'})]
+          : statement.includes('FROM app.judgment j')
             ? [
-                {
-                  assessmentComment: 'looks good',
-                  assessmentIsCorrect: true,
-                  createdAt: '2024-01-05T00:00:00.000Z',
-                  id: 'assessment-1',
-                  judgmentId: 'judgment-detail',
-                  updatedAt: '2024-01-05T00:00:00.000Z',
-                },
+                getArticleJudgmentRow({judgmentId: 'judgment-detail', judgmentPromptId: 'prompt-1'}),
+                getArticleJudgmentRow({judgmentId: 'judgment-fallback', judgmentPromptId: 'prompt-2'}),
               ]
-            : []
+            : statement.includes('FROM app.judgment_assessment')
+              ? [
+                  {
+                    assessmentComment: 'looks good',
+                    assessmentIsCorrect: true,
+                    createdAt: '2024-01-05T00:00:00.000Z',
+                    id: 'assessment-1',
+                    judgmentId: 'judgment-detail',
+                    updatedAt: '2024-01-05T00:00:00.000Z',
+                  },
+                ]
+              : []
   }
 
   const response = await postReviewDetailsRequest()
@@ -240,17 +248,19 @@ test('project review details keeps cross-project raw judgments out of the main f
   queryJsonRef.current = async (statement) => {
     return statement.includes('FROM app.project_prompt pp')
       ? [getPromptRow('prompt-1', 0)]
-      : statement.includes('FROM app.judgment j')
-        ? [
-            getArticleJudgmentRow({judgmentId: 'judgment-project', judgmentPromptId: 'prompt-1'}),
-            getArticleJudgmentRow({
-              judgmentId: 'judgment-cross-project',
-              judgmentProjectId: 'project-other',
-              judgmentSnapshotProjectId: 'project-other',
-              judgmentPromptId: 'prompt-1',
-            }),
-          ]
-        : []
+      : statement.includes('FROM app.project_mart_refresh_state')
+        ? [getFreshnessRow()]
+        : statement.includes('FROM app.judgment j')
+          ? [
+              getArticleJudgmentRow({judgmentId: 'judgment-project', judgmentPromptId: 'prompt-1'}),
+              getArticleJudgmentRow({
+                judgmentId: 'judgment-cross-project',
+                judgmentProjectId: 'project-other',
+                judgmentSnapshotProjectId: 'project-other',
+                judgmentPromptId: 'prompt-1',
+              }),
+            ]
+          : []
   }
 
   const response = await postReviewDetailsRequest()
@@ -267,4 +277,78 @@ test('project review details keeps cross-project raw judgments out of the main f
       return judgment.id
     }),
   ).toEqual(['judgment-cross-project'])
+})
+
+test('project review details bypasses stale detail mart rows and surfaces stale freshness', async () => {
+  let detailQueryCount = 0
+
+  fullArticlesByIdsRef.current = async () => {
+    return [{articleTitle: 'Article 1', id: 'article-1'}]
+  }
+  projectReviewConfigRef.current = async () => {
+    return {modelId: 'model-1', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+  }
+  queryJsonRef.current = async (statement) => {
+    return statement.includes('FROM app.project_prompt pp')
+      ? [getPromptRow('prompt-1', 0)]
+      : statement.includes('FROM app.project_mart_refresh_state')
+        ? [getFreshnessRow({dirtyToken: 4, lastCompletedRefreshToken: 3, refreshStatus: 'failed'})]
+        : statement.includes('FROM mart.review_article_serving_detail j')
+          ? ((detailQueryCount += 1), [getProjectReviewDetailJudgmentRow({judgmentId: 'stale-detail'})])
+          : statement.includes('FROM app.judgment j')
+            ? [getArticleJudgmentRow({judgmentId: 'judgment-fallback', judgmentPromptId: 'prompt-1'})]
+            : []
+  }
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as {
+    judgments: Array<{id: string}>
+    martFreshness: {isFresh: boolean; state: string}
+  }
+
+  expect(response.status).toBe(200)
+  expect(detailQueryCount).toBe(0)
+  expect(body.martFreshness).toMatchObject({isFresh: false, state: 'stale'})
+  expect(
+    body.judgments.map((judgment) => {
+      return judgment.id
+    }),
+  ).toEqual(['judgment-fallback'])
+})
+
+test('project review details surfaces running freshness while bypassing detail mart rows', async () => {
+  let detailQueryCount = 0
+
+  fullArticlesByIdsRef.current = async () => {
+    return [{articleTitle: 'Article 1', id: 'article-1'}]
+  }
+  projectReviewConfigRef.current = async () => {
+    return {modelId: 'model-1', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+  }
+  queryJsonRef.current = async (statement) => {
+    return statement.includes('FROM app.project_prompt pp')
+      ? [getPromptRow('prompt-1', 0)]
+      : statement.includes('FROM app.project_mart_refresh_state')
+        ? [getFreshnessRow({dirtyToken: 5, lastCompletedRefreshToken: 4, refreshStatus: 'running'})]
+        : statement.includes('FROM mart.review_article_serving_detail j')
+          ? ((detailQueryCount += 1), [getProjectReviewDetailJudgmentRow({judgmentId: 'running-detail'})])
+          : statement.includes('FROM app.judgment j')
+            ? [getArticleJudgmentRow({judgmentId: 'judgment-fallback', judgmentPromptId: 'prompt-1'})]
+            : []
+  }
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as {
+    judgments: Array<{id: string}>
+    martFreshness: {isFresh: boolean; state: string}
+  }
+
+  expect(response.status).toBe(200)
+  expect(detailQueryCount).toBe(0)
+  expect(body.martFreshness).toMatchObject({isFresh: false, state: 'running'})
+  expect(
+    body.judgments.map((judgment) => {
+      return judgment.id
+    }),
+  ).toEqual(['judgment-fallback'])
 })

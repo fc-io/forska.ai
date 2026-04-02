@@ -4,6 +4,7 @@ import type {
   JudgmentAssessmentRecord,
   JudgmentChunkingStrategy,
   JudgmentRecord,
+  ProjectMartRefreshStatus,
   PromptRecord,
 } from '../../../db/schemaTypes.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
@@ -72,6 +73,14 @@ type ProjectReviewConfig = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+}
+
+type ProjectReviewDetailMartFreshness = {
+  dirtyToken: number | null
+  isFresh: boolean
+  lastCompletedRefreshToken: number | null
+  refreshStatus: ProjectMartRefreshStatus | null
+  state: 'fresh' | 'running' | 'stale'
 }
 
 type ProjectReviewDetailJudgmentRow = {
@@ -183,6 +192,30 @@ const getProjectReviewDetailJudgmentRows = async (params: {
   `)
 
   return rows
+}
+
+const getProjectReviewDetailMartFreshness = async (projectId: string): Promise<ProjectReviewDetailMartFreshness> => {
+  const [row] = await getAppDatabaseService().queryJson<{
+    dirtyToken: number | null
+    lastCompletedRefreshToken: number | null
+    refreshStatus: ProjectMartRefreshStatus | null
+  }>(`
+    SELECT
+      CAST(dirty_token AS INTEGER) AS dirtyToken,
+      CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+      refresh_status AS refreshStatus
+    FROM app.project_mart_refresh_state
+    WHERE project_id = '${escapeSqlString(projectId)}'
+    LIMIT 1
+  `)
+
+  const dirtyToken = row?.dirtyToken ?? null
+  const lastCompletedRefreshToken = row?.lastCompletedRefreshToken ?? null
+  const refreshStatus = row?.refreshStatus ?? null
+  const isFresh = dirtyToken === null || (lastCompletedRefreshToken !== null && lastCompletedRefreshToken >= dirtyToken)
+  const state = isFresh ? 'fresh' : refreshStatus === 'running' ? 'running' : 'stale'
+
+  return {dirtyToken, isFresh, lastCompletedRefreshToken, refreshStatus, state}
 }
 
 const getArticleJudgmentRows = async (articleId: string): Promise<ArticleJudgmentRow[]> => {
@@ -355,23 +388,27 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       const projectReviewConfigPromise: Promise<ProjectReviewConfig | null> =
         getAppQueryService().getProjectReviewConfig(projectId)
       const allArticleJudgmentsPromise: Promise<ArticleJudgmentRow[]> = getArticleJudgmentRows(articleId)
-      const projectReviewDetailJudgmentRowsPromise: Promise<ProjectReviewDetailJudgmentRow[]> =
-        getProjectReviewDetailJudgmentRows({projectId, articleId})
-      const [projectPromptRows, projectReviewConfig, allArticleJudgments, projectReviewDetailJudgmentRows]: [
+      const martFreshnessPromise: Promise<ProjectReviewDetailMartFreshness> =
+        getProjectReviewDetailMartFreshness(projectId)
+      const [projectPromptRows, projectReviewConfig, allArticleJudgments, martFreshness]: [
         ProjectPromptRow[],
         ProjectReviewConfig | null,
         ArticleJudgmentRow[],
-        ProjectReviewDetailJudgmentRow[],
+        ProjectReviewDetailMartFreshness,
       ] = await Promise.all([
         projectPromptRowsPromise,
         projectReviewConfigPromise,
         allArticleJudgmentsPromise,
-        projectReviewDetailJudgmentRowsPromise,
+        martFreshnessPromise,
       ])
 
       if (!projectReviewConfig) {
         throw new Error('Project not found')
       }
+
+      const projectReviewDetailJudgmentRows = martFreshness.isFresh
+        ? await getProjectReviewDetailJudgmentRows({projectId, articleId})
+        : []
 
       const promptIds = projectPromptRows.map((p) => {
         return p.id
@@ -646,6 +683,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
 
       return {
         article,
+        martFreshness,
         prompts: projectPromptRows,
         judgments: judgmentsWithPlaceholders,
         // Cross-project extras
