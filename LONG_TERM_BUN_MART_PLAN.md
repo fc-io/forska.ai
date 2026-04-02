@@ -344,6 +344,7 @@ Requirement:
 - whenever a new LLM judgment is persisted, resolve all affected projects for the article and mark each affected project dirty
 - dirty marking must happen in the same outer transaction as the stale-causing write where feasible
 - if same-transaction dirtying is not feasible for a given path, that path must use a durable outbox / reconciliation mechanism so a crash cannot leave committed judgment writes with no dirty signal
+- migrate/remove the current legacy ack writer in `judgmentJobSqliteOutboxImport.ts` so this importer no longer publishes seq-based refresh acknowledgement after the worker becomes the source of truth for token-based refresh visibility
 
 ### Human assessments / review answers
 Files to inspect/update:
@@ -667,6 +668,7 @@ Step 1: Write failing tests that assert dirty-project marking occurs after:
 - datasource/import-scope changes
 - prompt merges / invalid-judgment flows that rewrite or delete judgments
 - prompt/project config changes
+- importer paths no longer write legacy seq-based refresh ack state once worker-owned token ack publication is in place
 
 Step 2: Implement cross-project impact resolution
 - changed article -> all active, non-archived affected projects
@@ -882,6 +884,7 @@ Concretely, phase 1 should be:
 - worker runs article judgment-fact refresh for all unresolved articles in that range
 - worker runs `refreshProject(projectId)`
 - worker marks `last_completed_refresh_token = claimed_token`
+- worker publishes replacement token-based job refresh visibility ack(s) for the satisfied token where relevant
 - worker trims/clears resolved article dirtiness through `claimed_token`
 
 Why this is the right long-term architecture:
