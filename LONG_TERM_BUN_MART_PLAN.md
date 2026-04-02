@@ -540,6 +540,11 @@ Migration rule:
   - `src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts`
   - `src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.ts`
   - `src/server/cron/judgmentsJobs/judgmentsJobsCronGetPrompts.ts`
+- explicitly add an in-place SQLite schema upgrade path for existing `job_scan_state` files that still contain:
+  - `last_project_refresh_ack_seq`
+  - `wrap_visibility_ack_seq`
+- replace those legacy columns/semantics with token-based equivalents in a compatibility-safe way
+- add tests that open an older per-job SQLite DB and migrate it safely without delete-and-recreate semantics
 - do not leave these files partially on seq-based semantics while the ledger uses token-based semantics
 
 This cleanly separates:
@@ -746,8 +751,10 @@ Step 1: Write failing tests for:
 - strict count endpoints use raw fallback or bypass stale marts
 - prompt queue generation paths do not silently trust stale marts
 - replacement SQLite/job refresh ack updates only after worker completion of the satisfied dirty token
+- legacy per-job SQLite `job_scan_state` files upgrade in place from seq-based columns to token-based columns safely
 - review detail route does not silently trust stale `mart.review_article_serving_detail`
 - unassessed count cache invalidates when project/job becomes dirty
+- unassessed preview endpoint reflects freshness correctly
 
 Step 2: Implement freshness gating
 - cover `duckdbOlap.ts` readers, direct review-detail readers, and prompt-queue builder paths
@@ -841,6 +848,8 @@ Targeted tests/examples (adapt to your actual suite names):
 - `bun test src/server/workers/projectMartRefreshWorker.test.ts`
 - `bun test src/server/routes/JudgmentsJobsRoutes.test.ts`
 - `bun test src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.test.ts`
+- `bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts`
+- `bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts`
 - `bun test src/services/olap/duckdbOlap*.test.ts`
 - `bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings*.test.ts`
 
