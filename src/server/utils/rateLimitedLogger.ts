@@ -39,6 +39,29 @@ type RateLimitedLogger = {
   resetAll: () => void
 }
 
+const safeSerializeLogArg = (value: unknown): string => {
+  if (typeof value === 'string') {
+    return value
+  }
+
+  if (value instanceof Error) {
+    return value.stack ?? `${value.name}: ${value.message}`
+  }
+
+  try {
+    return JSON.stringify(value)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return JSON.stringify({error: `failed to serialize log argument: ${message}`})
+  }
+}
+
+const normalizeLogArgs = (args: unknown[]): string[] => {
+  return args.map((arg) => {
+    return safeSerializeLogArg(arg)
+  })
+}
+
 export const createRateLimitedLogger = (options: RateLimitedLoggerOptions = {}): RateLimitedLogger => {
   const {windowMs = 600_000, showSuppressedCount = true} = options
 
@@ -60,15 +83,17 @@ export const createRateLimitedLogger = (options: RateLimitedLoggerOptions = {}):
       finalMessage = `${message} (+${entry.suppressedCount} suppressed)`
     }
 
-    // Log it
-    console[level](finalMessage, ...args)
+    // Bun 1.3.x can crash while pretty-printing large object arguments.
+    // Serialize structured args up front so logs stay informative without
+    // going through Bun's inspector on hot server paths.
+    console[level](finalMessage, ...normalizeLogArgs(args))
 
     // Update or create entry
     entries.set(key, {lastLogTime: now, suppressedCount: 0})
   }
 
   const force = (key: string, message: string, level: LogLevel = 'log', ...args: unknown[]): void => {
-    console[level](message, ...args)
+    console[level](message, ...normalizeLogArgs(args))
     entries.set(key, {lastLogTime: Date.now(), suppressedCount: 0})
   }
 

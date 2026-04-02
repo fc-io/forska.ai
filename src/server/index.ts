@@ -36,6 +36,7 @@ import {warmCodexAppServer} from './utils/getCodexAppServerClient.ts'
 import {inferenceRuntimeConfig} from './utils/getInferenceRuntimeConfig.ts'
 import {startMartRefreshDrainHeartbeat} from './utils/martRefreshDrainHeartbeat.ts'
 import {shouldServerRoleMountWriterCrons} from './utils/serverRole.ts'
+import {installSafeConsoleLogging} from './utils/installSafeConsoleLogging.ts'
 import {
   getCurrentServerRole,
   initializeServerRuntimeRole,
@@ -43,6 +44,8 @@ import {
   startServerRuntimeRoleMonitor,
 } from './utils/serverRuntimeRole.ts'
 import {startWriterConnectionHeartbeat} from './utils/writerConnectionHeartbeat.ts'
+
+installSafeConsoleLogging()
 
 const appServerRuntimeConfig = getAppServerRuntimeConfig()
 const allowedOrigins = [`http://localhost:${env.VITE_PORT}`, `http://localhost:${appServerRuntimeConfig.port}`]

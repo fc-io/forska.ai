@@ -33,7 +33,9 @@ export const requeueAbandonedSentPrompts = async ({
   }, 0)
 
   if (totalRequeued > 0) {
-    console.warn('[judgments] requeued abandoned sent prompts', {count: totalRequeued, jobIds, serverJobId})
+    console.warn(
+      `[judgments] requeued abandoned sent prompts ${JSON.stringify({count: totalRequeued, jobIds, serverJobId})}`,
+    )
   }
 
   return totalRequeued

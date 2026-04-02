@@ -59,6 +59,58 @@ const truncateForLog = (text: string, maxChars: number): {text: string; original
   return {text: truncatedText, originalLength, truncated}
 }
 
+const safeJsonStringify = (value: unknown): string => {
+  try {
+    return JSON.stringify(value)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return JSON.stringify({error: `failed to serialize log payload: ${message}`})
+  }
+}
+
+export const formatFirstJudgeRequestLog = ({
+  judgmentsJobId,
+  articleId,
+  promptId,
+  baseURL,
+  modelName,
+  requestConfig,
+  systemPromptPreview,
+  userPromptPreview,
+}: {
+  judgmentsJobId: string
+  articleId: string
+  promptId: string
+  baseURL: string
+  modelName: string
+  requestConfig: {temperature: number; maxCompletionTokens: number}
+  systemPromptPreview: ReturnType<typeof truncateForLog>
+  userPromptPreview: ReturnType<typeof truncateForLog>
+}): string => {
+  return safeJsonStringify({
+    judgmentsJobId,
+    articleId,
+    promptId,
+    baseURL,
+    modelName,
+    normalizedModelName: normalizeModelName(modelName),
+    request: {
+      temperature: requestConfig.temperature,
+      max_completion_tokens: requestConfig.maxCompletionTokens,
+      messages: {
+        system: systemPromptPreview.text,
+        user: userPromptPreview.text,
+      },
+      preview: {
+        systemOriginalLength: systemPromptPreview.originalLength,
+        systemTruncated: systemPromptPreview.truncated,
+        userOriginalLength: userPromptPreview.originalLength,
+        userTruncated: userPromptPreview.truncated,
+      },
+    },
+  })
+}
+
 const getFirstRequestPreviewChars = (): number => {
   return inferenceRuntimeConfig.judgeFirstRequestPreviewChars > 0
     ? inferenceRuntimeConfig.judgeFirstRequestPreviewChars
@@ -92,24 +144,29 @@ const logFirstJudgeRequest = ({
   const systemPromptPreview = truncateForLog(systemPrompt, previewChars)
   const shouldLogFullPrompt = inferenceRuntimeConfig.judgeFirstRequestLogFull
 
-  const messages = {system: systemPromptPreview.text, user: userPromptPreview.text}
-
-  console.log('[judge] first-request', {
-    judgmentsJobId,
-    articleId,
-    promptId,
-    baseURL,
-    modelName,
-    normalizedModelName: normalizeModelName(modelName),
-    request: {
-      temperature: requestConfig.temperature,
-      max_completion_tokens: requestConfig.maxCompletionTokens,
-      messages,
-    },
-  })
+  // Keep this as a pre-serialized string log. Bun 1.3.x has been crashing
+  // on this path when pretty-printing large nested prompt objects directly.
+  console.log(
+    `[judge] first-request ${formatFirstJudgeRequestLog({
+      judgmentsJobId,
+      articleId,
+      promptId,
+      baseURL,
+      modelName,
+      requestConfig,
+      systemPromptPreview,
+      userPromptPreview,
+    })}`,
+  )
 
   return shouldLogFullPrompt
-    ? console.log('[judge] first-request:full-user-prompt', {judgmentsJobId, userPrompt})
+    ? console.log(
+        `[judge] first-request:full-user-prompt ${safeJsonStringify({
+          judgmentsJobId,
+          userPrompt,
+          userPromptLength: userPrompt.length,
+        })}`,
+      )
     : undefined
 }
 
