@@ -14,7 +14,17 @@ type MarkProjectsDirtyAtomicallyParams = {
   reason?: string | null
 }
 
+type MarkArticleProjectsDirtyAtomicallyParams = {
+  articleIds: string[]
+  now?: Date
+  requestedBy?: string | null
+  runner?: RefreshStateRunner
+  reason?: string | null
+}
+
 type MarkedProjectDirtyState = {dirtyToken: number; projectId: string}
+
+type DirtyProjectArticleRow = {articleId: string; projectId: string}
 
 type ClaimDirtyProjectsParams = {leaseMs: number; limit: number; now?: Date; workerId: string}
 
@@ -159,6 +169,49 @@ const getProjectRefreshStateRecord = async (runner: RefreshStateRunner, projectI
   return row ?? null
 }
 
+const getDirtyProjectsForArticleIds = async (runner: RefreshStateRunner, articleIds: string[]) => {
+  const uniqueArticleIds = getUniqueValues(articleIds)
+
+  if (uniqueArticleIds.length === 0) {
+    return []
+  }
+
+  const rows = await runner.queryJson<DirtyProjectArticleRow>(`
+    SELECT
+      project_article.project_id AS projectId,
+      project_article.article_id AS articleId
+    FROM app.project_article project_article
+    INNER JOIN app.project project ON project.id = project_article.project_id
+    WHERE project_article.article_id IN (${getQuotedStringList(uniqueArticleIds).join(', ')})
+      AND project.archived = FALSE
+    UNION
+    SELECT
+      project_import_route.project_id AS projectId,
+      article_import_route.article_id AS articleId
+    FROM app.article_import_route article_import_route
+    INNER JOIN app.project_import_route project_import_route
+      ON project_import_route.import_route_id = article_import_route.import_route_id
+    INNER JOIN app.project project ON project.id = project_import_route.project_id
+    WHERE article_import_route.article_id IN (${getQuotedStringList(uniqueArticleIds).join(', ')})
+      AND project.archived = FALSE
+  `)
+
+  return Array.from(
+    rows
+      .reduce((acc, row) => {
+        const existing = acc.get(row.projectId)
+
+        acc.set(row.projectId, {
+          articleIds: getUniqueValues([...(existing?.articleIds ?? []), row.articleId]),
+          projectId: row.projectId,
+        })
+
+        return acc
+      }, new Map<string, {articleIds: string[]; projectId: string}>())
+      .values(),
+  )
+}
+
 const markProjectsDirtyAtomically = async ({
   now,
   projects,
@@ -178,6 +231,22 @@ const markProjectsDirtyAtomically = async ({
           const state = await markSingleProjectDirty(tx, project, {now: currentNow, requestedBy, reason})
           return [...acc, state]
         }, Promise.resolve([]))
+      })
+}
+
+const markArticleProjectsDirtyAtomically = async ({
+  articleIds,
+  now,
+  requestedBy = null,
+  runner,
+  reason = null,
+}: MarkArticleProjectsDirtyAtomicallyParams): Promise<MarkedProjectDirtyState[]> => {
+  return articleIds.length === 0
+    ? []
+    : withTransaction(runner, async (tx) => {
+        const projects = await getDirtyProjectsForArticleIds(tx, articleIds)
+
+        return markProjectsDirtyAtomically({now, projects, requestedBy, runner: tx, reason})
       })
 }
 
@@ -365,6 +434,7 @@ const projectMartRefreshStateService = {
   failProjectRefresh,
   getDirtyArticlesForClaim,
   heartbeatClaim,
+  markArticleProjectsDirtyAtomically,
   markProjectsDirtyAtomically,
 }
 
@@ -378,6 +448,7 @@ export {
   failProjectRefresh,
   getDirtyArticlesForClaim,
   heartbeatClaim,
+  markArticleProjectsDirtyAtomically,
   markProjectsDirtyAtomically,
 }
 
@@ -388,6 +459,7 @@ export type {
   FailProjectRefreshParams,
   GetDirtyArticlesForClaimParams,
   HeartbeatClaimParams,
+  MarkArticleProjectsDirtyAtomicallyParams,
   MarkedProjectDirtyState,
   MarkProjectsDirtyAtomicallyParams,
   ProjectRefreshClaim,

@@ -1,6 +1,6 @@
 import {getAppDatabaseService, type JudgmentInsertRow} from '../../services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
-import {getDuckdbMartRefreshService} from '../../services/getDuckdbMartRefreshService.ts'
+import {getProjectMartRefreshStateService} from '../../services/projectMartRefreshStateService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getImportableJudgmentJobWhereSql} from './judgmentJobImportScope.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
@@ -255,24 +255,7 @@ const insertOutboxEntriesIntoDuckdb = async (entries: JudgmentJobSqliteOutboxEnt
   await getAppDatabaseService().appendJudgments(getJudgmentInsertRows(entries))
 }
 
-const queueRefreshesForEntries = async (entries: JudgmentJobSqliteOutboxEntry[]) => {
-  const projectIds = Array.from(
-    new Set(
-      entries.flatMap((entry) => {
-        return entry.projectId ? [entry.projectId] : []
-      }),
-    ),
-  )
-
-  if (projectIds.length > 0) {
-    // Queue a project-scope refresh instead of one task per article. Large
-    // article fan-outs in this path have been triggering Bun/DuckDB crashes on
-    // macOS during mart_refresh_queue writes, while a single project refresh is
-    // semantically sufficient for imported judgment batches.
-    await getDuckdbMartRefreshService().queueProjectRefreshes(projectIds, 'sqliteJudgmentOutboxImport')
-    return
-  }
-
+const markRefreshStateDirtyForEntries = async (entries: JudgmentJobSqliteOutboxEntry[], requestedBy?: string) => {
   const articleIds = Array.from(
     new Set(
       entries.map((entry) => {
@@ -285,7 +268,11 @@ const queueRefreshesForEntries = async (entries: JudgmentJobSqliteOutboxEntry[])
     return
   }
 
-  await getDuckdbMartRefreshService().queueJudgmentArticleRefreshes(articleIds, 'sqliteJudgmentOutboxImport')
+  await getProjectMartRefreshStateService().markArticleProjectsDirtyAtomically({
+    articleIds,
+    reason: 'sqliteJudgmentOutboxImport',
+    requestedBy: requestedBy ?? null,
+  })
 }
 
 const getLastImportedOutboxSeq = (entries: JudgmentJobSqliteOutboxEntry[]) => {
@@ -458,8 +445,7 @@ export const importRecoveredJudgmentJobSqliteOutboxEntries = async (
   }
 
   if (importableEntries.length > 0) {
-    await queueRefreshesForEntries(importableEntries)
-    await getDuckdbMartRefreshService().flush()
+    await markRefreshStateDirtyForEntries(importableEntries)
   }
 
   return {
@@ -511,8 +497,7 @@ export const runJudgmentJobSqliteOutboxImportCycleForClaimedBatch = async ({
     }
 
     if (importableEntries.length > 0) {
-      await queueRefreshesForEntries(importableEntries)
-      await getDuckdbMartRefreshService().flush()
+      await markRefreshStateDirtyForEntries(importableEntries, claimedBy)
       await sqliteService.setLastProjectRefreshAckSeq(claim.jobId, lastImportedOutboxSeq)
     }
 

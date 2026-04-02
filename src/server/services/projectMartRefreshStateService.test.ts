@@ -392,6 +392,115 @@ test('markProjectsDirtyAtomically bumps tokens once per project and merges unres
   expect(result.unresolvedArticles).toEqual([{articleId: 'refresh-article-1'}, {articleId: 'refresh-article-2'}])
 })
 
+test('markArticleProjectsDirtyAtomically resolves active affected projects before recording dirty state', () => {
+  const result = runRefreshStateScript<{
+    articleRows: ProjectMartRefreshArticleStateRecord[]
+    marks: Array<{dirtyToken: number; projectId: string}>
+    stateRows: ProjectMartRefreshStateRecord[]
+  }>(`
+    const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
+
+    const service = getProjectMartRefreshStateService()
+
+    await database.run(\`
+      INSERT INTO app.import_route (id, route, name)
+      VALUES ('refresh-route-1', '/refresh-route-1', 'manual')
+    \`)
+    await database.run(\`
+      INSERT INTO app.project (id, name, model_id, archived, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+      VALUES ('refresh-project-archived', 'Archived Project', 'refresh-state-model', TRUE, TRUE, TRUE, FALSE, FALSE)
+    \`)
+    await database.run(\`
+      INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+      VALUES ('refresh-project-3', 'Unused Project', 'refresh-state-model', TRUE, TRUE, FALSE, FALSE)
+    \`)
+    await database.run(\`
+      INSERT INTO app.project_article (id, project_id, article_id)
+      VALUES
+        ('refresh-project-1-article-1', 'refresh-project-1', 'refresh-article-1'),
+        ('refresh-project-archived-article-1', 'refresh-project-archived', 'refresh-article-1')
+    \`)
+    await database.run(\`
+      INSERT INTO app.project_import_route (id, project_id, import_route_id)
+      VALUES
+        ('refresh-project-2-route', 'refresh-project-2', 'refresh-route-1'),
+        ('refresh-project-archived-route', 'refresh-project-archived', 'refresh-route-1')
+    \`)
+    await database.run(\`
+      INSERT INTO app.article_import_route (id, article_id, import_route_id)
+      VALUES ('refresh-article-1-route', 'refresh-article-1', 'refresh-route-1')
+    \`)
+
+    const marks = await service.markArticleProjectsDirtyAtomically({
+      articleIds: ['refresh-article-1', 'refresh-article-1', 'refresh-article-2'],
+      reason: 'judgment-import',
+      requestedBy: 'import-worker',
+      now: new Date('2026-04-02T10:02:00.000Z'),
+    })
+    const stateRows = await database.queryJson(\`
+      SELECT
+        project_id AS projectId,
+        CAST(dirty_token AS INTEGER) AS dirtyToken,
+        CAST(active_refresh_token AS INTEGER) AS activeRefreshToken,
+        CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+        last_requested_at AS lastRequestedAt,
+        last_request_reason AS lastRequestReason,
+        requested_by AS requestedBy,
+        refresh_status AS refreshStatus,
+        last_started_at AS lastStartedAt,
+        last_completed_at AS lastCompletedAt,
+        last_failed_at AS lastFailedAt,
+        last_error AS lastError,
+        worker_id AS workerId,
+        lease_expires_at AS leaseExpiresAt,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+      FROM app.project_mart_refresh_state
+      ORDER BY project_id ASC
+    \`)
+    const articleRows = await database.queryJson(\`
+      SELECT
+        project_id AS projectId,
+        article_id AS articleId,
+        CAST(first_dirty_token AS INTEGER) AS firstDirtyToken,
+        CAST(last_dirty_token AS INTEGER) AS lastDirtyToken,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+      FROM app.project_mart_refresh_article_state
+      ORDER BY project_id ASC, article_id ASC
+    \`)
+
+    console.log(JSON.stringify({articleRows, marks, stateRows}))
+    await database.close()
+  `)
+
+  expect(result.marks).toEqual([
+    {dirtyToken: 1, projectId: 'refresh-project-1'},
+    {dirtyToken: 1, projectId: 'refresh-project-2'},
+  ])
+  expect(
+    result.stateRows.map((row) => {
+      return {dirtyToken: row.dirtyToken, projectId: row.projectId}
+    }),
+  ).toEqual([
+    {dirtyToken: 1, projectId: 'refresh-project-1'},
+    {dirtyToken: 1, projectId: 'refresh-project-2'},
+  ])
+  expect(
+    result.articleRows.map((row) => {
+      return {
+        articleId: row.articleId,
+        firstDirtyToken: row.firstDirtyToken,
+        lastDirtyToken: row.lastDirtyToken,
+        projectId: row.projectId,
+      }
+    }),
+  ).toEqual([
+    {articleId: 'refresh-article-1', firstDirtyToken: 1, lastDirtyToken: 1, projectId: 'refresh-project-1'},
+    {articleId: 'refresh-article-1', firstDirtyToken: 1, lastDirtyToken: 1, projectId: 'refresh-project-2'},
+  ])
+})
+
 test('claimDirtyProjects supports heartbeat extension and lease expiry recovery', () => {
   const result = runRefreshStateScript<{
     firstClaim: Array<{

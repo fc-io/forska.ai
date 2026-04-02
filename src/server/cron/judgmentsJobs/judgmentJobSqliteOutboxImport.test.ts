@@ -104,7 +104,7 @@ afterEach(async () => {
   rmSync(tempJobDir, {force: true, recursive: true})
 })
 
-test('background import selects active running jobs and draining jobs, but excludes paused active jobs', () => {
+test('background import selects the next active or draining job for a single import cycle', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -118,6 +118,7 @@ test('background import selects active running jobs and draining jobs, but exclu
 
         const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
         const sqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
+        const outboxImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts')
         const backgroundImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts')
         const importedJobIds = []
         const queryStatements = []
@@ -154,26 +155,23 @@ test('background import selects active running jobs and draining jobs, but exclu
           }
         })
 
-        globalThis.Bun.spawn = (cmd) => {
-          importedJobIds.push(cmd.find((arg) => arg.startsWith('--jobId='))?.slice('--jobId='.length) ?? null)
+        void mock.module(outboxImportModulePath, () => {
           return {
-            exited: Promise.resolve(0),
-            stderr: new Blob(['']).stream(),
-            stdout: new Blob([
-              JSON.stringify({
+            runJudgmentJobSqliteOutboxImportCycle: async ({jobId}) => {
+              importedJobIds.push(jobId)
+              return {
                 claimedBy: 'test-server',
-                cycleStatus: 'idle',
                 discardedCount: 0,
                 duplicateCount: 0,
                 importedCount: 0,
-                jobId: 'mock-job',
+                jobId,
                 outboxClaimId: null,
                 outboxRowCount: 0,
-                status: 'ok',
-              }),
-            ]).stream(),
+                status: 'idle',
+              }
+            },
           }
-        }
+        })
 
         const {runJudgmentJobSqliteBackgroundImport} = await import(backgroundImportModulePath + '?storage-states=' + Date.now())
         const summary = await runJudgmentJobSqliteBackgroundImport({claimedBy: 'test-server'})
@@ -197,7 +195,7 @@ test('background import selects active running jobs and draining jobs, but exclu
     syncedLeaseJobIds: string[]
   }
 
-  expect(result.importedJobIds).toEqual(['active-job', 'draining-job'])
+  expect(result.importedJobIds).toEqual(['active-job'])
   expect(
     result.queryStatements.some((statement) => {
       return (
@@ -210,10 +208,10 @@ test('background import selects active running jobs and draining jobs, but exclu
     }),
   ).toBe(true)
   expect(result.syncedLeaseJobIds).toEqual([])
-  expect(result.summary).toEqual({attemptedCount: 2, failedCount: 0, skippedCount: 0, succeededCount: 2})
+  expect(result.summary).toEqual({attemptedCount: 1, failedCount: 0, skippedCount: 1, succeededCount: 0})
 })
 
-test('background import records metadata, quarantines repeated failures, and continues other jobs', () => {
+test('background import records metadata and quarantines repeated failures for the attempted job', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -227,11 +225,12 @@ test('background import records metadata, quarantines repeated failures, and con
 
         const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
         const sqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
+        const outboxImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts')
         const backgroundImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts')
         const failureCounts = {'fail-job': 0, 'quarantine-job': 2}
         const queryStatements = []
         const runStatements = []
-        const spawnedJobIds = []
+        const attemptedJobIds = []
 
         void mock.module(appDatabaseServiceModulePath, () => {
           return {
@@ -280,42 +279,20 @@ test('background import records metadata, quarantines repeated failures, and con
           }
         })
 
-        globalThis.Bun.spawn = (cmd) => {
-          const jobId = cmd.find((arg) => arg.startsWith('--jobId='))?.slice('--jobId='.length) ?? ''
-          spawnedJobIds.push(jobId)
-
-          if (jobId === 'success-job') {
-            return {
-              exited: Promise.resolve(0),
-              stderr: new Blob(['']).stream(),
-              stdout: new Blob([
-                JSON.stringify({
-                  claimedBy: 'test-server',
-                  cycleStatus: 'idle',
-                  discardedCount: 0,
-                  duplicateCount: 0,
-                  importedCount: 0,
-                  jobId,
-                  outboxClaimId: null,
-                  outboxRowCount: 0,
-                  status: 'ok',
-                }),
-              ]).stream(),
-            }
-          }
-
+        void mock.module(outboxImportModulePath, () => {
           return {
-            exited: Promise.resolve(1),
-            stderr: new Blob(['']).stream(),
-            stdout: new Blob([JSON.stringify({error: jobId + ' exploded', status: 'failed'})]).stream(),
+            runJudgmentJobSqliteOutboxImportCycle: async ({jobId}) => {
+              attemptedJobIds.push(jobId)
+              throw new Error(jobId + ' exploded')
+            },
           }
-        }
+        })
 
         const {runJudgmentJobSqliteBackgroundImport} = await import(backgroundImportModulePath + '?metadata=' + Date.now())
         const summary = await runJudgmentJobSqliteBackgroundImport({claimedBy: 'test-server'})
 
         console.log(
-          JSON.stringify({failureCounts, queryStatements, runStatements, spawnedJobIds, summary}),
+          JSON.stringify({attemptedJobIds, failureCounts, queryStatements, runStatements, summary}),
         )
       `,
     ],
@@ -331,26 +308,21 @@ test('background import records metadata, quarantines repeated failures, and con
   }
 
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    attemptedJobIds: string[]
     failureCounts: Record<string, number>
     queryStatements: string[]
     runStatements: string[]
-    spawnedJobIds: string[]
     summary: {attemptedCount: number; failedCount: number; skippedCount: number; succeededCount: number}
   }
 
-  expect(result.spawnedJobIds).toEqual(['fail-job', 'success-job', 'quarantine-job'])
-  expect(result.summary).toEqual({attemptedCount: 3, failedCount: 2, skippedCount: 0, succeededCount: 1})
-  expect(result.failureCounts).toEqual({'fail-job': 1, 'quarantine-job': 3})
+  expect(result.attemptedJobIds).toEqual(['fail-job'])
+  expect(result.summary).toEqual({attemptedCount: 1, failedCount: 1, skippedCount: 0, succeededCount: 0})
+  expect(result.failureCounts).toEqual({'fail-job': 1, 'quarantine-job': 2})
   expect(
     result.runStatements.filter((statement) => {
       return statement.includes('last_import_started_at')
     }),
-  ).toHaveLength(3)
-  expect(
-    result.runStatements.some((statement) => {
-      return statement.includes("WHERE id = 'success-job'") && statement.includes('last_import_exit_code = 0')
-    }),
-  ).toBe(true)
+  ).toHaveLength(1)
   expect(
     result.queryStatements.some((statement) => {
       return statement.includes("WHERE id = 'fail-job'") && statement.includes('last_import_exit_code = 1')
@@ -358,16 +330,12 @@ test('background import records metadata, quarantines repeated failures, and con
   ).toBe(true)
   expect(
     result.queryStatements.some((statement) => {
-      return (
-        statement.includes("WHERE id = 'quarantine-job'")
-        && statement.includes('storage_state = CASE')
-        && statement.includes("THEN 'quarantined'")
-      )
+      return statement.includes('storage_state = CASE') && statement.includes("THEN 'quarantined'")
     }),
   ).toBe(true)
 })
 
-test('background import releases an owned sqlite lease before using the isolated importer', () => {
+test('background import releases an owned sqlite lease before importing the next job', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -381,10 +349,10 @@ test('background import releases an owned sqlite lease before using the isolated
 
         const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
         const sqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
-        const isolatedImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteIsolatedImport.ts')
+        const outboxImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts')
         const backgroundImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts')
         const releasedOwnedLeaseJobIds = []
-        const spawnedJobIds = []
+        const attemptedJobIds = []
 
         void mock.module(appDatabaseServiceModulePath, () => {
           return {
@@ -416,24 +384,19 @@ test('background import releases an owned sqlite lease before using the isolated
           }
         })
 
-        void mock.module(isolatedImportModulePath, () => {
+        void mock.module(outboxImportModulePath, () => {
           return {
-            isJudgmentJobSqliteIsolatedImportLeaseConflict: () => false,
-            runJudgmentJobSqliteIsolatedImportCycle: async ({jobId}) => {
-              spawnedJobIds.push(jobId)
+            runJudgmentJobSqliteOutboxImportCycle: async ({jobId}) => {
+              attemptedJobIds.push(jobId)
               return {
-                errorMessage: null,
-                exitCode: 0,
-                result: {
-                  claimedBy: 'test-server',
-                  discardedCount: 0,
-                  duplicateCount: 0,
-                  importedCount: 0,
-                  jobId,
-                  outboxClaimId: null,
-                  outboxRowCount: 0,
-                  status: 'idle',
-                },
+                claimedBy: 'test-server',
+                discardedCount: 0,
+                duplicateCount: 0,
+                importedCount: 0,
+                jobId,
+                outboxClaimId: null,
+                outboxRowCount: 0,
+                status: 'idle',
               }
             },
           }
@@ -442,7 +405,7 @@ test('background import releases an owned sqlite lease before using the isolated
         const {runJudgmentJobSqliteBackgroundImport} = await import(backgroundImportModulePath + '?owned-lease=' + Date.now())
         const summary = await runJudgmentJobSqliteBackgroundImport({claimedBy: 'test-server'})
 
-        console.log(JSON.stringify({releasedOwnedLeaseJobIds, spawnedJobIds, summary}))
+        console.log(JSON.stringify({attemptedJobIds, releasedOwnedLeaseJobIds, summary}))
       `,
     ],
     {cwd: process.cwd(), env: {...process.env}},
@@ -457,14 +420,14 @@ test('background import releases an owned sqlite lease before using the isolated
   }
 
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    attemptedJobIds: string[]
     releasedOwnedLeaseJobIds: string[]
-    spawnedJobIds: string[]
     summary: {attemptedCount: number; failedCount: number; skippedCount: number; succeededCount: number}
   }
 
   expect(result.releasedOwnedLeaseJobIds).toEqual(['owned-job'])
-  expect(result.spawnedJobIds).toEqual(['owned-job', 'unowned-job'])
-  expect(result.summary).toEqual({attemptedCount: 2, failedCount: 0, skippedCount: 0, succeededCount: 2})
+  expect(result.attemptedJobIds).toEqual(['owned-job'])
+  expect(result.summary).toEqual({attemptedCount: 1, failedCount: 0, skippedCount: 1, succeededCount: 0})
 })
 
 test('imports SQLite-backed judgments into DuckDB in batches', async () => {
@@ -476,9 +439,12 @@ test('imports SQLite-backed judgments into DuckDB in batches', async () => {
   const connectionId = `connection-${Date.now()}`
   const modelId = `model-${Date.now()}`
   const projectId = `project-${Date.now()}`
+  const linkedProjectId = `project-linked-${Date.now()}`
+  const archivedProjectId = `project-archived-${Date.now()}`
   const jobId = `job-${Date.now()}`
   const promptId = `prompt-${Date.now()}`
   const articleId = `article-${Date.now()}`
+  const importRouteId = `import-route-${Date.now()}`
 
   await runDatabase(`
     INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
@@ -493,6 +459,14 @@ test('imports SQLite-backed judgments into DuckDB in batches', async () => {
     VALUES ('${projectId}', 'SQLite Import Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
   `)
   await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${linkedProjectId}', 'SQLite Import Linked Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, archived, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${archivedProjectId}', 'SQLite Import Archived Test', '${modelId}', TRUE, TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
     INSERT INTO app.judgment_job (id, project_id, status)
     VALUES ('${jobId}', '${projectId}', 'running')
   `)
@@ -503,6 +477,24 @@ test('imports SQLite-backed judgments into DuckDB in batches', async () => {
   await runDatabase(`
     INSERT INTO app.article (id, article_title)
     VALUES ('${articleId}', 'Article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.import_route (id, route, name)
+    VALUES ('${importRouteId}', '/sqlite-import-route', 'manual')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('${jobId}-project-article', '${projectId}', '${articleId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_import_route (id, project_id, import_route_id)
+    VALUES
+      ('${jobId}-linked-route', '${linkedProjectId}', '${importRouteId}'),
+      ('${jobId}-archived-route', '${archivedProjectId}', '${importRouteId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article_import_route (id, article_id, import_route_id)
+    VALUES ('${jobId}-article-route', '${articleId}', '${importRouteId}')
   `)
 
   await service.initializeJob(jobId)
@@ -536,7 +528,31 @@ test('imports SQLite-backed judgments into DuckDB in batches', async () => {
       AND model_id = '${modelId}'
   `)
 
+  const refreshStateRows = await queryDatabase<{dirtyToken: number; projectId: string}>(`
+    SELECT
+      CAST(dirty_token AS INTEGER) AS dirtyToken,
+      project_id AS projectId
+    FROM app.project_mart_refresh_state
+    ORDER BY project_id ASC
+  `)
+
+  const articleStateRows = await queryDatabase<{articleId: string; projectId: string}>(`
+    SELECT
+      article_id AS articleId,
+      project_id AS projectId
+    FROM app.project_mart_refresh_article_state
+    ORDER BY project_id ASC, article_id ASC
+  `)
+
   expect(rows).toHaveLength(1)
+  expect(refreshStateRows).toEqual([
+    {dirtyToken: 1, projectId},
+    {dirtyToken: 1, projectId: linkedProjectId},
+  ])
+  expect(articleStateRows).toEqual([
+    {articleId, projectId},
+    {articleId, projectId: linkedProjectId},
+  ])
   expect((await service.getPendingOutboxBatch({jobId, maxBytes: 1024 * 1024, maxRows: 10})).length).toBe(0)
 })
 
@@ -983,9 +999,9 @@ test('keeps the previous refresh acknowledgement seq when mart visibility acknow
     throw new Error('Test database not initialized')
   }
 
-  const {getDuckdbMartRefreshService} = await import('../../services/getDuckdbMartRefreshService.ts')
-  const martRefreshService = getDuckdbMartRefreshService()
-  const originalFlush = martRefreshService.flush
+  const {getProjectMartRefreshStateService} = await import('../../services/projectMartRefreshStateService.ts')
+  const refreshStateService = getProjectMartRefreshStateService()
+  const originalMarkArticleProjectsDirtyAtomically = refreshStateService.markArticleProjectsDirtyAtomically
   const service = sqliteService()
   const connectionId = `connection-ack-fail-${Date.now()}`
   const modelId = `model-ack-fail-${Date.now()}`
@@ -1041,18 +1057,18 @@ test('keeps the previous refresh acknowledgement seq when mart visibility acknow
   })
 
   const [pendingOutboxRow] = await service.getPendingOutboxBatch({maxBytes: 1024 * 1024, maxRows: 10})
-  martRefreshService.flush = async () => {
-    throw new Error('refresh visibility failed')
+  refreshStateService.markArticleProjectsDirtyAtomically = async () => {
+    throw new Error('refresh state dirty mark failed')
   }
 
   try {
     await importOutboxBatch()
-    throw new Error('Expected mart refresh acknowledgement failure')
+    throw new Error('Expected refresh state dirty mark failure')
   } catch (error) {
     expect(error).toBeInstanceOf(Error)
-    expect(error instanceof Error ? error.message : '').toBe('refresh visibility failed')
+    expect(error instanceof Error ? error.message : '').toBe('refresh state dirty mark failed')
   } finally {
-    martRefreshService.flush = originalFlush
+    refreshStateService.markArticleProjectsDirtyAtomically = originalMarkArticleProjectsDirtyAtomically
   }
 
   expect((await service.getScanState(jobId)).lastProjectRefreshAckSeq).toBe(0)
