@@ -4,10 +4,12 @@ import {beforeEach, expect, mock, test} from 'bun:test'
 
 import {
   defaultProjectMartRefreshWorkerIncrementalArticleThreshold,
+  getProjectMartRefreshExecutionMode,
   type ProjectMartRefreshRunnerService,
   type ProjectMartRefreshStateWorkerService,
   type ProjectMartRefreshWorkerDependencies,
   runProjectMartRefreshWorkerCycle,
+  runProjectMartRefreshWorkerOnce,
 } from './projectMartRefreshWorker.ts'
 
 type ClaimPlan = {
@@ -34,6 +36,7 @@ const createWorkerTestContext = (params: {
   claims?: ClaimPlan[]
   onRefreshProject?: (projectId: string) => Promise<void>
   reconciledProjectIds?: string[]
+  scopeArticleCountByProject?: Record<string, number>
 }) => {
   const callLog: string[] = []
   const claims = [...(params.claims ?? [])]
@@ -41,6 +44,7 @@ const createWorkerTestContext = (params: {
   const completed: Array<{completedToken: number; projectId: string; workerId: string}> = []
   const failed: Array<{error: string; projectId: string; workerId: string}> = []
   const heartbeatCalls: Array<{leaseMs: number; projectId: string; workerId: string}> = []
+  const released: Array<{projectId: string; workerId: string}> = []
   const stateService: ProjectMartRefreshStateWorkerService = {
     claimDirtyProjects: mock(async ({leaseMs, limit, workerId}: {leaseMs: number; limit: number; workerId: string}) => {
       callLog.push(`claim:${workerId}:${limit}:${leaseMs}`)
@@ -78,6 +82,11 @@ const createWorkerTestContext = (params: {
         return null
       },
     ),
+    releaseProjectRefreshClaim: mock(async ({projectId, workerId}: {projectId: string; workerId: string}) => {
+      callLog.push(`release:${projectId}`)
+      released.push({projectId, workerId})
+      return null
+    }),
   }
   const refreshService: ProjectMartRefreshRunnerService = {
     refreshJudgmentArticle: mock(async (articleId: string) => {
@@ -111,18 +120,67 @@ const createWorkerTestContext = (params: {
         : remainingReconciledProjectIds.splice(0, remainingReconciledProjectIds.length).length
     }),
   }
+  const queuedLargeRebuilds: Array<{projectId: string; rebuildPhase: string; refreshToken: number}> = []
   const dependencies: ProjectMartRefreshWorkerDependencies = {
+    largeRebuildStateService: {
+      queueLargeRebuild: mock(async ({projectId, rebuildPhase, refreshToken}) => {
+        callLog.push(`largeRebuild:${projectId}:${rebuildPhase}:${refreshToken}`)
+        queuedLargeRebuilds.push({projectId, rebuildPhase, refreshToken})
+        return null
+      }),
+    },
+    projectInspector: {
+      getProjectScopeArticleCount: mock(async (projectId: string) => {
+        callLog.push(`scope:${projectId}`)
+        return params.scopeArticleCountByProject?.[projectId] ?? 0
+      }),
+    },
     refreshService,
     sleep: mock(async () => {}),
     sqliteService,
     stateService,
   }
 
-  return {acknowledgedProjects, callLog, completed, dependencies, failed, heartbeatCalls}
+  return {acknowledgedProjects, callLog, completed, dependencies, failed, heartbeatCalls, queuedLargeRebuilds}
 }
 
 beforeEach(() => {
   mock.restore()
+})
+
+test('classifies refresh execution mode as idle incremental or full', () => {
+  expect(getProjectMartRefreshExecutionMode({dirtyArticleCount: 0, incrementalArticleThreshold: 3})).toBe('idle')
+  expect(getProjectMartRefreshExecutionMode({dirtyArticleCount: 3, incrementalArticleThreshold: 3})).toBe('incremental')
+  expect(getProjectMartRefreshExecutionMode({dirtyArticleCount: 4, incrementalArticleThreshold: 3})).toBe('full')
+})
+
+test('one-shot worker reuses single-cycle behavior and exits after one claim attempt', async () => {
+  const context = createWorkerTestContext({
+    claims: [
+      {
+        claimedToken: 3,
+        lastCompletedToken: 2,
+        leaseExpiresAt: new Date('2026-04-02T13:00:30.000Z'),
+        projectId: 'project-1',
+        workerId: 'worker-1',
+      },
+      {
+        claimedToken: 1,
+        lastCompletedToken: 0,
+        leaseExpiresAt: new Date('2026-04-02T13:00:30.000Z'),
+        projectId: 'project-2',
+        workerId: 'worker-1',
+      },
+    ],
+  })
+
+  const result = await runProjectMartRefreshWorkerOnce({leaseMs: 2_000, workerId: 'worker-1'}, context.dependencies)
+
+  expect(result).toEqual({claimedToken: 3, projectId: 'project-1', status: 'completed', workerId: 'worker-1'})
+  expect(context.callLog[0]).toBe('reconcile:all')
+  expect(context.callLog[1]).toBe('claim:worker-1:1:2000')
+  expect(context.completed).toEqual([{completedToken: 3, projectId: 'project-1', workerId: 'worker-1'}])
+  expect(context.acknowledgedProjects).toEqual([{ackToken: 3, projectId: 'project-1'}])
 })
 
 test('claims at most one project per cycle', async () => {
@@ -176,6 +234,7 @@ test('refreshes judgment facts before the project rebuild', async () => {
     'load:project-1',
     'judgment:article-2',
     'judgment:article-1',
+    'scope:project-1',
     'project:project-1',
     'complete:project-1:2',
     'ack:project-1:2',
@@ -235,6 +294,7 @@ test('falls back to a full project refresh when the dirty-article delta exceeds 
     'judgment:article-2',
     'judgment:article-3',
     'judgment:article-4',
+    'scope:project-1',
     'project:project-1',
     'complete:project-1:5',
     'ack:project-1:5',
@@ -275,6 +335,45 @@ test('records failures when a claimed refresh errors', async () => {
   expect(context.acknowledgedProjects).toEqual([])
 })
 
+test('routes oversized automatic full refreshes into large rebuild state before project rebuilds', async () => {
+  const context = createWorkerTestContext({
+    articlesByProject: {'project-1': ['article-1', 'article-2', 'article-3', 'article-4']},
+    claims: [
+      {
+        claimedToken: 9,
+        lastCompletedToken: 8,
+        leaseExpiresAt: new Date('2026-04-02T13:20:30.000Z'),
+        projectId: 'project-1',
+        workerId: 'worker-1',
+      },
+    ],
+    scopeArticleCountByProject: {'project-1': 200_000},
+  })
+
+  const result = await runProjectMartRefreshWorkerCycle(
+    {incrementalArticleThreshold: 3, maxFullProjectScopeArticles: 100_000, workerId: 'worker-1'},
+    context.dependencies,
+  )
+
+  expect(result).toEqual({claimedToken: 9, projectId: 'project-1', status: 'completed', workerId: 'worker-1'})
+  expect(context.callLog).toEqual([
+    'reconcile:all',
+    'claim:worker-1:1:30000',
+    'load:project-1',
+    'judgment:article-1',
+    'judgment:article-2',
+    'judgment:article-3',
+    'judgment:article-4',
+    'scope:project-1',
+    'largeRebuild:project-1:prompt_answer_fact:9',
+    'release:project-1',
+  ])
+  expect(context.queuedLargeRebuilds).toEqual([{projectId: 'project-1', rebuildPhase: 'prompt_answer_fact', refreshToken: 9}])
+  expect(context.failed).toEqual([])
+  expect(context.completed).toEqual([])
+  expect(context.acknowledgedProjects).toEqual([])
+})
+
 test('can process work reclaimed after an expired lease', async () => {
   const context = createWorkerTestContext({
     articlesByProject: {'project-1': ['article-1']},
@@ -300,6 +399,7 @@ test('can process work reclaimed after an expired lease', async () => {
     'claim:worker-2:1:5000',
     'load:project-1',
     'judgment:article-1',
+    'scope:project-1',
     'project:project-1',
     'complete:project-1:4',
     'ack:project-1:4',

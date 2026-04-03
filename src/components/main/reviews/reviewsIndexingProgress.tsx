@@ -16,6 +16,24 @@ const getLaneDescription = (processingCount: number, queuedCount: number, speedP
   return `processing ${processingCount}, queued ${queuedCount}, ${getSpeedLabel(speedPerMinute)}`
 }
 
+const getLargeRebuildPhaseLabel = (indexing: ReviewsWarningsData['indexing']) => {
+  const rebuildPhase = indexing.largeRebuild?.rebuildPhase
+
+  return rebuildPhase === null || rebuildPhase === undefined ? null : `phase ${rebuildPhase}`
+}
+
+const getLargeRebuildCursorLabel = (indexing: ReviewsWarningsData['indexing']) => {
+  const cursorArticleId = indexing.largeRebuild?.cursorArticleId
+
+  return cursorArticleId === null || cursorArticleId === undefined ? null : `resuming from article ${cursorArticleId}`
+}
+
+const getLargeRebuildFailureLabel = (indexing: ReviewsWarningsData['indexing']) => {
+  const lastError = indexing.largeRebuild?.lastError
+
+  return lastError === null || lastError === undefined ? null : `last error: ${lastError}`
+}
+
 export const ReviewsIndexingProgress = (props: ReviewsIndexingProgressProps) => {
   return (
     <Show when={props.indexing.status === 'refreshing'}>
@@ -36,6 +54,21 @@ export const ReviewsIndexingProgress = (props: ReviewsIndexingProgressProps) => 
             props.indexing.articleRefreshesPerMinute,
           )}
         </p>
+        <Show when={getLargeRebuildPhaseLabel(props.indexing)}>
+          {(phaseLabel) => {
+            return <p><span class="font-medium text-slate-700">Large rebuild:</span> {phaseLabel()}</p>
+          }}
+        </Show>
+        <Show when={getLargeRebuildCursorLabel(props.indexing)}>
+          {(cursorLabel) => {
+            return <p><span class="font-medium text-slate-700">Cursor:</span> {cursorLabel()}</p>
+          }}
+        </Show>
+        <Show when={props.indexing.status === 'failed' ? getLargeRebuildFailureLabel(props.indexing) : null}>
+          {(failureLabel) => {
+            return <p><span class="font-medium text-slate-700">Large rebuild failure:</span> {failureLabel()}</p>
+          }}
+        </Show>
       </div>
     </Show>
   )

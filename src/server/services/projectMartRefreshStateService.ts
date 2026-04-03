@@ -44,6 +44,8 @@ type GetDirtyArticlesForClaimParams = {claimedToken: number; lastCompletedToken:
 
 type CompleteProjectRefreshParams = {completedToken: number; now?: Date; projectId: string; workerId: string}
 
+type ReleaseProjectRefreshClaimParams = {now?: Date; projectId: string; workerId: string}
+
 type FailProjectRefreshParams = {error: string; now?: Date; projectId: string; workerId: string}
 
 type ProjectRefreshStateRow = {
@@ -322,57 +324,57 @@ const claimDirtyProjects = async ({
   now,
   workerId,
 }: ClaimDirtyProjectsParams): Promise<ProjectRefreshClaim[]> => {
-  return limit <= 0
-    ? []
-    : await (getAppDatabaseService().transaction(async (tx) => {
-        const currentNow = getNow(now)
-        const leaseExpiresAt = getLeaseExpiry(currentNow, leaseMs)
-        const claimableRows = await tx.queryJson<{dirtyToken: number; lastCompletedToken: number; projectId: string}>(`
-          SELECT
-            project_id AS projectId,
-            CAST(dirty_token AS INTEGER) AS dirtyToken,
-            CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedToken
-          FROM app.project_mart_refresh_state
-          WHERE dirty_token > last_completed_refresh_token
-            AND (
-              refresh_status <> 'running'
-              OR lease_expires_at IS NULL
-              OR lease_expires_at <= ${getTimestampLiteral(currentNow)}
-            )
-          ORDER BY last_requested_at ASC, project_id ASC
-          LIMIT ${Math.max(0, Math.floor(limit))}
-        `)
+  if (limit <= 0) {
+    return []
+  }
 
-        return claimableRows.reduce<Promise<ProjectRefreshClaim[]>>(async (accPromise, row) => {
-          const acc = await accPromise
-          const [claimed] = await tx.queryJson<ProjectRefreshClaim>(`
-            UPDATE app.project_mart_refresh_state
-            SET
-              active_refresh_token = ${row.dirtyToken},
-              refresh_status = 'running',
-              last_started_at = ${getTimestampLiteral(currentNow)},
-              last_error = NULL,
-              worker_id = ${getSqlLiteral(workerId)},
-              lease_expires_at = ${getTimestampLiteral(leaseExpiresAt)},
-              updated_at = ${getTimestampLiteral(currentNow)}
-            WHERE project_id = ${getSqlLiteral(row.projectId)}
-              AND dirty_token > last_completed_refresh_token
-              AND (
-                refresh_status <> 'running'
-                OR lease_expires_at IS NULL
-                OR lease_expires_at <= ${getTimestampLiteral(currentNow)}
-              )
-            RETURNING
-              project_id AS projectId,
-              ${getSqlLiteral(workerId)} AS workerId,
-              CAST(active_refresh_token AS INTEGER) AS claimedToken,
-              CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedToken,
-              lease_expires_at AS leaseExpiresAt
-          `)
+  const currentNow = getNow(now)
+  const leaseExpiresAt = getLeaseExpiry(currentNow, leaseMs)
+  const claimableRows = await getAppDatabaseService().queryJson<{dirtyToken: number; lastCompletedToken: number; projectId: string}>(`
+    SELECT
+      project_id AS projectId,
+      CAST(dirty_token AS INTEGER) AS dirtyToken,
+      CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedToken
+    FROM app.project_mart_refresh_state
+    WHERE dirty_token > last_completed_refresh_token
+      AND (
+        refresh_status <> 'running'
+        OR lease_expires_at IS NULL
+        OR lease_expires_at <= ${getTimestampLiteral(currentNow)}
+      )
+    ORDER BY last_requested_at ASC, project_id ASC
+    LIMIT ${Math.max(0, Math.floor(limit))}
+  `)
 
-          return claimed ? [...acc, claimed] : acc
-        }, Promise.resolve([]))
-      }) as Promise<ProjectRefreshClaim[]>)
+  return claimableRows.reduce<Promise<ProjectRefreshClaim[]>>(async (accPromise, row) => {
+    const acc = await accPromise
+    const [claimed] = await getAppDatabaseService().queryJson<ProjectRefreshClaim>(`
+      UPDATE app.project_mart_refresh_state
+      SET
+        active_refresh_token=${row.dirtyToken},
+        refresh_status = 'running',
+        last_started_at = ${getTimestampLiteral(currentNow)},
+        last_error = NULL,
+        worker_id = ${getSqlLiteral(workerId)},
+        lease_expires_at = ${getTimestampLiteral(leaseExpiresAt)},
+        updated_at = ${getTimestampLiteral(currentNow)}
+      WHERE project_id = ${getSqlLiteral(row.projectId)}
+        AND dirty_token > last_completed_refresh_token
+        AND (
+          refresh_status <> 'running'
+          OR lease_expires_at IS NULL
+          OR lease_expires_at <= ${getTimestampLiteral(currentNow)}
+        )
+      RETURNING
+        project_id AS projectId,
+        ${getSqlLiteral(workerId)} AS workerId,
+        CAST(active_refresh_token AS INTEGER) AS claimedToken,
+        CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedToken,
+        lease_expires_at AS leaseExpiresAt
+    `)
+
+    return claimed ? [...acc, claimed] : acc
+  }, Promise.resolve([]))
 }
 
 const heartbeatClaim = async ({
@@ -415,6 +417,31 @@ const getDirtyArticlesForClaim = async ({
       AND last_dirty_token > ${lastCompletedToken}
     ORDER BY article_id ASC
   `)
+}
+
+const releaseProjectRefreshClaim = async ({now, projectId, workerId}: ReleaseProjectRefreshClaimParams) => {
+  const currentNow = getNow(now)
+  const [released] = await getAppDatabaseService().queryJson<ProjectRefreshStateRow>(`
+    UPDATE app.project_mart_refresh_state
+    SET
+      active_refresh_token = 0,
+      refresh_status = 'idle',
+      worker_id = NULL,
+      lease_expires_at = NULL,
+      updated_at = ${getTimestampLiteral(currentNow)}
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND worker_id = ${getSqlLiteral(workerId)}
+      AND refresh_status = 'running'
+    RETURNING
+      project_id AS projectId,
+      CAST(dirty_token AS INTEGER) AS dirtyToken,
+      CAST(active_refresh_token AS INTEGER) AS activeRefreshToken,
+      CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+      refresh_status AS refreshStatus,
+      worker_id AS workerId
+  `)
+
+  return released ? getProjectRefreshStateRecord(getAppDatabaseService(), projectId) : null
 }
 
 const completeProjectRefresh = async ({completedToken, now, projectId, workerId}: CompleteProjectRefreshParams) => {
@@ -503,6 +530,7 @@ const projectMartRefreshStateService = {
   heartbeatClaim,
   markArticleProjectsDirtyAtomically,
   markProjectsDirtyAtomically,
+  releaseProjectRefreshClaim,
 }
 
 export const getProjectMartRefreshStateService = () => {

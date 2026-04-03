@@ -4,7 +4,7 @@ import {createMemo, Show} from 'solid-js'
 
 import {getReviewIndexingInProgressTitle} from './getReviewIndexingInProgressTitle.ts'
 import {ReviewsIndexingProgress} from './reviewsIndexingProgress.tsx'
-import {createReviewsWarningsQueryOptions} from './reviewsWarningsQuery.ts'
+import {createReviewsWarningsQueryOptions, type ReviewsWarningsData} from './reviewsWarningsQuery.ts'
 
 const formatQueuedAt = (value: string | null) => {
   const parsed = value ? new Date(value) : null
@@ -20,6 +20,7 @@ const getPendingRefreshLabel = (pendingRefreshCount: number) => {
 
 const getIndexingBannerTitle = (
   params: {
+    largeRebuild: null | {rebuildPhase: string | null}
     pendingArticleRefreshCount: number
     pendingProjectRefreshCount: number
     status: 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
@@ -27,28 +28,42 @@ const getIndexingBannerTitle = (
   projectId: string,
 ) => {
   return params.status === 'failed'
-    ? 'Review indexing failed'
+    ? params.largeRebuild?.rebuildPhase
+      ? `Large rebuild failed: ${params.largeRebuild.rebuildPhase}`
+      : 'Review indexing failed'
     : params.status === 'stale'
       ? 'Review index is catching up'
-      : params.pendingArticleRefreshCount > 0 && params.pendingProjectRefreshCount === 0
-        ? 'New judgments are still being incorporated'
-        : getReviewIndexingInProgressTitle(projectId)
+      : params.largeRebuild?.rebuildPhase
+        ? `Large rebuild in progress: ${params.largeRebuild.rebuildPhase}`
+        : params.pendingArticleRefreshCount > 0 && params.pendingProjectRefreshCount === 0
+          ? 'New judgments are still being incorporated'
+          : getReviewIndexingInProgressTitle(projectId)
 }
 
 const getIndexingBannerBody = (params: {
+  largeRebuild: null | {
+    cursorArticleCreatedAt: string | null
+    cursorArticleId: string | null
+    lastError: string | null
+    rebuildPhase: string | null
+  }
   pendingArticleRefreshCount: number
   pendingProjectRefreshCount: number
   status: 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
 }) => {
   return params.status === 'failed'
-    ? 'The latest review index refresh failed, so review lists may be stale or incomplete until the writer retries the project.'
+    ? params.largeRebuild?.lastError
+      ? `Large rebuild failed: ${params.largeRebuild.lastError}`
+      : 'The latest review index refresh failed, so review lists may be stale or incomplete until the writer retries the project.'
     : params.status === 'stale'
       ? 'This project has scoped articles, but the review index is missing or stale. Review lists may stay empty until the writer rebuilds the project.'
-      : params.pendingProjectRefreshCount > 0 && params.pendingArticleRefreshCount > 0
-        ? 'This project is still rebuilding its review index and folding in newly produced judgments. Counts and article lists may change until the backlog clears.'
-        : params.pendingProjectRefreshCount > 0
-          ? 'This project has scoped articles, but the review index is still updating in the background. Review lists may look partial or empty until indexing finishes.'
-          : "New judgments are still being folded into this project's review index. Counts and article lists may change until the backlog clears."
+      : params.largeRebuild?.rebuildPhase
+        ? 'This project is being rebuilt in bounded stages to avoid large-refresh crashes. Review lists and counts may change until the staged rebuild finishes.'
+        : params.pendingProjectRefreshCount > 0 && params.pendingArticleRefreshCount > 0
+          ? 'This project is still rebuilding its review index and folding in newly produced judgments. Counts and article lists may change until the backlog clears.'
+          : params.pendingProjectRefreshCount > 0
+            ? 'This project has scoped articles, but the review index is still updating in the background. Review lists may look partial or empty until indexing finishes.'
+            : "New judgments are still being folded into this project's review index. Counts and article lists may change until the backlog clears."
 }
 
 const getPendingRefreshMetaLabel = (params: {
@@ -71,6 +86,17 @@ const getPendingRefreshMetaLabel = (params: {
   })
 
   return segments.join(' and ')
+}
+
+const getLargeRebuildDetailLabel = (data: ReviewsWarningsData | null) => {
+  const phaseLabel = data?.indexing.largeRebuild?.rebuildPhase
+  const cursorArticleId = data?.indexing.largeRebuild?.cursorArticleId
+
+  return phaseLabel === undefined || phaseLabel === null
+    ? null
+    : cursorArticleId
+      ? `Resuming from article ${cursorArticleId}`
+      : `Large rebuild in progress: ${phaseLabel}`
 }
 
 export const ReviewsProjectWarnings = (props: {projectId: string}) => {
@@ -125,12 +151,19 @@ export const ReviewsProjectWarnings = (props: {projectId: string}) => {
 
   const indexingBannerMeta = createMemo(() => {
     const data = warningsData()
-    if (!data || data.indexing.pendingRefreshCount === 0) return null
+    if (!data) return null
 
+    const largeRebuildLabel = getLargeRebuildDetailLabel(data)
     const queuedAtLabel = formatQueuedAt(data.indexing.oldestQueuedAt)
-    const pendingLabel = getPendingRefreshMetaLabel(data.indexing)
+    const pendingLabel =
+      data.indexing.pendingRefreshCount === 0 ? null : getPendingRefreshMetaLabel(data.indexing)
+    const parts = [largeRebuildLabel, pendingLabel ? (queuedAtLabel ? `${pendingLabel} since ${queuedAtLabel}` : pendingLabel) : null].filter(
+      (value): value is string => {
+        return value !== null
+      },
+    )
 
-    return queuedAtLabel ? `${pendingLabel} since ${queuedAtLabel}` : pendingLabel
+    return parts.length === 0 ? null : parts.join(' • ')
   })
 
   return (

@@ -2,7 +2,9 @@ import {hostname} from 'node:os'
 
 import {sleep} from '../../utils/sleep.ts'
 import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
+import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
+import {getProjectMartLargeRebuildStateService} from '../services/projectMartLargeRebuildStateService.ts'
 import {
   getProjectMartRefreshStateService,
   type ProjectRefreshClaim,
@@ -33,6 +35,19 @@ type ProjectMartRefreshStateWorkerService = {
     projectId: string
     workerId: string
   }) => Promise<ProjectRefreshClaim | null>
+  releaseProjectRefreshClaim: (params: {now?: Date; projectId: string; workerId: string}) => Promise<unknown>
+}
+
+type ProjectMartLargeRebuildStateWorkerService = {
+  queueLargeRebuild: (params: {
+    cursorArticleCreatedAt?: Date | null
+    cursorArticleId?: string | null
+    now?: Date
+    projectId: string
+    rebuildPhase: 'judgment_fact' | 'prompt_answer_fact' | 'review_answer_dictionary' | 'review_article_filter_member' | 'review_article_rollup' | 'review_article_serving'
+    refreshToken: number
+    targetGeneration?: number | null
+  }) => Promise<unknown>
 }
 
 type ProjectMartRefreshRunnerService = {
@@ -42,6 +57,8 @@ type ProjectMartRefreshRunnerService = {
 }
 
 type ProjectMartRefreshWorkerDependencies = {
+  largeRebuildStateService: ProjectMartLargeRebuildStateWorkerService
+  projectInspector: {getProjectScopeArticleCount: (projectId: string) => Promise<number>}
   refreshService: ProjectMartRefreshRunnerService
   sleep: typeof sleep
   sqliteService: {
@@ -55,6 +72,7 @@ type ProjectMartRefreshWorkerCycleOptions = {
   heartbeatMs?: number
   incrementalArticleThreshold?: number
   leaseMs?: number
+  maxFullProjectScopeArticles?: number
   now?: Date
   workerId?: string
 }
@@ -72,9 +90,36 @@ type ProjectMartRefreshWorkerCycleResult =
 const defaultProjectMartRefreshWorkerLeaseMs = 30_000
 const defaultProjectMartRefreshWorkerHeartbeatMs = 10_000
 const defaultProjectMartRefreshWorkerIncrementalArticleThreshold = 3
+const defaultProjectMartRefreshWorkerMaxFullProjectScopeArticles = 100_000
 const defaultProjectMartRefreshWorkerPollIntervalMs = 2_000
 
+const getProjectMartRefreshWorkerMaxFullProjectScopeArticles = () => {
+  const parsed = Number(process.env.PROJECT_MART_REFRESH_MAX_FULL_SCOPE_ARTICLES ?? '')
+
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultProjectMartRefreshWorkerMaxFullProjectScopeArticles
+}
+
+const getProjectScopeArticleCount = async (projectId: string) => {
+  const [row] = await getAppDatabaseService().queryJson<{count: number | string}>(`
+    SELECT COUNT(*) AS count
+    FROM (
+      SELECT article_id
+      FROM app.project_article
+      WHERE project_id = '${projectId}'
+      UNION
+      SELECT air.article_id
+      FROM app.project_import_route pir
+      INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
+      WHERE pir.project_id = '${projectId}'
+    ) scope
+  `)
+
+  return Number(row?.count ?? 0)
+}
+
 const defaultProjectMartRefreshWorkerDependencies: ProjectMartRefreshWorkerDependencies = {
+  largeRebuildStateService: getProjectMartLargeRebuildStateService(),
+  projectInspector: {getProjectScopeArticleCount},
   refreshService: getDuckdbMartRefreshService(),
   sleep,
   sqliteService: getJudgmentJobSqliteService(),
@@ -132,8 +177,48 @@ const refreshClaimArticlesIncrementally = async (
       })
 }
 
-const shouldUseIncrementalArticleRefresh = (articleCount: number, threshold: number) => {
-  return articleCount > 0 && articleCount <= threshold
+const getProjectMartRefreshExecutionMode = ({
+  dirtyArticleCount,
+  incrementalArticleThreshold,
+}: {
+  dirtyArticleCount: number
+  incrementalArticleThreshold: number
+}) => {
+  return dirtyArticleCount === 0 ? 'idle' : dirtyArticleCount <= incrementalArticleThreshold ? 'incremental' : 'full'
+}
+
+const getFullRefreshBlockedErrorText = ({
+  dirtyArticleCount,
+  maxFullProjectScopeArticles,
+  projectId,
+  scopeArticleCount,
+}: {
+  dirtyArticleCount: number
+  maxFullProjectScopeArticles: number
+  projectId: string
+  scopeArticleCount: number
+}) => {
+  return `Blocked automatic full refresh for project ${projectId}: scope_article_count=${scopeArticleCount}, dirty_article_count=${dirtyArticleCount}, max_full_project_scope_articles=${maxFullProjectScopeArticles}. Use guarded/manual recovery after reducing scope or raising PROJECT_MART_REFRESH_MAX_FULL_SCOPE_ARTICLES deliberately.`
+}
+
+const assertFullRefreshIsSafe = async ({
+  dependencies,
+  dirtyArticleCount,
+  maxFullProjectScopeArticles,
+  projectId,
+}: {
+  dependencies: ProjectMartRefreshWorkerDependencies
+  dirtyArticleCount: number
+  maxFullProjectScopeArticles: number
+  projectId: string
+}) => {
+  const scopeArticleCount = await dependencies.projectInspector.getProjectScopeArticleCount(projectId)
+
+  if (scopeArticleCount > maxFullProjectScopeArticles) {
+    throw new Error(
+      getFullRefreshBlockedErrorText({dirtyArticleCount, maxFullProjectScopeArticles, projectId, scopeArticleCount}),
+    )
+  }
 }
 
 const getErrorText = (error: unknown) => {
@@ -189,12 +274,39 @@ export const runProjectMartRefreshWorkerCycle = async (
     })
     const incrementalArticleThreshold =
       options.incrementalArticleThreshold ?? defaultProjectMartRefreshWorkerIncrementalArticleThreshold
+    const maxFullProjectScopeArticles =
+      options.maxFullProjectScopeArticles ?? getProjectMartRefreshWorkerMaxFullProjectScopeArticles()
+    const executionMode = getProjectMartRefreshExecutionMode({
+      dirtyArticleCount: dirtyArticleIds.length,
+      incrementalArticleThreshold,
+    })
 
-    if (shouldUseIncrementalArticleRefresh(dirtyArticleIds.length, incrementalArticleThreshold)) {
+    if (executionMode === 'incremental') {
       await refreshClaimArticlesIncrementally(dirtyArticleIds, claim.projectId, dependencies.refreshService)
     } else {
       await refreshClaimArticles(dirtyArticleIds, dependencies.refreshService)
-      await dependencies.refreshService.refreshProject(claim.projectId)
+
+      if (executionMode === 'full') {
+        const scopeArticleCount = await dependencies.projectInspector.getProjectScopeArticleCount(claim.projectId)
+
+        if (scopeArticleCount > maxFullProjectScopeArticles) {
+          await dependencies.largeRebuildStateService.queueLargeRebuild({
+            now: getWorkerNow(options.now),
+            projectId: claim.projectId,
+            rebuildPhase: 'prompt_answer_fact',
+            refreshToken: claim.claimedToken,
+          })
+          await dependencies.stateService.releaseProjectRefreshClaim({
+            now: getWorkerNow(options.now),
+            projectId: claim.projectId,
+            workerId,
+          })
+
+          return {claimedToken: claim.claimedToken, projectId: claim.projectId, status: 'completed', workerId}
+        }
+
+        await dependencies.refreshService.refreshProject(claim.projectId)
+      }
     }
 
     await dependencies.stateService.completeProjectRefresh({
@@ -230,11 +342,18 @@ export const runProjectMartRefreshWorkerCycle = async (
   }
 }
 
+export const runProjectMartRefreshWorkerOnce = async (
+  options: ProjectMartRefreshWorkerCycleOptions = {},
+  dependencies: ProjectMartRefreshWorkerDependencies = defaultProjectMartRefreshWorkerDependencies,
+): Promise<ProjectMartRefreshWorkerCycleResult> => {
+  return runProjectMartRefreshWorkerCycle(options, dependencies)
+}
+
 export const runProjectMartRefreshWorker = async (
   options: ProjectMartRefreshWorkerLoopOptions = {},
   dependencies: ProjectMartRefreshWorkerDependencies = defaultProjectMartRefreshWorkerDependencies,
 ): Promise<void> => {
-  const cycleResult = await runProjectMartRefreshWorkerCycle(options, dependencies)
+  const cycleResult = await runProjectMartRefreshWorkerOnce(options, dependencies)
 
   if (options.signal?.aborted) {
     return
@@ -252,6 +371,7 @@ export {
   defaultProjectMartRefreshWorkerIncrementalArticleThreshold,
   defaultProjectMartRefreshWorkerLeaseMs,
   defaultProjectMartRefreshWorkerPollIntervalMs,
+  getProjectMartRefreshExecutionMode,
   getProjectMartRefreshWorkerId,
 }
 

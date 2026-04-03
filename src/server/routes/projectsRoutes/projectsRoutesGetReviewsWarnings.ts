@@ -12,6 +12,28 @@ type ProjectMartRefreshStatus = 'failed' | 'idle' | 'running'
 
 type RefreshCountInfo = {oldestQueuedAt: string | null; queuedRefreshCount: number}
 
+type ProjectLargeRebuildState = {
+  cursorArticleCreatedAt: string | null
+  cursorArticleId: string | null
+  lastError: string | null
+  refreshStatus: ProjectMartRefreshStatus | null
+  rebuildPhase: string | null
+  refreshToken: number | null
+}
+
+const getLargeRebuildDetails = (state: ProjectLargeRebuildState) => {
+  return state.refreshToken === null
+    ? null
+    : {
+        cursorArticleCreatedAt: state.cursorArticleCreatedAt,
+        cursorArticleId: state.cursorArticleId,
+        lastError: state.lastError,
+        rebuildPhase: state.rebuildPhase,
+        refreshStatus: state.refreshStatus,
+        refreshToken: state.refreshToken,
+      }
+}
+
 type ProjectRefreshState = {
   dirtyToken: number | null
   isFresh: boolean
@@ -86,6 +108,37 @@ const getProjectRefreshState = async (projectId: string): Promise<ProjectRefresh
     lastRequestedAt: row?.lastRequestedAt ?? null,
     leaseExpiresAt: row?.leaseExpiresAt ?? null,
     refreshStatus,
+  }
+}
+
+const getProjectLargeRebuildState = async (projectId: string): Promise<ProjectLargeRebuildState> => {
+  const [row] = await getAppDatabaseService().queryJson<{
+    cursorArticleCreatedAt: string | null
+    cursorArticleId: string | null
+    lastError: string | null
+    rebuildPhase: string | null
+    refreshStatus: ProjectMartRefreshStatus | null
+    refreshToken: number | null
+  }>(`
+    SELECT
+      cursor_article_created_at AS cursorArticleCreatedAt,
+      cursor_article_id AS cursorArticleId,
+      last_error AS lastError,
+      rebuild_phase AS rebuildPhase,
+      refresh_status AS refreshStatus,
+      CAST(refresh_token AS INTEGER) AS refreshToken
+    FROM app.project_mart_large_rebuild_state
+    WHERE project_id = '${escapeSqlString(projectId)}'
+    LIMIT 1
+  `)
+
+  return {
+    cursorArticleCreatedAt: row?.cursorArticleCreatedAt ?? null,
+    cursorArticleId: row?.cursorArticleId ?? null,
+    lastError: row?.lastError ?? null,
+    rebuildPhase: row?.rebuildPhase ?? null,
+    refreshStatus: row?.refreshStatus ?? null,
+    refreshToken: row?.refreshToken ?? null,
   }
 }
 
@@ -233,6 +286,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       hasCuratedArticles,
       hasRouteArticles,
       projectRefreshState,
+      projectLargeRebuildState,
       pendingArticleRefreshInfo,
       hasReviewServingRows,
       processingArticleRefreshCount,
@@ -241,6 +295,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       getHasCuratedArticles(projectId),
       getHasRouteArticles(projectId),
       getProjectRefreshState(projectId),
+      getProjectLargeRebuildState(projectId),
       getPendingArticleRefreshInfo(projectId),
       getHasReviewServingRows(projectId),
       getScopedArticleRefreshCount(projectId, progressSnapshot.processingArticleIds),
@@ -249,13 +304,19 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       getMatchingProjectRefreshCount(projectId, progressSnapshot.processingProjectIds) > 0
     const hasActiveProjectLease =
       projectRefreshState.leaseExpiresAt !== null && new Date(projectRefreshState.leaseExpiresAt) > new Date()
+    const hasLargeRebuild = projectLargeRebuildState.refreshToken !== null
+    const isLargeRebuildRunning = projectLargeRebuildState.refreshStatus === 'running'
+    const isLargeRebuildQueued = hasLargeRebuild && projectLargeRebuildState.refreshStatus === 'idle'
+    const isLargeRebuildFailed = projectLargeRebuildState.refreshStatus === 'failed'
     const isProjectRunning =
       !projectRefreshState.isFresh
       && (hasLiveProcessingSnapshot || (projectRefreshState.refreshStatus === 'running' && hasActiveProjectLease))
-    const inFlightProjectRefreshCount = isProjectRunning ? 1 : 0
-    const queuedProjectRefreshCount = projectRefreshState.isFresh
+    const inFlightProjectRefreshCount = isProjectRunning ? 1 : isLargeRebuildRunning ? 1 : 0
+    const queuedProjectRefreshCount = projectRefreshState.isFresh && !hasLargeRebuild
       ? 0
-      : getNonNegativeDifference(1, inFlightProjectRefreshCount)
+      : isLargeRebuildQueued
+        ? 1
+        : getNonNegativeDifference(1, inFlightProjectRefreshCount)
     const inFlightArticleRefreshCount =
       processingArticleRefreshCount > 0
         ? processingArticleRefreshCount
@@ -274,9 +335,10 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const inFlightRefreshCount = inFlightProjectRefreshCount + inFlightArticleRefreshCount
     const hasAnyArticlesInScope = hasCuratedArticles || hasRouteArticles
     const pendingRefreshCount = pendingProjectRefreshCount + pendingArticleRefreshCount
+    const hasFailedRefresh = (!projectRefreshState.isFresh && projectRefreshState.refreshStatus === 'failed') || isLargeRebuildFailed
     const indexingStatus = getReviewsIndexingStatus({
       enabledPromptCount,
-      hasFailedRefresh: !projectRefreshState.isFresh && projectRefreshState.refreshStatus === 'failed',
+      hasFailedRefresh,
       hasAnyArticlesInScope,
       hasReviewRollupRows: hasReviewServingRows,
       pendingRefreshCount,
@@ -294,6 +356,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
           inFlightArticleRefreshCount,
           inFlightProjectRefreshCount,
           inFlightRefreshCount,
+          largeRebuild: getLargeRebuildDetails(projectLargeRebuildState),
           oldestQueuedAt: getOldestQueuedAt(
             projectRefreshState.isFresh ? null : projectRefreshState.lastRequestedAt,
             pendingArticleRefreshInfo.oldestQueuedAt,

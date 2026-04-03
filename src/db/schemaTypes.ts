@@ -23,6 +23,13 @@ export type JudgmentChunkingStrategy = 'patient_h3_greedy' | 'article_heading_gr
 export type Engine = 'sglang' | 'vllm'
 export type ModelSource = 'discovered' | 'manual'
 export type ProjectMartRefreshStatus = 'idle' | 'running' | 'failed'
+export type ProjectMartLargeRebuildPhase =
+  | 'judgment_fact'
+  | 'prompt_answer_fact'
+  | 'review_answer_dictionary'
+  | 'review_article_filter_member'
+  | 'review_article_rollup'
+  | 'review_article_serving'
 
 export type UserRecord = {
   id: string
@@ -332,6 +339,24 @@ export type ProjectMartRefreshArticleStateRecord = {
   articleId: string
   firstDirtyToken: number
   lastDirtyToken: number
+  createdAt: Date
+  updatedAt: Date
+}
+
+export type ProjectMartLargeRebuildStateRecord = {
+  projectId: string
+  refreshToken: number
+  rebuildPhase: ProjectMartLargeRebuildPhase
+  cursorArticleCreatedAt: Date | null
+  cursorArticleId: string | null
+  targetGeneration: number | null
+  refreshStatus: ProjectMartRefreshStatus
+  lastStartedAt: Date | null
+  lastCompletedAt: Date | null
+  lastFailedAt: Date | null
+  lastError: string | null
+  workerId: string | null
+  leaseExpiresAt: Date | null
   createdAt: Date
   updatedAt: Date
 }

@@ -48,6 +48,15 @@ type RefreshStateOverrides = {
   refreshStatus?: 'failed' | 'idle' | 'running'
 }
 
+type LargeRebuildStateOverrides = {
+  cursorArticleCreatedAt?: string | null
+  cursorArticleId?: string | null
+  lastError?: string | null
+  refreshStatus?: 'failed' | 'idle' | 'running'
+  rebuildPhase?: string
+  refreshToken?: number
+}
+
 let app: {handle: (request: Request) => Promise<Response>} | null = null
 let closeDatabase: (() => Promise<void>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
@@ -124,6 +133,39 @@ const insertProjectRefreshState = async (projectId: string, overrides: RefreshSt
       ${lastStartedAt === null ? 'NULL' : `TIMESTAMPTZ '${lastStartedAt}'`},
       ${lastFailedAt === null ? 'NULL' : `TIMESTAMPTZ '${lastFailedAt}'`},
       ${leaseExpiresAt === null ? 'NULL' : `TIMESTAMPTZ '${leaseExpiresAt}'`}
+    )
+  `)
+}
+
+const insertLargeRebuildState = async (projectId: string, overrides: LargeRebuildStateOverrides = {}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const refreshToken = overrides.refreshToken ?? 1
+  const rebuildPhase = overrides.rebuildPhase ?? 'prompt_answer_fact'
+  const refreshStatus = overrides.refreshStatus ?? 'idle'
+  const cursorArticleId = overrides.cursorArticleId ?? null
+  const cursorArticleCreatedAt = overrides.cursorArticleCreatedAt ?? null
+  const lastError = overrides.lastError ?? null
+
+  await runDatabase(`
+    INSERT INTO app.project_mart_large_rebuild_state (
+      project_id,
+      refresh_token,
+      rebuild_phase,
+      cursor_article_created_at,
+      cursor_article_id,
+      refresh_status,
+      last_error
+    ) VALUES (
+      '${projectId}',
+      ${refreshToken},
+      '${rebuildPhase}',
+      ${cursorArticleCreatedAt === null ? 'NULL' : `TIMESTAMPTZ '${cursorArticleCreatedAt}'`},
+      ${cursorArticleId === null ? 'NULL' : `'${cursorArticleId}'`},
+      '${refreshStatus}',
+      ${lastError === null ? 'NULL' : `'${lastError}'`}
     )
   `)
 }
@@ -406,4 +448,40 @@ test('reviews warnings treat expired running leases as queued instead of in-flig
   expect(body.data.indexing.pendingArticleRefreshCount).toBe(1)
   expect(body.data.indexing.pendingRefreshCount).toBe(2)
   expect(body.data.indexing.status).toBe('refreshing')
+})
+
+test('reviews warnings report refreshing when a staged large rebuild is queued', async () => {
+  const projectId = 'project-large-rebuild-queued-warning'
+
+  await insertProjectFixture(projectId)
+  await insertLargeRebuildState(projectId, {
+    rebuildPhase: 'prompt_answer_fact',
+    refreshStatus: 'idle',
+    refreshToken: 5,
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.queuedProjectRefreshCount).toBe(1)
+  expect(body.data.indexing.inFlightProjectRefreshCount).toBe(0)
+  expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
+  expect(body.data.indexing.status).toBe('refreshing')
+})
+
+test('reviews warnings report failed when a staged large rebuild has failed', async () => {
+  const projectId = 'project-large-rebuild-failed-warning'
+
+  await insertProjectFixture(projectId)
+  await insertLargeRebuildState(projectId, {
+    rebuildPhase: 'prompt_answer_fact',
+    refreshStatus: 'failed',
+    refreshToken: 5,
+    lastError: 'Maximum call stack size exceeded',
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.status).toBe('failed')
 })

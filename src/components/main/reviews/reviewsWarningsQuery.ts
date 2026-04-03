@@ -8,6 +8,14 @@ export type ReviewsWarningsData = {
     inFlightArticleRefreshCount: number
     inFlightProjectRefreshCount: number
     inFlightRefreshCount: number
+    largeRebuild: null | {
+      cursorArticleCreatedAt: string | null
+      cursorArticleId: string | null
+      lastError: string | null
+      rebuildPhase: string | null
+      refreshStatus: 'failed' | 'idle' | 'running' | null
+      refreshToken: number | null
+    }
     oldestQueuedAt: string | null
     pendingArticleRefreshCount: number
     pendingProjectRefreshCount: number
