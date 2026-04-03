@@ -22,6 +22,8 @@ const envShape = arktype({
   }),
   FULL_TEXT_CONVERSION_BATCH_SIZE: 'number | string.integer.parse | null | undefined',
   FULL_TEXT_CONVERSION_CONCURRENCY: 'number | string.integer.parse | null | undefined',
+  PROJECT_MART_LARGE_REBUILD_BATCH_SIZE: 'number | string.integer.parse | null | undefined',
+  PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS: 'number | string.integer.parse | null | undefined',
 })
 
 const readFromFileVar = (envValues: Record<string, string | undefined>, key: string): string | undefined => {
@@ -86,6 +88,18 @@ export const loadEnv = ({
     || String(merged.FULL_TEXT_CONVERSION_CONCURRENCY).trim() === ''
   ) {
     ;(merged as Record<string, string>).FULL_TEXT_CONVERSION_CONCURRENCY = '1'
+  }
+  if (
+    merged.PROJECT_MART_LARGE_REBUILD_BATCH_SIZE == null
+    || String(merged.PROJECT_MART_LARGE_REBUILD_BATCH_SIZE).trim() === ''
+  ) {
+    ;(merged as Record<string, string>).PROJECT_MART_LARGE_REBUILD_BATCH_SIZE = '1'
+  }
+  if (
+    merged.PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS == null
+    || String(merged.PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS).trim() === ''
+  ) {
+    ;(merged as Record<string, string>).PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS = '5000'
   }
   return envShape.assert(merged)
 }
