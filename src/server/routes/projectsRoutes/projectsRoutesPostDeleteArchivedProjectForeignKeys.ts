@@ -6,6 +6,7 @@ export const archivedProjectCleanupHandledProjectForeignKeys = [
   {columnName: 'project_id', schemaName: 'app', tableName: 'judgment'},
   {columnName: 'project_id', schemaName: 'app', tableName: 'judgment_human'},
   {columnName: 'project_id', schemaName: 'app', tableName: 'judgment_job'},
+  {columnName: 'project_id', schemaName: 'app', tableName: 'project_mart_large_rebuild_state'},
   {columnName: 'project_id', schemaName: 'app', tableName: 'project_mart_refresh_article_state'},
   {columnName: 'project_id', schemaName: 'app', tableName: 'project_mart_refresh_state'},
   {columnName: 'imported_from_project_id', schemaName: 'app', tableName: 'project_article'},
