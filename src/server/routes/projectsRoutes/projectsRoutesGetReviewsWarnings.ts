@@ -17,6 +17,7 @@ type ProjectRefreshState = {
   isFresh: boolean
   lastCompletedRefreshToken: number | null
   lastRequestedAt: string | null
+  leaseExpiresAt: string | null
   refreshStatus: ProjectMartRefreshStatus | null
 }
 
@@ -59,12 +60,14 @@ const getProjectRefreshState = async (projectId: string): Promise<ProjectRefresh
     dirtyToken: number | null
     lastCompletedRefreshToken: number | null
     lastRequestedAt: string | null
+    leaseExpiresAt: string | null
     refreshStatus: ProjectMartRefreshStatus | null
   }>(`
     SELECT
       CAST(dirty_token AS INTEGER) AS dirtyToken,
       CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
       last_requested_at AS lastRequestedAt,
+      lease_expires_at AS leaseExpiresAt,
       refresh_status AS refreshStatus
     FROM app.project_mart_refresh_state
     WHERE project_id = '${escapeSqlString(projectId)}'
@@ -76,7 +79,14 @@ const getProjectRefreshState = async (projectId: string): Promise<ProjectRefresh
   const refreshStatus = row?.refreshStatus ?? null
   const isFresh = dirtyToken === null || (lastCompletedRefreshToken !== null && lastCompletedRefreshToken >= dirtyToken)
 
-  return {dirtyToken, isFresh, lastCompletedRefreshToken, lastRequestedAt: row?.lastRequestedAt ?? null, refreshStatus}
+  return {
+    dirtyToken,
+    isFresh,
+    lastCompletedRefreshToken,
+    lastRequestedAt: row?.lastRequestedAt ?? null,
+    leaseExpiresAt: row?.leaseExpiresAt ?? null,
+    refreshStatus,
+  }
 }
 
 const getPendingArticleRefreshInfo = async (projectId: string): Promise<RefreshCountInfo> => {
@@ -235,10 +245,13 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       getHasReviewServingRows(projectId),
       getScopedArticleRefreshCount(projectId, progressSnapshot.processingArticleIds),
     ])
+    const hasLiveProcessingSnapshot =
+      getMatchingProjectRefreshCount(projectId, progressSnapshot.processingProjectIds) > 0
+    const hasActiveProjectLease =
+      projectRefreshState.leaseExpiresAt !== null && new Date(projectRefreshState.leaseExpiresAt) > new Date()
     const isProjectRunning =
       !projectRefreshState.isFresh
-      && (projectRefreshState.refreshStatus === 'running'
-        || getMatchingProjectRefreshCount(projectId, progressSnapshot.processingProjectIds) > 0)
+      && (hasLiveProcessingSnapshot || (projectRefreshState.refreshStatus === 'running' && hasActiveProjectLease))
     const inFlightProjectRefreshCount = isProjectRunning ? 1 : 0
     const queuedProjectRefreshCount = projectRefreshState.isFresh
       ? 0

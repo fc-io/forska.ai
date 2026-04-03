@@ -44,6 +44,7 @@ type RefreshStateOverrides = {
   lastFailedAt?: string | null
   lastRequestedAt?: string | null
   lastStartedAt?: string | null
+  leaseExpiresAt?: string | null
   refreshStatus?: 'failed' | 'idle' | 'running'
 }
 
@@ -99,6 +100,7 @@ const insertProjectRefreshState = async (projectId: string, overrides: RefreshSt
   const lastRequestedAt = overrides.lastRequestedAt ?? '2026-04-02T12:00:00.000Z'
   const lastStartedAt = overrides.lastStartedAt ?? null
   const lastFailedAt = overrides.lastFailedAt ?? null
+  const leaseExpiresAt = overrides.leaseExpiresAt ?? null
   const refreshStatus = overrides.refreshStatus ?? 'idle'
 
   await runDatabase(`
@@ -110,7 +112,8 @@ const insertProjectRefreshState = async (projectId: string, overrides: RefreshSt
       last_requested_at,
       refresh_status,
       last_started_at,
-      last_failed_at
+      last_failed_at,
+      lease_expires_at
     ) VALUES (
       '${projectId}',
       ${dirtyToken},
@@ -119,7 +122,8 @@ const insertProjectRefreshState = async (projectId: string, overrides: RefreshSt
       ${lastRequestedAt === null ? 'NULL' : `TIMESTAMPTZ '${lastRequestedAt}'`},
       '${refreshStatus}',
       ${lastStartedAt === null ? 'NULL' : `TIMESTAMPTZ '${lastStartedAt}'`},
-      ${lastFailedAt === null ? 'NULL' : `TIMESTAMPTZ '${lastFailedAt}'`}
+      ${lastFailedAt === null ? 'NULL' : `TIMESTAMPTZ '${lastFailedAt}'`},
+      ${leaseExpiresAt === null ? 'NULL' : `TIMESTAMPTZ '${leaseExpiresAt}'`}
     )
   `)
 }
@@ -375,4 +379,31 @@ test('reviews warnings report failed when refresh work is still dirty after a fa
   expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
   expect(body.data.indexing.pendingRefreshCount).toBe(1)
   expect(body.data.indexing.status).toBe('failed')
+})
+
+test('reviews warnings treat expired running leases as queued instead of in-flight', async () => {
+  const projectId = 'project-expired-lease-warning'
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {
+    dirtyToken: 2,
+    lastCompletedRefreshToken: 1,
+    lastRequestedAt: '2026-04-02T12:00:00.000Z',
+    lastStartedAt: '2026-04-02T12:05:00.000Z',
+    leaseExpiresAt: '2026-04-02T12:05:30.000Z',
+    refreshStatus: 'running',
+  })
+  await insertDirtyArticleRefreshState(projectId, `article-${projectId}`, 2)
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.queuedProjectRefreshCount).toBe(1)
+  expect(body.data.indexing.inFlightProjectRefreshCount).toBe(0)
+  expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
+  expect(body.data.indexing.queuedArticleRefreshCount).toBe(1)
+  expect(body.data.indexing.inFlightArticleRefreshCount).toBe(0)
+  expect(body.data.indexing.pendingArticleRefreshCount).toBe(1)
+  expect(body.data.indexing.pendingRefreshCount).toBe(2)
+  expect(body.data.indexing.status).toBe('refreshing')
 })

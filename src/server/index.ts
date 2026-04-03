@@ -34,16 +34,10 @@ import {env} from './utils/env'
 import {getAppServerRuntimeConfig} from './utils/getAppServerRuntimeConfig.ts'
 import {warmCodexAppServer} from './utils/getCodexAppServerClient.ts'
 import {inferenceRuntimeConfig} from './utils/getInferenceRuntimeConfig.ts'
-import {startMartRefreshDrainHeartbeat} from './utils/martRefreshDrainHeartbeat.ts'
-import {shouldServerRoleMountWriterCrons} from './utils/serverRole.ts'
 import {installSafeConsoleLogging} from './utils/installSafeConsoleLogging.ts'
-import {
-  getCurrentServerRole,
-  initializeServerRuntimeRole,
-  shouldCurrentServerRunWriterWork,
-  startServerRuntimeRoleMonitor,
-} from './utils/serverRuntimeRole.ts'
-import {startWriterConnectionHeartbeat} from './utils/writerConnectionHeartbeat.ts'
+import {shouldServerRoleMountWriterCrons} from './utils/serverRole.ts'
+import {getCurrentServerRole, initializeServerRuntimeRole, shouldCurrentServerRunWriterWork} from './utils/serverRuntimeRole.ts'
+import {startBackgroundWork} from './utils/startBackgroundWork.ts'
 
 installSafeConsoleLogging()
 
@@ -100,9 +94,7 @@ console.log(
 console.log(
   `[server] configured_role=${env.SERVER_ROLE} role=${getCurrentServerRole()} duckdb_writer=${shouldCurrentServerRunWriterWork()}`,
 )
-startServerRuntimeRoleMonitor()
-startWriterConnectionHeartbeat()
-startMartRefreshDrainHeartbeat()
+startBackgroundWork()
 
 if (shouldWarmCodex) {
   void warmCodexAppServer()
