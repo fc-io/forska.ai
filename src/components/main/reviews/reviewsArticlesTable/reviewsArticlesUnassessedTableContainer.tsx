@@ -3,6 +3,7 @@ import type {Accessor, Setter} from 'solid-js'
 import {createEffect, createMemo, createSignal, Show, Suspense} from 'solid-js'
 
 import {createArticlesUnassessedQueryOptions} from '../../projects/projectsArticlesUnassessedQuery.ts'
+import {getReviewIndexingInProgressTitle} from '../getReviewIndexingInProgressTitle.ts'
 import {ReviewsIndexingProgress} from '../reviewsIndexingProgress.tsx'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
 import {createReviewsWarningsQueryOptions} from '../reviewsWarningsQuery.ts'
@@ -65,7 +66,7 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
         : {
             description:
               'This project has scoped articles, but the review index is still updating. The unassessed list may appear empty until indexing finishes.',
-            title: 'Review indexing in progress',
+            title: getReviewIndexingInProgressTitle(props.projectId),
           }
       : (warningsData?.indexing.status === 'failed' || warningsData?.indexing.status === 'stale')
           && warningsData.scope.hasAnyArticlesInScope

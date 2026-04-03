@@ -2,6 +2,7 @@ import {useQuery} from '@tanstack/solid-query'
 import {Link} from '@tanstack/solid-router'
 import {createMemo, Show} from 'solid-js'
 
+import {getReviewIndexingInProgressTitle} from './getReviewIndexingInProgressTitle.ts'
 import {ReviewsIndexingProgress} from './reviewsIndexingProgress.tsx'
 import {createReviewsWarningsQueryOptions} from './reviewsWarningsQuery.ts'
 
@@ -17,18 +18,21 @@ const getPendingRefreshLabel = (pendingRefreshCount: number) => {
   return pendingRefreshCount === 1 ? '1 refresh job outstanding' : `${pendingRefreshCount} refresh jobs outstanding`
 }
 
-const getIndexingBannerTitle = (params: {
-  pendingArticleRefreshCount: number
-  pendingProjectRefreshCount: number
-  status: 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
-}) => {
+const getIndexingBannerTitle = (
+  params: {
+    pendingArticleRefreshCount: number
+    pendingProjectRefreshCount: number
+    status: 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
+  },
+  projectId: string,
+) => {
   return params.status === 'failed'
     ? 'Review indexing failed'
     : params.status === 'stale'
       ? 'Review index is catching up'
       : params.pendingArticleRefreshCount > 0 && params.pendingProjectRefreshCount === 0
         ? 'New judgments are still being incorporated'
-        : 'Review indexing in progress'
+        : getReviewIndexingInProgressTitle(projectId)
 }
 
 const getIndexingBannerBody = (params: {
@@ -107,7 +111,9 @@ export const ReviewsProjectWarnings = (props: {projectId: string}) => {
 
   const indexingBannerTitle = createMemo(() => {
     const data = warningsData()
-    return !data ? 'Review indexing in progress' : getIndexingBannerTitle(data.indexing)
+    return !data
+      ? getReviewIndexingInProgressTitle(props.projectId)
+      : getIndexingBannerTitle(data.indexing, props.projectId)
   })
 
   const indexingBannerBody = createMemo(() => {

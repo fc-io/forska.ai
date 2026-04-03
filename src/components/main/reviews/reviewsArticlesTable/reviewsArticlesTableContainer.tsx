@@ -4,6 +4,7 @@ import {createEffect, createMemo, createSignal, Show} from 'solid-js'
 
 import {createArticlesReviewsCountQueryOptions} from '../../projects/projectsArticlesReviewsCountQuery.ts'
 import {createArticlesReviewsQueryOptions} from '../../projects/projectsArticlesReviewsQuery.ts'
+import {getReviewIndexingInProgressTitle} from '../getReviewIndexingInProgressTitle.ts'
 import {ReviewsIndexingProgress} from '../reviewsIndexingProgress.tsx'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
 import {createReviewsWarningsQueryOptions} from '../reviewsWarningsQuery.ts'
@@ -145,7 +146,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
         : {
             description:
               'This project has scoped articles, but the review index is still updating. Articles with judgments may appear here soon.',
-            title: 'Review indexing in progress',
+            title: getReviewIndexingInProgressTitle(props.projectId),
           }
       : (warningsData?.indexing.status === 'failed' || warningsData?.indexing.status === 'stale')
           && warningsData.scope.hasAnyArticlesInScope
