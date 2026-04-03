@@ -74,5 +74,6 @@ Desktop.ini
 
 .tanstack/
 .ralph-tui/
+.hermes/
 drizzle
 ./CLAUDE.local.md
