@@ -19,7 +19,7 @@ const terminalJudgmentJobStatuses = ['completed', 'failed', 'project_removed']
 const tokenUseCreateSql = `
   CREATE TABLE app.token_use (
     id VARCHAR PRIMARY KEY,
-    judgment_job_id VARCHAR REFERENCES app.judgment_job(id),
+    judgment_job_id VARCHAR,
     requests INTEGER NOT NULL,
     total_prompt_tokens BIGINT NOT NULL,
     total_completion_tokens BIGINT NOT NULL,
