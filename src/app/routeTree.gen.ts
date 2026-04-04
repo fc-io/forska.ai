@@ -42,6 +42,7 @@ import { Route as ArticlesIdIndexRouteImport } from './routes/+articles/+$id/+in
 import { Route as AdminWriterConnectionsIndexRouteImport } from './routes/+admin/+writer-connections/+index'
 import { Route as AdminUnexpectedAnswersIndexRouteImport } from './routes/+admin/+unexpected-answers/+index'
 import { Route as AdminSetup_statsIndexRouteImport } from './routes/+admin/+setup_stats/+index'
+import { Route as AdminProjectMartLargeRebuildIndexRouteImport } from './routes/+admin/+project-mart-large-rebuild/+index'
 import { Route as AdminPdfResetIndexRouteImport } from './routes/+admin/+pdf-reset/+index'
 import { Route as AdminPdfConversionsIndexRouteImport } from './routes/+admin/+pdf-conversions/+index'
 import { Route as AdminLlmIndexRouteImport } from './routes/+admin/+llm/+index'
@@ -242,6 +243,12 @@ const AdminSetup_statsIndexRoute = AdminSetup_statsIndexRouteImport.update({
   path: '/admin/setup_stats/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminProjectMartLargeRebuildIndexRoute =
+  AdminProjectMartLargeRebuildIndexRouteImport.update({
+    id: '/admin/project-mart-large-rebuild/',
+    path: '/admin/project-mart-large-rebuild/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const AdminPdfResetIndexRoute = AdminPdfResetIndexRouteImport.update({
   id: '/admin/pdf-reset/',
   path: '/admin/pdf-reset/',
@@ -412,6 +419,7 @@ export interface FileRoutesByFullPath {
   '/admin/llm/': typeof AdminLlmIndexRoute
   '/admin/pdf-conversions/': typeof AdminPdfConversionsIndexRoute
   '/admin/pdf-reset/': typeof AdminPdfResetIndexRoute
+  '/admin/project-mart-large-rebuild/': typeof AdminProjectMartLargeRebuildIndexRoute
   '/admin/setup_stats/': typeof AdminSetup_statsIndexRoute
   '/admin/unexpected-answers/': typeof AdminUnexpectedAnswersIndexRoute
   '/admin/writer-connections/': typeof AdminWriterConnectionsIndexRoute
@@ -473,6 +481,7 @@ export interface FileRoutesByTo {
   '/admin/llm': typeof AdminLlmIndexRoute
   '/admin/pdf-conversions': typeof AdminPdfConversionsIndexRoute
   '/admin/pdf-reset': typeof AdminPdfResetIndexRoute
+  '/admin/project-mart-large-rebuild': typeof AdminProjectMartLargeRebuildIndexRoute
   '/admin/setup_stats': typeof AdminSetup_statsIndexRoute
   '/admin/unexpected-answers': typeof AdminUnexpectedAnswersIndexRoute
   '/admin/writer-connections': typeof AdminWriterConnectionsIndexRoute
@@ -535,6 +544,7 @@ export interface FileRoutesById {
   '/admin/llm/': typeof AdminLlmIndexRoute
   '/admin/pdf-conversions/': typeof AdminPdfConversionsIndexRoute
   '/admin/pdf-reset/': typeof AdminPdfResetIndexRoute
+  '/admin/project-mart-large-rebuild/': typeof AdminProjectMartLargeRebuildIndexRoute
   '/admin/setup_stats/': typeof AdminSetup_statsIndexRoute
   '/admin/unexpected-answers/': typeof AdminUnexpectedAnswersIndexRoute
   '/admin/writer-connections/': typeof AdminWriterConnectionsIndexRoute
@@ -598,6 +608,7 @@ export interface FileRouteTypes {
     | '/admin/llm/'
     | '/admin/pdf-conversions/'
     | '/admin/pdf-reset/'
+    | '/admin/project-mart-large-rebuild/'
     | '/admin/setup_stats/'
     | '/admin/unexpected-answers/'
     | '/admin/writer-connections/'
@@ -659,6 +670,7 @@ export interface FileRouteTypes {
     | '/admin/llm'
     | '/admin/pdf-conversions'
     | '/admin/pdf-reset'
+    | '/admin/project-mart-large-rebuild'
     | '/admin/setup_stats'
     | '/admin/unexpected-answers'
     | '/admin/writer-connections'
@@ -720,6 +732,7 @@ export interface FileRouteTypes {
     | '/admin/llm/'
     | '/admin/pdf-conversions/'
     | '/admin/pdf-reset/'
+    | '/admin/project-mart-large-rebuild/'
     | '/admin/setup_stats/'
     | '/admin/unexpected-answers/'
     | '/admin/writer-connections/'
@@ -782,6 +795,7 @@ export interface RootRouteChildren {
   AdminLlmIndexRoute: typeof AdminLlmIndexRoute
   AdminPdfConversionsIndexRoute: typeof AdminPdfConversionsIndexRoute
   AdminPdfResetIndexRoute: typeof AdminPdfResetIndexRoute
+  AdminProjectMartLargeRebuildIndexRoute: typeof AdminProjectMartLargeRebuildIndexRoute
   AdminSetup_statsIndexRoute: typeof AdminSetup_statsIndexRoute
   AdminUnexpectedAnswersIndexRoute: typeof AdminUnexpectedAnswersIndexRoute
   AdminWriterConnectionsIndexRoute: typeof AdminWriterConnectionsIndexRoute
@@ -1054,6 +1068,13 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof AdminSetup_statsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/project-mart-large-rebuild/': {
+      id: '/admin/project-mart-large-rebuild/'
+      path: '/admin/project-mart-large-rebuild'
+      fullPath: '/admin/project-mart-large-rebuild/'
+      preLoaderRoute: typeof AdminProjectMartLargeRebuildIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/pdf-reset/': {
       id: '/admin/pdf-reset/'
       path: '/admin/pdf-reset'
@@ -1263,6 +1284,8 @@ const rootRouteChildren: RootRouteChildren = {
   AdminLlmIndexRoute: AdminLlmIndexRoute,
   AdminPdfConversionsIndexRoute: AdminPdfConversionsIndexRoute,
   AdminPdfResetIndexRoute: AdminPdfResetIndexRoute,
+  AdminProjectMartLargeRebuildIndexRoute:
+    AdminProjectMartLargeRebuildIndexRoute,
   AdminSetup_statsIndexRoute: AdminSetup_statsIndexRoute,
   AdminUnexpectedAnswersIndexRoute: AdminUnexpectedAnswersIndexRoute,
   AdminWriterConnectionsIndexRoute: AdminWriterConnectionsIndexRoute,

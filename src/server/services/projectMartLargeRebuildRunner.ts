@@ -24,7 +24,8 @@ type ProjectMartLargeRebuildRunnerDependencies = {
     setupProjectReviewServingStaging: (projectId: string) => Promise<void>
   }
   largeRebuildStateService: {
-    claimLargeRebuilds: (params: {leaseMs: number; limit: number; now?: Date; workerId: string}) => Promise<LargeRebuildClaim[]>
+    claimLargeRebuilds: (params: {leaseMs: number; limit: number; now?: Date; projectId?: string; workerId: string}) => Promise<LargeRebuildClaim[]>
+    clearArchivedLargeRebuildStates: () => Promise<unknown>
     completeLargeRebuild: (params: {now?: Date; projectId: string; workerId: string}) => Promise<unknown>
     failLargeRebuild: (params: {error: string; now?: Date; projectId: string; workerId: string}) => Promise<unknown>
     getLargeRebuildState: (projectId: string) => Promise<{
@@ -51,6 +52,7 @@ type ProjectMartLargeRebuildRunnerOptions = {
   heartbeatMs?: number
   leaseMs?: number
   now?: Date
+  projectId?: string
   workerId: string
 }
 
@@ -265,10 +267,13 @@ export const runProjectMartLargeRebuildCycle = async (
   options: ProjectMartLargeRebuildRunnerOptions,
   dependencies: ProjectMartLargeRebuildRunnerDependencies = defaultDependencies,
 ): Promise<ProjectMartLargeRebuildRunnerResult> => {
+  await dependencies.largeRebuildStateService.clearArchivedLargeRebuildStates()
+
   const [claim] = await dependencies.largeRebuildStateService.claimLargeRebuilds({
     leaseMs: options.leaseMs ?? defaultLeaseMs,
     limit: 1,
     now: options.now,
+    projectId: options.projectId,
     workerId: options.workerId,
   })
 

@@ -230,14 +230,17 @@ const isDuckdbRestartRequiredError = (error: unknown) => {
   })
 }
 
+const getCompactDuckdbErrorMessage = (error: unknown) => {
+  const message = getNormalizedDuckdbError(error).message.replace(/\s+/g, ' ').trim()
+  return message.length <= 280 ? message : `${message.slice(0, 277)}...`
+}
+
 const recoverDuckdbRuntimeAfterFatalError = async (error: unknown) => {
   if (duckdbFatalRecoveryPromise !== null) {
     return duckdbFatalRecoveryPromise
   }
 
-  const normalizedError = getNormalizedDuckdbError(error)
-
-  console.warn('[duckdb] restarting embedded runtime after fatal invalidation', normalizedError)
+  console.warn('[duckdb] restarting embedded runtime after fatal invalidation', getCompactDuckdbErrorMessage(error))
 
   duckdbFatalRecoveryPromise = closeDuckdbServiceDirect()
     .catch((closeError) => {

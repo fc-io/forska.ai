@@ -1381,40 +1381,44 @@ const getProjectReviewServingFinalizeSql = (projectId: string) => {
   `
 }
 
-const getJudgmentArticleRefreshSql = (articleId: string) => {
-  const articleLiteral = getSqlLiteral(articleId)
+const judgmentFactCreateSql = `
+  CREATE TABLE mart.judgment_fact (
+    judgment_id VARCHAR PRIMARY KEY,
+    article_id VARCHAR NOT NULL,
+    prompt_id VARCHAR NOT NULL,
+    model_id VARCHAR NOT NULL,
+    project_id VARCHAR,
+    snapshot_project_id VARCHAR,
+    snapshot_project_model_name VARCHAR,
+    use_title BOOLEAN NOT NULL,
+    use_abstract BOOLEAN NOT NULL,
+    use_fulltext BOOLEAN NOT NULL,
+    use_fulltext_no_images BOOLEAN NOT NULL,
+    chunking_strategy VARCHAR,
+    is_answered BOOLEAN NOT NULL,
+    answered_original VARCHAR,
+    answered_original_as_array VARCHAR[],
+    normalized_answers VARCHAR[],
+    confidence_original INTEGER,
+    explanation VARCHAR,
+    quotes JSON,
+    article_title VARCHAR NOT NULL,
+    article_created_at TIMESTAMPTZ,
+    article_updated_at TIMESTAMPTZ,
+    article_import_route VARCHAR,
+    article_publication_status VARCHAR,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
+  )
+`
 
+const judgmentFactIndexSql = `
+  CREATE INDEX idx_mart_judgment_fact_lookup
+  ON mart.judgment_fact(article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+`
+
+const getJudgmentFactRefreshSourceSql = (articleFilterSql: string) => {
   return `
-    BEGIN TRANSACTION;
-    DELETE FROM mart.judgment_fact WHERE article_id = ${articleLiteral};
-    INSERT INTO mart.judgment_fact (
-      judgment_id,
-      article_id,
-      prompt_id,
-      model_id,
-      project_id,
-      snapshot_project_id,
-      snapshot_project_model_name,
-      use_title,
-      use_abstract,
-      use_fulltext,
-      use_fulltext_no_images,
-      chunking_strategy,
-      is_answered,
-      answered_original,
-      answered_original_as_array,
-      normalized_answers,
-      confidence_original,
-      explanation,
-      quotes,
-      article_title,
-      article_created_at,
-      article_updated_at,
-      article_import_route,
-      article_publication_status,
-      created_at,
-      updated_at
-    )
     SELECT
       judgment.id,
       judgment.article_id,
@@ -1451,9 +1455,168 @@ const getJudgmentArticleRefreshSql = (articleId: string) => {
     FROM app.judgment judgment
     INNER JOIN app.article article ON article.id = judgment.article_id
     WHERE judgment.deleted_at IS NULL
-      AND judgment.article_id = ${articleLiteral};
+      AND ${articleFilterSql}
+  `
+}
+
+const getJudgmentFactSafeRefreshSql = ({dirtyArticlesSql, rebuildTableName}: {dirtyArticlesSql: string; rebuildTableName: string}) => {
+  return `
+    BEGIN TRANSACTION;
+    CREATE TEMP TABLE temp_dirty_judgment_fact_article AS ${dirtyArticlesSql};
+    DROP TABLE IF EXISTS ${rebuildTableName};
+    CREATE TABLE ${rebuildTableName} (
+      judgment_id VARCHAR PRIMARY KEY,
+      article_id VARCHAR NOT NULL,
+      prompt_id VARCHAR NOT NULL,
+      model_id VARCHAR NOT NULL,
+      project_id VARCHAR,
+      snapshot_project_id VARCHAR,
+      snapshot_project_model_name VARCHAR,
+      use_title BOOLEAN NOT NULL,
+      use_abstract BOOLEAN NOT NULL,
+      use_fulltext BOOLEAN NOT NULL,
+      use_fulltext_no_images BOOLEAN NOT NULL,
+      chunking_strategy VARCHAR,
+      is_answered BOOLEAN NOT NULL,
+      answered_original VARCHAR,
+      answered_original_as_array VARCHAR[],
+      normalized_answers VARCHAR[],
+      confidence_original INTEGER,
+      explanation VARCHAR,
+      quotes JSON,
+      article_title VARCHAR NOT NULL,
+      article_created_at TIMESTAMPTZ,
+      article_updated_at TIMESTAMPTZ,
+      article_import_route VARCHAR,
+      article_publication_status VARCHAR,
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL
+    );
+    INSERT INTO ${rebuildTableName} (
+      judgment_id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      snapshot_project_id,
+      snapshot_project_model_name,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      chunking_strategy,
+      is_answered,
+      answered_original,
+      answered_original_as_array,
+      normalized_answers,
+      confidence_original,
+      explanation,
+      quotes,
+      article_title,
+      article_created_at,
+      article_updated_at,
+      article_import_route,
+      article_publication_status,
+      created_at,
+      updated_at
+    )
+    SELECT
+      judgment_id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      snapshot_project_id,
+      snapshot_project_model_name,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      chunking_strategy,
+      is_answered,
+      answered_original,
+      answered_original_as_array,
+      normalized_answers,
+      confidence_original,
+      explanation,
+      quotes,
+      article_title,
+      article_created_at,
+      article_updated_at,
+      article_import_route,
+      article_publication_status,
+      created_at,
+      updated_at
+    FROM mart.judgment_fact
+    WHERE article_id NOT IN (
+      SELECT article_id
+      FROM temp_dirty_judgment_fact_article
+    );
+    INSERT INTO ${rebuildTableName} (
+      judgment_id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      snapshot_project_id,
+      snapshot_project_model_name,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      chunking_strategy,
+      is_answered,
+      answered_original,
+      answered_original_as_array,
+      normalized_answers,
+      confidence_original,
+      explanation,
+      quotes,
+      article_title,
+      article_created_at,
+      article_updated_at,
+      article_import_route,
+      article_publication_status,
+      created_at,
+      updated_at
+    )
+    ${getJudgmentFactRefreshSourceSql("judgment.article_id IN (SELECT article_id FROM temp_dirty_judgment_fact_article)")};
+    DROP TABLE mart.judgment_fact;
+    ALTER TABLE ${rebuildTableName} RENAME TO judgment_fact;
+    ${judgmentFactIndexSql};
+    DROP TABLE temp_dirty_judgment_fact_article;
     COMMIT;
   `
+}
+
+const getJudgmentArticleRefreshSql = (articleId: string) => {
+  const articleLiteral = getSqlLiteral(articleId)
+
+  return getJudgmentFactSafeRefreshSql({
+    dirtyArticlesSql: `SELECT ${articleLiteral} AS article_id`,
+    rebuildTableName: 'mart.judgment_fact_rebuild',
+  })
+}
+
+const getJudgmentProjectClaimRefreshSql = ({
+  claimedToken,
+  lastCompletedToken,
+  projectId,
+}: {
+  claimedToken: number
+  lastCompletedToken: number
+  projectId: string
+}) => {
+  return getJudgmentFactSafeRefreshSql({
+    dirtyArticlesSql: `
+      SELECT DISTINCT article_id
+      FROM app.project_mart_refresh_article_state
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND first_dirty_token <= ${claimedToken}
+        AND last_dirty_token > ${lastCompletedToken}
+    `,
+    rebuildTableName: 'mart.judgment_fact_rebuild',
+  })
 }
 
 const getQueuedArticleTasks = async () => {
@@ -2466,6 +2629,22 @@ const refreshJudgmentArticle = async (articleId: string) => {
   recordArticleRefreshCompletion()
 }
 
+const refreshJudgmentFactsForProjectClaim = async ({
+  claimedToken,
+  lastCompletedToken,
+  projectId,
+}: {
+  claimedToken: number
+  lastCompletedToken: number
+  projectId: string
+}) => {
+  await runMartRefreshBackgroundStatement(
+    getJudgmentProjectClaimRefreshSql({claimedToken, lastCompletedToken, projectId}),
+  )
+  await yieldToEventLoop()
+  recordArticleRefreshCompletion()
+}
+
 const refreshProjects = async (projectIds: string[]): Promise<void> => {
   const [currentProjectId = ''] = projectIds
 
@@ -2736,6 +2915,7 @@ const duckdbMartRefreshService = {
   queueProjectRefreshesByPromptIds,
   recoverQueuedArchivedProjectRefresh,
   refreshJudgmentArticle,
+  refreshJudgmentFactsForProjectClaim,
   refreshProject,
   refreshProjectArticleServing,
   resetProgressSnapshotForTests: () => {

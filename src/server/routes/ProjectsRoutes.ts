@@ -10,6 +10,7 @@ import {
   getTimestampLiteral,
 } from '../services/appQueryHelpers.ts'
 import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
+import {getProjectMartLargeRebuildStateService} from '../services/projectMartLargeRebuildStateService.ts'
 import {getProjectMartRefreshStateService} from '../services/projectMartRefreshStateService.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {assertProjectIsActive, getProjectAccess} from './projectsRoutes/projectAccessGuard.ts'
@@ -1313,11 +1314,8 @@ export const projectsRoutes = new Elysia()
       })
 
       if (updatedProject) {
-        await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
-          projects: [{projectId: params.id}],
-          reason: 'ProjectsRoutes.archive',
-          runner: tx,
-        })
+        await getProjectMartRefreshStateService().clearProjectRefreshState({projectId: params.id, runner: tx})
+        await getProjectMartLargeRebuildStateService().clearLargeRebuildState({projectId: params.id, runner: tx})
       }
 
       return updatedProject

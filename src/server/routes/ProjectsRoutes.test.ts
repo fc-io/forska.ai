@@ -253,7 +253,7 @@ afterAll(async () => {
   rmSync(tempDbPath, {force: true})
 })
 
-test('archive route marks the archived project dirty without depending on the legacy queue', async () => {
+test('archive route clears refresh state for archived projects without depending on the legacy queue', async () => {
   if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')
   }
@@ -277,23 +277,24 @@ test('archive route marks the archived project dirty without depending on the le
     WHERE id = '${projectId}'
     LIMIT 1
   `)
-  const [refreshState] = await queryDatabase<{dirtyToken: number; projectId: string; reason: string | null}>(`
+  const [refreshState] = await queryDatabase<{dirtyToken: number; lastCompletedRefreshToken: number; projectId: string; refreshStatus: string}>(`
     SELECT
       project_id AS projectId,
       CAST(dirty_token AS INTEGER) AS dirtyToken,
-      last_request_reason AS reason
+      CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+      refresh_status AS refreshStatus
     FROM app.project_mart_refresh_state
     WHERE project_id = '${projectId}'
     LIMIT 1
   `)
 
   expect(storedProject?.archived).toBe(true)
-  expect(refreshState).toEqual({dirtyToken: 1, projectId, reason: 'ProjectsRoutes.archive'})
+  expect(refreshState).toBeUndefined()
 
   await flushMartRefreshes()
 })
 
-test('archive route leaves downstream serving rows for refresh workers and records dirty state', async () => {
+test('archive route leaves downstream serving rows in place while clearing refresh state', async () => {
   if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')
   }
@@ -333,7 +334,7 @@ test('archive route leaves downstream serving rows for refresh workers and recor
 
   expect(Number(servingRowCount?.count ?? 0)).toBe(398)
   expect(Number(generationRowCount?.count ?? 0)).toBe(1)
-  expect(refreshState).toEqual({dirtyToken: 1, projectId, reason: 'ProjectsRoutes.archive'})
+  expect(refreshState).toBeUndefined()
 
   await flushMartRefreshes()
 })

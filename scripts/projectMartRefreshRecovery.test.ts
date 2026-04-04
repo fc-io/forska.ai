@@ -223,7 +223,7 @@ test('runProjectMartRefreshWorkerOnce CLI completes one claim and leaves the led
   expect(state).toEqual({lastCompletedRefreshToken: '1', refreshStatus: 'idle'})
 })
 
-test('runProjectMartRefreshWorkerOnce blocks oversized full refreshes and leaves an actionable failed ledger state', () => {
+test('runProjectMartRefreshWorkerOnce routes oversized full refreshes into staged large rebuild state', () => {
   const duckdbPath = join(projectRoot, '.tmp', 'run-project-mart-refresh-worker-once-blocked.duckdb')
   removeFileIfExists(dirname(duckdbPath))
   seedDatabase({dirtyArticleCount: 4, duckdbPath, projectId: 'project-blocked', refreshStatus: 'idle'})
@@ -237,26 +237,30 @@ test('runProjectMartRefreshWorkerOnce blocks oversized full refreshes and leaves
     },
   })
 
-  expect(runScript.exitCode).toBe(1)
+  expect(runScript.exitCode).toBe(0)
 
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
-    error: string
     projectId: string
     status: string
+    workerId: string
   }
 
   expect(result.projectId).toBe('project-blocked')
-  expect(result.status).toBe('failed')
-  expect(result.error).toContain('Blocked automatic full refresh for project project-blocked')
-  expect(result.error).toContain('max_full_project_scope_articles=3')
+  expect(result.status).toBe('completed')
 
   const [state] = runQuery(
     duckdbPath,
-    "SELECT refresh_status AS refreshStatus, last_error AS lastError FROM app.project_mart_refresh_state WHERE project_id = 'project-blocked'",
-  ) as Array<{lastError: string; refreshStatus: string}>
+    "SELECT refresh_status AS refreshStatus, last_error AS lastError, CAST(active_refresh_token AS INTEGER) AS activeRefreshToken FROM app.project_mart_refresh_state WHERE project_id = 'project-blocked'",
+  ) as Array<{activeRefreshToken: number; lastError: string | null; refreshStatus: string}>
+  const [largeRebuildState] = runQuery(
+    duckdbPath,
+    "SELECT rebuild_phase AS rebuildPhase, refresh_status AS refreshStatus, CAST(refresh_token AS INTEGER) AS refreshToken FROM app.project_mart_large_rebuild_state WHERE project_id = 'project-blocked'",
+  ) as Array<{rebuildPhase: string; refreshStatus: string; refreshToken: number}>
 
-  expect(state.refreshStatus).toBe('failed')
-  expect(state.lastError).toContain('Blocked automatic full refresh for project project-blocked')
+  expect(state.refreshStatus).toBe('idle')
+  expect(state.lastError).toBeNull()
+  expect(state.activeRefreshToken).toBe(0)
+  expect(largeRebuildState).toEqual({rebuildPhase: 'prompt_answer_fact', refreshStatus: 'idle', refreshToken: 1})
 })
 
 test('isolated refresh command progresses one large rebuild batch when no normal refresh claim is available', () => {
@@ -471,4 +475,302 @@ test('recoverProjectMartRefreshClaims lists and recovers stale claims only when 
   ) as Array<{lastCompletedRefreshToken: string; refreshStatus: string}>
 
   expect(state).toEqual({lastCompletedRefreshToken: '1', refreshStatus: 'idle'})
+})
+
+
+test('runProjectMartLargeRebuildCycle CLI advances one staged batch with conservative default batch size', () => {
+  const duckdbPath = join(projectRoot, '.tmp', 'run-project-mart-large-rebuild-cli.duckdb')
+  removeFileIfExists(dirname(duckdbPath))
+  seedDatabase({dirtyArticleCount: 1, duckdbPath, projectId: 'project-large-rebuild-cli', refreshStatus: 'idle'})
+
+  const seedLargeRebuild = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const database = getAppDatabaseService()
+        await database.run(\`
+          UPDATE app.project_mart_refresh_state
+          SET dirty_token = 0, last_completed_refresh_token = 0, active_refresh_token = 0, refresh_status = 'idle'
+          WHERE project_id = 'project-large-rebuild-cli';
+          DELETE FROM app.project_mart_refresh_article_state WHERE project_id = 'project-large-rebuild-cli';
+        \`)
+        await database.run(\`
+          INSERT INTO app.prompt (id, original_text, content_hash)
+          VALUES ('prompt-large-rebuild-cli', 'Prompt large rebuild cli', 'hash-large-rebuild-cli')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+          VALUES ('project-prompt-large-rebuild-cli', 'project-large-rebuild-cli', 'prompt-large-rebuild-cli', 1, TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO mart.project_scope_article (
+            project_id,
+            article_id,
+            in_curated_scope,
+            in_route_scope,
+            article_created_at,
+            article_updated_at
+          ) VALUES (
+            'project-large-rebuild-cli',
+            'article-1',
+            TRUE,
+            FALSE,
+            TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+            TIMESTAMPTZ '2026-04-01T01:00:00.000Z'
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO mart.judgment_fact (
+            judgment_id,
+            article_id,
+            prompt_id,
+            model_id,
+            project_id,
+            snapshot_project_id,
+            snapshot_project_model_name,
+            use_title,
+            use_abstract,
+            use_fulltext,
+            use_fulltext_no_images,
+            chunking_strategy,
+            is_answered,
+            answered_original,
+            answered_original_as_array,
+            normalized_answers,
+            confidence_original,
+            explanation,
+            quotes,
+            article_title,
+            article_created_at,
+            article_updated_at,
+            article_import_route,
+            article_publication_status,
+            created_at,
+            updated_at
+          ) VALUES (
+            'judgment-large-rebuild-cli',
+            'article-1',
+            'prompt-large-rebuild-cli',
+            'model-project-large-rebuild-cli',
+            'project-large-rebuild-cli',
+            'project-large-rebuild-cli',
+            'Project project-large-rebuild-cli',
+            TRUE,
+            TRUE,
+            FALSE,
+            FALSE,
+            NULL,
+            TRUE,
+            'yes',
+            ['yes'],
+            ['yes'],
+            1,
+            NULL,
+            NULL,
+            'Article 1',
+            TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+            TIMESTAMPTZ '2026-04-01T01:00:00.000Z',
+            NULL,
+            NULL,
+            TIMESTAMPTZ '2026-04-03T00:00:00.000Z',
+            TIMESTAMPTZ '2026-04-03T00:00:00.000Z'
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_mart_large_rebuild_state (
+            project_id,
+            refresh_token,
+            rebuild_phase,
+            refresh_status
+          ) VALUES (
+            'project-large-rebuild-cli',
+            5,
+            'prompt_answer_fact',
+            'idle'
+          )
+        \`)
+        await database.close()
+      `,
+    ],
+    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}},
+  )
+
+  if (seedLargeRebuild.exitCode !== 0) {
+    throw new Error(seedLargeRebuild.stderr.toString() || seedLargeRebuild.stdout.toString() || 'large rebuild cli seed failed')
+  }
+
+  const runScript = globalThis.Bun.spawnSync(['bun', 'scripts/runProjectMartLargeRebuildCycle.ts', '--worker-id=test-large-rebuild-cli'], {
+    cwd: projectRoot,
+    env: {...defaultEnv, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer', SERVER_WRITER_URL: ''},
+  })
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'large rebuild cli run failed')
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    articleCount: number
+    nextCursor: {articleCreatedAt: string; articleId: string} | null
+    projectId: string
+    status: string
+    workerId: string
+  }
+
+  expect(result.articleCount).toBe(1)
+  expect(result.projectId).toBe('project-large-rebuild-cli')
+  expect(result.status).toBe('progressed')
+  expect(result.workerId).toBe('test-large-rebuild-cli')
+  expect(result.nextCursor?.articleId).toBe('article-1')
+})
+
+
+test('runProjectMartLargeRebuildCycles CLI returns structured bounded multi-cycle progress summary', () => {
+  const duckdbPath = join(projectRoot, '.tmp', 'run-project-mart-large-rebuild-cycles-cli.duckdb')
+  removeFileIfExists(dirname(duckdbPath))
+  seedDatabase({dirtyArticleCount: 1, duckdbPath, projectId: 'project-large-rebuild-cycles-cli', refreshStatus: 'idle'})
+
+  const seedLargeRebuild = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const database = getAppDatabaseService()
+        await database.run(\`
+          UPDATE app.project_mart_refresh_state
+          SET dirty_token = 0, last_completed_refresh_token = 0, active_refresh_token = 0, refresh_status = 'idle'
+          WHERE project_id = 'project-large-rebuild-cycles-cli';
+          DELETE FROM app.project_mart_refresh_article_state WHERE project_id = 'project-large-rebuild-cycles-cli';
+        \`)
+        await database.run(\`
+          INSERT INTO app.prompt (id, original_text, content_hash)
+          VALUES ('prompt-large-rebuild-cycles-cli', 'Prompt large rebuild cycles cli', 'hash-large-rebuild-cycles-cli')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+          VALUES ('project-prompt-large-rebuild-cycles-cli', 'project-large-rebuild-cycles-cli', 'prompt-large-rebuild-cycles-cli', 1, TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO mart.project_scope_article (
+            project_id,
+            article_id,
+            in_curated_scope,
+            in_route_scope,
+            article_created_at,
+            article_updated_at
+          ) VALUES (
+            'project-large-rebuild-cycles-cli',
+            'article-1',
+            TRUE,
+            FALSE,
+            TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+            TIMESTAMPTZ '2026-04-01T01:00:00.000Z'
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO mart.judgment_fact (
+            judgment_id,
+            article_id,
+            prompt_id,
+            model_id,
+            project_id,
+            snapshot_project_id,
+            snapshot_project_model_name,
+            use_title,
+            use_abstract,
+            use_fulltext,
+            use_fulltext_no_images,
+            chunking_strategy,
+            is_answered,
+            answered_original,
+            answered_original_as_array,
+            normalized_answers,
+            confidence_original,
+            explanation,
+            quotes,
+            article_title,
+            article_created_at,
+            article_updated_at,
+            article_import_route,
+            article_publication_status,
+            created_at,
+            updated_at
+          ) VALUES (
+            'judgment-large-rebuild-cycles-cli',
+            'article-1',
+            'prompt-large-rebuild-cycles-cli',
+            'model-project-large-rebuild-cycles-cli',
+            'project-large-rebuild-cycles-cli',
+            'project-large-rebuild-cycles-cli',
+            'Project project-large-rebuild-cycles-cli',
+            TRUE,
+            TRUE,
+            FALSE,
+            FALSE,
+            NULL,
+            TRUE,
+            'yes',
+            ['yes'],
+            ['yes'],
+            1,
+            NULL,
+            NULL,
+            'Article 1',
+            TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+            TIMESTAMPTZ '2026-04-01T01:00:00.000Z',
+            NULL,
+            NULL,
+            TIMESTAMPTZ '2026-04-03T00:00:00.000Z',
+            TIMESTAMPTZ '2026-04-03T00:00:00.000Z'
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_mart_large_rebuild_state (
+            project_id,
+            refresh_token,
+            rebuild_phase,
+            refresh_status
+          ) VALUES (
+            'project-large-rebuild-cycles-cli',
+            5,
+            'prompt_answer_fact',
+            'idle'
+          )
+        \`)
+        await database.close()
+      `,
+    ],
+    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}},
+  )
+
+  if (seedLargeRebuild.exitCode !== 0) {
+    throw new Error(seedLargeRebuild.stderr.toString() || seedLargeRebuild.stdout.toString() || 'large rebuild cycles cli seed failed')
+  }
+
+  const runScript = globalThis.Bun.spawnSync(
+    ['bun', 'scripts/runProjectMartLargeRebuildCycles.ts', '--worker-id=test-large-rebuild-cycles-cli', '--max-cycles=3'],
+    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer', SERVER_WRITER_URL: ''}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'large rebuild cycles cli run failed')
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    completedCycles: number
+    cycleResults: Array<{projectId: string | null; status: string}>
+    maxCycles: number
+    status: string
+    stopReason: string
+    workerId: string
+  }
+
+  expect(result.status).toBe('completed')
+  expect(result.workerId).toBe('test-large-rebuild-cycles-cli')
+  expect(result.maxCycles).toBe(3)
+  expect(result.completedCycles).toBe(3)
+  expect(result.stopReason).toBe('max-cycles')
+  expect(result.cycleResults[0]?.projectId).toBe('project-large-rebuild-cycles-cli')
 })

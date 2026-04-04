@@ -17,6 +17,7 @@ type ProjectMartRefreshStateWorkerService = {
     now?: Date
     workerId: string
   }) => Promise<ProjectRefreshClaim[]>
+  clearArchivedProjectRefreshStates: (params?: {now?: Date}) => Promise<unknown>
   completeProjectRefresh: (params: {
     completedToken: number
     now?: Date
@@ -39,6 +40,7 @@ type ProjectMartRefreshStateWorkerService = {
 }
 
 type ProjectMartLargeRebuildStateWorkerService = {
+  clearArchivedLargeRebuildStates: () => Promise<unknown>
   queueLargeRebuild: (params: {
     cursorArticleCreatedAt?: Date | null
     cursorArticleId?: string | null
@@ -52,6 +54,11 @@ type ProjectMartLargeRebuildStateWorkerService = {
 
 type ProjectMartRefreshRunnerService = {
   refreshJudgmentArticle: (articleId: string) => Promise<void>
+  refreshJudgmentFactsForProjectClaim: (params: {
+    claimedToken: number
+    lastCompletedToken: number
+    projectId: string
+  }) => Promise<void>
   refreshProject: (projectId: string) => Promise<void>
   refreshProjectArticleServing: (projectId: string, articleId: string) => Promise<void>
 }
@@ -148,20 +155,7 @@ const getClaimedProject = async (
   return claim ?? null
 }
 
-const refreshClaimArticles = async (
-  articleIds: string[],
-  refreshService: ProjectMartRefreshRunnerService,
-): Promise<void> => {
-  const [articleId = ''] = articleIds
-
-  return articleId === ''
-    ? Promise.resolve()
-    : refreshService.refreshJudgmentArticle(articleId).then(() => {
-        return refreshClaimArticles(articleIds.slice(1), refreshService)
-      })
-}
-
-const refreshClaimArticlesIncrementally = async (
+const refreshClaimArticleServingIncrementally = async (
   articleIds: string[],
   projectId: string,
   refreshService: ProjectMartRefreshRunnerService,
@@ -170,10 +164,8 @@ const refreshClaimArticlesIncrementally = async (
 
   return articleId === ''
     ? Promise.resolve()
-    : refreshService.refreshJudgmentArticle(articleId).then(() => {
-        return refreshService.refreshProjectArticleServing(projectId, articleId).then(() => {
-          return refreshClaimArticlesIncrementally(articleIds.slice(1), projectId, refreshService)
-        })
+    : refreshService.refreshProjectArticleServing(projectId, articleId).then(() => {
+        return refreshClaimArticleServingIncrementally(articleIds.slice(1), projectId, refreshService)
       })
 }
 
@@ -252,6 +244,8 @@ export const runProjectMartRefreshWorkerCycle = async (
 ): Promise<ProjectMartRefreshWorkerCycleResult> => {
   const workerId = options.workerId ?? getProjectMartRefreshWorkerId()
 
+  await dependencies.stateService.clearArchivedProjectRefreshStates({now: options.now})
+  await dependencies.largeRebuildStateService.clearArchivedLargeRebuildStates()
   await dependencies.sqliteService.reconcileProjectRefreshAcks()
 
   const claim = await getClaimedProject(dependencies, {...options, workerId})
@@ -281,11 +275,15 @@ export const runProjectMartRefreshWorkerCycle = async (
       incrementalArticleThreshold,
     })
 
-    if (executionMode === 'incremental') {
-      await refreshClaimArticlesIncrementally(dirtyArticleIds, claim.projectId, dependencies.refreshService)
-    } else {
-      await refreshClaimArticles(dirtyArticleIds, dependencies.refreshService)
+    await dependencies.refreshService.refreshJudgmentFactsForProjectClaim({
+      claimedToken: claim.claimedToken,
+      lastCompletedToken: claim.lastCompletedToken,
+      projectId: claim.projectId,
+    })
 
+    if (executionMode === 'incremental') {
+      await refreshClaimArticleServingIncrementally(dirtyArticleIds, claim.projectId, dependencies.refreshService)
+    } else {
       if (executionMode === 'full') {
         const scopeArticleCount = await dependencies.projectInspector.getProjectScopeArticleCount(claim.projectId)
 

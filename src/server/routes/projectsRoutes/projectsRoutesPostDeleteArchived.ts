@@ -262,6 +262,7 @@ const projectMartLargeRebuildStateCreateSql = `
     last_completed_at TIMESTAMPTZ,
     last_failed_at TIMESTAMPTZ,
     last_error VARCHAR,
+    operator_note VARCHAR,
     worker_id VARCHAR,
     lease_expires_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,

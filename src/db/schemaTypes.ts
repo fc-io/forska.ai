@@ -22,7 +22,7 @@ export type JudgmentsJobsPromptsSkipReason = 'no_fulltext' | 'conversion_failed'
 export type JudgmentChunkingStrategy = 'patient_h3_greedy' | 'article_heading_greedy' | 'article_paragraph_greedy'
 export type Engine = 'sglang' | 'vllm'
 export type ModelSource = 'discovered' | 'manual'
-export type ProjectMartRefreshStatus = 'idle' | 'running' | 'failed'
+export type ProjectMartRefreshStatus = 'idle' | 'running' | 'failed' | 'paused'
 export type ProjectMartLargeRebuildPhase =
   | 'judgment_fact'
   | 'prompt_answer_fact'
@@ -343,6 +343,14 @@ export type ProjectMartRefreshArticleStateRecord = {
   updatedAt: Date
 }
 
+export type ProjectMartRefreshArticleQuarantineRecord = {
+  articleId: string
+  error: string
+  detectedBy: string | null
+  createdAt: Date
+  updatedAt: Date
+}
+
 export type ProjectMartLargeRebuildStateRecord = {
   projectId: string
   refreshToken: number
@@ -355,6 +363,7 @@ export type ProjectMartLargeRebuildStateRecord = {
   lastCompletedAt: Date | null
   lastFailedAt: Date | null
   lastError: string | null
+  operatorNote: string | null
   workerId: string | null
   leaseExpiresAt: Date | null
   createdAt: Date

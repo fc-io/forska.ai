@@ -3,10 +3,13 @@ import {Elysia, t} from 'elysia'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../services/getAppQueryService.ts'
+import {runProjectMartLargeRebuildCycles} from '../services/projectMartLargeRebuildCyclesService.ts'
+import {getProjectMartLargeRebuildStateService} from '../services/projectMartLargeRebuildStateService.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
 const appDatabaseService = getAppDatabaseService()
 const appQueryService = getAppQueryService()
+const projectMartLargeRebuildStateService = getProjectMartLargeRebuildStateService()
 
 const parseArktypeOptions = (typeStr: string | null): string[] => {
   if (!typeStr) return []
@@ -56,6 +59,218 @@ type AutoSyncAllProgress = {
   startedAt: Date | null
   completedAt: Date | null
   error: string | null
+}
+
+type ProjectMartLargeRebuildOperatorStatus = {
+  estimates: {
+    currentPhaseProgressPercent: number
+    estimatedRemainingCyclesAtBatchSize1: number
+    estimatedRemainingMs: number | null
+    overallProgressPercent: number
+    remainingPhaseArticleCount: number
+    scannedPhaseArticleCount: number
+    scopeArticleCount: number
+  }
+  largeRebuild: {
+    createdAt: string | null
+    cursorArticleCreatedAt: string | null
+    cursorArticleId: string | null
+    lastCompletedAt: string | null
+    lastError: string | null
+    lastStartedAt: string | null
+    operatorNote: string | null
+    rebuildPhase: string | null
+    refreshStatus: string | null
+    refreshToken: number | null
+    updatedAt: string | null
+  } | null
+  project: {archived: boolean; id: string; name: string}
+  refreshState: {
+    activeRefreshToken: number
+    dirtyToken: number
+    lastCompletedRefreshToken: number
+    lastError: string | null
+    refreshStatus: string
+    workerId: string | null
+  } | null
+}
+
+const largeRebuildPhaseOrder = [
+  'prompt_answer_fact',
+  'review_answer_dictionary',
+  'review_article_filter_member',
+  'review_article_rollup',
+  'review_article_serving',
+] as const
+
+const articleScopedLargeRebuildPhases = new Set(['prompt_answer_fact', 'review_article_filter_member', 'review_article_rollup', 'review_article_serving'])
+
+const getLargeRebuildPhaseIndex = (phase: string | null) => {
+  return phase === null ? -1 : largeRebuildPhaseOrder.indexOf(phase as (typeof largeRebuildPhaseOrder)[number])
+}
+
+const getOverallProgressPercent = ({
+  currentPhaseProgressPercent,
+  refreshStatus,
+  rebuildPhase,
+}: {
+  currentPhaseProgressPercent: number
+  rebuildPhase: string | null
+  refreshStatus: string | null
+}) => {
+  const phaseIndex = getLargeRebuildPhaseIndex(rebuildPhase)
+  const totalPhaseCount = largeRebuildPhaseOrder.length
+
+  return refreshStatus === 'paused' || refreshStatus === 'running' || refreshStatus === 'idle' || refreshStatus === 'failed'
+    ? rebuildPhase === null
+      ? refreshStatus === 'idle'
+        ? 100
+        : 0
+      : Math.max(0, Math.min(100, Math.round((((Math.max(0, phaseIndex) + currentPhaseProgressPercent / 100) / totalPhaseCount) * 100))))
+    : 0
+}
+
+const getEstimatedRemainingCyclesAtBatchSize1 = ({rebuildPhase, remainingPhaseArticleCount}: {rebuildPhase: string | null; remainingPhaseArticleCount: number}) => {
+  const phaseIndex = getLargeRebuildPhaseIndex(rebuildPhase)
+
+  return rebuildPhase === null || phaseIndex === -1
+    ? 0
+    : articleScopedLargeRebuildPhases.has(rebuildPhase)
+      ? remainingPhaseArticleCount + (largeRebuildPhaseOrder.length - phaseIndex - 1)
+      : largeRebuildPhaseOrder.length - phaseIndex
+}
+
+const getProjectMartLargeRebuildOperatorStatus = async (projectId: string): Promise<ProjectMartLargeRebuildOperatorStatus> => {
+  const [project] = await appDatabaseService.queryJson<{archived: boolean; id: string; name: string}>(`
+    SELECT id, name, archived
+    FROM app.project
+    WHERE id = '${appQueryHelpers.escapeSqlString(projectId)}'
+    LIMIT 1
+  `)
+
+  if (!project) {
+    throw new Error('Project not found')
+  }
+
+  const [refreshState] = await appDatabaseService.queryJson<{
+    activeRefreshToken: number
+    dirtyToken: number
+    lastCompletedRefreshToken: number
+    lastError: string | null
+    refreshStatus: string
+    workerId: string | null
+  }>(`
+    SELECT
+      CAST(active_refresh_token AS INTEGER) AS activeRefreshToken,
+      CAST(dirty_token AS INTEGER) AS dirtyToken,
+      CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+      last_error AS lastError,
+      refresh_status AS refreshStatus,
+      worker_id AS workerId
+    FROM app.project_mart_refresh_state
+    WHERE project_id = '${appQueryHelpers.escapeSqlString(projectId)}'
+    LIMIT 1
+  `)
+
+  const [largeRebuild] = await appDatabaseService.queryJson<{
+    createdAt: string | null
+    cursorArticleCreatedAt: string | null
+    cursorArticleId: string | null
+    lastCompletedAt: string | null
+    lastError: string | null
+    lastStartedAt: string | null
+    operatorNote: string | null
+    rebuildPhase: string | null
+    refreshStatus: string | null
+    refreshToken: number | null
+    updatedAt: string | null
+  }>(`
+    SELECT
+      created_at AS createdAt,
+      cursor_article_created_at AS cursorArticleCreatedAt,
+      cursor_article_id AS cursorArticleId,
+      last_completed_at AS lastCompletedAt,
+      last_error AS lastError,
+      last_started_at AS lastStartedAt,
+      operator_note AS operatorNote,
+      rebuild_phase AS rebuildPhase,
+      refresh_status AS refreshStatus,
+      CAST(refresh_token AS INTEGER) AS refreshToken,
+      updated_at AS updatedAt
+    FROM app.project_mart_large_rebuild_state
+    WHERE project_id = '${appQueryHelpers.escapeSqlString(projectId)}'
+    LIMIT 1
+  `)
+
+  const [scopeRow] = await appDatabaseService.queryJson<{scopeArticleCount: number}>(`
+    SELECT CAST(COUNT(*) AS INTEGER) AS scopeArticleCount
+    FROM mart.project_scope_article
+    WHERE project_id = '${appQueryHelpers.escapeSqlString(projectId)}'
+  `)
+
+  const [scannedRow] = await appDatabaseService.queryJson<{scannedPhaseArticleCount: number}>(`
+    SELECT CAST(COUNT(*) AS INTEGER) AS scannedPhaseArticleCount
+    FROM mart.project_scope_article
+    WHERE project_id = '${appQueryHelpers.escapeSqlString(projectId)}'
+      AND (
+        '${appQueryHelpers.escapeSqlString(largeRebuild?.cursorArticleId ?? '')}' <> ''
+        AND (
+          article_created_at < ${appQueryHelpers.getSqlLiteral(largeRebuild?.cursorArticleCreatedAt ?? null)}
+          OR (
+            article_created_at = ${appQueryHelpers.getSqlLiteral(largeRebuild?.cursorArticleCreatedAt ?? null)}
+            AND article_id <= ${appQueryHelpers.getSqlLiteral(largeRebuild?.cursorArticleId ?? null)}
+          )
+        )
+      )
+  `)
+
+  const scopeArticleCount = scopeRow?.scopeArticleCount ?? 0
+  const scannedPhaseArticleCount = articleScopedLargeRebuildPhases.has(largeRebuild?.rebuildPhase ?? '')
+    ? Math.min(scopeArticleCount, Math.max(0, scannedRow?.scannedPhaseArticleCount ?? 0))
+    : largeRebuild?.rebuildPhase === 'review_answer_dictionary'
+      ? scopeArticleCount
+      : 0
+  const remainingPhaseArticleCount = articleScopedLargeRebuildPhases.has(largeRebuild?.rebuildPhase ?? '')
+    ? Math.max(0, scopeArticleCount - scannedPhaseArticleCount)
+    : 0
+  const currentPhaseProgressPercent = articleScopedLargeRebuildPhases.has(largeRebuild?.rebuildPhase ?? '')
+    ? scopeArticleCount === 0
+      ? 100
+      : Math.max(0, Math.min(100, Math.round((scannedPhaseArticleCount / scopeArticleCount) * 100)))
+    : largeRebuild?.rebuildPhase === 'review_answer_dictionary'
+      ? 100
+      : largeRebuild?.rebuildPhase === null
+        ? 100
+        : 0
+  const overallProgressPercent = getOverallProgressPercent({
+    currentPhaseProgressPercent,
+    rebuildPhase: largeRebuild?.rebuildPhase ?? null,
+    refreshStatus: largeRebuild?.refreshStatus ?? null,
+  })
+  const estimatedRemainingCyclesAtBatchSize1 = getEstimatedRemainingCyclesAtBatchSize1({
+    rebuildPhase: largeRebuild?.rebuildPhase ?? null,
+    remainingPhaseArticleCount,
+  })
+  const lastStartedAt = largeRebuild?.lastStartedAt ? new Date(largeRebuild.lastStartedAt) : null
+  const estimatedRemainingMs =
+    lastStartedAt && largeRebuild?.refreshStatus === 'running' && overallProgressPercent > 0 && overallProgressPercent < 100
+      ? Math.max(0, Math.round(((Date.now() - lastStartedAt.getTime()) * (100 - overallProgressPercent)) / overallProgressPercent))
+      : null
+
+  return {
+    estimates: {
+      currentPhaseProgressPercent,
+      estimatedRemainingCyclesAtBatchSize1,
+      estimatedRemainingMs,
+      overallProgressPercent,
+      remainingPhaseArticleCount,
+      scannedPhaseArticleCount,
+      scopeArticleCount,
+    },
+    largeRebuild: largeRebuild ?? null,
+    project,
+    refreshState: refreshState ?? null,
+  }
 }
 
 const getProjectJudgmentClause = (projectScope: ProjectScope | null, judgmentAlias: string) => {
@@ -456,6 +671,75 @@ export const adminInvestigateRoutes = new Elysia()
   .get('/api/admin/duckdb-append-metrics', async () => {
     return appDatabaseService.getAppendMetrics()
   })
+  .get(
+    '/api/admin/project-mart-large-rebuild-status',
+    async ({query}) => {
+      return getProjectMartLargeRebuildOperatorStatus(query.projectId)
+    },
+    {query: t.Object({projectId: t.String()})},
+  )
+  .post(
+    '/api/admin/project-mart-large-rebuild-run',
+    async ({body}) => {
+      return runProjectMartLargeRebuildCycles({
+        batchSize: body.batchSize ?? 1,
+        maxCycles: body.maxCycles,
+        maxNoProgressBackoffs: body.maxNoProgressBackoffs,
+        projectId: body.projectId,
+        until: body.until ?? 'max-cycles',
+        workerId: body.workerId ?? `admin-project-mart-large-rebuild:${process.pid}`,
+      })
+    },
+    {
+      body: t.Object({
+        batchSize: t.Optional(t.Numeric()),
+        maxCycles: t.Numeric(),
+        maxNoProgressBackoffs: t.Optional(t.Numeric()),
+        projectId: t.String(),
+        until: t.Optional(t.Union([
+          t.Literal('completed'),
+          t.Literal('failed'),
+          t.Literal('idle'),
+          t.Literal('phase-change'),
+          t.Literal('max-cycles'),
+        ])),
+        workerId: t.Optional(t.String()),
+      }),
+    },
+  )
+  .post(
+    '/api/admin/project-mart-large-rebuild-pause',
+    async ({body}) => {
+      return projectMartLargeRebuildStateService.pauseLargeRebuild({projectId: body.projectId, reason: body.reason})
+    },
+    {
+      body: t.Object({
+        projectId: t.String(),
+        reason: t.Optional(t.String()),
+      }),
+    },
+  )
+  .post(
+    '/api/admin/project-mart-large-rebuild-resume',
+    async ({body}) => {
+      return projectMartLargeRebuildStateService.resumeLargeRebuild({projectId: body.projectId})
+    },
+    {
+      body: t.Object({projectId: t.String()}),
+    },
+  )
+  .post(
+    '/api/admin/project-mart-large-rebuild-note',
+    async ({body}) => {
+      return projectMartLargeRebuildStateService.setLargeRebuildOperatorNote({note: body.note, projectId: body.projectId})
+    },
+    {
+      body: t.Object({
+        note: t.Union([t.String(), t.Null()]),
+        projectId: t.String(),
+      }),
+    },
+  )
   .get('/api/admin/list-prompts-with-types', async () => {
     const promptsList = await getTypedPrompts()
     const filtered = promptsList.filter((prompt) => {

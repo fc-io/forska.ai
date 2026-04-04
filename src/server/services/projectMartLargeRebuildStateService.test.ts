@@ -119,6 +119,7 @@ test('large rebuild state migration creates typed schema and indexes', () => {
     'lease_expires_at',
     'created_at',
     'updated_at',
+    'operator_note',
   ])
   expect(result.indexes.map((index) => index.indexName)).toEqual([
     'idx_app_project_mart_large_rebuild_state_claim',
@@ -229,4 +230,85 @@ test('claim heartbeat complete fail and reset large rebuild state', () => {
   expect(result.reset?.cursorArticleId).toBe('article-99')
   expect(result.reset?.targetGeneration).toBe(12)
   expect(result.reset?.lastError).toBeNull()
+})
+
+test('clearArchivedLargeRebuildStates removes archived rebuild debt and claimLargeRebuilds skips archived projects', () => {
+  const result = runScript<{
+    archivedRows: number
+    claims: Array<{projectId: string}>
+  }>(`
+    await database.run(\`
+      UPDATE app.project
+      SET archived = TRUE
+      WHERE id = 'large-rebuild-project-2'
+    \`)
+    await service.queueLargeRebuild({projectId: 'large-rebuild-project-1', rebuildPhase: 'judgment_fact', refreshToken: 5})
+    await service.queueLargeRebuild({projectId: 'large-rebuild-project-2', rebuildPhase: 'review_article_rollup', refreshToken: 9})
+
+    const claims = await service.claimLargeRebuilds({leaseMs: 5000, limit: 5, workerId: 'worker-1'})
+    await service.clearArchivedLargeRebuildStates()
+    const [archivedRow] = await database.queryJson(\`
+      SELECT CAST(COUNT(*) AS INTEGER) AS rowCount
+      FROM app.project_mart_large_rebuild_state
+      WHERE project_id = 'large-rebuild-project-2'
+    \`)
+
+    console.log(JSON.stringify({
+      archivedRows: archivedRow?.rowCount ?? 0,
+      claims: claims.map((claim) => ({projectId: claim.projectId})),
+    }))
+    await database.close()
+  `)
+
+  expect(result.claims).toEqual([{projectId: 'large-rebuild-project-1'}])
+  expect(result.archivedRows).toBe(0)
+})
+
+
+test('pauseLargeRebuild and resumeLargeRebuild preserve cursor state and exclude paused rows from claims', () => {
+  const result = runScript<{
+    claimsWhilePaused: Array<{projectId: string}>
+    paused: ProjectMartLargeRebuildStateRecord | null
+    resumed: ProjectMartLargeRebuildStateRecord | null
+  }>(`
+    await service.queueLargeRebuild({
+      cursorArticleCreatedAt: new Date('2026-04-04T08:00:00.000Z'),
+      cursorArticleId: 'article-paused',
+      projectId: 'large-rebuild-project-1',
+      rebuildPhase: 'prompt_answer_fact',
+      refreshToken: 11,
+    })
+    const paused = await service.pauseLargeRebuild({projectId: 'large-rebuild-project-1', reason: 'Paused by operator for inspection'})
+    const claimsWhilePaused = await service.claimLargeRebuilds({leaseMs: 5000, limit: 5, workerId: 'worker-paused'})
+    const resumed = await service.resumeLargeRebuild({projectId: 'large-rebuild-project-1'})
+
+    console.log(JSON.stringify({
+      claimsWhilePaused: claimsWhilePaused.map((claim) => ({projectId: claim.projectId})),
+      paused,
+      resumed,
+    }))
+    await database.close()
+  `)
+
+  expect(result.claimsWhilePaused).toEqual([])
+  expect(result.paused?.refreshStatus).toBe('paused')
+  expect(result.paused?.cursorArticleId).toBe('article-paused')
+  expect(result.paused?.lastError).toBe('Paused by operator for inspection')
+  expect(result.resumed?.refreshStatus).toBe('idle')
+  expect(result.resumed?.cursorArticleId).toBe('article-paused')
+})
+
+
+test('setLargeRebuildOperatorNote persists durable operator notes separately from errors', () => {
+  const result = runScript<{note: string | null; lastError: string | null}>(`
+    await service.queueLargeRebuild({projectId: 'large-rebuild-project-1', rebuildPhase: 'prompt_answer_fact', refreshToken: 7})
+    await service.setLargeRebuildOperatorNote({projectId: 'large-rebuild-project-1', note: 'Investigating intermittent cursor stall'})
+    const noteRow = await service.getLargeRebuildState('large-rebuild-project-1')
+
+    console.log(JSON.stringify({lastError: noteRow?.lastError ?? null, note: noteRow?.operatorNote ?? null}))
+    await database.close()
+  `)
+
+  expect(result.note).toBe('Investigating intermittent cursor stall')
+  expect(result.lastError).toBeNull()
 })

@@ -3,6 +3,7 @@ import {hostname} from 'node:os'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getDuckdbMartRefreshService} from '../src/server/services/getDuckdbMartRefreshService.ts'
 import {runProjectMartLargeRebuildCycle} from '../src/server/services/projectMartLargeRebuildRunner.ts'
+import {getProjectMartLargeRebuildStateService} from '../src/server/services/projectMartLargeRebuildStateService.ts'
 import {getProjectMartRefreshStateService} from '../src/server/services/projectMartRefreshStateService.ts'
 
 type CliOptions = {
@@ -104,17 +105,7 @@ const getErrorText = (error: unknown) => {
   return error instanceof Error ? error.message : String(error)
 }
 
-const refreshClaimArticles = async (articleIds: string[], refreshService: ReturnType<typeof getDuckdbMartRefreshService>): Promise<void> => {
-  const [articleId = ''] = articleIds
-
-  return articleId === ''
-    ? Promise.resolve()
-    : refreshService.refreshJudgmentArticle(articleId).then(() => {
-        return refreshClaimArticles(articleIds.slice(1), refreshService)
-      })
-}
-
-const refreshClaimArticlesIncrementally = async (
+const refreshClaimArticleServingIncrementally = async (
   articleIds: string[],
   projectId: string,
   refreshService: ReturnType<typeof getDuckdbMartRefreshService>,
@@ -123,10 +114,8 @@ const refreshClaimArticlesIncrementally = async (
 
   return articleId === ''
     ? Promise.resolve()
-    : refreshService.refreshJudgmentArticle(articleId).then(() => {
-        return refreshService.refreshProjectArticleServing(projectId, articleId).then(() => {
-          return refreshClaimArticlesIncrementally(articleIds.slice(1), projectId, refreshService)
-        })
+    : refreshService.refreshProjectArticleServing(projectId, articleId).then(() => {
+        return refreshClaimArticleServingIncrementally(articleIds.slice(1), projectId, refreshService)
       })
 }
 
@@ -182,6 +171,7 @@ const startHeartbeat = (claim: Claim, heartbeatMs: number, leaseMs: number) => {
 
 export const runProjectMartRefreshWorkerOnceIsolated = async () => {
   const options = getCliOptions()
+  const largeRebuildStateService = getProjectMartLargeRebuildStateService()
   const stateService = getProjectMartRefreshStateService()
   const refreshService = getDuckdbMartRefreshService()
 
@@ -216,23 +206,28 @@ export const runProjectMartRefreshWorkerOnceIsolated = async () => {
         incrementalArticleThreshold: options.incrementalArticleThreshold,
       })
 
-      if (executionMode === 'incremental') {
-        await refreshClaimArticlesIncrementally(dirtyArticleIds, claim.projectId, refreshService)
-      } else {
-        await refreshClaimArticles(dirtyArticleIds, refreshService)
+      await refreshService.refreshJudgmentFactsForProjectClaim({
+        claimedToken: claim.claimedToken,
+        lastCompletedToken: claim.lastCompletedToken,
+        projectId: claim.projectId,
+      })
 
+      if (executionMode === 'incremental') {
+        await refreshClaimArticleServingIncrementally(dirtyArticleIds, claim.projectId, refreshService)
+      } else {
         if (executionMode === 'full') {
           const scopeArticleCount = await getProjectScopeArticleCount(claim.projectId)
 
           if (scopeArticleCount > options.maxFullProjectScopeArticles) {
-            throw new Error(
-              getFullRefreshBlockedErrorText({
-                dirtyArticleCount: dirtyArticleIds.length,
-                maxFullProjectScopeArticles: options.maxFullProjectScopeArticles,
-                projectId: claim.projectId,
-                scopeArticleCount,
-              }),
-            )
+            await largeRebuildStateService.queueLargeRebuild({
+              now: new Date(),
+              projectId: claim.projectId,
+              rebuildPhase: 'prompt_answer_fact',
+              refreshToken: claim.claimedToken,
+            })
+            await stateService.releaseProjectRefreshClaim({projectId: claim.projectId, workerId: options.workerId})
+            console.log(JSON.stringify({claimedToken: claim.claimedToken, projectId: claim.projectId, status: 'completed', workerId: options.workerId}))
+            return
           }
 
           await refreshService.refreshProject(claim.projectId)

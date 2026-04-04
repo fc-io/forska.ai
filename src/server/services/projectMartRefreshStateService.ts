@@ -1,4 +1,8 @@
-import type {ProjectMartRefreshStateRecord, ProjectMartRefreshStatus} from '../../db/schemaTypes.ts'
+import type {
+  ProjectMartRefreshArticleQuarantineRecord,
+  ProjectMartRefreshStateRecord,
+  ProjectMartRefreshStatus,
+} from '../../db/schemaTypes.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral, getTimestampLiteral} from './appQueryHelpers.ts'
 
@@ -46,6 +50,24 @@ type CompleteProjectRefreshParams = {completedToken: number; now?: Date; project
 
 type ReleaseProjectRefreshClaimParams = {now?: Date; projectId: string; workerId: string}
 
+type ClearProjectRefreshStateParams = {now?: Date; projectId: string; runner?: RefreshStateRunner}
+
+type ClearArchivedProjectRefreshStatesParams = {now?: Date; runner?: RefreshStateRunner}
+
+type QuarantineProjectRefreshArticleParams = {
+  articleId: string
+  detectedBy?: string | null
+  error: string
+  now?: Date
+  runner?: RefreshStateRunner
+}
+
+type GetQuarantinedArticlesForProjectParams = {
+  articleIds?: string[]
+  projectId: string
+  runner?: RefreshStateRunner
+}
+
 type FailProjectRefreshParams = {error: string; now?: Date; projectId: string; workerId: string}
 
 type ProjectRefreshStateRow = {
@@ -91,6 +113,45 @@ const ensureProjectRefreshStateRow = async (runner: RefreshStateRunner, projectI
   `)
 }
 
+const getProjectRefreshArticleQuarantineRecord = async (runner: RefreshStateRunner, articleId: string) => {
+  const [row] = await runner.queryJson<ProjectMartRefreshArticleQuarantineRecord>(`
+    SELECT
+      article_id AS articleId,
+      error,
+      detected_by AS detectedBy,
+      created_at AS createdAt,
+      updated_at AS updatedAt
+    FROM app.project_mart_refresh_article_quarantine
+    WHERE article_id = ${getSqlLiteral(articleId)}
+    LIMIT 1
+  `)
+
+  return row ?? null
+}
+
+const getQuarantinedArticleIds = async (runner: RefreshStateRunner, articleIds: string[]) => {
+  const uniqueArticleIds = getUniqueValues(articleIds)
+
+  if (uniqueArticleIds.length === 0) {
+    return []
+  }
+
+  const rows = await runner.queryJson<{articleId: string}>(`
+    SELECT article_id AS articleId
+    FROM app.project_mart_refresh_article_quarantine
+    WHERE article_id IN (${getQuotedStringList(uniqueArticleIds).join(', ')})
+    ORDER BY article_id ASC
+  `)
+
+  return rows.map((row) => {
+    return row.articleId
+  })
+}
+
+const getQuarantinedRefreshArticleError = ({articleId, error}: {articleId: string; error: string}) => {
+  return `Quarantined project mart refresh article ${articleId}: ${error}`
+}
+
 const markSingleProjectDirty = async (
   runner: RefreshStateRunner,
   project: {articleIds: string[]; projectId: string},
@@ -134,6 +195,31 @@ const markSingleProjectDirty = async (
         last_dirty_token = GREATEST(app.project_mart_refresh_article_state.last_dirty_token, EXCLUDED.last_dirty_token),
         updated_at = EXCLUDED.updated_at
     `)
+
+    const quarantinedArticleIds = await getQuarantinedArticleIds(runner, project.articleIds)
+    const [firstQuarantinedArticleId = ''] = quarantinedArticleIds
+
+    if (firstQuarantinedArticleId !== '') {
+      const quarantineRecord = await getProjectRefreshArticleQuarantineRecord(runner, firstQuarantinedArticleId)
+
+      await runner.run(`
+        UPDATE app.project_mart_refresh_state
+        SET
+          refresh_status = 'failed',
+          last_failed_at = ${getTimestampLiteral(params.now)},
+          last_error = ${getSqlLiteral(
+            getQuarantinedRefreshArticleError({
+              articleId: firstQuarantinedArticleId,
+              error: quarantineRecord?.error ?? 'quarantined article refresh blocked',
+            }),
+          )},
+          worker_id = NULL,
+          lease_expires_at = NULL,
+          active_refresh_token = 0,
+          updated_at = ${getTimestampLiteral(params.now)}
+        WHERE project_id = ${getSqlLiteral(project.projectId)}
+      `)
+    }
   }
 
   return state
@@ -332,17 +418,34 @@ const claimDirtyProjects = async ({
   const leaseExpiresAt = getLeaseExpiry(currentNow, leaseMs)
   const claimableRows = await getAppDatabaseService().queryJson<{dirtyToken: number; lastCompletedToken: number; projectId: string}>(`
     SELECT
-      project_id AS projectId,
-      CAST(dirty_token AS INTEGER) AS dirtyToken,
-      CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedToken
-    FROM app.project_mart_refresh_state
-    WHERE dirty_token > last_completed_refresh_token
-      AND (
-        refresh_status <> 'running'
-        OR lease_expires_at IS NULL
-        OR lease_expires_at <= ${getTimestampLiteral(currentNow)}
+      state.project_id AS projectId,
+      CAST(state.dirty_token AS INTEGER) AS dirtyToken,
+      CAST(state.last_completed_refresh_token AS INTEGER) AS lastCompletedToken
+    FROM app.project_mart_refresh_state state
+    INNER JOIN app.project project ON project.id = state.project_id
+    WHERE project.archived = FALSE
+      AND state.dirty_token > state.last_completed_refresh_token
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.project_mart_refresh_article_state article_state
+        INNER JOIN app.project_mart_refresh_article_quarantine quarantine
+          ON quarantine.article_id = article_state.article_id
+        WHERE article_state.project_id = state.project_id
+          AND article_state.first_dirty_token <= state.dirty_token
+          AND article_state.last_dirty_token > state.last_completed_refresh_token
       )
-    ORDER BY last_requested_at ASC, project_id ASC
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.project_mart_large_rebuild_state large_rebuild
+        WHERE large_rebuild.project_id = state.project_id
+          AND large_rebuild.refresh_token >= state.dirty_token
+      )
+      AND (
+        state.refresh_status <> 'running'
+        OR state.lease_expires_at IS NULL
+        OR state.lease_expires_at <= ${getTimestampLiteral(currentNow)}
+      )
+    ORDER BY state.last_requested_at ASC, state.project_id ASC
     LIMIT ${Math.max(0, Math.floor(limit))}
   `)
 
@@ -424,7 +527,7 @@ const releaseProjectRefreshClaim = async ({now, projectId, workerId}: ReleasePro
   const [released] = await getAppDatabaseService().queryJson<ProjectRefreshStateRow>(`
     UPDATE app.project_mart_refresh_state
     SET
-      active_refresh_token = 0,
+      active_refresh_token=0,
       refresh_status = 'idle',
       worker_id = NULL,
       lease_expires_at = NULL,
@@ -442,6 +545,117 @@ const releaseProjectRefreshClaim = async ({now, projectId, workerId}: ReleasePro
   `)
 
   return released ? getProjectRefreshStateRecord(getAppDatabaseService(), projectId) : null
+}
+
+const clearProjectRefreshState = async ({now, projectId, runner}: ClearProjectRefreshStateParams) => {
+  return withTransaction(runner, async (tx) => {
+    const currentNow = getNow(now)
+
+    await tx.run(`
+      DELETE FROM app.project_mart_refresh_article_state
+      WHERE project_id = ${getSqlLiteral(projectId)}
+    `)
+    await tx.run(`
+      DELETE FROM app.project_mart_refresh_state
+      WHERE project_id = ${getSqlLiteral(projectId)}
+    `)
+
+    return getProjectRefreshStateRecord(tx, projectId)
+  })
+}
+
+const clearArchivedProjectRefreshStates = async ({runner}: ClearArchivedProjectRefreshStatesParams = {}) => {
+  return withTransaction(runner, async (tx) => {
+    await tx.run(`
+      DELETE FROM app.project_mart_refresh_article_state
+      WHERE project_id IN (
+        SELECT id
+        FROM app.project
+        WHERE archived = TRUE
+      )
+    `)
+    await tx.run(`
+      DELETE FROM app.project_mart_refresh_state
+      WHERE project_id IN (
+        SELECT id
+        FROM app.project
+        WHERE archived = TRUE
+      )
+    `)
+  })
+}
+
+const getQuarantinedArticlesForProject = async ({articleIds, projectId, runner}: GetQuarantinedArticlesForProjectParams) => {
+  const activeRunner = runner ?? getAppDatabaseService()
+  const idsFilter = articleIds && articleIds.length > 0 ? `AND quarantine.article_id IN (${getQuotedStringList(getUniqueValues(articleIds)).join(', ')})` : ''
+
+  return activeRunner.queryJson<ProjectMartRefreshArticleQuarantineRecord>(`
+    SELECT
+      quarantine.article_id AS articleId,
+      quarantine.error,
+      quarantine.detected_by AS detectedBy,
+      quarantine.created_at AS createdAt,
+      quarantine.updated_at AS updatedAt
+    FROM app.project_mart_refresh_article_quarantine quarantine
+    INNER JOIN app.project_mart_refresh_article_state article_state
+      ON article_state.article_id = quarantine.article_id
+    WHERE article_state.project_id = ${getSqlLiteral(projectId)}
+      ${idsFilter}
+    GROUP BY 1, 2, 3, 4, 5
+    ORDER BY quarantine.article_id ASC
+  `)
+}
+
+const quarantineProjectRefreshArticle = async ({
+  articleId,
+  detectedBy = null,
+  error,
+  now,
+  runner,
+}: QuarantineProjectRefreshArticleParams) => {
+  return withTransaction(runner, async (tx) => {
+    const currentNow = getNow(now)
+    const quarantineError = getQuarantinedRefreshArticleError({articleId, error})
+
+    await tx.run(`
+      INSERT INTO app.project_mart_refresh_article_quarantine (
+        article_id,
+        error,
+        detected_by,
+        created_at,
+        updated_at
+      ) VALUES (
+        ${getSqlLiteral(articleId)},
+        ${getSqlLiteral(error)},
+        ${getSqlLiteral(detectedBy)},
+        ${getTimestampLiteral(currentNow)},
+        ${getTimestampLiteral(currentNow)}
+      )
+      ON CONFLICT(article_id) DO UPDATE SET
+        error = EXCLUDED.error,
+        detected_by = EXCLUDED.detected_by,
+        updated_at = EXCLUDED.updated_at
+    `)
+
+    await tx.run(`
+      UPDATE app.project_mart_refresh_state
+      SET
+        refresh_status = 'failed',
+        last_failed_at = ${getTimestampLiteral(currentNow)},
+        last_error = ${getSqlLiteral(quarantineError)},
+        worker_id = NULL,
+        lease_expires_at = NULL,
+        active_refresh_token = 0,
+        updated_at = ${getTimestampLiteral(currentNow)}
+      WHERE project_id IN (
+        SELECT DISTINCT project_id
+        FROM app.project_mart_refresh_article_state
+        WHERE article_id = ${getSqlLiteral(articleId)}
+      )
+    `)
+
+    return getProjectRefreshArticleQuarantineRecord(tx, articleId)
+  })
 }
 
 const completeProjectRefresh = async ({completedToken, now, projectId, workerId}: CompleteProjectRefreshParams) => {
@@ -523,13 +737,17 @@ const failProjectRefresh = async ({error, now, projectId, workerId}: FailProject
 
 const projectMartRefreshStateService = {
   claimDirtyProjects,
+  clearArchivedProjectRefreshStates,
+  clearProjectRefreshState,
   completeProjectRefresh,
   failProjectRefresh,
   getDirtyProjectsForProjectIds,
   getDirtyArticlesForClaim,
+  getQuarantinedArticlesForProject,
   heartbeatClaim,
   markArticleProjectsDirtyAtomically,
   markProjectsDirtyAtomically,
+  quarantineProjectRefreshArticle,
   releaseProjectRefreshClaim,
 }
 

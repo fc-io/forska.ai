@@ -52,6 +52,10 @@ const createWorkerTestContext = (params: {
 
       return claim === undefined ? [] : [claims.shift() as ClaimPlan]
     }),
+    clearArchivedProjectRefreshStates: mock(async () => {
+      callLog.push('clearArchivedRefreshStates')
+      return null
+    }),
     completeProjectRefresh: mock(
       async ({completedToken, projectId, workerId}: {completedToken: number; projectId: string; workerId: string}) => {
         callLog.push(`complete:${projectId}:${completedToken}`)
@@ -92,6 +96,11 @@ const createWorkerTestContext = (params: {
     refreshJudgmentArticle: mock(async (articleId: string) => {
       callLog.push(`judgment:${articleId}`)
     }),
+    refreshJudgmentFactsForProjectClaim: mock(async ({projectId}: {claimedToken: number; lastCompletedToken: number; projectId: string}) => {
+      ;(params.articlesByProject?.[projectId] ?? []).forEach((articleId) => {
+        callLog.push(`judgment:${articleId}`)
+      })
+    }),
     refreshProject: mock(async (projectId: string) => {
       callLog.push(`project:${projectId}`)
       return params.onRefreshProject?.(projectId)
@@ -123,6 +132,10 @@ const createWorkerTestContext = (params: {
   const queuedLargeRebuilds: Array<{projectId: string; rebuildPhase: string; refreshToken: number}> = []
   const dependencies: ProjectMartRefreshWorkerDependencies = {
     largeRebuildStateService: {
+      clearArchivedLargeRebuildStates: mock(async () => {
+        callLog.push('clearArchivedLargeRebuildStates')
+        return null
+      }),
       queueLargeRebuild: mock(async ({projectId, rebuildPhase, refreshToken}) => {
         callLog.push(`largeRebuild:${projectId}:${rebuildPhase}:${refreshToken}`)
         queuedLargeRebuilds.push({projectId, rebuildPhase, refreshToken})
@@ -177,8 +190,10 @@ test('one-shot worker reuses single-cycle behavior and exits after one claim att
   const result = await runProjectMartRefreshWorkerOnce({leaseMs: 2_000, workerId: 'worker-1'}, context.dependencies)
 
   expect(result).toEqual({claimedToken: 3, projectId: 'project-1', status: 'completed', workerId: 'worker-1'})
-  expect(context.callLog[0]).toBe('reconcile:all')
-  expect(context.callLog[1]).toBe('claim:worker-1:1:2000')
+  expect(context.callLog[0]).toBe('clearArchivedRefreshStates')
+  expect(context.callLog[1]).toBe('clearArchivedLargeRebuildStates')
+  expect(context.callLog[2]).toBe('reconcile:all')
+  expect(context.callLog[3]).toBe('claim:worker-1:1:2000')
   expect(context.completed).toEqual([{completedToken: 3, projectId: 'project-1', workerId: 'worker-1'}])
   expect(context.acknowledgedProjects).toEqual([{ackToken: 3, projectId: 'project-1'}])
 })
@@ -206,8 +221,10 @@ test('claims at most one project per cycle', async () => {
   const result = await runProjectMartRefreshWorkerCycle({leaseMs: 2_000, workerId: 'worker-1'}, context.dependencies)
 
   expect(result).toEqual({claimedToken: 3, projectId: 'project-1', status: 'completed', workerId: 'worker-1'})
-  expect(context.callLog[0]).toBe('reconcile:all')
-  expect(context.callLog[1]).toBe('claim:worker-1:1:2000')
+  expect(context.callLog[0]).toBe('clearArchivedRefreshStates')
+  expect(context.callLog[1]).toBe('clearArchivedLargeRebuildStates')
+  expect(context.callLog[2]).toBe('reconcile:all')
+  expect(context.callLog[3]).toBe('claim:worker-1:1:2000')
   expect(context.completed).toEqual([{completedToken: 3, projectId: 'project-1', workerId: 'worker-1'}])
   expect(context.acknowledgedProjects).toEqual([{ackToken: 3, projectId: 'project-1'}])
 })
@@ -229,6 +246,8 @@ test('refreshes judgment facts before the project rebuild', async () => {
   await runProjectMartRefreshWorkerCycle({incrementalArticleThreshold: 0, workerId: 'worker-1'}, context.dependencies)
 
   expect(context.callLog).toEqual([
+    'clearArchivedRefreshStates',
+    'clearArchivedLargeRebuildStates',
     'reconcile:all',
     'claim:worker-1:1:30000',
     'load:project-1',
@@ -258,12 +277,14 @@ test('uses incremental article-aware refresh routing for small deltas', async ()
   await runProjectMartRefreshWorkerCycle({incrementalArticleThreshold: 2, workerId: 'worker-1'}, context.dependencies)
 
   expect(context.callLog).toEqual([
+    'clearArchivedRefreshStates',
+    'clearArchivedLargeRebuildStates',
     'reconcile:all',
     'claim:worker-1:1:30000',
     'load:project-1',
     'judgment:article-1',
-    'serving:project-1:article-1',
     'judgment:article-2',
+    'serving:project-1:article-1',
     'serving:project-1:article-2',
     'complete:project-1:3',
     'ack:project-1:3',
@@ -287,6 +308,8 @@ test('falls back to a full project refresh when the dirty-article delta exceeds 
   await runProjectMartRefreshWorkerCycle({incrementalArticleThreshold: 3, workerId: 'worker-1'}, context.dependencies)
 
   expect(context.callLog).toEqual([
+    'clearArchivedRefreshStates',
+    'clearArchivedLargeRebuildStates',
     'reconcile:all',
     'claim:worker-1:1:30000',
     'load:project-1',
@@ -357,6 +380,8 @@ test('routes oversized automatic full refreshes into large rebuild state before 
 
   expect(result).toEqual({claimedToken: 9, projectId: 'project-1', status: 'completed', workerId: 'worker-1'})
   expect(context.callLog).toEqual([
+    'clearArchivedRefreshStates',
+    'clearArchivedLargeRebuildStates',
     'reconcile:all',
     'claim:worker-1:1:30000',
     'load:project-1',
@@ -395,6 +420,8 @@ test('can process work reclaimed after an expired lease', async () => {
 
   expect(result).toEqual({claimedToken: 4, projectId: 'project-1', status: 'completed', workerId: 'worker-2'})
   expect(context.callLog).toEqual([
+    'clearArchivedRefreshStates',
+    'clearArchivedLargeRebuildStates',
     'reconcile:all',
     'claim:worker-2:1:5000',
     'load:project-1',
@@ -412,7 +439,7 @@ test('returns idle when nothing is claimable', async () => {
   const result = await runProjectMartRefreshWorkerCycle({workerId: 'worker-1'}, context.dependencies)
 
   expect(result).toEqual({projectId: null, status: 'idle', workerId: 'worker-1'})
-  expect(context.callLog).toEqual(['reconcile:all', 'claim:worker-1:1:30000'])
+  expect(context.callLog).toEqual(['clearArchivedRefreshStates', 'clearArchivedLargeRebuildStates', 'reconcile:all', 'claim:worker-1:1:30000'])
 })
 
 test('replays sqlite ack publication after a post-completion crash without rerunning refresh work', async () => {
@@ -445,7 +472,7 @@ test('replays sqlite ack publication after a post-completion crash without rerun
   const result = await runProjectMartRefreshWorkerCycle({workerId: 'worker-1'}, reconcileContext.dependencies)
 
   expect(result).toEqual({projectId: null, status: 'idle', workerId: 'worker-1'})
-  expect(reconcileContext.callLog).toEqual(['reconcile:all', 'claim:worker-1:1:30000'])
+  expect(reconcileContext.callLog).toEqual(['clearArchivedRefreshStates', 'clearArchivedLargeRebuildStates', 'reconcile:all', 'claim:worker-1:1:30000'])
   expect(reconcileContext.completed).toEqual([])
   expect(reconcileContext.failed).toEqual([])
 })

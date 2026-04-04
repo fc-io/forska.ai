@@ -15,7 +15,7 @@ type QueueLargeRebuildParams = {
   targetGeneration?: number | null
 }
 
-type ClaimLargeRebuildsParams = {leaseMs: number; limit: number; now?: Date; workerId: string}
+type ClaimLargeRebuildsParams = {leaseMs: number; limit: number; now?: Date; projectId?: string; workerId: string}
 
 type LargeRebuildClaim = {
   leaseExpiresAt: Date
@@ -40,6 +40,14 @@ type ResetLargeRebuildParams = {
   targetGeneration?: number | null
 }
 
+type ClearLargeRebuildStateParams = {projectId: string; runner?: LargeRebuildStateRunner}
+
+type ClearArchivedLargeRebuildStatesParams = {runner?: LargeRebuildStateRunner}
+
+type PauseLargeRebuildParams = {note?: string; now?: Date; projectId: string; reason?: string}
+type ResumeLargeRebuildParams = {now?: Date; projectId: string}
+type SetLargeRebuildOperatorNoteParams = {note: string | null; now?: Date; projectId: string}
+
 type LargeRebuildStateRow = {
   createdAt: Date
   cursorArticleCreatedAt: Date | null
@@ -47,6 +55,7 @@ type LargeRebuildStateRow = {
   lastCompletedAt: Date | null
   lastError: string | null
   lastFailedAt: Date | null
+  operatorNote: string | null
   lastStartedAt: Date | null
   leaseExpiresAt: Date | null
   projectId: string
@@ -92,6 +101,7 @@ const getLargeRebuildStateRecord = async (runner: LargeRebuildStateRunner, proje
       last_completed_at AS lastCompletedAt,
       last_failed_at AS lastFailedAt,
       last_error AS lastError,
+      operator_note AS operatorNote,
       worker_id AS workerId,
       lease_expires_at AS leaseExpiresAt,
       created_at AS createdAt,
@@ -126,7 +136,7 @@ const queueLargeRebuild = async ({
         cursor_article_created_at = ${cursorArticleCreatedAt === undefined || cursorArticleCreatedAt === null ? 'NULL' : getTimestampLiteral(cursorArticleCreatedAt)},
         cursor_article_id = ${getSqlLiteral(cursorArticleId ?? null)},
         target_generation = ${targetGeneration === undefined ? 'target_generation' : getSqlLiteral(targetGeneration)},
-        refresh_status = 'idle',
+        refresh_status = CASE WHEN refresh_status = 'paused' THEN 'paused' ELSE 'idle' END,
         last_error = NULL,
         worker_id = NULL,
         lease_expires_at = NULL,
@@ -138,7 +148,7 @@ const queueLargeRebuild = async ({
   })
 }
 
-const claimLargeRebuilds = async ({leaseMs, limit, now, workerId}: ClaimLargeRebuildsParams): Promise<LargeRebuildClaim[]> => {
+const claimLargeRebuilds = async ({leaseMs, limit, now, projectId, workerId}: ClaimLargeRebuildsParams): Promise<LargeRebuildClaim[]> => {
   if (limit <= 0) {
     return []
   }
@@ -146,15 +156,23 @@ const claimLargeRebuilds = async ({leaseMs, limit, now, workerId}: ClaimLargeReb
   const currentNow = getNow(now)
   const leaseExpiresAt = getLeaseExpiry(currentNow, leaseMs)
   const claimableRows = await getAppDatabaseService().queryJson<{projectId: string}>(`
-    SELECT project_id AS projectId
-    FROM app.project_mart_large_rebuild_state
-    WHERE refresh_token > 0
+    SELECT state.project_id AS projectId
+    FROM app.project_mart_large_rebuild_state state
+    INNER JOIN app.project project ON project.id = state.project_id
+    WHERE project.archived = FALSE
+      AND state.refresh_token > 0
+      AND (${getSqlLiteral(projectId)} IS NULL OR state.project_id = ${getSqlLiteral(projectId)})
       AND (
-        refresh_status <> 'running'
-        OR lease_expires_at IS NULL
-        OR lease_expires_at <= ${getTimestampLiteral(currentNow)}
+        state.refresh_status IN ('idle', 'failed')
+        OR (
+          state.refresh_status = 'running'
+          AND (
+            state.lease_expires_at IS NULL
+            OR state.lease_expires_at <= ${getTimestampLiteral(currentNow)}
+          )
+        )
       )
-    ORDER BY refresh_token ASC, project_id ASC
+    ORDER BY state.refresh_token ASC, state.project_id ASC
     LIMIT ${Math.max(0, Math.floor(limit))}
   `)
 
@@ -172,9 +190,14 @@ const claimLargeRebuilds = async ({leaseMs, limit, now, workerId}: ClaimLargeReb
       WHERE project_id = ${getSqlLiteral(row.projectId)}
         AND refresh_token > 0
         AND (
-          refresh_status <> 'running'
-          OR lease_expires_at IS NULL
-          OR lease_expires_at <= ${getTimestampLiteral(currentNow)}
+          refresh_status IN ('idle', 'failed')
+          OR (
+            refresh_status = 'running'
+            AND (
+              lease_expires_at IS NULL
+              OR lease_expires_at <= ${getTimestampLiteral(currentNow)}
+            )
+          )
         )
       RETURNING
         project_id AS projectId,
@@ -215,7 +238,7 @@ const completeLargeRebuild = async ({now, projectId, workerId}: CompleteLargeReb
   const [completed] = await getAppDatabaseService().queryJson<LargeRebuildStateRow>(`
     UPDATE app.project_mart_large_rebuild_state
     SET
-      refresh_status = 'idle',
+      refresh_status = CASE WHEN refresh_status = 'paused' THEN 'paused' ELSE 'idle' END,
       last_completed_at = ${getTimestampLiteral(currentNow)},
       last_error = NULL,
       worker_id = NULL,
@@ -236,6 +259,7 @@ const completeLargeRebuild = async ({now, projectId, workerId}: CompleteLargeReb
       last_completed_at AS lastCompletedAt,
       last_failed_at AS lastFailedAt,
       last_error AS lastError,
+      operator_note AS operatorNote,
       worker_id AS workerId,
       lease_expires_at AS leaseExpiresAt,
       created_at AS createdAt,
@@ -271,6 +295,7 @@ const failLargeRebuild = async ({error, now, projectId, workerId}: FailLargeRebu
       last_completed_at AS lastCompletedAt,
       last_failed_at AS lastFailedAt,
       last_error AS lastError,
+      operator_note AS operatorNote,
       worker_id AS workerId,
       lease_expires_at AS leaseExpiresAt,
       created_at AS createdAt,
@@ -290,8 +315,8 @@ const resetLargeRebuild = async ({cursorArticleCreatedAt, cursorArticleId, now, 
       cursor_article_created_at = ${cursorArticleCreatedAt === undefined || cursorArticleCreatedAt === null ? 'NULL' : getTimestampLiteral(cursorArticleCreatedAt)},
       cursor_article_id = ${getSqlLiteral(cursorArticleId ?? null)},
       target_generation = ${targetGeneration === undefined ? 'target_generation' : getSqlLiteral(targetGeneration)},
-      refresh_status = 'idle',
-      last_error = NULL,
+      refresh_status = CASE WHEN refresh_status = 'paused' THEN 'paused' ELSE 'idle' END,
+      last_error = CASE WHEN refresh_status = 'paused' THEN last_error ELSE NULL END,
       worker_id = NULL,
       lease_expires_at = NULL,
       updated_at = ${getTimestampLiteral(currentNow)}
@@ -301,18 +326,97 @@ const resetLargeRebuild = async ({cursorArticleCreatedAt, cursorArticleId, now, 
   return getLargeRebuildStateRecord(getAppDatabaseService(), projectId)
 }
 
+const pauseLargeRebuild = async ({note, now, projectId, reason}: PauseLargeRebuildParams) => {
+  const currentNow = getNow(now)
+
+  await ensureLargeRebuildStateRow(getAppDatabaseService(), projectId)
+  await getAppDatabaseService().run(`
+    UPDATE app.project_mart_large_rebuild_state
+    SET
+      refresh_status = 'paused',
+      last_error = ${getSqlLiteral(reason ?? 'Paused by operator')},
+      operator_note = ${note === undefined ? 'operator_note' : getSqlLiteral(note)},
+      worker_id = NULL,
+      lease_expires_at = NULL,
+      updated_at = ${getTimestampLiteral(currentNow)}
+    WHERE project_id = ${getSqlLiteral(projectId)}
+  `)
+
+  return getLargeRebuildStateRecord(getAppDatabaseService(), projectId)
+}
+
+const resumeLargeRebuild = async ({now, projectId}: ResumeLargeRebuildParams) => {
+  const currentNow = getNow(now)
+
+  await ensureLargeRebuildStateRow(getAppDatabaseService(), projectId)
+  await getAppDatabaseService().run(`
+    UPDATE app.project_mart_large_rebuild_state
+    SET
+      refresh_status = 'idle',
+      last_error = CASE WHEN last_error LIKE 'Paused by operator%' THEN NULL ELSE last_error END,
+      worker_id = NULL,
+      lease_expires_at = NULL,
+      updated_at = ${getTimestampLiteral(currentNow)}
+    WHERE project_id = ${getSqlLiteral(projectId)}
+  `)
+
+  return getLargeRebuildStateRecord(getAppDatabaseService(), projectId)
+}
+
+const setLargeRebuildOperatorNote = async ({note, now, projectId}: SetLargeRebuildOperatorNoteParams) => {
+  const currentNow = getNow(now)
+
+  await ensureLargeRebuildStateRow(getAppDatabaseService(), projectId)
+  await getAppDatabaseService().run(`
+    UPDATE app.project_mart_large_rebuild_state
+    SET
+      operator_note = ${getSqlLiteral(note)},
+      updated_at = ${getTimestampLiteral(currentNow)}
+    WHERE project_id = ${getSqlLiteral(projectId)}
+  `)
+
+  return getLargeRebuildStateRecord(getAppDatabaseService(), projectId)
+}
+
+const clearLargeRebuildState = async ({projectId, runner}: ClearLargeRebuildStateParams) => {
+  return withTransaction(runner, async (tx) => {
+    await tx.run(`
+      DELETE FROM app.project_mart_large_rebuild_state
+      WHERE project_id = ${getSqlLiteral(projectId)}
+    `)
+  })
+}
+
+const clearArchivedLargeRebuildStates = async ({runner}: ClearArchivedLargeRebuildStatesParams = {}) => {
+  return withTransaction(runner, async (tx) => {
+    await tx.run(`
+      DELETE FROM app.project_mart_large_rebuild_state
+      WHERE project_id IN (
+        SELECT id
+        FROM app.project
+        WHERE archived = TRUE
+      )
+    `)
+  })
+}
+
 const getLargeRebuildState = async (projectId: string) => {
   return getLargeRebuildStateRecord(getAppDatabaseService(), projectId)
 }
 
 const projectMartLargeRebuildStateService = {
   claimLargeRebuilds,
+  clearArchivedLargeRebuildStates,
+  clearLargeRebuildState,
   completeLargeRebuild,
   failLargeRebuild,
   getLargeRebuildState,
   heartbeatLargeRebuildClaim,
+  pauseLargeRebuild,
   queueLargeRebuild,
   resetLargeRebuild,
+  resumeLargeRebuild,
+  setLargeRebuildOperatorNote,
 }
 
 export const getProjectMartLargeRebuildStateService = () => {
@@ -325,6 +429,9 @@ export type {
   FailLargeRebuildParams,
   HeartbeatLargeRebuildClaimParams,
   LargeRebuildClaim,
+  PauseLargeRebuildParams,
   QueueLargeRebuildParams,
   ResetLargeRebuildParams,
+  ResumeLargeRebuildParams,
+  SetLargeRebuildOperatorNoteParams,
 }

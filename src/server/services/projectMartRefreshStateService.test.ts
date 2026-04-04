@@ -696,3 +696,126 @@ test('completeProjectRefresh trims resolved article state and failProjectRefresh
   expect(result.failedState?.workerId).toBeNull()
   expect(result.failedState?.lastFailedAt).toBeTruthy()
 })
+
+test('clearArchivedProjectRefreshStates removes archived refresh debt and claimDirtyProjects skips archived projects', () => {
+  const result = runRefreshStateScript<{
+    activeClaims: Array<{projectId: string}>
+    archivedRefreshRows: number
+    archivedArticleRows: number
+  }>(`
+    const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
+    const service = getProjectMartRefreshStateService()
+
+    await database.run(\`
+      UPDATE app.project
+      SET archived = TRUE
+      WHERE id = 'refresh-project-2'
+    \`)
+    await service.markProjectsDirtyAtomically({
+      projects: [
+        {articleIds: ['refresh-article-1'], projectId: 'refresh-project-1'},
+        {articleIds: ['refresh-article-2'], projectId: 'refresh-project-2'},
+      ],
+      reason: 'refresh-state-test.archived-cleanup',
+    })
+
+    const activeClaims = await service.claimDirtyProjects({leaseMs: 5000, limit: 5, workerId: 'worker-1'})
+    await service.clearArchivedProjectRefreshStates()
+    const [archivedRefreshRow] = await database.queryJson(\`
+      SELECT CAST(COUNT(*) AS INTEGER) AS rowCount
+      FROM app.project_mart_refresh_state
+      WHERE project_id = 'refresh-project-2'
+    \`)
+    const [archivedArticleRow] = await database.queryJson(\`
+      SELECT CAST(COUNT(*) AS INTEGER) AS rowCount
+      FROM app.project_mart_refresh_article_state
+      WHERE project_id = 'refresh-project-2'
+    \`)
+
+    console.log(JSON.stringify({
+      activeClaims: activeClaims.map((claim) => ({projectId: claim.projectId})),
+      archivedArticleRows: archivedArticleRow?.rowCount ?? 0,
+      archivedRefreshRows: archivedRefreshRow?.rowCount ?? 0,
+    }))
+    await database.close()
+  `)
+
+  expect(result.activeClaims).toEqual([{projectId: 'refresh-project-1'}])
+  expect(result.archivedRefreshRows).toBe(0)
+  expect(result.archivedArticleRows).toBe(0)
+})
+
+test('quarantineProjectRefreshArticle blocks claims for impacted projects and records an explicit failure', () => {
+  const result = runRefreshStateScript<{
+    claims: Array<{projectId: string}>
+    quarantine: {articleId: string; detectedBy: string | null; error: string} | null
+    quarantinedArticles: Array<{articleId: string; detectedBy: string | null; error: string}>
+    refreshState: {lastError: string | null; refreshStatus: string} | null
+  }>(`
+    const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
+    const service = getProjectMartRefreshStateService()
+
+    await service.markProjectsDirtyAtomically({
+      projects: [{articleIds: ['refresh-article-1'], projectId: 'refresh-project-1'}],
+      reason: 'refresh-state-test.quarantine',
+    })
+    const quarantine = await service.quarantineProjectRefreshArticle({
+      articleId: 'refresh-article-1',
+      detectedBy: 'test-suite',
+      error: 'native crash repro',
+    })
+    const claims = await service.claimDirtyProjects({leaseMs: 5000, limit: 5, workerId: 'worker-1'})
+    const quarantinedArticles = await service.getQuarantinedArticlesForProject({projectId: 'refresh-project-1'})
+    const [refreshState] = await database.queryJson(\`
+      SELECT refresh_status AS refreshStatus, last_error AS lastError
+      FROM app.project_mart_refresh_state
+      WHERE project_id = 'refresh-project-1'
+      LIMIT 1
+    \`)
+
+    console.log(JSON.stringify({
+      claims: claims.map((claim) => ({projectId: claim.projectId})),
+      quarantine,
+      quarantinedArticles,
+      refreshState,
+    }))
+    await database.close()
+  `)
+
+  expect(result.quarantine?.articleId).toBe('refresh-article-1')
+  expect(result.quarantine?.detectedBy).toBe('test-suite')
+  expect(result.quarantine?.error).toBe('native crash repro')
+  expect(result.claims).toEqual([])
+  expect(result.quarantinedArticles.map((row) => ({articleId: row.articleId, detectedBy: row.detectedBy, error: row.error}))).toEqual([
+    {articleId: 'refresh-article-1', detectedBy: 'test-suite', error: 'native crash repro'},
+  ])
+  expect(result.refreshState?.refreshStatus).toBe('failed')
+  expect(result.refreshState?.lastError).toContain('Quarantined project mart refresh article refresh-article-1')
+})
+
+test('claimDirtyProjects skips projects already handed off to large rebuild state', () => {
+  const result = runRefreshStateScript<{
+    claims: Array<{projectId: string}>
+  }>(`
+    const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
+    const {getProjectMartLargeRebuildStateService} = await import('./src/server/services/projectMartLargeRebuildStateService.ts')
+    const refreshStateService = getProjectMartRefreshStateService()
+    const largeRebuildStateService = getProjectMartLargeRebuildStateService()
+
+    await refreshStateService.markProjectsDirtyAtomically({
+      projects: [{articleIds: ['refresh-article-1'], projectId: 'refresh-project-1'}],
+      reason: 'refresh-state-test.large-rebuild-handoff',
+    })
+    await largeRebuildStateService.queueLargeRebuild({
+      projectId: 'refresh-project-1',
+      rebuildPhase: 'prompt_answer_fact',
+      refreshToken: 1,
+    })
+    const claims = await refreshStateService.claimDirtyProjects({leaseMs: 5000, limit: 5, workerId: 'worker-1'})
+
+    console.log(JSON.stringify({claims: claims.map((claim) => ({projectId: claim.projectId}))}))
+    await database.close()
+  `)
+
+  expect(result.claims).toEqual([])
+})

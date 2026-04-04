@@ -489,6 +489,12 @@ const AdminJobs = () => {
           >
             DuckDB Append Metrics
           </Link>
+          <Link
+            to="/admin/project-mart-large-rebuild"
+            class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-100"
+          >
+            Large Rebuild Status
+          </Link>
         </div>
       </div>
 
