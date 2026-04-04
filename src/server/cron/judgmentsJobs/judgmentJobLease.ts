@@ -1,8 +1,8 @@
 import {createHash, randomUUID} from 'node:crypto'
-import {readFile, unlink, writeFile} from 'node:fs/promises'
+import {readFile, rename, unlink, writeFile} from 'node:fs/promises'
 import {mkdir} from 'node:fs/promises'
 import {hostname, networkInterfaces} from 'node:os'
-import {dirname} from 'node:path'
+import {dirname, join} from 'node:path'
 
 import {getJudgmentJobLeasePath} from './judgmentJobPaths.ts'
 
@@ -76,7 +76,15 @@ const readLeaseMetadata = async (jobId: string) => {
 
 const writeLeaseMetadata = async (leasePath: string, metadata: JudgmentJobLeaseMetadata, flag?: 'wx') => {
   await mkdir(dirname(leasePath), {recursive: true})
-  await writeFile(leasePath, JSON.stringify(metadata, null, 2), flag ? {flag} : undefined)
+
+  if (flag === 'wx') {
+    await writeFile(leasePath, JSON.stringify(metadata, null, 2), {flag})
+    return
+  }
+
+  const tempPath = join(dirname(leasePath), `.${randomUUID()}.lease.tmp`)
+  await writeFile(tempPath, JSON.stringify(metadata, null, 2))
+  await rename(tempPath, leasePath)
 }
 
 const getLeaseOwnerText = (metadata: JudgmentJobLeaseMetadata) => {
