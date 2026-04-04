@@ -1394,3 +1394,41 @@ test('edit route detaches changed owned prompts from matching global prompt ids'
 
   await flushMartRefreshes()
 })
+
+
+test('archive route marks active judgment jobs as project_removed and draining for archived projects', async () => {
+  if (!app || !queryDatabase || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = 'archive-project-judgment-job-cleanup'
+  const jobId = 'archive-project-judgment-job-cleanup-job'
+
+  await insertProjectFixture({
+    connectionId: 'archive-project-judgment-job-cleanup-connection',
+    modelId: 'archive-project-judgment-job-cleanup-model',
+    projectId,
+  })
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'running', 'active')
+  `)
+
+  const response = await app.handle(new Request(`http://localhost/api/projects/${projectId}`, {method: 'DELETE'}))
+
+  expect(response.status).toBe(200)
+
+  const [jobRow] = await queryDatabase<{pauseRequestedAt: string | null; status: string; storageState: string}>(`
+    SELECT
+      status,
+      storage_state AS storageState,
+      pause_requested_at AS pauseRequestedAt
+    FROM app.judgment_job
+    WHERE id = '${jobId}'
+    LIMIT 1
+  `)
+
+  expect(jobRow?.status).toBe('project_removed')
+  expect(jobRow?.storageState).toBe('draining')
+  expect(jobRow?.pauseRequestedAt).toBeTruthy()
+})

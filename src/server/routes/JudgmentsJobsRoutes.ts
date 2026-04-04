@@ -25,6 +25,7 @@ import {
   getQuotedStringList,
   getSqlLiteral,
 } from '../services/appQueryHelpers.ts'
+import {deleteJudgmentJobSafelyTx} from '../services/judgmentJobDeleteService.ts'
 import {HttpError} from '../utils/httpError.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
@@ -72,70 +73,15 @@ type JudgmentJobHealthBadge =
   | 'Quarantined'
   | 'Retained Outbox'
   | 'Stale Import'
-type JudgmentJobDeleteTx = {run: (statement: string) => Promise<void>}
-
 type UnassessedCountCacheValue = {value: number; expiresAt: number}
 type ProjectMartFreshnessState = {dirtyToken: number | null; isFresh: boolean; lastCompletedRefreshToken: number | null}
 const unassessedCountTTLms = 10_000
 const staleImportThresholdMs = 15 * 60 * 1_000
 const largeWalThresholdBytes = 64 * 1_024 * 1_024
 const unassessedCountCache = new Map<string, UnassessedCountCacheValue>()
-const tokenUseCreateSql = `
-  CREATE TABLE app.token_use (
-    id VARCHAR PRIMARY KEY,
-    judgment_job_id VARCHAR REFERENCES app.judgment_job(id),
-    requests INTEGER NOT NULL,
-    total_prompt_tokens BIGINT NOT NULL,
-    total_completion_tokens BIGINT NOT NULL,
-    total_tokens BIGINT NOT NULL,
-    started_at TIMESTAMPTZ,
-    finished_at TIMESTAMPTZ,
-    duration BIGINT,
-    gpu_nnodes INTEGER,
-    gpu_gpus_per_node INTEGER,
-    gpu_total_gpus INTEGER,
-    tp_size INTEGER,
-    dp_size INTEGER,
-    gpu_shape VARCHAR,
-    sglang_max_running_requests INTEGER,
-    sglang_model VARCHAR,
-    successful_requests INTEGER,
-    failed_requests INTEGER,
-    has_failed_requests BOOLEAN,
-    failed_requests_details JSON,
-    total_success_prompt_tokens BIGINT,
-    total_success_completion_tokens BIGINT,
-    total_success_tokens BIGINT,
-    total_failed_prompt_tokens BIGINT,
-    total_failed_completion_tokens BIGINT,
-    total_failed_tokens BIGINT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
-  )
-`
 const systemSqliteFallbackStepsSchema = t.Array(
   t.Union([t.Literal('checkpoint'), t.Literal('diagnostic'), t.Literal('export')]),
 )
-
-const getTempTableName = (prefix: string) => {
-  return `temp_${prefix}_${crypto.randomUUID().replaceAll('-', '_')}`
-}
-
-const rebuildTokenUseWithoutJobTx = async ({jobId, tx}: {jobId: string; tx: JudgmentJobDeleteTx}) => {
-  const tempTableName = getTempTableName('judgment_job_delete_token_use')
-
-  await tx.run(`
-    CREATE TEMP TABLE ${tempTableName} AS
-    SELECT *
-    FROM app.token_use
-    WHERE judgment_job_id != ${getSqlLiteral(jobId)}
-       OR judgment_job_id IS NULL
-  `)
-  await tx.run(`DROP TABLE app.token_use`)
-  await tx.run(tokenUseCreateSql)
-  await tx.run(`INSERT INTO app.token_use SELECT * FROM ${tempTableName}`)
-  await tx.run(`DROP TABLE ${tempTableName}`)
-}
 
 const getUnassessedCountCacheKey = (
   projectId: string,
@@ -640,10 +586,9 @@ export const judgmentsJobsRoutes = new Elysia()
           .catch(() => {
             return undefined
           })
-        await getAppDatabaseService().run(`
-          DELETE FROM app.judgment_job
-          WHERE id = '${escapeSqlString(job.id)}'
-        `)
+        await getAppDatabaseService().transaction(async (tx) => {
+          await deleteJudgmentJobSafelyTx({jobId: job.id, tx})
+        })
         throw error
       }
 
@@ -1258,12 +1203,7 @@ export const judgmentsJobsRoutes = new Elysia()
       await sqliteService.deleteJob(params.id)
 
       await getAppDatabaseService().transaction(async (tx) => {
-        await rebuildTokenUseWithoutJobTx({jobId: params.id, tx})
-
-        await tx.run(`
-          DELETE FROM app.judgment_job
-          WHERE id = '${escapeSqlString(params.id)}'
-        `)
+        await deleteJudgmentJobSafelyTx({jobId: params.id, tx})
       })
 
       return {data: {jobId: existingJob.id}, error: null}

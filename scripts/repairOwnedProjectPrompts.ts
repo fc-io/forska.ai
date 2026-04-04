@@ -226,14 +226,10 @@ const deleteEmptyJob = async (row: EmptyJobInspection) => {
     await sqliteService.deleteJob(row.jobId)
   }
 
-  await getAppDatabaseService().run(`
-    DELETE FROM app.token_use
-    WHERE judgment_job_id = ${quoteSqlString(row.jobId)}
-  `)
-  await getAppDatabaseService().run(`
-    DELETE FROM app.judgment_job
-    WHERE id = ${quoteSqlString(row.jobId)}
-  `)
+  const {deleteJudgmentJobSafelyTx} = await import('../src/server/services/judgmentJobDeleteService.ts')
+  await getAppDatabaseService().transaction(async (tx) => {
+    await deleteJudgmentJobSafelyTx({jobId: row.jobId, tx})
+  })
 }
 
 const deleteEmptyJobs = async (rows: EmptyJobInspection[], index = 0): Promise<string[]> => {

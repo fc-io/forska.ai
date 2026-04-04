@@ -1314,6 +1314,20 @@ export const projectsRoutes = new Elysia()
       })
 
       if (updatedProject) {
+        await tx.run(`
+          UPDATE app.judgment_job
+          SET status = CASE
+                WHEN status IN ('completed', 'failed', 'project_removed') THEN status
+                ELSE 'project_removed'
+              END,
+              storage_state = CASE
+                WHEN storage_state IN ('drained', 'quarantined') THEN storage_state
+                ELSE 'draining'
+              END,
+              pause_requested_at = current_timestamp,
+              updated_at = current_timestamp
+          WHERE project_id = '${escapeSqlString(params.id)}'
+        `)
         await getProjectMartRefreshStateService().clearProjectRefreshState({projectId: params.id, runner: tx})
         await getProjectMartLargeRebuildStateService().clearLargeRebuildState({projectId: params.id, runner: tx})
       }
