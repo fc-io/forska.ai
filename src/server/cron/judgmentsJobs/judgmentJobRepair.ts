@@ -266,6 +266,9 @@ const clearJobQuarantine = async (jobId: string) => {
         storage_state = 'active',
         quarantined_at = NULL,
         quarantine_reason = NULL,
+        import_failure_count = 0,
+        last_import_error = NULL,
+        last_import_error_at = NULL,
         updated_at = current_timestamp
     WHERE id = ${getSqlLiteral(jobId)}
   `)
