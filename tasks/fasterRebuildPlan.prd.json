@@ -1,0 +1,140 @@
+{
+  "name": "Faster Rebuild Plan",
+  "description": "Speed up background project mart large rebuilds with better observability, machine-aware worker memory defaults, burst execution, and safer DuckDB isolation so refresh ack and retained-row drain can catch up on both laptops and larger machines.",
+  "branchName": "ralph/faster-rebuild",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Expose effective worker runtime diagnostics",
+      "description": "As a maintainer, I want the worker to expose its effective DuckDB runtime settings and process memory signals so rebuild tuning can use live data instead of shell-only inspection.",
+      "acceptanceCriteria": [
+        "Add an admin/debug path or extend an existing admin path to report the effective worker `DUCKDB_MEMORY_LIMIT`, temp directory, and relevant runtime config used by the background writer.",
+        "Include worker-side process memory data that is cheap to collect, such as RSS, so rebuild tuning can compare configured memory with actual worker usage.",
+        "The diagnostics are available from the running writer without requiring manual `ps` or environment inspection.",
+        "`bun test src/server/utils/backgroundServerStack.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun test src/server/services/projectMartLargeRebuildRunner.test.ts` passes",
+        "`bun run lint` passes",
+        "Live verify after implementation: worker reports the effective DuckDB memory limit, large rebuild cursor advances multiple batches per wake, `lastAckSeq` starts moving, `retainedRowCount` declines, temp dir does not grow explosively, and API latency remains acceptable while rebuild is active"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Add rebuild and DuckDB queue observability",
+      "description": "As a maintainer, I want rebuild cycle timing and DuckDB queue metrics so we can tell when throughput is limited by polling, queue wait, or query execution.",
+      "acceptanceCriteria": [
+        "Record large rebuild cycle metrics including phase, rows processed, and cycle duration in a way that can be inspected from an admin/debug path.",
+        "Expose main and background DuckDB queue depth or wait-time metrics so rebuild contention can be distinguished from memory pressure and idle polling.",
+        "The metrics are lightweight enough to leave enabled in ordinary local development.",
+        "`bun test src/server/utils/backgroundServerStack.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun test src/server/services/projectMartLargeRebuildRunner.test.ts` passes",
+        "`bun run lint` passes",
+        "Live verify after implementation: worker reports the effective DuckDB memory limit, large rebuild cursor advances multiple batches per wake, `lastAckSeq` starts moving, `retainedRowCount` declines, temp dir does not grow explosively, and API latency remains acceptable while rebuild is active"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-003",
+      "title": "Make background worker DuckDB memory default machine-aware",
+      "description": "As a maintainer, I want the split background writer to choose a safer default DuckDB memory cap based on host RAM so large rebuilds are not artificially constrained on bigger machines while smaller laptops stay protected.",
+      "acceptanceCriteria": [
+        "Replace the fixed `4GB` fallback in `src/server/utils/backgroundServerStack.ts` with a machine-aware default derived from total host memory.",
+        "Keep `BACKGROUND_WRITER_DUCKDB_MEMORY_LIMIT` and `DUCKDB_MEMORY_LIMIT` as explicit overrides that win over the automatic default.",
+        "Add tests that cover at least low-memory, mid-memory, and higher-memory machine tiers for the worker DuckDB limit selection.",
+        "`bun test src/server/utils/backgroundServerStack.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun test src/server/services/projectMartLargeRebuildRunner.test.ts` passes",
+        "`bun run lint` passes",
+        "Live verify after implementation: worker reports the effective DuckDB memory limit, large rebuild cursor advances multiple batches per wake, `lastAckSeq` starts moving, `retainedRowCount` declines, temp dir does not grow explosively, and API latency remains acceptable while rebuild is active"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-004",
+      "title": "Raise portable rebuild throughput defaults",
+      "description": "As a maintainer, I want the default large rebuild batch size and idle poll interval to reflect practical catch-up behavior so rebuilds stop sleeping through obvious work.",
+      "acceptanceCriteria": [
+        "Increase the default `PROJECT_MART_LARGE_REBUILD_BATCH_SIZE` to a portable non-trivial value instead of `1`.",
+        "Lower the default `PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS` from `5000` to a faster idle poll suitable for ordinary development machines.",
+        "Update tests and env-loading expectations to match the new defaults without requiring env overrides.",
+        "`bun test src/server/utils/backgroundServerStack.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun test src/server/services/projectMartLargeRebuildRunner.test.ts` passes",
+        "`bun run lint` passes",
+        "Live verify after implementation: worker reports the effective DuckDB memory limit, large rebuild cursor advances multiple batches per wake, `lastAckSeq` starts moving, `retainedRowCount` declines, temp dir does not grow explosively, and API latency remains acceptable while rebuild is active"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001", "US-003"]
+    },
+    {
+      "id": "US-005",
+      "title": "Run bounded rebuild bursts per wake",
+      "description": "As a maintainer, I want each heartbeat wake to process multiple rebuild cycles when useful so the worker can keep advancing without waiting for the next timer tick after every batch.",
+      "acceptanceCriteria": [
+        "Add a bounded `PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE` control with a sensible default for portable machines.",
+        "The heartbeat runs consecutive cycles within one wake until it hits completion, idle, failure, pause, no-progress protection, or the configured per-wake limit.",
+        "Tests cover at least the single-wake burst path and one early-stop condition.",
+        "`bun test src/server/utils/backgroundServerStack.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun test src/server/services/projectMartLargeRebuildRunner.test.ts` passes",
+        "`bun run lint` passes",
+        "Live verify after implementation: worker reports the effective DuckDB memory limit, large rebuild cursor advances multiple batches per wake, `lastAckSeq` starts moving, `retainedRowCount` declines, temp dir does not grow explosively, and API latency remains acceptable while rebuild is active"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-002", "US-004"]
+    },
+    {
+      "id": "US-006",
+      "title": "Move large rebuild executor work off the main DuckDB queue",
+      "description": "As a maintainer, I want large rebuild batch queries and statements to stop contending with the main control-plane DuckDB queue so higher rebuild throughput does not starve shorter writer operations.",
+      "acceptanceCriteria": [
+        "Route large rebuild executor reads and writes onto the background DuckDB queue or another dedicated rebuild execution path instead of the normal serialized control queue.",
+        "Keep rebuild execution serialized initially so functional behavior does not change while queue isolation is introduced.",
+        "Rebuild metrics make it possible to see the effect of the queue move on cycle timing and queue pressure.",
+        "`bun test src/server/utils/backgroundServerStack.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun test src/server/services/projectMartLargeRebuildRunner.test.ts` passes",
+        "`bun run lint` passes",
+        "Live verify after implementation: worker reports the effective DuckDB memory limit, large rebuild cursor advances multiple batches per wake, `lastAckSeq` starts moving, `retainedRowCount` declines, temp dir does not grow explosively, and API latency remains acceptable while rebuild is active"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-002", "US-005"]
+    },
+    {
+      "id": "US-007",
+      "title": "Add a documented catch-up tuning profile",
+      "description": "As a maintainer, I want repo-native guidance for portable defaults and larger-machine catch-up overrides so rebuild tuning is repeatable across laptops and stronger hosts.",
+      "acceptanceCriteria": [
+        "Document the recommended portable defaults for rebuild batch size, idle poll interval, per-wake cycle burst, and background worker DuckDB memory limit selection.",
+        "Document a stronger catch-up profile for larger-memory machines and a conservative profile for smaller machines.",
+        "Document which live signals to watch when tuning, including memory usage, temp growth, queue metrics, `lastAckSeq`, and retained row drain.",
+        "`bun test src/server/utils/backgroundServerStack.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun test src/server/services/projectMartLargeRebuildRunner.test.ts` passes",
+        "`bun run lint` passes",
+        "Live verify after implementation: worker reports the effective DuckDB memory limit, large rebuild cursor advances multiple batches per wake, `lastAckSeq` starts moving, `retainedRowCount` declines, temp dir does not grow explosively, and API latency remains acceptable while rebuild is active"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003", "US-004", "US-005", "US-006"]
+    }
+  ]
+}
