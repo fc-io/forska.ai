@@ -1,9 +1,10 @@
-import {existsSync, rmSync, writeFileSync} from 'node:fs'
+import {existsSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 import {dirname, join} from 'node:path'
 
 import {Database} from 'bun:sqlite'
 import {afterAll, beforeAll, expect, test} from 'bun:test'
 
+import type {JudgmentJobLeaseMetadata} from './judgmentJobLease.ts'
 import {getJudgmentJobLeasePath, getJudgmentJobSqlitePath} from './judgmentJobPaths.ts'
 
 const tempDbPath = `/tmp/f1-judgment-job-sqlite-service-${process.pid}-${Date.now()}.duckdb`
@@ -19,6 +20,8 @@ let closeDatabase: (() => Promise<void>) | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 let sqliteService: Awaited<typeof import('./judgmentJobSqliteService.ts')>['getJudgmentJobSqliteService'] | null = null
+let JudgmentJobLeaseError: Awaited<typeof import('./judgmentJobSqliteService.ts')>['JudgmentJobLeaseError'] | null =
+  null
 
 const waitForPaths = async (paths: string[], timeoutMs: number): Promise<void> => {
   const startedAt = Date.now()
@@ -78,6 +81,7 @@ beforeAll(async () => {
     return database.run(statement)
   }
   sqliteService = sqliteModule.getJudgmentJobSqliteService
+  JudgmentJobLeaseError = sqliteModule.JudgmentJobLeaseError
 })
 
 afterAll(async () => {
@@ -118,6 +122,7 @@ test('claims and requeues prompts from the per-job SQLite queue', async () => {
   `)
 
   await service.initializeJob(jobId)
+  await service.releaseOwnedLease(jobId)
   await service.addReadyPrompts(
     jobId,
     [
@@ -176,6 +181,7 @@ test('runs isolated SQLite preflight against queue and outbox state', async () =
   `)
 
   await service.initializeJob(jobId)
+  await service.releaseOwnedLease(jobId)
   await service.addReadyPrompts(jobId, [{articleId: 'article-preflight', promptId: 'prompt-preflight'}], 'server-a')
 
   const [claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
@@ -2132,4 +2138,266 @@ test('syncOwnedLeases releases only inactive SQLite job leases', async () => {
   expect(service.hasOwnedLease(secondJobId)).toBe(false)
   expect(existsSync(getJudgmentJobLeasePath(firstJobId))).toBe(true)
   expect(existsSync(getJudgmentJobLeasePath(secondJobId))).toBe(false)
+})
+
+test('ensureOwnedLease recovers a job lease when a stale replacement lease is detected', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-lease-recover-${Date.now()}`
+  const modelId = `model-lease-recover-${Date.now()}`
+  const projectId = `project-lease-recover-${Date.now()}`
+  const jobId = `job-lease-recover-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Lease Recover', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  const firstLease = await service.ensureOwnedLease(jobId, 'server-a')
+
+  const leasePath = getJudgmentJobLeasePath(jobId)
+  const staleLease: JudgmentJobLeaseMetadata = {
+    ...firstLease.metadata,
+    acquiredAt: new Date(Date.now() - 120_000).toISOString(),
+    heartbeatAt: new Date(Date.now() - 120_000).toISOString(),
+    leaseId: crypto.randomUUID(),
+    pid: 999_999,
+    serverJobId: 'other-process',
+  }
+
+  writeFileSync(leasePath, JSON.stringify(staleLease, null, 2))
+
+  const nextLease = await service.ensureOwnedLease(jobId, 'server-a')
+
+  expect(nextLease.metadata.leaseId).not.toBe(staleLease.leaseId)
+  expect(nextLease.metadata.leaseId).not.toBe(firstLease.metadata.leaseId)
+  expect(service.hasOwnedLease(jobId)).toBe(true)
+  expect(readFileSync(leasePath, 'utf8')).toContain(nextLease.metadata.leaseId)
+})
+
+test('ensureOwnedLease fails refresh when an active competing process lease is detected', async () => {
+  if (!runDatabase || !sqliteService || !JudgmentJobLeaseError) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-lease-conflict-${Date.now()}`
+  const modelId = `model-lease-conflict-${Date.now()}`
+  const projectId = `project-lease-conflict-${Date.now()}`
+  const jobId = `job-lease-conflict-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Lease Conflict', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  const firstLease = await service.ensureOwnedLease(jobId, 'server-a')
+
+  const leasePath = getJudgmentJobLeasePath(jobId)
+  const activeLease: JudgmentJobLeaseMetadata = {
+    ...firstLease.metadata,
+    heartbeatAt: new Date().toISOString(),
+    hostname: 'foreign-host',
+    machineFingerprint: 'foreign-fingerprint',
+    leaseId: `active-${crypto.randomUUID()}`,
+    pid: process.pid,
+    serverJobId: 'other-live-process',
+  }
+
+  writeFileSync(leasePath, JSON.stringify(activeLease, null, 2))
+
+  const refreshError = await service
+    .ensureOwnedLease(jobId, 'server-a')
+    .then(() => {
+      return null
+    })
+    .catch((error: unknown) => {
+      return error
+    })
+
+  expect(refreshError).toBeInstanceOf(JudgmentJobLeaseError)
+  expect(service.hasOwnedLease(jobId)).toBe(false)
+  expect(refreshError instanceof Error ? refreshError.message : '').toContain(
+    `Failed to refresh SQLite job lease for ${jobId}`,
+  )
+})
+
+test('recoverJudgmentJobLeasesOnStartup recovers stale lease files', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-startup-recover-${Date.now()}`
+  const modelId = `model-startup-recover-${Date.now()}`
+  const projectId = `project-startup-recover-${Date.now()}`
+  const jobId = `job-startup-recover-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Startup Recover', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.releaseOwnedLease(jobId)
+
+  const leasePath = getJudgmentJobLeasePath(jobId)
+  writeFileSync(
+    leasePath,
+    JSON.stringify(
+      {
+        acquiredAt: new Date(Date.now() - 120_000).toISOString(),
+        apiServerPort: Number(process.env.API_SERVER_PORT ?? 0),
+        heartbeatAt: new Date(Date.now() - 120_000).toISOString(),
+        hostname: 'foreign-host',
+        jobId,
+        leaseId: `stale-${crypto.randomUUID()}`,
+        pid: 999_999,
+        serverJobId: 'startup-recover-server',
+      },
+      null,
+      2,
+    ),
+  )
+
+  const recovery = await service.recoverJudgmentJobLeasesOnStartup({jobIds: [jobId]})
+
+  expect(recovery.recovered).toContain(jobId)
+  expect(service.hasOwnedLease(jobId)).toBe(true)
+  expect(readFileSync(leasePath, 'utf8')).toContain('startup-recover-server')
+  expect(readFileSync(leasePath, 'utf8')).not.toContain('stale-')
+})
+
+test('recoverJudgmentJobLeasesOnStartup ignores an active competing lease', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-startup-ignore-${Date.now()}`
+  const modelId = `model-startup-ignore-${Date.now()}`
+  const projectId = `project-startup-ignore-${Date.now()}`
+  const jobId = `job-startup-ignore-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Startup Ignore', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.releaseOwnedLease(jobId)
+
+  const leasePath = getJudgmentJobLeasePath(jobId)
+  writeFileSync(
+    leasePath,
+    JSON.stringify(
+      {
+        acquiredAt: new Date(Date.now() + 60_000).toISOString(),
+        apiServerPort: Number(process.env.API_SERVER_PORT ?? 0),
+        heartbeatAt: new Date(Date.now() + 60_000).toISOString(),
+        hostname: 'foreign-host',
+        machineFingerprint: 'foreign-fingerprint',
+        jobId,
+        leaseId: `active-${crypto.randomUUID()}`,
+        pid: 123_456,
+        serverJobId: 'foreign-startup',
+      },
+      null,
+      2,
+    ),
+  )
+
+  const recovery = await service.recoverJudgmentJobLeasesOnStartup({jobIds: [jobId]})
+
+  expect(recovery.ignored).toContain(jobId)
+  expect(service.hasOwnedLease(jobId)).toBe(false)
+  expect(existsSync(leasePath)).toBe(true)
+})
+
+test('recoverJudgmentJobLeasesOnStartup deletes orphaned lease files', async () => {
+  if (!sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const jobId = `job-startup-orphan-${Date.now()}`
+  const leasePath = getJudgmentJobLeasePath(jobId)
+  await service.releaseOwnedLease(jobId)
+
+  writeFileSync(
+    leasePath,
+    JSON.stringify(
+      {
+        acquiredAt: new Date().toISOString(),
+        apiServerPort: Number(process.env.API_SERVER_PORT ?? 0),
+        heartbeatAt: new Date().toISOString(),
+        hostname: 'foreign-host',
+        jobId,
+        leaseId: `orphan-${crypto.randomUUID()}`,
+        pid: 123_456,
+        serverJobId: 'orphan-startup',
+      },
+      null,
+      2,
+    ),
+  )
+
+  const recovery = await service.recoverJudgmentJobLeasesOnStartup({jobIds: [jobId]})
+
+  expect(recovery.deleted).toContain(jobId)
+  expect(existsSync(leasePath)).toBe(false)
+  expect(service.hasOwnedLease(jobId)).toBe(false)
 })

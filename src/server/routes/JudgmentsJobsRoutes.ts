@@ -648,9 +648,11 @@ export const judgmentsJobsRoutes = new Elysia()
       const {job} = await getJobContext({jobId: params.id})
       const sqliteService = getJudgmentJobSqliteService()
       const sqliteHealthPromise = sqliteService.getHealthSnapshot(job.id)
+      const leaseMetadataPromise = sqliteService.getJudgmentJobLeaseMetadata(job.id)
 
-      const [sqliteHealth, totalTokenUsage, tokenUsageRows] = await Promise.all([
+      const [sqliteHealth, leaseMetadata, totalTokenUsage, tokenUsageRows] = await Promise.all([
         sqliteHealthPromise,
+        leaseMetadataPromise,
         getAppDatabaseService().queryJson<{
           totalTokens: number | null
           totalPromptTokens: number | null
@@ -701,6 +703,7 @@ export const judgmentsJobsRoutes = new Elysia()
 
       return {
         ...job,
+        leaseMetadata,
         promptStats: sqliteHealth.promptCounts,
         storagePolicy,
         storageHealth: sqliteHealth,

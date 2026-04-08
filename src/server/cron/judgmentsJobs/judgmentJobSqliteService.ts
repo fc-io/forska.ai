@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto'
-import {existsSync, rmSync, statSync, writeFileSync} from 'node:fs'
+import {existsSync, readdirSync, rmSync, statSync, writeFileSync} from 'node:fs'
 
 import {Database} from 'bun:sqlite'
 
@@ -10,10 +10,17 @@ import {registerWriterDemotionHandler} from '../../utils/serverRuntimeRole.ts'
 import {
   acquireJudgmentJobLease,
   type JudgmentJobLease,
+  type JudgmentJobLeaseMetadata,
+  readJudgmentJobLease,
   releaseJudgmentJobLease,
   updateJudgmentJobLeaseHeartbeat,
 } from './judgmentJobLease.ts'
-import {getJudgmentJobLeasePath, getJudgmentJobSqliteJobIds, getJudgmentJobSqlitePath} from './judgmentJobPaths.ts'
+import {
+  getJudgmentJobLeasePath,
+  getJudgmentJobSqliteJobIds,
+  getJudgmentJobSqlitePath,
+  getJudgmentJobsRootDirectory,
+} from './judgmentJobPaths.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
 
 type JobInfoRow = {
@@ -257,6 +264,103 @@ export class JudgmentJobSqlitePreflightError extends Error {
   }
 }
 
+export type JudgmentJobLeaseRecoverySummary = {deleted: string[]; ignored: string[]; recovered: string[]}
+
+const isValidJudgmentJobLeaseMetadata = (leaseMetadata: unknown): leaseMetadata is JudgmentJobLeaseMetadata => {
+  return (
+    typeof leaseMetadata === 'object'
+    && leaseMetadata !== null
+    && typeof (leaseMetadata as JudgmentJobLeaseMetadata).acquiredAt === 'string'
+    && typeof (leaseMetadata as JudgmentJobLeaseMetadata).apiServerPort === 'number'
+    && typeof (leaseMetadata as JudgmentJobLeaseMetadata).heartbeatAt === 'string'
+    && typeof (leaseMetadata as JudgmentJobLeaseMetadata).hostname === 'string'
+    && typeof (leaseMetadata as JudgmentJobLeaseMetadata).jobId === 'string'
+    && typeof (leaseMetadata as JudgmentJobLeaseMetadata).leaseId === 'string'
+    && typeof (leaseMetadata as JudgmentJobLeaseMetadata).pid === 'number'
+    && typeof (leaseMetadata as JudgmentJobLeaseMetadata).serverJobId === 'string'
+  )
+}
+
+const getRecoverableJudgmentJobLeaseIds = ({jobIds}: {jobIds?: string[]}) => {
+  if (jobIds && jobIds.length > 0) {
+    return jobIds.filter((jobId) => {
+      return existsSync(getJudgmentJobLeasePath(jobId))
+    })
+  }
+
+  const rootDirectory = getJudgmentJobsRootDirectory()
+
+  return existsSync(rootDirectory)
+    ? readdirSync(rootDirectory).reduce<string[]>((result, entry) => {
+        return entry.endsWith('.lease.json') ? [...result, entry.slice(0, -'.lease.json'.length)] : result
+      }, [])
+    : []
+}
+
+const recoverJudgmentJobLeaseFromFile = async (jobId: string): Promise<'deleted' | 'ignored' | 'recovered'> => {
+  const leasePath = getJudgmentJobLeasePath(jobId)
+  const currentLeaseMetadata = await readJudgmentJobLease(jobId).catch(() => {
+    rmSync(leasePath, {force: true})
+    return null
+  })
+
+  if (!currentLeaseMetadata || !isValidJudgmentJobLeaseMetadata(currentLeaseMetadata)) {
+    rmSync(leasePath, {force: true})
+    return 'deleted'
+  }
+
+  if (currentLeaseMetadata.jobId !== jobId || !existsSync(getJudgmentJobSqlitePath(jobId))) {
+    rmSync(leasePath, {force: true})
+    return 'deleted'
+  }
+
+  const recoveredLease = await acquireJudgmentJobLease({
+    apiServerPort: Number(process.env.API_SERVER_PORT ?? 0),
+    jobId,
+    serverJobId: currentLeaseMetadata.serverJobId ?? getDefaultJudgmentServerJobId(),
+    takeoverLeaseId: currentLeaseMetadata.leaseId,
+  }).catch(() => {
+    return null
+  })
+
+  if (!recoveredLease) {
+    return 'ignored'
+  }
+
+  ownedJobLeases.set(jobId, recoveredLease)
+  return 'recovered'
+}
+
+const recoverStartupJudgmentJobLeases = async ({
+  jobIds,
+}: {jobIds?: string[]} = {}): Promise<JudgmentJobLeaseRecoverySummary> => {
+  const candidates = getRecoverableJudgmentJobLeaseIds({jobIds})
+  const initialSummary = {deleted: [] as string[], ignored: [] as string[], recovered: [] as string[]}
+
+  return candidates.reduce<Promise<JudgmentJobLeaseRecoverySummary>>(async (summaryPromise, candidateJobId) => {
+    const summary = await summaryPromise
+    const status = await recoverJudgmentJobLeaseFromFile(candidateJobId)
+
+    if (status === 'recovered') {
+      return {...summary, recovered: [...summary.recovered, candidateJobId]}
+    }
+
+    if (status === 'deleted') {
+      return {...summary, deleted: [...summary.deleted, candidateJobId]}
+    }
+
+    return {...summary, ignored: [...summary.ignored, candidateJobId]}
+  }, Promise.resolve(initialSummary))
+}
+
+const getJudgmentJobLeaseMetadataForJob = async (jobId: string): Promise<JudgmentJobLeaseMetadata | null> => {
+  const leaseMetadata = await readJudgmentJobLease(jobId).catch(() => {
+    return null
+  })
+
+  return leaseMetadata && isValidJudgmentJobLeaseMetadata(leaseMetadata) ? leaseMetadata : null
+}
+
 const closeOpenDatabase = (jobId: string) => {
   const database = openDatabases.get(jobId)
 
@@ -304,12 +408,31 @@ const heartbeatOwnedJobLease = async (jobId: string) => {
     const nextLease = await updateJudgmentJobLeaseHeartbeat(currentLease)
     ownedJobLeases.set(jobId, nextLease)
   } catch (error) {
+    const recoveredLease = await acquireJudgmentJobLeaseWithCurrentServerId({currentLease}).catch(() => {
+      return null
+    })
+
+    if (recoveredLease) {
+      ownedJobLeases.set(jobId, recoveredLease)
+      return
+    }
+
     releaseOwnedJobLeaseState(jobId)
     judgmentJobLeaseLogger.warn(`judgments:lease-heartbeat:${jobId}`, '[judgments] lost SQLite job lease heartbeat', {
       error: error instanceof Error ? error.message : String(error),
       jobId,
     })
   }
+}
+
+const acquireJudgmentJobLeaseWithCurrentServerId = async ({currentLease}: {currentLease: JudgmentJobLease}) => {
+  const {metadata} = currentLease
+  return acquireJudgmentJobLease({
+    apiServerPort: Number(process.env.API_SERVER_PORT ?? 0),
+    jobId: metadata.jobId,
+    serverJobId: metadata.serverJobId ?? getDefaultJudgmentServerJobId(),
+    takeoverLeaseId: metadata.leaseId,
+  })
 }
 
 const startOwnedJobLeaseHeartbeatMonitor = () => {
@@ -1470,6 +1593,15 @@ const ensureOwnedJobLease = async (jobId: string, serverJobId = getDefaultJudgme
       ownedJobLeases.set(jobId, nextLease)
       return nextLease
     } catch (error) {
+      const recoveredLease = await acquireJudgmentJobLeaseWithCurrentServerId({currentLease}).catch(() => {
+        return null
+      })
+
+      if (recoveredLease) {
+        ownedJobLeases.set(jobId, recoveredLease)
+        return recoveredLease
+      }
+
       releaseOwnedJobLeaseState(jobId)
       throw new JudgmentJobLeaseError(`Failed to refresh SQLite job lease for ${jobId}`, {cause: error})
     }
@@ -2342,6 +2474,12 @@ const sqliteService = {
   },
   hasOwnedLease: (jobId: string) => {
     return ownedJobLeases.has(jobId)
+  },
+  getJudgmentJobLeaseMetadata: async (jobId: string) => {
+    return getJudgmentJobLeaseMetadataForJob(jobId)
+  },
+  recoverJudgmentJobLeasesOnStartup: async ({jobIds}: {jobIds?: string[]} = {}) => {
+    return recoverStartupJudgmentJobLeases({jobIds})
   },
   ensureOwnedLease: async (jobId: string, serverJobId?: string) => {
     return ensureOwnedJobLease(jobId, serverJobId)

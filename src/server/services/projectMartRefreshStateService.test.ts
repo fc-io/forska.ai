@@ -697,6 +697,90 @@ test('completeProjectRefresh trims resolved article state and failProjectRefresh
   expect(result.failedState?.lastFailedAt).toBeTruthy()
 })
 
+test('finalizeProjectRefreshAfterLargeRebuild advances refresh completion after claim release', () => {
+  const result = runRefreshStateScript<{
+    finalizedState: ProjectMartRefreshStateRecord | null
+    remainingArticlesAfterFinalize: ProjectMartRefreshArticleStateRecord[]
+    unresolvedAfterFinalize: Array<{articleId: string}>
+  }>(`
+    const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
+    const service = getProjectMartRefreshStateService()
+
+    await service.markProjectsDirtyAtomically({
+      projects: [{projectId: 'refresh-project-1', articleIds: ['refresh-article-1']}],
+      reason: 'project-update',
+      requestedBy: 'route-test',
+      now: new Date('2026-04-02T12:10:00.000Z'),
+    })
+
+    const [firstClaim] = await service.claimDirtyProjects({
+      workerId: 'worker-1',
+      limit: 1,
+      leaseMs: 5000,
+      now: new Date('2026-04-02T12:10:01.000Z'),
+    })
+
+    await service.markProjectsDirtyAtomically({
+      projects: [{projectId: 'refresh-project-1', articleIds: ['refresh-article-1', 'refresh-article-2']}],
+      reason: 'project-update',
+      requestedBy: 'route-test',
+      now: new Date('2026-04-02T12:10:02.000Z'),
+    })
+
+    await service.releaseProjectRefreshClaim({
+      projectId: 'refresh-project-1',
+      workerId: 'worker-1',
+      now: new Date('2026-04-02T12:10:03.000Z'),
+    })
+
+    const finalizedState = await service.finalizeProjectRefreshAfterLargeRebuild({
+      completedToken: firstClaim.claimedToken,
+      projectId: 'refresh-project-1',
+      now: new Date('2026-04-02T12:10:04.000Z'),
+    })
+    const remainingArticlesAfterFinalize = await database.queryJson(\`
+      SELECT
+        project_id AS projectId,
+        article_id AS articleId,
+        CAST(first_dirty_token AS INTEGER) AS firstDirtyToken,
+        CAST(last_dirty_token AS INTEGER) AS lastDirtyToken,
+        created_at AS createdAt,
+        updated_at AS updatedAt
+      FROM app.project_mart_refresh_article_state
+      WHERE project_id = 'refresh-project-1'
+      ORDER BY article_id ASC
+    \`)
+    const unresolvedAfterFinalize = await service.getDirtyArticlesForClaim({
+      projectId: 'refresh-project-1',
+      lastCompletedToken: 1,
+      claimedToken: 2,
+    })
+
+    console.log(JSON.stringify({
+      finalizedState,
+      remainingArticlesAfterFinalize,
+      unresolvedAfterFinalize,
+    }))
+    await database.close()
+  `)
+
+  expect(result.finalizedState?.projectId).toBe('refresh-project-1')
+  expect(result.finalizedState?.dirtyToken).toBe(2)
+  expect(result.finalizedState?.lastCompletedRefreshToken).toBe(1)
+  expect(result.finalizedState?.activeRefreshToken).toBe(0)
+  expect(result.finalizedState?.refreshStatus).toBe('idle')
+  expect(result.finalizedState?.workerId).toBeNull()
+  expect(
+    result.remainingArticlesAfterFinalize.map((row) => {
+      return {articleId: row.articleId, firstDirtyToken: row.firstDirtyToken, lastDirtyToken: row.lastDirtyToken}
+    }),
+  ).toEqual([
+    {articleId: 'refresh-article-1', firstDirtyToken: 2, lastDirtyToken: 2},
+    {articleId: 'refresh-article-2', firstDirtyToken: 2, lastDirtyToken: 2},
+  ])
+  expect(result.unresolvedAfterFinalize).toEqual([{articleId: 'refresh-article-1'}, {articleId: 'refresh-article-2'}])
+})
+
 test('clearArchivedProjectRefreshStates removes archived refresh debt and claimDirtyProjects skips archived projects', () => {
   const result = runRefreshStateScript<{
     activeClaims: Array<{projectId: string}>
@@ -786,17 +870,17 @@ test('quarantineProjectRefreshArticle blocks claims for impacted projects and re
   expect(result.quarantine?.detectedBy).toBe('test-suite')
   expect(result.quarantine?.error).toBe('native crash repro')
   expect(result.claims).toEqual([])
-  expect(result.quarantinedArticles.map((row) => ({articleId: row.articleId, detectedBy: row.detectedBy, error: row.error}))).toEqual([
-    {articleId: 'refresh-article-1', detectedBy: 'test-suite', error: 'native crash repro'},
-  ])
+  expect(
+    result.quarantinedArticles.map((row) => {
+      return {articleId: row.articleId, detectedBy: row.detectedBy, error: row.error}
+    }),
+  ).toEqual([{articleId: 'refresh-article-1', detectedBy: 'test-suite', error: 'native crash repro'}])
   expect(result.refreshState?.refreshStatus).toBe('failed')
   expect(result.refreshState?.lastError).toContain('Quarantined project mart refresh article refresh-article-1')
 })
 
 test('claimDirtyProjects skips projects already handed off to large rebuild state', () => {
-  const result = runRefreshStateScript<{
-    claims: Array<{projectId: string}>
-  }>(`
+  const result = runRefreshStateScript<{claims: Array<{projectId: string}>}>(`
     const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
     const {getProjectMartLargeRebuildStateService} = await import('./src/server/services/projectMartLargeRebuildStateService.ts')
     const refreshStateService = getProjectMartRefreshStateService()

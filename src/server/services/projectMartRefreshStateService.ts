@@ -48,6 +48,8 @@ type GetDirtyArticlesForClaimParams = {claimedToken: number; lastCompletedToken:
 
 type CompleteProjectRefreshParams = {completedToken: number; now?: Date; projectId: string; workerId: string}
 
+type FinalizeProjectRefreshAfterLargeRebuildParams = {completedToken: number; now?: Date; projectId: string}
+
 type ReleaseProjectRefreshClaimParams = {now?: Date; projectId: string; workerId: string}
 
 type ClearProjectRefreshStateParams = {now?: Date; projectId: string; runner?: RefreshStateRunner}
@@ -62,11 +64,7 @@ type QuarantineProjectRefreshArticleParams = {
   runner?: RefreshStateRunner
 }
 
-type GetQuarantinedArticlesForProjectParams = {
-  articleIds?: string[]
-  projectId: string
-  runner?: RefreshStateRunner
-}
+type GetQuarantinedArticlesForProjectParams = {articleIds?: string[]; projectId: string; runner?: RefreshStateRunner}
 
 type FailProjectRefreshParams = {error: string; now?: Date; projectId: string; workerId: string}
 
@@ -416,7 +414,11 @@ const claimDirtyProjects = async ({
 
   const currentNow = getNow(now)
   const leaseExpiresAt = getLeaseExpiry(currentNow, leaseMs)
-  const claimableRows = await getAppDatabaseService().queryJson<{dirtyToken: number; lastCompletedToken: number; projectId: string}>(`
+  const claimableRows = await getAppDatabaseService().queryJson<{
+    dirtyToken: number
+    lastCompletedToken: number
+    projectId: string
+  }>(`
     SELECT
       state.project_id AS projectId,
       CAST(state.dirty_token AS INTEGER) AS dirtyToken,
@@ -547,10 +549,8 @@ const releaseProjectRefreshClaim = async ({now, projectId, workerId}: ReleasePro
   return released ? getProjectRefreshStateRecord(getAppDatabaseService(), projectId) : null
 }
 
-const clearProjectRefreshState = async ({now, projectId, runner}: ClearProjectRefreshStateParams) => {
+const clearProjectRefreshState = async ({now: _now, projectId, runner}: ClearProjectRefreshStateParams) => {
   return withTransaction(runner, async (tx) => {
-    const currentNow = getNow(now)
-
     await tx.run(`
       DELETE FROM app.project_mart_refresh_article_state
       WHERE project_id = ${getSqlLiteral(projectId)}
@@ -585,9 +585,16 @@ const clearArchivedProjectRefreshStates = async ({runner}: ClearArchivedProjectR
   })
 }
 
-const getQuarantinedArticlesForProject = async ({articleIds, projectId, runner}: GetQuarantinedArticlesForProjectParams) => {
+const getQuarantinedArticlesForProject = async ({
+  articleIds,
+  projectId,
+  runner,
+}: GetQuarantinedArticlesForProjectParams) => {
   const activeRunner = runner ?? getAppDatabaseService()
-  const idsFilter = articleIds && articleIds.length > 0 ? `AND quarantine.article_id IN (${getQuotedStringList(getUniqueValues(articleIds)).join(', ')})` : ''
+  const idsFilter =
+    articleIds && articleIds.length > 0
+      ? `AND quarantine.article_id IN (${getQuotedStringList(getUniqueValues(articleIds)).join(', ')})`
+      : ''
 
   return activeRunner.queryJson<ProjectMartRefreshArticleQuarantineRecord>(`
     SELECT
@@ -658,6 +665,33 @@ const quarantineProjectRefreshArticle = async ({
   })
 }
 
+const cleanupCompletedProjectRefreshArticleState = async ({
+  completedToken,
+  currentNow,
+  projectId,
+  tx,
+}: {
+  completedToken: number
+  currentNow: Date
+  projectId: string
+  tx: RefreshStateRunner
+}) => {
+  await tx.run(`
+    DELETE FROM app.project_mart_refresh_article_state
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND last_dirty_token <= ${completedToken}
+  `)
+  await tx.run(`
+    UPDATE app.project_mart_refresh_article_state
+    SET
+      first_dirty_token = GREATEST(first_dirty_token, ${completedToken + 1}),
+      updated_at = ${getTimestampLiteral(currentNow)}
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND first_dirty_token <= ${completedToken}
+      AND last_dirty_token > ${completedToken}
+  `)
+}
+
 const completeProjectRefresh = async ({completedToken, now, projectId, workerId}: CompleteProjectRefreshParams) => {
   return getAppDatabaseService().transaction(async (tx) => {
     const currentNow = getNow(now)
@@ -689,20 +723,45 @@ const completeProjectRefresh = async ({completedToken, now, projectId, workerId}
       return null
     }
 
-    await tx.run(`
-      DELETE FROM app.project_mart_refresh_article_state
-      WHERE project_id = ${getSqlLiteral(projectId)}
-        AND last_dirty_token <= ${completedToken}
-    `)
-    await tx.run(`
-      UPDATE app.project_mart_refresh_article_state
+    await cleanupCompletedProjectRefreshArticleState({completedToken, currentNow, projectId, tx})
+
+    return getProjectRefreshStateRecord(tx, projectId)
+  })
+}
+
+const finalizeProjectRefreshAfterLargeRebuild = async ({
+  completedToken,
+  now,
+  projectId,
+}: FinalizeProjectRefreshAfterLargeRebuildParams) => {
+  return getAppDatabaseService().transaction(async (tx) => {
+    const currentNow = getNow(now)
+    const [completed] = await tx.queryJson<ProjectRefreshStateRow>(`
+      UPDATE app.project_mart_refresh_state
       SET
-        first_dirty_token = GREATEST(first_dirty_token, ${completedToken + 1}),
+        active_refresh_token = CASE WHEN active_refresh_token <= ${completedToken} THEN 0 ELSE active_refresh_token END,
+        last_completed_refresh_token = GREATEST(last_completed_refresh_token, ${completedToken}),
+        refresh_status = CASE WHEN active_refresh_token <= ${completedToken} THEN 'idle' ELSE refresh_status END,
+        last_completed_at = ${getTimestampLiteral(currentNow)},
+        last_error = CASE WHEN active_refresh_token <= ${completedToken} THEN NULL ELSE last_error END,
+        worker_id = CASE WHEN active_refresh_token <= ${completedToken} THEN NULL ELSE worker_id END,
+        lease_expires_at = CASE WHEN active_refresh_token <= ${completedToken} THEN NULL ELSE lease_expires_at END,
         updated_at = ${getTimestampLiteral(currentNow)}
       WHERE project_id = ${getSqlLiteral(projectId)}
-        AND first_dirty_token <= ${completedToken}
-        AND last_dirty_token > ${completedToken}
+      RETURNING
+        project_id AS projectId,
+        CAST(dirty_token AS INTEGER) AS dirtyToken,
+        CAST(active_refresh_token AS INTEGER) AS activeRefreshToken,
+        CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+        refresh_status AS refreshStatus,
+        worker_id AS workerId
     `)
+
+    if (!completed) {
+      return null
+    }
+
+    await cleanupCompletedProjectRefreshArticleState({completedToken, currentNow, projectId, tx})
 
     return getProjectRefreshStateRecord(tx, projectId)
   })
@@ -741,6 +800,7 @@ const projectMartRefreshStateService = {
   clearProjectRefreshState,
   completeProjectRefresh,
   failProjectRefresh,
+  finalizeProjectRefreshAfterLargeRebuild,
   getDirtyProjectsForProjectIds,
   getDirtyArticlesForClaim,
   getQuarantinedArticlesForProject,
@@ -759,6 +819,7 @@ export {
   claimDirtyProjects,
   completeProjectRefresh,
   failProjectRefresh,
+  finalizeProjectRefreshAfterLargeRebuild,
   getDirtyArticlesForClaim,
   getDirtyProjectsForProjectIds,
   heartbeatClaim,
@@ -771,6 +832,7 @@ export type {
   CompleteProjectRefreshParams,
   DirtyProjectInput,
   FailProjectRefreshParams,
+  FinalizeProjectRefreshAfterLargeRebuildParams,
   GetDirtyArticlesForClaimParams,
   HeartbeatClaimParams,
   MarkArticleProjectsDirtyAtomicallyParams,

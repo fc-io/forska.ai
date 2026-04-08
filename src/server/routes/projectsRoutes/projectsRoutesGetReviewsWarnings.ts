@@ -22,7 +22,7 @@ type ProjectLargeRebuildState = {
 }
 
 const getLargeRebuildDetails = (state: ProjectLargeRebuildState) => {
-  return state.refreshToken === null
+  return state.refreshToken === null || state.refreshToken <= 0
     ? null
     : {
         cursorArticleCreatedAt: state.cursorArticleCreatedAt,
@@ -304,7 +304,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       getMatchingProjectRefreshCount(projectId, progressSnapshot.processingProjectIds) > 0
     const hasActiveProjectLease =
       projectRefreshState.leaseExpiresAt !== null && new Date(projectRefreshState.leaseExpiresAt) > new Date()
-    const hasLargeRebuild = projectLargeRebuildState.refreshToken !== null
+    const hasLargeRebuild = projectLargeRebuildState.refreshToken !== null && projectLargeRebuildState.refreshToken > 0
     const isLargeRebuildRunning = projectLargeRebuildState.refreshStatus === 'running'
     const isLargeRebuildQueued = hasLargeRebuild && projectLargeRebuildState.refreshStatus === 'idle'
     const isLargeRebuildFailed = projectLargeRebuildState.refreshStatus === 'failed'
@@ -312,11 +312,12 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       !projectRefreshState.isFresh
       && (hasLiveProcessingSnapshot || (projectRefreshState.refreshStatus === 'running' && hasActiveProjectLease))
     const inFlightProjectRefreshCount = isProjectRunning ? 1 : isLargeRebuildRunning ? 1 : 0
-    const queuedProjectRefreshCount = projectRefreshState.isFresh && !hasLargeRebuild
-      ? 0
-      : isLargeRebuildQueued
-        ? 1
-        : getNonNegativeDifference(1, inFlightProjectRefreshCount)
+    const queuedProjectRefreshCount =
+      projectRefreshState.isFresh && !hasLargeRebuild
+        ? 0
+        : isLargeRebuildQueued
+          ? 1
+          : getNonNegativeDifference(1, inFlightProjectRefreshCount)
     const inFlightArticleRefreshCount =
       processingArticleRefreshCount > 0
         ? processingArticleRefreshCount
@@ -335,7 +336,8 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const inFlightRefreshCount = inFlightProjectRefreshCount + inFlightArticleRefreshCount
     const hasAnyArticlesInScope = hasCuratedArticles || hasRouteArticles
     const pendingRefreshCount = pendingProjectRefreshCount + pendingArticleRefreshCount
-    const hasFailedRefresh = (!projectRefreshState.isFresh && projectRefreshState.refreshStatus === 'failed') || isLargeRebuildFailed
+    const hasFailedRefresh =
+      (!projectRefreshState.isFresh && projectRefreshState.refreshStatus === 'failed') || isLargeRebuildFailed
     const indexingStatus = getReviewsIndexingStatus({
       enabledPromptCount,
       hasFailedRefresh,

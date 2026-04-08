@@ -1,8 +1,15 @@
-import type {ProjectMartLargeRebuildPhase, ProjectMartLargeRebuildStateRecord, ProjectMartRefreshStatus} from '../../db/schemaTypes.ts'
+import type {
+  ProjectMartLargeRebuildPhase,
+  ProjectMartLargeRebuildStateRecord,
+  ProjectMartRefreshStatus,
+} from '../../db/schemaTypes.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getSqlLiteral, getTimestampLiteral} from './appQueryHelpers.ts'
 
-type LargeRebuildStateRunner = {queryJson: <T>(statement: string) => Promise<T[]>; run: (statement: string) => Promise<void>}
+type LargeRebuildStateRunner = {
+  queryJson: <T>(statement: string) => Promise<T[]>
+  run: (statement: string) => Promise<void>
+}
 
 type QueueLargeRebuildParams = {
   cursorArticleCreatedAt?: Date | null
@@ -75,7 +82,10 @@ const getLeaseExpiry = (now: Date, leaseMs: number) => {
   return new Date(now.getTime() + leaseMs)
 }
 
-const withTransaction = async <T>(runner: LargeRebuildStateRunner | undefined, work: (tx: LargeRebuildStateRunner) => Promise<T>) => {
+const withTransaction = async <T>(
+  runner: LargeRebuildStateRunner | undefined,
+  work: (tx: LargeRebuildStateRunner) => Promise<T>,
+) => {
   return runner ? work(runner) : (getAppDatabaseService().transaction(work) as Promise<T>)
 }
 
@@ -114,6 +124,32 @@ const getLargeRebuildStateRecord = async (runner: LargeRebuildStateRunner, proje
   return row ?? null
 }
 
+const getQueuedCursorArticleCreatedAtSql = ({
+  cursorArticleCreatedAt,
+  rebuildPhase,
+}: {
+  cursorArticleCreatedAt: Date | null | undefined
+  rebuildPhase: ProjectMartLargeRebuildPhase
+}) => {
+  return cursorArticleCreatedAt !== undefined
+    ? cursorArticleCreatedAt === null
+      ? 'NULL'
+      : getTimestampLiteral(cursorArticleCreatedAt)
+    : `CASE WHEN rebuild_phase = ${getSqlLiteral(rebuildPhase)} THEN cursor_article_created_at ELSE NULL END`
+}
+
+const getQueuedCursorArticleIdSql = ({
+  cursorArticleId,
+  rebuildPhase,
+}: {
+  cursorArticleId: string | null | undefined
+  rebuildPhase: ProjectMartLargeRebuildPhase
+}) => {
+  return cursorArticleId !== undefined
+    ? getSqlLiteral(cursorArticleId)
+    : `CASE WHEN rebuild_phase = ${getSqlLiteral(rebuildPhase)} THEN cursor_article_id ELSE NULL END`
+}
+
 const queueLargeRebuild = async ({
   cursorArticleCreatedAt,
   cursorArticleId,
@@ -126,6 +162,8 @@ const queueLargeRebuild = async ({
 }: QueueLargeRebuildParams) => {
   return withTransaction(runner, async (tx) => {
     const currentNow = getNow(now)
+    const queuedCursorArticleCreatedAtSql = getQueuedCursorArticleCreatedAtSql({cursorArticleCreatedAt, rebuildPhase})
+    const queuedCursorArticleIdSql = getQueuedCursorArticleIdSql({cursorArticleId, rebuildPhase})
 
     await ensureLargeRebuildStateRow(tx, projectId)
     await tx.run(`
@@ -133,8 +171,8 @@ const queueLargeRebuild = async ({
       SET
         refresh_token = GREATEST(refresh_token, ${refreshToken}),
         rebuild_phase = ${getSqlLiteral(rebuildPhase)},
-        cursor_article_created_at = ${cursorArticleCreatedAt === undefined || cursorArticleCreatedAt === null ? 'NULL' : getTimestampLiteral(cursorArticleCreatedAt)},
-        cursor_article_id = ${getSqlLiteral(cursorArticleId ?? null)},
+        cursor_article_created_at = ${queuedCursorArticleCreatedAtSql},
+        cursor_article_id = ${queuedCursorArticleIdSql},
         target_generation = ${targetGeneration === undefined ? 'target_generation' : getSqlLiteral(targetGeneration)},
         refresh_status = CASE WHEN refresh_status = 'paused' THEN 'paused' ELSE 'idle' END,
         last_error = NULL,
@@ -148,7 +186,13 @@ const queueLargeRebuild = async ({
   })
 }
 
-const claimLargeRebuilds = async ({leaseMs, limit, now, projectId, workerId}: ClaimLargeRebuildsParams): Promise<LargeRebuildClaim[]> => {
+const claimLargeRebuilds = async ({
+  leaseMs,
+  limit,
+  now,
+  projectId,
+  workerId,
+}: ClaimLargeRebuildsParams): Promise<LargeRebuildClaim[]> => {
   if (limit <= 0) {
     return []
   }
@@ -172,7 +216,7 @@ const claimLargeRebuilds = async ({leaseMs, limit, now, projectId, workerId}: Cl
           )
         )
       )
-    ORDER BY state.refresh_token ASC, state.project_id ASC
+    ORDER BY state.last_started_at ASC NULLS FIRST, state.refresh_token ASC, state.project_id ASC
     LIMIT ${Math.max(0, Math.floor(limit))}
   `)
 
@@ -238,6 +282,9 @@ const completeLargeRebuild = async ({now, projectId, workerId}: CompleteLargeReb
   const [completed] = await getAppDatabaseService().queryJson<LargeRebuildStateRow>(`
     UPDATE app.project_mart_large_rebuild_state
     SET
+      refresh_token = 0,
+      cursor_article_created_at = NULL,
+      cursor_article_id = NULL,
       refresh_status = CASE WHEN refresh_status = 'paused' THEN 'paused' ELSE 'idle' END,
       last_completed_at = ${getTimestampLiteral(currentNow)},
       last_error = NULL,
@@ -305,7 +352,14 @@ const failLargeRebuild = async ({error, now, projectId, workerId}: FailLargeRebu
   return failed ? getLargeRebuildStateRecord(getAppDatabaseService(), projectId) : null
 }
 
-const resetLargeRebuild = async ({cursorArticleCreatedAt, cursorArticleId, now, projectId, rebuildPhase, targetGeneration}: ResetLargeRebuildParams) => {
+const resetLargeRebuild = async ({
+  cursorArticleCreatedAt,
+  cursorArticleId,
+  now,
+  projectId,
+  rebuildPhase,
+  targetGeneration,
+}: ResetLargeRebuildParams) => {
   const currentNow = getNow(now)
 
   await getAppDatabaseService().run(`

@@ -1,101 +1,176 @@
 import {expect, mock, test} from 'bun:test'
 
-import {runProjectMartLargeRebuildCycle, type ProjectMartLargeRebuildRunnerDependencies} from './projectMartLargeRebuildRunner.ts'
+import {
+  type ProjectMartLargeRebuildRunnerDependencies,
+  runProjectMartLargeRebuildCycle,
+} from './projectMartLargeRebuildRunner.ts'
 
 const createRunnerContext = (params: {
-  batchRows?: Array<{articleCreatedAt: Date | null; articleId: string; articleUpdatedAt: Date | null; inCuratedScope: boolean; inRouteScope: boolean}>
-  claim?: {leaseExpiresAt: Date; projectId: string; rebuildPhase: 'prompt_answer_fact' | 'review_answer_dictionary' | 'review_article_filter_member' | 'review_article_rollup' | 'review_article_serving'; refreshToken: number; workerId: string}
-  state?: {cursorArticleCreatedAt: Date | null; cursorArticleId: string | null; projectId: string; rebuildPhase: string; targetGeneration: number | null} | null
+  batchRows?: Array<{
+    articleCreatedAt: Date | null
+    articleId: string
+    articleUpdatedAt: Date | null
+    inCuratedScope: boolean
+    inRouteScope: boolean
+  }>
+  claim?: {
+    leaseExpiresAt: Date
+    projectId: string
+    rebuildPhase:
+      | 'prompt_answer_fact'
+      | 'review_answer_dictionary'
+      | 'review_article_filter_member'
+      | 'review_article_rollup'
+      | 'review_article_serving'
+    refreshToken: number
+    workerId: string
+  }
+  state?: {
+    cursorArticleCreatedAt: Date | null
+    cursorArticleId: string | null
+    projectId: string
+    rebuildPhase: string
+    targetGeneration: number | null
+  } | null
 }) => {
   const callLog: string[] = []
   const completed: string[] = []
   const failed: Array<{error: string; projectId: string}> = []
-  const resets: Array<{cursorArticleCreatedAt: Date | null; cursorArticleId: string | null; projectId: string; rebuildPhase?: string}> = []
+  const finalizedRefreshes: Array<{completedToken: number; projectId: string}> = []
+  const publishedAcks: Array<{ackToken: number | null; projectId: string}> = []
+  const resets: Array<{
+    cursorArticleCreatedAt: Date | null
+    cursorArticleId: string | null
+    projectId: string
+    rebuildPhase?: string
+  }> = []
   const rebuildBatches: string[][] = []
   const dictionaryRebuilds: string[] = []
   const dictionaryResets: string[] = []
-  const [claim] = params.claim ? [params.claim] : []
+  const claim = params.claim ?? null
   const dependencies: ProjectMartLargeRebuildRunnerDependencies = {
     executor: {
-      finalizeProjectReviewServing: mock(async (projectId) => {
+      finalizeProjectReviewServing: mock(async (projectId: string) => {
         callLog.push(`serving:finalize:${projectId}`)
       }),
-      getNextBatchCursor: (rows) => {
+      getNextBatchCursor: (rows: Array<{articleCreatedAt: Date | string | null; articleId: string}>) => {
         const [lastRow] = rows.slice(-1)
         return lastRow ? {articleCreatedAt: lastRow.articleCreatedAt, articleId: lastRow.articleId} : null
       },
-      getProjectScopeSourceBatch: mock(async ({projectId}) => {
+      getProjectScopeSourceBatch: mock(async ({projectId}: {projectId: string}) => {
         callLog.push(`batch:${projectId}`)
         return params.batchRows ?? []
       }),
-      rebuildProjectPromptAnswerFactBatch: mock(async (projectId, articleIds) => {
+      rebuildProjectPromptAnswerFactBatch: mock(async (projectId: string, articleIds: string[]) => {
         callLog.push(`rebuild:${projectId}:${articleIds.join(',')}`)
         rebuildBatches.push(articleIds)
       }),
-      rebuildProjectReviewAnswerDictionary: mock(async (projectId) => {
+      rebuildProjectReviewAnswerDictionary: mock(async (projectId: string) => {
         callLog.push(`dictionary:rebuild:${projectId}`)
         dictionaryRebuilds.push(projectId)
       }),
-      rebuildProjectReviewArticleFilterMemberBatch: mock(async (projectId, articleIds) => {
+      rebuildProjectReviewArticleFilterMemberBatch: mock(async (projectId: string, articleIds: string[]) => {
         callLog.push(`filter:rebuild:${projectId}:${articleIds.join(',')}`)
       }),
-      rebuildProjectReviewArticleRollupBatch: mock(async (projectId, articleIds) => {
+      rebuildProjectReviewArticleRollupBatch: mock(async (projectId: string, articleIds: string[]) => {
         callLog.push(`rollup:rebuild:${projectId}:${articleIds.join(',')}`)
       }),
-      rebuildProjectReviewServingBatch: mock(async (projectId, articleIds) => {
+      rebuildProjectReviewServingBatch: mock(async (projectId: string, articleIds: string[]) => {
         callLog.push(`serving:rebuild:${projectId}:${articleIds.join(',')}`)
       }),
-      resetProjectPromptAnswerFact: mock(async (projectId) => {
+      resetProjectPromptAnswerFact: mock(async (projectId: string) => {
         callLog.push(`reset:${projectId}`)
       }),
-      resetProjectReviewAnswerDictionary: mock(async (projectId) => {
+      resetProjectReviewAnswerDictionary: mock(async (projectId: string) => {
         callLog.push(`dictionary:reset:${projectId}`)
         dictionaryResets.push(projectId)
       }),
-      resetProjectReviewArticleRollup: mock(async (projectId) => {
+      resetProjectReviewArticleRollup: mock(async (projectId: string) => {
         callLog.push(`rollup:reset:${projectId}`)
       }),
-      setupProjectReviewServingStaging: mock(async (projectId) => {
+      setupProjectReviewServingStaging: mock(async (projectId: string) => {
         callLog.push(`serving:setup:${projectId}`)
       }),
     },
     largeRebuildStateService: {
+      clearArchivedLargeRebuildStates: mock(async () => {
+        callLog.push('clearArchived')
+      }),
       claimLargeRebuilds: mock(async () => {
         callLog.push('claim')
         return claim ? [claim] : []
       }),
-      completeLargeRebuild: mock(async ({projectId}) => {
+      completeLargeRebuild: mock(async ({projectId}: {projectId: string}) => {
         callLog.push(`complete:${projectId}`)
         completed.push(projectId)
         return null
       }),
-      failLargeRebuild: mock(async ({error, projectId}) => {
+      failLargeRebuild: mock(async ({error, projectId}: {error: string; projectId: string}) => {
         callLog.push(`fail:${projectId}:${error}`)
         failed.push({error, projectId})
         return null
       }),
-      getLargeRebuildState: mock(async (projectId) => {
+      getLargeRebuildState: mock(async (projectId: string) => {
         callLog.push(`state:${projectId}`)
         return params.state ?? null
       }),
-      heartbeatLargeRebuildClaim: mock(async ({projectId}) => {
+      heartbeatLargeRebuildClaim: mock(async ({projectId}: {projectId: string}) => {
         callLog.push(`heartbeat:${projectId}`)
         return null
       }),
-      resetLargeRebuild: mock(async ({cursorArticleCreatedAt, cursorArticleId, projectId, rebuildPhase}) => {
-        callLog.push(`advance:${projectId}:${cursorArticleId ?? 'null'}:${rebuildPhase ?? 'same'}`)
-        resets.push({
-          cursorArticleCreatedAt: cursorArticleCreatedAt ?? null,
-          cursorArticleId: cursorArticleId ?? null,
+      resetLargeRebuild: mock(
+        async ({
+          cursorArticleCreatedAt,
+          cursorArticleId,
           projectId,
           rebuildPhase,
-        })
-        return null
+        }: {
+          cursorArticleCreatedAt?: Date | null
+          cursorArticleId?: string | null
+          projectId: string
+          rebuildPhase?: string
+        }) => {
+          callLog.push(`advance:${projectId}:${cursorArticleId ?? 'null'}:${rebuildPhase ?? 'same'}`)
+          resets.push({
+            cursorArticleCreatedAt: cursorArticleCreatedAt ?? null,
+            cursorArticleId: cursorArticleId ?? null,
+            projectId,
+            rebuildPhase,
+          })
+          return null
+        },
+      ),
+    },
+    refreshStateService: {
+      finalizeProjectRefreshAfterLargeRebuild: mock(
+        async ({completedToken, projectId}: {completedToken: number; projectId: string}) => {
+          callLog.push(`refresh:complete:${projectId}:${completedToken}`)
+          finalizedRefreshes.push({completedToken, projectId})
+          return null
+        },
+      ),
+    },
+    sqliteService: {
+      publishProjectRefreshAck: mock(async ({ackToken, projectId}: {ackToken: number | null; projectId: string}) => {
+        callLog.push(`ack:${projectId}:${ackToken}`)
+        publishedAcks.push({ackToken, projectId})
+        return 1
       }),
     },
   }
 
-  return {callLog, completed, dependencies, dictionaryRebuilds, dictionaryResets, failed, rebuildBatches, resets}
+  return {
+    callLog,
+    completed,
+    dependencies,
+    dictionaryRebuilds,
+    dictionaryResets,
+    failed,
+    finalizedRefreshes,
+    publishedAcks,
+    rebuildBatches,
+    resets,
+  }
 }
 
 test('returns idle when no large rebuild work is claimable', async () => {
@@ -104,7 +179,7 @@ test('returns idle when no large rebuild work is claimable', async () => {
   const result = await runProjectMartLargeRebuildCycle({workerId: 'worker-1'}, context.dependencies)
 
   expect(result).toEqual({projectId: null, status: 'idle', workerId: 'worker-1'})
-  expect(context.callLog).toEqual(['claim'])
+  expect(context.callLog).toEqual(['clearArchived', 'claim'])
 })
 
 test('runs one prompt_answer_fact batch and advances the cursor', async () => {
@@ -151,6 +226,7 @@ test('runs one prompt_answer_fact batch and advances the cursor', async () => {
     workerId: 'worker-1',
   })
   expect(context.callLog).toEqual([
+    'clearArchived',
     'claim',
     'state:project-1',
     'reset:project-1',
@@ -182,8 +258,20 @@ test('transitions from prompt_answer_fact to review_answer_dictionary when no ro
 
   const result = await runProjectMartLargeRebuildCycle({workerId: 'worker-1'}, context.dependencies)
 
-  expect(result).toEqual({articleCount: 0, nextCursor: null, projectId: 'project-1', status: 'progressed', workerId: 'worker-1'})
-  expect(context.callLog).toEqual(['claim', 'state:project-1', 'batch:project-1', 'advance:project-1:null:review_answer_dictionary'])
+  expect(result).toEqual({
+    articleCount: 0,
+    nextCursor: null,
+    projectId: 'project-1',
+    status: 'progressed',
+    workerId: 'worker-1',
+  })
+  expect(context.callLog).toEqual([
+    'clearArchived',
+    'claim',
+    'state:project-1',
+    'batch:project-1',
+    'advance:project-1:null:review_answer_dictionary',
+  ])
   expect(context.completed).toEqual([])
 })
 
@@ -207,8 +295,20 @@ test('transitions from review_answer_dictionary to review_article_filter_member'
 
   const result = await runProjectMartLargeRebuildCycle({workerId: 'worker-1'}, context.dependencies)
 
-  expect(result).toEqual({articleCount: 0, nextCursor: null, projectId: 'project-1', status: 'progressed', workerId: 'worker-1'})
-  expect(context.callLog).toEqual(['claim', 'dictionary:reset:project-1', 'dictionary:rebuild:project-1', 'advance:project-1:null:review_article_filter_member'])
+  expect(result).toEqual({
+    articleCount: 0,
+    nextCursor: null,
+    projectId: 'project-1',
+    status: 'progressed',
+    workerId: 'worker-1',
+  })
+  expect(context.callLog).toEqual([
+    'clearArchived',
+    'claim',
+    'dictionary:reset:project-1',
+    'dictionary:rebuild:project-1',
+    'advance:project-1:null:review_article_filter_member',
+  ])
 })
 
 test('transitions through filter_member rollup and serving to completion', async () => {
@@ -231,7 +331,14 @@ test('transitions through filter_member rollup and serving to completion', async
   })
   const filterResult = await runProjectMartLargeRebuildCycle({workerId: 'worker-1'}, filterContext.dependencies)
   expect(filterResult.status).toBe('progressed')
-  expect(filterContext.callLog).toEqual(['claim', 'state:project-1', 'serving:setup:project-1', 'batch:project-1', 'advance:project-1:null:review_article_rollup'])
+  expect(filterContext.callLog).toEqual([
+    'clearArchived',
+    'claim',
+    'state:project-1',
+    'serving:setup:project-1',
+    'batch:project-1',
+    'advance:project-1:null:review_article_rollup',
+  ])
 
   const rollupContext = createRunnerContext({
     batchRows: [],
@@ -252,7 +359,14 @@ test('transitions through filter_member rollup and serving to completion', async
   })
   const rollupResult = await runProjectMartLargeRebuildCycle({workerId: 'worker-1'}, rollupContext.dependencies)
   expect(rollupResult.status).toBe('progressed')
-  expect(rollupContext.callLog).toEqual(['claim', 'state:project-1', 'rollup:reset:project-1', 'batch:project-1', 'advance:project-1:null:review_article_serving'])
+  expect(rollupContext.callLog).toEqual([
+    'clearArchived',
+    'claim',
+    'state:project-1',
+    'rollup:reset:project-1',
+    'batch:project-1',
+    'advance:project-1:null:review_article_serving',
+  ])
 
   const servingContext = createRunnerContext({
     batchRows: [],
@@ -273,7 +387,18 @@ test('transitions through filter_member rollup and serving to completion', async
   })
   const servingResult = await runProjectMartLargeRebuildCycle({workerId: 'worker-1'}, servingContext.dependencies)
   expect(servingResult).toEqual({projectId: 'project-1', status: 'completed', workerId: 'worker-1'})
-  expect(servingContext.callLog).toEqual(['claim', 'state:project-1', 'batch:project-1', 'serving:finalize:project-1', 'complete:project-1'])
+  expect(servingContext.callLog).toEqual([
+    'clearArchived',
+    'claim',
+    'state:project-1',
+    'batch:project-1',
+    'serving:finalize:project-1',
+    'refresh:complete:project-1:9',
+    'complete:project-1',
+    'ack:project-1:9',
+  ])
+  expect(servingContext.finalizedRefreshes).toEqual([{completedToken: 9, projectId: 'project-1'}])
+  expect(servingContext.publishedAcks).toEqual([{ackToken: 9, projectId: 'project-1'}])
 })
 
 test('fails unsupported phases explicitly', async () => {

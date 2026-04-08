@@ -4,6 +4,7 @@ import {Elysia} from 'elysia'
 import {fullTextConversionJobsCron} from './cron/fullTextConversionJobs.ts'
 import {fullTextJobsCron} from './cron/fullTextJobs.ts'
 import {judgmentsJobsCron} from './cron/judgmentsJobs.ts'
+import {getJudgmentJobSqliteService} from './cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {nvidiaSmiCron} from './cron/nvidiaSmi.ts'
 import {adminInvestigateRoutes} from './routes/AdminInvestigateRoutes.ts'
 import {apiProxyRoutes} from './routes/ApiProxyRoutes.ts'
@@ -36,7 +37,11 @@ import {warmCodexAppServer} from './utils/getCodexAppServerClient.ts'
 import {inferenceRuntimeConfig} from './utils/getInferenceRuntimeConfig.ts'
 import {installSafeConsoleLogging} from './utils/installSafeConsoleLogging.ts'
 import {shouldServerRoleMountWriterCrons} from './utils/serverRole.ts'
-import {getCurrentServerRole, initializeServerRuntimeRole, shouldCurrentServerRunWriterWork} from './utils/serverRuntimeRole.ts'
+import {
+  getCurrentServerRole,
+  initializeServerRuntimeRole,
+  shouldCurrentServerRunWriterWork,
+} from './utils/serverRuntimeRole.ts'
 import {startBackgroundWork} from './utils/startBackgroundWork.ts'
 
 installSafeConsoleLogging()
@@ -49,6 +54,7 @@ const writerCronRoutes = shouldMountWriterCrons
   : new Elysia()
 
 await initializeServerRuntimeRole()
+await getJudgmentJobSqliteService().recoverJudgmentJobLeasesOnStartup()
 
 const shouldWarmCodex = getCurrentServerRole() !== 'worker'
 

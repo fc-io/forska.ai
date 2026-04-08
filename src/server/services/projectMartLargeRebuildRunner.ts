@@ -1,8 +1,11 @@
-import {getProjectMartLargeRebuildExecutor, type ProjectMartLargeRebuildBatchCursor, type ProjectMartLargeRebuildScopeBatchRow} from './projectMartLargeRebuildExecutor.ts'
+import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {
-  getProjectMartLargeRebuildStateService,
-  type LargeRebuildClaim,
-} from './projectMartLargeRebuildStateService.ts'
+  getProjectMartLargeRebuildExecutor,
+  type ProjectMartLargeRebuildBatchCursor,
+  type ProjectMartLargeRebuildScopeBatchRow,
+} from './projectMartLargeRebuildExecutor.ts'
+import {getProjectMartLargeRebuildStateService, type LargeRebuildClaim} from './projectMartLargeRebuildStateService.ts'
+import {getProjectMartRefreshStateService} from './projectMartRefreshStateService.ts'
 
 type ProjectMartLargeRebuildRunnerDependencies = {
   executor: {
@@ -24,27 +27,54 @@ type ProjectMartLargeRebuildRunnerDependencies = {
     setupProjectReviewServingStaging: (projectId: string) => Promise<void>
   }
   largeRebuildStateService: {
-    claimLargeRebuilds: (params: {leaseMs: number; limit: number; now?: Date; projectId?: string; workerId: string}) => Promise<LargeRebuildClaim[]>
+    claimLargeRebuilds: (params: {
+      leaseMs: number
+      limit: number
+      now?: Date
+      projectId?: string
+      workerId: string
+    }) => Promise<LargeRebuildClaim[]>
     clearArchivedLargeRebuildStates: () => Promise<unknown>
     completeLargeRebuild: (params: {now?: Date; projectId: string; workerId: string}) => Promise<unknown>
     failLargeRebuild: (params: {error: string; now?: Date; projectId: string; workerId: string}) => Promise<unknown>
-    getLargeRebuildState: (projectId: string) => Promise<{
+    getLargeRebuildState: (
+      projectId: string,
+    ) => Promise<{
       cursorArticleCreatedAt: Date | null
       cursorArticleId: string | null
       projectId: string
       rebuildPhase: string
       targetGeneration: number | null
     } | null>
-    heartbeatLargeRebuildClaim: (params: {leaseMs: number; now?: Date; projectId: string; workerId: string}) => Promise<LargeRebuildClaim | null>
+    heartbeatLargeRebuildClaim: (params: {
+      leaseMs: number
+      now?: Date
+      projectId: string
+      workerId: string
+    }) => Promise<LargeRebuildClaim | null>
     resetLargeRebuild: (params: {
       cursorArticleCreatedAt?: Date | null
       cursorArticleId?: string | null
       now?: Date
       projectId: string
-      rebuildPhase?: 'judgment_fact' | 'prompt_answer_fact' | 'review_answer_dictionary' | 'review_article_filter_member' | 'review_article_rollup' | 'review_article_serving'
+      rebuildPhase?:
+        | 'judgment_fact'
+        | 'prompt_answer_fact'
+        | 'review_answer_dictionary'
+        | 'review_article_filter_member'
+        | 'review_article_rollup'
+        | 'review_article_serving'
       targetGeneration?: number | null
     }) => Promise<unknown>
   }
+  refreshStateService: {
+    finalizeProjectRefreshAfterLargeRebuild: (params: {
+      completedToken: number
+      now?: Date
+      projectId: string
+    }) => Promise<unknown>
+  }
+  sqliteService: {publishProjectRefreshAck: (params: {ackToken: number | null; projectId: string}) => Promise<number>}
 }
 
 type ProjectMartLargeRebuildRunnerOptions = {
@@ -58,7 +88,13 @@ type ProjectMartLargeRebuildRunnerOptions = {
 
 type ProjectMartLargeRebuildRunnerResult =
   | {projectId: null; status: 'idle'; workerId: string}
-  | {articleCount: number; nextCursor: ProjectMartLargeRebuildBatchCursor | null; projectId: string; status: 'progressed'; workerId: string}
+  | {
+      articleCount: number
+      nextCursor: ProjectMartLargeRebuildBatchCursor | null
+      projectId: string
+      status: 'progressed'
+      workerId: string
+    }
   | {projectId: string; status: 'completed'; workerId: string}
   | {error: string; projectId: string; status: 'failed'; workerId: string}
 
@@ -68,6 +104,8 @@ const defaultHeartbeatMs = 10_000
 const defaultDependencies: ProjectMartLargeRebuildRunnerDependencies = {
   executor: getProjectMartLargeRebuildExecutor(),
   largeRebuildStateService: getProjectMartLargeRebuildStateService(),
+  refreshStateService: getProjectMartRefreshStateService(),
+  sqliteService: getJudgmentJobSqliteService(),
 }
 
 const getNow = (now?: Date) => {
@@ -138,10 +176,18 @@ const runPromptAnswerFactPhase = async (
       rebuildPhase: 'review_answer_dictionary',
       targetGeneration: rebuildState.targetGeneration,
     })
-    return {articleCount: 0, nextCursor: null, projectId: claim.projectId, status: 'progressed', workerId: options.workerId}
+    return {
+      articleCount: 0,
+      nextCursor: null,
+      projectId: claim.projectId,
+      status: 'progressed',
+      workerId: options.workerId,
+    }
   }
 
-  const articleIds = batchRows.map((row) => row.articleId)
+  const articleIds = batchRows.map((row) => {
+    return row.articleId
+  })
   await dependencies.executor.rebuildProjectPromptAnswerFactBatch(claim.projectId, articleIds)
   const nextCursor = dependencies.executor.getNextBatchCursor(batchRows)
 
@@ -154,7 +200,13 @@ const runPromptAnswerFactPhase = async (
     targetGeneration: rebuildState.targetGeneration,
   })
 
-  return {articleCount: articleIds.length, nextCursor, projectId: claim.projectId, status: 'progressed', workerId: options.workerId}
+  return {
+    articleCount: articleIds.length,
+    nextCursor,
+    projectId: claim.projectId,
+    status: 'progressed',
+    workerId: options.workerId,
+  }
 }
 
 const runReviewAnswerDictionaryPhase = async (
@@ -171,7 +223,13 @@ const runReviewAnswerDictionaryPhase = async (
     projectId: claim.projectId,
     rebuildPhase: 'review_article_filter_member',
   })
-  return {articleCount: 0, nextCursor: null, projectId: claim.projectId, status: 'progressed', workerId: options.workerId}
+  return {
+    articleCount: 0,
+    nextCursor: null,
+    projectId: claim.projectId,
+    status: 'progressed',
+    workerId: options.workerId,
+  }
 }
 
 const runReviewArticleFilterMemberPhase = async (
@@ -185,24 +243,57 @@ const runReviewArticleFilterMemberPhase = async (
     throw new Error(`Missing large rebuild state for ${claim.projectId}`)
   }
 
-  const initialCursor = rebuildState.cursorArticleId === null ? null : {articleCreatedAt: rebuildState.cursorArticleCreatedAt, articleId: rebuildState.cursorArticleId}
+  const initialCursor =
+    rebuildState.cursorArticleId === null
+      ? null
+      : {articleCreatedAt: rebuildState.cursorArticleCreatedAt, articleId: rebuildState.cursorArticleId}
 
   if (initialCursor === null) {
     await dependencies.executor.setupProjectReviewServingStaging(claim.projectId)
   }
 
-  const batchRows = await dependencies.executor.getProjectScopeSourceBatch({batchSize: options.batchSize, cursor: initialCursor, projectId: claim.projectId})
+  const batchRows = await dependencies.executor.getProjectScopeSourceBatch({
+    batchSize: options.batchSize,
+    cursor: initialCursor,
+    projectId: claim.projectId,
+  })
 
   if (batchRows.length === 0) {
-    await dependencies.largeRebuildStateService.resetLargeRebuild({cursorArticleCreatedAt: null, cursorArticleId: null, now: getNow(options.now), projectId: claim.projectId, rebuildPhase: 'review_article_rollup'})
-    return {articleCount: 0, nextCursor: null, projectId: claim.projectId, status: 'progressed', workerId: options.workerId}
+    await dependencies.largeRebuildStateService.resetLargeRebuild({
+      cursorArticleCreatedAt: null,
+      cursorArticleId: null,
+      now: getNow(options.now),
+      projectId: claim.projectId,
+      rebuildPhase: 'review_article_rollup',
+    })
+    return {
+      articleCount: 0,
+      nextCursor: null,
+      projectId: claim.projectId,
+      status: 'progressed',
+      workerId: options.workerId,
+    }
   }
 
-  const articleIds = batchRows.map((row) => row.articleId)
+  const articleIds = batchRows.map((row) => {
+    return row.articleId
+  })
   await dependencies.executor.rebuildProjectReviewArticleFilterMemberBatch(claim.projectId, articleIds)
   const nextCursor = dependencies.executor.getNextBatchCursor(batchRows)
-  await dependencies.largeRebuildStateService.resetLargeRebuild({cursorArticleCreatedAt: nextCursor === null ? null : getCursorDateValue(nextCursor.articleCreatedAt), cursorArticleId: nextCursor?.articleId ?? null, now: getNow(options.now), projectId: claim.projectId, rebuildPhase: 'review_article_filter_member'})
-  return {articleCount: articleIds.length, nextCursor, projectId: claim.projectId, status: 'progressed', workerId: options.workerId}
+  await dependencies.largeRebuildStateService.resetLargeRebuild({
+    cursorArticleCreatedAt: nextCursor === null ? null : getCursorDateValue(nextCursor.articleCreatedAt),
+    cursorArticleId: nextCursor?.articleId ?? null,
+    now: getNow(options.now),
+    projectId: claim.projectId,
+    rebuildPhase: 'review_article_filter_member',
+  })
+  return {
+    articleCount: articleIds.length,
+    nextCursor,
+    projectId: claim.projectId,
+    status: 'progressed',
+    workerId: options.workerId,
+  }
 }
 
 const runReviewArticleRollupPhase = async (
@@ -216,24 +307,57 @@ const runReviewArticleRollupPhase = async (
     throw new Error(`Missing large rebuild state for ${claim.projectId}`)
   }
 
-  const initialCursor = rebuildState.cursorArticleId === null ? null : {articleCreatedAt: rebuildState.cursorArticleCreatedAt, articleId: rebuildState.cursorArticleId}
+  const initialCursor =
+    rebuildState.cursorArticleId === null
+      ? null
+      : {articleCreatedAt: rebuildState.cursorArticleCreatedAt, articleId: rebuildState.cursorArticleId}
 
   if (initialCursor === null) {
     await dependencies.executor.resetProjectReviewArticleRollup(claim.projectId)
   }
 
-  const batchRows = await dependencies.executor.getProjectScopeSourceBatch({batchSize: options.batchSize, cursor: initialCursor, projectId: claim.projectId})
+  const batchRows = await dependencies.executor.getProjectScopeSourceBatch({
+    batchSize: options.batchSize,
+    cursor: initialCursor,
+    projectId: claim.projectId,
+  })
 
   if (batchRows.length === 0) {
-    await dependencies.largeRebuildStateService.resetLargeRebuild({cursorArticleCreatedAt: null, cursorArticleId: null, now: getNow(options.now), projectId: claim.projectId, rebuildPhase: 'review_article_serving'})
-    return {articleCount: 0, nextCursor: null, projectId: claim.projectId, status: 'progressed', workerId: options.workerId}
+    await dependencies.largeRebuildStateService.resetLargeRebuild({
+      cursorArticleCreatedAt: null,
+      cursorArticleId: null,
+      now: getNow(options.now),
+      projectId: claim.projectId,
+      rebuildPhase: 'review_article_serving',
+    })
+    return {
+      articleCount: 0,
+      nextCursor: null,
+      projectId: claim.projectId,
+      status: 'progressed',
+      workerId: options.workerId,
+    }
   }
 
-  const articleIds = batchRows.map((row) => row.articleId)
+  const articleIds = batchRows.map((row) => {
+    return row.articleId
+  })
   await dependencies.executor.rebuildProjectReviewArticleRollupBatch(claim.projectId, articleIds)
   const nextCursor = dependencies.executor.getNextBatchCursor(batchRows)
-  await dependencies.largeRebuildStateService.resetLargeRebuild({cursorArticleCreatedAt: nextCursor === null ? null : getCursorDateValue(nextCursor.articleCreatedAt), cursorArticleId: nextCursor?.articleId ?? null, now: getNow(options.now), projectId: claim.projectId, rebuildPhase: 'review_article_rollup'})
-  return {articleCount: articleIds.length, nextCursor, projectId: claim.projectId, status: 'progressed', workerId: options.workerId}
+  await dependencies.largeRebuildStateService.resetLargeRebuild({
+    cursorArticleCreatedAt: nextCursor === null ? null : getCursorDateValue(nextCursor.articleCreatedAt),
+    cursorArticleId: nextCursor?.articleId ?? null,
+    now: getNow(options.now),
+    projectId: claim.projectId,
+    rebuildPhase: 'review_article_rollup',
+  })
+  return {
+    articleCount: articleIds.length,
+    nextCursor,
+    projectId: claim.projectId,
+    status: 'progressed',
+    workerId: options.workerId,
+  }
 }
 
 const runReviewArticleServingPhase = async (
@@ -247,20 +371,54 @@ const runReviewArticleServingPhase = async (
     throw new Error(`Missing large rebuild state for ${claim.projectId}`)
   }
 
-  const initialCursor = rebuildState.cursorArticleId === null ? null : {articleCreatedAt: rebuildState.cursorArticleCreatedAt, articleId: rebuildState.cursorArticleId}
-  const batchRows = await dependencies.executor.getProjectScopeSourceBatch({batchSize: options.batchSize, cursor: initialCursor, projectId: claim.projectId})
+  const initialCursor =
+    rebuildState.cursorArticleId === null
+      ? null
+      : {articleCreatedAt: rebuildState.cursorArticleCreatedAt, articleId: rebuildState.cursorArticleId}
+  const batchRows = await dependencies.executor.getProjectScopeSourceBatch({
+    batchSize: options.batchSize,
+    cursor: initialCursor,
+    projectId: claim.projectId,
+  })
 
   if (batchRows.length === 0) {
     await dependencies.executor.finalizeProjectReviewServing(claim.projectId)
-    await dependencies.largeRebuildStateService.completeLargeRebuild({now: getNow(options.now), projectId: claim.projectId, workerId: options.workerId})
+    await dependencies.refreshStateService.finalizeProjectRefreshAfterLargeRebuild({
+      completedToken: claim.refreshToken,
+      now: getNow(options.now),
+      projectId: claim.projectId,
+    })
+    await dependencies.largeRebuildStateService.completeLargeRebuild({
+      now: getNow(options.now),
+      projectId: claim.projectId,
+      workerId: options.workerId,
+    })
+    await dependencies.sqliteService.publishProjectRefreshAck({
+      ackToken: claim.refreshToken,
+      projectId: claim.projectId,
+    })
     return {projectId: claim.projectId, status: 'completed', workerId: options.workerId}
   }
 
-  const articleIds = batchRows.map((row) => row.articleId)
+  const articleIds = batchRows.map((row) => {
+    return row.articleId
+  })
   await dependencies.executor.rebuildProjectReviewServingBatch(claim.projectId, articleIds)
   const nextCursor = dependencies.executor.getNextBatchCursor(batchRows)
-  await dependencies.largeRebuildStateService.resetLargeRebuild({cursorArticleCreatedAt: nextCursor === null ? null : getCursorDateValue(nextCursor.articleCreatedAt), cursorArticleId: nextCursor?.articleId ?? null, now: getNow(options.now), projectId: claim.projectId, rebuildPhase: 'review_article_serving'})
-  return {articleCount: articleIds.length, nextCursor, projectId: claim.projectId, status: 'progressed', workerId: options.workerId}
+  await dependencies.largeRebuildStateService.resetLargeRebuild({
+    cursorArticleCreatedAt: nextCursor === null ? null : getCursorDateValue(nextCursor.articleCreatedAt),
+    cursorArticleId: nextCursor?.articleId ?? null,
+    now: getNow(options.now),
+    projectId: claim.projectId,
+    rebuildPhase: 'review_article_serving',
+  })
+  return {
+    articleCount: articleIds.length,
+    nextCursor,
+    projectId: claim.projectId,
+    status: 'progressed',
+    workerId: options.workerId,
+  }
 }
 
 export const runProjectMartLargeRebuildCycle = async (
@@ -307,11 +465,20 @@ export const runProjectMartLargeRebuildCycle = async (
     throw new Error(`Unsupported large rebuild phase ${claim.rebuildPhase}`)
   } catch (error) {
     const errorText = getErrorText(error)
-    await dependencies.largeRebuildStateService.failLargeRebuild({error: errorText, now: getNow(options.now), projectId: claim.projectId, workerId: options.workerId})
+    await dependencies.largeRebuildStateService.failLargeRebuild({
+      error: errorText,
+      now: getNow(options.now),
+      projectId: claim.projectId,
+      workerId: options.workerId,
+    })
     return {error: errorText, projectId: claim.projectId, status: 'failed', workerId: options.workerId}
   } finally {
     stopHeartbeat()
   }
 }
 
-export type {ProjectMartLargeRebuildRunnerDependencies, ProjectMartLargeRebuildRunnerOptions, ProjectMartLargeRebuildRunnerResult}
+export type {
+  ProjectMartLargeRebuildRunnerDependencies,
+  ProjectMartLargeRebuildRunnerOptions,
+  ProjectMartLargeRebuildRunnerResult,
+}

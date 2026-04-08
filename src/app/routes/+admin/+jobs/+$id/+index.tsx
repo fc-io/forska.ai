@@ -80,6 +80,10 @@ const formatDuration = (value: number | null | undefined) => {
   return hours > 0 ? `${hours}h ${minutes}m ${seconds}s` : minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
 }
 
+const getHeartbeatAgeMs = (heartbeatAt: string | null | undefined) => {
+  return heartbeatAt ? Math.max(Date.now() - new Date(heartbeatAt).getTime(), 0) : null
+}
+
 const formatRepairMode = (value: 'none' | 'offline_repair_required' | 'safe_live_repair' | null | undefined) => {
   return value === 'offline_repair_required'
     ? 'Offline Repair Required'
@@ -131,6 +135,15 @@ type JobData = {
     retainedRowCount?: number
     sqliteFileBytes?: number | null
     walBytes?: number
+  }
+  leaseMetadata?: {
+    acquiredAt?: string
+    apiServerPort?: number
+    heartbeatAt?: string
+    hostname?: string
+    leaseId?: string
+    pid?: number
+    serverJobId?: string
   }
   storagePolicy?: {
     hasLocalSqliteState?: boolean
@@ -339,6 +352,12 @@ const AdminJudgmentJobDetail = () => {
             }
             const storagePolicy = () => {
               return data()?.storagePolicy
+            }
+            const leaseMetadata = () => {
+              return data()?.leaseMetadata
+            }
+            const leaseHeartbeatAgeMs = () => {
+              return getHeartbeatAgeMs(leaseMetadata()?.heartbeatAt)
             }
             const resumeBlockedReason = () => {
               return data()?.storageState === 'draining'
@@ -689,6 +708,28 @@ const AdminJudgmentJobDetail = () => {
                       <p class="text-xs text-gray-500 mt-1 break-words">
                         {data()?.lastImportError ?? 'No recent import failure'}
                       </p>
+                    </div>
+                    <div class="bg-gray-50 rounded-lg p-4">
+                      <p class="text-sm text-gray-500">Lease Acquired</p>
+                      <p class="font-medium mt-1">{formatDateTime(leaseMetadata()?.acquiredAt)}</p>
+                      <p class="text-xs text-gray-500 mt-1">
+                        API server port: {leaseMetadata()?.apiServerPort ?? 'N/A'}
+                      </p>
+                    </div>
+                    <div class="bg-gray-50 rounded-lg p-4">
+                      <p class="text-sm text-gray-500">Lease Host</p>
+                      <p class="font-medium mt-1">{leaseMetadata()?.hostname ?? 'N/A'}</p>
+                      <p class="text-xs text-gray-500 mt-1">PID: {leaseMetadata()?.pid ?? 'N/A'}</p>
+                    </div>
+                    <div class="bg-gray-50 rounded-lg p-4">
+                      <p class="text-sm text-gray-500">Lease ID</p>
+                      <p class="font-medium mt-1 break-all">{leaseMetadata()?.leaseId ?? 'N/A'}</p>
+                      <p class="text-xs text-gray-500 mt-1">Server Job: {leaseMetadata()?.serverJobId ?? 'N/A'}</p>
+                    </div>
+                    <div class="bg-gray-50 rounded-lg p-4">
+                      <p class="text-sm text-gray-500">Lease Heartbeat</p>
+                      <p class="font-medium mt-1">{formatDateTime(leaseMetadata()?.heartbeatAt)}</p>
+                      <p class="text-xs text-gray-500 mt-1">Age: {formatDuration(leaseHeartbeatAgeMs())}</p>
                     </div>
                     <div class="bg-gray-50 rounded-lg p-4 md:col-span-2 xl:col-span-1">
                       <p class="text-sm text-gray-500">Quarantine Reason</p>

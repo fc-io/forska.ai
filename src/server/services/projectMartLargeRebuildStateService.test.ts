@@ -80,10 +80,7 @@ const runScript = <T>(body: string) => {
 }
 
 test('large rebuild state migration creates typed schema and indexes', () => {
-  const result = runScript<{
-    columns: Array<{columnName: string}>
-    indexes: Array<{indexName: string}>
-  }>(`
+  const result = runScript<{columns: Array<{columnName: string}>; indexes: Array<{indexName: string}>}>(`
     const columns = await database.queryJson(\`
       SELECT column_name AS columnName
       FROM information_schema.columns
@@ -103,7 +100,11 @@ test('large rebuild state migration creates typed schema and indexes', () => {
     await database.close()
   `)
 
-  expect(result.columns.map((column) => column.columnName)).toEqual([
+  expect(
+    result.columns.map((column) => {
+      return column.columnName
+    }),
+  ).toEqual([
     'project_id',
     'refresh_token',
     'rebuild_phase',
@@ -121,10 +122,11 @@ test('large rebuild state migration creates typed schema and indexes', () => {
     'updated_at',
     'operator_note',
   ])
-  expect(result.indexes.map((index) => index.indexName)).toEqual([
-    'idx_app_project_mart_large_rebuild_state_claim',
-    'idx_app_project_mart_large_rebuild_state_stale_work',
-  ])
+  expect(
+    result.indexes.map((index) => {
+      return index.indexName
+    }),
+  ).toEqual(['idx_app_project_mart_large_rebuild_state_claim', 'idx_app_project_mart_large_rebuild_state_stale_work'])
 })
 
 test('queueLargeRebuild creates and resets queued rebuild state', () => {
@@ -173,6 +175,70 @@ test('queueLargeRebuild creates and resets queued rebuild state', () => {
   expect(result.row.lastError).toBeNull()
 })
 
+test('queueLargeRebuild preserves cursor progress when requeued in the same phase', () => {
+  const result = runScript<{
+    row: {
+      cursorArticleCreatedAt: string | null
+      cursorArticleId: string | null
+      rebuildPhase: string
+      refreshToken: number
+    } | null
+  }>(`
+    await service.queueLargeRebuild({
+      cursorArticleCreatedAt: new Date('2026-04-03T08:00:00.000Z'),
+      cursorArticleId: 'article-1',
+      projectId: 'large-rebuild-project-1',
+      rebuildPhase: 'prompt_answer_fact',
+      refreshToken: 7,
+    })
+    await service.queueLargeRebuild({
+      projectId: 'large-rebuild-project-1',
+      rebuildPhase: 'prompt_answer_fact',
+      refreshToken: 11,
+    })
+
+    console.log(JSON.stringify({row: await service.getLargeRebuildState('large-rebuild-project-1')}))
+    await database.close()
+  `)
+
+  expect(result.row?.refreshToken).toBe(11)
+  expect(result.row?.rebuildPhase).toBe('prompt_answer_fact')
+  expect(result.row?.cursorArticleId).toBe('article-1')
+  expect(new Date(result.row?.cursorArticleCreatedAt ?? '').toISOString()).toBe('2026-04-03T08:00:00.000Z')
+})
+
+test('queueLargeRebuild resets cursor progress when requeued into a new phase', () => {
+  const result = runScript<{
+    row: {
+      cursorArticleCreatedAt: string | null
+      cursorArticleId: string | null
+      rebuildPhase: string
+      refreshToken: number
+    } | null
+  }>(`
+    await service.queueLargeRebuild({
+      cursorArticleCreatedAt: new Date('2026-04-03T08:00:00.000Z'),
+      cursorArticleId: 'article-1',
+      projectId: 'large-rebuild-project-1',
+      rebuildPhase: 'prompt_answer_fact',
+      refreshToken: 7,
+    })
+    await service.queueLargeRebuild({
+      projectId: 'large-rebuild-project-1',
+      rebuildPhase: 'review_article_filter_member',
+      refreshToken: 11,
+    })
+
+    console.log(JSON.stringify({row: await service.getLargeRebuildState('large-rebuild-project-1')}))
+    await database.close()
+  `)
+
+  expect(result.row?.refreshToken).toBe(11)
+  expect(result.row?.rebuildPhase).toBe('review_article_filter_member')
+  expect(result.row?.cursorArticleId).toBeNull()
+  expect(result.row?.cursorArticleCreatedAt).toBeNull()
+})
+
 test('claim heartbeat complete fail and reset large rebuild state', () => {
   const result = runScript<{
     claimed: Array<{projectId: string; rebuildPhase: string; refreshToken: number; workerId: string}>
@@ -217,10 +283,16 @@ test('claim heartbeat complete fail and reset large rebuild state', () => {
   `)
 
   expect(result.claimed).toHaveLength(2)
-  expect(result.claimed.map((row) => row.projectId)).toEqual(['large-rebuild-project-1', 'large-rebuild-project-2'])
+  expect(
+    result.claimed.map((row) => {
+      return row.projectId
+    }),
+  ).toEqual(['large-rebuild-project-1', 'large-rebuild-project-2'])
   expect(result.heartbeated?.projectId).toBe('large-rebuild-project-1')
   expect(result.completed?.projectId).toBe('large-rebuild-project-1')
+  expect(result.completed?.refreshToken).toBe(0)
   expect(result.completed?.refreshStatus).toBe('idle')
+  expect(result.completed?.cursorArticleId).toBeNull()
   expect(result.failed?.projectId).toBe('large-rebuild-project-2')
   expect(result.failed?.refreshStatus).toBe('failed')
   expect(result.failed?.lastError).toBe('phase crashed')
@@ -232,11 +304,28 @@ test('claim heartbeat complete fail and reset large rebuild state', () => {
   expect(result.reset?.lastError).toBeNull()
 })
 
+test('claimLargeRebuilds rotates to less recently started work instead of starving other projects', () => {
+  const result = runScript<{firstClaim: Array<{projectId: string}>; secondClaim: Array<{projectId: string}>}>(`
+    await service.queueLargeRebuild({projectId: 'large-rebuild-project-1', rebuildPhase: 'prompt_answer_fact', refreshToken: 1})
+    await service.queueLargeRebuild({projectId: 'large-rebuild-project-2', rebuildPhase: 'prompt_answer_fact', refreshToken: 99})
+
+    const firstClaim = await service.claimLargeRebuilds({leaseMs: 5000, limit: 1, workerId: 'worker-1'})
+    await service.resetLargeRebuild({projectId: 'large-rebuild-project-1', rebuildPhase: 'prompt_answer_fact'})
+    const secondClaim = await service.claimLargeRebuilds({leaseMs: 5000, limit: 1, workerId: 'worker-2'})
+
+    console.log(JSON.stringify({
+      firstClaim: firstClaim.map((claim) => ({projectId: claim.projectId})),
+      secondClaim: secondClaim.map((claim) => ({projectId: claim.projectId})),
+    }))
+    await database.close()
+  `)
+
+  expect(result.firstClaim).toEqual([{projectId: 'large-rebuild-project-1'}])
+  expect(result.secondClaim).toEqual([{projectId: 'large-rebuild-project-2'}])
+})
+
 test('clearArchivedLargeRebuildStates removes archived rebuild debt and claimLargeRebuilds skips archived projects', () => {
-  const result = runScript<{
-    archivedRows: number
-    claims: Array<{projectId: string}>
-  }>(`
+  const result = runScript<{archivedRows: number; claims: Array<{projectId: string}>}>(`
     await database.run(\`
       UPDATE app.project
       SET archived = TRUE
@@ -264,12 +353,11 @@ test('clearArchivedLargeRebuildStates removes archived rebuild debt and claimLar
   expect(result.archivedRows).toBe(0)
 })
 
-
 test('pauseLargeRebuild and resumeLargeRebuild preserve cursor state and exclude paused rows from claims', () => {
   const result = runScript<{
     claimsWhilePaused: Array<{projectId: string}>
-    paused: ProjectMartLargeRebuildStateRecord | null
-    resumed: ProjectMartLargeRebuildStateRecord | null
+    paused: {cursorArticleId: string | null; lastError: string | null; refreshStatus: string} | null
+    resumed: {cursorArticleId: string | null; refreshStatus: string} | null
   }>(`
     await service.queueLargeRebuild({
       cursorArticleCreatedAt: new Date('2026-04-04T08:00:00.000Z'),
@@ -297,7 +385,6 @@ test('pauseLargeRebuild and resumeLargeRebuild preserve cursor state and exclude
   expect(result.resumed?.refreshStatus).toBe('idle')
   expect(result.resumed?.cursorArticleId).toBe('article-paused')
 })
-
 
 test('setLargeRebuildOperatorNote persists durable operator notes separately from errors', () => {
   const result = runScript<{note: string | null; lastError: string | null}>(`
