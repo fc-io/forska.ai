@@ -34,6 +34,11 @@ export type DuckdbAppendRuntimeMetrics = {
   queueDepthByLane: number[]
   totalDurationMs: number
 }
+export type DuckdbBackgroundRuntimeDiagnostics = {
+  configured: DuckdbRuntimeConfig
+  effective: {memoryLimit: string | null; tempDirectory: string | null}
+  instanceOptions: Record<string, string>
+}
 type DuckdbTransactionRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
   run: (statement: string) => Promise<void>
@@ -883,6 +888,21 @@ const getDuckdbRollbackError = async (): Promise<Error | null> => {
 
 export const getDuckdbRuntimeConfig = () => {
   return {...getDuckdbRuntimeConfigValue()}
+}
+
+export const getDuckdbBackgroundRuntimeDiagnostics = async (): Promise<DuckdbBackgroundRuntimeDiagnostics> => {
+  const configured = getDuckdbRuntimeConfig()
+  const [settingsRow] = await runDuckdbBackgroundJsonQuery<{memoryLimit: string | null; tempDirectory: string | null}>(`
+    SELECT
+      current_setting('memory_limit') AS memoryLimit,
+      current_setting('temp_directory') AS tempDirectory
+  `)
+
+  return {
+    configured,
+    effective: {memoryLimit: settingsRow?.memoryLimit ?? null, tempDirectory: settingsRow?.tempDirectory ?? null},
+    instanceOptions: getDuckdbInstanceOptions(configured),
+  }
 }
 
 export const resetDuckdbServiceForTests = () => {

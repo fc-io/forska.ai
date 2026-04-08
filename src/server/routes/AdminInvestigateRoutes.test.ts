@@ -129,7 +129,6 @@ test('admin append metrics route returns append lane metrics', () => {
   }
 })
 
-
 test('admin project mart large rebuild status route returns explicit operator progress for a project', () => {
   const duckdbPath = `/tmp/f1-admin-large-rebuild-status-route-${Date.now()}.duckdb`
   const runRoute = globalThis.Bun.spawnSync(
@@ -216,7 +215,9 @@ test('admin project mart large rebuild status route returns explicit operator pr
 
   try {
     if (runRoute.exitCode !== 0) {
-      throw new Error(runRoute.stderr.toString() || runRoute.stdout.toString() || 'Admin large rebuild status route test failed')
+      throw new Error(
+        runRoute.stderr.toString() || runRoute.stdout.toString() || 'Admin large rebuild status route test failed',
+      )
     }
 
     const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
@@ -241,7 +242,11 @@ test('admin project mart large rebuild status route returns explicit operator pr
       } | null
     }
 
-    expect(responseBody.project).toEqual({archived: false, id: 'project-admin-large-rebuild', name: 'Admin Large Rebuild'})
+    expect(responseBody.project).toEqual({
+      archived: false,
+      id: 'project-admin-large-rebuild',
+      name: 'Admin Large Rebuild',
+    })
     expect(responseBody.refreshState).toEqual({
       activeRefreshToken: 0,
       dirtyToken: 7,
@@ -266,6 +271,80 @@ test('admin project mart large rebuild status route returns explicit operator pr
   }
 })
 
+test('admin worker runtime diagnostics route reports effective duckdb settings and process memory', () => {
+  const duckdbPath = `/tmp/f1-admin-worker-runtime-diagnostics-${Date.now()}.duckdb`
+  const tempDirectory = `/tmp/f1-admin-worker-runtime-diagnostics-temp-${Date.now()}`
+  const runRoute = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {Elysia} = await import('elysia')
+        const {adminInvestigateRoutes} = await import('./src/server/routes/AdminInvestigateRoutes.ts')
+        const {closeDuckdbService} = await import('./src/server/utils/duckdbService.ts')
+
+        const app = new Elysia().use(adminInvestigateRoutes)
+        const response = await app.handle(new Request('http://localhost/api/admin/worker-runtime-diagnostics'))
+        console.log(await response.text())
+        await closeDuckdbService()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_MEMORY_LIMIT: '256MiB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: tempDirectory,
+        PROJECT_MART_LARGE_REBUILD_BATCH_SIZE: '8',
+        PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS: '1500',
+        SERVER_ROLE: 'worker',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runRoute.exitCode !== 0) {
+      throw new Error(
+        runRoute.stderr.toString()
+          || runRoute.stdout.toString()
+          || 'Admin worker runtime diagnostics route test failed',
+      )
+    }
+
+    const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
+      duckdb: {
+        configured: {appendLaneCount: number; memoryLimit: string; tempDirectory: string | null}
+        effective: {memoryLimit: string | null; tempDirectory: string | null}
+        instanceOptions: {memory_limit: string; temp_directory?: string}
+      }
+      pid: number
+      processMemory: {heapUsedBytes: number; rssBytes: number}
+      projectMartLargeRebuildHeartbeat: {batchSize: number; pollIntervalMs: number}
+      role: string
+      serverRole: string | null
+    }
+
+    expect(responseBody.serverRole).toBe('worker')
+    expect(responseBody.role).toBe('worker')
+    expect(responseBody.pid).toBeGreaterThan(0)
+    expect(responseBody.duckdb.configured.appendLaneCount).toBeGreaterThan(0)
+    expect(responseBody.duckdb.configured.memoryLimit).toBe('256MiB')
+    expect(responseBody.duckdb.configured.tempDirectory).toBe(tempDirectory)
+    expect(responseBody.duckdb.instanceOptions).toEqual({memory_limit: '256MiB', temp_directory: tempDirectory})
+    expect(responseBody.duckdb.effective.memoryLimit).toBe('256.0 MiB')
+    expect(responseBody.duckdb.effective.tempDirectory).toBe(tempDirectory)
+    expect(responseBody.processMemory.rssBytes).toBeGreaterThan(0)
+    expect(responseBody.processMemory.heapUsedBytes).toBeGreaterThan(0)
+    expect(responseBody.projectMartLargeRebuildHeartbeat).toEqual({batchSize: 8, pollIntervalMs: 1500})
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+  }
+})
 
 test('admin project mart large rebuild run route triggers bounded rebuild cycles for the selected project', () => {
   const duckdbPath = `/tmp/f1-admin-large-rebuild-run-route-${Date.now()}.duckdb`
@@ -415,7 +494,9 @@ test('admin project mart large rebuild run route triggers bounded rebuild cycles
 
   try {
     if (runRoute.exitCode !== 0) {
-      throw new Error(runRoute.stderr.toString() || runRoute.stdout.toString() || 'Admin large rebuild run route test failed')
+      throw new Error(
+        runRoute.stderr.toString() || runRoute.stdout.toString() || 'Admin large rebuild run route test failed',
+      )
     }
 
     const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
@@ -438,7 +519,6 @@ test('admin project mart large rebuild run route triggers bounded rebuild cycles
     removeFileIfExists(`${duckdbPath}.writer.history.json`)
   }
 })
-
 
 test('admin project mart large rebuild pause and resume routes toggle operator status explicitly', () => {
   const duckdbPath = `/tmp/f1-admin-large-rebuild-pause-route-${Date.now()}.duckdb`
@@ -505,7 +585,9 @@ test('admin project mart large rebuild pause and resume routes toggle operator s
 
   try {
     if (runRoute.exitCode !== 0) {
-      throw new Error(runRoute.stderr.toString() || runRoute.stdout.toString() || 'Admin large rebuild pause route test failed')
+      throw new Error(
+        runRoute.stderr.toString() || runRoute.stdout.toString() || 'Admin large rebuild pause route test failed',
+      )
     }
 
     const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
@@ -524,7 +606,6 @@ test('admin project mart large rebuild pause and resume routes toggle operator s
     removeFileIfExists(`${duckdbPath}.writer.history.json`)
   }
 })
-
 
 test('admin project mart large rebuild note route persists operator notes without overwriting errors', () => {
   const duckdbPath = `/tmp/f1-admin-large-rebuild-note-route-${Date.now()}.duckdb`
@@ -584,7 +665,9 @@ test('admin project mart large rebuild note route persists operator notes withou
 
   try {
     if (runRoute.exitCode !== 0) {
-      throw new Error(runRoute.stderr.toString() || runRoute.stdout.toString() || 'Admin large rebuild note route test failed')
+      throw new Error(
+        runRoute.stderr.toString() || runRoute.stdout.toString() || 'Admin large rebuild note route test failed',
+      )
     }
 
     const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {

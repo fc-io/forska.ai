@@ -18,6 +18,10 @@ const getEnvPollIntervalMs = () => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultPollIntervalMs
 }
 
+export const getProjectMartLargeRebuildHeartbeatConfig = () => {
+  return {batchSize: getEnvBatchSize(), pollIntervalMs: getEnvPollIntervalMs()}
+}
+
 const logLargeRebuildHeartbeatError = (error: unknown) => {
   return largeRebuildLogger.warn(
     'project-mart-large-rebuild-heartbeat',
@@ -44,7 +48,10 @@ export const startProjectMartLargeRebuildHeartbeat = (options: ProjectMartLargeR
     running = true
 
     try {
-      await runProjectMartLargeRebuildCycle({batchSize, workerId: `project-mart-large-rebuild-heartbeat:${process.pid}`})
+      await runProjectMartLargeRebuildCycle({
+        batchSize,
+        workerId: `project-mart-large-rebuild-heartbeat:${process.pid}`,
+      })
     } catch (error) {
       logLargeRebuildHeartbeatError(error)
     } finally {
@@ -57,7 +64,9 @@ export const startProjectMartLargeRebuildHeartbeat = (options: ProjectMartLargeR
   }, pollIntervalMs)
 
   interval.unref()
-  console.log(`[projectMartLargeRebuild] background loop starting batch_size=${batchSize} poll_interval_ms=${pollIntervalMs}`)
+  console.log(
+    `[projectMartLargeRebuild] background loop starting batch_size=${batchSize} poll_interval_ms=${pollIntervalMs}`,
+  )
   void runCycle()
 
   const stop = () => {

@@ -5,7 +5,10 @@ import * as appQueryHelpers from '../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../services/getAppQueryService.ts'
 import {runProjectMartLargeRebuildCycles} from '../services/projectMartLargeRebuildCyclesService.ts'
 import {getProjectMartLargeRebuildStateService} from '../services/projectMartLargeRebuildStateService.ts'
+import {getDuckdbBackgroundRuntimeDiagnostics} from '../utils/duckdbService.ts'
+import {getProjectMartLargeRebuildHeartbeatConfig} from '../utils/projectMartLargeRebuildHeartbeat.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
+import {getCurrentServerRole} from '../utils/serverRuntimeRole.ts'
 
 const appDatabaseService = getAppDatabaseService()
 const appQueryService = getAppQueryService()
@@ -705,6 +708,24 @@ export const adminInvestigateRoutes = new Elysia()
   .use(withErrorHandler())
   .get('/api/admin/duckdb-append-metrics', async () => {
     return appDatabaseService.getAppendMetrics()
+  })
+  .get('/api/admin/worker-runtime-diagnostics', async () => {
+    const processMemory = process.memoryUsage()
+
+    return {
+      duckdb: await getDuckdbBackgroundRuntimeDiagnostics(),
+      processMemory: {
+        arrayBuffersBytes: processMemory.arrayBuffers,
+        externalBytes: processMemory.external,
+        heapTotalBytes: processMemory.heapTotal,
+        heapUsedBytes: processMemory.heapUsed,
+        rssBytes: processMemory.rss,
+      },
+      projectMartLargeRebuildHeartbeat: getProjectMartLargeRebuildHeartbeatConfig(),
+      role: getCurrentServerRole(),
+      serverRole: process.env.SERVER_ROLE ?? null,
+      pid: process.pid,
+    }
   })
   .get(
     '/api/admin/project-mart-large-rebuild-status',
