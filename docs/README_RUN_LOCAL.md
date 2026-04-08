@@ -87,6 +87,75 @@ Optional runtime knobs. Pass inline, do not store in `.env`:
 RUN_SERVER_FULL_TEXT_CONVERSION_CRON=true FULL_TEXT_CONVERSION_BATCH_SIZE=5 FULL_TEXT_CONVERSION_CONCURRENCY=2 bun run dev:server
 ```
 
+## Project mart large rebuild tuning
+
+Use shell env only for one-off tuning runs. The portable shipped defaults are:
+
+- `PROJECT_MART_LARGE_REBUILD_BATCH_SIZE=128`
+- `PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS=1000`
+- `PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE=4`
+- Worker DuckDB memory limit selection:
+  - `BACKGROUND_WRITER_DUCKDB_MEMORY_LIMIT` wins when set.
+  - Otherwise `DUCKDB_MEMORY_LIMIT` is reused when set.
+  - Otherwise the split worker derives its limit from host RAM as about half of total memory, clamped between `4GB` and `20GB`.
+
+Recommended profiles:
+
+- Portable default profile:
+
+```bash
+bun run dev:server
+```
+
+- Stronger catch-up profile for larger-memory hosts:
+  - Good starting point for `>=32GB` machines when a rebuild needs to drain obvious backlog.
+
+```bash
+BACKGROUND_WRITER_DUCKDB_MEMORY_LIMIT=12GB \
+PROJECT_MART_LARGE_REBUILD_BATCH_SIZE=512 \
+PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS=500 \
+PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE=8 \
+bun run dev:server
+```
+
+- Conservative profile for smaller machines:
+  - Good starting point for `8-16GB` laptops when you want to protect interactivity.
+
+```bash
+BACKGROUND_WRITER_DUCKDB_MEMORY_LIMIT=4GB \
+PROJECT_MART_LARGE_REBUILD_BATCH_SIZE=64 \
+PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS=1500 \
+PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE=2 \
+bun run dev:server
+```
+
+Live signals to watch while tuning:
+
+- Worker memory and effective DuckDB runtime:
+  - `curl -s http://127.0.0.1:3001/api/admin/worker-runtime-diagnostics`
+  - Watch `processMemory.rssBytes`, the effective DuckDB `memoryLimit`, and `tempDirectory`.
+- Rebuild burst behavior:
+  - The worker log prints `batch_size`, `max_cycles_per_wake`, and `poll_interval_ms` when the heartbeat starts.
+  - `projectMartLargeRebuildRuntimeMetrics.recentCycles` shows whether one wake is processing multiple consecutive cycles and whether work is landing on the background queue.
+- DuckDB queue contention:
+  - From the same diagnostics response, watch `projectMartLargeRebuildRuntimeMetrics.recentCycles[].duckdbQueues.background` and `.main` for queue depth, wait time, and task deltas.
+- Rebuild progress:
+  - `curl -s "http://127.0.0.1:3001/api/admin/project-mart-large-rebuild-status?projectId=<project-id>"`
+  - Watch the cursor fields and phase progress estimates to confirm the rebuild keeps moving.
+- SQLite drain health:
+  - Open `/admin/jobs/<job-id>` and watch `Last ACK seq` and `Retained` under Local Storage Health.
+  - A healthy catch-up run makes `lastAckSeq` move and `retainedRowCount` trend down.
+- Temp spill and user impact:
+  - Watch the DuckDB temp directory size on disk and keep it from growing explosively.
+  - Check that API requests stay responsive while the rebuild is active.
+
+Practical tuning loop:
+
+- If `rssBytes` stays stable, temp spill stays flat, and API latency is acceptable, raise batch size first.
+- If one wake still only clears a little visible work, raise `PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE` before pushing memory harder.
+- If temp growth jumps or API latency regresses, step batch size or per-wake burst back down.
+- Change `BACKGROUND_WRITER_DUCKDB_MEMORY_LIMIT` only after the faster batch and wake settings still leave the worker clearly memory-bound.
+
 ## Allowed env surface
 
 Most local users should not set any env vars beyond one-off inline overrides.
@@ -96,5 +165,6 @@ Most local users should not set any env vars beyond one-off inline overrides.
 - App server wiring: `APP_SERVER_API_HOST`, `APP_SERVER_API_PORT`, `APP_SERVER_API_SCHEME`, `APP_SERVER_DIST_DIR`, `APP_SERVER_PORT`
 - Advanced server role wiring: `SERVER_ROLE`, `SERVER_WRITER_URL`
 - Background job toggles: `RUN_SERVER_FULL_TEXT_FETCHING`, `RUN_SERVER_FULL_TEXT_CONVERSION_CRON`, `FULL_TEXT_CONVERSION_BATCH_SIZE`, `FULL_TEXT_CONVERSION_CONCURRENCY`
+- Project mart rebuild tuning: `PROJECT_MART_LARGE_REBUILD_BATCH_SIZE`, `PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS`, `PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE`, `BACKGROUND_WRITER_DUCKDB_MEMORY_LIMIT`
 - Runtime and launcher metadata: `FORSKA_RUNTIME_*`, `GPU_*`, `TP_SIZE`, `PP_SIZE`, `DP_SIZE`, `NVIDIA_SMI_WORKER_URLS`, `NVIDIA_SMI_WORKER_URLS_LOCAL`, `NVIDIA_SMI_SSH_JUMP_HOST`
 - Scheduler and transport tuning: `CODEX_MAX_INFLIGHT`, `JUDGE_CHUNK_MAX_PARALLEL`, `JUDGE_FIRST_REQUEST_LOG_FULL`, `JUDGE_FIRST_REQUEST_PREVIEW_CHARS`, `JUDGMENTS_ADD_TO_QUEUE_MAX_BATCH_SIZE`, `JUDGMENTS_READY_TARGET_MULTIPLIER`, `SGLANG_API_MAX_BURST_REQUESTS`, `SGLANG_API_MAX_INFLIGHT_REQUESTS`, `SGLANG_MAX_RUNNING_REQUESTS`, `BUN_CONFIG_MAX_HTTP_REQUESTS`

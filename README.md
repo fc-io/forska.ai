@@ -88,6 +88,8 @@ In the Forska UI:
 
 More local runtime notes: [RUN LOCAL](./docs/README_RUN_LOCAL.md)
 
+Large rebuild tuning guidance: [RUN LOCAL](./docs/README_RUN_LOCAL.md#project-mart-large-rebuild-tuning)
+
 ## Run remotely on HPC:
 
 [RUN REMOTE](./docs/README_RUN_REMOTE.md)
