@@ -34,10 +34,21 @@ export type DuckdbAppendRuntimeMetrics = {
   queueDepthByLane: number[]
   totalDurationMs: number
 }
+type DuckdbSingleQueueRuntimeMetrics = {
+  lastDurationMs: number | null
+  lastWaitMs: number | null
+  maxQueueDepth: number
+  queueDepth: number
+  tasksCompleted: number
+  tasksStarted: number
+  totalDurationMs: number
+  totalWaitMs: number
+}
 export type DuckdbBackgroundRuntimeDiagnostics = {
   configured: DuckdbRuntimeConfig
   effective: {memoryLimit: string | null; tempDirectory: string | null}
   instanceOptions: Record<string, string>
+  queues: {background: DuckdbSingleQueueRuntimeMetrics; main: DuckdbSingleQueueRuntimeMetrics}
 }
 type DuckdbTransactionRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -56,11 +67,27 @@ type DuckdbServiceState = {
   appendTotalBatchesStarted: number
   appendTotalDurationMs: number
   backgroundConnection: DuckDBConnection | null
+  backgroundLastDurationMs: number | null
+  backgroundLastWaitMs: number | null
+  backgroundMaxQueueDepth: number
+  backgroundPendingCount: number
   backgroundQueue: Promise<void>
+  backgroundTasksCompleted: number
+  backgroundTasksStarted: number
+  backgroundTotalDurationMs: number
+  backgroundTotalWaitMs: number
   controlConnection: DuckDBConnection | null
   duckdbInstance: DuckDBInstance | null
+  duckdbLastDurationMs: number | null
+  duckdbLastWaitMs: number | null
+  duckdbMaxQueueDepth: number
+  duckdbPendingCount: number
   duckdbQueue: Promise<void>
   duckdbRuntimeConfig: DuckdbRuntimeConfig | null
+  duckdbTasksCompleted: number
+  duckdbTasksStarted: number
+  duckdbTotalDurationMs: number
+  duckdbTotalWaitMs: number
   nextAppendLaneIndex: number
   shutdownHooksRegistered: boolean
   startupPromise: Promise<DuckDBConnection> | null
@@ -113,11 +140,27 @@ const getDuckdbServiceState = () => {
     appendTotalBatchesStarted: 0,
     appendTotalDurationMs: 0,
     backgroundConnection: null,
+    backgroundLastDurationMs: null,
+    backgroundLastWaitMs: null,
+    backgroundMaxQueueDepth: 0,
+    backgroundPendingCount: 0,
     backgroundQueue: Promise.resolve(),
+    backgroundTasksCompleted: 0,
+    backgroundTasksStarted: 0,
+    backgroundTotalDurationMs: 0,
+    backgroundTotalWaitMs: 0,
     controlConnection: null,
     duckdbInstance: null,
+    duckdbLastDurationMs: null,
+    duckdbLastWaitMs: null,
+    duckdbMaxQueueDepth: 0,
+    duckdbPendingCount: 0,
     duckdbQueue: Promise.resolve(),
     duckdbRuntimeConfig: null,
+    duckdbTasksCompleted: 0,
+    duckdbTasksStarted: 0,
+    duckdbTotalDurationMs: 0,
+    duckdbTotalWaitMs: 0,
     nextAppendLaneIndex: 0,
     shutdownHooksRegistered: false,
     startupPromise: null,
@@ -299,11 +342,27 @@ const resetDuckdbRuntimeState = () => {
   duckdbServiceState.appendTotalBatchesStarted = 0
   duckdbServiceState.appendTotalDurationMs = 0
   duckdbServiceState.backgroundConnection = null
+  duckdbServiceState.backgroundLastDurationMs = null
+  duckdbServiceState.backgroundLastWaitMs = null
+  duckdbServiceState.backgroundMaxQueueDepth = 0
+  duckdbServiceState.backgroundPendingCount = 0
   duckdbServiceState.backgroundQueue = Promise.resolve()
+  duckdbServiceState.backgroundTasksCompleted = 0
+  duckdbServiceState.backgroundTasksStarted = 0
+  duckdbServiceState.backgroundTotalDurationMs = 0
+  duckdbServiceState.backgroundTotalWaitMs = 0
   duckdbServiceState.controlConnection = null
   duckdbServiceState.duckdbInstance = null
+  duckdbServiceState.duckdbLastDurationMs = null
+  duckdbServiceState.duckdbLastWaitMs = null
+  duckdbServiceState.duckdbMaxQueueDepth = 0
+  duckdbServiceState.duckdbPendingCount = 0
   duckdbServiceState.duckdbQueue = Promise.resolve()
   duckdbServiceState.duckdbRuntimeConfig = null
+  duckdbServiceState.duckdbTasksCompleted = 0
+  duckdbServiceState.duckdbTasksStarted = 0
+  duckdbServiceState.duckdbTotalDurationMs = 0
+  duckdbServiceState.duckdbTotalWaitMs = 0
   duckdbServiceState.nextAppendLaneIndex = 0
   duckdbServiceState.startupPromise = null
 }
@@ -656,12 +715,35 @@ const ensureStartedDuckdbProcess = async () => {
 }
 
 const enqueueDuckdbWork = async <T>(work: () => Promise<T>): Promise<T> => {
-  const queuedWork = duckdbServiceState.duckdbQueue.then(work)
+  const queuedAtMs = Date.now()
+  duckdbServiceState.duckdbPendingCount += 1
+  duckdbServiceState.duckdbMaxQueueDepth = Math.max(
+    duckdbServiceState.duckdbMaxQueueDepth,
+    duckdbServiceState.duckdbPendingCount,
+  )
+  const queuedWork = duckdbServiceState.duckdbQueue.then(async () => {
+    const startedAtMs = Date.now()
+    const waitMs = startedAtMs - queuedAtMs
+    duckdbServiceState.duckdbLastWaitMs = waitMs
+    duckdbServiceState.duckdbTasksStarted += 1
+    duckdbServiceState.duckdbTotalWaitMs += waitMs
+
+    try {
+      return await work()
+    } finally {
+      const durationMs = Date.now() - startedAtMs
+      duckdbServiceState.duckdbLastDurationMs = durationMs
+      duckdbServiceState.duckdbTasksCompleted += 1
+      duckdbServiceState.duckdbTotalDurationMs += durationMs
+    }
+  })
   duckdbServiceState.duckdbQueue = queuedWork.then(
     () => {
+      duckdbServiceState.duckdbPendingCount = Math.max(0, duckdbServiceState.duckdbPendingCount - 1)
       return undefined
     },
     () => {
+      duckdbServiceState.duckdbPendingCount = Math.max(0, duckdbServiceState.duckdbPendingCount - 1)
       return undefined
     },
   )
@@ -669,12 +751,35 @@ const enqueueDuckdbWork = async <T>(work: () => Promise<T>): Promise<T> => {
 }
 
 const enqueueDuckdbBackgroundWork = async <T>(work: () => Promise<T>): Promise<T> => {
-  const queuedWork = duckdbServiceState.backgroundQueue.then(work)
+  const queuedAtMs = Date.now()
+  duckdbServiceState.backgroundPendingCount += 1
+  duckdbServiceState.backgroundMaxQueueDepth = Math.max(
+    duckdbServiceState.backgroundMaxQueueDepth,
+    duckdbServiceState.backgroundPendingCount,
+  )
+  const queuedWork = duckdbServiceState.backgroundQueue.then(async () => {
+    const startedAtMs = Date.now()
+    const waitMs = startedAtMs - queuedAtMs
+    duckdbServiceState.backgroundLastWaitMs = waitMs
+    duckdbServiceState.backgroundTasksStarted += 1
+    duckdbServiceState.backgroundTotalWaitMs += waitMs
+
+    try {
+      return await work()
+    } finally {
+      const durationMs = Date.now() - startedAtMs
+      duckdbServiceState.backgroundLastDurationMs = durationMs
+      duckdbServiceState.backgroundTasksCompleted += 1
+      duckdbServiceState.backgroundTotalDurationMs += durationMs
+    }
+  })
   duckdbServiceState.backgroundQueue = queuedWork.then(
     () => {
+      duckdbServiceState.backgroundPendingCount = Math.max(0, duckdbServiceState.backgroundPendingCount - 1)
       return undefined
     },
     () => {
+      duckdbServiceState.backgroundPendingCount = Math.max(0, duckdbServiceState.backgroundPendingCount - 1)
       return undefined
     },
   )
@@ -902,6 +1007,28 @@ export const getDuckdbBackgroundRuntimeDiagnostics = async (): Promise<DuckdbBac
     configured,
     effective: {memoryLimit: settingsRow?.memoryLimit ?? null, tempDirectory: settingsRow?.tempDirectory ?? null},
     instanceOptions: getDuckdbInstanceOptions(configured),
+    queues: {
+      background: {
+        lastDurationMs: duckdbServiceState.backgroundLastDurationMs,
+        lastWaitMs: duckdbServiceState.backgroundLastWaitMs,
+        maxQueueDepth: duckdbServiceState.backgroundMaxQueueDepth,
+        queueDepth: duckdbServiceState.backgroundPendingCount,
+        tasksCompleted: duckdbServiceState.backgroundTasksCompleted,
+        tasksStarted: duckdbServiceState.backgroundTasksStarted,
+        totalDurationMs: duckdbServiceState.backgroundTotalDurationMs,
+        totalWaitMs: duckdbServiceState.backgroundTotalWaitMs,
+      },
+      main: {
+        lastDurationMs: duckdbServiceState.duckdbLastDurationMs,
+        lastWaitMs: duckdbServiceState.duckdbLastWaitMs,
+        maxQueueDepth: duckdbServiceState.duckdbMaxQueueDepth,
+        queueDepth: duckdbServiceState.duckdbPendingCount,
+        tasksCompleted: duckdbServiceState.duckdbTasksCompleted,
+        tasksStarted: duckdbServiceState.duckdbTasksStarted,
+        totalDurationMs: duckdbServiceState.duckdbTotalDurationMs,
+        totalWaitMs: duckdbServiceState.duckdbTotalWaitMs,
+      },
+    },
   }
 }
 

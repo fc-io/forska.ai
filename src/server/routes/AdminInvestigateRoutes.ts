@@ -7,6 +7,7 @@ import {runProjectMartLargeRebuildCycles} from '../services/projectMartLargeRebu
 import {getProjectMartLargeRebuildStateService} from '../services/projectMartLargeRebuildStateService.ts'
 import {getDuckdbBackgroundRuntimeDiagnostics} from '../utils/duckdbService.ts'
 import {getProjectMartLargeRebuildHeartbeatConfig} from '../utils/projectMartLargeRebuildHeartbeat.ts'
+import {getProjectMartLargeRebuildRuntimeMetrics} from '../utils/projectMartLargeRebuildRuntimeMetrics.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {getCurrentServerRole} from '../utils/serverRuntimeRole.ts'
 
@@ -722,6 +723,7 @@ export const adminInvestigateRoutes = new Elysia()
         rssBytes: processMemory.rss,
       },
       projectMartLargeRebuildHeartbeat: getProjectMartLargeRebuildHeartbeatConfig(),
+      projectMartLargeRebuildRuntimeMetrics: getProjectMartLargeRebuildRuntimeMetrics(),
       role: getCurrentServerRole(),
       serverRole: process.env.SERVER_ROLE ?? null,
       pid: process.pid,

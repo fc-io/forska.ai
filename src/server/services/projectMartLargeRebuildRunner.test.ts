@@ -1,9 +1,17 @@
-import {expect, mock, test} from 'bun:test'
+import {beforeEach, expect, mock, test} from 'bun:test'
 
+import {
+  getProjectMartLargeRebuildRuntimeMetrics,
+  resetProjectMartLargeRebuildRuntimeMetricsForTests,
+} from '../utils/projectMartLargeRebuildRuntimeMetrics.ts'
 import {
   type ProjectMartLargeRebuildRunnerDependencies,
   runProjectMartLargeRebuildCycle,
 } from './projectMartLargeRebuildRunner.ts'
+
+beforeEach(() => {
+  resetProjectMartLargeRebuildRuntimeMetricsForTests()
+})
 
 const createRunnerContext = (params: {
   batchRows?: Array<{
@@ -177,9 +185,20 @@ test('returns idle when no large rebuild work is claimable', async () => {
   const context = createRunnerContext({})
 
   const result = await runProjectMartLargeRebuildCycle({workerId: 'worker-1'}, context.dependencies)
+  const runtimeMetrics = getProjectMartLargeRebuildRuntimeMetrics()
 
   expect(result).toEqual({projectId: null, status: 'idle', workerId: 'worker-1'})
   expect(context.callLog).toEqual(['clearArchived', 'claim'])
+  expect(runtimeMetrics.totals.cyclesIdle).toBe(1)
+  expect(runtimeMetrics.recentCycles).toHaveLength(1)
+  expect(runtimeMetrics.recentCycles[0]).toMatchObject({
+    articleCount: 0,
+    error: null,
+    phase: null,
+    projectId: null,
+    status: 'idle',
+    workerId: 'worker-1',
+  })
 })
 
 test('runs one prompt_answer_fact batch and advances the cursor', async () => {
@@ -217,6 +236,7 @@ test('runs one prompt_answer_fact batch and advances the cursor', async () => {
   })
 
   const result = await runProjectMartLargeRebuildCycle({workerId: 'worker-1'}, context.dependencies)
+  const runtimeMetrics = getProjectMartLargeRebuildRuntimeMetrics()
 
   expect(result).toEqual({
     articleCount: 2,
@@ -235,6 +255,16 @@ test('runs one prompt_answer_fact batch and advances the cursor', async () => {
     'advance:project-1:article-2:prompt_answer_fact',
   ])
   expect(context.rebuildBatches).toEqual([['article-1', 'article-2']])
+  expect(runtimeMetrics.totals.cyclesProgressed).toBe(1)
+  expect(runtimeMetrics.totals.rowsProcessed).toBe(2)
+  expect(runtimeMetrics.recentCycles[0]).toMatchObject({
+    articleCount: 2,
+    error: null,
+    phase: 'prompt_answer_fact',
+    projectId: 'project-1',
+    status: 'progressed',
+    workerId: 'worker-1',
+  })
 })
 
 test('transitions from prompt_answer_fact to review_answer_dictionary when no rows remain for the current cursor', async () => {
@@ -414,6 +444,7 @@ test('fails unsupported phases explicitly', async () => {
   })
 
   const result = await runProjectMartLargeRebuildCycle({workerId: 'worker-1'}, context.dependencies)
+  const runtimeMetrics = getProjectMartLargeRebuildRuntimeMetrics()
 
   expect(result).toEqual({
     error: 'Missing large rebuild state for project-1',
@@ -422,4 +453,13 @@ test('fails unsupported phases explicitly', async () => {
     workerId: 'worker-1',
   })
   expect(context.failed).toEqual([{error: 'Missing large rebuild state for project-1', projectId: 'project-1'}])
+  expect(runtimeMetrics.totals.cyclesFailed).toBe(1)
+  expect(runtimeMetrics.recentCycles[0]).toMatchObject({
+    articleCount: 0,
+    error: 'Missing large rebuild state for project-1',
+    phase: 'review_article_rollup',
+    projectId: 'project-1',
+    status: 'failed',
+    workerId: 'worker-1',
+  })
 })

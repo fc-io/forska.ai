@@ -319,10 +319,24 @@ test('admin worker runtime diagnostics route reports effective duckdb settings a
         configured: {appendLaneCount: number; memoryLimit: string; tempDirectory: string | null}
         effective: {memoryLimit: string | null; tempDirectory: string | null}
         instanceOptions: {memory_limit: string; temp_directory?: string}
+        queues: {
+          background: {maxQueueDepth: number; queueDepth: number; tasksCompleted: number; tasksStarted: number}
+          main: {maxQueueDepth: number; queueDepth: number; tasksCompleted: number; tasksStarted: number}
+        }
       }
       pid: number
       processMemory: {heapUsedBytes: number; rssBytes: number}
       projectMartLargeRebuildHeartbeat: {batchSize: number; pollIntervalMs: number}
+      projectMartLargeRebuildRuntimeMetrics: {
+        recentCycles: unknown[]
+        totals: {
+          cyclesCompleted: number
+          cyclesFailed: number
+          cyclesIdle: number
+          cyclesProgressed: number
+          rowsProcessed: number
+        }
+      }
       role: string
       serverRole: string | null
     }
@@ -336,9 +350,23 @@ test('admin worker runtime diagnostics route reports effective duckdb settings a
     expect(responseBody.duckdb.instanceOptions).toEqual({memory_limit: '256MiB', temp_directory: tempDirectory})
     expect(responseBody.duckdb.effective.memoryLimit).toBe('256.0 MiB')
     expect(responseBody.duckdb.effective.tempDirectory).toBe(tempDirectory)
+    expect(responseBody.duckdb.queues.main.tasksStarted).toBeGreaterThanOrEqual(0)
+    expect(responseBody.duckdb.queues.main.tasksCompleted).toBeGreaterThanOrEqual(0)
+    expect(responseBody.duckdb.queues.main.queueDepth).toBe(0)
+    expect(responseBody.duckdb.queues.background.tasksStarted).toBeGreaterThan(0)
+    expect(responseBody.duckdb.queues.background.tasksCompleted).toBeGreaterThan(0)
+    expect(responseBody.duckdb.queues.background.queueDepth).toBe(0)
     expect(responseBody.processMemory.rssBytes).toBeGreaterThan(0)
     expect(responseBody.processMemory.heapUsedBytes).toBeGreaterThan(0)
     expect(responseBody.projectMartLargeRebuildHeartbeat).toEqual({batchSize: 8, pollIntervalMs: 1500})
+    expect(responseBody.projectMartLargeRebuildRuntimeMetrics.recentCycles).toEqual([])
+    expect(responseBody.projectMartLargeRebuildRuntimeMetrics.totals).toEqual({
+      cyclesCompleted: 0,
+      cyclesFailed: 0,
+      cyclesIdle: 0,
+      cyclesProgressed: 0,
+      rowsProcessed: 0,
+    })
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.writer.lock`)

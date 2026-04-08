@@ -1,4 +1,5 @@
 import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
+import {recordProjectMartLargeRebuildCycleMetric} from '../utils/projectMartLargeRebuildRuntimeMetrics.ts'
 import {
   getProjectMartLargeRebuildExecutor,
   type ProjectMartLargeRebuildBatchCursor,
@@ -425,6 +426,8 @@ export const runProjectMartLargeRebuildCycle = async (
   options: ProjectMartLargeRebuildRunnerOptions,
   dependencies: ProjectMartLargeRebuildRunnerDependencies = defaultDependencies,
 ): Promise<ProjectMartLargeRebuildRunnerResult> => {
+  const startedAtMs = Date.now()
+  const startedAt = new Date(startedAtMs).toISOString()
   await dependencies.largeRebuildStateService.clearArchivedLargeRebuildStates()
 
   const [claim] = await dependencies.largeRebuildStateService.claimLargeRebuilds({
@@ -436,39 +439,74 @@ export const runProjectMartLargeRebuildCycle = async (
   })
 
   if (!claim) {
-    return {projectId: null, status: 'idle', workerId: options.workerId}
+    const result = {
+      projectId: null,
+      status: 'idle',
+      workerId: options.workerId,
+    } satisfies ProjectMartLargeRebuildRunnerResult
+    recordProjectMartLargeRebuildCycleMetric({
+      articleCount: 0,
+      durationMs: Date.now() - startedAtMs,
+      endedAt: new Date().toISOString(),
+      error: null,
+      phase: null,
+      projectId: null,
+      startedAt,
+      status: result.status,
+      workerId: options.workerId,
+    })
+    return result
   }
 
   const stopHeartbeat = startHeartbeat(claim, options, dependencies)
 
   try {
+    let result: ProjectMartLargeRebuildRunnerResult
+
     if (claim.rebuildPhase === 'prompt_answer_fact') {
-      return await runPromptAnswerFactPhase(claim, options, dependencies)
+      result = await runPromptAnswerFactPhase(claim, options, dependencies)
+    } else if (claim.rebuildPhase === 'review_answer_dictionary') {
+      result = await runReviewAnswerDictionaryPhase(claim, options, dependencies)
+    } else if (claim.rebuildPhase === 'review_article_filter_member') {
+      result = await runReviewArticleFilterMemberPhase(claim, options, dependencies)
+    } else if (claim.rebuildPhase === 'review_article_rollup') {
+      result = await runReviewArticleRollupPhase(claim, options, dependencies)
+    } else if (claim.rebuildPhase === 'review_article_serving') {
+      result = await runReviewArticleServingPhase(claim, options, dependencies)
+    } else {
+      throw new Error(`Unsupported large rebuild phase ${claim.rebuildPhase}`)
     }
 
-    if (claim.rebuildPhase === 'review_answer_dictionary') {
-      return await runReviewAnswerDictionaryPhase(claim, options, dependencies)
-    }
+    recordProjectMartLargeRebuildCycleMetric({
+      articleCount: result.status === 'progressed' ? result.articleCount : 0,
+      durationMs: Date.now() - startedAtMs,
+      endedAt: new Date().toISOString(),
+      error: null,
+      phase: claim.rebuildPhase,
+      projectId: claim.projectId,
+      startedAt,
+      status: result.status,
+      workerId: options.workerId,
+    })
 
-    if (claim.rebuildPhase === 'review_article_filter_member') {
-      return await runReviewArticleFilterMemberPhase(claim, options, dependencies)
-    }
-
-    if (claim.rebuildPhase === 'review_article_rollup') {
-      return await runReviewArticleRollupPhase(claim, options, dependencies)
-    }
-
-    if (claim.rebuildPhase === 'review_article_serving') {
-      return await runReviewArticleServingPhase(claim, options, dependencies)
-    }
-
-    throw new Error(`Unsupported large rebuild phase ${claim.rebuildPhase}`)
+    return result
   } catch (error) {
     const errorText = getErrorText(error)
     await dependencies.largeRebuildStateService.failLargeRebuild({
       error: errorText,
       now: getNow(options.now),
       projectId: claim.projectId,
+      workerId: options.workerId,
+    })
+    recordProjectMartLargeRebuildCycleMetric({
+      articleCount: 0,
+      durationMs: Date.now() - startedAtMs,
+      endedAt: new Date().toISOString(),
+      error: errorText,
+      phase: claim.rebuildPhase,
+      projectId: claim.projectId,
+      startedAt,
+      status: 'failed',
       workerId: options.workerId,
     })
     return {error: errorText, projectId: claim.projectId, status: 'failed', workerId: options.workerId}
