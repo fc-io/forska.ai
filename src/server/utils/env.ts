@@ -93,13 +93,13 @@ export const loadEnv = ({
     merged.PROJECT_MART_LARGE_REBUILD_BATCH_SIZE == null
     || String(merged.PROJECT_MART_LARGE_REBUILD_BATCH_SIZE).trim() === ''
   ) {
-    ;(merged as Record<string, string>).PROJECT_MART_LARGE_REBUILD_BATCH_SIZE = '1'
+    ;(merged as Record<string, string>).PROJECT_MART_LARGE_REBUILD_BATCH_SIZE = '128'
   }
   if (
     merged.PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS == null
     || String(merged.PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS).trim() === ''
   ) {
-    ;(merged as Record<string, string>).PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS = '5000'
+    ;(merged as Record<string, string>).PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS = '1000'
   }
   return envShape.assert(merged)
 }

@@ -4,8 +4,8 @@ import {registerWriterDemotionHandler, shouldCurrentServerRunWriterWork} from '.
 
 type ProjectMartLargeRebuildHeartbeatOptions = {batchSize?: number; pollIntervalMs?: number}
 
-const defaultBatchSize = 1
-const defaultPollIntervalMs = 5_000
+const defaultBatchSize = 128
+const defaultPollIntervalMs = 1_000
 const largeRebuildLogger = createRateLimitedLogger({windowMs: 30_000})
 
 const getEnvBatchSize = () => {

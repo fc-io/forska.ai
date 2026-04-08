@@ -20,7 +20,11 @@ const getLastJsonLine = (value: string) => {
   return lastLine
 }
 
-test('projectMartLargeRebuildHeartbeat runs one background cycle with conservative default batch size', () => {
+const parseCallsResult = (value: string): {calls: Array<{batchSize: number; workerId: string}>} => {
+  return JSON.parse(value) as {calls: Array<{batchSize: number; workerId: string}>}
+}
+
+test('projectMartLargeRebuildHeartbeat runs one background cycle with portable default batch size', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -58,20 +62,18 @@ test('projectMartLargeRebuildHeartbeat runs one background cycle with conservati
         console.log(JSON.stringify({calls}))
       `,
     ],
-    {cwd: process.cwd(), env: {...process.env, PROJECT_MART_LARGE_REBUILD_BATCH_SIZE: '1'}},
+    {cwd: process.cwd(), env: process.env},
   )
 
   if (runScript.exitCode !== 0) {
-    throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'projectMartLargeRebuildHeartbeat test failed')
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'projectMartLargeRebuildHeartbeat test failed',
+    )
   }
 
-  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
-    calls: Array<{batchSize: number; workerId: string}>
-  }
+  const result = parseCallsResult(getLastJsonLine(runScript.stdout.toString()))
 
   expect(result.calls).toHaveLength(1)
-  expect(result.calls[0]).toEqual({
-    batchSize: 1,
-    workerId: expect.stringContaining('project-mart-large-rebuild-heartbeat:'),
-  })
+  expect(result.calls[0]?.batchSize).toBe(128)
+  expect(result.calls[0]?.workerId).toContain('project-mart-large-rebuild-heartbeat:')
 })
