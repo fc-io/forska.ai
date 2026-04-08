@@ -24,11 +24,23 @@ type GetProjectScopeBatchParams = {
 const defaultProjectMartLargeRebuildBatchSize = 1_000
 const batchEpochSql = "TIMESTAMPTZ '1970-01-01T00:00:00.000Z'"
 
-const defaultProjectMartLargeRebuildExecutorDependencies: ProjectMartLargeRebuildExecutorDependencies = {
-  database: getAppDatabaseService(),
+const getProjectMartLargeRebuildExecutorDatabase = (): ProjectMartLargeRebuildExecutorDependencies['database'] => {
+  const database = getAppDatabaseService()
+
+  return {queryJson: database.queryJsonBackground, run: database.runBackground}
 }
 
-const getBatchOrderSql = ({articleCreatedAtColumn, articleIdColumn}: {articleCreatedAtColumn: string; articleIdColumn: string}) => {
+const defaultProjectMartLargeRebuildExecutorDependencies: ProjectMartLargeRebuildExecutorDependencies = {
+  database: getProjectMartLargeRebuildExecutorDatabase(),
+}
+
+const getBatchOrderSql = ({
+  articleCreatedAtColumn,
+  articleIdColumn,
+}: {
+  articleCreatedAtColumn: string
+  articleIdColumn: string
+}) => {
   return `COALESCE(${articleCreatedAtColumn}, ${batchEpochSql}) ASC, ${articleIdColumn} ASC`
 }
 
@@ -56,7 +68,15 @@ const getBatchCursorWhereSql = ({
   `
 }
 
-const getProjectScopeSourceBatchSql = ({batchSize, cursor, projectId}: {batchSize: number; cursor: ProjectMartLargeRebuildBatchCursor | null; projectId: string}) => {
+const getProjectScopeSourceBatchSql = ({
+  batchSize,
+  cursor,
+  projectId,
+}: {
+  batchSize: number
+  cursor: ProjectMartLargeRebuildBatchCursor | null
+  projectId: string
+}) => {
   const projectLiteral = getSqlLiteral(projectId)
 
   return `
@@ -119,7 +139,11 @@ const getProjectScopeSourceBatchSql = ({batchSize, cursor, projectId}: {batchSiz
 }
 
 const getProjectRefreshArticleIdsSql = (articleIds: string[]) => {
-  return articleIds.map((articleId) => getSqlLiteral(articleId)).join(', ')
+  return articleIds
+    .map((articleId) => {
+      return getSqlLiteral(articleId)
+    })
+    .join(', ')
 }
 
 const getJudgmentFactProjectJoinSql = (judgmentFactTableAlias: string, projectIdExpression: string) => {
@@ -571,12 +595,7 @@ const getProjectScopeSourceBatch = async (
 const getNextBatchCursor = (rows: ProjectMartLargeRebuildScopeBatchRow[]) => {
   const [lastRow] = rows.slice(-1)
 
-  return lastRow
-    ? {
-        articleCreatedAt: lastRow.articleCreatedAt,
-        articleId: lastRow.articleId,
-      }
-    : null
+  return lastRow ? {articleCreatedAt: lastRow.articleCreatedAt, articleId: lastRow.articleId} : null
 }
 
 const resetProjectPromptAnswerFact = async (

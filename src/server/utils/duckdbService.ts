@@ -44,11 +44,15 @@ type DuckdbSingleQueueRuntimeMetrics = {
   totalDurationMs: number
   totalWaitMs: number
 }
+export type DuckdbQueueRuntimeMetrics = {
+  background: DuckdbSingleQueueRuntimeMetrics
+  main: DuckdbSingleQueueRuntimeMetrics
+}
 export type DuckdbBackgroundRuntimeDiagnostics = {
   configured: DuckdbRuntimeConfig
   effective: {memoryLimit: string | null; tempDirectory: string | null}
   instanceOptions: Record<string, string>
-  queues: {background: DuckdbSingleQueueRuntimeMetrics; main: DuckdbSingleQueueRuntimeMetrics}
+  queues: DuckdbQueueRuntimeMetrics
 }
 type DuckdbTransactionRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -1007,27 +1011,31 @@ export const getDuckdbBackgroundRuntimeDiagnostics = async (): Promise<DuckdbBac
     configured,
     effective: {memoryLimit: settingsRow?.memoryLimit ?? null, tempDirectory: settingsRow?.tempDirectory ?? null},
     instanceOptions: getDuckdbInstanceOptions(configured),
-    queues: {
-      background: {
-        lastDurationMs: duckdbServiceState.backgroundLastDurationMs,
-        lastWaitMs: duckdbServiceState.backgroundLastWaitMs,
-        maxQueueDepth: duckdbServiceState.backgroundMaxQueueDepth,
-        queueDepth: duckdbServiceState.backgroundPendingCount,
-        tasksCompleted: duckdbServiceState.backgroundTasksCompleted,
-        tasksStarted: duckdbServiceState.backgroundTasksStarted,
-        totalDurationMs: duckdbServiceState.backgroundTotalDurationMs,
-        totalWaitMs: duckdbServiceState.backgroundTotalWaitMs,
-      },
-      main: {
-        lastDurationMs: duckdbServiceState.duckdbLastDurationMs,
-        lastWaitMs: duckdbServiceState.duckdbLastWaitMs,
-        maxQueueDepth: duckdbServiceState.duckdbMaxQueueDepth,
-        queueDepth: duckdbServiceState.duckdbPendingCount,
-        tasksCompleted: duckdbServiceState.duckdbTasksCompleted,
-        tasksStarted: duckdbServiceState.duckdbTasksStarted,
-        totalDurationMs: duckdbServiceState.duckdbTotalDurationMs,
-        totalWaitMs: duckdbServiceState.duckdbTotalWaitMs,
-      },
+    queues: getDuckdbQueueRuntimeMetricsSnapshot(),
+  }
+}
+
+export const getDuckdbQueueRuntimeMetricsSnapshot = (): DuckdbQueueRuntimeMetrics => {
+  return {
+    background: {
+      lastDurationMs: duckdbServiceState.backgroundLastDurationMs,
+      lastWaitMs: duckdbServiceState.backgroundLastWaitMs,
+      maxQueueDepth: duckdbServiceState.backgroundMaxQueueDepth,
+      queueDepth: duckdbServiceState.backgroundPendingCount,
+      tasksCompleted: duckdbServiceState.backgroundTasksCompleted,
+      tasksStarted: duckdbServiceState.backgroundTasksStarted,
+      totalDurationMs: duckdbServiceState.backgroundTotalDurationMs,
+      totalWaitMs: duckdbServiceState.backgroundTotalWaitMs,
+    },
+    main: {
+      lastDurationMs: duckdbServiceState.duckdbLastDurationMs,
+      lastWaitMs: duckdbServiceState.duckdbLastWaitMs,
+      maxQueueDepth: duckdbServiceState.duckdbMaxQueueDepth,
+      queueDepth: duckdbServiceState.duckdbPendingCount,
+      tasksCompleted: duckdbServiceState.duckdbTasksCompleted,
+      tasksStarted: duckdbServiceState.duckdbTasksStarted,
+      totalDurationMs: duckdbServiceState.duckdbTotalDurationMs,
+      totalWaitMs: duckdbServiceState.duckdbTotalWaitMs,
     },
   }
 }

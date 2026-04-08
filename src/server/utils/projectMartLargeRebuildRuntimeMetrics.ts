@@ -1,8 +1,29 @@
+import type {DuckdbQueueRuntimeMetrics} from './duckdbService.ts'
+
 type ProjectMartLargeRebuildCycleStatus = 'completed' | 'failed' | 'idle' | 'progressed'
+
+type ProjectMartLargeRebuildCycleQueueDelta = {
+  lastDurationMs: number | null
+  lastWaitMs: number | null
+  maxQueueDepth: number
+  queueDepth: number
+  tasksCompleted: number
+  tasksCompletedDelta: number
+  tasksStarted: number
+  tasksStartedDelta: number
+  totalDurationMs: number
+  totalDurationMsDelta: number
+  totalWaitMs: number
+  totalWaitMsDelta: number
+}
 
 type ProjectMartLargeRebuildCycleMetric = {
   articleCount: number
   durationMs: number
+  duckdbQueues: {
+    background: ProjectMartLargeRebuildCycleQueueDelta
+    main: ProjectMartLargeRebuildCycleQueueDelta
+  } | null
   endedAt: string
   error: string | null
   phase: string | null
@@ -57,6 +78,42 @@ export const recordProjectMartLargeRebuildCycleMetric = (metric: ProjectMartLarg
   projectMartLargeRebuildRuntimeMetricsState.totals.cyclesFailed += metric.status === 'failed' ? 1 : 0
   projectMartLargeRebuildRuntimeMetricsState.totals.cyclesIdle += metric.status === 'idle' ? 1 : 0
   projectMartLargeRebuildRuntimeMetricsState.totals.cyclesProgressed += metric.status === 'progressed' ? 1 : 0
+}
+
+export const getProjectMartLargeRebuildCycleQueueDelta = ({
+  finished,
+  started,
+}: {
+  finished: DuckdbQueueRuntimeMetrics
+  started: DuckdbQueueRuntimeMetrics
+}) => {
+  const getQueueDelta = ({
+    finishedQueue,
+    startedQueue,
+  }: {
+    finishedQueue: DuckdbQueueRuntimeMetrics['background']
+    startedQueue: DuckdbQueueRuntimeMetrics['background']
+  }): ProjectMartLargeRebuildCycleQueueDelta => {
+    return {
+      lastDurationMs: finishedQueue.lastDurationMs,
+      lastWaitMs: finishedQueue.lastWaitMs,
+      maxQueueDepth: finishedQueue.maxQueueDepth,
+      queueDepth: finishedQueue.queueDepth,
+      tasksCompleted: finishedQueue.tasksCompleted,
+      tasksCompletedDelta: finishedQueue.tasksCompleted - startedQueue.tasksCompleted,
+      tasksStarted: finishedQueue.tasksStarted,
+      tasksStartedDelta: finishedQueue.tasksStarted - startedQueue.tasksStarted,
+      totalDurationMs: finishedQueue.totalDurationMs,
+      totalDurationMsDelta: finishedQueue.totalDurationMs - startedQueue.totalDurationMs,
+      totalWaitMs: finishedQueue.totalWaitMs,
+      totalWaitMsDelta: finishedQueue.totalWaitMs - startedQueue.totalWaitMs,
+    }
+  }
+
+  return {
+    background: getQueueDelta({finishedQueue: finished.background, startedQueue: started.background}),
+    main: getQueueDelta({finishedQueue: finished.main, startedQueue: started.main}),
+  }
 }
 
 export const getProjectMartLargeRebuildRuntimeMetrics = (): ProjectMartLargeRebuildRuntimeMetrics => {

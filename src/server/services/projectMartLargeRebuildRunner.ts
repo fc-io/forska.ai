@@ -1,5 +1,9 @@
 import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
-import {recordProjectMartLargeRebuildCycleMetric} from '../utils/projectMartLargeRebuildRuntimeMetrics.ts'
+import {getDuckdbQueueRuntimeMetricsSnapshot} from '../utils/duckdbService.ts'
+import {
+  getProjectMartLargeRebuildCycleQueueDelta,
+  recordProjectMartLargeRebuildCycleMetric,
+} from '../utils/projectMartLargeRebuildRuntimeMetrics.ts'
 import {
   getProjectMartLargeRebuildExecutor,
   type ProjectMartLargeRebuildBatchCursor,
@@ -428,6 +432,7 @@ export const runProjectMartLargeRebuildCycle = async (
 ): Promise<ProjectMartLargeRebuildRunnerResult> => {
   const startedAtMs = Date.now()
   const startedAt = new Date(startedAtMs).toISOString()
+  const startedQueueMetrics = getDuckdbQueueRuntimeMetricsSnapshot()
   await dependencies.largeRebuildStateService.clearArchivedLargeRebuildStates()
 
   const [claim] = await dependencies.largeRebuildStateService.claimLargeRebuilds({
@@ -447,6 +452,10 @@ export const runProjectMartLargeRebuildCycle = async (
     recordProjectMartLargeRebuildCycleMetric({
       articleCount: 0,
       durationMs: Date.now() - startedAtMs,
+      duckdbQueues: getProjectMartLargeRebuildCycleQueueDelta({
+        finished: getDuckdbQueueRuntimeMetricsSnapshot(),
+        started: startedQueueMetrics,
+      }),
       endedAt: new Date().toISOString(),
       error: null,
       phase: null,
@@ -480,6 +489,10 @@ export const runProjectMartLargeRebuildCycle = async (
     recordProjectMartLargeRebuildCycleMetric({
       articleCount: result.status === 'progressed' ? result.articleCount : 0,
       durationMs: Date.now() - startedAtMs,
+      duckdbQueues: getProjectMartLargeRebuildCycleQueueDelta({
+        finished: getDuckdbQueueRuntimeMetricsSnapshot(),
+        started: startedQueueMetrics,
+      }),
       endedAt: new Date().toISOString(),
       error: null,
       phase: claim.rebuildPhase,
@@ -501,6 +514,10 @@ export const runProjectMartLargeRebuildCycle = async (
     recordProjectMartLargeRebuildCycleMetric({
       articleCount: 0,
       durationMs: Date.now() - startedAtMs,
+      duckdbQueues: getProjectMartLargeRebuildCycleQueueDelta({
+        finished: getDuckdbQueueRuntimeMetricsSnapshot(),
+        started: startedQueueMetrics,
+      }),
       endedAt: new Date().toISOString(),
       error: errorText,
       phase: claim.rebuildPhase,

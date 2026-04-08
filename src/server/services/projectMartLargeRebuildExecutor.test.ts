@@ -9,8 +9,12 @@ const removeFileIfExists = (filePath: string) => {
 const getLastJsonLine = (stdout: string) => {
   const lines = stdout
     .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line !== '')
+    .map((line) => {
+      return line.trim()
+    })
+    .filter((line) => {
+      return line !== ''
+    })
 
   const [lastLine = ''] = lines.slice(-1)
   return lastLine
@@ -88,7 +92,9 @@ const runScript = <T>(body: string) => {
 
   try {
     if (runResult.exitCode !== 0) {
-      throw new Error(runResult.stderr.toString() || runResult.stdout.toString() || 'Large rebuild executor test failed')
+      throw new Error(
+        runResult.stderr.toString() || runResult.stdout.toString() || 'Large rebuild executor test failed',
+      )
     }
 
     return JSON.parse(getLastJsonLine(runResult.stdout.toString())) as T
@@ -132,9 +138,7 @@ test('project scope source batch paginates deterministically by created_at and a
 })
 
 test('project scope source batch resumes from a cursor without repeating rows', () => {
-  const result = runScript<{
-    resumedBatch: Array<{articleId: string}>
-  }>(`
+  const result = runScript<{resumedBatch: Array<{articleId: string}>}>(`
     const resumedBatch = await executor.getProjectScopeSourceBatch({
       batchSize: 10,
       cursor: {articleCreatedAt: '2026-04-01T00:00:00.000Z', articleId: 'article-2'},
@@ -146,6 +150,30 @@ test('project scope source batch resumes from a cursor without repeating rows', 
   `)
 
   expect(result.resumedBatch).toEqual([{articleId: 'article-3'}])
+})
+
+test('large rebuild executor defaults to the background DuckDB queue', () => {
+  const result = runScript<{
+    afterRead: {background: {tasksStarted: number}; main: {tasksStarted: number}}
+    afterWrite: {background: {tasksStarted: number}; main: {tasksStarted: number}}
+    before: {background: {tasksStarted: number}; main: {tasksStarted: number}}
+  }>(`
+    const {getDuckdbQueueRuntimeMetricsSnapshot} = await import('./src/server/utils/duckdbService.ts')
+
+    const before = getDuckdbQueueRuntimeMetricsSnapshot()
+    await executor.getProjectScopeSourceBatch({batchSize: 2, projectId: 'large-rebuild-executor-project'})
+    const afterRead = getDuckdbQueueRuntimeMetricsSnapshot()
+    await executor.resetProjectPromptAnswerFact('large-rebuild-executor-project')
+    const afterWrite = getDuckdbQueueRuntimeMetricsSnapshot()
+
+    console.log(JSON.stringify({afterRead, afterWrite, before}))
+    await database.close()
+  `)
+
+  expect(result.afterRead.background.tasksStarted).toBeGreaterThan(result.before.background.tasksStarted)
+  expect(result.afterRead.main.tasksStarted).toBe(result.before.main.tasksStarted)
+  expect(result.afterWrite.background.tasksStarted).toBeGreaterThan(result.afterRead.background.tasksStarted)
+  expect(result.afterWrite.main.tasksStarted).toBe(result.afterRead.main.tasksStarted)
 })
 
 test('prompt answer fact reset and batch rebuild operate on bounded article sets', () => {
@@ -264,9 +292,7 @@ test('prompt answer fact reset and batch rebuild operate on bounded article sets
 })
 
 test('review answer dictionary reset and rebuild derive prompt answer ids from prompt_answer_fact', () => {
-  const result = runScript<{
-    rows: Array<{answerId: number; answerValue: string; promptId: string}>
-  }>(`
+  const result = runScript<{rows: Array<{answerId: number; answerValue: string; promptId: string}>}>(`
     await database.run(\`
       INSERT INTO app.review_answer_dictionary (
         project_id,
