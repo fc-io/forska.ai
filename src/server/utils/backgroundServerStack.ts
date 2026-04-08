@@ -1,3 +1,5 @@
+import {totalmem} from 'node:os'
+
 import {DEFAULT_API_SERVER_PORT} from '../../utils/runtimePortDefaults.ts'
 
 type BackgroundServerRole = 'api' | 'worker'
@@ -9,7 +11,9 @@ type BackgroundServerStackConfig = {
   writerUrl: string
 }
 
-const defaultBackgroundWorkerDuckdbMemoryLimit = '4GB'
+const gibibyte = 1024 ** 3
+const minimumBackgroundWorkerDuckdbMemoryLimitGb = 4
+const maximumBackgroundWorkerDuckdbMemoryLimitGb = 20
 
 const getIntegerPort = (value: string | undefined, fallback: number) => {
   const parsed = Number.parseInt(String(value ?? '').trim(), 10)
@@ -23,6 +27,17 @@ const getTrimmedValue = (value: string | undefined) => {
   return normalized === '' ? null : normalized
 }
 
+export const getDefaultBackgroundWorkerDuckdbMemoryLimit = (totalMemoryBytes = totalmem()) => {
+  const totalMemoryGb = Math.floor(totalMemoryBytes / gibibyte)
+  const derivedLimitGb = Math.floor(totalMemoryGb / 2)
+  const workerDuckdbMemoryLimitGb = Math.max(
+    minimumBackgroundWorkerDuckdbMemoryLimitGb,
+    Math.min(maximumBackgroundWorkerDuckdbMemoryLimitGb, derivedLimitGb),
+  )
+
+  return `${workerDuckdbMemoryLimitGb}GB`
+}
+
 export const getBackgroundServerStackConfig = (
   envValues: Record<string, string | undefined> = process.env,
 ): BackgroundServerStackConfig => {
@@ -31,7 +46,7 @@ export const getBackgroundServerStackConfig = (
   const workerDuckdbMemoryLimit =
     getTrimmedValue(envValues.BACKGROUND_WRITER_DUCKDB_MEMORY_LIMIT)
     ?? getTrimmedValue(envValues.DUCKDB_MEMORY_LIMIT)
-    ?? defaultBackgroundWorkerDuckdbMemoryLimit
+    ?? getDefaultBackgroundWorkerDuckdbMemoryLimit()
 
   return {apiPort, workerDuckdbMemoryLimit, workerPort, writerUrl: `http://127.0.0.1:${workerPort}`}
 }
