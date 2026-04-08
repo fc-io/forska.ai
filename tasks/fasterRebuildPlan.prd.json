@@ -105,12 +105,13 @@
         "Live verify after implementation: worker reports the effective DuckDB memory limit, large rebuild cursor advances multiple batches per wake, `lastAckSeq` starts moving, `retainedRowCount` declines, temp dir does not grow explosively, and API latency remains acceptable while rebuild is active"
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-002",
         "US-004"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-006",
@@ -160,6 +161,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-04-08T20:17:52.473Z"
+    "updatedAt": "2026-04-08T20:22:04.208Z"
   }
 }

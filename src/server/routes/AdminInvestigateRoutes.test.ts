@@ -326,7 +326,7 @@ test('admin worker runtime diagnostics route reports effective duckdb settings a
       }
       pid: number
       processMemory: {heapUsedBytes: number; rssBytes: number}
-      projectMartLargeRebuildHeartbeat: {batchSize: number; pollIntervalMs: number}
+      projectMartLargeRebuildHeartbeat: {batchSize: number; maxCyclesPerWake: number; pollIntervalMs: number}
       projectMartLargeRebuildRuntimeMetrics: {
         recentCycles: unknown[]
         totals: {
@@ -358,7 +358,11 @@ test('admin worker runtime diagnostics route reports effective duckdb settings a
     expect(responseBody.duckdb.queues.background.queueDepth).toBe(0)
     expect(responseBody.processMemory.rssBytes).toBeGreaterThan(0)
     expect(responseBody.processMemory.heapUsedBytes).toBeGreaterThan(0)
-    expect(responseBody.projectMartLargeRebuildHeartbeat).toEqual({batchSize: 8, pollIntervalMs: 1500})
+    expect(responseBody.projectMartLargeRebuildHeartbeat).toEqual({
+      batchSize: 8,
+      maxCyclesPerWake: 4,
+      pollIntervalMs: 1500,
+    })
     expect(responseBody.projectMartLargeRebuildRuntimeMetrics.recentCycles).toEqual([])
     expect(responseBody.projectMartLargeRebuildRuntimeMetrics.totals).toEqual({
       cyclesCompleted: 0,

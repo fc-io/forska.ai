@@ -23,6 +23,7 @@ const envShape = arktype({
   FULL_TEXT_CONVERSION_BATCH_SIZE: 'number | string.integer.parse | null | undefined',
   FULL_TEXT_CONVERSION_CONCURRENCY: 'number | string.integer.parse | null | undefined',
   PROJECT_MART_LARGE_REBUILD_BATCH_SIZE: 'number | string.integer.parse | null | undefined',
+  PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE: 'number | string.integer.parse | null | undefined',
   PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS: 'number | string.integer.parse | null | undefined',
 })
 
@@ -94,6 +95,12 @@ export const loadEnv = ({
     || String(merged.PROJECT_MART_LARGE_REBUILD_BATCH_SIZE).trim() === ''
   ) {
     ;(merged as Record<string, string>).PROJECT_MART_LARGE_REBUILD_BATCH_SIZE = '128'
+  }
+  if (
+    merged.PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE == null
+    || String(merged.PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE).trim() === ''
+  ) {
+    ;(merged as Record<string, string>).PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE = '4'
   }
   if (
     merged.PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS == null
