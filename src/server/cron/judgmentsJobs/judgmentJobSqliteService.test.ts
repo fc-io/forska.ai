@@ -1366,6 +1366,7 @@ test('returns safe health snapshot defaults when the SQLite job db is missing', 
     claimedOutboxCount: 0,
     lastAckSeq: null,
     oldestUnexportedAgeMs: null,
+    orphanedJudgedRowCount: 0,
     outboxRowCount: 0,
     promptCounts: {judged: 0, ready: 0, sent: 0, skipped: 0},
     retainedRowCount: 0,
@@ -1879,6 +1880,158 @@ test('transitions draining SQLite jobs to drained only after retention cleanup a
   expect(await service.deleteDrainedJobs({jobId})).toEqual([jobId])
   expect(existsSync(getJudgmentJobSqlitePath(jobId))).toBe(false)
   expect(existsSync(getJudgmentJobLeasePath(jobId))).toBe(false)
+})
+
+test('transitions paused draining SQLite jobs to drained only after retention cleanup and checkpointing finish', async () => {
+  if (!queryDatabase || !runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-paused-drain-${Date.now()}`
+  const modelId = `model-paused-drain-${Date.now()}`
+  const projectId = `project-paused-drain-${Date.now()}`
+  const jobId = `job-paused-drain-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Paused Drain Transition Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'paused', 'draining')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(
+    jobId,
+    [{articleId: 'article-paused-drain', promptId: 'prompt-paused-drain'}],
+    'server-a',
+  )
+
+  const [claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt for paused drain transition test')
+  }
+
+  await service.recordJudgmentSuccess(jobId, {
+    answeredOriginal: 'yes',
+    answeredOriginalAsArray: ['yes'],
+    articleId: claimedPrompt.articleId,
+    chunkingStrategy: null,
+    confidenceOriginal: 50,
+    createdAt: new Date(),
+    explanation: 'because',
+    isAnswered: true,
+    judgmentId: `judgment-paused-drain-${Date.now()}`,
+    modelId,
+    projectId,
+    promptId: claimedPrompt.promptId,
+    queuePromptId: claimedPrompt.recordId,
+    quotes: ['quote'],
+    rawResponseJson: {answer: 'yes'},
+    snapshotProjectId: projectId,
+    snapshotProjectModelName: 'Qwen 35B',
+    updatedAt: new Date(),
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
+
+  const claimedOutboxBatch = await service.claimPendingOutboxBatch({
+    claimedBy: 'server-a',
+    jobId,
+    maxBytes: 1024 * 1024,
+    maxRows: 10,
+  })
+  const ackedOutboxSeq = claimedOutboxBatch?.rows[0]?.outboxSeq ?? null
+
+  await service.completeOutboxClaim({claimId: claimedOutboxBatch?.claim.claimId ?? '', jobId})
+  await service.setLastProjectRefreshAckSeq(jobId, ackedOutboxSeq)
+
+  expect(await service.finalizeDrainingJobs({jobId})).toEqual([])
+  expect(
+    await queryDatabase<{storageState: string}>(`
+      SELECT storage_state AS storageState
+      FROM app.judgment_job
+      WHERE id = '${jobId}'
+    `),
+  ).toEqual([{storageState: 'draining'}])
+
+  await service.pruneVisibilityAckedRetention({jobId, maxRows: 10})
+
+  expect(await service.finalizeDrainingJobs({jobId})).toEqual([jobId])
+  expect(
+    await queryDatabase<{storageState: string}>(`
+      SELECT storage_state AS storageState
+      FROM app.judgment_job
+      WHERE id = '${jobId}'
+    `),
+  ).toEqual([{storageState: 'drained'}])
+})
+
+test('orphan judged queue rows keep draining SQLite jobs out of drained state', async () => {
+  if (!queryDatabase || !runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-orphan-drain-${Date.now()}`
+  const modelId = `model-orphan-drain-${Date.now()}`
+  const projectId = `project-orphan-drain-${Date.now()}`
+  const jobId = `job-orphan-drain-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Orphan Drain Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'completed', 'draining')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(
+    jobId,
+    [{articleId: 'article-orphan-drain', promptId: 'prompt-orphan-drain'}],
+    'server-a',
+  )
+
+  const [claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt for orphan drain test')
+  }
+
+  await service.markPromptAsJudged(jobId, claimedPrompt.recordId)
+
+  expect(await service.getOutboxCount(jobId)).toBe(0)
+  expect(await service.finalizeDrainingJobs({jobId})).toEqual([])
+  expect(
+    await queryDatabase<{storageState: string}>(`
+      SELECT storage_state AS storageState
+      FROM app.judgment_job
+      WHERE id = '${jobId}'
+    `),
+  ).toEqual([{storageState: 'draining'}])
 })
 
 test('retained outbox rows keep draining SQLite jobs out of drained state', async () => {

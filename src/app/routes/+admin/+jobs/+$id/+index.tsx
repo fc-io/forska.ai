@@ -134,6 +134,7 @@ type JobData = {
     claimedOutboxCount?: number
     lastAckSeq?: number | null
     oldestUnexportedAgeMs?: number | null
+    orphanedJudgedRowCount?: number
     outboxRowCount?: number
     projection?: {
       activeLargeRebuildProjectCount?: number
@@ -402,6 +403,7 @@ const AdminJudgmentJobDetail = () => {
                 (storageHealth()?.outboxRowCount ?? 0) > 0
                 || (storageHealth()?.claimedOutboxCount ?? 0) > 0
                 || (storageHealth()?.retainedRowCount ?? 0) > 0
+              const hasOrphanedLocalQueue = (storageHealth()?.orphanedJudgedRowCount ?? 0) > 0
 
               return isOfflineRepairOnly() && hasRetainedLocalState
                 ? {
@@ -414,7 +416,16 @@ const AdminJudgmentJobDetail = () => {
                     ],
                     title: 'Recommended now',
                   }
-                : null
+                : hasOrphanedLocalQueue
+                  ? {
+                      lines: [
+                        'This job has judged local queue rows with no SQLite outbox payload.',
+                        'Use Repair Storage to move recoverable orphaned rows back to Ready state.',
+                        'Do not use Drain Storage until the orphaned local queue count reaches zero.',
+                      ],
+                      title: 'Repair required',
+                    }
+                  : null
             }
             const projectProviderConnection = () => {
               const modelId = projectDetailsQuery.data?.model?.id
@@ -698,7 +709,8 @@ const AdminJudgmentJobDetail = () => {
                       <p class="font-medium mt-1">{storageHealth()?.outboxRowCount ?? 0}</p>
                       <p class="text-xs text-gray-500 mt-1">
                         Claimed: {storageHealth()?.claimedOutboxCount ?? 0} | Retained:{' '}
-                        {storageHealth()?.retainedRowCount ?? 0}
+                        {storageHealth()?.retainedRowCount ?? 0} | Orphaned judged:{' '}
+                        {storageHealth()?.orphanedJudgedRowCount ?? 0}
                       </p>
                     </div>
                     <div class="bg-gray-50 rounded-lg p-4">

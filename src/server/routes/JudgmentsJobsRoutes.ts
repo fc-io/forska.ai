@@ -62,6 +62,7 @@ type JudgmentJobHealthAction =
   | 'none'
   | 'repair_offline_required'
   | 'repair_missing_sqlite'
+  | 'repair_orphaned_queue'
   | 'wait_for_drain'
   | 'repair_quarantine'
   | 'resume_outbox_import'
@@ -549,6 +550,12 @@ const hasRetainedOutbox = (
   return sqliteHealth.outboxRowCount > 0 || sqliteHealth.claimedOutboxCount > 0
 }
 
+const hasOrphanedJudgedQueue = (
+  sqliteHealth: Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['getHealthSnapshot']>>,
+) => {
+  return sqliteHealth.orphanedJudgedRowCount > 0
+}
+
 const hasLargeWal = (
   sqliteHealth: Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['getHealthSnapshot']>>,
 ) => {
@@ -631,6 +638,10 @@ const getRecommendedHealthAction = ({
 
   if (isStaleImportJob(job)) {
     return 'retry_stale_import'
+  }
+
+  if (hasOrphanedJudgedQueue(sqliteHealth)) {
+    return 'repair_orphaned_queue'
   }
 
   if (job.storageState === 'draining') {

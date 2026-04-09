@@ -7,6 +7,7 @@ type JudgmentJobRepairResponse = {
   action: JudgmentJobRepairAction
   changes: {
     checkpointed: boolean
+    deletedOrphanedJudgedRows: number
     finalizedDrain: boolean
     importedOutboxRows: number
     initializedSqlite: boolean
@@ -14,6 +15,7 @@ type JudgmentJobRepairResponse = {
     prunedQueueRows: number
     quarantined: boolean
     reapedOutboxClaims: number
+    requeuedOrphanedJudgedRows: number
     requeuedSentPrompts: number
     unquarantined: boolean
   }

@@ -166,6 +166,7 @@ export type JudgmentJobSqliteHealthSnapshot = {
   claimedOutboxCount: number
   lastAckSeq: number | null
   oldestUnexportedAgeMs: number | null
+  orphanedJudgedRowCount: number
   outboxRowCount: number
   promptCounts: {judged: number; ready: number; sent: number; skipped: number}
   retainedRowCount: number
@@ -230,6 +231,16 @@ export type JudgmentJobSqliteClaimedOutboxBatch = {
 }
 
 type ClaimedOutboxRow = {claimId: string; rowCount: number}
+type OrphanedJudgedQueueRepairCounts = {deletedRows: number; requeuedRows: number}
+type OrphanedJudgedQueueRepairJobInfo = {
+  modelId: string
+  projectId: string
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
+type OrphanedJudgedQueueRow = {articleId: string; promptId: string; queuePromptId: string}
 
 type RetentionEligibleOutboxRow = {outboxSeq: number; queuePromptId: string}
 
@@ -923,7 +934,7 @@ const reconcileProjectRefreshAcks = async ({projectId}: {projectId?: string} = {
   )
 }
 
-const sqliteCleanupTerminalStatuses = ['completed', 'project_removed'] as const
+const sqliteCleanupTerminalStatuses = ['completed', 'paused', 'project_removed'] as const
 
 const deleteJobFiles = (jobId: string) => {
   const sqlitePath = getJudgmentJobSqlitePath(jobId)
@@ -1004,6 +1015,26 @@ const getOldestUnexportedAgeMs = (database: Database) => {
 
 const getRetainedQueueRowCount = (database: Database) => {
   const row = database.query(`SELECT COUNT(*) AS count FROM queue_prompt`).get() as {count: number} | null
+
+  return Number(row?.count ?? 0)
+}
+
+const getOrphanedJudgedQueueRowCount = (database: Database) => {
+  const row = database
+    .query(
+      `
+      SELECT COUNT(*) AS count
+      FROM queue_prompt qp
+      WHERE qp.status = 'judged'
+        AND qp.terminal_kind IS NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM judgment_outbox jo
+          WHERE jo.queue_prompt_id = qp.id
+        )
+    `,
+    )
+    .get() as {count: number} | null
 
   return Number(row?.count ?? 0)
 }
@@ -1109,6 +1140,7 @@ const getEmptyHealthSnapshot = (): JudgmentJobSqliteHealthSnapshot => {
     claimedOutboxCount: 0,
     lastAckSeq: null,
     oldestUnexportedAgeMs: null,
+    orphanedJudgedRowCount: 0,
     outboxRowCount: 0,
     promptCounts: {judged: 0, ready: 0, sent: 0, skipped: 0},
     retainedRowCount: 0,
@@ -1263,7 +1295,11 @@ const runIsolatedJudgmentJobSqlitePreflight = (jobId: string): JudgmentJobSqlite
 }
 
 const isDrainedSqliteJob = (database: Database, _jobId: string) => {
-  return getActiveQueueRowCount(database) === 0 && getRetainedOutboxCount(database) === 0
+  return (
+    getActiveQueueRowCount(database) === 0
+    && getRetainedOutboxCount(database) === 0
+    && getOrphanedJudgedQueueRowCount(database) === 0
+  )
 }
 
 const runWalCheckpoint = (database: Database) => {
@@ -1413,6 +1449,127 @@ const getProjectRefreshVisibilityStateForJob = async (
   `)
 
   return row ?? null
+}
+
+const getOrphanedJudgedQueuePairKey = ({articleId, promptId}: {articleId: string; promptId: string}) => {
+  return `${articleId}|${promptId}`
+}
+
+const getOrphanedJudgedQueueRows = (database: Database, limit: number) => {
+  return database
+    .query(
+      `
+        SELECT
+          qp.article_id AS articleId,
+          qp.prompt_id AS promptId,
+          qp.id AS queuePromptId
+        FROM queue_prompt qp
+        WHERE qp.status = 'judged'
+          AND qp.terminal_kind IS NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM judgment_outbox jo
+            WHERE jo.queue_prompt_id = qp.id
+          )
+        ORDER BY qp.updated_at ASC, qp.id ASC
+        LIMIT ?
+      `,
+    )
+    .all(limit) as OrphanedJudgedQueueRow[]
+}
+
+const getOrphanedJudgedQueueRepairJobInfo = (
+  database: Database,
+  jobId: string,
+): OrphanedJudgedQueueRepairJobInfo | null => {
+  const row = database
+    .query(
+      `
+        SELECT
+          model_id AS modelId,
+          project_id AS projectId,
+          use_abstract AS useAbstract,
+          use_fulltext AS useFulltext,
+          use_fulltext_no_images AS useFulltextNoImages,
+          use_title AS useTitle
+        FROM job_info
+        WHERE job_id = ?
+        LIMIT 1
+      `,
+    )
+    .get(jobId) as {
+    modelId: string
+    projectId: string
+    useAbstract: number
+    useFulltext: number
+    useFulltextNoImages: number
+    useTitle: number
+  } | null
+
+  return row
+    ? {
+        modelId: row.modelId,
+        projectId: row.projectId,
+        useAbstract: toBoolean(row.useAbstract),
+        useFulltext: toBoolean(row.useFulltext),
+        useFulltextNoImages: toBoolean(row.useFulltextNoImages),
+        useTitle: toBoolean(row.useTitle),
+      }
+    : null
+}
+
+const getExistingEntityIds = async (
+  tableName: 'app.article' | 'app.model' | 'app.project' | 'app.prompt',
+  ids: string[],
+) => {
+  const uniqueIds = Array.from(new Set(ids))
+
+  return uniqueIds.length === 0
+    ? new Set<string>()
+    : new Set(
+        (
+          await getAppDatabaseService().queryJson<{id: string}>(`
+            SELECT id
+            FROM ${tableName}
+            WHERE id IN (${getQuotedStringList(uniqueIds).join(', ')})
+          `)
+        ).map((row) => {
+          return row.id
+        }),
+      )
+}
+
+const getExistingJudgmentPairsForOrphanedQueueRows = async ({
+  jobInfo,
+  rows,
+}: {
+  jobInfo: OrphanedJudgedQueueRepairJobInfo
+  rows: OrphanedJudgedQueueRow[]
+}) => {
+  return rows.length === 0
+    ? new Set<string>()
+    : new Set(
+        (
+          await getAppDatabaseService().queryJson<{articleId: string; promptId: string}>(`
+            SELECT article_id AS articleId, prompt_id AS promptId
+            FROM app.judgment
+            WHERE model_id = ${getSqlLiteral(jobInfo.modelId)}
+              AND use_title = ${getSqlLiteral(jobInfo.useTitle)}
+              AND use_abstract = ${getSqlLiteral(jobInfo.useAbstract)}
+              AND use_fulltext = ${getSqlLiteral(jobInfo.useFulltext)}
+              AND use_fulltext_no_images = ${getSqlLiteral(jobInfo.useFulltextNoImages)}
+              AND delete_generation = 0
+              AND deleted_at IS NULL
+              AND (${rows
+                .map((row) => {
+                  return `(article_id = ${getSqlLiteral(row.articleId)} AND prompt_id = ${getSqlLiteral(row.promptId)})`
+                })
+                .join(' OR ')})
+          `)
+        ).map((row) => {
+          return getOrphanedJudgedQueuePairKey(row)
+        }),
+      )
 }
 
 const getOutboxEntry = (row: OutboxRow) => {
@@ -1951,6 +2108,138 @@ const pruneVisibilityAckedRetentionForJobIds = async ({
       )
 }
 
+const emptyOrphanedJudgedQueueRepairCounts = (): OrphanedJudgedQueueRepairCounts => {
+  return {deletedRows: 0, requeuedRows: 0}
+}
+
+const repairOrphanedJudgedQueueRowsForJob = async ({
+  jobId,
+  maxRows,
+  serverJobId,
+}: {
+  jobId: string
+  maxRows: number
+  serverJobId?: string
+}): Promise<OrphanedJudgedQueueRepairCounts> => {
+  if (maxRows <= 0) {
+    return emptyOrphanedJudgedQueueRepairCounts()
+  }
+
+  const repairBatch = await withOwnedJobDatabase(
+    jobId,
+    false,
+    (database) => {
+      const jobInfo = getOrphanedJudgedQueueRepairJobInfo(database, jobId)
+      return jobInfo ? {jobInfo, rows: getOrphanedJudgedQueueRows(database, maxRows)} : null
+    },
+    serverJobId,
+  )
+
+  if (!repairBatch?.jobInfo || repairBatch.rows.length === 0) {
+    return emptyOrphanedJudgedQueueRepairCounts()
+  }
+
+  const {jobInfo, rows} = repairBatch
+  const [existingJudgmentPairs, existingArticleIds, existingPromptIds, existingProjectIds, existingModelIds] =
+    await Promise.all([
+      getExistingJudgmentPairsForOrphanedQueueRows({jobInfo, rows}),
+      getExistingEntityIds(
+        'app.article',
+        rows.map((row) => {
+          return row.articleId
+        }),
+      ),
+      getExistingEntityIds(
+        'app.prompt',
+        rows.map((row) => {
+          return row.promptId
+        }),
+      ),
+      getExistingEntityIds('app.project', [jobInfo.projectId]),
+      getExistingEntityIds('app.model', [jobInfo.modelId]),
+    ])
+  const canRepairJob = existingProjectIds.has(jobInfo.projectId) && existingModelIds.has(jobInfo.modelId)
+  const repairPlan = rows.reduce(
+    (state, row) => {
+      const alreadyStored = existingJudgmentPairs.has(getOrphanedJudgedQueuePairKey(row))
+      const canRequeue =
+        !alreadyStored && canRepairJob && existingArticleIds.has(row.articleId) && existingPromptIds.has(row.promptId)
+
+      return canRequeue
+        ? {...state, requeueIds: [...state.requeueIds, row.queuePromptId]}
+        : {...state, deleteIds: [...state.deleteIds, row.queuePromptId]}
+    },
+    {deleteIds: [] as string[], requeueIds: [] as string[]},
+  )
+
+  return (
+    (await withOwnedJobDatabase(
+      jobId,
+      false,
+      (database) => {
+        return database.transaction(() => {
+          const now = new Date().toISOString()
+          const deletedRows =
+            repairPlan.deleteIds.length === 0
+              ? 0
+              : Number(
+                  (
+                    database
+                      .query(
+                        `
+                      DELETE FROM queue_prompt
+                      WHERE id IN (${getSqlPlaceholders(repairPlan.deleteIds.length).join(', ')})
+                        AND status = 'judged'
+                        AND terminal_kind IS NULL
+                        AND NOT EXISTS (
+                          SELECT 1
+                          FROM judgment_outbox jo
+                          WHERE jo.queue_prompt_id = queue_prompt.id
+                        )
+                    `,
+                      )
+                      .run(...repairPlan.deleteIds) as {changes?: number}
+                  ).changes ?? 0,
+                )
+          const requeuedRows =
+            repairPlan.requeueIds.length === 0
+              ? 0
+              : Number(
+                  (
+                    database
+                      .query(
+                        `
+                      UPDATE queue_prompt
+                      SET status = 'ready',
+                          terminal_kind = NULL,
+                          skip_reason = NULL,
+                          server_id = NULL,
+                          claim_id = NULL,
+                          sent_at = NULL,
+                          judged_at = NULL,
+                          updated_at = ?
+                      WHERE id IN (${getSqlPlaceholders(repairPlan.requeueIds.length).join(', ')})
+                        AND status = 'judged'
+                        AND terminal_kind IS NULL
+                        AND NOT EXISTS (
+                          SELECT 1
+                          FROM judgment_outbox jo
+                          WHERE jo.queue_prompt_id = queue_prompt.id
+                        )
+                    `,
+                      )
+                      .run(now, ...repairPlan.requeueIds) as {changes?: number}
+                  ).changes ?? 0,
+                )
+
+          return {deletedRows, requeuedRows}
+        })()
+      },
+      serverJobId,
+    )) ?? emptyOrphanedJudgedQueueRepairCounts()
+  )
+}
+
 const sqliteService = {
   addReadyPrompts: async (
     jobId: string,
@@ -2278,6 +2567,18 @@ const sqliteService = {
       }) ?? 0
     )
   },
+  repairOrphanedJudgedQueueRows: async ({
+    jobId,
+    maxRows,
+    serverJobId,
+  }: {
+    jobId: string
+    maxRows: number
+    serverJobId?: string
+  }): Promise<OrphanedJudgedQueueRepairCounts> => {
+    const normalizedMaxRows = Number.isFinite(maxRows) ? Math.max(0, Math.floor(maxRows)) : 0
+    return repairOrphanedJudgedQueueRowsForJob({jobId, maxRows: normalizedMaxRows, serverJobId})
+  },
   getHealthSnapshot: async (jobId: string): Promise<JudgmentJobSqliteHealthSnapshot> => {
     const sqlitePath = getJudgmentJobSqlitePath(jobId)
     const walPath = `${sqlitePath}-wal`
@@ -2286,6 +2587,7 @@ const sqliteService = {
         claimedOutboxCount: getClaimedOutboxCount(database),
         lastAckSeq: getStoredScanState(database, jobId).lastProjectRefreshAckSeq,
         oldestUnexportedAgeMs: getOldestUnexportedAgeMs(database),
+        orphanedJudgedRowCount: getOrphanedJudgedQueueRowCount(database),
         outboxRowCount: getRetainedOutboxCount(database),
         promptCounts: getPromptCounts(database),
         retainedRowCount: getRetainedQueueRowCount(database),

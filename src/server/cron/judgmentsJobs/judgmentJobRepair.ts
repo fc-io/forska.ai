@@ -30,6 +30,7 @@ type JudgmentJobRepairJobState = {
 
 type JudgmentJobRepairChanges = {
   checkpointed: boolean
+  deletedOrphanedJudgedRows: number
   finalizedDrain: boolean
   importedOutboxRows: number
   initializedSqlite: boolean
@@ -37,6 +38,7 @@ type JudgmentJobRepairChanges = {
   prunedQueueRows: number
   quarantined: boolean
   reapedOutboxClaims: number
+  requeuedOrphanedJudgedRows: number
   requeuedSentPrompts: number
   unquarantined: boolean
 }
@@ -100,6 +102,7 @@ const allowedSystemSqliteFallbackSteps = new Set<JudgmentJobSystemSqliteFallback
 const getEmptyRepairChanges = (): JudgmentJobRepairChanges => {
   return {
     checkpointed: false,
+    deletedOrphanedJudgedRows: 0,
     finalizedDrain: false,
     importedOutboxRows: 0,
     initializedSqlite: false,
@@ -107,6 +110,7 @@ const getEmptyRepairChanges = (): JudgmentJobRepairChanges => {
     prunedQueueRows: 0,
     quarantined: false,
     reapedOutboxClaims: 0,
+    requeuedOrphanedJudgedRows: 0,
     requeuedSentPrompts: 0,
     unquarantined: false,
   }
@@ -188,6 +192,7 @@ const getRepairResult = async ({
           claimedOutboxCount: 0,
           lastAckSeq: null,
           oldestUnexportedAgeMs: null,
+          orphanedJudgedRowCount: 0,
           outboxRowCount: 0,
           promptCounts: {judged: 0, ready: 0, sent: 0, skipped: 0},
           retainedRowCount: 0,
@@ -269,6 +274,21 @@ const clearJobQuarantine = async (jobId: string) => {
         import_failure_count = 0,
         last_import_error = NULL,
         last_import_error_at = NULL,
+        updated_at = current_timestamp
+    WHERE id = ${getSqlLiteral(jobId)}
+  `)
+}
+
+const restoreJobForResumedLocalQueue = async (jobId: string) => {
+  await getAppDatabaseService().run(`
+    UPDATE app.judgment_job
+    SET status = CASE
+          WHEN status IN ('completed', 'failed', 'project_removed') THEN 'paused'
+          ELSE status
+        END,
+        storage_state = 'active',
+        quarantined_at = NULL,
+        quarantine_reason = NULL,
         updated_at = current_timestamp
     WHERE id = ${getSqlLiteral(jobId)}
   `)
@@ -585,6 +605,35 @@ const runRepairAction = async ({
     staleBefore: new Date(),
   })
   const reapedOutboxClaimsCount = await sqliteService.reapStaleOutboxClaims({jobId, staleBefore: new Date()})
+  const orphanedQueueRepair = await sqliteService.repairOrphanedJudgedQueueRows({
+    jobId,
+    maxRows: retentionPruneChunkSize,
+    serverJobId: claimedBy,
+  })
+
+  if (orphanedQueueRepair.requeuedRows > 0) {
+    await restoreJobForResumedLocalQueue(jobId)
+
+    return {
+      changes: {
+        ...getEmptyRepairChanges(),
+        deletedOrphanedJudgedRows: orphanedQueueRepair.deletedRows,
+        importedOutboxRows: flushResult.importedOutboxRows,
+        initializedSqlite,
+        reapedOutboxClaims: reapedOutboxClaimsCount,
+        requeuedOrphanedJudgedRows: orphanedQueueRepair.requeuedRows,
+        requeuedSentPrompts: requeuedSentPromptsCount,
+        unquarantined: true,
+      },
+      message: appendFallbackMessage({
+        baseMessage: `Repair restored ${orphanedQueueRepair.requeuedRows} orphaned local queue row(s) for ${jobId}`,
+        fallbackResults: initialFallbackResults,
+      }),
+      ok: true,
+      preflight: recoveredPreflightOutcome.preflight,
+      systemSqliteFallbackResults: initialFallbackResults,
+    }
+  }
 
   const importedOutboxRows = flushResult.importedOutboxRows
   const pruned = await pruneRetentionUntilStable({claimedBy, jobId})
@@ -600,12 +649,14 @@ const runRepairAction = async ({
     changes: {
       ...getEmptyRepairChanges(),
       checkpointed,
+      deletedOrphanedJudgedRows: orphanedQueueRepair.deletedRows,
       finalizedDrain,
       importedOutboxRows,
       initializedSqlite,
       prunedOutboxRows: pruned.outboxRowsDeleted,
       prunedQueueRows: pruned.queuePromptRowsDeleted,
       reapedOutboxClaims: reapedOutboxClaimsCount,
+      requeuedOrphanedJudgedRows: orphanedQueueRepair.requeuedRows,
       requeuedSentPrompts: requeuedSentPromptsCount,
       unquarantined: shouldUnquarantine,
     },

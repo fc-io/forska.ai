@@ -810,6 +810,7 @@ test('returns safe SQLite health values for jobs without a local sqlite db', asy
     claimedOutboxCount: 0,
     lastAckSeq: null,
     oldestUnexportedAgeMs: null,
+    orphanedJudgedRowCount: 0,
     outboxRowCount: 0,
     promptCounts: {judged: 0, ready: 0, sent: 0, skipped: 0},
     retainedRowCount: 0,
@@ -1006,6 +1007,7 @@ test('judgment job health route returns missing job details', async () => {
     claimedOutboxCount: 0,
     lastAckSeq: null,
     oldestUnexportedAgeMs: null,
+    orphanedJudgedRowCount: 0,
     outboxRowCount: 0,
     promptCounts: {judged: 0, ready: 0, sent: 0, skipped: 0},
     retainedRowCount: 0,
@@ -1038,6 +1040,51 @@ test('judgment job health route returns draining job details', async () => {
   expect(response.status).toBe(200)
   expect(body.storageState).toBe('draining')
   expect(body.recommendedNextAction).toBe('wait_for_drain')
+})
+
+test('judgment job health route flags orphaned judged queue rows for repair', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const projectId = `health-orphan-project-${Date.now()}`
+  const modelId = `health-orphan-model-${Date.now()}`
+  const connectionId = `health-orphan-connection-${Date.now()}`
+  const jobId = `health-orphan-job-${Date.now()}`
+  const sqliteService = getJudgmentJobSqliteService()
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'completed', 'draining')
+  `)
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(
+    jobId,
+    [{articleId: 'article-health-orphan', promptId: 'prompt-health-orphan'}],
+    'server-a',
+  )
+
+  const [claimedPrompt] = await sqliteService.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt for orphan health test')
+  }
+
+  await sqliteService.markPromptAsJudged(jobId, claimedPrompt.recordId)
+
+  const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}/health`))
+  const body = (await response.json()) as {
+    liveSqlite: {orphanedJudgedRowCount?: number}
+    recommendedNextAction: string
+    storageState: string
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.storageState).toBe('draining')
+  expect(body.recommendedNextAction).toBe('repair_orphaned_queue')
+  expect(body.liveSqlite.orphanedJudgedRowCount).toBe(1)
 })
 
 test('judgment job health route returns quarantined job details', async () => {
@@ -1425,6 +1472,79 @@ test('repair route recreates missing sqlite state for one quarantined job', asyn
   expect(body.data.job.status).toBe('paused')
   expect(body.data.job.storageState).toBe('active')
   expect(body.data.preflight?.sqliteFileBytes).toBeGreaterThan(0)
+})
+
+test('repair route requeues orphaned judged queue rows and restores resumable local state', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const projectId = `repair-orphan-project-${Date.now()}`
+  const modelId = `repair-orphan-model-${Date.now()}`
+  const connectionId = `repair-orphan-connection-${Date.now()}`
+  const jobId = `repair-orphan-job-${Date.now()}`
+  const articleId = `repair-orphan-article-${Date.now()}`
+  const promptId = `repair-orphan-prompt-${Date.now()}`
+  const sqliteService = getJudgmentJobSqliteService()
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.article (id, article_id, article_title, article_created_at, article_updated_at)
+    VALUES (
+      '${articleId}',
+      'external-${articleId}',
+      'Repair orphan article',
+      TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+      TIMESTAMPTZ '2026-04-01T00:00:00.000Z'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES ('${promptId}', 'Repair orphan prompt', '${promptId}-hash')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'paused', 'draining')
+  `)
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
+
+  const [claimedPrompt] = await sqliteService.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt for orphan repair test')
+  }
+
+  await sqliteService.markPromptAsJudged(jobId, claimedPrompt.recordId)
+
+  const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}/repair`, {method: 'POST'}))
+  const body = (await response.json()) as {
+    data: {action: string; job: {status: string; storageState: string}; ok: boolean}
+  }
+  const healthResponse = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
+  const healthBody = (await healthResponse.json()) as {
+    storageHealth: {
+      orphanedJudgedRowCount?: number
+      outboxRowCount: number
+      promptCounts: {judged: number; ready: number}
+    }
+    storageState: string
+    status: string
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.action).toBe('repair')
+  expect(body.data.ok).toBe(true)
+  expect(body.data.job.status).toBe('paused')
+  expect(body.data.job.storageState).toBe('active')
+  expect(healthResponse.status).toBe(200)
+  expect(healthBody.status).toBe('paused')
+  expect(healthBody.storageState).toBe('active')
+  expect(healthBody.storageHealth.promptCounts.ready).toBe(1)
+  expect(healthBody.storageHealth.promptCounts.judged).toBe(0)
+  expect(healthBody.storageHealth.outboxRowCount).toBe(0)
+  expect(healthBody.storageHealth.orphanedJudgedRowCount).toBe(0)
 })
 
 test('repair route captures explicit system sqlite fallback results without changing normal repair flows', async () => {
