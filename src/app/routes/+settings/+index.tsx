@@ -5,25 +5,60 @@ import {createEffect, createSignal, For, Show} from 'solid-js'
 import {apiClient} from '../../../services/apiClient'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 
+type ProjectMartLargeRebuildTuningMode = 'automatic' | 'manual'
 type LocalUser = {
+  backgroundWriterDuckdbMemoryLimit?: string | null
+  codexBin?: string | null
   id: string
   name: string
   email: string
   role?: string | null
   fullTextConversionModelId?: string | null
+  projectMartLargeRebuildBatchSize?: number | null
+  projectMartLargeRebuildMaxCyclesPerWake?: number | null
+  projectMartLargeRebuildPollIntervalMs?: number | null
+  projectMartLargeRebuildTuningMode?: ProjectMartLargeRebuildTuningMode | null
   unpaywallEmail?: string | null
   duckdbBin?: string | null
-  codexBin?: string | null
 }
 type UsersResponse = {data: LocalUser[]}
 type StoredModel = {displayName?: string | null; enabled: boolean; id: string; name: string; provider: string}
+type WorkerRuntimeDiagnostics = {
+  duckdb?: {effective?: {memoryLimit?: string | null}}
+  projectMartLargeRebuildHeartbeat?: {
+    automatic?: {
+      activeLargeRebuildProjectCount?: number
+      batchSize?: number
+      maxCyclesPerWake?: number
+      pollIntervalMs?: number
+      profile?: string
+      totalMemoryGb?: number
+    }
+    batchSize?: number
+    maxCyclesPerWake?: number
+    pollIntervalMs?: number
+    sources?: {batchSize?: string; maxCyclesPerWake?: string; pollIntervalMs?: string}
+    stored?: {
+      backgroundWriterDuckdbMemoryLimit?: string | null
+      batchSize?: number | null
+      maxCyclesPerWake?: number | null
+      pollIntervalMs?: number | null
+      tuningMode?: ProjectMartLargeRebuildTuningMode
+    }
+  }
+}
 type UpdateLocalUserInput = {
+  backgroundWriterDuckdbMemoryLimit: string
+  codexBin: string
+  duckdbBin: string
   email: string
   name: string
   fullTextConversionModelId: string
+  projectMartLargeRebuildBatchSize: string
+  projectMartLargeRebuildMaxCyclesPerWake: string
+  projectMartLargeRebuildPollIntervalMs: string
+  projectMartLargeRebuildTuningMode: ProjectMartLargeRebuildTuningMode
   unpaywallEmail: string
-  duckdbBin: string
-  codexBin: string
 }
 type UpdateUserResponse = {data: LocalUser}
 type StoredModelsResponse = {data: StoredModel[]}
@@ -41,19 +76,52 @@ const fetchStoredModels = async (): Promise<StoredModel[]> => {
   return result.data ?? []
 }
 
+const fetchWorkerRuntimeDiagnostics = async (): Promise<WorkerRuntimeDiagnostics | null> => {
+  const response = await apiClient.api.admin['worker-runtime-diagnostics'].get()
+  return handleApiResponse<WorkerRuntimeDiagnostics>(response, 'Failed to load worker runtime diagnostics')
+}
+
 const getNullableString = (value: string): string | null => {
   const normalized = value.trim()
 
   return normalized === '' ? null : normalized
 }
 
+const getNullablePositiveInteger = (value: string): number | null => {
+  const normalized = value.trim()
+  const parsed = Number.parseInt(normalized, 10)
+
+  return normalized !== '' && Number.isInteger(parsed) && parsed > 0 ? parsed : null
+}
+
+const formatTuningSource = (value: string | null | undefined) => {
+  if (value === 'env') return 'Env override'
+  if (value === 'manual') return 'Manual setting'
+  return 'Automatic'
+}
+
+const formatTuningSummary = (value: {
+  batchSize?: number | null
+  maxCyclesPerWake?: number | null
+  pollIntervalMs?: number | null
+}) => {
+  return value.batchSize && value.maxCyclesPerWake && value.pollIntervalMs
+    ? `batch ${value.batchSize}, poll ${value.pollIntervalMs}ms, burst ${value.maxCyclesPerWake}`
+    : 'N/A'
+}
+
 const updateLocalUser = async (input: UpdateLocalUserInput): Promise<LocalUser> => {
   const response = await apiClient.api.users.patch({
+    backgroundWriterDuckdbMemoryLimit: getNullableString(input.backgroundWriterDuckdbMemoryLimit),
     codexBin: getNullableString(input.codexBin),
     duckdbBin: getNullableString(input.duckdbBin),
     email: input.email,
     fullTextConversionModelId: getNullableString(input.fullTextConversionModelId),
     name: input.name,
+    projectMartLargeRebuildBatchSize: getNullablePositiveInteger(input.projectMartLargeRebuildBatchSize),
+    projectMartLargeRebuildMaxCyclesPerWake: getNullablePositiveInteger(input.projectMartLargeRebuildMaxCyclesPerWake),
+    projectMartLargeRebuildPollIntervalMs: getNullablePositiveInteger(input.projectMartLargeRebuildPollIntervalMs),
+    projectMartLargeRebuildTuningMode: input.projectMartLargeRebuildTuningMode,
     unpaywallEmail: getNullableString(input.unpaywallEmail),
   })
   const result = handleApiResponse<UpdateUserResponse>(response, 'Failed to save settings')
@@ -62,9 +130,15 @@ const updateLocalUser = async (input: UpdateLocalUserInput): Promise<LocalUser> 
 }
 
 const Settings = () => {
+  const [backgroundWriterDuckdbMemoryLimit, setBackgroundWriterDuckdbMemoryLimit] = createSignal('')
   const [displayName, setDisplayName] = createSignal('')
   const [profileEmail, setProfileEmail] = createSignal('')
   const [fullTextConversionModelId, setFullTextConversionModelId] = createSignal('')
+  const [projectMartLargeRebuildBatchSize, setProjectMartLargeRebuildBatchSize] = createSignal('')
+  const [projectMartLargeRebuildMaxCyclesPerWake, setProjectMartLargeRebuildMaxCyclesPerWake] = createSignal('')
+  const [projectMartLargeRebuildPollIntervalMs, setProjectMartLargeRebuildPollIntervalMs] = createSignal('')
+  const [projectMartLargeRebuildTuningMode, setProjectMartLargeRebuildTuningMode] =
+    createSignal<ProjectMartLargeRebuildTuningMode>('automatic')
   const [unpaywallEmail, setUnpaywallEmail] = createSignal('')
   const [duckdbBin, setDuckdbBin] = createSignal('')
   const [codexBin, setCodexBin] = createSignal('')
@@ -79,25 +153,47 @@ const Settings = () => {
       refetchOnWindowFocus: false,
     }
   })
+  const workerRuntimeDiagnosticsQuery = useQuery(() => {
+    return {
+      queryKey: ['worker-runtime-diagnostics'],
+      queryFn: fetchWorkerRuntimeDiagnostics,
+      staleTime: 1_000,
+      refetchInterval: 5_000,
+      refetchOnWindowFocus: false,
+    }
+  })
   const updateLocalUserMutation = createMutation(() => {
     return {
       mutationFn: updateLocalUser,
       onSuccess: (user: LocalUser) => {
+        setBackgroundWriterDuckdbMemoryLimit(user.backgroundWriterDuckdbMemoryLimit ?? '')
         setDisplayName(user.name)
         setProfileEmail(user.email)
         setFullTextConversionModelId(user.fullTextConversionModelId ?? '')
+        setProjectMartLargeRebuildBatchSize(String(user.projectMartLargeRebuildBatchSize ?? ''))
+        setProjectMartLargeRebuildMaxCyclesPerWake(String(user.projectMartLargeRebuildMaxCyclesPerWake ?? ''))
+        setProjectMartLargeRebuildPollIntervalMs(String(user.projectMartLargeRebuildPollIntervalMs ?? ''))
+        setProjectMartLargeRebuildTuningMode(user.projectMartLargeRebuildTuningMode ?? 'automatic')
         setUnpaywallEmail(user.unpaywallEmail ?? '')
         setDuckdbBin(user.duckdbBin ?? '')
         setCodexBin(user.codexBin ?? '')
         void localUserQuery.refetch()
+        void workerRuntimeDiagnosticsQuery.refetch()
       },
     }
   })
 
   createEffect(() => {
+    setBackgroundWriterDuckdbMemoryLimit(localUserQuery.data?.backgroundWriterDuckdbMemoryLimit ?? '')
     setDisplayName(localUserQuery.data?.name ?? '')
     setProfileEmail(localUserQuery.data?.email ?? '')
     setFullTextConversionModelId(localUserQuery.data?.fullTextConversionModelId ?? '')
+    setProjectMartLargeRebuildBatchSize(String(localUserQuery.data?.projectMartLargeRebuildBatchSize ?? ''))
+    setProjectMartLargeRebuildMaxCyclesPerWake(
+      String(localUserQuery.data?.projectMartLargeRebuildMaxCyclesPerWake ?? ''),
+    )
+    setProjectMartLargeRebuildPollIntervalMs(String(localUserQuery.data?.projectMartLargeRebuildPollIntervalMs ?? ''))
+    setProjectMartLargeRebuildTuningMode(localUserQuery.data?.projectMartLargeRebuildTuningMode ?? 'automatic')
     setUnpaywallEmail(localUserQuery.data?.unpaywallEmail ?? '')
     setDuckdbBin(localUserQuery.data?.duckdbBin ?? '')
     setCodexBin(localUserQuery.data?.codexBin ?? '')
@@ -114,6 +210,15 @@ const Settings = () => {
       displayName().trim() !== (localUserQuery.data?.name ?? '').trim()
       || profileEmail().trim() !== (localUserQuery.data?.email ?? '').trim()
       || fullTextConversionModelId().trim() !== (localUserQuery.data?.fullTextConversionModelId ?? '').trim()
+      || projectMartLargeRebuildTuningMode() !== (localUserQuery.data?.projectMartLargeRebuildTuningMode ?? 'automatic')
+      || projectMartLargeRebuildBatchSize().trim()
+        !== String(localUserQuery.data?.projectMartLargeRebuildBatchSize ?? '').trim()
+      || projectMartLargeRebuildMaxCyclesPerWake().trim()
+        !== String(localUserQuery.data?.projectMartLargeRebuildMaxCyclesPerWake ?? '').trim()
+      || projectMartLargeRebuildPollIntervalMs().trim()
+        !== String(localUserQuery.data?.projectMartLargeRebuildPollIntervalMs ?? '').trim()
+      || backgroundWriterDuckdbMemoryLimit().trim()
+        !== (localUserQuery.data?.backgroundWriterDuckdbMemoryLimit ?? '').trim()
       || unpaywallEmail().trim() !== (localUserQuery.data?.unpaywallEmail ?? '').trim()
       || duckdbBin().trim() !== (localUserQuery.data?.duckdbBin ?? '').trim()
       || codexBin().trim() !== (localUserQuery.data?.codexBin ?? '').trim()
@@ -194,6 +299,143 @@ const Settings = () => {
                 </p>
               </div>
               <div class="pt-2 border-t border-gray-200">
+                <h3 class="text-sm font-semibold text-gray-900 mb-3">Background rebuild tuning</h3>
+                <div class="space-y-4">
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Tuning mode</label>
+                    <select
+                      value={projectMartLargeRebuildTuningMode()}
+                      onInput={(event) => {
+                        setProjectMartLargeRebuildTuningMode(
+                          event.currentTarget.value as ProjectMartLargeRebuildTuningMode,
+                        )
+                      }}
+                      class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
+                    >
+                      <option value="automatic">Automatic</option>
+                      <option value="manual">Manual</option>
+                    </select>
+                    <p class="mt-2 text-xs text-gray-500">
+                      Automatic mode tunes the rebuild heartbeat from machine memory and active rebuild count. Manual
+                      mode lets you pin batch size, poll interval, and burst size.
+                    </p>
+                  </div>
+                  <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                      Worker DuckDB Memory Limit (restart required)
+                    </label>
+                    <input
+                      type="text"
+                      value={backgroundWriterDuckdbMemoryLimit()}
+                      onInput={(event) => {
+                        setBackgroundWriterDuckdbMemoryLimit(event.currentTarget.value)
+                      }}
+                      class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
+                      placeholder="20GB"
+                    />
+                    <p class="mt-2 text-xs text-gray-500">
+                      Optional machine-local override for the background writer DuckDB memory cap. Leave empty to use
+                      the automatic memory limit from your host RAM.
+                    </p>
+                  </div>
+                  <Show when={projectMartLargeRebuildTuningMode() === 'manual'}>
+                    <div class="grid gap-4 md:grid-cols-3">
+                      <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Batch Size</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={projectMartLargeRebuildBatchSize()}
+                          onInput={(event) => {
+                            setProjectMartLargeRebuildBatchSize(event.currentTarget.value)
+                          }}
+                          class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Poll Interval (ms)</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={projectMartLargeRebuildPollIntervalMs()}
+                          onInput={(event) => {
+                            setProjectMartLargeRebuildPollIntervalMs(event.currentTarget.value)
+                          }}
+                          class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Max Cycles Per Wake</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={projectMartLargeRebuildMaxCyclesPerWake()}
+                          onInput={(event) => {
+                            setProjectMartLargeRebuildMaxCyclesPerWake(event.currentTarget.value)
+                          }}
+                          class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
+                        />
+                      </div>
+                    </div>
+                  </Show>
+                  <div class="rounded-md border border-gray-200 bg-gray-50 p-4 space-y-2">
+                    <p class="text-sm font-medium text-gray-900">Effective worker config</p>
+                    <Show when={workerRuntimeDiagnosticsQuery.isLoading}>
+                      <p class="text-xs text-gray-500">Loading worker runtime diagnostics...</p>
+                    </Show>
+                    <Show when={workerRuntimeDiagnosticsQuery.isError}>
+                      <p class="text-xs text-red-600">
+                        {workerRuntimeDiagnosticsQuery.error instanceof Error
+                          ? workerRuntimeDiagnosticsQuery.error.message
+                          : 'Failed to load worker runtime diagnostics'}
+                      </p>
+                    </Show>
+                    <Show when={!workerRuntimeDiagnosticsQuery.isLoading && !workerRuntimeDiagnosticsQuery.isError}>
+                      <p class="text-xs text-gray-600">
+                        Current:{' '}
+                        {formatTuningSummary(
+                          workerRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat ?? {},
+                        )}
+                      </p>
+                      <p class="text-xs text-gray-600">
+                        Sources: batch{' '}
+                        {formatTuningSource(
+                          workerRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.sources?.batchSize,
+                        )}
+                        , poll{' '}
+                        {formatTuningSource(
+                          workerRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.sources?.pollIntervalMs,
+                        )}
+                        , burst{' '}
+                        {formatTuningSource(
+                          workerRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.sources
+                            ?.maxCyclesPerWake,
+                        )}
+                      </p>
+                      <p class="text-xs text-gray-600">
+                        Automatic recommendation:{' '}
+                        {formatTuningSummary(
+                          workerRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.automatic ?? {},
+                        )}
+                      </p>
+                      <p class="text-xs text-gray-600">
+                        Auto profile:{' '}
+                        {workerRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.automatic?.profile
+                          ?? 'N/A'}{' '}
+                        | Active rebuilds:{' '}
+                        {workerRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.automatic
+                          ?.activeLargeRebuildProjectCount ?? 'N/A'}{' '}
+                        | Worker memory: {workerRuntimeDiagnosticsQuery.data?.duckdb?.effective?.memoryLimit ?? 'N/A'}
+                      </p>
+                    </Show>
+                    <p class="text-xs text-gray-500">
+                      Heartbeat tuning changes apply to the running worker within a few seconds. Memory-limit changes
+                      apply on the next server restart.
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div class="pt-2 border-t border-gray-200">
                 <h3 class="text-sm font-semibold text-gray-900 mb-3">Advanced</h3>
                 <div class="space-y-4">
                   <div>
@@ -242,11 +484,16 @@ const Settings = () => {
                 disabled={updateLocalUserMutation.isPending || !isProfileDirty()}
                 onClick={() => {
                   updateLocalUserMutation.mutate({
+                    backgroundWriterDuckdbMemoryLimit: backgroundWriterDuckdbMemoryLimit(),
                     codexBin: codexBin(),
                     duckdbBin: duckdbBin(),
                     email: profileEmail(),
                     fullTextConversionModelId: fullTextConversionModelId(),
                     name: displayName(),
+                    projectMartLargeRebuildBatchSize: projectMartLargeRebuildBatchSize(),
+                    projectMartLargeRebuildMaxCyclesPerWake: projectMartLargeRebuildMaxCyclesPerWake(),
+                    projectMartLargeRebuildPollIntervalMs: projectMartLargeRebuildPollIntervalMs(),
+                    projectMartLargeRebuildTuningMode: projectMartLargeRebuildTuningMode(),
                     unpaywallEmail: unpaywallEmail(),
                   })
                 }}

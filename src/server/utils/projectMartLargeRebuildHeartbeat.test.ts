@@ -24,15 +24,37 @@ const parseCallsResult = (
   value: string,
 ): {
   calls: Array<{batchSize: number; maxCycles: number; workerId: string}>
-  config?: {batchSize: number; maxCyclesPerWake: number; pollIntervalMs: number}
+  config?: {
+    automatic: {
+      activeLargeRebuildProjectCount: number
+      batchSize: number
+      maxCyclesPerWake: number
+      pollIntervalMs: number
+    }
+    batchSize: number
+    maxCyclesPerWake: number
+    pollIntervalMs: number
+    sources: {batchSize: string; maxCyclesPerWake: string; pollIntervalMs: string}
+  }
 } => {
   return JSON.parse(value) as {
     calls: Array<{batchSize: number; maxCycles: number; workerId: string}>
-    config?: {batchSize: number; maxCyclesPerWake: number; pollIntervalMs: number}
+    config?: {
+      automatic: {
+        activeLargeRebuildProjectCount: number
+        batchSize: number
+        maxCyclesPerWake: number
+        pollIntervalMs: number
+      }
+      batchSize: number
+      maxCyclesPerWake: number
+      pollIntervalMs: number
+      sources: {batchSize: string; maxCyclesPerWake: string; pollIntervalMs: string}
+    }
   }
 }
 
-test('projectMartLargeRebuildHeartbeat runs one bounded burst with portable defaults', () => {
+test('projectMartLargeRebuildHeartbeat runs one bounded burst with resolved tuning config', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -47,6 +69,7 @@ test('projectMartLargeRebuildHeartbeat runs one bounded burst with portable defa
         const heartbeatModulePath = getModulePath('./src/server/utils/projectMartLargeRebuildHeartbeat.ts')
         const cyclesModulePath = getModulePath('./src/server/services/projectMartLargeRebuildCyclesService.ts')
         const serverRuntimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const tuningModulePath = getModulePath('./src/server/utils/projectMartLargeRebuildTuning.ts')
         const calls = []
 
         void mock.module(cyclesModulePath, () => {
@@ -62,6 +85,33 @@ test('projectMartLargeRebuildHeartbeat runs one bounded burst with portable defa
           return {
             registerWriterDemotionHandler: () => {},
             shouldCurrentServerRunWriterWork: () => true,
+          }
+        })
+        void mock.module(tuningModulePath, () => {
+          return {
+            getProjectMartLargeRebuildHeartbeatConfig: async () => {
+              return {
+                automatic: {
+                  activeLargeRebuildProjectCount: 2,
+                  batchSize: 128,
+                  maxCyclesPerWake: 4,
+                  pollIntervalMs: 1000,
+                  profile: 'medium',
+                  totalMemoryGb: 32,
+                },
+                batchSize: 128,
+                maxCyclesPerWake: 4,
+                pollIntervalMs: 1000,
+                sources: {batchSize: 'automatic', maxCyclesPerWake: 'automatic', pollIntervalMs: 'automatic'},
+                stored: {
+                  backgroundWriterDuckdbMemoryLimit: null,
+                  batchSize: null,
+                  maxCyclesPerWake: null,
+                  pollIntervalMs: null,
+                  tuningMode: 'automatic',
+                },
+              }
+            },
           }
         })
 
@@ -89,7 +139,7 @@ test('projectMartLargeRebuildHeartbeat runs one bounded burst with portable defa
   expect(result.calls[0]?.workerId).toContain('project-mart-large-rebuild-heartbeat:')
 })
 
-test('projectMartLargeRebuildHeartbeat exposes env-backed max cycles per wake and stop interval', () => {
+test('projectMartLargeRebuildHeartbeat resolves env overrides ahead of manual settings', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -103,9 +153,22 @@ test('projectMartLargeRebuildHeartbeat exposes env-backed max cycles per wake an
         process.env.PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE = '7'
         process.env.PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS = '2500'
 
-        const heartbeatModulePath = getModulePath('./src/server/utils/projectMartLargeRebuildHeartbeat.ts')
-        const {getProjectMartLargeRebuildHeartbeatConfig} = await import(heartbeatModulePath + '?heartbeat=' + Date.now())
-        console.log(JSON.stringify({config: getProjectMartLargeRebuildHeartbeatConfig()}))
+        const tuningModulePath = getModulePath('./src/server/utils/projectMartLargeRebuildTuning.ts')
+        const {resolveProjectMartLargeRebuildHeartbeatConfig} = await import(tuningModulePath + '?heartbeat=' + Date.now())
+        console.log(JSON.stringify({config: resolveProjectMartLargeRebuildHeartbeatConfig({
+          activeLargeRebuildProjectCount: 1,
+          envValues: process.env,
+          localAppSettings: {
+            backgroundWriterDuckdbMemoryLimit: '12GB',
+            codexBin: null,
+            duckdbBin: null,
+            projectMartLargeRebuildBatchSize: 512,
+            projectMartLargeRebuildMaxCyclesPerWake: 9,
+            projectMartLargeRebuildPollIntervalMs: 500,
+            projectMartLargeRebuildTuningMode: 'manual',
+          },
+          totalMemoryBytes: 64 * 1024 ** 3,
+        })}))
       `,
     ],
     {cwd: process.cwd(), env: process.env},
@@ -121,5 +184,61 @@ test('projectMartLargeRebuildHeartbeat exposes env-backed max cycles per wake an
 
   const result = parseCallsResult(getLastJsonLine(runScript.stdout.toString()))
 
-  expect(result.config).toEqual({batchSize: 32, maxCyclesPerWake: 7, pollIntervalMs: 2500})
+  expect(result.config).toMatchObject({
+    automatic: {batchSize: 4096, maxCyclesPerWake: 16, pollIntervalMs: 250},
+    batchSize: 32,
+    maxCyclesPerWake: 7,
+    pollIntervalMs: 2500,
+    sources: {batchSize: 'env', maxCyclesPerWake: 'env', pollIntervalMs: 'env'},
+  })
+})
+
+test('projectMartLargeRebuildHeartbeat resolves machine-aware automatic config for a single active rebuild', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const tuningModulePath = getModulePath('./src/server/utils/projectMartLargeRebuildTuning.ts')
+        const {resolveProjectMartLargeRebuildHeartbeatConfig} = await import(tuningModulePath + '?heartbeat=' + Date.now())
+        console.log(JSON.stringify({config: resolveProjectMartLargeRebuildHeartbeatConfig({
+          activeLargeRebuildProjectCount: 1,
+          envValues: {},
+          localAppSettings: {
+            backgroundWriterDuckdbMemoryLimit: null,
+            codexBin: null,
+            duckdbBin: null,
+            projectMartLargeRebuildBatchSize: null,
+            projectMartLargeRebuildMaxCyclesPerWake: null,
+            projectMartLargeRebuildPollIntervalMs: null,
+            projectMartLargeRebuildTuningMode: 'automatic',
+          },
+          totalMemoryBytes: 64 * 1024 ** 3,
+        })}))
+      `,
+    ],
+    {cwd: process.cwd(), env: process.env},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'projectMartLargeRebuildHeartbeat automatic config test failed',
+    )
+  }
+
+  const result = parseCallsResult(getLastJsonLine(runScript.stdout.toString()))
+
+  expect(result.config).toMatchObject({
+    automatic: {batchSize: 4096, maxCyclesPerWake: 16, pollIntervalMs: 250},
+    batchSize: 4096,
+    maxCyclesPerWake: 16,
+    pollIntervalMs: 250,
+    sources: {batchSize: 'automatic', maxCyclesPerWake: 'automatic', pollIntervalMs: 'automatic'},
+  })
 })

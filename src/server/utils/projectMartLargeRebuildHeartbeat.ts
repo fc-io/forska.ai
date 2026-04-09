@@ -1,36 +1,14 @@
 import {runProjectMartLargeRebuildCycles} from '../services/projectMartLargeRebuildCyclesService.ts'
+import {
+  getProjectMartLargeRebuildHeartbeatConfig,
+  type ProjectMartLargeRebuildHeartbeatConfig,
+} from './projectMartLargeRebuildTuning.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {registerWriterDemotionHandler, shouldCurrentServerRunWriterWork} from './serverRuntimeRole.ts'
 
 type ProjectMartLargeRebuildHeartbeatOptions = {batchSize?: number; maxCyclesPerWake?: number; pollIntervalMs?: number}
 
-const defaultBatchSize = 128
-const defaultMaxCyclesPerWake = 4
-const defaultPollIntervalMs = 1_000
 const largeRebuildLogger = createRateLimitedLogger({windowMs: 30_000})
-
-const getEnvBatchSize = () => {
-  const parsed = Number(process.env.PROJECT_MART_LARGE_REBUILD_BATCH_SIZE ?? '')
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultBatchSize
-}
-
-const getEnvPollIntervalMs = () => {
-  const parsed = Number(process.env.PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS ?? '')
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultPollIntervalMs
-}
-
-const getEnvMaxCyclesPerWake = () => {
-  const parsed = Number(process.env.PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE ?? '')
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultMaxCyclesPerWake
-}
-
-export const getProjectMartLargeRebuildHeartbeatConfig = () => {
-  return {
-    batchSize: getEnvBatchSize(),
-    maxCyclesPerWake: getEnvMaxCyclesPerWake(),
-    pollIntervalMs: getEnvPollIntervalMs(),
-  }
-}
 
 const logLargeRebuildHeartbeatError = (error: unknown) => {
   return largeRebuildLogger.warn(
@@ -45,11 +23,53 @@ export const startProjectMartLargeRebuildHeartbeat = (options: ProjectMartLargeR
     return () => {}
   }
 
-  const pollIntervalMs = options.pollIntervalMs ?? getEnvPollIntervalMs()
-  const batchSize = options.batchSize ?? getEnvBatchSize()
-  const maxCyclesPerWake = options.maxCyclesPerWake ?? getEnvMaxCyclesPerWake()
   let stopped = false
   let running = false
+  let scheduledTimeout: ReturnType<typeof setTimeout> | null = null
+  let loggedConfigKey: string | null = null
+
+  const getResolvedConfig = async (): Promise<ProjectMartLargeRebuildHeartbeatConfig> => {
+    const resolvedConfig = await getProjectMartLargeRebuildHeartbeatConfig()
+
+    return {
+      ...resolvedConfig,
+      batchSize: options.batchSize ?? resolvedConfig.batchSize,
+      maxCyclesPerWake: options.maxCyclesPerWake ?? resolvedConfig.maxCyclesPerWake,
+      pollIntervalMs: options.pollIntervalMs ?? resolvedConfig.pollIntervalMs,
+    }
+  }
+
+  const logResolvedConfig = (resolvedConfig: ProjectMartLargeRebuildHeartbeatConfig) => {
+    const nextConfigKey = JSON.stringify({
+      batchSize: resolvedConfig.batchSize,
+      maxCyclesPerWake: resolvedConfig.maxCyclesPerWake,
+      pollIntervalMs: resolvedConfig.pollIntervalMs,
+      sources: resolvedConfig.sources,
+    })
+
+    if (nextConfigKey === loggedConfigKey) {
+      return
+    }
+
+    loggedConfigKey = nextConfigKey
+    console.log(
+      `[projectMartLargeRebuild] background loop config batch_size=${resolvedConfig.batchSize} max_cycles_per_wake=${resolvedConfig.maxCyclesPerWake} poll_interval_ms=${resolvedConfig.pollIntervalMs} sources=${JSON.stringify(resolvedConfig.sources)}`,
+    )
+  }
+
+  const scheduleNextRun = async () => {
+    if (stopped) {
+      return
+    }
+
+    const resolvedConfig = await getResolvedConfig()
+
+    logResolvedConfig(resolvedConfig)
+    scheduledTimeout = setTimeout(() => {
+      void runCycle()
+    }, resolvedConfig.pollIntervalMs)
+    scheduledTimeout.unref()
+  }
 
   const runCycle = async () => {
     if (stopped || running) {
@@ -59,31 +79,30 @@ export const startProjectMartLargeRebuildHeartbeat = (options: ProjectMartLargeR
     running = true
 
     try {
+      const resolvedConfig = await getResolvedConfig()
+
+      logResolvedConfig(resolvedConfig)
       await runProjectMartLargeRebuildCycles({
-        batchSize,
-        maxCycles: maxCyclesPerWake,
+        batchSize: resolvedConfig.batchSize,
+        maxCycles: resolvedConfig.maxCyclesPerWake,
         workerId: `project-mart-large-rebuild-heartbeat:${process.pid}`,
       })
     } catch (error) {
       logLargeRebuildHeartbeatError(error)
     } finally {
       running = false
+      await scheduleNextRun()
     }
   }
-
-  const interval = setInterval(() => {
-    return void runCycle()
-  }, pollIntervalMs)
-
-  interval.unref()
-  console.log(
-    `[projectMartLargeRebuild] background loop starting batch_size=${batchSize} max_cycles_per_wake=${maxCyclesPerWake} poll_interval_ms=${pollIntervalMs}`,
-  )
   void runCycle()
 
   const stop = () => {
     stopped = true
-    clearInterval(interval)
+
+    if (scheduledTimeout !== null) {
+      clearTimeout(scheduledTimeout)
+      scheduledTimeout = null
+    }
   }
 
   registerWriterDemotionHandler(() => {
@@ -93,3 +112,5 @@ export const startProjectMartLargeRebuildHeartbeat = (options: ProjectMartLargeR
 
   return stop
 }
+
+export {getProjectMartLargeRebuildHeartbeatConfig} from './projectMartLargeRebuildTuning.ts'

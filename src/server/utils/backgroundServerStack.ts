@@ -1,6 +1,7 @@
 import {totalmem} from 'node:os'
 
 import {DEFAULT_API_SERVER_PORT} from '../../utils/runtimePortDefaults.ts'
+import {type LocalAppSettings, readLocalAppSettings} from './localAppSettings.ts'
 
 type BackgroundServerRole = 'api' | 'worker'
 
@@ -40,11 +41,13 @@ export const getDefaultBackgroundWorkerDuckdbMemoryLimit = (totalMemoryBytes = t
 
 export const getBackgroundServerStackConfig = (
   envValues: Record<string, string | undefined> = process.env,
+  localAppSettings: LocalAppSettings = readLocalAppSettings(),
 ): BackgroundServerStackConfig => {
   const apiPort = getIntegerPort(envValues.API_SERVER_PORT, DEFAULT_API_SERVER_PORT)
   const workerPort = getIntegerPort(envValues.BACKGROUND_WRITER_PORT, apiPort + 1)
   const workerDuckdbMemoryLimit =
     getTrimmedValue(envValues.BACKGROUND_WRITER_DUCKDB_MEMORY_LIMIT)
+    ?? getTrimmedValue(localAppSettings.backgroundWriterDuckdbMemoryLimit)
     ?? getTrimmedValue(envValues.DUCKDB_MEMORY_LIMIT)
     ?? getDefaultBackgroundWorkerDuckdbMemoryLimit()
 
@@ -53,13 +56,15 @@ export const getBackgroundServerStackConfig = (
 
 export const getBackgroundServerEnv = ({
   baseEnv,
+  localAppSettings,
   role,
 }: {
   baseEnv?: Record<string, string | undefined>
+  localAppSettings?: LocalAppSettings
   role: BackgroundServerRole
 }) => {
   const resolvedBaseEnv = {...baseEnv, BUN_CONFIG_MAX_HTTP_REQUESTS: baseEnv?.BUN_CONFIG_MAX_HTTP_REQUESTS ?? '2048'}
-  const config = getBackgroundServerStackConfig(resolvedBaseEnv)
+  const config = getBackgroundServerStackConfig(resolvedBaseEnv, localAppSettings ?? readLocalAppSettings())
 
   return role === 'api'
     ? {

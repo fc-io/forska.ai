@@ -298,6 +298,7 @@ test('admin worker runtime diagnostics route reports effective duckdb settings a
         DUCKDB_PATH: duckdbPath,
         DUCKDB_TEMP_DIRECTORY: tempDirectory,
         PROJECT_MART_LARGE_REBUILD_BATCH_SIZE: '8',
+        PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE: '4',
         PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS: '1500',
         SERVER_ROLE: 'worker',
         VITE_PORT: '3000',
@@ -326,7 +327,14 @@ test('admin worker runtime diagnostics route reports effective duckdb settings a
       }
       pid: number
       processMemory: {heapUsedBytes: number; rssBytes: number}
-      projectMartLargeRebuildHeartbeat: {batchSize: number; maxCyclesPerWake: number; pollIntervalMs: number}
+      projectMartLargeRebuildHeartbeat: {
+        automatic: {batchSize: number; maxCyclesPerWake: number; pollIntervalMs: number}
+        batchSize: number
+        maxCyclesPerWake: number
+        pollIntervalMs: number
+        sources: {batchSize: string; maxCyclesPerWake: string; pollIntervalMs: string}
+        stored: {tuningMode: string}
+      }
       projectMartLargeRebuildRuntimeMetrics: {
         recentCycles: unknown[]
         totals: {
@@ -358,11 +366,18 @@ test('admin worker runtime diagnostics route reports effective duckdb settings a
     expect(responseBody.duckdb.queues.background.queueDepth).toBe(0)
     expect(responseBody.processMemory.rssBytes).toBeGreaterThan(0)
     expect(responseBody.processMemory.heapUsedBytes).toBeGreaterThan(0)
-    expect(responseBody.projectMartLargeRebuildHeartbeat).toEqual({
-      batchSize: 8,
-      maxCyclesPerWake: 4,
-      pollIntervalMs: 1500,
+    expect(responseBody.projectMartLargeRebuildHeartbeat.batchSize).toBe(8)
+    expect(responseBody.projectMartLargeRebuildHeartbeat.maxCyclesPerWake).toBe(4)
+    expect(responseBody.projectMartLargeRebuildHeartbeat.pollIntervalMs).toBe(1500)
+    expect(responseBody.projectMartLargeRebuildHeartbeat.sources).toEqual({
+      batchSize: 'env',
+      maxCyclesPerWake: 'env',
+      pollIntervalMs: 'env',
     })
+    expect(responseBody.projectMartLargeRebuildHeartbeat.stored.tuningMode).toBe('automatic')
+    expect(responseBody.projectMartLargeRebuildHeartbeat.automatic.batchSize).toBeGreaterThan(0)
+    expect(responseBody.projectMartLargeRebuildHeartbeat.automatic.maxCyclesPerWake).toBeGreaterThan(0)
+    expect(responseBody.projectMartLargeRebuildHeartbeat.automatic.pollIntervalMs).toBeGreaterThan(0)
     expect(responseBody.projectMartLargeRebuildRuntimeMetrics.recentCycles).toEqual([])
     expect(responseBody.projectMartLargeRebuildRuntimeMetrics.totals).toEqual({
       cyclesCompleted: 0,
