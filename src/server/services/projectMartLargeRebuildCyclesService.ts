@@ -95,13 +95,16 @@ const getNormalizedUntil = (value?: ProjectMartLargeRebuildUntil) => {
   return value ?? 'max-cycles'
 }
 
-const toCycleSummary = (result: Awaited<ReturnType<typeof runProjectMartLargeRebuildCycle>>): ProjectMartLargeRebuildCycleSummary => {
+const toCycleSummary = (
+  result: Awaited<ReturnType<typeof runProjectMartLargeRebuildCycle>>,
+): ProjectMartLargeRebuildCycleSummary => {
   return result.status === 'progressed'
     ? {
         articleCount: result.articleCount,
         nextCursor: result.nextCursor
           ? {
-              articleCreatedAt: result.nextCursor.articleCreatedAt === null ? null : String(result.nextCursor.articleCreatedAt),
+              articleCreatedAt:
+                result.nextCursor.articleCreatedAt === null ? null : String(result.nextCursor.articleCreatedAt),
               articleId: result.nextCursor.articleId,
             }
           : null,
@@ -116,7 +119,13 @@ const toCycleSummary = (result: Awaited<ReturnType<typeof runProjectMartLargeReb
         : {projectId: result.projectId, status: result.status, workerId: result.workerId}
 }
 
-const getProgressCursorKey = ({currentPhase, summary}: {currentPhase: string | null; summary: ProjectMartLargeRebuildCycleSummary}) => {
+const getProgressCursorKey = ({
+  currentPhase,
+  summary,
+}: {
+  currentPhase: string | null
+  summary: ProjectMartLargeRebuildCycleSummary
+}) => {
   return summary.status !== 'progressed'
     ? null
     : `${summary.projectId}:${currentPhase ?? 'null'}:${summary.nextCursor?.articleCreatedAt ?? 'null'}:${summary.nextCursor?.articleId ?? 'null'}:${summary.articleCount}`
@@ -160,25 +169,47 @@ const getResult = ({
   until,
   workerId,
 }: ProjectMartLargeRebuildCyclesResult) => {
-  return {backoffCount, batchSize, completedCycles, cycleResults, maxCycles, status, stopReason, totalBackoffMs, until, workerId}
+  return {
+    backoffCount,
+    batchSize,
+    completedCycles,
+    cycleResults,
+    maxCycles,
+    status,
+    stopReason,
+    totalBackoffMs,
+    until,
+    workerId,
+  }
 }
 
 export const runProjectMartLargeRebuildCycles = async (
-  {batchSize, heartbeatMs, leaseMs, maxCycles, maxNoProgressBackoffs, projectId, until, workerId}: ProjectMartLargeRebuildCyclesOptions,
+  {
+    batchSize,
+    heartbeatMs,
+    leaseMs,
+    maxCycles,
+    maxNoProgressBackoffs,
+    projectId,
+    until,
+    workerId,
+  }: ProjectMartLargeRebuildCyclesOptions,
   dependencies: ProjectMartLargeRebuildCyclesDependencies = defaultDependencies,
 ): Promise<ProjectMartLargeRebuildCyclesResult> => {
   const cycleResults: ProjectMartLargeRebuildCycleSummary[] = []
   const normalizedUntil = getNormalizedUntil(until)
   const effectiveBatchSize = batchSize ?? 1
   const allowedNoProgressBackoffs = maxNoProgressBackoffs ?? defaultMaxNoProgressBackoffs
+  const hasPinnedProjectId = projectId != null
   let stopReason: ProjectMartLargeRebuildStopReason = 'max-cycles'
   let lastCursorKey: string | null = null
-  let initialPhase: string | null = null
   let noProgressStreak = 0
   let backoffCount = 0
+  let activeProjectId = projectId ?? null
   let totalBackoffMs = 0
 
-  const initialSnapshot = await dependencies.getSnapshot(projectId ?? null)
+  const initialSnapshot = await dependencies.getSnapshot(activeProjectId)
+  let initialPhase = initialSnapshot.rebuildPhase
 
   if (initialSnapshot.refreshStatus === 'paused') {
     return getResult({
@@ -194,13 +225,20 @@ export const runProjectMartLargeRebuildCycles = async (
       workerId,
     })
   }
-
-  initialPhase = initialSnapshot.rebuildPhase
-
   for (let cycleIndex = 0; cycleIndex < maxCycles; cycleIndex += 1) {
-    const result = await dependencies.runCycle({batchSize, heartbeatMs, leaseMs, projectId, workerId})
+    const result = await dependencies.runCycle({
+      batchSize,
+      heartbeatMs,
+      leaseMs,
+      projectId: activeProjectId ?? undefined,
+      workerId,
+    })
     const summary = toCycleSummary(result)
     cycleResults.push(summary)
+
+    if (!hasPinnedProjectId && activeProjectId === null && summary.status === 'progressed') {
+      activeProjectId = summary.projectId
+    }
 
     if (summary.status === 'failed') {
       stopReason = 'failed'
@@ -237,6 +275,10 @@ export const runProjectMartLargeRebuildCycles = async (
     const snapshotProjectId = summary.projectId ?? projectId ?? null
     const snapshot = await dependencies.getSnapshot(snapshotProjectId)
     const currentPhase = snapshot.rebuildPhase
+
+    if (!hasPinnedProjectId && summary.status === 'completed') {
+      activeProjectId = null
+    }
 
     if (initialPhase === null && currentPhase !== null) {
       initialPhase = currentPhase

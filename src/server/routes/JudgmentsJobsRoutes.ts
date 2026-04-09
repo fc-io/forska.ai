@@ -27,6 +27,7 @@ import {
 } from '../services/appQueryHelpers.ts'
 import {deleteJudgmentJobSafelyTx} from '../services/judgmentJobDeleteService.ts'
 import {HttpError} from '../utils/httpError.ts'
+import {getProjectMartLargeRebuildRuntimeMetrics} from '../utils/projectMartLargeRebuildRuntimeMetrics.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
 
@@ -75,10 +76,26 @@ type JudgmentJobHealthBadge =
   | 'Stale Import'
 type UnassessedCountCacheValue = {value: number; expiresAt: number}
 type ProjectMartFreshnessState = {dirtyToken: number | null; isFresh: boolean; lastCompletedRefreshToken: number | null}
+type JudgmentJobStorageProjection = {
+  activeLargeRebuildProjectCount: number
+  currentPhase: string | null
+  estimatedCurrentPhaseRemainingMs: number | null
+  estimatedStorageDrainRemainingMs: number | null
+  projectedStorageDrainAt: string | null
+  remainingCurrentPhaseArticleCount: number | null
+  rowsPerMinute: number | null
+  scopeArticleCount: number | null
+}
 const unassessedCountTTLms = 10_000
 const staleImportThresholdMs = 15 * 60 * 1_000
 const largeWalThresholdBytes = 64 * 1_024 * 1_024
 const unassessedCountCache = new Map<string, UnassessedCountCacheValue>()
+const articleScopedLargeRebuildPhases = new Set([
+  'prompt_answer_fact',
+  'review_article_filter_member',
+  'review_article_rollup',
+  'review_article_serving',
+])
 const systemSqliteFallbackStepsSchema = t.Array(
   t.Union([t.Literal('checkpoint'), t.Literal('diagnostic'), t.Literal('export')]),
 )
@@ -122,6 +139,182 @@ const getProjectMartFreshnessState = async (projectId: string): Promise<ProjectM
     dirtyToken,
     isFresh: dirtyToken === null || (lastCompletedRefreshToken !== null && lastCompletedRefreshToken >= dirtyToken),
     lastCompletedRefreshToken,
+  }
+}
+
+const getProjectLargeRebuildRowsPerMs = (projectId: string) => {
+  const cycles = getProjectMartLargeRebuildRuntimeMetrics()
+    .recentCycles.filter((cycle) => {
+      return cycle.projectId === projectId && cycle.status === 'progressed' && cycle.articleCount > 0
+    })
+    .slice(-12)
+
+  if (cycles.length === 0) {
+    return null
+  }
+
+  const totalRows = cycles.reduce((sum, cycle) => {
+    return sum + cycle.articleCount
+  }, 0)
+
+  if (totalRows <= 0) {
+    return null
+  }
+
+  const firstStartedAt = new Date(cycles[0]?.startedAt ?? '').getTime()
+  const lastEndedAt = new Date(cycles[cycles.length - 1]?.endedAt ?? '').getTime()
+  const totalDurationMs = cycles.reduce((sum, cycle) => {
+    return sum + cycle.durationMs
+  }, 0)
+  const elapsedMs =
+    Number.isFinite(firstStartedAt) && Number.isFinite(lastEndedAt)
+      ? Math.max(lastEndedAt - firstStartedAt, totalDurationMs, 1)
+      : Math.max(totalDurationMs, 1)
+
+  return totalRows / elapsedMs
+}
+
+const getEstimatedRemainingArticlePassCount = ({
+  currentPhase,
+  remainingCurrentPhaseArticleCount,
+  scopeArticleCount,
+}: {
+  currentPhase: string | null
+  remainingCurrentPhaseArticleCount: number | null
+  scopeArticleCount: number
+}) => {
+  if (currentPhase === 'prompt_answer_fact') {
+    return (remainingCurrentPhaseArticleCount ?? scopeArticleCount) + scopeArticleCount * 3
+  }
+
+  if (currentPhase === 'review_answer_dictionary') {
+    return scopeArticleCount * 3
+  }
+
+  if (currentPhase === 'review_article_filter_member') {
+    return (remainingCurrentPhaseArticleCount ?? scopeArticleCount) + scopeArticleCount * 2
+  }
+
+  if (currentPhase === 'review_article_rollup') {
+    return (remainingCurrentPhaseArticleCount ?? scopeArticleCount) + scopeArticleCount
+  }
+
+  if (currentPhase === 'review_article_serving') {
+    return remainingCurrentPhaseArticleCount ?? scopeArticleCount
+  }
+
+  return null
+}
+
+const getJudgmentJobStorageProjection = async (projectId: string): Promise<JudgmentJobStorageProjection | null> => {
+  const [rebuildRow] = await getAppDatabaseService().queryJson<{
+    cursorArticleCreatedAt: string | null
+    cursorArticleId: string | null
+    rebuildPhase: string | null
+    refreshToken: number | null
+  }>(`
+    SELECT
+      cursor_article_created_at AS cursorArticleCreatedAt,
+      cursor_article_id AS cursorArticleId,
+      rebuild_phase AS rebuildPhase,
+      CAST(refresh_token AS INTEGER) AS refreshToken
+    FROM app.project_mart_large_rebuild_state
+    WHERE project_id = ${getSqlLiteral(projectId)}
+    LIMIT 1
+  `)
+
+  if ((rebuildRow?.refreshToken ?? 0) <= 0) {
+    return null
+  }
+
+  const [activeCountRows, scopeCountRows] = await Promise.all([
+    getAppDatabaseService().queryJson<{activeLargeRebuildProjectCount: number}>(`
+      SELECT CAST(COUNT(*) AS INTEGER) AS activeLargeRebuildProjectCount
+      FROM app.project_mart_large_rebuild_state
+      WHERE refresh_token > 0
+    `),
+    getAppDatabaseService().queryJson<{remainingCurrentPhaseArticleCount: number; scopeArticleCount: number}>(`
+      WITH route_scope AS (
+        SELECT
+          pir.project_id,
+          air.article_id,
+          TRUE AS in_route_scope,
+          FALSE AS in_curated_scope
+        FROM app.project_import_route pir
+        INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
+        WHERE pir.project_id = ${getSqlLiteral(projectId)}
+      ),
+      curated_scope AS (
+        SELECT
+          pa.project_id,
+          pa.article_id,
+          FALSE AS in_route_scope,
+          TRUE AS in_curated_scope
+        FROM app.project_article pa
+        WHERE pa.project_id = ${getSqlLiteral(projectId)}
+      ),
+      combined_scope AS (
+        SELECT * FROM route_scope
+        UNION ALL
+        SELECT * FROM curated_scope
+      ),
+      aggregated_scope AS (
+        SELECT project_id, article_id
+        FROM combined_scope
+        GROUP BY project_id, article_id
+      )
+      SELECT
+        CAST(COUNT(*) AS INTEGER) AS scopeArticleCount,
+        CAST(
+          COALESCE(
+            SUM(
+              CASE
+                WHEN ${getSqlLiteral(rebuildRow.cursorArticleId)} IS NULL THEN 1
+                WHEN COALESCE(article.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') > COALESCE(${getSqlLiteral(rebuildRow.cursorArticleCreatedAt)}, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') THEN 1
+                WHEN COALESCE(article.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') = COALESCE(${getSqlLiteral(rebuildRow.cursorArticleCreatedAt)}, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')
+                  AND aggregated_scope.article_id > ${getSqlLiteral(rebuildRow.cursorArticleId)} THEN 1
+                ELSE 0
+              END
+            ),
+            0
+          ) AS INTEGER
+        ) AS remainingCurrentPhaseArticleCount
+      FROM aggregated_scope
+      INNER JOIN app.article article ON article.id = aggregated_scope.article_id
+    `),
+  ])
+
+  const scopeArticleCount = scopeCountRows[0]?.scopeArticleCount ?? 0
+  const remainingCurrentPhaseArticleCount = articleScopedLargeRebuildPhases.has(rebuildRow.rebuildPhase ?? '')
+    ? (scopeCountRows[0]?.remainingCurrentPhaseArticleCount ?? scopeArticleCount)
+    : null
+  const rowsPerMs = getProjectLargeRebuildRowsPerMs(projectId)
+  const estimatedCurrentPhaseRemainingMs =
+    rowsPerMs !== null && remainingCurrentPhaseArticleCount !== null
+      ? Math.round(remainingCurrentPhaseArticleCount / rowsPerMs)
+      : null
+  const estimatedRemainingArticlePassCount = getEstimatedRemainingArticlePassCount({
+    currentPhase: rebuildRow.rebuildPhase,
+    remainingCurrentPhaseArticleCount,
+    scopeArticleCount,
+  })
+  const estimatedStorageDrainRemainingMs =
+    rowsPerMs !== null && estimatedRemainingArticlePassCount !== null
+      ? Math.round(estimatedRemainingArticlePassCount / rowsPerMs)
+      : null
+
+  return {
+    activeLargeRebuildProjectCount: activeCountRows[0]?.activeLargeRebuildProjectCount ?? 0,
+    currentPhase: rebuildRow.rebuildPhase,
+    estimatedCurrentPhaseRemainingMs,
+    estimatedStorageDrainRemainingMs,
+    projectedStorageDrainAt:
+      estimatedStorageDrainRemainingMs === null
+        ? null
+        : new Date(Date.now() + estimatedStorageDrainRemainingMs).toISOString(),
+    remainingCurrentPhaseArticleCount,
+    rowsPerMinute: rowsPerMs === null ? null : Math.round(rowsPerMs * 60 * 1000),
+    scopeArticleCount,
   }
 }
 
@@ -649,10 +842,12 @@ export const judgmentsJobsRoutes = new Elysia()
       const sqliteService = getJudgmentJobSqliteService()
       const sqliteHealthPromise = sqliteService.getHealthSnapshot(job.id)
       const leaseMetadataPromise = sqliteService.getJudgmentJobLeaseMetadata(job.id)
+      const storageProjectionPromise = getJudgmentJobStorageProjection(job.projectId)
 
-      const [sqliteHealth, leaseMetadata, totalTokenUsage, tokenUsageRows] = await Promise.all([
+      const [sqliteHealth, leaseMetadata, storageProjection, totalTokenUsage, tokenUsageRows] = await Promise.all([
         sqliteHealthPromise,
         leaseMetadataPromise,
+        storageProjectionPromise,
         getAppDatabaseService().queryJson<{
           totalTokens: number | null
           totalPromptTokens: number | null
@@ -706,7 +901,7 @@ export const judgmentsJobsRoutes = new Elysia()
         leaseMetadata,
         promptStats: sqliteHealth.promptCounts,
         storagePolicy,
-        storageHealth: sqliteHealth,
+        storageHealth: storageProjection === null ? sqliteHealth : {...sqliteHealth, projection: storageProjection},
         judgingRuntime: getJudgingRuntime(),
         totalTokenUsage: {
           totalTokens: Number(totalTokenUsage[0]?.totalTokens || 0),

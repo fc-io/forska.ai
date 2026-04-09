@@ -1,5 +1,16 @@
 # Faster Rebuild Plan
 
+## Status
+
+- Implemented and verified with targeted tests for the core rebuild pieces.
+- Current code now includes:
+  - worker runtime diagnostics endpoint,
+  - DuckDB main and background queue metrics,
+  - large rebuild cycle runtime metrics,
+  - portable rebuild defaults of `batchSize=128`, `pollIntervalMs=1000`, and `maxCyclesPerWake=4`,
+  - machine-aware background worker DuckDB memory defaults,
+  - large rebuild executor reads and writes on the background DuckDB queue.
+
 ## Goal
 
 - Make project mart large rebuilds catch up fast enough that `lastAckSeq` advances and retained SQLite rows drain.
@@ -31,31 +42,34 @@
 
 ## Why The Worker Default Is 4GB
 
-- I did not find a documented rationale in the repo for `src/server/utils/backgroundServerStack.ts:12` using `4GB`.
+- The previous fixed `4GB` worker fallback looked like a conservative dev-safety baseline.
 - The likely reason is conservative dev safety:
   - keep the split background writer from taking over a laptop,
   - leave headroom for the API server, browser, editor, Bun, and OS,
   - make `bun scripts/startServerStack.ts` predictable on 8-16GB machines.
-- That made sense as a safe baseline, but it is too conservative as a universal default for large rebuilds on larger-memory machines.
+- That made sense as a safe baseline, but it was too conservative as a universal default for large rebuilds on larger-memory machines.
 - The good news: the code already supports override via `BACKGROUND_WRITER_DUCKDB_MEMORY_LIMIT` or fallback `DUCKDB_MEMORY_LIMIT`.
 
 ## Recommendation On Memory Default
 
 - Do not keep `4GB` as the universal worker default.
-- Replace it with a machine-aware default, while preserving explicit env overrides.
-- Suggested tiered default for the background writer:
-  - total RAM `<= 8GB` -> `2GB`
-  - total RAM `<= 16GB` -> `4GB`
-  - total RAM `<= 32GB` -> `8GB`
-  - total RAM `> 32GB` -> `12GB`
-- On this machine, that would make the worker default `12GB`.
+- The current implementation replaced the fixed fallback with a machine-aware default, while preserving explicit env overrides.
+- Actual implemented rule in `src/server/utils/backgroundServerStack.ts`:
+  - derive the worker limit as about half of total host RAM,
+  - clamp to a minimum of `4GB`,
+  - clamp to a maximum of `20GB`.
+- Examples with the current rule:
+  - `8GB` host -> `4GB`
+  - `16GB` host -> `8GB`
+  - `64GB` host -> `20GB`
 - Keep `BACKGROUND_WRITER_DUCKDB_MEMORY_LIMIT` as the escape hatch for very small or very large machines.
 
 ## Tuning Strategy
 
 ### 1. Batch Size
 
-- Current default `PROJECT_MART_LARGE_REBUILD_BATCH_SIZE=1` is the first thing to fix.
+- The old default `PROJECT_MART_LARGE_REBUILD_BATCH_SIZE=1` was the first thing to fix.
+- The current default is now `128`.
 - Strategy:
   - move default to something meaningful, not heroic: start around `128`;
   - let larger machines or manual recovery use `256`, `512`, or `1000`;
@@ -70,7 +84,8 @@
 
 ### 2. Poll Interval
 
-- Current default `PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS=5000` is too sleepy.
+- The old default `PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS=5000` was too sleepy.
+- The current default is now `1000ms`.
 - Strategy:
   - lower idle poll to `500-1000ms`;
   - do not sleep between successful cycles when more rebuild work is immediately available.
@@ -97,9 +112,9 @@
 
 ### 4. Shared DuckDB Queue Contention
 
-- Right now large rebuild executor work goes through the normal DuckDB `queryJson` / `run` path.
-- That means rebuild work shares the same serialized writer queue as other app DB work.
-- It is not the dominant bottleneck in the current live sample, but it will matter once 1-3 are raised.
+- Large rebuild executor work now goes through the background DuckDB queue instead of the main control queue.
+- That isolates rebuild batch reads and writes from shorter control-plane operations while keeping rebuild execution serialized.
+- Main and background queue metrics are now exposed so contention is observable.
 - Strategy:
   - first add direct metrics for main queue depth and wait time, not just append-lane metrics;
   - then move large rebuild batch work onto the background DuckDB queue or a dedicated rebuild queue/connection;
@@ -150,7 +165,7 @@
   - `PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS=1000`
   - `PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE=4`
 - This machine local catch-up mode:
-  - `BACKGROUND_WRITER_DUCKDB_MEMORY_LIMIT=12GB`
+  - `BACKGROUND_WRITER_DUCKDB_MEMORY_LIMIT=12GB` or higher if you want to override the automatic host-based default explicitly
   - `PROJECT_MART_LARGE_REBUILD_BATCH_SIZE=512`
   - `PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS=500`
   - `PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE=8`
@@ -185,6 +200,8 @@
 - `bun test src/server/utils/backgroundServerStack.test.ts`
 - `bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts`
 - `bun test src/server/services/projectMartLargeRebuildRunner.test.ts`
+- `bun test src/server/services/projectMartLargeRebuildExecutor.test.ts`
+- `bun test src/server/routes/AdminInvestigateRoutes.test.ts`
 - `bun run lint`
 - Live verify after implementation:
   - worker reports the effective DuckDB memory limit,

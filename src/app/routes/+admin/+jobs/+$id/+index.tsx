@@ -80,6 +80,10 @@ const formatDuration = (value: number | null | undefined) => {
   return hours > 0 ? `${hours}h ${minutes}m ${seconds}s` : minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`
 }
 
+const formatRowsPerMinute = (value: number | null | undefined) => {
+  return value === null || value === undefined ? 'N/A' : `${value.toLocaleString()} rows/min`
+}
+
 const getHeartbeatAgeMs = (heartbeatAt: string | null | undefined) => {
   return heartbeatAt ? Math.max(Date.now() - new Date(heartbeatAt).getTime(), 0) : null
 }
@@ -131,6 +135,16 @@ type JobData = {
     lastAckSeq?: number | null
     oldestUnexportedAgeMs?: number | null
     outboxRowCount?: number
+    projection?: {
+      activeLargeRebuildProjectCount?: number
+      currentPhase?: string | null
+      estimatedCurrentPhaseRemainingMs?: number | null
+      estimatedStorageDrainRemainingMs?: number | null
+      projectedStorageDrainAt?: string | null
+      remainingCurrentPhaseArticleCount?: number | null
+      rowsPerMinute?: number | null
+      scopeArticleCount?: number | null
+    }
     promptCounts?: {judged?: number; ready?: number; sent?: number; skipped?: number}
     retainedRowCount?: number
     sqliteFileBytes?: number | null
@@ -691,6 +705,27 @@ const AdminJudgmentJobDetail = () => {
                       <p class="text-sm text-gray-500">Oldest Unexported</p>
                       <p class="font-medium mt-1">{formatDuration(storageHealth()?.oldestUnexportedAgeMs)}</p>
                       <p class="text-xs text-gray-500 mt-1">Last ACK seq: {storageHealth()?.lastAckSeq ?? 'N/A'}</p>
+                    </div>
+                    <div class="bg-gray-50 rounded-lg p-4 md:col-span-2 xl:col-span-1">
+                      <p class="text-sm text-gray-500">Projected Storage Drain</p>
+                      <p class="font-medium mt-1">
+                        {formatDuration(storageHealth()?.projection?.estimatedStorageDrainRemainingMs)}
+                      </p>
+                      <p class="text-xs text-gray-500 mt-1">
+                        ETA: {formatDateTime(storageHealth()?.projection?.projectedStorageDrainAt)}
+                      </p>
+                      <p class="text-xs text-gray-500 mt-1">
+                        Phase:{' '}
+                        {storageHealth()?.projection?.currentPhase
+                          ? formatStatus(storageHealth()?.projection?.currentPhase ?? null)
+                          : 'N/A'}{' '}
+                        | Current phase ETA:{' '}
+                        {formatDuration(storageHealth()?.projection?.estimatedCurrentPhaseRemainingMs)}
+                      </p>
+                      <p class="text-xs text-gray-500 mt-1">
+                        Throughput: {formatRowsPerMinute(storageHealth()?.projection?.rowsPerMinute)} | Active rebuilds:{' '}
+                        {storageHealth()?.projection?.activeLargeRebuildProjectCount ?? 'N/A'}
+                      </p>
                     </div>
                     <div class="bg-gray-50 rounded-lg p-4">
                       <p class="text-sm text-gray-500">Import Failures</p>

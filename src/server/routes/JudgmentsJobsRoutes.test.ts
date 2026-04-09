@@ -77,11 +77,15 @@ afterAll(async () => {
   rmSync(tempJobDir, {force: true, recursive: true})
 })
 
-afterEach(() => {
+afterEach(async () => {
   state.assertStoredProviderModelRuntimeMatch.mockImplementation(async (_input: {modelId: string}) => {})
   state.getStoredProviderModelRuntimeMatch.mockImplementation(async (_input: {modelId: string}) => {
     return {message: null, ok: true, reason: null}
   })
+  const {resetProjectMartLargeRebuildRuntimeMetricsForTests} =
+    await import('../utils/projectMartLargeRebuildRuntimeMetrics.ts')
+
+  resetProjectMartLargeRebuildRuntimeMetricsForTests()
 })
 
 const insertProjectFixture = async ({
@@ -812,6 +816,113 @@ test('returns safe SQLite health values for jobs without a local sqlite db', asy
     sqliteFileBytes: null,
     walBytes: 0,
   })
+})
+
+test('job details include projected storage drain when a large rebuild is active', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `sqlite-health-projection-project-${Date.now()}`
+  const modelId = `sqlite-health-projection-model-${Date.now()}`
+  const connectionId = `sqlite-health-projection-connection-${Date.now()}`
+  const jobId = `sqlite-health-projection-job-${Date.now()}`
+  const articleIdA = `sqlite-health-projection-article-a-${Date.now()}`
+  const articleIdB = `sqlite-health-projection-article-b-${Date.now()}`
+  const now = Date.now()
+  const {recordProjectMartLargeRebuildCycleMetric} = await import('../utils/projectMartLargeRebuildRuntimeMetrics.ts')
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'paused', 'draining')
+  `)
+  await insertOutboxFixture({jobId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.article (id, article_id, article_title, article_created_at, article_updated_at)
+    VALUES
+      ('${articleIdA}', 'external-${articleIdA}', 'Projection article A', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T00:00:00.000Z'),
+      ('${articleIdB}', 'external-${articleIdB}', 'Projection article B', TIMESTAMPTZ '2026-04-02T00:00:00.000Z', TIMESTAMPTZ '2026-04-02T00:00:00.000Z')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES
+      ('project-article-${articleIdA}', '${projectId}', '${articleIdA}'),
+      ('project-article-${articleIdB}', '${projectId}', '${articleIdB}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_mart_large_rebuild_state (
+      project_id,
+      refresh_token,
+      rebuild_phase,
+      cursor_article_created_at,
+      cursor_article_id,
+      refresh_status,
+      last_error
+    ) VALUES (
+      '${projectId}',
+      11,
+      'prompt_answer_fact',
+      TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+      '${articleIdA}',
+      'running',
+      NULL
+    )
+  `)
+
+  recordProjectMartLargeRebuildCycleMetric({
+    articleCount: 1,
+    durationMs: 1000,
+    duckdbQueues: null,
+    endedAt: new Date(now - 3000).toISOString(),
+    error: null,
+    phase: 'prompt_answer_fact',
+    projectId,
+    startedAt: new Date(now - 4000).toISOString(),
+    status: 'progressed',
+    workerId: 'test-worker',
+  })
+  recordProjectMartLargeRebuildCycleMetric({
+    articleCount: 1,
+    durationMs: 1000,
+    duckdbQueues: null,
+    endedAt: new Date(now).toISOString(),
+    error: null,
+    phase: 'prompt_answer_fact',
+    projectId,
+    startedAt: new Date(now - 1000).toISOString(),
+    status: 'progressed',
+    workerId: 'test-worker',
+  })
+
+  const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
+  const body = (await response.json()) as {
+    storageHealth: {
+      projection?: {
+        activeLargeRebuildProjectCount: number
+        currentPhase: string | null
+        estimatedCurrentPhaseRemainingMs: number | null
+        estimatedStorageDrainRemainingMs: number | null
+        projectedStorageDrainAt: string | null
+        remainingCurrentPhaseArticleCount: number | null
+        rowsPerMinute: number | null
+        scopeArticleCount: number | null
+      }
+    }
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.storageHealth.projection).toBeDefined()
+  expect(body.storageHealth.projection?.activeLargeRebuildProjectCount).toBe(1)
+  expect(body.storageHealth.projection?.currentPhase).toBe('prompt_answer_fact')
+  expect(body.storageHealth.projection?.remainingCurrentPhaseArticleCount).toBe(1)
+  expect(body.storageHealth.projection?.scopeArticleCount).toBe(2)
+  expect(body.storageHealth.projection?.rowsPerMinute).toBe(30)
+  expect(body.storageHealth.projection?.estimatedCurrentPhaseRemainingMs).toBeGreaterThanOrEqual(1500)
+  expect(body.storageHealth.projection?.estimatedCurrentPhaseRemainingMs).toBeLessThanOrEqual(2500)
+  expect(body.storageHealth.projection?.estimatedStorageDrainRemainingMs).toBeGreaterThanOrEqual(13000)
+  expect(body.storageHealth.projection?.estimatedStorageDrainRemainingMs).toBeLessThanOrEqual(15000)
+  expect(body.storageHealth.projection?.projectedStorageDrainAt).not.toBeNull()
 })
 
 test('judgment job health route returns healthy job details', async () => {
