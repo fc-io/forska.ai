@@ -36,6 +36,11 @@ export type UserRecord = {
   name: string
   email: string
   role: string | null
+  backgroundWriterDuckdbMemoryLimit: string | null
+  projectMartLargeRebuildBatchSize: number | null
+  projectMartLargeRebuildMaxCyclesPerWake: number | null
+  projectMartLargeRebuildPollIntervalMs: number | null
+  projectMartLargeRebuildTuningMode: 'automatic' | 'manual'
   unpaywallEmail: string | null
   fullTextConversionModelId: string | null
   createdAt: Date

@@ -1,8 +1,13 @@
+import {rm} from 'node:fs/promises'
+
+import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
 
 import {
   getBackgroundServerEnv,
+  getBackgroundServerEnvAsync,
   getBackgroundServerStackConfig,
+  getBackgroundServerStackConfigAsync,
   getDefaultBackgroundWorkerDuckdbMemoryLimit,
 } from './backgroundServerStack.ts'
 
@@ -114,4 +119,47 @@ test('background server stack passes machine-local worker duckdb memory into wor
       role: 'worker',
     }),
   ).toMatchObject({API_SERVER_PORT: '3302', DUCKDB_MEMORY_LIMIT: '18GB', SERVER_ROLE: 'worker', SERVER_WRITER_URL: ''})
+})
+
+test('background server stack async config reads worker duckdb memory from app.user_config', async () => {
+  const duckdbPath = `/tmp/f1-background-server-stack-${Date.now()}.duckdb`
+  const duckdbInstance = await DuckDBInstance.create(duckdbPath)
+  const connection = await duckdbInstance.connect()
+
+  await connection.run(`
+    CREATE SCHEMA IF NOT EXISTS app;
+    CREATE TABLE app.user_config (
+      id VARCHAR PRIMARY KEY,
+      background_writer_duckdb_memory_limit VARCHAR
+    );
+    INSERT INTO app.user_config (id, background_writer_duckdb_memory_limit)
+    VALUES ('local-user', '14GB');
+  `)
+  connection.closeSync()
+  duckdbInstance.closeSync()
+
+  try {
+    expect(
+      await getBackgroundServerStackConfigAsync(
+        {API_SERVER_PORT: '4100', DUCKDB_PATH: duckdbPath},
+        defaultLocalAppSettings,
+      ),
+    ).toEqual({apiPort: 4100, workerDuckdbMemoryLimit: '14GB', workerPort: 4101, writerUrl: 'http://127.0.0.1:4101'})
+
+    expect(
+      await getBackgroundServerEnvAsync({
+        baseEnv: {API_SERVER_PORT: '4100', DUCKDB_PATH: duckdbPath},
+        localAppSettings: defaultLocalAppSettings,
+        role: 'worker',
+      }),
+    ).toMatchObject({
+      API_SERVER_PORT: '4101',
+      DUCKDB_MEMORY_LIMIT: '14GB',
+      SERVER_ROLE: 'worker',
+      SERVER_WRITER_URL: '',
+    })
+  } finally {
+    await rm(duckdbPath, {force: true})
+    await rm(`${duckdbPath}.wal`, {force: true})
+  }
 })

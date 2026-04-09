@@ -335,7 +335,8 @@ const Settings = () => {
                     />
                     <p class="mt-2 text-xs text-gray-500">
                       Optional machine-local override for the background writer DuckDB memory cap. Leave empty to use
-                      the automatic memory limit from your host RAM.
+                      the automatic memory limit from your host RAM. DuckDB memory-limit changes require a server
+                      restart to take effect.
                     </p>
                   </div>
                   <Show when={projectMartLargeRebuildTuningMode() === 'manual'}>
@@ -429,8 +430,8 @@ const Settings = () => {
                       </p>
                     </Show>
                     <p class="text-xs text-gray-500">
-                      Heartbeat tuning changes apply to the running worker within a few seconds. Memory-limit changes
-                      apply on the next server restart.
+                      Heartbeat tuning changes apply to the running worker within a few seconds. DuckDB memory-limit
+                      changes are saved immediately but only apply after the next server restart.
                     </p>
                   </div>
                 </div>

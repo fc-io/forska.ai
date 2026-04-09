@@ -48,9 +48,16 @@ export const usersRoutes = new Elysia()
         projectMartLargeRebuildTuningMode: getProjectMartLargeRebuildTuningMode(body.projectMartLargeRebuildTuningMode),
       })
       const userConfig = await getUserConfigQueryService().updateUserConfig({
+        backgroundWriterDuckdbMemoryLimit: getNullableString(body.backgroundWriterDuckdbMemoryLimit),
         email: body.email,
         fullTextConversionModelId: getNullableString(body.fullTextConversionModelId),
         name: body.name,
+        projectMartLargeRebuildBatchSize: getNullablePositiveInteger(body.projectMartLargeRebuildBatchSize),
+        projectMartLargeRebuildMaxCyclesPerWake: getNullablePositiveInteger(
+          body.projectMartLargeRebuildMaxCyclesPerWake,
+        ),
+        projectMartLargeRebuildPollIntervalMs: getNullablePositiveInteger(body.projectMartLargeRebuildPollIntervalMs),
+        projectMartLargeRebuildTuningMode: getProjectMartLargeRebuildTuningMode(body.projectMartLargeRebuildTuningMode),
         unpaywallEmail: getNullableString(body.unpaywallEmail),
       })
 

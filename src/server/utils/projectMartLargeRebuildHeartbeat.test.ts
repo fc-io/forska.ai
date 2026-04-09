@@ -158,14 +158,12 @@ test('projectMartLargeRebuildHeartbeat resolves env overrides ahead of manual se
         console.log(JSON.stringify({config: resolveProjectMartLargeRebuildHeartbeatConfig({
           activeLargeRebuildProjectCount: 1,
           envValues: process.env,
-          localAppSettings: {
+          storedSettings: {
             backgroundWriterDuckdbMemoryLimit: '12GB',
-            codexBin: null,
-            duckdbBin: null,
-            projectMartLargeRebuildBatchSize: 512,
-            projectMartLargeRebuildMaxCyclesPerWake: 9,
-            projectMartLargeRebuildPollIntervalMs: 500,
-            projectMartLargeRebuildTuningMode: 'manual',
+            batchSize: 512,
+            maxCyclesPerWake: 9,
+            pollIntervalMs: 500,
+            tuningMode: 'manual',
           },
           totalMemoryBytes: 64 * 1024 ** 3,
         })}))
@@ -208,14 +206,12 @@ test('projectMartLargeRebuildHeartbeat resolves machine-aware automatic config f
         console.log(JSON.stringify({config: resolveProjectMartLargeRebuildHeartbeatConfig({
           activeLargeRebuildProjectCount: 1,
           envValues: {},
-          localAppSettings: {
+          storedSettings: {
             backgroundWriterDuckdbMemoryLimit: null,
-            codexBin: null,
-            duckdbBin: null,
-            projectMartLargeRebuildBatchSize: null,
-            projectMartLargeRebuildMaxCyclesPerWake: null,
-            projectMartLargeRebuildPollIntervalMs: null,
-            projectMartLargeRebuildTuningMode: 'automatic',
+            batchSize: null,
+            maxCyclesPerWake: null,
+            pollIntervalMs: null,
+            tuningMode: 'automatic',
           },
           totalMemoryBytes: 64 * 1024 ** 3,
         })}))

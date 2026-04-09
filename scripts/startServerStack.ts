@@ -4,7 +4,10 @@ import {dirname, join} from 'node:path'
 
 import {spawn, type Subprocess} from 'bun'
 
-import {getBackgroundServerEnv, getBackgroundServerStackConfig} from '../src/server/utils/backgroundServerStack.ts'
+import {
+  getBackgroundServerEnvAsync,
+  getBackgroundServerStackConfigAsync,
+} from '../src/server/utils/backgroundServerStack.ts'
 
 type ManagedRole = 'api' | 'worker'
 type ServerProcess = Subprocess<'ignore', 'inherit', 'inherit'>
@@ -22,7 +25,7 @@ const restartDelayMs = 1_000
 const startupTimeoutMs = 20_000
 const writerPollIntervalMs = 250
 
-const config = getBackgroundServerStackConfig(process.env)
+const config = await getBackgroundServerStackConfigAsync(process.env)
 const serverStackLockPath = join(tmpdir(), 'forska-server-stack', `${config.apiPort}-${config.workerPort}.lock.json`)
 
 if (config.apiPort === config.workerPort) {
@@ -166,10 +169,10 @@ const setManagedServerProcess = (role: ManagedRole, serverProcess: ServerProcess
   managedServerState.workerProcess = serverProcess
 }
 
-const startServerProcess = (role: ManagedRole): ServerProcess => {
+const startServerProcess = async (role: ManagedRole): Promise<ServerProcess> => {
   const serverProcess = spawn(getServerCommand(), {
     cwd: process.cwd(),
-    env: getBackgroundServerEnv({baseEnv: process.env, role}),
+    env: await getBackgroundServerEnvAsync({baseEnv: process.env, role}),
     stderr: 'inherit',
     stdin: 'ignore',
     stdout: 'inherit',
@@ -205,21 +208,21 @@ const stopManagedServerProcess = async (role: ManagedRole, serverProcess = getMa
   await stopServerProcess(serverProcess)
 }
 
-const ensureManagedServerProcess = (role: ManagedRole): ServerProcess => {
+const ensureManagedServerProcess = async (role: ManagedRole): Promise<ServerProcess> => {
   const currentProcess = getManagedServerProcess(role)
 
   if (isServerProcessRunning(currentProcess)) {
     return currentProcess
   }
 
-  const nextProcess = startServerProcess(role)
+  const nextProcess = await startServerProcess(role)
   setManagedServerProcess(role, nextProcess)
   void monitorManagedServerExit(role, nextProcess)
   return nextProcess
 }
 
 const ensureWorkerReadyAttempt = async (): Promise<void> => {
-  const workerProcess = ensureManagedServerProcess('worker')
+  const workerProcess = await ensureManagedServerProcess('worker')
 
   try {
     return await waitForWriter(config.writerUrl)
@@ -245,7 +248,7 @@ const ensureWorkerReady = () => {
 
 const ensureApiReadyAttempt = async (): Promise<void> => {
   await ensureWorkerReady()
-  ensureManagedServerProcess('api')
+  await ensureManagedServerProcess('api')
 }
 
 const ensureApiReady = () => {
