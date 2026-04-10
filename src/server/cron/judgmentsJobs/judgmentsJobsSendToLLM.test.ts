@@ -411,7 +411,7 @@ test('lets different provider connections progress under a stricter shared bucke
   ).toBe(true)
 })
 
-test('dispatch availability skips active cooldowns, probes expired cooldowns, and skips misconfigured endpoints', () => {
+test('dispatch availability skips 404 misroutes during cooldown, probes once after expiry, and skips misconfigured endpoints', () => {
   const providerConnectionId = 'connection-gated'
   const runtime = {modelBaseUrl: 'http://availability.test/v1', modelProvider: 'openai', modelWorkerUrls: []}
   let now = 1_000
@@ -421,7 +421,7 @@ test('dispatch availability skips active cooldowns, probes expired cooldowns, an
 
   const cooldownFailure = classifyConnectionFailure({
     context: {effectiveBaseURL: runtime.modelBaseUrl, endpointPath: '/v1/chat/completions', providerKind: 'openai'},
-    error: {status: 503},
+    error: {status: 404},
   })
   recordConnectionFailure({effectiveBaseURL: runtime.modelBaseUrl, failure: cooldownFailure, providerConnectionId})
 
@@ -480,6 +480,31 @@ test('requeues not-yet-started prompts for a connection after a connection error
 
   expect(processed).toEqual(['record-a'])
   expect(requeuePrompts).toHaveBeenCalledWith([secondPrompt])
+})
+
+test('prompt/content errors do not pause the whole provider connection', async () => {
+  const firstPrompt = createPrompt()
+  const secondPrompt = createPrompt({articleId: 'article-b', recordId: 'record-b'})
+  const processed: string[] = []
+  const requeuePrompts = mock(async (_prompts: PromptToProcess[]) => {
+    return undefined
+  })
+
+  await processClaimedPromptsByConnection({
+    label: 'test',
+    processPrompt: async (prompt) => {
+      processed.push(prompt.recordId)
+
+      if (prompt.recordId === firstPrompt.recordId) {
+        throw new Error('prompt validation failed: status=422')
+      }
+    },
+    prompts: [firstPrompt, secondPrompt],
+    requeuePrompts,
+  })
+
+  expect(processed).toEqual(['record-a', 'record-b'])
+  expect(requeuePrompts).not.toHaveBeenCalled()
 })
 
 test('requeues remaining claimed prompts when endpoint availability flips before launch', async () => {

@@ -265,7 +265,7 @@ test('codex requests enforce saved provider caps per connection', async () => {
   expect(secondStarted).toBe(true)
 })
 
-test('fallback endpoint availability blocks during cooldown, allows one probe, and resumes after probe success', async () => {
+test('404 misroutes block dispatch during cooldown, allow one probe after expiry, and reopen only after probe success', async () => {
   const {withJudgmentRequest} = await loadRuntime()
   let now = 1_000
   Date.now = () => {
@@ -303,6 +303,7 @@ test('fallback endpoint availability blocks during cooldown, allows one probe, a
   }
 
   expect(blockedError).toBeInstanceOf(ConnectionError)
+  expect((blockedError as ConnectionError).failure.kind).toBe('circuit_open')
 
   now += 30_001
 
@@ -357,6 +358,7 @@ test('fallback endpoint availability blocks during cooldown, allows one probe, a
   }
 
   expect(probingBlockedError).toBeInstanceOf(ConnectionError)
+  expect(testProviderConnectionHealth).toHaveBeenCalledTimes(1)
 
   expect(secondStarted).toBe(false)
   expect(testProviderConnectionHealth.mock.calls[0]?.[1]).toEqual({effectiveBaseURL: fallbackBaseURL})

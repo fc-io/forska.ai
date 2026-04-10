@@ -1,5 +1,7 @@
 import {expect, mock, test} from 'bun:test'
 
+import {classifyConnectionFailure} from '../../cron/judgmentsJobs/connectionHealth.ts'
+
 const openAIChatTransportModulePath = new URL('../transports/openaiChatTransport.ts', import.meta.url).pathname
 
 const transportState = {
@@ -188,4 +190,72 @@ test('OpenAI-compatible adapter health classifies missing /v1/models endpoint as
   expect(health.lastError).toContain('provider=ollama')
   expect(health.lastError).toContain('endpoint=/v1/models')
   expect(health.lastError).toContain('status=404')
+})
+
+test('OpenAI-compatible adapter surfaces 404 misroutes from /v1/chat/completions', async () => {
+  transportState.invoke.mockClear()
+  transportState.invoke.mockImplementationOnce(async () => {
+    throw {status: 404}
+  })
+  const {createOpenAICompatibleAdapter} = await loadFactory()
+  const adapter = createOpenAICompatibleAdapter(
+    {
+      defaultBaseURL: 'http://127.0.0.1:11434/v1',
+      description: 'Local Ollama',
+      kind: 'ollama',
+      label: 'Ollama',
+      requiresApiKey: false,
+      supportsDiscovery: true,
+      supportsWorkerUrls: true,
+    },
+    {transportFamily: 'ollama-native-discovery', useNativeOllamaDiscovery: false},
+  )
+
+  let invokeError: unknown = null
+
+  try {
+    await adapter.invoke({
+      connection: getOllamaConnectionInput().connection,
+      model: {
+        baseURL: null,
+        createdAt: null,
+        displayName: 'chat-model',
+        enabled: true,
+        id: 'model-1',
+        metadataJson: null,
+        modelName: 'chat-model',
+        name: 'chat-model',
+        provider: 'ollama',
+        providerConnectionId: 'ollama-1',
+        remoteModelId: 'chat-model',
+        source: 'manual',
+        updatedAt: null,
+        variant: null,
+        version: null,
+      },
+      request: {
+        maxCompletionTokens: 32,
+        outputSchema: null,
+        prompt: 'Say hi',
+        systemPrompt: 'Return JSON',
+        temperature: 0.1,
+      },
+      runtimeCredentials: getOllamaConnectionInput().runtimeCredentials,
+    })
+  } catch (error) {
+    invokeError = error
+  }
+
+  expect(invokeError).toEqual({status: 404})
+
+  expect(
+    classifyConnectionFailure({
+      context: {
+        effectiveBaseURL: getOllamaConnectionInput().runtimeCredentials.baseURL,
+        endpointPath: '/v1/chat/completions',
+        providerKind: 'ollama',
+      },
+      error: {status: 404},
+    }),
+  ).toMatchObject({kind: 'endpoint_unavailable', shouldPauseConnection: true, statusCode: 404})
 })
