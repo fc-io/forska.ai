@@ -941,17 +941,66 @@ const getHumanReviewedArticleIdsFromServing = async (params: {
   })
 }
 
-const getHasReviewArticleServingRows = async (projectId: string) => {
+const getHasReviewArticleServingRows = async (scope: ProjectOlapScope) => {
+  const scopeRouteQuery =
+    scope.routeIds.length > 0
+      ? `SELECT article_id AS articleId
+         FROM app.article_import_route
+         WHERE import_route_id IN (${getDuckdbSqlStringList(scope.routeIds).join(', ')})`
+      : null
+  const filteredScopeWhereParts = [
+    scope.dateFrom ? `a.article_created_at >= ${getDuckdbTimestampLiteral(scope.dateFrom)}` : null,
+    scope.dateTo ? `a.article_created_at <= ${getDuckdbTimestampLiteral(scope.dateTo)}` : null,
+  ].filter((part): part is string => {
+    return part !== null
+  })
+  const filteredScopeWhereClause =
+    filteredScopeWhereParts.length > 0 ? `WHERE ${filteredScopeWhereParts.join(' AND ')}` : ''
+  const scopeArticleIdsQuery = [
+    scopeRouteQuery,
+    `SELECT article_id AS articleId
+     FROM app.project_article
+     WHERE project_id = ${getDuckdbSqlString(scope.projectId)}`,
+  ]
+    .filter((query): query is string => {
+      return query !== null
+    })
+    .join('\nUNION\n')
   const rows = await runDuckdbJsonQuery<{projectId: string}>(`
-    SELECT generation.project_id AS projectId
-    FROM app.project_review_serving_generation generation
-    LEFT JOIN app.project_mart_refresh_state refresh_state
-      ON refresh_state.project_id = generation.project_id
-    INNER JOIN mart.review_article_serving serving
-      ON serving.project_id = generation.project_id
-     AND serving.generation = generation.active_generation
-    WHERE generation.project_id = ${getDuckdbSqlString(projectId)}
-      AND ${getProjectMartFreshnessClause()}
+    WITH scope_article_ids AS (
+      ${scopeArticleIdsQuery}
+    ),
+    filtered_scope_article_ids AS (
+      SELECT a.id AS articleId
+      FROM app.article a
+      INNER JOIN scope_article_ids s ON s.articleId = a.id
+      ${filteredScopeWhereClause}
+      GROUP BY a.id
+    ),
+    active_generation AS (
+      SELECT generation.project_id AS projectId, generation.active_generation AS generation
+      FROM app.project_review_serving_generation generation
+      LEFT JOIN app.project_mart_refresh_state refresh_state
+        ON refresh_state.project_id = generation.project_id
+      WHERE generation.project_id = ${getDuckdbSqlString(scope.projectId)}
+        AND ${getProjectMartFreshnessClause()}
+    ),
+    scope_counts AS (
+      SELECT COUNT(*) AS scopeRowCount
+      FROM filtered_scope_article_ids
+    ),
+    serving_counts AS (
+      SELECT COUNT(*) AS servingRowCount
+      FROM mart.review_article_serving s
+      INNER JOIN active_generation active
+        ON active.projectId = s.project_id
+       AND active.generation = s.generation
+    )
+    SELECT active.projectId
+    FROM active_generation active
+    CROSS JOIN scope_counts scope_counts
+    CROSS JOIN serving_counts serving_counts
+    WHERE scope_counts.scopeRowCount = serving_counts.servingRowCount
     LIMIT 1
   `)
 
@@ -2001,7 +2050,7 @@ export const queryArticlesReviewsFromDuckdb = async (
   const hasPromptFilters = getHasPromptFilters(params.prompts)
   const canUseServingV3 =
     scope.modelId
-    && (await getHasReviewArticleServingRows(scope.projectId))
+    && (await getHasReviewArticleServingRows(scope))
     && (!hasPromptFilters || (await getHasReviewArticleFilterMemberRows(scope.projectId)))
 
   if (canUseServingV3) {
@@ -2095,7 +2144,7 @@ export const countArticlesReviewsFromDuckdb = async (
   const hasPromptFilters = getHasPromptFilters(params.prompts)
   const canUseServingV3 =
     scope.modelId
-    && (await getHasReviewArticleServingRows(scope.projectId))
+    && (await getHasReviewArticleServingRows(scope))
     && (!hasPromptFilters || (await getHasReviewArticleFilterMemberRows(scope.projectId)))
 
   if (canUseServingV3) {
@@ -2116,7 +2165,7 @@ export const queryArticlesReviewsBothFromDuckdb = async (
     return {data: [], totalCount: 0, page: params.page, limit: params.limit, totalPages: 0}
   }
 
-  if (scope.modelId && (await getHasReviewArticleServingRows(scope.projectId))) {
+  if (scope.modelId && (await getHasReviewArticleServingRows(scope))) {
     const {rows: pageArticles, totalCount} = await getBothPageRowsFromServing({...params, scope})
     const totalPages = totalCount > 0 ? Math.ceil(totalCount / params.limit) : 0
     const llmJudgmentsByArticle = groupByArticleId(
@@ -2524,7 +2573,7 @@ export const getUnassessedCountFromDuckdb = async (params: UnassessedCountParams
     return 0
   }
 
-  if (!params.preferRawFallback && (await getHasReviewArticleServingRows(scope.projectId))) {
+  if (!params.preferRawFallback && (await getHasReviewArticleServingRows(scope))) {
     return countUnassessedRowsFromServing({
       scope,
       from: params.projectDateFrom ? params.projectDateFrom.toISOString().slice(0, 10) : null,
@@ -2550,7 +2599,7 @@ export const getUnassessedArticlesFromDuckdb = async (
     return {articles: [], totalCount: 0}
   }
 
-  if (!params.preferRawFallback && (await getHasReviewArticleServingRows(scope.projectId))) {
+  if (!params.preferRawFallback && (await getHasReviewArticleServingRows(scope))) {
     const servingResult = await getUnassessedRowsFromServing({
       scope,
       limit: params.limit,
@@ -2623,7 +2672,7 @@ export const getUnassessedPairsFromDuckdb = async (params: UnassessedPairsParams
   }
 
   const candidateLimit = getCandidateArticlesLimit(params.numberOfPromptsToGet)
-  const hasServingRows = await getHasReviewArticleServingRows(scope.projectId)
+  const hasServingRows = await getHasReviewArticleServingRows(scope)
   const useServingRows = hasServingRows && !params.preferRawFallback
   const candidateResult = await (useServingRows
     ? getUnassessedCandidateRowsFromServing({scope, cursor: params.cursor, limit: candidateLimit})
@@ -2732,13 +2781,13 @@ export const selectArticleIdsByFilterDuckdb = async (...args: SelectArticleIdsAr
   }
 
   if (listType === 'human') {
-    return scope.modelId && (await getHasReviewArticleServingRows(scope.projectId))
+    return scope.modelId && (await getHasReviewArticleServingRows(scope))
       ? getHumanReviewedArticleIdsFromServing({scope, from, to, search})
       : getHumanReviewedArticleIdsFromDuckdbRaw({scope, from, to, search})
   }
 
   if (scope.modelId) {
-    if (await getHasReviewArticleServingRows(scope.projectId)) {
+    if (await getHasReviewArticleServingRows(scope)) {
       if (listType === 'llm') {
         return getReviewedArticleIdsFromServing({scope, from, to, search, prompts: promptsFilter})
       }

@@ -659,6 +659,43 @@ test('getUnassessedCountFromDuckdb uses raw article and judgment rows when servi
   expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.judgment j')
 })
 
+test('getUnassessedCountFromDuckdb falls back to raw rows when serving coverage is incomplete', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [],
+    [
+      getDuckdbScopedArticleRow({id: 'article-1'}),
+      getDuckdbScopedArticleRow({id: 'article-2'}),
+      getDuckdbScopedArticleRow({id: 'article-3'}),
+    ],
+    [getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-1'})],
+  ])
+
+  const {getUnassessedCountFromDuckdb} = await loadDuckdbOlap()
+  const result = await getUnassessedCountFromDuckdb({
+    projectId: 'project-1',
+    projectModelId: 'model-1',
+    projectDateFrom: null,
+    projectDateTo: null,
+    importRouteIds: ['route-1'],
+    useTitle: true,
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+  })
+
+  expect(result).toBe(2)
+  expect(duckdbRunnerMockRef.current.queries).toHaveLength(6)
+  expect(duckdbRunnerMockRef.current.queries[3]).toContain('scopeRowCount')
+  expect(duckdbRunnerMockRef.current.queries[3]).toContain('servingRowCount')
+  expect(duckdbRunnerMockRef.current.queries[3]).toContain('FROM mart.review_article_serving s')
+  expect(duckdbRunnerMockRef.current.queries[3]).toContain('FROM app.article a')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.article a')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.judgment j')
+})
+
 test('getUnassessedArticlesFromDuckdb falls back to raw judgments when serving rows are missing', async () => {
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
     getPromptRows(),
