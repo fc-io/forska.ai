@@ -750,7 +750,7 @@ const AdminCovidenceImport = () => {
                   </p>
                 </div>
 
-                <div class="grid gap-4 md:col-span-2 xl:grid-cols-2">
+                <div class="grid gap-4 md:col-span-2">
                   <For each={covidenceEligibilitySections}>
                     {(section) => {
                       return (
@@ -760,7 +760,7 @@ const AdminCovidenceImport = () => {
                             <p class="text-xs leading-5 text-stone-500">{section.description}</p>
                           </div>
 
-                          <div class="grid gap-4">
+                          <div class="grid gap-4 md:grid-cols-2">
                             <label class="space-y-2 text-sm font-medium text-stone-700">
                               <span>Include</span>
                               <textarea
