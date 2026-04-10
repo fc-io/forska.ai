@@ -237,13 +237,20 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
     buildCovidencePromptDefinitionsForEligibilityFields({
       answerSet: 'yes|no|unsure',
       eligibilityFields: [
+        {disposition: 'include', sectionKey: ' outcome ', sectionLabel: ' Outcome ', text: '   '},
         {
           disposition: 'include',
-          sectionKey: 'population',
-          sectionLabel: 'Population',
-          text: 'Adults with confirmed disease',
+          sectionKey: ' population ',
+          sectionLabel: ' Population ',
+          text: ' Adults with confirmed disease ',
         },
-        {disposition: 'exclude', sectionKey: 'other', sectionLabel: 'Other', text: 'Case reports'},
+        {disposition: 'exclude', sectionKey: ' other ', sectionLabel: ' Other ', text: ' Case reports '},
+        {
+          disposition: 'exclude',
+          sectionKey: 'study_characteristics',
+          sectionLabel: 'Study Characteristics',
+          text: '\n\t',
+        },
       ],
       mode: 'title_abstract',
     }),

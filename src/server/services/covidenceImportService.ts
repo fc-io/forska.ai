@@ -362,12 +362,27 @@ const buildCovidencePromptDefinitionForEligibilityField = (params: {
   }
 }
 
+const getNormalizedCovidenceEligibilityPromptFields = (eligibilityFields: CovidenceEligibilityPromptField[]) => {
+  return eligibilityFields
+    .map((eligibilityField) => {
+      return {
+        disposition: eligibilityField.disposition,
+        sectionKey: eligibilityField.sectionKey.trim(),
+        sectionLabel: eligibilityField.sectionLabel.trim(),
+        text: eligibilityField.text.trim(),
+      }
+    })
+    .filter((eligibilityField) => {
+      return eligibilityField.text !== ''
+    })
+}
+
 export const buildCovidencePromptDefinitionsForEligibilityFields = (params: {
   answerSet: CovidencePromptAnswerSet
   eligibilityFields: CovidenceEligibilityPromptField[]
   mode: CovidenceImportMode
 }) => {
-  return params.eligibilityFields.map((eligibilityField) => {
+  return getNormalizedCovidenceEligibilityPromptFields(params.eligibilityFields).map((eligibilityField) => {
     return buildCovidencePromptDefinitionForEligibilityField({...params, eligibilityField})
   })
 }
