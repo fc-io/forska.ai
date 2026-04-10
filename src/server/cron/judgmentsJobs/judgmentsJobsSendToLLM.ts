@@ -2,9 +2,15 @@ import {rateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {ConnectionError} from './connectionHealth.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
+import {getJudgmentEndpointAvailability} from './judgmentEndpointAvailability.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 import {filterRunningJobsByRuntimeMatch, type RunningJudgmentJob} from './judgmentsJobsGetRunningJobs.ts'
-import {getAndUpdateReadyPrompts, type PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
+import {
+  getAndUpdateReadyPrompts,
+  getReadyPromptRuntime,
+  type PromptRuntime,
+  type PromptToProcess,
+} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 import {processPromptWithLLM} from './judgmentsJobsSendToLLM/processPromptWithLLM.ts'
 import {requeueAbandonedSentPrompts} from './requeueAbandonedSentPrompts.ts'
 
@@ -36,6 +42,9 @@ type Capacity = {maxInflight: number; maxBurst: number; workerCount: number}
 type CapacityBucket<T> = {capacity: Capacity; jobs: T[]; label: string}
 type JobRequestAllocation<T> = {job: T; limit: number}
 type ProviderConnectionRequestAllocation<T> = {connectionId: string; jobs: JobRequestAllocation<T>[]; limit: number}
+type ClaimableJobRequest<T> = JobRequestAllocation<T> & {dispatchMode: 'full' | 'probe'; runtime: PromptRuntime}
+
+const schedulerLogger = rateLimitedLogger
 
 const getCapacityFromMaxInflight = (maxInflightRequests: number): Capacity => {
   const limit = Math.max(1, maxInflightRequests)
@@ -174,6 +183,279 @@ const requeueRejectedPrompts = async (prompts: PromptToProcess[]) => {
   )
 }
 
+const getEndpointAvailabilityKey = ({
+  baseURL,
+  providerConnectionId,
+}: {
+  baseURL: string
+  providerConnectionId: string | null
+}): string => {
+  return `${providerConnectionId ?? 'unknown'}::${baseURL}`
+}
+
+const getDispatchEndpoints = (runtime: PromptRuntime): string[] => {
+  return runtime.modelWorkerUrls.length > 0
+    ? runtime.modelWorkerUrls.map((url) => {
+        return `${url}/v1`
+      })
+    : [runtime.modelBaseUrl]
+}
+
+export const getDispatchAvailability = ({
+  providerConnectionId,
+  runtime,
+}: {
+  providerConnectionId: string | null
+  runtime: PromptRuntime
+}): {dispatchMode: 'full' | 'probe' | 'skip'; status: 'cooldown' | 'healthy' | 'misconfigured' | 'probing'} => {
+  const endpointStates = getDispatchEndpoints(runtime).map((baseURL) => {
+    return getJudgmentEndpointAvailability({effectiveBaseURL: baseURL, providerConnectionId})
+  })
+  const hasHealthy = endpointStates.some((state) => {
+    return state.status === 'healthy'
+  })
+
+  if (hasHealthy) {
+    return {dispatchMode: 'full', status: 'healthy'}
+  }
+
+  const hasProbeEligibleCooldown = endpointStates.some((state) => {
+    return (
+      state.status === 'cooldown' && Boolean(state.cooldownExpiresAt) && state.cooldownExpiresAt.getTime() <= Date.now()
+    )
+  })
+
+  if (hasProbeEligibleCooldown) {
+    return {dispatchMode: 'probe', status: 'cooldown'}
+  }
+
+  const hasMisconfigured = endpointStates.some((state) => {
+    return state.status === 'misconfigured'
+  })
+
+  return {dispatchMode: 'skip', status: hasMisconfigured ? 'misconfigured' : 'cooldown'}
+}
+
+const logDispatchSkip = ({
+  connectionId,
+  dispatchStatus,
+  label,
+  runtime,
+}: {
+  connectionId: string | null
+  dispatchStatus: 'cooldown' | 'misconfigured' | 'probing'
+  label: string
+  runtime: PromptRuntime
+}) => {
+  const baseURL = getDispatchEndpoints(runtime)[0] ?? runtime.modelBaseUrl
+  schedulerLogger.warn(
+    `scheduler:skip:${dispatchStatus}:${getEndpointAvailabilityKey({baseURL, providerConnectionId: connectionId})}`,
+    `[capacity:${label}] skipping claims while endpoint is ${dispatchStatus}`,
+    {baseURL, connectionId},
+  )
+}
+
+export const getClaimableRequests = async ({
+  allocations,
+  label,
+}: {
+  allocations: ProviderConnectionRequestAllocation<RunningJudgmentJob>[]
+  label: string
+}): Promise<ClaimableJobRequest<RunningJudgmentJob>[]> => {
+  const connectionResults = await Promise.all(
+    allocations.map(async (allocation) => {
+      const runtimeResults = await Promise.all(
+        allocation.jobs.map(async (jobAllocation) => {
+          const runtime = await getReadyPromptRuntime(jobAllocation.job.id)
+          return runtime ? {...jobAllocation, runtime} : null
+        }),
+      )
+      const jobsWithRuntime = runtimeResults.filter(
+        (job): job is JobRequestAllocation<RunningJudgmentJob> & {runtime: PromptRuntime} => {
+          return Boolean(job)
+        },
+      )
+
+      const fullJobs = jobsWithRuntime.flatMap((jobAllocation) => {
+        const availability = getDispatchAvailability({
+          providerConnectionId: allocation.connectionId,
+          runtime: jobAllocation.runtime,
+        })
+        return availability.dispatchMode === 'full' ? [{...jobAllocation, dispatchMode: 'full' as const}] : []
+      })
+
+      if (fullJobs.length > 0) {
+        jobsWithRuntime.forEach((jobAllocation) => {
+          const availability = getDispatchAvailability({
+            providerConnectionId: allocation.connectionId,
+            runtime: jobAllocation.runtime,
+          })
+          if (availability.dispatchMode === 'skip') {
+            logDispatchSkip({
+              connectionId: allocation.connectionId,
+              dispatchStatus: availability.status,
+              label,
+              runtime: jobAllocation.runtime,
+            })
+          }
+        })
+
+        return fullJobs
+      }
+
+      const probeJob = jobsWithRuntime.find((jobAllocation) => {
+        return (
+          getDispatchAvailability({providerConnectionId: allocation.connectionId, runtime: jobAllocation.runtime})
+            .dispatchMode === 'probe'
+        )
+      })
+
+      if (probeJob) {
+        return [{...probeJob, dispatchMode: 'probe' as const, limit: 1}]
+      }
+
+      jobsWithRuntime.forEach((jobAllocation) => {
+        const availability = getDispatchAvailability({
+          providerConnectionId: allocation.connectionId,
+          runtime: jobAllocation.runtime,
+        })
+        logDispatchSkip({
+          connectionId: allocation.connectionId,
+          dispatchStatus: availability.status === 'healthy' ? 'probing' : availability.status,
+          label,
+          runtime: jobAllocation.runtime,
+        })
+      })
+
+      return []
+    }),
+  )
+
+  return connectionResults.flat()
+}
+
+export const processClaimedPromptsByConnection = async ({
+  label,
+  processPrompt = processPromptWithLLM,
+  prompts,
+  requeuePrompts = requeueRejectedPrompts,
+}: {
+  label: string
+  processPrompt?: (prompt: PromptToProcess) => Promise<void>
+  prompts: PromptToProcess[]
+  requeuePrompts?: (prompts: PromptToProcess[]) => Promise<void>
+}): Promise<{connectionErrors: number}> => {
+  const byConnection = prompts.reduce((state, prompt) => {
+    const connectionId = prompt.providerConnectionId ?? prompt.jobId
+    return new Map(state).set(connectionId, [...(state.get(connectionId) ?? []), prompt])
+  }, new Map<string, PromptToProcess[]>())
+
+  const results = await Promise.all(
+    Array.from(byConnection.entries()).map(async ([connectionId, connectionPrompts]) => {
+      let fulfilled = 0
+      let rejected = 0
+      let connectionErrors = 0
+      let halted = false
+      let requeuedCount = 0
+
+      await connectionPrompts.reduce<Promise<void>>(async (previous, prompt, index) => {
+        await previous
+
+        if (halted) {
+          return undefined
+        }
+
+        const availability = getDispatchAvailability({
+          providerConnectionId: prompt.providerConnectionId,
+          runtime: {
+            modelBaseUrl: prompt.modelBaseUrl,
+            modelProvider: prompt.modelProvider,
+            modelWorkerUrls: prompt.modelWorkerUrls,
+          },
+        })
+
+        if (availability.dispatchMode === 'skip') {
+          halted = true
+          const remainingPrompts = connectionPrompts.slice(index)
+          requeuedCount = remainingPrompts.length
+          await requeuePrompts(remainingPrompts)
+          logDispatchSkip({
+            connectionId: prompt.providerConnectionId,
+            dispatchStatus: availability.status,
+            label,
+            runtime: {
+              modelBaseUrl: prompt.modelBaseUrl,
+              modelProvider: prompt.modelProvider,
+              modelWorkerUrls: prompt.modelWorkerUrls,
+            },
+          })
+          return undefined
+        }
+
+        try {
+          const jitterMs = Math.floor(Math.random() * 1000)
+          await new Promise((resolve) => {
+            setTimeout(resolve, jitterMs)
+          })
+          await processPrompt(prompt)
+          fulfilled += 1
+        } catch (error) {
+          rejected += 1
+          const isConnectionFailure = error instanceof ConnectionError
+          connectionErrors += isConnectionFailure ? 1 : 0
+
+          if (!isConnectionFailure) {
+            return undefined
+          }
+
+          halted = true
+          const remainingPrompts = connectionPrompts.slice(index + 1)
+          requeuedCount = remainingPrompts.length
+          if (remainingPrompts.length > 0) {
+            await requeuePrompts(remainingPrompts)
+          }
+          schedulerLogger.warn(
+            `scheduler:halt:${connectionId}`,
+            `[capacity:${label}] stopping queued dispatch after endpoint became unavailable`,
+            {connectionId, requeuedCount},
+          )
+        }
+      }, Promise.resolve())
+
+      return {claimedPrompts: connectionPrompts.length, connectionErrors, fulfilled, rejected, requeuedCount}
+    }),
+  )
+
+  const summary = results.reduce(
+    (state, result) => {
+      return {
+        claimedPrompts: state.claimedPrompts + result.claimedPrompts,
+        connectionErrors: state.connectionErrors + result.connectionErrors,
+        fulfilled: state.fulfilled + result.fulfilled,
+        rejected: state.rejected + result.rejected,
+        requeuedCount: state.requeuedCount + result.requeuedCount,
+      }
+    },
+    {claimedPrompts: 0, connectionErrors: 0, fulfilled: 0, rejected: 0, requeuedCount: 0},
+  )
+
+  console.log('[llm] Batch complete:', summary)
+
+  if (summary.rejected > 0) {
+    schedulerLogger.error(
+      'llm:processing-errors',
+      `send to LLM: processing errors ${JSON.stringify({
+        rejected: summary.rejected,
+        connectionErrors: summary.connectionErrors,
+        total: summary.claimedPrompts,
+        requeuedCount: summary.requeuedCount,
+      })}`,
+    )
+  }
+
+  return {connectionErrors: summary.connectionErrors}
+}
+
 export const getRequestsToSendByJob = <T extends {id: string}>(
   jobs: T[],
   requestsToSend: number,
@@ -308,76 +590,6 @@ export const getRequestsToSendByProviderConnection = <T extends RunningJudgmentJ
   })
 }
 
-const processPrompts = async (prompts: PromptToProcess[]): Promise<{connectionErrors: number}> => {
-  const results = await Promise.allSettled(
-    prompts.map(async (prompt) => {
-      // Add random jitter (0-1000ms) to desynchronize requests and effectively smooth out
-      // the burst load on the SSH tunnel/firewall.
-      const jitterMs = Math.floor(Math.random() * 1000)
-      await new Promise((resolve) => {
-        setTimeout(resolve, jitterMs)
-      })
-      return processPromptWithLLM(prompt)
-    }),
-  )
-
-  const fulfilled = results.filter((r) => {
-    return r.status === 'fulfilled'
-  })
-  const rejected = results.filter((r) => {
-    return r.status === 'rejected'
-  })
-  const rejectedPrompts = results.flatMap((result, index) => {
-    return result.status === 'rejected'
-      ? [prompts[index]].filter((prompt): prompt is PromptToProcess => {
-          return Boolean(prompt)
-        })
-      : []
-  })
-
-  const connectionErrors = rejected.filter((r) => {
-    return r.reason instanceof ConnectionError
-  }).length
-  const rejectedErrorSamples = rejected.slice(0, 3).map((result) => {
-    const reason: unknown = result.reason
-    return reason instanceof Error ? reason.message : String(reason)
-  })
-
-  console.log('[llm] Batch complete:', {
-    claimedPrompts: prompts.length,
-    fulfilled: fulfilled.length,
-    rejected: rejected.length,
-    connectionErrors,
-  })
-
-  if (rejected.length > 0) {
-    rateLimitedLogger.error(
-      'llm:processing-errors',
-      `send to LLM: processing errors ${JSON.stringify({rejected: rejected.length, connectionErrors, total: results.length, rejectedErrorSamples})}`,
-    )
-
-    const rejectedRecordIds = rejectedPrompts.map((prompt) => {
-      return prompt.recordId
-    })
-
-    if (rejectedRecordIds.length > 0) {
-      await requeueRejectedPrompts(rejectedPrompts).catch((error: unknown) => {
-        const safeError =
-          error instanceof Error
-            ? {name: error.name, message: error.message, stack: error.stack}
-            : {message: String(error)}
-
-        console.error('[llm] Failed to requeue rejected prompts', {
-          error: safeError,
-          rejectedRecordCount: rejectedRecordIds.length,
-        })
-      })
-    }
-  }
-
-  return {connectionErrors}
-}
-
 let isRunningJudgmentsJobsSendToLLM = false
 
 export const requeueAndFilterRunningJobs = async ({
@@ -436,18 +648,17 @@ const sendToLLMForJobs = async (
 
   if (requestsToSend <= 0) return
 
-  const requestsToSendByJob = getRequestsToSendByProviderConnection({
+  const requestsToSendByConnection = getRequestsToSendByProviderConnection({
     jobs,
     maxRequestsToSend: requestsToSend,
     inFlightCounts,
     readyCounts,
-  }).flatMap(({jobs: connectionJobs}) => {
-    return connectionJobs
   })
+  const requestsToSendByJob = await getClaimableRequests({allocations: requestsToSendByConnection, label})
   console.log(
     `[capacity:${label}] requestsToSendByJob:`,
-    requestsToSendByJob.map(({job, limit}) => {
-      return {jobId: job.id.slice(0, 8), limit}
+    requestsToSendByJob.map(({dispatchMode, job, limit}) => {
+      return {dispatchMode, jobId: job.id.slice(0, 8), limit}
     }),
   )
 
@@ -498,7 +709,7 @@ const sendToLLMForJobs = async (
   promptsToProcess.map((prompts) => {
     void (async () => {
       if (prompts.length > 0) {
-        await processPrompts(prompts)
+        await processClaimedPromptsByConnection({label, prompts})
       }
     })().catch((error) => {
       const safeError =

@@ -27,6 +27,8 @@ export type PromptToProcess = {
   useFulltextNoImages: boolean
 }
 
+export type PromptRuntime = {modelBaseUrl: string; modelProvider: string; modelWorkerUrls: string[]}
+
 const normalizeProvider = (value: string | null | undefined): string => {
   const v = String(value ?? '')
     .trim()
@@ -159,6 +161,46 @@ const getSqliteReadyRows = async (serverJobId: string, jobId: string, limit: num
       useTitle: jobInfo.useTitle,
     }
   })
+}
+
+export const getReadyPromptRuntime = async (jobId: string): Promise<PromptRuntime | null> => {
+  if (!(await isJobReadyToClaimPrompts(jobId))) {
+    return null
+  }
+
+  const sqliteService = getJudgmentJobSqliteService()
+  const jobInfo = await sqliteService.getJobInfo(jobId)
+
+  if (!jobInfo) {
+    console.error('[getReadyPromptRuntime] SQLite job info not found for jobId:', jobId)
+    return null
+  }
+
+  const provider = normalizeProvider(jobInfo.modelProvider)
+  const runtime = await getModelRuntime({
+    baseURL: jobInfo.modelBaseUrl,
+    modelName: jobInfo.modelName,
+    providerConfigJson: jobInfo.providerConfigJson,
+    providerKind: provider,
+  })
+
+  if (!isCodexProvider(provider) && !runtime.baseURL) {
+    console.error('Prompt missing required matched model baseURL:', {
+      jobId,
+      modelName: jobInfo.modelName,
+      modelProvider: jobInfo.modelProvider,
+      runtimeMatchReason: runtime.reason,
+      runtimeResolutionMode: runtime.resolutionMode,
+      runtimeStatus: runtime.status,
+    })
+    return null
+  }
+
+  return {
+    modelBaseUrl: isCodexProvider(provider) ? getCodexPlaceholderBaseUrl() : String(runtime.baseURL),
+    modelProvider: provider,
+    modelWorkerUrls: runtime.workerUrls,
+  }
 }
 
 export const getAndUpdateReadyPrompts = async (

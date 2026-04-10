@@ -1,12 +1,50 @@
-import {expect, mock, test} from 'bun:test'
+import {afterEach, expect, mock, test} from 'bun:test'
 
+import {classifyConnectionFailure, ConnectionError, recordConnectionFailure} from './connectionHealth.ts'
+import {resetJudgmentEndpointAvailabilityForTests} from './judgmentEndpointAvailability.ts'
 import type {RunningJudgmentJob} from './judgmentsJobsGetRunningJobs.ts'
 import {
   getCapacityBuckets,
+  getDispatchAvailability,
   getEffectiveProviderCap,
   getRequestsToSendByProviderConnection,
+  processClaimedPromptsByConnection,
   requeueAndFilterRunningJobs,
 } from './judgmentsJobsSendToLLM.ts'
+import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
+
+const realDateNow = Date.now
+
+const createPrompt = (overrides: Partial<PromptToProcess> = {}): PromptToProcess => {
+  return {
+    articleId: 'article-a',
+    jobId: 'job-a',
+    modelBaseUrl: 'http://runtime.test/v1',
+    modelId: 'model-a',
+    modelMetadataJson: null,
+    modelName: 'Model A',
+    modelProvider: 'openai',
+    modelSecretRef: null,
+    modelVersion: null,
+    modelWorkerUrls: [],
+    projectId: 'project-a',
+    promptId: 'prompt-a',
+    providerConnectionId: 'connection-a',
+    providerMaxInflightRequests: 1,
+    providerUsesFamilyDefault: false,
+    recordId: 'record-a',
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+    ...overrides,
+  }
+}
+
+afterEach(() => {
+  resetJudgmentEndpointAvailabilityForTests()
+  Date.now = realDateNow
+})
 
 test('requeues stale sent prompts before runtime filtering', async () => {
   const requeueSentPrompts = mock(async (_params: {jobIds: string[]; serverJobId: string}) => {
@@ -371,4 +409,112 @@ test('lets different provider connections progress under a stricter shared bucke
       })
     }),
   ).toBe(true)
+})
+
+test('dispatch availability skips active cooldowns, probes expired cooldowns, and skips misconfigured endpoints', () => {
+  const providerConnectionId = 'connection-gated'
+  const runtime = {modelBaseUrl: 'http://availability.test/v1', modelProvider: 'openai', modelWorkerUrls: []}
+  let now = 1_000
+  Date.now = () => {
+    return now
+  }
+
+  const cooldownFailure = classifyConnectionFailure({
+    context: {effectiveBaseURL: runtime.modelBaseUrl, endpointPath: '/v1/chat/completions', providerKind: 'openai'},
+    error: {status: 503},
+  })
+  recordConnectionFailure({effectiveBaseURL: runtime.modelBaseUrl, failure: cooldownFailure, providerConnectionId})
+
+  expect(getDispatchAvailability({providerConnectionId, runtime})).toEqual({dispatchMode: 'skip', status: 'cooldown'})
+
+  now += 30_001
+
+  expect(getDispatchAvailability({providerConnectionId, runtime})).toEqual({dispatchMode: 'probe', status: 'cooldown'})
+
+  resetJudgmentEndpointAvailabilityForTests()
+
+  const misconfiguredFailure = classifyConnectionFailure({
+    context: {effectiveBaseURL: runtime.modelBaseUrl, endpointPath: '/v1/chat/completions', providerKind: 'openai'},
+    error: {status: 405},
+  })
+  recordConnectionFailure({effectiveBaseURL: runtime.modelBaseUrl, failure: misconfiguredFailure, providerConnectionId})
+
+  expect(getDispatchAvailability({providerConnectionId, runtime})).toEqual({
+    dispatchMode: 'skip',
+    status: 'misconfigured',
+  })
+})
+
+test('requeues not-yet-started prompts for a connection after a connection error', async () => {
+  const firstPrompt = createPrompt()
+  const secondPrompt = createPrompt({articleId: 'article-b', recordId: 'record-b'})
+  const processed: string[] = []
+  const requeuePrompts = mock(async (_prompts: PromptToProcess[]) => {
+    return undefined
+  })
+
+  const error = new ConnectionError(
+    'endpoint unavailable',
+    firstPrompt.modelBaseUrl,
+    classifyConnectionFailure({
+      context: {
+        effectiveBaseURL: firstPrompt.modelBaseUrl,
+        endpointPath: '/v1/chat/completions',
+        providerKind: 'openai',
+      },
+      error: {status: 503},
+    }),
+  )
+
+  await processClaimedPromptsByConnection({
+    label: 'test',
+    processPrompt: async (prompt) => {
+      processed.push(prompt.recordId)
+      if (prompt.recordId === firstPrompt.recordId) {
+        throw error
+      }
+    },
+    prompts: [firstPrompt, secondPrompt],
+    requeuePrompts,
+  })
+
+  expect(processed).toEqual(['record-a'])
+  expect(requeuePrompts).toHaveBeenCalledWith([secondPrompt])
+})
+
+test('requeues remaining claimed prompts when endpoint availability flips before launch', async () => {
+  const firstPrompt = createPrompt()
+  const secondPrompt = createPrompt({articleId: 'article-b', recordId: 'record-b'})
+  const processed: string[] = []
+  const requeuePrompts = mock(async (_prompts: PromptToProcess[]) => {
+    return undefined
+  })
+
+  await processClaimedPromptsByConnection({
+    label: 'test',
+    processPrompt: async (prompt) => {
+      processed.push(prompt.recordId)
+
+      if (prompt.recordId === firstPrompt.recordId) {
+        const failure = classifyConnectionFailure({
+          context: {
+            effectiveBaseURL: prompt.modelBaseUrl,
+            endpointPath: '/v1/chat/completions',
+            providerKind: 'openai',
+          },
+          error: {status: 503},
+        })
+        recordConnectionFailure({
+          effectiveBaseURL: prompt.modelBaseUrl,
+          failure,
+          providerConnectionId: prompt.providerConnectionId,
+        })
+      }
+    },
+    prompts: [firstPrompt, secondPrompt],
+    requeuePrompts,
+  })
+
+  expect(processed).toEqual(['record-a'])
+  expect(requeuePrompts).toHaveBeenCalledWith([secondPrompt])
 })
