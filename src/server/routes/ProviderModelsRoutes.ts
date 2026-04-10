@@ -71,6 +71,7 @@ export const providerModelsRoutes = new Elysia()
         metadataJson: getManualProviderModelMetadata({
           displayName,
           modelName: remoteModelId,
+          options: body.options,
           providerKind: connection.providerKind,
           remoteModelId,
           variant,
@@ -86,7 +87,12 @@ export const providerModelsRoutes = new Elysia()
       return {data: {model, modelId: model.id}, error: null}
     },
     {
-      body: t.Object({displayName: t.Optional(t.String()), remoteModelId: t.String(), variant: t.Optional(t.String())}),
+      body: t.Object({
+        displayName: t.Optional(t.String()),
+        options: t.Optional(t.Object({thinking: t.Optional(t.String())})),
+        remoteModelId: t.String(),
+        variant: t.Optional(t.String()),
+      }),
       params: t.Object({id: t.String()}),
     },
   )
@@ -104,13 +110,19 @@ export const providerModelsRoutes = new Elysia()
         displayName,
         enabled: body.enabled,
         id: params.id,
+        options: body.options,
         variant: getTrimmedValue(body.variant),
       })
 
       return {data: {model}, error: null}
     },
     {
-      body: t.Object({displayName: t.String(), enabled: t.Boolean(), variant: t.Optional(t.String())}),
+      body: t.Object({
+        displayName: t.String(),
+        enabled: t.Boolean(),
+        options: t.Optional(t.Object({thinking: t.Optional(t.String())})),
+        variant: t.Optional(t.String()),
+      }),
       params: t.Object({id: t.String()}),
     },
   )

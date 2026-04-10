@@ -1,3 +1,4 @@
+import {getProviderModelOptions} from '../../../utils/providerModelOptions.ts'
 import {classifyConnectionFailure} from '../../cron/judgmentsJobs/connectionHealth.ts'
 import {type ProviderCatalogEntry} from '../../services/providerCatalog.ts'
 import {getNormalizedProviderModelMetadata} from '../providerModelMetadata.ts'
@@ -210,6 +211,7 @@ export const createOpenAICompatibleAdapter = (
         apiKey: runtimeCredentials.apiKey,
         baseURL: runtimeCredentials.baseURL,
         maxCompletionTokens: request.maxCompletionTokens,
+        modelOptions: getProviderModelOptions(model.metadataJson),
         modelName: getProviderModelName(model),
         outputSchema: request.outputSchema,
         prompt: request.prompt,

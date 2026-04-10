@@ -1,12 +1,13 @@
 import {Elysia, t} from 'elysia'
 
+import {appendProviderModelThinkingBadgeLabel} from '../../utils/providerModelLabel.ts'
 import {resolveProviderRuntimeCredentials} from '../providers/providerAuthService.ts'
 import {
   createProviderConnection,
   getFirstEnabledProviderConnection,
   listProviderConnections,
 } from '../providers/providerConnectionRepository.ts'
-import {getManualProviderModelMetadata} from '../providers/providerModelMetadata.ts'
+import {getManualProviderModelMetadata, getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
 import {createProviderModel, listSelectableProviderModels} from '../providers/providerModelRepository.ts'
 import {requireProviderRegistryEntry} from '../providers/providerRegistry.ts'
 import {type ProviderModelRecord} from '../providers/providerTypes.ts'
@@ -68,6 +69,7 @@ const getSelectableCodexModel = ({
     baseURL: null,
     createdAt,
     id: toCodexVirtualId(modelName, version),
+    label: `Codex: ${displayName}`,
     modelName,
     name: displayName,
     provider: 'codex',
@@ -75,6 +77,23 @@ const getSelectableCodexModel = ({
     version,
     workerUrls: null,
   }
+}
+
+const getSelectableModelLabel = ({
+  metadataJson,
+  name,
+  provider,
+}: {
+  metadataJson: unknown
+  name: string
+  provider: string | null
+}) => {
+  const baseLabel = provider === 'codex' ? `Codex: ${name}` : name
+
+  return appendProviderModelThinkingBadgeLabel({
+    label: baseLabel,
+    thinking: getProviderModelMetadataOptions(metadataJson).thinking,
+  })
 }
 
 const getCodexVirtualModelsFromStoredModels = async (storedModels: ProviderModelRecord[]) => {
@@ -170,6 +189,11 @@ const getSelectableModelsPayload = async () => {
         baseURL: model.baseURL,
         createdAt: model.createdAt,
         id: model.id,
+        label: getSelectableModelLabel({
+          metadataJson: model.metadataJson,
+          name: model.displayName ?? model.name,
+          provider: model.provider,
+        }),
         modelName: model.modelName,
         name: model.displayName ?? model.name,
         provider: model.provider,
@@ -211,7 +235,16 @@ export const modelsRoutes = new Elysia()
 
     return {
       data: connections.flatMap((connection) => {
-        return connection.models
+        return connection.models.map((model) => {
+          return {
+            ...model,
+            label: getSelectableModelLabel({
+              metadataJson: model.metadataJson,
+              name: model.displayName ?? model.name,
+              provider: model.provider,
+            }),
+          }
+        })
       }),
     }
   })

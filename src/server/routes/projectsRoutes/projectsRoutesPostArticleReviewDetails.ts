@@ -7,6 +7,7 @@ import type {
   ProjectMartRefreshStatus,
   PromptRecord,
 } from '../../../db/schemaTypes.ts'
+import {getProviderModelMetadataOptions} from '../../providers/providerModelMetadata.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getJsonValue, getQuotedStringList} from '../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
@@ -18,6 +19,7 @@ type JudgmentWithPromptAndAssessments = JudgmentRecord & {
   assessments: Array<JudgmentAssessmentRecord>
   modelName?: string | null
   modelProvider?: string | null
+  modelThinking?: string | null
   modelVersion?: string | null
 }
 
@@ -33,6 +35,7 @@ type PlaceholderJudgment = {
   createdAt: null
   modelName?: string | null
   modelProvider?: string | null
+  modelThinking?: string | null
   modelVersion?: string | null
 }
 
@@ -62,6 +65,7 @@ type ArticleJudgmentRow = {
   judgmentSnapshotProjectModelName: string | null
   promptOriginalText: string
   promptHeading: string | null
+  modelMetadataJson: unknown
   modelName: string | null
   modelProvider: string | null
   modelVersion: string | null
@@ -106,6 +110,7 @@ type ProjectReviewDetailJudgmentRow = {
   judgmentSnapshotProjectModelName: string | null
   promptOriginalText: string
   promptHeading: string | null
+  modelMetadataJson: unknown
   modelName: string | null
   modelProvider: string | null
   modelVersion: string | null
@@ -126,6 +131,7 @@ type ReviewJudgmentDetail = {
   prompt: Pick<PromptRecord, 'originalText' | 'promptHeading'>
   modelName: string | null
   modelProvider: string | null
+  modelThinking: string | null
   modelVersion: string | null
 }
 
@@ -175,6 +181,7 @@ const getProjectReviewDetailJudgmentRows = async (params: {
       jf.snapshot_project_model_name AS judgmentSnapshotProjectModelName,
       p.original_text AS promptOriginalText,
       p.prompt_heading AS promptHeading,
+      TO_JSON(m.metadata_json) AS modelMetadataJson,
       COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
       pc.provider_kind AS modelProvider,
       m.variant AS modelVersion
@@ -240,13 +247,14 @@ const getArticleJudgmentRows = async (articleId: string): Promise<ArticleJudgmen
       j.confidence_original AS judgmentConfidenceOriginal,
       j.explanation AS judgmentExplanation,
       TO_JSON(j.quotes) AS judgmentQuotes,
-      j.snapshot_project_id AS judgmentSnapshotProjectId,
-      j.snapshot_project_model_name AS judgmentSnapshotProjectModelName,
-      p.original_text AS promptOriginalText,
-      p.prompt_heading AS promptHeading,
-      COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
-      pc.provider_kind AS modelProvider,
-      m.variant AS modelVersion
+          j.snapshot_project_id AS judgmentSnapshotProjectId,
+          j.snapshot_project_model_name AS judgmentSnapshotProjectModelName,
+          p.original_text AS promptOriginalText,
+          p.prompt_heading AS promptHeading,
+          TO_JSON(m.metadata_json) AS modelMetadataJson,
+          COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
+          pc.provider_kind AS modelProvider,
+          m.variant AS modelVersion
     FROM app.judgment j
     INNER JOIN app.prompt p ON j.prompt_id = p.id
     LEFT JOIN app.model m ON j.model_id = m.id
@@ -322,6 +330,10 @@ const getProjectReviewDetailJudgmentValue = (row: ProjectReviewDetailJudgmentRow
     snapshotProjectId: row.judgmentSnapshotProjectId,
     snapshotProjectModelName: row.judgmentSnapshotProjectModelName,
   }
+}
+
+const getModelThinkingValue = (row: {modelMetadataJson: unknown}) => {
+  return getProviderModelMetadataOptions(getJsonValue(row.modelMetadataJson)).thinking
 }
 
 const getMatchesProjectReviewConfig = (params: {row: ArticleJudgmentRow; projectReviewConfig: ProjectReviewConfig}) => {
@@ -441,6 +453,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
           prompt: getPromptValue(row),
           modelName: row.modelName,
           modelProvider: row.modelProvider,
+          modelThinking: getModelThinkingValue(row),
           modelVersion: row.modelVersion,
         }
       })
@@ -459,6 +472,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
             prompt: getPromptValue(row),
             modelName: row.modelName,
             modelProvider: row.modelProvider,
+            modelThinking: getModelThinkingValue(row),
             modelVersion: row.modelVersion,
           }
         })
@@ -504,6 +518,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
           assessments: judgmentAssessments,
           modelName: row.modelName,
           modelProvider: row.modelProvider,
+          modelThinking: row.modelThinking,
           modelVersion: row.modelVersion,
         }
       })
@@ -554,6 +569,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
             prompt: getPromptValue(row),
             modelName: row.modelName,
             modelProvider: row.modelProvider,
+            modelThinking: getModelThinkingValue(row),
             modelVersion: row.modelVersion,
           }
         })

@@ -1,3 +1,5 @@
+import {getProviderModelOptions, type ProviderModelOptions} from '../../../utils/providerModelOptions.ts'
+import {isQwen35Model} from '../../../utils/qwen35Thinking.ts'
 import {type ProviderInvocationResult, type ProviderListedModel} from '../providerTypes.ts'
 import {
   getJsonSchemaResponseFormat,
@@ -7,6 +9,8 @@ import {
   getRequiredBaseURL,
   getTrimmedValue,
 } from './providerTransportUtils.ts'
+
+export {isQwen35Model} from '../../../utils/qwen35Thinking.ts'
 
 type OpenAIChatCompletionRequest = {
   chat_template_kwargs?: {enable_thinking: boolean}
@@ -20,27 +24,26 @@ type OpenAIChatCompletionRequest = {
   top_p?: number
 }
 
-const qwen35ModelPattern = /(?:^|\/)qwen3\.5-/i
-
-export const isQwen35Model = (modelName: string): boolean => {
-  return qwen35ModelPattern.test(modelName.trim())
-}
-
 const getQwen35SamplingConfig = (): Pick<
   OpenAIChatCompletionRequest,
-  'chat_template_kwargs' | 'presence_penalty' | 'temperature' | 'top_k' | 'top_p'
+  'presence_penalty' | 'temperature' | 'top_k' | 'top_p'
 > => {
-  return {
-    chat_template_kwargs: {enable_thinking: false},
-    presence_penalty: 2.0,
-    temperature: 1.0,
-    top_k: 40,
-    top_p: 1.0,
-  }
+  return {presence_penalty: 2.0, temperature: 1.0, top_k: 40, top_p: 1.0}
+}
+
+export const getOpenAIListedModels = ({
+  metadataJson,
+  modelName,
+}: {
+  metadataJson: unknown
+  modelName: string
+}): ProviderListedModel[] => {
+  return [{displayName: modelName, metadataJson, modelName, remoteModelId: modelName, variant: null, version: null}]
 }
 
 export const getOpenAIChatCompletionRequest = ({
   maxCompletionTokens,
+  modelOptions,
   modelName,
   outputSchema,
   prompt,
@@ -48,6 +51,7 @@ export const getOpenAIChatCompletionRequest = ({
   temperature,
 }: {
   maxCompletionTokens: number
+  modelOptions?: ProviderModelOptions | null
   modelName: string
   outputSchema: unknown
   prompt: string
@@ -64,8 +68,11 @@ export const getOpenAIChatCompletionRequest = ({
     response_format: getJsonSchemaResponseFormat(outputSchema),
     temperature,
   }
+  const thinking = getProviderModelOptions(modelOptions).thinking
 
-  return isQwen35Model(modelName) ? {...defaultRequest, ...getQwen35SamplingConfig()} : defaultRequest
+  return isQwen35Model(modelName)
+    ? {...defaultRequest, ...getQwen35SamplingConfig(), chat_template_kwargs: {enable_thinking: thinking === 'enabled'}}
+    : defaultRequest
 }
 
 export const listOpenAIChatModels = async ({
@@ -81,17 +88,10 @@ export const listOpenAIChatModels = async ({
   const client = getOpenAIClient({apiKey, baseURL: resolvedBaseURL})
   const response = await client.models.list()
 
-  return response.data.map((model) => {
+  return response.data.flatMap((model) => {
     const modelId = String(model.id)
 
-    return {
-      displayName: modelId,
-      metadataJson: model,
-      modelName: modelId,
-      remoteModelId: modelId,
-      variant: null,
-      version: null,
-    }
+    return getOpenAIListedModels({metadataJson: model, modelName: modelId})
   })
 }
 
@@ -99,6 +99,7 @@ export const invokeOpenAIChatModel = async ({
   apiKey,
   baseURL,
   maxCompletionTokens,
+  modelOptions,
   modelName,
   outputSchema,
   prompt,
@@ -108,6 +109,7 @@ export const invokeOpenAIChatModel = async ({
   apiKey: string | null
   baseURL: string | null
   maxCompletionTokens: number
+  modelOptions?: ProviderModelOptions | null
   modelName: string
   outputSchema: unknown
   prompt: string
@@ -119,6 +121,7 @@ export const invokeOpenAIChatModel = async ({
   const response = await client.chat.completions.create(
     getOpenAIChatCompletionRequest({
       maxCompletionTokens,
+      modelOptions,
       modelName,
       outputSchema,
       prompt,

@@ -1,4 +1,5 @@
 import {type ModelSource} from '../../db/schemaTypes.ts'
+import {getProviderModelOptions, type ProviderModelOptions} from '../../utils/providerModelOptions.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {
@@ -10,7 +11,11 @@ import {
   getProviderModelReturnQuery,
   type ProviderModelRow,
 } from './providerDbUtils.ts'
-import {getPersistedProviderModelMetadata} from './providerModelMetadata.ts'
+import {
+  getPersistedProviderModelMetadata,
+  getProviderModelMetadataOptions,
+  setProviderModelMetadataOptions,
+} from './providerModelMetadata.ts'
 import {type ProviderConnectionRecord, type ProviderListedModel, type ProviderModelRecord} from './providerTypes.ts'
 
 const getProviderModelRows = async ({enabledOnly}: {enabledOnly: boolean}): Promise<ProviderModelRecord[]> => {
@@ -140,12 +145,14 @@ const updateProviderModelRow = async ({
   displayName,
   enabled,
   id,
+  metadataJson,
   variant,
 }: {
   databaseRunner: DatabaseRunner
   displayName: string
   enabled: boolean
   id: string
+  metadataJson: unknown
   variant: string | null
 }): Promise<void> => {
   await databaseRunner.run(`
@@ -153,6 +160,7 @@ const updateProviderModelRow = async ({
     SET name = ${getSqlLiteral(displayName)},
         display_name = ${getSqlLiteral(displayName)},
         enabled = ${getSqlLiteral(enabled)},
+        metadata_json = ${getJsonSqlLiteral(metadataJson)},
         variant = ${getSqlLiteral(variant)},
         updated_at = current_timestamp
     WHERE id = ${getSqlLiteral(id)}
@@ -184,18 +192,32 @@ const upsertDiscoveredProviderModelsRecursively = async ({
   const remoteModelId = currentModel.remoteModelId
   const displayName = currentModel.displayName
   const variant = currentModel.variant
-  const metadataJson = getPersistedProviderModelMetadata({
-    listedModel: currentModel,
-    metadataJson: currentModel.metadataJson,
-    providerKind: connection.providerKind,
-    source: 'provider',
-  })
   const existingId = await getExistingProviderModelId({
     databaseRunner,
     providerConnectionId: connection.id,
     remoteModelId,
     variant,
   })
+  const existingRow = existingId ? await getProviderModelRowByIdWithRunner(databaseRunner, existingId) : null
+  const metadataJson = setProviderModelMetadataOptions(
+    getPersistedProviderModelMetadata({
+      listedModel: currentModel,
+      metadataJson: currentModel.metadataJson,
+      providerKind: connection.providerKind,
+      source: 'provider',
+    }),
+    existingRow
+      ? getProviderModelMetadataOptions(getProviderModelRecordFromRow(existingRow).metadataJson)
+      : getProviderModelOptions(currentModel.metadataJson),
+  )
+  const persistedMetadataJson =
+    metadataJson
+    ?? getPersistedProviderModelMetadata({
+      listedModel: currentModel,
+      metadataJson: currentModel.metadataJson,
+      providerKind: connection.providerKind,
+      source: 'provider',
+    })
   const [saved] = await databaseRunner.queryJson<ProviderModelRow>(
     existingId
       ? getProviderModelReturnQuery(`
@@ -205,7 +227,7 @@ const upsertDiscoveredProviderModelsRecursively = async ({
             display_name = ${getSqlLiteral(displayName)},
             variant = ${getSqlLiteral(variant)},
             source = 'discovered',
-            metadata_json = ${getJsonSqlLiteral(metadataJson)},
+            metadata_json = ${getJsonSqlLiteral(persistedMetadataJson)},
             updated_at = current_timestamp
         WHERE id = ${getSqlLiteral(existingId)}
       `)
@@ -230,7 +252,7 @@ const upsertDiscoveredProviderModelsRecursively = async ({
           ${getSqlLiteral(variant)},
           'discovered',
           TRUE,
-          ${getJsonSqlLiteral(metadataJson)}
+          ${getJsonSqlLiteral(persistedMetadataJson)}
         )
       `),
   )
@@ -307,7 +329,13 @@ export const createProviderModel = async ({
 }
 
 export const updateProviderModel = async (
-  {displayName, enabled, id, variant}: {displayName: string; enabled: boolean; id: string; variant: string | null},
+  {
+    displayName,
+    enabled,
+    id,
+    options,
+    variant,
+  }: {displayName: string; enabled: boolean; id: string; options?: ProviderModelOptions; variant: string | null},
   {afterModelWrite}: {afterModelWrite?: () => Promise<void>} = {},
 ): Promise<ProviderModelRecord> => {
   const currentRow = await getProviderModelRowById(id)
@@ -317,16 +345,20 @@ export const updateProviderModel = async (
   }
 
   const currentModel = getProviderModelRecordFromRow(currentRow)
+  const currentOptions = getProviderModelMetadataOptions(currentModel.metadataJson)
+  const nextOptions = options ?? currentOptions
+  const nextMetadataJson = setProviderModelMetadataOptions(currentModel.metadataJson, nextOptions)
   const displayNameChanged = displayName !== (currentModel.displayName ?? currentModel.name)
   const variantChanged = variant !== currentModel.variant
   const enabledChanged = enabled !== currentModel.enabled
+  const optionsChanged = nextOptions.thinking !== currentOptions.thinking
 
-  if (!enabledChanged && !displayNameChanged && !variantChanged) {
+  if (!enabledChanged && !displayNameChanged && !optionsChanged && !variantChanged) {
     return currentModel
   }
 
   const refreshedRow = (await getAppDatabaseService().transaction(async (databaseRunner) => {
-    await updateProviderModelRow({databaseRunner, displayName, enabled, id, variant})
+    await updateProviderModelRow({databaseRunner, displayName, enabled, id, metadataJson: nextMetadataJson, variant})
 
     if (enabledChanged && currentRow.providerConnectionId) {
       await afterModelWrite?.()

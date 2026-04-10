@@ -22,7 +22,14 @@ type LocalUser = {
   duckdbBin?: string | null
 }
 type UsersResponse = {data: LocalUser[]}
-type StoredModel = {displayName?: string | null; enabled: boolean; id: string; name: string; provider: string}
+type StoredModel = {
+  displayName?: string | null
+  enabled: boolean
+  id: string
+  label: string
+  name: string
+  provider: string
+}
 type WorkerRuntimeDiagnostics = {
   duckdb?: {effective?: {memoryLimit?: string | null}}
   projectMartLargeRebuildHeartbeat?: {
@@ -276,7 +283,7 @@ const Settings = () => {
                   <option value="">No PDF conversion model selected</option>
                   <For each={fullTextConversionModels()}>
                     {(model) => {
-                      return <option value={model.id}>{model.displayName ?? model.name}</option>
+                      return <option value={model.id}>{model.label}</option>
                     }}
                   </For>
                 </select>

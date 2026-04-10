@@ -10,7 +10,14 @@ import {handleApiResponse} from '../../../../services/utils/handleApiResponse.ts
 type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
 type CovidencePromptAnswerSet = 'yes|no' | 'yes|no|unsure'
-type ModelOption = {id: string; modelName: string | null; name: string; provider: string | null; version: string | null}
+type ModelOption = {
+  id: string
+  label: string
+  modelName: string | null
+  name: string
+  provider: string | null
+  version: string | null
+}
 type ModelsResponse = {data: ModelOption[]}
 type EnsureModelResponse = {data: {modelId: string}; error: null}
 type CovidenceAnalyzeResponse = {
@@ -64,7 +71,7 @@ type CovidenceCreateResponse = {
 const covidenceModeOptions: Array<{description: string; title: string; value: CovidenceImportMode}> = [
   {
     description:
-      'All + irrelevant + full text packages. Seeds title/abstract decisions into a linked screening project.',
+      'Screen + irrelevant + select exports. Seeds title/abstract no/yes decisions and leaves screen rows unanswered.',
     title: 'Title / abstract screening',
     value: 'title_abstract',
   },
@@ -82,12 +89,21 @@ const covidenceRoleLabels: Record<CovidenceFileRole, string> = {
   included: 'Included',
   irrelevant: 'Irrelevant',
 }
-const covidenceRoleHints: Record<CovidenceFileRole, string> = {
-  all: 'Required. Canonical master export used for merge keys and article metadata.',
-  excluded: 'Required for full-text imports. Marks excluded full-text decisions.',
-  full_text: 'Required. Marks studies advanced to full-text review.',
-  included: 'Required for full-text imports. Marks included full-text decisions.',
-  irrelevant: 'Required. Marks studies excluded at title/abstract stage.',
+const covidenceRoleHintsByMode: Record<CovidenceImportMode, Record<CovidenceFileRole, string>> = {
+  full_text: {
+    all: 'Required. Canonical master export used for merge keys and article metadata.',
+    excluded: 'Required for full-text imports. Marks excluded full-text decisions.',
+    full_text: 'Required. Marks studies advanced to full-text review.',
+    included: 'Required for full-text imports. Marks included full-text decisions.',
+    irrelevant: 'Required. Marks studies excluded at title/abstract stage.',
+  },
+  title_abstract: {
+    all: 'Required. Use the Covidence screen export for studies still in title/abstract screening.',
+    excluded: 'Not used in title/abstract mode.',
+    full_text: 'Required. Use the Covidence select export for studies approved for full-text review.',
+    included: 'Not used in title/abstract mode.',
+    irrelevant: 'Required. Use the Covidence irrelevant export for human-excluded title/abstract decisions.',
+  },
 }
 const covidenceStageOrder: CovidenceFileRole[] = ['irrelevant', 'full_text', 'excluded', 'included']
 const covidenceAllRoles: CovidenceFileRole[] = ['all', 'irrelevant', 'full_text', 'excluded', 'included']
@@ -101,7 +117,7 @@ const getRequiredCovidenceRoles = (mode: CovidenceImportMode): CovidenceFileRole
 }
 
 const getModelLabel = (model: ModelOption): string => {
-  return model.provider?.toLowerCase() === 'codex' ? `Codex: ${model.name}` : model.name
+  return model.label
 }
 
 const getSelectedUploadFiles = (filesByRole: Record<CovidenceFileRole, File | null>, mode: CovidenceImportMode) => {
@@ -117,9 +133,21 @@ const getMissingCovidenceRoles = (filesByRole: Record<CovidenceFileRole, File | 
   })
 }
 
-const getStageMembershipLabels = (stageMembership: Record<CovidenceFileRole, boolean>) => {
+const getCovidenceRoleLabel = (mode: CovidenceImportMode, fileRole: CovidenceFileRole) => {
+  return mode === 'title_abstract' && fileRole === 'all'
+    ? 'Screen'
+    : mode === 'title_abstract' && fileRole === 'full_text'
+      ? 'Select'
+      : covidenceRoleLabels[fileRole]
+}
+
+const getCovidenceRoleHint = (mode: CovidenceImportMode, fileRole: CovidenceFileRole) => {
+  return covidenceRoleHintsByMode[mode][fileRole]
+}
+
+const getStageMembershipLabels = (mode: CovidenceImportMode, stageMembership: Record<CovidenceFileRole, boolean>) => {
   return covidenceStageOrder.flatMap((fileRole) => {
-    return stageMembership[fileRole] ? [covidenceRoleLabels[fileRole]] : []
+    return stageMembership[fileRole] ? [getCovidenceRoleLabel(mode, fileRole)] : []
   })
 }
 
@@ -306,7 +334,7 @@ const AdminCovidenceImport = () => {
       setPageError(
         `Add the required files first: ${nextMissingRoles
           .map((fileRole) => {
-            return covidenceRoleLabels[fileRole]
+            return getCovidenceRoleLabel(mode(), fileRole)
           })
           .join(', ')}`,
       )
@@ -347,7 +375,7 @@ const AdminCovidenceImport = () => {
       setPageError(
         `Add the required files first: ${nextMissingRoles
           .map((fileRole) => {
-            return covidenceRoleLabels[fileRole]
+            return getCovidenceRoleLabel(nextMode, fileRole)
           })
           .join(', ')}`,
       )
@@ -394,8 +422,8 @@ const AdminCovidenceImport = () => {
               <p class="text-xs font-semibold uppercase tracking-[0.28em] text-amber-700">Admin import flow</p>
               <h1 class="text-3xl font-semibold tracking-tight text-stone-900">Covidence multi-file import</h1>
               <p class="max-w-2xl text-sm leading-6 text-stone-600">
-                Upload the required Covidence exports, inspect merge warnings, then create the datasource, prompt,
-                linked project, and seeded judgments in one pass.
+                Upload the required Covidence exports, inspect how screen, irrelevant, and select rows merge, then
+                create the datasource, prompt, linked project, and seeded judgments in one pass.
               </p>
             </div>
             <Button as={Link} to="/admin/datasources" variant="outline" size="sm">
@@ -590,12 +618,12 @@ const AdminCovidenceImport = () => {
                     return (
                       <label class="rounded-2xl border border-stone-200 bg-stone-50 p-4 text-sm text-stone-700 shadow-sm">
                         <div class="mb-2 flex items-center justify-between gap-3">
-                          <span class="font-semibold text-stone-900">{covidenceRoleLabels[fileRole]}</span>
+                          <span class="font-semibold text-stone-900">{getCovidenceRoleLabel(mode(), fileRole)}</span>
                           <span class="rounded-full bg-stone-200 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-stone-700">
                             {fileRole.replace('_', ' ')}
                           </span>
                         </div>
-                        <p class="mb-3 text-xs leading-5 text-stone-500">{covidenceRoleHints[fileRole]}</p>
+                        <p class="mb-3 text-xs leading-5 text-stone-500">{getCovidenceRoleHint(mode(), fileRole)}</p>
                         <input
                           type="file"
                           accept=".csv,.ris,text/csv,text/plain,application/octet-stream"
@@ -636,7 +664,7 @@ const AdminCovidenceImport = () => {
                     Missing:{' '}
                     {missingRoles()
                       .map((fileRole) => {
-                        return covidenceRoleLabels[fileRole]
+                        return getCovidenceRoleLabel(mode(), fileRole)
                       })
                       .join(', ')}
                   </p>
@@ -714,7 +742,7 @@ const AdminCovidenceImport = () => {
                               <div class="flex flex-wrap items-center justify-between gap-2">
                                 <span class="font-medium text-stone-900">{file.sourceFileName}</span>
                                 <span class="text-xs uppercase tracking-wide text-stone-500">
-                                  {covidenceRoleLabels[file.fileRole]} · {file.format.toUpperCase()} ·{' '}
+                                  {getCovidenceRoleLabel(mode(), file.fileRole)} · {file.format.toUpperCase()} ·{' '}
                                   {file.rowCount.toLocaleString()} rows
                                 </span>
                               </div>
@@ -768,7 +796,7 @@ const AdminCovidenceImport = () => {
                                 <div class="rounded-xl bg-white/70 px-3 py-2">
                                   <p class="font-medium">{warning.sourceFileName}</p>
                                   <p class="text-xs text-rose-800">
-                                    {covidenceRoleLabels[warning.fileRole]} · row {warning.rowNumber}
+                                    {getCovidenceRoleLabel(mode(), warning.fileRole)} · row {warning.rowNumber}
                                     {warning.articleKey ? ` · key ${warning.articleKey}` : ''}
                                   </p>
                                 </div>
@@ -795,7 +823,7 @@ const AdminCovidenceImport = () => {
                                   </p>
                                 </div>
                                 <div class="flex flex-wrap gap-2">
-                                  <For each={getStageMembershipLabels(row.stageMembership)}>
+                                  <For each={getStageMembershipLabels(mode(), row.stageMembership)}>
                                     {(label) => {
                                       return (
                                         <span class="rounded-full bg-stone-100 px-2.5 py-1 text-xs font-medium text-stone-700">

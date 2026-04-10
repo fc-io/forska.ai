@@ -1,5 +1,6 @@
 import {createSignal, For, Show} from 'solid-js'
 
+import {appendProviderModelThinkingBadgeLabel} from '../../../../../utils/providerModelLabel.ts'
 import {reviewArticleDetailsDispatchScrollToQuote} from './reviewArticleDetails/reviewArticleDetailsScrollEvents.ts'
 import {ReviewJudgmentAssessments} from './reviewJudgmentAssessments.tsx'
 
@@ -13,11 +14,14 @@ const isPlaceholderJudgmentId = (judgmentId: string): boolean => {
 
 const toThinkingLevelLabel = ({
   modelProvider,
+  modelThinking,
   modelVersion,
 }: {
   modelProvider: string | null | undefined
+  modelThinking: string | null | undefined
   modelVersion: string | null | undefined
 }): string => {
+  const thinking = String(modelThinking ?? '').trim()
   const provider = String(modelProvider ?? '')
     .trim()
     .toLowerCase()
@@ -26,7 +30,17 @@ const toThinkingLevelLabel = ({
   const hasProvider = provider.length > 0
   const isCodex = provider === 'codex'
 
-  return isCodex ? (hasVersion ? version : 'auto') : hasVersion ? version : hasProvider ? 'n/a' : 'unknown'
+  return thinking.length > 0
+    ? thinking
+    : isCodex
+      ? hasVersion
+        ? version
+        : 'auto'
+      : hasVersion
+        ? version
+        : hasProvider
+          ? 'n/a'
+          : 'unknown'
 }
 
 const toChunkingLabel = (chunkingStrategy: string | null | undefined): string => {
@@ -47,6 +61,7 @@ type ReviewJudgmentItemProps = {
     assessments?: Array<{assessmentIsCorrect?: boolean | null; assessmentComment?: string | null}>
     modelName?: string | null
     modelProvider?: string | null
+    modelThinking?: string | null
     modelVersion?: string | null
     snapshotProjectModelName?: string | null
     useTitle?: boolean
@@ -78,10 +93,21 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
     // Use modelName (from joined models table) or fall back to snapshotProjectModelName
     return props.judgment.modelName || props.judgment.snapshotProjectModelName || undefined
   }
+  const modelLabel = () => {
+    const resolvedModelName = modelName()
+
+    return resolvedModelName
+      ? appendProviderModelThinkingBadgeLabel({
+          label: resolvedModelName,
+          thinking: props.judgment.modelThinking ?? null,
+        })
+      : undefined
+  }
 
   const thinkingLevel = () => {
     return toThinkingLevelLabel({
       modelProvider: props.judgment.modelProvider,
+      modelThinking: props.judgment.modelThinking,
       modelVersion: props.judgment.modelVersion,
     })
   }
@@ -208,7 +234,7 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
         </p>
         <div class="mt-1 text-[11px] text-gray-500 space-y-0.5 break-words">
           {promptId() ? <div>Prompt ID: {String(promptId()).slice(0, 8)}</div> : null}
-          {modelName() ? <div>Model: {modelName()}</div> : null}
+          {modelLabel() ? <div>Model: {modelLabel()}</div> : null}
           <Show when={!isPlaceholder()}>
             <div>Thinking level: {thinkingLevel()}</div>
             <div>Chunking: {chunking()}</div>

@@ -2,6 +2,7 @@ import {format, isValid} from 'date-fns'
 
 import {apiClient} from '../../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse.ts'
+import {type ProviderModelOptions} from '../../../../utils/providerModelOptions.ts'
 
 export type ProviderCatalogEntry = {
   defaultBaseURL: string | null
@@ -366,11 +367,13 @@ export const syncProviderConnectionModels = async (id: string) => {
 export const addManualProviderModel = async (input: {
   displayName?: string
   id: string
+  options?: ProviderModelOptions
   remoteModelId: string
   variant?: string
 }) => {
   const response = await apiClient.api['provider-connections']({id: input.id}).models.post({
     displayName: input.displayName,
+    options: input.options,
     remoteModelId: input.remoteModelId,
     variant: input.variant,
   })
@@ -386,11 +389,12 @@ export const updateProviderModel = async (input: {
   displayName: string
   enabled: boolean
   id: string
+  options?: ProviderModelOptions
   variant?: string
 }) => {
   const response = await apiClient.api
     .models({id: input.id})
-    .patch({displayName: input.displayName, enabled: input.enabled, variant: input.variant})
+    .patch({displayName: input.displayName, enabled: input.enabled, options: input.options, variant: input.variant})
   const result = handleApiResponse<ProviderModelMutationResponse>(
     response as unknown as {data?: ProviderModelMutationResponse; error?: unknown; status?: number},
     'Failed to update model',

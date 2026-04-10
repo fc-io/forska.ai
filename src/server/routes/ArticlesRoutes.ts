@@ -2,6 +2,7 @@ import {Elysia, t} from 'elysia'
 
 import {selectArticleIdsByFilterOlap} from '../../services/olap/selectArticleIdsOlap.ts'
 import {getArticleSourceMetadata, getOriginalDoi, normalizeDoi} from '../../utils/articleSourceMetadata.ts'
+import {getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
   escapeSqlString,
@@ -40,6 +41,7 @@ type ArticleJudgmentRow = {
   judgmentSnapshotProjectModelName: string | null
   promptOriginalText: string
   promptHeading: string | null
+  modelMetadataJson: unknown
   modelName: string | null
   modelProvider: string | null
   modelVersion: string | null
@@ -78,6 +80,7 @@ const getArticleJudgmentValue = (row: ArticleJudgmentRow) => {
     prompt: {originalText: row.promptOriginalText, promptHeading: row.promptHeading},
     modelName: row.modelName,
     modelProvider: row.modelProvider,
+    modelThinking: getProviderModelMetadataOptions(getJsonValue(row.modelMetadataJson)).thinking,
     modelVersion: row.modelVersion,
   }
 }
@@ -555,6 +558,7 @@ export const articlesRoutes = new Elysia()
           j.snapshot_project_model_name AS judgmentSnapshotProjectModelName,
           p.original_text AS promptOriginalText,
           p.prompt_heading AS promptHeading,
+          TO_JSON(m.metadata_json) AS modelMetadataJson,
           COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
           pc.provider_kind AS modelProvider,
           m.variant AS modelVersion

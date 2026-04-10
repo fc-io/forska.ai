@@ -1,10 +1,13 @@
 import {Elysia, t} from 'elysia'
 
+import {appendProviderModelThinkingBadgeLabel} from '../../utils/providerModelLabel.ts'
+import {getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
 import {assertSelectableProviderModelId} from '../providers/providerModelRepository.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
   escapeSqlString,
   getDateValue,
+  getJsonValue,
   getQuotedStringList,
   getSqlLiteral,
   getTimestampLiteral,
@@ -41,6 +44,15 @@ const parseOptionalDate = (value?: string | null) => {
     throw new Error('Invalid date value provided')
   }
   return parsedDate
+}
+
+const getProjectModelLabel = ({metadataJson, modelName}: {metadataJson: unknown; modelName: string | null}) => {
+  return modelName
+    ? appendProviderModelThinkingBadgeLabel({
+        label: modelName,
+        thinking: getProviderModelMetadataOptions(getJsonValue(metadataJson)).thinking,
+      })
+    : modelName
 }
 
 type AppQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
@@ -375,6 +387,7 @@ export const projectsRoutes = new Elysia()
         archived: boolean
         createdAt: unknown
         updatedAt: unknown
+        modelMetadataJson: unknown
         modelName: string | null
       }>(
         `
@@ -393,6 +406,7 @@ export const projectsRoutes = new Elysia()
         p.archived AS archived,
         p.created_at AS createdAt,
         p.updated_at AS updatedAt,
+        TO_JSON(m.metadata_json) AS modelMetadataJson,
         COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName
       FROM app.project p
       LEFT JOIN app.model m ON p.model_id = m.id
@@ -402,12 +416,15 @@ export const projectsRoutes = new Elysia()
       )
       .then((rows) => {
         return rows.map((row) => {
+          const {modelMetadataJson: _modelMetadataJson, ...projectRow} = row
+
           return {
-            ...row,
-            dateFrom: getDateValue(row.dateFrom),
-            dateTo: getDateValue(row.dateTo),
-            createdAt: getDateValue(row.createdAt),
-            updatedAt: getDateValue(row.updatedAt),
+            ...projectRow,
+            dateFrom: getDateValue(projectRow.dateFrom),
+            dateTo: getDateValue(projectRow.dateTo),
+            createdAt: getDateValue(projectRow.createdAt),
+            modelName: getProjectModelLabel({metadataJson: row.modelMetadataJson, modelName: projectRow.modelName}),
+            updatedAt: getDateValue(projectRow.updatedAt),
           }
         })
       })
@@ -431,6 +448,7 @@ export const projectsRoutes = new Elysia()
         archived: boolean
         createdAt: unknown
         updatedAt: unknown
+        modelMetadataJson: unknown
         modelName: string | null
       }>(
         `
@@ -449,6 +467,7 @@ export const projectsRoutes = new Elysia()
         p.archived AS archived,
         p.created_at AS createdAt,
         p.updated_at AS updatedAt,
+        TO_JSON(m.metadata_json) AS modelMetadataJson,
         COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName
       FROM app.project p
       LEFT JOIN app.model m ON p.model_id = m.id
@@ -458,12 +477,15 @@ export const projectsRoutes = new Elysia()
       )
       .then((rows) => {
         return rows.map((row) => {
+          const {modelMetadataJson: _modelMetadataJson, ...projectRow} = row
+
           return {
-            ...row,
-            dateFrom: getDateValue(row.dateFrom),
-            dateTo: getDateValue(row.dateTo),
-            createdAt: getDateValue(row.createdAt),
-            updatedAt: getDateValue(row.updatedAt),
+            ...projectRow,
+            dateFrom: getDateValue(projectRow.dateFrom),
+            dateTo: getDateValue(projectRow.dateTo),
+            createdAt: getDateValue(projectRow.createdAt),
+            modelName: getProjectModelLabel({metadataJson: row.modelMetadataJson, modelName: projectRow.modelName}),
+            updatedAt: getDateValue(projectRow.updatedAt),
           }
         })
       })
@@ -623,6 +645,7 @@ export const projectsRoutes = new Elysia()
           name: string
           provider: string | null
           modelName: string | null
+          modelMetadataJson: unknown
           baseURL: string | null
           version: string | null
         }>(`
@@ -631,6 +654,7 @@ export const projectsRoutes = new Elysia()
           COALESCE(m.display_name, m.name, m.remote_model_id) AS name,
           pc.provider_kind AS provider,
           m.remote_model_id AS modelName,
+          TO_JSON(m.metadata_json) AS modelMetadataJson,
           pc.base_url AS baseURL,
           m.variant AS version
         FROM app.model m
@@ -651,7 +675,18 @@ export const projectsRoutes = new Elysia()
     })
 
     const hasJudgedArticles = existingJob.length > 0
-    const [projectModel] = projectModelRows
+    const [projectModelRow] = projectModelRows
+    const projectModel = projectModelRow
+      ? {
+          ...(({modelMetadataJson: _modelMetadataJson, ...modelRow}) => {
+            return modelRow
+          })(projectModelRow),
+          name: getProjectModelLabel({
+            metadataJson: projectModelRow.modelMetadataJson,
+            modelName: projectModelRow.name,
+          }),
+        }
+      : undefined
 
     const importRoutes = linkedImportRoutes.map((r) => {
       return r.route

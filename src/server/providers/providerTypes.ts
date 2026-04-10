@@ -1,4 +1,5 @@
 import {type ModelSource} from '../../db/schemaTypes.ts'
+import {type ProviderModelOptions} from '../../utils/providerModelOptions.ts'
 import {type ProviderCatalogEntry, type ProviderKind} from '../services/providerCatalog.ts'
 
 export type ProviderTransportFamily =
@@ -195,7 +196,12 @@ export type ProviderListModelsInput = {
   runtimeCredentials: ProviderRuntimeCredentials
 }
 
-export type ProviderManualModelInput = {displayName: string; remoteModelId: string; variant: string | null}
+export type ProviderManualModelInput = {
+  displayName: string
+  options?: ProviderModelOptions
+  remoteModelId: string
+  variant: string | null
+}
 
 export type ProviderInvokeRequest = {
   maxCompletionTokens: number

@@ -53,7 +53,14 @@ type ProjectSummary = {
   useFulltextNoImages: boolean
 }
 
-type ModelOption = {id: string; name: string; provider: string | null; modelName: string | null; version: string | null}
+type ModelOption = {
+  id: string
+  label: string
+  modelName: string | null
+  name: string
+  provider: string | null
+  version: string | null
+}
 type ModelsResponse = {data: ModelOption[]}
 
 type EnsureModelResponse = {data: {modelId: string}; error: null}
@@ -808,8 +815,7 @@ const EditProject = (): JSX.Element => {
                     >
                       <For each={availableModels()}>
                         {(m) => {
-                          const label = m.provider?.toLowerCase() === 'codex' ? `Codex: ${m.name}` : m.name
-                          return <option value={m.id}>{label}</option>
+                          return <option value={m.id}>{m.label}</option>
                         }}
                       </For>
                     </select>

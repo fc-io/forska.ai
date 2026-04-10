@@ -5,10 +5,17 @@ import {createStore} from 'solid-js/store'
 
 import {Button} from '../../../../components/ui/button.tsx'
 import {
+  getProviderModelOptions,
+  getProviderModelSupportedOptions,
+  type ProviderModelOptions,
+  type ProviderModelThinkingOption,
+} from '../../../../utils/providerModelOptions.ts'
+import {
   getComparableModelNames,
   getRuntimeModelNamesForProvider,
   hasRuntimeModelMatch,
 } from '../../../../utils/providerRuntimeModelMatch.ts'
+import {isQwen35Model} from '../../../../utils/qwen35Thinking.ts'
 import {ProviderConnectionForm} from '../../+admin/+models/providerConnectionForm.tsx'
 import {
   addManualProviderModel,
@@ -59,10 +66,19 @@ type ConnectionFormState = {
   workerUrlMode: 'manual' | 'runtime'
 }
 
-type ManualModelFormState = {displayName: string; remoteModelId: string; variant: string}
+type ManualModelFormState = {
+  displayName: string
+  remoteModelId: string
+  thinking: ProviderModelThinkingOption
+  variant: string
+}
 
 type ProviderPageModel = ProviderModel & {persistedId: string | null}
-type ProviderPageModelDraft = ProviderPageModel & {displayNameValue: string; variantValue: string}
+type ProviderPageModelDraft = ProviderPageModel & {
+  displayNameValue: string
+  thinkingValue: ProviderModelThinkingOption
+  variantValue: string
+}
 
 const getTrimmedModelValue = (value: string | null | undefined): string | null => {
   const normalized = String(value ?? '').trim()
@@ -148,6 +164,32 @@ const getCodexModelVariantLabel = (model: {variant: string | null; version: stri
   return getTrimmedModelValue(model.variant ?? model.version) ?? 'auto'
 }
 
+const isQwen35ProviderModel = (model: {modelName: string | null; remoteModelId: string | null}) => {
+  return isQwen35Model(getTrimmedModelValue(model.remoteModelId ?? model.modelName) ?? '')
+}
+
+const supportsProviderModelThinking = (model: {
+  metadataJson: unknown
+  modelName: string | null
+  remoteModelId: string | null
+}) => {
+  return getProviderModelSupportedOptions(model.metadataJson).thinking || isQwen35ProviderModel(model)
+}
+
+const getProviderModelThinkingValue = (model: {
+  metadataJson: unknown
+  modelName: string | null
+  remoteModelId: string | null
+  variant: string | null
+  version: string | null
+}): ProviderModelThinkingOption => {
+  const thinking =
+    getProviderModelOptions(model.metadataJson).thinking
+    ?? getProviderModelOptions({variant: model.variant ?? model.version}).thinking
+
+  return thinking ?? 'disabled'
+}
+
 const getProviderPageModels = ({
   connection,
   discoveredCodexModels,
@@ -208,7 +250,12 @@ const getProviderPageModels = ({
 }
 
 const getProviderPageModelDraft = (model: ProviderPageModel): ProviderPageModelDraft => {
-  return {...model, displayNameValue: model.displayName ?? model.name, variantValue: model.variant ?? ''}
+  return {
+    ...model,
+    displayNameValue: model.displayName ?? model.name,
+    thinkingValue: getProviderModelThinkingValue(model),
+    variantValue: model.variant ?? '',
+  }
 }
 
 const hasProviderPageModelDraftChanges = ({
@@ -223,6 +270,7 @@ const hasProviderPageModelDraftChanges = ({
       ? draft.enabled !== source.enabled
       : draft.enabled !== source.enabled
         || draft.displayNameValue !== (source.displayName ?? source.name)
+        || draft.thinkingValue !== getProviderModelThinkingValue(source)
         || draft.variantValue !== (source.variant ?? '')
     : false
 }
@@ -241,7 +289,17 @@ const getConnectionFormState = (connection: ProviderConnection | null): Connecti
 }
 
 const getEmptyManualModelFormState = (): ManualModelFormState => {
-  return {displayName: '', remoteModelId: '', variant: ''}
+  return {displayName: '', remoteModelId: '', thinking: 'disabled', variant: ''}
+}
+
+const getSubmittedModelOptions = ({
+  supportsThinking,
+  thinkingValue,
+}: {
+  supportsThinking: boolean
+  thinkingValue: ProviderModelThinkingOption
+}): ProviderModelOptions | undefined => {
+  return supportsThinking ? {thinking: thinkingValue} : undefined
 }
 
 const ProviderDetailPage = () => {
@@ -591,6 +649,10 @@ const ProviderDetailPage = () => {
       await addManualModelMutation.mutateAsync({
         displayName: getTrimmedValue(manualModelForm.displayName) || undefined,
         id: connection.id,
+        options: getSubmittedModelOptions({
+          supportsThinking: isQwen35Model(manualModelForm.remoteModelId),
+          thinkingValue: manualModelForm.thinking,
+        }),
         remoteModelId: manualModelForm.remoteModelId,
         variant: getTrimmedValue(manualModelForm.variant) || undefined,
       })
@@ -703,7 +765,7 @@ const ProviderDetailPage = () => {
     const draftKey = [
       selectedConnection()?.id ?? 'none',
       ...models.map((model) => {
-        return `${model.id}:${model.enabled}:${model.displayName ?? model.name}:${model.variant ?? ''}:${model.persistedId ?? ''}`
+        return `${model.id}:${model.enabled}:${model.displayName ?? model.name}:${model.variant ?? ''}:${getProviderModelThinkingValue(model)}:${model.persistedId ?? ''}`
       }),
     ].join('|')
 
@@ -720,7 +782,7 @@ const ProviderDetailPage = () => {
     updates,
   }: {
     id: string
-    updates: Partial<Pick<ProviderPageModelDraft, 'displayNameValue' | 'enabled' | 'variantValue'>>
+    updates: Partial<Pick<ProviderPageModelDraft, 'displayNameValue' | 'enabled' | 'thinkingValue' | 'variantValue'>>
   }) => {
     setModelDrafts((drafts) => {
       return drafts.map((draft) => {
@@ -768,6 +830,10 @@ const ProviderDetailPage = () => {
             displayName: draft.displayNameValue,
             enabled: draft.enabled,
             id: persistedModelId,
+            options: getSubmittedModelOptions({
+              supportsThinking: supportsProviderModelThinking(draft),
+              thinkingValue: draft.thinkingValue,
+            }),
             variant:
               draft.provider === 'codex'
                 ? (getTrimmedModelValue(draft.variant ?? draft.version) ?? undefined)
@@ -1133,18 +1199,37 @@ const ProviderDetailPage = () => {
                             value={manualModelForm.displayName}
                           />
                         </div>
-                        <div>
-                          <label class="mb-2 block text-sm font-medium text-gray-700">Variant</label>
-                          <input
-                            class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
-                            onInput={(event) => {
-                              setManualModelForm('variant', event.currentTarget.value)
-                            }}
-                            placeholder="Optional"
-                            type="text"
-                            value={manualModelForm.variant}
-                          />
-                        </div>
+                        <Show
+                          when={isQwen35Model(manualModelForm.remoteModelId)}
+                          fallback={
+                            <div>
+                              <label class="mb-2 block text-sm font-medium text-gray-700">Variant</label>
+                              <input
+                                class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
+                                onInput={(event) => {
+                                  setManualModelForm('variant', event.currentTarget.value)
+                                }}
+                                placeholder="Optional"
+                                type="text"
+                                value={manualModelForm.variant}
+                              />
+                            </div>
+                          }
+                        >
+                          <div>
+                            <label class="mb-2 block text-sm font-medium text-gray-700">Thinking</label>
+                            <select
+                              class="w-full rounded-md border border-gray-300 px-3 py-3 text-sm text-gray-900"
+                              onChange={(event) => {
+                                setManualModelForm('thinking', event.currentTarget.value as ProviderModelThinkingOption)
+                              }}
+                              value={manualModelForm.thinking}
+                            >
+                              <option value="disabled">Disabled</option>
+                              <option value="enabled">Enabled</option>
+                            </select>
+                          </div>
+                        </Show>
                         <button
                           class="rounded-md border border-gray-300 px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
                           disabled={addManualModelMutation.isPending}
@@ -1167,7 +1252,7 @@ const ProviderDetailPage = () => {
                       <p class="text-sm text-gray-500">
                         {isCodexConnection()
                           ? 'Enable or disable the models and reasoning variants currently available from Codex App.'
-                          : 'Enable, disable, and rename the models available on this provider.'}
+                          : 'Enable, disable, rename, and configure the models available on this provider.'}
                       </p>
                     </div>
                     <div class="text-xs font-medium uppercase tracking-wide text-gray-500">
@@ -1259,7 +1344,7 @@ const ProviderDetailPage = () => {
                                     Model
                                   </th>
                                   <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                                    Variant
+                                    Variant / Options
                                   </th>
                                   <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                                     Enabled
@@ -1315,6 +1400,29 @@ const ProviderDetailPage = () => {
                                             type="text"
                                             value={model.variantValue}
                                           />
+                                          <Show when={supportsProviderModelThinking(model)}>
+                                            <div class="mt-2">
+                                              <label class="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                                                Thinking
+                                              </label>
+                                              <select
+                                                class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
+                                                onChange={(event) => {
+                                                  return updateModelDraft({
+                                                    id: model.id,
+                                                    updates: {
+                                                      thinkingValue: event.currentTarget
+                                                        .value as ProviderModelThinkingOption,
+                                                    },
+                                                  })
+                                                }}
+                                                value={model.thinkingValue}
+                                              >
+                                                <option value="disabled">Disabled</option>
+                                                <option value="enabled">Enabled</option>
+                                              </select>
+                                            </div>
+                                          </Show>
                                           <div class="mt-2 text-xs text-gray-500">
                                             Created {formatTimestamp(model.createdAt)}
                                           </div>

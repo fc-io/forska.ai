@@ -1,5 +1,7 @@
 import {Elysia, t} from 'elysia'
 
+import {appendProviderModelThinkingBadgeLabel} from '../../utils/providerModelLabel.ts'
+import {getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
 import {assertSelectableProviderModelIds} from '../providers/providerModelRepository.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
@@ -23,7 +25,7 @@ type ComparisonProjectContentVariant = {
   useFulltextNoImages: boolean
 }
 type ComparisonProjectPromptConfig = {id: string; promptHeading: string | null; promptLabel: string; order: number}
-type ComparisonProjectModelConfig = {id: string; name: string}
+type ComparisonProjectModelConfig = {id: string; metadataJson: unknown; name: string}
 type ComparisonProjectJudgmentsColumn = {
   id: string
   kind: 'llm' | 'human'
@@ -73,6 +75,7 @@ type ComparisonProjectSource = {
   name: string
   description: string | null
   modelId: string
+  modelMetadataJson?: unknown
   modelName: string
   useTitle: boolean
   useAbstract: boolean
@@ -512,6 +515,7 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
       p.name AS name,
       p.description AS description,
       p.model_id AS modelId,
+      TO_JSON(m.metadata_json) AS modelMetadataJson,
       COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
       p.use_title AS useTitle,
       p.use_abstract AS useAbstract,
@@ -581,8 +585,14 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
         return null
       }
 
+      const {modelMetadataJson: _modelMetadataJson, ...sourceProjectRow} = projectRow
+
       return {
-        ...projectRow,
+        ...sourceProjectRow,
+        modelName: appendProviderModelThinkingBadgeLabel({
+          label: projectRow.modelName,
+          thinking: getProviderModelMetadataOptions(getJsonValue(projectRow.modelMetadataJson)).thinking,
+        }),
         prompts: sourcePromptRows.map<ComparisonProjectSourcePrompt>((promptRow, index) => {
           return {id: promptRow.promptId, promptHeading: promptRow.promptHeading, order: promptRow.order ?? index}
         }),
@@ -793,7 +803,7 @@ const getComparisonProjectModels = async (
     comparisonProjectRow.sourceProjectId,
   )
   return appDatabaseService.queryJson<ComparisonProjectModelConfig>(`
-    SELECT m.id AS id, m.name AS name
+    SELECT m.id AS id, m.name AS name, TO_JSON(m.metadata_json) AS metadataJson
     FROM ${judgmentTable} j
     INNER JOIN ${modelTable} m ON m.id = j.model_id
     INNER JOIN ${articleTable} a ON a.id = j.article_id
@@ -803,7 +813,7 @@ const getComparisonProjectModels = async (
       contentCondition,
       ...articleScopeConditions,
     ])}
-    GROUP BY m.id, m.name
+    GROUP BY m.id, m.name, m.metadata_json
     ORDER BY m.name ASC
   `)
 }
@@ -823,7 +833,10 @@ const getComparisonProjectColumns = (
           promptId: promptRow.id,
           promptLabel: promptRow.promptLabel,
           modelId: modelRow.id,
-          modelLabel: modelRow.name,
+          modelLabel: appendProviderModelThinkingBadgeLabel({
+            label: modelRow.name,
+            thinking: getProviderModelMetadataOptions(getJsonValue(modelRow.metadataJson)).thinking,
+          }),
           contentLabel: contentVariant.label,
         }
       })

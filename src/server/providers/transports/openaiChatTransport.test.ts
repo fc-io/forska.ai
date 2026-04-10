@@ -1,6 +1,6 @@
 import {expect, test} from 'bun:test'
 
-import {getOpenAIChatCompletionRequest, isQwen35Model} from './openaiChatTransport.ts'
+import {getOpenAIChatCompletionRequest, getOpenAIListedModels, isQwen35Model} from './openaiChatTransport.ts'
 
 test('detects Qwen3.5 model ids', () => {
   expect(isQwen35Model('Qwen/Qwen3.5-27B')).toBe(true)
@@ -26,6 +26,21 @@ test('uses Qwen3.5 non-thinking request settings for structured output', () => {
   expect(request.top_k).toBe(40)
   expect(request.presence_penalty).toBe(2.0)
   expect(request.chat_template_kwargs).toEqual({enable_thinking: false})
+})
+
+test('uses Qwen3.5 thinking request settings when model options enable thinking', () => {
+  const request = getOpenAIChatCompletionRequest({
+    maxCompletionTokens: 2000,
+    modelName: 'Qwen/Qwen3.5-27B',
+    modelOptions: {thinking: 'enabled'},
+    outputSchema: {type: 'object'},
+    prompt: 'Prompt',
+    systemPrompt: 'System',
+    temperature: 0.2,
+  })
+
+  expect(request.chat_template_kwargs).toEqual({enable_thinking: true})
+  expect(request.temperature).toBe(1.0)
 })
 
 test('uses Qwen3.5 non-thinking request settings without org prefix', () => {
@@ -57,4 +72,17 @@ test('keeps default request settings for non-Qwen models', () => {
   expect(request.top_k).toBeUndefined()
   expect(request.presence_penalty).toBeUndefined()
   expect(request.chat_template_kwargs).toBeUndefined()
+})
+
+test('lists OpenAI models without transport-specific variants', () => {
+  expect(getOpenAIListedModels({metadataJson: {id: 'Qwen/Qwen3.5-27B'}, modelName: 'Qwen/Qwen3.5-27B'})).toEqual([
+    {
+      displayName: 'Qwen/Qwen3.5-27B',
+      metadataJson: {id: 'Qwen/Qwen3.5-27B'},
+      modelName: 'Qwen/Qwen3.5-27B',
+      remoteModelId: 'Qwen/Qwen3.5-27B',
+      variant: null,
+      version: null,
+    },
+  ])
 })

@@ -164,6 +164,54 @@ test('OpenAI-compatible adapter passes output schema to chat invocation', async 
   expect(transportState.invoke.mock.calls[0]?.[0]).toMatchObject({outputSchema})
 })
 
+test('OpenAI-compatible adapter passes stored model options to chat invocation', async () => {
+  transportState.invoke.mockClear()
+  const {createOpenAICompatibleAdapter} = await loadFactory()
+  const adapter = createOpenAICompatibleAdapter(
+    {
+      defaultBaseURL: 'http://127.0.0.1:11434/v1',
+      description: 'Local Ollama',
+      kind: 'ollama',
+      label: 'Ollama',
+      requiresApiKey: false,
+      supportsDiscovery: true,
+      supportsWorkerUrls: true,
+    },
+    {transportFamily: 'ollama-native-discovery', useNativeOllamaDiscovery: true},
+  )
+
+  await adapter.invoke({
+    connection: getOllamaConnectionInput().connection,
+    model: {
+      baseURL: null,
+      createdAt: null,
+      displayName: 'Qwen/Qwen3.5-27B',
+      enabled: true,
+      id: 'model-1',
+      metadataJson: {options: {thinking: 'enabled'}},
+      modelName: 'Qwen/Qwen3.5-27B',
+      name: 'Qwen/Qwen3.5-27B',
+      provider: 'ollama',
+      providerConnectionId: 'ollama-1',
+      remoteModelId: 'Qwen/Qwen3.5-27B',
+      source: 'manual',
+      updatedAt: null,
+      variant: null,
+      version: null,
+    },
+    request: {
+      maxCompletionTokens: 32,
+      outputSchema: {type: 'object'},
+      prompt: 'Say hi',
+      systemPrompt: 'Return JSON',
+      temperature: 0.1,
+    },
+    runtimeCredentials: getOllamaConnectionInput().runtimeCredentials,
+  })
+
+  expect(transportState.invoke.mock.calls[0]?.[0]).toMatchObject({modelOptions: {thinking: 'enabled'}})
+})
+
 test('OpenAI-compatible adapter health classifies missing /v1/models endpoint as provider outage', async () => {
   transportState.listChat.mockClear()
   transportState.listChat.mockImplementationOnce(async () => {

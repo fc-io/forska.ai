@@ -13,7 +13,14 @@ import {
 } from '../../../../services/comparisonProjectsService'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
 
-type ModelOption = {id: string; name: string; provider: string | null; modelName: string | null; version: string | null}
+type ModelOption = {
+  id: string
+  label: string
+  modelName: string | null
+  name: string
+  provider: string | null
+  version: string | null
+}
 type ModelsResponse = {data: ModelOption[]}
 type EnsureModelResponse = {data: {modelId: string}; error: null}
 
@@ -139,7 +146,7 @@ const EditComparisonProjectPage = () => {
   )
   const modelOptions = createMemo(() => {
     return (modelsQuery.data ?? []).map((model) => {
-      return {value: model.id, label: model.name}
+      return {value: model.id, label: model.label}
     })
   })
   const selectedContentOptionCount = createMemo(() => {

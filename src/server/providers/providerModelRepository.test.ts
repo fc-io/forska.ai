@@ -128,3 +128,102 @@ test('upsertDiscoveredModels persists discovered models through the transaction 
     },
   ])
 })
+
+test('upsertDiscoveredModels preserves stored model options when refreshing discovery metadata', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, config_json)
+    VALUES (
+      'upsert-qwen-connection',
+      'sglang',
+      'SGLang',
+      TRUE,
+      'none',
+      CAST('{"archived":false,"disabledModelIds":[],"manualWorkerUrls":[],"workerUrlMode":"manual"}' AS JSON)
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (
+      id,
+      provider_connection_id,
+      name,
+      remote_model_id,
+      display_name,
+      variant,
+      source,
+      enabled,
+      metadata_json
+    )
+    VALUES (
+      'legacy-qwen-model',
+      'upsert-qwen-connection',
+      'Qwen/Qwen3.5-27B',
+      'Qwen/Qwen3.5-27B',
+      'Qwen/Qwen3.5-27B',
+      NULL,
+      'manual',
+      TRUE,
+      CAST('{"options":{"thinking":"enabled"}}' AS JSON)
+    )
+  `)
+
+  const savedModels = await upsertDiscoveredModels({
+    connection: {
+      authMode: 'none',
+      baseURL: 'http://127.0.0.1:30001/v1',
+      config: {disabledModelIds: [], manualWorkerUrls: [], workerUrlMode: 'manual'},
+      createdAt: null,
+      enabled: true,
+      hasSecret: false,
+      id: 'upsert-qwen-connection',
+      label: 'SGLang',
+      lastCheckedAt: null,
+      lastError: null,
+      maxInflightRequests: null,
+      providerKind: 'sglang',
+      secretRef: null,
+      updatedAt: null,
+    },
+    models: [
+      {
+        displayName: 'Qwen/Qwen3.5-27B',
+        metadataJson: {id: 'Qwen/Qwen3.5-27B'},
+        modelName: 'Qwen/Qwen3.5-27B',
+        remoteModelId: 'Qwen/Qwen3.5-27B',
+        variant: null,
+        version: null,
+      },
+    ],
+  })
+
+  const storedModels = await queryDatabase<{
+    id: string
+    metadataJson: string
+    remoteModelId: string
+    source: string
+    variant: string | null
+  }>(`
+    SELECT
+      id,
+      TO_JSON(metadata_json) AS metadataJson,
+      remote_model_id AS remoteModelId,
+      source,
+      variant
+    FROM app.model
+    WHERE provider_connection_id = 'upsert-qwen-connection'
+  `)
+  const [storedModel] = storedModels
+  const parsedMetadata = storedModel ? (JSON.parse(storedModel.metadataJson) as Record<string, unknown>) : null
+
+  expect(savedModels).toHaveLength(1)
+  expect(storedModel).toMatchObject({
+    id: 'legacy-qwen-model',
+    remoteModelId: 'Qwen/Qwen3.5-27B',
+    source: 'discovered',
+    variant: null,
+  })
+  expect(parsedMetadata?.options).toEqual({thinking: 'enabled'})
+})

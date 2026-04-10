@@ -4,8 +4,10 @@ import {
   getNormalizedProviderModelMetadata,
   getPersistedProviderModelMetadata,
   getProviderModelMetadataContextLength,
+  getProviderModelMetadataOptions,
   getProviderModelMetadataReasoningEfforts,
   getProviderModelMetadataSource,
+  getProviderModelMetadataSupportedOptions,
 } from './providerModelMetadata.ts'
 
 test('normalized provider model metadata keeps discovered context length', () => {
@@ -83,7 +85,7 @@ test('persisted provider model metadata strips any extra top-level raw payload',
     },
     metadataJson: {
       discovery: {
-        capabilities: {reasoningEfforts: []},
+        capabilities: {reasoningEfforts: [], supportedOptions: {thinking: false}},
         contextWindow: {inputTokens: 128000, outputTokens: null, totalTokens: 128000},
         identity: {
           displayName: 'gpt-4.1',
@@ -126,4 +128,56 @@ test('normalized provider model metadata prefers real context keys over unrelate
   })
 
   expect(getProviderModelMetadataContextLength(metadata)).toBe(40960)
+})
+
+test('normalized provider model metadata infers Qwen3.5 thinking capabilities', () => {
+  const metadata = getNormalizedProviderModelMetadata({
+    listedModel: {
+      displayName: 'Qwen/Qwen3.5-27B',
+      metadataJson: null,
+      modelName: 'Qwen/Qwen3.5-27B',
+      remoteModelId: 'Qwen/Qwen3.5-27B',
+      variant: null,
+      version: null,
+    },
+    providerKind: 'sglang',
+    rawMetadata: null,
+    source: 'provider',
+  })
+
+  expect(getProviderModelMetadataSupportedOptions(metadata)).toEqual({thinking: true})
+})
+
+test('persisted provider model metadata keeps generic model options', () => {
+  const metadata = getPersistedProviderModelMetadata({
+    listedModel: {
+      displayName: 'Qwen/Qwen3.5-27B',
+      metadataJson: null,
+      modelName: 'Qwen/Qwen3.5-27B',
+      remoteModelId: 'Qwen/Qwen3.5-27B',
+      variant: null,
+      version: null,
+    },
+    metadataJson: {
+      discovery: {
+        capabilities: {reasoningEfforts: [], supportedOptions: {thinking: true}},
+        contextWindow: {inputTokens: null, outputTokens: null, totalTokens: null},
+        identity: {
+          displayName: 'Qwen/Qwen3.5-27B',
+          modelName: 'Qwen/Qwen3.5-27B',
+          remoteModelId: 'Qwen/Qwen3.5-27B',
+          variant: null,
+          version: null,
+        },
+        providerKind: 'sglang',
+        runtime: null,
+        source: 'provider',
+      },
+      options: {thinking: 'enabled'},
+    },
+    providerKind: 'sglang',
+    source: 'provider',
+  })
+
+  expect(getProviderModelMetadataOptions(metadata)).toEqual({thinking: 'enabled'})
 })
