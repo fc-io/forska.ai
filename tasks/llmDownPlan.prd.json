@@ -1,7 +1,7 @@
 {
   "name": "LLM Down / Misconfigured Endpoint Handling Plan",
-  "branchName": "ralph/llm-down-plan",
   "description": "When the configured inference endpoint is down or misconfigured, Forska should emit a clear operator message, stop claiming and sending additional prompts for that provider connection, and resume only after a successful health probe.",
+  "branchName": "ralph/llm-down-plan",
   "userStories": [
     {
       "id": "US-001",
@@ -16,9 +16,10 @@
         "`bun run lint` passes."
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "",
-      "dependsOn": []
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-002",
@@ -35,7 +36,9 @@
       "priority": 2,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001"]
+      "dependsOn": [
+        "US-001"
+      ]
     },
     {
       "id": "US-003",
@@ -52,7 +55,9 @@
       "priority": 3,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-002"]
+      "dependsOn": [
+        "US-002"
+      ]
     },
     {
       "id": "US-004",
@@ -70,7 +75,10 @@
       "priority": 4,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-002", "US-003"]
+      "dependsOn": [
+        "US-002",
+        "US-003"
+      ]
     },
     {
       "id": "US-005",
@@ -87,7 +95,10 @@
       "priority": 5,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001", "US-004"]
+      "dependsOn": [
+        "US-001",
+        "US-004"
+      ]
     },
     {
       "id": "US-006",
@@ -107,7 +118,14 @@
       "priority": 7,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001", "US-002", "US-003", "US-004", "US-005", "US-007"]
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003",
+        "US-004",
+        "US-005",
+        "US-007"
+      ]
     },
     {
       "id": "US-007",
@@ -124,7 +142,14 @@
       "priority": 6,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-002", "US-003", "US-004"]
+      "dependsOn": [
+        "US-002",
+        "US-003",
+        "US-004"
+      ]
     }
-  ]
+  ],
+  "metadata": {
+    "updatedAt": "2026-04-10T08:48:06.331Z"
+  }
 }

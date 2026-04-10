@@ -161,3 +161,31 @@ test('OpenAI-compatible adapter passes output schema to chat invocation', async 
   expect(transportState.invoke).toHaveBeenCalledTimes(1)
   expect(transportState.invoke.mock.calls[0]?.[0]).toMatchObject({outputSchema})
 })
+
+test('OpenAI-compatible adapter health classifies missing /v1/models endpoint as provider outage', async () => {
+  transportState.listChat.mockClear()
+  transportState.listChat.mockImplementationOnce(async () => {
+    throw {status: 404}
+  })
+  const {createOpenAICompatibleAdapter} = await loadFactory()
+  const adapter = createOpenAICompatibleAdapter(
+    {
+      defaultBaseURL: 'http://127.0.0.1:11434/v1',
+      description: 'Local Ollama',
+      kind: 'ollama',
+      label: 'Ollama',
+      requiresApiKey: false,
+      supportsDiscovery: true,
+      supportsWorkerUrls: true,
+    },
+    {transportFamily: 'ollama-native-discovery', useNativeOllamaDiscovery: false},
+  )
+
+  const health = await adapter.health(getOllamaConnectionInput())
+
+  expect(health.ok).toBe(false)
+  expect(health.lastError).toContain('endpoint_unavailable')
+  expect(health.lastError).toContain('provider=ollama')
+  expect(health.lastError).toContain('endpoint=/v1/models')
+  expect(health.lastError).toContain('status=404')
+})

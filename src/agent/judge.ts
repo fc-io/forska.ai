@@ -1,6 +1,9 @@
 import type {ArticleRecord} from '../db/schemaTypes.ts'
 import {
+  classifyConnectionFailure,
   ConnectionError,
+  type ConnectionFailure,
+  createConnectionError,
   isConnectionError,
   recordConnectionFailure,
   recordConnectionSuccess,
@@ -97,10 +100,7 @@ export const formatFirstJudgeRequestLog = ({
     request: {
       temperature: requestConfig.temperature,
       max_completion_tokens: requestConfig.maxCompletionTokens,
-      messages: {
-        system: systemPromptPreview.text,
-        user: userPromptPreview.text,
-      },
+      messages: {system: systemPromptPreview.text, user: userPromptPreview.text},
       preview: {
         systemOriginalLength: systemPromptPreview.originalLength,
         systemTruncated: systemPromptPreview.truncated,
@@ -312,7 +312,7 @@ const storeTokenUseAndThrowConnectionError = async ({
   baseURL,
   systemPrompt,
   userPrompt,
-  errorMessage,
+  failure,
   appendFailureEntry = true,
 }: {
   tokenUse: JudgeTokenUsageEntry[]
@@ -327,7 +327,7 @@ const storeTokenUseAndThrowConnectionError = async ({
   baseURL: string
   systemPrompt: string
   userPrompt: string
-  errorMessage: string
+  failure: ConnectionFailure
   appendFailureEntry?: boolean
 }): Promise<void> => {
   const duration = performance.now() - startDuration
@@ -345,7 +345,7 @@ const storeTokenUseAndThrowConnectionError = async ({
           completionTokens: 0,
           totalTokens: 0,
           outcome: 'failure' as const,
-          error: 'Connection error',
+          error: `Connection error: ${failure.message}`,
           sanitizationAttempted: false,
           sanitizedError: null,
           sanitizedResponse: null,
@@ -360,7 +360,7 @@ const storeTokenUseAndThrowConnectionError = async ({
     console.error('judgeStoreTokenUse failed; continuing', err instanceof Error ? err.message : err)
   })
 
-  throw new ConnectionError(`Failed to connect to inference server: ${errorMessage}`, baseURL)
+  throw new ConnectionError(failure.message, baseURL, failure)
 }
 
 type ArticlesType = ArticleRecord[]
@@ -381,6 +381,31 @@ type GeneratedPromptResponse = {
   text: string
   usage: {promptTokens: number; completionTokens: number; totalTokens: number}
   baseURL: string
+}
+
+const getProviderEndpointPath = (providerKind: string | null): string | null => {
+  return providerKind === 'openai'
+    ? '/v1/responses'
+    : providerKind === 'anthropic'
+        || providerKind === 'codex'
+        || providerKind === 'docling'
+        || providerKind === 'google'
+      ? null
+      : '/v1/chat/completions'
+}
+
+const classifyJudgeFailure = ({
+  baseURL,
+  endpointPath,
+  error,
+  providerKind,
+}: {
+  baseURL: string
+  endpointPath: string | null
+  error: unknown
+  providerKind: string | null
+}): ConnectionFailure => {
+  return classifyConnectionFailure({context: {effectiveBaseURL: baseURL, endpointPath, providerKind}, error})
 }
 
 /**
@@ -411,6 +436,8 @@ const generateSinglePromptResponse = async ({
   workerUrls: string[]
   outputSchema: unknown
 }): Promise<GeneratedPromptResponse> => {
+  const endpointPath = getProviderEndpointPath(provider)
+
   return withJudgmentRequest(
     {
       judgmentsJobId,
@@ -435,8 +462,16 @@ const generateSinglePromptResponse = async ({
 
         return {...result, baseURL: requestBaseURL}
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        throw new ConnectionError(message, requestBaseURL)
+        const failure = classifyJudgeFailure({baseURL: requestBaseURL, endpointPath, error, providerKind: provider})
+
+        if (!failure.shouldPauseConnection) {
+          throw error
+        }
+
+        throw createConnectionError({
+          context: {effectiveBaseURL: requestBaseURL, endpointPath, providerKind: provider},
+          error,
+        })
       }
     },
   )
@@ -754,13 +789,16 @@ export const judgeSinglePrompt = async ({
         const requestBaseURL = getRequestBaseURL({baseURL, currentResponse, error})
 
         if (isConnectionError(error)) {
+          const failure = classifyJudgeFailure({
+            baseURL: requestBaseURL,
+            endpointPath: getProviderEndpointPath(provider),
+            error,
+            providerKind: provider,
+          })
           recordConnectionFailure(requestBaseURL)
           abortCount += 1
           errorCount += 1
-          rateLimitedLogger.error(
-            `judge:connection-error:${requestBaseURL}`,
-            `Connection error for ${requestBaseURL} - aborting prompts`,
-          )
+          rateLimitedLogger.error(`judge:connection-error:${failure.kind}:${requestBaseURL}`, failure.message)
 
           await storeTokenUseAndThrowConnectionError({
             tokenUse,
@@ -775,7 +813,7 @@ export const judgeSinglePrompt = async ({
             baseURL: requestBaseURL,
             systemPrompt,
             userPrompt,
-            errorMessage,
+            failure,
           })
         }
 
@@ -972,14 +1010,22 @@ export const judgeSinglePrompt = async ({
               const errorMessage = error instanceof Error ? error.message : 'Unknown error'
               const requestBaseURL = getRequestBaseURL({baseURL, currentResponse, error})
               const connectionFailure = isConnectionError(error)
+              const classifiedFailure = connectionFailure
+                ? classifyJudgeFailure({
+                    baseURL: requestBaseURL,
+                    endpointPath: getProviderEndpointPath(provider),
+                    error,
+                    providerKind: provider,
+                  })
+                : null
 
               if (connectionFailure) {
                 recordConnectionFailure(requestBaseURL)
                 abortCount += 1
                 errorCount += 1
                 rateLimitedLogger.error(
-                  `judge:connection-error:${requestBaseURL}`,
-                  `Connection error for ${requestBaseURL} - aborting prompts`,
+                  `judge:connection-error:${classifiedFailure?.kind ?? 'other'}:${requestBaseURL}`,
+                  classifiedFailure?.message ?? errorMessage,
                 )
               }
 
@@ -1031,7 +1077,7 @@ export const judgeSinglePrompt = async ({
                 return {
                   status: 'connection_error' as const,
                   baseURL: requestBaseURL,
-                  errorMessage,
+                  errorMessage: classifiedFailure?.message ?? errorMessage,
                   facts: [],
                   quotes: [],
                 }
@@ -1057,6 +1103,13 @@ export const judgeSinglePrompt = async ({
       })
 
       if (connectionErrorResult && connectionErrorResult.status === 'connection_error') {
+        const failure = classifyJudgeFailure({
+          baseURL: connectionErrorResult.baseURL,
+          endpointPath: getProviderEndpointPath(provider),
+          error: new Error(connectionErrorResult.errorMessage),
+          providerKind: provider,
+        })
+
         await storeTokenUseAndThrowConnectionError({
           tokenUse,
           sessionId,
@@ -1082,7 +1135,7 @@ export const judgeSinglePrompt = async ({
                 includeSummary: chosen.includeSummary,
               })
             : '',
-          errorMessage: connectionErrorResult.errorMessage,
+          failure,
           appendFailureEntry: false,
         })
       }
@@ -1217,13 +1270,16 @@ export const judgeSinglePrompt = async ({
           const requestBaseURL = getRequestBaseURL({baseURL, currentResponse, error})
 
           if (isConnectionError(error)) {
+            const failure = classifyJudgeFailure({
+              baseURL: requestBaseURL,
+              endpointPath: getProviderEndpointPath(provider),
+              error,
+              providerKind: provider,
+            })
             recordConnectionFailure(requestBaseURL)
             abortCount += 1
             errorCount += 1
-            rateLimitedLogger.error(
-              `judge:connection-error:${requestBaseURL}`,
-              `Connection error for ${requestBaseURL} - aborting prompts`,
-            )
+            rateLimitedLogger.error(`judge:connection-error:${failure.kind}:${requestBaseURL}`, failure.message)
 
             await storeTokenUseAndThrowConnectionError({
               tokenUse,
@@ -1238,7 +1294,7 @@ export const judgeSinglePrompt = async ({
               baseURL: requestBaseURL,
               systemPrompt,
               userPrompt: finalUserPrompt,
-              errorMessage,
+              failure,
             })
           }
 

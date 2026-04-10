@@ -1,5 +1,5 @@
 import {workerLoadBalancer} from '../../utils/workerLoadBalancer.ts'
-import {ConnectionError, isCircuitOpen} from './connectionHealth.ts'
+import {ConnectionError, createConnectionError, isCircuitOpen} from './connectionHealth.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 
@@ -116,7 +116,10 @@ const markRequestFinished = (judgmentsJobId: string): void => {
 const buildWorkerCircuitError = (workerUrls: string[]): ConnectionError => {
   const firstWorker = workerUrls[0]
   const baseURL = firstWorker ? `${firstWorker}/v1` : 'worker://unavailable'
-  return new ConnectionError('All inference workers blocked by circuit breaker', baseURL)
+  return createConnectionError({
+    context: {effectiveBaseURL: baseURL, endpointPath: null, providerKind: null},
+    error: new Error('All inference workers blocked by circuit breaker'),
+  })
 }
 
 const hasHealthyWorker = (workerUrls: string[]): boolean => {
@@ -313,7 +316,10 @@ const drainFallbackWaiters = (): void => {
 
     if (isCircuitOpen(waiter.baseURL)) {
       return {
-        error: new ConnectionError('Inference server blocked by circuit breaker', waiter.baseURL),
+        error: createConnectionError({
+          context: {effectiveBaseURL: waiter.baseURL, endpointPath: null, providerKind: null},
+          error: new Error('Inference server blocked by circuit breaker'),
+        }),
         index,
         type: 'reject',
       }
@@ -341,7 +347,10 @@ const acquireFallbackSlot = async ({
   providerScope: ProviderRequestScope
 }): Promise<RequestSlot> => {
   if (isCircuitOpen(baseURL)) {
-    throw new ConnectionError('Inference server blocked by circuit breaker', baseURL)
+    throw createConnectionError({
+      context: {effectiveBaseURL: baseURL, endpointPath: null, providerKind: null},
+      error: new Error('Inference server blocked by circuit breaker'),
+    })
   }
 
   const slot = tryAcquireFallbackSlot({baseURL, providerScope})

@@ -337,8 +337,8 @@ export const processPromptWithLLM = async (promptToProcess: PromptToProcess): Pr
   } catch (error) {
     if (error instanceof ConnectionError) {
       rateLimitedLogger.log(
-        `prompt:retry:${promptToProcess.modelBaseUrl}`,
-        `Connection error - marking prompts for retry (${promptToProcess.modelBaseUrl})`,
+        `prompt:retry:${error.failure.kind}:${promptToProcess.modelBaseUrl}`,
+        `${error.message} Marking prompt for retry.`,
       )
       await markAsRetry(promptToProcess.jobId, promptToProcess.recordId)
       throw error

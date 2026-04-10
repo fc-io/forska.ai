@@ -1,3 +1,4 @@
+import {classifyConnectionFailure} from '../../cron/judgmentsJobs/connectionHealth.ts'
 import {type ProviderCatalogEntry} from '../../services/providerCatalog.ts'
 import {getNormalizedProviderModelMetadata} from '../providerModelMetadata.ts'
 import {discoverProviderRuntimeModel} from '../providerRuntimeDetector.ts'
@@ -176,7 +177,12 @@ export const createOpenAICompatibleAdapter = (
         modelCount: models.length,
       })
     } catch (error) {
-      return getProviderHealthFailure(error)
+      const failure = classifyConnectionFailure({
+        context: {effectiveBaseURL: baseURL ?? 'unknown', endpointPath: '/v1/models', providerKind: catalog.kind},
+        error,
+      })
+
+      return getProviderHealthFailure(failure.shouldPauseConnection ? new Error(failure.message) : error)
     }
   }
 
