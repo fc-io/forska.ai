@@ -1,6 +1,7 @@
 import {cors} from '@elysiajs/cors'
 import {Elysia} from 'elysia'
 
+import {migrateDuckdb} from '../db/migrateDuckdb.ts'
 import {fullTextConversionJobsCron} from './cron/fullTextConversionJobs.ts'
 import {fullTextJobsCron} from './cron/fullTextJobs.ts'
 import {judgmentsJobsCron} from './cron/judgmentsJobs.ts'
@@ -54,6 +55,11 @@ const writerCronRoutes = shouldMountWriterCrons
   : new Elysia()
 
 await initializeServerRuntimeRole()
+
+if (shouldCurrentServerRunWriterWork()) {
+  await migrateDuckdb()
+}
+
 await getJudgmentJobSqliteService().recoverJudgmentJobLeasesOnStartup()
 
 const shouldWarmCodex = getCurrentServerRole() !== 'worker'
