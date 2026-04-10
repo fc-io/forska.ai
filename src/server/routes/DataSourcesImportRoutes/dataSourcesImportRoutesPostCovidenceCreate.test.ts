@@ -504,20 +504,21 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
             buildCovidencePromptDefinition: (params) => {
               return {originalText: 'Prompt body', promptHeading: 'Prompt heading', type: params.answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'unsure'"}
             },
-            buildCovidencePromptDefinitionsForEligibilityFields: ({answerSet, eligibilityFields, mode}) => {
-              const question = mode === 'full_text'
-                ? 'Based on the inclusion and exclusion criteria, should this study be included in the final review?'
-                : 'Based on the inclusion and exclusion criteria, should this study be included for full text review?'
-              const allowedAnswers = answerSet === 'yes|no' ? 'yes, no' : 'yes, no, unsure'
-
+            buildCovidencePromptDefinitionsForEligibilityFields: ({answerSet, eligibilityFields}) => {
               return eligibilityFields.map((eligibilityField) => {
+                const sectionLabel = eligibilityField.sectionLabel
+                const question = eligibilityField.disposition === 'include'
+                  ? 'Does this study conform to the following ' + sectionLabel + ' inclusion criteria?'
+                  : 'Does this study meet any of the following ' + sectionLabel + ' exclusion criteria?'
+                const criteriaHeading = eligibilityField.disposition === 'include'
+                  ? sectionLabel + ' inclusion criteria:'
+                  : sectionLabel + ' exclusion criteria:'
+
                 return {
                   originalText: [
                     question,
                     '',
-                    'Allowed answers: ' + allowedAnswers,
-                    '',
-                    (eligibilityField.disposition === 'include' ? 'Include criterion' : 'Exclude criterion') + ' (' + eligibilityField.sectionLabel + '):',
+                    criteriaHeading,
                     eligibilityField.text,
                   ].join('\\n'),
                   promptHeading: 'Covidence title/abstract screening | ' + eligibilityField.sectionLabel + ' | ' + eligibilityField.disposition,
@@ -666,11 +667,9 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
     {
       promptDefinition: {
         originalText: [
-          'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
+          'Does this study conform to the following Population inclusion criteria?',
           '',
-          'Allowed answers: yes, no, unsure',
-          '',
-          'Include criterion (Population):',
+          'Population inclusion criteria:',
           'Adults with confirmed disease',
         ].join('\n'),
         promptHeading: 'Covidence title/abstract screening | Population | include',
@@ -680,11 +679,9 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
     {
       promptDefinition: {
         originalText: [
-          'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
+          'Does this study meet any of the following Other exclusion criteria?',
           '',
-          'Allowed answers: yes, no, unsure',
-          '',
-          'Exclude criterion (Other):',
+          'Other exclusion criteria:',
           'Case reports',
         ].join('\n'),
         promptHeading: 'Covidence title/abstract screening | Other | exclude',
@@ -719,11 +716,9 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
       created: false,
       id: 'prompt-existing-1',
       originalText: [
-        'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
+        'Does this study conform to the following Population inclusion criteria?',
         '',
-        'Allowed answers: yes, no, unsure',
-        '',
-        'Include criterion (Population):',
+        'Population inclusion criteria:',
         'Adults with confirmed disease',
       ].join('\n'),
       promptHeading: 'Covidence title/abstract screening | Population | include',
@@ -733,11 +728,9 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
       created: false,
       id: 'prompt-existing-2',
       originalText: [
-        'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
+        'Does this study meet any of the following Other exclusion criteria?',
         '',
-        'Allowed answers: yes, no, unsure',
-        '',
-        'Exclude criterion (Other):',
+        'Other exclusion criteria:',
         'Case reports',
       ].join('\n'),
       promptHeading: 'Covidence title/abstract screening | Other | exclude',
@@ -819,20 +812,22 @@ test('Covidence datasource create also creates or reuses a full-text project wit
               return {originalText: 'Prompt body', promptHeading: 'Prompt heading', type: params.answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'unsure'"}
             },
             buildCovidencePromptDefinitionsForEligibilityFields: ({answerSet, eligibilityFields, mode}) => {
-              const question = mode === 'full_text'
-                ? 'Based on the inclusion and exclusion criteria, should this study be included in the final review?'
-                : 'Based on the inclusion and exclusion criteria, should this study be included for full text review?'
-              const allowedAnswers = answerSet === 'yes|no' ? 'yes, no' : 'yes, no, unsure'
               const promptHeadingPrefix = mode === 'full_text' ? 'Covidence full-text screening | ' : 'Covidence title/abstract screening | '
 
               return eligibilityFields.map((eligibilityField) => {
+                const sectionLabel = eligibilityField.sectionLabel
+                const question = eligibilityField.disposition === 'include'
+                  ? 'Does this study conform to the following ' + sectionLabel + ' inclusion criteria?'
+                  : 'Does this study meet any of the following ' + sectionLabel + ' exclusion criteria?'
+                const criteriaHeading = eligibilityField.disposition === 'include'
+                  ? sectionLabel + ' inclusion criteria:'
+                  : sectionLabel + ' exclusion criteria:'
+
                 return {
                   originalText: [
                     question,
                     '',
-                    'Allowed answers: ' + allowedAnswers,
-                    '',
-                    (eligibilityField.disposition === 'include' ? 'Include criterion' : 'Exclude criterion') + ' (' + eligibilityField.sectionLabel + '):',
+                    criteriaHeading,
                     eligibilityField.text,
                   ].join('\\n'),
                   promptHeading: promptHeadingPrefix + eligibilityField.sectionLabel + ' | ' + eligibilityField.disposition,
@@ -972,11 +967,9 @@ test('Covidence datasource create also creates or reuses a full-text project wit
     {
       promptDefinition: {
         originalText: [
-          'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
+          'Does this study conform to the following Population inclusion criteria?',
           '',
-          'Allowed answers: yes, no',
-          '',
-          'Include criterion (Population):',
+          'Population inclusion criteria:',
           'Adults with confirmed disease',
         ].join('\n'),
         promptHeading: 'Covidence full-text screening | Population | include',
@@ -986,11 +979,9 @@ test('Covidence datasource create also creates or reuses a full-text project wit
     {
       promptDefinition: {
         originalText: [
-          'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
+          'Does this study conform to the following Outcome inclusion criteria?',
           '',
-          'Allowed answers: yes, no',
-          '',
-          'Include criterion (Outcome):',
+          'Outcome inclusion criteria:',
           'Pain reduction at follow-up',
         ].join('\n'),
         promptHeading: 'Covidence full-text screening | Outcome | include',
@@ -1000,11 +991,9 @@ test('Covidence datasource create also creates or reuses a full-text project wit
     {
       promptDefinition: {
         originalText: [
-          'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
+          'Does this study meet any of the following Study Characteristics exclusion criteria?',
           '',
-          'Allowed answers: yes, no',
-          '',
-          'Exclude criterion (Study Characteristics):',
+          'Study Characteristics exclusion criteria:',
           'Case reports',
         ].join('\n'),
         promptHeading: 'Covidence full-text screening | Study Characteristics | exclude',
@@ -1043,11 +1032,9 @@ test('Covidence datasource create also creates or reuses a full-text project wit
       created: true,
       id: 'prompt-full-text-1',
       originalText: [
-        'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
+        'Does this study conform to the following Population inclusion criteria?',
         '',
-        'Allowed answers: yes, no',
-        '',
-        'Include criterion (Population):',
+        'Population inclusion criteria:',
         'Adults with confirmed disease',
       ].join('\n'),
       promptHeading: 'Covidence full-text screening | Population | include',
@@ -1057,11 +1044,9 @@ test('Covidence datasource create also creates or reuses a full-text project wit
       created: true,
       id: 'prompt-full-text-2',
       originalText: [
-        'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
+        'Does this study conform to the following Outcome inclusion criteria?',
         '',
-        'Allowed answers: yes, no',
-        '',
-        'Include criterion (Outcome):',
+        'Outcome inclusion criteria:',
         'Pain reduction at follow-up',
       ].join('\n'),
       promptHeading: 'Covidence full-text screening | Outcome | include',
@@ -1071,11 +1056,9 @@ test('Covidence datasource create also creates or reuses a full-text project wit
       created: true,
       id: 'prompt-full-text-3',
       originalText: [
-        'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
+        'Does this study meet any of the following Study Characteristics exclusion criteria?',
         '',
-        'Allowed answers: yes, no',
-        '',
-        'Exclude criterion (Study Characteristics):',
+        'Study Characteristics exclusion criteria:',
         'Case reports',
       ].join('\n'),
       promptHeading: 'Covidence full-text screening | Study Characteristics | exclude',

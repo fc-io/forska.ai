@@ -314,8 +314,22 @@ const getCovidencePromptEligibilityDispositionLabel = (disposition: CovidenceEli
   return disposition === 'include' ? 'include' : 'exclude'
 }
 
-const getCovidencePromptEligibilityCriteriaLabel = (disposition: CovidenceEligibilityFieldDisposition) => {
-  return disposition === 'include' ? 'Include criterion' : 'Exclude criterion'
+const getCovidencePromptEligibilityQuestion = (params: {
+  disposition: CovidenceEligibilityFieldDisposition
+  sectionLabel: string
+}) => {
+  return params.disposition === 'include'
+    ? `Does this study conform to the following ${params.sectionLabel} inclusion criteria?`
+    : `Does this study meet any of the following ${params.sectionLabel} exclusion criteria?`
+}
+
+const getCovidencePromptEligibilityCriteriaHeading = (params: {
+  disposition: CovidenceEligibilityFieldDisposition
+  sectionLabel: string
+}) => {
+  return params.disposition === 'include'
+    ? `${params.sectionLabel} inclusion criteria:`
+    : `${params.sectionLabel} exclusion criteria:`
 }
 
 const getCovidencePromptText = (params: {
@@ -346,15 +360,17 @@ const buildCovidencePromptDefinitionForEligibilityField = (params: {
   eligibilityField: CovidenceEligibilityPromptField
   mode: CovidenceImportMode
 }): CovidencePromptDefinition => {
-  const allowedAnswers = getCovidencePromptAnswerValues(params.answerSet).join(', ')
-
   return {
     originalText: [
-      covidencePromptQuestionByMode[params.mode],
+      getCovidencePromptEligibilityQuestion({
+        disposition: params.eligibilityField.disposition,
+        sectionLabel: params.eligibilityField.sectionLabel,
+      }),
       '',
-      `Allowed answers: ${allowedAnswers}`,
-      '',
-      `${getCovidencePromptEligibilityCriteriaLabel(params.eligibilityField.disposition)} (${params.eligibilityField.sectionLabel}):`,
+      getCovidencePromptEligibilityCriteriaHeading({
+        disposition: params.eligibilityField.disposition,
+        sectionLabel: params.eligibilityField.sectionLabel,
+      }),
       params.eligibilityField.text,
     ].join('\n'),
     promptHeading: `${covidencePromptHeadingByMode[params.mode]} | ${params.eligibilityField.sectionLabel} | ${getCovidencePromptEligibilityDispositionLabel(params.eligibilityField.disposition)}`,

@@ -257,11 +257,9 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
   ).toEqual([
     {
       originalText: [
-        'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
+        'Does this study conform to the following Population inclusion criteria?',
         '',
-        'Allowed answers: yes, no, unsure',
-        '',
-        'Include criterion (Population):',
+        'Population inclusion criteria:',
         'Adults with confirmed disease',
       ].join('\n'),
       promptHeading: 'Covidence title/abstract screening | Population | include',
@@ -269,11 +267,9 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
     },
     {
       originalText: [
-        'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
+        'Does this study meet any of the following Other exclusion criteria?',
         '',
-        'Allowed answers: yes, no, unsure',
-        '',
-        'Exclude criterion (Other):',
+        'Other exclusion criteria:',
         'Case reports',
       ].join('\n'),
       promptHeading: 'Covidence title/abstract screening | Other | exclude',
