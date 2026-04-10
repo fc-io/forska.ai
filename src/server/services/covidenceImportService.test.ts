@@ -976,6 +976,167 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts answered and unanswered titl
   }
 })
 
+test('seedCovidenceHumanJudgmentsFromConfig treats disjoint screen irrelevant and select rows as null no yes', async () => {
+  const duckdbPath = `/tmp/f1-covidence-human-screen-union-${Date.now()}.duckdb`
+  const datasourceId = `covidence-human-screen-union-${Date.now()}`
+  const importRoute = `covidence:${datasourceId}`
+  datasourceIdsToDelete.add(datasourceId)
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, covidenceImportService] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/covidenceImportService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const datasourceId = ${JSON.stringify(datasourceId)}
+        const importRoute = ${JSON.stringify(importRoute)}
+        const files = await covidenceImportService.storeCovidencePackageFiles({
+          datasourceId,
+          files: [
+            {
+              file: new File(['Title,Authors,Published Year\\nStudy A,"Doe, Jane",2024\\n'], 'all.csv', {type: 'text/csv'}),
+              fileRole: 'all',
+            },
+            {
+              file: new File(['Title,Authors,Published Year,Ref\\nStudy B,"Roe, John",2023,screen-2\\n'], 'irrelevant.csv', {type: 'text/csv'}),
+              fileRole: 'irrelevant',
+            },
+            {
+              file: new File(['Title,Authors,Published Year,Covidence #\\nStudy C,"Lane, Kim",2022,#5003\\n'], 'full_text.csv', {type: 'text/csv'}),
+              fileRole: 'full_text',
+            },
+          ],
+        })
+        const config = covidenceImportService.buildCovidencePackageConfig({files, mode: 'title_abstract'})
+
+        await database.run(
+          "INSERT INTO app.provider_connection (id, label, provider_kind, enabled) VALUES ('pc-covidence-screen-union', 'Covidence provider', 'openai-compatible', TRUE);"
+          + "INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, enabled) VALUES ('model-covidence-screen-union', 'pc-covidence-screen-union', 'gpt-covidence', 'gpt-covidence', TRUE);"
+          + "INSERT INTO app.import_route (id, route, name, active) VALUES ('route-covidence-screen-union', '${importRoute}', '${importRoute}', TRUE);"
+        )
+
+        const prompt = await covidenceImportService.getOrCreateCovidencePrompt({
+          answerSet: 'yes|no|unsure',
+          exclusionCriteria: 'Case reports',
+          inclusionCriteria: 'Adults with confirmed disease',
+          mode: 'title_abstract',
+        })
+        const project = await covidenceImportService.getOrCreateCovidenceProject({
+          importRoute,
+          mode: 'title_abstract',
+          promptId: prompt.id,
+          title: 'Covidence screen union project',
+        })
+
+        await database.transaction(async (tx) => {
+          await covidenceImportService.importCovidencePackageFromConfig({config, datasourceId, importRoute, tx})
+          await covidenceImportService.seedCovidenceHumanJudgmentsFromConfig({config, importRoute, projectId: project.id, tx})
+        })
+
+        const judgmentRows = await database.queryJson(
+          \`SELECT
+            a.article_id AS articleExternalId,
+            a.article_title AS articleTitle,
+            jh.is_answered AS isAnswered,
+            jh.answer AS answer,
+            jh.prompt_id AS promptId
+          FROM app.judgment_human jh
+          INNER JOIN app.article a ON a.id = jh.article_id
+          WHERE jh.project_id = '\${project.id}'
+          ORDER BY a.article_title ASC, jh.prompt_id ASC\`
+        )
+
+        console.log(JSON.stringify({judgmentRows, promptId: prompt.id}))
+        covidenceImportService.deleteCovidencePackageFiles(datasourceId)
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39995',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39996',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to seed disjoint Covidence title/abstract rows',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      judgmentRows: Array<{
+        answer: string | null
+        articleExternalId: string
+        articleTitle: string
+        isAnswered: boolean
+        promptId: string
+      }>
+      promptId: string
+    }
+
+    expect(parsed.judgmentRows).toHaveLength(3)
+    expect(parsed.judgmentRows[0]).toEqual({
+      answer: null,
+      articleExternalId: expect.stringContaining(`${importRoute}:title_year_first_author%3A`),
+      articleTitle: 'Study A',
+      isAnswered: false,
+      promptId: parsed.promptId,
+    })
+    expect(parsed.judgmentRows[1]).toEqual({
+      answer: 'no',
+      articleExternalId: `${importRoute}:reference_id%3Ascreen-2`,
+      articleTitle: 'Study B',
+      isAnswered: true,
+      promptId: parsed.promptId,
+    })
+    expect(parsed.judgmentRows[2]).toEqual({
+      answer: 'yes',
+      articleExternalId: `${importRoute}:covidence%3A%235003`,
+      articleTitle: 'Study C',
+      isAnswered: true,
+      promptId: parsed.promptId,
+    })
+  } finally {
+    deleteCovidencePackageFiles(datasourceId)
+    ;[duckdbPath, `${duckdbPath}.wal`, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(
+      (filePath) => {
+        if (existsSync(filePath)) {
+          unlinkSync(filePath)
+        }
+
+        return filePath
+      },
+    )
+  }
+})
+
 test('seedCovidenceHumanJudgmentsFromConfig upserts full-text included and excluded judgments idempotently', async () => {
   const duckdbPath = `/tmp/f1-covidence-full-text-human-seed-${Date.now()}.duckdb`
   const datasourceId = `covidence-full-text-human-seed-${Date.now()}`
@@ -1810,9 +1971,19 @@ test('mergeCovidenceReferenceRows uses all rows as canonical metadata and report
         articleKey: candidate.articleKey,
         articleKeySource: candidate.articleKeySource,
         citation: candidate.citation,
+        covidenceIds: candidate.covidenceIds,
+        duplicateStudyRecordCount: candidate.duplicateStudyRecordCount,
         exclusionReasons: candidate.exclusionReasons,
+        hasDuplicateStudyRecords: candidate.hasDuplicateStudyRecords,
+        hasStudyDecisionConflict: candidate.hasStudyDecisionConflict,
+        isSeededHumanJudgmentAnswered: candidate.isSeededHumanJudgmentAnswered,
         notes: candidate.notes,
+        referenceIds: candidate.referenceIds,
+        seededHumanJudgmentAnswer: candidate.seededHumanJudgmentAnswer,
         stageMembership: candidate.stageMembership,
+        studyDecisionAnswers: candidate.studyDecisionAnswers,
+        studyKey: candidate.studyKey,
+        studyKeySource: candidate.studyKeySource,
         tags: candidate.tags,
       }
     }),
@@ -1826,36 +1997,76 @@ test('mergeCovidenceReferenceRows uses all rows as canonical metadata and report
         title: 'Canonical DOI title',
         year: '2024',
       },
+      covidenceIds: [],
+      duplicateStudyRecordCount: 1,
       exclusionReasons: [],
+      hasDuplicateStudyRecords: false,
+      hasStudyDecisionConflict: false,
+      isSeededHumanJudgmentAnswered: false,
       notes: ['irrelevant note', 'full text note'],
+      referenceIds: [],
+      seededHumanJudgmentAnswer: null,
       stageMembership: {all: true, excluded: false, full_text: true, included: false, irrelevant: true},
+      studyDecisionAnswers: [],
+      studyKey: 'doi:10.1000/alpha',
+      studyKeySource: 'doi',
       tags: ['all-tag', 'irrelevant-tag', 'full-text-tag'],
     },
     {
       articleKey: 'pmid:12345',
       articleKeySource: 'pmid',
       citation: {authors: 'Roe, John', pmid: '12345', title: 'Canonical PMID title', year: '2021'},
+      covidenceIds: [],
+      duplicateStudyRecordCount: 1,
       exclusionReasons: [],
+      hasDuplicateStudyRecords: false,
+      hasStudyDecisionConflict: false,
+      isSeededHumanJudgmentAnswered: false,
       notes: ['pmid note'],
+      referenceIds: [],
+      seededHumanJudgmentAnswer: null,
       stageMembership: {all: true, excluded: false, full_text: true, included: false, irrelevant: false},
+      studyDecisionAnswers: [],
+      studyKey: 'pmid:12345',
+      studyKeySource: 'pmid',
       tags: ['pmid-tag'],
     },
     {
       articleKey: 'reference_id:cov-3',
       articleKeySource: 'reference_id',
       citation: {authors: 'Lane, Kim', reference_id: 'cov-3', title: 'Canonical ref title', year: '2020'},
+      covidenceIds: [],
+      duplicateStudyRecordCount: 1,
       exclusionReasons: [],
+      hasDuplicateStudyRecords: false,
+      hasStudyDecisionConflict: false,
+      isSeededHumanJudgmentAnswered: true,
       notes: ['included note'],
+      referenceIds: ['cov-3', 'COV-3'],
+      seededHumanJudgmentAnswer: 'yes',
       stageMembership: {all: true, excluded: false, full_text: false, included: true, irrelevant: false},
+      studyDecisionAnswers: ['yes'],
+      studyKey: 'reference_id:cov-3',
+      studyKeySource: 'reference_id',
       tags: ['included-tag'],
     },
     {
       articleKey: `title_year_first_author:${getCovidenceFallbackHash('fallback title|2019|smith pat')}`,
       articleKeySource: 'title_year_first_author',
       citation: {authors: 'Smith, Pat; Roe, John', title: 'Fallback title', year: '2019'},
+      covidenceIds: [],
+      duplicateStudyRecordCount: 1,
       exclusionReasons: ['No outcome'],
+      hasDuplicateStudyRecords: false,
+      hasStudyDecisionConflict: false,
+      isSeededHumanJudgmentAnswered: true,
       notes: ['excluded note', 'included fallback note'],
+      referenceIds: [],
+      seededHumanJudgmentAnswer: 'yes',
       stageMembership: {all: true, excluded: true, full_text: false, included: true, irrelevant: false},
+      studyDecisionAnswers: ['yes'],
+      studyKey: `title_year_first_author:${getCovidenceFallbackHash('fallback title|2019|smith pat')}`,
+      studyKeySource: 'title_year_first_author',
       tags: ['excluded-tag', 'included-fallback-tag'],
     },
   ])
@@ -1918,25 +2129,129 @@ test('mergeCovidenceReferenceRows uses all rows as canonical metadata and report
       sourceFileName: 'excluded.csv',
     },
   ])
+  expect(merged.warnings.duplicateStudyGroups).toEqual([])
+  expect(merged.warnings.studyDecisionConflicts).toEqual([])
+})
+
+test('mergeCovidenceReferenceRows unions disjoint title abstract stage rows without missing matches', () => {
+  const merged = mergeCovidenceReferenceRows(
+    [
+      {
+        citation: {authors: 'Doe, Jane', published_year: '2024', title: 'Study A'},
+        exclusionReason: null,
+        fileRole: 'all',
+        notes: null,
+        rowNumber: 2,
+        sourceFileName: 'screen.csv',
+        tags: ['screen'],
+      },
+      {
+        citation: {authors: 'Doe, Jane', published_year: '2024', title: 'Study A'},
+        exclusionReason: null,
+        fileRole: 'full_text',
+        notes: 'approved',
+        rowNumber: 3,
+        sourceFileName: 'select.csv',
+        tags: ['select'],
+      },
+      {
+        citation: {authors: 'Roe, John', published_year: '2023', ref: 'screen-2', title: 'Study B'},
+        exclusionReason: 'Wrong population',
+        fileRole: 'irrelevant',
+        notes: 'excluded',
+        rowNumber: 4,
+        sourceFileName: 'irrelevant.csv',
+        tags: ['irrelevant'],
+      },
+    ],
+    'title_abstract',
+  )
+
+  expect(
+    merged.candidates.map((candidate) => {
+      return {
+        articleKey: candidate.articleKey,
+        articleKeySource: candidate.articleKeySource,
+        citation: candidate.citation,
+        covidenceIds: candidate.covidenceIds,
+        duplicateStudyRecordCount: candidate.duplicateStudyRecordCount,
+        exclusionReasons: candidate.exclusionReasons,
+        hasDuplicateStudyRecords: candidate.hasDuplicateStudyRecords,
+        hasStudyDecisionConflict: candidate.hasStudyDecisionConflict,
+        isSeededHumanJudgmentAnswered: candidate.isSeededHumanJudgmentAnswered,
+        notes: candidate.notes,
+        referenceIds: candidate.referenceIds,
+        seededHumanJudgmentAnswer: candidate.seededHumanJudgmentAnswer,
+        stageMembership: candidate.stageMembership,
+        studyDecisionAnswers: candidate.studyDecisionAnswers,
+        studyKey: candidate.studyKey,
+        studyKeySource: candidate.studyKeySource,
+        tags: candidate.tags,
+      }
+    }),
+  ).toEqual([
+    {
+      articleKey: `title_year_first_author:${getCovidenceFallbackHash('study a|2024|doe jane')}`,
+      articleKeySource: 'title_year_first_author',
+      citation: {authors: 'Doe, Jane', published_year: '2024', title: 'Study A'},
+      covidenceIds: [],
+      duplicateStudyRecordCount: 1,
+      exclusionReasons: [],
+      hasDuplicateStudyRecords: false,
+      hasStudyDecisionConflict: false,
+      isSeededHumanJudgmentAnswered: true,
+      notes: ['approved'],
+      referenceIds: [],
+      seededHumanJudgmentAnswer: 'yes',
+      stageMembership: {all: true, excluded: false, full_text: true, included: false, irrelevant: false},
+      studyDecisionAnswers: ['yes'],
+      studyKey: `title_year_first_author:${getCovidenceFallbackHash('study a|2024|doe jane')}`,
+      studyKeySource: 'title_year_first_author',
+      tags: ['screen', 'select'],
+    },
+    {
+      articleKey: 'reference_id:screen-2',
+      articleKeySource: 'reference_id',
+      citation: {authors: 'Roe, John', published_year: '2023', ref: 'screen-2', title: 'Study B'},
+      covidenceIds: [],
+      duplicateStudyRecordCount: 1,
+      exclusionReasons: ['Wrong population'],
+      hasDuplicateStudyRecords: false,
+      hasStudyDecisionConflict: false,
+      isSeededHumanJudgmentAnswered: true,
+      notes: ['excluded'],
+      referenceIds: ['screen-2'],
+      seededHumanJudgmentAnswer: 'no',
+      stageMembership: {all: false, excluded: false, full_text: false, included: false, irrelevant: true},
+      studyDecisionAnswers: ['no'],
+      studyKey: 'reference_id:screen-2',
+      studyKeySource: 'reference_id',
+      tags: ['irrelevant'],
+    },
+  ])
+  expect(merged.warnings).toEqual({
+    conflictingStageMemberships: [],
+    duplicateStudyGroups: [],
+    missingMatches: [],
+    studyDecisionConflicts: [],
+  })
 })
 
 test('analyzeCovidencePackageFiles returns detected roles counts warnings and sample merged rows', async () => {
   const result = await analyzeCovidencePackageFiles({
     files: [
       {
-        file: new File(['Title,Authors,Year,DOI\nStudy A,"Doe, Jane",2024,10.1000/alpha\n'], 'all.csv', {
-          type: 'text/csv',
-        }),
+        file: new File(['Title,Authors,Published Year\nStudy A,"Doe, Jane",2024\n'], 'all.csv', {type: 'text/csv'}),
         fileRole: 'all',
       },
       {
-        file: new File(['Title,Authors,Year,DOI\nStudy A,"Doe, Jane",2024,10.1000/alpha\n'], 'full_text.csv', {
+        file: new File(['Title,Authors,Published Year\nStudy A,"Doe, Jane",2024\n'], 'full_text.csv', {
           type: 'text/csv',
         }),
         fileRole: 'full_text',
       },
       {
-        file: new File(['Title,Authors,Year,DOI\nMissing Match,"Roe, John",2023,10.1000/missing\n'], 'irrelevant.csv', {
+        file: new File(['Title,Authors,Published Year,Ref\nStudy B,"Roe, John",2023,screen-2\n'], 'irrelevant.csv', {
           type: 'text/csv',
         }),
         fileRole: 'irrelevant',
@@ -1959,31 +2274,47 @@ test('analyzeCovidencePackageFiles returns detected roles counts warnings and sa
   ])
   expect(result.data.counts).toEqual({
     conflictingStageMembershipCount: 0,
+    duplicateStudyGroupCount: 0,
     fileCount: 3,
     filesByRole: {all: 1, excluded: 0, full_text: 1, included: 0, irrelevant: 1},
-    mergedRowCount: 1,
-    missingMatchCount: 1,
+    mergedRowCount: 2,
+    missingMatchCount: 0,
     rowCount: 3,
     rowsByRole: {all: 1, excluded: 0, full_text: 1, included: 0, irrelevant: 1},
+    studyDecisionConflictCount: 0,
+    studyGroupCount: 2,
   })
-  expect(result.data.warnings.missingMatches).toEqual([
-    {
-      articleKey: 'doi:10.1000/missing',
-      articleKeySource: 'doi',
-      fileRole: 'irrelevant',
-      rowNumber: 2,
-      sourceFileName: 'irrelevant.csv',
-    },
-  ])
+  expect(result.data.warnings.missingMatches).toEqual([])
   expect(result.data.warnings.conflictingStageMemberships).toEqual([])
+  expect(result.data.warnings.duplicateStudyGroups).toEqual([])
+  expect(result.data.warnings.studyDecisionConflicts).toEqual([])
   expect(result.data.sampleMergedRows).toEqual([
     {
-      articleKey: 'doi:10.1000/alpha',
-      articleKeySource: 'doi',
-      citation: {authors: 'Doe, Jane', doi: '10.1000/alpha', title: 'Study A', year: '2024'},
+      articleKey: `title_year_first_author:${getCovidenceFallbackHash('study a|2024|doe jane')}`,
+      articleKeySource: 'title_year_first_author',
+      citation: {authors: 'Doe, Jane', published_year: '2024', title: 'Study A'},
+      duplicateStudyRecordCount: 1,
       exclusionReasons: [],
+      hasDuplicateStudyRecords: false,
+      hasStudyDecisionConflict: false,
       notes: [],
       stageMembership: {all: true, excluded: false, full_text: true, included: false, irrelevant: false},
+      studyKey: `title_year_first_author:${getCovidenceFallbackHash('study a|2024|doe jane')}`,
+      studyKeySource: 'title_year_first_author',
+      tags: [],
+    },
+    {
+      articleKey: 'reference_id:screen-2',
+      articleKeySource: 'reference_id',
+      citation: {authors: 'Roe, John', published_year: '2023', ref: 'screen-2', title: 'Study B'},
+      duplicateStudyRecordCount: 1,
+      exclusionReasons: [],
+      hasDuplicateStudyRecords: false,
+      hasStudyDecisionConflict: false,
+      notes: [],
+      stageMembership: {all: false, excluded: false, full_text: false, included: false, irrelevant: true},
+      studyKey: 'reference_id:screen-2',
+      studyKeySource: 'reference_id',
       tags: [],
     },
   ])
@@ -2007,7 +2338,7 @@ test('analyzeCovidencePackageFiles rejects missing required files for the select
   })
 })
 
-test('analyzeCovidencePackageFiles rejects mutually exclusive stage memberships', async () => {
+test('analyzeCovidencePackageFiles returns mutually exclusive stage memberships as warnings', async () => {
   const result = await analyzeCovidencePackageFiles({
     files: [
       {
@@ -2032,14 +2363,13 @@ test('analyzeCovidencePackageFiles rejects mutually exclusive stage memberships'
     mode: 'title_abstract',
   })
 
-  expect(result.ok).toBe(false)
+  expect(result.ok).toBe(true)
 
-  if (result.ok) {
-    throw new Error('Expected Covidence analyze conflict failure')
+  if (result.ok === false) {
+    throw new Error('Expected Covidence analyze warning success')
   }
 
-  expect(result.error.code).toBe('conflicting_stage_memberships')
-  expect(result.error.message).toBe('Covidence package has mutually exclusive stage memberships')
-  expect(result.error.warnings?.conflictingStageMemberships).toHaveLength(1)
-  expect(result.error.warnings?.missingMatches).toEqual([])
+  expect(result.data.counts.conflictingStageMembershipCount).toBe(1)
+  expect(result.data.warnings.conflictingStageMemberships).toHaveLength(1)
+  expect(result.data.warnings.missingMatches).toEqual([])
 })

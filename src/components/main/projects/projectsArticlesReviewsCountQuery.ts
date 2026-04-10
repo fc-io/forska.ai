@@ -6,6 +6,8 @@ const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
 
 export const createArticlesReviewsCountQueryOptions = (
   projectId: string,
+  covidenceDuplicatesOnly: Accessor<boolean>,
+  covidenceConflictsOnly: Accessor<boolean>,
   promptFilters: Accessor<Record<string, string[] | null>>,
   pageLimit: Accessor<number>,
   fromDateStr: Accessor<string>,
@@ -31,6 +33,8 @@ export const createArticlesReviewsCountQueryOptions = (
     queryKey: [
       'project-articles-reviews-count',
       projectId,
+      covidenceDuplicatesOnly(),
+      covidenceConflictsOnly(),
       promptFilters(),
       pageLimit(),
       validFrom(),
@@ -55,6 +59,8 @@ export const createArticlesReviewsCountQueryOptions = (
       const body: {
         limit: string
         projectId: string
+        hasDuplicateStudyRecords?: true
+        hasStudyDecisionConflict?: true
         prompts: Record<string, string[]>
         from?: string
         to?: string
@@ -64,6 +70,8 @@ export const createArticlesReviewsCountQueryOptions = (
       if (from) body.from = from
       if (to) body.to = to
       if (search) body.search = search
+      if (covidenceDuplicatesOnly()) body.hasDuplicateStudyRecords = true
+      if (covidenceConflictsOnly()) body.hasStudyDecisionConflict = true
 
       const response = await apiClient.api.articlesreviewscount.post(body)
 

@@ -117,6 +117,7 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
           preprintHostLabel: string | null
           isPreprint: boolean
           fullTextLinks: []
+          covidence: null
         }
       }
       fullArticleRow: {articleAuthors: string[]}
@@ -146,6 +147,7 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
       preprintHostLabel: null,
       isPreprint: false,
       fullTextLinks: [],
+      covidence: null,
     })
     expect(parsed.fullArticleRow.articleAuthors).toEqual(['Alice', 'Bob'])
   } finally {

@@ -44,21 +44,33 @@ type CovidenceReferenceRow = {
   sourceFileName: string
   tags: string[]
 }
-type CovidenceArticleKeySource = 'doi' | 'pmid' | 'reference_id' | 'title_year_first_author'
-type CovidenceArticleKey = {source: CovidenceArticleKeySource; value: string}
+type CovidenceStudyKeySource = 'doi' | 'pmid' | 'reference_id' | 'title_year_first_author'
+type CovidenceRecordKeySource = 'covidence' | CovidenceStudyKeySource
+type CovidenceStudyKey = {source: CovidenceStudyKeySource; value: string}
+type CovidenceRecordKey = {source: CovidenceRecordKeySource; value: string}
 type CovidenceMergedArticleCandidate = {
   articleKey: string
-  articleKeySource: CovidenceArticleKeySource | 'unkeyed'
+  articleKeySource: CovidenceRecordKeySource | 'unkeyed'
   citation: Record<string, string | null>
+  covidenceIds: string[]
+  duplicateStudyRecordCount: number
   exclusionReasons: string[]
+  hasDuplicateStudyRecords: boolean
+  hasStudyDecisionConflict: boolean
+  isSeededHumanJudgmentAnswered: boolean
   notes: string[]
+  referenceIds: string[]
+  seededHumanJudgmentAnswer: 'no' | 'yes' | null
   sourceRows: CovidenceReferenceRow[]
   stageMembership: Record<CovidenceFileRole, boolean>
+  studyDecisionAnswers: Array<'no' | 'yes'>
+  studyKey: string | null
+  studyKeySource: CovidenceStudyKeySource | null
   tags: string[]
 }
 type CovidenceMergeMissingMatch = {
   articleKey: string | null
-  articleKeySource: CovidenceArticleKeySource | null
+  articleKeySource: CovidenceRecordKeySource | null
   fileRole: Exclude<CovidenceFileRole, 'all'>
   rowNumber: number
   sourceFileName: string
@@ -68,12 +80,32 @@ type CovidenceMergeConflict = {
   conflictingFileRoles: CovidenceFileRole[]
   sourceRows: CovidenceReferenceRow[]
 }
+type CovidenceStudyGroupWarningRecord = {
+  articleKey: string
+  articleKeySource: CovidenceRecordKeySource | 'unkeyed'
+  covidenceIds: string[]
+  referenceIds: string[]
+  seededHumanJudgmentAnswer: 'no' | 'yes' | null
+  stageMembership: Record<CovidenceFileRole, boolean>
+  title: string | null
+}
+type CovidenceStudyGroupWarning = {
+  articleCount: number
+  records: CovidenceStudyGroupWarningRecord[]
+  studyKey: string
+  studyKeySource: CovidenceStudyKeySource
+}
 type CovidenceReferenceMergeResult = {
   candidates: CovidenceMergedArticleCandidate[]
-  warnings: {conflictingStageMemberships: CovidenceMergeConflict[]; missingMatches: CovidenceMergeMissingMatch[]}
+  warnings: {
+    conflictingStageMemberships: CovidenceMergeConflict[]
+    duplicateStudyGroups: CovidenceStudyGroupWarning[]
+    missingMatches: CovidenceMergeMissingMatch[]
+    studyDecisionConflicts: CovidenceStudyGroupWarning[]
+  }
 }
 type CovidenceCanonicalCandidateState = {
-  articleKeySource: CovidenceArticleKeySource | 'unkeyed'
+  articleKeySource: CovidenceRecordKeySource | 'unkeyed'
   canonicalRow: CovidenceReferenceRow
   sourceRows: CovidenceReferenceRow[]
 }
@@ -105,16 +137,30 @@ type CovidenceAnalyzeDetectedFile = {
 }
 type CovidenceAnalyzeSampleRow = Pick<
   CovidenceMergedArticleCandidate,
-  'articleKey' | 'articleKeySource' | 'citation' | 'exclusionReasons' | 'notes' | 'stageMembership' | 'tags'
+  | 'articleKey'
+  | 'articleKeySource'
+  | 'citation'
+  | 'duplicateStudyRecordCount'
+  | 'exclusionReasons'
+  | 'hasDuplicateStudyRecords'
+  | 'hasStudyDecisionConflict'
+  | 'notes'
+  | 'stageMembership'
+  | 'studyKey'
+  | 'studyKeySource'
+  | 'tags'
 >
 type CovidenceAnalyzeCounts = {
   conflictingStageMembershipCount: number
+  duplicateStudyGroupCount: number
   fileCount: number
   filesByRole: Record<CovidenceFileRole, number>
   mergedRowCount: number
   missingMatchCount: number
   rowCount: number
   rowsByRole: Record<CovidenceFileRole, number>
+  studyDecisionConflictCount: number
+  studyGroupCount: number
 }
 type CovidenceAnalyzeResult = {
   counts: CovidenceAnalyzeCounts
@@ -224,8 +270,10 @@ const covidenceRisFieldNames = {
   y1: 'publication_date',
 } as const satisfies Record<string, string>
 const covidencePmidKeys = ['pmid', 'pubmed_id']
-const covidenceReferenceIdKeys = ['reference_id', 'covidence_id']
-const covidenceYearKeys = ['year', 'publication_year', 'publication_date', 'date']
+const covidenceRecordCovidenceKeys = ['covidence', 'covidence_id']
+const covidenceRecordReferenceKeys = ['reference_id', 'ref']
+const covidenceStudyReferenceKeys = ['reference_id', 'ref']
+const covidenceYearKeys = ['year', 'publication_year', 'published_year', 'publication_date', 'date']
 const emptyCovidenceStageMembership = {
   all: false,
   excluded: false,
@@ -388,10 +436,10 @@ const getCovidenceTitleYearFirstAuthorHash = (citation: Record<string, string | 
   return hashInput ? createHash('sha256').update(hashInput).digest('hex') : null
 }
 
-const getCovidenceArticleKey = (citation: Record<string, string | null>): CovidenceArticleKey | null => {
+const getCovidenceStudyKey = (citation: Record<string, string | null>): CovidenceStudyKey | null => {
   const doi = getNormalizedCovidenceMatchValue(normalizeDoi(getCovidenceCitationValue(citation, ['doi'])))
   const pmid = getNormalizedCovidenceMatchValue(getCovidenceCitationValue(citation, covidencePmidKeys))
-  const referenceId = getNormalizedCovidenceMatchValue(getCovidenceCitationValue(citation, covidenceReferenceIdKeys))
+  const referenceId = getNormalizedCovidenceMatchValue(getCovidenceCitationValue(citation, covidenceStudyReferenceKeys))
   const titleYearFirstAuthorHash = getCovidenceTitleYearFirstAuthorHash(citation)
 
   return doi
@@ -405,8 +453,24 @@ const getCovidenceArticleKey = (citation: Record<string, string | null>): Covide
           : null
 }
 
+const getCovidenceRecordKey = (citation: Record<string, string | null>): CovidenceRecordKey | null => {
+  const covidenceId = getNormalizedCovidenceMatchValue(
+    getCovidenceCitationValue(citation, covidenceRecordCovidenceKeys),
+  )
+  const referenceId = getNormalizedCovidenceMatchValue(
+    getCovidenceCitationValue(citation, covidenceRecordReferenceKeys),
+  )
+  const studyKey = getCovidenceStudyKey(citation)
+
+  return covidenceId
+    ? {source: 'covidence', value: covidenceId}
+    : referenceId
+      ? {source: 'reference_id', value: referenceId}
+      : studyKey
+}
+
 const getCovidenceRowKey = (row: CovidenceReferenceRow) => {
-  return getCovidenceArticleKey(row.citation)
+  return getCovidenceRecordKey(row.citation)
 }
 
 const isCovidenceOverlayRow = (
@@ -436,26 +500,46 @@ const getCovidenceStageMembership = (rows: CovidenceReferenceRow[]) => {
 
 const getCovidenceMergedArticleCandidate = (params: {
   articleKey: string
-  articleKeySource: CovidenceArticleKeySource | 'unkeyed'
+  articleKeySource: CovidenceRecordKeySource | 'unkeyed'
   canonicalRow: CovidenceReferenceRow
   sourceRows: CovidenceReferenceRow[]
 }): CovidenceMergedArticleCandidate => {
+  const studyKey = getCovidenceStudyKey(params.canonicalRow.citation)
+
   return {
     articleKey: params.articleKey,
     articleKeySource: params.articleKeySource,
     citation: params.canonicalRow.citation,
+    covidenceIds: getCovidenceUniqueStrings(
+      params.sourceRows.map((row) => {
+        return getCovidenceCitationValue(row.citation, covidenceRecordCovidenceKeys)
+      }),
+    ),
+    duplicateStudyRecordCount: 1,
     exclusionReasons: getCovidenceUniqueStrings(
       params.sourceRows.map((row) => {
         return row.exclusionReason
       }),
     ),
+    hasDuplicateStudyRecords: false,
+    hasStudyDecisionConflict: false,
+    isSeededHumanJudgmentAnswered: false,
     notes: getCovidenceUniqueStrings(
       params.sourceRows.map((row) => {
         return row.notes
       }),
     ),
+    referenceIds: getCovidenceUniqueStrings(
+      params.sourceRows.map((row) => {
+        return getCovidenceCitationValue(row.citation, covidenceRecordReferenceKeys)
+      }),
+    ),
+    seededHumanJudgmentAnswer: null,
     sourceRows: params.sourceRows,
     stageMembership: getCovidenceStageMembership(params.sourceRows),
+    studyDecisionAnswers: [],
+    studyKey: studyKey ? `${studyKey.source}:${studyKey.value}` : null,
+    studyKeySource: studyKey?.source ?? null,
     tags: getCovidenceUniqueStrings(
       params.sourceRows.flatMap((row) => {
         return row.tags
@@ -465,11 +549,102 @@ const getCovidenceMergedArticleCandidate = (params: {
 }
 
 const getCovidenceCandidateState = (params: {
-  articleKeySource: CovidenceArticleKeySource | 'unkeyed'
+  articleKeySource: CovidenceRecordKeySource | 'unkeyed'
   canonicalRow: CovidenceReferenceRow
   sourceRows: CovidenceReferenceRow[]
 }): CovidenceCanonicalCandidateState => {
   return {articleKeySource: params.articleKeySource, canonicalRow: params.canonicalRow, sourceRows: params.sourceRows}
+}
+
+const getCovidenceResolvedArticleKey = (row: CovidenceReferenceRow) => {
+  const key = getCovidenceRowKey(row)
+
+  return {
+    articleKey: key ? `${key.source}:${key.value}` : `unkeyed:${row.sourceFileName}:${row.rowNumber}`,
+    articleKeySource: key?.source ?? 'unkeyed',
+  }
+}
+
+const getCovidenceCanonicalStateFromAllRows = (rows: CovidenceReferenceRow[]) => {
+  return rows.reduce(
+    (state, row) => {
+      const resolvedKey = getCovidenceResolvedArticleKey(row)
+      const existingCandidate = state.candidateMap.get(resolvedKey.articleKey)
+      const candidateState = getCovidenceCandidateState({
+        articleKeySource: existingCandidate?.articleKeySource ?? resolvedKey.articleKeySource,
+        canonicalRow: existingCandidate?.canonicalRow ?? row,
+        sourceRows: [...(existingCandidate?.sourceRows ?? []), row],
+      })
+
+      state.candidateMap.set(resolvedKey.articleKey, candidateState)
+
+      return {
+        ...state,
+        articleKeys: existingCandidate ? state.articleKeys : [...state.articleKeys, resolvedKey.articleKey],
+      }
+    },
+    {articleKeys: [] as string[], candidateMap: new Map<string, CovidenceCanonicalCandidateState>()},
+  )
+}
+
+const getCovidenceCanonicalStateFromMasterRows = (rows: CovidenceReferenceRow[]) => {
+  return rows
+    .filter((row) => {
+      return row.fileRole === 'all'
+    })
+    .reduce(
+      (state, row) => {
+        const resolvedKey = getCovidenceResolvedArticleKey(row)
+        const existingCandidate = state.candidateMap.get(resolvedKey.articleKey)
+        const candidateState = getCovidenceCandidateState({
+          articleKeySource: existingCandidate?.articleKeySource ?? resolvedKey.articleKeySource,
+          canonicalRow: existingCandidate?.canonicalRow ?? row,
+          sourceRows: [...(existingCandidate?.sourceRows ?? []), row],
+        })
+
+        state.candidateMap.set(resolvedKey.articleKey, candidateState)
+
+        return {
+          ...state,
+          articleKeys: existingCandidate ? state.articleKeys : [...state.articleKeys, resolvedKey.articleKey],
+        }
+      },
+      {articleKeys: [] as string[], candidateMap: new Map<string, CovidenceCanonicalCandidateState>()},
+    )
+}
+
+const getCovidenceOverlayMergedState = (
+  rows: CovidenceReferenceRow[],
+  canonicalCandidateMap: Map<string, CovidenceCanonicalCandidateState>,
+) => {
+  const missingMatches: CovidenceMergeMissingMatch[] = []
+  const candidateMap = rows.filter(isCovidenceOverlayRow).reduce((rowMap, row) => {
+    const key = getCovidenceRowKey(row)
+    const articleKey = key ? `${key.source}:${key.value}` : null
+    const existingCandidate = articleKey ? rowMap.get(articleKey) : null
+
+    if (!articleKey || !existingCandidate) {
+      missingMatches.push({
+        articleKey,
+        articleKeySource: key?.source ?? null,
+        fileRole: row.fileRole,
+        rowNumber: row.rowNumber,
+        sourceFileName: row.sourceFileName,
+      })
+
+      return rowMap
+    }
+
+    rowMap.set(articleKey, {
+      articleKeySource: existingCandidate.articleKeySource,
+      canonicalRow: existingCandidate.canonicalRow,
+      sourceRows: [...existingCandidate.sourceRows, row],
+    })
+
+    return rowMap
+  }, new Map(canonicalCandidateMap))
+
+  return {candidateMap, missingMatches}
 }
 
 const getCovidenceConflictWarnings = (candidates: CovidenceMergedArticleCandidate[]) => {
@@ -495,6 +670,104 @@ const getCovidenceConflictWarnings = (candidates: CovidenceMergedArticleCandidat
           },
         ]
       : []
+  })
+}
+
+const getCovidenceStudyGroupWarnings = (params: {
+  candidates: CovidenceMergedArticleCandidate[]
+  mode: CovidenceImportMode
+}) => {
+  const groupedCandidates = params.candidates.reduce((groupMap, candidate) => {
+    if (!candidate.studyKey || !candidate.studyKeySource) {
+      return groupMap
+    }
+
+    const groupKey = `${candidate.studyKeySource}:${candidate.studyKey}`
+    const existingGroup = groupMap.get(groupKey) ?? []
+    groupMap.set(groupKey, [...existingGroup, candidate])
+
+    return groupMap
+  }, new Map<string, CovidenceMergedArticleCandidate[]>())
+
+  const groups = Array.from(groupedCandidates.values())
+    .filter((candidates) => {
+      return candidates.length > 1
+    })
+    .map((candidates) => {
+      const [firstCandidate] = candidates
+
+      if (!firstCandidate?.studyKey || !firstCandidate.studyKeySource) {
+        throw new Error('Expected Covidence study group key')
+      }
+
+      return {
+        articleCount: candidates.length,
+        records: candidates.map((candidate) => {
+          return {
+            articleKey: candidate.articleKey,
+            articleKeySource: candidate.articleKeySource,
+            covidenceIds: candidate.covidenceIds,
+            referenceIds: candidate.referenceIds,
+            seededHumanJudgmentAnswer: getCovidenceHumanJudgmentAnswer({
+              mode: params.mode,
+              stageMembership: candidate.stageMembership,
+            }),
+            stageMembership: candidate.stageMembership,
+            title: candidate.citation.title ?? null,
+          }
+        }),
+        studyKey: firstCandidate.studyKey,
+        studyKeySource: firstCandidate.studyKeySource,
+      }
+    })
+
+  return {
+    duplicateStudyGroups: groups,
+    studyDecisionConflicts: groups.filter((group) => {
+      return (
+        new Set(
+          group.records.flatMap((record) => {
+            return record.seededHumanJudgmentAnswer ? [record.seededHumanJudgmentAnswer] : []
+          }),
+        ).size > 1
+      )
+    }),
+  }
+}
+
+const getCovidenceCandidatesWithStudyMetadata = (params: {
+  candidates: CovidenceMergedArticleCandidate[]
+  mode: CovidenceImportMode
+}) => {
+  const groupedCandidates = params.candidates.reduce((groupMap, candidate) => {
+    const groupKey = candidate.studyKey ?? `record:${candidate.articleKey}`
+    const existingGroup = groupMap.get(groupKey) ?? []
+    groupMap.set(groupKey, [...existingGroup, candidate])
+
+    return groupMap
+  }, new Map<string, CovidenceMergedArticleCandidate[]>())
+
+  return params.candidates.map((candidate) => {
+    const group = groupedCandidates.get(candidate.studyKey ?? `record:${candidate.articleKey}`) ?? [candidate]
+    const studyDecisionAnswers = getCovidenceUniqueStrings(
+      group.map((groupCandidate) => {
+        return getCovidenceHumanJudgmentAnswer({mode: params.mode, stageMembership: groupCandidate.stageMembership})
+      }),
+    ) as Array<'no' | 'yes'>
+    const seededHumanJudgmentAnswer = getCovidenceHumanJudgmentAnswer({
+      mode: params.mode,
+      stageMembership: candidate.stageMembership,
+    })
+
+    return {
+      ...candidate,
+      duplicateStudyRecordCount: group.length,
+      hasDuplicateStudyRecords: group.length > 1,
+      hasStudyDecisionConflict: studyDecisionAnswers.length > 1,
+      isSeededHumanJudgmentAnswered: seededHumanJudgmentAnswer !== null,
+      seededHumanJudgmentAnswer,
+      studyDecisionAnswers,
+    }
   })
 }
 
@@ -1082,6 +1355,7 @@ const getCovidencePackageRowsFromConfig = (config: CovidencePackageConfig) => {
     parsedRows.flatMap((result) => {
       return result.ok ? result.rows : []
     }),
+    config.mode,
   )
 }
 
@@ -1091,8 +1365,17 @@ const getCovidenceImportOriginalData = (candidate: CovidenceMergedArticleCandida
       articleKey: candidate.articleKey,
       articleKeySource: candidate.articleKeySource,
       citation: candidate.citation,
+      covidenceIds: candidate.covidenceIds,
+      duplicateStudyRecordCount: candidate.duplicateStudyRecordCount,
       exclusionReasons: candidate.exclusionReasons,
+      hasDuplicateStudyRecords: candidate.hasDuplicateStudyRecords,
+      hasStudyDecisionConflict: candidate.hasStudyDecisionConflict,
+      isSeededHumanJudgmentAnswered: candidate.isSeededHumanJudgmentAnswered,
       notes: candidate.notes,
+      recordKey: candidate.articleKey,
+      recordKeySource: candidate.articleKeySource,
+      referenceIds: candidate.referenceIds,
+      seededHumanJudgmentAnswer: candidate.seededHumanJudgmentAnswer,
       sourceRows: candidate.sourceRows.map((row) => {
         return {
           citation: row.citation,
@@ -1105,6 +1388,9 @@ const getCovidenceImportOriginalData = (candidate: CovidenceMergedArticleCandida
         }
       }),
       stageMembership: candidate.stageMembership,
+      studyDecisionAnswers: candidate.studyDecisionAnswers,
+      studyKey: candidate.studyKey,
+      studyKeySource: candidate.studyKeySource,
       tags: candidate.tags,
     },
   }
@@ -1115,9 +1401,12 @@ const getCovidenceImportSourceMetadata = (params: {
   config: CovidencePackageConfig
 }) => {
   return {
+    journalTitle: params.candidate.citation.journal ?? null,
     covidence: {
       articleKey: params.candidate.articleKey,
       articleKeySource: params.candidate.articleKeySource,
+      covidenceIds: params.candidate.covidenceIds,
+      duplicateStudyRecordCount: params.candidate.duplicateStudyRecordCount,
       files: params.config.files.map((file) => {
         return {
           assetPath: file.assetPath,
@@ -1126,11 +1415,21 @@ const getCovidenceImportSourceMetadata = (params: {
           sourceFileName: file.sourceFileName,
         }
       }),
+      hasDuplicateStudyRecords: params.candidate.hasDuplicateStudyRecords,
+      hasStudyDecisionConflict: params.candidate.hasStudyDecisionConflict,
+      isSeededHumanJudgmentAnswered: params.candidate.isSeededHumanJudgmentAnswered,
       mode: params.config.mode,
+      recordKey: params.candidate.articleKey,
+      recordKeySource: params.candidate.articleKeySource,
+      referenceIds: params.candidate.referenceIds,
+      seededHumanJudgmentAnswer: params.candidate.seededHumanJudgmentAnswer,
       sourceFileNames: params.candidate.sourceRows.map((row) => {
         return row.sourceFileName
       }),
       stageMembership: params.candidate.stageMembership,
+      studyDecisionAnswers: params.candidate.studyDecisionAnswers,
+      studyKey: params.candidate.studyKey,
+      studyKeySource: params.candidate.studyKeySource,
       tags: params.candidate.tags,
     },
   }
@@ -1197,15 +1496,15 @@ const getCovidenceHumanJudgmentAnswer = (params: {
   stageMembership: Record<CovidenceFileRole, boolean>
 }) => {
   return params.mode === 'title_abstract'
-    ? params.stageMembership.irrelevant
-      ? 'no'
-      : params.stageMembership.full_text
-        ? 'yes'
+    ? params.stageMembership.full_text
+      ? 'yes'
+      : params.stageMembership.irrelevant
+        ? 'no'
         : null
-    : params.stageMembership.excluded
-      ? 'no'
-      : params.stageMembership.included
-        ? 'yes'
+    : params.stageMembership.included
+      ? 'yes'
+      : params.stageMembership.excluded
+        ? 'no'
         : null
 }
 
@@ -1836,56 +2135,20 @@ export const parseCovidenceReferenceRows = (params: {
     : parseCovidenceRisReferenceRows(params)
 }
 
-export const mergeCovidenceReferenceRows = (rows: CovidenceReferenceRow[]): CovidenceReferenceMergeResult => {
-  const canonicalState = rows
-    .filter((row) => {
-      return row.fileRole === 'all'
-    })
-    .reduce(
-      (state, row) => {
-        const key = getCovidenceRowKey(row)
-        const articleKey = key ? `${key.source}:${key.value}` : `unkeyed:${row.sourceFileName}:${row.rowNumber}`
-        const existingCandidate = state.candidateMap.get(articleKey)
-        const candidateState = getCovidenceCandidateState({
-          articleKeySource: key?.source ?? 'unkeyed',
-          canonicalRow: existingCandidate?.canonicalRow ?? row,
-          sourceRows: [...(existingCandidate?.sourceRows ?? []), row],
-        })
-
-        state.candidateMap.set(articleKey, candidateState)
-
-        return {...state, articleKeys: existingCandidate ? state.articleKeys : [...state.articleKeys, articleKey]}
-      },
-      {articleKeys: [] as string[], candidateMap: new Map<string, CovidenceCanonicalCandidateState>()},
-    )
-  const missingMatches: CovidenceMergeMissingMatch[] = []
-  const candidateMap = rows.filter(isCovidenceOverlayRow).reduce((rowMap, row) => {
-    const key = getCovidenceRowKey(row)
-    const articleKey = key ? `${key.source}:${key.value}` : null
-    const existingCandidate = articleKey ? rowMap.get(articleKey) : null
-
-    if (!articleKey || !existingCandidate) {
-      missingMatches.push({
-        articleKey,
-        articleKeySource: key?.source ?? null,
-        fileRole: row.fileRole,
-        rowNumber: row.rowNumber,
-        sourceFileName: row.sourceFileName,
-      })
-
-      return rowMap
-    }
-
-    rowMap.set(articleKey, {
-      articleKeySource: existingCandidate.articleKeySource,
-      canonicalRow: existingCandidate.canonicalRow,
-      sourceRows: [...existingCandidate.sourceRows, row],
-    })
-
-    return rowMap
-  }, new Map(canonicalState.candidateMap))
-  const candidates = canonicalState.articleKeys.map((articleKey) => {
-    const candidateState = candidateMap.get(articleKey)
+export const mergeCovidenceReferenceRows = (
+  rows: CovidenceReferenceRow[],
+  mode: CovidenceImportMode = 'full_text',
+): CovidenceReferenceMergeResult => {
+  const canonicalState =
+    mode === 'title_abstract'
+      ? getCovidenceCanonicalStateFromAllRows(rows)
+      : getCovidenceCanonicalStateFromMasterRows(rows)
+  const mergedState =
+    mode === 'title_abstract'
+      ? {candidateMap: canonicalState.candidateMap, missingMatches: [] as CovidenceMergeMissingMatch[]}
+      : getCovidenceOverlayMergedState(rows, canonicalState.candidateMap)
+  const rawCandidates = canonicalState.articleKeys.map((articleKey) => {
+    const candidateState = mergedState.candidateMap.get(articleKey)
 
     if (!candidateState) {
       throw new Error('Expected Covidence candidate state')
@@ -1898,8 +2161,18 @@ export const mergeCovidenceReferenceRows = (rows: CovidenceReferenceRow[]): Covi
       sourceRows: candidateState.sourceRows,
     })
   })
+  const candidates = getCovidenceCandidatesWithStudyMetadata({candidates: rawCandidates, mode})
+  const studyGroupWarnings = getCovidenceStudyGroupWarnings({candidates, mode})
 
-  return {candidates, warnings: {conflictingStageMemberships: getCovidenceConflictWarnings(candidates), missingMatches}}
+  return {
+    candidates,
+    warnings: {
+      conflictingStageMemberships: getCovidenceConflictWarnings(candidates),
+      duplicateStudyGroups: studyGroupWarnings.duplicateStudyGroups,
+      missingMatches: mergedState.missingMatches,
+      studyDecisionConflicts: studyGroupWarnings.studyDecisionConflicts,
+    },
+  }
 }
 
 export const parseCovidenceCsvReferenceRows = (params: {
@@ -2007,51 +2280,55 @@ export const analyzeCovidencePackageFiles = async (params: {
     parsedFiles.flatMap((entry) => {
       return entry.parsedResult.ok ? entry.parsedResult.rows : []
     }),
+    params.mode,
   )
 
-  return mergedResult.warnings.conflictingStageMemberships.length > 0
-    ? {
-        error: {
-          code: 'conflicting_stage_memberships',
-          message: 'Covidence package has mutually exclusive stage memberships',
-          warnings: mergedResult.warnings,
-        },
-        ok: false,
-      }
-    : {
-        data: {
-          counts: {
-            conflictingStageMembershipCount: mergedResult.warnings.conflictingStageMemberships.length,
-            fileCount: detectedFiles.length,
-            filesByRole: getCovidenceRoleCounts(detectedFiles),
-            mergedRowCount: mergedResult.candidates.length,
-            missingMatchCount: mergedResult.warnings.missingMatches.length,
-            rowCount: detectedFiles.reduce((count, file) => {
-              return count + file.rowCount
-            }, 0),
-            rowsByRole: getCovidenceRoleCounts(
-              parsedFiles.flatMap((entry) => {
-                return entry.parsedResult.ok ? entry.parsedResult.rows : []
-              }),
-            ),
-          },
-          detectedFiles,
-          mode: params.mode,
-          sampleMergedRows: mergedResult.candidates.slice(0, 5).map((candidate) => {
-            return {
-              articleKey: candidate.articleKey,
-              articleKeySource: candidate.articleKeySource,
-              citation: candidate.citation,
-              exclusionReasons: candidate.exclusionReasons,
-              notes: candidate.notes,
-              stageMembership: candidate.stageMembership,
-              tags: candidate.tags,
-            }
+  return {
+    data: {
+      counts: {
+        conflictingStageMembershipCount: mergedResult.warnings.conflictingStageMemberships.length,
+        duplicateStudyGroupCount: mergedResult.warnings.duplicateStudyGroups.length,
+        fileCount: detectedFiles.length,
+        filesByRole: getCovidenceRoleCounts(detectedFiles),
+        mergedRowCount: mergedResult.candidates.length,
+        missingMatchCount: mergedResult.warnings.missingMatches.length,
+        rowCount: detectedFiles.reduce((count, file) => {
+          return count + file.rowCount
+        }, 0),
+        rowsByRole: getCovidenceRoleCounts(
+          parsedFiles.flatMap((entry) => {
+            return entry.parsedResult.ok ? entry.parsedResult.rows : []
           }),
-          warnings: mergedResult.warnings,
-        },
-        ok: true,
-      }
+        ),
+        studyDecisionConflictCount: mergedResult.warnings.studyDecisionConflicts.length,
+        studyGroupCount: new Set(
+          mergedResult.candidates.map((candidate) => {
+            return candidate.studyKey ?? `record:${candidate.articleKey}`
+          }),
+        ).size,
+      },
+      detectedFiles,
+      mode: params.mode,
+      sampleMergedRows: mergedResult.candidates.slice(0, 5).map((candidate) => {
+        return {
+          articleKey: candidate.articleKey,
+          articleKeySource: candidate.articleKeySource,
+          citation: candidate.citation,
+          duplicateStudyRecordCount: candidate.duplicateStudyRecordCount,
+          exclusionReasons: candidate.exclusionReasons,
+          hasDuplicateStudyRecords: candidate.hasDuplicateStudyRecords,
+          hasStudyDecisionConflict: candidate.hasStudyDecisionConflict,
+          notes: candidate.notes,
+          stageMembership: candidate.stageMembership,
+          studyKey: candidate.studyKey,
+          studyKeySource: candidate.studyKeySource,
+          tags: candidate.tags,
+        }
+      }),
+      warnings: mergedResult.warnings,
+    },
+    ok: true,
+  }
 }
 
 export const deleteCovidencePackageFiles = (datasourceId: string) => {

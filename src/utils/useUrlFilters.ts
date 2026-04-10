@@ -14,6 +14,10 @@ interface UseUrlFiltersResult {
   setFromDate: Setter<string>
   toDate: () => string
   setToDate: Setter<string>
+  covidenceDuplicatesOnly: () => boolean
+  setCovidenceDuplicatesOnly: Setter<boolean>
+  covidenceConflictsOnly: () => boolean
+  setCovidenceConflictsOnly: Setter<boolean>
   promptFilters: () => Record<string, string[] | null>
   setPromptFilters: Setter<Record<string, string[] | null>>
   currentPage: () => number
@@ -39,6 +43,8 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
   // State signals
   const [fromDate, setFromDate] = createSignal('')
   const [toDate, setToDate] = createSignal('')
+  const [covidenceDuplicatesOnly, setCovidenceDuplicatesOnly] = createSignal(false)
+  const [covidenceConflictsOnly, setCovidenceConflictsOnly] = createSignal(false)
   const [promptFilters, setPromptFilters] = createSignal<Record<string, string[] | null>>({})
   const [currentPage, setCurrentPage] = createSignal(1)
   const [pageLimit, setPageLimit] = createSignal(100)
@@ -55,6 +61,8 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
     const to = urlParams.get('to')
     if (from) setFromDate(from)
     if (to) setToDate(to)
+    setCovidenceDuplicatesOnly(urlParams.get('covidenceDuplicates') === '1')
+    setCovidenceConflictsOnly(urlParams.get('covidenceConflicts') === '1')
 
     // Parse page and limit
     const page = urlParams.get('page')
@@ -96,6 +104,8 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
     const page = currentPage()
     const limit = pageLimit()
     const search = appliedSearchTitle()
+    const duplicatesOnly = covidenceDuplicatesOnly()
+    const conflictsOnly = covidenceConflictsOnly()
     const filters = promptFilters()
 
     if (from) params.from = from
@@ -103,6 +113,8 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
     if (page !== 1) params.page = String(page)
     if (limit !== 100) params.limit = String(limit)
     if (search) params.search = search
+    if (duplicatesOnly) params.covidenceDuplicates = '1'
+    if (conflictsOnly) params.covidenceConflicts = '1'
 
     // Add prompt filters with pf_ prefix
     for (const [promptId, values] of Object.entries(filters)) {
@@ -120,17 +132,30 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
 
   // Update URL when filters change (after initialization)
   createEffect(
-    on([fromDate, toDate, currentPage, pageLimit, appliedSearchTitle, promptFilters, initialized], () => {
-      if (!initialized()) return
+    on(
+      [
+        fromDate,
+        toDate,
+        covidenceDuplicatesOnly,
+        covidenceConflictsOnly,
+        currentPage,
+        pageLimit,
+        appliedSearchTitle,
+        promptFilters,
+        initialized,
+      ],
+      () => {
+        if (!initialized()) return
 
-      const searchParams = buildSearchParams()
-      void navigate({
-        to: options.routePath as '/',
-        params: options.routeParams,
-        search: searchParams,
-        replace: true, // Replace history entry instead of pushing
-      })
-    }),
+        const searchParams = buildSearchParams()
+        void navigate({
+          to: options.routePath as '/',
+          params: options.routeParams,
+          search: searchParams,
+          replace: true, // Replace history entry instead of pushing
+        })
+      },
+    ),
   )
 
   const onSubmitSearch = () => {
@@ -143,6 +168,10 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
     setFromDate,
     toDate,
     setToDate,
+    covidenceDuplicatesOnly,
+    setCovidenceDuplicatesOnly,
+    covidenceConflictsOnly,
+    setCovidenceConflictsOnly,
     promptFilters,
     setPromptFilters,
     currentPage,

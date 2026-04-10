@@ -19,6 +19,8 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
       const fromDate = query?.from ? new Date(`${query.from}T00:00:00.000Z`) : null
       const toDate = query?.to ? new Date(`${query.to}T23:59:59.999Z`) : null
       const searchTitle = typeof query?.search === 'string' ? query.search.trim() : ''
+      const hasDuplicateStudyRecords = query?.covidenceDuplicates === '1'
+      const hasStudyDecisionConflict = query?.covidenceConflicts === '1'
 
       const projectPromptRows = await getAppQueryService().getProjectPromptRows(query.projectId)
 
@@ -51,6 +53,12 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
         fromDate ? `a.article_created_at >= ${getTimestampLiteral(fromDate)}` : null,
         toDate ? `a.article_created_at <= ${getTimestampLiteral(toDate)}` : null,
         searchTitle ? `LOWER(COALESCE(a.article_title, '')) LIKE LOWER('%${escapeSqlString(searchTitle)}%')` : null,
+        hasDuplicateStudyRecords
+          ? "LOWER(COALESCE(json_extract_string(a.source_metadata, '$.covidence.hasDuplicateStudyRecords'), 'false')) = 'true'"
+          : null,
+        hasStudyDecisionConflict
+          ? "LOWER(COALESCE(json_extract_string(a.source_metadata, '$.covidence.hasStudyDecisionConflict'), 'false')) = 'true'"
+          : null,
       ].filter((part): part is string => {
         return part !== null
       })
@@ -98,6 +106,8 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
   {
     query: t.Object({
       projectId: t.String(),
+      covidenceConflicts: t.Optional(t.String()),
+      covidenceDuplicates: t.Optional(t.String()),
       from: t.Optional(t.String()),
       to: t.Optional(t.String()),
       search: t.Optional(t.String()),

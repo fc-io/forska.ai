@@ -20,6 +20,8 @@ export const projectsAddArticlesRoutes = new Elysia()
         body.from,
         body.to,
         body.search,
+        body.hasDuplicateStudyRecords,
+        body.hasStudyDecisionConflict,
       )
 
       // Upsert associations + auto-link prompts
@@ -29,7 +31,14 @@ export const projectsAddArticlesRoutes = new Elysia()
         targetProjectId: body.targetProjectId,
         sourceProjectId: body.sourceProjectId,
         listType: body.listType,
-        filters: {from: body.from, to: body.to, search: body.search, prompts: body.prompts},
+        filters: {
+          from: body.from,
+          to: body.to,
+          search: body.search,
+          prompts: body.prompts,
+          hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
+          hasStudyDecisionConflict: body.hasStudyDecisionConflict,
+        },
         selectionTotal: articleIds.length,
         ...result,
       })
@@ -42,6 +51,8 @@ export const projectsAddArticlesRoutes = new Elysia()
         sourceProjectId: t.String(),
         listType: t.Union([t.Literal('llm'), t.Literal('human'), t.Literal('both'), t.Literal('unassessed')]),
         prompts: t.Optional(t.Record(t.String(), t.Array(t.String()))),
+        hasDuplicateStudyRecords: t.Optional(t.Boolean()),
+        hasStudyDecisionConflict: t.Optional(t.Boolean()),
         from: t.Optional(t.String()),
         to: t.Optional(t.String()),
         search: t.Optional(t.String()),

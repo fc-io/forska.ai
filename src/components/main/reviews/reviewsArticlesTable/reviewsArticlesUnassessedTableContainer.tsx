@@ -15,6 +15,8 @@ const formatThousandSeparatedNumber = (value: number) => {
 
 interface ReviewsArticlesUnassessedTableContainerProps {
   projectId: string
+  covidenceDuplicatesOnly: Accessor<boolean>
+  covidenceConflictsOnly: Accessor<boolean>
   currentPage: Accessor<number>
   setCurrentPage: Setter<number>
   pageLimit: Accessor<number>
@@ -31,6 +33,8 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
     // Access to track dependencies
     props.fromDate()
     props.toDate()
+    props.covidenceDuplicatesOnly()
+    props.covidenceConflictsOnly()
     props.searchTitle()
     props.pageLimit()
     props.currentPage()
@@ -40,6 +44,8 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
   const articlesQuery = useQuery(() => {
     return createArticlesUnassessedQueryOptions(
       props.projectId,
+      props.covidenceDuplicatesOnly,
+      props.covidenceConflictsOnly,
       props.currentPage,
       props.pageLimit,
       props.fromDate,
@@ -138,10 +144,18 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
                     const from = props.fromDate().trim()
                     const to = props.toDate().trim()
                     const search = (props.searchTitle() || '').trim()
-                    const body: {from?: string; to?: string; search?: string} = {}
+                    const body: {
+                      from?: string
+                      to?: string
+                      search?: string
+                      hasDuplicateStudyRecords?: true
+                      hasStudyDecisionConflict?: true
+                    } = {}
                     if (from) body.from = from
                     if (to) body.to = to
                     if (search) body.search = search
+                    if (props.covidenceDuplicatesOnly()) body.hasDuplicateStudyRecords = true
+                    if (props.covidenceConflictsOnly()) body.hasStudyDecisionConflict = true
                     return body
                   }}
                 />
@@ -186,10 +200,18 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
                     const from = props.fromDate().trim()
                     const to = props.toDate().trim()
                     const search = (props.searchTitle() || '').trim()
-                    const body: {from?: string; to?: string; search?: string} = {}
+                    const body: {
+                      from?: string
+                      to?: string
+                      search?: string
+                      hasDuplicateStudyRecords?: true
+                      hasStudyDecisionConflict?: true
+                    } = {}
                     if (from) body.from = from
                     if (to) body.to = to
                     if (search) body.search = search
+                    if (props.covidenceDuplicatesOnly()) body.hasDuplicateStudyRecords = true
+                    if (props.covidenceConflictsOnly()) body.hasStudyDecisionConflict = true
                     return body
                   }}
                 />

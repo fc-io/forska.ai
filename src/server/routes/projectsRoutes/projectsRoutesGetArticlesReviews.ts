@@ -25,6 +25,8 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
 
       const result = await queryArticlesReviewsFromOlap({
         cursor: body.cursor,
+        hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
+        hasStudyDecisionConflict: body.hasStudyDecisionConflict,
         projectId: body.projectId,
         page,
         limit,
@@ -82,6 +84,8 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
     body: t.Object({
       cursor: t.Optional(t.String()),
       from: t.Optional(t.String()),
+      hasDuplicateStudyRecords: t.Optional(t.Boolean()),
+      hasStudyDecisionConflict: t.Optional(t.Boolean()),
       limit: t.String(),
       page: t.String(),
       projectId: t.String(),

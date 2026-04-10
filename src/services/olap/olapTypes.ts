@@ -5,6 +5,8 @@ export type ArticlesReviewsParams = {
   page: number
   limit: number
   cursor?: string | null
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
   from?: string | null
   to?: string | null
   search?: string | null
@@ -59,6 +61,8 @@ export type ArticlesReviewsResponse = {
 export type ArticlesReviewsCountParams = {
   projectId: string
   limit: number
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
   from?: string | null
   to?: string | null
   search?: string | null
@@ -71,6 +75,8 @@ export type ArticlesReviewsBothParams = {
   projectId: string
   page: number
   limit: number
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
   from?: string | null
   to?: string | null
   search?: string | null
@@ -123,6 +129,8 @@ export type DatabaseFilterParams = {
   fromDate: Date | null
   toDate: Date | null
   searchTitle: string
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
 }
 
 export type PaginationCursor = {lastDate: Date; lastArticleId: string}
@@ -137,10 +145,18 @@ export type UnassessedCountParams = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
   preferRawFallback?: boolean
 }
 
-export type UnassessedArticlesParams = UnassessedCountParams & {limit: number; offset: number; search?: string}
+export type UnassessedArticlesParams = UnassessedCountParams & {
+  limit: number
+  offset: number
+  search?: string
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
+}
 
 export type PromptQueueEntry = {articleId: string; promptId: string}
 
@@ -171,4 +187,6 @@ export type SelectArticleIdsArgs = [
   from?: string,
   to?: string,
   search?: string,
+  hasDuplicateStudyRecords?: boolean,
+  hasStudyDecisionConflict?: boolean,
 ]

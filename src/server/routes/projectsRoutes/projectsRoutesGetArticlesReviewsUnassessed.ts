@@ -37,6 +37,8 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
     })()
 
     const {articles: unassessedArticles, totalCount} = await getUnassessedArticlesFromOlap({
+      hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
+      hasStudyDecisionConflict: body.hasStudyDecisionConflict,
       projectId: body.projectId,
       projectModelId: projectBounds.modelId,
       projectDateFrom: effectiveFromDate,
@@ -83,6 +85,8 @@ export const projectsRoutesGetArticlesReviewsUnassessed = new Elysia().post(
       limit: t.String(),
       page: t.String(),
       projectId: t.String(),
+      hasDuplicateStudyRecords: t.Optional(t.Boolean()),
+      hasStudyDecisionConflict: t.Optional(t.Boolean()),
       from: t.Optional(t.String()),
       to: t.Optional(t.String()),
       search: t.Optional(t.String()),

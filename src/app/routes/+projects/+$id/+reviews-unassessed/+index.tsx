@@ -113,6 +113,10 @@ const ReviewsUnassessed = () => {
 
           <ReviewsFilterControls
             projectId={projectId}
+            covidenceDuplicatesOnly={filters.covidenceDuplicatesOnly()}
+            setCovidenceDuplicatesOnly={filters.setCovidenceDuplicatesOnly}
+            covidenceConflictsOnly={filters.covidenceConflictsOnly()}
+            setCovidenceConflictsOnly={filters.setCovidenceConflictsOnly}
             promptFilters={() => {
               return {}
             }}
@@ -135,6 +139,8 @@ const ReviewsUnassessed = () => {
 
           <ReviewsArticlesUnassessedTableContainer
             projectId={projectId}
+            covidenceDuplicatesOnly={filters.covidenceDuplicatesOnly}
+            covidenceConflictsOnly={filters.covidenceConflictsOnly}
             currentPage={filters.currentPage}
             setCurrentPage={filters.setCurrentPage}
             pageLimit={filters.pageLimit}

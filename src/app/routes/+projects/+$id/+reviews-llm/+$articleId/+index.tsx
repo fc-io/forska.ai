@@ -1,16 +1,29 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute} from '@tanstack/solid-router'
-import {createEffect, createMemo, createSignal, Show, Suspense} from 'solid-js'
+import {createEffect, createMemo, createSignal, For, Show, Suspense} from 'solid-js'
 
 import {ArticleAdminSection} from '../../../../../../components/main/articles/articleAdminSection'
 import {ArticleTabs} from '../../../../../../components/main/articles/articleTabs'
 import {StickyColumn} from '../../../../../../components/main/common/stickyColumn'
+import {ReviewsCovidenceBadges} from '../../../../../../components/main/reviews/reviewsCovidenceBadges.tsx'
 import {ReviewArticleDetails} from '../../../../../../components/main/projects/reviews/review/reviewArticleDetails.tsx'
 import {ReviewAvailableJudgments} from '../../../../../../components/main/projects/reviews/review/reviewAvailableJudgments.tsx'
 import {ReviewHumanAssessments} from '../../../../../../components/main/projects/reviews/review/reviewHumanAssessments.tsx'
 import {ReviewJudgments} from '../../../../../../components/main/projects/reviews/review/reviewJudgments.tsx'
 import {apiClient} from '../../../../../../services/apiClient.ts'
 import {getArticleDocumentTitle} from '../../../../../utils/getArticleDocumentTitle'
+
+const getCovidenceStageLabels = (stageMembership: Record<string, boolean>) => {
+  return [
+    stageMembership.irrelevant ? 'Irrelevant' : null,
+    stageMembership.full_text ? 'Select' : null,
+    stageMembership.excluded ? 'Excluded' : null,
+    stageMembership.included ? 'Included' : null,
+    stageMembership.all ? 'Screen' : null,
+  ].filter((value): value is string => {
+    return value !== null
+  })
+}
 
 export const ReviewDetail = () => {
   const params = Route.useParams()
@@ -89,6 +102,69 @@ export const ReviewDetail = () => {
                 <div class="flex gap-6">
                   <div class="flex-1 space-y-6">
                     <h1 class="text-2xl font-bold">Article Details</h1>
+
+                    <Show when={(data().covidenceRelatedRecords?.length ?? 0) > 1}>
+                      <div class="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                        <div class="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <h2 class="text-sm font-semibold text-amber-900">Covidence duplicate study group</h2>
+                            <p class="mt-1 text-sm text-amber-800">
+                              {data().covidenceRelatedRecords.length} records share the same study identity in this
+                              import.
+                            </p>
+                          </div>
+                          <ReviewsCovidenceBadges sourceMetadata={data().article.sourceMetadata} />
+                        </div>
+                        <div class="mt-4 space-y-3">
+                          <For each={data().covidenceRelatedRecords}>
+                            {(record) => {
+                              const stageLabels = getCovidenceStageLabels(record.stageMembership)
+                              const answerLabel = !record.isSeededHumanJudgmentAnswered
+                                ? 'Unanswered'
+                                : record.seededHumanJudgmentAnswer === 'yes'
+                                  ? 'Seeded yes'
+                                  : 'Seeded no'
+
+                              return (
+                                <div
+                                  class={`rounded-lg border px-3 py-3 ${record.isCurrentRecord ? 'border-amber-400 bg-white' : 'border-amber-100 bg-white/70'}`}
+                                >
+                                  <div class="flex flex-wrap items-center justify-between gap-2">
+                                    <div>
+                                      <p class="font-medium text-stone-900">{record.articleTitle}</p>
+                                      <p class="text-xs text-stone-500">{record.articleExternalId ?? record.id}</p>
+                                    </div>
+                                    <div class="flex flex-wrap items-center gap-2">
+                                      <Show when={record.isCurrentRecord}>
+                                        <span class="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900">
+                                          Current record
+                                        </span>
+                                      </Show>
+                                      <span
+                                        class={`rounded-full px-2 py-0.5 text-xs font-medium ${record.hasStudyDecisionConflict ? 'bg-rose-100 text-rose-800' : 'bg-stone-100 text-stone-700'}`}
+                                      >
+                                        {answerLabel}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div class="mt-2 flex flex-wrap gap-2 text-xs text-stone-600">
+                                    <Show when={record.covidenceIds.length > 0}>
+                                      <span>Covidence: {record.covidenceIds.join(', ')}</span>
+                                    </Show>
+                                    <Show when={record.referenceIds.length > 0}>
+                                      <span>Ref: {record.referenceIds.join(', ')}</span>
+                                    </Show>
+                                    <Show when={stageLabels.length > 0}>
+                                      <span>Stages: {stageLabels.join(', ')}</span>
+                                    </Show>
+                                  </div>
+                                </div>
+                              )
+                            }}
+                          </For>
+                        </div>
+                      </div>
+                    </Show>
 
                     <ArticleTabs
                       activeTab="summary"

@@ -24,22 +24,30 @@ type CovidenceAnalyzeResponse = {
   data: {
     counts: {
       conflictingStageMembershipCount: number
+      duplicateStudyGroupCount: number
       fileCount: number
       filesByRole: Record<CovidenceFileRole, number>
       mergedRowCount: number
       missingMatchCount: number
       rowCount: number
       rowsByRole: Record<CovidenceFileRole, number>
+      studyDecisionConflictCount: number
+      studyGroupCount: number
     }
     detectedFiles: Array<{fileRole: CovidenceFileRole; format: 'csv' | 'ris'; rowCount: number; sourceFileName: string}>
     mode: CovidenceImportMode
     sampleMergedRows: Array<{
       articleKey: string
-      articleKeySource: 'doi' | 'pmid' | 'reference_id' | 'title_year_first_author' | 'unkeyed'
+      articleKeySource: 'covidence' | 'doi' | 'pmid' | 'reference_id' | 'title_year_first_author' | 'unkeyed'
       citation: Record<string, string | null>
+      duplicateStudyRecordCount: number
       exclusionReasons: string[]
+      hasDuplicateStudyRecords: boolean
+      hasStudyDecisionConflict: boolean
       notes: string[]
       stageMembership: Record<CovidenceFileRole, boolean>
+      studyKey: string | null
+      studyKeySource: 'doi' | 'pmid' | 'reference_id' | 'title_year_first_author' | null
       tags: string[]
     }>
     warnings: {
@@ -48,12 +56,40 @@ type CovidenceAnalyzeResponse = {
         conflictingFileRoles: CovidenceFileRole[]
         sourceRows: Array<{fileRole: CovidenceFileRole; rowNumber: number; sourceFileName: string}>
       }>
+      duplicateStudyGroups: Array<{
+        articleCount: number
+        studyKey: string
+        studyKeySource: 'doi' | 'pmid' | 'reference_id' | 'title_year_first_author'
+        records: Array<{
+          articleKey: string
+          articleKeySource: 'covidence' | 'doi' | 'pmid' | 'reference_id' | 'title_year_first_author' | 'unkeyed'
+          covidenceIds: string[]
+          referenceIds: string[]
+          seededHumanJudgmentAnswer: 'yes' | 'no' | null
+          stageMembership: Record<CovidenceFileRole, boolean>
+          title: string | null
+        }>
+      }>
       missingMatches: Array<{
         articleKey: string | null
-        articleKeySource: 'doi' | 'pmid' | 'reference_id' | 'title_year_first_author' | null
+        articleKeySource: 'covidence' | 'doi' | 'pmid' | 'reference_id' | 'title_year_first_author' | null
         fileRole: Exclude<CovidenceFileRole, 'all'>
         rowNumber: number
         sourceFileName: string
+      }>
+      studyDecisionConflicts: Array<{
+        articleCount: number
+        studyKey: string
+        studyKeySource: 'doi' | 'pmid' | 'reference_id' | 'title_year_first_author'
+        records: Array<{
+          articleKey: string
+          articleKeySource: 'covidence' | 'doi' | 'pmid' | 'reference_id' | 'title_year_first_author' | 'unkeyed'
+          covidenceIds: string[]
+          referenceIds: string[]
+          seededHumanJudgmentAnswer: 'yes' | 'no' | null
+          stageMembership: Record<CovidenceFileRole, boolean>
+          title: string | null
+        }>
       }>
     }
   }
@@ -107,6 +143,7 @@ const covidenceRoleHintsByMode: Record<CovidenceImportMode, Record<CovidenceFile
 }
 const covidenceStageOrder: CovidenceFileRole[] = ['irrelevant', 'full_text', 'excluded', 'included']
 const covidenceAllRoles: CovidenceFileRole[] = ['all', 'irrelevant', 'full_text', 'excluded', 'included']
+const covidenceWarningPreviewLimit = 25
 const covidenceAnswerSetOptions: Array<{description: string; label: string; value: CovidencePromptAnswerSet}> = [
   {description: 'Use yes and no only.', label: 'Yes / No', value: 'yes|no'},
   {description: 'Allow an unsure answer for borderline studies.', label: 'Yes / No / Unsure', value: 'yes|no|unsure'},
@@ -149,6 +186,10 @@ const getStageMembershipLabels = (mode: CovidenceImportMode, stageMembership: Re
   return covidenceStageOrder.flatMap((fileRole) => {
     return stageMembership[fileRole] ? [getCovidenceRoleLabel(mode, fileRole)] : []
   })
+}
+
+const getCovidenceSeedLabel = (answer: 'yes' | 'no' | null) => {
+  return answer === 'yes' ? 'Seeded yes' : answer === 'no' ? 'Seeded no' : 'Unanswered'
 }
 
 const fetchModels = async (): Promise<ModelOption[]> => {
@@ -710,16 +751,28 @@ const AdminCovidenceImport = () => {
 
               <Show when={analysis()}>
                 <div class="space-y-6">
-                  <div class="grid gap-3 sm:grid-cols-2">
+                  <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                     <div class="rounded-2xl bg-stone-50 p-4">
-                      <p class="text-xs font-medium uppercase tracking-wide text-stone-500">Merged rows</p>
+                      <p class="text-xs font-medium uppercase tracking-wide text-stone-500">Imported records</p>
                       <p class="mt-2 text-2xl font-semibold text-stone-900">{analysis()?.counts.mergedRowCount ?? 0}</p>
                     </div>
                     <div class="rounded-2xl bg-stone-50 p-4">
-                      <p class="text-xs font-medium uppercase tracking-wide text-stone-500">Warnings</p>
+                      <p class="text-xs font-medium uppercase tracking-wide text-stone-500">Study groups</p>
+                      <p class="mt-2 text-2xl font-semibold text-stone-900">
+                        {analysis()?.counts.studyGroupCount ?? 0}
+                      </p>
+                    </div>
+                    <div class="rounded-2xl bg-stone-50 p-4">
+                      <p class="text-xs font-medium uppercase tracking-wide text-stone-500">Duplicate groups</p>
+                      <p class="mt-2 text-2xl font-semibold text-stone-900">
+                        {analysis()?.counts.duplicateStudyGroupCount ?? 0}
+                      </p>
+                    </div>
+                    <div class="rounded-2xl bg-stone-50 p-4">
+                      <p class="text-xs font-medium uppercase tracking-wide text-stone-500">Conflict groups</p>
                       <p class="mt-2 text-2xl font-semibold text-stone-900">
                         {(analysis()?.counts.conflictingStageMembershipCount ?? 0)
-                          + (analysis()?.counts.missingMatchCount ?? 0)}
+                          + (analysis()?.counts.studyDecisionConflictCount ?? 0)}
                       </p>
                     </div>
                     <div class="rounded-2xl bg-stone-50 p-4">
@@ -759,7 +812,9 @@ const AdminCovidenceImport = () => {
                       <Show
                         when={
                           (analysis()?.warnings.conflictingStageMemberships.length ?? 0) === 0
+                          && (analysis()?.warnings.duplicateStudyGroups.length ?? 0) === 0
                           && (analysis()?.warnings.missingMatches.length ?? 0) === 0
+                          && (analysis()?.warnings.studyDecisionConflicts.length ?? 0) === 0
                         }
                       >
                         <span class="rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-800">
@@ -770,9 +825,14 @@ const AdminCovidenceImport = () => {
 
                     <Show when={(analysis()?.warnings.conflictingStageMemberships.length ?? 0) > 0}>
                       <div class="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-                        <p class="text-sm font-semibold text-amber-900">Conflicting stage memberships</p>
+                        <p class="text-sm font-semibold text-amber-900">Same-record stage conflicts</p>
                         <div class="mt-3 space-y-2 text-sm text-amber-900">
-                          <For each={analysis()?.warnings.conflictingStageMemberships ?? []}>
+                          <For
+                            each={(analysis()?.warnings.conflictingStageMemberships ?? []).slice(
+                              0,
+                              covidenceWarningPreviewLimit,
+                            )}
+                          >
                             {(warning) => {
                               return (
                                 <div class="rounded-xl bg-white/70 px-3 py-2">
@@ -786,11 +846,82 @@ const AdminCovidenceImport = () => {
                       </div>
                     </Show>
 
+                    <Show when={(analysis()?.warnings.studyDecisionConflicts.length ?? 0) > 0}>
+                      <div class="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+                        <p class="text-sm font-semibold text-rose-900">Duplicate study decision conflicts</p>
+                        <div class="mt-3 space-y-3 text-sm text-rose-900">
+                          <For
+                            each={(analysis()?.warnings.studyDecisionConflicts ?? []).slice(
+                              0,
+                              covidenceWarningPreviewLimit,
+                            )}
+                          >
+                            {(warning) => {
+                              return (
+                                <div class="rounded-xl bg-white/70 px-3 py-3">
+                                  <p class="font-medium">{warning.studyKey}</p>
+                                  <p class="text-xs text-rose-800">
+                                    {warning.articleCount} records share this study key
+                                  </p>
+                                  <div class="mt-2 space-y-2">
+                                    <For each={warning.records}>
+                                      {(record) => {
+                                        return (
+                                          <div class="rounded-lg border border-rose-100 bg-white px-3 py-2">
+                                            <p class="font-medium text-stone-900">
+                                              {record.title ?? record.articleKey}
+                                            </p>
+                                            <p class="text-xs text-rose-800">
+                                              {getCovidenceSeedLabel(record.seededHumanJudgmentAnswer)}
+                                            </p>
+                                            <p class="mt-1 text-xs text-stone-600">
+                                              {getStageMembershipLabels(mode(), record.stageMembership).join(', ')}
+                                            </p>
+                                          </div>
+                                        )
+                                      }}
+                                    </For>
+                                  </div>
+                                </div>
+                              )
+                            }}
+                          </For>
+                        </div>
+                      </div>
+                    </Show>
+
+                    <Show when={(analysis()?.warnings.duplicateStudyGroups.length ?? 0) > 0}>
+                      <div class="rounded-2xl border border-stone-200 bg-stone-50 p-4">
+                        <p class="text-sm font-semibold text-stone-900">Duplicate study groups</p>
+                        <div class="mt-3 space-y-3 text-sm text-stone-800">
+                          <For
+                            each={(analysis()?.warnings.duplicateStudyGroups ?? []).slice(
+                              0,
+                              covidenceWarningPreviewLimit,
+                            )}
+                          >
+                            {(warning) => {
+                              return (
+                                <div class="rounded-xl bg-white px-3 py-3">
+                                  <p class="font-medium">{warning.studyKey}</p>
+                                  <p class="text-xs text-stone-500">
+                                    {warning.articleCount} records share this study key
+                                  </p>
+                                </div>
+                              )
+                            }}
+                          </For>
+                        </div>
+                      </div>
+                    </Show>
+
                     <Show when={(analysis()?.warnings.missingMatches.length ?? 0) > 0}>
                       <div class="rounded-2xl border border-rose-200 bg-rose-50 p-4">
                         <p class="text-sm font-semibold text-rose-900">Rows missing a canonical match</p>
                         <div class="mt-3 space-y-2 text-sm text-rose-900">
-                          <For each={analysis()?.warnings.missingMatches ?? []}>
+                          <For
+                            each={(analysis()?.warnings.missingMatches ?? []).slice(0, covidenceWarningPreviewLimit)}
+                          >
                             {(warning) => {
                               return (
                                 <div class="rounded-xl bg-white/70 px-3 py-2">
@@ -821,8 +952,21 @@ const AdminCovidenceImport = () => {
                                   <p class="mt-1 text-xs uppercase tracking-wide text-stone-500">
                                     {row.articleKeySource.replaceAll('_', ' ')} · {row.articleKey}
                                   </p>
+                                  <Show when={row.studyKey}>
+                                    <p class="mt-1 text-xs text-stone-500">Study key: {row.studyKey}</p>
+                                  </Show>
                                 </div>
                                 <div class="flex flex-wrap gap-2">
+                                  <Show when={row.hasStudyDecisionConflict}>
+                                    <span class="rounded-full bg-rose-100 px-2.5 py-1 text-xs font-medium text-rose-800">
+                                      Conflict
+                                    </span>
+                                  </Show>
+                                  <Show when={row.hasDuplicateStudyRecords}>
+                                    <span class="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-800">
+                                      Duplicate x{row.duplicateStudyRecordCount}
+                                    </span>
+                                  </Show>
                                   <For each={getStageMembershipLabels(mode(), row.stageMembership)}>
                                     {(label) => {
                                       return (

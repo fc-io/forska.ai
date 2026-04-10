@@ -15,6 +15,8 @@ export const projectsRoutesGetArticlesReviewsCount = new Elysia().post(
       await assertProjectIsActive(body.projectId)
 
       const result = await countArticlesReviewsFromOlap({
+        hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
+        hasStudyDecisionConflict: body.hasStudyDecisionConflict,
         projectId: body.projectId,
         limit,
         from: body.from,
@@ -35,6 +37,8 @@ export const projectsRoutesGetArticlesReviewsCount = new Elysia().post(
   {
     body: t.Object({
       from: t.Optional(t.String()),
+      hasDuplicateStudyRecords: t.Optional(t.Boolean()),
+      hasStudyDecisionConflict: t.Optional(t.Boolean()),
       limit: t.String(),
       projectId: t.String(),
       prompts: t.Record(t.String(), t.Array(t.String())),

@@ -6,6 +6,7 @@ import {For, Show} from 'solid-js'
 
 import {getArticleUrl} from '../../../../app/utils/getArticleUrl.ts'
 import {getJournalDisplayTitleForArticle} from '../../../../utils/getJournalDisplayTitleForArticle.ts'
+import {ReviewsCovidenceBadges} from '../reviewsCovidenceBadges.tsx'
 import {ReviewsArticlesPdfCell} from './reviewsArticlesPdfCell.tsx'
 
 declare module '@tanstack/solid-table' {
@@ -120,13 +121,16 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
     maxSize: 600,
     cell: (info) => {
       return (
-        <Link
-          to="/projects/$id/reviews-llm/$articleId"
-          params={{id: info.table.options.meta?.projectId?.() || '', articleId: info.row.original.id}}
-          class="text-blue-600 hover:underline"
-        >
-          {(info.getValue() as string) || 'Untitled'}
-        </Link>
+        <div>
+          <Link
+            to="/projects/$id/reviews-llm/$articleId"
+            params={{id: info.table.options.meta?.projectId?.() || '', articleId: info.row.original.id}}
+            class="text-blue-600 hover:underline"
+          >
+            {(info.getValue() as string) || 'Untitled'}
+          </Link>
+          <ReviewsCovidenceBadges sourceMetadata={info.row.original.sourceMetadata} />
+        </div>
       )
     },
   },

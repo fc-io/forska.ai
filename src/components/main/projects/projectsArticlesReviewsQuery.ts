@@ -6,6 +6,8 @@ const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
 
 export const createArticlesReviewsQueryOptions = (
   projectId: string,
+  covidenceDuplicatesOnly: Accessor<boolean>,
+  covidenceConflictsOnly: Accessor<boolean>,
   promptFilters: Accessor<Record<string, string[] | null>>,
   currentPage: Accessor<number>,
   currentCursor: Accessor<string | null | undefined>,
@@ -33,6 +35,8 @@ export const createArticlesReviewsQueryOptions = (
     queryKey: [
       'project-articles-reviews',
       projectId,
+      covidenceDuplicatesOnly(),
+      covidenceConflictsOnly(),
       promptFilters(),
       currentPage(),
       currentCursor() ?? null,
@@ -60,6 +64,8 @@ export const createArticlesReviewsQueryOptions = (
         page: String(currentPage()),
         limit: String(pageLimit()),
         projectId,
+        hasDuplicateStudyRecords: covidenceDuplicatesOnly() ? true : undefined,
+        hasStudyDecisionConflict: covidenceConflictsOnly() ? true : undefined,
         prompts,
         cursor: cursor ?? undefined,
         from: from ?? undefined,

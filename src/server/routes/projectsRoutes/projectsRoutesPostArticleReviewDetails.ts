@@ -7,6 +7,7 @@ import type {
   ProjectMartRefreshStatus,
   PromptRecord,
 } from '../../../db/schemaTypes.ts'
+import {getArticleSourceMetadataValue} from '../../../utils/articleSourceMetadata.ts'
 import {getProviderModelMetadataOptions} from '../../providers/providerModelMetadata.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getJsonValue, getQuotedStringList} from '../../services/appQueryHelpers.ts'
@@ -142,6 +143,20 @@ type AssessmentRow = {
   assessmentComment: string | null
   createdAt: unknown
   updatedAt: unknown
+}
+
+type CovidenceRelatedRecord = {
+  articleExternalId: string | null
+  articleTitle: string
+  covidenceIds: string[]
+  hasDuplicateStudyRecords: boolean
+  hasStudyDecisionConflict: boolean
+  id: string
+  isCurrentRecord: boolean
+  isSeededHumanJudgmentAnswered: boolean
+  referenceIds: string[]
+  seededHumanJudgmentAnswer: string | null
+  stageMembership: Record<string, boolean>
 }
 
 const getPromptValue = (row: {promptOriginalText: string; promptHeading: string | null}) => {
@@ -368,6 +383,51 @@ const getAssessmentValue = (row: {
   }
 }
 
+const getCovidenceRelatedRecords = async (params: {
+  articleId: string
+  importRoute: string | null
+  studyKey: string | null
+}): Promise<CovidenceRelatedRecord[]> => {
+  if (!params.importRoute || !params.studyKey) {
+    return []
+  }
+
+  const rows = await getAppDatabaseService().queryJson<{
+    articleExternalId: string | null
+    articleTitle: string
+    id: string
+    sourceMetadata: unknown
+  }>(`
+    SELECT
+      id,
+      article_id AS articleExternalId,
+      article_title AS articleTitle,
+      source_metadata AS sourceMetadata
+    FROM app.article
+    WHERE import_route = '${escapeSqlString(params.importRoute)}'
+      AND json_extract_string(source_metadata, '$.covidence.studyKey') = '${escapeSqlString(params.studyKey)}'
+    ORDER BY article_title ASC, id ASC
+  `)
+
+  return rows.map((row) => {
+    const covidence = getArticleSourceMetadataValue(getJsonValue(row.sourceMetadata))?.covidence
+
+    return {
+      articleExternalId: row.articleExternalId,
+      articleTitle: row.articleTitle,
+      covidenceIds: covidence?.covidenceIds ?? [],
+      hasDuplicateStudyRecords: covidence?.hasDuplicateStudyRecords ?? false,
+      hasStudyDecisionConflict: covidence?.hasStudyDecisionConflict ?? false,
+      id: row.id,
+      isCurrentRecord: row.id === params.articleId,
+      isSeededHumanJudgmentAnswered: covidence?.isSeededHumanJudgmentAnswered ?? false,
+      referenceIds: covidence?.referenceIds ?? [],
+      seededHumanJudgmentAnswer: covidence?.seededHumanJudgmentAnswer ?? null,
+      stageMembership: covidence?.stageMembership ?? {},
+    }
+  })
+}
+
 export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
   '/api/projectsreview',
   async ({body}) => {
@@ -381,6 +441,12 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       if (!article) {
         throw new Error('Article not found')
       }
+
+      const covidenceRelatedRecordsPromise = getCovidenceRelatedRecords({
+        articleId,
+        importRoute: article.importRoute,
+        studyKey: article.sourceMetadata?.covidence?.studyKey ?? null,
+      })
 
       const projectPromptRowsPromise: Promise<ProjectPromptRow[]> = getAppDatabaseService()
         .queryJson<ProjectPromptRow>(`
@@ -697,8 +763,11 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         }
       }
 
+      const covidenceRelatedRecords = await covidenceRelatedRecordsPromise
+
       return {
         article,
+        covidenceRelatedRecords,
         martFreshness,
         prompts: projectPromptRows,
         judgments: judgmentsWithPlaceholders,

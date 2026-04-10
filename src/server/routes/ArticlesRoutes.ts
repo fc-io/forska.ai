@@ -185,6 +185,8 @@ export const articlesRoutes = new Elysia()
         body.from,
         body.to,
         body.search,
+        body.hasDuplicateStudyRecords,
+        body.hasStudyDecisionConflict,
       )
 
       const job = startPdfFetchJob({articleIds, concurrency: body.concurrency, forceRefetch: body.forceRefetch})
@@ -197,6 +199,8 @@ export const articlesRoutes = new Elysia()
         sourceProjectId: t.String(),
         listType: t.Union([t.Literal('llm'), t.Literal('human'), t.Literal('both'), t.Literal('unassessed')]),
         prompts: t.Optional(t.Record(t.String(), t.Array(t.String()))),
+        hasDuplicateStudyRecords: t.Optional(t.Boolean()),
+        hasStudyDecisionConflict: t.Optional(t.Boolean()),
         from: t.Optional(t.String()),
         to: t.Optional(t.String()),
         search: t.Optional(t.String()),
@@ -241,6 +245,12 @@ export const articlesRoutes = new Elysia()
         effectiveFromDate ? `a.article_created_at >= ${getTimestampLiteral(effectiveFromDate)}` : null,
         effectiveToDate ? `a.article_created_at <= ${getTimestampLiteral(effectiveToDate)}` : null,
         searchTitle ? `LOWER(COALESCE(a.article_title, '')) LIKE LOWER('%${escapeSqlString(searchTitle)}%')` : null,
+        body.hasDuplicateStudyRecords
+          ? "LOWER(COALESCE(json_extract_string(a.source_metadata, '$.covidence.hasDuplicateStudyRecords'), 'false')) = 'true'"
+          : null,
+        body.hasStudyDecisionConflict
+          ? "LOWER(COALESCE(json_extract_string(a.source_metadata, '$.covidence.hasStudyDecisionConflict'), 'false')) = 'true'"
+          : null,
       ].filter((part): part is string => {
         return part !== null
       })
@@ -263,6 +273,8 @@ export const articlesRoutes = new Elysia()
     {
       body: t.Object({
         projectId: t.String(),
+        hasDuplicateStudyRecords: t.Optional(t.Boolean()),
+        hasStudyDecisionConflict: t.Optional(t.Boolean()),
         from: t.Optional(t.String()),
         to: t.Optional(t.String()),
         search: t.Optional(t.String()),

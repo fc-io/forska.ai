@@ -25,7 +25,14 @@ interface ReviewsPaginationControlsProps {
   sourceProjectId?: string
   listType?: ListType
   // Provide filter payload for server-side selection when selecting across all matching
-  buildAddAllFilterBody?: () => {prompts?: Record<string, string[]>; from?: string; to?: string; search?: string}
+  buildAddAllFilterBody?: () => {
+    prompts?: Record<string, string[]>
+    from?: string
+    to?: string
+    search?: string
+    hasDuplicateStudyRecords?: true
+    hasStudyDecisionConflict?: true
+  }
 }
 
 export const ReviewsPaginationControls = (props: ReviewsPaginationControlsProps) => {

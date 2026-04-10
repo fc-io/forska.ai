@@ -209,6 +209,34 @@ const getDuckdbArticleSourceMetadata = (sourceMetadata: unknown) => {
   return getArticleSourceMetadataValue(getDuckdbJsonValue(sourceMetadata)) ?? emptyArticleSourceMetadata
 }
 
+const getMatchesCovidenceSourceMetadataFilters = (params: {
+  sourceMetadata: ArticleSourceMetadata
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
+}) => {
+  return (
+    (!params.hasDuplicateStudyRecords || params.sourceMetadata.covidence?.hasDuplicateStudyRecords === true)
+    && (!params.hasStudyDecisionConflict || params.sourceMetadata.covidence?.hasStudyDecisionConflict === true)
+  )
+}
+
+const getDuckdbCovidenceMetadataWhereParts = (params: {
+  sourceMetadataExpression: string
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
+}) => {
+  return [
+    params.hasDuplicateStudyRecords
+      ? `LOWER(COALESCE(json_extract_string(${params.sourceMetadataExpression}, '$.covidence.hasDuplicateStudyRecords'), 'false')) = 'true'`
+      : null,
+    params.hasStudyDecisionConflict
+      ? `LOWER(COALESCE(json_extract_string(${params.sourceMetadataExpression}, '$.covidence.hasStudyDecisionConflict'), 'false')) = 'true'`
+      : null,
+  ].filter((part): part is string => {
+    return part !== null
+  })
+}
+
 const getDuckdbStringArrayValue = (value: unknown) => {
   const normalizedValue = getDuckdbJsonValue(value)
   return Array.isArray(normalizedValue)
@@ -474,6 +502,8 @@ const getDuckdbServingPostingSelection = (scope: ProjectOlapScope, prompts?: Rec
 
 const getDuckdbServingBaseWhereParts = (params: {
   scope: ProjectOlapScope
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
   from?: string | null
   to?: string | null
   search?: string | null
@@ -510,6 +540,11 @@ const getDuckdbServingBaseWhereParts = (params: {
           )
         )`
       : null,
+    ...getDuckdbCovidenceMetadataWhereParts({
+      sourceMetadataExpression: 's.source_metadata',
+      hasDuplicateStudyRecords: params.hasDuplicateStudyRecords,
+      hasStudyDecisionConflict: params.hasStudyDecisionConflict,
+    }),
   ].filter((part): part is string => {
     return part !== null
   })
@@ -527,6 +562,8 @@ const getDuckdbServingWhereParts = (params: {
 
 const getDuckdbServingReviewWhereParts = (params: {
   scope: ProjectOlapScope
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
   from?: string | null
   to?: string | null
   search?: string | null
@@ -553,6 +590,8 @@ const getReviewedPageRowsFromServingMart = async (params: {
   scope: ProjectOlapScope
   page: number
   limit: number
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
   from?: string | null
   to?: string | null
   search?: string | null
@@ -637,6 +676,8 @@ const getReviewedPageRowsFromServingMart = async (params: {
 
 const countReviewedServingRows = async (params: {
   scope: ProjectOlapScope
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
   from?: string | null
   to?: string | null
   search?: string | null
@@ -669,6 +710,8 @@ const getBothPageRowsFromServing = async (params: {
   scope: ProjectOlapScope
   page: number
   limit: number
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
   from?: string | null
   to?: string | null
   search?: string | null
@@ -740,6 +783,8 @@ const getBothPageRowsFromServing = async (params: {
 
 const countUnassessedRowsFromServing = async (params: {
   scope: ProjectOlapScope
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
   from?: string | null
   to?: string | null
   search?: string | null
@@ -766,6 +811,8 @@ const getUnassessedRowsFromServing = async (params: {
   scope: ProjectOlapScope
   limit?: number
   offset?: number
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
   from?: string | null
   to?: string | null
   search?: string | null
@@ -876,6 +923,8 @@ const getUnassessedCandidateRowsFromServing = async (params: {
 
 const getReviewedArticleIdsFromServing = async (params: {
   scope: ProjectOlapScope
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
   from?: string | null
   to?: string | null
   search?: string | null
@@ -916,6 +965,8 @@ const getReviewedArticleIdsFromServing = async (params: {
 
 const getHumanReviewedArticleIdsFromServing = async (params: {
   scope: ProjectOlapScope
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
   from?: string | null
   to?: string | null
   search?: string | null
@@ -1176,6 +1227,8 @@ const getLlmJudgmentRowsFromReviewDetailMart = async (
 
 const getDuckdbReviewedArticlesQuerySections = (params: {
   scope: ProjectOlapScope
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
   from?: string | null
   to?: string | null
   search?: string | null
@@ -1198,6 +1251,11 @@ const getDuckdbReviewedArticlesQuerySections = (params: {
     trimmedSearch
       ? `LOWER(COALESCE(a.article_title, '')) LIKE LOWER(${getDuckdbSqlString(`%${trimmedSearch}%`)})`
       : null,
+    ...getDuckdbCovidenceMetadataWhereParts({
+      sourceMetadataExpression: 'a.source_metadata',
+      hasDuplicateStudyRecords: params.hasDuplicateStudyRecords,
+      hasStudyDecisionConflict: params.hasStudyDecisionConflict,
+    }),
   ].filter((part): part is string => {
     return part !== null
   })
@@ -1240,6 +1298,8 @@ const getDuckdbReviewedPageRows = async (params: {
   scope: ProjectOlapScope
   page: number
   limit: number
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
   from?: string | null
   to?: string | null
   search?: string | null
@@ -1314,6 +1374,8 @@ const getDuckdbReviewedPageRows = async (params: {
 
 const countDuckdbReviewedArticles = async (params: {
   scope: ProjectOlapScope
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
   from?: string | null
   to?: string | null
   search?: string | null
@@ -1610,6 +1672,8 @@ const getProjectOlapScope = async (projectId: string): Promise<ProjectOlapScope 
 
 const getScopedArticles = async (params: {
   scope: ProjectOlapScope
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
   from?: string | null
   to?: string | null
   search?: string | null
@@ -1684,8 +1748,17 @@ const getScopedArticles = async (params: {
       sourceMetadata: getDuckdbArticleSourceMetadata(row.sourceMetadata),
     }
   })
+  const covidenceFilteredRows = normalizedRows.filter((row) => {
+    return getMatchesCovidenceSourceMetadataFilters({
+      sourceMetadata: row.sourceMetadata,
+      hasDuplicateStudyRecords: params.hasDuplicateStudyRecords,
+      hasStudyDecisionConflict: params.hasStudyDecisionConflict,
+    })
+  })
 
-  return params.orderBy === 'activity' ? sortArticlesByActivity(normalizedRows) : sortArticlesByCreated(normalizedRows)
+  return params.orderBy === 'activity'
+    ? sortArticlesByActivity(covidenceFilteredRows)
+    : sortArticlesByCreated(covidenceFilteredRows)
 }
 
 const rawUnassessedArticleWindowSize = 1000
@@ -1989,6 +2062,8 @@ const getHumanAnswerRows = async (scope: ProjectOlapScope, articleIds: string[])
 
 const getLlmReviewedArticleRows = async (params: {
   scope: ProjectOlapScope
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
   from?: string | null
   to?: string | null
   search?: string | null
@@ -2018,6 +2093,8 @@ const getLlmReviewedArticleRows = async (params: {
 
 const getUnassessedArticleRows = async (params: {
   scope: ProjectOlapScope
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
   from?: string | null
   to?: string | null
   search?: string | null
@@ -2258,6 +2335,8 @@ export const getDatabaseBasedFiltersFromDuckdb = async (
   if (!scope.modelId) {
     const scopedArticles = await getScopedArticles({
       scope,
+      hasDuplicateStudyRecords: params.hasDuplicateStudyRecords,
+      hasStudyDecisionConflict: params.hasStudyDecisionConflict,
       from: params.fromDate ? params.fromDate.toISOString().slice(0, 10) : null,
       to: params.toDate ? params.toDate.toISOString().slice(0, 10) : null,
       search: params.searchTitle,
@@ -2311,6 +2390,11 @@ export const getDatabaseBasedFiltersFromDuckdb = async (
       params.searchTitle.trim()
         ? `LOWER(COALESCE(serving.article_title, '')) LIKE LOWER(${getDuckdbSqlString(`%${params.searchTitle.trim()}%`)})`
         : null,
+      ...getDuckdbCovidenceMetadataWhereParts({
+        sourceMetadataExpression: 'serving.source_metadata',
+        hasDuplicateStudyRecords: params.hasDuplicateStudyRecords,
+        hasStudyDecisionConflict: params.hasStudyDecisionConflict,
+      }),
     ].filter((part): part is string => {
       return part !== null
     })
@@ -2368,6 +2452,11 @@ export const getDatabaseBasedFiltersFromDuckdb = async (
     params.searchTitle.trim()
       ? `LOWER(COALESCE(article.article_title, '')) LIKE LOWER(${getDuckdbSqlString(`%${params.searchTitle.trim()}%`)})`
       : null,
+    ...getDuckdbCovidenceMetadataWhereParts({
+      sourceMetadataExpression: 'article.source_metadata',
+      hasDuplicateStudyRecords: params.hasDuplicateStudyRecords,
+      hasStudyDecisionConflict: params.hasStudyDecisionConflict,
+    }),
   ].filter((part): part is string => {
     return part !== null
   })
@@ -2412,6 +2501,8 @@ export const getNumericFiltersFromDuckdb = async (params: DatabaseFilterParams):
   if (!scope.modelId) {
     const scopedArticles = await getScopedArticles({
       scope,
+      hasDuplicateStudyRecords: params.hasDuplicateStudyRecords,
+      hasStudyDecisionConflict: params.hasStudyDecisionConflict,
       from: params.fromDate ? params.fromDate.toISOString().slice(0, 10) : null,
       to: params.toDate ? params.toDate.toISOString().slice(0, 10) : null,
       search: params.searchTitle,
@@ -2467,6 +2558,11 @@ export const getNumericFiltersFromDuckdb = async (params: DatabaseFilterParams):
       params.searchTitle.trim()
         ? `LOWER(COALESCE(serving.article_title, '')) LIKE LOWER(${getDuckdbSqlString(`%${params.searchTitle.trim()}%`)})`
         : null,
+      ...getDuckdbCovidenceMetadataWhereParts({
+        sourceMetadataExpression: 'serving.source_metadata',
+        hasDuplicateStudyRecords: params.hasDuplicateStudyRecords,
+        hasStudyDecisionConflict: params.hasStudyDecisionConflict,
+      }),
     ].filter((part): part is string => {
       return part !== null
     })
@@ -2528,6 +2624,11 @@ export const getNumericFiltersFromDuckdb = async (params: DatabaseFilterParams):
     params.searchTitle.trim()
       ? `LOWER(COALESCE(article.article_title, '')) LIKE LOWER(${getDuckdbSqlString(`%${params.searchTitle.trim()}%`)})`
       : null,
+    ...getDuckdbCovidenceMetadataWhereParts({
+      sourceMetadataExpression: 'article.source_metadata',
+      hasDuplicateStudyRecords: params.hasDuplicateStudyRecords,
+      hasStudyDecisionConflict: params.hasStudyDecisionConflict,
+    }),
   ].filter((part): part is string => {
     return part !== null
   })
@@ -2576,6 +2677,8 @@ export const getUnassessedCountFromDuckdb = async (params: UnassessedCountParams
   if (!params.preferRawFallback && (await getHasReviewArticleServingRows(scope))) {
     return countUnassessedRowsFromServing({
       scope,
+      hasDuplicateStudyRecords: params.hasDuplicateStudyRecords,
+      hasStudyDecisionConflict: params.hasStudyDecisionConflict,
       from: params.projectDateFrom ? params.projectDateFrom.toISOString().slice(0, 10) : null,
       to: params.projectDateTo ? params.projectDateTo.toISOString().slice(0, 10) : null,
     })
@@ -2583,6 +2686,8 @@ export const getUnassessedCountFromDuckdb = async (params: UnassessedCountParams
 
   const {scopedArticles} = await getUnassessedArticleRows({
     scope,
+    hasDuplicateStudyRecords: params.hasDuplicateStudyRecords,
+    hasStudyDecisionConflict: params.hasStudyDecisionConflict,
     from: params.projectDateFrom ? params.projectDateFrom.toISOString().slice(0, 10) : null,
     to: params.projectDateTo ? params.projectDateTo.toISOString().slice(0, 10) : null,
   })
@@ -2604,6 +2709,8 @@ export const getUnassessedArticlesFromDuckdb = async (
       scope,
       limit: params.limit,
       offset: params.offset,
+      hasDuplicateStudyRecords: params.hasDuplicateStudyRecords,
+      hasStudyDecisionConflict: params.hasStudyDecisionConflict,
       from: params.projectDateFrom ? params.projectDateFrom.toISOString().slice(0, 10) : null,
       to: params.projectDateTo ? params.projectDateTo.toISOString().slice(0, 10) : null,
       search: params.search,
@@ -2625,6 +2732,8 @@ export const getUnassessedArticlesFromDuckdb = async (
 
   const rawResult = await getUnassessedArticleRows({
     scope,
+    hasDuplicateStudyRecords: params.hasDuplicateStudyRecords,
+    hasStudyDecisionConflict: params.hasStudyDecisionConflict,
     from: params.projectDateFrom ? params.projectDateFrom.toISOString().slice(0, 10) : null,
     to: params.projectDateTo ? params.projectDateTo.toISOString().slice(0, 10) : null,
     search: params.search,
@@ -2743,6 +2852,8 @@ export const getUnassessedPairsFromDuckdb = async (params: UnassessedPairsParams
 
 const getHumanReviewedArticleIdsFromDuckdbRaw = async (params: {
   scope: ProjectOlapScope
+  hasDuplicateStudyRecords?: boolean
+  hasStudyDecisionConflict?: boolean
   from?: string | null
   to?: string | null
   search?: string | null
@@ -2773,7 +2884,16 @@ const getHumanReviewedArticleIdsFromDuckdbRaw = async (params: {
 }
 
 export const selectArticleIdsByFilterDuckdb = async (...args: SelectArticleIdsArgs): Promise<string[]> => {
-  const [sourceProjectId, listType, promptsFilter, from, to, search] = args
+  const [
+    sourceProjectId,
+    listType,
+    promptsFilter,
+    from,
+    to,
+    search,
+    hasDuplicateStudyRecords,
+    hasStudyDecisionConflict,
+  ] = args
   const scope = await getProjectOlapScope(sourceProjectId)
 
   if (!scope || scope.promptIds.length === 0) {
@@ -2782,18 +2902,47 @@ export const selectArticleIdsByFilterDuckdb = async (...args: SelectArticleIdsAr
 
   if (listType === 'human') {
     return scope.modelId && (await getHasReviewArticleServingRows(scope))
-      ? getHumanReviewedArticleIdsFromServing({scope, from, to, search})
-      : getHumanReviewedArticleIdsFromDuckdbRaw({scope, from, to, search})
+      ? getHumanReviewedArticleIdsFromServing({
+          scope,
+          from,
+          to,
+          search,
+          hasDuplicateStudyRecords,
+          hasStudyDecisionConflict,
+        })
+      : getHumanReviewedArticleIdsFromDuckdbRaw({
+          scope,
+          from,
+          to,
+          search,
+          hasDuplicateStudyRecords,
+          hasStudyDecisionConflict,
+        })
   }
 
   if (scope.modelId) {
     if (await getHasReviewArticleServingRows(scope)) {
       if (listType === 'llm') {
-        return getReviewedArticleIdsFromServing({scope, from, to, search, prompts: promptsFilter})
+        return getReviewedArticleIdsFromServing({
+          scope,
+          from,
+          to,
+          search,
+          prompts: promptsFilter,
+          hasDuplicateStudyRecords,
+          hasStudyDecisionConflict,
+        })
       }
 
       if (listType === 'unassessed') {
-        const {rows} = await getUnassessedRowsFromServing({scope, from, to, search})
+        const {rows} = await getUnassessedRowsFromServing({
+          scope,
+          from,
+          to,
+          search,
+          hasDuplicateStudyRecords,
+          hasStudyDecisionConflict,
+        })
         return rows.map((article) => {
           return article.id
         })
@@ -2805,20 +2954,37 @@ export const selectArticleIdsByFilterDuckdb = async (...args: SelectArticleIdsAr
         to,
         search,
         prompts: promptsFilter,
+        hasDuplicateStudyRecords,
+        hasStudyDecisionConflict,
         requireAllHumanAnswers: true,
         requireAllLlmJudgments: true,
       })
     }
 
     if (listType === 'llm') {
-      const {scopedArticles} = await getLlmReviewedArticleRows({scope, from, to, search, prompts: promptsFilter})
+      const {scopedArticles} = await getLlmReviewedArticleRows({
+        scope,
+        from,
+        to,
+        search,
+        prompts: promptsFilter,
+        hasDuplicateStudyRecords,
+        hasStudyDecisionConflict,
+      })
       return scopedArticles.map((article) => {
         return article.id
       })
     }
 
     if (listType === 'unassessed') {
-      const {scopedArticles} = await getUnassessedArticleRows({scope, from, to, search})
+      const {scopedArticles} = await getUnassessedArticleRows({
+        scope,
+        from,
+        to,
+        search,
+        hasDuplicateStudyRecords,
+        hasStudyDecisionConflict,
+      })
       return scopedArticles.map((article) => {
         return article.id
       })
@@ -2830,9 +2996,20 @@ export const selectArticleIdsByFilterDuckdb = async (...args: SelectArticleIdsAr
       to,
       search,
       prompts: promptsFilter,
+      hasDuplicateStudyRecords,
+      hasStudyDecisionConflict,
       requireAllLlmJudgments: true,
     })
-    const humanArticleIds = new Set(await getHumanReviewedArticleIdsFromDuckdbRaw({scope, from, to, search}))
+    const humanArticleIds = new Set(
+      await getHumanReviewedArticleIdsFromDuckdbRaw({
+        scope,
+        from,
+        to,
+        search,
+        hasDuplicateStudyRecords,
+        hasStudyDecisionConflict,
+      }),
+    )
 
     return scopedArticles
       .filter((article) => {
@@ -2844,14 +3021,29 @@ export const selectArticleIdsByFilterDuckdb = async (...args: SelectArticleIdsAr
   }
 
   if (listType === 'llm') {
-    const {scopedArticles} = await getLlmReviewedArticleRows({scope, from, to, search, prompts: promptsFilter})
+    const {scopedArticles} = await getLlmReviewedArticleRows({
+      scope,
+      from,
+      to,
+      search,
+      prompts: promptsFilter,
+      hasDuplicateStudyRecords,
+      hasStudyDecisionConflict,
+    })
     return scopedArticles.map((article) => {
       return article.id
     })
   }
 
   if (listType === 'unassessed') {
-    const {scopedArticles} = await getUnassessedArticleRows({scope, from, to, search})
+    const {scopedArticles} = await getUnassessedArticleRows({
+      scope,
+      from,
+      to,
+      search,
+      hasDuplicateStudyRecords,
+      hasStudyDecisionConflict,
+    })
     return scopedArticles.map((article) => {
       return article.id
     })
@@ -2863,9 +3055,20 @@ export const selectArticleIdsByFilterDuckdb = async (...args: SelectArticleIdsAr
     to,
     search,
     prompts: promptsFilter,
+    hasDuplicateStudyRecords,
+    hasStudyDecisionConflict,
     requireAllLlmJudgments: true,
   })
-  const humanArticleIds = new Set(await getHumanReviewedArticleIdsFromDuckdbRaw({scope, from, to, search}))
+  const humanArticleIds = new Set(
+    await getHumanReviewedArticleIdsFromDuckdbRaw({
+      scope,
+      from,
+      to,
+      search,
+      hasDuplicateStudyRecords,
+      hasStudyDecisionConflict,
+    }),
+  )
 
   return scopedArticles
     .filter((article) => {

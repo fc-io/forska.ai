@@ -8,6 +8,8 @@ import {ReviewsArticlesTable} from './reviewsArticlesTable.tsx'
 
 interface ReviewsArticlesBothTableContainerProps {
   projectId: string
+  covidenceDuplicatesOnly: Accessor<boolean>
+  covidenceConflictsOnly: Accessor<boolean>
   promptFilters: Accessor<Record<string, string[] | null>>
   currentPage: Accessor<number>
   setCurrentPage: Setter<number>
@@ -24,6 +26,8 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
   createEffect(() => {
     // Access to track dependencies
     props.promptFilters()
+    props.covidenceDuplicatesOnly()
+    props.covidenceConflictsOnly()
     props.fromDate()
     props.toDate()
     props.searchTitle()
@@ -35,6 +39,8 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
   const articlesQuery = useQuery(() => {
     return createArticlesBothReviewsQueryOptions(
       props.projectId,
+      props.covidenceDuplicatesOnly,
+      props.covidenceConflictsOnly,
       props.promptFilters,
       props.currentPage,
       props.pageLimit,
@@ -105,11 +111,20 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
                     const from = props.fromDate().trim()
                     const to = props.toDate().trim()
                     const search = (props.searchTitle() || '').trim()
-                    const body: {prompts?: Record<string, string[]>; from?: string; to?: string; search?: string} = {}
+                    const body: {
+                      prompts?: Record<string, string[]>
+                      from?: string
+                      to?: string
+                      search?: string
+                      hasDuplicateStudyRecords?: true
+                      hasStudyDecisionConflict?: true
+                    } = {}
                     if (Object.keys(prompts).length > 0) body.prompts = prompts
                     if (from) body.from = from
                     if (to) body.to = to
                     if (search) body.search = search
+                    if (props.covidenceDuplicatesOnly()) body.hasDuplicateStudyRecords = true
+                    if (props.covidenceConflictsOnly()) body.hasStudyDecisionConflict = true
                     return body
                   }}
                 />
@@ -159,11 +174,20 @@ export const ReviewsArticlesBothTableContainer = (props: ReviewsArticlesBothTabl
                     const from = props.fromDate().trim()
                     const to = props.toDate().trim()
                     const search = (props.searchTitle() || '').trim()
-                    const body: {prompts?: Record<string, string[]>; from?: string; to?: string; search?: string} = {}
+                    const body: {
+                      prompts?: Record<string, string[]>
+                      from?: string
+                      to?: string
+                      search?: string
+                      hasDuplicateStudyRecords?: true
+                      hasStudyDecisionConflict?: true
+                    } = {}
                     if (Object.keys(prompts).length > 0) body.prompts = prompts
                     if (from) body.from = from
                     if (to) body.to = to
                     if (search) body.search = search
+                    if (props.covidenceDuplicatesOnly()) body.hasDuplicateStudyRecords = true
+                    if (props.covidenceConflictsOnly()) body.hasStudyDecisionConflict = true
                     return body
                   }}
                 />

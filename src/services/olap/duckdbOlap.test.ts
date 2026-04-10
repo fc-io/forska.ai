@@ -503,6 +503,7 @@ test('queryArticlesReviewsFromDuckdb uses review article serving details when th
     preprintHostLabel: 'Research Square',
     isPreprint: true,
     fullTextLinks: [],
+    covidence: null,
   })
 })
 

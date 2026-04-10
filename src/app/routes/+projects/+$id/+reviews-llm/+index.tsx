@@ -108,6 +108,10 @@ const Reviews = () => {
 
         <ReviewsFilterControls
           projectId={params().id}
+          covidenceDuplicatesOnly={filters.covidenceDuplicatesOnly()}
+          setCovidenceDuplicatesOnly={filters.setCovidenceDuplicatesOnly}
+          covidenceConflictsOnly={filters.covidenceConflictsOnly()}
+          setCovidenceConflictsOnly={filters.setCovidenceConflictsOnly}
           promptFilters={filters.promptFilters}
           setPromptFilters={filters.setPromptFilters}
           pageLimit={filters.pageLimit}
@@ -125,6 +129,8 @@ const Reviews = () => {
 
         <ReviewsArticlesTableContainer
           projectId={params().id}
+          covidenceDuplicatesOnly={filters.covidenceDuplicatesOnly}
+          covidenceConflictsOnly={filters.covidenceConflictsOnly}
           promptFilters={filters.promptFilters}
           currentPage={filters.currentPage}
           setCurrentPage={filters.setCurrentPage}

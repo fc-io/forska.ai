@@ -68,6 +68,7 @@ test('reads normalized source metadata values', () => {
         documentStyle: null,
       },
     ],
+    covidence: null,
   })
 })
 
@@ -97,5 +98,57 @@ test('infers known preprint hosts from doi prefixes', () => {
     preprintHostLabel: 'Research Square',
     isPreprint: true,
     fullTextLinks: [],
+  })
+})
+
+test('reads covidence source metadata values', () => {
+  expect(
+    getArticleSourceMetadataValue({
+      journalTitle: 'BMJ',
+      covidence: {
+        articleKey: 'covidence:#5001',
+        articleKeySource: 'covidence',
+        recordKey: 'covidence:#5001',
+        recordKeySource: 'covidence',
+        studyKey: 'doi:10.1000/example',
+        studyKeySource: 'doi',
+        mode: 'title_abstract',
+        sourceFileNames: ['screen.csv', 'irrelevant.csv'],
+        stageMembership: {all: true, excluded: false, full_text: false, included: false, irrelevant: true},
+        tags: ['not rct'],
+        covidenceIds: ['#5001'],
+        referenceIds: ['12345'],
+        duplicateStudyRecordCount: 2,
+        hasDuplicateStudyRecords: true,
+        hasStudyDecisionConflict: true,
+        seededHumanJudgmentAnswer: 'no',
+        isSeededHumanJudgmentAnswered: true,
+      },
+    }),
+  ).toEqual({
+    journalTitle: 'BMJ',
+    preprintSource: null,
+    preprintHostLabel: null,
+    isPreprint: false,
+    fullTextLinks: [],
+    covidence: {
+      articleKey: 'covidence:#5001',
+      articleKeySource: 'covidence',
+      recordKey: 'covidence:#5001',
+      recordKeySource: 'covidence',
+      studyKey: 'doi:10.1000/example',
+      studyKeySource: 'doi',
+      mode: 'title_abstract',
+      sourceFileNames: ['screen.csv', 'irrelevant.csv'],
+      stageMembership: {all: true, excluded: false, full_text: false, included: false, irrelevant: true},
+      tags: ['not rct'],
+      covidenceIds: ['#5001'],
+      referenceIds: ['12345'],
+      duplicateStudyRecordCount: 2,
+      hasDuplicateStudyRecords: true,
+      hasStudyDecisionConflict: true,
+      seededHumanJudgmentAnswer: 'no',
+      isSeededHumanJudgmentAnswered: true,
+    },
   })
 })

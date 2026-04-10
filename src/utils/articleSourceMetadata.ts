@@ -8,12 +8,41 @@ export type ArticleSourceLink = {
   documentStyle: string | null
 }
 
+type ArticleCovidenceStageMembership = {
+  all: boolean
+  excluded: boolean
+  full_text: boolean
+  included: boolean
+  irrelevant: boolean
+}
+
+export type ArticleCovidenceSourceMetadata = {
+  articleKey: string
+  articleKeySource: string | null
+  recordKey: string
+  recordKeySource: string | null
+  studyKey: string | null
+  studyKeySource: string | null
+  mode: string | null
+  sourceFileNames: string[]
+  stageMembership: ArticleCovidenceStageMembership
+  tags: string[]
+  covidenceIds: string[]
+  referenceIds: string[]
+  duplicateStudyRecordCount: number
+  hasDuplicateStudyRecords: boolean
+  hasStudyDecisionConflict: boolean
+  seededHumanJudgmentAnswer: string | null
+  isSeededHumanJudgmentAnswered: boolean
+}
+
 export type ArticleSourceMetadata = {
   journalTitle: string | null
   preprintSource: string | null
   preprintHostLabel: string | null
   isPreprint: boolean
   fullTextLinks: ArticleSourceLink[]
+  covidence?: ArticleCovidenceSourceMetadata | null
 }
 
 export const emptyArticleSourceMetadata: ArticleSourceMetadata = {
@@ -256,6 +285,73 @@ const getSourceMetadataLinks = (value: unknown) => {
     })
 }
 
+const getBooleanAtPath = (value: unknown, path: string[]) => {
+  const resolved = getValueAtPath(value, path)
+
+  return typeof resolved === 'boolean'
+    ? resolved
+    : typeof resolved === 'number'
+      ? resolved !== 0
+      : typeof resolved === 'string'
+        ? resolved.trim().toLowerCase() === 'true'
+        : false
+}
+
+const getStringArrayAtPath = (value: unknown, path: string[]) => {
+  return getArrayAtPath(value, path)
+    .map((entry) => {
+      return asNonEmptyString(entry)
+    })
+    .filter((entry): entry is string => {
+      return entry !== null
+    })
+}
+
+const getCovidenceStageMembershipValue = (value: unknown): ArticleCovidenceStageMembership => {
+  return {
+    all: getBooleanAtPath(value, ['all']),
+    excluded: getBooleanAtPath(value, ['excluded']),
+    full_text: getBooleanAtPath(value, ['full_text']),
+    included: getBooleanAtPath(value, ['included']),
+    irrelevant: getBooleanAtPath(value, ['irrelevant']),
+  }
+}
+
+const getCovidenceSourceMetadataValue = (value: unknown): ArticleCovidenceSourceMetadata | null => {
+  const record = isRecord(value) ? value : null
+
+  if (!record) {
+    return null
+  }
+
+  const articleKey = asNonEmptyString(record.articleKey)
+  const recordKey = asNonEmptyString(record.recordKey) ?? articleKey
+
+  if (!recordKey) {
+    return null
+  }
+
+  return {
+    articleKey: articleKey ?? recordKey,
+    articleKeySource: asNonEmptyString(record.articleKeySource),
+    recordKey,
+    recordKeySource: asNonEmptyString(record.recordKeySource) ?? asNonEmptyString(record.articleKeySource),
+    studyKey: asNonEmptyString(record.studyKey),
+    studyKeySource: asNonEmptyString(record.studyKeySource),
+    mode: asNonEmptyString(record.mode),
+    sourceFileNames: getStringArrayAtPath(record, ['sourceFileNames']),
+    stageMembership: getCovidenceStageMembershipValue(record.stageMembership),
+    tags: getStringArrayAtPath(record, ['tags']),
+    covidenceIds: getStringArrayAtPath(record, ['covidenceIds']),
+    referenceIds: getStringArrayAtPath(record, ['referenceIds']),
+    duplicateStudyRecordCount: Math.max(1, Number.parseInt(String(record.duplicateStudyRecordCount ?? '1'), 10) || 1),
+    hasDuplicateStudyRecords: getBooleanAtPath(record, ['hasDuplicateStudyRecords']),
+    hasStudyDecisionConflict: getBooleanAtPath(record, ['hasStudyDecisionConflict']),
+    seededHumanJudgmentAnswer: asNonEmptyString(record.seededHumanJudgmentAnswer),
+    isSeededHumanJudgmentAnswered: getBooleanAtPath(record, ['isSeededHumanJudgmentAnswered']),
+  }
+}
+
 export const getOriginalDoi = (originalData: unknown) => {
   return normalizeDoi(getStringAtPath(originalData, ['doi']))
 }
@@ -317,6 +413,7 @@ export const getArticleSourceMetadataValue = (value: unknown) => {
     preprintHostLabel: getPreprintHostLabelCandidate(record.preprintHostLabel),
     isPreprint: Boolean(record.isPreprint),
     fullTextLinks: getSourceMetadataLinks(record.fullTextLinks),
+    covidence: getCovidenceSourceMetadataValue(record.covidence),
   } satisfies ArticleSourceMetadata
 
   return metadata.journalTitle
@@ -324,6 +421,7 @@ export const getArticleSourceMetadataValue = (value: unknown) => {
     || metadata.preprintHostLabel
     || metadata.isPreprint
     || metadata.fullTextLinks.length > 0
+    || metadata.covidence
     ? metadata
     : null
 }

@@ -25,6 +25,8 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
 
       const fromDate = query?.from ? new Date(`${query.from}T00:00:00.000Z`) : null
       const toDate = query?.to ? new Date(`${query.to}T23:59:59.999Z`) : null
+      const hasDuplicateStudyRecords = query?.covidenceDuplicates === '1'
+      const hasStudyDecisionConflict = query?.covidenceConflicts === '1'
       const searchTitle = typeof query?.search === 'string' ? query.search.trim() : ''
 
       // Get all prompts for this project with their type information
@@ -56,6 +58,8 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
           ? getDatabaseBasedFiltersFromOlap({
               projectId: query.projectId,
               prompts: analyzedPrompts,
+              hasDuplicateStudyRecords,
+              hasStudyDecisionConflict,
               fromDate,
               toDate,
               searchTitle,
@@ -65,6 +69,8 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
           ? getNumericFiltersFromOlap({
               projectId: query.projectId,
               prompts: analyzedPrompts,
+              hasDuplicateStudyRecords,
+              hasStudyDecisionConflict,
               fromDate,
               toDate,
               searchTitle,
@@ -123,6 +129,8 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
   {
     query: t.Object({
       projectId: t.String(),
+      covidenceConflicts: t.Optional(t.String()),
+      covidenceDuplicates: t.Optional(t.String()),
       from: t.Optional(t.String()),
       to: t.Optional(t.String()),
       search: t.Optional(t.String()),

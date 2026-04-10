@@ -6,6 +6,8 @@ const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
 
 export const createArticlesUnassessedQueryOptions = (
   projectId: string,
+  covidenceDuplicatesOnly: Accessor<boolean>,
+  covidenceConflictsOnly: Accessor<boolean>,
   currentPage: Accessor<number>,
   pageLimit: Accessor<number>,
   fromDateStr: Accessor<string>,
@@ -31,6 +33,8 @@ export const createArticlesUnassessedQueryOptions = (
     queryKey: [
       'project-articles-unassessed',
       projectId,
+      covidenceDuplicatesOnly(),
+      covidenceConflictsOnly(),
       currentPage(),
       pageLimit(),
       validFrom(),
@@ -46,6 +50,8 @@ export const createArticlesUnassessedQueryOptions = (
         page: String(currentPage()),
         limit: String(pageLimit()),
         projectId,
+        hasDuplicateStudyRecords: covidenceDuplicatesOnly() ? true : undefined,
+        hasStudyDecisionConflict: covidenceConflictsOnly() ? true : undefined,
         from: from ?? undefined,
         to: to ?? undefined,
         search: search || undefined,

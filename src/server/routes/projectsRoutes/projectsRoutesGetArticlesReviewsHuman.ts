@@ -104,6 +104,12 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
         fromDate ? `a.article_created_at >= ${getTimestampLiteral(fromDate)}` : null,
         toDate ? `a.article_created_at <= ${getTimestampLiteral(toDate)}` : null,
         searchTitle ? `LOWER(COALESCE(a.article_title, '')) LIKE LOWER('%${escapeSqlString(searchTitle)}%')` : null,
+        body.hasDuplicateStudyRecords
+          ? "LOWER(COALESCE(json_extract_string(a.source_metadata, '$.covidence.hasDuplicateStudyRecords'), 'false')) = 'true'"
+          : null,
+        body.hasStudyDecisionConflict
+          ? "LOWER(COALESCE(json_extract_string(a.source_metadata, '$.covidence.hasStudyDecisionConflict'), 'false')) = 'true'"
+          : null,
       ].filter((part): part is string => {
         return part !== null
       })
@@ -208,6 +214,8 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
   {
     body: t.Object({
       from: t.Optional(t.String()),
+      hasDuplicateStudyRecords: t.Optional(t.Boolean()),
+      hasStudyDecisionConflict: t.Optional(t.Boolean()),
       limit: t.String(),
       page: t.String(),
       projectId: t.String(),

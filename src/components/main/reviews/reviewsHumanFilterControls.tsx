@@ -7,6 +7,10 @@ import {apiClient} from '../../../services/apiClient.ts'
 
 interface ReviewsHumanFilterControlsProps {
   projectId: string
+  covidenceDuplicatesOnly: boolean
+  setCovidenceDuplicatesOnly: Setter<boolean>
+  covidenceConflictsOnly: boolean
+  setCovidenceConflictsOnly: Setter<boolean>
   promptFilters: () => Record<string, string[] | null>
   setPromptFilters: Setter<Record<string, string[] | null>>
   pageLimit: () => number
@@ -43,6 +47,8 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
       queryKey: [
         'project-articles-human-reviews-filters',
         props.projectId,
+        props.covidenceDuplicatesOnly,
+        props.covidenceConflictsOnly,
         validFrom(),
         validTo(),
         (props.appliedSearchTitle || '').trim() || null,
@@ -55,6 +61,8 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
         const response = await apiClient.api.articlesreviewshumanfilters.get({
           query: {
             projectId: props.projectId,
+            covidenceConflicts: props.covidenceConflictsOnly ? '1' : undefined,
+            covidenceDuplicates: props.covidenceDuplicatesOnly ? '1' : undefined,
             from: from ?? undefined,
             to: to ?? undefined,
             search: search || undefined,
@@ -189,6 +197,32 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
               <option value="500">500</option>
             </select>
           </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-4 py-4 border-b w-full">
+          <label class="inline-flex items-center gap-2 text-sm font-medium text-gray-700">
+            <input
+              type="checkbox"
+              checked={props.covidenceDuplicatesOnly}
+              onChange={(e) => {
+                props.setCovidenceDuplicatesOnly(e.currentTarget.checked)
+                props.setCurrentPage(1)
+              }}
+              class="h-4 w-4 rounded border-gray-300"
+            />
+            <span>Covidence duplicates only</span>
+          </label>
+          <label class="inline-flex items-center gap-2 text-sm font-medium text-gray-700">
+            <input
+              type="checkbox"
+              checked={props.covidenceConflictsOnly}
+              onChange={(e) => {
+                props.setCovidenceConflictsOnly(e.currentTarget.checked)
+                props.setCurrentPage(1)
+              }}
+              class="h-4 w-4 rounded border-gray-300"
+            />
+            <span>Covidence conflicts only</span>
+          </label>
         </div>
         <Show when={!props.hidePromptSelectors && filtersQuery.data}>
           {(data) => {
