@@ -1,0 +1,130 @@
+{
+  "name": "LLM Down / Misconfigured Endpoint Handling Plan",
+  "branchName": "ralph/llm-down-plan",
+  "description": "When the configured inference endpoint is down or misconfigured, Forska should emit a clear operator message, stop claiming and sending additional prompts for that provider connection, and resume only after a successful health probe.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Introduce structured inference endpoint failure classification",
+      "description": "As a developer, I want typed endpoint failure classification in the judge and connection health flow so that transport outages and endpoint misroutes pause a provider connection without turning prompt/content errors into provider-wide outages.",
+      "acceptanceCriteria": [
+        "`src/server/cron/judgmentsJobs/connectionHealth.ts`, `src/agent/judge.ts`, and `src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/processPromptWithLLM.ts` classify failures into explicit kinds including network unavailable, endpoint unavailable, endpoint misconfigured, rate limited, circuit open, and other.",
+        "OpenAI-compatible failures from required inference endpoints treat `404`, `405`, and `501` on `/v1/models`, `/v1/chat/completions`, or `/v1/responses` as endpoint-unavailable or endpoint-misconfigured instead of generic prompt aborts.",
+        "Propagated outage messages include provider kind, effective base URL, endpoint path, status code, and a likely cause, while `400` and `422` style prompt/content failures stay out of the outage path.",
+        "`bun test src/server/cron/judgmentsJobs/connectionHealth.test.ts` passes.",
+        "`bun test src/server/providers/adapters/createOpenAICompatibleAdapter.test.ts` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Replace failure-count-only gating with endpoint availability state",
+      "description": "As a developer, I want connection-scoped endpoint availability state keyed by provider connection and effective base URL so that the request runtime can pause work immediately when an endpoint is unavailable and recover cleanly after a probe succeeds.",
+      "acceptanceCriteria": [
+        "A new `src/server/cron/judgmentsJobs/judgmentEndpointAvailability.ts` tracks `healthy`, `cooldown`, `probing`, and `misconfigured` states by `providerConnectionId` plus effective base URL, along with last failure kind, last failure message, cooldown expiry, and any in-flight probe promise.",
+        "Explicit endpoint-unavailable or endpoint-misconfigured failures open the gate immediately, only one half-open probe can run at a time, and a successful probe clears the gate and resets failure history.",
+        "`src/server/cron/judgmentsJobs/judgmentsRequestRuntime.ts` consults the richer availability state instead of relying only on `isCircuitOpen(baseURL)` while staying the concurrency and slot-management layer.",
+        "`bun test src/server/cron/judgmentsJobs/connectionHealth.test.ts` passes.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-003",
+      "title": "Reuse provider adapter health probes for resume logic",
+      "description": "As an operator, I want Forska to reuse the existing provider health checks as the single source of truth for endpoint recovery so that paused dispatch resumes only after the endpoint proves it can serve model traffic again.",
+      "acceptanceCriteria": [
+        "`src/server/providers/providerHealthService.ts` and the new endpoint availability flow reuse `testProviderConnectionHealth(...)` and adapter `testConnection(...)` for health probes instead of adding a second bespoke protocol.",
+        "OpenAI-compatible probing remains `models.list()` based unless a transport-specific endpoint check is demonstrably more reliable, and probe failures are normalized into the same endpoint-availability message format used by runtime failures.",
+        "The latest probe failure is persisted through the existing provider health service path into `app.provider_connection.last_error` and `last_checked_at` so diagnostics and scheduler behavior report the same reason for a pause.",
+        "`bun test src/server/providers/adapters/createOpenAICompatibleAdapter.test.ts` passes.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-002"]
+    },
+    {
+      "id": "US-004",
+      "title": "Stop claiming and sending new prompts while the endpoint is down",
+      "description": "As a scheduler, I want to skip claim and send work for unavailable provider connections so that Forska avoids noisy retries, abort churn, and wasted prompt launches while an endpoint is paused.",
+      "acceptanceCriteria": [
+        "Before calling `getAndUpdateReadyPrompts(...)`, `src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.ts` checks endpoint availability and only claims prompts for `healthy` connections; `cooldown` and `misconfigured` states skip claim, and expired cooldown runs a single probe before dispatch resumes.",
+        "When availability flips to unavailable during a tick, connection-scoped dispatch stops launching additional not-yet-started prompts for that connection instead of eagerly starting the whole claimed batch with `Promise.allSettled(...)`.",
+        "Prompts already claimed for an unavailable endpoint are safely returned to `ready` and are not marked `judged`, preserving the existing retry-safe queue semantics.",
+        "Scheduler logs emit one clear skip message per pause window rather than one message per skipped prompt.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts` passes.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-002", "US-003"]
+    },
+    {
+      "id": "US-005",
+      "title": "Make operator-facing messages explicit and actionable",
+      "description": "As an operator, I want endpoint failures to explain what broke, where it broke, and that Forska has paused dispatch so that I can fix the misconfiguration quickly instead of interpreting opaque abort messages.",
+      "acceptanceCriteria": [
+        "`src/agent/judge.ts` and `src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/processPromptWithLLM.ts` replace opaque lines such as `Aborting: 404 NOT_FOUND` with endpoint-aware messages that include the failing base URL, endpoint path, status code, pause behavior, and next probe timing when known.",
+        "Per-prompt retry messages make it explicit that the prompt was requeued because the provider endpoint is unavailable and that no further prompts will be sent for that connection until the health check passes.",
+        "Any existing diagnostics or status payload touched for provider or job errors reuse the same actionable outage wording instead of inventing a second message shape.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts` passes.",
+        "`bun test src/server/cron/judgmentsJobs/connectionHealth.test.ts` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001", "US-004"]
+    },
+    {
+      "id": "US-006",
+      "title": "Add regression coverage for the exact misroute scenario",
+      "description": "As a maintainer, I want regression tests around the wrong-server-on-the-LLM-port scenario so that endpoint misroutes, recovery gating, and safe requeue behavior stay locked in as this scheduler evolves.",
+      "acceptanceCriteria": [
+        "`src/server/cron/judgmentsJobs/connectionHealth.test.ts` covers `404 NOT_FOUND` from OpenAI-compatible `/v1/chat/completions` as endpoint unavailable or misconfigured.",
+        "`src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts` covers dispatch blocking while unavailable, single-probe resume behavior after cooldown expiry, and reopening only after probe success.",
+        "`src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts` covers skipping new claims while unavailable, safe requeue of already claimed prompts, and avoiding provider-wide pauses for prompt/content errors.",
+        "`src/server/providers/adapters/createOpenAICompatibleAdapter.test.ts` covers OpenAI-compatible health-probe and `404` endpoint behavior.",
+        "`bun test src/server/cron/judgmentsJobs/connectionHealth.test.ts` passes.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts` passes.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts` passes.",
+        "`bun test src/server/providers/adapters/createOpenAICompatibleAdapter.test.ts` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001", "US-002", "US-003", "US-004", "US-005", "US-007"]
+    },
+    {
+      "id": "US-007",
+      "title": "Surface the paused state in diagnostics",
+      "description": "As an operator, I want diagnostics to expose paused endpoint state and retry timing so that I can see why dispatch is blocked without inspecting scheduler logs or inferring state from prompt churn.",
+      "acceptanceCriteria": [
+        "Existing judgments job diagnostics and provider admin or status payloads expose availability status, last failure kind, last failure message, cooldown remaining, and whether a probe is in progress.",
+        "The diagnostics view stays read-only and derives from the shared endpoint availability state instead of introducing a second independent source of truth.",
+        "Any surfaced provider status continues to align with `last_error` and runtime pause state coming from the provider health and endpoint availability flow.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts` passes.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-002", "US-003", "US-004"]
+    }
+  ]
+}
