@@ -3,6 +3,13 @@ import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {createEffect, createSignal, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../../../services/apiClient.ts'
+import {
+  builtInImportRouteOptions,
+  customImportRoutePlaceholder,
+  getBuiltInImportRouteValue,
+  getCustomImportRouteValue,
+  getResolvedImportRoute,
+} from '../dataSourceImportRouteOptions.ts'
 
 type StructuredFileConfig = {
   assetPath: string
@@ -180,6 +187,7 @@ const AdminEditDataSource = () => {
 
   const [title, setTitle] = createSignal('')
   const [description, setDescription] = createSignal('')
+  const [selectedBuiltInImportRoute, setSelectedBuiltInImportRoute] = createSignal('')
   const [importRoute, setImportRoute] = createSignal('')
   const [dateFrom, setDateFrom] = createSignal('')
   const [dateTo, setDateTo] = createSignal('')
@@ -223,7 +231,8 @@ const AdminEditDataSource = () => {
 
     setTitle(data.title)
     setDescription(data.description ?? '')
-    setImportRoute(data.importRoute ?? '')
+    setSelectedBuiltInImportRoute(getBuiltInImportRouteValue(data.importRoute))
+    setImportRoute(getCustomImportRouteValue(data.importRoute))
     setDateFrom(formatDateForInput(data.dateFrom))
     setDateTo(formatDateForInput(data.dateTo))
   })
@@ -254,10 +263,15 @@ const AdminEditDataSource = () => {
       return
     }
 
+    const resolvedImportRoute = getResolvedImportRoute({
+      customImportRoute: importRoute(),
+      selectedBuiltInImportRoute: selectedBuiltInImportRoute(),
+    })
+
     const payload = {
       title: title(),
       description: description().trim() === '' ? null : description(),
-      importRoute: importRoute().trim() === '' ? null : importRoute(),
+      importRoute: resolvedImportRoute,
       dateFrom: startDateResult.normalized,
       dateTo: endDateResult.normalized,
     }
@@ -266,7 +280,8 @@ const AdminEditDataSource = () => {
       .then((response) => {
         setTitle(response.title)
         setDescription(response.description ?? '')
-        setImportRoute(response.importRoute ?? '')
+        setSelectedBuiltInImportRoute(getBuiltInImportRouteValue(response.importRoute))
+        setImportRoute(getCustomImportRouteValue(response.importRoute))
         setDateFrom(formatDateForInput(response.dateFrom))
         setDateTo(formatDateForInput(response.dateTo))
         setSuccessMessage('Data source updated successfully.')
@@ -399,16 +414,45 @@ const AdminEditDataSource = () => {
               </div>
 
               <div>
-                <label class="block text-sm font-medium text-gray-700 mb-2">Import Route</label>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Built-in API Route</label>
+                <select
+                  value={selectedBuiltInImportRoute()}
+                  onChange={(event) => {
+                    const nextRoute = event.currentTarget.value
+                    setSelectedBuiltInImportRoute(nextRoute)
+                    if (nextRoute !== '') {
+                      setImportRoute('')
+                    }
+                  }}
+                  class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">None</option>
+                  <For each={builtInImportRouteOptions}>
+                    {(option) => {
+                      return <option value={option.value}>{option.label}</option>
+                    }}
+                  </For>
+                </select>
+              </div>
+
+              <div>
+                <label class="block text-sm font-medium text-gray-700 mb-2">Custom Import Route</label>
                 <input
                   type="text"
                   value={importRoute()}
                   onInput={(event) => {
-                    setImportRoute(event.currentTarget.value)
+                    const nextRoute = event.currentTarget.value
+                    setImportRoute(nextRoute)
+                    if (nextRoute.trim() !== '') {
+                      setSelectedBuiltInImportRoute('')
+                    }
                   }}
-                  placeholder="/api/imports/example"
+                  placeholder={customImportRoutePlaceholder}
                   class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
                 />
+                <p class="mt-2 text-sm text-gray-500">
+                  Use the custom field for non-standard routes such as <code>fhir:</code> imports.
+                </p>
               </div>
             </Show>
 

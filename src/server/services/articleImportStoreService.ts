@@ -123,12 +123,16 @@ const getNormalizedArticleImportRow = (row: ArticleImportStoreRow): ArticleImpor
   return {...row, doi, sourceMetadata}
 }
 
-const getArticleInsertValues = (rows: ArticleImportStoreRow[], includedKeys: PersistedArticleKey[]) => {
-  return rows
+const getArticleValues = (params: {
+  includedKeys: PersistedArticleKey[]
+  includeInternalId: boolean
+  rows: ArticleImportStoreRow[]
+}) => {
+  return params.rows
     .map((row) => {
       const values = [
-        crypto.randomUUID(),
-        ...includedKeys.map((key) => {
+        ...(params.includeInternalId ? [crypto.randomUUID()] : []),
+        ...params.includedKeys.map((key) => {
           return row[key] ?? null
         }),
       ]
@@ -142,17 +146,13 @@ const getArticleInsertValues = (rows: ArticleImportStoreRow[], includedKeys: Per
     .join(', ')
 }
 
-const getArticleMergeAssignments = (includedKeys: PersistedArticleKey[]) => {
-  return includedKeys
-    .filter((key) => {
-      return key !== 'articleId'
-    })
-    .map((key) => {
-      const columnName = articleColumnMap[key]
-      return `${columnName} = source.${columnName}`
-    })
-    .concat('updated_at = NOW()')
-    .join(', ')
+const getArticleSourceColumnNames = (params: {includedKeys: PersistedArticleKey[]; includeInternalId: boolean}) => {
+  return [
+    ...(params.includeInternalId ? ['id'] : []),
+    ...params.includedKeys.map((key) => {
+      return articleColumnMap[key]
+    }),
+  ]
 }
 
 const getImportRouteIds = async (tx: ArticleImportStoreTx, routes: string[]) => {
@@ -198,14 +198,56 @@ const ensureImportRoutes = async (tx: ArticleImportStoreTx, routes: string[]) =>
   return getImportRouteIds(tx, routes)
 }
 
+const getExistingArticleIds = async (tx: ArticleImportStoreTx, articleIds: string[]) => {
+  if (articleIds.length === 0) {
+    return new Set<string>()
+  }
+
+  const rows = await tx.queryJson<{articleId: string}>(`
+    SELECT article_id AS articleId
+    FROM app.article
+    WHERE article_id IN (${getQuotedStringList(articleIds).join(', ')})
+  `)
+
+  return new Set(
+    rows.map((row) => {
+      return row.articleId
+    }),
+  )
+}
+
+const insertImportedArticlesInTx = async (params: {
+  includedKeys: PersistedArticleKey[]
+  rows: ArticleImportStoreRow[]
+  tx: ArticleImportStoreTx
+}) => {
+  if (params.rows.length === 0) {
+    return
+  }
+
+  const columnNames = getArticleSourceColumnNames({includedKeys: params.includedKeys, includeInternalId: true})
+
+  await params.tx.run(`
+    INSERT INTO app.article (${columnNames.join(', ')})
+    VALUES ${getArticleValues({includedKeys: params.includedKeys, includeInternalId: true, rows: params.rows})}
+    ON CONFLICT(article_id) DO NOTHING
+  `)
+}
+
 const storeImportedArticlesInTx = async (tx: ArticleImportStoreTx, rows: ArticleImportStoreRow[]) => {
   if (rows.length === 0) {
     return {importRouteIds: [] as string[]}
   }
 
-  const normalizedRows = rows.map((row) => {
-    return getNormalizedArticleImportRow(row)
-  })
+  const normalizedRows = Array.from(
+    rows
+      .reduce<Map<string, ArticleImportStoreRow>>((acc, row) => {
+        const normalizedRow = getNormalizedArticleImportRow(row)
+        acc.set(normalizedRow.articleId, normalizedRow)
+        return acc
+      }, new Map())
+      .values(),
+  )
   const includedKeys = getIncludedArticleKeys(normalizedRows)
   const routes = Array.from(
     new Set(
@@ -218,26 +260,18 @@ const storeImportedArticlesInTx = async (tx: ArticleImportStoreTx, rows: Article
         }),
     ),
   )
-  const columnNames = [
-    'id',
-    ...includedKeys.map((key) => {
-      return articleColumnMap[key]
+  const existingArticleIds = await getExistingArticleIds(
+    tx,
+    normalizedRows.map((row) => {
+      return row.articleId
     }),
-  ]
-  await tx.run(`
-    MERGE INTO app.article AS target
-    USING (VALUES ${getArticleInsertValues(normalizedRows, includedKeys)}) AS source (${columnNames.join(', ')})
-    ON target.article_id = source.article_id
-    WHEN MATCHED THEN
-      UPDATE SET ${getArticleMergeAssignments(includedKeys)}
-    WHEN NOT MATCHED THEN
-      INSERT (${columnNames.join(', ')})
-      VALUES (${columnNames
-        .map((columnName) => {
-          return `source.${columnName}`
-        })
-        .join(', ')})
-  `)
+  )
+  const rowsToInsert = normalizedRows.filter((row) => {
+    return !existingArticleIds.has(row.articleId)
+  })
+
+  await insertImportedArticlesInTx({includedKeys, rows: rowsToInsert, tx})
+
   const upsertedArticles = await tx.queryJson<{id: string; articleId: string}>(`
     SELECT id, article_id AS articleId
     FROM app.article

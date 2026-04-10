@@ -1,7 +1,12 @@
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
-import {createSignal, Show} from 'solid-js'
+import {createSignal, For, Show} from 'solid-js'
 
 import {apiClient} from '../../../../services/apiClient.ts'
+import {
+  builtInImportRouteOptions,
+  customImportRoutePlaceholder,
+  getResolvedImportRoute,
+} from './dataSourceImportRouteOptions.ts'
 
 type ParsedDateResult = {date: Date | null; normalized: string | null; error: string | null}
 
@@ -28,6 +33,7 @@ const AdminCreateDataSource = () => {
 
   const [title, setTitle] = createSignal('')
   const [description, setDescription] = createSignal('')
+  const [selectedBuiltInImportRoute, setSelectedBuiltInImportRoute] = createSignal('')
   const [importRoute, setImportRoute] = createSignal('')
   const [dateFrom, setDateFrom] = createSignal('')
   const [dateTo, setDateTo] = createSignal('')
@@ -57,13 +63,18 @@ const AdminCreateDataSource = () => {
       return
     }
 
+    const resolvedImportRoute = getResolvedImportRoute({
+      customImportRoute: importRoute(),
+      selectedBuiltInImportRoute: selectedBuiltInImportRoute(),
+    })
+
     setIsSaving(true)
 
     try {
       const response = await apiClient.api.datasources.post({
         title: title(),
         description: description().trim() === '' ? undefined : description(),
-        importRoute: importRoute().trim() === '' ? undefined : importRoute(),
+        importRoute: resolvedImportRoute ?? undefined,
         dateFrom: startDateResult.normalized ?? undefined,
         dateTo: endDateResult.normalized ?? undefined,
       })
@@ -127,16 +138,45 @@ const AdminCreateDataSource = () => {
           </div>
 
           <div>
-            <label class="block text-sm font-medium text-gray-700 mb-2">Import Route</label>
+            <label class="block text-sm font-medium text-gray-700 mb-2">Built-in API Route</label>
+            <select
+              value={selectedBuiltInImportRoute()}
+              onChange={(event) => {
+                const nextRoute = event.currentTarget.value
+                setSelectedBuiltInImportRoute(nextRoute)
+                if (nextRoute !== '') {
+                  setImportRoute('')
+                }
+              }}
+              class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">None</option>
+              <For each={builtInImportRouteOptions}>
+                {(option) => {
+                  return <option value={option.value}>{option.label}</option>
+                }}
+              </For>
+            </select>
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-2">Custom Import Route</label>
             <input
               type="text"
               value={importRoute()}
               onInput={(event) => {
-                setImportRoute(event.currentTarget.value)
+                const nextRoute = event.currentTarget.value
+                setImportRoute(nextRoute)
+                if (nextRoute.trim() !== '') {
+                  setSelectedBuiltInImportRoute('')
+                }
               }}
-              placeholder="/api/datasources/import/arxiv or ... or fhir:sample-bulk-fhir-datasets-100-patients (maps to assets/sample-bulk-fhir-datasets-100-patients)"
+              placeholder={customImportRoutePlaceholder}
               class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
             />
+            <p class="mt-2 text-sm text-gray-500">
+              Use the custom field for non-standard routes such as <code>fhir:</code> imports.
+            </p>
           </div>
 
           <div>
