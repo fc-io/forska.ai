@@ -154,6 +154,9 @@ const getConnectionFailureMessage = ({
   return `Inference outage classified as ${kind} for provider=${providerLabel} baseURL=${effectiveBaseURL} endpoint=${endpointLabel} status=${statusLabel}. Likely cause: ${likelyCause}.`
 }
 
+const connectionFailureMessagePattern =
+  /^Inference outage classified as (network_unavailable|endpoint_unavailable|endpoint_misconfigured|rate_limited|circuit_open|other) for provider=(.*?) baseURL=(.*?) endpoint=(.*?) status=(.*?)\. Likely cause: (.*)\.$/
+
 export const classifyConnectionFailure = ({
   error,
   context,
@@ -198,6 +201,31 @@ export const classifyConnectionFailure = ({
       statusCode,
     }),
     providerKind: normalizedContext.providerKind,
+    shouldPauseConnection: kind !== 'other',
+    statusCode,
+  }
+}
+
+export const parseConnectionFailureMessage = (message: string): ConnectionFailure | null => {
+  const matched = message.match(connectionFailureMessagePattern)
+
+  if (!matched) {
+    return null
+  }
+
+  const [, kind, providerLabel, effectiveBaseURL, endpointLabel, statusLabel, likelyCause] = matched
+  const endpointPath = endpointLabel === '(none)' ? null : getNormalizedEndpointPath(endpointLabel)
+  const providerKind = providerLabel === 'unknown' ? null : getNormalizedProviderKind(providerLabel)
+  const parsedStatusCode = Number(statusLabel)
+  const statusCode = Number.isFinite(parsedStatusCode) ? parsedStatusCode : null
+
+  return {
+    effectiveBaseURL,
+    endpointPath,
+    kind: kind as ConnectionFailureKind,
+    likelyCause,
+    message,
+    providerKind,
     shouldPauseConnection: kind !== 'other',
     statusCode,
   }

@@ -1,12 +1,46 @@
-import {afterEach, expect, test} from 'bun:test'
+import {afterEach, expect, mock, test} from 'bun:test'
 
-import {
-  classifyConnectionFailure,
-  ConnectionError,
-  recordConnectionFailure,
-  recordConnectionSuccess,
-} from './connectionHealth.ts'
-import {resetJudgmentRequestRuntimeForTests, withJudgmentRequest} from './judgmentsRequestRuntime.ts'
+import {classifyConnectionFailure, ConnectionError, recordConnectionFailure} from './connectionHealth.ts'
+
+const providerConnectionRepositoryModulePath = new URL(
+  '../../providers/providerConnectionRepository.ts',
+  import.meta.url,
+).pathname
+const providerHealthServiceModulePath = new URL('../../providers/providerHealthService.ts', import.meta.url).pathname
+
+const getProviderConnection = mock(async (id: string) => {
+  return {
+    authMode: 'none' as const,
+    baseURL: 'http://fallback-runtime.test/v1',
+    config: {manualWorkerUrls: [], workerUrlMode: 'manual' as const},
+    createdAt: null,
+    enabled: true,
+    hasSecret: false,
+    id,
+    label: `Connection ${id}`,
+    lastCheckedAt: null,
+    lastError: null,
+    maxInflightRequests: null,
+    providerKind: 'openai' as const,
+    secretRef: null,
+    updatedAt: null,
+  }
+})
+const testProviderConnectionHealth = mock(async (_connection: unknown, _options: unknown) => {
+  return {lastError: null, message: 'ok', modelCount: 1, ok: true}
+})
+
+void mock.module(providerConnectionRepositoryModulePath, () => {
+  return {getProviderConnection}
+})
+
+void mock.module(providerHealthServiceModulePath, () => {
+  return {testProviderConnectionHealth}
+})
+
+const loadRuntime = () => {
+  return import('./judgmentsRequestRuntime.ts')
+}
 
 const flush = async (): Promise<void> => {
   await Promise.resolve()
@@ -26,14 +60,21 @@ const createSignal = () => {
   return {promise, resolve}
 }
 
-afterEach(() => {
+afterEach(async () => {
+  const {resetJudgmentRequestRuntimeForTests} = await loadRuntime()
   resetJudgmentRequestRuntimeForTests()
   Date.now = realDateNow
+  getProviderConnection.mockClear()
+  testProviderConnectionHealth.mockClear()
+  testProviderConnectionHealth.mockImplementation(async (_connection: unknown, _options: unknown) => {
+    return {lastError: null, message: 'ok', modelCount: 1, ok: true}
+  })
 })
 
 const realDateNow = Date.now
 
 test('fallback requests enforce provider caps and release after failure', async () => {
+  const {withJudgmentRequest} = await loadRuntime()
   const firstRelease = createSignal()
   let firstStarted = false
   let secondStarted = false
@@ -87,6 +128,7 @@ test('fallback requests enforce provider caps and release after failure', async 
 })
 
 test('worker requests enforce provider caps and release after success', async () => {
+  const {withJudgmentRequest} = await loadRuntime()
   const firstRelease = createSignal()
   let firstStarted = false
   let secondStarted = false
@@ -155,6 +197,7 @@ test('worker requests enforce provider caps and release after success', async ()
 })
 
 test('codex requests enforce saved provider caps per connection', async () => {
+  const {withJudgmentRequest} = await loadRuntime()
   const firstRelease = createSignal()
   let firstStarted = false
   let secondStarted = false
@@ -223,6 +266,7 @@ test('codex requests enforce saved provider caps per connection', async () => {
 })
 
 test('fallback endpoint availability blocks during cooldown, allows one probe, and resumes after probe success', async () => {
+  const {withJudgmentRequest} = await loadRuntime()
   let now = 1_000
   Date.now = () => {
     return now
@@ -263,6 +307,10 @@ test('fallback endpoint availability blocks during cooldown, allows one probe, a
   now += 30_001
 
   const probeRelease = createSignal()
+  testProviderConnectionHealth.mockImplementationOnce(async (_connection: unknown, _options: unknown) => {
+    await probeRelease.promise
+    return {lastError: null, message: 'ok', modelCount: 1, ok: true}
+  })
   let probeStarted = false
   let secondStarted = false
   let thirdStarted = false
@@ -279,13 +327,13 @@ test('fallback endpoint availability blocks during cooldown, allows one probe, a
     },
     async (baseURL) => {
       probeStarted = true
-      await probeRelease.promise
-      recordConnectionSuccess({effectiveBaseURL: baseURL, providerConnectionId})
+      expect(baseURL).toBe(fallbackBaseURL)
     },
   )
 
   await flush()
-  expect(probeStarted).toBe(true)
+  expect(probeStarted).toBe(false)
+  expect(testProviderConnectionHealth).toHaveBeenCalledTimes(1)
 
   let probingBlockedError: unknown = null
 
@@ -311,9 +359,11 @@ test('fallback endpoint availability blocks during cooldown, allows one probe, a
   expect(probingBlockedError).toBeInstanceOf(ConnectionError)
 
   expect(secondStarted).toBe(false)
+  expect(testProviderConnectionHealth.mock.calls[0]?.[1]).toEqual({effectiveBaseURL: fallbackBaseURL})
 
   probeRelease.resolve()
   await probeRequest
+  expect(probeStarted).toBe(true)
 
   await withJudgmentRequest(
     {
@@ -331,4 +381,53 @@ test('fallback endpoint availability blocks during cooldown, allows one probe, a
   )
 
   expect(thirdStarted).toBe(true)
+})
+
+test('failed resume probe blocks the real request and preserves the normalized failure', async () => {
+  const {withJudgmentRequest} = await loadRuntime()
+  let now = 1_000
+  Date.now = () => {
+    return now
+  }
+
+  const providerConnectionId = 'connection-failed-probe'
+  const fallbackBaseURL = 'http://failed-probe-runtime.test/v1'
+  const failure = classifyConnectionFailure({
+    context: {effectiveBaseURL: fallbackBaseURL, endpointPath: '/v1/chat/completions', providerKind: 'openai'},
+    error: {status: 503},
+  })
+
+  recordConnectionFailure({effectiveBaseURL: fallbackBaseURL, failure, providerConnectionId})
+  now += 30_001
+
+  testProviderConnectionHealth.mockImplementationOnce(async (_connection: unknown, _options: unknown) => {
+    return {lastError: failure.message, message: failure.message, modelCount: null, ok: false}
+  })
+
+  let runStarted = false
+  let probeError: unknown = null
+
+  try {
+    await withJudgmentRequest(
+      {
+        judgmentsJobId: 'job-failed-probe',
+        provider: 'openai',
+        fallbackBaseURL,
+        providerConnectionId,
+        providerMaxInflightRequests: 2,
+        providerUsesFamilyDefault: false,
+        workerUrls: [],
+      },
+      async () => {
+        runStarted = true
+      },
+    )
+  } catch (error) {
+    probeError = error
+  }
+
+  expect(runStarted).toBe(false)
+  expect(probeError).toBeInstanceOf(ConnectionError)
+  expect((probeError as ConnectionError).message).toBe(failure.message)
+  expect(testProviderConnectionHealth).toHaveBeenCalledTimes(1)
 })

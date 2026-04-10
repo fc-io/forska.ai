@@ -12,10 +12,14 @@ export const getProviderHealth = async (connection: ProviderConnectionRecord): P
 
 export const testProviderConnectionHealth = async (
   connection: ProviderConnectionRecord,
+  options?: {effectiveBaseURL?: string | null},
 ): Promise<ProviderHealthResult> => {
   const definition = requireProviderRegistryEntry(connection.providerKind)
   const runtimeCredentials = await resolveMatchedProviderRuntimeCredentials(connection)
-  const result = await definition.testConnection({connection, runtimeCredentials})
+  const result = await definition.testConnection({
+    connection,
+    runtimeCredentials: {...runtimeCredentials, baseURL: options?.effectiveBaseURL ?? runtimeCredentials.baseURL},
+  })
 
   await setProviderConnectionCheckState({id: connection.id, lastError: result.lastError})
 

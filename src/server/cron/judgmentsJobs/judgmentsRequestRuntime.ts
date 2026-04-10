@@ -1,5 +1,14 @@
+import {getProviderConnection} from '../../providers/providerConnectionRepository.ts'
+import {testProviderConnectionHealth} from '../../providers/providerHealthService.ts'
 import {workerLoadBalancer} from '../../utils/workerLoadBalancer.ts'
-import {ConnectionError, createConnectionError} from './connectionHealth.ts'
+import {
+  classifyConnectionFailure,
+  ConnectionError,
+  createConnectionError,
+  parseConnectionFailureMessage,
+  recordConnectionFailure,
+  recordConnectionSuccess,
+} from './connectionHealth.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {
@@ -8,7 +17,7 @@ import {
   resetJudgmentEndpointAvailabilityForTests,
 } from './judgmentEndpointAvailability.ts'
 
-type RequestSlot = {baseURL: string; release: () => void}
+type RequestSlot = {baseURL: string; release: () => void; requiresProbe: boolean}
 
 type RequestWaiter<T> = {resolve: (value: T) => void; reject: (error: unknown) => void}
 
@@ -121,6 +130,83 @@ const markRequestFinished = (judgmentsJobId: string): void => {
 
 const createProviderScopeConnectionContext = ({baseURL}: {baseURL: string}) => {
   return {effectiveBaseURL: baseURL, endpointPath: null, providerKind: null}
+}
+
+const getProviderProbeEndpointPath = (provider: string | null | undefined): string | null => {
+  return normalizeProvider(provider) === 'codex' ? null : '/v1/models'
+}
+
+const getProbeFailure = ({
+  baseURL,
+  message,
+  provider,
+}: {
+  baseURL: string
+  message: string
+  provider: string | null | undefined
+}) => {
+  const parsedFailure = parseConnectionFailureMessage(message)
+
+  if (parsedFailure) {
+    return parsedFailure
+  }
+
+  return classifyConnectionFailure({
+    context: {
+      effectiveBaseURL: baseURL,
+      endpointPath: getProviderProbeEndpointPath(provider),
+      providerKind: provider ?? null,
+    },
+    error: new Error(message),
+  })
+}
+
+const probeJudgmentEndpointAvailability = async ({
+  baseURL,
+  provider,
+  providerConnectionId,
+}: {
+  baseURL: string
+  provider: string | null | undefined
+  providerConnectionId: string | null
+}): Promise<void> => {
+  if (!providerConnectionId) {
+    return undefined
+  }
+
+  const connection = await getProviderConnection(providerConnectionId)
+
+  if (!connection) {
+    const failure = classifyConnectionFailure({
+      context: {
+        effectiveBaseURL: baseURL,
+        endpointPath: getProviderProbeEndpointPath(provider),
+        providerKind: provider ?? null,
+      },
+      error: new Error(`Provider connection ${providerConnectionId} not found for endpoint probe`),
+    })
+
+    recordConnectionFailure({effectiveBaseURL: baseURL, failure, providerConnectionId})
+
+    throw new ConnectionError(failure.message, failure.effectiveBaseURL, failure)
+  }
+
+  const result = await testProviderConnectionHealth(connection, {effectiveBaseURL: baseURL})
+
+  if (result.ok) {
+    recordConnectionSuccess({effectiveBaseURL: baseURL, providerConnectionId})
+    return undefined
+  }
+
+  const failure = getProbeFailure({
+    baseURL,
+    message: result.lastError ?? 'Provider connection health probe failed',
+    provider,
+  })
+
+  recordConnectionFailure({effectiveBaseURL: baseURL, failure, providerConnectionId})
+
+  throw new ConnectionError(failure.message, failure.effectiveBaseURL, failure)
 }
 
 const buildWorkerCircuitError = ({
@@ -270,7 +356,15 @@ const drainProviderScopedWaiters = (): void => {
   drainFallbackWaiters()
 }
 
-const buildWorkerSlot = (workerUrl: string, releaseProviderRequest: () => void): RequestSlot => {
+const buildWorkerSlot = ({
+  releaseProviderRequest,
+  requiresProbe,
+  workerUrl,
+}: {
+  releaseProviderRequest: () => void
+  requiresProbe: boolean
+  workerUrl: string
+}): RequestSlot => {
   return {
     baseURL: `${workerUrl}/v1`,
     release: () => {
@@ -278,6 +372,7 @@ const buildWorkerSlot = (workerUrl: string, releaseProviderRequest: () => void):
       releaseProviderRequest()
       drainProviderScopedWaiters()
     },
+    requiresProbe,
   }
 }
 
@@ -300,7 +395,10 @@ const tryAcquireWorkerSlot = ({
   })
 
   if (healthyWorkerUrl) {
-    return {slot: buildWorkerSlot(healthyWorkerUrl, releaseProviderRequest), type: 'slot'}
+    return {
+      slot: buildWorkerSlot({releaseProviderRequest, requiresProbe: false, workerUrl: healthyWorkerUrl}),
+      type: 'slot',
+    }
   }
 
   const probeEligibleWorkerUrl = workerLoadBalancer.acquireWorkerUrl({
@@ -324,7 +422,10 @@ const tryAcquireWorkerSlot = ({
     return hasHealthyWorker({providerScope, workerUrls}) ? {type: 'waiting'} : {type: 'blocked'}
   }
 
-  return {slot: buildWorkerSlot(probeEligibleWorkerUrl, releaseProviderRequest), type: 'slot'}
+  return {
+    slot: buildWorkerSlot({releaseProviderRequest, requiresProbe: true, workerUrl: probeEligibleWorkerUrl}),
+    type: 'slot',
+  }
 }
 
 const drainWorkerWaiters = (): void => {
@@ -395,6 +496,8 @@ const tryAcquireFallbackSlot = ({
     return releaseProviderRequest ? (releaseProviderRequest(), {type: 'waiting'}) : {type: 'waiting'}
   }
 
+  const requiresProbe = getEndpointAvailabilityState({baseURL, providerScope}).status !== 'healthy'
+
   if (!claimEndpointAvailability({baseURL, providerScope})) {
     releaseProviderRequest()
     return {type: 'blocked'}
@@ -410,6 +513,7 @@ const tryAcquireFallbackSlot = ({
         releaseProviderRequest()
         drainProviderScopedWaiters()
       },
+      requiresProbe,
     },
     type: 'slot',
   }
@@ -495,7 +599,7 @@ const acquireRequestSlot = async ({
 
   return normalizeProvider(provider) === 'codex'
     ? acquireCodexRequestRelease(providerScope).then((release) => {
-        return {baseURL: fallbackBaseURL, release}
+        return {baseURL: fallbackBaseURL, release, requiresProbe: false}
       })
     : workerUrls.length > 0
       ? acquireWorkerSlot({providerScope, workerUrls})
@@ -546,6 +650,10 @@ export const withJudgmentRequest = async <T>(
   markRequestStarted(judgmentsJobId)
 
   try {
+    if (slot.requiresProbe) {
+      await probeJudgmentEndpointAvailability({baseURL: slot.baseURL, provider, providerConnectionId})
+    }
+
     return await run(slot.baseURL)
   } finally {
     markRequestFinished(judgmentsJobId)
