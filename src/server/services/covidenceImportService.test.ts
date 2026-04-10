@@ -8,6 +8,7 @@ import {
   analyzeCovidencePackageFiles,
   buildCovidencePackageConfig,
   buildCovidencePromptDefinition,
+  buildCovidencePromptDefinitionsForEligibilityFields,
   deleteCovidencePackageFiles,
   getCovidencePackageConfig,
   getCovidencePackageCursor,
@@ -231,6 +232,47 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
     promptHeading: 'Covidence full-text screening',
     type: "'yes' | 'no'",
   })
+
+  expect(
+    buildCovidencePromptDefinitionsForEligibilityFields({
+      answerSet: 'yes|no|unsure',
+      eligibilityFields: [
+        {
+          disposition: 'include',
+          sectionKey: 'population',
+          sectionLabel: 'Population',
+          text: 'Adults with confirmed disease',
+        },
+        {disposition: 'exclude', sectionKey: 'other', sectionLabel: 'Other', text: 'Case reports'},
+      ],
+      mode: 'title_abstract',
+    }),
+  ).toEqual([
+    {
+      originalText: [
+        'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
+        '',
+        'Allowed answers: yes, no, unsure',
+        '',
+        'Include criterion (Population):',
+        'Adults with confirmed disease',
+      ].join('\n'),
+      promptHeading: 'Covidence title/abstract screening | Population | include',
+      type: "'yes' | 'no' | 'unsure'",
+    },
+    {
+      originalText: [
+        'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
+        '',
+        'Allowed answers: yes, no, unsure',
+        '',
+        'Exclude criterion (Other):',
+        'Case reports',
+      ].join('\n'),
+      promptHeading: 'Covidence title/abstract screening | Other | exclude',
+      type: "'yes' | 'no' | 'unsure'",
+    },
+  ])
 
   const duckdbPath = `/tmp/f1-covidence-prompt-${Date.now()}.duckdb`
   const result = globalThis.Bun.spawnSync(

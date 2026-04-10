@@ -5,7 +5,8 @@ type CovidenceCreateSuccessResult = {
   getDataSourceCallCount: number
   martQueueCalls?: Array<{importRouteIds: string[]; reason: string}>
   projectCalls?: Array<{importRoute: string; mode: string; promptId: string | null; title: string}>
-  promptCalls?: Array<{answerSet: string; exclusionCriteria: string; inclusionCriteria: string; mode: string}>
+  promptCalls?: Array<{promptDefinition: {originalText: string; promptHeading: string; type: string}}>
+  promptSyncCalls?: Array<{projectId: string; promptIds: string[]}>
   queueCalls: string[][]
   seedCalls?: Array<{importRoute: string; mode: string; projectId: string | null}>
   scopeCalls?: Array<{importRoute: string; mode: string; projectId: string | null}>
@@ -13,7 +14,7 @@ type CovidenceCreateSuccessResult = {
     data: {
       covidencePackageConfig: {kind: 'covidence_import'; mode: 'full_text' | 'title_abstract'; version: 1}
       covidenceProject?: {created: boolean; id: string; name: string} | null
-      covidencePrompt?: {created: boolean; id: string; promptHeading: string; type: string} | null
+      covidencePrompts?: Array<{created: boolean; id: string; promptHeading: string; type: string}>
     }
     success: boolean
   }
@@ -109,6 +110,12 @@ test('Covidence datasource create stores package files and persists cursor confi
 
         void mock.module(covidenceImportServiceModulePath, () => {
           return {
+            buildCovidencePromptDefinition: (params) => {
+              return {originalText: 'Prompt body', promptHeading: 'Prompt heading', type: params.answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'unsure'"}
+            },
+            buildCovidencePromptDefinitionsForEligibilityFields: () => {
+              return []
+            },
             buildCovidencePackageConfig: (params) => {
               return {kind: 'covidence_import', version: 1, ...params}
             },
@@ -169,6 +176,7 @@ test('Covidence datasource create stores package files and persists cursor confi
                 },
               ]
             },
+            syncCovidenceProjectPrompts: async () => {},
             syncCovidenceProjectScopeFromConfig: async (params) => {
               state.scopeCalls.push({importRoute: params.importRoute, mode: params.config.mode, projectId: params.projectId ?? null})
             },
@@ -323,6 +331,12 @@ test('Covidence datasource create deletes stored files when the transaction fail
 
         void mock.module(covidenceImportServiceModulePath, () => {
           return {
+            buildCovidencePromptDefinition: (params) => {
+              return {originalText: 'Prompt body', promptHeading: 'Prompt heading', type: params.answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'unsure'"}
+            },
+            buildCovidencePromptDefinitionsForEligibilityFields: () => {
+              return []
+            },
             buildCovidencePackageConfig: (params) => {
               return {kind: 'covidence_import', version: 1, ...params}
             },
@@ -364,6 +378,7 @@ test('Covidence datasource create deletes stored files when the transaction fail
                 },
               ]
             },
+            syncCovidenceProjectPrompts: async () => {},
             syncCovidenceProjectScopeFromConfig: async () => {},
           }
         })
@@ -437,6 +452,7 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
           martQueueCalls: [],
           projectCalls: [],
           promptCalls: [],
+          promptSyncCalls: [],
           queueCalls: [],
           seedCalls: [],
           scopeCalls: [],
@@ -485,6 +501,30 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
 
         void mock.module(covidenceImportServiceModulePath, () => {
           return {
+            buildCovidencePromptDefinition: (params) => {
+              return {originalText: 'Prompt body', promptHeading: 'Prompt heading', type: params.answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'unsure'"}
+            },
+            buildCovidencePromptDefinitionsForEligibilityFields: ({answerSet, eligibilityFields, mode}) => {
+              const question = mode === 'full_text'
+                ? 'Based on the inclusion and exclusion criteria, should this study be included in the final review?'
+                : 'Based on the inclusion and exclusion criteria, should this study be included for full text review?'
+              const allowedAnswers = answerSet === 'yes|no' ? 'yes, no' : 'yes, no, unsure'
+
+              return eligibilityFields.map((eligibilityField) => {
+                return {
+                  originalText: [
+                    question,
+                    '',
+                    'Allowed answers: ' + allowedAnswers,
+                    '',
+                    (eligibilityField.disposition === 'include' ? 'Include criterion' : 'Exclude criterion') + ' (' + eligibilityField.sectionLabel + '):',
+                    eligibilityField.text,
+                  ].join('\\n'),
+                  promptHeading: 'Covidence title/abstract screening | ' + eligibilityField.sectionLabel + ' | ' + eligibilityField.disposition,
+                  type: answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'unsure'",
+                }
+              })
+            },
             buildCovidencePackageConfig: (params) => {
               return {kind: 'covidence_import', version: 1, ...params}
             },
@@ -509,12 +549,14 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
             },
             getOrCreateCovidencePrompt: async (params) => {
               state.promptCalls.push({...params, tx: undefined})
+              const promptIndex = state.promptCalls.length
+
               return {
                 created: false,
-                id: 'prompt-existing',
-                originalText: 'Prompt body',
-                promptHeading: 'Covidence title/abstract screening',
-                type: "'yes' | 'no' | 'unsure'",
+                id: 'prompt-existing-' + promptIndex,
+                originalText: params.promptDefinition.originalText,
+                promptHeading: params.promptDefinition.promptHeading,
+                type: params.promptDefinition.type,
               }
             },
             importCovidencePackageFromConfig: async () => {
@@ -551,6 +593,9 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
                   sourceFileName: 'full_text.ris',
                 },
               ]
+            },
+            syncCovidenceProjectPrompts: async (params) => {
+              state.promptSyncCalls.push({...params, tx: undefined})
             },
             syncCovidenceProjectScopeFromConfig: async (params) => {
               state.scopeCalls.push({importRoute: params.importRoute, mode: params.config.mode, projectId: params.projectId ?? null})
@@ -619,17 +664,42 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
 
   expect(parsed.promptCalls).toEqual([
     {
-      answerSet: 'yes|no|unsure',
-      exclusionCriteria: 'Other:\nCase reports',
-      inclusionCriteria: 'Population:\nAdults with confirmed disease',
-      mode: 'title_abstract',
+      promptDefinition: {
+        originalText: [
+          'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
+          '',
+          'Allowed answers: yes, no, unsure',
+          '',
+          'Include criterion (Population):',
+          'Adults with confirmed disease',
+        ].join('\n'),
+        promptHeading: 'Covidence title/abstract screening | Population | include',
+        type: "'yes' | 'no' | 'unsure'",
+      },
+    },
+    {
+      promptDefinition: {
+        originalText: [
+          'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
+          '',
+          'Allowed answers: yes, no, unsure',
+          '',
+          'Exclude criterion (Other):',
+          'Case reports',
+        ].join('\n'),
+        promptHeading: 'Covidence title/abstract screening | Other | exclude',
+        type: "'yes' | 'no' | 'unsure'",
+      },
     },
   ])
   expect(parsed.projectCalls).toHaveLength(1)
   expect(parsed.projectCalls?.[0]?.importRoute).toContain('covidence:')
   expect(parsed.projectCalls?.[0]?.mode).toBe('title_abstract')
-  expect(parsed.projectCalls?.[0]?.promptId).toBe('prompt-existing')
+  expect(parsed.projectCalls?.[0]?.promptId).toBeNull()
   expect(parsed.projectCalls?.[0]?.title).toBe('Created datasource')
+  expect(parsed.promptSyncCalls).toEqual([
+    {projectId: 'project-created', promptIds: ['prompt-existing-1', 'prompt-existing-2']},
+  ])
   expect(parsed.seedCalls).toHaveLength(1)
   expect(parsed.seedCalls?.[0]?.importRoute).toContain('covidence:')
   expect(parsed.seedCalls?.[0]?.mode).toBe('title_abstract')
@@ -644,12 +714,36 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
     id: 'project-created',
     name: 'Created datasource',
   })
-  expect(parsed.result.data.covidencePrompt).toMatchObject({
-    created: false,
-    id: 'prompt-existing',
-    promptHeading: 'Covidence title/abstract screening',
-    type: "'yes' | 'no' | 'unsure'",
-  })
+  expect(parsed.result.data.covidencePrompts).toEqual([
+    {
+      created: false,
+      id: 'prompt-existing-1',
+      originalText: [
+        'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
+        '',
+        'Allowed answers: yes, no, unsure',
+        '',
+        'Include criterion (Population):',
+        'Adults with confirmed disease',
+      ].join('\n'),
+      promptHeading: 'Covidence title/abstract screening | Population | include',
+      type: "'yes' | 'no' | 'unsure'",
+    },
+    {
+      created: false,
+      id: 'prompt-existing-2',
+      originalText: [
+        'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
+        '',
+        'Allowed answers: yes, no, unsure',
+        '',
+        'Exclude criterion (Other):',
+        'Case reports',
+      ].join('\n'),
+      promptHeading: 'Covidence title/abstract screening | Other | exclude',
+      type: "'yes' | 'no' | 'unsure'",
+    },
+  ])
 })
 
 test('Covidence datasource create also creates or reuses a full-text project with scoped articles', () => {
@@ -672,6 +766,7 @@ test('Covidence datasource create also creates or reuses a full-text project wit
           martQueueCalls: [],
           projectCalls: [],
           promptCalls: [],
+          promptSyncCalls: [],
           queueCalls: [],
           seedCalls: [],
           scopeCalls: [],
@@ -720,6 +815,31 @@ test('Covidence datasource create also creates or reuses a full-text project wit
 
         void mock.module(covidenceImportServiceModulePath, () => {
           return {
+            buildCovidencePromptDefinition: (params) => {
+              return {originalText: 'Prompt body', promptHeading: 'Prompt heading', type: params.answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'unsure'"}
+            },
+            buildCovidencePromptDefinitionsForEligibilityFields: ({answerSet, eligibilityFields, mode}) => {
+              const question = mode === 'full_text'
+                ? 'Based on the inclusion and exclusion criteria, should this study be included in the final review?'
+                : 'Based on the inclusion and exclusion criteria, should this study be included for full text review?'
+              const allowedAnswers = answerSet === 'yes|no' ? 'yes, no' : 'yes, no, unsure'
+              const promptHeadingPrefix = mode === 'full_text' ? 'Covidence full-text screening | ' : 'Covidence title/abstract screening | '
+
+              return eligibilityFields.map((eligibilityField) => {
+                return {
+                  originalText: [
+                    question,
+                    '',
+                    'Allowed answers: ' + allowedAnswers,
+                    '',
+                    (eligibilityField.disposition === 'include' ? 'Include criterion' : 'Exclude criterion') + ' (' + eligibilityField.sectionLabel + '):',
+                    eligibilityField.text,
+                  ].join('\\n'),
+                  promptHeading: promptHeadingPrefix + eligibilityField.sectionLabel + ' | ' + eligibilityField.disposition,
+                  type: answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'unsure'",
+                }
+              })
+            },
             buildCovidencePackageConfig: (params) => {
               return {kind: 'covidence_import', version: 1, ...params}
             },
@@ -744,12 +864,14 @@ test('Covidence datasource create also creates or reuses a full-text project wit
             },
             getOrCreateCovidencePrompt: async (params) => {
               state.promptCalls.push({...params, tx: undefined})
+              const promptIndex = state.promptCalls.length
+
               return {
                 created: true,
-                id: 'prompt-full-text',
-                originalText: 'Prompt body',
-                promptHeading: 'Covidence full-text screening',
-                type: "'yes' | 'no'",
+                id: 'prompt-full-text-' + promptIndex,
+                originalText: params.promptDefinition.originalText,
+                promptHeading: params.promptDefinition.promptHeading,
+                type: params.promptDefinition.type,
               }
             },
             importCovidencePackageFromConfig: async () => {
@@ -773,6 +895,9 @@ test('Covidence datasource create also creates or reuses a full-text project wit
                 {assetPath: 'assets/covidence_imports/' + params.datasourceId + '/excluded-excluded.csv', fileRole: 'excluded', format: 'csv', sourceFileName: 'excluded.csv'},
                 {assetPath: 'assets/covidence_imports/' + params.datasourceId + '/included-included.csv', fileRole: 'included', format: 'csv', sourceFileName: 'included.csv'},
               ]
+            },
+            syncCovidenceProjectPrompts: async (params) => {
+              state.promptSyncCalls.push({...params, tx: undefined})
             },
             syncCovidenceProjectScopeFromConfig: async (params) => {
               state.scopeCalls.push({importRoute: params.importRoute, mode: params.config.mode, projectId: params.projectId ?? null})
@@ -845,17 +970,56 @@ test('Covidence datasource create also creates or reuses a full-text project wit
 
   expect(parsed.promptCalls).toEqual([
     {
-      answerSet: 'yes|no',
-      exclusionCriteria: 'Study Characteristics:\nCase reports',
-      inclusionCriteria: 'Population:\nAdults with confirmed disease\n\nOutcome:\nPain reduction at follow-up',
-      mode: 'full_text',
+      promptDefinition: {
+        originalText: [
+          'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
+          '',
+          'Allowed answers: yes, no',
+          '',
+          'Include criterion (Population):',
+          'Adults with confirmed disease',
+        ].join('\n'),
+        promptHeading: 'Covidence full-text screening | Population | include',
+        type: "'yes' | 'no'",
+      },
+    },
+    {
+      promptDefinition: {
+        originalText: [
+          'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
+          '',
+          'Allowed answers: yes, no',
+          '',
+          'Include criterion (Outcome):',
+          'Pain reduction at follow-up',
+        ].join('\n'),
+        promptHeading: 'Covidence full-text screening | Outcome | include',
+        type: "'yes' | 'no'",
+      },
+    },
+    {
+      promptDefinition: {
+        originalText: [
+          'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
+          '',
+          'Allowed answers: yes, no',
+          '',
+          'Exclude criterion (Study Characteristics):',
+          'Case reports',
+        ].join('\n'),
+        promptHeading: 'Covidence full-text screening | Study Characteristics | exclude',
+        type: "'yes' | 'no'",
+      },
     },
   ])
   expect(parsed.projectCalls).toHaveLength(1)
   expect(parsed.projectCalls?.[0]?.importRoute).toContain('covidence:')
   expect(parsed.projectCalls?.[0]?.mode).toBe('full_text')
-  expect(parsed.projectCalls?.[0]?.promptId).toBe('prompt-full-text')
+  expect(parsed.projectCalls?.[0]?.promptId).toBeNull()
   expect(parsed.projectCalls?.[0]?.title).toBe('Full text datasource')
+  expect(parsed.promptSyncCalls).toEqual([
+    {projectId: 'project-full-text', promptIds: ['prompt-full-text-1', 'prompt-full-text-2', 'prompt-full-text-3']},
+  ])
   expect(parsed.scopeCalls).toHaveLength(1)
   expect(parsed.scopeCalls?.[0]?.importRoute).toContain('covidence:')
   expect(parsed.scopeCalls?.[0]?.mode).toBe('full_text')
@@ -874,12 +1038,50 @@ test('Covidence datasource create also creates or reuses a full-text project wit
     id: 'project-full-text',
     name: 'Full text datasource',
   })
-  expect(parsed.result.data.covidencePrompt).toMatchObject({
-    created: true,
-    id: 'prompt-full-text',
-    promptHeading: 'Covidence full-text screening',
-    type: "'yes' | 'no'",
-  })
+  expect(parsed.result.data.covidencePrompts).toEqual([
+    {
+      created: true,
+      id: 'prompt-full-text-1',
+      originalText: [
+        'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
+        '',
+        'Allowed answers: yes, no',
+        '',
+        'Include criterion (Population):',
+        'Adults with confirmed disease',
+      ].join('\n'),
+      promptHeading: 'Covidence full-text screening | Population | include',
+      type: "'yes' | 'no'",
+    },
+    {
+      created: true,
+      id: 'prompt-full-text-2',
+      originalText: [
+        'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
+        '',
+        'Allowed answers: yes, no',
+        '',
+        'Include criterion (Outcome):',
+        'Pain reduction at follow-up',
+      ].join('\n'),
+      promptHeading: 'Covidence full-text screening | Outcome | include',
+      type: "'yes' | 'no'",
+    },
+    {
+      created: true,
+      id: 'prompt-full-text-3',
+      originalText: [
+        'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
+        '',
+        'Allowed answers: yes, no',
+        '',
+        'Exclude criterion (Study Characteristics):',
+        'Case reports',
+      ].join('\n'),
+      promptHeading: 'Covidence full-text screening | Study Characteristics | exclude',
+      type: "'yes' | 'no'",
+    },
+  ])
 })
 
 test('Covidence datasource create skips prompt creation when normalized eligibility fields are empty', () => {
@@ -902,6 +1104,7 @@ test('Covidence datasource create skips prompt creation when normalized eligibil
           martQueueCalls: [],
           projectCalls: [],
           promptCalls: [],
+          promptSyncCalls: [],
           queueCalls: [],
           seedCalls: [],
           scopeCalls: [],
@@ -949,6 +1152,12 @@ test('Covidence datasource create skips prompt creation when normalized eligibil
 
         void mock.module(covidenceImportServiceModulePath, () => {
           return {
+            buildCovidencePromptDefinition: (params) => {
+              return {originalText: 'Prompt body', promptHeading: 'Prompt heading', type: params.answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'unsure'"}
+            },
+            buildCovidencePromptDefinitionsForEligibilityFields: () => {
+              return []
+            },
             buildCovidencePackageConfig: (params) => {
               return {kind: 'covidence_import', version: 1, ...params}
             },
@@ -1000,6 +1209,9 @@ test('Covidence datasource create skips prompt creation when normalized eligibil
                 {assetPath: 'assets/covidence_imports/' + params.datasourceId + '/irrelevant-irrelevant.csv', fileRole: 'irrelevant', format: 'csv', sourceFileName: 'irrelevant.csv'},
                 {assetPath: 'assets/covidence_imports/' + params.datasourceId + '/full_text-full_text.ris', fileRole: 'full_text', format: 'ris', sourceFileName: 'full_text.ris'},
               ]
+            },
+            syncCovidenceProjectPrompts: async (params) => {
+              state.promptSyncCalls.push({...params, tx: undefined})
             },
             syncCovidenceProjectScopeFromConfig: async (params) => {
               state.scopeCalls.push({importRoute: params.importRoute, mode: params.config.mode, projectId: params.projectId ?? null})
@@ -1072,6 +1284,7 @@ test('Covidence datasource create skips prompt creation when normalized eligibil
   expect(parsed.promptCalls).toEqual([])
   expect(parsed.projectCalls).toHaveLength(1)
   expect(parsed.projectCalls?.[0]?.promptId).toBeNull()
-  expect(parsed.result.data.covidencePrompt).toBeNull()
+  expect(parsed.promptSyncCalls).toEqual([])
+  expect(parsed.result.data.covidencePrompts).toEqual([])
   expect(parsed.queueCalls).toEqual([['route-1']])
 })

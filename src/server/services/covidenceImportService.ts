@@ -186,6 +186,13 @@ type CovidencePromptDefinition = {
   promptHeading: string
   type: "'yes' | 'no'" | "'yes' | 'no' | 'unsure'"
 }
+type CovidenceEligibilityFieldDisposition = 'include' | 'exclude'
+type CovidenceEligibilityPromptField = {
+  disposition: CovidenceEligibilityFieldDisposition
+  sectionKey: string
+  sectionLabel: string
+  text: string
+}
 type CovidencePromptRecord = CovidencePromptDefinition & {created: boolean; id: string}
 type CovidenceProjectRecord = {
   created: boolean
@@ -303,6 +310,14 @@ const getCovidencePromptCriteriaText = (criteria: string) => {
   return trimmedCriteria === '' ? '(none provided)' : trimmedCriteria
 }
 
+const getCovidencePromptEligibilityDispositionLabel = (disposition: CovidenceEligibilityFieldDisposition) => {
+  return disposition === 'include' ? 'include' : 'exclude'
+}
+
+const getCovidencePromptEligibilityCriteriaLabel = (disposition: CovidenceEligibilityFieldDisposition) => {
+  return disposition === 'include' ? 'Include criterion' : 'Exclude criterion'
+}
+
 const getCovidencePromptText = (params: {
   answerSet: CovidencePromptAnswerSet
   exclusionCriteria: string
@@ -324,6 +339,37 @@ const getCovidencePromptText = (params: {
 
 const getCovidencePromptType = (answerSet: CovidencePromptAnswerSet): CovidencePromptDefinition['type'] => {
   return answerSet === 'yes|no|unsure' || answerSet === 'yes_no_unsure' ? "'yes' | 'no' | 'unsure'" : "'yes' | 'no'"
+}
+
+const buildCovidencePromptDefinitionForEligibilityField = (params: {
+  answerSet: CovidencePromptAnswerSet
+  eligibilityField: CovidenceEligibilityPromptField
+  mode: CovidenceImportMode
+}): CovidencePromptDefinition => {
+  const allowedAnswers = getCovidencePromptAnswerValues(params.answerSet).join(', ')
+
+  return {
+    originalText: [
+      covidencePromptQuestionByMode[params.mode],
+      '',
+      `Allowed answers: ${allowedAnswers}`,
+      '',
+      `${getCovidencePromptEligibilityCriteriaLabel(params.eligibilityField.disposition)} (${params.eligibilityField.sectionLabel}):`,
+      params.eligibilityField.text,
+    ].join('\n'),
+    promptHeading: `${covidencePromptHeadingByMode[params.mode]} | ${params.eligibilityField.sectionLabel} | ${getCovidencePromptEligibilityDispositionLabel(params.eligibilityField.disposition)}`,
+    type: getCovidencePromptType(params.answerSet),
+  }
+}
+
+export const buildCovidencePromptDefinitionsForEligibilityFields = (params: {
+  answerSet: CovidencePromptAnswerSet
+  eligibilityFields: CovidenceEligibilityPromptField[]
+  mode: CovidenceImportMode
+}) => {
+  return params.eligibilityFields.map((eligibilityField) => {
+    return buildCovidencePromptDefinitionForEligibilityField({...params, eligibilityField})
+  })
 }
 
 const getCovidencePromptQueryRunner = (tx?: CovidencePromptTx) => {
@@ -1662,14 +1708,19 @@ export const buildCovidencePromptDefinition = (params: {
   }
 }
 
-export const getOrCreateCovidencePrompt = async (params: {
-  answerSet: CovidencePromptAnswerSet
-  exclusionCriteria: string
-  inclusionCriteria: string
-  mode: CovidenceImportMode
-  tx?: CovidencePromptTx
-}): Promise<CovidencePromptRecord> => {
-  const promptDefinition = buildCovidencePromptDefinition(params)
+export const getOrCreateCovidencePrompt = async (
+  params:
+    | {
+        answerSet: CovidencePromptAnswerSet
+        exclusionCriteria: string
+        inclusionCriteria: string
+        mode: CovidenceImportMode
+        tx?: CovidencePromptTx
+      }
+    | {promptDefinition: CovidencePromptDefinition; tx?: CovidencePromptTx},
+): Promise<CovidencePromptRecord> => {
+  const promptDefinition =
+    'promptDefinition' in params ? params.promptDefinition : buildCovidencePromptDefinition(params)
   const contentHash = computePromptContentHash(
     promptDefinition.originalText,
     null,
@@ -1708,6 +1759,41 @@ export const getOrCreateCovidencePrompt = async (params: {
   }
 
   return {...promptDefinition, created: true, id: insertedPrompt.id}
+}
+
+export const syncCovidenceProjectPrompts = async (params: {
+  projectId: string
+  promptIds: string[]
+  tx?: CovidenceProjectTx
+}) => {
+  const queryRunner = getCovidenceProjectQueryRunner(params.tx)
+  const promptIds = params.promptIds.reduce<string[]>((distinctPromptIds, promptId) => {
+    return distinctPromptIds.includes(promptId) ? distinctPromptIds : [...distinctPromptIds, promptId]
+  }, [])
+
+  return promptIds.length === 0
+    ? undefined
+    : await queryRunner.run(`
+        INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, enabled, origin_project_id)
+        VALUES ${promptIds
+          .map((promptId, index) => {
+            return `(
+              '${escapeSqlString(globalThis.crypto.randomUUID())}',
+              '${escapeSqlString(params.projectId)}',
+              '${escapeSqlString(promptId)}',
+              ${index},
+              FALSE,
+              TRUE,
+              NULL
+            )`
+          })
+          .join(', ')}
+        ON CONFLICT(project_id, prompt_id) DO UPDATE SET
+          prompt_order = EXCLUDED.prompt_order,
+          archived = FALSE,
+          enabled = TRUE,
+          updated_at = now()
+      `)
 }
 
 export const getOrCreateCovidenceProject = async (params: {

@@ -4,6 +4,8 @@ import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
 import {queueImportedArticleRefreshes} from '../../services/articleImportStoreService.ts'
 import {
+  buildCovidencePromptDefinition,
+  buildCovidencePromptDefinitionsForEligibilityFields,
   buildCovidencePackageConfig,
   deleteCovidencePackageFiles,
   getCovidencePackageCursor,
@@ -12,6 +14,7 @@ import {
   importCovidencePackageFromConfig,
   seedCovidenceHumanJudgmentsFromConfig,
   storeCovidencePackageFiles,
+  syncCovidenceProjectPrompts,
   syncCovidenceProjectScopeFromConfig,
 } from '../../services/covidenceImportService.ts'
 import {getDataSourceQueryService} from '../../services/dataSourceQueryService.ts'
@@ -43,21 +46,7 @@ const getNormalizedCovidenceEligibilityFields = (eligibilityFields?: CovidenceEl
     })
 }
 
-const getCovidencePromptCriteriaFromEligibilityFields = (params: {
-  disposition: CovidenceEligibilityFieldDisposition
-  eligibilityFields: ReturnType<typeof getNormalizedCovidenceEligibilityFields>
-}) => {
-  return params.eligibilityFields
-    .filter((eligibilityField) => {
-      return eligibilityField.disposition === params.disposition
-    })
-    .map((eligibilityField) => {
-      return `${eligibilityField.sectionLabel}:\n${eligibilityField.text}`
-    })
-    .join('\n\n')
-}
-
-const getCovidencePromptInput = (body: {
+const getCovidencePromptDefinitions = (body: {
   answerSet?: CovidencePromptAnswerSet
   eligibilityFields?: CovidenceEligibilityField[]
   exclusionCriteria?: string
@@ -73,25 +62,25 @@ const getCovidencePromptInput = (body: {
 
     return eligibilityFields.length === 0
       ? null
-      : {
+      : buildCovidencePromptDefinitionsForEligibilityFields({
           answerSet: body.answerSet,
-          exclusionCriteria: getCovidencePromptCriteriaFromEligibilityFields({
-            disposition: 'exclude',
-            eligibilityFields,
-          }),
-          inclusionCriteria: getCovidencePromptCriteriaFromEligibilityFields({
-            disposition: 'include',
-            eligibilityFields,
-          }),
+          eligibilityFields,
           mode: body.mode,
-        }
+        })
   }
 
   const inclusionCriteria = body.inclusionCriteria?.trim() ?? ''
   const exclusionCriteria = body.exclusionCriteria?.trim() ?? ''
 
   return inclusionCriteria || exclusionCriteria
-    ? {answerSet: body.answerSet, exclusionCriteria, inclusionCriteria, mode: body.mode}
+    ? [
+        buildCovidencePromptDefinition({
+          answerSet: body.answerSet,
+          exclusionCriteria,
+          inclusionCriteria,
+          mode: body.mode,
+        }),
+      ]
     : null
 }
 
@@ -117,12 +106,16 @@ export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
   const config = buildCovidencePackageConfig({files: storedFiles, mode: body.mode})
   const cursor = getCovidencePackageCursor(config)
   const importRoute = `covidence:${dataSourceId}`
-  const covidencePromptInput = getCovidencePromptInput(body)
+  const covidencePromptDefinitions = getCovidencePromptDefinitions(body)
   const result = (await getAppDatabaseService()
     .transaction(async (tx) => {
-      const covidencePrompt = covidencePromptInput
-        ? await getOrCreateCovidencePrompt({...covidencePromptInput, tx})
-        : null
+      const covidencePrompts = covidencePromptDefinitions
+        ? await Promise.all(
+            covidencePromptDefinitions.map(async (promptDefinition) => {
+              return await getOrCreateCovidencePrompt({promptDefinition, tx})
+            }),
+          )
+        : []
 
       await tx.run(`
         INSERT INTO app.data_source (id, title, description, import_route, cursor)
@@ -158,15 +151,25 @@ export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
         importRoute,
         modelId: body.modelId,
         mode: body.mode,
-        promptId: covidencePrompt?.id ?? null,
+        promptId: null,
         title,
         tx,
       })
 
+      if (covidencePrompts.length > 0) {
+        await syncCovidenceProjectPrompts({
+          projectId: covidenceProject.id,
+          promptIds: covidencePrompts.map((covidencePrompt) => {
+            return covidencePrompt.id
+          }),
+          tx,
+        })
+      }
+
       await syncCovidenceProjectScopeFromConfig({config, importRoute, projectId: covidenceProject.id, tx})
       await seedCovidenceHumanJudgmentsFromConfig({config, importRoute, projectId: covidenceProject?.id ?? null, tx})
 
-      return {...importResult, covidenceProject, covidencePrompt}
+      return {...importResult, covidenceProject, covidencePrompts}
     })
     .catch(async (error) => {
       deleteCovidencePackageFiles(dataSourceId)
@@ -186,7 +189,7 @@ export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
     data: {
       covidencePackageConfig: config,
       covidenceProject: 'covidenceProject' in result ? result.covidenceProject : null,
-      covidencePrompt: 'covidencePrompt' in result ? result.covidencePrompt : null,
+      covidencePrompts: 'covidencePrompts' in result ? result.covidencePrompts : [],
       dataSource,
       stats: result.stats,
     },
