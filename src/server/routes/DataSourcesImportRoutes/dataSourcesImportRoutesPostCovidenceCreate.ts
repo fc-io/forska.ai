@@ -20,12 +20,87 @@ type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
 type CovidencePromptAnswerSet = 'yes|no' | 'yes|no|unsure' | 'yes_no' | 'yes_no_unsure'
 type CovidencePackageUploadInput = Blob & {name?: string; type?: string}
+type CovidenceEligibilityFieldDisposition = 'include' | 'exclude'
+type CovidenceEligibilityField = {
+  disposition: CovidenceEligibilityFieldDisposition
+  sectionKey: string
+  sectionLabel: string
+  text: string
+}
+
+const getNormalizedCovidenceEligibilityFields = (eligibilityFields?: CovidenceEligibilityField[]) => {
+  return (eligibilityFields ?? [])
+    .map((eligibilityField) => {
+      return {
+        disposition: eligibilityField.disposition,
+        sectionKey: eligibilityField.sectionKey.trim(),
+        sectionLabel: eligibilityField.sectionLabel.trim(),
+        text: eligibilityField.text.trim(),
+      }
+    })
+    .filter((eligibilityField) => {
+      return eligibilityField.text !== ''
+    })
+}
+
+const getCovidencePromptCriteriaFromEligibilityFields = (params: {
+  disposition: CovidenceEligibilityFieldDisposition
+  eligibilityFields: ReturnType<typeof getNormalizedCovidenceEligibilityFields>
+}) => {
+  return params.eligibilityFields
+    .filter((eligibilityField) => {
+      return eligibilityField.disposition === params.disposition
+    })
+    .map((eligibilityField) => {
+      return `${eligibilityField.sectionLabel}:\n${eligibilityField.text}`
+    })
+    .join('\n\n')
+}
+
+const getCovidencePromptInput = (body: {
+  answerSet?: CovidencePromptAnswerSet
+  eligibilityFields?: CovidenceEligibilityField[]
+  exclusionCriteria?: string
+  inclusionCriteria?: string
+  mode: CovidenceImportMode
+}) => {
+  if (typeof body.answerSet !== 'string') {
+    return null
+  }
+
+  if (Array.isArray(body.eligibilityFields)) {
+    const eligibilityFields = getNormalizedCovidenceEligibilityFields(body.eligibilityFields)
+
+    return eligibilityFields.length === 0
+      ? null
+      : {
+          answerSet: body.answerSet,
+          exclusionCriteria: getCovidencePromptCriteriaFromEligibilityFields({
+            disposition: 'exclude',
+            eligibilityFields,
+          }),
+          inclusionCriteria: getCovidencePromptCriteriaFromEligibilityFields({
+            disposition: 'include',
+            eligibilityFields,
+          }),
+          mode: body.mode,
+        }
+  }
+
+  const inclusionCriteria = body.inclusionCriteria?.trim() ?? ''
+  const exclusionCriteria = body.exclusionCriteria?.trim() ?? ''
+
+  return inclusionCriteria || exclusionCriteria
+    ? {answerSet: body.answerSet, exclusionCriteria, inclusionCriteria, mode: body.mode}
+    : null
+}
 
 export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
   title: string
   description?: string
   modelId?: string
   answerSet?: CovidencePromptAnswerSet
+  eligibilityFields?: CovidenceEligibilityField[]
   exclusionCriteria?: string
   inclusionCriteria?: string
   mode: CovidenceImportMode
@@ -42,17 +117,7 @@ export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
   const config = buildCovidencePackageConfig({files: storedFiles, mode: body.mode})
   const cursor = getCovidencePackageCursor(config)
   const importRoute = `covidence:${dataSourceId}`
-  const covidencePromptInput =
-    typeof body.answerSet === 'string'
-    && typeof body.inclusionCriteria === 'string'
-    && typeof body.exclusionCriteria === 'string'
-      ? {
-          answerSet: body.answerSet,
-          exclusionCriteria: body.exclusionCriteria,
-          inclusionCriteria: body.inclusionCriteria,
-          mode: body.mode,
-        }
-      : null
+  const covidencePromptInput = getCovidencePromptInput(body)
   const result = (await getAppDatabaseService()
     .transaction(async (tx) => {
       const covidencePrompt = covidencePromptInput

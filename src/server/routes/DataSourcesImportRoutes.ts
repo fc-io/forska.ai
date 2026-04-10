@@ -52,6 +52,16 @@ export const dataSourcesImportRoutes = new Elysia()
         answerSet: t.Optional(
           t.Union([t.Literal('yes|no'), t.Literal('yes|no|unsure'), t.Literal('yes_no'), t.Literal('yes_no_unsure')]),
         ),
+        eligibilityFields: t.Optional(
+          t.Array(
+            t.Object({
+              disposition: t.Union([t.Literal('include'), t.Literal('exclude')]),
+              sectionKey: t.String(),
+              sectionLabel: t.String(),
+              text: t.String(),
+            }),
+          ),
+        ),
         exclusionCriteria: t.Optional(t.String()),
         inclusionCriteria: t.Optional(t.String()),
         mode: t.Union([t.Literal('title_abstract'), t.Literal('full_text')]),
