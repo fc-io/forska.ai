@@ -84,8 +84,11 @@ afterEach(async () => {
   })
   const {resetProjectMartLargeRebuildRuntimeMetricsForTests} =
     await import('../utils/projectMartLargeRebuildRuntimeMetrics.ts')
+  const {resetJudgmentEndpointAvailabilityForTests} =
+    await import('../cron/judgmentsJobs/judgmentEndpointAvailability.ts')
 
   resetProjectMartLargeRebuildRuntimeMetricsForTests()
+  resetJudgmentEndpointAvailabilityForTests()
 })
 
 const insertProjectFixture = async ({
@@ -817,6 +820,65 @@ test('returns safe SQLite health values for jobs without a local sqlite db', asy
     sqliteFileBytes: null,
     walBytes: 0,
   })
+})
+
+test('job details expose shared endpoint availability diagnostics', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {classifyConnectionFailure, recordConnectionFailure} = await import('../cron/judgmentsJobs/connectionHealth.ts')
+  const projectId = `endpoint-diagnostics-project-${Date.now()}`
+  const modelId = `endpoint-diagnostics-model-${Date.now()}`
+  const connectionId = `endpoint-diagnostics-connection-${Date.now()}`
+  const jobId = `endpoint-diagnostics-job-${Date.now()}`
+  const baseURL = 'https://runtime-paused.example.com/v1'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    UPDATE app.provider_connection
+    SET base_url = '${baseURL}'
+    WHERE id = '${connectionId}'
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  recordConnectionFailure({
+    effectiveBaseURL: baseURL,
+    failure: classifyConnectionFailure({
+      context: {effectiveBaseURL: baseURL, endpointPath: '/v1/models', providerKind: 'sglang'},
+      error: Object.assign(new Error('Service unavailable'), {status: 503}),
+    }),
+    providerConnectionId: connectionId,
+  })
+
+  const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
+  const body = (await response.json()) as {
+    requestStats: {
+      attempts: number
+      endpointAvailability: {
+        cooldownRemainingMs: number | null
+        lastFailureKind: string | null
+        lastFailureMessage: string | null
+        probeInProgress: boolean
+        status: string
+      } | null
+      inFlight: number
+    }
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.requestStats.inFlight).toBe(0)
+  expect(body.requestStats.attempts).toBe(0)
+  expect(body.requestStats.endpointAvailability).toMatchObject({
+    lastFailureKind: 'endpoint_unavailable',
+    probeInProgress: false,
+    status: 'cooldown',
+  })
+  expect(body.requestStats.endpointAvailability?.lastFailureMessage).toContain('Provider endpoint outage:')
+  expect(body.requestStats.endpointAvailability?.cooldownRemainingMs).toBeGreaterThan(0)
 })
 
 test('job details include projected storage drain when a large rebuild is active', async () => {

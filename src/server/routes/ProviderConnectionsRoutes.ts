@@ -3,6 +3,10 @@ import {Elysia, t} from 'elysia'
 import {getCodexMaxInflight} from '../cron/judgmentsJobs/getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from '../cron/judgmentsJobs/getJudgmentsCapacity.ts'
 import {
+  getJudgmentEndpointAvailability,
+  getJudgmentEndpointAvailabilityDiagnostics,
+} from '../cron/judgmentsJobs/judgmentEndpointAvailability.ts'
+import {
   beginProviderAuth,
   finishProviderAuth,
   getProviderAuthConnection,
@@ -177,21 +181,31 @@ const getProviderConnectionRuntimeState = ({
   connection: {
     baseURL: string | null
     config: {manualWorkerUrls: string[]; workerUrlMode: 'manual' | 'runtime'}
+    id: string
     models: Array<{modelName: string | null; remoteModelId: string | null}>
     providerKind: string
   }
   runtimeSummaries: Awaited<ReturnType<typeof getDetectedProviderRuntimeSummaries>>
 }): ProviderConnectionRuntimeState => {
-  const match = resolveProviderConnectionRuntimeMatchFromSummaries({
+  const match: ProviderRuntimeMatch = resolveProviderConnectionRuntimeMatchFromSummaries({
     baseURL: connection.baseURL,
     config: connection.config,
     providerKind: connection.providerKind,
     runtimeSummaries,
     savedModelIds: getSavedModelIds(connection.models),
   })
+  const endpointAvailability = match.effectiveBaseURL
+    ? getJudgmentEndpointAvailabilityDiagnostics(
+        getJudgmentEndpointAvailability({
+          effectiveBaseURL: match.effectiveBaseURL,
+          providerConnectionId: connection.id,
+        }),
+      )
+    : null
 
   return {
     detectedModelNames: match.detectedModelNames,
+    endpointAvailability,
     effectiveBaseURL: match.effectiveBaseURL,
     effectiveWorkerUrls: match.effectiveWorkerUrls,
     reason: match.reason,

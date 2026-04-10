@@ -1,6 +1,10 @@
 import {Elysia, t} from 'elysia'
 
 import {getUnassessedArticlesFromOlap, getUnassessedCountFromOlap} from '../../services/olap/unassessedArticlesOlap.ts'
+import {
+  getJudgmentEndpointAvailability,
+  getJudgmentEndpointAvailabilityDiagnostics,
+} from '../cron/judgmentsJobs/judgmentEndpointAvailability.ts'
 import {runJudgmentJobRepairAction} from '../cron/judgmentsJobs/judgmentJobRepair.ts'
 import {getDefaultJudgmentServerJobId} from '../cron/judgmentsJobs/judgmentJobServerIdentity.ts'
 import {
@@ -16,7 +20,9 @@ import {
   hasJudgmentJobLocalSqliteState,
 } from '../cron/judgmentsJobs/judgmentJobStoragePolicy.ts'
 import {getJudgmentRequestStats} from '../cron/judgmentsJobs/judgmentsRequestRuntime.ts'
+import {getProviderConnectionForStoredModel} from '../providers/providerConnectionRepository.ts'
 import {assertStoredProviderModelRuntimeMatch} from '../providers/providerRuntimeModelGuard.ts'
+import {getProviderConnectionEffectiveBaseURL} from '../providers/providerRuntimeState.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
   escapeSqlString,
@@ -849,7 +855,7 @@ export const judgmentsJobsRoutes = new Elysia()
   .get(
     '/api/judgmentsjobs/:id',
     async ({params}) => {
-      const {job} = await getJobContext({jobId: params.id})
+      const {job, projectModelId} = await getJobContext({jobId: params.id})
       const sqliteService = getJudgmentJobSqliteService()
       const sqliteHealthPromise = sqliteService.getHealthSnapshot(job.id)
       const leaseMetadataPromise = sqliteService.getJudgmentJobLeaseMetadata(job.id)
@@ -906,6 +912,20 @@ export const judgmentsJobsRoutes = new Elysia()
       const tokenUsagePerDay = aggregateTokenUsagePerDay(normalizedTokenUsageRows)
       const requestRuntimeStats = getJudgmentRequestStats(job.id)
       const storagePolicy = getStoragePolicy({job, sqliteHealth})
+      const providerConnection = await getProviderConnectionForStoredModel(projectModelId)
+      const effectiveBaseURL = providerConnection
+        ? getProviderConnectionEffectiveBaseURL({
+            baseURL: providerConnection.baseURL,
+            config: providerConnection.config,
+            providerKind: providerConnection.providerKind,
+            savedModelIds: [projectModelId],
+          })
+        : null
+      const endpointAvailability = effectiveBaseURL
+        ? getJudgmentEndpointAvailabilityDiagnostics(
+            getJudgmentEndpointAvailability({effectiveBaseURL, providerConnectionId: providerConnection?.id ?? null}),
+          )
+        : null
 
       return {
         ...job,
@@ -920,6 +940,7 @@ export const judgmentsJobsRoutes = new Elysia()
           totalCompletionTokens: Number(totalTokenUsage[0]?.totalCompletionTokens || 0),
         },
         requestStats: {
+          endpointAvailability,
           inFlight: requestRuntimeStats.inFlight,
           attempts: Number(totalTokenUsage[0]?.totalRequests || 0) + requestRuntimeStats.pendingPersistedAttempts,
         },

@@ -31,6 +31,14 @@ export type JudgmentEndpointAvailability = {
   status: JudgmentEndpointAvailabilityStatus
 }
 
+export type JudgmentEndpointAvailabilityDiagnostics = {
+  cooldownRemainingMs: number | null
+  lastFailureKind: JudgmentEndpointFailureKind | null
+  lastFailureMessage: string | null
+  probeInProgress: boolean
+  status: JudgmentEndpointAvailabilityStatus
+}
+
 const endpointAvailabilityStates = new Map<string, JudgmentEndpointAvailabilityState>()
 
 const getEndpointAvailabilityKey = ({
@@ -124,6 +132,22 @@ export const getJudgmentEndpointAvailability = ({
   providerConnectionId: string | null
 }): JudgmentEndpointAvailability => {
   return getEndpointAvailabilitySnapshot(getOrCreateEndpointAvailabilityState({effectiveBaseURL, providerConnectionId}))
+}
+
+export const getJudgmentEndpointAvailabilityDiagnostics = (
+  availability: JudgmentEndpointAvailability,
+): JudgmentEndpointAvailabilityDiagnostics => {
+  const cooldownRemainingMs = availability.cooldownExpiresAt
+    ? Math.max(0, availability.cooldownExpiresAt.getTime() - Date.now())
+    : null
+
+  return {
+    cooldownRemainingMs,
+    lastFailureKind: availability.lastFailureKind,
+    lastFailureMessage: availability.lastFailureMessage,
+    probeInProgress: availability.status === 'probing' || availability.probePromise !== null,
+    status: availability.status,
+  }
 }
 
 export const claimJudgmentEndpointAvailability = ({

@@ -78,6 +78,20 @@ export type ProviderRuntimeMatch = {
 
 export type ProviderConnectionRuntimeState = {
   detectedModelNames: string[]
+  endpointAvailability: {
+    cooldownRemainingMs: number | null
+    lastFailureKind:
+      | 'network_unavailable'
+      | 'endpoint_unavailable'
+      | 'endpoint_misconfigured'
+      | 'rate_limited'
+      | 'circuit_open'
+      | 'other'
+      | null
+    lastFailureMessage: string | null
+    probeInProgress: boolean
+    status: 'healthy' | 'cooldown' | 'probing' | 'misconfigured'
+  } | null
   effectiveBaseURL: string | null
   effectiveWorkerUrls: string[]
   reason: ProviderRuntimeMatchReason

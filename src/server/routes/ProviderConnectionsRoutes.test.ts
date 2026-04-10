@@ -1,4 +1,4 @@
-import {expect, mock, test} from 'bun:test'
+import {afterEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 const providerAuthServiceModulePath = new URL('../providers/providerAuthService.ts', import.meta.url).pathname
@@ -313,6 +313,13 @@ const loadRoutes = async () => {
   return new Elysia().use(providerConnectionsRoutes)
 }
 
+afterEach(async () => {
+  const {resetJudgmentEndpointAvailabilityForTests} =
+    await import('../cron/judgmentsJobs/judgmentEndpointAvailability.ts')
+
+  resetJudgmentEndpointAvailabilityForTests()
+})
+
 test('provider connections route creates a provider connection', async () => {
   state.createProviderConnection.mockClear()
   state.storeProviderSecret.mockClear()
@@ -543,6 +550,13 @@ test('provider connections list returns runtime state with display labels', asyn
   expect(body.data.connections[0]?.maxInflightRequests).toBe(6)
   expect(body.data.connections[0]?.runtimeState).toEqual({
     detectedModelNames: ['Qwen/Qwen3'],
+    endpointAvailability: {
+      cooldownRemainingMs: null,
+      lastFailureKind: null,
+      lastFailureMessage: null,
+      probeInProgress: false,
+      status: 'healthy',
+    },
     effectiveBaseURL: 'https://alvis-tunnel.example/v1',
     effectiveWorkerUrls: ['http://localhost:30020'],
     reason: 'runtime-auto-detect',
@@ -589,6 +603,94 @@ test('provider connections route exposes the current runtime/global inflight def
   expect(response.status).toBe(200)
   expect(body.data.connections[0]?.effectiveMaxInflightRequests).toBe(12)
   expect(state.getJudgmentsCapacity).toHaveBeenCalledWith(1)
+})
+
+test('provider connections route exposes shared endpoint availability diagnostics', async () => {
+  const {classifyConnectionFailure, recordConnectionFailure} = await import('../cron/judgmentsJobs/connectionHealth.ts')
+
+  state.resolveProviderConnectionRuntimeMatchFromSummaries.mockImplementationOnce((_input: unknown): unknown => {
+    return {
+      candidate: null,
+      detectedModelNames: [],
+      effectiveBaseURL: 'https://api-paused.example.com/v1',
+      effectiveWorkerUrls: [],
+      localUrls: [],
+      modelNames: [],
+      reason: 'manual-base-url',
+      reasons: ['manual-mode', 'manual-base-url'],
+      remoteUrls: ['https://api-paused.example.com/v1'],
+      resolutionMode: 'manual',
+      sourceMetadata: null,
+      source: 'saved-base-url',
+      status: 'manual-only',
+    }
+  })
+
+  state.listProviderConnections.mockImplementationOnce(async () => {
+    return [
+      {
+        authMode: 'api-key',
+        baseURL: 'https://api-paused.example.com/v1',
+        config: {manualWorkerUrls: [], workerUrlMode: 'manual'},
+        createdAt: null,
+        enabled: true,
+        hasSecret: true,
+        id: 'connection-paused',
+        label: 'Paused Connection',
+        lastCheckedAt: null,
+        lastError: 'persisted last error',
+        maxInflightRequests: null,
+        models: [],
+        providerKind: 'openrouter',
+        secretRef: 'keychain:provider-connection:test',
+        updatedAt: null,
+      },
+    ]
+  })
+
+  recordConnectionFailure({
+    effectiveBaseURL: 'https://api-paused.example.com/v1',
+    failure: classifyConnectionFailure({
+      context: {
+        effectiveBaseURL: 'https://api-paused.example.com/v1',
+        endpointPath: '/v1/models',
+        providerKind: 'openrouter',
+      },
+      error: Object.assign(new Error('Service unavailable'), {status: 503}),
+    }),
+    providerConnectionId: 'connection-paused',
+  })
+
+  const app = await loadRoutes()
+  const response = await app.handle(new Request('http://localhost/api/provider-connections'))
+  const body = (await response.json()) as {
+    data: {
+      connections: Array<{
+        lastError: string | null
+        runtimeState: {
+          endpointAvailability: {
+            cooldownRemainingMs: number | null
+            lastFailureKind: string | null
+            lastFailureMessage: string | null
+            probeInProgress: boolean
+            status: string
+          } | null
+        }
+      }>
+    }
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.connections[0]?.lastError).toBe('persisted last error')
+  expect(body.data.connections[0]?.runtimeState.endpointAvailability).toMatchObject({
+    lastFailureKind: 'endpoint_unavailable',
+    probeInProgress: false,
+    status: 'cooldown',
+  })
+  expect(body.data.connections[0]?.runtimeState.endpointAvailability?.lastFailureMessage).toContain(
+    'Provider endpoint outage:',
+  )
+  expect(body.data.connections[0]?.runtimeState.endpointAvailability?.cooldownRemainingMs).toBeGreaterThan(0)
 })
 
 test('provider connections route disables a provider connection', async () => {
