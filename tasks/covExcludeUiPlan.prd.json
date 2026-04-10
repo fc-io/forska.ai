@@ -1,0 +1,124 @@
+{
+  "name": "Covidence Eligibility Criteria Prompts",
+  "description": "Capture structured Covidence eligibility sections in the import UI and turn each non-empty section into an ordered project prompt during create.",
+  "branchName": "ralph/covidence-eligibility-prompts",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Normalize structured eligibility field payload for Covidence create",
+      "description": "As an admin, I want the Covidence create route to accept ordered eligibility section fields so structured criteria can flow from the UI to prompt creation without relying on two free-text blobs.",
+      "acceptanceCriteria": [
+        "Add a structured eligibility field contract with `sectionKey`, `sectionLabel`, `disposition`, and `text` for the Covidence create flow.",
+        "The create route trims each submitted field and drops empty or whitespace-only entries before downstream prompt creation.",
+        "The import create flow still succeeds when the normalized eligibility field list is empty.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceAnalyze.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Build one Covidence prompt definition per non-empty eligibility section",
+      "description": "As a maintainer, I want one prompt definition per filled eligibility section so each criterion can be judged independently in the created Covidence project.",
+      "acceptanceCriteria": [
+        "Add Covidence prompt-definition helpers that build one prompt per normalized eligibility field instead of one prompt for all criteria.",
+        "Each prompt heading identifies the screening mode, section label, and include or exclude disposition.",
+        "Each prompt body includes the existing mode-specific question, the selected answer set, and only the criterion text for that field.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceAnalyze.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Attach multiple criteria prompts to the created Covidence project",
+      "description": "As an admin, I want the Covidence create flow to create or reuse all section prompts and attach them to the project in UI order so the review queue matches the structured eligibility criteria.",
+      "acceptanceCriteria": [
+        "The create flow creates or reuses all prompt records for the normalized eligibility fields instead of a single `covidencePrompt`.",
+        "The created or reused prompts are linked to the Covidence project in the same order the fields were submitted.",
+        "The create response returns the created or reused prompt list in a stable order that the client can read.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceAnalyze.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Render structured eligibility sections in the Covidence import UI",
+      "description": "As an admin, I want the Covidence import page to show explicit eligibility sections so I can enter PICOS-style include and exclude criteria without packing everything into two large textareas.",
+      "acceptanceCriteria": [
+        "Replace the current inclusion and exclusion criteria textareas with sectioned textareas for Population, Intervention / Exposure, Comparator / Context, Outcome, Study Characteristics, and Other with include and exclude variants.",
+        "The UI explains that every non-empty field becomes a separate project prompt.",
+        "Leaving any section blank remains valid and does not block package analysis or create.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceAnalyze.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Submit structured eligibility sections from the Covidence UI create flow",
+      "description": "As an admin, I want the Covidence import UI to submit ordered structured eligibility fields to the create API so the created project receives the intended prompt set.",
+      "acceptanceCriteria": [
+        "The UI serializes the sectioned eligibility form into ordered field entries that match the new server contract.",
+        "Submission excludes empty or whitespace-only fields from the payload while preserving the remaining field order.",
+        "Successful create still navigates to the created project or datasource after sending the new structured payload.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceAnalyze.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-003",
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Add focused coverage for blank-field skipping and multi-prompt project linking",
+      "description": "As a maintainer, I want focused Covidence tests around structured eligibility prompts so blank-field skipping, prompt ordering, and project linking remain stable as the feature evolves.",
+      "acceptanceCriteria": [
+        "Service tests cover blank or whitespace-only eligibility fields being ignored during prompt creation.",
+        "Create route tests cover one prompt per non-empty field and project prompt attachment in submitted order.",
+        "Response-shape assertions are updated for the returned prompt list rather than a single prompt record.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceAnalyze.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-003",
+        "US-005"
+      ]
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-04-10T16:56:27.543Z"
+  }
+}
