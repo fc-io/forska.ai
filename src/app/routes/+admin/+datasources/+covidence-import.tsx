@@ -172,7 +172,7 @@ type CovidenceCreateResponse = {
 const covidenceModeOptions: Array<{description: string; title: string; value: CovidenceImportMode}> = [
   {
     description:
-      'Screen + irrelevant + select exports. Seeds title/abstract no/yes decisions and leaves screen rows unanswered.',
+      'Title and abstract screening, irrelevant, and full-text review CSV exports. Seeds title/abstract no/yes decisions and leaves title and abstract screening rows unanswered.',
     title: 'Title / abstract screening',
     value: 'title_abstract',
   },
@@ -199,11 +199,11 @@ const covidenceRoleHintsByMode: Record<CovidenceImportMode, Record<CovidenceFile
     irrelevant: 'Required. Marks studies excluded at title/abstract stage.',
   },
   title_abstract: {
-    all: 'Required. Use the Covidence screen export for studies still in title/abstract screening.',
+    all: 'Required CSV for studies still in title/abstract screening.',
     excluded: 'Not used in title/abstract mode.',
-    full_text: 'Required. Use the Covidence select export for studies approved for full-text review.',
+    full_text: 'Required CSV for studies approved for full-text review.',
     included: 'Not used in title/abstract mode.',
-    irrelevant: 'Required. Use the Covidence irrelevant export for human-excluded title/abstract decisions.',
+    irrelevant: 'Required CSV for human-excluded title/abstract decisions.',
   },
 }
 const covidenceStageOrder: CovidenceFileRole[] = ['irrelevant', 'full_text', 'excluded', 'included']
@@ -237,9 +237,9 @@ const getMissingCovidenceRoles = (filesByRole: Record<CovidenceFileRole, File | 
 
 const getCovidenceRoleLabel = (mode: CovidenceImportMode, fileRole: CovidenceFileRole) => {
   return mode === 'title_abstract' && fileRole === 'all'
-    ? 'Screen'
+    ? 'Title and abstract screening'
     : mode === 'title_abstract' && fileRole === 'full_text'
-      ? 'Select'
+      ? 'Full text review'
       : covidenceRoleLabels[fileRole]
 }
 
@@ -285,15 +285,76 @@ const fetchModels = async (): Promise<ModelOption[]> => {
   return [...hpcSorted, ...codexInApiOrder]
 }
 
+const getParsedJsonResponseBody = async (response: Response) => {
+  const responseText = await response.text()
+
+  if (!responseText) {
+    return null
+  }
+
+  try {
+    return JSON.parse(responseText) as unknown
+  } catch {
+    return responseText
+  }
+}
+
+const appendCovidenceFilesToFormData = (
+  formData: FormData,
+  files: Array<{file: File; fileRole: CovidenceFileRole}>,
+) => {
+  return files.reduce((nextFormData, entry, index) => {
+    nextFormData.append(`files[${index}].file`, entry.file)
+    nextFormData.append(`files[${index}].fileRole`, entry.fileRole)
+
+    return nextFormData
+  }, formData)
+}
+
+const appendCovidenceEligibilityFieldsToFormData = (
+  formData: FormData,
+  eligibilityFields: Array<{
+    disposition: CovidenceEligibilityDisposition
+    sectionKey: CovidenceEligibilitySectionKey
+    sectionLabel: string
+    text: string
+  }>,
+) => {
+  return eligibilityFields.reduce((nextFormData, field, index) => {
+    nextFormData.append(`eligibilityFields[${index}].disposition`, field.disposition)
+    nextFormData.append(`eligibilityFields[${index}].sectionKey`, field.sectionKey)
+    nextFormData.append(`eligibilityFields[${index}].sectionLabel`, field.sectionLabel)
+    nextFormData.append(`eligibilityFields[${index}].text`, field.text)
+
+    return nextFormData
+  }, formData)
+}
+
+const postCovidenceFormData = async <T>(params: {errorMessage: string; formData: FormData; path: string}) => {
+  const response = await fetch(params.path, {body: params.formData, method: 'POST'})
+  const payload = await getParsedJsonResponseBody(response)
+
+  return handleApiResponse<T>(
+    {
+      data: payload as T,
+      error: response.ok ? undefined : payload,
+      status: response.status,
+    },
+    params.errorMessage,
+  )
+}
+
 const analyzeCovidencePackage = async (params: {
   files: Array<{file: File; fileRole: CovidenceFileRole}>
   mode: CovidenceImportMode
 }) => {
-  const response = await apiClient.api.datasources.import['covidence-analyze'].post(params)
-  const result = handleApiResponse<CovidenceAnalyzeResponse>(
-    response as unknown as {data?: CovidenceAnalyzeResponse; error?: unknown; status?: number},
-    'Failed to analyze Covidence package',
-  )
+  const formData = appendCovidenceFilesToFormData(new FormData(), params.files)
+  formData.append('mode', params.mode)
+  const result = await postCovidenceFormData<CovidenceAnalyzeResponse>({
+    errorMessage: 'Failed to analyze Covidence package',
+    formData,
+    path: '/api/datasources/import/covidence-analyze',
+  })
 
   return result.data
 }
@@ -337,20 +398,24 @@ const createCovidenceImport = async (params: {
   modelId: string
   title: string
 }) => {
-  const response = await apiClient.api.datasources.import['covidence-create'].post({
-    answerSet: params.answerSet,
-    description: params.description.trim() || undefined,
-    eligibilityFields: params.eligibilityFields,
-    files: params.files,
-    mode: params.mode,
-    modelId: params.modelId,
-    title: params.title.trim(),
-  })
-
-  return handleApiResponse<CovidenceCreateResponse>(
-    response as unknown as {data?: CovidenceCreateResponse; error?: unknown; status?: number},
-    'Failed to import Covidence package',
+  const formData = appendCovidenceEligibilityFieldsToFormData(
+    appendCovidenceFilesToFormData(new FormData(), params.files),
+    params.eligibilityFields,
   )
+  formData.append('answerSet', params.answerSet)
+  formData.append('mode', params.mode)
+  formData.append('modelId', params.modelId)
+  formData.append('title', params.title.trim())
+
+  if (params.description.trim()) {
+    formData.append('description', params.description.trim())
+  }
+
+  return postCovidenceFormData<CovidenceCreateResponse>({
+    errorMessage: 'Failed to import Covidence package',
+    formData,
+    path: '/api/datasources/import/covidence-create',
+  })
 }
 
 const AdminCovidenceImport = () => {
@@ -523,7 +588,7 @@ const AdminCovidenceImport = () => {
               <p class="text-xs font-semibold uppercase tracking-[0.28em] text-amber-700">Admin import flow</p>
               <h1 class="text-3xl font-semibold tracking-tight text-stone-900">Covidence multi-file import</h1>
               <p class="max-w-2xl text-sm leading-6 text-stone-600">
-                Upload the required Covidence exports, inspect how screen, irrelevant, and select rows merge, then
+                Upload the required Covidence CSV exports, inspect the merged rows, then
                 create the datasource, prompt, linked project, and seeded judgments in one pass.
               </p>
             </div>
@@ -734,7 +799,7 @@ const AdminCovidenceImport = () => {
               <div class="mb-4">
                 <h2 class="text-lg font-semibold text-stone-900">2. Upload required Covidence files</h2>
                 <p class="mt-1 text-sm text-stone-500">
-                  Switching modes resets selected files so the preview always matches the package.
+                  Switching modes resets selected files. Upload CSV exports only.
                 </p>
               </div>
 
@@ -752,7 +817,7 @@ const AdminCovidenceImport = () => {
                         <p class="mb-3 text-xs leading-5 text-stone-500">{getCovidenceRoleHint(mode(), fileRole)}</p>
                         <input
                           type="file"
-                          accept=".csv,.ris,text/csv,text/plain,application/octet-stream"
+                          accept=".csv,text/csv"
                           onChange={(event) => {
                             handleFileChange(fileRole, event)
                           }}
