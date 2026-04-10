@@ -1,5 +1,11 @@
 import {afterEach, expect, test} from 'bun:test'
 
+import {
+  classifyConnectionFailure,
+  ConnectionError,
+  recordConnectionFailure,
+  recordConnectionSuccess,
+} from './connectionHealth.ts'
 import {resetJudgmentRequestRuntimeForTests, withJudgmentRequest} from './judgmentsRequestRuntime.ts'
 
 const flush = async (): Promise<void> => {
@@ -22,7 +28,10 @@ const createSignal = () => {
 
 afterEach(() => {
   resetJudgmentRequestRuntimeForTests()
+  Date.now = realDateNow
 })
+
+const realDateNow = Date.now
 
 test('fallback requests enforce provider caps and release after failure', async () => {
   const firstRelease = createSignal()
@@ -211,4 +220,115 @@ test('codex requests enforce saved provider caps per connection', async () => {
   await thirdRequest
 
   expect(secondStarted).toBe(true)
+})
+
+test('fallback endpoint availability blocks during cooldown, allows one probe, and resumes after probe success', async () => {
+  let now = 1_000
+  Date.now = () => {
+    return now
+  }
+
+  const providerConnectionId = 'connection-gated'
+  const fallbackBaseURL = 'http://fallback-runtime-gated.test/v1'
+  const failure = classifyConnectionFailure({
+    context: {effectiveBaseURL: fallbackBaseURL, endpointPath: '/v1/chat/completions', providerKind: 'openai'},
+    error: {status: 404},
+  })
+
+  recordConnectionFailure({effectiveBaseURL: fallbackBaseURL, failure, providerConnectionId})
+
+  let blockedError: unknown = null
+
+  try {
+    await withJudgmentRequest(
+      {
+        judgmentsJobId: 'job-gated-blocked',
+        provider: 'openai',
+        fallbackBaseURL,
+        providerConnectionId,
+        providerMaxInflightRequests: 2,
+        providerUsesFamilyDefault: false,
+        workerUrls: [],
+      },
+      async () => {
+        throw new Error('should not run while cooldown is active')
+      },
+    )
+  } catch (error) {
+    blockedError = error
+  }
+
+  expect(blockedError).toBeInstanceOf(ConnectionError)
+
+  now += 30_001
+
+  const probeRelease = createSignal()
+  let probeStarted = false
+  let secondStarted = false
+  let thirdStarted = false
+
+  const probeRequest = withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-gated-probe-1',
+      provider: 'openai',
+      fallbackBaseURL,
+      providerConnectionId,
+      providerMaxInflightRequests: 2,
+      providerUsesFamilyDefault: false,
+      workerUrls: [],
+    },
+    async (baseURL) => {
+      probeStarted = true
+      await probeRelease.promise
+      recordConnectionSuccess({effectiveBaseURL: baseURL, providerConnectionId})
+    },
+  )
+
+  await flush()
+  expect(probeStarted).toBe(true)
+
+  let probingBlockedError: unknown = null
+
+  try {
+    await withJudgmentRequest(
+      {
+        judgmentsJobId: 'job-gated-probe-2',
+        provider: 'openai',
+        fallbackBaseURL,
+        providerConnectionId,
+        providerMaxInflightRequests: 2,
+        providerUsesFamilyDefault: false,
+        workerUrls: [],
+      },
+      async () => {
+        secondStarted = true
+      },
+    )
+  } catch (error) {
+    probingBlockedError = error
+  }
+
+  expect(probingBlockedError).toBeInstanceOf(ConnectionError)
+
+  expect(secondStarted).toBe(false)
+
+  probeRelease.resolve()
+  await probeRequest
+
+  await withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-gated-probe-3',
+      provider: 'openai',
+      fallbackBaseURL,
+      providerConnectionId,
+      providerMaxInflightRequests: 2,
+      providerUsesFamilyDefault: false,
+      workerUrls: [],
+    },
+    async () => {
+      thirdStarted = true
+    },
+  )
+
+  expect(thirdStarted).toBe(true)
 })

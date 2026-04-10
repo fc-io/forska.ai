@@ -1,29 +1,8 @@
-/**
- * Connection health tracking with circuit breaker pattern.
- *
- * When the inference server is down, we want to:
- * 1. Stop hammering it with requests (circuit breaker)
- * 2. Automatically resume when it's back up (cooldown-based recovery)
- *
- * The circuit breaker has three states:
- * - CLOSED: Normal operation, requests flow through
- * - OPEN: Too many failures, requests are blocked
- * - HALF-OPEN: After cooldown, allow one test request
- */
-
-import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
-
-// Circuit breaker configuration
-const CIRCUIT_BREAKER_THRESHOLD = 5 // Number of consecutive failures to open circuit
-const COOLDOWN_MS = 30_000 // 30 seconds before attempting retry
-
-// Rate-limited logger for circuit breaker events (30s window)
-const circuitLogger = createRateLimitedLogger({windowMs: 30_000})
-
-// State tracking (per baseURL to handle multiple inference servers)
-type CircuitState = {consecutiveFailures: number; lastFailureTime: Date | null; isOpen: boolean}
-
-const circuitStates = new Map<string, CircuitState>()
+import {
+  getJudgmentEndpointAvailability,
+  recordJudgmentEndpointFailure,
+  recordJudgmentEndpointSuccess,
+} from './judgmentEndpointAvailability.ts'
 
 export type ConnectionFailureKind =
   | 'network_unavailable'
@@ -101,6 +80,7 @@ const isCircuitOpenError = (error: unknown): boolean => {
   return (
     message.includes('circuit breaker')
     || message.includes('blocked by circuit breaker')
+    || message.includes('endpoint availability gate')
     || (error instanceof ConnectionError && error.failure.kind === 'circuit_open')
   )
 }
@@ -235,106 +215,61 @@ export const createConnectionError = ({
   return new ConnectionError(failure.message, failure.effectiveBaseURL, failure)
 }
 
-const getOrCreateState = (baseURL: string): CircuitState => {
-  let state = circuitStates.get(baseURL)
-  if (!state) {
-    state = {consecutiveFailures: 0, lastFailureTime: null, isOpen: false}
-    circuitStates.set(baseURL, state)
+const getConnectionTrackingInput = (
+  input: string | {effectiveBaseURL: string; failure?: ConnectionFailure; providerConnectionId?: string | null},
+): {effectiveBaseURL: string; failure: ConnectionFailure | null; providerConnectionId: string | null} => {
+  if (typeof input === 'string') {
+    return {effectiveBaseURL: input, failure: null, providerConnectionId: null}
   }
-  return state
+
+  return {
+    effectiveBaseURL: input.effectiveBaseURL,
+    failure: input.failure ?? null,
+    providerConnectionId: input.providerConnectionId ?? null,
+  }
 }
 
-/**
- * Check if the circuit breaker is open (blocking requests).
- * If cooldown has expired, the circuit moves to half-open state.
- */
 export const isCircuitOpen = (baseURL: string): boolean => {
-  const state = getOrCreateState(baseURL)
+  const state = getJudgmentEndpointAvailability({effectiveBaseURL: baseURL, providerConnectionId: null})
 
-  if (state.consecutiveFailures < CIRCUIT_BREAKER_THRESHOLD) {
-    return false
-  }
-
-  if (!state.lastFailureTime) {
-    return false
-  }
-
-  const timeSinceLastFailure = Date.now() - state.lastFailureTime.getTime()
-  const cooldownExpired = timeSinceLastFailure > COOLDOWN_MS
-
-  if (cooldownExpired) {
-    // Move to half-open state - allow a test request
-    circuitLogger.log(
-      `circuit:half-open:${baseURL}`,
-      `Circuit breaker half-open for ${baseURL} - allowing test request`,
-    )
-    // Reset to allow one retry, but keep some failure count
-    // so we don't need full threshold again if it fails
-    state.consecutiveFailures = CIRCUIT_BREAKER_THRESHOLD - 1
-    state.isOpen = false
-    return false
-  }
-
-  if (!state.isOpen) {
-    state.isOpen = true
-    // Force log state transitions (important events)
-    circuitLogger.force(
-      `circuit:open:${baseURL}`,
-      `Circuit breaker OPEN for ${baseURL} - blocking requests for ${COOLDOWN_MS}ms`,
-    )
-  }
-
-  return true
+  return state.status !== 'healthy'
 }
 
-/**
- * Record a successful connection - reset the circuit breaker.
- */
-export const recordConnectionSuccess = (baseURL: string): void => {
-  const state = getOrCreateState(baseURL)
-  if (state.consecutiveFailures > 0 || state.isOpen) {
-    // Force log recovery (important event) and reset rate limiter for this URL
-    circuitLogger.force(`circuit:closed:${baseURL}`, `Circuit breaker CLOSED for ${baseURL} - connection restored`)
-    circuitLogger.reset(`circuit:failure:${baseURL}`)
-  }
-  state.consecutiveFailures = 0
-  state.lastFailureTime = null
-  state.isOpen = false
+export const recordConnectionSuccess = (
+  input: string | {effectiveBaseURL: string; providerConnectionId?: string | null},
+): void => {
+  const {effectiveBaseURL, providerConnectionId} = getConnectionTrackingInput(input)
+
+  return recordJudgmentEndpointSuccess({effectiveBaseURL, providerConnectionId})
 }
 
-/**
- * Record a connection failure - may trip the circuit breaker.
- */
-export const recordConnectionFailure = (baseURL: string): void => {
-  const state = getOrCreateState(baseURL)
-  state.consecutiveFailures += 1
-  state.lastFailureTime = new Date()
+export const recordConnectionFailure = (
+  input: string | {effectiveBaseURL: string; failure?: ConnectionFailure; providerConnectionId?: string | null},
+): void => {
+  const {effectiveBaseURL, failure, providerConnectionId} = getConnectionTrackingInput(input)
 
-  if (state.consecutiveFailures >= CIRCUIT_BREAKER_THRESHOLD) {
-    // Rate-limited: only log once per 30s window, with count of suppressed logs
-    circuitLogger.warn(
-      `circuit:failure:${baseURL}`,
-      `Circuit breaker: ${state.consecutiveFailures} consecutive failures for ${baseURL}`,
-    )
-  }
+  return recordJudgmentEndpointFailure({
+    effectiveBaseURL,
+    failureKind: failure?.kind ?? 'network_unavailable',
+    failureMessage: failure?.message ?? `Connection failure recorded for ${effectiveBaseURL}`,
+    providerConnectionId,
+  })
 }
 
-/**
- * Get current circuit breaker status for monitoring/debugging.
- */
 export const getCircuitStatus = (
   baseURL: string,
 ): {isOpen: boolean; consecutiveFailures: number; lastFailureTime: Date | null; cooldownRemainingMs: number | null} => {
-  const state = getOrCreateState(baseURL)
-  const cooldownRemainingMs =
-    state.lastFailureTime && state.isOpen
-      ? Math.max(0, COOLDOWN_MS - (Date.now() - state.lastFailureTime.getTime()))
-      : null
+  const state = getJudgmentEndpointAvailability({effectiveBaseURL: baseURL, providerConnectionId: null})
+  const cooldownRemainingMs = state.cooldownExpiresAt
+    ? Math.max(0, state.cooldownExpiresAt.getTime() - Date.now())
+    : null
 
   return {
-    isOpen: state.isOpen,
-    consecutiveFailures: state.consecutiveFailures,
-    lastFailureTime: state.lastFailureTime,
+    isOpen: state.status !== 'healthy',
+    consecutiveFailures: state.lastFailureKind == null ? 0 : 1,
+    lastFailureTime: state.cooldownExpiresAt
+      ? new Date(state.cooldownExpiresAt.getTime() - (cooldownRemainingMs ?? 0))
+      : null,
     cooldownRemainingMs,
   }
 }

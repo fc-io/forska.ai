@@ -762,7 +762,7 @@ export const judgeSinglePrompt = async ({
           chunkingStrategy: null,
         })
 
-        recordConnectionSuccess(currentResponse.baseURL)
+        recordConnectionSuccess({effectiveBaseURL: currentResponse.baseURL, providerConnectionId})
 
         tokenUse.push({
           articleId: article.id,
@@ -795,7 +795,7 @@ export const judgeSinglePrompt = async ({
             error,
             providerKind: provider,
           })
-          recordConnectionFailure(requestBaseURL)
+          recordConnectionFailure({effectiveBaseURL: requestBaseURL, failure, providerConnectionId})
           abortCount += 1
           errorCount += 1
           rateLimitedLogger.error(`judge:connection-error:${failure.kind}:${requestBaseURL}`, failure.message)
@@ -972,7 +972,7 @@ export const judgeSinglePrompt = async ({
               })
 
               evidence = parseSinglePromptEvidence(currentResponse.text)
-              recordConnectionSuccess(currentResponse.baseURL)
+              recordConnectionSuccess({effectiveBaseURL: currentResponse.baseURL, providerConnectionId})
 
               tokenUse.push({
                 articleId: article.id,
@@ -1020,7 +1020,11 @@ export const judgeSinglePrompt = async ({
                 : null
 
               if (connectionFailure) {
-                recordConnectionFailure(requestBaseURL)
+                recordConnectionFailure({
+                  effectiveBaseURL: requestBaseURL,
+                  failure: classifiedFailure ?? undefined,
+                  providerConnectionId,
+                })
                 abortCount += 1
                 errorCount += 1
                 rateLimitedLogger.error(
@@ -1197,7 +1201,7 @@ export const judgeSinglePrompt = async ({
           const quoteValidation = getQuoteValidation(rawQuotes, recordTextForQuoteValidation)
 
           if (quoteValidation.invalid.length > 0 && attempts < MAX_RETRIES) {
-            recordConnectionSuccess(currentResponse.baseURL)
+            recordConnectionSuccess({effectiveBaseURL: currentResponse.baseURL, providerConnectionId})
 
             tokenUse.push({
               articleId: article.id,
@@ -1242,7 +1246,7 @@ export const judgeSinglePrompt = async ({
             chunkingStrategy,
           })
 
-          recordConnectionSuccess(currentResponse.baseURL)
+          recordConnectionSuccess({effectiveBaseURL: currentResponse.baseURL, providerConnectionId})
 
           tokenUse.push({
             articleId: article.id,
@@ -1276,7 +1280,7 @@ export const judgeSinglePrompt = async ({
               error,
               providerKind: provider,
             })
-            recordConnectionFailure(requestBaseURL)
+            recordConnectionFailure({effectiveBaseURL: requestBaseURL, failure, providerConnectionId})
             abortCount += 1
             errorCount += 1
             rateLimitedLogger.error(`judge:connection-error:${failure.kind}:${requestBaseURL}`, failure.message)

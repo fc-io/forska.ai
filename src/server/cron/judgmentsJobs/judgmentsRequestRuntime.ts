@@ -1,7 +1,12 @@
 import {workerLoadBalancer} from '../../utils/workerLoadBalancer.ts'
-import {ConnectionError, createConnectionError, isCircuitOpen} from './connectionHealth.ts'
+import {ConnectionError, createConnectionError} from './connectionHealth.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
+import {
+  claimJudgmentEndpointAvailability,
+  getJudgmentEndpointAvailability,
+  resetJudgmentEndpointAvailabilityForTests,
+} from './judgmentEndpointAvailability.ts'
 
 type RequestSlot = {baseURL: string; release: () => void}
 
@@ -18,6 +23,7 @@ type WorkerWaiter = RequestWaiter<RequestSlot> & {providerScope: ProviderRequest
 
 type JobRequestState = {inFlight: number; pendingPersistedAttempts: number}
 type ProviderRequestState = {inFlight: number}
+type SlotAcquisitionAttempt = {slot: RequestSlot; type: 'slot'} | {type: 'blocked'} | {type: 'waiting'}
 
 const codexWaiters: RequestWaiter<() => void>[] = []
 const codexProviderWaiters: CodexProviderWaiter[] = []
@@ -113,18 +119,74 @@ const markRequestFinished = (judgmentsJobId: string): void => {
   trimJobRequestState(judgmentsJobId)
 }
 
-const buildWorkerCircuitError = (workerUrls: string[]): ConnectionError => {
+const createProviderScopeConnectionContext = ({baseURL}: {baseURL: string}) => {
+  return {effectiveBaseURL: baseURL, endpointPath: null, providerKind: null}
+}
+
+const buildWorkerCircuitError = ({
+  providerScope: _providerScope,
+  workerUrls,
+}: {
+  providerScope: ProviderRequestScope
+  workerUrls: string[]
+}): ConnectionError => {
   const firstWorker = workerUrls[0]
   const baseURL = firstWorker ? `${firstWorker}/v1` : 'worker://unavailable'
+
   return createConnectionError({
-    context: {effectiveBaseURL: baseURL, endpointPath: null, providerKind: null},
-    error: new Error('All inference workers blocked by circuit breaker'),
+    context: createProviderScopeConnectionContext({baseURL}),
+    error: new Error('All inference workers blocked by endpoint availability gate'),
   })
 }
 
-const hasHealthyWorker = (workerUrls: string[]): boolean => {
+const getEndpointAvailabilityState = ({
+  baseURL,
+  providerScope,
+}: {
+  baseURL: string
+  providerScope: ProviderRequestScope
+}) => {
+  return getJudgmentEndpointAvailability({
+    effectiveBaseURL: baseURL,
+    providerConnectionId: providerScope.providerConnectionId,
+  })
+}
+
+const canRequestEndpointNow = ({
+  baseURL,
+  providerScope,
+}: {
+  baseURL: string
+  providerScope: ProviderRequestScope
+}): boolean => {
+  const state = getEndpointAvailabilityState({baseURL, providerScope})
+  const cooldownExpired = state.cooldownExpiresAt ? state.cooldownExpiresAt.getTime() <= Date.now() : false
+
+  return state.status === 'healthy' || (state.status !== 'probing' && cooldownExpired)
+}
+
+const claimEndpointAvailability = ({
+  baseURL,
+  providerScope,
+}: {
+  baseURL: string
+  providerScope: ProviderRequestScope
+}): boolean => {
+  return claimJudgmentEndpointAvailability({
+    effectiveBaseURL: baseURL,
+    providerConnectionId: providerScope.providerConnectionId,
+  })
+}
+
+const hasHealthyWorker = ({
+  providerScope,
+  workerUrls,
+}: {
+  providerScope: ProviderRequestScope
+  workerUrls: string[]
+}): boolean => {
   return workerUrls.some((url) => {
-    return !isCircuitOpen(`${url}/v1`)
+    return canRequestEndpointNow({baseURL: `${url}/v1`, providerScope})
   })
 }
 
@@ -225,19 +287,44 @@ const tryAcquireWorkerSlot = ({
 }: {
   providerScope: ProviderRequestScope
   workerUrls: string[]
-}): RequestSlot | null => {
+}): SlotAcquisitionAttempt => {
   const releaseProviderRequest = acquireProviderRequestRelease(providerScope)
-  if (!releaseProviderRequest) return null
+  if (!releaseProviderRequest) return {type: 'waiting'}
 
-  const workerUrl = workerLoadBalancer.acquireWorkerUrl({
-    maxActiveRequests: getNonCodexCapacity().perWorkerMaxInflightRequests,
-    workerUrls,
-    canUse: (url) => {
-      return !isCircuitOpen(`${url}/v1`)
-    },
+  const maxActiveRequests = getNonCodexCapacity().perWorkerMaxInflightRequests
+  const healthyWorkerUrl = workerLoadBalancer.acquireWorkerUrl({
+    maxActiveRequests,
+    workerUrls: workerUrls.filter((url) => {
+      return getEndpointAvailabilityState({baseURL: `${url}/v1`, providerScope}).status === 'healthy'
+    }),
   })
 
-  return workerUrl ? buildWorkerSlot(workerUrl, releaseProviderRequest) : (releaseProviderRequest(), null)
+  if (healthyWorkerUrl) {
+    return {slot: buildWorkerSlot(healthyWorkerUrl, releaseProviderRequest), type: 'slot'}
+  }
+
+  const probeEligibleWorkerUrl = workerLoadBalancer.acquireWorkerUrl({
+    maxActiveRequests: getNonCodexCapacity().perWorkerMaxInflightRequests,
+    workerUrls: workerUrls.filter((url) => {
+      return canRequestEndpointNow({baseURL: `${url}/v1`, providerScope})
+    }),
+  })
+
+  if (!probeEligibleWorkerUrl) {
+    releaseProviderRequest()
+    return hasHealthyWorker({providerScope, workerUrls}) ? {type: 'waiting'} : {type: 'blocked'}
+  }
+
+  const baseURL = `${probeEligibleWorkerUrl}/v1`
+
+  if (!claimEndpointAvailability({baseURL, providerScope})) {
+    workerLoadBalancer.releaseWorker(probeEligibleWorkerUrl)
+    releaseProviderRequest()
+
+    return hasHealthyWorker({providerScope, workerUrls}) ? {type: 'waiting'} : {type: 'blocked'}
+  }
+
+  return {slot: buildWorkerSlot(probeEligibleWorkerUrl, releaseProviderRequest), type: 'slot'}
 }
 
 const drainWorkerWaiters = (): void => {
@@ -246,12 +333,24 @@ const drainWorkerWaiters = (): void => {
   >((state, waiter, index) => {
     if (state) return state
 
-    if (!hasHealthyWorker(waiter.workerUrls)) {
-      return {error: buildWorkerCircuitError(waiter.workerUrls), index, type: 'reject'}
+    if (!hasHealthyWorker({providerScope: waiter.providerScope, workerUrls: waiter.workerUrls})) {
+      return {
+        error: buildWorkerCircuitError({providerScope: waiter.providerScope, workerUrls: waiter.workerUrls}),
+        index,
+        type: 'reject',
+      }
     }
 
-    const slot = tryAcquireWorkerSlot(waiter)
-    return slot ? {index, slot, type: 'resolve'} : null
+    const attempt = tryAcquireWorkerSlot(waiter)
+    return attempt.type === 'slot'
+      ? {index, slot: attempt.slot, type: 'resolve'}
+      : attempt.type === 'blocked'
+        ? {
+            error: buildWorkerCircuitError({providerScope: waiter.providerScope, workerUrls: waiter.workerUrls}),
+            index,
+            type: 'reject',
+          }
+        : null
   }, null)
 
   if (!nextAction) return
@@ -271,10 +370,10 @@ const acquireWorkerSlot = async ({
   providerScope: ProviderRequestScope
   workerUrls: string[]
 }): Promise<RequestSlot> => {
-  const slot = tryAcquireWorkerSlot({providerScope, workerUrls})
+  const attempt = tryAcquireWorkerSlot({providerScope, workerUrls})
 
-  if (slot) return slot
-  if (!hasHealthyWorker(workerUrls)) throw buildWorkerCircuitError(workerUrls)
+  if (attempt.type === 'slot') return attempt.slot
+  if (attempt.type === 'blocked') throw buildWorkerCircuitError({providerScope, workerUrls})
 
   return new Promise((resolve, reject) => {
     workerWaiters.push({providerScope, reject, resolve, workerUrls})
@@ -287,25 +386,46 @@ const tryAcquireFallbackSlot = ({
 }: {
   baseURL: string
   providerScope: ProviderRequestScope
-}): RequestSlot | null => {
+}): SlotAcquisitionAttempt => {
   const releaseProviderRequest = acquireProviderRequestRelease(providerScope)
   const maxInflight = getNonCodexCapacity().maxInflight
   const canAcquireFallback = fallbackInFlight < maxInflight
 
   if (!releaseProviderRequest || !canAcquireFallback) {
-    return releaseProviderRequest ? (releaseProviderRequest(), null) : null
+    return releaseProviderRequest ? (releaseProviderRequest(), {type: 'waiting'}) : {type: 'waiting'}
+  }
+
+  if (!claimEndpointAvailability({baseURL, providerScope})) {
+    releaseProviderRequest()
+    return {type: 'blocked'}
   }
 
   fallbackInFlight += 1
 
   return {
-    baseURL,
-    release: () => {
-      fallbackInFlight = Math.max(0, fallbackInFlight - 1)
-      releaseProviderRequest()
-      drainProviderScopedWaiters()
+    slot: {
+      baseURL,
+      release: () => {
+        fallbackInFlight = Math.max(0, fallbackInFlight - 1)
+        releaseProviderRequest()
+        drainProviderScopedWaiters()
+      },
     },
+    type: 'slot',
   }
+}
+
+const buildFallbackCircuitError = ({
+  baseURL,
+  providerScope: _providerScope,
+}: {
+  baseURL: string
+  providerScope: ProviderRequestScope
+}): ConnectionError => {
+  return createConnectionError({
+    context: createProviderScopeConnectionContext({baseURL}),
+    error: new Error('Inference server blocked by endpoint availability gate'),
+  })
 }
 
 const drainFallbackWaiters = (): void => {
@@ -314,19 +434,16 @@ const drainFallbackWaiters = (): void => {
   >((state, waiter, index) => {
     if (state) return state
 
-    if (isCircuitOpen(waiter.baseURL)) {
-      return {
-        error: createConnectionError({
-          context: {effectiveBaseURL: waiter.baseURL, endpointPath: null, providerKind: null},
-          error: new Error('Inference server blocked by circuit breaker'),
-        }),
-        index,
-        type: 'reject',
-      }
+    if (!canRequestEndpointNow({baseURL: waiter.baseURL, providerScope: waiter.providerScope})) {
+      return {error: buildFallbackCircuitError(waiter), index, type: 'reject'}
     }
 
-    const slot = tryAcquireFallbackSlot(waiter)
-    return slot ? {index, slot, type: 'resolve'} : null
+    const attempt = tryAcquireFallbackSlot(waiter)
+    return attempt.type === 'slot'
+      ? {index, slot: attempt.slot, type: 'resolve'}
+      : attempt.type === 'blocked'
+        ? {error: buildFallbackCircuitError(waiter), index, type: 'reject'}
+        : null
   }, null)
 
   if (!nextAction) return
@@ -346,15 +463,13 @@ const acquireFallbackSlot = async ({
   baseURL: string
   providerScope: ProviderRequestScope
 }): Promise<RequestSlot> => {
-  if (isCircuitOpen(baseURL)) {
-    throw createConnectionError({
-      context: {effectiveBaseURL: baseURL, endpointPath: null, providerKind: null},
-      error: new Error('Inference server blocked by circuit breaker'),
-    })
+  if (!canRequestEndpointNow({baseURL, providerScope})) {
+    throw buildFallbackCircuitError({baseURL, providerScope})
   }
 
-  const slot = tryAcquireFallbackSlot({baseURL, providerScope})
-  if (slot) return slot
+  const attempt = tryAcquireFallbackSlot({baseURL, providerScope})
+  if (attempt.type === 'slot') return attempt.slot
+  if (attempt.type === 'blocked') throw buildFallbackCircuitError({baseURL, providerScope})
 
   return new Promise((resolve, reject) => {
     fallbackWaiters.push({baseURL, providerScope, resolve, reject})
@@ -447,4 +562,5 @@ export const resetJudgmentRequestRuntimeForTests = (): void => {
   providerRequestStates.clear()
   codexInFlight = 0
   fallbackInFlight = 0
+  resetJudgmentEndpointAvailabilityForTests()
 }

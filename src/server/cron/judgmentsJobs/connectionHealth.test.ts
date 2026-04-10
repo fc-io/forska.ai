@@ -1,12 +1,30 @@
-import {expect, test} from 'bun:test'
+import {afterEach, expect, test} from 'bun:test'
 
-import {classifyConnectionFailure, createConnectionError, isConnectionError} from './connectionHealth.ts'
+import {
+  classifyConnectionFailure,
+  createConnectionError,
+  isConnectionError,
+  recordConnectionFailure,
+  recordConnectionSuccess,
+} from './connectionHealth.ts'
+import {
+  claimJudgmentEndpointAvailability,
+  getJudgmentEndpointAvailability,
+  resetJudgmentEndpointAvailabilityForTests,
+} from './judgmentEndpointAvailability.ts'
 
 const context = {
   effectiveBaseURL: 'http://127.0.0.1:11434/v1',
   endpointPath: '/v1/chat/completions',
   providerKind: 'ollama',
 } as const
+
+const realDateNow = Date.now
+
+afterEach(() => {
+  Date.now = realDateNow
+  resetJudgmentEndpointAvailabilityForTests()
+})
 
 test('classifies missing required OpenAI-compatible endpoints as endpoint unavailable', () => {
   const failure = classifyConnectionFailure({context, error: {status: 404}})
@@ -51,4 +69,75 @@ test('classifies circuit-open failures with typed connection errors', () => {
 
   expect(error.failure.kind).toBe('circuit_open')
   expect(isConnectionError(error)).toBe(true)
+})
+
+test('tracks endpoint availability by provider connection and effective base URL', () => {
+  const failure = classifyConnectionFailure({context, error: {status: 404}})
+
+  recordConnectionFailure({effectiveBaseURL: context.effectiveBaseURL, failure, providerConnectionId: 'connection-a'})
+
+  expect(
+    getJudgmentEndpointAvailability({effectiveBaseURL: context.effectiveBaseURL, providerConnectionId: 'connection-a'}),
+  ).toMatchObject({lastFailureKind: 'endpoint_unavailable', status: 'cooldown'})
+  expect(
+    getJudgmentEndpointAvailability({effectiveBaseURL: context.effectiveBaseURL, providerConnectionId: 'connection-b'})
+      .status,
+  ).toBe('healthy')
+})
+
+test('allows a single half-open probe and resets state after a successful probe', () => {
+  let now = 1_000
+  Date.now = () => {
+    return now
+  }
+
+  const failure = classifyConnectionFailure({context, error: {status: 501}})
+
+  recordConnectionFailure({effectiveBaseURL: context.effectiveBaseURL, failure, providerConnectionId: 'connection-a'})
+
+  expect(
+    getJudgmentEndpointAvailability({effectiveBaseURL: context.effectiveBaseURL, providerConnectionId: 'connection-a'})
+      .status,
+  ).toBe('misconfigured')
+  expect(
+    claimJudgmentEndpointAvailability({
+      effectiveBaseURL: context.effectiveBaseURL,
+      providerConnectionId: 'connection-a',
+    }),
+  ).toBe(false)
+
+  now += 30_001
+
+  expect(
+    claimJudgmentEndpointAvailability({
+      effectiveBaseURL: context.effectiveBaseURL,
+      providerConnectionId: 'connection-a',
+    }),
+  ).toBe(true)
+
+  const probingState = getJudgmentEndpointAvailability({
+    effectiveBaseURL: context.effectiveBaseURL,
+    providerConnectionId: 'connection-a',
+  })
+
+  expect(probingState.status).toBe('probing')
+  expect(probingState.probePromise).toBeInstanceOf(Promise)
+  expect(
+    claimJudgmentEndpointAvailability({
+      effectiveBaseURL: context.effectiveBaseURL,
+      providerConnectionId: 'connection-a',
+    }),
+  ).toBe(false)
+
+  recordConnectionSuccess({effectiveBaseURL: context.effectiveBaseURL, providerConnectionId: 'connection-a'})
+
+  expect(
+    getJudgmentEndpointAvailability({effectiveBaseURL: context.effectiveBaseURL, providerConnectionId: 'connection-a'}),
+  ).toMatchObject({
+    cooldownExpiresAt: null,
+    lastFailureKind: null,
+    lastFailureMessage: null,
+    probePromise: null,
+    status: 'healthy',
+  })
 })
