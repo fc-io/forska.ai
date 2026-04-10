@@ -10,6 +10,14 @@ import {handleApiResponse} from '../../../../services/utils/handleApiResponse.ts
 type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
 type CovidencePromptAnswerSet = 'yes|no' | 'yes|no|unsure'
+type CovidenceEligibilityDisposition = 'include' | 'exclude'
+type CovidenceEligibilitySectionKey =
+  | 'population'
+  | 'interventionExposure'
+  | 'comparatorContext'
+  | 'outcome'
+  | 'studyCharacteristics'
+  | 'other'
 type ModelOption = {
   id: string
   label: string
@@ -17,6 +25,63 @@ type ModelOption = {
   name: string
   provider: string | null
   version: string | null
+}
+
+const covidenceEligibilitySections: Array<{description: string; key: CovidenceEligibilitySectionKey; label: string}> = [
+  {
+    description: 'Participants, disease state, demographics, setting, or eligibility population details.',
+    key: 'population',
+    label: 'Population',
+  },
+  {
+    description: 'Treatments, exposures, programs, or index interventions under review.',
+    key: 'interventionExposure',
+    label: 'Intervention / Exposure',
+  },
+  {
+    description: 'Comparators, controls, background care, or study context requirements.',
+    key: 'comparatorContext',
+    label: 'Comparator / Context',
+  },
+  {
+    description: 'Outcomes, endpoints, follow-up thresholds, or outcome reporting needs.',
+    key: 'outcome',
+    label: 'Outcome',
+  },
+  {
+    description: 'Design, publication status, language, time frame, sample size, or other study features.',
+    key: 'studyCharacteristics',
+    label: 'Study Characteristics',
+  },
+  {
+    description: 'Anything else the prompt should screen for that does not fit the PICOS buckets above.',
+    key: 'other',
+    label: 'Other',
+  },
+]
+const createEmptyEligibilitySectionValues = (): Record<
+  CovidenceEligibilitySectionKey,
+  Record<CovidenceEligibilityDisposition, string>
+> => {
+  return {
+    comparatorContext: {exclude: '', include: ''},
+    interventionExposure: {exclude: '', include: ''},
+    other: {exclude: '', include: ''},
+    outcome: {exclude: '', include: ''},
+    population: {exclude: '', include: ''},
+    studyCharacteristics: {exclude: '', include: ''},
+  }
+}
+const getCovidenceEligibilityPromptFields = (
+  sectionValues: Record<CovidenceEligibilitySectionKey, Record<CovidenceEligibilityDisposition, string>>,
+) => {
+  return covidenceEligibilitySections.flatMap((section) => {
+    return (['include', 'exclude'] as const).flatMap((disposition) => {
+      const text = sectionValues[section.key][disposition].trim()
+
+      return text.length > 0 ? [{disposition, sectionKey: section.key, sectionLabel: section.label, text}] : []
+    })
+  })
 }
 type ModelsResponse = {data: ModelOption[]}
 type EnsureModelResponse = {data: {modelId: string}; error: null}
@@ -261,9 +326,13 @@ const ensureSelectedModelId = async (selectedModel: ModelOption): Promise<string
 const createCovidenceImport = async (params: {
   answerSet: CovidencePromptAnswerSet
   description: string
-  exclusionCriteria: string
+  eligibilityFields: Array<{
+    disposition: CovidenceEligibilityDisposition
+    sectionKey: CovidenceEligibilitySectionKey
+    sectionLabel: string
+    text: string
+  }>
   files: Array<{file: File; fileRole: CovidenceFileRole}>
-  inclusionCriteria: string
   mode: CovidenceImportMode
   modelId: string
   title: string
@@ -271,9 +340,8 @@ const createCovidenceImport = async (params: {
   const response = await apiClient.api.datasources.import['covidence-create'].post({
     answerSet: params.answerSet,
     description: params.description.trim() || undefined,
-    exclusionCriteria: params.exclusionCriteria.trim(),
+    eligibilityFields: params.eligibilityFields,
     files: params.files,
-    inclusionCriteria: params.inclusionCriteria.trim(),
     mode: params.mode,
     modelId: params.modelId,
     title: params.title.trim(),
@@ -292,9 +360,8 @@ const AdminCovidenceImport = () => {
   const [description, setDescription] = createSignal('')
   const [selectedModelId, setSelectedModelId] = createSignal('')
   const [answerSet, setAnswerSet] = createSignal<CovidencePromptAnswerSet>('yes|no|unsure')
-  const [inclusionCriteria, setInclusionCriteria] = createSignal('')
-  const [exclusionCriteria, setExclusionCriteria] = createSignal('')
   const [pageError, setPageError] = createSignal('')
+  const [eligibilitySectionValues, setEligibilitySectionValues] = createStore(createEmptyEligibilitySectionValues())
   const [filesByRole, setFilesByRole] = createStore<Record<CovidenceFileRole, File | null>>({
     all: null,
     excluded: null,
@@ -388,8 +455,7 @@ const AdminCovidenceImport = () => {
 
   const handleSubmit = () => {
     const trimmedProjectName = projectName().trim()
-    const trimmedInclusionCriteria = inclusionCriteria().trim()
-    const trimmedExclusionCriteria = exclusionCriteria().trim()
+    const eligibilityFields = getCovidenceEligibilityPromptFields(eligibilitySectionValues)
     const nextMode = mode()
     const nextAnswerSet = answerSet()
     const nextDescription = description()
@@ -404,11 +470,6 @@ const AdminCovidenceImport = () => {
 
     if (!nextSelectedModel) {
       setPageError('Choose a model before importing')
-      return
-    }
-
-    if (!trimmedInclusionCriteria || !trimmedExclusionCriteria) {
-      setPageError('Inclusion and exclusion criteria are required')
       return
     }
 
@@ -434,9 +495,8 @@ const AdminCovidenceImport = () => {
         createMutationState.mutate({
           answerSet: nextAnswerSet,
           description: nextDescription,
-          exclusionCriteria: trimmedExclusionCriteria,
+          eligibilityFields,
           files: nextFiles,
-          inclusionCriteria: trimmedInclusionCriteria,
           mode: nextMode,
           modelId,
           title: trimmedProjectName,
@@ -617,31 +677,56 @@ const AdminCovidenceImport = () => {
                   />
                 </label>
 
-                <label class="space-y-2 text-sm font-medium text-stone-700 md:col-span-2">
-                  <span>Inclusion criteria</span>
-                  <textarea
-                    value={inclusionCriteria()}
-                    onInput={(event) => {
-                      setInclusionCriteria(event.currentTarget.value)
-                    }}
-                    rows={4}
-                    placeholder="Adults with confirmed infection, randomized controlled trials, English full text..."
-                    class="w-full rounded-xl border border-stone-300 bg-white px-3 py-2.5 text-sm shadow-sm outline-none transition focus:border-amber-500 focus:ring-2 focus:ring-amber-200"
-                  />
-                </label>
+                <div class="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 md:col-span-2">
+                  <p class="text-sm font-medium text-amber-950">Eligibility prompts</p>
+                  <p class="mt-1 text-sm leading-6 text-amber-900/80">
+                    Each non-empty include or exclude field becomes a separate project prompt. Leave any section blank
+                    if it does not apply.
+                  </p>
+                </div>
 
-                <label class="space-y-2 text-sm font-medium text-stone-700 md:col-span-2">
-                  <span>Exclusion criteria</span>
-                  <textarea
-                    value={exclusionCriteria()}
-                    onInput={(event) => {
-                      setExclusionCriteria(event.currentTarget.value)
+                <div class="grid gap-4 md:col-span-2 xl:grid-cols-2">
+                  <For each={covidenceEligibilitySections}>
+                    {(section) => {
+                      return (
+                        <div class="rounded-2xl border border-stone-200 bg-stone-50 p-4 shadow-sm">
+                          <div class="mb-4 space-y-1">
+                            <h3 class="text-sm font-semibold text-stone-900">{section.label}</h3>
+                            <p class="text-xs leading-5 text-stone-500">{section.description}</p>
+                          </div>
+
+                          <div class="grid gap-4">
+                            <label class="space-y-2 text-sm font-medium text-stone-700">
+                              <span>Include</span>
+                              <textarea
+                                value={eligibilitySectionValues[section.key].include}
+                                onInput={(event) => {
+                                  setEligibilitySectionValues(section.key, 'include', event.currentTarget.value)
+                                }}
+                                rows={3}
+                                placeholder={`Include ${section.label.toLowerCase()} criteria`}
+                                class="w-full rounded-xl border border-stone-300 bg-white px-3 py-2.5 text-sm shadow-sm outline-none transition focus:border-amber-500 focus:ring-2 focus:ring-amber-200"
+                              />
+                            </label>
+
+                            <label class="space-y-2 text-sm font-medium text-stone-700">
+                              <span>Exclude</span>
+                              <textarea
+                                value={eligibilitySectionValues[section.key].exclude}
+                                onInput={(event) => {
+                                  setEligibilitySectionValues(section.key, 'exclude', event.currentTarget.value)
+                                }}
+                                rows={3}
+                                placeholder={`Exclude ${section.label.toLowerCase()} criteria`}
+                                class="w-full rounded-xl border border-stone-300 bg-white px-3 py-2.5 text-sm shadow-sm outline-none transition focus:border-amber-500 focus:ring-2 focus:ring-amber-200"
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      )
                     }}
-                    rows={4}
-                    placeholder="Animal studies, case reports, unavailable full text..."
-                    class="w-full rounded-xl border border-stone-300 bg-white px-3 py-2.5 text-sm shadow-sm outline-none transition focus:border-amber-500 focus:ring-2 focus:ring-amber-200"
-                  />
-                </label>
+                  </For>
+                </div>
               </div>
             </section>
 
