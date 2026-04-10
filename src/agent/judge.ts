@@ -4,10 +4,13 @@ import {
   ConnectionError,
   type ConnectionFailure,
   createConnectionError,
+  formatConnectionOutageMessage,
   isConnectionError,
+  parseConnectionFailureMessage,
   recordConnectionFailure,
   recordConnectionSuccess,
 } from '../server/cron/judgmentsJobs/connectionHealth.ts'
+import {getJudgmentEndpointAvailability} from '../server/cron/judgmentsJobs/judgmentEndpointAvailability.ts'
 import {withJudgmentRequest} from '../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {invokeStoredProviderModel} from '../server/providers/providerInvocationService.ts'
 import {inferenceRuntimeConfig} from '../server/utils/getInferenceRuntimeConfig.ts'
@@ -798,7 +801,12 @@ export const judgeSinglePrompt = async ({
           recordConnectionFailure({effectiveBaseURL: requestBaseURL, failure, providerConnectionId})
           abortCount += 1
           errorCount += 1
-          rateLimitedLogger.error(`judge:connection-error:${failure.kind}:${requestBaseURL}`, failure.message)
+          const availability = getJudgmentEndpointAvailability({effectiveBaseURL: requestBaseURL, providerConnectionId})
+          const outageMessage = formatConnectionOutageMessage({
+            cooldownExpiresAt: availability.cooldownExpiresAt,
+            failure,
+          })
+          rateLimitedLogger.error(`judge:connection-error:${failure.kind}:${requestBaseURL}`, outageMessage)
 
           await storeTokenUseAndThrowConnectionError({
             tokenUse,
@@ -858,7 +866,9 @@ export const judgeSinglePrompt = async ({
           userPrompt = buildRetryPrompt(basePrompt, errorMessage, lastResponse)
         } else {
           abortCount += 1
-          console.error(`${article.id} | Prompt ${prompt.id} | Aborting: ${errorMessage}`)
+          const failure = parseConnectionFailureMessage(errorMessage)
+          const outageMessage = failure ? formatConnectionOutageMessage({failure}) : errorMessage
+          console.error(`${article.id} | Prompt ${prompt.id} | Aborting request. ${outageMessage}`)
         }
       }
     }

@@ -8,7 +8,8 @@ import {getAppQueryService} from '../../../services/getAppQueryService.ts'
 import {ensureFullText} from '../../../utils/ensureFullText.ts'
 import {processFulltextForLLM} from '../../../utils/fulltextProcessing.ts'
 import {createRateLimitedLogger, rateLimitedLogger} from '../../../utils/rateLimitedLogger.ts'
-import {ConnectionError} from '../connectionHealth.ts'
+import {ConnectionError, formatConnectionOutageMessage} from '../connectionHealth.ts'
+import {getJudgmentEndpointAvailability} from '../judgmentEndpointAvailability.ts'
 import {getJudgmentJobSqliteService} from '../judgmentJobSqliteService.ts'
 import type {PromptToProcess} from './getAndUpdateReadyPrompts.ts'
 
@@ -336,10 +337,17 @@ export const processPromptWithLLM = async (promptToProcess: PromptToProcess): Pr
     processPromptLogger.log(`llm:success:${promptToProcess.modelBaseUrl}`, `[llm] Success - processed in ${duration}ms`)
   } catch (error) {
     if (error instanceof ConnectionError) {
-      rateLimitedLogger.log(
-        `prompt:retry:${error.failure.kind}:${promptToProcess.modelBaseUrl}`,
-        `${error.message} Marking prompt for retry.`,
-      )
+      const availability = getJudgmentEndpointAvailability({
+        effectiveBaseURL: error.baseURL,
+        providerConnectionId: promptToProcess.providerConnectionId,
+      })
+      const retryMessage = formatConnectionOutageMessage({
+        cooldownExpiresAt: availability.cooldownExpiresAt,
+        failure: error.failure,
+        promptAction:
+          'Prompt requeued because the provider endpoint is unavailable. No further prompts will be sent for this connection until the provider health check passes.',
+      })
+      rateLimitedLogger.log(`prompt:retry:${error.failure.kind}:${promptToProcess.modelBaseUrl}`, retryMessage)
       await markAsRetry(promptToProcess.jobId, promptToProcess.recordId)
       throw error
     }

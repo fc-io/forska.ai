@@ -3,7 +3,9 @@ import {afterEach, expect, test} from 'bun:test'
 import {
   classifyConnectionFailure,
   createConnectionError,
+  formatConnectionOutageMessage,
   isConnectionError,
+  parseConnectionFailureMessage,
   recordConnectionFailure,
   recordConnectionSuccess,
 } from './connectionHealth.ts'
@@ -35,6 +37,32 @@ test('classifies missing required OpenAI-compatible endpoints as endpoint unavai
   expect(failure.message).toContain('baseURL=http://127.0.0.1:11434/v1')
   expect(failure.message).toContain('endpoint=/v1/chat/completions')
   expect(failure.message).toContain('status=404')
+  expect(failure.message).toContain('Forska paused dispatch for this connection until the provider health check passes')
+})
+
+test('formats operator-facing outage messages with next probe timing when known', () => {
+  const failure = classifyConnectionFailure({context, error: {status: 503}})
+  const cooldownExpiresAt = new Date('2026-04-10T12:34:56.000Z')
+
+  expect(
+    formatConnectionOutageMessage({
+      cooldownExpiresAt,
+      failure,
+      promptAction: 'Prompt requeued because the provider endpoint is unavailable.',
+    }),
+  ).toContain('Next health probe not before 2026-04-10T12:34:56.000Z')
+})
+
+test('parses the shared provider outage wording', () => {
+  const failure = classifyConnectionFailure({context, error: {status: 503}})
+
+  expect(parseConnectionFailureMessage(failure.message)).toMatchObject({
+    effectiveBaseURL: context.effectiveBaseURL,
+    endpointPath: context.endpointPath,
+    kind: 'endpoint_unavailable',
+    providerKind: 'ollama',
+    statusCode: 503,
+  })
 })
 
 test('classifies 405 and 501 on required OpenAI-compatible endpoints as endpoint misconfigured', () => {

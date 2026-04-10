@@ -150,12 +150,36 @@ const getConnectionFailureMessage = ({
   const providerLabel = providerKind ?? 'unknown'
   const endpointLabel = endpointPath ?? '(none)'
   const statusLabel = statusCode == null ? 'n/a' : String(statusCode)
+  const pauseBehavior =
+    kind === 'other'
+      ? 'Forska left dispatch active because this does not look like a provider-wide outage.'
+      : 'Forska paused dispatch for this connection until the provider health check passes.'
 
-  return `Inference outage classified as ${kind} for provider=${providerLabel} baseURL=${effectiveBaseURL} endpoint=${endpointLabel} status=${statusLabel}. Likely cause: ${likelyCause}.`
+  return `Provider endpoint outage: provider=${providerLabel} baseURL=${effectiveBaseURL} endpoint=${endpointLabel} status=${statusLabel} classification=${kind}. What broke: ${likelyCause}. ${pauseBehavior}`
 }
 
 const connectionFailureMessagePattern =
-  /^Inference outage classified as (network_unavailable|endpoint_unavailable|endpoint_misconfigured|rate_limited|circuit_open|other) for provider=(.*?) baseURL=(.*?) endpoint=(.*?) status=(.*?)\. Likely cause: (.*)\.$/
+  /^Provider endpoint outage: provider=(.*?) baseURL=(.*?) endpoint=(.*?) status=(.*?) classification=(network_unavailable|endpoint_unavailable|endpoint_misconfigured|rate_limited|circuit_open|other)\. What broke: (.*?)\. (Forska paused dispatch for this connection until the provider health check passes\.|Forska left dispatch active because this does not look like a provider-wide outage\.)$/
+
+const formatProbeTiming = (cooldownExpiresAt: Date | null): string => {
+  const nextProbeAt = cooldownExpiresAt?.toISOString() ?? null
+
+  return nextProbeAt ? ` Next health probe not before ${nextProbeAt}.` : ''
+}
+
+export const formatConnectionOutageMessage = ({
+  cooldownExpiresAt = null,
+  failure,
+  promptAction,
+}: {
+  cooldownExpiresAt?: Date | null
+  failure: ConnectionFailure
+  promptAction?: string
+}): string => {
+  const action = promptAction ? ` ${promptAction}` : ''
+
+  return `${failure.message}${formatProbeTiming(cooldownExpiresAt)}${action}`
+}
 
 export const classifyConnectionFailure = ({
   error,
@@ -213,7 +237,7 @@ export const parseConnectionFailureMessage = (message: string): ConnectionFailur
     return null
   }
 
-  const [, kind, providerLabel, effectiveBaseURL, endpointLabel, statusLabel, likelyCause] = matched
+  const [, providerLabel, effectiveBaseURL, endpointLabel, statusLabel, kind, likelyCause] = matched
   const endpointPath = endpointLabel === '(none)' ? null : getNormalizedEndpointPath(endpointLabel)
   const providerKind = providerLabel === 'unknown' ? null : getNormalizedProviderKind(providerLabel)
   const parsedStatusCode = Number(statusLabel)
