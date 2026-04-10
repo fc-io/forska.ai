@@ -386,6 +386,7 @@ const startWorkerTunnels = async (config: AlvisConfig, jobId: string, restartCou
 
   activeJobId = jobId
   const restartSuffix = restartCount > 0 ? ` (restart #${restartCount})` : ''
+  if (restartCount === 0) log(`Model: ${config.SGLANG_MODEL}`)
   log(`Starting SSH tunnels to ${workers.length} worker(s)${restartSuffix}`)
 
   if (activeTunnelProcs.length > 0) {
