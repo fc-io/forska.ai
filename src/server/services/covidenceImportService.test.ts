@@ -262,7 +262,7 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
         'Population inclusion criteria:',
         'Adults with confirmed disease',
       ].join('\n'),
-      promptHeading: 'Covidence title/abstract screening | Population | include',
+      promptHeading: 'Population | Include',
       type: "'yes' | 'no' | 'unsure'",
     },
     {
@@ -272,7 +272,7 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
         'Other exclusion criteria:',
         'Case reports',
       ].join('\n'),
-      promptHeading: 'Covidence title/abstract screening | Other | exclude',
+      promptHeading: 'Other | Exclude',
       type: "'yes' | 'no' | 'unsure'",
     },
   ])

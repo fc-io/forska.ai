@@ -311,7 +311,7 @@ const getCovidencePromptCriteriaText = (criteria: string) => {
 }
 
 const getCovidencePromptEligibilityDispositionLabel = (disposition: CovidenceEligibilityFieldDisposition) => {
-  return disposition === 'include' ? 'include' : 'exclude'
+  return disposition === 'include' ? 'Include' : 'Exclude'
 }
 
 const getCovidencePromptEligibilityQuestion = (params: {
@@ -373,7 +373,7 @@ const buildCovidencePromptDefinitionForEligibilityField = (params: {
       }),
       params.eligibilityField.text,
     ].join('\n'),
-    promptHeading: `${covidencePromptHeadingByMode[params.mode]} | ${params.eligibilityField.sectionLabel} | ${getCovidencePromptEligibilityDispositionLabel(params.eligibilityField.disposition)}`,
+    promptHeading: `${params.eligibilityField.sectionLabel} | ${getCovidencePromptEligibilityDispositionLabel(params.eligibilityField.disposition)}`,
     type: getCovidencePromptType(params.answerSet),
   }
 }
