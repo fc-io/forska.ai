@@ -27,4 +27,5 @@ export default defineConfig({
   resolve: {alias: {'~': path.resolve(__dirname, './src')}},
   server: {port: env.VITE_PORT, strictPort: false, proxy: {'/api': {target: apiProxyTarget, changeOrigin: true}}},
   build: {target: 'esnext'},
+  test: {environment: 'happy-dom', include: ['src/**/*.vitest.ts', 'src/**/*.vitest.tsx']},
 })
