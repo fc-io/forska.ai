@@ -19,9 +19,10 @@
         "`bun run lint` passes"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "Preserve deterministic SQLite ready ordering and requeue order preservation. Do not reshuffle rows already queued in local SQLite beyond replacing non-deterministic tie-breaking with explicit FIFO behavior.",
-      "dependsOn": []
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-002",
@@ -98,6 +99,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-04-11T12:06:28.919Z"
+    "updatedAt": "2026-04-11T12:15:15.266Z"
   }
 }

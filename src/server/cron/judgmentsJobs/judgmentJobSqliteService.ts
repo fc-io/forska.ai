@@ -82,6 +82,8 @@ type QueuePromptInsert = {articleId: string; promptId: string}
 
 type QueuePromptClaim = {articleId: string; jobId: string; promptId: string; recordId: string}
 
+const queuePromptReadyOrderColumnName = 'ready_insert_seq'
+
 type QueuePromptOutboxInsert = {
   answeredOriginal: string | null
   answeredOriginalAsArray: string[]
@@ -522,12 +524,13 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       claim_id TEXT,
       sent_at TEXT,
       judged_at TEXT,
+      ready_insert_seq INTEGER NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(job_id, article_id, prompt_id)
     );
-    CREATE INDEX IF NOT EXISTS idx_queue_prompt_status_created
-      ON queue_prompt(status, created_at, article_id);
+    CREATE INDEX IF NOT EXISTS idx_queue_prompt_status_ready_insert_seq
+      ON queue_prompt(status, ready_insert_seq, id);
     CREATE TABLE IF NOT EXISTS judgment_outbox (
       outbox_seq INTEGER PRIMARY KEY AUTOINCREMENT,
       job_id TEXT NOT NULL,
@@ -565,6 +568,7 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
   `)
 
   ensureJobScanStateSchema(database)
+  ensureQueuePromptSchema(database)
   ensureOutboxClaimSchema(database)
 
   openDatabases.set(jobId, database)
@@ -643,6 +647,7 @@ const judgmentJobSqliteRequiredSchema = {
     'server_id',
     'claim_id',
     'sent_at',
+    'ready_insert_seq',
     'created_at',
     'updated_at',
   ],
@@ -668,6 +673,8 @@ const jobScanStateColumns = [
   {name: 'last_project_refresh_ack_token', sql: 'INTEGER'},
   {name: 'wrap_visibility_ack_token', sql: 'INTEGER'},
 ] as const
+
+const queuePromptColumns = [{name: queuePromptReadyOrderColumnName, sql: 'INTEGER'}] as const
 
 const legacyJobScanStateAckColumns = [
   {legacyName: 'last_project_refresh_ack_seq', nextName: 'last_project_refresh_ack_token'},
@@ -700,6 +707,20 @@ const addMissingJobScanStateColumns = (
 
   database.exec(`ALTER TABLE job_scan_state ADD COLUMN ${currentColumn.name} ${currentColumn.sql}`)
   return addMissingJobScanStateColumns(database, columns.slice(1))
+}
+
+const addMissingQueuePromptColumns = (
+  database: Database,
+  columns: ReadonlyArray<(typeof queuePromptColumns)[number]>,
+): void => {
+  const [currentColumn] = columns
+
+  if (!currentColumn) {
+    return
+  }
+
+  database.exec(`ALTER TABLE queue_prompt ADD COLUMN ${currentColumn.name} ${currentColumn.sql}`)
+  return addMissingQueuePromptColumns(database, columns.slice(1))
 }
 
 const renameLegacyJobScanStateAckColumns = (
@@ -809,6 +830,39 @@ const ensureJobScanStateSchema = (database: Database) => {
   )
 
   backfillJobScanStateAckTokens(database, finalColumnNames)
+}
+
+const backfillQueuePromptReadyInsertSeq = (database: Database) => {
+  database.exec(`
+    WITH ordered_rows AS (
+      SELECT
+        id,
+        ROW_NUMBER() OVER (ORDER BY created_at ASC, id ASC) AS ready_insert_seq
+      FROM queue_prompt
+    )
+    UPDATE queue_prompt
+    SET ready_insert_seq = (
+      SELECT ordered_rows.ready_insert_seq
+      FROM ordered_rows
+      WHERE ordered_rows.id = queue_prompt.id
+    )
+    WHERE ready_insert_seq IS NULL
+  `)
+}
+
+const ensureQueuePromptSchema = (database: Database) => {
+  const existingColumnNames = getTableColumnNames(database, 'queue_prompt')
+  const missingColumns = queuePromptColumns.filter((column) => {
+    return !existingColumnNames.has(column.name)
+  })
+
+  addMissingQueuePromptColumns(database, missingColumns)
+  backfillQueuePromptReadyInsertSeq(database)
+  database.exec(`DROP INDEX IF EXISTS idx_queue_prompt_status_created`)
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_queue_prompt_status_ready_insert_seq
+      ON queue_prompt(status, ready_insert_seq, id)
+  `)
 }
 
 const getStoredScanState = (database: Database, jobId: string) => {
@@ -1201,7 +1255,7 @@ const getIsolatedPreflightSnapshot = (database: Database, jobId: string): Judgme
         `
           SELECT id
           FROM queue_prompt
-          ORDER BY created_at ASC, id ASC
+          ORDER BY ready_insert_seq ASC, id ASC
           LIMIT 1
         `,
       )
@@ -1241,7 +1295,15 @@ const getIsolatedPreflightSnapshot = (database: Database, jobId: string): Judgme
 
 const upgradeJudgmentJobSqliteSchemaInPlace = (jobId: string) => {
   const sqlitePath = getJudgmentJobSqlitePath(jobId)
+  const cachedDatabase = openDatabases.get(jobId)
   let database: Database | null = null
+
+  if (cachedDatabase) {
+    ensureJobScanStateSchema(cachedDatabase)
+    ensureQueuePromptSchema(cachedDatabase)
+    ensureOutboxClaimSchema(cachedDatabase)
+    return
+  }
 
   try {
     database = new Database(sqlitePath)
@@ -1256,6 +1318,10 @@ const upgradeJudgmentJobSqliteSchemaInPlace = (jobId: string) => {
 
     if (existingTables.has('job_scan_state')) {
       ensureJobScanStateSchema(database)
+    }
+
+    if (existingTables.has('queue_prompt')) {
+      ensureQueuePromptSchema(database)
     }
 
     if (existingTables.has('judgment_outbox')) {
@@ -2267,24 +2333,46 @@ const sqliteService = {
           prompt_id,
           status,
           server_id,
+          ready_insert_seq,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, 'ready', ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, 'ready', ?, ?, ?, ?)
       `)
         const now = new Date().toISOString()
+        const selectMaxReadyInsertSeq = database.query(`
+          SELECT COALESCE(MAX(ready_insert_seq), 0) AS maxReadyInsertSeq
+          FROM queue_prompt
+        `)
 
         return database.transaction((entries: QueuePromptInsert[]) => {
-          return entries.reduce((count, entry) => {
-            if (count >= normalizedMaxInserted) {
-              return count
-            }
+          const maxReadyInsertSeq = Number(
+            (selectMaxReadyInsertSeq.get() as {maxReadyInsertSeq: number | null} | null)?.maxReadyInsertSeq ?? 0,
+          )
 
-            const result = insert.run(randomUUID(), jobId, entry.articleId, entry.promptId, serverJobId, now, now) as {
-              changes?: number
-            }
+          return entries.reduce(
+            (state, entry) => {
+              if (state.count >= normalizedMaxInserted) {
+                return state
+              }
 
-            return count + (result.changes === 1 ? 1 : 0)
-          }, 0)
+              const result = insert.run(
+                randomUUID(),
+                jobId,
+                entry.articleId,
+                entry.promptId,
+                serverJobId,
+                state.nextReadyInsertSeq,
+                now,
+                now,
+              ) as {changes?: number}
+
+              return {
+                count: state.count + (result.changes === 1 ? 1 : 0),
+                nextReadyInsertSeq: state.nextReadyInsertSeq + 1,
+              }
+            },
+            {count: 0, nextReadyInsertSeq: maxReadyInsertSeq + 1},
+          ).count
         })(promptEntries)
       },
       serverJobId,
@@ -2301,7 +2389,7 @@ const sqliteService = {
         SELECT id, article_id AS articleId, prompt_id AS promptId
         FROM queue_prompt
         WHERE status = 'ready'
-        ORDER BY created_at ASC, id ASC
+        ORDER BY ready_insert_seq ASC, id ASC
         LIMIT ?
       `)
         const markSent = database.query(`

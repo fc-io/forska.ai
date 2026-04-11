@@ -152,6 +152,60 @@ test('claims and requeues prompts from the per-job SQLite queue', async () => {
   expect(await service.getInFlightCount(jobId)).toBe(0)
 })
 
+test('preserves original enqueue order when stale sent prompts are requeued', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-requeue-order-${Date.now()}`
+  const modelId = `model-requeue-order-${Date.now()}`
+  const projectId = `project-requeue-order-${Date.now()}`
+  const jobId = `job-requeue-order-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Requeue Order Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(
+    jobId,
+    [
+      {articleId: 'article-1', promptId: 'prompt-1'},
+      {articleId: 'article-2', promptId: 'prompt-2'},
+    ],
+    'server-a',
+  )
+
+  const [firstClaimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!firstClaimedPrompt) {
+    throw new Error('Expected first claimed prompt for requeue order test')
+  }
+
+  await service.addReadyPrompts(jobId, [{articleId: 'article-3', promptId: 'prompt-3'}], 'server-a')
+  await service.requeueAbandonedSentPrompts({jobId, serverJobId: 'server-b', staleBefore: new Date(Date.now() + 1000)})
+
+  expect(
+    (await service.claimReadyPrompts(jobId, 'server-a', 3)).map((prompt) => {
+      return prompt.articleId
+    }),
+  ).toEqual(['article-1', 'article-2', 'article-3'])
+})
+
 test('runs isolated SQLite preflight against queue and outbox state', async () => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')
@@ -545,7 +599,7 @@ test('claims each SQLite prompt pair at most once under competing writers', asyn
       SELECT id, article_id AS articleId, prompt_id AS promptId
       FROM queue_prompt
       WHERE status = 'ready'
-      ORDER BY created_at ASC, id ASC
+      ORDER BY ready_insert_seq ASC, id ASC
       LIMIT 1
     \`)
     const markSent = database.query(\`

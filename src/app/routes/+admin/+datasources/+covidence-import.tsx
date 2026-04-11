@@ -842,14 +842,18 @@ const AdminCovidenceImport = () => {
                 </label>
 
                 <div class="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 md:col-span-2">
-                  <div class="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p class="text-sm font-medium text-amber-950">Eligibility prompts</p>
-                      <p class="mt-1 text-sm leading-6 text-amber-900/80">
-                        Each non-empty include or exclude field becomes a separate project prompt. Leave any section
-                        blank if it does not apply.
-                      </p>
-                    </div>
+                  <p class="text-sm font-medium text-amber-950">Eligibility prompts</p>
+                  <p class="mt-1 text-sm leading-6 text-amber-900/80">
+                    Each non-empty include or exclude field becomes a separate project prompt. Leave any section blank
+                    if it does not apply.
+                  </p>
+                </div>
+
+                <div class="rounded-2xl border border-stone-200 bg-stone-50 p-4 md:col-span-2">
+                  <div class="flex flex-wrap items-center justify-between gap-3">
+                    <p class="text-sm text-stone-600">
+                      Paste a Covidence eligibility criteria block to fill the section fields automatically.
+                    </p>
                     <Button
                       type="button"
                       variant="outline"
@@ -860,8 +864,8 @@ const AdminCovidenceImport = () => {
                       {isLoadingClipboard() ? 'Loading...' : 'Load from Clipboard'}
                     </Button>
                   </div>
-                  <p class="mt-3 text-xs text-amber-900/70">
-                    Reads a Covidence eligibility criteria block and keeps empty include or exclude sections blank.
+                  <p class="mt-3 text-xs text-stone-500">
+                    Empty include or exclude sections stay blank after import.
                   </p>
                 </div>
 
