@@ -179,70 +179,49 @@ const state = {
   }),
 }
 
-void mock.module(providerConnectionRepositoryModulePath, () => {
-  return {
-    createProviderConnection: state.createProviderConnection,
-    deleteProviderConnection: state.deleteProviderConnection,
-    getProviderConnection: state.getProviderConnection,
-    listProviderConnections: state.listProviderConnections,
-    updateProviderConnection: state.updateProviderConnection,
-  }
-})
+const registerModuleMocks = () => {
+  void mock.module(providerConnectionRepositoryModulePath, () => {
+    return {
+      createProviderConnection: state.createProviderConnection,
+      deleteProviderConnection: state.deleteProviderConnection,
+      getProviderConnection: state.getProviderConnection,
+      listProviderConnections: state.listProviderConnections,
+      updateProviderConnection: state.updateProviderConnection,
+    }
+  })
 
-void mock.module(providerSecretStoreModulePath, () => {
-  return {deleteProviderSecret: state.deleteProviderSecret, storeProviderSecret: state.storeProviderSecret}
-})
+  void mock.module(providerSecretStoreModulePath, () => {
+    return {deleteProviderSecret: state.deleteProviderSecret, storeProviderSecret: state.storeProviderSecret}
+  })
 
-void mock.module(providerHealthServiceModulePath, () => {
-  return {testProviderConnectionHealth: state.testProviderConnectionHealth}
-})
+  void mock.module(providerHealthServiceModulePath, () => {
+    return {testProviderConnectionHealth: state.testProviderConnectionHealth}
+  })
 
-void mock.module(providerConnectionHelpersModulePath, () => {
-  return {
-    getProviderConnectionAuthMode: ({secretRef}: {secretRef: string | null}) => {
-      return secretRef ? 'api-key' : 'none'
-    },
-    getResolvedProviderBaseURL: ({baseURL}: {baseURL: string | null}) => {
-      return baseURL
-    },
-  }
-})
+  void mock.module(providerConnectionHelpersModulePath, () => {
+    return {
+      getProviderConnectionAuthMode: ({secretRef}: {secretRef: string | null}) => {
+        return secretRef ? 'api-key' : 'none'
+      },
+      getResolvedProviderBaseURL: ({baseURL}: {baseURL: string | null}) => {
+        return baseURL
+      },
+    }
+  })
 
-void mock.module(getCodexMaxInflightModulePath, () => {
-  return {getCodexMaxInflight: state.getCodexMaxInflight}
-})
+  void mock.module(getCodexMaxInflightModulePath, () => {
+    return {getCodexMaxInflight: state.getCodexMaxInflight}
+  })
 
-void mock.module(getJudgmentsCapacityModulePath, () => {
-  return {getJudgmentsCapacity: state.getJudgmentsCapacity}
-})
+  void mock.module(getJudgmentsCapacityModulePath, () => {
+    return {getJudgmentsCapacity: state.getJudgmentsCapacity}
+  })
 
-void mock.module(providerCatalogModulePath, () => {
-  return {
-    getProviderCatalog: () => {
-      return [
-        {
-          defaultBaseURL: null,
-          description: 'mock',
-          kind: 'openrouter',
-          label: 'OpenRouter',
-          requiresApiKey: true,
-          supportsDiscovery: true,
-          supportsWorkerUrls: false,
-        },
-        {
-          defaultBaseURL: null,
-          description: 'mock',
-          kind: 'codex',
-          label: 'Codex App',
-          requiresApiKey: false,
-          supportsDiscovery: true,
-          supportsWorkerUrls: false,
-        },
-      ]
-    },
-    getProviderCatalogEntry: (providerKind: string) => {
-      return providerKind === 'openrouter'
-        ? {
+  void mock.module(providerCatalogModulePath, () => {
+    return {
+      getProviderCatalog: () => {
+        return [
+          {
             defaultBaseURL: null,
             description: 'mock',
             kind: 'openrouter',
@@ -250,65 +229,92 @@ void mock.module(providerCatalogModulePath, () => {
             requiresApiKey: true,
             supportsDiscovery: true,
             supportsWorkerUrls: false,
-          }
-        : providerKind === 'codex'
+          },
+          {
+            defaultBaseURL: null,
+            description: 'mock',
+            kind: 'codex',
+            label: 'Codex App',
+            requiresApiKey: false,
+            supportsDiscovery: true,
+            supportsWorkerUrls: false,
+          },
+        ]
+      },
+      getProviderCatalogEntry: (providerKind: string) => {
+        return providerKind === 'openrouter'
           ? {
               defaultBaseURL: null,
               description: 'mock',
-              kind: 'codex',
-              label: 'Codex App',
-              requiresApiKey: false,
+              kind: 'openrouter',
+              label: 'OpenRouter',
+              requiresApiKey: true,
               supportsDiscovery: true,
               supportsWorkerUrls: false,
             }
-          : null
-    },
-    isCodexProvider: (providerKind: string) => {
-      return providerKind === 'codex'
-    },
-    normalizeProviderKind: (providerKind: string) => {
-      return providerKind as 'codex' | 'openrouter' | 'unknown'
-    },
-  }
-})
+          : providerKind === 'codex'
+            ? {
+                defaultBaseURL: null,
+                description: 'mock',
+                kind: 'codex',
+                label: 'Codex App',
+                requiresApiKey: false,
+                supportsDiscovery: true,
+                supportsWorkerUrls: false,
+              }
+            : null
+      },
+      isCodexProvider: (providerKind: string) => {
+        return providerKind === 'codex'
+      },
+      normalizeProviderKind: (providerKind: string) => {
+        return providerKind as 'codex' | 'openrouter' | 'unknown'
+      },
+    }
+  })
 
-void mock.module(providerRuntimeMatchResolverModulePath, () => {
-  return {resolveProviderConnectionRuntimeMatchFromSummaries: state.resolveProviderConnectionRuntimeMatchFromSummaries}
-})
+  void mock.module(providerRuntimeMatchResolverModulePath, () => {
+    return {
+      resolveProviderConnectionRuntimeMatchFromSummaries: state.resolveProviderConnectionRuntimeMatchFromSummaries,
+    }
+  })
 
-void mock.module(providerAuthServiceModulePath, () => {
-  return {
-    beginProviderAuth: state.beginProviderAuth,
-    finishProviderAuth: state.finishProviderAuth,
-    getProviderAuthConnection: state.getProviderAuthConnection,
-    resolveMatchedProviderRuntimeCredentials: state.resolveMatchedProviderRuntimeCredentials,
-    resolveProviderRuntimeCredentials: state.resolveProviderRuntimeCredentials,
-  }
-})
+  void mock.module(providerAuthServiceModulePath, () => {
+    return {
+      beginProviderAuth: state.beginProviderAuth,
+      finishProviderAuth: state.finishProviderAuth,
+      getProviderAuthConnection: state.getProviderAuthConnection,
+      resolveMatchedProviderRuntimeCredentials: state.resolveMatchedProviderRuntimeCredentials,
+      resolveProviderRuntimeCredentials: state.resolveProviderRuntimeCredentials,
+    }
+  })
 
-void mock.module(providerRegistryModulePath, () => {
-  return {
-    requireProviderRegistryEntry: () => {
-      return {
-        listModels: async () => {
-          return [
-            {
-              displayName: 'remote-model',
-              metadataJson: null,
-              modelName: 'remote-model',
-              remoteModelId: 'remote-model',
-              variant: null,
-              version: null,
-            },
-          ]
-        },
-      }
-    },
-  }
-})
+  void mock.module(providerRegistryModulePath, () => {
+    return {
+      requireProviderRegistryEntry: () => {
+        return {
+          listModels: async () => {
+            return [
+              {
+                displayName: 'remote-model',
+                metadataJson: null,
+                modelName: 'remote-model',
+                remoteModelId: 'remote-model',
+                variant: null,
+                version: null,
+              },
+            ]
+          },
+        }
+      },
+    }
+  })
+}
 
 const loadRoutes = async () => {
-  const {providerConnectionsRoutes} = await import('./ProviderConnectionsRoutes.ts')
+  registerModuleMocks()
+
+  const {providerConnectionsRoutes} = await import(`./ProviderConnectionsRoutes.ts?test=${Date.now()}-${Math.random()}`)
 
   return new Elysia().use(providerConnectionsRoutes)
 }
@@ -318,6 +324,7 @@ afterEach(async () => {
     await import('../cron/judgmentsJobs/judgmentEndpointAvailability.ts')
 
   resetJudgmentEndpointAvailabilityForTests()
+  mock.restore()
 })
 
 test('provider connections route creates a provider connection', async () => {

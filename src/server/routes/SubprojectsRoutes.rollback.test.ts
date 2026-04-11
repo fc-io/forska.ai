@@ -83,85 +83,87 @@ const queryJson = async (statement: string) => {
   throw new Error(`Unhandled query: ${statement}`)
 }
 
-void mock.module(appDatabaseServiceModulePath, () => {
-  return {
-    getAppDatabaseService: () => {
-      return {
-        queryJson: async <T>(statement: string) => {
-          return (await queryJson(statement)) as T[]
-        },
-        run: async (statement: string) => {
-          getMockDatabaseState().rootRunStatements.push(statement)
-        },
-        transaction: async <T>(
-          work: (runner: {
-            queryJson: <R>(statement: string) => Promise<R[]>
-            run: (statement: string) => Promise<void>
-          }) => Promise<T>,
-        ) => {
-          const state = getMockDatabaseState()
-          const pendingProjectArticleStatements: string[] = []
-          const pendingProjectPromptStatements: string[] = []
-          const pendingProjectStatements: string[] = []
-          const pendingPromptStatements: string[] = []
+const registerModuleMocks = () => {
+  void mock.module(appDatabaseServiceModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {
+          queryJson: async <T>(statement: string) => {
+            return (await queryJson(statement)) as T[]
+          },
+          run: async (statement: string) => {
+            getMockDatabaseState().rootRunStatements.push(statement)
+          },
+          transaction: async <T>(
+            work: (runner: {
+              queryJson: <R>(statement: string) => Promise<R[]>
+              run: (statement: string) => Promise<void>
+            }) => Promise<T>,
+          ) => {
+            const state = getMockDatabaseState()
+            const pendingProjectArticleStatements: string[] = []
+            const pendingProjectPromptStatements: string[] = []
+            const pendingProjectStatements: string[] = []
+            const pendingPromptStatements: string[] = []
 
-          state.transactionCalls += 1
+            state.transactionCalls += 1
 
-          const result = await work({
-            queryJson: async <R>(statement: string) => {
-              if (statement.includes('INSERT INTO app.project')) {
-                pendingProjectStatements.push(statement)
-                return [getCreatedProjectRow()] as R[]
-              }
+            const result = await work({
+              queryJson: async <R>(statement: string) => {
+                if (statement.includes('INSERT INTO app.project')) {
+                  pendingProjectStatements.push(statement)
+                  return [getCreatedProjectRow()] as R[]
+                }
 
-              if (statement.includes('INSERT INTO app.prompt')) {
-                pendingPromptStatements.push(statement)
-                return [{id: `detached-prompt-${pendingPromptStatements.length}`}] as R[]
-              }
+                if (statement.includes('INSERT INTO app.prompt')) {
+                  pendingPromptStatements.push(statement)
+                  return [{id: `detached-prompt-${pendingPromptStatements.length}`}] as R[]
+                }
 
-              return (await queryJson(statement)) as R[]
-            },
-            run: async (statement: string) => {
-              if (statement.includes('INSERT INTO app.project_prompt')) {
-                pendingProjectPromptStatements.push(statement)
-                return
-              }
+                return (await queryJson(statement)) as R[]
+              },
+              run: async (statement: string) => {
+                if (statement.includes('INSERT INTO app.project_prompt')) {
+                  pendingProjectPromptStatements.push(statement)
+                  return
+                }
 
-              if (statement.includes('INSERT INTO app.project_article')) {
-                throw new Error('project article insert failed')
-              }
+                if (statement.includes('INSERT INTO app.project_article')) {
+                  throw new Error('project article insert failed')
+                }
 
-              pendingProjectArticleStatements.push(statement)
-            },
-          })
+                pendingProjectArticleStatements.push(statement)
+              },
+            })
 
-          state.committedProjectStatements.push(...pendingProjectStatements)
-          state.committedPromptStatements.push(...pendingPromptStatements)
-          state.committedProjectPromptStatements.push(...pendingProjectPromptStatements)
-          state.committedProjectArticleStatements.push(...pendingProjectArticleStatements)
+            state.committedProjectStatements.push(...pendingProjectStatements)
+            state.committedPromptStatements.push(...pendingPromptStatements)
+            state.committedProjectPromptStatements.push(...pendingProjectPromptStatements)
+            state.committedProjectArticleStatements.push(...pendingProjectArticleStatements)
 
-          return result
-        },
-      }
-    },
-  }
-})
+            return result
+          },
+        }
+      },
+    }
+  })
 
-void mock.module(duckdbMartRefreshServiceModulePath, () => {
-  return {
-    getDuckdbMartRefreshService: () => {
-      return {
-        queueProjectRefresh: async (projectId: string, reason: string) => {
-          getMockDatabaseState().queueProjectRefreshCalls.push({projectId, reason})
-        },
-      }
-    },
-  }
-})
+  void mock.module(duckdbMartRefreshServiceModulePath, () => {
+    return {
+      getDuckdbMartRefreshService: () => {
+        return {
+          queueProjectRefresh: async (projectId: string, reason: string) => {
+            getMockDatabaseState().queueProjectRefreshCalls.push({projectId, reason})
+          },
+        }
+      },
+    }
+  })
 
-void mock.module(providerModelRepositoryModulePath, () => {
-  return {assertSelectableProviderModelId: async () => {}}
-})
+  void mock.module(providerModelRepositoryModulePath, () => {
+    return {assertSelectableProviderModelId: async () => {}}
+  })
+}
 
 const createMockDatabaseState = (): MockDatabaseState => {
   return {
@@ -176,12 +178,15 @@ const createMockDatabaseState = (): MockDatabaseState => {
 }
 
 const loadSubprojectsRoutes = async () => {
+  registerModuleMocks()
+
   const moduleUnknown: unknown = await import(`./SubprojectsRoutes.ts?rollback=${Date.now()}-${Math.random()}`)
   return moduleUnknown as typeof import('./SubprojectsRoutes.ts')
 }
 
 afterEach(() => {
   mockDatabaseStateRef.current = null
+  mock.restore()
 })
 
 test('subproject route rolls back project and detached prompts when article linking fails', async () => {

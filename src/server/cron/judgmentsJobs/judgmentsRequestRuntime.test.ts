@@ -30,16 +30,20 @@ const testProviderConnectionHealth = mock(async (_connection: unknown, _options:
   return {lastError: null, message: 'ok', modelCount: 1, ok: true}
 })
 
-void mock.module(providerConnectionRepositoryModulePath, () => {
-  return {getProviderConnection}
-})
+const registerModuleMocks = () => {
+  void mock.module(providerConnectionRepositoryModulePath, () => {
+    return {getProviderConnection}
+  })
 
-void mock.module(providerHealthServiceModulePath, () => {
-  return {testProviderConnectionHealth}
-})
+  void mock.module(providerHealthServiceModulePath, () => {
+    return {testProviderConnectionHealth}
+  })
+}
 
 const loadRuntime = () => {
-  return import('./judgmentsRequestRuntime.ts')
+  registerModuleMocks()
+
+  return import(`./judgmentsRequestRuntime.ts?test=${Date.now()}-${Math.random()}`)
 }
 
 const flush = async (): Promise<void> => {
@@ -69,6 +73,7 @@ afterEach(async () => {
   testProviderConnectionHealth.mockImplementation(async (_connection: unknown, _options: unknown) => {
     return {lastError: null, message: 'ok', modelCount: 1, ok: true}
   })
+  mock.restore()
 })
 
 const realDateNow = Date.now

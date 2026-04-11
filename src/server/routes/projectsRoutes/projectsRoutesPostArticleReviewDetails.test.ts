@@ -1,4 +1,4 @@
-import {expect, mock, test} from 'bun:test'
+import {afterEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 const appDatabaseServiceModulePath = new URL('../../services/appDatabaseService.ts', import.meta.url).pathname
@@ -28,47 +28,59 @@ const getFreshnessRow = (overrides: Partial<Record<string, unknown>> = {}) => {
   return {dirtyToken: null, lastCompletedRefreshToken: null, refreshStatus: 'idle', ...overrides}
 }
 
-void mock.module(appQueryServiceModulePath, () => {
-  return {
-    getAppQueryService: () => {
-      return {
-        getFullArticlesByIds: (articleIds: string[]) => {
-          return fullArticlesByIdsRef.current(articleIds)
-        },
-        getProjectReviewConfig: (projectId: string) => {
-          return projectReviewConfigRef.current(projectId)
-        },
-      }
-    },
-  }
-})
+const registerModuleMocks = () => {
+  void mock.module(appQueryServiceModulePath, () => {
+    return {
+      getAppQueryService: () => {
+        return {
+          getFullArticlesByIds: (articleIds: string[]) => {
+            return fullArticlesByIdsRef.current(articleIds)
+          },
+          getProjectReviewConfig: (projectId: string) => {
+            return projectReviewConfigRef.current(projectId)
+          },
+        }
+      },
+    }
+  })
 
-void mock.module(appDatabaseServiceModulePath, () => {
-  return {
-    getAppDatabaseService: () => {
-      return {
-        queryJson: (statement: string) => {
-          return queryJsonRef.current(statement)
-        },
-      }
-    },
-  }
-})
+  void mock.module(appDatabaseServiceModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {
+          queryJson: (statement: string) => {
+            return queryJsonRef.current(statement)
+          },
+        }
+      },
+    }
+  })
 
-void mock.module(systemActorModulePath, () => {
-  return {
-    getSystemActor: () => {
-      return {id: 'system-actor', name: 'System'}
-    },
-  }
-})
+  void mock.module(systemActorModulePath, () => {
+    return {
+      getSystemActor: () => {
+        return {id: 'system-actor', name: 'System'}
+      },
+    }
+  })
 
-void mock.module(projectAccessGuardModulePath, () => {
-  return {
-    assertProjectIsActive: async () => {
-      return {archived: false, id: 'project-1', name: 'Project 1'}
-    },
-  }
+  void mock.module(projectAccessGuardModulePath, () => {
+    return {
+      assertProjectIsActive: async () => {
+        return {archived: false, id: 'project-1', name: 'Project 1'}
+      },
+    }
+  })
+}
+
+const loadHandler = () => {
+  registerModuleMocks()
+
+  return import(`./projectsRoutesPostArticleReviewDetails.ts?test=${Date.now()}-${Math.random()}`)
+}
+
+afterEach(() => {
+  mock.restore()
 })
 
 const getPromptRow = (id: string, order: number) => {
@@ -147,7 +159,7 @@ const getProjectReviewDetailJudgmentRow = (overrides: Partial<Record<string, unk
 }
 
 const postReviewDetailsRequest = async () => {
-  const {projectsRoutesPostArticleReviewDetails} = await import('./projectsRoutesPostArticleReviewDetails.ts')
+  const {projectsRoutesPostArticleReviewDetails} = await loadHandler()
   const app = new Elysia().use(projectsRoutesPostArticleReviewDetails)
 
   return app.handle(

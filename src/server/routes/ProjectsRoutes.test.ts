@@ -129,6 +129,10 @@ const rebuildMartRefreshQueueWithoutGeneration = async () => {
     );
     CREATE INDEX IF NOT EXISTS idx_app_mart_refresh_queue_created_at ON app.mart_refresh_queue(created_at);
   `)
+
+  const {getDuckdbMartRefreshService} = await import('../services/getDuckdbMartRefreshService.ts')
+
+  getDuckdbMartRefreshService().resetProgressSnapshotForTests()
 }
 
 const insertReviewArticleServingFixtureRows = async ({
@@ -277,7 +281,12 @@ test('archive route clears refresh state for archived projects without depending
     WHERE id = '${projectId}'
     LIMIT 1
   `)
-  const [refreshState] = await queryDatabase<{dirtyToken: number; lastCompletedRefreshToken: number; projectId: string; refreshStatus: string}>(`
+  const [refreshState] = await queryDatabase<{
+    dirtyToken: number
+    lastCompletedRefreshToken: number
+    projectId: string
+    refreshStatus: string
+  }>(`
     SELECT
       project_id AS projectId,
       CAST(dirty_token AS INTEGER) AS dirtyToken,
@@ -1394,7 +1403,6 @@ test('edit route detaches changed owned prompts from matching global prompt ids'
 
   await flushMartRefreshes()
 })
-
 
 test('archive route marks active judgment jobs as project_removed and draining for archived projects', async () => {
   if (!app || !queryDatabase || !runDatabase) {

@@ -25,7 +25,7 @@ test('runDuckdbJsonQuery reads native duckdb tables', async () => {
   try {
     const rows = await runDuckdbJsonQuery<{total: number}>(`SELECT SUM(value) AS total FROM app.sample`, duckdbPath)
 
-    expect(rows[0]?.total).toBe(7)
+    expect(Number(rows[0]?.total)).toBe(7)
   } finally {
     removeFileIfExists(duckdbPath)
   }

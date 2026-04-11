@@ -252,6 +252,23 @@ test('serving table remediation path switches to rewrite when single-row delete 
 test('archive serving repro harness captures delete and rewrite probe results on repeat runs', async () => {
   const workingDirectory = mkdtempSync(join(tmpdir(), 'f1-archive-serving-repro-'))
   const duckdbPath = join(workingDirectory, 'archive-serving.duckdb')
+  const normalizeTimestamp = (value: unknown) => {
+    return typeof value !== 'string'
+      ? value
+      : new Date(value.replace(' ', 'T').replace(/([+-]\d{2})$/, '$1:00')).toISOString()
+  }
+  const normalizeRowSample = (row: Record<string, unknown>) => {
+    return {
+      ...row,
+      article_created_at: normalizeTimestamp(row.article_created_at),
+      article_updated_at: normalizeTimestamp(row.article_updated_at),
+      full_text_fetched_at: normalizeTimestamp(row.full_text_fetched_at),
+      latest_human_updated_at: normalizeTimestamp(row.latest_human_updated_at),
+      latest_llm_created_at: normalizeTimestamp(row.latest_llm_created_at),
+      latest_review_updated_at: normalizeTimestamp(row.latest_review_updated_at),
+      serving_updated_at: normalizeTimestamp(row.serving_updated_at),
+    }
+  }
 
   try {
     await seedArchiveServingDatabase(duckdbPath)
@@ -274,15 +291,15 @@ test('archive serving repro harness captures delete and rewrite probe results on
     expect(firstRun.operations.rewriteProbe.retainedRowCount).toBe(1)
     expect(firstRun.remediationPath).toBe('keep-single-row-purge')
     expect(firstRun.rowIds).toHaveLength(1)
-    expect(firstRun.rowSample[0]).toEqual({
-      article_created_at: '2024-02-03 05:05:06+01',
+    expect(normalizeRowSample(firstRun.rowSample[0] as Record<string, unknown>)).toEqual({
+      article_created_at: '2024-02-03T04:05:06.000Z',
       article_external_id: 'EXT-001',
       article_id: 'article-001',
       article_title: 'Archived article',
-      article_updated_at: '2024-02-04 06:06:07+01',
+      article_updated_at: '2024-02-04T05:06:07.000Z',
       enabled_prompt_count: 3,
       full_text_conversion_status: 'success',
-      full_text_fetched_at: '2024-02-05 07:07:08+01',
+      full_text_fetched_at: '2024-02-05T06:07:08.000Z',
       full_text_pdf: 's3://bucket/archive-article.pdf',
       generation: '7',
       has_all_human_answers: false,
@@ -290,16 +307,16 @@ test('archive serving repro harness captures delete and rewrite probe results on
       human_answered_prompt_count: 1,
       human_answered_prompt_ids: ['prompt-a'],
       journal_title: 'Journal of Archive Failures',
-      latest_human_updated_at: '2024-02-07 09:09:10+01',
-      latest_llm_created_at: '2024-02-06 08:08:09+01',
-      latest_review_updated_at: '2024-02-08 10:10:11+01',
+      latest_human_updated_at: '2024-02-07T08:09:10.000Z',
+      latest_llm_created_at: '2024-02-06T07:08:09.000Z',
+      latest_review_updated_at: '2024-02-08T09:10:11.000Z',
       llm_judged_prompt_count: 3,
       llm_judged_prompt_ids: ['prompt-a', 'prompt-b', 'prompt-c'],
       project_id: 'archived-project-repro',
       review_opened: true,
       review_sections_completed: 6,
       rowId: firstRun.rowIds[0],
-      serving_updated_at: '2024-02-09 11:11:12+01',
+      serving_updated_at: '2024-02-09T10:11:12.000Z',
       source_metadata: '{"journalTitle":"Journal of Archive Failures","source":"failure-log"}',
       url: 'https://example.com/archive-article',
     })

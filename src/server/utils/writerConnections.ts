@@ -232,6 +232,7 @@ export const recordWriterConnectionProxy = (headers: Headers, requestPath: strin
 
   const previous = writerConnectionState.recordsByConnectionId.get(getWriterConnectionId(input))
   const nextRecord = getUpdatedWriterConnectionRecord(input, previous, {
+    lastHeartbeatAt: new Date(nowMs).toISOString(),
     lastProxyAt: new Date(nowMs).toISOString(),
     lastRequestPath: requestPath,
     proxyCount: (previous?.proxyCount ?? 0) + 1,

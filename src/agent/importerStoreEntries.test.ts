@@ -11,32 +11,40 @@ type StoredArticleRow = Record<string, unknown>
 
 const storedRowsRef: {current: StoredArticleRow[][]} = {current: []}
 
-void mock.module(articleImportStoreServiceModulePath, () => {
-  return {
-    storeImportedArticles: async (rows: StoredArticleRow[]) => {
-      storedRowsRef.current.push(rows)
-    },
-  }
-})
+const registerModuleMocks = () => {
+  void mock.module(articleImportStoreServiceModulePath, () => {
+    return {
+      storeImportedArticles: async (rows: StoredArticleRow[]) => {
+        storedRowsRef.current.push(rows)
+      },
+    }
+  })
 
-void mock.module(appDatabaseServiceModulePath, () => {
-  return {
-    getAppDatabaseService: () => {
-      return {
-        queryJson: async (statement: string) => {
-          if (statement.includes('FROM app.import_route')) {
-            return [{id: 'import-route-1'}]
-          }
+  void mock.module(appDatabaseServiceModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {
+          queryJson: async (statement: string) => {
+            if (statement.includes('FROM app.import_route')) {
+              return [{id: 'import-route-1'}]
+            }
 
-          return []
-        },
-        run: async () => {
-          return undefined
-        },
-      }
-    },
-  }
-})
+            return []
+          },
+          run: async () => {
+            return undefined
+          },
+        }
+      },
+    }
+  })
+}
+
+const loadAgentModule = async <T>(relativePath: string): Promise<T> => {
+  registerModuleMocks()
+
+  return (await import(`${relativePath}?test=${Date.now()}-${Math.random()}`)) as T
+}
 
 const getStoredRows = () => {
   return storedRowsRef.current.flatMap((batch) => {
@@ -46,10 +54,12 @@ const getStoredRows = () => {
 
 afterEach(() => {
   storedRowsRef.current = []
+  mock.restore()
 })
 
 test('pubmed harvest mapping keeps DOI and import metadata', async () => {
-  const {pubmedHarvestToDatabaseEntry} = await import('./pubmedHarvest.ts')
+  const {pubmedHarvestToDatabaseEntry} =
+    await loadAgentModule<typeof import('./pubmedHarvest.ts')>('./pubmedHarvest.ts')
 
   expect(
     pubmedHarvestToDatabaseEntry(
@@ -92,7 +102,9 @@ test('pubmed harvest mapping keeps DOI and import metadata', async () => {
 })
 
 test('pubmed workflow store entries pass DOI into storeImportedArticles', async () => {
-  const {pubmedWorkflowStoreEntries} = await import('./pubmedWorkflowStoreEntries.ts')
+  const {pubmedWorkflowStoreEntries} = await loadAgentModule<typeof import('./pubmedWorkflowStoreEntries.ts')>(
+    './pubmedWorkflowStoreEntries.ts',
+  )
 
   await pubmedWorkflowStoreEntries([
     {
@@ -128,7 +140,9 @@ test('pubmed workflow store entries pass DOI into storeImportedArticles', async 
 })
 
 test('arxiv workflow store entries pass arxiv payloads through the import service', async () => {
-  const {arxivWorkflowStoreEntires} = await import('./arxivWorkflow/arxivWorkflowStoreEntires.ts')
+  const {arxivWorkflowStoreEntires} = await loadAgentModule<
+    typeof import('./arxivWorkflow/arxivWorkflowStoreEntires.ts')
+  >('./arxivWorkflow/arxivWorkflowStoreEntires.ts')
 
   await arxivWorkflowStoreEntires(
     [
@@ -170,7 +184,9 @@ test('arxiv workflow store entries pass arxiv payloads through the import servic
 })
 
 test('biorxiv workflow store entries pass normalized DOI and URL', async () => {
-  const {biorxivWorkflowStoreEntries} = await import('./biorxivWorkflowStoreEntries.ts')
+  const {biorxivWorkflowStoreEntries} = await loadAgentModule<typeof import('./biorxivWorkflowStoreEntries.ts')>(
+    './biorxivWorkflowStoreEntries.ts',
+  )
 
   await biorxivWorkflowStoreEntries([
     {
@@ -200,7 +216,9 @@ test('biorxiv workflow store entries pass normalized DOI and URL', async () => {
 })
 
 test('medrxiv workflow store entries pass normalized DOI and URL', async () => {
-  const {medrxivWorkflowStoreEntries} = await import('./medrxivWorkflowStoreEntries.ts')
+  const {medrxivWorkflowStoreEntries} = await loadAgentModule<typeof import('./medrxivWorkflowStoreEntries.ts')>(
+    './medrxivWorkflowStoreEntries.ts',
+  )
 
   await medrxivWorkflowStoreEntries([
     {
@@ -230,7 +248,9 @@ test('medrxiv workflow store entries pass normalized DOI and URL', async () => {
 })
 
 test('europe pmc ppr workflow store entries pass DOI, URL, and raw payload', async () => {
-  const {europePmcPprWorkflowStoreEntries} = await import('./europePmcPprWorkflowStoreEntries.ts')
+  const {europePmcPprWorkflowStoreEntries} = await loadAgentModule<
+    typeof import('./europePmcPprWorkflowStoreEntries.ts')
+  >('./europePmcPprWorkflowStoreEntries.ts')
 
   await europePmcPprWorkflowStoreEntries([
     {
@@ -273,8 +293,9 @@ test('fhir importer stores synthesized article payloads through the import servi
       `${JSON.stringify({resourceType: 'Patient', id: 'patient-1', name: [{text: 'Alice Example'}]})}\n`,
     )
 
-    const {fhirEhrPatientsWorkflowStoreEntries} =
-      await import('./fhirEhrPatientsWorkflow/fhirEhrPatientsWorkflowStoreEntries.ts')
+    const {fhirEhrPatientsWorkflowStoreEntries} = await loadAgentModule<
+      typeof import('./fhirEhrPatientsWorkflow/fhirEhrPatientsWorkflowStoreEntries.ts')
+    >('./fhirEhrPatientsWorkflow/fhirEhrPatientsWorkflowStoreEntries.ts')
 
     const result = await fhirEhrPatientsWorkflowStoreEntries({
       assetsFolder: relative(process.cwd(), tempAssetsPath),

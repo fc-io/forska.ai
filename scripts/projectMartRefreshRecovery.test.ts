@@ -150,10 +150,10 @@ const seedDatabase = ({
 }
 
 const runQuery = (duckdbPath: string, sql: string) => {
-  const result = globalThis.Bun.spawnSync(
-    ['bun', 'scripts/dbQuerySnapshot.ts', `--sql=${sql}`],
-    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath}},
-  )
+  const result = globalThis.Bun.spawnSync(['bun', 'scripts/dbQuerySnapshot.ts', `--sql=${sql}`], {
+    cwd: projectRoot,
+    env: {...defaultEnv, DUCKDB_PATH: duckdbPath},
+  })
 
   if (result.exitCode !== 0) {
     throw new Error(result.stderr.toString() || result.stdout.toString() || 'query failed')
@@ -230,11 +230,7 @@ test('runProjectMartRefreshWorkerOnce routes oversized full refreshes into stage
 
   const runScript = globalThis.Bun.spawnSync(['bun', runOnceScriptPath, '--worker-id=test-worker'], {
     cwd: projectRoot,
-    env: {
-      ...defaultEnv,
-      DUCKDB_PATH: duckdbPath,
-      PROJECT_MART_REFRESH_MAX_FULL_SCOPE_ARTICLES: '3',
-    },
+    env: {...defaultEnv, DUCKDB_PATH: duckdbPath, PROJECT_MART_REFRESH_MAX_FULL_SCOPE_ARTICLES: '3'},
   })
 
   expect(runScript.exitCode).toBe(0)
@@ -383,16 +379,20 @@ test('isolated refresh command progresses one large rebuild batch when no normal
   )
 
   if (seedLargeRebuild.exitCode !== 0) {
-    throw new Error(seedLargeRebuild.stderr.toString() || seedLargeRebuild.stdout.toString() || 'large rebuild seed failed')
+    throw new Error(
+      seedLargeRebuild.stderr.toString() || seedLargeRebuild.stdout.toString() || 'large rebuild seed failed',
+    )
   }
 
-  const runScript = globalThis.Bun.spawnSync(['bunx', 'tsx', runOnceScriptPath, '--worker-id=test-large-rebuild'], {
+  const runScript = globalThis.Bun.spawnSync(['bun', runOnceScriptPath, '--worker-id=test-large-rebuild'], {
     cwd: projectRoot,
     env: {...defaultEnv, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer', SERVER_WRITER_URL: ''},
   })
 
   if (runScript.exitCode !== 0) {
-    throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'large rebuild run-once script failed')
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'large rebuild run-once script failed',
+    )
   }
 
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
@@ -420,7 +420,11 @@ test('isolated refresh command progresses one large rebuild batch when no normal
   ) as Array<{cursorArticleId: string | null; rebuildPhase: string; refreshStatus: string}>
 
   expect(promptAnswerFactCount).toEqual({count: '1'})
-  expect(largeRebuildState).toEqual({cursorArticleId: 'article-1', rebuildPhase: 'prompt_answer_fact', refreshStatus: 'idle'})
+  expect(largeRebuildState).toEqual({
+    cursorArticleId: 'article-1',
+    rebuildPhase: 'prompt_answer_fact',
+    refreshStatus: 'idle',
+  })
 })
 
 test('recoverProjectMartRefreshClaims lists and recovers stale claims only when explicitly requested', () => {
@@ -476,7 +480,6 @@ test('recoverProjectMartRefreshClaims lists and recovers stale claims only when 
 
   expect(state).toEqual({lastCompletedRefreshToken: '1', refreshStatus: 'idle'})
 })
-
 
 test('runProjectMartLargeRebuildCycle CLI advances one staged batch with conservative default batch size', () => {
   const duckdbPath = join(projectRoot, '.tmp', 'run-project-mart-large-rebuild-cli.duckdb')
@@ -598,13 +601,15 @@ test('runProjectMartLargeRebuildCycle CLI advances one staged batch with conserv
   )
 
   if (seedLargeRebuild.exitCode !== 0) {
-    throw new Error(seedLargeRebuild.stderr.toString() || seedLargeRebuild.stdout.toString() || 'large rebuild cli seed failed')
+    throw new Error(
+      seedLargeRebuild.stderr.toString() || seedLargeRebuild.stdout.toString() || 'large rebuild cli seed failed',
+    )
   }
 
-  const runScript = globalThis.Bun.spawnSync(['bun', 'scripts/runProjectMartLargeRebuildCycle.ts', '--worker-id=test-large-rebuild-cli'], {
-    cwd: projectRoot,
-    env: {...defaultEnv, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer', SERVER_WRITER_URL: ''},
-  })
+  const runScript = globalThis.Bun.spawnSync(
+    ['bun', 'scripts/runProjectMartLargeRebuildCycle.ts', '--worker-id=test-large-rebuild-cli'],
+    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer', SERVER_WRITER_URL: ''}},
+  )
 
   if (runScript.exitCode !== 0) {
     throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'large rebuild cli run failed')
@@ -624,7 +629,6 @@ test('runProjectMartLargeRebuildCycle CLI advances one staged batch with conserv
   expect(result.workerId).toBe('test-large-rebuild-cli')
   expect(result.nextCursor?.articleId).toBe('article-1')
 })
-
 
 test('runProjectMartLargeRebuildCycles CLI returns structured bounded multi-cycle progress summary', () => {
   const duckdbPath = join(projectRoot, '.tmp', 'run-project-mart-large-rebuild-cycles-cli.duckdb')
@@ -746,11 +750,20 @@ test('runProjectMartLargeRebuildCycles CLI returns structured bounded multi-cycl
   )
 
   if (seedLargeRebuild.exitCode !== 0) {
-    throw new Error(seedLargeRebuild.stderr.toString() || seedLargeRebuild.stdout.toString() || 'large rebuild cycles cli seed failed')
+    throw new Error(
+      seedLargeRebuild.stderr.toString()
+        || seedLargeRebuild.stdout.toString()
+        || 'large rebuild cycles cli seed failed',
+    )
   }
 
   const runScript = globalThis.Bun.spawnSync(
-    ['bun', 'scripts/runProjectMartLargeRebuildCycles.ts', '--worker-id=test-large-rebuild-cycles-cli', '--max-cycles=3'],
+    [
+      'bun',
+      'scripts/runProjectMartLargeRebuildCycles.ts',
+      '--worker-id=test-large-rebuild-cycles-cli',
+      '--max-cycles=3',
+    ],
     {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer', SERVER_WRITER_URL: ''}},
   )
 

@@ -1,4 +1,4 @@
-import {expect, mock, test} from 'bun:test'
+import {afterEach, expect, mock, test} from 'bun:test'
 
 const providerConnectionHelpersModulePath = new URL('./providerConnectionHelpers.ts', import.meta.url).pathname
 const providerConnectionRepositoryModulePath = new URL('./providerConnectionRepository.ts', import.meta.url).pathname
@@ -81,72 +81,80 @@ const state = {
   }),
 }
 
-void mock.module(providerConnectionRepositoryModulePath, () => {
-  return {
-    createProviderConnection: state.createProviderConnection,
-    deleteProviderConnection: state.deleteProviderConnection,
-    getProviderConnection: state.getProviderConnection,
-    listProviderConnections: async () => {
-      return []
-    },
-    updateProviderConnection: state.updateProviderConnection,
-  }
-})
+const registerModuleMocks = () => {
+  void mock.module(providerConnectionRepositoryModulePath, () => {
+    return {
+      createProviderConnection: state.createProviderConnection,
+      deleteProviderConnection: state.deleteProviderConnection,
+      getProviderConnection: state.getProviderConnection,
+      listProviderConnections: async () => {
+        return []
+      },
+      updateProviderConnection: state.updateProviderConnection,
+    }
+  })
 
-void mock.module(providerSecretStoreModulePath, () => {
-  return {
-    deleteProviderSecret: state.deleteProviderSecret,
-    readProviderSecret: state.readProviderSecret,
-    storeProviderSecret: state.storeProviderSecret,
-  }
-})
+  void mock.module(providerSecretStoreModulePath, () => {
+    return {
+      deleteProviderSecret: state.deleteProviderSecret,
+      readProviderSecret: state.readProviderSecret,
+      storeProviderSecret: state.storeProviderSecret,
+    }
+  })
 
-void mock.module(providerRuntimeDetectorModulePath, () => {
-  return {markProviderRuntimeUsage: state.markProviderRuntimeUsage}
-})
+  void mock.module(providerRuntimeDetectorModulePath, () => {
+    return {markProviderRuntimeUsage: state.markProviderRuntimeUsage}
+  })
 
-void mock.module(providerRuntimeMatchResolverModulePath, () => {
-  return {resolveProviderConnectionRuntimeMatch: state.resolveProviderConnectionRuntimeMatch}
-})
+  void mock.module(providerRuntimeMatchResolverModulePath, () => {
+    return {resolveProviderConnectionRuntimeMatch: state.resolveProviderConnectionRuntimeMatch}
+  })
 
-void mock.module(providerConnectionHelpersModulePath, () => {
-  return {
-    getProviderConnectionAuthMode: ({secretRef}: {secretRef: string | null}) => {
-      return secretRef ? 'api-key' : 'none'
-    },
-    getResolvedProviderBaseURL: ({baseURL}: {baseURL: string | null}) => {
-      return baseURL
-    },
-  }
-})
+  void mock.module(providerConnectionHelpersModulePath, () => {
+    return {
+      getProviderConnectionAuthMode: ({secretRef}: {secretRef: string | null}) => {
+        return secretRef ? 'api-key' : 'none'
+      },
+      getResolvedProviderBaseURL: ({baseURL}: {baseURL: string | null}) => {
+        return baseURL
+      },
+    }
+  })
 
-void mock.module(providerRegistryModulePath, () => {
-  return {
-    requireProviderRegistryEntry: () => {
-      return {
-        beginAuth: async () => {
-          return {connection: null, message: 'Provide API key', payload: {authMode: 'api-key'}, status: 'pending'}
-        },
-        catalog: {kind: 'openrouter', label: 'OpenRouter'},
-        finishAuth: async ({connection}: {connection: unknown}) => {
-          return {
-            connection,
-            message: 'Captured API key',
-            payload: {authMode: 'api-key', secretValue: 'test-key'},
-            status: 'complete',
-          }
-        },
-        resolveRuntimeCredentials: async () => {
-          return {apiKey: null, baseURL: 'https://api.example.com/v1', headers: {}, secretRef: null}
-        },
-      }
-    },
-  }
-})
+  void mock.module(providerRegistryModulePath, () => {
+    return {
+      requireProviderRegistryEntry: () => {
+        return {
+          beginAuth: async () => {
+            return {connection: null, message: 'Provide API key', payload: {authMode: 'api-key'}, status: 'pending'}
+          },
+          catalog: {kind: 'openrouter', label: 'OpenRouter'},
+          finishAuth: async ({connection}: {connection: unknown}) => {
+            return {
+              connection,
+              message: 'Captured API key',
+              payload: {authMode: 'api-key', secretValue: 'test-key'},
+              status: 'complete',
+            }
+          },
+          resolveRuntimeCredentials: async () => {
+            return {apiKey: null, baseURL: 'https://api.example.com/v1', headers: {}, secretRef: null}
+          },
+        }
+      },
+    }
+  })
+}
 
 const loadAuthService = () => {
-  return import('./providerAuthService.ts')
+  registerModuleMocks()
+
+  return import(`./providerAuthService.ts?test=${Date.now()}-${Math.random()}`)
 }
+
+afterEach(() => {
+  mock.restore()
+})
 
 test('finishProviderAuth persists secret and updates connection when auth completes', async () => {
   state.storeProviderSecret.mockClear()

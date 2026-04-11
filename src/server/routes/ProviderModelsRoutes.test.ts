@@ -1,4 +1,4 @@
-import {expect, mock, test} from 'bun:test'
+import {afterEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).pathname
@@ -68,35 +68,43 @@ const state = {
   }),
 }
 
-void mock.module(providerConnectionRepositoryModulePath, () => {
-  return {getProviderConnection: state.getProviderConnection}
-})
+const registerModuleMocks = () => {
+  void mock.module(providerConnectionRepositoryModulePath, () => {
+    return {getProviderConnection: state.getProviderConnection}
+  })
 
-void mock.module(providerModelRepositoryModulePath, () => {
-  return {createProviderModel: state.createProviderModel, updateProviderModel: state.updateProviderModel}
-})
+  void mock.module(providerModelRepositoryModulePath, () => {
+    return {createProviderModel: state.createProviderModel, updateProviderModel: state.updateProviderModel}
+  })
 
-void mock.module(providerSyncServiceModulePath, () => {
-  return {syncProviderConnectionModels: state.syncProviderConnectionModels}
-})
+  void mock.module(providerSyncServiceModulePath, () => {
+    return {syncProviderConnectionModels: state.syncProviderConnectionModels}
+  })
 
-void mock.module(appDatabaseServiceModulePath, () => {
-  return {
-    getAppDatabaseService: () => {
-      return {
-        queryJson: (statement: string) => {
-          return state.queryJson(statement)
-        },
-      }
-    },
-  }
-})
+  void mock.module(appDatabaseServiceModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {
+          queryJson: (statement: string) => {
+            return state.queryJson(statement)
+          },
+        }
+      },
+    }
+  })
+}
 
 const loadRoutes = async () => {
-  const {providerModelsRoutes} = await import('./ProviderModelsRoutes.ts')
+  registerModuleMocks()
+
+  const {providerModelsRoutes} = await import(`./ProviderModelsRoutes.ts?test=${Date.now()}-${Math.random()}`)
 
   return new Elysia().use(providerModelsRoutes)
 }
+
+afterEach(() => {
+  mock.restore()
+})
 
 test('provider models route syncs models for a connection', async () => {
   state.syncProviderConnectionModels.mockClear()

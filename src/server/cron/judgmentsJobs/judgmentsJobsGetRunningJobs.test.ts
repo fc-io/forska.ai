@@ -79,7 +79,7 @@ test('filterRunningJobsByRuntimeMatch logs when the runtime is unreachable', asy
     expect(filtered).toEqual([])
     expect(warn).toHaveBeenCalledTimes(1)
     expect(warn.mock.calls[0]?.[0]).toBe('[judgments] skipping running job because the SGLang runtime is unreachable')
-    expect(warn.mock.calls[0]?.[1]).toMatchObject({reason: 'runtime-unreachable'})
+    expect(String(warn.mock.calls[0]?.[1] ?? '')).toContain('"reason":"runtime-unreachable"')
   } finally {
     console.warn = originalWarn
   }
@@ -107,7 +107,7 @@ test('filterRunningJobsByRuntimeMatch logs when the runtime is serving a differe
     expect(warn.mock.calls[0]?.[0]).toBe(
       '[judgments] skipping running job because the SGLang runtime is serving a different model',
     )
-    expect(warn.mock.calls[0]?.[1]).toMatchObject({reason: 'runtime-mismatch'})
+    expect(String(warn.mock.calls[0]?.[1] ?? '')).toContain('"reason":"runtime-mismatch"')
   } finally {
     console.warn = originalWarn
   }

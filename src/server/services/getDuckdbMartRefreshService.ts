@@ -1459,7 +1459,13 @@ const getJudgmentFactRefreshSourceSql = (articleFilterSql: string) => {
   `
 }
 
-const getJudgmentFactSafeRefreshSql = ({dirtyArticlesSql, rebuildTableName}: {dirtyArticlesSql: string; rebuildTableName: string}) => {
+const getJudgmentFactSafeRefreshSql = ({
+  dirtyArticlesSql,
+  rebuildTableName,
+}: {
+  dirtyArticlesSql: string
+  rebuildTableName: string
+}) => {
   return `
     BEGIN TRANSACTION;
     CREATE TEMP TABLE temp_dirty_judgment_fact_article AS ${dirtyArticlesSql};
@@ -1580,7 +1586,7 @@ const getJudgmentFactSafeRefreshSql = ({dirtyArticlesSql, rebuildTableName}: {di
       created_at,
       updated_at
     )
-    ${getJudgmentFactRefreshSourceSql("judgment.article_id IN (SELECT article_id FROM temp_dirty_judgment_fact_article)")};
+    ${getJudgmentFactRefreshSourceSql('judgment.article_id IN (SELECT article_id FROM temp_dirty_judgment_fact_article)')};
     DROP TABLE mart.judgment_fact;
     ALTER TABLE ${rebuildTableName} RENAME TO judgment_fact;
     ${judgmentFactIndexSql};
@@ -2757,29 +2763,94 @@ const _scheduleQueuedMartRefreshes = (delayMs = martRefreshScheduleDelayMs) => {
   updateMartRefreshDebugSnapshot({drainTimerActive: true})
 }
 
+const getMartRefreshTaskKeys = (task: QueueMartRefreshTask) => {
+  return task.refreshScope === 'project'
+    ? {articleKey: '', projectKey: task.projectId ?? ''}
+    : {articleKey: task.articleId ?? '', projectKey: ''}
+}
+
+const getQueueMartRefreshTaskValueSql = (task: QueueMartRefreshTask) => {
+  const {articleKey, projectKey} = getMartRefreshTaskKeys(task)
+
+  return `(
+    ${getSqlLiteral(globalThis.crypto.randomUUID())},
+    ${getSqlLiteral(task.refreshScope)},
+    ${getSqlLiteral(task.projectId ?? null)},
+    ${getSqlLiteral(task.articleId ?? null)},
+    ${getSqlLiteral(projectKey)},
+    ${getSqlLiteral(articleKey)},
+    0,
+    ${getSqlLiteral(task.reason)}
+  )`
+}
+
 const queueMartRefreshTasks = async (tasks: QueueMartRefreshTask[]) => {
   if (tasks.length === 0) {
     return
   }
+
+  await ensureMartRefreshQueueSchema()
+  await getAppDatabaseService().run(`
+    INSERT INTO app.mart_refresh_queue (
+      id,
+      refresh_scope,
+      project_id,
+      article_id,
+      project_key,
+      article_key,
+      refresh_generation,
+      reason
+    )
+    VALUES ${tasks
+      .map((task) => {
+        return getQueueMartRefreshTaskValueSql(task)
+      })
+      .join(',\n')}
+    ON CONFLICT (refresh_scope, project_key, article_key) DO UPDATE SET
+      project_id = EXCLUDED.project_id,
+      article_id = EXCLUDED.article_id,
+      reason = EXCLUDED.reason,
+      completed_at = NULL,
+      refresh_generation = COALESCE(refresh_generation, 0) + 1,
+      updated_at = NOW()
+  `)
+
+  if (isMartRefreshAutoDrainEnabled()) {
+    _scheduleQueuedMartRefreshes()
+  }
 }
 
 export const flushQueuedMartRefreshes = async (): Promise<void> => {
+  if (martRefreshDrainTimer) {
+    clearTimeout(martRefreshDrainTimer)
+    martRefreshDrainTimer = null
+  }
+
+  if (martRefreshDrainPromise) {
+    return martRefreshDrainPromise
+  }
+
   updateMartRefreshDebugSnapshot({
-    drainPromiseActive: false,
+    drainPromiseActive: true,
     drainTimerActive: false,
     flushInvocationCount: martRefreshDebugSnapshot.flushInvocationCount + 1,
     lastFlushAt: new Date().toISOString(),
-    lastHasMoreQueuedTasks: false,
-    lastPassCompletedAt: new Date().toISOString(),
-    lastPassStartedAt: new Date().toISOString(),
-    lastQueuedTaskCount: 0,
   })
+
+  martRefreshDrainPromise = _processQueuedMartRefreshes().finally(() => {
+    martRefreshDrainPromise = null
+    updateMartRefreshDebugSnapshot({drainPromiseActive: false, drainTimerActive: martRefreshDrainTimer !== null})
+  })
+
+  return martRefreshDrainPromise
 }
 
 const recoverQueuedArchivedProjectRefresh = async (projectId: string) => {
   if (!(await getProjectIsArchived(projectId))) {
     throw new Error(`Queued archived-project recovery requires an archived project: ${projectId}`)
   }
+
+  const queuedProjectTasks = await _getQueuedProjectTasksForProject(projectId)
 
   setMartRefreshProgressSnapshot({
     claimedQueuedArticleIds: [],
@@ -2790,7 +2861,8 @@ const recoverQueuedArchivedProjectRefresh = async (projectId: string) => {
 
   try {
     await refreshProjects([projectId])
-    return {completedTaskCount: 1, projectId}
+    await completeQueuedTasks(queuedProjectTasks)
+    return {completedTaskCount: Math.max(queuedProjectTasks.length, 1), projectId}
   } finally {
     resetMartRefreshProgressSnapshot()
   }

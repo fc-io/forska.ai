@@ -24,18 +24,22 @@ const state = {
   }),
 }
 
-void mock.module(providerRuntimeModelGuardModulePath, () => {
-  return {
-    assertStoredProviderModelRuntimeMatch: state.assertStoredProviderModelRuntimeMatch,
-    getStoredProviderModelRuntimeMatch: state.getStoredProviderModelRuntimeMatch,
-  }
-})
+const registerModuleMocks = () => {
+  void mock.module(providerRuntimeModelGuardModulePath, () => {
+    return {
+      assertStoredProviderModelRuntimeMatch: state.assertStoredProviderModelRuntimeMatch,
+      getStoredProviderModelRuntimeMatch: state.getStoredProviderModelRuntimeMatch,
+    }
+  })
+}
 
 let app: {handle: (request: Request) => Promise<Response>} | null = null
 let closeDatabase: (() => Promise<void>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 
 beforeAll(async () => {
+  registerModuleMocks()
+
   const [
     {migrateDuckdb},
     {getAppDatabaseService},
@@ -47,7 +51,7 @@ beforeAll(async () => {
     import('../services/appDatabaseService.ts'),
     import('../utils/duckdbService.ts'),
     import('../utils/serverRuntimeRole.ts'),
-    import('./JudgmentsJobsRoutes.ts'),
+    import(`./JudgmentsJobsRoutes.ts?test=${Date.now()}-${Math.random()}`),
   ])
 
   resetDuckdbServiceForTests()
@@ -75,6 +79,7 @@ afterAll(async () => {
   rmSync(`${tempDbPath}.writer.history.json`, {force: true})
   rmSync(`${tempDbPath}.writer.lock`, {force: true})
   rmSync(tempJobDir, {force: true, recursive: true})
+  mock.restore()
 })
 
 afterEach(async () => {

@@ -1,9 +1,6 @@
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 
-type CliOptions = {
-  recover: boolean
-  yes: boolean
-}
+type CliOptions = {recover: boolean; yes: boolean}
 
 type RecoveryResult = {
   claimedToken?: number
@@ -28,10 +25,7 @@ const getBooleanFlag = (names: string[]) => {
 }
 
 const getCliOptions = (): CliOptions => {
-  return {
-    recover: getBooleanFlag(['--recover']),
-    yes: getBooleanFlag(['--yes']),
-  }
+  return {recover: getBooleanFlag(['--recover']), yes: getBooleanFlag(['--yes'])}
 }
 
 const toNumber = (value: number | string | null | undefined) => {
@@ -68,15 +62,12 @@ const getSummary = (staleClaims: StaleClaimRow[]) => {
 }
 
 const runIsolatedRecovery = () => {
-  const result = globalThis.Bun.spawnSync(
-    ['bunx', 'tsx', 'scripts/runProjectMartRefreshWorkerOnceIsolated.ts'],
-    {
-      cwd: process.cwd(),
-      env: {...process.env, SERVER_ROLE: 'writer', SERVER_WRITER_URL: ''},
-      stderr: 'pipe',
-      stdout: 'pipe',
-    },
-  )
+  const result = globalThis.Bun.spawnSync(['bun', 'scripts/runProjectMartRefreshWorkerOnceIsolated.ts'], {
+    cwd: process.cwd(),
+    env: {...process.env, SERVER_ROLE: 'writer', SERVER_WRITER_URL: ''},
+    stderr: 'pipe',
+    stdout: 'pipe',
+  })
   const output = result.stdout.toString().trim()
   const lastLine = output
     .split(/\r?\n/)

@@ -99,40 +99,44 @@ const resetState = (): void => {
   })
 }
 
-void mock.module(providerAuthServiceModulePath, () => {
-  return {resolveMatchedProviderRuntimeCredentials: state.resolveMatchedProviderRuntimeCredentials}
-})
+const registerModuleMocks = () => {
+  void mock.module(providerAuthServiceModulePath, () => {
+    return {resolveMatchedProviderRuntimeCredentials: state.resolveMatchedProviderRuntimeCredentials}
+  })
 
-void mock.module(providerConnectionRepositoryModulePath, () => {
-  return {
-    getProviderConnectionForStoredModel: state.getProviderConnectionForStoredModel,
-    listProviderConnections: state.listProviderConnections,
-  }
-})
+  void mock.module(providerConnectionRepositoryModulePath, () => {
+    return {
+      getProviderConnectionForStoredModel: state.getProviderConnectionForStoredModel,
+      listProviderConnections: state.listProviderConnections,
+    }
+  })
 
-void mock.module(providerModelRepositoryModulePath, () => {
-  return {getProviderModels: state.getProviderModels}
-})
+  void mock.module(providerModelRepositoryModulePath, () => {
+    return {getProviderModels: state.getProviderModels}
+  })
 
-void mock.module(providerRegistryModulePath, () => {
-  return {
-    requireProviderRegistryEntry: () => {
-      return {listModels: state.listModels}
-    },
-  }
-})
+  void mock.module(providerRegistryModulePath, () => {
+    return {
+      requireProviderRegistryEntry: () => {
+        return {listModels: state.listModels}
+      },
+    }
+  })
 
-void mock.module(providerRuntimeDiscoveryModulePath, () => {
-  return {
-    discoverOpenAICompatibleRuntimeModel: state.discoverOpenAICompatibleRuntimeModel,
-    supportsSavedLocalProviderProbe: (providerKind: string | null | undefined) => {
-      return ['ollama', 'llamacpp', 'llmstudio', 'sglang', 'vllm'].includes(String(providerKind ?? '').trim())
-    },
-  }
-})
+  void mock.module(providerRuntimeDiscoveryModulePath, () => {
+    return {
+      discoverOpenAICompatibleRuntimeModel: state.discoverOpenAICompatibleRuntimeModel,
+      supportsSavedLocalProviderProbe: (providerKind: string | null | undefined) => {
+        return ['ollama', 'llamacpp', 'llmstudio', 'sglang', 'vllm'].includes(String(providerKind ?? '').trim())
+      },
+    }
+  })
+}
 
 const loadGuard = () => {
-  return import('./providerRuntimeModelGuard.ts')
+  registerModuleMocks()
+
+  return import(`./providerRuntimeModelGuard.ts?test=${Date.now()}-${Math.random()}`)
 }
 
 afterEach(() => {
@@ -141,6 +145,7 @@ afterEach(() => {
   return (import(providerRuntimeDetectorModulePath) as Promise<{clearProviderRuntimeDetectorCache: () => void}>).then(
     ({clearProviderRuntimeDetectorCache}) => {
       clearProviderRuntimeDetectorCache()
+      mock.restore()
     },
   )
 })

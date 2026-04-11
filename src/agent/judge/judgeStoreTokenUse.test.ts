@@ -4,18 +4,18 @@ const envModulePath = new URL('../../server/utils/env.ts', import.meta.url).path
 const apiClientModulePath = new URL('../../services/apiClient.ts', import.meta.url).pathname
 
 void mock.module(envModulePath, () => {
-  return {
-    env: {
-      GPU_NNODES: 0,
-      GPU_GPUS_PER_NODE: 0,
-      GPU_TOTAL_GPUS: 0,
-      TP_SIZE: 0,
-      DP_SIZE: 0,
-      GPU_SHAPE: null,
-      SGLANG_MAX_RUNNING_REQUESTS: 1,
-      SGLANG_MODEL: null,
-    },
+  const mockedEnv = {
+    GPU_NNODES: 0,
+    GPU_GPUS_PER_NODE: 0,
+    GPU_TOTAL_GPUS: 0,
+    TP_SIZE: 0,
+    DP_SIZE: 0,
+    GPU_SHAPE: null,
+    SGLANG_MAX_RUNNING_REQUESTS: 1,
+    SGLANG_MODEL: null,
   }
+
+  return {env: mockedEnv, getEnv: () => mockedEnv, loadEnv: () => mockedEnv}
 })
 
 void mock.module(apiClientModulePath, () => {

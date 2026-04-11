@@ -29,29 +29,33 @@ const state = {
   }),
 }
 
-void mock.module(providerConnectionRepositoryModulePath, () => {
-  return {listProviderConnections: state.listProviderConnections}
-})
+const registerModuleMocks = () => {
+  void mock.module(providerConnectionRepositoryModulePath, () => {
+    return {listProviderConnections: state.listProviderConnections}
+  })
 
-void mock.module(providerRuntimeDiscoveryModulePath, () => {
-  return {
-    discoverOpenAICompatibleRuntimeModel: state.discoverOpenAICompatibleRuntimeModel,
-    supportsSavedLocalProviderProbe: (providerKind: string | null | undefined) => {
-      return ['ollama', 'llamacpp', 'llmstudio', 'sglang', 'vllm'].includes(String(providerKind ?? '').trim())
-    },
-  }
-})
+  void mock.module(providerRuntimeDiscoveryModulePath, () => {
+    return {
+      discoverOpenAICompatibleRuntimeModel: state.discoverOpenAICompatibleRuntimeModel,
+      supportsSavedLocalProviderProbe: (providerKind: string | null | undefined) => {
+        return ['ollama', 'llamacpp', 'llmstudio', 'sglang', 'vllm'].includes(String(providerKind ?? '').trim())
+      },
+    }
+  })
 
-void mock.module(providerRuntimeRecordsModulePath, () => {
-  return {
-    getLatestActiveProviderRuntimeRecord: state.getLatestActiveProviderRuntimeRecord,
-    getProviderRuntimeRecordStatus: state.getProviderRuntimeRecordStatus,
-    loadProviderRuntimeRecords: state.loadProviderRuntimeRecords,
-  }
-})
+  void mock.module(providerRuntimeRecordsModulePath, () => {
+    return {
+      getLatestActiveProviderRuntimeRecord: state.getLatestActiveProviderRuntimeRecord,
+      getProviderRuntimeRecordStatus: state.getProviderRuntimeRecordStatus,
+      loadProviderRuntimeRecords: state.loadProviderRuntimeRecords,
+    }
+  })
+}
 
 const loadDetector = () => {
-  return import('./providerRuntimeDetector.ts')
+  registerModuleMocks()
+
+  return import(`./providerRuntimeDetector.ts?test=${Date.now()}-${Math.random()}`)
 }
 
 afterEach(() => {
@@ -83,9 +87,7 @@ afterEach(() => {
     return []
   })
 
-  return loadDetector().then(({clearProviderRuntimeDetectorCache}) => {
-    clearProviderRuntimeDetectorCache()
-  })
+  mock.restore()
 })
 
 test('detector probes saved manual worker urls for runtime-backed providers', async () => {

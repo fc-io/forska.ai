@@ -30,84 +30,86 @@ const getMockDatabaseState = () => {
   return state
 }
 
-void mock.module(appDatabaseServiceModulePath, () => {
-  return {
-    getAppDatabaseService: () => {
-      return {
-        queryJson: async <T>(statement: string) => {
-          return (await getMockDatabaseState().queryJson(statement)) as T[]
-        },
-        run: async (statement: string) => {
-          getMockDatabaseState().rootRunStatements.push(statement)
-        },
-        transaction: async <T>(
-          work: (runner: {
-            queryJson: <TRow>(statement: string) => Promise<TRow[]>
-            run: (statement: string) => Promise<void>
-          }) => Promise<T>,
-        ) => {
-          const state = getMockDatabaseState()
-          const pendingProjectArticleStatements: string[] = []
-          const pendingProjectPromptStatements: string[] = []
-          const pendingMarkProjectsDirtyCalls: Array<{
-            projects: Array<{articleIds?: string[]; projectId: string}>
-            reason: string | null
-          }> = []
+const registerModuleMocks = () => {
+  void mock.module(appDatabaseServiceModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {
+          queryJson: async <T>(statement: string) => {
+            return (await getMockDatabaseState().queryJson(statement)) as T[]
+          },
+          run: async (statement: string) => {
+            getMockDatabaseState().rootRunStatements.push(statement)
+          },
+          transaction: async <T>(
+            work: (runner: {
+              queryJson: <TRow>(statement: string) => Promise<TRow[]>
+              run: (statement: string) => Promise<void>
+            }) => Promise<T>,
+          ) => {
+            const state = getMockDatabaseState()
+            const pendingProjectArticleStatements: string[] = []
+            const pendingProjectPromptStatements: string[] = []
+            const pendingMarkProjectsDirtyCalls: Array<{
+              projects: Array<{articleIds?: string[]; projectId: string}>
+              reason: string | null
+            }> = []
 
-          state.transactionCalls += 1
-          state.currentTransactionMarkProjectsDirtyCalls = pendingMarkProjectsDirtyCalls
+            state.transactionCalls += 1
+            state.currentTransactionMarkProjectsDirtyCalls = pendingMarkProjectsDirtyCalls
 
-          const result = await work({
-            queryJson: async <TRow>(statement: string) => {
-              return (await state.queryJson(statement)) as TRow[]
-            },
-            run: async (statement: string) => {
-              if (statement.includes('INSERT INTO app.project_article')) {
-                pendingProjectArticleStatements.push(statement)
-              }
-
-              if (statement.includes('INSERT INTO app.project_prompt')) {
-                if (state.failProjectPromptInsert) {
-                  throw new Error('project prompt insert failed')
+            const result = await work({
+              queryJson: async <TRow>(statement: string) => {
+                return (await state.queryJson(statement)) as TRow[]
+              },
+              run: async (statement: string) => {
+                if (statement.includes('INSERT INTO app.project_article')) {
+                  pendingProjectArticleStatements.push(statement)
                 }
 
-                pendingProjectPromptStatements.push(statement)
-              }
-            },
-          })
+                if (statement.includes('INSERT INTO app.project_prompt')) {
+                  if (state.failProjectPromptInsert) {
+                    throw new Error('project prompt insert failed')
+                  }
 
-          state.committedProjectArticleStatements.push(...pendingProjectArticleStatements)
-          state.committedProjectPromptStatements.push(...pendingProjectPromptStatements)
-          state.markProjectsDirtyCalls.push(...pendingMarkProjectsDirtyCalls)
-          state.currentTransactionMarkProjectsDirtyCalls = null
+                  pendingProjectPromptStatements.push(statement)
+                }
+              },
+            })
 
-          return result
-        },
-      }
-    },
-  }
-})
+            state.committedProjectArticleStatements.push(...pendingProjectArticleStatements)
+            state.committedProjectPromptStatements.push(...pendingProjectPromptStatements)
+            state.markProjectsDirtyCalls.push(...pendingMarkProjectsDirtyCalls)
+            state.currentTransactionMarkProjectsDirtyCalls = null
 
-void mock.module(projectMartRefreshStateServiceModulePath, () => {
-  return {
-    getProjectMartRefreshStateService: () => {
-      return {
-        markProjectsDirtyAtomically: async (params: {
-          projects: Array<{articleIds?: string[]; projectId: string}>
-          reason?: string | null
-          runner?: unknown
-        }) => {
-          const state = getMockDatabaseState()
+            return result
+          },
+        }
+      },
+    }
+  })
 
-          state.currentTransactionMarkProjectsDirtyCalls?.push({
-            projects: params.projects,
-            reason: params.reason ?? null,
-          })
-        },
-      }
-    },
-  }
-})
+  void mock.module(projectMartRefreshStateServiceModulePath, () => {
+    return {
+      getProjectMartRefreshStateService: () => {
+        return {
+          markProjectsDirtyAtomically: async (params: {
+            projects: Array<{articleIds?: string[]; projectId: string}>
+            reason?: string | null
+            runner?: unknown
+          }) => {
+            const state = getMockDatabaseState()
+
+            state.currentTransactionMarkProjectsDirtyCalls?.push({
+              projects: params.projects,
+              reason: params.reason ?? null,
+            })
+          },
+        }
+      },
+    }
+  })
+}
 
 const createMockDatabaseState = (options?: {failProjectPromptInsert?: boolean}): MockDatabaseState => {
   return {
@@ -149,12 +151,15 @@ const createMockDatabaseState = (options?: {failProjectPromptInsert?: boolean}):
 }
 
 const loadInsertArticlesIntoProject = async () => {
+  registerModuleMocks()
+
   const moduleUnknown: unknown = await import(`./insertArticlesIntoProject.ts?test=${Date.now()}-${Math.random()}`)
   return moduleUnknown as typeof import('./insertArticlesIntoProject.ts')
 }
 
 afterEach(() => {
   mockDatabaseStateRef.current = null
+  mock.restore()
 })
 
 test('insertArticlesIntoProject writes article and prompt links in one transaction on success', async () => {

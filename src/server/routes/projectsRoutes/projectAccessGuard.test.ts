@@ -1,4 +1,4 @@
-import {expect, mock, test} from 'bun:test'
+import {afterEach, expect, mock, test} from 'bun:test'
 
 const appDatabaseServiceModulePath = new URL('../../services/appDatabaseService.ts', import.meta.url).pathname
 
@@ -8,16 +8,28 @@ const queryJsonRef = {
   },
 }
 
-void mock.module(appDatabaseServiceModulePath, () => {
-  return {
-    getAppDatabaseService: () => {
-      return {
-        queryJson: (statement: string) => {
-          return queryJsonRef.current(statement)
-        },
-      }
-    },
-  }
+const registerModuleMocks = () => {
+  void mock.module(appDatabaseServiceModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {
+          queryJson: (statement: string) => {
+            return queryJsonRef.current(statement)
+          },
+        }
+      },
+    }
+  })
+}
+
+const loadProjectAccessGuard = () => {
+  registerModuleMocks()
+
+  return import(`./projectAccessGuard.ts?test=${Date.now()}-${Math.random()}`)
+}
+
+afterEach(() => {
+  mock.restore()
 })
 
 test('getProjectAccess returns archived project rows', async () => {
@@ -25,7 +37,7 @@ test('getProjectAccess returns archived project rows', async () => {
     return [{id: 'project-1', name: 'Archived Project', archived: true}]
   }
 
-  const {getProjectAccess} = await import('./projectAccessGuard.ts')
+  const {getProjectAccess} = await loadProjectAccessGuard()
 
   expect(await getProjectAccess('project-1')).toEqual({id: 'project-1', name: 'Archived Project', archived: true})
 })
@@ -35,7 +47,7 @@ test('assertProjectIsActive rejects archived projects', async () => {
     return [{id: 'project-1', name: 'Archived Project', archived: true}]
   }
 
-  const {archivedProjectAccessErrorMessage, assertProjectIsActive} = await import('./projectAccessGuard.ts')
+  const {archivedProjectAccessErrorMessage, assertProjectIsActive} = await loadProjectAccessGuard()
   let error: unknown = null
 
   await assertProjectIsActive('project-1').catch((caught: unknown) => {
@@ -51,7 +63,7 @@ test('assertProjectIsActive allows active projects', async () => {
     return [{id: 'project-2', name: 'Active Project', archived: false}]
   }
 
-  const {assertProjectIsActive} = await import('./projectAccessGuard.ts')
+  const {assertProjectIsActive} = await loadProjectAccessGuard()
 
   expect(await assertProjectIsActive('project-2')).toEqual({id: 'project-2', name: 'Active Project', archived: false})
 })

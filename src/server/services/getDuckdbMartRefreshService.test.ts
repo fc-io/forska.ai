@@ -46,7 +46,7 @@ test('mart refresh keeps a requeue that arrives during drain', () => {
               return {
                 ...service,
                 runBackground: async (statement) => {
-                  if (statement.includes('DELETE FROM mart.judgment_fact') && statement.includes('article-requeue-test')) {
+                  if (statement.includes('DROP TABLE mart.judgment_fact') && statement.includes('article-requeue-test')) {
                     refreshRuns += 1
 
                     if (!hasRequeued && martRefreshService) {
@@ -1731,14 +1731,13 @@ test('mart refresh retries cleanly after a failed background transaction poisons
                 runBackground: async (statement) => {
                   if (
                     shouldFailBackgroundRefresh
-                    && statement.includes('DELETE FROM mart.judgment_fact')
+                    && statement.includes('DROP TABLE mart.judgment_fact')
                     && statement.includes('article-background-rollback-test')
                   ) {
                     shouldFailBackgroundRefresh = false
                     return service.runBackground(\`
                       BEGIN TRANSACTION;
-                      DELETE FROM mart.judgment_fact
-                      WHERE article_id = 'article-background-rollback-test';
+                      DROP TABLE mart.judgment_fact;
                       SELECT *
                       FROM app.missing_background_rollback_table;
                       COMMIT;
@@ -2892,7 +2891,7 @@ test('mart refresh yields between drain passes after exceeding the time budget',
               return {
                 ...service,
                 runBackground: async (statement) => {
-                  if (statement.includes('DELETE FROM mart.judgment_fact') && statement.includes('article-yield-test-')) {
+                  if (statement.includes('DROP TABLE mart.judgment_fact') && statement.includes('article-yield-test-')) {
                     delayedRefreshRuns += 1
 
                     if (!hasDelayed) {

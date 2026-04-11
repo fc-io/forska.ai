@@ -1,4 +1,4 @@
-import {expect, mock, test} from 'bun:test'
+import {afterEach, expect, mock, test} from 'bun:test'
 
 const appDatabaseServiceModulePath = new URL('../../services/appDatabaseService.ts', import.meta.url).pathname
 const appQueryServiceModulePath = new URL('../../services/getAppQueryService.ts', import.meta.url).pathname
@@ -15,28 +15,40 @@ const queryJsonRef = {
   },
 }
 
-void mock.module(appQueryServiceModulePath, () => {
-  return {
-    getAppQueryService: () => {
-      return {
-        getProjectReviewConfig: (projectId: string) => {
-          return projectReviewConfigRef.current(projectId)
-        },
-      }
-    },
-  }
-})
+const registerModuleMocks = () => {
+  void mock.module(appQueryServiceModulePath, () => {
+    return {
+      getAppQueryService: () => {
+        return {
+          getProjectReviewConfig: (projectId: string) => {
+            return projectReviewConfigRef.current(projectId)
+          },
+        }
+      },
+    }
+  })
 
-void mock.module(appDatabaseServiceModulePath, () => {
-  return {
-    getAppDatabaseService: () => {
-      return {
-        queryJson: (statement: string) => {
-          return queryJsonRef.current(statement)
-        },
-      }
-    },
-  }
+  void mock.module(appDatabaseServiceModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {
+          queryJson: (statement: string) => {
+            return queryJsonRef.current(statement)
+          },
+        }
+      },
+    }
+  })
+}
+
+const loadHandler = () => {
+  registerModuleMocks()
+
+  return import(`./humanAssessmentRoutesPostInit.ts?test=${Date.now()}-${Math.random()}`)
+}
+
+afterEach(() => {
+  mock.restore()
 })
 
 test('human assessment init inserts project id before the answered flag', async () => {
@@ -62,7 +74,7 @@ test('human assessment init inserts project id before the answered flag', async 
                 : []
   }
 
-  const {humanAssessmentRoutesPostInit} = await import('./humanAssessmentRoutesPostInit.ts')
+  const {humanAssessmentRoutesPostInit} = await loadHandler()
   const set = {status: 200} as Parameters<typeof humanAssessmentRoutesPostInit>[0]['set']
   const response = await humanAssessmentRoutesPostInit({body: {projectId: 'project-1'}, set})
   const insertStatement =

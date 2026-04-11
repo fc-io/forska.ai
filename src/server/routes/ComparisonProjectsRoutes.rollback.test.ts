@@ -144,101 +144,103 @@ const queryJson = async (
   throw new Error(`Unhandled query: ${statement}`)
 }
 
-void mock.module(providerModelRepositoryModulePath, () => {
-  return {
-    assertSelectableProviderModelIds: async (_db: unknown, params: {modelIds: string[]}) => {
-      return params.modelIds
-    },
-  }
-})
+const registerModuleMocks = () => {
+  void mock.module(providerModelRepositoryModulePath, () => {
+    return {
+      assertSelectableProviderModelIds: async (_db: unknown, params: {modelIds: string[]}) => {
+        return params.modelIds
+      },
+    }
+  })
 
-void mock.module(appDatabaseServiceModulePath, () => {
-  return {
-    getAppDatabaseService: () => {
-      return {
-        queryJson: async <T>(statement: string) => {
-          return (await queryJson(statement, getMockDatabaseState())) as T[]
-        },
-        run: async (statement: string) => {
-          getMockDatabaseState().rootRunStatements.push(statement)
-        },
-        transaction: async <T>(
-          work: (runner: {
-            queryJson: <R>(statement: string) => Promise<R[]>
-            run: (statement: string) => Promise<void>
-          }) => Promise<T>,
-        ) => {
-          const state = getMockDatabaseState()
-          const pendingComparisonProject = {...state.comparisonProject}
-          const pendingPromptLinks = state.promptLinks.map((link) => {
-            return {...link}
-          })
-          const pendingRouteLinks = state.routeLinks.map((link) => {
-            return {...link}
-          })
+  void mock.module(appDatabaseServiceModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {
+          queryJson: async <T>(statement: string) => {
+            return (await queryJson(statement, getMockDatabaseState())) as T[]
+          },
+          run: async (statement: string) => {
+            getMockDatabaseState().rootRunStatements.push(statement)
+          },
+          transaction: async <T>(
+            work: (runner: {
+              queryJson: <R>(statement: string) => Promise<R[]>
+              run: (statement: string) => Promise<void>
+            }) => Promise<T>,
+          ) => {
+            const state = getMockDatabaseState()
+            const pendingComparisonProject = {...state.comparisonProject}
+            const pendingPromptLinks = state.promptLinks.map((link) => {
+              return {...link}
+            })
+            const pendingRouteLinks = state.routeLinks.map((link) => {
+              return {...link}
+            })
 
-          state.transactionCalls += 1
+            state.transactionCalls += 1
 
-          const result = await work({
-            queryJson: async <R>(statement: string) => {
-              return (await queryJson(statement, {
-                comparisonProject: pendingComparisonProject,
-                promptLinks: pendingPromptLinks,
-                routeLinks: pendingRouteLinks,
-              })) as R[]
-            },
-            run: async (statement: string) => {
-              if (statement.includes('UPDATE app.comparison_project')) {
-                pendingComparisonProject.modelIds = ['model-2']
-                return
-              }
-
-              if (statement.includes('DELETE FROM app.comparison_project_prompt')) {
-                pendingPromptLinks.splice(0, pendingPromptLinks.length)
-                return
-              }
-
-              if (statement.includes('DELETE FROM app.comparison_project_import_route')) {
-                pendingRouteLinks.splice(0, pendingRouteLinks.length)
-                return
-              }
-
-              if (statement.includes('INSERT INTO app.comparison_project_import_route')) {
-                const matchingRouteLink = state.routeLinks.find((routeLink) => {
-                  return statement.includes(`'${routeLink.id}'`) && statement.includes(`'${routeLink.importRouteId}'`)
-                })
-
-                if (!matchingRouteLink) {
-                  throw new Error(`Unhandled route relink insert: ${statement}`)
+            const result = await work({
+              queryJson: async <R>(statement: string) => {
+                return (await queryJson(statement, {
+                  comparisonProject: pendingComparisonProject,
+                  promptLinks: pendingPromptLinks,
+                  routeLinks: pendingRouteLinks,
+                })) as R[]
+              },
+              run: async (statement: string) => {
+                if (statement.includes('UPDATE app.comparison_project')) {
+                  pendingComparisonProject.modelIds = ['model-2']
+                  return
                 }
 
-                pendingRouteLinks.push(matchingRouteLink)
-                return
-              }
-
-              if (statement.includes('INSERT INTO app.comparison_project_prompt')) {
-                if (state.failPromptInsert) {
-                  throw new Error('comparison project prompt insert failed')
+                if (statement.includes('DELETE FROM app.comparison_project_prompt')) {
+                  pendingPromptLinks.splice(0, pendingPromptLinks.length)
+                  return
                 }
 
-                pendingPromptLinks.push({id: 'comparison-project-prompt-2', order: 0, promptId: 'prompt-2'})
-                return
-              }
+                if (statement.includes('DELETE FROM app.comparison_project_import_route')) {
+                  pendingRouteLinks.splice(0, pendingRouteLinks.length)
+                  return
+                }
 
-              throw new Error(`Unhandled run: ${statement}`)
-            },
-          })
+                if (statement.includes('INSERT INTO app.comparison_project_import_route')) {
+                  const matchingRouteLink = state.routeLinks.find((routeLink) => {
+                    return statement.includes(`'${routeLink.id}'`) && statement.includes(`'${routeLink.importRouteId}'`)
+                  })
 
-          state.comparisonProject = pendingComparisonProject
-          state.promptLinks = pendingPromptLinks
-          state.routeLinks = pendingRouteLinks
+                  if (!matchingRouteLink) {
+                    throw new Error(`Unhandled route relink insert: ${statement}`)
+                  }
 
-          return result
-        },
-      }
-    },
-  }
-})
+                  pendingRouteLinks.push(matchingRouteLink)
+                  return
+                }
+
+                if (statement.includes('INSERT INTO app.comparison_project_prompt')) {
+                  if (state.failPromptInsert) {
+                    throw new Error('comparison project prompt insert failed')
+                  }
+
+                  pendingPromptLinks.push({id: 'comparison-project-prompt-2', order: 0, promptId: 'prompt-2'})
+                  return
+                }
+
+                throw new Error(`Unhandled run: ${statement}`)
+              },
+            })
+
+            state.comparisonProject = pendingComparisonProject
+            state.promptLinks = pendingPromptLinks
+            state.routeLinks = pendingRouteLinks
+
+            return result
+          },
+        }
+      },
+    }
+  })
+}
 
 const createMockDatabaseState = (): MockDatabaseState => {
   return {
@@ -252,12 +254,15 @@ const createMockDatabaseState = (): MockDatabaseState => {
 }
 
 const loadComparisonProjectsRoutes = async () => {
+  registerModuleMocks()
+
   const moduleUnknown: unknown = await import(`./ComparisonProjectsRoutes.ts?rollback=${Date.now()}-${Math.random()}`)
   return moduleUnknown as typeof import('./ComparisonProjectsRoutes.ts')
 }
 
 afterEach(() => {
   mockDatabaseStateRef.current = null
+  mock.restore()
 })
 
 test('comparison project model relink failure keeps original links intact', async () => {
