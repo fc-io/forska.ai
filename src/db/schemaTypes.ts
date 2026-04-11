@@ -23,6 +23,10 @@ export type JudgmentChunkingStrategy = 'patient_h3_greedy' | 'article_heading_gr
 export type Engine = 'sglang' | 'vllm'
 export type ModelSource = 'discovered' | 'manual'
 export type ProjectMartRefreshStatus = 'idle' | 'running' | 'failed' | 'paused'
+export type HumanJudgmentMode = 'prompt' | 'summary'
+export type ProjectPromptCriteriaDisposition = 'include' | 'exclude'
+export type JudgmentHumanSummaryAnswer = 'yes' | 'no' | 'maybe'
+export type JudgmentHumanSummaryOrigin = 'covidence_import' | 'manual_override'
 export type ProjectMartLargeRebuildPhase =
   | 'judgment_fact'
   | 'prompt_answer_fact'
@@ -153,6 +157,7 @@ export type ProjectRecord = {
   description: string | null
   engine: Engine | null
   modelId: string
+  humanJudgmentMode: HumanJudgmentMode | null
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean
@@ -264,6 +269,9 @@ export type ProjectPromptRecord = {
   archived: boolean
   originProjectId: string | null
   enabled: boolean
+  criteriaDisposition: ProjectPromptCriteriaDisposition | null
+  criteriaSectionKey: string | null
+  criteriaSectionLabel: string | null
 }
 
 export type ComparisonProjectPromptRecord = {
@@ -309,6 +317,16 @@ export type JudgmentHumanRecord = {
   answer: string | null
   comment: string | null
   projectId: string
+}
+
+export type JudgmentHumanSummaryRecord = {
+  id: string
+  createdAt: Date
+  updatedAt: Date
+  articleId: string
+  projectId: string
+  answer: JudgmentHumanSummaryAnswer | null
+  origin: JudgmentHumanSummaryOrigin
 }
 
 export type ProjectArticleRecord = {
