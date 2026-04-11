@@ -9,7 +9,7 @@ import {handleApiResponse} from '../../../../services/utils/handleApiResponse.ts
 
 type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
-type CovidencePromptAnswerSet = 'yes|no' | 'yes|no|unsure'
+type CovidencePromptAnswerSet = 'yes|no' | 'yes|no|maybe'
 type CovidenceEligibilityDisposition = 'include' | 'exclude'
 type CovidenceEligibilitySectionKey =
   | 'population'
@@ -211,7 +211,7 @@ const covidenceAllRoles: CovidenceFileRole[] = ['all', 'irrelevant', 'full_text'
 const covidenceWarningPreviewLimit = 25
 const covidenceAnswerSetOptions: Array<{description: string; label: string; value: CovidencePromptAnswerSet}> = [
   {description: 'Use yes and no only.', label: 'Yes / No', value: 'yes|no'},
-  {description: 'Allow an unsure answer for borderline studies.', label: 'Yes / No / Unsure', value: 'yes|no|unsure'},
+  {description: 'Allow a maybe answer for borderline studies.', label: 'Yes / No / Maybe', value: 'yes|no|maybe'},
 ]
 
 const getRequiredCovidenceRoles = (mode: CovidenceImportMode): CovidenceFileRole[] => {
@@ -424,7 +424,7 @@ const AdminCovidenceImport = () => {
   const [projectName, setProjectName] = createSignal('')
   const [description, setDescription] = createSignal('')
   const [selectedModelId, setSelectedModelId] = createSignal('')
-  const [answerSet, setAnswerSet] = createSignal<CovidencePromptAnswerSet>('yes|no|unsure')
+  const [answerSet, setAnswerSet] = createSignal<CovidencePromptAnswerSet>('yes|no|maybe')
   const [pageError, setPageError] = createSignal('')
   const [eligibilitySectionValues, setEligibilitySectionValues] = createStore(createEmptyEligibilitySectionValues())
   const [filesByRole, setFilesByRole] = createStore<Record<CovidenceFileRole, File | null>>({

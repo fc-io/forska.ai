@@ -50,7 +50,7 @@ export const dataSourcesImportRoutes = new Elysia()
         description: t.Optional(t.String()),
         modelId: t.Optional(t.String()),
         answerSet: t.Optional(
-          t.Union([t.Literal('yes|no'), t.Literal('yes|no|unsure'), t.Literal('yes_no'), t.Literal('yes_no_unsure')]),
+          t.Union([t.Literal('yes|no'), t.Literal('yes|no|maybe'), t.Literal('yes_no'), t.Literal('yes_no_maybe')]),
         ),
         eligibilityFields: t.Optional(
           t.Array(

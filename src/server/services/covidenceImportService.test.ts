@@ -189,7 +189,7 @@ test('deleteCovidencePackageFiles removes the datasource package folder', async 
 test('Covidence prompt definition builds stage-specific text and reuses matching prompts', async () => {
   expect(
     buildCovidencePromptDefinition({
-      answerSet: 'yes|no|unsure',
+      answerSet: 'yes|no|maybe',
       exclusionCriteria: 'Case reports\nEditorials',
       inclusionCriteria: 'Adults with confirmed disease',
       mode: 'title_abstract',
@@ -198,7 +198,7 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
     originalText: [
       'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
       '',
-      'Allowed answers: yes, no, unsure',
+      'Allowed answers: yes, no, maybe',
       '',
       'Inclusion:',
       'Adults with confirmed disease',
@@ -207,7 +207,7 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
       'Case reports\nEditorials',
     ].join('\n'),
     promptHeading: 'Covidence title/abstract screening',
-    type: "'yes' | 'no' | 'unsure'",
+    type: "'yes' | 'no' | 'maybe'",
   })
 
   expect(
@@ -235,7 +235,7 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
 
   expect(
     buildCovidencePromptDefinitionsForEligibilityFields({
-      answerSet: 'yes|no|unsure',
+      answerSet: 'yes|no|maybe',
       eligibilityFields: [
         {disposition: 'include', sectionKey: ' outcome ', sectionLabel: ' Outcome ', text: '   '},
         {
@@ -257,23 +257,29 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
   ).toEqual([
     {
       originalText: [
-        'Does this study conform to the following Population inclusion criteria?',
+        'Review only the Population inclusion criteria below.',
+        'Answer yes if the study matches the Population inclusion criteria.',
+        'Answer no if the study does not match the Population inclusion criteria.',
+        'Answer maybe if the report does not provide enough information to decide.',
         '',
         'Population inclusion criteria:',
         'Adults with confirmed disease',
       ].join('\n'),
-      promptHeading: 'Population | Include',
-      type: "'yes' | 'no' | 'unsure'",
+      promptHeading: 'Matches Population Inclusion',
+      type: "'yes' | 'no' | 'maybe'",
     },
     {
       originalText: [
-        'Does this study meet any of the following Other exclusion criteria?',
+        'Review only the Other exclusion criteria below.',
+        'Answer yes if the study matches any of the Other exclusion criteria.',
+        'Answer no if the study does not match any of the Other exclusion criteria.',
+        'Answer maybe if the report does not provide enough information to decide.',
         '',
         'Other exclusion criteria:',
         'Case reports',
       ].join('\n'),
-      promptHeading: 'Other | Exclude',
-      type: "'yes' | 'no' | 'unsure'",
+      promptHeading: 'Matches Other Exclusion',
+      type: "'yes' | 'no' | 'maybe'",
     },
   ])
 
@@ -299,7 +305,7 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
 
         const database = getAppDatabaseService()
         const definition = covidenceImportService.buildCovidencePromptDefinition({
-          answerSet: 'yes|no|unsure',
+          answerSet: 'yes|no|maybe',
           exclusionCriteria: 'Case reports',
           inclusionCriteria: 'Adults with confirmed disease',
           mode: 'title_abstract',
@@ -320,7 +326,7 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
         \`)
 
         const reusedPrompt = await covidenceImportService.getOrCreateCovidencePrompt({
-          answerSet: 'yes|no|unsure',
+          answerSet: 'yes|no|maybe',
           exclusionCriteria: 'Case reports',
           inclusionCriteria: 'Adults with confirmed disease',
           mode: 'title_abstract',
@@ -379,7 +385,7 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
       created: false,
       id: 'prompt-existing',
       promptHeading: 'Covidence title/abstract screening',
-      type: "'yes' | 'no' | 'unsure'",
+      type: "'yes' | 'no' | 'maybe'",
     })
     expect(parsed.createdPrompt.created).toBe(true)
     expect(parsed.createdPrompt.id).not.toBe('prompt-existing')
@@ -433,7 +439,7 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
         \`)
 
         const prompt = await covidenceImportService.getOrCreateCovidencePrompt({
-          answerSet: 'yes|no|unsure',
+          answerSet: 'yes|no|maybe',
           exclusionCriteria: 'Case reports',
           inclusionCriteria: 'Adults with confirmed disease',
           mode: 'title_abstract',
@@ -888,7 +894,7 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts answered and unanswered titl
         \`)
 
         const prompt = await covidenceImportService.getOrCreateCovidencePrompt({
-          answerSet: 'yes|no|unsure',
+          answerSet: 'yes|no|maybe',
           exclusionCriteria: 'Case reports',
           inclusionCriteria: 'Adults with confirmed disease',
           mode: 'title_abstract',
@@ -1072,7 +1078,7 @@ test('seedCovidenceHumanJudgmentsFromConfig treats disjoint screen irrelevant an
         )
 
         const prompt = await covidenceImportService.getOrCreateCovidencePrompt({
-          answerSet: 'yes|no|unsure',
+          answerSet: 'yes|no|maybe',
           exclusionCriteria: 'Case reports',
           inclusionCriteria: 'Adults with confirmed disease',
           mode: 'title_abstract',
@@ -1234,7 +1240,7 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts full-text included and exclu
         \`)
 
         const prompt = await covidenceImportService.getOrCreateCovidencePrompt({
-          answerSet: 'yes|no|unsure',
+          answerSet: 'yes|no|maybe',
           exclusionCriteria: 'Case reports',
           inclusionCriteria: 'Adults with confirmed disease',
           mode: 'full_text',

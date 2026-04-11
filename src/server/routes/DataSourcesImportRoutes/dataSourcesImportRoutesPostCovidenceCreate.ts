@@ -21,7 +21,7 @@ import {getDataSourceQueryService} from '../../services/dataSourceQueryService.t
 
 type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
-type CovidencePromptAnswerSet = 'yes|no' | 'yes|no|unsure' | 'yes_no' | 'yes_no_unsure'
+type CovidencePromptAnswerSet = 'yes|no' | 'yes|no|maybe' | 'yes_no' | 'yes_no_maybe'
 type CovidencePackageUploadInput = Blob & {name?: string; type?: string}
 type CovidenceEligibilityFieldDisposition = 'include' | 'exclude'
 type CovidenceEligibilityField = {

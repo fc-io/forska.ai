@@ -247,6 +247,7 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
         if (!n) return '—'
         if (n === 'yes') return 'Y'
         if (n === 'no') return 'N'
+        if (n === 'maybe') return 'M'
         if (n === 'unsure') return 'U'
         return n.slice(0, 1).toUpperCase()
       }

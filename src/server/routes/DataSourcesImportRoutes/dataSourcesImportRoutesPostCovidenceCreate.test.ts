@@ -111,7 +111,7 @@ test('Covidence datasource create stores package files and persists cursor confi
         void mock.module(covidenceImportServiceModulePath, () => {
           return {
             buildCovidencePromptDefinition: (params) => {
-              return {originalText: 'Prompt body', promptHeading: 'Prompt heading', type: params.answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'unsure'"}
+              return {originalText: 'Prompt body', promptHeading: 'Prompt heading', type: params.answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'maybe'"}
             },
             buildCovidencePromptDefinitionsForEligibilityFields: () => {
               return []
@@ -332,7 +332,7 @@ test('Covidence datasource create deletes stored files when the transaction fail
         void mock.module(covidenceImportServiceModulePath, () => {
           return {
             buildCovidencePromptDefinition: (params) => {
-              return {originalText: 'Prompt body', promptHeading: 'Prompt heading', type: params.answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'unsure'"}
+              return {originalText: 'Prompt body', promptHeading: 'Prompt heading', type: params.answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'maybe'"}
             },
             buildCovidencePromptDefinitionsForEligibilityFields: () => {
               return []
@@ -502,30 +502,42 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
         void mock.module(covidenceImportServiceModulePath, () => {
           return {
             buildCovidencePromptDefinition: (params) => {
-              return {originalText: 'Prompt body', promptHeading: 'Prompt heading', type: params.answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'unsure'"}
+              return {originalText: 'Prompt body', promptHeading: 'Prompt heading', type: params.answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'maybe'"}
             },
             buildCovidencePromptDefinitionsForEligibilityFields: ({answerSet, eligibilityFields}) => {
               return eligibilityFields.map((eligibilityField) => {
                 const sectionLabel = eligibilityField.sectionLabel
-                const question = eligibilityField.disposition === 'include'
-                  ? 'Does this study conform to the following ' + sectionLabel + ' inclusion criteria?'
-                  : 'Does this study meet any of the following ' + sectionLabel + ' exclusion criteria?'
+                const description = sectionLabel + ' ' + (eligibilityField.disposition === 'include' ? 'inclusion' : 'exclusion') + ' criteria'
+                const guidance = eligibilityField.disposition === 'include'
+                  ? [
+                      'Review only the ' + description + ' below.',
+                      'Answer yes if the study matches the ' + description + '.',
+                      'Answer no if the study does not match the ' + description + '.',
+                      'Answer maybe if the report does not provide enough information to decide.',
+                    ].join('\\n')
+                  : [
+                      'Review only the ' + description + ' below.',
+                      'Answer yes if the study matches any of the ' + description + '.',
+                      'Answer no if the study does not match any of the ' + description + '.',
+                      'Answer maybe if the report does not provide enough information to decide.',
+                    ].join('\\n')
                 const criteriaHeading = eligibilityField.disposition === 'include'
                   ? sectionLabel + ' inclusion criteria:'
                   : sectionLabel + ' exclusion criteria:'
 
                 return {
                   originalText: [
-                    question,
+                    guidance,
                     '',
                     criteriaHeading,
                     eligibilityField.text,
                   ].join('\\n'),
                   promptHeading:
-                    eligibilityField.sectionLabel
-                    + ' | '
-                    + (eligibilityField.disposition === 'include' ? 'Include' : 'Exclude'),
-                  type: answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'unsure'",
+                    'Matches '
+                    + eligibilityField.sectionLabel
+                    + ' '
+                    + (eligibilityField.disposition === 'include' ? 'Inclusion' : 'Exclusion'),
+                  type: answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'maybe'",
                 }
               })
             },
@@ -638,7 +650,7 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
         )
 
         const result = await dataSourcesImportRoutesPostCovidenceCreate({
-          answerSet: 'yes|no|unsure',
+          answerSet: 'yes|no|maybe',
           description: 'Created from Covidence package',
           eligibilityFields: [
             {disposition: 'include', sectionKey: ' population ', sectionLabel: ' Population ', text: ' Adults with confirmed disease '},
@@ -670,25 +682,31 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
     {
       promptDefinition: {
         originalText: [
-          'Does this study conform to the following Population inclusion criteria?',
+          'Review only the Population inclusion criteria below.',
+          'Answer yes if the study matches the Population inclusion criteria.',
+          'Answer no if the study does not match the Population inclusion criteria.',
+          'Answer maybe if the report does not provide enough information to decide.',
           '',
           'Population inclusion criteria:',
           'Adults with confirmed disease',
         ].join('\n'),
-        promptHeading: 'Population | Include',
-        type: "'yes' | 'no' | 'unsure'",
+        promptHeading: 'Matches Population Inclusion',
+        type: "'yes' | 'no' | 'maybe'",
       },
     },
     {
       promptDefinition: {
         originalText: [
-          'Does this study meet any of the following Other exclusion criteria?',
+          'Review only the Other exclusion criteria below.',
+          'Answer yes if the study matches any of the Other exclusion criteria.',
+          'Answer no if the study does not match any of the Other exclusion criteria.',
+          'Answer maybe if the report does not provide enough information to decide.',
           '',
           'Other exclusion criteria:',
           'Case reports',
         ].join('\n'),
-        promptHeading: 'Other | Exclude',
-        type: "'yes' | 'no' | 'unsure'",
+        promptHeading: 'Matches Other Exclusion',
+        type: "'yes' | 'no' | 'maybe'",
       },
     },
   ])
@@ -719,25 +737,31 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
       created: false,
       id: 'prompt-existing-1',
       originalText: [
-        'Does this study conform to the following Population inclusion criteria?',
+        'Review only the Population inclusion criteria below.',
+        'Answer yes if the study matches the Population inclusion criteria.',
+        'Answer no if the study does not match the Population inclusion criteria.',
+        'Answer maybe if the report does not provide enough information to decide.',
         '',
         'Population inclusion criteria:',
         'Adults with confirmed disease',
       ].join('\n'),
-      promptHeading: 'Population | Include',
-      type: "'yes' | 'no' | 'unsure'",
+      promptHeading: 'Matches Population Inclusion',
+      type: "'yes' | 'no' | 'maybe'",
     },
     {
       created: false,
       id: 'prompt-existing-2',
       originalText: [
-        'Does this study meet any of the following Other exclusion criteria?',
+        'Review only the Other exclusion criteria below.',
+        'Answer yes if the study matches any of the Other exclusion criteria.',
+        'Answer no if the study does not match any of the Other exclusion criteria.',
+        'Answer maybe if the report does not provide enough information to decide.',
         '',
         'Other exclusion criteria:',
         'Case reports',
       ].join('\n'),
-      promptHeading: 'Other | Exclude',
-      type: "'yes' | 'no' | 'unsure'",
+      promptHeading: 'Matches Other Exclusion',
+      type: "'yes' | 'no' | 'maybe'",
     },
   ])
 })
@@ -812,30 +836,40 @@ test('Covidence datasource create also creates or reuses a full-text project wit
         void mock.module(covidenceImportServiceModulePath, () => {
           return {
             buildCovidencePromptDefinition: (params) => {
-              return {originalText: 'Prompt body', promptHeading: 'Prompt heading', type: params.answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'unsure'"}
+              return {originalText: 'Prompt body', promptHeading: 'Prompt heading', type: params.answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'maybe'"}
             },
             buildCovidencePromptDefinitionsForEligibilityFields: ({answerSet, eligibilityFields, mode}) => {
               return eligibilityFields.map((eligibilityField) => {
                 const sectionLabel = eligibilityField.sectionLabel
-                const question = eligibilityField.disposition === 'include'
-                  ? 'Does this study conform to the following ' + sectionLabel + ' inclusion criteria?'
-                  : 'Does this study meet any of the following ' + sectionLabel + ' exclusion criteria?'
+                const description = sectionLabel + ' ' + (eligibilityField.disposition === 'include' ? 'inclusion' : 'exclusion') + ' criteria'
+                const guidance = eligibilityField.disposition === 'include'
+                  ? [
+                      'Review only the ' + description + ' below.',
+                      'Answer yes if the study matches the ' + description + '.',
+                      'Answer no if the study does not match the ' + description + '.',
+                    ].join('\\n')
+                  : [
+                      'Review only the ' + description + ' below.',
+                      'Answer yes if the study matches any of the ' + description + '.',
+                      'Answer no if the study does not match any of the ' + description + '.',
+                    ].join('\\n')
                 const criteriaHeading = eligibilityField.disposition === 'include'
                   ? sectionLabel + ' inclusion criteria:'
                   : sectionLabel + ' exclusion criteria:'
 
                 return {
                   originalText: [
-                    question,
+                    guidance,
                     '',
                     criteriaHeading,
                     eligibilityField.text,
                   ].join('\\n'),
                   promptHeading:
-                    eligibilityField.sectionLabel
-                    + ' | '
-                    + (eligibilityField.disposition === 'include' ? 'Include' : 'Exclude'),
-                  type: answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'unsure'",
+                    'Matches '
+                    + eligibilityField.sectionLabel
+                    + ' '
+                    + (eligibilityField.disposition === 'include' ? 'Inclusion' : 'Exclusion'),
+                  type: answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'maybe'",
                 }
               })
             },
@@ -971,36 +1005,42 @@ test('Covidence datasource create also creates or reuses a full-text project wit
     {
       promptDefinition: {
         originalText: [
-          'Does this study conform to the following Population inclusion criteria?',
+          'Review only the Population inclusion criteria below.',
+          'Answer yes if the study matches the Population inclusion criteria.',
+          'Answer no if the study does not match the Population inclusion criteria.',
           '',
           'Population inclusion criteria:',
           'Adults with confirmed disease',
         ].join('\n'),
-        promptHeading: 'Population | Include',
+        promptHeading: 'Matches Population Inclusion',
         type: "'yes' | 'no'",
       },
     },
     {
       promptDefinition: {
         originalText: [
-          'Does this study conform to the following Outcome inclusion criteria?',
+          'Review only the Outcome inclusion criteria below.',
+          'Answer yes if the study matches the Outcome inclusion criteria.',
+          'Answer no if the study does not match the Outcome inclusion criteria.',
           '',
           'Outcome inclusion criteria:',
           'Pain reduction at follow-up',
         ].join('\n'),
-        promptHeading: 'Outcome | Include',
+        promptHeading: 'Matches Outcome Inclusion',
         type: "'yes' | 'no'",
       },
     },
     {
       promptDefinition: {
         originalText: [
-          'Does this study meet any of the following Study Characteristics exclusion criteria?',
+          'Review only the Study Characteristics exclusion criteria below.',
+          'Answer yes if the study matches any of the Study Characteristics exclusion criteria.',
+          'Answer no if the study does not match any of the Study Characteristics exclusion criteria.',
           '',
           'Study Characteristics exclusion criteria:',
           'Case reports',
         ].join('\n'),
-        promptHeading: 'Study Characteristics | Exclude',
+        promptHeading: 'Matches Study Characteristics Exclusion',
         type: "'yes' | 'no'",
       },
     },
@@ -1036,36 +1076,42 @@ test('Covidence datasource create also creates or reuses a full-text project wit
       created: true,
       id: 'prompt-full-text-1',
       originalText: [
-        'Does this study conform to the following Population inclusion criteria?',
+        'Review only the Population inclusion criteria below.',
+        'Answer yes if the study matches the Population inclusion criteria.',
+        'Answer no if the study does not match the Population inclusion criteria.',
         '',
         'Population inclusion criteria:',
         'Adults with confirmed disease',
       ].join('\n'),
-      promptHeading: 'Population | Include',
+      promptHeading: 'Matches Population Inclusion',
       type: "'yes' | 'no'",
     },
     {
       created: true,
       id: 'prompt-full-text-2',
       originalText: [
-        'Does this study conform to the following Outcome inclusion criteria?',
+        'Review only the Outcome inclusion criteria below.',
+        'Answer yes if the study matches the Outcome inclusion criteria.',
+        'Answer no if the study does not match the Outcome inclusion criteria.',
         '',
         'Outcome inclusion criteria:',
         'Pain reduction at follow-up',
       ].join('\n'),
-      promptHeading: 'Outcome | Include',
+      promptHeading: 'Matches Outcome Inclusion',
       type: "'yes' | 'no'",
     },
     {
       created: true,
       id: 'prompt-full-text-3',
       originalText: [
-        'Does this study meet any of the following Study Characteristics exclusion criteria?',
+        'Review only the Study Characteristics exclusion criteria below.',
+        'Answer yes if the study matches any of the Study Characteristics exclusion criteria.',
+        'Answer no if the study does not match any of the Study Characteristics exclusion criteria.',
         '',
         'Study Characteristics exclusion criteria:',
         'Case reports',
       ].join('\n'),
-      promptHeading: 'Study Characteristics | Exclude',
+      promptHeading: 'Matches Study Characteristics Exclusion',
       type: "'yes' | 'no'",
     },
   ])
@@ -1140,7 +1186,7 @@ test('Covidence datasource create skips prompt creation when normalized eligibil
         void mock.module(covidenceImportServiceModulePath, () => {
           return {
             buildCovidencePromptDefinition: (params) => {
-              return {originalText: 'Prompt body', promptHeading: 'Prompt heading', type: params.answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'unsure'"}
+              return {originalText: 'Prompt body', promptHeading: 'Prompt heading', type: params.answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'maybe'"}
             },
             buildCovidencePromptDefinitionsForEligibilityFields: () => {
               return []
@@ -1174,7 +1220,7 @@ test('Covidence datasource create skips prompt creation when normalized eligibil
                 id: 'prompt-created',
                 originalText: 'Prompt body',
                 promptHeading: 'Covidence title/abstract screening',
-                type: "'yes' | 'no' | 'unsure'",
+                type: "'yes' | 'no' | 'maybe'",
               }
             },
             importCovidencePackageFromConfig: async () => {
@@ -1237,7 +1283,7 @@ test('Covidence datasource create skips prompt creation when normalized eligibil
         )
 
         const result = await dataSourcesImportRoutesPostCovidenceCreate({
-          answerSet: 'yes|no|unsure',
+          answerSet: 'yes|no|maybe',
           description: 'Created from Covidence package',
           eligibilityFields: [
             {disposition: 'include', sectionKey: 'population', sectionLabel: 'Population', text: '   '},

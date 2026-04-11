@@ -18,7 +18,7 @@ import {getProjectMartRefreshStateService} from './projectMartRefreshStateServic
 type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
 type CovidenceFileFormat = 'csv' | 'ris'
-type CovidencePromptAnswerSet = 'yes|no' | 'yes|no|unsure' | 'yes_no' | 'yes_no_unsure'
+type CovidencePromptAnswerSet = 'yes|no' | 'yes|no|maybe' | 'yes_no' | 'yes_no_maybe'
 type CovidencePromptTx = {queryJson: <TRow>(statement: string) => Promise<TRow[]>}
 type CovidenceProjectTx = CovidencePromptTx & {run: (statement: string) => Promise<void>}
 type CovidenceCsvParseErrorCode =
@@ -184,7 +184,7 @@ type CovidenceImportResult = {
 type CovidencePromptDefinition = {
   originalText: string
   promptHeading: string
-  type: "'yes' | 'no'" | "'yes' | 'no' | 'unsure'"
+  type: "'yes' | 'no'" | "'yes' | 'no' | 'maybe'"
 }
 type CovidenceEligibilityFieldDisposition = 'include' | 'exclude'
 type CovidenceEligibilityPromptField = {
@@ -301,7 +301,7 @@ const emptyCovidenceRoleCounts = {
 } as const satisfies Record<CovidenceFileRole, number>
 
 const getCovidencePromptAnswerValues = (answerSet: CovidencePromptAnswerSet) => {
-  return answerSet === 'yes|no|unsure' || answerSet === 'yes_no_unsure' ? ['yes', 'no', 'unsure'] : ['yes', 'no']
+  return answerSet === 'yes|no|maybe' || answerSet === 'yes_no_maybe' ? ['yes', 'no', 'maybe'] : ['yes', 'no']
 }
 
 const getCovidencePromptCriteriaText = (criteria: string) => {
@@ -310,17 +310,32 @@ const getCovidencePromptCriteriaText = (criteria: string) => {
   return trimmedCriteria === '' ? '(none provided)' : trimmedCriteria
 }
 
-const getCovidencePromptEligibilityDispositionLabel = (disposition: CovidenceEligibilityFieldDisposition) => {
-  return disposition === 'include' ? 'Include' : 'Exclude'
+const getCovidencePromptEligibilityHeadingDispositionLabel = (disposition: CovidenceEligibilityFieldDisposition) => {
+  return disposition === 'include' ? 'Inclusion' : 'Exclusion'
 }
 
-const getCovidencePromptEligibilityQuestion = (params: {
+const getCovidencePromptEligibilityGuidance = (params: {
+  answerSet: CovidencePromptAnswerSet
   disposition: CovidenceEligibilityFieldDisposition
   sectionLabel: string
 }) => {
-  return params.disposition === 'include'
-    ? `Does this study conform to the following ${params.sectionLabel} inclusion criteria?`
-    : `Does this study meet any of the following ${params.sectionLabel} exclusion criteria?`
+  const description = `${params.sectionLabel} ${params.disposition === 'include' ? 'inclusion' : 'exclusion'} criteria`
+  const lines =
+    params.disposition === 'include'
+      ? [
+          `Review only the ${description} below.`,
+          `Answer yes if the study matches the ${description}.`,
+          `Answer no if the study does not match the ${description}.`,
+        ]
+      : [
+          `Review only the ${description} below.`,
+          `Answer yes if the study matches any of the ${description}.`,
+          `Answer no if the study does not match any of the ${description}.`,
+        ]
+
+  return getCovidencePromptAnswerValues(params.answerSet).includes('maybe')
+    ? [...lines, 'Answer maybe if the report does not provide enough information to decide.'].join('\n')
+    : lines.join('\n')
 }
 
 const getCovidencePromptEligibilityCriteriaHeading = (params: {
@@ -352,7 +367,7 @@ const getCovidencePromptText = (params: {
 }
 
 const getCovidencePromptType = (answerSet: CovidencePromptAnswerSet): CovidencePromptDefinition['type'] => {
-  return answerSet === 'yes|no|unsure' || answerSet === 'yes_no_unsure' ? "'yes' | 'no' | 'unsure'" : "'yes' | 'no'"
+  return answerSet === 'yes|no|maybe' || answerSet === 'yes_no_maybe' ? "'yes' | 'no' | 'maybe'" : "'yes' | 'no'"
 }
 
 const buildCovidencePromptDefinitionForEligibilityField = (params: {
@@ -362,7 +377,8 @@ const buildCovidencePromptDefinitionForEligibilityField = (params: {
 }): CovidencePromptDefinition => {
   return {
     originalText: [
-      getCovidencePromptEligibilityQuestion({
+      getCovidencePromptEligibilityGuidance({
+        answerSet: params.answerSet,
         disposition: params.eligibilityField.disposition,
         sectionLabel: params.eligibilityField.sectionLabel,
       }),
@@ -373,7 +389,7 @@ const buildCovidencePromptDefinitionForEligibilityField = (params: {
       }),
       params.eligibilityField.text,
     ].join('\n'),
-    promptHeading: `${params.eligibilityField.sectionLabel} | ${getCovidencePromptEligibilityDispositionLabel(params.eligibilityField.disposition)}`,
+    promptHeading: `Matches ${params.eligibilityField.sectionLabel} ${getCovidencePromptEligibilityHeadingDispositionLabel(params.eligibilityField.disposition)}`,
     type: getCovidencePromptType(params.answerSet),
   }
 }
