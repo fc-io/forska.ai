@@ -1,0 +1,103 @@
+{
+  "name": "Judge Human First Plan",
+  "description": "Prioritize future queue top-ups toward answered human judgment pairs while preserving deterministic local SQLite ready ordering, legacy job DB upgrade safety, and existing ready-row semantics.",
+  "branchName": "ralph/judge-human-first",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Make SQLite ready claims use deterministic enqueue order",
+      "description": "As a maintainer, I want `queue_prompt` ready claims to use an explicit enqueue sequence so newly inserted ready rows are claimed deterministically without changing the order of existing ready rows or requeued rows.",
+      "acceptanceCriteria": [
+        "Add an explicit monotonic enqueue-order column for `queue_prompt`, such as `ready_insert_seq`, and assign it once when rows are first inserted into `ready`.",
+        "`claimReadyPrompts` orders ready rows by the explicit enqueue-order column instead of relying on tied `created_at` timestamps and UUID tie-breaking.",
+        "Status transitions including claim, judgment success, and requeue do not rewrite the enqueue-order value, so stale sent rows returning to `ready` keep their prior queue position relative to newer rows.",
+        "Update the SQLite ready-claim index and any queue-order validation that assumed `(created_at, id)` ordering to use the explicit enqueue-order column.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/requeueAbandonedSentPrompts.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "Preserve deterministic SQLite ready ordering and requeue order preservation. Do not reshuffle rows already queued in local SQLite beyond replacing non-deterministic tie-breaking with explicit FIFO behavior.",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Upgrade legacy SQLite job DBs without changing effective ready order",
+      "description": "As a maintainer, I want existing judgment job SQLite files to upgrade in place so the new enqueue-order column is backfilled safely without losing rows or changing the effective FIFO order of already queued work.",
+      "acceptanceCriteria": [
+        "Add an in-place schema upgrade for legacy `queue_prompt` tables, following the existing local SQLite upgrade patterns already used for other job tables.",
+        "Backfill enqueue-order values for existing `queue_prompt` rows in current `(created_at, id)` order so legacy ready rows keep their effective FIFO order after upgrade.",
+        "Isolated preflight or readonly validation upgrades legacy `queue_prompt` schema before validating required columns and queue ordering assumptions.",
+        "Legacy SQLite job DB upgrades keep all queue rows intact and do not change the effective order of existing ready rows.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/requeueAbandonedSentPrompts.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "Preserve legacy DB upgrade safety. Existing queued rows must remain stable, and readonly or preflight checks must not fail simply because the DB predates the new column.",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Prioritize answered human pairs at the queue add boundary",
+      "description": "As a maintainer, I want `judgmentsJobsAddToQueue` to prefer fetched `(articleId, promptId)` pairs with answered human rows for the same project so future top-ups become human-first without changing OLAP ordering or scan cursor semantics.",
+      "acceptanceCriteria": [
+        "Add a helper in `judgmentsJobsAddToQueue.ts` that batches fetched prompt pairs and queries `app.judgment_human` for `project_id = job.projectId` and `is_answered = TRUE` using the existing pair-CTE style.",
+        "Keep existing `filterAlreadyJudged` behavior, then stable-partition the fetched-and-filtered window into `humanFirst` and `rest` while preserving original order inside each group.",
+        "Pass `[...humanFirst, ...rest]` into `addReadyPrompts` so human-touched pairs become visible in actual SQLite ready insertion and claim order for new rows when `readyDeficit` trims the window.",
+        "Prioritization remains window-local only: it does not change OLAP candidate ordering, scan cursor semantics, or the order of rows already present in local SQLite `ready`.",
+        "Unanswered human rows, cross-project human rows, already judged rows, and locally judged SQLite rows do not gain priority or bypass existing filtering rules.",
+        "Add minimal observability that logs non-zero human-first candidates in the fetched window and how many of those candidates were actually inserted after `readyDeficit` trimming and `INSERT OR IGNORE` dedupe.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/requeueAbandonedSentPrompts.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "Preserve human-first window-local prioritization. This change applies only to future top-ups, uses `app.judgment_human.is_answered = TRUE` as the signal, and must not require non-empty `answer` content or involve `app.judgment_assessment`.",
+      "dependsOn": [
+        "US-001",
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Lock the behavior with ordering and prioritization regression tests",
+      "description": "As a maintainer, I want targeted regression coverage for deterministic queue ordering, legacy upgrade safety, and human-first top-ups so future changes cannot silently reintroduce queue-order or prioritization regressions.",
+      "acceptanceCriteria": [
+        "Add SQLite service coverage proving a fresh job DB preserves insertion order through `claimReadyPrompts` and that requeueing stale sent rows back to `ready` does not rewrite enqueue order.",
+        "Add legacy upgrade coverage proving a legacy `queue_prompt` schema is upgraded in place, enqueue order is backfilled without losing rows, and isolated preflight upgrades the schema before readonly validation.",
+        "Add top-up coverage proving end-to-end `judgmentsJobsAddToQueue -> addReadyPrompts -> claimReadyPrompts` behavior when `readyDeficit` is smaller than the fetched window and a human-answered pair appears later than non-human pairs in scan order.",
+        "Add top-up coverage proving multiple promoted human pairs preserve their original relative order and that unanswered, cross-project, already-judged, and locally judged rows do not receive priority.",
+        "Update or add `getAndUpdateReadyPrompts` coverage so tests assert returned prompt order directly rather than sorting results and masking queue-order regressions.",
+        "Add requeue coverage proving rows already in `status = 'ready'` still claim ahead of newly inserted human-first rows and stale sent rows moved back to `ready` preserve original queue position relative to newer rows.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/requeueAbandonedSentPrompts.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "Preserve the listed regression tests from the plan and keep them focused on deterministic ready ordering, human-first window-local insertion, legacy upgrade safety, and requeue order preservation.",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003"
+      ]
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-04-11T12:06:28.919Z"
+  }
+}
