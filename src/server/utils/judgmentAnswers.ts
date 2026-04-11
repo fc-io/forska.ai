@@ -1,4 +1,8 @@
+import type {JudgmentHumanSummaryAnswer, ProjectPromptCriteriaDisposition} from '../../db/schemaTypes.ts'
+
 type JudgmentAnswerShape = {answeredOriginal: string | null; answeredOriginalAsArray?: string[] | null}
+type SummaryCriterion = {criteriaDisposition: ProjectPromptCriteriaDisposition | null; promptId: string}
+type SummaryAnswersByPromptId = Record<string, JudgmentHumanSummaryAnswer | null | undefined>
 
 const getTrimmedValue = (value: string | null | undefined) => {
   const trimmedValue = value?.trim() ?? ''
@@ -85,4 +89,55 @@ export const getNormalizedJudgmentAnswerKey = (answer: JudgmentAnswerShape): str
   const displayAnswer = getJudgmentDisplayAnswer(answer)
   const normalizedValue = displayAnswer?.trim().toLowerCase() ?? ''
   return normalizedValue.length > 0 ? normalizedValue : null
+}
+
+export const normalizeSummaryAnswerValue = (value: string | null | undefined): JudgmentHumanSummaryAnswer | null => {
+  const normalizedValue = value?.trim().toLowerCase() ?? ''
+
+  if (normalizedValue === 'yes' || normalizedValue === 'no' || normalizedValue === 'maybe') {
+    return normalizedValue
+  }
+
+  return normalizedValue.length > 0 ? 'maybe' : null
+}
+
+export const getNormalizedSummaryAnswer = (answer: JudgmentAnswerShape): JudgmentHumanSummaryAnswer | null => {
+  return normalizeSummaryAnswerValue(getNormalizedJudgmentAnswerKey(answer))
+}
+
+export const deriveStrictSummaryAnswer = (
+  enabledPromptCriteria: SummaryCriterion[],
+  normalizedAnswers: SummaryAnswersByPromptId,
+  logWarning: (message: string) => void = console.warn,
+): JudgmentHumanSummaryAnswer | null => {
+  const hasHardNo = enabledPromptCriteria.some((promptCriterion) => {
+    if (promptCriterion.criteriaDisposition === null) {
+      logWarning(
+        `Cannot derive strict summary answer for prompt ${promptCriterion.promptId}: missing criteria disposition metadata on an enabled summary prompt.`,
+      )
+      return true
+    }
+
+    const answer = normalizedAnswers[promptCriterion.promptId]
+
+    if (answer == null) {
+      return true
+    }
+
+    return promptCriterion.criteriaDisposition === 'exclude' ? answer === 'yes' : answer === 'no'
+  })
+
+  if (hasHardNo) {
+    return enabledPromptCriteria.some((promptCriterion) => {
+      return promptCriterion.criteriaDisposition === null || normalizedAnswers[promptCriterion.promptId] == null
+    })
+      ? null
+      : 'no'
+  }
+
+  const hasMaybe = enabledPromptCriteria.some((promptCriterion) => {
+    return normalizedAnswers[promptCriterion.promptId] === 'maybe'
+  })
+
+  return hasMaybe ? 'maybe' : 'yes'
 }
