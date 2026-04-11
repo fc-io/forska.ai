@@ -72,6 +72,73 @@ const createEmptyEligibilitySectionValues = (): Record<
     studyCharacteristics: {exclude: '', include: ''},
   }
 }
+
+const normalizeCovidenceClipboardHeading = (value: string) => {
+  return value
+    .toLowerCase()
+    .replace(/\s*\/\s*/g, ' / ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const covidenceEligibilitySectionKeyByLabel = covidenceEligibilitySections.reduce(
+  (lookup, section) => {
+    lookup[normalizeCovidenceClipboardHeading(section.label)] = section.key
+    return lookup
+  },
+  {} as Record<string, CovidenceEligibilitySectionKey>,
+)
+
+const appendEligibilityClipboardLine = (currentValue: string, nextLine: string) => {
+  return currentValue ? `${currentValue}\n${nextLine}` : nextLine
+}
+
+const parseCovidenceEligibilityClipboardText = (text: string) => {
+  const parsed = text
+    .split(/\r?\n/)
+    .map((line) => {
+      return line.trim()
+    })
+    .reduce(
+      (state, line) => {
+        if (line === '') {
+          return state
+        }
+
+        const nextSectionKey = covidenceEligibilitySectionKeyByLabel[normalizeCovidenceClipboardHeading(line)]
+
+        if (nextSectionKey) {
+          return {...state, currentDisposition: null, currentSection: nextSectionKey, sawSection: true}
+        }
+
+        const loweredLine = line.toLowerCase()
+
+        if (state.currentSection && (loweredLine === 'include' || loweredLine === 'exclude')) {
+          return {...state, currentDisposition: loweredLine as CovidenceEligibilityDisposition}
+        }
+
+        if (!state.currentSection || !state.currentDisposition) {
+          return state
+        }
+
+        state.values[state.currentSection][state.currentDisposition] = appendEligibilityClipboardLine(
+          state.values[state.currentSection][state.currentDisposition],
+          line,
+        )
+
+        return state
+      },
+      {
+        currentDisposition: null as CovidenceEligibilityDisposition | null,
+        currentSection: null as CovidenceEligibilitySectionKey | null,
+        sawSection: false,
+        values: createEmptyEligibilitySectionValues(),
+      },
+    )
+
+  return parsed.sawSection ? parsed.values : null
+}
+
 const getCovidenceEligibilityPromptFields = (
   sectionValues: Record<CovidenceEligibilitySectionKey, Record<CovidenceEligibilityDisposition, string>>,
 ) => {
@@ -425,6 +492,7 @@ const AdminCovidenceImport = () => {
   const [description, setDescription] = createSignal('')
   const [selectedModelId, setSelectedModelId] = createSignal('')
   const [answerSet, setAnswerSet] = createSignal<CovidencePromptAnswerSet>('yes|no|maybe')
+  const [isLoadingClipboard, setIsLoadingClipboard] = createSignal(false)
   const [pageError, setPageError] = createSignal('')
   const [eligibilitySectionValues, setEligibilitySectionValues] = createStore(createEmptyEligibilitySectionValues())
   const [filesByRole, setFilesByRole] = createStore<Record<CovidenceFileRole, File | null>>({
@@ -498,6 +566,37 @@ const AdminCovidenceImport = () => {
     setFilesByRole(fileRole, nextFile)
     setAnalysis(null)
     setPageError('')
+  }
+
+  const handleLoadEligibilityFromClipboard = () => {
+    const readText = globalThis.navigator?.clipboard?.readText
+
+    if (!readText) {
+      setPageError('Clipboard read is not available in this browser')
+      return
+    }
+
+    setIsLoadingClipboard(true)
+    setPageError('')
+
+    void readText
+      .call(globalThis.navigator.clipboard)
+      .then((text) => {
+        const parsed = parseCovidenceEligibilityClipboardText(text)
+
+        if (!parsed) {
+          setPageError('Clipboard does not look like Covidence eligibility criteria')
+          return
+        }
+
+        setEligibilitySectionValues(parsed)
+      })
+      .catch((error: unknown) => {
+        setPageError(error instanceof Error ? error.message : 'Failed to read clipboard')
+      })
+      .finally(() => {
+        setIsLoadingClipboard(false)
+      })
   }
 
   const handleAnalyze = () => {
@@ -743,10 +842,26 @@ const AdminCovidenceImport = () => {
                 </label>
 
                 <div class="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 md:col-span-2">
-                  <p class="text-sm font-medium text-amber-950">Eligibility prompts</p>
-                  <p class="mt-1 text-sm leading-6 text-amber-900/80">
-                    Each non-empty include or exclude field becomes a separate project prompt. Leave any section blank
-                    if it does not apply.
+                  <div class="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p class="text-sm font-medium text-amber-950">Eligibility prompts</p>
+                      <p class="mt-1 text-sm leading-6 text-amber-900/80">
+                        Each non-empty include or exclude field becomes a separate project prompt. Leave any section
+                        blank if it does not apply.
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleLoadEligibilityFromClipboard}
+                      disabled={isLoadingClipboard()}
+                    >
+                      {isLoadingClipboard() ? 'Loading...' : 'Load from Clipboard'}
+                    </Button>
+                  </div>
+                  <p class="mt-3 text-xs text-amber-900/70">
+                    Reads a Covidence eligibility criteria block and keeps empty include or exclude sections blank.
                   </p>
                 </div>
 
