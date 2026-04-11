@@ -1,0 +1,165 @@
+{
+  "name": "Sent Queue Fix Plan",
+  "description": "Fix prompt dispatch accounting so scheduler capacity tracks real active LLM work, the worker uses an Effect-owned dispatch runtime, and the UI clearly separates claimed backlog from live requests.",
+  "branchName": "ralph/sent-queue-fix",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Introduce claimed and running queue prompt states",
+      "description": "As a maintainer, I want per-job SQLite queue rows to distinguish claimed prompts from running prompts so local worker backlog no longer masquerades as active LLM work.",
+      "acceptanceCriteria": [
+        "Upgrade the per-job SQLite queue helpers so prompt lifecycle supports `ready -> claimed -> running` instead of overloading `sent` for all non-ready work.",
+        "Add explicit helpers for `markPromptAsRunning`, `getClaimedCount`, `getRunningCount`, and `getDispatchCounts` in `src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts`.",
+        "Opening an existing job upgrades legacy `sent` rows to `claimed` without losing queue order or existing work.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/requeueAbandonedSentPrompts.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts` passes",
+        "`bun test src/server/routes/JudgmentsJobsRoutes.test.ts` passes",
+        "`bun test src/utils/llmStatusQuery.test.ts` passes",
+        "`bun run build` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Recover legacy sent and stale claimed or running prompts safely",
+      "description": "As a maintainer, I want restart and stale-queue recovery to handle legacy `sent` rows and new `claimed` or `running` rows so worker restarts do not strand work or create duplicate terminal judgments.",
+      "acceptanceCriteria": [
+        "Extend stale queue cleanup and restart recovery so legacy `sent`, new `claimed`, and new `running` rows all requeue idempotently.",
+        "Recovery preserves ready-queue ordering and does not duplicate `judged` or `skipped` terminal outcomes after worker restart.",
+        "Tests cover stale claim recovery and restart recovery across all three statuses in the SQLite queue helpers.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/requeueAbandonedSentPrompts.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts` passes",
+        "`bun test src/server/routes/JudgmentsJobsRoutes.test.ts` passes",
+        "`bun test src/utils/llmStatusQuery.test.ts` passes",
+        "`bun run build` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-003",
+      "title": "Build an Effect-owned judgment dispatch runtime",
+      "description": "As a maintainer, I want a scoped Effect dispatcher to own provider queues and worker fibers so prompt dispatch has one clear runtime owner instead of detached cron-launched reducers.",
+      "acceptanceCriteria": [
+        "Add `src/server/cron/judgmentsJobs/judgmentDispatchRuntime.ts` using `Context` or `Layer`, `Effect.gen`, and scoped worker fibers for provider-scoped dispatch.",
+        "The dispatcher exposes bounded per-provider queue-capacity and enqueue APIs that the cron can use without spawning detached serial reducers.",
+        "Dispatcher shutdown interrupts worker fibers and leaves prompts in a recoverable state during shutdown or writer demotion.",
+        "Add `src/server/cron/judgmentsJobs/judgmentDispatchRuntime.test.ts` covering bounded queue behavior, provider-scoped dispatch, and interruption cleanup.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/requeueAbandonedSentPrompts.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts` passes",
+        "`bun test src/server/routes/JudgmentsJobsRoutes.test.ts` passes",
+        "`bun test src/utils/llmStatusQuery.test.ts` passes",
+        "`bun run build` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-004",
+      "title": "Move prompt lifecycle transitions into Effect acquire or release boundaries",
+      "description": "As a maintainer, I want the dispatcher to own `claimed -> running` and terminal cleanup transitions so success, retry, failure, and interruption all release prompt and request state correctly.",
+      "acceptanceCriteria": [
+        "When a dispatcher worker starts a prompt, it transitions `claimed -> running` inside an `Effect.acquireRelease` boundary.",
+        "Success, retry, skip, failure, and interruption release prompt state to `judged`, `ready`, or `skipped` without stranding rows in `running`.",
+        "Request runtime accounting still reflects live upstream LLM calls only and continues to compose with provider-scoped request caps.",
+        "`src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts` covers release behavior on success, connection failure, and interruption.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/requeueAbandonedSentPrompts.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts` passes",
+        "`bun test src/server/routes/JudgmentsJobsRoutes.test.ts` passes",
+        "`bun test src/utils/llmStatusQuery.test.ts` passes",
+        "`bun run build` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001", "US-003"]
+    },
+    {
+      "id": "US-005",
+      "title": "Top up scheduler capacity from dispatcher state instead of raw sent rows",
+      "description": "As a maintainer, I want `judgmentsJobsSendToLLM.ts` to compute deficits from real request activity and bounded dispatcher capacity so Forska claims only the work it can actively drain.",
+      "acceptanceCriteria": [
+        "Update `src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.ts` so per-provider deficits are computed from actual request runtime activity plus available dispatcher queue capacity.",
+        "The cron claims only enough prompts to fill the bounded local dispatcher buffer instead of filling an entire provider-cap worth of local backlog.",
+        "Jobs sharing one provider connection still make fair progress, and different provider connections can still advance independently under shared caps.",
+        "`src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts` verifies scheduler top-up uses dispatcher capacity rather than counting every claimed prompt as running.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/requeueAbandonedSentPrompts.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts` passes",
+        "`bun test src/server/routes/JudgmentsJobsRoutes.test.ts` passes",
+        "`bun test src/utils/llmStatusQuery.test.ts` passes",
+        "`bun run build` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003", "US-004"]
+    },
+    {
+      "id": "US-006",
+      "title": "Expose claimed and running prompt stats in job APIs",
+      "description": "As a maintainer, I want the job detail API and client defaults to expose prompt backlog and request activity separately so server and client code stop treating claimed prompts as active LLM calls.",
+      "acceptanceCriteria": [
+        "Update `src/server/routes/JudgmentsJobsRoutes.ts` to return prompt-level counts using `claimed` and `running` names while keeping `requestStats.inFlight` for actual live LLM calls.",
+        "Update `src/services/judgmentsJobsService.ts` defaults and related client types to match the renamed prompt stats payload.",
+        "`src/server/routes/JudgmentsJobsRoutes.test.ts` covers the renamed prompt stats and keeps `requestStats.inFlight` semantics unchanged.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/requeueAbandonedSentPrompts.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts` passes",
+        "`bun test src/server/routes/JudgmentsJobsRoutes.test.ts` passes",
+        "`bun test src/utils/llmStatusQuery.test.ts` passes",
+        "`bun run build` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001", "US-004", "US-005"]
+    },
+    {
+      "id": "US-007",
+      "title": "Clarify queue backlog versus request activity in the admin UI",
+      "description": "As an operator, I want the admin job UI to distinguish claimed backlog, running prompts, and active LLM calls so I can understand whether Forska or the runtime is the bottleneck.",
+      "acceptanceCriteria": [
+        "Update `/admin/jobs/:id` so the queue card shows `Ready`, `Claimed`, `Running Prompts`, `Judged`, and `Skipped` instead of the old `Prompts in Progress` wording.",
+        "Update the request activity card to show `Active LLM Calls` and `Attempts`, with copy that makes clear those numbers are request-level rather than prompt-level.",
+        "Rename or tooltip the nav waiting or running indicator so it is clearly described as runtime-only LLM waiting and running data.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/requeueAbandonedSentPrompts.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts` passes",
+        "`bun test src/server/routes/JudgmentsJobsRoutes.test.ts` passes",
+        "`bun test src/utils/llmStatusQuery.test.ts` passes",
+        "`bun run build` passes",
+        "`bun run lint` passes",
+        "Browser verify `/admin/jobs/:id`: local queue card shows `Ready`, `Claimed`, `Running Prompts`, `Judged`, and `Skipped`; request activity shows `Active LLM Calls` and `Attempts`; nav indicator still reflects runtime-only waiting or running"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-006"]
+    }
+  ]
+}
