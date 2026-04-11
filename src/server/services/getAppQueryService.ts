@@ -54,6 +54,7 @@ type FullArticleRow = {
 type ProjectReviewConfig = {
   dateFrom: Date | null
   dateTo: Date | null
+  humanJudgmentMode: 'prompt' | 'summary'
   importRouteIds: string[]
   modelId: string | null
   useTitle: boolean
@@ -324,6 +325,7 @@ const getProjectReviewConfig = async (projectId: string): Promise<ProjectReviewC
     getAppDatabaseService().queryJson<{
       dateFrom: unknown
       dateTo: unknown
+      humanJudgmentMode: 'prompt' | 'summary' | null
       modelId: string | null
       useTitle: boolean | null
       useAbstract: boolean | null
@@ -333,6 +335,7 @@ const getProjectReviewConfig = async (projectId: string): Promise<ProjectReviewC
       SELECT
         date_from AS dateFrom,
         date_to AS dateTo,
+        human_judgment_mode AS humanJudgmentMode,
         model_id AS modelId,
         use_title AS useTitle,
         use_abstract AS useAbstract,
@@ -354,6 +357,7 @@ const getProjectReviewConfig = async (projectId: string): Promise<ProjectReviewC
     ? {
         dateFrom: getDateValue(projectConfig.dateFrom),
         dateTo: getDateValue(projectConfig.dateTo),
+        humanJudgmentMode: projectConfig.humanJudgmentMode ?? 'prompt',
         importRouteIds: routeRows.map((row) => {
           return row.importRouteId
         }),

@@ -159,8 +159,13 @@ export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
       if (covidencePrompts.length > 0) {
         await syncCovidenceProjectPrompts({
           projectId: covidenceProject.id,
-          promptIds: covidencePrompts.map((covidencePrompt) => {
-            return covidencePrompt.id
+          promptLinks: covidencePrompts.map((covidencePrompt) => {
+            return {
+              criteriaDisposition: covidencePrompt.criteriaDisposition,
+              criteriaSectionKey: covidencePrompt.criteriaSectionKey,
+              criteriaSectionLabel: covidencePrompt.criteriaSectionLabel,
+              promptId: covidencePrompt.id,
+            }
           }),
           tx,
         })

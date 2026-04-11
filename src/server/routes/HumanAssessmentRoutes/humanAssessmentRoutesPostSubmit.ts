@@ -12,6 +12,137 @@ export const humanAssessmentRoutesPostSubmit = async ({
   body: {projectId: string; answers: Array<{judgmentHumanId: string; answer: string; comment?: string}>}
   set: Context['set']
 }) => {
+  const [project] = await getAppDatabaseService().queryJson<{humanJudgmentMode: 'prompt' | 'summary' | null}>(`
+    SELECT human_judgment_mode AS humanJudgmentMode
+    FROM app.project
+    WHERE id = '${escapeSqlString(body.projectId)}'
+    LIMIT 1
+  `)
+  const humanJudgmentMode = project?.humanJudgmentMode ?? 'prompt'
+
+  if (humanJudgmentMode === 'summary') {
+    const pending = await getAppDatabaseService().queryJson<{articleId: string; id: string; type: string}>(`
+      SELECT
+        id,
+        article_id AS articleId,
+        "'yes' | 'no' | 'maybe'" AS type
+      FROM app.judgment_human_summary
+      WHERE project_id = '${escapeSqlString(body.projectId)}'
+        AND answer IS NULL
+    `)
+
+    if (pending.length === 0) {
+      set.status = 400
+      return {data: null, error: 'No pending human assessments for this project'}
+    }
+
+    const articleIds = Array.from(
+      new Set(
+        pending.map((row) => {
+          return row.articleId
+        }),
+      ),
+    )
+
+    if (articleIds.length !== 1) {
+      set.status = 400
+      return {data: null, error: 'Multiple pending articles detected; please refresh and try again'}
+    }
+
+    const [currentArticleId = ''] = articleIds
+    const expectedIds = new Set(
+      pending.map((row) => {
+        return row.id
+      }),
+    )
+    const submittedIds = new Set(
+      body.answers.map((answer) => {
+        return answer.judgmentHumanId
+      }),
+    )
+    const missingRequired = Array.from(expectedIds).some((id) => {
+      return !submittedIds.has(id)
+    })
+
+    if (missingRequired) {
+      set.status = 400
+      return {data: null, error: 'Missing answers for one or more required prompts'}
+    }
+
+    const hasOnlyPending = Array.from(submittedIds).every((id) => {
+      return expectedIds.has(id)
+    })
+
+    if (!hasOnlyPending) {
+      set.status = 400
+      return {data: null, error: 'Submission contains answers for non-pending prompts'}
+    }
+
+    const byId = body.answers.reduce<Record<string, {answer: string; comment?: string}>>((acc, answer) => {
+      acc[answer.judgmentHumanId] = {answer: answer.answer, comment: answer.comment}
+      return acc
+    }, {})
+
+    for (const row of pending) {
+      const submitted = byId[row.id]
+      const value = submitted?.answer
+      const Type = arktype(row.type)
+
+      if (value == null || `${value}`.trim() === '') {
+        set.status = 400
+        return {data: null, error: 'All required prompts must have a non-empty answer'}
+      }
+
+      try {
+        Type.assert(value)
+      } catch {
+        set.status = 400
+        return {data: null, error: `Answer does not match required type for a prompt (${row.type})`}
+      }
+    }
+
+    const idsToUpdate = Array.from(submittedIds)
+    const updatedAt = new Date()
+    const answerCase = idsToUpdate
+      .map((id) => {
+        const value = byId[id]?.answer?.trim() ?? ''
+        return `WHEN id = '${escapeSqlString(id)}' THEN ${getSqlLiteral(value === '' ? null : value)}`
+      })
+      .join(' ')
+
+    await getAppDatabaseService().transaction(async (tx) => {
+      const rows = await tx.queryJson<{id: string}>(`
+        SELECT id
+        FROM app.judgment_human_summary
+        WHERE id IN (${getQuotedStringList(idsToUpdate).join(', ')})
+          AND project_id = '${escapeSqlString(body.projectId)}'
+          AND answer IS NULL
+      `)
+
+      if (rows.length !== idsToUpdate.length) {
+        throw new Error('One or more submitted answers could not be validated for update')
+      }
+
+      await tx.run(`
+        UPDATE app.judgment_human_summary
+        SET answer = CASE ${answerCase} ELSE answer END,
+            origin = 'manual_override',
+            updated_at = ${getSqlLiteral(updatedAt)}
+        WHERE id IN (${getQuotedStringList(idsToUpdate).join(', ')})
+          AND project_id = '${escapeSqlString(body.projectId)}'
+          AND answer IS NULL
+      `)
+
+      await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+        projects: [{articleIds: [currentArticleId], projectId: body.projectId}],
+        reason: 'humanAssessmentRoutesPostSubmit',
+        runner: tx,
+      })
+    })
+
+    return {data: {updated: idsToUpdate.length}}
+  }
+
   const pending = await getAppDatabaseService().queryJson<{
     id: string
     promptId: string

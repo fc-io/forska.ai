@@ -123,3 +123,48 @@ test('human assessment submit marks the project dirty in the same transaction fo
     }),
   ).toBe(true)
 })
+
+test('human assessment submit updates summary judgments in the same transaction for summary-mode projects', async () => {
+  const statements: string[] = []
+  dirtyMarksRef.current = []
+  queryJsonRef.current = async (statement) => {
+    statements.push(statement)
+
+    return statement.includes('FROM app.project')
+      ? [{humanJudgmentMode: 'summary'}]
+      : statement.includes('FROM app.judgment_human_summary')
+          && statement.includes('answer IS NULL')
+          && statement.includes('SELECT')
+        ? [{id: 'judgment-summary-1', articleId: 'article-1', type: "'yes' | 'no' | 'maybe'"}]
+        : statement.includes('WHERE id IN') && statement.includes('AND answer IS NULL')
+          ? [{id: 'judgment-summary-1'}]
+          : []
+  }
+  runRef.current = async (statement) => {
+    statements.push(statement)
+  }
+  transactionRef.current = async (operation) => {
+    return operation({queryJson: queryJsonRef.current, run: runRef.current})
+  }
+
+  const {humanAssessmentRoutesPostSubmit} = await loadHandler()
+  const set = {status: 200} as Parameters<typeof humanAssessmentRoutesPostSubmit>[0]['set']
+  const response = await humanAssessmentRoutesPostSubmit({
+    body: {answers: [{answer: 'yes', judgmentHumanId: 'judgment-summary-1'}], projectId: 'project-1'},
+    set,
+  })
+
+  expect(response).toEqual({data: {updated: 1}})
+  expect(dirtyMarksRef.current).toEqual([
+    {
+      hasRunner: true,
+      projects: [{articleIds: ['article-1'], projectId: 'project-1'}],
+      reason: 'humanAssessmentRoutesPostSubmit',
+    },
+  ])
+  expect(
+    statements.some((statement) => {
+      return statement.includes('UPDATE app.judgment_human_summary') && statement.includes("origin = 'manual_override'")
+    }),
+  ).toBe(true)
+})

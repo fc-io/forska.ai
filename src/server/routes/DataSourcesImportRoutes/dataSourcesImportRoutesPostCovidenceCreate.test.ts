@@ -5,8 +5,25 @@ type CovidenceCreateSuccessResult = {
   getDataSourceCallCount: number
   martQueueCalls?: Array<{importRouteIds: string[]; reason: string}>
   projectCalls?: Array<{importRoute: string; mode: string; promptId: string | null; title: string}>
-  promptCalls?: Array<{promptDefinition: {originalText: string; promptHeading: string; type: string}}>
-  promptSyncCalls?: Array<{projectId: string; promptIds: string[]}>
+  promptCalls?: Array<{
+    promptDefinition: {
+      criteriaDisposition?: string
+      criteriaSectionKey?: string
+      criteriaSectionLabel?: string
+      originalText: string
+      promptHeading: string
+      type: string
+    }
+  }>
+  promptSyncCalls?: Array<{
+    projectId: string
+    promptLinks: Array<{
+      criteriaDisposition?: string
+      criteriaSectionKey?: string
+      criteriaSectionLabel?: string
+      promptId: string
+    }>
+  }>
   queueCalls: string[][]
   seedCalls?: Array<{importRoute: string; mode: string; projectId: string | null}>
   scopeCalls?: Array<{importRoute: string; mode: string; projectId: string | null}>
@@ -681,6 +698,9 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
   expect(parsed.promptCalls).toEqual([
     {
       promptDefinition: {
+        criteriaDisposition: 'include',
+        criteriaSectionKey: 'population',
+        criteriaSectionLabel: 'Population',
         originalText: [
           'Review only the Population inclusion criteria below.',
           'Answer yes if the study matches the Population inclusion criteria.',
@@ -696,6 +716,9 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
     },
     {
       promptDefinition: {
+        criteriaDisposition: 'exclude',
+        criteriaSectionKey: 'other',
+        criteriaSectionLabel: 'Other',
         originalText: [
           'Review only the Other exclusion criteria below.',
           'Answer yes if the study matches any of the Other exclusion criteria.',
@@ -716,7 +739,23 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
   expect(parsed.projectCalls?.[0]?.promptId).toBeNull()
   expect(parsed.projectCalls?.[0]?.title).toBe('Created datasource')
   expect(parsed.promptSyncCalls).toEqual([
-    {projectId: 'project-created', promptIds: ['prompt-existing-1', 'prompt-existing-2']},
+    {
+      projectId: 'project-created',
+      promptLinks: [
+        {
+          criteriaDisposition: 'include',
+          criteriaSectionKey: 'population',
+          criteriaSectionLabel: 'Population',
+          promptId: 'prompt-existing-1',
+        },
+        {
+          criteriaDisposition: 'exclude',
+          criteriaSectionKey: 'other',
+          criteriaSectionLabel: 'Other',
+          promptId: 'prompt-existing-2',
+        },
+      ],
+    },
   ])
   expect(parsed.seedCalls).toHaveLength(1)
   expect(parsed.seedCalls?.[0]?.importRoute).toContain('covidence:')
@@ -735,6 +774,9 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
   expect(parsed.result.data.covidencePrompts).toEqual([
     {
       created: false,
+      criteriaDisposition: 'include',
+      criteriaSectionKey: 'population',
+      criteriaSectionLabel: 'Population',
       id: 'prompt-existing-1',
       originalText: [
         'Review only the Population inclusion criteria below.',
@@ -750,6 +792,9 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
     },
     {
       created: false,
+      criteriaDisposition: 'exclude',
+      criteriaSectionKey: 'other',
+      criteriaSectionLabel: 'Other',
       id: 'prompt-existing-2',
       originalText: [
         'Review only the Other exclusion criteria below.',
@@ -1004,6 +1049,9 @@ test('Covidence datasource create also creates or reuses a full-text project wit
   expect(parsed.promptCalls).toEqual([
     {
       promptDefinition: {
+        criteriaDisposition: 'include',
+        criteriaSectionKey: 'population',
+        criteriaSectionLabel: 'Population',
         originalText: [
           'Review only the Population inclusion criteria below.',
           'Answer yes if the study matches the Population inclusion criteria.',
@@ -1018,6 +1066,9 @@ test('Covidence datasource create also creates or reuses a full-text project wit
     },
     {
       promptDefinition: {
+        criteriaDisposition: 'include',
+        criteriaSectionKey: 'outcome',
+        criteriaSectionLabel: 'Outcome',
         originalText: [
           'Review only the Outcome inclusion criteria below.',
           'Answer yes if the study matches the Outcome inclusion criteria.',
@@ -1032,6 +1083,9 @@ test('Covidence datasource create also creates or reuses a full-text project wit
     },
     {
       promptDefinition: {
+        criteriaDisposition: 'exclude',
+        criteriaSectionKey: 'study_characteristics',
+        criteriaSectionLabel: 'Study Characteristics',
         originalText: [
           'Review only the Study Characteristics exclusion criteria below.',
           'Answer yes if the study matches any of the Study Characteristics exclusion criteria.',
@@ -1051,7 +1105,29 @@ test('Covidence datasource create also creates or reuses a full-text project wit
   expect(parsed.projectCalls?.[0]?.promptId).toBeNull()
   expect(parsed.projectCalls?.[0]?.title).toBe('Full text datasource')
   expect(parsed.promptSyncCalls).toEqual([
-    {projectId: 'project-full-text', promptIds: ['prompt-full-text-1', 'prompt-full-text-2', 'prompt-full-text-3']},
+    {
+      projectId: 'project-full-text',
+      promptLinks: [
+        {
+          criteriaDisposition: 'include',
+          criteriaSectionKey: 'population',
+          criteriaSectionLabel: 'Population',
+          promptId: 'prompt-full-text-1',
+        },
+        {
+          criteriaDisposition: 'include',
+          criteriaSectionKey: 'outcome',
+          criteriaSectionLabel: 'Outcome',
+          promptId: 'prompt-full-text-2',
+        },
+        {
+          criteriaDisposition: 'exclude',
+          criteriaSectionKey: 'study_characteristics',
+          criteriaSectionLabel: 'Study Characteristics',
+          promptId: 'prompt-full-text-3',
+        },
+      ],
+    },
   ])
   expect(parsed.scopeCalls).toHaveLength(1)
   expect(parsed.scopeCalls?.[0]?.importRoute).toContain('covidence:')
@@ -1074,6 +1150,9 @@ test('Covidence datasource create also creates or reuses a full-text project wit
   expect(parsed.result.data.covidencePrompts).toEqual([
     {
       created: true,
+      criteriaDisposition: 'include',
+      criteriaSectionKey: 'population',
+      criteriaSectionLabel: 'Population',
       id: 'prompt-full-text-1',
       originalText: [
         'Review only the Population inclusion criteria below.',
@@ -1088,6 +1167,9 @@ test('Covidence datasource create also creates or reuses a full-text project wit
     },
     {
       created: true,
+      criteriaDisposition: 'include',
+      criteriaSectionKey: 'outcome',
+      criteriaSectionLabel: 'Outcome',
       id: 'prompt-full-text-2',
       originalText: [
         'Review only the Outcome inclusion criteria below.',
@@ -1102,6 +1184,9 @@ test('Covidence datasource create also creates or reuses a full-text project wit
     },
     {
       created: true,
+      criteriaDisposition: 'exclude',
+      criteriaSectionKey: 'study_characteristics',
+      criteriaSectionLabel: 'Study Characteristics',
       id: 'prompt-full-text-3',
       originalText: [
         'Review only the Study Characteristics exclusion criteria below.',

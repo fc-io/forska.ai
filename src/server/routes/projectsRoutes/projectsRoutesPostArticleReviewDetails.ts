@@ -73,6 +73,7 @@ type ArticleJudgmentRow = {
 }
 
 type ProjectReviewConfig = {
+  humanJudgmentMode?: 'prompt' | 'summary'
   modelId: string | null
   useTitle: boolean
   useAbstract: boolean
@@ -667,31 +668,54 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
 
       const systemActor = getSystemActor()
 
-      const humanRows = await getAppDatabaseService().queryJson<{
-        judgmentId: string
-        promptId: string
-        answer: string | null
-        comment: string | null
-        promptOriginalText: string
-        promptOrder: number | null
-      }>(`
-        SELECT
-          jh.id AS judgmentId,
-          jh.prompt_id AS promptId,
-          jh.answer AS answer,
-          jh.comment AS comment,
-          p.original_text AS promptOriginalText,
-          pp.prompt_order AS promptOrder
-        FROM app.judgment_human jh
-        INNER JOIN app.prompt p ON p.id = jh.prompt_id
-        INNER JOIN app.project_prompt pp
-          ON pp.prompt_id = p.id
-         AND pp.project_id = '${escapeSqlString(projectId)}'
-        WHERE jh.article_id = '${escapeSqlString(articleId)}'
-          AND jh.project_id = '${escapeSqlString(projectId)}'
-          AND jh.is_answered = TRUE
-        ORDER BY pp.prompt_order ASC NULLS LAST, jh.updated_at DESC NULLS LAST
-      `)
+      const humanRows =
+        projectReviewConfig?.humanJudgmentMode === 'summary'
+          ? await getAppDatabaseService().queryJson<{
+              judgmentId: string
+              promptId: string
+              answer: string | null
+              comment: string | null
+              promptOriginalText: string
+              promptOrder: number | null
+            }>(`
+            SELECT
+              jhs.id AS judgmentId,
+              'summary' AS promptId,
+              jhs.answer AS answer,
+              NULL AS comment,
+              'Overall human screening decision' AS promptOriginalText,
+              0 AS promptOrder
+            FROM app.judgment_human_summary jhs
+            WHERE jhs.article_id = '${escapeSqlString(articleId)}'
+              AND jhs.project_id = '${escapeSqlString(projectId)}'
+              AND NULLIF(TRIM(COALESCE(jhs.answer, '')), '') IS NOT NULL
+            ORDER BY jhs.updated_at DESC NULLS LAST
+          `)
+          : await getAppDatabaseService().queryJson<{
+              judgmentId: string
+              promptId: string
+              answer: string | null
+              comment: string | null
+              promptOriginalText: string
+              promptOrder: number | null
+            }>(`
+            SELECT
+              jh.id AS judgmentId,
+              jh.prompt_id AS promptId,
+              jh.answer AS answer,
+              jh.comment AS comment,
+              p.original_text AS promptOriginalText,
+              pp.prompt_order AS promptOrder
+            FROM app.judgment_human jh
+            INNER JOIN app.prompt p ON p.id = jh.prompt_id
+            INNER JOIN app.project_prompt pp
+              ON pp.prompt_id = p.id
+             AND pp.project_id = '${escapeSqlString(projectId)}'
+            WHERE jh.article_id = '${escapeSqlString(articleId)}'
+              AND jh.project_id = '${escapeSqlString(projectId)}'
+              AND jh.is_answered = TRUE
+            ORDER BY pp.prompt_order ASC NULLS LAST, jh.updated_at DESC NULLS LAST
+          `)
 
       const humanAssessmentsByUser =
         humanRows.length === 0
@@ -712,7 +736,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
             ]
 
       let humanAnswersByPrompt: Record<string, Array<{userName: string; answer: string}>> | undefined = undefined
-      if (promptIds.length > 0) {
+      if (projectReviewConfig?.humanJudgmentMode !== 'summary' && promptIds.length > 0) {
         type HumanRow = {articleId: string; promptId: string; answer: string | null; updatedAt: Date | null}
         const rows = await getAppDatabaseService().queryJson<{
           articleId: string

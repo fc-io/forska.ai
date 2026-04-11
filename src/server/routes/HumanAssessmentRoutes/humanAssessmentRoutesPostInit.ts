@@ -22,9 +22,21 @@ type InitResponse = {
   judgmentsHuman: Array<{id: string; promptId: string}>
 }
 
+const summaryPrompt = {
+  id: 'summary',
+  order: 0,
+  originalText: 'Overall human screening decision',
+  promptHeading: 'Human summary',
+  type: "'yes' | 'no' | 'maybe'",
+} satisfies InitResponse['prompts'][number]
+
 export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {projectId: string}; set: Context['set']}) => {
-  const [project] = await getAppDatabaseService().queryJson<{id: string; name: string}>(`
-    SELECT id, name
+  const [project] = await getAppDatabaseService().queryJson<{
+    humanJudgmentMode: 'prompt' | 'summary' | null
+    id: string
+    name: string
+  }>(`
+    SELECT id, name, human_judgment_mode AS humanJudgmentMode
     FROM app.project
     WHERE id = '${escapeSqlString(body.projectId)}'
     LIMIT 1
@@ -34,6 +46,7 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
     return {data: null, error: 'Project not found'}
   }
   console.log('project', project)
+  const humanJudgmentMode = project.humanJudgmentMode ?? 'prompt'
 
   const projectPromptRows = await getAppDatabaseService().queryJson<InitResponse['prompts'][number]>(`
     SELECT
@@ -54,14 +67,26 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
     return {data: null, error: 'Project has no prompts configured'}
   }
 
-  const existingUnanswered = await getAppDatabaseService().queryJson<{id: string; articleId: string}>(`
-    SELECT id, article_id AS articleId
-    FROM app.judgment_human
-    WHERE project_id = '${escapeSqlString(body.projectId)}'
-      AND is_answered = FALSE
-    ORDER BY created_at DESC
-    LIMIT 50
-  `)
+  const responsePrompts = humanJudgmentMode === 'summary' ? [summaryPrompt] : projectPromptRows
+
+  const existingUnanswered =
+    humanJudgmentMode === 'summary'
+      ? await getAppDatabaseService().queryJson<{id: string; articleId: string}>(`
+        SELECT id, article_id AS articleId
+        FROM app.judgment_human_summary
+        WHERE project_id = '${escapeSqlString(body.projectId)}'
+          AND answer IS NULL
+        ORDER BY created_at DESC
+        LIMIT 50
+      `)
+      : await getAppDatabaseService().queryJson<{id: string; articleId: string}>(`
+        SELECT id, article_id AS articleId
+        FROM app.judgment_human
+        WHERE project_id = '${escapeSqlString(body.projectId)}'
+          AND is_answered = FALSE
+        ORDER BY created_at DESC
+        LIMIT 50
+      `)
   console.log('existingUnanswered', existingUnanswered.length)
   let targetArticleId: string | null = null
   const firstUnanswered = existingUnanswered[0]
@@ -93,7 +118,7 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
       projectConfig?.dateTo ? `a.article_created_at <= ${getTimestampLiteral(projectConfig.dateTo)}` : null,
       `NOT EXISTS (
         SELECT 1
-        FROM app.judgment_human jh
+        FROM app.${humanJudgmentMode === 'summary' ? 'judgment_human_summary' : 'judgment_human'} jh
         WHERE jh.project_id = '${escapeSqlString(body.projectId)}'
           AND jh.article_id = a.id
         LIMIT 1
@@ -121,20 +146,27 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
 
     const articleId = randomArticle.id
 
-    const inserted = await getAppDatabaseService().queryJson<{id: string; promptId: string}>(`
-      INSERT INTO app.judgment_human (id, article_id, prompt_id, project_id, is_answered, answer, comment)
-      VALUES ${projectPromptRows
-        .map((prompt) => {
-          return `(${getQuotedStringList([crypto.randomUUID(), articleId, prompt.id, body.projectId]).join(', ')}, FALSE, NULL, NULL)`
-        })
-        .join(', ')}
-      RETURNING id, prompt_id AS promptId
-    `)
+    const inserted =
+      humanJudgmentMode === 'summary'
+        ? await getAppDatabaseService().queryJson<{id: string; promptId: string}>(`
+          INSERT INTO app.judgment_human_summary (id, article_id, project_id, answer, origin)
+          VALUES (${getQuotedStringList([crypto.randomUUID(), articleId, body.projectId]).join(', ')}, NULL, 'manual_override')
+          RETURNING id, 'summary' AS promptId
+        `)
+        : await getAppDatabaseService().queryJson<{id: string; promptId: string}>(`
+          INSERT INTO app.judgment_human (id, article_id, prompt_id, project_id, is_answered, answer, comment)
+          VALUES ${projectPromptRows
+            .map((prompt) => {
+              return `(${getQuotedStringList([crypto.randomUUID(), articleId, prompt.id, body.projectId]).join(', ')}, FALSE, NULL, NULL)`
+            })
+            .join(', ')}
+          RETURNING id, prompt_id AS promptId
+        `)
 
     const response: InitResponse = {
       project: {id: project.id, name: project.name},
       article: randomArticle,
-      prompts: projectPromptRows,
+      prompts: responsePrompts,
       judgmentsHuman: inserted,
     }
 
@@ -162,18 +194,27 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
     return {data: null, error: 'Article not found'}
   }
 
-  const pendingForArticle = await getAppDatabaseService().queryJson<{id: string; promptId: string}>(`
-    SELECT id, prompt_id AS promptId
-    FROM app.judgment_human
-    WHERE project_id = '${escapeSqlString(body.projectId)}'
-      AND article_id = '${escapeSqlString(targetId)}'
-      AND is_answered = FALSE
-  `)
+  const pendingForArticle =
+    humanJudgmentMode === 'summary'
+      ? await getAppDatabaseService().queryJson<{id: string; promptId: string}>(`
+        SELECT id, 'summary' AS promptId
+        FROM app.judgment_human_summary
+        WHERE project_id = '${escapeSqlString(body.projectId)}'
+          AND article_id = '${escapeSqlString(targetId)}'
+          AND answer IS NULL
+      `)
+      : await getAppDatabaseService().queryJson<{id: string; promptId: string}>(`
+        SELECT id, prompt_id AS promptId
+        FROM app.judgment_human
+        WHERE project_id = '${escapeSqlString(body.projectId)}'
+          AND article_id = '${escapeSqlString(targetId)}'
+          AND is_answered = FALSE
+      `)
 
   const response: InitResponse = {
     project: {id: project.id, name: project.name},
     article: articleRow,
-    prompts: projectPromptRows,
+    prompts: responsePrompts,
     judgmentsHuman: pendingForArticle,
   }
 

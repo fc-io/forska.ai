@@ -1064,7 +1064,7 @@ const getProjectReviewArticleRollupBatchInsertSql = (projectId: string, articleI
       FROM llm_project_prompt
       GROUP BY project_id, article_id
     ),
-    human_project_prompt AS (
+    prompt_mode_human_project_prompt AS (
       SELECT
         judgment_human.project_id,
         judgment_human.article_id,
@@ -1076,19 +1076,54 @@ const getProjectReviewArticleRollupBatchInsertSql = (projectId: string, articleI
        AND enabled_prompt.prompt_id = judgment_human.prompt_id
       WHERE judgment_human.project_id = ${projectLiteral}
         AND judgment_human.article_id IN (${articleIdsSql})
+        AND EXISTS (
+          SELECT 1
+          FROM app.project project
+          WHERE project.id = judgment_human.project_id
+            AND project.human_judgment_mode = 'prompt'
+        )
         AND judgment_human.is_answered = TRUE
         AND NULLIF(TRIM(COALESCE(judgment_human.answer, '')), '') IS NOT NULL
       GROUP BY judgment_human.project_id, judgment_human.article_id, judgment_human.prompt_id
     ),
-    human_project_rollup AS (
+    prompt_mode_human_project_rollup AS (
       SELECT
         project_id,
         article_id,
         COUNT(DISTINCT prompt_id) AS human_answered_prompt_count,
         LIST(DISTINCT prompt_id) AS human_answered_prompt_ids,
         MAX(latest_human_updated_at) AS latest_human_updated_at
-      FROM human_project_prompt
+      FROM prompt_mode_human_project_prompt
       GROUP BY project_id, article_id
+    ),
+    summary_mode_human_project_rollup AS (
+      SELECT
+        judgment_human_summary.project_id,
+        judgment_human_summary.article_id,
+        COALESCE(prompt_count.enabled_prompt_count, 0) AS human_answered_prompt_count,
+        enabled_prompt.prompt_ids AS human_answered_prompt_ids,
+        MAX(judgment_human_summary.updated_at) AS latest_human_updated_at
+      FROM app.judgment_human_summary judgment_human_summary
+      INNER JOIN app.project project
+        ON project.id = judgment_human_summary.project_id
+       AND project.human_judgment_mode = 'summary'
+      LEFT JOIN enabled_project_prompt_count prompt_count
+        ON prompt_count.project_id = judgment_human_summary.project_id
+      LEFT JOIN (
+        SELECT project_id, LIST(prompt_id) AS prompt_ids
+        FROM enabled_project_prompt
+        GROUP BY project_id
+      ) enabled_prompt
+        ON enabled_prompt.project_id = judgment_human_summary.project_id
+      WHERE judgment_human_summary.project_id = ${projectLiteral}
+        AND judgment_human_summary.article_id IN (${articleIdsSql})
+        AND NULLIF(TRIM(COALESCE(judgment_human_summary.answer, '')), '') IS NOT NULL
+      GROUP BY judgment_human_summary.project_id, judgment_human_summary.article_id, prompt_count.enabled_prompt_count, enabled_prompt.prompt_ids
+    ),
+    human_project_rollup AS (
+      SELECT * FROM prompt_mode_human_project_rollup
+      UNION ALL
+      SELECT * FROM summary_mode_human_project_rollup
     ),
     review_state AS (
       SELECT
@@ -1110,7 +1145,7 @@ const getProjectReviewArticleRollupBatchInsertSql = (projectId: string, articleI
       FROM app.review review
       WHERE review.project_id = ${projectLiteral}
         AND review.article_id IN (${articleIdsSql})
-      GROUP BY review.project_id, review.article_id
+      GROUP BY project_id, article_id
     )
     SELECT
       scope_article.project_id,
@@ -2320,7 +2355,7 @@ const getProjectArticleServingRefreshSql = (projectId: string, articleId: string
       FROM llm_project_prompt
       GROUP BY project_id, article_id
     ),
-    human_project_prompt AS (
+    prompt_mode_human_project_prompt AS (
       SELECT
         judgment_human.project_id,
         judgment_human.article_id,
@@ -2332,19 +2367,54 @@ const getProjectArticleServingRefreshSql = (projectId: string, articleId: string
        AND enabled_prompt.prompt_id = judgment_human.prompt_id
       WHERE judgment_human.project_id = ${projectLiteral}
         AND judgment_human.article_id = ${articleLiteral}
+        AND EXISTS (
+          SELECT 1
+          FROM app.project project
+          WHERE project.id = judgment_human.project_id
+            AND project.human_judgment_mode = 'prompt'
+        )
         AND judgment_human.is_answered = TRUE
         AND NULLIF(TRIM(COALESCE(judgment_human.answer, '')), '') IS NOT NULL
       GROUP BY judgment_human.project_id, judgment_human.article_id, judgment_human.prompt_id
     ),
-    human_project_rollup AS (
+    prompt_mode_human_project_rollup AS (
       SELECT
         project_id,
         article_id,
         COUNT(DISTINCT prompt_id) AS human_answered_prompt_count,
         LIST(DISTINCT prompt_id) AS human_answered_prompt_ids,
         MAX(latest_human_updated_at) AS latest_human_updated_at
-      FROM human_project_prompt
+      FROM prompt_mode_human_project_prompt
       GROUP BY project_id, article_id
+    ),
+    summary_mode_human_project_rollup AS (
+      SELECT
+        judgment_human_summary.project_id,
+        judgment_human_summary.article_id,
+        COALESCE(prompt_count.enabled_prompt_count, 0) AS human_answered_prompt_count,
+        enabled_prompt.prompt_ids AS human_answered_prompt_ids,
+        MAX(judgment_human_summary.updated_at) AS latest_human_updated_at
+      FROM app.judgment_human_summary judgment_human_summary
+      INNER JOIN app.project project
+        ON project.id = judgment_human_summary.project_id
+       AND project.human_judgment_mode = 'summary'
+      LEFT JOIN enabled_project_prompt_count prompt_count
+        ON prompt_count.project_id = judgment_human_summary.project_id
+      LEFT JOIN (
+        SELECT project_id, LIST(prompt_id) AS prompt_ids
+        FROM enabled_project_prompt
+        GROUP BY project_id
+      ) enabled_prompt
+        ON enabled_prompt.project_id = judgment_human_summary.project_id
+      WHERE judgment_human_summary.project_id = ${projectLiteral}
+        AND judgment_human_summary.article_id = ${articleLiteral}
+        AND NULLIF(TRIM(COALESCE(judgment_human_summary.answer, '')), '') IS NOT NULL
+      GROUP BY judgment_human_summary.project_id, judgment_human_summary.article_id, prompt_count.enabled_prompt_count, enabled_prompt.prompt_ids
+    ),
+    human_project_rollup AS (
+      SELECT * FROM prompt_mode_human_project_rollup
+      UNION ALL
+      SELECT * FROM summary_mode_human_project_rollup
     ),
     review_state AS (
       SELECT
@@ -2366,7 +2436,7 @@ const getProjectArticleServingRefreshSql = (projectId: string, articleId: string
       FROM app.review review
       WHERE review.project_id = ${projectLiteral}
         AND review.article_id = ${articleLiteral}
-      GROUP BY review.project_id, review.article_id
+      GROUP BY project_id, article_id
     )
     SELECT
       article_scope.project_id,

@@ -256,6 +256,9 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
     }),
   ).toEqual([
     {
+      criteriaDisposition: 'include',
+      criteriaSectionKey: 'population',
+      criteriaSectionLabel: 'Population',
       originalText: [
         'Review only the Population inclusion criteria below.',
         'Answer yes if the study matches the Population inclusion criteria.',
@@ -269,6 +272,9 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
       type: "'yes' | 'no' | 'maybe'",
     },
     {
+      criteriaDisposition: 'exclude',
+      criteriaSectionKey: 'other',
+      criteriaSectionLabel: 'Other',
       originalText: [
         'Review only the Other exclusion criteria below.',
         'Answer yes if the study matches any of the Other exclusion criteria.',
@@ -458,6 +464,7 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
         })
         const projectRows = await database.queryJson(\`
           SELECT
+            p.human_judgment_mode AS humanJudgmentMode,
             p.id AS id,
             p.model_id AS modelId,
             p.name AS name,
@@ -510,6 +517,7 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
     const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
       createdProject: {
         created: boolean
+        humanJudgmentMode: string
         id: string
         modelId: string
         name: string
@@ -521,6 +529,7 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
       projectImportRouteRows: Array<{projectId: string; route: string}>
       projectPromptRows: Array<{enabled: boolean; projectId: string; promptId: string}>
       projectRows: Array<{
+        humanJudgmentMode: string
         id: string
         modelId: string
         name: string
@@ -531,6 +540,7 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
       }>
       reusedProject: {
         created: boolean
+        humanJudgmentMode: string
         id: string
         modelId: string
         name: string
@@ -543,6 +553,7 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
 
     expect(parsed.createdProject).toEqual({
       created: true,
+      humanJudgmentMode: 'summary',
       id: parsed.createdProject.id,
       modelId: 'model-covidence',
       name: 'Created datasource',
@@ -553,6 +564,7 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
     })
     expect(parsed.reusedProject).toEqual({
       created: false,
+      humanJudgmentMode: 'summary',
       id: parsed.createdProject.id,
       modelId: 'model-covidence',
       name: 'Created datasource',
@@ -563,6 +575,7 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
     })
     expect(parsed.projectRows).toEqual([
       {
+        humanJudgmentMode: 'summary',
         id: parsed.createdProject.id,
         modelId: 'model-covidence',
         name: 'Created datasource',
@@ -655,6 +668,7 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
 
         const projectRows = await database.queryJson(\`
           SELECT
+            human_judgment_mode AS humanJudgmentMode,
             id,
             model_id AS modelId,
             name,
@@ -728,6 +742,7 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
     const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
       createdProject: {
         created: boolean
+        humanJudgmentMode: string
         id: string
         modelId: string
         name: string
@@ -743,6 +758,7 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
         projectId: string
       }>
       projectRows: Array<{
+        humanJudgmentMode: string
         id: string
         modelId: string
         name: string
@@ -760,6 +776,7 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
       refreshStateRows: Array<{dirtyToken: number; projectId: string; reason: string | null}>
       reusedProject: {
         created: boolean
+        humanJudgmentMode: string
         id: string
         modelId: string
         name: string
@@ -772,6 +789,7 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
 
     expect(parsed.createdProject).toEqual({
       created: true,
+      humanJudgmentMode: 'summary',
       id: parsed.createdProject.id,
       modelId: 'model-covidence-full-text',
       name: 'Full text datasource',
@@ -782,6 +800,7 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
     })
     expect(parsed.reusedProject).toEqual({
       created: false,
+      humanJudgmentMode: 'summary',
       id: parsed.createdProject.id,
       modelId: 'model-covidence-full-text',
       name: 'Full text datasource',
@@ -792,6 +811,7 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
     })
     expect(parsed.projectRows).toEqual([
       {
+        humanJudgmentMode: 'summary',
         id: parsed.createdProject.id,
         modelId: 'model-covidence-full-text',
         name: 'Full text datasource',
@@ -905,6 +925,7 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts answered and unanswered titl
           promptId: prompt.id,
           title: 'Covidence seeded project',
         })
+        await database.run(\`UPDATE app.project SET human_judgment_mode = 'prompt' WHERE id = '\${project.id}'\`)
 
         const firstConfig = await createConfig(
           'Title,Authors,Year,DOI\\nStudy A,"Doe, Jane",2024,10.1000/alpha\\nStudy B,"Roe, John",2023,10.1000/beta\\nStudy C,"Lane, Kim",2022,10.1000/gamma\\n',
@@ -1089,6 +1110,7 @@ test('seedCovidenceHumanJudgmentsFromConfig treats disjoint screen irrelevant an
           promptId: prompt.id,
           title: 'Covidence screen union project',
         })
+        await database.run(\`UPDATE app.project SET human_judgment_mode = 'prompt' WHERE id = '\${project.id}'\`)
 
         await database.transaction(async (tx) => {
           await covidenceImportService.importCovidencePackageFromConfig({config, datasourceId, importRoute, tx})
@@ -1251,6 +1273,7 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts full-text included and exclu
           promptId: prompt.id,
           title: 'Covidence full-text seeded project',
         })
+        await database.run(\`UPDATE app.project SET human_judgment_mode = 'prompt' WHERE id = '\${project.id}'\`)
 
         const firstConfig = await createConfig(
           'Title,Authors,Year,DOI\\nStudy A,"Doe, Jane",2024,10.1000/alpha\\nStudy B,"Roe, John",2023,10.1000/beta\\nStudy C,"Lane, Kim",2022,10.1000/gamma\\nStudy D,"Poe, Sam",2021,10.1000/delta\\n',
@@ -1404,6 +1427,155 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts full-text included and exclu
         articleTitle: 'Study C',
         importedFromProjectId: parsed.projectId,
         projectId: parsed.projectId,
+      },
+    ])
+  } finally {
+    deleteCovidencePackageFiles(datasourceId)
+    ;[duckdbPath, `${duckdbPath}.wal`, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(
+      (filePath) => {
+        if (existsSync(filePath)) {
+          unlinkSync(filePath)
+        }
+
+        return filePath
+      },
+    )
+  }
+})
+
+test('seedCovidenceHumanJudgmentsFromConfig seeds one summary judgment row per imported article for summary-mode projects', async () => {
+  const duckdbPath = `/tmp/f1-covidence-summary-seed-${Date.now()}.duckdb`
+  const datasourceId = `covidence-summary-seed-${Date.now()}`
+  const importRoute = `covidence:${datasourceId}`
+  datasourceIdsToDelete.add(datasourceId)
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, covidenceImportService] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/covidenceImportService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const datasourceId = ${JSON.stringify(datasourceId)}
+        const importRoute = ${JSON.stringify(importRoute)}
+        const files = await covidenceImportService.storeCovidencePackageFiles({
+          datasourceId,
+          files: [
+            {file: new File(['Title,Authors,Year,DOI\\nStudy A,"Doe, Jane",2024,10.1000/alpha\\nStudy B,"Roe, John",2023,10.1000/beta\\nStudy C,"Lane, Kim",2022,10.1000/gamma\\n'], 'all.csv', {type: 'text/csv'}), fileRole: 'all'},
+            {file: new File(['Title,Authors,Year,DOI\\nStudy B,"Roe, John",2023,10.1000/beta\\n'], 'irrelevant.csv', {type: 'text/csv'}), fileRole: 'irrelevant'},
+            {file: new File(['Title,Authors,Year,DOI\\nStudy A,"Doe, Jane",2024,10.1000/alpha\\n'], 'full_text.csv', {type: 'text/csv'}), fileRole: 'full_text'},
+          ],
+        })
+        const config = covidenceImportService.buildCovidencePackageConfig({files, mode: 'title_abstract'})
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, label, provider_kind, enabled)
+          VALUES ('pc-covidence-summary-seed', 'Covidence provider', 'openai-compatible', TRUE);
+
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, enabled)
+          VALUES ('model-covidence-summary-seed', 'pc-covidence-summary-seed', 'gpt-covidence', 'gpt-covidence', TRUE);
+
+          INSERT INTO app.import_route (id, route, name, active)
+          VALUES ('route-covidence-summary-seed', '${importRoute}', '${importRoute}', TRUE);
+        \`)
+
+        const project = await covidenceImportService.getOrCreateCovidenceProject({
+          importRoute,
+          mode: 'title_abstract',
+          title: 'Covidence summary seeded project',
+        })
+
+        await database.transaction(async (tx) => {
+          await covidenceImportService.importCovidencePackageFromConfig({config, datasourceId, importRoute, tx})
+          await covidenceImportService.seedCovidenceHumanJudgmentsFromConfig({config, importRoute, projectId: project.id, tx})
+        })
+
+        const summaryRows = await database.queryJson(\`
+          SELECT
+            a.article_id AS articleExternalId,
+            a.article_title AS articleTitle,
+            jhs.answer AS answer,
+            jhs.origin AS origin
+          FROM app.judgment_human_summary jhs
+          INNER JOIN app.article a ON a.id = jhs.article_id
+          WHERE jhs.project_id = '\${project.id}'
+          ORDER BY a.article_title ASC
+        \`)
+        const promptRows = await database.queryJson(\`
+          SELECT id
+          FROM app.judgment_human
+          WHERE project_id = '\${project.id}'
+        \`)
+
+        console.log(JSON.stringify({promptRows, project, summaryRows}))
+        covidenceImportService.deleteCovidencePackageFiles(datasourceId)
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39989',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39990',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to seed summary-mode Covidence human judgments',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      project: {humanJudgmentMode: string}
+      promptRows: Array<{id: string}>
+      summaryRows: Array<{answer: string | null; articleExternalId: string; articleTitle: string; origin: string}>
+    }
+
+    expect(parsed.project.humanJudgmentMode).toBe('summary')
+    expect(parsed.promptRows).toEqual([])
+    expect(parsed.summaryRows).toEqual([
+      {
+        answer: 'yes',
+        articleExternalId: `${importRoute}:doi%3A10.1000%2Falpha`,
+        articleTitle: 'Study A',
+        origin: 'covidence_import',
+      },
+      {
+        answer: 'no',
+        articleExternalId: `${importRoute}:doi%3A10.1000%2Fbeta`,
+        articleTitle: 'Study B',
+        origin: 'covidence_import',
+      },
+      {
+        answer: null,
+        articleExternalId: `${importRoute}:doi%3A10.1000%2Fgamma`,
+        articleTitle: 'Study C',
+        origin: 'covidence_import',
       },
     ])
   } finally {

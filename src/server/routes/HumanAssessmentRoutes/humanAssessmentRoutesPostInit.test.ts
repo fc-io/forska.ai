@@ -93,3 +93,54 @@ test('human assessment init inserts project id before the answered flag', async 
     },
   })
 })
+
+test('human assessment init creates one summary judgment row for summary-mode projects', async () => {
+  const statements: string[] = []
+  projectReviewConfigRef.current = async () => {
+    return {importRouteIds: []}
+  }
+  queryJsonRef.current = async (statement) => {
+    statements.push(statement)
+
+    return statement.includes("WHERE id = 'project-1'")
+      ? [{humanJudgmentMode: 'summary', id: 'project-1', name: 'Project 1'}]
+      : statement.includes('FROM app.project_prompt pp')
+        ? [{id: 'prompt-1', originalText: 'Prompt 1', promptHeading: 'Heading 1', order: 0, type: 'string'}]
+        : statement.includes('FROM app.judgment_human_summary') && statement.includes('ORDER BY created_at DESC')
+          ? []
+          : statement.includes('FROM app.article a')
+            ? [{articleSummary: 'Summary 1', articleTitle: 'Article 1', id: 'article-1'}]
+            : statement.includes('FROM app.project_article')
+              ? [{articleId: 'article-1'}]
+              : statement.includes('INSERT INTO app.judgment_human_summary')
+                ? [{id: 'judgment-summary-1', promptId: 'summary'}]
+                : []
+  }
+
+  const {humanAssessmentRoutesPostInit} = await loadHandler()
+  const set = {status: 200} as Parameters<typeof humanAssessmentRoutesPostInit>[0]['set']
+  const response = await humanAssessmentRoutesPostInit({body: {projectId: 'project-1'}, set})
+  const insertStatement =
+    statements.find((statement) => {
+      return statement.includes('INSERT INTO app.judgment_human_summary')
+    }) ?? ''
+
+  expect(insertStatement).toContain('(id, article_id, project_id, answer, origin)')
+  expect(insertStatement).toContain("NULL, 'manual_override')")
+  expect(response).toEqual({
+    data: {
+      article: {articleSummary: 'Summary 1', articleTitle: 'Article 1', id: 'article-1'},
+      judgmentsHuman: [{id: 'judgment-summary-1', promptId: 'summary'}],
+      project: {id: 'project-1', name: 'Project 1'},
+      prompts: [
+        {
+          id: 'summary',
+          order: 0,
+          originalText: 'Overall human screening decision',
+          promptHeading: 'Human summary',
+          type: "'yes' | 'no' | 'maybe'",
+        },
+      ],
+    },
+  })
+})
