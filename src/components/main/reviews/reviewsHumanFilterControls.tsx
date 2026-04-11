@@ -73,7 +73,10 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
           throw new Error('Failed to fetch filters')
         }
 
-        return response.data as Array<{promptId: string; promptName: string; answeredOriginalValues: string[]}>
+        return response.data as {
+          filters: Array<{promptId: string; promptName: string; answeredOriginalValues: string[]}>
+          humanJudgmentMode: 'prompt' | 'summary'
+        }
       },
       enabled: !props.hidePromptSelectors,
     }
@@ -91,13 +94,24 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
       return
     }
     const maybe = (filtersQuery as unknown as {data?: unknown}).data
-    const filters =
+    const filtersResponse =
       typeof maybe === 'function'
-        ? (maybe as () => Array<{promptId: string; answeredOriginalValues: string[]}>)()
-        : (maybe as Array<{promptId: string; answeredOriginalValues: string[]}> | undefined)
-    if (!filters) {
+        ? (
+            maybe as () => {
+              filters: Array<{promptId: string; answeredOriginalValues: string[]}>
+              humanJudgmentMode: 'prompt' | 'summary'
+            }
+          )()
+        : (maybe as
+            | {
+                filters: Array<{promptId: string; answeredOriginalValues: string[]}>
+                humanJudgmentMode: 'prompt' | 'summary'
+              }
+            | undefined)
+    if (!filtersResponse) {
       return
     }
+    const filters = filtersResponse.filters
     const allowedByPrompt: Record<string, Set<string>> = filters.reduce(
       (acc, f) => {
         return {...acc, [f.promptId]: new Set(f.answeredOriginalValues)}
@@ -226,7 +240,8 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
         </div>
         <Show when={!props.hidePromptSelectors && filtersQuery.data}>
           {(data) => {
-            const filters = data()
+            const filtersResponse = data()
+            const filters = filtersResponse.filters
             return (
               <div class="space-y-4">
                 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

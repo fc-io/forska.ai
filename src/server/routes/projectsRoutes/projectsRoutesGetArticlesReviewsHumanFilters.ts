@@ -21,19 +21,67 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
       const searchTitle = typeof query?.search === 'string' ? query.search.trim() : ''
       const hasDuplicateStudyRecords = query?.covidenceDuplicates === '1'
       const hasStudyDecisionConflict = query?.covidenceConflicts === '1'
+      const projectConfig = await getAppQueryService().getProjectReviewConfig(query.projectId)
+      const humanJudgmentMode = projectConfig?.humanJudgmentMode ?? 'prompt'
 
       const projectPromptRows = await getAppQueryService().getProjectPromptRows(query.projectId)
 
-      if (projectPromptRows.length === 0) {
-        return []
-      }
-
-      const projectConfig = await getAppQueryService().getProjectReviewConfig(query.projectId)
       const scopeCondition = getProjectScopeClause({
         articleAlias: 'a',
         importRouteIds: projectConfig?.importRouteIds ?? [],
         projectId: query.projectId,
       })
+
+      const articleWhereParts = [
+        scopeCondition,
+        projectConfig?.dateFrom ? `a.article_created_at >= ${getTimestampLiteral(projectConfig.dateFrom)}` : null,
+        projectConfig?.dateTo ? `a.article_created_at <= ${getTimestampLiteral(projectConfig.dateTo)}` : null,
+        fromDate ? `a.article_created_at >= ${getTimestampLiteral(fromDate)}` : null,
+        toDate ? `a.article_created_at <= ${getTimestampLiteral(toDate)}` : null,
+        searchTitle ? `LOWER(COALESCE(a.article_title, '')) LIKE LOWER('%${escapeSqlString(searchTitle)}%')` : null,
+        hasDuplicateStudyRecords
+          ? "LOWER(COALESCE(json_extract_string(a.source_metadata, '$.covidence.hasDuplicateStudyRecords'), 'false')) = 'true'"
+          : null,
+        hasStudyDecisionConflict
+          ? "LOWER(COALESCE(json_extract_string(a.source_metadata, '$.covidence.hasStudyDecisionConflict'), 'false')) = 'true'"
+          : null,
+      ].filter((part): part is string => {
+        return part !== null
+      })
+
+      if (humanJudgmentMode === 'summary') {
+        const grouped = await getAppDatabaseService().queryJson<{answer: string | null}>(`
+          SELECT jhs.answer AS answer
+          FROM app.judgment_human_summary jhs
+          INNER JOIN app.article a ON a.id = jhs.article_id
+          WHERE jhs.project_id = '${escapeSqlString(query.projectId)}'
+            AND NULLIF(TRIM(COALESCE(jhs.answer, '')), '') IS NOT NULL
+            AND ${articleWhereParts.join(' AND ')}
+          GROUP BY jhs.answer
+          ORDER BY jhs.answer ASC
+        `)
+
+        return {
+          filters: [
+            {
+              promptId: 'summary',
+              promptName: 'Overall human screening decision',
+              answeredOriginalValues: grouped
+                .map((row) => {
+                  return row.answer
+                })
+                .filter((answer): answer is string => {
+                  return answer !== null
+                }),
+            },
+          ],
+          humanJudgmentMode,
+        }
+      }
+
+      if (projectPromptRows.length === 0) {
+        return {filters: [], humanJudgmentMode}
+      }
 
       const promptIds = projectPromptRows.map((p) => {
         return p.id
@@ -47,18 +95,7 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
           .join(', ')})`,
         'jh.is_answered = TRUE',
         'jh.answer IS NOT NULL',
-        scopeCondition,
-        projectConfig?.dateFrom ? `a.article_created_at >= ${getTimestampLiteral(projectConfig.dateFrom)}` : null,
-        projectConfig?.dateTo ? `a.article_created_at <= ${getTimestampLiteral(projectConfig.dateTo)}` : null,
-        fromDate ? `a.article_created_at >= ${getTimestampLiteral(fromDate)}` : null,
-        toDate ? `a.article_created_at <= ${getTimestampLiteral(toDate)}` : null,
-        searchTitle ? `LOWER(COALESCE(a.article_title, '')) LIKE LOWER('%${escapeSqlString(searchTitle)}%')` : null,
-        hasDuplicateStudyRecords
-          ? "LOWER(COALESCE(json_extract_string(a.source_metadata, '$.covidence.hasDuplicateStudyRecords'), 'false')) = 'true'"
-          : null,
-        hasStudyDecisionConflict
-          ? "LOWER(COALESCE(json_extract_string(a.source_metadata, '$.covidence.hasStudyDecisionConflict'), 'false')) = 'true'"
-          : null,
+        ...articleWhereParts,
       ].filter((part): part is string => {
         return part !== null
       })
@@ -94,7 +131,7 @@ export const projectsRoutesGetArticlesReviewsHumanFilters = new Elysia().get(
         }
       })
 
-      return result
+      return {filters: result, humanJudgmentMode}
     } catch (error) {
       console.error('Error fetching human articles reviews filters:', error)
       set.status = 500

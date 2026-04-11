@@ -29,6 +29,7 @@ type Judgment = {
 type ReviewJudgmentsProps = {
   judgments?: Judgment[]
   setArticleViewToShow: SetArticleViewToShow
+  humanJudgmentMode?: 'prompt' | 'summary'
   humanAnswersByPrompt?: Record<string, HumanAnswer[]>
 }
 
@@ -82,7 +83,9 @@ export const ReviewJudgments = (props: ReviewJudgmentsProps) => {
               {(judgment) => {
                 const promptId = getPromptId(judgment)
                 const humanAnswers = () => {
-                  return promptId ? props.humanAnswersByPrompt?.[promptId] : undefined
+                  return props.humanJudgmentMode === 'summary' || !promptId
+                    ? undefined
+                    : props.humanAnswersByPrompt?.[promptId]
                 }
                 return (
                   <ReviewJudgmentItem

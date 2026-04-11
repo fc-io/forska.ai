@@ -73,7 +73,7 @@ const registerModuleMocks = () => {
   })
 }
 
-const loadHandler = () => {
+const loadHandler = (): Promise<typeof import('./projectsRoutesPostArticleReviewDetails.ts')> => {
   registerModuleMocks()
 
   return import(`./projectsRoutesPostArticleReviewDetails.ts?test=${Date.now()}-${Math.random()}`)
@@ -420,5 +420,9 @@ test('project review details exposes summary-mode overall answers without prompt
   expect(body.humanJudgmentMode).toBe('summary')
   expect(body.humanSummaryAnswer).toBe('no')
   expect(body.llmSummaryAnswer).toBe('yes')
+  expect(body.prompts).toEqual([
+    expect.objectContaining({criteriaDisposition: 'include', id: 'prompt-1'}),
+    expect.objectContaining({criteriaDisposition: 'exclude', id: 'prompt-2'}),
+  ])
   expect(body.humanAnswersByPrompt).toBeUndefined()
 })

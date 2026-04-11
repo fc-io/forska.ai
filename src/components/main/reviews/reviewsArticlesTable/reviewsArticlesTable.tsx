@@ -40,8 +40,10 @@ export type ArticleWithJudgments = {
   fullTextFetchedAt?: Date | null
   fullTextConversionStatus?: string | null
   sourceMetadata?: unknown
-  // Present for "Assessed by Both" view: per-prompt human answers from all qualifying humans
+  humanJudgmentMode?: 'prompt' | 'summary'
   humanAnswersByPrompt?: Record<string, string[]>
+  humanSummaryAnswer?: string | null
+  llmSummaryAnswer?: string | null
   // Judged status (from new API response)
   judgedPromptIds?: string[]
   isFullyJudged?: boolean
@@ -255,61 +257,92 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
       return (
         <div class="flex items-center gap-2">
           <span class="text-sm text-gray-600">{judgmentsData?.length || 0}</span>
-          <Show when={judgmentsData && judgmentsData.length > 0}>
-            <div class="flex gap-1">
-              <For each={judgmentsData.slice(0, 3)}>
-                {(judgment) => {
-                  const llmAns = norm(judgment.answeredOriginal)
-                  const humanAnswers = (row.humanAnswersByPrompt?.[judgment.promptId] ?? []).map(norm)
+          <Show
+            when={row.humanJudgmentMode === 'summary'}
+            fallback={
+              <Show when={judgmentsData && judgmentsData.length > 0}>
+                <div class="flex gap-1">
+                  <For each={judgmentsData.slice(0, 3)}>
+                    {(judgment) => {
+                      const llmAns = norm(judgment.answeredOriginal)
+                      const humanAnswers = (row.humanAnswersByPrompt?.[judgment.promptId] ?? []).map(norm)
 
-                  let cls = 'bg-gray-100 text-gray-800'
-                  if (humanAnswers.length > 0 && llmAns) {
-                    const matches = humanAnswers.filter((a) => {
-                      return a === llmAns
-                    }).length
-                    if (matches === humanAnswers.length) {
-                      cls = 'bg-green-100 text-green-800'
-                    } else if (matches > 0) {
-                      cls = 'bg-yellow-100 text-yellow-800'
-                    } else {
-                      cls = 'bg-red-100 text-red-800'
-                    }
-                  }
+                      let cls = 'bg-gray-100 text-gray-800'
+                      if (humanAnswers.length > 0 && llmAns) {
+                        const matches = humanAnswers.filter((a) => {
+                          return a === llmAns
+                        }).length
+                        if (matches === humanAnswers.length) {
+                          cls = 'bg-green-100 text-green-800'
+                        } else if (matches > 0) {
+                          cls = 'bg-yellow-100 text-yellow-800'
+                        } else {
+                          cls = 'bg-red-100 text-red-800'
+                        }
+                      }
 
-                  const tooltip = (() => {
-                    const llmText = judgment.answeredOriginal ?? '—'
-                    const humans = row.humanAnswersByPrompt?.[judgment.promptId]
-                    const humanText = humans && humans.length > 0 ? humans.join(', ') : '—'
-                    return `LLM: ${llmText} • Human(s): ${humanText}`
-                  })()
+                      const tooltip = (() => {
+                        const llmText = judgment.answeredOriginal ?? '—'
+                        const humans = row.humanAnswersByPrompt?.[judgment.promptId]
+                        const humanText = humans && humans.length > 0 ? humans.join(', ') : '—'
+                        return `LLM: ${llmText} • Human(s): ${humanText}`
+                      })()
 
-                  const text = (() => {
-                    const hasHuman =
-                      Array.isArray(row.humanAnswersByPrompt?.[judgment.promptId])
-                      && (row.humanAnswersByPrompt?.[judgment.promptId] || []).length > 0
-                    if (!hasHuman) return labelFor(judgment.answeredOriginal, judgment.answeredOriginalAsArray)
+                      const text = (() => {
+                        const hasHuman =
+                          Array.isArray(row.humanAnswersByPrompt?.[judgment.promptId])
+                          && (row.humanAnswersByPrompt?.[judgment.promptId] || []).length > 0
+                        if (!hasHuman) return labelFor(judgment.answeredOriginal, judgment.answeredOriginalAsArray)
 
-                    const humans = row.humanAnswersByPrompt?.[judgment.promptId] || []
-                    const normalizedHumans = humans.map(norm)
-                    const firstDiff = normalizedHumans.find((h) => {
-                      return h !== llmAns
-                    })
-                    const humanLetter = labelFor(firstDiff ?? llmAns)
-                    const llmLetter = labelFor(judgment.answeredOriginal, judgment.answeredOriginalAsArray)
-                    return `${llmLetter}/${humanLetter}`
-                  })()
+                        const humans = row.humanAnswersByPrompt?.[judgment.promptId] || []
+                        const normalizedHumans = humans.map(norm)
+                        const firstDiff = normalizedHumans.find((h) => {
+                          return h !== llmAns
+                        })
+                        const humanLetter = labelFor(firstDiff ?? llmAns)
+                        const llmLetter = labelFor(judgment.answeredOriginal, judgment.answeredOriginalAsArray)
+                        return `${llmLetter}/${humanLetter}`
+                      })()
 
-                  return (
-                    <span class={`px-1.5 py-0.5 text-xs rounded ${cls}`} title={tooltip}>
-                      {text}
-                    </span>
-                  )
-                }}
-              </For>
-              <Show when={judgmentsData.length > 3}>
-                <span class="text-xs text-gray-500">+{judgmentsData.length - 3}</span>
+                      return (
+                        <span class={`px-1.5 py-0.5 text-xs rounded ${cls}`} title={tooltip}>
+                          {text}
+                        </span>
+                      )
+                    }}
+                  </For>
+                  <Show when={judgmentsData.length > 3}>
+                    <span class="text-xs text-gray-500">+{judgmentsData.length - 3}</span>
+                  </Show>
+                </div>
               </Show>
-            </div>
+            }
+          >
+            {() => {
+              const llmAnswer = norm(row.llmSummaryAnswer)
+              const humanAnswer = norm(row.humanSummaryAnswer)
+              const hasHumanAnswer = Boolean(humanAnswer)
+              const cls =
+                !llmAnswer || !hasHumanAnswer
+                  ? 'bg-gray-100 text-gray-800'
+                  : llmAnswer === humanAnswer
+                    ? 'bg-green-100 text-green-800'
+                    : 'bg-red-100 text-red-800'
+              const text = !llmAnswer
+                ? '—'
+                : !hasHumanAnswer
+                  ? labelFor(row.llmSummaryAnswer)
+                  : `${labelFor(row.llmSummaryAnswer)}/${labelFor(row.humanSummaryAnswer)}`
+              const tooltip = `LLM summary: ${row.llmSummaryAnswer ?? '—'} • Human summary: ${row.humanSummaryAnswer ?? '—'}`
+
+              return (
+                <div class="flex gap-1">
+                  <span class={`px-1.5 py-0.5 text-xs rounded ${cls}`} title={tooltip}>
+                    {text}
+                  </span>
+                </div>
+              )
+            }}
           </Show>
         </div>
       )

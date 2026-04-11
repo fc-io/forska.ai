@@ -66,7 +66,9 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
         humanJudgmentMode: article.humanJudgmentMode,
         humanSummaryAnswer: article.humanSummaryAnswer,
         llmSummaryAnswer: article.llmSummaryAnswer,
-        ...(article.humanAnswersByPrompt ? {humanAnswersByPrompt: article.humanAnswersByPrompt} : {}),
+        ...(article.humanJudgmentMode !== 'summary' && article.humanAnswersByPrompt
+          ? {humanAnswersByPrompt: article.humanAnswersByPrompt}
+          : {}),
       }
     })
 

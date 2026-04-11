@@ -5,11 +5,11 @@ import {createEffect, createMemo, createSignal, For, Show, Suspense} from 'solid
 import {ArticleAdminSection} from '../../../../../../components/main/articles/articleAdminSection'
 import {ArticleTabs} from '../../../../../../components/main/articles/articleTabs'
 import {StickyColumn} from '../../../../../../components/main/common/stickyColumn'
-import {ReviewsCovidenceBadges} from '../../../../../../components/main/reviews/reviewsCovidenceBadges.tsx'
 import {ReviewArticleDetails} from '../../../../../../components/main/projects/reviews/review/reviewArticleDetails.tsx'
 import {ReviewAvailableJudgments} from '../../../../../../components/main/projects/reviews/review/reviewAvailableJudgments.tsx'
 import {ReviewHumanAssessments} from '../../../../../../components/main/projects/reviews/review/reviewHumanAssessments.tsx'
 import {ReviewJudgments} from '../../../../../../components/main/projects/reviews/review/reviewJudgments.tsx'
+import {ReviewsCovidenceBadges} from '../../../../../../components/main/reviews/reviewsCovidenceBadges.tsx'
 import {apiClient} from '../../../../../../services/apiClient.ts'
 import {getArticleDocumentTitle} from '../../../../../utils/getArticleDocumentTitle'
 
@@ -197,6 +197,7 @@ export const ReviewDetail = () => {
                     <ReviewJudgments
                       judgments={data().judgments}
                       setArticleViewToShow={setArticleViewToShow}
+                      humanJudgmentMode={data().humanJudgmentMode}
                       humanAnswersByPrompt={data().humanAnswersByPrompt}
                     />
                     <ReviewHumanAssessments groups={data().humanAssessmentsByUser} />

@@ -24,6 +24,149 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
       const fromDate = body.from ? new Date(`${body.from}T00:00:00.000Z`) : null
       const toDate = body.to ? new Date(`${body.to}T23:59:59.999Z`) : null
       const searchTitle = typeof body.search === 'string' ? body.search.trim() : ''
+      const projectConfig = await getAppQueryService().getProjectReviewConfig(body.projectId)
+      const humanJudgmentMode = projectConfig?.humanJudgmentMode ?? 'prompt'
+
+      const buildArticleWhereParts = (candidateArticleIds: string[]) => {
+        return [
+          `a.id IN (${getQuotedStringList(candidateArticleIds).join(', ')})`,
+          getProjectScopeClause({
+            articleAlias: 'a',
+            importRouteIds: projectConfig?.importRouteIds ?? [],
+            projectId: body.projectId,
+          }),
+          projectConfig?.dateFrom ? `a.article_created_at >= ${getTimestampLiteral(projectConfig.dateFrom)}` : null,
+          projectConfig?.dateTo ? `a.article_created_at <= ${getTimestampLiteral(projectConfig.dateTo)}` : null,
+          fromDate ? `a.article_created_at >= ${getTimestampLiteral(fromDate)}` : null,
+          toDate ? `a.article_created_at <= ${getTimestampLiteral(toDate)}` : null,
+          searchTitle ? `LOWER(COALESCE(a.article_title, '')) LIKE LOWER('%${escapeSqlString(searchTitle)}%')` : null,
+          body.hasDuplicateStudyRecords
+            ? "LOWER(COALESCE(json_extract_string(a.source_metadata, '$.covidence.hasDuplicateStudyRecords'), 'false')) = 'true'"
+            : null,
+          body.hasStudyDecisionConflict
+            ? "LOWER(COALESCE(json_extract_string(a.source_metadata, '$.covidence.hasStudyDecisionConflict'), 'false')) = 'true'"
+            : null,
+        ].filter((part): part is string => {
+          return part !== null
+        })
+      }
+
+      if (humanJudgmentMode === 'summary') {
+        const summaryAnswers = body.prompts.summary ?? []
+        const summaryWhereParts = [
+          `project_id = '${escapeSqlString(body.projectId)}'`,
+          "NULLIF(TRIM(COALESCE(answer, '')), '') IS NOT NULL",
+          summaryAnswers.length > 0 ? `answer IN (${getQuotedStringList(summaryAnswers).join(', ')})` : null,
+        ].filter((part): part is string => {
+          return part !== null
+        })
+
+        const summaryArticleIdRows = await getAppDatabaseService().queryJson<{articleId: string}>(`
+          SELECT article_id AS articleId
+          FROM app.judgment_human_summary
+          WHERE ${summaryWhereParts.join(' AND ')}
+        `)
+        const candidateArticleIds = [
+          ...new Set(
+            summaryArticleIdRows.map((row) => {
+              return row.articleId
+            }),
+          ),
+        ]
+
+        if (candidateArticleIds.length === 0) {
+          return {data: [], humanJudgmentMode, totalCount: 0, page, limit, totalPages: 0}
+        }
+
+        const whereParts = buildArticleWhereParts(candidateArticleIds)
+        const [countRows, pageArticleIdRows] = await Promise.all([
+          getAppDatabaseService().queryJson<{count: number}>(`
+            SELECT COUNT(*) AS count
+            FROM app.article a
+            WHERE ${whereParts.join(' AND ')}
+          `),
+          getAppDatabaseService().queryJson<{id: string}>(`
+            SELECT a.id AS id
+            FROM app.article a
+            WHERE ${whereParts.join(' AND ')}
+            ORDER BY a.article_created_at DESC NULLS LAST, a.id ASC
+            LIMIT ${limit}
+            OFFSET ${offset}
+          `),
+        ])
+
+        const totalCount = Number(countRows[0]?.count ?? 0)
+        const articleIds = pageArticleIdRows.map((row) => {
+          return row.id
+        })
+        const [articlesWithHumanJudgments, allHumanSummaryJudgments] = await Promise.all([
+          getAppQueryService().getFullArticlesByIds(articleIds),
+          articleIds.length > 0
+            ? getAppDatabaseService().queryJson<{
+                id: string
+                createdAt: unknown
+                updatedAt: unknown
+                articleId: string
+                answer: string | null
+                projectId: string
+              }>(`
+                SELECT
+                  id,
+                  created_at AS createdAt,
+                  updated_at AS updatedAt,
+                  article_id AS articleId,
+                  answer,
+                  project_id AS projectId
+                FROM app.judgment_human_summary
+                WHERE article_id IN (${getQuotedStringList(articleIds).join(', ')})
+                  AND project_id = '${escapeSqlString(body.projectId)}'
+                  AND NULLIF(TRIM(COALESCE(answer, '')), '') IS NOT NULL
+              `)
+            : [],
+        ])
+
+        const latestSummaryJudgmentByArticle = allHumanSummaryJudgments.reduce((acc, judgment) => {
+          const existing = acc.get(judgment.articleId)
+          const existingUpdatedAt = getDateValue(existing?.updatedAt ?? null)?.getTime() ?? 0
+          const currentUpdatedAt = getDateValue(judgment.updatedAt)?.getTime() ?? 0
+
+          return !existing || currentUpdatedAt >= existingUpdatedAt ? acc.set(judgment.articleId, judgment) : acc
+        }, new Map<string, (typeof allHumanSummaryJudgments)[number]>())
+
+        const articleOrder = new Map(
+          articleIds.map((id, index) => {
+            return [id, index]
+          }),
+        )
+        const sortedArticles = [...articlesWithHumanJudgments].sort((left, right) => {
+          return (
+            (articleOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER)
+            - (articleOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER)
+          )
+        })
+
+        const data = sortedArticles.map((article) => {
+          const summaryJudgment = latestSummaryJudgmentByArticle.get(article.id)
+          const normalizedJudgment = summaryJudgment
+            ? {
+                ...summaryJudgment,
+                answer: summaryJudgment.answer,
+                createdAt: getDateValue(summaryJudgment.createdAt),
+                promptId: 'summary',
+                updatedAt: getDateValue(summaryJudgment.updatedAt),
+              }
+            : null
+
+          return {
+            ...article,
+            humanJudgmentMode,
+            humanSummaryAnswer: normalizedJudgment?.answer ?? null,
+            judgments: normalizedJudgment ? [normalizedJudgment] : [],
+          }
+        })
+
+        return {data, humanJudgmentMode, totalCount, page, limit, totalPages: Math.ceil(totalCount / limit)}
+      }
 
       const projectPromptRows = await getAppDatabaseService().queryJson<{id: string; order: number | null}>(`
         SELECT p.id AS id, pp.prompt_order AS "order"
@@ -35,7 +178,7 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
       `)
 
       if (projectPromptRows.length === 0) {
-        return {data: [], totalCount: 0, page, limit, totalPages: 0}
+        return {data: [], humanJudgmentMode, totalCount: 0, page, limit, totalPages: 0}
       }
 
       const promptIds = projectPromptRows.map((p) => {
@@ -62,7 +205,7 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
 
       // If no articles are fully assessed by humans, return early
       if (fullyAssessedArticleIds.length === 0) {
-        return {data: [], totalCount: 0, page, limit, totalPages: 0}
+        return {data: [], humanJudgmentMode, totalCount: 0, page, limit, totalPages: 0}
       }
 
       const promptFilters = Object.entries(body.prompts || {}).map(([key, values]) => {
@@ -87,32 +230,11 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
           ),
         ]
         if (candidateArticleIds.length === 0) {
-          return {data: [], totalCount: 0, page, limit, totalPages: 0}
+          return {data: [], humanJudgmentMode, totalCount: 0, page, limit, totalPages: 0}
         }
       }
 
-      const projectConfig = await getAppQueryService().getProjectReviewConfig(body.projectId)
-      const whereParts = [
-        `a.id IN (${getQuotedStringList(candidateArticleIds).join(', ')})`,
-        getProjectScopeClause({
-          articleAlias: 'a',
-          importRouteIds: projectConfig?.importRouteIds ?? [],
-          projectId: body.projectId,
-        }),
-        projectConfig?.dateFrom ? `a.article_created_at >= ${getTimestampLiteral(projectConfig.dateFrom)}` : null,
-        projectConfig?.dateTo ? `a.article_created_at <= ${getTimestampLiteral(projectConfig.dateTo)}` : null,
-        fromDate ? `a.article_created_at >= ${getTimestampLiteral(fromDate)}` : null,
-        toDate ? `a.article_created_at <= ${getTimestampLiteral(toDate)}` : null,
-        searchTitle ? `LOWER(COALESCE(a.article_title, '')) LIKE LOWER('%${escapeSqlString(searchTitle)}%')` : null,
-        body.hasDuplicateStudyRecords
-          ? "LOWER(COALESCE(json_extract_string(a.source_metadata, '$.covidence.hasDuplicateStudyRecords'), 'false')) = 'true'"
-          : null,
-        body.hasStudyDecisionConflict
-          ? "LOWER(COALESCE(json_extract_string(a.source_metadata, '$.covidence.hasStudyDecisionConflict'), 'false')) = 'true'"
-          : null,
-      ].filter((part): part is string => {
-        return part !== null
-      })
+      const whereParts = buildArticleWhereParts(candidateArticleIds)
 
       const [countRows, pageArticleIdRows] = await Promise.all([
         getAppDatabaseService().queryJson<{count: number}>(`
@@ -202,10 +324,10 @@ export const projectsRoutesGetArticlesReviewsHuman = new Elysia().post(
           return ao - bo
         })
 
-        return {...article, judgments: sorted}
+        return {...article, humanJudgmentMode, judgments: sorted}
       })
 
-      return {data: result, totalCount, page, limit, totalPages: Math.ceil(totalCount / limit)}
+      return {data: result, humanJudgmentMode, totalCount, page, limit, totalPages: Math.ceil(totalCount / limit)}
     } catch (error) {
       console.error('Error fetching human articles reviews:', error)
       throw new Error(error instanceof Error ? error.message : 'Failed to fetch human articles reviews', {cause: error})

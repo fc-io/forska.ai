@@ -118,6 +118,7 @@ export const ReviewDetailFulltext = () => {
                     <ReviewJudgments
                       judgments={data().judgments}
                       setArticleViewToShow={setArticleViewToShow}
+                      humanJudgmentMode={data().humanJudgmentMode}
                       humanAnswersByPrompt={data().humanAnswersByPrompt}
                     />
                     <ReviewHumanAssessments groups={data().humanAssessmentsByUser} />
