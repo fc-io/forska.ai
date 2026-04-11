@@ -1,4 +1,15 @@
-import {afterEach, expect, mock, test} from 'bun:test'
+import {afterAll, afterEach, beforeAll, expect, mock, test} from 'bun:test'
+import {rmSync} from 'node:fs'
+import {dirname, join} from 'node:path'
+
+const tempDbPath = `/tmp/f1-judgments-jobs-add-to-queue-${process.pid}-${Date.now()}.duckdb`
+const tempJobDir = join(dirname(tempDbPath), 'judgment-jobs')
+
+process.env.SERVER_ROLE = 'dev-single'
+process.env.DUCKDB_PATH = tempDbPath
+process.env.API_SERVER_PORT = process.env.API_SERVER_PORT ?? '3001'
+process.env.RUN_SERVER_JUDGING = 'false'
+process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 
 const getModulePath = (relativePath: string) => {
   return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
@@ -16,6 +27,56 @@ const judgmentsJobsGetRunningJobsModulePath = getModulePath(
 )
 const getJudgmentsCapacityModulePath = getModulePath('./src/server/cron/judgmentsJobs/getJudgmentsCapacity.ts')
 type JudgmentsJobsAddToQueueModule = typeof import('./judgmentsJobsAddToQueue.ts')
+
+let closeDatabase: (() => Promise<void>) | null = null
+let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
+let runDatabase: ((statement: string) => Promise<void>) | null = null
+let getRealSqliteService:
+  | Awaited<typeof import('./judgmentJobSqliteService.ts')>['getJudgmentJobSqliteService']
+  | null = null
+
+beforeAll(async () => {
+  const [
+    {migrateDuckdb},
+    {getAppDatabaseService},
+    {resetDuckdbServiceForTests},
+    {resetServerRuntimeRoleForTests},
+    sqliteModule,
+  ] = await Promise.all([
+    import('../../../db/migrateDuckdb.ts'),
+    import('../../services/appDatabaseService.ts'),
+    import('../../utils/duckdbService.ts'),
+    import('../../utils/serverRuntimeRole.ts'),
+    import('./judgmentJobSqliteService.ts'),
+  ])
+
+  resetDuckdbServiceForTests()
+  resetServerRuntimeRoleForTests()
+
+  await migrateDuckdb()
+
+  const database = getAppDatabaseService()
+
+  closeDatabase = () => {
+    return database.close()
+  }
+  queryDatabase = <T>(statement: string) => {
+    return database.queryJson<T>(statement)
+  }
+  runDatabase = (statement: string) => {
+    return database.run(statement)
+  }
+  getRealSqliteService = sqliteModule.getJudgmentJobSqliteService
+})
+
+afterAll(async () => {
+  await getRealSqliteService?.().closeAll()
+  await closeDatabase?.()
+  rmSync(tempDbPath, {force: true})
+  rmSync(`${tempDbPath}.writer.history.json`, {force: true})
+  rmSync(`${tempDbPath}.writer.lock`, {force: true})
+  rmSync(tempJobDir, {force: true, recursive: true})
+})
 
 type MockScanState = {
   cursor: null
@@ -76,6 +137,7 @@ const registerSharedMocks = (
   {
     getPromptsImpl,
     answeredHumanRows = [],
+    existingJudgmentRows = [],
     projectDirtyToken = null,
   }: {
     getPromptsImpl?: (
@@ -89,6 +151,7 @@ const registerSharedMocks = (
       promptEntries: Array<{articleId: string; promptId: string}>
     }>
     answeredHumanRows?: Array<{articleId: string; promptId: string}>
+    existingJudgmentRows?: Array<{articleId: string; promptId: string}>
     projectDirtyToken?: number | null
   } = {},
 ) => {
@@ -101,9 +164,11 @@ const registerSharedMocks = (
               ? [{dirtyToken: projectDirtyToken} as T]
               : statement.includes('FROM app.judgment_human jh')
                 ? (answeredHumanRows as T[])
-                : statement.includes('FROM app.judgment_job jj')
-                  ? [getJobConfigRow() as T]
-                  : []
+                : statement.includes('FROM app.judgment j')
+                  ? (existingJudgmentRows as T[])
+                  : statement.includes('FROM app.judgment_job jj')
+                    ? [getJobConfigRow() as T]
+                    : []
           },
           run: async (_statement: string): Promise<void> => {
             return undefined
@@ -475,4 +540,180 @@ test('prioritizes answered human pairs within the fetched window and logs insert
     ],
   ])
   expect(loggedMessages).toContain('[addToQueue] Prioritized 2 answered human entries and inserted 1')
+})
+
+test('claims promoted human pairs first when ready deficit is smaller than the fetched window', async () => {
+  if (!queryDatabase || !runDatabase || !getRealSqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const sqliteService = getRealSqliteService()
+  const connectionId = `connection-human-window-${Date.now()}`
+  const modelId = `model-human-window-${Date.now()}`
+  const projectId = `project-human-window-${Date.now()}`
+  const jobId = `job-human-window-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Human Window Priority Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  void mock.module(appDatabaseServiceModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {
+          queryJson: async <T>(statement: string): Promise<T[]> => {
+            return statement.includes('FROM app.judgment_human jh')
+              ? ([{articleId: 'article-human-late', promptId: 'prompt-human-late'}] as T[])
+              : queryDatabase<T>(statement)
+          },
+          run: async (statement: string): Promise<void> => {
+            return runDatabase(statement)
+          },
+        }
+      },
+    }
+  })
+
+  void mock.module(judgmentJobSqliteServiceModulePath, () => {
+    return {
+      JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
+      getJudgmentJobSqliteService: () => {
+        return sqliteService
+      },
+    }
+  })
+  void mock.module(judgmentsJobsCronGetPromptsModulePath, () => {
+    return {
+      judgmentsJobsCronGetPrompts: async () => {
+        return {
+          nextCursor: null,
+          promptEntries: [
+            {articleId: 'article-rest-first', promptId: 'prompt-rest-first'},
+            {articleId: 'article-human-late', promptId: 'prompt-human-late'},
+            {articleId: 'article-rest-second', promptId: 'prompt-rest-second'},
+          ],
+        }
+      },
+    }
+  })
+  void mock.module(judgmentsJobsGetRunningJobsModulePath, () => {
+    return {
+      judgmentsJobsGetRunningJobs: async () => {
+        return [{id: jobId, modelProvider: 'openai', projectId}]
+      },
+    }
+  })
+  void mock.module(getJudgmentsCapacityModulePath, () => {
+    return {
+      getJudgmentsCapacity: () => {
+        return {addToQueueMaxBatchSize: 1, readyTargetPerJob: 1}
+      },
+    }
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?human-window=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(
+    (await sqliteService.claimReadyPrompts(jobId, 'server-claim', 1)).map((prompt) => {
+      return `${prompt.articleId}:${prompt.promptId}`
+    }),
+  ).toEqual(['article-human-late:prompt-human-late'])
+
+  await sqliteService.closeAll()
+})
+
+test('preserves relative order for multiple promoted human pairs and does not prioritize excluded rows', async () => {
+  const getPromptsCalls = {count: 0}
+  const addReadyPromptsCalls: Array<Array<{articleId: string; promptId: string}>> = []
+  const sqliteService: MockSqliteService = {
+    addReadyPrompts: async (...args) => {
+      addReadyPromptsCalls.push(args[1] as Array<{articleId: string; promptId: string}>)
+      return 5
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries.filter((entry) => {
+        return entry.articleId !== 'article-local-judged'
+      })
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    getReadyCount: async () => {
+      return 0
+    },
+    getScanState: async () => {
+      return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    setScanState: async () => {
+      return undefined
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    answeredHumanRows: [
+      {articleId: 'article-human-late-1', promptId: 'prompt-human-late-1'},
+      {articleId: 'article-human-late-2', promptId: 'prompt-human-late-2'},
+    ],
+    existingJudgmentRows: [{articleId: 'article-already-judged', promptId: 'prompt-already-judged'}],
+    getPromptsImpl: async () => {
+      return {
+        nextCursor: null,
+        promptEntries: [
+          {articleId: 'article-rest-first', promptId: 'prompt-rest-first'},
+          {articleId: 'article-human-late-1', promptId: 'prompt-human-late-1'},
+          {articleId: 'article-unanswered-human', promptId: 'prompt-unanswered-human'},
+          {articleId: 'article-cross-project-human', promptId: 'prompt-cross-project-human'},
+          {articleId: 'article-already-judged', promptId: 'prompt-already-judged'},
+          {articleId: 'article-human-late-2', promptId: 'prompt-human-late-2'},
+          {articleId: 'article-local-judged', promptId: 'prompt-local-judged'},
+        ],
+      }
+    },
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?multiple-human-window=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(getPromptsCalls.count).toBe(1)
+  expect(addReadyPromptsCalls).toEqual([
+    [
+      {articleId: 'article-human-late-1', promptId: 'prompt-human-late-1'},
+      {articleId: 'article-human-late-2', promptId: 'prompt-human-late-2'},
+      {articleId: 'article-rest-first', promptId: 'prompt-rest-first'},
+      {articleId: 'article-unanswered-human', promptId: 'prompt-unanswered-human'},
+      {articleId: 'article-cross-project-human', promptId: 'prompt-cross-project-human'},
+    ],
+  ])
 })

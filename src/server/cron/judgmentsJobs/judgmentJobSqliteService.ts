@@ -529,8 +529,6 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       updated_at TEXT NOT NULL,
       UNIQUE(job_id, article_id, prompt_id)
     );
-    CREATE INDEX IF NOT EXISTS idx_queue_prompt_status_ready_insert_seq
-      ON queue_prompt(status, ready_insert_seq, id);
     CREATE TABLE IF NOT EXISTS judgment_outbox (
       outbox_seq INTEGER PRIMARY KEY AUTOINCREMENT,
       job_id TEXT NOT NULL,

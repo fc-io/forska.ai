@@ -91,16 +91,17 @@
         "`bun run lint` passes"
       ],
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "notes": "Preserve the listed regression tests from the plan and keep them focused on deterministic ready ordering, human-first window-local insertion, legacy upgrade safety, and requeue order preservation.",
       "dependsOn": [
         "US-001",
         "US-002",
         "US-003"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     }
   ],
   "metadata": {
-    "updatedAt": "2026-04-11T12:25:07.000Z"
+    "updatedAt": "2026-04-11T12:37:11.392Z"
   }
 }

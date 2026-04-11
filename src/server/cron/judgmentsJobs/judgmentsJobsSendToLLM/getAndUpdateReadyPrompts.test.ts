@@ -131,6 +131,7 @@ test('claims ready rows from the per-job SQLite queue', async () => {
     ],
     'server-job-queued',
   )
+  await sqliteService.releaseOwnedLease(jobId)
 
   const prompts = await getAndUpdateReadyPrompts('server-job-claim', jobId, 2, {
     providerConnectionId: connectionId,
@@ -140,21 +141,13 @@ test('claims ready rows from the per-job SQLite queue', async () => {
 
   expect(prompts).toHaveLength(2)
   expect(
-    prompts
-      .map((prompt) => {
-        return {articleId: prompt.articleId, promptId: prompt.promptId}
-      })
-      .sort((left, right) => {
-        return left.articleId.localeCompare(right.articleId)
-      }),
-  ).toEqual(
-    [
-      {articleId: firstArticleId, promptId: firstPromptId},
-      {articleId: secondArticleId, promptId: secondPromptId},
-    ].sort((left, right) => {
-      return left.articleId.localeCompare(right.articleId)
+    prompts.map((prompt) => {
+      return {articleId: prompt.articleId, promptId: prompt.promptId}
     }),
-  )
+  ).toEqual([
+    {articleId: firstArticleId, promptId: firstPromptId},
+    {articleId: secondArticleId, promptId: secondPromptId},
+  ])
   expect(
     prompts.every((prompt) => {
       return (
@@ -169,4 +162,5 @@ test('claims ready rows from the per-job SQLite queue', async () => {
   ).toBe(true)
   expect(await sqliteService.getInFlightCount(jobId)).toBe(2)
   expect(await sqliteService.getReadyCount(jobId)).toBe(0)
+  await sqliteService.closeAll()
 })

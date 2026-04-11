@@ -152,6 +152,54 @@ test('claims and requeues prompts from the per-job SQLite queue', async () => {
   expect(await service.getInFlightCount(jobId)).toBe(0)
 })
 
+test('claims ready prompts in insertion order for a fresh SQLite queue', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-claim-order-${Date.now()}`
+  const modelId = `model-claim-order-${Date.now()}`
+  const projectId = `project-claim-order-${Date.now()}`
+  const jobId = `job-claim-order-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Claim Order Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(
+    jobId,
+    [
+      {articleId: 'article-first', promptId: 'prompt-first'},
+      {articleId: 'article-second', promptId: 'prompt-second'},
+      {articleId: 'article-third', promptId: 'prompt-third'},
+    ],
+    'server-a',
+  )
+
+  expect(
+    (await service.claimReadyPrompts(jobId, 'server-a', 3)).map((prompt) => {
+      return `${prompt.articleId}:${prompt.promptId}`
+    }),
+  ).toEqual(['article-first:prompt-first', 'article-second:prompt-second', 'article-third:prompt-third'])
+
+  await service.closeAll()
+})
+
 test('preserves original enqueue order when stale sent prompts are requeued', async () => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')
@@ -235,7 +283,6 @@ test('runs isolated SQLite preflight against queue and outbox state', async () =
   `)
 
   await service.initializeJob(jobId)
-  await service.releaseOwnedLease(jobId)
   await service.addReadyPrompts(jobId, [{articleId: 'article-preflight', promptId: 'prompt-preflight'}], 'server-a')
 
   const [claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
@@ -312,10 +359,8 @@ test('isolated SQLite preflight fails when required schema is missing', async ()
   await service.closeAll()
 
   const malformedDatabase = new Database(sqlitePath)
-  malformedDatabase.exec(`
-    DROP TABLE queue_prompt;
-    DROP TABLE judgment_outbox;
-  `)
+  malformedDatabase.exec(`DROP TABLE IF EXISTS queue_prompt;`)
+  malformedDatabase.exec(`DROP TABLE IF EXISTS judgment_outbox;`)
   malformedDatabase.close(false)
   const preflightError = await service
     .runIsolatedPreflight(jobId)
@@ -930,6 +975,108 @@ test('upgrades legacy job_scan_state ack columns in place without losing row dat
   })
 })
 
+test('upgrades legacy queue_prompt schema in place and backfills enqueue order without losing rows', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-legacy-queue-upgrade-${Date.now()}`
+  const modelId = `model-legacy-queue-upgrade-${Date.now()}`
+  const projectId = `project-legacy-queue-upgrade-${Date.now()}`
+  const jobId = `job-legacy-queue-upgrade-${Date.now()}`
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+  const firstCreatedAt = '2025-02-04T03:04:05.000Z'
+  const secondCreatedAt = '2025-02-04T03:04:06.000Z'
+  const thirdCreatedAt = '2025-02-04T03:04:07.000Z'
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Legacy Queue Upgrade Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  const legacyDatabase = new Database(sqlitePath)
+  legacyDatabase.exec(`
+    CREATE TABLE queue_prompt (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      article_id TEXT NOT NULL,
+      prompt_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      server_id TEXT,
+      claim_id TEXT,
+      sent_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE(job_id, article_id, prompt_id)
+    );
+
+    INSERT INTO queue_prompt (
+      id,
+      job_id,
+      article_id,
+      prompt_id,
+      status,
+      server_id,
+      claim_id,
+      sent_at,
+      created_at,
+      updated_at
+    ) VALUES
+      ('queue-2', '${jobId}', 'article-second', 'prompt-second', 'ready', NULL, NULL, NULL, '${secondCreatedAt}', '${secondCreatedAt}'),
+      ('queue-1', '${jobId}', 'article-first', 'prompt-first', 'ready', NULL, NULL, NULL, '${firstCreatedAt}', '${firstCreatedAt}'),
+      ('queue-3', '${jobId}', 'article-third', 'prompt-third', 'ready', NULL, NULL, NULL, '${thirdCreatedAt}', '${thirdCreatedAt}');
+  `)
+  legacyDatabase.close(false)
+
+  await service.initializeJob(jobId)
+
+  expect(await service.getReadyCount(jobId)).toBe(3)
+  expect(
+    (await service.claimReadyPrompts(jobId, 'server-a', 3)).map((prompt) => {
+      return prompt.articleId
+    }),
+  ).toEqual(['article-first', 'article-second', 'article-third'])
+
+  await service.closeAll()
+
+  const upgradedDatabase = new Database(sqlitePath, {readonly: true})
+  const upgradedColumns = (
+    upgradedDatabase.query(`PRAGMA table_info('queue_prompt')`).all() as Array<{name: string}>
+  ).map((row) => {
+    return row.name
+  })
+  const upgradedRows = upgradedDatabase
+    .query(
+      `
+        SELECT article_id AS articleId, ready_insert_seq AS readyInsertSeq
+        FROM queue_prompt
+        ORDER BY ready_insert_seq ASC, id ASC
+      `,
+    )
+    .all() as Array<{articleId: string; readyInsertSeq: number}>
+  upgradedDatabase.close(false)
+
+  expect(upgradedColumns).toContain('ready_insert_seq')
+  expect(upgradedRows).toEqual([
+    {articleId: 'article-first', readyInsertSeq: 1},
+    {articleId: 'article-second', readyInsertSeq: 2},
+    {articleId: 'article-third', readyInsertSeq: 3},
+  ])
+})
+
 test('publishes a refresh ack token to every tracked sqlite job for the same project', async () => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')
@@ -1178,12 +1325,28 @@ test('isolated SQLite preflight upgrades legacy ack columns before readonly vali
   ).map((row) => {
     return row.name
   })
+  const upgradedQueueColumns = (
+    upgradedDatabase.query(`PRAGMA table_info('queue_prompt')`).all() as Array<{name: string}>
+  ).map((row) => {
+    return row.name
+  })
+  const upgradedQueueRows = upgradedDatabase
+    .query(
+      `
+        SELECT article_id AS articleId, ready_insert_seq AS readyInsertSeq
+        FROM queue_prompt
+        ORDER BY ready_insert_seq ASC, id ASC
+      `,
+    )
+    .all() as Array<{articleId: string; readyInsertSeq: number}>
   upgradedDatabase.close(false)
 
   expect(upgradedColumns).toContain('last_project_refresh_ack_token')
   expect(upgradedColumns).toContain('wrap_visibility_ack_token')
   expect(upgradedColumns).not.toContain('last_project_refresh_ack_seq')
   expect(upgradedColumns).not.toContain('wrap_visibility_ack_seq')
+  expect(upgradedQueueColumns).toContain('ready_insert_seq')
+  expect(upgradedQueueRows).toEqual([{articleId: 'article-1', readyInsertSeq: 1}])
 })
 
 test('claims, reaps, releases, and completes outbox batches', async () => {
