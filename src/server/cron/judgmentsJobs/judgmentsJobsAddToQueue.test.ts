@@ -37,6 +37,10 @@ type MockSqliteService = {
     jobId: string,
     entries: Array<{articleId: string; promptId: string}>,
   ) => Promise<Array<{articleId: string; promptId: string}>>
+  filterOutExistingQueuedPrompts: (
+    jobId: string,
+    entries: Array<{articleId: string; promptId: string}>,
+  ) => Promise<Array<{articleId: string; promptId: string}>>
   getReadyCount: () => Promise<number>
   getScanState: () => Promise<MockScanState>
   hasJob: () => boolean
@@ -71,6 +75,7 @@ const registerSharedMocks = (
   getPromptsCalls: {count: number},
   {
     getPromptsImpl,
+    answeredHumanRows = [],
     projectDirtyToken = null,
   }: {
     getPromptsImpl?: (
@@ -83,6 +88,7 @@ const registerSharedMocks = (
       nextCursor: {lastArticleId: string; lastDate: Date} | null
       promptEntries: Array<{articleId: string; promptId: string}>
     }>
+    answeredHumanRows?: Array<{articleId: string; promptId: string}>
     projectDirtyToken?: number | null
   } = {},
 ) => {
@@ -93,9 +99,11 @@ const registerSharedMocks = (
           queryJson: async <T>(statement: string): Promise<T[]> => {
             return statement.includes('FROM app.project_mart_refresh_state pmrs')
               ? [{dirtyToken: projectDirtyToken} as T]
-              : statement.includes('FROM app.judgment_job jj')
-                ? [getJobConfigRow() as T]
-                : []
+              : statement.includes('FROM app.judgment_human jh')
+                ? (answeredHumanRows as T[])
+                : statement.includes('FROM app.judgment_job jj')
+                  ? [getJobConfigRow() as T]
+                  : []
           },
           run: async (_statement: string): Promise<void> => {
             return undefined
@@ -172,6 +180,9 @@ test('uses raw OLAP fallback when exhausted SQLite jobs are waiting on mart visi
     filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
       return entries
     },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
     getReadyCount: async () => {
       return 0
     },
@@ -226,6 +237,9 @@ test('wraps exhausted SQLite jobs once visibility catches up and increments scan
       return undefined
     },
     filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
       return entries
     },
     getReadyCount: async () => {
@@ -283,6 +297,9 @@ test('initializes missing SQLite job state before topping up the queue', async (
     filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
       return entries
     },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
     getReadyCount: async () => {
       return 0
     },
@@ -332,6 +349,9 @@ test('filters out locally judged SQLite prompt pairs before adding ready prompts
         return entry.articleId !== 'article-local'
       })
     },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
     getReadyCount: async () => {
       return 0
     },
@@ -372,4 +392,87 @@ test('filters out locally judged SQLite prompt pairs before adding ready prompts
 
   expect(getPromptsCalls.count).toBe(1)
   expect(addReadyPromptsCalls).toEqual([[{articleId: 'article-new', promptId: 'prompt-1'}]])
+})
+
+test('prioritizes answered human pairs within the fetched window and logs inserted prioritized entries', async () => {
+  const getPromptsCalls = {count: 0}
+  const addReadyPromptsCalls: Array<Array<{articleId: string; promptId: string}>> = []
+  const loggedMessages: string[] = []
+  const originalConsoleLog = console.log
+  console.log = (...args: unknown[]) => {
+    loggedMessages.push(args.join(' '))
+  }
+
+  const sqliteService: MockSqliteService = {
+    addReadyPrompts: async (...args) => {
+      addReadyPromptsCalls.push(args[1] as Array<{articleId: string; promptId: string}>)
+      return 1
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries.filter((entry) => {
+        return entry.articleId !== 'article-human-ignored'
+      })
+    },
+    getReadyCount: async () => {
+      return 0
+    },
+    getScanState: async () => {
+      return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    setScanState: async () => {
+      return undefined
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    answeredHumanRows: [
+      {articleId: 'article-human', promptId: 'prompt-1'},
+      {articleId: 'article-human-ignored', promptId: 'prompt-2'},
+    ],
+    getPromptsImpl: async () => {
+      return {
+        nextCursor: null,
+        promptEntries: [
+          {articleId: 'article-rest', promptId: 'prompt-0'},
+          {articleId: 'article-human', promptId: 'prompt-1'},
+          {articleId: 'article-human-ignored', promptId: 'prompt-2'},
+        ],
+      }
+    },
+  })
+
+  try {
+    const module = (await import(
+      `${judgmentsJobsAddToQueueModulePath}?prioritize-human-first=${Date.now()}`
+    )) as JudgmentsJobsAddToQueueModule
+
+    await module.judgmentsJobsAddToQueue('server-1')
+  } finally {
+    console.log = originalConsoleLog
+  }
+
+  expect(getPromptsCalls.count).toBe(1)
+  expect(addReadyPromptsCalls).toEqual([
+    [
+      {articleId: 'article-human', promptId: 'prompt-1'},
+      {articleId: 'article-human-ignored', promptId: 'prompt-2'},
+      {articleId: 'article-rest', promptId: 'prompt-0'},
+    ],
+  ])
+  expect(loggedMessages).toContain('[addToQueue] Prioritized 2 answered human entries and inserted 1')
 })

@@ -2736,6 +2736,44 @@ const sqliteService = {
           })
         }) ?? [])
   },
+  filterOutExistingQueuedPrompts: async (
+    jobId: string,
+    entries: Array<{articleId: string; promptId: string}>,
+  ): Promise<Array<{articleId: string; promptId: string}>> => {
+    return entries.length === 0
+      ? []
+      : (withJobDatabase(jobId, false, (database) => {
+          const existingQueuedPairs = database
+            .query(
+              `
+                  WITH pairs(article_id, prompt_id) AS (
+                    VALUES ${entries
+                      .map(() => {
+                        return '(?, ?)'
+                      })
+                      .join(', ')}
+                  )
+                  SELECT qp.article_id AS articleId, qp.prompt_id AS promptId
+                  FROM queue_prompt qp
+                  INNER JOIN pairs p ON p.article_id = qp.article_id AND p.prompt_id = qp.prompt_id
+                `,
+            )
+            .all(
+              ...entries.flatMap((entry) => {
+                return [entry.articleId, entry.promptId]
+              }),
+            ) as Array<{articleId: string; promptId: string}>
+          const existingQueuedSet = new Set(
+            existingQueuedPairs.map((entry) => {
+              return `${entry.articleId}:${entry.promptId}`
+            }),
+          )
+
+          return entries.filter((entry) => {
+            return !existingQueuedSet.has(`${entry.articleId}:${entry.promptId}`)
+          })
+        }) ?? [])
+  },
   hasJob: (jobId: string) => {
     return existsSync(getJudgmentJobSqlitePath(jobId))
   },

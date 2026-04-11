@@ -54,6 +54,73 @@ const getPromptsToFetchCount = (
 
 type PromptQueueEntry = {articleId: string; promptId: string}
 
+const sqliteBatchSize = 1000
+
+const getPromptQueueEntryKey = (entry: PromptQueueEntry) => {
+  return `${entry.articleId}:${entry.promptId}`
+}
+
+const getPromptQueueEntryBatches = (entries: PromptQueueEntry[]) => {
+  return entries.reduce<PromptQueueEntry[][]>((batches, entry, index) => {
+    const batchIndex = Math.floor(index / sqliteBatchSize)
+    const batch = batches[batchIndex] ?? []
+
+    batch.push(entry)
+    batches[batchIndex] = batch
+
+    return batches
+  }, [])
+}
+
+const getAnsweredHumanPromptPairKeys = async (
+  promptEntries: PromptQueueEntry[],
+  projectId: string,
+): Promise<Set<string>> => {
+  const batches = getPromptQueueEntryBatches(promptEntries)
+  const matchingRows = await Promise.all(
+    batches.map(async (batch) => {
+      return getAppDatabaseService().queryJson<{articleId: string; promptId: string}>(`
+        WITH pairs(article_id, prompt_id) AS (
+          VALUES ${batch
+            .map((entry) => {
+              return `(${getSqlLiteral(entry.articleId)}, ${getSqlLiteral(entry.promptId)})`
+            })
+            .join(', ')}
+        )
+        SELECT DISTINCT jh.article_id AS articleId, jh.prompt_id AS promptId
+        FROM app.judgment_human jh
+        INNER JOIN pairs p ON p.article_id = jh.article_id AND p.prompt_id = jh.prompt_id
+        WHERE jh.project_id = ${getSqlLiteral(projectId)}
+          AND jh.is_answered = TRUE
+      `)
+    }),
+  )
+
+  return new Set(
+    matchingRows.flatMap((rows) => {
+      return rows.map((entry) => {
+        return getPromptQueueEntryKey(entry)
+      })
+    }),
+  )
+}
+
+const partitionPromptQueueEntriesByHumanAnswered = (
+  promptEntries: PromptQueueEntry[],
+  answeredHumanPairKeys: Set<string>,
+) => {
+  return promptEntries.reduce<{humanFirst: PromptQueueEntry[]; rest: PromptQueueEntry[]}>(
+    (state, entry) => {
+      const target = answeredHumanPairKeys.has(getPromptQueueEntryKey(entry)) ? state.humanFirst : state.rest
+
+      target.push(entry)
+
+      return state
+    },
+    {humanFirst: [], rest: []},
+  )
+}
+
 /** Filter out prompt entries that already have judgments in the app database */
 const filterAlreadyJudged = async (
   promptEntries: PromptQueueEntry[],
@@ -64,12 +131,10 @@ const filterAlreadyJudged = async (
 
   const sqliteService = getJudgmentJobSqliteService()
 
-  // Check in batches to avoid query size limits
-  const BATCH_SIZE = 1000
   const filtered: PromptQueueEntry[] = []
 
-  for (let i = 0; i < promptEntries.length; i += BATCH_SIZE) {
-    const batch = promptEntries.slice(i, i + BATCH_SIZE)
+  for (let i = 0; i < promptEntries.length; i += sqliteBatchSize) {
+    const batch = promptEntries.slice(i, i + sqliteBatchSize)
 
     // Find which pairs already have judgments
     const existingJudgments = await getAppDatabaseService().queryJson<{articleId: string; promptId: string}>(`
@@ -93,12 +158,12 @@ const filterAlreadyJudged = async (
 
     const existingSet = new Set(
       existingJudgments.map((j) => {
-        return `${j.articleId}:${j.promptId}`
+        return getPromptQueueEntryKey(j)
       }),
     )
 
     const notJudged = batch.filter((entry) => {
-      return !existingSet.has(`${entry.articleId}:${entry.promptId}`)
+      return !existingSet.has(getPromptQueueEntryKey(entry))
     })
     filtered.push(...notJudged)
   }
@@ -127,18 +192,32 @@ const getSqliteWindowSize = (readyDeficit: number, addToQueueMaxBatchSize: numbe
 
 const getInsertedReadyCount = async ({
   filteredEntries,
+  humanFirstEntries,
   jobId,
   readyDeficit,
   serverJobId,
   sqliteService,
 }: {
   filteredEntries: PromptQueueEntry[]
+  humanFirstEntries: PromptQueueEntry[]
   jobId: string
   readyDeficit: number
   serverJobId: string
   sqliteService: ReturnType<typeof getJudgmentJobSqliteService>
 }) => {
-  return sqliteService.addReadyPrompts(jobId, filteredEntries, serverJobId, readyDeficit)
+  const insertableHumanFirstEntries =
+    humanFirstEntries.length > 0 ? await sqliteService.filterOutExistingQueuedPrompts(jobId, humanFirstEntries) : []
+  const insertedCount = await sqliteService.addReadyPrompts(jobId, filteredEntries, serverJobId, readyDeficit)
+
+  if (humanFirstEntries.length > 0) {
+    const insertedHumanFirstCount = Math.min(insertedCount, readyDeficit, insertableHumanFirstEntries.length)
+
+    console.log(
+      `[addToQueue] Prioritized ${humanFirstEntries.length} answered human entries and inserted ${insertedHumanFirstCount}`,
+    )
+  }
+
+  return insertedCount
 }
 
 const hasSqliteExhaustedCooldown = (exhaustedAt: Date | null) => {
@@ -261,8 +340,18 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
       shouldForceRawFallback,
     )
     const filteredEntries = await filterAlreadyJudged(promptData.promptEntries, jobConfig, job.id)
+    const answeredHumanPairKeys = await getAnsweredHumanPromptPairKeys(filteredEntries, job.projectId)
+    const {humanFirst, rest} = partitionPromptQueueEntriesByHumanAnswered(filteredEntries, answeredHumanPairKeys)
+    const prioritizedEntries = [...humanFirst, ...rest]
 
-    await getInsertedReadyCount({filteredEntries, jobId: job.id, readyDeficit, serverJobId, sqliteService})
+    await getInsertedReadyCount({
+      filteredEntries: prioritizedEntries,
+      humanFirstEntries: humanFirst,
+      jobId: job.id,
+      readyDeficit,
+      serverJobId,
+      sqliteService,
+    })
 
     const nextReadyCount = await sqliteService.getReadyCount(job.id)
     const nextScanState = promptData.nextCursor
