@@ -19,7 +19,7 @@ import {
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {normalizeProviderKind} from '../services/providerCatalog.ts'
-import {inferenceRuntimeConfig} from '../utils/getInferenceRuntimeConfig.ts'
+import {getInferenceRuntimeConfig} from '../utils/getInferenceRuntimeConfig.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {providerConnectionsRoutes} from './ProviderConnectionsRoutes.ts'
 import {providerModelsRoutes} from './ProviderModelsRoutes.ts'
@@ -333,15 +333,17 @@ export const modelsRoutes = new Elysia()
   .use(providerConnectionsRoutes)
   .use(providerModelsRoutes)
   .get('/api/models/gpu-info', async () => {
+    const runtimeConfig = getInferenceRuntimeConfig()
+
     return {
       data: {
-        DP_SIZE: inferenceRuntimeConfig.dpSize,
-        GPU_GPUS_PER_NODE: inferenceRuntimeConfig.gpuGpusPerNode,
-        GPU_NNODES: inferenceRuntimeConfig.gpuNnodes,
-        GPU_SHAPE: inferenceRuntimeConfig.gpuShape,
-        GPU_TOTAL_GPUS: inferenceRuntimeConfig.gpuTotalGpus,
-        SGLANG_MAX_RUNNING_REQUESTS: inferenceRuntimeConfig.sglangMaxRunningRequests,
-        TP_SIZE: inferenceRuntimeConfig.tpSize,
+        DP_SIZE: runtimeConfig.dpSize,
+        GPU_GPUS_PER_NODE: runtimeConfig.gpuGpusPerNode,
+        GPU_NNODES: runtimeConfig.gpuNnodes,
+        GPU_SHAPE: runtimeConfig.gpuShape,
+        GPU_TOTAL_GPUS: runtimeConfig.gpuTotalGpus,
+        SGLANG_MAX_RUNNING_REQUESTS: runtimeConfig.sglangMaxRunningRequests,
+        TP_SIZE: runtimeConfig.tpSize,
       },
     }
   })

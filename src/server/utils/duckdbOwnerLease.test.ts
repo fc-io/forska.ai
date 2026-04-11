@@ -82,6 +82,27 @@ test('writer reclaims stale local lease for shell hostname alias', async () => {
   }
 })
 
+test('writer replaces an empty lease file left behind by a crashed writer', async () => {
+  const {duckdbPath, leasePath, tempDirectory} = createLeasePaths()
+
+  try {
+    writeFileSync(leasePath, '')
+
+    const nextLease = await Effect.runPromise(
+      acquireDuckdbOwnerLease({apiServerPort: 3999, databasePath: duckdbPath, serverRole: 'writer'}),
+    )
+
+    if (nextLease === null) {
+      throw new Error('Expected replacement lease')
+    }
+
+    expect(nextLease.metadata.hostname).toBe(hostname())
+    expect(readLeaseMetadata(leasePath).leaseId).toBe(nextLease.metadata.leaseId)
+  } finally {
+    rmSync(tempDirectory, {force: true, recursive: true})
+  }
+})
+
 test('writer reclaims stale legacy local lease for macOS local hostname alias', async () => {
   const darwinLocalHostname = getDarwinLocalHostname()
 

@@ -105,7 +105,14 @@ const registerSharedMocks = (
     }
   })
   void mock.module(inferenceRuntimeConfigModulePath, () => {
-    return {inferenceRuntimeConfig: {judgmentsAddToQueueMaxBatchSize: 1, judgmentsReadyTargetMultiplier: 1}}
+    const inferenceRuntimeConfig = {judgmentsAddToQueueMaxBatchSize: 1, judgmentsReadyTargetMultiplier: 1}
+
+    return {
+      getInferenceRuntimeConfig: () => {
+        return inferenceRuntimeConfig
+      },
+      inferenceRuntimeConfig,
+    }
   })
   void mock.module(judgmentJobSqliteServiceModulePath, () => {
     return {

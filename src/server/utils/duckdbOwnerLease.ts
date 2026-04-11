@@ -155,6 +155,14 @@ const isExistingFileError = (error: unknown) => {
   return error instanceof Error && 'code' in error && error.code === 'EEXIST'
 }
 
+const isJsonSyntaxError = (error: unknown) => {
+  return error instanceof SyntaxError || (error instanceof Error && error.name === 'SyntaxError')
+}
+
+const getErrorText = (error: unknown) => {
+  return error instanceof Error ? error.message : String(error)
+}
+
 const isProcessAlive = (pid: number) => {
   try {
     process.kill(pid, 0)
@@ -226,10 +234,22 @@ const getCurrentLeaseMetadata = (databasePath: string): Effect.Effect<DuckdbOwne
     : Effect.tryPromise(async () => {
         try {
           const raw = await readFile(leasePath, 'utf8')
+          const trimmed = raw.trim()
+
+          if (trimmed === '') {
+            console.warn(`[duckdb] ignoring empty writer lease file at ${leasePath}`)
+            return null
+          }
+
           const parsed = JSON.parse(raw) as Partial<DuckdbOwnerLeaseMetadata>
           return normalizeDuckdbOwnerLeaseMetadata(databasePath, parsed)
         } catch (error) {
           if (isMissingFileError(error)) {
+            return null
+          }
+
+          if (isJsonSyntaxError(error)) {
+            console.warn(`[duckdb] ignoring malformed writer lease file at ${leasePath}: ${getErrorText(error)}`)
             return null
           }
 
@@ -246,10 +266,22 @@ const getCurrentLeaseHistory = (databasePath: string): Effect.Effect<DuckdbOwner
     : Effect.tryPromise(async () => {
         try {
           const raw = await readFile(historyPath, 'utf8')
+          const trimmed = raw.trim()
+
+          if (trimmed === '') {
+            console.warn(`[duckdb] ignoring empty writer history file at ${historyPath}`)
+            return []
+          }
+
           const parsed = JSON.parse(raw) as Partial<DuckdbOwnerLeaseHistoryEntry>[]
           return Array.isArray(parsed) ? parsed.map(normalizeDuckdbOwnerLeaseHistoryEntry) : []
         } catch (error) {
           if (isMissingFileError(error)) {
+            return []
+          }
+
+          if (isJsonSyntaxError(error)) {
+            console.warn(`[duckdb] ignoring malformed writer history file at ${historyPath}: ${getErrorText(error)}`)
             return []
           }
 
@@ -392,7 +424,11 @@ export const acquireDuckdbOwnerLease = (params: {
         ? getCurrentLeaseMetadata(params.databasePath).pipe(
             Effect.flatMap((currentLease) => {
               return currentLease === null
-                ? acquireDuckdbOwnerLease(params)
+                ? removeLeasePath(leasePath).pipe(
+                    Effect.flatMap(() => {
+                      return acquireDuckdbOwnerLease(params)
+                    }),
+                  )
                 : isDuckdbOwnerLeaseOwnedByCurrentProcess(currentLease)
                   ? Effect.succeed({
                       leasePath,

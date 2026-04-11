@@ -1,5 +1,5 @@
-import {inferenceRuntimeConfig} from '../../utils/getInferenceRuntimeConfig.ts'
+import {getInferenceRuntimeConfig} from '../../utils/getInferenceRuntimeConfig.ts'
 
 export const getCodexMaxInflight = (): number => {
-  return Math.max(1, inferenceRuntimeConfig.codexMaxInflight)
+  return Math.max(1, getInferenceRuntimeConfig().codexMaxInflight)
 }

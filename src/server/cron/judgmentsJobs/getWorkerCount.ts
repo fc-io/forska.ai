@@ -1,12 +1,12 @@
-import {inferenceRuntimeConfig} from '../../utils/getInferenceRuntimeConfig.ts'
+import {getInferenceRuntimeConfig} from '../../utils/getInferenceRuntimeConfig.ts'
 
 export const getWorkerCount = (): number => {
+  const runtimeConfig = getInferenceRuntimeConfig()
   const estimatedWorkers = Math.max(
     1,
     Math.floor(
-      Number(inferenceRuntimeConfig.gpuTotalGpus || 0)
-        / (Math.max(1, Number(inferenceRuntimeConfig.tpSize || 1))
-          * Math.max(1, Number(inferenceRuntimeConfig.ppSize || 1))),
+      Number(runtimeConfig.gpuTotalGpus || 0)
+        / (Math.max(1, Number(runtimeConfig.tpSize || 1)) * Math.max(1, Number(runtimeConfig.ppSize || 1))),
     ),
   )
 
