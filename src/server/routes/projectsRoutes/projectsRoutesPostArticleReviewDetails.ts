@@ -12,6 +12,11 @@ import {getProviderModelMetadataOptions} from '../../providers/providerModelMeta
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getJsonValue, getQuotedStringList} from '../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
+import {
+  deriveStrictSummaryAnswer,
+  getNormalizedSummaryAnswer,
+  normalizeSummaryAnswerValue,
+} from '../../utils/judgmentAnswers.ts'
 import {getSystemActor} from '../../utils/getSystemActor.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
 
@@ -125,6 +130,7 @@ type ProjectPromptRow = {
   order: number | null
   type: string | null
   enabled: boolean | null
+  criteriaDisposition: 'include' | 'exclude' | null
   originProjectId: string | null
 }
 
@@ -458,6 +464,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
             pp.prompt_order AS "order",
             p.type AS type,
             pp.enabled AS enabled,
+            pp.criteria_disposition AS criteriaDisposition,
             pp.origin_project_id AS originProjectId
           FROM app.project_prompt pp
           INNER JOIN app.prompt p ON p.id = pp.prompt_id
@@ -497,6 +504,9 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       })
       const enabledPromptIds = enabledPromptRows.map((p) => {
         return p.id
+      })
+      const summaryCriteria = enabledPromptRows.map((row) => {
+        return {promptId: row.id, criteriaDisposition: row.criteriaDisposition}
       })
       const enabledPromptIdSet = new Set(enabledPromptIds)
       const promptOrderMap = projectPromptRows.reduce(
@@ -547,6 +557,28 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         ...projectReviewDetailJudgmentDetails,
         ...fallbackAppJudgmentDetails,
       ]
+      const latestArticleJudgmentsByPrompt = articleJudgments.reduce<Map<string, ReviewJudgmentDetail>>(
+        (judgmentMap, row) => {
+          const existing = judgmentMap.get(row.judgment.promptId)
+
+          return !existing || row.judgment.createdAt >= existing.judgment.createdAt
+            ? judgmentMap.set(row.judgment.promptId, row)
+            : judgmentMap
+        },
+        new Map<string, ReviewJudgmentDetail>(),
+      )
+      const llmSummaryAnswer =
+        projectReviewConfig.humanJudgmentMode === 'summary'
+          ? deriveStrictSummaryAnswer(
+              summaryCriteria,
+              Array.from(latestArticleJudgmentsByPrompt.values()).reduce<Record<string, 'yes' | 'no' | 'maybe' | null>>(
+                (answerMap, row) => {
+                  return {...answerMap, [row.judgment.promptId]: getNormalizedSummaryAnswer(row.judgment)}
+                },
+                {},
+              ),
+            )
+          : null
 
       const judgmentIds: string[] = articleJudgments.map((j) => {
         return j.judgment.id
@@ -735,6 +767,11 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
               },
             ]
 
+      const humanSummaryAnswer =
+        projectReviewConfig.humanJudgmentMode === 'summary'
+          ? normalizeSummaryAnswerValue(humanRows[0]?.answer ?? null)
+          : null
+
       let humanAnswersByPrompt: Record<string, Array<{userName: string; answer: string}>> | undefined = undefined
       if (projectReviewConfig?.humanJudgmentMode !== 'summary' && promptIds.length > 0) {
         type HumanRow = {articleId: string; promptId: string; answer: string | null; updatedAt: Date | null}
@@ -792,6 +829,9 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
       return {
         article,
         covidenceRelatedRecords,
+        humanJudgmentMode: projectReviewConfig.humanJudgmentMode,
+        humanSummaryAnswer,
+        llmSummaryAnswer,
         martFreshness,
         prompts: projectPromptRows,
         judgments: judgmentsWithPlaceholders,

@@ -4,7 +4,12 @@ import {
   type NumericFilterResult,
 } from '../../server/routes/projectsRoutes/articlesReviewsFiltersNumeric.ts'
 import {isNumericType} from '../../server/routes/projectsRoutes/articlesReviewsFiltersUtils.ts'
-import {hasMatchingJudgmentAnswer} from '../../server/utils/judgmentAnswers.ts'
+import {
+  deriveStrictSummaryAnswer,
+  hasMatchingJudgmentAnswer,
+  getNormalizedSummaryAnswer,
+  normalizeSummaryAnswerValue,
+} from '../../server/utils/judgmentAnswers.ts'
 import {createRateLimitedLogger} from '../../server/utils/rateLimitedLogger.ts'
 import {
   type ArticleSourceMetadata,
@@ -35,12 +40,14 @@ import type {
 
 type ProjectOlapScope = {
   projectId: string
+  humanJudgmentMode: 'prompt' | 'summary'
   promptRows: Array<{
     id: string
     order: number | null
     promptHeading: string | null
     originalText: string
     type: string | null
+    criteriaDisposition: 'include' | 'exclude' | null
   }>
   promptIds: string[]
   promptOrderMap: Record<string, number>
@@ -72,6 +79,7 @@ type ScopedArticleRow = {
 }
 
 type HumanAnswerRow = {articleId: string; promptId: string; answer: string | null; updatedAt: Date | null}
+type HumanSummaryRow = {articleId: string; answer: string | null; updatedAt: Date | null}
 type UnassessedCandidateRow = {
   articleId: string
   articleCreatedAt: Date | null
@@ -1534,6 +1542,52 @@ const getHumanAnswersByPrompt = (promptIds: string[], rows: HumanAnswerRow[]): H
     : null
 }
 
+const getSummaryCriteria = (scope: ProjectOlapScope) => {
+  return scope.promptRows.map((row) => {
+    return {promptId: row.id, criteriaDisposition: row.criteriaDisposition}
+  })
+}
+
+const getLatestRowsByPromptId = <T extends {createdAt: string; promptId: string}>(rows: T[]) => {
+  return rows.reduce<Map<string, T>>((rowMap, row) => {
+    const existing = rowMap.get(row.promptId)
+
+    if (!existing || row.createdAt >= existing.createdAt) {
+      rowMap.set(row.promptId, row)
+    }
+
+    return rowMap
+  }, new Map<string, T>())
+}
+
+const getLlmSummaryAnswer = (scope: ProjectOlapScope, rows: ArticlesReviewsBothJudgmentRow[] | OlapJudgmentRow[]) => {
+  if (scope.humanJudgmentMode !== 'summary') {
+    return null
+  }
+
+  const normalizedAnswers = Array.from(getLatestRowsByPromptId(rows).values()).reduce<
+    Record<string, 'yes' | 'no' | 'maybe' | null>
+  >((answerMap, row) => {
+    return {...answerMap, [row.promptId]: getNormalizedSummaryAnswer(row)}
+  }, {})
+
+  return deriveStrictSummaryAnswer(getSummaryCriteria(scope), normalizedAnswers)
+}
+
+const getHumanSummaryRowsByArticleId = (rows: HumanSummaryRow[]) => {
+  return rows.reduce<Map<string, HumanSummaryRow>>((rowMap, row) => {
+    const existing = rowMap.get(row.articleId)
+    const rowUpdatedAtMs = row.updatedAt?.getTime() ?? 0
+    const existingUpdatedAtMs = existing?.updatedAt?.getTime() ?? 0
+
+    return rowUpdatedAtMs >= existingUpdatedAtMs ? rowMap.set(row.articleId, row) : rowMap
+  }, new Map<string, HumanSummaryRow>())
+}
+
+const getHumanSummaryAnswer = (row: HumanSummaryRow | undefined) => {
+  return normalizeSummaryAnswerValue(row?.answer ?? null)
+}
+
 const getJudgmentRowsSorted = (rows: OlapJudgmentRow[], promptOrderMap: Record<string, number>) => {
   return [...rows].sort((left, right) => {
     const leftOrder = promptOrderMap[left.promptId] ?? Number.MAX_SAFE_INTEGER
@@ -1603,13 +1657,15 @@ const getProjectOlapScope = async (projectId: string): Promise<ProjectOlapScope 
       promptHeading: string | null
       originalText: string
       type: string | null
+      criteriaDisposition: 'include' | 'exclude' | null
     }>(`
       SELECT
         p.id AS id,
         pp.prompt_order AS "order",
         p.prompt_heading AS promptHeading,
         p.original_text AS originalText,
-        p.type AS type
+        p.type AS type,
+        pp.criteria_disposition AS criteriaDisposition
       FROM app.project_prompt pp
       INNER JOIN app.prompt p ON p.id = pp.prompt_id
       WHERE pp.project_id = ${getDuckdbSqlString(projectId)}
@@ -1620,6 +1676,7 @@ const getProjectOlapScope = async (projectId: string): Promise<ProjectOlapScope 
       id: string
       dateFrom: unknown
       dateTo: unknown
+      humanJudgmentMode: 'prompt' | 'summary' | null
       modelId: string | null
       useTitle: unknown
       useAbstract: unknown
@@ -1630,6 +1687,7 @@ const getProjectOlapScope = async (projectId: string): Promise<ProjectOlapScope 
         id,
         date_from AS dateFrom,
         date_to AS dateTo,
+        human_judgment_mode AS humanJudgmentMode,
         model_id AS modelId,
         use_title AS useTitle,
         use_abstract AS useAbstract,
@@ -1650,6 +1708,7 @@ const getProjectOlapScope = async (projectId: string): Promise<ProjectOlapScope 
   return projectRow
     ? {
         projectId,
+        humanJudgmentMode: projectRow.humanJudgmentMode ?? 'prompt',
         promptRows,
         promptIds: promptRows.map((row) => {
           return row.id
@@ -2033,7 +2092,7 @@ const getRawUnassessedCandidateRows = async (params: {
 }
 
 const getHumanAnswerRows = async (scope: ProjectOlapScope, articleIds: string[]): Promise<HumanAnswerRow[]> => {
-  if (articleIds.length === 0 || scope.promptIds.length === 0) {
+  if (scope.humanJudgmentMode === 'summary' || articleIds.length === 0 || scope.promptIds.length === 0) {
     return []
   }
 
@@ -2053,6 +2112,27 @@ const getHumanAnswerRows = async (scope: ProjectOlapScope, articleIds: string[])
       AND is_answered = TRUE
       AND article_id IN (${getDuckdbSqlStringList(articleIds).join(', ')})
       AND prompt_id IN (${getDuckdbSqlStringList(scope.promptIds).join(', ')})
+  `)
+
+  return rows.map((row) => {
+    return {...row, updatedAt: getDuckdbDateValue(row.updatedAt)}
+  })
+}
+
+const getHumanSummaryRows = async (scope: ProjectOlapScope, articleIds: string[]): Promise<HumanSummaryRow[]> => {
+  if (scope.humanJudgmentMode !== 'summary' || articleIds.length === 0) {
+    return []
+  }
+
+  const rows = await runDuckdbJsonQuery<{articleId: string; answer: string | null; updatedAt: unknown}>(`
+    SELECT
+      article_id AS articleId,
+      answer,
+      updated_at AS updatedAt
+    FROM app.judgment_human_summary
+    WHERE project_id = ${getDuckdbSqlString(scope.projectId)}
+      AND article_id IN (${getDuckdbSqlStringList(articleIds).join(', ')})
+      AND NULLIF(TRIM(COALESCE(answer, '')), '') IS NOT NULL
   `)
 
   return rows.map((row) => {
@@ -2245,31 +2325,28 @@ export const queryArticlesReviewsBothFromDuckdb = async (
   if (scope.modelId && (await getHasReviewArticleServingRows(scope))) {
     const {rows: pageArticles, totalCount} = await getBothPageRowsFromServing({...params, scope})
     const totalPages = totalCount > 0 ? Math.ceil(totalCount / params.limit) : 0
-    const llmJudgmentsByArticle = groupByArticleId(
-      await getJudgmentRowsForReviews(
-        scope,
-        pageArticles.map((article) => {
-          return article.id
-        }),
-      ),
-    )
-    const humanRowsByArticle = getHumanRowsByArticleId(
-      await getHumanAnswerRows(
-        scope,
-        pageArticles.map((article) => {
-          return article.id
-        }),
-      ),
-    )
+    const articleIds = pageArticles.map((article) => {
+      return article.id
+    })
+    const llmJudgmentsByArticle = groupByArticleId(await getJudgmentRowsForReviews(scope, articleIds))
+    const humanRowsByArticle = getHumanRowsByArticleId(await getHumanAnswerRows(scope, articleIds))
+    const humanSummaryRowsByArticle = getHumanSummaryRowsByArticleId(await getHumanSummaryRows(scope, articleIds))
     const data = pageArticles.map((article) => {
+      const llmRows = getJudgmentRowsSorted(llmJudgmentsByArticle.get(article.id) ?? [], scope.promptOrderMap)
+
       return {
         id: article.id,
         articleTitle: article.articleTitle,
         articleCreatedAt: article.articleCreatedAt,
         articleUpdatedAt: article.articleUpdatedAt,
-        judgments: getJudgmentRowsSorted(llmJudgmentsByArticle.get(article.id) ?? [], scope.promptOrderMap),
+        judgments: llmRows,
+        humanJudgmentMode: scope.humanJudgmentMode,
+        humanSummaryAnswer: getHumanSummaryAnswer(humanSummaryRowsByArticle.get(article.id)) ?? undefined,
+        llmSummaryAnswer: getLlmSummaryAnswer(scope, llmRows) ?? undefined,
         humanAnswersByPrompt:
-          getHumanAnswersByPrompt(scope.promptIds, humanRowsByArticle.get(article.id) ?? []) ?? undefined,
+          scope.humanJudgmentMode === 'summary'
+            ? undefined
+            : (getHumanAnswersByPrompt(scope.promptIds, humanRowsByArticle.get(article.id) ?? []) ?? undefined),
         journalTitle: article.sourceMetadata.journalTitle,
         sourceMetadata: article.sourceMetadata,
       }
@@ -2283,22 +2360,20 @@ export const queryArticlesReviewsBothFromDuckdb = async (
     scope,
     requireAllLlmJudgments: true,
   })
-  const humanRowsByArticle = getHumanRowsByArticleId(
-    await getHumanAnswerRows(
-      scope,
-      scopedArticles.map((article) => {
-        return article.id
-      }),
-    ),
-  )
+  const articleIds = scopedArticles.map((article) => {
+    return article.id
+  })
+  const humanRowsByArticle = getHumanRowsByArticleId(await getHumanAnswerRows(scope, articleIds))
+  const humanSummaryRowsByArticle = getHumanSummaryRowsByArticleId(await getHumanSummaryRows(scope, articleIds))
   const filteredArticles = scopedArticles.filter((article) => {
-    const humanRows = humanRowsByArticle.get(article.id) ?? []
-    return getHasAllProjectPrompts(
-      scope.promptIds,
-      humanRows.filter((row) => {
-        return getHasHumanAnswer(row.answer)
-      }),
-    )
+    return scope.humanJudgmentMode === 'summary'
+      ? getHumanSummaryAnswer(humanSummaryRowsByArticle.get(article.id)) !== null
+      : getHasAllProjectPrompts(
+          scope.promptIds,
+          (humanRowsByArticle.get(article.id) ?? []).filter((row) => {
+            return getHasHumanAnswer(row.answer)
+          }),
+        )
   })
   const totalCount = filteredArticles.length
   const totalPages = totalCount > 0 ? Math.ceil(totalCount / params.limit) : 0
@@ -2313,7 +2388,13 @@ export const queryArticlesReviewsBothFromDuckdb = async (
       articleCreatedAt: article.articleCreatedAt,
       articleUpdatedAt: article.articleUpdatedAt,
       judgments: llmRows,
-      humanAnswersByPrompt: getHumanAnswersByPrompt(scope.promptIds, humanRows) ?? undefined,
+      humanJudgmentMode: scope.humanJudgmentMode,
+      humanSummaryAnswer: getHumanSummaryAnswer(humanSummaryRowsByArticle.get(article.id)) ?? undefined,
+      llmSummaryAnswer: getLlmSummaryAnswer(scope, llmRows) ?? undefined,
+      humanAnswersByPrompt:
+        scope.humanJudgmentMode === 'summary'
+          ? undefined
+          : (getHumanAnswersByPrompt(scope.promptIds, humanRows) ?? undefined),
       journalTitle: article.sourceMetadata.journalTitle,
       sourceMetadata: article.sourceMetadata,
     }
@@ -2859,6 +2940,26 @@ const getHumanReviewedArticleIdsFromDuckdbRaw = async (params: {
   search?: string | null
 }) => {
   const scopedArticles = await getScopedArticles({...params, orderBy: 'created'})
+
+  if (params.scope.humanJudgmentMode === 'summary') {
+    const humanSummaryRowsByArticle = getHumanSummaryRowsByArticleId(
+      await getHumanSummaryRows(
+        params.scope,
+        scopedArticles.map((article) => {
+          return article.id
+        }),
+      ),
+    )
+
+    return scopedArticles
+      .filter((article) => {
+        return getHumanSummaryAnswer(humanSummaryRowsByArticle.get(article.id)) !== null
+      })
+      .map((article) => {
+        return article.id
+      })
+  }
+
   const humanRowsByArticle = getHumanRowsByArticleId(
     await getHumanAnswerRows(
       params.scope,

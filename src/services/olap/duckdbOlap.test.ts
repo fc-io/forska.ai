@@ -44,29 +44,67 @@ const getPromptFilter = (
 }
 
 const getPromptRows = () => {
-  return [{id: 'prompt-1', order: 0, promptHeading: 'Prompt 1', originalText: 'Prompt 1', type: 'string'}]
+  return [
+    {
+      id: 'prompt-1',
+      order: 0,
+      promptHeading: 'Prompt 1',
+      originalText: 'Prompt 1',
+      type: 'string',
+      criteriaDisposition: 'include',
+    },
+  ]
 }
 
 const getPromptRowsWithTie = () => {
   return [
-    {id: 'prompt-1', order: 0, promptHeading: 'Prompt 1', originalText: 'Prompt 1', type: 'string'},
-    {id: 'prompt-2', order: 0, promptHeading: 'Prompt 2', originalText: 'Prompt 2', type: 'string'},
+    {
+      id: 'prompt-1',
+      order: 0,
+      promptHeading: 'Prompt 1',
+      originalText: 'Prompt 1',
+      type: 'string',
+      criteriaDisposition: 'include',
+    },
+    {
+      id: 'prompt-2',
+      order: 0,
+      promptHeading: 'Prompt 2',
+      originalText: 'Prompt 2',
+      type: 'string',
+      criteriaDisposition: 'exclude',
+    },
   ]
 }
 
 const getPromptRowsWithTwoPrompts = () => {
   return [
-    {id: 'prompt-1', order: 0, promptHeading: 'Prompt 1', originalText: 'Prompt 1', type: 'string'},
-    {id: 'prompt-2', order: 1, promptHeading: 'Prompt 2', originalText: 'Prompt 2', type: 'string'},
+    {
+      id: 'prompt-1',
+      order: 0,
+      promptHeading: 'Prompt 1',
+      originalText: 'Prompt 1',
+      type: 'string',
+      criteriaDisposition: 'include',
+    },
+    {
+      id: 'prompt-2',
+      order: 1,
+      promptHeading: 'Prompt 2',
+      originalText: 'Prompt 2',
+      type: 'string',
+      criteriaDisposition: 'exclude',
+    },
   ]
 }
 
-const getProjectRows = (modelId: string | null) => {
+const getProjectRows = (modelId: string | null, humanJudgmentMode: 'prompt' | 'summary' = 'prompt') => {
   return [
     {
       id: 'project-1',
       dateFrom: null,
       dateTo: null,
+      humanJudgmentMode,
       modelId,
       useTitle: true,
       useAbstract: true,
@@ -1260,6 +1298,43 @@ test('selectArticleIdsByFilterDuckdb both keeps complete llm requirement on serv
   expect(result).toEqual(['article-1'])
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('s.has_all_llm_judgments = TRUE')
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('s.has_all_human_answers = TRUE')
+})
+
+test('queryArticlesReviewsBothFromDuckdb exposes summary answers for summary-mode serving rows', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1', 'summary'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [{totalCount: 1}],
+    [
+      {
+        articleId: 'article-1',
+        articleTitle: 'Article 1',
+        articleCreatedAt: '2024-01-02T00:00:00.000Z',
+        articleUpdatedAt: '2024-01-03T00:00:00.000Z',
+        sourceMetadata: {journalTitle: 'Journal 1'},
+      },
+    ],
+    [],
+    [
+      getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-1', answeredOriginal: 'yes'}),
+      getDuckdbJudgmentRow({id: 'judgment-2', articleId: 'article-1', promptId: 'prompt-2', answeredOriginal: 'no'}),
+    ],
+    [{articleId: 'article-1', answer: 'no', updatedAt: '2024-01-04T00:00:00.000Z'}],
+  ])
+
+  const {queryArticlesReviewsBothFromDuckdb} = await loadDuckdbOlap()
+  const result = await queryArticlesReviewsBothFromDuckdb({projectId: 'project-1', page: 1, limit: 10})
+
+  expect(result.data[0]).toMatchObject({
+    id: 'article-1',
+    humanJudgmentMode: 'summary',
+    humanSummaryAnswer: 'no',
+    llmSummaryAnswer: 'yes',
+  })
+  expect(result.data[0]?.humanAnswersByPrompt).toBeUndefined()
+  expect(duckdbRunnerMockRef.current.queries[8]).toContain('FROM app.judgment_human_summary')
 })
 
 test('selectArticleIdsByFilterDuckdb keeps llm selection working when project modelId is null', async () => {

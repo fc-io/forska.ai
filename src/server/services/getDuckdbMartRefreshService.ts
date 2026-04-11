@@ -1100,25 +1100,17 @@ const getProjectReviewArticleRollupBatchInsertSql = (projectId: string, articleI
       SELECT
         judgment_human_summary.project_id,
         judgment_human_summary.article_id,
-        COALESCE(prompt_count.enabled_prompt_count, 0) AS human_answered_prompt_count,
-        enabled_prompt.prompt_ids AS human_answered_prompt_ids,
+        1 AS human_answered_prompt_count,
+        ['summary'] AS human_answered_prompt_ids,
         MAX(judgment_human_summary.updated_at) AS latest_human_updated_at
       FROM app.judgment_human_summary judgment_human_summary
       INNER JOIN app.project project
         ON project.id = judgment_human_summary.project_id
        AND project.human_judgment_mode = 'summary'
-      LEFT JOIN enabled_project_prompt_count prompt_count
-        ON prompt_count.project_id = judgment_human_summary.project_id
-      LEFT JOIN (
-        SELECT project_id, LIST(prompt_id) AS prompt_ids
-        FROM enabled_project_prompt
-        GROUP BY project_id
-      ) enabled_prompt
-        ON enabled_prompt.project_id = judgment_human_summary.project_id
       WHERE judgment_human_summary.project_id = ${projectLiteral}
         AND judgment_human_summary.article_id IN (${articleIdsSql})
         AND NULLIF(TRIM(COALESCE(judgment_human_summary.answer, '')), '') IS NOT NULL
-      GROUP BY judgment_human_summary.project_id, judgment_human_summary.article_id, prompt_count.enabled_prompt_count, enabled_prompt.prompt_ids
+      GROUP BY judgment_human_summary.project_id, judgment_human_summary.article_id
     ),
     human_project_rollup AS (
       SELECT * FROM prompt_mode_human_project_rollup
@@ -1159,8 +1151,11 @@ const getProjectReviewArticleRollupBatchInsertSql = (projectId: string, articleI
       human_rollup.human_answered_prompt_ids,
       COALESCE(prompt_count.enabled_prompt_count, 0) > 0
         AND COALESCE(llm_rollup.llm_judged_prompt_count, 0) = COALESCE(prompt_count.enabled_prompt_count, 0) AS has_all_llm_judgments,
-      COALESCE(prompt_count.enabled_prompt_count, 0) > 0
-        AND COALESCE(human_rollup.human_answered_prompt_count, 0) = COALESCE(prompt_count.enabled_prompt_count, 0) AS has_all_human_answers,
+      CASE
+        WHEN project.human_judgment_mode = 'summary' THEN COALESCE(human_rollup.human_answered_prompt_count, 0) > 0
+        ELSE COALESCE(prompt_count.enabled_prompt_count, 0) > 0
+          AND COALESCE(human_rollup.human_answered_prompt_count, 0) = COALESCE(prompt_count.enabled_prompt_count, 0)
+      END AS has_all_human_answers,
       scope_article.in_curated_scope,
       scope_article.in_route_scope,
       COALESCE(review_state.review_opened, FALSE) AS review_opened,
@@ -1170,6 +1165,7 @@ const getProjectReviewArticleRollupBatchInsertSql = (projectId: string, articleI
       review_state.latest_review_updated_at,
       current_timestamp AS rollup_updated_at
     FROM mart.project_scope_article scope_article
+    INNER JOIN app.project project ON project.id = scope_article.project_id
     LEFT JOIN enabled_project_prompt_count prompt_count ON prompt_count.project_id = scope_article.project_id
     LEFT JOIN llm_project_rollup llm_rollup
       ON llm_rollup.project_id = scope_article.project_id
@@ -2391,25 +2387,17 @@ const getProjectArticleServingRefreshSql = (projectId: string, articleId: string
       SELECT
         judgment_human_summary.project_id,
         judgment_human_summary.article_id,
-        COALESCE(prompt_count.enabled_prompt_count, 0) AS human_answered_prompt_count,
-        enabled_prompt.prompt_ids AS human_answered_prompt_ids,
+        1 AS human_answered_prompt_count,
+        ['summary'] AS human_answered_prompt_ids,
         MAX(judgment_human_summary.updated_at) AS latest_human_updated_at
       FROM app.judgment_human_summary judgment_human_summary
       INNER JOIN app.project project
         ON project.id = judgment_human_summary.project_id
        AND project.human_judgment_mode = 'summary'
-      LEFT JOIN enabled_project_prompt_count prompt_count
-        ON prompt_count.project_id = judgment_human_summary.project_id
-      LEFT JOIN (
-        SELECT project_id, LIST(prompt_id) AS prompt_ids
-        FROM enabled_project_prompt
-        GROUP BY project_id
-      ) enabled_prompt
-        ON enabled_prompt.project_id = judgment_human_summary.project_id
       WHERE judgment_human_summary.project_id = ${projectLiteral}
         AND judgment_human_summary.article_id = ${articleLiteral}
         AND NULLIF(TRIM(COALESCE(judgment_human_summary.answer, '')), '') IS NOT NULL
-      GROUP BY judgment_human_summary.project_id, judgment_human_summary.article_id, prompt_count.enabled_prompt_count, enabled_prompt.prompt_ids
+      GROUP BY judgment_human_summary.project_id, judgment_human_summary.article_id
     ),
     human_project_rollup AS (
       SELECT * FROM prompt_mode_human_project_rollup
@@ -2463,8 +2451,11 @@ const getProjectArticleServingRefreshSql = (projectId: string, articleId: string
       COALESCE(prompt_count.enabled_prompt_count, 0),
       COALESCE(human_rollup.human_answered_prompt_count, 0),
       human_rollup.human_answered_prompt_ids,
-      COALESCE(prompt_count.enabled_prompt_count, 0) > 0
-        AND COALESCE(human_rollup.human_answered_prompt_count, 0) = COALESCE(prompt_count.enabled_prompt_count, 0),
+      CASE
+        WHEN project.human_judgment_mode = 'summary' THEN COALESCE(human_rollup.human_answered_prompt_count, 0) > 0
+        ELSE COALESCE(prompt_count.enabled_prompt_count, 0) > 0
+          AND COALESCE(human_rollup.human_answered_prompt_count, 0) = COALESCE(prompt_count.enabled_prompt_count, 0)
+      END,
       COALESCE(review_state.review_opened, FALSE),
       COALESCE(review_state.review_sections_completed, 0),
       llm_rollup.latest_llm_created_at,
@@ -2472,6 +2463,7 @@ const getProjectArticleServingRefreshSql = (projectId: string, articleId: string
       review_state.latest_review_updated_at,
       current_timestamp
     FROM article_scope
+    INNER JOIN app.project project ON project.id = article_scope.project_id
     INNER JOIN app.article article ON article.id = article_scope.article_id
     LEFT JOIN enabled_project_prompt_count prompt_count ON prompt_count.project_id = article_scope.project_id
     LEFT JOIN llm_project_rollup llm_rollup

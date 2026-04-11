@@ -85,6 +85,7 @@ afterEach(() => {
 
 const getPromptRow = (id: string, order: number) => {
   return {
+    criteriaDisposition: order === 0 ? 'include' : 'exclude',
     enabled: true,
     id,
     order,
@@ -363,4 +364,61 @@ test('project review details surfaces running freshness while bypassing detail m
       return judgment.id
     }),
   ).toEqual(['judgment-fallback'])
+})
+
+test('project review details exposes summary-mode overall answers without prompt human map', async () => {
+  fullArticlesByIdsRef.current = async () => {
+    return [{articleTitle: 'Article 1', id: 'article-1'}]
+  }
+  projectReviewConfigRef.current = async () => {
+    return {
+      humanJudgmentMode: 'summary',
+      modelId: 'model-1',
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useTitle: true,
+    }
+  }
+  queryJsonRef.current = async (statement) => {
+    return statement.includes('FROM app.project_prompt pp')
+      ? [getPromptRow('prompt-1', 0), getPromptRow('prompt-2', 1)]
+      : statement.includes('FROM app.project_mart_refresh_state')
+        ? [getFreshnessRow()]
+        : statement.includes('FROM app.judgment j')
+          ? [
+              getArticleJudgmentRow({
+                judgmentId: 'judgment-1',
+                judgmentPromptId: 'prompt-1',
+                judgmentAnsweredOriginal: 'yes',
+                judgmentAnsweredOriginalAsArray: ['yes'],
+              }),
+              getArticleJudgmentRow({
+                judgmentId: 'judgment-2',
+                judgmentPromptId: 'prompt-2',
+                judgmentAnsweredOriginal: 'no',
+                judgmentAnsweredOriginalAsArray: ['no'],
+              }),
+            ]
+          : statement.includes('FROM app.judgment_human_summary jhs')
+            ? [
+                {
+                  judgmentId: 'human-summary-1',
+                  promptId: 'summary',
+                  answer: 'no',
+                  comment: null,
+                  promptOriginalText: 'Overall',
+                },
+              ]
+            : []
+  }
+
+  const response = await postReviewDetailsRequest()
+  const body = (await response.json()) as Record<string, unknown>
+
+  expect(response.status).toBe(200)
+  expect(body.humanJudgmentMode).toBe('summary')
+  expect(body.humanSummaryAnswer).toBe('no')
+  expect(body.llmSummaryAnswer).toBe('yes')
+  expect(body.humanAnswersByPrompt).toBeUndefined()
 })

@@ -63,7 +63,10 @@ export const projectsRoutesGetArticlesReviewsBoth = new Elysia().post(
             quotes: Array.isArray(j.quotes) ? j.quotes : null,
           }
         }),
-        humanAnswersByPrompt: article.humanAnswersByPrompt,
+        humanJudgmentMode: article.humanJudgmentMode,
+        humanSummaryAnswer: article.humanSummaryAnswer,
+        llmSummaryAnswer: article.llmSummaryAnswer,
+        ...(article.humanAnswersByPrompt ? {humanAnswersByPrompt: article.humanAnswersByPrompt} : {}),
       }
     })
 

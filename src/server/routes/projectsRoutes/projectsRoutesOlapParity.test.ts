@@ -357,6 +357,63 @@ test('articles reviews both route preserves page echo and missing-article fallba
   })
 })
 
+test('articles reviews both route preserves summary-mode overall answers', async () => {
+  reviewHydrationRowsRef.current = async () => {
+    return []
+  }
+  queryBothRef.current = async (): Promise<unknown> => {
+    return {
+      data: [
+        {
+          id: 'article-1',
+          articleTitle: 'Summary OLAP title',
+          articleCreatedAt: new Date('2024-02-01T00:00:00.000Z'),
+          articleUpdatedAt: null,
+          judgments: [],
+          humanJudgmentMode: 'summary',
+          humanSummaryAnswer: 'no',
+          llmSummaryAnswer: 'yes',
+          journalTitle: 'Journal 3',
+        },
+      ],
+      totalCount: 1,
+      page: 1,
+      limit: 10,
+      totalPages: 1,
+    }
+  }
+
+  const {projectsRoutesGetArticlesReviewsBoth} = await import('./projectsRoutesGetArticlesReviewsBoth.ts')
+  const app = new Elysia().use(projectsRoutesGetArticlesReviewsBoth)
+  const response = await app.handle(
+    new Request('http://localhost/api/articlesreviewsboth', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({projectId: 'project-1', page: '1', limit: '10', prompts: {}}),
+    }),
+  )
+  const data = (await response.json()) as {data: Array<Record<string, unknown>>}
+
+  expect(response.status).toBe(200)
+  expect(data.data[0]).toEqual({
+    id: 'article-1',
+    articleTitle: 'Summary OLAP title',
+    articleCreatedAt: '2024-02-01T00:00:00.000Z',
+    articleUpdatedAt: null,
+    journalTitle: 'Journal 3',
+    articleId: null,
+    url: null,
+    fullTextPDF: null,
+    fullTextFetchedAt: null,
+    fullTextConversionStatus: null,
+    sourceMetadata: null,
+    judgments: [],
+    humanJudgmentMode: 'summary',
+    humanSummaryAnswer: 'no',
+    llmSummaryAnswer: 'yes',
+  })
+})
+
 test('articles reviews unassessed route preserves olap ordering after sqlite hydration', async () => {
   projectReviewConfigRef.current = async () => {
     return {

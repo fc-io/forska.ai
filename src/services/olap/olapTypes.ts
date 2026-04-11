@@ -109,7 +109,10 @@ export type ArticleReviewsBothResult = {
   fullTextConversionStatus?: string | null
   sourceMetadata?: unknown
   judgments: ArticlesReviewsBothJudgmentRow[]
+  humanJudgmentMode?: 'prompt' | 'summary'
   humanAnswersByPrompt?: HumanAnswersByPrompt
+  humanSummaryAnswer?: 'yes' | 'no' | 'maybe' | null
+  llmSummaryAnswer?: 'yes' | 'no' | 'maybe' | null
   journalTitle: string | null
 }
 
