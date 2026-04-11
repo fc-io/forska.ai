@@ -122,6 +122,7 @@ test('claims ready rows from the per-job SQLite queue', async () => {
   `)
 
   await sqliteService.initializeJob(jobId)
+  await sqliteService.releaseOwnedLease(jobId)
   await sqliteService.addReadyPrompts(
     jobId,
     [

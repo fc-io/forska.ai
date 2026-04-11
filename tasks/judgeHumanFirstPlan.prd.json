@@ -40,11 +40,12 @@
         "`bun run lint` passes"
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": "Preserve legacy DB upgrade safety. Existing queued rows must remain stable, and readonly or preflight checks must not fail simply because the DB predates the new column.",
       "dependsOn": [
         "US-001"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-003",
@@ -99,6 +100,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-04-11T12:15:15.266Z"
+    "updatedAt": "2026-04-11T12:20:39.708Z"
   }
 }
