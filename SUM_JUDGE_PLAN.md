@@ -17,9 +17,13 @@
 ## Core Decision
 
 - Implement the clean model now, not a phased compatibility model for new writes.
-- Add a project-level human judgment granularity flag so summary-mode projects are explicit.
+- Add an explicit project-level summary mode switch so summary behavior is configured, not inferred.
+- Model that switch as `app.project.human_judgment_granularity` with values `'prompt' | 'summary'` rather than a bare boolean.
+- Gate all summary storage, rollup, query, and UI behavior off that project setting.
 - Persist Covidence criteria metadata on `app.project_prompt`, not `app.prompt`, so summary behavior stays project-local.
 - Persist imported human screening decisions in a dedicated summary table, not in `app.judgment_human`.
+- Keep `app.judgment_human` for ordinary prompt-by-prompt human assessments only.
+- Keep `app.judgment` for ordinary AI prompt-level judgments only.
 - Derive the AI summary answer from existing prompt judgments. Do not create a synthetic summary prompt and do not make an LLM call.
 
 ## Strict Summary Rule
@@ -35,7 +39,9 @@
 ## Data Model Changes
 
 - Add `app.project.human_judgment_granularity VARCHAR NOT NULL DEFAULT 'prompt'`.
+- This is the explicit project-level summary enable state.
 - Use `'summary'` for Covidence screening projects that should compare one imported human decision against derived AI summary output.
+- Use `'prompt'` for existing prompt-by-prompt human review workflows.
 - Add nullable metadata columns on `app.project_prompt`:
   - `criteria_disposition`
   - `criteria_section_key`
@@ -51,6 +57,10 @@
   - `created_at`
   - `updated_at`
   - `UNIQUE(project_id, article_id)`
+- Storage split:
+  - `app.judgment_human_summary` stores one overall human screening answer per `(project_id, article_id)` when the project is in summary mode.
+  - `app.judgment_human` stores prompt-level human answers only for prompt-mode projects and manual prompt-based review flows.
+  - `app.judgment` continues to store AI prompt-level judgments only.
 
 ## Scope Now
 
@@ -87,6 +97,7 @@
    - Create a DuckDB migration for `project.human_judgment_granularity`.
    - Create a DuckDB migration for `project_prompt` criteria metadata columns.
    - Create `app.judgment_human_summary` with indexes aligned to project/article lookups.
+   - Ensure all new summary logic keys off `project.human_judgment_granularity = 'summary'` instead of guessing from import source or row shape.
 
 2. Centralize summary-answer derivation.
    - Add one shared helper that accepts project-prompt metadata plus normalized answers and returns `yes | no | maybe | null`.
@@ -97,7 +108,7 @@
    - Persist `criteria_disposition`, `criteria_section_key`, and `criteria_section_label` when linking prompts to the project.
    - Stop seeding duplicated prompt rows into `app.judgment_human` for these projects.
    - Seed one row per article into `app.judgment_human_summary` using the existing Covidence stage-based answer.
-   - Keep `app.judgment_human` for true prompt-level manual human workflows only.
+   - Keep `app.judgment_human` untouched for true prompt-level manual human workflows only.
 
 4. Update mart and OLAP rollups.
    - Extend rollup/serving refresh logic to read `app.judgment_human_summary` for summary-mode projects.
@@ -107,6 +118,7 @@
 
 5. Update review routes and payloads.
    - Return `humanSummaryAnswer` and `llmSummaryAnswer` from article review detail.
+   - Return `humanSummaryAnswer` and `llmSummaryAnswer` from `articlesreviewsboth` rows for summary-mode projects.
    - Return project prompt criteria metadata needed to label the AI sections cleanly.
    - For summary-mode projects, stop returning fake per-prompt `humanAnswersByPrompt` data derived from duplicated rows.
    - Switch summary-mode human article queries and filter queries to `app.judgment_human_summary`.
@@ -115,7 +127,9 @@
    - Add an overall decision card near the top of the review sidebar showing human and AI summary answers together.
    - Keep the AI section list below it so reviewers can still inspect inclusion and exclusion prompts individually.
    - In summary mode, stop rendering imported human answers as if they belong to each prompt.
-   - In summary mode, review tables should compare `llmSummaryAnswer` against `humanSummaryAnswer` instead of coloring prompt chips against duplicated human prompt answers.
+   - In summary mode, the `reviews both` comparison label on the right should compare only `llmSummaryAnswer` against `humanSummaryAnswer`.
+   - Keep the current compact `Y`, `N`, `M` label style and the same green/yellow/red agreement coloring, but drive it from summary-vs-summary comparison instead of prompt-level human rows.
+   - Do not append per-prompt human comparison letters in summary mode.
 
 7. Guard prompt-based human assessment routes.
    - Reject or explicitly disable `HumanAssessmentRoutes` for summary-mode projects in this first pass.
@@ -150,7 +164,7 @@
 - AI overall decision is derived from prompt judgments with the strict inclusion/exclusion rule.
 - Review detail shows one overall human answer and one overall AI answer.
 - AI prompt-level sections remain visible for inspection.
-- Summary-mode review tables no longer compare AI prompt answers against duplicated human prompt answers.
+- Summary-mode `reviews both` rows compare only overall human vs overall AI summaries in the right-side comparison label, with the existing `Y/N/M` label style and agreement colors preserved.
 - Prompt-mode projects keep their existing behavior.
 
 ## Quality Gates
