@@ -101,6 +101,7 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
       projectConfig: {
         dateFrom: string
         dateTo: string | null
+        humanJudgmentMode: 'prompt' | 'summary'
         importRouteIds: string[]
         modelId: string
         useTitle: boolean
@@ -132,6 +133,7 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
     expect(parsed.projectConfig).toEqual({
       dateFrom: '2024-01-01T00:00:00.000Z',
       dateTo: null,
+      humanJudgmentMode: 'prompt',
       importRouteIds: ['route-1'],
       modelId: 'model-1',
       useTitle: true,

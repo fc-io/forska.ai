@@ -154,6 +154,9 @@ const projectPromptCreateSql = `
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     archived BOOLEAN NOT NULL DEFAULT FALSE,
     origin_project_id VARCHAR REFERENCES app.project(id),
+    criteria_disposition project_prompt_criteria_disposition,
+    criteria_section_key VARCHAR,
+    criteria_section_label VARCHAR,
     created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
     UNIQUE(project_id, prompt_id)
@@ -212,6 +215,19 @@ const judgmentHumanCreateSql = `
     created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
     UNIQUE(project_id, article_id, prompt_id)
+  )
+`
+
+const judgmentHumanSummaryCreateSql = `
+  CREATE TABLE app.judgment_human_summary (
+    id VARCHAR PRIMARY KEY,
+    project_id VARCHAR NOT NULL REFERENCES app.project(id),
+    article_id VARCHAR NOT NULL REFERENCES app.article(id),
+    answer VARCHAR CHECK (answer IN ('yes', 'no', 'maybe') OR answer IS NULL),
+    origin VARCHAR NOT NULL CHECK (origin IN ('covidence_import', 'manual_override')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    UNIQUE(project_id, article_id)
   )
 `
 
@@ -559,6 +575,9 @@ const rebuildProjectDeleteTablesTx = async (tx: AppTx, projectIds: string[]) => 
         enabled,
         archived,
         CASE WHEN origin_project_id IN (${projectIdsSql}) THEN NULL ELSE origin_project_id END AS origin_project_id,
+        criteria_disposition,
+        criteria_section_key,
+        criteria_section_label,
         created_at,
         updated_at
       FROM app.project_prompt
@@ -585,6 +604,17 @@ const rebuildProjectDeleteTablesTx = async (tx: AppTx, projectIds: string[]) => 
     `,
     tableName: 'app.judgment_human',
     tempPrefix: 'delete_archived_judgment_human',
+  })
+
+  await rebuildTableTx(tx, {
+    createSql: judgmentHumanSummaryCreateSql,
+    selectSql: `
+      SELECT *
+      FROM app.judgment_human_summary
+      WHERE project_id NOT IN (${projectIdsSql})
+    `,
+    tableName: 'app.judgment_human_summary',
+    tempPrefix: 'delete_archived_judgment_human_summary',
   })
 
   await rebuildTableTx(tx, {

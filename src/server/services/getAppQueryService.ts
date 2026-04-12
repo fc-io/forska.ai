@@ -321,6 +321,7 @@ const getFullArticlesByIds = async (
 }
 
 const getProjectReviewConfig = async (projectId: string): Promise<ProjectReviewConfig | null> => {
+  const columnNames = await getAppTableColumnNames('project')
   const [projectRows, routeRows] = await Promise.all([
     getAppDatabaseService().queryJson<{
       dateFrom: unknown
@@ -335,7 +336,7 @@ const getProjectReviewConfig = async (projectId: string): Promise<ProjectReviewC
       SELECT
         date_from AS dateFrom,
         date_to AS dateTo,
-        human_judgment_mode AS humanJudgmentMode,
+        ${getOptionalColumnSelect({alias: 'humanJudgmentMode', columnName: 'human_judgment_mode', columnNames})},
         model_id AS modelId,
         use_title AS useTitle,
         use_abstract AS useAbstract,

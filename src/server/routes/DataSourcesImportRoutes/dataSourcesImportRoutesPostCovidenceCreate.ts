@@ -4,9 +4,9 @@ import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
 import {queueImportedArticleRefreshes} from '../../services/articleImportStoreService.ts'
 import {
+  buildCovidencePackageConfig,
   buildCovidencePromptDefinition,
   buildCovidencePromptDefinitionsForEligibilityFields,
-  buildCovidencePackageConfig,
   deleteCovidencePackageFiles,
   getCovidencePackageCursor,
   getOrCreateCovidenceProject,
@@ -66,6 +66,15 @@ const getCovidencePromptDefinitions = (body: {
           answerSet: body.answerSet,
           eligibilityFields,
           mode: body.mode,
+        }).map((promptDefinition, index) => {
+          const eligibilityField = eligibilityFields[index]
+
+          return {
+            ...promptDefinition,
+            criteriaDisposition: promptDefinition.criteriaDisposition ?? eligibilityField?.disposition,
+            criteriaSectionKey: promptDefinition.criteriaSectionKey ?? eligibilityField?.sectionKey,
+            criteriaSectionLabel: promptDefinition.criteriaSectionLabel ?? eligibilityField?.sectionLabel,
+          }
         })
   }
 
@@ -112,7 +121,14 @@ export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
       const covidencePrompts = covidencePromptDefinitions
         ? await Promise.all(
             covidencePromptDefinitions.map(async (promptDefinition) => {
-              return await getOrCreateCovidencePrompt({promptDefinition, tx})
+              const covidencePrompt = await getOrCreateCovidencePrompt({promptDefinition, tx})
+
+              return {
+                ...covidencePrompt,
+                criteriaDisposition: covidencePrompt.criteriaDisposition ?? promptDefinition.criteriaDisposition,
+                criteriaSectionKey: covidencePrompt.criteriaSectionKey ?? promptDefinition.criteriaSectionKey,
+                criteriaSectionLabel: covidencePrompt.criteriaSectionLabel ?? promptDefinition.criteriaSectionLabel,
+              }
             }),
           )
         : []
