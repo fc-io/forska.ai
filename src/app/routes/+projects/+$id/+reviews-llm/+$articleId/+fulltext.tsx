@@ -120,6 +120,8 @@ export const ReviewDetailFulltext = () => {
                       setArticleViewToShow={setArticleViewToShow}
                       humanJudgmentMode={data().humanJudgmentMode}
                       humanAnswersByPrompt={data().humanAnswersByPrompt}
+                      humanSummaryAnswer={data().humanSummaryAnswer}
+                      llmSummaryAnswer={data().llmSummaryAnswer}
                     />
                     <ReviewHumanAssessments groups={data().humanAssessmentsByUser} />
                     <ReviewAvailableJudgments

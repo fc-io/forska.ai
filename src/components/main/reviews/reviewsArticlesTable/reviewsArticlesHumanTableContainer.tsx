@@ -71,14 +71,18 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
               <div class="space-y-4">
                 <div class="p-4 bg-white rounded-lg shadow">
                   <h3 class="text-lg font-semibold mb-2">
-                    Articles with Human Judgments (
+                    {response().humanJudgmentMode === 'summary'
+                      ? 'Articles with Overall Human Answers ('
+                      : 'Articles with Human Judgments ('}
                     {response().totalCount > 0
                       ? `Showing ${Math.min((response().page - 1) * props.pageLimit() + 1, response().totalCount)}-${Math.min(response().page * props.pageLimit(), response().totalCount)} of ${response().totalCount}`
                       : '0'}
                     )
                   </h3>
                   <p class="text-sm text-gray-600">
-                    Showing articles that have human judgments for all prompts in this project
+                    {response().humanJudgmentMode === 'summary'
+                      ? 'Showing articles that have an overall human screening answer in this project'
+                      : 'Showing articles that have human judgments for all prompts in this project'}
                     {Object.keys(props.promptFilters()).some((k) => {
                       const v = props.promptFilters()[k]
                       return Array.isArray(v) && v.length > 0
@@ -133,7 +137,9 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
                   when={response().data.length > 0}
                   fallback={
                     <div class="p-8 text-center text-gray-500">
-                      No articles found with complete human judgments
+                      {response().humanJudgmentMode === 'summary'
+                        ? 'No articles found with overall human answers'
+                        : 'No articles found with complete human judgments'}
                       {Object.keys(props.promptFilters()).some((k) => {
                         const v = props.promptFilters()[k]
                         return Array.isArray(v) && v.length > 0
@@ -146,6 +152,7 @@ export const ReviewsArticlesHumanTableContainer = (props: ReviewsArticlesHumanTa
                     articles={response().data}
                     rowSelection={rowSelection}
                     setRowSelection={setRowSelection}
+                    humanJudgmentMode={response().humanJudgmentMode}
                   />
                 </Show>
 

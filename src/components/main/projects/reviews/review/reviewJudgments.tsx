@@ -31,6 +31,26 @@ type ReviewJudgmentsProps = {
   setArticleViewToShow: SetArticleViewToShow
   humanJudgmentMode?: 'prompt' | 'summary'
   humanAnswersByPrompt?: Record<string, HumanAnswer[]>
+  humanSummaryAnswer?: string | null
+  llmSummaryAnswer?: string | null
+}
+
+const toSummaryAnswerLabel = (answer: string | null | undefined) => {
+  const normalized = String(answer ?? '')
+    .trim()
+    .toLowerCase()
+
+  return normalized === 'yes'
+    ? 'Y'
+    : normalized === 'no'
+      ? 'N'
+      : normalized === 'maybe'
+        ? 'M'
+        : normalized === 'unsure'
+          ? 'U'
+          : normalized.length > 0
+            ? normalized.slice(0, 1).toUpperCase()
+            : '-'
 }
 
 export const ReviewJudgments = (props: ReviewJudgmentsProps) => {
@@ -42,6 +62,23 @@ export const ReviewJudgments = (props: ReviewJudgmentsProps) => {
 
   const count = () => {
     return props.judgments?.length ?? 0
+  }
+
+  const summaryAgreementClass = () => {
+    const llm = String(props.llmSummaryAnswer ?? '')
+      .trim()
+      .toLowerCase()
+    const human = String(props.humanSummaryAnswer ?? '')
+      .trim()
+      .toLowerCase()
+
+    return !llm || !human
+      ? 'bg-gray-50 border-gray-200'
+      : llm === human
+        ? 'bg-green-50 border-green-200'
+        : llm === 'maybe' || human === 'maybe'
+          ? 'bg-yellow-50 border-yellow-200'
+          : 'bg-red-50 border-red-200'
   }
 
   return (
@@ -74,6 +111,31 @@ export const ReviewJudgments = (props: ReviewJudgmentsProps) => {
       </div>
 
       <Show when={isOpen()}>
+        <Show when={props.humanJudgmentMode === 'summary'}>
+          <div class={`mx-4 mt-4 rounded-lg border p-3 ${summaryAgreementClass()}`}>
+            <div class="text-xs font-semibold uppercase tracking-wide text-gray-600">Overall decision</div>
+            <div class="mt-3 grid grid-cols-2 gap-3">
+              <div>
+                <div class="text-[11px] font-medium text-gray-500">Human</div>
+                <div class="mt-1 flex items-center gap-2">
+                  <span class="inline-flex h-7 w-7 items-center justify-center rounded bg-white text-sm font-semibold text-gray-900 ring-1 ring-inset ring-gray-200">
+                    {toSummaryAnswerLabel(props.humanSummaryAnswer)}
+                  </span>
+                  <span class="text-sm text-gray-700">{props.humanSummaryAnswer ?? '-'}</span>
+                </div>
+              </div>
+              <div>
+                <div class="text-[11px] font-medium text-gray-500">AI</div>
+                <div class="mt-1 flex items-center gap-2">
+                  <span class="inline-flex h-7 w-7 items-center justify-center rounded bg-white text-sm font-semibold text-gray-900 ring-1 ring-inset ring-gray-200">
+                    {toSummaryAnswerLabel(props.llmSummaryAnswer)}
+                  </span>
+                  <span class="text-sm text-gray-700">{props.llmSummaryAnswer ?? '-'}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </Show>
         <Show
           when={props.judgments && props.judgments.length > 0}
           fallback={<p class="text-gray-500 p-4">No judgments available</p>}

@@ -20,13 +20,17 @@ declare module '@tanstack/solid-table' {
 
 type HumanJudgmentType = JudgmentHumanRecord
 
-type ArticleWithHumanJudgments = Omit<ArticleRecord, 'judgments'> & {judgments: Array<HumanJudgmentType>}
+type ArticleWithHumanJudgments = Omit<ArticleRecord, 'judgments'> & {
+  judgments: Array<HumanJudgmentType>
+  humanJudgmentMode?: 'prompt' | 'summary'
+}
 
 interface ReviewsArticlesHumanTableProps {
   articles: ArticleWithHumanJudgments[]
   projectId: string
   rowSelection: Accessor<Record<string, boolean>>
   setRowSelection: Setter<Record<string, boolean>>
+  humanJudgmentMode?: 'prompt' | 'summary'
 }
 
 const selectionColumn: ColumnDef<ArticleWithHumanJudgments, unknown> = {
@@ -194,6 +198,9 @@ const columns: ColumnDef<ArticleWithHumanJudgments, unknown>[] = [
 ]
 
 export const ReviewsArticlesHumanTable = (props: ReviewsArticlesHumanTableProps) => {
+  const judgmentsHeader = () => {
+    return props.humanJudgmentMode === 'summary' ? 'Overall Answer' : 'Human Judgments'
+  }
   const projectId = () => {
     return props.projectId
   }
@@ -204,7 +211,16 @@ export const ReviewsArticlesHumanTable = (props: ReviewsArticlesHumanTableProps)
     get data() {
       return props.articles
     },
-    columns,
+    columns: columns.map((column) => {
+      return column.id === 'judgments'
+        ? {
+            ...column,
+            header: () => {
+              return judgmentsHeader()
+            },
+          }
+        : column
+    }),
     getCoreRowModel: getCoreRowModel(),
     meta: {projectId, rowSelection},
     enableRowSelection: true,

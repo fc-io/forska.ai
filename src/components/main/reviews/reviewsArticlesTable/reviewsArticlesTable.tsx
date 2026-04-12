@@ -228,6 +228,16 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
         return (s ?? '').toString().trim().toLowerCase()
       }
 
+      const getSummaryComparisonClass = (llmAnswer: string, humanAnswer: string) => {
+        return !llmAnswer || !humanAnswer
+          ? 'bg-gray-100 text-gray-800'
+          : llmAnswer === humanAnswer
+            ? 'bg-green-100 text-green-800'
+            : llmAnswer === 'maybe' || humanAnswer === 'maybe'
+              ? 'bg-yellow-100 text-yellow-800'
+              : 'bg-red-100 text-red-800'
+      }
+
       const labelFor = (s?: string | null, asArray?: string[] | null) => {
         // If we have an array representation, show count
         if (asArray && Array.isArray(asArray) && asArray.length > 0) {
@@ -322,12 +332,7 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
               const llmAnswer = norm(row.llmSummaryAnswer)
               const humanAnswer = norm(row.humanSummaryAnswer)
               const hasHumanAnswer = Boolean(humanAnswer)
-              const cls =
-                !llmAnswer || !hasHumanAnswer
-                  ? 'bg-gray-100 text-gray-800'
-                  : llmAnswer === humanAnswer
-                    ? 'bg-green-100 text-green-800'
-                    : 'bg-red-100 text-red-800'
+              const cls = getSummaryComparisonClass(llmAnswer, humanAnswer)
               const text = !llmAnswer
                 ? '—'
                 : !hasHumanAnswer
