@@ -2168,6 +2168,165 @@ test('mart refresh updates serving rows incrementally after a judgment answer ch
   }
 })
 
+test('mart refresh computes summary-mode human completeness from summary judgments', () => {
+  const duckdbPath = `/tmp/f1-mart-refresh-summary-human-${Date.now()}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts')
+
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+          VALUES ('connection-summary-human-test', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+        \`)
+        await database.run(\`
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+          VALUES ('model-summary-human-test', 'connection-summary-human-test', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.project (
+            id,
+            name,
+            model_id,
+            human_judgment_mode,
+            use_title,
+            use_abstract,
+            use_fulltext,
+            use_fulltext_no_images
+          )
+          VALUES ('project-summary-human-test', 'Summary Human Project', 'model-summary-human-test', 'summary', TRUE, TRUE, FALSE, FALSE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.prompt (id, original_text, content_hash)
+          VALUES
+            ('prompt-summary-human-1', 'Prompt one', 'hash-summary-human-1'),
+            ('prompt-summary-human-2', 'Prompt two', 'hash-summary-human-2')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled, criteria_disposition)
+          VALUES
+            ('project-prompt-summary-human-1', 'project-summary-human-test', 'prompt-summary-human-1', 0, TRUE, 'include'),
+            ('project-prompt-summary-human-2', 'project-summary-human-test', 'prompt-summary-human-2', 1, TRUE, 'exclude')
+        \`)
+        await database.run(\`
+          INSERT INTO app.article (id, article_title)
+          VALUES
+            ('article-summary-human-complete', 'Complete summary article'),
+            ('article-summary-human-missing', 'Missing summary article')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_article (id, project_id, article_id)
+          VALUES
+            ('project-article-summary-human-complete', 'project-summary-human-test', 'article-summary-human-complete'),
+            ('project-article-summary-human-missing', 'project-summary-human-test', 'article-summary-human-missing')
+        \`)
+        await database.run(\`
+          INSERT INTO app.judgment (
+            id,
+            article_id,
+            prompt_id,
+            model_id,
+            project_id,
+            snapshot_project_id,
+            use_title,
+            use_abstract,
+            use_fulltext,
+            use_fulltext_no_images,
+            is_answered,
+            answered_original,
+            answered_original_as_array,
+            confidence_original
+          )
+          VALUES
+            ('judgment-summary-human-complete-1', 'article-summary-human-complete', 'prompt-summary-human-1', 'model-summary-human-test', 'project-summary-human-test', 'project-summary-human-test', TRUE, TRUE, FALSE, FALSE, TRUE, 'yes', ['yes'], 90),
+            ('judgment-summary-human-complete-2', 'article-summary-human-complete', 'prompt-summary-human-2', 'model-summary-human-test', 'project-summary-human-test', 'project-summary-human-test', TRUE, TRUE, FALSE, FALSE, TRUE, 'no', ['no'], 90),
+            ('judgment-summary-human-missing-1', 'article-summary-human-missing', 'prompt-summary-human-1', 'model-summary-human-test', 'project-summary-human-test', 'project-summary-human-test', TRUE, TRUE, FALSE, FALSE, TRUE, 'yes', ['yes'], 90),
+            ('judgment-summary-human-missing-2', 'article-summary-human-missing', 'prompt-summary-human-2', 'model-summary-human-test', 'project-summary-human-test', 'project-summary-human-test', TRUE, TRUE, FALSE, FALSE, TRUE, 'no', ['no'], 90)
+        \`)
+        await database.run(\`
+          INSERT INTO app.judgment_human_summary (id, project_id, article_id, answer, origin)
+          VALUES ('human-summary-complete', 'project-summary-human-test', 'article-summary-human-complete', 'no', 'manual_override')
+        \`)
+
+        const martRefreshService = getDuckdbMartRefreshService()
+
+        await martRefreshService.queueProjectRefresh('project-summary-human-test', 'summary-human-test')
+        await martRefreshService.flush()
+
+        const rollupRows = await database.queryJson(\`
+          SELECT
+            article_id AS articleId,
+            enabled_prompt_count AS enabledPromptCount,
+            human_answered_prompt_count AS humanAnsweredPromptCount,
+            has_all_human_answers AS hasAllHumanAnswers
+          FROM mart.review_article_rollup
+          WHERE project_id = 'project-summary-human-test'
+          ORDER BY article_id ASC
+        \`)
+
+        console.log(JSON.stringify({rollupRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(
+        runScript.stderr.toString()
+          || runScript.stdout.toString()
+          || 'Mart summary-mode human completeness regression test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      rollupRows: Array<{
+        articleId: string
+        enabledPromptCount: number
+        humanAnsweredPromptCount: number
+        hasAllHumanAnswers: boolean
+      }>
+    }
+
+    expect(result.rollupRows).toEqual([
+      {
+        articleId: 'article-summary-human-complete',
+        enabledPromptCount: 2,
+        humanAnsweredPromptCount: 1,
+        hasAllHumanAnswers: true,
+      },
+      {
+        articleId: 'article-summary-human-missing',
+        enabledPromptCount: 2,
+        humanAnsweredPromptCount: 0,
+        hasAllHumanAnswers: false,
+      },
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+  }
+})
+
 test('mart refresh keeps serving marts scoped to the originating judgment project', () => {
   const duckdbPath = `/tmp/f1-mart-refresh-project-scoped-judgments-${Date.now()}.duckdb`
   const runScript = globalThis.Bun.spawnSync(

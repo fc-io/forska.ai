@@ -1210,6 +1210,173 @@ test('seedCovidenceHumanJudgmentsFromConfig treats disjoint screen irrelevant an
   }
 })
 
+test('syncCovidenceProjectPrompts persists summary-mode criteria metadata in prompt order', async () => {
+  const duckdbPath = `/tmp/f1-covidence-summary-prompt-metadata-${Date.now()}.duckdb`
+  const importRoute = `covidence:summary-prompt-metadata-${Date.now()}`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, covidenceImportService] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/covidenceImportService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const importRoute = ${JSON.stringify(importRoute)}
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, label, provider_kind, enabled)
+          VALUES ('pc-covidence-summary-prompt-metadata', 'Covidence provider', 'openai-compatible', TRUE);
+
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, enabled)
+          VALUES ('model-covidence-summary-prompt-metadata', 'pc-covidence-summary-prompt-metadata', 'gpt-covidence', 'gpt-covidence', TRUE);
+
+          INSERT INTO app.import_route (id, route, name, active)
+          VALUES ('route-covidence-summary-prompt-metadata', '\${importRoute}', '\${importRoute}', TRUE);
+        \`)
+
+        const promptDefinitions = covidenceImportService.buildCovidencePromptDefinitionsForEligibilityFields({
+          answerSet: 'yes|no|maybe',
+          eligibilityFields: [
+            {
+              disposition: 'include',
+              sectionKey: 'population',
+              sectionLabel: 'Population',
+              text: 'Adults with confirmed disease',
+            },
+            {
+              disposition: 'exclude',
+              sectionKey: 'other',
+              sectionLabel: 'Other',
+              text: 'Case reports',
+            },
+          ],
+          mode: 'title_abstract',
+        })
+        const prompts = await Promise.all(
+          promptDefinitions.map((definition) => {
+            return covidenceImportService.getOrCreateCovidencePrompt({promptDefinition: definition})
+          }),
+        )
+        const project = await covidenceImportService.getOrCreateCovidenceProject({
+          importRoute,
+          mode: 'title_abstract',
+          title: 'Covidence summary criteria project',
+        })
+
+        await covidenceImportService.syncCovidenceProjectPrompts({
+          projectId: project.id,
+          promptLinks: prompts.map((prompt, index) => {
+            const definition = promptDefinitions[index]
+
+            return {
+              promptId: prompt.id,
+              criteriaDisposition: definition?.criteriaDisposition,
+              criteriaSectionKey: definition?.criteriaSectionKey,
+              criteriaSectionLabel: definition?.criteriaSectionLabel,
+            }
+          }),
+        })
+
+        const [projectRow] = await database.queryJson(\`
+          SELECT human_judgment_mode AS humanJudgmentMode
+          FROM app.project
+          WHERE id = '\${project.id}'
+        \`)
+        const projectPromptRows = await database.queryJson(\`
+          SELECT
+            prompt_id AS promptId,
+            prompt_order AS promptOrder,
+            criteria_disposition AS criteriaDisposition,
+            criteria_section_key AS criteriaSectionKey,
+            criteria_section_label AS criteriaSectionLabel
+          FROM app.project_prompt
+          WHERE project_id = '\${project.id}'
+          ORDER BY prompt_order ASC
+        \`)
+
+        console.log(JSON.stringify({humanJudgmentMode: projectRow?.humanJudgmentMode ?? null, projectPromptRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39987',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39988',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to persist Covidence summary prompt metadata',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      humanJudgmentMode: string | null
+      projectPromptRows: Array<{
+        criteriaDisposition: string | null
+        criteriaSectionKey: string | null
+        criteriaSectionLabel: string | null
+        promptId: string
+        promptOrder: number
+      }>
+    }
+
+    expect(parsed.humanJudgmentMode).toBe('summary')
+    expect(parsed.projectPromptRows).toEqual([
+      {
+        criteriaDisposition: 'include',
+        criteriaSectionKey: 'population',
+        criteriaSectionLabel: 'Population',
+        promptId: parsed.projectPromptRows[0]?.promptId ?? '',
+        promptOrder: 0,
+      },
+      {
+        criteriaDisposition: 'exclude',
+        criteriaSectionKey: 'other',
+        criteriaSectionLabel: 'Other',
+        promptId: parsed.projectPromptRows[1]?.promptId ?? '',
+        promptOrder: 1,
+      },
+    ])
+  } finally {
+    ;[duckdbPath, `${duckdbPath}.wal`, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(
+      (filePath) => {
+        if (existsSync(filePath)) {
+          unlinkSync(filePath)
+        }
+
+        return filePath
+      },
+    )
+  }
+})
+
 test('seedCovidenceHumanJudgmentsFromConfig upserts full-text included and excluded judgments idempotently', async () => {
   const duckdbPath = `/tmp/f1-covidence-full-text-human-seed-${Date.now()}.duckdb`
   const datasourceId = `covidence-full-text-human-seed-${Date.now()}`
