@@ -26,6 +26,7 @@ import {loadEnv} from '../src/server/utils/env.ts'
 const watchedPaths = ['src', 'package.json', 'tsconfig.json']
 const restartDelayMs = 150
 const stackShutdownTimeoutMs = 20_000
+const forcedKillTimeoutMs = 5_000
 const healthProbeTimeoutMs = 1_500
 
 type ServerProcess = Subprocess<'inherit', 'inherit', 'inherit'>
@@ -92,6 +93,19 @@ const waitFor = async (ms: number) => {
   await new Promise((resolve) => {
     setTimeout(resolve, ms)
   })
+}
+
+const waitForProcessExit = async (pid: number, deadlineMs = Date.now() + stackShutdownTimeoutMs): Promise<boolean> => {
+  if (!isProcessAlive(pid)) {
+    return true
+  }
+
+  if (Date.now() >= deadlineMs) {
+    return false
+  }
+
+  await waitFor(250)
+  return waitForProcessExit(pid, deadlineMs)
 }
 
 const readServerStackLock = async () => {
@@ -310,17 +324,28 @@ const getExistingLocks = async () => {
   }
 }
 
-const stopExternalProcess = async (pid: number) => {
-  process.kill(pid, 'SIGTERM')
-  const deadlineMs = Date.now() + stackShutdownTimeoutMs
-
-  while (isProcessAlive(pid)) {
-    if (Date.now() >= deadlineMs) {
-      throw new Error(`Timed out waiting for pid=${pid} to exit`)
-    }
-
-    await waitFor(250)
+const stopExternalProcess = async ({pid, processName}: {pid: number; processName: string}) => {
+  if (!isProcessAlive(pid)) {
+    return
   }
+
+  process.kill(pid, 'SIGTERM')
+
+  if (await waitForProcessExit(pid)) {
+    return
+  }
+
+  log(`${processName} pid=${pid} did not exit after SIGTERM; sending SIGKILL`)
+
+  if (isProcessAlive(pid)) {
+    process.kill(pid, 'SIGKILL')
+  }
+
+  if (await waitForProcessExit(pid, Date.now() + forcedKillTimeoutMs)) {
+    return
+  }
+
+  throw new Error(`Timed out waiting for ${processName} pid=${pid} to exit`)
 }
 
 const stopExistingWatcher = async (existingWatcher: DevWatcherLockMetadata | null) => {
@@ -329,7 +354,7 @@ const stopExistingWatcher = async (existingWatcher: DevWatcherLockMetadata | nul
   }
 
   log(`stopping existing dev watcher pid=${existingWatcher.pid}`)
-  await stopExternalProcess(existingWatcher.pid)
+  await stopExternalProcess({pid: existingWatcher.pid, processName: 'dev watcher'})
 }
 
 const releaseDevWatcherLock = async () => {
@@ -379,8 +404,7 @@ const acquireDevWatcherLock = async (): Promise<void> => {
     }
 
     log(`taking over existing dev watcher pid=${currentLock.pid}`)
-    process.kill(currentLock.pid, 'SIGTERM')
-    await waitFor(500)
+    await stopExternalProcess({pid: currentLock.pid, processName: 'dev watcher'})
     return acquireDevWatcherLock()
   }
 }
@@ -437,7 +461,7 @@ const stopExistingLockedStack = async () => {
   }
 
   log(`taking over existing server stack pid=${currentLock.pid}`)
-  process.kill(currentLock.pid, 'SIGTERM')
+  await stopExternalProcess({pid: currentLock.pid, processName: 'server stack'})
   await waitForStackLockRelease()
 }
 
@@ -470,8 +494,14 @@ const stopServer = async () => {
 
   const processToStop = serverProcess
   serverProcess = null
-  processToStop.kill()
-  await processToStop.exited
+
+  if (processToStop.pid !== undefined) {
+    await stopExternalProcess({pid: processToStop.pid, processName: 'server stack'})
+  } else {
+    processToStop.kill('SIGTERM')
+    await processToStop.exited
+  }
+
   await waitForStackLockRelease()
 }
 

@@ -23,6 +23,8 @@ type ManagedServerState = {
 
 const restartDelayMs = 1_000
 const startupTimeoutMs = 20_000
+const shutdownTimeoutMs = 20_000
+const forcedKillTimeoutMs = 5_000
 const writerPollIntervalMs = 250
 
 const config = await getBackgroundServerStackConfigAsync(process.env)
@@ -133,6 +135,19 @@ const waitFor = async (ms: number) => {
   })
 }
 
+const waitForProcessExit = async (pid: number, deadlineMs = Date.now() + shutdownTimeoutMs): Promise<boolean> => {
+  if (!isProcessAlive(pid)) {
+    return true
+  }
+
+  if (Date.now() >= deadlineMs) {
+    return false
+  }
+
+  await waitFor(250)
+  return waitForProcessExit(pid, deadlineMs)
+}
+
 const isWriterReady = async (writerUrl: string) => {
   try {
     const response = await fetch(`${writerUrl}/api/writer_connections`, {signal: AbortSignal.timeout(1_000)})
@@ -187,7 +202,21 @@ const stopServerProcess = async (serverProcess: ServerProcess | null) => {
     return
   }
 
+  const pid = serverProcess.pid
+
   serverProcess.kill('SIGTERM')
+
+  if (pid !== undefined && !(await waitForProcessExit(pid))) {
+    console.error(`[server:stack] pid=${pid} did not exit after SIGTERM; sending SIGKILL`)
+
+    if (isProcessAlive(pid)) {
+      serverProcess.kill('SIGKILL')
+    }
+
+    if (!(await waitForProcessExit(pid, Date.now() + forcedKillTimeoutMs))) {
+      throw new Error(`Timed out waiting for pid=${pid} to exit`)
+    }
+  }
 
   try {
     await serverProcess.exited
