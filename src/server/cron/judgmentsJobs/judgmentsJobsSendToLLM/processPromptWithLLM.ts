@@ -1,3 +1,5 @@
+import {Effect} from 'effect'
+
 import {judgeSinglePrompt} from '../../../../agent/judge.ts'
 import {JudgmentPersistenceError} from '../../../../agent/judge/storeSinglePromptJudgment.ts'
 import type {ArticleRecord, PublicationStatus} from '../../../../db/schemaTypes.ts'
@@ -52,9 +54,18 @@ type PromptDefinition = {
   type: string | null
 }
 
-type PreparedPrompt = {articleForJudging: ArticleRecord; prompt: PromptDefinition} | null
+type PreparedPromptResult =
+  | {kind: 'judged'}
+  | {kind: 'ready'}
+  | {kind: 'run'; articleForJudging: ArticleRecord; prompt: PromptDefinition}
+  | {kind: 'skipped'; skipReason: 'no_fulltext' | 'conversion_failed' | 'fulltext_too_large'}
 
 type PromptPreparationWaiter = {resolve: (release: () => void) => void}
+
+type PromptTerminalState =
+  | {kind: 'judged'}
+  | {kind: 'ready'}
+  | {kind: 'skipped'; skipReason: 'no_fulltext' | 'conversion_failed' | 'fulltext_too_large'}
 
 const processPromptLogger = createRateLimitedLogger({windowMs: 30_000})
 const cachedArticleLookups = new Map<string, Promise<ArticleRecord | null>>()
@@ -221,18 +232,10 @@ const markAsJudged = async (jobId: string, recordId: string): Promise<void> => {
   await getJudgmentJobSqliteService().markPromptAsJudged(jobId, recordId)
 }
 
-/**
- * Reset a prompt back to 'pending' so it can be retried on the next cron cycle.
- * Used when connection errors occur - the prompt is not permanently failed.
- */
 const markAsRetry = async (jobId: string, recordId: string): Promise<void> => {
   await getJudgmentJobSqliteService().markPromptAsRetry(jobId, recordId)
 }
 
-/**
- * Mark a prompt as skipped when fulltext is required but unavailable.
- * This is a terminal state - the prompt will not be retried.
- */
 const markAsSkipped = async (
   jobId: string,
   recordId: string,
@@ -241,12 +244,11 @@ const markAsSkipped = async (
   await getJudgmentJobSqliteService().markPromptAsSkipped(jobId, recordId, skipReason)
 }
 
-const preparePrompt = async (promptToProcess: PromptToProcess, modelContext: number): Promise<PreparedPrompt> => {
+const preparePrompt = async (promptToProcess: PromptToProcess, modelContext: number): Promise<PreparedPromptResult> => {
   const judgmentExists = await checkJudgmentExistsInDatabase(promptToProcess)
   if (judgmentExists) {
-    await markAsJudged(promptToProcess.jobId, promptToProcess.recordId)
     console.log('[llm] Skipped - judgment already exists for:', promptToProcess.articleId.slice(0, 8))
-    return null
+    return {kind: 'judged'}
   }
 
   const needsFulltext = promptToProcess.useFulltext || promptToProcess.useFulltextNoImages
@@ -254,8 +256,7 @@ const preparePrompt = async (promptToProcess: PromptToProcess, modelContext: num
 
   if (!article) {
     console.error('Article not found:', promptToProcess.articleId)
-    await markAsJudged(promptToProcess.jobId, promptToProcess.recordId)
-    return null
+    return {kind: 'judged'}
   }
 
   let articleWithFulltext = article
@@ -270,18 +271,14 @@ const preparePrompt = async (promptToProcess: PromptToProcess, modelContext: num
               `fulltext:skip:${result.reason}`,
               `[fulltext] Skipping article ${article.id}: ${result.reason}`,
             )
-            return markAsSkipped(promptToProcess.jobId, promptToProcess.recordId, result.reason)
-          })().then(() => {
-            return null
-          })
+            return {kind: 'skipped', skipReason: result.reason} as const
+          })()
         : (() => {
             console.log(
               `[fulltext] Transient failure for article ${article.id}, requeuing prompt ${promptToProcess.promptId}`,
             )
-            return markAsRetry(promptToProcess.jobId, promptToProcess.recordId)
-          })().then(() => {
-            return null
-          })
+            return {kind: 'ready'} as const
+          })()
     }
 
     const processResult = processFulltextForLLM(result.text, {
@@ -307,63 +304,102 @@ const preparePrompt = async (promptToProcess: PromptToProcess, modelContext: num
 
   if (!prompt) {
     console.log('Prompt not found or not enabled:', promptToProcess.promptId)
-    await markAsJudged(promptToProcess.jobId, promptToProcess.recordId)
-    return null
+    return {kind: 'judged'}
   }
 
-  return {articleForJudging, prompt}
+  return {articleForJudging, kind: 'run', prompt}
+}
+
+const releasePromptTerminalState = async (
+  jobId: string,
+  recordId: string,
+  terminalState: PromptTerminalState,
+): Promise<void> => {
+  return terminalState.kind === 'judged'
+    ? markAsJudged(jobId, recordId)
+    : terminalState.kind === 'ready'
+      ? markAsRetry(jobId, recordId)
+      : markAsSkipped(jobId, recordId, terminalState.skipReason)
+}
+
+export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Effect.Effect<void, unknown> => {
+  const startTime = Date.now()
+  const modelContext = getModelContext(promptToProcess.modelMetadataJson)
+  let terminalState: PromptTerminalState = {kind: 'ready'}
+
+  return Effect.scoped(
+    Effect.acquireRelease(
+      Effect.promise(() => {
+        return getJudgmentJobSqliteService().markPromptAsRunning(promptToProcess.jobId, promptToProcess.recordId)
+      }),
+      () => {
+        return Effect.promise(() => {
+          return releasePromptTerminalState(promptToProcess.jobId, promptToProcess.recordId, terminalState)
+        })
+      },
+    ).pipe(
+      Effect.flatMap(() => {
+        return Effect.promise(async () => {
+          const prepared = await withPromptPreparationPermit(() => {
+            return preparePrompt(promptToProcess, modelContext)
+          })
+
+          if (prepared.kind !== 'run') {
+            terminalState = prepared
+            return undefined
+          }
+
+          try {
+            processPromptLogger.log(
+              `llm:calling:${promptToProcess.modelBaseUrl}`,
+              '[llm] Calling LLM for article:',
+              promptToProcess.articleId.slice(0, 8),
+            )
+            await processSinglePrompt(promptToProcess, prepared.articleForJudging, prepared.prompt, modelContext)
+            terminalState = {kind: 'judged'}
+            const duration = Date.now() - startTime
+            processPromptLogger.log(
+              `llm:success:${promptToProcess.modelBaseUrl}`,
+              `[llm] Success - processed in ${duration}ms`,
+            )
+            return undefined
+          } catch (error) {
+            if (error instanceof ConnectionError) {
+              const availability = getJudgmentEndpointAvailability({
+                effectiveBaseURL: error.baseURL,
+                providerConnectionId: promptToProcess.providerConnectionId,
+              })
+              const retryMessage = formatConnectionOutageMessage({
+                cooldownExpiresAt: availability.cooldownExpiresAt,
+                failure: error.failure,
+                promptAction:
+                  'Prompt requeued because the provider endpoint is unavailable. No further prompts will be sent for this connection until the provider health check passes.',
+              })
+              rateLimitedLogger.log(`prompt:retry:${error.failure.kind}:${promptToProcess.modelBaseUrl}`, retryMessage)
+              terminalState = {kind: 'ready'}
+              throw error
+            }
+
+            if (error instanceof JudgmentPersistenceError) {
+              terminalState = {kind: 'ready'}
+              throw error
+            }
+
+            const errorMessage = error instanceof Error ? error.message : String(error)
+            console.error('[llm] ERROR - Failed to process prompt:', {
+              articleId: promptToProcess.articleId,
+              promptId: promptToProcess.promptId,
+              error: errorMessage,
+            })
+            terminalState = {kind: 'judged'}
+            return undefined
+          }
+        })
+      }),
+    ),
+  )
 }
 
 export const processPromptWithLLM = async (promptToProcess: PromptToProcess): Promise<void> => {
-  const startTime = Date.now()
-  const modelContext = getModelContext(promptToProcess.modelMetadataJson)
-  const prepared = await withPromptPreparationPermit(() => {
-    return preparePrompt(promptToProcess, modelContext)
-  })
-
-  if (!prepared) {
-    return
-  }
-
-  try {
-    await getJudgmentJobSqliteService().markPromptAsRunning(promptToProcess.jobId, promptToProcess.recordId)
-    processPromptLogger.log(
-      `llm:calling:${promptToProcess.modelBaseUrl}`,
-      '[llm] Calling LLM for article:',
-      promptToProcess.articleId.slice(0, 8),
-    )
-    await processSinglePrompt(promptToProcess, prepared.articleForJudging, prepared.prompt, modelContext)
-    await markAsJudged(promptToProcess.jobId, promptToProcess.recordId)
-    const duration = Date.now() - startTime
-    processPromptLogger.log(`llm:success:${promptToProcess.modelBaseUrl}`, `[llm] Success - processed in ${duration}ms`)
-  } catch (error) {
-    if (error instanceof ConnectionError) {
-      const availability = getJudgmentEndpointAvailability({
-        effectiveBaseURL: error.baseURL,
-        providerConnectionId: promptToProcess.providerConnectionId,
-      })
-      const retryMessage = formatConnectionOutageMessage({
-        cooldownExpiresAt: availability.cooldownExpiresAt,
-        failure: error.failure,
-        promptAction:
-          'Prompt requeued because the provider endpoint is unavailable. No further prompts will be sent for this connection until the provider health check passes.',
-      })
-      rateLimitedLogger.log(`prompt:retry:${error.failure.kind}:${promptToProcess.modelBaseUrl}`, retryMessage)
-      await markAsRetry(promptToProcess.jobId, promptToProcess.recordId)
-      throw error
-    }
-
-    if (error instanceof JudgmentPersistenceError) {
-      await markAsRetry(promptToProcess.jobId, promptToProcess.recordId)
-      throw error
-    }
-
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    console.error('[llm] ERROR - Failed to process prompt:', {
-      articleId: promptToProcess.articleId,
-      promptId: promptToProcess.promptId,
-      error: errorMessage,
-    })
-    await markAsJudged(promptToProcess.jobId, promptToProcess.recordId)
-  }
+  await Effect.runPromise(processPromptWithLLMEffect(promptToProcess))
 }

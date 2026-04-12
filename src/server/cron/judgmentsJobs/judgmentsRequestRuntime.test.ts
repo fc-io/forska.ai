@@ -1,12 +1,40 @@
 import {afterEach, expect, mock, test} from 'bun:test'
+import {Effect, Fiber} from 'effect'
 
 import {classifyConnectionFailure, ConnectionError, recordConnectionFailure} from './connectionHealth.ts'
+
+type JudgmentsRequestRuntimeModule = typeof import('./judgmentsRequestRuntime.ts')
+type ProcessPromptModule = typeof import('./judgmentsJobsSendToLLM/processPromptWithLLM.ts')
+type PromptToProcess = import('./judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts').PromptToProcess
 
 const providerConnectionRepositoryModulePath = new URL(
   '../../providers/providerConnectionRepository.ts',
   import.meta.url,
 ).pathname
 const providerHealthServiceModulePath = new URL('../../providers/providerHealthService.ts', import.meta.url).pathname
+const judgeModulePath = new URL('../../../agent/judge.ts', import.meta.url).pathname
+const appDatabaseServiceModulePath = new URL('../../services/appDatabaseService.ts', import.meta.url).pathname
+const appQueryServiceModulePath = new URL('../../services/getAppQueryService.ts', import.meta.url).pathname
+const ensureFullTextModulePath = new URL('../../utils/ensureFullText.ts', import.meta.url).pathname
+const sqliteServiceModulePath = new URL('./judgmentJobSqliteService.ts', import.meta.url).pathname
+
+const createPromptRows = () => {
+  return [{id: 'prompt-a', order: 1, originalText: 'Prompt text', promptHeading: 'Prompt', type: 'single'}]
+}
+
+const createArticleRows = () => {
+  return [
+    {
+      articleSummary: 'Summary',
+      articleTitle: 'Title',
+      createdAt: new Date(0),
+      fullText: null,
+      id: 'article-a',
+      publicationStatus: null,
+      updatedAt: new Date(0),
+    },
+  ]
+}
 
 const getProviderConnection = mock(async (id: string) => {
   return {
@@ -29,6 +57,43 @@ const getProviderConnection = mock(async (id: string) => {
 const testProviderConnectionHealth = mock(async (_connection: unknown, _options: unknown) => {
   return {lastError: null, message: 'ok', modelCount: 1, ok: true}
 })
+const judgeSinglePrompt = mock(async (_input: unknown) => {
+  return undefined
+})
+const queryJson = mock(async (sql: string) => {
+  if (sql.includes('FROM app.prompt p')) {
+    return createPromptRows()
+  }
+
+  return []
+})
+const getFullArticlesByIds = mock(async (_articleIds: string[], _options: unknown) => {
+  return createArticleRows()
+})
+const ensureFullTextMock = mock(async (article: {fullText: string | null}) => {
+  return {reason: 'no_fulltext' as const, shouldSkip: true, text: article.fullText ?? 'Full text'}
+})
+const sqliteStateTransitions: string[] = []
+const sqliteServiceMock = {
+  hasJob: mock((_jobId: string) => {
+    return true
+  }),
+  hasLocalJudgment: mock(async (_jobId: string, _articleId: string, _promptId: string) => {
+    return false
+  }),
+  markPromptAsJudged: mock(async (_jobId: string, _recordId: string) => {
+    sqliteStateTransitions.push('judged')
+  }),
+  markPromptAsRetry: mock(async (_jobId: string, _recordId: string) => {
+    sqliteStateTransitions.push('ready')
+  }),
+  markPromptAsRunning: mock(async (_jobId: string, _recordId: string) => {
+    sqliteStateTransitions.push('running')
+  }),
+  markPromptAsSkipped: mock(async (_jobId: string, _recordId: string, _skipReason: string) => {
+    sqliteStateTransitions.push('skipped')
+  }),
+}
 
 const registerModuleMocks = () => {
   void mock.module(providerConnectionRepositoryModulePath, () => {
@@ -40,10 +105,79 @@ const registerModuleMocks = () => {
   })
 }
 
-const loadRuntime = () => {
+const loadRuntime = (): Promise<JudgmentsRequestRuntimeModule> => {
   registerModuleMocks()
 
-  return import(`./judgmentsRequestRuntime.ts?test=${Date.now()}-${Math.random()}`)
+  return import(
+    `./judgmentsRequestRuntime.ts?test=${Date.now()}-${Math.random()}`
+  ) as Promise<JudgmentsRequestRuntimeModule>
+}
+
+const registerPromptModuleMocks = () => {
+  void mock.module(judgeModulePath, () => {
+    return {judgeSinglePrompt}
+  })
+
+  void mock.module(appDatabaseServiceModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {queryJson}
+      },
+    }
+  })
+
+  void mock.module(appQueryServiceModulePath, () => {
+    return {
+      getAppQueryService: () => {
+        return {getFullArticlesByIds}
+      },
+    }
+  })
+
+  void mock.module(ensureFullTextModulePath, () => {
+    return {ensureFullText: ensureFullTextMock}
+  })
+
+  void mock.module(sqliteServiceModulePath, () => {
+    return {
+      getJudgmentJobSqliteService: () => {
+        return sqliteServiceMock
+      },
+    }
+  })
+}
+
+const loadProcessPromptModule = (): Promise<ProcessPromptModule> => {
+  registerPromptModuleMocks()
+
+  return import(
+    `./judgmentsJobsSendToLLM/processPromptWithLLM.ts?test=${Date.now()}-${Math.random()}`
+  ) as Promise<ProcessPromptModule>
+}
+
+const createPromptToProcess = (): PromptToProcess => {
+  return {
+    articleId: 'article-a',
+    jobId: 'job-a',
+    modelBaseUrl: 'http://runtime.test/v1',
+    modelId: 'model-a',
+    modelMetadataJson: null,
+    modelName: 'model-a',
+    modelProvider: 'openai',
+    modelSecretRef: null,
+    modelVersion: null,
+    modelWorkerUrls: [],
+    projectId: 'project-a',
+    promptId: 'prompt-a',
+    providerConnectionId: 'connection-a',
+    providerMaxInflightRequests: 1,
+    providerUsesFamilyDefault: false,
+    recordId: 'record-a',
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  }
 }
 
 const flush = async (): Promise<void> => {
@@ -53,7 +187,7 @@ const flush = async (): Promise<void> => {
   })
 }
 
-const createSignal = () => {
+const createSignal = (): {promise: Promise<void>; resolve: () => void} => {
   let resolve: () => void = () => {
     return undefined
   }
@@ -70,8 +204,35 @@ afterEach(async () => {
   Date.now = realDateNow
   getProviderConnection.mockClear()
   testProviderConnectionHealth.mockClear()
+  judgeSinglePrompt.mockClear()
+  queryJson.mockClear()
+  getFullArticlesByIds.mockClear()
+  ensureFullTextMock.mockClear()
+  sqliteServiceMock.hasJob.mockClear()
+  sqliteServiceMock.hasLocalJudgment.mockClear()
+  sqliteServiceMock.markPromptAsJudged.mockClear()
+  sqliteServiceMock.markPromptAsRetry.mockClear()
+  sqliteServiceMock.markPromptAsRunning.mockClear()
+  sqliteServiceMock.markPromptAsSkipped.mockClear()
+  sqliteStateTransitions.splice(0, sqliteStateTransitions.length)
   testProviderConnectionHealth.mockImplementation(async (_connection: unknown, _options: unknown) => {
     return {lastError: null, message: 'ok', modelCount: 1, ok: true}
+  })
+  judgeSinglePrompt.mockImplementation(async (_input: unknown) => {
+    return undefined
+  })
+  queryJson.mockImplementation(async (sql: string) => {
+    if (sql.includes('FROM app.prompt p')) {
+      return createPromptRows()
+    }
+
+    return []
+  })
+  getFullArticlesByIds.mockImplementation(async (_articleIds: string[], _options: unknown) => {
+    return createArticleRows()
+  })
+  ensureFullTextMock.mockImplementation(async (article: {fullText: string | null}) => {
+    return {reason: 'no_fulltext' as const, shouldSkip: true, text: article.fullText ?? 'Full text'}
   })
   mock.restore()
 })
@@ -437,4 +598,56 @@ test('failed resume probe blocks the real request and preserves the normalized f
   expect(probeError).toBeInstanceOf(ConnectionError)
   expect((probeError as ConnectionError).message).toBe(failure.message)
   expect(testProviderConnectionHealth).toHaveBeenCalledTimes(1)
+})
+
+test('prompt release marks running then judged on success', async () => {
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+
+  await processPromptWithLLM(createPromptToProcess())
+
+  expect(sqliteStateTransitions).toEqual(['running', 'judged'])
+  expect(sqliteServiceMock.markPromptAsRetry).not.toHaveBeenCalled()
+  expect(sqliteServiceMock.markPromptAsSkipped).not.toHaveBeenCalled()
+})
+
+test('prompt release marks running then ready on connection failure', async () => {
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+  const failure = classifyConnectionFailure({
+    context: {effectiveBaseURL: 'http://runtime.test/v1', endpointPath: '/v1/chat/completions', providerKind: 'openai'},
+    error: {status: 503},
+  })
+  let caughtError: unknown = null
+
+  judgeSinglePrompt.mockImplementationOnce(async () => {
+    throw new ConnectionError(failure.message, 'http://runtime.test/v1', failure)
+  })
+
+  try {
+    await processPromptWithLLM(createPromptToProcess())
+  } catch (error) {
+    caughtError = error
+  }
+
+  expect(String(caughtError)).toContain('ConnectionError')
+  expect(sqliteStateTransitions).toEqual(['running', 'ready'])
+  expect(sqliteServiceMock.markPromptAsJudged).not.toHaveBeenCalled()
+})
+
+test('prompt release marks running then ready on interruption', async () => {
+  const {processPromptWithLLMEffect} = await loadProcessPromptModule()
+  const gate = createSignal()
+
+  judgeSinglePrompt.mockImplementationOnce(async () => {
+    await gate.promise
+  })
+
+  const fiber = Effect.runFork(processPromptWithLLMEffect(createPromptToProcess()))
+
+  await flush()
+  await Effect.runPromise(Fiber.interrupt(fiber))
+  gate.resolve()
+  await flush()
+
+  expect(sqliteStateTransitions).toEqual(['running', 'ready'])
+  expect(sqliteServiceMock.markPromptAsJudged).not.toHaveBeenCalled()
 })
