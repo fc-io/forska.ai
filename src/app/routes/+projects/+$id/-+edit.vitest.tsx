@@ -431,6 +431,60 @@ describe('project edit route regressions', () => {
     }
   })
 
+  test('Covidence import refetches models when mounting with cached options', async () => {
+    const routeContext = await loadFreshRouteContext({includeCovidenceImport: true})
+    const providerQueryClient = new QueryClient()
+    const browserFailures = createBrowserFailureAssertions(window)
+
+    providerQueryClient.setQueryData(
+      ['models', 'covidence-import'],
+      [
+        {
+          id: 'model-stale',
+          label: 'Stale Model',
+          modelName: 'stale-model',
+          name: 'Stale Model',
+          provider: 'openai-compatible',
+          version: null,
+        },
+      ],
+    )
+    mockState.models = [
+      {
+        id: 'model-fresh',
+        label: 'Fresh Model',
+        modelName: 'fresh-model',
+        name: 'Fresh Model',
+        provider: 'openai-compatible',
+        version: null,
+      },
+    ]
+    resetApiCallCounts()
+
+    const {container, dispose} = await mountRouterAtPath({
+      path: '/admin/datasources/covidence-import',
+      queryClient: providerQueryClient,
+      routeTree: routeContext.routeTree,
+      solidQueryModule: routeContext.solidQueryModule,
+      solidRouterModule: routeContext.solidRouterModule,
+      solidWebModule: routeContext.solidWebModule,
+    })
+
+    try {
+      await waitForUpdates()
+
+      expect(mockState.apiCallCounts.models).toBe(1)
+      expect(container.textContent ?? '').toContain('Fresh Model')
+      expect(container.textContent ?? '').not.toContain('Stale Model')
+      browserFailures.assertNoFailures()
+    } finally {
+      browserFailures.dispose()
+      providerQueryClient.clear()
+      dispose()
+      container.remove()
+    }
+  })
+
   test('project edit path exposes a stable route error surface for render crashes', async () => {
     const projectId = 'project-route-error-test'
     const routeContext = await loadFreshRouteContext({

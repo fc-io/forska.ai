@@ -500,7 +500,12 @@ const AdminCovidenceImport = () => {
   const [analysis, setAnalysis] = createSignal<CovidenceAnalyzeResponse['data'] | null>(null)
 
   const modelsQuery = useQuery(() => {
-    return {queryKey: ['models', 'covidence-import'], queryFn: fetchModels, staleTime: 1000 * 60 * 5}
+    return {
+      queryKey: ['models', 'covidence-import'],
+      queryFn: fetchModels,
+      refetchOnMount: 'always',
+      staleTime: 1000 * 60 * 5,
+    }
   })
 
   createEffect(() => {
