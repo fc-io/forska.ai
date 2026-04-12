@@ -30,8 +30,8 @@ const buildRuntimeRecord = (overrides: Partial<ProviderRuntimeRecord> = {}): Pro
   }
 }
 
-test('getInferenceRuntimeConfig applies runtime defaults', () => {
-  const runtimeConfig = getInferenceRuntimeConfig({envValues: {}})
+test('getInferenceRuntimeConfig applies runtime defaults when launcher runtime records are explicitly empty', () => {
+  const runtimeConfig = getInferenceRuntimeConfig({envValues: {}, launcherRecords: []})
 
   expect(runtimeConfig.gpuNnodes).toBe(0)
   expect(runtimeConfig.gpuGpusPerNode).toBe(0)
@@ -58,6 +58,7 @@ test('getInferenceRuntimeConfig applies runtime defaults', () => {
 
 test('getInferenceRuntimeConfig prioritizes launcher runtime metadata', () => {
   const runtimeConfig = getInferenceRuntimeConfig({
+    launcherRecords: [],
     envValues: {
       DP_SIZE: '9',
       FORSKA_RUNTIME_DP_SIZE: '1',
@@ -93,8 +94,9 @@ test('getInferenceRuntimeConfig prioritizes launcher runtime metadata', () => {
   expect(runtimeConfig.judgeFirstRequestLogFull).toBe(true)
 })
 
-test('getInferenceRuntimeConfig falls back to legacy runtime wiring names', () => {
+test('getInferenceRuntimeConfig falls back to legacy runtime wiring names when launcher runtime records are explicitly empty', () => {
   const runtimeConfig = getInferenceRuntimeConfig({
+    launcherRecords: [],
     envValues: {
       GPU_NNODES: '1',
       GPU_GPUS_PER_NODE: '2',
