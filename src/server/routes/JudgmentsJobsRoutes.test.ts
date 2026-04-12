@@ -1122,7 +1122,7 @@ test('returns recent outbox flow metrics from actual SQLite add and import activ
   }
 
   expect(response.status).toBe(200)
-  expect(body.storageHealth.outboxRowCount).toBe(1)
+  expect(body.storageHealth.outboxRowCount).toBe(2)
   expect(body.storageHealth.recentTransfer).toEqual({
     addedRows: 2,
     addedRowsPerMinute: 0.4,

@@ -100,16 +100,17 @@
         "`bun run build` passes"
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "Preserve the invariant that Vitest coverage stays as a speed layer only. Do not treat happy-dom or route-level coverage as sufficient proof for this bug class after the earlier real-browser escape.",
       "dependsOn": [
         "US-002",
         "US-003",
         "US-004"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     }
   ],
   "metadata": {
-    "updatedAt": "2026-04-12T11:21:37.486Z"
+    "updatedAt": "2026-04-12T11:25:05.283Z"
   }
 }

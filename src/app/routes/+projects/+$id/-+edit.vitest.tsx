@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import {createMemoryHistory} from '@tanstack/history'
-import type {QueryClient} from '@tanstack/solid-query'
+import {QueryClient} from '@tanstack/solid-query'
 import {afterEach, beforeEach, describe, expect, test, vi} from 'vitest'
 
 import {routeErrorSurfaceTestId} from '../../../routerErrorSurface'
@@ -39,6 +39,7 @@ type MockProjectDetails = {
 
 const mockState = vi.hoisted(() => {
   return {
+    apiCallCounts: {importRoutes: 0, models: 0, projectAccess: 0, projectDetails: 0, providerConnections: 0},
     importRoutes: [] as Array<{name: string | null; route: string}>,
     models: [
       {
@@ -112,6 +113,18 @@ const waitForUpdates = async () => {
     setTimeout(resolve, 0)
   })
   await Promise.resolve()
+}
+
+const resetApiCallCounts = () => {
+  mockState.apiCallCounts = {importRoutes: 0, models: 0, projectAccess: 0, projectDetails: 0, providerConnections: 0}
+}
+
+const expectNoEditRouteFetches = () => {
+  expect(mockState.apiCallCounts.projectAccess).toBe(0)
+  expect(mockState.apiCallCounts.projectDetails).toBe(0)
+  expect(mockState.apiCallCounts.models).toBe(0)
+  expect(mockState.apiCallCounts.providerConnections).toBe(0)
+  expect(mockState.apiCallCounts.importRoutes).toBe(0)
 }
 
 const seedEditRouteQueries = (queryClient: QueryClient, projectId: string) => {
@@ -231,11 +244,13 @@ vi.mock('../../../../services/apiClient.ts', () => {
       api: {
         'import-routes': {
           get: async () => {
+            mockState.apiCallCounts.importRoutes += 1
             return {data: {data: mockState.importRoutes}}
           },
         },
         'provider-connections': {
           get: async () => {
+            mockState.apiCallCounts.providerConnections += 1
             return {data: {data: mockState.providerConnectionsPayload}}
           },
         },
@@ -268,6 +283,7 @@ vi.mock('../../../../services/apiClient.ts', () => {
             },
           },
           get: async () => {
+            mockState.apiCallCounts.models += 1
             return {data: {data: mockState.models}}
           },
         },
@@ -275,6 +291,7 @@ vi.mock('../../../../services/apiClient.ts', () => {
           return {
             access: {
               get: async () => {
+                mockState.apiCallCounts.projectAccess += 1
                 return {data: {data: getProjectAccess(id)}}
               },
             },
@@ -287,6 +304,7 @@ vi.mock('../../../../services/apiClient.ts', () => {
               return {data: {success: true}}
             },
             get: async () => {
+              mockState.apiCallCounts.projectDetails += 1
               return {data: {data: getProjectDetails(id)}}
             },
             patch: async () => {
@@ -307,6 +325,7 @@ vi.mock('../../../../services/apiClient.ts', () => {
 describe('project edit route regressions', () => {
   beforeEach(() => {
     document.body.innerHTML = ''
+    resetApiCallCounts()
     mockState.importRoutes = []
     mockState.models = [
       {
@@ -331,10 +350,11 @@ describe('project edit route regressions', () => {
     document.body.innerHTML = ''
   })
 
-  test('project edit route renders inside the shared query client provider', async () => {
+  test('project edit route keeps using the shared singleton query client boundary', async () => {
     const projectId = 'project-smoke-test'
     const routeContext = await loadFreshRouteContext({includeCovidenceImport: false})
     const queryClient = routeContext.appQueryClient
+    const providerQueryClient = new QueryClient()
     const browserFailures = createBrowserFailureAssertions(window)
 
     queryClient.clear()
@@ -342,7 +362,7 @@ describe('project edit route regressions', () => {
 
     const {container, dispose} = await mountRouterAtPath({
       path: `/projects/${projectId}/edit`,
-      queryClient,
+      queryClient: providerQueryClient,
       routeTree: routeContext.routeTree,
       solidQueryModule: routeContext.solidQueryModule,
       solidRouterModule: routeContext.solidRouterModule,
@@ -356,10 +376,12 @@ describe('project edit route regressions', () => {
       expect(text).toContain('Edit Project')
       expect(text).toContain('Project Name')
       expect(projectNameInput?.value).toBe(`Project ${projectId}`)
+      expectNoEditRouteFetches()
       browserFailures.assertNoFailures()
     } finally {
       browserFailures.dispose()
       queryClient.clear()
+      providerQueryClient.clear()
       dispose()
       container.remove()
     }
@@ -369,6 +391,7 @@ describe('project edit route regressions', () => {
     const projectId = 'project-navigation-test'
     const routeContext = await loadFreshRouteContext({includeCovidenceImport: true})
     const queryClient = routeContext.appQueryClient
+    const providerQueryClient = new QueryClient()
     const browserFailures = createBrowserFailureAssertions(window)
 
     queryClient.clear()
@@ -377,7 +400,7 @@ describe('project edit route regressions', () => {
 
     const {container, dispose, router} = await mountRouterAtPath({
       path: '/admin/datasources/covidence-import',
-      queryClient,
+      queryClient: providerQueryClient,
       routeTree: routeContext.routeTree,
       solidQueryModule: routeContext.solidQueryModule,
       solidRouterModule: routeContext.solidRouterModule,
@@ -386,6 +409,7 @@ describe('project edit route regressions', () => {
 
     try {
       expect(container.textContent ?? '').toContain('Covidence multi-file import')
+      resetApiCallCounts()
 
       await router.navigate({params: {id: projectId} as never, to: '/projects/$id/edit'})
       await waitForUpdates()
@@ -396,10 +420,12 @@ describe('project edit route regressions', () => {
       expect(text).toContain('Edit Project')
       expect(text).toContain('Project Name')
       expect(projectNameInput?.value).toBe(`Project ${projectId}`)
+      expectNoEditRouteFetches()
       browserFailures.assertNoFailures()
     } finally {
       browserFailures.dispose()
       queryClient.clear()
+      providerQueryClient.clear()
       dispose()
       container.remove()
     }
