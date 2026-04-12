@@ -3,11 +3,12 @@ import {escapeSqlString} from '../../services/appQueryHelpers.ts'
 
 export const archivedProjectAccessErrorMessage = 'Archived projects must be unarchived before use'
 
-type ProjectAccessRow = {id: string; name: string; archived: boolean}
+type HumanJudgmentMode = 'prompt' | 'summary' | null
+type ProjectAccessRow = {archived: boolean; humanJudgmentMode: HumanJudgmentMode; id: string; name: string}
 
 export const getProjectAccess = async (projectId: string) => {
   const [project] = await getAppDatabaseService().queryJson<ProjectAccessRow>(`
-    SELECT id, name, archived
+    SELECT id, name, archived, human_judgment_mode AS humanJudgmentMode
     FROM app.project
     WHERE id = '${escapeSqlString(projectId)}'
     LIMIT 1

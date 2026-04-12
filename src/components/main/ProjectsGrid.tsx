@@ -35,6 +35,10 @@ const getActionErrorMessage = (error: unknown, fallback: string) => {
   return error instanceof Error && error.message.trim().length > 0 ? error.message : fallback
 }
 
+const supportsPromptHumanAssessment = (project: Project) => {
+  return project.humanJudgmentMode !== 'summary'
+}
+
 export const ProjectsGrid = (props: IndexProjectsGridProps) => {
   const queryClient = useQueryClient()
   const providerConnectionsQuery = useQuery(() => {
@@ -221,16 +225,18 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                       >
                         Project Reviews
                       </Button>
-                      <Button
-                        as={Link}
-                        to="/projects/$id/humanAssessment"
-                        params={{id: project.id} as never}
-                        variant="outline"
-                        size="sm"
-                        class="px-3 py-1 text-sm"
-                      >
-                        Human Assessment
-                      </Button>
+                      <Show when={supportsPromptHumanAssessment(project)}>
+                        <Button
+                          as={Link}
+                          to="/projects/$id/humanAssessment"
+                          params={{id: project.id} as never}
+                          variant="outline"
+                          size="sm"
+                          class="px-3 py-1 text-sm"
+                        >
+                          Human Assessment
+                        </Button>
+                      </Show>
                       <Button
                         as={Link}
                         to="/projects/$id/edit"

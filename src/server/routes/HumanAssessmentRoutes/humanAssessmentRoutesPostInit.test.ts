@@ -41,10 +41,12 @@ const registerModuleMocks = () => {
   })
 }
 
-const loadHandler = () => {
+const loadHandler = async (): Promise<typeof import('./humanAssessmentRoutesPostInit.ts')> => {
   registerModuleMocks()
 
-  return import(`./humanAssessmentRoutesPostInit.ts?test=${Date.now()}-${Math.random()}`)
+  return import(`./humanAssessmentRoutesPostInit.ts?test=${Date.now()}-${Math.random()}`) as Promise<
+    typeof import('./humanAssessmentRoutesPostInit.ts')
+  >
 }
 
 afterEach(() => {
@@ -75,8 +77,8 @@ test('human assessment init inserts project id before the answered flag', async 
   }
 
   const {humanAssessmentRoutesPostInit} = await loadHandler()
-  const set = {status: 200} as Parameters<typeof humanAssessmentRoutesPostInit>[0]['set']
-  const response = await humanAssessmentRoutesPostInit({body: {projectId: 'project-1'}, set})
+  const set: {status: number} = {status: 200}
+  const response = await humanAssessmentRoutesPostInit({body: {projectId: 'project-1'}, set: set as never})
   const insertStatement =
     statements.find((statement) => {
       return statement.includes('INSERT INTO app.judgment_human')
@@ -94,7 +96,7 @@ test('human assessment init inserts project id before the answered flag', async 
   })
 })
 
-test('human assessment init creates one summary judgment row for summary-mode projects', async () => {
+test('human assessment init rejects summary-mode projects before creating pending rows', async () => {
   const statements: string[] = []
   projectReviewConfigRef.current = async () => {
     return {importRouteIds: []}
@@ -118,29 +120,14 @@ test('human assessment init creates one summary judgment row for summary-mode pr
   }
 
   const {humanAssessmentRoutesPostInit} = await loadHandler()
-  const set = {status: 200} as Parameters<typeof humanAssessmentRoutesPostInit>[0]['set']
-  const response = await humanAssessmentRoutesPostInit({body: {projectId: 'project-1'}, set})
-  const insertStatement =
-    statements.find((statement) => {
-      return statement.includes('INSERT INTO app.judgment_human_summary')
-    }) ?? ''
+  const set: {status: number} = {status: 200}
+  const response = await humanAssessmentRoutesPostInit({body: {projectId: 'project-1'}, set: set as never})
 
-  expect(insertStatement).toContain('(id, article_id, project_id, answer, origin)')
-  expect(insertStatement).toContain("NULL, 'manual_override')")
-  expect(response).toEqual({
-    data: {
-      article: {articleSummary: 'Summary 1', articleTitle: 'Article 1', id: 'article-1'},
-      judgmentsHuman: [{id: 'judgment-summary-1', promptId: 'summary'}],
-      project: {id: 'project-1', name: 'Project 1'},
-      prompts: [
-        {
-          id: 'summary',
-          order: 0,
-          originalText: 'Overall human screening decision',
-          promptHeading: 'Human summary',
-          type: "'yes' | 'no' | 'maybe'",
-        },
-      ],
-    },
-  })
+  expect(set.status).toBe(409)
+  expect(response).toEqual({data: null, error: 'Summary-mode projects do not support prompt-based human assessment'})
+  expect(
+    statements.some((statement) => {
+      return statement.includes('INSERT INTO app.judgment_human_summary')
+    }),
+  ).toBe(false)
 })

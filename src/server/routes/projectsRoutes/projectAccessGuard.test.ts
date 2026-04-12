@@ -22,10 +22,12 @@ const registerModuleMocks = () => {
   })
 }
 
-const loadProjectAccessGuard = () => {
+const loadProjectAccessGuard = async (): Promise<typeof import('./projectAccessGuard.ts')> => {
   registerModuleMocks()
 
-  return import(`./projectAccessGuard.ts?test=${Date.now()}-${Math.random()}`)
+  return import(`./projectAccessGuard.ts?test=${Date.now()}-${Math.random()}`) as Promise<
+    typeof import('./projectAccessGuard.ts')
+  >
 }
 
 afterEach(() => {
@@ -34,17 +36,22 @@ afterEach(() => {
 
 test('getProjectAccess returns archived project rows', async () => {
   queryJsonRef.current = async () => {
-    return [{id: 'project-1', name: 'Archived Project', archived: true}]
+    return [{archived: true, humanJudgmentMode: 'summary', id: 'project-1', name: 'Archived Project'}]
   }
 
   const {getProjectAccess} = await loadProjectAccessGuard()
 
-  expect(await getProjectAccess('project-1')).toEqual({id: 'project-1', name: 'Archived Project', archived: true})
+  expect(await getProjectAccess('project-1')).toEqual({
+    archived: true,
+    humanJudgmentMode: 'summary',
+    id: 'project-1',
+    name: 'Archived Project',
+  })
 })
 
 test('assertProjectIsActive rejects archived projects', async () => {
   queryJsonRef.current = async () => {
-    return [{id: 'project-1', name: 'Archived Project', archived: true}]
+    return [{archived: true, humanJudgmentMode: 'summary', id: 'project-1', name: 'Archived Project'}]
   }
 
   const {archivedProjectAccessErrorMessage, assertProjectIsActive} = await loadProjectAccessGuard()
@@ -60,10 +67,15 @@ test('assertProjectIsActive rejects archived projects', async () => {
 
 test('assertProjectIsActive allows active projects', async () => {
   queryJsonRef.current = async () => {
-    return [{id: 'project-2', name: 'Active Project', archived: false}]
+    return [{archived: false, humanJudgmentMode: 'prompt', id: 'project-2', name: 'Active Project'}]
   }
 
   const {assertProjectIsActive} = await loadProjectAccessGuard()
 
-  expect(await assertProjectIsActive('project-2')).toEqual({id: 'project-2', name: 'Active Project', archived: false})
+  expect(await assertProjectIsActive('project-2')).toEqual({
+    archived: false,
+    humanJudgmentMode: 'prompt',
+    id: 'project-2',
+    name: 'Active Project',
+  })
 })

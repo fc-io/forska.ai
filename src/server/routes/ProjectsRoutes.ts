@@ -65,6 +65,7 @@ type ProjectReferenceDetachPlan = {
 }
 
 type ProjectRow = {
+  humanJudgmentMode: 'prompt' | 'summary' | null
   id: string
   name: string
   description: string | null
@@ -103,6 +104,7 @@ const getProjectRowSql = (projectId: string) => {
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
+      human_judgment_mode AS humanJudgmentMode,
       date_from AS dateFrom,
       date_to AS dateTo,
       archived,
@@ -382,6 +384,7 @@ export const projectsRoutes = new Elysia()
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
+        humanJudgmentMode: 'prompt' | 'summary' | null
         dateFrom: unknown
         dateTo: unknown
         archived: boolean
@@ -401,6 +404,7 @@ export const projectsRoutes = new Elysia()
         p.use_abstract AS useAbstract,
         p.use_fulltext AS useFulltext,
         p.use_fulltext_no_images AS useFulltextNoImages,
+        p.human_judgment_mode AS humanJudgmentMode,
         p.date_from AS dateFrom,
         p.date_to AS dateTo,
         p.archived AS archived,
@@ -443,6 +447,7 @@ export const projectsRoutes = new Elysia()
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
+        humanJudgmentMode: 'prompt' | 'summary' | null
         dateFrom: unknown
         dateTo: unknown
         archived: boolean
@@ -462,6 +467,7 @@ export const projectsRoutes = new Elysia()
         p.use_abstract AS useAbstract,
         p.use_fulltext AS useFulltext,
         p.use_fulltext_no_images AS useFulltextNoImages,
+        p.human_judgment_mode AS humanJudgmentMode,
         p.date_from AS dateFrom,
         p.date_to AS dateTo,
         p.archived AS archived,
@@ -515,6 +521,7 @@ export const projectsRoutes = new Elysia()
         useAbstract: boolean
         useFulltext: boolean
         useFulltextNoImages: boolean
+        humanJudgmentMode: 'prompt' | 'summary' | null
         dateFrom: unknown
         dateTo: unknown
         archived: boolean
@@ -532,6 +539,7 @@ export const projectsRoutes = new Elysia()
         use_abstract AS useAbstract,
         use_fulltext AS useFulltext,
         use_fulltext_no_images AS useFulltextNoImages,
+        human_judgment_mode AS humanJudgmentMode,
         date_from AS dateFrom,
         date_to AS dateTo,
         archived,

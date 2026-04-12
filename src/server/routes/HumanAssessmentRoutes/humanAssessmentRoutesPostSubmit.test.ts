@@ -70,10 +70,12 @@ const registerModuleMocks = () => {
   })
 }
 
-const loadHandler = () => {
+const loadHandler = async (): Promise<typeof import('./humanAssessmentRoutesPostSubmit.ts')> => {
   registerModuleMocks()
 
-  return import(`./humanAssessmentRoutesPostSubmit.ts?test=${Date.now()}-${Math.random()}`)
+  return import(`./humanAssessmentRoutesPostSubmit.ts?test=${Date.now()}-${Math.random()}`) as Promise<
+    typeof import('./humanAssessmentRoutesPostSubmit.ts')
+  >
 }
 
 afterEach(() => {
@@ -100,13 +102,13 @@ test('human assessment submit marks the project dirty in the same transaction fo
   }
 
   const {humanAssessmentRoutesPostSubmit} = await loadHandler()
-  const set = {status: 200} as Parameters<typeof humanAssessmentRoutesPostSubmit>[0]['set']
+  const set: {status: number} = {status: 200}
   const response = await humanAssessmentRoutesPostSubmit({
     body: {
       answers: [{answer: 'yes', comment: 'looks good', judgmentHumanId: 'judgment-human-1'}],
       projectId: 'project-1',
     },
-    set,
+    set: set as never,
   })
 
   expect(response).toEqual({data: {updated: 1}})
@@ -124,21 +126,13 @@ test('human assessment submit marks the project dirty in the same transaction fo
   ).toBe(true)
 })
 
-test('human assessment submit updates summary judgments in the same transaction for summary-mode projects', async () => {
+test('human assessment submit rejects summary-mode projects before prompt validation', async () => {
   const statements: string[] = []
   dirtyMarksRef.current = []
   queryJsonRef.current = async (statement) => {
     statements.push(statement)
 
-    return statement.includes('FROM app.project')
-      ? [{humanJudgmentMode: 'summary'}]
-      : statement.includes('FROM app.judgment_human_summary')
-          && statement.includes('answer IS NULL')
-          && statement.includes('SELECT')
-        ? [{id: 'judgment-summary-1', articleId: 'article-1', type: "'yes' | 'no' | 'maybe'"}]
-        : statement.includes('WHERE id IN') && statement.includes('AND answer IS NULL')
-          ? [{id: 'judgment-summary-1'}]
-          : []
+    return statement.includes('FROM app.project') ? [{humanJudgmentMode: 'summary'}] : []
   }
   runRef.current = async (statement) => {
     statements.push(statement)
@@ -148,23 +142,20 @@ test('human assessment submit updates summary judgments in the same transaction 
   }
 
   const {humanAssessmentRoutesPostSubmit} = await loadHandler()
-  const set = {status: 200} as Parameters<typeof humanAssessmentRoutesPostSubmit>[0]['set']
+  const set: {status: number} = {status: 200}
   const response = await humanAssessmentRoutesPostSubmit({
     body: {answers: [{answer: 'yes', judgmentHumanId: 'judgment-summary-1'}], projectId: 'project-1'},
-    set,
+    set: set as never,
   })
 
-  expect(response).toEqual({data: {updated: 1}})
-  expect(dirtyMarksRef.current).toEqual([
-    {
-      hasRunner: true,
-      projects: [{articleIds: ['article-1'], projectId: 'project-1'}],
-      reason: 'humanAssessmentRoutesPostSubmit',
-    },
-  ])
+  expect(set.status).toBe(409)
+  expect(response).toEqual({data: null, error: 'Summary-mode projects do not support prompt-based human assessment'})
+  expect(dirtyMarksRef.current).toEqual([])
   expect(
     statements.some((statement) => {
-      return statement.includes('UPDATE app.judgment_human_summary') && statement.includes("origin = 'manual_override'")
+      return (
+        statement.includes('FROM app.judgment_human_summary') || statement.includes('UPDATE app.judgment_human_summary')
+      )
     }),
-  ).toBe(true)
+  ).toBe(false)
 })

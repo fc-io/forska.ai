@@ -86,14 +86,16 @@ const ReviewsUnassessed = () => {
               <Button as={Link} to="/projects/$id" params={{id: params().id} as never} variant="outline">
                 Project Details
               </Button>
-              <Button
-                as={Link}
-                to="/projects/$id/humanAssessment"
-                params={{id: params().id} as never}
-                variant="outline"
-              >
-                Human Assessment
-              </Button>
+              <Show when={projectQuery.data?.project.humanJudgmentMode !== 'summary'}>
+                <Button
+                  as={Link}
+                  to="/projects/$id/humanAssessment"
+                  params={{id: params().id} as never}
+                  variant="outline"
+                >
+                  Human Assessment
+                </Button>
+              </Show>
               <Button as={Link} to="/projects/$id/edit" params={{id: params().id} as never}>
                 Edit Project
               </Button>

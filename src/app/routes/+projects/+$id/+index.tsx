@@ -88,9 +88,13 @@ const ProjectDetail = () => {
           <Button as={Link} to="/projects/$id/reviews-llm" params={{id: projectId} as never} variant="outline">
             Project Reviews
           </Button>
-          <Button as={Link} to="/projects/$id/humanAssessment" params={{id: projectId} as never} variant="outline">
-            Human Assessment
-          </Button>
+          <Switch>
+            <Match when={projectData.data?.project.humanJudgmentMode !== 'summary'}>
+              <Button as={Link} to="/projects/$id/humanAssessment" params={{id: projectId} as never} variant="outline">
+                Human Assessment
+              </Button>
+            </Match>
+          </Switch>
           <Button as={Link} to="/projects/$id/edit" params={{id: projectId} as never}>
             Edit Project
           </Button>

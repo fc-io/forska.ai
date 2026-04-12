@@ -3,7 +3,12 @@ import type {QueryClient} from '@tanstack/solid-query'
 import {apiClient} from './apiClient.ts'
 import {handleApiResponse} from './utils/handleApiResponse.ts'
 
-export type ProjectAccess = {id: string; name: string; archived: boolean}
+export type ProjectAccess = {
+  archived: boolean
+  humanJudgmentMode: 'prompt' | 'summary' | null
+  id: string
+  name: string
+}
 
 export const fetchProjects = async () => {
   const response = await apiClient.api.projects.get()
