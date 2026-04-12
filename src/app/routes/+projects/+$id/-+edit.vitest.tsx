@@ -1,8 +1,11 @@
 // @vitest-environment happy-dom
 
 import {createMemoryHistory} from '@tanstack/history'
-import {afterEach, beforeEach, describe, expect, test, vi} from 'vitest'
 import type {QueryClient} from '@tanstack/solid-query'
+import {afterEach, beforeEach, describe, expect, test, vi} from 'vitest'
+
+import {routeErrorSurfaceTestId} from '../../../routerErrorSurface'
+import {createBrowserFailureAssertions} from '../../../utils/browserFailureAssertions'
 
 type MockProjectAccess = {archived: boolean; id: string; name: string}
 type MockProjectDetails = {
@@ -127,7 +130,7 @@ const seedCovidenceImportQueries = (queryClient: QueryClient) => {
   queryClient.setQueryData(['models', 'covidence-import'], mockState.models)
 }
 
-const loadFreshRouteContext = async (includeCovidenceImport: boolean) => {
+const loadFreshRouteContext = async (params: {editComponent?: () => unknown; includeCovidenceImport: boolean}) => {
   vi.resetModules()
 
   const [
@@ -143,22 +146,25 @@ const loadFreshRouteContext = async (includeCovidenceImport: boolean) => {
     import('solid-js/web'),
     import('../../+__root.tsx'),
     import('./+edit.tsx'),
-    includeCovidenceImport ? import('../../+admin/+datasources/+covidence-import.tsx') : Promise.resolve(null),
+    params.includeCovidenceImport ? import('../../+admin/+datasources/+covidence-import.tsx') : Promise.resolve(null),
   ])
 
-  const {createFileRoute} = solidRouterModule
-
   const editRoute = editRouteImport.update({
-    getParentRoute: () => rootRouteImport,
+    ...(params.editComponent ? {component: params.editComponent} : {}),
+    getParentRoute: () => {
+      return rootRouteImport
+    },
     id: '/projects/$id/edit',
     path: '/projects/$id/edit',
   } as never)
 
   const routeTree =
-    includeCovidenceImport && covidenceRouteModule
+    params.includeCovidenceImport && covidenceRouteModule
       ? rootRouteImport.addChildren([
           covidenceRouteModule.Route.update({
-            getParentRoute: () => rootRouteImport,
+            getParentRoute: () => {
+              return rootRouteImport
+            },
             id: '/admin/datasources/covidence-import',
             path: '/admin/datasources/covidence-import',
           } as never),
@@ -182,7 +188,9 @@ const mountRouterAtPath = async (params: {
   const {render} = params.solidWebModule
 
   const router = createRouter({
-    defaultPendingComponent: () => null,
+    defaultPendingComponent: () => {
+      return null
+    },
     defaultPendingMinMs: 0,
     history: createMemoryHistory({initialEntries: [params.path]}),
     routeTree: params.routeTree as never,
@@ -206,7 +214,11 @@ const mountRouterAtPath = async (params: {
 }
 
 vi.mock('../../../../components/Navigation.tsx', () => {
-  return {Navigation: () => <div>Navigation</div>}
+  return {
+    Navigation: () => {
+      return <div>Navigation</div>
+    },
+  }
 })
 
 vi.mock('../../../../services/apiClient.ts', () => {
@@ -317,8 +329,9 @@ describe('project edit route regressions', () => {
 
   test('project edit route renders inside the shared query client provider', async () => {
     const projectId = 'project-smoke-test'
-    const routeContext = await loadFreshRouteContext(false)
+    const routeContext = await loadFreshRouteContext({includeCovidenceImport: false})
     const queryClient = buildQueryClient(routeContext.solidQueryModule.QueryClient)
+    const browserFailures = createBrowserFailureAssertions(window)
 
     seedEditRouteQueries(queryClient, projectId)
 
@@ -338,7 +351,9 @@ describe('project edit route regressions', () => {
       expect(text).toContain('Edit Project')
       expect(text).toContain('Project Name')
       expect(projectNameInput?.value).toBe(`Project ${projectId}`)
+      browserFailures.assertNoFailures()
     } finally {
+      browserFailures.dispose()
       dispose()
       container.remove()
     }
@@ -346,8 +361,9 @@ describe('project edit route regressions', () => {
 
   test('navigating from Covidence import to project edit renders without query client crashes', async () => {
     const projectId = 'project-navigation-test'
-    const routeContext = await loadFreshRouteContext(true)
+    const routeContext = await loadFreshRouteContext({includeCovidenceImport: true})
     const queryClient = buildQueryClient(routeContext.solidQueryModule.QueryClient)
+    const browserFailures = createBrowserFailureAssertions(window)
 
     seedCovidenceImportQueries(queryClient)
     seedEditRouteQueries(queryClient, projectId)
@@ -373,6 +389,38 @@ describe('project edit route regressions', () => {
       expect(text).toContain('Edit Project')
       expect(text).toContain('Project Name')
       expect(projectNameInput?.value).toBe(`Project ${projectId}`)
+      browserFailures.assertNoFailures()
+    } finally {
+      browserFailures.dispose()
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('project edit path exposes a stable route error surface for render crashes', async () => {
+    const projectId = 'project-route-error-test'
+    const routeContext = await loadFreshRouteContext({
+      editComponent: () => {
+        throw new Error('project edit render crash')
+      },
+      includeCovidenceImport: false,
+    })
+    const queryClient = buildQueryClient(routeContext.solidQueryModule.QueryClient)
+
+    const {container, dispose} = await mountRouterAtPath({
+      path: `/projects/${projectId}/edit`,
+      queryClient,
+      routeTree: routeContext.routeTree,
+      solidQueryModule: routeContext.solidQueryModule,
+      solidRouterModule: routeContext.solidRouterModule,
+      solidWebModule: routeContext.solidWebModule,
+    })
+
+    try {
+      const routeErrorSurface = container.querySelector<HTMLElement>(`[data-testid="${routeErrorSurfaceTestId}"]`)
+
+      expect(routeErrorSurface?.textContent ?? '').toContain('Route render failed')
+      expect(routeErrorSurface?.textContent ?? '').toContain('project edit render crash')
     } finally {
       dispose()
       container.remove()

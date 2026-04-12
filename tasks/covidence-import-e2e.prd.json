@@ -1,0 +1,112 @@
+{
+  "name": "Covidence Import Edit-Route Crash And Real-Browser E2E",
+  "description": "Stop the recurring Covidence project edit-route query-client crash after title/abstract import and add a small real-browser regression layer that catches the same route and navigation failure class before release.",
+  "branchName": "ralph/covidence-import-e2e",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Expose route crashes to browser tests with stable failure signals",
+      "description": "As a developer, I want a stable router-level error surface and shared browser failure assertions so that browser tests can distinguish a real edit-page render from a hidden route crash.",
+      "acceptanceCriteria": [
+        "Add a stable root router error surface or equivalent test-visible failure marker for route/render failures in the project edit path",
+        "Provide one shared browser assertion helper that fails on `pageerror`, fails on `console.error`, and fails on console text matching `defaultQueryOptions`",
+        "The failure signals are usable by both the seeded navigation smoke test and the full Covidence import workflow test",
+        "The added visibility improves test and debug observability without becoming a symptom-only workaround for the underlying query-client bug",
+        "`bun run lint` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "This story must land before the source fix and before the Playwright specs so later stories can fail loudly and capture the exact route/query-client crash. Preserve the invariant that browser tests fail on real route errors instead of silently accepting redirect or blank-page behavior.",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-002",
+      "title": "Fix the Covidence project edit crash at the route or query-client boundary",
+      "description": "As a developer, I want the smallest durable fix for the Covidence-created project edit crash so that real browser navigation to `/projects/$id/edit` no longer throws `defaultQueryOptions` errors after import.",
+      "acceptanceCriteria": [
+        "Re-verify the failing real-browser navigation path before changing code and compare the current route/query-client integration against commit `ea2cf9fe` as a hypothesis, not a presumed fix",
+        "Confirm whether `src/app/routes/+projects/projectAccessGuard.ts` needs the explicit shared query-client path again or whether the failure belongs in another shared router or query boundary",
+        "Implement the smallest durable architecture-level fix for the actual crash source rather than a symptom patch or test-only bypass",
+        "After the fix, real browser navigation from a Covidence-created project into `/projects/$id/edit` renders the edit page without the `Cannot read properties of undefined (reading 'defaultQueryOptions')` failure",
+        "The existing fast route-level regression remains in place and still covers the relevant contract after the fix",
+        "`bunx vitest run 'src/app/routes/+projects/+$id/-+edit.vitest.tsx'` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes",
+        "In a real browser on local dev, reproduce the failing route once before the fix, then verify the same path renders the edit page without console or query-client crash after the fix"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "Preserve the ordering constraint that the root cause is re-verified before code changes and that the confirmed fix is source-level, not instrumentation-level. Keep the hypothesis about `projectAccessGuard.ts` explicit until proven. Do not let this story depend on Playwright setup to determine whether the crash is fixed.",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Add a deterministic seeded Playwright smoke regression for project edit",
+      "description": "As a developer, I want one fast seeded real-browser smoke test for `/projects/$id/edit` so that this crash class is caught quickly in CI and local debugging without rerunning the full import flow.",
+      "acceptanceCriteria": [
+        "Add Bun-friendly Playwright setup and one spec that opens the app, navigates directly to a seeded Covidence-created `/projects/$id/edit`, and verifies expected edit controls render",
+        "The seeded smoke test reuses the shared browser failure helper and fails on route crash, `pageerror`, `console.error`, and the known `defaultQueryOptions` signature",
+        "Seed test data through an API path or a tiny local helper script rather than direct database mutation from the Playwright test",
+        "Configure trace-on-failure and screenshot-on-failure so this bug class leaves actionable artifacts",
+        "Keep this test deterministic and fast enough to remain the required smoke coverage for this area",
+        "`bun run lint` passes",
+        "`bun run build` passes",
+        "`bunx playwright test tests/e2e/projectEditFromCovidence.spec.ts` passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "This story must come after the source fix so the smoke test locks in the corrected behavior instead of codifying the crash. Preserve the invariant that seeded navigation is the primary fast browser guardrail and that seeding is deterministic but not tightly coupled to direct DB writes.",
+      "dependsOn": [
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Add one full Covidence import-to-edit Playwright regression",
+      "description": "As a developer, I want one end-to-end Covidence upload workflow test so that the actual title/abstract import, redirect, and final edit-page render stay covered in a true browser.",
+      "acceptanceCriteria": [
+        "Add exactly one high-value full workflow spec that opens `/admin/datasources/covidence-import`, fills the minimum required fields, uploads the three title/abstract CSVs, runs analyze/create, waits for navigation to `/projects/$id/edit`, and verifies the edit page renders",
+        "The workflow test reuses the shared browser failure helper and fails on route crash, `pageerror`, `console.error`, and the known `defaultQueryOptions` signature",
+        "Reuse the existing Covidence CSV fixtures or move only a minimal test-owned subset so fixture size stays intentionally small and the test remains reasonably fast",
+        "The test covers the real user journey but remains the only higher-level upload regression for this area rather than expanding into a large slow suite",
+        "`bun run lint` passes",
+        "`bun run build` passes",
+        "`bunx playwright test tests/e2e/covidenceImportCreateAndEdit.spec.ts` passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "Preserve the ordering constraint that the seeded smoke exists first and remains the faster required browser guardrail. This workflow test should validate upload, analyze/create, redirect, and final render together, but it must stay intentionally small so it does not become flaky or too slow to run often.",
+      "dependsOn": [
+        "US-003"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Tighten the existing Vitest route regression around the confirmed contract",
+      "description": "As a developer, I want the existing route-level Vitest coverage to reflect the confirmed query-client boundary so that local fast feedback complements, but does not replace, the browser regressions.",
+      "acceptanceCriteria": [
+        "Keep `src/app/routes/+projects/+$id/-+edit.vitest.tsx` in place and update it only after the real root-cause contract is confirmed",
+        "Add or refine assertions so the route-level test mirrors the production-sensitive boundary as closely as possible without pretending to replace real-browser navigation coverage",
+        "The test remains a fast inner-loop complement to Playwright instead of becoming the sole guard for this crash class",
+        "`bunx vitest run 'src/app/routes/+projects/+$id/-+edit.vitest.tsx'` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "Preserve the invariant that Vitest coverage stays as a speed layer only. Do not treat happy-dom or route-level coverage as sufficient proof for this bug class after the earlier real-browser escape.",
+      "dependsOn": [
+        "US-002",
+        "US-003",
+        "US-004"
+      ]
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-04-12T10:50:14.132Z"
+  }
+}
