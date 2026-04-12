@@ -850,14 +850,6 @@ const backfillQueuePromptReadyInsertSeq = (database: Database) => {
   `)
 }
 
-const upgradeLegacySentQueuePromptStatuses = (database: Database) => {
-  database.exec(`
-    UPDATE queue_prompt
-    SET status = 'claimed'
-    WHERE status = 'sent'
-  `)
-}
-
 const ensureQueuePromptSchema = (database: Database) => {
   const existingColumnNames = getTableColumnNames(database, 'queue_prompt')
   const missingColumns = queuePromptColumns.filter((column) => {
@@ -865,7 +857,6 @@ const ensureQueuePromptSchema = (database: Database) => {
   })
 
   addMissingQueuePromptColumns(database, missingColumns)
-  upgradeLegacySentQueuePromptStatuses(database)
   backfillQueuePromptReadyInsertSeq(database)
   database.exec(`DROP INDEX IF EXISTS idx_queue_prompt_status_created`)
   database.exec(`
@@ -3317,7 +3308,7 @@ const sqliteService = {
               updated_at = ?,
               server_id = ?,
               claim_id = NULL
-          WHERE status IN ('claimed', 'sent')
+          WHERE status IN ('claimed', 'running', 'sent')
             AND COALESCE(server_id, '') <> ?
             AND sent_at <= ?
         `,

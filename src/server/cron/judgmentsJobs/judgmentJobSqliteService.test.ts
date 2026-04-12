@@ -249,7 +249,7 @@ test('promotes claimed prompts to running without changing in-flight totals', as
   expect(await service.getInFlightCount(jobId)).toBe(1)
 })
 
-test('opening an existing job upgrades legacy sent rows to claimed without changing queue order', async () => {
+test('opening an existing job preserves legacy sent rows until recovery requeues them in original order', async () => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')
   }
@@ -323,12 +323,18 @@ test('opening an existing job upgrades legacy sent rows to claimed without chang
 
   await service.initializeJob(jobId)
 
-  expect(await service.getDispatchCounts(jobId)).toEqual({claimed: 1, running: 0})
+  expect(
+    await service.requeueAbandonedSentPrompts({
+      jobId,
+      serverJobId: 'server-b',
+      staleBefore: new Date(Date.now() + 1000),
+    }),
+  ).toBe(1)
   expect(
     (await service.claimReadyPrompts(jobId, 'server-a', 2)).map((prompt) => {
       return prompt.articleId
     }),
-  ).toEqual(['article-legacy-second', 'article-legacy-third'])
+  ).toEqual(['article-legacy-first', 'article-legacy-second'])
 })
 
 test('preserves original enqueue order when stale sent prompts are requeued', async () => {
@@ -383,6 +389,165 @@ test('preserves original enqueue order when stale sent prompts are requeued', as
       return prompt.articleId
     }),
   ).toEqual(['article-1', 'article-2', 'article-3'])
+})
+
+test('requeues stale sent, claimed, and running rows without duplicating terminal outcomes', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-recovery-statuses-${Date.now()}`
+  const modelId = `model-recovery-statuses-${Date.now()}`
+  const projectId = `project-recovery-statuses-${Date.now()}`
+  const jobId = `job-recovery-statuses-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Recovery Status Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(
+    jobId,
+    [
+      {articleId: 'article-sent', promptId: 'prompt-sent'},
+      {articleId: 'article-claimed', promptId: 'prompt-claimed'},
+      {articleId: 'article-running', promptId: 'prompt-running'},
+      {articleId: 'article-terminal-judged', promptId: 'prompt-terminal-judged'},
+      {articleId: 'article-terminal-skipped', promptId: 'prompt-terminal-skipped'},
+    ],
+    'server-a',
+  )
+
+  const claimedPrompts = await service.claimReadyPrompts(jobId, 'server-a', 5)
+  const sentPrompt = claimedPrompts.find((prompt) => {
+    return prompt.articleId === 'article-sent'
+  })
+  const claimedPrompt = claimedPrompts.find((prompt) => {
+    return prompt.articleId === 'article-claimed'
+  })
+  const runningPrompt = claimedPrompts.find((prompt) => {
+    return prompt.articleId === 'article-running'
+  })
+  const judgedPrompt = claimedPrompts.find((prompt) => {
+    return prompt.articleId === 'article-terminal-judged'
+  })
+  const skippedPrompt = claimedPrompts.find((prompt) => {
+    return prompt.articleId === 'article-terminal-skipped'
+  })
+
+  if (!sentPrompt || !claimedPrompt || !runningPrompt || !judgedPrompt || !skippedPrompt) {
+    throw new Error('Expected claimed prompts for recovery status test')
+  }
+
+  await service.markPromptAsRunning(jobId, runningPrompt.recordId)
+  await service.markPromptAsJudged(jobId, judgedPrompt.recordId)
+  await service.markPromptAsSkipped(jobId, skippedPrompt.recordId, 'no_fulltext')
+  await service.closeAll()
+
+  const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+
+  try {
+    sqliteDatabase.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA foreign_keys = ON;
+      PRAGMA synchronous = FULL;
+      PRAGMA busy_timeout = 5000;
+    `)
+    sqliteDatabase
+      .query(
+        `
+          UPDATE queue_prompt
+          SET status = CASE
+                WHEN id = ? THEN 'sent'
+                WHEN id = ? THEN 'claimed'
+                WHEN id = ? THEN 'running'
+                ELSE status
+              END,
+              sent_at = CASE
+                WHEN id IN (?, ?, ?) THEN ?
+                ELSE sent_at
+              END,
+              updated_at = CASE
+                WHEN id IN (?, ?, ?) THEN ?
+                ELSE updated_at
+              END,
+              server_id = CASE
+                WHEN id IN (?, ?, ?) THEN 'legacy-server'
+                ELSE server_id
+              END
+          WHERE id IN (?, ?, ?, ?, ?)
+        `,
+      )
+      .run(
+        sentPrompt.recordId,
+        claimedPrompt.recordId,
+        runningPrompt.recordId,
+        sentPrompt.recordId,
+        claimedPrompt.recordId,
+        runningPrompt.recordId,
+        new Date(Date.now() - 45_000).toISOString(),
+        sentPrompt.recordId,
+        claimedPrompt.recordId,
+        runningPrompt.recordId,
+        new Date(Date.now() - 45_000).toISOString(),
+        sentPrompt.recordId,
+        claimedPrompt.recordId,
+        runningPrompt.recordId,
+        sentPrompt.recordId,
+        claimedPrompt.recordId,
+        runningPrompt.recordId,
+        judgedPrompt.recordId,
+        skippedPrompt.recordId,
+      )
+  } finally {
+    sqliteDatabase.close(false)
+  }
+
+  await service.initializeJob(jobId)
+
+  expect(await service.getPromptStatusCounts(jobId)).toEqual(
+    expect.arrayContaining([
+      {count: 1, status: 'claimed'},
+      {count: 1, status: 'judged'},
+      {count: 1, status: 'running'},
+      {count: 1, status: 'sent'},
+      {count: 1, status: 'skipped'},
+    ]),
+  )
+  expect(
+    await service.requeueAbandonedSentPrompts({
+      jobId,
+      serverJobId: 'server-b',
+      staleBefore: new Date(Date.now() + 1000),
+    }),
+  ).toBe(3)
+  expect(await service.getDispatchCounts(jobId)).toEqual({claimed: 0, running: 0})
+  expect(await service.getPromptStatusCounts(jobId)).toEqual(
+    expect.arrayContaining([
+      {count: 3, status: 'ready'},
+      {count: 1, status: 'judged'},
+      {count: 1, status: 'skipped'},
+    ]),
+  )
+  expect(
+    (await service.claimReadyPrompts(jobId, 'server-c', 3)).map((prompt) => {
+      return prompt.articleId
+    }),
+  ).toEqual(['article-sent', 'article-claimed', 'article-running'])
 })
 
 test('runs isolated SQLite preflight against queue and outbox state', async () => {
