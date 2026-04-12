@@ -3189,6 +3189,24 @@ const sqliteService = {
         .run(now, recordId)
     })
   },
+  markPromptAsRecoverable: async (jobId: string, recordId: string) => {
+    return withOwnedJobDatabase(jobId, false, (database) => {
+      const now = new Date().toISOString()
+      database
+        .query(
+          `
+        UPDATE queue_prompt
+        SET status = 'ready',
+            sent_at = NULL,
+            updated_at = ?,
+            claim_id = NULL
+        WHERE id = ?
+          AND status IN ('claimed', 'running', 'sent')
+      `,
+        )
+        .run(now, recordId)
+    })
+  },
   markPromptAsSkipped: async (
     jobId: string,
     recordId: string,

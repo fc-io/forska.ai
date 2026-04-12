@@ -2,6 +2,7 @@ import {rateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {ConnectionError} from './connectionHealth.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
+import {enqueueClaimedJudgmentPrompts} from './judgmentDispatchRuntime.ts'
 import {getJudgmentEndpointAvailability} from './judgmentEndpointAvailability.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 import {filterRunningJobsByRuntimeMatch, type RunningJudgmentJob} from './judgmentsJobsGetRunningJobs.ts'
@@ -706,19 +707,26 @@ const sendToLLMForJobs = async (
     console.warn(`[capacity:${label}] mismatch: fetched`, totalPromptsFetched, 'but requested', requestsToSend)
   }
 
-  promptsToProcess.map((prompts) => {
-    void (async () => {
-      if (prompts.length > 0) {
-        await processClaimedPromptsByConnection({label, prompts})
-      }
-    })().catch((error) => {
-      const safeError =
-        error instanceof Error
-          ? {name: error.name, message: error.message, stack: error.stack}
-          : {message: String(error)}
-      console.error('judgmentsJobsSendToLLM job failed', {error: safeError})
-    })
+  const enqueueResults = await Promise.all(
+    promptsToProcess.map(async (prompts) => {
+      return prompts.length > 0
+        ? enqueueClaimedJudgmentPrompts({label, prompts})
+        : {acceptedCount: 0, rejectedPrompts: []}
+    }),
+  )
+
+  const rejectedPrompts = enqueueResults.flatMap((result) => {
+    return result.rejectedPrompts
   })
+
+  if (rejectedPrompts.length > 0) {
+    await requeueRejectedPrompts(rejectedPrompts)
+    schedulerLogger.warn(
+      'scheduler:dispatch-queue-full',
+      `[capacity:${label}] requeued claimed prompts because dispatch queues were full`,
+      {rejectedCount: rejectedPrompts.length},
+    )
+  }
 }
 
 export const judgmentsJobsSendToLLM = async (allJobs: RunningJudgmentJob[], serverJobId: string): Promise<void> => {
