@@ -8,6 +8,7 @@ import {
   getJudgmentJobSqliteService,
   JudgmentJobLeaseError,
   type JudgmentJobSqliteClaimedOutboxBatch,
+  type JudgmentJobSqliteOutboxClaim,
   type JudgmentJobSqliteOutboxEntry,
 } from './judgmentJobSqliteService.ts'
 import {recordJudgmentJobStorageTransfer} from './judgmentJobStorageTransferRuntime.ts'
@@ -43,6 +44,27 @@ type JudgmentOutboxForeignKeys = {
   modelIds: Set<string>
   projectIds: Set<string>
   promptIds: Set<string>
+}
+
+type JudgmentOutboxStringDiagnostics = {
+  hasBackslash: boolean
+  hasDoubleQuote: boolean
+  hasNewline: boolean
+  hasSemicolon: boolean
+  hasSingleQuote: boolean
+  length: number
+}
+
+type JudgmentOutboxFailureSample = {
+  answeredOriginal: JudgmentOutboxStringDiagnostics | null
+  articleId: string
+  explanation: JudgmentOutboxStringDiagnostics | null
+  judgmentId: string
+  outboxSeq: number
+  promptId: string
+  queuePromptId: string
+  quoteCount: number | null
+  rawResponseJsonBytes: number | null
 }
 
 type JudgmentNaturalKeyRow = {
@@ -307,6 +329,62 @@ const getImportCandidateJobIds = async (jobId?: string) => {
   })
 }
 
+const getStringDiagnostics = (value: string | null): JudgmentOutboxStringDiagnostics | null => {
+  if (value === null) {
+    return null
+  }
+
+  return {
+    hasBackslash: value.includes('\\'),
+    hasDoubleQuote: value.includes('"'),
+    hasNewline: value.includes('\n'),
+    hasSemicolon: value.includes(';'),
+    hasSingleQuote: value.includes("'"),
+    length: value.length,
+  }
+}
+
+const getSerializedBytes = (value: unknown) => {
+  if (value === null || value === undefined) {
+    return null
+  }
+
+  return new TextEncoder().encode(JSON.stringify(value)).length
+}
+
+const getFailureSample = (entry: JudgmentJobSqliteOutboxEntry): JudgmentOutboxFailureSample => {
+  return {
+    answeredOriginal: getStringDiagnostics(entry.answeredOriginal),
+    articleId: entry.articleId,
+    explanation: getStringDiagnostics(entry.explanation),
+    judgmentId: entry.judgmentId,
+    outboxSeq: entry.outboxSeq,
+    promptId: entry.promptId,
+    queuePromptId: entry.queuePromptId,
+    quoteCount: Array.isArray(entry.quotes) ? entry.quotes.length : null,
+    rawResponseJsonBytes: getSerializedBytes(entry.rawResponseJson),
+  }
+}
+
+const getFailureDiagnostics = ({
+  claim,
+  rows,
+}: {
+  claim: JudgmentJobSqliteOutboxClaim
+  rows: JudgmentJobSqliteOutboxEntry[]
+}) => {
+  const firstOutboxSeq = rows[0]?.outboxSeq ?? null
+  const lastOutboxSeq = rows[rows.length - 1]?.outboxSeq ?? null
+
+  return {
+    claimId: claim.claimId,
+    firstOutboxSeq,
+    lastOutboxSeq,
+    rowCount: claim.rowCount,
+    sampleRows: rows.slice(0, 3).map(getFailureSample),
+  }
+}
+
 const claimPendingOutboxBatchForJobIds = async ({
   claimedBy,
   jobIds,
@@ -513,11 +591,15 @@ export const runJudgmentJobSqliteOutboxImportCycleForClaimedBatch = async ({
       status: 'imported',
     }
   } catch (error) {
-    await sqliteService.releaseOutboxClaim({
-      claimId: claim.claimId,
-      errorMessage: error instanceof Error ? error.message : String(error),
-      jobId: claim.jobId,
-    })
+    const errorMessage = error instanceof Error ? error.message : String(error)
+
+    judgmentOutboxImportLogger.warn(
+      `importJudgments:failed:${claim.jobId}:${claim.claimId}`,
+      '[importJudgments] failed to import SQLite outbox claim',
+      {claimedBy, errorMessage, jobId: claim.jobId, ...getFailureDiagnostics({claim, rows})},
+    )
+
+    await sqliteService.releaseOutboxClaim({claimId: claim.claimId, errorMessage, jobId: claim.jobId})
     throw error
   }
 }

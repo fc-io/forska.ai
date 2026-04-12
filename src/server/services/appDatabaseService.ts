@@ -15,7 +15,6 @@ import {
   runDuckdbTransaction,
 } from '../utils/duckdbService.ts'
 import {clearWriterWriteFailure, recordWriterWriteFailure} from '../utils/writerWarnings.ts'
-import {getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
 
 type AppDatabaseMaintenanceCommand = 'checkpoint' | 'force_checkpoint'
 type AppDatabaseSnapshot = DuckdbSnapshot
@@ -83,26 +82,50 @@ const withWriterWriteTracking = async <_T>(action: string, operation: () => Prom
   }
 }
 
-const getAppendJudgmentValues = (row: JudgmentInsertRow) => {
+const getAppendJudgmentJsonParameter = (value: unknown) => {
+  return value === undefined ? null : JSON.stringify(value)
+}
+
+const getAppendJudgmentRowPlaceholders = () => {
   return `(
-    ${getQuotedStringList([row.id, row.articleId, row.modelId, row.promptId]).join(', ')},
-    ${getSqlLiteral(row.projectId)},
-    ${getSqlLiteral(row.isAnswered)},
-    ${getSqlLiteral(row.answeredOriginal)},
-    ${getSqlLiteral(row.answeredOriginalAsArray)},
-    ${getSqlLiteral(row.confidenceOriginal)},
-    ${getSqlLiteral(row.explanation)},
-    ${getSqlLiteral(row.quotes)},
-    ${getSqlLiteral(row.useTitle)},
-    ${getSqlLiteral(row.useAbstract)},
-    ${getSqlLiteral(row.useFulltext)},
-    ${getSqlLiteral(row.useFulltextNoImages)},
-    ${getSqlLiteral(row.chunkingStrategy)},
-    ${getSqlLiteral(row.snapshotProjectId)},
-    ${getSqlLiteral(row.snapshotProjectModelName)},
-    ${getSqlLiteral(row.createdAt)},
-    ${getSqlLiteral(row.updatedAt)}
+    ?, ?, ?, ?,
+    ?, ?, ?, (?::JSON)::VARCHAR[],
+    ?, ?, ?::JSON,
+    ?, ?, ?, ?,
+    ?, ?, ?,
+    ?::TIMESTAMPTZ, ?::TIMESTAMPTZ
   )`
+}
+
+const getAppendJudgmentParameters = (row: JudgmentInsertRow) => {
+  return [
+    row.id,
+    row.articleId,
+    row.modelId,
+    row.promptId,
+    row.projectId,
+    row.isAnswered,
+    row.answeredOriginal,
+    getAppendJudgmentJsonParameter(row.answeredOriginalAsArray),
+    row.confidenceOriginal,
+    row.explanation,
+    getAppendJudgmentJsonParameter(row.quotes),
+    row.useTitle,
+    row.useAbstract,
+    row.useFulltext,
+    row.useFulltextNoImages,
+    row.chunkingStrategy,
+    row.snapshotProjectId,
+    row.snapshotProjectModelName,
+    row.createdAt.toISOString(),
+    row.updatedAt.toISOString(),
+  ]
+}
+
+const getAppendJudgmentsParameters = (rows: JudgmentInsertRow[]) => {
+  return rows.flatMap((row) => {
+    return getAppendJudgmentParameters(row)
+  })
 }
 
 const getAppendJudgmentsSql = (rows: JudgmentInsertRow[]) => {
@@ -129,8 +152,8 @@ const getAppendJudgmentsSql = (rows: JudgmentInsertRow[]) => {
       created_at,
       updated_at
     ) VALUES ${rows
-      .map((row) => {
-        return getAppendJudgmentValues(row)
+      .map(() => {
+        return getAppendJudgmentRowPlaceholders()
       })
       .join(', ')}
     ON CONFLICT(article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, delete_generation) DO NOTHING
@@ -171,7 +194,10 @@ const appDatabaseService = {
       ? {attempted: 0, inserted: 0, skipped: 0}
       : withWriterWriteTracking('appendJudgments', async () => {
           appDatabaseAppendMetricsState.lastStartedAt = new Date().toISOString()
-          const insertedRows = await runDuckdbAppendJsonQuery<{id: string}>(getAppendJudgmentsSql(rows))
+          const insertedRows = await runDuckdbAppendJsonQuery<{id: string}>(
+            getAppendJudgmentsSql(rows),
+            getAppendJudgmentsParameters(rows),
+          )
           const inserted = insertedRows.length
           const skipped = rows.length - inserted
 

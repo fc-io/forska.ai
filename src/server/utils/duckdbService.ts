@@ -4,7 +4,7 @@ import {access, copyFile, mkdir, rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {basename, join} from 'node:path'
 
-import {DuckDBConnection, DuckDBInstance} from '@duckdb/node-api'
+import {DuckDBConnection, DuckDBInstance, type DuckDBType, type DuckDBValue} from '@duckdb/node-api'
 import {Effect} from 'effect'
 
 import {getEnv} from './env.ts'
@@ -59,6 +59,8 @@ type DuckdbTransactionRunner = {
   run: (statement: string) => Promise<void>
 }
 type DuckdbAppendBarrier = {promise: Promise<void>; resolve: () => void}
+type DuckdbBoundValues = DuckDBValue[] | Record<string, DuckDBValue>
+type DuckdbBoundTypes = DuckDBType[] | Record<string, DuckDBType | undefined>
 
 type DuckdbServiceState = {
   appendBarrier: DuckdbAppendBarrier | null
@@ -937,8 +939,10 @@ const runDuckdbSingleStatement = async (duckdbConnection: DuckDBConnection, stat
 const runDuckdbSingleStatementAndReadAll = async <T>(
   duckdbConnection: DuckDBConnection,
   statement: string,
+  values?: DuckdbBoundValues,
+  types?: DuckdbBoundTypes,
 ): Promise<T[]> => {
-  const reader = await duckdbConnection.runAndReadAll(statement)
+  const reader = await duckdbConnection.runAndReadAll(statement, values, types)
   return reader.getRowObjectsJson() as T[]
 }
 
@@ -1125,14 +1129,20 @@ export const runDuckdbBackgroundStatement = async (statement: string) => {
   })
 }
 
-export const runDuckdbAppendJsonQuery = async <T>(statement: string): Promise<T[]> => {
+export const runDuckdbAppendJsonQuery = async <T>(
+  statement: string,
+  values?: DuckdbBoundValues,
+  types?: DuckdbBoundTypes,
+): Promise<T[]> => {
   return withNormalizedDuckdbError(async () => {
     await ensureStartedDuckdbProcess()
     await waitForDuckdbAppendBarrier()
     const appendLaneIndex = getNextDuckdbAppendLaneIndex()
 
     return enqueueDuckdbAppendLaneWork(appendLaneIndex, (appendConnection) => {
-      return runDuckdbStatementsAndReadLastDirect<T>(appendConnection, splitDuckdbStatements(statement))
+      return values === undefined && types === undefined
+        ? runDuckdbStatementsAndReadLastDirect<T>(appendConnection, splitDuckdbStatements(statement))
+        : runDuckdbSingleStatementAndReadAll<T>(appendConnection, statement, values, types)
     })
   })
 }

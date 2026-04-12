@@ -160,3 +160,72 @@ test('appendJudgments uses append lanes and preserves dedupe semantics', async (
   expect(appendMetrics.queueDepth).toBe(0)
   expect(Number(countRow?.total ?? 0)).toBe(4)
 })
+
+test('appendJudgments safely inserts quote-heavy judgment text', async () => {
+  if (!appendJudgments || !queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const connectionId = `connection-quotes-${Date.now()}`
+  const modelId = `model-quotes-${Date.now()}`
+  const promptId = `prompt-quotes-${Date.now()}`
+  const articleId = `article-quotes-${Date.now()}`
+  const answeredOriginal = `'"CONCLUSIONS: ... Every unit needs a rational antibiotic policy."'`
+  const explanation =
+    `Results for febrile neutropenia over a period of 1-year are presented."', `
+    + `'"CONCLUSIONS: ... Every unit needs a rational antibiotic policy..."; unit's local path \\ward`
+  const createdAt = new Date()
+  const updatedAt = new Date(createdAt.getTime() + 1_000)
+  const rowId = `judgment-quotes-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES ('${promptId}', 'Prompt', '${promptId}-hash')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('${articleId}', 'Article')
+  `)
+
+  const result = await appendJudgments([
+    {
+      answeredOriginal,
+      answeredOriginalAsArray: [answeredOriginal, explanation],
+      articleId,
+      chunkingStrategy: null,
+      confidenceOriginal: 50,
+      createdAt,
+      explanation,
+      id: rowId,
+      isAnswered: true,
+      modelId,
+      projectId: null,
+      promptId,
+      quotes: [answeredOriginal, explanation],
+      snapshotProjectId: null,
+      snapshotProjectModelName: null,
+      updatedAt,
+      useAbstract: true,
+      useFulltext: false,
+      useFulltextNoImages: false,
+      useTitle: true,
+    },
+  ])
+  const [insertedRow] = await queryDatabase<{answeredOriginal: string | null; explanation: string | null}>(`
+    SELECT answered_original AS answeredOriginal, explanation
+    FROM app.judgment
+    WHERE id = '${rowId}'
+  `)
+
+  expect(result).toEqual({attempted: 1, inserted: 1, skipped: 0})
+  expect(insertedRow?.answeredOriginal).toBe(answeredOriginal)
+  expect(insertedRow?.explanation).toBe(explanation)
+})
