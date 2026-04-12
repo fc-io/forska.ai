@@ -565,7 +565,7 @@ const AdminJudgmentJobDetail = () => {
                         </Show>
                       </div>
                       <div>
-                        <p class="text-sm text-gray-500">Current Prompts in Progress limit</p>
+                        <p class="text-sm text-gray-500">Current Active LLM Calls limit</p>
                         <Show
                           when={!projectDetailsQuery.isLoading && !providerConnectionsQuery.isLoading}
                           fallback={<p class="font-medium">Loading...</p>}
@@ -639,9 +639,9 @@ const AdminJudgmentJobDetail = () => {
                         <p class="text-xs text-blue-600 mt-1">Local prompt backlog claimed by this server</p>
                       </div>
                       <div class="bg-sky-50 rounded-lg p-4">
-                        <p class="text-sm text-sky-600 mb-1">Running</p>
+                        <p class="text-sm text-sky-600 mb-1">Running Prompts</p>
                         <p class="text-2xl font-bold text-sky-900">{data()?.promptStats?.running ?? 0}</p>
-                        <p class="text-xs text-sky-600 mt-1">Prompts currently inside LLM execution</p>
+                        <p class="text-xs text-sky-600 mt-1">Prompt rows currently inside local LLM execution</p>
                       </div>
                       <div class="bg-green-50 rounded-lg p-4">
                         <p class="text-sm text-green-600 mb-1">Judged</p>
@@ -664,14 +664,14 @@ const AdminJudgmentJobDetail = () => {
                     <h2 class="text-lg font-semibold mb-4">Request Activity</h2>
                     <div class="grid gap-4 grid-cols-2">
                       <div class="bg-sky-50 rounded-lg p-4">
-                        <p class="text-sm text-sky-600 mb-1">In Flight</p>
+                        <p class="text-sm text-sky-600 mb-1">Active LLM Calls</p>
                         <p class="text-2xl font-bold text-sky-900">{data()?.requestStats?.inFlight ?? 0}</p>
-                        <p class="text-xs text-sky-600 mt-1">Actual LLM calls running now</p>
+                        <p class="text-xs text-sky-600 mt-1">Runtime request-level calls currently running now</p>
                       </div>
                       <div class="bg-indigo-50 rounded-lg p-4">
                         <p class="text-sm text-indigo-600 mb-1">Attempts</p>
                         <p class="text-2xl font-bold text-indigo-900">{data()?.requestStats?.attempts ?? 0}</p>
-                        <p class="text-xs text-indigo-600 mt-1">Real LLM call attempts so far</p>
+                        <p class="text-xs text-indigo-600 mt-1">Total runtime request attempts, not distinct prompts</p>
                       </div>
                     </div>
                   </div>

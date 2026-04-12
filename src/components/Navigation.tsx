@@ -43,8 +43,8 @@ const getLlmMetricsIndicator = (metrics: LlmMetricsSummary | null, nowMs: number
 
 const getLlmMetricsIndicatorTitle = (isFresh: boolean) => {
   return isFresh
-    ? 'Waiting / Running requests across all workers'
-    : 'Waiting / Running requests across all workers (no metrics update in last 3m)'
+    ? 'Runtime-only LLM waiting / running requests across all workers'
+    : 'Runtime-only LLM waiting / running requests across all workers (no metrics update in last 3m)'
 }
 
 const getLlmMetricsRefetchInterval = (pathname: string, rows: LlmStatusRow[]) => {
@@ -239,7 +239,7 @@ export const Navigation = () => {
                 {llmMetricsIndicator().waiting}/{llmMetricsIndicator().running}
               </div>
               <div class={`text-xs ${llmMetricsIndicator().isFresh ? 'text-gray-400' : 'text-red-400'}`}>
-                {formatLastUpdate(llmMetricsIndicator().lastUpdate)}
+                Runtime waiting/running | {formatLastUpdate(llmMetricsIndicator().lastUpdate)}
               </div>
             </div>
             <div

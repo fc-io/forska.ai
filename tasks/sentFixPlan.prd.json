@@ -177,14 +177,15 @@
         "Browser verify `/admin/jobs/:id`: local queue card shows `Ready`, `Claimed`, `Running Prompts`, `Judged`, and `Skipped`; request activity shows `Active LLM Calls` and `Attempts`; nav indicator still reflects runtime-only waiting or running"
       ],
       "priority": 7,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-006"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     }
   ],
   "metadata": {
-    "updatedAt": "2026-04-12T09:51:53.637Z"
+    "updatedAt": "2026-04-12T09:54:31.488Z"
   }
 }
