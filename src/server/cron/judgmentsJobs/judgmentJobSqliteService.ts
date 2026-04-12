@@ -170,7 +170,7 @@ export type JudgmentJobSqliteHealthSnapshot = {
   oldestUnexportedAgeMs: number | null
   orphanedJudgedRowCount: number
   outboxRowCount: number
-  promptCounts: {judged: number; ready: number; sent: number; skipped: number}
+  promptCounts: {claimed: number; judged: number; ready: number; running: number; skipped: number}
   retainedRowCount: number
   sqliteFileBytes: number | null
   walBytes: number
@@ -247,6 +247,8 @@ type OrphanedJudgedQueueRow = {articleId: string; promptId: string; queuePromptI
 type RetentionEligibleOutboxRow = {outboxSeq: number; queuePromptId: string}
 
 type RetentionPruneResult = {outboxRowsDeleted: number; queuePromptRowsDeleted: number}
+
+type PromptDispatchCounts = {claimed: number; running: number}
 
 type JudgmentJobStorageRow = {id: string}
 
@@ -848,6 +850,14 @@ const backfillQueuePromptReadyInsertSeq = (database: Database) => {
   `)
 }
 
+const upgradeLegacySentQueuePromptStatuses = (database: Database) => {
+  database.exec(`
+    UPDATE queue_prompt
+    SET status = 'claimed'
+    WHERE status = 'sent'
+  `)
+}
+
 const ensureQueuePromptSchema = (database: Database) => {
   const existingColumnNames = getTableColumnNames(database, 'queue_prompt')
   const missingColumns = queuePromptColumns.filter((column) => {
@@ -855,6 +865,7 @@ const ensureQueuePromptSchema = (database: Database) => {
   })
 
   addMissingQueuePromptColumns(database, missingColumns)
+  upgradeLegacySentQueuePromptStatuses(database)
   backfillQueuePromptReadyInsertSeq(database)
   database.exec(`DROP INDEX IF EXISTS idx_queue_prompt_status_created`)
   database.exec(`
@@ -1022,9 +1033,9 @@ const getSqliteCleanupCandidateJobIds = async ({
 }
 
 const getActiveQueueRowCount = (database: Database) => {
-  const row = database.query(`SELECT COUNT(*) AS count FROM queue_prompt WHERE status IN ('ready', 'sent')`).get() as {
-    count: number
-  } | null
+  const row = database
+    .query(`SELECT COUNT(*) AS count FROM queue_prompt WHERE status IN ('ready', 'claimed', 'running', 'sent')`)
+    .get() as {count: number} | null
 
   return Number(row?.count ?? 0)
 }
@@ -1092,7 +1103,7 @@ const getOrphanedJudgedQueueRowCount = (database: Database) => {
 }
 
 const getPromptCounts = (database: Database) => {
-  const promptCounts = {judged: 0, ready: 0, sent: 0, skipped: 0}
+  const promptCounts = {claimed: 0, judged: 0, ready: 0, running: 0, skipped: 0}
 
   ;(
     database
@@ -1108,12 +1119,28 @@ const getPromptCounts = (database: Database) => {
       .all() as QueueCountRow[]
   ).forEach((row) => {
     if (row.status === 'ready') promptCounts.ready = Number(row.count)
-    if (row.status === 'sent') promptCounts.sent = Number(row.count)
+    if (row.status === 'claimed' || row.status === 'sent') promptCounts.claimed += Number(row.count)
     if (row.status === 'judged') promptCounts.judged = Number(row.count)
+    if (row.status === 'running') promptCounts.running = Number(row.count)
     if (row.status === 'skipped') promptCounts.skipped = Number(row.count)
   })
 
   return promptCounts
+}
+
+const getDispatchCounts = (database: Database): PromptDispatchCounts => {
+  const row = database
+    .query(
+      `
+        SELECT
+          SUM(CASE WHEN status IN ('claimed', 'sent') THEN 1 ELSE 0 END) AS claimedCount,
+          SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) AS runningCount
+        FROM queue_prompt
+      `,
+    )
+    .get() as {claimedCount: number | null; runningCount: number | null} | null
+
+  return {claimed: Number(row?.claimedCount ?? 0), running: Number(row?.runningCount ?? 0)}
 }
 
 const getFileByteSize = (filePath: string) => {
@@ -1194,7 +1221,7 @@ const getEmptyHealthSnapshot = (): JudgmentJobSqliteHealthSnapshot => {
     oldestUnexportedAgeMs: null,
     orphanedJudgedRowCount: 0,
     outboxRowCount: 0,
-    promptCounts: {judged: 0, ready: 0, sent: 0, skipped: 0},
+    promptCounts: {claimed: 0, judged: 0, ready: 0, running: 0, skipped: 0},
     retainedRowCount: 0,
     sqliteFileBytes: null,
     walBytes: 0,
@@ -2390,9 +2417,9 @@ const sqliteService = {
         ORDER BY ready_insert_seq ASC, id ASC
         LIMIT ?
       `)
-        const markSent = database.query(`
+        const markClaimed = database.query(`
         UPDATE queue_prompt
-        SET status = 'sent',
+        SET status = 'claimed',
             sent_at = ?,
             updated_at = ?,
             server_id = ?,
@@ -2407,7 +2434,7 @@ const sqliteService = {
 
           return readyRows.flatMap((row) => {
             const claimId = randomUUID()
-            const result = markSent.run(now, now, serverJobId, claimId, row.id) as {changes?: number}
+            const result = markClaimed.run(now, now, serverJobId, claimId, row.id) as {changes?: number}
 
             return result.changes === 1
               ? [{articleId: row.articleId, jobId, promptId: row.promptId, recordId: row.id}]
@@ -2474,12 +2501,30 @@ const sqliteService = {
   getInFlightCount: async (jobId: string): Promise<number> => {
     return (
       withJobDatabase(jobId, false, (database) => {
-        const row = database.query(`SELECT COUNT(*) AS count FROM queue_prompt WHERE status = 'sent'`).get() as {
-          count: number
-        } | null
-
-        return Number(row?.count ?? 0)
+        const dispatchCounts = getDispatchCounts(database)
+        return dispatchCounts.claimed + dispatchCounts.running
       }) ?? 0
+    )
+  },
+  getClaimedCount: async (jobId: string): Promise<number> => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        return getDispatchCounts(database).claimed
+      }) ?? 0
+    )
+  },
+  getRunningCount: async (jobId: string): Promise<number> => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        return getDispatchCounts(database).running
+      }) ?? 0
+    )
+  },
+  getDispatchCounts: async (jobId: string): Promise<PromptDispatchCounts> => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        return getDispatchCounts(database)
+      }) ?? {claimed: 0, running: 0}
     )
   },
   getJobInfo: async (jobId: string): Promise<JudgmentJobSqliteInfo | null> => {
@@ -3119,6 +3164,23 @@ const sqliteService = {
         .run(now, now, recordId)
     })
   },
+  markPromptAsRunning: async (jobId: string, recordId: string) => {
+    return withOwnedJobDatabase(jobId, false, (database) => {
+      const now = new Date().toISOString()
+      database
+        .query(
+          `
+        UPDATE queue_prompt
+        SET status = 'running',
+            sent_at = ?,
+            updated_at = ?
+        WHERE id = ?
+          AND status IN ('claimed', 'sent')
+      `,
+        )
+        .run(now, now, recordId)
+    })
+  },
   markPromptAsRetry: async (jobId: string, recordId: string) => {
     return withOwnedJobDatabase(jobId, false, (database) => {
       const now = new Date().toISOString()
@@ -3255,7 +3317,7 @@ const sqliteService = {
               updated_at = ?,
               server_id = ?,
               claim_id = NULL
-          WHERE status = 'sent'
+          WHERE status IN ('claimed', 'sent')
             AND COALESCE(server_id, '') <> ?
             AND sent_at <= ?
         `,

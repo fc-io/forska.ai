@@ -139,6 +139,9 @@ test('claims and requeues prompts from the per-job SQLite queue', async () => {
 
   expect(claimed).toHaveLength(1)
   expect(await service.getReadyCount(jobId)).toBe(1)
+  expect(await service.getClaimedCount(jobId)).toBe(1)
+  expect(await service.getRunningCount(jobId)).toBe(0)
+  expect(await service.getDispatchCounts(jobId)).toEqual({claimed: 1, running: 0})
   expect(await service.getInFlightCount(jobId)).toBe(1)
 
   const requeued = await service.requeueAbandonedSentPrompts({
@@ -149,6 +152,7 @@ test('claims and requeues prompts from the per-job SQLite queue', async () => {
 
   expect(requeued).toBe(1)
   expect(await service.getReadyCount(jobId)).toBe(2)
+  expect(await service.getClaimedCount(jobId)).toBe(0)
   expect(await service.getInFlightCount(jobId)).toBe(0)
 })
 
@@ -198,6 +202,133 @@ test('claims ready prompts in insertion order for a fresh SQLite queue', async (
   ).toEqual(['article-first:prompt-first', 'article-second:prompt-second', 'article-third:prompt-third'])
 
   await service.closeAll()
+})
+
+test('promotes claimed prompts to running without changing in-flight totals', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-running-state-${Date.now()}`
+  const modelId = `model-running-state-${Date.now()}`
+  const projectId = `project-running-state-${Date.now()}`
+  const jobId = `job-running-state-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Running State Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(jobId, [{articleId: 'article-running', promptId: 'prompt-running'}], 'server-a')
+
+  const [claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Expected claimed prompt for running state test')
+  }
+
+  expect(await service.getDispatchCounts(jobId)).toEqual({claimed: 1, running: 0})
+  await service.markPromptAsRunning(jobId, claimedPrompt.recordId)
+  expect(await service.getClaimedCount(jobId)).toBe(0)
+  expect(await service.getRunningCount(jobId)).toBe(1)
+  expect(await service.getDispatchCounts(jobId)).toEqual({claimed: 0, running: 1})
+  expect(await service.getInFlightCount(jobId)).toBe(1)
+})
+
+test('opening an existing job upgrades legacy sent rows to claimed without changing queue order', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-legacy-sent-${Date.now()}`
+  const modelId = `model-legacy-sent-${Date.now()}`
+  const projectId = `project-legacy-sent-${Date.now()}`
+  const jobId = `job-legacy-sent-${Date.now()}`
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Legacy Sent Upgrade Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(
+    jobId,
+    [
+      {articleId: 'article-legacy-first', promptId: 'prompt-legacy-first'},
+      {articleId: 'article-legacy-second', promptId: 'prompt-legacy-second'},
+      {articleId: 'article-legacy-third', promptId: 'prompt-legacy-third'},
+    ],
+    'server-a',
+  )
+  await service.closeAll()
+
+  const sqliteDatabase = new Database(sqlitePath)
+
+  try {
+    sqliteDatabase.exec(`
+      PRAGMA journal_mode = WAL;
+      PRAGMA foreign_keys = ON;
+      PRAGMA synchronous = FULL;
+      PRAGMA busy_timeout = 5000;
+    `)
+    sqliteDatabase
+      .query(
+        `
+          UPDATE queue_prompt
+          SET status = 'sent',
+              sent_at = ?,
+              updated_at = ?,
+              server_id = ?,
+              claim_id = ?
+          WHERE article_id = 'article-legacy-first'
+        `,
+      )
+      .run(
+        new Date(Date.now() - 45_000).toISOString(),
+        new Date().toISOString(),
+        'legacy-server',
+        `legacy-claim-${Date.now()}`,
+      )
+  } finally {
+    sqliteDatabase.close(false)
+  }
+
+  await service.initializeJob(jobId)
+
+  expect(await service.getDispatchCounts(jobId)).toEqual({claimed: 1, running: 0})
+  expect(
+    (await service.claimReadyPrompts(jobId, 'server-a', 2)).map((prompt) => {
+      return prompt.articleId
+    }),
+  ).toEqual(['article-legacy-second', 'article-legacy-third'])
 })
 
 test('preserves original enqueue order when stale sent prompts are requeued', async () => {
@@ -647,9 +778,9 @@ test('claims each SQLite prompt pair at most once under competing writers', asyn
       ORDER BY ready_insert_seq ASC, id ASC
       LIMIT 1
     \`)
-    const markSent = database.query(\`
+    const markClaimed = database.query(\`
       UPDATE queue_prompt
-      SET status = 'sent',
+      SET status = 'claimed',
           sent_at = ?,
           updated_at = ?,
           server_id = ?,
@@ -672,7 +803,7 @@ test('claims each SQLite prompt pair at most once under competing writers', asyn
             return []
           }
 
-          const result = markSent.run(now, now, workerId, randomUUID(), row.id) as {changes?: number}
+          const result = markClaimed.run(now, now, workerId, randomUUID(), row.id) as {changes?: number}
 
           return result.changes === 1 ? [{articleId: row.articleId, promptId: row.promptId}] : []
         })()
@@ -1491,14 +1622,14 @@ test('computes a per-job SQLite health snapshot', async () => {
       {articleId: 'article-health-ready', promptId: 'prompt-health-ready'},
       {articleId: 'article-health-judged', promptId: 'prompt-health-judged'},
       {articleId: 'article-health-skipped', promptId: 'prompt-health-skipped'},
-      {articleId: 'article-health-sent', promptId: 'prompt-health-sent'},
+      {articleId: 'article-health-claimed', promptId: 'prompt-health-claimed'},
     ],
     'server-a',
   )
 
-  const [judgedPrompt, skippedPrompt, sentPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 3)
+  const [judgedPrompt, skippedPrompt, claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 3)
 
-  if (!judgedPrompt || !skippedPrompt || !sentPrompt) {
+  if (!judgedPrompt || !skippedPrompt || !claimedPrompt) {
     throw new Error('Failed to claim SQLite queue prompts for health snapshot test')
   }
 
@@ -1546,7 +1677,7 @@ test('computes a per-job SQLite health snapshot', async () => {
   expect(snapshot.outboxRowCount).toBe(1)
   expect(snapshot.oldestUnexportedAgeMs).toBeGreaterThanOrEqual(0)
   expect(snapshot.claimedOutboxCount).toBe(1)
-  expect(snapshot.promptCounts).toEqual({judged: 1, ready: 1, sent: 1, skipped: 1})
+  expect(snapshot.promptCounts).toEqual({claimed: 1, judged: 1, ready: 1, running: 0, skipped: 1})
   expect(snapshot.lastAckSeq).toBe(dirtyState?.dirtyToken ?? null)
   expect(snapshot.retainedRowCount).toBe(4)
 })
@@ -1585,7 +1716,7 @@ test('returns safe health snapshot defaults when the SQLite job db is missing', 
     oldestUnexportedAgeMs: null,
     orphanedJudgedRowCount: 0,
     outboxRowCount: 0,
-    promptCounts: {judged: 0, ready: 0, sent: 0, skipped: 0},
+    promptCounts: {claimed: 0, judged: 0, ready: 0, running: 0, skipped: 0},
     retainedRowCount: 0,
     sqliteFileBytes: null,
     walBytes: 0,

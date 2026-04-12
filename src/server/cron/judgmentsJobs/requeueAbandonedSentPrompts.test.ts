@@ -113,7 +113,8 @@ test('requeues sent SQLite prompts claimed by an older server job', async () => 
       .query(
         `
           UPDATE queue_prompt
-          SET sent_at = CASE
+          SET status = 'claimed',
+              sent_at = CASE
                   WHEN id = ? THEN ?
                   ELSE sent_at
                 END,
@@ -212,7 +213,7 @@ test('keeps older ready rows ahead of newer inserts and preserves stale sent que
       .query(
         `
           UPDATE queue_prompt
-          SET sent_at = ?, updated_at = ?
+          SET status = 'claimed', sent_at = ?, updated_at = ?
           WHERE id = ?
         `,
       )

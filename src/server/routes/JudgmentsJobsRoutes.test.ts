@@ -40,19 +40,17 @@ let runDatabase: ((statement: string) => Promise<void>) | null = null
 beforeAll(async () => {
   registerModuleMocks()
 
-  const [
-    {migrateDuckdb},
-    {getAppDatabaseService},
-    {resetDuckdbServiceForTests},
-    {resetServerRuntimeRoleForTests},
-    {judgmentsJobsRoutes},
-  ] = await Promise.all([
-    import('../../db/migrateDuckdb.ts'),
-    import('../services/appDatabaseService.ts'),
-    import('../utils/duckdbService.ts'),
-    import('../utils/serverRuntimeRole.ts'),
-    import(`./JudgmentsJobsRoutes.ts?test=${Date.now()}-${Math.random()}`),
-  ])
+  const [{migrateDuckdb}, {getAppDatabaseService}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}] =
+    await Promise.all([
+      import('../../db/migrateDuckdb.ts'),
+      import('../services/appDatabaseService.ts'),
+      import('../utils/duckdbService.ts'),
+      import('../utils/serverRuntimeRole.ts'),
+    ])
+  const judgmentsJobsRoutesModule = (await import(
+    `./JudgmentsJobsRoutes.ts?test=${Date.now()}-${Math.random()}`
+  )) as typeof import('./JudgmentsJobsRoutes.ts')
+  const {judgmentsJobsRoutes} = judgmentsJobsRoutesModule
 
   resetDuckdbServiceForTests()
   resetServerRuntimeRoleForTests()
@@ -720,14 +718,14 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
       {articleId: `sqlite-stats-article-ready-${Date.now()}`, promptId: `sqlite-stats-prompt-ready-${Date.now()}`},
       {articleId: `sqlite-stats-article-judged-${Date.now()}`, promptId: `sqlite-stats-prompt-judged-${Date.now()}`},
       {articleId: `sqlite-stats-article-skipped-${Date.now()}`, promptId: `sqlite-stats-prompt-skipped-${Date.now()}`},
-      {articleId: `sqlite-stats-article-sent-${Date.now()}`, promptId: `sqlite-stats-prompt-sent-${Date.now()}`},
+      {articleId: `sqlite-stats-article-claimed-${Date.now()}`, promptId: `sqlite-stats-prompt-claimed-${Date.now()}`},
     ],
     'server-a',
   )
 
-  const [judgedPrompt, skippedPrompt, sentPrompt] = await sqliteService.claimReadyPrompts(jobId, 'server-a', 3)
+  const [judgedPrompt, skippedPrompt, claimedPrompt] = await sqliteService.claimReadyPrompts(jobId, 'server-a', 3)
 
-  if (!judgedPrompt || !skippedPrompt || !sentPrompt) {
+  if (!judgedPrompt || !skippedPrompt || !claimedPrompt) {
     throw new Error('Failed to claim SQLite queue prompts for stats test')
   }
 
@@ -759,13 +757,13 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
 
   const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
   const body = (await response.json()) as {
-    promptStats: {judged: number; ready: number; sent: number; skipped: number}
+    promptStats: {claimed: number; judged: number; ready: number; running: number; skipped: number}
     storageHealth: {
       claimedOutboxCount: number
       lastAckSeq: number | null
       oldestUnexportedAgeMs: number | null
       outboxRowCount: number
-      promptCounts: {judged: number; ready: number; sent: number; skipped: number}
+      promptCounts: {claimed: number; judged: number; ready: number; running: number; skipped: number}
       retainedRowCount: number
       sqliteFileBytes: number | null
       walBytes: number
@@ -773,7 +771,7 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
   }
 
   expect(response.status).toBe(200)
-  expect(body.promptStats).toEqual({judged: 1, ready: 1, sent: 1, skipped: 1})
+  expect(body.promptStats).toEqual({claimed: 1, judged: 1, ready: 1, running: 0, skipped: 1})
   expect(body.storageHealth.promptCounts).toEqual(body.promptStats)
   expect(body.storageHealth.outboxRowCount).toBe(1)
   expect(body.storageHealth.retainedRowCount).toBe(4)
@@ -799,13 +797,13 @@ test('returns safe SQLite health values for jobs without a local sqlite db', asy
 
   const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
   const body = (await response.json()) as {
-    promptStats: {judged: number; ready: number; sent: number; skipped: number}
+    promptStats: {claimed: number; judged: number; ready: number; running: number; skipped: number}
     storageHealth: {
       claimedOutboxCount: number
       lastAckSeq: number | null
       oldestUnexportedAgeMs: number | null
       outboxRowCount: number
-      promptCounts: {judged: number; ready: number; sent: number; skipped: number}
+      promptCounts: {claimed: number; judged: number; ready: number; running: number; skipped: number}
       retainedRowCount: number
       sqliteFileBytes: number | null
       walBytes: number
@@ -813,14 +811,14 @@ test('returns safe SQLite health values for jobs without a local sqlite db', asy
   }
 
   expect(response.status).toBe(200)
-  expect(body.promptStats).toEqual({judged: 0, ready: 0, sent: 0, skipped: 0})
+  expect(body.promptStats).toEqual({claimed: 0, judged: 0, ready: 0, running: 0, skipped: 0})
   expect(body.storageHealth).toEqual({
     claimedOutboxCount: 0,
     lastAckSeq: null,
     oldestUnexportedAgeMs: null,
     orphanedJudgedRowCount: 0,
     outboxRowCount: 0,
-    promptCounts: {judged: 0, ready: 0, sent: 0, skipped: 0},
+    promptCounts: {claimed: 0, judged: 0, ready: 0, running: 0, skipped: 0},
     retainedRowCount: 0,
     sqliteFileBytes: null,
     walBytes: 0,
@@ -1019,7 +1017,7 @@ test('judgment job health route returns healthy job details', async () => {
     importMetadata: {importFailureCount: number; lastImportStartedAt: string | null}
     liveSqlite: {
       outboxRowCount: number
-      promptCounts: {judged: number; ready: number; sent: number; skipped: number}
+      promptCounts: {claimed: number; judged: number; ready: number; running: number; skipped: number}
       sqliteFileBytes: number | null
     }
   }
@@ -1031,7 +1029,7 @@ test('judgment job health route returns healthy job details', async () => {
   expect(body.importMetadata.importFailureCount).toBe(0)
   expect(body.importMetadata.lastImportStartedAt).toBeNull()
   expect(body.liveSqlite.outboxRowCount).toBe(0)
-  expect(body.liveSqlite.promptCounts).toEqual({judged: 0, ready: 0, sent: 0, skipped: 0})
+  expect(body.liveSqlite.promptCounts).toEqual({claimed: 0, judged: 0, ready: 0, running: 0, skipped: 0})
   expect(body.liveSqlite.sqliteFileBytes).not.toBeNull()
 })
 
@@ -1060,7 +1058,7 @@ test('judgment job health route returns missing job details', async () => {
       lastAckSeq: number | null
       oldestUnexportedAgeMs: number | null
       outboxRowCount: number
-      promptCounts: {judged: number; ready: number; sent: number; skipped: number}
+      promptCounts: {claimed: number; judged: number; ready: number; running: number; skipped: number}
       retainedRowCount: number
       sqliteFileBytes: number | null
       walBytes: number
@@ -1076,7 +1074,7 @@ test('judgment job health route returns missing job details', async () => {
     oldestUnexportedAgeMs: null,
     orphanedJudgedRowCount: 0,
     outboxRowCount: 0,
-    promptCounts: {judged: 0, ready: 0, sent: 0, skipped: 0},
+    promptCounts: {claimed: 0, judged: 0, ready: 0, running: 0, skipped: 0},
     retainedRowCount: 0,
     sqliteFileBytes: null,
     walBytes: 0,

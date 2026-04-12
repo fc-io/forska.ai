@@ -326,6 +326,7 @@ export const processPromptWithLLM = async (promptToProcess: PromptToProcess): Pr
   }
 
   try {
+    await getJudgmentJobSqliteService().markPromptAsRunning(promptToProcess.jobId, promptToProcess.recordId)
     processPromptLogger.log(
       `llm:calling:${promptToProcess.modelBaseUrl}`,
       '[llm] Calling LLM for article:',

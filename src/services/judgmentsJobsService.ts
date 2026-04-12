@@ -40,7 +40,7 @@ type JudgmentJobRepairResponse = {
     lastAckSeq: number | null
     oldestUnexportedAgeMs: number | null
     outboxRowCount: number
-    promptCounts: {judged: number; ready: number; sent: number; skipped: number}
+    promptCounts: {claimed: number; judged: number; ready: number; running: number; skipped: number}
     retainedRowCount: number
     sqliteFileBytes: number | null
     walBytes: number
@@ -85,7 +85,7 @@ const buildMissingJob = () => {
     pauseRequestedAt: null,
     error: '',
     projectName: '',
-    promptStats: {ready: 0, sent: 0, judged: 0, skipped: 0},
+    promptStats: {claimed: 0, ready: 0, running: 0, judged: 0, skipped: 0},
     requestStats: {inFlight: 0, attempts: 0},
   }
 }

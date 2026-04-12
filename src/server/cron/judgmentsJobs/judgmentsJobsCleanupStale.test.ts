@@ -140,7 +140,7 @@ test('cleanupStale automatically repairs recoverable orphaned judged queue rows 
   expect(await service.getHealthSnapshot(jobId)).toMatchObject({
     orphanedJudgedRowCount: 0,
     outboxRowCount: 0,
-    promptCounts: {judged: 0, ready: 1, sent: 0, skipped: 0},
+    promptCounts: {claimed: 0, judged: 0, ready: 1, running: 0, skipped: 0},
     retainedRowCount: 1,
   })
 })
