@@ -9,6 +9,8 @@ import {apiClient} from '../../../../../services/apiClient.ts'
 import {
   deleteJudgmentsJob,
   getJudgmentsJobById,
+  type JudgmentJobPromptStats,
+  type JudgmentJobRequestStats,
   pauseJudgmentsJob,
   runJudgmentsJobRepairAction,
   startJudgmentsJob,
@@ -128,8 +130,8 @@ type JobData = {
   useFulltext?: boolean
   useFulltextNoImages?: boolean
   totalTokenUsage?: {totalTokens?: number; totalPromptTokens?: number; totalCompletionTokens?: number}
-  promptStats?: {ready?: number; sent?: number; judged?: number; skipped?: number}
-  requestStats?: {inFlight?: number; attempts?: number}
+  promptStats?: Partial<JudgmentJobPromptStats>
+  requestStats?: Partial<JudgmentJobRequestStats>
   storageHealth?: {
     claimedOutboxCount?: number
     lastAckSeq?: number | null
@@ -146,7 +148,7 @@ type JobData = {
       rowsPerMinute?: number | null
       scopeArticleCount?: number | null
     }
-    promptCounts?: {judged?: number; ready?: number; sent?: number; skipped?: number}
+    promptCounts?: Partial<JudgmentJobPromptStats>
     retainedRowCount?: number
     sqliteFileBytes?: number | null
     walBytes?: number
@@ -467,7 +469,7 @@ const AdminJudgmentJobDetail = () => {
               return runtime?.enabled === false ? (runtime.reason ?? 'Judging is disabled for this server.') : null
             }
             const jobQueueGridClass = () => {
-              return `grid gap-4 ${shouldShowFulltextSkipped() ? 'grid-cols-4' : 'grid-cols-3'}`
+              return `grid gap-4 ${shouldShowFulltextSkipped() ? 'grid-cols-5' : 'grid-cols-4'}`
             }
             return (
               <>
@@ -632,9 +634,14 @@ const AdminJudgmentJobDetail = () => {
                         <p class="text-xs text-gray-500 mt-1">Prompts queued for judgment</p>
                       </div>
                       <div class="bg-blue-50 rounded-lg p-4">
-                        <p class="text-sm text-blue-600 mb-1">Prompts in Progress</p>
-                        <p class="text-2xl font-bold text-blue-900">{data()?.promptStats?.sent ?? 0}</p>
-                        <p class="text-xs text-blue-600 mt-1">Claimed prompts being worked on</p>
+                        <p class="text-sm text-blue-600 mb-1">Claimed</p>
+                        <p class="text-2xl font-bold text-blue-900">{data()?.promptStats?.claimed ?? 0}</p>
+                        <p class="text-xs text-blue-600 mt-1">Local prompt backlog claimed by this server</p>
+                      </div>
+                      <div class="bg-sky-50 rounded-lg p-4">
+                        <p class="text-sm text-sky-600 mb-1">Running</p>
+                        <p class="text-2xl font-bold text-sky-900">{data()?.promptStats?.running ?? 0}</p>
+                        <p class="text-xs text-sky-600 mt-1">Prompts currently inside LLM execution</p>
                       </div>
                       <div class="bg-green-50 rounded-lg p-4">
                         <p class="text-sm text-green-600 mb-1">Judged</p>

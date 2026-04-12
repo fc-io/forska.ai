@@ -719,13 +719,18 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
       {articleId: `sqlite-stats-article-judged-${Date.now()}`, promptId: `sqlite-stats-prompt-judged-${Date.now()}`},
       {articleId: `sqlite-stats-article-skipped-${Date.now()}`, promptId: `sqlite-stats-prompt-skipped-${Date.now()}`},
       {articleId: `sqlite-stats-article-claimed-${Date.now()}`, promptId: `sqlite-stats-prompt-claimed-${Date.now()}`},
+      {articleId: `sqlite-stats-article-running-${Date.now()}`, promptId: `sqlite-stats-prompt-running-${Date.now()}`},
     ],
     'server-a',
   )
 
-  const [judgedPrompt, skippedPrompt, claimedPrompt] = await sqliteService.claimReadyPrompts(jobId, 'server-a', 3)
+  const [judgedPrompt, skippedPrompt, claimedPrompt, runningPrompt] = await sqliteService.claimReadyPrompts(
+    jobId,
+    'server-a',
+    4,
+  )
 
-  if (!judgedPrompt || !skippedPrompt || !claimedPrompt) {
+  if (!judgedPrompt || !skippedPrompt || !claimedPrompt || !runningPrompt) {
     throw new Error('Failed to claim SQLite queue prompts for stats test')
   }
 
@@ -754,10 +759,12 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
     useTitle: true,
   })
   await sqliteService.markPromptAsSkipped(jobId, skippedPrompt.recordId, 'no_fulltext')
+  await sqliteService.markPromptAsRunning(jobId, runningPrompt.recordId)
 
   const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
   const body = (await response.json()) as {
     promptStats: {claimed: number; judged: number; ready: number; running: number; skipped: number}
+    requestStats: {attempts: number; inFlight: number}
     storageHealth: {
       claimedOutboxCount: number
       lastAckSeq: number | null
@@ -771,10 +778,11 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
   }
 
   expect(response.status).toBe(200)
-  expect(body.promptStats).toEqual({claimed: 1, judged: 1, ready: 1, running: 0, skipped: 1})
+  expect(body.promptStats).toEqual({claimed: 1, judged: 1, ready: 1, running: 1, skipped: 1})
   expect(body.storageHealth.promptCounts).toEqual(body.promptStats)
+  expect(body.requestStats.inFlight).toBe(0)
   expect(body.storageHealth.outboxRowCount).toBe(1)
-  expect(body.storageHealth.retainedRowCount).toBe(4)
+  expect(body.storageHealth.retainedRowCount).toBe(5)
   expect(body.storageHealth.sqliteFileBytes).not.toBeNull()
   expect(body.storageHealth.oldestUnexportedAgeMs).toBeGreaterThanOrEqual(0)
 })

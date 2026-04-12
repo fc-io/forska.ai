@@ -927,10 +927,18 @@ export const judgmentsJobsRoutes = new Elysia()
           )
         : null
 
+      const promptStats = {
+        claimed: sqliteHealth.promptCounts.claimed,
+        judged: sqliteHealth.promptCounts.judged,
+        ready: sqliteHealth.promptCounts.ready,
+        running: sqliteHealth.promptCounts.running,
+        skipped: sqliteHealth.promptCounts.skipped,
+      }
+
       return {
         ...job,
         leaseMetadata,
-        promptStats: sqliteHealth.promptCounts,
+        promptStats,
         storagePolicy,
         storageHealth: storageProjection === null ? sqliteHealth : {...sqliteHealth, projection: storageProjection},
         judgingRuntime: getJudgingRuntime(),

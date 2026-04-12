@@ -2,6 +2,18 @@ import {apiClient} from './apiClient.ts'
 import {handleApiResponse} from './utils/handleApiResponse'
 
 export type JudgmentJobRepairAction = 'checkpoint' | 'drain' | 'preflight' | 'quarantine' | 'repair' | 'unquarantine'
+export type JudgmentJobPromptStats = {claimed: number; judged: number; ready: number; running: number; skipped: number}
+export type JudgmentJobRequestStats = {
+  attempts: number
+  endpointAvailability?: {
+    cooldownRemainingMs: number | null
+    lastFailureKind: string | null
+    lastFailureMessage: string | null
+    probeInProgress: boolean
+    status: string
+  } | null
+  inFlight: number
+}
 
 type JudgmentJobRepairResponse = {
   action: JudgmentJobRepairAction
@@ -85,8 +97,8 @@ const buildMissingJob = () => {
     pauseRequestedAt: null,
     error: '',
     projectName: '',
-    promptStats: {claimed: 0, ready: 0, running: 0, judged: 0, skipped: 0},
-    requestStats: {inFlight: 0, attempts: 0},
+    promptStats: {claimed: 0, ready: 0, running: 0, judged: 0, skipped: 0} satisfies JudgmentJobPromptStats,
+    requestStats: {attempts: 0, endpointAvailability: null, inFlight: 0} satisfies JudgmentJobRequestStats,
   }
 }
 
