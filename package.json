@@ -137,6 +137,7 @@
     "ulid": "^3.0.2"
   },
   "devDependencies": {
+    "@playwright/test": "^1.54.2",
     "@eslint/js": "^10.0.1",
     "@tailwindcss/vite": "^4.2.1",
     "@types/bun": "^1.3.10",

@@ -10,6 +10,17 @@ export type ProjectAccess = {
   name: string
 }
 
+const getResponseData = <T>(
+  response: {data?: T | {data: T} | null; error?: unknown; status?: number},
+  errorMessage: string,
+): T => {
+  const result = handleApiResponse<T | {data: T}>(response, errorMessage)
+
+  return typeof result === 'object' && result !== null && 'data' in result
+    ? getResponseData<T>({data: result.data}, errorMessage)
+    : result
+}
+
 export const fetchProjects = async () => {
   const response = await apiClient.api.projects.get()
 
@@ -124,12 +135,7 @@ export const fetchProjectWithPrompts = async (projectId: string) => {
   try {
     const response = await apiClient.api.projects({id: projectId}).get()
 
-    if (response.error || !response.data?.data) {
-      console.error('Error fetching project:', response.error)
-      throw new Error('Project not found')
-    }
-
-    return response.data.data
+    return getResponseData(response, 'Project not found')
   } catch (err) {
     console.error('Error fetching project with prompts:', err)
     throw err
@@ -140,7 +146,7 @@ export const fetchProjectAccess = async (projectId: string): Promise<ProjectAcce
   try {
     const response = await apiClient.api.projects({id: projectId}).access.get()
 
-    return handleApiResponse<{data: ProjectAccess}>(response, 'Failed to fetch project access').data
+    return getResponseData(response, 'Failed to fetch project access')
   } catch (err) {
     console.error('Error fetching project access:', err)
     throw err

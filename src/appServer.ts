@@ -27,18 +27,18 @@ const resolveDistDir = () => {
 const distDir = resolveDistDir()
 const assetsDir = path.join(distDir, 'assets')
 
-const app = new Elysia()
-  .use(staticPlugin({assets: assetsDir, prefix: '/assets'}))
-  .all('/api/*', async ({request}) => {
-    const url = new URL(request.url)
+const app = new Elysia().use(staticPlugin({assets: assetsDir, prefix: '/assets'})).all('*', async ({request}) => {
+  const url = new URL(request.url)
+
+  if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
     const target = `${appServerRuntimeConfig.apiScheme}://${appServerRuntimeConfig.apiHost}:${appServerRuntimeConfig.apiPort}${url.pathname}${url.search}`
     const method = request.method
     const body = method === 'GET' || method === 'HEAD' ? undefined : request.body
     return fetch(target, {method, headers: request.headers, body})
-  })
-  .get('*', () => {
-    return file(path.join(distDir, 'index.html'))
-  })
+  }
+
+  return file(path.join(distDir, 'index.html'))
+})
 
 const listener = app.listen(appServerRuntimeConfig.port)
 
