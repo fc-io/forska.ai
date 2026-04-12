@@ -230,7 +230,16 @@ test('caps shared provider connections before splitting claims across jobs', () 
     getNonCodexCapacity: () => {
       return {maxBurst: 10, maxInflight: 10, workerCount: 1}
     },
-    inFlightCounts: new Map([
+    providerQueueCapacities: new Map([
+      ['connection-shared', 2],
+      ['connection-independent', 5],
+    ]),
+    readyCounts: new Map([
+      ['job-shared-a', 4],
+      ['job-shared-b', 4],
+      ['job-independent', 5],
+    ]),
+    runtimeInFlightCounts: new Map([
       ['job-shared-a', 5],
       ['job-shared-b', 3],
       ['job-independent', 0],
@@ -265,11 +274,6 @@ test('caps shared provider connections before splitting claims across jobs', () 
       },
     ],
     maxRequestsToSend: 20,
-    readyCounts: new Map([
-      ['job-shared-a', 4],
-      ['job-shared-b', 4],
-      ['job-independent', 5],
-    ]),
   })
 
   const limitsByConnection = new Map(
@@ -295,7 +299,16 @@ test('caps shared codex provider connections by the saved override before splitt
     getNonCodexCapacity: () => {
       return {maxBurst: 10, maxInflight: 10, workerCount: 1}
     },
-    inFlightCounts: new Map([
+    providerQueueCapacities: new Map([
+      ['connection-codex-shared', 1],
+      ['connection-codex-other', 4],
+    ]),
+    readyCounts: new Map([
+      ['job-codex-shared-a', 4],
+      ['job-codex-shared-b', 4],
+      ['job-codex-other', 4],
+    ]),
+    runtimeInFlightCounts: new Map([
       ['job-codex-shared-a', 1],
       ['job-codex-shared-b', 0],
       ['job-codex-other', 0],
@@ -330,11 +343,6 @@ test('caps shared codex provider connections by the saved override before splitt
       },
     ],
     maxRequestsToSend: 10,
-    readyCounts: new Map([
-      ['job-codex-shared-a', 4],
-      ['job-codex-shared-b', 4],
-      ['job-codex-other', 4],
-    ]),
   })
 
   const limitsByConnection = new Map(
@@ -360,7 +368,15 @@ test('lets different provider connections progress under a stricter shared bucke
     getNonCodexCapacity: () => {
       return {maxBurst: 10, maxInflight: 10, workerCount: 1}
     },
-    inFlightCounts: new Map([
+    providerQueueCapacities: new Map([
+      ['connection-a', 5],
+      ['connection-b', 5],
+    ]),
+    readyCounts: new Map([
+      ['job-a', 5],
+      ['job-b', 5],
+    ]),
+    runtimeInFlightCounts: new Map([
       ['job-a', 0],
       ['job-b', 0],
     ]),
@@ -385,10 +401,6 @@ test('lets different provider connections progress under a stricter shared bucke
       },
     ],
     maxRequestsToSend: 2,
-    readyCounts: new Map([
-      ['job-a', 5],
-      ['job-b', 5],
-    ]),
   })
 
   expect(allocations).toHaveLength(2)
@@ -409,6 +421,82 @@ test('lets different provider connections progress under a stricter shared bucke
       })
     }),
   ).toBe(true)
+})
+
+test('tops up from free dispatcher capacity instead of treating claimed backlog as running', () => {
+  const allocations = getRequestsToSendByProviderConnection({
+    getCodexDefaultMaxInflight: () => {
+      return 4
+    },
+    getNonCodexCapacity: () => {
+      return {maxBurst: 10, maxInflight: 10, workerCount: 1}
+    },
+    jobs: [
+      {
+        id: 'job-a',
+        maxInflightRequests: 2,
+        modelId: 'model-a',
+        modelName: 'Model A',
+        modelProvider: 'openai',
+        projectId: 'project-a',
+        providerConnectionId: 'connection-a',
+      },
+    ],
+    maxRequestsToSend: 10,
+    providerQueueCapacities: new Map([['connection-a', 1]]),
+    readyCounts: new Map([['job-a', 5]]),
+    runtimeInFlightCounts: new Map([['job-a', 0]]),
+  })
+
+  expect(allocations).toEqual([
+    {
+      connectionId: 'connection-a',
+      jobs: [
+        {
+          job: {
+            id: 'job-a',
+            maxInflightRequests: 2,
+            modelId: 'model-a',
+            modelName: 'Model A',
+            modelProvider: 'openai',
+            projectId: 'project-a',
+            providerConnectionId: 'connection-a',
+          },
+          limit: 1,
+        },
+      ],
+      limit: 1,
+    },
+  ])
+})
+
+test('caps connection claims by actual running requests plus dispatcher headroom', () => {
+  const allocations = getRequestsToSendByProviderConnection({
+    getCodexDefaultMaxInflight: () => {
+      return 4
+    },
+    getNonCodexCapacity: () => {
+      return {maxBurst: 10, maxInflight: 10, workerCount: 1}
+    },
+    jobs: [
+      {
+        id: 'job-a',
+        maxInflightRequests: 2,
+        modelId: 'model-a',
+        modelName: 'Model A',
+        modelProvider: 'openai',
+        projectId: 'project-a',
+        providerConnectionId: 'connection-a',
+      },
+    ],
+    maxRequestsToSend: 10,
+    providerQueueCapacities: new Map([['connection-a', 2]]),
+    readyCounts: new Map([['job-a', 5]]),
+    runtimeInFlightCounts: new Map([['job-a', 1]]),
+  })
+
+  expect(allocations[0]?.limit).toBe(1)
+  expect(allocations[0]?.jobs[0]?.limit).toBe(1)
 })
 
 test('dispatch availability skips 404 misroutes during cooldown, probes once after expiry, and skips misconfigured endpoints', () => {

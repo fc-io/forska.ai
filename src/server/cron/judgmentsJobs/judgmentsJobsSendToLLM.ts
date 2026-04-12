@@ -2,7 +2,7 @@ import {rateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {ConnectionError} from './connectionHealth.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
-import {enqueueClaimedJudgmentPrompts} from './judgmentDispatchRuntime.ts'
+import {enqueueClaimedJudgmentPrompts, getJudgmentDispatchQueueCapacity} from './judgmentDispatchRuntime.ts'
 import {getJudgmentEndpointAvailability} from './judgmentEndpointAvailability.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 import {filterRunningJobsByRuntimeMatch, type RunningJudgmentJob} from './judgmentsJobsGetRunningJobs.ts'
@@ -13,6 +13,7 @@ import {
   type PromptToProcess,
 } from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 import {processPromptWithLLM} from './judgmentsJobsSendToLLM/processPromptWithLLM.ts'
+import {getJudgmentRequestStats} from './judgmentsRequestRuntime.ts'
 import {requeueAbandonedSentPrompts} from './requeueAbandonedSentPrompts.ts'
 
 const shuffle = <T>(items: T[]): T[] => {
@@ -163,15 +164,38 @@ const getReadyCountsByJob = async (jobIds: string[]): Promise<Map<string, number
   return new Map(pairs)
 }
 
-const getInFlightCountsByJob = async (jobIds: string[]): Promise<Map<string, number>> => {
-  const sqliteService = getJudgmentJobSqliteService()
-  const pairs = await Promise.all(
-    jobIds.map(async (jobId) => {
-      return [jobId, await sqliteService.getInFlightCount(jobId)] as const
+const getRuntimeInFlightCountsByJob = (jobIds: string[]): Map<string, number> => {
+  return new Map(
+    jobIds.map((jobId) => {
+      return [jobId, getJudgmentRequestStats(jobId).inFlight] as const
+    }),
+  )
+}
+
+const getDispatchQueueCapacityByConnection = async (jobs: RunningJudgmentJob[]): Promise<Map<string, number>> => {
+  const connectionJobs = Array.from(
+    jobs.reduce((state, job) => {
+      const connectionId = job.providerConnectionId ?? job.id
+      return new Map(state).set(connectionId, state.get(connectionId) ?? job)
+    }, new Map<string, RunningJudgmentJob>()),
+  )
+
+  const capacities = await Promise.all(
+    connectionJobs.map(async ([connectionId, job]) => {
+      const providerCap = getEffectiveProviderCap({job})
+
+      return [
+        connectionId,
+        await getJudgmentDispatchQueueCapacity({
+          providerConnectionId: job.providerConnectionId,
+          providerMaxInflightRequests: providerCap.maxInflight,
+          providerUsesFamilyDefault: providerCap.usesFamilyDefault,
+        }),
+      ] as const
     }),
   )
 
-  return new Map(pairs)
+  return new Map(capacities)
 }
 
 const requeueRejectedPrompts = async (prompts: PromptToProcess[]) => {
@@ -527,15 +551,17 @@ export const getRequestsToSendByProviderConnection = <T extends RunningJudgmentJ
   getNonCodexCapacity = getJudgmentsCapacity,
   jobs,
   maxRequestsToSend,
-  inFlightCounts,
+  providerQueueCapacities,
   readyCounts,
+  runtimeInFlightCounts,
 }: {
   getCodexDefaultMaxInflight?: () => number
   getNonCodexCapacity?: (runningJobCount: number) => Capacity
   jobs: T[]
   maxRequestsToSend: number
-  inFlightCounts: Map<string, number>
+  providerQueueCapacities: Map<string, number>
   readyCounts: Map<string, number>
+  runtimeInFlightCounts: Map<string, number>
 }): ProviderConnectionRequestAllocation<T>[] => {
   const connectionGroups = Array.from(
     jobs.reduce((state, job) => {
@@ -554,11 +580,16 @@ export const getRequestsToSendByProviderConnection = <T extends RunningJudgmentJ
     const ready = connectionJobs.reduce((sum, job) => {
       return sum + (readyCounts.get(job.id) ?? 0)
     }, 0)
-    const promptsInFlight = connectionJobs.reduce((sum, job) => {
-      return sum + (inFlightCounts.get(job.id) ?? 0)
+    const runtimeInFlight = connectionJobs.reduce((sum, job) => {
+      return sum + (runtimeInFlightCounts.get(job.id) ?? 0)
     }, 0)
+    const providerQueueCapacity = providerQueueCapacities.get(connectionId) ?? 0
 
-    return {connectionId, jobs: connectionJobs, limit: Math.max(0, Math.min(ready, providerCap - promptsInFlight))}
+    return {
+      connectionId,
+      jobs: connectionJobs,
+      limit: Math.max(0, Math.min(ready, providerCap - runtimeInFlight, providerQueueCapacity)),
+    }
   })
   const sendableConnectionGroups = connectionGroups.filter(
     (group): group is {connectionId: string; jobs: T[]; limit: number} => {
@@ -625,12 +656,16 @@ const sendToLLMForJobs = async (
   const jobIds = jobs.map((job) => {
     return job.id
   })
-  const inFlightCounts = await getInFlightCountsByJob(jobIds)
-  const promptsInFlight = Array.from(inFlightCounts.values()).reduce((sum, count) => {
+  const runtimeInFlightCounts = getRuntimeInFlightCountsByJob(jobIds)
+  const providerQueueCapacities = await getDispatchQueueCapacityByConnection(jobs)
+  const promptsInFlight = Array.from(runtimeInFlightCounts.values()).reduce((sum, count) => {
     return sum + count
   }, 0)
   const deficit = Math.max(0, capacity.maxInflight - promptsInFlight)
-  const requestsToSend = Math.min(deficit, capacity.maxBurst)
+  const totalQueueCapacity = Array.from(providerQueueCapacities.values()).reduce((sum, count) => {
+    return sum + count
+  }, 0)
+  const requestsToSend = Math.min(deficit, capacity.maxBurst, totalQueueCapacity)
   const readyCounts = await getReadyCountsByJob(jobIds)
 
   if (requestsToSend > 0 || promptsInFlight > capacity.maxInflight * 0.9) {
@@ -642,6 +677,7 @@ const sendToLLMForJobs = async (
       maxBurst: capacity.maxBurst,
       workerCount: capacity.workerCount,
       deficit,
+      totalQueueCapacity,
       jobCount: jobs.length,
       readyCounts: readyCountsObj,
     })
@@ -652,8 +688,9 @@ const sendToLLMForJobs = async (
   const requestsToSendByConnection = getRequestsToSendByProviderConnection({
     jobs,
     maxRequestsToSend: requestsToSend,
-    inFlightCounts,
+    providerQueueCapacities,
     readyCounts,
+    runtimeInFlightCounts,
   })
   const requestsToSendByJob = await getClaimableRequests({allocations: requestsToSendByConnection, label})
   console.log(
