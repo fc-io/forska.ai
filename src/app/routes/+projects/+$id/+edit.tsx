@@ -1,4 +1,4 @@
-import {useQuery, useQueryClient} from '@tanstack/solid-query'
+import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import type {JSX} from 'solid-js'
 import {createEffect, createMemo, createSignal, For, Show, Suspense} from 'solid-js'
@@ -299,7 +299,7 @@ const EditProject = (): JSX.Element => {
   const params = Route.useParams()
   const projectId = (params() as {id: string}).id
   const navigate = useNavigate()
-  const queryClient = useQueryClient(appQueryClient)
+  const queryClient = appQueryClient
   const projectAccessQuery = useProjectAccessQuery(
     () => {
       return projectId

@@ -86,6 +86,11 @@ const formatRowsPerMinute = (value: number | null | undefined) => {
   return value === null || value === undefined ? 'N/A' : `${value.toLocaleString()} rows/min`
 }
 
+const formatSignedRowCount = (value: number | null | undefined) => {
+  const normalizedValue = Number(value ?? 0)
+  return `${normalizedValue > 0 ? '+' : ''}${normalizedValue.toLocaleString()} rows`
+}
+
 const getHeartbeatAgeMs = (heartbeatAt: string | null | undefined) => {
   return heartbeatAt ? Math.max(Date.now() - new Date(heartbeatAt).getTime(), 0) : null
 }
@@ -138,6 +143,17 @@ type JobData = {
     oldestUnexportedAgeMs?: number | null
     orphanedJudgedRowCount?: number
     outboxRowCount?: number
+    recentTransfer?: {
+      addedRows?: number
+      addedRowsPerMinute?: number
+      clearedRows?: number
+      clearedRowsPerMinute?: number
+      insertedRows?: number
+      insertedRowsPerMinute?: number
+      netRows?: number
+      netRowsPerMinute?: number
+      windowMinutes?: number
+    }
     projection?: {
       activeLargeRebuildProjectCount?: number
       currentPhase?: string | null
@@ -366,6 +382,9 @@ const AdminJudgmentJobDetail = () => {
             }
             const storageHealth = () => {
               return data()?.storageHealth
+            }
+            const recentTransfer = () => {
+              return storageHealth()?.recentTransfer
             }
             const storagePolicy = () => {
               return data()?.storagePolicy
@@ -718,6 +737,28 @@ const AdminJudgmentJobDetail = () => {
                         Claimed: {storageHealth()?.claimedOutboxCount ?? 0} | Retained:{' '}
                         {storageHealth()?.retainedRowCount ?? 0} | Orphaned judged:{' '}
                         {storageHealth()?.orphanedJudgedRowCount ?? 0}
+                      </p>
+                    </div>
+                    <div class="bg-gray-50 rounded-lg p-4 md:col-span-2 xl:col-span-1">
+                      <p class="text-sm text-gray-500">Recent Outbox Flow</p>
+                      <p class="font-medium mt-1">
+                        Net {formatSignedRowCount(recentTransfer()?.netRows)} (
+                        {formatRowsPerMinute(recentTransfer()?.netRowsPerMinute ?? 0)})
+                      </p>
+                      <p class="text-xs text-gray-500 mt-1">
+                        Last {recentTransfer()?.windowMinutes ?? 5}m of actual runtime activity
+                      </p>
+                      <p class="text-xs text-gray-500 mt-1">
+                        Added: {(recentTransfer()?.addedRows ?? 0).toLocaleString()} (
+                        {formatRowsPerMinute(recentTransfer()?.addedRowsPerMinute ?? 0)})
+                      </p>
+                      <p class="text-xs text-gray-500 mt-1">
+                        Cleared: {(recentTransfer()?.clearedRows ?? 0).toLocaleString()} (
+                        {formatRowsPerMinute(recentTransfer()?.clearedRowsPerMinute ?? 0)})
+                      </p>
+                      <p class="text-xs text-gray-500 mt-1">
+                        DuckDB inserts: {(recentTransfer()?.insertedRows ?? 0).toLocaleString()} (
+                        {formatRowsPerMinute(recentTransfer()?.insertedRowsPerMinute ?? 0)})
                       </p>
                     </div>
                     <div class="bg-gray-50 rounded-lg p-4">

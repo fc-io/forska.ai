@@ -89,9 +89,12 @@ afterEach(async () => {
     await import('../utils/projectMartLargeRebuildRuntimeMetrics.ts')
   const {resetJudgmentEndpointAvailabilityForTests} =
     await import('../cron/judgmentsJobs/judgmentEndpointAvailability.ts')
+  const {resetJudgmentJobStorageTransferRuntimeForTests} =
+    await import('../cron/judgmentsJobs/judgmentJobStorageTransferRuntime.ts')
 
   resetProjectMartLargeRebuildRuntimeMetricsForTests()
   resetJudgmentEndpointAvailabilityForTests()
+  resetJudgmentJobStorageTransferRuntimeForTests()
 })
 
 const insertProjectFixture = async ({
@@ -997,6 +1000,140 @@ test('job details include projected storage drain when a large rebuild is active
   expect(body.storageHealth.projection?.estimatedStorageDrainRemainingMs).toBeGreaterThanOrEqual(13000)
   expect(body.storageHealth.projection?.estimatedStorageDrainRemainingMs).toBeLessThanOrEqual(15000)
   expect(body.storageHealth.projection?.projectedStorageDrainAt).not.toBeNull()
+})
+
+test('returns recent outbox flow metrics from actual SQLite add and import activity', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {flushJudgmentJobSqliteOutbox} = await import('../cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts')
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const sqliteService = getJudgmentJobSqliteService()
+  const projectId = `recent-outbox-flow-project-${Date.now()}`
+  const modelId = `recent-outbox-flow-model-${Date.now()}`
+  const connectionId = `recent-outbox-flow-connection-${Date.now()}`
+  const jobId = `recent-outbox-flow-job-${Date.now()}`
+  const firstArticleId = `recent-outbox-flow-article-1-${Date.now()}`
+  const firstPromptId = `recent-outbox-flow-prompt-1-${Date.now()}`
+  const secondArticleId = `recent-outbox-flow-article-2-${Date.now()}`
+  const secondPromptId = `recent-outbox-flow-prompt-2-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_id, article_title, article_created_at, article_updated_at)
+    VALUES
+      ('${firstArticleId}', 'external-${firstArticleId}', 'Recent outbox flow article 1', current_timestamp, current_timestamp),
+      ('${secondArticleId}', 'external-${secondArticleId}', 'Recent outbox flow article 2', current_timestamp, current_timestamp)
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES
+      ('${firstPromptId}', 'Recent outbox flow prompt 1', '${firstPromptId}-hash'),
+      ('${secondPromptId}', 'Recent outbox flow prompt 2', '${secondPromptId}-hash')
+  `)
+
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(
+    jobId,
+    [
+      {articleId: firstArticleId, promptId: firstPromptId},
+      {articleId: secondArticleId, promptId: secondPromptId},
+    ],
+    'server-a',
+  )
+
+  const [firstPrompt, secondPrompt] = await sqliteService.claimReadyPrompts(jobId, 'server-a', 2)
+
+  if (!firstPrompt || !secondPrompt) {
+    throw new Error('Failed to claim SQLite queue prompts for recent outbox flow test')
+  }
+
+  await sqliteService.recordJudgmentSuccess(jobId, {
+    answeredOriginal: 'yes',
+    answeredOriginalAsArray: ['yes'],
+    articleId: firstPrompt.articleId,
+    chunkingStrategy: null,
+    confidenceOriginal: 70,
+    createdAt: new Date(),
+    explanation: 'because',
+    isAnswered: true,
+    judgmentId: `recent-outbox-flow-judgment-1-${Date.now()}`,
+    modelId,
+    projectId,
+    promptId: firstPrompt.promptId,
+    queuePromptId: firstPrompt.recordId,
+    quotes: ['quote'],
+    rawResponseJson: {answer: 'yes'},
+    snapshotProjectId: projectId,
+    snapshotProjectModelName: 'Qwen 122B',
+    updatedAt: new Date(),
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
+  await flushJudgmentJobSqliteOutbox({jobId})
+  await sqliteService.recordJudgmentSuccess(jobId, {
+    answeredOriginal: 'no',
+    answeredOriginalAsArray: ['no'],
+    articleId: secondPrompt.articleId,
+    chunkingStrategy: null,
+    confidenceOriginal: 80,
+    createdAt: new Date(),
+    explanation: 'because',
+    isAnswered: true,
+    judgmentId: `recent-outbox-flow-judgment-2-${Date.now()}`,
+    modelId,
+    projectId,
+    promptId: secondPrompt.promptId,
+    queuePromptId: secondPrompt.recordId,
+    quotes: ['quote'],
+    rawResponseJson: {answer: 'no'},
+    snapshotProjectId: projectId,
+    snapshotProjectModelName: 'Qwen 122B',
+    updatedAt: new Date(),
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
+
+  const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
+  const body = (await response.json()) as {
+    storageHealth: {
+      outboxRowCount: number
+      recentTransfer?: {
+        addedRows: number
+        addedRowsPerMinute: number
+        clearedRows: number
+        clearedRowsPerMinute: number
+        insertedRows: number
+        insertedRowsPerMinute: number
+        netRows: number
+        netRowsPerMinute: number
+        windowMinutes: number
+      }
+    }
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.storageHealth.outboxRowCount).toBe(1)
+  expect(body.storageHealth.recentTransfer).toEqual({
+    addedRows: 2,
+    addedRowsPerMinute: 0.4,
+    clearedRows: 1,
+    clearedRowsPerMinute: 0.2,
+    insertedRows: 1,
+    insertedRowsPerMinute: 0.2,
+    netRows: 1,
+    netRowsPerMinute: 0.2,
+    windowMinutes: 5,
+  })
 })
 
 test('judgment job health route returns healthy job details', async () => {

@@ -1,5 +1,5 @@
 import {createMutation, useQuery} from '@tanstack/solid-query'
-import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
+import {createFileRoute, Link} from '@tanstack/solid-router'
 import {createEffect, createMemo, createSignal, For, Show} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
@@ -397,16 +397,12 @@ const appendCovidenceEligibilityFieldsToFormData = (
   }, formData)
 }
 
-const postCovidenceFormData = async <T>(params: {errorMessage: string; formData: FormData; path: string}) => {
+const postCovidenceFormData = async <T,>(params: {errorMessage: string; formData: FormData; path: string}) => {
   const response = await fetch(params.path, {body: params.formData, method: 'POST'})
   const payload = await getParsedJsonResponseBody(response)
 
   return handleApiResponse<T>(
-    {
-      data: payload as T,
-      error: response.ok ? undefined : payload,
-      status: response.status,
-    },
+    {data: payload as T, error: response.ok ? undefined : payload, status: response.status},
     params.errorMessage,
   )
 }
@@ -486,7 +482,6 @@ const createCovidenceImport = async (params: {
 }
 
 const AdminCovidenceImport = () => {
-  const navigate = useNavigate()
   const [mode, setMode] = createSignal<CovidenceImportMode>('title_abstract')
   const [projectName, setProjectName] = createSignal('')
   const [description, setDescription] = createSignal('')
@@ -546,10 +541,11 @@ const AdminCovidenceImport = () => {
       mutationFn: createCovidenceImport,
       onSuccess: (result) => {
         const projectId = result.data.covidenceProject?.id
+        const nextPath = projectId
+          ? `/projects/${projectId}/edit`
+          : `/admin/datasources/${result.data.dataSource.id}/edit`
 
-        return projectId
-          ? void navigate({params: {id: projectId}, to: '/projects/$id/edit'})
-          : void navigate({params: {id: result.data.dataSource.id}, to: '/admin/datasources/$id/edit'})
+        globalThis.location.assign(nextPath)
       },
     }
   })
@@ -569,9 +565,7 @@ const AdminCovidenceImport = () => {
   }
 
   const handleLoadEligibilityFromClipboard = () => {
-    const readText = globalThis.navigator?.clipboard?.readText
-
-    if (!readText) {
+    if (!globalThis.navigator?.clipboard?.readText) {
       setPageError('Clipboard read is not available in this browser')
       return
     }
@@ -579,8 +573,8 @@ const AdminCovidenceImport = () => {
     setIsLoadingClipboard(true)
     setPageError('')
 
-    void readText
-      .call(globalThis.navigator.clipboard)
+    void globalThis.navigator.clipboard
+      .readText()
       .then((text) => {
         const parsed = parseCovidenceEligibilityClipboardText(text)
 
@@ -687,8 +681,8 @@ const AdminCovidenceImport = () => {
               <p class="text-xs font-semibold uppercase tracking-[0.28em] text-amber-700">Admin import flow</p>
               <h1 class="text-3xl font-semibold tracking-tight text-stone-900">Covidence multi-file import</h1>
               <p class="max-w-2xl text-sm leading-6 text-stone-600">
-                Upload the required Covidence CSV exports, inspect the merged rows, then
-                create the datasource, prompt, linked project, and seeded judgments in one pass.
+                Upload the required Covidence CSV exports, inspect the merged rows, then create the datasource, prompt,
+                linked project, and seeded judgments in one pass.
               </p>
             </div>
             <Button as={Link} to="/admin/datasources" variant="outline" size="sm">
@@ -864,9 +858,7 @@ const AdminCovidenceImport = () => {
                       {isLoadingClipboard() ? 'Loading...' : 'Load from Clipboard'}
                     </Button>
                   </div>
-                  <p class="mt-3 text-xs text-stone-500">
-                    Empty include or exclude sections stay blank after import.
-                  </p>
+                  <p class="mt-3 text-xs text-stone-500">Empty include or exclude sections stay blank after import.</p>
                 </div>
 
                 <div class="grid gap-4 md:col-span-2">

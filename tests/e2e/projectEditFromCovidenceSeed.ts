@@ -1,21 +1,17 @@
 import {rmSync} from 'node:fs'
 import path from 'node:path'
 
+import {
+  appendCovidenceFixtureFileEntry,
+  createPlaywrightProviderModel,
+  playwrightCovidenceEligibilityField,
+  playwrightCovidenceProjectDescription,
+  playwrightCovidenceProjectTitle,
+} from './covidenceImportFixtures'
+
 type SeededProject = {projectId: string}
 
-type ProviderConnectionCreateResponse = {data: {connection: {id: string}}}
-type ProviderModelCreateResponse = {data: {modelId: string}}
 type CovidenceCreateResponse = {data: {covidenceProject: {id: string} | null; dataSource: {id: string}}}
-
-const seedTitle = 'Playwright Covidence Project'
-const allReferencesCsv = [
-  'Title,Authors,Year,DOI',
-  'Study A,"Doe, Jane",2024,10.1000/alpha',
-  'Study B,"Roe, John",2023,10.1000/beta',
-  'Study C,"Lane, Kim",2022,10.1000/gamma',
-].join('\n')
-const irrelevantReferencesCsv = ['Title,Authors,Year,DOI', 'Study B,"Roe, John",2023,10.1000/beta'].join('\n')
-const fullTextReferencesCsv = ['Title,Authors,Year,DOI', 'Study A,"Doe, Jane",2024,10.1000/alpha'].join('\n')
 
 const assertOk = async <T>(response: Response, errorMessage: string): Promise<T> => {
   if (!response.ok) {
@@ -48,7 +44,7 @@ const waitForSeededProject = async (apiBaseUrl: string, projectId: string) => {
     if (response.ok) {
       const payload = getUnwrappedData<{project?: {name?: string}; prompts?: unknown[]}>(await response.json())
 
-      if (payload?.project?.name === seedTitle && Array.isArray(payload.prompts)) {
+      if (payload?.project?.name === playwrightCovidenceProjectTitle && Array.isArray(payload.prompts)) {
         return
       }
     }
@@ -59,72 +55,22 @@ const waitForSeededProject = async (apiBaseUrl: string, projectId: string) => {
   throw new Error(`Seeded project ${projectId} was not readable in time`)
 }
 
-const createProviderConnection = async (apiBaseUrl: string) => {
-  const response = await fetch(`${apiBaseUrl}/api/provider-connections`, {
-    method: 'POST',
-    headers: {'content-type': 'application/json'},
-    body: JSON.stringify({
-      baseURL: 'http://127.0.0.1:1234/v1',
-      label: 'Playwright LM Studio',
-      providerKind: 'llmstudio',
-    }),
-  })
-  const payload = await assertOk<ProviderConnectionCreateResponse>(response, 'Failed to create provider connection')
-
-  return payload.data.connection.id
-}
-
-const createProviderModel = async (apiBaseUrl: string, connectionId: string) => {
-  const response = await fetch(`${apiBaseUrl}/api/provider-connections/${connectionId}/models`, {
-    method: 'POST',
-    headers: {'content-type': 'application/json'},
-    body: JSON.stringify({displayName: 'Playwright Model', remoteModelId: 'playwright-model'}),
-  })
-  const payload = await assertOk<ProviderModelCreateResponse>(response, 'Failed to create provider model')
-
-  return payload.data.modelId
-}
-
-const appendFileEntry = (
-  formData: FormData,
-  params: {content: string; fileName: string; fileRole: string; index: number},
-) => {
-  formData.append(`files[${params.index}].file`, new Blob([params.content], {type: 'text/csv'}), params.fileName)
-  formData.append(`files[${params.index}].fileRole`, params.fileRole)
-  return formData
-}
-
 const createCovidenceProject = async (apiBaseUrl: string, modelId: string) => {
-  const formData = appendFileEntry(new FormData(), {
-    content: allReferencesCsv,
-    fileName: 'all.csv',
-    fileRole: 'all',
-    index: 0,
-  })
+  const formData = appendCovidenceFixtureFileEntry(new FormData(), {fileName: 'all.csv', fileRole: 'all', index: 0})
 
-  appendFileEntry(formData, {
-    content: irrelevantReferencesCsv,
-    fileName: 'irrelevant.csv',
-    fileRole: 'irrelevant',
-    index: 1,
-  })
+  appendCovidenceFixtureFileEntry(formData, {fileName: 'irrelevant.csv', fileRole: 'irrelevant', index: 1})
 
-  appendFileEntry(formData, {
-    content: fullTextReferencesCsv,
-    fileName: 'full_text.csv',
-    fileRole: 'full_text',
-    index: 2,
-  })
+  appendCovidenceFixtureFileEntry(formData, {fileName: 'full_text.csv', fileRole: 'full_text', index: 2})
 
   formData.append('answerSet', 'yes|no|maybe')
   formData.append('mode', 'title_abstract')
   formData.append('modelId', modelId)
-  formData.append('title', seedTitle)
-  formData.append('description', 'Seeded for Playwright smoke coverage')
-  formData.append('eligibilityFields[0].disposition', 'include')
-  formData.append('eligibilityFields[0].sectionKey', 'population')
-  formData.append('eligibilityFields[0].sectionLabel', 'Population')
-  formData.append('eligibilityFields[0].text', 'Adults with chronic conditions')
+  formData.append('title', playwrightCovidenceProjectTitle)
+  formData.append('description', playwrightCovidenceProjectDescription)
+  formData.append('eligibilityFields[0].disposition', playwrightCovidenceEligibilityField.disposition)
+  formData.append('eligibilityFields[0].sectionKey', playwrightCovidenceEligibilityField.sectionKey)
+  formData.append('eligibilityFields[0].sectionLabel', playwrightCovidenceEligibilityField.sectionLabel)
+  formData.append('eligibilityFields[0].text', playwrightCovidenceEligibilityField.text)
 
   const response = await fetch(`${apiBaseUrl}/api/datasources/import/covidence-create`, {
     method: 'POST',
@@ -140,8 +86,7 @@ const cleanupCovidenceAssets = (dataSourceId: string) => {
 }
 
 export const seedProjectEditFromCovidence = async (apiBaseUrl: string): Promise<SeededProject> => {
-  const connectionId = await createProviderConnection(apiBaseUrl)
-  const modelId = await createProviderModel(apiBaseUrl, connectionId)
+  const modelId = await createPlaywrightProviderModel(apiBaseUrl)
   const payload = await createCovidenceProject(apiBaseUrl, modelId)
   const projectId = payload.covidenceProject?.id
 

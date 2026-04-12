@@ -10,6 +10,7 @@ import {
   type JudgmentJobSqliteClaimedOutboxBatch,
   type JudgmentJobSqliteOutboxEntry,
 } from './judgmentJobSqliteService.ts'
+import {recordJudgmentJobStorageTransfer} from './judgmentJobStorageTransferRuntime.ts'
 
 const judgmentOutboxBatchMaxRows = 100
 const judgmentOutboxBatchMaxBytes = 4 * 1024 * 1024
@@ -475,7 +476,7 @@ export const runJudgmentJobSqliteOutboxImportCycleForClaimedBatch = async ({
     const {missingEntries} = await partitionExistingJudgments(importableEntries)
     const duplicateCount = importableEntries.length - missingEntries.length
 
-    await sqliteService.completeClaimedOutboxRows({
+    const discardedClearedCount = await sqliteService.completeClaimedOutboxRows({
       claimId: claim.claimId,
       jobId: claim.jobId,
       rows: discardedEntries.map(({entry, errorMessage}) => {
@@ -493,7 +494,13 @@ export const runJudgmentJobSqliteOutboxImportCycleForClaimedBatch = async ({
       await markRefreshStateDirtyForEntries(importableEntries, claimedBy)
     }
 
-    await sqliteService.completeOutboxClaim({claimId: claim.claimId, jobId: claim.jobId})
+    const importedClearedCount = await sqliteService.completeOutboxClaim({claimId: claim.claimId, jobId: claim.jobId})
+
+    recordJudgmentJobStorageTransfer({
+      clearedRows: discardedClearedCount + importedClearedCount,
+      insertedRows: missingEntries.length,
+      jobId: claim.jobId,
+    })
 
     return {
       claimedBy,

@@ -22,6 +22,7 @@ import {
   getJudgmentJobsRootDirectory,
 } from './judgmentJobPaths.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
+import {recordJudgmentJobStorageTransfer} from './judgmentJobStorageTransferRuntime.ts'
 
 type JobInfoRow = {
   cursorLastArticleId: string | null
@@ -3231,8 +3232,8 @@ const sqliteService = {
   },
   recordJudgmentSuccess: async (jobId: string, outboxInsert: QueuePromptOutboxInsert) => {
     return withOwnedJobDatabase(jobId, false, (database) => {
-      database.transaction((input: QueuePromptOutboxInsert) => {
-        database
+      const insertedRows = database.transaction((input: QueuePromptOutboxInsert) => {
+        const insertResult = database
           .query(
             `
           INSERT OR IGNORE INTO judgment_outbox (
@@ -3286,7 +3287,7 @@ const sqliteService = {
             JSON.stringify(input.rawResponseJson),
             input.createdAt.toISOString(),
             input.updatedAt.toISOString(),
-          )
+          ) as {changes?: number}
         database
           .query(
             `
@@ -3300,7 +3301,11 @@ const sqliteService = {
         `,
           )
           .run(input.updatedAt.toISOString(), input.updatedAt.toISOString(), input.queuePromptId)
+
+        return Number(insertResult.changes ?? 0)
       })(outboxInsert)
+
+      recordJudgmentJobStorageTransfer({addedRows: insertedRows, jobId})
     })
   },
   requeueAbandonedSentPrompts: async ({

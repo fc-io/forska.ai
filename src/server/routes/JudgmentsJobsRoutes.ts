@@ -14,6 +14,7 @@ import {
 import {flushJudgmentJobSqliteOutbox} from '../cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts'
 import {assertJudgmentJobCanRunSqlitePreflight} from '../cron/judgmentsJobs/judgmentJobSqlitePreflight.ts'
 import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
+import {getJudgmentJobStorageTransferRuntime} from '../cron/judgmentsJobs/judgmentJobStorageTransferRuntime.ts'
 import {
   getJudgmentJobRepairMode,
   getJudgmentJobStartupHandling,
@@ -912,6 +913,7 @@ export const judgmentsJobsRoutes = new Elysia()
       const tokenUsagePerDay = aggregateTokenUsagePerDay(normalizedTokenUsageRows)
       const requestRuntimeStats = getJudgmentRequestStats(job.id)
       const storagePolicy = getStoragePolicy({job, sqliteHealth})
+      const recentTransfer = getJudgmentJobStorageTransferRuntime(job.id)
       const providerConnection = await getProviderConnectionForStoredModel(projectModelId)
       const effectiveBaseURL = providerConnection
         ? getProviderConnectionEffectiveBaseURL({
@@ -934,13 +936,18 @@ export const judgmentsJobsRoutes = new Elysia()
         running: sqliteHealth.promptCounts.running,
         skipped: sqliteHealth.promptCounts.skipped,
       }
+      const storageHealth = {
+        ...sqliteHealth,
+        ...(storageProjection ? {projection: storageProjection} : {}),
+        ...(recentTransfer ? {recentTransfer} : {}),
+      }
 
       return {
         ...job,
         leaseMetadata,
         promptStats,
         storagePolicy,
-        storageHealth: storageProjection === null ? sqliteHealth : {...sqliteHealth, projection: storageProjection},
+        storageHealth,
         judgingRuntime: getJudgingRuntime(),
         totalTokenUsage: {
           totalTokens: Number(totalTokenUsage[0]?.totalTokens || 0),
