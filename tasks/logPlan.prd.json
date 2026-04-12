@@ -1,0 +1,330 @@
+{
+  "name": "Structured Runtime Logging Migration",
+  "branchName": "ralph/structured-runtime-logging",
+  "description": "Move repeating runtime noise out of the terminal and into structured per-service JSONL files, while keeping startup guidance, warnings, and errors visible in the terminal and making concurrent same-service runs attributable with per-record instance identity.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add shared logging config and runtime-profile resolution",
+      "description": "As a developer, I want logging config and runtime-profile resolution centralized so every server runtime derives the same log root and sink behavior without ad hoc env reads.",
+      "acceptanceCriteria": [
+        "Add shared log config resolution for `LOG_DIR`, `LOG_LEVEL`, and stderr threshold through `src/server/utils/env.ts`, `src/server/utils/getAppServerRuntimeConfig.ts`, or one shared helper.",
+        "Add explicit runtime-profile resolution for `primary`, `secondary`, and `local`, including a stable `FORSKA_RUNTIME_PROFILE` marker for launcher-driven runs.",
+        "Resolved log roots map to `logs/runtime/<profile>/` for server runtimes without raw `process.env.LOG_*` reads at call sites.",
+        "`bun run lint` passes",
+        "`bun test src/server/utils/env.test.ts` passes",
+        "`bun test src/server/utils/getAppServerRuntimeConfig.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Add shared per-process instance identity",
+      "description": "As an operator, I want every server log line to identify the emitting process so shared daily service files remain attributable when multiple same-service instances run at once.",
+      "acceptanceCriteria": [
+        "Add one shared helper that emits `runtimeProfile`, `instanceId`, `hostname`, `pid`, `processStartedAt`, and `service` on every server-side log record.",
+        "API, worker, and `dev-single` records also include `serverRole` and `apiServerPort`, and app-server records include `appServerPort`.",
+        "`instanceId` uses `<service>:<hostname>:<port>:<pid>:<processStartedAt>` and reuses existing identity pieces from `src/server/utils/writerConnections.ts` where possible.",
+        "`bun run lint` passes",
+        "`bun test src/server/utils/env.test.ts` passes",
+        "`bun test src/server/utils/getAppServerRuntimeConfig.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-003",
+      "title": "Add the shared JSONL file sink",
+      "description": "As a developer, I want one file-backed structured logger sink so server runtimes can write JSONL to stable per-service daily files without inventing separate logging stacks.",
+      "acceptanceCriteria": [
+        "Add a shared file-backed sink that writes one JSON event per line to `logs/runtime/<profile>/<service>-YYYY-MM-DD.jsonl` using UTC calendar dates.",
+        "Daily files are partitioned by `runtimeProfile + service + UTC date`, not by subsystem or per-process filenames.",
+        "Multiple same-service instances in the same profile append to the same daily service file and remain attributable from per-record instance fields.",
+        "Use `Effect` internally for file-handle lifecycle, flush, retry, and shutdown-safe cleanup without forcing `Effect` at each call site.",
+        "`bun run lint` passes",
+        "`bun test src/server/utils/env.test.ts` passes",
+        "`bun test src/server/utils/getAppServerRuntimeConfig.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001", "US-002"]
+    },
+    {
+      "id": "US-004",
+      "title": "Extend rateLimitedLogger with explicit sink routing",
+      "description": "As a developer, I want the existing rate-limited logger to route progress and failure events to the correct sinks so noisy paths can migrate with minimal call-site churn.",
+      "acceptanceCriteria": [
+        "Extend `src/server/utils/rateLimitedLogger.ts` so routine `INFO` and `DEBUG` events are `file-only` and `WARN` and `ERROR` events are `both`.",
+        "Preserve suppressed-count behavior and rate limiting while writing structured JSONL records.",
+        "Reuse the existing Bun-safe serialization behavior from `src/server/utils/installSafeConsoleLogging.ts` or an extracted shared helper instead of adding a second object-printing path.",
+        "Logging an error does not swallow failures; thrown errors and returned error results still propagate after logging.",
+        "`bun run lint` passes",
+        "`bun test src/server/utils/env.test.ts` passes",
+        "`bun test src/server/utils/getAppServerRuntimeConfig.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003"]
+    },
+    {
+      "id": "US-005",
+      "title": "Route startup and operator guidance to both sinks",
+      "description": "As an operator, I want startup, shutdown, and readiness guidance to remain visible in the terminal while also landing in structured log files.",
+      "acceptanceCriteria": [
+        "Update `src/server/index.ts`, `src/appServer.ts`, and `src/server/utils/getCodexAppServerClient.ts` so startup, shutdown, and operator guidance lines are `both`.",
+        "Structured startup and guidance records include service and instance identity fields.",
+        "Interactive CLI and JSON-contract scripts remain outside the server file logger and stay `terminal-only`.",
+        "`bun run lint` passes",
+        "`bun test src/server/utils/env.test.ts` passes",
+        "`bun test src/server/utils/getAppServerRuntimeConfig.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-004"]
+    },
+    {
+      "id": "US-006",
+      "title": "Keep operator-visible failures duplicated to file and terminal",
+      "description": "As an operator, I want route, DuckDB, lease, and provider-loading failures to stay visible in terminal stderr while also landing in JSONL files.",
+      "acceptanceCriteria": [
+        "Update `src/server/utils/routeErrorHandler.ts`, `src/server/utils/duckdbService.ts`, `src/server/utils/duckdbOwnerLease.ts`, and `src/server/routes/ModelsRoutes.ts` so operator-visible failures and recovery warnings are `both`.",
+        "Preserve existing stderr visibility and exception or error-result propagation after logging.",
+        "Do not downgrade thrown or returned failures into file-only events.",
+        "`bun run lint` passes",
+        "`bun test src/server/utils/env.test.ts` passes",
+        "`bun test src/server/utils/getAppServerRuntimeConfig.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-004"]
+    },
+    {
+      "id": "US-007",
+      "title": "Migrate judgment queue progress logs",
+      "description": "As an operator, I want recurring queue-refresh and prompt-fetch chatter moved out of the terminal so judgment scheduling stays observable without flooding live output.",
+      "acceptanceCriteria": [
+        "Migrate recurring progress logs in `src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.ts` and `src/server/cron/judgmentsJobs/judgmentsJobsCronGetPrompts.ts` to structured JSONL events.",
+        "Routine queue and prompt-fetch progress messages are `file-only` and include `component`, `event`, `jobId`, `projectId`, and related attrs where relevant.",
+        "Warnings and errors in these paths remain `both`.",
+        "`bun run lint` passes",
+        "`bun test src/server/utils/env.test.ts` passes",
+        "`bun test src/server/utils/getAppServerRuntimeConfig.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-004"]
+    },
+    {
+      "id": "US-008",
+      "title": "Migrate LLM dispatch and capacity progress logs",
+      "description": "As an operator, I want recurring LLM batch and capacity chatter written as structured events so the worker runtime stays readable while failures remain obvious.",
+      "acceptanceCriteria": [
+        "Migrate recurring progress logs in `src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.ts` and `src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/processPromptWithLLM.ts` to structured JSONL events.",
+        "Routine batch, retry, skip, and capacity progress messages are `file-only` with fields such as `claimedPrompts`, `fulfilled`, `requeuedCount`, and related attrs where relevant.",
+        "Warnings, errors, and processing failures in these paths remain `both` and still propagate.",
+        "`bun run lint` passes",
+        "`bun test src/server/utils/env.test.ts` passes",
+        "`bun test src/server/utils/getAppServerRuntimeConfig.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-004"]
+    },
+    {
+      "id": "US-009",
+      "title": "Migrate full-text fetch progress and timing logs",
+      "description": "As an operator, I want full-text fetch progress and hot-path timing recorded as structured events so terminal output stays focused on real problems.",
+      "acceptanceCriteria": [
+        "Migrate recurring progress logs in `src/server/cron/fullTextJobs.ts` to structured JSONL events.",
+        "Replace `console.time` and `console.timeEnd` usage in `src/server/cron/fullTextJobs.ts` with explicit `durationMs` fields on structured events.",
+        "Routine fetch progress is `file-only` and failures remain `both`.",
+        "`bun run lint` passes",
+        "`bun test src/server/utils/env.test.ts` passes",
+        "`bun test src/server/utils/getAppServerRuntimeConfig.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-004"]
+    },
+    {
+      "id": "US-010",
+      "title": "Migrate full-text conversion and helper progress logs",
+      "description": "As an operator, I want conversion and fallback full-text progress written to JSONL so repeated helper chatter leaves the terminal without hiding failures.",
+      "acceptanceCriteria": [
+        "Migrate recurring progress logs in `src/server/cron/fullTextConversionJobs.ts`, `src/server/utils/ensureFullText.ts`, and `src/server/utils/convertPdfToText.ts` to structured JSONL events.",
+        "Routine conversion, retry, fallback, and summary messages are `file-only` and warnings or errors remain `both`.",
+        "Any timing currently emitted in these paths is represented as explicit structured fields instead of `console.time` output.",
+        "`bun run lint` passes",
+        "`bun test src/server/utils/env.test.ts` passes",
+        "`bun test src/server/utils/getAppServerRuntimeConfig.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-004"]
+    },
+    {
+      "id": "US-011",
+      "title": "Migrate review request summary logs",
+      "description": "As an operator, I want repeating reviews request and filter summaries moved into JSONL so read-heavy review flows stop spamming the terminal.",
+      "acceptanceCriteria": [
+        "Migrate request-start and request-summary logs in `src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviews.ts`, `src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsCount.ts`, and `src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsFilters.ts` to structured JSONL events.",
+        "Routine request summaries are `file-only` and include request context such as project id, counts, and filter summary attrs where relevant.",
+        "Errors in these routes remain `both` and preserve current failure behavior.",
+        "`bun run lint` passes",
+        "`bun test src/server/utils/env.test.ts` passes",
+        "`bun test src/server/utils/getAppServerRuntimeConfig.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-004"]
+    },
+    {
+      "id": "US-012",
+      "title": "Migrate export and add-articles progress logs",
+      "description": "As an operator, I want export and add-articles progress chatter in structured files so large request flows stay inspectable without overwhelming terminal output.",
+      "acceptanceCriteria": [
+        "Migrate recurring progress logs in `src/server/routes/ProjectExportRoutes.ts` and `src/server/routes/ProjectsAddArticlesRoutes.ts` to structured JSONL events.",
+        "Routine export progress, streamed-count, and applied-filter summaries are `file-only` with explicit structured attrs.",
+        "Warnings and errors in these paths remain `both`.",
+        "`bun run lint` passes",
+        "`bun test src/server/utils/env.test.ts` passes",
+        "`bun test src/server/utils/getAppServerRuntimeConfig.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-004"]
+    },
+    {
+      "id": "US-013",
+      "title": "Migrate heartbeat and config chatter",
+      "description": "As an operator, I want steady-state heartbeat and background-loop config chatter written to JSONL so long-running workers stay quiet unless something needs attention.",
+      "acceptanceCriteria": [
+        "Migrate steady-state heartbeat and config logs in `src/server/utils/projectMartRefreshWorkerHeartbeat.ts` and `src/server/utils/projectMartLargeRebuildHeartbeat.ts` to structured JSONL events.",
+        "Routine heartbeat and config lines are `file-only` and include structured attrs for loop configuration where relevant.",
+        "Warnings and errors in these heartbeat paths remain `both`.",
+        "`bun run lint` passes",
+        "`bun test src/server/utils/env.test.ts` passes",
+        "`bun test src/server/utils/getAppServerRuntimeConfig.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-004"]
+    },
+    {
+      "id": "US-014",
+      "title": "Remove or dev-gate browser and inspection logs",
+      "description": "As a developer, I want browser debug dumps and temporary inspection logs removed from normal runs so they do not pollute either the terminal or the server logging pipeline.",
+      "acceptanceCriteria": [
+        "Remove or dev-gate the listed browser debug dumps and success chatter in `src/app/routes/+projects/+$id/+humanAssessment.tsx`, `src/app/routes/+admin/+failed_requests/+$id/+index.tsx`, `src/app/utils/client-env.ts`, `src/components/main/ProjectsGrid.tsx`, `src/app/routes/+projects/+$id/+reviews-llm/+$articleId/+index.tsx`, and `src/app/routes/+projects/+$id/+reviews-llm/+$articleId/+fulltext.tsx`.",
+        "Remove or dev-gate the temporary inspection logs in `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.ts`.",
+        "Do not forward browser debug logs or temporary inspection logs into the server JSONL pipeline.",
+        "`bun run lint` passes",
+        "`bun test src/server/utils/env.test.ts` passes",
+        "`bun test src/server/utils/getAppServerRuntimeConfig.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-004"]
+    },
+    {
+      "id": "US-015",
+      "title": "Add focused logger and path-selection tests",
+      "description": "As a developer, I want regression coverage for logger behavior so JSONL writing, sink routing, and instance identity stay correct as more call sites migrate.",
+      "acceptanceCriteria": [
+        "Add or update focused tests for JSONL writing, sink selection, rate limiting, service path selection, env parsing, and per-record instance identity.",
+        "Cover shared service-file behavior where multiple same-service instances are distinguished by `instanceId` rather than separate filenames.",
+        "Keep the targeted env, judgments, and heartbeat tests aligned with the new logger behavior.",
+        "`bun run lint` passes",
+        "`bun test src/server/utils/env.test.ts` passes",
+        "`bun test src/server/utils/getAppServerRuntimeConfig.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-005", "US-006", "US-007", "US-008", "US-009", "US-010", "US-011", "US-012", "US-013", "US-014"]
+    },
+    {
+      "id": "US-016",
+      "title": "Verify live runtime sink behavior",
+      "description": "As an operator, I want a real runtime verification pass so I know routine progress is file-only, failures are duplicated to terminal and file, and concurrent instances remain attributable.",
+      "acceptanceCriteria": [
+        "Run `bun run dev:server`, exercise a reviews flow and an export flow, and confirm routine progress logs are `file-only` while `logs/runtime/primary/*.jsonl` receives structured entries.",
+        "Trigger at least one failing request or background-job error path and confirm the failure is `both`: visible in terminal stderr and present in the matching JSONL file.",
+        "If multiple same-service processes are started intentionally in one profile, confirm the shared daily file contains distinct `instanceId` values for each process.",
+        "If runtime-profile launchers are touched, confirm primary and secondary runs write under the matching profile directory.",
+        "`bun run lint` passes",
+        "`bun test src/server/utils/env.test.ts` passes",
+        "`bun test src/server/utils/getAppServerRuntimeConfig.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-015"]
+    }
+  ]
+}
