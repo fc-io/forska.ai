@@ -11,6 +11,7 @@ import {fetchProjectWithPrompts} from '../../../../services/projectsService'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
 import {getSglangRuntimeModelNotice} from '../../../../utils/getSglangRuntimeModelNotice.ts'
 import {isImportedFileRoute} from '../../../../utils/importRouteUtils.ts'
+import {appQueryClient} from '../../../queryClient'
 import {fetchProviderConnections} from '../../+admin/+models/providerConnectionsClient.ts'
 import {useArchivedProjectRedirect, useProjectAccessQuery} from '../projectAccessGuard'
 
@@ -298,26 +299,36 @@ const EditProject = (): JSX.Element => {
   const params = Route.useParams()
   const projectId = (params() as {id: string}).id
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
-  const projectAccessQuery = useProjectAccessQuery(() => {
-    return projectId
-  })
+  const queryClient = useQueryClient(appQueryClient)
+  const projectAccessQuery = useProjectAccessQuery(
+    () => {
+      return projectId
+    },
+    () => {
+      return appQueryClient
+    },
+  )
 
   useArchivedProjectRedirect(projectAccessQuery)
 
-  const projectData = useQuery(() => {
-    return {
-      queryKey: ['project', projectId, 'with-prompts'],
-      queryFn: () => {
-        return fetchProjectWithPrompts(projectId)
-      },
-      enabled: projectAccessQuery.data !== undefined && !projectAccessQuery.data.archived,
-      // Disable auto-refetch on window focus since this is a form with user-editable state.
-      // Otherwise, refetches would overwrite the user's local changes (e.g., enabled checkbox).
-      refetchOnWindowFocus: false,
-      staleTime: 5 * 60 * 1000,
-    }
-  })
+  const projectData = useQuery(
+    () => {
+      return {
+        queryKey: ['project', projectId, 'with-prompts'],
+        queryFn: () => {
+          return fetchProjectWithPrompts(projectId)
+        },
+        enabled: projectAccessQuery.data !== undefined && !projectAccessQuery.data.archived,
+        // Disable auto-refetch on window focus since this is a form with user-editable state.
+        // Otherwise, refetches would overwrite the user's local changes (e.g., enabled checkbox).
+        refetchOnWindowFocus: false,
+        staleTime: 5 * 60 * 1000,
+      }
+    },
+    () => {
+      return appQueryClient
+    },
+  )
 
   const [projectName, setProjectName] = createSignal('')
   const [description, setDescription] = createSignal('')
@@ -338,41 +349,56 @@ const EditProject = (): JSX.Element => {
   let initialDataLoaded = false
   let initialModelLoaded = false
 
-  const modelsQuery = useQuery(() => {
-    return {
-      queryKey: ['models'],
-      queryFn: async () => {
-        const response = await apiClient.api.models.get()
-        const result = handleApiResponse<ModelsResponse>(
-          response as unknown as {data?: ModelsResponse; error?: unknown; status?: number},
-          'Failed to load models',
-        )
-        return result.data ?? []
-      },
-      staleTime: 1000 * 60 * 5,
-    }
-  })
+  const modelsQuery = useQuery(
+    () => {
+      return {
+        queryKey: ['models'],
+        queryFn: async () => {
+          const response = await apiClient.api.models.get()
+          const result = handleApiResponse<ModelsResponse>(
+            response as unknown as {data?: ModelsResponse; error?: unknown; status?: number},
+            'Failed to load models',
+          )
+          return result.data ?? []
+        },
+        staleTime: 1000 * 60 * 5,
+      }
+    },
+    () => {
+      return appQueryClient
+    },
+  )
 
-  const providerConnectionsQuery = useQuery(() => {
-    return {
-      queryKey: ['provider-connections', 'project-edit', projectId],
-      queryFn: fetchProviderConnections,
-      staleTime: 60 * 1000,
-      suspense: false,
-    }
-  })
+  const providerConnectionsQuery = useQuery(
+    () => {
+      return {
+        queryKey: ['provider-connections', 'project-edit', projectId],
+        queryFn: fetchProviderConnections,
+        staleTime: 60 * 1000,
+        suspense: false,
+      }
+    },
+    () => {
+      return appQueryClient
+    },
+  )
 
-  const importRoutesQuery = useQuery(() => {
-    return {
-      queryKey: ['importroutes'],
-      queryFn: async () => {
-        const response = await apiClient.api['import-routes'].get()
-        const result = handleApiResponse<ImportRoutesResponse>(response, 'Failed to load import routes')
-        return result.data ?? []
-      },
-      staleTime: 1000 * 60 * 5,
-    }
-  })
+  const importRoutesQuery = useQuery(
+    () => {
+      return {
+        queryKey: ['importroutes'],
+        queryFn: async () => {
+          const response = await apiClient.api['import-routes'].get()
+          const result = handleApiResponse<ImportRoutesResponse>(response, 'Failed to load import routes')
+          return result.data ?? []
+        },
+        staleTime: 1000 * 60 * 5,
+      }
+    },
+    () => {
+      return appQueryClient
+    },
+  )
 
   const createDefaultModel = async () => {
     await apiClient.api.judgments.model.get()

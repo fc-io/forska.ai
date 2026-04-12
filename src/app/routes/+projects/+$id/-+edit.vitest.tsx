@@ -114,10 +114,6 @@ const waitForUpdates = async () => {
   await Promise.resolve()
 }
 
-const buildQueryClient = (QueryClientCtor: typeof import('@tanstack/solid-query').QueryClient): QueryClient => {
-  return new QueryClientCtor({defaultOptions: {queries: {retry: false, refetchOnWindowFocus: false, suspense: false}}})
-}
-
 const seedEditRouteQueries = (queryClient: QueryClient, projectId: string) => {
   queryClient.setQueryData(['project', projectId, 'access'], getProjectAccess(projectId))
   queryClient.setQueryData(['project', projectId, 'with-prompts'], getProjectDetails(projectId))
@@ -137,6 +133,7 @@ const loadFreshRouteContext = async (params: {editComponent?: () => unknown; inc
     solidQueryModule,
     solidRouterModule,
     solidWebModule,
+    queryClientModule,
     {Route: rootRouteImport},
     {Route: editRouteImport},
     covidenceRouteModule,
@@ -144,6 +141,7 @@ const loadFreshRouteContext = async (params: {editComponent?: () => unknown; inc
     import('@tanstack/solid-query'),
     import('@tanstack/solid-router'),
     import('solid-js/web'),
+    import('../../../queryClient.ts'),
     import('../../+__root.tsx'),
     import('./+edit.tsx'),
     params.includeCovidenceImport ? import('../../+admin/+datasources/+covidence-import.tsx') : Promise.resolve(null),
@@ -172,7 +170,13 @@ const loadFreshRouteContext = async (params: {editComponent?: () => unknown; inc
         ])
       : rootRouteImport.addChildren([editRoute])
 
-  return {routeTree, solidQueryModule, solidRouterModule, solidWebModule}
+  return {
+    appQueryClient: queryClientModule.appQueryClient,
+    routeTree,
+    solidQueryModule,
+    solidRouterModule,
+    solidWebModule,
+  }
 }
 
 const mountRouterAtPath = async (params: {
@@ -330,9 +334,10 @@ describe('project edit route regressions', () => {
   test('project edit route renders inside the shared query client provider', async () => {
     const projectId = 'project-smoke-test'
     const routeContext = await loadFreshRouteContext({includeCovidenceImport: false})
-    const queryClient = buildQueryClient(routeContext.solidQueryModule.QueryClient)
+    const queryClient = routeContext.appQueryClient
     const browserFailures = createBrowserFailureAssertions(window)
 
+    queryClient.clear()
     seedEditRouteQueries(queryClient, projectId)
 
     const {container, dispose} = await mountRouterAtPath({
@@ -354,6 +359,7 @@ describe('project edit route regressions', () => {
       browserFailures.assertNoFailures()
     } finally {
       browserFailures.dispose()
+      queryClient.clear()
       dispose()
       container.remove()
     }
@@ -362,9 +368,10 @@ describe('project edit route regressions', () => {
   test('navigating from Covidence import to project edit renders without query client crashes', async () => {
     const projectId = 'project-navigation-test'
     const routeContext = await loadFreshRouteContext({includeCovidenceImport: true})
-    const queryClient = buildQueryClient(routeContext.solidQueryModule.QueryClient)
+    const queryClient = routeContext.appQueryClient
     const browserFailures = createBrowserFailureAssertions(window)
 
+    queryClient.clear()
     seedCovidenceImportQueries(queryClient)
     seedEditRouteQueries(queryClient, projectId)
 
@@ -392,6 +399,7 @@ describe('project edit route regressions', () => {
       browserFailures.assertNoFailures()
     } finally {
       browserFailures.dispose()
+      queryClient.clear()
       dispose()
       container.remove()
     }
@@ -405,7 +413,9 @@ describe('project edit route regressions', () => {
       },
       includeCovidenceImport: false,
     })
-    const queryClient = buildQueryClient(routeContext.solidQueryModule.QueryClient)
+    const queryClient = routeContext.appQueryClient
+
+    queryClient.clear()
 
     const {container, dispose} = await mountRouterAtPath({
       path: `/projects/${projectId}/edit`,
@@ -422,6 +432,7 @@ describe('project edit route regressions', () => {
       expect(routeErrorSurface?.textContent ?? '').toContain('Route render failed')
       expect(routeErrorSurface?.textContent ?? '').toContain('project edit render crash')
     } finally {
+      queryClient.clear()
       dispose()
       container.remove()
     }

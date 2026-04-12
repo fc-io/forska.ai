@@ -1,10 +1,16 @@
 import {useQuery} from '@tanstack/solid-query'
 import {useNavigate} from '@tanstack/solid-router'
-import {createEffect} from 'solid-js'
+import {type Accessor, createEffect} from 'solid-js'
 
 import {fetchProjectAccess} from '../../../services/projectsService.ts'
+import {appQueryClient} from '../../queryClient'
 
-export const useProjectAccessQuery = (projectId: () => string) => {
+export const useProjectAccessQuery = (
+  projectId: () => string,
+  queryClient: Accessor<typeof appQueryClient> = () => {
+    return appQueryClient
+  },
+) => {
   return useQuery(() => {
     return {
       queryKey: ['project', projectId(), 'access'],
@@ -14,7 +20,7 @@ export const useProjectAccessQuery = (projectId: () => string) => {
       refetchOnWindowFocus: false,
       staleTime: 5 * 60 * 1000,
     }
-  })
+  }, queryClient)
 }
 
 export const useArchivedProjectRedirect = (projectAccessQuery: ReturnType<typeof useProjectAccessQuery>) => {

@@ -37,11 +37,12 @@
         "In a real browser on local dev, reproduce the failing route once before the fix, then verify the same path renders the edit page without console or query-client crash after the fix"
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": "Preserve the ordering constraint that the root cause is re-verified before code changes and that the confirmed fix is source-level, not instrumentation-level. Keep the hypothesis about `projectAccessGuard.ts` explicit until proven. Do not let this story depend on Playwright setup to determine whether the crash is fixed.",
       "dependsOn": [
         "US-001"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-003",
@@ -107,6 +108,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-04-12T10:50:14.132Z"
+    "updatedAt": "2026-04-12T10:57:28.393Z"
   }
 }
