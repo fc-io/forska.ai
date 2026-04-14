@@ -12,11 +12,30 @@ const providerConnectionRepositoryModulePath = new URL(
   import.meta.url,
 ).pathname
 const providerHealthServiceModulePath = new URL('../../providers/providerHealthService.ts', import.meta.url).pathname
+const judgmentsCapacityModulePath = new URL('./getJudgmentsCapacity.ts', import.meta.url).pathname
 const judgeModulePath = new URL('../../../agent/judge.ts', import.meta.url).pathname
 const appDatabaseServiceModulePath = new URL('../../services/appDatabaseService.ts', import.meta.url).pathname
 const appQueryServiceModulePath = new URL('../../services/getAppQueryService.ts', import.meta.url).pathname
 const ensureFullTextModulePath = new URL('../../utils/ensureFullText.ts', import.meta.url).pathname
 const sqliteServiceModulePath = new URL('./judgmentJobSqliteService.ts', import.meta.url).pathname
+
+const createJudgmentsCapacity = ({
+  maxInflight = 2,
+  perWorkerMaxInflightRequests = 1,
+  workerCount = 2,
+}: {maxInflight?: number; perWorkerMaxInflightRequests?: number; workerCount?: number} = {}) => {
+  return {
+    addToQueueMaxBatchSize: 10,
+    maxBurst: maxInflight,
+    maxInflight,
+    perWorkerMaxBurstRequests: perWorkerMaxInflightRequests,
+    perWorkerMaxInflightRequests,
+    perWorkerMaxRunningRequests: perWorkerMaxInflightRequests,
+    readyTargetPerJob: maxInflight,
+    readyTargetTotal: maxInflight,
+    workerCount,
+  }
+}
 
 const createPromptRows = () => {
   return [{id: 'prompt-a', order: 1, originalText: 'Prompt text', promptHeading: 'Prompt', type: 'single'}]
@@ -56,6 +75,9 @@ const getProviderConnection = mock(async (id: string) => {
 })
 const testProviderConnectionHealth = mock(async (_connection: unknown, _options: unknown) => {
   return {lastError: null, message: 'ok', modelCount: 1, ok: true}
+})
+const getJudgmentsCapacityMock = mock((_runningJobCount: number) => {
+  return createJudgmentsCapacity()
 })
 const judgeSinglePrompt = mock(async (_input: unknown) => {
   return undefined
@@ -102,6 +124,10 @@ const registerModuleMocks = () => {
 
   void mock.module(providerHealthServiceModulePath, () => {
     return {testProviderConnectionHealth}
+  })
+
+  void mock.module(judgmentsCapacityModulePath, () => {
+    return {getJudgmentsCapacity: getJudgmentsCapacityMock}
   })
 }
 
@@ -204,6 +230,7 @@ afterEach(async () => {
   Date.now = realDateNow
   getProviderConnection.mockClear()
   testProviderConnectionHealth.mockClear()
+  getJudgmentsCapacityMock.mockClear()
   judgeSinglePrompt.mockClear()
   queryJson.mockClear()
   getFullArticlesByIds.mockClear()
@@ -217,6 +244,9 @@ afterEach(async () => {
   sqliteStateTransitions.splice(0, sqliteStateTransitions.length)
   testProviderConnectionHealth.mockImplementation(async (_connection: unknown, _options: unknown) => {
     return {lastError: null, message: 'ok', modelCount: 1, ok: true}
+  })
+  getJudgmentsCapacityMock.mockImplementation((_runningJobCount: number) => {
+    return createJudgmentsCapacity()
   })
   judgeSinglePrompt.mockImplementation(async (_input: unknown) => {
     return undefined
@@ -360,6 +390,160 @@ test('worker requests enforce provider caps and release after success', async ()
   await thirdRequest
 
   expect(secondStarted).toBe(true)
+})
+
+test('fallback requests plateau at local runtime capacity when it is lower than the saved provider cap', async () => {
+  getJudgmentsCapacityMock.mockImplementation((_runningJobCount: number) => {
+    return createJudgmentsCapacity({maxInflight: 2})
+  })
+
+  const {withJudgmentRequest} = await loadRuntime()
+  const firstRelease = createSignal()
+  const secondRelease = createSignal()
+  let firstStarted = false
+  let secondStarted = false
+  let thirdStarted = false
+
+  const firstRequest = withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-fallback-plateau-1',
+      provider: 'openai',
+      fallbackBaseURL: 'http://fallback-runtime.test/v1',
+      providerConnectionId: 'connection-fallback-plateau',
+      providerMaxInflightRequests: 3,
+      providerUsesFamilyDefault: false,
+      workerUrls: [],
+    },
+    async () => {
+      firstStarted = true
+      await firstRelease.promise
+    },
+  )
+
+  const secondRequest = withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-fallback-plateau-2',
+      provider: 'openai',
+      fallbackBaseURL: 'http://fallback-runtime.test/v1',
+      providerConnectionId: 'connection-fallback-plateau',
+      providerMaxInflightRequests: 3,
+      providerUsesFamilyDefault: false,
+      workerUrls: [],
+    },
+    async () => {
+      secondStarted = true
+      await secondRelease.promise
+    },
+  )
+
+  await flush()
+  expect(firstStarted).toBe(true)
+  expect(secondStarted).toBe(true)
+
+  const thirdRequest = withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-fallback-plateau-3',
+      provider: 'openai',
+      fallbackBaseURL: 'http://fallback-runtime.test/v1',
+      providerConnectionId: 'connection-fallback-plateau',
+      providerMaxInflightRequests: 3,
+      providerUsesFamilyDefault: false,
+      workerUrls: [],
+    },
+    async () => {
+      thirdStarted = true
+    },
+  )
+
+  await flush()
+  expect(thirdStarted).toBe(false)
+
+  firstRelease.resolve()
+  await firstRequest
+  await flush()
+  await thirdRequest
+
+  expect(thirdStarted).toBe(true)
+
+  secondRelease.resolve()
+  await secondRequest
+})
+
+test('worker requests plateau at worker capacity when it is lower than the saved provider cap', async () => {
+  getJudgmentsCapacityMock.mockImplementation((_runningJobCount: number) => {
+    return createJudgmentsCapacity({maxInflight: 4, perWorkerMaxInflightRequests: 1, workerCount: 2})
+  })
+
+  const {withJudgmentRequest} = await loadRuntime()
+  const firstRelease = createSignal()
+  const secondRelease = createSignal()
+  let firstStarted = false
+  let secondStarted = false
+  let thirdStarted = false
+
+  const firstRequest = withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-worker-plateau-1',
+      provider: 'sglang',
+      fallbackBaseURL: 'http://unused-runtime.test/v1',
+      providerConnectionId: 'connection-worker-plateau',
+      providerMaxInflightRequests: 3,
+      providerUsesFamilyDefault: false,
+      workerUrls: ['http://worker-runtime-a.test', 'http://worker-runtime-b.test'],
+    },
+    async () => {
+      firstStarted = true
+      await firstRelease.promise
+    },
+  )
+
+  const secondRequest = withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-worker-plateau-2',
+      provider: 'sglang',
+      fallbackBaseURL: 'http://unused-runtime.test/v1',
+      providerConnectionId: 'connection-worker-plateau',
+      providerMaxInflightRequests: 3,
+      providerUsesFamilyDefault: false,
+      workerUrls: ['http://worker-runtime-a.test', 'http://worker-runtime-b.test'],
+    },
+    async () => {
+      secondStarted = true
+      await secondRelease.promise
+    },
+  )
+
+  await flush()
+  expect(firstStarted).toBe(true)
+  expect(secondStarted).toBe(true)
+
+  const thirdRequest = withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-worker-plateau-3',
+      provider: 'sglang',
+      fallbackBaseURL: 'http://unused-runtime.test/v1',
+      providerConnectionId: 'connection-worker-plateau',
+      providerMaxInflightRequests: 3,
+      providerUsesFamilyDefault: false,
+      workerUrls: ['http://worker-runtime-a.test', 'http://worker-runtime-b.test'],
+    },
+    async () => {
+      thirdStarted = true
+    },
+  )
+
+  await flush()
+  expect(thirdStarted).toBe(false)
+
+  firstRelease.resolve()
+  await firstRequest
+  await flush()
+  await thirdRequest
+
+  expect(thirdStarted).toBe(true)
+
+  secondRelease.resolve()
+  await secondRequest
 })
 
 test('codex requests enforce saved provider caps per connection', async () => {
