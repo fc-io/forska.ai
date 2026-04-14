@@ -199,7 +199,7 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
           <div class="ml-auto flex items-center gap-2">
             <label class="font-medium">Items per page:</label>
             <select
-              class="px-3 py-2 border rounded-md"
+              class="px-3 py-2 border rounded-md bg-white text-gray-900"
               value={String(props.pageLimit())}
               onChange={(e) => {
                 return handleLimitChange(parseInt(e.target.value))
@@ -279,7 +279,7 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
                               return (
                                 <Select.Item
                                   item={itemProps.item}
-                                  class="relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-muted data-[disabled]:opacity-50"
+                                  class="relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2 pr-8 text-sm text-gray-900 outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-gray-100 data-[disabled]:opacity-50"
                                 >
                                   <Select.ItemLabel class="truncate">{itemProps.item.rawValue}</Select.ItemLabel>
                                   <Select.ItemIndicator class="absolute right-2 flex h-3.5 w-3.5 items-center justify-center">
@@ -301,14 +301,11 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
                             }}
                           >
                             <Select.Trigger
-                              class="group min-h-11 w-full rounded-md border border-input bg-background bg-white dark:bg-neutral-900 px-2 py-1.5 text-sm shadow-sm transition-[box-shadow,background-color] flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[expanded]:ring-2 data-[expanded]:ring-ring"
+                              class="group min-h-11 w-full rounded-md border border-input bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm transition-[box-shadow,background-color] flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[expanded]:ring-2 data-[expanded]:ring-ring"
                               aria-label={promptFilter.promptName || `Prompt ${promptFilter.promptId}`}
                             >
                               <div class="flex flex-wrap gap-2 grow">
-                                <Show
-                                  when={current().length > 0}
-                                  fallback={<span class="text-muted-foreground">All</span>}
-                                >
+                                <Show when={current().length > 0} fallback={<span class="text-gray-500">All</span>}>
                                   <For each={current()}>
                                     {(val) => {
                                       return (
@@ -388,7 +385,7 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
                               </div>
                             </Select.Trigger>
                             <Select.Portal>
-                              <Select.Content class="z-50 min-w-56 rounded-md border bg-popover bg-white dark:bg-neutral-900 p-1 text-popover-foreground shadow-xl outline-none">
+                              <Select.Content class="z-50 min-w-56 rounded-md border border-input bg-white p-1 text-gray-900 shadow-xl outline-none">
                                 <Select.Listbox class="max-h-60 overflow-auto outline-none" />
                               </Select.Content>
                             </Select.Portal>
