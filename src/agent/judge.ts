@@ -560,9 +560,19 @@ const getMaxUserPromptChars = ({
   return Math.max(0, maxPromptChars - systemPrompt.length)
 }
 
-const getChunkParallelLimit = (chunkCount: number): number => {
+export const getChunkParallelLimit = ({
+  chunkCount,
+  providerMaxInflightRequests,
+}: {
+  chunkCount: number
+  providerMaxInflightRequests: number | null
+}): number => {
   const configured = inferenceRuntimeConfig.judgeChunkMaxParallel > 0 ? inferenceRuntimeConfig.judgeChunkMaxParallel : 4
-  return Math.max(1, Math.min(chunkCount, configured))
+  const providerCap =
+    providerMaxInflightRequests && providerMaxInflightRequests > 0 ? providerMaxInflightRequests : null
+  return providerCap === null
+    ? Math.max(1, Math.min(chunkCount, configured))
+    : Math.max(1, Math.min(chunkCount, configured, providerCap))
 }
 
 const buildEvidenceUserPrompt = ({
@@ -926,7 +936,7 @@ export const judgeSinglePrompt = async ({
 
     try {
       const evidenceOutputSchema = getSinglePromptEvidenceOutputSchema()
-      const chunkParallelLimit = getChunkParallelLimit(chunks.length)
+      const chunkParallelLimit = getChunkParallelLimit({chunkCount: chunks.length, providerMaxInflightRequests})
       const chunkResults = await mapAsyncWithConcurrency({
         items: chunks,
         limit: chunkParallelLimit,

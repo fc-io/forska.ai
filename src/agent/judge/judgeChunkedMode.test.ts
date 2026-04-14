@@ -1,5 +1,6 @@
 import {expect, test} from 'bun:test'
 
+import {getChunkParallelLimit} from '../judge.ts'
 import {parseSinglePromptEvidence} from './parseSinglePromptEvidence.ts'
 import {parseSinglePromptJudgment} from './parseSinglePromptJudgment.ts'
 
@@ -25,4 +26,12 @@ test('single prompt parser extracts JSON after thinking preamble', () => {
   expect(judgment.answer).toBe('yes')
   expect(judgment.explanation).toBe('because')
   expect(judgment.quotes).toBeNull()
+})
+
+test('chunked mode uses provider cap when present and keeps configured fallback when absent', () => {
+  const original = getChunkParallelLimit({chunkCount: 10, providerMaxInflightRequests: null})
+
+  expect(getChunkParallelLimit({chunkCount: 10, providerMaxInflightRequests: 2})).toBe(2)
+  expect(getChunkParallelLimit({chunkCount: 3, providerMaxInflightRequests: null})).toBe(3)
+  expect(original).toBeGreaterThan(1)
 })
