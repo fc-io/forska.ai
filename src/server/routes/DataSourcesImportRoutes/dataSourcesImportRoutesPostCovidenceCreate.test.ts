@@ -1413,7 +1413,7 @@ test('Covidence datasource create skips prompt creation when normalized eligibil
   expect(parsed.promptCalls).toEqual([])
   expect(parsed.projectCalls).toHaveLength(1)
   expect(parsed.projectCalls?.[0]?.promptId).toBeNull()
-  expect(parsed.promptSyncCalls).toEqual([])
+  expect(parsed.promptSyncCalls).toEqual([{projectId: 'project-created', promptLinks: []}])
   expect(parsed.result.data.covidencePrompts).toEqual([])
   expect(parsed.queueCalls).toEqual([['route-1']])
 })

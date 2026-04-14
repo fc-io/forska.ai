@@ -1986,6 +1986,23 @@ export const syncCovidenceProjectPrompts = async (params: {
       : [...distinctPromptLinks, promptLink]
   }, [])
 
+  await queryRunner.run(`
+    UPDATE app.project_prompt
+    SET archived = TRUE,
+        enabled = FALSE,
+        updated_at = now()
+    WHERE project_id = ${getSqlLiteral(params.projectId)}
+      ${
+        promptLinks.length === 0
+          ? ''
+          : `AND prompt_id NOT IN (${getQuotedStringList(
+              promptLinks.map((promptLink) => {
+                return promptLink.promptId
+              }),
+            ).join(', ')})`
+      }
+  `)
+
   return promptLinks.length === 0
     ? undefined
     : await queryRunner.run(`

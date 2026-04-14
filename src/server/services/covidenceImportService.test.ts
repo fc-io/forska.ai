@@ -1475,6 +1475,250 @@ test('syncCovidenceProjectPrompts persists summary-mode criteria metadata in pro
   }
 })
 
+test('syncCovidenceProjectPrompts keeps the exact reused prompt set for grouping changes', async () => {
+  const duckdbPath = `/tmp/f1-covidence-prompt-set-${Date.now()}.duckdb`
+  const importRoute = `covidence:prompt-set-${Date.now()}`
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, covidenceImportService] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/covidenceImportService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const importRoute = ${JSON.stringify(importRoute)}
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, label, provider_kind, enabled)
+          VALUES ('pc-covidence-prompt-set', 'Covidence provider', 'openai-compatible', TRUE);
+
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, enabled)
+          VALUES ('model-covidence-prompt-set', 'pc-covidence-prompt-set', 'gpt-covidence', 'gpt-covidence', TRUE);
+
+          INSERT INTO app.import_route (id, route, name, active)
+          VALUES ('route-covidence-prompt-set', '\${importRoute}', '\${importRoute}', TRUE);
+        \`)
+
+        const perFieldDefinitions = covidenceImportService.buildCovidencePromptDefinitionsForEligibilityFields({
+          answerSet: 'yes|no|maybe',
+          eligibilityFields: [
+            {
+              disposition: 'include',
+              sectionKey: 'population',
+              sectionLabel: 'Population',
+              text: 'Adults with confirmed disease',
+            },
+            {
+              disposition: 'exclude',
+              sectionKey: 'other',
+              sectionLabel: 'Other',
+              text: 'Case reports',
+            },
+          ],
+          mode: 'title_abstract',
+          promptGrouping: 'per_field',
+        })
+        const singlePromptDefinitions = covidenceImportService.buildCovidencePromptDefinitionsForEligibilityFields({
+          answerSet: 'yes|no|maybe',
+          eligibilityFields: [
+            {
+              disposition: 'include',
+              sectionKey: 'population',
+              sectionLabel: 'Population',
+              text: 'Adults with confirmed disease',
+            },
+            {
+              disposition: 'exclude',
+              sectionKey: 'other',
+              sectionLabel: 'Other',
+              text: 'Case reports',
+            },
+          ],
+          mode: 'title_abstract',
+          promptGrouping: 'single_prompt',
+        })
+
+        const perFieldPrompts = await Promise.all(
+          perFieldDefinitions.map((definition) => {
+            return covidenceImportService.getOrCreateCovidencePrompt({promptDefinition: definition})
+          }),
+        )
+        const singlePrompt = await covidenceImportService.getOrCreateCovidencePrompt({
+          promptDefinition: singlePromptDefinitions[0],
+        })
+        const project = await covidenceImportService.getOrCreateCovidenceProject({
+          importRoute,
+          mode: 'title_abstract',
+          title: 'Covidence prompt set project',
+        })
+
+        await covidenceImportService.syncCovidenceProjectPrompts({
+          projectId: project.id,
+          promptLinks: perFieldPrompts.map((prompt, index) => {
+            const definition = perFieldDefinitions[index]
+
+            return {
+              promptId: prompt.id,
+              criteriaDisposition: definition?.criteriaDisposition,
+              criteriaSectionKey: definition?.criteriaSectionKey,
+              criteriaSectionLabel: definition?.criteriaSectionLabel,
+            }
+          }),
+        })
+
+        await covidenceImportService.syncCovidenceProjectPrompts({
+          projectId: project.id,
+          promptLinks: [
+            {
+              promptId: singlePrompt.id,
+              criteriaDisposition: singlePromptDefinitions[0]?.criteriaDisposition,
+              criteriaSectionKey: singlePromptDefinitions[0]?.criteriaSectionKey,
+              criteriaSectionLabel: singlePromptDefinitions[0]?.criteriaSectionLabel,
+            },
+          ],
+        })
+
+        const promptRowsAfterSinglePrompt = await database.queryJson(\`
+          SELECT
+            prompt_id AS promptId,
+            prompt_order AS promptOrder,
+            enabled,
+            archived,
+            criteria_disposition AS criteriaDisposition
+          FROM app.project_prompt
+          WHERE project_id = '\${project.id}'
+          ORDER BY prompt_order ASC NULLS LAST, prompt_id ASC
+        \`)
+
+        await covidenceImportService.syncCovidenceProjectPrompts({
+          projectId: project.id,
+          promptLinks: [],
+        })
+
+        const promptRowsAfterClear = await database.queryJson(\`
+          SELECT
+            prompt_id AS promptId,
+            prompt_order AS promptOrder,
+            enabled,
+            archived,
+            criteria_disposition AS criteriaDisposition
+          FROM app.project_prompt
+          WHERE project_id = '\${project.id}'
+          ORDER BY prompt_order ASC NULLS LAST, prompt_id ASC
+        \`)
+
+        console.log(JSON.stringify({
+          promptRowsAfterClear,
+          promptRowsAfterSinglePrompt,
+          singlePromptId: singlePrompt.id,
+        }))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39983',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39984',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to sync exact Covidence prompt set',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      promptRowsAfterClear: Array<{
+        archived: boolean
+        criteriaDisposition: string | null
+        enabled: boolean
+        promptId: string
+        promptOrder: number | null
+      }>
+      promptRowsAfterSinglePrompt: Array<{
+        archived: boolean
+        criteriaDisposition: string | null
+        enabled: boolean
+        promptId: string
+        promptOrder: number | null
+      }>
+      singlePromptId: string
+    }
+
+    expect(parsed.promptRowsAfterSinglePrompt).toHaveLength(3)
+    expect(
+      parsed.promptRowsAfterSinglePrompt.filter((row) => {
+        return row.enabled
+      }),
+    ).toEqual([
+      {
+        archived: false,
+        criteriaDisposition: 'combined',
+        enabled: true,
+        promptId: parsed.singlePromptId,
+        promptOrder: 0,
+      },
+    ])
+    expect(
+      parsed.promptRowsAfterSinglePrompt.filter((row) => {
+        return !row.enabled
+      }),
+    ).toHaveLength(2)
+    expect(
+      parsed.promptRowsAfterSinglePrompt
+        .filter((row) => {
+          return !row.enabled
+        })
+        .every((row) => {
+          return row.archived
+        }),
+    ).toBe(true)
+
+    expect(parsed.promptRowsAfterClear).toHaveLength(3)
+    expect(
+      parsed.promptRowsAfterClear.every((row) => {
+        return row.enabled === false && row.archived === true
+      }),
+    ).toBe(true)
+  } finally {
+    ;[duckdbPath, `${duckdbPath}.wal`, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(
+      (filePath) => {
+        if (existsSync(filePath)) {
+          unlinkSync(filePath)
+        }
+
+        return filePath
+      },
+    )
+  }
+})
+
 test('seedCovidenceHumanJudgmentsFromConfig upserts full-text included and excluded judgments idempotently', async () => {
   const duckdbPath = `/tmp/f1-covidence-full-text-human-seed-${Date.now()}.duckdb`
   const datasourceId = `covidence-full-text-human-seed-${Date.now()}`

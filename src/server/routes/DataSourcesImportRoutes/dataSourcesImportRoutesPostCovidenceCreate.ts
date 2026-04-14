@@ -167,20 +167,18 @@ export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
         tx,
       })
 
-      if (covidencePrompts.length > 0) {
-        await syncCovidenceProjectPrompts({
-          projectId: covidenceProject.id,
-          promptLinks: covidencePrompts.map((covidencePrompt) => {
-            return {
-              criteriaDisposition: covidencePrompt.criteriaDisposition,
-              criteriaSectionKey: covidencePrompt.criteriaSectionKey,
-              criteriaSectionLabel: covidencePrompt.criteriaSectionLabel,
-              promptId: covidencePrompt.id,
-            }
-          }),
-          tx,
-        })
-      }
+      await syncCovidenceProjectPrompts({
+        projectId: covidenceProject.id,
+        promptLinks: covidencePrompts.map((covidencePrompt) => {
+          return {
+            criteriaDisposition: covidencePrompt.criteriaDisposition,
+            criteriaSectionKey: covidencePrompt.criteriaSectionKey,
+            criteriaSectionLabel: covidencePrompt.criteriaSectionLabel,
+            promptId: covidencePrompt.id,
+          }
+        }),
+        tx,
+      })
 
       await syncCovidenceProjectScopeFromConfig({config, importRoute, projectId: covidenceProject.id, tx})
       await seedCovidenceHumanJudgmentsFromConfig({config, importRoute, projectId: covidenceProject?.id ?? null, tx})
