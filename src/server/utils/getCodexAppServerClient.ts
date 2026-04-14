@@ -23,6 +23,20 @@ const CODEx_DEFAULT_TIMEOUT_MS = 30_000
 
 const MAX_DEBUG_OUTPUT_CHARS = 8_000
 
+export type CodexTokenUsageBreakdown = {
+  totalTokens: number
+  inputTokens: number
+  cachedInputTokens: number
+  outputTokens: number
+  reasoningOutputTokens: number
+}
+
+export type CodexThreadTokenUsage = {
+  total: CodexTokenUsageBreakdown
+  last: CodexTokenUsageBreakdown
+  modelContextWindow: number | null
+}
+
 export const getCodexBinPath = (): string => {
   const configuredPath = readLocalAppSettings().codexBin
   if (configuredPath) return configuredPath
@@ -113,10 +127,70 @@ type CodexAppServerClient = {
     inputText: string
     outputSchema: unknown
     timeoutMs?: number
-  }) => Promise<{text: string}>
+  }) => Promise<{text: string; usage: CodexThreadTokenUsage | null}>
 }
 
 let singleton: CodexAppServerClient | null = null
+
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return Boolean(value && typeof value === 'object')
+}
+
+const getNumber = (value: unknown): number | null => {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+const getString = (value: unknown): string | null => {
+  return typeof value === 'string' ? value : null
+}
+
+const getCodexTokenUsageBreakdown = (value: unknown): CodexTokenUsageBreakdown | null => {
+  if (!isRecord(value)) return null
+
+  const totalTokens = getNumber(value.totalTokens)
+  const inputTokens = getNumber(value.inputTokens)
+  const cachedInputTokens = getNumber(value.cachedInputTokens)
+  const outputTokens = getNumber(value.outputTokens)
+  const reasoningOutputTokens = getNumber(value.reasoningOutputTokens)
+
+  return totalTokens === null
+    || inputTokens === null
+    || cachedInputTokens === null
+    || outputTokens === null
+    || reasoningOutputTokens === null
+    ? null
+    : {totalTokens, inputTokens, cachedInputTokens, outputTokens, reasoningOutputTokens}
+}
+
+const getCodexThreadTokenUsage = (value: unknown): CodexThreadTokenUsage | null => {
+  if (!isRecord(value)) return null
+
+  const total = getCodexTokenUsageBreakdown(value.total)
+  const last = getCodexTokenUsageBreakdown(value.last)
+  const modelContextWindowValue = value.modelContextWindow
+  const modelContextWindow = modelContextWindowValue === null ? null : getNumber(modelContextWindowValue)
+
+  return total === null
+    || last === null
+    || modelContextWindowValue === undefined
+    || (modelContextWindow === null && modelContextWindowValue !== null)
+    ? null
+    : {total, last, modelContextWindow}
+}
+
+export const getCodexThreadTokenUsageUpdate = (
+  msg: JsonRpcMessage,
+): {threadId: string; tokenUsage: CodexThreadTokenUsage; turnId: string} | null => {
+  if (!isNotification(msg) || msg.method !== 'thread/tokenUsage/updated' || !isRecord(msg.params)) {
+    return null
+  }
+
+  const threadId = getString(msg.params.threadId)
+  const turnId = getString(msg.params.turnId)
+  const tokenUsage = getCodexThreadTokenUsage(msg.params.tokenUsage)
+
+  return threadId === null || turnId === null || tokenUsage === null ? null : {threadId, tokenUsage, turnId}
+}
 
 const appendDebug = (current: string, chunk: string): string => {
   const next = (current + chunk).slice(-MAX_DEBUG_OUTPUT_CHARS)
@@ -316,7 +390,7 @@ export const getCodexAppServerClient = (): CodexAppServerClient => {
     inputText: string
     outputSchema: unknown
     timeoutMs?: number
-  }): Promise<{text: string}> => {
+  }): Promise<{text: string; usage: CodexThreadTokenUsage | null}> => {
     await initPromise
     const safe = buildSafeTurnConfig()
     const started = await request('thread/start', {model: params.model, cwd: safe.cwd})
@@ -344,15 +418,22 @@ export const getCodexAppServerClient = (): CodexAppServerClient => {
       throw new Error('codex app-server: turn/start missing turnId')
     }
 
-    const text = await new Promise<string>((resolve, reject) => {
+    const turnResult = await new Promise<{text: string; usage: CodexThreadTokenUsage | null}>((resolve, reject) => {
       const timeout = setTimeout(() => {
         listeners.delete(handler)
         reject(new Error('codex app-server: turn timeout'))
       }, params.timeoutMs ?? CODEx_DEFAULT_TIMEOUT_MS)
 
       let lastAgentText = ''
+      let turnUsage: CodexThreadTokenUsage | null = null
 
       const handler: Listener = (msg) => {
+        const tokenUsageUpdate = getCodexThreadTokenUsageUpdate(msg)
+        if (tokenUsageUpdate && tokenUsageUpdate.turnId === turnId) {
+          turnUsage = tokenUsageUpdate.tokenUsage
+          return undefined
+        }
+
         if (isNotification(msg) && msg.method === 'item/completed') {
           const item = (msg.params as {item?: {type?: unknown; text?: unknown}} | undefined)?.item
           const isAgentMessage = item && item.type === 'agentMessage' && typeof item.text === 'string'
@@ -366,19 +447,21 @@ export const getCodexAppServerClient = (): CodexAppServerClient => {
           if (completedTurnId !== turnId) return
           clearTimeout(timeout)
           listeners.delete(handler)
-          return status === 'failed' ? reject(new Error('codex app-server: turn failed')) : resolve(lastAgentText)
+          return status === 'failed'
+            ? reject(new Error('codex app-server: turn failed'))
+            : resolve({text: lastAgentText, usage: turnUsage})
         }
       }
 
       listeners.add(handler)
     })
 
-    const needsFallback = text.trim().length === 0
-    if (!needsFallback) return {text}
+    const needsFallback = turnResult.text.trim().length === 0
+    if (!needsFallback) return turnResult
 
     const threadRead = await request('thread/read', {threadId, includeTurns: true})
     const fallbackText = getLastAgentMessageText(threadRead, turnId)
-    return {text: fallbackText}
+    return {...turnResult, text: fallbackText}
   }
 
   singleton = {modelList, runJsonTurn}

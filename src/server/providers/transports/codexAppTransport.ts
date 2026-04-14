@@ -5,8 +5,17 @@ import {
   getCurrentCodexDeviceAuthLoginJob,
   startCodexDeviceAuthLogin,
 } from '../../utils/codexCliAuth.ts'
-import {getCodexAppServerClient, getCodexBinPath} from '../../utils/getCodexAppServerClient.ts'
-import {type ProviderHealthResult, type ProviderInvocationResult, type ProviderListedModel} from '../providerTypes.ts'
+import {
+  type CodexThreadTokenUsage,
+  getCodexAppServerClient,
+  getCodexBinPath,
+} from '../../utils/getCodexAppServerClient.ts'
+import {
+  type ProviderHealthResult,
+  type ProviderInvocationResult,
+  type ProviderListedModel,
+  type ProviderUsageSnapshot,
+} from '../providerTypes.ts'
 
 export type CodexRuntimeStatus = {
   appServerReady: boolean
@@ -74,6 +83,25 @@ export const listCodexAppModels = async (): Promise<ProviderListedModel[]> => {
     })
 }
 
+export const getProviderUsageFromCodexThreadTokenUsage = (
+  usage: CodexThreadTokenUsage | null,
+): ProviderUsageSnapshot => {
+  const last = usage?.last
+  if (!last) {
+    return {completionTokens: 0, promptTokens: 0, totalTokens: 0}
+  }
+
+  const promptTokens = Math.max(0, last.inputTokens)
+  const completionTokensFromTotal = Math.max(0, last.totalTokens - promptTokens)
+  const completionTokensFromOutputs = Math.max(0, last.outputTokens + last.reasoningOutputTokens)
+  const completionTokens =
+    completionTokensFromTotal > 0 || completionTokensFromOutputs === 0
+      ? completionTokensFromTotal
+      : completionTokensFromOutputs
+
+  return {completionTokens, promptTokens, totalTokens: Math.max(0, last.totalTokens)}
+}
+
 export const invokeCodexAppModel = async ({
   modelName,
   outputSchema,
@@ -96,7 +124,7 @@ export const invokeCodexAppModel = async ({
     timeoutMs: 900_000,
   })
 
-  return {text: result.text, usage: {completionTokens: 0, promptTokens: 0, totalTokens: 0}}
+  return {text: result.text, usage: getProviderUsageFromCodexThreadTokenUsage(result.usage)}
 }
 
 export const getCodexAppRuntimeStatus = async (): Promise<CodexRuntimeStatus> => {
