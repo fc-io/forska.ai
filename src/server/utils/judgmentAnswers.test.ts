@@ -86,6 +86,9 @@ test('deriveStrictSummaryAnswer handles zero-inclusion and zero-exclusion projec
   expect(deriveStrictSummaryAnswer([{promptId: 'prompt-1', criteriaDisposition: 'include'}], {'prompt-1': 'yes'})).toBe(
     'yes',
   )
+  expect(
+    deriveStrictSummaryAnswer([{promptId: 'prompt-1', criteriaDisposition: 'combined'}], {'prompt-1': 'yes'}),
+  ).toBe('yes')
   expect(deriveStrictSummaryAnswer([], {})).toBe('yes')
 })
 

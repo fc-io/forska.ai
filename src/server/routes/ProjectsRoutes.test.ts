@@ -100,7 +100,7 @@ const insertProjectPromptFixture = async ({
   promptArchived?: boolean
   promptHeading?: string | null
   promptId: string
-  criteriaDisposition?: 'include' | 'exclude' | null
+  criteriaDisposition?: 'include' | 'exclude' | 'combined' | null
   criteriaSectionKey?: string | null
   criteriaSectionLabel?: string | null
   transformedText?: string | null

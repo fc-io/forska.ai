@@ -55,7 +55,7 @@ export const dataSourcesImportRoutes = new Elysia()
         eligibilityFields: t.Optional(
           t.Array(
             t.Object({
-              disposition: t.Union([t.Literal('include'), t.Literal('exclude')]),
+              disposition: t.Union([t.Literal('include'), t.Literal('exclude'), t.Literal('combined')]),
               sectionKey: t.String(),
               sectionLabel: t.String(),
               text: t.String(),

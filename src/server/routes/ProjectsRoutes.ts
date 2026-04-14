@@ -1565,7 +1565,7 @@ export const projectsRoutes = new Elysia()
           promptHeading: string | null
           type: string | null
           promptArchived: boolean
-          criteriaDisposition: 'include' | 'exclude' | null
+          criteriaDisposition: 'include' | 'exclude' | 'combined' | null
           criteriaSectionKey: string | null
           criteriaSectionLabel: string | null
         }>(`

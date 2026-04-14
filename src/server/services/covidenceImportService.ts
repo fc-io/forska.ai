@@ -190,7 +190,7 @@ type CovidencePromptDefinition = {
   promptHeading: string
   type: "'yes' | 'no'" | "'yes' | 'no' | 'maybe'"
 }
-type CovidenceEligibilityFieldDisposition = 'include' | 'exclude'
+type CovidenceEligibilityFieldDisposition = 'include' | 'exclude' | 'combined'
 type CovidenceEligibilityPromptField = {
   disposition: CovidenceEligibilityFieldDisposition
   sectionKey: string
@@ -1768,6 +1768,7 @@ export const buildCovidencePromptDefinition = (params: {
   mode: CovidenceImportMode
 }): CovidencePromptDefinition => {
   return {
+    criteriaDisposition: 'combined',
     originalText: getCovidencePromptText(params),
     promptHeading: covidencePromptHeadingByMode[params.mode],
     type: getCovidencePromptType(params.answerSet),

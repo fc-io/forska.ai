@@ -6,8 +6,8 @@ import {
 import {isNumericType} from '../../server/routes/projectsRoutes/articlesReviewsFiltersUtils.ts'
 import {
   deriveStrictSummaryAnswer,
-  hasMatchingJudgmentAnswer,
   getNormalizedSummaryAnswer,
+  hasMatchingJudgmentAnswer,
   normalizeSummaryAnswerValue,
 } from '../../server/utils/judgmentAnswers.ts'
 import {createRateLimitedLogger} from '../../server/utils/rateLimitedLogger.ts'
@@ -47,7 +47,7 @@ type ProjectOlapScope = {
     promptHeading: string | null
     originalText: string
     type: string | null
-    criteriaDisposition: 'include' | 'exclude' | null
+    criteriaDisposition: 'include' | 'exclude' | 'combined' | null
   }>
   promptIds: string[]
   promptOrderMap: Record<string, number>
@@ -1560,7 +1560,14 @@ const getLatestRowsByPromptId = <T extends {createdAt: string; promptId: string}
   }, new Map<string, T>())
 }
 
-const getLlmSummaryAnswer = (scope: ProjectOlapScope, rows: ArticlesReviewsBothJudgmentRow[] | OlapJudgmentRow[]) => {
+type SummaryJudgmentRow = {
+  answeredOriginal: string | null
+  answeredOriginalAsArray?: string[] | null
+  createdAt: string
+  promptId: string
+}
+
+const getLlmSummaryAnswer = (scope: ProjectOlapScope, rows: SummaryJudgmentRow[]) => {
   if (scope.humanJudgmentMode !== 'summary') {
     return null
   }
@@ -1657,7 +1664,7 @@ const getProjectOlapScope = async (projectId: string): Promise<ProjectOlapScope 
       promptHeading: string | null
       originalText: string
       type: string | null
-      criteriaDisposition: 'include' | 'exclude' | null
+      criteriaDisposition: 'include' | 'exclude' | 'combined' | null
     }>(`
       SELECT
         p.id AS id,

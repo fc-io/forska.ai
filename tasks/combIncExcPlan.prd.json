@@ -1,0 +1,200 @@
+{
+  "name": "Covidence Prompt Grouping Modes",
+  "description": "Add per-field, per-section, and single-prompt grouping options to the Covidence multi-file import flow while keeping project prompt metadata and summary-mode behavior consistent.",
+  "branchName": "ralph/covidence-prompt-grouping-modes",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add combined project prompt criteria metadata",
+      "description": "As a maintainer, I want project prompt criteria metadata to support combined prompts so per-section and single-prompt Covidence imports can persist summary-safe prompt semantics.",
+      "acceptanceCriteria": [
+        "Add a DuckDB migration that updates `project_prompt_criteria_disposition` to allow `combined`.",
+        "Update schema and server types so project prompt criteria metadata can be `include`, `exclude`, or `combined`.",
+        "Existing project prompt rows and write paths continue to work for `include` and `exclude` dispositions.",
+        "`bun run lint` passes",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun test src/server/utils/judgmentAnswers.test.ts` passes",
+        "`bun test src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.test.ts` passes",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-002",
+      "title": "Teach summary derivation to evaluate combined prompts",
+      "description": "As a reviewer, I want summary-mode answer derivation to interpret combined prompts consistently so per-section and single-prompt projects still roll up to the correct yes, no, or maybe answer.",
+      "acceptanceCriteria": [
+        "Update `deriveStrictSummaryAnswer` so `combined` prompt answers treat `no` as a hard fail, `maybe` as indeterminate, and `yes` as satisfied.",
+        "Missing answers for any enabled prompt still keep the derived summary answer at `null`.",
+        "Existing `include` and `exclude` prompt semantics remain unchanged.",
+        "`bun run lint` passes",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun test src/server/utils/judgmentAnswers.test.ts` passes",
+        "`bun test src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.test.ts` passes",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Preserve combined prompt metadata across project prompt consumers",
+      "description": "As a maintainer, I want project prompt readers and writers outside the Covidence import route to preserve combined criteria metadata so cloning, review details, OLAP, and rebuild flows stay consistent.",
+      "acceptanceCriteria": [
+        "Update project prompt reader and writer paths to accept and preserve `combined` criteria metadata in project cloning, review detail, OLAP, and archived-project rebuild flows.",
+        "Combined prompt metadata is copied through clone and rebuild operations without being dropped or coerced to `null`.",
+        "Downstream summary-mode consumers use the updated criteria metadata without introducing missing-disposition warnings for combined prompts.",
+        "`bun run lint` passes",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun test src/server/utils/judgmentAnswers.test.ts` passes",
+        "`bun test src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.test.ts` passes",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001",
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Accept prompt grouping in the Covidence create API",
+      "description": "As an admin, I want the Covidence create flow to accept a prompt grouping mode and normalized eligibility fields so different prompt grouping strategies can flow from the UI to server-side prompt creation reliably.",
+      "acceptanceCriteria": [
+        "Extend the Covidence create route schema to accept `promptGrouping` values `per_field`, `per_section`, and `single_prompt`.",
+        "Normalize ordered eligibility fields once in the create route and stop relying on 1:1 field-to-prompt index backfilling.",
+        "Whitespace-only eligibility text is still ignored and the create flow still succeeds when no normalized criteria remain.",
+        "`bun run lint` passes",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun test src/server/utils/judgmentAnswers.test.ts` passes",
+        "`bun test src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.test.ts` passes",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Build Covidence prompt definitions for all grouping modes",
+      "description": "As a maintainer, I want Covidence prompt builder helpers for per-field, per-section, and single-prompt modes so prompt generation stays stable across the structured UI and legacy criteria paths.",
+      "acceptanceCriteria": [
+        "Add service helpers that generate prompt definitions for `per_field`, `per_section`, and `single_prompt` grouping modes.",
+        "Per-section and single-prompt prompt text includes explicit combined answer rules plus ordered inclusion and exclusion blocks.",
+        "The legacy `inclusionCriteria` and `exclusionCriteria` path reuses the single-prompt combined semantics and emits `combined` criteria metadata.",
+        "`bun run lint` passes",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun test src/server/utils/judgmentAnswers.test.ts` passes",
+        "`bun test src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.test.ts` passes",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Persist the correct prompt set for each grouping mode",
+      "description": "As an admin, I want the Covidence create flow to create or reuse the right prompt set and attach it to the project in stable order so each grouping mode yields the expected review configuration.",
+      "acceptanceCriteria": [
+        "The create flow generates one prompt per field for `per_field`, one prompt per populated section for `per_section`, and at most one prompt for `single_prompt`.",
+        "Project prompt links persist `include`, `exclude`, or `combined` criteria metadata appropriately for the created prompts.",
+        "The create response returns `covidencePrompts` in the same stable order as the created or reused prompt links.",
+        "`bun run lint` passes",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun test src/server/utils/judgmentAnswers.test.ts` passes",
+        "`bun test src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.test.ts` passes",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001",
+        "US-004",
+        "US-005"
+      ]
+    },
+    {
+      "id": "US-007",
+      "title": "Add prompt grouping controls to the Covidence import UI",
+      "description": "As an admin, I want to choose prompt grouping on the Covidence import page and preview the resulting prompt count so I can balance prompt specificity against prompt volume before create.",
+      "acceptanceCriteria": [
+        "Add a prompt grouping control with options for one prompt per field, one prompt per section, and one prompt for all sections.",
+        "Update helper copy and derived prompt count preview to reflect the selected grouping mode, including the all-in-one single-prompt tradeoff.",
+        "The UI submits `promptGrouping` with the create request and still navigates to the created project or datasource on success.",
+        "`bun run lint` passes",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun test src/server/utils/judgmentAnswers.test.ts` passes",
+        "`bun test src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.test.ts` passes",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "`bun run build` passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-006"
+      ]
+    },
+    {
+      "id": "US-008",
+      "title": "Add focused coverage for all prompt grouping modes",
+      "description": "As a maintainer, I want automated coverage for per-field, per-section, and single-prompt Covidence imports so prompt counts, metadata, and summary behavior stay stable as the feature evolves.",
+      "acceptanceCriteria": [
+        "Service tests cover `per_field`, `per_section`, `single_prompt`, and the legacy combined criteria path.",
+        "Route tests cover prompt link counts, ordering, and criteria metadata for each grouping mode.",
+        "Summary logic and UI coverage verify combined prompt rollups plus visible prompt headings and counts for each grouping mode.",
+        "`bun run lint` passes",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun test src/server/utils/judgmentAnswers.test.ts` passes",
+        "`bun test src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.test.ts` passes",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "`bun run build` passes",
+        "Verify in browser using dev-browser skill"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-003",
+        "US-006",
+        "US-007"
+      ]
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-04-14T14:20:31.621Z"
+  }
+}

@@ -12,12 +12,12 @@ import {getProviderModelMetadataOptions} from '../../providers/providerModelMeta
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getJsonValue, getQuotedStringList} from '../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
+import {getSystemActor} from '../../utils/getSystemActor.ts'
 import {
   deriveStrictSummaryAnswer,
   getNormalizedSummaryAnswer,
   normalizeSummaryAnswerValue,
 } from '../../utils/judgmentAnswers.ts'
-import {getSystemActor} from '../../utils/getSystemActor.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
 
 type JudgmentWithPromptAndAssessments = JudgmentRecord & {
@@ -130,7 +130,7 @@ type ProjectPromptRow = {
   order: number | null
   type: string | null
   enabled: boolean | null
-  criteriaDisposition: 'include' | 'exclude' | null
+  criteriaDisposition: 'include' | 'exclude' | 'combined' | null
   originProjectId: string | null
 }
 

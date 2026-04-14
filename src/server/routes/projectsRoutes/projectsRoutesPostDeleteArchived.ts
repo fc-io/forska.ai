@@ -154,7 +154,7 @@ const projectPromptCreateSql = `
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     archived BOOLEAN NOT NULL DEFAULT FALSE,
     origin_project_id VARCHAR REFERENCES app.project(id),
-    criteria_disposition project_prompt_criteria_disposition,
+    criteria_disposition project_prompt_criteria_disposition_v2,
     criteria_section_key VARCHAR,
     criteria_section_label VARCHAR,
     created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,

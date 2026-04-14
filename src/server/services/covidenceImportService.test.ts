@@ -195,6 +195,7 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
       mode: 'title_abstract',
     }),
   ).toEqual({
+    criteriaDisposition: 'combined',
     originalText: [
       'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
       '',
@@ -218,6 +219,7 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
       mode: 'full_text',
     }),
   ).toEqual({
+    criteriaDisposition: 'combined',
     originalText: [
       'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
       '',
@@ -382,18 +384,20 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
         return line.length > 0
       })
     const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
-      createdPrompt: {created: boolean; id: string; type: string}
+      createdPrompt: {created: boolean; criteriaDisposition?: string; id: string; type: string}
       promptRows: Array<{id: string; originalText: string; promptHeading: string; type: string}>
-      reusedPrompt: {created: boolean; id: string; type: string}
+      reusedPrompt: {created: boolean; criteriaDisposition?: string; id: string; type: string}
     }
 
     expect(parsed.reusedPrompt).toMatchObject({
       created: false,
+      criteriaDisposition: 'combined',
       id: 'prompt-existing',
       promptHeading: 'Covidence title/abstract screening',
       type: "'yes' | 'no' | 'maybe'",
     })
     expect(parsed.createdPrompt.created).toBe(true)
+    expect(parsed.createdPrompt.criteriaDisposition).toBe('combined')
     expect(parsed.createdPrompt.id).not.toBe('prompt-existing')
     expect(parsed.createdPrompt.type).toBe("'yes' | 'no'")
     expect(parsed.promptRows).toHaveLength(2)
