@@ -670,6 +670,67 @@ test('launches claimed prompts in bounded parallel per connection', async () => 
   await processing
 })
 
+test('connection halts requeue only prompts that never started launch', async () => {
+  const secondRelease = (() => {
+    let resolve: () => void = () => {
+      return undefined
+    }
+    const promise = new Promise<void>((nextResolve) => {
+      resolve = nextResolve
+    })
+
+    return {promise, resolve}
+  })()
+  const requeuePrompts = mock(async (_prompts: PromptToProcess[]) => {
+    return undefined
+  })
+  const started: string[] = []
+  const firstPrompt = createPrompt({providerMaxInflightRequests: 2, recordId: 'record-a'})
+  const secondPrompt = createPrompt({articleId: 'article-b', providerMaxInflightRequests: 2, recordId: 'record-b'})
+  const thirdPrompt = createPrompt({articleId: 'article-c', providerMaxInflightRequests: 2, recordId: 'record-c'})
+  const error = new ConnectionError(
+    'endpoint unavailable',
+    firstPrompt.modelBaseUrl,
+    classifyConnectionFailure({
+      context: {
+        effectiveBaseURL: firstPrompt.modelBaseUrl,
+        endpointPath: '/v1/chat/completions',
+        providerKind: 'openai',
+      },
+      error: {status: 503},
+    }),
+  )
+
+  const processing = processClaimedPromptsByConnection({
+    label: 'test',
+    processPrompt: async (prompt) => {
+      started.push(prompt.recordId)
+
+      if (prompt.recordId === firstPrompt.recordId) {
+        await flush()
+        throw error
+      }
+
+      if (prompt.recordId === secondPrompt.recordId) {
+        await secondRelease.promise
+      }
+    },
+    prompts: [firstPrompt, secondPrompt, thirdPrompt],
+    requeuePrompts,
+  })
+
+  await flush()
+
+  expect(started).toContain('record-a')
+  expect(started).toContain('record-b')
+  expect(started).not.toContain('record-c')
+
+  secondRelease.resolve()
+  await processing
+
+  expect(requeuePrompts).toHaveBeenCalledWith([thirdPrompt])
+})
+
 test('requeues remaining claimed prompts when endpoint availability flips before launch', async () => {
   const firstPrompt = createPrompt()
   const secondPrompt = createPrompt({articleId: 'article-b', recordId: 'record-b'})

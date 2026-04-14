@@ -23,11 +23,13 @@ const getSqlLiteral = (value: string | null) => {
 const insertProjectFixture = async ({
   archived = false,
   connectionId,
+  humanJudgmentMode = 'prompt',
   modelId,
   projectId,
 }: {
   archived?: boolean
   connectionId: string
+  humanJudgmentMode?: 'prompt' | 'summary'
   modelId: string
   projectId: string
 }) => {
@@ -44,8 +46,28 @@ const insertProjectFixture = async ({
     VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-122B-A10B', 'Qwen/Qwen3.5-122B-A10B', 'Qwen 122B', 'manual', TRUE)
   `)
   await runDatabase(`
-    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, archived)
-    VALUES ('${projectId}', 'Archive Regression Project', '${modelId}', TRUE, TRUE, FALSE, FALSE, ${archived ? 'TRUE' : 'FALSE'})
+    INSERT INTO app.project (
+      id,
+      name,
+      model_id,
+      human_judgment_mode,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      archived
+    )
+    VALUES (
+      '${projectId}',
+      'Archive Regression Project',
+      '${modelId}',
+      '${humanJudgmentMode}',
+      TRUE,
+      TRUE,
+      FALSE,
+      FALSE,
+      ${archived ? 'TRUE' : 'FALSE'}
+    )
   `)
 }
 
@@ -61,6 +83,9 @@ const insertProjectPromptFixture = async ({
   promptArchived = false,
   promptHeading = null,
   promptId,
+  criteriaDisposition = null,
+  criteriaSectionKey = null,
+  criteriaSectionLabel = null,
   transformedText = null,
   type = null,
 }: {
@@ -75,6 +100,9 @@ const insertProjectPromptFixture = async ({
   promptArchived?: boolean
   promptHeading?: string | null
   promptId: string
+  criteriaDisposition?: 'include' | 'exclude' | null
+  criteriaSectionKey?: string | null
+  criteriaSectionLabel?: string | null
   transformedText?: string | null
   type?: string | null
 }) => {
@@ -95,7 +123,18 @@ const insertProjectPromptFixture = async ({
     )
   `)
   await runDatabase(`
-    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, enabled, origin_project_id)
+    INSERT INTO app.project_prompt (
+      id,
+      project_id,
+      prompt_id,
+      prompt_order,
+      archived,
+      enabled,
+      origin_project_id,
+      criteria_disposition,
+      criteria_section_key,
+      criteria_section_label
+    )
     VALUES (
       '${projectPromptId}',
       '${projectId}',
@@ -103,7 +142,10 @@ const insertProjectPromptFixture = async ({
       ${order},
       ${archived ? 'TRUE' : 'FALSE'},
       ${enabled ? 'TRUE' : 'FALSE'},
-      ${originProjectId === null ? 'NULL' : `'${originProjectId}'`}
+      ${originProjectId === null ? 'NULL' : `'${originProjectId}'`},
+      ${getSqlLiteral(criteriaDisposition)},
+      ${getSqlLiteral(criteriaSectionKey)},
+      ${getSqlLiteral(criteriaSectionLabel)}
     )
   `)
 }
@@ -1049,6 +1091,49 @@ test('edit route accepts full client payload when the model is unchanged', async
   await flushMartRefreshes()
 })
 
+test('edit route can change human judgment mode', async () => {
+  if (!app || !queryDatabase || !flushMartRefreshes || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-human-mode-connection'
+  const modelId = 'edit-human-mode-model'
+  const projectId = 'edit-human-mode-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('edit-human-mode-article', 'Edit human mode article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('edit-human-mode-project-article', '${projectId}', 'edit-human-mode-article')
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({humanJudgmentMode: 'summary'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {data: {project: {humanJudgmentMode: string | null}}}
+
+  expect(response.status).toBe(200)
+  expect(body.data.project.humanJudgmentMode).toBe('summary')
+
+  const [storedProject] = await queryDatabase<{humanJudgmentMode: string | null}>(`
+    SELECT human_judgment_mode AS humanJudgmentMode
+    FROM app.project
+    WHERE id = '${projectId}'
+    LIMIT 1
+  `)
+
+  expect(storedProject?.humanJudgmentMode).toBe('summary')
+
+  await flushMartRefreshes()
+})
+
 test('edit route can change the model for a populated project', async () => {
   if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')
@@ -1297,6 +1382,120 @@ test('clone route detaches prompt ids and hides duplicate importable prompts', a
   expect(matchingPrompts[0]?.originProjectId).toBe(clonedProjectId)
   expect(unrelatedPrompts.length).toBe(1)
   expect(unrelatedPrompts[0]?.originProjectId).toBe(null)
+
+  await flushMartRefreshes()
+})
+
+test('clone route preserves summary mode criteria and human summary judgments', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'clone-summary-connection'
+  const modelId = 'clone-summary-model'
+  const projectId = 'clone-summary-project'
+  const articleId = 'clone-summary-article'
+
+  await insertProjectFixture({connectionId, humanJudgmentMode: 'summary', modelId, projectId})
+  await insertProjectPromptFixture({
+    contentHash: 'clone-summary-hash-include',
+    criteriaDisposition: 'include',
+    criteriaSectionKey: 'population',
+    criteriaSectionLabel: 'Population',
+    order: 0,
+    originProjectId: projectId,
+    originalText: 'Include prompt',
+    projectId,
+    projectPromptId: 'clone-summary-project-prompt-include',
+    promptHeading: 'Include heading',
+    promptId: 'clone-summary-prompt-include',
+    type: 'string',
+  })
+  await insertProjectPromptFixture({
+    contentHash: 'clone-summary-hash-exclude',
+    criteriaDisposition: 'exclude',
+    criteriaSectionKey: 'outcome',
+    criteriaSectionLabel: 'Outcome',
+    order: 1,
+    originProjectId: projectId,
+    originalText: 'Exclude prompt',
+    projectId,
+    projectPromptId: 'clone-summary-project-prompt-exclude',
+    promptHeading: 'Exclude heading',
+    promptId: 'clone-summary-prompt-exclude',
+    type: 'string',
+  })
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('${articleId}', 'Clone summary article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('clone-summary-project-article', '${projectId}', '${articleId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_human_summary (id, project_id, article_id, answer, origin)
+    VALUES ('clone-summary-judgment', '${projectId}', '${articleId}', 'yes', 'covidence_import')
+  `)
+
+  const cloneResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/clone`, {method: 'POST'}),
+  )
+  const cloneBody = (await cloneResponse.json()) as {data: {humanJudgmentMode: string | null; id: string}}
+  const clonedProjectId = cloneBody.data.id
+
+  expect(cloneResponse.status).toBe(200)
+  expect(cloneBody.data.humanJudgmentMode).toBe('summary')
+
+  const [storedProject] = await queryDatabase<{humanJudgmentMode: string | null}>(`
+    SELECT human_judgment_mode AS humanJudgmentMode
+    FROM app.project
+    WHERE id = '${clonedProjectId}'
+    LIMIT 1
+  `)
+  const clonedPromptRows = await queryDatabase<{
+    criteriaDisposition: string | null
+    criteriaSectionKey: string | null
+    criteriaSectionLabel: string | null
+    originProjectId: string | null
+    promptHeading: string | null
+  }>(`
+    SELECT
+      pp.criteria_disposition AS criteriaDisposition,
+      pp.criteria_section_key AS criteriaSectionKey,
+      pp.criteria_section_label AS criteriaSectionLabel,
+      pp.origin_project_id AS originProjectId,
+      p.prompt_heading AS promptHeading
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON p.id = pp.prompt_id
+    WHERE pp.project_id = '${clonedProjectId}'
+    ORDER BY pp.prompt_order ASC
+  `)
+  const clonedSummaryRows = await queryDatabase<{answer: string | null; articleId: string; origin: string}>(`
+    SELECT answer, article_id AS articleId, origin
+    FROM app.judgment_human_summary
+    WHERE project_id = '${clonedProjectId}'
+    ORDER BY article_id ASC
+  `)
+
+  expect(storedProject?.humanJudgmentMode).toBe('summary')
+  expect(clonedPromptRows).toEqual([
+    {
+      criteriaDisposition: 'include',
+      criteriaSectionKey: 'population',
+      criteriaSectionLabel: 'Population',
+      originProjectId: clonedProjectId,
+      promptHeading: 'Include heading',
+    },
+    {
+      criteriaDisposition: 'exclude',
+      criteriaSectionKey: 'outcome',
+      criteriaSectionLabel: 'Outcome',
+      originProjectId: clonedProjectId,
+      promptHeading: 'Exclude heading',
+    },
+  ])
+  expect(clonedSummaryRows).toEqual([{answer: 'yes', articleId, origin: 'covidence_import'}])
 
   await flushMartRefreshes()
 })

@@ -393,9 +393,12 @@ export const processClaimedPromptsByConnection = async ({
       let requeuedCount = 0
       let nextPromptIndex = 0
       let haltPromise: Promise<void> | null = null
+      const startedPromptIds = new Set<string>()
 
-      const requeueRemainingPrompts = async (startIndex: number): Promise<void> => {
-        const remainingPrompts = connectionPrompts.slice(startIndex)
+      const requeueRemainingPrompts = async (): Promise<void> => {
+        const remainingPrompts = connectionPrompts.filter((prompt) => {
+          return !startedPromptIds.has(prompt.recordId)
+        })
         requeuedCount = remainingPrompts.length
 
         if (remainingPrompts.length > 0) {
@@ -403,14 +406,14 @@ export const processClaimedPromptsByConnection = async ({
         }
       }
 
-      const haltConnection = (startIndex: number, onHalt: () => Promise<void>): Promise<void> => {
+      const haltConnection = (onHalt: () => Promise<void>): Promise<void> => {
         if (haltPromise) {
           return haltPromise
         }
 
         halted = true
         haltPromise = onHalt().then(() => {
-          return requeueRemainingPrompts(startIndex)
+          return requeueRemainingPrompts()
         })
 
         return haltPromise
@@ -422,7 +425,6 @@ export const processClaimedPromptsByConnection = async ({
         }
 
         const prompt = connectionPrompts[nextPromptIndex]
-        const index = nextPromptIndex
 
         if (!prompt) {
           return undefined
@@ -438,7 +440,7 @@ export const processClaimedPromptsByConnection = async ({
         const availability = getDispatchAvailability({providerConnectionId: prompt.providerConnectionId, runtime})
 
         if (availability.dispatchMode === 'skip') {
-          await haltConnection(index, async () => {
+          await haltConnection(async () => {
             logDispatchSkip({
               connectionId: prompt.providerConnectionId,
               dispatchStatus: availability.status,
@@ -450,6 +452,7 @@ export const processClaimedPromptsByConnection = async ({
         }
 
         try {
+          startedPromptIds.add(prompt.recordId)
           await processPrompt(prompt)
           fulfilled += 1
         } catch (error) {
@@ -458,7 +461,7 @@ export const processClaimedPromptsByConnection = async ({
           connectionErrors += isConnectionFailure ? 1 : 0
 
           if (isConnectionFailure) {
-            await haltConnection(nextPromptIndex, async () => {
+            await haltConnection(async () => {
               schedulerLogger.warn(
                 `scheduler:halt:${connectionId}`,
                 `[capacity:${label}] stopping queued dispatch after endpoint became unavailable`,

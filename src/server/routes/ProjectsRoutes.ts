@@ -1007,6 +1007,7 @@ export const projectsRoutes = new Elysia()
       const [currentProject] = await getAppDatabaseService().queryJson<{
         id: string
         modelId: string
+        humanJudgmentMode: 'prompt' | 'summary' | null
         useTitle: boolean
         useAbstract: boolean
         useFulltext: boolean
@@ -1015,6 +1016,7 @@ export const projectsRoutes = new Elysia()
         SELECT
           id,
           model_id AS modelId,
+          human_judgment_mode AS humanJudgmentMode,
           use_title AS useTitle,
           use_abstract AS useAbstract,
           use_fulltext AS useFulltext,
@@ -1053,6 +1055,9 @@ export const projectsRoutes = new Elysia()
             parsedDateFrom !== undefined ? `date_from = ${getSqlLiteral(parsedDateFrom)}` : null,
             parsedDateTo !== undefined ? `date_to = ${getSqlLiteral(parsedDateTo)}` : null,
             hasModelIdUpdate ? `model_id = ${getSqlLiteral(body.modelId)}` : null,
+            body.humanJudgmentMode !== undefined
+              ? `human_judgment_mode = ${getSqlLiteral(body.humanJudgmentMode)}`
+              : null,
             body.useTitle !== undefined ? `use_title = ${body.useTitle ? 'TRUE' : 'FALSE'}` : null,
             body.useAbstract !== undefined ? `use_abstract = ${body.useAbstract ? 'TRUE' : 'FALSE'}` : null,
             body.useFulltext !== undefined ? `use_fulltext = ${body.useFulltext ? 'TRUE' : 'FALSE'}` : null,
@@ -1340,6 +1345,7 @@ export const projectsRoutes = new Elysia()
         dateFrom: t.Optional(t.Union([t.String(), t.Null()])),
         dateTo: t.Optional(t.Union([t.String(), t.Null()])),
         modelId: t.Optional(t.String()),
+        humanJudgmentMode: t.Optional(t.Union([t.Literal('prompt'), t.Literal('summary')])),
         useTitle: t.Optional(t.Boolean()),
         useAbstract: t.Optional(t.Boolean()),
         useFulltext: t.Optional(t.Boolean()),
@@ -1436,6 +1442,7 @@ export const projectsRoutes = new Elysia()
         description: string | null
         engine: string | null
         modelId: string
+        humanJudgmentMode: 'prompt' | 'summary' | null
         useTitle: boolean
         useAbstract: boolean
         useFulltext: boolean
@@ -1450,6 +1457,7 @@ export const projectsRoutes = new Elysia()
         description,
         engine,
         model_id AS modelId,
+        human_judgment_mode AS humanJudgmentMode,
         use_title AS useTitle,
         use_abstract AS useAbstract,
         use_fulltext AS useFulltext,
@@ -1484,6 +1492,7 @@ export const projectsRoutes = new Elysia()
         description: string | null
         engine: string | null
         modelId: string
+        humanJudgmentMode: 'prompt' | 'summary' | null
         useTitle: boolean
         useAbstract: boolean
         useFulltext: boolean
@@ -1500,6 +1509,7 @@ export const projectsRoutes = new Elysia()
           description,
           engine,
           model_id,
+          human_judgment_mode,
           use_title,
           use_abstract,
           use_fulltext,
@@ -1514,6 +1524,7 @@ export const projectsRoutes = new Elysia()
           ${getSqlLiteral(sourceProject.description)},
           ${getSqlLiteral(sourceProject.engine)},
           '${escapeSqlString(sourceProject.modelId)}',
+          ${getSqlLiteral(sourceProject.humanJudgmentMode ?? 'prompt')},
           ${sourceProject.useTitle ? 'TRUE' : 'FALSE'},
           ${sourceProject.useAbstract ? 'TRUE' : 'FALSE'},
           ${sourceProject.useFulltext ? 'TRUE' : 'FALSE'},
@@ -1528,6 +1539,7 @@ export const projectsRoutes = new Elysia()
           description,
           engine,
           model_id AS modelId,
+          human_judgment_mode AS humanJudgmentMode,
           use_title AS useTitle,
           use_abstract AS useAbstract,
           use_fulltext AS useFulltext,
@@ -1543,7 +1555,7 @@ export const projectsRoutes = new Elysia()
         throw new Error('Failed to create cloned project')
       }
 
-      const [sourcePrompts, sourceRouteLinks, sourceArticles] = await Promise.all([
+      const [sourcePrompts, sourceRouteLinks, sourceArticles, sourceSummaryJudgments] = await Promise.all([
         tx.queryJson<{
           order: number | null
           archived: boolean
@@ -1553,6 +1565,9 @@ export const projectsRoutes = new Elysia()
           promptHeading: string | null
           type: string | null
           promptArchived: boolean
+          criteriaDisposition: 'include' | 'exclude' | null
+          criteriaSectionKey: string | null
+          criteriaSectionLabel: string | null
         }>(`
           SELECT
             pp.prompt_order AS "order",
@@ -1562,7 +1577,10 @@ export const projectsRoutes = new Elysia()
             p.transformed_text AS transformedText,
             p.prompt_heading AS promptHeading,
             p.type AS type,
-            p.archived AS promptArchived
+            p.archived AS promptArchived,
+            pp.criteria_disposition AS criteriaDisposition,
+            pp.criteria_section_key AS criteriaSectionKey,
+            pp.criteria_section_label AS criteriaSectionLabel
           FROM app.project_prompt pp
           INNER JOIN app.prompt p ON p.id = pp.prompt_id
           WHERE pp.project_id = '${escapeSqlString(params.id)}'
@@ -1578,6 +1596,13 @@ export const projectsRoutes = new Elysia()
           FROM app.project_article
           WHERE project_id = '${escapeSqlString(params.id)}'
         `),
+        sourceProject.humanJudgmentMode === 'summary'
+          ? tx.queryJson<{answer: string | null; articleId: string; origin: 'covidence_import' | 'manual_override'}>(`
+              SELECT article_id AS articleId, answer, origin
+              FROM app.judgment_human_summary
+              WHERE project_id = '${escapeSqlString(params.id)}'
+            `)
+          : Promise.resolve([]),
       ])
 
       if (sourcePrompts.length > 0) {
@@ -1594,14 +1619,32 @@ export const projectsRoutes = new Elysia()
             throw new Error('Failed to create detached cloned prompt')
           }
 
-          await upsertProjectPromptTx(tx, {
-            projectId: clonedProject.id,
-            promptId: detachedPromptId,
-            order: prompt.order ?? 0,
-            archived: prompt.archived,
-            enabled: prompt.enabled,
-            originProjectId: clonedProject.id,
-          })
+          await tx.run(`
+            INSERT INTO app.project_prompt (
+              id,
+              project_id,
+              prompt_id,
+              prompt_order,
+              archived,
+              enabled,
+              origin_project_id,
+              criteria_disposition,
+              criteria_section_key,
+              criteria_section_label
+            )
+            VALUES (
+              '${escapeSqlString(crypto.randomUUID())}',
+              '${escapeSqlString(clonedProject.id)}',
+              '${escapeSqlString(detachedPromptId)}',
+              ${prompt.order ?? 0},
+              ${prompt.archived ? 'TRUE' : 'FALSE'},
+              ${prompt.enabled ? 'TRUE' : 'FALSE'},
+              '${escapeSqlString(clonedProject.id)}',
+              ${getSqlLiteral(prompt.criteriaDisposition)},
+              ${getSqlLiteral(prompt.criteriaSectionKey)},
+              ${getSqlLiteral(prompt.criteriaSectionLabel)}
+            )
+          `)
         }
       }
 
@@ -1622,6 +1665,17 @@ export const projectsRoutes = new Elysia()
           VALUES ${sourceArticles
             .map((article) => {
               return `(${getQuotedStringList([crypto.randomUUID(), clonedProject.id, article.articleId, params.id]).join(', ')})`
+            })
+            .join(', ')}
+        `)
+      }
+
+      if (sourceProject.humanJudgmentMode === 'summary' && sourceSummaryJudgments.length > 0) {
+        await tx.run(`
+          INSERT INTO app.judgment_human_summary (id, project_id, article_id, answer, origin)
+          VALUES ${sourceSummaryJudgments
+            .map((judgment) => {
+              return `(${getQuotedStringList([crypto.randomUUID(), clonedProject.id, judgment.articleId]).join(', ')}, ${getSqlLiteral(judgment.answer)}, ${getSqlLiteral(judgment.origin)})`
             })
             .join(', ')}
         `)
