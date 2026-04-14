@@ -359,22 +359,43 @@ const getCovidencePromptEligibilityCriteriaHeading = (params: {
     : `${params.sectionLabel} exclusion criteria:`
 }
 
+const getCovidenceCombinedPromptDecisionRules = (params: {
+  answerSet: CovidencePromptAnswerSet
+  mode: CovidenceImportMode
+}) => {
+  const maybeRule = getCovidencePromptAnswerValues(params.answerSet).includes('maybe')
+    ? [
+        `Answer maybe if the report does not provide enough information to determine whether the study should be included ${params.mode === 'full_text' ? 'in the final review' : 'for full text review'}.`,
+      ]
+    : []
+
+  return [
+    `Answer yes only if all inclusion criteria are satisfied and none of the exclusion criteria apply.`,
+    `Answer no if any inclusion criterion is not satisfied or any exclusion criterion applies.`,
+    ...maybeRule,
+  ].join('\n')
+}
+
+const getCovidenceCombinedPromptCriteriaHeading = (disposition: 'include' | 'exclude') => {
+  return disposition === 'include'
+    ? 'Inclusion criteria (evaluate in order):'
+    : 'Exclusion criteria (evaluate in order):'
+}
+
 const getCovidencePromptText = (params: {
   answerSet: CovidencePromptAnswerSet
   exclusionCriteria: string
   inclusionCriteria: string
   mode: CovidenceImportMode
 }) => {
-  const allowedAnswers = getCovidencePromptAnswerValues(params.answerSet).join(', ')
-
   return [
     covidencePromptQuestionByMode[params.mode],
     '',
-    `Allowed answers: ${allowedAnswers}`,
+    getCovidenceCombinedPromptDecisionRules(params),
     '',
-    `Inclusion:\n${getCovidencePromptCriteriaText(params.inclusionCriteria)}`,
+    `${getCovidenceCombinedPromptCriteriaHeading('include')}\n${getCovidencePromptCriteriaText(params.inclusionCriteria)}`,
     '',
-    `Exclusion:\n${getCovidencePromptCriteriaText(params.exclusionCriteria)}`,
+    `${getCovidenceCombinedPromptCriteriaHeading('exclude')}\n${getCovidencePromptCriteriaText(params.exclusionCriteria)}`,
   ].join('\n')
 }
 
@@ -486,6 +507,61 @@ const getCovidencePromptCriteriaGroups = (params: {
         ]
 }
 
+const buildCovidencePromptDefinitionsPerField = (params: {
+  answerSet: CovidencePromptAnswerSet
+  eligibilityFields: CovidenceEligibilityPromptField[]
+  mode: CovidenceImportMode
+}) => {
+  return getNormalizedCovidenceEligibilityPromptFields(params.eligibilityFields).map((eligibilityField) => {
+    return buildCovidencePromptDefinitionForEligibilityField({...params, eligibilityField})
+  })
+}
+
+const buildCovidencePromptDefinitionsPerSection = (params: {
+  answerSet: CovidencePromptAnswerSet
+  eligibilityFields: CovidenceEligibilityPromptField[]
+  mode: CovidenceImportMode
+}) => {
+  return getCovidencePromptCriteriaGroups({
+    eligibilityFields: params.eligibilityFields,
+    promptGrouping: 'per_section',
+  }).map((criteriaGroup) => {
+    const promptDefinition = buildCovidencePromptDefinition({
+      answerSet: params.answerSet,
+      exclusionCriteria: criteriaGroup.exclusionCriteria.join('\n\n'),
+      inclusionCriteria: criteriaGroup.inclusionCriteria.join('\n\n'),
+      mode: params.mode,
+    })
+
+    return criteriaGroup.sectionKey && criteriaGroup.sectionLabel
+      ? {
+          ...promptDefinition,
+          criteriaSectionKey: criteriaGroup.sectionKey,
+          criteriaSectionLabel: criteriaGroup.sectionLabel,
+          promptHeading: `Matches ${criteriaGroup.sectionLabel} Criteria`,
+        }
+      : promptDefinition
+  })
+}
+
+const buildCovidencePromptDefinitionsSinglePrompt = (params: {
+  answerSet: CovidencePromptAnswerSet
+  eligibilityFields: CovidenceEligibilityPromptField[]
+  mode: CovidenceImportMode
+}) => {
+  return getCovidencePromptCriteriaGroups({
+    eligibilityFields: params.eligibilityFields,
+    promptGrouping: 'single_prompt',
+  }).map((criteriaGroup) => {
+    return buildCovidencePromptDefinition({
+      answerSet: params.answerSet,
+      exclusionCriteria: criteriaGroup.exclusionCriteria.join('\n\n'),
+      inclusionCriteria: criteriaGroup.inclusionCriteria.join('\n\n'),
+      mode: params.mode,
+    })
+  })
+}
+
 export const buildCovidencePromptDefinitionsForEligibilityFields = (params: {
   answerSet: CovidencePromptAnswerSet
   eligibilityFields: CovidenceEligibilityPromptField[]
@@ -495,28 +571,10 @@ export const buildCovidencePromptDefinitionsForEligibilityFields = (params: {
   const promptGrouping = params.promptGrouping ?? 'per_field'
 
   return promptGrouping === 'per_field'
-    ? getNormalizedCovidenceEligibilityPromptFields(params.eligibilityFields).map((eligibilityField) => {
-        return buildCovidencePromptDefinitionForEligibilityField({...params, eligibilityField})
-      })
-    : getCovidencePromptCriteriaGroups({eligibilityFields: params.eligibilityFields, promptGrouping}).map(
-        (criteriaGroup) => {
-          const promptDefinition = buildCovidencePromptDefinition({
-            answerSet: params.answerSet,
-            exclusionCriteria: criteriaGroup.exclusionCriteria.join('\n\n'),
-            inclusionCriteria: criteriaGroup.inclusionCriteria.join('\n\n'),
-            mode: params.mode,
-          })
-
-          return criteriaGroup.sectionKey && criteriaGroup.sectionLabel
-            ? {
-                ...promptDefinition,
-                criteriaSectionKey: criteriaGroup.sectionKey,
-                criteriaSectionLabel: criteriaGroup.sectionLabel,
-                promptHeading: `Matches ${criteriaGroup.sectionLabel} Criteria`,
-              }
-            : promptDefinition
-        },
-      )
+    ? buildCovidencePromptDefinitionsPerField(params)
+    : promptGrouping === 'per_section'
+      ? buildCovidencePromptDefinitionsPerSection(params)
+      : buildCovidencePromptDefinitionsSinglePrompt(params)
 }
 
 const getCovidencePromptQueryRunner = (tx?: CovidencePromptTx) => {
