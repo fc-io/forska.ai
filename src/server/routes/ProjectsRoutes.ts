@@ -65,7 +65,7 @@ type ProjectReferenceDetachPlan = {
 }
 
 type ProjectRow = {
-  humanJudgmentMode: 'prompt' | 'summary' | null
+  humanJudgmentMode?: 'prompt' | 'summary' | null
   id: string
   name: string
   description: string | null
@@ -180,6 +180,11 @@ const getProjectReferenceDetachPlan = (projectId: string): ProjectReferenceDetac
     tempTable: getTempTable('judgment_human'),
     whereClause: `project_id = ${projectLiteral}`,
   }
+  const judgmentHumanSummarySpec = {
+    sourceTable: 'app.judgment_human_summary',
+    tempTable: getTempTable('judgment_human_summary'),
+    whereClause: `project_id = ${projectLiteral}`,
+  }
   const projectMartRefreshStateSpec = {
     sourceTable: 'app.project_mart_refresh_state',
     tempTable: getTempTable('project_mart_refresh_state'),
@@ -195,6 +200,11 @@ const getProjectReferenceDetachPlan = (projectId: string): ProjectReferenceDetac
     tempTable: getTempTable('review'),
     whereClause: `project_id = ${projectLiteral}`,
   }
+  const projectMartLargeRebuildStateSpec = {
+    sourceTable: 'app.project_mart_large_rebuild_state',
+    tempTable: getTempTable('project_mart_large_rebuild_state'),
+    whereClause: `project_id = ${projectLiteral}`,
+  }
 
   return {
     deleteSpecs: [
@@ -204,8 +214,10 @@ const getProjectReferenceDetachPlan = (projectId: string): ProjectReferenceDetac
       judgmentAssessmentSpec,
       judgmentSpec,
       judgmentHumanSpec,
+      judgmentHumanSummarySpec,
       projectMartRefreshArticleStateSpec,
       projectMartRefreshStateSpec,
+      projectMartLargeRebuildStateSpec,
       reviewSpec,
     ],
     restoreSpecs: [
@@ -215,8 +227,10 @@ const getProjectReferenceDetachPlan = (projectId: string): ProjectReferenceDetac
       judgmentSpec,
       judgmentAssessmentSpec,
       judgmentHumanSpec,
+      judgmentHumanSummarySpec,
       projectMartRefreshStateSpec,
       projectMartRefreshArticleStateSpec,
+      projectMartLargeRebuildStateSpec,
       reviewSpec,
     ],
   }

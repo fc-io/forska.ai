@@ -1116,6 +1116,94 @@ test('edit route can change the model for a populated project', async () => {
   await flushMartRefreshes()
 })
 
+test('edit route can change the model when summary judgments and large rebuild state reference the project', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-switch-model-summary-connection'
+  const initialModelId = 'edit-switch-model-summary-initial'
+  const nextModelId = 'edit-switch-model-summary-next'
+  const projectId = 'edit-switch-model-summary-project'
+  const articleId = 'edit-switch-model-summary-article'
+
+  await insertProjectFixture({connectionId, modelId: initialModelId, projectId})
+  await runDatabase(`
+    UPDATE app.project
+    SET human_judgment_mode = 'summary'
+    WHERE id = '${projectId}'
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${nextModelId}', '${connectionId}', 'Qwen/Qwen3.5-32B', 'Qwen/Qwen3.5-32B', 'Qwen 32B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('${articleId}', 'Edit switch model summary article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('edit-switch-model-summary-project-article', '${projectId}', '${articleId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_human_summary (id, project_id, article_id, answer, origin)
+    VALUES ('edit-switch-model-summary-judgment', '${projectId}', '${articleId}', 'yes', 'manual_override')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_mart_large_rebuild_state (project_id)
+    VALUES ('${projectId}')
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        name: 'Project with switched model and summary state',
+        description: null,
+        prompts: [],
+        dateFrom: null,
+        dateTo: null,
+        modelId: nextModelId,
+        importRoutes: [],
+        useTitle: true,
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {data: {project: {modelId: string; name: string}}}
+
+  expect(response.status).toBe(200)
+  expect(body.data.project.modelId).toBe(nextModelId)
+  expect(body.data.project.name).toBe('Project with switched model and summary state')
+
+  const [storedProject] = await queryDatabase<{modelId: string}>(`
+    SELECT model_id AS modelId
+    FROM app.project
+    WHERE id = '${projectId}'
+    LIMIT 1
+  `)
+  const [storedSummaryCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.judgment_human_summary
+    WHERE project_id = '${projectId}'
+  `)
+  const [storedLargeRebuildState] = await queryDatabase<{projectId: string}>(`
+    SELECT project_id AS projectId
+    FROM app.project_mart_large_rebuild_state
+    WHERE project_id = '${projectId}'
+    LIMIT 1
+  `)
+
+  expect(storedProject?.modelId).toBe(nextModelId)
+  expect(Number(storedSummaryCount?.count ?? 0)).toBe(1)
+  expect(storedLargeRebuildState?.projectId).toBe(projectId)
+
+  await flushMartRefreshes()
+})
+
 test('clone route detaches prompt ids and hides duplicate importable prompts', async () => {
   if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')
