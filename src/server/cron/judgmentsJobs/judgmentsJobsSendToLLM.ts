@@ -375,6 +375,15 @@ export const processClaimedPromptsByConnection = async ({
     return new Map(state).set(connectionId, [...(state.get(connectionId) ?? []), prompt])
   }, new Map<string, PromptToProcess[]>())
 
+  const getConnectionLaunchLimit = (connectionPrompts: PromptToProcess[]): number => {
+    return Math.max(
+      1,
+      ...connectionPrompts.map((prompt) => {
+        return Math.max(1, prompt.providerMaxInflightRequests ?? 1)
+      }),
+    )
+  }
+
   const results = await Promise.all(
     Array.from(byConnection.entries()).map(async ([connectionId, connectionPrompts]) => {
       let fulfilled = 0
@@ -382,46 +391,65 @@ export const processClaimedPromptsByConnection = async ({
       let connectionErrors = 0
       let halted = false
       let requeuedCount = 0
+      let nextPromptIndex = 0
+      let haltPromise: Promise<void> | null = null
 
-      await connectionPrompts.reduce<Promise<void>>(async (previous, prompt, index) => {
-        await previous
+      const requeueRemainingPrompts = async (startIndex: number): Promise<void> => {
+        const remainingPrompts = connectionPrompts.slice(startIndex)
+        requeuedCount = remainingPrompts.length
 
+        if (remainingPrompts.length > 0) {
+          await requeuePrompts(remainingPrompts)
+        }
+      }
+
+      const haltConnection = (startIndex: number, onHalt: () => Promise<void>): Promise<void> => {
+        if (haltPromise) {
+          return haltPromise
+        }
+
+        halted = true
+        haltPromise = onHalt().then(() => {
+          return requeueRemainingPrompts(startIndex)
+        })
+
+        return haltPromise
+      }
+
+      const runWorker = async (): Promise<void> => {
         if (halted) {
           return undefined
         }
 
-        const availability = getDispatchAvailability({
-          providerConnectionId: prompt.providerConnectionId,
-          runtime: {
-            modelBaseUrl: prompt.modelBaseUrl,
-            modelProvider: prompt.modelProvider,
-            modelWorkerUrls: prompt.modelWorkerUrls,
-          },
-        })
+        const prompt = connectionPrompts[nextPromptIndex]
+        const index = nextPromptIndex
+
+        if (!prompt) {
+          return undefined
+        }
+
+        nextPromptIndex += 1
+
+        const runtime = {
+          modelBaseUrl: prompt.modelBaseUrl,
+          modelProvider: prompt.modelProvider,
+          modelWorkerUrls: prompt.modelWorkerUrls,
+        }
+        const availability = getDispatchAvailability({providerConnectionId: prompt.providerConnectionId, runtime})
 
         if (availability.dispatchMode === 'skip') {
-          halted = true
-          const remainingPrompts = connectionPrompts.slice(index)
-          requeuedCount = remainingPrompts.length
-          await requeuePrompts(remainingPrompts)
-          logDispatchSkip({
-            connectionId: prompt.providerConnectionId,
-            dispatchStatus: availability.status,
-            label,
-            runtime: {
-              modelBaseUrl: prompt.modelBaseUrl,
-              modelProvider: prompt.modelProvider,
-              modelWorkerUrls: prompt.modelWorkerUrls,
-            },
+          await haltConnection(index, async () => {
+            logDispatchSkip({
+              connectionId: prompt.providerConnectionId,
+              dispatchStatus: availability.status,
+              label,
+              runtime,
+            })
           })
           return undefined
         }
 
         try {
-          const jitterMs = Math.floor(Math.random() * 1000)
-          await new Promise((resolve) => {
-            setTimeout(resolve, jitterMs)
-          })
           await processPrompt(prompt)
           fulfilled += 1
         } catch (error) {
@@ -429,23 +457,27 @@ export const processClaimedPromptsByConnection = async ({
           const isConnectionFailure = error instanceof ConnectionError
           connectionErrors += isConnectionFailure ? 1 : 0
 
-          if (!isConnectionFailure) {
-            return undefined
+          if (isConnectionFailure) {
+            await haltConnection(nextPromptIndex, async () => {
+              schedulerLogger.warn(
+                `scheduler:halt:${connectionId}`,
+                `[capacity:${label}] stopping queued dispatch after endpoint became unavailable`,
+                {connectionId, requeuedCount},
+              )
+            })
           }
-
-          halted = true
-          const remainingPrompts = connectionPrompts.slice(index + 1)
-          requeuedCount = remainingPrompts.length
-          if (remainingPrompts.length > 0) {
-            await requeuePrompts(remainingPrompts)
-          }
-          schedulerLogger.warn(
-            `scheduler:halt:${connectionId}`,
-            `[capacity:${label}] stopping queued dispatch after endpoint became unavailable`,
-            {connectionId, requeuedCount},
-          )
         }
-      }, Promise.resolve())
+
+        return halted ? undefined : runWorker()
+      }
+
+      const launchCount = Math.min(connectionPrompts.length, getConnectionLaunchLimit(connectionPrompts))
+
+      await Promise.all(
+        Array.from({length: launchCount}).map(async () => {
+          await runWorker()
+        }),
+      )
 
       return {claimedPrompts: connectionPrompts.length, connectionErrors, fulfilled, rejected, requeuedCount}
     }),

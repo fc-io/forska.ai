@@ -46,6 +46,13 @@ afterEach(() => {
   Date.now = realDateNow
 })
 
+const flush = async (): Promise<void> => {
+  await Promise.resolve()
+  await new Promise((resolve) => {
+    setTimeout(resolve, 0)
+  })
+}
+
 test('requeues stale sent prompts before runtime filtering', async () => {
   const requeueSentPrompts = mock(async (_params: {jobIds: string[]; serverJobId: string}) => {
     return 0
@@ -593,6 +600,74 @@ test('prompt/content errors do not pause the whole provider connection', async (
 
   expect(processed).toEqual(['record-a', 'record-b'])
   expect(requeuePrompts).not.toHaveBeenCalled()
+})
+
+test('launches claimed prompts in bounded parallel per connection', async () => {
+  const firstRelease = (() => {
+    let resolve: () => void = () => {
+      return undefined
+    }
+    const promise = new Promise<void>((nextResolve) => {
+      resolve = nextResolve
+    })
+
+    return {promise, resolve}
+  })()
+  const secondRelease = (() => {
+    let resolve: () => void = () => {
+      return undefined
+    }
+    const promise = new Promise<void>((nextResolve) => {
+      resolve = nextResolve
+    })
+
+    return {promise, resolve}
+  })()
+  const thirdRelease = (() => {
+    let resolve: () => void = () => {
+      return undefined
+    }
+    const promise = new Promise<void>((nextResolve) => {
+      resolve = nextResolve
+    })
+
+    return {promise, resolve}
+  })()
+  const started: string[] = []
+  const processPrompt = mock(async (prompt: PromptToProcess) => {
+    started.push(prompt.recordId)
+
+    return prompt.recordId === 'record-a'
+      ? firstRelease.promise
+      : prompt.recordId === 'record-b'
+        ? secondRelease.promise
+        : thirdRelease.promise
+  })
+
+  const processing = processClaimedPromptsByConnection({
+    label: 'test',
+    processPrompt,
+    prompts: [
+      createPrompt({providerMaxInflightRequests: 2, recordId: 'record-a'}),
+      createPrompt({articleId: 'article-b', providerMaxInflightRequests: 2, recordId: 'record-b'}),
+      createPrompt({articleId: 'article-c', providerMaxInflightRequests: 2, recordId: 'record-c'}),
+    ],
+  })
+
+  await flush()
+
+  expect(started.includes('record-a')).toBe(true)
+  expect(started.includes('record-b')).toBe(true)
+  expect(started).not.toContain('record-c')
+
+  firstRelease.resolve()
+  await flush()
+
+  expect(started).toContain('record-c')
+
+  secondRelease.resolve()
+  thirdRelease.resolve()
+  await processing
 })
 
 test('requeues remaining claimed prompts when endpoint availability flips before launch', async () => {
