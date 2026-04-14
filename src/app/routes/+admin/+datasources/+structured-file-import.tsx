@@ -5,6 +5,7 @@ import {createMemo, createSignal, For, Show} from 'solid-js'
 import {Button} from '../../../../components/ui/button'
 import {apiClient} from '../../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse.ts'
+import {postFormDataToApi} from '../../../utils/postFormDataToApi.ts'
 
 type StructuredFileFormat = 'json' | 'xml'
 type StructuredBoundaryCandidate = {
@@ -22,8 +23,15 @@ type StructuredFileCreateResponse = {
 }
 
 const analyzeStructuredFile = async (file: File) => {
-  const response = await apiClient.api.datasources.import['structured-file-analyze'].post({file})
-  return handleApiResponse<StructuredFileAnalyzeResponse>(response, 'Failed to analyze file').data
+  const formData = new FormData()
+  formData.append('file', file)
+  const result = await postFormDataToApi<StructuredFileAnalyzeResponse>({
+    errorMessage: 'Failed to analyze file',
+    formData,
+    path: '/api/datasources/import/structured-file-analyze',
+  })
+
+  return result.data
 }
 
 const createStructuredFileImport = async (params: {

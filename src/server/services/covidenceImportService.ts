@@ -109,6 +109,7 @@ type CovidenceCanonicalCandidateState = {
   canonicalRow: CovidenceReferenceRow
   sourceRows: CovidenceReferenceRow[]
 }
+type CovidenceCanonicalState = {articleKeys: string[]; candidateMap: Map<string, CovidenceCanonicalCandidateState>}
 type CovidenceCsvParseError = {
   code: CovidenceCsvParseErrorCode
   fileRole: CovidenceFileRole
@@ -588,19 +589,28 @@ const isCovidenceOverlayRow = (
 }
 
 const getCovidenceUniqueStrings = (values: Array<string | null>) => {
+  const seenValues = new Set<string>()
+
   return values.reduce<string[]>((uniqueValues, value) => {
     const normalizedValue = value?.trim() ?? ''
 
-    return normalizedValue === '' || uniqueValues.includes(normalizedValue)
-      ? uniqueValues
-      : [...uniqueValues, normalizedValue]
+    if (normalizedValue === '' || seenValues.has(normalizedValue)) {
+      return uniqueValues
+    }
+
+    seenValues.add(normalizedValue)
+    uniqueValues.push(normalizedValue)
+
+    return uniqueValues
   }, [])
 }
 
 const getCovidenceStageMembership = (rows: CovidenceReferenceRow[]) => {
   return rows.reduce<Record<CovidenceFileRole, boolean>>(
     (membership, row) => {
-      return {...membership, [row.fileRole]: true}
+      membership[row.fileRole] = true
+
+      return membership
     },
     {...emptyCovidenceStageMembership},
   )
@@ -664,7 +674,35 @@ const getCovidenceCandidateState = (params: {
   return {articleKeySource: params.articleKeySource, canonicalRow: params.canonicalRow, sourceRows: params.sourceRows}
 }
 
-const getCovidenceResolvedArticleKey = (row: CovidenceReferenceRow) => {
+const createCovidenceCanonicalState = (): CovidenceCanonicalState => {
+  return {articleKeys: [] as string[], candidateMap: new Map<string, CovidenceCanonicalCandidateState>()}
+}
+
+const appendCovidenceCanonicalRow = (
+  state: CovidenceCanonicalState,
+  row: CovidenceReferenceRow,
+): CovidenceCanonicalState => {
+  const resolvedKey = getCovidenceResolvedArticleKey(row)
+  const existingCandidate = state.candidateMap.get(resolvedKey.articleKey)
+
+  if (existingCandidate) {
+    existingCandidate.sourceRows.push(row)
+
+    return state
+  }
+
+  state.candidateMap.set(
+    resolvedKey.articleKey,
+    getCovidenceCandidateState({articleKeySource: resolvedKey.articleKeySource, canonicalRow: row, sourceRows: [row]}),
+  )
+  state.articleKeys.push(resolvedKey.articleKey)
+
+  return state
+}
+
+const getCovidenceResolvedArticleKey = (
+  row: CovidenceReferenceRow,
+): {articleKey: string; articleKeySource: CovidenceRecordKeySource | 'unkeyed'} => {
   const key = getCovidenceRowKey(row)
 
   return {
@@ -674,25 +712,7 @@ const getCovidenceResolvedArticleKey = (row: CovidenceReferenceRow) => {
 }
 
 const getCovidenceCanonicalStateFromAllRows = (rows: CovidenceReferenceRow[]) => {
-  return rows.reduce(
-    (state, row) => {
-      const resolvedKey = getCovidenceResolvedArticleKey(row)
-      const existingCandidate = state.candidateMap.get(resolvedKey.articleKey)
-      const candidateState = getCovidenceCandidateState({
-        articleKeySource: existingCandidate?.articleKeySource ?? resolvedKey.articleKeySource,
-        canonicalRow: existingCandidate?.canonicalRow ?? row,
-        sourceRows: [...(existingCandidate?.sourceRows ?? []), row],
-      })
-
-      state.candidateMap.set(resolvedKey.articleKey, candidateState)
-
-      return {
-        ...state,
-        articleKeys: existingCandidate ? state.articleKeys : [...state.articleKeys, resolvedKey.articleKey],
-      }
-    },
-    {articleKeys: [] as string[], candidateMap: new Map<string, CovidenceCanonicalCandidateState>()},
-  )
+  return rows.reduce(appendCovidenceCanonicalRow, createCovidenceCanonicalState())
 }
 
 const getCovidenceCanonicalStateFromMasterRows = (rows: CovidenceReferenceRow[]) => {
@@ -700,25 +720,7 @@ const getCovidenceCanonicalStateFromMasterRows = (rows: CovidenceReferenceRow[])
     .filter((row) => {
       return row.fileRole === 'all'
     })
-    .reduce(
-      (state, row) => {
-        const resolvedKey = getCovidenceResolvedArticleKey(row)
-        const existingCandidate = state.candidateMap.get(resolvedKey.articleKey)
-        const candidateState = getCovidenceCandidateState({
-          articleKeySource: existingCandidate?.articleKeySource ?? resolvedKey.articleKeySource,
-          canonicalRow: existingCandidate?.canonicalRow ?? row,
-          sourceRows: [...(existingCandidate?.sourceRows ?? []), row],
-        })
-
-        state.candidateMap.set(resolvedKey.articleKey, candidateState)
-
-        return {
-          ...state,
-          articleKeys: existingCandidate ? state.articleKeys : [...state.articleKeys, resolvedKey.articleKey],
-        }
-      },
-      {articleKeys: [] as string[], candidateMap: new Map<string, CovidenceCanonicalCandidateState>()},
-    )
+    .reduce(appendCovidenceCanonicalRow, createCovidenceCanonicalState())
 }
 
 const getCovidenceOverlayMergedState = (
@@ -743,11 +745,7 @@ const getCovidenceOverlayMergedState = (
       return rowMap
     }
 
-    rowMap.set(articleKey, {
-      articleKeySource: existingCandidate.articleKeySource,
-      canonicalRow: existingCandidate.canonicalRow,
-      sourceRows: [...existingCandidate.sourceRows, row],
-    })
+    existingCandidate.sourceRows.push(row)
 
     return rowMap
   }, new Map(canonicalCandidateMap))
@@ -784,15 +782,21 @@ const getCovidenceConflictWarnings = (candidates: CovidenceMergedArticleCandidat
 const getCovidenceStudyGroupWarnings = (params: {
   candidates: CovidenceMergedArticleCandidate[]
   mode: CovidenceImportMode
-}) => {
+}): {duplicateStudyGroups: CovidenceStudyGroupWarning[]; studyDecisionConflicts: CovidenceStudyGroupWarning[]} => {
   const groupedCandidates = params.candidates.reduce((groupMap, candidate) => {
     if (!candidate.studyKey || !candidate.studyKeySource) {
       return groupMap
     }
 
     const groupKey = `${candidate.studyKeySource}:${candidate.studyKey}`
-    const existingGroup = groupMap.get(groupKey) ?? []
-    groupMap.set(groupKey, [...existingGroup, candidate])
+    const existingGroup = groupMap.get(groupKey)
+
+    if (existingGroup) {
+      existingGroup.push(candidate)
+      return groupMap
+    }
+
+    groupMap.set(groupKey, [candidate])
 
     return groupMap
   }, new Map<string, CovidenceMergedArticleCandidate[]>())
@@ -846,11 +850,17 @@ const getCovidenceStudyGroupWarnings = (params: {
 const getCovidenceCandidatesWithStudyMetadata = (params: {
   candidates: CovidenceMergedArticleCandidate[]
   mode: CovidenceImportMode
-}) => {
+}): CovidenceMergedArticleCandidate[] => {
   const groupedCandidates = params.candidates.reduce((groupMap, candidate) => {
     const groupKey = candidate.studyKey ?? `record:${candidate.articleKey}`
-    const existingGroup = groupMap.get(groupKey) ?? []
-    groupMap.set(groupKey, [...existingGroup, candidate])
+    const existingGroup = groupMap.get(groupKey)
+
+    if (existingGroup) {
+      existingGroup.push(candidate)
+      return groupMap
+    }
+
+    groupMap.set(groupKey, [candidate])
 
     return groupMap
   }, new Map<string, CovidenceMergedArticleCandidate[]>())
@@ -1050,75 +1060,60 @@ const getParsedCovidenceRisRecords = (params: {
   }
 
   const lines = normalizedContent.split(/\r?\n/)
-  const state = lines.reduce(
-    (currentState, line, index) => {
-      const trimmedLine = line.trimEnd()
-      const match = trimmedLine.match(/^([A-Z0-9]{2,})\s*-\s?(.*)$/)
+  const records: Array<Record<string, string[]>> = []
+  let currentRecord = {} as Record<string, string[]>
+  let currentTag: string | null = null
+  let malformedLineIndex: number | null = null
 
-      if (trimmedLine.trim() === '') {
-        return currentState
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? ''
+    const trimmedLine = line.trimEnd()
+    const match = trimmedLine.match(/^([A-Z0-9]{2,})\s*-\s?(.*)$/)
+
+    if (trimmedLine.trim() === '') {
+      continue
+    }
+
+    if (match) {
+      const normalizedTag = getNormalizedCovidenceRisTag(match[1] ?? '')
+      const value = getNormalizedCovidenceCellValue(match[2] ?? '') ?? ''
+
+      if (normalizedTag === 'er') {
+        records.push(currentRecord)
+        currentRecord = {}
+        currentTag = null
+        continue
       }
 
-      if (match) {
-        const normalizedTag = getNormalizedCovidenceRisTag(match[1] ?? '')
-        const value = getNormalizedCovidenceCellValue(match[2] ?? '') ?? ''
-        const updatedRecord =
-          normalizedTag === 'er'
-            ? currentState.currentRecord
-            : {
-                ...currentState.currentRecord,
-                [normalizedTag]: [...(currentState.currentRecord[normalizedTag] ?? []), value],
-              }
+      const currentValues = currentRecord[normalizedTag] ?? []
+      currentValues.push(value)
+      currentRecord[normalizedTag] = currentValues
+      currentTag = normalizedTag
+      continue
+    }
 
-        return normalizedTag === 'er'
-          ? {
-              currentRecord: {},
-              currentTag: null,
-              malformedLineIndex: currentState.malformedLineIndex,
-              records: [...currentState.records, updatedRecord],
-            }
-          : {
-              currentRecord: updatedRecord,
-              currentTag: normalizedTag,
-              malformedLineIndex: currentState.malformedLineIndex,
-              records: currentState.records,
-            }
-      }
+    if (!currentTag) {
+      malformedLineIndex = index
+      break
+    }
 
-      return currentState.currentTag
-        ? {
-            currentRecord: {
-              ...currentState.currentRecord,
-              [currentState.currentTag]: [
-                ...(currentState.currentRecord[currentState.currentTag] ?? []).slice(0, -1),
-                `${(currentState.currentRecord[currentState.currentTag] ?? []).at(-1) ?? ''}\n${line.trim()}`.trim(),
-              ],
-            },
-            currentTag: currentState.currentTag,
-            malformedLineIndex: currentState.malformedLineIndex,
-            records: currentState.records,
-          }
-        : {...currentState, malformedLineIndex: currentState.malformedLineIndex ?? index}
-    },
-    {
-      currentRecord: {} as Record<string, string[]>,
-      currentTag: null as string | null,
-      malformedLineIndex: null as number | null,
-      records: [] as Array<Record<string, string[]>>,
-    },
-  )
+    const currentValues = currentRecord[currentTag] ?? ['']
+    const lastValueIndex = currentValues.length - 1
+    currentValues[lastValueIndex] = `${currentValues[lastValueIndex] ?? ''}\n${line.trim()}`.trim()
+    currentRecord[currentTag] = currentValues
+  }
 
-  if (state.malformedLineIndex !== null) {
+  if (malformedLineIndex !== null) {
     return getCovidenceRisParseError({
       code: 'malformed_ris',
       fileRole: params.fileRole,
-      message: `Covidence RIS line ${state.malformedLineIndex + 1} is not a valid RIS field`,
-      rowNumber: state.malformedLineIndex + 1,
+      message: `Covidence RIS line ${malformedLineIndex + 1} is not a valid RIS field`,
+      rowNumber: malformedLineIndex + 1,
       sourceFileName: params.sourceFileName,
     })
   }
 
-  if (Object.keys(state.currentRecord).length > 0) {
+  if (Object.keys(currentRecord).length > 0) {
     return getCovidenceRisParseError({
       code: 'malformed_ris',
       fileRole: params.fileRole,
@@ -1127,14 +1122,14 @@ const getParsedCovidenceRisRecords = (params: {
     })
   }
 
-  return state.records.length === 0
+  return records.length === 0
     ? getCovidenceRisParseError({
         code: 'empty_file',
         fileRole: params.fileRole,
         message: 'Covidence RIS is empty',
         sourceFileName: params.sourceFileName,
       })
-    : {ok: true, records: state.records}
+    : {ok: true, records}
 }
 
 const getCovidenceReferenceRowFromEntries = (params: {
@@ -1158,44 +1153,53 @@ const getCovidenceReferenceRowFromEntries = (params: {
 }
 
 const getParsedCovidenceCsvRows = (content: string) => {
-  const state = Array.from(content).reduce(
-    (currentState, character, index, characters) => {
-      if (currentState.skipNext) {
-        return {...currentState, skipNext: false}
+  const rows: string[][] = []
+  let currentField = ''
+  let currentRow: string[] = []
+  let inQuotes = false
+
+  for (let index = 0; index < content.length; index += 1) {
+    const character = content[index]
+
+    if (character === '"') {
+      if (inQuotes && content[index + 1] === '"') {
+        currentField = `${currentField}"`
+        index += 1
+        continue
       }
 
-      if (character === '"') {
-        return currentState.inQuotes && characters[index + 1] === '"'
-          ? {...currentState, currentField: `${currentState.currentField}"`, skipNext: true}
-          : {...currentState, inQuotes: !currentState.inQuotes}
-      }
+      inQuotes = !inQuotes
+      continue
+    }
 
-      if (character === '\r') {
-        return currentState
-      }
+    if (character === '\r') {
+      continue
+    }
 
-      if (character === ',' && !currentState.inQuotes) {
-        return {...currentState, currentField: '', currentRow: [...currentState.currentRow, currentState.currentField]}
-      }
+    if (character === ',' && !inQuotes) {
+      currentRow.push(currentField)
+      currentField = ''
+      continue
+    }
 
-      if (character === '\n' && !currentState.inQuotes) {
-        return {
-          ...currentState,
-          currentField: '',
-          currentRow: [],
-          rows: [...currentState.rows, [...currentState.currentRow, currentState.currentField]],
-        }
-      }
+    if (character === '\n' && !inQuotes) {
+      currentRow.push(currentField)
+      rows.push(currentRow)
+      currentField = ''
+      currentRow = []
+      continue
+    }
 
-      return {...currentState, currentField: `${currentState.currentField}${character}`}
-    },
-    {currentField: '', currentRow: [] as string[], inQuotes: false, rows: [] as string[][], skipNext: false},
-  )
-  const rows = [...state.rows, [...state.currentRow, state.currentField]].filter((row, index, allRows) => {
-    return !(index === allRows.length - 1 && row.length === 1 && row[0] === '' && content.endsWith('\n'))
-  })
+    currentField = `${currentField}${character}`
+  }
 
-  return state.inQuotes ? null : rows
+  if (inQuotes) {
+    return null
+  }
+
+  currentRow.push(currentField)
+
+  return currentRow.length === 1 && currentRow[0] === '' && content.endsWith('\n') ? rows : [...rows, currentRow]
 }
 
 const getCovidenceCsvHeaders = (params: {
@@ -1602,7 +1606,7 @@ const getCovidenceImportResultFromConfig = async (params: {
 const getCovidenceHumanJudgmentAnswer = (params: {
   mode: CovidenceImportMode
   stageMembership: Record<CovidenceFileRole, boolean>
-}) => {
+}): 'no' | 'yes' | null => {
   return params.mode === 'title_abstract'
     ? params.stageMembership.full_text
       ? 'yes'
@@ -2412,6 +2416,62 @@ export const parseCovidenceCsvReferenceRows = (params: {
   return parseCovidenceCsvReferenceRowsInternal(params)
 }
 
+const readAndParseCovidenceAnalyzeFiles = async (
+  files: CovidenceAnalyzeUploadFile[],
+  index = 0,
+  state = {
+    detectedFiles: [] as Array<{
+      fileRole: CovidenceFileRole
+      format: CovidenceFileFormat
+      rowCount: number
+      sourceFileName: string
+    }>,
+    parseError: null as
+      | {code: 'parse_error'; message: string; parseError: CovidenceCsvParseError}
+      | {code: 'unsupported_format'; message: string}
+      | null,
+    rows: [] as CovidenceReferenceRow[],
+  },
+): Promise<typeof state> => {
+  const nextFile = files[index]
+
+  if (!nextFile || state.parseError) {
+    return state
+  }
+
+  const sourceFileName = nextFile.file.name?.trim() || `${nextFile.fileRole}.upload`
+  const format = getCovidenceFileFormatFromName(sourceFileName)
+
+  if (!format) {
+    return {
+      ...state,
+      parseError: {
+        code: 'unsupported_format',
+        message: `Only Covidence CSV and RIS files are supported, got '${sourceFileName}'`,
+      },
+    }
+  }
+
+  const parsedResult = parseCovidenceReferenceRows({
+    content: await nextFile.file.text(),
+    fileRole: nextFile.fileRole,
+    format,
+    sourceFileName,
+  })
+
+  if (parsedResult.ok === false) {
+    return {
+      ...state,
+      parseError: {code: 'parse_error', message: parsedResult.error.message, parseError: parsedResult.error},
+    }
+  }
+
+  state.detectedFiles.push({fileRole: nextFile.fileRole, format, rowCount: parsedResult.rows.length, sourceFileName})
+  state.rows.push(...parsedResult.rows)
+
+  return await readAndParseCovidenceAnalyzeFiles(files, index + 1, state)
+}
+
 export const analyzeCovidencePackageFiles = async (params: {
   files: CovidenceAnalyzeUploadFile[]
   mode: CovidenceImportMode
@@ -2441,93 +2501,38 @@ export const analyzeCovidencePackageFiles = async (params: {
     }
   }
 
-  const filesWithContent = await Promise.all(
-    getSortedCovidenceAnalyzeFiles(params.mode, uploads).map(async ({file, fileRole}) => {
-      const sourceFileName = file.name?.trim() || `${fileRole}.upload`
-      const format = getCovidenceFileFormatFromName(sourceFileName)
+  const parsedState = await readAndParseCovidenceAnalyzeFiles(getSortedCovidenceAnalyzeFiles(params.mode, uploads))
 
-      return {content: await file.text(), fileRole, format, sourceFileName}
-    }),
-  )
-  const invalidFormatFile = filesWithContent.find((file) => {
-    return file.format === null
-  })
-
-  if (invalidFormatFile) {
-    return {
-      error: {
-        code: 'unsupported_format',
-        message: `Only Covidence CSV and RIS files are supported, got '${invalidFormatFile.sourceFileName}'`,
-      },
-      ok: false,
-    }
+  if (parsedState.parseError?.code === 'unsupported_format') {
+    return {error: {code: 'unsupported_format', message: parsedState.parseError.message}, ok: false}
   }
 
-  const validFormatFiles = filesWithContent.filter((file): file is typeof file & {format: CovidenceFileFormat} => {
-    return file.format !== null
-  })
-
-  const parsedFiles = validFormatFiles.map((file) => {
-    const parsedResult = parseCovidenceReferenceRows({
-      content: file.content,
-      fileRole: file.fileRole,
-      format: file.format,
-      sourceFileName: file.sourceFileName,
-    })
-
-    return {file, parsedResult}
-  })
-  const parseFailure = parsedFiles.find((entry) => {
-    return entry.parsedResult.ok === false
-  })
-
-  if (parseFailure && parseFailure.parsedResult.ok === false) {
+  if (parsedState.parseError?.code === 'parse_error') {
     return {
       error: {
         code: 'parse_error',
-        message: parseFailure.parsedResult.error.message,
-        parseError: parseFailure.parsedResult.error,
+        message: parsedState.parseError.message,
+        parseError: parsedState.parseError.parseError,
       },
       ok: false,
     }
   }
 
-  const detectedFiles = parsedFiles.flatMap((entry) => {
-    return entry.parsedResult.ok
-      ? [
-          {
-            fileRole: entry.file.fileRole,
-            format: entry.file.format,
-            rowCount: entry.parsedResult.rows.length,
-            sourceFileName: entry.file.sourceFileName,
-          },
-        ]
-      : []
-  })
-  const mergedResult = mergeCovidenceReferenceRows(
-    parsedFiles.flatMap((entry) => {
-      return entry.parsedResult.ok ? entry.parsedResult.rows : []
-    }),
-    params.mode,
-  )
+  const mergedResult = mergeCovidenceReferenceRows(parsedState.rows, params.mode)
 
   return {
     data: {
       counts: {
         conflictingStageMembershipCount: mergedResult.warnings.conflictingStageMemberships.length,
         duplicateStudyGroupCount: mergedResult.warnings.duplicateStudyGroups.length,
-        fileCount: detectedFiles.length,
-        filesByRole: getCovidenceRoleCounts(detectedFiles),
+        fileCount: parsedState.detectedFiles.length,
+        filesByRole: getCovidenceRoleCounts(parsedState.detectedFiles),
         mergedRowCount: mergedResult.candidates.length,
         missingMatchCount: mergedResult.warnings.missingMatches.length,
-        rowCount: detectedFiles.reduce((count, file) => {
+        rowCount: parsedState.detectedFiles.reduce((count, file) => {
           return count + file.rowCount
         }, 0),
-        rowsByRole: getCovidenceRoleCounts(
-          parsedFiles.flatMap((entry) => {
-            return entry.parsedResult.ok ? entry.parsedResult.rows : []
-          }),
-        ),
+        rowsByRole: getCovidenceRoleCounts(parsedState.rows),
         studyDecisionConflictCount: mergedResult.warnings.studyDecisionConflicts.length,
         studyGroupCount: new Set(
           mergedResult.candidates.map((candidate) => {
@@ -2535,7 +2540,7 @@ export const analyzeCovidencePackageFiles = async (params: {
           }),
         ).size,
       },
-      detectedFiles,
+      detectedFiles: parsedState.detectedFiles,
       mode: params.mode,
       sampleMergedRows: mergedResult.candidates.slice(0, 5).map((candidate) => {
         return {

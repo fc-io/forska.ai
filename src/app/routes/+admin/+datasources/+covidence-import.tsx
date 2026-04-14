@@ -6,6 +6,7 @@ import {createStore} from 'solid-js/store'
 import {Button} from '../../../../components/ui/button'
 import {apiClient} from '../../../../services/apiClient.ts'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse.ts'
+import {postFormDataToApi} from '../../../utils/postFormDataToApi.ts'
 
 type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
@@ -352,20 +353,6 @@ const fetchModels = async (): Promise<ModelOption[]> => {
   return [...hpcSorted, ...codexInApiOrder]
 }
 
-const getParsedJsonResponseBody = async (response: Response) => {
-  const responseText = await response.text()
-
-  if (!responseText) {
-    return null
-  }
-
-  try {
-    return JSON.parse(responseText) as unknown
-  } catch {
-    return responseText
-  }
-}
-
 const appendCovidenceFilesToFormData = (
   formData: FormData,
   files: Array<{file: File; fileRole: CovidenceFileRole}>,
@@ -397,23 +384,13 @@ const appendCovidenceEligibilityFieldsToFormData = (
   }, formData)
 }
 
-const postCovidenceFormData = async <T,>(params: {errorMessage: string; formData: FormData; path: string}) => {
-  const response = await fetch(params.path, {body: params.formData, method: 'POST'})
-  const payload = await getParsedJsonResponseBody(response)
-
-  return handleApiResponse<T>(
-    {data: payload as T, error: response.ok ? undefined : payload, status: response.status},
-    params.errorMessage,
-  )
-}
-
 const analyzeCovidencePackage = async (params: {
   files: Array<{file: File; fileRole: CovidenceFileRole}>
   mode: CovidenceImportMode
 }) => {
   const formData = appendCovidenceFilesToFormData(new FormData(), params.files)
   formData.append('mode', params.mode)
-  const result = await postCovidenceFormData<CovidenceAnalyzeResponse>({
+  const result = await postFormDataToApi<CovidenceAnalyzeResponse>({
     errorMessage: 'Failed to analyze Covidence package',
     formData,
     path: '/api/datasources/import/covidence-analyze',
@@ -474,7 +451,7 @@ const createCovidenceImport = async (params: {
     formData.append('description', params.description.trim())
   }
 
-  return postCovidenceFormData<CovidenceCreateResponse>({
+  return postFormDataToApi<CovidenceCreateResponse>({
     errorMessage: 'Failed to import Covidence package',
     formData,
     path: '/api/datasources/import/covidence-create',

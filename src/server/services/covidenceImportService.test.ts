@@ -1175,13 +1175,11 @@ test('seedCovidenceHumanJudgmentsFromConfig treats disjoint screen irrelevant an
     }
 
     expect(parsed.judgmentRows).toHaveLength(3)
-    expect(parsed.judgmentRows[0]).toEqual({
-      answer: null,
-      articleExternalId: expect.stringContaining(`${importRoute}:title_year_first_author%3A`),
-      articleTitle: 'Study A',
-      isAnswered: false,
-      promptId: parsed.promptId,
-    })
+    expect(parsed.judgmentRows[0]?.answer).toBeNull()
+    expect(parsed.judgmentRows[0]?.articleExternalId).toContain(`${importRoute}:title_year_first_author%3A`)
+    expect(parsed.judgmentRows[0]?.articleTitle).toBe('Study A')
+    expect(parsed.judgmentRows[0]?.isAnswered).toBe(false)
+    expect(parsed.judgmentRows[0]?.promptId).toBe(parsed.promptId)
     expect(parsed.judgmentRows[1]).toEqual({
       answer: 'no',
       articleExternalId: `${importRoute}:reference_id%3Ascreen-2`,
@@ -2053,6 +2051,34 @@ test('parseCovidenceCsvReferenceRows returns stable parse errors for malformed o
   })
 })
 
+test('parseCovidenceCsvReferenceRows keeps embedded newlines commas and escaped quotes inside quoted cells', () => {
+  expect(
+    parseCovidenceCsvReferenceRows({
+      content: [
+        'Title,Authors,Abstract,Notes',
+        'Study A,"Doe, Jane","First line',
+        'Second ""quoted"" line, with comma",Keep this',
+      ].join('\n'),
+      fileRole: 'all',
+      format: 'csv',
+      sourceFileName: 'all.csv',
+    }),
+  ).toEqual({
+    ok: true,
+    rows: [
+      {
+        citation: {abstract: 'First line\nSecond "quoted" line, with comma', authors: 'Doe, Jane', title: 'Study A'},
+        exclusionReason: null,
+        fileRole: 'all',
+        notes: 'Keep this',
+        rowNumber: 2,
+        sourceFileName: 'all.csv',
+        tags: [],
+      },
+    ],
+  })
+})
+
 test('parseCovidenceReferenceRows parses Covidence RIS rows into the same downstream shape across file roles', () => {
   const risContent = [
     'TY  - JOUR',
@@ -2244,6 +2270,38 @@ test('parseCovidenceReferenceRows returns stable RIS parse errors for malformed 
       sourceFileName: 'all.ris',
     },
     ok: false,
+  })
+})
+
+test('parseCovidenceReferenceRows appends RIS continuation lines to the active field', () => {
+  expect(
+    parseCovidenceReferenceRows({
+      content: [
+        'TY  - JOUR',
+        'TI  - Study A',
+        'AB  - First line',
+        ' second line',
+        'N1  - First note',
+        ' second note line',
+        'ER  - ',
+      ].join('\n'),
+      fileRole: 'full_text',
+      format: 'ris',
+      sourceFileName: 'full_text.ris',
+    }),
+  ).toEqual({
+    ok: true,
+    rows: [
+      {
+        citation: {abstract: 'First line\nsecond line', reference_type: 'JOUR', title: 'Study A'},
+        exclusionReason: null,
+        fileRole: 'full_text',
+        notes: 'First note\nsecond note line',
+        rowNumber: 1,
+        sourceFileName: 'full_text.ris',
+        tags: [],
+      },
+    ],
   })
 })
 
