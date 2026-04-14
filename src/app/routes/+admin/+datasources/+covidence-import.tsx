@@ -11,6 +11,7 @@ import {postFormDataToApi} from '../../../utils/postFormDataToApi.ts'
 type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
 type CovidencePromptAnswerSet = 'yes|no' | 'yes|no|maybe'
+type CovidencePromptGrouping = 'per_field' | 'per_section' | 'single_prompt'
 type CovidenceEligibilityDisposition = 'include' | 'exclude'
 type CovidenceEligibilitySectionKey =
   | 'population'
@@ -281,6 +282,32 @@ const covidenceAnswerSetOptions: Array<{description: string; label: string; valu
   {description: 'Use yes and no only.', label: 'Yes / No', value: 'yes|no'},
   {description: 'Allow a maybe answer for borderline studies.', label: 'Yes / No / Maybe', value: 'yes|no|maybe'},
 ]
+const covidencePromptGroupingOptions: Array<{
+  description: string
+  helperCopy: string
+  label: string
+  value: CovidencePromptGrouping
+}> = [
+  {
+    description: 'One project prompt for each non-empty include or exclude field.',
+    helperCopy: 'Most specific. More prompts to answer, but each criterion stays isolated.',
+    label: 'One prompt per field',
+    value: 'per_field',
+  },
+  {
+    description: 'One project prompt per section, combining include and exclude text inside that section.',
+    helperCopy: 'Middle ground. Fewer prompts, while keeping Population, Outcome, and other sections separate.',
+    label: 'One prompt per section',
+    value: 'per_section',
+  },
+  {
+    description: 'One combined project prompt across every populated section.',
+    helperCopy:
+      'Fewest prompts. Reviewers answer everything at once, which lowers prompt volume but reduces specificity.',
+    label: 'One prompt for all sections',
+    value: 'single_prompt',
+  },
+]
 
 const getRequiredCovidenceRoles = (mode: CovidenceImportMode): CovidenceFileRole[] => {
   return mode === 'full_text' ? covidenceAllRoles : ['all', 'irrelevant', 'full_text']
@@ -323,6 +350,28 @@ const getStageMembershipLabels = (mode: CovidenceImportMode, stageMembership: Re
 
 const getCovidenceSeedLabel = (answer: 'yes' | 'no' | null) => {
   return answer === 'yes' ? 'Seeded yes' : answer === 'no' ? 'Seeded no' : 'Unanswered'
+}
+
+const getCovidencePromptCount = (
+  eligibilityFields: Array<{
+    disposition: CovidenceEligibilityDisposition
+    sectionKey: CovidenceEligibilitySectionKey
+    sectionLabel: string
+    text: string
+  }>,
+  promptGrouping: CovidencePromptGrouping,
+) => {
+  return promptGrouping === 'per_field'
+    ? eligibilityFields.length
+    : promptGrouping === 'per_section'
+      ? new Set(
+          eligibilityFields.map((eligibilityField) => {
+            return eligibilityField.sectionKey
+          }),
+        ).size
+      : eligibilityFields.length > 0
+        ? 1
+        : 0
 }
 
 const fetchModels = async (): Promise<ModelOption[]> => {
@@ -436,6 +485,7 @@ const createCovidenceImport = async (params: {
   files: Array<{file: File; fileRole: CovidenceFileRole}>
   mode: CovidenceImportMode
   modelId: string
+  promptGrouping: CovidencePromptGrouping
   title: string
 }) => {
   const formData = appendCovidenceEligibilityFieldsToFormData(
@@ -445,6 +495,7 @@ const createCovidenceImport = async (params: {
   formData.append('answerSet', params.answerSet)
   formData.append('mode', params.mode)
   formData.append('modelId', params.modelId)
+  formData.append('promptGrouping', params.promptGrouping)
   formData.append('title', params.title.trim())
 
   if (params.description.trim()) {
@@ -464,6 +515,7 @@ const AdminCovidenceImport = () => {
   const [description, setDescription] = createSignal('')
   const [selectedModelId, setSelectedModelId] = createSignal('')
   const [answerSet, setAnswerSet] = createSignal<CovidencePromptAnswerSet>('yes|no|maybe')
+  const [promptGrouping, setPromptGrouping] = createSignal<CovidencePromptGrouping>('per_field')
   const [isLoadingClipboard, setIsLoadingClipboard] = createSignal(false)
   const [pageError, setPageError] = createSignal('')
   const [eligibilitySectionValues, setEligibilitySectionValues] = createStore(createEmptyEligibilitySectionValues())
@@ -507,6 +559,17 @@ const AdminCovidenceImport = () => {
         return model.id === selectedModelId()
       }) ?? null
     )
+  })
+  const eligibilityFields = createMemo(() => {
+    return getCovidenceEligibilityPromptFields(eligibilitySectionValues)
+  })
+  const selectedPromptGroupingOption = createMemo(() => {
+    return covidencePromptGroupingOptions.find((option) => {
+      return option.value === promptGrouping()
+    })
+  })
+  const promptCountPreview = createMemo(() => {
+    return getCovidencePromptCount(eligibilityFields(), promptGrouping())
   })
 
   const analyzeMutation = createMutation(() => {
@@ -595,13 +658,14 @@ const AdminCovidenceImport = () => {
 
   const handleSubmit = () => {
     const trimmedProjectName = projectName().trim()
-    const eligibilityFields = getCovidenceEligibilityPromptFields(eligibilitySectionValues)
+    const nextEligibilityFields = eligibilityFields()
     const nextMode = mode()
     const nextAnswerSet = answerSet()
     const nextDescription = description()
     const nextMissingRoles = getMissingCovidenceRoles(filesByRole, mode())
     const nextSelectedModel = selectedModel()
     const nextFiles = getSelectedUploadFiles(filesByRole, nextMode)
+    const nextPromptGrouping = promptGrouping()
 
     if (!trimmedProjectName) {
       setPageError('Project name is required')
@@ -635,10 +699,11 @@ const AdminCovidenceImport = () => {
         createMutationState.mutate({
           answerSet: nextAnswerSet,
           description: nextDescription,
-          eligibilityFields,
+          eligibilityFields: nextEligibilityFields,
           files: nextFiles,
           mode: nextMode,
           modelId,
+          promptGrouping: nextPromptGrouping,
           title: trimmedProjectName,
         })
       })
@@ -820,9 +885,56 @@ const AdminCovidenceImport = () => {
                 <div class="rounded-2xl border border-amber-200 bg-amber-50/70 p-4 md:col-span-2">
                   <p class="text-sm font-medium text-amber-950">Eligibility prompts</p>
                   <p class="mt-1 text-sm leading-6 text-amber-900/80">
-                    Each non-empty include or exclude field becomes a separate project prompt. Leave any section blank
-                    if it does not apply.
+                    {selectedPromptGroupingOption()?.helperCopy ?? ''}
                   </p>
+                  <p class="mt-2 text-xs text-amber-900/70">
+                    {promptCountPreview() === 0
+                      ? 'No prompts will be created until at least one eligibility field has content.'
+                      : `${promptCountPreview()} prompt${promptCountPreview() === 1 ? '' : 's'} will be created with the current grouping.`}
+                  </p>
+                </div>
+
+                <div class="space-y-3 md:col-span-2">
+                  <div>
+                    <span class="block text-sm font-medium text-stone-700">Prompt grouping</span>
+                    <p class="mt-1 text-sm text-stone-500">
+                      Choose how the eligibility criteria roll up into review prompts before project creation.
+                    </p>
+                  </div>
+
+                  <div class="grid gap-3 md:grid-cols-3">
+                    <For each={covidencePromptGroupingOptions}>
+                      {(option) => {
+                        const isSelected = () => {
+                          return promptGrouping() === option.value
+                        }
+
+                        return (
+                          <button
+                            type="button"
+                            class={`rounded-2xl border p-4 text-left transition ${
+                              isSelected()
+                                ? 'border-amber-400 bg-amber-50 shadow-sm'
+                                : 'border-stone-200 bg-stone-50 hover:border-stone-300 hover:bg-white'
+                            }`}
+                            onClick={() => {
+                              setPromptGrouping(option.value)
+                            }}
+                          >
+                            <div class="flex items-start justify-between gap-3">
+                              <div class="space-y-2">
+                                <p class="text-sm font-semibold text-stone-900">{option.label}</p>
+                                <p class="text-xs leading-5 text-stone-600">{option.description}</p>
+                              </div>
+                              <div
+                                class={`mt-1 h-3 w-3 rounded-full ${isSelected() ? 'bg-amber-500' : 'bg-stone-300'}`}
+                              />
+                            </div>
+                          </button>
+                        )
+                      }}
+                    </For>
+                  </div>
                 </div>
 
                 <div class="rounded-2xl border border-stone-200 bg-stone-50 p-4 md:col-span-2">
