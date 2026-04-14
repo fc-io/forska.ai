@@ -79,6 +79,10 @@ const getProviderBatchesPrompts = (batches: DispatchBatch[]): PromptToProcess[] 
   })
 }
 
+const getProviderReservedPromptCount = (state: ProviderDispatchState): number => {
+  return state.pendingPromptCount + state.activePrompts.length
+}
+
 const logDispatchWorkerError = (key: string, error: unknown) => {
   const safeError =
     error instanceof Error ? {message: error.message, name: error.name, stack: error.stack} : {message: String(error)}
@@ -211,7 +215,10 @@ const createJudgmentDispatchRuntimeLayer = (
               }
 
               const providerState = yield* getOrCreateProviderState(getPromptProviderQueueInput(firstPrompt))
-              const remainingCapacity = Math.max(0, providerState.maxQueuedPrompts - providerState.pendingPromptCount)
+              const remainingCapacity = Math.max(
+                0,
+                providerState.maxQueuedPrompts - getProviderReservedPromptCount(providerState),
+              )
               const acceptedPrompts = providerPrompts.slice(0, remainingCapacity)
               const rejectedProviderPrompts = providerPrompts.slice(remainingCapacity)
 
@@ -232,7 +239,7 @@ const createJudgmentDispatchRuntimeLayer = (
         getProviderQueueCapacity: (input) => {
           return Effect.gen(function* () {
             const state = yield* getOrCreateProviderState(input)
-            return Math.max(0, state.maxQueuedPrompts - state.pendingPromptCount)
+            return Math.max(0, state.maxQueuedPrompts - getProviderReservedPromptCount(state))
           })
         },
       }

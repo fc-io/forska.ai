@@ -1,0 +1,134 @@
+{
+  "name": "Limit Fix Plan",
+  "description": "Make the saved provider connection limit a meaningful per-connection parallelism knob by aligning dispatch, request concurrency, and chunk fan-out to the same upper bound.",
+  "branchName": "ralph/limit-fix-parallelism",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Count active and queued prompts in dispatch capacity",
+      "description": "As a maintainer, I want dispatch runtime capacity to subtract both queued and active prompts so claimed backlog reflects the real prompt budget reserved on each provider connection.",
+      "acceptanceCriteria": [
+        "Update `src/server/cron/judgmentsJobs/judgmentDispatchRuntime.ts` so remaining provider capacity uses `pendingPromptCount + activePrompts.length` instead of queued prompts alone.",
+        "`enqueueClaimedPrompts(...)` accepts claimed prompts only when the connection still has real headroom after counting both queued and active prompts.",
+        "`getProviderQueueCapacity(...)` reports remaining connection headroom rather than only free queue slots.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentDispatchRuntime.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts` passes",
+        "`bun test src/agent/judge/judgeChunkedMode.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-002",
+      "title": "Launch claimed prompts in bounded parallel per connection",
+      "description": "As a maintainer, I want per-connection prompt dispatch to launch up to the saved provider limit so raising that limit materially increases local parallelism for normal prompt jobs.",
+      "acceptanceCriteria": [
+        "Replace the serial per-connection launch loop in `src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.ts` with bounded parallel launch per provider connection.",
+        "The per-connection launch cap uses the effective provider connection limit for the claimed prompts being processed.",
+        "Remove or sharply reduce the current per-prompt launch jitter so available request capacity can fill quickly after claims are made.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentDispatchRuntime.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts` passes",
+        "`bun test src/agent/judge/judgeChunkedMode.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Stop new launches on connection failure and requeue only untouched prompts",
+      "description": "As a maintainer, I want parallel prompt dispatch to track started prompts so connection failures halt new launches without requeueing prompts that already entered their normal retry or recovery path.",
+      "acceptanceCriteria": [
+        "Track which claimed prompts have started launch before invoking LLM processing in `src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.ts`.",
+        "If endpoint availability flips to `skip` or a `ConnectionError` occurs, stop scheduling new prompts for that provider connection.",
+        "Requeue only claimed prompts that never started launch, while already-started prompts continue on their existing retry or recovery behavior.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentDispatchRuntime.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts` passes",
+        "`bun test src/agent/judge/judgeChunkedMode.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Cap chunked prompt fan-out by the provider limit",
+      "description": "As a maintainer, I want chunked judging to use the same provider cap so one large prompt cannot consume more request slots than the connection-level upper bound on its own.",
+      "acceptanceCriteria": [
+        "Update `src/agent/judge.ts` so chunk concurrency uses the minimum of `judgeChunkMaxParallel`, `providerMaxInflightRequests` when present, and `chunkCount`.",
+        "When no provider cap is saved, chunked judging falls back to the existing configured chunk parallelism behavior instead of becoming serial by accident.",
+        "Add or update `src/agent/judge/judgeChunkedMode.test.ts` to cover provider-cap-limited chunk concurrency selection.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentDispatchRuntime.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts` passes",
+        "`bun test src/agent/judge/judgeChunkedMode.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-005",
+      "title": "Lock in request runtime as the final provider-cap guardrail",
+      "description": "As a maintainer, I want request runtime coverage to prove provider request concurrency never exceeds local caps even after prompt dispatch becomes more parallel.",
+      "acceptanceCriteria": [
+        "Add or update `src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts` so provider-scoped request caps remain enforced after the dispatch parallelism changes.",
+        "Tests cover the case where worker or fallback capacity is lower than the saved provider limit so observed active calls can legitimately plateau below the configured value.",
+        "No actual LLM request path added by this work bypasses `withJudgmentRequest(...)` as the authoritative request guardrail.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentDispatchRuntime.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts` passes",
+        "`bun test src/agent/judge/judgeChunkedMode.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-003",
+        "US-004"
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Clarify backlog and throughput metrics on the job detail page",
+      "description": "As a user, I want the job detail page to describe claimed backlog, running prompts, and active LLM calls accurately so higher parallelism is understandable while a job is running.",
+      "acceptanceCriteria": [
+        "Update `src/app/routes/+admin/+jobs/+$id/+index.tsx` only if needed so `Claimed` means reserved local backlog not yet running, `Running Prompts` means prompt executions started locally, and `Active LLM Calls` remains the primary live throughput metric.",
+        "The page copy does not imply the configured provider limit is a per-job total when multiple jobs share the same provider connection.",
+        "Any copy change preserves the current job-detail layout and data wiring.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentDispatchRuntime.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts` passes",
+        "`bun test src/agent/judge/judgeChunkedMode.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-005"
+      ]
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-04-14T12:32:03.076Z"
+  }
+}
