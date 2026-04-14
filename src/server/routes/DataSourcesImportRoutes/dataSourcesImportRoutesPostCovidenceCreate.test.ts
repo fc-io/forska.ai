@@ -15,6 +15,10 @@ type CovidenceCreateSuccessResult = {
       type: string
     }
   }>
+  promptDefinitionCalls?: Array<{
+    eligibilityFields: Array<{disposition: string; sectionKey: string; sectionLabel: string; text: string}>
+    promptGrouping?: string
+  }>
   promptSyncCalls?: Array<{
     projectId: string
     promptLinks: Array<{
@@ -521,7 +525,7 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
             buildCovidencePromptDefinition: (params) => {
               return {originalText: 'Prompt body', promptHeading: 'Prompt heading', type: params.answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'maybe'"}
             },
-            buildCovidencePromptDefinitionsForEligibilityFields: ({answerSet, eligibilityFields}) => {
+            buildCovidencePromptDefinitionsForEligibilityFields: ({answerSet, eligibilityFields, promptGrouping}) => {
               return eligibilityFields.map((eligibilityField) => {
                 const sectionLabel = eligibilityField.sectionLabel
                 const description = sectionLabel + ' ' + (eligibilityField.disposition === 'include' ? 'inclusion' : 'exclusion') + ' criteria'
@@ -543,6 +547,9 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
                   : sectionLabel + ' exclusion criteria:'
 
                 return {
+                  criteriaDisposition: eligibilityField.disposition,
+                  criteriaSectionKey: eligibilityField.sectionKey,
+                  criteriaSectionLabel: eligibilityField.sectionLabel,
                   originalText: [
                     guidance,
                     '',
@@ -680,6 +687,7 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
             {file: new File(['TY  - JOUR\\nER  - \\n'], 'full_text.ris', {type: 'text/plain'}), fileRole: 'full_text'},
           ],
           mode: 'title_abstract',
+          promptGrouping: 'per_field',
           title: 'Created datasource',
         })
 
@@ -903,6 +911,9 @@ test('Covidence datasource create also creates or reuses a full-text project wit
                   : sectionLabel + ' exclusion criteria:'
 
                 return {
+                  criteriaDisposition: eligibilityField.disposition,
+                  criteriaSectionKey: eligibilityField.sectionKey,
+                  criteriaSectionLabel: eligibilityField.sectionLabel,
                   originalText: [
                     guidance,
                     '',
@@ -1405,4 +1416,447 @@ test('Covidence datasource create skips prompt creation when normalized eligibil
   expect(parsed.promptSyncCalls).toEqual([])
   expect(parsed.result.data.covidencePrompts).toEqual([])
   expect(parsed.queueCalls).toEqual([['route-1']])
+})
+
+test('Covidence datasource create normalizes eligibility fields before building per-section prompts', () => {
+  const runRoute = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').pathname
+        const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
+        const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
+
+        const state = {
+          deleteCalls: [],
+          getDataSourceCallCount: 0,
+          projectCalls: [],
+          promptCalls: [],
+          promptDefinitionCalls: [],
+          promptSyncCalls: [],
+          queueCalls: [],
+          seedCalls: [],
+          scopeCalls: [],
+          storedFileCalls: [],
+          transactionCallCount: 0,
+          txStatements: [],
+        }
+
+        void mock.module(articleImportStoreServiceModulePath, () => {
+          return {
+            queueImportedArticleRefreshes: async (importRouteIds) => {
+              state.queueCalls.push(importRouteIds)
+            },
+          }
+        })
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                transaction: async (work) => {
+                  state.transactionCallCount += 1
+                  return await work({
+                    run: async (statement) => {
+                      state.txStatements.push(statement)
+                    },
+                  })
+                },
+              }
+            },
+          }
+        })
+
+        void mock.module(covidenceImportServiceModulePath, () => {
+          return {
+            buildCovidencePromptDefinition: () => {
+              return {criteriaDisposition: 'combined', originalText: 'Prompt body', promptHeading: 'Prompt heading', type: "'yes' | 'no'"}
+            },
+            buildCovidencePromptDefinitionsForEligibilityFields: ({eligibilityFields, promptGrouping}) => {
+              state.promptDefinitionCalls.push({eligibilityFields, promptGrouping})
+              return [
+                {
+                  criteriaDisposition: 'combined',
+                  criteriaSectionKey: 'population',
+                  criteriaSectionLabel: 'Population',
+                  originalText: 'Population combined prompt',
+                  promptHeading: 'Matches Population Criteria',
+                  type: "'yes' | 'no'",
+                },
+              ]
+            },
+            buildCovidencePackageConfig: (params) => {
+              return {kind: 'covidence_import', version: 1, ...params}
+            },
+            deleteCovidencePackageFiles: (datasourceId) => {
+              state.deleteCalls.push(datasourceId)
+            },
+            getCovidencePackageCursor: (config) => {
+              return JSON.stringify(config)
+            },
+            getOrCreateCovidenceProject: async (params) => {
+              state.projectCalls.push({...params, tx: undefined})
+              return {
+                created: true,
+                id: 'project-created',
+                modelId: 'model-default',
+                name: params.title,
+                useAbstract: true,
+                useFulltext: false,
+                useFulltextNoImages: false,
+                useTitle: true,
+              }
+            },
+            getOrCreateCovidencePrompt: async (params) => {
+              state.promptCalls.push({...params, tx: undefined})
+              return {created: true, id: 'prompt-created', ...params.promptDefinition}
+            },
+            importCovidencePackageFromConfig: async () => {
+              return {importRouteIds: ['route-1'], stats: {importedCount: 2, itemCount: 2}}
+            },
+            seedCovidenceHumanJudgmentsFromConfig: async (params) => {
+              state.seedCalls.push({importRoute: params.importRoute, mode: params.config.mode, projectId: params.projectId ?? null})
+            },
+            storeCovidencePackageFiles: async (params) => {
+              state.storedFileCalls.push({
+                datasourceId: params.datasourceId,
+                files: params.files.map((entry) => {
+                  return {fileName: entry.file.name, fileRole: entry.fileRole}
+                }),
+              })
+
+              return [
+                {assetPath: 'assets/covidence_imports/' + params.datasourceId + '/all-all.csv', fileRole: 'all', format: 'csv', sourceFileName: 'all.csv'},
+                {assetPath: 'assets/covidence_imports/' + params.datasourceId + '/irrelevant-irrelevant.csv', fileRole: 'irrelevant', format: 'csv', sourceFileName: 'irrelevant.csv'},
+                {assetPath: 'assets/covidence_imports/' + params.datasourceId + '/full_text-full_text.ris', fileRole: 'full_text', format: 'ris', sourceFileName: 'full_text.ris'},
+              ]
+            },
+            syncCovidenceProjectPrompts: async (params) => {
+              state.promptSyncCalls.push({...params, tx: undefined})
+            },
+            syncCovidenceProjectScopeFromConfig: async (params) => {
+              state.scopeCalls.push({importRoute: params.importRoute, mode: params.config.mode, projectId: params.projectId ?? null})
+            },
+          }
+        })
+
+        void mock.module(dataSourceQueryServiceModulePath, () => {
+          return {
+            getDataSourceQueryService: () => {
+              return {
+                getDataSourceById: async (id) => {
+                  state.getDataSourceCallCount += 1
+                  return {
+                    archived: false,
+                    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+                    cursor: 'cursor-json',
+                    dateFrom: null,
+                    dateTo: null,
+                    description: 'Created from Covidence package',
+                    id,
+                    importRoute: 'covidence:' + id,
+                    itemsAfterLastImport: 0,
+                    lastImportAt: null,
+                    title: 'Created datasource',
+                    updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+                  }
+                },
+              }
+            },
+          }
+        })
+
+        const {dataSourcesImportRoutesPostCovidenceCreate} = await import(
+          './src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.ts?test=' + Date.now(),
+        )
+
+        const result = await dataSourcesImportRoutesPostCovidenceCreate({
+          answerSet: 'yes|no',
+          description: 'Created from Covidence package',
+          eligibilityFields: [
+            {disposition: 'include', sectionKey: ' population ', sectionLabel: ' Population ', text: ' Adults with confirmed disease '},
+            {disposition: 'exclude', sectionKey: ' population ', sectionLabel: ' Population ', text: ' Pediatric-only cohorts '},
+            {disposition: 'exclude', sectionKey: ' other ', sectionLabel: ' Other ', text: '   '},
+          ],
+          files: [
+            {file: new File(['a,b\\n1,2\\n'], 'all.csv', {type: 'text/csv'}), fileRole: 'all'},
+            {file: new File(['a,b\\n3,4\\n'], 'irrelevant.csv', {type: 'text/csv'}), fileRole: 'irrelevant'},
+            {file: new File(['TY  - JOUR\\nER  - \\n'], 'full_text.ris', {type: 'text/plain'}), fileRole: 'full_text'},
+          ],
+          mode: 'title_abstract',
+          promptGrouping: 'per_section',
+          title: 'Created datasource',
+        })
+
+        console.log(JSON.stringify({...state, result}))
+      `,
+    ],
+    {cwd: process.cwd(), env: process.env},
+  )
+
+  if (runRoute.exitCode !== 0) {
+    throw new Error(
+      runRoute.stderr.toString() || runRoute.stdout.toString() || 'Covidence create per-section test failed',
+    )
+  }
+
+  const parsed = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as CovidenceCreateSuccessResult
+
+  expect(parsed.promptDefinitionCalls).toEqual([
+    {
+      eligibilityFields: [
+        {
+          disposition: 'include',
+          sectionKey: 'population',
+          sectionLabel: 'Population',
+          text: 'Adults with confirmed disease',
+        },
+        {disposition: 'exclude', sectionKey: 'population', sectionLabel: 'Population', text: 'Pediatric-only cohorts'},
+      ],
+      promptGrouping: 'per_section',
+    },
+  ])
+  expect(parsed.promptSyncCalls).toEqual([
+    {
+      projectId: 'project-created',
+      promptLinks: [
+        {
+          criteriaDisposition: 'combined',
+          criteriaSectionKey: 'population',
+          criteriaSectionLabel: 'Population',
+          promptId: 'prompt-created',
+        },
+      ],
+    },
+  ])
+  expect(parsed.result.data.covidencePrompts).toEqual([
+    {
+      created: true,
+      criteriaDisposition: 'combined',
+      criteriaSectionKey: 'population',
+      criteriaSectionLabel: 'Population',
+      id: 'prompt-created',
+      originalText: 'Population combined prompt',
+      promptHeading: 'Matches Population Criteria',
+      type: "'yes' | 'no'",
+    },
+  ])
+})
+
+test('Covidence datasource create supports single-prompt grouping for eligibility fields', () => {
+  const runRoute = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').pathname
+        const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
+        const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
+
+        const state = {
+          deleteCalls: [],
+          getDataSourceCallCount: 0,
+          projectCalls: [],
+          promptCalls: [],
+          promptDefinitionCalls: [],
+          promptSyncCalls: [],
+          queueCalls: [],
+          seedCalls: [],
+          scopeCalls: [],
+          storedFileCalls: [],
+          transactionCallCount: 0,
+          txStatements: [],
+        }
+
+        void mock.module(articleImportStoreServiceModulePath, () => {
+          return {
+            queueImportedArticleRefreshes: async (importRouteIds) => {
+              state.queueCalls.push(importRouteIds)
+            },
+          }
+        })
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                transaction: async (work) => {
+                  state.transactionCallCount += 1
+                  return await work({
+                    run: async (statement) => {
+                      state.txStatements.push(statement)
+                    },
+                  })
+                },
+              }
+            },
+          }
+        })
+
+        void mock.module(covidenceImportServiceModulePath, () => {
+          return {
+            buildCovidencePromptDefinition: () => {
+              return {criteriaDisposition: 'combined', originalText: 'Prompt body', promptHeading: 'Prompt heading', type: "'yes' | 'no' | 'maybe'"}
+            },
+            buildCovidencePromptDefinitionsForEligibilityFields: ({eligibilityFields, promptGrouping}) => {
+              state.promptDefinitionCalls.push({eligibilityFields, promptGrouping})
+              return [
+                {
+                  criteriaDisposition: 'combined',
+                  originalText: 'Combined screening prompt',
+                  promptHeading: 'Covidence title/abstract screening',
+                  type: "'yes' | 'no' | 'maybe'",
+                },
+              ]
+            },
+            buildCovidencePackageConfig: (params) => {
+              return {kind: 'covidence_import', version: 1, ...params}
+            },
+            deleteCovidencePackageFiles: (datasourceId) => {
+              state.deleteCalls.push(datasourceId)
+            },
+            getCovidencePackageCursor: (config) => {
+              return JSON.stringify(config)
+            },
+            getOrCreateCovidenceProject: async (params) => {
+              state.projectCalls.push({...params, tx: undefined})
+              return {
+                created: true,
+                id: 'project-created',
+                modelId: 'model-default',
+                name: params.title,
+                useAbstract: true,
+                useFulltext: false,
+                useFulltextNoImages: false,
+                useTitle: true,
+              }
+            },
+            getOrCreateCovidencePrompt: async (params) => {
+              state.promptCalls.push({...params, tx: undefined})
+              return {created: false, id: 'prompt-created', ...params.promptDefinition}
+            },
+            importCovidencePackageFromConfig: async () => {
+              return {importRouteIds: ['route-1'], stats: {importedCount: 2, itemCount: 2}}
+            },
+            seedCovidenceHumanJudgmentsFromConfig: async (params) => {
+              state.seedCalls.push({importRoute: params.importRoute, mode: params.config.mode, projectId: params.projectId ?? null})
+            },
+            storeCovidencePackageFiles: async (params) => {
+              state.storedFileCalls.push({
+                datasourceId: params.datasourceId,
+                files: params.files.map((entry) => {
+                  return {fileName: entry.file.name, fileRole: entry.fileRole}
+                }),
+              })
+
+              return [
+                {assetPath: 'assets/covidence_imports/' + params.datasourceId + '/all-all.csv', fileRole: 'all', format: 'csv', sourceFileName: 'all.csv'},
+                {assetPath: 'assets/covidence_imports/' + params.datasourceId + '/irrelevant-irrelevant.csv', fileRole: 'irrelevant', format: 'csv', sourceFileName: 'irrelevant.csv'},
+                {assetPath: 'assets/covidence_imports/' + params.datasourceId + '/full_text-full_text.ris', fileRole: 'full_text', format: 'ris', sourceFileName: 'full_text.ris'},
+              ]
+            },
+            syncCovidenceProjectPrompts: async (params) => {
+              state.promptSyncCalls.push({...params, tx: undefined})
+            },
+            syncCovidenceProjectScopeFromConfig: async (params) => {
+              state.scopeCalls.push({importRoute: params.importRoute, mode: params.config.mode, projectId: params.projectId ?? null})
+            },
+          }
+        })
+
+        void mock.module(dataSourceQueryServiceModulePath, () => {
+          return {
+            getDataSourceQueryService: () => {
+              return {
+                getDataSourceById: async (id) => {
+                  state.getDataSourceCallCount += 1
+                  return {
+                    archived: false,
+                    createdAt: new Date('2026-01-01T00:00:00.000Z'),
+                    cursor: 'cursor-json',
+                    dateFrom: null,
+                    dateTo: null,
+                    description: 'Created from Covidence package',
+                    id,
+                    importRoute: 'covidence:' + id,
+                    itemsAfterLastImport: 0,
+                    lastImportAt: null,
+                    title: 'Created datasource',
+                    updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+                  }
+                },
+              }
+            },
+          }
+        })
+
+        const {dataSourcesImportRoutesPostCovidenceCreate} = await import(
+          './src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.ts?test=' + Date.now(),
+        )
+
+        const result = await dataSourcesImportRoutesPostCovidenceCreate({
+          answerSet: 'yes|no|maybe',
+          description: 'Created from Covidence package',
+          eligibilityFields: [
+            {disposition: 'include', sectionKey: ' population ', sectionLabel: ' Population ', text: ' Adults with confirmed disease '},
+            {disposition: 'exclude', sectionKey: ' other ', sectionLabel: ' Other ', text: ' Case reports '},
+          ],
+          files: [
+            {file: new File(['a,b\\n1,2\\n'], 'all.csv', {type: 'text/csv'}), fileRole: 'all'},
+            {file: new File(['a,b\\n3,4\\n'], 'irrelevant.csv', {type: 'text/csv'}), fileRole: 'irrelevant'},
+            {file: new File(['TY  - JOUR\\nER  - \\n'], 'full_text.ris', {type: 'text/plain'}), fileRole: 'full_text'},
+          ],
+          mode: 'title_abstract',
+          promptGrouping: 'single_prompt',
+          title: 'Created datasource',
+        })
+
+        console.log(JSON.stringify({...state, result}))
+      `,
+    ],
+    {cwd: process.cwd(), env: process.env},
+  )
+
+  if (runRoute.exitCode !== 0) {
+    throw new Error(
+      runRoute.stderr.toString() || runRoute.stdout.toString() || 'Covidence create single-prompt test failed',
+    )
+  }
+
+  const parsed = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as CovidenceCreateSuccessResult
+
+  expect(parsed.promptDefinitionCalls).toEqual([
+    {
+      eligibilityFields: [
+        {
+          disposition: 'include',
+          sectionKey: 'population',
+          sectionLabel: 'Population',
+          text: 'Adults with confirmed disease',
+        },
+        {disposition: 'exclude', sectionKey: 'other', sectionLabel: 'Other', text: 'Case reports'},
+      ],
+      promptGrouping: 'single_prompt',
+    },
+  ])
+  expect(parsed.promptSyncCalls).toEqual([
+    {projectId: 'project-created', promptLinks: [{criteriaDisposition: 'combined', promptId: 'prompt-created'}]},
+  ])
+  expect(parsed.result.data.covidencePrompts).toEqual([
+    {
+      created: false,
+      criteriaDisposition: 'combined',
+      id: 'prompt-created',
+      originalText: 'Combined screening prompt',
+      promptHeading: 'Covidence title/abstract screening',
+      type: "'yes' | 'no' | 'maybe'",
+    },
+  ])
 })

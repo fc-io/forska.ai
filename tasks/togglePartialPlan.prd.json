@@ -1,0 +1,114 @@
+{
+  "name": "Toggle Partial Plan",
+  "description": "Default the LLM reviews list to complete articles only and add a complete/both/partial toggle under the date filters while keeping counts, pagination, and bulk actions aligned.",
+  "branchName": "ralph/llm-review-completion-filter",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add shared llmStatus contracts across client and server",
+      "description": "As a maintainer, I want one shared LLM completeness filter contract so the reviews UI, routes, and OLAP layer all agree on the same `complete`, `both`, and `partial` modes.",
+      "acceptanceCriteria": [
+        "Add a shared `llmStatus` type in `src/services/olap/olapTypes.ts` with the values `complete`, `both`, and `partial`, and thread it through the LLM reviews query, count, and article-ID-selection params.",
+        "Update `src/components/main/projects/projectsArticlesReviewsQuery.ts` and `src/components/main/projects/projectsArticlesReviewsCountQuery.ts` so query keys and request bodies include `llmStatus` when present.",
+        "Update `src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviews.ts`, `src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsCount.ts`, `src/server/routes/ArticlesRoutes.ts`, and `src/server/routes/ProjectsAddArticlesRoutes.ts` so route validation accepts `llmStatus` and forwards it to OLAP helpers.",
+        "When `llmStatus` is omitted, the server-side contract keeps the current any-LLM behavior so non-updated callers do not break.",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "`bun test src/server/routes/projectsRoutes/projectsRoutesOlapParity.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Filter LLM review list and counts by completion mode",
+      "description": "As a reviewer, I want the LLM reviews list and total counts to respect complete, both, and only-partial modes so the page contents match the selected status filter.",
+      "acceptanceCriteria": [
+        "Update `src/services/olap/duckdbOlap.ts` so the serving-mart path for `queryArticlesReviewsFromDuckdb(...)` and `countArticlesReviewsFromDuckdb(...)` honors `llmStatus`.",
+        "`complete` requires all project prompts judged, `both` keeps the current any-judged behavior, and `partial` requires at least one judged prompt but not all project prompts judged.",
+        "The raw fallback path applies the same three modes and stays aligned with the serving-mart semantics.",
+        "The API response continues to expose `isFullyJudged` for row rendering after the new filter is applied.",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "`bun test src/server/routes/projectsRoutes/projectsRoutesOlapParity.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-003",
+      "title": "Keep bulk article selection aligned with llmStatus",
+      "description": "As a reviewer, I want add-to-project and PDF bulk actions to use the same completion filter as the visible LLM list so bulk operations target exactly the rows I am looking at.",
+      "acceptanceCriteria": [
+        "Update `src/services/olap/duckdbOlap.ts` so `selectArticleIdsByFilterDuckdb(...)` honors `llmStatus` for the `llm` list type on both serving and raw paths.",
+        "Update `/api/projects/add_articles_by_filter` in `src/server/routes/ProjectsAddArticlesRoutes.ts` and `/api/articles/pdf-fetch-by-filter` in `src/server/routes/ArticlesRoutes.ts` so forwarded filter payloads preserve `llmStatus`.",
+        "When `llmStatus` is absent, article-ID selection keeps the current any-LLM behavior for backwards compatibility.",
+        "The selected article IDs for bulk add and bulk PDF fetch match the visible LLM review filter semantics for `complete`, `both`, and `partial`.",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "`bun test src/server/routes/projectsRoutes/projectsRoutesOlapParity.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001", "US-002"]
+    },
+    {
+      "id": "US-004",
+      "title": "Add URL-backed llmStatus state on the LLM reviews route",
+      "description": "As a reviewer, I want the selected LLM completion mode stored in the URL so refresh, sharing, and back-navigation keep the same filtered view.",
+      "acceptanceCriteria": [
+        "Update `src/utils/useUrlFilters.ts` so it can read and write an `llmStatus` query param with the values `complete`, `both`, and `partial`.",
+        "Update `src/app/routes/+projects/+$id/+reviews-llm/+index.tsx` so the LLM reviews route passes the new URL-backed status state into its filter controls and table container.",
+        "When the LLM reviews route has no `llmStatus` query param, it defaults to `complete` without changing the behavior of the other review tabs.",
+        "Changing the LLM completion mode resets the current page the same way the existing review filters do.",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "`bun test src/server/routes/projectsRoutes/projectsRoutesOlapParity.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-005",
+      "title": "Render the LLM completion radio group and wire the table container",
+      "description": "As a reviewer, I want radio buttons under the date inputs for Complete, Both, and Only Partial so I can switch completion modes directly from the LLM reviews filter bar.",
+      "acceptanceCriteria": [
+        "Update `src/components/main/reviews/reviewsFilterControls.tsx` to render an LLM-only radio group directly under the date inputs with the labels `Complete`, `Both`, and `Only Partial`.",
+        "Keep the new radio group hidden on non-LLM review tabs that also use the shared filter controls.",
+        "Update `src/components/main/reviews/reviewsArticlesTable/reviewsArticlesTableContainer.tsx` so row selection, select-all state, cursors, and loaded pages reset when `llmStatus` changes.",
+        "Update `src/components/main/reviews/reviewsPaginationControls.tsx` and the LLM table container's bulk filter builder so list queries, counts, add-to-sub-project, and download-PDF actions all include the selected `llmStatus`.",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "`bun test src/server/routes/projectsRoutes/projectsRoutesOlapParity.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003", "US-004"]
+    },
+    {
+      "id": "US-006",
+      "title": "Lock in llmStatus behavior with regression coverage",
+      "description": "As a maintainer, I want targeted coverage for the new LLM completion modes so future changes cannot drift list results, counts, route forwarding, or bulk selection semantics apart.",
+      "acceptanceCriteria": [
+        "Add or update `src/services/olap/duckdbOlap.test.ts` to cover `complete`, `both`, and `partial` for review queries, counts, and article-ID selection on both serving and raw paths.",
+        "Add or update `src/server/routes/projectsRoutes/projectsRoutesOlapParity.test.ts` so the reviews and count routes prove they forward `llmStatus` correctly.",
+        "Regression coverage proves `partial` excludes fully judged rows, `complete` excludes partial rows, and `both` preserves the existing any-judged behavior.",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "`bun test src/server/routes/projectsRoutes/projectsRoutesOlapParity.test.ts` passes",
+        "`bun run build` passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-002", "US-003", "US-005"]
+    }
+  ]
+}

@@ -12,6 +12,7 @@
 - Keep priority at the add-to-queue boundary, not in OLAP candidate ordering.
 - Reuse the current stable partition approach from the prompt-mode human-first change.
 - Make the priority signal mode-aware:
+  - treat `NULL` `humanJudgmentMode` as `'prompt'` to preserve existing behavior
   - prompt mode: `app.judgment_human.is_answered = TRUE` on the exact `(article_id, prompt_id)` pair
   - summary mode: non-empty `app.judgment_human_summary.answer` on `(project_id, article_id)`, promoting all fetched prompt rows for that article
 - Use summary answer presence, not `origin`, as the signal.
@@ -35,7 +36,7 @@
 
 1. Extend job config lookup in `judgmentsJobsAddToQueue.ts`.
    - Include `humanJudgmentMode` alongside the existing model and content settings.
-   - Branch the human-priority lookup off that mode instead of assuming prompt-level human rows.
+   - Branch the human-priority lookup off `humanJudgmentMode ?? 'prompt'` instead of assuming prompt-level human rows.
 2. Add a summary-mode priority helper.
    - Input: fetched and filtered prompt entries plus `projectId`.
    - Query `app.judgment_human_summary` in batches by `article_id`.
@@ -54,7 +55,7 @@
 5. Add focused tests.
    - Prompt-mode tests continue to pass unchanged.
    - New top-up test: a summary-mode article appearing later in the fetched window is claimed first when it has an answered human summary and the ready deficit is smaller than the window.
-   - New top-up test: all fetched prompt rows for a summary-backed article are promoted, not just one prompt.
+   - New top-up test: all fetched prompt rows for a summary-backed article move to the front of the fetched candidate list, not just one prompt.
    - New top-up test: `NULL` or blank summary answers do not get priority.
    - New top-up test: summary rows from another project do not affect prioritization.
    - New top-up test: already-judged and locally-judged rows are still filtered out even if the article has an answered human summary.
@@ -72,13 +73,13 @@
 ## Behavior Notes
 
 - This is still window-local priority, not a global reprioritization of the whole project.
-- In summary mode, the signal is article-level, but the queue remains prompt-level, so promoting one summary-backed article promotes each of its fetched missing prompt rows.
+- In summary mode, the signal is article-level, but the queue remains prompt-level, so promoting one summary-backed article moves each of its fetched missing prompt rows to the front of that fetched window before the existing `readyDeficit` cap is applied.
 - Partially LLM-judged summary-backed articles stay eligible; only the still-missing prompt rows are queued and promoted.
 - This change complements the existing summary-mode review semantics where human completeness is based on summary-answer presence.
 
 ## Done Criteria
 
-- For summary-mode projects, future queue top-ups insert and claim fetched prompt rows for articles with answered human summaries before non-summary rows from the same fetched window.
+- For summary-mode projects, future queue top-ups insert and claim fetched prompt rows for articles with answered human summaries before non-summary rows from the same fetched window, subject to the existing `readyDeficit` cap.
 - Prompt-mode projects keep the current pair-level human-first behavior.
 - Blank or null summary rows do not affect priority.
 - Cross-project summary rows do not affect priority.

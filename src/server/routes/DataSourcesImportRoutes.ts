@@ -52,10 +52,13 @@ export const dataSourcesImportRoutes = new Elysia()
         answerSet: t.Optional(
           t.Union([t.Literal('yes|no'), t.Literal('yes|no|maybe'), t.Literal('yes_no'), t.Literal('yes_no_maybe')]),
         ),
+        promptGrouping: t.Optional(
+          t.Union([t.Literal('per_field'), t.Literal('per_section'), t.Literal('single_prompt')]),
+        ),
         eligibilityFields: t.Optional(
           t.Array(
             t.Object({
-              disposition: t.Union([t.Literal('include'), t.Literal('exclude'), t.Literal('combined')]),
+              disposition: t.Union([t.Literal('include'), t.Literal('exclude')]),
               sectionKey: t.String(),
               sectionLabel: t.String(),
               text: t.String(),

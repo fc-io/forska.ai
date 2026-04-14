@@ -291,6 +291,95 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
     },
   ])
 
+  expect(
+    buildCovidencePromptDefinitionsForEligibilityFields({
+      answerSet: 'yes|no',
+      eligibilityFields: [
+        {
+          disposition: 'include',
+          sectionKey: ' population ',
+          sectionLabel: ' Population ',
+          text: ' Adults with confirmed disease ',
+        },
+        {disposition: 'exclude', sectionKey: 'population', sectionLabel: 'Population', text: 'Pediatric-only cohorts'},
+        {disposition: 'exclude', sectionKey: ' other ', sectionLabel: ' Other ', text: ' Case reports '},
+      ],
+      mode: 'full_text',
+      promptGrouping: 'per_section',
+    }),
+  ).toEqual([
+    {
+      criteriaDisposition: 'combined',
+      criteriaSectionKey: 'population',
+      criteriaSectionLabel: 'Population',
+      originalText: [
+        'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
+        '',
+        'Allowed answers: yes, no',
+        '',
+        'Inclusion:',
+        'Adults with confirmed disease',
+        '',
+        'Exclusion:',
+        'Pediatric-only cohorts',
+      ].join('\n'),
+      promptHeading: 'Matches Population Criteria',
+      type: "'yes' | 'no'",
+    },
+    {
+      criteriaDisposition: 'combined',
+      criteriaSectionKey: 'other',
+      criteriaSectionLabel: 'Other',
+      originalText: [
+        'Based on the inclusion and exclusion criteria, should this study be included in the final review?',
+        '',
+        'Allowed answers: yes, no',
+        '',
+        'Inclusion:',
+        '(none provided)',
+        '',
+        'Exclusion:',
+        'Case reports',
+      ].join('\n'),
+      promptHeading: 'Matches Other Criteria',
+      type: "'yes' | 'no'",
+    },
+  ])
+
+  expect(
+    buildCovidencePromptDefinitionsForEligibilityFields({
+      answerSet: 'yes|no|maybe',
+      eligibilityFields: [
+        {
+          disposition: 'include',
+          sectionKey: 'population',
+          sectionLabel: 'Population',
+          text: 'Adults with confirmed disease',
+        },
+        {disposition: 'exclude', sectionKey: 'other', sectionLabel: 'Other', text: 'Case reports'},
+      ],
+      mode: 'title_abstract',
+      promptGrouping: 'single_prompt',
+    }),
+  ).toEqual([
+    {
+      criteriaDisposition: 'combined',
+      originalText: [
+        'Based on the inclusion and exclusion criteria, should this study be included for full text review?',
+        '',
+        'Allowed answers: yes, no, maybe',
+        '',
+        'Inclusion:',
+        'Adults with confirmed disease',
+        '',
+        'Exclusion:',
+        'Case reports',
+      ].join('\n'),
+      promptHeading: 'Covidence title/abstract screening',
+      type: "'yes' | 'no' | 'maybe'",
+    },
+  ])
+
   const duckdbPath = `/tmp/f1-covidence-prompt-${Date.now()}.duckdb`
   const result = globalThis.Bun.spawnSync(
     [

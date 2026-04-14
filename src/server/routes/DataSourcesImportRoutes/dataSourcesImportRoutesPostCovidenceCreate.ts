@@ -22,8 +22,9 @@ import {getDataSourceQueryService} from '../../services/dataSourceQueryService.t
 type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
 type CovidencePromptAnswerSet = 'yes|no' | 'yes|no|maybe' | 'yes_no' | 'yes_no_maybe'
+type CovidencePromptGrouping = 'per_field' | 'per_section' | 'single_prompt'
 type CovidencePackageUploadInput = Blob & {name?: string; type?: string}
-type CovidenceEligibilityFieldDisposition = 'include' | 'exclude' | 'combined'
+type CovidenceEligibilityFieldDisposition = 'include' | 'exclude'
 type CovidenceEligibilityField = {
   disposition: CovidenceEligibilityFieldDisposition
   sectionKey: string
@@ -52,6 +53,7 @@ const getCovidencePromptDefinitions = (body: {
   exclusionCriteria?: string
   inclusionCriteria?: string
   mode: CovidenceImportMode
+  promptGrouping?: CovidencePromptGrouping
 }) => {
   if (typeof body.answerSet !== 'string') {
     return null
@@ -66,15 +68,7 @@ const getCovidencePromptDefinitions = (body: {
           answerSet: body.answerSet,
           eligibilityFields,
           mode: body.mode,
-        }).map((promptDefinition, index) => {
-          const eligibilityField = eligibilityFields[index]
-
-          return {
-            ...promptDefinition,
-            criteriaDisposition: promptDefinition.criteriaDisposition ?? eligibilityField?.disposition,
-            criteriaSectionKey: promptDefinition.criteriaSectionKey ?? eligibilityField?.sectionKey,
-            criteriaSectionLabel: promptDefinition.criteriaSectionLabel ?? eligibilityField?.sectionLabel,
-          }
+          promptGrouping: body.promptGrouping,
         })
   }
 
@@ -98,6 +92,7 @@ export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
   description?: string
   modelId?: string
   answerSet?: CovidencePromptAnswerSet
+  promptGrouping?: CovidencePromptGrouping
   eligibilityFields?: CovidenceEligibilityField[]
   exclusionCriteria?: string
   inclusionCriteria?: string
