@@ -595,7 +595,7 @@ const AdminJudgmentJobDetail = () => {
                                 <>
                                   <p class="font-medium">{formatProviderMaxInflightRequests(connection())}</p>
                                   <p class="text-xs text-gray-500 mt-1">
-                                    Shared across jobs using this provider connection.
+                                    Shared throughput ceiling for all jobs using this provider connection.
                                   </p>
                                 </>
                               )
@@ -655,12 +655,16 @@ const AdminJudgmentJobDetail = () => {
                       <div class="bg-blue-50 rounded-lg p-4">
                         <p class="text-sm text-blue-600 mb-1">Claimed</p>
                         <p class="text-2xl font-bold text-blue-900">{data()?.promptStats?.claimed ?? 0}</p>
-                        <p class="text-xs text-blue-600 mt-1">Local prompt backlog claimed by this server</p>
+                        <p class="text-xs text-blue-600 mt-1">
+                          Reserved local backlog on this server that has not started running yet
+                        </p>
                       </div>
                       <div class="bg-sky-50 rounded-lg p-4">
                         <p class="text-sm text-sky-600 mb-1">Running Prompts</p>
                         <p class="text-2xl font-bold text-sky-900">{data()?.promptStats?.running ?? 0}</p>
-                        <p class="text-xs text-sky-600 mt-1">Prompt rows currently inside local LLM execution</p>
+                        <p class="text-xs text-sky-600 mt-1">
+                          Prompt executions started locally; one prompt can span multiple live LLM calls
+                        </p>
                       </div>
                       <div class="bg-green-50 rounded-lg p-4">
                         <p class="text-sm text-green-600 mb-1">Judged</p>
@@ -685,7 +689,9 @@ const AdminJudgmentJobDetail = () => {
                       <div class="bg-sky-50 rounded-lg p-4">
                         <p class="text-sm text-sky-600 mb-1">Active LLM Calls</p>
                         <p class="text-2xl font-bold text-sky-900">{data()?.requestStats?.inFlight ?? 0}</p>
-                        <p class="text-xs text-sky-600 mt-1">Runtime request-level calls currently running now</p>
+                        <p class="text-xs text-sky-600 mt-1">
+                          Primary live throughput metric: request-level LLM calls running right now
+                        </p>
                       </div>
                       <div class="bg-indigo-50 rounded-lg p-4">
                         <p class="text-sm text-indigo-600 mb-1">Attempts</p>
