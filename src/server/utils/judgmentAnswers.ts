@@ -110,29 +110,42 @@ export const deriveStrictSummaryAnswer = (
   normalizedAnswers: SummaryAnswersByPromptId,
   logWarning: (message: string) => void = console.warn,
 ): JudgmentHumanSummaryAnswer | null => {
-  const hasHardNo = enabledPromptCriteria.some((promptCriterion) => {
-    if (promptCriterion.criteriaDisposition === null) {
+  const hasMissingDisposition = enabledPromptCriteria.some((promptCriterion) => {
+    const hasMissingMetadata = promptCriterion.criteriaDisposition === null
+
+    if (hasMissingMetadata) {
       logWarning(
         `Cannot derive strict summary answer for prompt ${promptCriterion.promptId}: missing criteria disposition metadata on an enabled summary prompt.`,
       )
-      return true
     }
 
+    return hasMissingMetadata
+  })
+
+  if (hasMissingDisposition) {
+    return null
+  }
+
+  const hasMissingAnswer = enabledPromptCriteria.some((promptCriterion) => {
+    return normalizedAnswers[promptCriterion.promptId] == null
+  })
+
+  if (hasMissingAnswer) {
+    return null
+  }
+
+  const hasHardNo = enabledPromptCriteria.some((promptCriterion) => {
     const answer = normalizedAnswers[promptCriterion.promptId]
 
-    if (answer == null) {
-      return true
-    }
-
-    return promptCriterion.criteriaDisposition === 'exclude' ? answer === 'yes' : answer === 'no'
+    return promptCriterion.criteriaDisposition === 'exclude'
+      ? answer === 'yes'
+      : promptCriterion.criteriaDisposition === 'include'
+        ? answer === 'no'
+        : answer === 'no'
   })
 
   if (hasHardNo) {
-    return enabledPromptCriteria.some((promptCriterion) => {
-      return promptCriterion.criteriaDisposition === null || normalizedAnswers[promptCriterion.promptId] == null
-    })
-      ? null
-      : 'no'
+    return 'no'
   }
 
   const hasMaybe = enabledPromptCriteria.some((promptCriterion) => {

@@ -55,6 +55,18 @@ test('deriveStrictSummaryAnswer returns maybe when no hard no applies and any an
   ).toBe('maybe')
 })
 
+test('deriveStrictSummaryAnswer returns no for combined no', () => {
+  expect(deriveStrictSummaryAnswer([{promptId: 'prompt-1', criteriaDisposition: 'combined'}], {'prompt-1': 'no'})).toBe(
+    'no',
+  )
+})
+
+test('deriveStrictSummaryAnswer returns maybe for combined maybe', () => {
+  expect(
+    deriveStrictSummaryAnswer([{promptId: 'prompt-1', criteriaDisposition: 'combined'}], {'prompt-1': 'maybe'}),
+  ).toBe('maybe')
+})
+
 test('deriveStrictSummaryAnswer returns yes when inclusions and exclusions are fully satisfied', () => {
   expect(
     deriveStrictSummaryAnswer(
@@ -72,6 +84,15 @@ test('deriveStrictSummaryAnswer returns null when an answer is missing', () => {
     deriveStrictSummaryAnswer(
       [
         {promptId: 'prompt-1', criteriaDisposition: 'include'},
+        {promptId: 'prompt-2', criteriaDisposition: 'exclude'},
+      ],
+      {'prompt-1': 'yes'},
+    ),
+  ).toBeNull()
+  expect(
+    deriveStrictSummaryAnswer(
+      [
+        {promptId: 'prompt-1', criteriaDisposition: 'combined'},
         {promptId: 'prompt-2', criteriaDisposition: 'exclude'},
       ],
       {'prompt-1': 'yes'},
