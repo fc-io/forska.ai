@@ -34,6 +34,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         to: body.to,
         search: body.search,
         prompts: body.prompts,
+        ...(body.llmStatus ? {llmStatus: body.llmStatus} : {}),
       })
 
       const hasInlineHydration = result.data.every((article) => {
@@ -86,6 +87,7 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       from: t.Optional(t.String()),
       hasDuplicateStudyRecords: t.Optional(t.Boolean()),
       hasStudyDecisionConflict: t.Optional(t.Boolean()),
+      llmStatus: t.Optional(t.Union([t.Literal('complete'), t.Literal('both'), t.Literal('partial')])),
       limit: t.String(),
       page: t.String(),
       projectId: t.String(),

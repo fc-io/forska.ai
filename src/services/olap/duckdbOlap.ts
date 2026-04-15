@@ -27,6 +27,7 @@ import type {
   DatabaseFilterParams,
   DatabaseFilterResult,
   HumanAnswersByPrompt,
+  LlmStatus,
   OlapJudgmentRow,
   PaginationCursor,
   PromptQueueEntry,
@@ -564,8 +565,17 @@ const getDuckdbServingWhereParts = (params: {
   to?: string | null
   search?: string | null
   cursor?: string | null
+  llmStatus?: LlmStatus
 }) => {
-  return getDuckdbServingReviewWhereParts({...params, requireAnyLlmJudgments: true})
+  return getDuckdbServingReviewWhereParts({...params, ...getLlmStatusWhereParts(params.llmStatus)})
+}
+
+const getLlmStatusWhereParts = (llmStatus?: LlmStatus) => {
+  return llmStatus === 'complete'
+    ? {requireAllLlmJudgments: true, requireAnyLlmJudgments: false, requireIncompleteLlm: false}
+    : llmStatus === 'partial'
+      ? {requireAllLlmJudgments: false, requireAnyLlmJudgments: true, requireIncompleteLlm: true}
+      : {requireAllLlmJudgments: false, requireAnyLlmJudgments: true, requireIncompleteLlm: false}
 }
 
 const getDuckdbServingReviewWhereParts = (params: {
@@ -598,6 +608,7 @@ const getReviewedPageRowsFromServingMart = async (params: {
   scope: ProjectOlapScope
   page: number
   limit: number
+  llmStatus?: LlmStatus
   hasDuplicateStudyRecords?: boolean
   hasStudyDecisionConflict?: boolean
   from?: string | null
@@ -684,6 +695,7 @@ const getReviewedPageRowsFromServingMart = async (params: {
 
 const countReviewedServingRows = async (params: {
   scope: ProjectOlapScope
+  llmStatus?: LlmStatus
   hasDuplicateStudyRecords?: boolean
   hasStudyDecisionConflict?: boolean
   from?: string | null
@@ -931,6 +943,7 @@ const getUnassessedCandidateRowsFromServing = async (params: {
 
 const getReviewedArticleIdsFromServing = async (params: {
   scope: ProjectOlapScope
+  llmStatus?: LlmStatus
   hasDuplicateStudyRecords?: boolean
   hasStudyDecisionConflict?: boolean
   from?: string | null
@@ -942,8 +955,7 @@ const getReviewedArticleIdsFromServing = async (params: {
 }) => {
   const whereParts = getDuckdbServingReviewWhereParts({
     ...params,
-    requireAllLlmJudgments: params.requireAllLlmJudgments,
-    requireAnyLlmJudgments: !params.requireAllLlmJudgments,
+    ...getLlmStatusWhereParts(params.requireAllLlmJudgments ? 'complete' : params.llmStatus),
     requireAllHumanAnswers: params.requireAllHumanAnswers,
   })
   const postingSelection = getDuckdbServingPostingSelection(params.scope, params.prompts)
@@ -1235,6 +1247,7 @@ const getLlmJudgmentRowsFromReviewDetailMart = async (
 
 const getDuckdbReviewedArticlesQuerySections = (params: {
   scope: ProjectOlapScope
+  llmStatus?: LlmStatus
   hasDuplicateStudyRecords?: boolean
   hasStudyDecisionConflict?: boolean
   from?: string | null
@@ -1280,7 +1293,7 @@ const getDuckdbReviewedArticlesQuerySections = (params: {
     return part !== null
   })
   const havingParts = [
-    'COUNT(DISTINCT j.prompt_id) > 0',
+    getReviewedLlmStatusHavingClause(params.scope.promptIds.length, params.llmStatus),
     ...getDuckdbReviewedPromptHavingParts(params.scope, params.prompts),
   ]
 
@@ -1302,10 +1315,19 @@ const getDuckdbReviewedArticlesQuerySections = (params: {
   }
 }
 
+const getReviewedLlmStatusHavingClause = (promptCount: number, llmStatus?: LlmStatus) => {
+  return llmStatus === 'complete'
+    ? `COUNT(DISTINCT j.prompt_id) = ${promptCount}`
+    : llmStatus === 'partial'
+      ? `COUNT(DISTINCT j.prompt_id) > 0 AND COUNT(DISTINCT j.prompt_id) < ${promptCount}`
+      : 'COUNT(DISTINCT j.prompt_id) > 0'
+}
+
 const getDuckdbReviewedPageRows = async (params: {
   scope: ProjectOlapScope
   page: number
   limit: number
+  llmStatus?: LlmStatus
   hasDuplicateStudyRecords?: boolean
   hasStudyDecisionConflict?: boolean
   from?: string | null
@@ -1382,6 +1404,7 @@ const getDuckdbReviewedPageRows = async (params: {
 
 const countDuckdbReviewedArticles = async (params: {
   scope: ProjectOlapScope
+  llmStatus?: LlmStatus
   hasDuplicateStudyRecords?: boolean
   hasStudyDecisionConflict?: boolean
   from?: string | null
@@ -2149,6 +2172,7 @@ const getHumanSummaryRows = async (scope: ProjectOlapScope, articleIds: string[]
 
 const getLlmReviewedArticleRows = async (params: {
   scope: ProjectOlapScope
+  llmStatus?: LlmStatus
   hasDuplicateStudyRecords?: boolean
   hasStudyDecisionConflict?: boolean
   from?: string | null
@@ -2168,14 +2192,34 @@ const getLlmReviewedArticleRows = async (params: {
   const promptFilters = getPromptFilters(params.prompts)
   const filteredArticles = scopedArticles.filter((article) => {
     const articleJudgments = llmJudgmentsByArticle.get(article.id) ?? []
-    const hasRequiredLlmJudgments = params.requireAllLlmJudgments
-      ? getHasAllProjectPrompts(params.scope.promptIds, articleJudgments)
-      : articleJudgments.length > 0
+    const hasRequiredLlmJudgments = getHasRequiredLlmJudgments({
+      promptIds: params.scope.promptIds,
+      articleJudgments,
+      llmStatus: params.requireAllLlmJudgments ? 'complete' : params.llmStatus,
+    })
 
     return hasRequiredLlmJudgments && getMatchesPromptFilters(articleJudgments, promptFilters)
   })
 
   return {scopedArticles: filteredArticles, llmJudgmentsByArticle}
+}
+
+const getHasRequiredLlmJudgments = (params: {
+  promptIds: string[]
+  articleJudgments: Array<{promptId: string}>
+  llmStatus?: LlmStatus
+}) => {
+  const judgedPromptCount = new Set(
+    params.articleJudgments.map((judgment) => {
+      return judgment.promptId
+    }),
+  ).size
+
+  return params.llmStatus === 'complete'
+    ? judgedPromptCount === params.promptIds.length
+    : params.llmStatus === 'partial'
+      ? judgedPromptCount > 0 && judgedPromptCount < params.promptIds.length
+      : judgedPromptCount > 0
 }
 
 const getUnassessedArticleRows = async (params: {
@@ -2995,6 +3039,7 @@ export const selectArticleIdsByFilterDuckdb = async (...args: SelectArticleIdsAr
   const [
     sourceProjectId,
     listType,
+    llmStatus,
     promptsFilter,
     from,
     to,
@@ -3033,6 +3078,7 @@ export const selectArticleIdsByFilterDuckdb = async (...args: SelectArticleIdsAr
       if (listType === 'llm') {
         return getReviewedArticleIdsFromServing({
           scope,
+          llmStatus,
           from,
           to,
           search,
@@ -3072,6 +3118,7 @@ export const selectArticleIdsByFilterDuckdb = async (...args: SelectArticleIdsAr
     if (listType === 'llm') {
       const {scopedArticles} = await getLlmReviewedArticleRows({
         scope,
+        llmStatus,
         from,
         to,
         search,
@@ -3131,6 +3178,7 @@ export const selectArticleIdsByFilterDuckdb = async (...args: SelectArticleIdsAr
   if (listType === 'llm') {
     const {scopedArticles} = await getLlmReviewedArticleRows({
       scope,
+      llmStatus,
       from,
       to,
       search,

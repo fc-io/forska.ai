@@ -23,6 +23,7 @@ export const projectsRoutesGetArticlesReviewsCount = new Elysia().post(
         to: body.to,
         search: body.search,
         prompts: body.prompts,
+        ...(body.llmStatus ? {llmStatus: body.llmStatus} : {}),
       })
 
       const elapsed = Date.now() - startTime
@@ -39,6 +40,7 @@ export const projectsRoutesGetArticlesReviewsCount = new Elysia().post(
       from: t.Optional(t.String()),
       hasDuplicateStudyRecords: t.Optional(t.Boolean()),
       hasStudyDecisionConflict: t.Optional(t.Boolean()),
+      llmStatus: t.Optional(t.Union([t.Literal('complete'), t.Literal('both'), t.Literal('partial')])),
       limit: t.String(),
       projectId: t.String(),
       prompts: t.Record(t.String(), t.Array(t.String())),

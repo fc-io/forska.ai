@@ -1176,7 +1176,7 @@ test('selectArticleIdsByFilterDuckdb human uses raw rows when serving rows are m
   ])
 
   const {selectArticleIdsByFilterDuckdb} = await loadDuckdbOlap()
-  const result = await selectArticleIdsByFilterDuckdb('project-1', 'human', {['prompt-1']: ['yes']})
+  const result = await selectArticleIdsByFilterDuckdb('project-1', 'human', undefined, {['prompt-1']: ['yes']})
 
   expect(result).toEqual(['article-1'])
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.article a')
@@ -1195,7 +1195,7 @@ test('selectArticleIdsByFilterDuckdb both uses raw rows when serving rows are mi
   ])
 
   const {selectArticleIdsByFilterDuckdb} = await loadDuckdbOlap()
-  const result = await selectArticleIdsByFilterDuckdb('project-1', 'both', {['prompt-1']: ['yes']})
+  const result = await selectArticleIdsByFilterDuckdb('project-1', 'both', undefined, {['prompt-1']: ['yes']})
 
   expect(result).toEqual(['article-1'])
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.article a')
@@ -1217,7 +1217,7 @@ test('selectArticleIdsByFilterDuckdb both excludes partially judged llm rows whe
   ])
 
   const {selectArticleIdsByFilterDuckdb} = await loadDuckdbOlap()
-  const result = await selectArticleIdsByFilterDuckdb('project-1', 'both', {['prompt-1']: ['yes']})
+  const result = await selectArticleIdsByFilterDuckdb('project-1', 'both', undefined, {['prompt-1']: ['yes']})
 
   expect(result).toEqual([])
 })
@@ -1283,6 +1283,39 @@ test('selectArticleIdsByFilterDuckdb llm uses review article serving when rows e
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('COALESCE(s.llm_judged_prompt_count, 0) > 0')
 })
 
+test('selectArticleIdsByFilterDuckdb llm complete uses full-judgment serving filter', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [{articleId: 'article-1'}],
+  ])
+
+  const {selectArticleIdsByFilterDuckdb} = await loadDuckdbOlap()
+  const result = await selectArticleIdsByFilterDuckdb('project-1', 'llm', 'complete')
+
+  expect(result).toEqual(['article-1'])
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('s.has_all_llm_judgments = TRUE')
+})
+
+test('selectArticleIdsByFilterDuckdb llm partial uses incomplete serving filter', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [{articleId: 'article-1'}],
+  ])
+
+  const {selectArticleIdsByFilterDuckdb} = await loadDuckdbOlap()
+  const result = await selectArticleIdsByFilterDuckdb('project-1', 'llm', 'partial')
+
+  expect(result).toEqual(['article-1'])
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('COALESCE(s.llm_judged_prompt_count, 0) > 0')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('s.has_all_llm_judgments = FALSE')
+})
+
 test('selectArticleIdsByFilterDuckdb both keeps complete llm requirement on serving path', async () => {
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
     getPromptRowsWithTwoPrompts(),
@@ -1293,7 +1326,7 @@ test('selectArticleIdsByFilterDuckdb both keeps complete llm requirement on serv
   ])
 
   const {selectArticleIdsByFilterDuckdb} = await loadDuckdbOlap()
-  const result = await selectArticleIdsByFilterDuckdb('project-1', 'both', {['prompt-1']: ['yes']})
+  const result = await selectArticleIdsByFilterDuckdb('project-1', 'both', undefined, {['prompt-1']: ['yes']})
 
   expect(result).toEqual(['article-1'])
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('s.has_all_llm_judgments = TRUE')

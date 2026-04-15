@@ -1,6 +1,7 @@
 import type {Accessor} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
+import type {LlmStatus} from '../../../services/olap/olapTypes.ts'
 
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
 
@@ -15,6 +16,7 @@ export const createArticlesReviewsQueryOptions = (
   fromDateStr: Accessor<string>,
   toDateStr: Accessor<string>,
   searchTitleApplied: Accessor<string>,
+  llmStatus?: Accessor<LlmStatus | null | undefined>,
 ) => {
   const fromStr = () => {
     return fromDateStr().trim()
@@ -44,6 +46,7 @@ export const createArticlesReviewsQueryOptions = (
       validFrom(),
       validTo(),
       (searchTitleApplied() || '').trim() || null,
+      llmStatus?.() ?? null,
     ],
     queryFn: async () => {
       const prompts = Object.entries(promptFilters()).reduce(
@@ -59,8 +62,9 @@ export const createArticlesReviewsQueryOptions = (
       const to = validTo()
       const search = (searchTitleApplied() || '').trim()
       const cursor = currentCursor()
+      const currentLlmStatus = llmStatus?.()
 
-      const response = await apiClient.api.articlesreviews.post({
+      const body = {
         page: String(currentPage()),
         limit: String(pageLimit()),
         projectId,
@@ -71,7 +75,10 @@ export const createArticlesReviewsQueryOptions = (
         from: from ?? undefined,
         to: to ?? undefined,
         search: search || undefined,
-      })
+        ...(currentLlmStatus ? {llmStatus: currentLlmStatus} : {}),
+      }
+
+      const response = await apiClient.api.articlesreviews.post(body)
 
       if (!response.data) {
         throw new Error('Failed to fetch articles')

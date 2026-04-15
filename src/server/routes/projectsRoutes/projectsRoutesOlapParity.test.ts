@@ -154,6 +154,7 @@ test('articles reviews route forwards filtered request params to olap', async ()
         from: '2024-01-01',
         hasDuplicateStudyRecords: true,
         hasStudyDecisionConflict: true,
+        llmStatus: 'partial',
         to: '2024-02-01',
         search: 'covid',
         prompts: {'prompt-1': ['yes', 'no']},
@@ -170,11 +171,33 @@ test('articles reviews route forwards filtered request params to olap', async ()
       from: '2024-01-01',
       hasDuplicateStudyRecords: true,
       hasStudyDecisionConflict: true,
+      llmStatus: 'partial',
       to: '2024-02-01',
       search: 'covid',
       prompts: {'prompt-1': ['yes', 'no']},
     },
   ])
+})
+
+test('articles reviews count route forwards llmStatus to olap when present', async () => {
+  const receivedParams: unknown[] = []
+  countReviewsRef.current = async (params?: unknown): Promise<unknown> => {
+    receivedParams.push(params)
+    return {totalCount: 7, totalPages: 1}
+  }
+
+  const {projectsRoutesGetArticlesReviewsCount} = await import('./projectsRoutesGetArticlesReviewsCount.ts')
+  const app = new Elysia().use(projectsRoutesGetArticlesReviewsCount)
+  const response = await app.handle(
+    new Request('http://localhost/api/articlesreviewscount', {
+      method: 'POST',
+      headers: {'content-type': 'application/json'},
+      body: JSON.stringify({projectId: 'project-1', limit: '10', prompts: {}, llmStatus: 'complete'}),
+    }),
+  )
+
+  expect(response.status).toBe(200)
+  expect(receivedParams).toEqual([{projectId: 'project-1', limit: 10, prompts: {}, llmStatus: 'complete'}])
 })
 
 test('articles reviews route skips hydration query when olap already returns hydrated article fields', async () => {

@@ -1,6 +1,7 @@
 import type {Accessor} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
+import type {LlmStatus} from '../../../services/olap/olapTypes.ts'
 
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
 
@@ -13,6 +14,7 @@ export const createArticlesReviewsCountQueryOptions = (
   fromDateStr: Accessor<string>,
   toDateStr: Accessor<string>,
   searchTitleApplied: Accessor<string>,
+  llmStatus?: Accessor<LlmStatus | null | undefined>,
 ) => {
   const fromStr = () => {
     return fromDateStr().trim()
@@ -40,6 +42,7 @@ export const createArticlesReviewsCountQueryOptions = (
       validFrom(),
       validTo(),
       (searchTitleApplied() || '').trim() || null,
+      llmStatus?.() ?? null,
     ],
     queryFn: async () => {
       const prompts = Object.entries(promptFilters()).reduce(
@@ -65,11 +68,13 @@ export const createArticlesReviewsCountQueryOptions = (
         from?: string
         to?: string
         search?: string
+        llmStatus?: LlmStatus
       } = {limit: String(pageLimit()), projectId, prompts}
 
       if (from) body.from = from
       if (to) body.to = to
       if (search) body.search = search
+      if (llmStatus?.()) body.llmStatus = llmStatus()
       if (covidenceDuplicatesOnly()) body.hasDuplicateStudyRecords = true
       if (covidenceConflictsOnly()) body.hasStudyDecisionConflict = true
 

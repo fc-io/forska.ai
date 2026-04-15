@@ -232,7 +232,7 @@ type CovidenceCreateResponse = {
   success: boolean
   data: {
     covidenceProject: {created: boolean; id: string; modelId: string; name: string} | null
-    covidencePrompt: {created: boolean; id: string; promptHeading: string; type: string} | null
+    covidencePrompts: Array<{created: boolean; id: string; promptHeading: string; type: string}>
     dataSource: {id: string; importRoute: string | null; title: string}
     stats: {importedCount: number; itemCount: number}
   }

@@ -1,0 +1,83 @@
+{
+  "name": "Summary Human Priority Plan",
+  "branchName": "ralph/summary-human-priority",
+  "description": "Prioritize future judgment queue top-ups toward articles with answered human summaries for summary-mode projects while preserving prompt-mode behavior, scan cursor semantics, and existing SQLite ready ordering.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Load mode-aware job config and summary priority candidates",
+      "description": "As a maintainer, I want `judgmentsJobsAddToQueue` to load `humanJudgmentMode` and resolve answered summary-backed article IDs so queue top-ups can distinguish prompt-mode pair priority from summary-mode article priority without breaking legacy prompt defaults.",
+      "acceptanceCriteria": [
+        "Extend the add-to-queue job config lookup to include `humanJudgmentMode` alongside the existing model and content settings.",
+        "Treat `NULL` `humanJudgmentMode` values as `prompt` so legacy or unset projects keep the current prompt-mode behavior.",
+        "Add a summary-mode helper in `judgmentsJobsAddToQueue.ts` that batches fetched, post-filter prompt entries by `article_id` and queries `app.judgment_human_summary` for the current `project_id`.",
+        "The summary-mode helper treats only non-empty answers as priority candidates using `NULLIF(TRIM(COALESCE(answer, '')), '') IS NOT NULL`.",
+        "The helper returns matching article IDs so every fetched prompt row for those articles can be prioritized within the current fetched window.",
+        "Prompt-mode pair-based answered-human lookup remains available for non-summary projects.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Apply stable summary-mode prioritization before SQLite insertion",
+      "description": "As a maintainer, I want summary-mode queue top-ups to reorder only the fetched candidate window before insertion so summary-backed articles claim first without changing OLAP ordering, existing ready rows, or scan cursor behavior.",
+      "acceptanceCriteria": [
+        "After `filterAlreadyJudged` and local SQLite judged filtering, the top-up flow branches on `humanJudgmentMode ?? 'prompt'` before choosing a priority strategy.",
+        "Prompt mode keeps the current stable partition of fetched rows by answered `(articleId, promptId)` pair.",
+        "Summary mode stable-partitions fetched rows into `summaryHumanFirst` and `rest` by article ID while preserving original order within both groups.",
+        "The reordered rows are passed into `addReadyPrompts` so SQLite ready claim order for newly inserted rows reflects the priority choice.",
+        "Prioritization remains subject to the existing `readyDeficit` cap and does not change OLAP candidate ordering, scan cursor semantics, or the order of rows already queued in local SQLite `ready`.",
+        "Already-judged and locally judged rows still do not enter the queue even if their article has an answered human summary.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-003",
+      "title": "Cover summary-mode prioritization edge cases in add-to-queue tests",
+      "description": "As a maintainer, I want focused regression coverage for summary-mode add-to-queue prioritization so future changes cannot break article-level promotion, filtering, or project isolation.",
+      "acceptanceCriteria": [
+        "Add coverage proving all fetched prompt rows for an article with an answered human summary move to the front of the fetched candidate list, not just one prompt.",
+        "Add coverage proving `NULL` or blank summary answers do not get priority.",
+        "Add coverage proving summary rows from another project do not affect prioritization.",
+        "Add coverage proving already-judged and locally judged rows are still filtered out even when the article has an answered human summary.",
+        "Add coverage proving multiple summary-backed articles preserve their original relative order and prompt-mode tests continue to pass unchanged.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001", "US-002"]
+    },
+    {
+      "id": "US-004",
+      "title": "Prove summary-backed rows claim first in actual SQLite order",
+      "description": "As a maintainer, I want an end-to-end top-up regression test that exercises SQLite insertion and claiming so summary-backed rows visibly claim first when they appear later in the fetched window.",
+      "acceptanceCriteria": [
+        "Add a top-up regression test proving an article with an answered human summary appearing later in the fetched window is claimed first when `readyDeficit` is smaller than the window.",
+        "The regression covers actual `judgmentsJobsAddToQueue -> addReadyPrompts -> claimReadyPrompts` behavior rather than only asserting an intermediate reordered array.",
+        "Existing ready-row semantics remain intact: the new test does not require reshuffling rows already queued in local SQLite `ready`.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-002", "US-003"]
+    }
+  ]
+}

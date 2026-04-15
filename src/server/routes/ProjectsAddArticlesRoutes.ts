@@ -16,6 +16,7 @@ export const projectsAddArticlesRoutes = new Elysia()
       const articleIds = await selectArticleIdsByFilterOlap(
         body.sourceProjectId,
         body.listType,
+        body.llmStatus,
         body.prompts,
         body.from,
         body.to,
@@ -50,6 +51,7 @@ export const projectsAddArticlesRoutes = new Elysia()
         targetProjectId: t.String(),
         sourceProjectId: t.String(),
         listType: t.Union([t.Literal('llm'), t.Literal('human'), t.Literal('both'), t.Literal('unassessed')]),
+        llmStatus: t.Optional(t.Union([t.Literal('complete'), t.Literal('both'), t.Literal('partial')])),
         prompts: t.Optional(t.Record(t.String(), t.Array(t.String()))),
         hasDuplicateStudyRecords: t.Optional(t.Boolean()),
         hasStudyDecisionConflict: t.Optional(t.Boolean()),

@@ -1,10 +1,13 @@
 import type {PromptFilterInfo} from '../../server/routes/projectsRoutes/articlesReviewsFiltersUtils.ts'
 
+export type LlmStatus = 'complete' | 'both' | 'partial'
+
 export type ArticlesReviewsParams = {
   projectId: string
   page: number
   limit: number
   cursor?: string | null
+  llmStatus?: LlmStatus
   hasDuplicateStudyRecords?: boolean
   hasStudyDecisionConflict?: boolean
   from?: string | null
@@ -61,6 +64,7 @@ export type ArticlesReviewsResponse = {
 export type ArticlesReviewsCountParams = {
   projectId: string
   limit: number
+  llmStatus?: LlmStatus
   hasDuplicateStudyRecords?: boolean
   hasStudyDecisionConflict?: boolean
   from?: string | null
@@ -186,6 +190,7 @@ export type SelectArticleIdsListType = 'llm' | 'human' | 'both' | 'unassessed'
 export type SelectArticleIdsArgs = [
   sourceProjectId: string,
   listType: SelectArticleIdsListType,
+  llmStatus?: LlmStatus,
   promptsFilter?: Record<string, string[]>,
   from?: string,
   to?: string,
