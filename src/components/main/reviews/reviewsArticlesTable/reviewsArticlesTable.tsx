@@ -56,6 +56,119 @@ interface ReviewsArticlesTableProps {
   setRowSelection: Setter<Record<string, boolean>>
 }
 
+const normalizeAnswer = (value?: string | null) => {
+  return (value ?? '').toString().trim().toLowerCase()
+}
+
+const getArrayAnswerCount = (value?: string | null) => {
+  const trimmed = (value ?? '').toString().trim()
+  let count: number | null = null
+
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown
+      count = Array.isArray(parsed) ? parsed.length : null
+    } catch {
+      count = null
+    }
+  }
+
+  return count
+}
+
+const getAnswerLabel = (value?: string | null, asArray?: string[] | null) => {
+  const providedArrayCount = Array.isArray(asArray) ? asArray.length : 0
+  const parsedArrayCount = getArrayAnswerCount(value)
+  const normalized = normalizeAnswer(value)
+  const shortLabel =
+    normalized === 'yes'
+      ? 'Y'
+      : normalized === 'no'
+        ? 'N'
+        : normalized === 'maybe'
+          ? 'M'
+          : normalized === 'unsure'
+            ? 'U'
+            : normalized.length > 0
+              ? normalized.slice(0, 1).toUpperCase()
+              : '—'
+
+  return providedArrayCount > 0
+    ? `[x${providedArrayCount}]`
+    : parsedArrayCount !== null
+      ? `[x${parsedArrayCount}]`
+      : shortLabel
+}
+
+const getHumanAnswerLabel = (answers?: string[]) => {
+  const labels = (answers ?? []).map((answer) => {
+    return getAnswerLabel(answer)
+  })
+  const uniqueLabels = [...new Set(labels)]
+
+  return labels.length === 0
+    ? '—'
+    : uniqueLabels.length === 1
+      ? labels.length === 1
+        ? (uniqueLabels[0] ?? '—')
+        : `${uniqueLabels[0] ?? '—'} x${labels.length}`
+      : labels.join(', ')
+}
+
+const getPromptTone = (aiAnswer: string, humanAnswers: string[]) => {
+  const matches = humanAnswers.filter((answer) => {
+    return answer === aiAnswer
+  }).length
+
+  return !aiAnswer || humanAnswers.length === 0
+    ? 'neutral'
+    : matches === humanAnswers.length
+      ? 'match'
+      : matches > 0
+        ? 'mixed'
+        : 'mismatch'
+}
+
+const getSummaryTone = (aiAnswer: string, humanAnswer: string) => {
+  return !aiAnswer || !humanAnswer
+    ? 'neutral'
+    : aiAnswer === humanAnswer
+      ? 'match'
+      : aiAnswer === 'maybe' || humanAnswer === 'maybe'
+        ? 'mixed'
+        : 'mismatch'
+}
+
+const getJudgmentBadgeClassName = (tone: ReturnType<typeof getSummaryTone>) => {
+  return tone === 'match'
+    ? 'bg-green-50 text-green-800'
+    : tone === 'mixed'
+      ? 'bg-yellow-50 text-yellow-800'
+      : tone === 'mismatch'
+        ? 'bg-red-50 text-red-800'
+        : 'bg-gray-50 text-gray-800'
+}
+
+const getJudgmentComparisonClassName = () => {
+  return 'inline-flex min-w-[84px] flex-col overflow-hidden bg-white'
+}
+
+const getJudgmentComparisonHeadingRowClassName = () => {
+  return 'grid grid-cols-2'
+}
+
+const getJudgmentComparisonValueRowClassName = (tone: ReturnType<typeof getSummaryTone>) => {
+  return `grid grid-cols-2 border border-gray-200 ${getJudgmentBadgeClassName(tone)}`
+}
+
+const getJudgmentComparisonHeadingClassName = () => {
+  return 'px-1.5 py-1 text-center text-[9px] font-medium uppercase tracking-[0.12em] text-gray-500'
+}
+
+const getJudgmentComparisonValueClassName = () => {
+  return 'px-1.5 py-1 text-center text-xs font-semibold text-gray-900'
+}
+
 const selectionColumn: ColumnDef<ArticleWithJudgments, unknown> = {
   id: 'select',
   header: () => {
@@ -218,136 +331,74 @@ const columns: ColumnDef<ArticleWithJudgments, unknown>[] = [
   {
     accessorKey: 'judgments',
     header: 'Judgments',
-    size: 130,
-    minSize: 100,
+    size: 210,
+    minSize: 180,
     cell: (info) => {
       const judgmentsData = info.getValue() as JudgmentData[]
       const row = info.row.original
 
-      const norm = (s?: string | null) => {
-        return (s ?? '').toString().trim().toLowerCase()
-      }
-
-      const getSummaryComparisonClass = (llmAnswer: string, humanAnswer: string) => {
-        return !llmAnswer || !humanAnswer
-          ? 'bg-gray-100 text-gray-800'
-          : llmAnswer === humanAnswer
-            ? 'bg-green-100 text-green-800'
-            : llmAnswer === 'maybe' || humanAnswer === 'maybe'
-              ? 'bg-yellow-100 text-yellow-800'
-              : 'bg-red-100 text-red-800'
-      }
-
-      const labelFor = (s?: string | null, asArray?: string[] | null) => {
-        // If we have an array representation, show count
-        if (asArray && Array.isArray(asArray) && asArray.length > 0) {
-          return `[x${asArray.length}]`
-        }
-        // Check if the string looks like a JSON array (starts with '[')
-        const trimmed = (s ?? '').toString().trim()
-        if (trimmed.startsWith('[')) {
-          try {
-            const parsed = JSON.parse(trimmed) as unknown
-            if (Array.isArray(parsed)) {
-              return `[x${parsed.length}]`
-            }
-          } catch {
-            // Not valid JSON, fall through
-          }
-        }
-        const n = norm(s)
-        if (!n) return '—'
-        if (n === 'yes') return 'Y'
-        if (n === 'no') return 'N'
-        if (n === 'maybe') return 'M'
-        if (n === 'unsure') return 'U'
-        return n.slice(0, 1).toUpperCase()
-      }
-
       return (
-        <div class="flex items-center gap-2">
-          <span class="text-sm text-gray-600">{judgmentsData?.length || 0}</span>
+        <div class="space-y-2">
           <Show
             when={row.humanJudgmentMode === 'summary'}
             fallback={
               <Show when={judgmentsData && judgmentsData.length > 0}>
-                <div class="flex gap-1">
+                <div class="flex flex-wrap gap-2">
                   <For each={judgmentsData.slice(0, 3)}>
                     {(judgment) => {
-                      const llmAns = norm(judgment.answeredOriginal)
-                      const humanAnswers = (row.humanAnswersByPrompt?.[judgment.promptId] ?? []).map(norm)
-
-                      let cls = 'bg-gray-100 text-gray-800'
-                      if (humanAnswers.length > 0 && llmAns) {
-                        const matches = humanAnswers.filter((a) => {
-                          return a === llmAns
-                        }).length
-                        if (matches === humanAnswers.length) {
-                          cls = 'bg-green-100 text-green-800'
-                        } else if (matches > 0) {
-                          cls = 'bg-yellow-100 text-yellow-800'
-                        } else {
-                          cls = 'bg-red-100 text-red-800'
-                        }
-                      }
+                      const aiAnswer = normalizeAnswer(judgment.answeredOriginal)
+                      const humanAnswers = (row.humanAnswersByPrompt?.[judgment.promptId] ?? []).map((answer) => {
+                        return normalizeAnswer(answer)
+                      })
+                      const humanValue = getHumanAnswerLabel(row.humanAnswersByPrompt?.[judgment.promptId])
+                      const aiValue = getAnswerLabel(judgment.answeredOriginal, judgment.answeredOriginalAsArray)
 
                       const tooltip = (() => {
-                        const llmText = judgment.answeredOriginal ?? '—'
+                        const aiText = judgment.answeredOriginal ?? '—'
                         const humans = row.humanAnswersByPrompt?.[judgment.promptId]
                         const humanText = humans && humans.length > 0 ? humans.join(', ') : '—'
-                        return `LLM: ${llmText} • Human(s): ${humanText}`
+                        return `AI: ${aiText} • Human: ${humanText}`
                       })()
-
-                      const text = (() => {
-                        const hasHuman =
-                          Array.isArray(row.humanAnswersByPrompt?.[judgment.promptId])
-                          && (row.humanAnswersByPrompt?.[judgment.promptId] || []).length > 0
-                        if (!hasHuman) return labelFor(judgment.answeredOriginal, judgment.answeredOriginalAsArray)
-
-                        const humans = row.humanAnswersByPrompt?.[judgment.promptId] || []
-                        const normalizedHumans = humans.map(norm)
-                        const firstDiff = normalizedHumans.find((h) => {
-                          return h !== llmAns
-                        })
-                        const humanLetter = labelFor(firstDiff ?? llmAns)
-                        const llmLetter = labelFor(judgment.answeredOriginal, judgment.answeredOriginalAsArray)
-                        return `${llmLetter}/${humanLetter}`
-                      })()
+                      const tone = getPromptTone(aiAnswer, humanAnswers)
 
                       return (
-                        <span class={`px-1.5 py-0.5 text-xs rounded ${cls}`} title={tooltip}>
-                          {text}
-                        </span>
+                        <div class={getJudgmentComparisonClassName()} title={tooltip}>
+                          <div class={getJudgmentComparisonHeadingRowClassName()}>
+                            <span class={getJudgmentComparisonHeadingClassName()}>AI</span>
+                            <span class={getJudgmentComparisonHeadingClassName()}>H</span>
+                          </div>
+                          <div class={getJudgmentComparisonValueRowClassName(tone)}>
+                            <span class={getJudgmentComparisonValueClassName()}>{aiValue}</span>
+                            <span class={getJudgmentComparisonValueClassName()}>{humanValue}</span>
+                          </div>
+                        </div>
                       )
                     }}
                   </For>
                   <Show when={judgmentsData.length > 3}>
-                    <span class="text-xs text-gray-500">+{judgmentsData.length - 3}</span>
+                    <span class="self-center text-xs text-gray-500">+{judgmentsData.length - 3}</span>
                   </Show>
                 </div>
               </Show>
             }
           >
-            {() => {
-              const llmAnswer = norm(row.llmSummaryAnswer)
-              const humanAnswer = norm(row.humanSummaryAnswer)
-              const hasHumanAnswer = Boolean(humanAnswer)
-              const cls = getSummaryComparisonClass(llmAnswer, humanAnswer)
-              const text = !llmAnswer
-                ? '—'
-                : !hasHumanAnswer
-                  ? labelFor(row.llmSummaryAnswer)
-                  : `${labelFor(row.llmSummaryAnswer)}/${labelFor(row.humanSummaryAnswer)}`
-              const tooltip = `LLM summary: ${row.llmSummaryAnswer ?? '—'} • Human summary: ${row.humanSummaryAnswer ?? '—'}`
-
-              return (
-                <div class="flex gap-1">
-                  <span class={`px-1.5 py-0.5 text-xs rounded ${cls}`} title={tooltip}>
-                    {text}
-                  </span>
-                </div>
-              )
-            }}
+            <div
+              class={getJudgmentComparisonClassName()}
+              title={`AI: ${row.llmSummaryAnswer ?? '—'} • Human: ${row.humanSummaryAnswer ?? '—'}`}
+            >
+              <div class={getJudgmentComparisonHeadingRowClassName()}>
+                <span class={getJudgmentComparisonHeadingClassName()}>AI</span>
+                <span class={getJudgmentComparisonHeadingClassName()}>H</span>
+              </div>
+              <div
+                class={getJudgmentComparisonValueRowClassName(
+                  getSummaryTone(normalizeAnswer(row.llmSummaryAnswer), normalizeAnswer(row.humanSummaryAnswer)),
+                )}
+              >
+                <span class={getJudgmentComparisonValueClassName()}>{getAnswerLabel(row.llmSummaryAnswer)}</span>
+                <span class={getJudgmentComparisonValueClassName()}>{getAnswerLabel(row.humanSummaryAnswer)}</span>
+              </div>
+            </div>
           </Show>
         </div>
       )
@@ -429,7 +480,9 @@ export const ReviewsArticlesTable = (props: ReviewsArticlesTableProps) => {
                               ? 'px-1.5 py-4 text-sm text-gray-900'
                               : cell.column.id === 'articleTitle'
                                 ? 'px-6 py-4 text-sm text-gray-900'
-                                : 'px-6 py-4 whitespace-nowrap text-sm text-gray-900'
+                                : cell.column.id === 'judgments'
+                                  ? 'px-6 py-4 align-top text-sm text-gray-900'
+                                  : 'px-6 py-4 whitespace-nowrap text-sm text-gray-900'
                           }
                           style={{width: `${cell.column.getSize()}px`, 'max-width': `${cell.column.getSize()}px`}}
                         >

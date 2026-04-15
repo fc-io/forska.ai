@@ -1,6 +1,7 @@
 import {createSignal, For, Show} from 'solid-js'
 
 import {appendProviderModelThinkingBadgeLabel} from '../../../../../utils/providerModelLabel.ts'
+import type {ProviderModelThinkingOption} from '../../../../../utils/providerModelOptions.ts'
 import {reviewArticleDetailsDispatchScrollToQuote} from './reviewArticleDetails/reviewArticleDetailsScrollEvents.ts'
 import {ReviewJudgmentAssessments} from './reviewJudgmentAssessments.tsx'
 
@@ -61,7 +62,7 @@ type ReviewJudgmentItemProps = {
     assessments?: Array<{assessmentIsCorrect?: boolean | null; assessmentComment?: string | null}>
     modelName?: string | null
     modelProvider?: string | null
-    modelThinking?: string | null
+    modelThinking?: ProviderModelThinkingOption | null
     modelVersion?: string | null
     snapshotProjectModelName?: string | null
     useTitle?: boolean
@@ -275,18 +276,15 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
         </div>
       </div>
 
-      {/* LLM Answer row */}
+      <div class="mb-2 border-t border-dashed border-gray-200" />
+
       <div class="flex items-start justify-between gap-2 text-xs">
         <div class="flex items-start gap-2 min-w-0 flex-1">
           <span class="font-medium w-[70px] text-right shrink-0">Answer:</span>
           <span class={`${getAnswerColorClass()} min-w-0 flex-1 break-words`}>{llmAnswerDisplay()}</span>
         </div>
-        <Show when={props.judgment.confidenceOriginal}>
-          <div class="text-gray-500 shrink-0">{props.judgment.confidenceOriginal}%</div>
-        </Show>
       </div>
 
-      {/* Human answers displayed under the LLM answer - matching styling */}
       <Show when={props.humanAnswers && props.humanAnswers.length > 0}>
         <div class="mt-1">
           <For each={visibleHumanAnswers()}>

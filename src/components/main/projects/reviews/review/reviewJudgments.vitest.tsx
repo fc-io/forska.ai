@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
-import {afterEach, expect, test} from 'vitest'
 import {render} from 'solid-js/web'
+import {afterEach, expect, test} from 'vitest'
 
 import {ReviewJudgments} from './reviewJudgments.tsx'
 
@@ -9,7 +9,7 @@ afterEach(() => {
   document.body.innerHTML = ''
 })
 
-test('ReviewJudgments shows summary-vs-summary labels while keeping AI prompt detail in summary mode', () => {
+test('ReviewJudgments shows separate AI and Human summary values while keeping AI prompt detail in summary mode', () => {
   const container = document.createElement('div')
   document.body.appendChild(container)
 
@@ -34,11 +34,14 @@ test('ReviewJudgments shows summary-vs-summary labels while keeping AI prompt de
     )
   }, container)
 
-  expect(container.textContent).toContain('Overall decision')
+  expect(container.textContent).toContain('Include this study?')
+  expect(container.textContent).toContain('AI')
+  expect(container.textContent).toContain('Human')
+  expect(container.textContent).toContain('Maybe')
+  expect(container.textContent).toContain('No')
   expect(container.textContent).toContain('Population prompt text')
   expect(container.textContent).toContain('Matched the population criteria')
-  expect(container.textContent).toContain('N')
-  expect(container.textContent).toContain('M')
+  expect(container.textContent).toContain('YES')
 
   dispose()
 })
