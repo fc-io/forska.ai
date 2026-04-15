@@ -10,6 +10,7 @@ const migrationsFolder = resolve(import.meta.dir, 'duckdbMigrations')
 const nonTransactionalDuckdbMigrationFiles = new Set([
   '0013_rebuildArticleWithoutOpenalexId.sql',
   '0021_rebuildModelWithProviderConnections.sql',
+  '0040_projectPromptCriteriaDispositionCombined.sql',
 ])
 
 const getDuckdbMigrationFiles = (folder: string) => {
@@ -24,6 +25,34 @@ const getDuckdbMigrationFiles = (folder: string) => {
 
 const escapeSqlString = (value: string) => {
   return value.replaceAll("'", "''")
+}
+
+const getNormalizedDuckdbMigrationError = (error: unknown) => {
+  return error instanceof Error ? error : new Error(String(error))
+}
+
+const isDuckdbMigrationNoActiveTransactionError = (error: unknown) => {
+  return getNormalizedDuckdbMigrationError(error).message.includes('cannot rollback - no transaction is active')
+}
+
+const getChainedDuckdbMigrationError = (error: unknown, nextError: unknown, context: string) => {
+  const normalizedError = getNormalizedDuckdbMigrationError(error)
+  const normalizedNextError = getNormalizedDuckdbMigrationError(nextError)
+  const combinedMessage =
+    normalizedNextError.message === normalizedError.message
+      ? normalizedError.message
+      : `${normalizedError.message} -- ${context}: ${normalizedNextError.message}`
+
+  return combinedMessage === normalizedError.message ? normalizedError : new Error(combinedMessage)
+}
+
+const getDuckdbMigrationRollbackError = async () => {
+  try {
+    await getAppDatabaseService().run('ROLLBACK')
+    return null
+  } catch (error) {
+    return getNormalizedDuckdbMigrationError(error)
+  }
 }
 
 const insertDuckdbMigrationName = async (fileName: string) => {
@@ -75,8 +104,13 @@ const applyDuckdbMigrationFile = async (fileName: string) => {
     await insertDuckdbMigrationName(fileName)
     await getAppDatabaseService().run('COMMIT')
   } catch (error) {
-    await getAppDatabaseService().run('ROLLBACK')
-    throw error
+    const rollbackError = await getDuckdbMigrationRollbackError()
+
+    if (rollbackError !== null && !isDuckdbMigrationNoActiveTransactionError(rollbackError)) {
+      throw getChainedDuckdbMigrationError(error, rollbackError, 'rollback failed')
+    }
+
+    throw getNormalizedDuckdbMigrationError(error)
   }
 }
 
