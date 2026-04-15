@@ -676,6 +676,125 @@ test('claims promoted human pairs first when ready deficit is smaller than the f
   await sqliteService.closeAll()
 })
 
+test('top-up inserts later summary-backed rows ahead of new window peers without reshuffling existing ready rows', async () => {
+  if (!queryDatabase || !runDatabase || !getRealSqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const sqliteService = getRealSqliteService()
+  const connectionId = `connection-summary-window-${Date.now()}`
+  const modelId = `model-summary-window-${Date.now()}`
+  const projectId = `project-summary-window-${Date.now()}`
+  const jobId = `job-summary-window-${Date.now()}`
+  const existingArticleId = `article-existing-ready-${Date.now()}`
+  const existingPromptId = `prompt-existing-ready-${Date.now()}`
+  const summaryArticleId = `article-summary-late-${Date.now()}`
+  const summaryPromptId = `prompt-summary-late-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (
+      id,
+      name,
+      model_id,
+      human_judgment_mode,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images
+    )
+    VALUES ('${projectId}', 'Summary Window Priority Test', '${modelId}', 'summary', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.releaseOwnedLease(jobId)
+  await sqliteService.addReadyPrompts(
+    jobId,
+    [{articleId: existingArticleId, promptId: existingPromptId}],
+    'server-existing-ready',
+  )
+  await sqliteService.releaseOwnedLease(jobId)
+
+  void mock.module(appDatabaseServiceModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {
+          queryJson: async <T>(statement: string): Promise<T[]> => {
+            return statement.includes('FROM app.judgment_human_summary')
+              ? ([{articleId: summaryArticleId}] as T[])
+              : queryDatabase<T>(statement)
+          },
+          run: async (statement: string): Promise<void> => {
+            return runDatabase(statement)
+          },
+        }
+      },
+    }
+  })
+
+  void mock.module(judgmentJobSqliteServiceModulePath, () => {
+    return {
+      JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
+      getJudgmentJobSqliteService: () => {
+        return sqliteService
+      },
+    }
+  })
+  void mock.module(judgmentsJobsCronGetPromptsModulePath, () => {
+    return {
+      judgmentsJobsCronGetPrompts: async () => {
+        return {
+          nextCursor: null,
+          promptEntries: [
+            {articleId: 'article-rest-first', promptId: 'prompt-rest-first'},
+            {articleId: summaryArticleId, promptId: summaryPromptId},
+            {articleId: 'article-rest-second', promptId: 'prompt-rest-second'},
+          ],
+        }
+      },
+    }
+  })
+  void mock.module(judgmentsJobsGetRunningJobsModulePath, () => {
+    return {
+      judgmentsJobsGetRunningJobs: async () => {
+        return [{id: jobId, modelProvider: 'openai', projectId}]
+      },
+    }
+  })
+  void mock.module(getJudgmentsCapacityModulePath, () => {
+    return {
+      getJudgmentsCapacity: () => {
+        return {addToQueueMaxBatchSize: 1, readyTargetPerJob: 2}
+      },
+    }
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?summary-top-up-window=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(
+    (await sqliteService.claimReadyPrompts(jobId, 'server-claim', 2)).map((prompt) => {
+      return `${prompt.articleId}:${prompt.promptId}`
+    }),
+  ).toEqual([`${existingArticleId}:${existingPromptId}`, `${summaryArticleId}:${summaryPromptId}`])
+
+  await sqliteService.closeAll()
+})
+
 test('preserves relative order for multiple promoted human pairs and does not prioritize excluded rows', async () => {
   const getPromptsCalls = {count: 0}
   const addReadyPromptsCalls: Array<Array<{articleId: string; promptId: string}>> = []
