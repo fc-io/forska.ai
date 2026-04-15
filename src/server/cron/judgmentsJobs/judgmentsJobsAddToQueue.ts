@@ -11,6 +11,7 @@ import {judgmentsJobsGetRunningJobs} from './judgmentsJobsGetRunningJobs.ts'
 type Job = Awaited<ReturnType<typeof judgmentsJobsGetRunningJobs>>[number]
 
 type JobConfig = {
+  humanJudgmentMode: 'prompt' | 'summary'
   modelId: string
   useTitle: boolean
   useAbstract: boolean
@@ -60,6 +61,32 @@ const getPromptQueueEntryKey = (entry: PromptQueueEntry) => {
   return `${entry.articleId}:${entry.promptId}`
 }
 
+const getPromptQueueEntryArticleIdBatches = (entries: PromptQueueEntry[]) => {
+  return entries
+    .reduce<{articleIds: string[]; seenArticleIds: Set<string>}>(
+      (state, entry) => {
+        if (state.seenArticleIds.has(entry.articleId)) {
+          return state
+        }
+
+        state.articleIds.push(entry.articleId)
+        state.seenArticleIds.add(entry.articleId)
+
+        return state
+      },
+      {articleIds: [], seenArticleIds: new Set<string>()},
+    )
+    .articleIds.reduce<string[][]>((batches, articleId, index) => {
+      const batchIndex = Math.floor(index / sqliteBatchSize)
+      const batch = batches[batchIndex] ?? []
+
+      batch.push(articleId)
+      batches[batchIndex] = batch
+
+      return batches
+    }, [])
+}
+
 const getPromptQueueEntryBatches = (entries: PromptQueueEntry[]) => {
   return entries.reduce<PromptQueueEntry[][]>((batches, entry, index) => {
     const batchIndex = Math.floor(index / sqliteBatchSize)
@@ -105,6 +132,36 @@ const getAnsweredHumanPromptPairKeys = async (
   )
 }
 
+const getAnsweredHumanSummaryArticleIds = async (
+  promptEntries: PromptQueueEntry[],
+  projectId: string,
+): Promise<Set<string>> => {
+  const batches = getPromptQueueEntryArticleIdBatches(promptEntries)
+  const matchingRows = await Promise.all(
+    batches.map(async (batch) => {
+      return getAppDatabaseService().queryJson<{articleId: string}>(`
+        SELECT DISTINCT article_id AS articleId
+        FROM app.judgment_human_summary
+        WHERE project_id = ${getSqlLiteral(projectId)}
+          AND article_id IN (${batch
+            .map((articleId) => {
+              return getSqlLiteral(articleId)
+            })
+            .join(', ')})
+          AND NULLIF(TRIM(COALESCE(answer, '')), '') IS NOT NULL
+      `)
+    }),
+  )
+
+  return new Set(
+    matchingRows.flatMap((rows) => {
+      return rows.map((entry) => {
+        return entry.articleId
+      })
+    }),
+  )
+}
+
 const partitionPromptQueueEntriesByHumanAnswered = (
   promptEntries: PromptQueueEntry[],
   answeredHumanPairKeys: Set<string>,
@@ -112,6 +169,22 @@ const partitionPromptQueueEntriesByHumanAnswered = (
   return promptEntries.reduce<{humanFirst: PromptQueueEntry[]; rest: PromptQueueEntry[]}>(
     (state, entry) => {
       const target = answeredHumanPairKeys.has(getPromptQueueEntryKey(entry)) ? state.humanFirst : state.rest
+
+      target.push(entry)
+
+      return state
+    },
+    {humanFirst: [], rest: []},
+  )
+}
+
+const partitionPromptQueueEntriesByHumanSummaryAnswered = (
+  promptEntries: PromptQueueEntry[],
+  answeredHumanSummaryArticleIds: Set<string>,
+) => {
+  return promptEntries.reduce<{humanFirst: PromptQueueEntry[]; rest: PromptQueueEntry[]}>(
+    (state, entry) => {
+      const target = answeredHumanSummaryArticleIds.has(entry.articleId) ? state.humanFirst : state.rest
 
       target.push(entry)
 
@@ -340,8 +413,16 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
       shouldForceRawFallback,
     )
     const filteredEntries = await filterAlreadyJudged(promptData.promptEntries, jobConfig, job.id)
-    const answeredHumanPairKeys = await getAnsweredHumanPromptPairKeys(filteredEntries, job.projectId)
-    const {humanFirst, rest} = partitionPromptQueueEntriesByHumanAnswered(filteredEntries, answeredHumanPairKeys)
+    const {humanFirst, rest} =
+      jobConfig.humanJudgmentMode === 'summary'
+        ? partitionPromptQueueEntriesByHumanSummaryAnswered(
+            filteredEntries,
+            await getAnsweredHumanSummaryArticleIds(filteredEntries, job.projectId),
+          )
+        : partitionPromptQueueEntriesByHumanAnswered(
+            filteredEntries,
+            await getAnsweredHumanPromptPairKeys(filteredEntries, job.projectId),
+          )
     const prioritizedEntries = [...humanFirst, ...rest]
 
     await getInsertedReadyCount({
@@ -397,6 +478,7 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
 const getJobConfig = async (jobId: string): Promise<JobConfig | null> => {
   const [config] = await getAppDatabaseService().queryJson<JobConfig>(`
     SELECT
+      COALESCE(p.human_judgment_mode, 'prompt') AS humanJudgmentMode,
       p.model_id AS modelId,
       p.use_title AS useTitle,
       p.use_abstract AS useAbstract,

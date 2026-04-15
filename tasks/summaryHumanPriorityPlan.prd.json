@@ -1,7 +1,7 @@
 {
   "name": "Summary Human Priority Plan",
-  "branchName": "ralph/summary-human-priority",
   "description": "Prioritize future judgment queue top-ups toward articles with answered human summaries for summary-mode projects while preserving prompt-mode behavior, scan cursor semantics, and existing SQLite ready ordering.",
+  "branchName": "ralph/summary-human-priority",
   "userStories": [
     {
       "id": "US-001",
@@ -19,9 +19,10 @@
         "`bun run lint` passes"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "",
-      "dependsOn": []
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-002",
@@ -41,7 +42,9 @@
       "priority": 2,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001"]
+      "dependsOn": [
+        "US-001"
+      ]
     },
     {
       "id": "US-003",
@@ -60,7 +63,10 @@
       "priority": 3,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001", "US-002"]
+      "dependsOn": [
+        "US-001",
+        "US-002"
+      ]
     },
     {
       "id": "US-004",
@@ -77,7 +83,13 @@
       "priority": 4,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-002", "US-003"]
+      "dependsOn": [
+        "US-002",
+        "US-003"
+      ]
     }
-  ]
+  ],
+  "metadata": {
+    "updatedAt": "2026-04-15T05:46:02.456Z"
+  }
 }

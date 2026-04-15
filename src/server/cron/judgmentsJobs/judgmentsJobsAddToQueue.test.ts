@@ -1,6 +1,7 @@
-import {afterAll, afterEach, beforeAll, expect, mock, test} from 'bun:test'
 import {rmSync} from 'node:fs'
 import {dirname, join} from 'node:path'
+
+import {afterAll, afterEach, beforeAll, expect, mock, test} from 'bun:test'
 
 const tempDbPath = `/tmp/f1-judgments-jobs-add-to-queue-${process.pid}-${Date.now()}.duckdb`
 const tempJobDir = join(dirname(tempDbPath), 'judgment-jobs')
@@ -114,8 +115,24 @@ const getRunningJob = () => {
   return {id: 'job-1', modelProvider: 'openai', projectId: 'project-1'}
 }
 
-const getJobConfigRow = () => {
-  return {modelId: 'model-1', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+type MockJobConfigRow = {
+  humanJudgmentMode: 'prompt' | 'summary' | null
+  modelId: string
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
+
+const getJobConfigRow = (): MockJobConfigRow => {
+  return {
+    humanJudgmentMode: 'prompt',
+    modelId: 'model-1',
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  }
 }
 
 const getExhaustedScanState = (
@@ -135,11 +152,14 @@ const registerSharedMocks = (
   sqliteService: MockSqliteService,
   getPromptsCalls: {count: number},
   {
+    jobConfigRow = getJobConfigRow(),
     getPromptsImpl,
     answeredHumanRows = [],
+    answeredHumanSummaryRows = [],
     existingJudgmentRows = [],
     projectDirtyToken = null,
   }: {
+    jobConfigRow?: MockJobConfigRow
     getPromptsImpl?: (
       projectId: string,
       jobId: string,
@@ -151,6 +171,7 @@ const registerSharedMocks = (
       promptEntries: Array<{articleId: string; promptId: string}>
     }>
     answeredHumanRows?: Array<{articleId: string; promptId: string}>
+    answeredHumanSummaryRows?: Array<{articleId: string}>
     existingJudgmentRows?: Array<{articleId: string; promptId: string}>
     projectDirtyToken?: number | null
   } = {},
@@ -162,13 +183,15 @@ const registerSharedMocks = (
           queryJson: async <T>(statement: string): Promise<T[]> => {
             return statement.includes('FROM app.project_mart_refresh_state pmrs')
               ? [{dirtyToken: projectDirtyToken} as T]
-              : statement.includes('FROM app.judgment_human jh')
-                ? (answeredHumanRows as T[])
-                : statement.includes('FROM app.judgment j')
-                  ? (existingJudgmentRows as T[])
-                  : statement.includes('FROM app.judgment_job jj')
-                    ? [getJobConfigRow() as T]
-                    : []
+              : statement.includes('FROM app.judgment_human_summary')
+                ? (answeredHumanSummaryRows as T[])
+                : statement.includes('FROM app.judgment_human jh')
+                  ? (answeredHumanRows as T[])
+                  : statement.includes('FROM app.judgment j')
+                    ? (existingJudgmentRows as T[])
+                    : statement.includes('FROM app.judgment_job jj')
+                      ? [jobConfigRow as T]
+                      : []
           },
           run: async (_statement: string): Promise<void> => {
             return undefined
@@ -714,6 +737,146 @@ test('preserves relative order for multiple promoted human pairs and does not pr
       {articleId: 'article-rest-first', promptId: 'prompt-rest-first'},
       {articleId: 'article-unanswered-human', promptId: 'prompt-unanswered-human'},
       {articleId: 'article-cross-project-human', promptId: 'prompt-cross-project-human'},
+    ],
+  ])
+})
+
+test('prioritizes every fetched prompt row for articles with answered human summaries', async () => {
+  const getPromptsCalls = {count: 0}
+  const addReadyPromptsCalls: Array<Array<{articleId: string; promptId: string}>> = []
+  const sqliteService: MockSqliteService = {
+    addReadyPrompts: async (...args) => {
+      addReadyPromptsCalls.push(args[1] as Array<{articleId: string; promptId: string}>)
+      return 4
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    getReadyCount: async () => {
+      return 0
+    },
+    getScanState: async () => {
+      return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    setScanState: async () => {
+      return undefined
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    answeredHumanRows: [{articleId: 'article-prompt-only', promptId: 'prompt-prompt-only'}],
+    answeredHumanSummaryRows: [{articleId: 'article-summary'}],
+    getPromptsImpl: async () => {
+      return {
+        nextCursor: null,
+        promptEntries: [
+          {articleId: 'article-rest', promptId: 'prompt-rest'},
+          {articleId: 'article-summary', promptId: 'prompt-summary-1'},
+          {articleId: 'article-prompt-only', promptId: 'prompt-prompt-only'},
+          {articleId: 'article-summary', promptId: 'prompt-summary-2'},
+        ],
+      }
+    },
+    jobConfigRow: {...getJobConfigRow(), humanJudgmentMode: 'summary'},
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?summary-human-window=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(getPromptsCalls.count).toBe(1)
+  expect(addReadyPromptsCalls).toEqual([
+    [
+      {articleId: 'article-summary', promptId: 'prompt-summary-1'},
+      {articleId: 'article-summary', promptId: 'prompt-summary-2'},
+      {articleId: 'article-rest', promptId: 'prompt-rest'},
+      {articleId: 'article-prompt-only', promptId: 'prompt-prompt-only'},
+    ],
+  ])
+})
+
+test('treats null human judgment mode as prompt mode', async () => {
+  const getPromptsCalls = {count: 0}
+  const addReadyPromptsCalls: Array<Array<{articleId: string; promptId: string}>> = []
+  const sqliteService: MockSqliteService = {
+    addReadyPrompts: async (...args) => {
+      addReadyPromptsCalls.push(args[1] as Array<{articleId: string; promptId: string}>)
+      return 3
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    getReadyCount: async () => {
+      return 0
+    },
+    getScanState: async () => {
+      return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    setScanState: async () => {
+      return undefined
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    answeredHumanRows: [{articleId: 'article-prompt-priority', promptId: 'prompt-priority'}],
+    answeredHumanSummaryRows: [{articleId: 'article-summary'}],
+    getPromptsImpl: async () => {
+      return {
+        nextCursor: null,
+        promptEntries: [
+          {articleId: 'article-rest', promptId: 'prompt-rest'},
+          {articleId: 'article-prompt-priority', promptId: 'prompt-priority'},
+          {articleId: 'article-summary', promptId: 'prompt-summary'},
+        ],
+      }
+    },
+    jobConfigRow: {...getJobConfigRow(), humanJudgmentMode: null},
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?null-human-mode=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(getPromptsCalls.count).toBe(1)
+  expect(addReadyPromptsCalls).toEqual([
+    [
+      {articleId: 'article-prompt-priority', promptId: 'prompt-priority'},
+      {articleId: 'article-rest', promptId: 'prompt-rest'},
+      {articleId: 'article-summary', promptId: 'prompt-summary'},
     ],
   ])
 })
