@@ -182,16 +182,39 @@ const partitionPromptQueueEntriesByHumanSummaryAnswered = (
   promptEntries: PromptQueueEntry[],
   answeredHumanSummaryArticleIds: Set<string>,
 ) => {
-  return promptEntries.reduce<{humanFirst: PromptQueueEntry[]; rest: PromptQueueEntry[]}>(
+  return promptEntries.reduce<{summaryHumanFirst: PromptQueueEntry[]; rest: PromptQueueEntry[]}>(
     (state, entry) => {
-      const target = answeredHumanSummaryArticleIds.has(entry.articleId) ? state.humanFirst : state.rest
+      const target = answeredHumanSummaryArticleIds.has(entry.articleId) ? state.summaryHumanFirst : state.rest
 
       target.push(entry)
 
       return state
     },
-    {humanFirst: [], rest: []},
+    {summaryHumanFirst: [], rest: []},
   )
+}
+
+const getPrioritizedPromptQueueEntries = async (
+  filteredEntries: PromptQueueEntry[],
+  {humanJudgmentMode, projectId}: {humanJudgmentMode: 'prompt' | 'summary' | null | undefined; projectId: string},
+) => {
+  const resolvedHumanJudgmentMode = humanJudgmentMode ?? 'prompt'
+
+  if (resolvedHumanJudgmentMode === 'summary') {
+    const {summaryHumanFirst, rest} = partitionPromptQueueEntriesByHumanSummaryAnswered(
+      filteredEntries,
+      await getAnsweredHumanSummaryArticleIds(filteredEntries, projectId),
+    )
+
+    return {humanFirstEntries: summaryHumanFirst, prioritizedEntries: [...summaryHumanFirst, ...rest]}
+  }
+
+  const {humanFirst, rest} = partitionPromptQueueEntriesByHumanAnswered(
+    filteredEntries,
+    await getAnsweredHumanPromptPairKeys(filteredEntries, projectId),
+  )
+
+  return {humanFirstEntries: humanFirst, prioritizedEntries: [...humanFirst, ...rest]}
 }
 
 /** Filter out prompt entries that already have judgments in the app database */
@@ -413,21 +436,14 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
       shouldForceRawFallback,
     )
     const filteredEntries = await filterAlreadyJudged(promptData.promptEntries, jobConfig, job.id)
-    const {humanFirst, rest} =
-      jobConfig.humanJudgmentMode === 'summary'
-        ? partitionPromptQueueEntriesByHumanSummaryAnswered(
-            filteredEntries,
-            await getAnsweredHumanSummaryArticleIds(filteredEntries, job.projectId),
-          )
-        : partitionPromptQueueEntriesByHumanAnswered(
-            filteredEntries,
-            await getAnsweredHumanPromptPairKeys(filteredEntries, job.projectId),
-          )
-    const prioritizedEntries = [...humanFirst, ...rest]
+    const {humanFirstEntries, prioritizedEntries} = await getPrioritizedPromptQueueEntries(filteredEntries, {
+      humanJudgmentMode: jobConfig.humanJudgmentMode ?? 'prompt',
+      projectId: job.projectId,
+    })
 
     await getInsertedReadyCount({
       filteredEntries: prioritizedEntries,
-      humanFirstEntries: humanFirst,
+      humanFirstEntries,
       jobId: job.id,
       readyDeficit,
       serverJobId,
