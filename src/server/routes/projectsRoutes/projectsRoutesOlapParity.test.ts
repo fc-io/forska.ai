@@ -179,6 +179,38 @@ test('articles reviews route forwards filtered request params to olap', async ()
   ])
 })
 
+test('articles reviews route forwards llmStatus modes to olap unchanged', async () => {
+  queryReviewsParamsRef.current = []
+  reviewHydrationCallCountRef.current = 0
+  reviewHydrationRowsRef.current = async () => {
+    return []
+  }
+  queryReviewsRef.current = async (params?: unknown): Promise<unknown> => {
+    return {data: [], totalCount: null, page: 1, limit: 10, totalPages: null, echoed: params}
+  }
+
+  const {projectsRoutesGetArticlesReviews} = await import('./projectsRoutesGetArticlesReviews.ts')
+  const app = new Elysia().use(projectsRoutesGetArticlesReviews)
+
+  await Promise.all(
+    ['complete', 'both', 'partial'].map((llmStatus) => {
+      return app.handle(
+        new Request('http://localhost/api/articlesreviews', {
+          method: 'POST',
+          headers: {'content-type': 'application/json'},
+          body: JSON.stringify({projectId: 'project-1', page: '1', limit: '10', prompts: {}, llmStatus}),
+        }),
+      )
+    }),
+  )
+
+  expect(queryReviewsParamsRef.current).toEqual([
+    {projectId: 'project-1', page: 1, limit: 10, from: undefined, to: undefined, search: undefined, prompts: {}, llmStatus: 'complete'},
+    {projectId: 'project-1', page: 1, limit: 10, from: undefined, to: undefined, search: undefined, prompts: {}, llmStatus: 'both'},
+    {projectId: 'project-1', page: 1, limit: 10, from: undefined, to: undefined, search: undefined, prompts: {}, llmStatus: 'partial'},
+  ])
+})
+
 test('articles reviews count route forwards llmStatus to olap when present', async () => {
   const receivedParams: unknown[] = []
   countReviewsRef.current = async (params?: unknown): Promise<unknown> => {
@@ -198,6 +230,35 @@ test('articles reviews count route forwards llmStatus to olap when present', asy
 
   expect(response.status).toBe(200)
   expect(receivedParams).toEqual([{projectId: 'project-1', limit: 10, prompts: {}, llmStatus: 'complete'}])
+})
+
+test('articles reviews count route forwards llmStatus modes to olap unchanged', async () => {
+  const receivedParams: unknown[] = []
+  countReviewsRef.current = async (params?: unknown): Promise<unknown> => {
+    receivedParams.push(params)
+    return {totalCount: 7, totalPages: 1}
+  }
+
+  const {projectsRoutesGetArticlesReviewsCount} = await import('./projectsRoutesGetArticlesReviewsCount.ts')
+  const app = new Elysia().use(projectsRoutesGetArticlesReviewsCount)
+
+  await Promise.all(
+    ['complete', 'both', 'partial'].map((llmStatus) => {
+      return app.handle(
+        new Request('http://localhost/api/articlesreviewscount', {
+          method: 'POST',
+          headers: {'content-type': 'application/json'},
+          body: JSON.stringify({projectId: 'project-1', limit: '10', prompts: {}, llmStatus}),
+        }),
+      )
+    }),
+  )
+
+  expect(receivedParams).toEqual([
+    {projectId: 'project-1', limit: 10, prompts: {}, llmStatus: 'complete'},
+    {projectId: 'project-1', limit: 10, prompts: {}, llmStatus: 'both'},
+    {projectId: 'project-1', limit: 10, prompts: {}, llmStatus: 'partial'},
+  ])
 })
 
 test('articles reviews route skips hydration query when olap already returns hydrated article fields', async () => {

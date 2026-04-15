@@ -243,6 +243,21 @@ const getNormalizedUnassessedRows = (rows: Array<{id: string; articleTitle: stri
   })
 }
 
+const getServingReviewArticleRow = (overrides?: Partial<{articleId: string; articleTitle: string}>) => {
+  return {
+    articleId: overrides?.articleId ?? 'article-1',
+    articleExternalId: `external-${overrides?.articleId ?? 'article-1'}`,
+    articleTitle: overrides?.articleTitle ?? 'Article 1',
+    articleCreatedAt: '2024-01-02T00:00:00.000Z',
+    articleUpdatedAt: '2024-01-03T00:00:00.000Z',
+    fullTextConversionStatus: null,
+    fullTextFetchedAt: null,
+    fullTextPDF: null,
+    journalTitle: 'Journal 1',
+    url: null,
+  }
+}
+
 test('queryArticlesReviewsFromDuckdb keeps reviewed rows when project modelId is null', async () => {
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
     getPromptRows(),
@@ -1479,6 +1494,96 @@ test('queryArticlesReviewsFromDuckdb keeps core row output aligned across servin
   expect(duckdbRunnerMockRef.current.queries[4]).not.toContain('COUNT(DISTINCT j.prompt_id) = 2')
 })
 
+test('queryArticlesReviewsFromDuckdb llmStatus modes stay aligned across serving and raw paths', async () => {
+  const {queryArticlesReviewsFromDuckdb} = await loadDuckdbOlap()
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [getServingReviewArticleRow()],
+    [],
+    [getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-1'})],
+  ])
+  await queryArticlesReviewsFromDuckdb({projectId: 'project-1', page: 1, limit: 10, llmStatus: 'complete'})
+  const completeServingQuery = duckdbRunnerMockRef.current.queries[4]
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [getServingReviewArticleRow()],
+    [],
+    [getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-1'})],
+  ])
+  await queryArticlesReviewsFromDuckdb({projectId: 'project-1', page: 1, limit: 10, llmStatus: 'both'})
+  const bothServingQuery = duckdbRunnerMockRef.current.queries[4]
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [getServingReviewArticleRow()],
+    [],
+    [getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-1'})],
+  ])
+  await queryArticlesReviewsFromDuckdb({projectId: 'project-1', page: 1, limit: 10, llmStatus: 'partial'})
+  const partialServingQuery = duckdbRunnerMockRef.current.queries[4]
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [],
+    [getDuckdbScopedArticleRow({id: 'article-1'})],
+    [getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-1'})],
+  ])
+  await queryArticlesReviewsFromDuckdb({projectId: 'project-1', page: 1, limit: 10, llmStatus: 'complete'})
+  const completeRawQuery = duckdbRunnerMockRef.current.queries[4]
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [],
+    [getDuckdbScopedArticleRow({id: 'article-1'})],
+    [getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-1'})],
+  ])
+  await queryArticlesReviewsFromDuckdb({projectId: 'project-1', page: 1, limit: 10, llmStatus: 'both'})
+  const bothRawQuery = duckdbRunnerMockRef.current.queries[4]
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [],
+    [getDuckdbScopedArticleRow({id: 'article-1'})],
+    [getDuckdbJudgmentRow({articleId: 'article-1', promptId: 'prompt-1'})],
+  ])
+  await queryArticlesReviewsFromDuckdb({projectId: 'project-1', page: 1, limit: 10, llmStatus: 'partial'})
+  const partialRawQuery = duckdbRunnerMockRef.current.queries[4]
+
+  expect(completeServingQuery).toContain('s.has_all_llm_judgments = TRUE')
+  expect(completeServingQuery).not.toContain('s.has_all_llm_judgments = FALSE')
+  expect(completeServingQuery).not.toContain('COALESCE(s.llm_judged_prompt_count, 0) > 0')
+  expect(bothServingQuery).toContain('COALESCE(s.llm_judged_prompt_count, 0) > 0')
+  expect(bothServingQuery).not.toContain('s.has_all_llm_judgments = TRUE')
+  expect(bothServingQuery).not.toContain('s.has_all_llm_judgments = FALSE')
+  expect(partialServingQuery).toContain('COALESCE(s.llm_judged_prompt_count, 0) > 0')
+  expect(partialServingQuery).toContain('s.has_all_llm_judgments = FALSE')
+
+  expect(completeRawQuery).toContain('COUNT(DISTINCT j.prompt_id) = 2')
+  expect(completeRawQuery).not.toContain('COUNT(DISTINCT j.prompt_id) < 2')
+  expect(bothRawQuery).toContain('COUNT(DISTINCT j.prompt_id) > 0')
+  expect(bothRawQuery).not.toContain('COUNT(DISTINCT j.prompt_id) < 2')
+  expect(bothRawQuery).not.toContain('COUNT(DISTINCT j.prompt_id) = 2')
+  expect(partialRawQuery).toContain('COUNT(DISTINCT j.prompt_id) > 0 AND COUNT(DISTINCT j.prompt_id) < 2')
+  expect(partialRawQuery).not.toContain('COUNT(DISTINCT j.prompt_id) = 2')
+})
+
 test('countArticlesReviewsFromDuckdb keeps counts aligned across serving and raw paths', async () => {
   const {countArticlesReviewsFromDuckdb} = await loadDuckdbOlap()
 
@@ -1505,6 +1610,183 @@ test('countArticlesReviewsFromDuckdb keeps counts aligned across serving and raw
   expect(rawResult).toEqual(servingResult)
   expect(servingCountQuery).toContain('COALESCE(s.llm_judged_prompt_count, 0) > 0')
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('COUNT(DISTINCT j.prompt_id) > 0')
+})
+
+test('countArticlesReviewsFromDuckdb llmStatus modes stay aligned across serving and raw paths', async () => {
+  const {countArticlesReviewsFromDuckdb} = await loadDuckdbOlap()
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [{totalCount: 1}],
+  ])
+  await countArticlesReviewsFromDuckdb({projectId: 'project-1', limit: 10, llmStatus: 'complete'})
+  const completeServingQuery = duckdbRunnerMockRef.current.queries[4]
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [{totalCount: 1}],
+  ])
+  await countArticlesReviewsFromDuckdb({projectId: 'project-1', limit: 10, llmStatus: 'both'})
+  const bothServingQuery = duckdbRunnerMockRef.current.queries[4]
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [{totalCount: 1}],
+  ])
+  await countArticlesReviewsFromDuckdb({projectId: 'project-1', limit: 10, llmStatus: 'partial'})
+  const partialServingQuery = duckdbRunnerMockRef.current.queries[4]
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [],
+    [{totalCount: 1}],
+  ])
+  await countArticlesReviewsFromDuckdb({projectId: 'project-1', limit: 10, llmStatus: 'complete'})
+  const completeRawQuery = duckdbRunnerMockRef.current.queries[4]
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [],
+    [{totalCount: 1}],
+  ])
+  await countArticlesReviewsFromDuckdb({projectId: 'project-1', limit: 10, llmStatus: 'both'})
+  const bothRawQuery = duckdbRunnerMockRef.current.queries[4]
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [],
+    [{totalCount: 1}],
+  ])
+  await countArticlesReviewsFromDuckdb({projectId: 'project-1', limit: 10, llmStatus: 'partial'})
+  const partialRawQuery = duckdbRunnerMockRef.current.queries[4]
+
+  expect(completeServingQuery).toContain('s.has_all_llm_judgments = TRUE')
+  expect(completeServingQuery).not.toContain('COALESCE(s.llm_judged_prompt_count, 0) > 0')
+  expect(bothServingQuery).toContain('COALESCE(s.llm_judged_prompt_count, 0) > 0')
+  expect(bothServingQuery).not.toContain('s.has_all_llm_judgments = TRUE')
+  expect(partialServingQuery).toContain('COALESCE(s.llm_judged_prompt_count, 0) > 0')
+  expect(partialServingQuery).toContain('s.has_all_llm_judgments = FALSE')
+
+  expect(completeRawQuery).toContain('COUNT(DISTINCT j.prompt_id) = 2')
+  expect(bothRawQuery).toContain('COUNT(DISTINCT j.prompt_id) > 0')
+  expect(bothRawQuery).not.toContain('COUNT(DISTINCT j.prompt_id) = 2')
+  expect(partialRawQuery).toContain('COUNT(DISTINCT j.prompt_id) > 0 AND COUNT(DISTINCT j.prompt_id) < 2')
+})
+
+test('selectArticleIdsByFilterDuckdb llmStatus modes stay aligned across serving and raw paths', async () => {
+  const {selectArticleIdsByFilterDuckdb} = await loadDuckdbOlap()
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [{articleId: 'article-complete'}],
+  ])
+  const completeServingResult = await selectArticleIdsByFilterDuckdb('project-1', 'llm', 'complete')
+  const completeServingQuery = duckdbRunnerMockRef.current.queries[4]
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [{articleId: 'article-both'}],
+  ])
+  const bothServingResult = await selectArticleIdsByFilterDuckdb('project-1', 'llm', 'both')
+  const bothServingQuery = duckdbRunnerMockRef.current.queries[4]
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [{articleId: 'article-partial'}],
+  ])
+  const partialServingResult = await selectArticleIdsByFilterDuckdb('project-1', 'llm', 'partial')
+  const partialServingQuery = duckdbRunnerMockRef.current.queries[4]
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [],
+    [
+      getDuckdbScopedArticleRow({id: 'article-complete'}),
+      getDuckdbScopedArticleRow({id: 'article-partial'}),
+      getDuckdbScopedArticleRow({id: 'article-none'}),
+    ],
+    [
+      getDuckdbJudgmentRow({articleId: 'article-complete', promptId: 'prompt-1'}),
+      getDuckdbJudgmentRow({id: 'judgment-2', articleId: 'article-complete', promptId: 'prompt-2'}),
+      getDuckdbJudgmentRow({id: 'judgment-3', articleId: 'article-partial', promptId: 'prompt-1'}),
+    ],
+  ])
+  const completeRawResult = await selectArticleIdsByFilterDuckdb('project-1', 'llm', 'complete')
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [],
+    [
+      getDuckdbScopedArticleRow({id: 'article-complete'}),
+      getDuckdbScopedArticleRow({id: 'article-partial'}),
+      getDuckdbScopedArticleRow({id: 'article-none'}),
+    ],
+    [
+      getDuckdbJudgmentRow({articleId: 'article-complete', promptId: 'prompt-1'}),
+      getDuckdbJudgmentRow({id: 'judgment-2', articleId: 'article-complete', promptId: 'prompt-2'}),
+      getDuckdbJudgmentRow({id: 'judgment-3', articleId: 'article-partial', promptId: 'prompt-1'}),
+    ],
+  ])
+  const bothRawResult = await selectArticleIdsByFilterDuckdb('project-1', 'llm', 'both')
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [],
+    [
+      getDuckdbScopedArticleRow({id: 'article-complete'}),
+      getDuckdbScopedArticleRow({id: 'article-partial'}),
+      getDuckdbScopedArticleRow({id: 'article-none'}),
+    ],
+    [
+      getDuckdbJudgmentRow({articleId: 'article-complete', promptId: 'prompt-1'}),
+      getDuckdbJudgmentRow({id: 'judgment-2', articleId: 'article-complete', promptId: 'prompt-2'}),
+      getDuckdbJudgmentRow({id: 'judgment-3', articleId: 'article-partial', promptId: 'prompt-1'}),
+    ],
+  ])
+  const partialRawResult = await selectArticleIdsByFilterDuckdb('project-1', 'llm', 'partial')
+
+  expect(completeServingResult).toEqual(['article-complete'])
+  expect(bothServingResult).toEqual(['article-both'])
+  expect(partialServingResult).toEqual(['article-partial'])
+  expect(completeServingQuery).toContain('s.has_all_llm_judgments = TRUE')
+  expect(bothServingQuery).toContain('COALESCE(s.llm_judged_prompt_count, 0) > 0')
+  expect(bothServingQuery).not.toContain('s.has_all_llm_judgments = TRUE')
+  expect(partialServingQuery).toContain('COALESCE(s.llm_judged_prompt_count, 0) > 0')
+  expect(partialServingQuery).toContain('s.has_all_llm_judgments = FALSE')
+
+  expect(completeRawResult).toEqual(['article-complete'])
+  expect(bothRawResult).toEqual(['article-complete', 'article-partial'])
+  expect(partialRawResult).toEqual(['article-partial'])
 })
 
 test('getUnassessedArticlesFromDuckdb keeps rows aligned across serving and raw paths', async () => {
