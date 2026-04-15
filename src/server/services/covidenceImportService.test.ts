@@ -273,7 +273,7 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
         'Population inclusion criteria:',
         'Adults with confirmed disease',
       ].join('\n'),
-      promptHeading: 'Matches Population Inclusion',
+      promptHeading: 'Population Inclusion',
       type: "'yes' | 'no' | 'maybe'",
     },
     {
@@ -289,7 +289,7 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
         'Other exclusion criteria:',
         'Case reports',
       ].join('\n'),
-      promptHeading: 'Matches Other Exclusion',
+      promptHeading: 'Other Exclusion',
       type: "'yes' | 'no' | 'maybe'",
     },
   ])
@@ -327,7 +327,7 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
         'Exclusion criteria (evaluate in order):',
         'Pediatric-only cohorts',
       ].join('\n'),
-      promptHeading: 'Matches Population Criteria',
+      promptHeading: 'Population Criteria',
       type: "'yes' | 'no'",
     },
     {
@@ -346,7 +346,7 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
         'Exclusion criteria (evaluate in order):',
         'Case reports',
       ].join('\n'),
-      promptHeading: 'Matches Other Criteria',
+      promptHeading: 'Other Criteria',
       type: "'yes' | 'no'",
     },
   ])

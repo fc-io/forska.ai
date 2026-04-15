@@ -91,7 +91,7 @@ const buildProjectDetails = (projectId: string): MockProjectDetails => {
         originalText: 'Prompt body',
         originProjectId: null,
         promptArchived: false,
-        promptHeading: 'Matches Population Inclusion',
+        promptHeading: 'Population Inclusion',
         type: "'yes' | 'no' | 'maybe'",
       },
     ],

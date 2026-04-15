@@ -21,7 +21,7 @@ test('seeded Covidence project edit smoke renders edit controls without browser 
     await expect(page.getByText('Playwright Covidence Project')).toBeVisible()
     await expect(page.getByText('Use Article Title')).toBeVisible()
     await expect(page.getByText('Importable prompts')).toBeVisible()
-    await expect(page.locator('span').filter({hasText: 'Matches Population Inclusion'}).first()).toBeVisible()
+    await expect(page.locator('span').filter({hasText: 'Population Inclusion'}).first()).toBeVisible()
 
     browserFailures.assertNoFailures()
   } finally {

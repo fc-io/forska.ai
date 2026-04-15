@@ -557,8 +557,7 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
                     eligibilityField.text,
                   ].join('\\n'),
                   promptHeading:
-                    'Matches '
-                    + eligibilityField.sectionLabel
+                    eligibilityField.sectionLabel
                     + ' '
                     + (eligibilityField.disposition === 'include' ? 'Inclusion' : 'Exclusion'),
                   type: answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'maybe'",
@@ -718,7 +717,7 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
           'Population inclusion criteria:',
           'Adults with confirmed disease',
         ].join('\n'),
-        promptHeading: 'Matches Population Inclusion',
+        promptHeading: 'Population Inclusion',
         type: "'yes' | 'no' | 'maybe'",
       },
     },
@@ -736,7 +735,7 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
           'Other exclusion criteria:',
           'Case reports',
         ].join('\n'),
-        promptHeading: 'Matches Other Exclusion',
+        promptHeading: 'Other Exclusion',
         type: "'yes' | 'no' | 'maybe'",
       },
     },
@@ -795,7 +794,7 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
         'Population inclusion criteria:',
         'Adults with confirmed disease',
       ].join('\n'),
-      promptHeading: 'Matches Population Inclusion',
+      promptHeading: 'Population Inclusion',
       type: "'yes' | 'no' | 'maybe'",
     },
     {
@@ -813,7 +812,7 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
         'Other exclusion criteria:',
         'Case reports',
       ].join('\n'),
-      promptHeading: 'Matches Other Exclusion',
+      promptHeading: 'Other Exclusion',
       type: "'yes' | 'no' | 'maybe'",
     },
   ])
@@ -921,8 +920,7 @@ test('Covidence datasource create also creates or reuses a full-text project wit
                     eligibilityField.text,
                   ].join('\\n'),
                   promptHeading:
-                    'Matches '
-                    + eligibilityField.sectionLabel
+                    eligibilityField.sectionLabel
                     + ' '
                     + (eligibilityField.disposition === 'include' ? 'Inclusion' : 'Exclusion'),
                   type: answerSet === 'yes|no' ? "'yes' | 'no'" : "'yes' | 'no' | 'maybe'",
@@ -1071,7 +1069,7 @@ test('Covidence datasource create also creates or reuses a full-text project wit
           'Population inclusion criteria:',
           'Adults with confirmed disease',
         ].join('\n'),
-        promptHeading: 'Matches Population Inclusion',
+        promptHeading: 'Population Inclusion',
         type: "'yes' | 'no'",
       },
     },
@@ -1088,7 +1086,7 @@ test('Covidence datasource create also creates or reuses a full-text project wit
           'Outcome inclusion criteria:',
           'Pain reduction at follow-up',
         ].join('\n'),
-        promptHeading: 'Matches Outcome Inclusion',
+        promptHeading: 'Outcome Inclusion',
         type: "'yes' | 'no'",
       },
     },
@@ -1105,7 +1103,7 @@ test('Covidence datasource create also creates or reuses a full-text project wit
           'Study Characteristics exclusion criteria:',
           'Case reports',
         ].join('\n'),
-        promptHeading: 'Matches Study Characteristics Exclusion',
+        promptHeading: 'Study Characteristics Exclusion',
         type: "'yes' | 'no'",
       },
     },
@@ -1173,7 +1171,7 @@ test('Covidence datasource create also creates or reuses a full-text project wit
         'Population inclusion criteria:',
         'Adults with confirmed disease',
       ].join('\n'),
-      promptHeading: 'Matches Population Inclusion',
+      promptHeading: 'Population Inclusion',
       type: "'yes' | 'no'",
     },
     {
@@ -1190,7 +1188,7 @@ test('Covidence datasource create also creates or reuses a full-text project wit
         'Outcome inclusion criteria:',
         'Pain reduction at follow-up',
       ].join('\n'),
-      promptHeading: 'Matches Outcome Inclusion',
+      promptHeading: 'Outcome Inclusion',
       type: "'yes' | 'no'",
     },
     {
@@ -1207,7 +1205,7 @@ test('Covidence datasource create also creates or reuses a full-text project wit
         'Study Characteristics exclusion criteria:',
         'Case reports',
       ].join('\n'),
-      promptHeading: 'Matches Study Characteristics Exclusion',
+      promptHeading: 'Study Characteristics Exclusion',
       type: "'yes' | 'no'",
     },
   ])
@@ -1484,7 +1482,7 @@ test('Covidence datasource create normalizes eligibility fields before building 
                   criteriaSectionKey: 'population',
                   criteriaSectionLabel: 'Population',
                   originalText: 'Population combined prompt',
-                  promptHeading: 'Matches Population Criteria',
+                  promptHeading: 'Population Criteria',
                   type: "'yes' | 'no'",
                 },
               ]
@@ -1641,7 +1639,7 @@ test('Covidence datasource create normalizes eligibility fields before building 
       criteriaSectionLabel: 'Population',
       id: 'prompt-created',
       originalText: 'Population combined prompt',
-      promptHeading: 'Matches Population Criteria',
+      promptHeading: 'Population Criteria',
       type: "'yes' | 'no'",
     },
   ])

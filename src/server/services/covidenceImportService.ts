@@ -425,7 +425,7 @@ const buildCovidencePromptDefinitionForEligibilityField = (params: {
       }),
       params.eligibilityField.text,
     ].join('\n'),
-    promptHeading: `Matches ${params.eligibilityField.sectionLabel} ${getCovidencePromptEligibilityHeadingDispositionLabel(params.eligibilityField.disposition)}`,
+    promptHeading: `${params.eligibilityField.sectionLabel} ${getCovidencePromptEligibilityHeadingDispositionLabel(params.eligibilityField.disposition)}`,
     type: getCovidencePromptType(params.answerSet),
   }
 }
@@ -538,7 +538,7 @@ const buildCovidencePromptDefinitionsPerSection = (params: {
           ...promptDefinition,
           criteriaSectionKey: criteriaGroup.sectionKey,
           criteriaSectionLabel: criteriaGroup.sectionLabel,
-          promptHeading: `Matches ${criteriaGroup.sectionLabel} Criteria`,
+          promptHeading: `${criteriaGroup.sectionLabel} Criteria`,
         }
       : promptDefinition
   })
