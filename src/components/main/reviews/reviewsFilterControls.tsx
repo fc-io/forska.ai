@@ -224,48 +224,82 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
             </select>
           </div>
         </div>
-        <div class="flex flex-wrap items-center gap-4 py-4 border-b w-full">
+        <div class="py-4 border-b w-full space-y-4">
           <Show when={props.llmStatus && props.setLlmStatus}>
-            <label class="flex flex-col text-sm font-medium gap-1 w-44">
-              <span>LLM status</span>
-              <select
-                class="w-full px-3 py-2 border rounded-md bg-white text-gray-900"
-                value={props.llmStatus}
+            <fieldset class="flex flex-col gap-2">
+              <legend class="text-sm font-medium">LLM status</legend>
+              <div class="flex flex-wrap items-center gap-4">
+                <label class="inline-flex items-center gap-2 text-sm font-medium text-gray-700">
+                  <input
+                    type="radio"
+                    name="llm-status"
+                    value="complete"
+                    checked={props.llmStatus === 'complete'}
+                    onChange={(e) => {
+                      props.setLlmStatus?.(e.currentTarget.value as LlmStatus)
+                      props.setCurrentPage(1)
+                    }}
+                    class="h-4 w-4 border-gray-300"
+                  />
+                  <span>Complete</span>
+                </label>
+                <label class="inline-flex items-center gap-2 text-sm font-medium text-gray-700">
+                  <input
+                    type="radio"
+                    name="llm-status"
+                    value="both"
+                    checked={props.llmStatus === 'both'}
+                    onChange={(e) => {
+                      props.setLlmStatus?.(e.currentTarget.value as LlmStatus)
+                      props.setCurrentPage(1)
+                    }}
+                    class="h-4 w-4 border-gray-300"
+                  />
+                  <span>Both</span>
+                </label>
+                <label class="inline-flex items-center gap-2 text-sm font-medium text-gray-700">
+                  <input
+                    type="radio"
+                    name="llm-status"
+                    value="partial"
+                    checked={props.llmStatus === 'partial'}
+                    onChange={(e) => {
+                      props.setLlmStatus?.(e.currentTarget.value as LlmStatus)
+                      props.setCurrentPage(1)
+                    }}
+                    class="h-4 w-4 border-gray-300"
+                  />
+                  <span>Only Partial</span>
+                </label>
+              </div>
+            </fieldset>
+          </Show>
+          <div class="flex flex-wrap items-center gap-4">
+            <label class="inline-flex items-center gap-2 text-sm font-medium text-gray-700">
+              <input
+                type="checkbox"
+                checked={props.covidenceDuplicatesOnly}
                 onChange={(e) => {
-                  props.setLlmStatus?.(e.currentTarget.value as LlmStatus)
+                  props.setCovidenceDuplicatesOnly(e.currentTarget.checked)
                   props.setCurrentPage(1)
                 }}
-              >
-                <option value="complete">Complete</option>
-                <option value="both">Both</option>
-                <option value="partial">Partial</option>
-              </select>
+                class="h-4 w-4 rounded border-gray-300"
+              />
+              <span>Covidence duplicates only</span>
             </label>
-          </Show>
-          <label class="inline-flex items-center gap-2 text-sm font-medium text-gray-700">
-            <input
-              type="checkbox"
-              checked={props.covidenceDuplicatesOnly}
-              onChange={(e) => {
-                props.setCovidenceDuplicatesOnly(e.currentTarget.checked)
-                props.setCurrentPage(1)
-              }}
-              class="h-4 w-4 rounded border-gray-300"
-            />
-            <span>Covidence duplicates only</span>
-          </label>
-          <label class="inline-flex items-center gap-2 text-sm font-medium text-gray-700">
-            <input
-              type="checkbox"
-              checked={props.covidenceConflictsOnly}
-              onChange={(e) => {
-                props.setCovidenceConflictsOnly(e.currentTarget.checked)
-                props.setCurrentPage(1)
-              }}
-              class="h-4 w-4 rounded border-gray-300"
-            />
-            <span>Covidence conflicts only</span>
-          </label>
+            <label class="inline-flex items-center gap-2 text-sm font-medium text-gray-700">
+              <input
+                type="checkbox"
+                checked={props.covidenceConflictsOnly}
+                onChange={(e) => {
+                  props.setCovidenceConflictsOnly(e.currentTarget.checked)
+                  props.setCurrentPage(1)
+                }}
+                class="h-4 w-4 rounded border-gray-300"
+              />
+              <span>Covidence conflicts only</span>
+            </label>
+          </div>
         </div>
         <Show when={!props.hidePromptSelectors && filtersQuery.data}>
           {(data) => {

@@ -348,6 +348,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
                 from?: string
                 to?: string
                 search?: string
+                llmStatus?: LlmStatus
                 hasDuplicateStudyRecords?: true
                 hasStudyDecisionConflict?: true
               } = {}
@@ -355,6 +356,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
               if (from) body.from = from
               if (to) body.to = to
               if (search) body.search = search
+              if (props.llmStatus?.()) body.llmStatus = props.llmStatus?.()
               if (props.covidenceDuplicatesOnly()) body.hasDuplicateStudyRecords = true
               if (props.covidenceConflictsOnly()) body.hasStudyDecisionConflict = true
               return body

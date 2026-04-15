@@ -30,6 +30,7 @@ interface ReviewsPaginationControlsProps {
     from?: string
     to?: string
     search?: string
+    llmStatus?: 'complete' | 'both' | 'partial'
     hasDuplicateStudyRecords?: true
     hasStudyDecisionConflict?: true
   }
