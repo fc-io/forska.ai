@@ -4,6 +4,7 @@ import type {Setter} from 'solid-js'
 import {createEffect, createMemo, For, Show, Suspense} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
+import type {LlmStatus} from '../../../services/olap/olapTypes.ts'
 
 type NumericBin = {label: string; min: number; max: number}
 
@@ -39,6 +40,8 @@ interface ReviewsFilterControlsProps {
   setSearchTitle: Setter<string>
   appliedSearchTitle: string
   onSubmitSearch: () => void
+  llmStatus?: LlmStatus
+  setLlmStatus?: Setter<LlmStatus | undefined>
 }
 
 export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
@@ -222,6 +225,23 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
           </div>
         </div>
         <div class="flex flex-wrap items-center gap-4 py-4 border-b w-full">
+          <Show when={props.llmStatus && props.setLlmStatus}>
+            <label class="flex flex-col text-sm font-medium gap-1 w-44">
+              <span>LLM status</span>
+              <select
+                class="w-full px-3 py-2 border rounded-md bg-white text-gray-900"
+                value={props.llmStatus}
+                onChange={(e) => {
+                  props.setLlmStatus?.(e.currentTarget.value as LlmStatus)
+                  props.setCurrentPage(1)
+                }}
+              >
+                <option value="complete">Complete</option>
+                <option value="both">Both</option>
+                <option value="partial">Partial</option>
+              </select>
+            </label>
+          </Show>
           <label class="inline-flex items-center gap-2 text-sm font-medium text-gray-700">
             <input
               type="checkbox"

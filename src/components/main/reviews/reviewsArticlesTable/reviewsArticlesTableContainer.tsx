@@ -2,6 +2,7 @@ import {useQuery} from '@tanstack/solid-query'
 import type {Accessor, Setter} from 'solid-js'
 import {createEffect, createMemo, createSignal, Show} from 'solid-js'
 
+import type {LlmStatus} from '../../../../services/olap/olapTypes.ts'
 import {createArticlesReviewsCountQueryOptions} from '../../projects/projectsArticlesReviewsCountQuery.ts'
 import {createArticlesReviewsQueryOptions} from '../../projects/projectsArticlesReviewsQuery.ts'
 import {getReviewIndexingInProgressTitle} from '../getReviewIndexingInProgressTitle.ts'
@@ -25,7 +26,7 @@ interface ReviewsArticlesTableContainerProps {
   fromDate: Accessor<string>
   toDate: Accessor<string>
   searchTitle: Accessor<string>
-  /** Whether URL filters have been initialized - queries will wait until true */
+  llmStatus?: Accessor<LlmStatus | undefined>
   initialized: Accessor<boolean>
 }
 
@@ -45,6 +46,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
     props.fromDate()
     props.toDate()
     props.searchTitle()
+    props.llmStatus?.()
     props.pageLimit()
     setRowSelection({})
     setSelectAllMatching(false)
@@ -68,8 +70,8 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
         props.fromDate,
         props.toDate,
         props.searchTitle,
+        props.llmStatus,
       ),
-      // Wait until URL filters are initialized to avoid duplicate calls
       enabled: props.initialized(),
     }
   })
@@ -118,8 +120,8 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
         props.fromDate,
         props.toDate,
         props.searchTitle,
+        props.llmStatus,
       ),
-      // Wait until URL filters are initialized to avoid duplicate calls
       enabled: props.initialized() && articlesQuery.isSuccess && !articlesQuery.isFetching,
     }
   })
@@ -276,6 +278,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
                 from?: string
                 to?: string
                 search?: string
+                llmStatus?: LlmStatus
                 hasDuplicateStudyRecords?: true
                 hasStudyDecisionConflict?: true
               } = {}
@@ -283,6 +286,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
               if (from) body.from = from
               if (to) body.to = to
               if (search) body.search = search
+              if (props.llmStatus?.()) body.llmStatus = props.llmStatus?.()
               if (props.covidenceDuplicatesOnly()) body.hasDuplicateStudyRecords = true
               if (props.covidenceConflictsOnly()) body.hasStudyDecisionConflict = true
               return body

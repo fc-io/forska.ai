@@ -2,14 +2,11 @@ import {useNavigate} from '@tanstack/solid-router'
 import type {Setter} from 'solid-js'
 import {createEffect, createSignal, on, onMount} from 'solid-js'
 
-interface UseUrlFiltersOptions {
-  /** Route path for navigation (e.g., '/projects/$id/reviews-llm/') */
-  routePath: string
-  /** Route params for navigation (e.g., {id: 'xxx'}) */
-  routeParams: Record<string, string>
-}
+import type {LlmStatus} from '../services/olap/olapTypes.ts'
 
-interface UseUrlFiltersResult {
+type UseUrlFiltersOptions = {routePath: string; routeParams: Record<string, string>; includeLlmStatus?: boolean}
+
+type UseUrlFiltersResult = {
   fromDate: () => string
   setFromDate: Setter<string>
   toDate: () => string
@@ -28,8 +25,9 @@ interface UseUrlFiltersResult {
   setSearchTitle: Setter<string>
   appliedSearchTitle: () => string
   setAppliedSearchTitle: Setter<string>
+  llmStatus: () => LlmStatus | undefined
+  setLlmStatus: Setter<LlmStatus | undefined>
   onSubmitSearch: () => void
-  /** Whether initial URL params have been parsed and applied */
   initialized: () => boolean
 }
 
@@ -50,6 +48,9 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
   const [pageLimit, setPageLimit] = createSignal(100)
   const [searchTitle, setSearchTitle] = createSignal('')
   const [appliedSearchTitle, setAppliedSearchTitle] = createSignal('')
+  const [llmStatus, setLlmStatus] = createSignal<LlmStatus | undefined>(
+    options.includeLlmStatus ? 'complete' : undefined,
+  )
   const [initialized, setInitialized] = createSignal(false)
 
   // Parse URL params on mount
@@ -77,11 +78,19 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
       setAppliedSearchTitle(search)
     }
 
-    // Parse prompt filters (format: pf_<promptId>=value1,value2,...)
+    if (options.includeLlmStatus) {
+      const urlLlmStatus = urlParams.get('llmStatus')
+      setLlmStatus(
+        urlLlmStatus === 'both' || urlLlmStatus === 'partial' || urlLlmStatus === 'complete'
+          ? urlLlmStatus
+          : 'complete',
+      )
+    }
+
     const filters: Record<string, string[] | null> = {}
     urlParams.forEach((value, key) => {
       if (key.startsWith('pf_')) {
-        const promptId = key.slice(3) // Remove 'pf_' prefix
+        const promptId = key.slice(3)
         const values = value.split(',').map((v) => {
           return decodeURIComponent(v)
         })
@@ -107,6 +116,7 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
     const duplicatesOnly = covidenceDuplicatesOnly()
     const conflictsOnly = covidenceConflictsOnly()
     const filters = promptFilters()
+    const currentLlmStatus = llmStatus()
 
     if (from) params.from = from
     if (to) params.to = to
@@ -115,8 +125,8 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
     if (search) params.search = search
     if (duplicatesOnly) params.covidenceDuplicates = '1'
     if (conflictsOnly) params.covidenceConflicts = '1'
+    if (options.includeLlmStatus && currentLlmStatus) params.llmStatus = currentLlmStatus
 
-    // Add prompt filters with pf_ prefix
     for (const [promptId, values] of Object.entries(filters)) {
       if (values && values.length > 0) {
         params[`pf_${promptId}`] = values
@@ -141,6 +151,7 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
         currentPage,
         pageLimit,
         appliedSearchTitle,
+        llmStatus,
         promptFilters,
         initialized,
       ],
@@ -182,6 +193,8 @@ export const useUrlFilters = (options: UseUrlFiltersOptions): UseUrlFiltersResul
     setSearchTitle,
     appliedSearchTitle,
     setAppliedSearchTitle,
+    llmStatus,
+    setLlmStatus,
     onSubmitSearch,
     initialized,
   }

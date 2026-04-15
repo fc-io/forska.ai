@@ -20,7 +20,11 @@ const Reviews = () => {
     return params().id
   })
 
-  const filters = useUrlFilters({routePath: '/projects/$id/reviews-llm/', routeParams: {id: params().id}})
+  const filters = useUrlFilters({
+    routePath: '/projects/$id/reviews-llm/',
+    routeParams: {id: params().id},
+    includeLlmStatus: true,
+  })
 
   useArchivedProjectRedirect(projectAccessQuery)
 
@@ -132,6 +136,8 @@ const Reviews = () => {
           setSearchTitle={filters.setSearchTitle}
           appliedSearchTitle={filters.appliedSearchTitle()}
           onSubmitSearch={filters.onSubmitSearch}
+          llmStatus={filters.llmStatus()}
+          setLlmStatus={filters.setLlmStatus}
         />
 
         <ReviewsArticlesTableContainer
@@ -145,6 +151,7 @@ const Reviews = () => {
           fromDate={filters.fromDate}
           toDate={filters.toDate}
           searchTitle={filters.appliedSearchTitle}
+          llmStatus={filters.llmStatus}
           initialized={filters.initialized}
         />
       </div>
