@@ -156,6 +156,7 @@ const registerSharedMocks = (
     getPromptsImpl,
     answeredHumanRows = [],
     answeredHumanSummaryRows = [],
+    answeredHumanSummaryTableRows,
     existingJudgmentRows = [],
     projectDirtyToken = null,
   }: {
@@ -172,6 +173,7 @@ const registerSharedMocks = (
     }>
     answeredHumanRows?: Array<{articleId: string; promptId: string}>
     answeredHumanSummaryRows?: Array<{articleId: string}>
+    answeredHumanSummaryTableRows?: Array<{answer: string | null; articleId: string; projectId: string}>
     existingJudgmentRows?: Array<{articleId: string; promptId: string}>
     projectDirtyToken?: number | null
   } = {},
@@ -184,7 +186,19 @@ const registerSharedMocks = (
             return statement.includes('FROM app.project_mart_refresh_state pmrs')
               ? [{dirtyToken: projectDirtyToken} as T]
               : statement.includes('FROM app.judgment_human_summary')
-                ? (answeredHumanSummaryRows as T[])
+                ? ((answeredHumanSummaryTableRows
+                    ? answeredHumanSummaryTableRows
+                        .filter((row) => {
+                          return (
+                            statement.includes(`project_id = '${row.projectId}'`)
+                            && statement.includes(`'${row.articleId}'`)
+                            && row.answer?.trim()
+                          )
+                        })
+                        .map((row) => {
+                          return {articleId: row.articleId}
+                        })
+                    : answeredHumanSummaryRows) as T[])
                 : statement.includes('FROM app.judgment_human jh')
                   ? (answeredHumanRows as T[])
                   : statement.includes('FROM app.judgment j')
@@ -808,6 +822,99 @@ test('prioritizes every fetched prompt row for articles with answered human summ
       {articleId: 'article-summary', promptId: 'prompt-summary-2'},
       {articleId: 'article-rest', promptId: 'prompt-rest'},
       {articleId: 'article-prompt-only', promptId: 'prompt-prompt-only'},
+    ],
+  ])
+})
+
+test('summary prioritization ignores blank answers and other projects while preserving stable article order after filters', async () => {
+  const getPromptsCalls = {count: 0}
+  const addReadyPromptsCalls: Array<Array<{articleId: string; promptId: string}>> = []
+  const sqliteService: MockSqliteService = {
+    addReadyPrompts: async (...args) => {
+      addReadyPromptsCalls.push(args[1] as Array<{articleId: string; promptId: string}>)
+      return 5
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries.filter((entry) => {
+        return entry.promptId !== 'prompt-summary-local-judged'
+      })
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    getReadyCount: async () => {
+      return 0
+    },
+    getScanState: async () => {
+      return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    setScanState: async () => {
+      return undefined
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    answeredHumanSummaryTableRows: [
+      {answer: 'Has summary', articleId: 'article-summary-second', projectId: 'project-1'},
+      {answer: 'Also answered', articleId: 'article-summary-first', projectId: 'project-1'},
+      {answer: null, articleId: 'article-summary-null', projectId: 'project-1'},
+      {answer: '   ', articleId: 'article-summary-blank', projectId: 'project-1'},
+      {answer: 'Other project answered', articleId: 'article-summary-other-project', projectId: 'project-2'},
+      {answer: 'Filtered by app judgment', articleId: 'article-summary-already-judged', projectId: 'project-1'},
+      {answer: 'Filtered by local judgment', articleId: 'article-summary-local', projectId: 'project-1'},
+    ],
+    existingJudgmentRows: [{articleId: 'article-summary-already-judged', promptId: 'prompt-summary-already-judged'}],
+    getPromptsImpl: async () => {
+      return {
+        nextCursor: null,
+        promptEntries: [
+          {articleId: 'article-rest-first', promptId: 'prompt-rest-first'},
+          {articleId: 'article-summary-second', promptId: 'prompt-summary-second-a'},
+          {articleId: 'article-summary-null', promptId: 'prompt-summary-null'},
+          {articleId: 'article-summary-first', promptId: 'prompt-summary-first-a'},
+          {articleId: 'article-summary-already-judged', promptId: 'prompt-summary-already-judged'},
+          {articleId: 'article-summary-blank', promptId: 'prompt-summary-blank'},
+          {articleId: 'article-summary-second', promptId: 'prompt-summary-second-b'},
+          {articleId: 'article-summary-local', promptId: 'prompt-summary-local-judged'},
+          {articleId: 'article-summary-other-project', promptId: 'prompt-summary-other-project'},
+          {articleId: 'article-summary-first', promptId: 'prompt-summary-first-b'},
+          {articleId: 'article-rest-second', promptId: 'prompt-rest-second'},
+        ],
+      }
+    },
+    jobConfigRow: {...getJobConfigRow(), humanJudgmentMode: 'summary'},
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?summary-priority-edge-cases=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(getPromptsCalls.count).toBe(1)
+  expect(addReadyPromptsCalls).toEqual([
+    [
+      {articleId: 'article-summary-second', promptId: 'prompt-summary-second-a'},
+      {articleId: 'article-summary-first', promptId: 'prompt-summary-first-a'},
+      {articleId: 'article-summary-second', promptId: 'prompt-summary-second-b'},
+      {articleId: 'article-summary-first', promptId: 'prompt-summary-first-b'},
+      {articleId: 'article-rest-first', promptId: 'prompt-rest-first'},
+      {articleId: 'article-summary-null', promptId: 'prompt-summary-null'},
+      {articleId: 'article-summary-blank', promptId: 'prompt-summary-blank'},
+      {articleId: 'article-summary-other-project', promptId: 'prompt-summary-other-project'},
+      {articleId: 'article-rest-second', promptId: 'prompt-rest-second'},
     ],
   ])
 })

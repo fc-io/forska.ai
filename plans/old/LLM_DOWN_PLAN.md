@@ -30,12 +30,14 @@
 **Objective:** Replace the current boolean connection-error heuristic with a typed classification that can distinguish network failure, endpoint unavailable, endpoint misconfigured, circuit open, rate limit, and generic request/content errors.
 
 **Files:**
+
 - Modify: `src/server/cron/judgmentsJobs/connectionHealth.ts`
 - Modify: `src/agent/judge.ts`
 - Modify: `src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/processPromptWithLLM.ts`
 - Optional helper: `src/server/providers/adapters/providerAdapterUtils.ts`
 
 **Plan:**
+
 - Add a structured error type or classifier result, for example:
   - `network_unavailable`
   - `endpoint_unavailable`
@@ -54,11 +56,13 @@
 **Objective:** Track whether a provider connection is healthy, unavailable, misconfigured, cooling down, or probing, keyed by provider connection and effective base URL.
 
 **Files:**
+
 - Create: `src/server/cron/judgmentsJobs/judgmentEndpointAvailability.ts`
 - Modify: `src/server/cron/judgmentsJobs/connectionHealth.ts`
 - Modify: `src/server/cron/judgmentsJobs/judgmentsRequestRuntime.ts`
 
 **Plan:**
+
 - Introduce connection-scoped availability state keyed by:
   - `providerConnectionId`
   - resolved/effective base URL
@@ -79,11 +83,13 @@
 **Objective:** Use the existing provider registry health path as the authoritative `can this endpoint serve model traffic?` probe.
 
 **Files:**
+
 - Modify: `src/server/providers/providerHealthService.ts`
 - Modify: `src/server/cron/judgmentsJobs/judgmentEndpointAvailability.ts`
 - Modify: `src/server/providers/adapters/createOpenAICompatibleAdapter.ts` only if returned messages need tightening
 
 **Plan:**
+
 - Reuse `testProviderConnectionHealth(...)` and adapter `testConnection(...)` for probe execution.
 - For OpenAI-compatible providers, the probe should remain `models.list()`-based unless a transport-specific endpoint check is more reliable.
 - Normalize probe failures into the new endpoint-availability message shape.
@@ -94,11 +100,13 @@
 **Objective:** Prevent unnecessary claim/send/abort churn at the scheduler level.
 
 **Files:**
+
 - Modify: `src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.ts`
 - Modify: `src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts` if claim flow needs an early availability check
 - Modify: `src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/processPromptWithLLM.ts`
 
 **Plan:**
+
 - Before calling `getAndUpdateReadyPrompts(...)` for a provider connection, consult availability state:
   - `healthy` → proceed
   - `cooldown` / `misconfigured` → skip claim
@@ -116,11 +124,13 @@
 **Objective:** Replace opaque `Aborting: 404 NOT_FOUND` lines with messages that explain the failure mode and pause behavior.
 
 **Files:**
+
 - Modify: `src/agent/judge.ts`
 - Modify: `src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/processPromptWithLLM.ts`
 - Modify: diagnostics/status payloads that already expose provider/job error state, if needed
 
 **Plan:**
+
 - Replace generic messages like:
   - `Aborting: 404 NOT_FOUND`
   - `Connection error - marking prompts for retry (...)`
@@ -140,12 +150,14 @@
 **Objective:** Lock in the behavior for `wrong server on the configured LLM port`.
 
 **Files:**
+
 - Create: `src/server/cron/judgmentsJobs/connectionHealth.test.ts`
 - Modify: `src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts`
 - Modify: `src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts`
 - Modify: `src/server/providers/adapters/createOpenAICompatibleAdapter.test.ts`
 
 **Required test cases:**
+
 - `404 NOT_FOUND` from OpenAI-compatible `/v1/chat/completions` is classified as endpoint unavailable or misconfigured.
 - Once classified unavailable, dispatch skips new claims for that provider connection.
 - Only one health probe runs after cooldown expiry.
@@ -158,10 +170,12 @@
 **Objective:** Make it easy to see from job/provider diagnostics why dispatch is paused and when it will retry.
 
 **Files:**
+
 - Modify: existing judgments job diagnostics/status route(s) that already expose request stats and provider state
 - Modify: provider admin/status payloads that already include `last_error` / runtime state
 
 **Plan:**
+
 - Expose:
   - availability status
   - last failure kind
