@@ -17,16 +17,9 @@ const getModulePath = (relativePath: string) => {
 }
 
 const judgmentsJobsAddToQueueModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.ts')
-const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
-const inferenceRuntimeConfigModulePath = getModulePath('./src/server/utils/getInferenceRuntimeConfig.ts')
-const judgmentJobSqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
-const judgmentsJobsCronGetPromptsModulePath = getModulePath(
-  './src/server/cron/judgmentsJobs/judgmentsJobsCronGetPrompts.ts',
+const judgmentsJobsAddToQueueDependenciesModulePath = getModulePath(
+  './src/server/cron/judgmentsJobs/judgmentsJobsAddToQueueDependencies.ts',
 )
-const judgmentsJobsGetRunningJobsModulePath = getModulePath(
-  './src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts',
-)
-const getJudgmentsCapacityModulePath = getModulePath('./src/server/cron/judgmentsJobs/getJudgmentsCapacity.ts')
 type JudgmentsJobsAddToQueueModule = typeof import('./judgmentsJobsAddToQueue.ts')
 
 let closeDatabase: (() => Promise<void>) | null = null
@@ -200,7 +193,9 @@ const registerSharedMocks = (
     runningJobs?: MockRunningJob[]
   } = {},
 ) => {
-  void mock.module(appDatabaseServiceModulePath, () => {
+  void mock.module(judgmentsJobsAddToQueueDependenciesModulePath, () => {
+    const runtimeConfig = inferenceConfig
+
     return {
       getAppDatabaseService: () => {
         return {
@@ -234,28 +229,14 @@ const registerSharedMocks = (
           },
         }
       },
-    }
-  })
-  void mock.module(inferenceRuntimeConfigModulePath, () => {
-    const inferenceRuntimeConfig = inferenceConfig
-
-    return {
-      getInferenceRuntimeConfig: () => {
-        return inferenceRuntimeConfig
-      },
-      inferenceRuntimeConfig,
-    }
-  })
-  void mock.module(judgmentJobSqliteServiceModulePath, () => {
-    return {
-      JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
       getJudgmentJobSqliteService: () => {
         return sqliteService
       },
-    }
-  })
-  void mock.module(judgmentsJobsCronGetPromptsModulePath, () => {
-    return {
+      getJudgmentsCapacity: () => {
+        return {addToQueueMaxBatchSize: 1, maxInflight: 1, readyTargetPerJob: 1}
+      },
+      inferenceRuntimeConfig: runtimeConfig,
+      JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
       judgmentsJobsCronGetPrompts: async (
         projectId: string,
         jobId: string,
@@ -268,19 +249,8 @@ const registerSharedMocks = (
           ? getPromptsImpl(projectId, jobId, numberOfPromptsToGet, cursor, preferRawFallback)
           : {nextCursor: null, promptEntries: []}
       },
-    }
-  })
-  void mock.module(judgmentsJobsGetRunningJobsModulePath, () => {
-    return {
       judgmentsJobsGetRunningJobs: async () => {
         return runningJobs
-      },
-    }
-  })
-  void mock.module(getJudgmentsCapacityModulePath, () => {
-    return {
-      getJudgmentsCapacity: () => {
-        return {addToQueueMaxBatchSize: 1, maxInflight: 1, readyTargetPerJob: 1}
       },
     }
   })
@@ -835,7 +805,7 @@ test('claims promoted human pairs first when ready deficit is smaller than the f
     VALUES ('${jobId}', '${projectId}', 'running')
   `)
 
-  void mock.module(appDatabaseServiceModulePath, () => {
+  void mock.module(judgmentsJobsAddToQueueDependenciesModulePath, () => {
     return {
       getAppDatabaseService: () => {
         return {
@@ -849,19 +819,18 @@ test('claims promoted human pairs first when ready deficit is smaller than the f
           },
         }
       },
-    }
-  })
-
-  void mock.module(judgmentJobSqliteServiceModulePath, () => {
-    return {
       JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
       getJudgmentJobSqliteService: () => {
         return sqliteService
       },
-    }
-  })
-  void mock.module(judgmentsJobsCronGetPromptsModulePath, () => {
-    return {
+      getJudgmentsCapacity: () => {
+        return {addToQueueMaxBatchSize: 1, maxInflight: 1, readyTargetPerJob: 1}
+      },
+      inferenceRuntimeConfig: {
+        codexMaxInflight: 1,
+        judgmentsAddToQueueMaxBatchSize: 1,
+        judgmentsReadyTargetMultiplier: 1,
+      },
       judgmentsJobsCronGetPrompts: async () => {
         return {
           nextCursor: null,
@@ -872,19 +841,8 @@ test('claims promoted human pairs first when ready deficit is smaller than the f
           ],
         }
       },
-    }
-  })
-  void mock.module(judgmentsJobsGetRunningJobsModulePath, () => {
-    return {
       judgmentsJobsGetRunningJobs: async () => {
         return [{id: jobId, modelProvider: 'openai', projectId}]
-      },
-    }
-  })
-  void mock.module(getJudgmentsCapacityModulePath, () => {
-    return {
-      getJudgmentsCapacity: () => {
-        return {addToQueueMaxBatchSize: 1, maxInflight: 1, readyTargetPerJob: 1}
       },
     }
   })
@@ -956,7 +914,7 @@ test('top-up inserts later summary-backed rows ahead of new window peers without
   )
   await sqliteService.releaseOwnedLease(jobId)
 
-  void mock.module(appDatabaseServiceModulePath, () => {
+  void mock.module(judgmentsJobsAddToQueueDependenciesModulePath, () => {
     return {
       getAppDatabaseService: () => {
         return {
@@ -970,19 +928,18 @@ test('top-up inserts later summary-backed rows ahead of new window peers without
           },
         }
       },
-    }
-  })
-
-  void mock.module(judgmentJobSqliteServiceModulePath, () => {
-    return {
       JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
       getJudgmentJobSqliteService: () => {
         return sqliteService
       },
-    }
-  })
-  void mock.module(judgmentsJobsCronGetPromptsModulePath, () => {
-    return {
+      getJudgmentsCapacity: () => {
+        return {addToQueueMaxBatchSize: 1, maxInflight: 2, readyTargetPerJob: 2}
+      },
+      inferenceRuntimeConfig: {
+        codexMaxInflight: 1,
+        judgmentsAddToQueueMaxBatchSize: 1,
+        judgmentsReadyTargetMultiplier: 1,
+      },
       judgmentsJobsCronGetPrompts: async () => {
         return {
           nextCursor: null,
@@ -993,19 +950,8 @@ test('top-up inserts later summary-backed rows ahead of new window peers without
           ],
         }
       },
-    }
-  })
-  void mock.module(judgmentsJobsGetRunningJobsModulePath, () => {
-    return {
       judgmentsJobsGetRunningJobs: async () => {
         return [{id: jobId, modelProvider: 'openai', projectId}]
-      },
-    }
-  })
-  void mock.module(getJudgmentsCapacityModulePath, () => {
-    return {
-      getJudgmentsCapacity: () => {
-        return {addToQueueMaxBatchSize: 1, maxInflight: 2, readyTargetPerJob: 2}
       },
     }
   })
