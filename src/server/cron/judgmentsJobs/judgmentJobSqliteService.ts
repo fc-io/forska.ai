@@ -73,7 +73,7 @@ export type JudgmentJobSqliteInfo = {
   useTitle: boolean
 }
 
-export type JobCursor = {lastDate: Date; lastArticleId: string; priorityBucket?: number}
+export type JobCursor = {lastDate: Date; lastArticleId: string; priorityBucket: number}
 
 type QueueCountRow = {count: number; status: string}
 

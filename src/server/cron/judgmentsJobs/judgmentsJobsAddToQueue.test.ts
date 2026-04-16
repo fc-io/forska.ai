@@ -79,8 +79,10 @@ afterAll(async () => {
   rmSync(tempJobDir, {force: true, recursive: true})
 })
 
+type MockCursor = {lastArticleId: string; lastDate: Date; priorityBucket: number}
+
 type MockScanState = {
-  cursor: null
+  cursor: MockCursor | null
   exhaustedAt: Date | null
   lastProjectRefreshAckSeq: number | null
   scanEpoch: number
@@ -182,12 +184,9 @@ const registerSharedMocks = (
       projectId: string,
       jobId: string,
       numberOfPromptsToGet: number,
-      cursor?: {lastArticleId: string; lastDate: Date} | null,
+      cursor?: MockCursor | null,
       preferRawFallback?: boolean,
-    ) => Promise<{
-      nextCursor: {lastArticleId: string; lastDate: Date} | null
-      promptEntries: Array<{articleId: string; promptId: string}>
-    }>
+    ) => Promise<{nextCursor: MockCursor | null; promptEntries: Array<{articleId: string; promptId: string}>}>
     answeredHumanRows?: Array<{articleId: string; promptId: string}>
     answeredHumanSummaryRows?: Array<{articleId: string}>
     answeredHumanSummaryTableRows?: Array<{answer: string | null; articleId: string; projectId: string}>
@@ -261,7 +260,7 @@ const registerSharedMocks = (
         projectId: string,
         jobId: string,
         numberOfPromptsToGet: number,
-        cursor?: {lastArticleId: string; lastDate: Date} | null,
+        cursor?: MockCursor | null,
         preferRawFallback?: boolean,
       ) => {
         getPromptsCalls.count += 1
@@ -542,6 +541,74 @@ test('wraps exhausted SQLite jobs once visibility catches up and increments scan
   expect(setScanStateCalls[1]?.state.wrapVisibilityAckSeq).toBe(12)
   expect(setScanStateCalls[1]?.state.cursor).toBeNull()
   expect(setScanStateCalls[1]?.state.exhaustedAt).toBeInstanceOf(Date)
+})
+
+test('round-trips priority-aware SQLite cursors through prompt fetching and scan state', async () => {
+  const getPromptsCalls = {count: 0}
+  const cursorValues: Array<MockCursor | null | undefined> = []
+  const setScanStateCalls: Array<{jobId: string; state: Record<string, unknown>}> = []
+  const savedCursorDate = new Date('2025-03-01T00:00:00.000Z')
+  const nextCursorDate = new Date('2025-02-28T00:00:00.000Z')
+  const savedCursor = {lastArticleId: 'saved-article', lastDate: savedCursorDate, priorityBucket: 1}
+  const nextCursor = {lastArticleId: 'next-article', lastDate: nextCursorDate, priorityBucket: 0}
+  let readyCountCalls = 0
+  const sqliteService: MockSqliteService = {
+    addReadyPrompts: async () => {
+      return 0
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    getReadyCount: async () => {
+      readyCountCalls += 1
+      return readyCountCalls === 1 ? 0 : 1
+    },
+    getScanState: async () => {
+      return {
+        cursor: savedCursor,
+        exhaustedAt: null,
+        lastProjectRefreshAckSeq: 12,
+        scanEpoch: 3,
+        wrapVisibilityAckSeq: 12,
+      }
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    setScanState: async (jobId: string, state: Record<string, unknown>) => {
+      setScanStateCalls.push({jobId, state})
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    getPromptsImpl: async (_projectId, _jobId, _numberOfPromptsToGet, cursor) => {
+      cursorValues.push(cursor)
+      return {nextCursor, promptEntries: []}
+    },
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?priorityCursor=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(cursorValues).toEqual([savedCursor])
+  expect(setScanStateCalls).toEqual([
+    {jobId: 'job-1', state: {cursor: nextCursor, exhaustedAt: null, wrapVisibilityAckSeq: null}},
+  ])
 })
 
 test('initializes missing SQLite job state before topping up the queue', async () => {
