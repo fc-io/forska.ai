@@ -98,19 +98,14 @@ type ModelListEntry = {
 
 type ModelListResult = {data: ModelListEntry[]; nextCursor: string | null}
 
-const getLastAgentMessageText = (threadReadResult: unknown, turnId: string): string => {
+export const getCodexTurnAgentMessageText = (threadReadResult: unknown, turnId: string): string => {
   const thread = (threadReadResult as {thread?: unknown} | null | undefined)?.thread
   const turns = typeof thread === 'object' && thread ? (thread as {turns?: unknown}).turns : null
   const arr = Array.isArray(turns) ? (turns as unknown[]) : []
 
-  const pickTurn = (): unknown => {
-    const byId = arr.find((t) => {
-      return typeof t === 'object' && t && 'id' in t && (t as {id?: unknown}).id === turnId
-    })
-    return byId ?? arr[arr.length - 1] ?? null
-  }
-
-  const turn = pickTurn() as {items?: unknown} | null
+  const turn = arr.find((value) => {
+    return typeof value === 'object' && value && 'id' in value && (value as {id?: unknown}).id === turnId
+  }) as {items?: unknown} | undefined
   const items = Array.isArray(turn?.items) ? (turn?.items as unknown[]) : []
   const agentItems = items.filter((i) => {
     return typeof i === 'object' && i && (i as {type?: unknown}).type === 'agentMessage'
@@ -424,7 +419,6 @@ export const getCodexAppServerClient = (): CodexAppServerClient => {
         reject(new Error('codex app-server: turn timeout'))
       }, params.timeoutMs ?? CODEx_DEFAULT_TIMEOUT_MS)
 
-      let lastAgentText = ''
       let turnUsage: CodexThreadTokenUsage | null = null
 
       const handler: Listener = (msg) => {
@@ -434,12 +428,6 @@ export const getCodexAppServerClient = (): CodexAppServerClient => {
           return undefined
         }
 
-        if (isNotification(msg) && msg.method === 'item/completed') {
-          const item = (msg.params as {item?: {type?: unknown; text?: unknown}} | undefined)?.item
-          const isAgentMessage = item && item.type === 'agentMessage' && typeof item.text === 'string'
-          if (isAgentMessage) lastAgentText = String(item.text)
-        }
-
         if (isNotification(msg) && msg.method === 'turn/completed') {
           const completedTurnId = (msg.params as {turn?: {id?: unknown; status?: unknown; error?: unknown}} | undefined)
             ?.turn?.id
@@ -447,21 +435,24 @@ export const getCodexAppServerClient = (): CodexAppServerClient => {
           if (completedTurnId !== turnId) return
           clearTimeout(timeout)
           listeners.delete(handler)
-          return status === 'failed'
-            ? reject(new Error('codex app-server: turn failed'))
-            : resolve({text: lastAgentText, usage: turnUsage})
+
+          if (status === 'failed') {
+            reject(new Error('codex app-server: turn failed'))
+            return undefined
+          }
+
+          void request('thread/read', {threadId, includeTurns: true}, 5_000)
+            .then((threadRead) => {
+              resolve({text: getCodexTurnAgentMessageText(threadRead, turnId), usage: turnUsage})
+            })
+            .catch(reject)
         }
       }
 
       listeners.add(handler)
     })
 
-    const needsFallback = turnResult.text.trim().length === 0
-    if (!needsFallback) return turnResult
-
-    const threadRead = await request('thread/read', {threadId, includeTurns: true})
-    const fallbackText = getLastAgentMessageText(threadRead, turnId)
-    return {...turnResult, text: fallbackText}
+    return turnResult
   }
 
   singleton = {modelList, runJsonTurn}

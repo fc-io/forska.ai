@@ -89,6 +89,15 @@ bun run start:secondary:server
 bun run start:secondary:app-server
 ```
 
+Desktop spike scaffold:
+
+```bash
+bun run desktop:dev
+bun run desktop:build
+```
+
+These desktop commands are additive. Keep using `bun run dev:server` and `bun run dev:app` for the normal browser workflow.
+
 Open the local URL printed by Vite or the built app server URL for the profile you started.
 
 Do not create or edit `.env` files for normal local dev. Configure providers/models in the UI. For one-off machine-local overrides, pass shell env inline with the command.

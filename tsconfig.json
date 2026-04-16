@@ -1,5 +1,5 @@
 {
-  "include": ["src", "scripts", "eslint.config.ts", "vite.config.ts"],
+  "include": ["src", "scripts", "electrobun.config.ts", "eslint.config.ts", "vite.config.ts"],
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {"~/*": ["./src/*"]},

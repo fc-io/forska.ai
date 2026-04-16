@@ -1,4 +1,5 @@
 import {runtimeProfiles} from '../../utils/runtimeProfile.ts'
+import {getDesktopApiOrigin} from './getDesktopApiOrigin.ts'
 
 const localHostnames = new Set(['127.0.0.1', '::1', '[::1]', 'localhost'])
 
@@ -30,8 +31,14 @@ const getCurrentLocationOrigin = () => {
   return typeof window === 'undefined' ? null : window.location.origin
 }
 
-export const getApiRequestUrl = (path: string, locationOrigin = getCurrentLocationOrigin()) => {
+export const getApiRequestUrl = (
+  path: string,
+  locationOrigin = getCurrentLocationOrigin(),
+  desktopApiOrigin = getDesktopApiOrigin(),
+) => {
   const directLocalApiOrigin = getDirectLocalApiOrigin(locationOrigin)
+  const resolvedDesktopApiOrigin = getTrimmedValue(desktopApiOrigin)?.replace(/\/+$/, '') ?? null
+  const apiOrigin = directLocalApiOrigin ?? resolvedDesktopApiOrigin
 
-  return directLocalApiOrigin ? `${directLocalApiOrigin}${path}` : path
+  return apiOrigin ? `${apiOrigin}${path}` : path
 }

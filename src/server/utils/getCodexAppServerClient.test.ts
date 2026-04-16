@@ -1,6 +1,6 @@
 import {expect, test} from 'bun:test'
 
-import {getCodexThreadTokenUsageUpdate} from './getCodexAppServerClient.ts'
+import {getCodexThreadTokenUsageUpdate, getCodexTurnAgentMessageText} from './getCodexAppServerClient.ts'
 
 test('getCodexThreadTokenUsageUpdate parses app-server usage notifications', () => {
   const result = getCodexThreadTokenUsageUpdate({
@@ -34,4 +34,35 @@ test('getCodexThreadTokenUsageUpdate ignores unrelated notifications', () => {
   })
 
   expect(result).toBeNull()
+})
+
+test('getCodexTurnAgentMessageText returns the agent message for the requested turn', () => {
+  const result = getCodexTurnAgentMessageText(
+    {
+      thread: {
+        turns: [
+          {id: 'turn-1', items: [{type: 'agentMessage', text: 'first turn answer'}]},
+          {
+            id: 'turn-2',
+            items: [
+              {type: 'agentMessage', text: 'stale answer'},
+              {type: 'agentMessage', text: 'second turn answer'},
+            ],
+          },
+        ],
+      },
+    },
+    'turn-2',
+  )
+
+  expect(result).toBe('second turn answer')
+})
+
+test('getCodexTurnAgentMessageText does not fall back to another turn', () => {
+  const result = getCodexTurnAgentMessageText(
+    {thread: {turns: [{id: 'turn-1', items: [{type: 'agentMessage', text: 'other turn answer'}]}]}},
+    'turn-2',
+  )
+
+  expect(result).toBe('')
 })

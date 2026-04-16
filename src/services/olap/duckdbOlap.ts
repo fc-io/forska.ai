@@ -29,12 +29,12 @@ import type {
   HumanAnswersByPrompt,
   LlmStatus,
   OlapJudgmentRow,
-  PaginationCursor,
   PromptQueueEntry,
   SelectArticleIdsArgs,
   UnassessedArticleRow,
   UnassessedArticlesParams,
   UnassessedCountParams,
+  UnassessedPairsCursor,
   UnassessedPairsParams,
   UnassessedPairsResult,
 } from './olapTypes.ts'
@@ -86,6 +86,7 @@ type UnassessedCandidateRow = {
   articleCreatedAt: Date | null
   articleUpdatedAt: Date | null
   llmJudgedPromptIds: string[]
+  priorityBucket: number
 }
 
 const rawFallbackQueueLogger = createRateLimitedLogger({windowMs: 30_000})
@@ -210,8 +211,24 @@ const getDuckdbJsonValue = (value: unknown): unknown => {
   }
 }
 
-const getPaginationCursorSummary = (cursor: PaginationCursor | null) => {
-  return cursor ? {lastArticleId: cursor.lastArticleId.slice(0, 8), lastDate: cursor.lastDate.toISOString()} : null
+const getUnassessedPairsCursorPriorityBucket = (cursor: UnassessedPairsCursor | null) => {
+  return Number.isFinite(cursor?.priorityBucket) ? Math.trunc(cursor.priorityBucket) : 0
+}
+
+const getUnassessedPairsCursor = (cursor: UnassessedPairsCursor | null): UnassessedPairsCursor | null => {
+  return cursor ? {...cursor, priorityBucket: getUnassessedPairsCursorPriorityBucket(cursor)} : null
+}
+
+const getUnassessedPairsCursorSummary = (cursor: UnassessedPairsCursor | null) => {
+  const normalizedCursor = getUnassessedPairsCursor(cursor)
+
+  return normalizedCursor
+    ? {
+        lastArticleId: normalizedCursor.lastArticleId.slice(0, 8),
+        lastDate: normalizedCursor.lastDate.toISOString(),
+        priorityBucket: normalizedCursor.priorityBucket,
+      }
+    : null
 }
 
 const getDuckdbArticleSourceMetadata = (sourceMetadata: unknown) => {
@@ -886,24 +903,29 @@ const getUnassessedRowsFromServing = async (params: {
 
 const getUnassessedCandidateRowsFromServing = async (params: {
   scope: ProjectOlapScope
-  cursor: PaginationCursor | null
+  cursor: UnassessedPairsCursor | null
   limit: number
 }) => {
   const whereParts = getDuckdbServingReviewWhereParts({...params, requireIncompleteLlm: true})
-  const cursorClause = params.cursor
-    ? `(
-        COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') < ${getDuckdbTimestampLiteral(params.cursor.lastDate)}
-        OR (
-          COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') = ${getDuckdbTimestampLiteral(params.cursor.lastDate)}
-          AND s.article_id < ${getDuckdbSqlString(params.cursor.lastArticleId)}
-        )
-      )`
+  const activityExpression =
+    "COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')"
+  const priorityBucketExpression = getDuckdbUnassessedPairsPriorityBucketExpression(params.scope)
+  const priorityJoinClause = getDuckdbUnassessedPairsPriorityJoinClause(params.scope, 's.article_id')
+  const normalizedCursor = getUnassessedPairsCursor(params.cursor)
+  const cursorClause = normalizedCursor
+    ? getDuckdbUnassessedPairsCursorWhereClause({
+        activityExpression,
+        articleIdExpression: 's.article_id',
+        cursor: normalizedCursor,
+        priorityBucketExpression,
+      })
     : null
   const rows = await runDuckdbJsonQuery<{
     articleCreatedAt: unknown
     articleId: string
     articleUpdatedAt: unknown
     llmJudgedPromptIds: unknown
+    priorityBucket: number
   }>(`
     WITH active_generation AS (
       SELECT project_id AS projectId, active_generation AS generation
@@ -914,17 +936,23 @@ const getUnassessedCandidateRowsFromServing = async (params: {
       s.article_id AS articleId,
       s.article_created_at AS articleCreatedAt,
       s.article_updated_at AS articleUpdatedAt,
-      TO_JSON(s.llm_judged_prompt_ids) AS llmJudgedPromptIds
+      TO_JSON(s.llm_judged_prompt_ids) AS llmJudgedPromptIds,
+      ${priorityBucketExpression} AS priorityBucket
     FROM mart.review_article_serving s
     INNER JOIN active_generation active
       ON active.projectId = s.project_id
      AND active.generation = s.generation
+    ${priorityJoinClause}
     WHERE ${[...whereParts, cursorClause]
       .filter((part): part is string => {
         return part !== null
       })
       .join(' AND ')}
-    ORDER BY COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') DESC, s.article_id DESC
+    ORDER BY ${getDuckdbUnassessedPairsOrderByClause({
+      activityExpression,
+      articleIdExpression: 's.article_id',
+      priorityBucketExpression,
+    })}
     LIMIT ${params.limit + 1}
   `)
 
@@ -936,6 +964,7 @@ const getUnassessedCandidateRowsFromServing = async (params: {
         articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
         articleUpdatedAt: getDuckdbDateValue(row.articleUpdatedAt),
         llmJudgedPromptIds: getDuckdbStringArrayValue(row.llmJudgedPromptIds),
+        priorityBucket: Number(row.priorityBucket ?? 0),
       }
     }),
   }
@@ -1450,16 +1479,55 @@ const getDuckdbActivityTimestampExpression = (rowAlias: string) => {
   return `COALESCE(${rowAlias}.article_updated_at, ${rowAlias}.article_created_at, ${rowAlias}.created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')`
 }
 
-const getDuckdbActivityCursorWhereClause = (rowAlias: string, cursor: PaginationCursor) => {
-  const timestampExpression = getDuckdbActivityTimestampExpression(rowAlias)
+const getDuckdbUnassessedPairsPriorityJoinClause = (scope: ProjectOlapScope, articleIdExpression: string) => {
+  return scope.humanJudgmentMode === 'summary'
+    ? `
+      LEFT JOIN (
+        SELECT DISTINCT article_id
+        FROM app.judgment_human_summary
+        WHERE project_id = ${getDuckdbSqlString(scope.projectId)}
+          AND NULLIF(TRIM(COALESCE(answer, '')), '') IS NOT NULL
+      ) human_summary_priority
+        ON human_summary_priority.article_id = ${articleIdExpression}
+    `
+    : ''
+}
+
+const getDuckdbUnassessedPairsPriorityBucketExpression = (scope: ProjectOlapScope) => {
+  return scope.humanJudgmentMode === 'summary'
+    ? 'CASE WHEN human_summary_priority.article_id IS NULL THEN 0 ELSE 1 END'
+    : '0'
+}
+
+const getDuckdbUnassessedPairsCursorWhereClause = (params: {
+  activityExpression: string
+  articleIdExpression: string
+  cursor: UnassessedPairsCursor
+  priorityBucketExpression: string
+}) => {
+  const cursor = getUnassessedPairsCursor(params.cursor)
+  const priorityBucket = cursor?.priorityBucket ?? 0
 
   return `(
-    ${timestampExpression} < ${getDuckdbTimestampLiteral(cursor.lastDate)}
+    ${params.priorityBucketExpression} < ${priorityBucket}
     OR (
-      ${timestampExpression} = ${getDuckdbTimestampLiteral(cursor.lastDate)}
-      AND ${rowAlias}.id < ${getDuckdbSqlString(cursor.lastArticleId)}
+      ${params.priorityBucketExpression} = ${priorityBucket}
+      AND ${params.activityExpression} < ${getDuckdbTimestampLiteral(params.cursor.lastDate)}
+    )
+    OR (
+      ${params.priorityBucketExpression} = ${priorityBucket}
+      AND ${params.activityExpression} = ${getDuckdbTimestampLiteral(params.cursor.lastDate)}
+      AND ${params.articleIdExpression} < ${getDuckdbSqlString(params.cursor.lastArticleId)}
     )
   )`
+}
+
+const getDuckdbUnassessedPairsOrderByClause = (params: {
+  activityExpression: string
+  articleIdExpression: string
+  priorityBucketExpression: string
+}) => {
+  return `${params.priorityBucketExpression} DESC, ${params.activityExpression} DESC, ${params.articleIdExpression} DESC`
 }
 
 const getCreatedSortMs = (article: ScopedArticleRow) => {
@@ -1854,14 +1922,25 @@ const rawUnassessedArticleWindowSize = 1000
 
 const getScopedActivityArticleWindow = async (params: {
   scope: ProjectOlapScope
-  cursor: PaginationCursor | null
+  cursor: UnassessedPairsCursor | null
   limit: number
 }) => {
   const normalizedLimit = Math.max(1, Math.trunc(params.limit))
   const whereParts = [
     getDuckdbScopeClause({articleAlias: 'a', routeIds: params.scope.routeIds, projectId: params.scope.projectId}),
   ]
-  const cursorClause = params.cursor ? getDuckdbActivityCursorWhereClause('a', params.cursor) : null
+  const activityExpression = getDuckdbActivityTimestampExpression('a')
+  const priorityBucketExpression = getDuckdbUnassessedPairsPriorityBucketExpression(params.scope)
+  const priorityJoinClause = getDuckdbUnassessedPairsPriorityJoinClause(params.scope, 'a.id')
+  const normalizedCursor = getUnassessedPairsCursor(params.cursor)
+  const cursorClause = normalizedCursor
+    ? getDuckdbUnassessedPairsCursorWhereClause({
+        activityExpression,
+        articleIdExpression: 'a.id',
+        cursor: normalizedCursor,
+        priorityBucketExpression,
+      })
+    : null
 
   if (cursorClause) {
     whereParts.push(cursorClause)
@@ -1872,15 +1951,22 @@ const getScopedActivityArticleWindow = async (params: {
     createdAt: unknown
     articleCreatedAt: unknown
     articleUpdatedAt: unknown
+    priorityBucket: number
   }>(`
     SELECT
       a.id AS id,
       a.created_at AS createdAt,
       a.article_created_at AS articleCreatedAt,
-      a.article_updated_at AS articleUpdatedAt
+      a.article_updated_at AS articleUpdatedAt,
+      ${priorityBucketExpression} AS priorityBucket
     FROM app.article a
+    ${priorityJoinClause}
     WHERE ${whereParts.join(' AND ')}
-    ORDER BY ${getDuckdbActivityTimestampExpression('a')} DESC, a.id DESC
+    ORDER BY ${getDuckdbUnassessedPairsOrderByClause({
+      activityExpression,
+      articleIdExpression: 'a.id',
+      priorityBucketExpression,
+    })}
     LIMIT ${normalizedLimit + 1}
   `)
   const hasMore = rows.length > normalizedLimit
@@ -1893,6 +1979,7 @@ const getScopedActivityArticleWindow = async (params: {
         createdAt: getDuckdbDateValue(row.createdAt) ?? new Date(0),
         articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
         articleUpdatedAt: getDuckdbDateValue(row.articleUpdatedAt),
+        priorityBucket: Number(row.priorityBucket ?? 0),
       }
     }),
   }
@@ -1994,7 +2081,7 @@ const getLlmJudgedPromptRows = async (
 
 const getRawUnassessedCandidateRows = async (params: {
   jobId: string
-  cursor: PaginationCursor | null
+  cursor: UnassessedPairsCursor | null
   limit: number
   scope: ProjectOlapScope
 }): Promise<{hasMore: boolean; rows: UnassessedCandidateRow[]}> => {
@@ -2003,7 +2090,7 @@ const getRawUnassessedCandidateRows = async (params: {
 
   rawFallbackQueueLogger.log(`getPrompts:raw-fallback:${params.jobId}:start`, '[getPrompts] raw fallback scan start', {
     candidateLimit: normalizedLimit,
-    cursor: getPaginationCursorSummary(params.cursor),
+    cursor: getUnassessedPairsCursorSummary(params.cursor),
     jobId: params.jobId,
     projectId: params.scope.projectId,
   })
@@ -2016,7 +2103,7 @@ const getRawUnassessedCandidateRows = async (params: {
     windowsScanned,
   }: {
     collectedRows: UnassessedCandidateRow[]
-    cursor: PaginationCursor | null
+    cursor: UnassessedPairsCursor | null
     scannedArticleCount: number
     totalJudgedPromptRows: number
     windowsScanned: number
@@ -2050,6 +2137,7 @@ const getRawUnassessedCandidateRows = async (params: {
                 articleCreatedAt: article.articleCreatedAt,
                 articleUpdatedAt: article.articleUpdatedAt,
                 llmJudgedPromptIds: getJudgedPromptIds(articleJudgments, params.scope.promptOrderMap),
+                priorityBucket: article.priorityBucket,
               },
             ]
           : []
@@ -2060,7 +2148,11 @@ const getRawUnassessedCandidateRows = async (params: {
     const nextWindowsScanned = windowsScanned + 1
     const lastWindowArticle = articleWindow.rows[articleWindow.rows.length - 1] ?? null
     const nextCursor = lastWindowArticle
-      ? {lastArticleId: lastWindowArticle.id, lastDate: getActivityDate(lastWindowArticle)}
+      ? {
+          lastArticleId: lastWindowArticle.id,
+          lastDate: getActivityDate(lastWindowArticle),
+          priorityBucket: lastWindowArticle.priorityBucket,
+        }
       : null
 
     if (articleWindowMs > 1_000 || judgmentQueryMs > 1_000) {
@@ -2071,7 +2163,7 @@ const getRawUnassessedCandidateRows = async (params: {
           articleWindowMs,
           articlesScannedInWindow: articleWindow.rows.length,
           collectedCandidates: nextCollectedRows.length,
-          cursor: getPaginationCursorSummary(cursor),
+          cursor: getUnassessedPairsCursorSummary(cursor),
           hasMore: articleWindow.hasMore,
           jobId: params.jobId,
           judgedPromptRowsInWindow: llmJudgedPromptRows.length,
@@ -2090,7 +2182,7 @@ const getRawUnassessedCandidateRows = async (params: {
           candidateLimit: normalizedLimit,
           candidateRows: nextCollectedRows.length,
           durationMs: Date.now() - startedAtMs,
-          finalCursor: getPaginationCursorSummary(nextCursor),
+          finalCursor: getUnassessedPairsCursorSummary(nextCursor),
           hasMore: articleWindow.hasMore,
           jobId: params.jobId,
           projectId: params.scope.projectId,
@@ -2946,10 +3038,10 @@ export const getUnassessedPairsFromDuckdb = async (params: UnassessedPairsParams
       {
         candidateArticles: candidateArticles.length,
         candidateLimit,
-        cursor: getPaginationCursorSummary(params.cursor),
+        cursor: getUnassessedPairsCursorSummary(params.cursor),
         hasMore: candidateResult.hasMore,
         jobId: params.jobId,
-        nextCursor: getPaginationCursorSummary(
+        nextCursor: getUnassessedPairsCursorSummary(
           nextCursorArticle
             ? {
                 lastArticleId: nextCursorArticle.articleId,
@@ -2957,6 +3049,7 @@ export const getUnassessedPairsFromDuckdb = async (params: UnassessedPairsParams
                   nextCursorArticle.articleUpdatedAt
                   ?? nextCursorArticle.articleCreatedAt
                   ?? new Date('1970-01-01T00:00:00.000Z'),
+                priorityBucket: nextCursorArticle.priorityBucket,
               }
             : null,
         ),
@@ -2977,6 +3070,7 @@ export const getUnassessedPairsFromDuckdb = async (params: UnassessedPairsParams
             ?? nextCursorArticle.articleCreatedAt
             ?? new Date('1970-01-01T00:00:00.000Z'),
           lastArticleId: nextCursorArticle.articleId,
+          priorityBucket: nextCursorArticle.priorityBucket,
         }
       : null,
   }

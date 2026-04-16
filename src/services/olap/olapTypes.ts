@@ -142,6 +142,8 @@ export type DatabaseFilterParams = {
 
 export type PaginationCursor = {lastDate: Date; lastArticleId: string}
 
+export type UnassessedPairsCursor = {lastDate: Date; lastArticleId: string; priorityBucket: number}
+
 export type UnassessedCountParams = {
   projectId: string
   projectModelId: string
@@ -171,11 +173,11 @@ export type UnassessedPairsParams = {
   projectId: string
   jobId: string
   numberOfPromptsToGet: number
-  cursor: PaginationCursor | null
+  cursor: UnassessedPairsCursor | null
   preferRawFallback?: boolean
 }
 
-export type UnassessedPairsResult = {promptEntries: PromptQueueEntry[]; nextCursor: PaginationCursor | null}
+export type UnassessedPairsResult = {promptEntries: PromptQueueEntry[]; nextCursor: UnassessedPairsCursor | null}
 
 export type UnassessedArticleRow = {
   id: string

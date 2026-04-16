@@ -1,0 +1,119 @@
+{
+  "name": "Better Human Priority Plan",
+  "description": "Move summary-mode human priority before unassessed-pair window slicing so answered-summary articles are selected first while preserving prompt-mode behavior, safe cursor progression, and existing SQLite ready ordering.",
+  "branchName": "ralph/better-human-priority",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Introduce a dedicated unassessed-pairs cursor contract",
+      "description": "As a maintainer, I want queue scanning to use its own priority-aware cursor type so summary-first ordering can evolve without coupling unrelated review-page pagination behavior.",
+      "acceptanceCriteria": [
+        "Introduce `UnassessedPairsCursor` in `src/services/olap/olapTypes.ts` with `lastDate`, `lastArticleId`, and `priorityBucket` fields for queue scanning.",
+        "Update the unassessed-pair OLAP types and callers to use `UnassessedPairsCursor` instead of the generic `PaginationCursor` used by review-page flows.",
+        "Add shared helper logic in `src/services/olap/duckdbOlap.ts` that applies consistent `(priorityBucket DESC, activity DESC, article_id DESC)` ordering and matching cursor comparisons.",
+        "Missing or legacy cursor priority values are treated as `0` so pre-existing scan state can continue safely.",
+        "Review-page pagination continues to use its existing cursor contract unchanged.",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-002",
+      "title": "Persist the priority-aware cursor in local job scan state",
+      "description": "As a maintainer, I want judgment-job SQLite scan state to store the priority bucket so in-progress jobs resume safely after restart without skipping or duplicating articles.",
+      "acceptanceCriteria": [
+        "Extend the judgment-job cursor types and `job_scan_state` persistence in `src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts` to store `priorityBucket` alongside `lastDate` and `lastArticleId`.",
+        "Existing local job SQLite files upgrade in place with a safe default of `0` for missing stored priority buckets.",
+        "Reading legacy scan state, writing new scan state, and clearing scan state preserve restart safety and do not disturb existing queued rows.",
+        "The add-to-queue flow can round-trip the new cursor field between SQLite scan state and OLAP unassessed-pair requests.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts` passes",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Make the serving-path candidate window summary-first",
+      "description": "As a maintainer, I want the serving-backed unassessed-pair path to rank answered-summary articles before prompt-row slicing so promoted articles actually enter the returned queue window.",
+      "acceptanceCriteria": [
+        "`getUnassessedCandidateRowsFromServing` derives a `priorityBucket` from the existing `mart.review_article_serving` human-summary signal for summary-mode projects and uses `0` for prompt-mode projects.",
+        "The serving-path query orders incomplete LLM candidates by `priorityBucket DESC`, then the existing activity ordering, then `article_id DESC`.",
+        "`getUnassessedPairsFromDuckdb` keeps the current `candidateArticles -> promptEntries -> slice(numberOfPromptsToGet)` shape but returns summary-backed articles ahead of non-summary articles in summary mode.",
+        "Prompt ordering within a selected article stays unchanged.",
+        "The next unassessed-pair cursor includes the `priorityBucket` of the last article that contributed prompt rows to the returned window.",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001",
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Apply the same priority contract to raw fallback",
+      "description": "As a maintainer, I want the raw unassessed-pair fallback to use the same summary-first ordering and cursor semantics so serving and fallback paths behave consistently.",
+      "acceptanceCriteria": [
+        "The raw fallback derives `priorityBucket` from non-empty `app.judgment_human_summary` rows for the current project using `NULLIF(TRIM(COALESCE(answer, '')), '') IS NOT NULL`.",
+        "Blank, `NULL`, and cross-project summary rows do not promote articles in raw fallback.",
+        "The raw fallback uses the same priority-aware ordering and next-cursor semantics as the serving path.",
+        "Summary-mode promotion remains article-level only and does not change prompt ordering inside a selected article.",
+        "Serving and raw fallback continue to agree on returned prompt order for equivalent inputs.",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Lock the behavior with no-skip and edge-case regressions",
+      "description": "As a maintainer, I want regression coverage for summary-first window selection so future changes cannot reintroduce prompt-slice misses, cursor skips, or mode-specific parity bugs.",
+      "acceptanceCriteria": [
+        "Add serving-path coverage proving a later summary-backed article enters the returned prompt window ahead of a fresher non-summary article when prompt-row slicing would previously have excluded it.",
+        "Add cursor coverage proving a summary-first first window does not cause displaced non-summary articles to be skipped on the next call.",
+        "Add raw fallback coverage proving summary-first ordering matches the serving path for equivalent inputs.",
+        "Add edge-case coverage proving prompt mode stays unchanged and that blank, `NULL`, and cross-project summary rows do not affect priority.",
+        "Existing `judgmentsJobsAddToQueue` summary-priority tests continue to pass so add-to-queue remains the secondary guard after pre-slice selection.",
+        "`bun test src/services/olap/duckdbOlap.test.ts` passes",
+        "`bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts` passes",
+        "`bun run lint` passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002",
+        "US-003",
+        "US-004"
+      ]
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-04-16T13:11:58.208Z"
+  }
+}

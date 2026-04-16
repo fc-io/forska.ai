@@ -10,6 +10,10 @@ export type QueuePromptsResult = {promptEntries: PromptQueueEntry[]; nextCursor:
 
 const getPromptsLogger = createRateLimitedLogger({windowMs: 30_000})
 
+const getUnassessedPairsCursor = (cursor: JobCursor | null) => {
+  return cursor ? {...cursor, priorityBucket: Number(cursor.priorityBucket ?? 0)} : null
+}
+
 /**
  * Gets prompts (article × prompt pairs) that need to be judged for a project.
  *
@@ -75,7 +79,11 @@ export const judgmentsJobsCronGetPrompts = async (
   }
 
   const cursorSummary = cursor
-    ? {lastDate: cursor.lastDate.toISOString(), lastArticleId: cursor.lastArticleId.slice(0, 8)}
+    ? {
+        lastDate: cursor.lastDate.toISOString(),
+        lastArticleId: cursor.lastArticleId.slice(0, 8),
+        priorityBucket: cursor.priorityBucket ?? 0,
+      }
     : null
 
   const slowLogMs = 30_000
@@ -95,7 +103,7 @@ export const judgmentsJobsCronGetPrompts = async (
     projectId,
     jobId,
     numberOfPromptsToGet,
-    cursor,
+    cursor: getUnassessedPairsCursor(cursor),
     preferRawFallback: shouldPreferRawFallback,
   }).finally(() => {
     clearTimeout(slowTimer)
@@ -103,7 +111,11 @@ export const judgmentsJobsCronGetPrompts = async (
   const durationMs = Date.now() - startedAtMs
 
   const nextCursorSummary = result.nextCursor
-    ? {lastDate: result.nextCursor.lastDate.toISOString(), lastArticleId: result.nextCursor.lastArticleId.slice(0, 8)}
+    ? {
+        lastDate: result.nextCursor.lastDate.toISOString(),
+        lastArticleId: result.nextCursor.lastArticleId.slice(0, 8),
+        priorityBucket: result.nextCursor.priorityBucket,
+      }
     : null
 
   const cursorAction = result.nextCursor ? 'advance' : cursor ? 'clear' : 'none'

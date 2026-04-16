@@ -48,7 +48,12 @@ import {startBackgroundWork} from './utils/startBackgroundWork.ts'
 installSafeConsoleLogging()
 
 const appServerRuntimeConfig = getAppServerRuntimeConfig()
-const allowedOrigins = [`http://localhost:${env.VITE_PORT}`, `http://localhost:${appServerRuntimeConfig.port}`]
+const desktopAllowedOrigins = process.env.FORSKA_DESKTOP_MODE === 'true' ? ['null', 'views://mainview'] : []
+const allowedOrigins = [
+  `http://localhost:${env.VITE_PORT}`,
+  `http://localhost:${appServerRuntimeConfig.port}`,
+  ...desktopAllowedOrigins,
+]
 const shouldMountWriterCrons = shouldServerRoleMountWriterCrons(env.SERVER_ROLE)
 const writerCronRoutes = shouldMountWriterCrons
   ? new Elysia().use(fullTextJobsCron).use(fullTextConversionJobsCron).use(judgmentsJobsCron).use(nvidiaSmiCron)

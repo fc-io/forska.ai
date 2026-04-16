@@ -20,6 +20,8 @@ data/
 # output
 out
 dist
+desktopArtifacts/
+desktopBuild/
 *.tgz
 cache
 

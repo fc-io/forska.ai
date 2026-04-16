@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
   <head>
     <title>forska.ai</title>
@@ -12,6 +12,15 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      ;(() => {
+        const desktopApiOrigin = new URLSearchParams(window.location.search).get('apiOrigin')
+
+        if (desktopApiOrigin) {
+          window.__FORSKA_DESKTOP_API_ORIGIN__ = desktopApiOrigin.replace(/\/+$/, '')
+        }
+      })()
+    </script>
     <script type="module" src="/src/app/index.tsx"></script>
   </body>
 </html>

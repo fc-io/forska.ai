@@ -1976,6 +1976,46 @@ test('getUnassessedPairsFromDuckdb keeps prompt entries aligned across serving a
   expect(servingResult).toEqual(rawResult)
 })
 
+test('getUnassessedPairsFromDuckdb uses priority-aware cursor ordering for summary queue scans', async () => {
+  const {getUnassessedPairsFromDuckdb} = await loadDuckdbOlap()
+  const cursorDate = new Date('2024-01-03T00:00:00.000Z')
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1', 'summary'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [
+      {
+        articleId: 'article-1',
+        articleCreatedAt: '2024-01-01T00:00:00.000Z',
+        articleUpdatedAt: '2024-01-02T00:00:00.000Z',
+        llmJudgedPromptIds: [],
+        priorityBucket: 0,
+      },
+    ],
+  ])
+
+  const result = await getUnassessedPairsFromDuckdb({
+    projectId: 'project-1',
+    jobId: 'job-1',
+    numberOfPromptsToGet: 10,
+    cursor: {lastArticleId: 'article-2', lastDate: cursorDate} as never,
+  })
+
+  const servingQuery = duckdbRunnerMockRef.current.queries[4] ?? ''
+
+  expect(result.nextCursor).toEqual({
+    lastArticleId: 'article-1',
+    lastDate: new Date('2024-01-02T00:00:00.000Z'),
+    priorityBucket: 0,
+  })
+  expect(servingQuery).toContain('CASE WHEN human_summary_priority.article_id IS NULL THEN 0 ELSE 1 END < 0')
+  expect(servingQuery).toContain(
+    "ORDER BY CASE WHEN human_summary_priority.article_id IS NULL THEN 0 ELSE 1 END DESC, COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') DESC, s.article_id DESC",
+  )
+})
+
 test('getDatabaseBasedFiltersFromDuckdb keeps values aligned across prompt answer fact and raw fallback paths', async () => {
   const {getDatabaseBasedFiltersFromDuckdb} = await loadDuckdbOlap()
 

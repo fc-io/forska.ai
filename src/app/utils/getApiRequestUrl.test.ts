@@ -14,3 +14,9 @@ test('keeps relative API paths outside the local vite dev profiles', () => {
   expect(getApiRequestUrl('/api/example', 'http://localhost:8080')).toBe('/api/example')
   expect(getApiRequestUrl('/api/example', 'https://forska.example')).toBe('/api/example')
 })
+
+test('uses the desktop API origin when the renderer is loaded from the desktop shell', () => {
+  expect(getApiRequestUrl('/api/example', 'views://mainview', 'http://127.0.0.1:32101')).toBe(
+    'http://127.0.0.1:32101/api/example',
+  )
+})
