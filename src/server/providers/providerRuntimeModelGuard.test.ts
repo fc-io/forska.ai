@@ -7,6 +7,8 @@ const providerModelRepositoryModulePath = new URL('./providerModelRepository.ts'
 const providerRegistryModulePath = new URL('./providerRegistry.ts', import.meta.url).pathname
 const providerRuntimeDiscoveryModulePath = new URL('./providerRuntimeDiscovery.ts', import.meta.url).pathname
 
+type ProviderRuntimeModelGuardModule = typeof import('./providerRuntimeModelGuard.ts')
+
 const defaultBaseURL = 'http://127.0.0.1:30000/v1'
 const expectedModelName = 'Qwen/Qwen3.5-35B-A3B'
 
@@ -133,10 +135,12 @@ const registerModuleMocks = () => {
   })
 }
 
-const loadGuard = () => {
+const loadGuard = (): Promise<ProviderRuntimeModelGuardModule> => {
   registerModuleMocks()
 
-  return import(`./providerRuntimeModelGuard.ts?test=${Date.now()}-${Math.random()}`)
+  return import(
+    `./providerRuntimeModelGuard.ts?test=${Date.now()}-${Math.random()}`
+  ) as Promise<ProviderRuntimeModelGuardModule>
 }
 
 afterEach(() => {

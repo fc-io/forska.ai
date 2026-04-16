@@ -4,6 +4,8 @@ const providerConnectionRepositoryModulePath = new URL('./providerConnectionRepo
 const providerRuntimeDiscoveryModulePath = new URL('./providerRuntimeDiscovery.ts', import.meta.url).pathname
 const providerRuntimeRecordsModulePath = new URL('../../utils/providerRuntimeRecords.ts', import.meta.url).pathname
 
+type ProviderRuntimeDetectorModule = typeof import('./providerRuntimeDetector.ts')
+
 const state = {
   discoverOpenAICompatibleRuntimeModel: mock(async ({baseURL}: {baseURL: string}) => {
     return {
@@ -52,10 +54,12 @@ const registerModuleMocks = () => {
   })
 }
 
-const loadDetector = () => {
+const loadDetector = (): Promise<ProviderRuntimeDetectorModule> => {
   registerModuleMocks()
 
-  return import(`./providerRuntimeDetector.ts?test=${Date.now()}-${Math.random()}`)
+  return import(
+    `./providerRuntimeDetector.ts?test=${Date.now()}-${Math.random()}`
+  ) as Promise<ProviderRuntimeDetectorModule>
 }
 
 afterEach(() => {

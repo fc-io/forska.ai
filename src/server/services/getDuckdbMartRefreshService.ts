@@ -1412,7 +1412,7 @@ const getProjectReviewServingFinalizeSql = (projectId: string) => {
   `
 }
 
-const judgmentFactCreateSql = `
+const _judgmentFactCreateSql = `
   CREATE TABLE mart.judgment_fact (
     judgment_id VARCHAR PRIMARY KEY,
     article_id VARCHAR NOT NULL,

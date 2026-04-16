@@ -1,6 +1,7 @@
 const isolatedTestFiles = new Set([
   'src/agent/importerStoreEntries.test.ts',
   'src/agent/judge/judgeStoreTokenUse.test.ts',
+  'src/db/migrateDuckdb.test.ts',
   'src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts',
   'src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.test.ts',
   'src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.test.ts',
@@ -11,6 +12,9 @@ const isolatedTestFiles = new Set([
   'src/server/providers/adapters/createOpenAICompatibleAdapter.test.ts',
   'src/server/providers/adapters/directAdapters.test.ts',
   'src/server/providers/providerAuthService.test.ts',
+  'src/server/providers/providerConnectionRepository.atomic.test.ts',
+  'src/server/providers/providerModelRepository.atomic.test.ts',
+  'src/server/providers/providerModelRepository.test.ts',
   'src/server/providers/providerRuntimeDetector.test.ts',
   'src/server/providers/providerRuntimeModelGuard.test.ts',
   'src/server/routes/ApiProxyRoutes.retry.test.ts',
@@ -18,21 +22,28 @@ const isolatedTestFiles = new Set([
   'src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.test.ts',
   'src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.test.ts',
   'src/server/routes/JudgmentsJobsRoutes.test.ts',
+  'src/server/routes/ProjectsRoutes.test.ts',
+  'src/server/routes/PromptsRoutes.test.ts',
   'src/server/routes/ProviderConnectionsRoutes.test.ts',
   'src/server/routes/ProviderModelsRoutes.test.ts',
+  'src/server/routes/SubprojectsRoutes.test.ts',
   'src/server/routes/SubprojectsRoutes.rollback.test.ts',
+  'src/server/routes/providerProjectFlow.e2e.test.ts',
   'src/server/routes/projectsRoutes/projectAccessGuard.test.ts',
   'src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts',
   'src/server/routes/projectsRoutes/projectsRoutesOlapParity.test.ts',
   'src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.test.ts',
   'src/server/services/insertArticlesIntoProject.test.ts',
+  'src/server/services/appDatabaseServiceAppendJudgments.test.ts',
   'src/server/services/structuredFileImportService.test.ts',
+  'src/server/services/tokenUseQueryService.test.ts',
+  'src/server/utils/getInferenceRuntimeConfig.test.ts',
   'src/services/olap/duckdbOlap.test.ts',
   'src/services/olap/duckdbRunnerAppDatabase.test.ts',
   'src/utils/llmStatusQuery.test.ts',
 ])
 
-const ignoredPrefixes = ['node_modules/', 'dist/', '.git/']
+const ignoredPrefixes = ['node_modules/', 'dist/', '.git/', 'desktopBuild/', 'desktopArtifacts/']
 
 const isIgnoredPath = (filePath: string) => {
   return ignoredPrefixes.some((prefix) => {
@@ -62,7 +73,11 @@ const runBunTest = (files: string[]) => {
     return
   }
 
-  const result = Bun.spawnSync(['bun', 'test', ...files], {
+  const fileArgs = files.map((filePath) => {
+    return filePath.startsWith('./') ? filePath : `./${filePath}`
+  })
+
+  const result = Bun.spawnSync(['bun', 'test', ...fileArgs], {
     cwd: process.cwd(),
     env: process.env,
     stderr: 'inherit',

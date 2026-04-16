@@ -28,7 +28,11 @@ export const installSafeConsoleLogging = (): void => {
   ;(['debug', 'error', 'info', 'log', 'warn'] as const).forEach((methodName: ConsoleMethodName) => {
     const originalMethod = console[methodName].bind(console)
     console[methodName] = ((...args: unknown[]) => {
-      originalMethod(...args.map((arg) => safeSerializeConsoleArg(arg)))
+      originalMethod(
+        ...args.map((arg) => {
+          return safeSerializeConsoleArg(arg)
+        }),
+      )
     }) as Console[ConsoleMethodName]
   })
 

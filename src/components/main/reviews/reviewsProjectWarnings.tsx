@@ -155,13 +155,13 @@ export const ReviewsProjectWarnings = (props: {projectId: string}) => {
 
     const largeRebuildLabel = getLargeRebuildDetailLabel(data)
     const queuedAtLabel = formatQueuedAt(data.indexing.oldestQueuedAt)
-    const pendingLabel =
-      data.indexing.pendingRefreshCount === 0 ? null : getPendingRefreshMetaLabel(data.indexing)
-    const parts = [largeRebuildLabel, pendingLabel ? (queuedAtLabel ? `${pendingLabel} since ${queuedAtLabel}` : pendingLabel) : null].filter(
-      (value): value is string => {
-        return value !== null
-      },
-    )
+    const pendingLabel = data.indexing.pendingRefreshCount === 0 ? null : getPendingRefreshMetaLabel(data.indexing)
+    const parts = [
+      largeRebuildLabel,
+      pendingLabel ? (queuedAtLabel ? `${pendingLabel} since ${queuedAtLabel}` : pendingLabel) : null,
+    ].filter((value): value is string => {
+      return value !== null
+    })
 
     return parts.length === 0 ? null : parts.join(' • ')
   })

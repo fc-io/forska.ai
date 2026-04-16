@@ -16,6 +16,16 @@ let closeDatabase: (() => Promise<void>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 let requeueAbandonedSentPrompts: ((input: {jobIds: string[]; serverJobId: string}) => Promise<number>) | null = null
 
+type QueueCountRow = {count: number; status: string}
+
+const getQueueCountMap = (rows: QueueCountRow[]) => {
+  return Object.fromEntries(
+    rows.map((row) => {
+      return [row.status, row.count]
+    }),
+  )
+}
+
 beforeAll(async () => {
   const [
     {migrateDuckdb},
@@ -361,13 +371,7 @@ test('requeues stale sent, claimed, and running prompts while leaving terminal r
   const requeued = await requeueAbandonedSentPrompts({jobIds: [jobId], serverJobId: currentServerJobId})
 
   expect(requeued).toBe(3)
-  expect(await sqliteService.getPromptStatusCounts(jobId)).toEqual(
-    expect.arrayContaining([
-      {count: 3, status: 'ready'},
-      {count: 1, status: 'judged'},
-      {count: 1, status: 'skipped'},
-    ]),
-  )
+  expect(getQueueCountMap(await sqliteService.getPromptStatusCounts(jobId))).toEqual({judged: 1, ready: 3, skipped: 1})
   expect(
     (await sqliteService.claimReadyPrompts(jobId, currentServerJobId, 3)).map((prompt) => {
       return prompt.articleId

@@ -2448,9 +2448,9 @@ test('getUnassessedPairsFromDuckdb keeps prompt-mode queue scans date-first with
     {articleId: 'article-plain-fresher', promptId: 'prompt-1'},
     {articleId: 'article-plain-fresher', promptId: 'prompt-2'},
   ])
-  expect(servingQuery).toContain('0 AS priorityBucket')
+  expect(servingQuery).toContain('CAST(0 AS INTEGER) AS priorityBucket')
   expect(servingQuery).toContain(
-    "ORDER BY 0 DESC, COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') DESC, s.article_id DESC",
+    "ORDER BY CAST(0 AS INTEGER) DESC, COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') DESC, s.article_id DESC",
   )
   expect(servingQuery).not.toContain("list_contains(s.human_answered_prompt_ids, 'summary')")
 })

@@ -2,6 +2,10 @@ import {expect, mock, test} from 'bun:test'
 
 import {filterRunningJobsByRuntimeMatch, type RunningJudgmentJob} from './judgmentsJobsGetRunningJobs.ts'
 
+const getLoggedDetailsText = (value: unknown) => {
+  return typeof value === 'string' ? value : JSON.stringify(value)
+}
+
 const getJob = (id: string): RunningJudgmentJob => {
   return {
     id,
@@ -75,11 +79,12 @@ test('filterRunningJobsByRuntimeMatch logs when the runtime is unreachable', asy
 
   try {
     const filtered = await filterRunningJobsByRuntimeMatch([getJob('job-unreachable')], getRuntimeMatch)
+    const details = getLoggedDetailsText(warn.mock.calls[0]?.[1] ?? null)
 
     expect(filtered).toEqual([])
     expect(warn).toHaveBeenCalledTimes(1)
     expect(warn.mock.calls[0]?.[0]).toBe('[judgments] skipping running job because the SGLang runtime is unreachable')
-    expect(String(warn.mock.calls[0]?.[1] ?? '')).toContain('"reason":"runtime-unreachable"')
+    expect(details).toContain('"reason":"runtime-unreachable"')
   } finally {
     console.warn = originalWarn
   }
@@ -101,13 +106,14 @@ test('filterRunningJobsByRuntimeMatch logs when the runtime is serving a differe
 
   try {
     const filtered = await filterRunningJobsByRuntimeMatch([getJob('job-mismatch-log')], getRuntimeMatch)
+    const details = getLoggedDetailsText(warn.mock.calls[0]?.[1] ?? null)
 
     expect(filtered).toEqual([])
     expect(warn).toHaveBeenCalledTimes(1)
     expect(warn.mock.calls[0]?.[0]).toBe(
       '[judgments] skipping running job because the SGLang runtime is serving a different model',
     )
-    expect(String(warn.mock.calls[0]?.[1] ?? '')).toContain('"reason":"runtime-mismatch"')
+    expect(details).toContain('"reason":"runtime-mismatch"')
   } finally {
     console.warn = originalWarn
   }

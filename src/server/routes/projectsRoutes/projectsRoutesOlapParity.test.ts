@@ -205,9 +205,36 @@ test('articles reviews route forwards llmStatus modes to olap unchanged', async 
   )
 
   expect(queryReviewsParamsRef.current).toEqual([
-    {projectId: 'project-1', page: 1, limit: 10, from: undefined, to: undefined, search: undefined, prompts: {}, llmStatus: 'complete'},
-    {projectId: 'project-1', page: 1, limit: 10, from: undefined, to: undefined, search: undefined, prompts: {}, llmStatus: 'both'},
-    {projectId: 'project-1', page: 1, limit: 10, from: undefined, to: undefined, search: undefined, prompts: {}, llmStatus: 'partial'},
+    {
+      projectId: 'project-1',
+      page: 1,
+      limit: 10,
+      from: undefined,
+      to: undefined,
+      search: undefined,
+      prompts: {},
+      llmStatus: 'complete',
+    },
+    {
+      projectId: 'project-1',
+      page: 1,
+      limit: 10,
+      from: undefined,
+      to: undefined,
+      search: undefined,
+      prompts: {},
+      llmStatus: 'both',
+    },
+    {
+      projectId: 'project-1',
+      page: 1,
+      limit: 10,
+      from: undefined,
+      to: undefined,
+      search: undefined,
+      prompts: {},
+      llmStatus: 'partial',
+    },
   ])
 })
 

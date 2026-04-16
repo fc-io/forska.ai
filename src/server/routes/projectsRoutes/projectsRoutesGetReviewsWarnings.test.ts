@@ -454,11 +454,7 @@ test('reviews warnings report refreshing when a staged large rebuild is queued',
   const projectId = 'project-large-rebuild-queued-warning'
 
   await insertProjectFixture(projectId)
-  await insertLargeRebuildState(projectId, {
-    rebuildPhase: 'prompt_answer_fact',
-    refreshStatus: 'idle',
-    refreshToken: 5,
-  })
+  await insertLargeRebuildState(projectId, {rebuildPhase: 'prompt_answer_fact', refreshStatus: 'idle', refreshToken: 5})
 
   const {body, response} = await postWarningsRequest(projectId)
 

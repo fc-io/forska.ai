@@ -46,7 +46,13 @@ type ProjectMartLargeRebuildStateWorkerService = {
     cursorArticleId?: string | null
     now?: Date
     projectId: string
-    rebuildPhase: 'judgment_fact' | 'prompt_answer_fact' | 'review_answer_dictionary' | 'review_article_filter_member' | 'review_article_rollup' | 'review_article_serving'
+    rebuildPhase:
+      | 'judgment_fact'
+      | 'prompt_answer_fact'
+      | 'review_answer_dictionary'
+      | 'review_article_filter_member'
+      | 'review_article_rollup'
+      | 'review_article_serving'
     refreshToken: number
     targetGeneration?: number | null
   }) => Promise<unknown>
@@ -193,7 +199,7 @@ const getFullRefreshBlockedErrorText = ({
   return `Blocked automatic full refresh for project ${projectId}: scope_article_count=${scopeArticleCount}, dirty_article_count=${dirtyArticleCount}, max_full_project_scope_articles=${maxFullProjectScopeArticles}. Use guarded/manual recovery after reducing scope or raising PROJECT_MART_REFRESH_MAX_FULL_SCOPE_ARTICLES deliberately.`
 }
 
-const assertFullRefreshIsSafe = async ({
+const _assertFullRefreshIsSafe = async ({
   dependencies,
   dirtyArticleCount,
   maxFullProjectScopeArticles,

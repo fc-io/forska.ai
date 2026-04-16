@@ -7,11 +7,17 @@ const removeFileIfExists = (filePath: string) => {
 }
 
 const getLastJsonLine = (stdout: string) => {
-  return stdout
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line !== '')
-    .at(-1) ?? ''
+  return (
+    stdout
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line !== ''
+      })
+      .at(-1) ?? ''
+  )
 }
 
 test('deleteJudgmentJobSafelyTx removes token_use dependents before deleting the job row', () => {
@@ -60,16 +66,27 @@ test('deleteJudgmentJobSafelyTx removes token_use dependents before deleting the
     ],
     {
       cwd: process.cwd(),
-      env: {...process.env, API_SERVER_PORT: '3001', DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'dev-single', VITE_PORT: '3000'},
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
     },
   )
 
   try {
     if (runResult.exitCode !== 0) {
-      throw new Error(runResult.stderr.toString() || runResult.stdout.toString() || 'judgment job delete service test failed')
+      throw new Error(
+        runResult.stderr.toString() || runResult.stdout.toString() || 'judgment job delete service test failed',
+      )
     }
 
-    const result = JSON.parse(getLastJsonLine(runResult.stdout.toString())) as {jobs: number | string; tokens: number | string}
+    const result = JSON.parse(getLastJsonLine(runResult.stdout.toString())) as {
+      jobs: number | string
+      tokens: number | string
+    }
     expect(Number(result.jobs)).toBe(0)
     expect(Number(result.tokens)).toBe(0)
   } finally {

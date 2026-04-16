@@ -23,6 +23,16 @@ let sqliteService: Awaited<typeof import('./judgmentJobSqliteService.ts')>['getJ
 let JudgmentJobLeaseError: Awaited<typeof import('./judgmentJobSqliteService.ts')>['JudgmentJobLeaseError'] | null =
   null
 
+type QueueCountRow = {count: number; status: string}
+
+const getQueueCountMap = (rows: QueueCountRow[]) => {
+  return Object.fromEntries(
+    rows.map((row) => {
+      return [row.status, row.count]
+    }),
+  )
+}
+
 const waitForPaths = async (paths: string[], timeoutMs: number): Promise<void> => {
   const startedAt = Date.now()
 
@@ -519,15 +529,13 @@ test('requeues stale sent, claimed, and running rows without duplicating termina
 
   await service.initializeJob(jobId)
 
-  expect(await service.getPromptStatusCounts(jobId)).toEqual(
-    expect.arrayContaining([
-      {count: 1, status: 'claimed'},
-      {count: 1, status: 'judged'},
-      {count: 1, status: 'running'},
-      {count: 1, status: 'sent'},
-      {count: 1, status: 'skipped'},
-    ]),
-  )
+  expect(getQueueCountMap(await service.getPromptStatusCounts(jobId))).toEqual({
+    claimed: 1,
+    judged: 1,
+    running: 1,
+    sent: 1,
+    skipped: 1,
+  })
   expect(
     await service.requeueAbandonedSentPrompts({
       jobId,
@@ -536,13 +544,7 @@ test('requeues stale sent, claimed, and running rows without duplicating termina
     }),
   ).toBe(3)
   expect(await service.getDispatchCounts(jobId)).toEqual({claimed: 0, running: 0})
-  expect(await service.getPromptStatusCounts(jobId)).toEqual(
-    expect.arrayContaining([
-      {count: 3, status: 'ready'},
-      {count: 1, status: 'judged'},
-      {count: 1, status: 'skipped'},
-    ]),
-  )
+  expect(getQueueCountMap(await service.getPromptStatusCounts(jobId))).toEqual({judged: 1, ready: 3, skipped: 1})
   expect(
     (await service.claimReadyPrompts(jobId, 'server-c', 3)).map((prompt) => {
       return prompt.articleId

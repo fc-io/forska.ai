@@ -7,6 +7,8 @@ const providerRuntimeDetectorModulePath = new URL('./providerRuntimeDetector.ts'
 const providerRuntimeMatchResolverModulePath = new URL('./providerRuntimeMatchResolver.ts', import.meta.url).pathname
 const providerSecretStoreModulePath = new URL('./providerSecretStore.ts', import.meta.url).pathname
 
+type ProviderAuthServiceModule = typeof import('./providerAuthService.ts')
+
 const state = {
   createProviderConnection: mock(async (_input: unknown) => {
     return null
@@ -146,10 +148,10 @@ const registerModuleMocks = () => {
   })
 }
 
-const loadAuthService = () => {
+const loadAuthService = (): Promise<ProviderAuthServiceModule> => {
   registerModuleMocks()
 
-  return import(`./providerAuthService.ts?test=${Date.now()}-${Math.random()}`)
+  return import(`./providerAuthService.ts?test=${Date.now()}-${Math.random()}`) as Promise<ProviderAuthServiceModule>
 }
 
 afterEach(() => {

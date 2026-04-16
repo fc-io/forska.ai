@@ -96,11 +96,13 @@ const createWorkerTestContext = (params: {
     refreshJudgmentArticle: mock(async (articleId: string) => {
       callLog.push(`judgment:${articleId}`)
     }),
-    refreshJudgmentFactsForProjectClaim: mock(async ({projectId}: {claimedToken: number; lastCompletedToken: number; projectId: string}) => {
-      ;(params.articlesByProject?.[projectId] ?? []).forEach((articleId) => {
-        callLog.push(`judgment:${articleId}`)
-      })
-    }),
+    refreshJudgmentFactsForProjectClaim: mock(
+      async ({projectId}: {claimedToken: number; lastCompletedToken: number; projectId: string}) => {
+        ;(params.articlesByProject?.[projectId] ?? []).forEach((articleId) => {
+          callLog.push(`judgment:${articleId}`)
+        })
+      },
+    ),
     refreshProject: mock(async (projectId: string) => {
       callLog.push(`project:${projectId}`)
       return params.onRefreshProject?.(projectId)
@@ -136,11 +138,21 @@ const createWorkerTestContext = (params: {
         callLog.push('clearArchivedLargeRebuildStates')
         return null
       }),
-      queueLargeRebuild: mock(async ({projectId, rebuildPhase, refreshToken}) => {
-        callLog.push(`largeRebuild:${projectId}:${rebuildPhase}:${refreshToken}`)
-        queuedLargeRebuilds.push({projectId, rebuildPhase, refreshToken})
-        return null
-      }),
+      queueLargeRebuild: mock(
+        async ({
+          projectId,
+          rebuildPhase,
+          refreshToken,
+        }: {
+          projectId: string
+          rebuildPhase: string
+          refreshToken: number
+        }) => {
+          callLog.push(`largeRebuild:${projectId}:${rebuildPhase}:${refreshToken}`)
+          queuedLargeRebuilds.push({projectId, rebuildPhase, refreshToken})
+          return null
+        },
+      ),
     },
     projectInspector: {
       getProjectScopeArticleCount: mock(async (projectId: string) => {
@@ -393,7 +405,9 @@ test('routes oversized automatic full refreshes into large rebuild state before 
     'largeRebuild:project-1:prompt_answer_fact:9',
     'release:project-1',
   ])
-  expect(context.queuedLargeRebuilds).toEqual([{projectId: 'project-1', rebuildPhase: 'prompt_answer_fact', refreshToken: 9}])
+  expect(context.queuedLargeRebuilds).toEqual([
+    {projectId: 'project-1', rebuildPhase: 'prompt_answer_fact', refreshToken: 9},
+  ])
   expect(context.failed).toEqual([])
   expect(context.completed).toEqual([])
   expect(context.acknowledgedProjects).toEqual([])
@@ -439,7 +453,12 @@ test('returns idle when nothing is claimable', async () => {
   const result = await runProjectMartRefreshWorkerCycle({workerId: 'worker-1'}, context.dependencies)
 
   expect(result).toEqual({projectId: null, status: 'idle', workerId: 'worker-1'})
-  expect(context.callLog).toEqual(['clearArchivedRefreshStates', 'clearArchivedLargeRebuildStates', 'reconcile:all', 'claim:worker-1:1:30000'])
+  expect(context.callLog).toEqual([
+    'clearArchivedRefreshStates',
+    'clearArchivedLargeRebuildStates',
+    'reconcile:all',
+    'claim:worker-1:1:30000',
+  ])
 })
 
 test('replays sqlite ack publication after a post-completion crash without rerunning refresh work', async () => {
@@ -472,7 +491,12 @@ test('replays sqlite ack publication after a post-completion crash without rerun
   const result = await runProjectMartRefreshWorkerCycle({workerId: 'worker-1'}, reconcileContext.dependencies)
 
   expect(result).toEqual({projectId: null, status: 'idle', workerId: 'worker-1'})
-  expect(reconcileContext.callLog).toEqual(['clearArchivedRefreshStates', 'clearArchivedLargeRebuildStates', 'reconcile:all', 'claim:worker-1:1:30000'])
+  expect(reconcileContext.callLog).toEqual([
+    'clearArchivedRefreshStates',
+    'clearArchivedLargeRebuildStates',
+    'reconcile:all',
+    'claim:worker-1:1:30000',
+  ])
   expect(reconcileContext.completed).toEqual([])
   expect(reconcileContext.failed).toEqual([])
 })

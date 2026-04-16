@@ -43,15 +43,6 @@ const recordImportSuccess = async ({exitCode, jobId}: {exitCode: number; jobId: 
   `)
 }
 
-const recordImportLeaseSkip = async (jobId: string) => {
-  await getAppDatabaseService().run(`
-    UPDATE app.judgment_job
-    SET last_import_completed_at = current_timestamp,
-        updated_at = current_timestamp
-    WHERE id = ${getSqlLiteral(jobId)}
-  `)
-}
-
 const recordImportFailure = async ({
   errorMessage,
   exitCode,
@@ -114,11 +105,7 @@ export const runJudgmentJobSqliteBackgroundImport = async ({claimedBy}: {claimed
       : {attemptedCount: 1, failedCount: 0, skippedCount: 0, succeededCount: 1}
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
-    const [failureState] = await recordImportFailure({
-      errorMessage,
-      exitCode: 1,
-      jobId,
-    })
+    const [failureState] = await recordImportFailure({errorMessage, exitCode: 1, jobId})
 
     judgmentJobSqliteBackgroundImportLogger.warn(
       `judgment-job-sqlite-background-import:failed:${jobId}`,

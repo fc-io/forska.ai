@@ -56,17 +56,29 @@ export const ReviewsIndexingProgress = (props: ReviewsIndexingProgressProps) => 
         </p>
         <Show when={getLargeRebuildPhaseLabel(props.indexing)}>
           {(phaseLabel) => {
-            return <p><span class="font-medium text-slate-700">Large rebuild:</span> {phaseLabel()}</p>
+            return (
+              <p>
+                <span class="font-medium text-slate-700">Large rebuild:</span> {phaseLabel()}
+              </p>
+            )
           }}
         </Show>
         <Show when={getLargeRebuildCursorLabel(props.indexing)}>
           {(cursorLabel) => {
-            return <p><span class="font-medium text-slate-700">Cursor:</span> {cursorLabel()}</p>
+            return (
+              <p>
+                <span class="font-medium text-slate-700">Cursor:</span> {cursorLabel()}
+              </p>
+            )
           }}
         </Show>
         <Show when={props.indexing.status === 'failed' ? getLargeRebuildFailureLabel(props.indexing) : null}>
           {(failureLabel) => {
-            return <p><span class="font-medium text-slate-700">Large rebuild failure:</span> {failureLabel()}</p>
+            return (
+              <p>
+                <span class="font-medium text-slate-700">Large rebuild failure:</span> {failureLabel()}
+              </p>
+            )
           }}
         </Show>
       </div>

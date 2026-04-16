@@ -2,6 +2,21 @@ import {expect, test} from 'bun:test'
 
 import {formatFirstJudgeRequestLog} from './judge.ts'
 
+type FirstJudgeRequestLogPayload = {
+  normalizedModelName: string
+  request: {
+    max_completion_tokens: number
+    messages: {system: string; user: string}
+    preview: {
+      systemOriginalLength: number
+      systemTruncated: boolean
+      userOriginalLength: number
+      userTruncated: boolean
+    }
+    temperature: number
+  }
+}
+
 test('formatFirstJudgeRequestLog serializes first-request logs as JSON with preview metadata', () => {
   const output = formatFirstJudgeRequestLog({
     judgmentsJobId: 'job-1',
@@ -10,11 +25,7 @@ test('formatFirstJudgeRequestLog serializes first-request logs as JSON with prev
     baseURL: 'http://localhost:3000',
     modelName: 'Qwen/Qwen3.5-27B',
     requestConfig: {temperature: 0.1, maxCompletionTokens: 2000},
-    systemPromptPreview: {
-      text: 'You are a helpful deep research assistant.',
-      originalLength: 41,
-      truncated: false,
-    },
+    systemPromptPreview: {text: 'You are a helpful deep research assistant.', originalLength: 41, truncated: false},
     userPromptPreview: {
       text: '## article_title\n\nNote: Between <DANGEROUS_TEXT_START>',
       originalLength: 12000,
@@ -22,20 +33,7 @@ test('formatFirstJudgeRequestLog serializes first-request logs as JSON with prev
     },
   })
 
-  const parsed = JSON.parse(output) as {
-    normalizedModelName: string
-    request: {
-      max_completion_tokens: number
-      messages: {system: string; user: string}
-      preview: {
-        systemOriginalLength: number
-        systemTruncated: boolean
-        userOriginalLength: number
-        userTruncated: boolean
-      }
-      temperature: number
-    }
-  }
+  const parsed = JSON.parse(output) as FirstJudgeRequestLogPayload
 
   expect(parsed.normalizedModelName).toBe('Qwen/Qwen3.5-27B')
   expect(parsed.request.temperature).toBe(0.1)
@@ -60,5 +58,7 @@ test('formatFirstJudgeRequestLog normalizes legacy relative model paths', () => 
     userPromptPreview: {text: 'user', originalLength: 4, truncated: false},
   })
 
-  expect(JSON.parse(output).normalizedModelName).toBe('/models/local-model')
+  const parsed = JSON.parse(output) as FirstJudgeRequestLogPayload
+
+  expect(parsed.normalizedModelName).toBe('/models/local-model')
 })

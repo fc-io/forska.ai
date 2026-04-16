@@ -52,7 +52,7 @@ test('Covidence import create flow returns to projects without browser failures'
     await expect(page.getByRole('heading', {name: 'Projects'})).toBeVisible()
     await expect(page.getByTestId(routeErrorSurfaceTestId)).toHaveCount(0)
     await expect(page.getByText('Create Covidence Project')).toBeVisible()
-    await expect(page.getByText(playwrightCovidenceProjectTitle)).toBeVisible()
+    await expect(page.getByRole('heading', {name: playwrightCovidenceProjectTitle}).first()).toBeVisible()
 
     browserFailures.assertNoFailures()
   } finally {

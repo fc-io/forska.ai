@@ -213,7 +213,13 @@ const getDuckdbJsonValue = (value: unknown): unknown => {
 }
 
 const getUnassessedPairsCursorPriorityBucket = (cursor: UnassessedPairsCursor | null) => {
-  return Number.isFinite(cursor?.priorityBucket) ? Math.trunc(cursor.priorityBucket) : 0
+  const priorityBucket = cursor?.priorityBucket
+
+  if (typeof priorityBucket !== 'number' || !Number.isFinite(priorityBucket)) {
+    return 0
+  }
+
+  return Math.trunc(priorityBucket)
 }
 
 const getUnassessedPairsCursor = (cursor: UnassessedPairsCursor | null): UnassessedPairsCursor | null => {
@@ -1496,13 +1502,13 @@ const getDuckdbUnassessedPairsPriorityJoinClause = (scope: ProjectOlapScope, art
 const getDuckdbUnassessedPairsPriorityBucketExpression = (scope: ProjectOlapScope) => {
   return scope.humanJudgmentMode === 'summary'
     ? 'CASE WHEN human_summary_priority.article_id IS NULL THEN 0 ELSE 1 END'
-    : '0'
+    : 'CAST(0 AS INTEGER)'
 }
 
 const getDuckdbServingUnassessedPairsPriorityBucketExpression = (scope: ProjectOlapScope) => {
   return scope.humanJudgmentMode === 'summary'
     ? "CASE WHEN list_contains(s.human_answered_prompt_ids, 'summary') THEN 1 ELSE 0 END"
-    : '0'
+    : 'CAST(0 AS INTEGER)'
 }
 
 const getDuckdbUnassessedPairsCursorWhereClause = (params: {

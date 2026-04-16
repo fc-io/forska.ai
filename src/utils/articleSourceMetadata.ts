@@ -87,6 +87,13 @@ const getStringAtPath = (value: unknown, path: string[]) => {
   return asNonEmptyString(getValueAtPath(value, path))
 }
 
+const getPositiveIntOrDefault = (value: unknown, fallback: number) => {
+  const normalizedValue = typeof value === 'number' ? String(value) : asNonEmptyString(value)
+  const parsed = Number.parseInt(normalizedValue ?? String(fallback), 10)
+
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
 const getArrayAtPath = (value: unknown, path: string[]) => {
   const resolved = getValueAtPath(value, path)
   return Array.isArray(resolved)
@@ -344,7 +351,7 @@ const getCovidenceSourceMetadataValue = (value: unknown): ArticleCovidenceSource
     tags: getStringArrayAtPath(record, ['tags']),
     covidenceIds: getStringArrayAtPath(record, ['covidenceIds']),
     referenceIds: getStringArrayAtPath(record, ['referenceIds']),
-    duplicateStudyRecordCount: Math.max(1, Number.parseInt(String(record.duplicateStudyRecordCount ?? '1'), 10) || 1),
+    duplicateStudyRecordCount: Math.max(1, getPositiveIntOrDefault(record.duplicateStudyRecordCount, 1)),
     hasDuplicateStudyRecords: getBooleanAtPath(record, ['hasDuplicateStudyRecords']),
     hasStudyDecisionConflict: getBooleanAtPath(record, ['hasStudyDecisionConflict']),
     seededHumanJudgmentAnswer: asNonEmptyString(record.seededHumanJudgmentAnswer),

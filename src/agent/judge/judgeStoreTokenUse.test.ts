@@ -15,7 +15,15 @@ void mock.module(envModulePath, () => {
     SGLANG_MODEL: null,
   }
 
-  return {env: mockedEnv, getEnv: () => mockedEnv, loadEnv: () => mockedEnv}
+  return {
+    env: mockedEnv,
+    getEnv: () => {
+      return mockedEnv
+    },
+    loadEnv: () => {
+      return mockedEnv
+    },
+  }
 })
 
 void mock.module(apiClientModulePath, () => {

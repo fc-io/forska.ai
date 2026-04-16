@@ -7,6 +7,8 @@ const providerConnectionRepositoryModulePath = new URL('../providers/providerCon
 const providerModelRepositoryModulePath = new URL('../providers/providerModelRepository.ts', import.meta.url).pathname
 const providerSyncServiceModulePath = new URL('../providers/providerSyncService.ts', import.meta.url).pathname
 
+type ProviderModelsRoutesModule = typeof import('./ProviderModelsRoutes.ts')
+
 const state = {
   createProviderModel: mock(async (_input: unknown) => {
     return {
@@ -97,7 +99,9 @@ const registerModuleMocks = () => {
 const loadRoutes = async () => {
   registerModuleMocks()
 
-  const {providerModelsRoutes} = await import(`./ProviderModelsRoutes.ts?test=${Date.now()}-${Math.random()}`)
+  const {providerModelsRoutes} = (await import(
+    `./ProviderModelsRoutes.ts?test=${Date.now()}-${Math.random()}`
+  )) as ProviderModelsRoutesModule
 
   return new Elysia().use(providerModelsRoutes)
 }

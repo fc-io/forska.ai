@@ -4,14 +4,18 @@ import {getArticleSourceMetadataValue} from '../../../utils/articleSourceMetadat
 
 type ReviewsCovidenceBadgesProps = {sourceMetadata?: unknown}
 
-const getBadgeTitle = (props: {
+const getBadgeTitle = ({
+  covidenceIds,
+  duplicateStudyRecordCount,
+  hasStudyDecisionConflict,
+}: {
   covidenceIds: string[]
   duplicateStudyRecordCount: number
   hasStudyDecisionConflict: boolean
 }) => {
-  const idText = props.covidenceIds.length > 0 ? `Covidence IDs: ${props.covidenceIds.join(', ')}` : 'No Covidence ID'
-  const duplicateText = `Study group size: ${props.duplicateStudyRecordCount}`
-  const conflictText = props.hasStudyDecisionConflict ? 'This study group has conflicting seeded decisions.' : null
+  const idText = covidenceIds.length > 0 ? `Covidence IDs: ${covidenceIds.join(', ')}` : 'No Covidence ID'
+  const duplicateText = `Study group size: ${duplicateStudyRecordCount}`
+  const conflictText = hasStudyDecisionConflict ? 'This study group has conflicting seeded decisions.' : null
 
   return [idText, duplicateText, conflictText]
     .filter((value): value is string => {
