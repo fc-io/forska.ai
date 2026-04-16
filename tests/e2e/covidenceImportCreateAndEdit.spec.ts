@@ -14,7 +14,7 @@ import {
 
 const apiBaseUrl = 'http://127.0.0.1:43101'
 
-test('Covidence import create flow redirects to edit page without browser failures', async ({page}) => {
+test('Covidence import create flow returns to projects without browser failures', async ({page}) => {
   const browserFailures = createBrowserFailureAssertions(page)
   const existingAssetDirectories = getCovidenceImportAssetDirectories()
 
@@ -45,16 +45,14 @@ test('Covidence import create flow redirects to edit page without browser failur
     await expect(page.getByText('No warnings')).toBeVisible()
 
     await Promise.all([
-      page.waitForURL(/\/projects\/[^/]+\/edit$/),
+      page.waitForURL(/\/projects\/?$/),
       page.getByRole('button', {name: 'Create datasource and project'}).click(),
     ])
 
-    await expect(page.getByRole('heading', {name: 'Edit Project'})).toBeVisible()
+    await expect(page.getByRole('heading', {name: 'Projects'})).toBeVisible()
     await expect(page.getByTestId(routeErrorSurfaceTestId)).toHaveCount(0)
-    await expect(page.locator('#project-name')).toHaveValue(playwrightCovidenceProjectTitle)
-    await expect(page.getByText('Import Routes')).toBeVisible()
-    await expect(page.getByText('Use Article Title')).toBeVisible()
-    await expect(page.getByText('Importable prompts')).toBeVisible()
+    await expect(page.getByText('Create Covidence Project')).toBeVisible()
+    await expect(page.getByText(playwrightCovidenceProjectTitle)).toBeVisible()
 
     browserFailures.assertNoFailures()
   } finally {

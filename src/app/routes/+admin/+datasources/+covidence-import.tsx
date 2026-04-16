@@ -584,13 +584,8 @@ const AdminCovidenceImport = () => {
   const createMutationState = createMutation(() => {
     return {
       mutationFn: createCovidenceImport,
-      onSuccess: (result) => {
-        const projectId = result.data.covidenceProject?.id
-        const nextPath = projectId
-          ? `/projects/${projectId}/edit`
-          : `/admin/datasources/${result.data.dataSource.id}/edit`
-
-        globalThis.location.assign(nextPath)
+      onSuccess: () => {
+        globalThis.location.assign('/projects')
       },
     }
   })

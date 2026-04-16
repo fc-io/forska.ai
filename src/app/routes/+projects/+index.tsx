@@ -13,14 +13,22 @@ export const ProjectsPage = () => {
 
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
-      <div class="flex justify-between items-center mb-6">
+      <div class="flex flex-wrap justify-between items-center mb-6 gap-4">
         <h1 class="text-2xl font-bold">Projects</h1>
-        <div class="flex gap-2">
+        <div class="flex gap-2 flex-wrap justify-end">
           <Button as={Link} to="/projects/archived" variant="outline">
             Show Archived
           </Button>
           <Button as={Link} to="/projects/create-subproject" variant="outline">
             Create Subproject
+          </Button>
+          <Button
+            as={Link}
+            to="/admin/datasources/covidence-import"
+            variant="outline"
+            class="border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 hover:text-amber-700 focus:ring-amber-500"
+          >
+            Create Covidence Project
           </Button>
           <Button as={Link} to="/projects/create">
             Create New Project
