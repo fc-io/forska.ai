@@ -19,6 +19,20 @@ type Pending = {resolve: (value: unknown) => void; reject: (error: unknown) => v
 
 type Listener = (msg: JsonRpcMessage) => void
 
+type CodexAppServerProcess = {
+  on: ((event: 'error', listener: (error: Error) => void) => unknown)
+    & ((event: 'exit', listener: (code: number | null, signal: string | null) => void) => unknown)
+  stderr: {on: (event: 'data', listener: (data: Buffer) => void) => unknown}
+  stdin: {write: (data: string) => unknown}
+  stdout: {on: (event: 'data', listener: (data: Buffer) => void) => unknown}
+}
+
+export type SpawnCodexAppServer = (
+  command: string,
+  args: string[],
+  options: {stdio: ['pipe', 'pipe', 'pipe']},
+) => CodexAppServerProcess
+
 const CODEx_DEFAULT_TIMEOUT_MS = 30_000
 
 const MAX_DEBUG_OUTPUT_CHARS = 8_000
@@ -114,7 +128,7 @@ export const getCodexTurnAgentMessageText = (threadReadResult: unknown, turnId: 
   return typeof last?.text === 'string' ? last.text : ''
 }
 
-type CodexAppServerClient = {
+export type CodexAppServerClient = {
   modelList: (params?: {limit?: number; includeHidden?: boolean; cursor?: string | null}) => Promise<ModelListResult>
   runJsonTurn: (params: {
     model: string
@@ -203,15 +217,17 @@ export const warmCodexAppServer = async (): Promise<void> => {
   }
 }
 
-export const getCodexAppServerClient = (): CodexAppServerClient => {
-  if (singleton) return singleton
-
+export const createCodexAppServerClient = ({
+  spawnProcess = (command, args, options) => {
+    return spawn(command, args, options)
+  },
+}: {spawnProcess?: SpawnCodexAppServer} = {}): CodexAppServerClient => {
   let nextId = 1
   const pending = new Map<JsonRpcId, Pending>()
   const listeners = new Set<Listener>()
   const codexBin = getCodexBinPath()
 
-  const proc = spawn(codexBin, ['app-server'], {stdio: ['pipe', 'pipe', 'pipe']})
+  const proc = spawnProcess(codexBin, ['app-server'], {stdio: ['pipe', 'pipe', 'pipe']})
 
   let rawStdout = ''
   let rawStderr = ''
@@ -413,7 +429,7 @@ export const getCodexAppServerClient = (): CodexAppServerClient => {
       throw new Error('codex app-server: turn/start missing turnId')
     }
 
-    const turnResult = await new Promise<{text: string; usage: CodexThreadTokenUsage | null}>((resolve, reject) => {
+    return await new Promise<{text: string; usage: CodexThreadTokenUsage | null}>((resolve, reject) => {
       const timeout = setTimeout(() => {
         listeners.delete(handler)
         reject(new Error('codex app-server: turn timeout'))
@@ -451,10 +467,14 @@ export const getCodexAppServerClient = (): CodexAppServerClient => {
 
       listeners.add(handler)
     })
-
-    return turnResult
   }
 
-  singleton = {modelList, runJsonTurn}
+  return {modelList, runJsonTurn}
+}
+
+export const getCodexAppServerClient = (): CodexAppServerClient => {
+  if (singleton) return singleton
+
+  singleton = createCodexAppServerClient()
   return singleton
 }

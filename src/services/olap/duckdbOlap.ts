@@ -83,6 +83,7 @@ type HumanAnswerRow = {articleId: string; promptId: string; answer: string | nul
 type HumanSummaryRow = {articleId: string; answer: string | null; updatedAt: Date | null}
 type UnassessedCandidateRow = {
   articleId: string
+  createdAt: Date | null
   articleCreatedAt: Date | null
   articleUpdatedAt: Date | null
   llmJudgedPromptIds: string[]
@@ -959,6 +960,7 @@ const getUnassessedCandidateRowsFromServing = async (params: {
     rows: rows.slice(0, params.limit).map((row) => {
       return {
         articleId: row.articleId,
+        createdAt: null,
         articleCreatedAt: getDuckdbDateValue(row.articleCreatedAt),
         articleUpdatedAt: getDuckdbDateValue(row.articleUpdatedAt),
         llmJudgedPromptIds: getDuckdbStringArrayValue(row.llmJudgedPromptIds),
@@ -2138,6 +2140,7 @@ const getRawUnassessedCandidateRows = async (params: {
           ? [
               {
                 articleId: article.id,
+                createdAt: article.createdAt,
                 articleCreatedAt: article.articleCreatedAt,
                 articleUpdatedAt: article.articleUpdatedAt,
                 llmJudgedPromptIds: getJudgedPromptIds(articleJudgments, params.scope.promptOrderMap),
@@ -3052,6 +3055,7 @@ export const getUnassessedPairsFromDuckdb = async (params: UnassessedPairsParams
                 lastDate:
                   nextCursorArticle.articleUpdatedAt
                   ?? nextCursorArticle.articleCreatedAt
+                  ?? nextCursorArticle.createdAt
                   ?? new Date('1970-01-01T00:00:00.000Z'),
                 priorityBucket: nextCursorArticle.priorityBucket,
               }
@@ -3072,6 +3076,7 @@ export const getUnassessedPairsFromDuckdb = async (params: UnassessedPairsParams
           lastDate:
             nextCursorArticle.articleUpdatedAt
             ?? nextCursorArticle.articleCreatedAt
+            ?? nextCursorArticle.createdAt
             ?? new Date('1970-01-01T00:00:00.000Z'),
           lastArticleId: nextCursorArticle.articleId,
           priorityBucket: nextCursorArticle.priorityBucket,

@@ -2072,6 +2072,162 @@ test('getUnassessedPairsFromDuckdb slices serving candidates after summary prior
   )
 })
 
+test('getUnassessedPairsFromDuckdb derives raw summary priority from non-empty project summary answers', async () => {
+  const {getUnassessedPairsFromDuckdb} = await loadDuckdbOlap()
+  const cursorDate = new Date('2024-01-03T00:00:00.000Z')
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1', 'summary'),
+    getScopeRouteRows(),
+    [],
+    [
+      {
+        ...getDuckdbScopedArticleRow({id: 'article-1', articleUpdatedAt: '2024-01-02T00:00:00.000Z'}),
+        priorityBucket: 1,
+      },
+    ],
+    [],
+  ])
+
+  const result = await getUnassessedPairsFromDuckdb({
+    projectId: 'project-1',
+    jobId: 'job-1',
+    numberOfPromptsToGet: 10,
+    cursor: {lastArticleId: 'article-2', lastDate: cursorDate, priorityBucket: 1},
+  })
+
+  const rawArticleQuery = duckdbRunnerMockRef.current.queries[4] ?? ''
+
+  expect(result.nextCursor).toEqual({
+    lastArticleId: 'article-1',
+    lastDate: new Date('2024-01-02T00:00:00.000Z'),
+    priorityBucket: 1,
+  })
+  expect(rawArticleQuery).toContain('FROM app.judgment_human_summary')
+  expect(rawArticleQuery).toContain("WHERE project_id = 'project-1'")
+  expect(rawArticleQuery).toContain("AND NULLIF(TRIM(COALESCE(answer, '')), '') IS NOT NULL")
+  expect(rawArticleQuery).toContain('CASE WHEN human_summary_priority.article_id IS NULL THEN 0 ELSE 1 END < 1')
+  expect(rawArticleQuery).toContain(
+    'ORDER BY CASE WHEN human_summary_priority.article_id IS NULL THEN 0 ELSE 1 END DESC',
+  )
+})
+
+test('getUnassessedPairsFromDuckdb keeps raw summary priority article-level with prompt order unchanged', async () => {
+  const {getUnassessedPairsFromDuckdb} = await loadDuckdbOlap()
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1', 'summary'),
+    getScopeRouteRows(),
+    [],
+    [
+      {
+        ...getDuckdbScopedArticleRow({
+          id: 'article-summary',
+          articleCreatedAt: '2024-01-01T00:00:00.000Z',
+          articleUpdatedAt: '2024-01-01T00:00:00.000Z',
+        }),
+        priorityBucket: 1,
+      },
+      {
+        ...getDuckdbScopedArticleRow({
+          id: 'article-plain',
+          articleCreatedAt: '2024-01-03T00:00:00.000Z',
+          articleUpdatedAt: '2024-01-03T00:00:00.000Z',
+        }),
+        priorityBucket: 0,
+      },
+    ],
+    [],
+  ])
+
+  const result = await getUnassessedPairsFromDuckdb({
+    projectId: 'project-1',
+    jobId: 'job-1',
+    numberOfPromptsToGet: 3,
+    cursor: null,
+  })
+
+  expect(result.promptEntries).toEqual([
+    {articleId: 'article-summary', promptId: 'prompt-1'},
+    {articleId: 'article-summary', promptId: 'prompt-2'},
+    {articleId: 'article-plain', promptId: 'prompt-1'},
+  ])
+  expect(result.nextCursor).toEqual({
+    lastArticleId: 'article-plain',
+    lastDate: new Date('2024-01-03T00:00:00.000Z'),
+    priorityBucket: 0,
+  })
+})
+
+test('getUnassessedPairsFromDuckdb keeps serving and raw summary prompt order aligned', async () => {
+  const {getUnassessedPairsFromDuckdb} = await loadDuckdbOlap()
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1', 'summary'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [
+      {
+        articleId: 'article-summary',
+        articleCreatedAt: '2024-01-01T00:00:00.000Z',
+        articleUpdatedAt: '2024-01-01T00:00:00.000Z',
+        llmJudgedPromptIds: [],
+        priorityBucket: 1,
+      },
+      {
+        articleId: 'article-plain',
+        articleCreatedAt: '2024-01-03T00:00:00.000Z',
+        articleUpdatedAt: '2024-01-03T00:00:00.000Z',
+        llmJudgedPromptIds: [],
+        priorityBucket: 0,
+      },
+    ],
+  ])
+  const servingResult = await getUnassessedPairsFromDuckdb({
+    projectId: 'project-1',
+    jobId: 'job-1',
+    numberOfPromptsToGet: 3,
+    cursor: null,
+  })
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1', 'summary'),
+    getScopeRouteRows(),
+    [],
+    [
+      {
+        ...getDuckdbScopedArticleRow({
+          id: 'article-summary',
+          articleCreatedAt: '2024-01-01T00:00:00.000Z',
+          articleUpdatedAt: '2024-01-01T00:00:00.000Z',
+        }),
+        priorityBucket: 1,
+      },
+      {
+        ...getDuckdbScopedArticleRow({
+          id: 'article-plain',
+          articleCreatedAt: '2024-01-03T00:00:00.000Z',
+          articleUpdatedAt: '2024-01-03T00:00:00.000Z',
+        }),
+        priorityBucket: 0,
+      },
+    ],
+    [],
+  ])
+  const rawResult = await getUnassessedPairsFromDuckdb({
+    projectId: 'project-1',
+    jobId: 'job-1',
+    numberOfPromptsToGet: 3,
+    cursor: null,
+  })
+
+  expect(rawResult).toEqual(servingResult)
+})
+
 test('getDatabaseBasedFiltersFromDuckdb keeps values aligned across prompt answer fact and raw fallback paths', async () => {
   const {getDatabaseBasedFiltersFromDuckdb} = await loadDuckdbOlap()
 

@@ -1,0 +1,22 @@
+[
+  {
+    "apiServerPort": 32101,
+    "at": "2026-04-16T13:20:02.714Z",
+    "event": "released",
+    "hostname": "Fredriks-MacBook-Pro-3.local",
+    "leaseId": "43b4cb74-6ee8-4517-9064-1fe2f319d85d",
+    "pid": 81279,
+    "serverRole": "dev-single",
+    "writerUrl": "http://127.0.0.1:32101"
+  },
+  {
+    "apiServerPort": 32101,
+    "at": "2026-04-16T13:19:55.723Z",
+    "event": "acquired",
+    "hostname": "Fredriks-MacBook-Pro-3.local",
+    "leaseId": "43b4cb74-6ee8-4517-9064-1fe2f319d85d",
+    "pid": 81279,
+    "serverRole": "dev-single",
+    "writerUrl": "http://127.0.0.1:32101"
+  }
+]
