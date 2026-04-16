@@ -12,8 +12,10 @@ import {
   getSqlLiteral,
   getTimestampLiteral,
 } from '../services/appQueryHelpers.ts'
+import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
 import {ConversionError, convertPdfToText} from '../utils/convertPdfToText.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
+import {resolveRuntimeWritablePath} from '../utils/runtimeWritablePath.ts'
 
 /**
  * Store an uploaded PDF to the local assets folder.
@@ -23,7 +25,7 @@ const storeUploadedPdf = async (articleId: string, pdfBuffer: Buffer): Promise<s
   const relDir = 'assets/user_uploaded_article_pdfs'
   const fileName = `${articleId}.pdf`
   const relPath = `${relDir}/${fileName}`
-  const absDir = path.join(process.cwd(), relDir)
+  const absDir = resolveRuntimeWritablePath({pathValue: relDir})
   const absPath = path.join(absDir, fileName)
 
   try {
@@ -256,7 +258,17 @@ export const articleAdminRoutes = new Elysia()
         console.log(`[convertPdf] Converting article ${article.id}`)
 
         try {
-          const {md, html} = await convertPdfToText(fullTextPDF, DOCLING_CONVERSION_TIMEOUT_MS)
+          const runtimeConfig = await getUserConfigQueryService().getFullTextConversionModelConfig()
+
+          if (!runtimeConfig) {
+            throw new Error('No Docling conversion model configured')
+          }
+
+          const {md, html} = await convertPdfToText({
+            baseURL: runtimeConfig.baseURL,
+            localPath: fullTextPDF,
+            timeoutMs: DOCLING_CONVERSION_TIMEOUT_MS,
+          })
 
           await getAppDatabaseService().run(`
             UPDATE app.article

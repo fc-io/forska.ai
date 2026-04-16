@@ -1,6 +1,8 @@
 import {Link} from '@tanstack/solid-router'
 import {Show} from 'solid-js'
 
+import {getRuntimeAssetUrl} from '../../../app/utils/getRuntimeAssetUrl.ts'
+
 type ArticleTabsProps = {
   activeTab: 'summary' | 'fulltext'
   hasFullText: boolean
@@ -39,30 +41,34 @@ export const ArticleTabs = (props: ArticleTabsProps) => {
         </Show>
       </div>
 
-      <Show when={props.fullTextPDF}>
-        <div class="pr-4">
-          <a
-            href={`/${props.fullTextPDF}`}
-            download=""
-            class="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke-width="1.5"
-              stroke="currentColor"
-              class="w-4 h-4"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"
-              />
-            </svg>
-            Download PDF
-          </a>
-        </div>
+      <Show when={props.fullTextPDF ?? null}>
+        {(fullTextPdf) => {
+          return (
+            <div class="pr-4">
+              <a
+                href={getRuntimeAssetUrl(fullTextPdf())}
+                download=""
+                class="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke-width="1.5"
+                  stroke="currentColor"
+                  class="w-4 h-4"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"
+                  />
+                </svg>
+                Download PDF
+              </a>
+            </div>
+          )
+        }}
       </Show>
     </div>
   )

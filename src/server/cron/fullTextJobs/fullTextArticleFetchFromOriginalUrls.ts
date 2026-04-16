@@ -7,6 +7,7 @@ import {
   emptyArticleSourceMetadata,
   getArticleSourceMetadataValue,
 } from '../../../utils/articleSourceMetadata.ts'
+import {resolveRuntimeWritablePath} from '../../utils/runtimeWritablePath.ts'
 import type {PdfFetchAttemptResult} from './pdfFetchTypes.ts'
 
 const SOURCE_NAME = 'OriginalUrls'
@@ -21,7 +22,7 @@ const storePdfToAssets = async (key: string, response: Response): Promise<string
   const relDir = 'assets/article_pdfs'
   const fileName = `${toSafeFilename(key)}.pdf`
   const relPath = `${relDir}/${fileName}`
-  const absDir = path.join(process.cwd(), relDir)
+  const absDir = resolveRuntimeWritablePath({pathValue: relDir})
   const absPath = path.join(absDir, fileName)
   const write = async () => {
     await mkdir(absDir, {recursive: true})

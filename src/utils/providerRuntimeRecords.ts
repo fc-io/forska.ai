@@ -1,7 +1,9 @@
 import {type as arktype} from 'arktype'
 import {mkdirSync, readdirSync, readFileSync} from 'fs'
 import {writeFile} from 'fs/promises'
-import {join, resolve} from 'path'
+import {join} from 'path'
+
+import {resolveRuntimeWritablePath} from '../server/utils/runtimeWritablePath.ts'
 
 const providerRuntimeRecordShape = arktype({
   activeModelNames: 'string[]',
@@ -32,7 +34,7 @@ type CreateProviderRuntimeRecordInput = Omit<ProviderRuntimeRecord, 'modelName' 
   modelName?: string | null
 }
 
-export const providerRuntimeRecordsDir = resolve(process.cwd(), 'cache/providerRuntimeRecords')
+export const providerRuntimeRecordsDir = resolveRuntimeWritablePath({pathValue: 'cache/providerRuntimeRecords'})
 export const providerRuntimeRecordFreshnessMs = 30_000
 
 const getTrimmedValue = (value: string | null | undefined): string | null => {

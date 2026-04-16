@@ -98,6 +98,8 @@ bun run desktop:build
 
 These desktop commands are additive. Keep using `bun run dev:server` and `bun run dev:app` for the normal browser workflow.
 
+Desktop build outputs go to `.desktopBuild/` and `.desktopArtifacts/`. In desktop mode the packaged backend writes its DuckDB, cache, imports, and runtime assets under the desktop app-data root instead of the repo root.
+
 Open the local URL printed by Vite or the built app server URL for the profile you started.
 
 Do not create or edit `.env` files for normal local dev. Configure providers/models in the UI. For one-off machine-local overrides, pass shell env inline with the command.

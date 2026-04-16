@@ -1,5 +1,6 @@
 import {randomUUID} from 'node:crypto'
 import {existsSync, readdirSync, rmSync, statSync, writeFileSync} from 'node:fs'
+import {dirname} from 'node:path'
 
 import {Database} from 'bun:sqlite'
 
@@ -1187,7 +1188,7 @@ const runSystemSqliteFallbackStep = ({
   const walPath = `${sqlitePath}-wal`
   const walBytesBefore = existsSync(walPath) ? getFileByteSize(walPath) : null
   const result = globalThis.Bun.spawnSync(command, {
-    cwd: process.cwd(),
+    cwd: dirname(sqlitePath),
     env: {...process.env},
     stderr: 'pipe',
     stdout: 'pipe',

@@ -3,6 +3,7 @@ import path from 'path'
 
 import type {ArticleRecord} from '../../../db/schemaTypes.ts'
 import {sleep} from '../../../utils/sleep.ts'
+import {resolveRuntimeWritablePath} from '../../utils/runtimeWritablePath.ts'
 import type {PdfFetchAttemptResult} from './pdfFetchTypes.ts'
 
 const SOURCE_NAME = 'arXiv'
@@ -21,7 +22,7 @@ const storePdfToAssets = async (arxivId: string, response: Response): Promise<st
   const relDir = 'assets/article_pdfs'
   const fileName = `${toSafeFilename(cleanArxivId(arxivId))}.pdf`
   const relPath = `${relDir}/${fileName}`
-  const absDir = path.join(process.cwd(), relDir)
+  const absDir = resolveRuntimeWritablePath({pathValue: relDir})
   const absPath = path.join(absDir, fileName)
   const write = async () => {
     await mkdir(absDir, {recursive: true})

@@ -2,6 +2,7 @@ import {createEffect, createMemo, createSignal, onCleanup, onMount, Show} from '
 
 import {decodeAndSanitize} from '../../../../../app/utils/decodeAndSanitize'
 import {getArticleUrl} from '../../../../../app/utils/getArticleUrl.ts'
+import {getRuntimeAssetUrl} from '../../../../../app/utils/getRuntimeAssetUrl.ts'
 import {reviewArticleDetailsNormalizeQuoteForHtmlMatch} from './reviewArticleDetails/reviewArticleDetailsNormalizeQuoteForHtmlMatch.ts'
 import {
   ReviewArticleDetailsPatientTimelineExpandable,
@@ -927,30 +928,34 @@ export const ReviewArticleDetails = (props: ReviewArticleDetailsProps) => {
           </Show>
 
           {/* PDF Download Button - hidden when using tabs (button is in tab bar) */}
-          <Show when={!hidePdfButton() && props.article.fullTextPDF}>
-            <div class="mt-2">
-              <a
-                href={`/${props.article.fullTextPDF}`}
-                download=""
-                class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke-width="1.5"
-                  stroke="currentColor"
-                  class="w-4 h-4"
-                >
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"
-                  />
-                </svg>
-                Download PDF
-              </a>
-            </div>
+          <Show when={!hidePdfButton() ? (props.article.fullTextPDF ?? null) : null}>
+            {(fullTextPdf) => {
+              return (
+                <div class="mt-2">
+                  <a
+                    href={getRuntimeAssetUrl(fullTextPdf())}
+                    download=""
+                    class="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke-width="1.5"
+                      stroke="currentColor"
+                      class="w-4 h-4"
+                    >
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"
+                      />
+                    </svg>
+                    Download PDF
+                  </a>
+                </div>
+              )
+            }}
           </Show>
 
           {/* Summary with clickable highlights - shown in summary and all modes */}

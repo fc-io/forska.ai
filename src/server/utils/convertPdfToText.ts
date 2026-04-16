@@ -1,4 +1,6 @@
-import path from 'path'
+import {basename} from 'path'
+
+import {resolveRuntimeFilePath} from './runtimeWritablePath.ts'
 
 // Bun global type declaration for environments where Bun types aren't available
 declare const Bun: {file: (path: string) => {exists: () => Promise<boolean>; arrayBuffer: () => Promise<ArrayBuffer>}}
@@ -110,7 +112,7 @@ export const convertPdfToText = async ({
   const startTime = Date.now()
 
   // Use absolute path for safety
-  const absPath = path.resolve(process.cwd(), localPath)
+  const absPath = resolveRuntimeFilePath({pathValue: localPath})
 
   // Check if file exists
   const file = Bun.file(absPath)
@@ -135,7 +137,7 @@ export const convertPdfToText = async ({
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        sources: [{kind: 'file', base64_string: base64, filename: path.basename(absPath)}],
+        sources: [{kind: 'file', base64_string: base64, filename: basename(absPath)}],
         options: {to_formats: ['md', 'html']},
       }),
       signal: controller.signal,

@@ -1,6 +1,7 @@
 import type {ArticleRecord} from '../../db/schemaTypes.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from '../services/appQueryHelpers.ts'
+import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
 import {ConversionError, convertPdfToText} from './convertPdfToText.ts'
 import {rateLimitedLogger} from './rateLimitedLogger.ts'
 
@@ -105,7 +106,17 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
 
     console.log(`[ensureFullText] Converting article ${articleId} on-the-fly`)
     const startTime = Date.now()
-    const {md, html} = await convertPdfToText(fresh.fullTextPDF, DOCLING_CONVERSION_TIMEOUT_MS)
+    const runtimeConfig = await getUserConfigQueryService().getFullTextConversionModelConfig()
+
+    if (!runtimeConfig) {
+      throw new Error('No Docling conversion model configured')
+    }
+
+    const {md, html} = await convertPdfToText({
+      baseURL: runtimeConfig.baseURL,
+      localPath: fresh.fullTextPDF,
+      timeoutMs: DOCLING_CONVERSION_TIMEOUT_MS,
+    })
 
     await getAppDatabaseService().run(`
       UPDATE app.article

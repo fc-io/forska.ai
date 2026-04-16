@@ -4,6 +4,7 @@ import path from 'node:path'
 
 import {XMLParser} from 'fast-xml-parser'
 
+import {resolveRuntimeFilePath, resolveRuntimeWritablePath} from '../utils/runtimeWritablePath.ts'
 import {
   type ArticleImportStoreRow,
   type ArticleImportStoreTx,
@@ -46,8 +47,8 @@ type StructuredFileItemContext = {
 
 type StructuredFileUploadInput = Blob & {name?: string; type?: string}
 
-const structuredFileImportFolder = path.resolve(process.cwd(), 'assets/structured_file_imports')
-const structuredFilePathPrefix = 'assets/structured_file_imports/'
+const structuredFilePathPrefix = 'assets/structured_file_imports'
+const structuredFileImportFolder = resolveRuntimeWritablePath({pathValue: structuredFilePathPrefix})
 const xmlParser = new XMLParser({
   attributeNamePrefix: '@_',
   ignoreAttributes: false,
@@ -400,8 +401,8 @@ const getStoredStructuredFileUpload = async (
 
   const sanitizedFileName = getSanitizedFileName(sourceFileName)
   const targetFileName = `${randomUUID()}-${sanitizedFileName}`
-  const assetPath = `${structuredFilePathPrefix}${targetFileName}`
-  const absolutePath = path.resolve(process.cwd(), assetPath)
+  const assetPath = `${structuredFilePathPrefix}/${targetFileName}`
+  const absolutePath = resolveRuntimeFilePath({pathValue: assetPath})
 
   writeFileSync(absolutePath, content)
 
@@ -409,7 +410,7 @@ const getStoredStructuredFileUpload = async (
 }
 
 const getStructuredFileAbsolutePath = (assetPath: string) => {
-  const absolutePath = path.resolve(process.cwd(), assetPath)
+  const absolutePath = resolveRuntimeFilePath({pathValue: assetPath})
   const allowedPrefix = `${structuredFileImportFolder}${path.sep}`
   return absolutePath === structuredFileImportFolder || absolutePath.startsWith(allowedPrefix) ? absolutePath : null
 }

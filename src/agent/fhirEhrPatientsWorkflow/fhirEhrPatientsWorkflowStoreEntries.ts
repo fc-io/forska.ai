@@ -1,7 +1,7 @@
 import {createReadStream, createWriteStream} from 'node:fs'
 import {access, mkdtemp, readdir, rm, stat} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
-import {join, resolve} from 'node:path'
+import {join} from 'node:path'
 import {createInterface} from 'node:readline'
 import {createGunzip} from 'node:zlib'
 
@@ -9,6 +9,7 @@ import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts
 import {escapeSqlString, getQuotedStringList} from '../../server/services/appQueryHelpers.ts'
 import {storeImportedArticles} from '../../server/services/articleImportStoreService.ts'
 import {HttpError} from '../../server/utils/httpError.ts'
+import {resolveRuntimeFilePath} from '../../server/utils/runtimeWritablePath.ts'
 import {buildFhirPatientMarkdown} from './buildFhirPatientMarkdown.ts'
 import {
   FhirDiagnosticReportLine,
@@ -611,7 +612,7 @@ export const fhirEhrPatientsWorkflowStoreEntries = async (
   }
 
   const {assetsFolder, importRoute, dryRun} = normalized.value
-  const assetsPath = resolve(process.cwd(), assetsFolder)
+  const assetsPath = resolveRuntimeFilePath({pathValue: assetsFolder})
   const shards = await getShardFilesRecursively(assetsPath)
 
   const stats: ImportStats = {patientsTotal: 0, inserted: 0, updated: 0, skipped: 0, errors: 0}

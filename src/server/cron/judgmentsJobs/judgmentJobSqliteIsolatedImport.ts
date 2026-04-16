@@ -1,5 +1,7 @@
 import {spawn} from 'node:child_process'
+import {fileURLToPath} from 'node:url'
 
+import {getRuntimeWritableRoot} from '../../utils/runtimeWritablePath.ts'
 import {
   type JudgmentJobSqliteOutboxImportCycleResult,
   runJudgmentJobSqliteOutboxImportCycleForClaimedBatch,
@@ -7,6 +9,9 @@ import {
 import type {JudgmentJobSqliteClaimedOutboxBatch, JudgmentJobSqliteOutboxEntry} from './judgmentJobSqliteService.ts'
 
 const isolatedImportFlushMaxCycles = 1_000
+const isolatedImportEntrypointPath = fileURLToPath(
+  new URL('./runJudgmentJobSqliteSingleJobClaimExport.ts', import.meta.url),
+)
 
 type ParsedIsolatedImportOutput = Partial<JudgmentJobSqliteOutboxImportCycleResult> & {
   claimedBatch?: unknown
@@ -148,9 +153,9 @@ export const runJudgmentJobSqliteIsolatedImportCycle = async ({
   jobId: string
 }): Promise<JudgmentJobSqliteIsolatedImportProcessResult> => {
   const childProcess = spawn(
-    'bun',
-    ['scripts/runJudgmentJobSqliteSingleJobClaimExport.ts', `--jobId=${jobId}`, `--claimedBy=${claimedBy}`],
-    {cwd: process.cwd(), env: {...process.env}, stdio: ['ignore', 'pipe', 'pipe']},
+    process.execPath,
+    [isolatedImportEntrypointPath, `--jobId=${jobId}`, `--claimedBy=${claimedBy}`],
+    {cwd: getRuntimeWritableRoot(), env: {...process.env}, stdio: ['ignore', 'pipe', 'pipe']},
   )
 
   const stdoutPromise = new Promise<string>((resolve, reject) => {

@@ -1,6 +1,7 @@
 import {format} from 'date-fns'
 import {createMemo, Match, Show, splitProps, Switch} from 'solid-js'
 
+import {getRuntimeAssetUrl} from '../../../../app/utils/getRuntimeAssetUrl.ts'
 import {type ArticleSourceLink, getArticleSourceMetadataValue} from '../../../../utils/articleSourceMetadata.ts'
 
 const isSubscriptionRequired = (url: ArticleSourceLink) => {
@@ -50,7 +51,7 @@ export const ReviewsArticlesPdfCell = (props: {
     <Switch fallback={<span class="text-gray-400">—</span>}>
       <Match when={view().hasPdf}>
         <a
-          href={view().pdf.startsWith('/') ? view().pdf : `/${view().pdf}`}
+          href={getRuntimeAssetUrl(view().pdf)}
           target="_blank"
           rel="noopener noreferrer"
           class="px-1.5 py-0.5 text-xs rounded bg-green-100 text-green-800"

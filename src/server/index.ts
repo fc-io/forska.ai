@@ -27,6 +27,7 @@ import {projectExportRoutes} from './routes/ProjectExportRoutes.ts'
 import {projectsAddArticlesRoutes} from './routes/ProjectsAddArticlesRoutes.ts'
 import {projectsRoutes} from './routes/ProjectsRoutes.ts'
 import {promptsRoutes} from './routes/PromptsRoutes.ts'
+import {runtimeAssetsRoutes} from './routes/RuntimeAssetsRoutes.ts'
 import {subprojectsRoutes} from './routes/SubprojectsRoutes.ts'
 import {tokensRoutes} from './routes/TokensRoutes'
 import {usersRoutes} from './routes/UsersRoutes'
@@ -94,6 +95,7 @@ const _app = new Elysia()
   .use(projectsAddArticlesRoutes)
   .use(projectArticlesRoutes)
   .use(promptsRoutes)
+  .use(runtimeAssetsRoutes)
   .use(importRoutes)
   .use(dataSourcesRoutes)
   .use(dataSourcesImportRoutes)

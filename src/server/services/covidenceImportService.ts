@@ -5,6 +5,7 @@ import path from 'node:path'
 import {normalizeDoi} from '../../utils/articleSourceMetadata.ts'
 import {listSelectableProviderModels} from '../providers/providerModelRepository.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
+import {resolveRuntimeFilePath, resolveRuntimeWritablePath} from '../utils/runtimeWritablePath.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
 import {
@@ -219,8 +220,8 @@ type CovidenceProjectPromptLink = {
   promptId: string
 }
 
-const covidenceImportFolder = path.resolve(process.cwd(), 'assets/covidence_imports')
 const covidenceImportPathPrefix = 'assets/covidence_imports'
+const covidenceImportFolder = resolveRuntimeWritablePath({pathValue: covidenceImportPathPrefix})
 const covidencePromptHeadingByMode = {
   full_text: 'Covidence full-text screening',
   title_abstract: 'Covidence title/abstract screening',
@@ -1657,7 +1658,7 @@ const getCovidencePackageAbsolutePath = (assetPath: string) => {
   }
 
   const datasourceFolder = getCovidencePackageFolder(assetPathParts.datasourceId)
-  const absolutePath = path.resolve(process.cwd(), assetPath)
+  const absolutePath = resolveRuntimeFilePath({pathValue: assetPath})
   const allowedPrefix = `${datasourceFolder}${path.sep}`
 
   return absolutePath.startsWith(allowedPrefix) ? absolutePath : null
@@ -2438,7 +2439,7 @@ export const storeCovidencePackageFiles = async (params: {
 
       const sanitizedFileName = getSanitizedFileName(sourceFileName)
       const assetPath = `${covidenceImportPathPrefix}/${params.datasourceId}/${fileRole}-${sanitizedFileName}`
-      const absolutePath = path.resolve(process.cwd(), assetPath)
+      const absolutePath = resolveRuntimeFilePath({pathValue: assetPath})
 
       writeFileSync(absolutePath, await file.text())
 

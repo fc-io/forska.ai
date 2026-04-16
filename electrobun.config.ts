@@ -13,10 +13,15 @@ export default {
     version: typeof packageJson.version === 'string' ? packageJson.version : '0.0.0',
   },
   build: {
-    artifactFolder: 'desktopArtifacts',
-    buildFolder: 'desktopBuild',
+    artifactFolder: '.desktopArtifacts',
+    buildFolder: '.desktopBuild',
     bun: {entrypoint: 'src/desktop/index.ts'},
-    copy: {src: 'src', 'dist/assets': 'views/mainview/assets', 'dist/index.html': 'views/mainview/index.html'},
+    copy: {
+      'dist/assets': 'views/mainview/assets',
+      'dist/index.html': 'views/mainview/index.html',
+      node_modules: 'node_modules',
+      src: 'src',
+    },
     watchIgnore: ['dist/**', 'desktopArtifacts/**', 'desktopBuild/**'],
   },
 } satisfies ElectrobunConfig
