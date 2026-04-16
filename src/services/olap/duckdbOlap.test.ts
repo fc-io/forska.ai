@@ -2010,9 +2010,65 @@ test('getUnassessedPairsFromDuckdb uses priority-aware cursor ordering for summa
     lastDate: new Date('2024-01-02T00:00:00.000Z'),
     priorityBucket: 0,
   })
-  expect(servingQuery).toContain('CASE WHEN human_summary_priority.article_id IS NULL THEN 0 ELSE 1 END < 0')
   expect(servingQuery).toContain(
-    "ORDER BY CASE WHEN human_summary_priority.article_id IS NULL THEN 0 ELSE 1 END DESC, COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') DESC, s.article_id DESC",
+    "CASE WHEN list_contains(s.human_answered_prompt_ids, 'summary') THEN 1 ELSE 0 END < 0",
+  )
+  expect(servingQuery).toContain(
+    "ORDER BY CASE WHEN list_contains(s.human_answered_prompt_ids, 'summary') THEN 1 ELSE 0 END DESC, COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') DESC, s.article_id DESC",
+  )
+  expect(servingQuery).not.toContain('FROM app.judgment_human_summary')
+})
+
+test('getUnassessedPairsFromDuckdb slices serving candidates after summary priority article ordering', async () => {
+  const {getUnassessedPairsFromDuckdb} = await loadDuckdbOlap()
+
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRowsWithTwoPrompts(),
+    getProjectRows('model-1', 'summary'),
+    getScopeRouteRows(),
+    [{projectId: 'project-1'}],
+    [
+      {
+        articleId: 'article-summary',
+        articleCreatedAt: '2024-01-01T00:00:00.000Z',
+        articleUpdatedAt: '2024-01-01T00:00:00.000Z',
+        llmJudgedPromptIds: [],
+        priorityBucket: 1,
+      },
+      {
+        articleId: 'article-plain',
+        articleCreatedAt: '2024-01-03T00:00:00.000Z',
+        articleUpdatedAt: '2024-01-03T00:00:00.000Z',
+        llmJudgedPromptIds: [],
+        priorityBucket: 0,
+      },
+    ],
+  ])
+
+  const result = await getUnassessedPairsFromDuckdb({
+    projectId: 'project-1',
+    jobId: 'job-1',
+    numberOfPromptsToGet: 3,
+    cursor: null,
+  })
+
+  const servingQuery = duckdbRunnerMockRef.current.queries[4] ?? ''
+
+  expect(result.promptEntries).toEqual([
+    {articleId: 'article-summary', promptId: 'prompt-1'},
+    {articleId: 'article-summary', promptId: 'prompt-2'},
+    {articleId: 'article-plain', promptId: 'prompt-1'},
+  ])
+  expect(result.nextCursor).toEqual({
+    lastArticleId: 'article-plain',
+    lastDate: new Date('2024-01-03T00:00:00.000Z'),
+    priorityBucket: 0,
+  })
+  expect(servingQuery).toContain(
+    "CASE WHEN list_contains(s.human_answered_prompt_ids, 'summary') THEN 1 ELSE 0 END AS priorityBucket",
+  )
+  expect(servingQuery).toContain(
+    "ORDER BY CASE WHEN list_contains(s.human_answered_prompt_ids, 'summary') THEN 1 ELSE 0 END DESC, COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') DESC, s.article_id DESC",
   )
 })
 

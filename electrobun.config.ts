@@ -1,3 +1,5 @@
+/* eslint-disable import/no-default-export */
+
 import {readFileSync} from 'node:fs'
 
 import type {ElectrobunConfig} from 'electrobun'
@@ -14,7 +16,7 @@ export default {
     artifactFolder: 'desktopArtifacts',
     buildFolder: 'desktopBuild',
     bun: {entrypoint: 'src/desktop/index.ts'},
-    copy: {'dist/assets': 'views/mainview/assets', 'dist/index.html': 'views/mainview/index.html'},
+    copy: {src: 'src', 'dist/assets': 'views/mainview/assets', 'dist/index.html': 'views/mainview/index.html'},
     watchIgnore: ['dist/**', 'desktopArtifacts/**', 'desktopBuild/**'],
   },
 } satisfies ElectrobunConfig

@@ -218,6 +218,7 @@ test('runJsonTurn keeps concurrent success scoped when another turn fails out of
 
         console.log(
           JSON.stringify({
+            turnIds: Object.fromEntries(turnIdByInputText.entries()),
             results: results.map((result) => {
               return result.status === 'fulfilled'
                 ? {status: 'fulfilled', text: result.value.text}

@@ -909,8 +909,7 @@ const getUnassessedCandidateRowsFromServing = async (params: {
   const whereParts = getDuckdbServingReviewWhereParts({...params, requireIncompleteLlm: true})
   const activityExpression =
     "COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')"
-  const priorityBucketExpression = getDuckdbUnassessedPairsPriorityBucketExpression(params.scope)
-  const priorityJoinClause = getDuckdbUnassessedPairsPriorityJoinClause(params.scope, 's.article_id')
+  const priorityBucketExpression = getDuckdbServingUnassessedPairsPriorityBucketExpression(params.scope)
   const normalizedCursor = getUnassessedPairsCursor(params.cursor)
   const cursorClause = normalizedCursor
     ? getDuckdbUnassessedPairsCursorWhereClause({
@@ -942,7 +941,6 @@ const getUnassessedCandidateRowsFromServing = async (params: {
     INNER JOIN active_generation active
       ON active.projectId = s.project_id
      AND active.generation = s.generation
-    ${priorityJoinClause}
     WHERE ${[...whereParts, cursorClause]
       .filter((part): part is string => {
         return part !== null
@@ -1496,6 +1494,12 @@ const getDuckdbUnassessedPairsPriorityJoinClause = (scope: ProjectOlapScope, art
 const getDuckdbUnassessedPairsPriorityBucketExpression = (scope: ProjectOlapScope) => {
   return scope.humanJudgmentMode === 'summary'
     ? 'CASE WHEN human_summary_priority.article_id IS NULL THEN 0 ELSE 1 END'
+    : '0'
+}
+
+const getDuckdbServingUnassessedPairsPriorityBucketExpression = (scope: ProjectOlapScope) => {
+  return scope.humanJudgmentMode === 'summary'
+    ? "CASE WHEN list_contains(s.human_answered_prompt_ids, 'summary') THEN 1 ELSE 0 END"
     : '0'
 }
 
