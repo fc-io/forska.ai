@@ -34,9 +34,10 @@ import {parseSinglePromptEvidence} from './judge/parseSinglePromptEvidence.ts'
 import {
   type ParseAttemptResult,
   parseSinglePromptJudgment,
+  type SinglePromptJudgmentResult,
   tryParseJsonWithSanitization,
 } from './judge/parseSinglePromptJudgment.ts'
-import {storeSinglePromptJudgment} from './judge/storeSinglePromptJudgment.ts'
+import {JudgmentPersistenceError, storeSinglePromptJudgment} from './judge/storeSinglePromptJudgment.ts'
 
 type ModelConfigInput = {
   modelId: string
@@ -300,6 +301,42 @@ Here is your previous answer:
 ${lastResponse}
 
 Please try again. Your quotes MUST be copied verbatim from the provided text (or return an empty array). Respond ONLY with valid JSON matching the schema.`
+}
+
+type SinglePromptJudgmentQuoteValidationResult =
+  | {judgment: SinglePromptJudgmentResult; kind: 'valid'}
+  | {error: string; kind: 'requeue'}
+  | {error: string; kind: 'retry'; nextPrompt: string}
+
+const invalidSinglePromptQuoteError = 'Invalid quotes: not substrings of record text'
+
+export const validateSinglePromptJudgmentQuotes = ({
+  attempt,
+  judgment,
+  lastResponse,
+  maxRetries,
+  recordText,
+  retryBasePrompt,
+}: {
+  attempt: number
+  judgment: SinglePromptJudgmentResult
+  lastResponse: string
+  maxRetries: number
+  recordText: string
+  retryBasePrompt: string
+}): SinglePromptJudgmentQuoteValidationResult => {
+  const rawQuotes = Array.isArray(judgment.quotes) ? judgment.quotes : []
+  const quoteValidation = getQuoteValidation(rawQuotes, recordText)
+
+  return quoteValidation.invalid.length === 0
+    ? {judgment, kind: 'valid'}
+    : attempt < maxRetries
+      ? {
+          error: invalidSinglePromptQuoteError,
+          kind: 'retry',
+          nextPrompt: buildQuoteValidationRetryPrompt(retryBasePrompt, quoteValidation.invalid, lastResponse),
+        }
+      : {error: invalidSinglePromptQuoteError, kind: 'requeue'}
 }
 
 const storeTokenUseAndThrowConnectionError = async ({
@@ -713,11 +750,13 @@ export const judgeSinglePrompt = async ({
   const tokenUse: JudgeTokenUsageEntry[] = []
   const startedAt = new Date().toISOString()
   const startDuration = performance.now()
+  let shouldRequeueError: JudgmentPersistenceError | null = null
 
   const systemPrompt = getSinglePromptSystemPromptForArticle(article)
 
   const basePrompt = judgeGetSinglePrompt(article, prompt, contentSettings)
   const promptIds = [prompt.id]
+  const recordTextForQuoteValidation = getRecordTextForQuoteValidation(article)
 
   const baseBudget = isWithinContextBudget({
     systemPrompt,
@@ -763,6 +802,70 @@ export const judgeSinglePrompt = async ({
         })
 
         const judgment = parseSinglePromptJudgment(currentResponse.text, prompt.type)
+        const quoteValidationResult = validateSinglePromptJudgmentQuotes({
+          attempt: attempts,
+          judgment,
+          lastResponse: currentResponse.text,
+          maxRetries: MAX_RETRIES,
+          recordText: recordTextForQuoteValidation,
+          retryBasePrompt: basePrompt,
+        })
+
+        if (quoteValidationResult.kind === 'retry') {
+          recordConnectionSuccess({effectiveBaseURL: currentResponse.baseURL, providerConnectionId})
+
+          tokenUse.push({
+            articleId: article.id,
+            promptIds,
+            modelId,
+            modelName,
+            baseURL: currentResponse.baseURL,
+            promptTokens: currentResponse.usage.promptTokens,
+            completionTokens: currentResponse.usage.completionTokens,
+            totalTokens: currentResponse.usage.totalTokens,
+            outcome: 'failure',
+            error: quoteValidationResult.error,
+            sanitizationAttempted: false,
+            sanitizedError: null,
+            sanitizedResponse: null,
+            lastResponse: currentResponse.text,
+            systemPrompt,
+            userPrompt,
+          })
+          errorCount += 1
+
+          userPrompt = quoteValidationResult.nextPrompt
+          lastResponse = currentResponse.text
+          continue
+        }
+
+        if (quoteValidationResult.kind === 'requeue') {
+          recordConnectionSuccess({effectiveBaseURL: currentResponse.baseURL, providerConnectionId})
+
+          tokenUse.push({
+            articleId: article.id,
+            promptIds,
+            modelId,
+            modelName,
+            baseURL: currentResponse.baseURL,
+            promptTokens: currentResponse.usage.promptTokens,
+            completionTokens: currentResponse.usage.completionTokens,
+            totalTokens: currentResponse.usage.totalTokens,
+            outcome: 'failure',
+            error: quoteValidationResult.error,
+            sanitizationAttempted: false,
+            sanitizedError: null,
+            sanitizedResponse: null,
+            lastResponse: currentResponse.text,
+            systemPrompt,
+            userPrompt,
+          })
+          errorCount += 1
+          abortCount += 1
+          shouldRequeueError = new JudgmentPersistenceError(quoteValidationResult.error)
+          console.error(`${article.id} | Prompt ${prompt.id} | Aborting request. ${quoteValidationResult.error}`)
+          break
+        }
 
         await storeSinglePromptJudgment({
           article,
@@ -771,7 +874,7 @@ export const judgeSinglePrompt = async ({
           queueRecordId,
           modelId,
           projectId,
-          judgment,
+          judgment: quoteValidationResult.judgment,
           chunkingStrategy: null,
         })
 
@@ -884,7 +987,6 @@ export const judgeSinglePrompt = async ({
     }
   } else {
     const evidenceSystemPrompt = getSinglePromptEvidenceSystemPromptForArticle(article)
-    const recordTextForQuoteValidation = getRecordTextForQuoteValidation(article)
     const chunkTarget = getChunkingTarget({article, contentSettings})
     const maxEvidenceUserPromptChars = getMaxUserPromptChars({
       modelContext,
@@ -1389,4 +1491,8 @@ export const judgeSinglePrompt = async ({
   await judgeStoreTokenUse(tokenUse, sessionId, {startedAt, finishedAt, duration}, judgmentsJobId).catch((err) => {
     console.error('judgeStoreTokenUse failed; continuing', err instanceof Error ? err.message : err)
   })
+
+  if (shouldRequeueError) {
+    throw shouldRequeueError
+  }
 }
