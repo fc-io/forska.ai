@@ -665,6 +665,11 @@ const AdminJudgmentJobDetail = () => {
                         <p class="text-xs text-sky-600 mt-1">
                           Prompt executions started locally; one prompt can span multiple live LLM calls
                         </p>
+                        <Show when={data()?.requestStats}>
+                          <p class="text-xs font-medium text-sky-700 mt-1">
+                            Live LLM calls: {data()?.requestStats?.inFlight ?? 0}
+                          </p>
+                        </Show>
                       </div>
                       <div class="bg-green-50 rounded-lg p-4">
                         <p class="text-sm text-green-600 mb-1">Judged</p>

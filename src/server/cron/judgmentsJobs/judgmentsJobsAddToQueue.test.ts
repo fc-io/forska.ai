@@ -111,8 +111,23 @@ type MockSqliteService = {
   syncOwnedLeases: () => Promise<void>
 }
 
-const getRunningJob = () => {
-  return {id: 'job-1', modelProvider: 'openai', projectId: 'project-1'}
+type MockRunningJob = {
+  id: string
+  maxInflightRequests: number | null
+  modelProvider: string
+  projectId: string
+  providerConnectionId: string | null
+}
+
+const getRunningJob = (overrides: Partial<MockRunningJob> = {}): MockRunningJob => {
+  return {
+    id: 'job-1',
+    maxInflightRequests: null,
+    modelProvider: 'openai',
+    projectId: 'project-1',
+    providerConnectionId: 'connection-1',
+    ...overrides,
+  }
 }
 
 type MockJobConfigRow = {
@@ -158,7 +173,9 @@ const registerSharedMocks = (
     answeredHumanSummaryRows = [],
     answeredHumanSummaryTableRows,
     existingJudgmentRows = [],
+    inferenceConfig = {codexMaxInflight: 1, judgmentsAddToQueueMaxBatchSize: 1, judgmentsReadyTargetMultiplier: 1},
     projectDirtyToken = null,
+    runningJobs = [getRunningJob()],
   }: {
     jobConfigRow?: MockJobConfigRow
     getPromptsImpl?: (
@@ -175,7 +192,13 @@ const registerSharedMocks = (
     answeredHumanSummaryRows?: Array<{articleId: string}>
     answeredHumanSummaryTableRows?: Array<{answer: string | null; articleId: string; projectId: string}>
     existingJudgmentRows?: Array<{articleId: string; promptId: string}>
+    inferenceConfig?: {
+      codexMaxInflight: number
+      judgmentsAddToQueueMaxBatchSize: number
+      judgmentsReadyTargetMultiplier: number
+    }
     projectDirtyToken?: number | null
+    runningJobs?: MockRunningJob[]
   } = {},
 ) => {
   void mock.module(appDatabaseServiceModulePath, () => {
@@ -215,7 +238,7 @@ const registerSharedMocks = (
     }
   })
   void mock.module(inferenceRuntimeConfigModulePath, () => {
-    const inferenceRuntimeConfig = {judgmentsAddToQueueMaxBatchSize: 1, judgmentsReadyTargetMultiplier: 1}
+    const inferenceRuntimeConfig = inferenceConfig
 
     return {
       getInferenceRuntimeConfig: () => {
@@ -251,14 +274,14 @@ const registerSharedMocks = (
   void mock.module(judgmentsJobsGetRunningJobsModulePath, () => {
     return {
       judgmentsJobsGetRunningJobs: async () => {
-        return [getRunningJob()]
+        return runningJobs
       },
     }
   })
   void mock.module(getJudgmentsCapacityModulePath, () => {
     return {
       getJudgmentsCapacity: () => {
-        return {addToQueueMaxBatchSize: 1, readyTargetPerJob: 1}
+        return {addToQueueMaxBatchSize: 1, maxInflight: 1, readyTargetPerJob: 1}
       },
     }
   })
@@ -326,6 +349,142 @@ test('uses raw OLAP fallback when exhausted SQLite jobs are waiting on mart visi
     jobId: 'job-1',
     state: {cursor: null, exhaustedAt: null, scanEpoch: 4, wrapVisibilityAckSeq: 12},
   })
+})
+
+test('uses saved codex provider caps for per-connection ready targets', async () => {
+  const getPromptsCalls = {count: 0}
+  const readyDeficits: number[] = []
+  const sqliteService: MockSqliteService = {
+    addReadyPrompts: async (_jobId, _entries, _serverJobId, readyDeficit) => {
+      readyDeficits.push(readyDeficit)
+      return 1
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    getReadyCount: async () => {
+      return 0
+    },
+    getScanState: async () => {
+      return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    setScanState: async () => {
+      return undefined
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    getPromptsImpl: async () => {
+      return {nextCursor: null, promptEntries: [{articleId: 'article-1', promptId: 'prompt-1'}]}
+    },
+    inferenceConfig: {codexMaxInflight: 1, judgmentsAddToQueueMaxBatchSize: 100, judgmentsReadyTargetMultiplier: 1},
+    runningJobs: [
+      getRunningJob({
+        id: 'job-codex-1',
+        maxInflightRequests: 20,
+        modelProvider: 'codex',
+        projectId: 'project-codex-1',
+        providerConnectionId: 'connection-codex-1',
+      }),
+    ],
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?codex-override-ready-target=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(getPromptsCalls.count).toBe(1)
+  expect(readyDeficits).toEqual([20])
+})
+
+test('splits saved codex provider caps across jobs on the same connection', async () => {
+  const getPromptsCalls = {count: 0}
+  const readyDeficits: Array<{jobId: string; readyDeficit: number}> = []
+  const sqliteService: MockSqliteService = {
+    addReadyPrompts: async (jobId, _entries, _serverJobId, readyDeficit) => {
+      readyDeficits.push({jobId, readyDeficit})
+      return 1
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    getReadyCount: async () => {
+      return 0
+    },
+    getScanState: async () => {
+      return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    setScanState: async () => {
+      return undefined
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    getPromptsImpl: async () => {
+      return {nextCursor: null, promptEntries: [{articleId: 'article-1', promptId: 'prompt-1'}]}
+    },
+    inferenceConfig: {codexMaxInflight: 1, judgmentsAddToQueueMaxBatchSize: 100, judgmentsReadyTargetMultiplier: 1},
+    runningJobs: [
+      getRunningJob({
+        id: 'job-codex-a',
+        maxInflightRequests: 20,
+        modelProvider: 'codex',
+        projectId: 'project-codex-a',
+        providerConnectionId: 'connection-codex-shared',
+      }),
+      getRunningJob({
+        id: 'job-codex-b',
+        maxInflightRequests: 20,
+        modelProvider: 'codex',
+        projectId: 'project-codex-b',
+        providerConnectionId: 'connection-codex-shared',
+      }),
+    ],
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?codex-shared-ready-target=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(getPromptsCalls.count).toBe(2)
+  expect(readyDeficits).toEqual([
+    {jobId: 'job-codex-a', readyDeficit: 10},
+    {jobId: 'job-codex-b', readyDeficit: 10},
+  ])
 })
 
 test('wraps exhausted SQLite jobs once visibility catches up and increments scan epoch once', async () => {
@@ -585,24 +744,26 @@ test('claims promoted human pairs first when ready deficit is smaller than the f
   }
 
   const sqliteService = getRealSqliteService()
+  const dbQuery = queryDatabase
+  const dbRun = runDatabase
   const connectionId = `connection-human-window-${Date.now()}`
   const modelId = `model-human-window-${Date.now()}`
   const projectId = `project-human-window-${Date.now()}`
   const jobId = `job-human-window-${Date.now()}`
 
-  await runDatabase(`
+  await dbRun(`
     INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
     VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
   `)
-  await runDatabase(`
+  await dbRun(`
     INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
     VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
   `)
-  await runDatabase(`
+  await dbRun(`
     INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
     VALUES ('${projectId}', 'Human Window Priority Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
   `)
-  await runDatabase(`
+  await dbRun(`
     INSERT INTO app.judgment_job (id, project_id, status)
     VALUES ('${jobId}', '${projectId}', 'running')
   `)
@@ -614,10 +775,10 @@ test('claims promoted human pairs first when ready deficit is smaller than the f
           queryJson: async <T>(statement: string): Promise<T[]> => {
             return statement.includes('FROM app.judgment_human jh')
               ? ([{articleId: 'article-human-late', promptId: 'prompt-human-late'}] as T[])
-              : queryDatabase<T>(statement)
+              : dbQuery<T>(statement)
           },
           run: async (statement: string): Promise<void> => {
-            return runDatabase(statement)
+            return dbRun(statement)
           },
         }
       },
@@ -656,7 +817,7 @@ test('claims promoted human pairs first when ready deficit is smaller than the f
   void mock.module(getJudgmentsCapacityModulePath, () => {
     return {
       getJudgmentsCapacity: () => {
-        return {addToQueueMaxBatchSize: 1, readyTargetPerJob: 1}
+        return {addToQueueMaxBatchSize: 1, maxInflight: 1, readyTargetPerJob: 1}
       },
     }
   })
@@ -682,6 +843,8 @@ test('top-up inserts later summary-backed rows ahead of new window peers without
   }
 
   const sqliteService = getRealSqliteService()
+  const dbQuery = queryDatabase
+  const dbRun = runDatabase
   const connectionId = `connection-summary-window-${Date.now()}`
   const modelId = `model-summary-window-${Date.now()}`
   const projectId = `project-summary-window-${Date.now()}`
@@ -691,15 +854,15 @@ test('top-up inserts later summary-backed rows ahead of new window peers without
   const summaryArticleId = `article-summary-late-${Date.now()}`
   const summaryPromptId = `prompt-summary-late-${Date.now()}`
 
-  await runDatabase(`
+  await dbRun(`
     INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
     VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
   `)
-  await runDatabase(`
+  await dbRun(`
     INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
     VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
   `)
-  await runDatabase(`
+  await dbRun(`
     INSERT INTO app.project (
       id,
       name,
@@ -712,7 +875,7 @@ test('top-up inserts later summary-backed rows ahead of new window peers without
     )
     VALUES ('${projectId}', 'Summary Window Priority Test', '${modelId}', 'summary', TRUE, TRUE, FALSE, FALSE)
   `)
-  await runDatabase(`
+  await dbRun(`
     INSERT INTO app.judgment_job (id, project_id, status)
     VALUES ('${jobId}', '${projectId}', 'running')
   `)
@@ -733,10 +896,10 @@ test('top-up inserts later summary-backed rows ahead of new window peers without
           queryJson: async <T>(statement: string): Promise<T[]> => {
             return statement.includes('FROM app.judgment_human_summary')
               ? ([{articleId: summaryArticleId}] as T[])
-              : queryDatabase<T>(statement)
+              : dbQuery<T>(statement)
           },
           run: async (statement: string): Promise<void> => {
-            return runDatabase(statement)
+            return dbRun(statement)
           },
         }
       },
@@ -775,7 +938,7 @@ test('top-up inserts later summary-backed rows ahead of new window peers without
   void mock.module(getJudgmentsCapacityModulePath, () => {
     return {
       getJudgmentsCapacity: () => {
-        return {addToQueueMaxBatchSize: 1, readyTargetPerJob: 2}
+        return {addToQueueMaxBatchSize: 1, maxInflight: 2, readyTargetPerJob: 2}
       },
     }
   })

@@ -1,7 +1,10 @@
-import {rmSync} from 'node:fs'
+import {existsSync, rmSync} from 'node:fs'
 import {dirname, join} from 'node:path'
 
+import {Database} from 'bun:sqlite'
 import {afterAll, beforeAll, expect, test} from 'bun:test'
+
+import {getJudgmentJobSqlitePath} from './judgmentJobPaths.ts'
 
 const tempDbPath = `/tmp/f1-judgments-jobs-cleanup-stale-${process.pid}-${Date.now()}.duckdb`
 const tempJobDir = join(dirname(tempDbPath), 'judgment-jobs')
@@ -143,4 +146,84 @@ test('cleanupStale automatically repairs recoverable orphaned judged queue rows 
     promptCounts: {claimed: 0, judged: 0, ready: 1, running: 0, skipped: 0},
     retainedRowCount: 1,
   })
+})
+
+test('cleanupStale clears stale running prompts before finalizing draining jobs', async () => {
+  if (!judgmentsJobsCleanupStale || !queryDatabase || !runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `cleanup-stale-running-connection-${Date.now()}`
+  const modelId = `cleanup-stale-running-model-${Date.now()}`
+  const projectId = `cleanup-stale-running-project-${Date.now()}`
+  const jobId = `cleanup-stale-running-job-${Date.now()}`
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Cleanup stale running drain test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'paused', 'draining')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(
+    jobId,
+    [{articleId: 'article-stale-running', promptId: 'prompt-stale-running'}],
+    'server-a',
+  )
+
+  const [claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt for cleanup stale running test')
+  }
+
+  await service.markPromptAsRunning(jobId, claimedPrompt.recordId)
+  const sqliteDatabase = new Database(sqlitePath)
+
+  try {
+    sqliteDatabase
+      .query(
+        `
+          UPDATE queue_prompt
+          SET sent_at = ?
+          WHERE id = ?
+        `,
+      )
+      .run('2026-04-01T00:00:00.000Z', claimedPrompt.recordId)
+  } finally {
+    sqliteDatabase.close()
+  }
+
+  expect((await service.getHealthSnapshot(jobId)).promptCounts).toEqual({
+    claimed: 0,
+    judged: 0,
+    ready: 0,
+    running: 1,
+    skipped: 0,
+  })
+  expect(existsSync(sqlitePath)).toBe(true)
+
+  await judgmentsJobsCleanupStale()
+
+  expect(
+    await queryDatabase<{status: string; storageState: string}>(`
+      SELECT status, storage_state AS storageState
+      FROM app.judgment_job
+      WHERE id = '${jobId}'
+    `),
+  ).toEqual([{status: 'paused', storageState: 'drained'}])
+  expect(existsSync(sqlitePath)).toBe(false)
 })

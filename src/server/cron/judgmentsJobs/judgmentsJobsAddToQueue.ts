@@ -24,15 +24,22 @@ const sqliteScanOverscanMultiplier = 5
 const sqliteScanMaxWindowsPerTick = 5
 const sqliteScanExhaustedCooldownMs = 60_000
 
-const getCodexQueueTargets = (runningJobCount: number) => {
-  const maxInflight = getCodexMaxInflight()
+type AddToQueueBucket = {addToQueueMaxBatchSize: number; jobs: Job[]; label: string; readyTargetPerJob: number}
+
+const getReadyTargetMultiplier = () => {
   const readyTargetMultiplier = Math.max(1, inferenceRuntimeConfig.judgmentsReadyTargetMultiplier)
-  const readyTargetTotal = maxInflight * readyTargetMultiplier
-  const normalizedJobCount = Math.max(1, runningJobCount)
-  const readyTargetPerJob = Math.max(1, Math.ceil(readyTargetTotal / normalizedJobCount))
+  return readyTargetMultiplier
+}
+
+const getBucketReadyTargetPerJob = ({jobCount, maxInflight}: {jobCount: number; maxInflight: number}) => {
+  const readyTargetTotal = Math.max(1, maxInflight) * getReadyTargetMultiplier()
+  const normalizedJobCount = Math.max(1, jobCount)
+  return Math.max(1, Math.ceil(readyTargetTotal / normalizedJobCount))
+}
+
+const getAddToQueueMaxBatchSize = ({isCodex}: {isCodex: boolean}) => {
   const envMaxBatch = Math.max(1, inferenceRuntimeConfig.judgmentsAddToQueueMaxBatchSize)
-  const addToQueueMaxBatchSize = Math.min(envMaxBatch, 2000)
-  return {readyTargetPerJob, addToQueueMaxBatchSize}
+  return isCodex ? Math.min(envMaxBatch, 2000) : envMaxBatch
 }
 
 const getJobProvider = (job: Job): string => {
@@ -42,6 +49,81 @@ const getJobProvider = (job: Job): string => {
 
 const isCodexJob = (job: Job): boolean => {
   return getJobProvider(job).trim().toLowerCase() === 'codex'
+}
+
+const getJobConnectionKey = (job: Job): string => {
+  return job.providerConnectionId ?? job.id
+}
+
+const getAddToQueueBuckets = (jobs: Job[]): AddToQueueBucket[] => {
+  const grouped = jobs.reduce(
+    (state, job) => {
+      return job.maxInflightRequests != null
+        ? {
+            ...state,
+            overriddenJobsByConnection: new Map(state.overriddenJobsByConnection).set(getJobConnectionKey(job), [
+              ...(state.overriddenJobsByConnection.get(getJobConnectionKey(job)) ?? []),
+              job,
+            ]),
+          }
+        : isCodexJob(job)
+          ? {...state, defaultCodexJobs: [...state.defaultCodexJobs, job]}
+          : {...state, defaultNonCodexJobs: [...state.defaultNonCodexJobs, job]}
+    },
+    {
+      defaultCodexJobs: [] as Job[],
+      defaultNonCodexJobs: [] as Job[],
+      overriddenJobsByConnection: new Map<string, Job[]>(),
+    },
+  )
+  const overriddenBuckets = Array.from(grouped.overriddenJobsByConnection.entries()).flatMap(
+    ([connectionKey, bucketJobs]) => {
+      const firstJob = bucketJobs[0]
+      return firstJob
+        ? [
+            {
+              addToQueueMaxBatchSize: getAddToQueueMaxBatchSize({isCodex: isCodexJob(firstJob)}),
+              jobs: bucketJobs,
+              label: `${isCodexJob(firstJob) ? 'codex' : 'provider'}:${connectionKey}`,
+              readyTargetPerJob: getBucketReadyTargetPerJob({
+                jobCount: bucketJobs.length,
+                maxInflight: firstJob.maxInflightRequests ?? 1,
+              }),
+            },
+          ]
+        : []
+    },
+  )
+  const defaultNonCodexBucket =
+    grouped.defaultNonCodexJobs.length > 0
+      ? [
+          {
+            addToQueueMaxBatchSize: getAddToQueueMaxBatchSize({isCodex: false}),
+            jobs: grouped.defaultNonCodexJobs,
+            label: 'non-codex',
+            readyTargetPerJob: getBucketReadyTargetPerJob({
+              jobCount: grouped.defaultNonCodexJobs.length,
+              maxInflight: getJudgmentsCapacity(grouped.defaultNonCodexJobs.length).maxInflight,
+            }),
+          },
+        ]
+      : []
+  const defaultCodexBucket =
+    grouped.defaultCodexJobs.length > 0
+      ? [
+          {
+            addToQueueMaxBatchSize: getAddToQueueMaxBatchSize({isCodex: true}),
+            jobs: grouped.defaultCodexJobs,
+            label: 'codex',
+            readyTargetPerJob: getBucketReadyTargetPerJob({
+              jobCount: grouped.defaultCodexJobs.length,
+              maxInflight: getCodexMaxInflight(),
+            }),
+          },
+        ]
+      : []
+
+  return [...overriddenBuckets, ...defaultNonCodexBucket, ...defaultCodexBucket]
 }
 
 const getPromptsToFetchCount = (
@@ -525,21 +607,19 @@ export const judgmentsJobsAddToQueue = async (serverJobId: string): Promise<void
       return job.id
     }),
   )
-  const codexJobs = runningJobs.filter(isCodexJob)
-  const nonCodexJobs = runningJobs.filter((job) => {
-    return !isCodexJob(job)
-  })
-
-  const nonCodexCapacity = getJudgmentsCapacity(nonCodexJobs.length)
-  const codexTargets = getCodexQueueTargets(codexJobs.length)
+  const addToQueueBuckets = getAddToQueueBuckets(runningJobs)
 
   addToQueueLogger.log('addToQueue:tick', '[addToQueue] tick', {
     serverJobId,
+    buckets: addToQueueBuckets.map((bucket) => {
+      return {
+        addToQueueMaxBatchSize: bucket.addToQueueMaxBatchSize,
+        jobCount: bucket.jobs.length,
+        label: bucket.label,
+        readyTargetPerJob: bucket.readyTargetPerJob,
+      }
+    }),
     jobCount: runningJobs.length,
-    nonCodexJobCount: nonCodexJobs.length,
-    codexJobCount: codexJobs.length,
-    nonCodexReadyTargetPerJob: nonCodexCapacity.readyTargetPerJob,
-    codexReadyTargetPerJob: codexTargets.readyTargetPerJob,
   })
 
   const addForJobs = async (jobs: Job[], readyTargetPerJob: number, addToQueueMaxBatchSize: number) => {
@@ -548,6 +628,9 @@ export const judgmentsJobsAddToQueue = async (serverJobId: string): Promise<void
       await addToQueueForJob({job, readyTargetPerJob, addToQueueMaxBatchSize, serverJobId})
     }, Promise.resolve())
   }
-  await addForJobs(nonCodexJobs, nonCodexCapacity.readyTargetPerJob, nonCodexCapacity.addToQueueMaxBatchSize)
-  await addForJobs(codexJobs, codexTargets.readyTargetPerJob, codexTargets.addToQueueMaxBatchSize)
+
+  await addToQueueBuckets.reduce(async (prev, bucket) => {
+    await prev
+    await addForJobs(bucket.jobs, bucket.readyTargetPerJob, bucket.addToQueueMaxBatchSize)
+  }, Promise.resolve())
 }

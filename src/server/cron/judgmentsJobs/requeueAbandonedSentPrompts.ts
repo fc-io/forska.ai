@@ -1,6 +1,6 @@
 import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from './judgmentJobSqliteService.ts'
 
-const abandonedSentPromptGraceMs = 30_000
+export const abandonedSentPromptGraceMs = 30_000
 
 export const requeueAbandonedSentPrompts = async ({
   jobIds,
