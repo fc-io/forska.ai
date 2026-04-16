@@ -93,6 +93,8 @@ Open the local URL printed by Vite or the built app server URL for the profile y
 
 Do not create or edit `.env` files for normal local dev. Configure providers/models in the UI. For one-off machine-local overrides, pass shell env inline with the command.
 
+For Codex provider models, Forska starts turns with `sandboxPolicy.networkAccess: false`, so internet access is disabled inside the Codex sandbox. The Codex CLI still needs its normal network access for login and inference.
+
 Or export once per shell:
 
 ```bash
