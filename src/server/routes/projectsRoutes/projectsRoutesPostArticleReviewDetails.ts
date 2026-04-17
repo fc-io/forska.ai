@@ -12,6 +12,7 @@ import {getProviderModelMetadataOptions} from '../../providers/providerModelMeta
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getJsonValue, getQuotedStringList} from '../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
+import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJudgmentRule.ts'
 import {getSystemActor} from '../../utils/getSystemActor.ts'
 import {
   deriveStrictSummaryAnswer,
@@ -247,8 +248,23 @@ const getProjectReviewDetailMartFreshness = async (projectId: string): Promise<P
   return {dirtyToken, isFresh, lastCompletedRefreshToken, refreshStatus, state}
 }
 
-const getArticleJudgmentRows = async (articleId: string): Promise<ArticleJudgmentRow[]> => {
+const getArticleJudgmentRows = async (params: {
+  articleId: string
+  projectId: string
+}): Promise<ArticleJudgmentRow[]> => {
   const rows = await getAppDatabaseService().queryJson<ArticleJudgmentRow>(`
+    WITH project_scope_article AS (
+      SELECT pir.project_id, air.article_id
+      FROM app.project_import_route pir
+      INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
+      WHERE pir.project_id = '${escapeSqlString(params.projectId)}'
+        AND air.article_id = '${escapeSqlString(params.articleId)}'
+      UNION
+      SELECT pa.project_id, pa.article_id
+      FROM app.project_article pa
+      WHERE pa.project_id = '${escapeSqlString(params.projectId)}'
+        AND pa.article_id = '${escapeSqlString(params.articleId)}'
+    )
     SELECT
       j.id AS judgmentId,
       j.created_at AS judgmentCreatedAt,
@@ -278,10 +294,20 @@ const getArticleJudgmentRows = async (articleId: string): Promise<ArticleJudgmen
           pc.provider_kind AS modelProvider,
           m.variant AS modelVersion
     FROM app.judgment j
+    INNER JOIN project_scope_article scope_article ON scope_article.article_id = j.article_id
+    INNER JOIN app.project project ON project.id = scope_article.project_id
+    INNER JOIN app.project_prompt project_prompt ON project_prompt.prompt_id = j.prompt_id
     INNER JOIN app.prompt p ON j.prompt_id = p.id
     LEFT JOIN app.model m ON j.model_id = m.id
     LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
-    WHERE j.article_id = '${escapeSqlString(articleId)}'
+    WHERE project.id = '${escapeSqlString(params.projectId)}'
+      AND project.archived = FALSE
+      AND ${getProjectVisibleJudgmentScopeSql({
+        judgmentAlias: 'j',
+        projectAlias: 'project',
+        projectPromptAlias: 'project_prompt',
+        projectScopeAlias: 'scope_article',
+      })}
       AND j.deleted_at IS NULL
     ORDER BY j.created_at DESC NULLS LAST, j.id ASC
   `)
@@ -356,20 +382,6 @@ const getProjectReviewDetailJudgmentValue = (row: ProjectReviewDetailJudgmentRow
 
 const getModelThinkingValue = (row: {modelMetadataJson: unknown}) => {
   return getProviderModelMetadataOptions(getJsonValue(row.modelMetadataJson)).thinking
-}
-
-const getMatchesProjectReviewConfig = (params: {row: ArticleJudgmentRow; projectReviewConfig: ProjectReviewConfig}) => {
-  return (
-    (params.projectReviewConfig.modelId === null || params.row.judgmentModelId === params.projectReviewConfig.modelId)
-    && (params.row.judgmentUseTitle ?? true) === params.projectReviewConfig.useTitle
-    && (params.row.judgmentUseAbstract ?? true) === params.projectReviewConfig.useAbstract
-    && (params.row.judgmentUseFulltext ?? false) === params.projectReviewConfig.useFulltext
-    && (params.row.judgmentUseFulltextNoImages ?? false) === params.projectReviewConfig.useFulltextNoImages
-  )
-}
-
-const getMatchesProjectReviewSource = (params: {projectId: string; row: ArticleJudgmentRow}) => {
-  return (params.row.judgmentProjectId ?? params.row.judgmentSnapshotProjectId) === params.projectId
 }
 
 const getAssessmentValue = (row: {
@@ -473,7 +485,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         `)
       const projectReviewConfigPromise: Promise<ProjectReviewConfig | null> =
         getAppQueryService().getProjectReviewConfig(projectId)
-      const allArticleJudgmentsPromise: Promise<ArticleJudgmentRow[]> = getArticleJudgmentRows(articleId)
+      const allArticleJudgmentsPromise: Promise<ArticleJudgmentRow[]> = getArticleJudgmentRows({articleId, projectId})
       const martFreshnessPromise: Promise<ProjectReviewDetailMartFreshness> =
         getProjectReviewDetailMartFreshness(projectId)
       const [projectPromptRows, projectReviewConfig, allArticleJudgments, martFreshness]: [
@@ -518,11 +530,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         {} as Record<string, number>,
       )
       const appScopedArticleJudgments: ArticleJudgmentRow[] = allArticleJudgments.filter((row) => {
-        return (
-          enabledPromptIdSet.has(row.judgmentPromptId)
-          && getMatchesProjectReviewSource({projectId, row})
-          && getMatchesProjectReviewConfig({row, projectReviewConfig})
-        )
+        return enabledPromptIdSet.has(row.judgmentPromptId)
       })
       const projectReviewDetailJudgmentDetails: ReviewJudgmentDetail[] = projectReviewDetailJudgmentRows.map((row) => {
         return {

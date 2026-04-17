@@ -1,5 +1,6 @@
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getSqlLiteral} from './appQueryHelpers.ts'
+import {getProjectVisibleJudgmentScopeSql} from './projectVisibleJudgmentRule.ts'
 
 type ProjectMartLargeRebuildBatchCursor = {articleCreatedAt: Date | string | null; articleId: string}
 
@@ -146,15 +147,6 @@ const getProjectRefreshArticleIdsSql = (articleIds: string[]) => {
     .join(', ')
 }
 
-const getJudgmentFactProjectJoinSql = (judgmentFactTableAlias: string, projectIdExpression: string) => {
-  return `(
-    ${judgmentFactTableAlias}.snapshot_project_id IS NULL
-    OR ${judgmentFactTableAlias}.snapshot_project_id = ${projectIdExpression}
-    OR ${judgmentFactTableAlias}.project_id IS NULL
-    OR ${judgmentFactTableAlias}.project_id = ${projectIdExpression}
-  )`
-}
-
 const getProjectPromptAnswerFactResetSql = (projectId: string) => {
   const projectLiteral = getSqlLiteral(projectId)
 
@@ -201,14 +193,12 @@ const getProjectPromptAnswerFactBatchInsertSql = (projectId: string, articleIds:
         ON project_prompt.project_id = scope_article.project_id
        AND project_prompt.enabled = TRUE
       INNER JOIN mart.judgment_fact judgment_fact
-        ON judgment_fact.article_id = scope_article.article_id
-       AND judgment_fact.prompt_id = project_prompt.prompt_id
-       AND ${getJudgmentFactProjectJoinSql('judgment_fact', 'scope_article.project_id')}
-       AND judgment_fact.model_id = project.model_id
-       AND judgment_fact.use_title = project.use_title
-       AND judgment_fact.use_abstract = project.use_abstract
-       AND judgment_fact.use_fulltext = project.use_fulltext
-       AND judgment_fact.use_fulltext_no_images = project.use_fulltext_no_images
+        ON ${getProjectVisibleJudgmentScopeSql({
+          judgmentAlias: 'judgment_fact',
+          projectAlias: 'project',
+          projectPromptAlias: 'project_prompt',
+          projectScopeAlias: 'scope_article',
+        })}
       WHERE scope_article.project_id = ${projectLiteral}
         AND scope_article.article_id IN (${articleIdsSql})
     )
@@ -375,7 +365,7 @@ const getProjectReviewArticleRollupBatchInsertSql = (projectId: string, articleI
       rollup_updated_at
     )
     WITH enabled_project_prompt AS (
-      SELECT project_id, prompt_id
+      SELECT project_id, prompt_id, enabled
       FROM app.project_prompt
       WHERE enabled = TRUE AND project_id = ${projectLiteral}
     ),
@@ -394,14 +384,12 @@ const getProjectReviewArticleRollupBatchInsertSql = (projectId: string, articleI
       INNER JOIN app.project project ON project.id = scope_article.project_id
       INNER JOIN enabled_project_prompt enabled_prompt ON enabled_prompt.project_id = scope_article.project_id
       INNER JOIN mart.judgment_fact judgment_fact
-        ON judgment_fact.article_id = scope_article.article_id
-       AND judgment_fact.prompt_id = enabled_prompt.prompt_id
-       AND ${getJudgmentFactProjectJoinSql('judgment_fact', 'scope_article.project_id')}
-       AND judgment_fact.model_id = project.model_id
-       AND judgment_fact.use_title = project.use_title
-       AND judgment_fact.use_abstract = project.use_abstract
-       AND judgment_fact.use_fulltext = project.use_fulltext
-       AND judgment_fact.use_fulltext_no_images = project.use_fulltext_no_images
+        ON ${getProjectVisibleJudgmentScopeSql({
+          judgmentAlias: 'judgment_fact',
+          projectAlias: 'project',
+          projectPromptAlias: 'enabled_prompt',
+          projectScopeAlias: 'scope_article',
+        })}
       WHERE scope_article.project_id = ${projectLiteral}
         AND scope_article.article_id IN (${articleIdsSql})
       GROUP BY scope_article.project_id, judgment_fact.article_id, judgment_fact.prompt_id
@@ -547,14 +535,12 @@ const getProjectReviewServingBatchInsertSql = (projectId: string, articleIds: st
     INNER JOIN app.project project ON project.id = scope_article.project_id
     INNER JOIN app.project_prompt project_prompt ON project_prompt.project_id = scope_article.project_id AND project_prompt.enabled = TRUE
     INNER JOIN mart.judgment_fact judgment_fact
-      ON judgment_fact.article_id = scope_article.article_id
-     AND judgment_fact.prompt_id = project_prompt.prompt_id
-     AND ${getJudgmentFactProjectJoinSql('judgment_fact', 'scope_article.project_id')}
-     AND judgment_fact.model_id = project.model_id
-     AND judgment_fact.use_title = project.use_title
-     AND judgment_fact.use_abstract = project.use_abstract
-     AND judgment_fact.use_fulltext = project.use_fulltext
-     AND judgment_fact.use_fulltext_no_images = project.use_fulltext_no_images
+      ON ${getProjectVisibleJudgmentScopeSql({
+        judgmentAlias: 'judgment_fact',
+        projectAlias: 'project',
+        projectPromptAlias: 'project_prompt',
+        projectScopeAlias: 'scope_article',
+      })}
     WHERE scope_article.project_id = ${projectLiteral}
       AND scope_article.article_id IN (${articleIdsSql});
     COMMIT;

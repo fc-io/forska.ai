@@ -2042,9 +2042,7 @@ test('cloned project config reruns isolate judgments for every judgment-affectin
     expect(getJudgmentSummaries(cloneDetailsBeforeRerun.judgments)).toEqual([
       {answeredOriginal: 'not answered', id: `placeholder:${promptId}`, promptId},
     ])
-    expect(getJudgmentSummaries(cloneDetailsBeforeRerun.allJudgments)).toEqual([
-      {answeredOriginal: 'yes', id: sourceJudgmentId, promptId},
-    ])
+    expect(getJudgmentSummaries(cloneDetailsBeforeRerun.allJudgments)).toEqual([])
 
     await insertCloneRerunJudgmentFixture({
       answer: 'no',
@@ -2063,9 +2061,7 @@ test('cloned project config reruns isolate judgments for every judgment-affectin
     expect(getJudgmentSummaries(cloneDetailsAfterRerun.judgments)).toEqual([
       {answeredOriginal: 'no', id: cloneJudgmentId, promptId},
     ])
-    expect(getJudgmentSummaries(cloneDetailsAfterRerun.allJudgments)).toEqual([
-      {answeredOriginal: 'yes', id: sourceJudgmentId, promptId},
-    ])
+    expect(getJudgmentSummaries(cloneDetailsAfterRerun.allJudgments)).toEqual([])
   }, Promise.resolve())
 
   await flushMartRefreshes()

@@ -251,7 +251,7 @@ test('project review details merges detail mart rows, raw fallback rows, and pla
   ).toEqual(['assessment-1'])
 })
 
-test('project review details keeps cross-project raw judgments out of the main fallback list', async () => {
+test('project review details reuses project-visible raw judgments from another source project', async () => {
   fullArticlesByIdsRef.current = async () => {
     return [{articleTitle: 'Article 1', id: 'article-1'}]
   }
@@ -284,12 +284,12 @@ test('project review details keeps cross-project raw judgments out of the main f
     body.judgments.map((judgment) => {
       return judgment.id
     }),
-  ).toEqual(['judgment-project'])
+  ).toEqual(['judgment-project', 'judgment-cross-project'])
   expect(
     body.allJudgments.map((judgment) => {
       return judgment.id
     }),
-  ).toEqual(['judgment-cross-project'])
+  ).toEqual([])
 })
 
 test('project review details bypasses stale detail mart rows and surfaces stale freshness', async () => {

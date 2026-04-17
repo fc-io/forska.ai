@@ -1,4 +1,5 @@
 import {escapeSqlString, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {getProjectVisibleJudgmentPromptSql} from '../../services/projectVisibleJudgmentRule.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {
@@ -305,8 +306,8 @@ const getPrioritizedPromptQueueEntries = async (
 /** Filter out prompt entries that already have judgments in the app database */
 const filterAlreadyJudged = async (
   promptEntries: PromptQueueEntry[],
-  jobConfig: JobConfig,
   jobId: string,
+  projectId: string,
 ): Promise<PromptQueueEntry[]> => {
   if (promptEntries.length === 0) return []
 
@@ -329,11 +330,15 @@ const filterAlreadyJudged = async (
       SELECT j.article_id AS articleId, j.prompt_id AS promptId
       FROM app.judgment j
       INNER JOIN pairs p ON p.article_id = j.article_id AND p.prompt_id = j.prompt_id
-      WHERE j.model_id = ${getSqlLiteral(jobConfig.modelId)}
-        AND j.use_title = ${getSqlLiteral(jobConfig.useTitle)}
-        AND j.use_abstract = ${getSqlLiteral(jobConfig.useAbstract)}
-        AND j.use_fulltext = ${getSqlLiteral(jobConfig.useFulltext)}
-        AND j.use_fulltext_no_images = ${getSqlLiteral(jobConfig.useFulltextNoImages)}
+      INNER JOIN app.project project ON project.id = ${getSqlLiteral(projectId)}
+      INNER JOIN app.project_prompt project_prompt
+        ON project_prompt.project_id = project.id
+       AND project_prompt.prompt_id = p.prompt_id
+      WHERE ${getProjectVisibleJudgmentPromptSql({
+        judgmentAlias: 'j',
+        projectAlias: 'project',
+        projectPromptAlias: 'project_prompt',
+      })}
         AND j.deleted_at IS NULL
     `)
 
@@ -520,7 +525,7 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
       cursor,
       shouldForceRawFallback,
     )
-    const filteredEntries = await filterAlreadyJudged(promptData.promptEntries, jobConfig, job.id)
+    const filteredEntries = await filterAlreadyJudged(promptData.promptEntries, job.id, job.projectId)
     const {humanFirstEntries, prioritizedEntries} = await getPrioritizedPromptQueueEntries(filteredEntries, {
       humanJudgmentMode: jobConfig.humanJudgmentMode ?? 'prompt',
       projectId: job.projectId,
