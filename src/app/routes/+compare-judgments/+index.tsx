@@ -23,7 +23,7 @@ export const CompareJudgmentsPage = () => {
             Compare Project
           </Button>
           <Button as={Link} to="/compare-judgments/create">
-            Create New Comparison
+            Compare Articles
           </Button>
         </div>
       </div>

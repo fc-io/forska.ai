@@ -10,30 +10,6 @@ import {
   fetchComparisonProjectSources,
 } from '../../../services/comparisonProjectsService'
 
-type ParsedDateResult = {date: Date | null; normalized: string | null; error: string | null}
-
-const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
-
-const parseDateInput = (value: string): ParsedDateResult => {
-  const trimmedValue = value.trim()
-
-  if (!trimmedValue) {
-    return {date: null, normalized: null, error: null}
-  }
-
-  if (!isoDatePattern.exec(trimmedValue)) {
-    return {date: null, normalized: null, error: 'Dates must use the YYYY-MM-DD format'}
-  }
-
-  const parsedDate = new Date(`${trimmedValue}T00:00:00.000Z`)
-
-  if (Number.isNaN(parsedDate.getTime())) {
-    return {date: null, normalized: null, error: 'Invalid date provided'}
-  }
-
-  return {date: parsedDate, normalized: trimmedValue, error: null}
-}
-
 const formatContentSettings = (sourceProject: ComparisonProjectSource) => {
   const parts = [
     sourceProject.useTitle ? 'title' : null,
@@ -56,8 +32,6 @@ const CreateCompareJudgmentsFromProjectPage = () => {
   })
   const [comparisonProjectName, setComparisonProjectName] = createSignal('')
   const [description, setDescription] = createSignal('')
-  const [dateFrom, setDateFrom] = createSignal('')
-  const [dateTo, setDateTo] = createSignal('')
   const [compareWithHumans, setCompareWithHumans] = createSignal(false)
   const [summaryModeEnabled, setSummaryModeEnabled] = createSignal(false)
   const [selectedSourceProjectId, setSelectedSourceProjectId] = createSignal('')
@@ -92,23 +66,6 @@ const CreateCompareJudgmentsFromProjectPage = () => {
     event.preventDefault()
     setError(null)
 
-    const startDateResult = parseDateInput(dateFrom())
-    if (startDateResult.error) {
-      setError(startDateResult.error)
-      return
-    }
-
-    const endDateResult = parseDateInput(dateTo())
-    if (endDateResult.error) {
-      setError(endDateResult.error)
-      return
-    }
-
-    if (startDateResult.date && endDateResult.date && startDateResult.date > endDateResult.date) {
-      setError('Start date must be on or before the end date')
-      return
-    }
-
     if (!selectedSourceProjectId().trim()) {
       setError('Select one project to import from')
       return
@@ -126,8 +83,6 @@ const CreateCompareJudgmentsFromProjectPage = () => {
       compareWithHumans: compareWithHumans(),
       humanJudgmentMode: summaryModeEnabled() ? 'summary' : 'prompt',
       summarySourceProjectId: summaryModeEnabled() ? selectedSourceProjectId() : null,
-      dateFrom: startDateResult.normalized ?? undefined,
-      dateTo: endDateResult.normalized ?? undefined,
       sourceProjectId: selectedSourceProjectId(),
     }
 
@@ -195,36 +150,6 @@ const CreateCompareJudgmentsFromProjectPage = () => {
               rows="4"
               class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none"
             />
-          </div>
-
-          <div>
-            <p class="block text-sm font-medium mb-2">Comparison Timeline</p>
-            <div class="grid grid-cols-2 gap-4">
-              <label class="flex flex-col text-sm font-medium gap-1">
-                <span>Start Date</span>
-                <input
-                  type="text"
-                  value={dateFrom()}
-                  onInput={(event) => {
-                    return setDateFrom(event.currentTarget.value)
-                  }}
-                  placeholder="YYYY-MM-DD"
-                  class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                />
-              </label>
-              <label class="flex flex-col text-sm font-medium gap-1">
-                <span>End Date</span>
-                <input
-                  type="text"
-                  value={dateTo()}
-                  onInput={(event) => {
-                    return setDateTo(event.currentTarget.value)
-                  }}
-                  placeholder="YYYY-MM-DD"
-                  class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                />
-              </label>
-            </div>
           </div>
 
           <div class="border border-input rounded-md p-4 bg-muted/20">

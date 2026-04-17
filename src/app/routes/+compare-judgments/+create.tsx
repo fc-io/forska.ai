@@ -25,29 +25,6 @@ type ExistingPromptsResponse = {data: ExistingPrompt[]}
 
 type ImportRouteOption = {route: string; name: string | null}
 type ImportRoutesResponse = {data: ImportRouteOption[]}
-type ParsedDateResult = {date: Date | null; normalized: string | null; error: string | null}
-
-const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
-
-const parseDateInput = (value: string): ParsedDateResult => {
-  const trimmedValue = value.trim()
-
-  if (!trimmedValue) {
-    return {date: null, normalized: null, error: null}
-  }
-
-  if (!isoDatePattern.exec(trimmedValue)) {
-    return {date: null, normalized: null, error: 'Dates must use the YYYY-MM-DD format'}
-  }
-
-  const parsedDate = new Date(`${trimmedValue}T00:00:00.000Z`)
-
-  if (Number.isNaN(parsedDate.getTime())) {
-    return {date: null, normalized: null, error: 'Invalid date provided'}
-  }
-
-  return {date: parsedDate, normalized: trimmedValue, error: null}
-}
 
 const toggleStringSelection = (currentValues: string[], nextValue: string) => {
   return currentValues.includes(nextValue)
@@ -73,28 +50,28 @@ const promptHasSummaryCriteria = (prompt: ComparisonProjectSource['prompts'][num
   return Boolean(prompt.criteriaDisposition && prompt.criteriaSectionKey)
 }
 
+const getSummaryCriteriaLabel = (prompt: ComparisonProjectSource['prompts'][number]) => {
+  const labelParts = [prompt.criteriaDisposition, prompt.criteriaSectionLabel ?? prompt.criteriaSectionKey].filter(
+    Boolean,
+  )
+
+  return labelParts.join(' · ')
+}
+
 const getSummaryCapableSources = (sources: ComparisonProjectSource[]) => {
   return sources.filter((source) => {
     return source.isSummaryCapable
   })
 }
 
-const getPromptSelectionsFromExistingPrompts = (prompts: ExistingPrompt[], selectedPromptIds: string[]) => {
-  return prompts
-    .filter((prompt) => {
-      return selectedPromptIds.includes(prompt.id)
-    })
-    .map((prompt, index) => {
-      return {promptId: prompt.id, order: index}
-    })
+const getSummarySourcePrompts = (sourceProject: ComparisonProjectSource | undefined) => {
+  return [...(sourceProject?.prompts ?? [])].filter(promptHasSummaryCriteria).sort((left, right) => {
+    return left.order - right.order
+  })
 }
 
-const getPromptSelectionsFromSourceProject = (
-  sourceProject: ComparisonProjectSource | undefined,
-  selectedPromptIds: string[],
-) => {
-  return (sourceProject?.prompts ?? [])
-    .filter(promptHasSummaryCriteria)
+const getPromptSelectionsFromExistingPrompts = (prompts: ExistingPrompt[], selectedPromptIds: string[]) => {
+  return prompts
     .filter((prompt) => {
       return selectedPromptIds.includes(prompt.id)
     })
@@ -140,8 +117,6 @@ const CreateCompareJudgmentsPage = () => {
 
   const [comparisonProjectName, setComparisonProjectName] = createSignal('')
   const [description, setDescription] = createSignal('')
-  const [dateFrom, setDateFrom] = createSignal('')
-  const [dateTo, setDateTo] = createSignal('')
   const [selectedImportRoutes, setSelectedImportRoutes] = createSignal<string[]>([])
   const [selectedPromptIds, setSelectedPromptIds] = createSignal<string[]>([])
   const [compareTitleAndAbstract, setCompareTitleAndAbstract] = createSignal(true)
@@ -176,19 +151,11 @@ const CreateCompareJudgmentsPage = () => {
       return sourceProject.id === selectedSummarySourceProjectId()
     })
   })
-  const summaryPromptIdsWithCriteria = createMemo(() => {
-    return new Set(
-      (selectedSummarySourceProject()?.prompts ?? []).filter(promptHasSummaryCriteria).map((prompt) => {
-        return prompt.id
-      }),
-    )
+  const summarySourcePrompts = createMemo(() => {
+    return getSummarySourcePrompts(selectedSummarySourceProject())
   })
   const selectableExistingPrompts = createMemo(() => {
-    return summaryModeEnabled()
-      ? sortedExistingPrompts().filter((prompt) => {
-          return summaryPromptIdsWithCriteria().has(prompt.id)
-        })
-      : sortedExistingPrompts()
+    return sortedExistingPrompts()
   })
   const selectedSelectablePromptCount = createMemo(() => {
     const selectablePromptIds = new Set(
@@ -225,7 +192,7 @@ const CreateCompareJudgmentsPage = () => {
       return 'Selected summary source project is unavailable'
     }
 
-    return selectableExistingPrompts().length === 0
+    return summarySourcePrompts().length === 0
       ? 'Selected summary source project has no prompts with summary criteria metadata'
       : null
   })
@@ -234,7 +201,6 @@ const CreateCompareJudgmentsPage = () => {
       Boolean(comparisonProjectName().trim())
       && hasSelectedContentOptions()
       && !summarySourceInvalidReason()
-      && (!summaryModeEnabled() || selectedSelectablePromptCount() > 0)
       && !isLoading()
     )
   })
@@ -242,23 +208,6 @@ const CreateCompareJudgmentsPage = () => {
   const handleSubmit = async (event: Event) => {
     event.preventDefault()
     setError(null)
-
-    const startDateResult = parseDateInput(dateFrom())
-    if (startDateResult.error) {
-      setError(startDateResult.error)
-      return
-    }
-
-    const endDateResult = parseDateInput(dateTo())
-    if (endDateResult.error) {
-      setError(endDateResult.error)
-      return
-    }
-
-    if (startDateResult.date && endDateResult.date && startDateResult.date > endDateResult.date) {
-      setError('Start date must be on or before the end date')
-      return
-    }
 
     if (!hasSelectedContentOptions()) {
       setError('Select at least one article content option to compare')
@@ -272,13 +221,8 @@ const CreateCompareJudgmentsPage = () => {
     }
 
     const promptSelections = summaryModeEnabled()
-      ? getPromptSelectionsFromSourceProject(selectedSummarySourceProject(), selectedPromptIds())
+      ? undefined
       : getPromptSelectionsFromExistingPrompts(sortedExistingPrompts(), selectedPromptIds())
-
-    if (summaryModeEnabled() && promptSelections.length === 0) {
-      setError('Summary mode requires at least one selected source-project prompt')
-      return
-    }
 
     const createComparisonProjectInput: CreateComparisonProjectInput = {
       name: comparisonProjectName(),
@@ -286,14 +230,12 @@ const CreateCompareJudgmentsPage = () => {
       compareWithHumans: compareWithHumans(),
       humanJudgmentMode: summaryModeEnabled() ? 'summary' : 'prompt',
       summarySourceProjectId: summaryModeEnabled() ? selectedSummarySourceProjectId() : null,
-      dateFrom: startDateResult.normalized ?? undefined,
-      dateTo: endDateResult.normalized ?? undefined,
       useTitle: compareTitleAndAbstract(),
       useAbstract: compareTitleAndAbstract(),
       useFulltext: useFulltext(),
       useFulltextNoImages: useFulltextNoImages(),
       importRoutes: selectedImportRoutes().length > 0 ? selectedImportRoutes() : undefined,
-      promptSelections: promptSelections.length > 0 ? promptSelections : undefined,
+      promptSelections: promptSelections && promptSelections.length > 0 ? promptSelections : undefined,
     }
 
     setIsLoading(true)
@@ -315,7 +257,7 @@ const CreateCompareJudgmentsPage = () => {
         <Button as={Link} to="/compare-judgments" variant="outline" size="sm">
           ← Back to Compare Judgments
         </Button>
-        <h1 class="text-3xl font-bold">Create New Comparison</h1>
+        <h1 class="text-3xl font-bold">Compare Articles</h1>
       </div>
 
       <div class="bg-card border rounded-lg p-6">
@@ -360,36 +302,6 @@ const CreateCompareJudgmentsPage = () => {
               rows="4"
               class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent resize-none"
             />
-          </div>
-
-          <div>
-            <p class="block text-sm font-medium mb-2">Comparison Timeline</p>
-            <div class="grid grid-cols-2 gap-4">
-              <label class="flex flex-col text-sm font-medium gap-1">
-                <span>Start Date</span>
-                <input
-                  type="text"
-                  value={dateFrom()}
-                  onInput={(event) => {
-                    return setDateFrom(event.currentTarget.value)
-                  }}
-                  placeholder="YYYY-MM-DD"
-                  class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                />
-              </label>
-              <label class="flex flex-col text-sm font-medium gap-1">
-                <span>End Date</span>
-                <input
-                  type="text"
-                  value={dateTo()}
-                  onInput={(event) => {
-                    return setDateTo(event.currentTarget.value)
-                  }}
-                  placeholder="YYYY-MM-DD"
-                  class="w-full px-3 py-2 border border-input rounded-md focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
-                />
-              </label>
-            </div>
           </div>
 
           <div>
@@ -598,17 +510,6 @@ const CreateCompareJudgmentsPage = () => {
                             checked={selectedSummarySourceProjectId() === sourceProject.id}
                             onChange={() => {
                               setSelectedSummarySourceProjectId(sourceProject.id)
-                              setSelectedPromptIds((current) => {
-                                const availablePromptIds = new Set(
-                                  sourceProject.prompts.filter(promptHasSummaryCriteria).map((prompt) => {
-                                    return prompt.id
-                                  }),
-                                )
-
-                                return current.filter((promptId) => {
-                                  return availablePromptIds.has(promptId)
-                                })
-                              })
                             }}
                           />
                           <div class="flex-1">
@@ -639,121 +540,164 @@ const CreateCompareJudgmentsPage = () => {
             </div>
           </Show>
 
-          <div>
-            <div class="flex items-center justify-between mb-2">
-              <label class="block text-sm font-medium">Existing Prompts</label>
-              <span class="text-xs text-muted-foreground">
-                {selectedSelectablePromptCount()} of {selectableExistingPrompts().length} selected
-              </span>
-            </div>
-            <Show when={summaryModeEnabled()}>
-              <p class="text-sm text-muted-foreground mb-3">
-                Summary mode only allows prompts from the selected source project that include summary criteria
-                metadata.
-              </p>
-            </Show>
-            <Show when={existingPromptsQuery.isLoading}>
-              <div class="text-sm text-muted-foreground">Loading existing prompts...</div>
-            </Show>
-            <Show when={existingPromptsQuery.isError}>
-              <p class="text-sm text-red-600">
-                {existingPromptsQuery.error instanceof Error
-                  ? existingPromptsQuery.error.message
-                  : 'Failed to load existing prompts'}
-              </p>
-            </Show>
-            <Show
-              when={
-                !existingPromptsQuery.isLoading
-                && !existingPromptsQuery.isError
-                && selectableExistingPrompts().length === 0
-              }
-            >
-              <p class="text-sm text-muted-foreground">
-                {summaryModeEnabled() ? 'No source-project summary prompts available.' : 'No prompts available.'}
-              </p>
-            </Show>
-            <Show
-              when={
-                !existingPromptsQuery.isLoading
-                && !existingPromptsQuery.isError
-                && selectableExistingPrompts().length > 0
-              }
-            >
-              <div class="space-y-3">
-                <For each={selectableExistingPrompts()}>
-                  {(prompt) => {
-                    const isSelected = () => {
-                      return selectedPromptIds().includes(prompt.id)
-                    }
+          <Show
+            when={summaryModeEnabled()}
+            fallback={
+              <div>
+                <div class="flex items-center justify-between mb-2">
+                  <label class="block text-sm font-medium">Existing Prompts</label>
+                  <span class="text-xs text-muted-foreground">
+                    {selectedSelectablePromptCount()} of {selectableExistingPrompts().length} selected
+                  </span>
+                </div>
+                <Show when={existingPromptsQuery.isLoading}>
+                  <div class="text-sm text-muted-foreground">Loading existing prompts...</div>
+                </Show>
+                <Show when={existingPromptsQuery.isError}>
+                  <p class="text-sm text-red-600">
+                    {existingPromptsQuery.error instanceof Error
+                      ? existingPromptsQuery.error.message
+                      : 'Failed to load existing prompts'}
+                  </p>
+                </Show>
+                <Show
+                  when={
+                    !existingPromptsQuery.isLoading
+                    && !existingPromptsQuery.isError
+                    && selectableExistingPrompts().length === 0
+                  }
+                >
+                  <p class="text-sm text-muted-foreground">No prompts available.</p>
+                </Show>
+                <Show
+                  when={
+                    !existingPromptsQuery.isLoading
+                    && !existingPromptsQuery.isError
+                    && selectableExistingPrompts().length > 0
+                  }
+                >
+                  <div class="space-y-3">
+                    <For each={selectableExistingPrompts()}>
+                      {(prompt) => {
+                        const isSelected = () => {
+                          return selectedPromptIds().includes(prompt.id)
+                        }
 
-                    return (
-                      <div class="border rounded-lg p-4 bg-background" classList={{'opacity-40': !isSelected()}}>
-                        <div class="flex justify-between items-start mb-3 gap-4">
-                          <div class="flex items-center gap-2 flex-wrap">
-                            <Show when={prompt.promptHeading}>
-                              <span class="font-medium">{prompt.promptHeading}</span>
-                            </Show>
-                            <Show when={prompt.type}>
-                              <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                                {prompt.type}
-                              </span>
-                            </Show>
-                            <Show when={prompt.createdAt}>
-                              <span class="inline-flex items-center px-2 py-1 rounded-full text-[11px] font-medium bg-gray-50 text-gray-600">
-                                Created: {new Date(prompt.createdAt as Date | string).toLocaleDateString()}
-                              </span>
-                            </Show>
-                            <Show when={isSelected()}>
-                              <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                Selected
-                              </span>
-                            </Show>
-                          </div>
-                          <label class="flex items-center gap-2">
-                            <input
-                              type="checkbox"
-                              class="mt-0.5"
-                              checked={isSelected()}
-                              onChange={() => {
-                                setSelectedPromptIds((current) => {
-                                  return toggleStringSelection(current, prompt.id)
-                                })
-                              }}
-                            />
-                            <span class="text-sm">Include</span>
-                          </label>
-                        </div>
+                        return (
+                          <div class="border rounded-lg p-4 bg-background" classList={{'opacity-40': !isSelected()}}>
+                            <div class="flex justify-between items-start mb-3 gap-4">
+                              <div class="flex items-center gap-2 flex-wrap">
+                                <Show when={prompt.promptHeading}>
+                                  <span class="font-medium">{prompt.promptHeading}</span>
+                                </Show>
+                                <Show when={prompt.type}>
+                                  <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                                    {prompt.type}
+                                  </span>
+                                </Show>
+                                <Show when={prompt.createdAt}>
+                                  <span class="inline-flex items-center px-2 py-1 rounded-full text-[11px] font-medium bg-gray-50 text-gray-600">
+                                    Created: {new Date(prompt.createdAt as Date | string).toLocaleDateString()}
+                                  </span>
+                                </Show>
+                                <Show when={isSelected()}>
+                                  <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                    Selected
+                                  </span>
+                                </Show>
+                              </div>
+                              <label class="flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  class="mt-0.5"
+                                  checked={isSelected()}
+                                  onChange={() => {
+                                    setSelectedPromptIds((current) => {
+                                      return toggleStringSelection(current, prompt.id)
+                                    })
+                                  }}
+                                />
+                                <span class="text-sm">Include</span>
+                              </label>
+                            </div>
 
-                        <div class="space-y-3">
-                          <Show when={prompt.promptHeading}>
-                            <div>
-                              <label class="text-sm font-medium text-muted-foreground block mb-1">Heading</label>
-                              <div class="bg-gray-50 rounded p-3 text-sm whitespace-pre-wrap">
-                                {prompt.promptHeading}
+                            <div class="space-y-3">
+                              <Show when={prompt.promptHeading}>
+                                <div>
+                                  <label class="text-sm font-medium text-muted-foreground block mb-1">Heading</label>
+                                  <div class="bg-gray-50 rounded p-3 text-sm whitespace-pre-wrap">
+                                    {prompt.promptHeading}
+                                  </div>
+                                </div>
+                              </Show>
+                              <Show when={prompt.type}>
+                                <div>
+                                  <label class="text-sm font-medium text-muted-foreground block mb-1">Type</label>
+                                  <div class="bg-gray-50 rounded p-3 text-sm whitespace-pre-wrap">{prompt.type}</div>
+                                </div>
+                              </Show>
+                              <div>
+                                <label class="text-sm font-medium text-muted-foreground block mb-1">Prompt Text</label>
+                                <div class="bg-gray-50 rounded p-3 text-sm font-mono whitespace-pre-wrap">
+                                  {prompt.originalText}
+                                </div>
                               </div>
                             </div>
-                          </Show>
-                          <Show when={prompt.type}>
-                            <div>
-                              <label class="text-sm font-medium text-muted-foreground block mb-1">Type</label>
-                              <div class="bg-gray-50 rounded p-3 text-sm whitespace-pre-wrap">{prompt.type}</div>
-                            </div>
-                          </Show>
-                          <div>
-                            <label class="text-sm font-medium text-muted-foreground block mb-1">Prompt Text</label>
-                            <div class="bg-gray-50 rounded p-3 text-sm font-mono whitespace-pre-wrap">
-                              {prompt.originalText}
-                            </div>
+                          </div>
+                        )
+                      }}
+                    </For>
+                  </div>
+                </Show>
+              </div>
+            }
+          >
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <label class="block text-sm font-medium">Inherited Summary Prompts</label>
+                <span class="text-xs text-muted-foreground">{summarySourcePrompts().length} inherited</span>
+              </div>
+              <p class="text-sm text-muted-foreground mb-3">
+                Summary mode automatically compares overall decisions using the selected source project's eligible
+                summary prompts.
+              </p>
+              <Show when={!selectedSummarySourceProjectId()}>
+                <p class="text-sm text-muted-foreground">
+                  Select a summary source project to preview inherited prompts.
+                </p>
+              </Show>
+              <Show when={selectedSummarySourceProjectId() && summarySourcePrompts().length === 0}>
+                <p class="text-sm text-muted-foreground">
+                  No eligible summary prompts are available on the selected source project.
+                </p>
+              </Show>
+              <Show when={summarySourcePrompts().length > 0}>
+                <div class="space-y-2">
+                  <For each={summarySourcePrompts()}>
+                    {(prompt) => {
+                      return (
+                        <div class="border border-input rounded-md p-3 bg-background">
+                          <div class="flex items-center gap-2 flex-wrap">
+                            <span class="text-sm font-medium text-gray-900">
+                              {prompt.promptHeading?.trim() || `Prompt ${prompt.order + 1}`}
+                            </span>
+                            <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">
+                              Inherited automatically
+                            </span>
+                            <Show when={getSummaryCriteriaLabel(prompt)}>
+                              <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700">
+                                {getSummaryCriteriaLabel(prompt)}
+                              </span>
+                            </Show>
                           </div>
                         </div>
-                      </div>
-                    )
-                  }}
-                </For>
-              </div>
-            </Show>
-          </div>
+                      )
+                    }}
+                  </For>
+                </div>
+              </Show>
+            </div>
+          </Show>
 
           <div class="flex gap-3 pt-4">
             <Button type="submit" disabled={!canSubmit()}>

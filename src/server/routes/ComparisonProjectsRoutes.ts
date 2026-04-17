@@ -70,8 +70,6 @@ type ComparisonProjectScope = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
-  dateFrom: Date | null
-  dateTo: Date | null
   archived: boolean
   createdAt: Date
   modelIds: string[] | null
@@ -119,8 +117,6 @@ type ComparisonProjectSource = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
-  dateFrom: Date | null
-  dateTo: Date | null
   prompts: ComparisonProjectSourcePrompt[]
   importRoutes: ComparisonProjectSourceImportRoute[]
 }
@@ -148,6 +144,13 @@ type ComparisonProjectRecordRow = Omit<
   ComparisonProjectRecord,
   'createdAt' | 'dateFrom' | 'dateTo' | 'modelIds' | 'updatedAt'
 > & {createdAt: unknown; dateFrom: unknown; dateTo: unknown; modelIds: unknown; updatedAt: unknown}
+
+const hasSummaryPromptCriteriaMetadata = (prompt: {
+  criteriaDisposition: ProjectPromptCriteriaDisposition | null
+  criteriaSectionKey: string | null
+}) => {
+  return Boolean(prompt.criteriaDisposition && prompt.criteriaSectionKey)
+}
 
 const comparisonProjectTable = 'app.comparison_project'
 const comparisonProjectPromptTable = 'app.comparison_project_prompt'
@@ -274,6 +277,12 @@ const getComparisonProjectRecordValue = (row: ComparisonProjectRecordRow) => {
   }
 }
 
+const getComparisonProjectApiRecord = (comparisonProjectRecord: ReturnType<typeof getComparisonProjectRecordValue>) => {
+  const {dateFrom: _dateFrom, dateTo: _dateTo, ...publicComparisonProjectRecord} = comparisonProjectRecord
+
+  return publicComparisonProjectRecord
+}
+
 const getComparisonProjectRecordSql = (comparisonProjectId: string) => {
   return `
     SELECT
@@ -318,28 +327,6 @@ const updateComparisonProjectTx = async (tx: AppTx, params: {comparisonProjectId
 
 const isDefined = <T>(value: T | null | undefined): value is T => {
   return value !== null && value !== undefined
-}
-
-const parseOptionalDate = (value?: string | null) => {
-  if (!value) {
-    return null
-  }
-
-  const trimmedValue = value.trim()
-  if (!trimmedValue) {
-    return null
-  }
-
-  const isoDateOnlyPattern = /^\d{4}-\d{2}-\d{2}$/
-  const hasIsoDateOnlyMatch = isoDateOnlyPattern.exec(trimmedValue)
-  const normalizedValue = hasIsoDateOnlyMatch ? `${trimmedValue}T00:00:00.000Z` : trimmedValue
-  const parsedDate = new Date(normalizedValue)
-
-  if (Number.isNaN(parsedDate.getTime())) {
-    throw new Error('Invalid date value provided')
-  }
-
-  return parsedDate
 }
 
 const getUniqueStringValues = (values: string[]) => {
@@ -520,8 +507,6 @@ const getComparisonProjectsList = async (archived: boolean) => {
     useAbstract: boolean
     useFulltext: boolean
     useFulltextNoImages: boolean
-    dateFrom: unknown
-    dateTo: unknown
     archived: boolean
     createdAt: unknown
     promptCount: number
@@ -538,8 +523,6 @@ const getComparisonProjectsList = async (archived: boolean) => {
       cp.use_abstract AS useAbstract,
       cp.use_fulltext AS useFulltext,
       cp.use_fulltext_no_images AS useFulltextNoImages,
-      cp.date_from AS dateFrom,
-      cp.date_to AS dateTo,
       cp.archived AS archived,
       cp.created_at AS createdAt,
       COALESCE(prompt_counts.promptCount, 0) AS promptCount,
@@ -560,13 +543,7 @@ const getComparisonProjectsList = async (archived: boolean) => {
   `)
 
   return rows.map((row) => {
-    return {
-      ...row,
-      humanJudgmentMode: row.humanJudgmentMode ?? 'prompt',
-      dateFrom: getDateValue(row.dateFrom),
-      dateTo: getDateValue(row.dateTo),
-      createdAt: getDateValue(row.createdAt),
-    }
+    return {...row, humanJudgmentMode: row.humanJudgmentMode ?? 'prompt', createdAt: getDateValue(row.createdAt)}
   })
 }
 
@@ -583,9 +560,7 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
       p.use_title AS useTitle,
       p.use_abstract AS useAbstract,
       p.use_fulltext AS useFulltext,
-      p.use_fulltext_no_images AS useFulltextNoImages,
-      p.date_from AS dateFrom,
-      p.date_to AS dateTo
+      p.use_fulltext_no_images AS useFulltextNoImages
     FROM ${projectTable} p
     INNER JOIN ${modelTable} m ON m.id = p.model_id
     WHERE p.archived = FALSE
@@ -669,8 +644,6 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
         humanJudgmentMode,
         isSummaryCapable: humanJudgmentMode === 'summary',
         summarySourceProjectId: humanJudgmentMode === 'summary' ? projectRow.id : null,
-        dateFrom: getDateValue(projectRow.dateFrom),
-        dateTo: getDateValue(projectRow.dateTo),
         prompts: sourcePromptRows.map<ComparisonProjectSourcePrompt>((promptRow, index) => {
           return {
             id: promptRow.promptId,
@@ -737,10 +710,6 @@ const getHasSameStringValues = (left: string[], right: string[]) => {
   )
 }
 
-const getHasSameOptionalDateValue = (left: Date | null, right: Date | null) => {
-  return (left?.getTime() ?? null) === (right?.getTime() ?? null)
-}
-
 const getNormalizedComparisonScopeName = (value: string) => {
   return value.trim().toLowerCase()
 }
@@ -752,8 +721,6 @@ const getInferredSourceProjectId = async (
     useAbstract: boolean
     useFulltext: boolean
     useFulltextNoImages: boolean
-    dateFrom: Date | null
-    dateTo: Date | null
   },
   promptConfigs: ComparisonProjectPromptConfig[],
   importRouteIds: string[],
@@ -762,36 +729,22 @@ const getInferredSourceProjectId = async (
     return null
   }
 
-  const candidateProjects = await appDatabaseService.queryJson<{
-    id: string
-    name: string
-    dateFrom: unknown
-    dateTo: unknown
-  }>(`
+  const candidateProjects = await appDatabaseService.queryJson<{id: string; name: string}>(`
     SELECT
       id,
-      name,
-      date_from AS dateFrom,
-      date_to AS dateTo
+      name
     FROM ${projectTable}
     WHERE use_title = ${getBooleanLiteral(comparisonProjectRow.useTitle)}
       AND use_abstract = ${getBooleanLiteral(comparisonProjectRow.useAbstract)}
       AND use_fulltext = ${getBooleanLiteral(comparisonProjectRow.useFulltext)}
       AND use_fulltext_no_images = ${getBooleanLiteral(comparisonProjectRow.useFulltextNoImages)}
   `)
-  const normalizedCandidateProjects = candidateProjects.map((candidateProject) => {
-    return {
-      ...candidateProject,
-      dateFrom: getDateValue(candidateProject.dateFrom),
-      dateTo: getDateValue(candidateProject.dateTo),
-    }
-  })
 
-  if (normalizedCandidateProjects.length === 0) {
+  if (candidateProjects.length === 0) {
     return null
   }
 
-  const candidateProjectIds = normalizedCandidateProjects.map((candidateProject) => {
+  const candidateProjectIds = candidateProjects.map((candidateProject) => {
     return candidateProject.id
   })
   const [candidatePromptRows, candidateRouteRows] = await Promise.all([
@@ -822,7 +775,7 @@ const getInferredSourceProjectId = async (
   const comparisonPromptIds = promptConfigs.map((promptConfig) => {
     return promptConfig.id
   })
-  const exactCandidates = normalizedCandidateProjects.filter((candidateProject) => {
+  const exactCandidates = candidateProjects.filter((candidateProject) => {
     const candidatePromptIds = promptIdsByProjectId.get(candidateProject.id) ?? []
     const candidateRouteIds = routeIdsByProjectId.get(candidateProject.id) ?? []
 
@@ -831,44 +784,28 @@ const getInferredSourceProjectId = async (
       && getHasSameStringValues(candidateRouteIds, importRouteIds)
     )
   })
-  const dateMatchedCandidates = exactCandidates.filter((candidateProject) => {
+  const comparisonProjectName = getNormalizedComparisonScopeName(comparisonProjectRow.name)
+  const nameMatchedCandidates = exactCandidates.filter((candidateProject) => {
+    const candidateProjectName = getNormalizedComparisonScopeName(candidateProject.name)
+
     return (
-      getHasSameOptionalDateValue(candidateProject.dateFrom, comparisonProjectRow.dateFrom)
-      && getHasSameOptionalDateValue(candidateProject.dateTo, comparisonProjectRow.dateTo)
+      candidateProjectName.length > 0
+      && (comparisonProjectName === candidateProjectName
+        || comparisonProjectName.startsWith(`${candidateProjectName} |`)
+        || comparisonProjectName.includes(candidateProjectName))
     )
   })
-  const comparisonProjectName = getNormalizedComparisonScopeName(comparisonProjectRow.name)
-  const nameMatchedCandidates = (dateMatchedCandidates.length > 0 ? dateMatchedCandidates : exactCandidates).filter(
-    (candidateProject) => {
-      const candidateProjectName = getNormalizedComparisonScopeName(candidateProject.name)
-
-      return (
-        candidateProjectName.length > 0
-        && (comparisonProjectName === candidateProjectName
-          || comparisonProjectName.startsWith(`${candidateProjectName} |`)
-          || comparisonProjectName.includes(candidateProjectName))
-      )
-    },
-  )
   const [matchedCandidate] = nameMatchedCandidates
 
   return nameMatchedCandidates.length === 1 ? (matchedCandidate?.id ?? null) : null
 }
 
-const getArticleScopeConditions = (
-  routeIds: string[],
-  dateFrom: Date | null,
-  dateTo: Date | null,
-  sourceProjectId: string | null,
-  searchTitle?: string | null,
-) => {
+const getArticleScopeConditions = (routeIds: string[], sourceProjectId: string | null, searchTitle?: string | null) => {
   const trimmedSearchTitle = searchTitle?.trim() ?? ''
   const scopeCondition = getArticleInScopeClause('a', routeIds, sourceProjectId)
 
   return [
     scopeCondition,
-    dateFrom ? `a.article_created_at >= ${getSqlLiteral(dateFrom)}` : null,
-    dateTo ? `a.article_created_at <= ${getSqlLiteral(dateTo)}` : null,
     trimmedSearchTitle ? getCaseInsensitiveContainsClause('a.article_title', trimmedSearchTitle) : null,
   ].filter(isDefined)
 }
@@ -878,8 +815,6 @@ const getComparisonProjectModels = async (
     modelIds: string[] | null
     sourceProjectId: string | null
     contentVariants: ComparisonProjectContentVariant[]
-    dateFrom: Date | null
-    dateTo: Date | null
   },
   promptIds: string[],
   importRouteIds: string[],
@@ -911,12 +846,7 @@ const getComparisonProjectModels = async (
     return []
   }
 
-  const articleScopeConditions = getArticleScopeConditions(
-    importRouteIds,
-    comparisonProjectRow.dateFrom,
-    comparisonProjectRow.dateTo,
-    comparisonProjectRow.sourceProjectId,
-  )
+  const articleScopeConditions = getArticleScopeConditions(importRouteIds, comparisonProjectRow.sourceProjectId)
   return appDatabaseService.queryJson<ComparisonProjectModelConfig>(`
     SELECT m.id AS id, m.name AS name, TO_JSON(m.metadata_json) AS metadataJson
     FROM ${judgmentTable} j
@@ -991,8 +921,6 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
     useAbstract: boolean
     useFulltext: boolean
     useFulltextNoImages: boolean
-    dateFrom: unknown
-    dateTo: unknown
     archived: boolean
     createdAt: unknown
     modelIds: unknown
@@ -1008,8 +936,6 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
-      date_from AS dateFrom,
-      date_to AS dateTo,
       archived,
       created_at AS createdAt,
       model_ids AS modelIds
@@ -1024,8 +950,6 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
 
   const normalizedComparisonProjectRow = {
     ...comparisonProjectRow,
-    dateFrom: getDateValue(comparisonProjectRow.dateFrom),
-    dateTo: getDateValue(comparisonProjectRow.dateTo),
     createdAt: getRequiredDateValue(comparisonProjectRow.createdAt),
     modelIds: getStringArrayRowValue(comparisonProjectRow, 'modelIds'),
     humanJudgmentMode: comparisonProjectRow.humanJudgmentMode ?? 'prompt',
@@ -1616,12 +1540,7 @@ const getComparisonProjectJudgmentsPage = async (
     return {data: [], totalCount: 0, page: 1, limit, totalPages: 0}
   }
 
-  const articleScopeConditions = getArticleScopeConditions(
-    scope.importRouteIds,
-    scope.dateFrom,
-    scope.dateTo,
-    scope.sourceProjectId,
-  )
+  const articleScopeConditions = getArticleScopeConditions(scope.importRouteIds, scope.sourceProjectId)
 
   const scopedArticles = await appDatabaseService
     .queryJson<{id: string; articleTitle: string; articleCreatedAt: unknown}>(
@@ -1876,31 +1795,48 @@ const getValidatedSummaryPromptSelections = async (
   promptSelections: PromptSelection[],
 ) => {
   const uniquePromptSelections = getUniquePromptSelections(promptSelections)
-
-  if (uniquePromptSelections.length === 0) {
-    throw new Error('Summary mode requires at least one selected prompt')
-  }
+  const selectedPromptIds = uniquePromptSelections.map((promptSelection) => {
+    return promptSelection.promptId
+  })
 
   const sourcePromptRows = await db.queryJson<{
     promptId: string
+    order: number | null
     criteriaDisposition: ProjectPromptCriteriaDisposition | null
     criteriaSectionKey: string | null
     criteriaSectionLabel: string | null
   }>(`
     SELECT
       prompt_id AS promptId,
+      prompt_order AS order,
       criteria_disposition AS criteriaDisposition,
       criteria_section_key AS criteriaSectionKey,
       criteria_section_label AS criteriaSectionLabel
     FROM ${projectPromptTable}
     WHERE project_id = ${getSqlLiteral(summarySourceProjectId)}
       AND enabled = TRUE
-      AND prompt_id IN (${getInClause(
-        uniquePromptSelections.map((promptSelection) => {
-          return promptSelection.promptId
-        }),
-      )})
+      AND criteria_disposition IS NOT NULL
+      AND criteria_section_key IS NOT NULL
+      ${selectedPromptIds.length > 0 ? `AND prompt_id IN (${getInClause(selectedPromptIds)})` : ''}
+    ORDER BY prompt_order ASC, prompt_id ASC
   `)
+
+  if (uniquePromptSelections.length === 0) {
+    if (sourcePromptRows.length === 0) {
+      throw new Error('Selected summary source project has no prompts with summary criteria metadata')
+    }
+
+    return sourcePromptRows.map<PromptSelection>((sourcePromptRow, index) => {
+      return {
+        promptId: sourcePromptRow.promptId,
+        order: sourcePromptRow.order ?? index,
+        criteriaDisposition: sourcePromptRow.criteriaDisposition,
+        criteriaSectionKey: sourcePromptRow.criteriaSectionKey,
+        criteriaSectionLabel: sourcePromptRow.criteriaSectionLabel,
+      }
+    })
+  }
+
   const sourcePromptRowsByPromptId = sourcePromptRows.reduce<Map<string, (typeof sourcePromptRows)[number]>>(
     (rowMap, sourcePromptRow) => {
       rowMap.set(sourcePromptRow.promptId, sourcePromptRow)
@@ -1910,14 +1846,18 @@ const getValidatedSummaryPromptSelections = async (
   )
 
   if (sourcePromptRowsByPromptId.size !== uniquePromptSelections.length) {
-    throw new Error('Summary mode selected prompts must exist on the summary source project')
+    throw new Error(
+      'Summary mode selected prompts must exist on the summary source project and include summary criteria metadata',
+    )
   }
 
   return uniquePromptSelections.map<PromptSelection>((promptSelection) => {
     const sourcePromptRow = sourcePromptRowsByPromptId.get(promptSelection.promptId)
 
     if (!sourcePromptRow) {
-      throw new Error('Summary mode selected prompts must exist on the summary source project')
+      throw new Error(
+        'Summary mode selected prompts must exist on the summary source project and include summary criteria metadata',
+      )
     }
 
     return {
@@ -2033,8 +1973,6 @@ const createComparisonProjectRecord = async (
     compareWithHumans?: boolean
     humanJudgmentMode?: HumanJudgmentMode
     summarySourceProjectId?: string | null
-    dateFrom?: string | null
-    dateTo?: string | null
     useTitle?: boolean
     useAbstract?: boolean
     useFulltext?: boolean
@@ -2042,17 +1980,11 @@ const createComparisonProjectRecord = async (
     importRoutes?: string[]
     promptSelections?: PromptSelection[]
   },
-) => {
-  const dateFrom = parseOptionalDate(body.dateFrom)
-  const dateTo = parseOptionalDate(body.dateTo)
+): Promise<ReturnType<typeof getComparisonProjectRecordValue>> => {
   const useTitle = body.useTitle ?? true
   const useAbstract = body.useAbstract ?? true
   const useFulltext = body.useFulltext ?? false
   const useFulltextNoImages = body.useFulltextNoImages ?? false
-
-  if (dateFrom && dateTo && dateFrom > dateTo) {
-    throw new Error('date_from must be on or before date_to')
-  }
 
   if (!useTitle && !useAbstract && !useFulltext && !useFulltextNoImages) {
     throw new Error('Select at least one article content option to compare')
@@ -2098,9 +2030,7 @@ const createComparisonProjectRecord = async (
       use_title,
       use_abstract,
       use_fulltext,
-      use_fulltext_no_images,
-      date_from,
-      date_to
+      use_fulltext_no_images
     )
     VALUES (
       ${getSqlLiteral(crypto.randomUUID())},
@@ -2113,9 +2043,7 @@ const createComparisonProjectRecord = async (
       ${getBooleanLiteral(useTitle)},
       ${getBooleanLiteral(useAbstract)},
       ${getBooleanLiteral(useFulltext)},
-      ${getBooleanLiteral(useFulltextNoImages)},
-      ${getSqlLiteral(dateFrom)},
-      ${getSqlLiteral(dateTo)}
+      ${getBooleanLiteral(useFulltextNoImages)}
     )
     RETURNING
       id,
@@ -2180,7 +2108,11 @@ export const comparisonProjectsRoutes = new Elysia()
         body.humanJudgmentMode ?? (sourceProject.isSummaryCapable && body.compareWithHumans ? 'summary' : 'prompt')
       const summarySourceProjectId =
         humanJudgmentMode === 'summary' ? (body.summarySourceProjectId ?? sourceProject.id) : null
-      const createdComparisonProject = await appDatabaseService.transaction(async (tx) => {
+      const sourcePromptSelections =
+        humanJudgmentMode === 'summary'
+          ? sourceProject.prompts.filter(hasSummaryPromptCriteriaMetadata)
+          : sourceProject.prompts
+      const createdComparisonProject = (await appDatabaseService.transaction(async (tx) => {
         return createComparisonProjectRecord(tx, {
           name: body.name,
           description: body.description,
@@ -2188,8 +2120,6 @@ export const comparisonProjectsRoutes = new Elysia()
           compareWithHumans: body.compareWithHumans,
           humanJudgmentMode,
           summarySourceProjectId,
-          dateFrom: body.dateFrom,
-          dateTo: body.dateTo,
           useTitle: sourceProject.useTitle,
           useAbstract: sourceProject.useAbstract,
           useFulltext: sourceProject.useFulltext,
@@ -2197,7 +2127,7 @@ export const comparisonProjectsRoutes = new Elysia()
           importRoutes: sourceProject.importRoutes.map((importRoute) => {
             return importRoute.route
           }),
-          promptSelections: sourceProject.prompts.map((prompt) => {
+          promptSelections: sourcePromptSelections.map((prompt) => {
             return {
               promptId: prompt.id,
               order: prompt.order,
@@ -2207,9 +2137,9 @@ export const comparisonProjectsRoutes = new Elysia()
             }
           }),
         })
-      })
+      })) as Awaited<ReturnType<typeof createComparisonProjectRecord>>
 
-      return {data: createdComparisonProject}
+      return {data: getComparisonProjectApiRecord(createdComparisonProject)}
     },
     {
       body: t.Object({
@@ -2218,8 +2148,6 @@ export const comparisonProjectsRoutes = new Elysia()
         compareWithHumans: t.Optional(t.Boolean()),
         humanJudgmentMode: t.Optional(t.Union([t.Literal('prompt'), t.Literal('summary')])),
         summarySourceProjectId: t.Optional(t.Union([t.String(), t.Null()])),
-        dateFrom: t.Optional(t.Union([t.String(), t.Null()])),
-        dateTo: t.Optional(t.Union([t.String(), t.Null()])),
         sourceProjectId: t.String(),
       }),
     },
@@ -2298,11 +2226,11 @@ export const comparisonProjectsRoutes = new Elysia()
     '/api/comparison-projects',
     async (context) => {
       const {body} = context
-      const createdComparisonProject = await appDatabaseService.transaction(async (tx) => {
+      const createdComparisonProject = (await appDatabaseService.transaction(async (tx) => {
         return createComparisonProjectRecord(tx, body)
-      })
+      })) as Awaited<ReturnType<typeof createComparisonProjectRecord>>
 
-      return {data: createdComparisonProject}
+      return {data: getComparisonProjectApiRecord(createdComparisonProject)}
     },
     {
       body: t.Object({
@@ -2312,8 +2240,6 @@ export const comparisonProjectsRoutes = new Elysia()
         compareWithHumans: t.Optional(t.Boolean()),
         humanJudgmentMode: t.Optional(t.Union([t.Literal('prompt'), t.Literal('summary')])),
         summarySourceProjectId: t.Optional(t.Union([t.String(), t.Null()])),
-        dateFrom: t.Optional(t.Union([t.String(), t.Null()])),
-        dateTo: t.Optional(t.Union([t.String(), t.Null()])),
         useTitle: t.Boolean(),
         useAbstract: t.Boolean(),
         useFulltext: t.Boolean(),
@@ -2411,7 +2337,7 @@ export const comparisonProjectsRoutes = new Elysia()
         throw new Error('Comparison project not found')
       }
 
-      return {data: getComparisonProjectRecordValue(updatedComparisonProjectRow)}
+      return {data: getComparisonProjectApiRecord(getComparisonProjectRecordValue(updatedComparisonProjectRow))}
     },
     {
       body: t.Object({

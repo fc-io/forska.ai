@@ -12,8 +12,6 @@ export type CreateComparisonProjectInput = {
   compareWithHumans?: boolean
   humanJudgmentMode?: HumanJudgmentMode
   summarySourceProjectId?: string | null
-  dateFrom?: string | null
-  dateTo?: string | null
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean
@@ -28,8 +26,6 @@ export type CreateComparisonProjectFromProjectInput = {
   compareWithHumans?: boolean
   humanJudgmentMode?: HumanJudgmentMode
   summarySourceProjectId?: string | null
-  dateFrom?: string | null
-  dateTo?: string | null
   sourceProjectId: string
 }
 
@@ -46,8 +42,6 @@ export type ComparisonProjectSource = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
-  dateFrom: Date | string | null
-  dateTo: Date | string | null
   prompts: Array<{
     id: string
     promptHeading: string | null
@@ -132,8 +126,6 @@ export type ComparisonProjectJudgmentsMetadata = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
-  dateFrom: Date | string | null
-  dateTo: Date | string | null
   archived: boolean
   createdAt: Date | string
   importRouteIds: string[]

@@ -33,21 +33,8 @@ const getComparisonProjectContentUsedLabel = (comparisonProject: ComparisonProje
   return parts.length > 0 ? parts.join(' · ') : 'none'
 }
 
-const formatDateValue = (value: Date | string) => {
-  return format(new Date(value), 'yyyy-MM-dd HH:mm')
-}
-
-const getTimelineLabel = (comparisonProject: ComparisonProject) => {
-  if (!comparisonProject.dateFrom && !comparisonProject.dateTo) {
-    return 'Any time'
-  }
-
-  const startLabel = comparisonProject.dateFrom
-    ? format(new Date(comparisonProject.dateFrom), 'yyyy-MM-dd')
-    : 'Any time'
-  const endLabel = comparisonProject.dateTo ? format(new Date(comparisonProject.dateTo), 'yyyy-MM-dd') : 'Any time'
-
-  return `${startLabel} -> ${endLabel}`
+const formatDateValue = (value: Date | string | null) => {
+  return value ? format(new Date(value), 'yyyy-MM-dd HH:mm') : 'Unknown'
 }
 
 export const ComparisonProjectsGrid = (props: ComparisonProjectsGridProps) => {
@@ -151,11 +138,10 @@ export const ComparisonProjectsGrid = (props: ComparisonProjectsGridProps) => {
                     {description.length > 120 ? `${description.slice(0, 120).trim()}...` : description}
                   </p>
                 </Show>
-                <div class="grid gap-2 text-sm text-muted-foreground mb-4 sm:grid-cols-3">
+                <div class="grid gap-2 text-sm text-muted-foreground mb-4 sm:grid-cols-2">
                   <p>
                     Prompts: {comparisonProject.promptCount} · Import routes: {comparisonProject.routeCount}
                   </p>
-                  <p>Timeline: {getTimelineLabel(comparisonProject)}</p>
                   <p>Article content: {getComparisonProjectContentUsedLabel(comparisonProject)}</p>
                 </div>
                 <div class="flex gap-2">
