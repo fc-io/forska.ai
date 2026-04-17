@@ -309,12 +309,20 @@ test('project review details bypasses stale detail mart rows and surfaces stale 
         : statement.includes('FROM mart.review_article_serving_detail j')
           ? ((detailQueryCount += 1), [getProjectReviewDetailJudgmentRow({judgmentId: 'stale-detail'})])
           : statement.includes('FROM app.judgment j')
-            ? [getArticleJudgmentRow({judgmentId: 'judgment-fallback', judgmentPromptId: 'prompt-1'})]
+            ? [
+                getArticleJudgmentRow({
+                  judgmentId: 'judgment-fallback',
+                  judgmentProjectId: 'project-other',
+                  judgmentPromptId: 'prompt-1',
+                  judgmentSnapshotProjectId: 'project-other',
+                }),
+              ]
             : []
   }
 
   const response = await postReviewDetailsRequest()
   const body = (await response.json()) as {
+    allJudgments: Array<{id: string}>
     judgments: Array<{id: string}>
     martFreshness: {isFresh: boolean; state: string}
   }
@@ -327,6 +335,11 @@ test('project review details bypasses stale detail mart rows and surfaces stale 
       return judgment.id
     }),
   ).toEqual(['judgment-fallback'])
+  expect(
+    body.allJudgments.map((judgment) => {
+      return judgment.id
+    }),
+  ).toEqual([])
 })
 
 test('project review details surfaces running freshness while bypassing detail mart rows', async () => {
@@ -346,12 +359,20 @@ test('project review details surfaces running freshness while bypassing detail m
         : statement.includes('FROM mart.review_article_serving_detail j')
           ? ((detailQueryCount += 1), [getProjectReviewDetailJudgmentRow({judgmentId: 'running-detail'})])
           : statement.includes('FROM app.judgment j')
-            ? [getArticleJudgmentRow({judgmentId: 'judgment-fallback', judgmentPromptId: 'prompt-1'})]
+            ? [
+                getArticleJudgmentRow({
+                  judgmentId: 'judgment-fallback',
+                  judgmentProjectId: 'project-other',
+                  judgmentPromptId: 'prompt-1',
+                  judgmentSnapshotProjectId: 'project-other',
+                }),
+              ]
             : []
   }
 
   const response = await postReviewDetailsRequest()
   const body = (await response.json()) as {
+    allJudgments: Array<{id: string}>
     judgments: Array<{id: string}>
     martFreshness: {isFresh: boolean; state: string}
   }
@@ -364,6 +385,45 @@ test('project review details surfaces running freshness while bypassing detail m
       return judgment.id
     }),
   ).toEqual(['judgment-fallback'])
+  expect(
+    body.allJudgments.map((judgment) => {
+      return judgment.id
+    }),
+  ).toEqual([])
+})
+
+test('project review details raw fallback query uses project-visible scope without judgment project ownership', async () => {
+  let judgmentStatement = ''
+
+  fullArticlesByIdsRef.current = async () => {
+    return [{articleTitle: 'Article 1', id: 'article-1'}]
+  }
+  projectReviewConfigRef.current = async () => {
+    return {modelId: 'model-1', useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+  }
+  queryJsonRef.current = async (statement) => {
+    if (statement.includes('FROM app.judgment j')) {
+      judgmentStatement = statement
+      return []
+    }
+
+    return statement.includes('FROM app.project_prompt pp')
+      ? [getPromptRow('prompt-1', 0)]
+      : statement.includes('FROM app.project_mart_refresh_state')
+        ? [getFreshnessRow({dirtyToken: 5, lastCompletedRefreshToken: 4, refreshStatus: 'running'})]
+        : []
+  }
+
+  const response = await postReviewDetailsRequest()
+
+  expect(response.status).toBe(200)
+  expect(judgmentStatement).toContain('project_prompt.project_id = project.id')
+  expect(judgmentStatement).toContain('project_prompt.enabled = TRUE')
+  expect(judgmentStatement).toContain('j.prompt_id = project_prompt.prompt_id')
+  expect(judgmentStatement).toContain('j.article_id = scope_article.article_id')
+  expect(judgmentStatement).toContain('j.model_id = project.model_id')
+  expect(judgmentStatement).toContain('j.use_fulltext_no_images = project.use_fulltext_no_images')
+  expect(judgmentStatement).not.toContain('j.project_id =')
 })
 
 test('project review details exposes summary-mode overall answers without prompt human map', async () => {
