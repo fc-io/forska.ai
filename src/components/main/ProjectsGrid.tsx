@@ -115,10 +115,8 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
       return new Set([...prev, projectId])
     })
     try {
-      const clonedProject = await cloneProject(projectId)
+      const clonedProject = await cloneProject(queryClient, projectId)
       console.log('Project cloned:', clonedProject)
-      // Reload the page to show the new project
-      window.location.reload()
     } catch (error) {
       console.error('Failed to clone project:', error)
     } finally {
@@ -238,12 +236,12 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
                         </Button>
                       </Show>
                       <Button
-                        as={Link}
-                        to="/projects/$id/edit"
-                        params={{id: project.id} as never}
                         size="sm"
                         variant="outline"
                         class="px-3 py-1 text-sm"
+                        onClick={() => {
+                          window.location.assign(`/projects/${project.id}/edit`)
+                        }}
                       >
                         Edit
                       </Button>

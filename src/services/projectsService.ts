@@ -153,7 +153,7 @@ export const fetchProjectAccess = async (projectId: string): Promise<ProjectAcce
   }
 }
 
-export const cloneProject = async (projectId: string) => {
+export const cloneProject = async (queryClient: QueryClient, projectId: string) => {
   try {
     const response = await apiClient.api.projects({id: projectId}).clone.post()
 
@@ -161,6 +161,8 @@ export const cloneProject = async (projectId: string) => {
       console.error('Error cloning project:', response.error)
       throw new Error('Failed to clone project')
     }
+
+    await invalidateProjectsQueries(queryClient)
 
     return response.data.data
   } catch (err) {
