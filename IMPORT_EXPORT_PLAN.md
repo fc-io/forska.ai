@@ -186,7 +186,7 @@
 - Validate incoming import payloads with ArkType at the route boundary.
 - Reuse the existing provider connection and provider auth services during dependency resolution instead of duplicating credential setup logic inside project import.
 - Anchor staged uploads, extracted assets, and rewritten file paths to the runtime-writable root so browser mode and desktop mode share the same contract.
-- Support threshold-based execution modes: inline for small packages, background session jobs for large export assembly and large import analyze work.
+- Support threshold-based execution modes: inline for small packages, background session jobs for large export assembly and large import analyze or commit work.
 - Record completed imports in a small transfer-history store with package fingerprint, source project summary, imported project id, imported at, and counts so analyze can warn on exact duplicate packages later.
 - Keep the final commit transactional and fail-fast when any required model mapping is unresolved.
 
@@ -219,7 +219,7 @@
 - [ ] Lock the manifest schema, payload file list, and explicit exported field set, including article fields and omission warnings.
 - [ ] Define import-session state, source-to-target id maps, unresolved dependency statuses, and judgment-collision reporting.
 - [ ] Pick the zip implementation and lock checksum, package fingerprint, path-normalization, and size-limit rules before writing route handlers.
-- [ ] Define the thresholds that switch export/analyze work from inline requests to background session jobs.
+- [ ] Define the thresholds that switch export, analyze, and commit work from inline requests to background session jobs.
 
 #### Quality Gates
 
