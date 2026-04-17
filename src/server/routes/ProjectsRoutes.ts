@@ -154,7 +154,7 @@ const getProjectReferenceDetachPlan = (projectId: string): ProjectReferenceDetac
   const projectPromptSpec = {
     sourceTable: 'app.project_prompt',
     tempTable: getTempTable('project_prompt'),
-    whereClause: `project_id = ${projectLiteral} OR origin_project_id = ${projectLiteral}`,
+    whereClause: `project_id = ${projectLiteral}`,
   }
   const projectImportRouteSpec = {
     sourceTable: 'app.project_import_route',
@@ -567,6 +567,7 @@ export const projectsRoutes = new Elysia()
           type: string | null
           enabled: boolean
           originProjectId: string | null
+          linkedToProject: boolean
           contentHash: string | null
           createdAt: unknown
         }>(`
@@ -581,6 +582,7 @@ export const projectsRoutes = new Elysia()
           p.type AS type,
           pp.enabled AS enabled,
           pp.origin_project_id AS originProjectId,
+          TRUE AS linkedToProject,
           p.content_hash AS contentHash,
           p.created_at AS createdAt
         FROM app.project_prompt pp
@@ -599,6 +601,7 @@ export const projectsRoutes = new Elysia()
           type: string | null
           enabled: boolean
           originProjectId: string | null
+          linkedToProject: boolean
           contentHash: string | null
           createdAt: unknown
         }>(`
@@ -613,6 +616,7 @@ export const projectsRoutes = new Elysia()
           p.type AS type,
           FALSE AS enabled,
           NULL AS originProjectId,
+          FALSE AS linkedToProject,
           p.content_hash AS contentHash,
           p.created_at AS createdAt
         FROM app.prompt p
@@ -1255,6 +1259,7 @@ export const projectsRoutes = new Elysia()
             type: string | null
             enabled: boolean
             originProjectId: string | null
+            linkedToProject: boolean
           }>(`
           SELECT
             p.id AS id,
@@ -1266,7 +1271,8 @@ export const projectsRoutes = new Elysia()
             p.archived AS promptArchived,
             p.type AS type,
             pp.enabled AS enabled,
-            pp.origin_project_id AS originProjectId
+            pp.origin_project_id AS originProjectId,
+            TRUE AS linkedToProject
           FROM app.project_prompt pp
           INNER JOIN app.prompt p ON pp.prompt_id = p.id
           WHERE pp.project_id = '${escapeSqlString(params.id)}'

@@ -27,6 +27,7 @@ type PromptItem = {
   promptArchived?: boolean
   enabled?: boolean
   originProjectId?: string | null
+  linkedToProject?: boolean
   createdAt?: Date | string | null
 }
 
@@ -40,6 +41,7 @@ type ProjectPromptResponse = {
   promptArchived?: boolean
   enabled?: boolean
   originProjectId?: string | null
+  linkedToProject?: boolean
   createdAt?: Date | string | null
 }
 
@@ -143,6 +145,7 @@ const isProjectPromptResponse = (value: unknown): value is ProjectPromptResponse
   const order = prompt.order
   const archived = typeof prompt.archived === 'boolean' ? prompt.archived : undefined
   const promptArchived = typeof prompt.promptArchived === 'boolean' ? prompt.promptArchived : undefined
+  const linkedToProject = typeof prompt.linkedToProject === 'boolean' ? prompt.linkedToProject : undefined
   const hasRequiredFields = typeof id === 'string' && typeof originalText === 'string'
   const hasOptionalFields =
     (promptHeading === null || typeof promptHeading === 'string')
@@ -150,6 +153,7 @@ const isProjectPromptResponse = (value: unknown): value is ProjectPromptResponse
     && (order === null || typeof order === 'number')
     && (typeof archived === 'boolean' || archived === undefined)
     && (typeof promptArchived === 'boolean' || promptArchived === undefined)
+    && (typeof linkedToProject === 'boolean' || linkedToProject === undefined)
   return hasRequiredFields && hasOptionalFields
 }
 
@@ -188,6 +192,7 @@ const buildExistingPrompt = (prompt: ProjectPromptResponse): PromptItem => {
     promptArchived: typeof prompt.promptArchived === 'boolean' ? prompt.promptArchived : undefined,
     enabled: typeof prompt.enabled === 'boolean' ? prompt.enabled : undefined,
     originProjectId: prompt.originProjectId ?? null,
+    linkedToProject: prompt.linkedToProject ?? prompt.order !== null,
     createdAt: prompt.createdAt ?? null,
   }
 }
@@ -514,10 +519,10 @@ const EditProject = (): JSX.Element => {
       setDateTo(formatDateForInput(details.project.dateTo))
       const all = mapPromptsFromResponse(details.prompts)
       const owned = all.filter((p) => {
-        return p.originProjectId === projectId
+        return p.linkedToProject === true
       })
       const imported = all.filter((p) => {
-        return p.originProjectId !== projectId
+        return p.linkedToProject !== true
       })
       setOwnedPrompts(owned.length > 0 ? owned : [buildEmptyPrompt(1)])
 
@@ -682,10 +687,10 @@ const EditProject = (): JSX.Element => {
     setDateTo(formatDateForInput(result.project.dateTo))
     const all = mapPromptsFromResponse(result.prompts)
     const owned = all.filter((p) => {
-      return p.originProjectId === projectId
+      return p.linkedToProject === true
     })
     const imported = all.filter((p) => {
-      return p.originProjectId !== projectId
+      return p.linkedToProject !== true
     })
     setOwnedPrompts(owned.length > 0 ? owned : [buildEmptyPrompt(1)])
     setImportedPrompts(imported)

@@ -508,7 +508,9 @@ const rebuildComparisonProjectGroupTx = async (tx: AppTx, projectIdsSql: string)
   const comparisonProjectTempTableName = getTempTableName('delete_archived_comparison_project')
   const comparisonProjectPromptTempTableName = getTempTableName('delete_archived_comparison_project_prompt')
   const comparisonProjectImportRouteTempTableName = getTempTableName('delete_archived_comparison_project_import_route')
-  const comparisonProjectSourceProjectTempTableName = getTempTableName('delete_archived_comparison_project_source_project')
+  const comparisonProjectSourceProjectTempTableName = getTempTableName(
+    'delete_archived_comparison_project_source_project',
+  )
 
   return runStatements(tx, [
     `

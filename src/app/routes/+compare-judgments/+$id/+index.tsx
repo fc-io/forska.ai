@@ -279,7 +279,12 @@ const CompareProjectJudgmentsPage = () => {
                     </p>
                     <Show when={comparisonProject().sourceProjects.length > 0}>
                       <p class="mt-1 text-xs text-gray-500">
-                        Included projects: {comparisonProject().sourceProjects.map((sourceProject) => sourceProject.name).join(' · ')}
+                        Included projects:{' '}
+                        {comparisonProject()
+                          .sourceProjects.map((sourceProject) => {
+                            return sourceProject.name
+                          })
+                          .join(' · ')}
                       </p>
                     </Show>
                   </div>

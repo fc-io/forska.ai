@@ -33,15 +33,15 @@ const hasSummaryPromptCriteria = (prompt: ComparisonProjectSource['prompts'][num
 }
 
 const getSummaryPrompts = (sourceProject: ComparisonProjectSource | undefined) => {
-  return [...(sourceProject?.prompts ?? [])]
-    .filter(hasSummaryPromptCriteria)
-    .sort((left, right) => {
-      return left.order - right.order
-    })
+  return [...(sourceProject?.prompts ?? [])].filter(hasSummaryPromptCriteria).sort((left, right) => {
+    return left.order - right.order
+  })
 }
 
 const getSummaryCriteriaLabel = (prompt: ComparisonProjectSource['prompts'][number]) => {
-  const labelParts = [prompt.criteriaDisposition, prompt.criteriaSectionLabel ?? prompt.criteriaSectionKey].filter(Boolean)
+  const labelParts = [prompt.criteriaDisposition, prompt.criteriaSectionLabel ?? prompt.criteriaSectionKey].filter(
+    Boolean,
+  )
 
   return labelParts.join(' · ')
 }
@@ -106,13 +106,16 @@ const CreateCompareJudgmentsFromProjectPage = () => {
     })
   })
   const selectedAdditionalSourceProjects = createMemo(() => {
-    return selectedAdditionalSourceProjectIds().reduce<ComparisonProjectSource[]>((selectedProjects, sourceProjectId) => {
-      const sourceProject = (sourcesQuery.data ?? []).find((candidateSourceProject) => {
-        return candidateSourceProject.id === sourceProjectId
-      })
+    return selectedAdditionalSourceProjectIds().reduce<ComparisonProjectSource[]>(
+      (selectedProjects, sourceProjectId) => {
+        const sourceProject = (sourcesQuery.data ?? []).find((candidateSourceProject) => {
+          return candidateSourceProject.id === sourceProjectId
+        })
 
-      return sourceProject ? [...selectedProjects, sourceProject] : selectedProjects
-    }, [])
+        return sourceProject ? [...selectedProjects, sourceProject] : selectedProjects
+      },
+      [],
+    )
   })
   const additionalSourceProjects = createMemo(() => {
     return (sourcesQuery.data ?? []).filter((sourceProject) => {
@@ -166,9 +169,9 @@ const CreateCompareJudgmentsFromProjectPage = () => {
   const canSubmit = createMemo(() => {
     return Boolean(
       comparisonProjectName().trim()
-        && selectedSourceProjectId()
-        && (!summaryModeEnabled() || (!summaryModeUnavailableReason() && !additionalProjectValidationError()))
-        && !isLoading(),
+      && selectedSourceProjectId()
+      && (!summaryModeEnabled() || (!summaryModeUnavailableReason() && !additionalProjectValidationError()))
+      && !isLoading(),
     )
   })
 
@@ -182,7 +185,7 @@ const CreateCompareJudgmentsFromProjectPage = () => {
     }
 
     const summaryValidationError = summaryModeEnabled()
-      ? summaryModeUnavailableReason() ?? additionalProjectValidationError()
+      ? (summaryModeUnavailableReason() ?? additionalProjectValidationError())
       : null
 
     if (summaryValidationError) {
@@ -386,7 +389,9 @@ const CreateCompareJudgmentsFromProjectPage = () => {
                               {sourceProject.modelName}
                             </span>
                           </div>
-                          <p class="text-xs text-muted-foreground mt-1">Content: {formatContentSettings(sourceProject)}</p>
+                          <p class="text-xs text-muted-foreground mt-1">
+                            Content: {formatContentSettings(sourceProject)}
+                          </p>
                           <p class="text-xs text-muted-foreground mt-1">
                             Prompts: {sourceProject.prompts.length} · Import routes: {sourceProject.importRoutes.length}
                           </p>
@@ -419,10 +424,13 @@ const CreateCompareJudgmentsFromProjectPage = () => {
                 <div>
                   <p class="text-sm font-medium text-gray-900">Additional Projects to Compare With</p>
                   <p class="text-xs text-muted-foreground mt-1">
-                    The primary project stays the summary source. Additional projects add compatible articles and models.
+                    The primary project stays the summary source. Additional projects add compatible articles and
+                    models.
                   </p>
                 </div>
-                <span class="text-xs text-muted-foreground">{selectedAdditionalSourceProjectIds().length} selected</span>
+                <span class="text-xs text-muted-foreground">
+                  {selectedAdditionalSourceProjectIds().length} selected
+                </span>
               </summary>
 
               <div class="mt-4 space-y-2">
@@ -438,7 +446,10 @@ const CreateCompareJudgmentsFromProjectPage = () => {
                     return (
                       <label
                         class="flex items-start gap-3 border border-input rounded-md p-3"
-                        classList={{'cursor-pointer hover:bg-muted/50': !disabledReason(), 'opacity-60': Boolean(disabledReason())}}
+                        classList={{
+                          'cursor-pointer hover:bg-muted/50': !disabledReason(),
+                          'opacity-60': Boolean(disabledReason()),
+                        }}
                       >
                         <input
                           type="checkbox"
@@ -458,9 +469,12 @@ const CreateCompareJudgmentsFromProjectPage = () => {
                               {sourceProject.modelName}
                             </span>
                           </div>
-                          <p class="text-xs text-muted-foreground mt-1">Content: {formatContentSettings(sourceProject)}</p>
                           <p class="text-xs text-muted-foreground mt-1">
-                            Summary prompts: {getSummaryPrompts(sourceProject).length} · Import routes: {sourceProject.importRoutes.length}
+                            Content: {formatContentSettings(sourceProject)}
+                          </p>
+                          <p class="text-xs text-muted-foreground mt-1">
+                            Summary prompts: {getSummaryPrompts(sourceProject).length} · Import routes:{' '}
+                            {sourceProject.importRoutes.length}
                           </p>
                           <Show when={disabledReason()}>
                             <p class="text-xs text-red-600 mt-1">{disabledReason()}</p>
@@ -478,13 +492,17 @@ const CreateCompareJudgmentsFromProjectPage = () => {
             <div>
               <div class="flex items-center justify-between mb-2">
                 <label class="block text-sm font-medium">Summary Prompts Used</label>
-                <span class="text-xs text-muted-foreground">{selectedSourceProjectSummaryPrompts().length} inherited</span>
+                <span class="text-xs text-muted-foreground">
+                  {selectedSourceProjectSummaryPrompts().length} inherited
+                </span>
               </div>
               <p class="text-sm text-muted-foreground mb-3">
                 These prompts come from the primary project and must match on any additional projects you include.
               </p>
               <Show when={selectedSourceProjectSummaryPrompts().length === 0}>
-                <p class="text-sm text-muted-foreground">Select a compatible primary project to preview summary prompts.</p>
+                <p class="text-sm text-muted-foreground">
+                  Select a compatible primary project to preview summary prompts.
+                </p>
               </Show>
               <Show when={selectedSourceProjectSummaryPrompts().length > 0}>
                 <div class="space-y-2">

@@ -720,16 +720,16 @@ const getComparisonProjectSourceProjects = async (sourceProjectIds: string[]) =>
     WHERE p.id IN (${getInClause(sourceProjectIds)})
     ORDER BY p.name ASC
   `)
-  const sourceProjectOrderLookup = sourceProjectIds.reduce<Record<string, number>>((orderLookup, sourceProjectId, index) => {
-    return {...orderLookup, [sourceProjectId]: index}
-  }, {})
+  const sourceProjectOrderLookup = sourceProjectIds.reduce<Record<string, number>>(
+    (orderLookup, sourceProjectId, index) => {
+      return {...orderLookup, [sourceProjectId]: index}
+    },
+    {},
+  )
 
   return sourceProjectRows
     .map<ComparisonProjectLinkedSourceProject>((sourceProjectRow) => {
-      return {
-        ...sourceProjectRow,
-        humanJudgmentMode: sourceProjectRow.humanJudgmentMode ?? 'prompt',
-      }
+      return {...sourceProjectRow, humanJudgmentMode: sourceProjectRow.humanJudgmentMode ?? 'prompt'}
     })
     .sort((left, right) => {
       return (
@@ -797,13 +797,16 @@ const getValidatedComparisonSourceProjectIds = async (db: AppQueryRunner, source
 }
 
 const getSelectedComparisonProjectSources = (sources: ComparisonProjectSource[], sourceProjectIds: string[]) => {
-  const selectedSourceProjects = sourceProjectIds.reduce<ComparisonProjectSource[]>((selectedProjects, sourceProjectId) => {
-    const sourceProject = sources.find((candidateSourceProject) => {
-      return candidateSourceProject.id === sourceProjectId
-    })
+  const selectedSourceProjects = sourceProjectIds.reduce<ComparisonProjectSource[]>(
+    (selectedProjects, sourceProjectId) => {
+      const sourceProject = sources.find((candidateSourceProject) => {
+        return candidateSourceProject.id === sourceProjectId
+      })
 
-    return sourceProject ? [...selectedProjects, sourceProject] : selectedProjects
-  }, [])
+      return sourceProject ? [...selectedProjects, sourceProject] : selectedProjects
+    },
+    [],
+  )
 
   if (selectedSourceProjects.length !== sourceProjectIds.length) {
     throw new Error('One or more selected source projects were not found')
@@ -840,7 +843,10 @@ const getValidatedCreateFromProjectSummarySelections = (params: {
 
   const summaryPromptContractValue = getPromptSelectionContractValue(summaryPromptSelections)
   const mismatchedSourceProject = params.selectedSourceProjects.find((sourceProject) => {
-    return getPromptSelectionContractValue(getSourceProjectSummaryPromptSelections(sourceProject)) !== summaryPromptContractValue
+    return (
+      getPromptSelectionContractValue(getSourceProjectSummaryPromptSelections(sourceProject))
+      !== summaryPromptContractValue
+    )
   })
 
   if (mismatchedSourceProject) {
@@ -1171,8 +1177,8 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
   const fallbackSourceProjectId =
     linkedSourceProjectIds.length > 0
       ? null
-      : normalizedComparisonProjectRow.summarySourceProjectId
-        ?? (await getInferredSourceProjectId(normalizedComparisonProjectRow, promptConfigs, importRouteIds))
+      : (normalizedComparisonProjectRow.summarySourceProjectId
+        ?? (await getInferredSourceProjectId(normalizedComparisonProjectRow, promptConfigs, importRouteIds)))
   const sourceProjectIds =
     linkedSourceProjectIds.length > 0
       ? linkedSourceProjectIds
@@ -2320,10 +2326,7 @@ export const comparisonProjectsRoutes = new Elysia()
         humanJudgmentMode === 'summary' ? (body.summarySourceProjectId ?? sourceProject.id) : null
       const sourcePromptSelections =
         humanJudgmentMode === 'summary' && summarySourceProjectId
-          ? getValidatedCreateFromProjectSummarySelections({
-              selectedSourceProjects,
-              summarySourceProjectId,
-            })
+          ? getValidatedCreateFromProjectSummarySelections({selectedSourceProjects, summarySourceProjectId})
           : sourceProject.prompts.map<PromptSelection>((prompt) => {
               return {
                 promptId: prompt.id,
@@ -2344,11 +2347,13 @@ export const comparisonProjectsRoutes = new Elysia()
         }),
       )
       const selectedImportRoutes = getUniqueStringValues(
-        (humanJudgmentMode === 'summary' ? selectedSourceProjects : [sourceProject]).flatMap((selectedSourceProject) => {
-          return selectedSourceProject.importRoutes.map((importRoute) => {
-            return importRoute.route
-          })
-        }),
+        (humanJudgmentMode === 'summary' ? selectedSourceProjects : [sourceProject]).flatMap(
+          (selectedSourceProject) => {
+            return selectedSourceProject.importRoutes.map((importRoute) => {
+              return importRoute.route
+            })
+          },
+        ),
       )
       const createdComparisonProject = (await appDatabaseService.transaction(async (tx) => {
         return createComparisonProjectRecord(tx, {

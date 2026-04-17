@@ -618,9 +618,10 @@ const registerModuleMocks = () => {
                   })
 
                   pendingRouteLinks.push({
-                    id: statement.includes(`'${matchingRouteLink.id}'`)
-                      ? matchingRouteLink.id
-                      : 'comparison-project-route-created',
+                    id:
+                      matchingRouteLink && statement.includes(`'${matchingRouteLink.id}'`)
+                        ? matchingRouteLink.id
+                        : 'comparison-project-route-created',
                     importRouteId,
                   })
                   return
@@ -661,7 +662,9 @@ const registerModuleMocks = () => {
                     ? 'source-project-2'
                     : statement.includes("'source-project-mismatch'")
                       ? 'source-project-mismatch'
-                      : 'source-project-1'
+                      : statement.includes("'prompt-project-1'")
+                        ? 'prompt-project-1'
+                        : 'source-project-1'
 
                   pendingSourceProjectLinks.push({
                     id: `comparison-project-source-${pendingSourceProjectLinks.length + 1}`,
@@ -926,7 +929,12 @@ test('comparison project create-from-project defaults summary-capable sources to
 })
 
 test('comparison project create-from-project includes compatible additional summary projects', async () => {
-  mockDatabaseStateRef.current = {...createMockDatabaseState(), failPromptInsert: false, promptLinks: [], routeLinks: []}
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    failPromptInsert: false,
+    promptLinks: [],
+    routeLinks: [],
+  }
 
   const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
   const app = new Elysia().use(comparisonProjectsRoutes)
@@ -1319,7 +1327,7 @@ test('summary comparison judgments use synthetic summary columns and derived cel
     state.queryStatements.some((statement) => {
       return (
         statement.includes('FROM app.article a')
-        && statement.includes("pa.project_id = 'source-project-1'")
+        && statement.includes("pa.project_id IN ('source-project-1')")
         && statement.includes("air.import_route_id IN ('import-route-1')")
       )
     }),

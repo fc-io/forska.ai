@@ -31,6 +31,7 @@ type MockProjectDetails = {
     order: number
     originalText: string
     originProjectId?: string | null
+    linkedToProject?: boolean
     promptArchived?: boolean
     promptHeading: string | null
     type: string | null
@@ -90,6 +91,7 @@ const buildProjectDetails = (projectId: string): MockProjectDetails => {
         order: 1,
         originalText: 'Prompt body',
         originProjectId: null,
+        linkedToProject: true,
         promptArchived: false,
         promptHeading: 'Population Inclusion',
         type: "'yes' | 'no' | 'maybe'",

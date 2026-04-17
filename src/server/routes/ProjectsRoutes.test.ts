@@ -1550,7 +1550,7 @@ test('clone route reuses prompt ids and hides duplicate importable prompts', asy
 
   const detailsResponse = await app.handle(new Request(`http://localhost/api/projects/${clonedProjectId}`))
   const detailsBody = (await detailsResponse.json()) as {
-    data: {prompts: Array<{id: string; originalText: string; originProjectId: string | null}>}
+    data: {prompts: Array<{id: string; linkedToProject: boolean; originalText: string; originProjectId: string | null}>}
   }
   const matchingPrompts = detailsBody.data.prompts.filter((prompt) => {
     return prompt.originalText === 'Is this about AI?'
@@ -1562,8 +1562,10 @@ test('clone route reuses prompt ids and hides duplicate importable prompts', asy
   expect(detailsResponse.status).toBe(200)
   expect(matchingPrompts.length).toBe(1)
   expect(matchingPrompts[0]?.originProjectId).toBe(null)
+  expect(matchingPrompts[0]?.linkedToProject).toBe(true)
   expect(unrelatedPrompts.length).toBe(1)
   expect(unrelatedPrompts[0]?.originProjectId).toBe(null)
+  expect(unrelatedPrompts[0]?.linkedToProject).toBe(false)
 
   await flushMartRefreshes()
 })

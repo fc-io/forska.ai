@@ -180,13 +180,14 @@ const ProjectDetail = () => {
               type: string | null
               enabled?: boolean
               originProjectId?: string | null
+              linkedToProject?: boolean
             }
 
             const visibleRawPrompts = rawPrompts.filter((p: RawPrompt) => {
               const isArchived = Boolean(p.promptArchived)
               const isEnabled = p.enabled !== false
-              const isCreatedForProject = p.originProjectId === project.id
-              return !isArchived || isEnabled || isCreatedForProject
+              const isLinkedToProject = p.linkedToProject ?? p.order !== null
+              return !isArchived || isEnabled || isLinkedToProject
             })
 
             const prompts = visibleRawPrompts.map((p: RawPrompt) => {
@@ -203,6 +204,7 @@ const ProjectDetail = () => {
                 archived: p.promptArchived ?? undefined,
                 enabled: p.enabled ?? true,
                 originProjectId: p.originProjectId ?? null,
+                linkedToProject: p.linkedToProject ?? p.order !== null,
               }
             })
             return (

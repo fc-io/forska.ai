@@ -11,6 +11,7 @@ type Prompt = {
   transformed_text?: string
   enabled?: boolean
   originProjectId?: string | null
+  linkedToProject?: boolean
   provider?: string | null
   modelName?: string | null
   contentHash?: string | null
@@ -25,12 +26,12 @@ type ProjectDetailsPromptsProps = {
 export const ProjectDetailsPrompts = (props: ProjectDetailsPromptsProps) => {
   const owned = createMemo(() => {
     return props.prompts.filter((p) => {
-      return props.projectId && p.originProjectId === props.projectId
+      return p.linkedToProject === true
     })
   })
   const linked = createMemo(() => {
     return props.prompts.filter((p) => {
-      return !props.projectId || p.originProjectId !== props.projectId
+      return p.linkedToProject !== true
     })
   })
 
@@ -50,12 +51,12 @@ export const ProjectDetailsPrompts = (props: ProjectDetailsPromptsProps) => {
                 {prompt.type}
               </span>
             </Show>
-            <Show when={props.projectId ? prompt.originProjectId !== props.projectId : prompt.originProjectId === null}>
+            <Show when={prompt.linkedToProject !== true}>
               <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
                 Imported
               </span>
             </Show>
-            <Show when={props.projectId ? prompt.originProjectId !== props.projectId : prompt.originProjectId === null}>
+            <Show when={prompt.linkedToProject !== true}>
               <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
                 {prompt.provider || 'no provider set'}
               </span>
