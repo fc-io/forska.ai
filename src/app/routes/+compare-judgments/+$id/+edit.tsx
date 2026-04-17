@@ -4,6 +4,7 @@ import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {createEffect, createMemo, createSignal, For, Show} from 'solid-js'
 
 import {Button} from '../../../../components/ui/button'
+import type {HumanJudgmentMode} from '../../../../db/schemaTypes'
 import {apiClient} from '../../../../services/apiClient'
 import {
   type ComparisonProjectEditFormData,
@@ -56,6 +57,10 @@ const getSelectedPromptIds = (comparisonProject: ComparisonProjectEditFormData) 
 
 const getSelectedModelIds = (comparisonProject: ComparisonProjectEditFormData) => {
   return comparisonProject.selectedModelIds ?? []
+}
+
+const getHumanJudgmentModeLabel = (humanJudgmentMode: HumanJudgmentMode) => {
+  return humanJudgmentMode === 'summary' ? 'Summary overall decisions' : 'Prompt-by-prompt decisions'
 }
 
 const getResolvedModelIdsForUpdate = async (selectedModelIds: string[], availableModels: ModelOption[]) => {
@@ -134,6 +139,7 @@ const EditComparisonProjectPage = () => {
   const [comparisonProjectName, setComparisonProjectName] = createSignal('')
   const [description, setDescription] = createSignal('')
   const [compareWithHumans, setCompareWithHumans] = createSignal(false)
+  const [humanJudgmentMode, setHumanJudgmentMode] = createSignal<HumanJudgmentMode>('prompt')
   const [selectedModelIds, setSelectedModelIds] = createSignal<string[]>([])
   const [compareTitleAndAbstract, setCompareTitleAndAbstract] = createSignal(true)
   const [useFulltext, setUseFulltext] = createSignal(false)
@@ -159,6 +165,12 @@ const EditComparisonProjectPage = () => {
   const hasSelectedContentOptions = createMemo(() => {
     return selectedContentOptionCount() > 0
   })
+  const canUseSummaryMode = createMemo(() => {
+    return Boolean(comparisonProjectQuery.data?.summarySourceProject)
+  })
+  const selectedHumanJudgmentModeLabel = createMemo(() => {
+    return getHumanJudgmentModeLabel(humanJudgmentMode())
+  })
 
   createEffect(() => {
     const comparisonProject = comparisonProjectQuery.data
@@ -173,6 +185,7 @@ const EditComparisonProjectPage = () => {
     setComparisonProjectName(comparisonProject.name)
     setDescription(comparisonProject.description ?? '')
     setCompareWithHumans(comparisonProject.compareWithHumans)
+    setHumanJudgmentMode(comparisonProject.humanJudgmentMode)
     setSelectedModelIds(getSelectedModelIds(comparisonProject))
     setCompareTitleAndAbstract(comparisonProject.useTitle || comparisonProject.useAbstract)
     setUseFulltext(comparisonProject.useFulltext)
@@ -194,12 +207,14 @@ const EditComparisonProjectPage = () => {
 
     try {
       const resolvedModelIds = await getResolvedModelIdsForUpdate(selectedModelIds(), modelsQuery.data ?? [])
+      const selectedHumanJudgmentMode = compareWithHumans() ? humanJudgmentMode() : 'prompt'
       const updateComparisonProjectInput: UpdateComparisonProjectInput = {
         name: comparisonProjectName().trim(),
         description: description().trim() || null,
         compareWithHumans: compareWithHumans(),
-        humanJudgmentMode: comparisonProjectQuery.data?.humanJudgmentMode,
-        summarySourceProjectId: comparisonProjectQuery.data?.summarySourceProjectId,
+        humanJudgmentMode: selectedHumanJudgmentMode,
+        summarySourceProjectId:
+          selectedHumanJudgmentMode === 'summary' ? comparisonProjectQuery.data?.summarySourceProjectId : null,
         modelIds: resolvedModelIds.length > 0 ? resolvedModelIds : undefined,
         useTitle: compareTitleAndAbstract(),
         useAbstract: compareTitleAndAbstract(),
@@ -518,16 +533,66 @@ const EditComparisonProjectPage = () => {
                   class="mt-1"
                   checked={compareWithHumans()}
                   onChange={(event) => {
-                    return setCompareWithHumans(event.currentTarget.checked)
+                    setCompareWithHumans(event.currentTarget.checked)
+                    if (!event.currentTarget.checked) {
+                      setHumanJudgmentMode('prompt')
+                    }
                   }}
                 />
                 <div class="flex-1">
                   <p class="text-sm font-medium text-gray-900">Compare with humans</p>
-                  <p class="text-xs text-muted-foreground mt-1">
-                    Save that this comparison should include human judgments in future result views.
-                  </p>
+                  <p class="text-xs text-muted-foreground mt-1">{selectedHumanJudgmentModeLabel()}</p>
                 </div>
               </label>
+              <Show when={compareWithHumans()}>
+                <div class="mt-4 grid gap-3 md:grid-cols-2">
+                  <label class="flex items-start gap-3 border border-input rounded-md p-3 cursor-pointer bg-background">
+                    <input
+                      type="radio"
+                      name="human-judgment-mode"
+                      class="mt-1"
+                      checked={humanJudgmentMode() === 'prompt'}
+                      onChange={() => {
+                        return setHumanJudgmentMode('prompt')
+                      }}
+                    />
+                    <div>
+                      <p class="text-sm font-medium text-gray-900">Prompt mode</p>
+                      <p class="text-xs text-muted-foreground mt-1">Show one human column for each selected prompt.</p>
+                    </div>
+                  </label>
+                  <label
+                    class="flex items-start gap-3 border border-input rounded-md p-3 bg-background"
+                    classList={{'cursor-pointer': canUseSummaryMode(), 'opacity-50': !canUseSummaryMode()}}
+                  >
+                    <input
+                      type="radio"
+                      name="human-judgment-mode"
+                      class="mt-1"
+                      disabled={!canUseSummaryMode()}
+                      checked={humanJudgmentMode() === 'summary'}
+                      onChange={() => {
+                        return setHumanJudgmentMode('summary')
+                      }}
+                    />
+                    <div>
+                      <p class="text-sm font-medium text-gray-900">Summary mode</p>
+                      <p class="text-xs text-muted-foreground mt-1">Show overall human and LLM decision columns.</p>
+                    </div>
+                  </label>
+                </div>
+                <Show when={humanJudgmentMode() === 'summary' && comparisonProjectQuery.data?.summarySourceProject}>
+                  {(summarySourceProject) => {
+                    return (
+                      <div class="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3">
+                        <p class="text-xs font-medium uppercase tracking-wide text-amber-800">Summary Source Project</p>
+                        <p class="mt-1 text-sm font-medium text-gray-900">{summarySourceProject().name}</p>
+                        <p class="mt-1 text-xs text-gray-600">{summarySourceProject().modelName}</p>
+                      </div>
+                    )
+                  }}
+                </Show>
+              </Show>
             </div>
 
             <div>

@@ -1168,6 +1168,36 @@ const getComparisonProjectEditFormData = async (comparisonProjectId: string) => 
     },
     new Map<string, (typeof configuredModelRows)[number]>(),
   )
+  const availablePromptsQuery =
+    normalizedComparisonProjectRow.humanJudgmentMode === 'summary'
+    && normalizedComparisonProjectRow.summarySourceProjectId
+      ? `
+      SELECT
+        p.id AS id,
+        p.original_text AS originalText,
+        p.prompt_heading AS promptHeading,
+        p.type,
+        p.created_at AS createdAt,
+        p.archived AS archived
+      FROM ${projectPromptTable} pp
+      INNER JOIN ${promptTable} p ON p.id = pp.prompt_id
+      WHERE pp.project_id = ${getSqlLiteral(normalizedComparisonProjectRow.summarySourceProjectId)}
+        AND pp.enabled = TRUE
+        AND p.archived = FALSE
+      ORDER BY pp.prompt_order ASC, p.created_at ASC
+    `
+      : `
+      SELECT
+        id,
+        original_text AS originalText,
+        prompt_heading AS promptHeading,
+        type,
+        created_at AS createdAt,
+        archived
+      FROM ${promptTable}
+      WHERE archived = FALSE
+      ORDER BY created_at DESC
+    `
 
   const [selectedPromptRows, availablePromptRows] = await Promise.all([
     appDatabaseService.queryJson<{
@@ -1199,18 +1229,7 @@ const getComparisonProjectEditFormData = async (comparisonProjectId: string) => 
       type: string | null
       createdAt: unknown
       archived: boolean
-    }>(`
-      SELECT
-        id,
-        original_text AS originalText,
-        prompt_heading AS promptHeading,
-        type,
-        created_at AS createdAt,
-        archived
-      FROM ${promptTable}
-      WHERE archived = FALSE
-      ORDER BY created_at DESC
-    `),
+    }>(availablePromptsQuery),
   ])
   const normalizedSelectedPromptRows = selectedPromptRows.map((promptRow) => {
     return {...promptRow, createdAt: getRequiredDateValue(promptRow.createdAt)}

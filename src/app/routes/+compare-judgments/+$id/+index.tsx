@@ -48,12 +48,30 @@ const getAnsweredPromptCount = (
   ).size
 }
 
+const getAnsweredColumnCount = (cells: Record<string, string | null>, columns: Array<{id: string}>) => {
+  return columns.filter((column) => {
+    return (cells[column.id]?.trim() ?? '') !== ''
+  }).length
+}
+
 const getConfiguredPromptCount = (columns: Array<{promptId: string}>) => {
   return new Set(
     columns.map((column) => {
       return column.promptId
     }),
   ).size
+}
+
+const getConfiguredColumnCount = (columns: Array<{id: string}>) => {
+  return columns.length
+}
+
+const getHumanJudgmentModeLabel = (humanJudgmentMode: 'prompt' | 'summary') => {
+  return humanJudgmentMode === 'summary' ? 'Summary overall decisions' : 'Prompt-by-prompt decisions'
+}
+
+const getSparseRowsFilterLabel = (isSummaryMode: boolean) => {
+  return isSummaryMode ? 'Hide rows with under 2 answered overall columns' : 'Hide rows with under 2 answered prompts'
 }
 
 const getHasAllShownColumnsAnswered = (cells: Record<string, string | null>, columns: Array<{id: string}>) => {
@@ -181,18 +199,27 @@ const CompareProjectJudgmentsPage = () => {
       comparisonProjectQuery.data?.prompts ?? [],
     )
   })
+  const isSummaryMode = createMemo(() => {
+    const comparisonProject = comparisonProjectQuery.data
+
+    return Boolean(comparisonProject?.compareWithHumans && comparisonProject.humanJudgmentMode === 'summary')
+  })
   const filteredRows = createMemo(() => {
     const rows = judgmentsPageQuery.data?.data ?? []
     const columns = orderedColumns()
     return rows.filter((row) => {
-      const answeredPromptCount = getAnsweredPromptCount(row.cells, columns)
-      const configuredPromptCount = getConfiguredPromptCount(columns)
-      const passesSparseRowsFilter = !hideSparseRows() || answeredPromptCount >= 2
+      const answeredComparableCount = isSummaryMode()
+        ? getAnsweredColumnCount(row.cells, columns)
+        : getAnsweredPromptCount(row.cells, columns)
+      const configuredComparableCount = isSummaryMode()
+        ? getConfiguredColumnCount(columns)
+        : getConfiguredPromptCount(columns)
+      const passesSparseRowsFilter = !hideSparseRows() || answeredComparableCount >= 2
       const passesFullyAnsweredFilter =
         !showOnlyFullyAnsweredPrompts() || getHasAllShownColumnsAnswered(row.cells, columns)
       const passesModelDifferenceFilter = !showOnlyModelDifferences() || getHasModelDifferences(row.cells, columns)
 
-      return configuredPromptCount === 0
+      return configuredComparableCount === 0
         ? false
         : passesSparseRowsFilter && passesFullyAnsweredFilter && passesModelDifferenceFilter
     })
@@ -253,10 +280,17 @@ const CompareProjectJudgmentsPage = () => {
                     </p>
                   </div>
                   <div>
-                    <p class="text-xs font-medium uppercase tracking-wide text-gray-500">Human Columns</p>
+                    <p class="text-xs font-medium uppercase tracking-wide text-gray-500">Human Comparison</p>
                     <p class="mt-2 text-sm text-gray-700">
-                      {comparisonProject().compareWithHumans ? 'Shown on the right' : 'Not included'}
+                      {comparisonProject().compareWithHumans
+                        ? getHumanJudgmentModeLabel(comparisonProject().humanJudgmentMode)
+                        : 'Not included'}
                     </p>
+                    <Show when={comparisonProject().summarySourceProject}>
+                      {(summarySourceProject) => {
+                        return <p class="mt-1 text-xs text-gray-500">Summary source: {summarySourceProject().name}</p>
+                      }}
+                    </Show>
                   </div>
                 </div>
               </div>
@@ -291,7 +325,7 @@ const CompareProjectJudgmentsPage = () => {
                           setCurrentPage(1)
                         }}
                       />
-                      <span>Hide rows with under 2 answered prompts</span>
+                      <span>{getSparseRowsFilterLabel(Boolean(isSummaryMode()))}</span>
                     </label>
                     <label class="flex items-center gap-2 text-sm text-gray-600">
                       <input
