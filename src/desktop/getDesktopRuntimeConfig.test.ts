@@ -16,6 +16,7 @@ test('uses the macOS application support directory by default', () => {
   expect(runtimeConfig.backendEnv.DUCKDB_PATH).toBe(
     '/Users/tester/Library/Application Support/Forska/desktop/forska.duckdb',
   )
+  expect(runtimeConfig.backendLogPath).toBe('/Users/tester/Library/Application Support/Forska/desktop/logs/backend.log')
 })
 
 test('uses LOCALAPPDATA on Windows when it is available', () => {
@@ -29,6 +30,7 @@ test('uses LOCALAPPDATA on Windows when it is available', () => {
   expect(runtimeConfig.dataRoot).toBe('C:\\Users\\tester\\AppData\\Local\\Forska\\desktop')
   expect(runtimeConfig.backendCommand[0]).toBe('C:\\Bun\\bun.exe')
   expect(runtimeConfig.backendEnv.DUCKDB_PATH).toBe('C:\\Users\\tester\\AppData\\Local\\Forska\\desktop\\forska.duckdb')
+  expect(runtimeConfig.backendLogPath).toBe('C:\\Users\\tester\\AppData\\Local\\Forska\\desktop\\logs\\backend.log')
 })
 
 test('supports desktop API port overrides', () => {
@@ -41,5 +43,8 @@ test('supports desktop API port overrides', () => {
 
   expect(runtimeConfig.apiOrigin).toBe('http://127.0.0.1:32999')
   expect(runtimeConfig.backendEnv.API_SERVER_PORT).toBe('32999')
-  expect(runtimeConfig.windowUrl).toBe('views://mainview/index.html?apiOrigin=http%3A%2F%2F127.0.0.1%3A32999')
+  expect(runtimeConfig.windowUrl).toBe('views://mainview/index.html')
+  expect(
+    Buffer.from(runtimeConfig.windowPreload.replace('data:text/javascript;base64,', ''), 'base64').toString('utf8'),
+  ).toBe('window.__FORSKA_DESKTOP_API_ORIGIN__ = "http://127.0.0.1:32999";')
 })

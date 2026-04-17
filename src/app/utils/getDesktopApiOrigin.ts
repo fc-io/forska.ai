@@ -13,7 +13,14 @@ const getDesktopApiOriginFromLocation = (): string | null => {
     return null
   }
 
-  return trimTrailingSlash(getTrimmedValue(new URLSearchParams(window.location.search).get('apiOrigin')))
+  const searchApiOrigin = trimTrailingSlash(
+    getTrimmedValue(new URLSearchParams(window.location.search).get('apiOrigin')),
+  )
+  const hashApiOrigin = trimTrailingSlash(
+    getTrimmedValue(new URLSearchParams(window.location.hash.replace(/^#/, '')).get('apiOrigin')),
+  )
+
+  return searchApiOrigin ?? hashApiOrigin
 }
 
 export const getDesktopApiOrigin = (): string | null => {

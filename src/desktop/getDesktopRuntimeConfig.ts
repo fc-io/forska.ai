@@ -10,11 +10,21 @@ type DesktopRuntimeConfig = {
   apiServerPort: string
   backendCommand: string[]
   backendEnv: Record<string, string | undefined>
+  backendLogPath: string
   dataRoot: string
+  windowPreload: string
+  viewsRoot: string
   windowUrl: string
 }
 
 const desktopDefaultApiServerPort = '32101'
+
+const getDesktopWindowPreload = (apiOrigin: string) => {
+  return `data:text/javascript;base64,${Buffer.from(
+    `window.__FORSKA_DESKTOP_API_ORIGIN__ = ${JSON.stringify(apiOrigin)};`,
+    'utf8',
+  ).toString('base64')}`
+}
 
 const getPathModule = (platform: Platform): PathModule => {
   return platform === 'win32' ? win32 : posix
@@ -84,10 +94,11 @@ export const getDesktopRuntimeConfig = ({
   platform?: Platform
 } = {}): DesktopRuntimeConfig => {
   const dataRoot = getDesktopDataRoot({envValues, homeDirectory, platform})
+  const pathModule = getPathModule(platform)
+  const backendLogPath = pathModule.resolve(dataRoot, 'logs', 'backend.log')
   const apiServerPort = getTrimmedValue(envValues.FORSKA_DESKTOP_API_SERVER_PORT) ?? desktopDefaultApiServerPort
   const apiOrigin = `http://127.0.0.1:${apiServerPort}`
   const serverEntryPath = resolve(import.meta.dir, '../src/server/index.ts')
-  const pathModule = getPathModule(platform)
   const backendCommand = [getDesktopBunBinary(envValues), serverEntryPath]
   const backendEnv = {
     ...envValues,
@@ -100,6 +111,7 @@ export const getDesktopRuntimeConfig = ({
 
   if (createDataRoot) {
     mkdirSync(dataRoot, {recursive: true})
+    mkdirSync(resolve(dataRoot, 'logs'), {recursive: true})
   }
 
   return {
@@ -107,7 +119,10 @@ export const getDesktopRuntimeConfig = ({
     apiServerPort,
     backendCommand,
     backendEnv,
+    backendLogPath,
     dataRoot,
-    windowUrl: `views://mainview/index.html?apiOrigin=${encodeURIComponent(apiOrigin)}`,
+    windowPreload: getDesktopWindowPreload(apiOrigin),
+    viewsRoot: resolve(import.meta.dir, '../views'),
+    windowUrl: 'views://mainview/index.html',
   }
 }

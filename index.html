@@ -14,7 +14,10 @@
     <div id="root"></div>
     <script>
       ;(() => {
-        const desktopApiOrigin = new URLSearchParams(window.location.search).get('apiOrigin')
+        const locationHash = window.location.hash.replace(/^#/, '')
+        const desktopApiOrigin =
+          new URLSearchParams(window.location.search).get('apiOrigin')
+          ?? new URLSearchParams(locationHash).get('apiOrigin')
 
         if (desktopApiOrigin) {
           window.__FORSKA_DESKTOP_API_ORIGIN__ = desktopApiOrigin.replace(/\/+$/, '')
