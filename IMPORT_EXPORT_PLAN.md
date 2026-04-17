@@ -79,7 +79,7 @@
 - Export models with enough identity to re-link judgments correctly: `remoteModelId`, `displayName`, `variant`, provider kind, connection reference, and metadata.
 - Export the full dependency set for all model ids referenced by the project and its judgments.
 - Reuse the existing provider setup flows during import instead of inventing a separate import-only credential path.
-- Use the normal provider endpoints for dependency setup where possible, especially `/api/provider-auth/:providerKind/*`, `/api/provider-connections`, and `/api/models/ensure`.
+- Use the normal provider endpoints for dependency setup where possible: `/api/provider-auth/:providerKind/*` and `/api/provider-connections` for connection setup, `/api/provider-connections/:id/models` and `/api/provider-connections/:id/sync-models` for non-Codex model materialization, and `POST /api/models/ensure` only for Codex model materialization.
 
 ### Codex Special Handling
 
@@ -100,7 +100,7 @@
 - Import never merges into an existing project in v1; each successful import creates a new project.
 - During analyze, compute or validate the package fingerprint and compare it with previously completed imports recorded by the app.
 - If the fingerprint matches a prior import exactly, show a non-blocking `already imported on this machine` warning with the prior imported project name, id, and timestamp.
-- If the package is not an exact duplicate but overlaps existing data, show an overlap summary instead of a duplicate warning: reused article count, new article count, omitted route-link count, and any judgment conflicts.
+- If the package is not an exact duplicate but overlaps existing data, show an overlap summary instead of a duplicate warning: reused article count, new article count, omitted route-link count, and any post-remap conflicts that would still block judgment inserts.
 - Exact package duplicates stay allowed because users may intentionally create parallel copies, but the warning must appear before final confirmation.
 
 ### Mapping Strategy
@@ -108,15 +108,15 @@
 - `project`: always create a new target id.
 - `prompt`: always create detached prompt rows, similar to the existing clone flow in `src/server/routes/ProjectsRoutes.ts`, so imported prompts stay self-contained and `origin_project_id` can point at the new imported project.
 - `import_route`: match by `route`; if a route is missing on the target, show it in preview and require the user to accept omitting that route link or cancel the import.
-- `article`: match only on exact stable identifiers in priority order: `article_id`, normalized DOI, normalized PubMed id, normalized arXiv id, normalized medRxiv id, and normalized bioRxiv id. If no exact match exists, create a new article. If multiple candidates or conflicting exact identifiers appear, stop and require manual review instead of heuristic auto-linking.
-- `project_article`: always create a new link row for the imported project, even when the article row is reused, and set `imported_from_project_id` to `NULL` in v1 because the source project does not exist on the target.
-- `provider_connection`: match by provider kind plus safe connection fingerprint; otherwise let the user choose an existing connection or create a new sanitized one.
-- `model`: match by mapped provider connection plus `remote_model_id` and `variant`; otherwise create it during import after the user resolves the provider step.
+- `article`: match only on exact stable identifiers in priority order: `article_id`, normalized DOI, normalized PubMed id, normalized arXiv id, normalized medRxiv id, and normalized bioRxiv id. If no exact match exists, create a new article. Because only `article_id` is globally unique today, analyze must show the matched identifier type and all exact candidates when secondary identifiers produce multiple matches, and block commit until resolved. Never heuristic auto-link in v1.
+- `project_article`: always create a new link row for the imported project, even when the article row is reused, and set `imported_from_project_id` to `NULL` in v1. This intentionally differs from clone and Covidence-managed imports and must not imply local source-project ownership or managed re-sync behavior.
+- `provider_connection`: match by provider kind plus safe connection fingerprint only when the target connection is enabled and its saved config would still leave the required imported models selectable. Otherwise treat it as unresolved and let the user choose an existing connection or create a new sanitized one.
+- `model`: match by mapped provider connection plus `remote_model_id` and `variant` only when the resolved target model is enabled and selectable. Otherwise materialize it during import after the user resolves the provider step, using `/api/provider-connections/:id/models` or `/api/provider-connections/:id/sync-models` for normal providers and `POST /api/models/ensure` for Codex.
 
 ### Source Project Provenance Fields
 
 - `project_prompt.origin_project_id`: set to the new imported project id so imported detached prompts remain self-contained and keep the same local semantics as cloned prompts.
-- `project_article.imported_from_project_id`: leave `NULL` in v1 and keep source-project provenance only in the manifest, import session summary, and post-import warnings.
+- `project_article.imported_from_project_id`: leave `NULL` in v1 and keep source-project provenance only in the manifest, import session summary, and post-import warnings. Treat this as an intentional package-import semantic distinct from clone and Covidence-managed flows.
 
 ## Article And Asset Rules
 
@@ -131,7 +131,8 @@
 - Export and import only active judgments where `deleted_at IS NULL` in v1.
 - Import judgments only after article, prompt, and model mappings are fully resolved.
 - Rewrite every judgment foreign key to target ids before insert.
-- Detect judgment identity collisions before commit because `app.judgment` is unique by article, prompt, model, and content toggles rather than by project. In v1, reuse an existing target judgment only when the stored payload matches exactly; otherwise block the import and show a conflict.
+- Because imported prompts are detached new rows in v1, imported judgments should not collide with unrelated target judgments in the common case.
+- Still validate judgment identity after all ids are remapped, and treat the effective uniqueness key as article, prompt, model, content toggles, and `delete_generation`. If any post-remap collision remains within the package or against existing target data, block the import and show a conflict instead of silently merging or reusing a target judgment.
 - Preserve answer payloads, explanation, quotes, chunking strategy, and timestamps where safe.
 - Rewrite `project_id` to the new imported project id.
 - Rewrite `snapshot_project_id` to the new imported project id so the imported project's review and mart queries continue to work.
@@ -217,7 +218,7 @@
 ### Phase 1 - Contract And Schemas
 
 - [ ] Lock the manifest schema, payload file list, and explicit exported field set, including article fields and omission warnings.
-- [ ] Define import-session state, source-to-target id maps, unresolved dependency statuses, and judgment-collision reporting.
+- [ ] Define import-session state, source-to-target id maps, unresolved dependency statuses, detached-prompt import rules, and post-remap judgment-conflict reporting.
 - [ ] Pick the zip implementation and lock checksum, package fingerprint, path-normalization, and size-limit rules before writing route handlers.
 - [ ] Define the thresholds that switch export, analyze, and commit work from inline requests to background session jobs.
 
@@ -268,10 +269,32 @@
 
 - `Overlap summary contract`
   - Analyze should always produce `reusedArticleCount`, `newArticleCount`, `omittedRouteLinkCount`, `duplicateImportMatchCount`, and `judgmentConflictCount`.
+  - `judgmentConflictCount` should count only post-remap judgment insert conflicts that would still block commit; in the normal detached-prompt v1 flow this should usually be `0`.
   - Duplicate-package warnings and overlap summaries are informational; they never silently change the import plan.
+
+- `Provider/model resolution contract`
+  - Auto-match only enabled provider connections and enabled/selectable models.
+  - For non-Codex imports, create missing models through `/api/provider-connections/:id/models` and use `/api/provider-connections/:id/sync-models` only as a helper when provider discovery is useful.
+  - Use `POST /api/models/ensure` only for Codex.
+
+- `Article conflict review`
+  - Because DOI, PubMed id, arXiv id, medRxiv id, and bioRxiv id are not unique in the current schema, analyze must return all exact candidates, the matched identifier type, and a blocking resolution requirement whenever more than one target article matches.
+
+- `Provenance semantics`
+  - `project_article.imported_from_project_id = NULL` is an intentional package-import semantic and must not trigger clone-style or Covidence-managed resync behavior.
+
+#### Phase 1 Implementation Breakdown
+
+- `Database contract` owner files: new `src/db/duckdbMigrations/00xx_projectTransferHistory.sql`, `src/db/schemaTypes.ts`. Add the duplicate-history table and typed record first so later phases can rely on it.
+- `Route shell` owner files: new `src/server/routes/ProjectTransferRoutes.ts`, `src/server/index.ts`. Mount the new route module and lock the Phase 1 request and response shapes at the server boundary.
+- `Manifest contract` owner files: new `src/server/services/projectTransfer/projectTransferSchemas.ts`, new `src/server/services/projectTransfer/projectTransferManifest.ts`, new `src/server/services/projectTransfer/projectTransferFingerprint.ts`. Centralize manifest fields, omission warnings, checksum rules, and stable fingerprinting.
+- `Zip and path rules` owner files: new `src/server/services/projectTransfer/projectTransferZip.ts`, new `src/server/services/projectTransfer/projectTransferPaths.ts`. Own normalized archive member validation, allowed payload paths, and path-safety helpers.
+- `Session and history contract` owner files: new `src/server/services/projectTransfer/projectTransferSession.ts`, new `src/server/services/projectTransfer/projectTransferHistoryRepository.ts`. Define session states, progress payloads, temp-layout metadata, and duplicate-history reads and writes.
+- `Phase 1 tests` owner files: new `src/server/services/projectTransfer/projectTransferManifest.test.ts`, new `src/server/routes/ProjectTransferRoutes.test.ts`. Cover manifest validation, fingerprint stability, zip/path rejection, and route-level contract failures.
 
 #### Quality Gates
 
+- [ ] `bun run db:mig`
 - [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferManifest.test.ts`
 
 ### Phase 2 - Export Assembly
@@ -289,7 +312,7 @@
 ### Phase 3 - Analyze And Resolve Dependencies
 
 - [ ] Build upload/analyze session endpoints, staged extraction, TTL cleanup, preview summaries, unresolved-warning reporting, and background progress for large packages.
-- [ ] Implement provider connection auto-match, existing-connection selection, managed-provider auth handoff, and Codex `POST /api/models/ensure` materialization.
+- [ ] Implement provider connection auto-match, existing-connection selection, managed-provider auth handoff, non-Codex provider-model materialization through provider-connection model routes, and Codex `POST /api/models/ensure` materialization.
 - [ ] Implement conservative article matching, route-link omission review, and conflict detection before commit.
 - [ ] Implement exact duplicate-package detection from package fingerprint plus overlap summaries for partial matches.
 - [ ] Build the `/projects/import` wizard for upload, package review, dependency resolution, and final plan review.
@@ -304,7 +327,7 @@
 ### Phase 4 - Commit And Post-Import Behavior
 
 - [ ] Implement the final transaction that creates the new project, detached prompts, article links, judgments, human judgments, summaries, reviews, and assessments with remapped ids.
-- [ ] Set `project_prompt.origin_project_id` to the new imported project id and keep `project_article.imported_from_project_id` null in v1.
+- [ ] Set `project_prompt.origin_project_id` to the new imported project id and keep `project_article.imported_from_project_id` null in v1 as an intentional package-import-only semantic.
 - [ ] Mark the new project dirty, queue mart refresh, navigate to the imported project, and surface post-import warnings for omitted links or unfinished provider setup.
 
 #### Quality Gates
@@ -328,8 +351,9 @@
 ## Risks And Decisions To Lock Early
 
 - Article matching stays exact-identifier-only in v1; heuristics can explain likely matches in review but cannot silently auto-link.
-- Judgment collision handling must be locked early because `app.judgment` uniqueness is global by article, prompt, model, and content settings rather than by project.
-- Imported detached prompts should point `origin_project_id` at the new imported project, and imported project-article links should leave `imported_from_project_id` null.
+- Detached prompt import should make cross-project judgment collisions rare in v1, but any remaining post-remap conflicts must still respect `delete_generation` in the uniqueness key and block commit.
+- Imported detached prompts should point `origin_project_id` at the new imported project, and imported project-article links should leave `imported_from_project_id` null as an intentional semantic distinct from clone and Covidence-managed imports.
+- Generic provider model materialization must use provider-connection model routes; `POST /api/models/ensure` stays Codex-only.
 - Local provider URLs and worker URLs are transferable only as review hints, not as trustworthy defaults.
 - Missing import routes need a clear product rule: block, omit with warning, or map manually.
 - Large project packages need tuned thresholds for switching from inline requests to background jobs so the small-package UX stays fast without risking timeouts or memory spikes.
@@ -342,7 +366,7 @@
 - A receiving user can start import from a new `Import Project` action on the projects index page.
 - The import wizard shows a clear review step before any write.
 - Very large package export and analyze flows switch to server-side progress-aware jobs instead of buffering everything into one request.
-- Missing providers and models can be resolved during import, including Codex-specific setup.
+- Missing providers and models can be resolved during import: non-Codex through provider-connection model flows, Codex through Codex setup plus `POST /api/models/ensure`.
 - API keys, Codex login state, and other secrets are never exported.
 - Exact duplicate package imports warn before confirmation, and overlapping imports show clear reuse-versus-create counts.
 - Imported prompts, articles, judgments, human judgments, reviews, and assessments all point to correct target ids after import.
@@ -362,6 +386,7 @@
 - `bun test src/server/routes/providerProjectFlow.e2e.test.ts`
 - `bun test src/app/routes/+projects/-+index.vitest.tsx`
 - Add and run `bun test src/app/routes/+projects/-+import.vitest.tsx`
+- `bun run db:mig`
 - `bun run build`
 - `bun run lint`
 - `bun run desktop:build`
