@@ -1,5 +1,5 @@
 import {escapeSqlString, getSqlLiteral} from '../../services/appQueryHelpers.ts'
-import {getProjectVisibleJudgmentPromptSql} from '../../services/projectVisibleJudgmentRule.ts'
+import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJudgmentRule.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {
@@ -326,18 +326,46 @@ const filterAlreadyJudged = async (
             return `(${getSqlLiteral(entry.articleId)}, ${getSqlLiteral(entry.promptId)})`
           })
           .join(', ')}
+      ),
+      route_scope AS (
+        SELECT
+          pir.project_id,
+          air.article_id
+        FROM app.project_import_route pir
+        INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
+        INNER JOIN pairs p ON p.article_id = air.article_id
+        WHERE pir.project_id = ${getSqlLiteral(projectId)}
+      ),
+      curated_scope AS (
+        SELECT
+          pa.project_id,
+          pa.article_id
+        FROM app.project_article pa
+        INNER JOIN pairs p ON p.article_id = pa.article_id
+        WHERE pa.project_id = ${getSqlLiteral(projectId)}
+      ),
+      project_scope_article AS (
+        SELECT DISTINCT project_id, article_id FROM route_scope
+        UNION
+        SELECT DISTINCT project_id, article_id FROM curated_scope
       )
-      SELECT j.article_id AS articleId, j.prompt_id AS promptId
-      FROM app.judgment j
-      INNER JOIN pairs p ON p.article_id = j.article_id AND p.prompt_id = j.prompt_id
+      SELECT DISTINCT j.article_id AS articleId, j.prompt_id AS promptId
+      FROM pairs p
       INNER JOIN app.project project ON project.id = ${getSqlLiteral(projectId)}
+      INNER JOIN project_scope_article scope_article
+        ON scope_article.project_id = project.id
+       AND scope_article.article_id = p.article_id
       INNER JOIN app.project_prompt project_prompt
         ON project_prompt.project_id = project.id
        AND project_prompt.prompt_id = p.prompt_id
-      WHERE ${getProjectVisibleJudgmentPromptSql({
+      INNER JOIN app.judgment j
+        ON j.article_id = p.article_id
+       AND j.prompt_id = p.prompt_id
+      WHERE ${getProjectVisibleJudgmentScopeSql({
         judgmentAlias: 'j',
         projectAlias: 'project',
         projectPromptAlias: 'project_prompt',
+        projectScopeAlias: 'scope_article',
       })}
         AND j.deleted_at IS NULL
     `)

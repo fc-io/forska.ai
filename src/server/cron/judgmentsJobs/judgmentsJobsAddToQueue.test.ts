@@ -218,7 +218,7 @@ const registerSharedMocks = (
                     : answeredHumanSummaryRows) as T[])
                 : statement.includes('FROM app.judgment_human jh')
                   ? (answeredHumanRows as T[])
-                  : statement.includes('FROM app.judgment j')
+                  : statement.includes('app.judgment j')
                     ? (existingJudgmentRows as T[])
                     : statement.includes('FROM app.judgment_job jj')
                       ? [jobConfigRow as T]
@@ -1281,4 +1281,283 @@ test('treats null human judgment mode as prompt mode', async () => {
       {articleId: 'article-summary', promptId: 'prompt-summary'},
     ],
   ])
+})
+
+test('queue reuse skips unchanged scoped clone judgments and keeps changed settings queued', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const dbQuery = queryDatabase
+  const dbRun = runDatabase
+  const suffix = `queue-reuse-${Date.now()}`
+  const connectionId = `${suffix}-connection`
+  const modelId = `${suffix}-model`
+  const changedModelId = `${suffix}-changed-model`
+  const projectId = `${suffix}-project`
+  const jobId = `${suffix}-job`
+  const promptId = `${suffix}-prompt`
+  const unchangedArticleId = `${suffix}-article-unchanged`
+  const changedModelArticleId = `${suffix}-article-changed-model`
+  const changedFulltextArticleId = `${suffix}-article-changed-fulltext`
+  const addReadyPromptsCalls: Array<Array<{articleId: string; promptId: string}>> = []
+  const sqliteService: MockSqliteService = {
+    addReadyPrompts: async (_jobId, entries) => {
+      addReadyPromptsCalls.push(entries)
+      return entries.length
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    getReadyCount: async () => {
+      return 0
+    },
+    getScanState: async () => {
+      return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    setScanState: async () => {
+      return undefined
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+
+  await dbRun(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await dbRun(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES
+      ('${modelId}', '${connectionId}', 'Queue reuse model', 'queue-reuse-model', 'Queue reuse model', 'manual', TRUE),
+      ('${changedModelId}', '${connectionId}', 'Queue reuse changed model', 'queue-reuse-changed-model', 'Queue reuse changed model', 'manual', TRUE)
+  `)
+  await dbRun(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Queue Reuse Project', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await dbRun(`
+    INSERT INTO app.prompt (id, original_text)
+    VALUES ('${promptId}', 'Queue reuse prompt')
+  `)
+  await dbRun(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+    VALUES ('${suffix}-project-prompt', '${projectId}', '${promptId}', 1, TRUE)
+  `)
+  await dbRun(`
+    INSERT INTO app.article (id, article_id, article_title)
+    VALUES
+      ('${unchangedArticleId}', '${unchangedArticleId}-external', 'Unchanged article'),
+      ('${changedModelArticleId}', '${changedModelArticleId}-external', 'Changed model article'),
+      ('${changedFulltextArticleId}', '${changedFulltextArticleId}-external', 'Changed fulltext article')
+  `)
+  await dbRun(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES
+      ('${suffix}-project-article-unchanged', '${projectId}', '${unchangedArticleId}'),
+      ('${suffix}-project-article-changed-model', '${projectId}', '${changedModelArticleId}'),
+      ('${suffix}-project-article-changed-fulltext', '${projectId}', '${changedFulltextArticleId}')
+  `)
+  await dbRun(`
+    INSERT INTO app.judgment (id, article_id, prompt_id, model_id, project_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES
+      ('${suffix}-judgment-unchanged', '${unchangedArticleId}', '${promptId}', '${modelId}', '${projectId}', TRUE, TRUE, FALSE, FALSE),
+      ('${suffix}-judgment-changed-model', '${changedModelArticleId}', '${promptId}', '${changedModelId}', '${projectId}', TRUE, TRUE, FALSE, FALSE),
+      ('${suffix}-judgment-changed-fulltext', '${changedFulltextArticleId}', '${promptId}', '${modelId}', '${projectId}', TRUE, TRUE, TRUE, FALSE)
+  `)
+  await dbRun(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  void mock.module(judgmentsJobsAddToQueueDependenciesModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {queryJson: dbQuery, run: dbRun}
+      },
+      getJudgmentJobSqliteService: () => {
+        return sqliteService
+      },
+      getJudgmentsCapacity: () => {
+        return {addToQueueMaxBatchSize: 10, maxInflight: 10, readyTargetPerJob: 10}
+      },
+      inferenceRuntimeConfig: {
+        codexMaxInflight: 1,
+        judgmentsAddToQueueMaxBatchSize: 10,
+        judgmentsReadyTargetMultiplier: 1,
+      },
+      JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
+      judgmentsJobsCronGetPrompts: async () => {
+        return {
+          nextCursor: null,
+          promptEntries: [
+            {articleId: unchangedArticleId, promptId},
+            {articleId: changedModelArticleId, promptId},
+            {articleId: changedFulltextArticleId, promptId},
+          ],
+        }
+      },
+      judgmentsJobsGetRunningJobs: async () => {
+        return [{id: jobId, maxInflightRequests: null, modelProvider: 'openai', projectId, providerConnectionId: null}]
+      },
+    }
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?queue-reuse-config=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(addReadyPromptsCalls).toEqual([
+    [
+      {articleId: changedModelArticleId, promptId},
+      {articleId: changedFulltextArticleId, promptId},
+    ],
+  ])
+})
+
+test('queue reuse does not skip matching judgments outside the target project scope', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const dbQuery = queryDatabase
+  const dbRun = runDatabase
+  const suffix = `queue-scope-${Date.now()}`
+  const connectionId = `${suffix}-connection`
+  const modelId = `${suffix}-model`
+  const projectId = `${suffix}-project`
+  const jobId = `${suffix}-job`
+  const promptId = `${suffix}-prompt`
+  const scopedArticleId = `${suffix}-article-scoped`
+  const outOfScopeArticleId = `${suffix}-article-out-of-scope`
+  const addReadyPromptsCalls: Array<Array<{articleId: string; promptId: string}>> = []
+  const sqliteService: MockSqliteService = {
+    addReadyPrompts: async (_jobId, entries) => {
+      addReadyPromptsCalls.push(entries)
+      return entries.length
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    getReadyCount: async () => {
+      return 0
+    },
+    getScanState: async () => {
+      return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    setScanState: async () => {
+      return undefined
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+
+  await dbRun(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await dbRun(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Queue scope model', 'queue-scope-model', 'Queue scope model', 'manual', TRUE)
+  `)
+  await dbRun(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Queue Scope Project', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await dbRun(`
+    INSERT INTO app.prompt (id, original_text)
+    VALUES ('${promptId}', 'Queue scope prompt')
+  `)
+  await dbRun(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+    VALUES ('${suffix}-project-prompt', '${projectId}', '${promptId}', 1, TRUE)
+  `)
+  await dbRun(`
+    INSERT INTO app.article (id, article_id, article_title)
+    VALUES
+      ('${scopedArticleId}', '${scopedArticleId}-external', 'Scoped article'),
+      ('${outOfScopeArticleId}', '${outOfScopeArticleId}-external', 'Out of scope article')
+  `)
+  await dbRun(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('${suffix}-project-article-scoped', '${projectId}', '${scopedArticleId}')
+  `)
+  await dbRun(`
+    INSERT INTO app.judgment (id, article_id, prompt_id, model_id, project_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES
+      ('${suffix}-judgment-scoped', '${scopedArticleId}', '${promptId}', '${modelId}', '${projectId}', TRUE, TRUE, FALSE, FALSE),
+      ('${suffix}-judgment-out-of-scope', '${outOfScopeArticleId}', '${promptId}', '${modelId}', '${projectId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await dbRun(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  void mock.module(judgmentsJobsAddToQueueDependenciesModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {queryJson: dbQuery, run: dbRun}
+      },
+      getJudgmentJobSqliteService: () => {
+        return sqliteService
+      },
+      getJudgmentsCapacity: () => {
+        return {addToQueueMaxBatchSize: 10, maxInflight: 10, readyTargetPerJob: 10}
+      },
+      inferenceRuntimeConfig: {
+        codexMaxInflight: 1,
+        judgmentsAddToQueueMaxBatchSize: 10,
+        judgmentsReadyTargetMultiplier: 1,
+      },
+      JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
+      judgmentsJobsCronGetPrompts: async () => {
+        return {
+          nextCursor: null,
+          promptEntries: [
+            {articleId: scopedArticleId, promptId},
+            {articleId: outOfScopeArticleId, promptId},
+          ],
+        }
+      },
+      judgmentsJobsGetRunningJobs: async () => {
+        return [{id: jobId, maxInflightRequests: null, modelProvider: 'openai', projectId, providerConnectionId: null}]
+      },
+    }
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?queue-reuse-scope=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(addReadyPromptsCalls).toEqual([[{articleId: outOfScopeArticleId, promptId}]])
 })
