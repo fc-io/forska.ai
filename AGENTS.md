@@ -8,6 +8,8 @@
 bun install
 bun run dev:server
 bun run dev:app
+bun run desktop:dev
+bun run desktop:build
 bun run build
 bun run lint
 bun run lint:fix
@@ -23,12 +25,19 @@ bun run db:duck:rebuild-marts
 - For any plan, PRD, or task breakdown, include explicit Quality Gates. Keep
   them concrete, minimal, pass/fail, and repo-native. Use only relevant gates:
   `bun run lint`, targeted `bun test` or `bun test <file>`, `bun run build` for
-  UI, `bun run db:mig` for schema work, sometimes also relevant to read from the 
+  UI, `bun run db:mig` for schema work, sometimes also relevant to read from the
   server or app output, and browser verification for UI flows
   when relevant.
 - In PRs and commits, note touched layers: server, client, database, docs.
 - List commands you ran. If you skip an obvious command, say why.
 - Do not fix unrelated lint issues.
+- For shared app, frontend, runtime-path, or server changes, explicitly consider both the browser/web flow and the desktop app flow. Verify the relevant one(s) and call out what you checked.
+
+## Web And Desktop
+
+- Desktop support is additive. Do not break the normal browser flow while adding or changing desktop behavior.
+- Keep `bun run dev:server` and `bun run dev:app` working for the web app unless the task explicitly says otherwise.
+- When changes affect shared UI, API wiring, runtime asset paths, imports, or local file storage, also check the desktop path with `bun run desktop:build` or `bun run desktop:dev` when relevant.
 
 ## File Structure
 
