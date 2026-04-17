@@ -49,3 +49,25 @@ test('resolveDuckdbBinary falls back to the installed DuckDB CLI directory when 
     removeDirectoryIfExists(rootDirectory)
   }
 })
+
+test('resolveDuckdbBinary honors Windows PATH separators and executable suffixes', () => {
+  const rootDirectory = join(tmpdir(), `f1-duckdb-binary-windows-${Date.now()}`)
+  const firstPathDirectory = join(rootDirectory, 'path-a')
+  const secondPathDirectory = join(rootDirectory, 'path-b')
+  const installedBinary = join(secondPathDirectory, 'duckdb.exe')
+
+  try {
+    createExecutableFile(installedBinary)
+
+    expect(
+      resolveDuckdbBinary({
+        configuredBinary: null,
+        homeDirectory: join(rootDirectory, 'home'),
+        pathValue: `${firstPathDirectory};${secondPathDirectory}`,
+        platform: 'win32',
+      }),
+    ).toBe(installedBinary)
+  } finally {
+    removeDirectoryIfExists(rootDirectory)
+  }
+})

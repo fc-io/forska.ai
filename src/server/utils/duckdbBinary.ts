@@ -4,10 +4,13 @@ import {join, resolve} from 'node:path'
 
 import {readLocalAppSettings} from './localAppSettings.ts'
 
+type Platform = typeof process.platform
+
 type DuckdbBinaryResolutionInput = {
   configuredBinary: string | null
   homeDirectory: string
   pathValue: string | undefined
+  platform?: Platform
 }
 
 const getTrimmedValue = (value: string | null | undefined): string | null => {
@@ -25,9 +28,19 @@ const canExecuteFile = (filePath: string) => {
   }
 }
 
-const getPathDirectories = (pathValue: string | undefined) => {
+const getPathSeparator = (platform: Platform) => {
+  return platform === 'win32' ? ';' : ':'
+}
+
+const getExecutableNameCandidates = (commandName: string, platform: Platform) => {
+  return platform === 'win32' && !commandName.toLowerCase().endsWith('.exe')
+    ? [`${commandName}.exe`, commandName]
+    : [commandName]
+}
+
+const getPathDirectories = (pathValue: string | undefined, platform: Platform) => {
   return String(pathValue ?? '')
-    .split(':')
+    .split(getPathSeparator(platform))
     .map((value) => {
       return value.trim()
     })
@@ -36,22 +49,32 @@ const getPathDirectories = (pathValue: string | undefined) => {
     })
 }
 
-const getExecutablePathFromPath = (commandName: string, pathValue: string | undefined) => {
-  const commandPath = commandName.includes('/') ? resolve(commandName) : null
+const getExecutablePathFromPath = (commandName: string, pathValue: string | undefined, platform: Platform) => {
+  const commandPath = commandName.includes('/') || commandName.includes('\\') ? resolve(commandName) : null
 
   if (commandPath !== null) {
-    return canExecuteFile(commandPath) ? commandPath : null
+    const directExecutablePath = getExecutableNameCandidates(commandPath, platform).find((candidatePath) => {
+      return canExecuteFile(candidatePath)
+    })
+
+    return directExecutablePath ?? null
   }
 
-  const pathDirectories = getPathDirectories(pathValue)
-  const executablePath = pathDirectories.find((directoryPath) => {
-    return canExecuteFile(join(directoryPath, commandName))
-  })
+  const pathDirectories = getPathDirectories(pathValue, platform)
+  const executablePath = pathDirectories
+    .flatMap((directoryPath) => {
+      return getExecutableNameCandidates(commandName, platform).map((candidateName) => {
+        return join(directoryPath, candidateName)
+      })
+    })
+    .find((candidatePath) => {
+      return canExecuteFile(candidatePath)
+    })
 
-  return executablePath === undefined ? null : join(executablePath, commandName)
+  return executablePath ?? null
 }
 
-const getInstalledDuckdbCliBinaries = (homeDirectory: string) => {
+const getInstalledDuckdbCliBinaries = (homeDirectory: string, platform: Platform) => {
   const duckdbCliDirectory = join(homeDirectory, '.duckdb', 'cli')
 
   if (!existsSync(duckdbCliDirectory)) {
@@ -63,10 +86,14 @@ const getInstalledDuckdbCliBinaries = (homeDirectory: string) => {
       return right.localeCompare(left, undefined, {numeric: true, sensitivity: 'base'})
     })
     .map((entryName) => {
-      return join(duckdbCliDirectory, entryName, 'duckdb')
+      return getExecutableNameCandidates(join(duckdbCliDirectory, entryName, 'duckdb'), platform).find(
+        (candidatePath) => {
+          return canExecuteFile(candidatePath)
+        },
+      )
     })
     .filter((filePath) => {
-      return canExecuteFile(filePath)
+      return filePath !== undefined
     })
 }
 
@@ -74,11 +101,12 @@ const getDuckdbBinaryCandidates = ({
   configuredBinary,
   homeDirectory,
   pathValue,
+  platform = process.platform,
 }: DuckdbBinaryResolutionInput): string[] => {
   const configured = getTrimmedValue(configuredBinary)
-  const installedCliBinaries = getInstalledDuckdbCliBinaries(homeDirectory)
+  const installedCliBinaries = getInstalledDuckdbCliBinaries(homeDirectory, platform)
 
-  return [configured, getExecutablePathFromPath('duckdb', pathValue), ...installedCliBinaries].filter(
+  return [configured, getExecutablePathFromPath('duckdb', pathValue, platform), ...installedCliBinaries].filter(
     (value, index, values): value is string => {
       return value !== null && values.indexOf(value) === index
     },

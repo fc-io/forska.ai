@@ -1,6 +1,7 @@
-import {createRouter, RouterProvider} from '@tanstack/solid-router'
+import {createHashHistory, createRouter, RouterProvider} from '@tanstack/solid-router'
 import type {JSX} from 'solid-js'
 
+import {getRouterHistoryMode} from './getRouterHistoryMode.ts'
 import {routeTree} from './routeTree.gen'
 
 const DefaultPending = (): JSX.Element => {
@@ -21,7 +22,20 @@ const DefaultPending = (): JSX.Element => {
   )
 }
 
-const router = createRouter({routeTree, defaultPendingComponent: DefaultPending, defaultPendingMinMs: 200})
+const getRouterHistory = () => {
+  const protocol = typeof window === 'undefined' ? null : window.location.protocol
+
+  return getRouterHistoryMode(protocol) === 'hash' ? createHashHistory() : undefined
+}
+
+const routerHistory = getRouterHistory()
+
+const router = createRouter({
+  routeTree,
+  defaultPendingComponent: DefaultPending,
+  defaultPendingMinMs: 200,
+  ...(routerHistory ? {history: routerHistory} : {}),
+})
 
 declare module '@tanstack/solid-router' {
   interface Register {
