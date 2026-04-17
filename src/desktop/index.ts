@@ -1,8 +1,9 @@
 import {appendFileSync, writeFileSync} from 'node:fs'
 import {resolve} from 'node:path'
 
-import {BrowserWindow} from 'electrobun/bun'
+import {BrowserView, BrowserWindow} from 'electrobun/bun'
 
+import type {DesktopApiRequest, DesktopApiRpc} from './desktopApiRpc.ts'
 import {acquireDesktopSingleInstance} from './desktopSingleInstance.ts'
 import {getDesktopRuntimeConfig} from './getDesktopRuntimeConfig.ts'
 
@@ -46,23 +47,56 @@ const waitForBackendReady = async ({apiOrigin, deadlineMs}: {apiOrigin: string; 
 const createWindow = ({
   frame = defaultWindowFrame,
   preload,
+  rpc,
   title,
   url,
   viewsRoot,
 }: {
   frame?: {height: number; width: number; x: number; y: number}
   preload: string
+  rpc?: ReturnType<typeof BrowserView.defineRPC<DesktopApiRpc>>
   title: string
   url: string
   viewsRoot: string
 }) => {
-  return new BrowserWindow({frame, preload, title, url, viewsRoot})
+  return new BrowserWindow({frame, preload, rpc, title, url, viewsRoot})
 }
 
 const runtimeConfig = getDesktopRuntimeConfig()
 const desktopSingleInstanceLockPath = resolve(runtimeConfig.dataRoot, 'desktop.lock.json')
 const desktopSingleInstanceResult = acquireDesktopSingleInstance({lockPath: desktopSingleInstanceLockPath})
 let backendLogTail = ''
+
+const getDesktopApiRequestUrl = ({path}: DesktopApiRequest) => {
+  if (!path.startsWith('/api/')) {
+    throw new Error(`Desktop API bridge only supports /api routes, received ${path}`)
+  }
+
+  return `${runtimeConfig.apiOrigin}${path}`
+}
+
+const desktopApiRpc = BrowserView.defineRPC<DesktopApiRpc>({
+  maxRequestTime: 120_000,
+  handlers: {
+    requests: {
+      fetchApi: async ({bodyBase64, headers, method, path}) => {
+        const response = await fetch(getDesktopApiRequestUrl({bodyBase64, headers, method, path}), {
+          body: bodyBase64 === null ? undefined : Buffer.from(bodyBase64, 'base64'),
+          headers,
+          method,
+        })
+
+        return {
+          bodyBase64: Buffer.from(await response.arrayBuffer()).toString('base64'),
+          headers: [...response.headers.entries()],
+          status: response.status,
+          statusText: response.statusText,
+        }
+      },
+    },
+    messages: {},
+  },
+})
 
 const appendBackendLog = ({text, writeToStderr = false}: {text: string; writeToStderr?: boolean}) => {
   if (text === '') {
@@ -237,6 +271,7 @@ await (
   .then(() => {
     createWindow({
       preload: runtimeConfig.windowPreload,
+      rpc: desktopApiRpc,
       title: 'Forska',
       url: runtimeConfig.windowUrl,
       viewsRoot: runtimeConfig.viewsRoot,
