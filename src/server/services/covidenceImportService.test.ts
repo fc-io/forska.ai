@@ -1192,7 +1192,7 @@ test('syncCovidenceProjectScopeFromConfig marks removed and added full-text arti
             pa.project_id AS projectId
           FROM app.project_article pa
           INNER JOIN app.article a ON a.id = pa.article_id
-          WHERE pa.project_id = '${project.id}'
+          WHERE pa.project_id = '\${project.id}'
           ORDER BY a.article_title ASC
         \`)
         const refreshStateRows = await database.queryJson(\`
@@ -1201,7 +1201,7 @@ test('syncCovidenceProjectScopeFromConfig marks removed and added full-text arti
             CAST(dirty_token AS INTEGER) AS dirtyToken,
             last_request_reason AS reason
           FROM app.project_mart_refresh_state
-          WHERE project_id = '${project.id}'
+          WHERE project_id = '\${project.id}'
         \`)
         const refreshArticleStateRows = await database.queryJson(\`
           SELECT
@@ -1211,7 +1211,7 @@ test('syncCovidenceProjectScopeFromConfig marks removed and added full-text arti
             article_state.project_id AS projectId
           FROM app.project_mart_refresh_article_state article_state
           INNER JOIN app.article a ON a.id = article_state.article_id
-          WHERE article_state.project_id = '${project.id}'
+          WHERE article_state.project_id = '\${project.id}'
           ORDER BY a.article_id ASC
         \`)
 
@@ -1261,16 +1261,8 @@ test('syncCovidenceProjectScopeFromConfig marks removed and added full-text arti
     }
 
     expect(parsed.projectArticleRows).toEqual([
-      {
-        articleExternalId: `${importRoute}:doi%3A10.1000%2Falpha`,
-        articleTitle: 'Study A',
-        projectId: parsed.projectId,
-      },
-      {
-        articleExternalId: `${importRoute}:doi%3A10.1000%2Fgamma`,
-        articleTitle: 'Study C',
-        projectId: parsed.projectId,
-      },
+      {articleExternalId: `${importRoute}:doi%3A10.1000%2Falpha`, articleTitle: 'Study A', projectId: parsed.projectId},
+      {articleExternalId: `${importRoute}:doi%3A10.1000%2Fgamma`, articleTitle: 'Study C', projectId: parsed.projectId},
     ])
     expect(parsed.refreshStateRows).toEqual([
       {dirtyToken: 2, projectId: parsed.projectId, reason: 'syncCovidenceProjectScopeFromConfig'},

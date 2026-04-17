@@ -11,9 +11,12 @@ import {assertSelectableProviderModelIds} from '../providers/providerModelReposi
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
 import {
+  deriveStrictSummaryAnswer,
   getJudgmentDisplayAnswer,
   getNormalizedJudgmentAnswerKey,
+  getNormalizedSummaryAnswer,
   hasAnyJudgmentAnswer,
+  normalizeSummaryAnswerValue,
 } from '../utils/judgmentAnswers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
@@ -80,6 +83,7 @@ type ComparisonProjectScope = {
 }
 type ComparisonProjectLlmRow = {
   articleId: string
+  createdAt: Date
   promptId: string
   modelId: string
   answeredOriginal: string | null
@@ -157,8 +161,11 @@ const articleTable = 'app.article'
 const articleImportRouteTable = 'app.article_import_route'
 const judgmentTable = 'app.judgment'
 const judgmentHumanTable = 'app.judgment_human'
+const judgmentHumanSummaryTable = 'app.judgment_human_summary'
 const appDatabaseService = getAppDatabaseService()
 const {getDateValue, getJsonValue, getQuotedStringList, getSqlLiteral} = appQueryHelpers
+const summaryPromptId = 'summary'
+const summaryPromptLabel = 'Overall decision'
 
 const getRequiredDateValue = (value: unknown) => {
   const parsedDate = getDateValue(value)
@@ -469,6 +476,10 @@ const getComparisonProjectContentVariants = (settings: {
 
 const getColumnId = (kind: 'llm' | 'human', promptId: string, modelId?: string | null, contentKey?: string | null) => {
   return kind === 'human' ? `human:${promptId}` : `llm:${modelId}:${contentKey ?? 'default'}:${promptId}`
+}
+
+const getIsSummaryMode = (scope: Pick<ComparisonProjectScope, 'compareWithHumans' | 'humanJudgmentMode'>) => {
+  return scope.compareWithHumans && scope.humanJudgmentMode === 'summary'
 }
 
 const getModelSelectionId = (modelRow: {
@@ -918,8 +929,13 @@ const getComparisonProjectColumns = (
   modelRows: ComparisonProjectModelConfig[],
   contentVariants: ComparisonProjectContentVariant[],
   compareWithHumans: boolean,
+  humanJudgmentMode: HumanJudgmentMode,
 ) => {
-  const llmColumns = promptRows.flatMap((promptRow) => {
+  const shownPromptRows =
+    compareWithHumans && humanJudgmentMode === 'summary'
+      ? [{id: summaryPromptId, promptLabel: summaryPromptLabel}]
+      : promptRows
+  const llmColumns = shownPromptRows.flatMap((promptRow) => {
     return modelRows.flatMap((modelRow) => {
       return contentVariants.map<ComparisonProjectJudgmentsColumn>((contentVariant) => {
         return {
@@ -938,7 +954,7 @@ const getComparisonProjectColumns = (
     })
   })
   const humanColumns = compareWithHumans
-    ? promptRows.map<ComparisonProjectJudgmentsColumn>((promptRow) => {
+    ? shownPromptRows.map<ComparisonProjectJudgmentsColumn>((promptRow) => {
         return {
           id: getColumnId('human', promptRow.id),
           kind: 'human',
@@ -1068,6 +1084,7 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
     modelRows,
     contentVariants,
     normalizedComparisonProjectRow.compareWithHumans,
+    normalizedComparisonProjectRow.humanJudgmentMode,
   )
 
   return {
@@ -1279,6 +1296,16 @@ const getComparisonProjectAnsweredPromptIds = (
   return answeredPromptIds
 }
 
+const getComparisonProjectAnsweredColumnCount = (
+  llmCells: Record<string, string | null> | undefined,
+  humanCells: Record<string, string | null> | undefined,
+  columnIds: Set<string>,
+) => {
+  return Array.from(columnIds).filter((columnId) => {
+    return hasValue(llmCells?.[columnId]) || hasValue(humanCells?.[columnId])
+  }).length
+}
+
 const hasValue = (value: string | null | undefined) => {
   return (value?.trim() ?? '') !== ''
 }
@@ -1326,6 +1353,23 @@ const getComparisonProjectHasModelDifference = (rows: ComparisonProjectLlmRow[])
   })
 }
 
+const getComparisonProjectHasSummaryDifference = (
+  cellMap: Record<string, string | null> | undefined,
+  requiredColumnIds: Set<string>,
+) => {
+  const answers = Array.from(requiredColumnIds).reduce<Set<string>>((answerSet, columnId) => {
+    const normalizedValue = cellMap?.[columnId]?.trim().toLowerCase() ?? ''
+
+    if (normalizedValue !== '') {
+      answerSet.add(normalizedValue)
+    }
+
+    return answerSet
+  }, new Set<string>())
+
+  return answers.size > 1
+}
+
 const getComparisonProjectLlmRows = async (scope: ComparisonProjectScope, articleIds: string[]) => {
   const promptIds = scope.prompts.map((prompt) => {
     return prompt.id
@@ -1345,6 +1389,7 @@ const getComparisonProjectLlmRows = async (scope: ComparisonProjectScope, articl
   }
 
   const rows = await appDatabaseService.queryJson<{
+    createdAt: unknown
     articleId: string
     promptId: string
     modelId: string
@@ -1356,6 +1401,7 @@ const getComparisonProjectLlmRows = async (scope: ComparisonProjectScope, articl
     useFulltextNoImages: boolean
   }>(`
     SELECT
+      created_at AS createdAt,
       article_id AS articleId,
       prompt_id AS promptId,
       model_id AS modelId,
@@ -1377,14 +1423,68 @@ const getComparisonProjectLlmRows = async (scope: ComparisonProjectScope, articl
 
   return rows
     .map<ComparisonProjectLlmRow>((row) => {
-      return {...row, answeredOriginalAsArray: getStringArrayRowValue(row, 'answeredOriginalAsArray')}
+      return {
+        ...row,
+        createdAt: getRequiredDateValue(row.createdAt),
+        answeredOriginalAsArray: getStringArrayRowValue(row, 'answeredOriginalAsArray'),
+      }
     })
     .filter((row) => {
       return hasAnyJudgmentAnswer(row)
     })
 }
 
-const getComparisonProjectHumanRows = async (scope: ComparisonProjectScope, articleIds: string[]) => {
+const getSummaryCriteria = (scope: ComparisonProjectScope) => {
+  return scope.prompts.map((prompt) => {
+    return {promptId: prompt.id, criteriaDisposition: prompt.criteriaDisposition}
+  })
+}
+
+const getLatestComparisonProjectLlmRowsByPromptId = (rows: ComparisonProjectLlmRow[]) => {
+  return rows.reduce<Map<string, ComparisonProjectLlmRow>>((rowMap, row) => {
+    const existingRow = rowMap.get(row.promptId)
+
+    return !existingRow || row.createdAt.getTime() >= existingRow.createdAt.getTime()
+      ? rowMap.set(row.promptId, row)
+      : rowMap
+  }, new Map<string, ComparisonProjectLlmRow>())
+}
+
+const getComparisonProjectLlmSummaryRows = (scope: ComparisonProjectScope, rows: ComparisonProjectLlmRow[]) => {
+  if (!getIsSummaryMode(scope)) {
+    return rows
+  }
+
+  const rowGroups = rows.reduce<Map<string, ComparisonProjectLlmRow[]>>((rowMap, row) => {
+    const key = `${row.articleId}:${row.modelId}:${getComparisonProjectContentKey(row)}`
+    const currentRows = rowMap.get(key) ?? []
+    rowMap.set(key, [...currentRows, row])
+    return rowMap
+  }, new Map<string, ComparisonProjectLlmRow[]>())
+
+  return Array.from(rowGroups.values())
+    .map<ComparisonProjectLlmRow | null>((groupRows) => {
+      const [firstRow] = groupRows
+
+      if (!firstRow) {
+        return null
+      }
+
+      const normalizedAnswers = Array.from(getLatestComparisonProjectLlmRowsByPromptId(groupRows).values()).reduce<
+        Record<string, 'yes' | 'no' | 'maybe' | null>
+      >((answerMap, row) => {
+        return {...answerMap, [row.promptId]: getNormalizedSummaryAnswer(row)}
+      }, {})
+      const summaryAnswer = deriveStrictSummaryAnswer(getSummaryCriteria(scope), normalizedAnswers)
+
+      return summaryAnswer
+        ? {...firstRow, promptId: summaryPromptId, answeredOriginal: summaryAnswer, answeredOriginalAsArray: null}
+        : null
+    })
+    .filter(isDefined)
+}
+
+const getComparisonProjectPromptHumanRows = async (scope: ComparisonProjectScope, articleIds: string[]) => {
   const promptIds = scope.prompts.map((prompt) => {
     return prompt.id
   })
@@ -1414,6 +1514,44 @@ const getComparisonProjectHumanRows = async (scope: ComparisonProjectScope, arti
   return rows.map((row) => {
     return {...row, updatedAt: getDateValue(row.updatedAt)}
   })
+}
+
+const getComparisonProjectSummaryHumanRows = async (scope: ComparisonProjectScope, articleIds: string[]) => {
+  if (articleIds.length === 0 || !scope.compareWithHumans || !scope.summarySourceProjectId) {
+    return []
+  }
+
+  const rows = await appDatabaseService.queryJson<{articleId: string; answer: string | null; updatedAt: unknown}>(`
+    SELECT
+      article_id AS articleId,
+      answer AS answer,
+      updated_at AS updatedAt
+    FROM ${judgmentHumanSummaryTable}
+    WHERE project_id = ${getSqlLiteral(scope.summarySourceProjectId)}
+      AND article_id IN (${getInClause(articleIds)})
+      AND ${getTrimmedTextExistsClause('answer')}
+  `)
+
+  return rows
+    .map<ComparisonProjectHumanRow | null>((row) => {
+      const normalizedAnswer = normalizeSummaryAnswerValue(row.answer)
+
+      return normalizedAnswer
+        ? {
+            articleId: row.articleId,
+            promptId: summaryPromptId,
+            answer: normalizedAnswer,
+            updatedAt: getDateValue(row.updatedAt),
+          }
+        : null
+    })
+    .filter(isDefined)
+}
+
+const getComparisonProjectHumanRows = async (scope: ComparisonProjectScope, articleIds: string[]) => {
+  return getIsSummaryMode(scope)
+    ? getComparisonProjectSummaryHumanRows(scope, articleIds)
+    : getComparisonProjectPromptHumanRows(scope, articleIds)
 }
 
 const getComparisonProjectLlmCells = (rows: ComparisonProjectLlmRow[]) => {
@@ -1510,28 +1648,37 @@ const getComparisonProjectJudgmentsPage = async (
   const articleIds = scopedArticles.map((article) => {
     return article.id
   })
-  const [llmRows, humanRows] = await Promise.all([
+  const [rawLlmRows, humanRows] = await Promise.all([
     getComparisonProjectLlmRows(scope, articleIds),
     getComparisonProjectHumanRows(scope, articleIds),
   ])
+  const llmRows = getComparisonProjectLlmSummaryRows(scope, rawLlmRows)
   const llmRowsByArticle = getRowsByArticleId(llmRows)
   const humanRowsByArticle = getRowsByArticleId(humanRows)
   const llmCellsByArticle = getComparisonProjectLlmCells(llmRows)
   const humanCellsByArticle = getComparisonProjectHumanCells(humanRows)
   const requiredLlmColumnIds = getComparisonProjectRequiredColumnIds(scope, 'llm')
   const requiredHumanColumnIds = getComparisonProjectRequiredColumnIds(scope, 'human')
+  const requiredColumnIds = new Set([...requiredLlmColumnIds, ...requiredHumanColumnIds])
   const filteredArticles = scopedArticles.filter((article) => {
     const articleLlmRows = llmRowsByArticle.get(article.id) ?? []
     const articleHumanRows = humanRowsByArticle.get(article.id) ?? []
     const hasArticleData = articleLlmRows.length > 0 || articleHumanRows.length > 0
     const answeredPromptIds = getComparisonProjectAnsweredPromptIds(articleLlmRows, articleHumanRows)
+    const answeredColumnCount = getComparisonProjectAnsweredColumnCount(
+      llmCellsByArticle[article.id],
+      humanCellsByArticle[article.id],
+      requiredColumnIds,
+    )
     const hasAllLlmColumns = getHasAllRequiredColumns(llmCellsByArticle[article.id], requiredLlmColumnIds)
     const hasAllHumanColumns = getHasAllRequiredColumns(humanCellsByArticle[article.id], requiredHumanColumnIds)
-    const hasModelDifference = getComparisonProjectHasModelDifference(articleLlmRows)
+    const hasModelDifference = getIsSummaryMode(scope)
+      ? getComparisonProjectHasSummaryDifference(llmCellsByArticle[article.id], requiredLlmColumnIds)
+      : getComparisonProjectHasModelDifference(articleLlmRows)
 
     return (
       hasArticleData
-      && (!hideSparseRows || answeredPromptIds.size >= 2)
+      && (!hideSparseRows || (getIsSummaryMode(scope) ? answeredColumnCount >= 2 : answeredPromptIds.size >= 2))
       && (!showOnlyFullyAnsweredPrompts || (hasAllLlmColumns && hasAllHumanColumns))
       && (!showOnlyModelDifferences || hasModelDifference)
     )

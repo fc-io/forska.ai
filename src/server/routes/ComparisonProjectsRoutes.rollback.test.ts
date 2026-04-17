@@ -6,6 +6,7 @@ const providerModelRepositoryModulePath = new URL('../providers/providerModelRep
 
 type MockDatabaseState = {
   comparisonProject: {
+    compareWithHumans: boolean
     humanJudgmentMode: 'prompt' | 'summary' | null
     id: string
     modelIds: string[]
@@ -65,8 +66,10 @@ const getMockDatabaseState = () => {
 
 const getComparisonProjectRow = (comparisonProject: MockDatabaseState['comparisonProject']) => {
   return {
-    compareWithHumans: false,
+    compareWithHumans: comparisonProject.compareWithHumans,
     createdAt: new Date('2026-03-29T00:00:00.000Z'),
+    dateFrom: null,
+    dateTo: null,
     description: 'Rollback test project',
     humanJudgmentMode: comparisonProject.humanJudgmentMode,
     id: 'comparison-project-1',
@@ -117,7 +120,14 @@ const getConfiguredModelRows = (selectedModelIds: string[]) => {
   return selectedModelIds.map((modelId) => {
     const modelRow = modelRows[modelId as keyof typeof modelRows]
 
-    return {id: modelRow.id, modelName: modelRow.modelName, provider: modelRow.provider, version: modelRow.version}
+    return {
+      id: modelRow.id,
+      metadataJson: {},
+      modelName: modelRow.modelName,
+      name: modelRow.modelName,
+      provider: modelRow.provider,
+      version: modelRow.version,
+    }
   })
 }
 
@@ -143,10 +153,19 @@ const queryJson = async (
     return [getComparisonProjectRow(state.comparisonProject)]
   }
 
+  if (
+    statement.includes('FROM app.comparison_project')
+    && statement.includes('created_at AS createdAt')
+    && statement.includes('WHERE id =')
+  ) {
+    return [getComparisonProjectRow(state.comparisonProject)]
+  }
+
   if (statement.includes('INSERT INTO app.comparison_project') && statement.includes('RETURNING')) {
     return [
       {
         ...getComparisonProjectRow({
+          compareWithHumans: statement.includes('TRUE'),
           humanJudgmentMode: statement.includes("'summary'") ? 'summary' : 'prompt',
           id: 'comparison-project-created',
           modelIds: statement.includes('model-1') ? ['model-1'] : [],
@@ -167,6 +186,23 @@ const queryJson = async (
         id: 'source-project-1',
         modelId: 'model-1',
         modelMetadataJson: {},
+        modelName: 'Model 1',
+        name: 'Summary Source',
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+        useTitle: true,
+      },
+    ]
+  }
+
+  if (statement.includes('FROM app.project p') && statement.includes("WHERE p.id = 'source-project-1'")) {
+    return [
+      {
+        description: 'Summary source project',
+        humanJudgmentMode: 'summary',
+        id: 'source-project-1',
+        modelId: 'model-1',
         modelName: 'Model 1',
         name: 'Summary Source',
         useAbstract: true,
@@ -245,6 +281,70 @@ const queryJson = async (
     return state.routeLinks.map((routeLink) => {
       return {id: routeLink.id, importRouteId: routeLink.importRouteId}
     })
+  }
+
+  if (statement.includes('FROM app.article a')) {
+    return [
+      {articleCreatedAt: new Date('2026-03-30T00:00:00.000Z'), articleTitle: 'Article 1', id: 'article-1'},
+      {articleCreatedAt: new Date('2026-03-29T00:00:00.000Z'), articleTitle: 'Article 2', id: 'article-2'},
+    ]
+  }
+
+  if (statement.includes('FROM app.judgment j')) {
+    return [
+      {
+        answeredOriginal: 'yes',
+        answeredOriginalAsArray: null,
+        articleId: 'article-1',
+        createdAt: new Date('2026-03-31T00:00:00.000Z'),
+        modelId: 'model-1',
+        promptId: 'prompt-1',
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+        useTitle: true,
+      },
+      {
+        answeredOriginal: 'yes',
+        answeredOriginalAsArray: null,
+        articleId: 'article-1',
+        createdAt: new Date('2026-03-31T00:00:00.000Z'),
+        modelId: 'model-1',
+        promptId: 'prompt-2',
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+        useTitle: true,
+      },
+      {
+        answeredOriginal: 'yes',
+        answeredOriginalAsArray: null,
+        articleId: 'article-1',
+        createdAt: new Date('2026-04-01T00:00:00.000Z'),
+        modelId: 'model-2',
+        promptId: 'prompt-1',
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+        useTitle: true,
+      },
+      {
+        answeredOriginal: 'no',
+        answeredOriginalAsArray: null,
+        articleId: 'article-1',
+        createdAt: new Date('2026-04-01T00:00:00.000Z'),
+        modelId: 'model-2',
+        promptId: 'prompt-2',
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+        useTitle: true,
+      },
+    ]
+  }
+
+  if (statement.includes('FROM app.judgment_human_summary')) {
+    return [{answer: 'maybe', articleId: 'article-1', updatedAt: new Date('2026-04-02T00:00:00.000Z')}]
   }
 
   throw new Error(`Unhandled query: ${statement}`)
@@ -379,6 +479,7 @@ const registerModuleMocks = () => {
 const createMockDatabaseState = (): MockDatabaseState => {
   return {
     comparisonProject: {
+      compareWithHumans: false,
       humanJudgmentMode: 'prompt',
       id: 'comparison-project-1',
       modelIds: ['model-1'],
@@ -605,4 +706,75 @@ test('comparison project sources expose summary capability metadata', async () =
   expect(sourceProject?.summarySourceProjectId).toBe('source-project-1')
   expect(sourceProject?.prompts[0]?.criteriaDisposition).toBe('include')
   expect(sourceProject?.prompts[0]?.criteriaSectionKey).toBe('population')
+})
+
+test('summary comparison judgments use synthetic summary columns and derived cells', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    comparisonProject: {
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    failPromptInsert: false,
+    promptLinks: [
+      {
+        criteriaDisposition: 'include',
+        criteriaSectionKey: 'population',
+        criteriaSectionLabel: 'Population',
+        id: 'comparison-project-prompt-1',
+        order: 0,
+        promptId: 'prompt-1',
+      },
+      {
+        criteriaDisposition: 'exclude',
+        criteriaSectionKey: 'outcome',
+        criteriaSectionLabel: 'Outcome',
+        id: 'comparison-project-prompt-2',
+        order: 1,
+        promptId: 'prompt-2',
+      },
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const metadataResponse = await app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1'),
+  )
+  const metadataBody = (await metadataResponse.json()) as {
+    data: {columns: Array<{id: string; promptId: string; promptLabel: string}>}
+  }
+  const judgmentsResponse = await app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1/judgments', {
+      body: JSON.stringify({
+        hideSparseRows: true,
+        limit: '50',
+        page: '1',
+        showOnlyFullyAnsweredPrompts: true,
+        showOnlyModelDifferences: true,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const judgmentsBody = (await judgmentsResponse.json()) as {
+    data: {data: Array<{cells: Record<string, string | null>; id: string}>; totalCount: number}
+  }
+  const [row] = judgmentsBody.data.data
+
+  expect(metadataResponse.status).toBe(200)
+  expect(
+    metadataBody.data.columns.map((column) => {
+      return column.promptId
+    }),
+  ).toEqual(['summary', 'summary', 'summary'])
+  expect(metadataBody.data.columns[0]?.promptLabel).toBe('Overall decision')
+  expect(judgmentsResponse.status).toBe(200)
+  expect(judgmentsBody.data.totalCount).toBe(1)
+  expect(row?.cells['llm:model-1:1100:summary']).toBe('no')
+  expect(row?.cells['llm:model-2:1100:summary']).toBe('yes')
+  expect(row?.cells['human:summary']).toBe('maybe')
 })
