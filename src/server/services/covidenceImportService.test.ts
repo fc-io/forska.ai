@@ -1102,6 +1102,213 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
   }
 })
 
+test('syncCovidenceProjectScopeFromConfig marks removed and added full-text articles dirty across reimport', async () => {
+  const duckdbPath = `/tmp/f1-covidence-scope-reimport-${Date.now()}.duckdb`
+  const datasourceId = `covidence-scope-reimport-${Date.now()}`
+  const importRoute = `covidence:${datasourceId}`
+  datasourceIdsToDelete.add(datasourceId)
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const [{migrateDuckdb}, {resetDuckdbServiceForTests}, {resetServerRuntimeRoleForTests}, {getAppDatabaseService}, covidenceImportService] = await Promise.all([
+          import('./src/db/migrateDuckdb.ts'),
+          import('./src/server/utils/duckdbService.ts'),
+          import('./src/server/utils/serverRuntimeRole.ts'),
+          import('./src/server/services/appDatabaseService.ts'),
+          import('./src/server/services/covidenceImportService.ts'),
+        ])
+
+        resetDuckdbServiceForTests()
+        resetServerRuntimeRoleForTests()
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const datasourceId = ${JSON.stringify(datasourceId)}
+        const importRoute = ${JSON.stringify(importRoute)}
+        const createConfig = async (allContent, irrelevantContent, fullTextContent, excludedContent, includedContent) => {
+          const files = await covidenceImportService.storeCovidencePackageFiles({
+            datasourceId,
+            files: [
+              {file: new File([allContent], 'all.csv', {type: 'text/csv'}), fileRole: 'all'},
+              {file: new File([irrelevantContent], 'irrelevant.csv', {type: 'text/csv'}), fileRole: 'irrelevant'},
+              {file: new File([fullTextContent], 'full_text.csv', {type: 'text/csv'}), fileRole: 'full_text'},
+              {file: new File([excludedContent], 'excluded.csv', {type: 'text/csv'}), fileRole: 'excluded'},
+              {file: new File([includedContent], 'included.csv', {type: 'text/csv'}), fileRole: 'included'},
+            ],
+          })
+
+          return covidenceImportService.buildCovidencePackageConfig({files, mode: 'full_text'})
+        }
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, label, provider_kind, enabled)
+          VALUES ('pc-covidence-scope-reimport', 'Covidence provider', 'openai-compatible', TRUE);
+
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, enabled)
+          VALUES ('model-covidence-scope-reimport', 'pc-covidence-scope-reimport', 'gpt-covidence', 'gpt-covidence', TRUE);
+
+          INSERT INTO app.import_route (id, route, name, active)
+          VALUES ('route-covidence-scope-reimport', '${importRoute}', '${importRoute}', TRUE);
+        \`)
+
+        const project = await covidenceImportService.getOrCreateCovidenceProject({
+          importRoute,
+          mode: 'full_text',
+          title: 'Covidence scope reimport project',
+        })
+
+        const firstConfig = await createConfig(
+          'Title,Authors,Year,DOI\\nStudy A,"Doe, Jane",2024,10.1000/alpha\\nStudy B,"Roe, John",2023,10.1000/beta\\nStudy C,"Lane, Kim",2022,10.1000/gamma\\n',
+          'Title,Authors,Year,DOI\\n',
+          'Title,Authors,Year,DOI\\nStudy A,"Doe, Jane",2024,10.1000/alpha\\n',
+          'Title,Authors,Year,DOI,Reason for exclusion\\n',
+          'Title,Authors,Year,DOI\\nStudy B,"Roe, John",2023,10.1000/beta\\n',
+        )
+
+        await database.transaction(async (tx) => {
+          await covidenceImportService.importCovidencePackageFromConfig({config: firstConfig, datasourceId, importRoute, tx})
+          await covidenceImportService.syncCovidenceProjectScopeFromConfig({config: firstConfig, importRoute, projectId: project.id, tx})
+        })
+
+        const secondConfig = await createConfig(
+          'Title,Authors,Year,DOI\\nStudy A,"Doe, Jane",2024,10.1000/alpha\\nStudy B,"Roe, John",2023,10.1000/beta\\nStudy C,"Lane, Kim",2022,10.1000/gamma\\n',
+          'Title,Authors,Year,DOI\\n',
+          'Title,Authors,Year,DOI\\nStudy A,"Doe, Jane",2024,10.1000/alpha\\n',
+          'Title,Authors,Year,DOI,Reason for exclusion\\n',
+          'Title,Authors,Year,DOI\\nStudy C,"Lane, Kim",2022,10.1000/gamma\\n',
+        )
+
+        await database.transaction(async (tx) => {
+          await covidenceImportService.importCovidencePackageFromConfig({config: secondConfig, datasourceId, importRoute, tx})
+          await covidenceImportService.syncCovidenceProjectScopeFromConfig({config: secondConfig, importRoute, projectId: project.id, tx})
+        })
+
+        const projectArticleRows = await database.queryJson(\`
+          SELECT
+            a.article_id AS articleExternalId,
+            a.article_title AS articleTitle,
+            pa.project_id AS projectId
+          FROM app.project_article pa
+          INNER JOIN app.article a ON a.id = pa.article_id
+          WHERE pa.project_id = '${project.id}'
+          ORDER BY a.article_title ASC
+        \`)
+        const refreshStateRows = await database.queryJson(\`
+          SELECT
+            project_id AS projectId,
+            CAST(dirty_token AS INTEGER) AS dirtyToken,
+            last_request_reason AS reason
+          FROM app.project_mart_refresh_state
+          WHERE project_id = '${project.id}'
+        \`)
+        const refreshArticleStateRows = await database.queryJson(\`
+          SELECT
+            a.article_id AS articleExternalId,
+            CAST(article_state.first_dirty_token AS INTEGER) AS firstDirtyToken,
+            CAST(article_state.last_dirty_token AS INTEGER) AS lastDirtyToken,
+            article_state.project_id AS projectId
+          FROM app.project_mart_refresh_article_state article_state
+          INNER JOIN app.article a ON a.id = article_state.article_id
+          WHERE article_state.project_id = '${project.id}'
+          ORDER BY a.article_id ASC
+        \`)
+
+        console.log(JSON.stringify({projectArticleRows, projectId: project.id, refreshArticleStateRows, refreshStateRows}))
+        covidenceImportService.deleteCovidencePackageFiles(datasourceId)
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '39993',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '39994',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.toString() || result.stdout.toString() || 'Failed to track Covidence scope reimport dirty state',
+      )
+    }
+
+    const stdoutLines = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => {
+        return line.trim()
+      })
+      .filter((line) => {
+        return line.length > 0
+      })
+    const parsed = JSON.parse(stdoutLines.at(-1) ?? '{}') as {
+      projectArticleRows: Array<{articleExternalId: string; articleTitle: string; projectId: string}>
+      projectId: string
+      refreshArticleStateRows: Array<{
+        articleExternalId: string
+        firstDirtyToken: number
+        lastDirtyToken: number
+        projectId: string
+      }>
+      refreshStateRows: Array<{dirtyToken: number; projectId: string; reason: string | null}>
+    }
+
+    expect(parsed.projectArticleRows).toEqual([
+      {
+        articleExternalId: `${importRoute}:doi%3A10.1000%2Falpha`,
+        articleTitle: 'Study A',
+        projectId: parsed.projectId,
+      },
+      {
+        articleExternalId: `${importRoute}:doi%3A10.1000%2Fgamma`,
+        articleTitle: 'Study C',
+        projectId: parsed.projectId,
+      },
+    ])
+    expect(parsed.refreshStateRows).toEqual([
+      {dirtyToken: 2, projectId: parsed.projectId, reason: 'syncCovidenceProjectScopeFromConfig'},
+    ])
+    expect(parsed.refreshArticleStateRows).toEqual([
+      {
+        articleExternalId: `${importRoute}:doi%3A10.1000%2Falpha`,
+        firstDirtyToken: 1,
+        lastDirtyToken: 2,
+        projectId: parsed.projectId,
+      },
+      {
+        articleExternalId: `${importRoute}:doi%3A10.1000%2Fbeta`,
+        firstDirtyToken: 1,
+        lastDirtyToken: 2,
+        projectId: parsed.projectId,
+      },
+      {
+        articleExternalId: `${importRoute}:doi%3A10.1000%2Fgamma`,
+        firstDirtyToken: 2,
+        lastDirtyToken: 2,
+        projectId: parsed.projectId,
+      },
+    ])
+  } finally {
+    deleteCovidencePackageFiles(datasourceId)
+    ;[duckdbPath, `${duckdbPath}.wal`, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(
+      (filePath) => {
+        if (existsSync(filePath)) {
+          unlinkSync(filePath)
+        }
+
+        return filePath
+      },
+    )
+  }
+})
+
 test('seedCovidenceHumanJudgmentsFromConfig upserts answered and unanswered title/abstract judgments idempotently', async () => {
   const duckdbPath = `/tmp/f1-covidence-human-seed-${Date.now()}.duckdb`
   const datasourceId = `covidence-human-seed-${Date.now()}`

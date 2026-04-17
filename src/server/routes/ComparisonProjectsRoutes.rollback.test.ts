@@ -12,8 +12,16 @@ type MockDatabaseState = {
     summarySourceProjectId: string | null
   }
   failPromptInsert: boolean
+  lastPromptInsertStatement: string | null
   lastUpdateStatement: string | null
-  promptLinks: Array<{id: string; promptId: string; order: number}>
+  promptLinks: Array<{
+    criteriaDisposition?: string | null
+    criteriaSectionKey?: string | null
+    criteriaSectionLabel?: string | null
+    id: string
+    promptId: string
+    order: number
+  }>
   routeLinks: Array<{id: string; importRouteId: string}>
   rootRunStatements: string[]
   transactionCalls: number
@@ -73,13 +81,25 @@ const getComparisonProjectRow = (comparisonProject: MockDatabaseState['compariso
   }
 }
 
-const getPromptRows = (links: Array<{id: string; promptId: string; order: number}>) => {
+const getPromptRows = (
+  links: Array<{
+    criteriaDisposition?: string | null
+    criteriaSectionKey?: string | null
+    criteriaSectionLabel?: string | null
+    id: string
+    promptId: string
+    order: number
+  }>,
+) => {
   return links.map((link) => {
     const promptRow = promptRows[link.promptId as keyof typeof promptRows]
 
     return {
       archived: promptRow.archived,
       createdAt: promptRow.createdAt,
+      criteriaDisposition: link.criteriaDisposition ?? null,
+      criteriaSectionKey: link.criteriaSectionKey ?? null,
+      criteriaSectionLabel: link.criteriaSectionLabel ?? null,
       id: promptRow.id,
       order: link.order,
       originalText: promptRow.originalText,
@@ -115,12 +135,26 @@ const queryJson = async (
   statement: string,
   state: {
     comparisonProject: MockDatabaseState['comparisonProject']
-    promptLinks: Array<{id: string; promptId: string; order: number}>
+    promptLinks: MockDatabaseState['promptLinks']
     routeLinks: Array<{id: string; importRouteId: string}>
   },
 ) => {
   if (statement.includes('FROM app.comparison_project') && statement.includes('updated_at AS updatedAt')) {
     return [getComparisonProjectRow(state.comparisonProject)]
+  }
+
+  if (statement.includes('INSERT INTO app.comparison_project') && statement.includes('RETURNING')) {
+    return [
+      {
+        ...getComparisonProjectRow({
+          humanJudgmentMode: statement.includes("'summary'") ? 'summary' : 'prompt',
+          id: 'comparison-project-created',
+          modelIds: statement.includes('model-1') ? ['model-1'] : [],
+          summarySourceProjectId: statement.includes("'source-project-1'") ? 'source-project-1' : null,
+        }),
+        id: 'comparison-project-created',
+      },
+    ]
   }
 
   if (statement.includes('FROM app.project p') && statement.includes('WHERE p.archived = FALSE')) {
@@ -143,8 +177,31 @@ const queryJson = async (
     ]
   }
 
+  if (statement.includes('FROM app.project') && statement.includes("WHERE id = 'source-project-1'")) {
+    return [{humanJudgmentMode: 'summary', id: 'source-project-1'}]
+  }
+
   if (statement.includes('FROM app.comparison_project') && statement.includes('model_ids AS modelIds')) {
     return [{modelIds: state.comparisonProject.modelIds}]
+  }
+
+  if (statement.includes('FROM app.project_prompt') && statement.includes("project_id = 'source-project-1'")) {
+    return [
+      {
+        criteriaDisposition: 'include',
+        criteriaSectionKey: 'population',
+        criteriaSectionLabel: 'Population',
+        promptId: 'prompt-1',
+      },
+      {
+        criteriaDisposition: 'exclude',
+        criteriaSectionKey: 'outcome',
+        criteriaSectionLabel: 'Outcome',
+        promptId: 'prompt-2',
+      },
+    ].filter((promptRow) => {
+      return statement.includes(`'${promptRow.promptId}'`)
+    })
   }
 
   if (statement.includes('FROM app.project_prompt') && statement.includes("pp.project_id IN ('source-project-1')")) {
@@ -291,7 +348,15 @@ const registerModuleMocks = () => {
                     throw new Error('comparison project prompt insert failed')
                   }
 
-                  pendingPromptLinks.push({id: 'comparison-project-prompt-2', order: 0, promptId: 'prompt-2'})
+                  state.lastPromptInsertStatement = statement
+                  pendingPromptLinks.push({
+                    criteriaDisposition: statement.includes("'exclude'") ? 'exclude' : null,
+                    criteriaSectionKey: statement.includes("'outcome'") ? 'outcome' : null,
+                    criteriaSectionLabel: statement.includes("'Outcome'") ? 'Outcome' : null,
+                    id: 'comparison-project-prompt-2',
+                    order: 0,
+                    promptId: 'prompt-2',
+                  })
                   return
                 }
 
@@ -320,6 +385,7 @@ const createMockDatabaseState = (): MockDatabaseState => {
       summarySourceProjectId: null,
     },
     failPromptInsert: true,
+    lastPromptInsertStatement: null,
     lastUpdateStatement: null,
     promptLinks: [{id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'}],
     rootRunStatements: [],
@@ -382,7 +448,7 @@ test('comparison project update persists summary mode contract fields', async ()
   const response = await app.handle(
     new Request('http://localhost/api/comparison-projects/comparison-project-1', {
       body: JSON.stringify({
-        compareWithHumans: false,
+        compareWithHumans: true,
         description: 'Rollback test project',
         humanJudgmentMode: 'summary',
         modelIds: ['model-1'],
@@ -408,6 +474,113 @@ test('comparison project update persists summary mode contract fields', async ()
   expect(state.comparisonProject.summarySourceProjectId).toBe('source-project-1')
   expect(state.lastUpdateStatement).toContain("human_judgment_mode = 'summary'")
   expect(state.lastUpdateStatement).toContain("summary_source_project_id = 'source-project-1'")
+  expect(state.lastPromptInsertStatement).toContain("'exclude'")
+  expect(state.lastPromptInsertStatement).toContain("'outcome'")
+  expect(state.lastPromptInsertStatement).toContain("'Outcome'")
+  expect(state.promptLinks[0]?.criteriaDisposition).toBe('exclude')
+  expect(state.promptLinks[0]?.criteriaSectionKey).toBe('outcome')
+})
+
+test('comparison project create copies summary source prompt criteria metadata', async () => {
+  mockDatabaseStateRef.current = {...createMockDatabaseState(), failPromptInsert: false, promptLinks: []}
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects', {
+      body: JSON.stringify({
+        compareWithHumans: true,
+        description: 'Manual summary comparison',
+        humanJudgmentMode: 'summary',
+        modelIds: ['model-1'],
+        name: 'Manual summary comparison',
+        promptSelections: [{promptId: 'prompt-2', order: 0}],
+        summarySourceProjectId: 'source-project-1',
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+        useTitle: true,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {data: {humanJudgmentMode: string; summarySourceProjectId: string | null}}
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(body.data.humanJudgmentMode).toBe('summary')
+  expect(body.data.summarySourceProjectId).toBe('source-project-1')
+  expect(state.lastPromptInsertStatement).toContain("'exclude'")
+  expect(state.lastPromptInsertStatement).toContain("'outcome'")
+  expect(state.promptLinks[0]?.criteriaDisposition).toBe('exclude')
+  expect(state.promptLinks[0]?.criteriaSectionKey).toBe('outcome')
+})
+
+test('comparison project update rejects summary mode without human comparison', async () => {
+  mockDatabaseStateRef.current = {...createMockDatabaseState(), failPromptInsert: false}
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1', {
+      body: JSON.stringify({
+        compareWithHumans: false,
+        description: 'Rollback test project',
+        humanJudgmentMode: 'summary',
+        modelIds: ['model-1'],
+        name: 'Rollback test project',
+        promptSelections: [{promptId: 'prompt-2', order: 0}],
+        summarySourceProjectId: 'source-project-1',
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+        useTitle: true,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const bodyText = await response.text()
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(500)
+  expect(bodyText).toContain('Summary mode requires compareWithHumans to be true')
+  expect(state.comparisonProject.humanJudgmentMode).toBe('prompt')
+  expect(state.promptLinks).toEqual([{id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'}])
+})
+
+test('comparison project update rejects summary prompts outside source project', async () => {
+  mockDatabaseStateRef.current = {...createMockDatabaseState(), failPromptInsert: false}
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1', {
+      body: JSON.stringify({
+        compareWithHumans: true,
+        description: 'Rollback test project',
+        humanJudgmentMode: 'summary',
+        modelIds: ['model-1'],
+        name: 'Rollback test project',
+        promptSelections: [{promptId: 'missing-prompt', order: 0}],
+        summarySourceProjectId: 'source-project-1',
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+        useTitle: true,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const bodyText = await response.text()
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(500)
+  expect(bodyText).toContain('Summary mode selected prompts must exist on the summary source project')
+  expect(state.comparisonProject.humanJudgmentMode).toBe('prompt')
+  expect(state.promptLinks).toEqual([{id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'}])
 })
 
 test('comparison project sources expose summary capability metadata', async () => {

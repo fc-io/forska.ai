@@ -1703,6 +1703,113 @@ const getValidatedPromptSelections = async (db: AppQueryRunner, promptSelections
   return uniquePromptSelections
 }
 
+const getSummarySourceProjectId = (summarySourceProjectId?: string | null) => {
+  const trimmedSummarySourceProjectId = summarySourceProjectId?.trim() ?? ''
+
+  if (!trimmedSummarySourceProjectId) {
+    throw new Error('Summary mode requires a summary source project')
+  }
+
+  return trimmedSummarySourceProjectId
+}
+
+const validateSummaryModeSourceProject = async (db: AppQueryRunner, summarySourceProjectId: string) => {
+  const [summarySourceProject] = await db.queryJson<{id: string; humanJudgmentMode: HumanJudgmentMode | null}>(`
+    SELECT id, human_judgment_mode AS humanJudgmentMode
+    FROM ${projectTable}
+    WHERE id = ${getSqlLiteral(summarySourceProjectId)}
+      AND archived = FALSE
+    LIMIT 1
+  `)
+
+  if (!summarySourceProject || summarySourceProject.humanJudgmentMode !== 'summary') {
+    throw new Error('Summary source project must exist and be summary-capable')
+  }
+}
+
+const getValidatedSummaryPromptSelections = async (
+  db: AppQueryRunner,
+  summarySourceProjectId: string,
+  promptSelections: PromptSelection[],
+) => {
+  const uniquePromptSelections = getUniquePromptSelections(promptSelections)
+
+  if (uniquePromptSelections.length === 0) {
+    throw new Error('Summary mode requires at least one selected prompt')
+  }
+
+  const sourcePromptRows = await db.queryJson<{
+    promptId: string
+    criteriaDisposition: ProjectPromptCriteriaDisposition | null
+    criteriaSectionKey: string | null
+    criteriaSectionLabel: string | null
+  }>(`
+    SELECT
+      prompt_id AS promptId,
+      criteria_disposition AS criteriaDisposition,
+      criteria_section_key AS criteriaSectionKey,
+      criteria_section_label AS criteriaSectionLabel
+    FROM ${projectPromptTable}
+    WHERE project_id = ${getSqlLiteral(summarySourceProjectId)}
+      AND enabled = TRUE
+      AND prompt_id IN (${getInClause(
+        uniquePromptSelections.map((promptSelection) => {
+          return promptSelection.promptId
+        }),
+      )})
+  `)
+  const sourcePromptRowsByPromptId = sourcePromptRows.reduce<Map<string, (typeof sourcePromptRows)[number]>>(
+    (rowMap, sourcePromptRow) => {
+      rowMap.set(sourcePromptRow.promptId, sourcePromptRow)
+      return rowMap
+    },
+    new Map<string, (typeof sourcePromptRows)[number]>(),
+  )
+
+  if (sourcePromptRowsByPromptId.size !== uniquePromptSelections.length) {
+    throw new Error('Summary mode selected prompts must exist on the summary source project')
+  }
+
+  return uniquePromptSelections.map<PromptSelection>((promptSelection) => {
+    const sourcePromptRow = sourcePromptRowsByPromptId.get(promptSelection.promptId)
+
+    if (!sourcePromptRow) {
+      throw new Error('Summary mode selected prompts must exist on the summary source project')
+    }
+
+    return {
+      promptId: promptSelection.promptId,
+      order: promptSelection.order,
+      criteriaDisposition: sourcePromptRow.criteriaDisposition,
+      criteriaSectionKey: sourcePromptRow.criteriaSectionKey,
+      criteriaSectionLabel: sourcePromptRow.criteriaSectionLabel,
+    }
+  })
+}
+
+const getValidatedComparisonPromptSelections = async (
+  db: AppQueryRunner,
+  params: {
+    compareWithHumans: boolean
+    humanJudgmentMode: HumanJudgmentMode
+    promptSelections: PromptSelection[]
+    summarySourceProjectId: string | null
+  },
+) => {
+  if (params.humanJudgmentMode !== 'summary') {
+    return getValidatedPromptSelections(db, params.promptSelections)
+  }
+
+  if (!params.compareWithHumans) {
+    throw new Error('Summary mode requires compareWithHumans to be true')
+  }
+
+  const summarySourceProjectId = getSummarySourceProjectId(params.summarySourceProjectId)
+  await validateSummaryModeSourceProject(db, summarySourceProjectId)
+
+  return getValidatedSummaryPromptSelections(db, summarySourceProjectId, params.promptSelections)
+}
+
 const hasSameStringArrayValue = (left: string[] | null, right: string[] | null) => {
   return JSON.stringify(left ?? []) === JSON.stringify(right ?? [])
 }
@@ -1809,7 +1916,15 @@ const createComparisonProjectRecord = async (
   }
 
   const validatedModelIds = await getValidatedModelIds(tx, getUniqueStringValues(body.modelIds ?? []))
-  const uniquePromptSelections = getUniquePromptSelections(body.promptSelections ?? [])
+  const humanJudgmentMode = body.humanJudgmentMode ?? 'prompt'
+  const summarySourceProjectId =
+    humanJudgmentMode === 'summary' ? getSummarySourceProjectId(body.summarySourceProjectId) : null
+  const validatedPromptSelections = await getValidatedComparisonPromptSelections(tx, {
+    compareWithHumans: body.compareWithHumans ?? false,
+    humanJudgmentMode,
+    promptSelections: body.promptSelections ?? [],
+    summarySourceProjectId,
+  })
   const uniqueImportRoutes = getUniqueStringValues(body.importRoutes ?? [])
   const [newComparisonProject] = await tx.queryJson<{
     id: string
@@ -1850,8 +1965,8 @@ const createComparisonProjectRecord = async (
       ${getSqlLiteral(body.description?.trim() || null)},
       ${getSqlLiteral(validatedModelIds)},
       ${getBooleanLiteral(body.compareWithHumans ?? false)},
-      ${getSqlLiteral(body.humanJudgmentMode ?? 'prompt')},
-      ${getSqlLiteral(body.summarySourceProjectId ?? null)},
+      ${getSqlLiteral(humanJudgmentMode)},
+      ${getSqlLiteral(summarySourceProjectId)},
       ${getBooleanLiteral(useTitle)},
       ${getBooleanLiteral(useAbstract)},
       ${getBooleanLiteral(useFulltext)},
@@ -1882,7 +1997,7 @@ const createComparisonProjectRecord = async (
     throw new Error('Failed to create comparison project')
   }
 
-  await insertComparisonProjectPromptLinks(tx, newComparisonProject.id, uniquePromptSelections)
+  await insertComparisonProjectPromptLinks(tx, newComparisonProject.id, validatedPromptSelections)
   await insertComparisonProjectRouteLinks(tx, newComparisonProject.id, uniqueImportRoutes)
 
   return getComparisonProjectRecordValue(newComparisonProject)
@@ -1918,9 +2033,10 @@ export const comparisonProjectsRoutes = new Elysia()
         throw new Error('Source project not found')
       }
 
-      const humanJudgmentMode = body.humanJudgmentMode ?? sourceProject.humanJudgmentMode
+      const humanJudgmentMode =
+        body.humanJudgmentMode ?? (sourceProject.isSummaryCapable && body.compareWithHumans ? 'summary' : 'prompt')
       const summarySourceProjectId =
-        humanJudgmentMode === 'summary' ? (body.summarySourceProjectId ?? sourceProject.summarySourceProjectId) : null
+        humanJudgmentMode === 'summary' ? (body.summarySourceProjectId ?? sourceProject.id) : null
       const createdComparisonProject = await appDatabaseService.transaction(async (tx) => {
         return createComparisonProjectRecord(tx, {
           name: body.name,
@@ -2083,12 +2199,17 @@ export const comparisonProjectsRoutes = new Elysia()
         LIMIT 1
       `)
       const existingModelIds = getDuckdbStringArrayValue(existingModelIdsRow?.modelIds)
-      const validatedPromptSelections = await getValidatedPromptSelections(appDatabaseService, body.promptSelections)
       const humanJudgmentMode = body.humanJudgmentMode ?? existingComparisonProject.humanJudgmentMode
       const summarySourceProjectId =
         humanJudgmentMode === 'summary'
-          ? (body.summarySourceProjectId ?? existingComparisonProject.summarySourceProjectId)
+          ? getSummarySourceProjectId(body.summarySourceProjectId ?? existingComparisonProject.summarySourceProjectId)
           : null
+      const validatedPromptSelections = await getValidatedComparisonPromptSelections(appDatabaseService, {
+        compareWithHumans: body.compareWithHumans,
+        humanJudgmentMode,
+        promptSelections: body.promptSelections,
+        summarySourceProjectId,
+      })
       const baseSetParts = [
         `name = ${getSqlLiteral(body.name)}`,
         `description = ${getSqlLiteral(body.description?.trim() || null)}`,
