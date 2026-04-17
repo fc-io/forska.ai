@@ -110,10 +110,10 @@
 
 ### First Tasks
 
-- [ ] Add a minimal `desktop/` or equivalent ElectroBun app scaffold plus Bun scripts for desktop dev and desktop build.
-- [ ] Load the existing frontend build inside the ElectroBun window without changing current browser dev commands.
-- [ ] Add a desktop runtime config path so the frontend can read a shell-provided API origin while browser mode keeps its current behavior.
-- [ ] Launch the Bun backend as a separate desktop sidecar in `SERVER_ROLE=dev-single` and wait for a ready signal before showing the main window.
+- [x] Add a minimal `desktop/` or equivalent ElectroBun app scaffold plus Bun scripts for desktop dev and desktop build.
+- [x] Load the existing frontend build inside the ElectroBun window without changing current browser dev commands.
+- [x] Add a desktop runtime config path so the frontend can read a shell-provided API origin while browser mode keeps its current behavior.
+- [x] Launch the Bun backend as a separate desktop sidecar in `SERVER_ROLE=dev-single` and wait for a ready signal before showing the main window.
 - [ ] Add a minimal desktop-mode path helper for DB, cache, imports, temp files, and logs so packaged runs stop depending on repo-root writes.
 - [ ] Verify migrations, DuckDB boot, SQLite job state, and `@duckdb/node-api` all work in desktop mode on a local smoke run.
 - [ ] Produce one unsigned macOS artifact and confirm launch, quit, relaunch, and basic in-app API connectivity.
@@ -128,6 +128,19 @@
 - Local writable state lands in app-owned directories rather than the repo root or install directory.
 - `bun run dev:server` plus `bun run dev:app` still work in a normal browser.
 - There is a clear list of remaining blockers for signed release packaging.
+
+### Current Spike Status
+
+- Done in local ElectroBun dev: the desktop window opens, the Bun sidecar starts in `SERVER_ROLE=dev-single`, the frontend reaches the local API, and the normal browser dev commands still boot.
+- Still open before calling the spike complete: unsigned macOS and Windows artifact smoke tests, packaged native dependency verification, and a final blocker list plus continue-or-fallback call.
+
+### Current Blockers
+
+- Unsigned macOS and Windows artifact creation and relaunch smoke tests are still pending.
+- Packaged `@duckdb/node-api` verification is still pending on macOS and Windows.
+- Windows strategy for the `sqlite3` fallback flow in `judgmentJobSqliteService.ts` is still unresolved.
+- Packaged Codex CLI and Bun binary path resolution still need a platform-aware audit.
+- Signing, notarization, installer generation, and update strategy are not started.
 
 ### Spike Quality Gates
 
@@ -151,49 +164,49 @@
 
 ### 1. Architecture Decision
 
-- [ ] Lock the first-shell choice to ElectroBun.
+- [x] Lock the first-shell choice to ElectroBun.
 - [ ] Time-box an ElectroBun feasibility spike for macOS and Windows packaging.
-- [ ] Confirm v1 runtime shape: one Bun backend process in `dev-single` mode.
-- [ ] Decide whether the ElectroBun shell launches a separate backend process or embeds startup in-process. Default: separate backend process.
-- [ ] Confirm that `src/appServer.ts` is removed from the packaged path or kept only for web builds.
-- [ ] Confirm that current browser/server commands remain first-class supported workflows.
+- [x] Confirm v1 runtime shape: one Bun backend process in `dev-single` mode.
+- [x] Decide whether the ElectroBun shell launches a separate backend process or embeds startup in-process. Default: separate backend process.
+- [x] Confirm that `src/appServer.ts` is removed from the packaged path or kept only for web builds.
+- [x] Confirm that current browser/server commands remain first-class supported workflows.
 - [ ] Define supported targets for v1: macOS Intel/Apple Silicon, Windows x64, and Linux later.
 - [ ] Define what "works offline" means versus what still needs network access for providers and remote runtimes.
-- [ ] Define explicit fallback triggers for switching the shell layer to Electron.
+- [x] Define explicit fallback triggers for switching the shell layer to Electron.
 
 ### 2. Desktop Shell Bootstrap
 
-- [ ] Add an ElectroBun desktop entrypoint and folder for shell-specific code.
-- [ ] Start the Bun backend on app launch.
-- [ ] Wait for backend readiness before showing the main UI.
-- [ ] Surface a startup error screen when migration or backend boot fails.
-- [ ] Stop the backend cleanly when the app quits.
-- [ ] Add single-instance protection so two app launches do not race for the same local DB.
+- [x] Add an ElectroBun desktop entrypoint and folder for shell-specific code.
+- [x] Start the Bun backend on app launch.
+- [x] Wait for backend readiness before showing the main UI.
+- [x] Surface a startup error screen when migration or backend boot fails.
+- [x] Stop the backend cleanly when the app quits.
+- [x] Add single-instance protection so two app launches do not race for the same local DB.
 
 ### 3. Frontend Runtime Wiring
 
-- [ ] Replace localhost-only API resolution with a shell-provided API origin for packaged builds.
-- [ ] Keep existing browser/dev behavior working for `bun run dev:app` and `bun run dev:server`.
+- [x] Replace localhost-only API resolution with a shell-provided API origin for packaged builds.
+- [x] Keep existing browser/dev behavior working for `bun run dev:app` and `bun run dev:server`.
 - [ ] Keep browser built-mode behavior working when the app is opened outside the desktop shell.
 - [ ] Audit code that assumes `/api` proxying through the app server.
-- [ ] Add a packaged-build path for TanStack router deep links and refreshes.
-- [ ] Add a backend-unavailable state in the UI instead of generic fetch failures.
+- [x] Add a packaged-build path for TanStack router deep links and refreshes.
+- [x] Add a backend-unavailable state in the UI instead of generic fetch failures.
 
 ### 4. Data, Cache, Import, And Log Paths
 
 - [ ] Introduce one shared runtime-path helper for app data, cache, temp, logs, exports, and imports.
 - [ ] Stop writing runtime files under repo-root paths like `cache/` and `assets/` in packaged builds.
-- [ ] Move provider runtime records from `cache/providerRuntimeRecords` to an app cache directory.
-- [ ] Move Covidence import storage from `assets/covidence_imports` to an app data or imports directory.
+- [x] Move provider runtime records from `cache/providerRuntimeRecords` to an app cache directory.
+- [x] Move Covidence import storage from `assets/covidence_imports` to an app data or imports directory.
 - [ ] Keep DuckDB, SQLite, WAL, lock files, and temp directories inside app-owned writable locations.
-- [ ] Add log-file locations for backend stdout, stderr, crash details, and migration failures.
+- [x] Add log-file locations for backend stdout, stderr, crash details, and migration failures.
 - [ ] Add UI affordances for "Open data folder" and "Open logs folder".
 
 ### 5. Cross-Platform Hardening
 
 - [ ] Audit all `process.cwd()` runtime writes and replace them with explicit runtime paths.
 - [ ] Audit path parsing and separators for Windows correctness.
-- [ ] Fix `src/server/utils/duckdbBinary.ts` PATH parsing so it does not assume `:` on Windows.
+- [x] Fix `src/server/utils/duckdbBinary.ts` PATH parsing so it does not assume `:` on Windows.
 - [ ] Audit hard-coded Bun global paths and macOS-specific binary lookup assumptions for Codex and DuckDB.
 - [ ] Verify `src/server/utils/getDuckdbPath.ts` remains the single default DB-path source for packaged builds.
 - [ ] Audit spawned subprocess commands for Windows-safe quoting and executable lookup.
@@ -217,11 +230,11 @@
 
 ### 8. Build And Packaging Pipeline
 
-- [ ] Add ElectroBun desktop build commands for local unsigned artifacts.
-- [ ] Build the Solid frontend once for desktop packaging.
+- [x] Add ElectroBun desktop build commands for local unsigned artifacts.
+- [x] Build the Solid frontend once for desktop packaging.
 - [ ] Package backend entrypoints, runtime assets, migrations, native modules, and ElectroBun shell assets.
 - [ ] Decide whether to ship backend source files or a compiled backend artifact.
-- [ ] Keep existing web build and local browser startup commands unchanged or provide compatibility aliases.
+- [x] Keep existing web build and local browser startup commands unchanged or provide compatibility aliases.
 - [ ] Create local macOS ElectroBun artifacts for smoke testing.
 - [ ] Create local Windows ElectroBun artifacts for smoke testing.
 - [ ] Make artifact naming consistent by version, platform, and architecture.
@@ -230,7 +243,7 @@
 ### 9. UX And Product Polish
 
 - [ ] Add a first-run experience that explains local storage, provider setup, and optional remote runtimes.
-- [ ] Add a startup splash or progress UI while the backend warms up.
+- [x] Add a startup splash or progress UI while the backend warms up.
 - [ ] Add a clear recovery path when the local DB is locked, corrupt, or mid-migration.
 - [ ] Add app-level diagnostics: version, data path, API port, DB path, log path, and backend health.
 - [ ] Decide whether the app should minimize to tray/menu bar or fully quit.
@@ -271,9 +284,9 @@
 
 - [ ] Clean install on macOS with no Bun/Node preinstalled.
 - [ ] Clean install on Windows with no Bun/Node preinstalled.
-- [ ] Existing browser dev flow still works with `bun run dev:server` plus `bun run dev:app`.
+- [x] Existing browser dev flow still works with `bun run dev:server` plus `bun run dev:app`.
 - [ ] Existing browser built flow still works after desktop packaging changes.
-- [ ] First launch creates data directories and runs migrations.
+- [x] First launch creates data directories and runs migrations.
 - [ ] App restart reuses the same DB and settings safely.
 - [ ] Import flow works and stores files in app-owned paths.
 - [ ] Provider setup works for at least one local/manual provider and one remote provider.
@@ -308,7 +321,16 @@
 
 ## Commands Run For This Plan
 
-- None. This plan was based on repo inspection only.
+- `bun run build`
+- `bun run desktop:dev`
+- `bun run dev:app`
+- `bun run dev:server`
+- `bun test src/app/utils/getApiRequestUrl.test.ts`
+- `bun test src/app/utils/client-env.test.ts`
+- `bun test src/desktop/getDesktopRuntimeConfig.test.ts`
+- `bun test src/desktop/desktopSingleInstance.test.ts`
+- `bun test src/server/utils/duckdbBinary.test.ts`
+- `bunx eslint src/desktop/index.ts src/desktop/getDesktopRuntimeConfig.ts src/desktop/getDesktopRuntimeConfig.test.ts src/app/index.tsx src/services/apiClient.ts src/app/utils/postFormDataToApi.ts 'src/app/routes/+projects/+$id/+export.tsx' src/app/utils/client-env.ts src/app/utils/client-env.test.ts`
 
 ## Done Criteria
 
