@@ -2327,7 +2327,7 @@ test('mart refresh computes summary-mode human completeness from summary judgmen
   }
 })
 
-test('mart refresh keeps serving marts scoped to the originating judgment project', () => {
+test('mart refresh reuses shared judgments across projects with matching prompt and config', () => {
   const duckdbPath = `/tmp/f1-mart-refresh-project-scoped-judgments-${Date.now()}.duckdb`
   const runScript = globalThis.Bun.spawnSync(
     [
@@ -2511,7 +2511,7 @@ test('mart refresh keeps serving marts scoped to the originating judgment projec
       throw new Error(
         runScript.stderr.toString()
           || runScript.stdout.toString()
-          || 'Mart project-scoped judgment regression test failed',
+          || 'Mart shared judgment reuse regression test failed',
       )
     }
 
@@ -2529,10 +2529,10 @@ test('mart refresh keeps serving marts scoped to the originating judgment projec
     }
 
     expect(result.targetActiveGeneration).toBe(2)
-    expect(result.targetPromptAnswerCount).toBe(0)
-    expect(result.targetFilterCount).toBe(0)
-    expect(result.targetReviewedServingCount).toBe(0)
-    expect(result.targetDetailCount).toBe(0)
+    expect(result.targetPromptAnswerCount).toBe(1)
+    expect(result.targetFilterCount).toBeGreaterThan(0)
+    expect(result.targetReviewedServingCount).toBeGreaterThan(0)
+    expect(result.targetDetailCount).toBeGreaterThan(0)
     expect(result.sourceActiveGeneration).toBe(1)
     expect(result.sourcePromptAnswerCount).toBe(1)
     expect(result.sourceFilterCount).toBe(1)

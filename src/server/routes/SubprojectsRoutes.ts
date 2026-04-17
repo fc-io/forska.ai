@@ -3,6 +3,7 @@ import {Elysia, t} from 'elysia'
 import {assertSelectableProviderModelId} from '../providers/providerModelRepository.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
+import {getOrCreateImmutablePromptTx} from '../services/immutablePromptService.ts'
 import {getProjectMartRefreshStateService} from '../services/projectMartRefreshStateService.ts'
 import {hasMatchingJudgmentAnswer} from '../utils/judgmentAnswers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
@@ -53,37 +54,7 @@ const chunk = <T>(arr: T[], size: number): T[][] => {
   return out
 }
 
-const createDetachedPromptTx = async (
-  tx: AppTx,
-  params: {
-    archived: boolean
-    originalText: string
-    promptHeading: string | null
-    transformedText: string | null
-    type: string | null
-  },
-) => {
-  const [prompt] = await tx.queryJson<{id: string}>(`
-    INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived)
-    VALUES (
-      '${appQueryHelpers.escapeSqlString(crypto.randomUUID())}',
-      ${appQueryHelpers.getSqlLiteral(params.originalText)},
-      ${appQueryHelpers.getSqlLiteral(params.transformedText)},
-      ${appQueryHelpers.getSqlLiteral(params.promptHeading)},
-      ${appQueryHelpers.getSqlLiteral(params.type)},
-      NULL,
-      ${params.archived ? 'TRUE' : 'FALSE'}
-    )
-    RETURNING id
-  `)
-
-  return prompt?.id ?? null
-}
-
-const linkProjectPromptTx = async (
-  tx: AppTx,
-  params: {order: number; originProjectId: string; projectId: string; promptId: string},
-) => {
+const linkProjectPromptTx = async (tx: AppTx, params: {order: number; projectId: string; promptId: string}) => {
   await tx.run(`
     INSERT INTO app.project_prompt (
       id,
@@ -101,7 +72,7 @@ const linkProjectPromptTx = async (
       ${params.order},
       FALSE,
       TRUE,
-      '${appQueryHelpers.escapeSqlString(params.originProjectId)}'
+      NULL
     )
     ON CONFLICT DO NOTHING
   `)
@@ -520,7 +491,7 @@ export const subprojectsRoutes = new Elysia()
         }
 
         for (const [orderIndex, prompt] of orderedPromptDetails.entries()) {
-          const targetPromptId = await createDetachedPromptTx(tx, {
+          const targetPromptId = await getOrCreateImmutablePromptTx(tx, {
             archived: prompt.archived,
             originalText: prompt.originalText,
             promptHeading: prompt.promptHeading,
@@ -532,12 +503,7 @@ export const subprojectsRoutes = new Elysia()
             throw new Error('Failed to create detached subproject prompt')
           }
 
-          await linkProjectPromptTx(tx, {
-            order: orderIndex,
-            originProjectId: createdProject.id,
-            projectId: createdProject.id,
-            promptId: targetPromptId,
-          })
+          await linkProjectPromptTx(tx, {order: orderIndex, projectId: createdProject.id, promptId: targetPromptId})
         }
 
         for (const idsChunk of chunk(articleIds, batchSize)) {

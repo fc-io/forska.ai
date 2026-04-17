@@ -13,6 +13,7 @@ import {
   getTimestampLiteral,
 } from '../services/appQueryHelpers.ts'
 import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
+import {getOrCreateImmutablePromptTx} from '../services/immutablePromptService.ts'
 import {getProjectMartLargeRebuildStateService} from '../services/projectMartLargeRebuildStateService.ts'
 import {getProjectMartRefreshStateService} from '../services/projectMartRefreshStateService.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
@@ -302,33 +303,6 @@ const runWithDetachedProjectReferenceRecovery = async <T>(
     await restoreDetachedProjectReferences(detachPlan)
     throw error
   }
-}
-
-const createDetachedPromptTx = async (
-  tx: AppTx,
-  params: {
-    originalText: string
-    transformedText: string | null
-    promptHeading: string | null
-    type: string | null
-    archived: boolean
-  },
-) => {
-  const [insertedPrompt] = await tx.queryJson<{id: string}>(`
-    INSERT INTO app.prompt (id, original_text, transformed_text, prompt_heading, type, content_hash, archived)
-    VALUES (
-      '${escapeSqlString(crypto.randomUUID())}',
-      ${getSqlLiteral(params.originalText)},
-      ${getSqlLiteral(params.transformedText)},
-      ${getSqlLiteral(params.promptHeading)},
-      ${getSqlLiteral(params.type)},
-      NULL,
-      ${params.archived ? 'TRUE' : 'FALSE'}
-    )
-    RETURNING id
-  `)
-
-  return insertedPrompt?.id ?? null
 }
 
 const upsertProjectPromptTx = async (
@@ -827,7 +801,7 @@ export const projectsRoutes = new Elysia()
             const heading = typeof prompt === 'object' ? prompt.promptHeading || null : null
             const typeVal = typeof prompt === 'object' ? prompt.type || null : null
             const orderVal = typeof prompt === 'object' && prompt.order !== undefined ? prompt.order : index
-            const promptId = await createDetachedPromptTx(tx, {
+            const promptId = await getOrCreateImmutablePromptTx(tx, {
               originalText: content,
               transformedText: null,
               promptHeading: heading,
@@ -845,7 +819,7 @@ export const projectsRoutes = new Elysia()
               order: orderVal,
               archived: false,
               enabled: true,
-              originProjectId: createdProject.id,
+              originProjectId: null,
             })
           }
         }
@@ -1175,7 +1149,7 @@ export const projectsRoutes = new Elysia()
 
                 const targetPromptId =
                   textChanged || metaChanged
-                    ? await createDetachedPromptTx(tx, {
+                    ? await getOrCreateImmutablePromptTx(tx, {
                         originalText: prompt.originalText,
                         transformedText: null,
                         promptHeading: prompt.promptHeading || null,
@@ -1199,15 +1173,6 @@ export const projectsRoutes = new Elysia()
                 const currentAssociation = existing.find((entry) => {
                   return entry.promptId === prompt.originalId
                 })
-                const [originProjectRow] =
-                  currentAssociation?.originProjectId !== undefined
-                    ? [null]
-                    : await tx.queryJson<{originProjectId: string | null}>(`
-                    SELECT origin_project_id AS originProjectId
-                    FROM app.project_prompt
-                    WHERE prompt_id = '${escapeSqlString(prompt.originalId)}'
-                    LIMIT 1
-                  `)
 
                 await upsertProjectPromptTx(tx, {
                   projectId: params.id,
@@ -1215,13 +1180,10 @@ export const projectsRoutes = new Elysia()
                   order,
                   archived: archived ?? currentAssociation?.archived ?? false,
                   enabled: enabled ?? currentAssociation?.enabled ?? true,
-                  originProjectId:
-                    textChanged || metaChanged
-                      ? params.id
-                      : (currentAssociation?.originProjectId ?? originProjectRow?.originProjectId ?? params.id),
+                  originProjectId: null,
                 })
               } else {
-                const targetPromptId = await createDetachedPromptTx(tx, {
+                const targetPromptId = await getOrCreateImmutablePromptTx(tx, {
                   originalText: prompt.originalText,
                   transformedText: null,
                   promptHeading: prompt.promptHeading || null,
@@ -1239,7 +1201,7 @@ export const projectsRoutes = new Elysia()
                   order,
                   archived: archived ?? false,
                   enabled: enabled ?? true,
-                  originProjectId: params.id,
+                  originProjectId: null,
                 })
               }
             }
@@ -1557,6 +1519,7 @@ export const projectsRoutes = new Elysia()
 
       const [sourcePrompts, sourceRouteLinks, sourceArticles, sourceSummaryJudgments] = await Promise.all([
         tx.queryJson<{
+          promptId: string
           order: number | null
           archived: boolean
           enabled: boolean
@@ -1570,6 +1533,7 @@ export const projectsRoutes = new Elysia()
           criteriaSectionLabel: string | null
         }>(`
           SELECT
+            pp.prompt_id AS promptId,
             pp.prompt_order AS "order",
             pp.archived AS archived,
             pp.enabled AS enabled,
@@ -1607,18 +1571,6 @@ export const projectsRoutes = new Elysia()
 
       if (sourcePrompts.length > 0) {
         for (const prompt of sourcePrompts) {
-          const detachedPromptId = await createDetachedPromptTx(tx, {
-            originalText: prompt.originalText,
-            transformedText: prompt.transformedText,
-            promptHeading: prompt.promptHeading,
-            type: prompt.type,
-            archived: prompt.promptArchived,
-          })
-
-          if (!detachedPromptId) {
-            throw new Error('Failed to create detached cloned prompt')
-          }
-
           await tx.run(`
             INSERT INTO app.project_prompt (
               id,
@@ -1635,11 +1587,11 @@ export const projectsRoutes = new Elysia()
             VALUES (
               '${escapeSqlString(crypto.randomUUID())}',
               '${escapeSqlString(clonedProject.id)}',
-              '${escapeSqlString(detachedPromptId)}',
+              '${escapeSqlString(prompt.promptId)}',
               ${prompt.order ?? 0},
               ${prompt.archived ? 'TRUE' : 'FALSE'},
               ${prompt.enabled ? 'TRUE' : 'FALSE'},
-              '${escapeSqlString(clonedProject.id)}',
+              NULL,
               ${getSqlLiteral(prompt.criteriaDisposition)},
               ${getSqlLiteral(prompt.criteriaSectionKey)},
               ${getSqlLiteral(prompt.criteriaSectionLabel)}

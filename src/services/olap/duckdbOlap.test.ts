@@ -20,8 +20,8 @@ const getDuckdbSqlString = (value: string) => {
   return `'${value.replaceAll("'", "''")}'`
 }
 
-const getJudgmentProjectClause = (projectId = 'project-1') => {
-  return `COALESCE(j.project_id, j.snapshot_project_id) = ${getDuckdbSqlString(projectId)}`
+const getJudgmentProjectClause = (_projectId = 'project-1') => {
+  return 'TRUE'
 }
 
 const getPromptFilter = (

@@ -92,8 +92,8 @@ type UnassessedCandidateRow = {
 
 const rawFallbackQueueLogger = createRateLimitedLogger({windowMs: 30_000})
 
-const getDuckdbJudgmentProjectWhereClause = (params: {judgmentAlias: string; projectId: string}) => {
-  return `COALESCE(${params.judgmentAlias}.project_id, ${params.judgmentAlias}.snapshot_project_id) = ${getDuckdbSqlString(params.projectId)}`
+const getDuckdbJudgmentProjectWhereClause = (_params: {judgmentAlias: string; projectId: string}) => {
+  return 'TRUE'
 }
 
 const getPromptFilters = (promptsFilter?: Record<string, string[]>) => {

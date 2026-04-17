@@ -3,6 +3,8 @@ import {rmSync} from 'node:fs'
 import {afterAll, beforeAll, expect, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
+import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
+
 const tempDbPath = `/tmp/f1-projects-routes-${process.pid}-${Date.now()}.duckdb`
 
 process.env.SERVER_ROLE = 'dev-single'
@@ -1313,7 +1315,7 @@ test('edit route can change the model when summary judgments and large rebuild s
   await flushMartRefreshes()
 })
 
-test('clone route detaches prompt ids and hides duplicate importable prompts', async () => {
+test('clone route reuses prompt ids and hides duplicate importable prompts', async () => {
   if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')
   }
@@ -1384,11 +1386,11 @@ test('clone route detaches prompt ids and hides duplicate importable prompts', a
 
   expect(sourcePromptRows.length).toBe(1)
   expect(clonedPromptRows.length).toBe(1)
-  expect(clonedPromptRows[0]?.promptId).not.toBe(sourcePromptRows[0]?.promptId)
+  expect(clonedPromptRows[0]?.promptId).toBe(sourcePromptRows[0]?.promptId)
   expect(clonedPromptRows[0]?.originalText).toBe(sourcePromptRows[0]?.originalText)
   expect(clonedPromptRows[0]?.promptHeading).toBe(sourcePromptRows[0]?.promptHeading)
-  expect(clonedPromptRows[0]?.contentHash).toBe(null)
-  expect(clonedPromptRows[0]?.originProjectId).toBe(clonedProjectId)
+  expect(clonedPromptRows[0]?.contentHash).toBe(sourcePromptRows[0]?.contentHash)
+  expect(clonedPromptRows[0]?.originProjectId).toBe(null)
 
   const detailsResponse = await app.handle(new Request(`http://localhost/api/projects/${clonedProjectId}`))
   const detailsBody = (await detailsResponse.json()) as {
@@ -1403,7 +1405,7 @@ test('clone route detaches prompt ids and hides duplicate importable prompts', a
 
   expect(detailsResponse.status).toBe(200)
   expect(matchingPrompts.length).toBe(1)
-  expect(matchingPrompts[0]?.originProjectId).toBe(clonedProjectId)
+  expect(matchingPrompts[0]?.originProjectId).toBe(null)
   expect(unrelatedPrompts.length).toBe(1)
   expect(unrelatedPrompts[0]?.originProjectId).toBe(null)
 
@@ -1508,18 +1510,262 @@ test('clone route preserves summary mode criteria and human summary judgments', 
       criteriaDisposition: 'include',
       criteriaSectionKey: 'population',
       criteriaSectionLabel: 'Population',
-      originProjectId: clonedProjectId,
+      originProjectId: null,
       promptHeading: 'Include heading',
     },
     {
       criteriaDisposition: 'exclude',
       criteriaSectionKey: 'outcome',
       criteriaSectionLabel: 'Outcome',
-      originProjectId: clonedProjectId,
+      originProjectId: null,
       promptHeading: 'Exclude heading',
     },
   ])
   expect(clonedSummaryRows).toEqual([{answer: 'yes', articleId, origin: 'covidence_import'}])
+
+  await flushMartRefreshes()
+})
+
+test('editing a cloned project prompt keeps source prompt links and judgments isolated', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'clone-edit-prompt-isolation-connection'
+  const modelId = 'clone-edit-prompt-isolation-model'
+  const sourceProjectId = 'clone-edit-prompt-isolation-source'
+  const articleId = 'clone-edit-prompt-isolation-article'
+  const originalPromptId = 'clone-edit-prompt-isolation-prompt-original'
+  const originalPromptText = 'Original screening prompt'
+  const editedPromptText = 'Edited clone screening prompt'
+  const promptHeading = 'Eligibility'
+  const type = 'string'
+
+  await insertProjectFixture({connectionId, modelId, projectId: sourceProjectId})
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(originalPromptText, null, promptHeading, type),
+    order: 0,
+    originProjectId: null,
+    originalText: originalPromptText,
+    projectId: sourceProjectId,
+    projectPromptId: 'clone-edit-prompt-isolation-project-prompt-original',
+    promptHeading,
+    promptId: originalPromptId,
+    type,
+  })
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('${articleId}', 'Clone prompt edit isolation article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('clone-edit-prompt-isolation-source-article', '${sourceProjectId}', '${articleId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      snapshot_project_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      is_answered,
+      answered_original,
+      answered_original_as_array,
+      confidence_original,
+      created_at
+    )
+    VALUES (
+      'clone-edit-prompt-isolation-source-judgment',
+      '${articleId}',
+      '${originalPromptId}',
+      '${modelId}',
+      '${sourceProjectId}',
+      '${sourceProjectId}',
+      TRUE,
+      TRUE,
+      FALSE,
+      FALSE,
+      TRUE,
+      'yes',
+      ['yes'],
+      91,
+      TIMESTAMPTZ '2025-01-01 00:00:00+00'
+    )
+  `)
+
+  const cloneResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${sourceProjectId}/clone`, {method: 'POST'}),
+  )
+  const cloneBody = (await cloneResponse.json()) as {data: {id: string}}
+  const clonedProjectId = cloneBody.data.id
+
+  expect(cloneResponse.status).toBe(200)
+
+  const editResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${clonedProjectId}/edit`, {
+      body: JSON.stringify({
+        name: 'Clone with isolated prompt edit',
+        description: null,
+        prompts: [
+          {originalId: originalPromptId, originalText: editedPromptText, promptHeading, type, order: 0, enabled: true},
+        ],
+        dateFrom: null,
+        dateTo: null,
+        modelId,
+        importRoutes: [],
+        useTitle: true,
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+
+  expect(editResponse.status).toBe(200)
+
+  const promptRows = await queryDatabase<{
+    contentHash: string | null
+    originalText: string
+    projectId: string
+    promptId: string
+  }>(`
+    SELECT
+      pp.project_id AS projectId,
+      pp.prompt_id AS promptId,
+      p.original_text AS originalText,
+      p.content_hash AS contentHash
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON p.id = pp.prompt_id
+    WHERE pp.project_id IN ('${sourceProjectId}', '${clonedProjectId}')
+    ORDER BY pp.project_id ASC
+  `)
+  const sourcePromptRow = promptRows.find((row) => {
+    return row.projectId === sourceProjectId
+  })
+  const clonedPromptRow = promptRows.find((row) => {
+    return row.projectId === clonedProjectId
+  })
+
+  expect(sourcePromptRow?.promptId).toBe(originalPromptId)
+  expect(sourcePromptRow?.originalText).toBe(originalPromptText)
+  expect(sourcePromptRow?.contentHash).toBe(computePromptContentHash(originalPromptText, null, promptHeading, type))
+  expect(clonedPromptRow?.promptId).not.toBe(originalPromptId)
+  expect(clonedPromptRow?.originalText).toBe(editedPromptText)
+  expect(clonedPromptRow?.contentHash).toBe(computePromptContentHash(editedPromptText, null, promptHeading, type))
+
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      snapshot_project_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      is_answered,
+      answered_original,
+      answered_original_as_array,
+      confidence_original,
+      created_at
+    )
+    VALUES (
+      'clone-edit-prompt-isolation-clone-judgment',
+      '${articleId}',
+      '${clonedPromptRow?.promptId ?? ''}',
+      '${modelId}',
+      '${clonedProjectId}',
+      '${clonedProjectId}',
+      TRUE,
+      TRUE,
+      FALSE,
+      FALSE,
+      TRUE,
+      'no',
+      ['no'],
+      88,
+      TIMESTAMPTZ '2025-01-02 00:00:00+00'
+    )
+  `)
+
+  const sourceDetailsResponse = await app.handle(
+    new Request('http://localhost/api/projectsreview', {
+      body: JSON.stringify({articleId, projectId: sourceProjectId}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const cloneDetailsResponse = await app.handle(
+    new Request('http://localhost/api/projectsreview', {
+      body: JSON.stringify({articleId, projectId: clonedProjectId}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const sourceDetailsBody = (await sourceDetailsResponse.json()) as {
+    judgments: Array<{answeredOriginal: string | null; id: string; prompt: {originalText: string}; promptId: string}>
+    prompts: Array<{id: string; originalText: string}>
+  }
+  const cloneDetailsBody = (await cloneDetailsResponse.json()) as {
+    judgments: Array<{answeredOriginal: string | null; id: string; prompt: {originalText: string}; promptId: string}>
+    prompts: Array<{id: string; originalText: string}>
+  }
+
+  expect(sourceDetailsResponse.status).toBe(200)
+  expect(cloneDetailsResponse.status).toBe(200)
+  expect(
+    sourceDetailsBody.prompts.map((prompt) => {
+      return {id: prompt.id, originalText: prompt.originalText}
+    }),
+  ).toEqual([{id: originalPromptId, originalText: originalPromptText}])
+  expect(
+    sourceDetailsBody.judgments.map((judgment) => {
+      return {
+        answeredOriginal: judgment.answeredOriginal,
+        id: judgment.id,
+        prompt: {originalText: judgment.prompt.originalText},
+        promptId: judgment.promptId,
+      }
+    }),
+  ).toEqual([
+    {
+      answeredOriginal: 'yes',
+      id: 'clone-edit-prompt-isolation-source-judgment',
+      prompt: {originalText: originalPromptText},
+      promptId: originalPromptId,
+    },
+  ])
+  expect(
+    cloneDetailsBody.prompts.map((prompt) => {
+      return {id: prompt.id, originalText: prompt.originalText}
+    }),
+  ).toEqual([{id: clonedPromptRow?.promptId, originalText: editedPromptText}])
+  expect(
+    cloneDetailsBody.judgments.map((judgment) => {
+      return {
+        answeredOriginal: judgment.answeredOriginal,
+        id: judgment.id,
+        prompt: {originalText: judgment.prompt.originalText},
+        promptId: judgment.promptId,
+      }
+    }),
+  ).toEqual([
+    {
+      answeredOriginal: 'no',
+      id: 'clone-edit-prompt-isolation-clone-judgment',
+      prompt: {originalText: editedPromptText},
+      promptId: clonedPromptRow?.promptId,
+    },
+  ])
 
   await flushMartRefreshes()
 })
@@ -1589,7 +1835,7 @@ test('editing a cloned project model leaves the source project model unchanged',
   await flushMartRefreshes()
 })
 
-test('create route detaches owned prompts from existing global prompt ids', async () => {
+test('create route stores hash-backed immutable prompts', async () => {
   if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')
   }
@@ -1635,13 +1881,13 @@ test('create route detaches owned prompts from existing global prompt ids', asyn
   `)
 
   expect(promptRow?.promptId).not.toBe('create-detach-existing-prompt')
-  expect(promptRow?.contentHash).toBe(null)
-  expect(promptRow?.originProjectId).toBe(projectId)
+  expect(promptRow?.contentHash).toBeTruthy()
+  expect(promptRow?.originProjectId).toBe(null)
 
   await flushMartRefreshes()
 })
 
-test('edit route detaches changed owned prompts from matching global prompt ids', async () => {
+test('edit route reuses matching immutable prompts when content matches', async () => {
   if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')
   }
@@ -1661,7 +1907,13 @@ test('edit route detaches changed owned prompts from matching global prompt ids'
   })
   await runDatabase(`
     INSERT INTO app.prompt (id, original_text, prompt_heading, type, content_hash)
-    VALUES ('edit-detach-existing-prompt', 'Shared prompt text', 'shared', 'string', 'edit-detach-shared-hash')
+    VALUES (
+      'edit-detach-existing-prompt',
+      'Shared prompt text',
+      'shared',
+      'string',
+      '${computePromptContentHash('Shared prompt text', null, 'shared', 'string')}'
+    )
   `)
 
   const response = await app.handle(
@@ -1707,10 +1959,9 @@ test('edit route detaches changed owned prompts from matching global prompt ids'
     LIMIT 1
   `)
 
-  expect(promptRow?.promptId).not.toBe('edit-detach-owned-prompt')
-  expect(promptRow?.promptId).not.toBe('edit-detach-existing-prompt')
-  expect(promptRow?.contentHash).toBe(null)
-  expect(promptRow?.originProjectId).toBe(projectId)
+  expect(promptRow?.promptId).toBe('edit-detach-existing-prompt')
+  expect(promptRow?.contentHash).toBe(computePromptContentHash('Shared prompt text', null, 'shared', 'string'))
+  expect(promptRow?.originProjectId).toBe(null)
 
   await flushMartRefreshes()
 })

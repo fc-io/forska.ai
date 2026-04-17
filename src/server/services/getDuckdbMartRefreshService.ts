@@ -529,8 +529,8 @@ const getProjectRefreshArticleIdsSql = (articleIds: string[]) => {
   return getQuotedStringList(articleIds).join(', ')
 }
 
-const getJudgmentFactProjectJoinSql = (judgmentAlias: string, projectExpression: string) => {
-  return `COALESCE(${judgmentAlias}.project_id, ${judgmentAlias}.snapshot_project_id) = ${projectExpression}`
+const getJudgmentFactProjectJoinSql = (_judgmentAlias: string, _projectExpression: string) => {
+  return 'TRUE'
 }
 
 const getProjectScopeResetSql = (projectId: string) => {

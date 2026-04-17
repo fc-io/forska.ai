@@ -3,6 +3,8 @@ import {rmSync} from 'node:fs'
 import {afterAll, beforeAll, expect, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
+import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
+
 const tempDbPath = `/tmp/f1-subprojects-routes-${process.pid}-${Date.now()}.duckdb`
 
 process.env.SERVER_ROLE = 'dev-single'
@@ -70,7 +72,7 @@ const insertProjectPromptFixture = async ({
       NULL,
       'ai',
       'string',
-      'subproject-source-prompt-hash',
+      '${computePromptContentHash(originalText, null, 'ai', 'string')}',
       FALSE
     )
   `)
@@ -140,7 +142,7 @@ afterAll(async () => {
   rmSync(tempDbPath, {force: true})
 })
 
-test('subproject route detaches selected prompt ids from source projects', async () => {
+test('subproject route reuses selected prompt ids from source projects', async () => {
   if (!app || !queryDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')
   }
@@ -226,10 +228,10 @@ test('subproject route detaches selected prompt ids from source projects', async
   `)
 
   expect(sourcePrompt?.promptId).toBe(sourcePromptId)
-  expect(subprojectPrompt?.promptId).not.toBe(sourcePromptId)
+  expect(subprojectPrompt?.promptId).toBe(sourcePromptId)
   expect(subprojectPrompt?.originalText).toBe(sourcePrompt?.originalText)
-  expect(subprojectPrompt?.contentHash).toBe(null)
-  expect(subprojectPrompt?.originProjectId).toBe(subprojectId)
+  expect(subprojectPrompt?.contentHash).toBe(sourcePrompt?.contentHash)
+  expect(subprojectPrompt?.originProjectId).toBe(null)
   expect(refreshState).toEqual({dirtyToken: 1, projectId: subprojectId})
   expect(refreshArticleState).toEqual({
     articleId: sourceArticleId,

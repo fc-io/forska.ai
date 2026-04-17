@@ -1,0 +1,179 @@
+{
+  "name": "Shared Prompt Plan",
+  "description": "Keep project prompts shared by content in normal project flows, avoid prompt copy semantics, and make judgment reuse and visibility consistent across queueing, marts, and review details.",
+  "branchName": "ralph/shared-prompt-reuse",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add clone prompt-edit isolation regressions",
+      "description": "As a maintainer, I want regression coverage for clone prompt edits so that changing a cloned project's prompt cannot mutate or redirect the source project's prompt or judgment behavior.",
+      "acceptanceCriteria": [
+        "Add regression coverage that clones a project, edits the cloned project's prompt content, reruns clone judgments, and verifies the source project still points at its original prompt row.",
+        "The regression proves the edited clone repoints to a different immutable prompt row while the source project keeps its original prompt id, prompt content, and prompt-linked behavior.",
+        "Run the new targeted regression suite before behavior changes and keep the baseline result as pre-change evidence when a newly added regression exposes an existing bug.",
+        "bun test src/server/routes/ProjectsRoutes.test.ts passes",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts passes",
+        "bun test src/server/services/getDuckdbMartRefreshService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-002",
+      "title": "Add cloned-project config rerun regression matrix",
+      "description": "As a maintainer, I want clone rerun regressions for every judgment-affecting project setting so that changing the clone's config cannot accidentally reuse or overwrite source-project judgments.",
+      "acceptanceCriteria": [
+        "Add regression coverage for cloned-project reruns after changing `model_id`, `use_title`, `use_abstract`, `use_fulltext`, and `use_fulltext_no_images`.",
+        "Each changed-setting scenario proves the clone does not reuse source judgments and the source project's stored prompt links and judgment visibility remain unchanged.",
+        "Add a positive unchanged-clone regression proving rerunning judgments still reuses shared judgments only when prompt id, model id, and content flags all match exactly.",
+        "bun test src/server/routes/ProjectsRoutes.test.ts passes",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts passes",
+        "bun test src/server/services/getDuckdbMartRefreshService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Canonicalize immutable prompt lookup by content hash",
+      "description": "As a maintainer, I want immutable prompt lookup to be keyed by prompt content rather than archived state so that shared prompts keep one canonical row per hash in normal project flows.",
+      "acceptanceCriteria": [
+        "Update immutable prompt lookup so `app.prompt.archived` does not create parallel prompt identities for the same content hash.",
+        "Define the canonical behavior for relinking a hash-matching prompt row whose global `app.prompt.archived` flag is already `TRUE` and keep one-row-per-hash semantics in normal project flows.",
+        "Project create, edit, and clone flows continue to work safely with historical mixed prompt rows, including legacy rows with `NULL` content hashes.",
+        "bun test src/server/routes/ProjectsRoutes.test.ts passes",
+        "bun test src/server/routes/PromptsRoutes.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts passes",
+        "bun test src/server/services/getDuckdbMartRefreshService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Audit remaining origin project semantics",
+      "description": "As a maintainer, I want the remaining `origin_project_id` paths narrowed to true legacy needs so that clone and edit flows no longer depend on project-owned prompt assumptions.",
+      "acceptanceCriteria": [
+        "Audit model-detach and archived-project cleanup paths against shared prompt links instead of project-owned prompt copies.",
+        "Keep normal create, edit, clone, and import flows writing `NULL` for `origin_project_id`.",
+        "Remove or quarantine any remaining active ownership semantics that are not required by detach recovery or archived-project cleanup.",
+        "bun test src/server/routes/ProjectsRoutes.test.ts passes",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts passes",
+        "bun test src/server/services/getDuckdbMartRefreshService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Create shared project-visible judgment rule",
+      "description": "As a maintainer, I want one reusable project-visible judgment rule so that fallback reads and mart rebuilds use the same scope, prompt, model, and content-flag eligibility logic.",
+      "acceptanceCriteria": [
+        "Add a shared server-side rule or helper that determines whether a target project may see or reuse a judgment based on project scope, enabled prompt links, model id, and content flags.",
+        "The shared rule keeps project or import-route membership out of the intrinsic judgment natural key while preventing out-of-scope visibility or skipped work.",
+        "The shared rule is reusable from both raw fallback readers and mart rebuild flows instead of duplicating diverging SQL conditions.",
+        "bun test src/server/routes/ProjectsRoutes.test.ts passes",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts passes",
+        "bun test src/server/services/getDuckdbMartRefreshService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Apply shared visibility rule to review-details fallback",
+      "description": "As a user, I want stale or running review details to show the same reusable judgments as fresh mart-backed views so that fallback reads do not hide valid shared judgments.",
+      "acceptanceCriteria": [
+        "When review-detail mart data is stale or running, the raw `app.judgment` fallback returns judgments visible to the target project under the shared rule instead of using same-project-only filtering.",
+        "Keep any cross-project diagnostic or `allJudgments` surface separate from the main project-visible judgments list.",
+        "Add or update review-details tests for reused visible judgments and out-of-scope exclusions.",
+        "bun test src/server/routes/ProjectsRoutes.test.ts passes",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts passes",
+        "bun test src/server/services/getDuckdbMartRefreshService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-005"
+      ]
+    },
+    {
+      "id": "US-007",
+      "title": "Lock queue reuse and scope safeguards",
+      "description": "As a maintainer, I want queue reuse logic to stay strict about judgment-affecting inputs so that reruns only skip work when the clone truly matches an existing judgment.",
+      "acceptanceCriteria": [
+        "Queue reuse remains keyed by `article_id`, `prompt_id`, `model_id`, `use_title`, `use_abstract`, `use_fulltext`, and `use_fulltext_no_images` with explicit regression coverage for changed clone settings.",
+        "Queue filtering only skips work for articles actually in the target project's scope and does not leak out-of-scope reused judgments.",
+        "Add or update queue tests so unchanged clone settings reuse safely and changed clone settings do not reuse.",
+        "bun test src/server/routes/ProjectsRoutes.test.ts passes",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts passes",
+        "bun test src/server/services/getDuckdbMartRefreshService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-008",
+      "title": "Align large rebuild shared-judgment behavior",
+      "description": "As a maintainer, I want large rebuild mart logic to match incremental refresh shared-judgment behavior so that rebuilt review surfaces do not disagree with fresh incremental marts.",
+      "acceptanceCriteria": [
+        "Large rebuild shared-judgment eligibility matches incremental mart refresh for matching prompt ids, model ids, and content flags on in-scope articles.",
+        "Add or update mart tests proving large rebuild and incremental refresh agree on unchanged clone reuse and changed clone non-reuse.",
+        "If any intentional difference remains, document it explicitly and keep review-surface behavior consistent with that decision.",
+        "bun test src/server/routes/ProjectsRoutes.test.ts passes",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts passes",
+        "bun test src/server/services/getDuckdbMartRefreshService.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-005",
+        "US-007"
+      ]
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-04-17T13:32:17.333Z"
+  }
+}

@@ -516,8 +516,8 @@ const rebuildComparisonProjectGroupTx = async (tx: AppTx, projectIdsSql: string)
         use_abstract,
         use_fulltext,
         use_fulltext_no_images,
-        date_from,
-        date_to,
+        NULL AS date_from,
+        NULL AS date_to,
         archived,
         created_at,
         updated_at
