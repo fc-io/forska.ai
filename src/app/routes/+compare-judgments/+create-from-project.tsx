@@ -20,6 +20,67 @@ const formatContentSettings = (sourceProject: ComparisonProjectSource) => {
   return parts.length > 0 ? parts.join(' + ') : 'none'
 }
 
+const toggleStringSelection = (currentValues: string[], nextValue: string) => {
+  return currentValues.includes(nextValue)
+    ? currentValues.filter((value) => {
+        return value !== nextValue
+      })
+    : [...currentValues, nextValue]
+}
+
+const hasSummaryPromptCriteria = (prompt: ComparisonProjectSource['prompts'][number]) => {
+  return Boolean(prompt.criteriaDisposition && prompt.criteriaSectionKey)
+}
+
+const getSummaryPrompts = (sourceProject: ComparisonProjectSource | undefined) => {
+  return [...(sourceProject?.prompts ?? [])]
+    .filter(hasSummaryPromptCriteria)
+    .sort((left, right) => {
+      return left.order - right.order
+    })
+}
+
+const getSummaryCriteriaLabel = (prompt: ComparisonProjectSource['prompts'][number]) => {
+  const labelParts = [prompt.criteriaDisposition, prompt.criteriaSectionLabel ?? prompt.criteriaSectionKey].filter(Boolean)
+
+  return labelParts.join(' · ')
+}
+
+const getSummaryPromptContractValue = (sourceProject: ComparisonProjectSource | undefined) => {
+  return JSON.stringify(
+    getSummaryPrompts(sourceProject).map((prompt) => {
+      return {
+        promptId: prompt.id,
+        order: prompt.order,
+        criteriaDisposition: prompt.criteriaDisposition,
+        criteriaSectionKey: prompt.criteriaSectionKey,
+        criteriaSectionLabel: prompt.criteriaSectionLabel,
+      }
+    }),
+  )
+}
+
+const getAdditionalSummaryProjectReason = (
+  primarySourceProject: ComparisonProjectSource | undefined,
+  additionalSourceProject: ComparisonProjectSource,
+) => {
+  if (!primarySourceProject) {
+    return 'Select a primary project first.'
+  }
+
+  if (!additionalSourceProject.isSummaryCapable) {
+    return 'Summary mode is unavailable for this project.'
+  }
+
+  if (getSummaryPrompts(additionalSourceProject).length === 0) {
+    return 'No prompts with summary criteria metadata.'
+  }
+
+  return getSummaryPromptContractValue(primarySourceProject) === getSummaryPromptContractValue(additionalSourceProject)
+    ? null
+    : 'Summary prompts do not match the primary project.'
+}
+
 const CreateCompareJudgmentsFromProjectPage = () => {
   const navigate = useNavigate()
   const sourcesQuery = useQuery(() => {
@@ -35,6 +96,7 @@ const CreateCompareJudgmentsFromProjectPage = () => {
   const [compareWithHumans, setCompareWithHumans] = createSignal(false)
   const [summaryModeEnabled, setSummaryModeEnabled] = createSignal(false)
   const [selectedSourceProjectId, setSelectedSourceProjectId] = createSignal('')
+  const [selectedAdditionalSourceProjectIds, setSelectedAdditionalSourceProjectIds] = createSignal<string[]>([])
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
 
@@ -43,9 +105,29 @@ const CreateCompareJudgmentsFromProjectPage = () => {
       return sourceProject.id === selectedSourceProjectId()
     })
   })
+  const selectedAdditionalSourceProjects = createMemo(() => {
+    return selectedAdditionalSourceProjectIds().reduce<ComparisonProjectSource[]>((selectedProjects, sourceProjectId) => {
+      const sourceProject = (sourcesQuery.data ?? []).find((candidateSourceProject) => {
+        return candidateSourceProject.id === sourceProjectId
+      })
+
+      return sourceProject ? [...selectedProjects, sourceProject] : selectedProjects
+    }, [])
+  })
+  const additionalSourceProjects = createMemo(() => {
+    return (sourcesQuery.data ?? []).filter((sourceProject) => {
+      return sourceProject.id !== selectedSourceProjectId()
+    })
+  })
+  const selectedSourceProjectSummaryPrompts = createMemo(() => {
+    return getSummaryPrompts(selectedSourceProject())
+  })
+  const selectedProjectCount = createMemo(() => {
+    return selectedSourceProjectId() ? 1 + selectedAdditionalSourceProjectIds().length : 0
+  })
   const summaryModeUnavailableReason = createMemo(() => {
     if (sourcesQuery.isLoading) {
-      return 'Select a source project after projects finish loading.'
+      return 'Select a primary project after projects finish loading.'
     }
 
     if (sourcesQuery.isError) {
@@ -53,13 +135,42 @@ const CreateCompareJudgmentsFromProjectPage = () => {
     }
 
     if (!selectedSourceProjectId()) {
-      return 'Select a source project to check summary support.'
+      return 'Select a primary project to enable summary mode.'
     }
 
-    return selectedSourceProject()?.isSummaryCapable ? null : 'Selected project is not summary-capable.'
+    if (!selectedSourceProject()?.isSummaryCapable) {
+      return 'Selected primary project is not summary-capable.'
+    }
+
+    return selectedSourceProjectSummaryPrompts().length === 0
+      ? 'Selected primary project has no prompts with summary criteria metadata.'
+      : null
+  })
+  const additionalProjectValidationError = createMemo(() => {
+    if (!summaryModeEnabled()) {
+      return null
+    }
+
+    const invalidSourceProject = selectedAdditionalSourceProjects().find((sourceProject) => {
+      return Boolean(getAdditionalSummaryProjectReason(selectedSourceProject(), sourceProject))
+    })
+
+    if (!invalidSourceProject) {
+      return null
+    }
+
+    const reason = getAdditionalSummaryProjectReason(selectedSourceProject(), invalidSourceProject)
+
+    return reason ? `${invalidSourceProject.name}: ${reason}` : null
   })
   const canSubmit = createMemo(() => {
-    return Boolean(comparisonProjectName().trim() && selectedSourceProjectId() && !isLoading())
+    return Boolean(
+      comparisonProjectName().trim()
+        && selectedSourceProjectId()
+        && !summaryModeUnavailableReason()
+        && !additionalProjectValidationError()
+        && !isLoading(),
+    )
   })
 
   const handleSubmit = async (event: Event) => {
@@ -67,11 +178,14 @@ const CreateCompareJudgmentsFromProjectPage = () => {
     setError(null)
 
     if (!selectedSourceProjectId().trim()) {
-      setError('Select one project to import from')
+      setError('Select a primary project to compare from')
       return
     }
 
-    const summaryValidationError = summaryModeEnabled() ? summaryModeUnavailableReason() : null
+    const summaryValidationError = summaryModeEnabled()
+      ? summaryModeUnavailableReason() ?? additionalProjectValidationError()
+      : null
+
     if (summaryValidationError) {
       setError(summaryValidationError)
       return
@@ -84,6 +198,9 @@ const CreateCompareJudgmentsFromProjectPage = () => {
       humanJudgmentMode: summaryModeEnabled() ? 'summary' : 'prompt',
       summarySourceProjectId: summaryModeEnabled() ? selectedSourceProjectId() : null,
       sourceProjectId: selectedSourceProjectId(),
+      sourceProjectIds: summaryModeEnabled()
+        ? [selectedSourceProjectId(), ...selectedAdditionalSourceProjectIds()]
+        : [selectedSourceProjectId()],
     }
 
     setIsLoading(true)
@@ -188,12 +305,16 @@ const CreateCompareJudgmentsFromProjectPage = () => {
                   if (event.currentTarget.checked) {
                     setCompareWithHumans(true)
                   }
+
+                  if (!event.currentTarget.checked) {
+                    setSelectedAdditionalSourceProjectIds([])
+                  }
                 }}
               />
               <div class="flex-1">
                 <p class="text-sm font-medium text-gray-900">Summary mode</p>
                 <p class="text-xs text-muted-foreground mt-1">
-                  Use the selected source project's overall human decisions for comparison.
+                  Use the primary project's overall human decisions and summary prompts for comparison.
                 </p>
                 <Show when={summaryModeUnavailableReason()}>
                   <p class="text-xs text-muted-foreground mt-1">{summaryModeUnavailableReason()}</p>
@@ -203,7 +324,15 @@ const CreateCompareJudgmentsFromProjectPage = () => {
           </div>
 
           <div>
-            <p class="block text-sm font-medium mb-2">Import from Project</p>
+            <div class="flex items-center justify-between mb-2 gap-3">
+              <p class="block text-sm font-medium">Primary Project</p>
+              <Show when={selectedProjectCount() > 0}>
+                <span class="text-xs text-muted-foreground">{selectedProjectCount()} selected for comparison</span>
+              </Show>
+            </div>
+            <p class="text-xs text-muted-foreground mb-3">
+              The primary project controls content settings and, in summary mode, supplies the human summary judgments.
+            </p>
             <Show when={sourcesQuery.isLoading}>
               <p class="text-sm text-muted-foreground">Loading projects...</p>
             </Show>
@@ -228,8 +357,25 @@ const CreateCompareJudgmentsFromProjectPage = () => {
                           checked={selectedSourceProjectId() === sourceProject.id}
                           onChange={() => {
                             setSelectedSourceProjectId(sourceProject.id)
+                            setSelectedAdditionalSourceProjectIds((currentValues) => {
+                              const nextValues = currentValues.filter((value) => {
+                                return value !== sourceProject.id
+                              })
 
-                            if (!sourceProject.isSummaryCapable) {
+                              return sourceProject.isSummaryCapable && getSummaryPrompts(sourceProject).length > 0
+                                ? nextValues.filter((value) => {
+                                    const nextProject = (sourcesQuery.data ?? []).find((candidateSourceProject) => {
+                                      return candidateSourceProject.id === value
+                                    })
+
+                                    return nextProject
+                                      ? !getAdditionalSummaryProjectReason(sourceProject, nextProject)
+                                      : false
+                                  })
+                                : []
+                            })
+
+                            if (!sourceProject.isSummaryCapable || getSummaryPrompts(sourceProject).length === 0) {
                               setSummaryModeEnabled(false)
                             }
                           }}
@@ -241,9 +387,7 @@ const CreateCompareJudgmentsFromProjectPage = () => {
                               {sourceProject.modelName}
                             </span>
                           </div>
-                          <p class="text-xs text-muted-foreground mt-1">
-                            Content: {formatContentSettings(sourceProject)}
-                          </p>
+                          <p class="text-xs text-muted-foreground mt-1">Content: {formatContentSettings(sourceProject)}</p>
                           <p class="text-xs text-muted-foreground mt-1">
                             Prompts: {sourceProject.prompts.length} · Import routes: {sourceProject.importRoutes.length}
                           </p>
@@ -255,7 +399,7 @@ const CreateCompareJudgmentsFromProjectPage = () => {
                             }}
                           >
                             {sourceProject.isSummaryCapable
-                              ? 'Summary mode available'
+                              ? `Summary mode available · ${getSummaryPrompts(sourceProject).length} summary prompts`
                               : 'Summary mode unavailable for this project'}
                           </p>
                           <Show when={sourceProject.description}>
@@ -269,6 +413,110 @@ const CreateCompareJudgmentsFromProjectPage = () => {
               </div>
             </Show>
           </div>
+
+          <Show when={summaryModeEnabled() && selectedSourceProject()}>
+            <details class="border border-input rounded-md p-4 bg-muted/10" open>
+              <summary class="cursor-pointer list-none flex items-center justify-between gap-3">
+                <div>
+                  <p class="text-sm font-medium text-gray-900">Additional Projects to Compare With</p>
+                  <p class="text-xs text-muted-foreground mt-1">
+                    The primary project stays the summary source. Additional projects add compatible articles and models.
+                  </p>
+                </div>
+                <span class="text-xs text-muted-foreground">{selectedAdditionalSourceProjectIds().length} selected</span>
+              </summary>
+
+              <div class="mt-4 space-y-2">
+                <Show when={additionalSourceProjects().length === 0}>
+                  <p class="text-sm text-muted-foreground">No additional projects are available.</p>
+                </Show>
+                <For each={additionalSourceProjects()}>
+                  {(sourceProject) => {
+                    const disabledReason = createMemo(() => {
+                      return getAdditionalSummaryProjectReason(selectedSourceProject(), sourceProject)
+                    })
+
+                    return (
+                      <label
+                        class="flex items-start gap-3 border border-input rounded-md p-3"
+                        classList={{'cursor-pointer hover:bg-muted/50': !disabledReason(), 'opacity-60': Boolean(disabledReason())}}
+                      >
+                        <input
+                          type="checkbox"
+                          class="mt-1"
+                          checked={selectedAdditionalSourceProjectIds().includes(sourceProject.id)}
+                          disabled={Boolean(disabledReason())}
+                          onChange={() => {
+                            setSelectedAdditionalSourceProjectIds((currentValues) => {
+                              return toggleStringSelection(currentValues, sourceProject.id)
+                            })
+                          }}
+                        />
+                        <div class="flex-1">
+                          <div class="flex items-center gap-2 flex-wrap">
+                            <p class="text-sm font-medium text-gray-900">{sourceProject.name}</p>
+                            <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700">
+                              {sourceProject.modelName}
+                            </span>
+                          </div>
+                          <p class="text-xs text-muted-foreground mt-1">Content: {formatContentSettings(sourceProject)}</p>
+                          <p class="text-xs text-muted-foreground mt-1">
+                            Summary prompts: {getSummaryPrompts(sourceProject).length} · Import routes: {sourceProject.importRoutes.length}
+                          </p>
+                          <Show when={disabledReason()}>
+                            <p class="text-xs text-red-600 mt-1">{disabledReason()}</p>
+                          </Show>
+                        </div>
+                      </label>
+                    )
+                  }}
+                </For>
+              </div>
+            </details>
+          </Show>
+
+          <Show when={summaryModeEnabled()}>
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <label class="block text-sm font-medium">Summary Prompts Used</label>
+                <span class="text-xs text-muted-foreground">{selectedSourceProjectSummaryPrompts().length} inherited</span>
+              </div>
+              <p class="text-sm text-muted-foreground mb-3">
+                These prompts come from the primary project and must match on any additional projects you include.
+              </p>
+              <Show when={selectedSourceProjectSummaryPrompts().length === 0}>
+                <p class="text-sm text-muted-foreground">Select a compatible primary project to preview summary prompts.</p>
+              </Show>
+              <Show when={selectedSourceProjectSummaryPrompts().length > 0}>
+                <div class="space-y-2">
+                  <For each={selectedSourceProjectSummaryPrompts()}>
+                    {(prompt) => {
+                      return (
+                        <div class="border border-input rounded-md p-3 bg-background">
+                          <div class="flex items-center gap-2 flex-wrap">
+                            <span class="text-sm font-medium text-gray-900">
+                              {prompt.promptHeading?.trim() || `Prompt ${prompt.order + 1}`}
+                            </span>
+                            <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">
+                              Used for overall summary
+                            </span>
+                            <Show when={getSummaryCriteriaLabel(prompt)}>
+                              <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700">
+                                {getSummaryCriteriaLabel(prompt)}
+                              </span>
+                            </Show>
+                          </div>
+                        </div>
+                      )
+                    }}
+                  </For>
+                </div>
+              </Show>
+              <Show when={additionalProjectValidationError()}>
+                <p class="mt-2 text-sm text-red-600">{additionalProjectValidationError()}</p>
+              </Show>
+            </div>
+          </Show>
 
           <div class="flex gap-3 pt-4">
             <Button type="submit" disabled={!canSubmit()}>

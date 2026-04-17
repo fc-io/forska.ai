@@ -15,6 +15,8 @@ process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 let app: {handle: (request: Request) => Promise<Response>} | null = null
 let closeDatabase: (() => Promise<void>) | null = null
 let flushMartRefreshes: (() => Promise<void>) | null = null
+let queueJudgmentArticleRefresh: ((articleId: string, reason: string) => Promise<void>) | null = null
+let queueProjectRefresh: ((projectId: string, reason: string) => Promise<void>) | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 
@@ -152,6 +154,144 @@ const insertProjectPromptFixture = async ({
   `)
 }
 
+type CloneRerunProjectConfig = {
+  modelId: string
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
+
+type CloneRerunScenario = {key: string; nextConfig: CloneRerunProjectConfig}
+
+type ProjectReviewJudgmentSummary = {answeredOriginal: string | null; id: string; promptId: string}
+
+const baseCloneRerunConfig = (modelId: string): CloneRerunProjectConfig => {
+  return {modelId, useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true}
+}
+
+const insertCloneRerunJudgmentFixture = async ({
+  answer,
+  articleId,
+  config,
+  createdAt,
+  judgmentId,
+  projectId,
+  promptId,
+}: {
+  answer: 'no' | 'yes'
+  articleId: string
+  config: CloneRerunProjectConfig
+  createdAt: string
+  judgmentId: string
+  projectId: string
+  promptId: string
+}) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      snapshot_project_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      is_answered,
+      answered_original,
+      answered_original_as_array,
+      confidence_original,
+      created_at
+    )
+    VALUES (
+      '${judgmentId}',
+      '${articleId}',
+      '${promptId}',
+      '${config.modelId}',
+      '${projectId}',
+      '${projectId}',
+      ${config.useTitle ? 'TRUE' : 'FALSE'},
+      ${config.useAbstract ? 'TRUE' : 'FALSE'},
+      ${config.useFulltext ? 'TRUE' : 'FALSE'},
+      ${config.useFulltextNoImages ? 'TRUE' : 'FALSE'},
+      TRUE,
+      '${answer}',
+      ['${answer}'],
+      90,
+      TIMESTAMPTZ '${createdAt}'
+    )
+  `)
+}
+
+const getProjectReviewDetails = async (params: {articleId: string; projectId: string}) => {
+  if (!app) {
+    throw new Error('Test app not initialized')
+  }
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projectsreview', {
+      body: JSON.stringify(params),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {
+    allJudgments: ProjectReviewJudgmentSummary[]
+    judgments: ProjectReviewJudgmentSummary[]
+    prompts: Array<{id: string; originalText: string}>
+  }
+
+  expect(response.status).toBe(200)
+
+  return body
+}
+
+const getJudgmentSummaries = (judgments: ProjectReviewJudgmentSummary[]) => {
+  return judgments.map((judgment) => {
+    return {answeredOriginal: judgment.answeredOriginal, id: judgment.id, promptId: judgment.promptId}
+  })
+}
+
+const assertSourceCloneRerunState = async ({
+  articleId,
+  promptId,
+  sourceJudgmentId,
+  sourceProjectId,
+}: {
+  articleId: string
+  promptId: string
+  sourceJudgmentId: string
+  sourceProjectId: string
+}) => {
+  if (!queryDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const sourcePromptRows = await queryDatabase<{promptId: string}>(`
+    SELECT prompt_id AS promptId
+    FROM app.project_prompt
+    WHERE project_id = '${sourceProjectId}'
+    ORDER BY prompt_order ASC
+  `)
+  const sourceDetails = await getProjectReviewDetails({articleId, projectId: sourceProjectId})
+
+  expect(sourcePromptRows).toEqual([{promptId}])
+  expect(
+    sourceDetails.prompts.map((prompt) => {
+      return {id: prompt.id, originalText: prompt.originalText}
+    }),
+  ).toEqual([{id: promptId, originalText: 'Clone rerun prompt'}])
+  expect(getJudgmentSummaries(sourceDetails.judgments)).toEqual([
+    {answeredOriginal: 'yes', id: sourceJudgmentId, promptId},
+  ])
+}
+
 const rebuildMartRefreshQueueWithoutGeneration = async () => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
@@ -285,6 +425,12 @@ beforeAll(async () => {
   }
   flushMartRefreshes = () => {
     return getDuckdbMartRefreshService().flush()
+  }
+  queueJudgmentArticleRefresh = (articleId: string, reason: string) => {
+    return getDuckdbMartRefreshService().queueJudgmentArticleRefresh(articleId, reason)
+  }
+  queueProjectRefresh = (projectId: string, reason: string) => {
+    return getDuckdbMartRefreshService().queueProjectRefresh(projectId, reason)
   }
   queryDatabase = (statement: string) => {
     return database.queryJson(statement)
@@ -1768,6 +1914,256 @@ test('editing a cloned project prompt keeps source prompt links and judgments is
   ])
 
   await flushMartRefreshes()
+})
+
+test('cloned project config reruns isolate judgments for every judgment-affecting setting', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const sourceConfig = baseCloneRerunConfig('clone-config-rerun-model')
+  const scenarios: CloneRerunScenario[] = [
+    {key: 'model-id', nextConfig: {...sourceConfig, modelId: 'clone-config-rerun-model-next'}},
+    {key: 'use-title', nextConfig: {...sourceConfig, useTitle: false}},
+    {key: 'use-abstract', nextConfig: {...sourceConfig, useAbstract: false}},
+    {key: 'use-fulltext', nextConfig: {...sourceConfig, useFulltext: true}},
+    {key: 'use-fulltext-no-images', nextConfig: {...sourceConfig, useFulltextNoImages: true}},
+  ]
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode)
+    VALUES ('clone-config-rerun-connection', 'sglang', 'SGLang', TRUE, 'none')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES
+      ('${sourceConfig.modelId}', 'clone-config-rerun-connection', 'Qwen/Qwen3.5-122B-A10B', 'Qwen/Qwen3.5-122B-A10B', 'Qwen 122B', 'manual', TRUE),
+      ('clone-config-rerun-model-next', 'clone-config-rerun-connection', 'Qwen/Qwen3.5-32B', 'Qwen/Qwen3.5-32B', 'Qwen 32B', 'manual', TRUE)
+  `)
+
+  await scenarios.reduce(async (previous, scenario) => {
+    await previous
+
+    const sourceProjectId = `clone-config-rerun-source-${scenario.key}`
+    const articleId = `clone-config-rerun-article-${scenario.key}`
+    const promptId = `clone-config-rerun-prompt-${scenario.key}`
+    const sourceJudgmentId = `clone-config-rerun-source-judgment-${scenario.key}`
+    const cloneJudgmentId = `clone-config-rerun-clone-judgment-${scenario.key}`
+
+    await runDatabase(`
+      INSERT INTO app.project (
+        id,
+        name,
+        model_id,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images
+      )
+      VALUES (
+        '${sourceProjectId}',
+        'Clone Config Rerun Source ${scenario.key}',
+        '${sourceConfig.modelId}',
+        TRUE,
+        TRUE,
+        FALSE,
+        FALSE
+      )
+    `)
+    await insertProjectPromptFixture({
+      contentHash: `clone-config-rerun-hash-${scenario.key}`,
+      order: 0,
+      originProjectId: null,
+      originalText: 'Clone rerun prompt',
+      projectId: sourceProjectId,
+      projectPromptId: `clone-config-rerun-project-prompt-${scenario.key}`,
+      promptId,
+    })
+    await runDatabase(`
+      INSERT INTO app.article (id, article_title)
+      VALUES ('${articleId}', 'Clone config rerun article ${scenario.key}')
+    `)
+    await runDatabase(`
+      INSERT INTO app.project_article (id, project_id, article_id)
+      VALUES ('clone-config-rerun-project-article-${scenario.key}', '${sourceProjectId}', '${articleId}')
+    `)
+    await insertCloneRerunJudgmentFixture({
+      answer: 'yes',
+      articleId,
+      config: sourceConfig,
+      createdAt: '2025-01-01 00:00:00+00',
+      judgmentId: sourceJudgmentId,
+      projectId: sourceProjectId,
+      promptId,
+    })
+
+    const cloneResponse = await app.handle(
+      new Request(`http://localhost/api/projects/${sourceProjectId}/clone`, {method: 'POST'}),
+    )
+    const cloneBody = (await cloneResponse.json()) as {data: {id: string}}
+    const clonedProjectId = cloneBody.data.id
+
+    expect(cloneResponse.status).toBe(200)
+
+    const editResponse = await app.handle(
+      new Request(`http://localhost/api/projects/${clonedProjectId}/edit`, {
+        body: JSON.stringify({
+          name: `Clone Config Rerun Clone ${scenario.key}`,
+          description: null,
+          modelId: scenario.nextConfig.modelId,
+          useTitle: scenario.nextConfig.useTitle,
+          useAbstract: scenario.nextConfig.useAbstract,
+          useFulltext: scenario.nextConfig.useFulltext,
+          useFulltextNoImages: scenario.nextConfig.useFulltextNoImages,
+        }),
+        headers: {'content-type': 'application/json'},
+        method: 'PATCH',
+      }),
+    )
+
+    expect(editResponse.status).toBe(200)
+
+    await assertSourceCloneRerunState({articleId, promptId, sourceJudgmentId, sourceProjectId})
+
+    const cloneDetailsBeforeRerun = await getProjectReviewDetails({articleId, projectId: clonedProjectId})
+
+    expect(getJudgmentSummaries(cloneDetailsBeforeRerun.judgments)).toEqual([
+      {answeredOriginal: 'not answered', id: `placeholder:${promptId}`, promptId},
+    ])
+    expect(getJudgmentSummaries(cloneDetailsBeforeRerun.allJudgments)).toEqual([
+      {answeredOriginal: 'yes', id: sourceJudgmentId, promptId},
+    ])
+
+    await insertCloneRerunJudgmentFixture({
+      answer: 'no',
+      articleId,
+      config: scenario.nextConfig,
+      createdAt: '2025-01-02 00:00:00+00',
+      judgmentId: cloneJudgmentId,
+      projectId: clonedProjectId,
+      promptId,
+    })
+
+    await assertSourceCloneRerunState({articleId, promptId, sourceJudgmentId, sourceProjectId})
+
+    const cloneDetailsAfterRerun = await getProjectReviewDetails({articleId, projectId: clonedProjectId})
+
+    expect(getJudgmentSummaries(cloneDetailsAfterRerun.judgments)).toEqual([
+      {answeredOriginal: 'no', id: cloneJudgmentId, promptId},
+    ])
+    expect(getJudgmentSummaries(cloneDetailsAfterRerun.allJudgments)).toEqual([
+      {answeredOriginal: 'yes', id: sourceJudgmentId, promptId},
+    ])
+  }, Promise.resolve())
+
+  await flushMartRefreshes()
+})
+
+test('unchanged cloned project reruns reuse shared judgments when prompt model and content flags match', async () => {
+  if (
+    !app
+    || !queryDatabase
+    || !runDatabase
+    || !flushMartRefreshes
+    || !queueJudgmentArticleRefresh
+    || !queueProjectRefresh
+  ) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'clone-unchanged-rerun-connection'
+  const modelId = 'clone-unchanged-rerun-model'
+  const sourceProjectId = 'clone-unchanged-rerun-source'
+  const articleId = 'clone-unchanged-rerun-article'
+  const promptId = 'clone-unchanged-rerun-prompt'
+  const sourceJudgmentId = 'clone-unchanged-rerun-source-judgment'
+  const config = baseCloneRerunConfig(modelId)
+
+  await insertProjectFixture({connectionId, modelId, projectId: sourceProjectId})
+  await insertProjectPromptFixture({
+    contentHash: 'clone-unchanged-rerun-hash',
+    order: 0,
+    originProjectId: null,
+    originalText: 'Clone rerun prompt',
+    projectId: sourceProjectId,
+    projectPromptId: 'clone-unchanged-rerun-project-prompt',
+    promptId,
+  })
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title, article_created_at, article_updated_at, article_id)
+    VALUES (
+      '${articleId}',
+      'Clone unchanged rerun article',
+      '2024-01-02T00:00:00.000Z',
+      '2024-01-03T00:00:00.000Z',
+      'external-clone-unchanged-rerun'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('clone-unchanged-rerun-project-article', '${sourceProjectId}', '${articleId}')
+  `)
+  await insertCloneRerunJudgmentFixture({
+    answer: 'yes',
+    articleId,
+    config,
+    createdAt: '2025-01-01 00:00:00+00',
+    judgmentId: sourceJudgmentId,
+    projectId: sourceProjectId,
+    promptId,
+  })
+  await queueJudgmentArticleRefresh(articleId, 'ProjectsRoutes.test.cloneUnchangedRerunJudgmentFact')
+  await queueProjectRefresh(sourceProjectId, 'ProjectsRoutes.test.cloneUnchangedRerunSource')
+  await flushMartRefreshes()
+
+  const cloneResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${sourceProjectId}/clone`, {method: 'POST'}),
+  )
+  const cloneBody = (await cloneResponse.json()) as {data: {id: string}}
+  const clonedProjectId = cloneBody.data.id
+
+  expect(cloneResponse.status).toBe(200)
+
+  await queueProjectRefresh(clonedProjectId, 'ProjectsRoutes.test.cloneUnchangedRerunClone')
+  await flushMartRefreshes()
+  await flushMartRefreshes()
+  await assertSourceCloneRerunState({articleId, promptId, sourceJudgmentId, sourceProjectId})
+
+  const [martCounts] = await queryDatabase<{
+    activeCloneDetailCount: number
+    activeCloneDetailJudgmentId: string | null
+    cloneDetailCount: number
+    cloneScopeCount: number
+    judgmentFactCount: number
+  }>(`
+    SELECT
+      (SELECT COUNT(*) FROM mart.judgment_fact WHERE judgment_id = '${sourceJudgmentId}') AS judgmentFactCount,
+      (SELECT COUNT(*) FROM mart.project_scope_article WHERE project_id = '${clonedProjectId}') AS cloneScopeCount,
+      (SELECT COUNT(*) FROM mart.review_article_serving_detail WHERE project_id = '${clonedProjectId}') AS cloneDetailCount,
+      (
+        SELECT COUNT(*)
+        FROM mart.review_article_serving_detail detail
+        INNER JOIN app.project_review_serving_generation generation
+          ON generation.project_id = detail.project_id
+         AND generation.active_generation = detail.generation
+        WHERE detail.project_id = '${clonedProjectId}'
+      ) AS activeCloneDetailCount,
+      (
+        SELECT detail.judgment_id
+        FROM mart.review_article_serving_detail detail
+        INNER JOIN app.project_review_serving_generation generation
+          ON generation.project_id = detail.project_id
+         AND generation.active_generation = detail.generation
+        WHERE detail.project_id = '${clonedProjectId}'
+        LIMIT 1
+      ) AS activeCloneDetailJudgmentId
+  `)
+
+  expect(Number(martCounts?.judgmentFactCount ?? 0)).toBe(1)
+  expect(Number(martCounts?.cloneScopeCount ?? 0)).toBe(1)
+  expect(Number(martCounts?.cloneDetailCount ?? 0)).toBe(1)
+  expect(Number(martCounts?.activeCloneDetailCount ?? 0)).toBe(1)
+  expect(martCounts?.activeCloneDetailJudgmentId).toBe(sourceJudgmentId)
 })
 
 test('editing a cloned project model leaves the source project model unchanged', async () => {

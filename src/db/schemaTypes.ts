@@ -210,6 +210,14 @@ export type ComparisonProjectRouteLinkRecord = {
   importRouteId: string
 }
 
+export type ComparisonProjectSourceProjectLinkRecord = {
+  id: string
+  createdAt: Date
+  updatedAt: Date
+  comparisonProjectId: string
+  sourceProjectId: string
+}
+
 export type JudgmentsJobRecord = {
   id: string
   createdAt: Date

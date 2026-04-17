@@ -4,6 +4,7 @@ type ProjectForeignKeyInventoryTx = {queryJson: <T>(statement: string) => Promis
 
 export const archivedProjectCleanupHandledProjectForeignKeys = [
   {columnName: 'summary_source_project_id', schemaName: 'app', tableName: 'comparison_project'},
+  {columnName: 'source_project_id', schemaName: 'app', tableName: 'comparison_project_source_project'},
   {columnName: 'project_id', schemaName: 'app', tableName: 'judgment'},
   {columnName: 'project_id', schemaName: 'app', tableName: 'judgment_human'},
   {columnName: 'project_id', schemaName: 'app', tableName: 'judgment_human_summary'},

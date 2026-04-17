@@ -25,6 +25,7 @@ type MockDatabaseState = {
   }>
   queryStatements: string[]
   routeLinks: Array<{id: string; importRouteId: string}>
+  sourceProjectLinks: Array<{id: string; sourceProjectId: string}>
   rootRunStatements: string[]
   transactionCalls: number
 }
@@ -54,6 +55,125 @@ const modelRows = {
   'model-1': {id: 'model-1', modelName: 'Model 1', provider: 'openrouter', version: null},
   'model-2': {id: 'model-2', modelName: 'Model 2', provider: 'openrouter', version: null},
 } as const
+
+const sourceProjects = {
+  'source-project-1': {
+    description: 'Summary source project',
+    humanJudgmentMode: 'summary',
+    id: 'source-project-1',
+    modelId: 'model-1',
+    modelMetadataJson: {},
+    modelName: 'Model 1',
+    name: 'Summary Source',
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  },
+  'source-project-2': {
+    description: 'Additional summary source project',
+    humanJudgmentMode: 'summary',
+    id: 'source-project-2',
+    modelId: 'model-2',
+    modelMetadataJson: {},
+    modelName: 'Model 2',
+    name: 'Summary Peer',
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  },
+  'source-project-mismatch': {
+    description: 'Mismatched summary source project',
+    humanJudgmentMode: 'summary',
+    id: 'source-project-mismatch',
+    modelId: 'model-2',
+    modelMetadataJson: {},
+    modelName: 'Model 2',
+    name: 'Summary Mismatch',
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  },
+  'prompt-project-1': {
+    description: 'Prompt source project',
+    humanJudgmentMode: 'prompt',
+    id: 'prompt-project-1',
+    modelId: 'model-1',
+    modelMetadataJson: {},
+    modelName: 'Model 1',
+    name: 'Prompt Source',
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  },
+} as const
+
+const sourceProjectPromptRows = [
+  {
+    criteriaDisposition: 'include',
+    criteriaSectionKey: 'population',
+    criteriaSectionLabel: 'Population',
+    order: 0,
+    projectId: 'source-project-1',
+    promptHeading: 'Prompt 1',
+    promptId: 'prompt-1',
+  },
+  {
+    criteriaDisposition: 'exclude',
+    criteriaSectionKey: 'outcome',
+    criteriaSectionLabel: 'Outcome',
+    order: 1,
+    projectId: 'source-project-1',
+    promptHeading: 'Prompt 2',
+    promptId: 'prompt-2',
+  },
+  {
+    criteriaDisposition: 'include',
+    criteriaSectionKey: 'population',
+    criteriaSectionLabel: 'Population',
+    order: 0,
+    projectId: 'source-project-2',
+    promptHeading: 'Prompt 1',
+    promptId: 'prompt-1',
+  },
+  {
+    criteriaDisposition: 'exclude',
+    criteriaSectionKey: 'outcome',
+    criteriaSectionLabel: 'Outcome',
+    order: 1,
+    projectId: 'source-project-2',
+    promptHeading: 'Prompt 2',
+    promptId: 'prompt-2',
+  },
+  {
+    criteriaDisposition: 'include',
+    criteriaSectionKey: 'intervention',
+    criteriaSectionLabel: 'Intervention',
+    order: 0,
+    projectId: 'source-project-mismatch',
+    promptHeading: 'Prompt 1',
+    promptId: 'prompt-1',
+  },
+  {
+    criteriaDisposition: null,
+    criteriaSectionKey: null,
+    criteriaSectionLabel: null,
+    order: 0,
+    projectId: 'prompt-project-1',
+    promptHeading: 'Prompt 1',
+    promptId: 'prompt-1',
+  },
+] as const
+
+const sourceProjectRouteRows = [
+  {name: 'Import Route 1', projectId: 'source-project-1', route: 'import-route-1'},
+  {name: 'Import Route 2', projectId: 'source-project-2', route: 'import-route-2'},
+  {name: 'Import Route 3', projectId: 'source-project-mismatch', route: 'import-route-3'},
+  {name: 'Import Route 1', projectId: 'prompt-project-1', route: 'import-route-1'},
+] as const
 
 const getMockDatabaseState = () => {
   const state = mockDatabaseStateRef.current
@@ -146,6 +266,7 @@ const queryJson = async (
     comparisonProject: MockDatabaseState['comparisonProject']
     promptLinks: MockDatabaseState['promptLinks']
     routeLinks: Array<{id: string; importRouteId: string}>
+    sourceProjectLinks: Array<{id: string; sourceProjectId: string}>
   },
 ) => {
   if (statement.includes('FROM app.comparison_project') && statement.includes('updated_at AS updatedAt')) {
@@ -453,6 +574,9 @@ const registerModuleMocks = () => {
             const pendingRouteLinks = state.routeLinks.map((link) => {
               return {...link}
             })
+            const pendingSourceProjectLinks = state.sourceProjectLinks.map((link) => {
+              return {...link}
+            })
 
             state.transactionCalls += 1
 
@@ -463,6 +587,7 @@ const registerModuleMocks = () => {
                   comparisonProject: pendingComparisonProject,
                   promptLinks: pendingPromptLinks,
                   routeLinks: pendingRouteLinks,
+                  sourceProjectLinks: pendingSourceProjectLinks,
                 })) as R[]
               },
               run: async (statement: string) => {
@@ -549,6 +674,20 @@ const registerModuleMocks = () => {
                   return
                 }
 
+                if (statement.includes('INSERT INTO app.comparison_project_source_project')) {
+                  const sourceProjectId = statement.includes("'source-project-2'")
+                    ? 'source-project-2'
+                    : statement.includes("'source-project-mismatch'")
+                      ? 'source-project-mismatch'
+                      : 'source-project-1'
+
+                  pendingSourceProjectLinks.push({
+                    id: `comparison-project-source-${pendingSourceProjectLinks.length + 1}`,
+                    sourceProjectId,
+                  })
+                  return
+                }
+
                 throw new Error(`Unhandled run: ${statement}`)
               },
             })
@@ -556,6 +695,7 @@ const registerModuleMocks = () => {
             state.comparisonProject = pendingComparisonProject
             state.promptLinks = pendingPromptLinks
             state.routeLinks = pendingRouteLinks
+            state.sourceProjectLinks = pendingSourceProjectLinks
 
             return result
           },
@@ -581,6 +721,7 @@ const createMockDatabaseState = (): MockDatabaseState => {
     queryStatements: [],
     rootRunStatements: [],
     routeLinks: [{id: 'comparison-project-route-1', importRouteId: 'import-route-1'}],
+    sourceProjectLinks: [],
     transactionCalls: 0,
   }
 }

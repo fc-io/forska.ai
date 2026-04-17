@@ -180,6 +180,17 @@ const comparisonProjectImportRouteCreateSql = `
   )
 `
 
+const comparisonProjectSourceProjectCreateSql = `
+  CREATE TABLE app.comparison_project_source_project (
+    id VARCHAR PRIMARY KEY,
+    comparison_project_id VARCHAR NOT NULL REFERENCES app.comparison_project(id),
+    source_project_id VARCHAR NOT NULL REFERENCES app.project(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    UNIQUE(comparison_project_id, source_project_id)
+  )
+`
+
 const projectArticleCreateSql = `
   CREATE TABLE app.project_article (
     id VARCHAR PRIMARY KEY,
@@ -497,6 +508,7 @@ const rebuildComparisonProjectGroupTx = async (tx: AppTx, projectIdsSql: string)
   const comparisonProjectTempTableName = getTempTableName('delete_archived_comparison_project')
   const comparisonProjectPromptTempTableName = getTempTableName('delete_archived_comparison_project_prompt')
   const comparisonProjectImportRouteTempTableName = getTempTableName('delete_archived_comparison_project_import_route')
+  const comparisonProjectSourceProjectTempTableName = getTempTableName('delete_archived_comparison_project_source_project')
 
   return runStatements(tx, [
     `
@@ -525,8 +537,14 @@ const rebuildComparisonProjectGroupTx = async (tx: AppTx, projectIdsSql: string)
     `,
     `CREATE TEMP TABLE ${comparisonProjectPromptTempTableName} AS SELECT * FROM app.comparison_project_prompt`,
     `CREATE TEMP TABLE ${comparisonProjectImportRouteTempTableName} AS SELECT * FROM app.comparison_project_import_route`,
+    `
+      CREATE TEMP TABLE ${comparisonProjectSourceProjectTempTableName} AS
+      SELECT * FROM app.comparison_project_source_project
+      WHERE source_project_id NOT IN (${projectIdsSql})
+    `,
     `DROP TABLE app.comparison_project_prompt`,
     `DROP TABLE app.comparison_project_import_route`,
+    `DROP TABLE app.comparison_project_source_project`,
     `DROP TABLE app.comparison_project`,
     comparisonProjectCreateSql,
     `INSERT INTO app.comparison_project SELECT * FROM ${comparisonProjectTempTableName}`,
@@ -534,6 +552,9 @@ const rebuildComparisonProjectGroupTx = async (tx: AppTx, projectIdsSql: string)
     `INSERT INTO app.comparison_project_prompt SELECT * FROM ${comparisonProjectPromptTempTableName}`,
     comparisonProjectImportRouteCreateSql,
     `INSERT INTO app.comparison_project_import_route SELECT * FROM ${comparisonProjectImportRouteTempTableName}`,
+    comparisonProjectSourceProjectCreateSql,
+    `INSERT INTO app.comparison_project_source_project SELECT * FROM ${comparisonProjectSourceProjectTempTableName}`,
+    `DROP TABLE ${comparisonProjectSourceProjectTempTableName}`,
     `DROP TABLE ${comparisonProjectImportRouteTempTableName}`,
     `DROP TABLE ${comparisonProjectPromptTempTableName}`,
     `DROP TABLE ${comparisonProjectTempTableName}`,

@@ -17,6 +17,7 @@ export type CreateComparisonProjectInput = {
   useFulltext: boolean
   useFulltextNoImages: boolean
   importRoutes?: string[]
+  sourceProjectIds?: string[]
   promptSelections?: Array<{promptId: string; order: number}>
 }
 
@@ -27,6 +28,7 @@ export type CreateComparisonProjectFromProjectInput = {
   humanJudgmentMode?: HumanJudgmentMode
   summarySourceProjectId?: string | null
   sourceProjectId: string
+  sourceProjectIds?: string[]
 }
 
 export type ComparisonProjectSource = {
@@ -114,6 +116,15 @@ export type ComparisonProjectSummarySourceProject = {
   useFulltextNoImages: boolean
 }
 
+export type ComparisonProjectLinkedSourceProject = {
+  id: string
+  name: string
+  description: string | null
+  modelId: string
+  modelName: string
+  humanJudgmentMode: HumanJudgmentMode
+}
+
 export type ComparisonProjectJudgmentsMetadata = {
   id: string
   name: string
@@ -122,6 +133,7 @@ export type ComparisonProjectJudgmentsMetadata = {
   humanJudgmentMode: HumanJudgmentMode
   summarySourceProjectId: string | null
   summarySourceProject: ComparisonProjectSummarySourceProject | null
+  sourceProjects: ComparisonProjectLinkedSourceProject[]
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean

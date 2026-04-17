@@ -73,8 +73,10 @@ type ComparisonProjectScope = {
   archived: boolean
   createdAt: Date
   modelIds: string[] | null
-  sourceProjectId: string | null
+  sourceProjectIds: string[]
+  useImportRoutesForScope: boolean
   summarySourceProject: ComparisonProjectSummarySourceProject | null
+  sourceProjects: ComparisonProjectLinkedSourceProject[]
   contentVariants: ComparisonProjectContentVariant[]
   prompts: ComparisonProjectPromptConfig[]
   models: ComparisonProjectModelConfig[]
@@ -132,6 +134,14 @@ type ComparisonProjectSummarySourceProject = {
   useFulltext: boolean
   useFulltextNoImages: boolean
 }
+type ComparisonProjectLinkedSourceProject = {
+  id: string
+  name: string
+  description: string | null
+  modelId: string
+  modelName: string
+  humanJudgmentMode: HumanJudgmentMode
+}
 type ComparisonProjectEditPrompt = {
   id: string
   originalText: string
@@ -153,9 +163,41 @@ const hasSummaryPromptCriteriaMetadata = (prompt: {
   return Boolean(prompt.criteriaDisposition && prompt.criteriaSectionKey)
 }
 
+const getSourceProjectSummaryPromptSelections = (sourceProject: ComparisonProjectSource) => {
+  return [...sourceProject.prompts]
+    .filter(hasSummaryPromptCriteriaMetadata)
+    .sort((left, right) => {
+      return left.order - right.order
+    })
+    .map<PromptSelection>((prompt) => {
+      return {
+        promptId: prompt.id,
+        order: prompt.order,
+        criteriaDisposition: prompt.criteriaDisposition,
+        criteriaSectionKey: prompt.criteriaSectionKey,
+        criteriaSectionLabel: prompt.criteriaSectionLabel,
+      }
+    })
+}
+
+const getPromptSelectionContractValue = (promptSelections: PromptSelection[]) => {
+  return JSON.stringify(
+    promptSelections.map((promptSelection) => {
+      return {
+        promptId: promptSelection.promptId,
+        order: promptSelection.order,
+        criteriaDisposition: promptSelection.criteriaDisposition ?? null,
+        criteriaSectionKey: promptSelection.criteriaSectionKey ?? null,
+        criteriaSectionLabel: promptSelection.criteriaSectionLabel ?? null,
+      }
+    }),
+  )
+}
+
 const comparisonProjectTable = 'app.comparison_project'
 const comparisonProjectPromptTable = 'app.comparison_project_prompt'
 const comparisonProjectImportRouteTable = 'app.comparison_project_import_route'
+const comparisonProjectSourceProjectTable = 'app.comparison_project_source_project'
 const promptTable = 'app.prompt'
 const importRouteTable = 'app.import_route'
 const projectTable = 'app.project'
@@ -214,20 +256,25 @@ const getArticleMatchesImportRouteClause = (articleAlias: string, routeIds: stri
       )`
 }
 
-const getArticleMatchesProjectClause = (articleAlias: string, projectId: string | null) => {
-  return !projectId
+const getArticleMatchesProjectClause = (articleAlias: string, projectIds: string[]) => {
+  return projectIds.length === 0
     ? null
     : `EXISTS (
         SELECT 1
         FROM ${projectArticleTable} pa
         WHERE pa.article_id = ${articleAlias}.id
-          AND pa.project_id = ${getSqlLiteral(projectId)}
+          AND pa.project_id IN (${getInClause(projectIds)})
       )`
 }
 
-const getArticleInScopeClause = (articleAlias: string, routeIds: string[], projectId: string | null) => {
-  const importRouteClause = getArticleMatchesImportRouteClause(articleAlias, routeIds)
-  const projectClause = getArticleMatchesProjectClause(articleAlias, projectId)
+const getArticleInScopeClause = (
+  articleAlias: string,
+  routeIds: string[],
+  projectIds: string[],
+  useImportRoutesForScope: boolean,
+) => {
+  const importRouteClause = useImportRoutesForScope ? getArticleMatchesImportRouteClause(articleAlias, routeIds) : null
+  const projectClause = getArticleMatchesProjectClause(articleAlias, projectIds)
   return importRouteClause && projectClause
     ? `(${importRouteClause} OR ${projectClause})`
     : (importRouteClause ?? projectClause)
@@ -653,6 +700,45 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
     .filter(isDefined)
 }
 
+const getComparisonProjectSourceProjects = async (sourceProjectIds: string[]) => {
+  if (sourceProjectIds.length === 0) {
+    return []
+  }
+
+  const sourceProjectRows = await appDatabaseService.queryJson<
+    Omit<ComparisonProjectLinkedSourceProject, 'humanJudgmentMode'> & {humanJudgmentMode: HumanJudgmentMode | null}
+  >(`
+    SELECT
+      p.id AS id,
+      p.name AS name,
+      p.description AS description,
+      p.model_id AS modelId,
+      COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
+      p.human_judgment_mode AS humanJudgmentMode
+    FROM ${projectTable} p
+    INNER JOIN ${modelTable} m ON m.id = p.model_id
+    WHERE p.id IN (${getInClause(sourceProjectIds)})
+    ORDER BY p.name ASC
+  `)
+  const sourceProjectOrderLookup = sourceProjectIds.reduce<Record<string, number>>((orderLookup, sourceProjectId, index) => {
+    return {...orderLookup, [sourceProjectId]: index}
+  }, {})
+
+  return sourceProjectRows
+    .map<ComparisonProjectLinkedSourceProject>((sourceProjectRow) => {
+      return {
+        ...sourceProjectRow,
+        humanJudgmentMode: sourceProjectRow.humanJudgmentMode ?? 'prompt',
+      }
+    })
+    .sort((left, right) => {
+      return (
+        (sourceProjectOrderLookup[left.id] ?? Number.MAX_SAFE_INTEGER)
+        - (sourceProjectOrderLookup[right.id] ?? Number.MAX_SAFE_INTEGER)
+      )
+    })
+}
+
 const getSortedUniqueStringValues = (values: string[]) => {
   return Array.from(new Set(values)).sort((left, right) => {
     return left.localeCompare(right)
@@ -687,6 +773,81 @@ const getSummarySourceProject = async (summarySourceProjectId: string | null) =>
   return sourceProjectRow
     ? {...sourceProjectRow, humanJudgmentMode: sourceProjectRow.humanJudgmentMode ?? 'prompt'}
     : null
+}
+
+const getValidatedComparisonSourceProjectIds = async (db: AppQueryRunner, sourceProjectIds: string[]) => {
+  const uniqueSourceProjectIds = getUniqueStringValues(sourceProjectIds)
+
+  if (uniqueSourceProjectIds.length === 0) {
+    return []
+  }
+
+  const sourceProjectRows = await db.queryJson<{id: string}>(`
+    SELECT id
+    FROM ${projectTable}
+    WHERE id IN (${getInClause(uniqueSourceProjectIds)})
+      AND archived = FALSE
+  `)
+
+  if (sourceProjectRows.length !== uniqueSourceProjectIds.length) {
+    throw new Error('One or more selected source projects are invalid')
+  }
+
+  return uniqueSourceProjectIds
+}
+
+const getSelectedComparisonProjectSources = (sources: ComparisonProjectSource[], sourceProjectIds: string[]) => {
+  const selectedSourceProjects = sourceProjectIds.reduce<ComparisonProjectSource[]>((selectedProjects, sourceProjectId) => {
+    const sourceProject = sources.find((candidateSourceProject) => {
+      return candidateSourceProject.id === sourceProjectId
+    })
+
+    return sourceProject ? [...selectedProjects, sourceProject] : selectedProjects
+  }, [])
+
+  if (selectedSourceProjects.length !== sourceProjectIds.length) {
+    throw new Error('One or more selected source projects were not found')
+  }
+
+  return selectedSourceProjects
+}
+
+const getValidatedCreateFromProjectSummarySelections = (params: {
+  selectedSourceProjects: ComparisonProjectSource[]
+  summarySourceProjectId: string
+}) => {
+  const summarySourceProject = params.selectedSourceProjects.find((sourceProject) => {
+    return sourceProject.id === params.summarySourceProjectId
+  })
+
+  if (!summarySourceProject) {
+    throw new Error('Summary source project must be included in the selected projects')
+  }
+
+  if (
+    params.selectedSourceProjects.some((sourceProject) => {
+      return !sourceProject.isSummaryCapable
+    })
+  ) {
+    throw new Error('Additional projects require summary-capable source projects')
+  }
+
+  const summaryPromptSelections = getSourceProjectSummaryPromptSelections(summarySourceProject)
+
+  if (summaryPromptSelections.length === 0) {
+    throw new Error('Selected summary source project has no prompts with summary criteria metadata')
+  }
+
+  const summaryPromptContractValue = getPromptSelectionContractValue(summaryPromptSelections)
+  const mismatchedSourceProject = params.selectedSourceProjects.find((sourceProject) => {
+    return getPromptSelectionContractValue(getSourceProjectSummaryPromptSelections(sourceProject)) !== summaryPromptContractValue
+  })
+
+  if (mismatchedSourceProject) {
+    throw new Error('Additional projects must match the summary source project prompt criteria exactly')
+  }
+
+  return summaryPromptSelections
 }
 
 const getHasSameStringValues = (left: string[], right: string[]) => {
@@ -791,9 +952,14 @@ const getInferredSourceProjectId = async (
   return nameMatchedCandidates.length === 1 ? (matchedCandidate?.id ?? null) : null
 }
 
-const getArticleScopeConditions = (routeIds: string[], sourceProjectId: string | null, searchTitle?: string | null) => {
+const getArticleScopeConditions = (
+  routeIds: string[],
+  sourceProjectIds: string[],
+  useImportRoutesForScope: boolean,
+  searchTitle?: string | null,
+) => {
   const trimmedSearchTitle = searchTitle?.trim() ?? ''
-  const scopeCondition = getArticleInScopeClause('a', routeIds, sourceProjectId)
+  const scopeCondition = getArticleInScopeClause('a', routeIds, sourceProjectIds, useImportRoutesForScope)
 
   return [
     scopeCondition,
@@ -804,7 +970,8 @@ const getArticleScopeConditions = (routeIds: string[], sourceProjectId: string |
 const getComparisonProjectModels = async (
   comparisonProjectRow: {
     modelIds: string[] | null
-    sourceProjectId: string | null
+    sourceProjectIds: string[]
+    useImportRoutesForScope: boolean
     contentVariants: ComparisonProjectContentVariant[]
   },
   promptIds: string[],
@@ -837,7 +1004,11 @@ const getComparisonProjectModels = async (
     return []
   }
 
-  const articleScopeConditions = getArticleScopeConditions(importRouteIds, comparisonProjectRow.sourceProjectId)
+  const articleScopeConditions = getArticleScopeConditions(
+    importRouteIds,
+    comparisonProjectRow.sourceProjectIds,
+    comparisonProjectRow.useImportRoutesForScope,
+  )
   return appDatabaseService.queryJson<ComparisonProjectModelConfig>(`
     SELECT m.id AS id, m.name AS name, TO_JSON(m.metadata_json) AS metadataJson
     FROM ${judgmentTable} j
@@ -945,7 +1116,7 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
     modelIds: getStringArrayRowValue(comparisonProjectRow, 'modelIds'),
     humanJudgmentMode: comparisonProjectRow.humanJudgmentMode ?? 'prompt',
   }
-  const [promptRows, routeRows] = await Promise.all([
+  const [promptRows, routeRows, sourceProjectLinkRows] = await Promise.all([
     appDatabaseService.queryJson<{
       id: string
       promptHeading: string | null
@@ -971,6 +1142,11 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
       FROM ${comparisonProjectImportRouteTable}
       WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
     `),
+    appDatabaseService.queryJson<{sourceProjectId: string}>(`
+      SELECT source_project_id AS sourceProjectId
+      FROM ${comparisonProjectSourceProjectTable}
+      WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
+    `),
   ])
 
   const promptConfigs = promptRows.map<ComparisonProjectPromptConfig>((promptRow, index) => {
@@ -989,14 +1165,27 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
   const importRouteIds = routeRows.map((routeRow) => {
     return routeRow.importRouteId
   })
-  const sourceProjectId =
-    normalizedComparisonProjectRow.summarySourceProjectId
-    ?? (await getInferredSourceProjectId(normalizedComparisonProjectRow, promptConfigs, importRouteIds))
+  const linkedSourceProjectIds = sourceProjectLinkRows.map((sourceProjectLinkRow) => {
+    return sourceProjectLinkRow.sourceProjectId
+  })
+  const fallbackSourceProjectId =
+    linkedSourceProjectIds.length > 0
+      ? null
+      : normalizedComparisonProjectRow.summarySourceProjectId
+        ?? (await getInferredSourceProjectId(normalizedComparisonProjectRow, promptConfigs, importRouteIds))
+  const sourceProjectIds =
+    linkedSourceProjectIds.length > 0
+      ? linkedSourceProjectIds
+      : fallbackSourceProjectId
+        ? [fallbackSourceProjectId]
+        : []
+  const useImportRoutesForScope = linkedSourceProjectIds.length === 0
   const contentVariants = getComparisonProjectContentVariants(normalizedComparisonProjectRow)
-  const [summarySourceProject, modelRows] = await Promise.all([
+  const [summarySourceProject, sourceProjects, modelRows] = await Promise.all([
     getSummarySourceProject(normalizedComparisonProjectRow.summarySourceProjectId),
+    getComparisonProjectSourceProjects(sourceProjectIds),
     getComparisonProjectModels(
-      {...normalizedComparisonProjectRow, sourceProjectId, contentVariants},
+      {...normalizedComparisonProjectRow, sourceProjectIds, useImportRoutesForScope, contentVariants},
       promptConfigs.map((prompt) => {
         return prompt.id
       }),
@@ -1013,8 +1202,10 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
 
   return {
     ...normalizedComparisonProjectRow,
-    sourceProjectId,
+    sourceProjectIds,
+    useImportRoutesForScope,
     summarySourceProject,
+    sourceProjects,
     contentVariants,
     prompts: promptConfigs,
     models: modelRows,
@@ -1531,7 +1722,11 @@ const getComparisonProjectJudgmentsPage = async (
     return {data: [], totalCount: 0, page: 1, limit, totalPages: 0}
   }
 
-  const articleScopeConditions = getArticleScopeConditions(scope.importRouteIds, scope.sourceProjectId)
+  const articleScopeConditions = getArticleScopeConditions(
+    scope.importRouteIds,
+    scope.sourceProjectIds,
+    scope.useImportRoutesForScope,
+  )
 
   const scopedArticles = await appDatabaseService
     .queryJson<{id: string; articleTitle: string; articleCreatedAt: unknown}>(
@@ -1696,6 +1891,29 @@ const insertComparisonProjectRouteLinks = async (tx: AppTx, comparisonProjectId:
       return routeRow.route
     }),
   )
+}
+
+const insertComparisonProjectSourceProjectLinks = async (
+  tx: AppTx,
+  comparisonProjectId: string,
+  sourceProjectIds: string[],
+) => {
+  const [currentSourceProjectId] = sourceProjectIds
+
+  if (!currentSourceProjectId) {
+    return
+  }
+
+  await tx.run(`
+    INSERT INTO ${comparisonProjectSourceProjectTable} (id, comparison_project_id, source_project_id)
+    VALUES (
+      ${getSqlLiteral(crypto.randomUUID())},
+      ${getSqlLiteral(comparisonProjectId)},
+      ${getSqlLiteral(currentSourceProjectId)}
+    )
+  `)
+
+  return insertComparisonProjectSourceProjectLinks(tx, comparisonProjectId, sourceProjectIds.slice(1))
 }
 
 const insertComparisonProjectImportRouteRows = async (
@@ -1969,6 +2187,7 @@ const createComparisonProjectRecord = async (
     useFulltext?: boolean
     useFulltextNoImages?: boolean
     importRoutes?: string[]
+    sourceProjectIds?: string[]
     promptSelections?: PromptSelection[]
   },
 ): Promise<ReturnType<typeof getComparisonProjectRecordValue>> => {
@@ -1992,6 +2211,7 @@ const createComparisonProjectRecord = async (
     summarySourceProjectId,
   })
   const uniqueImportRoutes = getUniqueStringValues(body.importRoutes ?? [])
+  const validatedSourceProjectIds = await getValidatedComparisonSourceProjectIds(tx, body.sourceProjectIds ?? [])
   const [newComparisonProject] = await tx.queryJson<{
     id: string
     name: string
@@ -2057,6 +2277,7 @@ const createComparisonProjectRecord = async (
 
   await insertComparisonProjectPromptLinks(tx, newComparisonProject.id, validatedPromptSelections)
   await insertComparisonProjectRouteLinks(tx, newComparisonProject.id, uniqueImportRoutes)
+  await insertComparisonProjectSourceProjectLinks(tx, newComparisonProject.id, validatedSourceProjectIds)
 
   return getComparisonProjectRecordValue(newComparisonProject)
 }
@@ -2083,7 +2304,9 @@ export const comparisonProjectsRoutes = new Elysia()
     async (context) => {
       const {body} = context
       const sources = await getComparisonProjectSources()
-      const sourceProject = sources.find((source) => {
+      const selectedSourceProjectIds = getUniqueStringValues([body.sourceProjectId, ...(body.sourceProjectIds ?? [])])
+      const selectedSourceProjects = getSelectedComparisonProjectSources(sources, selectedSourceProjectIds)
+      const sourceProject = selectedSourceProjects.find((source) => {
         return source.id === body.sourceProjectId
       })
 
@@ -2096,14 +2319,42 @@ export const comparisonProjectsRoutes = new Elysia()
       const summarySourceProjectId =
         humanJudgmentMode === 'summary' ? (body.summarySourceProjectId ?? sourceProject.id) : null
       const sourcePromptSelections =
-        humanJudgmentMode === 'summary'
-          ? sourceProject.prompts.filter(hasSummaryPromptCriteriaMetadata)
-          : sourceProject.prompts
+        humanJudgmentMode === 'summary' && summarySourceProjectId
+          ? getValidatedCreateFromProjectSummarySelections({
+              selectedSourceProjects,
+              summarySourceProjectId,
+            })
+          : sourceProject.prompts.map<PromptSelection>((prompt) => {
+              return {
+                promptId: prompt.id,
+                order: prompt.order,
+                criteriaDisposition: prompt.criteriaDisposition,
+                criteriaSectionKey: prompt.criteriaSectionKey,
+                criteriaSectionLabel: prompt.criteriaSectionLabel,
+              }
+            })
+
+      if (humanJudgmentMode !== 'summary' && selectedSourceProjectIds.length > 1) {
+        throw new Error('Additional source projects require summary mode')
+      }
+
+      const selectedModelIds = getUniqueStringValues(
+        (humanJudgmentMode === 'summary' ? selectedSourceProjects : [sourceProject]).map((selectedSourceProject) => {
+          return selectedSourceProject.modelId
+        }),
+      )
+      const selectedImportRoutes = getUniqueStringValues(
+        (humanJudgmentMode === 'summary' ? selectedSourceProjects : [sourceProject]).flatMap((selectedSourceProject) => {
+          return selectedSourceProject.importRoutes.map((importRoute) => {
+            return importRoute.route
+          })
+        }),
+      )
       const createdComparisonProject = (await appDatabaseService.transaction(async (tx) => {
         return createComparisonProjectRecord(tx, {
           name: body.name,
           description: body.description,
-          modelIds: [sourceProject.modelId],
+          modelIds: selectedModelIds,
           compareWithHumans: body.compareWithHumans,
           humanJudgmentMode,
           summarySourceProjectId,
@@ -2111,18 +2362,9 @@ export const comparisonProjectsRoutes = new Elysia()
           useAbstract: sourceProject.useAbstract,
           useFulltext: sourceProject.useFulltext,
           useFulltextNoImages: sourceProject.useFulltextNoImages,
-          importRoutes: sourceProject.importRoutes.map((importRoute) => {
-            return importRoute.route
-          }),
-          promptSelections: sourcePromptSelections.map((prompt) => {
-            return {
-              promptId: prompt.id,
-              order: prompt.order,
-              criteriaDisposition: prompt.criteriaDisposition,
-              criteriaSectionKey: prompt.criteriaSectionKey,
-              criteriaSectionLabel: prompt.criteriaSectionLabel,
-            }
-          }),
+          importRoutes: selectedImportRoutes,
+          sourceProjectIds: humanJudgmentMode === 'summary' ? selectedSourceProjectIds : [sourceProject.id],
+          promptSelections: sourcePromptSelections,
         })
       })) as Awaited<ReturnType<typeof createComparisonProjectRecord>>
 
@@ -2136,6 +2378,7 @@ export const comparisonProjectsRoutes = new Elysia()
         humanJudgmentMode: t.Optional(t.Union([t.Literal('prompt'), t.Literal('summary')])),
         summarySourceProjectId: t.Optional(t.Union([t.String(), t.Null()])),
         sourceProjectId: t.String(),
+        sourceProjectIds: t.Optional(t.Array(t.String())),
       }),
     },
   )
@@ -2232,6 +2475,7 @@ export const comparisonProjectsRoutes = new Elysia()
         useFulltext: t.Boolean(),
         useFulltextNoImages: t.Boolean(),
         importRoutes: t.Optional(t.Array(t.String())),
+        sourceProjectIds: t.Optional(t.Array(t.String())),
         promptSelections: t.Optional(t.Array(t.Object({promptId: t.String(), order: t.Number()}))),
       }),
     },
