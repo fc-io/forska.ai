@@ -1,7 +1,7 @@
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 import {escapeSqlString, getSqlLiteral} from './appQueryHelpers.ts'
 
-type PromptQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
+type PromptQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>; run: (statement: string) => Promise<void>}
 
 type ImmutablePromptInput = {
   archived: boolean
@@ -18,15 +18,24 @@ export const getOrCreateImmutablePromptTx = async (queryRunner: PromptQueryRunne
     params.promptHeading,
     params.type,
   )
-  const [existingPrompt] = await queryRunner.queryJson<{id: string}>(`
-    SELECT id
+  const [existingPrompt] = await queryRunner.queryJson<{archived: boolean; id: string}>(`
+    SELECT id,
+           archived
     FROM app.prompt
     WHERE content_hash = ${getSqlLiteral(contentHash)}
-      AND archived = ${params.archived ? 'TRUE' : 'FALSE'}
     LIMIT 1
   `)
 
   if (existingPrompt) {
+    if (existingPrompt.archived && !params.archived) {
+      await queryRunner.run(`
+        UPDATE app.prompt
+        SET archived = FALSE,
+            updated_at = current_timestamp
+        WHERE id = '${escapeSqlString(existingPrompt.id)}'
+      `)
+    }
+
     return existingPrompt.id
   }
 

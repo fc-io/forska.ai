@@ -288,8 +288,14 @@ const queryJson = async (
           compareWithHumans: statement.includes('TRUE'),
           humanJudgmentMode: statement.includes("'summary'") ? 'summary' : 'prompt',
           id: 'comparison-project-created',
-          modelIds: statement.includes('model-1') ? ['model-1'] : [],
-          summarySourceProjectId: statement.includes("'source-project-1'") ? 'source-project-1' : null,
+          modelIds: Object.keys(modelRows).filter((modelId) => {
+            return statement.includes(`'${modelId}'`)
+          }),
+          summarySourceProjectId: statement.includes("'source-project-2'")
+            ? 'source-project-2'
+            : statement.includes("'source-project-1'")
+              ? 'source-project-1'
+              : null,
         }),
         id: 'comparison-project-created',
       },
@@ -297,59 +303,49 @@ const queryJson = async (
   }
 
   if (statement.includes('FROM app.project p') && statement.includes('WHERE p.archived = FALSE')) {
-    return [
-      {
-        description: 'Summary source project',
-        humanJudgmentMode: 'summary',
-        id: 'source-project-1',
-        modelId: 'model-1',
-        modelMetadataJson: {},
-        modelName: 'Model 1',
-        name: 'Summary Source',
-        useAbstract: true,
-        useFulltext: false,
-        useFulltextNoImages: false,
-        useTitle: true,
-      },
-      {
-        description: 'Prompt source project',
-        humanJudgmentMode: 'prompt',
-        id: 'prompt-project-1',
-        modelId: 'model-1',
-        modelMetadataJson: {},
-        modelName: 'Model 1',
-        name: 'Prompt Source',
-        useAbstract: true,
-        useFulltext: false,
-        useFulltextNoImages: false,
-        useTitle: true,
-      },
-    ]
+    return Object.values(sourceProjects)
   }
 
-  if (statement.includes('FROM app.project p') && statement.includes("WHERE p.id = 'source-project-1'")) {
-    return [
-      {
-        description: 'Summary source project',
-        humanJudgmentMode: 'summary',
-        id: 'source-project-1',
-        modelId: 'model-1',
-        modelName: 'Model 1',
-        name: 'Summary Source',
-        useAbstract: true,
-        useFulltext: false,
-        useFulltextNoImages: false,
-        useTitle: true,
-      },
-    ]
+  if (statement.includes('FROM app.project p') && statement.includes('WHERE p.id IN')) {
+    return Object.values(sourceProjects)
+      .filter((sourceProject) => {
+        return statement.includes(`'${sourceProject.id}'`)
+      })
+      .map((sourceProject) => {
+        const {modelMetadataJson: _modelMetadataJson, ...sourceProjectRow} = sourceProject
+        return sourceProjectRow
+      })
   }
 
-  if (statement.includes('FROM app.project') && statement.includes("WHERE id = 'source-project-1'")) {
-    return [{humanJudgmentMode: 'summary', id: 'source-project-1'}]
+  if (statement.includes('FROM app.project p') && statement.includes('WHERE p.id =')) {
+    return Object.values(sourceProjects)
+      .filter((sourceProject) => {
+        return statement.includes(`'${sourceProject.id}'`)
+      })
+      .map((sourceProject) => {
+        const {modelMetadataJson: _modelMetadataJson, ...sourceProjectRow} = sourceProject
+        return sourceProjectRow
+      })
   }
 
-  if (statement.includes('FROM app.project') && statement.includes("WHERE id = 'prompt-project-1'")) {
-    return [{humanJudgmentMode: 'prompt', id: 'prompt-project-1'}]
+  if (statement.includes('FROM app.project') && statement.includes('WHERE id IN')) {
+    return Object.values(sourceProjects)
+      .filter((sourceProject) => {
+        return statement.includes(`'${sourceProject.id}'`)
+      })
+      .map((sourceProject) => {
+        return {id: sourceProject.id}
+      })
+  }
+
+  if (statement.includes('FROM app.project') && statement.includes('WHERE id =')) {
+    return Object.values(sourceProjects)
+      .filter((sourceProject) => {
+        return statement.includes(`'${sourceProject.id}'`)
+      })
+      .map((sourceProject) => {
+        return {humanJudgmentMode: sourceProject.humanJudgmentMode, id: sourceProject.id}
+      })
   }
 
   if (statement.includes('FROM app.project') && statement.includes('WHERE use_title =')) {
@@ -360,23 +356,20 @@ const queryJson = async (
     return [{modelIds: state.comparisonProject.modelIds}]
   }
 
-  if (statement.includes('FROM app.project_prompt') && statement.includes("project_id = 'source-project-1'")) {
-    const sourcePromptRows = [
-      {
-        order: 0,
-        criteriaDisposition: 'include',
-        criteriaSectionKey: 'population',
-        criteriaSectionLabel: 'Population',
-        promptId: 'prompt-1',
-      },
-      {
-        order: 1,
-        criteriaDisposition: 'exclude',
-        criteriaSectionKey: 'outcome',
-        criteriaSectionLabel: 'Outcome',
-        promptId: 'prompt-2',
-      },
-    ]
+  if (statement.includes('FROM app.project_prompt') && statement.includes('project_id =')) {
+    const sourcePromptRows = sourceProjectPromptRows
+      .filter((promptRow) => {
+        return statement.includes(`'${promptRow.projectId}'`)
+      })
+      .map((promptRow) => {
+        return {
+          criteriaDisposition: promptRow.criteriaDisposition,
+          criteriaSectionKey: promptRow.criteriaSectionKey,
+          criteriaSectionLabel: promptRow.criteriaSectionLabel,
+          order: promptRow.order,
+          promptId: promptRow.promptId,
+        }
+      })
 
     return statement.includes('prompt_id IN')
       ? sourcePromptRows.filter((promptRow) => {
@@ -386,44 +379,13 @@ const queryJson = async (
   }
 
   if (statement.includes('FROM app.project_prompt') && statement.includes('pp.project_id IN')) {
-    return [
-      {
-        criteriaDisposition: 'include',
-        criteriaSectionKey: 'population',
-        criteriaSectionLabel: 'Population',
-        order: 0,
-        projectId: 'source-project-1',
-        promptHeading: 'Prompt 1',
-        promptId: 'prompt-1',
-      },
-      {
-        criteriaDisposition: 'exclude',
-        criteriaSectionKey: 'outcome',
-        criteriaSectionLabel: 'Outcome',
-        order: 1,
-        projectId: 'source-project-1',
-        promptHeading: 'Prompt 2',
-        promptId: 'prompt-2',
-      },
-      {
-        criteriaDisposition: null,
-        criteriaSectionKey: null,
-        criteriaSectionLabel: null,
-        order: 0,
-        projectId: 'prompt-project-1',
-        promptHeading: 'Prompt 1',
-        promptId: 'prompt-1',
-      },
-    ].filter((promptRow) => {
+    return sourceProjectPromptRows.filter((promptRow) => {
       return statement.includes(`'${promptRow.projectId}'`)
     })
   }
 
   if (statement.includes('FROM app.project_import_route') && statement.includes('pir.project_id IN')) {
-    return [
-      {name: 'Import Route 1', projectId: 'source-project-1', route: 'import-route-1'},
-      {name: 'Import Route 1', projectId: 'prompt-project-1', route: 'import-route-1'},
-    ].filter((routeRow) => {
+    return sourceProjectRouteRows.filter((routeRow) => {
       return statement.includes(`'${routeRow.projectId}'`)
     })
   }
@@ -447,6 +409,12 @@ const queryJson = async (
   if (statement.includes('FROM app.comparison_project_import_route')) {
     return state.routeLinks.map((routeLink) => {
       return {id: routeLink.id, importRouteId: routeLink.importRouteId}
+    })
+  }
+
+  if (statement.includes('FROM app.comparison_project_source_project')) {
+    return state.sourceProjectLinks.map((sourceProjectLink) => {
+      return {id: sourceProjectLink.id, sourceProjectId: sourceProjectLink.sourceProjectId}
     })
   }
 
@@ -534,7 +502,17 @@ const queryJson = async (
   }
 
   if (statement.includes('FROM app.import_route')) {
-    return [{id: 'import-route-1', route: 'import-route-1'}]
+    return Array.from(
+      new Map(
+        sourceProjectRouteRows
+          .filter((routeRow) => {
+            return statement.includes(`'${routeRow.route}'`)
+          })
+          .map((routeRow) => {
+            return [routeRow.route, {id: routeRow.route, route: routeRow.route}] as const
+          }),
+      ).values(),
+    )
   }
 
   throw new Error(`Unhandled query: ${statement}`)
@@ -627,19 +605,23 @@ const registerModuleMocks = () => {
                 }
 
                 if (statement.includes('INSERT INTO app.comparison_project_import_route')) {
-                  const matchingRouteLink = state.routeLinks.find((routeLink) => {
-                    return statement.includes(`'${routeLink.importRouteId}'`)
+                  const importRouteId = ['import-route-1', 'import-route-2', 'import-route-3'].find((routeId) => {
+                    return statement.includes(`'${routeId}'`)
                   })
 
-                  if (!matchingRouteLink) {
+                  if (!importRouteId) {
                     throw new Error(`Unhandled route relink insert: ${statement}`)
                   }
+
+                  const matchingRouteLink = state.routeLinks.find((routeLink) => {
+                    return routeLink.importRouteId === importRouteId
+                  })
 
                   pendingRouteLinks.push({
                     id: statement.includes(`'${matchingRouteLink.id}'`)
                       ? matchingRouteLink.id
                       : 'comparison-project-route-created',
-                    importRouteId: matchingRouteLink.importRouteId,
+                    importRouteId,
                   })
                   return
                 }
@@ -940,6 +922,44 @@ test('comparison project create-from-project defaults summary-capable sources to
     },
   ])
   expect(state.routeLinks[0]?.importRouteId).toBe('import-route-1')
+  expect(state.sourceProjectLinks).toEqual([{id: 'comparison-project-source-1', sourceProjectId: 'source-project-1'}])
+})
+
+test('comparison project create-from-project includes compatible additional summary projects', async () => {
+  mockDatabaseStateRef.current = {...createMockDatabaseState(), failPromptInsert: false, promptLinks: [], routeLinks: []}
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects/from-project', {
+      body: JSON.stringify({
+        compareWithHumans: true,
+        description: 'Multi-project summary comparison',
+        name: 'Multi-project summary comparison',
+        sourceProjectId: 'source-project-1',
+        sourceProjectIds: ['source-project-2'],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {
+    data: {humanJudgmentMode: string; modelIds: string[] | null; summarySourceProjectId: string | null}
+  }
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(body.data.humanJudgmentMode).toBe('summary')
+  expect(body.data.summarySourceProjectId).toBe('source-project-1')
+  expect(body.data.modelIds).toEqual(['model-1', 'model-2'])
+  expect(state.routeLinks).toEqual([
+    {id: 'comparison-project-route-created', importRouteId: 'import-route-1'},
+    {id: 'comparison-project-route-created', importRouteId: 'import-route-2'},
+  ])
+  expect(state.sourceProjectLinks).toEqual([
+    {id: 'comparison-project-source-1', sourceProjectId: 'source-project-1'},
+    {id: 'comparison-project-source-2', sourceProjectId: 'source-project-2'},
+  ])
 })
 
 test('comparison project create-from-project keeps prompt sources in prompt mode', async () => {
@@ -975,6 +995,32 @@ test('comparison project create-from-project keeps prompt sources in prompt mode
       promptId: 'prompt-1',
     },
   ])
+  expect(state.sourceProjectLinks).toEqual([{id: 'comparison-project-source-1', sourceProjectId: 'prompt-project-1'}])
+})
+
+test('comparison project create-from-project rejects incompatible additional summary projects', async () => {
+  mockDatabaseStateRef.current = {...createMockDatabaseState(), failPromptInsert: false, promptLinks: []}
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects/from-project', {
+      body: JSON.stringify({
+        compareWithHumans: true,
+        description: 'Broken multi-project summary comparison',
+        name: 'Broken multi-project summary comparison',
+        sourceProjectId: 'source-project-1',
+        sourceProjectIds: ['source-project-mismatch'],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const bodyText = await response.text()
+
+  expect(response.status).toBe(500)
+  expect(bodyText).toContain('Additional projects must match the summary source project prompt criteria exactly')
+  expect(getMockDatabaseState().sourceProjectLinks).toEqual([])
 })
 
 test('comparison project create rejects summary mode without a summary source project', async () => {
@@ -1282,6 +1328,74 @@ test('summary comparison judgments use synthetic summary columns and derived cel
     state.queryStatements.some((statement) => {
       return (
         statement.includes('FROM app.judgment_human_summary') && statement.includes("project_id = 'source-project-1'")
+      )
+    }),
+  ).toBe(true)
+})
+
+test('summary comparison judgments scope to explicit source project links when available', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    comparisonProject: {
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    failPromptInsert: false,
+    promptLinks: [
+      {
+        criteriaDisposition: 'include',
+        criteriaSectionKey: 'population',
+        criteriaSectionLabel: 'Population',
+        id: 'comparison-project-prompt-1',
+        order: 0,
+        promptId: 'prompt-1',
+      },
+      {
+        criteriaDisposition: 'exclude',
+        criteriaSectionKey: 'outcome',
+        criteriaSectionLabel: 'Outcome',
+        id: 'comparison-project-prompt-2',
+        order: 1,
+        promptId: 'prompt-2',
+      },
+    ],
+    routeLinks: [
+      {id: 'comparison-project-route-1', importRouteId: 'import-route-1'},
+      {id: 'comparison-project-route-2', importRouteId: 'import-route-2'},
+    ],
+    sourceProjectLinks: [
+      {id: 'comparison-project-source-1', sourceProjectId: 'source-project-1'},
+      {id: 'comparison-project-source-2', sourceProjectId: 'source-project-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const judgmentsResponse = await app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1/judgments', {
+      body: JSON.stringify({
+        differenceFilter: 'llm-vs-llm',
+        hideSparseRows: true,
+        limit: '50',
+        page: '1',
+        showOnlyFullyAnsweredPrompts: true,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const state = getMockDatabaseState()
+
+  expect(judgmentsResponse.status).toBe(200)
+  expect(
+    state.queryStatements.some((statement) => {
+      return (
+        statement.includes('FROM app.article a')
+        && statement.includes("pa.project_id IN ('source-project-1', 'source-project-2')")
+        && !statement.includes('air.import_route_id IN')
       )
     }),
   ).toBe(true)

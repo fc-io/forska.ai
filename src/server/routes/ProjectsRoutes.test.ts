@@ -682,6 +682,10 @@ test('delete archived route removes archived project rows and keeps cross-projec
     )
   `)
   await runDatabase(`
+    INSERT INTO app.comparison_project_source_project (id, comparison_project_id, source_project_id)
+    VALUES ('delete-archived-comparison-source-link', '${survivorComparisonProjectId}', '${sourceProjectId}')
+  `)
+  await runDatabase(`
     INSERT INTO app.import_route (id, route, name)
     VALUES ('${importRouteId}', '/delete-archived-route', 'manual')
   `)
@@ -1152,6 +1156,11 @@ test('delete archived route removes archived project rows and keeps cross-projec
     WHERE id = '${survivorComparisonProjectId}'
     GROUP BY summary_source_project_id
   `)
+  const [comparisonProjectSourceLinkRowCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.comparison_project_source_project
+    WHERE comparison_project_id = '${survivorComparisonProjectId}'
+  `)
 
   expect(Number(projectRow?.count ?? 0)).toBe(0)
   expect(Number(projectPromptRowCount?.count ?? 0)).toBe(0)
@@ -1175,6 +1184,7 @@ test('delete archived route removes archived project rows and keeps cross-projec
   expect(survivorArticleOrigin?.importedFromProjectId).toBe(null)
   expect(Number(comparisonProjectRow?.count ?? 0)).toBe(1)
   expect(comparisonProjectRow?.summarySourceProjectId).toBe(null)
+  expect(Number(comparisonProjectSourceLinkRowCount?.count ?? 0)).toBe(0)
   expect(judgmentProjectId?.projectId).toBe(null)
   expect(judgmentHumanProjectId?.projectId).toBe(null)
 })
@@ -2283,6 +2293,75 @@ test('create route stores hash-backed immutable prompts', async () => {
   await flushMartRefreshes()
 })
 
+test('create route reuses archived hash-matching prompt and reactivates the canonical row', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'create-archived-canonical-connection'
+  const modelId = 'create-archived-canonical-model'
+  const promptHash = computePromptContentHash('Archived shared prompt text', null, 'archived shared', 'string')
+
+  await insertProjectFixture({connectionId, modelId, projectId: 'create-archived-canonical-seed-project'})
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, prompt_heading, type, content_hash, archived)
+    VALUES (
+      'create-archived-canonical-prompt',
+      'Archived shared prompt text',
+      'archived shared',
+      'string',
+      '${promptHash}',
+      TRUE
+    )
+  `)
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projects', {
+      body: JSON.stringify({
+        name: 'Archived canonical create project',
+        modelId,
+        prompts: [{content: 'Archived shared prompt text', promptHeading: 'archived shared', type: 'string', order: 0}],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {data: {id: string}}
+  const projectId = body.data.id
+
+  expect(response.status).toBe(200)
+
+  const promptRows = await queryDatabase<{
+    archived: boolean
+    contentHash: string | null
+    linkedProjectId: string | null
+    promptId: string
+  }>(`
+    SELECT
+      p.id AS promptId,
+      p.content_hash AS contentHash,
+      p.archived AS archived,
+      pp.project_id AS linkedProjectId
+    FROM app.prompt p
+    LEFT JOIN app.project_prompt pp
+      ON pp.prompt_id = p.id
+     AND pp.project_id = '${projectId}'
+    WHERE p.content_hash = '${promptHash}'
+    ORDER BY p.id ASC
+  `)
+
+  expect(promptRows).toEqual([
+    {
+      archived: false,
+      contentHash: promptHash,
+      linkedProjectId: projectId,
+      promptId: 'create-archived-canonical-prompt',
+    },
+  ])
+
+  await flushMartRefreshes()
+})
+
 test('edit route reuses matching immutable prompts when content matches', async () => {
   if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')
@@ -2358,6 +2437,139 @@ test('edit route reuses matching immutable prompts when content matches', async 
   expect(promptRow?.promptId).toBe('edit-detach-existing-prompt')
   expect(promptRow?.contentHash).toBe(computePromptContentHash('Shared prompt text', null, 'shared', 'string'))
   expect(promptRow?.originProjectId).toBe(null)
+
+  await flushMartRefreshes()
+})
+
+test('edit route reuses archived hash-matching prompt instead of creating a parallel prompt', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-archived-canonical-connection'
+  const modelId = 'edit-archived-canonical-model'
+  const projectId = 'edit-archived-canonical-project'
+  const promptHash = computePromptContentHash('Archived edit prompt text', null, 'archived edit', 'string')
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertProjectPromptFixture({
+    contentHash: 'edit-archived-canonical-original-hash',
+    originProjectId: projectId,
+    originalText: 'Original edit prompt text',
+    projectId,
+    projectPromptId: 'edit-archived-canonical-project-prompt',
+    promptId: 'edit-archived-canonical-original-prompt',
+  })
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, prompt_heading, type, content_hash, archived)
+    VALUES (
+      'edit-archived-canonical-target-prompt',
+      'Archived edit prompt text',
+      'archived edit',
+      'string',
+      '${promptHash}',
+      TRUE
+    )
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        name: 'Edited archived canonical project',
+        description: null,
+        prompts: [
+          {
+            originalId: 'edit-archived-canonical-original-prompt',
+            originalText: 'Archived edit prompt text',
+            promptHeading: 'archived edit',
+            type: 'string',
+            order: 0,
+            enabled: true,
+          },
+        ],
+        dateFrom: null,
+        dateTo: null,
+        modelId,
+        importRoutes: [],
+        useTitle: true,
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+
+  expect(response.status).toBe(200)
+
+  const promptRows = await queryDatabase<{
+    archived: boolean
+    contentHash: string | null
+    linkedProjectId: string | null
+    promptId: string
+  }>(`
+    SELECT
+      p.id AS promptId,
+      p.content_hash AS contentHash,
+      p.archived AS archived,
+      pp.project_id AS linkedProjectId
+    FROM app.prompt p
+    LEFT JOIN app.project_prompt pp
+      ON pp.prompt_id = p.id
+     AND pp.project_id = '${projectId}'
+    WHERE p.content_hash = '${promptHash}'
+    ORDER BY p.id ASC
+  `)
+
+  expect(promptRows).toEqual([
+    {
+      archived: false,
+      contentHash: promptHash,
+      linkedProjectId: projectId,
+      promptId: 'edit-archived-canonical-target-prompt',
+    },
+  ])
+
+  await flushMartRefreshes()
+})
+
+test('clone route keeps legacy null-hash prompt links stable', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'clone-null-hash-connection'
+  const modelId = 'clone-null-hash-model'
+  const projectId = 'clone-null-hash-project'
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, prompt_heading, type, content_hash)
+    VALUES ('clone-null-hash-prompt', 'Legacy null hash prompt', 'legacy', 'string', NULL)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, enabled, origin_project_id)
+    VALUES ('clone-null-hash-project-prompt', '${projectId}', 'clone-null-hash-prompt', 0, FALSE, TRUE, NULL)
+  `)
+
+  const cloneResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/clone`, {method: 'POST'}),
+  )
+  const cloneBody = (await cloneResponse.json()) as {data: {id: string}}
+  const clonedProjectId = cloneBody.data.id
+
+  expect(cloneResponse.status).toBe(200)
+
+  const clonedPromptRows = await queryDatabase<{contentHash: string | null; promptId: string}>(`
+    SELECT p.id AS promptId,
+           p.content_hash AS contentHash
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON p.id = pp.prompt_id
+    WHERE pp.project_id = '${clonedProjectId}'
+  `)
+
+  expect(clonedPromptRows).toEqual([{contentHash: null, promptId: 'clone-null-hash-prompt'}])
 
   await flushMartRefreshes()
 })

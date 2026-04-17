@@ -167,8 +167,7 @@ const CreateCompareJudgmentsFromProjectPage = () => {
     return Boolean(
       comparisonProjectName().trim()
         && selectedSourceProjectId()
-        && !summaryModeUnavailableReason()
-        && !additionalProjectValidationError()
+        && (!summaryModeEnabled() || (!summaryModeUnavailableReason() && !additionalProjectValidationError()))
         && !isLoading(),
     )
   })
