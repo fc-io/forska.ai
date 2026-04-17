@@ -1,5 +1,10 @@
 import {type ProviderInvocationResult, type ProviderListedModel} from '../providerTypes.ts'
-import {getRequiredApiKey, getRequiredBaseURL, getTrimmedValue} from './providerTransportUtils.ts'
+import {
+  getAnthropicJsonSchemaOutputConfig,
+  getRequiredApiKey,
+  getRequiredBaseURL,
+  getTrimmedValue,
+} from './providerTransportUtils.ts'
 
 const anthropicVersion = '2023-06-01'
 
@@ -18,12 +23,14 @@ const shouldIncludeAnthropicTemperature = (modelName: string): boolean => {
 const getAnthropicMessagesRequestBody = ({
   maxCompletionTokens,
   modelName,
+  outputSchema,
   prompt,
   systemPrompt,
   temperature,
 }: {
   maxCompletionTokens: number
   modelName: string
+  outputSchema: unknown
   prompt: string
   systemPrompt: string
   temperature: number
@@ -32,6 +39,7 @@ const getAnthropicMessagesRequestBody = ({
     max_tokens: maxCompletionTokens,
     messages: [{content: prompt, role: 'user' as const}],
     model: modelName,
+    output_config: getAnthropicJsonSchemaOutputConfig(outputSchema),
     system: systemPrompt,
   }
 
@@ -102,6 +110,7 @@ export const invokeAnthropicMessagesModel = async ({
   baseURL,
   maxCompletionTokens,
   modelName,
+  outputSchema,
   prompt,
   systemPrompt,
   temperature,
@@ -110,6 +119,7 @@ export const invokeAnthropicMessagesModel = async ({
   baseURL: string | null
   maxCompletionTokens: number
   modelName: string
+  outputSchema: unknown
   prompt: string
   systemPrompt: string
   temperature: number
@@ -118,7 +128,14 @@ export const invokeAnthropicMessagesModel = async ({
   const requiredApiKey = getRequiredApiKey({apiKey, providerLabel: 'Anthropic'})
   const response = await fetch(`${resolvedBaseURL}/messages`, {
     body: JSON.stringify(
-      getAnthropicMessagesRequestBody({maxCompletionTokens, modelName, prompt, systemPrompt, temperature}),
+      getAnthropicMessagesRequestBody({
+        maxCompletionTokens,
+        modelName,
+        outputSchema,
+        prompt,
+        systemPrompt,
+        temperature,
+      }),
     ),
     headers: getAnthropicHeaders(requiredApiKey),
     method: 'POST',

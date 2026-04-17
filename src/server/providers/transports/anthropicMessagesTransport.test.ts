@@ -61,6 +61,7 @@ test('includes Anthropic error details and request id on failed message requests
       baseURL: 'https://api.anthropic.com/v1',
       maxCompletionTokens: 2000,
       modelName: 'claude-opus-4-7',
+      outputSchema: {type: 'object'},
       prompt: 'Hello',
       systemPrompt: 'Return JSON',
       temperature: 0.2,
@@ -84,6 +85,7 @@ test('omits temperature for claude-opus-4-7 requests', async () => {
     baseURL: 'https://api.anthropic.com/v1',
     maxCompletionTokens: 32,
     modelName: 'claude-opus-4-7',
+    outputSchema: {type: 'object'},
     prompt: 'Hello',
     systemPrompt: 'Return JSON',
     temperature: 0.2,
@@ -94,6 +96,7 @@ test('omits temperature for claude-opus-4-7 requests', async () => {
     max_tokens: 32,
     messages: [{content: 'Hello', role: 'user'}],
     model: 'claude-opus-4-7',
+    output_config: {format: {schema: {type: 'object'}, type: 'json_schema'}},
     system: 'Return JSON',
   })
 })
@@ -112,6 +115,7 @@ test('keeps temperature for Anthropic models that still accept it', async () => 
     baseURL: 'https://api.anthropic.com/v1',
     maxCompletionTokens: 32,
     modelName: 'claude-sonnet-4-6',
+    outputSchema: {type: 'object'},
     prompt: 'Hello',
     systemPrompt: 'Return JSON',
     temperature: 0.2,
@@ -121,6 +125,7 @@ test('keeps temperature for Anthropic models that still accept it', async () => 
     max_tokens: 32,
     messages: [{content: 'Hello', role: 'user'}],
     model: 'claude-sonnet-4-6',
+    output_config: {format: {schema: {type: 'object'}, type: 'json_schema'}},
     system: 'Return JSON',
     temperature: 0.2,
   })

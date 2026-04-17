@@ -58,6 +58,7 @@ export const createAnthropicAdapter = (catalog: ProviderCatalogEntry): ProviderD
         baseURL: runtimeCredentials.baseURL,
         maxCompletionTokens: request.maxCompletionTokens,
         modelName: model.modelName ?? model.remoteModelId ?? model.name,
+        outputSchema: request.outputSchema,
         prompt: request.prompt,
         systemPrompt: request.systemPrompt,
         temperature: request.temperature,

@@ -225,6 +225,7 @@ test('anthropic adapter delegates health and invoke to messages transport', asyn
   expect(result.text).toBe('anthropic-response')
   expect(anthropicState.list).toHaveBeenCalledTimes(1)
   expect(anthropicState.invoke).toHaveBeenCalledTimes(1)
+  expect(anthropicState.invoke.mock.calls[0]?.[0]).toMatchObject({outputSchema: {type: 'object'}})
 })
 
 test('google adapter delegates health and invoke to generate-content transport', async () => {
