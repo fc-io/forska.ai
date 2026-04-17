@@ -191,6 +191,8 @@ export type ComparisonProjectRecord = {
   description: string | null
   modelIds: string[] | null
   compareWithHumans: boolean
+  humanJudgmentMode: HumanJudgmentMode | null
+  summarySourceProjectId: string | null
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean
@@ -281,6 +283,9 @@ export type ComparisonProjectPromptRecord = {
   comparisonProjectId: string
   promptId: string
   order: number | null
+  criteriaDisposition: ProjectPromptCriteriaDisposition | null
+  criteriaSectionKey: string | null
+  criteriaSectionLabel: string | null
 }
 
 export type JudgmentRecord = {

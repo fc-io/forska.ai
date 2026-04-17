@@ -1,5 +1,10 @@
 import {Elysia, t} from 'elysia'
 
+import type {
+  ComparisonProjectRecord,
+  HumanJudgmentMode,
+  ProjectPromptCriteriaDisposition,
+} from '../../db/schemaTypes.ts'
 import {appendProviderModelThinkingBadgeLabel} from '../../utils/providerModelLabel.ts'
 import {getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
 import {assertSelectableProviderModelIds} from '../providers/providerModelRepository.ts'
@@ -12,7 +17,13 @@ import {
 } from '../utils/judgmentAnswers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
-type PromptSelection = {promptId: string; order: number}
+type PromptSelection = {
+  promptId: string
+  order: number
+  criteriaDisposition?: ProjectPromptCriteriaDisposition | null
+  criteriaSectionKey?: string | null
+  criteriaSectionLabel?: string | null
+}
 type AppDatabaseService = ReturnType<typeof getAppDatabaseService>
 type AppTx = Parameters<AppDatabaseService['transaction']>[0] extends (runner: infer T) => Promise<unknown> ? T : never
 type AppQueryRunner = Pick<AppTx, 'queryJson'>
@@ -24,7 +35,15 @@ type ComparisonProjectContentVariant = {
   useFulltext: boolean
   useFulltextNoImages: boolean
 }
-type ComparisonProjectPromptConfig = {id: string; promptHeading: string | null; promptLabel: string; order: number}
+type ComparisonProjectPromptConfig = {
+  id: string
+  promptHeading: string | null
+  promptLabel: string
+  order: number
+  criteriaDisposition: ProjectPromptCriteriaDisposition | null
+  criteriaSectionKey: string | null
+  criteriaSectionLabel: string | null
+}
 type ComparisonProjectModelConfig = {id: string; metadataJson: unknown; name: string}
 type ComparisonProjectJudgmentsColumn = {
   id: string
@@ -40,6 +59,8 @@ type ComparisonProjectScope = {
   name: string
   description: string | null
   compareWithHumans: boolean
+  humanJudgmentMode: HumanJudgmentMode
+  summarySourceProjectId: string | null
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean
@@ -68,7 +89,14 @@ type ComparisonProjectLlmRow = {
   useFulltextNoImages: boolean
 }
 type ComparisonProjectHumanRow = {articleId: string; promptId: string; answer: string | null; updatedAt: Date | null}
-type ComparisonProjectSourcePrompt = {id: string; promptHeading: string | null; order: number}
+type ComparisonProjectSourcePrompt = {
+  id: string
+  promptHeading: string | null
+  order: number
+  criteriaDisposition: ProjectPromptCriteriaDisposition | null
+  criteriaSectionKey: string | null
+  criteriaSectionLabel: string | null
+}
 type ComparisonProjectSourceImportRoute = {route: string; name: string | null}
 type ComparisonProjectSource = {
   id: string
@@ -77,6 +105,7 @@ type ComparisonProjectSource = {
   modelId: string
   modelMetadataJson?: unknown
   modelName: string
+  humanJudgmentMode: HumanJudgmentMode | null
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean
@@ -92,22 +121,10 @@ type ComparisonProjectEditPrompt = {
   createdAt: Date
   archived: boolean
 }
-type ComparisonProjectRecordRow = {
-  id: string
-  name: string
-  description: string | null
-  modelIds: unknown
-  compareWithHumans: boolean
-  useTitle: boolean
-  useAbstract: boolean
-  useFulltext: boolean
-  useFulltextNoImages: boolean
-  dateFrom: unknown
-  dateTo: unknown
-  archived: boolean
-  createdAt: unknown
-  updatedAt: unknown
-}
+type ComparisonProjectRecordRow = Omit<
+  ComparisonProjectRecord,
+  'createdAt' | 'dateFrom' | 'dateTo' | 'modelIds' | 'updatedAt'
+> & {createdAt: unknown; dateFrom: unknown; dateTo: unknown; modelIds: unknown; updatedAt: unknown}
 
 const comparisonProjectTable = 'app.comparison_project'
 const comparisonProjectPromptTable = 'app.comparison_project_prompt'
@@ -216,6 +233,7 @@ const getComparisonProjectRecordValue = (row: ComparisonProjectRecordRow) => {
   return {
     ...row,
     modelIds: getStringArrayRowValue(row, 'modelIds'),
+    humanJudgmentMode: row.humanJudgmentMode ?? 'prompt',
     dateFrom: getDateValue(row.dateFrom),
     dateTo: getDateValue(row.dateTo),
     createdAt: getRequiredDateValue(row.createdAt),
@@ -231,6 +249,8 @@ const getComparisonProjectRecordSql = (comparisonProjectId: string) => {
       description,
       model_ids AS modelIds,
       compare_with_humans AS compareWithHumans,
+      human_judgment_mode AS humanJudgmentMode,
+      summary_source_project_id AS summarySourceProjectId,
       use_title AS useTitle,
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
@@ -457,6 +477,8 @@ const getComparisonProjectsList = async (archived: boolean) => {
     name: string
     description: string | null
     compareWithHumans: boolean
+    humanJudgmentMode: HumanJudgmentMode | null
+    summarySourceProjectId: string | null
     useTitle: boolean
     useAbstract: boolean
     useFulltext: boolean
@@ -473,6 +495,8 @@ const getComparisonProjectsList = async (archived: boolean) => {
       cp.name AS name,
       cp.description AS description,
       cp.compare_with_humans AS compareWithHumans,
+      cp.human_judgment_mode AS humanJudgmentMode,
+      cp.summary_source_project_id AS summarySourceProjectId,
       cp.use_title AS useTitle,
       cp.use_abstract AS useAbstract,
       cp.use_fulltext AS useFulltext,
@@ -501,6 +525,7 @@ const getComparisonProjectsList = async (archived: boolean) => {
   return rows.map((row) => {
     return {
       ...row,
+      humanJudgmentMode: row.humanJudgmentMode ?? 'prompt',
       dateFrom: getDateValue(row.dateFrom),
       dateTo: getDateValue(row.dateTo),
       createdAt: getDateValue(row.createdAt),
@@ -517,6 +542,7 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
       p.model_id AS modelId,
       TO_JSON(m.metadata_json) AS modelMetadataJson,
       COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
+      p.human_judgment_mode AS humanJudgmentMode,
       p.use_title AS useTitle,
       p.use_abstract AS useAbstract,
       p.use_fulltext AS useFulltext,
@@ -540,12 +566,18 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
       promptId: string
       promptHeading: string | null
       order: number | null
+      criteriaDisposition: ProjectPromptCriteriaDisposition | null
+      criteriaSectionKey: string | null
+      criteriaSectionLabel: string | null
     }>(`
       SELECT
         pp.project_id AS projectId,
         p.id AS promptId,
         p.prompt_heading AS promptHeading,
-        pp.prompt_order AS "order"
+        pp.prompt_order AS "order",
+        pp.criteria_disposition AS criteriaDisposition,
+        pp.criteria_section_key AS criteriaSectionKey,
+        pp.criteria_section_label AS criteriaSectionLabel
       FROM ${projectPromptTable} pp
       INNER JOIN ${promptTable} p ON p.id = pp.prompt_id
       WHERE pp.project_id IN (${getInClause(projectIds)})
@@ -593,8 +625,16 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
           label: projectRow.modelName,
           thinking: getProviderModelMetadataOptions(getJsonValue(projectRow.modelMetadataJson)).thinking,
         }),
+        humanJudgmentMode: projectRow.humanJudgmentMode ?? 'prompt',
         prompts: sourcePromptRows.map<ComparisonProjectSourcePrompt>((promptRow, index) => {
-          return {id: promptRow.promptId, promptHeading: promptRow.promptHeading, order: promptRow.order ?? index}
+          return {
+            id: promptRow.promptId,
+            promptHeading: promptRow.promptHeading,
+            order: promptRow.order ?? index,
+            criteriaDisposition: promptRow.criteriaDisposition,
+            criteriaSectionKey: promptRow.criteriaSectionKey,
+            criteriaSectionLabel: promptRow.criteriaSectionLabel,
+          }
         }),
         importRoutes: sourceImportRouteRows.map<ComparisonProjectSourceImportRoute>((routeRow) => {
           return {route: routeRow.route, name: routeRow.name}
@@ -865,6 +905,8 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
     name: string
     description: string | null
     compareWithHumans: boolean
+    humanJudgmentMode: HumanJudgmentMode | null
+    summarySourceProjectId: string | null
     useTitle: boolean
     useAbstract: boolean
     useFulltext: boolean
@@ -880,6 +922,8 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
       name,
       description,
       compare_with_humans AS compareWithHumans,
+      human_judgment_mode AS humanJudgmentMode,
+      summary_source_project_id AS summarySourceProjectId,
       use_title AS useTitle,
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
@@ -904,10 +948,24 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
     dateTo: getDateValue(comparisonProjectRow.dateTo),
     createdAt: getRequiredDateValue(comparisonProjectRow.createdAt),
     modelIds: getStringArrayRowValue(comparisonProjectRow, 'modelIds'),
+    humanJudgmentMode: comparisonProjectRow.humanJudgmentMode ?? 'prompt',
   }
   const [promptRows, routeRows] = await Promise.all([
-    appDatabaseService.queryJson<{id: string; promptHeading: string | null; order: number | null}>(`
-      SELECT p.id AS id, p.prompt_heading AS promptHeading, cpp.prompt_order AS "order"
+    appDatabaseService.queryJson<{
+      id: string
+      promptHeading: string | null
+      order: number | null
+      criteriaDisposition: ProjectPromptCriteriaDisposition | null
+      criteriaSectionKey: string | null
+      criteriaSectionLabel: string | null
+    }>(`
+      SELECT
+        p.id AS id,
+        p.prompt_heading AS promptHeading,
+        cpp.prompt_order AS "order",
+        cpp.criteria_disposition AS criteriaDisposition,
+        cpp.criteria_section_key AS criteriaSectionKey,
+        cpp.criteria_section_label AS criteriaSectionLabel
       FROM ${comparisonProjectPromptTable} cpp
       INNER JOIN ${promptTable} p ON p.id = cpp.prompt_id
       WHERE cpp.comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
@@ -928,16 +986,17 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
       promptHeading: promptRow.promptHeading,
       promptLabel: getPromptLabel(promptRow.promptHeading, order),
       order,
+      criteriaDisposition: promptRow.criteriaDisposition,
+      criteriaSectionKey: promptRow.criteriaSectionKey,
+      criteriaSectionLabel: promptRow.criteriaSectionLabel,
     }
   })
   const importRouteIds = routeRows.map((routeRow) => {
     return routeRow.importRouteId
   })
-  const sourceProjectId = await getInferredSourceProjectId(
-    normalizedComparisonProjectRow,
-    promptConfigs,
-    importRouteIds,
-  )
+  const sourceProjectId =
+    normalizedComparisonProjectRow.summarySourceProjectId
+    ?? (await getInferredSourceProjectId(normalizedComparisonProjectRow, promptConfigs, importRouteIds))
   const contentVariants = getComparisonProjectContentVariants(normalizedComparisonProjectRow)
   const modelRows = await getComparisonProjectModels(
     {...normalizedComparisonProjectRow, sourceProjectId, contentVariants},
@@ -970,6 +1029,8 @@ const getComparisonProjectEditFormData = async (comparisonProjectId: string) => 
     name: string
     description: string | null
     compareWithHumans: boolean
+    humanJudgmentMode: HumanJudgmentMode | null
+    summarySourceProjectId: string | null
     updatedAt: unknown
     modelIds: unknown
     useTitle: boolean
@@ -982,6 +1043,8 @@ const getComparisonProjectEditFormData = async (comparisonProjectId: string) => 
       name,
       description,
       compare_with_humans AS compareWithHumans,
+      human_judgment_mode AS humanJudgmentMode,
+      summary_source_project_id AS summarySourceProjectId,
       updated_at AS updatedAt,
       model_ids AS modelIds,
       use_title AS useTitle,
@@ -1001,6 +1064,7 @@ const getComparisonProjectEditFormData = async (comparisonProjectId: string) => 
     ...comparisonProjectRow,
     updatedAt: getDateValue(comparisonProjectRow.updatedAt),
     modelIds: getStringArrayRowValue(comparisonProjectRow, 'modelIds'),
+    humanJudgmentMode: comparisonProjectRow.humanJudgmentMode ?? 'prompt',
   }
   const configuredModelIds = normalizedComparisonProjectRow.modelIds ?? []
   const configuredModelRows =
@@ -1458,12 +1522,23 @@ const insertComparisonProjectPromptLinks = async (
   }
 
   await tx.run(`
-    INSERT INTO ${comparisonProjectPromptTable} (id, comparison_project_id, prompt_id, prompt_order)
+    INSERT INTO ${comparisonProjectPromptTable} (
+      id,
+      comparison_project_id,
+      prompt_id,
+      prompt_order,
+      criteria_disposition,
+      criteria_section_key,
+      criteria_section_label
+    )
     VALUES (
       ${getSqlLiteral(crypto.randomUUID())},
       ${getSqlLiteral(comparisonProjectId)},
       ${getSqlLiteral(currentPromptSelection.promptId)},
-      ${currentPromptSelection.order}
+      ${currentPromptSelection.order},
+      ${getSqlLiteral(currentPromptSelection.criteriaDisposition ?? null)},
+      ${getSqlLiteral(currentPromptSelection.criteriaSectionKey ?? null)},
+      ${getSqlLiteral(currentPromptSelection.criteriaSectionLabel ?? null)}
     )
   `)
 
@@ -1645,6 +1720,8 @@ const createComparisonProjectRecord = async (
     description?: string | null
     modelIds?: string[]
     compareWithHumans?: boolean
+    humanJudgmentMode?: HumanJudgmentMode
+    summarySourceProjectId?: string | null
     dateFrom?: string | null
     dateTo?: string | null
     useTitle?: boolean
@@ -1679,6 +1756,8 @@ const createComparisonProjectRecord = async (
     description: string | null
     modelIds: unknown
     compareWithHumans: boolean
+    humanJudgmentMode: HumanJudgmentMode | null
+    summarySourceProjectId: string | null
     useTitle: boolean
     useAbstract: boolean
     useFulltext: boolean
@@ -1695,6 +1774,8 @@ const createComparisonProjectRecord = async (
       description,
       model_ids,
       compare_with_humans,
+      human_judgment_mode,
+      summary_source_project_id,
       use_title,
       use_abstract,
       use_fulltext,
@@ -1708,6 +1789,8 @@ const createComparisonProjectRecord = async (
       ${getSqlLiteral(body.description?.trim() || null)},
       ${getSqlLiteral(validatedModelIds)},
       ${getBooleanLiteral(body.compareWithHumans ?? false)},
+      ${getSqlLiteral(body.humanJudgmentMode ?? 'prompt')},
+      ${getSqlLiteral(body.summarySourceProjectId ?? null)},
       ${getBooleanLiteral(useTitle)},
       ${getBooleanLiteral(useAbstract)},
       ${getBooleanLiteral(useFulltext)},
@@ -1721,6 +1804,8 @@ const createComparisonProjectRecord = async (
       description,
       model_ids AS modelIds,
       compare_with_humans AS compareWithHumans,
+      human_judgment_mode AS humanJudgmentMode,
+      summary_source_project_id AS summarySourceProjectId,
       use_title AS useTitle,
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
@@ -1778,6 +1863,8 @@ export const comparisonProjectsRoutes = new Elysia()
           description: body.description,
           modelIds: [sourceProject.modelId],
           compareWithHumans: body.compareWithHumans,
+          humanJudgmentMode: sourceProject.humanJudgmentMode ?? 'prompt',
+          summarySourceProjectId: sourceProject.humanJudgmentMode === 'summary' ? sourceProject.id : null,
           dateFrom: body.dateFrom,
           dateTo: body.dateTo,
           useTitle: sourceProject.useTitle,
@@ -1788,7 +1875,13 @@ export const comparisonProjectsRoutes = new Elysia()
             return importRoute.route
           }),
           promptSelections: sourceProject.prompts.map((prompt) => {
-            return {promptId: prompt.id, order: prompt.order}
+            return {
+              promptId: prompt.id,
+              order: prompt.order,
+              criteriaDisposition: prompt.criteriaDisposition,
+              criteriaSectionKey: prompt.criteriaSectionKey,
+              criteriaSectionLabel: prompt.criteriaSectionLabel,
+            }
           }),
         })
       })

@@ -3,8 +3,36 @@ import {getRequiredApiKey, getRequiredBaseURL, getTrimmedValue} from './provider
 
 const anthropicVersion = '2023-06-01'
 
+type AnthropicErrorResponse = {error?: {message?: string; type?: string}; request_id?: string}
+
 const getAnthropicHeaders = (apiKey: string): HeadersInit => {
   return {'anthropic-version': anthropicVersion, 'content-type': 'application/json', 'x-api-key': apiKey}
+}
+
+const getAnthropicResponseErrorMessage = async ({
+  action,
+  response,
+}: {
+  action: 'list models' | 'request'
+  response: Response
+}): Promise<string> => {
+  const parsedBody = (await response
+    .clone()
+    .json()
+    .catch(() => null)) as AnthropicErrorResponse | null
+  const fallbackText = getTrimmedValue(await response.text().catch(() => ''))
+  const errorType = getTrimmedValue(parsedBody?.error?.type)
+  const errorMessage = getTrimmedValue(parsedBody?.error?.message) ?? fallbackText
+  const requestId = getTrimmedValue(response.headers.get('request-id')) ?? getTrimmedValue(parsedBody?.request_id)
+  const detail = [errorType ? `[${errorType}]` : null, errorMessage, requestId ? `request_id=${requestId}` : null]
+    .filter((value): value is string => {
+      return value !== null
+    })
+    .join(' ')
+
+  return detail
+    ? `Anthropic ${action} failed (${response.status}): ${detail}`
+    : `Anthropic ${action} failed (${response.status})`
 }
 
 export const listAnthropicMessageModels = async ({
@@ -21,7 +49,7 @@ export const listAnthropicMessageModels = async ({
   const response = await fetch(`${resolvedBaseURL}/models`, {headers: getAnthropicHeaders(requiredApiKey)})
 
   if (!response.ok) {
-    throw new Error(`Anthropic list models failed (${response.status})`)
+    throw new Error(await getAnthropicResponseErrorMessage({action: 'list models', response}))
   }
 
   const body = (await response.json()) as {data?: Array<{display_name?: string; id: string}>}
@@ -72,7 +100,7 @@ export const invokeAnthropicMessagesModel = async ({
   })
 
   if (!response.ok) {
-    throw new Error(`Anthropic request failed (${response.status})`)
+    throw new Error(await getAnthropicResponseErrorMessage({action: 'request', response}))
   }
 
   const body = (await response.json()) as {

@@ -1,3 +1,4 @@
+import type {HumanJudgmentMode, ProjectPromptCriteriaDisposition} from '../db/schemaTypes.ts'
 import {apiClient} from './apiClient.ts'
 
 export type CreateComparisonProjectInput = {
@@ -30,11 +31,19 @@ export type ComparisonProjectSource = {
   description: string | null
   modelId: string
   modelName: string
+  humanJudgmentMode: HumanJudgmentMode | null
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
-  prompts: Array<{id: string; promptHeading: string | null; order: number}>
+  prompts: Array<{
+    id: string
+    promptHeading: string | null
+    order: number
+    criteriaDisposition: ProjectPromptCriteriaDisposition | null
+    criteriaSectionKey: string | null
+    criteriaSectionLabel: string | null
+  }>
   importRoutes: Array<{route: string; name: string | null}>
 }
 
@@ -43,6 +52,8 @@ export type ComparisonProjectEditFormData = {
   name: string
   description: string | null
   compareWithHumans: boolean
+  humanJudgmentMode: HumanJudgmentMode
+  summarySourceProjectId: string | null
   updatedAt: Date | string
   selectedModelIds: string[]
   useTitle: boolean
@@ -89,6 +100,8 @@ export type ComparisonProjectJudgmentsMetadata = {
   name: string
   description: string | null
   compareWithHumans: boolean
+  humanJudgmentMode: HumanJudgmentMode
+  summarySourceProjectId: string | null
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean
@@ -99,7 +112,15 @@ export type ComparisonProjectJudgmentsMetadata = {
   createdAt: Date | string
   importRouteIds: string[]
   contentVariants: ComparisonProjectContentVariant[]
-  prompts: Array<{id: string; promptHeading: string | null; promptLabel: string; order: number}>
+  prompts: Array<{
+    id: string
+    promptHeading: string | null
+    promptLabel: string
+    order: number
+    criteriaDisposition: ProjectPromptCriteriaDisposition | null
+    criteriaSectionKey: string | null
+    criteriaSectionLabel: string | null
+  }>
   models: Array<{id: string; name: string}>
   columns: ComparisonProjectJudgmentsColumn[]
 }

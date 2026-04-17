@@ -1,0 +1,167 @@
+{
+  "name": "Compare 2 Plan",
+  "description": "Add prompt-mode versus summary-mode comparison project support so comparison flows can use Covevidence-style human and LLM overall screening decisions with explicit source-project persistence, validation, and UI controls.",
+  "branchName": "ralph/compare-2-summary-mode",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add summary-mode fields to comparison project persistence",
+      "description": "As a maintainer, I want comparison projects to persist summary-mode configuration and copied prompt criteria metadata so overall human and LLM decisions can be derived without relying on inferred source projects.",
+      "acceptanceCriteria": [
+        "Add `human_judgment_mode` to `app.comparison_project` with `prompt` and `summary` values and default existing rows to prompt mode.",
+        "Add nullable `summary_source_project_id` to `app.comparison_project` referencing `app.project`.",
+        "Add `criteria_disposition`, `criteria_section_key`, and `criteria_section_label` to `app.comparison_project_prompt`.",
+        "Update comparison-project schema typing so the new persisted fields are available to server and client code without inventing parallel types.",
+        "Existing prompt-mode comparison projects continue to load as prompt mode with no behavior change.",
+        "`bun run db:mig` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes",
+        "`bun run desktop:build` passes"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-002",
+      "title": "Expose summary-mode comparison contracts and source metadata",
+      "description": "As a maintainer, I want comparison-project API contracts and source-project payloads to expose summary-mode fields so create, edit, and read flows can make mode-aware decisions consistently.",
+      "acceptanceCriteria": [
+        "Extend comparison-project create, create-from-project, fetch, and update contracts to include `humanJudgmentMode` and `summarySourceProjectId`.",
+        "Update `fetchComparisonProjectSources` payloads to expose whether a source project is summary-capable and enough metadata to drive summary-mode UI decisions.",
+        "Update comparison metadata and edit-form responses to return the saved mode and summary source project information.",
+        "Treat missing or `NULL` human-judgment mode values as `prompt` so legacy data remains compatible.",
+        "`bun test <targeted comparison test files>` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes",
+        "`bun run desktop:build` passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Persist and validate summary-mode create and edit flows",
+      "description": "As a maintainer, I want comparison-project create and edit routes to validate summary-mode requirements and copy source prompt criteria metadata so saved comparisons remain stable even if the source project later changes.",
+      "acceptanceCriteria": [
+        "Summary mode requires `compareWithHumans = true`, a valid `summarySourceProjectId`, and selected prompts that exist on the chosen summary source project.",
+        "Manual create and edit copy prompt criteria metadata from the selected summary source project into `app.comparison_project_prompt` for the saved prompt set.",
+        "Create-from-project saves `humanJudgmentMode = 'summary'` and `summarySourceProjectId = sourceProject.id` when the chosen source project is summary-capable and the summary toggle is enabled.",
+        "Invalid summary-mode requests fail with clear errors instead of silently falling back to prompt mode.",
+        "Prompt-mode create and edit behavior remain unchanged for existing comparison flows.",
+        "`bun test <targeted comparison test files>` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes",
+        "`bun run desktop:build` passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001",
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Derive summary-mode comparison scope and judgment cells",
+      "description": "As a maintainer, I want the comparison backend to build summary-aware scope, human rows, and derived LLM summary answers so comparison results can switch cleanly between prompt mode and overall-decision mode.",
+      "acceptanceCriteria": [
+        "Extend `ComparisonProjectScope` with `humanJudgmentMode`, `summarySourceProjectId`, and selected prompt criteria metadata.",
+        "In summary mode, load human answers from `app.judgment_human_summary` filtered by `summarySourceProjectId` and use the latest non-empty answer per article.",
+        "In summary mode, derive one strict LLM summary answer per model and content variant using `getNormalizedSummaryAnswer` and `deriveStrictSummaryAnswer` over the latest prompt answers.",
+        "Emit synthetic summary columns and cells in summary mode while preserving existing prompt-level columns and cells in prompt mode.",
+        "Sparse-row, fully-answered, and model-difference filtering operate against the shown summary columns in summary mode without changing prompt-mode behavior.",
+        "`bun test src/server/utils/judgmentAnswers.test.ts` passes",
+        "`bun test <targeted comparison test files>` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes",
+        "`bun run desktop:build` passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-003"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Add summary-mode controls to comparison creation flows",
+      "description": "As a user, I want comparison creation forms to let me choose summary mode with the right source-project constraints so I can build Covevidence-style overall-decision comparisons without manual database setup.",
+      "acceptanceCriteria": [
+        "`Create New Comparison` adds a summary toggle and a required summary-capable source-project picker when the toggle is enabled.",
+        "Manual summary mode constrains prompt selections to prompts available on the selected summary source project with the required summary criteria metadata.",
+        "`Compare Project` only enables the summary toggle for summary-capable source projects and submits the new fields when selected.",
+        "Form validation and loading states follow the existing comparison-form conventions and explain why summary mode is unavailable or invalid.",
+        "`bun run lint` passes",
+        "`bun run build` passes",
+        "`bun run desktop:build` passes",
+        "Verify in browser that a manual summary comparison can be created from a summary-capable source project"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002",
+        "US-003"
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Show summary-mode editing and comparison results",
+      "description": "As a user, I want summary-mode comparison projects to be editable and rendered with overall human and LLM decision columns so I can inspect agreement without prompt-by-prompt human columns.",
+      "acceptanceCriteria": [
+        "The comparison edit page shows the saved human-judgment mode, shows the selected summary source project in summary mode, and only allows valid mode switches.",
+        "The comparison results metadata cards show the human comparison mode and summary source project when present.",
+        "The comparison table renders overall-decision columns only in summary mode with clear labels such as `Overall decision` or `Include this study?`.",
+        "Row highlighting and visible filters continue to work in summary mode while prompt-mode rendering remains unchanged.",
+        "`bun run lint` passes",
+        "`bun run build` passes",
+        "`bun run desktop:build` passes",
+        "Verify in browser that a summary comparison can be edited and that summary-mode results render correctly"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-004",
+        "US-005"
+      ]
+    },
+    {
+      "id": "US-007",
+      "title": "Lock prompt-mode and summary-mode behavior with regressions",
+      "description": "As a maintainer, I want targeted regression coverage for comparison-project summary mode so future changes cannot break source scoping, derived summary answers, filters, or legacy prompt-mode behavior.",
+      "acceptanceCriteria": [
+        "Add targeted coverage for prompt-mode compatibility, summary-mode validation failures, summary-source scoping, and derived LLM summary answers.",
+        "Add coverage proving model-difference and fully-answered filtering behave correctly for synthetic summary columns.",
+        "Coverage includes create, create-from-project, edit, and judgment-page paths where summary mode changes behavior.",
+        "The final verification covers creating a summary comparison from a Covevidence project, creating a manual summary comparison from a summary-capable source project, editing a summary comparison, and confirming prompt mode remains unchanged.",
+        "`bun test src/server/utils/judgmentAnswers.test.ts` passes",
+        "`bun test <targeted comparison test files>` passes",
+        "`bun run lint` passes",
+        "`bun run build` passes",
+        "`bun run desktop:build` passes",
+        "Verify in browser that prompt-mode and summary-mode comparison flows both work end to end"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-004",
+        "US-005",
+        "US-006"
+      ]
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-04-17T07:50:14.942Z"
+  }
+}
