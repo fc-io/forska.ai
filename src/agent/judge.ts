@@ -300,7 +300,7 @@ ${invalidBlock.join('\n')}
 Here is your previous answer:
 ${lastResponse}
 
-Please try again. Your quotes MUST be copied verbatim from the provided text (or return an empty array). Respond ONLY with valid JSON matching the schema.`
+Please try again. Your quotes MUST be copied verbatim from the provided text (or return an empty array). Do not add surrounding quotation marks unless they appear in the source text. Do not shorten quotes with ellipses. Do not include wrapper markers in quotes. Respond ONLY with valid JSON matching the schema.`
 }
 
 type SinglePromptJudgmentQuoteValidationResult =
@@ -327,9 +327,10 @@ export const validateSinglePromptJudgmentQuotes = ({
 }): SinglePromptJudgmentQuoteValidationResult => {
   const rawQuotes = Array.isArray(judgment.quotes) ? judgment.quotes : []
   const quoteValidation = getQuoteValidation(rawQuotes, recordText)
+  const normalizedQuotes = dedupeStrings(quoteValidation.valid)
 
   return quoteValidation.invalid.length === 0
-    ? {judgment, kind: 'valid'}
+    ? {judgment: {...judgment, quotes: normalizedQuotes}, kind: 'valid'}
     : attempt < maxRetries
       ? {
           error: invalidSinglePromptQuoteError,
@@ -547,14 +548,70 @@ const getRecordTextForQuoteValidation = (article: ArticlesType[number]): string 
   return `${title}\n\n${summary}\n\n${fullText}`
 }
 
+const OUTER_QUOTE_WRAPPER_PAIRS: Array<[string, string]> = [
+  ['"', '"'],
+  ["'", "'"],
+  ['`', '`'],
+  ['\u201c', '\u201d'],
+  ['\u2018', '\u2019'],
+  ['\u00ab', '\u00bb'],
+  ['\u2039', '\u203a'],
+]
+
+const getNormalizedQuoteSubstring = (quote: string, recordText: string): string | null => {
+  const rawQuote = String(quote ?? '')
+
+  if (rawQuote.length === 0) {
+    return null
+  }
+
+  if (recordText.includes(rawQuote)) {
+    return rawQuote
+  }
+
+  const trimmedQuote = rawQuote.trim()
+
+  if (trimmedQuote.length > 0 && recordText.includes(trimmedQuote)) {
+    return trimmedQuote
+  }
+
+  const getNextCandidate = (value: string): string | null => {
+    return OUTER_QUOTE_WRAPPER_PAIRS.reduce<string | null>((match, [open, close]) => {
+      if (match !== null || !value.startsWith(open) || !value.endsWith(close)) {
+        return match
+      }
+
+      const stripped = value.slice(open.length, value.length - close.length).trim()
+      return stripped.length === 0 ? null : stripped
+    }, null)
+  }
+
+  const tryCandidate = (value: string): string | null => {
+    const nextCandidate = getNextCandidate(value)
+
+    if (nextCandidate === null) {
+      return null
+    }
+
+    if (recordText.includes(nextCandidate)) {
+      return nextCandidate
+    }
+
+    return nextCandidate === value ? null : tryCandidate(nextCandidate)
+  }
+
+  return tryCandidate(trimmedQuote)
+}
+
 const getQuoteValidation = (quotes: string[], recordText: string): {valid: string[]; invalid: string[]} => {
   return quotes.reduce(
     (acc, quote) => {
-      const q = String(quote ?? '')
-      const isValid = q.length > 0 && recordText.includes(q)
-      return isValid
-        ? {valid: [...acc.valid, q], invalid: acc.invalid}
-        : {valid: acc.valid, invalid: [...acc.invalid, q]}
+      const rawQuote = String(quote ?? '')
+      const normalizedQuote = getNormalizedQuoteSubstring(rawQuote, recordText)
+
+      return normalizedQuote === null
+        ? {valid: acc.valid, invalid: [...acc.invalid, rawQuote]}
+        : {valid: [...acc.valid, normalizedQuote], invalid: acc.invalid}
     },
     {valid: [] as string[], invalid: [] as string[]},
   )
@@ -667,7 +724,7 @@ const buildChunkedFinalUserPrompt = ({
     return `- ${JSON.stringify(q)}`
   })
 
-  return `## Question\n\n${prompt.originalText}\n\noutput_type: ${outputType}\n\n## Evidence Facts\n${factsBlock.join('\n')}\n\n## Evidence Quotes\n${quotesBlock.join('\n')}\n\nRules:\n- Use ONLY the evidence above.\n- In your "quotes" field, copy up to 3 entries EXACTLY from Evidence Quotes (or return []).\n- Respond ONLY with valid JSON matching the schema.`
+  return `## Question\n\n${prompt.originalText}\n\noutput_type: ${outputType}\n\n## Evidence Facts\n${factsBlock.join('\n')}\n\n## Evidence Quotes\n${quotesBlock.join('\n')}\n\nRules:\n- Use ONLY the evidence above.\n- In your "quotes" field, copy up to 3 entries EXACTLY from Evidence Quotes (or return []).\n- Do not add surrounding quotation marks unless they appear in the source text.\n- Do not shorten quotes with ellipses.\n- Do not include wrapper markers in quotes.\n- Respond ONLY with valid JSON matching the schema.`
 }
 
 const fitChunkedFinalPromptToBudget = ({
@@ -1125,7 +1182,9 @@ export const judgeSinglePrompt = async ({
                   return String(q ?? '').trim()
                 }),
               )
-              const validatedQuotes = getQuoteValidation(normalizedQuotes, recordTextForQuoteValidation).valid
+              const validatedQuotes = dedupeStrings(
+                getQuoteValidation(normalizedQuotes, recordTextForQuoteValidation).valid,
+              )
 
               return {status: 'success' as const, facts: normalizedFacts, quotes: validatedQuotes}
             } catch (error) {
@@ -1354,7 +1413,7 @@ export const judgeSinglePrompt = async ({
             continue
           }
 
-          const finalQuotes = quoteValidation.invalid.length > 0 ? quoteValidation.valid : rawQuotes
+          const finalQuotes = dedupeStrings(quoteValidation.valid)
           const judgmentToStore = {...judgment, quotes: finalQuotes}
 
           await storeSinglePromptJudgment({

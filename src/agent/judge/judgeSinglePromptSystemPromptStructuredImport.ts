@@ -20,7 +20,12 @@ Your response must be valid JSON with exactly these keys:
 - "explanation": A brief explanation of your reasoning
 - "quotes": An array of up to 3 quotes from the record that support your answer (empty array if none)
 
-Quotes should be copied verbatim from the provided record when possible. If nothing supports the answer, return an empty quotes array.
+Quotes rules:
+- Quotes MUST be exact substrings copied verbatim from the provided text.
+- Do not add surrounding quotation marks unless they appear in the source text.
+- Do not shorten quotes with ellipses.
+- Do not include wrapper markers in quotes.
+- If nothing supports the answer, return an empty quotes array.
 
 IMPORTANT: Properly escape all special characters in your JSON string values to ensure valid JSON output:
 - Use \\" for double quotes within strings
