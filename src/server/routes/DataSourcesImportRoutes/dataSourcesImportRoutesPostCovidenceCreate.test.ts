@@ -285,7 +285,7 @@ test('Covidence datasource create stores package files and persists cursor confi
   expect(parsed.scopeCalls?.[0]?.mode).toBe('title_abstract')
   expect(parsed.scopeCalls?.[0]?.projectId).toBe('project-created')
   expect(parsed.martQueueCalls).toEqual([])
-  expect(parsed.queueCalls).toEqual([['route-1']])
+  expect(parsed.queueCalls).toEqual([])
   expect(parsed.getDataSourceCallCount).toBe(1)
   expect(parsed.result.success).toBe(true)
   expect(parsed.result.data.covidencePackageConfig).toMatchObject({
@@ -773,6 +773,7 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
   expect(parsed.scopeCalls?.[0]?.mode).toBe('title_abstract')
   expect(parsed.scopeCalls?.[0]?.projectId).toBe('project-created')
   expect(parsed.martQueueCalls).toEqual([])
+  expect(parsed.queueCalls).toEqual([])
   expect(parsed.result.data.covidenceProject).toMatchObject({
     created: true,
     id: 'project-created',
@@ -1156,6 +1157,7 @@ test('Covidence datasource create also creates or reuses a full-text project wit
     id: 'project-full-text',
     name: 'Full text datasource',
   })
+  expect(parsed.queueCalls).toEqual([])
   expect(parsed.result.data.covidencePrompts).toEqual([
     {
       created: true,
@@ -1413,7 +1415,7 @@ test('Covidence datasource create skips prompt creation when normalized eligibil
   expect(parsed.projectCalls?.[0]?.promptId).toBeNull()
   expect(parsed.promptSyncCalls).toEqual([{projectId: 'project-created', promptLinks: []}])
   expect(parsed.result.data.covidencePrompts).toEqual([])
-  expect(parsed.queueCalls).toEqual([['route-1']])
+  expect(parsed.queueCalls).toEqual([])
 })
 
 test('Covidence datasource create normalizes eligibility fields before building per-section prompts', () => {
@@ -1643,6 +1645,7 @@ test('Covidence datasource create normalizes eligibility fields before building 
       type: "'yes' | 'no'",
     },
   ])
+  expect(parsed.queueCalls).toEqual([])
 })
 
 test('Covidence datasource create supports single-prompt grouping for eligibility fields', () => {
@@ -1857,4 +1860,5 @@ test('Covidence datasource create supports single-prompt grouping for eligibilit
       type: "'yes' | 'no' | 'maybe'",
     },
   ])
+  expect(parsed.queueCalls).toEqual([])
 })

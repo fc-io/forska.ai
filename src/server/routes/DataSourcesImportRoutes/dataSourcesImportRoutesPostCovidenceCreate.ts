@@ -2,7 +2,6 @@ import {randomUUID} from 'node:crypto'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
-import {queueImportedArticleRefreshes} from '../../services/articleImportStoreService.ts'
 import {
   buildCovidencePackageConfig,
   buildCovidencePromptDefinition,
@@ -189,8 +188,6 @@ export const dataSourcesImportRoutesPostCovidenceCreate = async (body: {
       deleteCovidencePackageFiles(dataSourceId)
       throw error
     })) as Awaited<ReturnType<typeof importCovidencePackageFromConfig>>
-
-  await queueImportedArticleRefreshes(result.importRouteIds ?? [])
 
   const dataSource = await getDataSourceQueryService().getDataSourceById(dataSourceId)
 
