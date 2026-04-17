@@ -291,6 +291,214 @@ test('prompt answer fact reset and batch rebuild operate on bounded article sets
   ])
 })
 
+test('large rebuild and incremental refresh agree on shared clone judgment reuse eligibility', () => {
+  const result = runScript<{
+    rows: Array<{
+      detailCount: number
+      llmJudgedPromptCount: number
+      promptAnswerCount: number
+      projectId: string
+      reusedJudgmentCount: number
+    }>
+  }>(`
+    const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts')
+
+    await database.run(\`
+      INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+      VALUES
+        ('shared-reuse-source-project', 'Shared Reuse Source Project', 'large-rebuild-executor-model', TRUE, TRUE, FALSE, FALSE),
+        ('shared-reuse-incremental-project', 'Shared Reuse Incremental Project', 'large-rebuild-executor-model', TRUE, TRUE, FALSE, FALSE),
+        ('shared-changed-incremental-project', 'Shared Changed Incremental Project', 'large-rebuild-executor-model', TRUE, TRUE, TRUE, FALSE),
+        ('shared-reuse-large-project', 'Shared Reuse Large Project', 'large-rebuild-executor-model', TRUE, TRUE, FALSE, FALSE),
+        ('shared-changed-large-project', 'Shared Changed Large Project', 'large-rebuild-executor-model', TRUE, TRUE, TRUE, FALSE)
+    \`)
+    await database.run(\`
+      INSERT INTO app.prompt (id, original_text, content_hash)
+      VALUES ('shared-reuse-prompt', 'Shared reuse prompt', 'shared-reuse-prompt-hash')
+    \`)
+    await database.run(\`
+      INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+      VALUES
+        ('shared-reuse-source-prompt', 'shared-reuse-source-project', 'shared-reuse-prompt', 1, TRUE),
+        ('shared-reuse-incremental-prompt', 'shared-reuse-incremental-project', 'shared-reuse-prompt', 1, TRUE),
+        ('shared-changed-incremental-prompt', 'shared-changed-incremental-project', 'shared-reuse-prompt', 1, TRUE),
+        ('shared-reuse-large-prompt', 'shared-reuse-large-project', 'shared-reuse-prompt', 1, TRUE),
+        ('shared-changed-large-prompt', 'shared-changed-large-project', 'shared-reuse-prompt', 1, TRUE)
+    \`)
+    await database.run(\`
+      INSERT INTO app.article (id, article_title, article_created_at, article_updated_at, article_id)
+      VALUES (
+        'shared-reuse-article',
+        'Shared Reuse Article',
+        TIMESTAMPTZ '2026-04-04T00:00:00.000Z',
+        TIMESTAMPTZ '2026-04-04T01:00:00.000Z',
+        'shared-reuse-external'
+      )
+    \`)
+    await database.run(\`
+      INSERT INTO app.project_article (id, project_id, article_id)
+      VALUES
+        ('shared-reuse-source-article', 'shared-reuse-source-project', 'shared-reuse-article'),
+        ('shared-reuse-incremental-article', 'shared-reuse-incremental-project', 'shared-reuse-article'),
+        ('shared-changed-incremental-article', 'shared-changed-incremental-project', 'shared-reuse-article'),
+        ('shared-reuse-large-article', 'shared-reuse-large-project', 'shared-reuse-article'),
+        ('shared-changed-large-article', 'shared-changed-large-project', 'shared-reuse-article')
+    \`)
+    await database.run(\`
+      INSERT INTO app.judgment (
+        id,
+        article_id,
+        prompt_id,
+        model_id,
+        project_id,
+        snapshot_project_id,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images,
+        is_answered,
+        answered_original,
+        answered_original_as_array,
+        confidence_original
+      )
+      VALUES (
+        'shared-reuse-source-judgment',
+        'shared-reuse-article',
+        'shared-reuse-prompt',
+        'large-rebuild-executor-model',
+        'shared-reuse-source-project',
+        'shared-reuse-source-project',
+        TRUE,
+        TRUE,
+        FALSE,
+        FALSE,
+        TRUE,
+        'yes',
+        ['yes'],
+        90
+      )
+    \`)
+
+    const martRefreshService = getDuckdbMartRefreshService()
+    await martRefreshService.queueJudgmentArticleRefresh('shared-reuse-article', 'shared-reuse-source-judgment')
+    await martRefreshService.flush()
+    await martRefreshService.queueProjectRefresh('shared-reuse-incremental-project', 'shared-reuse-incremental')
+    await martRefreshService.queueProjectRefresh('shared-changed-incremental-project', 'shared-changed-incremental')
+    await martRefreshService.flush()
+
+    await database.run(\`
+      DELETE FROM mart.project_scope_article
+      WHERE project_id IN ('shared-reuse-large-project', 'shared-changed-large-project');
+      INSERT INTO mart.project_scope_article (
+        project_id,
+        article_id,
+        in_curated_scope,
+        in_route_scope,
+        article_created_at,
+        article_updated_at
+      ) VALUES
+        ('shared-reuse-large-project', 'shared-reuse-article', TRUE, FALSE, TIMESTAMPTZ '2026-04-04T00:00:00.000Z', TIMESTAMPTZ '2026-04-04T01:00:00.000Z'),
+        ('shared-changed-large-project', 'shared-reuse-article', TRUE, FALSE, TIMESTAMPTZ '2026-04-04T00:00:00.000Z', TIMESTAMPTZ '2026-04-04T01:00:00.000Z')
+    \`)
+
+    const rebuildLargeProject = async (projectId) => {
+      await executor.resetProjectPromptAnswerFact(projectId)
+      await executor.rebuildProjectPromptAnswerFactBatch(projectId, ['shared-reuse-article'])
+      await executor.resetProjectReviewAnswerDictionary(projectId)
+      await executor.rebuildProjectReviewAnswerDictionary(projectId)
+      await executor.setupProjectReviewServingStaging(projectId)
+      await executor.rebuildProjectReviewArticleFilterMemberBatch(projectId, ['shared-reuse-article'])
+      await executor.resetProjectReviewArticleRollup(projectId)
+      await executor.rebuildProjectReviewArticleRollupBatch(projectId, ['shared-reuse-article'])
+      await executor.rebuildProjectReviewServingBatch(projectId, ['shared-reuse-article'])
+      await executor.finalizeProjectReviewServing(projectId)
+    }
+
+    await rebuildLargeProject('shared-reuse-large-project')
+    await rebuildLargeProject('shared-changed-large-project')
+
+    const rows = await database.queryJson(\`
+      SELECT
+        project.id AS projectId,
+        (SELECT COUNT(*) FROM mart.prompt_answer_fact fact WHERE fact.project_id = project.id) AS promptAnswerCount,
+        (
+          SELECT COUNT(*)
+          FROM mart.prompt_answer_fact fact
+          WHERE fact.project_id = project.id
+            AND fact.judgment_id = 'shared-reuse-source-judgment'
+        ) AS reusedJudgmentCount,
+        (
+          SELECT COALESCE(MAX(serving.llm_judged_prompt_count), 0)
+          FROM mart.review_article_serving serving
+          INNER JOIN app.project_review_serving_generation generation
+            ON generation.project_id = serving.project_id
+           AND generation.active_generation = serving.generation
+          WHERE serving.project_id = project.id
+            AND serving.article_id = 'shared-reuse-article'
+        ) AS llmJudgedPromptCount,
+        (
+          SELECT COUNT(*)
+          FROM mart.review_article_serving_detail detail
+          INNER JOIN app.project_review_serving_generation generation
+            ON generation.project_id = detail.project_id
+           AND generation.active_generation = detail.generation
+          WHERE detail.project_id = project.id
+            AND detail.article_id = 'shared-reuse-article'
+        ) AS detailCount
+      FROM app.project project
+      WHERE project.id IN (
+        'shared-reuse-incremental-project',
+        'shared-changed-incremental-project',
+        'shared-reuse-large-project',
+        'shared-changed-large-project'
+      )
+      ORDER BY project.id ASC
+    \`)
+
+    console.log(JSON.stringify({
+      rows: rows.map((row) => ({
+        detailCount: Number(row.detailCount ?? 0),
+        llmJudgedPromptCount: Number(row.llmJudgedPromptCount ?? 0),
+        promptAnswerCount: Number(row.promptAnswerCount ?? 0),
+        projectId: row.projectId,
+        reusedJudgmentCount: Number(row.reusedJudgmentCount ?? 0),
+      })),
+    }))
+    await database.close()
+  `)
+
+  expect(result.rows).toEqual([
+    {
+      detailCount: 0,
+      llmJudgedPromptCount: 0,
+      projectId: 'shared-changed-incremental-project',
+      promptAnswerCount: 0,
+      reusedJudgmentCount: 0,
+    },
+    {
+      detailCount: 0,
+      llmJudgedPromptCount: 0,
+      projectId: 'shared-changed-large-project',
+      promptAnswerCount: 0,
+      reusedJudgmentCount: 0,
+    },
+    {
+      detailCount: 1,
+      llmJudgedPromptCount: 1,
+      projectId: 'shared-reuse-incremental-project',
+      promptAnswerCount: 1,
+      reusedJudgmentCount: 1,
+    },
+    {
+      detailCount: 1,
+      llmJudgedPromptCount: 1,
+      projectId: 'shared-reuse-large-project',
+      promptAnswerCount: 1,
+      reusedJudgmentCount: 1,
+    },
+  ])
+})
+
 test('review answer dictionary reset and rebuild derive prompt answer ids from prompt_answer_fact', () => {
   const result = runScript<{rows: Array<{answerId: number; answerValue: string; promptId: string}>}>(`
     await database.run(\`
