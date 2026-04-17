@@ -198,6 +198,8 @@ const EditComparisonProjectPage = () => {
         name: comparisonProjectName().trim(),
         description: description().trim() || null,
         compareWithHumans: compareWithHumans(),
+        humanJudgmentMode: comparisonProjectQuery.data?.humanJudgmentMode,
+        summarySourceProjectId: comparisonProjectQuery.data?.summarySourceProjectId,
         modelIds: resolvedModelIds.length > 0 ? resolvedModelIds : undefined,
         useTitle: compareTitleAndAbstract(),
         useAbstract: compareTitleAndAbstract(),

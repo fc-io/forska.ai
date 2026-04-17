@@ -2545,6 +2545,133 @@ test('mart refresh keeps serving marts scoped to the originating judgment projec
   }
 })
 
+test('mart refresh deduplicates an article that is both curated and import-routed in one project', () => {
+  const duckdbPath = `/tmp/f1-mart-refresh-shared-scope-${Date.now()}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts')
+
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+          VALUES ('connection-shared-scope-test', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+        \`)
+        await database.run(\`
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+          VALUES ('model-shared-scope-test', 'connection-shared-scope-test', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+          VALUES ('project-shared-scope-test', 'Shared Scope Project', 'model-shared-scope-test', TRUE, TRUE, FALSE, FALSE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.import_route (id, route, name, active)
+          VALUES ('route-shared-scope-test', 'shared-scope:test', 'shared-scope:test', TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.article (id, article_title, article_created_at, article_updated_at, article_id)
+          VALUES (
+            'article-shared-scope-test',
+            'Shared Scope Article',
+            '2024-01-02T00:00:00.000Z',
+            '2024-01-03T00:00:00.000Z',
+            'external-shared-scope-test'
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_import_route (id, project_id, import_route_id)
+          VALUES ('project-import-route-shared-scope-test', 'project-shared-scope-test', 'route-shared-scope-test')
+        \`)
+        await database.run(\`
+          INSERT INTO app.article_import_route (id, article_id, import_route_id)
+          VALUES ('article-import-route-shared-scope-test', 'article-shared-scope-test', 'route-shared-scope-test')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_article (id, project_id, article_id)
+          VALUES ('project-article-shared-scope-test', 'project-shared-scope-test', 'article-shared-scope-test')
+        \`)
+
+        const martRefreshService = getDuckdbMartRefreshService()
+
+        await martRefreshService.queueProjectRefresh('project-shared-scope-test', 'shared-scope-test')
+        await martRefreshService.flush()
+
+        const projectScopeRows = await database.queryJson(\`
+          SELECT
+            article_id AS articleId,
+            in_curated_scope AS inCuratedScope,
+            in_route_scope AS inRouteScope
+          FROM mart.project_scope_article
+          WHERE project_id = 'project-shared-scope-test'
+          ORDER BY article_id ASC
+        \`)
+        const rollupRows = await database.queryJson(\`
+          SELECT
+            article_id AS articleId,
+            in_curated_scope AS inCuratedScope,
+            in_route_scope AS inRouteScope
+          FROM mart.review_article_rollup
+          WHERE project_id = 'project-shared-scope-test'
+          ORDER BY article_id ASC
+        \`)
+        const servingRows = await database.queryJson(\`
+          SELECT article_id AS articleId
+          FROM mart.review_article_serving
+          WHERE project_id = 'project-shared-scope-test'
+          ORDER BY article_id ASC
+        \`)
+
+        console.log(JSON.stringify({projectScopeRows, rollupRows, servingRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(
+        runScript.stderr.toString() || runScript.stdout.toString() || 'Mart shared scope dedupe test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      projectScopeRows: Array<{articleId: string; inCuratedScope: boolean; inRouteScope: boolean}>
+      rollupRows: Array<{articleId: string; inCuratedScope: boolean; inRouteScope: boolean}>
+      servingRows: Array<{articleId: string}>
+    }
+
+    expect(result.projectScopeRows).toEqual([
+      {articleId: 'article-shared-scope-test', inCuratedScope: true, inRouteScope: true},
+    ])
+    expect(result.rollupRows).toEqual([
+      {articleId: 'article-shared-scope-test', inCuratedScope: true, inRouteScope: true},
+    ])
+    expect(result.servingRows).toEqual([{articleId: 'article-shared-scope-test'}])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+  }
+})
+
 test('mart refresh keeps the previous serving generation during the next rebuild', () => {
   const duckdbPath = `/tmp/f1-mart-refresh-serving-generations-${Date.now()}.duckdb`
   const runScript = globalThis.Bun.spawnSync(

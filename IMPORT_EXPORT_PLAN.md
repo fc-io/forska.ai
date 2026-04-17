@@ -41,9 +41,9 @@
 - `schemaVersion`
 - `exportedAt`
 - `sourceAppVersion`
-- `project` summary with source id, name, counts, and current model reference
-- `warnings` for omitted secrets, local-only config, and unresolved runtime-specific data
-- checksums or file sizes for each payload file
+- `project` summary with source id, name, counts, human judgment mode, and current model reference
+- `warnings` for omitted secrets, omitted deleted judgments, local-only config, and unresolved runtime-specific data
+- `payloads` with row counts, checksums, and byte sizes for each payload file
 
 ## Exported Data Scope
 
@@ -53,9 +53,9 @@
 - Prompt definitions and project prompt links from `app.prompt` and `app.project_prompt`, including order, enabled state, archive state, and criteria fields.
 - Project route scope from `app.project_import_route` and referenced `app.import_route` rows.
 - Project article links from `app.project_article`.
-- Referenced article rows from `app.article` and `app.article_import_route`, including source metadata and any review-relevant full text fields.
-- All project judgments from `app.judgment`.
-- Linked judgment assessments from `app.judgment_assessment`.
+- Referenced article rows from `app.article` and `app.article_import_route`, including article identity fields (`article_id`, DOI, PubMed id, arXiv id, medRxiv id, bioRxiv id), citation metadata, title, summary, authors, article version, article timestamps, URL, publication status, `original_data`, `source_metadata`, `full_text`, `full_text_html`, `full_text_pdf`, `full_text_source`, `full_text_original_format`, `full_text_fetched_at`, `full_text_assets`, and `full_text_char_count`.
+- All active project judgments from `app.judgment` where `deleted_at IS NULL`.
+- Linked judgment assessments from `app.judgment_assessment` for exported judgments.
 - Project human judgments from `app.judgment_human`.
 - Project summary human judgments from `app.judgment_human_summary`.
 - Project review state from `app.review`.
@@ -68,6 +68,7 @@
 - Runtime-detection cache, worker health, endpoint health, logs, temp files, or machine-local status snapshots.
 - `app.judgment_job`, `app.token_use`, `app.llm_status`, `app.nvidia_smi`, or any job-runtime artifacts.
 - `app.project_mart_refresh_state`, `app.project_mart_refresh_article_state`, `app.project_mart_large_rebuild_state`, or any `mart.*` tables.
+- Soft-deleted judgments in v1; deleted rows stay out of the package.
 
 ## Provider And Model Export Rules
 
@@ -76,6 +77,8 @@
 - Treat machine-local values such as manual worker URLs as hints that the importer must confirm or edit, not as silent defaults.
 - Export models with enough identity to re-link judgments correctly: `remoteModelId`, `displayName`, `variant`, provider kind, connection reference, and metadata.
 - Export the full dependency set for all model ids referenced by the project and its judgments.
+- Reuse the existing provider setup flows during import instead of inventing a separate import-only credential path.
+- Use the normal provider endpoints for dependency setup where possible, especially `/api/provider-auth/:providerKind/*`, `/api/provider-connections`, and `/api/models/ensure`.
 
 ### Codex Special Handling
 
@@ -94,24 +97,32 @@
 ### Mapping Strategy
 
 - `project`: always create a new target id.
-- `prompt`: always create detached prompt rows, similar to the existing clone flow in `src/server/routes/ProjectsRoutes.ts`, so imported prompts stay self-contained.
+- `prompt`: always create detached prompt rows, similar to the existing clone flow in `src/server/routes/ProjectsRoutes.ts`, so imported prompts stay self-contained and `origin_project_id` can point at the new imported project.
 - `import_route`: match by `route`; if a route is missing on the target, show it in preview and require the user to accept omitting that route link or cancel the import.
-- `article`: prefer matching by stable article identity such as `article_id`; if that is missing or does not match, fall back to DOI, PubMed id, arXiv id, or source metadata heuristics, then create a new article only when no safe match exists.
-- `project_article`: always create a new link row for the imported project, even when the article row is reused.
+- `article`: match only on exact stable identifiers in priority order: `article_id`, normalized DOI, normalized PubMed id, normalized arXiv id, normalized medRxiv id, and normalized bioRxiv id. If no exact match exists, create a new article. If multiple candidates or conflicting exact identifiers appear, stop and require manual review instead of heuristic auto-linking.
+- `project_article`: always create a new link row for the imported project, even when the article row is reused, and set `imported_from_project_id` to `NULL` in v1 because the source project does not exist on the target.
 - `provider_connection`: match by provider kind plus safe connection fingerprint; otherwise let the user choose an existing connection or create a new sanitized one.
 - `model`: match by mapped provider connection plus `remote_model_id` and `variant`; otherwise create it during import after the user resolves the provider step.
+
+### Source Project Provenance Fields
+
+- `project_prompt.origin_project_id`: set to the new imported project id so imported detached prompts remain self-contained and keep the same local semantics as cloned prompts.
+- `project_article.imported_from_project_id`: leave `NULL` in v1 and keep source-project provenance only in the manifest, import session summary, and post-import warnings.
 
 ## Article And Asset Rules
 
 - Preserve enough article content for imported judgments and review screens to stay meaningful.
 - If an article references local file-backed content such as PDFs or extracted assets, export the actual files into `assets/` and not just the stored path string.
-- On import, write those files into the target runtime storage location and rewrite stored paths to the new location.
+- On import, validate asset paths before extraction, reject absolute paths and `..` traversal, write files into the target runtime storage location, and rewrite stored paths to the new location.
 - If an article match already exists on the target, merge non-destructively: fill missing target fields, do not erase richer target data, and still link the article to the imported project.
+- Title, year, author, and source-metadata heuristics may help the review UI explain likely matches, but they must not silently auto-link an article in v1.
 
 ## Judgment Integrity Rules
 
+- Export and import only active judgments where `deleted_at IS NULL` in v1.
 - Import judgments only after article, prompt, and model mappings are fully resolved.
 - Rewrite every judgment foreign key to target ids before insert.
+- Detect judgment identity collisions before commit because `app.judgment` is unique by article, prompt, model, and content toggles rather than by project. In v1, reuse an existing target judgment only when the stored payload matches exactly; otherwise block the import and show a conflict.
 - Preserve answer payloads, explanation, quotes, chunking strategy, and timestamps where safe.
 - Rewrite `project_id` to the new imported project id.
 - Rewrite `snapshot_project_id` to the new imported project id so the imported project's review and mart queries continue to work.
@@ -123,6 +134,8 @@
 - Do not write the project into the main tables until the final confirmation step.
 - Use a server-side import session so large uploads, preview state, and asset extraction do not live only in browser memory.
 - Store staged uploads in an app temp/runtime path, not under the repo root.
+- Give each import session a TTL, package size cap, extracted asset size cap, and cleanup on commit, cancel, expiry, and best-effort startup recovery.
+- Validate zip members before extraction and reject duplicate normalized paths, checksum mismatches, absolute paths, and `..` traversal.
 
 ### Import Steps
 
@@ -154,6 +167,8 @@
 - Add a dedicated project-transfer route module, for example `src/server/routes/ProjectTransferRoutes.ts`, so package export and package import do not bloat the CSV export file.
 - Add a service layer under something like `src/server/services/projectTransfer/` for package assembly, session parsing, mapping, and commit logic.
 - Validate incoming import payloads with ArkType at the route boundary.
+- Reuse the existing provider connection and provider auth services during dependency resolution instead of duplicating credential setup logic inside project import.
+- Anchor staged uploads, extracted assets, and rewritten file paths to the runtime-writable root so browser mode and desktop mode share the same contract.
 - Keep the final commit transactional and fail-fast when any required model mapping is unresolved.
 
 ### Suggested API Surface
@@ -174,22 +189,74 @@
 - possibly a small shared provider-model resolution component reused from `src/app/routes/+projects/+create.tsx`
 - update route tests in `src/app/routes/+projects/-+index.vitest.tsx`
 
-## Implementation Order
+## Phase Checklist
 
-1. Define the export manifest schema and package format.
-2. Build server-side project export assembly, including asset collection and sanitized dependency export.
-3. Build import session parsing and preview generation.
-4. Build provider and model resolution logic, including Codex-specific setup handling.
-5. Build the final import transaction with id remapping for project, prompt, article, judgment, and review data.
-6. Add the projects-page buttons and the `/projects/import` wizard UI.
-7. Add browser and desktop verification for upload, download, and post-import project behavior.
+### Phase 1 - Contract And Schemas
+
+- [ ] Lock the manifest schema, payload file list, and explicit exported field set, including article fields and omission warnings.
+- [ ] Define import-session state, source-to-target id maps, unresolved dependency statuses, and judgment-collision reporting.
+- [ ] Pick the zip implementation and lock checksum, path-normalization, and size-limit rules before writing route handlers.
+
+#### Quality Gates
+
+- [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferManifest.test.ts`
+
+### Phase 2 - Export Assembly
+
+- [ ] Build server-side package export assembly with manifest generation, JSON/NDJSON payload writers, active-judgment filtering, and sanitized provider/model export.
+- [ ] Collect local article assets, copy them into `assets/`, and record the metadata needed for safe import-time path rewriting.
+- [ ] Add `POST /api/projects/:id/export-project` and wire the new direct-download `Export Project` action in `src/components/main/ProjectsGrid.tsx`.
+
+#### Quality Gates
+
+- [ ] Add and run `bun test src/server/routes/ProjectTransferRoutes.test.ts`
+- [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferExport.test.ts`
+
+### Phase 3 - Analyze And Resolve Dependencies
+
+- [ ] Build upload/analyze session endpoints, staged extraction, TTL cleanup, preview summaries, and unresolved-warning reporting.
+- [ ] Implement provider connection auto-match, existing-connection selection, managed-provider auth handoff, and Codex `POST /api/models/ensure` materialization.
+- [ ] Implement conservative article matching, route-link omission review, and conflict detection before commit.
+- [ ] Build the `/projects/import` wizard for upload, package review, dependency resolution, and final plan review.
+
+#### Quality Gates
+
+- [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferAnalyze.test.ts`
+- [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts`
+- [ ] Add and run `bun test src/app/routes/+projects/-+import.vitest.tsx`
+
+### Phase 4 - Commit And Post-Import Behavior
+
+- [ ] Implement the final transaction that creates the new project, detached prompts, article links, judgments, human judgments, summaries, reviews, and assessments with remapped ids.
+- [ ] Set `project_prompt.origin_project_id` to the new imported project id and keep `project_article.imported_from_project_id` null in v1.
+- [ ] Mark the new project dirty, queue mart refresh, navigate to the imported project, and surface post-import warnings for omitted links or unfinished provider setup.
+
+#### Quality Gates
+
+- [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferCommit.test.ts`
+- [ ] `bun test src/server/routes/providerProjectFlow.e2e.test.ts`
+- [ ] `bun test src/app/routes/+projects/-+index.vitest.tsx`
+
+### Phase 5 - Browser And Desktop Verification
+
+- [ ] Verify the browser flow for package download, upload, dependency resolution, commit, and post-import review screens.
+- [ ] Verify the desktop flow for package download, runtime-writable asset extraction, upload, and navigation to the imported project.
+- [ ] Run the repo-native build and lint checks for touched layers without fixing unrelated issues.
+
+#### Quality Gates
+
+- [ ] `bun run build`
+- [ ] `bun run lint`
+- [ ] `bun run desktop:build`
 
 ## Risks And Decisions To Lock Early
 
-- Article matching rules must be conservative enough to avoid linking imported judgments to the wrong existing article.
+- Article matching stays exact-identifier-only in v1; heuristics can explain likely matches in review but cannot silently auto-link.
+- Judgment collision handling must be locked early because `app.judgment` uniqueness is global by article, prompt, model, and content settings rather than by project.
+- Imported detached prompts should point `origin_project_id` at the new imported project, and imported project-article links should leave `imported_from_project_id` null.
 - Local provider URLs and worker URLs are transferable only as review hints, not as trustworthy defaults.
 - Missing import routes need a clear product rule: block, omit with warning, or map manually.
-- Large project packages may need streaming zip generation and staged extraction to avoid memory spikes.
+- Large project packages may need streaming zip generation, staged extraction, and explicit package-size limits to avoid memory spikes.
 - Asset rewrite logic must work in browser mode and desktop mode without writing into repo-root paths.
 
 ## Done Criteria
@@ -207,6 +274,11 @@
 
 - `bun test src/server/routes/ProjectsRoutes.test.ts`
 - Add and run `bun test src/server/routes/ProjectTransferRoutes.test.ts`
+- Add and run `bun test src/server/services/projectTransfer/projectTransferManifest.test.ts`
+- Add and run `bun test src/server/services/projectTransfer/projectTransferExport.test.ts`
+- Add and run `bun test src/server/services/projectTransfer/projectTransferAnalyze.test.ts`
+- Add and run `bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts`
+- Add and run `bun test src/server/services/projectTransfer/projectTransferCommit.test.ts`
 - `bun test src/server/routes/providerProjectFlow.e2e.test.ts`
 - `bun test src/app/routes/+projects/-+index.vitest.tsx`
 - Add and run `bun test src/app/routes/+projects/-+import.vitest.tsx`
@@ -218,4 +290,4 @@
 
 ## Commands Run For This Plan
 
-- None. This plan is based on repo inspection only.
+- No shell commands. This plan is based on repo file inspection and route/schema review.

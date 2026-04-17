@@ -6,6 +6,8 @@ export type CreateComparisonProjectInput = {
   description?: string | null
   modelIds?: string[]
   compareWithHumans?: boolean
+  humanJudgmentMode?: HumanJudgmentMode
+  summarySourceProjectId?: string | null
   dateFrom?: string | null
   dateTo?: string | null
   useTitle: boolean
@@ -20,6 +22,8 @@ export type CreateComparisonProjectFromProjectInput = {
   name: string
   description?: string | null
   compareWithHumans?: boolean
+  humanJudgmentMode?: HumanJudgmentMode
+  summarySourceProjectId?: string | null
   dateFrom?: string | null
   dateTo?: string | null
   sourceProjectId: string
@@ -31,11 +35,15 @@ export type ComparisonProjectSource = {
   description: string | null
   modelId: string
   modelName: string
-  humanJudgmentMode: HumanJudgmentMode | null
+  humanJudgmentMode: HumanJudgmentMode
+  isSummaryCapable: boolean
+  summarySourceProjectId: string | null
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  dateFrom: Date | string | null
+  dateTo: Date | string | null
   prompts: Array<{
     id: string
     promptHeading: string | null
@@ -55,6 +63,7 @@ export type ComparisonProjectEditFormData = {
   humanJudgmentMode: HumanJudgmentMode
   summarySourceProjectId: string | null
   updatedAt: Date | string
+  summarySourceProject: ComparisonProjectSummarySourceProject | null
   selectedModelIds: string[]
   useTitle: boolean
   useAbstract: boolean
@@ -75,6 +84,8 @@ export type UpdateComparisonProjectInput = {
   name: string
   description?: string | null
   compareWithHumans: boolean
+  humanJudgmentMode?: HumanJudgmentMode
+  summarySourceProjectId?: string | null
   modelIds?: string[]
   useTitle: boolean
   useAbstract: boolean
@@ -95,6 +106,19 @@ export type ComparisonProjectJudgmentsColumn = {
 
 export type ComparisonProjectContentVariant = {key: string; label: string}
 
+export type ComparisonProjectSummarySourceProject = {
+  id: string
+  name: string
+  description: string | null
+  modelId: string
+  modelName: string
+  humanJudgmentMode: HumanJudgmentMode
+  useTitle: boolean
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+}
+
 export type ComparisonProjectJudgmentsMetadata = {
   id: string
   name: string
@@ -102,6 +126,7 @@ export type ComparisonProjectJudgmentsMetadata = {
   compareWithHumans: boolean
   humanJudgmentMode: HumanJudgmentMode
   summarySourceProjectId: string | null
+  summarySourceProject: ComparisonProjectSummarySourceProject | null
   useTitle: boolean
   useAbstract: boolean
   useFulltext: boolean

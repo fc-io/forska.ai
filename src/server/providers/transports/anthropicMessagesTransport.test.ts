@@ -69,3 +69,59 @@ test('includes Anthropic error details and request id on failed message requests
     'Anthropic request failed (400): [invalid_request_error] model claude-opus-4-7 is not available for this workspace request_id=req_123',
   )
 })
+
+test('omits temperature for claude-opus-4-7 requests', async () => {
+  globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch
+  fetchMock.mockImplementationOnce(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+    return new Response(
+      JSON.stringify({content: [{text: 'Hello', type: 'text'}], usage: {input_tokens: 1, output_tokens: 1}}),
+      {headers: {'content-type': 'application/json'}, status: 200},
+    )
+  })
+
+  await invokeAnthropicMessagesModel({
+    apiKey: 'test-key',
+    baseURL: 'https://api.anthropic.com/v1',
+    maxCompletionTokens: 32,
+    modelName: 'claude-opus-4-7',
+    prompt: 'Hello',
+    systemPrompt: 'Return JSON',
+    temperature: 0.2,
+  })
+
+  expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({method: 'POST'})
+  expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+    max_tokens: 32,
+    messages: [{content: 'Hello', role: 'user'}],
+    model: 'claude-opus-4-7',
+    system: 'Return JSON',
+  })
+})
+
+test('keeps temperature for Anthropic models that still accept it', async () => {
+  globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch
+  fetchMock.mockImplementationOnce(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+    return new Response(
+      JSON.stringify({content: [{text: 'Hello', type: 'text'}], usage: {input_tokens: 1, output_tokens: 1}}),
+      {headers: {'content-type': 'application/json'}, status: 200},
+    )
+  })
+
+  await invokeAnthropicMessagesModel({
+    apiKey: 'test-key',
+    baseURL: 'https://api.anthropic.com/v1',
+    maxCompletionTokens: 32,
+    modelName: 'claude-sonnet-4-6',
+    prompt: 'Hello',
+    systemPrompt: 'Return JSON',
+    temperature: 0.2,
+  })
+
+  expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+    max_tokens: 32,
+    messages: [{content: 'Hello', role: 'user'}],
+    model: 'claude-sonnet-4-6',
+    system: 'Return JSON',
+    temperature: 0.2,
+  })
+})

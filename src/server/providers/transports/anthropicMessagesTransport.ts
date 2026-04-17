@@ -9,6 +9,35 @@ const getAnthropicHeaders = (apiKey: string): HeadersInit => {
   return {'anthropic-version': anthropicVersion, 'content-type': 'application/json', 'x-api-key': apiKey}
 }
 
+const shouldIncludeAnthropicTemperature = (modelName: string): boolean => {
+  const normalizedModelName = getTrimmedValue(modelName)?.toLowerCase() ?? ''
+
+  return !normalizedModelName.startsWith('claude-opus-4-7')
+}
+
+const getAnthropicMessagesRequestBody = ({
+  maxCompletionTokens,
+  modelName,
+  prompt,
+  systemPrompt,
+  temperature,
+}: {
+  maxCompletionTokens: number
+  modelName: string
+  prompt: string
+  systemPrompt: string
+  temperature: number
+}) => {
+  const requestBody = {
+    max_tokens: maxCompletionTokens,
+    messages: [{content: prompt, role: 'user' as const}],
+    model: modelName,
+    system: systemPrompt,
+  }
+
+  return shouldIncludeAnthropicTemperature(modelName) ? {...requestBody, temperature} : requestBody
+}
+
 const getAnthropicResponseErrorMessage = async ({
   action,
   response,
@@ -88,13 +117,9 @@ export const invokeAnthropicMessagesModel = async ({
   const resolvedBaseURL = getRequiredBaseURL({baseURL, providerLabel: 'Anthropic'})
   const requiredApiKey = getRequiredApiKey({apiKey, providerLabel: 'Anthropic'})
   const response = await fetch(`${resolvedBaseURL}/messages`, {
-    body: JSON.stringify({
-      max_tokens: maxCompletionTokens,
-      messages: [{content: prompt, role: 'user'}],
-      model: modelName,
-      system: systemPrompt,
-      temperature,
-    }),
+    body: JSON.stringify(
+      getAnthropicMessagesRequestBody({maxCompletionTokens, modelName, prompt, systemPrompt, temperature}),
+    ),
     headers: getAnthropicHeaders(requiredApiKey),
     method: 'POST',
   })
