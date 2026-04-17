@@ -2545,6 +2545,288 @@ test('mart refresh reuses shared judgments across projects with matching prompt 
   }
 })
 
+test('mart refresh drops reused source judgments after a cloned project repoints to a new prompt id', () => {
+  const duckdbPath = `/tmp/f1-mart-refresh-prompt-edit-isolation-${Date.now()}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts')
+
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const martRefreshService = getDuckdbMartRefreshService()
+
+        const getActiveDetailRows = async (projectId) => {
+          return database.queryJson(\`
+            SELECT detail.article_id AS articleId, detail.judgment_id AS judgmentId, detail.prompt_id AS promptId
+            FROM mart.review_article_serving_detail detail
+            INNER JOIN app.project_review_serving_generation generation
+              ON generation.project_id = detail.project_id
+             AND generation.active_generation = detail.generation
+            WHERE detail.project_id = '\${projectId}'
+            ORDER BY detail.prompt_id ASC, detail.article_id ASC
+          \`)
+        }
+
+        const getPromptAnswerRows = async (projectId) => {
+          return database.queryJson(\`
+            SELECT article_id AS articleId, judgment_id AS judgmentId, prompt_id AS promptId
+            FROM mart.prompt_answer_fact
+            WHERE project_id = '\${projectId}'
+            ORDER BY prompt_id ASC, article_id ASC
+          \`)
+        }
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+          VALUES ('connection-prompt-edit-isolation', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+        \`)
+        await database.run(\`
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+          VALUES (
+            'model-prompt-edit-isolation',
+            'connection-prompt-edit-isolation',
+            'Qwen/Qwen3.5-35B-A3B',
+            'Qwen/Qwen3.5-35B-A3B',
+            'Qwen 35B',
+            'manual',
+            TRUE
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+          VALUES
+            ('project-prompt-edit-isolation-target', 'Prompt Edit Isolation Target', 'model-prompt-edit-isolation', TRUE, TRUE, FALSE, FALSE),
+            ('project-prompt-edit-isolation-source', 'Prompt Edit Isolation Source', 'model-prompt-edit-isolation', TRUE, TRUE, FALSE, FALSE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.prompt (id, original_text, content_hash)
+          VALUES
+            ('prompt-prompt-edit-isolation-shared', 'Shared prompt body', 'hash-prompt-edit-isolation-shared'),
+            ('prompt-prompt-edit-isolation-edited', 'Edited prompt body', 'hash-prompt-edit-isolation-edited')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+          VALUES
+            ('project-prompt-prompt-edit-isolation-target', 'project-prompt-edit-isolation-target', 'prompt-prompt-edit-isolation-shared', 1, TRUE),
+            ('project-prompt-prompt-edit-isolation-source', 'project-prompt-edit-isolation-source', 'prompt-prompt-edit-isolation-shared', 1, TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.article (id, article_title, article_created_at, article_updated_at, article_id)
+          VALUES (
+            'article-prompt-edit-isolation',
+            'Prompt edit isolation article',
+            '2024-01-02T00:00:00.000Z',
+            '2024-01-03T00:00:00.000Z',
+            'external-prompt-edit-isolation'
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_article (id, project_id, article_id)
+          VALUES
+            ('project-article-prompt-edit-isolation-target', 'project-prompt-edit-isolation-target', 'article-prompt-edit-isolation'),
+            ('project-article-prompt-edit-isolation-source', 'project-prompt-edit-isolation-source', 'article-prompt-edit-isolation')
+        \`)
+        await database.run(\`
+          INSERT INTO app.judgment (
+            id,
+            article_id,
+            prompt_id,
+            model_id,
+            project_id,
+            snapshot_project_id,
+            use_title,
+            use_abstract,
+            use_fulltext,
+            use_fulltext_no_images,
+            is_answered,
+            answered_original,
+            answered_original_as_array,
+            confidence_original
+          )
+          VALUES (
+            'judgment-prompt-edit-isolation-source',
+            'article-prompt-edit-isolation',
+            'prompt-prompt-edit-isolation-shared',
+            'model-prompt-edit-isolation',
+            'project-prompt-edit-isolation-source',
+            'project-prompt-edit-isolation-source',
+            TRUE,
+            TRUE,
+            FALSE,
+            FALSE,
+            TRUE,
+            'yes',
+            ['yes'],
+            90
+          )
+        \`)
+
+        await martRefreshService.queueJudgmentArticleRefresh('article-prompt-edit-isolation', 'prompt-edit-isolation-source-judgment')
+        await martRefreshService.queueProjectRefresh('project-prompt-edit-isolation-source', 'prompt-edit-isolation-source-initial')
+        await martRefreshService.queueProjectRefresh('project-prompt-edit-isolation-target', 'prompt-edit-isolation-target-initial')
+        await martRefreshService.flush()
+
+        const beforeEditSourceDetailRows = await getActiveDetailRows('project-prompt-edit-isolation-source')
+        const beforeEditTargetDetailRows = await getActiveDetailRows('project-prompt-edit-isolation-target')
+
+        await database.run(\`
+          UPDATE app.project_prompt
+          SET prompt_id = 'prompt-prompt-edit-isolation-edited'
+          WHERE project_id = 'project-prompt-edit-isolation-target'
+        \`)
+
+        await martRefreshService.queueProjectRefresh('project-prompt-edit-isolation-target', 'prompt-edit-isolation-target-repointed')
+        await martRefreshService.flush()
+
+        const afterEditSourceDetailRows = await getActiveDetailRows('project-prompt-edit-isolation-source')
+        const afterEditTargetDetailRows = await getActiveDetailRows('project-prompt-edit-isolation-target')
+        const afterEditTargetPromptAnswerRows = await getPromptAnswerRows('project-prompt-edit-isolation-target')
+
+        await database.run(\`
+          INSERT INTO app.judgment (
+            id,
+            article_id,
+            prompt_id,
+            model_id,
+            project_id,
+            snapshot_project_id,
+            use_title,
+            use_abstract,
+            use_fulltext,
+            use_fulltext_no_images,
+            is_answered,
+            answered_original,
+            answered_original_as_array,
+            confidence_original
+          )
+          VALUES (
+            'judgment-prompt-edit-isolation-target',
+            'article-prompt-edit-isolation',
+            'prompt-prompt-edit-isolation-edited',
+            'model-prompt-edit-isolation',
+            'project-prompt-edit-isolation-target',
+            'project-prompt-edit-isolation-target',
+            TRUE,
+            TRUE,
+            FALSE,
+            FALSE,
+            TRUE,
+            'no',
+            ['no'],
+            89
+          )
+        \`)
+
+        await martRefreshService.queueJudgmentArticleRefresh('article-prompt-edit-isolation', 'prompt-edit-isolation-target-judgment')
+        await martRefreshService.queueProjectRefresh('project-prompt-edit-isolation-target', 'prompt-edit-isolation-target-rerun')
+        await martRefreshService.flush()
+
+        const afterRerunSourceDetailRows = await getActiveDetailRows('project-prompt-edit-isolation-source')
+        const afterRerunTargetDetailRows = await getActiveDetailRows('project-prompt-edit-isolation-target')
+        const afterRerunTargetPromptAnswerRows = await getPromptAnswerRows('project-prompt-edit-isolation-target')
+
+        console.log(JSON.stringify({
+          afterEditSourceDetailRows,
+          afterEditTargetDetailRows,
+          afterEditTargetPromptAnswerRows,
+          afterRerunSourceDetailRows,
+          afterRerunTargetDetailRows,
+          afterRerunTargetPromptAnswerRows,
+          beforeEditSourceDetailRows,
+          beforeEditTargetDetailRows,
+        }))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(
+        runScript.stderr.toString()
+          || runScript.stdout.toString()
+          || 'Mart prompt edit isolation regression test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      afterEditSourceDetailRows: Array<{articleId: string; judgmentId: string; promptId: string}>
+      afterEditTargetDetailRows: Array<{articleId: string; judgmentId: string; promptId: string}>
+      afterEditTargetPromptAnswerRows: Array<{articleId: string; judgmentId: string; promptId: string}>
+      afterRerunSourceDetailRows: Array<{articleId: string; judgmentId: string; promptId: string}>
+      afterRerunTargetDetailRows: Array<{articleId: string; judgmentId: string; promptId: string}>
+      afterRerunTargetPromptAnswerRows: Array<{articleId: string; judgmentId: string; promptId: string}>
+      beforeEditSourceDetailRows: Array<{articleId: string; judgmentId: string; promptId: string}>
+      beforeEditTargetDetailRows: Array<{articleId: string; judgmentId: string; promptId: string}>
+    }
+
+    expect(result.beforeEditSourceDetailRows).toEqual([
+      {
+        articleId: 'article-prompt-edit-isolation',
+        judgmentId: 'judgment-prompt-edit-isolation-source',
+        promptId: 'prompt-prompt-edit-isolation-shared',
+      },
+    ])
+    expect(result.beforeEditTargetDetailRows).toEqual([
+      {
+        articleId: 'article-prompt-edit-isolation',
+        judgmentId: 'judgment-prompt-edit-isolation-source',
+        promptId: 'prompt-prompt-edit-isolation-shared',
+      },
+    ])
+    expect(result.afterEditSourceDetailRows).toEqual([
+      {
+        articleId: 'article-prompt-edit-isolation',
+        judgmentId: 'judgment-prompt-edit-isolation-source',
+        promptId: 'prompt-prompt-edit-isolation-shared',
+      },
+    ])
+    expect(result.afterEditTargetDetailRows).toEqual([])
+    expect(result.afterEditTargetPromptAnswerRows).toEqual([])
+    expect(result.afterRerunSourceDetailRows).toEqual([
+      {
+        articleId: 'article-prompt-edit-isolation',
+        judgmentId: 'judgment-prompt-edit-isolation-source',
+        promptId: 'prompt-prompt-edit-isolation-shared',
+      },
+    ])
+    expect(result.afterRerunTargetDetailRows).toEqual([
+      {
+        articleId: 'article-prompt-edit-isolation',
+        judgmentId: 'judgment-prompt-edit-isolation-target',
+        promptId: 'prompt-prompt-edit-isolation-edited',
+      },
+    ])
+    expect(result.afterRerunTargetPromptAnswerRows).toEqual([
+      {
+        articleId: 'article-prompt-edit-isolation',
+        judgmentId: 'judgment-prompt-edit-isolation-target',
+        promptId: 'prompt-prompt-edit-isolation-edited',
+      },
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+  }
+})
+
 test('mart refresh deduplicates an article that is both curated and import-routed in one project', () => {
   const duckdbPath = `/tmp/f1-mart-refresh-shared-scope-${Date.now()}.duckdb`
   const runScript = globalThis.Bun.spawnSync(

@@ -499,6 +499,262 @@ test('large rebuild and incremental refresh agree on shared clone judgment reuse
   ])
 })
 
+test('large rebuild drops reused source judgments after a cloned project repoints to a new prompt id', () => {
+  const result = runScript<{
+    afterEditSourceDetailRows: Array<{articleId: string; judgmentId: string; promptId: string}>
+    afterEditTargetDetailRows: Array<{articleId: string; judgmentId: string; promptId: string}>
+    afterEditTargetPromptAnswerRows: Array<{articleId: string; judgmentId: string; promptId: string}>
+    afterRerunSourceDetailRows: Array<{articleId: string; judgmentId: string; promptId: string}>
+    afterRerunTargetDetailRows: Array<{articleId: string; judgmentId: string; promptId: string}>
+    afterRerunTargetPromptAnswerRows: Array<{articleId: string; judgmentId: string; promptId: string}>
+    beforeEditSourceDetailRows: Array<{articleId: string; judgmentId: string; promptId: string}>
+    beforeEditTargetDetailRows: Array<{articleId: string; judgmentId: string; promptId: string}>
+    beforeEditTargetPromptAnswerRows: Array<{articleId: string; judgmentId: string; promptId: string}>
+  }>(`
+    const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts')
+
+    const martRefreshService = getDuckdbMartRefreshService()
+
+    const rebuildLargeProject = async (projectId) => {
+      await executor.resetProjectPromptAnswerFact(projectId)
+      await executor.rebuildProjectPromptAnswerFactBatch(projectId, ['prompt-edit-large-article'])
+      await executor.resetProjectReviewAnswerDictionary(projectId)
+      await executor.rebuildProjectReviewAnswerDictionary(projectId)
+      await executor.setupProjectReviewServingStaging(projectId)
+      await executor.rebuildProjectReviewArticleFilterMemberBatch(projectId, ['prompt-edit-large-article'])
+      await executor.resetProjectReviewArticleRollup(projectId)
+      await executor.rebuildProjectReviewArticleRollupBatch(projectId, ['prompt-edit-large-article'])
+      await executor.rebuildProjectReviewServingBatch(projectId, ['prompt-edit-large-article'])
+      await executor.finalizeProjectReviewServing(projectId)
+    }
+
+    const getActiveDetailRows = async (projectId) => {
+      return database.queryJson(\`
+        SELECT detail.article_id AS articleId, detail.judgment_id AS judgmentId, detail.prompt_id AS promptId
+        FROM mart.review_article_serving_detail detail
+        INNER JOIN app.project_review_serving_generation generation
+          ON generation.project_id = detail.project_id
+         AND generation.active_generation = detail.generation
+        WHERE detail.project_id = '\${projectId}'
+        ORDER BY detail.prompt_id ASC, detail.article_id ASC
+      \`)
+    }
+
+    const getPromptAnswerRows = async (projectId) => {
+      return database.queryJson(\`
+        SELECT article_id AS articleId, judgment_id AS judgmentId, prompt_id AS promptId
+        FROM mart.prompt_answer_fact
+        WHERE project_id = '\${projectId}'
+        ORDER BY prompt_id ASC, article_id ASC
+      \`)
+    }
+
+    await database.run(\`
+      INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+      VALUES
+        ('prompt-edit-large-source-project', 'Prompt Edit Large Source Project', 'large-rebuild-executor-model', TRUE, TRUE, FALSE, FALSE),
+        ('prompt-edit-large-target-project', 'Prompt Edit Large Target Project', 'large-rebuild-executor-model', TRUE, TRUE, FALSE, FALSE)
+    \`)
+    await database.run(\`
+      INSERT INTO app.prompt (id, original_text, content_hash)
+      VALUES
+        ('prompt-edit-large-shared-prompt', 'Prompt edit shared body', 'prompt-edit-large-shared-hash'),
+        ('prompt-edit-large-edited-prompt', 'Prompt edit edited body', 'prompt-edit-large-edited-hash')
+    \`)
+    await database.run(\`
+      INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+      VALUES
+        ('prompt-edit-large-source-project-prompt', 'prompt-edit-large-source-project', 'prompt-edit-large-shared-prompt', 1, TRUE),
+        ('prompt-edit-large-target-project-prompt', 'prompt-edit-large-target-project', 'prompt-edit-large-shared-prompt', 1, TRUE)
+    \`)
+    await database.run(\`
+      INSERT INTO app.article (id, article_title, article_created_at, article_updated_at, article_id)
+      VALUES (
+        'prompt-edit-large-article',
+        'Prompt Edit Large Article',
+        TIMESTAMPTZ '2026-04-04T00:00:00.000Z',
+        TIMESTAMPTZ '2026-04-04T01:00:00.000Z',
+        'prompt-edit-large-external'
+      )
+    \`)
+    await database.run(\`
+      INSERT INTO mart.project_scope_article (
+        project_id,
+        article_id,
+        in_curated_scope,
+        in_route_scope,
+        article_created_at,
+        article_updated_at
+      ) VALUES
+        ('prompt-edit-large-source-project', 'prompt-edit-large-article', TRUE, FALSE, TIMESTAMPTZ '2026-04-04T00:00:00.000Z', TIMESTAMPTZ '2026-04-04T01:00:00.000Z'),
+        ('prompt-edit-large-target-project', 'prompt-edit-large-article', TRUE, FALSE, TIMESTAMPTZ '2026-04-04T00:00:00.000Z', TIMESTAMPTZ '2026-04-04T01:00:00.000Z')
+    \`)
+    await database.run(\`
+      INSERT INTO app.judgment (
+        id,
+        article_id,
+        prompt_id,
+        model_id,
+        project_id,
+        snapshot_project_id,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images,
+        is_answered,
+        answered_original,
+        answered_original_as_array,
+        confidence_original
+      ) VALUES (
+        'prompt-edit-large-source-judgment',
+        'prompt-edit-large-article',
+        'prompt-edit-large-shared-prompt',
+        'large-rebuild-executor-model',
+        'prompt-edit-large-source-project',
+        'prompt-edit-large-source-project',
+        TRUE,
+        TRUE,
+        FALSE,
+        FALSE,
+        TRUE,
+        'yes',
+        ['yes'],
+        90
+      )
+    \`)
+
+    await martRefreshService.queueJudgmentArticleRefresh('prompt-edit-large-article', 'prompt-edit-large-source-judgment')
+    await martRefreshService.flush()
+
+    await rebuildLargeProject('prompt-edit-large-source-project')
+    await rebuildLargeProject('prompt-edit-large-target-project')
+
+    const beforeEditSourceDetailRows = await getActiveDetailRows('prompt-edit-large-source-project')
+    const beforeEditTargetDetailRows = await getActiveDetailRows('prompt-edit-large-target-project')
+    const beforeEditTargetPromptAnswerRows = await getPromptAnswerRows('prompt-edit-large-target-project')
+
+    await database.run(\`
+      UPDATE app.project_prompt
+      SET prompt_id = 'prompt-edit-large-edited-prompt'
+      WHERE project_id = 'prompt-edit-large-target-project'
+    \`)
+
+    await rebuildLargeProject('prompt-edit-large-target-project')
+
+    const afterEditSourceDetailRows = await getActiveDetailRows('prompt-edit-large-source-project')
+    const afterEditTargetDetailRows = await getActiveDetailRows('prompt-edit-large-target-project')
+    const afterEditTargetPromptAnswerRows = await getPromptAnswerRows('prompt-edit-large-target-project')
+
+    await database.run(\`
+      INSERT INTO app.judgment (
+        id,
+        article_id,
+        prompt_id,
+        model_id,
+        project_id,
+        snapshot_project_id,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images,
+        is_answered,
+        answered_original,
+        answered_original_as_array,
+        confidence_original
+      ) VALUES (
+        'prompt-edit-large-target-judgment',
+        'prompt-edit-large-article',
+        'prompt-edit-large-edited-prompt',
+        'large-rebuild-executor-model',
+        'prompt-edit-large-target-project',
+        'prompt-edit-large-target-project',
+        TRUE,
+        TRUE,
+        FALSE,
+        FALSE,
+        TRUE,
+        'no',
+        ['no'],
+        89
+      )
+    \`)
+
+    await martRefreshService.queueJudgmentArticleRefresh('prompt-edit-large-article', 'prompt-edit-large-target-judgment')
+    await martRefreshService.flush()
+
+    await rebuildLargeProject('prompt-edit-large-target-project')
+
+    const afterRerunSourceDetailRows = await getActiveDetailRows('prompt-edit-large-source-project')
+    const afterRerunTargetDetailRows = await getActiveDetailRows('prompt-edit-large-target-project')
+    const afterRerunTargetPromptAnswerRows = await getPromptAnswerRows('prompt-edit-large-target-project')
+
+    console.log(JSON.stringify({
+      afterEditSourceDetailRows,
+      afterEditTargetDetailRows,
+      afterEditTargetPromptAnswerRows,
+      afterRerunSourceDetailRows,
+      afterRerunTargetDetailRows,
+      afterRerunTargetPromptAnswerRows,
+      beforeEditSourceDetailRows,
+      beforeEditTargetDetailRows,
+      beforeEditTargetPromptAnswerRows,
+    }))
+    await database.close()
+  `)
+
+  expect(result.beforeEditSourceDetailRows).toEqual([
+    {
+      articleId: 'prompt-edit-large-article',
+      judgmentId: 'prompt-edit-large-source-judgment',
+      promptId: 'prompt-edit-large-shared-prompt',
+    },
+  ])
+  expect(result.beforeEditTargetDetailRows).toEqual([
+    {
+      articleId: 'prompt-edit-large-article',
+      judgmentId: 'prompt-edit-large-source-judgment',
+      promptId: 'prompt-edit-large-shared-prompt',
+    },
+  ])
+  expect(result.beforeEditTargetPromptAnswerRows).toEqual([
+    {
+      articleId: 'prompt-edit-large-article',
+      judgmentId: 'prompt-edit-large-source-judgment',
+      promptId: 'prompt-edit-large-shared-prompt',
+    },
+  ])
+  expect(result.afterEditSourceDetailRows).toEqual([
+    {
+      articleId: 'prompt-edit-large-article',
+      judgmentId: 'prompt-edit-large-source-judgment',
+      promptId: 'prompt-edit-large-shared-prompt',
+    },
+  ])
+  expect(result.afterEditTargetDetailRows).toEqual([])
+  expect(result.afterEditTargetPromptAnswerRows).toEqual([])
+  expect(result.afterRerunSourceDetailRows).toEqual([
+    {
+      articleId: 'prompt-edit-large-article',
+      judgmentId: 'prompt-edit-large-source-judgment',
+      promptId: 'prompt-edit-large-shared-prompt',
+    },
+  ])
+  expect(result.afterRerunTargetDetailRows).toEqual([
+    {
+      articleId: 'prompt-edit-large-article',
+      judgmentId: 'prompt-edit-large-target-judgment',
+      promptId: 'prompt-edit-large-edited-prompt',
+    },
+  ])
+  expect(result.afterRerunTargetPromptAnswerRows).toEqual([
+    {
+      articleId: 'prompt-edit-large-article',
+      judgmentId: 'prompt-edit-large-target-judgment',
+      promptId: 'prompt-edit-large-edited-prompt',
+    },
+  ])
+})
+
 test('review answer dictionary reset and rebuild derive prompt answer ids from prompt_answer_fact', () => {
   const result = runScript<{rows: Array<{answerId: number; answerValue: string; promptId: string}>}>(`
     await database.run(\`

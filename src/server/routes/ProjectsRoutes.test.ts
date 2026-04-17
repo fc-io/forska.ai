@@ -1810,13 +1810,18 @@ test('editing a cloned project prompt keeps source prompt links and judgments is
   const clonedPromptRow = promptRows.find((row) => {
     return row.projectId === clonedProjectId
   })
+  const clonedPromptId = clonedPromptRow?.promptId
 
   expect(sourcePromptRow?.promptId).toBe(originalPromptId)
   expect(sourcePromptRow?.originalText).toBe(originalPromptText)
   expect(sourcePromptRow?.contentHash).toBe(computePromptContentHash(originalPromptText, null, promptHeading, type))
-  expect(clonedPromptRow?.promptId).not.toBe(originalPromptId)
+  expect(clonedPromptId).not.toBe(originalPromptId)
   expect(clonedPromptRow?.originalText).toBe(editedPromptText)
   expect(clonedPromptRow?.contentHash).toBe(computePromptContentHash(editedPromptText, null, promptHeading, type))
+
+  if (!clonedPromptId) {
+    throw new Error('Cloned prompt id not found')
+  }
 
   await runDatabase(`
     INSERT INTO app.judgment (
@@ -1906,7 +1911,7 @@ test('editing a cloned project prompt keeps source prompt links and judgments is
     cloneDetailsBody.prompts.map((prompt) => {
       return {id: prompt.id, originalText: prompt.originalText}
     }),
-  ).toEqual([{id: clonedPromptRow?.promptId, originalText: editedPromptText}])
+  ).toEqual([{id: clonedPromptId, originalText: editedPromptText}])
   expect(
     cloneDetailsBody.judgments.map((judgment) => {
       return {
@@ -1921,7 +1926,7 @@ test('editing a cloned project prompt keeps source prompt links and judgments is
       answeredOriginal: 'no',
       id: 'clone-edit-prompt-isolation-clone-judgment',
       prompt: {originalText: editedPromptText},
-      promptId: clonedPromptRow?.promptId,
+      promptId: clonedPromptId,
     },
   ])
 
@@ -1934,6 +1939,8 @@ test('cloned project config reruns isolate judgments for every judgment-affectin
   }
 
   const sourceConfig = baseCloneRerunConfig('clone-config-rerun-model')
+  const currentApp = app
+  const currentRunDatabase = runDatabase
   const scenarios: CloneRerunScenario[] = [
     {key: 'model-id', nextConfig: {...sourceConfig, modelId: 'clone-config-rerun-model-next'}},
     {key: 'use-title', nextConfig: {...sourceConfig, useTitle: false}},
@@ -1942,11 +1949,11 @@ test('cloned project config reruns isolate judgments for every judgment-affectin
     {key: 'use-fulltext-no-images', nextConfig: {...sourceConfig, useFulltextNoImages: true}},
   ]
 
-  await runDatabase(`
+  await currentRunDatabase(`
     INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode)
     VALUES ('clone-config-rerun-connection', 'sglang', 'SGLang', TRUE, 'none')
   `)
-  await runDatabase(`
+  await currentRunDatabase(`
     INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
     VALUES
       ('${sourceConfig.modelId}', 'clone-config-rerun-connection', 'Qwen/Qwen3.5-122B-A10B', 'Qwen/Qwen3.5-122B-A10B', 'Qwen 122B', 'manual', TRUE),
@@ -1962,7 +1969,7 @@ test('cloned project config reruns isolate judgments for every judgment-affectin
     const sourceJudgmentId = `clone-config-rerun-source-judgment-${scenario.key}`
     const cloneJudgmentId = `clone-config-rerun-clone-judgment-${scenario.key}`
 
-    await runDatabase(`
+    await currentRunDatabase(`
       INSERT INTO app.project (
         id,
         name,
@@ -1991,11 +1998,11 @@ test('cloned project config reruns isolate judgments for every judgment-affectin
       projectPromptId: `clone-config-rerun-project-prompt-${scenario.key}`,
       promptId,
     })
-    await runDatabase(`
+    await currentRunDatabase(`
       INSERT INTO app.article (id, article_title)
       VALUES ('${articleId}', 'Clone config rerun article ${scenario.key}')
     `)
-    await runDatabase(`
+    await currentRunDatabase(`
       INSERT INTO app.project_article (id, project_id, article_id)
       VALUES ('clone-config-rerun-project-article-${scenario.key}', '${sourceProjectId}', '${articleId}')
     `)
@@ -2009,7 +2016,7 @@ test('cloned project config reruns isolate judgments for every judgment-affectin
       promptId,
     })
 
-    const cloneResponse = await app.handle(
+    const cloneResponse = await currentApp.handle(
       new Request(`http://localhost/api/projects/${sourceProjectId}/clone`, {method: 'POST'}),
     )
     const cloneBody = (await cloneResponse.json()) as {data: {id: string}}
@@ -2017,7 +2024,7 @@ test('cloned project config reruns isolate judgments for every judgment-affectin
 
     expect(cloneResponse.status).toBe(200)
 
-    const editResponse = await app.handle(
+    const editResponse = await currentApp.handle(
       new Request(`http://localhost/api/projects/${clonedProjectId}/edit`, {
         body: JSON.stringify({
           name: `Clone Config Rerun Clone ${scenario.key}`,
@@ -2291,6 +2298,72 @@ test('create route stores hash-backed immutable prompts', async () => {
   await flushMartRefreshes()
 })
 
+test('create route reuses exact hash-matching immutable prompts', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'create-immutable-reuse-connection'
+  const modelId = 'create-immutable-reuse-model'
+  const promptText = 'Shared immutable prompt text'
+  const promptHeading = 'shared immutable'
+  const type = 'string'
+  const promptHash = computePromptContentHash(promptText, null, promptHeading, type)
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-122B-A10B', 'Qwen/Qwen3.5-122B-A10B', 'Qwen 122B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, prompt_heading, type, content_hash)
+    VALUES ('create-immutable-reuse-prompt', '${promptText}', '${promptHeading}', '${type}', '${promptHash}')
+  `)
+
+  const response = await app.handle(
+    new Request('http://localhost/api/projects', {
+      body: JSON.stringify({
+        name: 'Create immutable reuse project',
+        modelId,
+        prompts: [{content: promptText, promptHeading, type, order: 0}],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {data: {id: string}}
+  const projectId = body.data.id
+
+  expect(response.status).toBe(200)
+
+  const [promptRow] = await queryDatabase<{
+    contentHash: string | null
+    originProjectId: string | null
+    promptId: string
+  }>(`
+    SELECT p.id AS promptId, p.content_hash AS contentHash, pp.origin_project_id AS originProjectId
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON p.id = pp.prompt_id
+    WHERE pp.project_id = '${projectId}'
+    LIMIT 1
+  `)
+  const [hashCountRow] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.prompt
+    WHERE content_hash = '${promptHash}'
+  `)
+
+  expect(promptRow?.promptId).toBe('create-immutable-reuse-prompt')
+  expect(promptRow?.contentHash).toBe(promptHash)
+  expect(promptRow?.originProjectId).toBe(null)
+  expect(Number(hashCountRow?.count ?? 0)).toBe(1)
+
+  await flushMartRefreshes()
+})
+
 test('create route reuses archived hash-matching prompt and reactivates the canonical row', async () => {
   if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')
@@ -2435,6 +2508,157 @@ test('edit route reuses matching immutable prompts when content matches', async 
   expect(promptRow?.promptId).toBe('edit-detach-existing-prompt')
   expect(promptRow?.contentHash).toBe(computePromptContentHash('Shared prompt text', null, 'shared', 'string'))
   expect(promptRow?.originProjectId).toBe(null)
+
+  await flushMartRefreshes()
+})
+
+test('edit route creates a new immutable prompt row instead of mutating a shared prompt', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'edit-immutable-new-row-connection'
+  const modelId = 'edit-immutable-new-row-model'
+  const projectId = 'edit-immutable-new-row-project'
+  const linkedProjectId = 'edit-immutable-new-row-linked-project'
+  const originalPromptId = 'edit-immutable-new-row-original-prompt'
+  const originalPromptText = 'Original immutable prompt text'
+  const editedPromptText = 'Edited immutable prompt text'
+  const promptHeading = 'eligibility'
+  const type = 'string'
+  const originalPromptHash = computePromptContentHash(originalPromptText, null, promptHeading, type)
+  const editedPromptHash = computePromptContentHash(editedPromptText, null, promptHeading, type)
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.project (
+      id,
+      name,
+      model_id,
+      human_judgment_mode,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      archived
+    )
+    VALUES (
+      '${linkedProjectId}',
+      'Edit immutable linked project',
+      '${modelId}',
+      'prompt',
+      TRUE,
+      TRUE,
+      FALSE,
+      FALSE,
+      FALSE
+    )
+  `)
+  await insertProjectPromptFixture({
+    contentHash: originalPromptHash,
+    originProjectId: null,
+    originalText: originalPromptText,
+    projectId,
+    projectPromptId: 'edit-immutable-new-row-project-prompt',
+    promptHeading,
+    promptId: originalPromptId,
+    type,
+  })
+  await runDatabase(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, enabled, origin_project_id)
+    VALUES (
+      'edit-immutable-new-row-linked-project-prompt',
+      '${linkedProjectId}',
+      '${originalPromptId}',
+      0,
+      FALSE,
+      TRUE,
+      NULL
+    )
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/projects/${projectId}/edit`, {
+      body: JSON.stringify({
+        name: 'Edited immutable project',
+        description: null,
+        prompts: [
+          {originalId: originalPromptId, originalText: editedPromptText, promptHeading, type, order: 0, enabled: true},
+        ],
+        dateFrom: null,
+        dateTo: null,
+        modelId,
+        importRoutes: [],
+        useTitle: true,
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+
+  expect(response.status).toBe(200)
+
+  const projectPromptRows = await queryDatabase<{projectId: string; promptId: string}>(`
+    SELECT project_id AS projectId, prompt_id AS promptId
+    FROM app.project_prompt
+    WHERE project_id IN ('${projectId}', '${linkedProjectId}')
+    ORDER BY project_id ASC
+  `)
+  const [originalPromptRow] = await queryDatabase<{
+    contentHash: string | null
+    originalText: string
+    promptHeading: string | null
+    type: string | null
+  }>(`
+    SELECT
+      content_hash AS contentHash,
+      original_text AS originalText,
+      prompt_heading AS promptHeading,
+      type
+    FROM app.prompt
+    WHERE id = '${originalPromptId}'
+    LIMIT 1
+  `)
+  const editedProjectPromptRow = projectPromptRows.find((row) => {
+    return row.projectId === projectId
+  })
+  const linkedProjectPromptRow = projectPromptRows.find((row) => {
+    return row.projectId === linkedProjectId
+  })
+  const [editedPromptRow] = await queryDatabase<{
+    contentHash: string | null
+    originalText: string
+    promptHeading: string | null
+    type: string | null
+  }>(`
+    SELECT
+      content_hash AS contentHash,
+      original_text AS originalText,
+      prompt_heading AS promptHeading,
+      type
+    FROM app.prompt
+    WHERE id = '${editedProjectPromptRow?.promptId ?? ''}'
+    LIMIT 1
+  `)
+  const [editedHashCountRow] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.prompt
+    WHERE content_hash = '${editedPromptHash}'
+  `)
+
+  expect(editedProjectPromptRow?.promptId).not.toBe(originalPromptId)
+  expect(linkedProjectPromptRow?.promptId).toBe(originalPromptId)
+  expect(originalPromptRow).toEqual({
+    contentHash: originalPromptHash,
+    originalText: originalPromptText,
+    promptHeading,
+    type,
+  })
+  expect(editedPromptRow).toEqual({contentHash: editedPromptHash, originalText: editedPromptText, promptHeading, type})
+  expect(Number(editedHashCountRow?.count ?? 0)).toBe(1)
 
   await flushMartRefreshes()
 })

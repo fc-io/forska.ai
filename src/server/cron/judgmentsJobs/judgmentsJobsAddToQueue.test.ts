@@ -1430,6 +1430,145 @@ test('queue reuse skips unchanged scoped clone judgments and keeps changed setti
   ])
 })
 
+test('queue reuse keeps cloned prompt edits queued when source judgments stay on the old prompt id', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  const dbQuery = queryDatabase
+  const dbRun = runDatabase
+  const suffix = `queue-prompt-edit-${Date.now()}`
+  const connectionId = `${suffix}-connection`
+  const modelId = `${suffix}-model`
+  const sourceProjectId = `${suffix}-source-project`
+  const clonedProjectId = `${suffix}-cloned-project`
+  const jobId = `${suffix}-job`
+  const sourcePromptId = `${suffix}-source-prompt`
+  const editedClonePromptId = `${suffix}-edited-clone-prompt`
+  const articleId = `${suffix}-article`
+  const addReadyPromptsCalls: Array<Array<{articleId: string; promptId: string}>> = []
+  const sqliteService: MockSqliteService = {
+    addReadyPrompts: async (_jobId, entries) => {
+      addReadyPromptsCalls.push(entries)
+      return entries.length
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    getReadyCount: async () => {
+      return 0
+    },
+    getScanState: async () => {
+      return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    setScanState: async () => {
+      return undefined
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+
+  await dbRun(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await dbRun(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Queue prompt edit model', 'queue-prompt-edit-model', 'Queue prompt edit model', 'manual', TRUE)
+  `)
+  await dbRun(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES
+      ('${sourceProjectId}', 'Queue Prompt Edit Source', '${modelId}', TRUE, TRUE, FALSE, FALSE),
+      ('${clonedProjectId}', 'Queue Prompt Edit Clone', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await dbRun(`
+    INSERT INTO app.prompt (id, original_text)
+    VALUES
+      ('${sourcePromptId}', 'Queue prompt edit source prompt'),
+      ('${editedClonePromptId}', 'Queue prompt edit clone prompt')
+  `)
+  await dbRun(`
+    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+    VALUES
+      ('${suffix}-source-project-prompt', '${sourceProjectId}', '${sourcePromptId}', 1, TRUE),
+      ('${suffix}-clone-project-prompt', '${clonedProjectId}', '${editedClonePromptId}', 1, TRUE)
+  `)
+  await dbRun(`
+    INSERT INTO app.article (id, article_id, article_title)
+    VALUES ('${articleId}', '${articleId}-external', 'Queue prompt edit article')
+  `)
+  await dbRun(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES
+      ('${suffix}-source-project-article', '${sourceProjectId}', '${articleId}'),
+      ('${suffix}-clone-project-article', '${clonedProjectId}', '${articleId}')
+  `)
+  await dbRun(`
+    INSERT INTO app.judgment (id, article_id, prompt_id, model_id, project_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${suffix}-source-judgment', '${articleId}', '${sourcePromptId}', '${modelId}', '${sourceProjectId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await dbRun(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${clonedProjectId}', 'running')
+  `)
+
+  void mock.module(judgmentsJobsAddToQueueDependenciesModulePath, () => {
+    return {
+      getAppDatabaseService: () => {
+        return {queryJson: dbQuery, run: dbRun}
+      },
+      getJudgmentJobSqliteService: () => {
+        return sqliteService
+      },
+      getJudgmentsCapacity: () => {
+        return {addToQueueMaxBatchSize: 10, maxInflight: 10, readyTargetPerJob: 10}
+      },
+      inferenceRuntimeConfig: {
+        codexMaxInflight: 1,
+        judgmentsAddToQueueMaxBatchSize: 10,
+        judgmentsReadyTargetMultiplier: 1,
+      },
+      JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
+      judgmentsJobsCronGetPrompts: async () => {
+        return {nextCursor: null, promptEntries: [{articleId, promptId: editedClonePromptId}]}
+      },
+      judgmentsJobsGetRunningJobs: async () => {
+        return [
+          {
+            id: jobId,
+            maxInflightRequests: null,
+            modelProvider: 'openai',
+            projectId: clonedProjectId,
+            providerConnectionId: null,
+          },
+        ]
+      },
+    }
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?queue-reuse-prompt-edit=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(addReadyPromptsCalls).toEqual([[{articleId, promptId: editedClonePromptId}]])
+})
+
 test('queue reuse does not skip matching judgments outside the target project scope', async () => {
   if (!queryDatabase || !runDatabase) {
     throw new Error('Test database not initialized')
