@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
-import {createSignal, For, Show} from 'solid-js'
+import {createMemo, createSignal, For, Show} from 'solid-js'
 
 import {Button} from '../../../components/ui/button'
 import {
@@ -59,9 +59,34 @@ const CreateCompareJudgmentsFromProjectPage = () => {
   const [dateFrom, setDateFrom] = createSignal('')
   const [dateTo, setDateTo] = createSignal('')
   const [compareWithHumans, setCompareWithHumans] = createSignal(false)
+  const [summaryModeEnabled, setSummaryModeEnabled] = createSignal(false)
   const [selectedSourceProjectId, setSelectedSourceProjectId] = createSignal('')
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
+
+  const selectedSourceProject = createMemo(() => {
+    return (sourcesQuery.data ?? []).find((sourceProject) => {
+      return sourceProject.id === selectedSourceProjectId()
+    })
+  })
+  const summaryModeUnavailableReason = createMemo(() => {
+    if (sourcesQuery.isLoading) {
+      return 'Select a source project after projects finish loading.'
+    }
+
+    if (sourcesQuery.isError) {
+      return sourcesQuery.error instanceof Error ? sourcesQuery.error.message : 'Failed to load projects'
+    }
+
+    if (!selectedSourceProjectId()) {
+      return 'Select a source project to check summary support.'
+    }
+
+    return selectedSourceProject()?.isSummaryCapable ? null : 'Selected project is not summary-capable.'
+  })
+  const canSubmit = createMemo(() => {
+    return Boolean(comparisonProjectName().trim() && selectedSourceProjectId() && !isLoading())
+  })
 
   const handleSubmit = async (event: Event) => {
     event.preventDefault()
@@ -89,10 +114,18 @@ const CreateCompareJudgmentsFromProjectPage = () => {
       return
     }
 
+    const summaryValidationError = summaryModeEnabled() ? summaryModeUnavailableReason() : null
+    if (summaryValidationError) {
+      setError(summaryValidationError)
+      return
+    }
+
     const createComparisonProjectInput: CreateComparisonProjectFromProjectInput = {
       name: comparisonProjectName().trim(),
       description: description().trim() || undefined,
       compareWithHumans: compareWithHumans(),
+      humanJudgmentMode: summaryModeEnabled() ? 'summary' : 'prompt',
+      summarySourceProjectId: summaryModeEnabled() ? selectedSourceProjectId() : null,
       dateFrom: startDateResult.normalized ?? undefined,
       dateTo: endDateResult.normalized ?? undefined,
       sourceProjectId: selectedSourceProjectId(),
@@ -201,7 +234,11 @@ const CreateCompareJudgmentsFromProjectPage = () => {
                 class="mt-1"
                 checked={compareWithHumans()}
                 onChange={(event) => {
-                  return setCompareWithHumans(event.currentTarget.checked)
+                  setCompareWithHumans(event.currentTarget.checked)
+
+                  if (!event.currentTarget.checked) {
+                    setSummaryModeEnabled(false)
+                  }
                 }}
               />
               <div class="flex-1">
@@ -209,6 +246,33 @@ const CreateCompareJudgmentsFromProjectPage = () => {
                 <p class="text-xs text-muted-foreground mt-1">
                   Save that this comparison should include human judgments in future result views.
                 </p>
+              </div>
+            </label>
+          </div>
+
+          <div class="border border-input rounded-md p-4 bg-muted/20">
+            <label class="flex items-start gap-3" classList={{'cursor-pointer': !summaryModeUnavailableReason()}}>
+              <input
+                type="checkbox"
+                class="mt-1"
+                checked={summaryModeEnabled()}
+                disabled={Boolean(summaryModeUnavailableReason())}
+                onChange={(event) => {
+                  setSummaryModeEnabled(event.currentTarget.checked)
+
+                  if (event.currentTarget.checked) {
+                    setCompareWithHumans(true)
+                  }
+                }}
+              />
+              <div class="flex-1">
+                <p class="text-sm font-medium text-gray-900">Summary mode</p>
+                <p class="text-xs text-muted-foreground mt-1">
+                  Use the selected source project's overall human decisions for comparison.
+                </p>
+                <Show when={summaryModeUnavailableReason()}>
+                  <p class="text-xs text-muted-foreground mt-1">{summaryModeUnavailableReason()}</p>
+                </Show>
               </div>
             </label>
           </div>
@@ -238,7 +302,11 @@ const CreateCompareJudgmentsFromProjectPage = () => {
                           class="mt-1"
                           checked={selectedSourceProjectId() === sourceProject.id}
                           onChange={() => {
-                            return setSelectedSourceProjectId(sourceProject.id)
+                            setSelectedSourceProjectId(sourceProject.id)
+
+                            if (!sourceProject.isSummaryCapable) {
+                              setSummaryModeEnabled(false)
+                            }
                           }}
                         />
                         <div class="flex-1">
@@ -254,6 +322,17 @@ const CreateCompareJudgmentsFromProjectPage = () => {
                           <p class="text-xs text-muted-foreground mt-1">
                             Prompts: {sourceProject.prompts.length} · Import routes: {sourceProject.importRoutes.length}
                           </p>
+                          <p
+                            class="text-xs mt-1"
+                            classList={{
+                              'text-emerald-700': sourceProject.isSummaryCapable,
+                              'text-muted-foreground': !sourceProject.isSummaryCapable,
+                            }}
+                          >
+                            {sourceProject.isSummaryCapable
+                              ? 'Summary mode available'
+                              : 'Summary mode unavailable for this project'}
+                          </p>
                           <Show when={sourceProject.description}>
                             <p class="text-xs text-muted-foreground mt-1">{sourceProject.description}</p>
                           </Show>
@@ -267,10 +346,7 @@ const CreateCompareJudgmentsFromProjectPage = () => {
           </div>
 
           <div class="flex gap-3 pt-4">
-            <Button
-              type="submit"
-              disabled={!comparisonProjectName().trim() || !selectedSourceProjectId() || isLoading()}
-            >
+            <Button type="submit" disabled={!canSubmit()}>
               {isLoading() ? 'Creating...' : 'Create Comparison Project'}
             </Button>
             <Button as={Link} to="/compare-judgments" variant="outline">

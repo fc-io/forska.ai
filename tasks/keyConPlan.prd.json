@@ -1,0 +1,71 @@
+{
+  "name": "Covidence Refresh Consolidation Plan",
+  "branchName": "ralph/covidence-refresh-consolidation",
+  "description": "Move Covidence create and reimport refreshes onto the `project_mart_refresh_state` worker path by marking seeded judgment writes dirty and removing the route-level `queueImportedArticleRefreshes` calls.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Mark dirty from seeded Covidence judgments",
+      "description": "As a maintainer, I want `seedCovidenceHumanJudgmentsFromConfig` to mark affected project articles dirty so Covidence imports refresh review marts through the worker-owned dirty-state path instead of route-level queueing.",
+      "acceptanceCriteria": [
+        "Update `src/server/services/covidenceImportService.ts` so `seedCovidenceHumanJudgmentsFromConfig` calls `getProjectMartRefreshStateService().markProjectsDirtyAtomically(...)` for the owning project and affected article ids in the same transaction.",
+        "Title/abstract imports and full-text judgment-only reimports advance `app.project_mart_refresh_state` and `app.project_mart_refresh_article_state` even when `project_article` scope does not change.",
+        "Keep `syncCovidenceProjectScopeFromConfig(...)` responsible for added and removed full-text scope articles, and add or update service regression coverage for both the title/abstract path and the judgment-only full-text reimport path.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun test src/server/services/projectMartRefreshStateService.test.ts` passes",
+        "`bun test src/server/services/getDuckdbMartRefreshService.test.ts` passes",
+        "`bunx eslint src/server/services/covidenceImportService.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.ts src/server/services/covidenceImportService.test.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.test.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Remove reimport route queue trigger",
+      "description": "As a maintainer, I want the Covidence reimport route to rely on dirty-state updates instead of `queueImportedArticleRefreshes` so project refresh orchestration has one source of truth.",
+      "acceptanceCriteria": [
+        "Remove `queueImportedArticleRefreshes(...)` from `src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.ts` and remove the unused import.",
+        "Update `src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.test.ts` to assert the route no longer calls the queue helper while still clearing seeded judgments and running the scope and seed steps.",
+        "Leave non-Covidence import flows that still use `src/server/services/articleImportStoreService.ts` unchanged.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun test src/server/services/projectMartRefreshStateService.test.ts` passes",
+        "`bun test src/server/services/getDuckdbMartRefreshService.test.ts` passes",
+        "`bunx eslint src/server/services/covidenceImportService.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.ts src/server/services/covidenceImportService.test.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.test.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Remove create route queue trigger",
+      "description": "As a maintainer, I want new Covidence datasource creation to rely on dirty-state updates instead of the old queue so create and reimport follow the same refresh path.",
+      "acceptanceCriteria": [
+        "Remove `queueImportedArticleRefreshes(...)` from `src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.ts` and remove the unused import.",
+        "Update `src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` to assert the create route no longer calls the queue helper while still creating the datasource, project, prompts, scope, and seeded judgments.",
+        "Keep the create response payload for datasource, project, prompts, and stats unchanged after the refresh-path swap.",
+        "`bun test src/server/services/covidenceImportService.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.test.ts` passes",
+        "`bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes",
+        "`bun test src/server/services/projectMartRefreshStateService.test.ts` passes",
+        "`bun test src/server/services/getDuckdbMartRefreshService.test.ts` passes",
+        "`bunx eslint src/server/services/covidenceImportService.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.ts src/server/services/covidenceImportService.test.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.test.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    }
+  ]
+}

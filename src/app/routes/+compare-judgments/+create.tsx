@@ -4,7 +4,12 @@ import {createMemo, createSignal, For, Show} from 'solid-js'
 
 import {Button} from '../../../components/ui/button'
 import {apiClient} from '../../../services/apiClient'
-import {createComparisonProject, type CreateComparisonProjectInput} from '../../../services/comparisonProjectsService'
+import {
+  type ComparisonProjectSource,
+  createComparisonProject,
+  type CreateComparisonProjectInput,
+  fetchComparisonProjectSources,
+} from '../../../services/comparisonProjectsService'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 import {isImportedFileRoute} from '../../../utils/importRouteUtils.ts'
 
@@ -64,6 +69,40 @@ const getSelectedContentOptionCount = (options: {
   return [options.compareTitleAndAbstract, options.useFulltext, options.useFulltextNoImages].filter(Boolean).length
 }
 
+const promptHasSummaryCriteria = (prompt: ComparisonProjectSource['prompts'][number]) => {
+  return Boolean(prompt.criteriaDisposition && prompt.criteriaSectionKey)
+}
+
+const getSummaryCapableSources = (sources: ComparisonProjectSource[]) => {
+  return sources.filter((source) => {
+    return source.isSummaryCapable
+  })
+}
+
+const getPromptSelectionsFromExistingPrompts = (prompts: ExistingPrompt[], selectedPromptIds: string[]) => {
+  return prompts
+    .filter((prompt) => {
+      return selectedPromptIds.includes(prompt.id)
+    })
+    .map((prompt, index) => {
+      return {promptId: prompt.id, order: index}
+    })
+}
+
+const getPromptSelectionsFromSourceProject = (
+  sourceProject: ComparisonProjectSource | undefined,
+  selectedPromptIds: string[],
+) => {
+  return (sourceProject?.prompts ?? [])
+    .filter(promptHasSummaryCriteria)
+    .filter((prompt) => {
+      return selectedPromptIds.includes(prompt.id)
+    })
+    .map((prompt, index) => {
+      return {promptId: prompt.id, order: index}
+    })
+}
+
 const CreateCompareJudgmentsPage = () => {
   const navigate = useNavigate()
   const importRoutesQuery = useQuery(() => {
@@ -90,6 +129,14 @@ const CreateCompareJudgmentsPage = () => {
       suspense: false,
     }
   })
+  const sourcesQuery = useQuery(() => {
+    return {
+      queryKey: ['comparison-project-sources'],
+      queryFn: fetchComparisonProjectSources,
+      staleTime: 1000 * 60 * 5,
+      suspense: false,
+    }
+  })
 
   const [comparisonProjectName, setComparisonProjectName] = createSignal('')
   const [description, setDescription] = createSignal('')
@@ -101,6 +148,8 @@ const CreateCompareJudgmentsPage = () => {
   const [useFulltext, setUseFulltext] = createSignal(false)
   const [useFulltextNoImages, setUseFulltextNoImages] = createSignal(false)
   const [compareWithHumans, setCompareWithHumans] = createSignal(false)
+  const [summaryModeEnabled, setSummaryModeEnabled] = createSignal(false)
+  const [selectedSummarySourceProjectId, setSelectedSummarySourceProjectId] = createSignal('')
   const [isLoading, setIsLoading] = createSignal(false)
   const [error, setError] = createSignal<string | null>(null)
 
@@ -118,6 +167,76 @@ const CreateCompareJudgmentsPage = () => {
   })
   const hasSelectedContentOptions = createMemo(() => {
     return selectedContentOptionCount() > 0
+  })
+  const summaryCapableSources = createMemo(() => {
+    return getSummaryCapableSources(sourcesQuery.data ?? [])
+  })
+  const selectedSummarySourceProject = createMemo(() => {
+    return summaryCapableSources().find((sourceProject) => {
+      return sourceProject.id === selectedSummarySourceProjectId()
+    })
+  })
+  const summaryPromptIdsWithCriteria = createMemo(() => {
+    return new Set(
+      (selectedSummarySourceProject()?.prompts ?? []).filter(promptHasSummaryCriteria).map((prompt) => {
+        return prompt.id
+      }),
+    )
+  })
+  const selectableExistingPrompts = createMemo(() => {
+    return summaryModeEnabled()
+      ? sortedExistingPrompts().filter((prompt) => {
+          return summaryPromptIdsWithCriteria().has(prompt.id)
+        })
+      : sortedExistingPrompts()
+  })
+  const selectedSelectablePromptCount = createMemo(() => {
+    const selectablePromptIds = new Set(
+      selectableExistingPrompts().map((prompt) => {
+        return prompt.id
+      }),
+    )
+
+    return selectedPromptIds().filter((promptId) => {
+      return selectablePromptIds.has(promptId)
+    }).length
+  })
+  const summaryModeUnavailableReason = createMemo(() => {
+    if (sourcesQuery.isLoading) {
+      return 'Loading summary-capable source projects...'
+    }
+
+    if (sourcesQuery.isError) {
+      return sourcesQuery.error instanceof Error ? sourcesQuery.error.message : 'Failed to load source projects'
+    }
+
+    return summaryCapableSources().length === 0 ? 'No summary-capable source projects are available.' : null
+  })
+  const summarySourceInvalidReason = createMemo(() => {
+    if (!summaryModeEnabled()) {
+      return null
+    }
+
+    if (!selectedSummarySourceProjectId()) {
+      return 'Select a summary-capable source project'
+    }
+
+    if (!selectedSummarySourceProject()) {
+      return 'Selected summary source project is unavailable'
+    }
+
+    return selectableExistingPrompts().length === 0
+      ? 'Selected summary source project has no prompts with summary criteria metadata'
+      : null
+  })
+  const canSubmit = createMemo(() => {
+    return (
+      Boolean(comparisonProjectName().trim())
+      && hasSelectedContentOptions()
+      && !summarySourceInvalidReason()
+      && (!summaryModeEnabled() || selectedSelectablePromptCount() > 0)
+      && !isLoading()
+    )
   })
 
   const handleSubmit = async (event: Event) => {
@@ -146,18 +265,27 @@ const CreateCompareJudgmentsPage = () => {
       return
     }
 
-    const promptSelections = sortedExistingPrompts()
-      .filter((prompt) => {
-        return selectedPromptIds().includes(prompt.id)
-      })
-      .map((prompt, index) => {
-        return {promptId: prompt.id, order: index}
-      })
+    const summaryValidationError = summarySourceInvalidReason()
+    if (summaryValidationError) {
+      setError(summaryValidationError)
+      return
+    }
+
+    const promptSelections = summaryModeEnabled()
+      ? getPromptSelectionsFromSourceProject(selectedSummarySourceProject(), selectedPromptIds())
+      : getPromptSelectionsFromExistingPrompts(sortedExistingPrompts(), selectedPromptIds())
+
+    if (summaryModeEnabled() && promptSelections.length === 0) {
+      setError('Summary mode requires at least one selected source-project prompt')
+      return
+    }
 
     const createComparisonProjectInput: CreateComparisonProjectInput = {
       name: comparisonProjectName(),
       description: description().trim() || undefined,
       compareWithHumans: compareWithHumans(),
+      humanJudgmentMode: summaryModeEnabled() ? 'summary' : 'prompt',
+      summarySourceProjectId: summaryModeEnabled() ? selectedSummarySourceProjectId() : null,
       dateFrom: startDateResult.normalized ?? undefined,
       dateTo: endDateResult.normalized ?? undefined,
       useTitle: compareTitleAndAbstract(),
@@ -392,7 +520,11 @@ const CreateCompareJudgmentsPage = () => {
                 class="mt-1"
                 checked={compareWithHumans()}
                 onChange={(event) => {
-                  return setCompareWithHumans(event.currentTarget.checked)
+                  setCompareWithHumans(event.currentTarget.checked)
+
+                  if (!event.currentTarget.checked) {
+                    setSummaryModeEnabled(false)
+                  }
                 }}
               />
               <div class="flex-1">
@@ -404,13 +536,122 @@ const CreateCompareJudgmentsPage = () => {
             </label>
           </div>
 
+          <div class="border border-input rounded-md p-4 bg-muted/20">
+            <label class="flex items-start gap-3" classList={{'cursor-pointer': !summaryModeUnavailableReason()}}>
+              <input
+                type="checkbox"
+                class="mt-1"
+                checked={summaryModeEnabled()}
+                disabled={Boolean(summaryModeUnavailableReason())}
+                onChange={(event) => {
+                  setSummaryModeEnabled(event.currentTarget.checked)
+
+                  if (event.currentTarget.checked) {
+                    setCompareWithHumans(true)
+                  }
+                }}
+              />
+              <div class="flex-1">
+                <p class="text-sm font-medium text-gray-900">Summary mode</p>
+                <p class="text-xs text-muted-foreground mt-1">
+                  Compare overall human decisions derived from a summary-capable source project.
+                </p>
+                <Show when={summaryModeUnavailableReason()}>
+                  <p class="text-xs text-red-600 mt-1">{summaryModeUnavailableReason()}</p>
+                </Show>
+              </div>
+            </label>
+          </div>
+
+          <Show when={summaryModeEnabled()}>
+            <div>
+              <p class="block text-sm font-medium mb-2">Summary Source Project *</p>
+              <Show when={sourcesQuery.isLoading}>
+                <p class="text-sm text-muted-foreground">Loading summary-capable source projects...</p>
+              </Show>
+              <Show when={sourcesQuery.isError}>
+                <p class="text-sm text-red-600">
+                  {sourcesQuery.error instanceof Error ? sourcesQuery.error.message : 'Failed to load source projects'}
+                </p>
+              </Show>
+              <Show when={!sourcesQuery.isLoading && !sourcesQuery.isError}>
+                <div class="space-y-2">
+                  <For each={summaryCapableSources()}>
+                    {(sourceProject) => {
+                      const summaryPromptCount = () => {
+                        return sourceProject.prompts.filter(promptHasSummaryCriteria).length
+                      }
+                      const isDisabled = () => {
+                        return summaryPromptCount() === 0
+                      }
+
+                      return (
+                        <label
+                          class="flex items-start gap-3 border border-input rounded-md p-3"
+                          classList={{'cursor-pointer hover:bg-muted/50': !isDisabled(), 'opacity-50': isDisabled()}}
+                        >
+                          <input
+                            type="radio"
+                            name="summary-source-project"
+                            class="mt-1"
+                            disabled={isDisabled()}
+                            checked={selectedSummarySourceProjectId() === sourceProject.id}
+                            onChange={() => {
+                              setSelectedSummarySourceProjectId(sourceProject.id)
+                              setSelectedPromptIds((current) => {
+                                const availablePromptIds = new Set(
+                                  sourceProject.prompts.filter(promptHasSummaryCriteria).map((prompt) => {
+                                    return prompt.id
+                                  }),
+                                )
+
+                                return current.filter((promptId) => {
+                                  return availablePromptIds.has(promptId)
+                                })
+                              })
+                            }}
+                          />
+                          <div class="flex-1">
+                            <div class="flex items-center gap-2 flex-wrap">
+                              <p class="text-sm font-medium text-gray-900">{sourceProject.name}</p>
+                              <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700">
+                                {sourceProject.modelName}
+                              </span>
+                            </div>
+                            <p class="text-xs text-muted-foreground mt-1">
+                              Summary prompts: {summaryPromptCount()} of {sourceProject.prompts.length}
+                            </p>
+                            <Show when={isDisabled()}>
+                              <p class="text-xs text-red-600 mt-1">
+                                This project has no prompts with summary criteria metadata.
+                              </p>
+                            </Show>
+                          </div>
+                        </label>
+                      )
+                    }}
+                  </For>
+                </div>
+              </Show>
+              <Show when={summarySourceInvalidReason()}>
+                <p class="mt-2 text-sm text-red-600">{summarySourceInvalidReason()}</p>
+              </Show>
+            </div>
+          </Show>
+
           <div>
             <div class="flex items-center justify-between mb-2">
               <label class="block text-sm font-medium">Existing Prompts</label>
               <span class="text-xs text-muted-foreground">
-                {selectedPromptIds().length} of {sortedExistingPrompts().length} selected
+                {selectedSelectablePromptCount()} of {selectableExistingPrompts().length} selected
               </span>
             </div>
+            <Show when={summaryModeEnabled()}>
+              <p class="text-sm text-muted-foreground mb-3">
+                Summary mode only allows prompts from the selected source project that include summary criteria
+                metadata.
+              </p>
+            </Show>
             <Show when={existingPromptsQuery.isLoading}>
               <div class="text-sm text-muted-foreground">Loading existing prompts...</div>
             </Show>
@@ -423,18 +664,24 @@ const CreateCompareJudgmentsPage = () => {
             </Show>
             <Show
               when={
-                !existingPromptsQuery.isLoading && !existingPromptsQuery.isError && sortedExistingPrompts().length === 0
+                !existingPromptsQuery.isLoading
+                && !existingPromptsQuery.isError
+                && selectableExistingPrompts().length === 0
               }
             >
-              <p class="text-sm text-muted-foreground">No prompts available.</p>
+              <p class="text-sm text-muted-foreground">
+                {summaryModeEnabled() ? 'No source-project summary prompts available.' : 'No prompts available.'}
+              </p>
             </Show>
             <Show
               when={
-                !existingPromptsQuery.isLoading && !existingPromptsQuery.isError && sortedExistingPrompts().length > 0
+                !existingPromptsQuery.isLoading
+                && !existingPromptsQuery.isError
+                && selectableExistingPrompts().length > 0
               }
             >
               <div class="space-y-3">
-                <For each={sortedExistingPrompts()}>
+                <For each={selectableExistingPrompts()}>
                   {(prompt) => {
                     const isSelected = () => {
                       return selectedPromptIds().includes(prompt.id)
@@ -509,10 +756,7 @@ const CreateCompareJudgmentsPage = () => {
           </div>
 
           <div class="flex gap-3 pt-4">
-            <Button
-              type="submit"
-              disabled={!comparisonProjectName().trim() || !hasSelectedContentOptions() || isLoading()}
-            >
+            <Button type="submit" disabled={!canSubmit()}>
               {isLoading() ? 'Creating...' : 'Create Comparison Project'}
             </Button>
             <Button as={Link} to="/compare-judgments" variant="outline">
