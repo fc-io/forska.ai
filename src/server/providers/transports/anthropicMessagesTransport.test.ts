@@ -65,6 +65,7 @@ test('includes Anthropic error details and request id on failed message requests
       prompt: 'Hello',
       systemPrompt: 'Return JSON',
       temperature: 0.2,
+      version: null,
     }),
   ).rejects.toThrow(
     'Anthropic request failed (400): [invalid_request_error] model claude-opus-4-7 is not available for this workspace request_id=req_123',
@@ -89,6 +90,7 @@ test('omits temperature for claude-opus-4-7 requests', async () => {
     prompt: 'Hello',
     systemPrompt: 'Return JSON',
     temperature: 0.2,
+    version: null,
   })
 
   expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({method: 'POST'})
@@ -119,6 +121,7 @@ test('keeps temperature for Anthropic models that still accept it', async () => 
     prompt: 'Hello',
     systemPrompt: 'Return JSON',
     temperature: 0.2,
+    version: null,
   })
 
   expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
@@ -128,5 +131,36 @@ test('keeps temperature for Anthropic models that still accept it', async () => 
     output_config: {format: {schema: {type: 'object'}, type: 'json_schema'}},
     system: 'Return JSON',
     temperature: 0.2,
+  })
+})
+
+test('uses adaptive thinking and effort for Anthropic effort variants', async () => {
+  globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch
+  fetchMock.mockImplementationOnce(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+    return new Response(
+      JSON.stringify({content: [{text: 'Hello', type: 'text'}], usage: {input_tokens: 1, output_tokens: 1}}),
+      {headers: {'content-type': 'application/json'}, status: 200},
+    )
+  })
+
+  await invokeAnthropicMessagesModel({
+    apiKey: 'test-key',
+    baseURL: 'https://api.anthropic.com/v1',
+    maxCompletionTokens: 32,
+    modelName: 'claude-opus-4-7',
+    outputSchema: {type: 'object'},
+    prompt: 'Hello',
+    systemPrompt: 'Return JSON',
+    temperature: 0.2,
+    version: 'xhigh',
+  })
+
+  expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+    max_tokens: 32,
+    messages: [{content: 'Hello', role: 'user'}],
+    model: 'claude-opus-4-7',
+    output_config: {effort: 'xhigh', format: {schema: {type: 'object'}, type: 'json_schema'}},
+    system: 'Return JSON',
+    thinking: {display: 'omitted', type: 'adaptive'},
   })
 })

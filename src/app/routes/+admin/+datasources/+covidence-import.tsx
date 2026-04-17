@@ -5,6 +5,7 @@ import {createStore} from 'solid-js/store'
 
 import {Button} from '../../../../components/ui/button'
 import {apiClient} from '../../../../services/apiClient.ts'
+import {ensureSelectableModelId} from '../../../../services/ensureSelectableModelId.ts'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse.ts'
 import {postFormDataToApi} from '../../../utils/postFormDataToApi.ts'
 
@@ -153,7 +154,6 @@ const getCovidenceEligibilityPromptFields = (
   })
 }
 type ModelsResponse = {data: ModelOption[]}
-type EnsureModelResponse = {data: {modelId: string}; error: null}
 type CovidenceAnalyzeResponse = {
   data: {
     counts: {
@@ -449,28 +449,7 @@ const analyzeCovidencePackage = async (params: {
 }
 
 const ensureSelectedModelId = async (selectedModel: ModelOption): Promise<string> => {
-  if (selectedModel.provider?.toLowerCase() !== 'codex') {
-    return selectedModel.id
-  }
-
-  const modelName = selectedModel.modelName?.trim() ?? ''
-
-  if (!modelName) {
-    throw new Error('Selected Codex model is missing modelName')
-  }
-
-  const response = await apiClient.api.models.ensure.post({
-    modelName,
-    name: selectedModel.name,
-    provider: 'codex',
-    version: selectedModel.version ?? undefined,
-  })
-  const result = handleApiResponse<EnsureModelResponse>(
-    response as unknown as {data?: EnsureModelResponse; error?: unknown; status?: number},
-    'Failed to ensure Codex model',
-  )
-
-  return result.data.modelId
+  return ensureSelectableModelId(selectedModel)
 }
 
 const createCovidenceImport = async (params: {

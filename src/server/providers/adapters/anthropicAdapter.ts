@@ -62,6 +62,7 @@ export const createAnthropicAdapter = (catalog: ProviderCatalogEntry): ProviderD
         prompt: request.prompt,
         systemPrompt: request.systemPrompt,
         temperature: request.temperature,
+        version: model.version ?? model.variant ?? null,
       })
     },
     kind: catalog.kind,

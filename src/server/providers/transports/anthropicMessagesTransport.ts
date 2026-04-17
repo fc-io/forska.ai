@@ -1,3 +1,4 @@
+import {getAnthropicThinkingConfig} from '../../../utils/anthropicThinking.ts'
 import {type ProviderInvocationResult, type ProviderListedModel} from '../providerTypes.ts'
 import {
   getAnthropicJsonSchemaOutputConfig,
@@ -27,6 +28,7 @@ const getAnthropicMessagesRequestBody = ({
   prompt,
   systemPrompt,
   temperature,
+  version,
 }: {
   maxCompletionTokens: number
   modelName: string
@@ -34,13 +36,16 @@ const getAnthropicMessagesRequestBody = ({
   prompt: string
   systemPrompt: string
   temperature: number
+  version: string | null
 }) => {
+  const thinkingConfig = getAnthropicThinkingConfig({modelName, version})
   const requestBody = {
     max_tokens: maxCompletionTokens,
     messages: [{content: prompt, role: 'user' as const}],
     model: modelName,
-    output_config: getAnthropicJsonSchemaOutputConfig(outputSchema),
+    output_config: {...getAnthropicJsonSchemaOutputConfig(outputSchema), ...(thinkingConfig?.outputConfig ?? {})},
     system: systemPrompt,
+    ...(thinkingConfig ? {thinking: thinkingConfig.thinking} : {}),
   }
 
   return shouldIncludeAnthropicTemperature(modelName) ? {...requestBody, temperature} : requestBody
@@ -114,6 +119,7 @@ export const invokeAnthropicMessagesModel = async ({
   prompt,
   systemPrompt,
   temperature,
+  version,
 }: {
   apiKey: string | null
   baseURL: string | null
@@ -123,6 +129,7 @@ export const invokeAnthropicMessagesModel = async ({
   prompt: string
   systemPrompt: string
   temperature: number
+  version: string | null
 }): Promise<ProviderInvocationResult> => {
   const resolvedBaseURL = getRequiredBaseURL({baseURL, providerLabel: 'Anthropic'})
   const requiredApiKey = getRequiredApiKey({apiKey, providerLabel: 'Anthropic'})
@@ -135,6 +142,7 @@ export const invokeAnthropicMessagesModel = async ({
         prompt,
         systemPrompt,
         temperature,
+        version,
       }),
     ),
     headers: getAnthropicHeaders(requiredApiKey),

@@ -7,6 +7,7 @@ import {createStore} from 'solid-js/store'
 import {RuntimeModelNotice} from '../../../../components/main/runtimeModelNotice.tsx'
 import {Button} from '../../../../components/ui/button'
 import {apiClient} from '../../../../services/apiClient'
+import {ensureSelectableModelId} from '../../../../services/ensureSelectableModelId.ts'
 import {fetchProjectWithPrompts} from '../../../../services/projectsService'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
 import {getSglangRuntimeModelNotice} from '../../../../utils/getSglangRuntimeModelNotice.ts'
@@ -65,8 +66,6 @@ type ModelOption = {
   version: string | null
 }
 type ModelsResponse = {data: ModelOption[]}
-
-type EnsureModelResponse = {data: {modelId: string}; error: null}
 type ImportRouteOption = {route: string; name: string | null}
 
 type ImportRoutesResponse = {data: ImportRouteOption[]}
@@ -634,21 +633,7 @@ const EditProject = (): JSX.Element => {
     })
     if (!selected) return undefined
 
-    if (selected.provider?.toLowerCase() !== 'codex') return selected.id
-
-    const modelName = selected.modelName?.trim() ?? ''
-    if (!modelName) throw new Error('Selected Codex model is missing modelName')
-    const response = await apiClient.api.models.ensure.post({
-      provider: 'codex',
-      modelName,
-      name: selected.name,
-      version: selected.version ?? undefined,
-    })
-    const result = handleApiResponse<EnsureModelResponse>(
-      response as unknown as {data?: EnsureModelResponse; error?: unknown; status?: number},
-      'Failed to ensure Codex model',
-    )
-    return result.data.modelId
+    return ensureSelectableModelId(selected)
   }
 
   const sendUpdateRequest = async (payload: {
@@ -680,7 +665,10 @@ const EditProject = (): JSX.Element => {
         useFulltextNoImages: payload.useFulltextNoImages,
       })
 
-    const result = handleApiResponse<ProjectUpdateResponse>(response, 'Failed to update project').data
+    const result = handleApiResponse<ProjectUpdateResponse>(
+      response as unknown as {data?: ProjectUpdateResponse; error?: unknown; status?: number},
+      'Failed to update project',
+    ).data
     setProjectName(result.project.name)
     setDescription(result.project.description ?? '')
     setDateFrom(formatDateForInput(result.project.dateFrom))

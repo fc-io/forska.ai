@@ -1,6 +1,10 @@
 import {Elysia, t} from 'elysia'
 
-import {appendProviderModelThinkingBadgeLabel} from '../../utils/providerModelLabel.ts'
+import {getAnthropicSupportedThinkingEfforts} from '../../utils/anthropicThinking.ts'
+import {
+  appendProviderModelThinkingBadgeLabel,
+  getProviderModelThinkingBadgeValue,
+} from '../../utils/providerModelLabel.ts'
 import {resolveProviderRuntimeCredentials} from '../providers/providerAuthService.ts'
 import {
   createProviderConnection,
@@ -29,6 +33,10 @@ const toCodexVirtualId = (modelName: string, effort?: string | null): string => 
   const trimmedEffort = String(effort ?? '').trim()
 
   return trimmedEffort.length > 0 ? `codex:${modelName}:${trimmedEffort}` : `codex:${modelName}`
+}
+
+const toAnthropicVirtualId = (modelName: string, effort: string): string => {
+  return `anthropic:${modelName}:${effort}`
 }
 
 const getCodexStoredModels = async (): Promise<ProviderModelRecord[]> => {
@@ -83,17 +91,88 @@ const getSelectableModelLabel = ({
   metadataJson,
   name,
   provider,
+  version,
 }: {
   metadataJson: unknown
   name: string
   provider: string | null
+  version?: string | null
 }) => {
   const baseLabel = provider === 'codex' ? `Codex: ${name}` : name
 
   return appendProviderModelThinkingBadgeLabel({
     label: baseLabel,
-    thinking: getProviderModelMetadataOptions(metadataJson).thinking,
+    thinking: getProviderModelThinkingBadgeValue({
+      provider,
+      thinking: getProviderModelMetadataOptions(metadataJson).thinking,
+      version: version ?? null,
+    }),
   })
+}
+
+const getSelectableStoredModel = (model: ProviderModelRecord) => {
+  return {
+    apiKeyVariable: null,
+    baseURL: model.baseURL,
+    createdAt: model.createdAt,
+    id: model.id,
+    label: getSelectableModelLabel({
+      metadataJson: model.metadataJson,
+      name: model.displayName ?? model.name,
+      provider: model.provider,
+      version: model.variant ?? model.version,
+    }),
+    modelName: model.modelName,
+    name: model.displayName ?? model.name,
+    provider: model.provider,
+    updatedAt: model.updatedAt,
+    version: model.variant ?? model.version,
+    workerUrls: null,
+  }
+}
+
+const getAnthropicStoredModelKey = (model: {
+  modelName: string | null
+  remoteModelId: string | null
+  variant: string | null
+  version: string | null
+}) => {
+  const modelName = getTrimmedValue(model.remoteModelId) ?? getTrimmedValue(model.modelName) ?? 'anthropic'
+  const effort = getTrimmedValue(model.variant ?? model.version) ?? 'base'
+
+  return `${modelName}:${effort}`
+}
+
+const getSelectableAnthropicVirtualModel = ({
+  baseURL,
+  createdAt,
+  displayName,
+  id,
+  modelName,
+  updatedAt,
+  version,
+}: {
+  baseURL: string | null
+  createdAt: Date | null
+  displayName: string
+  id: string
+  modelName: string
+  updatedAt: Date | null
+  version: string | null
+}) => {
+  return {
+    apiKeyVariable: null,
+    baseURL,
+    createdAt,
+    id,
+    label: getSelectableModelLabel({metadataJson: null, name: displayName, provider: 'anthropic', version}),
+    modelName,
+    name: displayName,
+    provider: 'anthropic',
+    updatedAt,
+    version,
+    workerUrls: null,
+  }
 }
 
 const getCodexVirtualModelsFromStoredModels = async (storedModels: ProviderModelRecord[]) => {
@@ -176,37 +255,77 @@ const getCodexVirtualModelsFromServer = async (storedModels: ProviderModelRecord
   }
 }
 
+const getAnthropicSelectableModels = (storedModels: ProviderModelRecord[]) => {
+  const anthropicModels = storedModels.filter((model) => {
+    return model.provider === 'anthropic'
+  })
+  const storedVariants = new Map(
+    anthropicModels.map((model) => {
+      return [getAnthropicStoredModelKey(model), model]
+    }),
+  )
+  const usedModelIds = new Set<string>()
+  const modelsFromBaseRows = anthropicModels.flatMap((model) => {
+    const currentVersion = getTrimmedValue(model.variant ?? model.version)
+    const modelName = getTrimmedValue(model.remoteModelId) ?? getTrimmedValue(model.modelName)
+
+    if (currentVersion || !modelName) {
+      return []
+    }
+
+    const baseDisplayName = model.displayName ?? model.name
+    const supportedEfforts = getAnthropicSupportedThinkingEfforts(modelName)
+
+    usedModelIds.add(model.id)
+
+    return [
+      getSelectableStoredModel(model),
+      ...supportedEfforts.map((effort) => {
+        const storedVariant = storedVariants.get(
+          getAnthropicStoredModelKey({modelName, remoteModelId: modelName, variant: effort, version: effort}),
+        )
+
+        if (storedVariant) {
+          usedModelIds.add(storedVariant.id)
+
+          return getSelectableStoredModel(storedVariant)
+        }
+
+        return getSelectableAnthropicVirtualModel({
+          baseURL: model.baseURL,
+          createdAt: model.createdAt,
+          displayName: appendProviderModelThinkingBadgeLabel({label: baseDisplayName, thinking: effort}),
+          id: toAnthropicVirtualId(modelName, effort),
+          modelName,
+          updatedAt: model.updatedAt,
+          version: effort,
+        })
+      }),
+    ]
+  })
+  const remainingStoredModels = anthropicModels
+    .filter((model) => {
+      return !usedModelIds.has(model.id)
+    })
+    .map(getSelectableStoredModel)
+
+  return [...modelsFromBaseRows, ...remainingStoredModels]
+}
+
 const getSelectableModelsPayload = async () => {
   const storedModels = await listSelectableProviderModels()
   const storedCodexModels = await getCodexStoredModels()
   const nonCodexModels = storedModels
     .filter((model) => {
-      return model.provider !== 'codex' && model.provider !== 'docling'
+      return model.provider !== 'anthropic' && model.provider !== 'codex' && model.provider !== 'docling'
     })
-    .map((model) => {
-      return {
-        apiKeyVariable: null,
-        baseURL: model.baseURL,
-        createdAt: model.createdAt,
-        id: model.id,
-        label: getSelectableModelLabel({
-          metadataJson: model.metadataJson,
-          name: model.displayName ?? model.name,
-          provider: model.provider,
-        }),
-        modelName: model.modelName,
-        name: model.displayName ?? model.name,
-        provider: model.provider,
-        updatedAt: model.updatedAt,
-        version: model.variant ?? model.version,
-        workerUrls: null,
-      }
-    })
+    .map(getSelectableStoredModel)
+  const anthropicModels = getAnthropicSelectableModels(storedModels)
   const codexVirtualFromServer = await getCodexVirtualModelsFromServer(storedCodexModels)
   const codexVirtualFromDb = await getCodexVirtualModelsFromStoredModels(storedCodexModels)
   const codexModels = codexVirtualFromServer.length > 0 ? codexVirtualFromServer : codexVirtualFromDb
 
-  return [...nonCodexModels, ...codexModels]
+  return [...nonCodexModels, ...anthropicModels, ...codexModels]
 }
 
 const getCodexConnectionForEnsure = async () => {
@@ -223,6 +342,16 @@ const getCodexConnectionForEnsure = async () => {
         providerKind: 'codex',
         secretRef: null,
       })
+}
+
+const getAnthropicConnectionForEnsure = async () => {
+  const existing = await getFirstEnabledProviderConnection('anthropic')
+
+  if (!existing) {
+    throw new Error('No enabled Anthropic provider connection found')
+  }
+
+  return existing
 }
 
 export const modelsRoutes = new Elysia()
@@ -242,6 +371,7 @@ export const modelsRoutes = new Elysia()
               metadataJson: model.metadataJson,
               name: model.displayName ?? model.name,
               provider: model.provider,
+              version: model.variant ?? model.version,
             }),
           }
         })
@@ -280,7 +410,9 @@ export const modelsRoutes = new Elysia()
   .post(
     '/api/models/ensure',
     async ({body, set}) => {
-      if (normalizeProviderKind(body.provider) !== 'codex') {
+      const provider = normalizeProviderKind(body.provider)
+
+      if (provider !== 'anthropic' && provider !== 'codex') {
         set.status = 400
         return {data: null, error: 'Unsupported provider'}
       }
@@ -293,8 +425,19 @@ export const modelsRoutes = new Elysia()
       }
 
       const version = getTrimmedValue(body.version)
+
+      if (provider === 'anthropic' && version) {
+        const supportedEfforts = getAnthropicSupportedThinkingEfforts(modelName)
+
+        if (!supportedEfforts.some((effort) => effort === version)) {
+          set.status = 400
+          return {data: null, error: 'Unsupported Anthropic thinking level'}
+        }
+      }
+
       const displayName = normalizeDisplayName(body.name)
-      const connection = await getCodexConnectionForEnsure()
+      const connection =
+        provider === 'codex' ? await getCodexConnectionForEnsure() : await getAnthropicConnectionForEnsure()
       const [existing] = await getAppDatabaseService().queryJson<{id: string}>(`
         SELECT id
         FROM app.model

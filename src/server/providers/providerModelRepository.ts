@@ -167,6 +167,22 @@ const updateProviderModelRow = async ({
   `)
 }
 
+const hasReferencedProviderModel = async ({
+  databaseRunner,
+  id,
+}: {
+  databaseRunner: DatabaseQueryRunner
+  id: string
+}): Promise<boolean> => {
+  const [usage] = await databaseRunner.queryJson<{judgmentCount: number; projectCount: number}>(`
+    SELECT
+      (SELECT COUNT(*) FROM app.project WHERE model_id = ${getSqlLiteral(id)}) AS projectCount,
+      (SELECT COUNT(*) FROM app.judgment WHERE model_id = ${getSqlLiteral(id)}) AS judgmentCount
+  `)
+
+  return (usage?.projectCount ?? 0) > 0 || (usage?.judgmentCount ?? 0) > 0
+}
+
 const upsertDiscoveredProviderModelsRecursively = async ({
   connection,
   databaseRunner,
@@ -199,6 +215,10 @@ const upsertDiscoveredProviderModelsRecursively = async ({
     variant,
   })
   const existingRow = existingId ? await getProviderModelRowByIdWithRunner(databaseRunner, existingId) : null
+  const existingModel = existingRow ? getProviderModelRecordFromRow(existingRow) : null
+  const shouldPreserveReferencedModel = existingId
+    ? await hasReferencedProviderModel({databaseRunner, id: existingId})
+    : false
   const metadataJson = setProviderModelMetadataOptions(
     getPersistedProviderModelMetadata({
       listedModel: currentModel,
@@ -206,8 +226,8 @@ const upsertDiscoveredProviderModelsRecursively = async ({
       providerKind: connection.providerKind,
       source: 'provider',
     }),
-    existingRow
-      ? getProviderModelMetadataOptions(getProviderModelRecordFromRow(existingRow).metadataJson)
+    existingModel
+      ? getProviderModelMetadataOptions(existingModel.metadataJson)
       : getProviderModelOptions(currentModel.metadataJson),
   )
   const persistedMetadataJson =
@@ -218,44 +238,47 @@ const upsertDiscoveredProviderModelsRecursively = async ({
       providerKind: connection.providerKind,
       source: 'provider',
     })
-  const [saved] = await databaseRunner.queryJson<ProviderModelRow>(
-    existingId
-      ? getProviderModelReturnQuery(`
-        UPDATE app.model
-        SET name = ${getSqlLiteral(displayName)},
-            remote_model_id = ${getSqlLiteral(remoteModelId)},
-            display_name = ${getSqlLiteral(displayName)},
-            variant = ${getSqlLiteral(variant)},
-            source = 'discovered',
-            metadata_json = ${getJsonSqlLiteral(persistedMetadataJson)},
-            updated_at = current_timestamp
-        WHERE id = ${getSqlLiteral(existingId)}
-      `)
-      : getProviderModelReturnQuery(`
-        INSERT INTO app.model (
-          id,
-          provider_connection_id,
-          name,
-          remote_model_id,
-          display_name,
-          variant,
-          source,
-          enabled,
-          metadata_json
+  const [saved] =
+    shouldPreserveReferencedModel && existingRow
+      ? [existingRow]
+      : await databaseRunner.queryJson<ProviderModelRow>(
+          existingId
+            ? getProviderModelReturnQuery(`
+            UPDATE app.model
+            SET name = ${getSqlLiteral(displayName)},
+                remote_model_id = ${getSqlLiteral(remoteModelId)},
+                display_name = ${getSqlLiteral(displayName)},
+                variant = ${getSqlLiteral(variant)},
+                source = 'discovered',
+                metadata_json = ${getJsonSqlLiteral(persistedMetadataJson)},
+                updated_at = current_timestamp
+            WHERE id = ${getSqlLiteral(existingId)}
+          `)
+            : getProviderModelReturnQuery(`
+            INSERT INTO app.model (
+              id,
+              provider_connection_id,
+              name,
+              remote_model_id,
+              display_name,
+              variant,
+              source,
+              enabled,
+              metadata_json
+            )
+            VALUES (
+              ${getSqlLiteral(crypto.randomUUID())},
+              ${getSqlLiteral(connection.id)},
+              ${getSqlLiteral(displayName)},
+              ${getSqlLiteral(remoteModelId)},
+              ${getSqlLiteral(displayName)},
+              ${getSqlLiteral(variant)},
+              'discovered',
+              TRUE,
+              ${getJsonSqlLiteral(persistedMetadataJson)}
+            )
+          `),
         )
-        VALUES (
-          ${getSqlLiteral(crypto.randomUUID())},
-          ${getSqlLiteral(connection.id)},
-          ${getSqlLiteral(displayName)},
-          ${getSqlLiteral(remoteModelId)},
-          ${getSqlLiteral(displayName)},
-          ${getSqlLiteral(variant)},
-          'discovered',
-          TRUE,
-          ${getJsonSqlLiteral(persistedMetadataJson)}
-        )
-      `),
-  )
 
   return upsertDiscoveredProviderModelsRecursively({
     connection,

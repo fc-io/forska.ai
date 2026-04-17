@@ -4,6 +4,7 @@ import {createEffect, createSignal, For, Show, Suspense} from 'solid-js'
 
 import {Button} from '../../../components/ui/button'
 import {apiClient} from '../../../services/apiClient'
+import {ensureSelectableModelId} from '../../../services/ensureSelectableModelId.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 
 type PromptInfo = {id: string; promptHeading: string | null; originalText: string; type: string | null}
@@ -32,8 +33,6 @@ type ModelOption = {
   version: string | null
 }
 type ModelsResponse = {data: ModelOption[]}
-
-type EnsureModelResponse = {data: {modelId: string}; error: null}
 
 // Parse arktype definition like "'yes' | 'no' | 'unsure' | 'potentially' | 'marginally'" into array
 const parseArktypeOptions = (typeStr: string | null): string[] => {
@@ -227,24 +226,7 @@ const CreateSubproject = () => {
     setIsLoading(true)
 
     try {
-      const ensuredModelId =
-        selectedModel.provider?.toLowerCase() === 'codex'
-          ? await (async () => {
-              const modelName = selectedModel.modelName?.trim() ?? ''
-              if (!modelName) throw new Error('Selected Codex model is missing modelName')
-              const response = await apiClient.api.models.ensure.post({
-                provider: 'codex',
-                modelName,
-                name: selectedModel.name,
-                version: selectedModel.version ?? undefined,
-              })
-              const result = handleApiResponse<EnsureModelResponse>(
-                response as unknown as {data?: EnsureModelResponse; error?: unknown; status?: number},
-                'Failed to ensure Codex model',
-              )
-              return result.data.modelId
-            })()
-          : selectedModel.id
+      const ensuredModelId = await ensureSelectableModelId(selectedModel)
 
       const currentPromptAnswerTypes = promptAnswerTypes()
       const currentAvailablePrompts = availablePrompts()

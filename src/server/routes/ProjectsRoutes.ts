@@ -1,6 +1,9 @@
 import {Elysia, t} from 'elysia'
 
-import {appendProviderModelThinkingBadgeLabel} from '../../utils/providerModelLabel.ts'
+import {
+  appendProviderModelThinkingBadgeLabel,
+  getProviderModelThinkingBadgeValue,
+} from '../../utils/providerModelLabel.ts'
 import {getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
 import {assertSelectableProviderModelId} from '../providers/providerModelRepository.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
@@ -47,11 +50,25 @@ const parseOptionalDate = (value?: string | null) => {
   return parsedDate
 }
 
-const getProjectModelLabel = ({metadataJson, modelName}: {metadataJson: unknown; modelName: string | null}) => {
+const getProjectModelLabel = ({
+  metadataJson,
+  modelName,
+  provider,
+  version,
+}: {
+  metadataJson: unknown
+  modelName: string | null
+  provider: string | null
+  version: string | null
+}) => {
   return modelName
     ? appendProviderModelThinkingBadgeLabel({
         label: modelName,
-        thinking: getProviderModelMetadataOptions(getJsonValue(metadataJson)).thinking,
+        thinking: getProviderModelThinkingBadgeValue({
+          provider,
+          thinking: getProviderModelMetadataOptions(getJsonValue(metadataJson)).thinking,
+          version,
+        }),
       })
     : modelName
 }
@@ -380,6 +397,8 @@ export const projectsRoutes = new Elysia()
         updatedAt: unknown
         modelMetadataJson: unknown
         modelName: string | null
+        modelProvider: string | null
+        modelVersion: string | null
       }>(
         `
       SELECT
@@ -399,9 +418,12 @@ export const projectsRoutes = new Elysia()
         p.created_at AS createdAt,
         p.updated_at AS updatedAt,
         TO_JSON(m.metadata_json) AS modelMetadataJson,
-        COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName
+        COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
+        pc.provider_kind AS modelProvider,
+        m.variant AS modelVersion
       FROM app.project p
       LEFT JOIN app.model m ON p.model_id = m.id
+      LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
       WHERE p.archived = FALSE
       ORDER BY p.name ASC
     `,
@@ -415,7 +437,12 @@ export const projectsRoutes = new Elysia()
             dateFrom: getDateValue(projectRow.dateFrom),
             dateTo: getDateValue(projectRow.dateTo),
             createdAt: getDateValue(projectRow.createdAt),
-            modelName: getProjectModelLabel({metadataJson: row.modelMetadataJson, modelName: projectRow.modelName}),
+            modelName: getProjectModelLabel({
+              metadataJson: row.modelMetadataJson,
+              modelName: projectRow.modelName,
+              provider: row.modelProvider,
+              version: row.modelVersion,
+            }),
             updatedAt: getDateValue(projectRow.updatedAt),
           }
         })
@@ -443,6 +470,8 @@ export const projectsRoutes = new Elysia()
         updatedAt: unknown
         modelMetadataJson: unknown
         modelName: string | null
+        modelProvider: string | null
+        modelVersion: string | null
       }>(
         `
       SELECT
@@ -462,9 +491,12 @@ export const projectsRoutes = new Elysia()
         p.created_at AS createdAt,
         p.updated_at AS updatedAt,
         TO_JSON(m.metadata_json) AS modelMetadataJson,
-        COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName
+        COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
+        pc.provider_kind AS modelProvider,
+        m.variant AS modelVersion
       FROM app.project p
       LEFT JOIN app.model m ON p.model_id = m.id
+      LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
       WHERE p.archived = TRUE
       ORDER BY p.created_at DESC
     `,
@@ -478,7 +510,12 @@ export const projectsRoutes = new Elysia()
             dateFrom: getDateValue(projectRow.dateFrom),
             dateTo: getDateValue(projectRow.dateTo),
             createdAt: getDateValue(projectRow.createdAt),
-            modelName: getProjectModelLabel({metadataJson: row.modelMetadataJson, modelName: projectRow.modelName}),
+            modelName: getProjectModelLabel({
+              metadataJson: row.modelMetadataJson,
+              modelName: projectRow.modelName,
+              provider: row.modelProvider,
+              version: row.modelVersion,
+            }),
             updatedAt: getDateValue(projectRow.updatedAt),
           }
         })
@@ -684,6 +721,8 @@ export const projectsRoutes = new Elysia()
           name: getProjectModelLabel({
             metadataJson: projectModelRow.modelMetadataJson,
             modelName: projectModelRow.name,
+            provider: projectModelRow.provider,
+            version: projectModelRow.version,
           }),
         }
       : undefined

@@ -6,6 +6,7 @@ import {createEffect, createMemo, createSignal, For, Show} from 'solid-js'
 import {Button} from '../../../../components/ui/button'
 import type {HumanJudgmentMode} from '../../../../db/schemaTypes'
 import {apiClient} from '../../../../services/apiClient'
+import {ensureSelectableModelId} from '../../../../services/ensureSelectableModelId.ts'
 import {
   type ComparisonProjectEditFormData,
   fetchComparisonProjectEditFormData,
@@ -23,7 +24,6 @@ type ModelOption = {
   version: string | null
 }
 type ModelsResponse = {data: ModelOption[]}
-type EnsureModelResponse = {data: {modelId: string}; error: null}
 
 const formatPromptCreatedAt = (value: Date | string) => {
   return new Date(value).toLocaleDateString()
@@ -70,32 +70,7 @@ const getResolvedModelIdsForUpdate = async (selectedModelIds: string[], availabl
         return model.id === selectedModelId
       })
 
-      if (!selectedModel) {
-        return selectedModelId
-      }
-
-      if (selectedModel.provider?.toLowerCase() !== 'codex') {
-        return selectedModel.id
-      }
-
-      const modelName = selectedModel.modelName?.trim() ?? ''
-
-      if (!modelName) {
-        throw new Error('Selected Codex model is missing modelName')
-      }
-
-      const response = await apiClient.api.models.ensure.post({
-        provider: 'codex',
-        modelName,
-        name: selectedModel.name,
-        version: selectedModel.version ?? undefined,
-      })
-      const result = handleApiResponse<EnsureModelResponse>(
-        response as unknown as {data?: EnsureModelResponse; error?: unknown; status?: number},
-        'Failed to ensure Codex model',
-      )
-
-      return result.data.modelId
+      return selectedModel ? ensureSelectableModelId(selectedModel) : selectedModelId
     }),
   )
 

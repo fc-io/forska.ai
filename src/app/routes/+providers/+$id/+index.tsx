@@ -3,6 +3,8 @@ import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {createEffect, createMemo, createSignal, For, onCleanup, Show} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
+import {ensureSelectableModelId} from '../../../../services/ensureSelectableModelId.ts'
+import {getAnthropicSupportedThinkingEfforts} from '../../../../utils/anthropicThinking.ts'
 import {Button} from '../../../../components/ui/button.tsx'
 import {
   getProviderModelOptions,
@@ -21,7 +23,6 @@ import {
   addManualProviderModel,
   type CodexDeviceLoginJob,
   deleteProviderConnection,
-  ensureCodexProviderModel,
   fetchCodexLoginJob,
   fetchCodexStatus,
   fetchProviderConnectionDiscoveredModels,
@@ -164,6 +165,10 @@ const getCodexModelVariantLabel = (model: {variant: string | null; version: stri
   return getTrimmedModelValue(model.variant ?? model.version) ?? 'auto'
 }
 
+const toAnthropicVirtualModelId = (modelName: string, effort: string) => {
+  return `anthropic:${modelName}:${effort}`
+}
+
 const isQwen35ProviderModel = (model: {modelName: string | null; remoteModelId: string | null}) => {
   return isQwen35Model(getTrimmedModelValue(model.remoteModelId ?? model.modelName) ?? '')
 }
@@ -199,6 +204,57 @@ const getProviderPageModels = ({
 }): ProviderPageModel[] => {
   if (!connection) {
     return []
+  }
+
+  if (connection.providerKind === 'anthropic') {
+    const storedModelMap = new Map(
+      connection.models.map((model) => {
+        return [getProviderPageModelKey(model), model]
+      }),
+    )
+    const usedStoredModelIds = new Set<string>()
+    const modelsFromBaseRows = connection.models.flatMap<ProviderPageModel>((model) => {
+      const modelName = getTrimmedModelValue(model.remoteModelId ?? model.modelName)
+      const modelVariant = getTrimmedModelValue(model.variant ?? model.version)
+
+      if (!modelName || modelVariant) {
+        return []
+      }
+
+      const baseDisplayName = model.displayName ?? model.name
+      const variantModels = getAnthropicSupportedThinkingEfforts(modelName).map<ProviderPageModel>((effort) => {
+        const storedVariant = storedModelMap.get(`${modelName}:${effort}`)
+
+        if (storedVariant) {
+          usedStoredModelIds.add(storedVariant.id)
+
+          return {...storedVariant, persistedId: storedVariant.id}
+        }
+
+        return {
+          ...model,
+          displayName: `${baseDisplayName} (thinking: ${effort})`,
+          id: toAnthropicVirtualModelId(modelName, effort),
+          name: `${baseDisplayName} (thinking: ${effort})`,
+          persistedId: null,
+          variant: effort,
+          version: effort,
+        }
+      })
+
+      usedStoredModelIds.add(model.id)
+
+      return [{...model, persistedId: model.id}, ...variantModels]
+    })
+    const remainingStoredModels = connection.models
+      .filter((model) => {
+        return !usedStoredModelIds.has(model.id)
+      })
+      .map((model) => {
+        return {...model, persistedId: model.id}
+      })
+
+    return [...modelsFromBaseRows, ...remainingStoredModels]
   }
 
   if (connection.providerKind !== 'codex') {
@@ -818,11 +874,13 @@ const ProviderDetailPage = () => {
         changedDrafts.map(async (draft) => {
           const persistedModelId =
             draft.persistedId
-            ?? (draft.provider === 'codex'
-              ? await ensureCodexProviderModel({
-                  modelName: getTrimmedModelValue(draft.remoteModelId ?? draft.modelName) ?? draft.name,
+            ?? (draft.provider === 'codex' || draft.provider === 'anthropic'
+              ? await ensureSelectableModelId({
+                  id: draft.id,
+                  modelName: getTrimmedModelValue(draft.remoteModelId ?? draft.modelName),
                   name: draft.displayNameValue,
-                  version: getTrimmedModelValue(draft.variant ?? draft.version) ?? undefined,
+                  provider: draft.provider,
+                  version: getTrimmedModelValue(draft.variant ?? draft.version),
                 })
               : draft.id)
 

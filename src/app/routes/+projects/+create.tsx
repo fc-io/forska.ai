@@ -6,6 +6,7 @@ import {createStore} from 'solid-js/store'
 import {RuntimeModelNotice} from '../../../components/main/runtimeModelNotice.tsx'
 import {Button} from '../../../components/ui/button'
 import {apiClient} from '../../../services/apiClient'
+import {ensureSelectableModelId} from '../../../services/ensureSelectableModelId.ts'
 import type {fetchProjects} from '../../../services/projectsService.ts'
 import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 import {getSglangRuntimeModelNotice} from '../../../utils/getSglangRuntimeModelNotice.ts'
@@ -49,14 +50,31 @@ type ModelOption = {
 }
 type ModelsResponse = {data: ModelOption[]}
 
-type EnsureModelResponse = {data: {modelId: string}; error: null}
 type ProjectListItem = Awaited<ReturnType<typeof fetchProjects>>[number]
-type CreatedProject = Omit<ProjectListItem, 'modelName'>
+type CreatedProject = Omit<ProjectListItem, 'humanJudgmentMode' | 'modelName' | 'modelProvider' | 'modelVersion'> & {
+  humanJudgmentMode?: ProjectListItem['humanJudgmentMode']
+}
 
 const isoDatePattern = /^\d{4}-\d{2}-\d{2}$/
 
-const buildCreatedProjectListItem = (createdProject: CreatedProject, modelName: string): ProjectListItem => {
-  return {...createdProject, modelName}
+const buildCreatedProjectListItem = ({
+  createdProject,
+  modelName,
+  modelProvider,
+  modelVersion,
+}: {
+  createdProject: CreatedProject
+  modelName: string
+  modelProvider: string | null
+  modelVersion: string | null
+}): ProjectListItem => {
+  return {
+    ...createdProject,
+    humanJudgmentMode: createdProject.humanJudgmentMode ?? null,
+    modelName,
+    modelProvider,
+    modelVersion,
+  }
 }
 
 const getProjectsCacheValue = (value: unknown): ProjectListItem[] | null => {
@@ -82,13 +100,18 @@ const syncCreatedProjectCaches = (
   queryClient: QueryClient,
   createdProject: CreatedProject,
   modelName: string,
+  modelProvider: string | null,
+  modelVersion: string | null,
 ): void => {
   queryClient.setQueryData(['projects'], (previous: unknown) => {
     const projects = getProjectsCacheValue(previous)
 
     return projects === null
       ? previous
-      : upsertCreatedProject(projects, buildCreatedProjectListItem(createdProject, modelName))
+      : upsertCreatedProject(
+          projects,
+          buildCreatedProjectListItem({createdProject, modelName, modelProvider, modelVersion}),
+        )
   })
 
   void queryClient.invalidateQueries({queryKey: ['projects']})
@@ -397,24 +420,7 @@ const CreateProject = () => {
       })
       if (!selected) throw new Error('Please select a model for this project')
 
-      const ensuredModelId =
-        selected.provider?.toLowerCase() === 'codex'
-          ? await (async () => {
-              const modelName = selected.modelName?.trim() ?? ''
-              if (!modelName) throw new Error('Selected Codex model is missing modelName')
-              const response = await apiClient.api.models.ensure.post({
-                provider: 'codex',
-                modelName,
-                name: selected.name,
-                version: selected.version ?? undefined,
-              })
-              const result = handleApiResponse<EnsureModelResponse>(
-                response as unknown as {data?: EnsureModelResponse; error?: unknown; status?: number},
-                'Failed to ensure Codex model',
-              )
-              return result.data.modelId
-            })()
-          : selected.id
+      const ensuredModelId = await ensureSelectableModelId(selected)
 
       const createdProject = await createProject(
         projectName(),
@@ -427,7 +433,7 @@ const CreateProject = () => {
         endDateResult.normalized ?? undefined,
       )
 
-      syncCreatedProjectCaches(queryClient, createdProject, selected.label)
+      syncCreatedProjectCaches(queryClient, createdProject, selected.label, selected.provider, selected.version)
       void navigate({to: '/projects'})
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred'

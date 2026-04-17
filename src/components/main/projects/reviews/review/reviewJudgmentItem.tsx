@@ -1,6 +1,9 @@
 import {createSignal, For, Show} from 'solid-js'
 
-import {appendProviderModelThinkingBadgeLabel} from '../../../../../utils/providerModelLabel.ts'
+import {
+  appendProviderModelThinkingBadgeLabel,
+  getProviderModelThinkingBadgeValue,
+} from '../../../../../utils/providerModelLabel.ts'
 import type {ProviderModelThinkingOption} from '../../../../../utils/providerModelOptions.ts'
 import {reviewArticleDetailsDispatchScrollToQuote} from './reviewArticleDetails/reviewArticleDetailsScrollEvents.ts'
 import {ReviewJudgmentAssessments} from './reviewJudgmentAssessments.tsx'
@@ -100,7 +103,11 @@ export const ReviewJudgmentItem = (props: ReviewJudgmentItemProps) => {
     return resolvedModelName
       ? appendProviderModelThinkingBadgeLabel({
           label: resolvedModelName,
-          thinking: props.judgment.modelThinking ?? null,
+          thinking: getProviderModelThinkingBadgeValue({
+            provider: props.judgment.modelProvider,
+            thinking: props.judgment.modelThinking ?? null,
+            version: props.judgment.modelVersion,
+          }),
         })
       : undefined
   }

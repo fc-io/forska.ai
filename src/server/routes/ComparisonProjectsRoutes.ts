@@ -11,7 +11,10 @@ import {
   getComparisonProjectHasDifferenceFilterMatch,
   getNormalizedComparisonProjectDifferenceFilter,
 } from '../../utils/comparisonProjectDifferenceFilter.ts'
-import {appendProviderModelThinkingBadgeLabel} from '../../utils/providerModelLabel.ts'
+import {
+  appendProviderModelThinkingBadgeLabel,
+  getProviderModelThinkingBadgeValue,
+} from '../../utils/providerModelLabel.ts'
 import {getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
 import {assertSelectableProviderModelIds} from '../providers/providerModelRepository.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
@@ -52,7 +55,13 @@ type ComparisonProjectPromptConfig = {
   criteriaSectionKey: string | null
   criteriaSectionLabel: string | null
 }
-type ComparisonProjectModelConfig = {id: string; metadataJson: unknown; name: string}
+type ComparisonProjectModelConfig = {
+  id: string
+  metadataJson: unknown
+  name: string
+  provider?: string | null
+  version?: string | null
+}
 type ComparisonProjectJudgmentsColumn = ComparisonProjectDifferenceColumn & {
   promptLabel: string
   modelId: string | null
@@ -111,6 +120,8 @@ type ComparisonProjectSource = {
   description: string | null
   modelId: string
   modelMetadataJson?: unknown
+  modelProvider?: string | null
+  modelVersion?: string | null
   modelName: string
   humanJudgmentMode: HumanJudgmentMode
   isSummaryCapable: boolean
@@ -594,6 +605,8 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
       p.model_id AS modelId,
       TO_JSON(m.metadata_json) AS modelMetadataJson,
       COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
+      pc.provider_kind AS modelProvider,
+      m.variant AS modelVersion,
       p.human_judgment_mode AS humanJudgmentMode,
       p.use_title AS useTitle,
       p.use_abstract AS useAbstract,
@@ -601,6 +614,7 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
       p.use_fulltext_no_images AS useFulltextNoImages
     FROM ${projectTable} p
     INNER JOIN ${modelTable} m ON m.id = p.model_id
+    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     WHERE p.archived = FALSE
     ORDER BY p.name ASC
   `)
@@ -677,7 +691,11 @@ const getComparisonProjectSources = async (): Promise<ComparisonProjectSource[]>
         ...sourceProjectRow,
         modelName: appendProviderModelThinkingBadgeLabel({
           label: projectRow.modelName,
-          thinking: getProviderModelMetadataOptions(getJsonValue(projectRow.modelMetadataJson)).thinking,
+          thinking: getProviderModelThinkingBadgeValue({
+            provider: projectRow.modelProvider,
+            thinking: getProviderModelMetadataOptions(getJsonValue(projectRow.modelMetadataJson)).thinking,
+            version: projectRow.modelVersion,
+          }),
         }),
         humanJudgmentMode,
         isSummaryCapable: humanJudgmentMode === 'summary',
@@ -987,9 +1005,10 @@ const getComparisonProjectModels = async (
 
   if (selectedModelIds.length > 0) {
     const modelRows = await appDatabaseService.queryJson<ComparisonProjectModelConfig>(`
-      SELECT id, name
-      FROM ${modelTable}
-      WHERE id IN (${getInClause(selectedModelIds)})
+      SELECT m.id AS id, m.name AS name, TO_JSON(m.metadata_json) AS metadataJson, pc.provider_kind AS provider, m.variant AS version
+      FROM ${modelTable} m
+      LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+      WHERE m.id IN (${getInClause(selectedModelIds)})
     `)
     const orderLookup = selectedModelIds.reduce<Record<string, number>>((acc, modelId, index) => {
       return {...acc, [modelId]: index}
@@ -1016,9 +1035,10 @@ const getComparisonProjectModels = async (
     comparisonProjectRow.useImportRoutesForScope,
   )
   return appDatabaseService.queryJson<ComparisonProjectModelConfig>(`
-    SELECT m.id AS id, m.name AS name, TO_JSON(m.metadata_json) AS metadataJson
+    SELECT m.id AS id, m.name AS name, TO_JSON(m.metadata_json) AS metadataJson, pc.provider_kind AS provider, m.variant AS version
     FROM ${judgmentTable} j
     INNER JOIN ${modelTable} m ON m.id = j.model_id
+    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     INNER JOIN ${articleTable} a ON a.id = j.article_id
     ${getWhereClause([
       `j.prompt_id IN (${getInClause(promptIds)})`,
@@ -1026,7 +1046,7 @@ const getComparisonProjectModels = async (
       contentCondition,
       ...articleScopeConditions,
     ])}
-    GROUP BY m.id, m.name, m.metadata_json
+    GROUP BY m.id, m.name, m.metadata_json, pc.provider_kind, m.variant
     ORDER BY m.name ASC
   `)
 }
@@ -1053,7 +1073,11 @@ const getComparisonProjectColumns = (
           modelId: modelRow.id,
           modelLabel: appendProviderModelThinkingBadgeLabel({
             label: modelRow.name,
-            thinking: getProviderModelMetadataOptions(getJsonValue(modelRow.metadataJson)).thinking,
+            thinking: getProviderModelThinkingBadgeValue({
+              provider: modelRow.provider,
+              thinking: getProviderModelMetadataOptions(getJsonValue(modelRow.metadataJson)).thinking,
+              version: modelRow.version,
+            }),
           }),
           contentLabel: contentVariant.label,
         }

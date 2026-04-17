@@ -227,3 +227,107 @@ test('upsertDiscoveredModels preserves stored model options when refreshing disc
   })
   expect(parsedMetadata?.options).toEqual({thinking: 'enabled'})
 })
+
+test('upsertDiscoveredModels refreshes a referenced discovered model without replacing its id', async () => {
+  if (!queryDatabase || !runDatabase) {
+    throw new Error('Test database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, config_json)
+    VALUES (
+      'upsert-anthropic-connection',
+      'anthropic',
+      'Anthropic',
+      TRUE,
+      'api-key',
+      CAST('{"archived":false,"disabledModelIds":[],"manualWorkerUrls":[],"workerUrlMode":"manual"}' AS JSON)
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (
+      id,
+      provider_connection_id,
+      name,
+      remote_model_id,
+      display_name,
+      variant,
+      source,
+      enabled,
+      metadata_json
+    )
+    VALUES (
+      'anthropic-discovered-model',
+      'upsert-anthropic-connection',
+      'Claude Opus 4.7',
+      'claude-opus-4-7',
+      'Claude Opus 4.7',
+      NULL,
+      'discovered',
+      TRUE,
+      CAST('{"discovery":{"providerKind":"anthropic"}}' AS JSON)
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id)
+    VALUES ('anthropic-project', 'Anthropic Project', 'anthropic-discovered-model')
+  `)
+
+  const savedModels = await upsertDiscoveredModels({
+    connection: {
+      authMode: 'api-key',
+      baseURL: 'https://api.anthropic.com/v1',
+      config: {disabledModelIds: [], manualWorkerUrls: [], workerUrlMode: 'manual'},
+      createdAt: null,
+      enabled: true,
+      hasSecret: true,
+      id: 'upsert-anthropic-connection',
+      label: 'Anthropic',
+      lastCheckedAt: null,
+      lastError: null,
+      maxInflightRequests: null,
+      providerKind: 'anthropic',
+      secretRef: 'secret:test',
+      updatedAt: null,
+    },
+    models: [
+      {
+        displayName: 'Claude Opus 4.7',
+        metadataJson: {id: 'claude-opus-4-7'},
+        modelName: 'claude-opus-4-7',
+        remoteModelId: 'claude-opus-4-7',
+        variant: null,
+        version: null,
+      },
+    ],
+  })
+
+  const storedModels = await queryDatabase<{
+    id: string
+    modelName: string
+    projectModelId: string
+    source: string
+    updatedAt: string | null
+  }>(`
+    SELECT
+      m.id AS id,
+      m.remote_model_id AS modelName,
+      p.model_id AS projectModelId,
+      m.source AS source,
+      CAST(m.updated_at AS VARCHAR) AS updatedAt
+    FROM app.model m
+    INNER JOIN app.project p ON p.id = 'anthropic-project'
+    WHERE m.provider_connection_id = 'upsert-anthropic-connection'
+  `)
+  const [storedModel] = storedModels
+
+  expect(savedModels).toHaveLength(1)
+  expect(savedModels[0]?.id).toBe('anthropic-discovered-model')
+  expect(storedModel).toMatchObject({
+    id: 'anthropic-discovered-model',
+    modelName: 'claude-opus-4-7',
+    projectModelId: 'anthropic-discovered-model',
+    source: 'discovered',
+  })
+  expect(storedModel?.updatedAt).not.toBeNull()
+})
