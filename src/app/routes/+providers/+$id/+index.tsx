@@ -5,6 +5,7 @@ import {createStore} from 'solid-js/store'
 
 import {ensureSelectableModelId} from '../../../../services/ensureSelectableModelId.ts'
 import {getAnthropicSupportedThinkingEfforts} from '../../../../utils/anthropicThinking.ts'
+import {stripProviderModelThinkingBadgeLabel} from '../../../../utils/providerModelLabel.ts'
 import {Button} from '../../../../components/ui/button.tsx'
 import {
   getProviderModelOptions,
@@ -140,29 +141,59 @@ const getProviderPageModelKey = ({
   return `${normalizedModelName}:${normalizedVariant}`
 }
 
-const stripCodexThinkingSuffix = (value: string | null | undefined): string => {
-  const normalized = String(value ?? '').trim()
-  const stripped = normalized.replace(/\s*\(thinking:[^)]+\)$/i, '').trim()
+const isCompactVariantProvider = (provider: string | null | undefined) => {
+  const normalizedProvider = getNormalizedProviderKind(provider)
 
-  return stripped || normalized
+  return normalizedProvider === 'anthropic' || normalizedProvider === 'codex'
 }
 
-const getCodexModelDisplayName = (model: {
+const getCompactVariantModelDisplayName = (model: {
   displayName: string | null
   modelName: string | null
   name: string
+  provider: string | null | undefined
   remoteModelId: string | null
 }) => {
-  return stripCodexThinkingSuffix(
+  const rawLabel =
     getTrimmedModelValue(model.remoteModelId)
-      ?? getTrimmedModelValue(model.modelName)
-      ?? getTrimmedModelValue(model.displayName)
-      ?? model.name,
-  )
+    ?? getTrimmedModelValue(model.modelName)
+    ?? getTrimmedModelValue(model.displayName)
+    ?? model.name
+
+  return isCompactVariantProvider(model.provider) ? stripProviderModelThinkingBadgeLabel(rawLabel) : rawLabel
 }
 
-const getCodexModelVariantLabel = (model: {variant: string | null; version: string | null}) => {
-  return getTrimmedModelValue(model.variant ?? model.version) ?? 'auto'
+const getCompactVariantLabel = (model: {
+  provider: string | null | undefined
+  variant: string | null
+  version: string | null
+}) => {
+  const normalizedProvider = getNormalizedProviderKind(model.provider)
+  const variant = getTrimmedModelValue(model.variant ?? model.version)
+
+  return normalizedProvider === 'codex'
+    ? (variant ?? 'auto')
+    : normalizedProvider === 'anthropic'
+      ? (variant ?? 'standard')
+      : (variant ?? 'default')
+}
+
+const getCompactVariantBadgeClass = (provider: string | null | undefined) => {
+  return getNormalizedProviderKind(provider) === 'anthropic'
+    ? 'rounded-full border border-fuchsia-200 bg-fuchsia-50 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-fuchsia-700'
+    : 'rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-blue-700'
+}
+
+const getCompactVariantModelsDescription = (provider: string | null | undefined) => {
+  return getNormalizedProviderKind(provider) === 'anthropic'
+    ? 'Enable or disable Anthropic models and their available thinking levels.'
+    : 'Enable or disable the models and reasoning variants currently available from Codex App.'
+}
+
+const getEmptyModelsMessage = (provider: string | null | undefined) => {
+  return getNormalizedProviderKind(provider) === 'anthropic'
+    ? 'No Anthropic models are available right now.'
+    : 'No Codex models are available right now.'
 }
 
 const toAnthropicVirtualModelId = (modelName: string, effort: string) => {
@@ -719,6 +750,10 @@ const ProviderDetailPage = () => {
 
   const isCodexConnection = () => {
     return selectedConnection()?.providerKind === 'codex'
+  }
+
+  const isCompactVariantConnection = () => {
+    return isCompactVariantProvider(selectedConnection()?.providerKind)
   }
 
   const providerModels = () => {
@@ -1308,8 +1343,8 @@ const ProviderDetailPage = () => {
                     <div>
                       <h2 class="text-lg font-semibold text-gray-900">Models</h2>
                       <p class="text-sm text-gray-500">
-                        {isCodexConnection()
-                          ? 'Enable or disable the models and reasoning variants currently available from Codex App.'
+                        {isCompactVariantConnection()
+                          ? getCompactVariantModelsDescription(selectedConnection()?.providerKind)
                           : 'Enable, disable, rename, and configure the models available on this provider.'}
                       </p>
                     </div>
@@ -1344,8 +1379,8 @@ const ProviderDetailPage = () => {
                     when={modelDrafts().length > 0}
                     fallback={
                       <div class="rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-10 text-center text-sm text-gray-500">
-                        {isCodexConnection()
-                          ? 'No Codex models are available right now.'
+                        {isCompactVariantConnection()
+                          ? getEmptyModelsMessage(selectedConnection()?.providerKind)
                           : 'No models yet. Use sync or add a manual model for this provider.'}
                       </div>
                     }
@@ -1393,7 +1428,7 @@ const ProviderDetailPage = () => {
 
                       <div class="overflow-x-auto rounded-lg border border-gray-200">
                         <Show
-                          when={isCodexConnection()}
+                          when={isCompactVariantConnection()}
                           fallback={
                             <table class="min-w-full divide-y divide-gray-200 text-sm">
                               <thead class="bg-gray-50">
@@ -1533,7 +1568,7 @@ const ProviderDetailPage = () => {
                                             class="font-medium"
                                             title={model.remoteModelId ?? model.modelName ?? model.name}
                                           >
-                                            {getCodexModelDisplayName(model)}
+                                            {getCompactVariantModelDisplayName(model)}
                                           </span>
                                           <Show when={model.persistedId}>
                                             <span class="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-gray-500">
@@ -1543,8 +1578,8 @@ const ProviderDetailPage = () => {
                                         </div>
                                       </td>
                                       <td class="px-4 py-2 align-middle">
-                                        <span class="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-blue-700">
-                                          {getCodexModelVariantLabel(model)}
+                                        <span class={getCompactVariantBadgeClass(model.provider)}>
+                                          {getCompactVariantLabel(model)}
                                         </span>
                                       </td>
                                       <td class="px-4 py-2 align-middle">

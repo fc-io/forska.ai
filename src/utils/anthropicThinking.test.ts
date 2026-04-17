@@ -7,7 +7,7 @@ import {
 } from './anthropicThinking.ts'
 
 test('detects supported Anthropic thinking efforts by model generation', () => {
-  expect(getAnthropicSupportedThinkingEfforts('claude-opus-4-7')).toEqual(['low', 'medium', 'high', 'max', 'xhigh'])
+  expect(getAnthropicSupportedThinkingEfforts('claude-opus-4-7')).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
   expect(getAnthropicSupportedThinkingEfforts('claude-opus-4-6')).toEqual(['low', 'medium', 'high', 'max'])
   expect(getAnthropicSupportedThinkingEfforts('claude-sonnet-4-6')).toEqual(['low', 'medium', 'high', 'max'])
   expect(getAnthropicSupportedThinkingEfforts('claude-opus-4-5')).toEqual([])

@@ -52,9 +52,15 @@ const formatModelVersionLabel = (request: {
     .toLowerCase()
   const version = String(request.modelVersion ?? '').trim()
 
-  const isCodex = provider === 'codex'
-  const codexThinking = isCodex ? (version.length > 0 ? version : 'auto') : ''
-  const suffix = isCodex ? `thinking: ${codexThinking}` : version.length > 0 ? `v: ${version}` : ''
+  const usesThinkingLabel = provider === 'anthropic' || provider === 'codex'
+  const thinking = provider === 'codex' ? (version.length > 0 ? version : 'auto') : version
+  const suffix = usesThinkingLabel
+    ? thinking.length > 0
+      ? `thinking: ${thinking}`
+      : ''
+    : version.length > 0
+      ? `v: ${version}`
+      : ''
 
   const base = modelName.length > 0 ? modelName : 'N/A'
   return suffix.length > 0 ? `${base} (${suffix})` : base

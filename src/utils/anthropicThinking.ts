@@ -1,5 +1,5 @@
 const anthropicAdaptiveThinkingEfforts = ['low', 'medium', 'high', 'max'] as const
-const anthropicOpus47ThinkingEfforts = ['low', 'medium', 'high', 'max', 'xhigh'] as const
+const anthropicOpus47ThinkingEfforts = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 
 export type AnthropicThinkingEffort = (typeof anthropicOpus47ThinkingEfforts)[number]
 
