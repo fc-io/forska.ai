@@ -21,7 +21,115 @@ const desktopDefaultApiServerPort = '32101'
 
 const getDesktopWindowPreload = (apiOrigin: string) => {
   return `data:text/javascript;base64,${Buffer.from(
-    `window.__FORSKA_DESKTOP_API_ORIGIN__ = ${JSON.stringify(apiOrigin)};`,
+    `
+window.__FORSKA_DESKTOP_API_ORIGIN__ = ${JSON.stringify(apiOrigin)};
+(() => {
+  const desktopApiOrigin = ${JSON.stringify(apiOrigin)};
+  const originalFetch = window.fetch.bind(window);
+  const originalReceiveMessageFromBun = window.__electrobun.receiveMessageFromBun;
+  const pendingRequests = new Map();
+  let nextRequestId = 0;
+
+  const getBase64FromArrayBuffer = (value) => {
+    const bytes = new Uint8Array(value);
+    let binary = '';
+
+    for (let index = 0; index < bytes.length; index += 1) {
+      binary += String.fromCharCode(bytes[index] ?? 0);
+    }
+
+    return btoa(binary);
+  };
+
+  const getUint8ArrayFromBase64 = (value) => {
+    const binary = atob(value);
+    const bytes = new Uint8Array(binary.length);
+
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+
+    return bytes;
+  };
+
+  const getDesktopApiPath = (request) => {
+    const requestUrl = new URL(request.url);
+    const desktopApiUrl = new URL(desktopApiOrigin);
+
+    if (requestUrl.origin === desktopApiUrl.origin) {
+      return requestUrl.pathname + requestUrl.search;
+    }
+
+    return requestUrl.pathname.startsWith('/api/') ? requestUrl.pathname + requestUrl.search : null;
+  };
+
+  window.__electrobun.receiveMessageFromBun = (message) => {
+    if (message?.type === 'forska-desktop-api-response') {
+      const pendingRequest = pendingRequests.get(message.id);
+
+      if (!pendingRequest) {
+        return;
+      }
+
+      pendingRequests.delete(message.id);
+
+      if (message.ok) {
+        pendingRequest.resolve(
+          new Response(
+            message.response.bodyBase64 === '' ? null : getUint8ArrayFromBase64(message.response.bodyBase64),
+            {
+              headers: message.response.headers,
+              status: message.response.status,
+              statusText: message.response.statusText,
+            },
+          ),
+        );
+
+        return;
+      }
+
+      pendingRequest.reject(new Error(message.error ?? 'Desktop API bridge request failed.'));
+      return;
+    }
+
+    originalReceiveMessageFromBun(message);
+  };
+
+  const patchedFetch = async (input, init) => {
+    const request = new Request(input, init);
+    const desktopApiPath = getDesktopApiPath(request);
+
+    if (desktopApiPath === null) {
+      return originalFetch(input, init);
+    }
+
+    return new Promise(async (resolve, reject) => {
+      const requestId = String(++nextRequestId);
+
+      pendingRequests.set(requestId, {reject, resolve});
+
+      const bodyBase64 =
+        request.method === 'GET' || request.method === 'HEAD' ? null : getBase64FromArrayBuffer(await request.arrayBuffer());
+
+      window.__electrobunBunBridge?.postMessage(
+        JSON.stringify({
+          id: requestId,
+          request: {
+            bodyBase64,
+            headers: [...request.headers.entries()],
+            method: request.method,
+            path: desktopApiPath,
+          },
+          type: 'forska-desktop-api-request',
+        }),
+      );
+    });
+  };
+
+  patchedFetch.preconnect = originalFetch.preconnect?.bind(originalFetch);
+  window.fetch = patchedFetch;
+})();
+`.trim(),
     'utf8',
   ).toString('base64')}`
 }

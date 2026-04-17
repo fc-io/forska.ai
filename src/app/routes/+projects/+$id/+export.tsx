@@ -5,7 +5,6 @@ import {createEffect, createSignal, For, Show} from 'solid-js'
 
 import {Button} from '../../../../components/ui/button'
 import {fetchProjectWithPrompts} from '../../../../services/projectsService'
-import {apiFetch} from '../../../utils/apiFetch.ts'
 import {env} from '../../../utils/client-env'
 import {useArchivedProjectRedirect, useProjectAccessQuery} from '../projectAccessGuard'
 
@@ -272,7 +271,7 @@ const ExportData = () => {
   const exportMutation = useMutation(() => {
     return {
       mutationFn: async (body: ExportRequestBody) => {
-        const response = await apiFetch(`${env.VITE_SERVER_API}/api/projects/${projectId}/export`, {
+        const response = await fetch(`${env.VITE_SERVER_API}/api/projects/${projectId}/export`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           credentials: 'include',
@@ -296,7 +295,7 @@ const ExportData = () => {
   const exportPromptsMutation = useMutation(() => {
     return {
       mutationFn: async (body: ExportPromptsRequestBody) => {
-        const response = await apiFetch(`${env.VITE_SERVER_API}/api/projects/${projectId}/export-prompts`, {
+        const response = await fetch(`${env.VITE_SERVER_API}/api/projects/${projectId}/export-prompts`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           credentials: 'include',

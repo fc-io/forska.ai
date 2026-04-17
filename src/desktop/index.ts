@@ -1,9 +1,8 @@
 import {appendFileSync, writeFileSync} from 'node:fs'
 import {resolve} from 'node:path'
 
-import {BrowserView, BrowserWindow} from 'electrobun/bun'
+import {BrowserWindow} from 'electrobun/bun'
 
-import type {DesktopApiRequest, DesktopApiRpc} from './desktopApiRpc.ts'
 import {acquireDesktopSingleInstance} from './desktopSingleInstance.ts'
 import {getDesktopRuntimeConfig} from './getDesktopRuntimeConfig.ts'
 
@@ -18,7 +17,7 @@ const getStartupErrorUrl = ({details, message}: {details: string; message: strin
 }
 
 const getStartupSplashUrl = () => {
-  return `data:text/html;charset=utf-8,${encodeURIComponent(`<!DOCTYPE html><html><head><meta charset="utf-8" /><title>Forska Starting</title><style>body{align-items:center;background:radial-gradient(circle at top,#f3f4f6 0%,#e7ecf5 42%,#d8e0ef 100%);color:#111827;display:flex;font-family:Inter,ui-sans-serif,system-ui,sans-serif;justify-content:center;margin:0;min-height:100vh}main{background:rgba(255,255,255,0.92);border:1px solid rgba(148,163,184,0.28);border-radius:28px;box-shadow:0 28px 90px rgba(15,23,42,0.12);max-width:560px;padding:40px 36px;width:calc(100vw - 48px)}.eyebrow{color:#335c95;font-size:12px;font-weight:700;letter-spacing:.28em;text-transform:uppercase}.row{align-items:center;display:flex;gap:18px;margin-top:18px}.mark{align-items:center;background:#234a7a;border-radius:18px;color:#fff;display:flex;font-family:ui-monospace,SFMono-Regular,monospace;font-size:28px;font-weight:700;height:64px;justify-content:center;letter-spacing:.04em;width:64px}.pulse{animation:pulse 1.4s ease-in-out infinite;background:#dbe5f3;border-radius:999px;height:10px;width:10px}.title{font-size:32px;font-weight:700;letter-spacing:-.03em;line-height:1.1;margin:0}.copy{color:#475569;font-size:15px;line-height:1.7;margin:14px 0 0}.meta{border-top:1px solid rgba(148,163,184,0.24);color:#64748b;font-size:12px;letter-spacing:.08em;margin-top:28px;padding-top:18px;text-transform:uppercase}@keyframes pulse{0%,100%{opacity:.35;transform:scale(.95)}50%{opacity:1;transform:scale(1.08)}}</style></head><body><main><div class="eyebrow">Desktop startup</div><div class="row"><div class="mark">F</div><div><h1 class="title">Starting Forska</h1><p class="copy">Opening the local desktop workspace, warming the API, and checking database migrations before the main app appears.</p></div></div><div class="meta">Keep this window open while Forska connects to its local backend.</div></main></body></html>`)}`
+  return `data:text/html;charset=utf-8,${encodeURIComponent(`<!DOCTYPE html><html><head><meta charset="utf-8" /><title>Forska Starting</title><style>body{align-items:center;background:radial-gradient(circle at top,#f3f4f6 0%,#e7ecf5 42%,#d8e0ef 100%);color:#111827;display:flex;font-family:Inter,ui-sans-serif,system-ui,sans-serif;justify-content:center;margin:0;min-height:100vh}main{background:rgba(255,255,255,0.92);border:1px solid rgba(148,163,184,0.28);border-radius:28px;box-shadow:0 28px 90px rgba(15,23,42,0.12);max-width:560px;padding:40px 36px;width:calc(100vw - 48px)}.eyebrow{color:#335c95;font-size:12px;font-weight:700;letter-spacing:.28em;text-transform:uppercase}.row{align-items:center;display:flex;gap:18px;margin-top:18px}.mark{align-items:center;background:#234a7a;border-radius:18px;color:#fff;display:flex;font-family:ui-monospace,SFMono-Regular,monospace;font-size:28px;font-weight:700;height:64px;justify-content:center;letter-spacing:.04em;width:64px}.title{font-size:32px;font-weight:700;letter-spacing:-.03em;line-height:1.1;margin:0}.copy{color:#475569;font-size:15px;line-height:1.7;margin:14px 0 0}.meta{border-top:1px solid rgba(148,163,184,0.24);color:#64748b;font-size:12px;letter-spacing:.08em;margin-top:28px;padding-top:18px;text-transform:uppercase}</style></head><body><main><div class="eyebrow">Desktop startup</div><div class="row"><div class="mark">F</div><div><h1 class="title">Starting Forska</h1><p class="copy">Opening the local desktop workspace, warming the API, and checking database migrations before the main app appears.</p></div></div><div class="meta">Keep this window open while Forska connects to its local backend.</div></main></body></html>`)}`
 }
 
 const sleep = (ms: number) => {
@@ -47,19 +46,17 @@ const waitForBackendReady = async ({apiOrigin, deadlineMs}: {apiOrigin: string; 
 const createWindow = ({
   frame = defaultWindowFrame,
   preload,
-  rpc,
   title,
   url,
   viewsRoot,
 }: {
   frame?: {height: number; width: number; x: number; y: number}
   preload: string
-  rpc?: ReturnType<typeof BrowserView.defineRPC<DesktopApiRpc>>
   title: string
   url: string
   viewsRoot: string
 }) => {
-  return new BrowserWindow({frame, preload, rpc, title, url, viewsRoot})
+  return new BrowserWindow({frame, preload, title, url, viewsRoot})
 }
 
 const runtimeConfig = getDesktopRuntimeConfig()
@@ -67,36 +64,13 @@ const desktopSingleInstanceLockPath = resolve(runtimeConfig.dataRoot, 'desktop.l
 const desktopSingleInstanceResult = acquireDesktopSingleInstance({lockPath: desktopSingleInstanceLockPath})
 let backendLogTail = ''
 
-const getDesktopApiRequestUrl = ({path}: DesktopApiRequest) => {
+const getDesktopApiRequestUrl = ({path}: {path: string}) => {
   if (!path.startsWith('/api/')) {
     throw new Error(`Desktop API bridge only supports /api routes, received ${path}`)
   }
 
   return `${runtimeConfig.apiOrigin}${path}`
 }
-
-const desktopApiRpc = BrowserView.defineRPC<DesktopApiRpc>({
-  maxRequestTime: 120_000,
-  handlers: {
-    requests: {
-      fetchApi: async ({bodyBase64, headers, method, path}) => {
-        const response = await fetch(getDesktopApiRequestUrl({bodyBase64, headers, method, path}), {
-          body: bodyBase64 === null ? undefined : Buffer.from(bodyBase64, 'base64'),
-          headers,
-          method,
-        })
-
-        return {
-          bodyBase64: Buffer.from(await response.arrayBuffer()).toString('base64'),
-          headers: [...response.headers.entries()],
-          status: response.status,
-          statusText: response.statusText,
-        }
-      },
-    },
-    messages: {},
-  },
-})
 
 const appendBackendLog = ({text, writeToStderr = false}: {text: string; writeToStderr?: boolean}) => {
   if (text === '') {
@@ -247,6 +221,49 @@ process.on('exit', stopBackend)
   })
 })
 
+const respondToDesktopApiRequest = async ({
+  bodyBase64,
+  headers,
+  id,
+  mainWindow,
+  method,
+  path,
+}: {
+  bodyBase64: string | null
+  headers: Array<[string, string]>
+  id: string
+  mainWindow: BrowserWindow
+  method: string
+  path: string
+}) => {
+  try {
+    const response = await fetch(getDesktopApiRequestUrl({path}), {
+      body: bodyBase64 === null ? undefined : Buffer.from(bodyBase64, 'base64'),
+      headers,
+      method,
+    })
+
+    mainWindow.webview.sendMessageToWebviewViaExecute({
+      id,
+      ok: true,
+      response: {
+        bodyBase64: Buffer.from(await response.arrayBuffer()).toString('base64'),
+        headers: [...response.headers.entries()],
+        status: response.status,
+        statusText: response.statusText,
+      },
+      type: 'forska-desktop-api-response',
+    })
+  } catch (error) {
+    mainWindow.webview.sendMessageToWebviewViaExecute({
+      error: error instanceof Error ? error.message : String(error),
+      id,
+      ok: false,
+      type: 'forska-desktop-api-response',
+    })
+  }
+}
+
 await (
   desktopSingleInstanceResult.status === 'already-running'
     ? Promise.reject(new Error('Forska desktop is already running in another process.'))
@@ -269,13 +286,43 @@ await (
       : Promise.reject(backendProcessResult.error)
 )
   .then(() => {
-    createWindow({
+    const mainWindow = createWindow({
       preload: runtimeConfig.windowPreload,
-      rpc: desktopApiRpc,
       title: 'Forska',
       url: runtimeConfig.windowUrl,
       viewsRoot: runtimeConfig.viewsRoot,
     })
+
+    mainWindow.webview.rpcHandler = (message) => {
+      const requestMessage = message as {
+        id?: string
+        request?: {bodyBase64?: string | null; headers?: Array<[string, string]>; method?: string; path?: string}
+        type?: string
+      }
+
+      if (requestMessage.type !== 'forska-desktop-api-request') {
+        return
+      }
+
+      const id = typeof requestMessage.id === 'string' ? requestMessage.id : null
+      const request = requestMessage.request
+      const path = typeof request?.path === 'string' ? request.path : null
+      const method = typeof request?.method === 'string' ? request.method : null
+
+      if (id === null || path === null || method === null) {
+        return
+      }
+
+      void respondToDesktopApiRequest({
+        bodyBase64: typeof request?.bodyBase64 === 'string' || request?.bodyBase64 === null ? request.bodyBase64 : null,
+        headers: Array.isArray(request?.headers) ? request.headers : [],
+        id,
+        mainWindow,
+        method,
+        path,
+      })
+    }
+
     startupWindow?.close()
   })
   .catch((error) => {

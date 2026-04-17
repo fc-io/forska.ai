@@ -1,5 +1,4 @@
 import {handleApiResponse} from '../../services/utils/handleApiResponse.ts'
-import {apiFetch} from './apiFetch.ts'
 import {getApiRequestUrl} from './getApiRequestUrl.ts'
 
 const getParsedJsonResponseBody = async (response: Response) => {
@@ -17,7 +16,7 @@ const getParsedJsonResponseBody = async (response: Response) => {
 }
 
 export const postFormDataToApi = async <T>(params: {errorMessage: string; formData: FormData; path: string}) => {
-  const response = await apiFetch(getApiRequestUrl(params.path), {body: params.formData, method: 'POST'})
+  const response = await fetch(getApiRequestUrl(params.path), {body: params.formData, method: 'POST'})
   const payload = await getParsedJsonResponseBody(response)
 
   return handleApiResponse<T>(

@@ -4,6 +4,7 @@ import {DEFAULT_API_SERVER_PORT} from '../../utils/runtimePortDefaults.ts'
 import {getDesktopApiOrigin} from './getDesktopApiOrigin.ts'
 
 const envShape = arktype({VITE_SERVER_API: 'string'})
+const desktopDefaultApiOrigin = 'http://127.0.0.1:32101'
 
 const getTrimmedValue = (value: string | null | number | undefined): string | null => {
   const normalized = String(value ?? '').trim()
@@ -26,6 +27,12 @@ const getNormalizedLocationOrigin = (value: string | null | undefined): string |
   return protocol === 'http:' || protocol === 'https:' ? normalizedValue : null
 }
 
+const isDesktopLocationProtocol = (value: string | null | undefined): boolean => {
+  const normalizedValue = getTrimmedValue(value)
+
+  return normalizedValue === 'views:' || normalizedValue === 'file:'
+}
+
 const getServerApiServerPort = (): string | undefined => {
   return typeof process === 'undefined' ? undefined : process.env.API_SERVER_PORT
 }
@@ -35,20 +42,25 @@ export const resolveClientApiOrigin = ({
   desktopOrigin,
   directOrigin,
   locationOrigin,
+  locationProtocol,
 }: {
   apiServerPort?: number | string | null | undefined
   desktopOrigin?: string | null | undefined
   directOrigin?: string | null | undefined
   locationOrigin?: string | null | undefined
+  locationProtocol?: string | null | undefined
 } = {}): string => {
   const resolvedDirectOrigin = trimTrailingSlash(getTrimmedValue(directOrigin))
   const resolvedDesktopOrigin = trimTrailingSlash(getTrimmedValue(desktopOrigin))
   const resolvedLocationOrigin = getNormalizedLocationOrigin(locationOrigin)
   const resolvedApiServerPort = getTrimmedValue(apiServerPort) ?? String(DEFAULT_API_SERVER_PORT)
+  const resolvedDesktopFallbackOrigin = isDesktopLocationProtocol(locationProtocol) ? desktopDefaultApiOrigin : null
+
   return (
-    resolvedDirectOrigin
-    ?? resolvedDesktopOrigin
+    resolvedDesktopOrigin
+    ?? resolvedDirectOrigin
     ?? resolvedLocationOrigin
+    ?? resolvedDesktopFallbackOrigin
     ?? `http://127.0.0.1:${resolvedApiServerPort}`
   )
 }
@@ -60,6 +72,7 @@ const loadEnv = (): typeof envShape.infer => {
       directOrigin: import.meta.env.VITE_SERVER_API,
       desktopOrigin: getDesktopApiOrigin(),
       locationOrigin: typeof window === 'undefined' ? undefined : window.location.origin,
+      locationProtocol: typeof window === 'undefined' ? undefined : window.location.protocol,
       apiServerPort: getServerApiServerPort(),
     }),
   })

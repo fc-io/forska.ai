@@ -46,5 +46,5 @@ test('supports desktop API port overrides', () => {
   expect(runtimeConfig.windowUrl).toBe('views://mainview/index.html')
   expect(
     Buffer.from(runtimeConfig.windowPreload.replace('data:text/javascript;base64,', ''), 'base64').toString('utf8'),
-  ).toBe('window.__FORSKA_DESKTOP_API_ORIGIN__ = "http://127.0.0.1:32999";')
+  ).toContain('window.__FORSKA_DESKTOP_API_ORIGIN__ = "http://127.0.0.1:32999";')
 })
