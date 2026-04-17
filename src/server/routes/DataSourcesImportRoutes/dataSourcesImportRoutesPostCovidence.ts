@@ -2,7 +2,6 @@ import type {Context} from 'elysia'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral, getTimestampLiteral} from '../../services/appQueryHelpers.ts'
-import {queueImportedArticleRefreshes} from '../../services/articleImportStoreService.ts'
 import {
   clearCovidenceSeededHumanJudgments,
   getCovidencePackageConfig,
@@ -57,8 +56,6 @@ export const dataSourcesImportRoutesPostCovidence = async ({body, set}: {body: {
 
     return importResult
   })) as Awaited<ReturnType<typeof importCovidencePackageFromConfig>>
-
-  await queueImportedArticleRefreshes(result.importRouteIds ?? [])
 
   return {success: true, data: await getDataSourceQueryService().getDataSourceById(dataSource.id), stats: result.stats}
 }
