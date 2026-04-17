@@ -1,10 +1,10 @@
-CREATE TEMP TABLE comparison_project_summary_mode_project_backup AS
+CREATE TEMP TABLE comparison_project_drop_dates_project_backup AS
 SELECT * FROM app.comparison_project;
 
-CREATE TEMP TABLE comparison_project_summary_mode_prompt_backup AS
+CREATE TEMP TABLE comparison_project_drop_dates_prompt_backup AS
 SELECT * FROM app.comparison_project_prompt;
 
-CREATE TEMP TABLE comparison_project_summary_mode_import_route_backup AS
+CREATE TEMP TABLE comparison_project_drop_dates_import_route_backup AS
 SELECT * FROM app.comparison_project_import_route;
 
 DROP TABLE app.comparison_project_prompt;
@@ -74,8 +74,8 @@ SELECT
   description,
   model_ids,
   compare_with_humans,
-  'prompt',
-  NULL,
+  human_judgment_mode,
+  summary_source_project_id,
   use_title,
   use_abstract,
   use_fulltext,
@@ -83,7 +83,7 @@ SELECT
   archived,
   created_at,
   updated_at
-FROM comparison_project_summary_mode_project_backup;
+FROM comparison_project_drop_dates_project_backup;
 
 INSERT INTO app.comparison_project_prompt (
   id,
@@ -101,12 +101,12 @@ SELECT
   comparison_project_id,
   prompt_id,
   prompt_order,
-  NULL,
-  NULL,
-  NULL,
+  criteria_disposition,
+  criteria_section_key,
+  criteria_section_label,
   created_at,
   updated_at
-FROM comparison_project_summary_mode_prompt_backup;
+FROM comparison_project_drop_dates_prompt_backup;
 
 INSERT INTO app.comparison_project_import_route (
   id,
@@ -121,4 +121,4 @@ SELECT
   import_route_id,
   created_at,
   updated_at
-FROM comparison_project_summary_mode_import_route_backup;
+FROM comparison_project_drop_dates_import_route_backup;

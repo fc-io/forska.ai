@@ -178,8 +178,6 @@ CREATE TABLE IF NOT EXISTS app.comparison_project (
   use_abstract BOOLEAN NOT NULL DEFAULT TRUE,
   use_fulltext BOOLEAN NOT NULL DEFAULT FALSE,
   use_fulltext_no_images BOOLEAN NOT NULL DEFAULT FALSE,
-  date_from TIMESTAMPTZ,
-  date_to TIMESTAMPTZ,
   archived BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp

@@ -197,8 +197,6 @@ export type ComparisonProjectRecord = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
-  dateFrom: Date | null
-  dateTo: Date | null
   archived: boolean
   createdAt: Date
   updatedAt: Date

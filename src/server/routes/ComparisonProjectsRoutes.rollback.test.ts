@@ -69,8 +69,6 @@ const getComparisonProjectRow = (comparisonProject: MockDatabaseState['compariso
   return {
     compareWithHumans: comparisonProject.compareWithHumans,
     createdAt: new Date('2026-03-29T00:00:00.000Z'),
-    dateFrom: null,
-    dateTo: null,
     description: 'Rollback test project',
     humanJudgmentMode: comparisonProject.humanJudgmentMode,
     id: 'comparison-project-1',
@@ -180,8 +178,6 @@ const queryJson = async (
   if (statement.includes('FROM app.project p') && statement.includes('WHERE p.archived = FALSE')) {
     return [
       {
-        dateFrom: new Date('2026-01-01T00:00:00.000Z'),
-        dateTo: new Date('2026-02-01T00:00:00.000Z'),
         description: 'Summary source project',
         humanJudgmentMode: 'summary',
         id: 'source-project-1',
@@ -195,8 +191,6 @@ const queryJson = async (
         useTitle: true,
       },
       {
-        dateFrom: new Date('2026-01-01T00:00:00.000Z'),
-        dateTo: new Date('2026-02-01T00:00:00.000Z'),
         description: 'Prompt source project',
         humanJudgmentMode: 'prompt',
         id: 'prompt-project-1',

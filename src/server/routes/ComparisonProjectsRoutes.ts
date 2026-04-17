@@ -140,10 +140,11 @@ type ComparisonProjectEditPrompt = {
   createdAt: Date
   archived: boolean
 }
-type ComparisonProjectRecordRow = Omit<
-  ComparisonProjectRecord,
-  'createdAt' | 'dateFrom' | 'dateTo' | 'modelIds' | 'updatedAt'
-> & {createdAt: unknown; dateFrom: unknown; dateTo: unknown; modelIds: unknown; updatedAt: unknown}
+type ComparisonProjectRecordRow = Omit<ComparisonProjectRecord, 'createdAt' | 'modelIds' | 'updatedAt'> & {
+  createdAt: unknown
+  modelIds: unknown
+  updatedAt: unknown
+}
 
 const hasSummaryPromptCriteriaMetadata = (prompt: {
   criteriaDisposition: ProjectPromptCriteriaDisposition | null
@@ -270,17 +271,9 @@ const getComparisonProjectRecordValue = (row: ComparisonProjectRecordRow) => {
     ...row,
     modelIds: getStringArrayRowValue(row, 'modelIds'),
     humanJudgmentMode: row.humanJudgmentMode ?? 'prompt',
-    dateFrom: getDateValue(row.dateFrom),
-    dateTo: getDateValue(row.dateTo),
     createdAt: getRequiredDateValue(row.createdAt),
     updatedAt: getRequiredDateValue(row.updatedAt),
   }
-}
-
-const getComparisonProjectApiRecord = (comparisonProjectRecord: ReturnType<typeof getComparisonProjectRecordValue>) => {
-  const {dateFrom: _dateFrom, dateTo: _dateTo, ...publicComparisonProjectRecord} = comparisonProjectRecord
-
-  return publicComparisonProjectRecord
 }
 
 const getComparisonProjectRecordSql = (comparisonProjectId: string) => {
@@ -297,8 +290,6 @@ const getComparisonProjectRecordSql = (comparisonProjectId: string) => {
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
-      date_from AS dateFrom,
-      date_to AS dateTo,
       archived,
       created_at AS createdAt,
       updated_at AS updatedAt
@@ -2013,8 +2004,6 @@ const createComparisonProjectRecord = async (
     useAbstract: boolean
     useFulltext: boolean
     useFulltextNoImages: boolean
-    dateFrom: unknown
-    dateTo: unknown
     archived: boolean
     createdAt: unknown
     updatedAt: unknown
@@ -2057,8 +2046,6 @@ const createComparisonProjectRecord = async (
       use_abstract AS useAbstract,
       use_fulltext AS useFulltext,
       use_fulltext_no_images AS useFulltextNoImages,
-      date_from AS dateFrom,
-      date_to AS dateTo,
       archived,
       created_at AS createdAt,
       updated_at AS updatedAt
@@ -2139,7 +2126,7 @@ export const comparisonProjectsRoutes = new Elysia()
         })
       })) as Awaited<ReturnType<typeof createComparisonProjectRecord>>
 
-      return {data: getComparisonProjectApiRecord(createdComparisonProject)}
+      return {data: createdComparisonProject}
     },
     {
       body: t.Object({
@@ -2230,7 +2217,7 @@ export const comparisonProjectsRoutes = new Elysia()
         return createComparisonProjectRecord(tx, body)
       })) as Awaited<ReturnType<typeof createComparisonProjectRecord>>
 
-      return {data: getComparisonProjectApiRecord(createdComparisonProject)}
+      return {data: createdComparisonProject}
     },
     {
       body: t.Object({
@@ -2337,7 +2324,7 @@ export const comparisonProjectsRoutes = new Elysia()
         throw new Error('Comparison project not found')
       }
 
-      return {data: getComparisonProjectApiRecord(getComparisonProjectRecordValue(updatedComparisonProjectRow))}
+      return {data: getComparisonProjectRecordValue(updatedComparisonProjectRow)}
     },
     {
       body: t.Object({
