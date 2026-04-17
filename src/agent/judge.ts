@@ -300,7 +300,7 @@ ${invalidBlock.join('\n')}
 Here is your previous answer:
 ${lastResponse}
 
-Please try again. Your quotes MUST be copied verbatim from the provided text (or return an empty array). Do not add surrounding quotation marks unless they appear in the source text. Do not shorten quotes with ellipses. Do not include wrapper markers in quotes. Respond ONLY with valid JSON matching the schema.`
+Please try again. Your quotes MUST be copied verbatim from the provided text (or return an empty array). Your quotes may come only from the article or record text sections, never from the question, inclusion criteria, exclusion criteria, or any instructions. Do not add surrounding quotation marks unless they appear in the source text. Do not shorten quotes with ellipses. Do not include wrapper markers in quotes. If the reasoning depends on the question or criteria text but the source text has no supporting quote, return an empty array. Respond ONLY with valid JSON matching the schema.`
 }
 
 type SinglePromptJudgmentQuoteValidationResult =
@@ -558,7 +558,11 @@ const OUTER_QUOTE_WRAPPER_PAIRS: Array<[string, string]> = [
   ['\u2039', '\u203a'],
 ]
 
-const getNormalizedQuoteSubstring = (quote: string, recordText: string): string | null => {
+const normalizeQuoteTextForMatch = (value: string): string => {
+  return value.replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"')
+}
+
+const getExactQuoteMatch = (quote: string, recordText: string, normalizedRecordText: string): string | null => {
   const rawQuote = String(quote ?? '')
 
   if (rawQuote.length === 0) {
@@ -569,10 +573,37 @@ const getNormalizedQuoteSubstring = (quote: string, recordText: string): string 
     return rawQuote
   }
 
+  const normalizedQuote = normalizeQuoteTextForMatch(rawQuote)
+  const normalizedIndex = normalizedRecordText.indexOf(normalizedQuote)
+
+  return normalizedIndex >= 0 ? recordText.slice(normalizedIndex, normalizedIndex + rawQuote.length) : null
+}
+
+const getNormalizedQuoteSubstring = (
+  quote: string,
+  recordText: string,
+  normalizedRecordText: string,
+): string | null => {
+  const rawQuote = String(quote ?? '')
+
+  if (rawQuote.length === 0) {
+    return null
+  }
+
+  const exactMatch = getExactQuoteMatch(rawQuote, recordText, normalizedRecordText)
+
+  if (exactMatch !== null) {
+    return exactMatch
+  }
+
   const trimmedQuote = rawQuote.trim()
 
-  if (trimmedQuote.length > 0 && recordText.includes(trimmedQuote)) {
-    return trimmedQuote
+  if (trimmedQuote.length > 0) {
+    const trimmedMatch = getExactQuoteMatch(trimmedQuote, recordText, normalizedRecordText)
+
+    if (trimmedMatch !== null) {
+      return trimmedMatch
+    }
   }
 
   const getNextCandidate = (value: string): string | null => {
@@ -593,8 +624,10 @@ const getNormalizedQuoteSubstring = (quote: string, recordText: string): string 
       return null
     }
 
-    if (recordText.includes(nextCandidate)) {
-      return nextCandidate
+    const candidateMatch = getExactQuoteMatch(nextCandidate, recordText, normalizedRecordText)
+
+    if (candidateMatch !== null) {
+      return candidateMatch
     }
 
     return nextCandidate === value ? null : tryCandidate(nextCandidate)
@@ -604,10 +637,12 @@ const getNormalizedQuoteSubstring = (quote: string, recordText: string): string 
 }
 
 const getQuoteValidation = (quotes: string[], recordText: string): {valid: string[]; invalid: string[]} => {
+  const normalizedRecordText = normalizeQuoteTextForMatch(recordText)
+
   return quotes.reduce(
     (acc, quote) => {
       const rawQuote = String(quote ?? '')
-      const normalizedQuote = getNormalizedQuoteSubstring(rawQuote, recordText)
+      const normalizedQuote = getNormalizedQuoteSubstring(rawQuote, recordText, normalizedRecordText)
 
       return normalizedQuote === null
         ? {valid: acc.valid, invalid: [...acc.invalid, rawQuote]}

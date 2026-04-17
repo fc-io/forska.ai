@@ -133,6 +133,53 @@ const projectImportRouteCreateSql = `
   )
 `
 
+const comparisonProjectCreateSql = `
+  CREATE TABLE app.comparison_project (
+    id VARCHAR PRIMARY KEY,
+    name VARCHAR NOT NULL,
+    description VARCHAR,
+    model_ids VARCHAR[],
+    compare_with_humans BOOLEAN NOT NULL DEFAULT FALSE,
+    human_judgment_mode human_judgment_mode DEFAULT 'prompt',
+    summary_source_project_id VARCHAR REFERENCES app.project(id),
+    use_title BOOLEAN NOT NULL DEFAULT TRUE,
+    use_abstract BOOLEAN NOT NULL DEFAULT TRUE,
+    use_fulltext BOOLEAN NOT NULL DEFAULT FALSE,
+    use_fulltext_no_images BOOLEAN NOT NULL DEFAULT FALSE,
+    date_from TIMESTAMPTZ,
+    date_to TIMESTAMPTZ,
+    archived BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+  )
+`
+
+const comparisonProjectPromptCreateSql = `
+  CREATE TABLE app.comparison_project_prompt (
+    id VARCHAR PRIMARY KEY,
+    comparison_project_id VARCHAR NOT NULL REFERENCES app.comparison_project(id),
+    prompt_id VARCHAR NOT NULL REFERENCES app.prompt(id),
+    prompt_order INTEGER,
+    criteria_disposition project_prompt_criteria_disposition_v2,
+    criteria_section_key VARCHAR,
+    criteria_section_label VARCHAR,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    UNIQUE(comparison_project_id, prompt_id)
+  )
+`
+
+const comparisonProjectImportRouteCreateSql = `
+  CREATE TABLE app.comparison_project_import_route (
+    id VARCHAR PRIMARY KEY,
+    comparison_project_id VARCHAR NOT NULL REFERENCES app.comparison_project(id),
+    import_route_id VARCHAR NOT NULL REFERENCES app.import_route(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    UNIQUE(comparison_project_id, import_route_id)
+  )
+`
+
 const projectArticleCreateSql = `
   CREATE TABLE app.project_article (
     id VARCHAR PRIMARY KEY,
@@ -446,6 +493,53 @@ const rebuildJudgmentGroupTx = async (tx: AppTx, projectIdsSql: string) => {
   ])
 }
 
+const rebuildComparisonProjectGroupTx = async (tx: AppTx, projectIdsSql: string) => {
+  const comparisonProjectTempTableName = getTempTableName('delete_archived_comparison_project')
+  const comparisonProjectPromptTempTableName = getTempTableName('delete_archived_comparison_project_prompt')
+  const comparisonProjectImportRouteTempTableName = getTempTableName('delete_archived_comparison_project_import_route')
+
+  return runStatements(tx, [
+    `
+      CREATE TEMP TABLE ${comparisonProjectTempTableName} AS
+      SELECT
+        id,
+        name,
+        description,
+        model_ids,
+        compare_with_humans,
+        human_judgment_mode,
+        CASE
+          WHEN summary_source_project_id IN (${projectIdsSql}) THEN NULL
+          ELSE summary_source_project_id
+        END AS summary_source_project_id,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images,
+        date_from,
+        date_to,
+        archived,
+        created_at,
+        updated_at
+      FROM app.comparison_project
+    `,
+    `CREATE TEMP TABLE ${comparisonProjectPromptTempTableName} AS SELECT * FROM app.comparison_project_prompt`,
+    `CREATE TEMP TABLE ${comparisonProjectImportRouteTempTableName} AS SELECT * FROM app.comparison_project_import_route`,
+    `DROP TABLE app.comparison_project_prompt`,
+    `DROP TABLE app.comparison_project_import_route`,
+    `DROP TABLE app.comparison_project`,
+    comparisonProjectCreateSql,
+    `INSERT INTO app.comparison_project SELECT * FROM ${comparisonProjectTempTableName}`,
+    comparisonProjectPromptCreateSql,
+    `INSERT INTO app.comparison_project_prompt SELECT * FROM ${comparisonProjectPromptTempTableName}`,
+    comparisonProjectImportRouteCreateSql,
+    `INSERT INTO app.comparison_project_import_route SELECT * FROM ${comparisonProjectImportRouteTempTableName}`,
+    `DROP TABLE ${comparisonProjectImportRouteTempTableName}`,
+    `DROP TABLE ${comparisonProjectPromptTempTableName}`,
+    `DROP TABLE ${comparisonProjectTempTableName}`,
+  ])
+}
+
 const assertAllProjectsExistAndArchived = async (projectIds: string[]) => {
   const projectIdsSql = getProjectIdsSql(projectIds)
   const projectRows = await getAppDatabaseService().queryJson<ProjectArchivedStateRow>(`
@@ -658,6 +752,7 @@ const deleteArchivedProjectsTx = async (tx: AppTx, projectIds: string[]) => {
 
   await assertArchivedProjectCleanupProjectForeignKeysTx(tx)
   await rebuildProjectDeleteTablesTx(tx, projectIds)
+  await rebuildComparisonProjectGroupTx(tx, projectIdsSql)
   await assertNoRemainingProjectForeignKeysTx(tx, projectIds)
 
   return runStatements(tx, [

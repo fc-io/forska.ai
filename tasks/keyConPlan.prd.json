@@ -1,7 +1,7 @@
 {
   "name": "Covidence Refresh Consolidation Plan",
-  "branchName": "ralph/covidence-refresh-consolidation",
   "description": "Move Covidence create and reimport refreshes onto the `project_mart_refresh_state` worker path by marking seeded judgment writes dirty and removing the route-level `queueImportedArticleRefreshes` calls.",
+  "branchName": "ralph/covidence-refresh-consolidation",
   "userStories": [
     {
       "id": "US-001",
@@ -19,9 +19,10 @@
         "`bunx eslint src/server/services/covidenceImportService.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.ts src/server/services/covidenceImportService.test.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.test.ts src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidenceCreate.test.ts` passes"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "",
-      "dependsOn": []
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-002",
@@ -67,5 +68,8 @@
         "US-001"
       ]
     }
-  ]
+  ],
+  "metadata": {
+    "updatedAt": "2026-04-17T09:43:02.975Z"
+  }
 }

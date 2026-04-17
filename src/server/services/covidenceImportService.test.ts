@@ -1401,8 +1401,27 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts answered and unanswered titl
           WHERE jh.project_id = '\${project.id}'
           ORDER BY a.article_title ASC, jh.prompt_id ASC
         \`)
+        const refreshStateRows = await database.queryJson(\`
+          SELECT
+            project_id AS projectId,
+            CAST(dirty_token AS INTEGER) AS dirtyToken,
+            last_request_reason AS reason
+          FROM app.project_mart_refresh_state
+          WHERE project_id = '\${project.id}'
+        \`)
+        const refreshArticleStateRows = await database.queryJson(\`
+          SELECT
+            a.article_id AS articleExternalId,
+            CAST(article_state.first_dirty_token AS INTEGER) AS firstDirtyToken,
+            CAST(article_state.last_dirty_token AS INTEGER) AS lastDirtyToken,
+            article_state.project_id AS projectId
+          FROM app.project_mart_refresh_article_state article_state
+          INNER JOIN app.article a ON a.id = article_state.article_id
+          WHERE article_state.project_id = '\${project.id}'
+          ORDER BY a.article_id ASC
+        \`)
 
-        console.log(JSON.stringify({judgmentRows, projectId: project.id, promptId: prompt.id}))
+        console.log(JSON.stringify({judgmentRows, projectId: project.id, promptId: prompt.id, refreshArticleStateRows, refreshStateRows}))
         covidenceImportService.deleteCovidencePackageFiles(datasourceId)
         await database.close()
       `,
@@ -1447,6 +1466,13 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts answered and unanswered titl
       }>
       projectId: string
       promptId: string
+      refreshArticleStateRows: Array<{
+        articleExternalId: string
+        firstDirtyToken: number
+        lastDirtyToken: number
+        projectId: string
+      }>
+      refreshStateRows: Array<{dirtyToken: number; projectId: string; reason: string | null}>
     }
 
     expect(parsed.judgmentRows).toHaveLength(3)
@@ -1471,6 +1497,29 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts answered and unanswered titl
     expect(parsed.judgmentRows[2]?.comment).toBeNull()
     expect(parsed.judgmentRows[2]?.isAnswered).toBe(true)
     expect(parsed.judgmentRows[2]?.promptId).toBe(parsed.promptId)
+    expect(parsed.refreshStateRows).toEqual([
+      {dirtyToken: 3, projectId: parsed.projectId, reason: 'seedCovidenceHumanJudgmentsFromConfig'},
+    ])
+    expect(parsed.refreshArticleStateRows).toEqual([
+      {
+        articleExternalId: `${importRoute}:doi%3A10.1000%2Falpha`,
+        firstDirtyToken: 1,
+        lastDirtyToken: 3,
+        projectId: parsed.projectId,
+      },
+      {
+        articleExternalId: `${importRoute}:doi%3A10.1000%2Fbeta`,
+        firstDirtyToken: 1,
+        lastDirtyToken: 3,
+        projectId: parsed.projectId,
+      },
+      {
+        articleExternalId: `${importRoute}:doi%3A10.1000%2Fgamma`,
+        firstDirtyToken: 1,
+        lastDirtyToken: 3,
+        projectId: parsed.projectId,
+      },
+    ])
   } finally {
     deleteCovidencePackageFiles(datasourceId)
     ;[duckdbPath, `${duckdbPath}.wal`, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(
@@ -2173,8 +2222,27 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts full-text included and exclu
           WHERE pa.project_id = '\${project.id}'
           ORDER BY a.article_title ASC
         \`)
+        const refreshStateRows = await database.queryJson(\`
+          SELECT
+            project_id AS projectId,
+            CAST(dirty_token AS INTEGER) AS dirtyToken,
+            last_request_reason AS reason
+          FROM app.project_mart_refresh_state
+          WHERE project_id = '\${project.id}'
+        \`)
+        const refreshArticleStateRows = await database.queryJson(\`
+          SELECT
+            a.article_id AS articleExternalId,
+            CAST(article_state.first_dirty_token AS INTEGER) AS firstDirtyToken,
+            CAST(article_state.last_dirty_token AS INTEGER) AS lastDirtyToken,
+            article_state.project_id AS projectId
+          FROM app.project_mart_refresh_article_state article_state
+          INNER JOIN app.article a ON a.id = article_state.article_id
+          WHERE article_state.project_id = '\${project.id}'
+          ORDER BY a.article_id ASC
+        \`)
 
-        console.log(JSON.stringify({judgmentRows, projectArticleRows, projectId: project.id, promptId: prompt.id}))
+        console.log(JSON.stringify({judgmentRows, projectArticleRows, projectId: project.id, promptId: prompt.id, refreshArticleStateRows, refreshStateRows}))
         covidenceImportService.deleteCovidencePackageFiles(datasourceId)
         await database.close()
       `,
@@ -2225,6 +2293,13 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts full-text included and exclu
       }>
       projectId: string
       promptId: string
+      refreshArticleStateRows: Array<{
+        articleExternalId: string
+        firstDirtyToken: number
+        lastDirtyToken: number
+        projectId: string
+      }>
+      refreshStateRows: Array<{dirtyToken: number; projectId: string; reason: string | null}>
     }
 
     expect(parsed.judgmentRows).toHaveLength(3)
@@ -2272,6 +2347,29 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts full-text included and exclu
         articleExternalId: `${importRoute}:doi%3A10.1000%2Fgamma`,
         articleTitle: 'Study C',
         importedFromProjectId: parsed.projectId,
+        projectId: parsed.projectId,
+      },
+    ])
+    expect(parsed.refreshStateRows).toEqual([
+      {dirtyToken: 3, projectId: parsed.projectId, reason: 'seedCovidenceHumanJudgmentsFromConfig'},
+    ])
+    expect(parsed.refreshArticleStateRows).toEqual([
+      {
+        articleExternalId: `${importRoute}:doi%3A10.1000%2Falpha`,
+        firstDirtyToken: 1,
+        lastDirtyToken: 3,
+        projectId: parsed.projectId,
+      },
+      {
+        articleExternalId: `${importRoute}:doi%3A10.1000%2Fbeta`,
+        firstDirtyToken: 1,
+        lastDirtyToken: 3,
+        projectId: parsed.projectId,
+      },
+      {
+        articleExternalId: `${importRoute}:doi%3A10.1000%2Fgamma`,
+        firstDirtyToken: 1,
+        lastDirtyToken: 3,
         projectId: parsed.projectId,
       },
     ])

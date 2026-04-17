@@ -67,6 +67,59 @@ test('single prompt quote validation accepts quotes wrapped in smart quotes', ()
   })
 })
 
+test('single prompt quote validation normalizes apostrophes back to the source substring', () => {
+  const result = validateSinglePromptJudgmentQuotes({
+    attempt: 1,
+    judgment: {
+      answer: 'no',
+      explanation: 'because',
+      quotes: [
+        "Our purpose is to characterise lesions' features, helping diagnose, treat and emphasize the relevance of an adequate anamnesis.",
+      ],
+    },
+    lastResponse: '{"answer":"no"}',
+    maxRetries: 2,
+    recordText:
+      'Our purpose is to characterise lesions’ features, helping diagnose, treat and emphasize the relevance of an adequate anamnesis.',
+    retryBasePrompt: 'base prompt',
+  })
+
+  expect(result).toEqual({
+    judgment: {
+      answer: 'no',
+      explanation: 'because',
+      quotes: [
+        'Our purpose is to characterise lesions’ features, helping diagnose, treat and emphasize the relevance of an adequate anamnesis.',
+      ],
+    },
+    kind: 'valid',
+  })
+})
+
+test('single prompt quote validation normalizes internal double quotes back to the source substring', () => {
+  const result = validateSinglePromptJudgmentQuotes({
+    attempt: 1,
+    judgment: {
+      answer: 'no',
+      explanation: 'because',
+      quotes: ['The leading causes were dose selection (C3) (1264, 61.9%) and "other domain" (C9) (543, 26.6%)'],
+    },
+    lastResponse: '{"answer":"no"}',
+    maxRetries: 2,
+    recordText: 'The leading causes were dose selection (C3) (1264, 61.9%) and “other domain” (C9) (543, 26.6%)',
+    retryBasePrompt: 'base prompt',
+  })
+
+  expect(result).toEqual({
+    judgment: {
+      answer: 'no',
+      explanation: 'because',
+      quotes: ['The leading causes were dose selection (C3) (1264, 61.9%) and “other domain” (C9) (543, 26.6%)'],
+    },
+    kind: 'valid',
+  })
+})
+
 test('single prompt quote validation keeps exact quotes that already include source quotation marks', () => {
   const result = validateSinglePromptJudgmentQuotes({
     attempt: 1,
@@ -110,6 +163,9 @@ test('single prompt quote validation requests a retry before the final attempt',
 
   if (result.kind === 'retry') {
     expect(result.nextPrompt).toContain('foreign quote')
+    expect(result.nextPrompt).toContain(
+      'never from the question, inclusion criteria, exclusion criteria, or any instructions',
+    )
     expect(result.nextPrompt).toContain('Do not add surrounding quotation marks unless they appear in the source text.')
     expect(result.nextPrompt).toContain('Do not shorten quotes with ellipses.')
     expect(result.nextPrompt).toContain('Do not include wrapper markers in quotes.')

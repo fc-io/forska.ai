@@ -221,6 +221,55 @@
 - [ ] Pick the zip implementation and lock checksum, package fingerprint, path-normalization, and size-limit rules before writing route handlers.
 - [ ] Define the thresholds that switch export, analyze, and commit work from inline requests to background session jobs.
 
+#### Phase 1 Spec
+
+- `Checksums and hashing`
+  - Use SHA-256 for payload file checksums, asset file checksums, and `packageFingerprint`.
+  - Compute manifest `payloads[*].checksum` over the exact file bytes written into the package.
+  - Compute `packageFingerprint` from canonical JSON built from: `schemaVersion`, normalized project source summary, sorted payload paths with checksums and row counts, sorted asset paths with checksums, and omission-warning codes.
+  - Exclude `exportedAt`, `sourceAppVersion`, byte sizes, temp ids, and any session-local values from `packageFingerprint` so equivalent re-exports stay stable.
+
+- `Zip rules`
+  - Root entries must be relative POSIX-style paths with `/` separators.
+  - Reject archive members that are absolute paths, contain `..`, normalize to the same path as another member, or are symlinks.
+  - Require `manifest.json` at the archive root.
+  - Allow payload files only from the locked manifest file list plus `assets/**`.
+
+- `Size thresholds`
+  - Inline export when estimated package bytes are `<= 128 MB` and estimated asset bytes are `<= 64 MB`.
+  - Background export session when either estimate exceeds those thresholds.
+  - Inline import analyze when uploaded zip bytes are `<= 128 MB` and declared extracted payload-plus-asset bytes are `<= 512 MB`.
+  - Background import analyze when either import threshold is exceeded.
+  - Background commit when the analyzed plan contains `>= 25,000` articles, `>= 250,000` judgments, or `>= 2 GB` of extracted assets.
+  - Reject packages larger than `8 GB` compressed, `20 GB` extracted, or `50,000` archive members.
+
+- `Session storage layout`
+  - Store working files under runtime-writable temp paths such as `tmp/project-transfer/import/<sessionId>/` and `tmp/project-transfer/export/<sessionId>/`.
+  - Import session folders should contain `upload.zip`, `manifest.json`, `extracted/`, `analysis.json`, and `progress.json`.
+  - Export session folders should contain `build/`, `manifest.json`, `package.zip`, and `progress.json`.
+
+- `Import session states`
+  - `uploading`, `queued`, `extracting`, `analyzing`, `awaiting_resolution`, `ready_to_commit`, `committing`, `completed`, `failed`, `cancelled`, `expired`.
+  - `awaiting_resolution` means the package is parsed but still has unresolved providers, models, routes, article conflicts, or judgment conflicts.
+  - `ready_to_commit` means every blocking dependency is resolved and the review plan is frozen for commit.
+
+- `Export session states`
+  - `queued`, `assembling`, `packaging`, `ready`, `failed`, `expired`.
+  - Small exports may skip persisted session creation and return the file directly.
+
+- `Progress contract`
+  - Session responses should expose `phase`, `status`, `percent`, `bytesProcessed`, `bytesTotal`, `rowCountProcessed`, `rowCountTotal`, `warningCount`, `startedAt`, `updatedAt`, and `expiresAt`.
+  - Background phases should be monotonic and resumable enough for UI polling after refresh.
+
+- `Duplicate history store`
+  - Add a small app table such as `app.project_transfer_history` with: `id`, `direction`, `package_fingerprint`, `schema_version`, `source_project_source_id`, `source_project_name`, `target_project_id`, `payload_counts_json`, `created_at`.
+  - Record one row after each completed import and optionally after each completed export.
+  - During analyze, match on `package_fingerprint` first and use the history row only for warning and display, never for automatic merge behavior.
+
+- `Overlap summary contract`
+  - Analyze should always produce `reusedArticleCount`, `newArticleCount`, `omittedRouteLinkCount`, `duplicateImportMatchCount`, and `judgmentConflictCount`.
+  - Duplicate-package warnings and overlap summaries are informational; they never silently change the import plan.
+
 #### Quality Gates
 
 - [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferManifest.test.ts`

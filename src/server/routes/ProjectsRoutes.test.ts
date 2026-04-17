@@ -502,6 +502,7 @@ test('delete archived route removes archived project rows and keeps cross-projec
 
   const sourceProjectId = 'delete-archived-source-project'
   const survivorProjectId = 'delete-archived-survivor-project'
+  const survivorComparisonProjectId = 'delete-archived-survivor-comparison-project'
   const importRouteId = 'delete-archived-import-route'
   const articleId = 'delete-archived-article'
   const promptId = 'delete-archived-prompt'
@@ -517,6 +518,21 @@ test('delete archived route removes archived project rows and keeps cross-projec
     modelId: 'delete-archived-survivor-model',
     projectId: survivorProjectId,
   })
+  await runDatabase(`
+    INSERT INTO app.comparison_project (
+      id,
+      name,
+      compare_with_humans,
+      human_judgment_mode,
+      summary_source_project_id
+    ) VALUES (
+      '${survivorComparisonProjectId}',
+      'Delete archived survivor comparison',
+      TRUE,
+      'summary',
+      '${sourceProjectId}'
+    )
+  `)
   await runDatabase(`
     INSERT INTO app.import_route (id, route, name)
     VALUES ('${importRouteId}', '/delete-archived-route', 'manual')
@@ -982,6 +998,12 @@ test('delete archived route removes archived project rows and keeps cross-projec
     WHERE id = 'delete-archived-judgment-human'
     LIMIT 1
   `)
+  const [comparisonProjectRow] = await queryDatabase<{count: number; summarySourceProjectId: string | null}>(`
+    SELECT COUNT(*) AS count, summary_source_project_id AS summarySourceProjectId
+    FROM app.comparison_project
+    WHERE id = '${survivorComparisonProjectId}'
+    GROUP BY summary_source_project_id
+  `)
 
   expect(Number(projectRow?.count ?? 0)).toBe(0)
   expect(Number(projectPromptRowCount?.count ?? 0)).toBe(0)
@@ -1003,6 +1025,8 @@ test('delete archived route removes archived project rows and keeps cross-projec
   expect(Number(servingDetailRowCount?.count ?? 0)).toBe(0)
   expect(survivorPromptOrigin?.originProjectId).toBe(null)
   expect(survivorArticleOrigin?.importedFromProjectId).toBe(null)
+  expect(Number(comparisonProjectRow?.count ?? 0)).toBe(1)
+  expect(comparisonProjectRow?.summarySourceProjectId).toBe(null)
   expect(judgmentProjectId?.projectId).toBe(null)
   expect(judgmentHumanProjectId?.projectId).toBe(null)
 })

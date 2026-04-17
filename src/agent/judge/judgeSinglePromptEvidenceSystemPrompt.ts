@@ -13,7 +13,9 @@ Your response must be valid JSON with exactly these keys:
 Rules:
 - Use ONLY the provided text.
 - Quotes MUST be exact substrings from the provided text. Do not paraphrase.
+- Quotes may come only from the provided text, never from the question or instructions.
 - Do not add surrounding quotation marks unless they appear in the source text.
 - Do not shorten quotes with ellipses.
 - Do not include wrapper markers in quotes.
+- If the question includes criteria or instructions that matter for reasoning, use them only to decide relevance and return no quote rather than quoting them.
 - If nothing is relevant, return {"facts":[],"quotes":[]} only.`

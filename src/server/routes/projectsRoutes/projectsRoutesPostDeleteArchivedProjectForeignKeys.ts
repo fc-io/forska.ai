@@ -3,6 +3,7 @@ type ProjectForeignKeyInventoryRow = {columnName: string; schemaName: string; ta
 type ProjectForeignKeyInventoryTx = {queryJson: <T>(statement: string) => Promise<T[]>}
 
 export const archivedProjectCleanupHandledProjectForeignKeys = [
+  {columnName: 'summary_source_project_id', schemaName: 'app', tableName: 'comparison_project'},
   {columnName: 'project_id', schemaName: 'app', tableName: 'judgment'},
   {columnName: 'project_id', schemaName: 'app', tableName: 'judgment_human'},
   {columnName: 'project_id', schemaName: 'app', tableName: 'judgment_human_summary'},

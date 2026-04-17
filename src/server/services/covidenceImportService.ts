@@ -1972,6 +1972,18 @@ const syncCovidenceSeededProjectArticles = async (params: {
         })
 }
 
+const markCovidenceSeededHumanJudgmentsDirty = async (params: {
+  articleIds: string[]
+  projectId: string
+  tx?: CovidenceProjectTx
+}) => {
+  await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+    projects: [{articleIds: params.articleIds, projectId: params.projectId}],
+    reason: 'seedCovidenceHumanJudgmentsFromConfig',
+    runner: params.tx,
+  })
+}
+
 export const buildCovidencePackageConfig = (params: {
   mode: CovidenceImportMode
   files: CovidencePackageFile[]
@@ -2341,6 +2353,8 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
       Promise.resolve(),
     )
 
+    await markCovidenceSeededHumanJudgmentsDirty({articleIds, projectId: project.id, tx: params.tx})
+
     return
   }
 
@@ -2386,6 +2400,8 @@ export const seedCovidenceHumanJudgmentsFromConfig = async (params: {
     },
     Promise.resolve(),
   )
+
+  await markCovidenceSeededHumanJudgmentsDirty({articleIds, projectId: project.id, tx: params.tx})
 }
 
 export const clearCovidenceSeededHumanJudgments = async (params: {importRoute: string; tx?: CovidenceProjectTx}) => {
