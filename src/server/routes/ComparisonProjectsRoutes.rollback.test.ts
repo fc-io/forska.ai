@@ -970,11 +970,11 @@ test('prompt comparison judgments keep legacy prompt columns and human prompt an
   const judgmentsResponse = await app.handle(
     new Request('http://localhost/api/comparison-projects/comparison-project-1/judgments', {
       body: JSON.stringify({
+        differenceFilter: 'llm-vs-llm',
         hideSparseRows: true,
         limit: '50',
         page: '1',
         showOnlyFullyAnsweredPrompts: true,
-        showOnlyModelDifferences: true,
       }),
       headers: {'content-type': 'application/json'},
       method: 'POST',
@@ -1049,11 +1049,11 @@ test('summary comparison judgments use synthetic summary columns and derived cel
   const judgmentsResponse = await app.handle(
     new Request('http://localhost/api/comparison-projects/comparison-project-1/judgments', {
       body: JSON.stringify({
+        differenceFilter: 'llm-vs-llm',
         hideSparseRows: true,
         limit: '50',
         page: '1',
         showOnlyFullyAnsweredPrompts: true,
-        showOnlyModelDifferences: true,
       }),
       headers: {'content-type': 'application/json'},
       method: 'POST',

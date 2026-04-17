@@ -5,6 +5,12 @@ import type {
   HumanJudgmentMode,
   ProjectPromptCriteriaDisposition,
 } from '../../db/schemaTypes.ts'
+import {
+  type ComparisonProjectDifferenceColumn,
+  type ComparisonProjectDifferenceFilter,
+  getComparisonProjectHasDifferenceFilterMatch,
+  getNormalizedComparisonProjectDifferenceFilter,
+} from '../../utils/comparisonProjectDifferenceFilter.ts'
 import {appendProviderModelThinkingBadgeLabel} from '../../utils/providerModelLabel.ts'
 import {getProviderModelMetadataOptions} from '../providers/providerModelMetadata.ts'
 import {assertSelectableProviderModelIds} from '../providers/providerModelRepository.ts'
@@ -13,7 +19,6 @@ import * as appQueryHelpers from '../services/appQueryHelpers.ts'
 import {
   deriveStrictSummaryAnswer,
   getJudgmentDisplayAnswer,
-  getNormalizedJudgmentAnswerKey,
   getNormalizedSummaryAnswer,
   hasAnyJudgmentAnswer,
   normalizeSummaryAnswerValue,
@@ -48,10 +53,7 @@ type ComparisonProjectPromptConfig = {
   criteriaSectionLabel: string | null
 }
 type ComparisonProjectModelConfig = {id: string; metadataJson: unknown; name: string}
-type ComparisonProjectJudgmentsColumn = {
-  id: string
-  kind: 'llm' | 'human'
-  promptId: string
+type ComparisonProjectJudgmentsColumn = ComparisonProjectDifferenceColumn & {
   promptLabel: string
   modelId: string | null
   modelLabel: string
@@ -251,6 +253,13 @@ const getComparisonProjectContentClause = (tableAlias: string, contentVariants: 
           return getContentVariantClause(tableAlias, contentVariant)
         })
         .join(' OR ')})`
+}
+
+const getRequestedComparisonProjectDifferenceFilter = (params: {
+  differenceFilter?: ComparisonProjectDifferenceFilter
+  showOnlyModelDifferences?: boolean
+}) => {
+  return params.differenceFilter ?? (params.showOnlyModelDifferences ? 'llm-vs-llm' : 'all')
 }
 
 const getComparisonProjectRecordValue = (row: ComparisonProjectRecordRow) => {
@@ -1353,42 +1362,6 @@ const getHasAllRequiredColumns = (
   })
 }
 
-const getComparisonProjectHasModelDifference = (rows: ComparisonProjectLlmRow[]) => {
-  const answersByPromptId = rows.reduce<Map<string, Set<string>>>((rowMap, row) => {
-    const normalizedAnswer = getNormalizedJudgmentAnswerKey(row)
-
-    if (!normalizedAnswer) {
-      return rowMap
-    }
-
-    const currentAnswers = rowMap.get(row.promptId) ?? new Set<string>()
-    currentAnswers.add(normalizedAnswer)
-    rowMap.set(row.promptId, currentAnswers)
-    return rowMap
-  }, new Map<string, Set<string>>())
-
-  return Array.from(answersByPromptId.values()).some((answers) => {
-    return answers.size > 1
-  })
-}
-
-const getComparisonProjectHasSummaryDifference = (
-  cellMap: Record<string, string | null> | undefined,
-  requiredColumnIds: Set<string>,
-) => {
-  const answers = Array.from(requiredColumnIds).reduce<Set<string>>((answerSet, columnId) => {
-    const normalizedValue = cellMap?.[columnId]?.trim().toLowerCase() ?? ''
-
-    if (normalizedValue !== '') {
-      answerSet.add(normalizedValue)
-    }
-
-    return answerSet
-  }, new Set<string>())
-
-  return answers.size > 1
-}
-
 const getComparisonProjectLlmRows = async (scope: ComparisonProjectScope, articleIds: string[]) => {
   const promptIds = scope.prompts.map((prompt) => {
     return prompt.id
@@ -1637,7 +1610,7 @@ const getComparisonProjectJudgmentsPage = async (
   limit: number,
   hideSparseRows: boolean,
   showOnlyFullyAnsweredPrompts: boolean,
-  showOnlyModelDifferences: boolean,
+  differenceFilter: ComparisonProjectDifferenceFilter,
 ) => {
   if (scope.prompts.length === 0 || scope.columns.length === 0) {
     return {data: [], totalCount: 0, page: 1, limit, totalPages: 0}
@@ -1679,9 +1652,11 @@ const getComparisonProjectJudgmentsPage = async (
   const requiredLlmColumnIds = getComparisonProjectRequiredColumnIds(scope, 'llm')
   const requiredHumanColumnIds = getComparisonProjectRequiredColumnIds(scope, 'human')
   const requiredColumnIds = new Set([...requiredLlmColumnIds, ...requiredHumanColumnIds])
+  const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(differenceFilter, scope.columns)
   const filteredArticles = scopedArticles.filter((article) => {
     const articleLlmRows = llmRowsByArticle.get(article.id) ?? []
     const articleHumanRows = humanRowsByArticle.get(article.id) ?? []
+    const articleCells = {...(llmCellsByArticle[article.id] ?? {}), ...(humanCellsByArticle[article.id] ?? {})}
     const hasArticleData = articleLlmRows.length > 0 || articleHumanRows.length > 0
     const answeredPromptIds = getComparisonProjectAnsweredPromptIds(articleLlmRows, articleHumanRows)
     const answeredColumnCount = getComparisonProjectAnsweredColumnCount(
@@ -1691,15 +1666,17 @@ const getComparisonProjectJudgmentsPage = async (
     )
     const hasAllLlmColumns = getHasAllRequiredColumns(llmCellsByArticle[article.id], requiredLlmColumnIds)
     const hasAllHumanColumns = getHasAllRequiredColumns(humanCellsByArticle[article.id], requiredHumanColumnIds)
-    const hasModelDifference = getIsSummaryMode(scope)
-      ? getComparisonProjectHasSummaryDifference(llmCellsByArticle[article.id], requiredLlmColumnIds)
-      : getComparisonProjectHasModelDifference(articleLlmRows)
+    const passesDifferenceFilter = getComparisonProjectHasDifferenceFilterMatch(
+      articleCells,
+      scope.columns,
+      normalizedDifferenceFilter,
+    )
 
     return (
       hasArticleData
       && (!hideSparseRows || (getIsSummaryMode(scope) ? answeredColumnCount >= 2 : answeredPromptIds.size >= 2))
       && (!showOnlyFullyAnsweredPrompts || (hasAllLlmColumns && hasAllHumanColumns))
-      && (!showOnlyModelDifferences || hasModelDifference)
+      && passesDifferenceFilter
     )
   })
   const totalCount = filteredArticles.length
@@ -2284,13 +2261,17 @@ export const comparisonProjectsRoutes = new Elysia()
       const parsedLimit = Number.parseInt(body.limit, 10)
       const page = Number.isNaN(parsedPage) ? 1 : parsedPage
       const limit = Number.isNaN(parsedLimit) ? 50 : Math.min(Math.max(parsedLimit, 1), 100)
+      const differenceFilter = getRequestedComparisonProjectDifferenceFilter({
+        differenceFilter: body.differenceFilter,
+        showOnlyModelDifferences: body.showOnlyModelDifferences,
+      })
       const judgmentsPage = await getComparisonProjectJudgmentsPage(
         data,
         page,
         limit,
         body.hideSparseRows ?? false,
         body.showOnlyFullyAnsweredPrompts ?? false,
-        body.showOnlyModelDifferences ?? false,
+        differenceFilter,
       )
 
       return {data: judgmentsPage}
@@ -2301,6 +2282,14 @@ export const comparisonProjectsRoutes = new Elysia()
         limit: t.String(),
         hideSparseRows: t.Optional(t.Boolean()),
         showOnlyFullyAnsweredPrompts: t.Optional(t.Boolean()),
+        differenceFilter: t.Optional(
+          t.Union([
+            t.Literal('all'),
+            t.Literal('human-vs-llm'),
+            t.Literal('llm-vs-llm'),
+            t.Literal('any-disagreement'),
+          ]),
+        ),
         showOnlyModelDifferences: t.Optional(t.Boolean()),
       }),
     },

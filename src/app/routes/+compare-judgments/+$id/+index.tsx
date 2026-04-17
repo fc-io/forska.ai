@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
-import {createMemo, createSignal, For, Show} from 'solid-js'
+import {createEffect, createMemo, createSignal, For, Show} from 'solid-js'
 
 import {ComparisonProjectJudgmentsTable} from '../../../../components/main/comparisonProjectJudgmentsTable/comparisonProjectJudgmentsTable.tsx'
 import {Button} from '../../../../components/ui/button'
@@ -9,6 +9,12 @@ import {
   fetchComparisonProjectJudgmentsMetadata,
   fetchComparisonProjectJudgmentsPage,
 } from '../../../../services/comparisonProjectsService'
+import {
+  type ComparisonProjectDifferenceFilter,
+  getAvailableComparisonProjectDifferenceFilters,
+  getComparisonProjectDifferenceFilterLabel,
+  getComparisonProjectHasDifferenceFilterMatch,
+} from '../../../../utils/comparisonProjectDifferenceFilter.ts'
 
 const pageLimitOptions = [25, 50, 100]
 
@@ -80,33 +86,6 @@ const getHasAllShownColumnsAnswered = (cells: Record<string, string | null>, col
   })
 }
 
-const normalizeAnswerValue = (value: string | null) => {
-  return value?.trim().toLowerCase() ?? ''
-}
-
-const getHasModelDifferences = (
-  cells: Record<string, string | null>,
-  columns: Array<{id: string; kind: 'llm' | 'human'; promptId: string}>,
-) => {
-  const llmAnswersByPrompt = columns.reduce<Record<string, string[]>>((answerMap, column) => {
-    if (column.kind !== 'llm') {
-      return answerMap
-    }
-
-    const normalizedAnswer = normalizeAnswerValue(cells[column.id] ?? null)
-
-    if (!normalizedAnswer) {
-      return answerMap
-    }
-
-    return {...answerMap, [column.promptId]: [...(answerMap[column.promptId] ?? []), normalizedAnswer]}
-  }, {})
-
-  return Object.values(llmAnswersByPrompt).some((answers) => {
-    return new Set(answers).size > 1
-  })
-}
-
 const getOrderedJudgmentColumns = (
   columns: ComparisonProjectJudgmentsColumn[],
   prompts: Array<{id: string; order: number}>,
@@ -150,7 +129,7 @@ const CompareProjectJudgmentsPage = () => {
   const [pageLimit, setPageLimit] = createSignal(50)
   const [hideSparseRows, setHideSparseRows] = createSignal(false)
   const [showOnlyFullyAnsweredPrompts, setShowOnlyFullyAnsweredPrompts] = createSignal(false)
-  const [showOnlyModelDifferences, setShowOnlyModelDifferences] = createSignal(false)
+  const [differenceFilter, setDifferenceFilter] = createSignal<ComparisonProjectDifferenceFilter>('all')
 
   const comparisonProjectQuery = useQuery(() => {
     return {
@@ -171,7 +150,7 @@ const CompareProjectJudgmentsPage = () => {
         pageLimit(),
         hideSparseRows(),
         showOnlyFullyAnsweredPrompts(),
-        showOnlyModelDifferences(),
+        differenceFilter(),
       ],
       queryFn: () => {
         return fetchComparisonProjectJudgmentsPage(
@@ -180,7 +159,7 @@ const CompareProjectJudgmentsPage = () => {
           pageLimit(),
           hideSparseRows(),
           showOnlyFullyAnsweredPrompts(),
-          showOnlyModelDifferences(),
+          differenceFilter(),
         )
       },
       refetchOnWindowFocus: false,
@@ -204,6 +183,22 @@ const CompareProjectJudgmentsPage = () => {
 
     return Boolean(comparisonProject?.compareWithHumans && comparisonProject.humanJudgmentMode === 'summary')
   })
+  const differenceFilterOptions = createMemo(() => {
+    return getAvailableComparisonProjectDifferenceFilters(orderedColumns()).map((value) => {
+      return {label: getComparisonProjectDifferenceFilterLabel(value), value}
+    })
+  })
+
+  createEffect(() => {
+    const availableFilters = differenceFilterOptions().map((option) => {
+      return option.value
+    })
+
+    if (!availableFilters.includes(differenceFilter())) {
+      setDifferenceFilter('all')
+    }
+  })
+
   const filteredRows = createMemo(() => {
     const rows = judgmentsPageQuery.data?.data ?? []
     const columns = orderedColumns()
@@ -217,15 +212,19 @@ const CompareProjectJudgmentsPage = () => {
       const passesSparseRowsFilter = !hideSparseRows() || answeredComparableCount >= 2
       const passesFullyAnsweredFilter =
         !showOnlyFullyAnsweredPrompts() || getHasAllShownColumnsAnswered(row.cells, columns)
-      const passesModelDifferenceFilter = !showOnlyModelDifferences() || getHasModelDifferences(row.cells, columns)
+      const passesDifferenceFilter = getComparisonProjectHasDifferenceFilterMatch(
+        row.cells,
+        columns,
+        differenceFilter(),
+      )
 
       return configuredComparableCount === 0
         ? false
-        : passesSparseRowsFilter && passesFullyAnsweredFilter && passesModelDifferenceFilter
+        : passesSparseRowsFilter && passesFullyAnsweredFilter && passesDifferenceFilter
     })
   })
   const hasRowFilters = createMemo(() => {
-    return hideSparseRows() || showOnlyFullyAnsweredPrompts() || showOnlyModelDifferences()
+    return hideSparseRows() || showOnlyFullyAnsweredPrompts() || differenceFilter() !== 'all'
   })
 
   return (
@@ -338,17 +337,25 @@ const CompareProjectJudgmentsPage = () => {
                       />
                       <span>Show only rows where all shown columns are answered</span>
                     </label>
-                    <label class="flex items-center gap-2 text-sm text-gray-600">
-                      <input
-                        type="checkbox"
-                        checked={showOnlyModelDifferences()}
-                        onChange={(event) => {
-                          setShowOnlyModelDifferences(event.currentTarget.checked)
-                          setCurrentPage(1)
-                        }}
-                      />
-                      <span>Show only rows with LLM differences</span>
-                    </label>
+                    <Show when={differenceFilterOptions().length > 1}>
+                      <label class="flex items-center gap-2 text-sm text-gray-600">
+                        <span>Difference filter</span>
+                        <select
+                          value={differenceFilter()}
+                          class="rounded-md border border-gray-300 bg-white px-2 py-1 text-sm"
+                          onChange={(event) => {
+                            setDifferenceFilter(event.currentTarget.value as ComparisonProjectDifferenceFilter)
+                            setCurrentPage(1)
+                          }}
+                        >
+                          <For each={differenceFilterOptions()}>
+                            {(option) => {
+                              return <option value={option.value}>{option.label}</option>
+                            }}
+                          </For>
+                        </select>
+                      </label>
+                    </Show>
                     <label class="flex items-center gap-2 text-sm text-gray-600">
                       <span>Rows</span>
                       <select

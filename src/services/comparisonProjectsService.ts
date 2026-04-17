@@ -1,4 +1,8 @@
 import type {HumanJudgmentMode, ProjectPromptCriteriaDisposition} from '../db/schemaTypes.ts'
+import type {
+  ComparisonProjectDifferenceColumn,
+  ComparisonProjectDifferenceFilter,
+} from '../utils/comparisonProjectDifferenceFilter.ts'
 import {apiClient} from './apiClient.ts'
 
 export type CreateComparisonProjectInput = {
@@ -94,10 +98,7 @@ export type UpdateComparisonProjectInput = {
   promptSelections: Array<{promptId: string; order: number}>
 }
 
-export type ComparisonProjectJudgmentsColumn = {
-  id: string
-  kind: 'llm' | 'human'
-  promptId: string
+export type ComparisonProjectJudgmentsColumn = ComparisonProjectDifferenceColumn & {
   promptLabel: string
   modelId: string | null
   modelLabel: string
@@ -232,14 +233,14 @@ export const fetchComparisonProjectJudgmentsPage = async (
   limit: number,
   hideSparseRows?: boolean,
   showOnlyFullyAnsweredPrompts?: boolean,
-  showOnlyModelDifferences?: boolean,
+  differenceFilter?: ComparisonProjectDifferenceFilter,
 ) => {
   const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).judgments.post({
     page: String(page),
     limit: String(limit),
     hideSparseRows,
     showOnlyFullyAnsweredPrompts,
-    showOnlyModelDifferences,
+    differenceFilter,
   })
 
   return getResponseData<ComparisonProjectJudgmentsPage>(response, 'Failed to fetch comparison project judgments')
