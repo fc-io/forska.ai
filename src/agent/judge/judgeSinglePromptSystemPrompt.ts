@@ -15,6 +15,8 @@ Your response must be valid JSON with exactly these keys:
 
 Quotes rules:
 - Quotes MUST be exact substrings copied verbatim from the provided text.
+- Prefer the shortest exact supporting substrings over long passages.
+- If only long quotes are available, return fewer quotes or an empty quotes array instead of long passages.
 - Quotes may come only from article_title, article_summary, or article_fulltext.
 - Never quote the question, inclusion criteria, exclusion criteria, or any instructions.
 - Do not add surrounding quotation marks unless they appear in the source text.

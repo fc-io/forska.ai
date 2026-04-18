@@ -218,7 +218,7 @@ export type ProviderInvokeInput = {
   runtimeCredentials: ProviderRuntimeCredentials
 }
 
-export type ProviderInvocationResult = {text: string; usage: ProviderUsageSnapshot}
+export type ProviderInvocationResult = {stopReason?: string | null; text: string; usage: ProviderUsageSnapshot}
 
 export type ProviderAdapter = {
   addManualModel?: (input: ProviderManualModelInput) => Promise<ProviderListedModel>

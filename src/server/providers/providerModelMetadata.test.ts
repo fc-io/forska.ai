@@ -5,6 +5,7 @@ import {
   getPersistedProviderModelMetadata,
   getProviderModelMetadataContextLength,
   getProviderModelMetadataOptions,
+  getProviderModelMetadataPromptTokenLimit,
   getProviderModelMetadataReasoningEfforts,
   getProviderModelMetadataSource,
   getProviderModelMetadataSupportedOptions,
@@ -180,4 +181,30 @@ test('persisted provider model metadata keeps generic model options', () => {
   })
 
   expect(getProviderModelMetadataOptions(metadata)).toEqual({thinking: 'enabled'})
+})
+
+test('prompt token limit prefers explicit input window over subtracting completion reserve', () => {
+  const metadata = {
+    discovery: {
+      capabilities: {reasoningEfforts: [], supportedOptions: {thinking: false}},
+      contextWindow: {inputTokens: 200000, outputTokens: 8000, totalTokens: 200000},
+      identity: {
+        displayName: 'claude-opus-4-7',
+        modelName: 'claude-opus-4-7',
+        remoteModelId: 'claude-opus-4-7',
+        variant: null,
+        version: 'max',
+      },
+      providerKind: 'anthropic',
+      runtime: null,
+      source: 'provider',
+    },
+    options: {},
+  }
+
+  expect(getProviderModelMetadataPromptTokenLimit(metadata, 4000)).toBe(200000)
+})
+
+test('prompt token limit falls back to total window minus completion reserve', () => {
+  expect(getProviderModelMetadataPromptTokenLimit({context_length: 32768}, 4000)).toBe(28768)
 })

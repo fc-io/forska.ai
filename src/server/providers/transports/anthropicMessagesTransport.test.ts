@@ -90,12 +90,16 @@ test('omits temperature for claude-opus-4-7 requests', async () => {
   globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch
   fetchMock.mockImplementationOnce(async (_input: RequestInfo | URL, _init?: RequestInit) => {
     return new Response(
-      JSON.stringify({content: [{text: 'Hello', type: 'text'}], usage: {input_tokens: 1, output_tokens: 1}}),
+      JSON.stringify({
+        content: [{text: 'Hello', type: 'text'}],
+        stop_reason: 'max_tokens',
+        usage: {input_tokens: 1, output_tokens: 1},
+      }),
       {headers: {'content-type': 'application/json'}, status: 200},
     )
   })
 
-  await invokeAnthropicMessagesModel({
+  const result = await invokeAnthropicMessagesModel({
     apiKey: 'test-key',
     baseURL: 'https://api.anthropic.com/v1',
     maxCompletionTokens: 32,
@@ -107,6 +111,7 @@ test('omits temperature for claude-opus-4-7 requests', async () => {
     version: null,
   })
 
+  expect(result.stopReason).toBe('max_tokens')
   expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({method: 'POST'})
   expect(getFirstRequestBody()).toEqual({
     max_tokens: 32,

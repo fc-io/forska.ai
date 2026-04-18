@@ -24,7 +24,7 @@ test('formatFirstJudgeRequestLog serializes first-request logs as JSON with prev
     promptId: 'prompt-1',
     baseURL: 'http://localhost:3000',
     modelName: 'Qwen/Qwen3.5-27B',
-    requestConfig: {temperature: 0.1, maxCompletionTokens: 2000},
+    requestConfig: {temperature: 0.1, maxCompletionTokens: 4000},
     systemPromptPreview: {text: 'You are a helpful deep research assistant.', originalLength: 41, truncated: false},
     userPromptPreview: {
       text: '## article_title\n\nNote: Between <DANGEROUS_TEXT_START>',
@@ -37,7 +37,7 @@ test('formatFirstJudgeRequestLog serializes first-request logs as JSON with prev
 
   expect(parsed.normalizedModelName).toBe('Qwen/Qwen3.5-27B')
   expect(parsed.request.temperature).toBe(0.1)
-  expect(parsed.request.max_completion_tokens).toBe(2000)
+  expect(parsed.request.max_completion_tokens).toBe(4000)
   expect(parsed.request.messages.system).toBe('You are a helpful deep research assistant.')
   expect(parsed.request.messages.user).toContain('<DANGEROUS_TEXT_START>')
   expect(parsed.request.preview.systemOriginalLength).toBe(41)

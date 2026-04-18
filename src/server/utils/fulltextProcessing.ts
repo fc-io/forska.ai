@@ -58,16 +58,16 @@ const CHARS_PER_TOKEN = 4
 
 /**
  * Reserved tokens for various parts of the prompt.
- * These values leave room for the title, summary, question, and response.
+ * These values leave room for the title, summary, question, and system prompt.
  */
 const RESERVED_FOR_PROMPT = 2000 // title, summary, question, system prompt
-const RESERVED_FOR_RESPONSE = 2000 // max_completion_tokens is 2000 in judge.ts
 
 /**
  * Default model context window (conservative estimate).
  * Most modern models have 32K+ context, but we use a safe default.
  */
 const DEFAULT_MODEL_CONTEXT = 32768
+const DEFAULT_PROMPT_TOKEN_LIMIT = DEFAULT_MODEL_CONTEXT - RESERVED_FOR_PROMPT
 
 export type TokenBudgetResult = {withinBudget: boolean; tokenCount: number; maxTokens: number}
 
@@ -75,14 +75,14 @@ export type TokenBudgetResult = {withinBudget: boolean; tokenCount: number; maxT
  * Check if fulltext fits within the token budget.
  *
  * @param fullText - The fulltext content to check
- * @param modelContext - The model's context window size (default: 32768)
+ * @param promptTokenLimit - The prompt-token budget available for the request
  * @returns Result indicating whether content fits and token counts
  */
 export const checkFulltextTokenBudget = (
   fullText: string,
-  modelContext: number = DEFAULT_MODEL_CONTEXT,
+  promptTokenLimit: number = DEFAULT_PROMPT_TOKEN_LIMIT,
 ): TokenBudgetResult => {
-  const maxFulltextTokens = modelContext - RESERVED_FOR_PROMPT - RESERVED_FOR_RESPONSE
+  const maxFulltextTokens = promptTokenLimit - RESERVED_FOR_PROMPT
 
   // Estimate token count (conservative: 4 chars per token)
   const estimatedTokens = Math.ceil(fullText.length / CHARS_PER_TOKEN)
@@ -99,7 +99,7 @@ export const checkFulltextTokenBudget = (
  * @param options - Processing options
  * @returns Processed result with status
  */
-export type ProcessFulltextOptions = {stripImages: boolean; modelContext?: number}
+export type ProcessFulltextOptions = {promptTokenLimit?: number; stripImages: boolean}
 
 export type ProcessFulltextResult = {
   processedText: string
@@ -113,7 +113,7 @@ export const processFulltextForLLM = (fullText: string, options: ProcessFulltext
   const processedText = options.stripImages ? stripMarkdownImages(fullText) : fullText
 
   // Step 2: Check token budget
-  const budgetResult = checkFulltextTokenBudget(processedText, options.modelContext)
+  const budgetResult = checkFulltextTokenBudget(processedText, options.promptTokenLimit)
 
   return {
     processedText,

@@ -266,7 +266,7 @@ const getSinglePromptEvidenceOutputSchema = (): unknown => {
 // How many times we should ask the model to retry if the response is invalid
 const MAX_RETRIES = 2
 
-const MAX_COMPLETION_TOKENS = 2000
+export const MAX_COMPLETION_TOKENS = 4000
 
 const CHARS_PER_TOKEN = 4
 
@@ -300,7 +300,7 @@ ${invalidBlock.join('\n')}
 Here is your previous answer:
 ${lastResponse}
 
-Please try again. Your quotes MUST be copied verbatim from the provided text (or return an empty array). Your quotes may come only from the article or record text sections, never from the question, inclusion criteria, exclusion criteria, or any instructions. Do not add surrounding quotation marks unless they appear in the source text. Do not shorten quotes with ellipses. Do not include wrapper markers in quotes. If the reasoning depends on the question or criteria text but the source text has no supporting quote, return an empty array. Respond ONLY with valid JSON matching the schema.`
+Please try again. Your quotes MUST be copied verbatim from the provided text (or return an empty array). Prefer the shortest exact supporting substrings over long passages. If only long quotes are available, return fewer quotes or an empty array instead of long passages. Your quotes may come only from the article or record text sections, never from the question, inclusion criteria, exclusion criteria, or any instructions. Do not add surrounding quotation marks unless they appear in the source text. Do not shorten quotes with ellipses. Do not include wrapper markers in quotes. If the reasoning depends on the question or criteria text but the source text has no supporting quote, return an empty array. Respond ONLY with valid JSON matching the schema.`
 }
 
 type SinglePromptJudgmentQuoteValidationResult =
@@ -419,6 +419,7 @@ type SinglePromptInput = {
 }
 
 type GeneratedPromptResponse = {
+  stopReason?: string | null
   text: string
   usage: {promptTokens: number; completionTokens: number; totalTokens: number}
   baseURL: string
@@ -664,6 +665,20 @@ const getRequestBaseURL = ({
   return error instanceof ConnectionError ? error.baseURL : (currentResponse?.baseURL ?? baseURL)
 }
 
+export const getStopReasonAdjustedErrorMessage = ({
+  errorMessage,
+  stopReason,
+}: {
+  errorMessage: string
+  stopReason?: string | null
+}): string => {
+  const isJsonParseFailure = errorMessage.startsWith('JSON Parse error:')
+
+  return stopReason === 'max_tokens' && isJsonParseFailure
+    ? `${errorMessage} (provider stop_reason=max_tokens; response likely truncated at output cap)`
+    : errorMessage
+}
+
 const dedupeStrings = (items: string[]): string[] => {
   const seen = new Set<string>()
   return items.filter((item) => {
@@ -675,17 +690,8 @@ const dedupeStrings = (items: string[]): string[] => {
   })
 }
 
-const getMaxUserPromptChars = ({
-  modelContext,
-  systemPrompt,
-  maxCompletionTokens,
-}: {
-  modelContext: number
-  systemPrompt: string
-  maxCompletionTokens: number
-}): number => {
-  const maxPromptTokens = Math.max(0, modelContext - maxCompletionTokens)
-  const maxPromptChars = maxPromptTokens * CHARS_PER_TOKEN
+const getMaxUserPromptChars = ({modelContext, systemPrompt}: {modelContext: number; systemPrompt: string}): number => {
+  const maxPromptChars = modelContext * CHARS_PER_TOKEN
   return Math.max(0, maxPromptChars - systemPrompt.length)
 }
 
@@ -759,7 +765,7 @@ const buildChunkedFinalUserPrompt = ({
     return `- ${JSON.stringify(q)}`
   })
 
-  return `## Question\n\n${prompt.originalText}\n\noutput_type: ${outputType}\n\n## Evidence Facts\n${factsBlock.join('\n')}\n\n## Evidence Quotes\n${quotesBlock.join('\n')}\n\nRules:\n- Use ONLY the evidence above.\n- In your "quotes" field, copy up to 3 entries EXACTLY from Evidence Quotes (or return []).\n- Do not add surrounding quotation marks unless they appear in the source text.\n- Do not shorten quotes with ellipses.\n- Do not include wrapper markers in quotes.\n- Respond ONLY with valid JSON matching the schema.`
+  return `## Question\n\n${prompt.originalText}\n\noutput_type: ${outputType}\n\n## Evidence Facts\n${factsBlock.join('\n')}\n\n## Evidence Quotes\n${quotesBlock.join('\n')}\n\nRules:\n- Use ONLY the evidence above.\n- In your "quotes" field, copy up to 3 entries EXACTLY from Evidence Quotes (or return []).\n- Prefer the shortest exact entries over long passages.\n- If only long entries are available, return fewer quotes or [] instead of long passages.\n- Do not add surrounding quotation marks unless they appear in the source text.\n- Do not shorten quotes with ellipses.\n- Do not include wrapper markers in quotes.\n- Respond ONLY with valid JSON matching the schema.`
 }
 
 const fitChunkedFinalPromptToBudget = ({
@@ -1044,6 +1050,10 @@ export const judgeSinglePrompt = async ({
             sanitizedResponse = parseAttempt.sanitizedResponse
           }
         }
+        const adjustedErrorMessage = getStopReasonAdjustedErrorMessage({
+          errorMessage,
+          stopReason: currentResponse?.stopReason,
+        })
 
         tokenUse.push({
           articleId: article.id,
@@ -1055,7 +1065,7 @@ export const judgeSinglePrompt = async ({
           completionTokens: usage.completionTokens,
           totalTokens: usage.totalTokens,
           outcome: 'failure',
-          error: errorMessage,
+          error: adjustedErrorMessage,
           sanitizationAttempted,
           sanitizedError,
           sanitizedResponse,
@@ -1068,11 +1078,11 @@ export const judgeSinglePrompt = async ({
         lastResponse = responseText
 
         if (attempts < MAX_RETRIES) {
-          userPrompt = buildRetryPrompt(basePrompt, errorMessage, lastResponse)
+          userPrompt = buildRetryPrompt(basePrompt, adjustedErrorMessage, lastResponse)
         } else {
           abortCount += 1
-          const failure = parseConnectionFailureMessage(errorMessage)
-          const outageMessage = failure ? formatConnectionOutageMessage({failure}) : errorMessage
+          const failure = parseConnectionFailureMessage(adjustedErrorMessage)
+          const outageMessage = failure ? formatConnectionOutageMessage({failure}) : adjustedErrorMessage
           console.error(`${article.id} | Prompt ${prompt.id} | Aborting request. ${outageMessage}`)
         }
       }
@@ -1080,11 +1090,7 @@ export const judgeSinglePrompt = async ({
   } else {
     const evidenceSystemPrompt = getSinglePromptEvidenceSystemPromptForArticle(article)
     const chunkTarget = getChunkingTarget({article, contentSettings})
-    const maxEvidenceUserPromptChars = getMaxUserPromptChars({
-      modelContext,
-      systemPrompt: evidenceSystemPrompt,
-      maxCompletionTokens: MAX_COMPLETION_TOKENS,
-    })
+    const maxEvidenceUserPromptChars = getMaxUserPromptChars({modelContext, systemPrompt: evidenceSystemPrompt})
 
     const getInclusion = (includeTitle: boolean, includeSummary: boolean) => {
       const overhead = buildEvidenceUserPrompt({
@@ -1263,6 +1269,10 @@ export const judgeSinglePrompt = async ({
                   sanitizedResponse = parseAttempt.sanitizedResponse
                 }
               }
+              const adjustedErrorMessage = getStopReasonAdjustedErrorMessage({
+                errorMessage,
+                stopReason: currentResponse?.stopReason,
+              })
 
               tokenUse.push({
                 articleId: article.id,
@@ -1274,7 +1284,7 @@ export const judgeSinglePrompt = async ({
                 completionTokens: usage.completionTokens,
                 totalTokens: usage.totalTokens,
                 outcome: 'failure',
-                error: errorMessage,
+                error: adjustedErrorMessage,
                 sanitizationAttempted,
                 sanitizedError,
                 sanitizedResponse,
@@ -1287,10 +1297,10 @@ export const judgeSinglePrompt = async ({
               lastResponse = responseText
 
               if (attempts < MAX_RETRIES) {
-                userPrompt = buildRetryPrompt(baseEvidencePrompt, errorMessage, lastResponse)
+                userPrompt = buildRetryPrompt(baseEvidencePrompt, adjustedErrorMessage, lastResponse)
               } else {
                 abortCount += 1
-                console.error(`${article.id} | Prompt ${prompt.id} | Aborting evidence chunk: ${errorMessage}`)
+                console.error(`${article.id} | Prompt ${prompt.id} | Aborting evidence chunk: ${adjustedErrorMessage}`)
               }
 
               if (connectionFailure) {
@@ -1532,6 +1542,10 @@ export const judgeSinglePrompt = async ({
               sanitizedResponse = parseAttempt.sanitizedResponse
             }
           }
+          const adjustedErrorMessage = getStopReasonAdjustedErrorMessage({
+            errorMessage,
+            stopReason: currentResponse?.stopReason,
+          })
 
           tokenUse.push({
             articleId: article.id,
@@ -1543,7 +1557,7 @@ export const judgeSinglePrompt = async ({
             completionTokens: usage.completionTokens,
             totalTokens: usage.totalTokens,
             outcome: 'failure',
-            error: errorMessage,
+            error: adjustedErrorMessage,
             sanitizationAttempted,
             sanitizedError,
             sanitizedResponse,
@@ -1553,7 +1567,7 @@ export const judgeSinglePrompt = async ({
           })
           errorCount += 1
 
-          lastError = errorMessage
+          lastError = adjustedErrorMessage
           lastResponse = responseText
 
           if (attempts < MAX_RETRIES) {

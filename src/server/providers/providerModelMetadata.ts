@@ -79,6 +79,8 @@ const outputWindowKeys = [
   'max_completion_tokens',
 ] as const
 
+const inputWindowKeys = ['maxInputTokens', 'max_input_tokens', 'inputTokenLimit', 'input_token_limit'] as const
+
 const modelNameKeys = ['model', 'modelName', 'model_name', 'modelPath', 'model_path'] as const
 const servedModelNameKeys = ['servedModelName', 'served_model_name'] as const
 const reasoningEffortKeys = ['reasoningEffort', 'reasoning_effort'] as const
@@ -145,6 +147,21 @@ const getContextWindowFromMetadata = (
       : allowScalarFallback
         ? {inputTokens: getPositiveInteger(value), outputTokens: null, totalTokens: getPositiveInteger(value)}
         : {inputTokens: null, outputTokens: null, totalTokens: null}
+}
+
+const getInputTokenWindowFromMetadata = (value: unknown): number | null => {
+  const record = getJsonRecord(value)
+  const arrayValue = Array.isArray(value) ? value : null
+
+  return arrayValue
+    ? arrayValue.reduce<number | null>((resolved, entry) => {
+        return resolved ?? getInputTokenWindowFromMetadata(entry)
+      }, null)
+    : record
+      ? inputWindowKeys.reduce<number | null>((resolved, key) => {
+          return resolved ?? getPositiveInteger(record[key]) ?? getInputTokenWindowFromMetadata(record[key])
+        }, null)
+      : null
 }
 
 const getReasoningEffortsFromEntry = (value: unknown): string[] => {
@@ -278,6 +295,20 @@ export const getProviderModelMetadataContextLength = (value: unknown): number | 
     getPositiveInteger(contextWindow?.totalTokens) ?? getPositiveInteger(contextWindow?.inputTokens)
 
   return discoveryContextLength ?? getContextWindowFromMetadata(value).totalTokens
+}
+
+export const getProviderModelMetadataPromptTokenLimit = (
+  value: unknown,
+  reservedCompletionTokens: number,
+): number | null => {
+  const metadataRecord = getJsonRecord(value)
+  const discovery = getJsonRecord(metadataRecord?.discovery)
+  const contextWindow = getJsonRecord(discovery?.contextWindow)
+  const normalizedContextWindow = getContextWindowFromMetadata(value)
+  const inputTokens = getPositiveInteger(contextWindow?.inputTokens) ?? getInputTokenWindowFromMetadata(value)
+  const totalTokens = getPositiveInteger(contextWindow?.totalTokens) ?? normalizedContextWindow.totalTokens
+
+  return inputTokens ?? (totalTokens === null ? null : Math.max(0, totalTokens - Math.max(0, reservedCompletionTokens)))
 }
 
 export const getProviderModelMetadataReasoningEfforts = (value: unknown): string[] => {

@@ -1,6 +1,6 @@
 import {describe, expect, test} from 'bun:test'
 
-import {chunkArticleText, chunkPatientMarkdown} from './judgeChunking.ts'
+import {chunkArticleText, chunkPatientMarkdown, isWithinContextBudget} from './judgeChunking.ts'
 
 describe('chunkPatientMarkdown', () => {
   test('repeats prefix; does not split buckets; respects max chars', () => {
@@ -90,5 +90,15 @@ Third paragraph.
     result.chunks.forEach((chunk) => {
       expect(chunk.length).toBeLessThanOrEqual(maxChunkChars)
     })
+  })
+
+  test('uses prompt-token budget while still reporting approximate total tokens', () => {
+    const systemPrompt = 's'.repeat(4000)
+    const userPrompt = 'u'.repeat(4000)
+    const result = isWithinContextBudget({systemPrompt, userPrompt, modelContext: 2000, maxCompletionTokens: 4000})
+
+    expect(result.withinBudget).toBe(true)
+    expect(result.approxPromptTokens).toBe(2000)
+    expect(result.approxTotalTokens).toBe(6000)
   })
 })

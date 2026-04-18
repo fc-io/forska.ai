@@ -161,6 +161,7 @@ export const invokeAnthropicMessagesModel = async ({
 
   const body = (await response.json()) as {
     content?: Array<{text?: string; type?: string}>
+    stop_reason?: string | null
     usage?: {input_tokens?: number; output_tokens?: number}
   }
   const text = (body.content ?? [])
@@ -174,5 +175,9 @@ export const invokeAnthropicMessagesModel = async ({
   const promptTokens = body.usage?.input_tokens ?? 0
   const completionTokens = body.usage?.output_tokens ?? 0
 
-  return {text, usage: {completionTokens, promptTokens, totalTokens: promptTokens + completionTokens}}
+  return {
+    stopReason: body.stop_reason ?? null,
+    text,
+    usage: {completionTokens, promptTokens, totalTokens: promptTokens + completionTokens},
+  }
 }

@@ -23,7 +23,7 @@ export const isWithinContextBudget = ({
 }): {withinBudget: boolean; approxPromptTokens: number; approxTotalTokens: number} => {
   const approxPromptTokens = getApproxTokensForPrompts(systemPrompt, userPrompt)
   const approxTotalTokens = approxPromptTokens + maxCompletionTokens
-  return {withinBudget: approxTotalTokens <= modelContext, approxPromptTokens, approxTotalTokens}
+  return {withinBudget: approxPromptTokens <= modelContext, approxPromptTokens, approxTotalTokens}
 }
 
 const splitParagraphBuckets = (text: string): string[] => {

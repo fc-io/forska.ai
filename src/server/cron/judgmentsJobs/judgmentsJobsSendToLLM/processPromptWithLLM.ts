@@ -1,9 +1,9 @@
 import {Effect} from 'effect'
 
-import {judgeSinglePrompt} from '../../../../agent/judge.ts'
+import {judgeSinglePrompt, MAX_COMPLETION_TOKENS} from '../../../../agent/judge.ts'
 import {JudgmentPersistenceError} from '../../../../agent/judge/storeSinglePromptJudgment.ts'
 import type {ArticleRecord, PublicationStatus} from '../../../../db/schemaTypes.ts'
-import {getProviderModelMetadataContextLength} from '../../../providers/providerModelMetadata.ts'
+import {getProviderModelMetadataPromptTokenLimit} from '../../../providers/providerModelMetadata.ts'
 import {getAppDatabaseService} from '../../../services/appDatabaseService.ts'
 import {escapeSqlString} from '../../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../../services/getAppQueryService.ts'
@@ -72,6 +72,7 @@ const cachedArticleLookups = new Map<string, Promise<ArticleRecord | null>>()
 const cachedPromptLookups = new Map<string, Promise<PromptDefinition | null>>()
 
 const DEFAULT_MODEL_CONTEXT = 32768
+const DEFAULT_PROMPT_TOKEN_LIMIT = Math.max(0, DEFAULT_MODEL_CONTEXT - MAX_COMPLETION_TOKENS)
 const promptPreparationMaxInFlight = 16
 
 const promptPreparationWaiters: PromptPreparationWaiter[] = []
@@ -79,7 +80,7 @@ const promptPreparationWaiters: PromptPreparationWaiter[] = []
 let promptPreparationInFlight = 0
 
 const getModelContext = (metadataJson: unknown): number => {
-  return getProviderModelMetadataContextLength(metadataJson) ?? DEFAULT_MODEL_CONTEXT
+  return getProviderModelMetadataPromptTokenLimit(metadataJson, MAX_COMPLETION_TOKENS) ?? DEFAULT_PROMPT_TOKEN_LIMIT
 }
 
 const trimCachedLookups = <T>(cache: Map<string, Promise<T>>, maxSize: number): void => {
@@ -283,7 +284,7 @@ const preparePrompt = async (promptToProcess: PromptToProcess, modelContext: num
 
     const processResult = processFulltextForLLM(result.text, {
       stripImages: promptToProcess.useFulltextNoImages,
-      modelContext,
+      promptTokenLimit: modelContext,
     })
 
     if (!processResult.withinBudget) {
