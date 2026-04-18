@@ -6,13 +6,13 @@ import {createEffect, createMemo, createSignal, For, Show} from 'solid-js'
 import {Button} from '../../../../components/ui/button'
 import type {HumanJudgmentMode} from '../../../../db/schemaTypes'
 import {apiClient} from '../../../../services/apiClient'
-import {ensureSelectableModelId} from '../../../../services/ensureSelectableModelId.ts'
 import {
   type ComparisonProjectEditFormData,
   fetchComparisonProjectEditFormData,
   updateComparisonProject,
   type UpdateComparisonProjectInput,
 } from '../../../../services/comparisonProjectsService'
+import {ensureSelectableModelId} from '../../../../services/ensureSelectableModelId.ts'
 import {handleApiResponse} from '../../../../services/utils/handleApiResponse'
 
 type ModelOption = {

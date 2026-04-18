@@ -429,7 +429,11 @@ export const modelsRoutes = new Elysia()
       if (provider === 'anthropic' && version) {
         const supportedEfforts = getAnthropicSupportedThinkingEfforts(modelName)
 
-        if (!supportedEfforts.some((effort) => effort === version)) {
+        if (
+          !supportedEfforts.some((effort) => {
+            return effort === version
+          })
+        ) {
           set.status = 400
           return {data: null, error: 'Unsupported Anthropic thinking level'}
         }

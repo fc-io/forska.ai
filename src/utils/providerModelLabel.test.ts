@@ -2,8 +2,8 @@ import {expect, test} from 'bun:test'
 
 import {
   appendProviderModelThinkingBadgeLabel,
-  getProviderModelThinkingBadgeValue,
   getProviderModelThinkingBadgeLabel,
+  getProviderModelThinkingBadgeValue,
   stripProviderModelThinkingBadgeLabel,
 } from './providerModelLabel.ts'
 

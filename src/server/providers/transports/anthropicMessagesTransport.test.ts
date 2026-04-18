@@ -10,6 +10,12 @@ const fetchMock = mock(async (_input: RequestInfo | URL, _init?: RequestInit) =>
   })
 })
 
+const getFirstRequestBody = (): unknown => {
+  const body = fetchMock.mock.calls[0]?.[1]?.body
+
+  return typeof body === 'string' ? (JSON.parse(body) as unknown) : null
+}
+
 afterEach(() => {
   fetchMock.mockReset()
   fetchMock.mockImplementation(async (_input: RequestInfo | URL, _init?: RequestInit) => {
@@ -55,19 +61,27 @@ test('includes Anthropic error details and request id on failed message requests
     )
   })
 
-  await expect(
-    invokeAnthropicMessagesModel({
-      apiKey: 'test-key',
-      baseURL: 'https://api.anthropic.com/v1',
-      maxCompletionTokens: 2000,
-      modelName: 'claude-opus-4-7',
-      outputSchema: {type: 'object'},
-      prompt: 'Hello',
-      systemPrompt: 'Return JSON',
-      temperature: 0.2,
-      version: null,
-    }),
-  ).rejects.toThrow(
+  const error = await invokeAnthropicMessagesModel({
+    apiKey: 'test-key',
+    baseURL: 'https://api.anthropic.com/v1',
+    maxCompletionTokens: 2000,
+    modelName: 'claude-opus-4-7',
+    outputSchema: {type: 'object'},
+    prompt: 'Hello',
+    systemPrompt: 'Return JSON',
+    temperature: 0.2,
+    version: null,
+  }).then(
+    () => {
+      return null
+    },
+    (caught: unknown) => {
+      return caught
+    },
+  )
+
+  expect(error).toBeInstanceOf(Error)
+  expect(error instanceof Error ? error.message : null).toBe(
     'Anthropic request failed (400): [invalid_request_error] model claude-opus-4-7 is not available for this workspace request_id=req_123',
   )
 })
@@ -94,7 +108,7 @@ test('omits temperature for claude-opus-4-7 requests', async () => {
   })
 
   expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({method: 'POST'})
-  expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+  expect(getFirstRequestBody()).toEqual({
     max_tokens: 32,
     messages: [{content: 'Hello', role: 'user'}],
     model: 'claude-opus-4-7',
@@ -124,7 +138,7 @@ test('keeps temperature for Anthropic models that still accept it', async () => 
     version: null,
   })
 
-  expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+  expect(getFirstRequestBody()).toEqual({
     max_tokens: 32,
     messages: [{content: 'Hello', role: 'user'}],
     model: 'claude-sonnet-4-6',
@@ -155,7 +169,7 @@ test('uses adaptive thinking and effort for Anthropic effort variants', async ()
     version: 'xhigh',
   })
 
-  expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+  expect(getFirstRequestBody()).toEqual({
     max_tokens: 32,
     messages: [{content: 'Hello', role: 'user'}],
     model: 'claude-opus-4-7',

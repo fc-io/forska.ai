@@ -61,8 +61,14 @@ const getAnthropicResponseErrorMessage = async ({
   const parsedBody = (await response
     .clone()
     .json()
-    .catch(() => null)) as AnthropicErrorResponse | null
-  const fallbackText = getTrimmedValue(await response.text().catch(() => ''))
+    .catch(() => {
+      return null
+    })) as AnthropicErrorResponse | null
+  const fallbackText = getTrimmedValue(
+    await response.text().catch(() => {
+      return ''
+    }),
+  )
   const errorType = getTrimmedValue(parsedBody?.error?.type)
   const errorMessage = getTrimmedValue(parsedBody?.error?.message) ?? fallbackText
   const requestId = getTrimmedValue(response.headers.get('request-id')) ?? getTrimmedValue(parsedBody?.request_id)

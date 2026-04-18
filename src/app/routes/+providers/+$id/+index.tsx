@@ -3,10 +3,10 @@ import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {createEffect, createMemo, createSignal, For, onCleanup, Show} from 'solid-js'
 import {createStore} from 'solid-js/store'
 
+import {Button} from '../../../../components/ui/button.tsx'
 import {ensureSelectableModelId} from '../../../../services/ensureSelectableModelId.ts'
 import {getAnthropicSupportedThinkingEfforts} from '../../../../utils/anthropicThinking.ts'
 import {stripProviderModelThinkingBadgeLabel} from '../../../../utils/providerModelLabel.ts'
-import {Button} from '../../../../components/ui/button.tsx'
 import {
   getProviderModelOptions,
   getProviderModelSupportedOptions,
@@ -1261,7 +1261,7 @@ const ProviderDetailPage = () => {
                     </div>
                   </Show>
 
-                  <Show when={!isCodexConnection()}>
+                  <Show when={!isCompactVariantConnection()}>
                     <div class="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
                       <h2 class="text-lg font-semibold text-gray-900">Add Model</h2>
                       <p class="mt-1 text-sm text-gray-500">

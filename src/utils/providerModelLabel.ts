@@ -1,5 +1,3 @@
-import {type ProviderModelThinkingOption} from './providerModelOptions.ts'
-
 const thinkingSuffixPattern = /\s+\(thinking:\s*[^)]+\)$/i
 
 const getTrimmedValue = (value: string | null | undefined) => {
@@ -20,7 +18,7 @@ export const getProviderModelThinkingBadgeValue = ({
   version,
 }: {
   provider: string | null | undefined
-  thinking: ProviderModelThinkingOption | string | null | undefined
+  thinking: string | null | undefined
   version: string | null | undefined
 }) => {
   const normalizedThinking = getTrimmedValue(thinking)
@@ -33,9 +31,7 @@ export const getProviderModelThinkingBadgeValue = ({
   )
 }
 
-export const getProviderModelThinkingBadgeLabel = (
-  thinking: ProviderModelThinkingOption | string | null | undefined,
-): string | null => {
+export const getProviderModelThinkingBadgeLabel = (thinking: string | null | undefined): string | null => {
   const normalizedThinking = getTrimmedValue(thinking)
 
   return normalizedThinking ? `thinking: ${normalizedThinking}` : null
@@ -50,7 +46,7 @@ export const appendProviderModelThinkingBadgeLabel = ({
   thinking,
 }: {
   label: string
-  thinking: ProviderModelThinkingOption | string | null | undefined
+  thinking: string | null | undefined
 }): string => {
   const normalizedLabel = stripProviderModelThinkingBadgeLabel(label)
   const thinkingLabel = getProviderModelThinkingBadgeLabel(thinking)

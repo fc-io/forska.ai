@@ -1,9 +1,9 @@
 import {expect, test} from 'bun:test'
 
 import {
+  getAnthropicSupportedThinkingEfforts,
   getAnthropicThinkingConfig,
   getAnthropicThinkingEffort,
-  getAnthropicSupportedThinkingEfforts,
 } from './anthropicThinking.ts'
 
 test('detects supported Anthropic thinking efforts by model generation', () => {
