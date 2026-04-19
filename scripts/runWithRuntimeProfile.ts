@@ -18,7 +18,7 @@ type RuntimeProfileCommandConfig = {
   env: (commandOptions: RuntimeProfileCommandOptions) => Record<string, string | undefined>
 }
 
-const forwardedSignals = ['SIGINT', 'SIGTERM'] as const
+type ForwardedSignal = 'SIGINT' | 'SIGTERM'
 
 const getRuntimeProfileBaseEnv = (profileName: RuntimeProfileName) => {
   return mergeRuntimeProfileEnv({profileName})
@@ -131,8 +131,8 @@ const runWithRuntimeProfile = async () => {
     stdout: 'inherit',
   })
 
-  let forwardedSignal: (typeof forwardedSignals)[number] | null = null
-  const forwardSignal = (signal: (typeof forwardedSignals)[number]) => {
+  let forwardedSignal: ForwardedSignal | null = null
+  const forwardSignal = (signal: ForwardedSignal) => {
     if (forwardedSignal !== null) {
       return
     }

@@ -28,6 +28,7 @@ const restartDelayMs = 150
 const stackShutdownTimeoutMs = 20_000
 const forcedKillTimeoutMs = 5_000
 const healthProbeTimeoutMs = 1_500
+const parentMonitorIntervalMs = 1_000
 
 type ServerProcess = Subprocess<'inherit', 'inherit', 'inherit'>
 type DevWatcherLockMetadata = {apiPort: number; pid: number; startedAt: string; workerPort: number}
@@ -50,6 +51,9 @@ let restartTimer: ReturnType<typeof setTimeout> | null = null
 let serverProcess: ServerProcess | null = null
 let shuttingDown = false
 let attachedToExistingStack = false
+let parentMonitor: ReturnType<typeof setInterval> | null = null
+
+const parentPid = process.ppid
 
 const stackConfig = getBackgroundServerStackConfig(process.env)
 const serverStackLockPath = join(
@@ -534,12 +538,43 @@ const createWatcher = (watchedPath: string) => {
   })
 }
 
+const stopParentMonitor = () => {
+  if (parentMonitor === null) {
+    return
+  }
+
+  clearInterval(parentMonitor)
+  parentMonitor = null
+}
+
+const shouldShutdownForParentExit = () => {
+  return process.ppid !== parentPid || !isProcessAlive(parentPid)
+}
+
+const startParentMonitor = () => {
+  if (parentMonitor !== null) {
+    return
+  }
+
+  parentMonitor = setInterval(() => {
+    if (shuttingDown || !shouldShutdownForParentExit()) {
+      return
+    }
+
+    log(`parent pid=${parentPid} exited, shutting down`)
+    void shutdown()
+  }, parentMonitorIntervalMs)
+
+  parentMonitor.unref?.()
+}
+
 const shutdown = async () => {
   if (shuttingDown) {
     return
   }
 
   shuttingDown = true
+  stopParentMonitor()
 
   if (restartTimer) {
     clearTimeout(restartTimer)
@@ -558,6 +593,8 @@ process.on('SIGINT', () => {
 process.on('SIGTERM', () => {
   void shutdown()
 })
+
+startParentMonitor()
 
 watchedPaths.forEach((watchedPath) => {
   createWatcher(watchedPath)

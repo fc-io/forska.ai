@@ -26,6 +26,7 @@ const startupTimeoutMs = 20_000
 const shutdownTimeoutMs = 20_000
 const forcedKillTimeoutMs = 5_000
 const writerPollIntervalMs = 250
+const parentMonitorIntervalMs = 1_000
 
 const config = await getBackgroundServerStackConfigAsync(process.env)
 const serverStackLockPath = join(tmpdir(), 'forska-server-stack', `${config.apiPort}-${config.workerPort}.lock.json`)
@@ -124,6 +125,10 @@ const managedServerState: ManagedServerState = {
   workerProcess: null,
   workerReadyPromise: null,
 }
+
+let parentMonitor: ReturnType<typeof setInterval> | null = null
+
+const parentPid = process.ppid
 
 const getServerCommand = () => {
   return ['bun', 'run', 'src/server/index.ts']
@@ -312,12 +317,43 @@ const monitorManagedServerExit = async (role: ManagedRole, serverProcess: Server
     : ensureApiReady()
 }
 
+const stopParentMonitor = () => {
+  if (parentMonitor === null) {
+    return
+  }
+
+  clearInterval(parentMonitor)
+  parentMonitor = null
+}
+
+const shouldShutdownForParentExit = () => {
+  return process.ppid !== parentPid || !isProcessAlive(parentPid)
+}
+
+const startParentMonitor = () => {
+  if (parentMonitor !== null) {
+    return
+  }
+
+  parentMonitor = setInterval(() => {
+    if (managedServerState.shuttingDown || !shouldShutdownForParentExit()) {
+      return
+    }
+
+    console.error(`[server:stack] parent pid=${parentPid} exited; shutting down`)
+    void shutdown(0)
+  }, parentMonitorIntervalMs)
+
+  parentMonitor.unref?.()
+}
+
 const shutdown = async (exitCode = 0) => {
   if (managedServerState.shuttingDown) {
     return
   }
 
   managedServerState.shuttingDown = true
+  stopParentMonitor()
   await Promise.all([stopManagedServerProcess('api'), stopManagedServerProcess('worker')])
   await releaseServerStackLock()
   process.exit(exitCode)
@@ -330,6 +366,8 @@ process.on('SIGINT', () => {
 process.on('SIGTERM', () => {
   void shutdown(0)
 })
+
+startParentMonitor()
 
 try {
   await acquireServerStackLock()
