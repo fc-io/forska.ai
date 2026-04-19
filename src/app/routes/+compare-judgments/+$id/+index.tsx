@@ -2,7 +2,10 @@ import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
 import {createEffect, createMemo, createSignal, For, Show} from 'solid-js'
 
-import {ComparisonProjectJudgmentsTable} from '../../../../components/main/comparisonProjectJudgmentsTable/comparisonProjectJudgmentsTable.tsx'
+import {
+  ComparisonProjectJudgmentsTable,
+  type ComparisonProjectJudgmentsTableColumn,
+} from '../../../../components/main/comparisonProjectJudgmentsTable/comparisonProjectJudgmentsTable.tsx'
 import {Button} from '../../../../components/ui/button'
 import {
   type ComparisonProjectJudgmentsColumn,
@@ -118,6 +121,31 @@ const getOrderedJudgmentColumns = (
     })
 }
 
+const getHumanColumnSourceProjectId = (comparisonProject?: {
+  humanJudgmentMode: 'prompt' | 'summary'
+  summarySourceProjectId: string | null
+  sourceProjects: Array<{id: string}>
+}) => {
+  return comparisonProject?.humanJudgmentMode === 'summary'
+    ? comparisonProject.summarySourceProjectId
+    : (comparisonProject?.sourceProjects[0]?.id ?? null)
+}
+
+const getColumnSourceProjectId = (
+  column: ComparisonProjectJudgmentsColumn,
+  comparisonProject?: {
+    humanJudgmentMode: 'prompt' | 'summary'
+    summarySourceProjectId: string | null
+    sourceProjects: Array<{id: string; modelId: string}>
+  },
+) => {
+  return column.kind === 'human'
+    ? getHumanColumnSourceProjectId(comparisonProject)
+    : (comparisonProject?.sourceProjects.find((sourceProject) => {
+        return sourceProject.modelId === column.modelId
+      })?.id ?? null)
+}
+
 const CompareProjectJudgmentsPage = () => {
   const params = Route.useParams()
   const comparisonProjectId = () => {
@@ -172,10 +200,13 @@ const CompareProjectJudgmentsPage = () => {
   const canGoToNextPage = createMemo(() => {
     return currentPage() < (judgmentsPageQuery.data?.totalPages ?? 0)
   })
-  const orderedColumns = createMemo(() => {
-    return getOrderedJudgmentColumns(
-      comparisonProjectQuery.data?.columns ?? [],
-      comparisonProjectQuery.data?.prompts ?? [],
+  const orderedColumns = createMemo<ComparisonProjectJudgmentsTableColumn[]>(() => {
+    const comparisonProject = comparisonProjectQuery.data
+
+    return getOrderedJudgmentColumns(comparisonProject?.columns ?? [], comparisonProject?.prompts ?? []).map(
+      (column) => {
+        return {...column, sourceProjectId: getColumnSourceProjectId(column, comparisonProject)}
+      },
     )
   })
   const isSummaryMode = createMemo(() => {

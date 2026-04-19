@@ -7,8 +7,10 @@ import type {
   ComparisonProjectJudgmentsRow,
 } from '../../../services/comparisonProjectsService.ts'
 
+export type ComparisonProjectJudgmentsTableColumn = ComparisonProjectJudgmentsColumn & {sourceProjectId: string | null}
+
 type ComparisonProjectJudgmentsTableProps = {
-  columns: ComparisonProjectJudgmentsColumn[]
+  columns: ComparisonProjectJudgmentsTableColumn[]
   rows: ComparisonProjectJudgmentsRow[]
 }
 
@@ -105,13 +107,7 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                     class={`sticky left-0 z-10 w-[22rem] min-w-[22rem] max-w-[22rem] px-6 py-4 ${rowHighlightClasses.stickyCell}`}
                   >
                     <div class="space-y-2">
-                      <Link
-                        to="/articles/$id"
-                        params={{id: row.id} as never}
-                        class="font-medium text-blue-600 hover:underline"
-                      >
-                        {row.articleTitle?.trim() || 'Untitled'}
-                      </Link>
+                      <p class="font-medium text-gray-900">{row.articleTitle?.trim() || 'Untitled'}</p>
                       <Show when={articleCreatedAt}>
                         <p class="text-xs text-gray-500">Created: {articleCreatedAt}</p>
                       </Show>
@@ -126,7 +122,22 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                           class={`w-[18rem] min-w-[18rem] max-w-[18rem] px-4 py-4 text-sm text-gray-800 ${rowHighlightClasses.cell}`}
                         >
                           <Show when={cellValue} fallback={<span class="text-gray-300">-</span>}>
-                            <div class="whitespace-pre-wrap break-words leading-6">{cellValue}</div>
+                            <Show
+                              when={column.sourceProjectId}
+                              fallback={<div class="whitespace-pre-wrap break-words leading-6">{cellValue}</div>}
+                            >
+                              {(sourceProjectId) => {
+                                return (
+                                  <Link
+                                    to="/projects/$id/reviews-llm/$articleId"
+                                    params={{articleId: row.id, id: sourceProjectId()} as never}
+                                    class="block whitespace-pre-wrap break-words leading-6 text-blue-600 hover:underline"
+                                  >
+                                    {cellValue}
+                                  </Link>
+                                )
+                              }}
+                            </Show>
                           </Show>
                         </td>
                       )
