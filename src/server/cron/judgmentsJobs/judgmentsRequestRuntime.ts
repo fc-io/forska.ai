@@ -481,6 +481,10 @@ const acquireWorkerSlot = async ({
   })
 }
 
+const usesSharedFallbackCapacity = (providerScope: ProviderRequestScope): boolean => {
+  return providerScope.providerUsesFamilyDefault || !providerScope.providerConnectionId
+}
+
 const tryAcquireFallbackSlot = ({
   baseURL,
   providerScope,
@@ -489,8 +493,8 @@ const tryAcquireFallbackSlot = ({
   providerScope: ProviderRequestScope
 }): SlotAcquisitionAttempt => {
   const releaseProviderRequest = acquireProviderRequestRelease(providerScope)
-  const maxInflight = getNonCodexCapacity().maxInflight
-  const canAcquireFallback = fallbackInFlight < maxInflight
+  const useSharedCapacity = usesSharedFallbackCapacity(providerScope)
+  const canAcquireFallback = useSharedCapacity ? fallbackInFlight < getNonCodexCapacity().maxInflight : true
 
   if (!releaseProviderRequest || !canAcquireFallback) {
     return releaseProviderRequest ? (releaseProviderRequest(), {type: 'waiting'}) : {type: 'waiting'}
@@ -503,13 +507,17 @@ const tryAcquireFallbackSlot = ({
     return {type: 'blocked'}
   }
 
-  fallbackInFlight += 1
+  if (useSharedCapacity) {
+    fallbackInFlight += 1
+  }
 
   return {
     slot: {
       baseURL,
       release: () => {
-        fallbackInFlight = Math.max(0, fallbackInFlight - 1)
+        if (useSharedCapacity) {
+          fallbackInFlight = Math.max(0, fallbackInFlight - 1)
+        }
         releaseProviderRequest()
         drainProviderScopedWaiters()
       },

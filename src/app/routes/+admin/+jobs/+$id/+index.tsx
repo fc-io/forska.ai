@@ -86,6 +86,10 @@ const formatRowsPerMinute = (value: number | null | undefined) => {
   return value === null || value === undefined ? 'N/A' : `${value.toLocaleString()} rows/min`
 }
 
+const formatPercent = (value: number | null | undefined) => {
+  return value === null || value === undefined ? 'N/A' : `${value}%`
+}
+
 const formatSignedRowCount = (value: number | null | undefined) => {
   const normalizedValue = Number(value ?? 0)
   return `${normalizedValue > 0 ? '+' : ''}${normalizedValue.toLocaleString()} rows`
@@ -670,6 +674,14 @@ const AdminJudgmentJobDetail = () => {
                             Live LLM calls: {data()?.requestStats?.inFlight ?? 0}
                           </p>
                         </Show>
+                        <Show when={data()?.requestStats?.dispatch}>
+                          <p class="text-xs text-sky-700 mt-1">
+                            Local active prompts: {data()?.requestStats?.dispatch?.jobActivePrompts ?? 0}
+                          </p>
+                          <p class="text-xs text-sky-700 mt-1">
+                            Local queued prompts: {data()?.requestStats?.dispatch?.jobQueuedPrompts ?? 0}
+                          </p>
+                        </Show>
                       </div>
                       <div class="bg-green-50 rounded-lg p-4">
                         <p class="text-sm text-green-600 mb-1">Judged</p>
@@ -690,7 +702,7 @@ const AdminJudgmentJobDetail = () => {
                 <Show when={data()?.requestStats}>
                   <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
                     <h2 class="text-lg font-semibold mb-4">Request Activity</h2>
-                    <div class="grid gap-4 grid-cols-2">
+                    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
                       <div class="bg-sky-50 rounded-lg p-4">
                         <p class="text-sm text-sky-600 mb-1">Active LLM Calls</p>
                         <p class="text-2xl font-bold text-sky-900">{data()?.requestStats?.inFlight ?? 0}</p>
@@ -703,6 +715,41 @@ const AdminJudgmentJobDetail = () => {
                         <p class="text-2xl font-bold text-indigo-900">{data()?.requestStats?.attempts ?? 0}</p>
                         <p class="text-xs text-indigo-600 mt-1">Total runtime request attempts, not distinct prompts</p>
                       </div>
+                      <Show when={data()?.requestStats?.dispatch}>
+                        <div class="bg-cyan-50 rounded-lg p-4">
+                          <p class="text-sm text-cyan-700 mb-1">Local Active Prompts</p>
+                          <p class="text-2xl font-bold text-cyan-900">
+                            {data()?.requestStats?.dispatch?.jobActivePrompts ?? 0}
+                          </p>
+                          <p class="text-xs text-cyan-700 mt-1">
+                            This job&apos;s prompts currently occupying provider-local active slots on this server
+                          </p>
+                        </div>
+                        <div class="bg-teal-50 rounded-lg p-4">
+                          <p class="text-sm text-teal-700 mb-1">Local Queued Prompts</p>
+                          <p class="text-2xl font-bold text-teal-900">
+                            {data()?.requestStats?.dispatch?.jobQueuedPrompts ?? 0}
+                          </p>
+                          <p class="text-xs text-teal-700 mt-1">
+                            This job&apos;s prompts already claimed locally and waiting for a provider slot
+                          </p>
+                        </div>
+                        <div class="bg-violet-50 rounded-lg p-4">
+                          <p class="text-sm text-violet-700 mb-1">Provider Prefetch Fill</p>
+                          <p class="text-2xl font-bold text-violet-900">
+                            {formatPercent(data()?.requestStats?.dispatch?.providerPrefetchFillPct)}
+                          </p>
+                          <p class="text-xs text-violet-700 mt-1">
+                            Shared connection queue: {data()?.requestStats?.dispatch?.providerQueuedPrompts ?? 0}/
+                            {data()?.requestStats?.dispatch?.providerQueueLimit ?? 0}
+                          </p>
+                          <p class="text-xs text-violet-700 mt-1">
+                            Shared active slots: {data()?.requestStats?.dispatch?.providerActivePrompts ?? 0}/
+                            {data()?.requestStats?.dispatch?.providerActiveLimit ?? 0} (
+                            {formatPercent(data()?.requestStats?.dispatch?.providerActiveFillPct)})
+                          </p>
+                        </div>
+                      </Show>
                     </div>
                   </div>
                 </Show>

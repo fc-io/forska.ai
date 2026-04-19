@@ -6,6 +6,7 @@ import {classifyConnectionFailure, ConnectionError, recordConnectionFailure} fro
 type JudgmentsRequestRuntimeModule = typeof import('./judgmentsRequestRuntime.ts')
 type ProcessPromptModule = typeof import('./judgmentsJobsSendToLLM/processPromptWithLLM.ts')
 type PromptToProcess = import('./judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts').PromptToProcess
+type ProviderHealthResult = {lastError: string | null; message: string; modelCount: number | null; ok: boolean}
 
 const providerConnectionRepositoryModulePath = new URL(
   '../../providers/providerConnectionRepository.ts',
@@ -73,12 +74,28 @@ const getProviderConnection = mock(async (id: string) => {
     updatedAt: null,
   }
 })
-const testProviderConnectionHealth = mock(async (_connection: unknown, _options: unknown) => {
-  return {lastError: null, message: 'ok', modelCount: 1, ok: true}
-})
+const testProviderConnectionHealth = mock(
+  async (_connection: unknown, _options: unknown): Promise<ProviderHealthResult> => {
+    return {lastError: null, message: 'ok', modelCount: 1, ok: true}
+  },
+)
 const getJudgmentsCapacityMock = mock((_runningJobCount: number) => {
   return createJudgmentsCapacity()
 })
+class RecoverableJudgeError extends Error {
+  failureCode: string
+  providerDiagnostics: unknown
+
+  constructor(
+    message: string,
+    {failureCode, providerDiagnostics}: {failureCode: string; providerDiagnostics?: unknown},
+  ) {
+    super(message)
+    this.name = 'RecoverableJudgeError'
+    this.failureCode = failureCode
+    this.providerDiagnostics = providerDiagnostics ?? null
+  }
+}
 const judgeSinglePrompt = mock(async (_input: unknown) => {
   return undefined
 })
@@ -109,6 +126,11 @@ const sqliteServiceMock = {
   markPromptAsRetry: mock(async (_jobId: string, _recordId: string) => {
     sqliteStateTransitions.push('ready')
   }),
+  consumePromptExtraRetry: mock(
+    async (_input: {errorCode: string; jobId: string; maxExtraRetries: number; recordId: string}) => {
+      return true
+    },
+  ),
   markPromptAsRunning: mock(async (_jobId: string, _recordId: string) => {
     sqliteStateTransitions.push('running')
   }),
@@ -141,7 +163,7 @@ const loadRuntime = (): Promise<JudgmentsRequestRuntimeModule> => {
 
 const registerPromptModuleMocks = () => {
   void mock.module(judgeModulePath, () => {
-    return {judgeSinglePrompt}
+    return {judgeSinglePrompt, MAX_COMPLETION_TOKENS: 4000, RecoverableJudgeError}
   })
 
   void mock.module(appDatabaseServiceModulePath, () => {
@@ -239,6 +261,7 @@ afterEach(async () => {
   sqliteServiceMock.hasLocalJudgment.mockClear()
   sqliteServiceMock.markPromptAsJudged.mockClear()
   sqliteServiceMock.markPromptAsRetry.mockClear()
+  sqliteServiceMock.consumePromptExtraRetry.mockClear()
   sqliteServiceMock.markPromptAsRunning.mockClear()
   sqliteServiceMock.markPromptAsSkipped.mockClear()
   sqliteStateTransitions.splice(0, sqliteStateTransitions.length)
@@ -263,6 +286,9 @@ afterEach(async () => {
   })
   ensureFullTextMock.mockImplementation(async (article: {fullText: string | null}) => {
     return {reason: 'no_fulltext' as const, shouldSkip: true, text: article.fullText ?? 'Full text'}
+  })
+  sqliteServiceMock.consumePromptExtraRetry.mockImplementation(async () => {
+    return true
   })
   mock.restore()
 })
@@ -392,7 +418,7 @@ test('worker requests enforce provider caps and release after success', async ()
   expect(secondStarted).toBe(true)
 })
 
-test('fallback requests plateau at local runtime capacity when it is lower than the saved provider cap', async () => {
+test('fallback requests honor saved provider caps even when local runtime capacity is lower', async () => {
   getJudgmentsCapacityMock.mockImplementation((_runningJobCount: number) => {
     return createJudgmentsCapacity({maxInflight: 2})
   })
@@ -400,6 +426,7 @@ test('fallback requests plateau at local runtime capacity when it is lower than 
   const {withJudgmentRequest} = await loadRuntime()
   const firstRelease = createSignal()
   const secondRelease = createSignal()
+  const thirdRelease = createSignal()
   let firstStarted = false
   let secondStarted = false
   let thirdStarted = false
@@ -436,10 +463,6 @@ test('fallback requests plateau at local runtime capacity when it is lower than 
     },
   )
 
-  await flush()
-  expect(firstStarted).toBe(true)
-  expect(secondStarted).toBe(true)
-
   const thirdRequest = withJudgmentRequest(
     {
       judgmentsJobId: 'job-fallback-plateau-3',
@@ -448,6 +471,83 @@ test('fallback requests plateau at local runtime capacity when it is lower than 
       providerConnectionId: 'connection-fallback-plateau',
       providerMaxInflightRequests: 3,
       providerUsesFamilyDefault: false,
+      workerUrls: [],
+    },
+    async () => {
+      thirdStarted = true
+      await thirdRelease.promise
+    },
+  )
+
+  await flush()
+  expect(firstStarted).toBe(true)
+  expect(secondStarted).toBe(true)
+  expect(thirdStarted).toBe(true)
+
+  firstRelease.resolve()
+  secondRelease.resolve()
+  thirdRelease.resolve()
+  await firstRequest
+  await secondRequest
+  await thirdRequest
+})
+
+test('fallback requests plateau at local runtime capacity when using family defaults', async () => {
+  getJudgmentsCapacityMock.mockImplementation((_runningJobCount: number) => {
+    return createJudgmentsCapacity({maxInflight: 2})
+  })
+
+  const {withJudgmentRequest} = await loadRuntime()
+  const firstRelease = createSignal()
+  const secondRelease = createSignal()
+  let firstStarted = false
+  let secondStarted = false
+  let thirdStarted = false
+
+  const firstRequest = withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-fallback-default-1',
+      provider: 'openai',
+      fallbackBaseURL: 'http://fallback-runtime.test/v1',
+      providerConnectionId: null,
+      providerMaxInflightRequests: 3,
+      providerUsesFamilyDefault: true,
+      workerUrls: [],
+    },
+    async () => {
+      firstStarted = true
+      await firstRelease.promise
+    },
+  )
+
+  const secondRequest = withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-fallback-default-2',
+      provider: 'openai',
+      fallbackBaseURL: 'http://fallback-runtime.test/v1',
+      providerConnectionId: null,
+      providerMaxInflightRequests: 3,
+      providerUsesFamilyDefault: true,
+      workerUrls: [],
+    },
+    async () => {
+      secondStarted = true
+      await secondRelease.promise
+    },
+  )
+
+  await flush()
+  expect(firstStarted).toBe(true)
+  expect(secondStarted).toBe(true)
+
+  const thirdRequest = withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-fallback-default-3',
+      provider: 'openai',
+      fallbackBaseURL: 'http://fallback-runtime.test/v1',
+      providerConnectionId: null,
+      providerMaxInflightRequests: 3,
+      providerUsesFamilyDefault: true,
       workerUrls: [],
     },
     async () => {
@@ -834,4 +934,50 @@ test('prompt release marks running then ready on interruption', async () => {
 
   expect(sqliteStateTransitions).toEqual(['running', 'ready'])
   expect(sqliteServiceMock.markPromptAsJudged).not.toHaveBeenCalled()
+})
+
+test('prompt release consumes one extra recoverable retry then marks ready', async () => {
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+  let caughtError: unknown = null
+
+  judgeSinglePrompt.mockImplementationOnce(async () => {
+    throw new RecoverableJudgeError('recoverable anthropic empty response', {
+      failureCode: 'anthropic_empty_response',
+      providerDiagnostics: {contentTypes: ['redacted_thinking'], stopReason: 'end_turn'},
+    })
+  })
+
+  try {
+    await processPromptWithLLM(createPromptToProcess())
+  } catch (error) {
+    caughtError = error
+  }
+
+  expect(String(caughtError)).toContain('RecoverableJudgeError')
+  expect(sqliteStateTransitions).toEqual(['running', 'ready'])
+  expect(sqliteServiceMock.consumePromptExtraRetry).toHaveBeenCalledWith({
+    errorCode: 'anthropic_empty_response',
+    jobId: 'job-a',
+    maxExtraRetries: 1,
+    recordId: 'record-a',
+  })
+})
+
+test('prompt release stops requeueing after recoverable retry budget is exhausted', async () => {
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+
+  sqliteServiceMock.consumePromptExtraRetry.mockImplementationOnce(async () => {
+    return false
+  })
+  judgeSinglePrompt.mockImplementationOnce(async () => {
+    throw new RecoverableJudgeError('recoverable anthropic empty response', {
+      failureCode: 'anthropic_empty_response',
+      providerDiagnostics: {contentTypes: ['redacted_thinking'], stopReason: 'end_turn'},
+    })
+  })
+
+  await processPromptWithLLM(createPromptToProcess())
+
+  expect(sqliteStateTransitions).toEqual(['running', 'judged'])
+  expect(sqliteServiceMock.markPromptAsRetry).not.toHaveBeenCalled()
 })

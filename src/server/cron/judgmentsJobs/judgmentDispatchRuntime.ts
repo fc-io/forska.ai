@@ -1,8 +1,9 @@
-import {Context, Effect, Fiber, Layer, ManagedRuntime, Queue} from 'effect'
+import {Context, Effect, Fiber, Layer, ManagedRuntime} from 'effect'
 
 import {registerWriterDemotionHandler} from '../../utils/serverRuntimeRole.ts'
+import {ConnectionError} from './connectionHealth.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
-import {processClaimedPromptsByConnection} from './judgmentsJobsSendToLLM.ts'
+import {processPromptWithLLM} from './judgmentsJobsSendToLLM/processPromptWithLLM.ts'
 import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 
 type ProviderQueueInput = {
@@ -11,16 +12,25 @@ type ProviderQueueInput = {
   providerUsesFamilyDefault: boolean
 }
 
-type DispatchBatch = {label: string; prompts: PromptToProcess[]}
+type DispatchPrompt = {label: string; prompt: PromptToProcess}
 
 type ProviderDispatchState = {
-  activePrompts: PromptToProcess[]
+  activePrompts: DispatchPrompt[]
+  batchFibers: Set<Fiber.Fiber<void | undefined, unknown>>
+  isPaused: boolean
   key: string
+  maxActivePrompts: number
   maxQueuedPrompts: number
-  pendingBatches: DispatchBatch[]
-  pendingPromptCount: number
-  queue: Queue.Queue<DispatchBatch>
-  workerFiber: Fiber.Fiber<void, never> | null
+  queuedPrompts: DispatchPrompt[]
+}
+
+export type JudgmentDispatchProviderStats = {
+  jobActivePromptCount: number
+  jobQueuedPromptCount: number
+  providerActiveLimit: number
+  providerActivePromptCount: number
+  providerQueueLimit: number
+  providerQueuedPromptCount: number
 }
 
 type JudgmentDispatchRuntimeService = {
@@ -28,10 +38,14 @@ type JudgmentDispatchRuntimeService = {
     label: string
     prompts: PromptToProcess[]
   }) => Effect.Effect<{acceptedCount: number; rejectedPrompts: PromptToProcess[]}>
+  getProviderDispatchStats: (
+    input: ProviderQueueInput & {jobId: string},
+  ) => Effect.Effect<JudgmentDispatchProviderStats>
   getProviderQueueCapacity: (input: ProviderQueueInput) => Effect.Effect<number>
 }
 
 type JudgmentDispatchRuntimeOptions = {
+  processPrompt?: (input: {label: string; prompt: PromptToProcess}) => Promise<void>
   processPromptBatch?: (input: {label: string; prompts: PromptToProcess[]}) => Promise<void>
   recoverPrompts?: (prompts: PromptToProcess[], reason: string) => Promise<void>
 }
@@ -41,6 +55,7 @@ type JudgmentDispatchRuntimeHandle = {
     label: string
     prompts: PromptToProcess[]
   }) => Promise<{acceptedCount: number; rejectedPrompts: PromptToProcess[]}>
+  getProviderDispatchStats: (input: ProviderQueueInput & {jobId: string}) => Promise<JudgmentDispatchProviderStats>
   getProviderQueueCapacity: (input: ProviderQueueInput) => Promise<number>
   shutdown: (reason?: string) => Promise<void>
 }
@@ -61,6 +76,10 @@ const getProviderDispatchKey = ({providerConnectionId}: ProviderQueueInput): str
   return providerConnectionId ?? 'unknown'
 }
 
+const getProviderActivePromptLimit = ({providerMaxInflightRequests}: ProviderQueueInput): number => {
+  return Math.max(1, providerMaxInflightRequests ?? 1)
+}
+
 const getProviderQueueCapacityLimit = ({providerMaxInflightRequests}: ProviderQueueInput): number => {
   return Math.max(1, providerMaxInflightRequests ?? 1)
 }
@@ -73,14 +92,8 @@ const getPromptProviderQueueInput = (prompt: PromptToProcess): ProviderQueueInpu
   }
 }
 
-const getProviderBatchesPrompts = (batches: DispatchBatch[]): PromptToProcess[] => {
-  return batches.flatMap((batch) => {
-    return batch.prompts
-  })
-}
-
-const getProviderReservedPromptCount = (state: ProviderDispatchState): number => {
-  return state.pendingPromptCount + state.activePrompts.length
+const getProviderQueuedPromptCount = (state: ProviderDispatchState): number => {
+  return state.queuedPrompts.length
 }
 
 const logDispatchWorkerError = (key: string, error: unknown) => {
@@ -94,11 +107,15 @@ const createJudgmentDispatchRuntimeLayer = (
   options: JudgmentDispatchRuntimeOptions,
   getShutdownReason: () => string,
 ) => {
-  const processPromptBatch =
-    options.processPromptBatch
-    ?? (async ({label, prompts}: {label: string; prompts: PromptToProcess[]}) => {
-      await processClaimedPromptsByConnection({label, prompts})
-    })
+  const processPrompt =
+    options.processPrompt
+    ?? (options.processPromptBatch
+      ? async ({label, prompt}: {label: string; prompt: PromptToProcess}) => {
+          await options.processPromptBatch?.({label, prompts: [prompt]})
+        }
+      : async ({prompt}: {label: string; prompt: PromptToProcess}) => {
+          await processPromptWithLLM(prompt)
+        })
   const recoverPrompts = options.recoverPrompts ?? defaultRecoverPrompts
 
   return Layer.scoped(
@@ -108,75 +125,156 @@ const createJudgmentDispatchRuntimeLayer = (
       const scope = yield* Effect.scope
       let isShuttingDown = false
 
-      const runProviderWorker = (state: ProviderDispatchState): Effect.Effect<void> => {
-        const runNextBatch = Effect.gen(function* () {
-          const batch = yield* Queue.take(state.queue)
-          state.pendingBatches = state.pendingBatches.slice(1)
-          state.pendingPromptCount = Math.max(0, state.pendingPromptCount - batch.prompts.length)
-          state.activePrompts = batch.prompts
-
-          yield* Effect.tryPromise(async () => {
-            await processPromptBatch(batch)
-          }).pipe(
-            Effect.catchAll((error) => {
-              return Effect.sync(() => {
-                logDispatchWorkerError(state.key, error)
-              })
-            }),
-          )
-
-          state.activePrompts = []
+      const removeActivePrompt = (state: ProviderDispatchState, recordId: string): void => {
+        state.activePrompts = state.activePrompts.filter((entry) => {
+          return entry.prompt.recordId !== recordId
         })
+      }
 
-        return Effect.forever(runNextBatch).pipe(
-          Effect.catchAll(() => {
-            return Effect.void
-          }),
-        )
+      const recoverQueuedPrompts = (state: ProviderDispatchState, reason: string): Promise<void> => {
+        const promptsToRecover = state.queuedPrompts.map((entry) => {
+          return entry.prompt
+        })
+        state.queuedPrompts = []
+
+        return promptsToRecover.length === 0 ? Promise.resolve() : recoverPrompts(promptsToRecover, reason)
+      }
+
+      const launchAvailablePrompts = (state: ProviderDispatchState): Effect.Effect<void> => {
+        return Effect.gen(function* () {
+          while (!isShuttingDown && !state.isPaused && state.activePrompts.length < state.maxActivePrompts) {
+            const [nextPrompt, ...remainingQueuedPrompts] = state.queuedPrompts
+
+            if (!nextPrompt) {
+              return undefined
+            }
+
+            state.queuedPrompts = remainingQueuedPrompts
+            state.activePrompts = [...state.activePrompts, nextPrompt]
+
+            let promptFiber: Fiber.Fiber<void | undefined, unknown> | null = null
+            const trackedPrompt = Effect.tryPromise({
+              catch: (error) => {
+                return error
+              },
+              try: () => {
+                return processPrompt(nextPrompt)
+              },
+            }).pipe(
+              Effect.catchAll((error) => {
+                return Effect.tryPromise(async () => {
+                  if (error instanceof ConnectionError) {
+                    state.isPaused = true
+                    await recoverQueuedPrompts(state, 'connection-error')
+                    state.isPaused = false
+                    return undefined
+                  }
+
+                  if (isShuttingDown) {
+                    return undefined
+                  }
+
+                  return undefined
+                })
+              }),
+              Effect.ensuring(
+                Effect.sync(() => {
+                  removeActivePrompt(state, nextPrompt.prompt.recordId)
+
+                  if (promptFiber) {
+                    state.batchFibers.delete(promptFiber)
+                  }
+                }).pipe(Effect.zipRight(launchAvailablePrompts(state))),
+              ),
+            )
+
+            promptFiber = yield* Effect.forkIn(trackedPrompt, scope)
+            state.batchFibers.add(promptFiber)
+          }
+        })
       }
 
       const getOrCreateProviderState = (input: ProviderQueueInput): Effect.Effect<ProviderDispatchState> => {
         const key = getProviderDispatchKey(input)
         const existing = providerStates.get(key)
+        const maxActivePrompts = getProviderActivePromptLimit(input)
+        const maxQueuedPrompts = getProviderQueueCapacityLimit(input)
 
         if (existing) {
-          existing.maxQueuedPrompts = Math.max(existing.maxQueuedPrompts, getProviderQueueCapacityLimit(input))
+          existing.maxActivePrompts = maxActivePrompts
+          existing.maxQueuedPrompts = maxQueuedPrompts
           return Effect.succeed(existing)
         }
 
         return Effect.gen(function* () {
-          const maxQueuedPrompts = getProviderQueueCapacityLimit(input)
-          const queue = yield* Queue.bounded<DispatchBatch>(maxQueuedPrompts)
           const state: ProviderDispatchState = {
             activePrompts: [],
+            batchFibers: new Set(),
+            isPaused: false,
             key,
+            maxActivePrompts,
             maxQueuedPrompts,
-            pendingBatches: [],
-            pendingPromptCount: 0,
-            queue,
-            workerFiber: null,
+            queuedPrompts: [],
           }
-          const workerFiber = yield* Effect.forkIn(runProviderWorker(state), scope)
-
-          state.workerFiber = workerFiber
           providerStates.set(key, state)
           return state
         })
       }
 
+      const getProviderDispatchStats = ({
+        jobId,
+        ...input
+      }: ProviderQueueInput & {jobId: string}): JudgmentDispatchProviderStats => {
+        const state = providerStates.get(getProviderDispatchKey(input))
+        const providerActiveLimit = getProviderActivePromptLimit(input)
+        const providerQueueLimit = getProviderQueueCapacityLimit(input)
+
+        if (!state) {
+          return {
+            jobActivePromptCount: 0,
+            jobQueuedPromptCount: 0,
+            providerActiveLimit,
+            providerActivePromptCount: 0,
+            providerQueueLimit,
+            providerQueuedPromptCount: 0,
+          }
+        }
+
+        const jobActivePromptCount = state.activePrompts.filter((entry) => {
+          return entry.prompt.jobId === jobId
+        }).length
+        const jobQueuedPromptCount = state.queuedPrompts.filter((entry) => {
+          return entry.prompt.jobId === jobId
+        }).length
+
+        return {
+          jobActivePromptCount,
+          jobQueuedPromptCount,
+          providerActiveLimit: state.maxActivePrompts,
+          providerActivePromptCount: state.activePrompts.length,
+          providerQueueLimit: state.maxQueuedPrompts,
+          providerQueuedPromptCount: state.queuedPrompts.length,
+        }
+      }
+
       const cleanupProviderState = (state: ProviderDispatchState): Effect.Effect<void> => {
-        const recoverablePrompts = [...state.activePrompts, ...getProviderBatchesPrompts(state.pendingBatches)]
+        const recoverablePrompts = [...state.activePrompts, ...state.queuedPrompts].map((entry) => {
+          return entry.prompt
+        })
 
         state.activePrompts = []
-        state.pendingBatches = []
-        state.pendingPromptCount = 0
+        state.queuedPrompts = []
+        state.isPaused = true
+        const batchFibers = Array.from(state.batchFibers)
+        state.batchFibers.clear()
 
         return Effect.gen(function* () {
-          yield* Queue.shutdown(state.queue)
-
-          if (state.workerFiber) {
-            yield* Fiber.interrupt(state.workerFiber)
-          }
+          yield* Effect.all(
+            batchFibers.map((fiber) => {
+              return Fiber.interrupt(fiber)
+            }),
+            {concurrency: 'unbounded', discard: true},
+          )
 
           if (recoverablePrompts.length > 0) {
             yield* Effect.tryPromise(async () => {
@@ -186,7 +284,9 @@ const createJudgmentDispatchRuntimeLayer = (
         }).pipe(
           Effect.catchAll((error) => {
             return Effect.sync(() => {
-              logDispatchWorkerError(state.key, error)
+              if (!isShuttingDown) {
+                logDispatchWorkerError(state.key, error)
+              }
             })
           }),
         )
@@ -217,16 +317,19 @@ const createJudgmentDispatchRuntimeLayer = (
               const providerState = yield* getOrCreateProviderState(getPromptProviderQueueInput(firstPrompt))
               const remainingCapacity = Math.max(
                 0,
-                providerState.maxQueuedPrompts - getProviderReservedPromptCount(providerState),
+                providerState.maxQueuedPrompts - getProviderQueuedPromptCount(providerState),
               )
               const acceptedPrompts = providerPrompts.slice(0, remainingCapacity)
               const rejectedProviderPrompts = providerPrompts.slice(remainingCapacity)
 
               if (acceptedPrompts.length > 0) {
-                const batch = {label, prompts: acceptedPrompts}
-                providerState.pendingBatches = [...providerState.pendingBatches, batch]
-                providerState.pendingPromptCount += acceptedPrompts.length
-                yield* Queue.offer(providerState.queue, batch)
+                providerState.queuedPrompts = [
+                  ...providerState.queuedPrompts,
+                  ...acceptedPrompts.map((prompt) => {
+                    return {label, prompt}
+                  }),
+                ]
+                yield* launchAvailablePrompts(providerState)
                 acceptedCount += acceptedPrompts.length
               }
 
@@ -236,10 +339,15 @@ const createJudgmentDispatchRuntimeLayer = (
             return {acceptedCount, rejectedPrompts}
           })
         },
+        getProviderDispatchStats: (input) => {
+          return Effect.sync(() => {
+            return getProviderDispatchStats(input)
+          })
+        },
         getProviderQueueCapacity: (input) => {
           return Effect.gen(function* () {
             const state = yield* getOrCreateProviderState(input)
-            return Math.max(0, state.maxQueuedPrompts - getProviderReservedPromptCount(state))
+            return Math.max(0, state.maxQueuedPrompts - getProviderQueuedPromptCount(state))
           })
         },
       }
@@ -288,6 +396,11 @@ export const createJudgmentDispatchRuntime = (
         return service.enqueueClaimedPrompts({label, prompts})
       })
     },
+    getProviderDispatchStats: (input) => {
+      return withService((service) => {
+        return service.getProviderDispatchStats(input)
+      })
+    },
     getProviderQueueCapacity: (input) => {
       return withService((service) => {
         return service.getProviderQueueCapacity(input)
@@ -317,6 +430,10 @@ export const enqueueClaimedJudgmentPrompts = (input: {label: string; prompts: Pr
 
 export const getJudgmentDispatchQueueCapacity = (input: ProviderQueueInput) => {
   return judgmentDispatchRuntime.getProviderQueueCapacity(input)
+}
+
+export const getJudgmentDispatchProviderStats = (input: ProviderQueueInput & {jobId: string}) => {
+  return judgmentDispatchRuntime.getProviderDispatchStats(input)
 }
 
 export const shutdownJudgmentDispatchRuntime = async (reason = 'shutdown') => {

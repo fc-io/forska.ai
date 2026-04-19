@@ -20,6 +20,8 @@ import {
   hasJudgmentJobLocalSqliteState,
 } from '../cron/judgmentsJobs/judgmentJobStoragePolicy.ts'
 import {getJudgmentJobStorageTransferRuntime} from '../cron/judgmentsJobs/judgmentJobStorageTransferRuntime.ts'
+import {getJudgmentDispatchProviderStats} from '../cron/judgmentsJobs/judgmentDispatchRuntime.ts'
+import {getEffectiveProviderCap} from '../cron/judgmentsJobs/judgmentsJobsSendToLLM.ts'
 import {getJudgmentRequestStats} from '../cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {getProviderConnectionForStoredModel} from '../providers/providerConnectionRepository.ts'
 import {assertStoredProviderModelRuntimeMatch} from '../providers/providerRuntimeModelGuard.ts'
@@ -928,6 +930,33 @@ export const judgmentsJobsRoutes = new Elysia()
             getJudgmentEndpointAvailability({effectiveBaseURL, providerConnectionId: providerConnection?.id ?? null}),
           )
         : null
+      const effectiveProviderCap = getEffectiveProviderCap({
+        job: {
+          id: job.id,
+          maxInflightRequests: providerConnection?.maxInflightRequests ?? null,
+          modelId: projectModelId,
+          modelName: providerConnection?.label ?? null,
+          modelProvider: providerConnection?.providerKind ?? null,
+          projectId: job.projectId,
+          providerConnectionId: providerConnection?.id ?? null,
+          quarantineReason: job.quarantineReason,
+          storageState: job.storageState,
+        },
+      })
+      const dispatchStats = await getJudgmentDispatchProviderStats({
+        jobId: job.id,
+        providerConnectionId: providerConnection?.id ?? null,
+        providerMaxInflightRequests: effectiveProviderCap.maxInflight,
+        providerUsesFamilyDefault: effectiveProviderCap.usesFamilyDefault,
+      })
+      const providerActiveFillPct =
+        dispatchStats.providerActiveLimit > 0
+          ? Math.round((dispatchStats.providerActivePromptCount / dispatchStats.providerActiveLimit) * 100)
+          : null
+      const providerPrefetchFillPct =
+        dispatchStats.providerQueueLimit > 0
+          ? Math.round((dispatchStats.providerQueuedPromptCount / dispatchStats.providerQueueLimit) * 100)
+          : null
 
       const promptStats = {
         claimed: sqliteHealth.promptCounts.claimed,
@@ -955,6 +984,16 @@ export const judgmentsJobsRoutes = new Elysia()
           totalCompletionTokens: Number(totalTokenUsage[0]?.totalCompletionTokens || 0),
         },
         requestStats: {
+          dispatch: {
+            jobActivePrompts: dispatchStats.jobActivePromptCount,
+            jobQueuedPrompts: dispatchStats.jobQueuedPromptCount,
+            providerActiveFillPct,
+            providerActiveLimit: dispatchStats.providerActiveLimit,
+            providerActivePrompts: dispatchStats.providerActivePromptCount,
+            providerPrefetchFillPct,
+            providerQueueLimit: dispatchStats.providerQueueLimit,
+            providerQueuedPrompts: dispatchStats.providerQueuedPromptCount,
+          },
           endpointAvailability,
           inFlight: requestRuntimeStats.inFlight,
           attempts: Number(totalTokenUsage[0]?.totalRequests || 0) + requestRuntimeStats.pendingPersistedAttempts,

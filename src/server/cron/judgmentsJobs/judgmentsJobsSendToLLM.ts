@@ -245,9 +245,11 @@ export const getDispatchAvailability = ({
   }
 
   const hasProbeEligibleCooldown = endpointStates.some((state) => {
-    return (
-      state.status === 'cooldown' && Boolean(state.cooldownExpiresAt) && state.cooldownExpiresAt.getTime() <= Date.now()
-    )
+    if (state.status !== 'cooldown' || !state.cooldownExpiresAt) {
+      return false
+    }
+
+    return state.cooldownExpiresAt.getTime() <= Date.now()
   })
 
   if (hasProbeEligibleCooldown) {
@@ -318,7 +320,7 @@ export const getClaimableRequests = async ({
           if (availability.dispatchMode === 'skip') {
             logDispatchSkip({
               connectionId: allocation.connectionId,
-              dispatchStatus: availability.status,
+              dispatchStatus: availability.status === 'healthy' ? 'probing' : availability.status,
               label,
               runtime: jobAllocation.runtime,
             })
@@ -443,7 +445,7 @@ export const processClaimedPromptsByConnection = async ({
           await haltConnection(async () => {
             logDispatchSkip({
               connectionId: prompt.providerConnectionId,
-              dispatchStatus: availability.status,
+              dispatchStatus: availability.status === 'healthy' ? 'probing' : availability.status,
               label,
               runtime,
             })
@@ -588,7 +590,7 @@ export const getRequestsToSendByProviderConnection = <T extends RunningJudgmentJ
   maxRequestsToSend,
   providerQueueCapacities,
   readyCounts,
-  runtimeInFlightCounts,
+  runtimeInFlightCounts: _runtimeInFlightCounts,
 }: {
   getCodexDefaultMaxInflight?: () => number
   getNonCodexCapacity?: (runningJobCount: number) => Capacity
@@ -615,16 +617,9 @@ export const getRequestsToSendByProviderConnection = <T extends RunningJudgmentJ
     const ready = connectionJobs.reduce((sum, job) => {
       return sum + (readyCounts.get(job.id) ?? 0)
     }, 0)
-    const runtimeInFlight = connectionJobs.reduce((sum, job) => {
-      return sum + (runtimeInFlightCounts.get(job.id) ?? 0)
-    }, 0)
     const providerQueueCapacity = providerQueueCapacities.get(connectionId) ?? 0
 
-    return {
-      connectionId,
-      jobs: connectionJobs,
-      limit: Math.max(0, Math.min(ready, providerCap - runtimeInFlight, providerQueueCapacity)),
-    }
+    return {connectionId, jobs: connectionJobs, limit: Math.max(0, Math.min(ready, providerCap, providerQueueCapacity))}
   })
   const sendableConnectionGroups = connectionGroups.filter(
     (group): group is {connectionId: string; jobs: T[]; limit: number} => {
@@ -696,11 +691,12 @@ const sendToLLMForJobs = async (
   const promptsInFlight = Array.from(runtimeInFlightCounts.values()).reduce((sum, count) => {
     return sum + count
   }, 0)
-  const deficit = Math.max(0, capacity.maxInflight - promptsInFlight)
+  const targetReservedPrompts = capacity.maxInflight + capacity.maxBurst
+  const deficit = Math.max(0, targetReservedPrompts - promptsInFlight)
   const totalQueueCapacity = Array.from(providerQueueCapacities.values()).reduce((sum, count) => {
     return sum + count
   }, 0)
-  const requestsToSend = Math.min(deficit, capacity.maxBurst, totalQueueCapacity)
+  const requestsToSend = Math.min(deficit, totalQueueCapacity)
   const readyCounts = await getReadyCountsByJob(jobIds)
 
   if (requestsToSend > 0 || promptsInFlight > capacity.maxInflight * 0.9) {
@@ -712,6 +708,7 @@ const sendToLLMForJobs = async (
       maxBurst: capacity.maxBurst,
       workerCount: capacity.workerCount,
       deficit,
+      targetReservedPrompts,
       totalQueueCapacity,
       jobCount: jobs.length,
       readyCounts: readyCountsObj,

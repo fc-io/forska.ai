@@ -1,6 +1,6 @@
 import {Effect} from 'effect'
 
-import {judgeSinglePrompt, MAX_COMPLETION_TOKENS} from '../../../../agent/judge.ts'
+import {judgeSinglePrompt, MAX_COMPLETION_TOKENS, RecoverableJudgeError} from '../../../../agent/judge.ts'
 import {JudgmentPersistenceError} from '../../../../agent/judge/storeSinglePromptJudgment.ts'
 import type {ArticleRecord, PublicationStatus} from '../../../../db/schemaTypes.ts'
 import {getProviderModelMetadataPromptTokenLimit} from '../../../providers/providerModelMetadata.ts'
@@ -73,6 +73,7 @@ const cachedPromptLookups = new Map<string, Promise<PromptDefinition | null>>()
 
 const DEFAULT_MODEL_CONTEXT = 32768
 const DEFAULT_PROMPT_TOKEN_LIMIT = Math.max(0, DEFAULT_MODEL_CONTEXT - MAX_COMPLETION_TOKENS)
+const maxRecoverablePromptExtraRetries = 1
 const promptPreparationMaxInFlight = 16
 
 const promptPreparationWaiters: PromptPreparationWaiter[] = []
@@ -384,6 +385,35 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
             if (error instanceof JudgmentPersistenceError) {
               terminalState = {kind: 'ready'}
               throw error
+            }
+
+            if (error instanceof RecoverableJudgeError) {
+              const consumed = await getJudgmentJobSqliteService().consumePromptExtraRetry({
+                errorCode: error.failureCode,
+                jobId: promptToProcess.jobId,
+                maxExtraRetries: maxRecoverablePromptExtraRetries,
+                recordId: promptToProcess.recordId,
+              })
+
+              if (consumed) {
+                terminalState = {kind: 'ready'}
+                console.warn('[llm] Requeued prompt after recoverable provider failure', {
+                  articleId: promptToProcess.articleId,
+                  diagnostics: error.providerDiagnostics,
+                  failureCode: error.failureCode,
+                  promptId: promptToProcess.promptId,
+                })
+                throw error
+              }
+
+              console.error('[llm] Recoverable provider failure exhausted extra retries', {
+                articleId: promptToProcess.articleId,
+                diagnostics: error.providerDiagnostics,
+                failureCode: error.failureCode,
+                promptId: promptToProcess.promptId,
+              })
+              terminalState = {kind: 'judged'}
+              return undefined
             }
 
             const errorMessage = error instanceof Error ? error.message : String(error)

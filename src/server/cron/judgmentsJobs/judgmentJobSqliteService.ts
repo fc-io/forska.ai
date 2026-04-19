@@ -530,6 +530,8 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       claim_id TEXT,
       sent_at TEXT,
       judged_at TEXT,
+      extra_retry_count INTEGER NOT NULL DEFAULT 0,
+      last_recoverable_error_code TEXT,
       ready_insert_seq INTEGER NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -680,7 +682,11 @@ const jobScanStateColumns = [
   {name: 'wrap_visibility_ack_token', sql: 'INTEGER'},
 ] as const
 
-const queuePromptColumns = [{name: queuePromptReadyOrderColumnName, sql: 'INTEGER'}] as const
+const queuePromptColumns = [
+  {name: queuePromptReadyOrderColumnName, sql: 'INTEGER'},
+  {name: 'extra_retry_count', sql: 'INTEGER NOT NULL DEFAULT 0'},
+  {name: 'last_recoverable_error_code', sql: 'TEXT'},
+] as const
 
 const legacyJobScanStateAckColumns = [
   {legacyName: 'last_project_refresh_ack_seq', nextName: 'last_project_refresh_ack_token'},
@@ -3206,6 +3212,37 @@ const sqliteService = {
         )
         .run(now, recordId)
     })
+  },
+  consumePromptExtraRetry: async ({
+    errorCode,
+    jobId,
+    maxExtraRetries,
+    recordId,
+  }: {
+    errorCode: string
+    jobId: string
+    maxExtraRetries: number
+    recordId: string
+  }): Promise<boolean> => {
+    return (
+      (await withOwnedJobDatabase(jobId, false, (database) => {
+        const now = new Date().toISOString()
+        const result = database
+          .query(
+            `
+              UPDATE queue_prompt
+              SET extra_retry_count = extra_retry_count + 1,
+                  last_recoverable_error_code = ?,
+                  updated_at = ?
+              WHERE id = ?
+                AND extra_retry_count < ?
+            `,
+          )
+          .run(errorCode, now, recordId, maxExtraRetries) as {changes?: number}
+
+        return Number(result.changes ?? 0) === 1
+      })) ?? false
+    )
   },
   markPromptAsRecoverable: async (jobId: string, recordId: string) => {
     return withOwnedJobDatabase(jobId, false, (database) => {

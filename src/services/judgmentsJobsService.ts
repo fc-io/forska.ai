@@ -5,6 +5,16 @@ export type JudgmentJobRepairAction = 'checkpoint' | 'drain' | 'preflight' | 'qu
 export type JudgmentJobPromptStats = {claimed: number; judged: number; ready: number; running: number; skipped: number}
 export type JudgmentJobRequestStats = {
   attempts: number
+  dispatch?: {
+    jobActivePrompts: number
+    jobQueuedPrompts: number
+    providerActiveFillPct: number | null
+    providerActiveLimit: number
+    providerActivePrompts: number
+    providerPrefetchFillPct: number | null
+    providerQueueLimit: number
+    providerQueuedPrompts: number
+  }
   endpointAvailability?: {
     cooldownRemainingMs: number | null
     lastFailureKind: string | null
@@ -98,7 +108,12 @@ const buildMissingJob = () => {
     error: '',
     projectName: '',
     promptStats: {claimed: 0, ready: 0, running: 0, judged: 0, skipped: 0} satisfies JudgmentJobPromptStats,
-    requestStats: {attempts: 0, endpointAvailability: null, inFlight: 0} satisfies JudgmentJobRequestStats,
+    requestStats: {
+      attempts: 0,
+      dispatch: undefined,
+      endpointAvailability: null,
+      inFlight: 0,
+    } satisfies JudgmentJobRequestStats,
   }
 }
 

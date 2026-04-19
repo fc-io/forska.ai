@@ -20,6 +20,8 @@ export type JudgeTokenUsageEntry = {
   lastResponse: string | null
   systemPrompt: string | null
   userPrompt: string | null
+  failureCode?: string | null
+  providerDiagnostics?: unknown
 }
 
 type FailedRequestDetail = {
@@ -41,6 +43,8 @@ type FailedRequestDetail = {
   lastResponse: string | null
   systemPrompt: string | null
   userPrompt: string | null
+  failureCode?: string | null
+  providerDiagnostics?: unknown
 }
 
 type FailedRequestAggregation = {
@@ -62,6 +66,8 @@ type FailedRequestAggregation = {
   lastResponse: string | null
   systemPrompt: string | null
   userPrompt: string | null
+  failureCode: string | null
+  providerDiagnostics: unknown
 }
 
 /**
@@ -261,6 +267,8 @@ export const buildTokenUseTotals = (tokenUseEntries: JudgeTokenUsageEntry[]): To
         lastResponse: null,
         systemPrompt: null,
         userPrompt: null,
+        failureCode: null,
+        providerDiagnostics: null,
       } satisfies FailedRequestAggregation)
 
     const attempts = existing.attempts + 1
@@ -278,6 +286,12 @@ export const buildTokenUseTotals = (tokenUseEntries: JudgeTokenUsageEntry[]): To
       isFailure && !isConnectionFailure ? (entry.systemPrompt ?? existing.systemPrompt) : existing.systemPrompt
     const userPrompt =
       isFailure && !isConnectionFailure ? (entry.userPrompt ?? existing.userPrompt) : existing.userPrompt
+    const failureCode =
+      isFailure && !isConnectionFailure ? (entry.failureCode ?? existing.failureCode) : existing.failureCode
+    const providerDiagnostics =
+      isFailure && !isConnectionFailure
+        ? (entry.providerDiagnostics ?? existing.providerDiagnostics)
+        : existing.providerDiagnostics
 
     const sanitizationAttempted =
       isFailure && !isConnectionFailure ? entry.sanitizationAttempted : existing.sanitizationAttempted
@@ -307,6 +321,8 @@ export const buildTokenUseTotals = (tokenUseEntries: JudgeTokenUsageEntry[]): To
       lastResponse,
       systemPrompt,
       userPrompt,
+      failureCode,
+      providerDiagnostics,
     })
 
     return map
@@ -338,6 +354,8 @@ export const buildTokenUseTotals = (tokenUseEntries: JudgeTokenUsageEntry[]): To
         lastResponse: request.lastResponse,
         systemPrompt: request.systemPrompt,
         userPrompt: request.userPrompt,
+        failureCode: request.failureCode,
+        providerDiagnostics: request.providerDiagnostics,
       }
     })
 

@@ -477,7 +477,7 @@ test('tops up from free dispatcher capacity instead of treating claimed backlog 
   ])
 })
 
-test('caps connection claims by actual running requests plus dispatcher headroom', () => {
+test('claims against dispatcher queue headroom even when a live request is already running', () => {
   const allocations = getRequestsToSendByProviderConnection({
     getCodexDefaultMaxInflight: () => {
       return 4
@@ -502,8 +502,8 @@ test('caps connection claims by actual running requests plus dispatcher headroom
     runtimeInFlightCounts: new Map([['job-a', 1]]),
   })
 
-  expect(allocations[0]?.limit).toBe(1)
-  expect(allocations[0]?.jobs[0]?.limit).toBe(1)
+  expect(allocations[0]?.limit).toBe(2)
+  expect(allocations[0]?.jobs[0]?.limit).toBe(2)
 })
 
 test('dispatch availability skips 404 misroutes during cooldown, probes once after expiry, and skips misconfigured endpoints', () => {

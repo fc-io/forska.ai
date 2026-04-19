@@ -154,6 +154,39 @@ export type ProviderListedModel = {
 
 export type ProviderUsageSnapshot = {completionTokens: number; promptTokens: number; totalTokens: number}
 
+export type ProviderInvocationDiagnostics = Record<string, unknown>
+
+export class ProviderInvocationError extends Error {
+  code: string
+  diagnostics: ProviderInvocationDiagnostics | null
+  providerKind: string | null
+  usage: ProviderUsageSnapshot | null
+
+  constructor(
+    message: string,
+    {
+      cause,
+      code,
+      diagnostics,
+      providerKind,
+      usage,
+    }: {
+      cause?: unknown
+      code: string
+      diagnostics?: ProviderInvocationDiagnostics | null
+      providerKind?: string | null
+      usage?: ProviderUsageSnapshot | null
+    },
+  ) {
+    super(message, {cause})
+    this.name = 'ProviderInvocationError'
+    this.code = code
+    this.diagnostics = diagnostics ?? null
+    this.providerKind = providerKind ?? null
+    this.usage = usage ?? null
+  }
+}
+
 export type ProviderRuntimeCredentials = {
   apiKey: string | null
   baseURL: string | null

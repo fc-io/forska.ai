@@ -13,6 +13,7 @@ import {
 import {getJudgmentEndpointAvailability} from '../server/cron/judgmentsJobs/judgmentEndpointAvailability.ts'
 import {withJudgmentRequest} from '../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {invokeStoredProviderModel} from '../server/providers/providerInvocationService.ts'
+import {ProviderInvocationError} from '../server/providers/providerTypes.ts'
 import {inferenceRuntimeConfig} from '../server/utils/getInferenceRuntimeConfig.ts'
 import {rateLimitedLogger} from '../server/utils/rateLimitedLogger.ts'
 import {
@@ -423,6 +424,45 @@ type GeneratedPromptResponse = {
   text: string
   usage: {promptTokens: number; completionTokens: number; totalTokens: number}
   baseURL: string
+}
+
+export class RecoverableJudgeError extends Error {
+  failureCode: string
+  providerDiagnostics: unknown
+
+  constructor(
+    message: string,
+    {cause, failureCode, providerDiagnostics}: {cause?: unknown; failureCode: string; providerDiagnostics?: unknown},
+  ) {
+    super(message, {cause})
+    this.name = 'RecoverableJudgeError'
+    this.failureCode = failureCode
+    this.providerDiagnostics = providerDiagnostics ?? null
+  }
+}
+
+const getProviderInvocationFailureCode = (error: unknown): string | null => {
+  return error instanceof ProviderInvocationError ? error.code : null
+}
+
+const getProviderInvocationDiagnostics = (error: unknown): unknown => {
+  return error instanceof ProviderInvocationError ? error.diagnostics : null
+}
+
+const getProviderInvocationUsage = (
+  error: unknown,
+): {completionTokens: number; promptTokens: number; totalTokens: number} | null => {
+  return error instanceof ProviderInvocationError ? error.usage : null
+}
+
+const getRecoverableJudgeError = ({adjustedErrorMessage, error}: {adjustedErrorMessage: string; error: unknown}) => {
+  return error instanceof ProviderInvocationError && error.code === 'anthropic_empty_response'
+    ? new RecoverableJudgeError(adjustedErrorMessage, {
+        cause: error,
+        failureCode: error.code,
+        providerDiagnostics: error.diagnostics,
+      })
+    : null
 }
 
 const getProviderEndpointPath = (providerKind: string | null): string | null => {
@@ -1037,7 +1077,8 @@ export const judgeSinglePrompt = async ({
         }
 
         const responseText = currentResponse?.text ?? lastResponse
-        const usage = currentResponse?.usage ?? {promptTokens: 0, completionTokens: 0, totalTokens: 0}
+        const providerUsage = getProviderInvocationUsage(error)
+        const usage = currentResponse?.usage ?? providerUsage ?? {promptTokens: 0, completionTokens: 0, totalTokens: 0}
 
         let sanitizationAttempted = false
         let sanitizedError: string | null = null
@@ -1054,6 +1095,9 @@ export const judgeSinglePrompt = async ({
           errorMessage,
           stopReason: currentResponse?.stopReason,
         })
+        const failureCode = getProviderInvocationFailureCode(error)
+        const providerDiagnostics = getProviderInvocationDiagnostics(error)
+        const recoverableJudgeError = getRecoverableJudgeError({adjustedErrorMessage, error})
 
         tokenUse.push({
           articleId: article.id,
@@ -1072,6 +1116,8 @@ export const judgeSinglePrompt = async ({
           lastResponse: responseText,
           systemPrompt,
           userPrompt,
+          failureCode,
+          providerDiagnostics,
         })
         errorCount += 1
 
@@ -1079,6 +1125,12 @@ export const judgeSinglePrompt = async ({
 
         if (attempts < MAX_RETRIES) {
           userPrompt = buildRetryPrompt(basePrompt, adjustedErrorMessage, lastResponse)
+        } else if (recoverableJudgeError) {
+          abortCount += 1
+          shouldRequeueError = shouldRequeueError ?? recoverableJudgeError
+          console.error(
+            `${article.id} | Prompt ${prompt.id} | Aborting request. ${adjustedErrorMessage} | Requesting one extra queue retry`,
+          )
         } else {
           abortCount += 1
           const failure = parseConnectionFailureMessage(adjustedErrorMessage)
@@ -1256,7 +1308,9 @@ export const judgeSinglePrompt = async ({
               }
 
               const responseText = currentResponse?.text ?? lastResponse
-              const usage = currentResponse?.usage ?? {promptTokens: 0, completionTokens: 0, totalTokens: 0}
+              const providerUsage = getProviderInvocationUsage(error)
+              const usage = currentResponse?.usage
+                ?? providerUsage ?? {promptTokens: 0, completionTokens: 0, totalTokens: 0}
 
               let sanitizationAttempted = false
               let sanitizedError: string | null = null
@@ -1273,6 +1327,9 @@ export const judgeSinglePrompt = async ({
                 errorMessage,
                 stopReason: currentResponse?.stopReason,
               })
+              const failureCode = getProviderInvocationFailureCode(error)
+              const providerDiagnostics = getProviderInvocationDiagnostics(error)
+              const recoverableJudgeError = getRecoverableJudgeError({adjustedErrorMessage, error})
 
               tokenUse.push({
                 articleId: article.id,
@@ -1291,6 +1348,8 @@ export const judgeSinglePrompt = async ({
                 lastResponse: responseText,
                 systemPrompt: evidenceSystemPrompt,
                 userPrompt,
+                failureCode,
+                providerDiagnostics,
               })
               errorCount += 1
 
@@ -1298,6 +1357,9 @@ export const judgeSinglePrompt = async ({
 
               if (attempts < MAX_RETRIES) {
                 userPrompt = buildRetryPrompt(baseEvidencePrompt, adjustedErrorMessage, lastResponse)
+              } else if (recoverableJudgeError) {
+                abortCount += 1
+                return {status: 'requeue' as const, error: recoverableJudgeError, facts: [], quotes: []}
               } else {
                 abortCount += 1
                 console.error(`${article.id} | Prompt ${prompt.id} | Aborting evidence chunk: ${adjustedErrorMessage}`)
@@ -1331,6 +1393,14 @@ export const judgeSinglePrompt = async ({
       const connectionErrorResult = chunkResults.find((result) => {
         return result.status === 'connection_error'
       })
+
+      const recoverableChunkResult = chunkResults.find((result) => {
+        return result.status === 'requeue'
+      })
+
+      if (recoverableChunkResult && recoverableChunkResult.status === 'requeue') {
+        throw recoverableChunkResult.error
+      }
 
       if (connectionErrorResult && connectionErrorResult.status === 'connection_error') {
         const failure = classifyJudgeFailure({
@@ -1529,7 +1599,9 @@ export const judgeSinglePrompt = async ({
           }
 
           const responseText = currentResponse?.text ?? lastResponse
-          const usage = currentResponse?.usage ?? {promptTokens: 0, completionTokens: 0, totalTokens: 0}
+          const providerUsage = getProviderInvocationUsage(error)
+          const usage = currentResponse?.usage
+            ?? providerUsage ?? {promptTokens: 0, completionTokens: 0, totalTokens: 0}
 
           let sanitizationAttempted = false
           let sanitizedError: string | null = null
@@ -1546,6 +1618,9 @@ export const judgeSinglePrompt = async ({
             errorMessage,
             stopReason: currentResponse?.stopReason,
           })
+          const failureCode = getProviderInvocationFailureCode(error)
+          const providerDiagnostics = getProviderInvocationDiagnostics(error)
+          const recoverableJudgeError = getRecoverableJudgeError({adjustedErrorMessage, error})
 
           tokenUse.push({
             articleId: article.id,
@@ -1564,6 +1639,8 @@ export const judgeSinglePrompt = async ({
             lastResponse: responseText,
             systemPrompt,
             userPrompt: finalUserPrompt,
+            failureCode,
+            providerDiagnostics,
           })
           errorCount += 1
 
@@ -1572,6 +1649,12 @@ export const judgeSinglePrompt = async ({
 
           if (attempts < MAX_RETRIES) {
             finalUserPrompt = buildRetryPrompt(fittedFinal.userPrompt, lastError, lastResponse)
+          } else if (recoverableJudgeError) {
+            abortCount += 1
+            shouldRequeueError = shouldRequeueError ?? recoverableJudgeError
+            console.error(
+              `${article.id} | Prompt ${prompt.id} | Aborting chunked final: ${lastError} | Requesting one extra queue retry`,
+            )
           } else {
             abortCount += 1
             console.error(`${article.id} | Prompt ${prompt.id} | Aborting chunked final: ${lastError}`)
@@ -1582,9 +1665,13 @@ export const judgeSinglePrompt = async ({
       if (error instanceof ConnectionError) {
         throw error
       }
-      const msg = error instanceof Error ? error.message : String(error)
-      abortCount += 1
-      console.error(`${article.id} | Prompt ${prompt.id} | Aborting chunked mode: ${msg}`)
+      if (error instanceof RecoverableJudgeError) {
+        shouldRequeueError = shouldRequeueError ?? error
+      } else {
+        const msg = error instanceof Error ? error.message : String(error)
+        abortCount += 1
+        console.error(`${article.id} | Prompt ${prompt.id} | Aborting chunked mode: ${msg}`)
+      }
     }
   }
 

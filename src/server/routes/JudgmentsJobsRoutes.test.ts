@@ -16,11 +16,42 @@ process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 
 const providerRuntimeModelGuardModulePath = new URL('../providers/providerRuntimeModelGuard.ts', import.meta.url)
   .pathname
+const judgmentDispatchRuntimeModulePath = new URL('../cron/judgmentsJobs/judgmentDispatchRuntime.ts', import.meta.url)
+  .pathname
 
 const state = {
   assertStoredProviderModelRuntimeMatch: mock(async (_input: {modelId: string}) => {}),
   getStoredProviderModelRuntimeMatch: mock(async (_input: {modelId: string}) => {
     return {message: null, ok: true, reason: null}
+  }),
+  getJudgmentDispatchProviderStats: mock(
+    async (_input: {
+      jobId: string
+      providerConnectionId: string | null
+      providerMaxInflightRequests: number | null
+      providerUsesFamilyDefault: boolean
+    }) => {
+      return {
+        jobActivePromptCount: 0,
+        jobQueuedPromptCount: 0,
+        providerActiveLimit: 1,
+        providerActivePromptCount: 0,
+        providerQueueLimit: 1,
+        providerQueuedPromptCount: 0,
+      }
+    },
+  ),
+  getJudgmentDispatchQueueCapacity: mock(
+    async (_input: {
+      providerConnectionId: string | null
+      providerMaxInflightRequests: number | null
+      providerUsesFamilyDefault: boolean
+    }) => {
+      return 1
+    },
+  ),
+  enqueueClaimedJudgmentPrompts: mock(async (_input: {label: string; prompts: unknown[]}) => {
+    return {acceptedCount: 0, rejectedPrompts: []}
   }),
 }
 
@@ -29,6 +60,13 @@ const registerModuleMocks = () => {
     return {
       assertStoredProviderModelRuntimeMatch: state.assertStoredProviderModelRuntimeMatch,
       getStoredProviderModelRuntimeMatch: state.getStoredProviderModelRuntimeMatch,
+    }
+  })
+  void mock.module(judgmentDispatchRuntimeModulePath, () => {
+    return {
+      enqueueClaimedJudgmentPrompts: state.enqueueClaimedJudgmentPrompts,
+      getJudgmentDispatchProviderStats: state.getJudgmentDispatchProviderStats,
+      getJudgmentDispatchQueueCapacity: state.getJudgmentDispatchQueueCapacity,
     }
   })
 }
@@ -84,6 +122,22 @@ afterEach(async () => {
   state.assertStoredProviderModelRuntimeMatch.mockImplementation(async (_input: {modelId: string}) => {})
   state.getStoredProviderModelRuntimeMatch.mockImplementation(async (_input: {modelId: string}) => {
     return {message: null, ok: true, reason: null}
+  })
+  state.getJudgmentDispatchProviderStats.mockImplementation(async (_input) => {
+    return {
+      jobActivePromptCount: 0,
+      jobQueuedPromptCount: 0,
+      providerActiveLimit: 1,
+      providerActivePromptCount: 0,
+      providerQueueLimit: 1,
+      providerQueuedPromptCount: 0,
+    }
+  })
+  state.getJudgmentDispatchQueueCapacity.mockImplementation(async (_input) => {
+    return 1
+  })
+  state.enqueueClaimedJudgmentPrompts.mockImplementation(async (_input) => {
+    return {acceptedCount: 0, rejectedPrompts: []}
   })
   const {resetProjectMartLargeRebuildRuntimeMetricsForTests} =
     await import('../utils/projectMartLargeRebuildRuntimeMetrics.ts')
@@ -767,11 +821,25 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
   const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
   const body = (await response.json()) as {
     promptStats: {claimed: number; judged: number; ready: number; running: number; skipped: number}
-    requestStats: {attempts: number; inFlight: number}
+    requestStats: {
+      attempts: number
+      dispatch: {
+        jobActivePrompts: number
+        jobQueuedPrompts: number
+        providerActiveFillPct: number | null
+        providerActiveLimit: number
+        providerActivePrompts: number
+        providerPrefetchFillPct: number | null
+        providerQueueLimit: number
+        providerQueuedPrompts: number
+      }
+      inFlight: number
+    }
     storageHealth: {
       claimedOutboxCount: number
       lastAckSeq: number | null
       oldestUnexportedAgeMs: number | null
+      orphanedJudgedRowCount?: number
       outboxRowCount: number
       promptCounts: {claimed: number; judged: number; ready: number; running: number; skipped: number}
       retainedRowCount: number
@@ -784,6 +852,16 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
   expect(body.promptStats).toEqual({claimed: 1, judged: 1, ready: 1, running: 1, skipped: 1})
   expect(body.storageHealth.promptCounts).toEqual(body.promptStats)
   expect(body.requestStats.inFlight).toBe(0)
+  expect(body.requestStats.dispatch).toEqual({
+    jobActivePrompts: 0,
+    jobQueuedPrompts: 0,
+    providerActiveFillPct: 0,
+    providerActiveLimit: 1,
+    providerActivePrompts: 0,
+    providerPrefetchFillPct: 0,
+    providerQueueLimit: 1,
+    providerQueuedPrompts: 0,
+  })
   expect(body.storageHealth.outboxRowCount).toBe(1)
   expect(body.storageHealth.retainedRowCount).toBe(5)
   expect(body.storageHealth.sqliteFileBytes).not.toBeNull()
@@ -813,6 +891,7 @@ test('returns safe SQLite health values for jobs without a local sqlite db', asy
       claimedOutboxCount: number
       lastAckSeq: number | null
       oldestUnexportedAgeMs: number | null
+      orphanedJudgedRowCount?: number
       outboxRowCount: number
       promptCounts: {claimed: number; judged: number; ready: number; running: number; skipped: number}
       retainedRowCount: number
@@ -893,6 +972,67 @@ test('job details expose shared endpoint availability diagnostics', async () => 
   })
   expect(body.requestStats.endpointAvailability?.lastFailureMessage).toContain('Provider endpoint outage:')
   expect(body.requestStats.endpointAvailability?.cooldownRemainingMs).toBeGreaterThan(0)
+})
+
+test('job details expose provider dispatch saturation stats', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `dispatch-stats-project-${Date.now()}`
+  const modelId = `dispatch-stats-model-${Date.now()}`
+  const connectionId = `dispatch-stats-connection-${Date.now()}`
+  const jobId = `dispatch-stats-job-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    UPDATE app.provider_connection
+    SET max_inflight_requests = 80
+    WHERE id = '${connectionId}'
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  state.getJudgmentDispatchProviderStats.mockImplementationOnce(async (_input) => {
+    return {
+      jobActivePromptCount: 12,
+      jobQueuedPromptCount: 18,
+      providerActiveLimit: 80,
+      providerActivePromptCount: 64,
+      providerQueueLimit: 80,
+      providerQueuedPromptCount: 40,
+    }
+  })
+
+  const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
+  const body = (await response.json()) as {
+    requestStats: {
+      dispatch: {
+        jobActivePrompts: number
+        jobQueuedPrompts: number
+        providerActiveFillPct: number | null
+        providerActiveLimit: number
+        providerActivePrompts: number
+        providerPrefetchFillPct: number | null
+        providerQueueLimit: number
+        providerQueuedPrompts: number
+      }
+    }
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.requestStats.dispatch).toEqual({
+    jobActivePrompts: 12,
+    jobQueuedPrompts: 18,
+    providerActiveFillPct: 80,
+    providerActiveLimit: 80,
+    providerActivePrompts: 64,
+    providerPrefetchFillPct: 50,
+    providerQueueLimit: 80,
+    providerQueuedPrompts: 40,
+  })
 })
 
 test('job details include projected storage drain when a large rebuild is active', async () => {
