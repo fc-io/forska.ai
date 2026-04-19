@@ -18,6 +18,8 @@ type RuntimeProfileCommandConfig = {
   env: (commandOptions: RuntimeProfileCommandOptions) => Record<string, string | undefined>
 }
 
+const forwardedSignals = ['SIGINT', 'SIGTERM'] as const
+
 const getRuntimeProfileBaseEnv = (profileName: RuntimeProfileName) => {
   return mergeRuntimeProfileEnv({profileName})
 }
@@ -128,7 +130,33 @@ const runWithRuntimeProfile = async () => {
     stdin: 'inherit',
     stdout: 'inherit',
   })
+
+  let forwardedSignal: (typeof forwardedSignals)[number] | null = null
+  const forwardSignal = (signal: (typeof forwardedSignals)[number]) => {
+    if (forwardedSignal !== null) {
+      return
+    }
+
+    forwardedSignal = signal
+
+    if (childProcess.exitCode === null) {
+      childProcess.kill(signal)
+    }
+  }
+
+  process.once('SIGINT', () => {
+    forwardSignal('SIGINT')
+  })
+
+  process.once('SIGTERM', () => {
+    forwardSignal('SIGTERM')
+  })
+
   const exitCode = await childProcess.exited
+
+  if (forwardedSignal !== null) {
+    process.exit(exitCode)
+  }
 
   if (exitCode !== 0) {
     process.exit(exitCode)
