@@ -1,18 +1,28 @@
 # LOG_PLAN
 
-Goal: move repeating runtime noise out of the terminal and into structured log files, while keeping the console useful for startup, failures, and interactive scripts.
+Goal: move repeating runtime noise out of the terminal and into structured log files, while keeping the console useful for startup, failures, interactive scripts, and desktop startup diagnostics.
 
-Layers: server, client, scripts.
+Layers: server, desktop backend, client, scripts.
 
 ## Standard
 
 - Use OpenTelemetry-aligned NDJSON/JSONL, not ad-hoc text or logfmt.
 - Write one event per line to `logs/runtime/<profile>/<service>-YYYY-MM-DD.jsonl`.
 - Resolve `<profile>` from the repo runtime-profile model. Use `primary` or `secondary` when launched through `scripts/runWithRuntimeProfile.ts`; otherwise use `local`.
+- Resolve the default `logs/` root from `src/server/utils/runtimeWritablePath.ts` so repo runs write under the repo and desktop runs write under the desktop data root.
 - Use UTC calendar dates in filenames so rotation matches the event timestamps.
 - V1 severity mapping: `console.log` and `rateLimitedLogger.log` map to `INFO`, `warn` maps to `WARN`, and `error` maps to `ERROR`. Add `DEBUG` only if a caller truly needs it.
+- Structured runtime file logging is opt-in per process at bootstrap. Only long-lived server runtimes install the file sink. Shared modules must not auto-enable file logging just because they were imported.
+- Shared modules, including current code under `src/agent`, inherit logging behavior from the hosting process. They never decide sink installation on import.
+- Do not route logs to file or terminal based on source file path, folder, or module name. The active process bootstrap and per-event sink decision decide routing.
 - Sink: routine server `DEBUG` and `INFO` events are `file-only`.
 - Sink: server `WARN` and `ERROR` events are `both`.
+- Sink routing is decided first per event: `file-only`, `both`, `terminal-only`, or `remove-or-dev-only`.
+- `LOG_LEVEL` gates file writes after sink routing. Default `LOG_LEVEL=INFO`.
+- `LOG_STDERR_LEVEL` gates terminal duplication after sink routing. Default `LOG_STDERR_LEVEL=WARN`.
+- `terminal-only` bypasses file filtering entirely. `file-only` never writes to stderr. `both` writes to file if the event passes `LOG_LEVEL` and writes to stderr if it passes `LOG_STDERR_LEVEL`.
+- Startup, shutdown, and operator-guidance events are an explicit exception to `LOG_STDERR_LEVEL`. They must always stay terminal-visible even when they are `INFO`.
+- For terminal-visible startup, shutdown, and operator-guidance events, keep warnings and errors on stderr. Non-error status lines may stay on stdout.
 - Error visibility rule: unexpected failures, caught exceptions, startup failures, and recovery failures must always reach the terminal on stderr. File logging may duplicate them, but must never be the only sink.
 - Error propagation rule: logging an error does not count as handling it. After emitting the structured error record, preserve the existing failure path by rethrowing, returning the error result, or letting the process-level handler print to stderr.
 - Sink: startup and shutdown one-liners are `both`.
@@ -26,6 +36,8 @@ Layers: server, client, scripts.
 - Start with one file per runtime service per day, not one file per feature.
 - V1 partitioning is by `runtimeProfile + service + UTC date`, not by individual process.
 - If multiple instances of the same service run in one profile on the same day, they append to the same service file and are distinguished by per-record instance fields.
+- Shared daily service files are only allowed when each record is serialized once and appended as one newline-terminated buffer with append-mode file semantics. Do not split a single record across multiple writes.
+- Keep a per-process write queue so one process never interleaves its own records. If the target path cannot preserve whole-record appends safely for shared files, fall back to per-instance filenames rather than risk corrupt JSONL.
 - Recommended file: `logs/runtime/<profile>/app-server-YYYY-MM-DD.jsonl`.
 - Recommended file: `logs/runtime/<profile>/api-server-YYYY-MM-DD.jsonl`.
 - Recommended file: `logs/runtime/<profile>/worker-server-YYYY-MM-DD.jsonl`.
@@ -89,6 +101,15 @@ Example line:
 - Do not adopt `Effect.log*` across the app right now. That would create two logging styles in one codebase.
 - Do not use `Effect` for browser console cleanup. Client-side debug logs should mostly be removed or gated, not routed into the server logging pipeline.
 
+## Desktop
+
+- The desktop backend is a normal server runtime with `SERVER_ROLE=dev-single`, so it writes structured JSONL too.
+- Resolve desktop runtime logs from the desktop writable root, which means the backend writes under the desktop data directory instead of the repo `logs/` folder.
+- Keep `src/desktop/index.ts` mirroring backend stdout and stderr into `backend.log`, but treat that file as launcher capture only for startup and fatal diagnostics. It is not the durable runtime telemetry store.
+- As routine server INFO noise moves to JSONL, `backend.log` should naturally shrink to startup lines, warnings, and real errors.
+- Preserve existing stdout vs stderr meaning for startup and operator guidance so desktop launcher capture stays useful and does not reclassify non-error startup lines as stderr noise.
+- Do not forward browser or renderer console chatter into desktop backend JSONL.
+
 ## Config Placement
 
 - Do not read raw `process.env.LOG_*` at call sites.
@@ -96,6 +117,11 @@ Example line:
 - API, worker, and `dev-single` server processes should read log config through `src/server/utils/env.ts`.
 - The app static server should read the same log config through `src/server/utils/getAppServerRuntimeConfig.ts` or a shared helper it calls.
 - Add an explicit runtime-profile marker, for example `FORSKA_RUNTIME_PROFILE`, from `scripts/runWithRuntimeProfile.ts` so file paths resolve predictably to `primary`, `secondary`, or `local`.
+- Default `LOG_DIR` from the runtime writable root plus `logs/runtime/<profile>/`, not from raw `process.cwd()`.
+- Bootstrap the runtime file sink in `src/server/index.ts`, `src/appServer.ts`, and desktop-backed server startup. Scripts and tests should keep the bootstrap off unless a specific task opts in.
+- If code currently under `src/agent` is moved under a server-only runtime area, that narrows the chance of accidental non-server file logging. The sink installation rule still stays process-based, not path-based.
+- Moving code from `src/agent` into an API-only area is a code-ownership and runtime-scope improvement, not the mechanism that turns file logging on. File logging still requires explicit bootstrap in the running process.
+- Because scripts import shared server modules at top level, execution context must be decided before process startup or at logger bootstrap time, not by mutating env after imports have already run.
 - Add one shared helper that derives per-process instance identity for log records, reusing existing writer-connection identity fields where possible.
 
 ## File-Only
@@ -147,6 +173,7 @@ Example line:
   Sink: `terminal-only`.
   Files: `scripts/startServerStack.ts`, `scripts/devServerWatch.ts`, `scripts/alvisLaunch.ts`, `scripts/mn5Launch.ts`, `scripts/recoverProjectMartRefreshClaims.ts`, `scripts/runProjectMartLargeRebuildCycle.ts`, `scripts/runProjectMartRefreshWorkerOnce.ts`, `scripts/runJudgmentJobRepair.ts`, `scripts/dbQuerySnapshot.ts`.
   Reason: these are interactive CLI tools or JSON-emitting scripts already consumed by people, tests, or wrapper scripts.
+- Implementation rule: these entrypoints must not install the runtime file sink, and importing shared server modules from them must not silently start JSONL file logging.
 
 ## Remove Or Dev-Gate
 
@@ -166,32 +193,42 @@ Example line:
 - [ ] Partition log files by runtime process: `app-server`, `api-server`, `worker-server`, and `dev-single` when needed.
 - [ ] Add an explicit runtime-profile marker, for example `FORSKA_RUNTIME_PROFILE`, so `logs/runtime/<profile>/...` resolves stably for `primary`, `secondary`, and `local` runs.
 - [ ] Add one shared instance-identity helper and emit `runtimeProfile`, `instanceId`, `hostname`, `pid`, `processStartedAt`, and port fields on every server-side log line.
-- [ ] Add runtime config for `LOG_DIR`, `LOG_LEVEL`, and stderr threshold; default to `logs/runtime/<profile>/`, and load it through `src/server/utils/env.ts` plus `src/server/utils/getAppServerRuntimeConfig.ts` or one shared helper.
+- [ ] Add runtime config for `LOG_DIR`, `LOG_LEVEL`, and `LOG_STDERR_LEVEL`; default to runtime-writable-root + `logs/runtime/<profile>/`, default `LOG_LEVEL=INFO`, default `LOG_STDERR_LEVEL=WARN`, and load it through `src/server/utils/env.ts` plus `src/server/utils/getAppServerRuntimeConfig.ts` or one shared helper.
+- [ ] Make the shared daily-file append path explicit: serialize one complete JSONL line per write, queue writes per process, and fall back to per-instance files if shared-file append safety cannot be preserved.
 - [ ] Extend `rateLimitedLogger` so noisy paths can keep rate limiting while writing structured JSONL.
 - [ ] Reuse or extract the safe console serializer so file logging does not reintroduce Bun pretty-print crashes.
 - [ ] Use `Effect` inside the sink for file-handle lifecycle, flush, and shutdown behavior, without forcing `Effect` at every call site.
+- [ ] Install the runtime file sink only in long-lived server entrypoints and keep scripts/tests terminal-only by default.
+- [ ] Keep sink installation process-based, not path-based: moving modules such as current `src/agent` code must not by itself change whether logs write to JSONL.
 - [ ] Migrate the hottest repeating server paths first: judgments jobs, full-text pipeline, export streaming, request summaries.
 - [ ] Preserve terminal-visible failure paths while migrating progress logs to JSONL.
 - [ ] Preserve existing exception and error-result propagation after adding file logging.
 - [ ] Replace `console.time` and `console.timeEnd` with explicit duration fields.
+- [ ] Keep the desktop backend on the same structured logging model, with runtime JSONL under the desktop data root and `backend.log` retained only as terminal capture.
 - [ ] Remove or dev-gate client-side debug logs and temporary server inspection logs instead of forwarding them to server log files.
 - [ ] Leave interactive and JSON-contract scripts on stdout or stderr.
 - [ ] Keep the sink decision explicit for every touched log call: `file-only`, `both`, `terminal-only`, or `remove-or-dev-only`.
-- [ ] Add or update tests for JSONL writing, rate limiting, path selection, and env parsing.
+- [ ] Add or update tests for JSONL writing, concurrent append safety, rate limiting, path selection, runtime-profile propagation, desktop path resolution, and env parsing.
 - [ ] Verify that terminal output drops to startup, warnings, and real errors only.
 
 ## Quality Gates
 
 - `bun run lint`
+- `bun test src/server/utils/runtimeLogger.test.ts`
 - `bun test src/server/utils/env.test.ts`
 - `bun test src/server/utils/getAppServerRuntimeConfig.test.ts`
+- `bun test src/server/utils/runtimeWritablePath.test.ts`
 - `bun test src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.test.ts`
 - `bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts`
+- `bun test src/desktop/getDesktopRuntimeConfig.test.ts`
+- `bun test scripts/runWithRuntimeProfile.test.ts`
 - `bun run build`
+- `bun run desktop:build`
 - Manual check: run `bun run dev:server`, hit a reviews flow and an export flow, confirm routine progress logs are `file-only` and `logs/runtime/primary/*.jsonl` gains structured entries.
 - Manual check: trigger one failing request or background-job error path and confirm the error is `both`: visible in terminal stderr and present in the matching JSONL file.
-- Manual check: if multiple same-service processes are started intentionally in one profile, confirm their shared daily file contains distinct `instanceId` values for each process.
+- Manual check: if multiple same-service processes are started intentionally in one profile, confirm their shared daily file contains distinct `instanceId` values for each process and still parses as one valid JSON object per line.
 - Manual check: if runtime-profile launchers are touched, run one `primary` or `secondary` flow via `scripts/runWithRuntimeProfile.ts` and confirm logs land under the matching profile directory.
+- Manual check: launch the desktop backend flow, confirm runtime JSONL lands under the desktop data root, and confirm `backend.log` contains only the reduced terminal stream rather than routine progress noise.
 
 ## Commands Run
 
