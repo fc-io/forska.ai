@@ -13,11 +13,14 @@ Layers: server, desktop backend, client, scripts.
 - Use UTC calendar dates in filenames so rotation matches the event timestamps.
 - V1 severity mapping: `console.log` and `rateLimitedLogger.log` map to `INFO`, `warn` maps to `WARN`, and `error` maps to `ERROR`. Add `DEBUG` only if a caller truly needs it.
 - Structured runtime file logging is opt-in per process at bootstrap. Only long-lived server runtimes install the file sink. Shared modules must not auto-enable file logging just because they were imported.
+- Service naming is decided once at process bootstrap and stays stable for the life of that process. Use `app-server` for `src/appServer.ts`, `api-server` and `worker-server` for the split background server processes, `dev-single-server` for the desktop-backed backend, and `single-server` for direct one-process `src/server/index.ts` runs such as `start:server:single`, `dev:server:single`, and raw `SERVER_ROLE=auto` or `SERVER_ROLE=writer` launches outside the split stack.
+- Raw `SERVER_ROLE` does not decide the filename for `single-server`. Those records still include `serverRole` on every line, so an `auto` process can promote or demote while keeping one stable service file.
 - Shared modules, including current code under `src/agent`, inherit logging behavior from the hosting process. They never decide sink installation on import.
 - Do not route logs to file or terminal based on source file path, folder, or module name. The active process bootstrap and per-event sink decision decide routing.
 - Sink: routine server `DEBUG` and `INFO` events are `file-only`.
 - Sink: server `WARN` and `ERROR` events are `both`.
 - Sink routing is decided first per event: `file-only`, `both`, `terminal-only`, or `remove-or-dev-only`.
+- Until a call site is explicitly migrated, preserve its current terminal behavior. Installing the runtime sink must not silently reinterpret untouched `console.*` calls as `file-only`; only touched call sites opt into `file-only`, `both`, `terminal-only`, or removal/dev-gating during the rollout.
 - `LOG_LEVEL` gates file writes after sink routing. Default `LOG_LEVEL=INFO`.
 - `LOG_STDERR_LEVEL` gates terminal duplication after sink routing. Default `LOG_STDERR_LEVEL=WARN`.
 - `terminal-only` bypasses file filtering entirely. `file-only` never writes to stderr. `both` writes to file if the event passes `LOG_LEVEL` and writes to stderr if it passes `LOG_STDERR_LEVEL`.
@@ -25,6 +28,8 @@ Layers: server, desktop backend, client, scripts.
 - For terminal-visible startup, shutdown, and operator-guidance events, keep warnings and errors on stderr. Non-error status lines may stay on stdout.
 - Error visibility rule: unexpected failures, caught exceptions, startup failures, and recovery failures must always reach the terminal on stderr. File logging may duplicate them, but must never be the only sink.
 - Error propagation rule: logging an error does not count as handling it. After emitting the structured error record, preserve the existing failure path by rethrowing, returning the error result, or letting the process-level handler print to stderr.
+- Any process that installs the file sink must also expose one shared bounded `flushRuntimeLogs` path and call it before controlled `process.exit(...)` paths, signal-driven shutdown exits, and other planned teardown that already owns the exit flow. Keep the flush best-effort and time-bounded so shutdown still completes if the filesystem stalls.
+- Fatal or duplicate-process exits may attempt the same bounded flush after writing the terminal-visible error, but terminal visibility wins over file durability. File logging supplements the existing failure path; it must not delay or replace it.
 - Sink: startup and shutdown one-liners are `both`.
 - Sink: interactive CLI stdout and stderr are `terminal-only`.
 - Sink: browser debug logs and temporary inspection logs are `remove-or-dev-only`.
@@ -38,10 +43,12 @@ Layers: server, desktop backend, client, scripts.
 - If multiple instances of the same service run in one profile on the same day, they append to the same service file and are distinguished by per-record instance fields.
 - Shared daily service files are only allowed when each record is serialized once and appended as one newline-terminated buffer with append-mode file semantics. Do not split a single record across multiple writes.
 - Keep a per-process write queue so one process never interleaves its own records. If the target path cannot preserve whole-record appends safely for shared files, fall back to per-instance filenames rather than risk corrupt JSONL.
+- On the first write whose event timestamp lands on a new UTC date, rotate by closing or releasing the previous day's handle after queued writes for that file drain and append subsequent records to the new day's file. Do not require a restart or a background timer for midnight rollover.
 - Recommended file: `logs/runtime/<profile>/app-server-YYYY-MM-DD.jsonl`.
 - Recommended file: `logs/runtime/<profile>/api-server-YYYY-MM-DD.jsonl`.
 - Recommended file: `logs/runtime/<profile>/worker-server-YYYY-MM-DD.jsonl`.
 - Recommended file: `logs/runtime/<profile>/dev-single-server-YYYY-MM-DD.jsonl` when the combined role is used.
+- Recommended file: `logs/runtime/<profile>/single-server-YYYY-MM-DD.jsonl` for direct `src/server/index.ts` runs that are not split into separate API and worker processes.
 - This is more granular than just app vs api, because this repo already has a distinct worker runtime and that is where most repeating logs live.
 - Do not split by subsystem in v1. Put `component`, `event`, `jobId`, `projectId`, and `articleId` in each record instead.
 - Split further only after observing real volume or retention pressure. The first candidate would be a dedicated worker LLM file, not per-route or per-module files.
@@ -52,7 +59,9 @@ Layers: server, desktop backend, client, scripts.
 - Records from API, worker, and `dev-single` runtimes must also include `serverRole` and `apiServerPort`.
 - Records from the app static server must include `appServerPort` instead of `serverRole`.
 - `instanceId` format: `<service>:<hostname>:<port>:<pid>:<processStartedAt>`.
-- Reuse the existing identity pieces already tracked in `src/server/utils/writerConnections.ts` where possible: `hostname`, `pid`, `startedAt`, `serverRole`, and server port.
+- Reuse the existing identity pieces already tracked in `src/server/utils/writerConnections.ts` where possible: `hostname`, `pid`, `serverRole`, and server port.
+- Capture `processStartedAt` once in logger bootstrap state when the process identity helper is initialized during startup, and reuse that exact value for every record from that process.
+- If `writerConnections` also needs that value, feed the bootstrap-captured `processStartedAt` into it. Do not treat its lazily initialized `startedAt` value as authoritative process start time unless both systems are deliberately sharing the same bootstrap state.
 - Do not rely on filename alone to identify a process. Instance identity must be present in every line so shared service files remain attributable.
 
 Example line:
@@ -119,6 +128,7 @@ Example line:
 - Add an explicit runtime-profile marker, for example `FORSKA_RUNTIME_PROFILE`, from `scripts/runWithRuntimeProfile.ts` so file paths resolve predictably to `primary`, `secondary`, or `local`.
 - Default `LOG_DIR` from the runtime writable root plus `logs/runtime/<profile>/`, not from raw `process.cwd()`.
 - Bootstrap the runtime file sink in `src/server/index.ts`, `src/appServer.ts`, and desktop-backed server startup. Scripts and tests should keep the bootstrap off unless a specific task opts in.
+- For direct local one-process backend runs such as `start:server:single`, `dev:server:single`, or raw `bun run src/server/index.ts`, bootstrap the same sink under `service=single-server`. Keep the file name stable even if `SERVER_ROLE=auto` later changes effective role; the per-record `serverRole` field captures the live role.
 - If code currently under `src/agent` is moved under a server-only runtime area, that narrows the chance of accidental non-server file logging. The sink installation rule still stays process-based, not path-based.
 - Moving code from `src/agent` into an API-only area is a code-ownership and runtime-scope improvement, not the mechanism that turns file logging on. File logging still requires explicit bootstrap in the running process.
 - Because scripts import shared server modules at top level, execution context must be decided before process startup or at logger bootstrap time, not by mutating env after imports have already run.
@@ -190,17 +200,19 @@ Example line:
 ## Checklist
 
 - [ ] Add a shared file-backed structured logger for server runtimes and background workers.
-- [ ] Partition log files by runtime process: `app-server`, `api-server`, `worker-server`, and `dev-single` when needed.
+- [ ] Partition log files by runtime process: `app-server`, `api-server`, `worker-server`, `dev-single-server`, and `single-server` when needed.
 - [ ] Add an explicit runtime-profile marker, for example `FORSKA_RUNTIME_PROFILE`, so `logs/runtime/<profile>/...` resolves stably for `primary`, `secondary`, and `local` runs.
-- [ ] Add one shared instance-identity helper and emit `runtimeProfile`, `instanceId`, `hostname`, `pid`, `processStartedAt`, and port fields on every server-side log line.
+- [ ] Add one shared instance-identity helper, capture `processStartedAt` at bootstrap, and emit `runtimeProfile`, `instanceId`, `hostname`, `pid`, `processStartedAt`, and port fields on every server-side log line.
 - [ ] Add runtime config for `LOG_DIR`, `LOG_LEVEL`, and `LOG_STDERR_LEVEL`; default to runtime-writable-root + `logs/runtime/<profile>/`, default `LOG_LEVEL=INFO`, default `LOG_STDERR_LEVEL=WARN`, and load it through `src/server/utils/env.ts` plus `src/server/utils/getAppServerRuntimeConfig.ts` or one shared helper.
-- [ ] Make the shared daily-file append path explicit: serialize one complete JSONL line per write, queue writes per process, and fall back to per-instance files if shared-file append safety cannot be preserved.
+- [ ] Make the shared daily-file append path explicit: serialize one complete JSONL line per write, queue writes per process, rotate on UTC date boundaries without restart, and fall back to per-instance files if shared-file append safety cannot be preserved.
 - [ ] Extend `rateLimitedLogger` so noisy paths can keep rate limiting while writing structured JSONL.
 - [ ] Reuse or extract the safe console serializer so file logging does not reintroduce Bun pretty-print crashes.
-- [ ] Use `Effect` inside the sink for file-handle lifecycle, flush, and shutdown behavior, without forcing `Effect` at every call site.
-- [ ] Install the runtime file sink only in long-lived server entrypoints and keep scripts/tests terminal-only by default.
+- [ ] Use `Effect` inside the sink for file-handle lifecycle, flush, rollover, and shutdown behavior, without forcing `Effect` at every call site.
+- [ ] Install the runtime file sink only in long-lived server entrypoints, including the legacy direct `single-server` backend, and keep scripts/tests terminal-only by default.
+- [ ] Add one bounded flush helper and call it before controlled exits in sink-owning runtimes.
 - [ ] Keep sink installation process-based, not path-based: moving modules such as current `src/agent` code must not by itself change whether logs write to JSONL.
 - [ ] Migrate the hottest repeating server paths first: judgments jobs, full-text pipeline, export streaming, request summaries.
+- [ ] Keep untouched `console.*` call sites on their current terminal behavior until each one is explicitly migrated.
 - [ ] Preserve terminal-visible failure paths while migrating progress logs to JSONL.
 - [ ] Preserve existing exception and error-result propagation after adding file logging.
 - [ ] Replace `console.time` and `console.timeEnd` with explicit duration fields.
@@ -209,7 +221,8 @@ Example line:
 - [ ] Leave interactive and JSON-contract scripts on stdout or stderr.
 - [ ] Keep the sink decision explicit for every touched log call: `file-only`, `both`, `terminal-only`, or `remove-or-dev-only`.
 - [ ] Add or update tests for JSONL writing, concurrent append safety, rate limiting, path selection, runtime-profile propagation, desktop path resolution, and env parsing.
-- [ ] Verify that terminal output drops to startup, warnings, and real errors only.
+- [ ] Add or update tests for legacy `single-server` service selection, UTC date rollover, bounded flush-before-exit behavior, and bootstrap-time process identity capture.
+- [ ] Verify that terminal output drops to startup, warnings, and real errors only for the explicitly migrated hot paths; untouched legacy call sites may remain terminal-visible until they are converted.
 
 ## Quality Gates
 
@@ -224,10 +237,11 @@ Example line:
 - `bun test scripts/runWithRuntimeProfile.test.ts`
 - `bun run build`
 - `bun run desktop:build`
-- Manual check: run `bun run dev:server`, hit a reviews flow and an export flow, confirm routine progress logs are `file-only` and `logs/runtime/primary/*.jsonl` gains structured entries.
+- Manual check: run `bun run dev:server`, hit a reviews flow and an export flow, confirm the migrated routine progress logs are `file-only` and `logs/runtime/primary/*.jsonl` gains structured entries.
 - Manual check: trigger one failing request or background-job error path and confirm the error is `both`: visible in terminal stderr and present in the matching JSONL file.
 - Manual check: if multiple same-service processes are started intentionally in one profile, confirm their shared daily file contains distinct `instanceId` values for each process and still parses as one valid JSON object per line.
 - Manual check: if runtime-profile launchers are touched, run one `primary` or `secondary` flow via `scripts/runWithRuntimeProfile.ts` and confirm logs land under the matching profile directory.
+- Manual check: run `bun run dev:server:single` or `bun run start:server:single`, confirm logs land under `logs/runtime/local/single-server-*.jsonl`, and confirm a direct `SERVER_ROLE=auto` run keeps one `single-server` file even if the per-record `serverRole` changes.
 - Manual check: launch the desktop backend flow, confirm runtime JSONL lands under the desktop data root, and confirm `backend.log` contains only the reduced terminal stream rather than routine progress noise.
 
 ## Commands Run
