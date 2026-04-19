@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
-import {createFileRoute, Link} from '@tanstack/solid-router'
-import {createEffect, createMemo, createSignal, For, Show} from 'solid-js'
+import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
+import {createEffect, createMemo, createSignal, For, on, onMount, Show} from 'solid-js'
 
 import {
   ComparisonProjectJudgmentsTable,
@@ -20,6 +20,79 @@ import {
 } from '../../../../utils/comparisonProjectDifferenceFilter.ts'
 
 const pageLimitOptions = [25, 50, 100]
+
+type CompareProjectJudgmentsUrlState = {
+  currentPage: number
+  pageLimit: number
+  hideSparseRows: boolean
+  showOnlyFullyAnsweredPrompts: boolean
+  differenceFilter: ComparisonProjectDifferenceFilter
+}
+
+const getDefaultCompareProjectJudgmentsUrlState = (): CompareProjectJudgmentsUrlState => {
+  return {
+    currentPage: 1,
+    pageLimit: 50,
+    hideSparseRows: false,
+    showOnlyFullyAnsweredPrompts: false,
+    differenceFilter: 'all',
+  }
+}
+
+const getPositiveIntegerSearchParamValue = (value: string | null, fallback: number) => {
+  const parsedValue = Number.parseInt(value ?? '', 10)
+
+  return Number.isInteger(parsedValue) && parsedValue > 0 ? parsedValue : fallback
+}
+
+const getDifferenceFilterSearchParamValue = (value: string | null): ComparisonProjectDifferenceFilter => {
+  return value === 'human-vs-llm' || value === 'llm-vs-llm' || value === 'any-disagreement' ? value : 'all'
+}
+
+const getInitialCompareProjectJudgmentsUrlState = (): CompareProjectJudgmentsUrlState => {
+  if (typeof window === 'undefined') {
+    return getDefaultCompareProjectJudgmentsUrlState()
+  }
+
+  const defaultState = getDefaultCompareProjectJudgmentsUrlState()
+  const urlParams = new URLSearchParams(window.location.search)
+  const parsedPageLimit = getPositiveIntegerSearchParamValue(urlParams.get('limit'), defaultState.pageLimit)
+
+  return {
+    currentPage: getPositiveIntegerSearchParamValue(urlParams.get('page'), defaultState.currentPage),
+    pageLimit: pageLimitOptions.includes(parsedPageLimit) ? parsedPageLimit : defaultState.pageLimit,
+    hideSparseRows: urlParams.get('hideSparseRows') === '1',
+    showOnlyFullyAnsweredPrompts: urlParams.get('showOnlyFullyAnsweredPrompts') === '1',
+    differenceFilter: getDifferenceFilterSearchParamValue(urlParams.get('differenceFilter')),
+  }
+}
+
+const getCompareProjectJudgmentsSearchParams = (state: CompareProjectJudgmentsUrlState): Record<string, string> => {
+  const defaultState = getDefaultCompareProjectJudgmentsUrlState()
+  const searchParams: Record<string, string> = {}
+
+  if (state.currentPage !== defaultState.currentPage) {
+    searchParams.page = String(state.currentPage)
+  }
+
+  if (state.pageLimit !== defaultState.pageLimit) {
+    searchParams.limit = String(state.pageLimit)
+  }
+
+  if (state.hideSparseRows) {
+    searchParams.hideSparseRows = '1'
+  }
+
+  if (state.showOnlyFullyAnsweredPrompts) {
+    searchParams.showOnlyFullyAnsweredPrompts = '1'
+  }
+
+  if (state.differenceFilter !== defaultState.differenceFilter) {
+    searchParams.differenceFilter = state.differenceFilter
+  }
+
+  return searchParams
+}
 
 const getContentSettingsLabel = (contentVariants: Array<{label: string}>) => {
   return contentVariants.length > 0
@@ -148,16 +221,27 @@ const getColumnSourceProjectId = (
 
 const CompareProjectJudgmentsPage = () => {
   const params = Route.useParams()
+  const navigate = useNavigate()
+  const initialUrlState = getInitialCompareProjectJudgmentsUrlState()
   const comparisonProjectId = () => {
     const routeParams = params()
 
     return 'id' in routeParams ? routeParams.id : ''
   }
-  const [currentPage, setCurrentPage] = createSignal(1)
-  const [pageLimit, setPageLimit] = createSignal(50)
-  const [hideSparseRows, setHideSparseRows] = createSignal(false)
-  const [showOnlyFullyAnsweredPrompts, setShowOnlyFullyAnsweredPrompts] = createSignal(false)
-  const [differenceFilter, setDifferenceFilter] = createSignal<ComparisonProjectDifferenceFilter>('all')
+  const [currentPage, setCurrentPage] = createSignal(initialUrlState.currentPage)
+  const [pageLimit, setPageLimit] = createSignal(initialUrlState.pageLimit)
+  const [hideSparseRows, setHideSparseRows] = createSignal(initialUrlState.hideSparseRows)
+  const [showOnlyFullyAnsweredPrompts, setShowOnlyFullyAnsweredPrompts] = createSignal(
+    initialUrlState.showOnlyFullyAnsweredPrompts,
+  )
+  const [differenceFilter, setDifferenceFilter] = createSignal<ComparisonProjectDifferenceFilter>(
+    initialUrlState.differenceFilter,
+  )
+  const [searchInitialized, setSearchInitialized] = createSignal(false)
+
+  onMount(() => {
+    setSearchInitialized(true)
+  })
 
   const comparisonProjectQuery = useQuery(() => {
     return {
@@ -190,6 +274,7 @@ const CompareProjectJudgmentsPage = () => {
           differenceFilter(),
         )
       },
+      enabled: searchInitialized(),
       refetchOnWindowFocus: false,
     }
   })
@@ -229,6 +314,30 @@ const CompareProjectJudgmentsPage = () => {
       setDifferenceFilter('all')
     }
   })
+
+  createEffect(
+    on(
+      [currentPage, pageLimit, hideSparseRows, showOnlyFullyAnsweredPrompts, differenceFilter, searchInitialized],
+      () => {
+        if (!searchInitialized()) {
+          return
+        }
+
+        void navigate({
+          to: '/compare-judgments/$id/' as '/',
+          params: {id: comparisonProjectId()} as never,
+          search: getCompareProjectJudgmentsSearchParams({
+            currentPage: currentPage(),
+            pageLimit: pageLimit(),
+            hideSparseRows: hideSparseRows(),
+            showOnlyFullyAnsweredPrompts: showOnlyFullyAnsweredPrompts(),
+            differenceFilter: differenceFilter(),
+          }) as never,
+          replace: true,
+        })
+      },
+    ),
+  )
 
   const filteredRows = createMemo(() => {
     const rows = judgmentsPageQuery.data?.data ?? []
