@@ -13,6 +13,7 @@ import {
 import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
 import {ConversionError, convertPdfToText} from '../utils/convertPdfToText.ts'
 import {env} from '../utils/env.ts'
+import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {isExpectedWriterRoleLossError, shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
 
 const CONVERSION_INTERVAL = '0 */2 * * * *' // Every 2 minutes
@@ -22,6 +23,9 @@ const DEFAULT_BATCH_SIZE = 5
 const DEFAULT_CONCURRENCY = 1
 // Maximum number of concurrent batch runs allowed
 const MAX_CONCURRENT_BATCHES = 3
+const fullTextConversionLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
+const fullTextConversionWarningLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
+const fullTextConversionComponent = 'fullTextConversionJobs'
 
 const normalizePositiveInt = (value: number | null | undefined, fallback: number): number => {
   const raw = value == null ? fallback : value
@@ -50,8 +54,7 @@ type FullTextConversionRuntimeConfig = {baseURL: string; modelId: string; modelN
 const getArticlesNeedingConversion = async (batchSize: number): Promise<ArticleForConversion[]> => {
   const collectedArticles: ArticleForConversion[] = []
   const seenIds = new Set<string>()
-
-  console.time('[fullTextConversion] getArticlesNeedingConversion total')
+  const startedAt = Date.now()
 
   // Base conditions: has PDF, no fullText, not failed, not exceeded retry limit
   const baseConditions = [
@@ -62,7 +65,7 @@ const getArticlesNeedingConversion = async (batchSize: number): Promise<ArticleF
   ]
 
   // Step 1: Get running jobs with their projects
-  console.time('[fullTextConversion] query running jobs')
+  const runningJobsQueryStartedAt = Date.now()
   const runningJobsWithProjects = await getAppDatabaseService().queryJson<{
     jobId: string
     projectId: string
@@ -81,16 +84,29 @@ const getArticlesNeedingConversion = async (batchSize: number): Promise<ArticleF
     WHERE jj.status = 'running'
     ORDER BY p.use_fulltext DESC
   `)
-  console.timeEnd('[fullTextConversion] query running jobs')
 
-  console.log(`[fullTextConversion] Found ${runningJobsWithProjects.length} running jobs`)
+  fullTextConversionLogger.log('fullTextConversion:runningJobsQueried', '[fullTextConversion] Running jobs queried', {
+    component: fullTextConversionComponent,
+    durationMs: Date.now() - runningJobsQueryStartedAt,
+    runningJobCount: runningJobsWithProjects.length,
+  })
 
   // Step 2: For each project, find articles needing conversion
   for (const {projectId, useFulltext, dateFrom, dateTo} of runningJobsWithProjects) {
     if (collectedArticles.length >= batchSize) break
 
     const remaining = batchSize - collectedArticles.length
-    console.log(`[fullTextConversion] Project ${projectId} (useFulltext=${useFulltext}), need ${remaining} more`)
+    fullTextConversionLogger.log(
+      'fullTextConversion:projectScanStarted',
+      '[fullTextConversion] Project conversion scan started',
+      {
+        collectedArticleCount: collectedArticles.length,
+        component: fullTextConversionComponent,
+        projectId,
+        remaining,
+        useFulltext,
+      },
+    )
 
     // Build date conditions
     const dateConditions = [
@@ -101,16 +117,28 @@ const getArticlesNeedingConversion = async (batchSize: number): Promise<ArticleF
     })
 
     // Try importRoute path first
+    const projectRoutesQueryStartedAt = Date.now()
     const projectRoutes = await getAppDatabaseService().queryJson<{importRouteId: string}>(`
       SELECT import_route_id AS importRouteId
       FROM app.project_import_route
       WHERE project_id = '${escapeSqlString(projectId)}'
     `)
+    fullTextConversionLogger.log(
+      'fullTextConversion:projectRoutesQueried',
+      '[fullTextConversion] Project import routes queried',
+      {
+        component: fullTextConversionComponent,
+        durationMs: Date.now() - projectRoutesQueryStartedAt,
+        projectId,
+        routeCount: projectRoutes.length,
+      },
+    )
 
     if (projectRoutes.length > 0) {
       const routeIds = projectRoutes.map((r) => {
         return r.importRouteId
       })
+      const articlesViaRouteQueryStartedAt = Date.now()
       const articlesViaRoute = await getAppDatabaseService().queryJson<ArticleForConversion>(`
         SELECT
           a.id AS id,
@@ -123,6 +151,17 @@ const getArticlesNeedingConversion = async (batchSize: number): Promise<ArticleF
         ORDER BY a.article_created_at DESC NULLS LAST
         LIMIT ${remaining}
       `)
+      fullTextConversionLogger.log(
+        'fullTextConversion:articlesViaImportRouteQueried',
+        '[fullTextConversion] Articles via import route queried',
+        {
+          component: fullTextConversionComponent,
+          durationMs: Date.now() - articlesViaRouteQueryStartedAt,
+          projectId,
+          resultCount: articlesViaRoute.length,
+          routeCount: routeIds.length,
+        },
+      )
 
       for (const article of articlesViaRoute) {
         if (!seenIds.has(article.id) && article.fullTextPDF) {
@@ -134,6 +173,7 @@ const getArticlesNeedingConversion = async (batchSize: number): Promise<ArticleF
     }
 
     // Try project_articles path
+    const articlesViaProjectQueryStartedAt = Date.now()
     const articlesViaDirect = await getAppDatabaseService().queryJson<ArticleForConversion>(`
       SELECT
         a.id AS id,
@@ -146,6 +186,16 @@ const getArticlesNeedingConversion = async (batchSize: number): Promise<ArticleF
       ORDER BY a.article_created_at DESC NULLS LAST
       LIMIT ${remaining}
     `)
+    fullTextConversionLogger.log(
+      'fullTextConversion:articlesViaProjectQueried',
+      '[fullTextConversion] Articles via project queried',
+      {
+        component: fullTextConversionComponent,
+        durationMs: Date.now() - articlesViaProjectQueryStartedAt,
+        projectId,
+        resultCount: articlesViaDirect.length,
+      },
+    )
 
     for (const article of articlesViaDirect) {
       if (!seenIds.has(article.id) && article.fullTextPDF) {
@@ -158,7 +208,7 @@ const getArticlesNeedingConversion = async (batchSize: number): Promise<ArticleF
   // Step 3: Fallback - fill remaining with any articles
   if (collectedArticles.length < batchSize) {
     const remaining = batchSize - collectedArticles.length
-    console.log(`[fullTextConversion] Fallback: fetching ${remaining} more articles`)
+    const fallbackQueryStartedAt = Date.now()
     const fallbackArticles = await getAppDatabaseService().queryJson<ArticleForConversion>(`
       SELECT
         id,
@@ -169,6 +219,17 @@ const getArticlesNeedingConversion = async (batchSize: number): Promise<ArticleF
       ORDER BY a.created_at DESC
       LIMIT ${remaining + seenIds.size}
     `)
+    fullTextConversionLogger.log(
+      'fullTextConversion:fallbackArticlesQueried',
+      '[fullTextConversion] Fallback articles queried',
+      {
+        component: fullTextConversionComponent,
+        durationMs: Date.now() - fallbackQueryStartedAt,
+        remaining,
+        resultCount: fallbackArticles.length,
+        seenArticleCount: seenIds.size,
+      },
+    )
 
     for (const article of fallbackArticles) {
       if (collectedArticles.length >= batchSize) break
@@ -179,8 +240,16 @@ const getArticlesNeedingConversion = async (batchSize: number): Promise<ArticleF
     }
   }
 
-  console.timeEnd('[fullTextConversion] getArticlesNeedingConversion total')
-  console.log(`[fullTextConversion] Returning ${collectedArticles.length} articles for conversion`)
+  fullTextConversionLogger.log(
+    'fullTextConversion:articlesSelected',
+    '[fullTextConversion] Articles selected for conversion',
+    {
+      batchSize,
+      component: fullTextConversionComponent,
+      durationMs: Date.now() - startedAt,
+      resultCount: collectedArticles.length,
+    },
+  )
 
   return collectedArticles
 }
@@ -221,7 +290,11 @@ const convertArticles = async ({
   })
 
   if (rejected.length > 0) {
-    console.error('[fullTextConversion] Worker failures', {total: results.length, rejected: rejected.length})
+    fullTextConversionWarningLogger.error('fullTextConversion:workerFailures', '[fullTextConversion] Worker failures', {
+      component: fullTextConversionComponent,
+      rejected: rejected.length,
+      total: results.length,
+    })
   }
 }
 
@@ -233,7 +306,11 @@ const convertArticle = async ({
   runtimeConfig: FullTextConversionRuntimeConfig
 }): Promise<void> => {
   const startTime = Date.now()
-  console.log(`[fullTextConversion] Converting article ${article.id} with ${runtimeConfig.modelName}`)
+  fullTextConversionLogger.log(
+    'fullTextConversion:articleConversionStarted',
+    '[fullTextConversion] Article conversion started',
+    {articleId: article.id, component: fullTextConversionComponent, modelName: runtimeConfig.modelName},
+  )
 
   try {
     const {md, html} = await convertPdfToText({
@@ -261,7 +338,17 @@ const convertArticle = async ({
       WHERE id = '${escapeSqlString(article.id)}'
     `)
 
-    console.log(`[fullTextConversion] Success: article ${article.id} (${Date.now() - startTime}ms, ${md.length} chars)`)
+    fullTextConversionLogger.log(
+      'fullTextConversion:articleConversionSucceeded',
+      '[fullTextConversion] Article conversion succeeded',
+      {
+        articleId: article.id,
+        charCount: md.length,
+        component: fullTextConversionComponent,
+        durationMs: Date.now() - startTime,
+        modelName: runtimeConfig.modelName,
+      },
+    )
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
     const msg = errorMessage.toLowerCase()
@@ -293,7 +380,19 @@ const convertArticle = async ({
       WHERE id = '${escapeSqlString(article.id)}'
     `)
 
-    console.log(`[fullTextConversion] ${isFinalFailure ? 'Failed' : 'Retry'}: article ${article.id} - ${errorMessage}`)
+    fullTextConversionWarningLogger.warn(
+      `fullTextConversion:articleConversion:${isFinalFailure ? 'failed' : 'retry'}`,
+      `[fullTextConversion] Article conversion ${isFinalFailure ? 'failed' : 'will retry'}`,
+      {
+        articleId: article.id,
+        attempts,
+        component: fullTextConversionComponent,
+        durationMs: Date.now() - startTime,
+        errorMessage,
+        finalFailure: isFinalFailure,
+        modelName: runtimeConfig.modelName,
+      },
+    )
   }
 }
 
@@ -304,8 +403,10 @@ const runConversionBatch = async () => {
   if (!env.RUN_SERVER_FULL_TEXT_CONVERSION_CRON || !shouldCurrentServerRunWriterWork()) return
 
   if (runningBatches >= MAX_CONCURRENT_BATCHES) {
-    console.log(
-      `[fullTextConversion] Max concurrent batches reached (${runningBatches}/${MAX_CONCURRENT_BATCHES}), skipping`,
+    fullTextConversionLogger.log(
+      'fullTextConversion:maxConcurrentBatchesReached',
+      '[fullTextConversion] Max concurrent batches reached',
+      {component: fullTextConversionComponent, maxConcurrentBatches: MAX_CONCURRENT_BATCHES, runningBatches},
     )
     return
   }
@@ -320,18 +421,31 @@ const runConversionBatch = async () => {
     if (!shouldCurrentServerRunWriterWork()) return
 
     if (!runtimeConfig) {
-      console.log('[fullTextConversion] No PDF conversion model configured, skipping batch')
+      fullTextConversionLogger.log(
+        'fullTextConversion:modelConfigMissing',
+        '[fullTextConversion] No PDF conversion model configured',
+        {batchNumber, component: fullTextConversionComponent},
+      )
       return
     }
 
-    console.log(
-      `[fullTextConversion] Starting batch #${batchNumber} (size=${batchSize}, concurrency=${concurrency}, model=${runtimeConfig.modelName}, running=${runningBatches}/${MAX_CONCURRENT_BATCHES})`,
-    )
+    fullTextConversionLogger.log('fullTextConversion:batchStarted', '[fullTextConversion] Conversion batch started', {
+      batchNumber,
+      batchSize,
+      component: fullTextConversionComponent,
+      concurrency,
+      maxConcurrentBatches: MAX_CONCURRENT_BATCHES,
+      modelName: runtimeConfig.modelName,
+      runningBatches,
+    })
 
     const articles = await getArticlesNeedingConversion(batchSize)
 
     if (articles.length === 0) {
-      console.log(`[fullTextConversion] Batch #${batchNumber}: No articles to convert`)
+      fullTextConversionLogger.log('fullTextConversion:batchEmpty', '[fullTextConversion] Conversion batch empty', {
+        batchNumber,
+        component: fullTextConversionComponent,
+      })
       return
     }
 

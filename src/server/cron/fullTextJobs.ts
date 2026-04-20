@@ -11,6 +11,7 @@ import {
   getTimestampLiteral,
 } from '../services/appQueryHelpers.ts'
 import {env} from '../utils/env.ts'
+import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {isExpectedWriterRoleLossError, shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
 import {fullTextArticleFetchFromArxiv} from './fullTextJobs/fullTextArticleFetchFromArxiv.ts'
 import {fullTextArticleFetchFromOriginalUrls} from './fullTextJobs/fullTextArticleFetchFromOriginalUrls.ts'
@@ -18,6 +19,8 @@ import {fullTextArticleFetchFromUnpaywall} from './fullTextJobs/fullTextArticleF
 import {attemptsToLegacyResult, type PdfFetchAttemptResult} from './fullTextJobs/pdfFetchTypes.ts'
 
 const NEW_ARTICLES_INTERVAL = '0 * * * * *'
+const fullTextFetchLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
+const fullTextFetchComponent = 'fullTextJobs'
 
 type ArticleResult = {
   id: string
@@ -35,11 +38,10 @@ type ArticleResult = {
 const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Promise<ArticleResult[]> => {
   const collectedArticles: ArticleResult[] = []
   const seenIds = new Set<string>()
-
-  console.time('[fullTextJobs] getArticlesWithoutFullText total')
+  const startedAt = Date.now()
 
   // Step 1: Get running jobs with their projects
-  console.time('[fullTextJobs] query running jobs')
+  const runningJobsQueryStartedAt = Date.now()
   const runningJobsWithProjects = await getAppDatabaseService().queryJson<{
     jobId: string
     projectId: string
@@ -58,16 +60,25 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
     WHERE jj.status = 'running'
     ORDER BY p.use_fulltext DESC
   `)
-  console.timeEnd('[fullTextJobs] query running jobs')
 
-  console.log(`[fullTextJobs] Found ${runningJobsWithProjects.length} running jobs`)
+  fullTextFetchLogger.log('fullTextJobs:runningJobsQueried', '[fullTextJobs] Running jobs queried', {
+    component: fullTextFetchComponent,
+    durationMs: Date.now() - runningJobsQueryStartedAt,
+    runningJobCount: runningJobsWithProjects.length,
+  })
 
   // Step 2: For each project, find articles without full text
   for (const {projectId, useFulltext, dateFrom, dateTo} of runningJobsWithProjects) {
     if (collectedArticles.length >= numberOfArticlesToFetch) break
 
     const remaining = numberOfArticlesToFetch - collectedArticles.length
-    console.log(`[fullTextJobs] Project ${projectId} (useFulltext=${useFulltext}), need ${remaining} more`)
+    fullTextFetchLogger.log('fullTextJobs:projectScanStarted', '[fullTextJobs] Project full-text scan started', {
+      collectedArticleCount: collectedArticles.length,
+      component: fullTextFetchComponent,
+      projectId,
+      remaining,
+      useFulltext,
+    })
 
     // Build date conditions
     const dateConditions = [
@@ -78,19 +89,24 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
     })
 
     // Try importRoute path first
-    console.time(`[fullTextJobs] project ${projectId} importRoute query`)
+    const projectRoutesQueryStartedAt = Date.now()
     const projectRoutes = await getAppDatabaseService().queryJson<{importRouteId: string}>(`
       SELECT import_route_id AS importRouteId
       FROM app.project_import_route
       WHERE project_id = '${escapeSqlString(projectId)}'
     `)
-    console.timeEnd(`[fullTextJobs] project ${projectId} importRoute query`)
+    fullTextFetchLogger.log('fullTextJobs:projectRoutesQueried', '[fullTextJobs] Project import routes queried', {
+      component: fullTextFetchComponent,
+      durationMs: Date.now() - projectRoutesQueryStartedAt,
+      projectId,
+      routeCount: projectRoutes.length,
+    })
 
     if (projectRoutes.length > 0) {
       const routeIds = projectRoutes.map((r) => {
         return r.importRouteId
       })
-      console.time(`[fullTextJobs] project ${projectId} articles via importRoute`)
+      const articlesViaRouteQueryStartedAt = Date.now()
       const articlesViaRoute = await getAppDatabaseService().queryJson<{
         id: string
         arxivId: string | null
@@ -110,7 +126,17 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
         ORDER BY a.article_created_at DESC NULLS LAST
         LIMIT ${remaining}
       `)
-      console.timeEnd(`[fullTextJobs] project ${projectId} articles via importRoute`)
+      fullTextFetchLogger.log(
+        'fullTextJobs:articlesViaImportRouteQueried',
+        '[fullTextJobs] Articles via import route queried',
+        {
+          component: fullTextFetchComponent,
+          durationMs: Date.now() - articlesViaRouteQueryStartedAt,
+          projectId,
+          resultCount: articlesViaRoute.length,
+          routeCount: routeIds.length,
+        },
+      )
 
       for (const article of articlesViaRoute) {
         if (!seenIds.has(article.id)) {
@@ -122,7 +148,7 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
     }
 
     // Try project_articles path
-    console.time(`[fullTextJobs] project ${projectId} articles via project_articles`)
+    const articlesViaProjectQueryStartedAt = Date.now()
     const articlesViaDirect = await getAppDatabaseService().queryJson<{
       id: string
       arxivId: string | null
@@ -142,7 +168,12 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
       ORDER BY a.article_created_at DESC NULLS LAST
       LIMIT ${remaining}
     `)
-    console.timeEnd(`[fullTextJobs] project ${projectId} articles via project_articles`)
+    fullTextFetchLogger.log('fullTextJobs:articlesViaProjectQueried', '[fullTextJobs] Articles via project queried', {
+      component: fullTextFetchComponent,
+      durationMs: Date.now() - articlesViaProjectQueryStartedAt,
+      projectId,
+      resultCount: articlesViaDirect.length,
+    })
 
     for (const article of articlesViaDirect) {
       if (!seenIds.has(article.id)) {
@@ -155,8 +186,7 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
   // Step 3: Fallback - fill remaining with any articles
   if (collectedArticles.length < numberOfArticlesToFetch) {
     const remaining = numberOfArticlesToFetch - collectedArticles.length
-    console.log(`[fullTextJobs] Fallback: fetching ${remaining} more articles`)
-    console.time('[fullTextJobs] fallback query')
+    const fallbackQueryStartedAt = Date.now()
     const fallbackArticles = await getAppDatabaseService().queryJson<{
       id: string
       arxivId: string | null
@@ -173,7 +203,13 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
       ORDER BY created_at DESC
       LIMIT ${remaining + seenIds.size}
     `)
-    console.timeEnd('[fullTextJobs] fallback query')
+    fullTextFetchLogger.log('fullTextJobs:fallbackArticlesQueried', '[fullTextJobs] Fallback articles queried', {
+      component: fullTextFetchComponent,
+      durationMs: Date.now() - fallbackQueryStartedAt,
+      remaining,
+      resultCount: fallbackArticles.length,
+      seenArticleCount: seenIds.size,
+    })
 
     for (const article of fallbackArticles) {
       if (collectedArticles.length >= numberOfArticlesToFetch) break
@@ -184,8 +220,12 @@ const getArticlesWithoutFullText = async (numberOfArticlesToFetch: number): Prom
     }
   }
 
-  console.timeEnd('[fullTextJobs] getArticlesWithoutFullText total')
-  console.log(`[fullTextJobs] Returning ${collectedArticles.length} articles`)
+  fullTextFetchLogger.log('fullTextJobs:articlesSelected', '[fullTextJobs] Articles selected for full-text fetch', {
+    component: fullTextFetchComponent,
+    durationMs: Date.now() - startedAt,
+    resultCount: collectedArticles.length,
+    targetCount: numberOfArticlesToFetch,
+  })
 
   return collectedArticles
 }

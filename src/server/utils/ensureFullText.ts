@@ -3,9 +3,12 @@ import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
 import {ConversionError, convertPdfToText} from './convertPdfToText.ts'
-import {rateLimitedLogger} from './rateLimitedLogger.ts'
+import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 
 const DOCLING_CONVERSION_TIMEOUT_MS = 600_000 // 10 minutes - same as cron job
+const ensureFullTextLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
+const ensureFullTextWarningLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
+const ensureFullTextComponent = 'ensureFullText'
 
 // In-memory lock map to prevent concurrent conversions of the same article
 const conversionLocks = new Map<string, Promise<void>>()
@@ -73,6 +76,7 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
     resolve = r
   })
   conversionLocks.set(articleId, lock)
+  const conversionStartedAt = Date.now()
 
   try {
     // Double-check after acquiring lock (another process may have finished)
@@ -104,8 +108,10 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
       return {text: null, shouldSkip: true, reason: 'no_fulltext'}
     }
 
-    console.log(`[ensureFullText] Converting article ${articleId} on-the-fly`)
-    const startTime = Date.now()
+    ensureFullTextLogger.log('ensureFullText:conversionStarted', '[ensureFullText] On-demand conversion started', {
+      articleId,
+      component: ensureFullTextComponent,
+    })
     const runtimeConfig = await getUserConfigQueryService().getFullTextConversionModelConfig()
 
     if (!runtimeConfig) {
@@ -130,7 +136,12 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
       WHERE id = '${escapeSqlString(articleId)}'
     `)
 
-    console.log(`[ensureFullText] Success: article ${articleId} (${Date.now() - startTime}ms, ${md.length} chars)`)
+    ensureFullTextLogger.log('ensureFullText:conversionSucceeded', '[ensureFullText] On-demand conversion succeeded', {
+      articleId,
+      charCount: md.length,
+      component: ensureFullTextComponent,
+      durationMs: Date.now() - conversionStartedAt,
+    })
     return {text: md, shouldSkip: false}
   } catch (error) {
     // Classify error
@@ -167,9 +178,17 @@ export const ensureFullText = async (article: ArticleRecord, articleId: string):
       WHERE id = '${escapeSqlString(articleId)}'
     `)
 
-    rateLimitedLogger.log(
+    ensureFullTextWarningLogger.warn(
       `fulltext:conversion:${isFinalFailure ? 'failed' : 'retry'}`,
-      `[ensureFullText] ${isFinalFailure ? 'Failed' : 'Retry'}: article ${articleId} - ${errorMessage}`,
+      `[ensureFullText] On-demand conversion ${isFinalFailure ? 'failed' : 'will retry'}`,
+      {
+        articleId,
+        attempts,
+        component: ensureFullTextComponent,
+        durationMs: Date.now() - conversionStartedAt,
+        errorMessage,
+        finalFailure: isFinalFailure,
+      },
     )
 
     // Return status to indicate whether caller should skip or requeue
