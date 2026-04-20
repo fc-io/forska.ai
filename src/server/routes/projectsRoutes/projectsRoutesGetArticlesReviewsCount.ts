@@ -1,13 +1,32 @@
 import {Elysia, t} from 'elysia'
 
 import {countArticlesReviewsFromOlap} from '../../../services/olap/articlesReviewsOlap.ts'
+import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
+
+const articlesReviewsCountLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
+const articlesReviewsCountErrorLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
 
 export const projectsRoutesGetArticlesReviewsCount = new Elysia().post(
   '/api/articlesreviewscount',
   async ({body}) => {
     const startTime = Date.now()
-    console.log('[Count API] Request starting...')
+    articlesReviewsCountLogger.force(
+      'projects.articles-reviews-count.request-start',
+      'Articles reviews count request started',
+      'log',
+      {
+        projectId: body.projectId,
+        limit: body.limit,
+        from: body.from,
+        to: body.to,
+        search: body.search,
+        promptFilterCount: Object.keys(body.prompts || {}).length,
+        hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
+        hasStudyDecisionConflict: body.hasStudyDecisionConflict,
+        llmStatus: body.llmStatus,
+      },
+    )
 
     try {
       const limit = parseInt(body.limit, 10) || 100
@@ -27,11 +46,21 @@ export const projectsRoutesGetArticlesReviewsCount = new Elysia().post(
       })
 
       const elapsed = Date.now() - startTime
-      console.log(`[Count API] Complete: ${result.totalCount.toLocaleString()} articles in ${elapsed}ms`)
+      articlesReviewsCountLogger.force(
+        'projects.articles-reviews-count.request-summary',
+        'Articles reviews count request completed',
+        'log',
+        {projectId: body.projectId, durationMs: elapsed, totalCount: result.totalCount, totalPages: result.totalPages},
+      )
 
       return result
     } catch (error) {
-      console.error('[Count API] Error:', error)
+      articlesReviewsCountErrorLogger.force(
+        'projects.articles-reviews-count.error',
+        'Articles reviews count request failed',
+        'error',
+        {projectId: body.projectId, error: error instanceof Error ? error.message : String(error)},
+      )
       return {totalCount: 0, totalPages: 0, error: error instanceof Error ? error.message : 'Unknown error'}
     }
   },

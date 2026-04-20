@@ -6,15 +6,18 @@ import {
   getNumericFiltersFromOlap,
 } from '../../../services/olap/articlesReviewsFiltersOlap.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
+import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {type EnumFilterResult, getEnumBasedFilters} from './articlesReviewsFiltersEnum.ts'
 import type {NumericFilterResult} from './articlesReviewsFiltersNumeric.ts'
 import {analyzePromptTypes} from './articlesReviewsFiltersUtils.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
 
+const articlesReviewsFiltersLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
+const articlesReviewsFiltersErrorLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
+
 export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
   '/api/articlesreviewsfilters',
   async ({query, set}) => {
-    console.log('articlesreviewsfilters', query)
     try {
       if (!query?.projectId) {
         set.status = 400
@@ -28,11 +31,37 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
       const hasDuplicateStudyRecords = query?.covidenceDuplicates === '1'
       const hasStudyDecisionConflict = query?.covidenceConflicts === '1'
       const searchTitle = typeof query?.search === 'string' ? query.search.trim() : ''
+      articlesReviewsFiltersLogger.force(
+        'projects.articles-reviews-filters.request-start',
+        'Articles reviews filters request started',
+        'log',
+        {
+          projectId: query.projectId,
+          from: query.from,
+          to: query.to,
+          search: searchTitle,
+          hasDuplicateStudyRecords,
+          hasStudyDecisionConflict,
+        },
+      )
 
       // Get all prompts for this project with their type information
       const projectPromptRows = await getAppQueryService().getProjectPromptRows(query.projectId)
 
       if (projectPromptRows.length === 0) {
+        articlesReviewsFiltersLogger.force(
+          'projects.articles-reviews-filters.request-summary',
+          'Articles reviews filters request completed',
+          'log',
+          {
+            projectId: query.projectId,
+            promptCount: 0,
+            enumFilterCount: 0,
+            databaseFilterCount: 0,
+            numericFilterCount: 0,
+            resultFilterCount: 0,
+          },
+        )
         return []
       }
 
@@ -117,9 +146,28 @@ export const projectsRoutesGetArticlesReviewsFilters = new Elysia().get(
         }
       })
 
+      articlesReviewsFiltersLogger.force(
+        'projects.articles-reviews-filters.request-summary',
+        'Articles reviews filters request completed',
+        'log',
+        {
+          projectId: query.projectId,
+          promptCount: projectPromptRows.length,
+          enumFilterCount: enumFilters.length,
+          databaseFilterCount: databaseFilters.length,
+          numericFilterCount: numericFilters.length,
+          resultFilterCount: result.length,
+        },
+      )
+
       return result
     } catch (error) {
-      console.error('Error fetching articles reviews filters:', error)
+      articlesReviewsFiltersErrorLogger.force(
+        'projects.articles-reviews-filters.error',
+        'Articles reviews filters request failed',
+        'error',
+        {projectId: query?.projectId, error: error instanceof Error ? error.message : String(error)},
+      )
       set.status = 500
       throw new Error(error instanceof Error ? error.message : 'Failed to fetch articles reviews filters', {
         cause: error,
