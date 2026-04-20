@@ -1,4 +1,4 @@
-import {existsSync, mkdtempSync, readFileSync} from 'node:fs'
+import {existsSync, mkdtempSync, readFileSync, writeFileSync} from 'node:fs'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
@@ -6,11 +6,14 @@ import {expect, test} from 'bun:test'
 
 import {getRuntimeServiceNameForServerRole} from './runtimeBootstrap.ts'
 import {
+  flushRuntimeLogs,
   getDefaultRuntimeLogDir,
   getRuntimeLogConfig,
+  getRuntimeLogFileMode,
   getRuntimeLogProfile,
   installRuntimeJsonlSink,
   isRuntimeJsonlSinkInstalled,
+  pruneManagedRuntimeLogFiles,
   resetRuntimeJsonlSinkForTests,
   writeRuntimeLogEvent,
 } from './runtimeLogger.ts'
@@ -51,6 +54,12 @@ test('normalizes runtime log filtering env and resolves explicit log dirs', () =
       envValues: {LOG_DIR: 'tmp/logs', LOG_LEVEL: 'debug', LOG_STDERR_LEVEL: 'error'},
     }),
   ).toEqual({logDir: '/repo/forska/tmp/logs', logLevel: 'DEBUG', logStderrLevel: 'ERROR', runtimeProfile: 'local'})
+})
+
+test('selects shared runtime log files only on tested platform allowlist', () => {
+  expect(getRuntimeLogFileMode({platform: 'darwin'})).toBe('shared-file')
+  expect(getRuntimeLogFileMode({platform: 'linux'})).toBe('shared-file')
+  expect(getRuntimeLogFileMode({platform: 'win32'})).toBe('per-instance-file')
 })
 
 test('selects stable runtime service names from server role before runtime imports', () => {
@@ -154,6 +163,93 @@ test('runtime JSONL sink writes one structured record to the service daily file'
   resetRuntimeProcessIdentityForTests()
 })
 
+test('runtime JSONL sink uses instance suffixed fallback files when shared append is disabled', () => {
+  resetRuntimeJsonlSinkForTests()
+  resetRuntimeProcessIdentityForTests()
+  const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
+  initializeRuntimeProcessIdentity({
+    hostnameValue: 'test-host',
+    listenPort: 4012,
+    pid: 223,
+    processStartedAt: '2026-04-20T12:00:00.000Z',
+    service: 'worker-server',
+  })
+  installRuntimeJsonlSink({
+    envValues: {LOG_DIR: logDir, LOG_LEVEL: 'INFO', SERVER_ROLE: 'worker'},
+    platform: 'win32',
+    timestamp: '2026-04-20T12:00:00.000Z',
+  })
+
+  expect(
+    writeRuntimeLogEvent({
+      event: 'runtime.logger.instance-file',
+      message: 'instance fallback',
+      severity: 'INFO',
+      timestamp: '2026-04-20T12:30:00.000Z',
+    }),
+  ).toBe(true)
+
+  expect(
+    existsSync(
+      join(logDir, 'worker-server-2026-04-20-worker-server_test-host_4012_223_2026-04-20T12_00_00.000Z.jsonl'),
+    ),
+  ).toBe(true)
+  expect(existsSync(join(logDir, 'worker-server-2026-04-20.jsonl'))).toBe(false)
+  resetRuntimeJsonlSinkForTests()
+  resetRuntimeProcessIdentityForTests()
+})
+
+test('runtime JSONL sink prunes managed files older than seven UTC days at bootstrap and rollover', () => {
+  resetRuntimeJsonlSinkForTests()
+  resetRuntimeProcessIdentityForTests()
+  const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
+  const oldFile = 'worker-server-2026-04-11.jsonl'
+  const retainedFile = 'worker-server-2026-04-13.jsonl'
+  const unmanagedFile = 'notes-2026-04-01.jsonl'
+  writeFileSync(join(logDir, oldFile), '{}\n', 'utf8')
+  writeFileSync(join(logDir, retainedFile), '{}\n', 'utf8')
+  writeFileSync(join(logDir, unmanagedFile), '{}\n', 'utf8')
+
+  initializeRuntimeProcessIdentity({
+    hostnameValue: 'test-host',
+    listenPort: 4013,
+    pid: 224,
+    processStartedAt: '2026-04-20T12:00:00.000Z',
+    service: 'worker-server',
+  })
+  installRuntimeJsonlSink({
+    envValues: {LOG_DIR: logDir, LOG_LEVEL: 'INFO', SERVER_ROLE: 'worker'},
+    timestamp: '2026-04-20T00:00:00.000Z',
+  })
+
+  expect(existsSync(join(logDir, oldFile))).toBe(false)
+  expect(existsSync(join(logDir, retainedFile))).toBe(true)
+  expect(existsSync(join(logDir, unmanagedFile))).toBe(true)
+
+  writeFileSync(join(logDir, 'worker-server-2026-04-12.jsonl'), '{}\n', 'utf8')
+  expect(
+    writeRuntimeLogEvent({
+      event: 'runtime.logger.rollover',
+      message: 'rollover prune',
+      severity: 'INFO',
+      timestamp: '2026-04-21T00:00:00.001Z',
+    }),
+  ).toBe(true)
+  expect(existsSync(join(logDir, 'worker-server-2026-04-12.jsonl'))).toBe(false)
+  resetRuntimeJsonlSinkForTests()
+  resetRuntimeProcessIdentityForTests()
+})
+
+test('runtime log pruning returns deleted managed files', () => {
+  const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
+  writeFileSync(join(logDir, 'api-server-2026-04-10-api_server_instance.jsonl'), '{}\n', 'utf8')
+  writeFileSync(join(logDir, 'api-server-2026-04-20.jsonl'), '{}\n', 'utf8')
+
+  expect(pruneManagedRuntimeLogFiles({currentDate: '2026-04-20', logDir})).toEqual([
+    'api-server-2026-04-10-api_server_instance.jsonl',
+  ])
+})
+
 test('runtime JSONL sink remains opt-in and honors the configured log level', () => {
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
@@ -198,4 +294,10 @@ test('runtime JSONL sink remains opt-in and honors the configured log level', ()
   expect(existsSync(join(logDir, 'api-server-2026-04-20.jsonl'))).toBe(true)
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
+})
+
+test('flushRuntimeLogs resolves through one bounded path', async () => {
+  const result = await flushRuntimeLogs({timeoutMs: 50})
+
+  expect(result).toBe(true)
 })

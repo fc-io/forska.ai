@@ -9,6 +9,7 @@ import {Effect} from 'effect'
 
 import {getEnv} from './env.ts'
 import {ensureDuckdbPathDirectory} from './getDuckdbPath.ts'
+import {exitWithRuntimeLogFlush} from './runtimeLogger.ts'
 import {
   ensureCurrentDuckdbOwnerLease,
   registerWriterDemotionHandler,
@@ -545,11 +546,11 @@ const registerDuckdbShutdownHooks = () => {
     process.once(signal, () => {
       void closeDuckdbServiceForSignal().then(
         () => {
-          process.exit(0)
+          void exitWithRuntimeLogFlush({code: 0})
         },
         (error) => {
           console.error(`[duckdb] shutdown failed on ${signal}`, error)
-          process.exit(1)
+          void exitWithRuntimeLogFlush({code: 1})
         },
       )
     })
