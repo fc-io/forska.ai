@@ -1,9 +1,14 @@
 import {basename} from 'path'
 
+import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {resolveRuntimeFilePath} from './runtimeWritablePath.ts'
 
 // Bun global type declaration for environments where Bun types aren't available
 declare const Bun: {file: (path: string) => {exists: () => Promise<boolean>; arrayBuffer: () => Promise<ArrayBuffer>}}
+
+const convertPdfToTextLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
+const convertPdfToTextWarningLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
+const convertPdfToTextComponent = 'convertPdfToText'
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -151,7 +156,18 @@ export const convertPdfToText = async ({
       try {
         const errorBody = await res.text()
         errorDetails = errorBody ? ` - ${errorBody.slice(0, 500)}` : ''
-        console.error(`[convertPdfToText] Error response from Docling: ${errorBody}`)
+        convertPdfToTextWarningLogger.error(
+          'convertPdfToText:doclingErrorResponse',
+          '[convertPdfToText] Error response from Docling',
+          {
+            component: convertPdfToTextComponent,
+            durationMs: Date.now() - startTime,
+            fileSizeMB,
+            localPath: absPath,
+            responseBody: errorBody,
+            status: res.status,
+          },
+        )
       } catch {
         // Ignore if we can't read the body
       }
@@ -174,7 +190,17 @@ export const convertPdfToText = async ({
 
     if (!mdContent) {
       const summary = summarizeDoclingResponse(json)
-      console.error(`[convertPdfToText] Docling returned no Markdown content: ${summary} (file: ${fileSizeMB}MB)`)
+      convertPdfToTextWarningLogger.error(
+        'convertPdfToText:missingMarkdownContent',
+        '[convertPdfToText] Docling returned no Markdown content',
+        {
+          component: convertPdfToTextComponent,
+          durationMs: Date.now() - startTime,
+          fileSizeMB,
+          localPath: absPath,
+          summary,
+        },
+      )
       throw new ConversionError(
         `Docling returned no Markdown content (${summary}) (file: ${fileSizeMB}MB)`,
         undefined,
@@ -183,9 +209,13 @@ export const convertPdfToText = async ({
     }
 
     const duration = Date.now() - startTime
-    console.log(
-      `[convertPdfToText] Success: ${absPath} (${duration}ms, ${mdContent.length} chars MD, ${htmlContent?.length ?? 0} chars HTML)`,
-    )
+    convertPdfToTextLogger.log('convertPdfToText:conversionSucceeded', '[convertPdfToText] PDF conversion succeeded', {
+      component: convertPdfToTextComponent,
+      durationMs: duration,
+      htmlCharCount: htmlContent?.length ?? 0,
+      localPath: absPath,
+      markdownCharCount: mdContent.length,
+    })
 
     return {md: mdContent, html: htmlContent}
   } catch (error) {
