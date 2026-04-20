@@ -1,7 +1,8 @@
 import {installSafeConsoleLogging} from './installSafeConsoleLogging.ts'
 import {getRuntimeLogConfig} from './runtimeLogger.ts'
+import {initializeRuntimeProcessIdentity, type RuntimeProcessServiceName} from './runtimeProcessIdentity.ts'
 
-export type RuntimeServiceName = 'api-server' | 'app-server' | 'dev-single-server' | 'single-server' | 'worker-server'
+export type RuntimeServiceName = RuntimeProcessServiceName
 
 type BootstrapRuntimeOptions = {envValues?: Record<string, string | undefined>; serviceName: RuntimeServiceName}
 
@@ -39,6 +40,7 @@ export const bootstrapRuntime = ({
   envValues.LOG_DIR = runtimeLogConfig.logDir
   envValues.LOG_LEVEL = runtimeLogConfig.logLevel
   envValues.LOG_STDERR_LEVEL = runtimeLogConfig.logStderrLevel
+  initializeRuntimeProcessIdentity({envValues, runtimeProfile: runtimeLogConfig.runtimeProfile, service: serviceName})
   installSafeConsoleLogging()
   return serviceName
 }

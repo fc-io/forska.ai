@@ -7,15 +7,20 @@ export type WriterConnectionRow = {
   connectionId: string
   firstSeenAt: Date | null
   hostname: string
+  instanceId: string
   isCurrentProcess: boolean
   isStale: boolean
   lastHeartbeatAt: Date | null
   lastProxyAt: Date | null
   lastRequestPath: string | null
   lastSeenAt: Date | null
+  listenPort: number
   pid: number
+  processStartedAt: Date | null
   proxyCount: number
+  runtimeProfile: string
   serverRole: string
+  service: string
   startedAt: Date | null
   writerUrl: string | null
 }
@@ -58,15 +63,20 @@ const normalizeWriterConnectionRow = (row: Record<string, unknown>): WriterConne
     connectionId: typeof row.connectionId === 'string' ? row.connectionId : '',
     firstSeenAt: normalizeWriterConnectionDate(row.firstSeenAt),
     hostname: typeof row.hostname === 'string' ? row.hostname : '',
+    instanceId: typeof row.instanceId === 'string' ? row.instanceId : '',
     isCurrentProcess: row.isCurrentProcess === true,
     isStale: row.isStale === true,
     lastHeartbeatAt: normalizeWriterConnectionDate(row.lastHeartbeatAt),
     lastProxyAt: normalizeWriterConnectionDate(row.lastProxyAt),
     lastRequestPath: typeof row.lastRequestPath === 'string' ? row.lastRequestPath : null,
     lastSeenAt: normalizeWriterConnectionDate(row.lastSeenAt),
+    listenPort: typeof row.listenPort === 'number' ? row.listenPort : 0,
     pid: typeof row.pid === 'number' ? row.pid : 0,
+    processStartedAt: normalizeWriterConnectionDate(row.processStartedAt),
     proxyCount: typeof row.proxyCount === 'number' ? row.proxyCount : 0,
+    runtimeProfile: typeof row.runtimeProfile === 'string' ? row.runtimeProfile : '',
     serverRole: typeof row.serverRole === 'string' ? row.serverRole : '',
+    service: typeof row.service === 'string' ? row.service : '',
     startedAt: normalizeWriterConnectionDate(row.startedAt),
     writerUrl: typeof row.writerUrl === 'string' ? row.writerUrl : null,
   }
