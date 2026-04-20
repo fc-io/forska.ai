@@ -2,6 +2,7 @@ import {cron} from '@elysiajs/cron'
 import {Elysia} from 'elysia'
 
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
+import {writeRuntimeFailureLogEvent} from '../utils/runtimeLogger.ts'
 import {isExpectedWriterRoleLossError, shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentsJobs/judgmentJobServerIdentity.ts'
 import {runJudgmentJobSqliteBackgroundImport} from './judgmentsJobs/judgmentJobSqliteBackgroundImport.ts'
@@ -18,7 +19,12 @@ const cronLogger = createRateLimitedLogger({windowMs: 30_000})
 
 const logJudgingCronError = (label: string, error: unknown) => {
   if (!isExpectedWriterRoleLossError(error)) {
-    console.error(label, error instanceof Error ? error.message : error)
+    writeRuntimeFailureLogEvent({
+      attrs: {error},
+      event: 'judgments.cron.failure',
+      message: label,
+      terminalArgs: [error instanceof Error ? error.message : error],
+    })
   }
 }
 

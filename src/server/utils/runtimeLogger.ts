@@ -31,6 +31,13 @@ export type RuntimeLogEventInput = {
   timestamp?: string
 }
 
+type RuntimeTerminalLogLevel = 'error' | 'log' | 'warn'
+
+type RuntimeTerminalLogEventInput = RuntimeLogEventInput & {
+  terminalArgs?: unknown[]
+  terminalLevel?: RuntimeTerminalLogLevel
+}
+
 type RuntimeLogConfigOptions = {
   cwd?: string
   envValues?: Record<string, string | undefined>
@@ -49,6 +56,9 @@ type RuntimeJsonlSinkState = {
 }
 
 type RuntimeLogFileMode = 'per-instance-file' | 'shared-file'
+type RuntimeProcessWithFailureMonitor = typeof process & {
+  on: (event: 'uncaughtExceptionMonitor', listener: (error: Error, origin: string) => void) => typeof process
+}
 
 const runtimeLogLevels = ['DEBUG', 'INFO', 'WARN', 'ERROR'] as const
 const runtimeLogProfiles = ['local', 'primary', 'secondary'] as const
@@ -60,6 +70,7 @@ const runtimeLogManagedFilePattern =
   /^(api-server|app-server|dev-single-server|single-server|worker-server)-(\d{4}-\d{2}-\d{2})(?:-[A-Za-z0-9_.-]+)?\.jsonl$/
 
 declare global {
+  var __forskaRuntimeFailureHandlersInstalled: boolean | undefined
   var __forskaRuntimeJsonlSinkState: RuntimeJsonlSinkState | undefined
 }
 
@@ -293,13 +304,13 @@ export const isRuntimeJsonlSinkInstalled = () => {
   return getRuntimeJsonlSinkState().installed
 }
 
-export const writeRuntimeLogEvent = (input: RuntimeLogEventInput) => {
+const writeRuntimeLogEventToJsonl = ({force, input}: {force: boolean; input: RuntimeLogEventInput}) => {
   const state = getRuntimeJsonlSinkState()
 
   if (
     !state.installed
     || state.logDir === null
-    || !shouldWriteRuntimeLogSeverity({configuredLevel: state.logLevel, severity: input.severity})
+    || (!force && !shouldWriteRuntimeLogSeverity({configuredLevel: state.logLevel, severity: input.severity}))
   ) {
     return false
   }
@@ -325,6 +336,67 @@ export const writeRuntimeLogEvent = (input: RuntimeLogEventInput) => {
   )
 
   return true
+}
+
+export const writeRuntimeLogEvent = (input: RuntimeLogEventInput) => {
+  return writeRuntimeLogEventToJsonl({force: false, input})
+}
+
+const getTerminalLevelForSeverity = (severity: RuntimeLogSeverity): RuntimeTerminalLogLevel => {
+  const terminalLevels: Record<RuntimeLogSeverity, RuntimeTerminalLogLevel> = {
+    DEBUG: 'log',
+    ERROR: 'error',
+    INFO: 'log',
+    WARN: 'warn',
+  }
+
+  return terminalLevels[severity]
+}
+
+const writeRuntimeTerminalEvent = ({terminalArgs = [], terminalLevel, ...input}: RuntimeTerminalLogEventInput) => {
+  const level = terminalLevel ?? getTerminalLevelForSeverity(input.severity)
+  console[level](input.message, ...terminalArgs)
+}
+
+export const writeRuntimeOperatorLogEvent = (input: RuntimeTerminalLogEventInput) => {
+  const jsonlWritten = writeRuntimeLogEventToJsonl({force: true, input})
+  writeRuntimeTerminalEvent(input)
+
+  return jsonlWritten
+}
+
+export const writeRuntimeFailureLogEvent = ({
+  severity = 'ERROR',
+  terminalLevel: _terminalLevel,
+  ...input
+}: Omit<RuntimeTerminalLogEventInput, 'severity'> & {severity?: RuntimeLogSeverity}) => {
+  const eventInput = {...input, severity}
+  const jsonlWritten = writeRuntimeLogEventToJsonl({force: true, input: eventInput})
+  writeRuntimeTerminalEvent({...eventInput, terminalLevel: 'error'})
+
+  return jsonlWritten
+}
+
+export const registerRuntimeFailureHandlers = () => {
+  if (globalThis.__forskaRuntimeFailureHandlersInstalled) {
+    return
+  }
+
+  globalThis.__forskaRuntimeFailureHandlersInstalled = true
+  ;(process as RuntimeProcessWithFailureMonitor).on('uncaughtExceptionMonitor', (error, origin) => {
+    writeRuntimeFailureLogEvent({
+      attrs: {error, origin},
+      event: 'runtime.failure.uncaught-exception',
+      message: '[runtime] uncaught exception',
+    })
+  })
+  process.on('unhandledRejection', (reason) => {
+    writeRuntimeFailureLogEvent({
+      attrs: {reason},
+      event: 'runtime.failure.unhandled-rejection',
+      message: '[runtime] unhandled promise rejection',
+    })
+  })
 }
 
 export const flushRuntimeLogs = async ({

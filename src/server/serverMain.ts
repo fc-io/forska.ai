@@ -37,6 +37,7 @@ import {env} from './utils/env'
 import {getAppServerRuntimeConfig} from './utils/getAppServerRuntimeConfig.ts'
 import {warmCodexAppServer} from './utils/getCodexAppServerClient.ts'
 import {inferenceRuntimeConfig} from './utils/getInferenceRuntimeConfig.ts'
+import {writeRuntimeOperatorLogEvent} from './utils/runtimeLogger.ts'
 import {shouldServerRoleMountWriterCrons} from './utils/serverRole.ts'
 import {
   getCurrentServerRole,
@@ -69,7 +70,13 @@ const startParentDisconnectMonitor = () => {
     }
 
     parentDisconnectSignalSent = true
-    console.error(`[server] parent pid=${parentPid} exited; shutting down`)
+    writeRuntimeOperatorLogEvent({
+      attrs: {parentPid},
+      event: 'server.shutdown.parent-exited',
+      message: `[server] parent pid=${parentPid} exited; shutting down`,
+      severity: 'WARN',
+      terminalLevel: 'error',
+    })
     process.kill(process.pid, 'SIGTERM')
   }, parentMonitorIntervalMs)
 
@@ -137,12 +144,34 @@ export const app = new Elysia()
   .use(subprojectsRoutes)
   .listen({port: env.API_SERVER_PORT, idleTimeout: 255})
 
-console.log(
-  `🦊 Elysia is running on :${env.API_SERVER_PORT} (nodes=${inferenceRuntimeConfig.gpuNnodes}, gpus/node=${inferenceRuntimeConfig.gpuGpusPerNode}, total_gpus=${inferenceRuntimeConfig.gpuTotalGpus}, shape=${inferenceRuntimeConfig.gpuShape ?? 'not set'}, tp=${inferenceRuntimeConfig.tpSize}, pp=${inferenceRuntimeConfig.ppSize}, dp=${inferenceRuntimeConfig.dpSize}, SGLANG_MAX_RUNNING_REQUESTS=${inferenceRuntimeConfig.sglangMaxRunningRequests}, SGLANG_API_MAX_INFLIGHT_REQUESTS=${inferenceRuntimeConfig.sglangApiMaxInflightRequests}, BUN_CONFIG_MAX_HTTP_REQUESTS=${inferenceRuntimeConfig.bunConfigMaxHttpRequests ?? 'not set'})`,
-)
-console.log(
-  `[server] configured_role=${env.SERVER_ROLE} role=${getCurrentServerRole()} duckdb_writer=${shouldCurrentServerRunWriterWork()}`,
-)
+writeRuntimeOperatorLogEvent({
+  attrs: {
+    apiServerPort: env.API_SERVER_PORT,
+    bunConfigMaxHttpRequests: inferenceRuntimeConfig.bunConfigMaxHttpRequests,
+    gpuGpusPerNode: inferenceRuntimeConfig.gpuGpusPerNode,
+    gpuNnodes: inferenceRuntimeConfig.gpuNnodes,
+    gpuShape: inferenceRuntimeConfig.gpuShape,
+    gpuTotalGpus: inferenceRuntimeConfig.gpuTotalGpus,
+    sglangApiMaxInflightRequests: inferenceRuntimeConfig.sglangApiMaxInflightRequests,
+    sglangMaxRunningRequests: inferenceRuntimeConfig.sglangMaxRunningRequests,
+    tpSize: inferenceRuntimeConfig.tpSize,
+    ppSize: inferenceRuntimeConfig.ppSize,
+    dpSize: inferenceRuntimeConfig.dpSize,
+  },
+  event: 'server.startup.port-bound',
+  message: `🦊 Elysia is running on :${env.API_SERVER_PORT} (nodes=${inferenceRuntimeConfig.gpuNnodes}, gpus/node=${inferenceRuntimeConfig.gpuGpusPerNode}, total_gpus=${inferenceRuntimeConfig.gpuTotalGpus}, shape=${inferenceRuntimeConfig.gpuShape ?? 'not set'}, tp=${inferenceRuntimeConfig.tpSize}, pp=${inferenceRuntimeConfig.ppSize}, dp=${inferenceRuntimeConfig.dpSize}, SGLANG_MAX_RUNNING_REQUESTS=${inferenceRuntimeConfig.sglangMaxRunningRequests}, SGLANG_API_MAX_INFLIGHT_REQUESTS=${inferenceRuntimeConfig.sglangApiMaxInflightRequests}, BUN_CONFIG_MAX_HTTP_REQUESTS=${inferenceRuntimeConfig.bunConfigMaxHttpRequests ?? 'not set'})`,
+  severity: 'INFO',
+})
+writeRuntimeOperatorLogEvent({
+  attrs: {
+    configuredRole: env.SERVER_ROLE,
+    duckdbWriter: shouldCurrentServerRunWriterWork(),
+    role: getCurrentServerRole(),
+  },
+  event: 'server.startup.role-summary',
+  message: `[server] configured_role=${env.SERVER_ROLE} role=${getCurrentServerRole()} duckdb_writer=${shouldCurrentServerRunWriterWork()}`,
+  severity: 'INFO',
+})
 startBackgroundWork()
 
 if (shouldWarmCodex) {
@@ -152,21 +181,32 @@ if (shouldWarmCodex) {
 if (shouldWarmCodex) {
   void getCodexCliLoginStatus().then((status) => {
     if (!status.ok) {
-      console.warn(
-        '[codex] CLI not available. Install @openai/codex and/or configure the Codex binary in Settings. Then visit /providers to connect.',
-      )
+      writeRuntimeOperatorLogEvent({
+        event: 'server.operator-guidance.codex-cli-unavailable',
+        message:
+          '[codex] CLI not available. Install @openai/codex and/or configure the Codex binary in Settings. Then visit /providers to connect.',
+        severity: 'WARN',
+      })
       return
     }
 
     if (!status.loggedIn) {
-      console.log(
-        `[codex] Not logged in. Run \`codex login\` or open http://localhost:${env.VITE_PORT}/providers to start device login.`,
-      )
+      writeRuntimeOperatorLogEvent({
+        attrs: {providersUrl: `http://localhost:${env.VITE_PORT}/providers`},
+        event: 'server.operator-guidance.codex-login',
+        message: `[codex] Not logged in. Run \`codex login\` or open http://localhost:${env.VITE_PORT}/providers to start device login.`,
+        severity: 'INFO',
+      })
       return
     }
 
     const method = status.method ?? 'unknown'
-    console.log(`[codex] Logged in (${method}).`)
+    writeRuntimeOperatorLogEvent({
+      attrs: {method},
+      event: 'server.startup.codex-login-status',
+      message: `[codex] Logged in (${method}).`,
+      severity: 'INFO',
+    })
   })
 }
 
