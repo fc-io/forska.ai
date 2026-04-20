@@ -1,4 +1,5 @@
 import {appendFileSync, mkdirSync, readdirSync, rmSync} from 'node:fs'
+import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 
 import {
@@ -125,6 +126,27 @@ const getRuntimeLogInstanceFileSuffix = (instanceId: string) => {
   return instanceId.replaceAll(/[^A-Za-z0-9_.-]/g, '_')
 }
 
+const isTestRuntime = (envValues: Record<string, string | undefined>) => {
+  return getTrimmedValue(envValues.NODE_ENV)?.toLowerCase() === 'test'
+}
+
+const getDefaultTestRuntimeLogDir = ({
+  envValues,
+  joinPath,
+  runtimeProfile,
+}: {
+  envValues: Record<string, string | undefined>
+  joinPath: (...paths: string[]) => string
+  runtimeProfile: RuntimeLogProfile
+}) => {
+  return joinPath(
+    getTrimmedValue(envValues.FORSKA_TEST_LOG_ROOT) ?? tmpdir(),
+    'forska-runtime-logs',
+    String(process.pid),
+    runtimeProfile,
+  )
+}
+
 const getRuntimeLogFilePath = ({
   fileMode,
   instanceId,
@@ -240,10 +262,13 @@ export const getDefaultRuntimeLogDir = ({
   runtimeWritableRoot,
 }: RuntimeLogConfigOptions = {}) => {
   const runtimeProfile = getRuntimeLogProfile({envValues})
-
-  return runtimeWritableRoot
+  const defaultRuntimeLogDir = runtimeWritableRoot
     ? joinPath(runtimeWritableRoot, 'logs', 'runtime', runtimeProfile)
     : resolveRuntimeWritablePath({cwd, envValues, pathValue: join('logs', 'runtime', runtimeProfile)})
+
+  return isTestRuntime(envValues)
+    ? getDefaultTestRuntimeLogDir({envValues, joinPath, runtimeProfile})
+    : defaultRuntimeLogDir
 }
 
 export const getRuntimeLogConfig = ({

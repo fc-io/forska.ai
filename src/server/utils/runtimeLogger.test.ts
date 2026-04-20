@@ -38,6 +38,15 @@ test('resolves default runtime log dir under writable root and profile', () => {
   )
 })
 
+test('resolves test runtime log dirs under temp when no explicit log dir is configured', () => {
+  const logDir = getRuntimeLogConfig({
+    cwd: '/repo/forska',
+    envValues: {FORSKA_RUNTIME_PROFILE: 'secondary', FORSKA_TEST_LOG_ROOT: '/tmp/forska-tests', NODE_ENV: 'test'},
+  }).logDir
+
+  expect(logDir).toBe(`/tmp/forska-tests/forska-runtime-logs/${process.pid}/secondary`)
+})
+
 test('resolves desktop runtime log dir under desktop writable root', () => {
   const envValues = {
     DUCKDB_PATH: '/Users/tester/Library/Application Support/Forska/desktop/forska.duckdb',
