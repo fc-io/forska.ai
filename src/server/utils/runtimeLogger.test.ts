@@ -175,6 +175,63 @@ test('runtime JSONL sink writes one structured record to the service daily file'
   resetRuntimeProcessIdentityForTests()
 })
 
+test('desktop dev-single runtime writes JSONL under the desktop writable root', () => {
+  resetRuntimeJsonlSinkForTests()
+  resetRuntimeProcessIdentityForTests()
+  const dataRoot = mkdtempSync(join(tmpdir(), 'forska-desktop-runtime-logger-'))
+  const duckdbPath = join(dataRoot, 'forska.duckdb')
+  const timestamp = '2026-04-20T12:30:00.000Z'
+  initializeRuntimeProcessIdentity({
+    envValues: {API_SERVER_PORT: '32101', FORSKA_RUNTIME_PROFILE: 'local'},
+    hostnameValue: 'desktop-host',
+    listenPort: 32101,
+    pid: 444,
+    processStartedAt: '2026-04-20T12:00:00.000Z',
+    service: 'dev-single-server',
+  })
+  installRuntimeJsonlSink({
+    envValues: {
+      DUCKDB_PATH: duckdbPath,
+      FORSKA_DESKTOP_MODE: 'true',
+      FORSKA_RUNTIME_PROFILE: 'local',
+      LOG_LEVEL: 'INFO',
+      SERVER_ROLE: 'dev-single',
+    },
+    timestamp,
+  })
+
+  expect(
+    writeRuntimeLogEvent({
+      attrs: {source: 'desktop-backend'},
+      event: 'runtime.logger.desktop-dev-single',
+      message: 'desktop runtime sink test',
+      severity: 'INFO',
+      timestamp,
+    }),
+  ).toBe(true)
+
+  const logPath = join(dataRoot, 'logs', 'runtime', 'local', 'dev-single-server-2026-04-20.jsonl')
+  const logContent = readFileSync(logPath, 'utf8')
+  const [record] = logContent
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      return JSON.parse(line) as Record<string, unknown>
+    })
+
+  expect(record).toMatchObject({
+    attrs: {source: 'desktop-backend'},
+    event: 'runtime.logger.desktop-dev-single',
+    message: 'desktop runtime sink test',
+    runtime: {listenPort: 32101, runtimeProfile: 'local', serverRole: 'dev-single', service: 'dev-single-server'},
+    severity: 'INFO',
+    timestamp,
+  })
+  expect(existsSync(join(dataRoot, 'logs', 'runtime', 'local', 'backend.log'))).toBe(false)
+  resetRuntimeJsonlSinkForTests()
+  resetRuntimeProcessIdentityForTests()
+})
+
 test('runtime JSONL sink uses instance suffixed fallback files when shared append is disabled', () => {
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
