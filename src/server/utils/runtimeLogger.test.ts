@@ -16,7 +16,9 @@ import {
   isRuntimeJsonlSinkInstalled,
   pruneManagedRuntimeLogFiles,
   resetRuntimeJsonlSinkForTests,
+  writeRuntimeFailureLogEvent,
   writeRuntimeLogEvent,
+  writeRuntimeOperatorLogEvent,
 } from './runtimeLogger.ts'
 import {
   getRuntimeProcessLogIdentity,
@@ -293,6 +295,103 @@ test('runtime JSONL sink remains opt-in and honors the configured log level', ()
     }),
   ).toBe(true)
   expect(existsSync(join(logDir, 'api-server-2026-04-20.jsonl'))).toBe(true)
+  resetRuntimeJsonlSinkForTests()
+  resetRuntimeProcessIdentityForTests()
+})
+
+test('operator-visible INFO events write to terminal and JSONL below configured file level', () => {
+  resetRuntimeJsonlSinkForTests()
+  resetRuntimeProcessIdentityForTests()
+  const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
+  const originalLog = console.log
+  const logs: unknown[][] = []
+  console.log = ((...args: unknown[]) => {
+    logs.push(args)
+  }) as typeof console.log
+  initializeRuntimeProcessIdentity({
+    hostnameValue: 'test-host',
+    listenPort: 4015,
+    pid: 226,
+    processStartedAt: '2026-04-20T12:00:00.000Z',
+    service: 'api-server',
+  })
+  installRuntimeJsonlSink({
+    envValues: {LOG_DIR: logDir, LOG_LEVEL: 'ERROR', SERVER_ROLE: 'api'},
+    timestamp: '2026-04-20T12:00:00.000Z',
+  })
+
+  expect(
+    writeRuntimeOperatorLogEvent({
+      attrs: {port: 3001},
+      event: 'server.startup.port-bound',
+      message: '[server] started',
+      severity: 'INFO',
+      timestamp: '2026-04-20T12:30:00.000Z',
+    }),
+  ).toBe(true)
+
+  const logContent = readFileSync(join(logDir, 'api-server-2026-04-20.jsonl'), 'utf8')
+  const [record] = logContent
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      return JSON.parse(line) as Record<string, unknown>
+    })
+
+  expect(logs).toEqual([['[server] started']])
+  expect(record.event).toBe('server.startup.port-bound')
+  expect(record.severity).toBe('INFO')
+  expect(record.attrs).toEqual({port: 3001})
+  console.log = originalLog
+  resetRuntimeJsonlSinkForTests()
+  resetRuntimeProcessIdentityForTests()
+})
+
+test('failure-visible events always write terminal stderr and may duplicate to JSONL', () => {
+  resetRuntimeJsonlSinkForTests()
+  resetRuntimeProcessIdentityForTests()
+  const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
+  const originalError = console.error
+  const errors: unknown[][] = []
+  console.error = ((...args: unknown[]) => {
+    errors.push(args)
+  }) as typeof console.error
+  initializeRuntimeProcessIdentity({
+    hostnameValue: 'test-host',
+    listenPort: 4016,
+    pid: 227,
+    processStartedAt: '2026-04-20T12:00:00.000Z',
+    service: 'worker-server',
+  })
+  installRuntimeJsonlSink({
+    envValues: {LOG_DIR: logDir, LOG_LEVEL: 'ERROR', SERVER_ROLE: 'worker'},
+    timestamp: '2026-04-20T12:00:00.000Z',
+  })
+
+  expect(
+    writeRuntimeFailureLogEvent({
+      attrs: {attempt: 2},
+      event: 'duckdb.startup.retry',
+      message: '[duckdb] retrying startup after recoverable initialization failure',
+      severity: 'WARN',
+      terminalArgs: ['recoverable'],
+      timestamp: '2026-04-20T12:30:00.000Z',
+    }),
+  ).toBe(true)
+
+  const logContent = readFileSync(join(logDir, 'worker-server-2026-04-20.jsonl'), 'utf8')
+  const [record] = logContent
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      return JSON.parse(line) as Record<string, unknown>
+    })
+
+  expect(errors).toEqual([['[duckdb] retrying startup after recoverable initialization failure', 'recoverable']])
+  expect(record.event).toBe('duckdb.startup.retry')
+  expect(record.severity).toBe('WARN')
+  expect(record.attrs).toEqual({attempt: 2})
+  console.error = originalError
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
 })

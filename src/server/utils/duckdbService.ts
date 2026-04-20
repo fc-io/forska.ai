@@ -9,7 +9,7 @@ import {Effect} from 'effect'
 
 import {getEnv} from './env.ts'
 import {ensureDuckdbPathDirectory} from './getDuckdbPath.ts'
-import {exitWithRuntimeLogFlush} from './runtimeLogger.ts'
+import {exitWithRuntimeLogFlush, writeRuntimeFailureLogEvent, writeRuntimeOperatorLogEvent} from './runtimeLogger.ts'
 import {
   ensureCurrentDuckdbOwnerLease,
   registerWriterDemotionHandler,
@@ -295,11 +295,23 @@ const recoverDuckdbRuntimeAfterFatalError = async (error: unknown) => {
     return duckdbFatalRecoveryPromise
   }
 
-  console.warn('[duckdb] restarting embedded runtime after fatal invalidation', getCompactDuckdbErrorMessage(error))
+  writeRuntimeOperatorLogEvent({
+    attrs: {error},
+    event: 'duckdb.recovery.restart',
+    message: '[duckdb] restarting embedded runtime after fatal invalidation',
+    severity: 'WARN',
+    terminalArgs: [getCompactDuckdbErrorMessage(error)],
+  })
 
   duckdbFatalRecoveryPromise = closeDuckdbServiceDirect()
     .catch((closeError) => {
-      console.warn('[duckdb] failed to close embedded runtime during fatal recovery', closeError)
+      writeRuntimeFailureLogEvent({
+        attrs: {closeError},
+        event: 'duckdb.recovery.close-failure',
+        message: '[duckdb] failed to close embedded runtime during fatal recovery',
+        severity: 'ERROR',
+        terminalArgs: [closeError],
+      })
     })
     .finally(() => {
       duckdbFatalRecoveryPromise = null
@@ -549,7 +561,12 @@ const registerDuckdbShutdownHooks = () => {
           void exitWithRuntimeLogFlush({code: 0})
         },
         (error) => {
-          console.error(`[duckdb] shutdown failed on ${signal}`, error)
+          writeRuntimeFailureLogEvent({
+            attrs: {error, signal},
+            event: 'duckdb.shutdown.failure',
+            message: `[duckdb] shutdown failed on ${signal}`,
+            terminalArgs: [error],
+          })
           void exitWithRuntimeLogFlush({code: 1})
         },
       )
@@ -611,7 +628,12 @@ const cleanupFailedDuckdbStart = async (params: {
   ])
 
   if (closeError !== null) {
-    console.error('[duckdb] failed to clean up embedded runtime', closeError)
+    writeRuntimeFailureLogEvent({
+      attrs: {closeError},
+      event: 'duckdb.startup.cleanup-failure',
+      message: '[duckdb] failed to clean up embedded runtime',
+      terminalArgs: [closeError],
+    })
   }
 
   try {
@@ -711,7 +733,13 @@ const ensureStartedDuckdbProcess = async () => {
         throw error
       }
 
-      console.warn('[duckdb] retrying startup after recoverable initialization failure', error)
+      writeRuntimeFailureLogEvent({
+        attrs: {error},
+        event: 'duckdb.startup.retry',
+        message: '[duckdb] retrying startup after recoverable initialization failure',
+        severity: 'WARN',
+        terminalArgs: [error],
+      })
       return startDuckdbProcess()
     })
     .finally(() => {

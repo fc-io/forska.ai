@@ -7,6 +7,7 @@ import {Database} from 'bun:sqlite'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
+import {writeRuntimeFailureLogEvent} from '../../utils/runtimeLogger.ts'
 import {registerWriterDemotionHandler} from '../../utils/serverRuntimeRole.ts'
 import {
   acquireJudgmentJobLease,
@@ -317,7 +318,13 @@ const getRecoverableJudgmentJobLeaseIds = ({jobIds}: {jobIds?: string[]}) => {
 
 const recoverJudgmentJobLeaseFromFile = async (jobId: string): Promise<'deleted' | 'ignored' | 'recovered'> => {
   const leasePath = getJudgmentJobLeasePath(jobId)
-  const currentLeaseMetadata = await readJudgmentJobLease(jobId).catch(() => {
+  const currentLeaseMetadata = await readJudgmentJobLease(jobId).catch((error) => {
+    writeRuntimeFailureLogEvent({
+      attrs: {error, jobId, leasePath},
+      event: 'judgments.sqlite-lease.startup-recovery.read-failure',
+      message: '[judgments] failed to read SQLite job lease during startup recovery',
+      terminalArgs: [jobId, error],
+    })
     rmSync(leasePath, {force: true})
     return null
   })
@@ -337,7 +344,13 @@ const recoverJudgmentJobLeaseFromFile = async (jobId: string): Promise<'deleted'
     jobId,
     serverJobId: currentLeaseMetadata.serverJobId ?? getDefaultJudgmentServerJobId(),
     takeoverLeaseId: currentLeaseMetadata.leaseId,
-  }).catch(() => {
+  }).catch((error) => {
+    writeRuntimeFailureLogEvent({
+      attrs: {error, jobId},
+      event: 'judgments.sqlite-lease.startup-recovery.acquire-failure',
+      message: '[judgments] failed to recover SQLite job lease during startup recovery',
+      terminalArgs: [jobId, error],
+    })
     return null
   })
 

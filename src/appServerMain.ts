@@ -6,7 +6,7 @@ import {file} from 'bun'
 import {Elysia} from 'elysia'
 
 import {getAppServerRuntimeConfig} from './server/utils/getAppServerRuntimeConfig.ts'
-import {exitWithRuntimeLogFlush} from './server/utils/runtimeLogger.ts'
+import {exitWithRuntimeLogFlush, writeRuntimeOperatorLogEvent} from './server/utils/runtimeLogger.ts'
 
 const appServerRuntimeConfig = getAppServerRuntimeConfig()
 
@@ -48,9 +48,19 @@ let shutdownStarted = false
 
 if (listener.server && typeof listener.server === 'object') {
   const {hostname, port: serverPort} = listener.server as {hostname?: string; port?: number}
-  console.log(`🦊 App static server running at ${String(hostname ?? 'unknown')}:${String(serverPort ?? 'unknown')}`)
+  writeRuntimeOperatorLogEvent({
+    attrs: {hostname: hostname ?? null, port: serverPort ?? appServerRuntimeConfig.port},
+    event: 'app-server.startup.port-bound',
+    message: `🦊 App static server running at ${String(hostname ?? 'unknown')}:${String(serverPort ?? 'unknown')}`,
+    severity: 'INFO',
+  })
 } else {
-  console.log(`🦊 App static server started on port ${appServerRuntimeConfig.port}`)
+  writeRuntimeOperatorLogEvent({
+    attrs: {port: appServerRuntimeConfig.port},
+    event: 'app-server.startup.port-bound',
+    message: `🦊 App static server started on port ${appServerRuntimeConfig.port}`,
+    severity: 'INFO',
+  })
 }
 
 ;(['SIGINT', 'SIGTERM'] as const).map((signal) => {
@@ -60,6 +70,12 @@ if (listener.server && typeof listener.server === 'object') {
     }
 
     shutdownStarted = true
+    writeRuntimeOperatorLogEvent({
+      attrs: {signal},
+      event: 'app-server.shutdown.signal',
+      message: `[app-server] received ${signal}; shutting down`,
+      severity: 'INFO',
+    })
     void app.stop().finally(() => {
       return exitWithRuntimeLogFlush({code: 0})
     })

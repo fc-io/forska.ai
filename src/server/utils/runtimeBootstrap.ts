@@ -1,5 +1,5 @@
 import {installSafeConsoleLogging} from './installSafeConsoleLogging.ts'
-import {getRuntimeLogConfig, installRuntimeJsonlSink} from './runtimeLogger.ts'
+import {getRuntimeLogConfig, installRuntimeJsonlSink, registerRuntimeFailureHandlers} from './runtimeLogger.ts'
 import {initializeRuntimeProcessIdentity, type RuntimeProcessServiceName} from './runtimeProcessIdentity.ts'
 
 export type RuntimeServiceName = RuntimeProcessServiceName
@@ -43,6 +43,7 @@ export const bootstrapRuntime = ({
   initializeRuntimeProcessIdentity({envValues, runtimeProfile: runtimeLogConfig.runtimeProfile, service: serviceName})
   installSafeConsoleLogging()
   installRuntimeJsonlSink({envValues})
+  registerRuntimeFailureHandlers()
   return serviceName
 }
 
