@@ -121,6 +121,7 @@ export const getBackgroundServerEnv = ({
     ? {
         ...resolvedBaseEnv,
         API_SERVER_PORT: String(config.apiPort),
+        FORSKA_RUNTIME_SERVICE: 'api-server',
         SERVER_ROLE: 'api',
         SERVER_WRITER_URL: config.writerUrl,
       }
@@ -128,6 +129,7 @@ export const getBackgroundServerEnv = ({
         ...resolvedBaseEnv,
         API_SERVER_PORT: String(config.workerPort),
         DUCKDB_MEMORY_LIMIT: config.workerDuckdbMemoryLimit,
+        FORSKA_RUNTIME_SERVICE: 'worker-server',
         SERVER_ROLE: 'worker',
         SERVER_WRITER_URL: '',
       }
@@ -149,6 +151,7 @@ export const getBackgroundServerEnvAsync = async ({
     ? {
         ...resolvedBaseEnv,
         API_SERVER_PORT: String(config.apiPort),
+        FORSKA_RUNTIME_SERVICE: 'api-server',
         SERVER_ROLE: 'api',
         SERVER_WRITER_URL: config.writerUrl,
       }
@@ -156,6 +159,7 @@ export const getBackgroundServerEnvAsync = async ({
         ...resolvedBaseEnv,
         API_SERVER_PORT: String(config.workerPort),
         DUCKDB_MEMORY_LIMIT: config.workerDuckdbMemoryLimit,
+        FORSKA_RUNTIME_SERVICE: 'worker-server',
         SERVER_ROLE: 'worker',
         SERVER_WRITER_URL: '',
       }

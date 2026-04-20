@@ -1,5 +1,6 @@
 import {expect, test} from 'bun:test'
 
+import {getRuntimeServiceNameForServerRole} from './runtimeBootstrap.ts'
 import {getDefaultRuntimeLogDir, getRuntimeLogConfig, getRuntimeLogProfile} from './runtimeLogger.ts'
 
 test('defaults unresolved runtime log profile to local', () => {
@@ -32,4 +33,13 @@ test('normalizes runtime log filtering env and resolves explicit log dirs', () =
       envValues: {LOG_DIR: 'tmp/logs', LOG_LEVEL: 'debug', LOG_STDERR_LEVEL: 'error'},
     }),
   ).toEqual({logDir: '/repo/forska/tmp/logs', logLevel: 'DEBUG', logStderrLevel: 'ERROR', runtimeProfile: 'local'})
+})
+
+test('selects stable runtime service names from server role before runtime imports', () => {
+  expect(getRuntimeServiceNameForServerRole({SERVER_ROLE: 'api'})).toBe('api-server')
+  expect(getRuntimeServiceNameForServerRole({SERVER_ROLE: 'worker'})).toBe('worker-server')
+  expect(getRuntimeServiceNameForServerRole({SERVER_ROLE: 'writer'})).toBe('worker-server')
+  expect(getRuntimeServiceNameForServerRole({SERVER_ROLE: 'dev-single'})).toBe('dev-single-server')
+  expect(getRuntimeServiceNameForServerRole({SERVER_ROLE: 'auto'})).toBe('single-server')
+  expect(getRuntimeServiceNameForServerRole({})).toBe('single-server')
 })
