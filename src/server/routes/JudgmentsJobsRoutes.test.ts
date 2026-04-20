@@ -656,6 +656,57 @@ test('pausing a judgments job marks it draining, clears ready queue state, and r
   expect(existsSync(getJudgmentJobLeasePath(jobId))).toBe(false)
 })
 
+test('starting a judgments job clean preserves token usage while recreating local SQLite state', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getAppDatabaseService} = await import('../services/appDatabaseService.ts')
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const sqliteService = getJudgmentJobSqliteService()
+  const projectId = `start-clean-project-${Date.now()}`
+  const modelId = `start-clean-model-${Date.now()}`
+  const connectionId = `start-clean-connection-${Date.now()}`
+  const jobId = `start-clean-job-${Date.now()}`
+  const articleId = `start-clean-article-${Date.now()}`
+  const promptId = `start-clean-prompt-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state, pause_requested_at)
+    VALUES ('${jobId}', '${projectId}', 'paused', 'draining', current_timestamp)
+  `)
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
+  await runDatabase(`
+    INSERT INTO app.token_use (id, judgment_job_id, requests, total_prompt_tokens, total_completion_tokens, total_tokens)
+    VALUES ('start-clean-token-${Date.now()}', '${jobId}', 2, 12, 6, 18)
+  `)
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/start-clean`, {method: 'POST'}),
+  )
+  const body = (await response.json()) as {
+    data: {pauseRequestedAt: string | null; quarantineReason: string | null; status: string; storageState: string}
+  }
+
+  const tokenUseRows = await getAppDatabaseService().queryJson<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.token_use
+    WHERE judgment_job_id = '${jobId}'
+  `)
+
+  expect(response.status).toBe(200)
+  expect(body.data.status).toBe('running')
+  expect(body.data.storageState).toBe('active')
+  expect(body.data.pauseRequestedAt).toBeNull()
+  expect(body.data.quarantineReason).toBeNull()
+  expect(sqliteService.hasJob(jobId)).toBe(true)
+  expect(await sqliteService.getReadyCount(jobId)).toBe(0)
+  expect(await sqliteService.getInFlightCount(jobId)).toBe(0)
+  expect(Number(tokenUseRows[0]?.count ?? 0)).toBe(1)
+})
+
 test('judgment job routes expose storage health fields', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')
@@ -817,6 +868,32 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
   })
   await sqliteService.markPromptAsSkipped(jobId, skippedPrompt.recordId, 'no_fulltext')
   await sqliteService.markPromptAsRunning(jobId, runningPrompt.recordId)
+  await runDatabase(`
+    INSERT INTO app.token_use (
+      id,
+      judgment_job_id,
+      requests,
+      total_prompt_tokens,
+      total_completion_tokens,
+      total_tokens,
+      successful_requests,
+      failed_requests,
+      has_failed_requests,
+      failed_requests_details
+    )
+    VALUES (
+      'sqlite-stats-token-${Date.now()}',
+      '${jobId}',
+      3,
+      10,
+      5,
+      15,
+      1,
+      2,
+      TRUE,
+      CAST('[{"articleId":"article-refusal","error":"Anthropic returned no text content (failure_code=anthropic_empty_response; stop_reason=refusal; content_types=none)","providerDiagnostics":{"initial":{"stopReason":"refusal"}}},{"articleId":"article-other","error":"Invalid JSON response"}]' AS JSON)
+    )
+  `)
 
   const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
   const body = (await response.json()) as {
@@ -833,6 +910,7 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
         providerQueueLimit: number
         providerQueuedPrompts: number
       }
+      failures: {anthropicRefusalArticles: number; anthropicRefusals: number; persistedFailedRequests: number}
       inFlight: number
     }
     storageHealth: {
@@ -852,6 +930,12 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
   expect(body.promptStats).toEqual({claimed: 1, judged: 1, ready: 1, running: 1, skipped: 1})
   expect(body.storageHealth.promptCounts).toEqual(body.promptStats)
   expect(body.requestStats.inFlight).toBe(0)
+  expect(body.requestStats.attempts).toBe(3)
+  expect(body.requestStats.failures).toEqual({
+    anthropicRefusalArticles: 1,
+    anthropicRefusals: 1,
+    persistedFailedRequests: 2,
+  })
   expect(body.requestStats.dispatch).toEqual({
     jobActivePrompts: 0,
     jobQueuedPrompts: 0,

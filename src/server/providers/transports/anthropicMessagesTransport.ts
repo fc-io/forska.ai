@@ -116,9 +116,7 @@ const invokeAnthropicMessagesRun = async ({
   const messages: AnthropicMessage[] = [{content: prompt, role: 'user'}]
   let completionTokens = 0
   let promptTokens = 0
-  let stopReason: string | null = null
   let text = ''
-  let lastContent: AnthropicContentBlock[] = []
   let pauseTurns = 0
 
   while (pauseTurns <= anthropicPauseTurnLimit) {
@@ -145,16 +143,15 @@ const invokeAnthropicMessagesRun = async ({
     const body = (await response.json()) as AnthropicMessageResponseBody
     const content = body.content ?? []
     const responseText = getAnthropicResponseText(content)
+    const stopReason = body.stop_reason ?? null
 
-    lastContent = content
     promptTokens += body.usage?.input_tokens ?? 0
     completionTokens += body.usage?.output_tokens ?? 0
-    stopReason = body.stop_reason ?? null
     text += responseText
 
     if (stopReason !== 'pause_turn') {
       return {
-        content: lastContent,
+        content,
         stopReason,
         text,
         usage: {completionTokens, promptTokens, totalTokens: promptTokens + completionTokens},
@@ -187,6 +184,22 @@ const getAnthropicEmptyResponseDiagnostics = ({
     textLength: result.text.length,
     thinkingVersion: version,
   }
+}
+
+const shouldRetryAnthropicWithoutThinking = ({
+  modelName,
+  result,
+  version,
+}: {
+  modelName: string
+  result: AnthropicInvocationRunResult
+  version: string | null
+}): boolean => {
+  return (
+    Boolean(getAnthropicThinkingConfig({modelName, version}))
+    && result.text.length === 0
+    && (isAnthropicThinkingOnlyContent(result.content) || result.stopReason === 'refusal')
+  )
 }
 
 const throwAnthropicEmptyResponseError = ({
@@ -308,10 +321,6 @@ export const invokeAnthropicMessagesModel = async ({
     temperature,
     thinkingVersion: version,
   })
-  const shouldRetryWithoutThinking =
-    getAnthropicThinkingConfig({modelName, version})
-    && initialResult.text.length === 0
-    && isAnthropicThinkingOnlyContent(initialResult.content)
   const initialDiagnostics = getAnthropicEmptyResponseDiagnostics({
     attempt: 'initial',
     modelName,
@@ -319,7 +328,7 @@ export const invokeAnthropicMessagesModel = async ({
     version,
   })
 
-  if (!shouldRetryWithoutThinking) {
+  if (!shouldRetryAnthropicWithoutThinking({modelName, result: initialResult, version})) {
     if (initialResult.text.length === 0) {
       throwAnthropicEmptyResponseError({fallbackDiagnostics: null, initialDiagnostics, usage: initialResult.usage})
     }

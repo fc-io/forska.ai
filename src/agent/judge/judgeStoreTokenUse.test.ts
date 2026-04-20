@@ -46,10 +46,12 @@ const buildEntry = ({
   outcome,
   error,
   baseURL = 'http://worker-a/v1',
+  pendingQueueRetry = false,
 }: {
   outcome: 'success' | 'failure'
   error: string | null
   baseURL?: string
+  pendingQueueRetry?: boolean
 }) => {
   return {
     articleId: 'article-1',
@@ -68,6 +70,7 @@ const buildEntry = ({
     lastResponse: outcome === 'failure' ? '{bad json}' : null,
     systemPrompt: outcome === 'failure' ? 'system' : null,
     userPrompt: outcome === 'failure' ? 'user' : null,
+    pendingQueueRetry,
   }
 }
 
@@ -86,5 +89,28 @@ test('buildTokenUseTotals counts real attempts and keeps non-connection failures
   expect(totals.hasFailedRequests).toBe(true)
   expect(totals.failedRequestsDetails.length).toBe(1)
   expect(totals.failedRequestsDetails[0]?.error).toBe('Invalid JSON response')
+  expect(totals.failedRequestsDetails[0]?.failedAttempts).toBe(2)
+})
+
+test('buildTokenUseTotals labels queue-retried recoverable failures as retry', () => {
+  const {buildTokenUseTotals} = require('./judgeStoreTokenUse.ts') as typeof import('./judgeStoreTokenUse.ts')
+  const totals = buildTokenUseTotals([
+    buildEntry({
+      outcome: 'failure',
+      error:
+        'Anthropic returned no text content (failure_code=anthropic_empty_response; stop_reason=refusal; content_types=none)',
+      pendingQueueRetry: true,
+    }),
+    buildEntry({
+      outcome: 'failure',
+      error:
+        'Anthropic returned no text content (failure_code=anthropic_empty_response; stop_reason=refusal; content_types=none)',
+    }),
+  ])
+
+  expect(totals.failedRequests).toBe(2)
+  expect(totals.hasFailedRequests).toBe(true)
+  expect(totals.failedRequestsDetails).toHaveLength(1)
+  expect(totals.failedRequestsDetails[0]?.failureType).toBe('retry')
   expect(totals.failedRequestsDetails[0]?.failedAttempts).toBe(2)
 })

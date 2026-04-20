@@ -214,6 +214,127 @@ test('claims ready prompts in insertion order for a fresh SQLite queue', async (
   await service.closeAll()
 })
 
+test('claimReadyPrompts skips delayed retry rows until their retry window opens', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-retry-delay-${Date.now()}`
+  const modelId = `model-retry-delay-${Date.now()}`
+  const projectId = `project-retry-delay-${Date.now()}`
+  const jobId = `job-retry-delay-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Retry Delay Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(
+    jobId,
+    [
+      {articleId: 'article-delayed', promptId: 'prompt-delayed'},
+      {articleId: 'article-ready', promptId: 'prompt-ready'},
+    ],
+    'server-a',
+  )
+
+  const [firstClaimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!firstClaimedPrompt) {
+    throw new Error('Failed to claim delayed retry prompt')
+  }
+
+  await service.markPromptAsRetry(jobId, firstClaimedPrompt.recordId, 25)
+
+  expect(
+    (await service.claimReadyPrompts(jobId, 'server-a', 2)).map((prompt) => {
+      return `${prompt.articleId}:${prompt.promptId}`
+    }),
+  ).toEqual(['article-ready:prompt-ready'])
+
+  await new Promise((resolve) => {
+    setTimeout(resolve, 35)
+  })
+
+  expect(
+    (await service.claimReadyPrompts(jobId, 'server-a', 1)).map((prompt) => {
+      return `${prompt.articleId}:${prompt.promptId}`
+    }),
+  ).toEqual(['article-delayed:prompt-delayed'])
+
+  await service.closeAll()
+})
+
+test('markPromptAsRetry moves failed prompts to the back of the ready queue', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-retry-tail-${Date.now()}`
+  const modelId = `model-retry-tail-${Date.now()}`
+  const projectId = `project-retry-tail-${Date.now()}`
+  const jobId = `job-retry-tail-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Retry Tail Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(
+    jobId,
+    [
+      {articleId: 'article-first', promptId: 'prompt-first'},
+      {articleId: 'article-second', promptId: 'prompt-second'},
+    ],
+    'server-a',
+  )
+
+  const [firstClaimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!firstClaimedPrompt) {
+    throw new Error('Expected first claimed prompt for retry tail test')
+  }
+
+  await service.addReadyPrompts(jobId, [{articleId: 'article-third', promptId: 'prompt-third'}], 'server-a')
+  await service.markPromptAsRetry(jobId, firstClaimedPrompt.recordId)
+
+  expect(
+    (await service.claimReadyPrompts(jobId, 'server-a', 3)).map((prompt) => {
+      return prompt.articleId
+    }),
+  ).toEqual(['article-second', 'article-third', 'article-first'])
+
+  await service.closeAll()
+})
+
 test('promotes claimed prompts to running without changing in-flight totals', async () => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')

@@ -149,6 +149,78 @@ test('single prompt quote validation still rejects ellipsized quotes', () => {
   expect(result.kind).toBe('retry')
 })
 
+test('single prompt quote validation drops criteria quotes when article quotes remain valid', () => {
+  const retryBasePrompt = `## article_title
+
+Barriers in implementing antibiotic stewardship programmes at paediatric units in academic hospitals in Thailand
+
+## article_summary
+
+OBJECTIVE: To explore the barriers that hinder and the facilitators that strengthen the implementation of the antimicrobial stewardship (AMS) programme at paediatric units in academic hospitals in Thailand.
+
+## Question
+
+Inclusion criteria:
+Antimicrobial stewardship can also be an intervention`
+  const result = validateSinglePromptJudgmentQuotes({
+    attempt: 1,
+    judgment: {
+      answer: 'yes',
+      explanation: 'because',
+      quotes: [
+        'implementation of the antimicrobial stewardship (AMS) programme at paediatric units in academic hospitals in Thailand',
+        'Antimicrobial stewardship can also be an intervention',
+      ],
+    },
+    lastResponse: '{"answer":"yes"}',
+    maxRetries: 2,
+    recordText:
+      'Barriers in implementing antibiotic stewardship programmes at paediatric units in academic hospitals in Thailand\n\nOBJECTIVE: To explore the barriers that hinder and the facilitators that strengthen the implementation of the antimicrobial stewardship (AMS) programme at paediatric units in academic hospitals in Thailand.',
+    retryBasePrompt,
+  })
+
+  expect(result).toEqual({
+    judgment: {
+      answer: 'yes',
+      explanation: 'because',
+      quotes: [
+        'implementation of the antimicrobial stewardship (AMS) programme at paediatric units in academic hospitals in Thailand',
+      ],
+    },
+    kind: 'valid',
+  })
+})
+
+test('single prompt quote validation accepts empty quotes when only criteria text was quoted', () => {
+  const retryBasePrompt = `## article_title
+
+Antibiotic use and resistance: Information sources and application by dentists in Jordan.
+
+## article_summary
+
+The present study aimed to evaluate dentists' preferred sources of information.
+
+## Question
+
+Inclusion criteria:
+Interventions aimed at improving antibiotic prescribing/use`
+  const result = validateSinglePromptJudgmentQuotes({
+    attempt: 1,
+    judgment: {
+      answer: 'no',
+      explanation: 'because',
+      quotes: ['Interventions aimed at improving antibiotic prescribing/use'],
+    },
+    lastResponse: '{"answer":"no"}',
+    maxRetries: 2,
+    recordText:
+      "Antibiotic use and resistance: Information sources and application by dentists in Jordan.\n\nThe present study aimed to evaluate dentists' preferred sources of information.",
+    retryBasePrompt,
+  })
+
+  expect(result).toEqual({judgment: {answer: 'no', explanation: 'because', quotes: []}, kind: 'valid'})
+})
+
 test('single prompt quote validation requests a retry before the final attempt', () => {
   const result = validateSinglePromptJudgmentQuotes({
     attempt: 1,

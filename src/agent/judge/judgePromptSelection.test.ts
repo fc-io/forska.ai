@@ -5,10 +5,13 @@ import {
   getSinglePromptEvidenceSystemPromptForArticle,
   getSinglePromptSystemPromptForArticle,
 } from './judgePromptSelection.ts'
-import {SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT} from './judgeSinglePromptEvidenceSystemPrompt.ts'
+import {
+  SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT,
+  SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_ANTHROPIC,
+} from './judgeSinglePromptEvidenceSystemPrompt.ts'
 import {SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_PATIENT} from './judgeSinglePromptEvidenceSystemPromptPatient.ts'
 import {SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptEvidenceSystemPromptStructuredImport.ts'
-import {SINGLE_PROMPT_SYSTEM_PROMPT} from './judgeSinglePromptSystemPrompt.ts'
+import {SINGLE_PROMPT_SYSTEM_PROMPT, SINGLE_PROMPT_SYSTEM_PROMPT_ANTHROPIC} from './judgeSinglePromptSystemPrompt.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_PATIENT} from './judgeSinglePromptSystemPromptPatient.ts'
 import {SINGLE_PROMPT_SYSTEM_PROMPT_STRUCTURED_IMPORT} from './judgeSinglePromptSystemPromptStructuredImport.ts'
 
@@ -17,6 +20,7 @@ type PromptSelectionCase = {
   article: ArticleRecord
   expectedSystemPrompt: string
   expectedEvidenceSystemPrompt: string
+  provider?: string | null
 }
 
 const buildArticle = (overrides: Partial<ArticleRecord> = {}): ArticleRecord => {
@@ -64,9 +68,10 @@ const expectPromptSelection = ({
   article,
   expectedSystemPrompt,
   expectedEvidenceSystemPrompt,
+  provider,
 }: Omit<PromptSelectionCase, 'name'>) => {
-  expect(getSinglePromptSystemPromptForArticle(article)).toBe(expectedSystemPrompt)
-  expect(getSinglePromptEvidenceSystemPromptForArticle(article)).toBe(expectedEvidenceSystemPrompt)
+  expect(getSinglePromptSystemPromptForArticle(article, provider)).toBe(expectedSystemPrompt)
+  expect(getSinglePromptEvidenceSystemPromptForArticle(article, provider)).toBe(expectedEvidenceSystemPrompt)
 }
 
 const registerPromptSelectionCase = ({
@@ -74,9 +79,10 @@ const registerPromptSelectionCase = ({
   article,
   expectedSystemPrompt,
   expectedEvidenceSystemPrompt,
+  provider,
 }: PromptSelectionCase) => {
   test(name, () => {
-    expectPromptSelection({article, expectedSystemPrompt, expectedEvidenceSystemPrompt})
+    expectPromptSelection({article, expectedSystemPrompt, expectedEvidenceSystemPrompt, provider})
   })
 }
 
@@ -87,6 +93,13 @@ describe('judge prompt selection', () => {
       article: buildArticle(),
       expectedSystemPrompt: SINGLE_PROMPT_SYSTEM_PROMPT,
       expectedEvidenceSystemPrompt: SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT,
+    },
+    {
+      name: 'uses Anthropic-specific article prompts for a scientific article on Anthropic',
+      article: buildArticle(),
+      expectedSystemPrompt: SINGLE_PROMPT_SYSTEM_PROMPT_ANTHROPIC,
+      expectedEvidenceSystemPrompt: SINGLE_PROMPT_EVIDENCE_SYSTEM_PROMPT_ANTHROPIC,
+      provider: 'anthropic',
     },
     {
       name: 'uses patient prompts for a FHIR patient record',

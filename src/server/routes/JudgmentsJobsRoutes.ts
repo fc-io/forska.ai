@@ -1,6 +1,7 @@
 import {Elysia, t} from 'elysia'
 
 import {getUnassessedArticlesFromOlap, getUnassessedCountFromOlap} from '../../services/olap/unassessedArticlesOlap.ts'
+import {getJudgmentDispatchProviderStats} from '../cron/judgmentsJobs/judgmentDispatchRuntime.ts'
 import {
   getJudgmentEndpointAvailability,
   getJudgmentEndpointAvailabilityDiagnostics,
@@ -20,7 +21,6 @@ import {
   hasJudgmentJobLocalSqliteState,
 } from '../cron/judgmentsJobs/judgmentJobStoragePolicy.ts'
 import {getJudgmentJobStorageTransferRuntime} from '../cron/judgmentsJobs/judgmentJobStorageTransferRuntime.ts'
-import {getJudgmentDispatchProviderStats} from '../cron/judgmentsJobs/judgmentDispatchRuntime.ts'
 import {getEffectiveProviderCap} from '../cron/judgmentsJobs/judgmentsJobsSendToLLM.ts'
 import {getJudgmentRequestStats} from '../cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {getProviderConnectionForStoredModel} from '../providers/providerConnectionRepository.ts'
@@ -95,6 +95,12 @@ type JudgmentJobStorageProjection = {
   remainingCurrentPhaseArticleCount: number | null
   rowsPerMinute: number | null
   scopeArticleCount: number | null
+}
+type FailedRequestDetailRecord = Record<string, unknown>
+type FailedRequestSummary = {
+  anthropicRefusalArticles: number
+  anthropicRefusals: number
+  persistedFailedRequests: number
 }
 const unassessedCountTTLms = 10_000
 const staleImportThresholdMs = 15 * 60 * 1_000
@@ -729,6 +735,97 @@ const getJudgmentJobMutationStorageAssignments = (status?: string) => {
       : null
 }
 
+const getFailedRequestDetailRecords = (value: unknown): FailedRequestDetailRecord[] => {
+  const parsed = getJsonValue(value)
+
+  return Array.isArray(parsed)
+    ? parsed.flatMap((entry) => {
+        return entry && typeof entry === 'object' && !Array.isArray(entry) ? [entry as FailedRequestDetailRecord] : []
+      })
+    : []
+}
+
+const isAnthropicRefusalDetail = (detail: FailedRequestDetailRecord): boolean => {
+  const error = typeof detail.error === 'string' ? detail.error : ''
+  const providerDiagnostics =
+    detail.providerDiagnostics
+    && typeof detail.providerDiagnostics === 'object'
+    && !Array.isArray(detail.providerDiagnostics)
+      ? (detail.providerDiagnostics as Record<string, unknown>)
+      : null
+  const initialStopReason =
+    providerDiagnostics?.initial
+    && typeof providerDiagnostics.initial === 'object'
+    && !Array.isArray(providerDiagnostics.initial)
+      ? (providerDiagnostics.initial as Record<string, unknown>).stopReason
+      : null
+  const fallbackStopReason =
+    providerDiagnostics?.fallback
+    && typeof providerDiagnostics.fallback === 'object'
+    && !Array.isArray(providerDiagnostics.fallback)
+      ? (providerDiagnostics.fallback as Record<string, unknown>).stopReason
+      : null
+
+  return (
+    error.includes('failure_code=anthropic_empty_response')
+    && (error.includes('stop_reason=refusal') || initialStopReason === 'refusal' || fallbackStopReason === 'refusal')
+  )
+}
+
+const getFailedRequestSummary = (rows: Array<{failedRequestsDetails: unknown}>): FailedRequestSummary => {
+  const detailRecords = rows.flatMap((row) => {
+    return getFailedRequestDetailRecords(row.failedRequestsDetails)
+  })
+  const anthropicRefusalArticleIds = detailRecords.reduce((set, detail) => {
+    if (!isAnthropicRefusalDetail(detail)) {
+      return set
+    }
+
+    const articleId = typeof detail.articleId === 'string' ? detail.articleId : null
+
+    return articleId ? new Set([...set, articleId]) : set
+  }, new Set<string>())
+
+  return {
+    anthropicRefusalArticles: anthropicRefusalArticleIds.size,
+    anthropicRefusals: detailRecords.filter((detail) => {
+      return isAnthropicRefusalDetail(detail)
+    }).length,
+    persistedFailedRequests: detailRecords.length,
+  }
+}
+
+const resetJudgmentJobLocalSqliteState = async ({jobId, storageState}: {jobId: string; storageState: string}) => {
+  const sqliteService = getJudgmentJobSqliteService()
+
+  if (!sqliteService.hasJob(jobId)) {
+    return
+  }
+
+  const shouldUseCrashContainedDeleteFlush =
+    getJudgmentJobRepairMode({hasLocalSqliteState: true, job: {status: 'failed', storageState}})
+    === 'offline_repair_required'
+
+  if (shouldUseCrashContainedDeleteFlush) {
+    const flushResult = await runJudgmentJobSqliteIsolatedFlush({claimedBy: judgmentJobServerId, jobId})
+
+    if (flushResult.errorMessage !== null) {
+      if (!isJudgmentJobSqliteIsolatedImportLeaseConflict(flushResult.errorMessage)) {
+        await runJudgmentJobRepairAction({action: 'quarantine', jobId, reason: flushResult.errorMessage})
+      }
+
+      throw new HttpError(
+        409,
+        `Start Job Clean stopped safely for ${jobId}: ${flushResult.errorMessage} Local SQLite data was left in place.`,
+      )
+    }
+  } else {
+    await flushJudgmentJobSqliteOutbox({claimedBy: judgmentJobServerId, jobId})
+  }
+
+  await sqliteService.deleteJob(jobId)
+}
+
 export const judgmentsJobsRoutes = new Elysia()
   .use(withErrorHandler())
   .post(
@@ -864,16 +961,17 @@ export const judgmentsJobsRoutes = new Elysia()
       const leaseMetadataPromise = sqliteService.getJudgmentJobLeaseMetadata(job.id)
       const storageProjectionPromise = getJudgmentJobStorageProjection(job.projectId)
 
-      const [sqliteHealth, leaseMetadata, storageProjection, totalTokenUsage, tokenUsageRows] = await Promise.all([
-        sqliteHealthPromise,
-        leaseMetadataPromise,
-        storageProjectionPromise,
-        getAppDatabaseService().queryJson<{
-          totalTokens: number | null
-          totalPromptTokens: number | null
-          totalCompletionTokens: number | null
-          totalRequests: number | null
-        }>(`
+      const [sqliteHealth, leaseMetadata, storageProjection, totalTokenUsage, tokenUsageRows, failedRequestRows] =
+        await Promise.all([
+          sqliteHealthPromise,
+          leaseMetadataPromise,
+          storageProjectionPromise,
+          getAppDatabaseService().queryJson<{
+            totalTokens: number | null
+            totalPromptTokens: number | null
+            totalCompletionTokens: number | null
+            totalRequests: number | null
+          }>(`
           SELECT
             SUM(total_tokens) AS totalTokens,
             SUM(total_prompt_tokens) AS totalPromptTokens,
@@ -882,13 +980,13 @@ export const judgmentsJobsRoutes = new Elysia()
           FROM app.token_use
           WHERE judgment_job_id = '${escapeSqlString(job.id)}'
         `),
-        getAppDatabaseService().queryJson<{
-          createdAt: unknown
-          dailyTokens: number | null
-          dailyPromptTokens: number | null
-          dailyCompletionTokens: number | null
-          requests: number | null
-        }>(`
+          getAppDatabaseService().queryJson<{
+            createdAt: unknown
+            dailyTokens: number | null
+            dailyPromptTokens: number | null
+            dailyCompletionTokens: number | null
+            requests: number | null
+          }>(`
           SELECT
             created_at AS createdAt,
             total_tokens AS dailyTokens,
@@ -899,7 +997,13 @@ export const judgmentsJobsRoutes = new Elysia()
           WHERE judgment_job_id = '${escapeSqlString(job.id)}'
           ORDER BY created_at ASC
         `),
-      ])
+          getAppDatabaseService().queryJson<{failedRequestsDetails: unknown}>(`
+          SELECT TO_JSON(failed_requests_details) AS failedRequestsDetails
+          FROM app.token_use
+          WHERE judgment_job_id = '${escapeSqlString(job.id)}'
+            AND has_failed_requests = TRUE
+        `),
+        ])
       const normalizedTokenUsageRows = tokenUsageRows.reduce<
         Array<{
           createdAt: Date
@@ -914,6 +1018,7 @@ export const judgmentsJobsRoutes = new Elysia()
       }, [])
       const tokenUsagePerDay = aggregateTokenUsagePerDay(normalizedTokenUsageRows)
       const requestRuntimeStats = getJudgmentRequestStats(job.id)
+      const failedRequestSummary = getFailedRequestSummary(failedRequestRows)
       const storagePolicy = getStoragePolicy({job, sqliteHealth})
       const recentTransfer = getJudgmentJobStorageTransferRuntime(job.id)
       const providerConnection = await getProviderConnectionForStoredModel(projectModelId)
@@ -995,6 +1100,7 @@ export const judgmentsJobsRoutes = new Elysia()
             providerQueuedPrompts: dispatchStats.providerQueuedPromptCount,
           },
           endpointAvailability,
+          failures: failedRequestSummary,
           inFlight: requestRuntimeStats.inFlight,
           attempts: Number(totalTokenUsage[0]?.totalRequests || 0) + requestRuntimeStats.pendingPersistedAttempts,
         },
@@ -1344,6 +1450,65 @@ export const judgmentsJobsRoutes = new Elysia()
         error: t.Optional(t.Array(t.String())),
       }),
     },
+  )
+  .post(
+    '/api/judgmentsjobs/:id/start-clean',
+    async ({params}) => {
+      assertJudgingRuntimeCanRun()
+
+      const sqliteService = getJudgmentJobSqliteService()
+      const {job, projectModelId} = await getJobContext({jobId: params.id})
+
+      if (job.status === 'running') {
+        throw new HttpError(409, `Pause job ${params.id} before starting it clean.`)
+      }
+
+      await assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
+      await resetJudgmentJobLocalSqliteState({jobId: params.id, storageState: job.storageState})
+      await sqliteService.initializeJob(params.id)
+      await assertJudgmentJobCanRunSqlitePreflight({jobId: params.id, quarantineReason: null, storageState: 'active'})
+
+      const updatedJob = (await getAppDatabaseService().transaction(async (tx) => {
+        await tx.run(`
+          UPDATE app.judgment_job
+          SET status = 'running',
+              error = NULL,
+              storage_state = 'active',
+              pause_requested_at = NULL,
+              quarantined_at = NULL,
+              quarantine_reason = NULL,
+              updated_at = current_timestamp
+          WHERE id = '${escapeSqlString(params.id)}'
+        `)
+
+        return getJudgmentJobMutationState(tx, params.id)
+      })) as JudgmentJobMutationState | null
+
+      if (!updatedJob) {
+        throw new Error('Job not found')
+      }
+
+      return {
+        data: {
+          jobId: updatedJob.id,
+          status: updatedJob.status,
+          storageState: updatedJob.storageState,
+          quarantinedAt: getDateValue(updatedJob.quarantinedAt),
+          quarantineReason: updatedJob.quarantineReason,
+          lastImportStartedAt: getDateValue(updatedJob.lastImportStartedAt),
+          lastImportCompletedAt: getDateValue(updatedJob.lastImportCompletedAt),
+          lastImportErrorAt: getDateValue(updatedJob.lastImportErrorAt),
+          lastImportError: updatedJob.lastImportError,
+          lastImportExitCode: updatedJob.lastImportExitCode,
+          importFailureCount: Number(updatedJob.importFailureCount ?? 0),
+          pauseRequestedAt: getDateValue(updatedJob.pauseRequestedAt),
+          updatedAt: getDateValue(updatedJob.updatedAt),
+          error: getJsonValue(updatedJob.error) as string[] | null,
+        },
+        error: null,
+      }
+    },
+    {params: t.Object({id: t.String()})},
   )
   .post(
     '/api/judgmentsjobs/:id/preflight',

@@ -22,6 +22,7 @@ export type JudgmentJobRequestStats = {
     probeInProgress: boolean
     status: string
   } | null
+  failures?: {anthropicRefusalArticles: number; anthropicRefusals: number; persistedFailedRequests: number}
   inFlight: number
 }
 
@@ -161,6 +162,11 @@ export const pauseJudgmentsJob = (jobId: string) => {
 
 export const startJudgmentsJob = (jobId: string) => {
   return updateJudgmentsJobStatus(jobId, 'running')
+}
+
+export const startJudgmentsJobClean = async (jobId: string) => {
+  const response = await apiClient.api.judgmentsjobs({id: jobId})['start-clean'].post()
+  return handleApiResponse(response, 'Failed to start job clean')
 }
 
 export const deleteJudgmentsJob = async (jobId: string) => {

@@ -64,7 +64,7 @@ type PromptPreparationWaiter = {resolve: (release: () => void) => void}
 
 type PromptTerminalState =
   | {kind: 'judged'}
-  | {kind: 'ready'}
+  | {kind: 'ready'; retryAfterMs: number | null}
   | {kind: 'skipped'; skipReason: 'no_fulltext' | 'conversion_failed' | 'fulltext_too_large'}
 
 const processPromptLogger = createRateLimitedLogger({windowMs: 30_000})
@@ -234,8 +234,8 @@ const markAsJudged = async (jobId: string, recordId: string): Promise<void> => {
   await getJudgmentJobSqliteService().markPromptAsJudged(jobId, recordId)
 }
 
-const markAsRetry = async (jobId: string, recordId: string): Promise<void> => {
-  await getJudgmentJobSqliteService().markPromptAsRetry(jobId, recordId)
+const markAsRetry = async (jobId: string, recordId: string, retryAfterMs: number | null): Promise<void> => {
+  await getJudgmentJobSqliteService().markPromptAsRetry(jobId, recordId, retryAfterMs)
 }
 
 const markAsSkipped = async (
@@ -320,14 +320,18 @@ const releasePromptTerminalState = async (
   return terminalState.kind === 'judged'
     ? markAsJudged(jobId, recordId)
     : terminalState.kind === 'ready'
-      ? markAsRetry(jobId, recordId)
+      ? markAsRetry(jobId, recordId, terminalState.retryAfterMs)
       : markAsSkipped(jobId, recordId, terminalState.skipReason)
+}
+
+const getRecoverableRetryDelayMs = (_failureCode: string): number | null => {
+  return null
 }
 
 export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Effect.Effect<void, unknown> => {
   const startTime = Date.now()
   const modelContext = getModelContext(promptToProcess.modelMetadataJson)
-  let terminalState: PromptTerminalState = {kind: 'ready'}
+  let terminalState: PromptTerminalState = {kind: 'ready', retryAfterMs: null}
 
   return Effect.scoped(
     Effect.acquireRelease(
@@ -347,7 +351,7 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
           })
 
           if (prepared.kind !== 'run') {
-            terminalState = prepared
+            terminalState = prepared.kind === 'ready' ? {kind: 'ready', retryAfterMs: null} : prepared
             return undefined
           }
 
@@ -378,12 +382,12 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
                   'Prompt requeued because the provider endpoint is unavailable. No further prompts will be sent for this connection until the provider health check passes.',
               })
               rateLimitedLogger.log(`prompt:retry:${error.failure.kind}:${promptToProcess.modelBaseUrl}`, retryMessage)
-              terminalState = {kind: 'ready'}
+              terminalState = {kind: 'ready', retryAfterMs: null}
               throw error
             }
 
             if (error instanceof JudgmentPersistenceError) {
-              terminalState = {kind: 'ready'}
+              terminalState = {kind: 'ready', retryAfterMs: null}
               throw error
             }
 
@@ -396,7 +400,7 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
               })
 
               if (consumed) {
-                terminalState = {kind: 'ready'}
+                terminalState = {kind: 'ready', retryAfterMs: getRecoverableRetryDelayMs(error.failureCode)}
                 console.warn('[llm] Requeued prompt after recoverable provider failure', {
                   articleId: promptToProcess.articleId,
                   diagnostics: error.providerDiagnostics,

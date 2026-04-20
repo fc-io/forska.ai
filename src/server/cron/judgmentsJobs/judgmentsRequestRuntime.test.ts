@@ -961,6 +961,7 @@ test('prompt release consumes one extra recoverable retry then marks ready', asy
     maxExtraRetries: 1,
     recordId: 'record-a',
   })
+  expect(sqliteServiceMock.markPromptAsRetry).toHaveBeenCalledWith('job-a', 'record-a', null)
 })
 
 test('prompt release stops requeueing after recoverable retry budget is exhausted', async () => {

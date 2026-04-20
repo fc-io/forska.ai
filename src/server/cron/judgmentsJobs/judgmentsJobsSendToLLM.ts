@@ -48,6 +48,36 @@ type ClaimableJobRequest<T> = JobRequestAllocation<T> & {dispatchMode: 'full' | 
 
 const schedulerLogger = rateLimitedLogger
 
+const anthropicConnectionWarmupStartedAt = new Map<string, number>()
+
+const isAnthropicJob = (job: {modelProvider: string | null}) => {
+  return normalizeProvider(job.modelProvider) === 'anthropic'
+}
+
+const getAnthropicWarmupMaxInflight = ({
+  configuredMaxInflight,
+  providerConnectionId,
+}: {
+  configuredMaxInflight: number
+  providerConnectionId: string | null
+}): number => {
+  if (!providerConnectionId) {
+    return configuredMaxInflight
+  }
+
+  const startedAt = anthropicConnectionWarmupStartedAt.get(providerConnectionId) ?? Date.now()
+
+  if (!anthropicConnectionWarmupStartedAt.has(providerConnectionId)) {
+    anthropicConnectionWarmupStartedAt.set(providerConnectionId, startedAt)
+  }
+
+  const elapsedMs = Math.max(0, Date.now() - startedAt)
+  const warmupMaxInflight =
+    elapsedMs < 15_000 ? 10 : elapsedMs < 30_000 ? 20 : elapsedMs < 60_000 ? 40 : configuredMaxInflight
+
+  return Math.max(1, Math.min(configuredMaxInflight, warmupMaxInflight))
+}
+
 const getCapacityFromMaxInflight = (maxInflightRequests: number): Capacity => {
   const limit = Math.max(1, maxInflightRequests)
 
@@ -84,6 +114,28 @@ export const getEffectiveProviderCap = ({
   const maxInflight = Math.max(1, savedMaxInflight ?? providerFamilyDefaultMaxInflight)
 
   return {maxInflight, usesFamilyDefault: savedMaxInflight == null}
+}
+
+export const getEffectiveDispatchProviderCap = ({
+  getCodexDefaultMaxInflight = getCodexMaxInflight,
+  getNonCodexCapacity = getJudgmentsCapacity,
+  job,
+}: {
+  getCodexDefaultMaxInflight?: () => number
+  getNonCodexCapacity?: (runningJobCount: number) => Capacity
+  job: RunningJudgmentJob
+}): {maxInflight: number; usesFamilyDefault: boolean} => {
+  const configuredCap = getEffectiveProviderCap({getCodexDefaultMaxInflight, getNonCodexCapacity, job})
+
+  return isAnthropicJob(job)
+    ? {
+        maxInflight: getAnthropicWarmupMaxInflight({
+          configuredMaxInflight: configuredCap.maxInflight,
+          providerConnectionId: job.providerConnectionId,
+        }),
+        usesFamilyDefault: configuredCap.usesFamilyDefault,
+      }
+    : configuredCap
 }
 
 export const getCapacityBuckets = ({
@@ -182,14 +234,14 @@ const getDispatchQueueCapacityByConnection = async (jobs: RunningJudgmentJob[]):
 
   const capacities = await Promise.all(
     connectionJobs.map(async ([connectionId, job]) => {
-      const providerCap = getEffectiveProviderCap({job})
+      const dispatchProviderCap = getEffectiveDispatchProviderCap({job})
 
       return [
         connectionId,
         await getJudgmentDispatchQueueCapacity({
           providerConnectionId: job.providerConnectionId,
-          providerMaxInflightRequests: providerCap.maxInflight,
-          providerUsesFamilyDefault: providerCap.usesFamilyDefault,
+          providerMaxInflightRequests: dispatchProviderCap.maxInflight,
+          providerUsesFamilyDefault: dispatchProviderCap.usesFamilyDefault,
         }),
       ] as const
     }),
@@ -734,7 +786,7 @@ const sendToLLMForJobs = async (
 
   const promptClaimResults = await Promise.allSettled(
     requestsToSendByJob.map(({job, limit}) => {
-      const providerCap = getEffectiveProviderCap({job})
+      const providerCap = getEffectiveDispatchProviderCap({job})
 
       return getAndUpdateReadyPrompts(serverJobId, job.id, limit, {
         providerConnectionId: job.providerConnectionId,
@@ -814,4 +866,8 @@ export const judgmentsJobsSendToLLM = async (allJobs: RunningJudgmentJob[], serv
   } finally {
     isRunningJudgmentsJobsSendToLLM = false
   }
+}
+
+export const resetDispatchProviderWarmupForTests = (): void => {
+  anthropicConnectionWarmupStartedAt.clear()
 }

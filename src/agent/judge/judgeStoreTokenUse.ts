@@ -21,6 +21,7 @@ export type JudgeTokenUsageEntry = {
   systemPrompt: string | null
   userPrompt: string | null
   failureCode?: string | null
+  pendingQueueRetry?: boolean
   providerDiagnostics?: unknown
 }
 
@@ -67,6 +68,7 @@ type FailedRequestAggregation = {
   systemPrompt: string | null
   userPrompt: string | null
   failureCode: string | null
+  pendingQueueRetry: boolean
   providerDiagnostics: unknown
 }
 
@@ -268,6 +270,7 @@ export const buildTokenUseTotals = (tokenUseEntries: JudgeTokenUsageEntry[]): To
         systemPrompt: null,
         userPrompt: null,
         failureCode: null,
+        pendingQueueRetry: false,
         providerDiagnostics: null,
       } satisfies FailedRequestAggregation)
 
@@ -288,6 +291,7 @@ export const buildTokenUseTotals = (tokenUseEntries: JudgeTokenUsageEntry[]): To
       isFailure && !isConnectionFailure ? (entry.userPrompt ?? existing.userPrompt) : existing.userPrompt
     const failureCode =
       isFailure && !isConnectionFailure ? (entry.failureCode ?? existing.failureCode) : existing.failureCode
+    const pendingQueueRetry = existing.pendingQueueRetry || (isFailure && entry.pendingQueueRetry === true)
     const providerDiagnostics =
       isFailure && !isConnectionFailure
         ? (entry.providerDiagnostics ?? existing.providerDiagnostics)
@@ -322,6 +326,7 @@ export const buildTokenUseTotals = (tokenUseEntries: JudgeTokenUsageEntry[]): To
       systemPrompt,
       userPrompt,
       failureCode,
+      pendingQueueRetry,
       providerDiagnostics,
     })
 
@@ -333,7 +338,8 @@ export const buildTokenUseTotals = (tokenUseEntries: JudgeTokenUsageEntry[]): To
       return request.failedAttempts > 0 && request.lastError !== null
     })
     .map((request) => {
-      const failureType: FailedRequestDetail['failureType'] = request.hasSuccess ? 'retry' : 'total_failure'
+      const failureType: FailedRequestDetail['failureType'] =
+        request.hasSuccess || request.pendingQueueRetry ? 'retry' : 'total_failure'
 
       return {
         articleId: request.articleId,

@@ -2,16 +2,19 @@ import {afterEach, expect, mock, test} from 'bun:test'
 
 import {classifyConnectionFailure, ConnectionError, recordConnectionFailure} from './connectionHealth.ts'
 import {resetJudgmentEndpointAvailabilityForTests} from './judgmentEndpointAvailability.ts'
-import type {RunningJudgmentJob} from './judgmentsJobsGetRunningJobs.ts'
 import {
   getCapacityBuckets,
   getDispatchAvailability,
+  getEffectiveDispatchProviderCap,
   getEffectiveProviderCap,
   getRequestsToSendByProviderConnection,
   processClaimedPromptsByConnection,
   requeueAndFilterRunningJobs,
+  resetDispatchProviderWarmupForTests,
 } from './judgmentsJobsSendToLLM.ts'
-import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
+
+type PromptToProcess = import('./judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts').PromptToProcess
+type RunningJudgmentJob = import('./judgmentsJobsGetRunningJobs.ts').RunningJudgmentJob
 
 const realDateNow = Date.now
 
@@ -42,6 +45,7 @@ const createPrompt = (overrides: Partial<PromptToProcess> = {}): PromptToProcess
 }
 
 afterEach(() => {
+  resetDispatchProviderWarmupForTests()
   resetJudgmentEndpointAvailabilityForTests()
   Date.now = realDateNow
 })
@@ -227,6 +231,63 @@ test('getEffectiveProviderCap prefers the saved provider override', () => {
       },
     }),
   ).toEqual({maxInflight: 2, usesFamilyDefault: false})
+})
+
+test('getEffectiveDispatchProviderCap ramps Anthropic connection overrides during the first minute', () => {
+  let now = 1_000
+  Date.now = () => {
+    return now
+  }
+
+  const job: RunningJudgmentJob = {
+    id: 'job-anthropic-warmup',
+    maxInflightRequests: 80,
+    modelId: 'model-anthropic-warmup',
+    modelName: 'claude-opus-4-7',
+    modelProvider: 'anthropic',
+    projectId: 'project-anthropic-warmup',
+    providerConnectionId: 'connection-anthropic-warmup',
+    quarantineReason: null,
+    storageState: 'active',
+  }
+
+  expect(getEffectiveDispatchProviderCap({job})).toEqual({maxInflight: 10, usesFamilyDefault: false})
+
+  now += 15_000
+  expect(getEffectiveDispatchProviderCap({job})).toEqual({maxInflight: 20, usesFamilyDefault: false})
+
+  now += 15_000
+  expect(getEffectiveDispatchProviderCap({job})).toEqual({maxInflight: 40, usesFamilyDefault: false})
+
+  now += 15_000
+  expect(getEffectiveDispatchProviderCap({job})).toEqual({maxInflight: 40, usesFamilyDefault: false})
+
+  now += 15_000
+  expect(getEffectiveDispatchProviderCap({job})).toEqual({maxInflight: 80, usesFamilyDefault: false})
+})
+
+test('getEffectiveDispatchProviderCap leaves non-Anthropic overrides unchanged', () => {
+  expect(
+    getEffectiveDispatchProviderCap({
+      getCodexDefaultMaxInflight: () => {
+        return 4
+      },
+      getNonCodexCapacity: () => {
+        return {maxBurst: 9, maxInflight: 9, workerCount: 3}
+      },
+      job: {
+        id: 'job-provider-override-dispatch',
+        maxInflightRequests: 80,
+        modelId: 'model-provider-override-dispatch',
+        modelName: 'Model Provider Override Dispatch',
+        modelProvider: 'sglang',
+        projectId: 'project-provider-override-dispatch',
+        providerConnectionId: 'connection-provider-override-dispatch',
+        quarantineReason: null,
+        storageState: 'active',
+      },
+    }),
+  ).toEqual({maxInflight: 80, usesFamilyDefault: false})
 })
 
 test('caps shared provider connections before splitting claims across jobs', () => {

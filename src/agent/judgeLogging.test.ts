@@ -27,7 +27,7 @@ test('formatFirstJudgeRequestLog serializes first-request logs as JSON with prev
     requestConfig: {temperature: 0.1, maxCompletionTokens: 4000},
     systemPromptPreview: {text: 'You are a helpful deep research assistant.', originalLength: 41, truncated: false},
     userPromptPreview: {
-      text: '## article_title\n\nNote: Between <DANGEROUS_TEXT_START>',
+      text: '## article_title\n\nNote: Between <SOURCE_TEXT_START>',
       originalLength: 12000,
       truncated: true,
     },
@@ -39,7 +39,7 @@ test('formatFirstJudgeRequestLog serializes first-request logs as JSON with prev
   expect(parsed.request.temperature).toBe(0.1)
   expect(parsed.request.max_completion_tokens).toBe(4000)
   expect(parsed.request.messages.system).toBe('You are a helpful deep research assistant.')
-  expect(parsed.request.messages.user).toContain('<DANGEROUS_TEXT_START>')
+  expect(parsed.request.messages.user).toContain('<SOURCE_TEXT_START>')
   expect(parsed.request.preview.systemOriginalLength).toBe(41)
   expect(parsed.request.preview.systemTruncated).toBe(false)
   expect(parsed.request.preview.userOriginalLength).toBe(12000)

@@ -14,6 +14,7 @@ import {
   pauseJudgmentsJob,
   runJudgmentsJobRepairAction,
   startJudgmentsJob,
+  startJudgmentsJobClean,
 } from '../../../../../services/judgmentsJobsService'
 import {fetchProjectWithPrompts} from '../../../../../services/projectsService'
 import {handleApiResponse} from '../../../../../services/utils/handleApiResponse'
@@ -223,6 +224,7 @@ const AdminJudgmentJobDetail = () => {
   const navigate = useNavigate()
   const [isDeleting, setIsDeleting] = createSignal(false)
   const [isStarting, setIsStarting] = createSignal(false)
+  const [isStartingClean, setIsStartingClean] = createSignal(false)
   const [isRepairing, setIsRepairing] = createSignal<JobRepairAction | null>(null)
   const [actionError, setActionError] = createSignal('')
   const [actionNotice, setActionNotice] = createSignal('')
@@ -295,6 +297,21 @@ const AdminJudgmentJobDetail = () => {
       setActionError(getActionErrorMessage(error, 'Failed to start job'))
     } finally {
       setIsStarting(false)
+    }
+  }
+  const handleStartJobClean = async (jobId: string) => {
+    setActionError('')
+    setActionNotice('')
+    setIsStartingClean(true)
+
+    try {
+      await startJudgmentsJobClean(jobId)
+      await job.refetch()
+      setActionNotice('Started job clean. Local SQLite queue state was reset and token usage history was preserved.')
+    } catch (error) {
+      setActionError(getActionErrorMessage(error, 'Failed to start job clean'))
+    } finally {
+      setIsStartingClean(false)
     }
   }
   const handleRepairAction = async ({
@@ -702,7 +719,7 @@ const AdminJudgmentJobDetail = () => {
                 <Show when={data()?.requestStats}>
                   <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
                     <h2 class="text-lg font-semibold mb-4">Request Activity</h2>
-                    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+                    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-7">
                       <div class="bg-sky-50 rounded-lg p-4">
                         <p class="text-sm text-sky-600 mb-1">Active LLM Calls</p>
                         <p class="text-2xl font-bold text-sky-900">{data()?.requestStats?.inFlight ?? 0}</p>
@@ -714,6 +731,24 @@ const AdminJudgmentJobDetail = () => {
                         <p class="text-sm text-indigo-600 mb-1">Attempts</p>
                         <p class="text-2xl font-bold text-indigo-900">{data()?.requestStats?.attempts ?? 0}</p>
                         <p class="text-xs text-indigo-600 mt-1">Total runtime request attempts, not distinct prompts</p>
+                      </div>
+                      <div class="bg-rose-50 rounded-lg p-4">
+                        <p class="text-sm text-rose-700 mb-1">Failed Requests</p>
+                        <p class="text-2xl font-bold text-rose-900">
+                          {data()?.requestStats?.failures?.persistedFailedRequests ?? 0}
+                        </p>
+                        <p class="text-xs text-rose-700 mt-1">
+                          Persisted failed request details captured in token usage rows
+                        </p>
+                      </div>
+                      <div class="bg-fuchsia-50 rounded-lg p-4">
+                        <p class="text-sm text-fuchsia-700 mb-1">Anthropic Refusals</p>
+                        <p class="text-2xl font-bold text-fuchsia-900">
+                          {data()?.requestStats?.failures?.anthropicRefusals ?? 0}
+                        </p>
+                        <p class="text-xs text-fuchsia-700 mt-1">
+                          Articles affected: {data()?.requestStats?.failures?.anthropicRefusalArticles ?? 0}
+                        </p>
                       </div>
                       <Show when={data()?.requestStats?.dispatch}>
                         <div class="bg-cyan-50 rounded-lg p-4">
@@ -1006,7 +1041,7 @@ const AdminJudgmentJobDetail = () => {
                       <Show when={data()?.status === 'paused'}>
                         <button
                           class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                          disabled={isStarting() || isResumeBlocked()}
+                          disabled={isStarting() || isStartingClean() || isResumeBlocked()}
                           onClick={() => {
                             const jobId = data()?.id
                             if (jobId) {
@@ -1020,7 +1055,7 @@ const AdminJudgmentJobDetail = () => {
                       <Show when={data()?.status === 'failed'}>
                         <button
                           class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                          disabled={isStarting() || isResumeBlocked()}
+                          disabled={isStarting() || isStartingClean() || isResumeBlocked()}
                           onClick={() => {
                             const jobId = data()?.id
                             if (jobId) {
@@ -1031,9 +1066,31 @@ const AdminJudgmentJobDetail = () => {
                           {isStarting() ? 'Retrying...' : 'Retry Job'}
                         </button>
                       </Show>
+                      <Show when={data()?.status === 'paused' || data()?.status === 'failed'}>
+                        <button
+                          class="px-4 py-2 bg-slate-700 text-white rounded-md hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                          disabled={isStarting() || isStartingClean() || isResumeBlocked()}
+                          onClick={() => {
+                            const jobId = data()?.id
+
+                            if (!jobId) return
+                            if (
+                              !confirm(
+                                'Start this job clean? This will reset local SQLite queue state for this job but keep the job and token usage history.',
+                              )
+                            ) {
+                              return
+                            }
+
+                            return void handleStartJobClean(jobId)
+                          }}
+                        >
+                          {isStartingClean() ? 'Starting Clean...' : 'Start Job Clean'}
+                        </button>
+                      </Show>
                       <button
                         class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                        disabled={isDeleting()}
+                        disabled={isDeleting() || isStarting() || isStartingClean()}
                         onClick={() => {
                           const jobId = data()?.id
                           if (!jobId) return

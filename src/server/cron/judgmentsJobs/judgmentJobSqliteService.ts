@@ -532,6 +532,7 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       judged_at TEXT,
       extra_retry_count INTEGER NOT NULL DEFAULT 0,
       last_recoverable_error_code TEXT,
+      retry_after_at TEXT,
       ready_insert_seq INTEGER NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -686,6 +687,7 @@ const queuePromptColumns = [
   {name: queuePromptReadyOrderColumnName, sql: 'INTEGER'},
   {name: 'extra_retry_count', sql: 'INTEGER NOT NULL DEFAULT 0'},
   {name: 'last_recoverable_error_code', sql: 'TEXT'},
+  {name: 'retry_after_at', sql: 'TEXT'},
 ] as const
 
 const legacyJobScanStateAckColumns = [
@@ -2314,6 +2316,7 @@ const repairOrphanedJudgedQueueRowsForJob = async ({
                           server_id = NULL,
                           claim_id = NULL,
                           sent_at = NULL,
+                          retry_after_at = NULL,
                           judged_at = NULL,
                           updated_at = ?
                       WHERE id IN (${getSqlPlaceholders(repairPlan.requeueIds.length).join(', ')})
@@ -2421,6 +2424,7 @@ const sqliteService = {
         SELECT id, article_id AS articleId, prompt_id AS promptId
         FROM queue_prompt
         WHERE status = 'ready'
+          AND (retry_after_at IS NULL OR retry_after_at <= ?)
         ORDER BY ready_insert_seq ASC, id ASC
         LIMIT ?
       `)
@@ -2437,7 +2441,7 @@ const sqliteService = {
 
         return database.transaction((requestedLimit: number) => {
           const now = new Date().toISOString()
-          const readyRows = selectReady.all(requestedLimit) as QueuePromptRow[]
+          const readyRows = selectReady.all(now, requestedLimit) as QueuePromptRow[]
 
           return readyRows.flatMap((row) => {
             const claimId = randomUUID()
@@ -3196,21 +3200,40 @@ const sqliteService = {
         .run(now, now, recordId)
     })
   },
-  markPromptAsRetry: async (jobId: string, recordId: string) => {
+  markPromptAsRetry: async (jobId: string, recordId: string, retryAfterMs: number | null = null) => {
     return withOwnedJobDatabase(jobId, false, (database) => {
       const now = new Date().toISOString()
-      database
-        .query(
-          `
-        UPDATE queue_prompt
-        SET status = 'ready',
-            sent_at = NULL,
-            updated_at = ?,
-            claim_id = NULL
-        WHERE id = ?
-      `,
+      const retryAfterAt = retryAfterMs && retryAfterMs > 0 ? new Date(Date.now() + retryAfterMs).toISOString() : null
+
+      database.transaction(() => {
+        const nextReadyInsertSeq = Number(
+          (
+            database
+              .query(
+                `
+                SELECT COALESCE(MAX(ready_insert_seq), 0) + 1 AS nextReadyInsertSeq
+                FROM queue_prompt
+              `,
+              )
+              .get() as {nextReadyInsertSeq: number | null} | null
+          )?.nextReadyInsertSeq ?? 1,
         )
-        .run(now, recordId)
+
+        database
+          .query(
+            `
+          UPDATE queue_prompt
+          SET status = 'ready',
+              sent_at = NULL,
+              retry_after_at = ?,
+              updated_at = ?,
+              claim_id = NULL,
+              ready_insert_seq = ?
+          WHERE id = ?
+        `,
+          )
+          .run(retryAfterAt, now, nextReadyInsertSeq, recordId)
+      })()
     })
   },
   consumePromptExtraRetry: async ({
@@ -3253,6 +3276,7 @@ const sqliteService = {
         UPDATE queue_prompt
         SET status = 'ready',
             sent_at = NULL,
+            retry_after_at = NULL,
             updated_at = ?,
             claim_id = NULL
         WHERE id = ?
@@ -3382,6 +3406,7 @@ const sqliteService = {
           UPDATE queue_prompt
           SET status = 'ready',
               sent_at = NULL,
+              retry_after_at = NULL,
               updated_at = ?,
               server_id = ?,
               claim_id = NULL

@@ -1,7 +1,7 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 
-import {invokeAnthropicMessagesModel, listAnthropicMessageModels} from './anthropicMessagesTransport.ts'
 import {ProviderInvocationError} from '../providerTypes.ts'
+import {invokeAnthropicMessagesModel, listAnthropicMessageModels} from './anthropicMessagesTransport.ts'
 
 const originalFetch = globalThis.fetch
 const fetchMock = mock(async (_input: RequestInfo | URL, _init?: RequestInit) => {
@@ -247,6 +247,59 @@ test('retries without thinking after an empty thinking-only response', async () 
         stop_reason: 'end_turn',
         usage: {input_tokens: 2, output_tokens: 24},
       }),
+      {headers: {'content-type': 'application/json'}, status: 200},
+    )
+  })
+  fetchMock.mockImplementationOnce(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+    return new Response(
+      JSON.stringify({
+        content: [{text: '{"answer":"no","explanation":"No intervention is described.","quotes":[]}', type: 'text'}],
+        stop_reason: 'end_turn',
+        usage: {input_tokens: 3, output_tokens: 12},
+      }),
+      {headers: {'content-type': 'application/json'}, status: 200},
+    )
+  })
+
+  const result = await invokeAnthropicMessagesModel({
+    apiKey: 'test-key',
+    baseURL: 'https://api.anthropic.com/v1',
+    maxCompletionTokens: 32,
+    modelName: 'claude-opus-4-7',
+    outputSchema: {type: 'object'},
+    prompt: 'Hello',
+    systemPrompt: 'Return JSON',
+    temperature: 0.2,
+    version: 'max',
+  })
+
+  expect(result).toEqual({
+    stopReason: 'end_turn',
+    text: '{"answer":"no","explanation":"No intervention is described.","quotes":[]}',
+    usage: {completionTokens: 36, promptTokens: 5, totalTokens: 41},
+  })
+  expect(getRequestBody(0)).toEqual({
+    max_tokens: 32,
+    messages: [{content: 'Hello', role: 'user'}],
+    model: 'claude-opus-4-7',
+    output_config: {effort: 'max', format: {schema: {type: 'object'}, type: 'json_schema'}},
+    system: 'Return JSON',
+    thinking: {display: 'omitted', type: 'adaptive'},
+  })
+  expect(getRequestBody(1)).toEqual({
+    max_tokens: 32,
+    messages: [{content: 'Hello', role: 'user'}],
+    model: 'claude-opus-4-7',
+    output_config: {format: {schema: {type: 'object'}, type: 'json_schema'}},
+    system: 'Return JSON',
+  })
+})
+
+test('retries without thinking after an empty refusal response', async () => {
+  globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch
+  fetchMock.mockImplementationOnce(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+    return new Response(
+      JSON.stringify({content: [], stop_reason: 'refusal', usage: {input_tokens: 2, output_tokens: 24}}),
       {headers: {'content-type': 'application/json'}, status: 200},
     )
   })
