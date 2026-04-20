@@ -44,8 +44,7 @@ const AdminLlm = () => {
       queryKey: llmStatusQueryKey,
       queryFn: fetchLlmStatus,
       refetchInterval: (query) => {
-        const rows = Array.isArray(query.state.data) ? query.state.data : []
-        return getLlmStatusRefetchInterval(rows)
+        return getLlmStatusRefetchInterval(query.state.data?.rows ?? [])
       },
       refetchOnWindowFocus: true,
       refetchOnReconnect: true,
@@ -53,7 +52,7 @@ const AdminLlm = () => {
   })
 
   const rows = () => {
-    return statusQuery.data ?? []
+    return statusQuery.data?.rows ?? []
   }
 
   const latestRows = () => {

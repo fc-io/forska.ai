@@ -85,7 +85,9 @@ test('fetchLlmStatus normalizes BIGINT counters returned as strings', async () =
     },
   }
 
-  const [row] = await fetchLlmStatus()
+  const {
+    rows: [row],
+  } = await fetchLlmStatus()
 
   expect(row).toMatchObject({
     numQueueReqs: 185,
@@ -97,26 +99,29 @@ test('fetchLlmStatus normalizes BIGINT counters returned as strings', async () =
 })
 
 test('getLlmMetricsSummary keeps waiting and running counts numeric when runtime rows contain strings', () => {
-  const summary = getLlmMetricsSummary([
-    buildLlmStatusRow({
-      instanceId: 'http://localhost:30001',
-      ts: new Date('2026-03-25T09:07:00.073Z'),
-      numQueueReqs: '185',
-      numRunningReqs: '204',
-    }),
-    buildLlmStatusRow({
-      instanceId: 'http://localhost:30000/v1',
-      ts: new Date('2026-03-25T09:00:00.011Z'),
-      numQueueReqs: '0',
-      numRunningReqs: '0',
-    }),
-    buildLlmStatusRow({
-      instanceId: 'http://127.0.0.1:30000/v1',
-      ts: new Date('2026-03-25T09:00:00.013Z'),
-      numQueueReqs: '0',
-      numRunningReqs: '0',
-    }),
-  ])
+  const summary = getLlmMetricsSummary({
+    rows: [
+      buildLlmStatusRow({
+        instanceId: 'http://localhost:30001',
+        ts: new Date('2026-03-25T09:07:00.073Z'),
+        numQueueReqs: '185',
+        numRunningReqs: '204',
+      }),
+      buildLlmStatusRow({
+        instanceId: 'http://localhost:30000/v1',
+        ts: new Date('2026-03-25T09:00:00.011Z'),
+        numQueueReqs: '0',
+        numRunningReqs: '0',
+      }),
+      buildLlmStatusRow({
+        instanceId: 'http://127.0.0.1:30000/v1',
+        ts: new Date('2026-03-25T09:00:00.013Z'),
+        numQueueReqs: '0',
+        numRunningReqs: '0',
+      }),
+    ],
+    hasMetricsCompatibleJob: true,
+  })
 
   expect(summary?.waiting).toBe(185)
   expect(summary?.running).toBe(204)

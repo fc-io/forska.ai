@@ -24,7 +24,12 @@ export type LlmStatusRow = {
   maxInFlight: number | null
 }
 
-export type LlmMetricsSummary = {waiting: number; running: number; lastUpdate: Date | null}
+export type LlmMetricsSummary = {
+  waiting: number
+  running: number
+  lastUpdate: Date | null
+  hasMetricsCompatibleJob: boolean
+}
 
 export const llmStatusQueryKey = ['llmstatus', 'latest50'] as const
 
@@ -57,7 +62,9 @@ const normalizeLlmStatusNumber = (value: unknown): number | null => {
   return Number.isFinite(parsed) ? parsed : null
 }
 
-export const fetchLlmStatus = async (): Promise<LlmStatusRow[]> => {
+export type LlmStatusResponse = {rows: LlmStatusRow[]; hasMetricsCompatibleJob: boolean}
+
+export const fetchLlmStatus = async (): Promise<LlmStatusResponse> => {
   const response = await apiClient.api.llmstatus.get()
 
   if (response.error) {
@@ -65,8 +72,10 @@ export const fetchLlmStatus = async (): Promise<LlmStatusRow[]> => {
   }
 
   const entries = response.data?.data ?? []
+  const hasMetricsCompatibleJob =
+    (response.data as Record<string, unknown> | undefined)?.hasMetricsCompatibleJob === true
 
-  return entries.map((row: Record<string, unknown>) => {
+  const rows = entries.map((row: Record<string, unknown>) => {
     return {
       ts: normalizeLlmStatusTimestamp(row.ts),
       instanceId: typeof row.instanceId === 'string' ? row.instanceId : '',
@@ -89,6 +98,8 @@ export const fetchLlmStatus = async (): Promise<LlmStatusRow[]> => {
       maxInFlight: normalizeLlmStatusNumber(row.maxInFlight),
     }
   })
+
+  return {rows, hasMetricsCompatibleJob}
 }
 
 export const getLatestLlmStatusRowsByInstance = (rows: LlmStatusRow[]) => {
@@ -109,11 +120,11 @@ const getLlmStatusTimestamps = (rows: LlmStatusRow[]) => {
     })
 }
 
-export const getLlmMetricsSummary = (rows: LlmStatusRow[]): LlmMetricsSummary | null => {
-  const latestRows = getLatestLlmStatusRowsByInstance(rows)
+export const getLlmMetricsSummary = (response: LlmStatusResponse): LlmMetricsSummary | null => {
+  const latestRows = getLatestLlmStatusRowsByInstance(response.rows)
 
   if (latestRows.length === 0) {
-    return null
+    return {waiting: 0, running: 0, lastUpdate: null, hasMetricsCompatibleJob: response.hasMetricsCompatibleJob}
   }
 
   const waiting = latestRows.reduce((sum, row) => {
@@ -134,7 +145,7 @@ export const getLlmMetricsSummary = (rows: LlmStatusRow[]): LlmMetricsSummary | 
         )
       : null
 
-  return {waiting, running, lastUpdate}
+  return {waiting, running, lastUpdate, hasMetricsCompatibleJob: response.hasMetricsCompatibleJob}
 }
 
 const isLlmStatusActive = (row: LlmStatusRow) => {

@@ -2,7 +2,7 @@ import {useQuery} from '@tanstack/solid-query'
 import {Link, useLocation} from '@tanstack/solid-router'
 import {createMemo, createSignal, onCleanup, onMount, Show} from 'solid-js'
 
-import type {LlmMetricsSummary, LlmStatusRow} from '../utils/llmStatusQuery'
+import type {LlmMetricsSummary, LlmStatusResponse} from '../utils/llmStatusQuery'
 import {
   fetchLlmStatus,
   getLlmMetricsSummary,
@@ -47,8 +47,8 @@ const getLlmMetricsIndicatorTitle = (isFresh: boolean) => {
     : 'Runtime-only LLM waiting / running requests across all workers (no metrics update in last 3m)'
 }
 
-const getLlmMetricsRefetchInterval = (pathname: string, rows: LlmStatusRow[]) => {
-  return pathname.startsWith('/admin/llm') ? false : getLlmStatusRefetchInterval(rows)
+const getLlmMetricsRefetchInterval = (pathname: string, response: LlmStatusResponse | undefined) => {
+  return pathname.startsWith('/admin/llm') ? false : getLlmStatusRefetchInterval(response?.rows ?? [])
 }
 
 const formatLastUpdate = (date: Date | null): string => {
@@ -77,15 +77,16 @@ export const Navigation = () => {
       queryKey: llmStatusQueryKey,
       queryFn: fetchLlmStatus,
       refetchInterval: (query) => {
-        const rows = Array.isArray(query.state.data) ? query.state.data : []
-        return getLlmMetricsRefetchInterval(location().pathname, rows)
+        return getLlmMetricsRefetchInterval(location().pathname, query.state.data ?? undefined)
       },
       suspense: false,
     }
   })
 
+  const defaultLlmStatusResponse: LlmStatusResponse = {rows: [], hasMetricsCompatibleJob: false}
+
   const llmMetrics = () => {
-    return getLlmMetricsSummary(llmMetricsQuery.data ?? [])
+    return getLlmMetricsSummary(llmMetricsQuery.data ?? defaultLlmStatusResponse)
   }
 
   const writerConnectionsQuery = useQuery(() => {
@@ -231,17 +232,19 @@ export const Navigation = () => {
             </Link>
           </div>
           <div class="flex items-center space-x-4">
-            <div
-              class="flex flex-col items-end px-2 py-1"
-              title={getLlmMetricsIndicatorTitle(llmMetricsIndicator().isFresh)}
-            >
-              <div class={`text-sm font-medium ${llmMetricsIndicator().isFresh ? 'text-gray-700' : 'text-red-600'}`}>
-                {llmMetricsIndicator().waiting}/{llmMetricsIndicator().running}
+            <Show when={llmMetrics()?.hasMetricsCompatibleJob}>
+              <div
+                class="flex flex-col items-end px-2 py-1"
+                title={getLlmMetricsIndicatorTitle(llmMetricsIndicator().isFresh)}
+              >
+                <div class={`text-sm font-medium ${llmMetricsIndicator().isFresh ? 'text-gray-700' : 'text-red-600'}`}>
+                  {llmMetricsIndicator().waiting}/{llmMetricsIndicator().running}
+                </div>
+                <div class={`text-xs ${llmMetricsIndicator().isFresh ? 'text-gray-400' : 'text-red-400'}`}>
+                  Runtime waiting/running | {formatLastUpdate(llmMetricsIndicator().lastUpdate)}
+                </div>
               </div>
-              <div class={`text-xs ${llmMetricsIndicator().isFresh ? 'text-gray-400' : 'text-red-400'}`}>
-                Runtime waiting/running | {formatLastUpdate(llmMetricsIndicator().lastUpdate)}
-              </div>
-            </div>
+            </Show>
             <div
               ref={(element) => {
                 adminMenuTriggerElement = element
