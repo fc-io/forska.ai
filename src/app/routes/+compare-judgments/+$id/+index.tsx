@@ -24,7 +24,7 @@ const pageLimitOptions = [25, 50, 100]
 type CompareProjectJudgmentsUrlState = {
   currentPage: number
   pageLimit: number
-  hideSparseRows: boolean
+  showOnlyRowsWithMultipleAnswers: boolean
   showOnlyFullyAnsweredPrompts: boolean
   differenceFilter: ComparisonProjectDifferenceFilter
 }
@@ -33,37 +33,38 @@ const getDefaultCompareProjectJudgmentsUrlState = (): CompareProjectJudgmentsUrl
   return {
     currentPage: 1,
     pageLimit: 50,
-    hideSparseRows: false,
+    showOnlyRowsWithMultipleAnswers: true,
     showOnlyFullyAnsweredPrompts: false,
     differenceFilter: 'all',
   }
 }
 
-const getPositiveIntegerSearchParamValue = (value: string | null, fallback: number) => {
-  const parsedValue = Number.parseInt(value ?? '', 10)
+const getPositiveIntegerSearchParamValue = (value: unknown, fallback: number) => {
+  const parsedValue = typeof value === 'number' ? value : Number.parseInt(typeof value === 'string' ? value : '', 10)
 
   return Number.isInteger(parsedValue) && parsedValue > 0 ? parsedValue : fallback
 }
 
-const getDifferenceFilterSearchParamValue = (value: string | null): ComparisonProjectDifferenceFilter => {
+const getDifferenceFilterSearchParamValue = (value: unknown): ComparisonProjectDifferenceFilter => {
   return value === 'human-vs-llm' || value === 'llm-vs-llm' || value === 'any-disagreement' ? value : 'all'
 }
 
-const getInitialCompareProjectJudgmentsUrlState = (): CompareProjectJudgmentsUrlState => {
-  if (typeof window === 'undefined') {
-    return getDefaultCompareProjectJudgmentsUrlState()
-  }
+const getTruthySearchParamValue = (value: unknown) => {
+  return value === '1' || value === 1 || value === true
+}
 
+const getInitialCompareProjectJudgmentsUrlState = (
+  search: Record<string, unknown>,
+): CompareProjectJudgmentsUrlState => {
   const defaultState = getDefaultCompareProjectJudgmentsUrlState()
-  const urlParams = new URLSearchParams(window.location.search)
-  const parsedPageLimit = getPositiveIntegerSearchParamValue(urlParams.get('limit'), defaultState.pageLimit)
+  const parsedPageLimit = getPositiveIntegerSearchParamValue(search.limit, defaultState.pageLimit)
 
   return {
-    currentPage: getPositiveIntegerSearchParamValue(urlParams.get('page'), defaultState.currentPage),
+    currentPage: getPositiveIntegerSearchParamValue(search.page, defaultState.currentPage),
     pageLimit: pageLimitOptions.includes(parsedPageLimit) ? parsedPageLimit : defaultState.pageLimit,
-    hideSparseRows: urlParams.get('hideSparseRows') === '1',
-    showOnlyFullyAnsweredPrompts: urlParams.get('showOnlyFullyAnsweredPrompts') === '1',
-    differenceFilter: getDifferenceFilterSearchParamValue(urlParams.get('differenceFilter')),
+    showOnlyRowsWithMultipleAnswers: !getTruthySearchParamValue(search.showAllRows),
+    showOnlyFullyAnsweredPrompts: getTruthySearchParamValue(search.showOnlyFullyAnsweredPrompts),
+    differenceFilter: getDifferenceFilterSearchParamValue(search.differenceFilter),
   }
 }
 
@@ -79,8 +80,8 @@ const getCompareProjectJudgmentsSearchParams = (state: CompareProjectJudgmentsUr
     searchParams.limit = String(state.pageLimit)
   }
 
-  if (state.hideSparseRows) {
-    searchParams.hideSparseRows = '1'
+  if (!state.showOnlyRowsWithMultipleAnswers) {
+    searchParams.showAllRows = '1'
   }
 
   if (state.showOnlyFullyAnsweredPrompts) {
@@ -153,7 +154,7 @@ const getHumanJudgmentModeLabel = (humanJudgmentMode: 'prompt' | 'summary') => {
 }
 
 const getSparseRowsFilterLabel = (isSummaryMode: boolean) => {
-  return isSummaryMode ? 'Hide rows with under 2 answered overall columns' : 'Hide rows with under 2 answered prompts'
+  return isSummaryMode ? 'Show rows with more than 1 answer' : 'Show rows with more than 1 answered prompt'
 }
 
 const getHasAllShownColumnsAnswered = (cells: Record<string, string | null>, columns: Array<{id: string}>) => {
@@ -221,8 +222,9 @@ const getColumnSourceProjectId = (
 
 const CompareProjectJudgmentsPage = () => {
   const params = Route.useParams()
+  const search = Route.useSearch()
   const navigate = useNavigate()
-  const initialUrlState = getInitialCompareProjectJudgmentsUrlState()
+  const initialUrlState = getInitialCompareProjectJudgmentsUrlState(search() as Record<string, unknown>)
   const comparisonProjectId = () => {
     const routeParams = params()
 
@@ -230,7 +232,9 @@ const CompareProjectJudgmentsPage = () => {
   }
   const [currentPage, setCurrentPage] = createSignal(initialUrlState.currentPage)
   const [pageLimit, setPageLimit] = createSignal(initialUrlState.pageLimit)
-  const [hideSparseRows, setHideSparseRows] = createSignal(initialUrlState.hideSparseRows)
+  const [showOnlyRowsWithMultipleAnswers, setShowOnlyRowsWithMultipleAnswers] = createSignal(
+    initialUrlState.showOnlyRowsWithMultipleAnswers,
+  )
   const [showOnlyFullyAnsweredPrompts, setShowOnlyFullyAnsweredPrompts] = createSignal(
     initialUrlState.showOnlyFullyAnsweredPrompts,
   )
@@ -260,7 +264,7 @@ const CompareProjectJudgmentsPage = () => {
         comparisonProjectId(),
         currentPage(),
         pageLimit(),
-        hideSparseRows(),
+        showOnlyRowsWithMultipleAnswers(),
         showOnlyFullyAnsweredPrompts(),
         differenceFilter(),
       ],
@@ -269,7 +273,7 @@ const CompareProjectJudgmentsPage = () => {
           comparisonProjectId(),
           currentPage(),
           pageLimit(),
-          hideSparseRows(),
+          showOnlyRowsWithMultipleAnswers(),
           showOnlyFullyAnsweredPrompts(),
           differenceFilter(),
         )
@@ -317,7 +321,14 @@ const CompareProjectJudgmentsPage = () => {
 
   createEffect(
     on(
-      [currentPage, pageLimit, hideSparseRows, showOnlyFullyAnsweredPrompts, differenceFilter, searchInitialized],
+      [
+        currentPage,
+        pageLimit,
+        showOnlyRowsWithMultipleAnswers,
+        showOnlyFullyAnsweredPrompts,
+        differenceFilter,
+        searchInitialized,
+      ],
       () => {
         if (!searchInitialized()) {
           return
@@ -329,7 +340,7 @@ const CompareProjectJudgmentsPage = () => {
           search: getCompareProjectJudgmentsSearchParams({
             currentPage: currentPage(),
             pageLimit: pageLimit(),
-            hideSparseRows: hideSparseRows(),
+            showOnlyRowsWithMultipleAnswers: showOnlyRowsWithMultipleAnswers(),
             showOnlyFullyAnsweredPrompts: showOnlyFullyAnsweredPrompts(),
             differenceFilter: differenceFilter(),
           }) as never,
@@ -349,7 +360,7 @@ const CompareProjectJudgmentsPage = () => {
       const configuredComparableCount = isSummaryMode()
         ? getConfiguredColumnCount(columns)
         : getConfiguredPromptCount(columns)
-      const passesSparseRowsFilter = !hideSparseRows() || answeredComparableCount >= 2
+      const passesSparseRowsFilter = !showOnlyRowsWithMultipleAnswers() || answeredComparableCount >= 2
       const passesFullyAnsweredFilter =
         !showOnlyFullyAnsweredPrompts() || getHasAllShownColumnsAnswered(row.cells, columns)
       const passesDifferenceFilter = getComparisonProjectHasDifferenceFilterMatch(
@@ -364,7 +375,7 @@ const CompareProjectJudgmentsPage = () => {
     })
   })
   const hasRowFilters = createMemo(() => {
-    return hideSparseRows() || showOnlyFullyAnsweredPrompts() || differenceFilter() !== 'all'
+    return showOnlyRowsWithMultipleAnswers() || showOnlyFullyAnsweredPrompts() || differenceFilter() !== 'all'
   })
 
   return (
@@ -468,9 +479,9 @@ const CompareProjectJudgmentsPage = () => {
                     <label class="flex items-center gap-2 text-sm text-gray-600">
                       <input
                         type="checkbox"
-                        checked={hideSparseRows()}
+                        checked={showOnlyRowsWithMultipleAnswers()}
                         onChange={(event) => {
-                          setHideSparseRows(event.currentTarget.checked)
+                          setShowOnlyRowsWithMultipleAnswers(event.currentTarget.checked)
                           setCurrentPage(1)
                         }}
                       />
