@@ -1,6 +1,7 @@
 import {type as arktype} from 'arktype'
 
 import {DEFAULT_API_SERVER_PORT, DEFAULT_APP_SERVER_PORT} from '../../utils/runtimePortDefaults.ts'
+import {getRuntimeLogConfig} from './runtimeLogger.ts'
 
 const appServerRuntimeShape = arktype({
   APP_SERVER_API_HOST: 'string',
@@ -33,8 +34,9 @@ const getFirstConfiguredValue = ({
 }
 
 export const getAppServerRuntimeConfig = ({
+  cwd = process.cwd(),
   envValues = process.env,
-}: {envValues?: Record<string, string | undefined>} = {}) => {
+}: {cwd?: string; envValues?: Record<string, string | undefined>} = {}) => {
   const parsed = appServerRuntimeShape.assert({
     APP_SERVER_API_HOST: getFirstConfiguredValue({
       envValues,
@@ -62,12 +64,17 @@ export const getAppServerRuntimeConfig = ({
       keys: ['APP_SERVER_PORT', 'PROD_SERVER'],
     }),
   })
+  const runtimeLogConfig = getRuntimeLogConfig({cwd, envValues})
 
   return {
     apiHost: parsed.APP_SERVER_API_HOST,
     apiPort: parsed.APP_SERVER_API_PORT,
     apiScheme: parsed.APP_SERVER_API_SCHEME,
     distDir: getTrimmedValue(parsed.APP_SERVER_DIST_DIR),
+    logDir: runtimeLogConfig.logDir,
+    logLevel: runtimeLogConfig.logLevel,
+    logStderrLevel: runtimeLogConfig.logStderrLevel,
     port: parsed.APP_SERVER_PORT,
+    runtimeProfile: runtimeLogConfig.runtimeProfile,
   }
 }

@@ -16,7 +16,10 @@ test('uses the macOS application support directory by default', () => {
   expect(runtimeConfig.backendEnv.DUCKDB_PATH).toBe(
     '/Users/tester/Library/Application Support/Forska/desktop/forska.duckdb',
   )
-  expect(runtimeConfig.backendLogPath).toBe('/Users/tester/Library/Application Support/Forska/desktop/logs/backend.log')
+  expect(runtimeConfig.backendEnv.FORSKA_RUNTIME_PROFILE).toBe('local')
+  expect(runtimeConfig.backendLogPath).toBe(
+    '/Users/tester/Library/Application Support/Forska/desktop/logs/runtime/local/backend.log',
+  )
 })
 
 test('uses LOCALAPPDATA on Windows when it is available', () => {
@@ -30,7 +33,9 @@ test('uses LOCALAPPDATA on Windows when it is available', () => {
   expect(runtimeConfig.dataRoot).toBe('C:\\Users\\tester\\AppData\\Local\\Forska\\desktop')
   expect(runtimeConfig.backendCommand[0]).toBe('C:\\Bun\\bun.exe')
   expect(runtimeConfig.backendEnv.DUCKDB_PATH).toBe('C:\\Users\\tester\\AppData\\Local\\Forska\\desktop\\forska.duckdb')
-  expect(runtimeConfig.backendLogPath).toBe('C:\\Users\\tester\\AppData\\Local\\Forska\\desktop\\logs\\backend.log')
+  expect(runtimeConfig.backendLogPath).toBe(
+    'C:\\Users\\tester\\AppData\\Local\\Forska\\desktop\\logs\\runtime\\local\\backend.log',
+  )
 })
 
 test('supports desktop API port overrides', () => {

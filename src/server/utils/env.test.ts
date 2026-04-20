@@ -11,4 +11,20 @@ test('uses local dev port defaults without env files', () => {
   expect(resolvedEnv.PROJECT_MART_LARGE_REBUILD_BATCH_SIZE).toBe(128)
   expect(resolvedEnv.PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE).toBe(4)
   expect(resolvedEnv.PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS).toBe(1000)
+  expect(resolvedEnv.FORSKA_RUNTIME_PROFILE).toBe('local')
+  expect(resolvedEnv.LOG_DIR).toBe(`${process.cwd()}/logs/runtime/local`)
+  expect(resolvedEnv.LOG_LEVEL).toBe('INFO')
+  expect(resolvedEnv.LOG_STDERR_LEVEL).toBe('WARN')
+})
+
+test('uses configured runtime log filtering and profile values', () => {
+  const resolvedEnv = loadEnv({
+    cwd: '/repo/forska',
+    envValues: {FORSKA_RUNTIME_PROFILE: 'secondary', LOG_LEVEL: 'debug', LOG_STDERR_LEVEL: 'error'},
+  })
+
+  expect(resolvedEnv.FORSKA_RUNTIME_PROFILE).toBe('secondary')
+  expect(resolvedEnv.LOG_DIR).toBe('/repo/forska/logs/runtime/secondary')
+  expect(resolvedEnv.LOG_LEVEL).toBe('DEBUG')
+  expect(resolvedEnv.LOG_STDERR_LEVEL).toBe('ERROR')
 })

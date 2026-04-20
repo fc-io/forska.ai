@@ -1,5 +1,6 @@
 import {expect, test} from 'bun:test'
 
+import {getDefaultRuntimeLogDir} from './runtimeLogger.ts'
 import {getRuntimeWritableRoot, resolveRuntimeFilePath, resolveRuntimeWritablePath} from './runtimeWritablePath.ts'
 
 test('keeps repo cwd as the writable root outside desktop mode', () => {
@@ -22,4 +23,10 @@ test('uses the DuckDB parent directory as the writable root in desktop mode', ()
 
 test('preserves absolute file paths when resolving runtime files', () => {
   expect(resolveRuntimeFilePath({pathValue: '/tmp/forska.pdf'})).toBe('/tmp/forska.pdf')
+})
+
+test('resolves runtime log roots through the writable root', () => {
+  expect(getDefaultRuntimeLogDir({cwd: '/repo/forska', envValues: {FORSKA_RUNTIME_PROFILE: 'secondary'}})).toBe(
+    '/repo/forska/logs/runtime/secondary',
+  )
 })

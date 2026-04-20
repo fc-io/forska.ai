@@ -11,6 +11,7 @@ test('runtime profiles define primary and secondary isolated runtime roots', () 
         APP_SERVER_PORT: '8080',
         BACKGROUND_WRITER_PORT: '3002',
         DUCKDB_PATH: 'data/runtime/primary/forska.duckdb',
+        FORSKA_RUNTIME_PROFILE: 'primary',
         VITE_PORT: '3000',
       },
       name: 'primary',
@@ -22,6 +23,7 @@ test('runtime profiles define primary and secondary isolated runtime roots', () 
         APP_SERVER_PORT: '8180',
         BACKGROUND_WRITER_PORT: '3102',
         DUCKDB_PATH: 'data/runtime/secondary/forska.duckdb',
+        FORSKA_RUNTIME_PROFILE: 'secondary',
         VITE_PORT: '3100',
       },
       name: 'secondary',
@@ -36,6 +38,7 @@ test('runtime profile helpers return the selected profile and env mapping', () =
     APP_SERVER_PORT: '8080',
     BACKGROUND_WRITER_PORT: '3002',
     DUCKDB_PATH: 'data/runtime/primary/forska.duckdb',
+    FORSKA_RUNTIME_PROFILE: 'primary',
     VITE_PORT: '3000',
   })
 })
@@ -53,6 +56,7 @@ test('runtime profile env merge keeps caller env and lets caller overrides win',
     BACKGROUND_WRITER_PORT: '3102',
     CUSTOM_FLAG: 'present',
     DUCKDB_PATH: 'data/runtime/secondary/forska.duckdb',
+    FORSKA_RUNTIME_PROFILE: 'secondary',
     VITE_PORT: '3100',
   })
 })
