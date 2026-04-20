@@ -9,7 +9,7 @@ import {escapeSqlString} from '../../../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../../../services/getAppQueryService.ts'
 import {ensureFullText} from '../../../utils/ensureFullText.ts'
 import {processFulltextForLLM} from '../../../utils/fulltextProcessing.ts'
-import {createRateLimitedLogger, rateLimitedLogger} from '../../../utils/rateLimitedLogger.ts'
+import {createRateLimitedLogger} from '../../../utils/rateLimitedLogger.ts'
 import {ConnectionError, formatConnectionOutageMessage} from '../connectionHealth.ts'
 import {getJudgmentEndpointAvailability} from '../judgmentEndpointAvailability.ts'
 import {getJudgmentJobSqliteService} from '../judgmentJobSqliteService.ts'
@@ -67,7 +67,9 @@ type PromptTerminalState =
   | {kind: 'ready'; retryAfterMs: number | null}
   | {kind: 'skipped'; skipReason: 'no_fulltext' | 'conversion_failed' | 'fulltext_too_large'}
 
-const processPromptLogger = createRateLimitedLogger({windowMs: 30_000})
+const processPromptLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
+const processPromptFailureLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
+const processPromptComponent = 'processPromptWithLLM'
 const cachedArticleLookups = new Map<string, Promise<ArticleRecord | null>>()
 const cachedPromptLookups = new Map<string, Promise<PromptDefinition | null>>()
 
@@ -249,7 +251,15 @@ const markAsSkipped = async (
 const preparePrompt = async (promptToProcess: PromptToProcess, modelContext: number): Promise<PreparedPromptResult> => {
   const judgmentExists = await checkJudgmentExistsInDatabase(promptToProcess)
   if (judgmentExists) {
-    console.log('[llm] Skipped - judgment already exists for:', promptToProcess.articleId.slice(0, 8))
+    processPromptLogger.log('llm.prompt.skipped.alreadyJudged', '[llm] Skipped - judgment already exists', {
+      articleId: promptToProcess.articleId,
+      articleIdPrefix: promptToProcess.articleId.slice(0, 8),
+      component: processPromptComponent,
+      event: 'alreadyJudgedSkip',
+      jobId: promptToProcess.jobId,
+      promptId: promptToProcess.promptId,
+      recordId: promptToProcess.recordId,
+    })
     return {kind: 'judged'}
   }
 
@@ -257,7 +267,14 @@ const preparePrompt = async (promptToProcess: PromptToProcess, modelContext: num
   const article = await getCachedArticle({articleId: promptToProcess.articleId, includeFullText: needsFulltext})
 
   if (!article) {
-    console.error('Article not found:', promptToProcess.articleId)
+    processPromptFailureLogger.error('llm.prompt.articleNotFound', 'Article not found', {
+      articleId: promptToProcess.articleId,
+      component: processPromptComponent,
+      event: 'articleNotFound',
+      jobId: promptToProcess.jobId,
+      promptId: promptToProcess.promptId,
+      recordId: promptToProcess.recordId,
+    })
     return {kind: 'judged'}
   }
 
@@ -269,15 +286,29 @@ const preparePrompt = async (promptToProcess: PromptToProcess, modelContext: num
     if (!result.text) {
       return result.shouldSkip
         ? (() => {
-            rateLimitedLogger.log(
-              `fulltext:skip:${result.reason}`,
-              `[fulltext] Skipping article ${article.id}: ${result.reason}`,
-            )
+            processPromptLogger.log(`fulltext:skip:${result.reason}`, '[fulltext] Skipping article', {
+              articleId: article.id,
+              component: processPromptComponent,
+              event: 'fulltextSkip',
+              jobId: promptToProcess.jobId,
+              promptId: promptToProcess.promptId,
+              recordId: promptToProcess.recordId,
+              skipReason: result.reason,
+            })
             return {kind: 'skipped', skipReason: result.reason} as const
           })()
         : (() => {
-            console.log(
-              `[fulltext] Transient failure for article ${article.id}, requeuing prompt ${promptToProcess.promptId}`,
+            processPromptLogger.log(
+              'fulltext.transientFailure.requeue',
+              '[fulltext] Transient failure, requeuing prompt',
+              {
+                articleId: article.id,
+                component: processPromptComponent,
+                event: 'fulltextTransientRequeue',
+                jobId: promptToProcess.jobId,
+                promptId: promptToProcess.promptId,
+                recordId: promptToProcess.recordId,
+              },
             )
             return {kind: 'ready'} as const
           })()
@@ -289,10 +320,16 @@ const preparePrompt = async (promptToProcess: PromptToProcess, modelContext: num
     })
 
     if (!processResult.withinBudget) {
-      rateLimitedLogger.log(
-        'fulltext:large:chunked-mode',
-        `[fulltext] Large fulltext for ${article.id}: ~${processResult.tokenCount.toLocaleString()} tokens (max ~${processResult.maxTokens.toLocaleString()}); will rely on chunked judging`,
-      )
+      processPromptLogger.log('fulltext:large:chunked-mode', '[fulltext] Large fulltext will rely on chunked judging', {
+        articleId: article.id,
+        component: processPromptComponent,
+        event: 'largeFulltextChunkedMode',
+        jobId: promptToProcess.jobId,
+        maxTokens: processResult.maxTokens,
+        promptId: promptToProcess.promptId,
+        recordId: promptToProcess.recordId,
+        tokenCount: processResult.tokenCount,
+      })
     }
 
     articleWithFulltext = {...articleWithFulltext, fullText: processResult.processedText}
@@ -305,7 +342,15 @@ const preparePrompt = async (promptToProcess: PromptToProcess, modelContext: num
   })
 
   if (!prompt) {
-    console.log('Prompt not found or not enabled:', promptToProcess.promptId)
+    processPromptFailureLogger.error('llm.prompt.definitionNotFound', 'Prompt not found or not enabled', {
+      articleId: promptToProcess.articleId,
+      component: processPromptComponent,
+      event: 'promptDefinitionNotFound',
+      jobId: promptToProcess.jobId,
+      promptId: promptToProcess.promptId,
+      projectId: promptToProcess.projectId,
+      recordId: promptToProcess.recordId,
+    })
     return {kind: 'judged'}
   }
 
@@ -356,18 +401,31 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
           }
 
           try {
-            processPromptLogger.log(
-              `llm:calling:${promptToProcess.modelBaseUrl}`,
-              '[llm] Calling LLM for article:',
-              promptToProcess.articleId.slice(0, 8),
-            )
+            processPromptLogger.log(`llm:calling:${promptToProcess.modelBaseUrl}`, '[llm] Calling LLM for article', {
+              articleId: promptToProcess.articleId,
+              articleIdPrefix: promptToProcess.articleId.slice(0, 8),
+              component: processPromptComponent,
+              event: 'llmCall',
+              jobId: promptToProcess.jobId,
+              modelBaseUrl: promptToProcess.modelBaseUrl,
+              modelId: promptToProcess.modelId,
+              promptId: promptToProcess.promptId,
+              recordId: promptToProcess.recordId,
+            })
             await processSinglePrompt(promptToProcess, prepared.articleForJudging, prepared.prompt, modelContext)
             terminalState = {kind: 'judged'}
             const duration = Date.now() - startTime
-            processPromptLogger.log(
-              `llm:success:${promptToProcess.modelBaseUrl}`,
-              `[llm] Success - processed in ${duration}ms`,
-            )
+            processPromptLogger.log(`llm:success:${promptToProcess.modelBaseUrl}`, '[llm] Success - processed prompt', {
+              articleId: promptToProcess.articleId,
+              component: processPromptComponent,
+              durationMs: duration,
+              event: 'llmSuccess',
+              jobId: promptToProcess.jobId,
+              modelBaseUrl: promptToProcess.modelBaseUrl,
+              modelId: promptToProcess.modelId,
+              promptId: promptToProcess.promptId,
+              recordId: promptToProcess.recordId,
+            })
             return undefined
           } catch (error) {
             if (error instanceof ConnectionError) {
@@ -381,7 +439,20 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
                 promptAction:
                   'Prompt requeued because the provider endpoint is unavailable. No further prompts will be sent for this connection until the provider health check passes.',
               })
-              rateLimitedLogger.log(`prompt:retry:${error.failure.kind}:${promptToProcess.modelBaseUrl}`, retryMessage)
+              processPromptFailureLogger.warn(
+                `prompt:retry:${error.failure.kind}:${promptToProcess.modelBaseUrl}`,
+                retryMessage,
+                {
+                  articleId: promptToProcess.articleId,
+                  component: processPromptComponent,
+                  event: 'connectionRetry',
+                  failureKind: error.failure.kind,
+                  jobId: promptToProcess.jobId,
+                  modelBaseUrl: promptToProcess.modelBaseUrl,
+                  promptId: promptToProcess.promptId,
+                  recordId: promptToProcess.recordId,
+                },
+              )
               terminalState = {kind: 'ready', retryAfterMs: null}
               throw error
             }
@@ -401,30 +472,50 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
 
               if (consumed) {
                 terminalState = {kind: 'ready', retryAfterMs: getRecoverableRetryDelayMs(error.failureCode)}
-                console.warn('[llm] Requeued prompt after recoverable provider failure', {
-                  articleId: promptToProcess.articleId,
-                  diagnostics: error.providerDiagnostics,
-                  failureCode: error.failureCode,
-                  promptId: promptToProcess.promptId,
-                })
+                processPromptFailureLogger.warn(
+                  'llm.prompt.recoverableProviderFailureRequeued',
+                  '[llm] Requeued prompt after recoverable provider failure',
+                  {
+                    articleId: promptToProcess.articleId,
+                    component: processPromptComponent,
+                    diagnostics: error.providerDiagnostics,
+                    event: 'recoverableProviderFailureRequeued',
+                    failureCode: error.failureCode,
+                    jobId: promptToProcess.jobId,
+                    promptId: promptToProcess.promptId,
+                    recordId: promptToProcess.recordId,
+                  },
+                )
                 throw error
               }
 
-              console.error('[llm] Recoverable provider failure exhausted extra retries', {
-                articleId: promptToProcess.articleId,
-                diagnostics: error.providerDiagnostics,
-                failureCode: error.failureCode,
-                promptId: promptToProcess.promptId,
-              })
+              processPromptFailureLogger.error(
+                'llm.prompt.recoverableProviderFailureExhausted',
+                '[llm] Recoverable provider failure exhausted extra retries',
+                {
+                  articleId: promptToProcess.articleId,
+                  component: processPromptComponent,
+                  diagnostics: error.providerDiagnostics,
+                  event: 'recoverableProviderFailureExhausted',
+                  failureCode: error.failureCode,
+                  jobId: promptToProcess.jobId,
+                  promptId: promptToProcess.promptId,
+                  recordId: promptToProcess.recordId,
+                },
+              )
               terminalState = {kind: 'judged'}
               return undefined
             }
 
             const errorMessage = error instanceof Error ? error.message : String(error)
-            console.error('[llm] ERROR - Failed to process prompt:', {
+            processPromptFailureLogger.error('llm.prompt.processFailed', '[llm] ERROR - Failed to process prompt', {
               articleId: promptToProcess.articleId,
-              promptId: promptToProcess.promptId,
+              component: processPromptComponent,
               error: errorMessage,
+              event: 'processPromptFailed',
+              jobId: promptToProcess.jobId,
+              promptId: promptToProcess.promptId,
+              recordId: promptToProcess.recordId,
             })
             terminalState = {kind: 'judged'}
             return undefined
