@@ -66,7 +66,6 @@ export const resolveClientApiOrigin = ({
 }
 
 const loadEnv = (): typeof envShape.infer => {
-  console.log(import.meta.env.VITE_SERVER_API)
   return envShape.assert({
     VITE_SERVER_API: resolveClientApiOrigin({
       directOrigin: import.meta.env.VITE_SERVER_API,

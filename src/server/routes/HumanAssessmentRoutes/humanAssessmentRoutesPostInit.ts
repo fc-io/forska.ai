@@ -39,7 +39,6 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
     set.status = 404
     return {data: null, error: 'Project not found'}
   }
-  console.log('project', project)
   const humanJudgmentMode = project.humanJudgmentMode ?? 'prompt'
 
   if (humanJudgmentMode === 'summary') {
@@ -59,7 +58,6 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
     WHERE pp.project_id = '${escapeSqlString(body.projectId)}'
     ORDER BY pp.prompt_order ASC NULLS LAST, p.created_at ASC
   `)
-  console.log('projectPrompts', projectPromptRows.length)
 
   if (projectPromptRows.length === 0) {
     set.status = 400
@@ -74,7 +72,6 @@ export const humanAssessmentRoutesPostInit = async ({body, set}: {body: {project
     ORDER BY created_at DESC
     LIMIT 50
   `)
-  console.log('existingUnanswered', existingUnanswered.length)
   let targetArticleId: string | null = null
   const firstUnanswered = existingUnanswered[0]
   if (firstUnanswered) {

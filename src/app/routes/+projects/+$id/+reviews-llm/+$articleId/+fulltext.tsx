@@ -27,7 +27,6 @@ export const ReviewDetailFulltext = () => {
         if (!response.data) {
           throw new Error('Failed to fetch apiClient.api.projectsreview.pos')
         }
-        console.log(response.data)
         return response.data
       },
       staleTime: 5 * 60 * 1000,
