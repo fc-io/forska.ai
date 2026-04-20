@@ -175,6 +175,58 @@ test('runtime JSONL sink writes one structured record to the service daily file'
   resetRuntimeProcessIdentityForTests()
 })
 
+test('runtime JSONL sink preserves one JSONL record per append during burst writes', () => {
+  resetRuntimeJsonlSinkForTests()
+  resetRuntimeProcessIdentityForTests()
+  const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
+  initializeRuntimeProcessIdentity({
+    hostnameValue: 'test-host',
+    listenPort: 4017,
+    pid: 228,
+    processStartedAt: '2026-04-20T12:00:00.000Z',
+    service: 'api-server',
+  })
+  installRuntimeJsonlSink({
+    envValues: {LOG_DIR: logDir, LOG_LEVEL: 'INFO', SERVER_ROLE: 'api'},
+    timestamp: '2026-04-20T12:00:00.000Z',
+  })
+
+  const writeResults = Array.from({length: 25}, (_value, index) => {
+    return writeRuntimeLogEvent({
+      attrs: {index},
+      event: 'runtime.logger.append-burst',
+      message: 'append burst',
+      severity: 'INFO',
+      timestamp: `2026-04-20T12:00:${String(index).padStart(2, '0')}.000Z`,
+    })
+  })
+  const records = readFileSync(join(logDir, 'api-server-2026-04-20.jsonl'), 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      return JSON.parse(line) as {attrs: {index: number}; event: string}
+    })
+
+  expect(writeResults.every(Boolean)).toBe(true)
+  expect(records).toHaveLength(25)
+  expect(
+    records.map((record) => {
+      return record.attrs.index
+    }),
+  ).toEqual(
+    Array.from({length: 25}, (_value, index) => {
+      return index
+    }),
+  )
+  expect(
+    records.every((record) => {
+      return record.event === 'runtime.logger.append-burst'
+    }),
+  ).toBe(true)
+  resetRuntimeJsonlSinkForTests()
+  resetRuntimeProcessIdentityForTests()
+})
+
 test('desktop dev-single runtime writes JSONL under the desktop writable root', () => {
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
@@ -524,6 +576,46 @@ test('file-only rate-limited logs write runtime JSONL without terminal output wh
   expect(record.severity).toBe('WARN')
   expect(record.attrs).toEqual({batch: 1})
   console.warn = originalWarn
+  resetRuntimeJsonlSinkForTests()
+  resetRuntimeProcessIdentityForTests()
+})
+
+test('both-sink rate-limited logs write terminal output and runtime JSONL', () => {
+  resetRuntimeJsonlSinkForTests()
+  resetRuntimeProcessIdentityForTests()
+  const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
+  const originalLog = console.log
+  const logs: unknown[][] = []
+  console.log = ((...args: unknown[]) => {
+    logs.push(args)
+  }) as typeof console.log
+  initializeRuntimeProcessIdentity({
+    hostnameValue: 'test-host',
+    listenPort: 4018,
+    pid: 229,
+    processStartedAt: '2026-04-20T12:00:00.000Z',
+    service: 'dev-single-server',
+  })
+  installRuntimeJsonlSink({
+    envValues: {LOG_DIR: logDir, LOG_LEVEL: 'INFO', SERVER_ROLE: 'dev-single'},
+    timestamp: '2026-04-20T12:00:00.000Z',
+  })
+  const logger = createRateLimitedLogger({sink: 'both', windowMs: 10})
+
+  logger.log('runtime.logger.both-sink', 'both sink log', {route: '/api/projects'})
+
+  const logContent = readFileSync(join(logDir, 'dev-single-server-2026-04-20.jsonl'), 'utf8')
+  const [record] = logContent
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      return JSON.parse(line) as Record<string, unknown>
+    })
+
+  expect(logs).toEqual([['both sink log', '{"route":"/api/projects"}']])
+  expect(record.event).toBe('runtime.logger.both-sink')
+  expect(record.attrs).toEqual({route: '/api/projects'})
+  console.log = originalLog
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
 })
