@@ -1,6 +1,12 @@
 import {expect, test} from 'bun:test'
 
-import {recordWriterConnectionProxy, upsertWriterConnectionHeartbeat} from './writerConnections.ts'
+import {createRuntimeLogRecord} from './runtimeLogger.ts'
+import {initializeRuntimeProcessIdentity, resetRuntimeProcessIdentityForTests} from './runtimeProcessIdentity.ts'
+import {
+  getWriterConnectionHeartbeatPayload,
+  recordWriterConnectionProxy,
+  upsertWriterConnectionHeartbeat,
+} from './writerConnections.ts'
 
 const getWriterHeaders = (startedAt: string) => {
   return new Headers({
@@ -44,4 +50,34 @@ test('tracks writer connection heartbeats and proxy metadata', () => {
   expect(proxied?.proxyCount).toBe(1)
   expect(proxied?.runtimeProfile).toBe('primary')
   expect(proxied?.writerUrl).toBe('http://127.0.0.1:4011')
+})
+
+test('uses the shared runtime process identity for runtime logs and writer heartbeats', () => {
+  resetRuntimeProcessIdentityForTests()
+  initializeRuntimeProcessIdentity({
+    hostnameValue: 'shared-host',
+    listenPort: 3001,
+    pid: 56789,
+    processStartedAt: '2026-04-20T12:00:00.000Z',
+    runtimeProfile: 'secondary',
+    service: 'api-server',
+  })
+
+  const runtimeRecord = createRuntimeLogRecord({
+    event: 'writer.identity.shared',
+    message: 'shared identity',
+    serverRole: 'api',
+    severity: 'INFO',
+    timestamp: '2026-04-20T12:30:00.000Z',
+  })
+  const heartbeat = getWriterConnectionHeartbeatPayload()
+
+  expect(heartbeat.instanceId).toBe(runtimeRecord.runtime.instanceId)
+  expect(heartbeat.hostname).toBe(runtimeRecord.runtime.hostname)
+  expect(heartbeat.listenPort).toBe(runtimeRecord.runtime.listenPort)
+  expect(heartbeat.processStartedAt).toBe(runtimeRecord.runtime.processStartedAt)
+  expect(heartbeat.runtimeProfile).toBe(runtimeRecord.runtime.runtimeProfile)
+  expect(heartbeat.service).toBe(runtimeRecord.runtime.service)
+  expect(heartbeat.startedAt).toBe(runtimeRecord.runtime.processStartedAt)
+  resetRuntimeProcessIdentityForTests()
 })
