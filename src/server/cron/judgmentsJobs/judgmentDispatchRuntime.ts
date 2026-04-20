@@ -3,8 +3,8 @@ import {Context, Effect, Fiber, Layer, ManagedRuntime} from 'effect'
 import {registerWriterDemotionHandler} from '../../utils/serverRuntimeRole.ts'
 import {ConnectionError} from './connectionHealth.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
-import {processPromptWithLLM} from './judgmentsJobsSendToLLM/processPromptWithLLM.ts'
 import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
+import {processPromptWithLLM} from './judgmentsJobsSendToLLM/processPromptWithLLM.ts'
 
 type ProviderQueueInput = {
   providerConnectionId: string | null
@@ -16,7 +16,7 @@ type DispatchPrompt = {label: string; prompt: PromptToProcess}
 
 type ProviderDispatchState = {
   activePrompts: DispatchPrompt[]
-  batchFibers: Set<Fiber.Fiber<void | undefined, unknown>>
+  batchFibers: Set<Fiber.Fiber<void, unknown>>
   isPaused: boolean
   key: string
   maxActivePrompts: number
@@ -152,7 +152,7 @@ const createJudgmentDispatchRuntimeLayer = (
             state.queuedPrompts = remainingQueuedPrompts
             state.activePrompts = [...state.activePrompts, nextPrompt]
 
-            let promptFiber: Fiber.Fiber<void | undefined, unknown> | null = null
+            let promptFiber: Fiber.Fiber<void, unknown> | null = null
             const trackedPrompt = Effect.tryPromise({
               catch: (error) => {
                 return error
@@ -206,7 +206,7 @@ const createJudgmentDispatchRuntimeLayer = (
           return Effect.succeed(existing)
         }
 
-        return Effect.gen(function* () {
+        return Effect.sync(() => {
           const state: ProviderDispatchState = {
             activePrompts: [],
             batchFibers: new Set(),

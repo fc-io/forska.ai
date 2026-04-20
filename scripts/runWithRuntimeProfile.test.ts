@@ -9,3 +9,18 @@ test('propagates the selected runtime profile into launcher child env', () => {
     getRuntimeProfileCommandEnv({mode: 'worker-only-server', profileName: 'secondary'}).FORSKA_RUNTIME_PROFILE,
   ).toBe('secondary')
 })
+
+test('fixes sink-owning runtime service names in launcher child env', () => {
+  expect(getRuntimeProfileCommandEnv({mode: 'app-server', profileName: 'primary'}).FORSKA_RUNTIME_SERVICE).toBe(
+    'app-server',
+  )
+  expect(getRuntimeProfileCommandEnv({mode: 'api-only-server', profileName: 'primary'}).FORSKA_RUNTIME_SERVICE).toBe(
+    'api-server',
+  )
+  expect(getRuntimeProfileCommandEnv({mode: 'worker-only-server', profileName: 'primary'}).FORSKA_RUNTIME_SERVICE).toBe(
+    'worker-server',
+  )
+  expect(getRuntimeProfileCommandEnv({mode: 'stacked-server', profileName: 'primary'}).FORSKA_RUNTIME_SERVICE).toBe(
+    'dev-single-server',
+  )
+})

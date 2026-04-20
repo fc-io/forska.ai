@@ -24,6 +24,10 @@ const getRuntimeProfileBaseEnv = (profileName: RuntimeProfileName) => {
   return mergeRuntimeProfileEnv({profileName})
 }
 
+const getAppServerEnv = (profileName: RuntimeProfileName) => {
+  return {...getRuntimeProfileBaseEnv(profileName), FORSKA_RUNTIME_SERVICE: 'app-server'}
+}
+
 const getRuntimeProfileServerEnv = ({profileName}: RuntimeProfileCommandOptions, role: RuntimeProfileServerRole) => {
   return getBackgroundServerEnv({baseEnv: getRuntimeProfileBaseEnv(profileName), role})
 }
@@ -44,7 +48,7 @@ const runtimeProfileModes: Record<RuntimeProfileMode, RuntimeProfileCommandConfi
   'app-server': {
     command: ['bun', 'run', 'src/appServer.ts'],
     env: ({profileName}) => {
-      return getRuntimeProfileBaseEnv(profileName)
+      return getAppServerEnv(profileName)
     },
   },
   'duckdb-migration': {
@@ -56,13 +60,13 @@ const runtimeProfileModes: Record<RuntimeProfileMode, RuntimeProfileCommandConfi
   'server-stack': {
     command: ['bun', 'scripts/startServerStack.ts'],
     env: ({profileName}) => {
-      return getRuntimeProfileBaseEnv(profileName)
+      return {...getRuntimeProfileBaseEnv(profileName), FORSKA_RUNTIME_SERVICE: 'dev-single-server'}
     },
   },
   'stacked-server': {
     command: ['bun', 'scripts/devServerWatch.ts'],
     env: ({profileName}) => {
-      return getRuntimeProfileBaseEnv(profileName)
+      return {...getRuntimeProfileBaseEnv(profileName), FORSKA_RUNTIME_SERVICE: 'dev-single-server'}
     },
   },
   'worker-only-server': {

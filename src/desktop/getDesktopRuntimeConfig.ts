@@ -215,6 +215,7 @@ export const getDesktopRuntimeConfig = ({
     DUCKDB_PATH: pathModule.join(dataRoot, 'forska.duckdb'),
     FORSKA_DESKTOP_MODE: 'true',
     FORSKA_RUNTIME_PROFILE: 'local',
+    FORSKA_RUNTIME_SERVICE: 'dev-single-server',
     SERVER_ROLE: 'dev-single',
     SERVER_WRITER_URL: '',
   }
