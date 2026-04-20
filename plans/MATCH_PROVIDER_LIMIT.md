@@ -175,10 +175,11 @@ Expected result:
 
 ## Observability
 
-- Add logs or counters for prompt-preparation wait time and prep duration.
-- Add cache-hit or cache-miss visibility for runtime resolution.
-- Log when ready-queue starvation, endpoint cooldown, or shared-allocation loss is the reason live calls stay low.
-- For Codex, log enough turn-start latency to tell whether the app-server client is the limiter.
+- Emit structured runtime events through the shared runtime logger or extended `rateLimitedLogger`, not ad-hoc `console.*` calls.
+- Use stable event names such as `judgments.promptPreparation.wait`, `judgments.runtimeResolution.cache`, `judgments.dispatch.idle`, and `judgments.codex.turnStart`, with attrs like `jobId`, `providerConnectionId`, `modelId`, `waitMs`, `durationMs`, `cacheHit`, `reason`, `limit`, `inFlight`, and `readyCount`.
+- Treat routine scheduler, prep, allocation, and utilization diagnostics as `file-only` so steady-state saturation debugging lands in JSONL instead of the terminal.
+- Treat endpoint cooldown transitions, provider misconfiguration, and request-launch failures as `both` so operators still see terminal-visible warnings and errors.
+- Replace any `console.time` and `console.timeEnd` timing with structured `durationMs` fields on those runtime events.
 
 ## Implementation Order
 

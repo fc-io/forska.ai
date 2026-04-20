@@ -55,6 +55,7 @@
 - Include `Dockerfile` or compose files only if they support a real public workflow, bind safely by default, and contain no private infra assumptions.
 - Exclude all old git history, private branches, and private tags from the public repo seed.
 - Exclude runtime and generated material: `.env*`, `data/`, `cache/`, `dist/`, `desktopBuild/`, `node_modules/`, `test-results/`, `tmp/`, logs, and local machine artifacts.
+- Exclude structured runtime telemetry such as `logs/runtime/` JSONL files and desktop `backend.log`; confirm those paths stay gitignored and never enter the public seed.
 - Exclude private infra and ops material by default: `forska-*.sbatch`, `old_sbatch/`, `mn5-tunnel-debug.txt`, remote backup helpers, cluster launch helpers, and any script tied to SSH aliases, stack roots, or private environments.
 - Exclude non-public publication artifacts by default: `Dockerfile.sglang`, `Dockerfile.sglang-gateway`, remote-only compose overrides, remote-run docs, CI or release config with private runners or registries, and any release helper that assumes private infrastructure.
 - Exclude ambiguous or internal planning material by default: root plan files, `plans/`, `future/`, `tasks/`, and any document that is not clearly meant for public users or contributors.
@@ -111,16 +112,19 @@
 ### 6. Audit configuration, secrets, and local data flows
 
 - Inventory `process.env` usage, UI-stored provider settings, token storage, and any config that could capture real credentials.
+- Inventory `LOG_DIR`, `LOG_LEVEL`, `LOG_STDERR_LEVEL`, and `FORSKA_RUNTIME_PROFILE` usage so public docs and sample commands do not expose machine-local paths or private runtime-profile conventions.
 - Confirm that normal local development does not require committing `.env` files, private tokens, or machine-specific paths.
 - Replace sensitive examples in docs and scripts with placeholders.
 - Check whether exported sample data, logs, fixtures, snapshots, or generated artifacts contain real article content, PHI, API responses, or private metadata.
 - Review whether runtime data under ignored paths has ever been copied into tracked files, tests, or docs.
+- Audit the structured runtime JSONL payload shape, filename pattern, and 7-day retention behavior to confirm no secrets, article payloads, or private machine metadata are intended for redistribution or sample docs.
 
 ### 7. Audit operational and debug surfaces
 
 - Review all admin, debug, status, proxy, database snapshot, and machine-observability routes.
 - Decide which of these should be removed entirely, which should remain local-only, and which need stronger gating.
 - Review every listener and proxy entrypoint, including `src/server/index.ts` and `src/appServer.ts`, and record the default bind interfaces.
+- Review bootstrap entrypoints that install runtime logging and process identity, including `src/server/index.ts`, `src/appServer.ts`, and any dedicated bootstrap modules, so the release inventory covers startup-time logging behavior as well as HTTP routes.
 - Confirm the supported OSS flow binds only to loopback by default, or document and explicitly justify any broader bind. Any wider default exposure is a release blocker.
 - Review CORS, desktop-mode exceptions, and writer-proxy behavior to ensure the default network posture stays narrow.
 - Remove or quarantine operational scripts that are useful only inside private environments.
@@ -153,6 +157,7 @@
 - Current tree transitive mount search: `rg "\\.use\\([A-Za-z].*Routes" src/server`
 - Current tree hotspot search: `rg "AdminInvestigate|ArticleAdmin|DuckdbStudio|NvidiaSmi|LlmStatus|ApiProxy|Tokens|Users" src docs scripts`
 - Publication artifact search: `rg "alvis|mn5|ssh|sbatch|STACK_ROOT|SSH_ALIAS|docker" README.md docs scripts package.json Dockerfile* *.sbatch`
+- Runtime logging surface search: `rg "LOG_DIR|LOG_LEVEL|LOG_STDERR_LEVEL|FORSKA_RUNTIME_PROFILE|runtimeLogger|logs/runtime" src docs scripts`
 - History search by path or string: `git log --all -- src/server src/appServer.ts docs scripts Dockerfile* '*.sbatch'` and `git log --all -S"/api/" -- src/server src/appServer.ts docs scripts`
 - Full-history secret scan: run a dedicated tool such as `gitleaks` or `trufflehog` against all refs, then manually review hits
 - Rewrite option if needed: `git filter-repo` or BFG, followed by a fresh scan of all remaining refs
@@ -166,6 +171,7 @@
 - A public-repo seed checklist for the minimum safe files, scripts, and docs to carry over
 - A kept-versus-removed publication artifact list covering scripts, Dockerfiles, remote docs, CI, and release helpers
 - A public-repo guardrail plan for secret scanning, denylisted-path checks, and unexpected route or listener changes
+- A logging-surface note covering runtime JSONL env vars, ignored paths, payload shape, bootstrap entrypoints, and retention behavior in the public seed
 - Public-release docs: `LICENSE`, `SECURITY.md`, contributor guidance, and sanitized README updates
 
 ## Exit Criteria

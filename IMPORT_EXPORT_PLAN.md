@@ -158,23 +158,23 @@
    - Create an import session and extract payload files into temp storage.
    - If the package crosses the configured threshold, continue extraction and analyze asynchronously and show progress until the session is ready.
 2. Review package.
-    - Show project name, source app version, counts for prompts, articles, judgments, human judgments, reviews, providers, and models.
-    - Show explicit warnings for fields that were intentionally not exported.
-    - Show exact-duplicate import warnings when the package fingerprint matches a prior completed import on this machine.
+   - Show project name, source app version, counts for prompts, articles, judgments, human judgments, reviews, providers, and models.
+   - Show explicit warnings for fields that were intentionally not exported.
+   - Show exact-duplicate import warnings when the package fingerprint matches a prior completed import on this machine.
 3. Resolve providers and models.
-    - Auto-match what can be matched safely.
-    - Show missing or ambiguous provider connections.
-    - Let the user map to an existing connection, create a sanitized new connection, or launch Codex setup where needed.
-    - Let the user create missing models from the resolved provider connection.
+   - Auto-match what can be matched safely.
+   - Show missing or ambiguous provider connections.
+   - Let the user map to an existing connection, create a sanitized new connection, or launch Codex setup where needed.
+   - Let the user create missing models from the resolved provider connection.
 4. Review import plan.
-    - Show which articles will be reused versus newly created.
-    - Show which import routes will be linked versus omitted.
-    - Show the final model mapping for the project and all imported judgments.
-    - Show overlap counts and any prior-import warning again before confirmation.
+   - Show which articles will be reused versus newly created.
+   - Show which import routes will be linked versus omitted.
+   - Show the final model mapping for the project and all imported judgments.
+   - Show overlap counts and any prior-import warning again before confirmation.
 5. Confirm import.
-    - Run one transaction that creates the project, prompts, links, articles, judgments, human judgments, reviews, and assessments.
-    - For large imports, let the server own the long-running commit work and expose session progress while the transactional write is in flight.
-    - Mark the new project dirty and queue mart refresh after the transaction succeeds.
+   - Run one transaction that creates the project, prompts, links, articles, judgments, human judgments, reviews, and assessments.
+   - For large imports, let the server own the long-running commit work and expose session progress while the transactional write is in flight.
+   - Mark the new project dirty and queue mart refresh after the transaction succeeds.
 6. Finish.
    - Navigate to the new project.
    - Show post-import warnings, such as omitted route links or provider connections that still need credential setup.
@@ -190,6 +190,12 @@
 - Support threshold-based execution modes: inline for small packages, background session jobs for large export assembly and large import analyze or commit work.
 - Record completed imports in a small transfer-history store with package fingerprint, source project summary, imported project id, imported at, and counts so analyze can warn on exact duplicate packages later.
 - Keep the final commit transactional and fail-fast when any required model mapping is unresolved.
+
+### Logging
+
+- Emit background export assembly, import analyze, and import commit progress as structured `file-only` runtime events with phase, percent, bytes, row counts, and session identifiers.
+- Emit warnings and failures such as omitted route links, unresolved provider dependencies, invalid zip members, checksum mismatches, and extraction errors as `both` so they stay terminal-visible and also land in JSONL.
+- Preserve terminal fail-fast behavior for blocking import failures such as unresolved required model mappings; file logging supplements that path instead of replacing it.
 
 ### Suggested API Surface
 

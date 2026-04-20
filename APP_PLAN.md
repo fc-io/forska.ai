@@ -195,11 +195,15 @@
 ### 4. Data, Cache, Import, And Log Paths
 
 - [ ] Introduce one shared runtime-path helper for app data, cache, temp, logs, exports, and imports.
+- [ ] Default structured runtime JSONL to `logs/runtime/<profile>/` via `src/server/utils/runtimeWritablePath.ts` so repo runs write under the repo and packaged desktop runs write under the desktop data root.
 - [ ] Stop writing runtime files under repo-root paths like `cache/` and `assets/` in packaged builds.
 - [x] Move provider runtime records from `cache/providerRuntimeRecords` to an app cache directory.
 - [x] Move Covidence import storage from `assets/covidence_imports` to an app data or imports directory.
 - [ ] Keep DuckDB, SQLite, WAL, lock files, and temp directories inside app-owned writable locations.
 - [x] Add log-file locations for backend stdout, stderr, crash details, and migration failures.
+- [ ] Keep the packaged desktop backend on the shared structured logging model: `SERVER_ROLE=dev-single`, `dev-single-server-YYYY-MM-DD.jsonl`, and 7-day pruning under the desktop data root.
+- [ ] Treat `backend.log` as launcher capture only for startup and fatal diagnostics; routine backend telemetry should live in runtime JSONL instead.
+- [ ] Make the shared runtime-path helper and desktop runtime config cooperate with `LOG_DIR`, `LOG_LEVEL`, `LOG_STDERR_LEVEL`, and `FORSKA_RUNTIME_PROFILE`.
 - [ ] Add UI affordances for "Open data folder" and "Open logs folder".
 
 ### 5. Cross-Platform Hardening

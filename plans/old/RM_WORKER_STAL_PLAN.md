@@ -13,6 +13,7 @@ Tech Stack: Bun server, Elysia, DuckDB app DB, project mart refresh ledger, writ
 ## Problem Summary
 
 Observed live state for project `184eb7f7-cc1a-4eb2-bdad-296ca872b0d7`:
+
 - `app.project_mart_refresh_state` shows `refresh_status = 'running'`, `dirty_token = 1`, `last_completed_refresh_token = 0`
 - `lease_expires_at` is long expired
 - recorded worker PID is gone
@@ -20,6 +21,7 @@ Observed live state for project `184eb7f7-cc1a-4eb2-bdad-296ca872b0d7`:
 - UI shows `processing 1` project and `processing 20731` articles with `0/min`
 
 Root cause hypothesis from inspection:
+
 1. The new worker heartbeat exists in `src/server/utils/projectMartRefreshWorkerHeartbeat.ts`
 2. The main server startup in `src/server/index.ts` still only starts `startMartRefreshDrainHeartbeat()`
 3. `src/server/utils/martRefreshDrainHeartbeat.ts` is intentionally a no-op now
@@ -66,6 +68,7 @@ This matches the user-visible freeze without requiring any new Bun crash to expl
 Use the existing long-term ledger/worker design. Fix only the missing runtime wiring and stale-state interpretation.
 
 High-level changes:
+
 - Start `startProjectMartRefreshWorkerHeartbeat()` from `src/server/index.ts`
 - Keep `startMartRefreshDrainHeartbeat()` inert or remove its startup relevance without reviving it
 - In `projectsRoutesGetReviewsWarnings.ts`, compute worker activity using lease freshness, not `refresh_status === 'running'` alone
@@ -79,31 +82,38 @@ High-level changes:
 Objective: Start the new worker heartbeat in the main server runtime where writer work is allowed.
 
 Files:
+
 - Modify: `src/server/index.ts`
 - Modify: `src/server/utils/projectMartRefreshWorkerHeartbeat.ts`
 - Test: `src/server/index.test.ts` or nearest startup/runtime test file if one exists
 
 Step 1: Write a failing startup wiring test
+
 - Assert writer-capable startup invokes `startProjectMartRefreshWorkerHeartbeat()`
 - Assert non-writer startup does not run the worker heartbeat
 - Assert startup does not require the legacy mart drain heartbeat to do useful work
 
 Step 2: Wire startup
+
 - Import `startProjectMartRefreshWorkerHeartbeat` in `src/server/index.ts`
 - Start it beside the other writer-owned background loops
 - Keep it under the same writer-role discipline already used elsewhere
 
 Step 3: Make the worker heartbeat logging explicit and low-risk
+
 - Ensure startup logs clearly say the project mart refresh worker loop started
 - Keep logging rate-limited and safe
 
 Step 4: Run targeted tests
+
 - `bun test src/server/index*.test.ts`
 
 Step 5: Commit
+
 - `git commit -m "fix: start project mart refresh worker in writer startup"`
 
 Quality Gates:
+
 - Writer startup test passes
 - Non-writer startup test passes
 - No code path re-enables legacy queue drain behavior
@@ -115,25 +125,31 @@ Quality Gates:
 Objective: Make it hard to accidentally reintroduce the old Bun crash-prone queue drain path.
 
 Files:
+
 - Modify: `src/server/utils/martRefreshDrainHeartbeat.ts`
 - Test: `src/server/utils/martRefreshDrainHeartbeat.test.ts`
 - Optional Test: `src/server/index*.test.ts`
 
 Step 1: Write a regression test for inert behavior
+
 - Assert `startMartRefreshDrainHeartbeat()` does not call queue flush or start timers
 - Assert it remains a safe no-op on Bun/macOS-oriented startup
 
 Step 2: Add an explicit commentless but strongly named invariant if needed
+
 - If code changes are needed, prefer naming and test structure over comments
 - Keep this module intentionally inert
 
 Step 3: Run targeted tests
+
 - `bun test src/server/utils/martRefreshDrainHeartbeat.test.ts`
 
 Step 4: Commit
+
 - `git commit -m "test: lock legacy mart drain heartbeat to inert behavior"`
 
 Quality Gates:
+
 - Tests prove the old drain heartbeat stays inert
 - No call path from startup to queue `flush()` is required for review refresh recovery
 
@@ -144,37 +160,45 @@ Quality Gates:
 Objective: Stop showing dead workers as active processing.
 
 Files:
+
 - Modify: `src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts`
 - Test: `src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings*.test.ts`
 - Optional Modify: `src/components/main/reviews/reviewsProjectWarnings.tsx`
 
 Step 1: Write failing route tests
+
 - Case A: dirty project, live unexpired running lease -> report in-flight project/article work
 - Case B: dirty project, expired running lease, no active progress snapshot -> report queued/stale, not processing
 - Case C: failed project -> report failed
 - Case D: fresh project -> report ready
 
 Step 2: Extend route-side project refresh state query
+
 - Include `lease_expires_at` and possibly `worker_id` in `getProjectRefreshState`
 - Add helper for `isLeaseStillActive(now, leaseExpiresAt)`
 
 Step 3: Change in-flight count math
+
 - Only set `isProjectRunning` when:
   - project is dirty and
   - either progress snapshot contains the project/article, or ledger says running with an unexpired lease
 - If lease is expired and no live snapshot evidence exists, treat the work as pending/queued instead of processing
 
 Step 4: Revisit status wording if needed
+
 - If `refresh_status = 'running'` but lease expired, prefer `stale` or `refreshing` with queued semantics, not active processing semantics
 - Preserve frontend contract shape unless a deliberate migration is needed
 
 Step 5: Run targeted tests
+
 - `bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings*.test.ts`
 
 Step 6: Commit
+
 - `git commit -m "fix: treat expired mart refresh claims as queued not active"`
 
 Quality Gates:
+
 - Expired lease test passes
 - UI contract shape is preserved
 - Banner no longer claims abandoned work is actively processing
@@ -186,11 +210,13 @@ Quality Gates:
 Objective: Ensure abandoned claims are reclaimed automatically when the new worker loop is running.
 
 Files:
+
 - Modify: `src/server/workers/projectMartRefreshWorker.test.ts`
 - Modify: `src/server/services/projectMartRefreshStateService.test.ts`
 - Optional Modify: `src/server/workers/projectMartRefreshWorker.ts`
 
 Step 1: Write failing recovery tests
+
 - Claim project with worker A
 - Simulate lease expiry without completion
 - Run worker cycle as worker B
@@ -198,17 +224,21 @@ Step 1: Write failing recovery tests
 - Assert dirty articles are processed and completion token advances
 
 Step 2: Tighten any recovery edge if test reveals one
+
 - Only change worker/state code if the reclaim path is incomplete
 - Do not broaden concurrency or revive old queue behavior
 
 Step 3: Run targeted tests
+
 - `bun test src/server/services/projectMartRefreshStateService.test.ts`
 - `bun test src/server/workers/projectMartRefreshWorker.test.ts`
 
 Step 4: Commit
+
 - `git commit -m "test: cover project mart refresh claim recovery after worker death"`
 
 Quality Gates:
+
 - Lease-expiry reclaim test passes
 - No duplicate completion or split-brain claim behavior
 
@@ -219,19 +249,23 @@ Quality Gates:
 Objective: Verify the intended startup path runs cleanly and does not reintroduce Bun crash signatures.
 
 Files:
+
 - Modify: existing runtime smoke test docs or add a small test helper if the repo already has a pattern
 - Optional Create: `scripts/checkProjectMartWorkerStartup.ts` only if needed for safe smoke verification
 
 Step 1: Define the exact smoke path
+
 - Preferred runtime to verify:
   - `bun run dev:server`
   - or `bun run dev:server:writer` when isolating writer-owned background loops is safer
 
 Step 2: Verify startup logs include the new worker
+
 - Expect a line like:
   - `[projectMartRefreshWorker] background loop starting`
 
 Step 3: Verify logs do not contain Bun native crash signatures
+
 - Check for:
   - `panic: A C++ exception occurred`
   - `oh no: Bun has crashed`
@@ -239,10 +273,12 @@ Step 3: Verify logs do not contain Bun native crash signatures
   - repeated `bun.report` links
 
 Step 4: Verify old queue/drain path is not used for this recovery path
+
 - No startup dependence on legacy drain flush
 - No queue heartbeat resurrected
 
 Step 5: Document exact commands run
+
 - `bun test src/server/index*.test.ts`
 - `bun test src/server/utils/martRefreshDrainHeartbeat.test.ts`
 - `bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings*.test.ts`
@@ -253,9 +289,11 @@ Step 5: Document exact commands run
 - `bun run dev:server`
 
 Step 6: Commit
+
 - `git commit -m "test: add bun-safe startup verification for mart refresh worker"`
 
 Quality Gates:
+
 - Tests pass
 - Lint passes
 - Build passes
@@ -269,24 +307,30 @@ Quality Gates:
 Objective: Improve observability so abandoned claims are obvious in the UI and debugging output.
 
 Files:
+
 - Modify: `src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts`
 - Optional Modify: `src/components/main/reviews/reviewsIndexingProgress.tsx`
 - Optional Modify: `src/components/main/reviews/reviewsProjectWarnings.tsx`
 
 Step 1: Add failing tests if you expose new metadata
+
 - Example: `hasExpiredLease`, `workerLeaseExpired`, or `isAbandoned`
 
 Step 2: Surface explicit stalled state only if it preserves the current contract safely
+
 - This is optional because the main fix is to stop calling dead work “processing”
 
 Step 3: Run targeted tests and browser check if UI changes
+
 - `bun run build`
 - browser verification if frontend text changes materially
 
 Step 4: Commit
+
 - `git commit -m "feat: expose stalled mart refresh visibility in reviews warnings"`
 
 Quality Gates:
+
 - Added state is contract-safe and does not break existing consumers
 - No extra complexity unless it materially helps diagnosis
 
@@ -295,6 +339,7 @@ Quality Gates:
 ## Test Matrix
 
 Required targeted tests:
+
 - `bun test src/server/index*.test.ts`
 - `bun test src/server/utils/martRefreshDrainHeartbeat.test.ts`
 - `bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings*.test.ts`
@@ -302,10 +347,12 @@ Required targeted tests:
 - `bun test src/server/workers/projectMartRefreshWorker.test.ts`
 
 Required repo-native quality gates:
+
 - `bun run lint`
 - `bun run build`
 
 Required runtime smoke test:
+
 - `bun run dev:server`
 - Let it run long enough to verify:
   - server startup succeeds
@@ -314,6 +361,7 @@ Required runtime smoke test:
   - no Bun native crash signatures appear
 
 Optional safer local isolation smoke test:
+
 - `bun run dev:server:writer`
 
 ---
@@ -337,6 +385,7 @@ The implementation is not complete unless all of these are true:
 ## Rollout Notes
 
 Preferred rollout:
+
 1. Land startup wiring + inert legacy guard tests
 2. Land expired-lease warning math tests and fix
 3. Land worker reclaim recovery test
@@ -350,6 +399,7 @@ Do not combine this with unrelated mart refresh optimization or queue cleanup ch
 ## Recommendation
 
 Implement the smallest durable fix:
+
 - start the real worker heartbeat in writer startup
 - keep the old drain path inert
 - make warnings lease-aware

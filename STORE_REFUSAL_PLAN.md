@@ -265,6 +265,12 @@ Recommended implementation path:
 
 `token_use` remains an audit/analytics source, not the runtime state source.
 
+### Logging
+
+- Emit pre-send refusal-limit skips as structured `file-only` runtime events because they are routine hot-path control decisions.
+- Emit refusal-state upserts, threshold crossings, and `blocked_at` transitions as `both` so operators get terminal-visible refusal-block signals and matching JSONL records.
+- Keep the refusal classifier and worker path on the shared runtime logger instead of direct `console.*` calls.
+
 ## API / Admin Surface Plan
 
 Phase 1 should at least support internal admin review and manual reset later.

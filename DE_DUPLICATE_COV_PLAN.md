@@ -456,6 +456,12 @@ After all reads and writes have moved:
 5. do not blindly rewrite tables with uniqueness constraints; run explicit conflict rules and quarantine unresolved collisions
 6. record old-to-new article id mappings and merge decisions for auditability and restart safety
 
+## Logging
+
+- Emit long-running migration and backfill progress as structured `file-only` runtime events with identifiers such as surviving article id, batch size, merge counts, and elapsed time.
+- Emit unresolved-match, quarantine, and conflict-resolution warnings as `both` so operators see them in the terminal and the runtime JSONL.
+- Make the centralized matching service emit stable structured attrs such as `articleId`, `identifierKind`, `matchStrategy`, and `matchConfidence` instead of ad-hoc text logs.
+
 ## Quality Gates
 
 Pass/fail checks for this change:

@@ -96,7 +96,7 @@ Files:
 
 Changes:
 
-- When parse failure happens after a provider max-token stop, record a more specific truncation-facing error message.
+- When parse failure happens after a provider max-token stop, record a more specific truncation-facing error message and emit a structured `ERROR` event with `stopReason`, `completionTokens`, and `maxCompletionTokens` attrs.
 - Keep existing retry behavior intact for the first pass.
 
 Expected result:

@@ -613,6 +613,12 @@ Ship:
 5. For replay routes, keep writes explicit and auditable.
 6. Rate-limit or permission-gate replay if needed later.
 
+## Logging
+
+- Emit replay request and result summaries as structured `file-only` runtime events with `refusalKey`, `systemPromptVersionId`, `modelId`, and replay mode attrs.
+- Emit replay refusals, provider failures, and replay-run persistence failures as `both` so expensive operator-visible failures still reach the terminal.
+- Include durable identifiers such as `refusalKey`, `tokenUseId`, and `systemPromptVersionId` in those structured events so replay outcomes are easy to correlate later.
+
 ## Risks
 
 1. Replay requests can generate real provider spend.
