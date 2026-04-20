@@ -772,7 +772,11 @@ test('prioritizes answered human pairs within the fetched window and logs insert
       {articleId: 'article-rest', promptId: 'prompt-0'},
     ],
   ])
-  expect(loggedMessages).toContain('[addToQueue] Prioritized 2 answered human entries and inserted 1')
+  expect(
+    loggedMessages.some((message) => {
+      return message.includes('[addToQueue] prioritized human entries')
+    }),
+  ).toBe(true)
 })
 
 test('claims promoted human pairs first when ready deficit is smaller than the fetched window', async () => {

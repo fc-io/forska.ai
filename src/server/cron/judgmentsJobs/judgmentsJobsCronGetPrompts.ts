@@ -8,7 +8,8 @@ export type PromptQueueEntry = {articleId: string; promptId: string}
 
 export type QueuePromptsResult = {promptEntries: PromptQueueEntry[]; nextCursor: JobCursor | null}
 
-const getPromptsLogger = createRateLimitedLogger({windowMs: 30_000})
+const getPromptsLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
+const getPromptsComponent = 'judgmentsJobsCronGetPrompts'
 
 const getUnassessedPairsCursor = (cursor: JobCursor | null) => {
   return cursor ? {...cursor, priorityBucket: Number(cursor.priorityBucket ?? 0)} : null
@@ -47,9 +48,11 @@ export const judgmentsJobsCronGetPrompts = async (
 
   if (!project) {
     if (numberOfPromptsToGet > 0) {
-      getPromptsLogger.warn(`getPrompts:${jobId}:no-project`, '[getPrompts] project not found', {
-        projectId,
+      getPromptsLogger.warn(`judgmentQueue.getPrompts.noProject.${jobId}`, '[getPrompts] project not found', {
+        component: getPromptsComponent,
+        event: 'noProject',
         jobId,
+        projectId,
         requested: numberOfPromptsToGet,
       })
     }
@@ -58,9 +61,11 @@ export const judgmentsJobsCronGetPrompts = async (
 
   if (project.archived) {
     if (numberOfPromptsToGet > 0) {
-      getPromptsLogger.warn(`getPrompts:${jobId}:archived`, '[getPrompts] project archived', {
-        projectId,
+      getPromptsLogger.warn(`judgmentQueue.getPrompts.archived.${jobId}`, '[getPrompts] project archived', {
+        component: getPromptsComponent,
+        event: 'archivedProject',
         jobId,
+        projectId,
         requested: numberOfPromptsToGet,
       })
     }
@@ -69,9 +74,11 @@ export const judgmentsJobsCronGetPrompts = async (
 
   if (!enabledPromptCount[0] || enabledPromptCount[0].count === 0) {
     if (numberOfPromptsToGet > 0) {
-      getPromptsLogger.warn(`getPrompts:${jobId}:no-prompts`, '[getPrompts] 0 enabled prompts', {
-        projectId,
+      getPromptsLogger.warn(`judgmentQueue.getPrompts.noPrompts.${jobId}`, '[getPrompts] 0 enabled prompts', {
+        component: getPromptsComponent,
+        event: 'noEnabledPrompts',
         jobId,
+        projectId,
         requested: numberOfPromptsToGet,
       })
     }
@@ -89,9 +96,11 @@ export const judgmentsJobsCronGetPrompts = async (
   const slowLogMs = 30_000
   const startedAtMs = Date.now()
   const slowTimer = setTimeout(() => {
-    console.warn('[getPrompts] slow OLAP query', {
-      projectId,
+    getPromptsLogger.warn(`judgmentQueue.getPrompts.slowTimer.${jobId}`, '[getPrompts] slow OLAP query', {
+      component: getPromptsComponent,
+      event: 'slowOlapQueryTimer',
       jobId,
+      projectId,
       requested: numberOfPromptsToGet,
       cursor: cursorSummary,
       olapDb: 'duckdb',
@@ -121,7 +130,9 @@ export const judgmentsJobsCronGetPrompts = async (
   const cursorAction = result.nextCursor ? 'advance' : cursor ? 'clear' : 'none'
 
   if (numberOfPromptsToGet > 0 && result.promptEntries.length === 0) {
-    getPromptsLogger.warn(`getPrompts:${jobId}:empty`, '[getPrompts] OLAP returned 0 pairs', {
+    getPromptsLogger.warn(`judgmentQueue.getPrompts.empty.${jobId}`, '[getPrompts] OLAP returned 0 pairs', {
+      component: getPromptsComponent,
+      event: 'emptyOlapResult',
       projectId,
       jobId,
       requested: numberOfPromptsToGet,
@@ -133,7 +144,9 @@ export const judgmentsJobsCronGetPrompts = async (
       olapDb: 'duckdb',
     })
   } else if (durationMs > 5_000) {
-    getPromptsLogger.warn(`getPrompts:${jobId}:slow`, '[getPrompts] slow OLAP query', {
+    getPromptsLogger.warn(`judgmentQueue.getPrompts.slow.${jobId}`, '[getPrompts] slow OLAP query', {
+      component: getPromptsComponent,
+      event: 'slowOlapQuery',
       projectId,
       jobId,
       requested: numberOfPromptsToGet,
