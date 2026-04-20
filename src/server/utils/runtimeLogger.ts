@@ -1,4 +1,4 @@
-import {appendFileSync, mkdirSync} from 'node:fs'
+import {appendFileSync, mkdirSync, readdirSync, rmSync} from 'node:fs'
 import {join} from 'node:path'
 
 import {
@@ -39,22 +39,40 @@ type RuntimeLogConfigOptions = {
 }
 
 type RuntimeJsonlSinkState = {
+  activeDate: string | null
+  fileMode: RuntimeLogFileMode
+  flushTimeoutMs: number
   installed: boolean
   logDir: string | null
   logLevel: RuntimeLogLevel
   serverRole: RuntimeProcessServerRole | undefined
 }
 
+type RuntimeLogFileMode = 'per-instance-file' | 'shared-file'
+
 const runtimeLogLevels = ['DEBUG', 'INFO', 'WARN', 'ERROR'] as const
 const runtimeLogProfiles = ['local', 'primary', 'secondary'] as const
 const runtimeLogLevelWeights: Record<RuntimeLogLevel, number> = {DEBUG: 10, ERROR: 40, INFO: 20, WARN: 30}
+const runtimeLogSharedFilePlatforms = ['darwin', 'linux'] as const
+const runtimeLogRetentionDays = 7
+const runtimeLogFlushTimeoutMs = 1_000
+const runtimeLogManagedFilePattern =
+  /^(api-server|app-server|dev-single-server|single-server|worker-server)-(\d{4}-\d{2}-\d{2})(?:-[A-Za-z0-9_.-]+)?\.jsonl$/
 
 declare global {
   var __forskaRuntimeJsonlSinkState: RuntimeJsonlSinkState | undefined
 }
 
 const getRuntimeJsonlSinkState = () => {
-  globalThis.__forskaRuntimeJsonlSinkState ??= {installed: false, logDir: null, logLevel: 'INFO', serverRole: undefined}
+  globalThis.__forskaRuntimeJsonlSinkState ??= {
+    activeDate: null,
+    fileMode: 'shared-file',
+    flushTimeoutMs: runtimeLogFlushTimeoutMs,
+    installed: false,
+    logDir: null,
+    logLevel: 'INFO',
+    serverRole: undefined,
+  }
 
   return globalThis.__forskaRuntimeJsonlSinkState
 }
@@ -87,16 +105,32 @@ const getJsonlDateFromTimestamp = (timestamp: string) => {
   return timestamp.slice(0, 10)
 }
 
+const getUtcDateBefore = ({date, days}: {date: string; days: number}) => {
+  const dateMs = Date.parse(`${date}T00:00:00.000Z`)
+  return new Date(dateMs - days * 24 * 60 * 60 * 1_000).toISOString().slice(0, 10)
+}
+
+const getRuntimeLogInstanceFileSuffix = (instanceId: string) => {
+  return instanceId.replaceAll(/[^A-Za-z0-9_.-]/g, '_')
+}
+
 const getRuntimeLogFilePath = ({
+  fileMode,
+  instanceId,
   logDir,
   service,
   timestamp,
 }: {
+  fileMode: RuntimeLogFileMode
+  instanceId: string
   logDir: string
   service: RuntimeProcessServiceName
   timestamp: string
 }) => {
-  return join(logDir, `${service}-${getJsonlDateFromTimestamp(timestamp)}.jsonl`)
+  const date = getJsonlDateFromTimestamp(timestamp)
+  const suffix = fileMode === 'shared-file' ? '' : `-${getRuntimeLogInstanceFileSuffix(instanceId)}`
+
+  return join(logDir, `${service}-${date}${suffix}.jsonl`)
 }
 
 const shouldWriteRuntimeLogSeverity = ({
@@ -159,6 +193,29 @@ const getJsonLine = (record: RuntimeLogRecord) => {
   return `${JSON.stringify(getSerializableValue(record))}\n`
 }
 
+export const getRuntimeLogFileMode = ({platform = process.platform}: {platform?: string} = {}) => {
+  const matchedPlatform = runtimeLogSharedFilePlatforms.find((item) => {
+    return item === platform
+  })
+
+  return matchedPlatform === undefined ? 'per-instance-file' : 'shared-file'
+}
+
+export const pruneManagedRuntimeLogFiles = ({currentDate, logDir}: {currentDate: string; logDir: string}) => {
+  const cutoffDate = getUtcDateBefore({date: currentDate, days: runtimeLogRetentionDays})
+
+  return readdirSync(logDir, {withFileTypes: true}).reduce((deletedFiles, dirent) => {
+    const match = dirent.isFile() ? runtimeLogManagedFilePattern.exec(dirent.name) : null
+    const shouldDelete = match !== null && match[2] < cutoffDate
+
+    if (shouldDelete) {
+      rmSync(join(logDir, dirent.name), {force: true})
+    }
+
+    return shouldDelete ? [...deletedFiles, dirent.name] : deletedFiles
+  }, [] as string[])
+}
+
 export const getRuntimeLogProfile = ({
   envValues = process.env,
 }: Pick<RuntimeLogConfigOptions, 'envValues'> = {}): RuntimeLogProfile => {
@@ -213,11 +270,17 @@ export const createRuntimeLogRecord = ({
 
 export const installRuntimeJsonlSink = ({
   envValues = process.env,
-}: {envValues?: Record<string, string | undefined>} = {}) => {
+  platform = process.platform,
+  timestamp = new Date().toISOString(),
+}: {envValues?: Record<string, string | undefined>; platform?: string; timestamp?: string} = {}) => {
   const state = getRuntimeJsonlSinkState()
   const runtimeLogConfig = getRuntimeLogConfig({envValues})
 
   mkdirSync(runtimeLogConfig.logDir, {recursive: true})
+  pruneManagedRuntimeLogFiles({currentDate: getJsonlDateFromTimestamp(timestamp), logDir: runtimeLogConfig.logDir})
+  state.activeDate = getJsonlDateFromTimestamp(timestamp)
+  state.fileMode = getRuntimeLogFileMode({platform})
+  state.flushTimeoutMs = runtimeLogFlushTimeoutMs
   state.installed = true
   state.logDir = runtimeLogConfig.logDir
   state.logLevel = runtimeLogConfig.logLevel
@@ -242,8 +305,21 @@ export const writeRuntimeLogEvent = (input: RuntimeLogEventInput) => {
   }
 
   const record = createRuntimeLogRecord({...input, serverRole: input.serverRole ?? state.serverRole})
+  const recordDate = getJsonlDateFromTimestamp(record.timestamp)
+
+  if (state.activeDate !== recordDate) {
+    pruneManagedRuntimeLogFiles({currentDate: recordDate, logDir: state.logDir})
+    state.activeDate = recordDate
+  }
+
   appendFileSync(
-    getRuntimeLogFilePath({logDir: state.logDir, service: record.runtime.service, timestamp: record.timestamp}),
+    getRuntimeLogFilePath({
+      fileMode: state.fileMode,
+      instanceId: record.runtime.instanceId,
+      logDir: state.logDir,
+      service: record.runtime.service,
+      timestamp: record.timestamp,
+    }),
     getJsonLine(record),
     'utf8',
   )
@@ -251,8 +327,29 @@ export const writeRuntimeLogEvent = (input: RuntimeLogEventInput) => {
   return true
 }
 
+export const flushRuntimeLogs = async ({
+  timeoutMs = getRuntimeJsonlSinkState().flushTimeoutMs,
+}: {timeoutMs?: number} = {}) => {
+  const flush = Promise.resolve(true)
+  const timeout = new Promise<false>((resolve) => {
+    setTimeout(() => {
+      resolve(false)
+    }, timeoutMs).unref()
+  })
+
+  return Promise.race([flush, timeout])
+}
+
+export const exitWithRuntimeLogFlush = async ({code, timeoutMs}: {code: number; timeoutMs?: number}) => {
+  await flushRuntimeLogs({timeoutMs})
+  process.exit(code)
+}
+
 export const resetRuntimeJsonlSinkForTests = () => {
   const state = getRuntimeJsonlSinkState()
+  state.activeDate = null
+  state.fileMode = 'shared-file'
+  state.flushTimeoutMs = runtimeLogFlushTimeoutMs
   state.installed = false
   state.logDir = null
   state.logLevel = 'INFO'

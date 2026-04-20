@@ -6,6 +6,7 @@ import {file} from 'bun'
 import {Elysia} from 'elysia'
 
 import {getAppServerRuntimeConfig} from './server/utils/getAppServerRuntimeConfig.ts'
+import {exitWithRuntimeLogFlush} from './server/utils/runtimeLogger.ts'
 
 const appServerRuntimeConfig = getAppServerRuntimeConfig()
 
@@ -43,6 +44,7 @@ export const app = new Elysia()
   })
 
 const listener = app.listen(appServerRuntimeConfig.port)
+let shutdownStarted = false
 
 if (listener.server && typeof listener.server === 'object') {
   const {hostname, port: serverPort} = listener.server as {hostname?: string; port?: number}
@@ -50,5 +52,18 @@ if (listener.server && typeof listener.server === 'object') {
 } else {
   console.log(`🦊 App static server started on port ${appServerRuntimeConfig.port}`)
 }
+
+;(['SIGINT', 'SIGTERM'] as const).map((signal) => {
+  return process.once(signal, () => {
+    if (shutdownStarted) {
+      return
+    }
+
+    shutdownStarted = true
+    void app.stop().finally(() => {
+      return exitWithRuntimeLogFlush({code: 0})
+    })
+  })
+})
 
 export type App = typeof app

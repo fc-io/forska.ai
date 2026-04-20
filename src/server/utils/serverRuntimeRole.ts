@@ -13,6 +13,7 @@ import {
 } from './duckdbOwnerLease.ts'
 import {getEnv} from './env.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
+import {exitWithRuntimeLogFlush} from './runtimeLogger.ts'
 import {
   canServerRoleOwnDuckdb,
   type EffectiveServerRole,
@@ -84,7 +85,8 @@ const exitForDuplicateLocalServer = (reason: string, writerUrl: string | null) =
     'warn',
     {apiServerPort: getRuntimeEnv().API_SERVER_PORT, pid: process.pid, writerUrl},
   )
-  process.exit(0)
+  void exitWithRuntimeLogFlush({code: 0})
+  return true
 }
 
 const getManualWriterUrl = () => {
