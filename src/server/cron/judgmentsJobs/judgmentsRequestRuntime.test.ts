@@ -942,7 +942,7 @@ test('prompt release consumes one extra recoverable retry then marks ready', asy
 
   judgeSinglePrompt.mockImplementationOnce(async () => {
     throw new RecoverableJudgeError('recoverable anthropic empty response', {
-      failureCode: 'anthropic_empty_response',
+      failureCode: 'anthropic_thinking_only_empty_response',
       providerDiagnostics: {contentTypes: ['redacted_thinking'], stopReason: 'end_turn'},
     })
   })
@@ -956,7 +956,7 @@ test('prompt release consumes one extra recoverable retry then marks ready', asy
   expect(String(caughtError)).toContain('RecoverableJudgeError')
   expect(sqliteStateTransitions).toEqual(['running', 'ready'])
   expect(sqliteServiceMock.consumePromptExtraRetry).toHaveBeenCalledWith({
-    errorCode: 'anthropic_empty_response',
+    errorCode: 'anthropic_thinking_only_empty_response',
     jobId: 'job-a',
     maxExtraRetries: 1,
     recordId: 'record-a',
@@ -972,7 +972,7 @@ test('prompt release stops requeueing after recoverable retry budget is exhauste
   })
   judgeSinglePrompt.mockImplementationOnce(async () => {
     throw new RecoverableJudgeError('recoverable anthropic empty response', {
-      failureCode: 'anthropic_empty_response',
+      failureCode: 'anthropic_thinking_only_empty_response',
       providerDiagnostics: {contentTypes: ['redacted_thinking'], stopReason: 'end_turn'},
     })
   })

@@ -297,7 +297,9 @@ export const getRetryPromptForFailure = ({
   lastError: string
   lastResponse: string
 }): string => {
-  return failureCode === 'anthropic_empty_response' ? basePrompt : buildRetryPrompt(basePrompt, lastError, lastResponse)
+  return isAnthropicEmptyResponseFailureCode(failureCode)
+    ? basePrompt
+    : buildRetryPrompt(basePrompt, lastError, lastResponse)
 }
 
 const buildQuoteValidationRetryPrompt = (basePrompt: string, invalidQuotes: string[], lastResponse: string): string => {
@@ -464,6 +466,14 @@ export class RecoverableJudgeError extends Error {
   }
 }
 
+const isAnthropicEmptyResponseFailureCode = (failureCode: string | null): boolean => {
+  return (
+    failureCode === 'anthropic_empty_response'
+    || failureCode === 'anthropic_refusal_empty_response'
+    || failureCode === 'anthropic_thinking_only_empty_response'
+  )
+}
+
 const getProviderInvocationFailureCode = (error: unknown): string | null => {
   return error instanceof ProviderInvocationError ? error.code : null
 }
@@ -479,7 +489,7 @@ const getProviderInvocationUsage = (
 }
 
 const getRecoverableJudgeError = ({adjustedErrorMessage, error}: {adjustedErrorMessage: string; error: unknown}) => {
-  return error instanceof ProviderInvocationError && error.code === 'anthropic_empty_response'
+  return error instanceof ProviderInvocationError && isAnthropicEmptyResponseFailureCode(error.code)
     ? new RecoverableJudgeError(adjustedErrorMessage, {
         cause: error,
         failureCode: error.code,

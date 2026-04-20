@@ -8,7 +8,7 @@ test('retries anthropic empty responses with the original prompt', () => {
   expect(
     getRetryPromptForFailure({
       basePrompt,
-      failureCode: 'anthropic_empty_response',
+      failureCode: 'anthropic_refusal_empty_response',
       lastError: 'Anthropic returned no text content',
       lastResponse: '',
     }),

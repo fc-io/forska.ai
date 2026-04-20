@@ -10,6 +10,8 @@ import {
 const anthropicVersion = '2023-06-01'
 const anthropicPauseTurnLimit = 8
 const anthropicEmptyResponseFailureCode = 'anthropic_empty_response'
+const anthropicRefusalEmptyResponseFailureCode = 'anthropic_refusal_empty_response'
+const anthropicThinkingOnlyEmptyResponseFailureCode = 'anthropic_thinking_only_empty_response'
 
 type AnthropicErrorResponse = {error?: {message?: string; type?: string}; request_id?: string}
 type AnthropicContentBlock = {text?: string; type?: string; [key: string]: unknown}
@@ -47,11 +49,11 @@ const getAnthropicContentTypes = (content: AnthropicContentBlock[]): string[] =>
   })
 }
 
-const isAnthropicThinkingOnlyContent = (content: AnthropicContentBlock[]): boolean => {
+const isAnthropicThinkingOnlyContent = (contentTypes: string[]): boolean => {
   return (
-    content.length > 0
-    && content.every((part) => {
-      return part.type === 'thinking' || part.type === 'redacted_thinking'
+    contentTypes.length > 0
+    && contentTypes.every((type) => {
+      return type === 'thinking' || type === 'redacted_thinking'
     })
   )
 }
@@ -171,7 +173,7 @@ const getAnthropicEmptyResponseDiagnostics = ({
   result,
   version,
 }: {
-  attempt: 'initial' | 'retry_without_thinking'
+  attempt: 'initial'
   modelName: string
   result: AnthropicInvocationRunResult
   version: string | null
@@ -186,39 +188,31 @@ const getAnthropicEmptyResponseDiagnostics = ({
   }
 }
 
-const shouldRetryAnthropicWithoutThinking = ({
-  modelName,
-  result,
-  version,
-}: {
-  modelName: string
-  result: AnthropicInvocationRunResult
-  version: string | null
-}): boolean => {
-  return (
-    Boolean(getAnthropicThinkingConfig({modelName, version}))
-    && result.text.length === 0
-    && (isAnthropicThinkingOnlyContent(result.content) || result.stopReason === 'refusal')
-  )
+const getAnthropicEmptyResponseFailureCode = (
+  diagnostics: ReturnType<typeof getAnthropicEmptyResponseDiagnostics>,
+): string => {
+  return diagnostics.stopReason === 'refusal'
+    ? anthropicRefusalEmptyResponseFailureCode
+    : isAnthropicThinkingOnlyContent(diagnostics.contentTypes)
+      ? anthropicThinkingOnlyEmptyResponseFailureCode
+      : anthropicEmptyResponseFailureCode
 }
 
 const throwAnthropicEmptyResponseError = ({
-  fallbackDiagnostics,
   initialDiagnostics,
   usage,
 }: {
-  fallbackDiagnostics: ReturnType<typeof getAnthropicEmptyResponseDiagnostics> | null
   initialDiagnostics: ReturnType<typeof getAnthropicEmptyResponseDiagnostics>
   usage: AnthropicInvocationRunResult['usage']
 }): never => {
-  const diagnostics = {fallback: fallbackDiagnostics, initial: initialDiagnostics}
-  const finalDiagnostics = fallbackDiagnostics ?? initialDiagnostics
+  const diagnostics = {fallback: null, initial: initialDiagnostics}
+  const failureCode = getAnthropicEmptyResponseFailureCode(initialDiagnostics)
 
   console.error('[anthropic] structured output returned no text content', diagnostics)
 
   throw new ProviderInvocationError(
-    `Anthropic returned no text content (failure_code=${anthropicEmptyResponseFailureCode}; stop_reason=${String(finalDiagnostics.stopReason ?? 'null')}; content_types=${finalDiagnostics.contentTypes.join(',') || 'none'})`,
-    {code: anthropicEmptyResponseFailureCode, diagnostics, providerKind: 'anthropic', usage},
+    `Anthropic returned no text content (failure_code=${failureCode}; stop_reason=${String(initialDiagnostics.stopReason ?? 'null')}; content_types=${initialDiagnostics.contentTypes.join(',') || 'none'})`,
+    {code: failureCode, diagnostics, providerKind: 'anthropic', usage},
   )
 }
 
@@ -328,59 +322,9 @@ export const invokeAnthropicMessagesModel = async ({
     version,
   })
 
-  if (!shouldRetryAnthropicWithoutThinking({modelName, result: initialResult, version})) {
-    if (initialResult.text.length === 0) {
-      throwAnthropicEmptyResponseError({fallbackDiagnostics: null, initialDiagnostics, usage: initialResult.usage})
-    }
-
-    return {stopReason: initialResult.stopReason, text: initialResult.text, usage: initialResult.usage}
+  if (initialResult.text.length === 0) {
+    throwAnthropicEmptyResponseError({initialDiagnostics, usage: initialResult.usage})
   }
 
-  console.warn('[anthropic] retrying structured output without thinking after empty thinking-only response', {
-    contentTypes: initialResult.content.map((part) => {
-      return part.type ?? 'unknown'
-    }),
-    modelName,
-    stopReason: initialResult.stopReason,
-    version,
-  })
-
-  const fallbackResult = await invokeAnthropicMessagesRun({
-    apiKey: requiredApiKey,
-    baseURL: resolvedBaseURL,
-    maxCompletionTokens,
-    modelName,
-    outputSchema,
-    prompt,
-    systemPrompt,
-    temperature,
-    thinkingVersion: null,
-  })
-
-  if (fallbackResult.text.length === 0) {
-    throwAnthropicEmptyResponseError({
-      fallbackDiagnostics: getAnthropicEmptyResponseDiagnostics({
-        attempt: 'retry_without_thinking',
-        modelName,
-        result: fallbackResult,
-        version: null,
-      }),
-      initialDiagnostics,
-      usage: {
-        completionTokens: initialResult.usage.completionTokens + fallbackResult.usage.completionTokens,
-        promptTokens: initialResult.usage.promptTokens + fallbackResult.usage.promptTokens,
-        totalTokens: initialResult.usage.totalTokens + fallbackResult.usage.totalTokens,
-      },
-    })
-  }
-
-  return {
-    stopReason: fallbackResult.stopReason,
-    text: fallbackResult.text,
-    usage: {
-      completionTokens: initialResult.usage.completionTokens + fallbackResult.usage.completionTokens,
-      promptTokens: initialResult.usage.promptTokens + fallbackResult.usage.promptTokens,
-      totalTokens: initialResult.usage.totalTokens + fallbackResult.usage.totalTokens,
-    },
-  }
+  return {stopReason: initialResult.stopReason, text: initialResult.text, usage: initialResult.usage}
 }

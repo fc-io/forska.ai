@@ -134,3 +134,15 @@ Use examples with pathogens, AMR, plasmids, virulence, and outbreaks, but only i
 4. Prefer narrowing scope and constraining outputs over arguing with refusals.
 
 5. Keep Anthropic-specific mitigations provider-scoped unless another provider shows the same failure mode.
+
+## Follow-up Plan
+
+There is now a dedicated implementation plan for refusal review, prompt versioning, and replay tooling in `REFUSAL_MANAGMENT_PLAN.md`.
+
+That plan covers:
+
+- a new admin `Safety Refusals` page
+- grouped refusal review by article + prompt
+- prompt version tracking
+- prompt editing and replay/testing workflow
+- additional review signals that should be exposed for diagnosing refusals

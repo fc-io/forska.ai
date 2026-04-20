@@ -747,6 +747,7 @@ const getFailedRequestDetailRecords = (value: unknown): FailedRequestDetailRecor
 
 const isAnthropicRefusalDetail = (detail: FailedRequestDetailRecord): boolean => {
   const error = typeof detail.error === 'string' ? detail.error : ''
+  const failureCode = typeof detail.failureCode === 'string' ? detail.failureCode : ''
   const providerDiagnostics =
     detail.providerDiagnostics
     && typeof detail.providerDiagnostics === 'object'
@@ -767,8 +768,10 @@ const isAnthropicRefusalDetail = (detail: FailedRequestDetailRecord): boolean =>
       : null
 
   return (
-    error.includes('failure_code=anthropic_empty_response')
-    && (error.includes('stop_reason=refusal') || initialStopReason === 'refusal' || fallbackStopReason === 'refusal')
+    failureCode === 'anthropic_refusal_empty_response'
+    || error.includes('failure_code=anthropic_refusal_empty_response')
+    || ((failureCode === 'anthropic_empty_response' || error.includes('failure_code=anthropic_empty_response'))
+      && (error.includes('stop_reason=refusal') || initialStopReason === 'refusal' || fallbackStopReason === 'refusal'))
   )
 }
 

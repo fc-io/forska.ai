@@ -33,6 +33,12 @@ bun run db:duck:rebuild-marts
 - Do not fix unrelated lint issues.
 - For shared app, frontend, runtime-path, or server changes, explicitly consider both the browser/web flow and the desktop app flow. Verify the relevant one(s) and call out what you checked.
 
+## Benchmark Integrity
+
+- Treat model, provider, thinking level, and other reliability-affecting settings as benchmark-critical configuration.
+- Never silently retry, downgrade, override, or work around those settings unless the user explicitly asks for that behavior.
+- If a request fails under the configured settings, preserve that failure and surface it; do not mutate the execution profile to chase a success.
+
 ## Web And Desktop
 
 - Desktop support is additive. Do not break the normal browser flow while adding or changing desktop behavior.
