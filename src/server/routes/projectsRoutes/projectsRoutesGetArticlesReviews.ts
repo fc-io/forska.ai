@@ -2,21 +2,33 @@ import {Elysia, t} from 'elysia'
 
 import {queryArticlesReviewsFromOlap} from '../../../services/olap/articlesReviewsOlap.ts'
 import {getAppQueryService} from '../../services/getAppQueryService.ts'
+import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
+
+const articlesReviewsLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
+const articlesReviewsErrorLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
 
 export const projectsRoutesGetArticlesReviews = new Elysia().post(
   '/api/articlesreviews',
   async ({body}) => {
     try {
-      console.log('[Articles Reviews API] Request:', {
-        projectId: body.projectId,
-        page: body.page,
-        limit: body.limit,
-        from: body.from,
-        to: body.to,
-        search: body.search,
-        promptFilters: Object.keys(body.prompts || {}).length,
-      })
+      articlesReviewsLogger.force(
+        'projects.articles-reviews.request-start',
+        'Articles reviews request started',
+        'log',
+        {
+          projectId: body.projectId,
+          page: body.page,
+          limit: body.limit,
+          from: body.from,
+          to: body.to,
+          search: body.search,
+          promptFilterCount: Object.keys(body.prompts || {}).length,
+          hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
+          hasStudyDecisionConflict: body.hasStudyDecisionConflict,
+          llmStatus: body.llmStatus,
+        },
+      )
 
       const page = parseInt(body?.page ?? '1', 10)
       const limit = parseInt(body?.limit ?? '100', 10)
@@ -42,7 +54,12 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
       })
 
       if (hasInlineHydration) {
-        console.log(`[Articles Reviews API] Returning ${result.data.length} articles`)
+        articlesReviewsLogger.force(
+          'projects.articles-reviews.request-summary',
+          'Articles reviews request completed',
+          'log',
+          {projectId: body.projectId, page, limit, returnedCount: result.data.length, hydrationMode: 'inline'},
+        )
         return result
       }
 
@@ -73,11 +90,26 @@ export const projectsRoutesGetArticlesReviews = new Elysia().post(
         }
       })
 
-      console.log(`[Articles Reviews API] Returning ${result.data.length} articles`)
+      articlesReviewsLogger.force(
+        'projects.articles-reviews.request-summary',
+        'Articles reviews request completed',
+        'log',
+        {
+          projectId: body.projectId,
+          page,
+          limit,
+          returnedCount: result.data.length,
+          hydrationMode: 'fallback',
+          hydrationRowCount: fullTextRows.length,
+        },
+      )
 
       return {...result, data}
     } catch (error) {
-      console.error('[Articles Reviews API] Error:', error)
+      articlesReviewsErrorLogger.force('projects.articles-reviews.error', 'Articles reviews request failed', 'error', {
+        projectId: body.projectId,
+        error: error instanceof Error ? error.message : String(error),
+      })
       throw new Error(error instanceof Error ? error.message : 'Failed to fetch articles reviews', {cause: error})
     }
   },

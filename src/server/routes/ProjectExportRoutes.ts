@@ -5,10 +5,13 @@ import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
 import {getAppQueryService} from '../services/getAppQueryService.ts'
 import {hasMatchingJudgmentAnswer} from '../utils/judgmentAnswers.ts'
+import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {assertProjectIsActive} from './projectsRoutes/projectAccessGuard.ts'
 
 const BATCH_SIZE = 500
+const projectExportLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
+const projectExportErrorLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
 
 const parseArktypeOptions = (typeStr: string | null): string[] => {
   if (!typeStr) return []
@@ -283,6 +286,23 @@ export const projectExportRoutes = new Elysia()
       const promptHeaderMap = new Map<string, string>()
       const promptTypeMap = new Map<string, string>()
       const promptContentMap = new Map<string, string>()
+      const exportAttrs = {
+        projectId,
+        sourceProjectIds,
+        promptCount: promptIds.length,
+        promptFilterCount: promptSelections.length,
+        includeExplanation,
+        includeQuotes,
+        includeJournal,
+        includeSummary,
+        includeArticleId,
+        includeArticleLink,
+        includeArticleAuthors,
+        includeArticleCreatedAt,
+        includeArticleUpdatedAt,
+        includePromptType,
+        includePromptContent,
+      }
 
       if (hasPrompts) {
         const promptDetails = await appDatabaseService.queryJson<PromptDetails>(`
@@ -335,8 +355,15 @@ export const projectExportRoutes = new Elysia()
           return !allOptionsSelected
         })
 
-        console.log(
-          `[export] Prompt filters: ${promptSelections.length} provided, ${effectivePromptSelections.length} effective (after removing "all selected")`,
+        projectExportLogger.force(
+          'project.export.prompt-filters-summary',
+          'Project export prompt filters summarized',
+          'log',
+          {
+            ...exportAttrs,
+            providedPromptFilterCount: promptSelections.length,
+            effectivePromptFilterCount: effectivePromptSelections.length,
+          },
         )
 
         if (effectivePromptSelections.length > 0) {
@@ -393,9 +420,23 @@ export const projectExportRoutes = new Elysia()
             .map(([articleId]) => {
               return articleId
             })
-          console.log(`[export] Filtered to ${filteredArticleIds.length} articles based on prompt answer filters`)
+          projectExportLogger.force(
+            'project.export.applied-filter-summary',
+            'Project export prompt answer filters applied',
+            'log',
+            {
+              ...exportAttrs,
+              filteredArticleCount: filteredArticleIds.length,
+              effectivePromptFilterCount: effectivePromptSelections.length,
+            },
+          )
         } else {
-          console.log('[export] All prompt filters had all options selected - treating as no filter')
+          projectExportLogger.force(
+            'project.export.applied-filter-summary',
+            'Project export prompt filters treated as no filter',
+            'log',
+            {...exportAttrs, filteredArticleCount: null, effectivePromptFilterCount: effectivePromptSelections.length},
+          )
         }
       }
 
@@ -457,7 +498,11 @@ export const projectExportRoutes = new Elysia()
                 WHERE ${finalScopeCondition}
               `)
               const totalCount = Number(countResult?.count ?? 0)
-              console.log(`[export] Starting export of ~${totalCount} articles with prompts`)
+              projectExportLogger.force('project.export.start', 'Project export started', 'log', {
+                ...exportAttrs,
+                exportMode: 'with-prompts',
+                totalCount,
+              })
 
               while (true) {
                 const batchData = await appDatabaseService.queryJson<{
@@ -609,7 +654,13 @@ export const projectExportRoutes = new Elysia()
                 }
 
                 offset += batchData.length
-                console.log(`[export] Streamed ${processedCount} articles`)
+                projectExportLogger.force('project.export.streamed-count', 'Project export streamed articles', 'log', {
+                  ...exportAttrs,
+                  exportMode: 'with-prompts',
+                  batchRowCount: batchData.length,
+                  processedCount,
+                  totalCount,
+                })
 
                 if (batchData.length < BATCH_SIZE * promptIds.length) {
                   break
@@ -622,7 +673,11 @@ export const projectExportRoutes = new Elysia()
                 WHERE ${finalScopeCondition}
               `)
               const totalCount = Number(countResult?.count ?? 0)
-              console.log(`[export] Starting export of ~${totalCount} articles (metadata only)`)
+              projectExportLogger.force('project.export.start', 'Project export started', 'log', {
+                ...exportAttrs,
+                exportMode: 'metadata-only',
+                totalCount,
+              })
 
               while (true) {
                 const batchData = await appDatabaseService.queryJson<{
@@ -684,7 +739,13 @@ export const projectExportRoutes = new Elysia()
                 }
 
                 offset += batchData.length
-                console.log(`[export] Streamed ${processedCount} articles`)
+                projectExportLogger.force('project.export.streamed-count', 'Project export streamed articles', 'log', {
+                  ...exportAttrs,
+                  exportMode: 'metadata-only',
+                  batchRowCount: batchData.length,
+                  processedCount,
+                  totalCount,
+                })
 
                 if (batchData.length < BATCH_SIZE) {
                   break
@@ -692,10 +753,16 @@ export const projectExportRoutes = new Elysia()
               }
             }
 
-            console.log(`[export] Export complete: ${processedCount} articles`)
+            projectExportLogger.force('project.export.complete', 'Project export completed', 'log', {
+              ...exportAttrs,
+              processedCount,
+            })
             controller.close()
           } catch (error) {
-            console.error('[export] Error:', error)
+            projectExportErrorLogger.force('project.export.error', 'Project export failed', 'error', {
+              ...exportAttrs,
+              error: error instanceof Error ? error.message : String(error),
+            })
             controller.error(error)
           }
         },

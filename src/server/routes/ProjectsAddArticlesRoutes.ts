@@ -2,6 +2,9 @@ import {Elysia, t} from 'elysia'
 
 import {selectArticleIdsByFilterOlap} from '../../services/olap/selectArticleIdsOlap.ts'
 import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
+import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
+
+const projectsAddArticlesLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 
 /**
  * Routes for adding articles to a project by various filter criteria.
@@ -28,21 +31,27 @@ export const projectsAddArticlesRoutes = new Elysia()
       // Upsert associations + auto-link prompts
       const result = await insertArticlesIntoProject(body.targetProjectId, articleIds, body.sourceProjectId)
 
-      console.log('[api/projects/add_articles_by_filter] applied', {
-        targetProjectId: body.targetProjectId,
-        sourceProjectId: body.sourceProjectId,
-        listType: body.listType,
-        filters: {
-          from: body.from,
-          to: body.to,
-          search: body.search,
-          prompts: body.prompts,
-          hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
-          hasStudyDecisionConflict: body.hasStudyDecisionConflict,
+      projectsAddArticlesLogger.force(
+        'projects.add-articles.applied-filter-summary',
+        'Articles added by filter',
+        'log',
+        {
+          targetProjectId: body.targetProjectId,
+          sourceProjectId: body.sourceProjectId,
+          listType: body.listType,
+          llmStatus: body.llmStatus,
+          filters: {
+            from: body.from,
+            to: body.to,
+            search: body.search,
+            prompts: body.prompts,
+            hasDuplicateStudyRecords: body.hasDuplicateStudyRecords,
+            hasStudyDecisionConflict: body.hasStudyDecisionConflict,
+          },
+          selectionTotal: articleIds.length,
+          ...result,
         },
-        selectionTotal: articleIds.length,
-        ...result,
-      })
+      )
 
       return {success: true, targetProjectId: body.targetProjectId, selectionTotal: articleIds.length, ...result}
     },
@@ -67,7 +76,7 @@ export const projectsAddArticlesRoutes = new Elysia()
       const ids = Array.isArray(body.articleIds) ? body.articleIds : [body.articleIds]
       const result = await insertArticlesIntoProject(body.targetProjectId, ids, body.sourceProjectId)
 
-      console.log('[api/projects/add_artilces_by_ids] applied', {
+      projectsAddArticlesLogger.force('projects.add-articles.applied-ids-summary', 'Articles added by ids', 'log', {
         targetProjectId: body.targetProjectId,
         sourceProjectId: body.sourceProjectId,
         providedTotal: ids.length,
