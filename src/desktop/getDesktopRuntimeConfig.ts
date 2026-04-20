@@ -2,6 +2,8 @@ import {mkdirSync} from 'node:fs'
 import {homedir} from 'node:os'
 import {posix, resolve, win32} from 'node:path'
 
+import {getRuntimeLogConfig} from '../server/utils/runtimeLogger.ts'
+
 type Platform = typeof process.platform
 type PathModule = typeof posix
 
@@ -203,23 +205,35 @@ export const getDesktopRuntimeConfig = ({
 } = {}): DesktopRuntimeConfig => {
   const dataRoot = getDesktopDataRoot({envValues, homeDirectory, platform})
   const pathModule = getPathModule(platform)
-  const backendLogPath = pathModule.resolve(dataRoot, 'logs', 'backend.log')
   const apiServerPort = getTrimmedValue(envValues.FORSKA_DESKTOP_API_SERVER_PORT) ?? desktopDefaultApiServerPort
   const apiOrigin = `http://127.0.0.1:${apiServerPort}`
   const serverEntryPath = resolve(import.meta.dir, '../src/server/index.ts')
   const backendCommand = [getDesktopBunBinary(envValues), serverEntryPath]
-  const backendEnv = {
+  const backendEnv: Record<string, string | undefined> = {
     ...envValues,
     API_SERVER_PORT: apiServerPort,
     DUCKDB_PATH: pathModule.join(dataRoot, 'forska.duckdb'),
     FORSKA_DESKTOP_MODE: 'true',
+    FORSKA_RUNTIME_PROFILE: 'local',
     SERVER_ROLE: 'dev-single',
     SERVER_WRITER_URL: '',
   }
+  const runtimeLogConfig = getRuntimeLogConfig({
+    cwd: dataRoot,
+    envValues: backendEnv,
+    joinPath: (...paths) => {
+      return pathModule.join(...paths)
+    },
+    runtimeWritableRoot: dataRoot,
+  })
+  backendEnv.LOG_DIR = runtimeLogConfig.logDir
+  backendEnv.LOG_LEVEL = runtimeLogConfig.logLevel
+  backendEnv.LOG_STDERR_LEVEL = runtimeLogConfig.logStderrLevel
+  const backendLogPath = pathModule.resolve(runtimeLogConfig.logDir, 'backend.log')
 
   if (createDataRoot) {
     mkdirSync(dataRoot, {recursive: true})
-    mkdirSync(resolve(dataRoot, 'logs'), {recursive: true})
+    mkdirSync(runtimeLogConfig.logDir, {recursive: true})
   }
 
   return {

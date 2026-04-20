@@ -4,6 +4,7 @@ import {dirname, resolve} from 'path'
 
 import {DEFAULT_API_SERVER_PORT, DEFAULT_VITE_PORT} from '../../utils/runtimePortDefaults.ts'
 import {getDuckdbPath} from './getDuckdbPath.ts'
+import {getRuntimeLogConfig} from './runtimeLogger.ts'
 
 const envShape = arktype({
   DUCKDB_PATH: 'string',
@@ -25,6 +26,10 @@ const envShape = arktype({
   PROJECT_MART_LARGE_REBUILD_BATCH_SIZE: 'number | string.integer.parse | null | undefined',
   PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE: 'number | string.integer.parse | null | undefined',
   PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS: 'number | string.integer.parse | null | undefined',
+  FORSKA_RUNTIME_PROFILE: arktype('"local" | "primary" | "secondary"'),
+  LOG_DIR: 'string',
+  LOG_LEVEL: arktype('"DEBUG" | "INFO" | "WARN" | "ERROR"'),
+  LOG_STDERR_LEVEL: arktype('"DEBUG" | "INFO" | "WARN" | "ERROR"'),
 })
 
 const readFromFileVar = (envValues: Record<string, string | undefined>, key: string): string | undefined => {
@@ -46,8 +51,9 @@ const getEnvWithFileFallback = (envValues: Record<string, string | undefined>): 
 }
 
 export const loadEnv = ({
+  cwd = process.cwd(),
   envValues = process.env,
-}: {envValues?: Record<string, string | undefined>} = {}): typeof envShape.infer => {
+}: {cwd?: string; envValues?: Record<string, string | undefined>} = {}): typeof envShape.infer => {
   const merged = getEnvWithFileFallback(envValues)
   if (merged.SERVER_ROLE == null || String(merged.SERVER_ROLE).trim() === '') {
     ;(merged as Record<string, string>).SERVER_ROLE = 'auto'
@@ -108,6 +114,11 @@ export const loadEnv = ({
   ) {
     ;(merged as Record<string, string>).PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS = '1000'
   }
+  const runtimeLogConfig = getRuntimeLogConfig({cwd, envValues: merged})
+  ;(merged as Record<string, string>).FORSKA_RUNTIME_PROFILE = runtimeLogConfig.runtimeProfile
+  ;(merged as Record<string, string>).LOG_DIR = runtimeLogConfig.logDir
+  ;(merged as Record<string, string>).LOG_LEVEL = runtimeLogConfig.logLevel
+  ;(merged as Record<string, string>).LOG_STDERR_LEVEL = runtimeLogConfig.logStderrLevel
   return envShape.assert(merged)
 }
 

@@ -1,7 +1,7 @@
 import {getBackgroundServerEnv} from '../src/server/utils/backgroundServerStack.ts'
 import {mergeRuntimeProfileEnv, type RuntimeProfileName} from '../src/utils/runtimeProfile.ts'
 
-type RuntimeProfileMode =
+export type RuntimeProfileMode =
   | 'api-only-server'
   | 'app'
   | 'app-server'
@@ -11,7 +11,7 @@ type RuntimeProfileMode =
   | 'worker-only-server'
 type RuntimeProfileServerRole = 'api' | 'worker'
 
-type RuntimeProfileCommandOptions = {mode: RuntimeProfileMode; profileName: RuntimeProfileName}
+export type RuntimeProfileCommandOptions = {mode: RuntimeProfileMode; profileName: RuntimeProfileName}
 
 type RuntimeProfileCommandConfig = {
   command: string[]
@@ -117,7 +117,7 @@ const getRuntimeProfileCommand = ({mode}: RuntimeProfileCommandOptions): string[
   return runtimeProfileModes[mode].command
 }
 
-const getRuntimeProfileCommandEnv = (commandOptions: RuntimeProfileCommandOptions) => {
+export const getRuntimeProfileCommandEnv = (commandOptions: RuntimeProfileCommandOptions) => {
   return runtimeProfileModes[commandOptions.mode].env(commandOptions)
 }
 
