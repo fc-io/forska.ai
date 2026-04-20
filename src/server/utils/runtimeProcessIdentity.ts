@@ -10,7 +10,7 @@ export type RuntimeProcessServiceName =
   | 'single-server'
   | 'worker-server'
 
-export type RuntimeProcessServerRole = 'api' | 'dev-single' | 'worker' | 'writer'
+export type RuntimeProcessServerRole = 'api' | 'auto' | 'dev-single' | 'worker' | 'writer'
 
 export type RuntimeProcessIdentity = {
   hostname: string

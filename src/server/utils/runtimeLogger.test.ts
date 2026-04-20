@@ -1,7 +1,19 @@
+import {existsSync, mkdtempSync, readFileSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
+
 import {expect, test} from 'bun:test'
 
 import {getRuntimeServiceNameForServerRole} from './runtimeBootstrap.ts'
-import {getDefaultRuntimeLogDir, getRuntimeLogConfig, getRuntimeLogProfile} from './runtimeLogger.ts'
+import {
+  getDefaultRuntimeLogDir,
+  getRuntimeLogConfig,
+  getRuntimeLogProfile,
+  installRuntimeJsonlSink,
+  isRuntimeJsonlSinkInstalled,
+  resetRuntimeJsonlSinkForTests,
+  writeRuntimeLogEvent,
+} from './runtimeLogger.ts'
 import {
   getRuntimeProcessLogIdentity,
   initializeRuntimeProcessIdentity,
@@ -84,5 +96,106 @@ test('omits serverRole for app-server runtime log identity', () => {
 
   expect(identity.service).toBe('app-server')
   expect('serverRole' in identity).toBe(false)
+  resetRuntimeProcessIdentityForTests()
+})
+
+test('runtime JSONL sink writes one structured record to the service daily file', () => {
+  resetRuntimeJsonlSinkForTests()
+  resetRuntimeProcessIdentityForTests()
+  const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
+  const timestamp = '2026-04-20T12:30:00.000Z'
+  initializeRuntimeProcessIdentity({
+    envValues: {FORSKA_RUNTIME_PROFILE: 'primary'},
+    hostnameValue: 'test-host',
+    listenPort: 4011,
+    pid: 222,
+    processStartedAt: '2026-04-20T12:00:00.000Z',
+    service: 'worker-server',
+  })
+  installRuntimeJsonlSink({
+    envValues: {FORSKA_RUNTIME_PROFILE: 'primary', LOG_DIR: logDir, LOG_LEVEL: 'INFO', SERVER_ROLE: 'worker'},
+  })
+
+  expect(
+    writeRuntimeLogEvent({
+      attrs: {attempt: 1, ok: true},
+      event: 'runtime.logger.test',
+      message: 'structured sink test',
+      severity: 'INFO',
+      timestamp,
+    }),
+  ).toBe(true)
+
+  const logContent = readFileSync(join(logDir, 'worker-server-2026-04-20.jsonl'), 'utf8')
+  const lines = logContent.split('\n').filter(Boolean)
+  const [record] = lines.map((line) => {
+    return JSON.parse(line) as Record<string, unknown>
+  })
+
+  expect(lines).toHaveLength(1)
+  expect(record).toEqual({
+    attrs: {attempt: 1, ok: true},
+    event: 'runtime.logger.test',
+    message: 'structured sink test',
+    runtime: {
+      hostname: 'test-host',
+      instanceId: 'worker-server:test-host:4011:222:2026-04-20T12:00:00.000Z',
+      listenPort: 4011,
+      pid: 222,
+      processStartedAt: '2026-04-20T12:00:00.000Z',
+      runtimeProfile: 'primary',
+      serverRole: 'worker',
+      service: 'worker-server',
+    },
+    severity: 'INFO',
+    timestamp,
+  })
+  resetRuntimeJsonlSinkForTests()
+  resetRuntimeProcessIdentityForTests()
+})
+
+test('runtime JSONL sink remains opt-in and honors the configured log level', () => {
+  resetRuntimeJsonlSinkForTests()
+  resetRuntimeProcessIdentityForTests()
+  const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
+  initializeRuntimeProcessIdentity({
+    hostnameValue: 'test-host',
+    listenPort: 3001,
+    pid: 333,
+    processStartedAt: '2026-04-20T12:00:00.000Z',
+    service: 'api-server',
+  })
+
+  expect(isRuntimeJsonlSinkInstalled()).toBe(false)
+  expect(
+    writeRuntimeLogEvent({
+      event: 'runtime.logger.uninstalled',
+      message: 'not installed',
+      severity: 'ERROR',
+      timestamp: '2026-04-20T12:00:00.000Z',
+    }),
+  ).toBe(false)
+
+  installRuntimeJsonlSink({envValues: {LOG_DIR: logDir, LOG_LEVEL: 'WARN', SERVER_ROLE: 'api'}})
+  expect(
+    writeRuntimeLogEvent({
+      event: 'runtime.logger.filtered',
+      message: 'filtered',
+      severity: 'INFO',
+      timestamp: '2026-04-20T12:01:00.000Z',
+    }),
+  ).toBe(false)
+  expect(existsSync(join(logDir, 'api-server-2026-04-20.jsonl'))).toBe(false)
+
+  expect(
+    writeRuntimeLogEvent({
+      event: 'runtime.logger.warning',
+      message: 'warning',
+      severity: 'WARN',
+      timestamp: '2026-04-20T12:02:00.000Z',
+    }),
+  ).toBe(true)
+  expect(existsSync(join(logDir, 'api-server-2026-04-20.jsonl'))).toBe(true)
+  resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
 })
