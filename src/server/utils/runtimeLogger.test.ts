@@ -4,6 +4,7 @@ import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
+import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {getRuntimeServiceNameForServerRole} from './runtimeBootstrap.ts'
 import {
   flushRuntimeLogs,
@@ -292,6 +293,72 @@ test('runtime JSONL sink remains opt-in and honors the configured log level', ()
     }),
   ).toBe(true)
   expect(existsSync(join(logDir, 'api-server-2026-04-20.jsonl'))).toBe(true)
+  resetRuntimeJsonlSinkForTests()
+  resetRuntimeProcessIdentityForTests()
+})
+
+test('file-only rate-limited logs fall back to terminal when the runtime sink is absent', async () => {
+  resetRuntimeJsonlSinkForTests()
+  const originalWarn = console.warn
+  const warnings: unknown[][] = []
+  console.warn = ((...args: unknown[]) => {
+    warnings.push(args)
+  }) as typeof console.warn
+  const logger = createRateLimitedLogger({sink: 'file-only', windowMs: 10})
+
+  logger.warn('runtime.logger.file-only-fallback', 'fallback warning', {fallback: true})
+  logger.warn('runtime.logger.file-only-fallback', 'suppressed warning', {suppressed: true})
+  await new Promise((resolve) => {
+    setTimeout(resolve, 15)
+  })
+  logger.warn('runtime.logger.file-only-fallback', 'fallback warning', {fallback: true})
+
+  expect(warnings).toEqual([
+    ['fallback warning', '{"fallback":true}'],
+    ['fallback warning (+1 suppressed)', '{"fallback":true}'],
+  ])
+  console.warn = originalWarn
+  resetRuntimeJsonlSinkForTests()
+})
+
+test('file-only rate-limited logs write runtime JSONL without terminal output when the sink is installed', () => {
+  resetRuntimeJsonlSinkForTests()
+  resetRuntimeProcessIdentityForTests()
+  const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
+  const originalWarn = console.warn
+  const warnings: unknown[][] = []
+  console.warn = ((...args: unknown[]) => {
+    warnings.push(args)
+  }) as typeof console.warn
+  initializeRuntimeProcessIdentity({
+    hostnameValue: 'test-host',
+    listenPort: 4014,
+    pid: 225,
+    processStartedAt: '2026-04-20T12:00:00.000Z',
+    service: 'worker-server',
+  })
+  installRuntimeJsonlSink({
+    envValues: {LOG_DIR: logDir, LOG_LEVEL: 'INFO', SERVER_ROLE: 'worker'},
+    timestamp: '2026-04-20T12:00:00.000Z',
+  })
+  const logger = createRateLimitedLogger({sink: 'file-only', windowMs: 10})
+
+  logger.warn('runtime.logger.file-only-installed', 'file warning', {batch: 1})
+
+  const logContent = readFileSync(join(logDir, 'worker-server-2026-04-20.jsonl'), 'utf8')
+  const [record] = logContent
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      return JSON.parse(line) as Record<string, unknown>
+    })
+
+  expect(warnings).toEqual([])
+  expect(record.event).toBe('runtime.logger.file-only-installed')
+  expect(record.message).toBe('file warning')
+  expect(record.severity).toBe('WARN')
+  expect(record.attrs).toEqual({args: ['{"batch":1}']})
+  console.warn = originalWarn
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
 })
