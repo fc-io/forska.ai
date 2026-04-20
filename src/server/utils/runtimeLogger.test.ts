@@ -2,6 +2,12 @@ import {expect, test} from 'bun:test'
 
 import {getRuntimeServiceNameForServerRole} from './runtimeBootstrap.ts'
 import {getDefaultRuntimeLogDir, getRuntimeLogConfig, getRuntimeLogProfile} from './runtimeLogger.ts'
+import {
+  getRuntimeProcessLogIdentity,
+  initializeRuntimeProcessIdentity,
+  resetRuntimeProcessIdentityForTests,
+  resolveRuntimeProcessIdentity,
+} from './runtimeProcessIdentity.ts'
 
 test('defaults unresolved runtime log profile to local', () => {
   expect(getRuntimeLogProfile({envValues: {}})).toBe('local')
@@ -42,4 +48,41 @@ test('selects stable runtime service names from server role before runtime impor
   expect(getRuntimeServiceNameForServerRole({SERVER_ROLE: 'dev-single'})).toBe('dev-single-server')
   expect(getRuntimeServiceNameForServerRole({SERVER_ROLE: 'auto'})).toBe('single-server')
   expect(getRuntimeServiceNameForServerRole({})).toBe('single-server')
+})
+
+test('resolves one runtime process identity with stable instance id shape', () => {
+  expect(
+    resolveRuntimeProcessIdentity({
+      envValues: {FORSKA_RUNTIME_PROFILE: 'primary'},
+      hostnameValue: 'test-host',
+      listenPort: 3002,
+      pid: 48192,
+      processStartedAt: '2026-04-12T10:10:00.000Z',
+      service: 'worker-server',
+    }),
+  ).toEqual({
+    hostname: 'test-host',
+    instanceId: 'worker-server:test-host:3002:48192:2026-04-12T10:10:00.000Z',
+    listenPort: 3002,
+    pid: 48192,
+    processStartedAt: '2026-04-12T10:10:00.000Z',
+    runtimeProfile: 'primary',
+    service: 'worker-server',
+  })
+})
+
+test('omits serverRole for app-server runtime log identity', () => {
+  resetRuntimeProcessIdentityForTests()
+  initializeRuntimeProcessIdentity({
+    hostnameValue: 'test-host',
+    listenPort: 8080,
+    pid: 100,
+    processStartedAt: '2026-04-12T10:10:00.000Z',
+    service: 'app-server',
+  })
+  const identity = getRuntimeProcessLogIdentity({serverRole: 'api'})
+
+  expect(identity.service).toBe('app-server')
+  expect('serverRole' in identity).toBe(false)
+  resetRuntimeProcessIdentityForTests()
 })

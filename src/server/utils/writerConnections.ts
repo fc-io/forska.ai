@@ -1,9 +1,9 @@
-import {hostname} from 'node:os'
-
 import {Effect} from 'effect'
 
 import {type DuckdbOwnerLeaseHistoryEntry, readDuckdbOwnerLeaseHistory} from './duckdbOwnerLease.ts'
 import {env} from './env.ts'
+import type {RuntimeLogProfile} from './runtimeLogger.ts'
+import {getRuntimeProcessIdentity, type RuntimeProcessServiceName} from './runtimeProcessIdentity.ts'
 import type {ServerRole} from './serverRole.ts'
 import {
   canCurrentServerOwnDuckdb,
@@ -18,22 +18,29 @@ const writerConnectionRetentionMs = 10 * 60_000
 const writerConnectionHeaderNames = {
   apiServerPort: 'x-forska-api-server-port',
   hostname: 'x-forska-hostname',
+  instanceId: 'x-forska-instance-id',
+  listenPort: 'x-forska-listen-port',
   pid: 'x-forska-pid',
+  processStartedAt: 'x-forska-process-started-at',
+  runtimeProfile: 'x-forska-runtime-profile',
   serverRole: 'x-forska-server-role',
+  service: 'x-forska-service',
   startedAt: 'x-forska-started-at',
   writerUrl: 'x-forska-writer-url',
 } as const
 
-type WriterConnectionState = {
-  processStartedAt: string
-  recordsByConnectionId: Map<string, WriterConnectionStoredRecord>
-}
+type WriterConnectionState = {recordsByConnectionId: Map<string, WriterConnectionStoredRecord>}
 
 type WriterConnectionIdentity = {
   apiServerPort: number
   hostname: string
+  instanceId: string
+  listenPort: number
   pid: number
+  processStartedAt: string
+  runtimeProfile: RuntimeLogProfile
   serverRole: ServerRole
+  service: RuntimeProcessServiceName
   startedAt: string
   writerUrl: string | null
 }
@@ -63,8 +70,13 @@ export type WriterConnectionsOverview = {
 export type WriterConnectionHeartbeatInput = {
   apiServerPort: number
   hostname: string
+  instanceId?: string
+  listenPort?: number
   pid: number
+  processStartedAt?: string
+  runtimeProfile?: RuntimeLogProfile
   serverRole: ServerRole
+  service?: RuntimeProcessServiceName
   startedAt: string
   writerUrl: string | null
 }
@@ -74,10 +86,7 @@ declare global {
 }
 
 const getWriterConnectionState = () => {
-  globalThis.__forskaWriterConnectionState ??= {
-    processStartedAt: new Date().toISOString(),
-    recordsByConnectionId: new Map<string, WriterConnectionStoredRecord>(),
-  }
+  globalThis.__forskaWriterConnectionState ??= {recordsByConnectionId: new Map<string, WriterConnectionStoredRecord>()}
 
   return globalThis.__forskaWriterConnectionState
 }
@@ -94,12 +103,19 @@ const getCurrentWriterUrl = () => {
 }
 
 const getCurrentWriterConnectionIdentity = (): WriterConnectionIdentity => {
+  const runtimeIdentity = getRuntimeProcessIdentity({listenPort: env.API_SERVER_PORT})
+
   return {
     apiServerPort: env.API_SERVER_PORT,
-    hostname: hostname(),
+    hostname: runtimeIdentity.hostname,
+    instanceId: runtimeIdentity.instanceId,
+    listenPort: runtimeIdentity.listenPort,
     pid: process.pid,
+    processStartedAt: runtimeIdentity.processStartedAt,
+    runtimeProfile: runtimeIdentity.runtimeProfile,
     serverRole: getCurrentServerRole(),
-    startedAt: writerConnectionState.processStartedAt,
+    service: runtimeIdentity.service,
+    startedAt: runtimeIdentity.processStartedAt,
     writerUrl: getKnownWriterUrl() ?? (canCurrentServerOwnDuckdb() ? getCurrentWriterUrl() : null),
   }
 }
@@ -115,7 +131,7 @@ const getWriterDisabledWarning = (): WriterWarning => {
 }
 
 const getWriterConnectionId = (identity: WriterConnectionHeartbeatInput) => {
-  return `${identity.hostname}:${identity.apiServerPort}:${identity.pid}:${identity.startedAt}`
+  return getNormalizedWriterConnectionIdentity(identity).instanceId
 }
 
 const getLastSeenAt = (record: WriterConnectionStoredRecord) => {
@@ -127,9 +143,11 @@ const getIsWriterConnectionStale = (record: WriterConnectionStoredRecord, nowMs:
 }
 
 const toWriterConnectionRecord = (record: WriterConnectionStoredRecord, nowMs: number): WriterConnectionRecord => {
+  const runtimeIdentity = getRuntimeProcessIdentity({listenPort: env.API_SERVER_PORT})
+
   return {
     ...record,
-    isCurrentProcess: record.pid === process.pid && record.startedAt === writerConnectionState.processStartedAt,
+    isCurrentProcess: record.instanceId === runtimeIdentity.instanceId,
     isStale: getIsWriterConnectionStale(record, nowMs),
     lastSeenAt: getLastSeenAt(record),
   }
@@ -147,8 +165,13 @@ const getWriterConnectionHeadersFromIdentity = (identity: WriterConnectionIdenti
   return {
     [writerConnectionHeaderNames.apiServerPort]: String(identity.apiServerPort),
     [writerConnectionHeaderNames.hostname]: identity.hostname,
+    [writerConnectionHeaderNames.instanceId]: identity.instanceId,
+    [writerConnectionHeaderNames.listenPort]: String(identity.listenPort),
     [writerConnectionHeaderNames.pid]: String(identity.pid),
+    [writerConnectionHeaderNames.processStartedAt]: identity.processStartedAt,
+    [writerConnectionHeaderNames.runtimeProfile]: identity.runtimeProfile,
     [writerConnectionHeaderNames.serverRole]: identity.serverRole,
+    [writerConnectionHeaderNames.service]: identity.service,
     [writerConnectionHeaderNames.startedAt]: identity.startedAt,
     [writerConnectionHeaderNames.writerUrl]: identity.writerUrl ?? '',
   }
@@ -162,11 +185,75 @@ const getServerRoleFromHeader = (value: string | null): ServerRole | null => {
   return value === 'writer' || value === 'api' || value === 'worker' || value === 'dev-single' ? value : null
 }
 
+const getRuntimeProfileFromHeader = (value: string | null): RuntimeLogProfile | null => {
+  return value === 'local' || value === 'primary' || value === 'secondary' ? value : null
+}
+
+const getRuntimeProcessServiceFromHeader = (value: string | null): RuntimeProcessServiceName | null => {
+  return value === 'api-server'
+    || value === 'app-server'
+    || value === 'dev-single-server'
+    || value === 'single-server'
+    || value === 'worker-server'
+    ? value
+    : null
+}
+
+const getRuntimeProcessServiceForServerRole = (serverRole: ServerRole): RuntimeProcessServiceName => {
+  return serverRole === 'api'
+    ? 'api-server'
+    : serverRole === 'dev-single'
+      ? 'dev-single-server'
+      : serverRole === 'auto'
+        ? 'single-server'
+        : 'worker-server'
+}
+
+const getInstanceIdFromIdentity = (identity: {
+  hostname: string
+  listenPort: number
+  pid: number
+  processStartedAt: string
+  service: RuntimeProcessServiceName
+}) => {
+  return `${identity.service}:${identity.hostname}:${identity.listenPort}:${identity.pid}:${identity.processStartedAt}`
+}
+
+const getNormalizedWriterConnectionIdentity = (input: WriterConnectionHeartbeatInput): WriterConnectionIdentity => {
+  const listenPort = input.listenPort ?? input.apiServerPort
+  const processStartedAt = input.processStartedAt ?? input.startedAt
+  const runtimeProfile = input.runtimeProfile ?? 'local'
+  const service = input.service ?? getRuntimeProcessServiceForServerRole(input.serverRole)
+  const instanceId =
+    input.instanceId
+    ?? getInstanceIdFromIdentity({hostname: input.hostname, listenPort, pid: input.pid, processStartedAt, service})
+
+  return {
+    apiServerPort: input.apiServerPort,
+    hostname: input.hostname,
+    instanceId,
+    listenPort,
+    pid: input.pid,
+    processStartedAt,
+    runtimeProfile,
+    serverRole: input.serverRole,
+    service,
+    startedAt: processStartedAt,
+    writerUrl: input.writerUrl,
+  }
+}
+
 const getWriterConnectionIdentityFromHeaders = (headers: Headers): WriterConnectionHeartbeatInput | null => {
   const apiServerPort = getNumberFromHeader(headers.get(writerConnectionHeaderNames.apiServerPort))
   const hostName = headers.get(writerConnectionHeaderNames.hostname)
+  const instanceId = headers.get(writerConnectionHeaderNames.instanceId) ?? undefined
+  const listenPort = getNumberFromHeader(headers.get(writerConnectionHeaderNames.listenPort)) ?? undefined
   const pid = getNumberFromHeader(headers.get(writerConnectionHeaderNames.pid))
+  const processStartedAt = headers.get(writerConnectionHeaderNames.processStartedAt) ?? undefined
+  const runtimeProfile =
+    getRuntimeProfileFromHeader(headers.get(writerConnectionHeaderNames.runtimeProfile)) ?? undefined
   const serverRole = getServerRoleFromHeader(headers.get(writerConnectionHeaderNames.serverRole))
+  const service = getRuntimeProcessServiceFromHeader(headers.get(writerConnectionHeaderNames.service)) ?? undefined
   const startedAt = headers.get(writerConnectionHeaderNames.startedAt)
 
   return apiServerPort === null || hostName === null || pid === null || serverRole === null || startedAt === null
@@ -174,8 +261,13 @@ const getWriterConnectionIdentityFromHeaders = (headers: Headers): WriterConnect
     : {
         apiServerPort,
         hostname: hostName,
+        instanceId,
+        listenPort,
         pid,
+        processStartedAt,
+        runtimeProfile,
         serverRole,
+        service,
         startedAt,
         writerUrl: getNormalizedWriterUrl(headers.get(writerConnectionHeaderNames.writerUrl)),
       }
@@ -189,21 +281,27 @@ const getUpdatedWriterConnectionRecord = (
   >,
 ) => {
   const nowIso = new Date().toISOString()
-  const connectionId = getWriterConnectionId(input)
+  const normalizedInput = getNormalizedWriterConnectionIdentity(input)
+  const connectionId = normalizedInput.instanceId
 
   return {
     connectionId,
-    apiServerPort: input.apiServerPort,
+    apiServerPort: normalizedInput.apiServerPort,
     firstSeenAt: previous?.firstSeenAt ?? nowIso,
-    hostname: input.hostname,
+    hostname: normalizedInput.hostname,
+    instanceId: normalizedInput.instanceId,
     lastHeartbeatAt: updates.lastHeartbeatAt ?? previous?.lastHeartbeatAt ?? null,
     lastProxyAt: updates.lastProxyAt ?? previous?.lastProxyAt ?? null,
     lastRequestPath: updates.lastRequestPath ?? previous?.lastRequestPath ?? null,
-    pid: input.pid,
+    listenPort: normalizedInput.listenPort,
+    pid: normalizedInput.pid,
+    processStartedAt: normalizedInput.processStartedAt,
     proxyCount: updates.proxyCount ?? previous?.proxyCount ?? 0,
-    serverRole: input.serverRole,
-    startedAt: input.startedAt,
-    writerUrl: input.writerUrl,
+    runtimeProfile: normalizedInput.runtimeProfile,
+    serverRole: normalizedInput.serverRole,
+    service: normalizedInput.service,
+    startedAt: normalizedInput.startedAt,
+    writerUrl: normalizedInput.writerUrl,
   } satisfies WriterConnectionStoredRecord
 }
 
