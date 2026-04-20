@@ -42,7 +42,6 @@ export const HumanAssessment = () => {
       queryFn: async () => {
         const response = await apiClient.api.humanassessment.init.post({projectId: params().id})
         const {data} = handleApiResponse<{data: HumanAssessmentData}>(response, 'Failed to initialize human assessment')
-        console.log('data', data)
         return data
       },
       enabled: !!params().id && projectAccessQuery.data !== undefined && !projectAccessQuery.data.archived,
@@ -186,14 +185,12 @@ export const HumanAssessment = () => {
                         const judgment = data()?.judgmentsHuman.find((j) => {
                           return j.promptId === prompt.id
                         })
-                        console.log('prompt', prompt)
 
                         if (!judgment) {
                           return null
                         }
 
                         const promptType = parsePromptType(prompt?.type ?? null)
-                        console.log('promptType', promptType)
                         return (
                           <form.Field
                             name={judgment.id}

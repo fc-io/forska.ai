@@ -93,8 +93,7 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
       return new Set([...prev, projectId])
     })
     try {
-      const job = await createJudgmentsJob(projectId)
-      console.log('Judgments job created:', job)
+      await createJudgmentsJob(projectId)
     } catch (error) {
       console.error('Failed to create judgments job:', error)
       setCreateJobErrors((prev) => {
@@ -115,8 +114,7 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
       return new Set([...prev, projectId])
     })
     try {
-      const clonedProject = await cloneProject(queryClient, projectId)
-      console.log('Project cloned:', clonedProject)
+      await cloneProject(queryClient, projectId)
     } catch (error) {
       console.error('Failed to clone project:', error)
     } finally {
@@ -135,7 +133,6 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
     })
     try {
       await unarchiveProject(queryClient, projectId)
-      console.log('Project unarchived:', projectId)
     } catch (error) {
       console.error('Failed to unarchive project:', error)
     } finally {

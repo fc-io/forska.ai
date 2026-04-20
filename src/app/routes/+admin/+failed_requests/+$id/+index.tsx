@@ -73,7 +73,6 @@ const getPromptIdsLabel = (detail: FailedRequestDetailItem): string => {
 }
 
 const fetchFailedRequest = async (id: string) => {
-  console.log('Fetching failed request detail for id:', id)
   const response = await apiClient.api.tokens['failed-requests']({id}).get()
 
   if (response.error) {
