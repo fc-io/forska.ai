@@ -1,4 +1,4 @@
-import {rateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
+import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {ConnectionError} from './connectionHealth.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
@@ -46,7 +46,9 @@ type JobRequestAllocation<T> = {job: T; limit: number}
 type ProviderConnectionRequestAllocation<T> = {connectionId: string; jobs: JobRequestAllocation<T>[]; limit: number}
 type ClaimableJobRequest<T> = JobRequestAllocation<T> & {dispatchMode: 'full' | 'probe'; runtime: PromptRuntime}
 
-const schedulerLogger = rateLimitedLogger
+const schedulerLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
+const schedulerFailureLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
+const sendToLLMComponent = 'judgmentsJobsSendToLLM'
 
 const anthropicConnectionWarmupStartedAt = new Map<string, number>()
 
@@ -330,7 +332,7 @@ const logDispatchSkip = ({
   schedulerLogger.warn(
     `scheduler:skip:${dispatchStatus}:${getEndpointAvailabilityKey({baseURL, providerConnectionId: connectionId})}`,
     `[capacity:${label}] skipping claims while endpoint is ${dispatchStatus}`,
-    {baseURL, connectionId},
+    {baseURL, component: sendToLLMComponent, connectionId, dispatchStatus, event: 'dispatchSkip', label},
   )
 }
 
@@ -519,7 +521,7 @@ export const processClaimedPromptsByConnection = async ({
               schedulerLogger.warn(
                 `scheduler:halt:${connectionId}`,
                 `[capacity:${label}] stopping queued dispatch after endpoint became unavailable`,
-                {connectionId, requeuedCount},
+                {component: sendToLLMComponent, connectionId, event: 'connectionHalt', label, requeuedCount},
               )
             })
           }
@@ -553,18 +555,23 @@ export const processClaimedPromptsByConnection = async ({
     {claimedPrompts: 0, connectionErrors: 0, fulfilled: 0, rejected: 0, requeuedCount: 0},
   )
 
-  console.log('[llm] Batch complete:', summary)
+  schedulerLogger.log('llm.batchComplete', '[llm] Batch complete', {
+    ...summary,
+    component: sendToLLMComponent,
+    event: 'batchComplete',
+    label,
+  })
 
   if (summary.rejected > 0) {
-    schedulerLogger.error(
-      'llm:processing-errors',
-      `send to LLM: processing errors ${JSON.stringify({
-        rejected: summary.rejected,
-        connectionErrors: summary.connectionErrors,
-        total: summary.claimedPrompts,
-        requeuedCount: summary.requeuedCount,
-      })}`,
-    )
+    schedulerFailureLogger.error('llm:processing-errors', 'send to LLM: processing errors', {
+      claimedPrompts: summary.claimedPrompts,
+      component: sendToLLMComponent,
+      connectionErrors: summary.connectionErrors,
+      event: 'processingErrors',
+      label,
+      rejected: summary.rejected,
+      requeuedCount: summary.requeuedCount,
+    })
   }
 
   return {connectionErrors: summary.connectionErrors}
@@ -753,7 +760,9 @@ const sendToLLMForJobs = async (
 
   if (requestsToSend > 0 || promptsInFlight > capacity.maxInflight * 0.9) {
     const readyCountsObj = Object.fromEntries(readyCounts)
-    console.log(`[capacity:${label}]`, {
+    schedulerLogger.log(`llm.capacity.${label}`, `[capacity:${label}] capacity summary`, {
+      component: sendToLLMComponent,
+      event: 'capacitySummary',
       requestsToSend,
       promptsInFlight,
       maxInflight: capacity.maxInflight,
@@ -763,6 +772,7 @@ const sendToLLMForJobs = async (
       targetReservedPrompts,
       totalQueueCapacity,
       jobCount: jobs.length,
+      label,
       readyCounts: readyCountsObj,
     })
   }
@@ -777,12 +787,14 @@ const sendToLLMForJobs = async (
     runtimeInFlightCounts,
   })
   const requestsToSendByJob = await getClaimableRequests({allocations: requestsToSendByConnection, label})
-  console.log(
-    `[capacity:${label}] requestsToSendByJob:`,
-    requestsToSendByJob.map(({dispatchMode, job, limit}) => {
+  schedulerLogger.log(`llm.requestsToSendByJob.${label}`, `[capacity:${label}] requests to send by job`, {
+    component: sendToLLMComponent,
+    event: 'requestsToSendByJob',
+    label,
+    requests: requestsToSendByJob.map(({dispatchMode, job, limit}) => {
       return {dispatchMode, jobId: job.id.slice(0, 8), limit}
     }),
-  )
+  })
 
   const promptClaimResults = await Promise.allSettled(
     requestsToSendByJob.map(({job, limit}) => {
@@ -805,11 +817,18 @@ const sendToLLMForJobs = async (
           ? {name: reason.name, message: reason.message, stack: reason.stack}
           : {message: String(reason)}
 
-      console.error(`[capacity:${label}] failed to claim prompts`, {
-        error: safeError,
-        jobId: request?.job.id,
-        requested: request?.limit,
-      })
+      schedulerFailureLogger.error(
+        `llm.claimPrompts.failed.${label}.${request?.job.id ?? 'unknown'}`,
+        `[capacity:${label}] failed to claim prompts`,
+        {
+          component: sendToLLMComponent,
+          error: safeError,
+          event: 'claimPromptsFailed',
+          jobId: request?.job.id,
+          label,
+          requested: request?.limit,
+        },
+      )
     }
   })
 
@@ -825,7 +844,13 @@ const sendToLLMForJobs = async (
     return sum + arr.length
   }, 0)
   if (totalPromptsFetched !== requestsToSend) {
-    console.warn(`[capacity:${label}] mismatch: fetched`, totalPromptsFetched, 'but requested', requestsToSend)
+    schedulerFailureLogger.warn(`llm.claimPrompts.mismatch.${label}`, `[capacity:${label}] claim count mismatch`, {
+      component: sendToLLMComponent,
+      event: 'claimCountMismatch',
+      label,
+      requested: requestsToSend,
+      totalPromptsFetched,
+    })
   }
 
   const enqueueResults = await Promise.all(
@@ -845,7 +870,7 @@ const sendToLLMForJobs = async (
     schedulerLogger.warn(
       'scheduler:dispatch-queue-full',
       `[capacity:${label}] requeued claimed prompts because dispatch queues were full`,
-      {rejectedCount: rejectedPrompts.length},
+      {component: sendToLLMComponent, event: 'dispatchQueueFullRequeue', label, requeuedCount: rejectedPrompts.length},
     )
   }
 }
