@@ -57,7 +57,7 @@ export const invokeGeminiGenerateContentModel = async ({
 }: {
   apiKey: string | null
   baseURL: string | null
-  maxCompletionTokens: number
+  maxCompletionTokens?: number | null
   modelName: string
   prompt: string
   systemPrompt: string
@@ -70,7 +70,10 @@ export const invokeGeminiGenerateContentModel = async ({
     {
       body: JSON.stringify({
         contents: [{parts: [{text: prompt}], role: 'user'}],
-        generationConfig: {maxOutputTokens: maxCompletionTokens, temperature},
+        generationConfig: {
+          temperature,
+          ...(typeof maxCompletionTokens === 'number' ? {maxOutputTokens: maxCompletionTokens} : {}),
+        },
         systemInstruction: {parts: [{text: systemPrompt}]},
       }),
       headers: {'content-type': 'application/json'},

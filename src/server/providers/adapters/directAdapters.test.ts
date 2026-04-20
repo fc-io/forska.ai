@@ -196,6 +196,7 @@ test('openai adapter delegates health and invoke to responses transport', async 
   expect(result.text).toBe('openai-response')
   expect(openAIResponsesState.list).toHaveBeenCalledTimes(1)
   expect(openAIResponsesState.invoke).toHaveBeenCalledTimes(1)
+  expect(openAIResponsesState.invoke.mock.calls[0]?.[0]).not.toHaveProperty('maxCompletionTokens')
 })
 
 test('anthropic adapter delegates health and invoke to messages transport', async () => {
@@ -255,6 +256,7 @@ test('google adapter delegates health and invoke to generate-content transport',
   expect(result.text).toBe('google-response')
   expect(googleState.list).toHaveBeenCalledTimes(1)
   expect(googleState.invoke).toHaveBeenCalledTimes(1)
+  expect(googleState.invoke.mock.calls[0]?.[0]).not.toHaveProperty('maxCompletionTokens')
 })
 
 test('codex adapter composes health from runtime status and model listing', async () => {

@@ -64,6 +64,16 @@ const shouldIncludeAnthropicTemperature = (modelName: string): boolean => {
   return !normalizedModelName.startsWith('claude-opus-4-7')
 }
 
+const getAnthropicMaxOutputTokens = (modelName: string): number | null => {
+  const normalizedModelName = getTrimmedValue(modelName)?.toLowerCase() ?? ''
+
+  return normalizedModelName.startsWith('claude-opus-4-7') || normalizedModelName.startsWith('claude-opus-4-6')
+    ? 128000
+    : normalizedModelName.startsWith('claude-sonnet-4-6')
+      ? 64000
+      : null
+}
+
 const getAnthropicMessagesRequestBody = ({
   maxCompletionTokens,
   messages,
@@ -82,8 +92,11 @@ const getAnthropicMessagesRequestBody = ({
   thinkingVersion: string | null
 }) => {
   const thinkingConfig = getAnthropicThinkingConfig({modelName, version: thinkingVersion})
+  const resolvedMaxCompletionTokens = thinkingConfig
+    ? Math.max(maxCompletionTokens, getAnthropicMaxOutputTokens(modelName) ?? maxCompletionTokens)
+    : maxCompletionTokens
   const requestBody = {
-    max_tokens: maxCompletionTokens,
+    max_tokens: resolvedMaxCompletionTokens,
     messages,
     model: modelName,
     output_config: {...getAnthropicJsonSchemaOutputConfig(outputSchema), ...(thinkingConfig?.outputConfig ?? {})},

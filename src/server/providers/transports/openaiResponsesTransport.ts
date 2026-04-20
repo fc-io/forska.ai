@@ -46,7 +46,7 @@ export const invokeOpenAIResponsesModel = async ({
 }: {
   apiKey: string | null
   baseURL: string | null
-  maxCompletionTokens: number
+  maxCompletionTokens?: number | null
   modelName: string
   outputSchema: unknown
   prompt: string
@@ -61,10 +61,10 @@ export const invokeOpenAIResponsesModel = async ({
       {content: systemPrompt, role: 'system'},
       {content: prompt, role: 'user'},
     ],
-    max_output_tokens: maxCompletionTokens,
     model: modelName,
     temperature,
     text: getJsonSchemaTextFormat(outputSchema),
+    ...(typeof maxCompletionTokens === 'number' ? {max_output_tokens: maxCompletionTokens} : {}),
   } as never)
   const usage = response.usage
 

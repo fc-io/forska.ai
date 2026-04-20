@@ -56,7 +56,6 @@ export const createGoogleAdapter = (catalog: ProviderCatalogEntry): ProviderDefi
       return invokeGeminiGenerateContentModel({
         apiKey: runtimeCredentials.apiKey,
         baseURL: runtimeCredentials.baseURL,
-        maxCompletionTokens: request.maxCompletionTokens,
         modelName: model.modelName ?? model.remoteModelId ?? model.name,
         prompt: request.prompt,
         systemPrompt: request.systemPrompt,

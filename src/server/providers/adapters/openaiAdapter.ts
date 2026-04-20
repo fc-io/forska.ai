@@ -56,7 +56,6 @@ export const createOpenAIAdapter = (catalog: ProviderCatalogEntry): ProviderDefi
       return invokeOpenAIResponsesModel({
         apiKey: runtimeCredentials.apiKey,
         baseURL: runtimeCredentials.baseURL,
-        maxCompletionTokens: request.maxCompletionTokens,
         modelName: model.modelName ?? model.remoteModelId ?? model.name,
         outputSchema: request.outputSchema,
         prompt: request.prompt,

@@ -176,7 +176,7 @@ test('uses adaptive thinking and effort for Anthropic effort variants', async ()
   })
 
   expect(getRequestBody(0)).toEqual({
-    max_tokens: 32,
+    max_tokens: 128000,
     messages: [{content: 'Hello', role: 'user'}],
     model: 'claude-opus-4-7',
     output_config: {effort: 'xhigh', format: {schema: {type: 'object'}, type: 'json_schema'}},
@@ -226,7 +226,7 @@ test('continues Anthropic pause_turn responses until text arrives', async () => 
     usage: {completionTokens: 36, promptTokens: 5, totalTokens: 41},
   })
   expect(getRequestBody(1)).toEqual({
-    max_tokens: 32,
+    max_tokens: 128000,
     messages: [
       {content: 'Hello', role: 'user'},
       {content: [{signature: 'sig_1', thinking: 'working', type: 'thinking'}], role: 'assistant'},
@@ -279,7 +279,7 @@ test('throws when Anthropic returns an empty thinking-only response', async () =
   })
   expect(fetchMock).toHaveBeenCalledTimes(1)
   expect(getRequestBody(0)).toEqual({
-    max_tokens: 32,
+    max_tokens: 128000,
     messages: [{content: 'Hello', role: 'user'}],
     model: 'claude-opus-4-7',
     output_config: {effort: 'max', format: {schema: {type: 'object'}, type: 'json_schema'}},
@@ -325,7 +325,7 @@ test('throws when Anthropic returns an empty refusal response', async () => {
   })
   expect(fetchMock).toHaveBeenCalledTimes(1)
   expect(getRequestBody(0)).toEqual({
-    max_tokens: 32,
+    max_tokens: 128000,
     messages: [{content: 'Hello', role: 'user'}],
     model: 'claude-opus-4-7',
     output_config: {effort: 'max', format: {schema: {type: 'object'}, type: 'json_schema'}},
