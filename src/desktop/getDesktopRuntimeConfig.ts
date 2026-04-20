@@ -207,7 +207,7 @@ export const getDesktopRuntimeConfig = ({
   const pathModule = getPathModule(platform)
   const apiServerPort = getTrimmedValue(envValues.FORSKA_DESKTOP_API_SERVER_PORT) ?? desktopDefaultApiServerPort
   const apiOrigin = `http://127.0.0.1:${apiServerPort}`
-  const serverEntryPath = resolve(import.meta.dir, '../src/server/index.ts')
+  const serverEntryPath = resolve(import.meta.dir, '../server/index.ts')
   const backendCommand = [getDesktopBunBinary(envValues), serverEntryPath]
   const backendEnv: Record<string, string | undefined> = {
     ...envValues,
