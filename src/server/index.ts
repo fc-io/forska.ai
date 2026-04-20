@@ -48,6 +48,39 @@ import {startBackgroundWork} from './utils/startBackgroundWork.ts'
 
 installSafeConsoleLogging()
 
+const parentMonitorIntervalMs = 1_000
+const parentPid = process.ppid
+let parentDisconnectSignalSent = false
+
+const isParentProcessAlive = (pid: number) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+const startParentDisconnectMonitor = () => {
+  const interval = setInterval(() => {
+    if (parentDisconnectSignalSent) {
+      return
+    }
+
+    if (process.ppid === parentPid && isParentProcessAlive(parentPid)) {
+      return
+    }
+
+    parentDisconnectSignalSent = true
+    console.error(`[server] parent pid=${parentPid} exited; shutting down`)
+    process.kill(process.pid, 'SIGTERM')
+  }, parentMonitorIntervalMs)
+
+  interval.unref()
+}
+
+startParentDisconnectMonitor()
+
 const appServerRuntimeConfig = getAppServerRuntimeConfig()
 const desktopAllowedOrigins = process.env.FORSKA_DESKTOP_MODE === 'true' ? ['null', 'views://mainview'] : []
 const allowedOrigins = [
