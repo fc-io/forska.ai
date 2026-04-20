@@ -4,13 +4,19 @@ import {registerWriterDemotionHandler, shouldCurrentServerRunWriterWork} from '.
 
 type ProjectMartRefreshWorkerHeartbeatOptions = {pollIntervalMs?: number}
 
-const projectMartRefreshWorkerLogger = createRateLimitedLogger({windowMs: 30_000})
+const projectMartRefreshWorkerLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
+const projectMartRefreshWorkerWarningLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
+const projectMartRefreshWorkerComponent = 'projectMartRefreshWorker'
+
+const getErrorMessage = (error: unknown) => {
+  return error instanceof Error ? error.message : String(error)
+}
 
 const logProjectMartRefreshWorkerError = (error: unknown) => {
-  return projectMartRefreshWorkerLogger.warn(
+  return projectMartRefreshWorkerWarningLogger.warn(
     'project-mart-refresh-worker',
     '[projectMartRefreshWorker] background loop failed',
-    error,
+    {component: projectMartRefreshWorkerComponent, errorMessage: getErrorMessage(error), event: 'loopFailed'},
   )
 }
 
@@ -21,7 +27,16 @@ export const startProjectMartRefreshWorkerHeartbeat = (options: ProjectMartRefre
 
   const controller = new AbortController()
 
-  console.log('[projectMartRefreshWorker] background loop starting')
+  projectMartRefreshWorkerLogger.log(
+    'project-mart-refresh-worker:loop-start',
+    '[projectMartRefreshWorker] background loop starting',
+    {
+      component: projectMartRefreshWorkerComponent,
+      event: 'loopStart',
+      pollIntervalMs: options.pollIntervalMs ?? null,
+      startCount: 1,
+    },
+  )
 
   void runProjectMartRefreshWorker({pollIntervalMs: options.pollIntervalMs, signal: controller.signal}).catch(
     logProjectMartRefreshWorkerError,

@@ -8,13 +8,19 @@ import {registerWriterDemotionHandler, shouldCurrentServerRunWriterWork} from '.
 
 type ProjectMartLargeRebuildHeartbeatOptions = {batchSize?: number; maxCyclesPerWake?: number; pollIntervalMs?: number}
 
-const largeRebuildLogger = createRateLimitedLogger({windowMs: 30_000})
+const largeRebuildLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
+const largeRebuildWarningLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
+const largeRebuildComponent = 'projectMartLargeRebuildHeartbeat'
+
+const getErrorMessage = (error: unknown) => {
+  return error instanceof Error ? error.message : String(error)
+}
 
 const logLargeRebuildHeartbeatError = (error: unknown) => {
-  return largeRebuildLogger.warn(
+  return largeRebuildWarningLogger.warn(
     'project-mart-large-rebuild-heartbeat',
     '[projectMartLargeRebuild] background cycle failed',
-    error,
+    {component: largeRebuildComponent, errorMessage: getErrorMessage(error), event: 'cycleFailed'},
   )
 }
 
@@ -27,6 +33,8 @@ export const startProjectMartLargeRebuildHeartbeat = (options: ProjectMartLargeR
   let running = false
   let scheduledTimeout: ReturnType<typeof setTimeout> | null = null
   let loggedConfigKey: string | null = null
+  let configLogCount = 0
+  let runCount = 0
 
   const getResolvedConfig = async (): Promise<ProjectMartLargeRebuildHeartbeatConfig> => {
     const resolvedConfig = await getProjectMartLargeRebuildHeartbeatConfig()
@@ -52,8 +60,20 @@ export const startProjectMartLargeRebuildHeartbeat = (options: ProjectMartLargeR
     }
 
     loggedConfigKey = nextConfigKey
-    console.log(
-      `[projectMartLargeRebuild] background loop config batch_size=${resolvedConfig.batchSize} max_cycles_per_wake=${resolvedConfig.maxCyclesPerWake} poll_interval_ms=${resolvedConfig.pollIntervalMs} sources=${JSON.stringify(resolvedConfig.sources)}`,
+    configLogCount += 1
+    largeRebuildLogger.log(
+      'project-mart-large-rebuild-heartbeat:loop-config',
+      '[projectMartLargeRebuild] background loop config',
+      {
+        batchSize: resolvedConfig.batchSize,
+        component: largeRebuildComponent,
+        configLogCount,
+        event: 'loopConfig',
+        maxCyclesPerWake: resolvedConfig.maxCyclesPerWake,
+        pollIntervalMs: resolvedConfig.pollIntervalMs,
+        runCount,
+        sources: resolvedConfig.sources,
+      },
     )
   }
 
@@ -77,6 +97,7 @@ export const startProjectMartLargeRebuildHeartbeat = (options: ProjectMartLargeR
     }
 
     running = true
+    runCount += 1
 
     try {
       const resolvedConfig = await getResolvedConfig()
