@@ -101,9 +101,8 @@ await initializeServerRuntimeRole()
 
 if (shouldCurrentServerRunWriterWork()) {
   await migrateDuckdb()
+  await getJudgmentJobSqliteService().recoverJudgmentJobLeasesOnStartup()
 }
-
-await getJudgmentJobSqliteService().recoverJudgmentJobLeasesOnStartup()
 
 const shouldWarmCodex = getCurrentServerRole() !== 'worker'
 

@@ -40,7 +40,8 @@ test('acquires and releases a same-host job lease', async () => {
 })
 
 test('does not acquire an active foreign lease', async () => {
-  const {acquireJudgmentJobLease} = await import('./judgmentJobLease.ts')
+  const {JudgmentJobLeaseHeldError, acquireJudgmentJobLease, isJudgmentJobLeaseHeldError} =
+    await import('./judgmentJobLease.ts')
   const jobId = `job-foreign-${Date.now()}`
 
   await writeLeaseMetadata(jobId, {
@@ -64,6 +65,8 @@ test('does not acquire an active foreign lease', async () => {
     })
 
   expect(acquireError).toBeInstanceOf(Error)
+  expect(acquireError).toBeInstanceOf(JudgmentJobLeaseHeldError)
+  expect(isJudgmentJobLeaseHeldError(acquireError)).toBe(true)
   expect((acquireError as Error).message).toContain('Judgment job lease for')
 })
 

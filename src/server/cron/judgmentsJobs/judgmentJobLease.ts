@@ -24,6 +24,23 @@ export type JudgmentJobLeaseMetadata = {
 
 export type JudgmentJobLease = {leasePath: string; metadata: JudgmentJobLeaseMetadata}
 
+export class JudgmentJobLeaseHeldError extends Error {
+  metadata: JudgmentJobLeaseMetadata
+
+  constructor(jobId: string, metadata: JudgmentJobLeaseMetadata, options?: {cause?: unknown}) {
+    super(
+      `Judgment job lease for ${jobId} is held by ${getLeaseOwnerText(metadata)} since ${metadata.acquiredAt}`,
+      options,
+    )
+    this.name = 'JudgmentJobLeaseHeldError'
+    this.metadata = metadata
+  }
+}
+
+export const isJudgmentJobLeaseHeldError = (error: unknown) => {
+  return error instanceof JudgmentJobLeaseHeldError
+}
+
 const normalizeHostname = (value: string) => {
   return value.trim().toLowerCase()
 }
@@ -169,10 +186,7 @@ export const acquireJudgmentJobLease = async (params: {
       return acquireJudgmentJobLease(params)
     }
 
-    throw new Error(
-      `Judgment job lease for ${params.jobId} is held by ${getLeaseOwnerText(currentLease)} since ${currentLease.acquiredAt}`,
-      {cause: error},
-    )
+    throw new JudgmentJobLeaseHeldError(params.jobId, currentLease, {cause: error})
   }
 }
 

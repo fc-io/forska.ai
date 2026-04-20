@@ -11,6 +11,7 @@ import {writeRuntimeFailureLogEvent} from '../../utils/runtimeLogger.ts'
 import {registerWriterDemotionHandler} from '../../utils/serverRuntimeRole.ts'
 import {
   acquireJudgmentJobLease,
+  isJudgmentJobLeaseHeldError,
   type JudgmentJobLease,
   type JudgmentJobLeaseMetadata,
   readJudgmentJobLease,
@@ -345,6 +346,10 @@ const recoverJudgmentJobLeaseFromFile = async (jobId: string): Promise<'deleted'
     serverJobId: currentLeaseMetadata.serverJobId ?? getDefaultJudgmentServerJobId(),
     takeoverLeaseId: currentLeaseMetadata.leaseId,
   }).catch((error) => {
+    if (isJudgmentJobLeaseHeldError(error)) {
+      return null
+    }
+
     writeRuntimeFailureLogEvent({
       attrs: {error, jobId},
       event: 'judgments.sqlite-lease.startup-recovery.acquire-failure',

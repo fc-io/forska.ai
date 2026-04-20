@@ -2,7 +2,7 @@ import {existsSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 import {dirname, join} from 'node:path'
 
 import {Database} from 'bun:sqlite'
-import {afterAll, beforeAll, expect, test} from 'bun:test'
+import {afterAll, beforeAll, expect, spyOn, test} from 'bun:test'
 
 import type {JudgmentJobLeaseMetadata} from './judgmentJobLease.ts'
 import {getJudgmentJobLeasePath, getJudgmentJobSqlitePath} from './judgmentJobPaths.ts'
@@ -3161,9 +3161,19 @@ test('recoverJudgmentJobLeasesOnStartup ignores an active competing lease', asyn
     ),
   )
 
+  const consoleError = spyOn(console, 'error').mockImplementation(() => {})
   const recovery = await service.recoverJudgmentJobLeasesOnStartup({jobIds: [jobId]})
+  const runtimeFailureMessages = consoleError.mock.calls
+    .map((call) => {
+      return String(call[0] ?? '')
+    })
+    .filter((message) => {
+      return message.includes('[judgments] failed to recover SQLite job lease during startup recovery')
+    })
+  consoleError.mockRestore()
 
   expect(recovery.ignored).toContain(jobId)
+  expect(runtimeFailureMessages).toEqual([])
   expect(service.hasOwnedLease(jobId)).toBe(false)
   expect(existsSync(leasePath)).toBe(true)
 })
