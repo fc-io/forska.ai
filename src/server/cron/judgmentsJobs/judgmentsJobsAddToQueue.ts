@@ -23,7 +23,9 @@ type JobConfig = {
   useFulltextNoImages: boolean
 }
 
-const addToQueueLogger = createRateLimitedLogger({windowMs: 30_000})
+const addToQueueLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
+const addToQueueWarningLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
+const addToQueueComponent = 'judgmentsJobsAddToQueue'
 const sqliteScanOverscanMultiplier = 5
 const sqliteScanMaxWindowsPerTick = 5
 const sqliteScanExhaustedCooldownMs = 60_000
@@ -384,14 +386,22 @@ const filterAlreadyJudged = async (
 
   const skipped = promptEntries.length - filtered.length
   if (skipped > 0) {
-    console.log(`[addToQueue] Filtered out ${skipped} already-judged entries after queue refresh`)
+    addToQueueLogger.log(
+      'judgmentQueue.addToQueue.filterAlreadyJudged',
+      '[addToQueue] filtered already-judged entries',
+      {component: addToQueueComponent, event: 'filterAlreadyJudged', jobId, projectId, skipped},
+    )
   }
 
   const filteredForLocalJudgments = await sqliteService.filterOutLocallyJudgedPrompts(jobId, filtered)
 
   const locallySkipped = filtered.length - filteredForLocalJudgments.length
   if (locallySkipped > 0) {
-    console.log(`[addToQueue] Filtered out ${locallySkipped} locally-judged SQLite entries after queue refresh`)
+    addToQueueLogger.log(
+      'judgmentQueue.addToQueue.filterLocallyJudged',
+      '[addToQueue] filtered locally-judged SQLite entries',
+      {component: addToQueueComponent, event: 'filterLocallyJudged', jobId, locallySkipped, projectId},
+    )
   }
 
   return filteredForLocalJudgments
@@ -408,6 +418,7 @@ const getInsertedReadyCount = async ({
   filteredEntries,
   humanFirstEntries,
   jobId,
+  projectId,
   readyDeficit,
   serverJobId,
   sqliteService,
@@ -415,6 +426,7 @@ const getInsertedReadyCount = async ({
   filteredEntries: PromptQueueEntry[]
   humanFirstEntries: PromptQueueEntry[]
   jobId: string
+  projectId: string
   readyDeficit: number
   serverJobId: string
   sqliteService: ReturnType<typeof getJudgmentJobSqliteService>
@@ -426,9 +438,14 @@ const getInsertedReadyCount = async ({
   if (humanFirstEntries.length > 0) {
     const insertedHumanFirstCount = Math.min(insertedCount, readyDeficit, insertableHumanFirstEntries.length)
 
-    console.log(
-      `[addToQueue] Prioritized ${humanFirstEntries.length} answered human entries and inserted ${insertedHumanFirstCount}`,
-    )
+    addToQueueLogger.log('judgmentQueue.addToQueue.prioritizedHumanEntries', '[addToQueue] prioritized human entries', {
+      component: addToQueueComponent,
+      event: 'prioritizedHumanEntries',
+      humanFirstEntries: humanFirstEntries.length,
+      insertedHumanFirstCount,
+      jobId,
+      projectId,
+    })
   }
 
   return insertedCount
@@ -487,9 +504,9 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
   } catch (error) {
     if (error instanceof JudgmentJobLeaseError) {
       addToQueueLogger.log(
-        `addToQueue:lease:${job.id}`,
+        `judgmentQueue.addToQueue.leaseSkipped.${job.id}`,
         '[addToQueue] skipped SQLite job because this process does not own the job lease',
-        {jobId: job.id},
+        {component: addToQueueComponent, event: 'leaseSkipped', jobId: job.id, projectId: job.projectId},
       )
       return
     }
@@ -507,7 +524,11 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
   const jobConfig = await getJobConfig(job.id)
 
   if (!jobConfig) {
-    console.error('[addToQueue] Job config not found for jobId:', job.id)
+    addToQueueWarningLogger.error(
+      `judgmentQueue.addToQueue.missingJobConfig.${job.id}`,
+      '[addToQueue] Job config not found for jobId',
+      {component: addToQueueComponent, event: 'missingJobConfig', jobId: job.id, projectId: job.projectId},
+    )
     return
   }
 
@@ -563,6 +584,7 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
       filteredEntries: prioritizedEntries,
       humanFirstEntries,
       jobId: job.id,
+      projectId: job.projectId,
       readyDeficit,
       serverJobId,
       sqliteService,
@@ -598,7 +620,9 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
   const getNewMs = Date.now() - getNewStartMs
   const finalReadyCount = await sqliteService.getReadyCount(job.id)
 
-  addToQueueLogger.log(`addToQueue:job:${job.id}`, '[addToQueue] sqlite top-up check', {
+  addToQueueLogger.log(`judgmentQueue.addToQueue.topUp.${job.id}`, '[addToQueue] sqlite top-up check', {
+    component: addToQueueComponent,
+    event: 'topUp',
     fetchedNeeded: promptsToFetchCount,
     jobId: job.id,
     ms: getNewMs,
@@ -645,8 +669,10 @@ export const judgmentsJobsAddToQueue = async (serverJobId: string): Promise<void
   )
   const addToQueueBuckets = getAddToQueueBuckets(runningJobs)
 
-  addToQueueLogger.log('addToQueue:tick', '[addToQueue] tick', {
+  addToQueueLogger.log('judgmentQueue.addToQueue.tick', '[addToQueue] tick', {
     serverJobId,
+    component: addToQueueComponent,
+    event: 'tick',
     buckets: addToQueueBuckets.map((bucket) => {
       return {
         addToQueueMaxBatchSize: bucket.addToQueueMaxBatchSize,

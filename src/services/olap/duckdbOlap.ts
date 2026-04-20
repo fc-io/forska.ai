@@ -90,7 +90,16 @@ type UnassessedCandidateRow = {
   priorityBucket: number
 }
 
-const rawFallbackQueueLogger = createRateLimitedLogger({windowMs: 30_000})
+const duckdbOlapComponent = 'duckdbOlap'
+const duckdbOlapErrorLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
+const rawFallbackQueueLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
+const rawFallbackQueueWarningLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
+
+const getDuckdbOlapErrorAttrs = (error: unknown) => {
+  return error instanceof Error
+    ? {errorMessage: error.message, errorName: error.name, errorStack: error.stack}
+    : {errorMessage: String(error)}
+}
 
 const getDuckdbJudgmentProjectWhereClause = (_params: {judgmentAlias: string; projectId: string}) => {
   return 'TRUE'
@@ -2100,12 +2109,18 @@ const getRawUnassessedCandidateRows = async (params: {
   const normalizedLimit = Math.max(1, Math.trunc(params.limit))
   const startedAtMs = Date.now()
 
-  rawFallbackQueueLogger.log(`getPrompts:raw-fallback:${params.jobId}:start`, '[getPrompts] raw fallback scan start', {
-    candidateLimit: normalizedLimit,
-    cursor: getUnassessedPairsCursorSummary(params.cursor),
-    jobId: params.jobId,
-    projectId: params.scope.projectId,
-  })
+  rawFallbackQueueLogger.log(
+    `judgmentQueue.rawFallback.start.${params.jobId}`,
+    '[getPrompts] raw fallback scan start',
+    {
+      candidateLimit: normalizedLimit,
+      component: duckdbOlapComponent,
+      cursor: getUnassessedPairsCursorSummary(params.cursor),
+      event: 'rawFallbackScanStart',
+      jobId: params.jobId,
+      projectId: params.scope.projectId,
+    },
+  )
 
   const collectWindow = async ({
     collectedRows,
@@ -2169,14 +2184,16 @@ const getRawUnassessedCandidateRows = async (params: {
       : null
 
     if (articleWindowMs > 1_000 || judgmentQueryMs > 1_000) {
-      rawFallbackQueueLogger.warn(
-        `getPrompts:raw-fallback:${params.jobId}:slow-window`,
+      rawFallbackQueueWarningLogger.warn(
+        `judgmentQueue.rawFallback.slowWindow.${params.jobId}`,
         '[getPrompts] raw fallback slow window',
         {
           articleWindowMs,
           articlesScannedInWindow: articleWindow.rows.length,
           collectedCandidates: nextCollectedRows.length,
+          component: duckdbOlapComponent,
           cursor: getUnassessedPairsCursorSummary(cursor),
+          event: 'rawFallbackSlowWindow',
           hasMore: articleWindow.hasMore,
           jobId: params.jobId,
           judgedPromptRowsInWindow: llmJudgedPromptRows.length,
@@ -2189,12 +2206,14 @@ const getRawUnassessedCandidateRows = async (params: {
 
     if (nextCollectedRows.length >= normalizedLimit || !articleWindow.hasMore || nextCursor === null) {
       rawFallbackQueueLogger.log(
-        `getPrompts:raw-fallback:${params.jobId}:complete`,
+        `judgmentQueue.rawFallback.complete.${params.jobId}`,
         '[getPrompts] raw fallback scan complete',
         {
           candidateLimit: normalizedLimit,
           candidateRows: nextCollectedRows.length,
+          component: duckdbOlapComponent,
           durationMs: Date.now() - startedAtMs,
+          event: 'rawFallbackScanComplete',
           finalCursor: getUnassessedPairsCursorSummary(nextCursor),
           hasMore: articleWindow.hasMore,
           jobId: params.jobId,
@@ -2676,7 +2695,17 @@ export const getDatabaseBasedFiltersFromDuckdb = async (
         return {promptId: prompt.promptId, promptName: prompt.promptName, answeredOriginalValues: values}
       })
     } catch (error) {
-      console.error('[duckdbOlap] Failed to build database filters from review article filter members:', error)
+      duckdbOlapErrorLogger.error(
+        `duckdbOlap.databaseFilters.servingFailed.${params.projectId}`,
+        '[duckdbOlap] Failed to build database filters from review article filter members',
+        {
+          ...getDuckdbOlapErrorAttrs(error),
+          component: duckdbOlapComponent,
+          event: 'databaseFiltersServingFailed',
+          projectId: params.projectId,
+          promptCount: databasePrompts.length,
+        },
+      )
       return databasePrompts
     }
   }
@@ -2722,7 +2751,17 @@ export const getDatabaseBasedFiltersFromDuckdb = async (
       return {promptId: prompt.promptId, promptName: prompt.promptName, answeredOriginalValues: values}
     })
   } catch (error) {
-    console.error('[duckdbOlap] Failed to build database filters:', error)
+    duckdbOlapErrorLogger.error(
+      `duckdbOlap.databaseFilters.failed.${params.projectId}`,
+      '[duckdbOlap] Failed to build database filters',
+      {
+        ...getDuckdbOlapErrorAttrs(error),
+        component: duckdbOlapComponent,
+        event: 'databaseFiltersFailed',
+        projectId: params.projectId,
+        promptCount: databasePrompts.length,
+      },
+    )
     return databasePrompts
   }
 }
@@ -2848,7 +2887,17 @@ export const getNumericFiltersFromDuckdb = async (params: DatabaseFilterParams):
         )
       })
     } catch (error) {
-      console.error('[duckdbOlap] Failed to build numeric filters from review article filter members:', error)
+      duckdbOlapErrorLogger.error(
+        `duckdbOlap.numericFilters.servingFailed.${params.projectId}`,
+        '[duckdbOlap] Failed to build numeric filters from review article filter members',
+        {
+          ...getDuckdbOlapErrorAttrs(error),
+          component: duckdbOlapComponent,
+          event: 'numericFiltersServingFailed',
+          projectId: params.projectId,
+          promptCount: numericPrompts.length,
+        },
+      )
       return numericPrompts
     }
   }
@@ -2899,7 +2948,17 @@ export const getNumericFiltersFromDuckdb = async (params: DatabaseFilterParams):
       )
     })
   } catch (error) {
-    console.error('[duckdbOlap] Failed to build numeric filters:', error)
+    duckdbOlapErrorLogger.error(
+      `duckdbOlap.numericFilters.failed.${params.projectId}`,
+      '[duckdbOlap] Failed to build numeric filters',
+      {
+        ...getDuckdbOlapErrorAttrs(error),
+        component: duckdbOlapComponent,
+        event: 'numericFiltersFailed',
+        projectId: params.projectId,
+        promptCount: numericPrompts.length,
+      },
+    )
     return numericPrompts
   }
 }
@@ -3046,12 +3105,14 @@ export const getUnassessedPairsFromDuckdb = async (params: UnassessedPairsParams
 
   if (!useServingRows) {
     rawFallbackQueueLogger.log(
-      `getPrompts:raw-fallback:${params.jobId}:prompt-result`,
+      `judgmentQueue.rawFallback.promptResult.${params.jobId}`,
       '[getPrompts] raw fallback prompt result',
       {
         candidateArticles: candidateArticles.length,
         candidateLimit,
+        component: duckdbOlapComponent,
         cursor: getUnassessedPairsCursorSummary(params.cursor),
+        event: 'rawFallbackPromptResult',
         hasMore: candidateResult.hasMore,
         jobId: params.jobId,
         nextCursor: getUnassessedPairsCursorSummary(

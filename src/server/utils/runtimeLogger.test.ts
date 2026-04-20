@@ -465,7 +465,7 @@ test('file-only rate-limited logs write runtime JSONL without terminal output wh
   expect(record.event).toBe('runtime.logger.file-only-installed')
   expect(record.message).toBe('file warning')
   expect(record.severity).toBe('WARN')
-  expect(record.attrs).toEqual({args: ['{"batch":1}']})
+  expect(record.attrs).toEqual({batch: 1})
   console.warn = originalWarn
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()

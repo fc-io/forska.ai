@@ -24,8 +24,16 @@ type RateLimitedLogger = {
   resetAll: () => void
 }
 
+const isStructuredAttrs = (value: unknown): value is Record<string, unknown> => {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) && !(value instanceof Error)
+}
+
 const normalizeLogArgs = (args: unknown[]): string[] => {
   return safeSerializeConsoleArgs(args)
+}
+
+const getRuntimeLogAttrs = (args: unknown[]): Record<string, unknown> => {
+  return args.length === 1 && isStructuredAttrs(args[0]) ? args[0] : {args: normalizeLogArgs(args)}
 }
 
 const getRuntimeLogSeverity = (level: LogLevel): RateLimitedLogSeverity => {
@@ -62,7 +70,7 @@ const writeFileLog = ({
 }) => {
   return sink === 'file-only' || sink === 'both'
     ? writeRuntimeLogEvent({
-        attrs: {args: normalizeLogArgs(args)},
+        attrs: getRuntimeLogAttrs(args),
         event: key,
         message,
         severity: getRuntimeLogSeverity(level),
