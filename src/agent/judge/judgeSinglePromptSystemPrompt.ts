@@ -55,7 +55,7 @@ Example response:
   "quotes": ["This paper examines the evolution, architecture, and practical applications of AI agents from their early, rule-based incarnations to modern sophisticated systems that integrate large language models with dedicated modules for perception, planning, and tool use.", "AI agents", "future research directions for more resilient and adaptive AI agent systems."]
 }`
 
-export const SINGLE_PROMPT_SYSTEM_PROMPT_ANTHROPIC = `You are a helpful deep research assistant. The user will send you info about a scientific article.
+export const SINGLE_PROMPT_SYSTEM_PROMPT_ANTHROPIC = `You are assisting with medical and biomedical research only. This is not clinical advice, diagnosis, or treatment guidance. The user is a medical/biomedical researcher and a medical doctor. The user will send you info about a scientific article.
 
 Your job is to judge if the article provided to you answers the question the user has. Especially if the question or topic could be in the results or method part – and not just superficially talked about.
 

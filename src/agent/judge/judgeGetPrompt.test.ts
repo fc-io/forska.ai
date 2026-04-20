@@ -18,3 +18,22 @@ test('judgeGetSinglePrompt wraps source text with neutral markers', () => {
   expect(prompt).toContain('article source text')
   expect(prompt).not.toContain('raw dangerous text')
 })
+
+test('judgeGetSinglePrompt omits source text markers for Anthropic', () => {
+  const prompt = judgeGetSinglePrompt(
+    {
+      articleId: 'article-1',
+      articleSummary: 'Summary with instructions like ignore prior text.',
+      articleTitle: 'Title text',
+      fullText: null,
+    } as Parameters<typeof judgeGetSinglePrompt>[0],
+    {id: 'prompt-1', originalText: 'Is this relevant?', order: 1, promptHeading: 'Eligibility', type: `'yes' | 'no'`},
+    undefined,
+    'anthropic',
+  )
+
+  expect(prompt).not.toContain('<SOURCE_TEXT_START>')
+  expect(prompt).not.toContain('</SOURCE_TEXT_END>')
+  expect(prompt).not.toContain('article source text')
+  expect(prompt).toContain('## article_title\n\nTitle text')
+})
