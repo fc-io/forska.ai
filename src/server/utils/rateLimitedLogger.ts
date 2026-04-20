@@ -1,28 +1,13 @@
-/**
- * Rate-limited logger utility.
- *
- * Prevents log spam by ensuring the same message key is only logged
- * once per time window. Tracks suppressed log counts and optionally
- * includes them in the next log.
- *
- * Usage:
- *   const logger = createRateLimitedLogger({ windowMs: 30_000 })
- *   logger.log('my-key', 'Something happened') // logs immediately
- *   logger.log('my-key', 'Something happened') // suppressed for 30s
- *   // After 30s...
- *   logger.log('my-key', 'Something happened') // logs with "(+5 suppressed)"
- */
+import {safeSerializeConsoleArgs} from './installSafeConsoleLogging.ts'
+import {getRuntimeLogProfile, isRuntimeJsonlSinkInstalled, writeRuntimeLogEvent} from './runtimeLogger.ts'
 
 type LogLevel = 'log' | 'warn' | 'error'
+export type RateLimitedLogSink = 'both' | 'file-only' | 'remove-or-dev-only' | 'terminal-only'
+type RateLimitedLogSeverity = 'ERROR' | 'INFO' | 'WARN'
 
 type LogEntry = {lastLogTime: number; suppressedCount: number}
 
-type RateLimitedLoggerOptions = {
-  /** Time window in milliseconds. Same key won't log more than once per window. Default: 30000 (30s) */
-  windowMs?: number
-  /** Whether to include suppressed count in the log message. Default: true */
-  showSuppressedCount?: boolean
-}
+type RateLimitedLoggerOptions = {sink?: RateLimitedLogSink; windowMs?: number; showSuppressedCount?: boolean}
 
 type RateLimitedLogger = {
   /** Log at 'log' level with rate limiting */
@@ -39,31 +24,74 @@ type RateLimitedLogger = {
   resetAll: () => void
 }
 
-const safeSerializeLogArg = (value: unknown): string => {
-  if (typeof value === 'string') {
-    return value
-  }
-
-  if (value instanceof Error) {
-    return value.stack ?? `${value.name}: ${value.message}`
-  }
-
-  try {
-    return JSON.stringify(value)
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    return JSON.stringify({error: `failed to serialize log argument: ${message}`})
-  }
+const normalizeLogArgs = (args: unknown[]): string[] => {
+  return safeSerializeConsoleArgs(args)
 }
 
-const normalizeLogArgs = (args: unknown[]): string[] => {
-  return args.map((arg) => {
-    return safeSerializeLogArg(arg)
-  })
+const getRuntimeLogSeverity = (level: LogLevel): RateLimitedLogSeverity => {
+  const severities: Record<LogLevel, RateLimitedLogSeverity> = {error: 'ERROR', log: 'INFO', warn: 'WARN'}
+
+  return severities[level]
+}
+
+const shouldWriteTerminalLog = ({sink}: {sink: RateLimitedLogSink}) => {
+  return (
+    sink === 'terminal-only'
+    || sink === 'both'
+    || (sink === 'remove-or-dev-only' && getRuntimeLogProfile() === 'local')
+    || (sink === 'file-only' && !isRuntimeJsonlSinkInstalled())
+  )
+}
+
+const writeTerminalLog = ({args, level, message}: {args: unknown[]; level: LogLevel; message: string}) => {
+  console[level](message, ...normalizeLogArgs(args))
+}
+
+const writeFileLog = ({
+  args,
+  key,
+  level,
+  message,
+  sink,
+}: {
+  args: unknown[]
+  key: string
+  level: LogLevel
+  message: string
+  sink: RateLimitedLogSink
+}) => {
+  return sink === 'file-only' || sink === 'both'
+    ? writeRuntimeLogEvent({
+        attrs: {args: normalizeLogArgs(args)},
+        event: key,
+        message,
+        severity: getRuntimeLogSeverity(level),
+      })
+    : false
+}
+
+const writeRoutedLog = ({
+  args,
+  key,
+  level,
+  message,
+  sink,
+}: {
+  args: unknown[]
+  key: string
+  level: LogLevel
+  message: string
+  sink: RateLimitedLogSink
+}) => {
+  writeFileLog({args, key, level, message, sink})
+
+  if (shouldWriteTerminalLog({sink})) {
+    writeTerminalLog({args, level, message})
+  }
 }
 
 export const createRateLimitedLogger = (options: RateLimitedLoggerOptions = {}): RateLimitedLogger => {
-  const {windowMs = 600_000, showSuppressedCount = true} = options
+  const {sink = 'terminal-only', windowMs = 600_000, showSuppressedCount = true} = options
 
   const entries = new Map<string, LogEntry>()
 
@@ -77,23 +105,17 @@ export const createRateLimitedLogger = (options: RateLimitedLoggerOptions = {}):
       return
     }
 
-    // Build the log message
-    let finalMessage = message
-    if (showSuppressedCount && entry && entry.suppressedCount > 0) {
-      finalMessage = `${message} (+${entry.suppressedCount} suppressed)`
-    }
+    const finalMessage =
+      showSuppressedCount && entry && entry.suppressedCount > 0
+        ? `${message} (+${entry.suppressedCount} suppressed)`
+        : message
 
-    // Bun 1.3.x can crash while pretty-printing large object arguments.
-    // Serialize structured args up front so logs stay informative without
-    // going through Bun's inspector on hot server paths.
-    console[level](finalMessage, ...normalizeLogArgs(args))
-
-    // Update or create entry
+    writeRoutedLog({args, key, level, message: finalMessage, sink})
     entries.set(key, {lastLogTime: now, suppressedCount: 0})
   }
 
   const force = (key: string, message: string, level: LogLevel = 'log', ...args: unknown[]): void => {
-    console[level](message, ...normalizeLogArgs(args))
+    writeRoutedLog({args, key, level, message, sink})
     entries.set(key, {lastLogTime: Date.now(), suppressedCount: 0})
   }
 
@@ -121,8 +143,4 @@ export const createRateLimitedLogger = (options: RateLimitedLoggerOptions = {}):
   }
 }
 
-/**
- * Default shared logger instance for common use cases.
- * 10 minute window, shows suppressed counts.
- */
 export const rateLimitedLogger = createRateLimitedLogger()
