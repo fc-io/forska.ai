@@ -16,7 +16,6 @@ import {
   type ComparisonProjectDifferenceFilter,
   getAvailableComparisonProjectDifferenceFilters,
   getComparisonProjectDifferenceFilterLabel,
-  getComparisonProjectHasDifferenceFilterMatch,
 } from '../../../../utils/comparisonProjectDifferenceFilter.ts'
 import {
   type ComparisonProjectRowFilter,
@@ -51,47 +50,8 @@ const getRangeLabel = (page: number, limit: number, totalCount: number) => {
   return `Showing ${start}-${end} of ${totalCount}`
 }
 
-const getAnsweredPromptCount = (
-  cells: Record<string, string | null>,
-  columns: Array<{id: string; promptId: string}>,
-) => {
-  return new Set(
-    columns
-      .filter((column) => {
-        return (cells[column.id]?.trim() ?? '') !== ''
-      })
-      .map((column) => {
-        return column.promptId
-      }),
-  ).size
-}
-
-const getAnsweredColumnCount = (cells: Record<string, string | null>, columns: Array<{id: string}>) => {
-  return columns.filter((column) => {
-    return (cells[column.id]?.trim() ?? '') !== ''
-  }).length
-}
-
-const getConfiguredPromptCount = (columns: Array<{promptId: string}>) => {
-  return new Set(
-    columns.map((column) => {
-      return column.promptId
-    }),
-  ).size
-}
-
-const getConfiguredColumnCount = (columns: Array<{id: string}>) => {
-  return columns.length
-}
-
 const getHumanJudgmentModeLabel = (humanJudgmentMode: 'prompt' | 'summary') => {
   return humanJudgmentMode === 'summary' ? 'Summary overall decisions' : 'Prompt-by-prompt decisions'
-}
-
-const getHasAllShownColumnsAnswered = (cells: Record<string, string | null>, columns: Array<{id: string}>) => {
-  return columns.every((column) => {
-    return (cells[column.id]?.trim() ?? '') !== ''
-  })
 }
 
 const getOrderedJudgmentColumns = (
@@ -263,29 +223,8 @@ const CompareProjectJudgmentsPage = () => {
     }),
   )
 
-  const filteredRows = createMemo(() => {
-    const rows = judgmentsPageQuery.data?.data ?? []
-    const columns = orderedColumns()
-    return rows.filter((row) => {
-      const answeredComparableCount = isSummaryMode()
-        ? getAnsweredColumnCount(row.cells, columns)
-        : getAnsweredPromptCount(row.cells, columns)
-      const configuredComparableCount = isSummaryMode()
-        ? getConfiguredColumnCount(columns)
-        : getConfiguredPromptCount(columns)
-      const passesRowFilter =
-        rowFilter() === 'all'
-        || (rowFilter() === 'fully-answered'
-          ? getHasAllShownColumnsAnswered(row.cells, columns)
-          : answeredComparableCount >= 2)
-      const passesDifferenceFilter = getComparisonProjectHasDifferenceFilterMatch(
-        row.cells,
-        columns,
-        differenceFilter(),
-      )
-
-      return configuredComparableCount === 0 ? false : passesRowFilter && passesDifferenceFilter
-    })
+  const serverFilteredRows = createMemo(() => {
+    return judgmentsPageQuery.data?.data ?? []
   })
   const hasRowFilters = createMemo(() => {
     return rowFilter() !== 'all' || differenceFilter() !== 'all'
@@ -374,17 +313,11 @@ const CompareProjectJudgmentsPage = () => {
                     <h2 class="text-lg font-semibold">Article Judgments</h2>
                     <p class="text-sm text-gray-600">
                       {judgmentsPageQuery.data
-                        ? hasRowFilters()
-                          ? `${filteredRows().length} visible on this page · ${getRangeLabel(
-                              judgmentsPageQuery.data.page,
-                              judgmentsPageQuery.data.limit,
-                              judgmentsPageQuery.data.totalCount,
-                            )}`
-                          : getRangeLabel(
-                              judgmentsPageQuery.data.page,
-                              judgmentsPageQuery.data.limit,
-                              judgmentsPageQuery.data.totalCount,
-                            )
+                        ? getRangeLabel(
+                            judgmentsPageQuery.data.page,
+                            judgmentsPageQuery.data.limit,
+                            judgmentsPageQuery.data.totalCount,
+                          )
                         : 'Loading results...'}
                     </p>
                   </div>
@@ -506,10 +439,10 @@ const CompareProjectJudgmentsPage = () => {
                     !judgmentsPageQuery.isPending
                     && !judgmentsPageQuery.isError
                     && orderedColumns().length > 0
-                    && filteredRows().length > 0
+                    && serverFilteredRows().length > 0
                   }
                 >
-                  <ComparisonProjectJudgmentsTable columns={orderedColumns()} rows={filteredRows()} />
+                  <ComparisonProjectJudgmentsTable columns={orderedColumns()} rows={serverFilteredRows()} />
                 </Show>
 
                 <Show
@@ -517,7 +450,7 @@ const CompareProjectJudgmentsPage = () => {
                     !judgmentsPageQuery.isPending
                     && !judgmentsPageQuery.isError
                     && orderedColumns().length > 0
-                    && filteredRows().length === 0
+                    && serverFilteredRows().length === 0
                   }
                 >
                   <div class="rounded-lg bg-white p-8 text-center text-gray-500 shadow">
