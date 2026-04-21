@@ -471,8 +471,18 @@ const queryJson = async (
 
   if (statement.includes('FROM app.article a')) {
     return [
-      {articleCreatedAt: new Date('2026-03-30T00:00:00.000Z'), articleTitle: 'Article 1', id: 'article-1'},
-      {articleCreatedAt: new Date('2026-03-29T00:00:00.000Z'), articleTitle: 'Article 2', id: 'article-2'},
+      {
+        articleCreatedAt: new Date('2026-03-30T00:00:00.000Z'),
+        articleSummary: 'Article 1 summary',
+        articleTitle: 'Article 1',
+        id: 'article-1',
+      },
+      {
+        articleCreatedAt: new Date('2026-03-29T00:00:00.000Z'),
+        articleSummary: 'Article 2 summary',
+        articleTitle: 'Article 2',
+        id: 'article-2',
+      },
     ]
   }
 
@@ -1468,7 +1478,10 @@ test('prompt comparison judgments keep legacy prompt columns and human prompt an
     }),
   )
   const judgmentsBody = (await judgmentsResponse.json()) as {
-    data: {data: Array<{cells: Record<string, string | null>; id: string}>; totalCount: number}
+    data: {
+      data: Array<{articleSummary: string | null; cells: Record<string, string | null>; id: string}>
+      totalCount: number
+    }
   }
   const [row] = judgmentsBody.data.data
   const state = getMockDatabaseState()
@@ -1541,7 +1554,10 @@ test('summary comparison judgments use synthetic summary columns and derived cel
     }),
   )
   const judgmentsBody = (await judgmentsResponse.json()) as {
-    data: {data: Array<{cells: Record<string, string | null>; id: string}>; totalCount: number}
+    data: {
+      data: Array<{articleSummary: string | null; cells: Record<string, string | null>; id: string}>
+      totalCount: number
+    }
   }
   const [row] = judgmentsBody.data.data
   const state = getMockDatabaseState()
@@ -1558,6 +1574,17 @@ test('summary comparison judgments use synthetic summary columns and derived cel
   expect(row?.cells['llm:model-1:1100:summary']).toBe('no')
   expect(row?.cells['llm:model-2:1100:summary']).toBe('yes')
   expect(row?.cells['human:summary']).toBe('maybe')
+  expect(row?.articleSummary).toBe('Article 1 summary')
+  expect(
+    state.queryStatements.some((statement) => {
+      return (
+        statement.includes('FROM app.article a')
+        && statement.includes('article_title AS articleTitle')
+        && statement.includes('article_summary AS articleSummary')
+        && statement.includes('article_created_at AS articleCreatedAt')
+      )
+    }),
+  ).toBe(true)
   expect(
     state.queryStatements.some((statement) => {
       return (

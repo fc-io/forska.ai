@@ -159,6 +159,7 @@ export type ComparisonProjectJudgmentsMetadata = {
 export type ComparisonProjectJudgmentsRow = {
   id: string
   articleTitle: string | null
+  articleSummary: string | null
   articleCreatedAt: Date | string | null
   cells: Record<string, string | null>
 }
