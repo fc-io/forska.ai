@@ -6,6 +6,7 @@ const providerModelRepositoryModulePath = new URL('../providers/providerModelRep
 
 type MockDatabaseState = {
   comparisonProject: {
+    archived?: boolean
     compareWithHumans: boolean
     humanJudgmentMode: 'prompt' | 'summary' | null
     id: string
@@ -202,6 +203,7 @@ const getMockDatabaseState = () => {
 
 const getComparisonProjectRow = (comparisonProject: MockDatabaseState['comparisonProject']) => {
   return {
+    archived: comparisonProject.archived ?? false,
     compareWithHumans: comparisonProject.compareWithHumans,
     createdAt: new Date('2026-03-29T00:00:00.000Z'),
     description: 'Rollback test project',
@@ -296,6 +298,19 @@ const postComparisonProjectJudgments = (
 ) => {
   return app.handle(
     new Request('http://localhost/api/comparison-projects/comparison-project-1/judgments', {
+      body: JSON.stringify(body),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+}
+
+const postComparisonProjectExport = (
+  app: {handle: (request: Request) => Promise<Response>},
+  body: Record<string, unknown>,
+) => {
+  return app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1/export', {
       body: JSON.stringify(body),
       headers: {'content-type': 'application/json'},
       method: 'POST',
@@ -1505,6 +1520,98 @@ test('prompt comparison judgments keep legacy prompt columns and human prompt an
       return statement.includes('FROM app.judgment_human_summary')
     }),
   ).toBe(false)
+})
+
+test('comparison project export streams ordered csv rows with article context and flattened answers', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    comparisonProject: {
+      compareWithHumans: true,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: null,
+    },
+    extraLlmRows: [
+      {
+        ...getMockLlmJudgmentRow({answer: 'yes', articleId: 'article-1', modelId: 'model-1', promptId: 'prompt-1'}),
+        answeredOriginal: null,
+        answeredOriginalAsArray: ['yes', 'maybe'],
+        createdAt: new Date('2026-04-02T00:00:00.000Z'),
+      },
+    ],
+    failPromptInsert: false,
+    promptLinks: [
+      {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
+      {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectExport(app, {differenceFilter: 'all', rowFilter: 'fully-answered'})
+  const csv = await response.text()
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(response.headers.get('Content-Type') ?? '').toContain('text/csv')
+  expect(response.headers.get('Content-Disposition') ?? '').toContain('Rollback_test_project_comparison_export_')
+  expect(csv.trim().split('\n')).toEqual([
+    [
+      'Title',
+      'Abstract/Summary',
+      'Date added',
+      'Prompt 1 - Model 1 - Article Title and Abstract',
+      'Prompt 1 - Model 2 - Article Title and Abstract',
+      'Prompt 1 - Human',
+      'Prompt 2 - Model 1 - Article Title and Abstract',
+      'Prompt 2 - Model 2 - Article Title and Abstract',
+      'Prompt 2 - Human',
+    ].join(','),
+    ['Article 1', 'Article 1 summary', '2026-03-30T00:00:00.000Z', 'yes; maybe', 'yes', 'yes', 'yes', 'no', 'no'].join(
+      ',',
+    ),
+  ])
+  expect(
+    state.queryStatements.some((statement) => {
+      return (
+        statement.includes('FROM app.article a')
+        && statement.includes('ORDER BY a.article_created_at DESC, a.article_title ASC, a.id ASC')
+        && statement.includes('LIMIT 500')
+        && statement.includes('OFFSET 0')
+      )
+    }),
+  ).toBe(true)
+})
+
+test('comparison project export allows archived projects without writes', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    comparisonProject: {
+      archived: true,
+      compareWithHumans: false,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: null,
+    },
+    failPromptInsert: false,
+    promptLinks: [
+      {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
+      {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectExport(app, {rowFilter: 'multiple-answers'})
+  const csv = await response.text()
+  const state = getMockDatabaseState()
+
+  expect(response.status).toBe(200)
+  expect(csv).toContain('Article 1,Article 1 summary,2026-03-30T00:00:00.000Z')
+  expect(state.transactionCalls).toBe(0)
+  expect(state.rootRunStatements).toEqual([])
 })
 
 test('summary comparison judgments use synthetic summary columns and derived cells', async () => {
