@@ -1582,6 +1582,9 @@ test('summary comparison judgments use synthetic summary columns and derived cel
         && statement.includes('article_title AS articleTitle')
         && statement.includes('article_summary AS articleSummary')
         && statement.includes('article_created_at AS articleCreatedAt')
+        && statement.includes('ORDER BY a.article_created_at DESC, a.article_title ASC, a.id ASC')
+        && statement.includes('LIMIT 500')
+        && statement.includes('OFFSET 0')
       )
     }),
   ).toBe(true)

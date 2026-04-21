@@ -2,6 +2,15 @@ export const comparisonProjectRowFilters = ['multiple-answers', 'fully-answered'
 
 export type ComparisonProjectRowFilter = (typeof comparisonProjectRowFilters)[number]
 
+export type ComparisonProjectRowFilterEvaluation = {
+  answeredColumnCount: number
+  answeredPromptCount: number
+  hasAllHumanColumns: boolean
+  hasAllLlmColumns: boolean
+  isSummaryMode: boolean
+  rowFilter: ComparisonProjectRowFilter
+}
+
 export const defaultComparisonProjectRowFilter = 'multiple-answers' satisfies ComparisonProjectRowFilter
 
 export const getNormalizedComparisonProjectRowFilter = (value: unknown): ComparisonProjectRowFilter => {
@@ -18,4 +27,14 @@ export const getComparisonProjectRowFilterLabel = (rowFilter: ComparisonProjectR
     : rowFilter === 'fully-answered'
       ? 'Rows where all shown columns are answered'
       : 'All rows'
+}
+
+export const getComparisonProjectPassesRowFilter = (params: ComparisonProjectRowFilterEvaluation) => {
+  return params.rowFilter === 'all'
+    ? true
+    : params.rowFilter === 'fully-answered'
+      ? params.hasAllLlmColumns && params.hasAllHumanColumns
+      : params.isSummaryMode
+        ? params.answeredColumnCount >= 2
+        : params.answeredPromptCount >= 2
 }
