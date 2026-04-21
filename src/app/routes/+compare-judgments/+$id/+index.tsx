@@ -161,6 +161,14 @@ const CompareProjectJudgmentsPage = () => {
       return {label: getComparisonProjectDifferenceFilterLabel(value), value}
     })
   })
+  const compareSearchParams = createMemo(() => {
+    return getCompareProjectJudgmentsSearchParams({
+      currentPage: currentPage(),
+      pageLimit: pageLimit(),
+      rowFilter: rowFilter(),
+      differenceFilter: differenceFilter(),
+    })
+  })
 
   createEffect(() => {
     const availableFilters = differenceFilterOptions().map((option) => {
@@ -181,12 +189,7 @@ const CompareProjectJudgmentsPage = () => {
       void navigate({
         to: '/compare-judgments/$id/' as '/',
         params: {id: comparisonProjectId()} as never,
-        search: getCompareProjectJudgmentsSearchParams({
-          currentPage: currentPage(),
-          pageLimit: pageLimit(),
-          rowFilter: rowFilter(),
-          differenceFilter: differenceFilter(),
-        }) as never,
+        search: compareSearchParams() as never,
         replace: true,
       })
     }),
@@ -211,11 +214,23 @@ const CompareProjectJudgmentsPage = () => {
             <p class="text-sm text-gray-500">{comparisonProjectQuery.data?.name ?? 'Loading comparison project...'}</p>
           </div>
         </div>
-        <Show when={comparisonProjectQuery.data?.archived}>
-          <span class="inline-flex items-center rounded-full bg-gray-200 px-3 py-1 text-xs font-medium text-gray-700">
-            Archived
-          </span>
-        </Show>
+        <div class="flex items-center gap-2">
+          <Button
+            as={Link}
+            to="/compare-judgments/$id/export"
+            params={{id: comparisonProjectId()} as never}
+            search={compareSearchParams() as never}
+            variant="outline"
+            size="sm"
+          >
+            Export data
+          </Button>
+          <Show when={comparisonProjectQuery.data?.archived}>
+            <span class="inline-flex items-center rounded-full bg-gray-200 px-3 py-1 text-xs font-medium text-gray-700">
+              Archived
+            </span>
+          </Show>
+        </div>
       </div>
 
       <Show when={comparisonProjectQuery.isError}>

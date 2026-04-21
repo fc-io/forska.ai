@@ -5,7 +5,7 @@ import {createEffect, createSignal, For, Show} from 'solid-js'
 
 import {Button} from '../../../../components/ui/button'
 import {fetchProjectWithPrompts} from '../../../../services/projectsService'
-import {env} from '../../../utils/client-env'
+import {downloadCsvFromPost} from '../../../utils/downloadCsv.ts'
 import {useArchivedProjectRedirect, useProjectAccessQuery} from '../projectAccessGuard'
 
 type PromptInfo = {id: string; promptHeading: string | null; originalText: string; type: string | null}
@@ -37,26 +37,6 @@ const parseArktypeOptions = (typeStr: string | null): string[] => {
       return m.slice(1, -1)
     }) ?? []
   )
-}
-
-const getFilenameFromResponse = (response: Response, fallbackFilename: string): string => {
-  const contentDisposition = response.headers.get('Content-Disposition')
-  const filenameMatch = contentDisposition ? contentDisposition.match(/filename="([^"]+)"/) : null
-  const filenameFromHeader = filenameMatch && filenameMatch[1] ? filenameMatch[1] : null
-  return filenameFromHeader ?? fallbackFilename
-}
-
-const downloadResponseAsCsv = async (response: Response, fallbackFilename: string): Promise<void> => {
-  const filename = getFilenameFromResponse(response, fallbackFilename)
-  const blob = await response.blob()
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
-  URL.revokeObjectURL(url)
 }
 
 const ExportData = () => {
@@ -271,18 +251,12 @@ const ExportData = () => {
   const exportMutation = useMutation(() => {
     return {
       mutationFn: async (body: ExportRequestBody) => {
-        const response = await fetch(`${env.VITE_SERVER_API}/api/projects/${projectId}/export`, {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          credentials: 'include',
-          body: JSON.stringify(body),
+        await downloadCsvFromPost({
+          body,
+          errorMessage: 'Export failed',
+          fallbackFilename: `export-${projectId}.csv`,
+          path: `/api/projects/${projectId}/export`,
         })
-
-        if (!response.ok) {
-          throw new Error('Export failed')
-        }
-
-        await downloadResponseAsCsv(response, `export-${projectId}.csv`)
         return {success: true}
       },
       onError: (err) => {
@@ -295,18 +269,12 @@ const ExportData = () => {
   const exportPromptsMutation = useMutation(() => {
     return {
       mutationFn: async (body: ExportPromptsRequestBody) => {
-        const response = await fetch(`${env.VITE_SERVER_API}/api/projects/${projectId}/export-prompts`, {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          credentials: 'include',
-          body: JSON.stringify(body),
+        await downloadCsvFromPost({
+          body,
+          errorMessage: 'Prompt export failed',
+          fallbackFilename: `prompts-${projectId}.csv`,
+          path: `/api/projects/${projectId}/export-prompts`,
         })
-
-        if (!response.ok) {
-          throw new Error('Prompt export failed')
-        }
-
-        await downloadResponseAsCsv(response, `prompts-${projectId}.csv`)
         return {success: true}
       },
       onError: (err) => {

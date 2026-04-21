@@ -148,6 +148,15 @@ export const ComparisonProjectsGrid = (props: ComparisonProjectsGridProps) => {
                   <Button as={Link} to="/compare-judgments/$id" params={{id: comparisonProject.id} as never} size="sm">
                     Open Comparison
                   </Button>
+                  <Button
+                    as={Link}
+                    to="/compare-judgments/$id/export"
+                    params={{id: comparisonProject.id} as never}
+                    size="sm"
+                    variant="outline"
+                  >
+                    Export data
+                  </Button>
                   <Show when={!props.isArchived}>
                     <Button
                       as={Link}
