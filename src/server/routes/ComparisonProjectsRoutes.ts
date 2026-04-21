@@ -1779,9 +1779,13 @@ const getComparisonProjectJudgmentsPage = async (
   )
 
   const scopedArticles = await appDatabaseService
-    .queryJson<{id: string; articleTitle: string; articleCreatedAt: unknown}>(
+    .queryJson<{id: string; articleTitle: string | null; articleSummary: string | null; articleCreatedAt: unknown}>(
       `
-      SELECT id, article_title AS articleTitle, article_created_at AS articleCreatedAt
+      SELECT
+        id,
+        article_title AS articleTitle,
+        article_summary AS articleSummary,
+        article_created_at AS articleCreatedAt
       FROM ${articleTable} a
       ${getWhereClause(articleScopeConditions)}
       ORDER BY a.article_created_at DESC, a.article_title ASC, a.id ASC
@@ -1846,6 +1850,7 @@ const getComparisonProjectJudgmentsPage = async (
     return {
       id: article.id,
       articleTitle: article.articleTitle,
+      articleSummary: article.articleSummary,
       articleCreatedAt: article.articleCreatedAt,
       cells: {...(llmCellsByArticle[article.id] ?? {}), ...(humanCellsByArticle[article.id] ?? {})},
     }
