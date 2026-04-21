@@ -324,6 +324,43 @@ const getComparisonProjectJudgmentsTotalCount = async (response: Response) => {
   return body.data.totalCount
 }
 
+const getComparisonProjectJudgmentRowTitles = async (response: Response) => {
+  const body = (await response.json()) as {data: {data: Array<{articleTitle: string | null}>}}
+
+  return body.data.data.map((row) => {
+    return row.articleTitle ?? 'Untitled'
+  })
+}
+
+const getComparisonProjectCsvDataTitles = (csv: string) => {
+  return csv
+    .trim()
+    .split('\n')
+    .slice(1)
+    .map((line) => {
+      return line.split(',')[0] ?? ''
+    })
+    .filter((title) => {
+      return title !== ''
+    })
+}
+
+const getComparisonProjectExportAndJudgmentTitles = async (
+  app: {handle: (request: Request) => Promise<Response>},
+  body: Record<string, unknown>,
+) => {
+  const judgmentsResponse = await postComparisonProjectJudgments(app, {...body, limit: '50', page: '1'})
+  const exportResponse = await postComparisonProjectExport(app, body)
+  const judgmentTitles = await getComparisonProjectJudgmentRowTitles(judgmentsResponse)
+  const exportTitles = getComparisonProjectCsvDataTitles(await exportResponse.text())
+
+  expect(judgmentsResponse.status).toBe(200)
+  expect(exportResponse.status).toBe(200)
+  expect(exportTitles).toEqual(judgmentTitles)
+
+  return exportTitles
+}
+
 const queryJson = async (
   statement: string,
   state: {
@@ -1456,6 +1493,47 @@ test('summary comparison judgments apply rowFilter modes to shown summary column
   expect(allRowsWithDifferenceTotalCount).toBe(1)
 })
 
+test('comparison export filters match judgments endpoint row and difference filters', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    comparisonProject: {
+      compareWithHumans: false,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: null,
+    },
+    extraLlmRows: [
+      getMockLlmJudgmentRow({answer: 'yes', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-1'}),
+      getMockLlmJudgmentRow({answer: 'yes', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-2'}),
+    ],
+    failPromptInsert: false,
+    promptLinks: [
+      {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
+      {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const multipleAnswerTitles = await getComparisonProjectExportAndJudgmentTitles(app, {
+    differenceFilter: 'all',
+    rowFilter: 'multiple-answers',
+  })
+  const fullyAnsweredTitles = await getComparisonProjectExportAndJudgmentTitles(app, {
+    differenceFilter: 'all',
+    rowFilter: 'fully-answered',
+  })
+  const llmDifferenceTitles = await getComparisonProjectExportAndJudgmentTitles(app, {
+    differenceFilter: 'llm-vs-llm',
+    rowFilter: 'all',
+  })
+
+  expect(multipleAnswerTitles).toEqual(['Article 1', 'Article 2'])
+  expect(fullyAnsweredTitles).toEqual(['Article 1'])
+  expect(llmDifferenceTitles).toEqual(['Article 1'])
+})
+
 test('prompt comparison judgments keep legacy prompt columns and human prompt answers', async () => {
   mockDatabaseStateRef.current = {
     ...createMockDatabaseState(),
@@ -1584,6 +1662,56 @@ test('comparison project export streams ordered csv rows with article context an
   ).toBe(true)
 })
 
+test('summary comparison project export streams synthetic summary csv columns', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    comparisonProject: {
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    failPromptInsert: false,
+    promptLinks: [
+      {
+        criteriaDisposition: 'include',
+        criteriaSectionKey: 'population',
+        criteriaSectionLabel: 'Population',
+        id: 'comparison-project-prompt-1',
+        order: 0,
+        promptId: 'prompt-1',
+      },
+      {
+        criteriaDisposition: 'exclude',
+        criteriaSectionKey: 'outcome',
+        criteriaSectionLabel: 'Outcome',
+        id: 'comparison-project-prompt-2',
+        order: 1,
+        promptId: 'prompt-2',
+      },
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await postComparisonProjectExport(app, {differenceFilter: 'llm-vs-llm', rowFilter: 'fully-answered'})
+  const csv = await response.text()
+
+  expect(response.status).toBe(200)
+  expect(csv.trim().split('\n')).toEqual([
+    [
+      'Title',
+      'Abstract/Summary',
+      'Date added',
+      'Overall decision - Model 1 - Article Title and Abstract',
+      'Overall decision - Model 2 - Article Title and Abstract',
+      'Overall decision - Human',
+    ].join(','),
+    ['Article 1', 'Article 1 summary', '2026-03-30T00:00:00.000Z', 'no', 'yes', 'maybe'].join(','),
+  ])
+})
+
 test('comparison project export allows archived projects without writes', async () => {
   mockDatabaseStateRef.current = {
     ...createMockDatabaseState(),
@@ -1610,6 +1738,12 @@ test('comparison project export allows archived projects without writes', async 
 
   expect(response.status).toBe(200)
   expect(csv).toContain('Article 1,Article 1 summary,2026-03-30T00:00:00.000Z')
+  expect(csv.trim().split('\n')[0]?.split(',').slice(0, 3)).toEqual(['Title', 'Abstract/Summary', 'Date added'])
+  expect(csv.trim().split('\n')[1]?.split(',').slice(0, 3)).toEqual([
+    'Article 1',
+    'Article 1 summary',
+    '2026-03-30T00:00:00.000Z',
+  ])
   expect(state.transactionCalls).toBe(0)
   expect(state.rootRunStatements).toEqual([])
 })

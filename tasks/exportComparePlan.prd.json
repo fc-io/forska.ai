@@ -224,15 +224,16 @@
         "`bun run desktop:build` passes."
       ],
       "priority": 10,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-008",
         "US-009"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     }
   ],
   "metadata": {
-    "updatedAt": "2026-04-21T10:31:21.434Z"
+    "updatedAt": "2026-04-21T10:37:26.129Z"
   }
 }
