@@ -5,6 +5,7 @@ import type {
   HumanJudgmentMode,
   ProjectPromptCriteriaDisposition,
 } from '../../db/schemaTypes.ts'
+import {getOrderedComparisonProjectColumns} from '../../utils/comparisonProjectColumnOrder.ts'
 import {
   type ComparisonProjectDifferenceColumn,
   type ComparisonProjectDifferenceFilter,
@@ -1599,6 +1600,147 @@ const getComparisonProjectHumanRows = async (scope: ComparisonProjectScope, arti
     : getComparisonProjectPromptHumanRows(scope, articleIds)
 }
 
+const escapeComparisonProjectCsvValue = (value: string) => {
+  return value.includes(',') || value.includes('"') || value.includes('\n') || value.includes('\r')
+    ? `"${value.replace(/"/g, '""')}"`
+    : value
+}
+
+const getComparisonProjectCsvLine = (values: string[]) => {
+  return `${values.map(escapeComparisonProjectCsvValue).join(',')}\n`
+}
+
+const getComparisonProjectExportDateValue = (value: Date | string | null) => {
+  return value ? new Date(value).toISOString() : ''
+}
+
+const getComparisonProjectExportCellValue = (value: string | null | undefined) => {
+  return (value ?? '')
+    .split(/\r\n|\n|\r/g)
+    .map((line) => {
+      return line.trim()
+    })
+    .filter((line) => {
+      return line !== ''
+    })
+    .join('; ')
+}
+
+const getComparisonProjectExportColumnHeader = (column: ComparisonProjectJudgmentsColumn) => {
+  return [column.promptLabel, column.modelLabel, column.contentLabel]
+    .map((part) => {
+      return part?.trim() ?? ''
+    })
+    .filter((part) => {
+      return part !== ''
+    })
+    .join(' - ')
+}
+
+const getComparisonProjectExportHeaders = (columns: readonly ComparisonProjectJudgmentsColumn[]) => {
+  return [
+    'Title',
+    'Abstract/Summary',
+    'Date added',
+    ...columns.map((column) => {
+      return getComparisonProjectExportColumnHeader(column)
+    }),
+  ]
+}
+
+const getComparisonProjectExportRowValues = (
+  row: ComparisonProjectJudgmentRow,
+  columns: readonly ComparisonProjectJudgmentsColumn[],
+) => {
+  return [
+    row.articleTitle?.trim() || 'Untitled',
+    row.articleSummary ?? '',
+    getComparisonProjectExportDateValue(row.articleCreatedAt),
+    ...columns.map((column) => {
+      return getComparisonProjectExportCellValue(row.cells[column.id])
+    }),
+  ]
+}
+
+const enqueueComparisonProjectExportRows = (
+  controller: ReadableStreamDefaultController<string>,
+  rows: ComparisonProjectJudgmentRow[],
+  columns: readonly ComparisonProjectJudgmentsColumn[],
+) => {
+  rows.reduce((count, row) => {
+    controller.enqueue(getComparisonProjectCsvLine(getComparisonProjectExportRowValues(row, columns)))
+    return count + 1
+  }, 0)
+}
+
+const getComparisonProjectExportFilename = (scope: ComparisonProjectScope) => {
+  return `${scope.name.replace(/[^a-zA-Z0-9]/g, '_')}_comparison_export_${new Date().toISOString().slice(0, 10)}.csv`
+}
+
+const getComparisonProjectExportResponse = (
+  scope: ComparisonProjectScope,
+  rowFilter: ComparisonProjectRowFilter,
+  differenceFilter: ComparisonProjectDifferenceFilter,
+) => {
+  const orderedColumns = getOrderedComparisonProjectColumns(scope.columns, scope.prompts)
+  const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(differenceFilter, orderedColumns)
+  const headers = getComparisonProjectExportHeaders(orderedColumns)
+  const filename = getComparisonProjectExportFilename(scope)
+  const responseHeaders = {
+    'Content-Disposition': `attachment; filename="${filename}"`,
+    'Content-Type': 'text/csv; charset=utf-8',
+  }
+  const stream = new ReadableStream<string>({
+    async start(controller) {
+      try {
+        controller.enqueue(getComparisonProjectCsvLine(headers))
+
+        if (scope.prompts.length > 0 && orderedColumns.length > 0) {
+          const articleScopeConditions = getArticleScopeConditions(
+            scope.importRouteIds,
+            scope.sourceProjectIds,
+            scope.useImportRoutesForScope,
+          )
+          const articleScopeWhereClause = getWhereClause(articleScopeConditions)
+
+          await forEachComparisonProjectJudgmentRowBatch({
+            articleBatchSize: comparisonProjectJudgmentArticleBatchSize,
+            columns: orderedColumns,
+            differenceFilter: normalizedDifferenceFilter,
+            isSummaryMode: getIsSummaryMode(scope),
+            loadHumanRows: (articleIds) => {
+              return getComparisonProjectHumanRows(scope, articleIds)
+            },
+            loadLlmRows: async (articleIds) => {
+              const rawLlmRows = await getComparisonProjectLlmRows(scope, articleIds)
+              return getComparisonProjectLlmSummaryRows(scope, rawLlmRows)
+            },
+            loadScopedArticles: (request) => {
+              return getComparisonProjectScopedArticleBatch({
+                articleTable,
+                limit: request.limit,
+                offset: request.offset,
+                queryRunner: appDatabaseService,
+                whereClause: articleScopeWhereClause,
+              })
+            },
+            onRows: (rows) => {
+              enqueueComparisonProjectExportRows(controller, rows, orderedColumns)
+            },
+            rowFilter,
+          })
+        }
+
+        controller.close()
+      } catch (error) {
+        controller.error(error)
+      }
+    },
+  })
+
+  return new Response(stream, {headers: responseHeaders})
+}
+
 const getComparisonProjectJudgmentsPage = async (
   scope: ComparisonProjectScope,
   page: number,
@@ -2317,6 +2459,36 @@ export const comparisonProjectsRoutes = new Elysia()
           ]),
         ),
         showOnlyModelDifferences: t.Optional(t.Boolean()),
+      }),
+    },
+  )
+  .post(
+    '/api/comparison-projects/:id/export',
+    async (context) => {
+      const {params, body, set} = context
+      const data = await getComparisonProjectScope(params.id)
+
+      if (!data) {
+        set.status = 404
+        return {data: null, error: 'Comparison project not found'}
+      }
+
+      const differenceFilter = getRequestedComparisonProjectDifferenceFilter({differenceFilter: body.differenceFilter})
+      const rowFilter = getNormalizedComparisonProjectRowFilter(body.rowFilter)
+
+      return getComparisonProjectExportResponse(data, rowFilter, differenceFilter)
+    },
+    {
+      body: t.Object({
+        rowFilter: t.Optional(t.String()),
+        differenceFilter: t.Optional(
+          t.Union([
+            t.Literal('all'),
+            t.Literal('human-vs-llm'),
+            t.Literal('llm-vs-llm'),
+            t.Literal('any-disagreement'),
+          ]),
+        ),
       }),
     },
   )
