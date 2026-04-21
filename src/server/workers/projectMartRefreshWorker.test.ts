@@ -413,6 +413,45 @@ test('routes oversized automatic full refreshes into large rebuild state before 
   expect(context.acknowledgedProjects).toEqual([])
 })
 
+test('uses a smaller automatic full-refresh ceiling when the worker duckdb memory limit is low', async () => {
+  const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
+  process.env.DUCKDB_MEMORY_LIMIT = '6400MiB'
+
+  try {
+    const context = createWorkerTestContext({
+      articlesByProject: {'project-1': ['article-1', 'article-2', 'article-3', 'article-4']},
+      claims: [
+        {
+          claimedToken: 9,
+          lastCompletedToken: 8,
+          leaseExpiresAt: new Date('2026-04-02T13:20:30.000Z'),
+          projectId: 'project-1',
+          workerId: 'worker-1',
+        },
+      ],
+      scopeArticleCountByProject: {'project-1': 19_252},
+    })
+
+    const result = await runProjectMartRefreshWorkerCycle(
+      {incrementalArticleThreshold: 3, workerId: 'worker-1'},
+      context.dependencies,
+    )
+
+    expect(result).toEqual({claimedToken: 9, projectId: 'project-1', status: 'completed', workerId: 'worker-1'})
+    expect(context.queuedLargeRebuilds).toEqual([
+      {projectId: 'project-1', rebuildPhase: 'prompt_answer_fact', refreshToken: 9},
+    ])
+    expect(context.callLog).toContain('largeRebuild:project-1:prompt_answer_fact:9')
+    expect(context.callLog).not.toContain('project:project-1')
+  } finally {
+    if (previousDuckdbMemoryLimit === undefined) {
+      delete process.env.DUCKDB_MEMORY_LIMIT
+    } else {
+      process.env.DUCKDB_MEMORY_LIMIT = previousDuckdbMemoryLimit
+    }
+  }
+})
+
 test('can process work reclaimed after an expired lease', async () => {
   const context = createWorkerTestContext({
     articlesByProject: {'project-1': ['article-1']},

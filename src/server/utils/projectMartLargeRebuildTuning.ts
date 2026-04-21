@@ -2,6 +2,7 @@ import {totalmem} from 'node:os'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
+import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {type LocalAppSettings, readLocalAppSettings} from './localAppSettings.ts'
 
 type ProjectMartLargeRebuildConfigSource = 'automatic' | 'env' | 'manual'
@@ -44,6 +45,7 @@ export type ProjectMartLargeRebuildHeartbeatConfig = {
 }
 
 const gibibyte = 1024 ** 3
+const mebibyte = 1024 ** 2
 const configCacheTtlMs = 2_000
 
 let cachedConfig: {expiresAt: number; value: ProjectMartLargeRebuildHeartbeatConfig} | null = null
@@ -116,12 +118,19 @@ const getActiveLargeRebuildProjectCount = async () => {
 
 export const getAutomaticProjectMartLargeRebuildHeartbeatConfig = ({
   activeLargeRebuildProjectCount,
+  backgroundWriterDuckdbMemoryLimit = null,
   totalMemoryBytes = totalmem(),
 }: {
   activeLargeRebuildProjectCount: number
+  backgroundWriterDuckdbMemoryLimit?: string | null
   totalMemoryBytes?: number
 }): ProjectMartLargeRebuildAutomaticHeartbeatConfig => {
-  const totalMemoryGb = Math.max(1, Math.floor(totalMemoryBytes / gibibyte))
+  const workerDuckdbMemoryLimitMiB = parseDuckdbMemoryLimitToMiB(backgroundWriterDuckdbMemoryLimit)
+  const effectiveTotalMemoryBytes =
+    workerDuckdbMemoryLimitMiB === null
+      ? totalMemoryBytes
+      : Math.min(totalMemoryBytes, workerDuckdbMemoryLimitMiB * mebibyte)
+  const totalMemoryGb = Math.max(1, Math.floor(effectiveTotalMemoryBytes / gibibyte))
   const activeRebuildCount = Math.max(activeLargeRebuildProjectCount, 0)
 
   if (totalMemoryGb <= 16) {
@@ -169,6 +178,7 @@ export const resolveProjectMartLargeRebuildHeartbeatConfig = ({
 }): ProjectMartLargeRebuildHeartbeatConfig => {
   const automatic = getAutomaticProjectMartLargeRebuildHeartbeatConfig({
     activeLargeRebuildProjectCount,
+    backgroundWriterDuckdbMemoryLimit: storedSettings.backgroundWriterDuckdbMemoryLimit,
     totalMemoryBytes,
   })
   const useManualValue = storedSettings.tuningMode === 'manual'

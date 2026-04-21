@@ -16,9 +16,10 @@ type BackgroundServerStackConfig = {
   writerUrl: string
 }
 
-const gibibyte = 1024 ** 3
-const minimumBackgroundWorkerDuckdbMemoryLimitGb = 4
-const maximumBackgroundWorkerDuckdbMemoryLimitGb = 20
+const mebibyte = 1024 ** 2
+const darwinMaximumBackgroundWorkerDuckdbMemoryLimitMiB = 6400
+const defaultMaximumBackgroundWorkerDuckdbMemoryLimitMiB = 20 * 1024
+const minimumBackgroundWorkerDuckdbMemoryLimitMiB = 4 * 1024
 
 const getIntegerPort = (value: string | undefined, fallback: number) => {
   const parsed = Number.parseInt(String(value ?? '').trim(), 10)
@@ -26,21 +27,30 @@ const getIntegerPort = (value: string | undefined, fallback: number) => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
 }
 
-const getTrimmedValue = (value: string | undefined) => {
+const getTrimmedValue = (value: string | null | undefined) => {
   const normalized = String(value ?? '').trim()
 
   return normalized === '' ? null : normalized
 }
 
-export const getDefaultBackgroundWorkerDuckdbMemoryLimit = (totalMemoryBytes = totalmem()) => {
-  const totalMemoryGb = Math.floor(totalMemoryBytes / gibibyte)
-  const derivedLimitGb = Math.floor(totalMemoryGb / 2)
-  const workerDuckdbMemoryLimitGb = Math.max(
-    minimumBackgroundWorkerDuckdbMemoryLimitGb,
-    Math.min(maximumBackgroundWorkerDuckdbMemoryLimitGb, derivedLimitGb),
+export const getDefaultBackgroundWorkerDuckdbMemoryLimit = (
+  totalMemoryBytes = totalmem(),
+  platform = process.platform,
+) => {
+  const totalMemoryMiB = Math.floor(totalMemoryBytes / mebibyte)
+  const derivedLimitMiB = Math.floor(totalMemoryMiB / 2)
+  const maximumBackgroundWorkerDuckdbMemoryLimitMiB =
+    platform === 'darwin'
+      ? darwinMaximumBackgroundWorkerDuckdbMemoryLimitMiB
+      : defaultMaximumBackgroundWorkerDuckdbMemoryLimitMiB
+  const workerDuckdbMemoryLimitMiB = Math.max(
+    minimumBackgroundWorkerDuckdbMemoryLimitMiB,
+    Math.min(maximumBackgroundWorkerDuckdbMemoryLimitMiB, derivedLimitMiB),
   )
 
-  return `${workerDuckdbMemoryLimitGb}GB`
+  return workerDuckdbMemoryLimitMiB % 1024 === 0
+    ? `${workerDuckdbMemoryLimitMiB / 1024}GB`
+    : `${workerDuckdbMemoryLimitMiB}MiB`
 }
 
 export const getBackgroundServerStackConfig = (

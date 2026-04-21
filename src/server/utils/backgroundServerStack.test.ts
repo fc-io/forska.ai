@@ -23,15 +23,19 @@ const defaultLocalAppSettings = {
 }
 
 test('background server stack derives a low-memory worker duckdb limit', () => {
-  expect(getDefaultBackgroundWorkerDuckdbMemoryLimit(8 * gibibyte)).toBe('4GB')
+  expect(getDefaultBackgroundWorkerDuckdbMemoryLimit(8 * gibibyte, 'linux')).toBe('4GB')
 })
 
 test('background server stack derives a mid-memory worker duckdb limit', () => {
-  expect(getDefaultBackgroundWorkerDuckdbMemoryLimit(16 * gibibyte)).toBe('8GB')
+  expect(getDefaultBackgroundWorkerDuckdbMemoryLimit(16 * gibibyte, 'linux')).toBe('8GB')
 })
 
 test('background server stack derives a higher-memory worker duckdb limit', () => {
-  expect(getDefaultBackgroundWorkerDuckdbMemoryLimit(64 * gibibyte)).toBe('20GB')
+  expect(getDefaultBackgroundWorkerDuckdbMemoryLimit(64 * gibibyte, 'linux')).toBe('20GB')
+})
+
+test('background server stack clamps darwin worker duckdb memory to the stable ceiling', () => {
+  expect(getDefaultBackgroundWorkerDuckdbMemoryLimit(32 * gibibyte, 'darwin')).toBe('6400MiB')
 })
 
 test('background server stack defaults worker port to api port plus one', () => {

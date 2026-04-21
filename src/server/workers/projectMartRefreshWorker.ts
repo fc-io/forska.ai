@@ -9,6 +9,7 @@ import {
   getProjectMartRefreshStateService,
   type ProjectRefreshClaim,
 } from '../services/projectMartRefreshStateService.ts'
+import {parseDuckdbMemoryLimitToMiB} from '../utils/duckdbMemoryLimit.ts'
 
 type ProjectMartRefreshStateWorkerService = {
   claimDirtyProjects: (params: {
@@ -105,11 +106,33 @@ const defaultProjectMartRefreshWorkerHeartbeatMs = 10_000
 const defaultProjectMartRefreshWorkerIncrementalArticleThreshold = 3
 const defaultProjectMartRefreshWorkerMaxFullProjectScopeArticles = 100_000
 const defaultProjectMartRefreshWorkerPollIntervalMs = 2_000
+const lowMemoryProjectMartRefreshWorkerMaxFullProjectScopeArticles = 10_000
+const mediumMemoryProjectMartRefreshWorkerMaxFullProjectScopeArticles = 20_000
+const lowMemoryProjectMartRefreshWorkerDuckdbLimitMiB = 6400
+const mediumMemoryProjectMartRefreshWorkerDuckdbLimitMiB = 8192
+
+const getAutomaticProjectMartRefreshWorkerMaxFullProjectScopeArticles = (workerDuckdbMemoryLimitMiB: number | null) => {
+  if (workerDuckdbMemoryLimitMiB === null) {
+    return defaultProjectMartRefreshWorkerMaxFullProjectScopeArticles
+  }
+
+  if (workerDuckdbMemoryLimitMiB <= lowMemoryProjectMartRefreshWorkerDuckdbLimitMiB) {
+    return lowMemoryProjectMartRefreshWorkerMaxFullProjectScopeArticles
+  }
+
+  return workerDuckdbMemoryLimitMiB <= mediumMemoryProjectMartRefreshWorkerDuckdbLimitMiB
+    ? mediumMemoryProjectMartRefreshWorkerMaxFullProjectScopeArticles
+    : defaultProjectMartRefreshWorkerMaxFullProjectScopeArticles
+}
 
 const getProjectMartRefreshWorkerMaxFullProjectScopeArticles = () => {
   const parsed = Number(process.env.PROJECT_MART_REFRESH_MAX_FULL_SCOPE_ARTICLES ?? '')
 
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultProjectMartRefreshWorkerMaxFullProjectScopeArticles
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : getAutomaticProjectMartRefreshWorkerMaxFullProjectScopeArticles(
+        parseDuckdbMemoryLimitToMiB(process.env.DUCKDB_MEMORY_LIMIT),
+      )
 }
 
 const getProjectScopeArticleCount = async (projectId: string) => {

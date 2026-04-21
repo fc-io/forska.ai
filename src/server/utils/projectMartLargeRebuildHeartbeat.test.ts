@@ -183,7 +183,7 @@ test('projectMartLargeRebuildHeartbeat resolves env overrides ahead of manual se
   const result = parseCallsResult(getLastJsonLine(runScript.stdout.toString()))
 
   expect(result.config).toMatchObject({
-    automatic: {batchSize: 4096, maxCyclesPerWake: 16, pollIntervalMs: 250},
+    automatic: {batchSize: 512, maxCyclesPerWake: 4, pollIntervalMs: 1000},
     batchSize: 32,
     maxCyclesPerWake: 7,
     pollIntervalMs: 2500,

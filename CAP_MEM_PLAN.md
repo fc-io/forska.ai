@@ -21,6 +21,7 @@
 - Keep the configured cap as the ceiling, derive a process-local active cap from a fixed ladder, and use that active cap for both the first DuckDB open and later restarts.
 - The initial active cap is the highest rung at or below the configured ceiling. If the ceiling falls between rungs, round down to the next lower rung instead of opening above the ceiling.
 - Keep one shared process-local active-cap source of truth for DuckDB runtime, mart refresh admission, large rebuild tuning, and worker diagnostics.
+- Use `failed` as the retryable-with-cooldown state and `paused` as the terminal auto-retry stop once a project exhausts recovery at the floor rung.
 - Step the active runtime cap down through a fixed ladder:
   - `6400MiB`
   - `4096MiB`
@@ -42,14 +43,14 @@
    - Close the embedded DuckDB runtime in-process.
    - Mark the project refresh or large rebuild as failed with a retry-after cooldown.
    - Let the background loop continue and reclaim the work automatically after cooldown.
-   - After cooldown expires, let that work re-enter the existing FIFO claim order with no special priority lane.
+   - After cooldown expires, let that work re-enter the normal claim path behind non-failed claimable work, without adding a separate retry queue.
 
 3. On repeated DuckDB OOM for the same project:
    - Keep stepping the runtime cap down until `1024MiB`.
    - Keep predictive limits aligned with the lower cap so large inline work is routed into safer paths earlier.
 
 4. On DuckDB OOM at `1024MiB` for one project:
-   - Stop automatic retries for that specific project or rebuild.
+   - Transition that specific project refresh or rebuild to `paused`.
    - Leave a clear failure reason in DB state so the operator can inspect it.
    - Keep the writer process and unrelated work alive.
 
@@ -62,6 +63,7 @@
 
 Files:
 
+- `src/server/utils/runtimeBootstrap.ts`
 - `src/server/utils/duckdbOomGovernor.ts`
 - `src/server/utils/duckdbService.ts`
 - `src/server/utils/backgroundServerStack.ts`
@@ -78,7 +80,7 @@ Changes:
   - recent OOM events by component
   - recent OOM events by project when known
   - heavy-work breaker cooldown state
-- Seed the governor before background work starts, and have `duckdbService` read it for the first `DuckDBInstance.create(...)` instead of reading raw `process.env.DUCKDB_MEMORY_LIMIT`.
+- Seed the governor during runtime bootstrap before `serverMain.ts` can call `migrateDuckdb()` or any other first DuckDB open, and have `duckdbService` read it for the first `DuckDBInstance.create(...)` instead of reading raw `process.env.DUCKDB_MEMORY_LIMIT`.
 - Export a shared active-cap accessor so runtime decisions do not read `process.env.DUCKDB_MEMORY_LIMIT` directly.
 - Add a controlled in-process DuckDB restart path that lowers the active runtime cap, closes the embedded runtime, and lets it reopen lazily on the next query.
 
@@ -100,15 +102,16 @@ Changes:
 
 - Reuse `lease_expires_at` as a retry-after timestamp for failed heavy work.
 - Update claim logic so failed rows are claimable only when cooldown has expired.
-- When cooldown expires, failed work re-enters the existing FIFO claim order; do not add a separate retry priority queue or special "send to the back" behavior.
-- Keep this path simple by reusing the current claim ordering instead of mutating request timestamps or adding extra queue state just to reorder cooled-down failures.
+- Keep `paused` rows out of automatic claim paths so floor-exhausted work stays stopped until an explicit operator action changes it.
+- When cooldown expires, deprioritize failed work behind non-failed claimable work in the existing claim query instead of adding a separate retry priority queue.
+- Keep this path simple by using status-aware ordering in the current claim query instead of mutating request timestamps or adding extra queue state just to reorder cooled-down failures.
 - Keep `last_error` explicit when the failure reason is DuckDB OOM and include the current cap rung.
 
 Expected result:
 
 - Project-local OOMs stop hot-looping immediately.
 - Retry timing is visible in existing DB state without a schema migration.
-- Recovery stays fair and predictable because cooled-down work returns through the normal claim order.
+- Recovery stays fair and predictable because fresh claimable work stays ahead of cooled-down retries.
 
 ## Step 3. Make Mart Refresh Self-Healing
 
@@ -122,6 +125,7 @@ Changes:
 
 - On OOM during project refresh, invoke the recovery governor instead of treating it like a generic failure.
 - Attach retry-after cooldown to the claimed project state before releasing the loop back to the heartbeat.
+- When a project still OOMs at the floor rung, transition that refresh to `paused` instead of leaving it in retryable `failed` state.
 - Restart the mart refresh loop automatically if it escapes, with cooldown-aware backoff.
 - Keep the current low-memory routing behavior so large inline full refreshes move into large rebuild earlier at smaller cap rungs.
 
@@ -143,6 +147,7 @@ Files:
 Changes:
 
 - On OOM in a claimed rebuild, fail that project-local rebuild with cooldown instead of only logging the error.
+- When a rebuild still OOMs at the floor rung, transition it to `paused` with an explicit system-generated reason instead of keeping it in retryable `failed` state.
 - On retry, use the lower active cap rung to reduce rebuild aggressiveness:
   - lower `batchSize`
   - lower `maxCyclesPerWake`
@@ -184,6 +189,8 @@ Files:
 - `src/server/utils/startBackgroundWork.ts`
 - `src/server/utils/projectMartRefreshWorkerHeartbeat.ts`
 - `src/server/utils/projectMartLargeRebuildHeartbeat.ts`
+- `src/server/cron/fullTextJobs.ts`
+- `src/server/cron/fullTextConversionJobs.ts`
 - `src/server/cron/judgmentsJobs.ts`
 - `src/server/routes/AdminInvestigateRoutes.ts`
 - adjacent tests
@@ -191,7 +198,7 @@ Files:
 Changes:
 
 - When multiple OOMs occur in a short window, suspend only heavy background work for a cooldown period.
-- Gate `projectMartRefreshWorker`, `projectMartLargeRebuildHeartbeat`, `runAddToQueue`, and `importJudgmentsCron` behind the breaker.
+- Gate `projectMartRefreshWorker`, `projectMartLargeRebuildHeartbeat`, `fullTextJobs`, `fullTextConversionJobs`, `runAddToQueue`, and `importJudgmentsCron` behind the breaker.
 - Keep `sendToLLM`, `checkLLMStatusCron`, and `cleanupStaleQueueCron` running because they are lease, status, or cleanup work rather than the DuckDB-heavy paths the breaker is meant to shed.
 - Make operator-triggered large rebuild runs respect the breaker too. During cooldown, return an explicit blocked response instead of silently bypassing the breaker. Do not add an implicit operator override in this plan.
 - Keep API flow and lighter writer work alive.
@@ -207,12 +214,13 @@ Expected result:
 
 1. Build the shared OOM recovery governor, derive the startup cap rung before first DuckDB open, and add in-process DuckDB cap step-down.
 2. Add retry-after gating to mart refresh and large rebuild claim logic.
-3. Make `projectMartRefreshWorkerHeartbeat` restart escaped loops automatically.
-4. Wire mart refresh OOM handling into the governor and cooldown path.
-5. Wire large rebuild OOM handling into the governor and cooldown path.
-6. Tie predictive thresholds, rebuild tuning, and diagnostics to the shared active cap rung.
-7. Add the writer-wide heavy-work breaker, scope it to heavy background paths, and make operator-triggered rebuilds respect it.
-8. Reproduce forced OOM paths and verify that no manual restart is required.
+3. Add floor-exhausted `paused` handling and status-aware retry ordering to mart refresh and large rebuild claim logic.
+4. Make `projectMartRefreshWorkerHeartbeat` restart escaped loops automatically.
+5. Wire mart refresh OOM handling into the governor and cooldown path.
+6. Wire large rebuild OOM handling into the governor and cooldown path.
+7. Tie predictive thresholds, rebuild tuning, and diagnostics to the shared active cap rung.
+8. Add the writer-wide heavy-work breaker, scope it to heavy background paths, and make operator-triggered rebuilds respect it.
+9. Reproduce forced OOM paths and verify that no manual restart is required.
 
 ## Done Criteria
 
@@ -221,7 +229,8 @@ Expected result:
 - The active DuckDB cap steps down automatically through the configured ladder until `1024MiB`.
 - Mart refresh admission, large rebuild tuning, and worker diagnostics all read the same active runtime cap source.
 - Failed heavy work is not immediately reclaimable; cooldown prevents thrash.
-- Cooled-down failed work re-enters the normal FIFO claim order.
+- Cooled-down failed work is retried automatically but does not jump ahead of fresh claimable work.
+- Work that still OOMs at `1024MiB` transitions to `paused` instead of remaining in retryable `failed` state.
 - Heavy work resumes automatically after cooldown when recovery remains possible.
 - Work that still OOMs at `1024MiB` stops locally without taking down the writer or the API server.
 - The writer-wide breaker pauses only the named heavy background paths, and operator-triggered rebuilds return a clear blocked response during breaker cooldown.
@@ -238,12 +247,14 @@ Expected result:
 - `bun test src/server/workers/projectMartRefreshWorker.test.ts`
 - `bun test src/server/services/projectMartRefreshStateService.test.ts`
 - `bun test src/server/services/projectMartLargeRebuildStateService.test.ts`
+- `bun test src/server/services/projectMartLargeRebuildCyclesService.test.ts`
 - `bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts`
 - `bun test src/server/utils/duckdbServiceReload.test.ts`
 - `bun test src/server/utils/duckdbServiceMemoryLimit.test.ts`
 - `bun test src/server/utils/backgroundServerStack.test.ts`
 - `bun test src/server/utils/martRefreshDrainHeartbeat.test.ts`
 - `bun test src/server/utils/startBackgroundWork.test.ts`
+- `bun test src/server/routes/AdminInvestigateRoutes.test.ts`
 - `bun run lint`
 - `bun run dev:server`
 - Verification from server output that:
@@ -253,6 +264,7 @@ Expected result:
   - cap rung steps down automatically
   - mart refresh routing, large rebuild tuning, and diagnostics report the same active rung
   - only the named heavy background loops pause during breaker cooldown while lighter cron work stays alive
+  - `fullTextJobs` and `fullTextConversionJobs` also respect breaker cooldown and auto-resume afterward
   - heavy work resumes after cooldown when recovery is still possible
 - `bun run build` not required unless the implementation expands into app or admin UI changes.
 - Desktop verification not required unless the implementation expands into shared UI or desktop-specific runtime controls.
