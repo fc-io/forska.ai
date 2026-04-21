@@ -12,6 +12,10 @@ import {
   getNormalizedComparisonProjectDifferenceFilter,
 } from '../../utils/comparisonProjectDifferenceFilter.ts'
 import {
+  type ComparisonProjectRowFilter,
+  getNormalizedComparisonProjectRowFilter,
+} from '../../utils/comparisonProjectRowFilter.ts'
+import {
   appendProviderModelThinkingBadgeLabel,
   getProviderModelThinkingBadgeValue,
 } from '../../utils/providerModelLabel.ts'
@@ -322,6 +326,23 @@ const getRequestedComparisonProjectDifferenceFilter = (params: {
   showOnlyModelDifferences?: boolean
 }) => {
   return params.differenceFilter ?? (params.showOnlyModelDifferences ? 'llm-vs-llm' : 'all')
+}
+
+const getComparisonProjectPassesRowFilter = (params: {
+  answeredColumnCount: number
+  answeredPromptCount: number
+  hasAllHumanColumns: boolean
+  hasAllLlmColumns: boolean
+  isSummaryMode: boolean
+  rowFilter: ComparisonProjectRowFilter
+}) => {
+  return params.rowFilter === 'all'
+    ? true
+    : params.rowFilter === 'fully-answered'
+      ? params.hasAllLlmColumns && params.hasAllHumanColumns
+      : params.isSummaryMode
+        ? params.answeredColumnCount >= 2
+        : params.answeredPromptCount >= 2
 }
 
 const getComparisonProjectRecordValue = (row: ComparisonProjectRecordRow) => {
@@ -1744,8 +1765,7 @@ const getComparisonProjectJudgmentsPage = async (
   scope: ComparisonProjectScope,
   page: number,
   limit: number,
-  hideSparseRows: boolean,
-  showOnlyFullyAnsweredPrompts: boolean,
+  rowFilter: ComparisonProjectRowFilter,
   differenceFilter: ComparisonProjectDifferenceFilter,
 ) => {
   if (scope.prompts.length === 0 || scope.columns.length === 0) {
@@ -1801,18 +1821,21 @@ const getComparisonProjectJudgmentsPage = async (
     )
     const hasAllLlmColumns = getHasAllRequiredColumns(llmCellsByArticle[article.id], requiredLlmColumnIds)
     const hasAllHumanColumns = getHasAllRequiredColumns(humanCellsByArticle[article.id], requiredHumanColumnIds)
+    const passesRowFilter = getComparisonProjectPassesRowFilter({
+      answeredColumnCount,
+      answeredPromptCount: answeredPromptIds.size,
+      hasAllHumanColumns,
+      hasAllLlmColumns,
+      isSummaryMode: getIsSummaryMode(scope),
+      rowFilter,
+    })
     const passesDifferenceFilter = getComparisonProjectHasDifferenceFilterMatch(
       articleCells,
       scope.columns,
       normalizedDifferenceFilter,
     )
 
-    return (
-      hasArticleData
-      && (!hideSparseRows || (getIsSummaryMode(scope) ? answeredColumnCount >= 2 : answeredPromptIds.size >= 2))
-      && (!showOnlyFullyAnsweredPrompts || (hasAllLlmColumns && hasAllHumanColumns))
-      && passesDifferenceFilter
-    )
+    return hasArticleData && passesRowFilter && passesDifferenceFilter
   })
   const totalCount = filteredArticles.length
   const totalPages = totalCount > 0 ? Math.ceil(totalCount / limit) : 0
@@ -2452,14 +2475,8 @@ export const comparisonProjectsRoutes = new Elysia()
         differenceFilter: body.differenceFilter,
         showOnlyModelDifferences: body.showOnlyModelDifferences,
       })
-      const judgmentsPage = await getComparisonProjectJudgmentsPage(
-        data,
-        page,
-        limit,
-        body.hideSparseRows ?? false,
-        body.showOnlyFullyAnsweredPrompts ?? false,
-        differenceFilter,
-      )
+      const rowFilter = getNormalizedComparisonProjectRowFilter(body.rowFilter)
+      const judgmentsPage = await getComparisonProjectJudgmentsPage(data, page, limit, rowFilter, differenceFilter)
 
       return {data: judgmentsPage}
     },
@@ -2467,8 +2484,7 @@ export const comparisonProjectsRoutes = new Elysia()
       body: t.Object({
         page: t.String(),
         limit: t.String(),
-        hideSparseRows: t.Optional(t.Boolean()),
-        showOnlyFullyAnsweredPrompts: t.Optional(t.Boolean()),
+        rowFilter: t.Optional(t.String()),
         differenceFilter: t.Optional(
           t.Union([
             t.Literal('all'),
