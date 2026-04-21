@@ -12,6 +12,7 @@ import {
   fetchComparisonProjectJudgmentsMetadata,
   fetchComparisonProjectJudgmentsPage,
 } from '../../../../services/comparisonProjectsService'
+import {getOrderedComparisonProjectColumns} from '../../../../utils/comparisonProjectColumnOrder.ts'
 import {
   type ComparisonProjectDifferenceFilter,
   getAvailableComparisonProjectDifferenceFilters,
@@ -52,38 +53,6 @@ const getRangeLabel = (page: number, limit: number, totalCount: number) => {
 
 const getHumanJudgmentModeLabel = (humanJudgmentMode: 'prompt' | 'summary') => {
   return humanJudgmentMode === 'summary' ? 'Summary overall decisions' : 'Prompt-by-prompt decisions'
-}
-
-const getOrderedJudgmentColumns = (
-  columns: ComparisonProjectJudgmentsColumn[],
-  prompts: Array<{id: string; order: number}>,
-) => {
-  const promptOrderMap = prompts.reduce<Record<string, number>>((orderMap, prompt) => {
-    return {...orderMap, [prompt.id]: prompt.order}
-  }, {})
-
-  return columns
-    .map((column, index) => {
-      return {column, index}
-    })
-    .sort((left, right) => {
-      const promptDiff =
-        (promptOrderMap[left.column.promptId] ?? Number.MAX_SAFE_INTEGER)
-        - (promptOrderMap[right.column.promptId] ?? Number.MAX_SAFE_INTEGER)
-
-      if (promptDiff !== 0) {
-        return promptDiff
-      }
-
-      if (left.column.kind !== right.column.kind) {
-        return left.column.kind === 'llm' ? -1 : 1
-      }
-
-      return left.index - right.index
-    })
-    .map(({column}) => {
-      return column
-    })
 }
 
 const getHumanColumnSourceProjectId = (comparisonProject?: {
@@ -176,7 +145,7 @@ const CompareProjectJudgmentsPage = () => {
   const orderedColumns = createMemo<ComparisonProjectJudgmentsTableColumn[]>(() => {
     const comparisonProject = comparisonProjectQuery.data
 
-    return getOrderedJudgmentColumns(comparisonProject?.columns ?? [], comparisonProject?.prompts ?? []).map(
+    return getOrderedComparisonProjectColumns(comparisonProject?.columns ?? [], comparisonProject?.prompts ?? []).map(
       (column) => {
         return {...column, sourceProjectId: getColumnSourceProjectId(column, comparisonProject)}
       },
