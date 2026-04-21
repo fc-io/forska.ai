@@ -33,3 +33,21 @@ test('compare export request body sends only export filters', () => {
 
   expect(getCompareProjectExportRequestBody(state)).toEqual({differenceFilter: 'llm-vs-llm', rowFilter: 'all'})
 })
+
+test('compare export URL state normalizes legacy compare filters to canonical params', () => {
+  const state = getInitialCompareProjectExportUrlState({
+    showOnlyFullyAnsweredPrompts: '1',
+    showOnlyModelDifferences: '1',
+  })
+
+  expect(state.rowFilter).toBe('fully-answered')
+  expect(state.differenceFilter).toBe('llm-vs-llm')
+  expect(getCompareProjectExportSearchParams(state)).toEqual({
+    differenceFilter: 'llm-vs-llm',
+    rowFilter: 'fully-answered',
+  })
+  expect(getCompareProjectExportRequestBody(state)).toEqual({
+    differenceFilter: 'llm-vs-llm',
+    rowFilter: 'fully-answered',
+  })
+})
