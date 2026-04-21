@@ -21,70 +21,14 @@ import {
 import {
   type ComparisonProjectRowFilter,
   comparisonProjectRowFilters,
-  defaultComparisonProjectRowFilter,
   getComparisonProjectRowFilterLabel,
   getNormalizedComparisonProjectRowFilter,
 } from '../../../../utils/comparisonProjectRowFilter.ts'
-
-const pageLimitOptions = [25, 50, 100]
-
-type CompareProjectJudgmentsUrlState = {
-  currentPage: number
-  pageLimit: number
-  rowFilter: ComparisonProjectRowFilter
-  differenceFilter: ComparisonProjectDifferenceFilter
-}
-
-const getDefaultCompareProjectJudgmentsUrlState = (): CompareProjectJudgmentsUrlState => {
-  return {currentPage: 1, pageLimit: 50, rowFilter: defaultComparisonProjectRowFilter, differenceFilter: 'all'}
-}
-
-const getPositiveIntegerSearchParamValue = (value: unknown, fallback: number) => {
-  const parsedValue = typeof value === 'number' ? value : Number.parseInt(typeof value === 'string' ? value : '', 10)
-
-  return Number.isInteger(parsedValue) && parsedValue > 0 ? parsedValue : fallback
-}
-
-const getDifferenceFilterSearchParamValue = (value: unknown): ComparisonProjectDifferenceFilter => {
-  return value === 'human-vs-llm' || value === 'llm-vs-llm' || value === 'any-disagreement' ? value : 'all'
-}
-
-const getInitialCompareProjectJudgmentsUrlState = (
-  search: Record<string, unknown>,
-): CompareProjectJudgmentsUrlState => {
-  const defaultState = getDefaultCompareProjectJudgmentsUrlState()
-  const parsedPageLimit = getPositiveIntegerSearchParamValue(search.limit, defaultState.pageLimit)
-
-  return {
-    currentPage: getPositiveIntegerSearchParamValue(search.page, defaultState.currentPage),
-    pageLimit: pageLimitOptions.includes(parsedPageLimit) ? parsedPageLimit : defaultState.pageLimit,
-    rowFilter: getNormalizedComparisonProjectRowFilter(search.rowFilter),
-    differenceFilter: getDifferenceFilterSearchParamValue(search.differenceFilter),
-  }
-}
-
-const getCompareProjectJudgmentsSearchParams = (state: CompareProjectJudgmentsUrlState): Record<string, string> => {
-  const defaultState = getDefaultCompareProjectJudgmentsUrlState()
-  const searchParams: Record<string, string> = {}
-
-  if (state.currentPage !== defaultState.currentPage) {
-    searchParams.page = String(state.currentPage)
-  }
-
-  if (state.pageLimit !== defaultState.pageLimit) {
-    searchParams.limit = String(state.pageLimit)
-  }
-
-  if (state.rowFilter !== defaultState.rowFilter) {
-    searchParams.rowFilter = state.rowFilter
-  }
-
-  if (state.differenceFilter !== defaultState.differenceFilter) {
-    searchParams.differenceFilter = state.differenceFilter
-  }
-
-  return searchParams
-}
+import {
+  compareProjectJudgmentsPageLimitOptions,
+  getCompareProjectJudgmentsSearchParams,
+  getInitialCompareProjectJudgmentsUrlState,
+} from './+index/compareProjectJudgmentsUrlState.ts'
 
 const getContentSettingsLabel = (contentVariants: Array<{label: string}>) => {
   return contentVariants.length > 0
@@ -495,7 +439,7 @@ const CompareProjectJudgmentsPage = () => {
                           setCurrentPage(1)
                         }}
                       >
-                        <For each={pageLimitOptions}>
+                        <For each={compareProjectJudgmentsPageLimitOptions}>
                           {(option) => {
                             return <option value={option}>{option}</option>
                           }}

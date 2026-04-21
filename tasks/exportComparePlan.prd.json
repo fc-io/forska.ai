@@ -38,11 +38,12 @@
         "Verify in browser that legacy compare URLs normalize to the canonical `rowFilter` state."
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-001"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-003",
@@ -225,6 +226,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-04-21T09:22:36.291Z"
+    "updatedAt": "2026-04-21T09:38:00.615Z"
   }
 }
