@@ -12,6 +12,7 @@ type MockDatabaseState = {
     modelIds: string[]
     summarySourceProjectId: string | null
   }
+  extraLlmRows: MockLlmJudgmentRow[]
   failPromptInsert: boolean
   includeSingleAnswerArticle: boolean
   lastPromptInsertStatement: string | null
@@ -32,6 +33,19 @@ type MockDatabaseState = {
 }
 
 const mockDatabaseStateRef: {current: MockDatabaseState | null} = {current: null}
+
+type MockLlmJudgmentRow = {
+  answeredOriginal: string | null
+  answeredOriginalAsArray: string[] | null
+  articleId: string
+  createdAt: Date
+  modelId: string
+  promptId: string
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
 
 const promptRows = {
   'prompt-1': {
@@ -261,10 +275,45 @@ const getValidatedPromptRows = (statement: string) => {
     })
 }
 
+const getMockLlmJudgmentRow = (params: {answer: string; articleId: string; modelId: string; promptId: string}) => {
+  return {
+    answeredOriginal: params.answer,
+    answeredOriginalAsArray: null,
+    articleId: params.articleId,
+    createdAt: new Date('2026-04-01T00:00:00.000Z'),
+    modelId: params.modelId,
+    promptId: params.promptId,
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  }
+}
+
+const postComparisonProjectJudgments = (
+  app: {handle: (request: Request) => Promise<Response>},
+  body: Record<string, unknown>,
+) => {
+  return app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1/judgments', {
+      body: JSON.stringify(body),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+}
+
+const getComparisonProjectJudgmentsTotalCount = async (response: Response) => {
+  const body = (await response.json()) as {data: {totalCount: number}}
+
+  return body.data.totalCount
+}
+
 const queryJson = async (
   statement: string,
   state: {
     comparisonProject: MockDatabaseState['comparisonProject']
+    extraLlmRows: MockDatabaseState['extraLlmRows']
     promptLinks: MockDatabaseState['promptLinks']
     routeLinks: Array<{id: string; importRouteId: string}>
     sourceProjectLinks: Array<{id: string; sourceProjectId: string}>
@@ -505,6 +554,7 @@ const queryJson = async (
             },
           ]
         : []),
+      ...state.extraLlmRows,
     ]
   }
 
@@ -581,6 +631,7 @@ const registerModuleMocks = () => {
                 getMockDatabaseState().queryStatements.push(statement)
                 return (await queryJson(statement, {
                   comparisonProject: pendingComparisonProject,
+                  extraLlmRows: state.extraLlmRows,
                   includeSingleAnswerArticle: state.includeSingleAnswerArticle,
                   promptLinks: pendingPromptLinks,
                   routeLinks: pendingRouteLinks,
@@ -718,6 +769,7 @@ const createMockDatabaseState = (): MockDatabaseState => {
       modelIds: ['model-1'],
       summarySourceProjectId: null,
     },
+    extraLlmRows: [],
     failPromptInsert: true,
     includeSingleAnswerArticle: false,
     lastPromptInsertStatement: null,
@@ -1255,6 +1307,128 @@ test('comparison judgments normalize missing and invalid rowFilter to multiple a
   expect(missingBody.data.totalCount).toBe(1)
   expect(invalidBody.data.totalCount).toBe(1)
   expect(allBody.data.totalCount).toBe(2)
+})
+
+test('prompt comparison judgments apply rowFilter modes and keep difference filtering', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    comparisonProject: {
+      compareWithHumans: false,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: null,
+    },
+    extraLlmRows: [
+      getMockLlmJudgmentRow({answer: 'yes', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-1'}),
+      getMockLlmJudgmentRow({answer: 'yes', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-2'}),
+    ],
+    failPromptInsert: false,
+    promptLinks: [
+      {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
+      {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const multipleAnswersResponse = await postComparisonProjectJudgments(app, {
+    limit: '50',
+    page: '1',
+    rowFilter: 'multiple-answers',
+  })
+  const fullyAnsweredResponse = await postComparisonProjectJudgments(app, {
+    limit: '50',
+    page: '1',
+    rowFilter: 'fully-answered',
+  })
+  const allRowsWithDifferenceResponse = await postComparisonProjectJudgments(app, {
+    differenceFilter: 'llm-vs-llm',
+    limit: '50',
+    page: '1',
+    rowFilter: 'all',
+  })
+  const [multipleAnswersTotalCount, fullyAnsweredTotalCount, allRowsWithDifferenceTotalCount] = await Promise.all(
+    [multipleAnswersResponse, fullyAnsweredResponse, allRowsWithDifferenceResponse].map(
+      getComparisonProjectJudgmentsTotalCount,
+    ),
+  )
+
+  expect(multipleAnswersResponse.status).toBe(200)
+  expect(fullyAnsweredResponse.status).toBe(200)
+  expect(allRowsWithDifferenceResponse.status).toBe(200)
+  expect(multipleAnswersTotalCount).toBe(2)
+  expect(fullyAnsweredTotalCount).toBe(1)
+  expect(allRowsWithDifferenceTotalCount).toBe(1)
+})
+
+test('summary comparison judgments apply rowFilter modes to shown summary columns', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    comparisonProject: {
+      compareWithHumans: true,
+      humanJudgmentMode: 'summary',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: 'source-project-1',
+    },
+    extraLlmRows: [
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-1'}),
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-1', promptId: 'prompt-2'}),
+      getMockLlmJudgmentRow({answer: 'yes', articleId: 'article-2', modelId: 'model-2', promptId: 'prompt-1'}),
+      getMockLlmJudgmentRow({answer: 'no', articleId: 'article-2', modelId: 'model-2', promptId: 'prompt-2'}),
+    ],
+    failPromptInsert: false,
+    promptLinks: [
+      {
+        criteriaDisposition: 'include',
+        criteriaSectionKey: 'population',
+        criteriaSectionLabel: 'Population',
+        id: 'comparison-project-prompt-1',
+        order: 0,
+        promptId: 'prompt-1',
+      },
+      {
+        criteriaDisposition: 'exclude',
+        criteriaSectionKey: 'outcome',
+        criteriaSectionLabel: 'Outcome',
+        id: 'comparison-project-prompt-2',
+        order: 1,
+        promptId: 'prompt-2',
+      },
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const multipleAnswersResponse = await postComparisonProjectJudgments(app, {
+    limit: '50',
+    page: '1',
+    rowFilter: 'multiple-answers',
+  })
+  const fullyAnsweredResponse = await postComparisonProjectJudgments(app, {
+    limit: '50',
+    page: '1',
+    rowFilter: 'fully-answered',
+  })
+  const allRowsWithDifferenceResponse = await postComparisonProjectJudgments(app, {
+    differenceFilter: 'human-vs-llm',
+    limit: '50',
+    page: '1',
+    rowFilter: 'all',
+  })
+  const [multipleAnswersTotalCount, fullyAnsweredTotalCount, allRowsWithDifferenceTotalCount] = await Promise.all(
+    [multipleAnswersResponse, fullyAnsweredResponse, allRowsWithDifferenceResponse].map(
+      getComparisonProjectJudgmentsTotalCount,
+    ),
+  )
+
+  expect(multipleAnswersResponse.status).toBe(200)
+  expect(fullyAnsweredResponse.status).toBe(200)
+  expect(allRowsWithDifferenceResponse.status).toBe(200)
+  expect(multipleAnswersTotalCount).toBe(2)
+  expect(fullyAnsweredTotalCount).toBe(1)
+  expect(allRowsWithDifferenceTotalCount).toBe(1)
 })
 
 test('prompt comparison judgments keep legacy prompt columns and human prompt answers', async () => {
