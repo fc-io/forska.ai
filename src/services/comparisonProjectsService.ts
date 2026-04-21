@@ -3,6 +3,7 @@ import type {
   ComparisonProjectDifferenceColumn,
   ComparisonProjectDifferenceFilter,
 } from '../utils/comparisonProjectDifferenceFilter.ts'
+import type {ComparisonProjectRowFilter} from '../utils/comparisonProjectRowFilter.ts'
 import {apiClient} from './apiClient.ts'
 
 export type CreateComparisonProjectInput = {
@@ -169,6 +170,12 @@ export type ComparisonProjectJudgmentsPage = {
   limit: number
   totalPages: number
 }
+export type ComparisonProjectRowsRequestFilters = {
+  rowFilter?: ComparisonProjectRowFilter
+  differenceFilter?: ComparisonProjectDifferenceFilter
+}
+export type ComparisonProjectJudgmentsPageRequest = ComparisonProjectRowsRequestFilters & {page: string; limit: string}
+export type ComparisonProjectExportRequest = ComparisonProjectRowsRequestFilters
 
 const getResponseData = <T>(response: {data?: {data?: T | null} | null; error?: unknown}, errorMessage: string) => {
   if (response.error || !response.data?.data) {
@@ -235,17 +242,16 @@ export const fetchComparisonProjectJudgmentsPage = async (
   comparisonProjectId: string,
   page: number,
   limit: number,
-  hideSparseRows?: boolean,
-  showOnlyFullyAnsweredPrompts?: boolean,
+  rowFilter?: ComparisonProjectRowFilter,
   differenceFilter?: ComparisonProjectDifferenceFilter,
 ) => {
-  const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).judgments.post({
+  const body: ComparisonProjectJudgmentsPageRequest = {
     page: String(page),
     limit: String(limit),
-    hideSparseRows,
-    showOnlyFullyAnsweredPrompts,
+    rowFilter,
     differenceFilter,
-  })
+  }
+  const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).judgments.post(body)
 
   return getResponseData<ComparisonProjectJudgmentsPage>(response, 'Failed to fetch comparison project judgments')
 }

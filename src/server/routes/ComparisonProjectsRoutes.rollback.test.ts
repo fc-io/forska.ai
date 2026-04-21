@@ -13,6 +13,7 @@ type MockDatabaseState = {
     summarySourceProjectId: string | null
   }
   failPromptInsert: boolean
+  includeSingleAnswerArticle: boolean
   lastPromptInsertStatement: string | null
   lastUpdateStatement: string | null
   promptLinks: Array<{
@@ -267,6 +268,7 @@ const queryJson = async (
     promptLinks: MockDatabaseState['promptLinks']
     routeLinks: Array<{id: string; importRouteId: string}>
     sourceProjectLinks: Array<{id: string; sourceProjectId: string}>
+    includeSingleAnswerArticle: boolean
   },
 ) => {
   if (statement.includes('FROM app.comparison_project') && statement.includes('updated_at AS updatedAt')) {
@@ -487,6 +489,22 @@ const queryJson = async (
         useFulltextNoImages: false,
         useTitle: true,
       },
+      ...(state.includeSingleAnswerArticle
+        ? [
+            {
+              answeredOriginal: 'yes',
+              answeredOriginalAsArray: null,
+              articleId: 'article-2',
+              createdAt: new Date('2026-04-01T00:00:00.000Z'),
+              modelId: 'model-1',
+              promptId: 'prompt-1',
+              useAbstract: true,
+              useFulltext: false,
+              useFulltextNoImages: false,
+              useTitle: true,
+            },
+          ]
+        : []),
     ]
   }
 
@@ -563,6 +581,7 @@ const registerModuleMocks = () => {
                 getMockDatabaseState().queryStatements.push(statement)
                 return (await queryJson(statement, {
                   comparisonProject: pendingComparisonProject,
+                  includeSingleAnswerArticle: state.includeSingleAnswerArticle,
                   promptLinks: pendingPromptLinks,
                   routeLinks: pendingRouteLinks,
                   sourceProjectLinks: pendingSourceProjectLinks,
@@ -700,6 +719,7 @@ const createMockDatabaseState = (): MockDatabaseState => {
       summarySourceProjectId: null,
     },
     failPromptInsert: true,
+    includeSingleAnswerArticle: false,
     lastPromptInsertStatement: null,
     lastUpdateStatement: null,
     promptLinks: [{id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'}],
@@ -1184,6 +1204,59 @@ test('comparison project sources expose summary capability metadata', async () =
   expect(sourceProject?.prompts[0]?.criteriaSectionKey).toBe('population')
 })
 
+test('comparison judgments normalize missing and invalid rowFilter to multiple answers', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    comparisonProject: {
+      compareWithHumans: false,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: null,
+    },
+    failPromptInsert: false,
+    includeSingleAnswerArticle: true,
+    promptLinks: [
+      {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
+      {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const missingResponse = await app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1/judgments', {
+      body: JSON.stringify({limit: '50', page: '1'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const invalidResponse = await app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1/judgments', {
+      body: JSON.stringify({limit: '50', page: '1', rowFilter: 'not-a-real-filter'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const allResponse = await app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1/judgments', {
+      body: JSON.stringify({limit: '50', page: '1', rowFilter: 'all'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const missingBody = (await missingResponse.json()) as {data: {totalCount: number}}
+  const invalidBody = (await invalidResponse.json()) as {data: {totalCount: number}}
+  const allBody = (await allResponse.json()) as {data: {totalCount: number}}
+
+  expect(missingResponse.status).toBe(200)
+  expect(invalidResponse.status).toBe(200)
+  expect(allResponse.status).toBe(200)
+  expect(missingBody.data.totalCount).toBe(1)
+  expect(invalidBody.data.totalCount).toBe(1)
+  expect(allBody.data.totalCount).toBe(2)
+})
+
 test('prompt comparison judgments keep legacy prompt columns and human prompt answers', async () => {
   mockDatabaseStateRef.current = {
     ...createMockDatabaseState(),
@@ -1215,13 +1288,7 @@ test('prompt comparison judgments keep legacy prompt columns and human prompt an
   }
   const judgmentsResponse = await app.handle(
     new Request('http://localhost/api/comparison-projects/comparison-project-1/judgments', {
-      body: JSON.stringify({
-        differenceFilter: 'llm-vs-llm',
-        hideSparseRows: true,
-        limit: '50',
-        page: '1',
-        showOnlyFullyAnsweredPrompts: true,
-      }),
+      body: JSON.stringify({differenceFilter: 'llm-vs-llm', limit: '50', page: '1', rowFilter: 'fully-answered'}),
       headers: {'content-type': 'application/json'},
       method: 'POST',
     }),
@@ -1294,13 +1361,7 @@ test('summary comparison judgments use synthetic summary columns and derived cel
   }
   const judgmentsResponse = await app.handle(
     new Request('http://localhost/api/comparison-projects/comparison-project-1/judgments', {
-      body: JSON.stringify({
-        differenceFilter: 'llm-vs-llm',
-        hideSparseRows: true,
-        limit: '50',
-        page: '1',
-        showOnlyFullyAnsweredPrompts: true,
-      }),
+      body: JSON.stringify({differenceFilter: 'llm-vs-llm', limit: '50', page: '1', rowFilter: 'fully-answered'}),
       headers: {'content-type': 'application/json'},
       method: 'POST',
     }),
@@ -1384,13 +1445,7 @@ test('summary comparison judgments scope to explicit source project links when a
   const app = new Elysia().use(comparisonProjectsRoutes)
   const judgmentsResponse = await app.handle(
     new Request('http://localhost/api/comparison-projects/comparison-project-1/judgments', {
-      body: JSON.stringify({
-        differenceFilter: 'llm-vs-llm',
-        hideSparseRows: true,
-        limit: '50',
-        page: '1',
-        showOnlyFullyAnsweredPrompts: true,
-      }),
+      body: JSON.stringify({differenceFilter: 'llm-vs-llm', limit: '50', page: '1', rowFilter: 'fully-answered'}),
       headers: {'content-type': 'application/json'},
       method: 'POST',
     }),
