@@ -1,0 +1,203 @@
+{
+  "name": "Compare Judgments Export Plan",
+  "branchName": "ralph/compare-judgments-export",
+  "description": "Add a compare-judgments export flow that mirrors project export, uses one canonical rowFilter model, and keeps compare-page rows and exported CSV rows aligned in prompt and summary modes.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Define the canonical compare rowFilter contract",
+      "description": "As a maintainer, I want compare judgments to use one shared `rowFilter` enum so page state, export state, and server filtering all use the same mutually exclusive contract.",
+      "acceptanceCriteria": [
+        "Add a shared `rowFilter` type with `multiple-answers`, `fully-answered`, and `all` values.",
+        "Update comparison page and export request contracts to use `rowFilter` instead of separate row-filter booleans.",
+        "Missing or invalid `rowFilter` values normalize to `multiple-answers`.",
+        "Targeted `bun test` for comparison route/export coverage passes.",
+        "`bun run lint` passes.",
+        "`bun run build` passes.",
+        "`bun run desktop:build` passes."
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Normalize legacy compare filter URLs to rowFilter",
+      "description": "As a user, I want old compare-page filter URLs to normalize into the new canonical `rowFilter` search param so bookmarked links still land in a sensible state.",
+      "acceptanceCriteria": [
+        "Legacy `showOnlyFullyAnsweredPrompts=1` normalizes to `rowFilter=fully-answered`.",
+        "Legacy `showAllRows=1` normalizes to `rowFilter=all` when the fully answered legacy param is not present.",
+        "Legacy URLs are replaced with canonical `rowFilter` and `differenceFilter` params after parsing.",
+        "When both legacy checkbox params are effectively active, the page normalizes to the stricter `rowFilter=fully-answered` state.",
+        "Targeted `bun test` for comparison route/export coverage passes.",
+        "`bun run lint` passes.",
+        "`bun run build` passes.",
+        "`bun run desktop:build` passes.",
+        "Verify in browser that legacy compare URLs normalize to the canonical `rowFilter` state."
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-003",
+      "title": "Update the comparison judgments endpoint to use rowFilter",
+      "description": "As a maintainer, I want the comparison judgments endpoint to accept the new `rowFilter` enum so server filtering remains the single source of truth for prompt-mode and summary-mode row inclusion.",
+      "acceptanceCriteria": [
+        "`POST /api/comparison-projects/:id/judgments` accepts `rowFilter` together with `differenceFilter`.",
+        "`rowFilter=multiple-answers` keeps the current default sparse-row behavior for both prompt mode and summary mode.",
+        "`rowFilter=fully-answered` requires all shown columns to be answered for the returned row.",
+        "`rowFilter=all` bypasses the row answer coverage filter while preserving difference filtering.",
+        "Targeted `bun test` for comparison route/export coverage passes.",
+        "`bun run lint` passes.",
+        "`bun run build` passes.",
+        "`bun run desktop:build` passes."
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-004",
+      "title": "Replace compare-page checkbox filters with the rowFilter select",
+      "description": "As a user, I want one row-filter select on the compare judgments page so the filter choices are clear and mutually exclusive.",
+      "acceptanceCriteria": [
+        "The compare judgments page replaces the two row-state checkboxes with a single select bound to `rowFilter`.",
+        "The select shows `All rows`, `Rows where all shown columns are answered`, and a mode-aware sparse-answer option label.",
+        "The compare page removes its extra client-side row filtering and renders the server-filtered rows and counts directly.",
+        "Changing the select updates the canonical URL state and refreshes the judgments query.",
+        "Targeted `bun test` for comparison route/export coverage passes.",
+        "`bun run lint` passes.",
+        "`bun run build` passes.",
+        "`bun run desktop:build` passes.",
+        "Verify in browser that compare-page row counts stay aligned with the server-filtered rows after the client-side post-filter is removed."
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-002", "US-003"]
+    },
+    {
+      "id": "US-005",
+      "title": "Expose article summary in comparison row data",
+      "description": "As a maintainer, I want comparison row data to include article summaries so the compare export can include the same article context users expect from project exports.",
+      "acceptanceCriteria": [
+        "Extend `ComparisonProjectJudgmentsRow` to include `articleSummary`.",
+        "Comparison row queries select `article_summary` together with title and article-created timestamp.",
+        "The compare page remains visually unchanged while the extra row field becomes available for export.",
+        "Targeted `bun test` for comparison route/export coverage passes.",
+        "`bun run lint` passes.",
+        "`bun run build` passes.",
+        "`bun run desktop:build` passes."
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003"]
+    },
+    {
+      "id": "US-006",
+      "title": "Share comparison column ordering between page and export",
+      "description": "As a maintainer, I want one reusable comparison-column ordering helper so the compare table and CSV export always use the same column order.",
+      "acceptanceCriteria": [
+        "Extract the current compare-page column-order logic into a shared utility.",
+        "The compare page uses the shared ordering helper without changing visible column order.",
+        "The helper remains usable by the export page and CSV generation code.",
+        "Targeted `bun test` for comparison route/export coverage passes.",
+        "`bun run lint` passes.",
+        "`bun run build` passes.",
+        "`bun run desktop:build` passes."
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-007",
+      "title": "Extract batch-friendly comparison row assembly helpers",
+      "description": "As a maintainer, I want shared batch-friendly comparison row helpers so paged results and streamed exports can reuse the same row assembly and filter logic without materializing the whole dataset in memory.",
+      "acceptanceCriteria": [
+        "Extract reusable helpers for stable scoped-article selection, batch cell assembly, and pure row-filter evaluation.",
+        "The judgments endpoint reuses the shared helpers while preserving current row semantics.",
+        "The shared row shape includes `id`, `articleTitle`, `articleSummary`, `articleCreatedAt`, and `cells`.",
+        "The helpers support streamed export batching instead of requiring one full filtered row array in memory.",
+        "Targeted `bun test` for comparison route/export coverage passes.",
+        "`bun run lint` passes.",
+        "`bun run build` passes.",
+        "`bun run desktop:build` passes."
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003", "US-005"]
+    },
+    {
+      "id": "US-008",
+      "title": "Add the compare judgments CSV export endpoint",
+      "description": "As a user, I want a compare-judgments CSV export endpoint so I can download all rows that match the same filters used on the compare page.",
+      "acceptanceCriteria": [
+        "Add `POST /api/comparison-projects/:id/export` that accepts `rowFilter` and `differenceFilter`.",
+        "The endpoint streams CSV rows incrementally over stable article batches instead of building the full file in memory first.",
+        "The CSV includes `Title`, `Abstract/Summary`, and `Date added` before the ordered comparison answer columns.",
+        "CSV header ordering matches the compare results table ordering.",
+        "Newline-delimited multi-answer cell values are flattened to `; ` in the CSV output.",
+        "Archived comparison projects remain exportable through this read-only endpoint.",
+        "Targeted `bun test` for comparison route/export coverage passes.",
+        "`bun run lint` passes.",
+        "`bun run build` passes.",
+        "`bun run desktop:build` passes."
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-006", "US-007"]
+    },
+    {
+      "id": "US-009",
+      "title": "Add compare export client wiring and entry points",
+      "description": "As a user, I want clear compare export entry points and a dedicated export page so I can export prompt-mode or summary-mode comparisons from the grid or the comparison details screen.",
+      "acceptanceCriteria": [
+        "Add compare export entry points in the comparison grid and the comparison detail page.",
+        "Archived comparison cards also show `Export data` while `Edit` remains active-only.",
+        "Add `/compare-judgments/$id/export` with comparison metadata, filter controls, and an `Export to CSV` action.",
+        "The export page carries active compare-page search params into the export flow so users start from the same filter state.",
+        "Extract or reuse a shared client CSV download helper so project export and compare export use the same download behavior.",
+        "Targeted `bun test` for comparison route/export coverage passes.",
+        "`bun run lint` passes.",
+        "`bun run build` passes.",
+        "`bun run desktop:build` passes.",
+        "Verify in browser that prompt-mode and summary-mode comparisons can be exported from the compare export page.",
+        "Verify in browser that archived comparison projects expose the export flow in read-only form.",
+        "Verify in browser that the compare export page opens with the active compare filters already applied.",
+        "Verify desktop export-page load and download behavior if the shared route or download wiring changes affect desktop packaging."
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-004", "US-008"]
+    },
+    {
+      "id": "US-010",
+      "title": "Lock compare export and filter parity with regressions",
+      "description": "As a maintainer, I want regression coverage for compare export and row-filter parity so prompt mode, summary mode, archived export access, and URL normalization remain stable.",
+      "acceptanceCriteria": [
+        "Add targeted coverage for prompt-mode and summary-mode compare export responses.",
+        "Add targeted coverage proving export filter behavior matches the judgments endpoint behavior for `rowFilter` and `differenceFilter`.",
+        "Add coverage for archived comparison export access and inclusion of `articleSummary` and `articleCreatedAt` export fields.",
+        "Add coverage or verification for legacy compare URLs normalizing to canonical `rowFilter` params.",
+        "Targeted `bun test` for comparison route/export coverage passes.",
+        "`bun run lint` passes.",
+        "`bun run build` passes.",
+        "`bun run desktop:build` passes."
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-008", "US-009"]
+    }
+  ]
+}
