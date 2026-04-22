@@ -29,7 +29,7 @@ const getPendingRefreshLabel = (pendingRefreshCount: number) => {
 const getIndexingBannerTitle = (
   params: {
     blockedReason: ReviewsWarningsData['indexing']['blockedReason']
-    largeRebuild: null | {rebuildPhase: string | null; refreshStatus: 'failed' | 'idle' | 'running' | null}
+    largeRebuild: null | {rebuildPhase: string | null; refreshStatus: 'failed' | 'idle' | 'paused' | 'running' | null}
     pendingArticleRefreshCount: number
     pendingProjectRefreshCount: number
     progressState: ReviewsWarningsData['indexing']['progressState']

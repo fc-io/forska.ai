@@ -2,6 +2,7 @@ import {hostname} from 'node:os'
 
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getDuckdbMartRefreshService} from '../src/server/services/getDuckdbMartRefreshService.ts'
+import {getMaintenanceWorkLeaseService} from '../src/server/services/maintenanceWorkLeaseService.ts'
 import {runProjectMartLargeRebuildCycle} from '../src/server/services/projectMartLargeRebuildRunner.ts'
 import {getProjectMartLargeRebuildStateService} from '../src/server/services/projectMartLargeRebuildStateService.ts'
 import {getProjectMartRefreshStateService} from '../src/server/services/projectMartRefreshStateService.ts'
@@ -15,12 +16,7 @@ type CliOptions = {
   workerId: string
 }
 
-type Claim = {
-  claimedToken: number
-  lastCompletedToken: number
-  projectId: string
-  workerId: string
-}
+type Claim = {claimedToken: number; lastCompletedToken: number; projectId: string; workerId: string}
 
 const defaultLeaseMs = 30_000
 const defaultHeartbeatMs = 10_000
@@ -44,7 +40,13 @@ const getNumberArgValue = (names: string[]) => {
   return rawValue === undefined || Number.isNaN(parsed) ? undefined : parsed
 }
 
-const getExecutionMode = ({dirtyArticleCount, incrementalArticleThreshold}: {dirtyArticleCount: number; incrementalArticleThreshold: number}) => {
+const getExecutionMode = ({
+  dirtyArticleCount,
+  incrementalArticleThreshold,
+}: {
+  dirtyArticleCount: number
+  incrementalArticleThreshold: number
+}) => {
   return dirtyArticleCount === 0 ? 'idle' : dirtyArticleCount <= incrementalArticleThreshold ? 'incremental' : 'full'
 }
 
@@ -66,22 +68,9 @@ const getProjectScopeArticleCount = async (projectId: string) => {
   return Number(row?.count ?? 0)
 }
 
-const getFullRefreshBlockedErrorText = ({
-  dirtyArticleCount,
-  maxFullProjectScopeArticles,
-  projectId,
-  scopeArticleCount,
-}: {
-  dirtyArticleCount: number
-  maxFullProjectScopeArticles: number
-  projectId: string
-  scopeArticleCount: number
-}) => {
-  return `Blocked automatic full refresh for project ${projectId}: scope_article_count=${scopeArticleCount}, dirty_article_count=${dirtyArticleCount}, max_full_project_scope_articles=${maxFullProjectScopeArticles}. Use guarded/manual recovery after reducing scope or raising PROJECT_MART_REFRESH_MAX_FULL_SCOPE_ARTICLES deliberately.`
-}
-
 const getCliOptions = (): CliOptions => {
-  const workerId = getArgValue(['--workerId', '--worker-id']) ?? `project-mart-refresh-worker-isolated:${hostname()}:${process.pid}`
+  const workerId =
+    getArgValue(['--workerId', '--worker-id']) ?? `project-mart-refresh-worker-isolated:${hostname()}:${process.pid}`
   const envMaxFullProjectScopeArticles = Number(process.env.PROJECT_MART_REFRESH_MAX_FULL_SCOPE_ARTICLES ?? '')
   const maxFullProjectScopeArticles =
     getNumberArgValue(['--maxFullProjectScopeArticles', '--max-full-project-scope-articles'])
@@ -119,7 +108,15 @@ const refreshClaimArticleServingIncrementally = async (
       })
 }
 
-const claimProject = async ({leaseMs, projectId, workerId}: {leaseMs: number; projectId?: string; workerId: string}) => {
+const claimProject = async ({
+  leaseMs,
+  projectId,
+  workerId,
+}: {
+  leaseMs: number
+  projectId?: string
+  workerId: string
+}) => {
   const stateService = getProjectMartRefreshStateService()
 
   if (!projectId) {
@@ -153,6 +150,18 @@ const claimProject = async ({leaseMs, projectId, workerId}: {leaseMs: number; pr
       CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedToken
   `)
 
+  if (claim) {
+    await getMaintenanceWorkLeaseService().claimMaintenanceWorkLease({
+      consumerId: workerId,
+      leaseMs,
+      now: currentNow,
+      projectId: claim.projectId,
+      requiredConsumerRole: 'maintenance-worker',
+      scopeKind: 'project',
+      workKind: 'review_index_project_refresh',
+    })
+  }
+
   return claim ?? null
 }
 
@@ -176,7 +185,11 @@ export const runProjectMartRefreshWorkerOnceIsolated = async () => {
   const refreshService = getDuckdbMartRefreshService()
 
   try {
-    const claim = await claimProject({leaseMs: options.leaseMs, projectId: options.projectId, workerId: options.workerId})
+    const claim = await claimProject({
+      leaseMs: options.leaseMs,
+      projectId: options.projectId,
+      workerId: options.workerId,
+    })
 
     if (!claim) {
       const largeRebuildResult = await runProjectMartLargeRebuildCycle({
@@ -226,7 +239,14 @@ export const runProjectMartRefreshWorkerOnceIsolated = async () => {
               refreshToken: claim.claimedToken,
             })
             await stateService.releaseProjectRefreshClaim({projectId: claim.projectId, workerId: options.workerId})
-            console.log(JSON.stringify({claimedToken: claim.claimedToken, projectId: claim.projectId, status: 'completed', workerId: options.workerId}))
+            console.log(
+              JSON.stringify({
+                claimedToken: claim.claimedToken,
+                projectId: claim.projectId,
+                status: 'completed',
+                workerId: options.workerId,
+              }),
+            )
             return
           }
 
@@ -234,13 +254,32 @@ export const runProjectMartRefreshWorkerOnceIsolated = async () => {
         }
       }
 
-      await stateService.completeProjectRefresh({completedToken: claim.claimedToken, projectId: claim.projectId, workerId: options.workerId})
-      console.log(JSON.stringify({claimedToken: claim.claimedToken, projectId: claim.projectId, status: 'completed', workerId: options.workerId}))
+      await stateService.completeProjectRefresh({
+        completedToken: claim.claimedToken,
+        projectId: claim.projectId,
+        workerId: options.workerId,
+      })
+      console.log(
+        JSON.stringify({
+          claimedToken: claim.claimedToken,
+          projectId: claim.projectId,
+          status: 'completed',
+          workerId: options.workerId,
+        }),
+      )
     } catch (error) {
       const errorText = getErrorText(error)
 
       await stateService.failProjectRefresh({error: errorText, projectId: claim.projectId, workerId: options.workerId})
-      console.log(JSON.stringify({claimedToken: claim.claimedToken, error: errorText, projectId: claim.projectId, status: 'failed', workerId: options.workerId}))
+      console.log(
+        JSON.stringify({
+          claimedToken: claim.claimedToken,
+          error: errorText,
+          projectId: claim.projectId,
+          status: 'failed',
+          workerId: options.workerId,
+        }),
+      )
       process.exitCode = 1
     } finally {
       stopHeartbeat()

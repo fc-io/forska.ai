@@ -32,7 +32,8 @@ type ReviewsWarningsResponse = {
       queuedArticleRefreshCount: number
       queuedProjectRefreshCount: number
       queuedRefreshCount: number
-      recoveryMode: 'none'
+      recoveryContext: Record<string, unknown> | null
+      recoveryMode: 'archived_project_mart_recovery' | 'none' | 'retry_backoff'
       requiredConsumerRole: 'maintenance-worker'
       retryAfterAt: string | null
       status: 'blocked' | 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
@@ -199,6 +200,40 @@ const insertDirtyArticleRefreshState = async (projectId: string, articleId: stri
       ${dirtyToken},
       ${dirtyToken},
       TIMESTAMPTZ '2026-04-02T12:01:00.000Z'
+    )
+  `)
+}
+
+const insertFreshArticleRefreshLease = async (projectId: string, articleId: string) => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  await runDatabase(`
+    INSERT INTO app.maintenance_work_lease (
+      id,
+      work_kind,
+      scope_kind,
+      project_id,
+      article_id,
+      required_consumer_role,
+      consumer_id,
+      last_started_at,
+      last_progressed_at,
+      lease_expires_at,
+      fresh_until_at
+    ) VALUES (
+      'test-article-refresh-lease-${projectId}',
+      'review_index_article_refresh',
+      'article',
+      '${projectId}',
+      '${articleId}',
+      'maintenance-worker',
+      'test-maintenance-worker',
+      TIMESTAMPTZ '2026-04-02T12:05:00.000Z',
+      TIMESTAMPTZ '2026-04-02T12:05:15.000Z',
+      TIMESTAMPTZ '2035-04-02T12:05:30.000Z',
+      TIMESTAMPTZ '2035-04-02T12:05:30.000Z'
     )
   `)
 }
@@ -372,6 +407,7 @@ test('reviews warnings report refreshing from ledger and worker progress state',
     lastCompletedRefreshToken: 1,
     lastRequestedAt: '2026-04-02T12:00:00.000Z',
     lastStartedAt: '2026-04-02T12:05:00.000Z',
+    leaseExpiresAt: '2035-04-02T12:05:30.000Z',
     refreshStatus: 'running',
   })
   await insertDirtyArticleRefreshState(projectId, `article-${projectId}`, 2)
@@ -415,6 +451,24 @@ test('reviews warnings report stale when scope exists but review rollups are mis
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
   expect(body.data.indexing.progressState).toBe('stalled')
   expect(body.data.indexing.status).toBe('stale')
+})
+
+test('reviews warnings report processing from fresh persisted article leases', async () => {
+  const projectId = 'project-persisted-article-lease-warning'
+
+  await insertProjectFixture(projectId)
+  await insertDirtyArticleRefreshState(projectId, `article-${projectId}`, 1)
+  await insertFreshArticleRefreshLease(projectId, `article-${projectId}`)
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.activeConsumerCount).toBe(1)
+  expect(body.data.indexing.inFlightArticleRefreshCount).toBe(1)
+  expect(body.data.indexing.queuedArticleRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('processing')
+  expect(body.data.indexing.lastStartedAt).toBe('2026-04-02 12:05:00+00')
+  expect(body.data.indexing.lastProgressedAt).toBe('2026-04-02 12:05:15+00')
 })
 
 test('reviews warnings report failed when refresh work is still dirty after a failed attempt', async () => {

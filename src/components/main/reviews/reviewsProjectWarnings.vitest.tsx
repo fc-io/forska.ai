@@ -54,6 +54,7 @@ const getWarningsData = (indexing: Partial<ReviewsWarningsData['indexing']>): Re
       queuedArticleRefreshCount: 0,
       queuedProjectRefreshCount: 1,
       queuedRefreshCount: 1,
+      recoveryContext: null,
       recoveryMode: 'none',
       requiredConsumerRole: 'maintenance-worker',
       retryAfterAt: null,

@@ -17,8 +17,9 @@ export type ReviewsWarningsData = {
       cursorArticleCreatedAt: string | null
       cursorArticleId: string | null
       lastError: string | null
+      operatorNote: string | null
       rebuildPhase: string | null
-      refreshStatus: 'failed' | 'idle' | 'running' | null
+      refreshStatus: 'failed' | 'idle' | 'paused' | 'running' | null
       refreshToken: number | null
     }
     lastProgressedAt: string | null
@@ -32,7 +33,8 @@ export type ReviewsWarningsData = {
     queuedArticleRefreshCount: number
     queuedProjectRefreshCount: number
     queuedRefreshCount: number
-    recoveryMode: 'none'
+    recoveryContext: Record<string, unknown> | null
+    recoveryMode: 'archived_project_mart_recovery' | 'none' | 'retry_backoff'
     requiredConsumerRole: 'maintenance-worker'
     retryAfterAt: string | null
     status: 'blocked' | 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'

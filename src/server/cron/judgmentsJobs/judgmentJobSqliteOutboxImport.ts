@@ -1,5 +1,6 @@
 import {getAppDatabaseService, type JudgmentInsertRow} from '../../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {getMaintenanceWorkLeaseService} from '../../services/maintenanceWorkLeaseService.ts'
 import {getProjectMartRefreshStateService} from '../../services/projectMartRefreshStateService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getImportableJudgmentJobWhereSql} from './judgmentJobImportScope.ts'
@@ -16,6 +17,7 @@ import {recordJudgmentJobStorageTransfer} from './judgmentJobStorageTransferRunt
 
 const judgmentOutboxBatchMaxRows = 100
 const judgmentOutboxBatchMaxBytes = 4 * 1024 * 1024
+const judgmentOutboxImportLeaseMs = 30_000
 const judgmentOutboxImportLogger = createRateLimitedLogger({windowMs: 30_000})
 
 type JudgmentOutboxDiscardedEntry = {entry: JudgmentJobSqliteOutboxEntry; errorMessage: string}
@@ -417,6 +419,81 @@ const getFailureDiagnostics = ({
   }
 }
 
+const getJudgmentJobProjectId = async (jobId: string) => {
+  const [row] = await getAppDatabaseService().queryJson<{projectId: string}>(`
+    SELECT project_id AS projectId
+    FROM app.judgment_job
+    WHERE id = ${getSqlLiteral(jobId)}
+    LIMIT 1
+  `)
+
+  return row?.projectId ?? null
+}
+
+const claimJudgmentImportMaintenanceWork = async ({
+  claim,
+  claimedBy,
+}: {
+  claim: JudgmentJobSqliteOutboxClaim
+  claimedBy: string
+}) => {
+  const projectId = await getJudgmentJobProjectId(claim.jobId)
+
+  await getMaintenanceWorkLeaseService().claimMaintenanceWorkLease({
+    consumerId: claimedBy,
+    judgmentJobId: claim.jobId,
+    leaseMs: judgmentOutboxImportLeaseMs,
+    projectId,
+    recoveryContext: {claimId: claim.claimId, rowCount: claim.rowCount},
+    requiredConsumerRole: 'judge-worker',
+    scopeKind: 'job',
+    workKind: 'judgment_sqlite_outbox_import',
+  })
+
+  return projectId
+}
+
+const completeJudgmentImportMaintenanceWork = async ({
+  claimedBy,
+  jobId,
+  projectId,
+}: {
+  claimedBy: string
+  jobId: string
+  projectId: string | null
+}) => {
+  await getMaintenanceWorkLeaseService().completeMaintenanceWorkLease({
+    consumerId: claimedBy,
+    judgmentJobId: jobId,
+    projectId,
+    scopeKind: 'job',
+    workKind: 'judgment_sqlite_outbox_import',
+  })
+}
+
+const failJudgmentImportMaintenanceWork = async ({
+  claim,
+  claimedBy,
+  errorMessage,
+  projectId,
+}: {
+  claim: JudgmentJobSqliteOutboxClaim
+  claimedBy: string
+  errorMessage: string
+  projectId: string | null
+}) => {
+  await getMaintenanceWorkLeaseService().failMaintenanceWorkLease({
+    consumerId: claimedBy,
+    judgmentJobId: claim.jobId,
+    leaseMs: judgmentOutboxImportLeaseMs,
+    projectId,
+    recoveryContext: {claimId: claim.claimId, error: errorMessage, rowCount: claim.rowCount},
+    requiredConsumerRole: 'judge-worker',
+    scopeKind: 'job',
+    workKind: 'judgment_sqlite_outbox_import',
+  })
+}
+
 const claimPendingOutboxBatchForJobIds = async ({
   claimedBy,
   jobIds,
@@ -580,6 +657,7 @@ export const runJudgmentJobSqliteOutboxImportCycleForClaimedBatch = async ({
   }
 
   const {claim, rows} = claimedBatch
+  const projectId = await claimJudgmentImportMaintenanceWork({claim, claimedBy})
 
   try {
     const {discardedEntries, importableEntries} = await partitionImportableEntries(rows)
@@ -611,6 +689,7 @@ export const runJudgmentJobSqliteOutboxImportCycleForClaimedBatch = async ({
       insertedRows: missingEntries.length,
       jobId: claim.jobId,
     })
+    await completeJudgmentImportMaintenanceWork({claimedBy, jobId: claim.jobId, projectId})
 
     return {
       claimedBy,
@@ -632,6 +711,7 @@ export const runJudgmentJobSqliteOutboxImportCycleForClaimedBatch = async ({
     )
 
     await sqliteService.releaseOutboxClaim({claimId: claim.claimId, errorMessage, jobId: claim.jobId})
+    await failJudgmentImportMaintenanceWork({claim, claimedBy, errorMessage, projectId})
     throw error
   }
 }

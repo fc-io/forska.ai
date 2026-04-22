@@ -5,6 +5,7 @@ import type {
 } from '../../db/schemaTypes.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getSqlLiteral, getTimestampLiteral} from './appQueryHelpers.ts'
+import {getMaintenanceWorkLeaseService} from './maintenanceWorkLeaseService.ts'
 
 type LargeRebuildStateRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -251,7 +252,22 @@ const claimLargeRebuilds = async ({
         lease_expires_at AS leaseExpiresAt
     `)
 
-    return claimed ? [...acc, claimed] : acc
+    if (!claimed) {
+      return acc
+    }
+
+    await getMaintenanceWorkLeaseService().claimMaintenanceWorkLease({
+      consumerId: workerId,
+      leaseMs,
+      now: currentNow,
+      projectId: claimed.projectId,
+      recoveryContext: {rebuildPhase: claimed.rebuildPhase, refreshToken: claimed.refreshToken},
+      requiredConsumerRole: 'maintenance-worker',
+      scopeKind: 'project',
+      workKind: 'review_index_large_rebuild',
+    })
+
+    return [...acc, claimed]
   }, Promise.resolve([]))
 }
 
@@ -273,6 +289,19 @@ const heartbeatLargeRebuildClaim = async ({leaseMs, now, projectId, workerId}: H
       worker_id AS workerId,
       lease_expires_at AS leaseExpiresAt
   `)
+
+  if (claim) {
+    await getMaintenanceWorkLeaseService().progressMaintenanceWorkLease({
+      consumerId: workerId,
+      leaseMs,
+      now: currentNow,
+      projectId,
+      recoveryContext: {rebuildPhase: claim.rebuildPhase, refreshToken: claim.refreshToken},
+      requiredConsumerRole: 'maintenance-worker',
+      scopeKind: 'project',
+      workKind: 'review_index_large_rebuild',
+    })
+  }
 
   return claim ?? null
 }
@@ -313,6 +342,16 @@ const completeLargeRebuild = async ({now, projectId, workerId}: CompleteLargeReb
       updated_at AS updatedAt
   `)
 
+  if (completed) {
+    await getMaintenanceWorkLeaseService().completeMaintenanceWorkLease({
+      consumerId: workerId,
+      now: currentNow,
+      projectId,
+      scopeKind: 'project',
+      workKind: 'review_index_large_rebuild',
+    })
+  }
+
   return completed ? getLargeRebuildStateRecord(getAppDatabaseService(), projectId) : null
 }
 
@@ -349,6 +388,16 @@ const failLargeRebuild = async ({error, now, projectId, workerId}: FailLargeRebu
       updated_at AS updatedAt
   `)
 
+  if (failed) {
+    await getMaintenanceWorkLeaseService().completeMaintenanceWorkLease({
+      consumerId: workerId,
+      now: currentNow,
+      projectId,
+      scopeKind: 'project',
+      workKind: 'review_index_large_rebuild',
+    })
+  }
+
   return failed ? getLargeRebuildStateRecord(getAppDatabaseService(), projectId) : null
 }
 
@@ -377,6 +426,13 @@ const resetLargeRebuild = async ({
     WHERE project_id = ${getSqlLiteral(projectId)}
   `)
 
+  await getMaintenanceWorkLeaseService().completeMaintenanceWorkLease({
+    now: currentNow,
+    projectId,
+    scopeKind: 'project',
+    workKind: 'review_index_large_rebuild',
+  })
+
   return getLargeRebuildStateRecord(getAppDatabaseService(), projectId)
 }
 
@@ -395,6 +451,13 @@ const pauseLargeRebuild = async ({note, now, projectId, reason}: PauseLargeRebui
       updated_at = ${getTimestampLiteral(currentNow)}
     WHERE project_id = ${getSqlLiteral(projectId)}
   `)
+
+  await getMaintenanceWorkLeaseService().completeMaintenanceWorkLease({
+    now: currentNow,
+    projectId,
+    scopeKind: 'project',
+    workKind: 'review_index_large_rebuild',
+  })
 
   return getLargeRebuildStateRecord(getAppDatabaseService(), projectId)
 }

@@ -5,6 +5,7 @@ import type {
 } from '../../db/schemaTypes.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral, getTimestampLiteral} from './appQueryHelpers.ts'
+import {getMaintenanceWorkLeaseService} from './maintenanceWorkLeaseService.ts'
 
 type RefreshStateRunner = {queryJson: <T>(statement: string) => Promise<T[]>; run: (statement: string) => Promise<void>}
 
@@ -478,7 +479,21 @@ const claimDirtyProjects = async ({
         lease_expires_at AS leaseExpiresAt
     `)
 
-    return claimed ? [...acc, claimed] : acc
+    if (!claimed) {
+      return acc
+    }
+
+    await getMaintenanceWorkLeaseService().claimMaintenanceWorkLease({
+      consumerId: workerId,
+      leaseMs,
+      now: currentNow,
+      projectId: claimed.projectId,
+      requiredConsumerRole: 'maintenance-worker',
+      scopeKind: 'project',
+      workKind: 'review_index_project_refresh',
+    })
+
+    return [...acc, claimed]
   }, Promise.resolve([]))
 }
 
@@ -505,6 +520,18 @@ const heartbeatClaim = async ({
       CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedToken,
       lease_expires_at AS leaseExpiresAt
   `)
+
+  if (claim) {
+    await getMaintenanceWorkLeaseService().progressMaintenanceWorkLease({
+      consumerId: workerId,
+      leaseMs,
+      now: currentNow,
+      projectId,
+      requiredConsumerRole: 'maintenance-worker',
+      scopeKind: 'project',
+      workKind: 'review_index_project_refresh',
+    })
+  }
 
   return claim ?? null
 }
@@ -545,6 +572,16 @@ const releaseProjectRefreshClaim = async ({now, projectId, workerId}: ReleasePro
       refresh_status AS refreshStatus,
       worker_id AS workerId
   `)
+
+  if (released) {
+    await getMaintenanceWorkLeaseService().completeMaintenanceWorkLease({
+      consumerId: workerId,
+      now: currentNow,
+      projectId,
+      scopeKind: 'project',
+      workKind: 'review_index_project_refresh',
+    })
+  }
 
   return released ? getProjectRefreshStateRecord(getAppDatabaseService(), projectId) : null
 }
@@ -693,8 +730,8 @@ const cleanupCompletedProjectRefreshArticleState = async ({
 }
 
 const completeProjectRefresh = async ({completedToken, now, projectId, workerId}: CompleteProjectRefreshParams) => {
-  return getAppDatabaseService().transaction(async (tx) => {
-    const currentNow = getNow(now)
+  const currentNow = getNow(now)
+  const completedState = await getAppDatabaseService().transaction(async (tx) => {
     const [completed] = await tx.queryJson<ProjectRefreshStateRow>(`
       UPDATE app.project_mart_refresh_state
       SET
@@ -727,6 +764,18 @@ const completeProjectRefresh = async ({completedToken, now, projectId, workerId}
 
     return getProjectRefreshStateRecord(tx, projectId)
   })
+
+  if (completedState) {
+    await getMaintenanceWorkLeaseService().completeMaintenanceWorkLease({
+      consumerId: workerId,
+      now: currentNow,
+      projectId,
+      scopeKind: 'project',
+      workKind: 'review_index_project_refresh',
+    })
+  }
+
+  return completedState
 }
 
 const finalizeProjectRefreshAfterLargeRebuild = async ({
@@ -734,8 +783,8 @@ const finalizeProjectRefreshAfterLargeRebuild = async ({
   now,
   projectId,
 }: FinalizeProjectRefreshAfterLargeRebuildParams) => {
-  return getAppDatabaseService().transaction(async (tx) => {
-    const currentNow = getNow(now)
+  const currentNow = getNow(now)
+  const completedState = await getAppDatabaseService().transaction(async (tx) => {
     const [completed] = await tx.queryJson<ProjectRefreshStateRow>(`
       UPDATE app.project_mart_refresh_state
       SET
@@ -765,6 +814,17 @@ const finalizeProjectRefreshAfterLargeRebuild = async ({
 
     return getProjectRefreshStateRecord(tx, projectId)
   })
+
+  if (completedState) {
+    await getMaintenanceWorkLeaseService().completeMaintenanceWorkLease({
+      now: currentNow,
+      projectId,
+      scopeKind: 'project',
+      workKind: 'review_index_project_refresh',
+    })
+  }
+
+  return completedState
 }
 
 const failProjectRefresh = async ({error, now, projectId, workerId}: FailProjectRefreshParams) => {
@@ -790,6 +850,16 @@ const failProjectRefresh = async ({error, now, projectId, workerId}: FailProject
       refresh_status AS refreshStatus,
       worker_id AS workerId
   `)
+
+  if (failed) {
+    await getMaintenanceWorkLeaseService().completeMaintenanceWorkLease({
+      consumerId: workerId,
+      now: currentNow,
+      projectId,
+      scopeKind: 'project',
+      workKind: 'review_index_project_refresh',
+    })
+  }
 
   return failed ? getProjectRefreshStateRecord(getAppDatabaseService(), projectId) : null
 }

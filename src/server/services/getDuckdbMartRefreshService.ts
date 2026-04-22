@@ -1,5 +1,8 @@
+import {hostname} from 'node:os'
+
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
+import {getMaintenanceWorkLeaseService} from './maintenanceWorkLeaseService.ts'
 import {getProjectVisibleJudgmentScopeSql} from './projectVisibleJudgmentRule.ts'
 
 type MartRefreshScope = 'judgment_article' | 'project'
@@ -110,6 +113,7 @@ const martRefreshProjectPurgeRowBatchSize = 10
 const martRefreshProjectRebuildArticleBatchSize = 20_000
 const martReviewArticleServingRewriteBatchSize = 1_000
 const martRefreshRetryDelayMs = 5000
+const martRefreshQueueLeaseMs = 30_000
 const martRefreshScheduleDelayMs = 250
 const martRefreshThroughputWindowMs = 15_000
 const martRefreshYieldDelayMs = 0
@@ -196,6 +200,10 @@ const resetMartRefreshDebugSnapshot = () => {
 
 const isMartRefreshAutoDrainEnabled = () => {
   return martRefreshAutoDrainEnabled
+}
+
+const getMartRefreshQueueWorkerId = () => {
+  return `mart-refresh-queue:${hostname()}:${process.pid}`
 }
 
 const setMartRefreshAutoDrainEnabled = (enabled: boolean) => {
@@ -1699,6 +1707,7 @@ const completeQueuedTask = async (task: MartRefreshTaskRow) => {
     WHERE id = ${getSqlLiteral(task.id)}
       AND COALESCE(refresh_generation, 0) = ${task.refreshGeneration}
   `)
+  await completeQueuedMaintenanceWorkTask(task)
 }
 
 const completeQueuedTasks = async (tasks: MartRefreshTaskRow[]): Promise<void> => {
@@ -1720,6 +1729,108 @@ const getUniqueValues = (values: Array<string | null | undefined>) => {
       }),
     ),
   )
+}
+
+const claimQueuedMaintenanceWorkTask = async (task: MartRefreshTaskRow) => {
+  const workerId = getMartRefreshQueueWorkerId()
+
+  return task.refreshScope === 'project' && task.projectId
+    ? getMaintenanceWorkLeaseService().claimMaintenanceWorkLease({
+        consumerId: workerId,
+        leaseMs: martRefreshQueueLeaseMs,
+        projectId: task.projectId,
+        queueId: task.id,
+        requiredConsumerRole: 'maintenance-worker',
+        scopeKind: 'project',
+        workKind: 'review_index_project_refresh',
+      })
+    : task.refreshScope === 'judgment_article' && task.articleId
+      ? getMaintenanceWorkLeaseService().claimMaintenanceWorkLease({
+          articleId: task.articleId,
+          consumerId: workerId,
+          leaseMs: martRefreshQueueLeaseMs,
+          queueId: task.id,
+          requiredConsumerRole: 'maintenance-worker',
+          scopeKind: 'article',
+          workKind: 'review_index_article_refresh',
+        })
+      : Promise.resolve(null)
+}
+
+const completeQueuedMaintenanceWorkTask = async (task: MartRefreshTaskRow) => {
+  const workerId = getMartRefreshQueueWorkerId()
+
+  return task.refreshScope === 'project' && task.projectId
+    ? getMaintenanceWorkLeaseService().completeMaintenanceWorkLease({
+        consumerId: workerId,
+        projectId: task.projectId,
+        queueId: task.id,
+        scopeKind: 'project',
+        workKind: 'review_index_project_refresh',
+      })
+    : task.refreshScope === 'judgment_article' && task.articleId
+      ? getMaintenanceWorkLeaseService().completeMaintenanceWorkLease({
+          articleId: task.articleId,
+          consumerId: workerId,
+          queueId: task.id,
+          scopeKind: 'article',
+          workKind: 'review_index_article_refresh',
+        })
+      : Promise.resolve()
+}
+
+const failQueuedMaintenanceWorkTask = async (task: MartRefreshTaskRow, error: unknown) => {
+  const workerId = getMartRefreshQueueWorkerId()
+  const retryAfterAt = new Date(Date.now() + martRefreshRetryDelayMs)
+  const recoveryContext = {error: error instanceof Error ? error.message : String(error), queueId: task.id}
+
+  return task.refreshScope === 'project' && task.projectId
+    ? getMaintenanceWorkLeaseService().failMaintenanceWorkLease({
+        consumerId: workerId,
+        leaseMs: martRefreshQueueLeaseMs,
+        projectId: task.projectId,
+        queueId: task.id,
+        recoveryContext,
+        requiredConsumerRole: 'maintenance-worker',
+        retryAfterAt,
+        scopeKind: 'project',
+        workKind: 'review_index_project_refresh',
+      })
+    : task.refreshScope === 'judgment_article' && task.articleId
+      ? getMaintenanceWorkLeaseService().failMaintenanceWorkLease({
+          articleId: task.articleId,
+          consumerId: workerId,
+          leaseMs: martRefreshQueueLeaseMs,
+          queueId: task.id,
+          recoveryContext,
+          requiredConsumerRole: 'maintenance-worker',
+          retryAfterAt,
+          scopeKind: 'article',
+          workKind: 'review_index_article_refresh',
+        })
+      : Promise.resolve()
+}
+
+const claimQueuedMaintenanceWorkTasks = async (tasks: MartRefreshTaskRow[]): Promise<void> => {
+  const [currentTask] = tasks
+
+  if (!currentTask) {
+    return
+  }
+
+  await claimQueuedMaintenanceWorkTask(currentTask)
+  return claimQueuedMaintenanceWorkTasks(tasks.slice(1))
+}
+
+const failQueuedMaintenanceWorkTasks = async (tasks: MartRefreshTaskRow[], error: unknown): Promise<void> => {
+  const [currentTask] = tasks
+
+  if (!currentTask) {
+    return
+  }
+
+  await failQueuedMaintenanceWorkTask(currentTask, error)
+  return failQueuedMaintenanceWorkTasks(tasks.slice(1), error)
 }
 
 const queryMartRefreshBackgroundJson = async <T>(statement: string): Promise<T[]> => {
@@ -2735,6 +2846,7 @@ const processQueuedMartRefreshPass = async (): Promise<boolean> => {
   )
 
   setClaimedQueuedRefreshes(claimedQueuedArticleIds, claimedQueuedProjectIds)
+  await claimQueuedMaintenanceWorkTasks(queuedTasks)
 
   try {
     await refreshQueuedArticleTasks(claimedQueuedArticleIds)
@@ -2756,6 +2868,7 @@ const processQueuedMartRefreshPass = async (): Promise<boolean> => {
     })
     return hasMoreQueuedTasks
   } catch (error) {
+    await failQueuedMaintenanceWorkTasks(queuedTasks, error)
     updateMartRefreshDebugSnapshot({
       lastErrorAt: new Date().toISOString(),
       lastErrorMessage: error instanceof Error ? error.message : String(error),
@@ -2896,6 +3009,18 @@ const recoverQueuedArchivedProjectRefresh = async (projectId: string) => {
   }
 
   const queuedProjectTasks = await _getQueuedProjectTasksForProject(projectId)
+  const workerId = getMartRefreshQueueWorkerId()
+
+  await getMaintenanceWorkLeaseService().claimMaintenanceWorkLease({
+    consumerId: workerId,
+    leaseMs: martRefreshQueueLeaseMs,
+    projectId,
+    recoveryContext: {queuedProjectTaskCount: queuedProjectTasks.length},
+    recoveryMode: 'archived_project_mart_recovery',
+    requiredConsumerRole: 'maintenance-worker',
+    scopeKind: 'project',
+    workKind: 'review_index_archived_project_recovery',
+  })
 
   setMartRefreshProgressSnapshot({
     claimedQueuedArticleIds: [],
@@ -2907,7 +3032,25 @@ const recoverQueuedArchivedProjectRefresh = async (projectId: string) => {
   try {
     await refreshProjects([projectId])
     await completeQueuedTasks(queuedProjectTasks)
+    await getMaintenanceWorkLeaseService().completeMaintenanceWorkLease({
+      consumerId: workerId,
+      projectId,
+      scopeKind: 'project',
+      workKind: 'review_index_archived_project_recovery',
+    })
     return {completedTaskCount: Math.max(queuedProjectTasks.length, 1), projectId}
+  } catch (error) {
+    await getMaintenanceWorkLeaseService().failMaintenanceWorkLease({
+      consumerId: workerId,
+      leaseMs: martRefreshQueueLeaseMs,
+      projectId,
+      recoveryContext: {error: error instanceof Error ? error.message : String(error)},
+      recoveryMode: 'archived_project_mart_recovery',
+      requiredConsumerRole: 'maintenance-worker',
+      scopeKind: 'project',
+      workKind: 'review_index_archived_project_recovery',
+    })
+    throw error
   } finally {
     resetMartRefreshProgressSnapshot()
   }
