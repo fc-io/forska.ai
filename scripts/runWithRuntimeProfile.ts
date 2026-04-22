@@ -6,6 +6,7 @@ export type RuntimeProfileMode =
   | 'app'
   | 'app-server'
   | 'duckdb-migration'
+  | 'judge-only-server'
   | 'maintenance-only-server'
   | 'server-stack'
   | 'stacked-server'
@@ -32,6 +33,18 @@ const getRuntimeProfileServerEnv = ({profileName}: RuntimeProfileCommandOptions,
   return getBackgroundServerEnv({baseEnv: getRuntimeProfileBaseEnv(profileName), role})
 }
 
+const getRuntimeProfileJudgeWorkerEnv = (profileName: RuntimeProfileName) => {
+  const baseEnv = getRuntimeProfileBaseEnv(profileName)
+
+  return {
+    ...baseEnv,
+    API_SERVER_PORT: baseEnv.BACKGROUND_JUDGE_PORT,
+    FORSKA_RUNTIME_SERVICE: 'judge-worker-server',
+    SERVER_DUCKDB_OWNER_URL: `http://127.0.0.1:${baseEnv.BACKGROUND_MAINTENANCE_PORT}`,
+    SERVER_ROLE: 'judge-worker',
+  }
+}
+
 const runtimeProfileModes: Record<RuntimeProfileMode, RuntimeProfileCommandConfig> = {
   'api-only-server': {
     command: ['bun', 'run', '--watch', 'src/server/index.ts'],
@@ -55,6 +68,12 @@ const runtimeProfileModes: Record<RuntimeProfileMode, RuntimeProfileCommandConfi
     command: ['bun', 'src/db/migrateDuckdb.ts'],
     env: ({profileName}) => {
       return getRuntimeProfileBaseEnv(profileName)
+    },
+  },
+  'judge-only-server': {
+    command: ['bun', 'run', '--watch', 'src/server/index.ts'],
+    env: ({profileName}) => {
+      return getRuntimeProfileJudgeWorkerEnv(profileName)
     },
   },
   'server-stack': {
@@ -101,6 +120,7 @@ const getMode = (): RuntimeProfileMode => {
     || mode === 'app'
     || mode === 'app-server'
     || mode === 'duckdb-migration'
+    || mode === 'judge-only-server'
     || mode === 'maintenance-only-server'
     || mode === 'server-stack'
     || mode === 'stacked-server'
@@ -109,7 +129,7 @@ const getMode = (): RuntimeProfileMode => {
   }
 
   throw new Error(
-    `Expected --mode api-only-server|app|app-server|duckdb-migration|maintenance-only-server|server-stack|stacked-server, received ${String(mode)}`,
+    `Expected --mode api-only-server|app|app-server|duckdb-migration|judge-only-server|maintenance-only-server|server-stack|stacked-server, received ${String(mode)}`,
   )
 }
 

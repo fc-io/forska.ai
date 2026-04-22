@@ -37,6 +37,7 @@ import {env} from './utils/env'
 import {getAppServerRuntimeConfig} from './utils/getAppServerRuntimeConfig.ts'
 import {warmCodexAppServer} from './utils/getCodexAppServerClient.ts'
 import {inferenceRuntimeConfig} from './utils/getInferenceRuntimeConfig.ts'
+import {initializeJudgeWorkerJournalIdentity} from './utils/judgeWorkerJournalIdentity.ts'
 import {writeRuntimeOperatorLogEvent} from './utils/runtimeLogger.ts'
 import {shouldServerRoleMountJudgingCrons, shouldServerRoleMountMaintenanceCrons} from './utils/serverRole.ts'
 import {
@@ -101,6 +102,17 @@ const maintenanceCronRoutes = shouldMountMaintenanceCrons
 const judgingCronRoutes = shouldMountJudgingCrons ? new Elysia().use(judgmentsJobsCron) : new Elysia()
 
 await initializeServerRuntimeRole()
+
+if (getCurrentServerRole() === 'judge-worker') {
+  const judgeWorkerJournalIdentity = initializeJudgeWorkerJournalIdentity()
+
+  writeRuntimeOperatorLogEvent({
+    attrs: judgeWorkerJournalIdentity,
+    event: 'judge-worker.journal.identity-ready',
+    message: `[judge-worker] journal identity ready source=${judgeWorkerJournalIdentity.source} path=${judgeWorkerJournalIdentity.journalPath}`,
+    severity: 'INFO',
+  })
+}
 
 if (canCurrentServerOwnDuckdb()) {
   await migrateDuckdb()

@@ -1,4 +1,6 @@
-import {existsSync, rmSync, writeFileSync} from 'node:fs'
+import {existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs'
+import {hostname} from 'node:os'
+import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
@@ -48,6 +50,52 @@ const startServer = (envValues: Record<string, string>) => {
   })
 }
 
+const readPipeText = async (pipe: ReadableStream<Uint8Array> | null) => {
+  return pipe === null ? '' : await new Response(pipe).text()
+}
+
+const getStartupTestDirectory = () => {
+  const startupTestRoot = join(process.cwd(), 'data', 'runtime')
+  mkdirSync(startupTestRoot, {recursive: true})
+
+  return mkdtempSync(join(startupTestRoot, 'index-startup-'))
+}
+
+const expectServerStartupFailure = async ({
+  envValues,
+  expectedMessage,
+  port,
+}: {
+  envValues: Record<string, string>
+  expectedMessage: string
+  port: number
+}) => {
+  const server = startServer(envValues)
+  const result = await Promise.race([
+    server.exited.then((exitCode) => {
+      return {exitCode, status: 'exited' as const}
+    }),
+    waitForServer(port, 2_000)
+      .then(() => {
+        return {exitCode: null, status: 'started' as const}
+      })
+      .catch(() => {
+        return {exitCode: null, status: 'timeout' as const}
+      }),
+  ])
+
+  if (result.status !== 'exited') {
+    await stopServer(server)
+    throw new Error(`Expected startup failure, but server ${result.status} on port ${port}`)
+  }
+
+  const stderr = await readPipeText(server.stderr)
+  const stdout = await readPipeText(server.stdout)
+
+  expect(result.exitCode).not.toBe(0)
+  expect(`${stdout}\n${stderr}`).toContain(expectedMessage)
+}
+
 const runStartupCommand = (args: string[], envValues: Record<string, string>, failureMessage: string) => {
   const result = globalThis.Bun.spawnSync(args, {
     cwd: process.cwd(),
@@ -60,6 +108,147 @@ const runStartupCommand = (args: string[], envValues: Record<string, string>, fa
     throw new Error(result.stderr.toString() || result.stdout.toString() || failureMessage)
   }
 }
+
+const getJudgeWorkerStartupEnv = ({
+  apiPort,
+  duckdbPath,
+  journalPath = '',
+  workerId,
+}: {
+  apiPort: number
+  duckdbPath: string
+  journalPath?: string
+  workerId: string
+}) => {
+  return {
+    API_SERVER_PORT: String(apiPort),
+    DUCKDB_PATH: duckdbPath,
+    JUDGE_WORKER_ID: workerId,
+    JUDGE_WORKER_JOURNAL_PATH: journalPath,
+    RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+    RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+    SERVER_DUCKDB_OWNER_URL: '',
+    SERVER_ROLE: 'judge-worker',
+    VITE_PORT: '4311',
+  }
+}
+
+test('judge-worker startup refuses a missing durable journal identity', async () => {
+  const testDirectory = getStartupTestDirectory()
+  const apiPort = 34991
+
+  try {
+    await expectServerStartupFailure({
+      envValues: getJudgeWorkerStartupEnv({apiPort, duckdbPath: join(testDirectory, 'forska.duckdb'), workerId: ''}),
+      expectedMessage: 'JUDGE_WORKER_ID is required',
+      port: apiPort,
+    })
+  } finally {
+    rmSync(testDirectory, {force: true, recursive: true})
+  }
+})
+
+test('judge-worker startup refuses an unstable journal worker id', async () => {
+  const testDirectory = getStartupTestDirectory()
+  const apiPort = 34992
+
+  try {
+    await expectServerStartupFailure({
+      envValues: getJudgeWorkerStartupEnv({
+        apiPort,
+        duckdbPath: join(testDirectory, 'forska.duckdb'),
+        workerId: `worker-${process.pid}/runtime`,
+      }),
+      expectedMessage: 'JUDGE_WORKER_ID must be a stable filesystem-safe id',
+      port: apiPort,
+    })
+  } finally {
+    rmSync(testDirectory, {force: true, recursive: true})
+  }
+})
+
+test('judge-worker startup refuses a non-durable explicit journal path', async () => {
+  const testDirectory = getStartupTestDirectory()
+  const apiPort = 34993
+
+  try {
+    await expectServerStartupFailure({
+      envValues: getJudgeWorkerStartupEnv({
+        apiPort,
+        duckdbPath: join(testDirectory, 'forska.duckdb'),
+        journalPath: `/tmp/forska-judge-worker-${Date.now()}.sqlite`,
+        workerId: 'startup-nondurable-worker',
+      }),
+      expectedMessage: 'JUDGE_WORKER_JOURNAL_PATH must be on durable app-data storage',
+      port: apiPort,
+    })
+  } finally {
+    rmSync(testDirectory, {force: true, recursive: true})
+  }
+})
+
+test('judge-worker startup refuses an unwritable journal target', async () => {
+  const testDirectory = getStartupTestDirectory()
+  const apiPort = 34994
+  const notDirectoryPath = join(testDirectory, 'not-directory')
+
+  writeFileSync(notDirectoryPath, 'not a directory', 'utf8')
+
+  try {
+    await expectServerStartupFailure({
+      envValues: getJudgeWorkerStartupEnv({
+        apiPort,
+        duckdbPath: join(testDirectory, 'forska.duckdb'),
+        journalPath: join(notDirectoryPath, 'journal.sqlite'),
+        workerId: 'startup-unwritable-worker',
+      }),
+      expectedMessage: 'Judge-worker journal directory is missing or not a directory',
+      port: apiPort,
+    })
+  } finally {
+    rmSync(testDirectory, {force: true, recursive: true})
+  }
+})
+
+test('judge-worker startup refuses a journal target held by another live worker', async () => {
+  const testDirectory = getStartupTestDirectory()
+  const apiPort = 34995
+  const now = new Date().toISOString()
+  const journalPath = join(testDirectory, 'journal.sqlite')
+
+  writeFileSync(journalPath, '', 'utf8')
+  writeFileSync(
+    `${journalPath}.lock`,
+    `${JSON.stringify(
+      {
+        acquiredAt: now,
+        hostname: hostname(),
+        journalPath,
+        leaseId: 'live-worker-lease',
+        pid: process.pid,
+        workerId: 'startup-collision-worker',
+      },
+      null,
+      2,
+    )}\n`,
+    'utf8',
+  )
+
+  try {
+    await expectServerStartupFailure({
+      envValues: getJudgeWorkerStartupEnv({
+        apiPort,
+        duckdbPath: join(testDirectory, 'forska.duckdb'),
+        journalPath,
+        workerId: 'startup-collision-worker',
+      }),
+      expectedMessage: 'collides with another live worker',
+      port: apiPort,
+    })
+  } finally {
+    rmSync(testDirectory, {force: true, recursive: true})
+  }
+})
 
 test('maintenance-worker startup migrates DuckDB before judgment health queries run', async () => {
   const apiPort = 34988

@@ -9,9 +9,11 @@ test('runtime profiles define primary and secondary isolated runtime roots', () 
       env: {
         API_SERVER_PORT: '3001',
         APP_SERVER_PORT: '8080',
+        BACKGROUND_JUDGE_PORT: '3003',
         BACKGROUND_MAINTENANCE_PORT: '3002',
         DUCKDB_PATH: 'data/runtime/primary/forska.duckdb',
         FORSKA_RUNTIME_PROFILE: 'primary',
+        JUDGE_WORKER_ID: 'primary-judge-worker',
         VITE_PORT: '3000',
       },
       name: 'primary',
@@ -21,9 +23,11 @@ test('runtime profiles define primary and secondary isolated runtime roots', () 
       env: {
         API_SERVER_PORT: '3101',
         APP_SERVER_PORT: '8180',
+        BACKGROUND_JUDGE_PORT: '3103',
         BACKGROUND_MAINTENANCE_PORT: '3102',
         DUCKDB_PATH: 'data/runtime/secondary/forska.duckdb',
         FORSKA_RUNTIME_PROFILE: 'secondary',
+        JUDGE_WORKER_ID: 'secondary-judge-worker',
         VITE_PORT: '3100',
       },
       name: 'secondary',
@@ -36,9 +40,11 @@ test('runtime profile helpers return the selected profile and env mapping', () =
   expect(getRuntimeProfileEnv('primary')).toEqual({
     API_SERVER_PORT: '3001',
     APP_SERVER_PORT: '8080',
+    BACKGROUND_JUDGE_PORT: '3003',
     BACKGROUND_MAINTENANCE_PORT: '3002',
     DUCKDB_PATH: 'data/runtime/primary/forska.duckdb',
     FORSKA_RUNTIME_PROFILE: 'primary',
+    JUDGE_WORKER_ID: 'primary-judge-worker',
     VITE_PORT: '3000',
   })
 })
@@ -46,17 +52,25 @@ test('runtime profile helpers return the selected profile and env mapping', () =
 test('runtime profile env merge keeps caller env and lets caller overrides win', () => {
   expect(
     mergeRuntimeProfileEnv({
-      baseEnv: {APP_SERVER_PORT: '9999', CUSTOM_FLAG: 'present', VITE_PORT: '9998'},
+      baseEnv: {
+        APP_SERVER_PORT: '9999',
+        CUSTOM_FLAG: 'present',
+        JUDGE_WORKER_JOURNAL_PATH: 'data/custom/judge.sqlite',
+        VITE_PORT: '9998',
+      },
       overrides: {APP_SERVER_PORT: '9090'},
       profileName: 'secondary',
     }),
   ).toMatchObject({
     API_SERVER_PORT: '3101',
     APP_SERVER_PORT: '9090',
+    BACKGROUND_JUDGE_PORT: '3103',
     BACKGROUND_MAINTENANCE_PORT: '3102',
     CUSTOM_FLAG: 'present',
     DUCKDB_PATH: 'data/runtime/secondary/forska.duckdb',
     FORSKA_RUNTIME_PROFILE: 'secondary',
+    JUDGE_WORKER_ID: 'secondary-judge-worker',
+    JUDGE_WORKER_JOURNAL_PATH: 'data/custom/judge.sqlite',
     VITE_PORT: '3100',
   })
 })

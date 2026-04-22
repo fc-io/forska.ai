@@ -216,6 +216,7 @@ export const getDesktopRuntimeConfig = ({
     FORSKA_DESKTOP_MODE: 'true',
     FORSKA_RUNTIME_PROFILE: 'local',
     FORSKA_RUNTIME_SERVICE: 'dev-single-server',
+    JUDGE_WORKER_ID: 'desktop-judge-worker',
     SERVER_DUCKDB_OWNER_URL: '',
     SERVER_ROLE: 'dev-single',
   }

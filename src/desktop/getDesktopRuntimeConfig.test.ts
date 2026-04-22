@@ -24,6 +24,7 @@ test('uses the macOS application support directory by default', () => {
   expect(runtimeConfig.backendEnv.LOG_DIR).toBe(
     '/Users/tester/Library/Application Support/Forska/desktop/logs/runtime/local',
   )
+  expect(runtimeConfig.backendEnv.JUDGE_WORKER_ID).toBe('desktop-judge-worker')
   expect(runtimeConfig.backendEnv.SERVER_ROLE).toBe('dev-single')
   expect(runtimeConfig.backendLogPath).toBe(
     '/Users/tester/Library/Application Support/Forska/desktop/logs/runtime/local/backend.log',
