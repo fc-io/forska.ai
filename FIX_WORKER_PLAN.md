@@ -772,7 +772,7 @@ Quality Gates:
 - `bun test src/utils/runtimeProfile.test.ts`
 - `bun test src/server/utils/writerConnections.test.ts`
 - `bun test src/agent/judge/judgeStoreTokenUse.test.ts`
-- `bun x eslint src/server/utils/serverRole.ts src/server/utils/serverRuntimeRole.ts src/server/utils/duckdbOwnerLease.ts src/server/utils/duckdbService.ts src/server/utils/env.ts src/server/utils/runtimeBootstrap.ts src/server/utils/runtimeProcessIdentity.ts src/server/utils/runtimeLogger.ts src/server/utils/writerConnections.ts src/server/utils/writerWarnings.ts src/server/utils/ensureFullText.ts src/server/serverMain.ts src/server/utils/startBackgroundWork.ts src/server/utils/backgroundServerStack.ts src/server/utils/projectMartLargeRebuildHeartbeat.ts src/server/utils/projectMartRefreshWorkerHeartbeat.ts src/server/utils/writerConnectionHeartbeat.ts src/server/utils/duckdbScriptAccess.ts src/server/services/getAppQueryService.ts src/server/services/userConfigQueryService.ts src/server/routes/ApiProxyRoutes.ts src/server/routes/WriterConnectionsRoutes.ts src/server/routes/AdminInvestigateRoutes.ts src/server/routes/UsersRoutes.ts src/server/utils/localAppSettings.ts src/server/utils/projectMartLargeRebuildTuning.ts src/server/cron/fullTextJobs.ts src/server/cron/fullTextConversionJobs.ts src/server/cron/judgmentsJobs.ts src/server/cron/nvidiaSmi.ts src/agent/judge.ts src/agent/judge/storeSinglePromptJudgment.ts src/agent/judge/judgeStoreTokenUse.ts src/app/routes/+__root.tsx src/components/Navigation.tsx src/app/routes/+admin/+writer-connections/+index.tsx src/app/routes/+settings/+index.tsx src/db/schemaTypes.ts src/utils/runtimeProfile.ts src/utils/writerConnectionsQuery.ts src/desktop/index.ts src/desktop/getDesktopRuntimeConfig.ts scripts/reproArchivedProjectServingDelete.ts scripts/benchmarkDuckdbAppendLanes.ts scripts/recoverProjectMartRefreshClaims.ts scripts/devServerWatch.ts scripts/runWithRuntimeProfile.ts scripts/startServerStack.ts`
+- `bun run lint`
 - `bun run build`
 - `bun run desktop:build`
 - Runtime verification:
@@ -832,7 +832,7 @@ Quality Gates:
 - `bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts`
 - `bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarningsTrigger.test.ts`
 - `bun test src/server/routes/JudgmentsJobsRoutes.test.ts`
-- `bun x eslint src/server/utils/writerConnections.ts src/server/utils/writerConnectionHeartbeat.ts src/server/routes/WriterConnectionsRoutes.ts src/server/routes/AdminInvestigateRoutes.ts src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts src/server/routes/JudgmentsJobsRoutes.ts`
+- `bun run lint`
 - Runtime verification:
   - when the active owner disappears but a standby `maintenance-worker` candidate is present, diagnostics and health show takeover in progress instead of `waiting_for_maintenance_worker`
   - when live read-only DuckDB is not the deployment choice, ownerless routes still answer from the mirrored ownerless-readable backend
@@ -873,7 +873,7 @@ Quality Gates:
 - `bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts`
 - `bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarningsTrigger.test.ts`
 - `bun test src/server/routes/JudgmentsJobsRoutes.test.ts`
-- `bun x eslint src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts src/server/routes/JudgmentsJobsRoutes.ts src/components/main/reviews/reviewsWarningsQuery.ts src/components/main/reviews/reviewsProjectWarnings.tsx src/components/main/reviews/reviewsIndexingProgress.tsx src/components/main/reviews/reviewsArticlesTable/reviewsArticlesTableContainer.tsx src/components/main/reviews/reviewsArticlesTable/reviewsArticlesUnassessedTableContainer.tsx`
+- `bun run lint`
 - `bun run build`
 - `bun run desktop:build`
 - Browser verification:
@@ -927,7 +927,7 @@ Quality Gates:
 - `bun test scripts/runWithRuntimeProfile.test.ts`
 - `bun test src/server/cron/judgmentsJobs/judgmentDispatchRuntime.test.ts src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.test.ts`
 - `bun test src/agent/judge/judgeStoreTokenUse.test.ts`
-- `bun x eslint src/server/cron/judgmentsJobs.ts src/server/cron/judgmentsJobs/judgmentDispatchRuntime.ts src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts src/server/cron/judgmentsJobs/judgmentsRequestRuntime.ts src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.ts src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/processPromptWithLLM.ts src/server/utils/ensureFullText.ts src/server/routes/JudgmentsJobsRoutes.ts src/server/serverMain.ts src/agent/judge.ts src/agent/judge/storeSinglePromptJudgment.ts src/agent/judge/judgeStoreTokenUse.ts`
+- `bun run lint`
 - Runtime verification:
   - `judge-worker` replays an unacked completion after `maintenance-worker` restart and the completion is applied exactly once
   - `judge-worker` startup fails closed when neither `JUDGE_WORKER_ID` nor `JUDGE_WORKER_JOURNAL_PATH` resolves a stable durable journal target or when the resolved target is missing, unstable, unwritable, or non-durable
@@ -992,7 +992,7 @@ Quality Gates:
 - `bun test src/server/workers/projectMartRefreshWorker.test.ts src/server/services/projectMartLargeRebuildRunner.test.ts`
 - `bun test src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.test.ts`
 - `bun test src/server/routes/AdminInvestigateRoutes.test.ts src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarningsTrigger.test.ts`
-- `bun x eslint src/server/utils/projectMartLargeRebuildTuning.ts src/server/workers/projectMartRefreshWorker.ts src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts src/server/utils/duckdbService.ts src/server/utils/backgroundServerStack.ts src/server/utils/startBackgroundWork.ts src/server/utils/projectMartRefreshWorkerHeartbeat.ts src/server/utils/projectMartLargeRebuildHeartbeat.ts src/server/cron/fullTextJobs.ts src/server/cron/fullTextConversionJobs.ts src/server/cron/judgmentsJobs.ts src/server/routes/AdminInvestigateRoutes.ts`
+- `bun run lint`
 - Runtime verification:
   - the first DuckDB startup uses the highest active rung at or below the configured ceiling instead of booting at the raw ceiling
   - a controlled in-process restart drains queued DuckDB work cleanly and reopens DuckDB at the lower rung after cap step-down
@@ -1032,7 +1032,7 @@ Quality Gates:
 
 - `bun test src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.test.ts src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts`
 - `bun test src/server/routes/JudgmentsJobsRoutes.test.ts`
-- `bun x eslint src/server/cron/judgmentsJobs/judgmentJobRepair.ts src/server/routes/JudgmentsJobsRoutes.ts`
+- `bun run lint`
 - Runtime verification:
   - small retained backlog auto-repair can run without collapsing normal drain into generic offline repair
   - larger retained backlog or repeated append OOM surfaces explicit offline repair or paused recovery state instead of silently looping normal drain
@@ -1107,7 +1107,7 @@ Quality Gates:
 
 - `bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts`
 - `bun test src/server/utils/duckdbServiceMemoryLimit.test.ts`
-- `bun x eslint src/server/utils/projectMartLargeRebuildTuning.ts src/server/utils/duckdbService.ts`
+- `bun run lint`
 - Runtime verification:
   - a higher-memory profile increases maintenance throughput versus `small` for the same representative backlog without changing queue correctness semantics or blocked-state behavior
   - diagnostics show the active throughput profile and current active cap rung so operators can explain why throughput changed
@@ -1473,19 +1473,19 @@ Changes:
   - `recoveryMode`
 - Keep current counts (`pendingProjectRefreshCount`, `pendingArticleRefreshCount`) intact.
 - Drive those fields from project-scoped persisted claims or leases rather than only queue-wide snapshots.
-- Stop mapping `pendingRefreshCount > 0` directly to `status = 'refreshing'` when no eligible consumer exists.
-- Update all review UI consumers so blocked queues render as blocked, not generic refresh or empty states.
+- Stop mapping `pendingRefreshCount > 0` directly to active progress when no eligible consumer or fresh claim exists.
+- Update all review UI consumers so blocked and queued queues render as blocked or queued, not generic refresh or empty states.
 
 Current bug source already confirmed:
 
-- `projectsRoutesGetReviewsWarnings.ts` derives `status = 'refreshing'` from queue counts
-- it does not know whether any role is actually eligible to drain those queues
+- the partial review-warning API now exposes `progressState`, but `status = 'refreshing'` can still mean queued work
+- several review UI consumers still used `status = 'refreshing'` to choose `in progress` copy instead of checking `progressState = 'processing'`
 
 Acceptance criteria:
 
-- no review UI says `in progress` when no eligible maintenance worker is running
+- no review UI says `in progress` unless `progressState = 'processing'`
 - unrelated project activity does not make the requested project display `processing`
-- review empty states distinguish blocked, stale, and actively processing states
+- review empty states distinguish blocked, queued, stalled, stale, and actively processing states
 - review warning responses expose `eligibleConsumerCount` and `retryAfterAt` when those values are needed to explain waiting, cooldown, or breaker-blocked states
 - review warning responses expose `recoveryMode` when paused-at-floor, cooldown, breaker, or repair context changes the operator or UI explanation
 - tests cover the blocked and waiting status
@@ -1731,7 +1731,7 @@ This order keeps role and runtime identity changes ahead of routing, updates Duc
 - `bun test src/desktop/getDesktopRuntimeConfig.test.ts src/desktop/desktopSingleInstance.test.ts`
 - `bun test src/server/utils/writerConnections.test.ts src/agent/judge/judgeStoreTokenUse.test.ts`
 - `bun test src/server/indexStartup.test.ts src/server/utils/duckdbScriptAccess.test.ts src/server/services/getAppQueryService.test.ts src/server/utils/runtimeLogger.test.ts scripts/runWithRuntimeProfile.test.ts src/utils/runtimeProfile.test.ts`
-- `bun x eslint src/server/utils/serverRole.ts src/server/utils/serverRuntimeRole.ts src/server/utils/duckdbOwnerLease.ts src/server/utils/duckdbService.ts src/server/utils/env.ts src/server/utils/runtimeBootstrap.ts src/server/utils/runtimeProcessIdentity.ts src/server/utils/runtimeLogger.ts src/server/utils/writerConnections.ts src/server/utils/writerWarnings.ts src/server/utils/ensureFullText.ts src/server/utils/startBackgroundWork.ts src/server/utils/backgroundServerStack.ts src/server/utils/projectMartLargeRebuildHeartbeat.ts src/server/utils/projectMartRefreshWorkerHeartbeat.ts src/server/utils/writerConnectionHeartbeat.ts src/server/utils/duckdbScriptAccess.ts src/server/serverMain.ts src/server/services/getAppQueryService.ts src/server/services/userConfigQueryService.ts src/server/routes/ApiProxyRoutes.ts src/server/routes/WriterConnectionsRoutes.ts src/server/routes/AdminInvestigateRoutes.ts src/server/routes/UsersRoutes.ts src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts src/server/routes/JudgmentsJobsRoutes.ts src/server/utils/localAppSettings.ts src/server/utils/projectMartLargeRebuildTuning.ts src/server/cron/judgmentsJobs.ts src/server/cron/judgmentsJobs/judgmentDispatchRuntime.ts src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts src/server/cron/judgmentsJobs/judgmentsRequestRuntime.ts src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.ts src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/processPromptWithLLM.ts src/agent/judge.ts src/agent/judge/storeSinglePromptJudgment.ts src/agent/judge/judgeStoreTokenUse.ts src/components/Navigation.tsx src/components/main/reviews/reviewsWarningsQuery.ts src/components/main/reviews/reviewsProjectWarnings.tsx src/components/main/reviews/reviewsIndexingProgress.tsx src/components/main/reviews/reviewsArticlesTable/reviewsArticlesTableContainer.tsx src/components/main/reviews/reviewsArticlesTable/reviewsArticlesUnassessedTableContainer.tsx src/app/routes/+__root.tsx src/app/routes/+admin/+writer-connections/+index.tsx src/app/routes/+settings/+index.tsx src/db/schemaTypes.ts src/utils/runtimeProfile.ts src/utils/writerConnectionsQuery.ts src/desktop/index.ts src/desktop/getDesktopRuntimeConfig.ts scripts/reproArchivedProjectServingDelete.ts scripts/benchmarkDuckdbAppendLanes.ts scripts/recoverProjectMartRefreshClaims.ts scripts/devServerWatch.ts scripts/runWithRuntimeProfile.ts scripts/startServerStack.ts`
+- `bun run lint`
 - `bun run build`
 - `bun run desktop:build`
 - Browser verification:

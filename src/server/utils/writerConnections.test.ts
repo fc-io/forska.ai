@@ -3,6 +3,7 @@ import {expect, test} from 'bun:test'
 import {createRuntimeLogRecord} from './runtimeLogger.ts'
 import {initializeRuntimeProcessIdentity, resetRuntimeProcessIdentityForTests} from './runtimeProcessIdentity.ts'
 import {
+  getWorkerRegistryOverview,
   getWriterConnectionHeartbeatPayload,
   recordWriterConnectionProxy,
   upsertWriterConnectionHeartbeat,
@@ -50,6 +51,7 @@ test('tracks writer connection heartbeats and proxy metadata', () => {
   expect(proxied?.proxyCount).toBe(1)
   expect(proxied?.runtimeProfile).toBe('primary')
   expect(proxied?.writerUrl).toBe('http://127.0.0.1:4011')
+  expect(proxied?.capabilities).toEqual(['api'])
 })
 
 test('uses the shared runtime process identity for runtime logs and writer heartbeats', () => {
@@ -80,4 +82,50 @@ test('uses the shared runtime process identity for runtime logs and writer heart
   expect(heartbeat.service).toBe(runtimeRecord.runtime.service)
   expect(heartbeat.startedAt).toBe(runtimeRecord.runtime.processStartedAt)
   resetRuntimeProcessIdentityForTests()
+})
+
+test('summarizes registered worker capabilities from fresh heartbeats', () => {
+  const startedAt = new Date().toISOString()
+  const apiWorker = upsertWriterConnectionHeartbeat({
+    apiServerPort: 4010,
+    hostname: 'test-host',
+    instanceId: `api-server:test-host:4010:12345:${startedAt}`,
+    listenPort: 4010,
+    pid: 12345,
+    processStartedAt: startedAt,
+    runtimeProfile: 'primary',
+    serverRole: 'api',
+    service: 'api-server',
+    startedAt,
+    writerUrl: 'http://127.0.0.1:4011',
+  })
+  const maintenanceWorker = upsertWriterConnectionHeartbeat({
+    apiServerPort: 4011,
+    hostname: 'test-host',
+    instanceId: `worker-server:test-host:4011:12346:${startedAt}`,
+    listenPort: 4011,
+    pid: 12346,
+    processStartedAt: startedAt,
+    runtimeProfile: 'primary',
+    serverRole: 'worker',
+    service: 'worker-server',
+    startedAt,
+    writerUrl: 'http://127.0.0.1:4011',
+  })
+  const registry = getWorkerRegistryOverview([apiWorker, maintenanceWorker, maintenanceWorker])
+
+  expect(maintenanceWorker.capabilities).toEqual(['duckdb-owner', 'maintenance', 'judging'])
+  expect(registry.registeredWorkerCount).toBe(2)
+  expect(registry.freshRegisteredWorkerCount).toBe(2)
+  expect(registry.staleRegisteredWorkerCount).toBe(0)
+  expect(
+    registry.capabilities.find((capability) => {
+      return capability.capability === 'api'
+    }),
+  ).toMatchObject({eligibleConsumerCount: 1, eligibleConsumerPresent: true, registeredConsumerCount: 1})
+  expect(
+    registry.capabilities.find((capability) => {
+      return capability.capability === 'maintenance'
+    }),
+  ).toMatchObject({eligibleConsumerCount: 1, eligibleConsumerPresent: true, registeredConsumerCount: 1})
 })

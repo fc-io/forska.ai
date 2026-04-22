@@ -6,6 +6,22 @@ export const getReviewIndexingInProgressTitle = (projectId: string) => {
   return `Review indexing in progress for project ${projectId}`
 }
 
+export const getReviewIndexingQueuedTitle = (projectId: string) => {
+  return `Review indexing queued for project ${projectId}`
+}
+
+export const getReviewIndexingQueuedBody = () => {
+  return 'Review index work is queued and waiting for the maintenance worker to pick up the next batch.'
+}
+
+export const getReviewIndexingStalledTitle = () => {
+  return 'Review indexing stalled'
+}
+
+export const getReviewIndexingStalledBody = () => {
+  return 'Review index work has not made progress recently even though a maintenance worker should be available.'
+}
+
 export const getReviewIndexingBlockedTitle = (blockedReason: ReviewIndexingBlockedReason) => {
   return blockedReason === 'paused_by_policy'
     ? 'Review indexing blocked: maintenance worker paused by low-memory policy'

@@ -9,6 +9,10 @@ import {
   getReviewIndexingBlockedBody,
   getReviewIndexingBlockedTitle,
   getReviewIndexingInProgressTitle,
+  getReviewIndexingQueuedBody,
+  getReviewIndexingQueuedTitle,
+  getReviewIndexingStalledBody,
+  getReviewIndexingStalledTitle,
 } from '../getReviewIndexingInProgressTitle.ts'
 import {ReviewsIndexingProgress} from '../reviewsIndexingProgress.tsx'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
@@ -156,17 +160,33 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
           title: getReviewIndexingBlockedTitle(warningsData.indexing.blockedReason),
         }
       : warningsData?.indexing.status === 'refreshing' && warningsData.scope.hasAnyArticlesInScope
-        ? warningsData.indexing.pendingArticleRefreshCount > 0 && warningsData.indexing.pendingProjectRefreshCount === 0
-          ? {
-              description:
-                'New judgments are still being folded into this project. Articles and counts here may change as the backlog clears.',
-              title: 'New judgments are still being incorporated',
-            }
-          : {
-              description:
-                'This project has scoped articles, but the review index is still updating. Articles with judgments may appear here soon.',
-              title: getReviewIndexingInProgressTitle(props.projectId),
-            }
+        ? warningsData.indexing.progressState === 'stalled'
+          ? {description: getReviewIndexingStalledBody(), title: getReviewIndexingStalledTitle()}
+          : warningsData.indexing.progressState !== 'processing'
+            ? {
+                description:
+                  warningsData.indexing.pendingArticleRefreshCount > 0
+                  && warningsData.indexing.pendingProjectRefreshCount === 0
+                    ? "New judgments are queued to be folded into this project's review index. Articles and counts may change once the backlog clears."
+                    : getReviewIndexingQueuedBody(),
+                title:
+                  warningsData.indexing.pendingArticleRefreshCount > 0
+                  && warningsData.indexing.pendingProjectRefreshCount === 0
+                    ? 'New judgments are queued for incorporation'
+                    : getReviewIndexingQueuedTitle(props.projectId),
+              }
+            : warningsData.indexing.pendingArticleRefreshCount > 0
+                && warningsData.indexing.pendingProjectRefreshCount === 0
+              ? {
+                  description:
+                    'New judgments are still being folded into this project. Articles and counts here may change as the backlog clears.',
+                  title: 'New judgments are still being incorporated',
+                }
+              : {
+                  description:
+                    'This project has scoped articles, but the review index is still updating. Articles with judgments may appear here soon.',
+                  title: getReviewIndexingInProgressTitle(props.projectId),
+                }
         : (warningsData?.indexing.status === 'failed' || warningsData?.indexing.status === 'stale')
             && warningsData.scope.hasAnyArticlesInScope
           ? {
@@ -174,8 +194,7 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
                 warningsData.indexing.status === 'failed'
                   ? 'The latest review refresh failed. Results may stay stale or incomplete until the maintenance worker retries the review index.'
                   : 'This project has scoped articles, but the review index is missing or stale. Results may stay empty until the maintenance worker rebuilds the review index.',
-              title:
-                warningsData.indexing.status === 'failed' ? 'Review indexing failed' : 'Review index is catching up',
+              title: warningsData.indexing.status === 'failed' ? 'Review indexing failed' : 'Review index is stale',
             }
           : hasPromptFilters()
             ? {

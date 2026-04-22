@@ -4,7 +4,7 @@ import {type DuckdbOwnerLeaseHistoryEntry, readDuckdbOwnerLeaseHistory} from './
 import {env} from './env.ts'
 import type {RuntimeLogProfile} from './runtimeLogger.ts'
 import {getRuntimeProcessIdentity, type RuntimeProcessServiceName} from './runtimeProcessIdentity.ts'
-import type {ServerRole} from './serverRole.ts'
+import {getServerRoleCapabilities, type ServerRole, type ServerRoleCapability} from './serverRole.ts'
 import {
   canCurrentServerOwnDuckdb,
   getCurrentServerRole,
@@ -55,14 +55,31 @@ type WriterConnectionStoredRecord = WriterConnectionIdentity & {
 }
 
 export type WriterConnectionRecord = WriterConnectionStoredRecord & {
+  capabilities: ServerRoleCapability[]
   isCurrentProcess: boolean
   isStale: boolean
   lastSeenAt: string
 }
 
+export type WorkerRegistryCapabilitySummary = {
+  capability: ServerRoleCapability
+  eligibleConsumerCount: number
+  eligibleConsumerPresent: boolean
+  registeredConsumerCount: number
+  staleConsumerCount: number
+}
+
+export type WorkerRegistryOverview = {
+  capabilities: WorkerRegistryCapabilitySummary[]
+  freshRegisteredWorkerCount: number
+  registeredWorkerCount: number
+  staleRegisteredWorkerCount: number
+}
+
 export type WriterConnectionsOverview = {
   followers: WriterConnectionRecord[]
   history: DuckdbOwnerLeaseHistoryEntry[]
+  registry: WorkerRegistryOverview
   warnings: WriterWarning[]
   writer: WriterConnectionRecord | null
 }
@@ -147,9 +164,59 @@ const toWriterConnectionRecord = (record: WriterConnectionStoredRecord, nowMs: n
 
   return {
     ...record,
+    capabilities: getServerRoleCapabilities(record.serverRole),
     isCurrentProcess: record.instanceId === runtimeIdentity.instanceId,
     isStale: getIsWriterConnectionStale(record, nowMs),
     lastSeenAt: getLastSeenAt(record),
+  }
+}
+
+const getUniqueRegisteredWorkers = (records: WriterConnectionRecord[]) => {
+  return records.reduce<WriterConnectionRecord[]>((registeredWorkers, record) => {
+    return registeredWorkers.some((registeredWorker) => {
+      return registeredWorker.instanceId === record.instanceId
+    })
+      ? registeredWorkers
+      : [...registeredWorkers, record]
+  }, [])
+}
+
+const getCapabilitySummary = (
+  capability: ServerRoleCapability,
+  registeredWorkers: WriterConnectionRecord[],
+): WorkerRegistryCapabilitySummary => {
+  const registeredConsumers = registeredWorkers.filter((registeredWorker) => {
+    return registeredWorker.capabilities.includes(capability)
+  })
+  const staleConsumerCount = registeredConsumers.filter((registeredWorker) => {
+    return registeredWorker.isStale
+  }).length
+  const eligibleConsumerCount = registeredConsumers.length - staleConsumerCount
+
+  return {
+    capability,
+    eligibleConsumerCount,
+    eligibleConsumerPresent: eligibleConsumerCount > 0,
+    registeredConsumerCount: registeredConsumers.length,
+    staleConsumerCount,
+  }
+}
+
+export const getWorkerRegistryOverview = (records: WriterConnectionRecord[]): WorkerRegistryOverview => {
+  const registeredWorkers = getUniqueRegisteredWorkers(records)
+  const staleRegisteredWorkerCount = registeredWorkers.filter((registeredWorker) => {
+    return registeredWorker.isStale
+  }).length
+
+  return {
+    capabilities: (['api', 'duckdb-owner', 'maintenance', 'judging'] satisfies ServerRoleCapability[]).map(
+      (capability) => {
+        return getCapabilitySummary(capability, registeredWorkers)
+      },
+    ),
+    freshRegisteredWorkerCount: registeredWorkers.length - staleRegisteredWorkerCount,
+    registeredWorkerCount: registeredWorkers.length,
+    staleRegisteredWorkerCount,
   }
 }
 
@@ -357,17 +424,19 @@ export const getWriterConnectionsOverview = async (): Promise<WriterConnectionsO
     })
 
   pruneWriterConnections(nowMs)
+  const writer = isCurrentServerWriterDisabled()
+    ? null
+    : toWriterConnectionRecord(
+        getUpdatedWriterConnectionRecord(writerIdentity, undefined, {lastHeartbeatAt: new Date(nowMs).toISOString()}),
+        nowMs,
+      )
 
   return {
     followers,
     history,
+    registry: getWorkerRegistryOverview(writer === null ? followers : [writer, ...followers]),
     warnings,
-    writer: isCurrentServerWriterDisabled()
-      ? null
-      : toWriterConnectionRecord(
-          getUpdatedWriterConnectionRecord(writerIdentity, undefined, {lastHeartbeatAt: new Date(nowMs).toISOString()}),
-          nowMs,
-        ),
+    writer,
   }
 }
 
