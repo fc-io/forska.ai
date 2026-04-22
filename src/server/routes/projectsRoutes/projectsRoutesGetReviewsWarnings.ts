@@ -3,6 +3,7 @@ import {Elysia, t} from 'elysia'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList} from '../../services/appQueryHelpers.ts'
 import {getDuckdbMartRefreshService} from '../../services/getDuckdbMartRefreshService.ts'
+import {getDuckdbOwnerConnectionsOverview} from '../../utils/duckdbOwnerConnections.ts'
 import {shouldCurrentRuntimeRunMartRefreshDrain} from '../../utils/martRefreshDrainEligibility.ts'
 import {shouldCurrentServerRunMaintenanceLoops} from '../../utils/serverRuntimeRole.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
@@ -276,6 +277,20 @@ const getReviewIndexingBlockedReason = (params: {
       : 'waiting_for_maintenance_worker'
 }
 
+const getMaintenanceConsumerAvailability = async () => {
+  const registry = (await getDuckdbOwnerConnectionsOverview()).registry
+  const maintenance = registry.capabilities.find((capability) => {
+    return capability.capability === 'maintenance'
+  })
+
+  return {
+    canRunMaintenanceWork: (maintenance?.freshConsumerCount ?? 0) > 0,
+    canRunMartRefreshDrain: (maintenance?.eligibleConsumerCount ?? 0) > 0,
+    eligibleConsumerCount: maintenance?.eligibleConsumerCount ?? 0,
+    eligibleConsumerPresent: maintenance?.eligibleConsumerPresent ?? false,
+  }
+}
+
 const getMatchingProjectRefreshCount = (projectId: string, projectIds: string[]) => {
   return projectIds.filter((currentProjectId) => {
     return currentProjectId === projectId
@@ -360,6 +375,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       pendingArticleRefreshInfo,
       hasReviewServingRows,
       processingArticleRefreshCount,
+      maintenanceConsumerAvailability,
     ] = await Promise.all([
       getEnabledPromptCount(projectId),
       getHasCuratedArticles(projectId),
@@ -369,6 +385,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       getPendingArticleRefreshInfo(projectId),
       getHasReviewServingRows(projectId),
       getScopedArticleRefreshCount(projectId, progressSnapshot.processingArticleIds),
+      getMaintenanceConsumerAvailability(),
     ])
     const hasLiveProcessingSnapshot =
       getMatchingProjectRefreshCount(projectId, progressSnapshot.processingProjectIds) > 0
@@ -378,9 +395,12 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const isLargeRebuildRunning = projectLargeRebuildState.refreshStatus === 'running'
     const isLargeRebuildQueued = hasLargeRebuild && projectLargeRebuildState.refreshStatus === 'idle'
     const isLargeRebuildFailed = projectLargeRebuildState.refreshStatus === 'failed'
-    const canRunMaintenanceWork = shouldCurrentServerRunMaintenanceLoops()
-    const canRunMartRefreshDrain = shouldCurrentRuntimeRunMartRefreshDrain()
-    const eligibleConsumerPresent = canRunMaintenanceWork && canRunMartRefreshDrain
+    const canRunMaintenanceWork =
+      maintenanceConsumerAvailability.canRunMaintenanceWork || shouldCurrentServerRunMaintenanceLoops()
+    const canRunMartRefreshDrain =
+      maintenanceConsumerAvailability.canRunMartRefreshDrain
+      || (shouldCurrentServerRunMaintenanceLoops() && shouldCurrentRuntimeRunMartRefreshDrain())
+    const eligibleConsumerPresent = maintenanceConsumerAvailability.eligibleConsumerPresent || canRunMartRefreshDrain
     const isProjectRunning =
       !projectRefreshState.isFresh
       && (hasLiveProcessingSnapshot || (projectRefreshState.refreshStatus === 'running' && hasActiveProjectLease))
@@ -441,7 +461,10 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
           activeWorkCount,
           articleRefreshesPerMinute: throughputSnapshot.articleRefreshesPerMinute,
           blockedReason,
-          eligibleConsumerCount: eligibleConsumerPresent ? 1 : 0,
+          eligibleConsumerCount: Math.max(
+            maintenanceConsumerAvailability.eligibleConsumerCount,
+            eligibleConsumerPresent ? 1 : 0,
+          ),
           eligibleConsumerPresent,
           inFlightArticleRefreshCount,
           inFlightProjectRefreshCount,

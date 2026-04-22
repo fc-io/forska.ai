@@ -1,8 +1,21 @@
+import {createHash} from 'node:crypto'
+import {mkdir, readdir, readFile, rename, unlink, writeFile} from 'node:fs/promises'
+import {join} from 'node:path'
+
 import {Effect} from 'effect'
 
-import {type DuckdbOwnerLeaseHistoryEntry, readDuckdbOwnerLeaseHistory} from './duckdbOwnerLease.ts'
+import {
+  type DuckdbOwnerLeaseHistoryEntry,
+  type DuckdbOwnerLeaseMetadata,
+  getDuckdbOwnerLeaseUrl,
+  isDuckdbOwnerLeaseProcessAlive,
+  isDuckdbOwnerLeaseStale,
+  readDuckdbOwnerLease,
+  readDuckdbOwnerLeaseHistory,
+} from './duckdbOwnerLease.ts'
 import {type DuckdbOwnerWarning, getDuckdbOwnerWarnings} from './duckdbOwnerWarnings.ts'
 import {env} from './env.ts'
+import {shouldRunMartRefreshDrainForDuckdbMemoryLimit} from './martRefreshDrainEligibility.ts'
 import {
   assertRuntimeCutoverVersionCompatible,
   getRuntimeCutoverVersion,
@@ -13,7 +26,7 @@ import {
 } from './runtimeCutover.ts'
 import type {RuntimeLogProfile} from './runtimeLogger.ts'
 import {getRuntimeProcessIdentity, type RuntimeProcessServiceName} from './runtimeProcessIdentity.ts'
-import {getServerRoleCapabilities, type ServerRole, type ServerRoleCapability} from './serverRole.ts'
+import {getServerRoleCapabilities, isAutoServerRole, type ServerRole, type ServerRoleCapability} from './serverRole.ts'
 import {
   canCurrentServerOwnDuckdb,
   getCurrentServerRole,
@@ -23,6 +36,7 @@ import {
 
 const duckdbOwnerConnectionHeartbeatWindowMs = 45_000
 const duckdbOwnerConnectionRetentionMs = 10 * 60_000
+const workerRegistryStorageVersion = 1
 const duckdbOwnerConnectionHeaderNames = {
   apiServerPort: 'x-forska-api-server-port',
   hostname: 'x-forska-hostname',
@@ -40,11 +54,48 @@ const duckdbOwnerConnectionHeaderNames = {
 
 type DuckdbOwnerConnectionState = {recordsByConnectionId: Map<string, DuckdbOwnerConnectionStoredRecord>}
 
+export type WorkerRegistryThroughputProfile = {
+  batchSize: number | null
+  martRefreshDrainEligible: boolean
+  maxCyclesPerWake: number | null
+  pollIntervalMs: number | null
+  profile: 'maintenance' | 'maintenance-paused-low-memory' | 'non-maintenance'
+}
+
+export type WorkerRegistryOwnerFreshnessState =
+  | 'owner_dead'
+  | 'owner_fresh'
+  | 'owner_missing'
+  | 'owner_stale'
+  | 'owner_unknown'
+
+export type WorkerRegistryTakeoverIntent = 'none' | 'standby' | 'takeover_in_progress'
+
+export type WorkerRegistryTakeoverState = {
+  candidate: boolean
+  intent: WorkerRegistryTakeoverIntent
+  observedAt: string
+  ownerFreshness: WorkerRegistryOwnerFreshnessState
+  ownerHeartbeatAt: string | null
+  ownerLeaseId: string | null
+  ownerUrl: string | null
+}
+
+export type WorkerRegistryTakeoverOverview = {
+  candidateCount: number
+  latestOwnerFreshness: WorkerRegistryOwnerFreshnessState
+  latestObservedAt: string | null
+  status: 'no_candidate' | 'owner_fresh' | 'standby' | 'takeover_in_progress' | 'unknown'
+  takeoverInProgressCount: number
+}
+
 type DuckdbOwnerConnectionIdentity = {
   apiServerPort: number
+  capabilities: ServerRoleCapability[]
   hostname: string
   instanceId: string
   listenPort: number
+  memoryLimit: string | null
   pid: number
   processStartedAt: string
   runtimeProfile: RuntimeLogProfile
@@ -52,6 +103,8 @@ type DuckdbOwnerConnectionIdentity = {
   serverRole: ServerRole
   service: RuntimeProcessServiceName
   startedAt: string
+  throughputProfile: WorkerRegistryThroughputProfile
+  takeover: WorkerRegistryTakeoverState
   duckdbOwnerUrl: string | null
 }
 
@@ -75,6 +128,7 @@ export type RuntimeCapabilityRegistrySummary = {
   capability: ServerRoleCapability
   eligibleConsumerCount: number
   eligibleConsumerPresent: boolean
+  freshConsumerCount: number
   registeredConsumerCount: number
   staleConsumerCount: number
 }
@@ -84,6 +138,7 @@ export type RuntimeCapabilityRegistryOverview = {
   freshRegisteredProcessCount: number
   registeredProcessCount: number
   staleRegisteredProcessCount: number
+  takeover: WorkerRegistryTakeoverOverview
 }
 
 export type DuckdbOwnerConnectionsOverview = {
@@ -97,9 +152,11 @@ export type DuckdbOwnerConnectionsOverview = {
 
 export type DuckdbOwnerConnectionHeartbeatInput = {
   apiServerPort: number
+  capabilities?: ServerRoleCapability[]
   hostname: string
   instanceId?: string
   listenPort?: number
+  memoryLimit?: string | null
   pid: number
   processStartedAt?: string
   runtimeProfile?: RuntimeLogProfile
@@ -107,8 +164,12 @@ export type DuckdbOwnerConnectionHeartbeatInput = {
   serverRole: ServerRole
   service?: RuntimeProcessServiceName
   startedAt: string
+  throughputProfile?: WorkerRegistryThroughputProfile | null
+  takeover?: WorkerRegistryTakeoverState | null
   duckdbOwnerUrl: string | null
 }
+
+type DuckdbOwnerConnectionStorageOptions = {databasePath?: string}
 
 declare global {
   var __forskaDuckdbOwnerConnectionState: DuckdbOwnerConnectionState | undefined
@@ -124,6 +185,88 @@ const getDuckdbOwnerConnectionState = () => {
 
 const duckdbOwnerConnectionState = getDuckdbOwnerConnectionState()
 
+const getWorkerRegistryStorageDirectory = (databasePath: string) => {
+  return databasePath === ':memory:' ? null : `${databasePath}.worker-registry`
+}
+
+const getWorkerRegistryRecordStorageKey = (connectionId: string) => {
+  return createHash('sha256').update(connectionId).digest('hex')
+}
+
+const getWorkerRegistryRecordPath = (databasePath: string, connectionId: string) => {
+  const storageDirectory = getWorkerRegistryStorageDirectory(databasePath)
+
+  return storageDirectory === null
+    ? null
+    : join(storageDirectory, `${getWorkerRegistryRecordStorageKey(connectionId)}.json`)
+}
+
+const getStringValue = (value: unknown, fallback = '') => {
+  return typeof value === 'string' ? value : fallback
+}
+
+const getNullableStringValue = (value: unknown) => {
+  return typeof value === 'string' && value.trim() !== '' ? value : null
+}
+
+const getNumberValue = (value: unknown, fallback = 0) => {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+const getNullableNumberValue = (value: unknown) => {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+const getPositiveIntegerEnvValue = (value: string | undefined) => {
+  const parsed = Number.parseInt(String(value ?? '').trim(), 10)
+
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
+}
+
+const getCurrentMemoryLimit = () => {
+  return String(process.env.DUCKDB_MEMORY_LIMIT ?? env.DUCKDB_MEMORY_LIMIT ?? '').trim() || null
+}
+
+const getDefaultThroughputProfile = (
+  serverRole: ServerRole,
+  memoryLimit: string | null = getCurrentMemoryLimit(),
+): WorkerRegistryThroughputProfile => {
+  const capabilities = getServerRoleCapabilities(serverRole)
+  const hasMaintenanceCapability = capabilities.includes('maintenance')
+  const martRefreshDrainEligible =
+    hasMaintenanceCapability && shouldRunMartRefreshDrainForDuckdbMemoryLimit(memoryLimit ?? undefined)
+
+  return {
+    batchSize: hasMaintenanceCapability
+      ? getPositiveIntegerEnvValue(process.env.PROJECT_MART_LARGE_REBUILD_BATCH_SIZE)
+      : null,
+    martRefreshDrainEligible,
+    maxCyclesPerWake: hasMaintenanceCapability
+      ? getPositiveIntegerEnvValue(process.env.PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE)
+      : null,
+    pollIntervalMs: hasMaintenanceCapability
+      ? getPositiveIntegerEnvValue(process.env.PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS)
+      : null,
+    profile: hasMaintenanceCapability
+      ? martRefreshDrainEligible
+        ? 'maintenance'
+        : 'maintenance-paused-low-memory'
+      : 'non-maintenance',
+  }
+}
+
+const getDefaultTakeoverState = (): WorkerRegistryTakeoverState => {
+  return {
+    candidate: false,
+    intent: 'none',
+    observedAt: new Date().toISOString(),
+    ownerFreshness: 'owner_unknown',
+    ownerHeartbeatAt: null,
+    ownerLeaseId: null,
+    ownerUrl: null,
+  }
+}
+
 const getNormalizedDuckdbOwnerUrl = (value: string | null | undefined) => {
   const raw = String(value ?? '').trim()
   return raw === '' ? null : raw.endsWith('/') ? raw.slice(0, -1) : raw
@@ -135,19 +278,25 @@ const getCurrentDuckdbOwnerUrl = () => {
 
 const getCurrentDuckdbOwnerConnectionIdentity = (): DuckdbOwnerConnectionIdentity => {
   const runtimeIdentity = getRuntimeProcessIdentity({listenPort: env.API_SERVER_PORT})
+  const serverRole = getCurrentServerRole()
+  const memoryLimit = getCurrentMemoryLimit()
 
   return {
     apiServerPort: env.API_SERVER_PORT,
+    capabilities: getServerRoleCapabilities(serverRole),
     hostname: runtimeIdentity.hostname,
     instanceId: runtimeIdentity.instanceId,
     listenPort: runtimeIdentity.listenPort,
+    memoryLimit,
     pid: process.pid,
     processStartedAt: runtimeIdentity.processStartedAt,
     runtimeProfile: runtimeIdentity.runtimeProfile,
     runtimeVersion: getRuntimeCutoverVersion(),
-    serverRole: getCurrentServerRole(),
+    serverRole,
     service: runtimeIdentity.service,
     startedAt: runtimeIdentity.processStartedAt,
+    throughputProfile: getDefaultThroughputProfile(serverRole, memoryLimit),
+    takeover: getDefaultTakeoverState(),
     duckdbOwnerUrl: getKnownDuckdbOwnerUrl() ?? (canCurrentServerOwnDuckdb() ? getCurrentDuckdbOwnerUrl() : null),
   }
 }
@@ -179,12 +328,14 @@ const toDuckdbOwnerConnectionRecord = (
   nowMs: number,
 ): DuckdbOwnerConnectionRecord => {
   const runtimeIdentity = getRuntimeProcessIdentity({listenPort: env.API_SERVER_PORT})
+  const isCurrentProcess = record.instanceId === runtimeIdentity.instanceId
+  const isCurrentProcessRoleMismatch = isCurrentProcess && record.serverRole !== getCurrentServerRole()
 
   return {
     ...record,
-    capabilities: getServerRoleCapabilities(record.serverRole),
-    isCurrentProcess: record.instanceId === runtimeIdentity.instanceId,
-    isStale: getIsDuckdbOwnerConnectionStale(record, nowMs),
+    capabilities: record.capabilities,
+    isCurrentProcess,
+    isStale: isCurrentProcessRoleMismatch || getIsDuckdbOwnerConnectionStale(record, nowMs),
     lastSeenAt: getLastSeenAt(record),
   }
 }
@@ -209,14 +360,67 @@ const getCapabilitySummary = (
   const staleConsumerCount = registeredConsumers.filter((registeredProcess) => {
     return registeredProcess.isStale
   }).length
-  const eligibleConsumerCount = registeredConsumers.length - staleConsumerCount
+  const freshConsumers = registeredConsumers.filter((registeredProcess) => {
+    return !registeredProcess.isStale
+  })
+  const eligibleConsumers = freshConsumers.filter((registeredProcess) => {
+    return capability === 'maintenance' ? registeredProcess.throughputProfile.martRefreshDrainEligible : true
+  })
+  const eligibleConsumerCount = eligibleConsumers.length
 
   return {
     capability,
     eligibleConsumerCount,
     eligibleConsumerPresent: eligibleConsumerCount > 0,
+    freshConsumerCount: freshConsumers.length,
     registeredConsumerCount: registeredConsumers.length,
     staleConsumerCount,
+  }
+}
+
+const getLatestTakeoverState = (registeredProcesses: DuckdbOwnerConnectionRecord[]) => {
+  return registeredProcesses.reduce<WorkerRegistryTakeoverState | null>((latest, registeredProcess) => {
+    if (latest === null) {
+      return registeredProcess.takeover
+    }
+
+    return registeredProcess.takeover.observedAt.localeCompare(latest.observedAt) > 0
+      ? registeredProcess.takeover
+      : latest
+  }, null)
+}
+
+const getWorkerRegistryTakeoverOverview = (
+  registeredProcesses: DuckdbOwnerConnectionRecord[],
+): WorkerRegistryTakeoverOverview => {
+  const freshCandidates = registeredProcesses.filter((registeredProcess) => {
+    return registeredProcess.takeover.candidate && !registeredProcess.isStale
+  })
+  const takeoverInProgressCount = freshCandidates.filter((registeredProcess) => {
+    return registeredProcess.takeover.intent === 'takeover_in_progress'
+  }).length
+  const latestTakeover = getLatestTakeoverState(registeredProcesses)
+  const latestOwnerFreshness = latestTakeover?.ownerFreshness ?? 'owner_unknown'
+  const ownerLost =
+    latestOwnerFreshness === 'owner_dead'
+    || latestOwnerFreshness === 'owner_missing'
+    || latestOwnerFreshness === 'owner_stale'
+
+  return {
+    candidateCount: freshCandidates.length,
+    latestOwnerFreshness,
+    latestObservedAt: latestTakeover?.observedAt ?? null,
+    status:
+      takeoverInProgressCount > 0
+        ? 'takeover_in_progress'
+        : latestOwnerFreshness === 'owner_fresh'
+          ? 'owner_fresh'
+          : freshCandidates.length > 0
+            ? 'standby'
+            : ownerLost
+              ? 'no_candidate'
+              : 'unknown',
+    takeoverInProgressCount,
   }
 }
 
@@ -237,6 +441,7 @@ export const getRuntimeCapabilityRegistryOverview = (
     freshRegisteredProcessCount: registeredProcesses.length - staleRegisteredProcessCount,
     registeredProcessCount: registeredProcesses.length,
     staleRegisteredProcessCount,
+    takeover: getWorkerRegistryTakeoverOverview(registeredProcesses),
   }
 }
 
@@ -277,6 +482,10 @@ const getServerRoleFromHeader = (value: string | null): ServerRole | null => {
     || value === 'dev-single'
     ? value
     : null
+}
+
+const getServerRoleFromValue = (value: unknown): ServerRole | null => {
+  return typeof value === 'string' ? getServerRoleFromHeader(value) : null
 }
 
 const getRuntimeProfileFromHeader = (value: string | null): RuntimeLogProfile | null => {
@@ -320,6 +529,85 @@ const getInstanceIdFromIdentity = (identity: {
   return `${identity.service}:${identity.hostname}:${identity.listenPort}:${identity.pid}:${identity.processStartedAt}`
 }
 
+const getCapabilityFromValue = (value: unknown): ServerRoleCapability | null => {
+  return value === 'api'
+    || value === 'owner-proxy'
+    || value === 'duckdb-owner'
+    || value === 'maintenance'
+    || value === 'judging'
+    ? value
+    : null
+}
+
+const getCapabilitiesFromValue = (value: unknown, serverRole: ServerRole) => {
+  return Array.isArray(value)
+    ? value.reduce<ServerRoleCapability[]>((capabilities, capabilityValue) => {
+        const capability = getCapabilityFromValue(capabilityValue)
+
+        return capability !== null && !capabilities.includes(capability) ? [...capabilities, capability] : capabilities
+      }, [])
+    : getServerRoleCapabilities(serverRole)
+}
+
+const getThroughputProfileName = (value: unknown): WorkerRegistryThroughputProfile['profile'] | null => {
+  return value === 'maintenance' || value === 'maintenance-paused-low-memory' || value === 'non-maintenance'
+    ? value
+    : null
+}
+
+const normalizeThroughputProfile = (
+  value: WorkerRegistryThroughputProfile | null | undefined,
+  serverRole: ServerRole,
+  memoryLimit: string | null,
+): WorkerRegistryThroughputProfile => {
+  const fallback = getDefaultThroughputProfile(serverRole, memoryLimit)
+  const record = typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null
+
+  return record === null
+    ? fallback
+    : {
+        batchSize: getNullableNumberValue(record.batchSize),
+        martRefreshDrainEligible:
+          typeof record.martRefreshDrainEligible === 'boolean'
+            ? record.martRefreshDrainEligible
+            : fallback.martRefreshDrainEligible,
+        maxCyclesPerWake: getNullableNumberValue(record.maxCyclesPerWake),
+        pollIntervalMs: getNullableNumberValue(record.pollIntervalMs),
+        profile: getThroughputProfileName(record.profile) ?? fallback.profile,
+      }
+}
+
+const getOwnerFreshnessState = (value: unknown): WorkerRegistryOwnerFreshnessState | null => {
+  return value === 'owner_dead'
+    || value === 'owner_fresh'
+    || value === 'owner_missing'
+    || value === 'owner_stale'
+    || value === 'owner_unknown'
+    ? value
+    : null
+}
+
+const getTakeoverIntent = (value: unknown): WorkerRegistryTakeoverIntent | null => {
+  return value === 'none' || value === 'standby' || value === 'takeover_in_progress' ? value : null
+}
+
+const normalizeTakeoverState = (value: WorkerRegistryTakeoverState | null | undefined): WorkerRegistryTakeoverState => {
+  const fallback = getDefaultTakeoverState()
+  const record = typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null
+
+  return record === null
+    ? fallback
+    : {
+        candidate: record.candidate === true,
+        intent: getTakeoverIntent(record.intent) ?? fallback.intent,
+        observedAt: getStringValue(record.observedAt, fallback.observedAt),
+        ownerFreshness: getOwnerFreshnessState(record.ownerFreshness) ?? fallback.ownerFreshness,
+        ownerHeartbeatAt: getNullableStringValue(record.ownerHeartbeatAt),
+        ownerLeaseId: getNullableStringValue(record.ownerLeaseId),
+        ownerUrl: getNormalizedDuckdbOwnerUrl(getNullableStringValue(record.ownerUrl)),
+      }
+}
+
 const getNormalizedDuckdbOwnerConnectionIdentity = (
   input: DuckdbOwnerConnectionHeartbeatInput,
 ): DuckdbOwnerConnectionIdentity => {
@@ -330,12 +618,16 @@ const getNormalizedDuckdbOwnerConnectionIdentity = (
   const instanceId =
     input.instanceId
     ?? getInstanceIdFromIdentity({hostname: input.hostname, listenPort, pid: input.pid, processStartedAt, service})
+  const memoryLimit = input.memoryLimit ?? null
+  const capabilities = getCapabilitiesFromValue(input.capabilities, input.serverRole)
 
   return {
     apiServerPort: input.apiServerPort,
+    capabilities,
     hostname: input.hostname,
     instanceId,
     listenPort,
+    memoryLimit,
     pid: input.pid,
     processStartedAt,
     runtimeProfile,
@@ -343,6 +635,8 @@ const getNormalizedDuckdbOwnerConnectionIdentity = (
     serverRole: input.serverRole,
     service,
     startedAt: processStartedAt,
+    throughputProfile: normalizeThroughputProfile(input.throughputProfile, input.serverRole, memoryLimit),
+    takeover: normalizeTakeoverState(input.takeover),
     duckdbOwnerUrl: input.duckdbOwnerUrl,
   }
 }
@@ -393,6 +687,7 @@ const getUpdatedDuckdbOwnerConnectionRecord = (
   return {
     connectionId,
     apiServerPort: normalizedInput.apiServerPort,
+    capabilities: normalizedInput.capabilities,
     firstSeenAt: previous?.firstSeenAt ?? nowIso,
     hostname: normalizedInput.hostname,
     instanceId: normalizedInput.instanceId,
@@ -400,6 +695,7 @@ const getUpdatedDuckdbOwnerConnectionRecord = (
     lastProxyAt: updates.lastProxyAt ?? previous?.lastProxyAt ?? null,
     lastRequestPath: updates.lastRequestPath ?? previous?.lastRequestPath ?? null,
     listenPort: normalizedInput.listenPort,
+    memoryLimit: normalizedInput.memoryLimit,
     pid: normalizedInput.pid,
     processStartedAt: normalizedInput.processStartedAt,
     proxyCount: updates.proxyCount ?? previous?.proxyCount ?? 0,
@@ -408,6 +704,8 @@ const getUpdatedDuckdbOwnerConnectionRecord = (
     serverRole: normalizedInput.serverRole,
     service: normalizedInput.service,
     startedAt: normalizedInput.startedAt,
+    throughputProfile: normalizedInput.throughputProfile,
+    takeover: normalizedInput.takeover,
     duckdbOwnerUrl: normalizedInput.duckdbOwnerUrl,
   } satisfies DuckdbOwnerConnectionStoredRecord
 }
@@ -443,19 +741,215 @@ export const assertDuckdbOwnerConnectionHeartbeatCompatible = (input: DuckdbOwne
   })
 }
 
-export const upsertDuckdbOwnerConnectionHeartbeat = (input: DuckdbOwnerConnectionHeartbeatInput) => {
+const isMissingFileError = (error: unknown) => {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT'
+}
+
+const isJsonSyntaxError = (error: unknown) => {
+  return error instanceof SyntaxError || (error instanceof Error && error.name === 'SyntaxError')
+}
+
+const normalizeStoredDuckdbOwnerConnectionRecord = (value: unknown): DuckdbOwnerConnectionStoredRecord | null => {
+  const record = typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : null
+  const serverRole = getServerRoleFromValue(record?.serverRole)
+
+  if (record === null || serverRole === null) {
+    return null
+  }
+
+  const startedAt = getStringValue(record.startedAt, getStringValue(record.processStartedAt, new Date().toISOString()))
+  const input = {
+    apiServerPort: getNumberValue(record.apiServerPort),
+    capabilities: getCapabilitiesFromValue(record.capabilities, serverRole),
+    hostname: getStringValue(record.hostname),
+    instanceId: getStringValue(record.instanceId, getStringValue(record.connectionId)),
+    listenPort: getNumberValue(record.listenPort, getNumberValue(record.apiServerPort)),
+    memoryLimit: getNullableStringValue(record.memoryLimit),
+    pid: getNumberValue(record.pid),
+    processStartedAt: getStringValue(record.processStartedAt, startedAt),
+    runtimeProfile: getRuntimeProfileFromHeader(getStringValue(record.runtimeProfile)) ?? undefined,
+    runtimeVersion: normalizeRuntimeCutoverVersion(getNullableStringValue(record.runtimeVersion)),
+    serverRole,
+    service: getRuntimeProcessServiceFromHeader(getStringValue(record.service)) ?? undefined,
+    startedAt,
+    throughputProfile: normalizeThroughputProfile(
+      record.throughputProfile as WorkerRegistryThroughputProfile | null | undefined,
+      serverRole,
+      getNullableStringValue(record.memoryLimit),
+    ),
+    takeover: normalizeTakeoverState(record.takeover as WorkerRegistryTakeoverState | null | undefined),
+    duckdbOwnerUrl: getNormalizedDuckdbOwnerUrl(getNullableStringValue(record.duckdbOwnerUrl)),
+  } satisfies DuckdbOwnerConnectionHeartbeatInput
+  const normalizedRecord = getUpdatedDuckdbOwnerConnectionRecord(input, undefined, {
+    lastHeartbeatAt: getNullableStringValue(record.lastHeartbeatAt),
+    lastProxyAt: getNullableStringValue(record.lastProxyAt),
+    lastRequestPath: getNullableStringValue(record.lastRequestPath),
+    proxyCount: getNumberValue(record.proxyCount),
+  })
+
+  return {
+    ...normalizedRecord,
+    connectionId: getStringValue(record.connectionId, normalizedRecord.connectionId),
+    firstSeenAt: getStringValue(record.firstSeenAt, normalizedRecord.firstSeenAt),
+  }
+}
+
+const readWorkerRegistryRecord = async (
+  databasePath: string,
+  connectionId: string,
+): Promise<DuckdbOwnerConnectionStoredRecord | null> => {
+  const recordPath = getWorkerRegistryRecordPath(databasePath, connectionId)
+
+  if (recordPath === null) {
+    return null
+  }
+
+  try {
+    const raw = await readFile(recordPath, 'utf8')
+    const parsed = JSON.parse(raw) as unknown
+    return normalizeStoredDuckdbOwnerConnectionRecord(parsed)
+  } catch (error) {
+    if (isMissingFileError(error) || isJsonSyntaxError(error)) {
+      return null
+    }
+
+    throw error
+  }
+}
+
+const writeWorkerRegistryRecord = async (record: DuckdbOwnerConnectionStoredRecord, databasePath = env.DUCKDB_PATH) => {
+  const recordPath = getWorkerRegistryRecordPath(databasePath, record.connectionId)
+  const storageDirectory = getWorkerRegistryStorageDirectory(databasePath)
+
+  if (recordPath === null || storageDirectory === null) {
+    return
+  }
+
+  await mkdir(storageDirectory, {recursive: true})
+  const temporaryPath = `${recordPath}.${process.pid}.${Date.now()}.tmp`
+  await writeFile(temporaryPath, JSON.stringify({storageVersion: workerRegistryStorageVersion, ...record}, null, 2))
+  await rename(temporaryPath, recordPath)
+}
+
+const readWorkerRegistryRecords = async (
+  databasePath = env.DUCKDB_PATH,
+  nowMs = Date.now(),
+): Promise<DuckdbOwnerConnectionStoredRecord[]> => {
+  const storageDirectory = getWorkerRegistryStorageDirectory(databasePath)
+
+  if (storageDirectory === null) {
+    return databasePath === env.DUCKDB_PATH ? [...duckdbOwnerConnectionState.recordsByConnectionId.values()] : []
+  }
+
+  try {
+    const fileNames = await readdir(storageDirectory)
+    const jsonFileNames = fileNames.filter((fileName) => {
+      return fileName.endsWith('.json')
+    })
+    const records = await Promise.all(
+      jsonFileNames.map(async (fileName) => {
+        try {
+          const raw = await readFile(join(storageDirectory, fileName), 'utf8')
+          return normalizeStoredDuckdbOwnerConnectionRecord(JSON.parse(raw) as unknown)
+        } catch (error) {
+          if (isMissingFileError(error) || isJsonSyntaxError(error)) {
+            return null
+          }
+
+          throw error
+        }
+      }),
+    )
+    const retainedRecords = records.filter((record): record is DuckdbOwnerConnectionStoredRecord => {
+      return record !== null && nowMs - new Date(getLastSeenAt(record)).getTime() <= duckdbOwnerConnectionRetentionMs
+    })
+
+    await Promise.all(
+      records.map(async (record, index) => {
+        const fileName = jsonFileNames[index]
+        const shouldRemove =
+          fileName !== undefined
+          && record !== null
+          && nowMs - new Date(getLastSeenAt(record)).getTime() > duckdbOwnerConnectionRetentionMs
+
+        return shouldRemove
+          ? unlink(join(storageDirectory, fileName)).catch(() => {
+              return undefined
+            })
+          : undefined
+      }),
+    )
+
+    return retainedRecords
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return databasePath === env.DUCKDB_PATH ? [...duckdbOwnerConnectionState.recordsByConnectionId.values()] : []
+    }
+
+    throw error
+  }
+}
+
+const getMergedDuckdbOwnerConnectionRecords = async (
+  nowMs: number,
+  databasePath = env.DUCKDB_PATH,
+): Promise<DuckdbOwnerConnectionStoredRecord[]> => {
+  const memoryRecords =
+    databasePath === env.DUCKDB_PATH ? [...duckdbOwnerConnectionState.recordsByConnectionId.values()] : []
+  const records = [...memoryRecords, ...(await readWorkerRegistryRecords(databasePath, nowMs))]
+
+  return records.reduce<DuckdbOwnerConnectionStoredRecord[]>((mergedRecords, record) => {
+    const existingIndex = mergedRecords.findIndex((mergedRecord) => {
+      return mergedRecord.connectionId === record.connectionId
+    })
+
+    if (existingIndex === -1) {
+      return [...mergedRecords, record]
+    }
+
+    const existingRecord = mergedRecords[existingIndex]
+    const nextRecord =
+      existingRecord && getLastSeenAt(record).localeCompare(getLastSeenAt(existingRecord)) > 0 ? record : existingRecord
+
+    return mergedRecords.map((mergedRecord, index) => {
+      return index === existingIndex ? nextRecord : mergedRecord
+    })
+  }, [])
+}
+
+const getPreviousDuckdbOwnerConnectionRecord = async (
+  input: DuckdbOwnerConnectionHeartbeatInput,
+  databasePath = env.DUCKDB_PATH,
+): Promise<DuckdbOwnerConnectionStoredRecord | undefined> => {
+  const connectionId = getDuckdbOwnerConnectionId(input)
+  const memoryRecord =
+    databasePath === env.DUCKDB_PATH ? duckdbOwnerConnectionState.recordsByConnectionId.get(connectionId) : undefined
+
+  return memoryRecord ?? (await readWorkerRegistryRecord(databasePath, connectionId)) ?? undefined
+}
+
+export const upsertDuckdbOwnerConnectionHeartbeat = async (
+  input: DuckdbOwnerConnectionHeartbeatInput,
+  options: DuckdbOwnerConnectionStorageOptions = {},
+): Promise<DuckdbOwnerConnectionRecord> => {
   const nowMs = Date.now()
-  const previous = duckdbOwnerConnectionState.recordsByConnectionId.get(getDuckdbOwnerConnectionId(input))
+  const databasePath = options.databasePath ?? env.DUCKDB_PATH
+  const previous = await getPreviousDuckdbOwnerConnectionRecord(input, databasePath)
   const nextRecord = getUpdatedDuckdbOwnerConnectionRecord(input, previous, {
     lastHeartbeatAt: new Date(nowMs).toISOString(),
   })
 
   pruneDuckdbOwnerConnections(nowMs)
   duckdbOwnerConnectionState.recordsByConnectionId.set(nextRecord.connectionId, nextRecord)
+  await writeWorkerRegistryRecord(nextRecord, databasePath)
   return toDuckdbOwnerConnectionRecord(nextRecord, nowMs)
 }
 
-export const recordDuckdbOwnerConnectionProxy = (headers: Headers, requestPath: string) => {
+export const recordDuckdbOwnerConnectionProxy = async (
+  headers: Headers,
+  requestPath: string,
+  options: DuckdbOwnerConnectionStorageOptions = {},
+): Promise<DuckdbOwnerConnectionRecord | null> => {
   assertDuckdbOwnerConnectionProxyHeadersCompatible(headers)
 
   const input = getDuckdbOwnerConnectionIdentityFromHeaders(headers)
@@ -466,7 +960,8 @@ export const recordDuckdbOwnerConnectionProxy = (headers: Headers, requestPath: 
     return null
   }
 
-  const previous = duckdbOwnerConnectionState.recordsByConnectionId.get(getDuckdbOwnerConnectionId(input))
+  const databasePath = options.databasePath ?? env.DUCKDB_PATH
+  const previous = await getPreviousDuckdbOwnerConnectionRecord(input, databasePath)
   const nextRecord = getUpdatedDuckdbOwnerConnectionRecord(input, previous, {
     lastHeartbeatAt: new Date(nowMs).toISOString(),
     lastProxyAt: new Date(nowMs).toISOString(),
@@ -476,44 +971,101 @@ export const recordDuckdbOwnerConnectionProxy = (headers: Headers, requestPath: 
 
   pruneDuckdbOwnerConnections(nowMs)
   duckdbOwnerConnectionState.recordsByConnectionId.set(nextRecord.connectionId, nextRecord)
+  await writeWorkerRegistryRecord(nextRecord, databasePath)
   return toDuckdbOwnerConnectionRecord(nextRecord, nowMs)
 }
 
-export const getDuckdbOwnerConnectionsOverview = async (): Promise<DuckdbOwnerConnectionsOverview> => {
+const getOwnerFreshnessFromLease = (lease: DuckdbOwnerLeaseMetadata | null) => {
+  return lease === null
+    ? 'owner_missing'
+    : !isDuckdbOwnerLeaseProcessAlive(lease)
+      ? 'owner_dead'
+      : isDuckdbOwnerLeaseStale(lease)
+        ? 'owner_stale'
+        : 'owner_fresh'
+}
+
+const getCurrentWorkerRegistryTakeoverState = async (): Promise<WorkerRegistryTakeoverState> => {
+  try {
+    const lease = await Effect.runPromise(readDuckdbOwnerLease(env.DUCKDB_PATH))
+    const ownerFreshness = getOwnerFreshnessFromLease(lease)
+    const isCandidate = isAutoServerRole(env.SERVER_ROLE) && !canCurrentServerOwnDuckdb()
+    const intent = !isCandidate ? 'none' : ownerFreshness === 'owner_fresh' ? 'standby' : 'takeover_in_progress'
+
+    return {
+      candidate: isCandidate,
+      intent,
+      observedAt: new Date().toISOString(),
+      ownerFreshness,
+      ownerHeartbeatAt: lease?.heartbeatAt ?? null,
+      ownerLeaseId: lease?.leaseId ?? null,
+      ownerUrl: lease === null ? getKnownDuckdbOwnerUrl() : getDuckdbOwnerLeaseUrl(lease),
+    }
+  } catch {
+    return {
+      ...getDefaultTakeoverState(),
+      candidate: isAutoServerRole(env.SERVER_ROLE) && !canCurrentServerOwnDuckdb(),
+      ownerFreshness: 'owner_unknown',
+    }
+  }
+}
+
+const getCurrentDuckdbOwnerConnectionHeartbeatIdentity = async (): Promise<DuckdbOwnerConnectionIdentity> => {
+  return {...getCurrentDuckdbOwnerConnectionIdentity(), takeover: await getCurrentWorkerRegistryTakeoverState()}
+}
+
+const getDuckdbOwnerRecordFromRecords = (
+  records: DuckdbOwnerConnectionRecord[],
+): DuckdbOwnerConnectionRecord | null => {
+  const [ownerRecord] = records
+    .filter((record) => {
+      return record.capabilities.includes('duckdb-owner')
+    })
+    .sort((left, right) => {
+      return right.lastSeenAt.localeCompare(left.lastSeenAt)
+    })
+
+  return ownerRecord ?? null
+}
+
+export const getDuckdbOwnerConnectionsOverview = async (
+  options: DuckdbOwnerConnectionStorageOptions = {},
+): Promise<DuckdbOwnerConnectionsOverview> => {
   const nowMs = Date.now()
-  const ownerIdentity = getCurrentDuckdbOwnerConnectionIdentity()
-  const history = await Effect.runPromise(readDuckdbOwnerLeaseHistory(env.DUCKDB_PATH))
+  const databasePath = options.databasePath ?? env.DUCKDB_PATH
+  const history = await Effect.runPromise(readDuckdbOwnerLeaseHistory(databasePath))
   const warnings = isCurrentServerDuckdbOwnerProxyDisabled()
     ? [getOwnerProxyDisabledWarning(), ...getDuckdbOwnerWarnings()]
     : getDuckdbOwnerWarnings()
-  const followers = [...duckdbOwnerConnectionState.recordsByConnectionId.values()]
-    .map((record) => {
-      return toDuckdbOwnerConnectionRecord(record, nowMs)
-    })
-    .sort((a, b) => {
-      return b.lastSeenAt.localeCompare(a.lastSeenAt)
-    })
+  const storedRecords = await getMergedDuckdbOwnerConnectionRecords(nowMs, databasePath)
+  const currentOwner = canCurrentServerOwnDuckdb()
+    ? await upsertDuckdbOwnerConnectionHeartbeat(await getDuckdbOwnerConnectionHeartbeatPayload(), {databasePath})
+    : null
+  const storedConnectionRecords = storedRecords.map((record) => {
+    return toDuckdbOwnerConnectionRecord(record, nowMs)
+  })
+  const allRecords: DuckdbOwnerConnectionRecord[] = (
+    currentOwner === null ? storedConnectionRecords : [currentOwner, ...storedConnectionRecords]
+  ).sort((a, b) => {
+    return b.lastSeenAt.localeCompare(a.lastSeenAt)
+  })
 
   pruneDuckdbOwnerConnections(nowMs)
-  const owner = isCurrentServerDuckdbOwnerProxyDisabled()
-    ? null
-    : toDuckdbOwnerConnectionRecord(
-        getUpdatedDuckdbOwnerConnectionRecord(ownerIdentity, undefined, {
-          lastHeartbeatAt: new Date(nowMs).toISOString(),
-        }),
-        nowMs,
-      )
+  const owner = currentOwner ?? getDuckdbOwnerRecordFromRecords(allRecords)
+  const followers = allRecords.filter((record) => {
+    return owner === null || record.connectionId !== owner.connectionId
+  })
 
   return {
     followers,
     history,
-    registry: getRuntimeCapabilityRegistryOverview(owner === null ? followers : [owner, ...followers]),
+    registry: getRuntimeCapabilityRegistryOverview(allRecords),
     runtimeVersion: getRuntimeCutoverVersion(),
     warnings,
     owner,
   }
 }
 
-export const getDuckdbOwnerConnectionHeartbeatPayload = () => {
-  return getCurrentDuckdbOwnerConnectionIdentity()
+export const getDuckdbOwnerConnectionHeartbeatPayload = async (): Promise<DuckdbOwnerConnectionIdentity> => {
+  return getCurrentDuckdbOwnerConnectionHeartbeatIdentity()
 }

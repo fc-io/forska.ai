@@ -11,6 +11,8 @@ import {getRuntimeCutoverVersion} from './runtimeCutover.ts'
 import {createRuntimeLogRecord} from './runtimeLogger.ts'
 import {initializeRuntimeProcessIdentity, resetRuntimeProcessIdentityForTests} from './runtimeProcessIdentity.ts'
 
+const testStorageOptions = {databasePath: ':memory:'}
+
 const getDuckdbOwnerHeaders = (startedAt: string) => {
   return new Headers({
     'x-forska-api-server-port': '4010',
@@ -28,25 +30,34 @@ const getDuckdbOwnerHeaders = (startedAt: string) => {
   })
 }
 
-test('tracks DuckDB owner connection heartbeats and proxy metadata', () => {
+test('tracks DuckDB owner connection heartbeats and proxy metadata', async () => {
   const startedAt = new Date().toISOString()
-  const heartbeat = upsertDuckdbOwnerConnectionHeartbeat({
-    apiServerPort: 4010,
-    hostname: 'test-host',
-    instanceId: `api-server:test-host:4010:12345:${startedAt}`,
-    listenPort: 4010,
-    pid: 12345,
-    processStartedAt: startedAt,
-    runtimeProfile: 'primary',
-    serverRole: 'api',
-    service: 'api-server',
-    startedAt,
-    duckdbOwnerUrl: 'http://127.0.0.1:4011',
-  })
-  const proxied = recordDuckdbOwnerConnectionProxy(getDuckdbOwnerHeaders(startedAt), '/api/projects')
+  const heartbeat = await upsertDuckdbOwnerConnectionHeartbeat(
+    {
+      apiServerPort: 4010,
+      hostname: 'test-host',
+      instanceId: `api-server:test-host:4010:12345:${startedAt}`,
+      listenPort: 4010,
+      pid: 12345,
+      processStartedAt: startedAt,
+      runtimeProfile: 'primary',
+      serverRole: 'api',
+      service: 'api-server',
+      startedAt,
+      memoryLimit: '20GB',
+      duckdbOwnerUrl: 'http://127.0.0.1:4011',
+    },
+    testStorageOptions,
+  )
+  const proxied = await recordDuckdbOwnerConnectionProxy(
+    getDuckdbOwnerHeaders(startedAt),
+    '/api/projects',
+    testStorageOptions,
+  )
 
   expect(heartbeat.connectionId).toBe(`api-server:test-host:4010:12345:${startedAt}`)
   expect(heartbeat.instanceId).toBe(heartbeat.connectionId)
+  expect(heartbeat.memoryLimit).toBe('20GB')
   expect(heartbeat.processStartedAt).toBe(startedAt)
   expect(heartbeat.service).toBe('api-server')
   expect(proxied?.connectionId).toBe(heartbeat.connectionId)
@@ -57,7 +68,7 @@ test('tracks DuckDB owner connection heartbeats and proxy metadata', () => {
   expect(proxied?.capabilities).toEqual(['api', 'owner-proxy'])
 })
 
-test('uses the shared runtime process identity for runtime logs and owner heartbeats', () => {
+test('uses the shared runtime process identity for runtime logs and owner heartbeats', async () => {
   resetRuntimeProcessIdentityForTests()
   initializeRuntimeProcessIdentity({
     hostnameValue: 'shared-host',
@@ -75,7 +86,7 @@ test('uses the shared runtime process identity for runtime logs and owner heartb
     severity: 'INFO',
     timestamp: '2026-04-20T12:30:00.000Z',
   })
-  const heartbeat = getDuckdbOwnerConnectionHeartbeatPayload()
+  const heartbeat = await getDuckdbOwnerConnectionHeartbeatPayload()
 
   expect(heartbeat.instanceId).toBe(runtimeRecord.runtime.instanceId)
   expect(heartbeat.hostname).toBe(runtimeRecord.runtime.hostname)
@@ -88,34 +99,41 @@ test('uses the shared runtime process identity for runtime logs and owner heartb
   resetRuntimeProcessIdentityForTests()
 })
 
-test('summarizes registered runtime capabilities from fresh heartbeats', () => {
+test('summarizes registered runtime capabilities from fresh heartbeats', async () => {
   const startedAt = new Date().toISOString()
-  const apiWorker = upsertDuckdbOwnerConnectionHeartbeat({
-    apiServerPort: 4010,
-    hostname: 'test-host',
-    instanceId: `api-server:test-host:4010:12345:${startedAt}`,
-    listenPort: 4010,
-    pid: 12345,
-    processStartedAt: startedAt,
-    runtimeProfile: 'primary',
-    serverRole: 'api',
-    service: 'api-server',
-    startedAt,
-    duckdbOwnerUrl: 'http://127.0.0.1:4011',
-  })
-  const maintenanceWorker = upsertDuckdbOwnerConnectionHeartbeat({
-    apiServerPort: 4011,
-    hostname: 'test-host',
-    instanceId: `maintenance-worker-server:test-host:4011:12346:${startedAt}`,
-    listenPort: 4011,
-    pid: 12346,
-    processStartedAt: startedAt,
-    runtimeProfile: 'primary',
-    serverRole: 'maintenance-worker',
-    service: 'maintenance-worker-server',
-    startedAt,
-    duckdbOwnerUrl: 'http://127.0.0.1:4011',
-  })
+  const apiWorker = await upsertDuckdbOwnerConnectionHeartbeat(
+    {
+      apiServerPort: 4010,
+      hostname: 'test-host',
+      instanceId: `api-server:test-host:4010:12345:${startedAt}`,
+      listenPort: 4010,
+      pid: 12345,
+      processStartedAt: startedAt,
+      runtimeProfile: 'primary',
+      serverRole: 'api',
+      service: 'api-server',
+      startedAt,
+      duckdbOwnerUrl: 'http://127.0.0.1:4011',
+    },
+    testStorageOptions,
+  )
+  const maintenanceWorker = await upsertDuckdbOwnerConnectionHeartbeat(
+    {
+      apiServerPort: 4011,
+      hostname: 'test-host',
+      instanceId: `maintenance-worker-server:test-host:4011:12346:${startedAt}`,
+      listenPort: 4011,
+      pid: 12346,
+      processStartedAt: startedAt,
+      runtimeProfile: 'primary',
+      serverRole: 'maintenance-worker',
+      service: 'maintenance-worker-server',
+      startedAt,
+      memoryLimit: '20GB',
+      duckdbOwnerUrl: 'http://127.0.0.1:4011',
+    },
+    testStorageOptions,
+  )
   const registry = getRuntimeCapabilityRegistryOverview([apiWorker, maintenanceWorker, maintenanceWorker])
 
   expect(maintenanceWorker.capabilities).toEqual(['duckdb-owner', 'maintenance'])
@@ -126,12 +144,22 @@ test('summarizes registered runtime capabilities from fresh heartbeats', () => {
     registry.capabilities.find((capability) => {
       return capability.capability === 'api'
     }),
-  ).toMatchObject({eligibleConsumerCount: 1, eligibleConsumerPresent: true, registeredConsumerCount: 1})
+  ).toMatchObject({
+    eligibleConsumerCount: 1,
+    eligibleConsumerPresent: true,
+    freshConsumerCount: 1,
+    registeredConsumerCount: 1,
+  })
   expect(
     registry.capabilities.find((capability) => {
       return capability.capability === 'maintenance'
     }),
-  ).toMatchObject({eligibleConsumerCount: 1, eligibleConsumerPresent: true, registeredConsumerCount: 1})
+  ).toMatchObject({
+    eligibleConsumerCount: 1,
+    eligibleConsumerPresent: true,
+    freshConsumerCount: 1,
+    registeredConsumerCount: 1,
+  })
 })
 
 test('rejects pre-cutover DuckDB owner connection heartbeats', () => {

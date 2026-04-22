@@ -133,6 +133,10 @@ const getDuckdbOwnerProxyUnavailableResponse = () => {
   return Response.json({data: null, error: 'DuckDB owner proxy target unavailable'}, {status: 502})
 }
 
+const getDuckdbOwnerProxyFailureResponse = (requestTemplate: DuckdbOwnerProxyRequestTemplate) => {
+  return requestTemplate.failClosedWithoutDuckdbOwner ? getDuckdbOwnerProxyUnavailableResponse() : null
+}
+
 const getIncompatibleDuckdbOwnerPeerResponse = (request: Request) => {
   const requestUrl = new URL(request.url)
   const classification = classifyApiRoute(requestUrl.pathname)
@@ -172,10 +176,13 @@ const forwardApiRequestToDuckdbOwner = async (request: Request): Promise<Respons
     return await fetchDuckdbOwnerProxyResponse(requestTemplate, duckdbOwnerUrl)
   } catch {
     if (!shouldRetryProxyRequest) {
-      return getDuckdbOwnerProxyUnavailableResponse()
+      return getDuckdbOwnerProxyFailureResponse(requestTemplate)
     }
 
-    return (await getRetriedProxyResponse(requestTemplate, duckdbOwnerUrl)) ?? getDuckdbOwnerProxyUnavailableResponse()
+    return (
+      (await getRetriedProxyResponse(requestTemplate, duckdbOwnerUrl))
+      ?? getDuckdbOwnerProxyFailureResponse(requestTemplate)
+    )
   }
 }
 

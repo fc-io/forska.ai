@@ -453,6 +453,26 @@ export const getCurrentServerDuckdbOwnerUrl = async () => {
   return canCurrentServerOwnDuckdb() ? null : readDuckdbOwnerUrlFromLease()
 }
 
+export const getCurrentServerWorkerRegistryOwnerUrl = async () => {
+  if (canCurrentServerOwnDuckdb()) {
+    return getCurrentServerUrl()
+  }
+
+  const manualDuckdbOwnerUrl = getManualDuckdbOwnerUrl()
+
+  if (manualDuckdbOwnerUrl !== null) {
+    setLastKnownDuckdbOwnerUrl(manualDuckdbOwnerUrl)
+    return manualDuckdbOwnerUrl
+  }
+
+  if (!isAutoServerRole(getRuntimeEnv().SERVER_ROLE)) {
+    return null
+  }
+
+  await syncAutoServerRole()
+  return canCurrentServerOwnDuckdb() ? getCurrentServerUrl() : readDuckdbOwnerUrlFromLease()
+}
+
 export const getKnownDuckdbOwnerUrl = () => {
   return canCurrentServerOwnDuckdb() ? getCurrentServerUrl() : serverRuntimeState.lastKnownDuckdbOwnerUrl
 }
