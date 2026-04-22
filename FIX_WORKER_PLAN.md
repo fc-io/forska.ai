@@ -91,7 +91,7 @@ The release should ship the end-state role model, not a compatibility bridge.
 - only `api` should mount the public product route tree after cutover; `maintenance-worker` may expose private owner RPC or control plus internal health endpoints, and `judge-worker` should expose no client-routable product API surface
 - replace the bootstrap role currently carried by `/api/writer_connections` with two explicit routes in the same cutover: a dedicated bootstrap-safe readiness route for startup and availability checks, and a separate owner or worker-registry route for detailed operator status
 - local `api` reads should use a dedicated read-only DuckDB or query path; routes that still depend on owner-local side effects, local SQLite, or process-local snapshots stay owner-proxied
-- `judge-worker` should use a dedicated read-only DuckDB or query path for immutable or snapshot-keyed judgment inputs such as article, prompt, project, model, and provider metadata; do not ship those large snapshots end-to-end through maintenance APIs in the first cutover slice
+- `judge-worker` should use a dedicated read-only DuckDB or query path for immutable or snapshot-keyed judgment inputs such as article, prompt, project, model, and provider metadata when that path is validated; still ship a maintenance-owned immutable snapshot fetch fallback for separate-host or unvalidated read-only deployments
 - a route or worker flow may use live read-only DuckDB only after explicit parity and concurrent-owner-write validation; if validation fails or read-only open is unavailable, keep that flow owner-proxied or move it onto a verified snapshot or replica path
 - queue `processing`, `activeConsumerCount`, and `activeWorkCount` should be derived from persisted claims or leases and their freshness, not from standalone increment or decrement counters
 - review refresh truth must be project-scoped and article-scoped from the first cutover slice so `/api/projectsreviewswarnings` can answer for the requested project from shared state; queue-level totals should derive from those scoped rows, not vice versa
@@ -101,12 +101,12 @@ The release should ship the end-state role model, not a compatibility bridge.
 - the cutover must include one-time migration of DuckDB-stored config and local `forska.settings.json` keys, plus simultaneous updates to runtime scripts, desktop readiness and startup, settings UI and PATCH payloads, rebuild-tuning surfaces, stored types, and admin or client queries that still use writer-era names
 - every currently writer-gated cron or background loop must be explicitly reassigned in the cutover inventory; for the cutover release, full-text fetch and full-text conversion stay on `maintenance-worker`, `judge-worker` owns only LLM execution, and no loop may silently disappear behind removed writer gating
 - `nvidiaSmiCron` stays on `maintenance-worker` in the cutover release because it writes shared operator telemetry into DuckDB; it is not an `api` or `judge-worker` process-local diagnostics loop
-- judgment dispatch claims, completion APIs, and shared projections must preserve benchmark-critical work-item identity, including `queueRecordId`, `articleId`, `promptId`, `modelId`, `useTitle`, `useAbstract`, `useFulltext`, and `useFulltextNoImages`
+- judgment dispatch claims, completion APIs, and shared projections must preserve benchmark-critical work-item identity, including `jobId`, `projectId`, `queueRecordId`, `articleId`, `promptId`, `modelId`, `useTitle`, `useAbstract`, `useFulltext`, and `useFulltextNoImages`
 - maintenance-issued judgment claims must carry `claimId`, `executionSnapshotId`, and `executionSnapshotHash` for prompt, model, provider, content-setting, article-input, and other reliability-affecting runtime inputs; the id must resolve to an immutable persisted snapshot record and the hash is an integrity check, not a substitute for stored snapshot data
 - immutable execution snapshots must be persisted before claim issuance, never rewritten in place, and retained until all dependent claims are terminal and acknowledged plus a minimum 30-day audit window
 - `judge-worker` must durably journal accepted claims and produced completion payloads in a dedicated file-backed local SQLite store on durable app-data storage until maintenance acknowledges them idempotently; a maintenance restart or transient network failure after LLM completion must not lose the result
 - `judge-worker` durable journal storage must be keyed by a stable configured logical worker id or explicit configured journal path, not by runtime `instanceId`, `pid`, or process start time; runtime `instanceId` is diagnostics metadata only
-- canonical split-runtime durability config is env-driven: `JUDGE_WORKER_ID` is the required stable logical identity for a `judge-worker`, `JUDGE_WORKER_JOURNAL_PATH` is an optional explicit override, and when the path is omitted the runtime must derive a durable app-data journal path from `JUDGE_WORKER_ID`; runtime profiles, local stack scripts, and desktop startup must all wire this contract through unchanged
+- canonical split-runtime durability config is env-driven: `JUDGE_WORKER_ID` is the required stable logical identity when `JUDGE_WORKER_JOURNAL_PATH` is omitted, `JUDGE_WORKER_JOURNAL_PATH` is an optional explicit override, and when the path is omitted the runtime must derive a durable app-data journal path from `JUDGE_WORKER_ID`; runtime profiles, local stack scripts, and desktop startup must all wire this contract through unchanged, and startup must fail closed when neither value yields a stable durable target or when the resolved target is missing, unstable, unwritable, or non-durable
 - `judge-worker` must fail closed instead of accepting claims when its durable journal or completion-outbox store is unavailable or unwritable
 - `judge-worker` must never write `app.token_use` or any other DuckDB-backed judge completion metadata directly; token-use summaries and failed-request diagnostics must travel inside the durable completion outbox and be persisted by maintenance in the same idempotent owner-backed completion apply path
 - audited `api-read-only` routes and `judge-worker` snapshot reads must use dedicated read-only helpers enforced by restricted-import lint or tests and runtime guards; they must not import owner-capable database helpers
@@ -142,11 +142,13 @@ Replace vague status with explicit orthogonal fields:
 - `blockedReason`
 - `requiredConsumerRole`
 - `eligibleConsumerPresent`
+- `eligibleConsumerCount`
 - `activeConsumerCount`
 - `activeWorkCount`
 - `lastStartedAt`
 - `lastProgressedAt`
 - `retryAfterAt`
+- `recoveryMode`
 
 Recommended `progressState` values:
 
@@ -167,7 +169,7 @@ Role-specific explanations belong in `blockedReason` and `requiredConsumerRole`,
 When no eligible maintenance worker is running, the UI should say something like:
 
 - `Review indexing blocked: waiting for maintenance worker`
-- `Judgment backlog queued: waiting for maintenance worker`
+- `Judgment backlog blocked: waiting for maintenance worker`
 
 When standby maintenance is already taking over, the UI should say something like:
 
@@ -181,6 +183,10 @@ When maintenance is cooling down or protecting itself after DuckDB memory pressu
 When work has reached the floor rung and now requires operator action, the UI should say something like:
 
 - `Review indexing blocked: operator resume required after memory floor`
+
+When offline repair is required, the UI should say something like:
+
+- `Judgment backlog repair required: offline repair needed`
 
 Do not show `in progress` unless a consumer is both eligible and actively advancing the queue.
 
@@ -247,7 +253,7 @@ This plan assumes the shipped runtime surface moves fully to the new names and r
 - replace the current `/api/writer_connections` bootstrap responsibilities with a dedicated readiness route, for example `GET /api/runtime/ready`, plus a separate owner or worker-registry route; update desktop startup, app-shell availability, local stack launchers, and CLI readiness checks to use the readiness route instead of the registry route
 - replace the private `POST /api/writer_connections/heartbeat` contract with an explicit owner-backed worker-registry or heartbeat-write route in the same cutover so no shipped process still posts to writer-era route names
 - mount the public product route tree only on `api` after cutover; `maintenance-worker` should expose private owner-backed RPC or control plus internal health only, and `judge-worker` should expose no public product API surface
-- introduce canonical `judge-worker` durability config surfaces: required `JUDGE_WORKER_ID` and optional `JUDGE_WORKER_JOURNAL_PATH`, carried through runtime profiles, local stack scripts, and desktop startup or readiness so split-role startup always resolves a stable durable journal target
+- introduce canonical `judge-worker` durability config surfaces: `JUDGE_WORKER_ID` required when `JUDGE_WORKER_JOURNAL_PATH` is omitted and optional explicit `JUDGE_WORKER_JOURNAL_PATH`, carried through runtime profiles, local stack scripts, and desktop startup wiring so split-role startup either resolves a stable durable journal target or fails closed
 - update package scripts, runtime-profile launchers, desktop backend startup and readiness checks, app-shell backend availability probes, navigation warnings, admin route paths, settings UI and PATCH payloads, rebuild-tuning surfaces, stored types, and admin or client queries to the final names in the same cutover so no shipped surface still depends on writer-era env or route names
 - audit and replace remaining role-string checks outside startup, including low-memory token-use persistence suppression and other logic that still keys off removed `writer` or `worker` roles
 - replace direct judge-side DuckDB token-use persistence with owner-backed completion persistence; the durable completion outbox must carry token-use summaries and failed-request diagnostics, and maintenance must apply them transactionally and idempotently with completion acknowledgment
@@ -257,7 +263,7 @@ This plan assumes the shipped runtime surface moves fully to the new names and r
 - require every deployment to provision the ownerless-readable backend for routes that must answer without an active owner, choosing one of: validated live read-only DuckDB plus any needed ownerless-readable lease or control-state sidecar, verified replica, or dedicated control-state store
 - add a cutover runtime version to owner-routed APIs, worker heartbeats, and lease metadata, and make startup fail closed on incompatible pre-cutover peers
 - add an automated first-start upgrade harness that boots against pre-cutover `app.user_config`, local `forska.settings.json`, `.writer.lock`, and `.writer.history.json`, rewrites or replaces them as needed, proves startup does not require manual cleanup, and proves cutover refusal when a legacy writer is still reachable or its lease is still fresh
-- make `judge-worker` startup fail closed when neither `JUDGE_WORKER_ID` nor `JUDGE_WORKER_JOURNAL_PATH` yields a stable durable journal target, and make local multi-worker setups use distinct stable ids unless an explicit shared-path collision test is intended
+- make `judge-worker` startup fail closed when neither `JUDGE_WORKER_ID` nor `JUDGE_WORKER_JOURNAL_PATH` yields a stable durable journal target or when the resolved target is missing, unstable, unwritable, or non-durable, and make local multi-worker setups use distinct stable ids unless an explicit shared-path collision test is intended
 - support separate-host `judge-worker` deployments by treating maintenance-owned immutable snapshot fetch as the required fallback when validated local read-only snapshot access is unavailable
 - perform production cutover as a coordinated same-version replacement or maintenance window rather than a normal rolling deploy across mixed old and new role surfaces
 
@@ -398,8 +404,8 @@ Add a persisted judgment-job SQLite health projection so `api` can answer health
 
 Preserve benchmark-critical judgment identity across the split.
 
-- every maintenance-issued judgment claim and completion payload must carry `jobId`, `claimId`, `queueRecordId`, `articleId`, `projectId`, `promptId`, `modelId`, `useTitle`, `useAbstract`, `useFulltext`, and `useFulltextNoImages`
-- maintenance-owned completion bookkeeping must validate `claimId`, `queueRecordId`, `articleId`, and the claimed prompt or model or content tuple before mutating queue source-of-truth state
+- every maintenance-issued judgment claim and completion payload must carry `jobId`, `projectId`, `claimId`, `queueRecordId`, `articleId`, `promptId`, `modelId`, `useTitle`, `useAbstract`, `useFulltext`, and `useFulltextNoImages`
+- maintenance-owned completion bookkeeping must validate `claimId`, `jobId`, `projectId`, `queueRecordId`, `articleId`, and the claimed prompt or model or content tuple before mutating queue source-of-truth state
 - shared health, progress, and diagnostics projections must preserve or derive the same article or prompt or model or content identity wherever queue truth depends on it; do not coalesce incompatible articles, models, or content settings into one generic backlog
 
 ## Immutable Execution Snapshot Store
@@ -429,7 +435,7 @@ Preserve benchmark-critical judgment identity across the split.
 - a second `judge-worker` process pointing at the same configured journal path must deterministically fail startup instead of sharing or racing on the same SQLite files
 - accepted claims must be written to a local claim journal before LLM execution; completions, terminal failures, and skips must be inserted into `completion_outbox` in the same local SQLite store before callback
 - completion outbox rows must also carry the token-use summary and failed-request diagnostics needed for `app.token_use`; `judge-worker` must never write token-use rows directly into DuckDB
-- maintenance completion APIs must be idempotent by `claimId` plus `queueRecordId` plus `executionSnapshotId`, must verify `executionSnapshotHash` before acknowledging the outbox row, and must persist judgments, token-use, and queue-source-of-truth updates in one owner-backed idempotent apply path so replay cannot double-count token use
+- maintenance completion APIs must be idempotent by `jobId` plus `projectId` plus `claimId` plus `queueRecordId` plus `executionSnapshotId`, must verify `executionSnapshotHash` before acknowledging the outbox row, and must persist judgments, token-use, and queue-source-of-truth updates in one owner-backed idempotent apply path so replay cannot double-count token use
 - `judge-worker` must retry unsent completion-outbox records until acknowledged, replay them on startup before fetching new claims, and reconcile journaled claimed-but-unfinished work through maintenance-owned lease status instead of dropping it locally
 - acknowledged journal and outbox rows may be compacted only after maintenance acknowledgment and a minimum 7-day local retention window; unacked rows must never be removed by best-effort cleanup
 - shared health and diagnostics should surface pending completion-ack backlog and last acknowledged completion age so stuck handoffs are visible
@@ -543,6 +549,7 @@ Memory pressure should scale throughput down, not disable required consumers.
 Adaptive throughput is not enough on its own. The sole `maintenance-worker` also needs explicit fairness rules so one backlog cannot monopolize the owner.
 
 - treat SQLite backlog import and review refresh as protected queues that must continue to receive bounded service while they are ready
+- a protected queue in explicit retry-after cooldown, breaker pause, or paused-at-floor state is not considered ready for fairness accounting until it becomes claimable again
 - treat large rebuild, full-text fetch, full-text conversion, and archival cleanup as opportunistic queues that must yield after each bounded slice
 - reserve at least one batch or bounded time slice per scheduler window for every ready protected queue before opportunistic queues consume extra slices
 - enforce a configured consecutive-slice cap so no opportunistic queue can keep running while a ready protected queue has not progressed within its allowed window
@@ -555,8 +562,8 @@ Adaptive throughput is not enough on its own. The sole `maintenance-worker` also
 
 - Repeated no-context or cross-project DuckDB OOM bursts should trip a bounded `maintenance-worker` heavy-work breaker.
 - An initial default may use `3` qualifying OOM events inside `60s` with a `5m` breaker cooldown, while treating those thresholds as runtime tuning rather than product semantics.
-- The breaker should pause only named heavy maintenance loops such as review refresh, large rebuild, full-text fetch, full-text conversion, and bulk import.
-- Lighter control-plane work, cleanup, status propagation, and non-DuckDB API flow should remain available while the breaker is active.
+- The breaker should pause only named heavy maintenance loops such as review refresh, large rebuild, full-text fetch, full-text conversion, heavy archival cleanup, and any optional bulk import outside the protected SQLite retained-outbox path. Protected SQLite retained-outbox import must keep its own adaptive bounded-service path unless its specific work is in an explicit retry-after cooldown.
+- Lighter control-plane work, small housekeeping cleanup, status propagation, and non-DuckDB API flow should remain available while the breaker is active.
 - Operator-triggered heavy maintenance during breaker cooldown should return an explicit blocked reason plus `retryAfterAt` instead of bypassing the safety rail.
 - The breaker should auto-resume heavy work after cooldown when recovery remains possible.
 
@@ -578,6 +585,7 @@ For every backlog, expose the same semantics even if route-specific field names 
 - `progressState`
 - `blockedReason`
 - `retryAfterAt`
+- `recoveryMode`
 
 ### Example `progressState`
 
@@ -603,10 +611,24 @@ For every backlog, expose the same semantics even if route-specific field names 
 - `provider_unavailable`
 - `quarantined_local_state`
 
+### Example `recoveryMode`
+
+- `none`
+- `cooldown_after_oom`
+- `paused_at_memory_floor`
+- `auto_repair_active`
+- `offline_repair_required`
+- `heavy_work_breaker_active`
+- `quarantined_local_state`
+
 Keep the state model flat and reusable. Do not encode role-specific text into `progressState`.
 
-- Retryable maintenance cooldown after DuckDB OOM should normally surface as `progressState = 'failed'` plus explicit `blockedReason` and `retryAfterAt`.
+- `blockedReason` should explain why work is not progressing right now.
+- `recoveryMode` should explain which recovery path is active or required when that context matters for product or operator truth.
+
+- Retryable maintenance cooldown after DuckDB OOM should normally surface as `progressState = 'blocked'` plus explicit `blockedReason` and `retryAfterAt`; internal refresh or rebuild work items may still use a retryable `failed` state for scheduling so they re-enter the normal claim path after cooldown.
 - Terminal floor-exhausted or breaker-blocked maintenance should normally surface as `progressState = 'blocked'` plus explicit `blockedReason`, and include `retryAfterAt` when the block will auto-clear.
+- Offline repair or other operator-only reconciliation should normally surface as `progressState = 'repair_required'` plus explicit `blockedReason`; include `retryAfterAt` only when a bounded automated retry is actually scheduled.
 
 ## Judgment Job Control And Health Contract
 
@@ -645,9 +667,10 @@ Diagnostics should show:
 
 ## Release Policy
 
-The phases below describe build order, not separate production rollouts.
+The phases below are workstreams and dependency buckets, not literal one-by-one production rollouts.
 
-- implement and verify the phases in order where that helps reduce engineering risk
+- implement and verify the phases in dependency order where that helps reduce engineering risk
+- the production cutover slice intentionally combines Phase 1, Phase 2, Phase 4, and the server-contract subset of Phase 3; any remaining Phase 3 UI polish can follow immediately after those APIs land
 - do not stop at a compatibility midpoint in production
 - cut over production only after the explicit role split, owner election, judge-worker path, status semantics, and naming migration are complete
 - do not cut over production until the shared worker registry, queue progress state, and judgment-job SQLite health projection exist for the routes that `api` must answer without owner-local state
@@ -680,7 +703,7 @@ Changes:
 - Define central capability helpers instead of ad hoc `if role === ...` checks.
 - Make the active DuckDB owner explicit in startup and proxy routing.
 - Complete the owner-naming migration for env vars, runtime profiles, persisted config, local settings, settings UI and PATCH payloads, rebuild-tuning surfaces, stored types, diagnostics, routes, client queries, desktop startup and readiness, and lease artifacts.
-- Introduce the canonical split-runtime `judge-worker` durability contract: required `JUDGE_WORKER_ID`, optional `JUDGE_WORKER_JOURNAL_PATH`, deterministic app-data path derivation when only the id is set, and fail-closed startup when neither produces a stable durable journal target.
+- Introduce the canonical split-runtime `judge-worker` durability contract: `JUDGE_WORKER_ID` required when `JUDGE_WORKER_JOURNAL_PATH` is omitted, optional explicit `JUDGE_WORKER_JOURNAL_PATH`, deterministic app-data path derivation when only the id is set, and fail-closed startup when neither value resolves a stable durable journal target or when the resolved target is missing, unstable, unwritable, or non-durable.
 - Audit and replace writer-era behavior branches outside startup, including app-shell availability checks, navigation and admin surfaces, and low-memory token-use persistence logic that still keys off `writer` or `worker`.
 - Split the current `/api/writer_connections` responsibilities into a dedicated bootstrap-safe readiness route and a separate owner or worker-registry route, and move desktop startup, app-shell availability, and local stack launchers onto the readiness route.
 - Restrict the public product route tree to `api`; `maintenance-worker` exposes only private owner-backed RPC or control plus internal health, and `judge-worker` exposes no public product routes.
@@ -712,7 +735,7 @@ Practical next steps:
 6. Add a dedicated read-only DuckDB and query path for audited `api` routes, audit existing `getAppQueryService()` call sites, and add parity and fallback validation, separate read-only helper modules, restricted-import lint or tests, and runtime guards that fail closed on write-capable opens.
 7. Add the mandatory ownerless-readable backend contract for routes that must answer without an active owner, and wire the chosen backend into startup validation and diagnostics.
 8. Replace writer-named env, runtime-profile, persisted-config, route, lease, settings UI, stored-type, client-query, package-script, dev-watch, CLI-guard, app-shell availability, admin-route, readiness, and desktop-startup surfaces with owner or maintenance-worker naming.
-9. Add `JUDGE_WORKER_ID` and optional `JUDGE_WORKER_JOURNAL_PATH` to env parsing, runtime profiles, local stack scripts, and desktop startup, and make startup fail closed when the resolved journal target is missing, unstable, or non-durable.
+9. Add `JUDGE_WORKER_ID` and optional explicit `JUDGE_WORKER_JOURNAL_PATH` to env parsing, runtime profiles, local stack scripts, and desktop startup, and make startup fail closed when neither value resolves a stable durable journal target or when the resolved target is missing, unstable, unwritable, or non-durable.
 10. Replace remaining removed-role checks outside startup, including low-memory token-use persistence suppression and any `writer` or `worker` string checks in runtime behavior.
 11. Replace direct server-side token-use writes from the judging path with owner-backed completion persistence carried by the durable completion outbox.
 12. Move mixed read or write status routes off local snapshots and owner-side effects before taking them off the owner proxy.
@@ -757,7 +780,7 @@ Quality Gates:
   - startup rejects incompatible writer-era peers or mismatched cutover versions
   - startup refuses cutover lease adoption or replacement while a legacy writer is still reachable or its lease is still fresh
   - first boot against pre-cutover `app.user_config`, `forska.settings.json`, `.writer.lock`, and `.writer.history.json` rewrites or cleanly replaces them without manual cleanup
-  - `judge-worker` startup refuses to run when neither `JUDGE_WORKER_ID` nor `JUDGE_WORKER_JOURNAL_PATH` resolves a stable durable journal target
+  - `judge-worker` startup refuses to run when neither `JUDGE_WORKER_ID` nor `JUDGE_WORKER_JOURNAL_PATH` resolves a stable durable journal target or when the resolved target is missing, unstable, unwritable, or non-durable
   - `maintenance-worker` and `judge-worker` do not expose the public product route tree after cutover, while `api` still serves the public surface and owner-proxies as needed
   - a separate-host `judge-worker` can fetch immutable snapshot inputs through maintenance-owned APIs when validated local read-only access is unavailable on that host
 
@@ -777,7 +800,7 @@ Changes:
 - Persist or mirror maintenance OOM recovery state needed for diagnostics and ownerless product truth, including configured ceiling, derived startup rung, current active cap rung, controlled restart-gate state, and heavy-work breaker cooldown.
 - Persist queue-level `lastStartedAt` when batches actually begin.
 - Persist queue-level `lastProgressedAt` when batches actually complete.
-- Persist per-backlog claim or lease rows and derive active consumer and work counts from their freshness, preserving project or article scope for review refresh work and `queueRecordId` plus `articleId` plus prompt or model or content identity for judgment work where applicable.
+- Persist per-backlog claim or lease rows and derive active consumer and work counts from their freshness, preserving project or article scope for review refresh work and `jobId` plus `projectId` plus `queueRecordId` plus `articleId` plus prompt or model or content identity for judgment work where applicable.
 - Persist or mirror project-scoped refresh or rebuild retry-after timestamps, paused-at-floor reasons, and recovery mode where those states affect honest API or UI answers.
 - Persist a judgment-job SQLite health projection that `api` can read without local SQLite ownership.
 - Persist enough `judge-worker` completion-handoff state for shared health, such as pending completion-ack counts or oldest unacked completion age.
@@ -790,7 +813,7 @@ Practical next steps:
 2. Add heartbeat writes and stale-worker pruning.
 3. Update queue consumers to create claims or leases when work starts, refresh them while active, and stamp progress on successful batch completion.
 4. Make review refresh claims explicitly project-scoped from the first cutover slice, with article-refresh work preserving `projectId` plus `articleId` or equivalent batch scope.
-5. Add maintenance-owned writes for judgment-job SQLite health and claim projection refresh, including `queueRecordId`, `articleId`, prompt, model, and content-setting identity where queue truth depends on it.
+5. Add maintenance-owned writes for judgment-job SQLite health and claim projection refresh, including `jobId`, `projectId`, `queueRecordId`, `articleId`, prompt, model, and content-setting identity where queue truth depends on it.
 6. Add registry queries for eligible maintenance consumers by capability.
 7. Add shared projection or heartbeat fields for `judge-worker` completion-outbox backlog and last acknowledged completion timestamp.
 8. Add maintenance-candidate takeover-intent writes and readers for the ownerless-readable backend.
@@ -810,7 +833,7 @@ Quality Gates:
 - Runtime verification:
   - when the active owner disappears but a standby `maintenance-worker` candidate is present, diagnostics and health show takeover in progress instead of `waiting_for_maintenance_worker`
   - when live read-only DuckDB is not the deployment choice, ownerless routes still answer from the mirrored ownerless-readable backend
-  - ownerless diagnostics and product routes can still report active cap rung, breaker cooldown, and project-scoped retry-after or paused-at-floor maintenance states without an active owner when the deployment promises those answers
+  - ownerless diagnostics and product routes can still report mirrored takeover intent, shared queue progress, and shared SQLite health without an active owner when the deployment promises those answers; later maintenance recovery fields such as active cap rung, breaker cooldown, and project-scoped retry-after or paused-at-floor states are verified in Phase 5 once those producers exist
 
 ## Phase 3. Make Health And UI Honest
 
@@ -869,10 +892,10 @@ Changes:
 - Introduce the non-owner `judge-worker` role.
 - Keep local judgment-job SQLite state, SQLite leases, import, repair, queue insertion, and claim persistence on `maintenance-worker`.
 - Add owner-backed dispatch, completion, and judgment-job control APIs so `judge-worker` can run without direct DuckDB writes or direct SQLite ownership.
-- Let `judge-worker` read immutable article or prompt or project or model or provider inputs through a dedicated read-only query path instead of shipping those full payloads through maintenance APIs, but only when those reads are keyed by the frozen claim snapshot stored in the immutable execution snapshot store.
+- Let `judge-worker` read immutable article or prompt or project or model or provider inputs through a dedicated read-only query path when that path is validated, but only when those reads are keyed by the frozen claim snapshot stored in the immutable execution snapshot store.
 - Keep full-text fetch and conversion on `maintenance-worker` and freeze prompt-ready article input or immutable content refs before claim issuance so `judge-worker` never needs live full-text fetch or conversion during execution.
 - Support separate-host `judge-worker` deployment by making maintenance-owned immutable snapshot fetch the required fallback whenever validated local read-only snapshot access is unavailable on that host.
-- Make dispatch claim, completion, and shared-projection contracts carry `claimId`, `executionSnapshotId`, `executionSnapshotHash`, `queueRecordId`, `articleId`, `promptId`, `modelId`, `useTitle`, `useAbstract`, `useFulltext`, and `useFulltextNoImages` as part of judgment work identity.
+- Make dispatch claim, completion, and shared-projection contracts carry `jobId`, `projectId`, `claimId`, `executionSnapshotId`, `executionSnapshotHash`, `queueRecordId`, `articleId`, `promptId`, `modelId`, `useTitle`, `useAbstract`, `useFulltext`, and `useFulltextNoImages` as part of judgment work identity.
 - Freeze benchmark-critical execution inputs at claim time in the immutable execution snapshot store before claim issuance, including prompt text or prompt version or hash, model or provider runtime resolution, content settings, exact prompt-ready article input or immutable article-content refs, and reliability-affecting options when present.
 - Add a durable `judge-worker` claim journal and completion outbox in a file-backed local SQLite database on durable app-data storage, keyed by a stable configured logical worker id or explicit journal path plus exclusive file locking, and fail closed if that store is unavailable or already claimed by another process.
 - Carry token-use summaries and failed-request diagnostics inside that durable completion outbox so `judge-worker` never writes `app.token_use` or other DuckDB-backed completion metadata directly.
@@ -881,10 +904,10 @@ Changes:
 
 Practical next steps:
 
-1. Add owner-backed APIs or RPC methods for claim issuance, immutable snapshot lookup or fetch from the persisted snapshot store, completion bookkeeping, token-use apply, lease sync, and judgment-job control operations, carrying `claimId`, `executionSnapshotId`, `executionSnapshotHash`, `queueRecordId`, `articleId`, and the benchmark-critical judgment config tuple.
+1. Add owner-backed APIs or RPC methods for claim issuance, immutable snapshot lookup or fetch from the persisted snapshot store, completion bookkeeping, token-use apply, lease sync, and judgment-job control operations, carrying `jobId`, `projectId`, `claimId`, `executionSnapshotId`, `executionSnapshotHash`, `queueRecordId`, `articleId`, and the benchmark-critical judgment config tuple.
 2. Move `PATCH /api/judgmentsjobs/:id`, `POST /api/judgmentsjobs/:id/start-clean`, `POST /api/judgmentsjobs/:id/preflight`, `POST /api/judgmentsjobs/:id/drain`, `POST /api/judgmentsjobs/:id/checkpoint`, `POST /api/judgmentsjobs/:id/repair`, `POST /api/judgmentsjobs/:id/quarantine`, `POST /api/judgmentsjobs/:id/unquarantine`, and `DELETE /api/judgmentsjobs/:id` behind maintenance-owned handlers, even if the public route stays stable.
 3. Split the current `sendToLLM` path so `judge-worker` resolves immutable snapshot inputs, prepares prompts, and invokes the LLM without calling live full-text fetch or conversion, writes accepted claims and resulting completions plus token-use summaries to a durable file-backed local SQLite journal or outbox in app-data storage, keys that store from a stable configured logical worker id or explicit journal path, protects it with an exclusive file lock, replays unacked rows on startup before fetching new claims, and only then posts idempotent completion callbacks that maintenance applies to queue truth and token-use persistence.
-4. Keep claim persistence and local SQLite ownership on `maintenance-worker` while `judge-worker` consumes owner-issued claim batches, durably records accepted claim state, and completion bookkeeping validates `claimId`, `queueRecordId`, `articleId`, `executionSnapshotId`, and `executionSnapshotHash` before applying source-of-truth updates and token-use writes exactly once.
+4. Keep claim persistence and local SQLite ownership on `maintenance-worker` while `judge-worker` consumes owner-issued claim batches, durably records accepted claim state, and completion bookkeeping validates `claimId`, `jobId`, `projectId`, `queueRecordId`, `articleId`, `executionSnapshotId`, and `executionSnapshotHash` before applying source-of-truth updates and token-use writes exactly once.
 5. Keep `runAddToQueue` on `maintenance-worker` and move `sendToLLM` onto `judge-worker` behind judging capability helpers.
 6. Ensure `judge-worker` only uses read-only DuckDB helpers for immutable reference data or snapshot-keyed lookups when validated on that host, otherwise fetches immutable snapshots from maintenance-owned APIs; in all cases it must never open DuckDB in write mode, never mutate local judgment-job SQLite state directly, never call live full-text helpers, and must be kept off owner-capable helpers by restricted-import lint or tests plus runtime guards.
 7. Keep judgment-job health readable from shared projection on `api`, with owner-proxy fallback when projection freshness is insufficient.
@@ -904,7 +927,7 @@ Quality Gates:
 - `bun x eslint src/server/cron/judgmentsJobs.ts src/server/cron/judgmentsJobs/judgmentDispatchRuntime.ts src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts src/server/cron/judgmentsJobs/judgmentsRequestRuntime.ts src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.ts src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/processPromptWithLLM.ts src/server/utils/ensureFullText.ts src/server/routes/JudgmentsJobsRoutes.ts src/server/serverMain.ts src/agent/judge.ts src/agent/judge/storeSinglePromptJudgment.ts src/agent/judge/judgeStoreTokenUse.ts`
 - Runtime verification:
   - `judge-worker` replays an unacked completion after `maintenance-worker` restart and the completion is applied exactly once
-  - `judge-worker` startup fails closed when its durable journal path is missing or unwritable
+  - `judge-worker` startup fails closed when neither `JUDGE_WORKER_ID` nor `JUDGE_WORKER_JOURNAL_PATH` resolves a stable durable journal target or when the resolved target is missing, unstable, unwritable, or non-durable
   - a second `judge-worker` started with the same journal path deterministically refuses startup instead of sharing SQLite state
   - a separate-host `judge-worker` without validated local read-only access can still execute claimed work by fetching immutable snapshots from maintenance-owned APIs
   - mutating prompt or provider settings after claim issuance does not change the `judge-worker` execution inputs for that already-issued claim
@@ -932,8 +955,9 @@ Changes:
 - Apply project-local retry-after cooldown and paused-at-floor semantics to review refresh and large rebuild OOM recovery instead of immediate retry thrash.
 - Tie predictive refresh admission, rebuild tuning, and adaptive throughput profiles to the current active cap rung rather than the configured ceiling alone.
 - Add a bounded `maintenance-worker` heavy-work breaker for repeated no-context or cross-project OOM pressure.
-- Keep the breaker scoped to named heavy maintenance loops such as review refresh, large rebuild, full-text fetch, full-text conversion, and bulk import; keep lighter control-plane work, cleanup, and non-DuckDB API flow available.
+- Keep the breaker scoped to named heavy maintenance loops such as review refresh, large rebuild, full-text fetch, full-text conversion, heavy archival cleanup, and any optional bulk import outside the protected SQLite retained-outbox path; keep protected SQLite retained-outbox import on its adaptive bounded-service path unless its own work is in explicit cooldown, and keep lighter control-plane work, small housekeeping cleanup, and non-DuckDB API flow available.
 - Make operator-triggered heavy maintenance respect both project-local cooldown and breaker cooldown with explicit blocked responses.
+- Extend `/api/admin/worker-runtime-diagnostics` to expose shared maintenance recovery state when available, including configured DuckDB ceiling, derived startup rung, current active cap rung, controlled restart-gate state, heavy-work breaker cooldown, and current maintenance `retryAfterAt` context.
 
 Practical next steps:
 
@@ -955,6 +979,7 @@ Practical next steps:
 8. Ensure every loop can continue with `small` profile settings and lower active cap rungs.
 9. Add a bounded heavy-work breaker that pauses only named heavy maintenance loops after repeated no-context or cross-project OOM pressure, auto-resumes after cooldown, and surfaces `retryAfterAt` in diagnostics or operator responses.
 10. Add starvation alarms when a ready protected queue exceeds its no-progress window while the worker heartbeat remains healthy.
+11. Update `/api/admin/worker-runtime-diagnostics` to read the shared maintenance recovery-state projection so diagnostics show configured ceiling, startup rung, active cap rung, restart-gate state, breaker cooldown, and maintenance retry-after context from shared truth.
 
 Quality Gates:
 
@@ -972,6 +997,7 @@ Quality Gates:
   - under the `small` profile with simultaneous import, review refresh, rebuild, and full-text backlog, import and review refresh each record bounded forward progress instead of waiting indefinitely behind opportunistic work
   - repeated no-context or cross-project OOMs trip the heavy-work breaker, pause only named heavy maintenance loops, keep lighter maintenance and non-DuckDB API flow available, and auto-resume after cooldown
   - a healthy `maintenance-worker` surfaces explicit starvation diagnostics before a protected queue exceeds its allowed no-progress window
+  - worker diagnostics surface configured ceiling, startup rung, active cap rung, controlled restart-gate state, and breaker cooldown from shared recovery state while those recovery paths are active
 
 ## Phase 6. Separate Repair From Normal Drain
 
@@ -1004,6 +1030,10 @@ Quality Gates:
 - `bun test src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.test.ts src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts`
 - `bun test src/server/routes/JudgmentsJobsRoutes.test.ts`
 - `bun x eslint src/server/cron/judgmentsJobs/judgmentJobRepair.ts src/server/routes/JudgmentsJobsRoutes.ts`
+- Runtime verification:
+  - small retained backlog auto-repair can run without collapsing normal drain into generic offline repair
+  - larger retained backlog or repeated append OOM surfaces explicit offline repair or paused recovery state instead of silently looping normal drain
+  - health responses expose `recoveryMode` so cooldown, auto-repair, offline repair, and paused-at-floor states are distinguishable without parsing free-form text
 
 ## Phase 7. Add Queue Progress SLAs And Stall Detection
 
@@ -1014,23 +1044,24 @@ Layers:
 
 Changes:
 
-- Track queue-level `lastProgressedAt` for:
+- Use the queue-level `lastProgressedAt`, `lastStartedAt`, and active-work counters persisted in Phase 2 for:
   - judgment import backlog
   - article refresh backlog
   - project refresh backlog
   - rebuild backlog
-- Track queue-level `lastStartedAt` and active-work counters for those same backlogs.
+- Do not add a second timestamp or counter store for stall detection; Phase 7 should derive from the Phase 2 queue-progress source of truth.
 - Compute stalled state from:
   - queue depth
   - active work presence
   - last progress age
   - eligible consumer presence
+  - absence of any explicit blocked or repair-required recovery state
 
 Practical next steps:
 
-1. Add health rules for stale drain windows.
+1. Add health rules and backlog-specific stale-drain windows using the Phase 2 persisted timestamps, active-work counters, and claim freshness rules.
 2. Update UI to show `stalled` only when a consumer should be progressing but is not.
-3. Keep `blocked` separate from `stalled`.
+3. Keep `blocked` and `repair_required` separate from `stalled`; an explicit cooldown, breaker, paused-at-floor, or offline-repair state must not be relabeled as stalled.
 4. Add explicit operator thresholds for acceptable queue delay by backlog type.
 
 Quality Gates:
@@ -1039,6 +1070,11 @@ Quality Gates:
 - `bun test src/server/routes/JudgmentsJobsRoutes.test.ts`
 - `bun run build`
 - `bun run desktop:build`
+- Runtime verification:
+  - a queue with an eligible consumer, no explicit blocked or repair state, and expired no-progress window surfaces `stalled`
+  - a queue in cooldown, paused-at-floor, breaker, or offline-repair state remains `blocked` or `repair_required` instead of flipping to `stalled`
+- Browser verification:
+  - review and judgment surfaces show `stalled` only for true stale-drain cases and keep blocked or repair states distinct in both web and desktop flows
 
 ## Phase 8. Optimize High-Memory Fast Path
 
@@ -1069,33 +1105,37 @@ Quality Gates:
 - `bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts`
 - `bun test src/server/utils/duckdbServiceMemoryLimit.test.ts`
 - `bun x eslint src/server/utils/projectMartLargeRebuildTuning.ts src/server/utils/duckdbService.ts`
+- Runtime verification:
+  - a higher-memory profile increases maintenance throughput versus `small` for the same representative backlog without changing queue correctness semantics or blocked-state behavior
+  - diagnostics show the active throughput profile and current active cap rung so operators can explain why throughput changed
 
 ## Rollout Order
 
-Recommended order:
+Recommended dependency order for the workstreams:
 
 1. role capability map and explicit owner semantics
 2. shared worker registry and persisted queue progress
-3. owner-backed judgment dispatch and explicit `judge-worker` split
-4. honest health and UI states
+3. owner-backed judgment dispatch and explicit `judge-worker` split, landed in the same cutover slice as honest health and status server contracts
+4. remaining honest health UI states and copy cleanup
 5. adaptive maintenance throttling plus `maintenance-worker` DuckDB OOM recovery governor instead of disablement
 6. auto-repair thresholds
 7. stall detection and SLAs
 8. high-memory throughput optimization
 
-This order matters because the final role split and owner election need to exist before shared status can describe them accurately, the shared worker registry and queue truth need to land before honest health or UI states move off owner-local snapshots, and throughput tuning should not start before correctness is guaranteed under the shipped topology.
+This order matters because role semantics and owner election need to be defined before shared status can describe them accurately, the cutover slice ships the shared registry and queue truth together with the final `judge-worker` split and the Phase 3 server contract, and throughput tuning should not start before correctness is guaranteed under the shipped topology.
 
 ## Operational Model After Implementation
 
 ### Low-Memory Single Machine
 
-- a single `maintenance-worker` plus `judge-worker` pair can still run slowly on one machine
+- one machine can still host separate `api`, `maintenance-worker`, and `judge-worker` processes under a low-memory profile
 - queues continue to drain slowly but correctly
 - UI says `processing`, `queued`, or `blocked`, never fake `in progress`
 - if one refresh or rebuild still OOMs, `maintenance-worker` steps the active cap down, cools only that work, and keeps unrelated work and non-DuckDB API flow alive
 
 ### Mixed-Memory Setup
 
+- one or more `api` processes remain the non-owner public surface for the split deployment
 - low-memory `judge-worker` handles LLM dispatch work safely after Phase 4
 - higher-memory `maintenance-worker` drains import and review backlog faster
 - no cross-role ambiguity about who owns backlog queues
@@ -1138,14 +1178,15 @@ The system is fixed when all of these are true:
 7. An LLM completion is not lost if `maintenance-worker` restarts or the network blips after the model returns; the completion is replayed until maintenance acknowledges it exactly once.
 8. During cutover, incompatible old and new runtimes fail closed instead of serving mixed routing, lease, or health semantics.
 9. Every route that promises ownerless answers has a mandatory ownerless-readable backend in the deployment, so the route stays honest even when owner proxying is unavailable.
-10. Under the low-memory profile with simultaneous backlog, import and review refresh still make bounded forward progress instead of waiting behind rebuild or full-text work.
-11. No post-cutover owner adopts or replaces a legacy writer lease while that legacy writer is still reachable or its lease is still fresh.
-12. The first DuckDB open on `maintenance-worker` uses the highest active rung at or below the configured ceiling instead of booting at the raw ceiling.
-13. A DuckDB OOM in review refresh or large rebuild does not require restarting `maintenance-worker`.
-14. The active DuckDB cap steps down automatically through the configured ladder until the floor rung and that active rung is visible in diagnostics.
-15. Work that still OOMs at the floor rung transitions to `paused` with explicit operator resume instead of remaining in retryable `failed` state forever.
-16. Repeated no-context or cross-project DuckDB OOM bursts activate a bounded heavy-work breaker that pauses only named heavy maintenance loops and auto-resumes later.
-17. Non-DuckDB API flow stays up while DuckDB-backed work waits behind the controlled restart gate.
+10. Separate-host `judge-worker` deployments can execute claimed work through validated local read-only snapshot access or the maintenance-owned immutable snapshot fetch fallback; cutover does not assume shared local DuckDB file access.
+11. Under the low-memory profile with simultaneous backlog, import and review refresh still make bounded forward progress instead of waiting behind rebuild or full-text work.
+12. No post-cutover owner adopts or replaces a legacy writer lease while that legacy writer is still reachable or its lease is still fresh.
+13. The first DuckDB open on `maintenance-worker` uses the highest active rung at or below the configured ceiling instead of booting at the raw ceiling.
+14. A DuckDB OOM in review refresh or large rebuild does not require restarting `maintenance-worker`.
+15. The active DuckDB cap steps down automatically through the configured ladder until the floor rung and that active rung is visible in diagnostics.
+16. Work that still OOMs at the floor rung transitions to `paused` with explicit operator resume instead of remaining in retryable `failed` state forever.
+17. Repeated no-context or cross-project DuckDB OOM bursts activate a bounded heavy-work breaker that pauses only named heavy maintenance loops and auto-resumes later.
+18. Non-DuckDB API flow stays up while DuckDB-backed work waits behind the controlled restart gate.
 
 ## Practical Next Step To Start Implementation
 
@@ -1157,7 +1198,7 @@ Why:
 - Phase 2 gives `api` a shared worker registry, project-scoped and article-scoped queue progress source of truth, SQLite health projection, and takeover-intent view so status routes stay honest after the role split.
 - the server-contract work from Phase 3 makes review warnings and judgment health describe the real shared state instead of owner-local snapshots.
 - Phase 4 makes the long-term `judge-worker` path real instead of leaving a combined-role gap.
-- the same slice must add the mandatory ownerless-readable backend, cutover-version refusal, cutover fencing, frozen claim snapshots, and durable completion replay so the split fails closed rather than losing work.
+- the same slice must add the mandatory ownerless-readable backend, cutover-version refusal, cutover fencing, frozen claim snapshots, maintenance-owned immutable snapshot fetch fallback, and durable completion replay so the split fails closed rather than losing work.
 
 Suggested first implementation slice:
 
@@ -1168,7 +1209,7 @@ Suggested first implementation slice:
 5. add persisted worker heartbeat, project-scoped and article-scoped queue progress, shared SQLite health projection, and maintenance takeover intent
 6. expose local capabilities and registry-derived eligible consumers in diagnostics
 7. extend review warnings and judgment-job health APIs so they answer from shared or read-only state and report honest consumer semantics
-8. add owner-backed judging APIs that preserve `claimId`, `executionSnapshotId`, `executionSnapshotHash`, `queueRecordId`, `articleId`, and the benchmark-critical judgment config tuple, back them with an immutable execution snapshot store, add required `JUDGE_WORKER_ID` plus optional `JUDGE_WORKER_JOURNAL_PATH` startup wiring, move `sendToLLM` onto `judge-worker` with a durable file-backed local SQLite claim journal and completion outbox keyed by that stable logical id or explicit journal path plus replay, and support maintenance-owned immutable snapshot fetch for separate-host `judge-worker` fallback
+8. add owner-backed judging APIs that preserve `jobId`, `projectId`, `claimId`, `executionSnapshotId`, `executionSnapshotHash`, `queueRecordId`, `articleId`, and the benchmark-critical judgment config tuple, back them with an immutable execution snapshot store, add `JUDGE_WORKER_ID` or explicit `JUDGE_WORKER_JOURNAL_PATH` startup wiring, move `sendToLLM` onto `judge-worker` with a durable file-backed local SQLite claim journal and completion outbox keyed by that stable logical id or explicit journal path plus replay, and support maintenance-owned immutable snapshot fetch for separate-host `judge-worker` fallback
 9. add cutover-version checks and the cutover-migration fence so incompatible writer-era peers or fresh reachable legacy writer leases refuse startup or serving during the release
 
 That is the smallest useful step that creates the actual end-state topology instead of a temporary bridge or a role split that still depends on owner-local health.
@@ -1234,7 +1275,7 @@ Changes:
 - Keep `dev-single` only as a local testing role if still needed.
 - Rename writer or background-writer env, runtime-profile, persisted-config, local-settings, settings UI field, rebuild-tuning, stored-type, client-query, and desktop-readiness names to maintenance-worker naming through one-time DuckDB and local `forska.settings.json` migration, without keeping public legacy aliases after upgrade.
 - Replace generic runtime service identities such as `worker-server` and `single-server` with explicit split-role service names in bootstrap, process identity, heartbeat payloads, diagnostics, and runtime log naming, for example `api-server`, `maintenance-worker-server`, `judge-worker-server`, and `dev-single-server`, so maintenance and judge processes are distinguishable after cutover while `app-server` remains the app-shell process name where applicable.
-- Add the canonical split-runtime `judge-worker` durability config surface: required `JUDGE_WORKER_ID`, optional `JUDGE_WORKER_JOURNAL_PATH`, deterministic app-data path derivation from the id when the path is omitted, and fail-closed startup when the resolved target is missing or unstable.
+- Add the canonical split-runtime `judge-worker` durability config surface: `JUDGE_WORKER_ID` required when `JUDGE_WORKER_JOURNAL_PATH` is omitted, optional explicit `JUDGE_WORKER_JOURNAL_PATH`, deterministic app-data path derivation from the id when the path is omitted, and fail-closed startup when neither value resolves a stable durable journal target or when the resolved target is missing, unstable, unwritable, or non-durable.
 - Make env the canonical runtime contract for `judge-worker` journal identity, and have runtime profiles, local stack scripts, and desktop startup pass it through rather than inventing separate naming.
 - Rename the writer-connections query, admin route, navigation warning surface, root backend-availability probe, and desktop readiness probe to owner or worker-registry naming in the same cutover.
 - Rename warning kinds and user-facing warning copy that still say `writer`, such as `writer-disabled` or `unresponsive-writer`, to owner or maintenance-worker terminology in the same cutover.
@@ -1249,7 +1290,7 @@ Changes:
   - `shouldServerRoleRunMaintenance(...)`
   - `shouldServerRoleRunJudging(...)`
   - `shouldServerRoleProxyApiToDuckdbOwner(...)`
-- Keep `api` and future `judge-worker` style roles from accidentally claiming owner-only work.
+- Keep `api`, `judge-worker`, and any future non-owner roles from accidentally claiming owner-only work.
 - Add cutover-version constants and startup refusal for incompatible writer-era peers.
 - Add cutover-migration fencing so legacy writer reachability and lease freshness are checked before lease adoption or replacement is allowed.
 
@@ -1271,7 +1312,7 @@ Acceptance criteria:
 - bootstrap, runtime logs, process identity, and heartbeat or registry service labels use canonical explicit split-role service names such as `api-server`, `maintenance-worker-server`, `judge-worker-server`, and `dev-single-server` rather than generic `worker-server` or `single-server` in production split deployments
 - audited `api` local-read routes no longer rely on owner-capable `getAppQueryService()` or `getAppDatabaseService()` paths
 - no shipped runtime behavior still branches on removed `writer` or `worker` roles
-- `judge-worker` startup requires stable `JUDGE_WORKER_ID` or `JUDGE_WORKER_JOURNAL_PATH` wiring through env, runtime profiles, local stack scripts, and desktop startup, and refuses startup when that contract is missing
+- `judge-worker` startup requires stable `JUDGE_WORKER_ID` or `JUDGE_WORKER_JOURNAL_PATH` wiring through env, runtime profiles, local stack scripts, and desktop startup, and refuses startup when that contract is missing or when the resolved journal target is missing, unstable, unwritable, or non-durable
 - startup validates that each ownerless route has a configured mandatory ownerless-readable backend in the deployment
 - DuckDB owner election works on `maintenance-worker` candidates, and SQLite-backed judgment takeover is explicitly limited to candidates that run on the same host and share the same data volume
 - startup refuses incompatible pre-cutover peers instead of attempting mixed-mode operation
@@ -1312,7 +1353,7 @@ Changes:
 - Replace the private `/api/writer_connections/heartbeat` route with an explicit owner-backed worker-registry or heartbeat-write route, and move runtime heartbeats onto that renamed contract with cutover-version checks.
 - Introduce the dedicated read-only query path used by local `api` reads.
 - Route ownerless health and diagnostics APIs through the mandatory ownerless-readable backend when live read-only DuckDB is unavailable or untrusted.
-- Keep `api` serving locally only the health and diagnostics routes that already answer from audited shared or read-only state; all remaining owner-dependent routes stay proxied to the active DuckDB owner until Step 3 lands.
+- Keep `api` serving locally only the health and diagnostics routes that already answer from audited shared or read-only state; all remaining owner-dependent routes stay proxied to the active DuckDB owner until Step 3 lands and the later route-specific audits switch them onto shared or read-only truth.
 - Preserve lease-follow and takeover behavior on explicit `maintenance-worker` candidates that run on the same host and share the data volume needed for SQLite-backed judgment work.
 - Keep any unvalidated local-read flow owner-proxied or snapshot-backed until parity and concurrent-write validation passes.
 
@@ -1334,7 +1375,7 @@ Acceptance criteria:
 - desktop startup, dev-watch helpers, stack launchers, and DuckDB CLI guards no longer rely on `GET /api/writer_connections` as the bootstrap or availability contract
 - unclassified `api` routes fail closed to owner proxy instead of accidentally running locally
 - `api` still proxies correctly to the active owner for owner-only routes
-- until Step 3 shared state lands, routes that still require owner-local runtime state remain proxied; once the shared projection exists, the audited health and diagnostics routes answer locally on `api`
+- until Step 3 shared state lands and the later route-specific audits adopt that shared truth, routes that still require owner-local runtime state remain proxied; once the shared projection exists and an audited health or diagnostics route has been updated to use it correctly, that route answers locally on `api`
 - standby same-host `maintenance-worker` candidates sharing the data volume can follow and take over correctly
 - live read-only routes fail closed onto the mandatory ownerless-readable backend or proxy or snapshot mode as appropriate when local read-only access is unavailable or untrusted
 
@@ -1353,13 +1394,14 @@ Primary files:
 Changes:
 
 - Add durable worker heartbeat records for role, capabilities, memory limit, throughput profile, and last heartbeat.
-- Have API, maintenance, and future judge processes heartbeat through the owner API.
+- Have `api`, `maintenance-worker`, and `judge-worker` processes heartbeat through the owner API.
 - Add registry queries for eligible maintenance consumers.
 - Add ownerless-readable maintenance takeover-intent records so status routes can show `takeover_in_progress` during owner loss.
-- Persist queue-level claim or lease rows for import and refresh work, including claim freshness, `projectId` and `articleId` scope for review work, and `queueRecordId` plus `articleId` plus the benchmark-critical judgment config tuple where applicable.
+- Persist queue-level claim or lease rows for import and refresh work, including claim freshness, `projectId` and `articleId` scope for review work, and `jobId` plus `projectId` plus `queueRecordId` plus `articleId` plus the benchmark-critical judgment config tuple where applicable.
+- Persist queue-level and project-scoped `lastStartedAt` for import and refresh work.
 - Persist queue-level and project-scoped `lastProgressedAt` for import and refresh work.
 - Persist `judge-worker` completion-handoff visibility such as pending completion-ack count and oldest unacked completion age.
-- Keep health and status routes owner-proxied until this shared state exists, then move audited routes to local `api` reads against that shared projection.
+- Keep health and status routes owner-proxied until this shared state exists and each route has been audited to use it correctly, then move only those audited routes to local `api` reads against that shared projection.
 
 Acceptance criteria:
 
@@ -1367,6 +1409,7 @@ Acceptance criteria:
 - `processing` derives from fresh claims or leases, not queue depth or orphaned counters
 - `/api/projectsreviewswarnings` can distinguish this project's active work from unrelated project activity
 - stale worker records and stale claims age out cleanly and do not create ghost capacity
+- shared queue progress exposes `lastStartedAt` and `lastProgressedAt` from persisted state instead of reconstructing them from local runtime snapshots
 - shared health can distinguish active LLM work from completion handoff waiting on owner acknowledgment
 - shared health and diagnostics can distinguish no maintenance candidate from takeover already in progress during owner loss
 
@@ -1415,12 +1458,15 @@ Changes:
 - Extend `/api/projectsreviewswarnings` with fields such as:
   - `requiredConsumerRole`
   - `eligibleConsumerPresent`
+  - `eligibleConsumerCount`
   - `activeConsumerCount`
   - `activeWorkCount`
   - `progressState`
   - `blockedReason`
   - `lastStartedAt`
   - `lastProgressedAt`
+  - `retryAfterAt`
+  - `recoveryMode`
 - Keep current counts (`pendingProjectRefreshCount`, `pendingArticleRefreshCount`) intact.
 - Drive those fields from project-scoped persisted claims or leases rather than only queue-wide snapshots.
 - Stop mapping `pendingRefreshCount > 0` directly to `status = 'refreshing'` when no eligible consumer exists.
@@ -1436,6 +1482,8 @@ Acceptance criteria:
 - no review UI says `in progress` when no eligible maintenance worker is running
 - unrelated project activity does not make the requested project display `processing`
 - review empty states distinguish blocked, stale, and actively processing states
+- review warning responses expose `eligibleConsumerCount` and `retryAfterAt` when those values are needed to explain waiting, cooldown, or breaker-blocked states
+- review warning responses expose `recoveryMode` when paused-at-floor, cooldown, breaker, or repair context changes the operator or UI explanation
 - tests cover the blocked and waiting status
 - the API route can still answer from shared/read-only state or the mandatory ownerless-readable backend when the owner is absent after it has been moved off the owner proxy
 
@@ -1450,13 +1498,16 @@ Changes:
 
 - Extend `/api/judgmentsjobs/:id/health` with:
   - `eligibleImportConsumerPresent`
-  - `eligibleImportConsumerRole`
+  - `requiredImportConsumerRole`
+  - `eligibleImportConsumerCount`
   - `activeImportConsumerCount`
   - `activeImportWorkCount`
   - `progressState`
   - `blockedReason`
   - `lastStartedAt`
   - `lastProgressedAt`
+  - `retryAfterAt`
+  - `recoveryMode`
 - Add shared SQLite health projection fields or equivalent derived fields for:
   - retained outbox presence
   - claimed outbox presence
@@ -1468,7 +1519,7 @@ Changes:
   - projection freshness
   - projection source
 - Ensure shared import or running-work summaries preserve the job's model and content-setting tuple instead of collapsing incompatible work into one generic backlog.
-- Extend `/api/judgmentsjobs-health` summary aggregation to count jobs blocked on missing maintenance workers separately from truly stale or failed jobs.
+- Extend `/api/judgmentsjobs-health` summary aggregation to count jobs blocked on missing maintenance workers or retry-after maintenance cooldown or heavy-work breaker separately from truly stale or failed jobs.
 - Keep current `recommendedNextAction` but stop overloading it as the only machine-readable state.
 - Read shared SQLite health projection on `api` when it is fresh enough from audited shared state or the mandatory ownerless-readable backend, and proxy to the owner or return explicit maintenance-unavailable when it is not.
 
@@ -1477,8 +1528,10 @@ Acceptance criteria:
 - job health can distinguish:
   - import actively draining
   - import queued but blocked on missing maintenance worker
+  - import blocked by cooldown or heavy-work breaker with explicit `retryAfterAt` when the block will auto-clear
   - completion waiting for owner acknowledgment
   - repair required
+- job health exposes `recoveryMode` so offline repair, auto-repair, cooldown, and paused-at-floor states are machine-readable without inferring them from text
 - job health remains available on `api` even when no owner is active, as long as audited shared/read-only state or the mandatory ownerless-readable backend is sufficient to answer it
 - job health never guesses `healthy` from absence of local SQLite state on `api`
 
@@ -1503,7 +1556,7 @@ Primary files:
 Changes:
 
 - Add the first owner-backed claim issue and completion-ack path that `judge-worker` can call without direct DuckDB writes or local judgment-job SQLite ownership.
-- Freeze immutable execution snapshot identity before claim issuance and require completion callbacks to validate `claimId`, `executionSnapshotId`, and `executionSnapshotHash` before mutating queue truth.
+- Freeze immutable execution snapshot identity before claim issuance and require completion callbacks to validate `claimId`, `jobId`, `projectId`, `queueRecordId`, `articleId`, `executionSnapshotId`, and `executionSnapshotHash` before mutating queue truth.
 - Keep local judgment-job SQLite source-of-truth state, leases, import, and repair on `maintenance-worker`.
 - Move `sendToLLM` onto `judge-worker` behind judging capability helpers while keeping `runAddToQueue` on `maintenance-worker`.
 - Add durable local claim journal and completion-outbox persistence for `judge-worker`, including replay on startup and token-use summaries carried in the completion outbox rather than written directly to DuckDB.
@@ -1537,8 +1590,9 @@ Changes:
 - Document the minimal local command needed to verify cutover-migration refusal while a legacy writer is still reachable or its lease is still fresh.
 - Document the minimal local command needed to verify that a second `judge-worker` using the same journal path refuses startup.
 - Document the stable logical journal id or explicit journal path configuration required for `judge-worker` restart replay.
-- Document that `JUDGE_WORKER_ID` is the required stable logical id, `JUDGE_WORKER_JOURNAL_PATH` is the optional override, and runtime profiles or stack scripts or desktop startup must pass one consistent contract through to the `judge-worker` process.
+- Document that `JUDGE_WORKER_ID` is the required stable logical id when `JUDGE_WORKER_JOURNAL_PATH` is omitted, `JUDGE_WORKER_JOURNAL_PATH` is the optional explicit override, and runtime profiles or stack scripts or desktop startup must pass one consistent contract through to the `judge-worker` process.
 - Document which ownerless-readable backend the local stack is using, and how to force the fallback path when live read-only DuckDB is intentionally disabled.
+- Document how to force a `judge-worker` onto the maintenance-owned immutable snapshot fetch fallback when validated local read-only snapshot access is intentionally disabled or unavailable on that host.
 - Document that desktop startup, app-shell backend availability, and local stack launchers use the dedicated readiness route rather than the worker-registry route.
 - Document that only `api` exposes the public product API, while `maintenance-worker` and `judge-worker` stay on private RPC or diagnostics surfaces.
 
@@ -1552,6 +1606,7 @@ Acceptance criteria:
 - startup refuses cutover when a legacy writer is still reachable or its lease is still fresh during final-split local verification
 - operators can intentionally reproduce same-path `judge-worker` journal collision and see the second process refuse startup deterministically
 - operators can restart a `judge-worker` with the same `JUDGE_WORKER_ID` or explicit journal path and see it reopen the same durable journal for replay
+- operators can intentionally reproduce the maintenance-owned immutable snapshot fetch fallback for a `judge-worker` when validated local read-only snapshot access is unavailable on that host
 
 ## First APIs To Change
 
@@ -1564,8 +1619,9 @@ These should be the first API contracts touched because they either expose produ
 5. `GET /api/judgmentsjobs/:id/health`
 6. `GET /api/judgmentsjobs-health`
 7. owner-backed judgment-job control endpoints behind the existing `/api/judgmentsjobs/...` surface, with cutover-version checks
-8. owner-backed dispatch claim and completion endpoints that preserve `claimId`, `executionSnapshotId`, `executionSnapshotHash`, `queueRecordId`, `articleId`, `promptId`, `modelId`, `useTitle`, `useAbstract`, `useFulltext`, and `useFulltextNoImages`, carry token-use summaries, and support idempotent completion replay
-9. private owner-backed heartbeat contract replacing `POST /api/writer_connections/heartbeat`
+8. owner-backed immutable snapshot fetch endpoint keyed by `executionSnapshotId` plus `executionSnapshotHash` for separate-host or unvalidated local-read `judge-worker` fallback
+9. owner-backed dispatch claim and completion endpoints that preserve `jobId`, `projectId`, `claimId`, `executionSnapshotId`, `executionSnapshotHash`, `queueRecordId`, `articleId`, `promptId`, `modelId`, `useTitle`, `useAbstract`, `useFulltext`, and `useFulltextNoImages`, carry token-use summaries, and support idempotent completion replay
+10. private owner-backed heartbeat contract replacing `POST /api/writer_connections/heartbeat`
 
 These contracts, plus the new durable worker-heartbeat contract, takeover-intent view, shared SQLite health projection, and dedicated readiness route, are enough to make role ownership visible before deeper queue logic changes land. The readiness route must stay bootstrap-safe and must not depend on the worker-registry route becoming healthy first. The claim and completion APIs must preserve full work-item identity plus frozen snapshot identity backed by immutable persisted snapshot rows, must carry token-use summaries through the durable completion outbox instead of direct judge-side DuckDB writes, and `judge-worker` should read immutable article or prompt or provider inputs through the audited read-only path only when those reads are keyed by that snapshot instead of receiving mutable latest rows from maintenance; when local read-only is unavailable on a separate host, it should fetch immutable snapshots from maintenance instead. The health routes should remain locally answerable on `api` only after they use audited shared or read-only state or the mandatory ownerless-readable backend. They should proxy explicitly to the owner when they cannot answer honestly.
 
@@ -1640,7 +1696,7 @@ Implement in this exact order:
 9. cutover-version handshake plus cutover-migration fence and incompatible-peer startup refusal
 10. explicit route classification, public-route surface restriction by role, read-only query path, dedicated readiness route, and mandatory ownerless-readable backend plus validation and fallback
 11. owner or worker-registry route migration replacing `writer_connections`
-12. worker heartbeat, queue progress, judgment-job SQLite health projection persistence, maintenance takeover-intent visibility, and `judge-worker` completion-handoff visibility
+12. worker heartbeat, queue progress, shared maintenance recovery-state projection, judgment-job SQLite health projection persistence, maintenance takeover-intent visibility, and `judge-worker` completion-handoff visibility
 13. `AdminInvestigateRoutes.ts`
 14. `projectsRoutesGetReviewsWarnings.ts`
 15. `reviewsWarningsQuery.ts`
@@ -1649,11 +1705,11 @@ Implement in this exact order:
 18. `reviewsArticlesTableContainer.tsx`
 19. `reviewsArticlesUnassessedTableContainer.tsx`
 20. `JudgmentsJobsRoutes.ts` health and owner-backed control routing
-21. `judgmentDispatchRuntime.ts`, `judgmentJobSqliteService.ts`, `judgmentsRequestRuntime.ts`, `processPromptWithLLM.ts`, `ensureFullText.ts`, `judge.ts`, and `storeSinglePromptJudgment.ts` for the first owner-backed `judge-worker` execution path
-22. owner-backed judgment claim snapshot, token-use apply, and durable completion-outbox routing
+21. owner-backed judgment claim snapshot, immutable snapshot fetch fallback endpoint, token-use apply, and durable completion-outbox routing
+22. `judgmentDispatchRuntime.ts`, `judgmentJobSqliteService.ts`, `judgmentsRequestRuntime.ts`, `processPromptWithLLM.ts`, `ensureFullText.ts`, `judge.ts`, and `storeSinglePromptJudgment.ts` for the first owner-backed `judge-worker` execution path
 23. runtime scripts, settings UI, app-shell availability and admin-route rename cleanup, stored-type and client-query rename cleanup, persisted-config rename cleanup, desktop readiness and startup, and docs
 
-This order keeps role and runtime identity changes ahead of routing, updates DuckDB ownership plumbing before split routing depends on it, keeps routing fail-closed early, fences cutover before legacy lease replacement, and makes the system diagnosable once step 12 lands. Before the shared worker registry, queue progress, SQLite health projection, and ownerless-readable backend exist, health and status routes that still depend on owner-local state stay proxied to the owner. It also limits UI churn before the server contract is ready.
+This order keeps role and runtime identity changes ahead of routing, updates DuckDB ownership plumbing before split routing depends on it, keeps routing fail-closed early, fences cutover before legacy lease replacement, and makes the system diagnosable once step 12 lands. It also puts frozen claim snapshots, token-use apply, and durable completion-outbox routing ahead of the first owner-backed `judge-worker` execution path so the execution slice lands on top of its required identity and durability plumbing instead of assuming it. Before the shared worker registry, queue progress, SQLite health projection, and ownerless-readable backend exist, health and status routes that still depend on owner-local state stay proxied to the owner. It also limits UI churn before the server contract is ready.
 
 ## Quality Gates For The First Coding Slice
 
@@ -1686,7 +1742,7 @@ This order keeps role and runtime identity changes ahead of routing, updates Duc
   - full-text fetch, full-text conversion, and `nvidia-smi` polling are mounted only on `maintenance-worker` after writer-role removal, and are absent from `api` and `judge-worker`
   - the public product route tree is mounted only on `api` after cutover, while `maintenance-worker` and `judge-worker` stay on their private RPC or diagnostics surfaces
   - `judge-worker` startup refuses to run without writable durable journal storage
-  - `judge-worker` startup refuses to run when neither `JUDGE_WORKER_ID` nor `JUDGE_WORKER_JOURNAL_PATH` resolves a stable durable journal target
+  - `judge-worker` startup refuses to run when neither `JUDGE_WORKER_ID` nor `JUDGE_WORKER_JOURNAL_PATH` resolves a stable durable journal target or when the resolved target is missing, unstable, unwritable, or non-durable
   - a second `judge-worker` started with the same journal path deterministically refuses startup instead of sharing SQLite state
   - restarting a `judge-worker` with the same `JUDGE_WORKER_ID` or explicit journal path reopens the same durable journal and replays unacked completions
   - an audited `api-read-only` or `judge-worker` path cannot silently fall back to owner-capable database helpers
