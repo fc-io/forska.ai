@@ -94,12 +94,6 @@ const allowedOrigins = [
   `http://localhost:${appServerRuntimeConfig.port}`,
   ...desktopAllowedOrigins,
 ]
-const shouldMountMaintenanceCrons = shouldServerRoleMountMaintenanceCrons(env.SERVER_ROLE)
-const shouldMountJudgingCrons = shouldServerRoleMountJudgingCrons(env.SERVER_ROLE)
-const maintenanceCronRoutes = shouldMountMaintenanceCrons
-  ? new Elysia().use(fullTextJobsCron).use(fullTextConversionJobsCron).use(nvidiaSmiCron)
-  : new Elysia()
-const judgingCronRoutes = shouldMountJudgingCrons ? new Elysia().use(judgmentsJobsCron) : new Elysia()
 
 await initializeServerRuntimeRole()
 
@@ -122,6 +116,12 @@ if (shouldCurrentServerRunJudgingLoops()) {
   await getJudgmentJobSqliteService().recoverJudgmentJobLeasesOnStartup()
 }
 
+const shouldMountMaintenanceCrons = shouldServerRoleMountMaintenanceCrons(getCurrentServerRole())
+const shouldMountJudgingCrons = shouldServerRoleMountJudgingCrons(getCurrentServerRole())
+const maintenanceCronRoutes = shouldMountMaintenanceCrons
+  ? new Elysia().use(fullTextJobsCron).use(fullTextConversionJobsCron).use(nvidiaSmiCron)
+  : new Elysia()
+const judgingCronRoutes = shouldMountJudgingCrons ? new Elysia().use(judgmentsJobsCron) : new Elysia()
 const shouldWarmCodex = getCurrentServerRole() !== 'maintenance-worker'
 
 export const app = new Elysia()

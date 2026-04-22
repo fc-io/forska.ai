@@ -55,15 +55,11 @@ export const getServerRoleCapabilities = (serverRole: ServerRole): ServerRoleCap
 }
 
 export const shouldServerRoleMountRuntimeCrons = (serverRole: ServerRole) => {
-  return (
-    serverRole === 'auto'
-    || shouldServerRoleRunMaintenanceLoops(serverRole)
-    || shouldServerRoleRunJudgingLoops(serverRole)
-  )
+  return shouldServerRoleMountMaintenanceCrons(serverRole) || shouldServerRoleMountJudgingCrons(serverRole)
 }
 
 export const shouldServerRoleMountMaintenanceCrons = (serverRole: ServerRole) => {
-  return serverRole === 'auto' || shouldServerRoleRunMaintenanceLoops(serverRole)
+  return serverRole === 'maintenance-worker' || serverRole === 'dev-single'
 }
 
 export const shouldServerRoleMountJudgingCrons = (serverRole: ServerRole) => {

@@ -133,6 +133,27 @@ test('background server stack builds maintenance-worker env on the sibling port'
   })
 })
 
+test('background server stack builds judge-worker env without DuckDB ownership', () => {
+  expect(
+    getBackgroundServerEnv({
+      baseEnv: {
+        API_SERVER_PORT: '3301',
+        BACKGROUND_JUDGE_PORT: '3303',
+        BACKGROUND_MAINTENANCE_PORT: '3302',
+        JUDGE_WORKER_ID: 'test-judge-worker',
+      },
+      localAppSettings: defaultLocalAppSettings,
+      role: 'judge-worker',
+    }),
+  ).toMatchObject({
+    API_SERVER_PORT: '3303',
+    FORSKA_RUNTIME_SERVICE: 'judge-worker-server',
+    JUDGE_WORKER_ID: 'test-judge-worker',
+    SERVER_ROLE: 'judge-worker',
+    SERVER_DUCKDB_OWNER_URL: 'http://127.0.0.1:3302',
+  })
+})
+
 test('background server stack passes machine-local maintenance-worker DuckDB memory into maintenance-worker env', () => {
   expect(
     getBackgroundServerEnv({

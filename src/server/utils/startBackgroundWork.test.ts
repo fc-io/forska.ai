@@ -20,7 +20,7 @@ const getLastJsonLine = (value: string) => {
   return lastLine
 }
 
-test('startBackgroundWork starts role monitor, owner heartbeat, and mart refresh heartbeat', () => {
+const runStartBackgroundWork = (role: 'api' | 'judge-worker' | 'maintenance-worker') => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -37,6 +37,7 @@ test('startBackgroundWork starts role monitor, owner heartbeat, and mart refresh
         const serverRuntimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
         const duckdbOwnerConnectionHeartbeatModulePath = getModulePath('./src/server/utils/duckdbOwnerConnectionHeartbeat.ts')
         const calls = []
+        const role = ${JSON.stringify(role)}
 
         void mock.module(martRefreshDrainHeartbeatModulePath, () => {
           return {
@@ -47,6 +48,9 @@ test('startBackgroundWork starts role monitor, owner heartbeat, and mart refresh
         })
         void mock.module(serverRuntimeRoleModulePath, () => {
           return {
+            shouldCurrentServerRunMaintenanceLoops: () => {
+              return role === 'maintenance-worker'
+            },
             startServerRuntimeRoleMonitor: () => {
               calls.push('serverRuntimeRoleMonitor')
             },
@@ -72,11 +76,21 @@ test('startBackgroundWork starts role monitor, owner heartbeat, and mart refresh
     throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'startBackgroundWork test failed')
   }
 
-  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {calls: string[]}
+  return JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {calls: string[]}
+}
+
+test('startBackgroundWork starts shared infrastructure and maintenance work for maintenance-worker', () => {
+  const result = runStartBackgroundWork('maintenance-worker')
 
   expect(result.calls).toEqual([
     'serverRuntimeRoleMonitor',
     'duckdbOwnerConnectionHeartbeat',
     'martRefreshDrainHeartbeat',
   ])
+})
+
+test('startBackgroundWork skips maintenance work when the current role lacks maintenance capability', () => {
+  const result = runStartBackgroundWork('judge-worker')
+
+  expect(result.calls).toEqual(['serverRuntimeRoleMonitor', 'duckdbOwnerConnectionHeartbeat'])
 })

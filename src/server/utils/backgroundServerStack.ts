@@ -7,7 +7,7 @@ import {DEFAULT_API_SERVER_PORT} from '../../utils/runtimePortDefaults.ts'
 import {getConfiguredDuckdbPath} from './getDuckdbPath.ts'
 import {type LocalAppSettings, readLocalAppSettings} from './localAppSettings.ts'
 
-type BackgroundServerRole = 'api' | 'maintenance-worker'
+type BackgroundServerRole = 'api' | 'judge-worker' | 'maintenance-worker'
 
 type BackgroundServerStackConfig = {
   apiPort: number
@@ -31,6 +31,12 @@ const getTrimmedValue = (value: string | null | undefined) => {
   const normalized = String(value ?? '').trim()
 
   return normalized === '' ? null : normalized
+}
+
+const getResolvedBackgroundBaseEnv = (
+  baseEnv: Record<string, string | undefined> | undefined,
+): Record<string, string | undefined> => {
+  return {...(baseEnv ?? {}), BUN_CONFIG_MAX_HTTP_REQUESTS: baseEnv?.BUN_CONFIG_MAX_HTTP_REQUESTS ?? '2048'}
 }
 
 export const getDefaultBackgroundMaintenanceDuckdbMemoryLimit = (
@@ -124,15 +130,26 @@ export const getBackgroundServerEnv = ({
   localAppSettings?: LocalAppSettings
   role: BackgroundServerRole
 }) => {
-  const resolvedBaseEnv = {...baseEnv, BUN_CONFIG_MAX_HTTP_REQUESTS: baseEnv?.BUN_CONFIG_MAX_HTTP_REQUESTS ?? '2048'}
+  const resolvedBaseEnv = getResolvedBackgroundBaseEnv(baseEnv)
   const config = getBackgroundServerStackConfig(resolvedBaseEnv, localAppSettings ?? readLocalAppSettings())
+  const judgePort = getIntegerPort(resolvedBaseEnv.BACKGROUND_JUDGE_PORT, config.maintenancePort + 1)
 
-  return role === 'api'
+  if (role === 'api') {
+    return {
+      ...resolvedBaseEnv,
+      API_SERVER_PORT: String(config.apiPort),
+      FORSKA_RUNTIME_SERVICE: 'api-server',
+      SERVER_ROLE: 'api',
+      SERVER_DUCKDB_OWNER_URL: config.duckdbOwnerUrl,
+    }
+  }
+
+  return role === 'judge-worker'
     ? {
         ...resolvedBaseEnv,
-        API_SERVER_PORT: String(config.apiPort),
-        FORSKA_RUNTIME_SERVICE: 'api-server',
-        SERVER_ROLE: 'api',
+        API_SERVER_PORT: String(judgePort),
+        FORSKA_RUNTIME_SERVICE: 'judge-worker-server',
+        SERVER_ROLE: 'judge-worker',
         SERVER_DUCKDB_OWNER_URL: config.duckdbOwnerUrl,
       }
     : {
@@ -154,15 +171,26 @@ export const getBackgroundServerEnvAsync = async ({
   localAppSettings?: LocalAppSettings
   role: BackgroundServerRole
 }) => {
-  const resolvedBaseEnv = {...baseEnv, BUN_CONFIG_MAX_HTTP_REQUESTS: baseEnv?.BUN_CONFIG_MAX_HTTP_REQUESTS ?? '2048'}
+  const resolvedBaseEnv = getResolvedBackgroundBaseEnv(baseEnv)
   const config = await getBackgroundServerStackConfigAsync(resolvedBaseEnv, localAppSettings ?? readLocalAppSettings())
+  const judgePort = getIntegerPort(resolvedBaseEnv.BACKGROUND_JUDGE_PORT, config.maintenancePort + 1)
 
-  return role === 'api'
+  if (role === 'api') {
+    return {
+      ...resolvedBaseEnv,
+      API_SERVER_PORT: String(config.apiPort),
+      FORSKA_RUNTIME_SERVICE: 'api-server',
+      SERVER_ROLE: 'api',
+      SERVER_DUCKDB_OWNER_URL: config.duckdbOwnerUrl,
+    }
+  }
+
+  return role === 'judge-worker'
     ? {
         ...resolvedBaseEnv,
-        API_SERVER_PORT: String(config.apiPort),
-        FORSKA_RUNTIME_SERVICE: 'api-server',
-        SERVER_ROLE: 'api',
+        API_SERVER_PORT: String(judgePort),
+        FORSKA_RUNTIME_SERVICE: 'judge-worker-server',
+        SERVER_ROLE: 'judge-worker',
         SERVER_DUCKDB_OWNER_URL: config.duckdbOwnerUrl,
       }
     : {

@@ -10,7 +10,7 @@ export type RuntimeProfileMode =
   | 'maintenance-only-server'
   | 'server-stack'
   | 'stacked-server'
-type RuntimeProfileServerRole = 'api' | 'maintenance-worker'
+type RuntimeProfileServerRole = 'api' | 'judge-worker' | 'maintenance-worker'
 
 export type RuntimeProfileCommandOptions = {mode: RuntimeProfileMode; profileName: RuntimeProfileName}
 
@@ -34,15 +34,7 @@ const getRuntimeProfileServerEnv = ({profileName}: RuntimeProfileCommandOptions,
 }
 
 const getRuntimeProfileJudgeWorkerEnv = (profileName: RuntimeProfileName) => {
-  const baseEnv = getRuntimeProfileBaseEnv(profileName)
-
-  return {
-    ...baseEnv,
-    API_SERVER_PORT: baseEnv.BACKGROUND_JUDGE_PORT,
-    FORSKA_RUNTIME_SERVICE: 'judge-worker-server',
-    SERVER_DUCKDB_OWNER_URL: `http://127.0.0.1:${baseEnv.BACKGROUND_MAINTENANCE_PORT}`,
-    SERVER_ROLE: 'judge-worker',
-  }
+  return getBackgroundServerEnv({baseEnv: getRuntimeProfileBaseEnv(profileName), role: 'judge-worker'})
 }
 
 const runtimeProfileModes: Record<RuntimeProfileMode, RuntimeProfileCommandConfig> = {

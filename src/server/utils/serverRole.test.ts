@@ -3,6 +3,7 @@ import {expect, test} from 'bun:test'
 import {
   canServerRoleOwnDuckdb,
   getServerRoleCapabilities,
+  productionServerRoles,
   shouldServerRoleMountJudgingCrons,
   shouldServerRoleMountMaintenanceCrons,
 } from './serverRole.ts'
@@ -19,6 +20,11 @@ test('api and judge-worker roles cannot own duckdb', () => {
 test('maintenance-worker role mounts maintenance crons only', () => {
   expect(shouldServerRoleMountMaintenanceCrons('maintenance-worker')).toBe(true)
   expect(shouldServerRoleMountJudgingCrons('maintenance-worker')).toBe(false)
+})
+
+test('cutover production maintenance crons mount only on maintenance-worker', () => {
+  expect(productionServerRoles.filter(shouldServerRoleMountMaintenanceCrons)).toEqual(['maintenance-worker'])
+  expect(shouldServerRoleMountMaintenanceCrons('auto')).toBe(false)
 })
 
 test('judge-worker role mounts judging crons only', () => {
