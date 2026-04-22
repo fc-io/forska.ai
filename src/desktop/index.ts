@@ -27,7 +27,7 @@ const sleep = (ms: number) => {
 }
 
 const waitForBackendReady = async ({apiOrigin, deadlineMs}: {apiOrigin: string; deadlineMs: number}): Promise<void> => {
-  const response = await fetch(`${apiOrigin}/api/duckdb_owner_connections`, {method: 'GET'}).catch(() => {
+  const response = await fetch(`${apiOrigin}/api/runtime/ready`, {method: 'GET'}).catch(() => {
     return null
   })
 

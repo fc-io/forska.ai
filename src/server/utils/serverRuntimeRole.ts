@@ -29,6 +29,8 @@ import {
   type EffectiveServerRole,
   getEffectiveServerRole,
   isAutoServerRole,
+  shouldServerRoleMountDuckdbOwnerPrivateApi,
+  shouldServerRoleMountPublicProductApi,
 } from './serverRole.ts'
 
 type ServerRuntimeState = {
@@ -405,6 +407,14 @@ export const shouldCurrentServerProxyApiToOwner = () => {
 }
 
 export const shouldCurrentServerProxyApiToDuckdbOwner = shouldCurrentServerProxyApiToOwner
+
+export const shouldCurrentServerMountPublicProductApi = () => {
+  return shouldServerRoleMountPublicProductApi(getCurrentServerRole())
+}
+
+export const shouldCurrentServerMountDuckdbOwnerPrivateApi = () => {
+  return shouldServerRoleMountDuckdbOwnerPrivateApi(getCurrentServerRole())
+}
 
 export const isExpectedDuckdbOwnerRoleLossError = (error: unknown) => {
   const message =

@@ -10,9 +10,16 @@ import {env} from '../utils/env.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {probeDuckdbOwnerCutoverCompatibility} from '../utils/runtimeCutover.ts'
 import {getCurrentServerDuckdbOwnerUrl, shouldCurrentServerProxyApiToOwner} from '../utils/serverRuntimeRole.ts'
+import {
+  classifyApiRoute,
+  getDuckdbOwnerProxyPathname,
+  shouldApiRouteFailClosedWithoutDuckdbOwner,
+  shouldApiRouteProxyToDuckdbOwner,
+} from './apiRouteClassification.ts'
 
 type DuckdbOwnerProxyRequestTemplate = {
   body: ArrayBuffer | null
+  failClosedWithoutDuckdbOwner: boolean
   headers: Headers
   method: string
   pathname: string
@@ -60,19 +67,21 @@ const getDuckdbOwnerProxyRequestTemplate = async (
   request: Request,
 ): Promise<DuckdbOwnerProxyRequestTemplate | null> => {
   const requestUrl = new URL(request.url)
+  const classification = classifyApiRoute(requestUrl.pathname)
   const requestHeaders = new Headers({
     ...Object.fromEntries(request.headers.entries()),
     ...getDuckdbOwnerConnectionProxyHeaders(),
   })
   const hasRequestBody = request.method !== 'GET' && request.method !== 'HEAD'
 
-  return !requestUrl.pathname.startsWith('/api/')
+  return !shouldApiRouteProxyToDuckdbOwner(classification)
     ? null
     : {
         body: hasRequestBody ? await request.clone().arrayBuffer() : null,
+        failClosedWithoutDuckdbOwner: shouldApiRouteFailClosedWithoutDuckdbOwner(classification),
         headers: requestHeaders,
         method: request.method,
-        pathname: requestUrl.pathname,
+        pathname: getDuckdbOwnerProxyPathname({classification, pathname: requestUrl.pathname}),
         search: requestUrl.search,
       }
 }
@@ -126,7 +135,8 @@ const getDuckdbOwnerProxyUnavailableResponse = () => {
 
 const getIncompatibleDuckdbOwnerPeerResponse = (request: Request) => {
   const requestUrl = new URL(request.url)
-  const error = requestUrl.pathname.startsWith('/api/')
+  const classification = classifyApiRoute(requestUrl.pathname)
+  const error = shouldApiRouteProxyToDuckdbOwner(classification)
     ? getDuckdbOwnerConnectionRuntimeVersionError(request.headers)
     : null
 
@@ -138,23 +148,22 @@ const forwardApiRequestToDuckdbOwner = async (request: Request): Promise<Respons
     return null
   }
 
-  const duckdbOwnerUrl = await getCurrentServerDuckdbOwnerUrl()
+  const requestTemplate = await getDuckdbOwnerProxyRequestTemplate(request)
 
-  if (duckdbOwnerUrl === null) {
+  if (requestTemplate === null) {
     return null
   }
 
-  const requestTemplate = await getDuckdbOwnerProxyRequestTemplate(request)
+  const duckdbOwnerUrl = await getCurrentServerDuckdbOwnerUrl()
+  if (duckdbOwnerUrl === null) {
+    return requestTemplate.failClosedWithoutDuckdbOwner ? getDuckdbOwnerProxyUnavailableResponse() : null
+  }
 
   if (isCurrentServerDuckdbOwnerUrl(duckdbOwnerUrl)) {
     return Response.json(
       {data: null, error: `DuckDB owner proxy target must not point to this same API server (${duckdbOwnerUrl})`},
       {status: 500},
     )
-  }
-
-  if (requestTemplate === null) {
-    return null
   }
 
   const shouldRetryProxyRequest = duckdbOwnerProxyRetryableMethods.has(requestTemplate.method)

@@ -9,6 +9,7 @@ import {getJudgmentJobSqliteService} from './cron/judgmentsJobs/judgmentJobSqlit
 import {nvidiaSmiCron} from './cron/nvidiaSmi.ts'
 import {adminInvestigateRoutes} from './routes/AdminInvestigateRoutes.ts'
 import {apiProxyRoutes} from './routes/ApiProxyRoutes.ts'
+import {duckdbOwnerPrivateApiPrefix} from './routes/apiRouteClassification.ts'
 import {articleAdminRoutes} from './routes/ArticleAdminRoutes.ts'
 import {articlesRoutes} from './routes/ArticlesRoutes.ts'
 import {comparisonProjectsRoutes} from './routes/ComparisonProjectsRoutes.ts'
@@ -29,6 +30,7 @@ import {projectsAddArticlesRoutes} from './routes/ProjectsAddArticlesRoutes.ts'
 import {projectsRoutes} from './routes/ProjectsRoutes.ts'
 import {promptsRoutes} from './routes/PromptsRoutes.ts'
 import {runtimeAssetsRoutes} from './routes/RuntimeAssetsRoutes.ts'
+import {runtimeReadyRoutes} from './routes/runtimeReadyRoutes.ts'
 import {subprojectsRoutes} from './routes/SubprojectsRoutes.ts'
 import {tokensRoutes} from './routes/TokensRoutes'
 import {usersRoutes} from './routes/UsersRoutes'
@@ -44,6 +46,8 @@ import {
   canCurrentServerOwnDuckdb,
   getCurrentServerRole,
   initializeServerRuntimeRole,
+  shouldCurrentServerMountDuckdbOwnerPrivateApi,
+  shouldCurrentServerMountPublicProductApi,
   shouldCurrentServerRunJudgingLoops,
 } from './utils/serverRuntimeRole.ts'
 import {startBackgroundWork} from './utils/startBackgroundWork.ts'
@@ -123,6 +127,40 @@ const maintenanceCronRoutes = shouldMountMaintenanceCrons
   : new Elysia()
 const judgingCronRoutes = shouldMountJudgingCrons ? new Elysia().use(judgmentsJobsCron) : new Elysia()
 const shouldWarmCodex = getCurrentServerRole() !== 'maintenance-worker'
+const getProductApiRoutes = () => {
+  return new Elysia()
+    .use(adminInvestigateRoutes)
+    .use(comparisonProjectsRoutes)
+    .use(judgmentsJobsRoutes)
+    .use(articlesRoutes)
+    .use(articleAdminRoutes)
+    .use(judgmentsRoutes)
+    .use(humanAssessmentRoutes)
+    .use(modelsRoutes)
+    .use(projectsRoutes)
+    .use(projectExportRoutes)
+    .use(projectsAddArticlesRoutes)
+    .use(projectArticlesRoutes)
+    .use(promptsRoutes)
+    .use(runtimeAssetsRoutes)
+    .use(importRoutes)
+    .use(dataSourcesRoutes)
+    .use(dataSourcesImportRoutes)
+    .use(duckdbStudioRoutes)
+    .use(tokensRoutes)
+    .use(usersRoutes)
+    .use(llmStatusRoutes)
+    .use(nvidiaSmiRoutes)
+    .use(subprojectsRoutes)
+}
+const publicProductApiRoutes = shouldCurrentServerMountPublicProductApi() ? getProductApiRoutes() : new Elysia()
+const duckdbOwnerPrivateApiRoutes = shouldCurrentServerMountDuckdbOwnerPrivateApi()
+  ? new Elysia({prefix: duckdbOwnerPrivateApiPrefix}).use(getProductApiRoutes())
+  : new Elysia()
+const _publicAppContract = new Elysia()
+  .use(runtimeReadyRoutes)
+  .use(duckdbOwnerConnectionsRoutes)
+  .use(getProductApiRoutes())
 
 export const app = new Elysia()
   .use(
@@ -134,32 +172,12 @@ export const app = new Elysia()
     }),
   )
   .use(apiProxyRoutes)
+  .use(runtimeReadyRoutes)
   .use(duckdbOwnerConnectionsRoutes)
   .use(maintenanceCronRoutes)
   .use(judgingCronRoutes)
-  .use(adminInvestigateRoutes)
-  .use(comparisonProjectsRoutes)
-  .use(judgmentsJobsRoutes)
-  .use(articlesRoutes)
-  .use(articleAdminRoutes)
-  .use(judgmentsRoutes)
-  .use(humanAssessmentRoutes)
-  .use(modelsRoutes)
-  .use(projectsRoutes)
-  .use(projectExportRoutes)
-  .use(projectsAddArticlesRoutes)
-  .use(projectArticlesRoutes)
-  .use(promptsRoutes)
-  .use(runtimeAssetsRoutes)
-  .use(importRoutes)
-  .use(dataSourcesRoutes)
-  .use(dataSourcesImportRoutes)
-  .use(duckdbStudioRoutes)
-  .use(tokensRoutes)
-  .use(usersRoutes)
-  .use(llmStatusRoutes)
-  .use(nvidiaSmiRoutes)
-  .use(subprojectsRoutes)
+  .use(publicProductApiRoutes)
+  .use(duckdbOwnerPrivateApiRoutes)
   .listen({port: env.API_SERVER_PORT, idleTimeout: 255})
 
 writeRuntimeOperatorLogEvent({
@@ -224,4 +242,4 @@ if (shouldWarmCodex) {
   })
 }
 
-export type App = typeof app
+export type App = typeof _publicAppContract

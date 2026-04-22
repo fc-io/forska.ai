@@ -8,6 +8,7 @@ import {
   upsertDuckdbOwnerConnectionHeartbeat,
 } from '../utils/duckdbOwnerConnections.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
+import {runtimeReadyPath} from '../utils/runtimeReadyContract.ts'
 
 const duckdbOwnerConnectionHeartbeatBody = t.Object({
   apiServerPort: t.Number(),
@@ -42,7 +43,11 @@ const duckdbOwnerConnectionHeartbeatBody = t.Object({
 export const duckdbOwnerConnectionsRoutes = new Elysia()
   .use(withErrorHandler())
   .onRequest(({request}) => {
-    recordDuckdbOwnerConnectionProxy(request.headers, new URL(request.url).pathname)
+    const pathname = new URL(request.url).pathname
+
+    if (pathname !== runtimeReadyPath) {
+      recordDuckdbOwnerConnectionProxy(request.headers, pathname)
+    }
   })
   .get('/api/duckdb_owner_connections', async () => {
     return {

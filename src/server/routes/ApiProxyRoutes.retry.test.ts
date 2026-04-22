@@ -67,14 +67,24 @@ const getRequestUrl = (request: Request | URL | string) => {
   return typeof request === 'string' ? request : request instanceof URL ? request.toString() : request.url
 }
 
-const isOwnerConnectionsUrl = (url: string) => {
-  return url.endsWith('/api/duckdb_owner_connections')
+const isRuntimeReadyUrl = (url: string) => {
+  return url.endsWith('/api/runtime/ready')
 }
 
-const getCompatibleOwnerConnectionsResponse = () => {
+const getCompatibleRuntimeReadyResponse = () => {
   const runtimeVersion = actualRuntimeCutoverModule.getRuntimeCutoverVersion()
 
-  return Response.json({data: {owner: {runtimeVersion}, runtimeVersion}})
+  return Response.json({data: {ready: true, runtimeVersion}})
+}
+
+const getOwnerFetchCallUrls = (calls: Array<[Request | URL | string]>) => {
+  return calls
+    .map(([request]) => {
+      return getRequestUrl(request)
+    })
+    .filter((url) => {
+      return url.startsWith('http://owner-')
+    })
 }
 
 afterEach(() => {
@@ -84,7 +94,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch
 })
 
-test('api proxy retries idempotent GET requests after a transport failure', async () => {
+test.serial('api proxy retries idempotent GET requests after a transport failure', async () => {
   const app = await loadRoutes()
   const fetchMock = mock(async (request: Request | URL | string) => {
     const url = getRequestUrl(request)
@@ -93,22 +103,21 @@ test('api proxy retries idempotent GET requests after a transport failure', asyn
       throw new Error('owner-1 unavailable')
     }
 
-    return isOwnerConnectionsUrl(url)
-      ? getCompatibleOwnerConnectionsResponse()
-      : Response.json({data: {ok: true}, error: null})
+    return isRuntimeReadyUrl(url) ? getCompatibleRuntimeReadyResponse() : Response.json({data: {ok: true}, error: null})
   })
   globalThis.fetch = fetchMock as unknown as typeof fetch
   state.ownerUrls = ['http://owner-1:34991', 'http://owner-2:34992']
 
   const response = await app.handle(new Request('http://localhost/api/example?x=1', {method: 'GET'}))
   const body = (await response.json()) as {data: {ok: boolean}; error: string | null}
+  const ownerFetchCallUrls = getOwnerFetchCallUrls(fetchMock.mock.calls)
 
   expect(response.status).toBe(200)
   expect(body.data.ok).toBe(true)
-  expect(fetchMock).toHaveBeenCalledTimes(4)
+  expect(ownerFetchCallUrls).toHaveLength(4)
 })
 
-test('api proxy does not retry non-idempotent POST requests after a transport failure', async () => {
+test.serial('api proxy does not retry non-idempotent POST requests after a transport failure', async () => {
   const app = await loadRoutes()
   const fetchMock = mock(async (_request: Request | URL | string) => {
     throw new Error('owner unavailable')
@@ -124,20 +133,21 @@ test('api proxy does not retry non-idempotent POST requests after a transport fa
     }),
   )
   const body = (await response.json()) as {data: null; error: string}
+  const ownerFetchCallUrls = getOwnerFetchCallUrls(fetchMock.mock.calls)
 
   expect(response.status).toBe(502)
   expect(body.error).toContain('DuckDB owner proxy target unavailable')
-  expect(fetchMock).toHaveBeenCalledTimes(2)
+  expect(ownerFetchCallUrls).toHaveLength(2)
 })
 
-test('api proxy retries idempotent DELETE requests after a temporary same-owner transport failure', async () => {
+test.serial('api proxy retries idempotent DELETE requests after a temporary same-owner transport failure', async () => {
   const app = await loadRoutes()
   let shouldFail = true
   const fetchMock = mock(async (request: Request | URL | string) => {
     const url = getRequestUrl(request)
 
-    if (isOwnerConnectionsUrl(url)) {
-      return getCompatibleOwnerConnectionsResponse()
+    if (isRuntimeReadyUrl(url)) {
+      return getCompatibleRuntimeReadyResponse()
     }
 
     if (shouldFail) {
@@ -152,18 +162,19 @@ test('api proxy retries idempotent DELETE requests after a temporary same-owner 
 
   const response = await app.handle(new Request('http://localhost/api/example', {method: 'DELETE'}))
   const body = (await response.json()) as {data: {ok: boolean}; error: string | null}
+  const ownerFetchCallUrls = getOwnerFetchCallUrls(fetchMock.mock.calls)
 
   expect(response.status).toBe(200)
   expect(body.data.ok).toBe(true)
-  expect(fetchMock).toHaveBeenCalledTimes(4)
+  expect(ownerFetchCallUrls).toHaveLength(4)
 })
 
-test('api proxy rejects a pre-cutover DuckDB owner target before forwarding', async () => {
+test.serial('api proxy rejects a pre-cutover DuckDB owner target before forwarding', async () => {
   const app = await loadRoutes()
   const fetchMock = mock(async (request: Request | URL | string) => {
     const url = getRequestUrl(request)
 
-    return isOwnerConnectionsUrl(url)
+    return isRuntimeReadyUrl(url)
       ? Response.json({data: {owner: {apiServerPort: 34991}}})
       : Response.json({data: {ok: true}, error: null})
   })
@@ -171,13 +182,14 @@ test('api proxy rejects a pre-cutover DuckDB owner target before forwarding', as
 
   const response = await app.handle(new Request('http://localhost/api/example', {method: 'GET'}))
   const body = (await response.json()) as {data: null; error: string}
+  const ownerFetchCallUrls = getOwnerFetchCallUrls(fetchMock.mock.calls)
 
   expect(response.status).toBe(426)
   expect(body.error).toContain('Incompatible Forska split runtime version')
-  expect(fetchMock).toHaveBeenCalledTimes(1)
+  expect(ownerFetchCallUrls).toHaveLength(1)
 })
 
-test('api proxy rejects pre-cutover owner-routed peer headers', async () => {
+test.serial('api proxy rejects pre-cutover owner-routed peer headers', async () => {
   const app = await loadRoutes()
   const fetchMock = mock(async () => {
     return Response.json({data: {ok: true}, error: null})
@@ -191,8 +203,9 @@ test('api proxy rejects pre-cutover owner-routed peer headers', async () => {
     }),
   )
   const body = (await response.json()) as {data: null; error: string}
+  const ownerFetchCallUrls = getOwnerFetchCallUrls(fetchMock.mock.calls)
 
   expect(response.status).toBe(426)
   expect(body.error).toContain('Incompatible Forska split runtime version')
-  expect(fetchMock).not.toHaveBeenCalled()
+  expect(ownerFetchCallUrls).toHaveLength(0)
 })

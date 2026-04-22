@@ -1,3 +1,5 @@
+import {runtimeReadyPath} from './runtimeReadyContract.ts'
+
 export const splitRuntimeCutoverVersion = 'split-runtime-v1'
 export const splitRuntimeCutoverVersionHeader = 'x-forska-runtime-version'
 
@@ -81,7 +83,7 @@ export const probeDuckdbOwnerCutoverCompatibility = async (
   context: string,
 ): Promise<RuntimeCutoverProbeResult> => {
   try {
-    const response = await fetch(`${duckdbOwnerUrl}/api/duckdb_owner_connections`, {signal: AbortSignal.timeout(1_000)})
+    const response = await fetch(`${duckdbOwnerUrl}${runtimeReadyPath}`, {signal: AbortSignal.timeout(1_000)})
     const runtimeVersion = getRuntimeCutoverVersionFromPeerResponse(await readResponseJson(response))
 
     return isRuntimeCutoverVersionCompatible(runtimeVersion)

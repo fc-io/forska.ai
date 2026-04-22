@@ -17,7 +17,7 @@ const waitForServer = async (port: number, timeoutMs: number): Promise<void> => 
   await new Promise<void>((resolve, reject) => {
     const check = async () => {
       try {
-        await fetch(`http://127.0.0.1:${port}/__healthcheck__`)
+        await fetch(`http://127.0.0.1:${port}/api/runtime/ready`)
         resolve()
       } catch (error) {
         if (Date.now() - startedAt >= timeoutMs) {
@@ -285,6 +285,35 @@ test('api server without DuckDB owner reports owner proxy disabled warning', asy
   }
 })
 
+test('api server without DuckDB owner fails closed for unclassified product routes', async () => {
+  const apiPort = 34998
+  const duckdbPath = `/tmp/f1-owner-proxy-fail-closed-${Date.now()}.duckdb`
+  const apiServer = startServer({
+    API_SERVER_PORT: String(apiPort),
+    DUCKDB_PATH: duckdbPath,
+    RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+    RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+    SERVER_ROLE: 'api',
+    SERVER_DUCKDB_OWNER_URL: '',
+    VITE_PORT: '4318',
+  })
+
+  try {
+    await waitForServer(apiPort, 10_000)
+
+    const response = await fetch(`http://127.0.0.1:${apiPort}/api/users`)
+    const body = (await response.json()) as {data: null; error: string}
+
+    expect(response.status).toBe(502)
+    expect(body.error).toContain('DuckDB owner proxy target unavailable')
+  } finally {
+    await stopServer(apiServer)
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('auto role elects one DuckDB owner and follower takes over after owner exit', async () => {
   const firstPort = 34995
   const secondPort = 34996
@@ -374,7 +403,9 @@ test('auto follower does not take over from a responsive owner with a stale hear
   try {
     await waitForServer(ownerPort, 10_000)
 
-    const snapshotResponse = await fetch(`http://127.0.0.1:${ownerPort}/api/duckdbStudioSnapshots`, {method: 'POST'})
+    const snapshotResponse = await fetch(`http://127.0.0.1:${ownerPort}/__duckdb-owner-rpc/api/duckdbStudioSnapshots`, {
+      method: 'POST',
+    })
     const snapshotBody = (await snapshotResponse.json()) as {data: {snapshotPath: string}; error?: string}
 
     expect(snapshotResponse.ok).toBe(true)

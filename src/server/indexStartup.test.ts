@@ -18,7 +18,7 @@ const waitForServer = async (port: number, timeoutMs: number): Promise<void> => 
   await new Promise<void>((resolve, reject) => {
     const check = async () => {
       try {
-        await fetch(`http://127.0.0.1:${port}/__healthcheck__`)
+        await fetch(`http://127.0.0.1:${port}/api/runtime/ready`)
         resolve()
       } catch (error) {
         if (Date.now() - startedAt >= timeoutMs) {
@@ -265,7 +265,7 @@ test('maintenance-worker startup migrates DuckDB before judgment health queries 
   try {
     await waitForServer(apiPort, 10_000)
 
-    const response = await fetch(`http://127.0.0.1:${apiPort}/api/judgmentsjobs-health`, {
+    const response = await fetch(`http://127.0.0.1:${apiPort}/__duckdb-owner-rpc/api/judgmentsjobs-health`, {
       signal: AbortSignal.timeout(5_000),
     })
     const body = (await response.json()) as {
@@ -340,7 +340,9 @@ test('maintenance-worker startup migrates pre-cutover user config naming', async
   try {
     await waitForServer(apiPort, 10_000)
 
-    const response = await fetch(`http://127.0.0.1:${apiPort}/api/users`, {signal: AbortSignal.timeout(5_000)})
+    const response = await fetch(`http://127.0.0.1:${apiPort}/__duckdb-owner-rpc/api/users`, {
+      signal: AbortSignal.timeout(5_000),
+    })
     const body = (await response.json()) as {
       data: Array<{backgroundWriterDuckdbMemoryLimit?: string; maintenanceWorkerDuckdbMemoryLimit?: string}>
     }
@@ -377,7 +379,7 @@ test('maintenance-worker startup tolerates malformed DuckDB lease metadata files
   try {
     await waitForServer(apiPort, 10_000)
 
-    const response = await fetch(`http://127.0.0.1:${apiPort}/api/judgmentsjobs-health`, {
+    const response = await fetch(`http://127.0.0.1:${apiPort}/__duckdb-owner-rpc/api/judgmentsjobs-health`, {
       signal: AbortSignal.timeout(5_000),
     })
     const body = (await response.json()) as {

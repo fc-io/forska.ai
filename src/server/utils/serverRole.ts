@@ -50,6 +50,14 @@ export const shouldServerRoleProxyApiToOwner = canServerRoleProxyApiToOwner
 
 export const shouldServerRoleProxyApiToDuckdbOwner = canServerRoleProxyApiToOwner
 
+export const shouldServerRoleMountPublicProductApi = (serverRole: ServerRole) => {
+  return getServerRoleCapabilities(serverRole).includes('api')
+}
+
+export const shouldServerRoleMountDuckdbOwnerPrivateApi = (serverRole: ServerRole) => {
+  return canServerRoleOwnDuckdb(serverRole)
+}
+
 export const getServerRoleCapabilities = (serverRole: ServerRole): ServerRoleCapability[] => {
   return [...serverRoleCapabilities[serverRole]]
 }
