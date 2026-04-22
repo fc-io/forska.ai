@@ -2,15 +2,7 @@ import {useQuery} from '@tanstack/solid-query'
 import {Link} from '@tanstack/solid-router'
 import {createMemo, Show} from 'solid-js'
 
-import {
-  getReviewIndexingBlockedBody,
-  getReviewIndexingBlockedTitle,
-  getReviewIndexingInProgressTitle,
-  getReviewIndexingQueuedBody,
-  getReviewIndexingQueuedTitle,
-  getReviewIndexingStalledBody,
-  getReviewIndexingStalledTitle,
-} from './getReviewIndexingInProgressTitle.ts'
+import {getReviewIndexingStateCopy} from './getReviewIndexingInProgressTitle.ts'
 import {ReviewsIndexingProgress} from './reviewsIndexingProgress.tsx'
 import {createReviewsWarningsQueryOptions, type ReviewsWarningsData} from './reviewsWarningsQuery.ts'
 
@@ -24,80 +16,6 @@ const formatQueuedAt = (value: string | null) => {
 
 const getPendingRefreshLabel = (pendingRefreshCount: number) => {
   return pendingRefreshCount === 1 ? '1 refresh job outstanding' : `${pendingRefreshCount} refresh jobs outstanding`
-}
-
-const getIndexingBannerTitle = (
-  params: {
-    blockedReason: ReviewsWarningsData['indexing']['blockedReason']
-    largeRebuild: null | {rebuildPhase: string | null; refreshStatus: 'failed' | 'idle' | 'paused' | 'running' | null}
-    pendingArticleRefreshCount: number
-    pendingProjectRefreshCount: number
-    progressState: ReviewsWarningsData['indexing']['progressState']
-    status: ReviewsWarningsData['indexing']['status']
-  },
-  projectId: string,
-) => {
-  return params.status === 'blocked'
-    ? getReviewIndexingBlockedTitle(params.blockedReason)
-    : params.status === 'failed'
-      ? params.largeRebuild?.rebuildPhase
-        ? `Large rebuild failed: ${params.largeRebuild.rebuildPhase}`
-        : 'Review indexing failed'
-      : params.status === 'stale'
-        ? 'Review index is stale'
-        : params.progressState === 'stalled'
-          ? getReviewIndexingStalledTitle()
-          : params.progressState !== 'processing'
-            ? params.largeRebuild?.rebuildPhase
-              ? `Large rebuild queued: ${params.largeRebuild.rebuildPhase}`
-              : params.pendingArticleRefreshCount > 0 && params.pendingProjectRefreshCount === 0
-                ? 'New judgments are queued for incorporation'
-                : getReviewIndexingQueuedTitle(projectId)
-            : params.largeRebuild?.rebuildPhase
-              ? `Large rebuild in progress: ${params.largeRebuild.rebuildPhase}`
-              : params.pendingArticleRefreshCount > 0 && params.pendingProjectRefreshCount === 0
-                ? 'New judgments are still being incorporated'
-                : getReviewIndexingInProgressTitle(projectId)
-}
-
-const getIndexingBannerBody = (params: {
-  blockedReason: ReviewsWarningsData['indexing']['blockedReason']
-  largeRebuild: null | {
-    cursorArticleCreatedAt: string | null
-    cursorArticleId: string | null
-    lastError: string | null
-    rebuildPhase: string | null
-  }
-  pendingArticleRefreshCount: number
-  pendingProjectRefreshCount: number
-  progressState: ReviewsWarningsData['indexing']['progressState']
-  status: ReviewsWarningsData['indexing']['status']
-}) => {
-  return params.status === 'blocked'
-    ? getReviewIndexingBlockedBody(params.blockedReason)
-    : params.status === 'failed'
-      ? params.largeRebuild?.lastError
-        ? `Large rebuild failed: ${params.largeRebuild.lastError}`
-        : 'The latest review index refresh failed, so review lists may be stale or incomplete until the maintenance worker retries the project.'
-      : params.status === 'stale'
-        ? 'This project has scoped articles, but the review index is missing or stale. Review lists may stay empty until the maintenance worker rebuilds the project.'
-        : params.progressState === 'stalled'
-          ? getReviewIndexingStalledBody()
-          : params.progressState !== 'processing'
-            ? params.largeRebuild?.rebuildPhase
-              ? 'This staged rebuild is queued for the maintenance worker. Review lists and counts may change once the backlog clears.'
-              : params.pendingProjectRefreshCount > 0 && params.pendingArticleRefreshCount > 0
-                ? 'Review indexing and newly produced judgments are queued for the maintenance worker. Counts and article lists may change once the backlog clears.'
-                : params.pendingProjectRefreshCount > 0
-                  ? getReviewIndexingQueuedBody()
-                  : "New judgments are queued to be folded into this project's review index. Counts and article lists may change once the backlog clears."
-            : params.largeRebuild?.rebuildPhase
-              ? 'This project is being rebuilt in bounded stages to avoid large-refresh crashes. Review lists and counts may change until the staged rebuild finishes.'
-              : params.pendingProjectRefreshCount > 0 && params.pendingArticleRefreshCount > 0
-                ? 'This project is still rebuilding its review index and folding in newly produced judgments. Counts and article lists may change until the backlog clears.'
-                : params.pendingProjectRefreshCount > 0
-                  ? 'This project has scoped articles, but the review index is still updating in the background. Review lists may look partial or empty until indexing finishes.'
-                  : "New judgments are still being folded into this project's review index. Counts and article lists may change until the backlog clears."
 }
 
 const getPendingRefreshMetaLabel = (params: {
@@ -122,7 +40,7 @@ const getPendingRefreshMetaLabel = (params: {
   return segments.join(' and ')
 }
 
-const getLargeRebuildDetailLabel = (data: ReviewsWarningsData | null) => {
+const getLargeRebuildDetailLabel = (data: ReviewsWarningsData) => {
   const phaseLabel = data?.indexing.largeRebuild?.rebuildPhase
   const cursorArticleId = data?.indexing.largeRebuild?.cursorArticleId
 
@@ -130,13 +48,19 @@ const getLargeRebuildDetailLabel = (data: ReviewsWarningsData | null) => {
     ? null
     : data?.indexing.status === 'failed'
       ? `Large rebuild failed: ${phaseLabel}`
-      : data?.indexing.progressState === 'stalled'
-        ? `Large rebuild stalled: ${phaseLabel}`
-        : data?.indexing.progressState === 'queued' || data?.indexing.largeRebuild?.refreshStatus === 'idle'
-          ? `Large rebuild queued: ${phaseLabel}`
-          : cursorArticleId
-            ? `Resuming from article ${cursorArticleId}`
-            : `Large rebuild in progress: ${phaseLabel}`
+      : data?.indexing.progressState === 'blocked'
+        ? data.indexing.blockedReason === 'paused_by_policy'
+          ? `Large rebuild cooling down: ${phaseLabel}`
+          : `Large rebuild blocked: ${phaseLabel}`
+        : data?.indexing.progressState === 'stalled'
+          ? `Large rebuild stalled: ${phaseLabel}`
+          : data?.indexing.progressState === 'queued' || data?.indexing.largeRebuild?.refreshStatus === 'idle'
+            ? `Large rebuild queued: ${phaseLabel}`
+            : data?.indexing.progressState !== 'processing'
+              ? null
+              : cursorArticleId
+                ? `Resuming from article ${cursorArticleId}`
+                : `Large rebuild in progress: ${phaseLabel}`
 }
 
 export const ReviewsProjectWarnings = (props: {projectId: string}) => {
@@ -177,16 +101,16 @@ export const ReviewsProjectWarnings = (props: {projectId: string}) => {
 
   const indexingBannerTitle = createMemo(() => {
     const data = warningsData()
-    return !data
-      ? getReviewIndexingInProgressTitle(props.projectId)
-      : getIndexingBannerTitle(data.indexing, props.projectId)
+    return data === null
+      ? null
+      : getReviewIndexingStateCopy({indexing: data.indexing, projectId: props.projectId, surface: 'banner'}).title
   })
 
   const indexingBannerBody = createMemo(() => {
     const data = warningsData()
-    return !data
-      ? 'This project has scoped articles, but the review index is still updating in the background. Review lists may look partial or empty until indexing finishes.'
-      : getIndexingBannerBody(data.indexing)
+    return data === null
+      ? null
+      : getReviewIndexingStateCopy({indexing: data.indexing, projectId: props.projectId, surface: 'banner'}).description
   })
 
   const indexingBannerMeta = createMemo(() => {

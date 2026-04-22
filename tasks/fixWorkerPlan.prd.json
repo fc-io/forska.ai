@@ -289,11 +289,12 @@
         "Verify in browser that the review warning shows `waiting for maintenance worker` when no maintenance-worker heartbeat exists."
       ],
       "priority": 14,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-013"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-015",
@@ -391,6 +392,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-04-22T23:10:22.399Z"
+    "updatedAt": "2026-04-22T23:21:46.740Z"
   }
 }

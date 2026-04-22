@@ -34,6 +34,22 @@ const getLargeRebuildFailureLabel = (indexing: ReviewsWarningsData['indexing']) 
   return lastError === null || lastError === undefined ? null : `last error: ${lastError}`
 }
 
+const getIndexingStatusLabel = (indexing: ReviewsWarningsData['indexing']) => {
+  return indexing.progressState === 'processing'
+    ? `${indexing.activeWorkCount} ${indexing.activeWorkCount === 1 ? 'refresh job' : 'refresh jobs'} actively processing`
+    : indexing.progressState === 'queued'
+      ? 'queued for the maintenance worker'
+      : indexing.progressState === 'blocked' && indexing.blockedReason === 'paused_by_policy'
+        ? 'cooling down after memory pressure'
+        : indexing.progressState === 'blocked'
+          ? 'waiting for maintenance worker'
+          : indexing.progressState === 'stalled'
+            ? 'stalled with no active processing'
+            : indexing.progressState === 'failed'
+              ? 'failed'
+              : 'completed'
+}
+
 const shouldShowIndexingProgress = (indexing: ReviewsWarningsData['indexing']) => {
   return (
     indexing.status === 'refreshing'
@@ -46,6 +62,9 @@ export const ReviewsIndexingProgress = (props: ReviewsIndexingProgressProps) => 
   return (
     <Show when={shouldShowIndexingProgress(props.indexing)}>
       <div class={getProgressContainerClass(props.compact ?? false)}>
+        <p>
+          <span class="font-medium text-slate-700">Status:</span> {getIndexingStatusLabel(props.indexing)}
+        </p>
         <p>
           <span class="font-medium text-slate-700">Project refreshes:</span>{' '}
           {getLaneDescription(

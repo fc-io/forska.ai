@@ -113,7 +113,9 @@ test('renders active review indexing only for processing progress', async () => 
 })
 
 test('renders stalled review indexing without active progress copy', async () => {
-  const {container, dispose} = await renderWarnings(getWarningsData({progressState: 'stalled'}))
+  const {container, dispose} = await renderWarnings(
+    getWarningsData({pendingProjectRefreshCount: 0, pendingRefreshCount: 0, progressState: 'stalled', status: 'stale'}),
+  )
 
   try {
     expect(container.textContent).toContain('Review indexing stalled')
@@ -136,6 +138,25 @@ test('renders blocked review indexing without active progress copy', async () =>
 
   try {
     expect(container.textContent).toContain('Review indexing blocked: waiting for maintenance worker')
+    expect(container.textContent).not.toContain('Review indexing in progress')
+  } finally {
+    dispose()
+  }
+})
+
+test('renders memory-pressure cooldown without active progress copy', async () => {
+  const {container, dispose} = await renderWarnings(
+    getWarningsData({
+      blockedReason: 'paused_by_policy',
+      eligibleConsumerPresent: false,
+      progressState: 'blocked',
+      status: 'blocked',
+    }),
+  )
+
+  try {
+    expect(container.textContent).toContain('Review indexing cooling down after memory pressure')
+    expect(container.textContent).toContain('cooling down after memory pressure')
     expect(container.textContent).not.toContain('Review indexing in progress')
   } finally {
     dispose()

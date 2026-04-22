@@ -1,6 +1,13 @@
 import type {ReviewsWarningsData} from './reviewsWarningsQuery.ts'
 
 type ReviewIndexingBlockedReason = ReviewsWarningsData['indexing']['blockedReason']
+type ReviewIndexingCopySurface = 'banner' | 'judgedEmpty' | 'unassessedEmpty'
+type ReviewIndexingCopy = {description: string; title: string}
+type ReviewIndexingCopyParams = {
+  indexing: ReviewsWarningsData['indexing']
+  projectId: string
+  surface: ReviewIndexingCopySurface
+}
 
 export const getReviewIndexingInProgressTitle = (projectId: string) => {
   return `Review indexing in progress for project ${projectId}`
@@ -19,17 +26,114 @@ export const getReviewIndexingStalledTitle = () => {
 }
 
 export const getReviewIndexingStalledBody = () => {
-  return 'Review index work has not made progress recently even though a maintenance worker should be available.'
+  return 'Review indexing appears stalled because the review index is missing or stale and no active processing is being reported.'
 }
 
 export const getReviewIndexingBlockedTitle = (blockedReason: ReviewIndexingBlockedReason) => {
   return blockedReason === 'paused_by_policy'
-    ? 'Review indexing blocked: maintenance worker paused by low-memory policy'
+    ? 'Review indexing cooling down after memory pressure'
     : 'Review indexing blocked: waiting for maintenance worker'
 }
 
 export const getReviewIndexingBlockedBody = (blockedReason: ReviewIndexingBlockedReason) => {
   return blockedReason === 'paused_by_policy'
-    ? 'Review index work is queued, but this runtime is protecting the DuckDB memory cap by not starting review refresh work.'
-    : 'Review index work is queued, but no eligible maintenance worker is currently draining it.'
+    ? 'Review index work is queued, but the maintenance worker is cooling down after memory pressure before starting more review refresh work.'
+    : 'Review index work is queued and waiting for a maintenance worker to become available.'
+}
+
+const hasOnlyArticleRefreshWork = (indexing: ReviewsWarningsData['indexing']) => {
+  return indexing.pendingArticleRefreshCount > 0 && indexing.pendingProjectRefreshCount === 0
+}
+
+const getLargeRebuildPhase = (indexing: ReviewsWarningsData['indexing']) => {
+  return indexing.largeRebuild?.rebuildPhase ?? null
+}
+
+const getArticleRefreshQueuedDescription = (surface: ReviewIndexingCopySurface) => {
+  return surface === 'unassessedEmpty'
+    ? "New judgments are queued to be folded into this project's review index. This list may change once the backlog clears."
+    : "New judgments are queued to be folded into this project's review index. Counts and article lists may change once the backlog clears."
+}
+
+const getArticleRefreshProcessingDescription = (surface: ReviewIndexingCopySurface) => {
+  return surface === 'unassessedEmpty'
+    ? 'New judgments are still being folded into this project. This list may change as the backlog clears.'
+    : 'New judgments are still being folded into this project. Articles and counts here may change as the backlog clears.'
+}
+
+const getProjectRefreshProcessingDescription = (surface: ReviewIndexingCopySurface) => {
+  return surface === 'unassessedEmpty'
+    ? 'This project has scoped articles, but the review index is actively processing. The unassessed list may appear empty until indexing finishes.'
+    : surface === 'judgedEmpty'
+      ? 'This project has scoped articles, but the review index is actively processing. Articles with judgments may appear here soon.'
+      : 'This project has scoped articles, but the review index is actively processing in the maintenance worker. Review lists may look partial or empty until indexing finishes.'
+}
+
+const getFailedReviewIndexingCopy = (indexing: ReviewsWarningsData['indexing']): ReviewIndexingCopy => {
+  const phase = getLargeRebuildPhase(indexing)
+
+  return phase
+    ? {
+        description: indexing.largeRebuild?.lastError
+          ? `Large rebuild failed: ${indexing.largeRebuild.lastError}`
+          : 'The staged large rebuild failed. Review lists may stay stale or incomplete until the maintenance worker retries it.',
+        title: `Large rebuild failed: ${phase}`,
+      }
+    : {
+        description:
+          'The latest review index refresh failed. Results may stay stale or incomplete until the maintenance worker retries the review index.',
+        title: 'Review indexing failed',
+      }
+}
+
+const getQueuedReviewIndexingCopy = (params: ReviewIndexingCopyParams): ReviewIndexingCopy => {
+  const phase = getLargeRebuildPhase(params.indexing)
+
+  return phase
+    ? {
+        description:
+          'This staged rebuild is queued for the maintenance worker. Review lists and counts may change once the backlog clears.',
+        title: `Large rebuild queued: ${phase}`,
+      }
+    : hasOnlyArticleRefreshWork(params.indexing)
+      ? {
+          description: getArticleRefreshQueuedDescription(params.surface),
+          title: 'New judgments are queued for incorporation',
+        }
+      : {description: getReviewIndexingQueuedBody(), title: getReviewIndexingQueuedTitle(params.projectId)}
+}
+
+const getProcessingReviewIndexingCopy = (params: ReviewIndexingCopyParams): ReviewIndexingCopy => {
+  const phase = getLargeRebuildPhase(params.indexing)
+
+  return phase
+    ? {
+        description:
+          'This project is being rebuilt in bounded stages to avoid large-refresh crashes. Review lists and counts may change until the staged rebuild finishes.',
+        title: `Large rebuild in progress: ${phase}`,
+      }
+    : hasOnlyArticleRefreshWork(params.indexing)
+      ? {
+          description: getArticleRefreshProcessingDescription(params.surface),
+          title: 'New judgments are still being incorporated',
+        }
+      : {
+          description: getProjectRefreshProcessingDescription(params.surface),
+          title: getReviewIndexingInProgressTitle(params.projectId),
+        }
+}
+
+export const getReviewIndexingStateCopy = (params: ReviewIndexingCopyParams): ReviewIndexingCopy => {
+  return params.indexing.status === 'failed'
+    ? getFailedReviewIndexingCopy(params.indexing)
+    : params.indexing.status === 'blocked'
+      ? {
+          description: getReviewIndexingBlockedBody(params.indexing.blockedReason),
+          title: getReviewIndexingBlockedTitle(params.indexing.blockedReason),
+        }
+      : params.indexing.progressState === 'stalled'
+        ? {description: getReviewIndexingStalledBody(), title: getReviewIndexingStalledTitle()}
+        : params.indexing.progressState === 'processing'
+          ? getProcessingReviewIndexingCopy(params)
+          : getQueuedReviewIndexingCopy(params)
 }
