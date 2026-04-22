@@ -1033,11 +1033,13 @@ test('judgment job health projection tracks completions waiting on maintenance v
 
   const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}/health`))
   const body = (await response.json()) as {
+    blockedReason: string | null
     liveSqlite: {
       hasPendingCompletionAck: boolean
       oldestUnackedCompletionAgeMs: number | null
       pendingCompletionAckCount: number
     }
+    progressState: string
   }
   const [projectionBeforeAck] = await getAppDatabaseService().queryJson<{
     pendingCompletionAckCount: number
@@ -1052,6 +1054,8 @@ test('judgment job health projection tracks completions waiting on maintenance v
   `)
 
   expect(response.status).toBe(200)
+  expect(body.progressState).toBe('waiting_for_owner_ack')
+  expect(body.blockedReason).toBe('waiting_for_owner_ack')
   expect(body.liveSqlite.hasPendingCompletionAck).toBe(true)
   expect(body.liveSqlite.pendingCompletionAckCount).toBe(1)
   expect(body.liveSqlite.oldestUnackedCompletionAgeMs).toBeGreaterThanOrEqual(0)
@@ -1178,6 +1182,23 @@ test('job details expose shared endpoint availability diagnostics', async () => 
   })
   expect(body.requestStats.endpointAvailability?.lastFailureMessage).toContain('Provider endpoint outage:')
   expect(body.requestStats.endpointAvailability?.cooldownRemainingMs).toBeGreaterThan(0)
+
+  const healthResponse = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}/health`))
+  const healthBody = (await healthResponse.json()) as {
+    blockedReason: string | null
+    endpointAvailability: {cooldownRemainingMs: number | null; status: string} | null
+    progressState: string
+    recoveryMode: string
+    retryAfterAt: string | null
+  }
+
+  expect(healthResponse.status).toBe(200)
+  expect(healthBody.progressState).toBe('cooldown')
+  expect(healthBody.blockedReason).toBe('endpoint_cooldown')
+  expect(healthBody.endpointAvailability?.status).toBe('cooldown')
+  expect(healthBody.endpointAvailability?.cooldownRemainingMs).toBeGreaterThan(0)
+  expect(healthBody.recoveryMode).toBe('retry_backoff')
+  expect(healthBody.retryAfterAt).not.toBeNull()
 })
 
 test('job details expose provider dispatch saturation stats', async () => {
@@ -1542,6 +1563,8 @@ test('judgment job health route returns missing job details', async () => {
 
   const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}/health`))
   const body = (await response.json()) as {
+    blockedReason: string | null
+    progressState: string
     storageState: string
     recommendedNextAction: string
     liveSqlite: {
@@ -1559,6 +1582,8 @@ test('judgment job health route returns missing job details', async () => {
   expect(response.status).toBe(200)
   expect(body.storageState).toBe('missing')
   expect(body.recommendedNextAction).toBe('repair_missing_sqlite')
+  expect(body.progressState).toBe('repair_required')
+  expect(body.blockedReason).toBe('storage_repair_required')
   expect(body.liveSqlite).toEqual({
     claimedOutboxCount: 0,
     hasOutboxRows: false,
@@ -1776,13 +1801,242 @@ test('judgment job health summary aggregates storage risk counts', async () => {
   }
 
   expect(response.status).toBe(200)
-  expect(body.data).toEqual({
+  expect(body.data).toMatchObject({
     healthy: baselineBody.data.healthy + 1,
     draining: baselineBody.data.draining + 1,
     offlineRepairRequired: baselineBody.data.offlineRepairRequired,
     quarantined: baselineBody.data.quarantined + 1,
     retainedOutbox: baselineBody.data.retainedOutbox + 1,
     staleImport: baselineBody.data.staleImport + 1,
+  })
+})
+
+test('judgment job health routes distinguish active and blocked import ownership states', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getJudgmentJobSqliteHealthProjectionService} =
+    await import('../services/judgmentJobSqliteHealthProjectionService.ts')
+  const {getAppDatabaseService} = await import('../services/appDatabaseService.ts')
+  const {withCurrentServerRoleOverride} = await import('../utils/serverRuntimeRole.ts')
+  const now = Date.now()
+  const activeProjectId = `health-active-import-project-${now}`
+  const activeModelId = `health-active-import-model-${now}`
+  const activeConnectionId = `health-active-import-connection-${now}`
+  const activeJobId = `health-active-import-job-${now}`
+  const blockedProjectId = `health-blocked-import-project-${now}`
+  const blockedModelId = `health-blocked-import-model-${now}`
+  const blockedConnectionId = `health-blocked-import-connection-${now}`
+  const blockedJobId = `health-blocked-import-job-${now}`
+  const activeStartedAt = new Date(now - 5_000).toISOString()
+  const activeProgressedAt = new Date(now - 1_000).toISOString()
+  const activeFreshUntilAt = new Date(now + 30_000).toISOString()
+  const buildProjectedHealth = (outboxRowCount: number) => {
+    return {
+      claimedOutboxCount: 0,
+      hasOutboxRows: outboxRowCount > 0,
+      hasPendingCompletionAck: false,
+      hasQueueRows: false,
+      lastAckSeq: null,
+      oldestUnackedCompletionAgeMs: null,
+      oldestUnexportedAgeMs: 1_000,
+      orphanedJudgedRowCount: 0,
+      outboxRowCount,
+      pendingCompletionAckCount: 0,
+      promptCounts: {claimed: 0, judged: 0, ready: 0, running: 0, skipped: 0},
+      retainedRowCount: outboxRowCount,
+      sqliteFileBytes: 4096,
+      walBytes: 0,
+    }
+  }
+
+  await insertProjectFixture({connectionId: activeConnectionId, modelId: activeModelId, projectId: activeProjectId})
+  await insertProjectFixture({connectionId: blockedConnectionId, modelId: blockedModelId, projectId: blockedProjectId})
+  await runDatabase(`
+    UPDATE app.project
+    SET use_title = TRUE, use_abstract = FALSE, use_fulltext = FALSE, use_fulltext_no_images = TRUE
+    WHERE id = '${activeProjectId}'
+  `)
+  await runDatabase(`
+    UPDATE app.project
+    SET use_title = FALSE, use_abstract = TRUE, use_fulltext = TRUE, use_fulltext_no_images = FALSE
+    WHERE id = '${blockedProjectId}'
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${activeJobId}', '${activeProjectId}', 'running', 'active')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${blockedJobId}', '${blockedProjectId}', 'running', 'active')
+  `)
+  await runDatabase(`
+    INSERT INTO app.maintenance_work_lease (
+      id,
+      work_kind,
+      scope_kind,
+      project_id,
+      judgment_job_id,
+      required_consumer_role,
+      consumer_id,
+      last_started_at,
+      last_progressed_at,
+      lease_expires_at,
+      fresh_until_at,
+      recovery_mode
+    ) VALUES (
+      'active-import-lease-${now}',
+      'judgment_sqlite_outbox_import',
+      'job',
+      '${activeProjectId}',
+      '${activeJobId}',
+      'judge-worker',
+      'judge-worker-active-import',
+      TIMESTAMPTZ '${activeStartedAt}',
+      TIMESTAMPTZ '${activeProgressedAt}',
+      TIMESTAMPTZ '${activeFreshUntilAt}',
+      TIMESTAMPTZ '${activeFreshUntilAt}',
+      'none'
+    )
+  `)
+  const allJobRows = await getAppDatabaseService().queryJson<{id: string}>(`
+    SELECT id
+    FROM app.judgment_job
+  `)
+
+  await Promise.all(
+    allJobRows
+      .filter((row) => {
+        return row.id !== activeJobId && row.id !== blockedJobId
+      })
+      .map((row) => {
+        return getJudgmentJobSqliteHealthProjectionService().publishJudgmentJobSqliteHealthProjection({
+          health: buildProjectedHealth(0),
+          jobId: row.id,
+          projectedBy: 'test-judge-worker',
+          projectionSource: 'test',
+        })
+      }),
+  )
+  await getJudgmentJobSqliteHealthProjectionService().publishJudgmentJobSqliteHealthProjection({
+    health: buildProjectedHealth(3),
+    jobId: activeJobId,
+    projectedBy: 'test-judge-worker',
+    projectionSource: 'test',
+  })
+  await getJudgmentJobSqliteHealthProjectionService().publishJudgmentJobSqliteHealthProjection({
+    health: buildProjectedHealth(2),
+    jobId: blockedJobId,
+    projectedBy: 'test-judge-worker',
+    projectionSource: 'test',
+  })
+
+  await withCurrentServerRoleOverride('maintenance-worker', async () => {
+    const activeResponse = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${activeJobId}/health`))
+    const blockedResponse = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${blockedJobId}/health`))
+    const summaryResponse = await app.handle(new Request('http://localhost/api/judgmentsjobs-health'))
+    const activeBody = (await activeResponse.json()) as {
+      blockedReason: string | null
+      importConsumer: {eligibleConsumerCount: number; requiredConsumerRole: string}
+      importWork: {activeConsumerCount: number; activeWorkCount: number; outboxRowCount: number}
+      lastProgressedAt: string | null
+      lastStartedAt: string | null
+      progressState: string
+      workIdentity: {
+        modelId: string
+        projectId: string
+        useAbstract: boolean
+        useFulltext: boolean
+        useFulltextNoImages: boolean
+        useTitle: boolean
+      }
+    }
+    const blockedBody = (await blockedResponse.json()) as {
+      blockedReason: string | null
+      importConsumer: {eligibleConsumerCount: number; requiredConsumerRole: string}
+      importWork: {activeConsumerCount: number; activeWorkCount: number; outboxRowCount: number}
+      progressState: string
+      workIdentity: {
+        modelId: string
+        projectId: string
+        useAbstract: boolean
+        useFulltext: boolean
+        useFulltextNoImages: boolean
+        useTitle: boolean
+      }
+    }
+    const summaryBody = (await summaryResponse.json()) as {
+      data: {
+        activeImport: number
+        blockedImport: number
+        importConsumer: {eligibleConsumerCount: number; requiredConsumerRole: string}
+        jobs: Array<{
+          blockedReason: string | null
+          jobId: string
+          progressState: string
+          workIdentity: {
+            modelId: string
+            projectId: string
+            useAbstract: boolean
+            useFulltext: boolean
+            useFulltextNoImages: boolean
+            useTitle: boolean
+          }
+        }>
+      }
+    }
+
+    const activeSummary = summaryBody.data.jobs.find((job) => {
+      return job.jobId === activeJobId
+    })
+    const blockedSummary = summaryBody.data.jobs.find((job) => {
+      return job.jobId === blockedJobId
+    })
+
+    expect(activeResponse.status).toBe(200)
+    expect(blockedResponse.status).toBe(200)
+    expect(summaryResponse.status).toBe(200)
+    expect(activeBody.progressState).toBe('active_import')
+    expect(activeBody.blockedReason).toBeNull()
+    expect(activeBody.importConsumer.requiredConsumerRole).toBe('judge-worker')
+    expect(activeBody.importWork.activeConsumerCount).toBe(1)
+    expect(activeBody.importWork.activeWorkCount).toBe(1)
+    expect(activeBody.importWork.outboxRowCount).toBe(3)
+    expect(activeBody.lastStartedAt).toBe(activeStartedAt)
+    expect(activeBody.lastProgressedAt).toBe(activeProgressedAt)
+    expect(activeBody.workIdentity).toEqual({
+      modelId: activeModelId,
+      projectId: activeProjectId,
+      useAbstract: false,
+      useFulltext: false,
+      useFulltextNoImages: true,
+      useTitle: true,
+    })
+    expect(blockedBody.progressState).toBe('blocked_import')
+    expect(blockedBody.blockedReason).toBe('waiting_for_judge_worker')
+    expect(blockedBody.importConsumer.requiredConsumerRole).toBe('judge-worker')
+    expect(blockedBody.importConsumer.eligibleConsumerCount).toBe(0)
+    expect(blockedBody.importWork.activeConsumerCount).toBe(0)
+    expect(blockedBody.importWork.activeWorkCount).toBe(0)
+    expect(blockedBody.importWork.outboxRowCount).toBe(2)
+    expect(blockedBody.workIdentity).toEqual({
+      modelId: blockedModelId,
+      projectId: blockedProjectId,
+      useAbstract: true,
+      useFulltext: true,
+      useFulltextNoImages: false,
+      useTitle: false,
+    })
+    expect(summaryBody.data.importConsumer.requiredConsumerRole).toBe('judge-worker')
+    expect(summaryBody.data.importConsumer.eligibleConsumerCount).toBe(0)
+    expect(summaryBody.data.activeImport).toBeGreaterThanOrEqual(1)
+    expect(summaryBody.data.blockedImport).toBeGreaterThanOrEqual(1)
+    expect(activeSummary?.progressState).toBe('active_import')
+    expect(activeSummary?.workIdentity).toEqual(activeBody.workIdentity)
+    expect(blockedSummary?.progressState).toBe('blocked_import')
+    expect(blockedSummary?.blockedReason).toBe('waiting_for_judge_worker')
+    expect(blockedSummary?.workIdentity).toEqual(blockedBody.workIdentity)
   })
 })
 

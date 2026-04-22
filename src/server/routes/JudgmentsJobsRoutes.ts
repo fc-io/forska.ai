@@ -42,6 +42,7 @@ import {
   type JudgmentJobSqliteHealthProjectionRecord,
   type JudgmentJobSqliteHealthSnapshotForProjection,
 } from '../services/judgmentJobSqliteHealthProjectionService.ts'
+import {getDuckdbOwnerConnectionsOverview} from '../utils/duckdbOwnerConnections.ts'
 import {HttpError} from '../utils/httpError.ts'
 import {getProjectMartLargeRebuildRuntimeMetrics} from '../utils/projectMartLargeRebuildRuntimeMetrics.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
@@ -111,6 +112,87 @@ type FailedRequestSummary = {
   anthropicRefusalArticles: number
   anthropicRefusals: number
   persistedFailedRequests: number
+}
+type JudgmentJobBlockedReason =
+  | 'endpoint_circuit_breaker'
+  | 'endpoint_cooldown'
+  | 'endpoint_misconfigured'
+  | 'stale_import'
+  | 'storage_repair_required'
+  | 'waiting_for_judge_worker'
+  | 'waiting_for_owner_ack'
+  | null
+type JudgmentJobProgressState =
+  | 'active_import'
+  | 'blocked_import'
+  | 'completed'
+  | 'cooldown'
+  | 'idle'
+  | 'processing'
+  | 'queued'
+  | 'repair_required'
+  | 'waiting_for_owner_ack'
+type JudgmentJobWorkIdentity = {
+  modelId: string
+  projectId: string
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
+type JudgmentJobImportConsumerAvailability = {
+  eligibleConsumerCount: number
+  eligibleConsumerPresent: boolean
+  freshConsumerCount: number
+  freshConsumerPresent: boolean
+  registeredConsumerCount: number
+  requiredConsumerRole: 'judge-worker'
+  staleConsumerCount: number
+}
+type JudgmentJobImportWorkLease = {
+  consumerId: string | null
+  freshUntilAt: string | null
+  lastProgressedAt: string | null
+  lastStartedAt: string | null
+  recoveryContext: Record<string, unknown> | null
+  recoveryMode: 'archived_project_mart_recovery' | 'none' | 'retry_backoff'
+  retryAfterAt: string | null
+}
+type JudgmentJobEndpointHealth = {
+  diagnostics: ReturnType<typeof getJudgmentEndpointAvailabilityDiagnostics> | null
+  retryAfterAt: string | null
+}
+type JudgmentJobHealthProgress = {
+  activeConsumerCount: number
+  activeImportWorkCount: number
+  blockedReason: JudgmentJobBlockedReason
+  importBacklogCount: number
+  importConsumer: JudgmentJobImportConsumerAvailability
+  importWork: {
+    activeConsumerCount: number
+    activeWorkCount: number
+    claimedOutboxCount: number
+    hasBacklog: boolean
+    outboxRowCount: number
+    pendingCompletionAckCount: number
+    workIdentity: JudgmentJobWorkIdentity
+  }
+  lastProgressedAt: string | null
+  lastStartedAt: string | null
+  progressState: JudgmentJobProgressState
+  recoveryContext: Record<string, unknown> | null
+  recoveryMode: 'archived_project_mart_recovery' | 'none' | 'retry_backoff'
+  retryAfterAt: string | null
+  runningWork: {
+    activePromptCount: number
+    claimedPromptCount: number
+    judgedPromptCount: number
+    readyPromptCount: number
+    runningPromptCount: number
+    skippedPromptCount: number
+    workIdentity: JudgmentJobWorkIdentity
+  }
+  workIdentity: JudgmentJobWorkIdentity
 }
 const unassessedCountTTLms = 10_000
 const staleImportThresholdMs = 15 * 60 * 1_000
@@ -831,6 +913,379 @@ const assertJudgingRuntimeCanRun = (): void => {
   }
 }
 
+const getIsoDateString = (value: unknown): string | null => {
+  return getDateValue(value)?.toISOString() ?? null
+}
+
+const getJudgmentJobWorkIdentity = ({
+  job,
+  modelId,
+}: {
+  job: {projectId: string; useAbstract: boolean; useFulltext: boolean; useFulltextNoImages: boolean; useTitle: boolean}
+  modelId: string
+}): JudgmentJobWorkIdentity => {
+  return {
+    modelId,
+    projectId: job.projectId,
+    useAbstract: job.useAbstract,
+    useFulltext: job.useFulltext,
+    useFulltextNoImages: job.useFulltextNoImages,
+    useTitle: job.useTitle,
+  }
+}
+
+const getJudgmentImportConsumerAvailability = async (): Promise<JudgmentJobImportConsumerAvailability> => {
+  const registry = (await getDuckdbOwnerConnectionsOverview()).registry
+  const judging = registry.capabilities.find((capability) => {
+    return capability.capability === 'judging'
+  })
+  const localJudgingConsumerCount = shouldCurrentServerRunJudgingLoops() ? 1 : 0
+  const eligibleConsumerCount = Math.max(judging?.eligibleConsumerCount ?? 0, localJudgingConsumerCount)
+  const freshConsumerCount = Math.max(judging?.freshConsumerCount ?? 0, localJudgingConsumerCount)
+  const registeredConsumerCount = Math.max(judging?.registeredConsumerCount ?? 0, localJudgingConsumerCount)
+
+  return {
+    eligibleConsumerCount,
+    eligibleConsumerPresent: eligibleConsumerCount > 0,
+    freshConsumerCount,
+    freshConsumerPresent: freshConsumerCount > 0,
+    registeredConsumerCount,
+    requiredConsumerRole: 'judge-worker',
+    staleConsumerCount: judging?.staleConsumerCount ?? 0,
+  }
+}
+
+const getJudgmentImportWorkLeasesByJobId = async ({
+  db,
+  jobIds,
+  now,
+}: {
+  db: JudgmentJobSqliteHealthProjectionReader
+  jobIds: string[]
+  now: Date
+}): Promise<Map<string, JudgmentJobImportWorkLease[]>> => {
+  if (jobIds.length === 0) {
+    return new Map()
+  }
+
+  const rows = await db.queryJson<{
+    consumerId: string | null
+    freshUntilAt: unknown
+    jobId: string
+    lastProgressedAt: unknown
+    lastStartedAt: unknown
+    recoveryContext: unknown
+    recoveryMode: JudgmentJobImportWorkLease['recoveryMode']
+    retryAfterAt: unknown
+  }>(`
+    SELECT
+      judgment_job_id AS jobId,
+      consumer_id AS consumerId,
+      last_started_at AS lastStartedAt,
+      last_progressed_at AS lastProgressedAt,
+      fresh_until_at AS freshUntilAt,
+      retry_after_at AS retryAfterAt,
+      recovery_mode AS recoveryMode,
+      TO_JSON(recovery_context) AS recoveryContext
+    FROM app.maintenance_work_lease
+    WHERE work_kind = 'judgment_sqlite_outbox_import'
+      AND scope_kind = 'job'
+      AND judgment_job_id IN (${getQuotedStringList(jobIds).join(', ')})
+      AND completed_at IS NULL
+      AND (
+        fresh_until_at > ${getSqlLiteral(now)}
+        OR recovery_mode <> 'none'
+        OR retry_after_at > ${getSqlLiteral(now)}
+      )
+    ORDER BY judgment_job_id ASC, fresh_until_at DESC NULLS LAST, updated_at DESC
+  `)
+
+  return rows.reduce((map, row) => {
+    const lease = {
+      consumerId: row.consumerId,
+      freshUntilAt: getIsoDateString(row.freshUntilAt),
+      lastProgressedAt: getIsoDateString(row.lastProgressedAt),
+      lastStartedAt: getIsoDateString(row.lastStartedAt),
+      recoveryContext: getJsonValue(row.recoveryContext) as Record<string, unknown> | null,
+      recoveryMode: row.recoveryMode,
+      retryAfterAt: getIsoDateString(row.retryAfterAt),
+    }
+    map.set(row.jobId, [...(map.get(row.jobId) ?? []), lease])
+    return map
+  }, new Map<string, JudgmentJobImportWorkLease[]>())
+}
+
+const getFreshImportWorkLeases = (leases: JudgmentJobImportWorkLease[], now: Date) => {
+  return leases.filter((lease) => {
+    const freshUntilAt = lease.freshUntilAt ? new Date(lease.freshUntilAt).getTime() : null
+    return freshUntilAt !== null && freshUntilAt > now.getTime()
+  })
+}
+
+const getImportRecoveryWorkLease = (
+  leases: JudgmentJobImportWorkLease[],
+  now: Date,
+): JudgmentJobImportWorkLease | null => {
+  return (
+    leases.find((lease) => {
+      const retryAfterAt = lease.retryAfterAt ? new Date(lease.retryAfterAt).getTime() : null
+      return lease.recoveryMode !== 'none' || (retryAfterAt !== null && retryAfterAt > now.getTime())
+    }) ?? null
+  )
+}
+
+const getUniqueStringCount = (values: Array<string | null>) => {
+  return new Set(
+    values.filter((value): value is string => {
+      return value !== null && value !== ''
+    }),
+  ).size
+}
+
+const getJudgmentJobEndpointHealth = async ({
+  db,
+  modelId,
+}: {
+  db: JudgmentJobSqliteHealthProjectionReader
+  modelId: string
+}): Promise<JudgmentJobEndpointHealth> => {
+  const providerConnection = await getProviderConnectionForStoredModel(modelId, db)
+  const effectiveBaseURL = providerConnection
+    ? getProviderConnectionEffectiveBaseURL({
+        baseURL: providerConnection.baseURL,
+        config: providerConnection.config,
+        providerKind: providerConnection.providerKind,
+        savedModelIds: [modelId],
+      })
+    : null
+  const availability = effectiveBaseURL
+    ? getJudgmentEndpointAvailability({effectiveBaseURL, providerConnectionId: providerConnection?.id ?? null})
+    : null
+
+  return {
+    diagnostics: availability ? getJudgmentEndpointAvailabilityDiagnostics(availability) : null,
+    retryAfterAt: availability?.cooldownExpiresAt?.toISOString() ?? null,
+  }
+}
+
+const getEndpointBlockedReason = (endpointHealth: JudgmentJobEndpointHealth): JudgmentJobBlockedReason => {
+  const diagnostics = endpointHealth.diagnostics
+  const failureMessage = diagnostics?.lastFailureMessage?.toLowerCase() ?? ''
+
+  return !diagnostics || diagnostics.status === 'healthy' || diagnostics.status === 'probing'
+    ? null
+    : diagnostics.status === 'misconfigured'
+      ? 'endpoint_misconfigured'
+      : diagnostics.lastFailureKind === 'circuit_open' || failureMessage.includes('circuit breaker')
+        ? 'endpoint_circuit_breaker'
+        : 'endpoint_cooldown'
+}
+
+const isRepairRequiredAction = (action: JudgmentJobHealthAction) => {
+  return (
+    action === 'repair_offline_required'
+    || action === 'repair_missing_sqlite'
+    || action === 'repair_orphaned_queue'
+    || action === 'repair_quarantine'
+  )
+}
+
+const getProgressState = ({
+  activeImportWorkCount,
+  endpointBlockedReason,
+  hasActivePrompts,
+  hasImportBacklog,
+  hasQueuedPrompts,
+  importConsumer,
+  isCompletionAckBacklog,
+  isStaleImport,
+  job,
+  repairRequired,
+}: {
+  activeImportWorkCount: number
+  endpointBlockedReason: JudgmentJobBlockedReason
+  hasActivePrompts: boolean
+  hasImportBacklog: boolean
+  hasQueuedPrompts: boolean
+  importConsumer: JudgmentJobImportConsumerAvailability
+  isCompletionAckBacklog: boolean
+  isStaleImport: boolean
+  job: {status: string}
+  repairRequired: boolean
+}): JudgmentJobProgressState => {
+  return repairRequired
+    ? 'repair_required'
+    : activeImportWorkCount > 0
+      ? 'active_import'
+      : isCompletionAckBacklog
+        ? 'waiting_for_owner_ack'
+        : endpointBlockedReason
+          ? 'cooldown'
+          : isStaleImport || (hasImportBacklog && !importConsumer.eligibleConsumerPresent)
+            ? 'blocked_import'
+            : hasImportBacklog || hasQueuedPrompts
+              ? 'queued'
+              : hasActivePrompts
+                ? 'processing'
+                : job.status === 'completed'
+                  ? 'completed'
+                  : 'idle'
+}
+
+const getProgressBlockedReason = ({
+  endpointBlockedReason,
+  isStaleImport,
+  progressState,
+  repairRequired,
+}: {
+  endpointBlockedReason: JudgmentJobBlockedReason
+  isStaleImport: boolean
+  progressState: JudgmentJobProgressState
+  repairRequired: boolean
+}): JudgmentJobBlockedReason => {
+  return repairRequired
+    ? 'storage_repair_required'
+    : progressState === 'waiting_for_owner_ack'
+      ? 'waiting_for_owner_ack'
+      : progressState === 'cooldown' && endpointBlockedReason
+        ? endpointBlockedReason
+        : progressState === 'blocked_import' && isStaleImport
+          ? 'stale_import'
+          : progressState === 'blocked_import'
+            ? 'waiting_for_judge_worker'
+            : null
+}
+
+const getJudgmentJobHealthProgress = ({
+  endpointHealth,
+  importConsumer,
+  importWorkLeases,
+  job,
+  now,
+  recommendedNextAction,
+  sqliteHealth,
+  workIdentity,
+}: {
+  endpointHealth: JudgmentJobEndpointHealth
+  importConsumer: JudgmentJobImportConsumerAvailability
+  importWorkLeases: JudgmentJobImportWorkLease[]
+  job: {
+    lastImportCompletedAt: Date | null
+    lastImportErrorAt: Date | null
+    lastImportStartedAt: Date | null
+    status: string
+  }
+  now: Date
+  recommendedNextAction: JudgmentJobHealthAction
+  sqliteHealth: JudgmentJobSqliteHealthSnapshot
+  workIdentity: JudgmentJobWorkIdentity
+}): JudgmentJobHealthProgress => {
+  const activeImportLeases = getFreshImportWorkLeases(importWorkLeases, now)
+  const recoveryLease = getImportRecoveryWorkLease(importWorkLeases, now)
+  const activeConsumerCount = getUniqueStringCount(
+    activeImportLeases.map((lease) => {
+      return lease.consumerId
+    }),
+  )
+  const importBacklogCount = sqliteHealth.outboxRowCount + sqliteHealth.claimedOutboxCount
+  const activePromptCount = sqliteHealth.promptCounts.claimed + sqliteHealth.promptCounts.running
+  const endpointBlockedReason = getEndpointBlockedReason(endpointHealth)
+  const repairRequired = isRepairRequiredAction(recommendedNextAction)
+  const progressState = getProgressState({
+    activeImportWorkCount: activeImportLeases.length,
+    endpointBlockedReason,
+    hasActivePrompts: activePromptCount > 0,
+    hasImportBacklog: importBacklogCount > 0,
+    hasQueuedPrompts: sqliteHealth.promptCounts.ready > 0 || sqliteHealth.hasQueueRows,
+    importConsumer,
+    isCompletionAckBacklog: sqliteHealth.hasPendingCompletionAck,
+    isStaleImport: isStaleImportJob(job),
+    job,
+    repairRequired,
+  })
+  const blockedReason = getProgressBlockedReason({
+    endpointBlockedReason,
+    isStaleImport: isStaleImportJob(job),
+    progressState,
+    repairRequired,
+  })
+  const recoveryMode =
+    recoveryLease?.recoveryMode ?? (endpointBlockedReason ? ('retry_backoff' as const) : ('none' as const))
+
+  return {
+    activeConsumerCount,
+    activeImportWorkCount: activeImportLeases.length,
+    blockedReason,
+    importBacklogCount,
+    importConsumer,
+    importWork: {
+      activeConsumerCount,
+      activeWorkCount: activeImportLeases.length,
+      claimedOutboxCount: sqliteHealth.claimedOutboxCount,
+      hasBacklog: importBacklogCount > 0,
+      outboxRowCount: sqliteHealth.outboxRowCount,
+      pendingCompletionAckCount: sqliteHealth.pendingCompletionAckCount,
+      workIdentity,
+    },
+    lastProgressedAt:
+      activeImportLeases[0]?.lastProgressedAt
+      ?? recoveryLease?.lastProgressedAt
+      ?? getIsoDateString(job.lastImportCompletedAt)
+      ?? getIsoDateString(job.lastImportErrorAt),
+    lastStartedAt:
+      activeImportLeases[0]?.lastStartedAt ?? recoveryLease?.lastStartedAt ?? getIsoDateString(job.lastImportStartedAt),
+    progressState,
+    recoveryContext: recoveryLease?.recoveryContext ?? null,
+    recoveryMode,
+    retryAfterAt: recoveryLease?.retryAfterAt ?? endpointHealth.retryAfterAt,
+    runningWork: {
+      activePromptCount,
+      claimedPromptCount: sqliteHealth.promptCounts.claimed,
+      judgedPromptCount: sqliteHealth.promptCounts.judged,
+      readyPromptCount: sqliteHealth.promptCounts.ready,
+      runningPromptCount: sqliteHealth.promptCounts.running,
+      skippedPromptCount: sqliteHealth.promptCounts.skipped,
+      workIdentity,
+    },
+    workIdentity,
+  }
+}
+
+const getProgressStateCounts = (entries: Array<{progressState: JudgmentJobProgressState}>) => {
+  return entries.reduce(
+    (counts, entry) => {
+      return entry.progressState === 'active_import'
+        ? {...counts, activeImport: counts.activeImport + 1}
+        : entry.progressState === 'blocked_import'
+          ? {...counts, blockedImport: counts.blockedImport + 1}
+          : entry.progressState === 'completed'
+            ? {...counts, completed: counts.completed + 1}
+            : entry.progressState === 'cooldown'
+              ? {...counts, cooldown: counts.cooldown + 1}
+              : entry.progressState === 'idle'
+                ? {...counts, idle: counts.idle + 1}
+                : entry.progressState === 'processing'
+                  ? {...counts, processing: counts.processing + 1}
+                  : entry.progressState === 'queued'
+                    ? {...counts, queued: counts.queued + 1}
+                    : entry.progressState === 'repair_required'
+                      ? {...counts, repairRequired: counts.repairRequired + 1}
+                      : {...counts, waitingForOwnerAck: counts.waitingForOwnerAck + 1}
+    },
+    {
+      activeImport: 0,
+      blockedImport: 0,
+      completed: 0,
+      cooldown: 0,
+      idle: 0,
+      processing: 0,
+      queued: 0,
+      repairRequired: 0,
+      waitingForOwnerAck: 0,
+    },
+  )
+}
+
 const getJudgmentJobMutationState = async (
   db: JudgmentJobMutationQueryRunner,
   jobId: string,
@@ -1064,16 +1519,35 @@ export const judgmentsJobsRoutes = new Elysia()
     async ({params}) => {
       return runJudgmentJobsRead(async () => {
         const db = getJudgmentJobsReadDatabase()
-        const {job} = await getJobContext({db, jobId: params.id})
-        const sqliteHealth = await getSqliteHealthForReadableRoute({db, jobId: job.id})
+        const currentNow = new Date()
+        const {job, projectModelId} = await getJobContext({db, jobId: params.id})
+        const workIdentity = getJudgmentJobWorkIdentity({job, modelId: projectModelId})
+        const [sqliteHealth, importConsumer, importWorkLeasesByJobId, endpointHealth] = await Promise.all([
+          getSqliteHealthForReadableRoute({db, jobId: job.id}),
+          getJudgmentImportConsumerAvailability(),
+          getJudgmentImportWorkLeasesByJobId({db, jobIds: [job.id], now: currentNow}),
+          getJudgmentJobEndpointHealth({db, modelId: projectModelId}),
+        ])
         const storagePolicy = getStoragePolicy({job, sqliteHealth})
         const recommendedNextAction = getRecommendedHealthAction({job, sqliteHealth})
+        const progress = getJudgmentJobHealthProgress({
+          endpointHealth,
+          importConsumer,
+          importWorkLeases: importWorkLeasesByJobId.get(job.id) ?? [],
+          job,
+          now: currentNow,
+          recommendedNextAction,
+          sqliteHealth,
+          workIdentity,
+        })
 
         return {
+          ...progress,
           jobId: job.id,
           storageState: job.storageState,
           storagePolicy,
           recommendedNextAction,
+          endpointAvailability: endpointHealth.diagnostics,
           importMetadata: {
             importFailureCount: job.importFailureCount,
             lastImportCompletedAt: job.lastImportCompletedAt,
@@ -1427,9 +1901,16 @@ export const judgmentsJobsRoutes = new Elysia()
   .get('/api/judgmentsjobs-health', async () => {
     return runJudgmentJobsRead(async () => {
       const db = getJudgmentJobsReadDatabase()
+      const currentNow = new Date()
       const jobs = await db.queryJson<{
         id: string
         status: string
+        projectId: string
+        projectModelId: string
+        useTitle: boolean | null
+        useAbstract: boolean | null
+        useFulltext: boolean | null
+        useFulltextNoImages: boolean | null
         storageState: string
         quarantinedAt: unknown
         quarantineReason: string | null
@@ -1442,52 +1923,95 @@ export const judgmentsJobsRoutes = new Elysia()
         pauseRequestedAt: unknown
       }>(`
         SELECT
-          id,
-          status,
-          storage_state AS storageState,
-          quarantined_at AS quarantinedAt,
-          quarantine_reason AS quarantineReason,
-          last_import_started_at AS lastImportStartedAt,
-          last_import_completed_at AS lastImportCompletedAt,
-          last_import_error_at AS lastImportErrorAt,
-          last_import_error AS lastImportError,
-          last_import_exit_code AS lastImportExitCode,
-          import_failure_count AS importFailureCount,
-          pause_requested_at AS pauseRequestedAt
-        FROM app.judgment_job
-        ORDER BY created_at ASC
+          jj.id AS id,
+          jj.status AS status,
+          jj.project_id AS projectId,
+          COALESCE(p.model_id, '') AS projectModelId,
+          p.use_title AS useTitle,
+          p.use_abstract AS useAbstract,
+          p.use_fulltext AS useFulltext,
+          p.use_fulltext_no_images AS useFulltextNoImages,
+          jj.storage_state AS storageState,
+          jj.quarantined_at AS quarantinedAt,
+          jj.quarantine_reason AS quarantineReason,
+          jj.last_import_started_at AS lastImportStartedAt,
+          jj.last_import_completed_at AS lastImportCompletedAt,
+          jj.last_import_error_at AS lastImportErrorAt,
+          jj.last_import_error AS lastImportError,
+          jj.last_import_exit_code AS lastImportExitCode,
+          jj.import_failure_count AS importFailureCount,
+          jj.pause_requested_at AS pauseRequestedAt
+        FROM app.judgment_job jj
+        INNER JOIN app.project p ON jj.project_id = p.id
+        ORDER BY jj.created_at ASC
       `)
-      const sqliteHealthByJobId = await getSqliteHealthMapForReadableRoute({
-        db,
-        jobIds: jobs.map((job) => {
-          return job.id
-        }),
+      const jobIds = jobs.map((job) => {
+        return job.id
       })
-      const jobsWithHealth = jobs.map((job) => {
-        const normalizedJob = {
-          ...job,
-          importFailureCount: Number(job.importFailureCount ?? 0),
-          lastImportCompletedAt: getDateValue(job.lastImportCompletedAt),
-          lastImportErrorAt: getDateValue(job.lastImportErrorAt),
-          lastImportStartedAt: getDateValue(job.lastImportStartedAt),
-          pauseRequestedAt: getDateValue(job.pauseRequestedAt),
-          quarantinedAt: getDateValue(job.quarantinedAt),
-        }
-        const sqliteHealth = sqliteHealthByJobId.get(job.id)
+      const sqliteHealthByJobId = await getSqliteHealthMapForReadableRoute({db, jobIds})
+      const [importConsumer, importWorkLeasesByJobId] = await Promise.all([
+        getJudgmentImportConsumerAvailability(),
+        getJudgmentImportWorkLeasesByJobId({db, jobIds, now: currentNow}),
+      ])
+      const jobsWithHealth = await Promise.all(
+        jobs.map(async (job) => {
+          const normalizedJob = {
+            ...job,
+            importFailureCount: Number(job.importFailureCount ?? 0),
+            lastImportCompletedAt: getDateValue(job.lastImportCompletedAt),
+            lastImportErrorAt: getDateValue(job.lastImportErrorAt),
+            lastImportStartedAt: getDateValue(job.lastImportStartedAt),
+            pauseRequestedAt: getDateValue(job.pauseRequestedAt),
+            quarantinedAt: getDateValue(job.quarantinedAt),
+            useAbstract: job.useAbstract ?? true,
+            useFulltext: job.useFulltext ?? false,
+            useFulltextNoImages: job.useFulltextNoImages ?? false,
+            useTitle: job.useTitle ?? true,
+          }
+          const sqliteHealth = sqliteHealthByJobId.get(job.id)
+          const workIdentity = getJudgmentJobWorkIdentity({job: normalizedJob, modelId: job.projectModelId})
+          const endpointHealth = await getJudgmentJobEndpointHealth({db, modelId: job.projectModelId})
 
-        if (!sqliteHealth) {
-          throw getMaintenanceUnavailableError(
-            `fresh SQLite health projection is unavailable for judgment job ${job.id}`,
-          )
-        }
+          if (!sqliteHealth) {
+            throw getMaintenanceUnavailableError(
+              `fresh SQLite health projection is unavailable for judgment job ${job.id}`,
+            )
+          }
 
-        const action = getRecommendedHealthAction({job: normalizedJob, sqliteHealth})
+          const action = getRecommendedHealthAction({job: normalizedJob, sqliteHealth})
+          const progress = getJudgmentJobHealthProgress({
+            endpointHealth,
+            importConsumer,
+            importWorkLeases: importWorkLeasesByJobId.get(job.id) ?? [],
+            job: normalizedJob,
+            now: currentNow,
+            recommendedNextAction: action,
+            sqliteHealth,
+            workIdentity,
+          })
 
-        return {action, job: normalizedJob, sqliteHealth}
+          return {
+            ...progress,
+            action,
+            endpointAvailability: endpointHealth.diagnostics,
+            job: normalizedJob,
+            sqliteHealth,
+          }
+        }),
+      )
+      const progressStates = getProgressStateCounts(jobsWithHealth)
+      const jobsSummary = jobsWithHealth.map(({action, endpointAvailability, job, sqliteHealth, ...progress}) => {
+        const normalizedJob = {id: job.id, projectId: job.projectId, status: job.status, storageState: job.storageState}
+
+        return {...progress, action, endpointAvailability, job: normalizedJob, jobId: job.id, sqliteHealth}
       })
 
       return {
         data: {
+          activeImport: progressStates.activeImport,
+          blockedImport: progressStates.blockedImport,
+          completionAckBacklog: progressStates.waitingForOwnerAck,
+          cooldown: progressStates.cooldown,
           healthy: jobsWithHealth.filter(({action, job}) => {
             return isHealthyJob({action, job})
           }).length,
@@ -1506,6 +2030,10 @@ export const judgmentsJobsRoutes = new Elysia()
           staleImport: jobsWithHealth.filter(({job}) => {
             return isStaleImportJob(job)
           }).length,
+          importConsumer,
+          jobs: jobsSummary,
+          progressStates,
+          repairRequired: progressStates.repairRequired,
         },
         error: null,
       }
