@@ -58,6 +58,7 @@ type RefreshStateOverrides = {
   lastStartedAt?: string | null
   leaseExpiresAt?: string | null
   refreshStatus?: 'failed' | 'idle' | 'running'
+  workerId?: string | null
 }
 
 type LargeRebuildStateOverrides = {
@@ -67,6 +68,7 @@ type LargeRebuildStateOverrides = {
   refreshStatus?: 'failed' | 'idle' | 'running'
   rebuildPhase?: string
   refreshToken?: number
+  workerId?: string | null
 }
 
 let app: {handle: (request: Request) => Promise<Response>} | null = null
@@ -123,6 +125,7 @@ const insertProjectRefreshState = async (projectId: string, overrides: RefreshSt
   const lastFailedAt = overrides.lastFailedAt ?? null
   const leaseExpiresAt = overrides.leaseExpiresAt ?? null
   const refreshStatus = overrides.refreshStatus ?? 'idle'
+  const workerId = overrides.workerId ?? (refreshStatus === 'running' ? `worker-${projectId}` : null)
 
   await runDatabase(`
     INSERT INTO app.project_mart_refresh_state (
@@ -134,7 +137,8 @@ const insertProjectRefreshState = async (projectId: string, overrides: RefreshSt
       refresh_status,
       last_started_at,
       last_failed_at,
-      lease_expires_at
+      lease_expires_at,
+      worker_id
     ) VALUES (
       '${projectId}',
       ${dirtyToken},
@@ -144,7 +148,8 @@ const insertProjectRefreshState = async (projectId: string, overrides: RefreshSt
       '${refreshStatus}',
       ${lastStartedAt === null ? 'NULL' : `TIMESTAMPTZ '${lastStartedAt}'`},
       ${lastFailedAt === null ? 'NULL' : `TIMESTAMPTZ '${lastFailedAt}'`},
-      ${leaseExpiresAt === null ? 'NULL' : `TIMESTAMPTZ '${leaseExpiresAt}'`}
+      ${leaseExpiresAt === null ? 'NULL' : `TIMESTAMPTZ '${leaseExpiresAt}'`},
+      ${workerId === null ? 'NULL' : `'${workerId}'`}
     )
   `)
 }
@@ -160,6 +165,7 @@ const insertLargeRebuildState = async (projectId: string, overrides: LargeRebuil
   const cursorArticleId = overrides.cursorArticleId ?? null
   const cursorArticleCreatedAt = overrides.cursorArticleCreatedAt ?? null
   const lastError = overrides.lastError ?? null
+  const workerId = overrides.workerId ?? (refreshStatus === 'running' ? `worker-${projectId}` : null)
 
   await runDatabase(`
     INSERT INTO app.project_mart_large_rebuild_state (
@@ -169,7 +175,8 @@ const insertLargeRebuildState = async (projectId: string, overrides: LargeRebuil
       cursor_article_created_at,
       cursor_article_id,
       refresh_status,
-      last_error
+      last_error,
+      worker_id
     ) VALUES (
       '${projectId}',
       ${refreshToken},
@@ -177,7 +184,8 @@ const insertLargeRebuildState = async (projectId: string, overrides: LargeRebuil
       ${cursorArticleCreatedAt === null ? 'NULL' : `TIMESTAMPTZ '${cursorArticleCreatedAt}'`},
       ${cursorArticleId === null ? 'NULL' : `'${cursorArticleId}'`},
       '${refreshStatus}',
-      ${lastError === null ? 'NULL' : `'${lastError}'`}
+      ${lastError === null ? 'NULL' : `'${lastError}'`},
+      ${workerId === null ? 'NULL' : `'${workerId}'`}
     )
   `)
 }
@@ -471,6 +479,39 @@ test('reviews warnings report processing from fresh persisted article leases', a
   expect(body.data.indexing.lastProgressedAt).toBe('2026-04-02 12:05:15+00')
 })
 
+test('reviews warnings report active project-scoped claims without inferring unrelated consumers', async () => {
+  const projectId = 'project-active-claim-warning'
+  const {withCurrentServerRoleOverride} = await import('../../utils/serverRuntimeRole.ts')
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {
+    dirtyToken: 2,
+    lastCompletedRefreshToken: 1,
+    lastRequestedAt: '2026-04-02T12:00:00.000Z',
+    lastStartedAt: '2026-04-02T12:05:00.000Z',
+    leaseExpiresAt: '2035-04-02T12:05:30.000Z',
+    refreshStatus: 'running',
+    workerId: 'maintenance-worker-active-claim',
+  })
+  await insertDirtyArticleRefreshState(projectId, `article-${projectId}`, 2)
+
+  const {body, response} = await withCurrentServerRoleOverride('api', () => {
+    return postWarningsRequest(projectId)
+  })
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.activeConsumerCount).toBe(1)
+  expect(body.data.indexing.activeWorkCount).toBe(2)
+  expect(body.data.indexing.blockedReason).toBe(null)
+  expect(body.data.indexing.eligibleConsumerCount).toBe(0)
+  expect(body.data.indexing.eligibleConsumerPresent).toBe(false)
+  expect(body.data.indexing.inFlightArticleRefreshCount).toBe(1)
+  expect(body.data.indexing.inFlightProjectRefreshCount).toBe(1)
+  expect(body.data.indexing.lastProgressedAt).not.toBe(null)
+  expect(body.data.indexing.progressState).toBe('processing')
+  expect(body.data.indexing.status).toBe('refreshing')
+})
+
 test('reviews warnings report failed when refresh work is still dirty after a failed attempt', async () => {
   const projectId = 'project-failed-warning'
 
@@ -613,4 +654,12 @@ test('reviews warnings report failed when a staged large rebuild has failed', as
 
   expect(response.status).toBe(200)
   expect(body.data.indexing.status).toBe('failed')
+})
+
+test('reviews warnings production api path remains owner-routed unless an ownerless backend is declared', async () => {
+  const {classifyApiRoute, shouldApiRouteProxyToDuckdbOwner} = await import('../apiRouteClassification.ts')
+  const classification = classifyApiRoute('/api/projectsreviewswarnings', 'POST')
+
+  expect(classification).toBe('unclassified')
+  expect(shouldApiRouteProxyToDuckdbOwner(classification)).toBe(true)
 })

@@ -32,6 +32,8 @@ type ProjectLargeRebuildState = {
   refreshStatus: ProjectMartRefreshStatus | null
   rebuildPhase: string | null
   refreshToken: number | null
+  updatedAt: string | null
+  workerId: string | null
 }
 
 const getLargeRebuildDetails = (state: ProjectLargeRebuildState) => {
@@ -57,6 +59,8 @@ type ProjectRefreshState = {
   lastStartedAt: string | null
   leaseExpiresAt: string | null
   refreshStatus: ProjectMartRefreshStatus | null
+  updatedAt: string | null
+  workerId: string | null
 }
 
 const getEnabledPromptCount = async (projectId: string): Promise<number> => {
@@ -102,6 +106,8 @@ const getProjectRefreshState = async (projectId: string): Promise<ProjectRefresh
     lastStartedAt: string | null
     leaseExpiresAt: string | null
     refreshStatus: ProjectMartRefreshStatus | null
+    updatedAt: string | null
+    workerId: string | null
   }>(`
     SELECT
       CAST(dirty_token AS INTEGER) AS dirtyToken,
@@ -110,7 +116,9 @@ const getProjectRefreshState = async (projectId: string): Promise<ProjectRefresh
       last_requested_at AS lastRequestedAt,
       last_started_at AS lastStartedAt,
       lease_expires_at AS leaseExpiresAt,
-      refresh_status AS refreshStatus
+      refresh_status AS refreshStatus,
+      updated_at AS updatedAt,
+      worker_id AS workerId
     FROM app.project_mart_refresh_state
     WHERE project_id = '${escapeSqlString(projectId)}'
     LIMIT 1
@@ -130,6 +138,8 @@ const getProjectRefreshState = async (projectId: string): Promise<ProjectRefresh
     lastStartedAt: row?.lastStartedAt ?? null,
     leaseExpiresAt: row?.leaseExpiresAt ?? null,
     refreshStatus,
+    updatedAt: row?.updatedAt ?? null,
+    workerId: row?.workerId ?? null,
   }
 }
 
@@ -145,6 +155,8 @@ const getProjectLargeRebuildState = async (projectId: string): Promise<ProjectLa
     rebuildPhase: string | null
     refreshStatus: ProjectMartRefreshStatus | null
     refreshToken: number | null
+    updatedAt: string | null
+    workerId: string | null
   }>(`
     SELECT
       cursor_article_created_at AS cursorArticleCreatedAt,
@@ -156,7 +168,9 @@ const getProjectLargeRebuildState = async (projectId: string): Promise<ProjectLa
       operator_note AS operatorNote,
       rebuild_phase AS rebuildPhase,
       refresh_status AS refreshStatus,
-      CAST(refresh_token AS INTEGER) AS refreshToken
+      CAST(refresh_token AS INTEGER) AS refreshToken,
+      updated_at AS updatedAt,
+      worker_id AS workerId
     FROM app.project_mart_large_rebuild_state
     WHERE project_id = '${escapeSqlString(projectId)}'
     LIMIT 1
@@ -173,6 +187,8 @@ const getProjectLargeRebuildState = async (projectId: string): Promise<ProjectLa
     rebuildPhase: row?.rebuildPhase ?? null,
     refreshStatus: row?.refreshStatus ?? null,
     refreshToken: row?.refreshToken ?? null,
+    updatedAt: row?.updatedAt ?? null,
+    workerId: row?.workerId ?? null,
   }
 }
 
@@ -314,12 +330,20 @@ const getUniqueCount = (values: Array<string | null>) => {
   ).size
 }
 
-const getFreshLeaseConsumerCount = (leases: FreshMaintenanceWorkLeaseRecord[]) => {
-  return getUniqueCount(
-    leases.map((lease) => {
+const getActiveConsumerCount = (params: {
+  freshMaintenanceLeases: FreshMaintenanceWorkLeaseRecord[]
+  isLargeRebuildRunning: boolean
+  isProjectRunning: boolean
+  projectLargeRebuildState: ProjectLargeRebuildState
+  projectRefreshState: ProjectRefreshState
+}) => {
+  return getUniqueCount([
+    ...params.freshMaintenanceLeases.map((lease) => {
       return lease.consumerId
     }),
-  )
+    params.isProjectRunning ? params.projectRefreshState.workerId : null,
+    params.isLargeRebuildRunning ? params.projectLargeRebuildState.workerId : null,
+  ])
 }
 
 const getHasActiveLease = (leaseExpiresAt: string | null, now: Date) => {
@@ -344,6 +368,7 @@ const triggerMartRefreshDrain = (pendingRefreshCount: number) => {
 }
 
 const getReviewsIndexingStatus = (params: {
+  activeWorkCount: number
   enabledPromptCount: number
   hasFailedRefresh: boolean
   hasAnyArticlesInScope: boolean
@@ -357,7 +382,7 @@ const getReviewsIndexingStatus = (params: {
     ? 'not-needed'
     : params.hasFailedRefresh
       ? 'failed'
-      : params.pendingRefreshCount > 0 && !params.eligibleConsumerPresent
+      : params.pendingRefreshCount > 0 && params.activeWorkCount === 0 && !params.eligibleConsumerPresent
         ? 'blocked'
         : params.pendingRefreshCount > 0
           ? 'refreshing'
@@ -441,7 +466,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       freshProjectRefreshLeaseCount > 0
       || (!projectRefreshState.isFresh && projectRefreshState.refreshStatus === 'running' && hasActiveProjectLease)
     const rawInFlightProjectRefreshCount = isProjectRunning ? 1 : isLargeRebuildRunning ? 1 : 0
-    const inFlightProjectRefreshCount = eligibleConsumerPresent ? rawInFlightProjectRefreshCount : 0
+    const inFlightProjectRefreshCount = rawInFlightProjectRefreshCount
     const queuedProjectRefreshCount =
       projectRefreshState.isFresh && !hasLargeRebuild && !isProjectRunning
         ? 0
@@ -454,11 +479,11 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
         : isProjectRunning
           ? pendingArticleRefreshInfo.queuedRefreshCount
           : 0
-    const inFlightArticleRefreshCount = eligibleConsumerPresent ? rawInFlightArticleRefreshCount : 0
+    const inFlightArticleRefreshCount = rawInFlightArticleRefreshCount
     const queuedArticleRefreshCount =
-      eligibleConsumerPresent && freshArticleRefreshLeaseCount > 0
+      freshArticleRefreshLeaseCount > 0
         ? getNonNegativeDifference(pendingArticleRefreshInfo.queuedRefreshCount, freshArticleRefreshLeaseCount)
-        : eligibleConsumerPresent && isProjectRunning
+        : isProjectRunning
           ? 0
           : pendingArticleRefreshInfo.queuedRefreshCount
     const pendingProjectRefreshCount = queuedProjectRefreshCount + inFlightProjectRefreshCount
@@ -467,6 +492,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const inFlightRefreshCount = inFlightProjectRefreshCount + inFlightArticleRefreshCount
     const hasAnyArticlesInScope = hasCuratedArticles || hasRouteArticles
     const pendingRefreshCount = pendingProjectRefreshCount + pendingArticleRefreshCount
+    const activeWorkCount = inFlightRefreshCount
     const rawBlockedReason = getReviewIndexingBlockedReason({
       canRunMaintenanceWork,
       canRunMartRefreshDrain,
@@ -475,6 +501,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const hasFailedRefresh =
       (!projectRefreshState.isFresh && projectRefreshState.refreshStatus === 'failed') || isLargeRebuildFailed
     const indexingStatus = getReviewsIndexingStatus({
+      activeWorkCount,
       enabledPromptCount,
       eligibleConsumerPresent,
       hasFailedRefresh,
@@ -483,8 +510,13 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       pendingRefreshCount,
     })
     const blockedReason = indexingStatus === 'blocked' ? rawBlockedReason : null
-    const activeWorkCount = eligibleConsumerPresent ? inFlightRefreshCount : 0
-    const activeConsumerCount = getFreshLeaseConsumerCount(freshMaintenanceLeases)
+    const activeConsumerCount = getActiveConsumerCount({
+      freshMaintenanceLeases,
+      isLargeRebuildRunning,
+      isProjectRunning,
+      projectLargeRebuildState,
+      projectRefreshState,
+    })
 
     triggerMartRefreshDrain(pendingRefreshCount)
 
@@ -494,7 +526,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
         enabledPromptCount,
         scope: {hasAnyArticlesInScope},
         indexing: {
-          activeConsumerCount: activeConsumerCount > 0 ? activeConsumerCount : activeWorkCount > 0 ? 1 : 0,
+          activeConsumerCount,
           activeWorkCount,
           articleRefreshesPerMinute: throughputSnapshot.articleRefreshesPerMinute,
           blockedReason,
@@ -509,7 +541,9 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
           largeRebuild: getLargeRebuildDetails(projectLargeRebuildState),
           lastProgressedAt: getLatestTimestamp(
             projectRefreshState.lastCompletedAt,
+            isProjectRunning ? projectRefreshState.updatedAt : null,
             projectLargeRebuildState.lastCompletedAt,
+            isLargeRebuildRunning ? projectLargeRebuildState.updatedAt : null,
             ...freshMaintenanceLeases.map((lease) => {
               return lease.lastProgressedAt
             }),
