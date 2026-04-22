@@ -13,7 +13,11 @@ export type ApiRouteClassification =
 
 const duckdbOwnerDiagnosticsPaths = ['/api/duckdb_owner_connections', '/api/duckdb_owner_connections/heartbeat']
 const ownerDependentPaths = [duckdbStudioSnapshotPath]
-const ownerlessReadableDiagnosticsPaths = ['/api/judgmentsjobs', '/api/judgmentsjobs-health']
+const ownerlessReadableDiagnosticsPaths = [
+  '/api/admin/worker-runtime-diagnostics',
+  '/api/judgmentsjobs',
+  '/api/judgmentsjobs-health',
+]
 
 const normalizePathname = (pathname: string) => {
   return pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname

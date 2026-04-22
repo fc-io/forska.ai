@@ -50,6 +50,12 @@ export const ownerlessRouteDeclarations = [
     pathname: '/api/duckdb_owner_connections/heartbeat',
     routeKind: 'diagnostics',
   },
+  {
+    backends: ['ownerless-control-state', 'process-runtime-state'],
+    method: 'GET',
+    pathname: '/api/admin/worker-runtime-diagnostics',
+    routeKind: 'diagnostics',
+  },
 ] satisfies OwnerlessRouteDeclaration[]
 
 const getRouteLabel = (route: OwnerlessRouteDeclaration) => {

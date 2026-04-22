@@ -54,6 +54,44 @@ type MaintenanceRuntimeDiagnostics = {
     }
   }
 }
+type WorkerRuntimeRegistryCapability = {
+  capability: string
+  eligibleConsumerCount: number
+  eligibleConsumerPresent: boolean
+  freshConsumerCount: number
+  registeredConsumerCount: number
+  staleConsumerCount: number
+}
+type WorkerRuntimeDiagnostics = {
+  capabilities: string[]
+  cutoverRefusal?: {
+    refusedRegisteredProcessCount: number
+    refusesMissingRuntimeVersion: boolean
+    runtimeVersion: string
+    status: string
+  }
+  duckdbOwnership?: {canOwnDuckdb: boolean; duckdbOwnerUrl: string | null; ownsDuckdb: boolean}
+  localRole: string | null
+  ownerlessBackends?: {validated: boolean; workerRuntimeDiagnostics: {backend: string; pathname: string} | null}
+  pendingCompletionAckVisibility?: {
+    available: boolean
+    freshProjectionCount: number
+    hasPendingCompletionAck: boolean
+    jobCount: number
+    pendingCompletionAckCount: number
+  }
+  readPath?: {judgmentJobs?: {mode: string; sharedProjectionFreshnessMs: number}}
+  registry?: {
+    capabilities: WorkerRuntimeRegistryCapability[]
+    freshRegisteredProcessCount: number
+    registeredProcessCount: number
+    staleRegisteredProcessCount: number
+    takeover: {status: string}
+  }
+  routeServing?: {duckdbOwnerPrivateApi: boolean; mode: string; ownerProxy: boolean; publicProductApi: boolean}
+  serverRole: string
+  takeoverState?: {status: string}
+}
 type UpdateLocalUserInput = {
   maintenanceWorkerDuckdbMemoryLimit: string
   codexBin: string
@@ -88,6 +126,11 @@ const fetchMaintenanceRuntimeDiagnostics = async (): Promise<MaintenanceRuntimeD
   return handleApiResponse<MaintenanceRuntimeDiagnostics>(response, 'Failed to load maintenance runtime diagnostics')
 }
 
+const fetchWorkerRuntimeDiagnostics = async (): Promise<WorkerRuntimeDiagnostics | null> => {
+  const response = await apiClient.api.admin['worker-runtime-diagnostics'].get()
+  return handleApiResponse<WorkerRuntimeDiagnostics>(response, 'Failed to load worker runtime diagnostics')
+}
+
 const getNullableString = (value: string): string | null => {
   const normalized = value.trim()
 
@@ -115,6 +158,20 @@ const formatTuningSummary = (value: {
   return value.batchSize && value.maxCyclesPerWake && value.pollIntervalMs
     ? `batch ${value.batchSize}, poll ${value.pollIntervalMs}ms, burst ${value.maxCyclesPerWake}`
     : 'N/A'
+}
+
+const formatWorkerRuntimeBoolean = (value: boolean | null | undefined) => {
+  return value ? 'Yes' : 'No'
+}
+
+const formatWorkerRuntimeList = (values: string[] | null | undefined) => {
+  return values && values.length > 0 ? values.join(', ') : 'None'
+}
+
+const formatOwnerlessBackend = (diagnostics: WorkerRuntimeDiagnostics | null | undefined) => {
+  const backend = diagnostics?.ownerlessBackends?.workerRuntimeDiagnostics?.backend
+
+  return backend ?? (diagnostics?.ownerlessBackends?.validated ? 'Not selected' : 'Not validated')
 }
 
 const updateLocalUser = async (input: UpdateLocalUserInput): Promise<LocalUser> => {
@@ -169,6 +226,15 @@ const Settings = () => {
       refetchOnWindowFocus: false,
     }
   })
+  const workerRuntimeDiagnosticsQuery = useQuery(() => {
+    return {
+      queryKey: ['worker-runtime-diagnostics'],
+      queryFn: fetchWorkerRuntimeDiagnostics,
+      staleTime: 1_000,
+      refetchInterval: 5_000,
+      refetchOnWindowFocus: false,
+    }
+  })
   const updateLocalUserMutation = createMutation(() => {
     return {
       mutationFn: updateLocalUser,
@@ -186,6 +252,7 @@ const Settings = () => {
         setCodexBin(user.codexBin ?? '')
         void localUserQuery.refetch()
         void maintenanceRuntimeDiagnosticsQuery.refetch()
+        void workerRuntimeDiagnosticsQuery.refetch()
       },
     }
   })
@@ -446,6 +513,87 @@ const Settings = () => {
                       Heartbeat tuning changes apply to the running maintenance runtime within a few seconds. DuckDB
                       memory-limit changes are saved immediately but only apply after the next server restart.
                     </p>
+                  </div>
+                  <div class="rounded-md border border-gray-200 bg-gray-50 p-4 space-y-3">
+                    <p class="text-sm font-medium text-gray-900">Worker runtime diagnostics</p>
+                    <Show when={workerRuntimeDiagnosticsQuery.isLoading}>
+                      <p class="text-xs text-gray-500">Loading worker runtime diagnostics...</p>
+                    </Show>
+                    <Show when={workerRuntimeDiagnosticsQuery.isError}>
+                      <p class="text-xs text-red-600">
+                        {workerRuntimeDiagnosticsQuery.error instanceof Error
+                          ? workerRuntimeDiagnosticsQuery.error.message
+                          : 'Failed to load worker runtime diagnostics'}
+                      </p>
+                    </Show>
+                    <Show when={!workerRuntimeDiagnosticsQuery.isLoading && !workerRuntimeDiagnosticsQuery.isError}>
+                      <div class="grid gap-2 md:grid-cols-2">
+                        <p class="text-xs text-gray-600">
+                          Local role: {workerRuntimeDiagnosticsQuery.data?.localRole ?? 'N/A'} | Server role:{' '}
+                          {workerRuntimeDiagnosticsQuery.data?.serverRole ?? 'N/A'}
+                        </p>
+                        <p class="text-xs text-gray-600">
+                          Capabilities: {formatWorkerRuntimeList(workerRuntimeDiagnosticsQuery.data?.capabilities)}
+                        </p>
+                        <p class="text-xs text-gray-600">
+                          Route mode: {workerRuntimeDiagnosticsQuery.data?.routeServing?.mode ?? 'N/A'} | Owner proxy:{' '}
+                          {formatWorkerRuntimeBoolean(workerRuntimeDiagnosticsQuery.data?.routeServing?.ownerProxy)}
+                        </p>
+                        <p class="text-xs text-gray-600">
+                          DuckDB owner:{' '}
+                          {formatWorkerRuntimeBoolean(workerRuntimeDiagnosticsQuery.data?.duckdbOwnership?.ownsDuckdb)}{' '}
+                          | Owner URL: {workerRuntimeDiagnosticsQuery.data?.duckdbOwnership?.duckdbOwnerUrl ?? 'N/A'}
+                        </p>
+                        <p class="text-xs text-gray-600">
+                          Ownerless backend: {formatOwnerlessBackend(workerRuntimeDiagnosticsQuery.data)}
+                        </p>
+                        <p class="text-xs text-gray-600">
+                          Read path: {workerRuntimeDiagnosticsQuery.data?.readPath?.judgmentJobs?.mode ?? 'N/A'} |
+                          Pending completion acks:{' '}
+                          {workerRuntimeDiagnosticsQuery.data?.pendingCompletionAckVisibility?.available
+                            ? workerRuntimeDiagnosticsQuery.data.pendingCompletionAckVisibility
+                                .pendingCompletionAckCount
+                            : 'N/A'}
+                        </p>
+                        <p class="text-xs text-gray-600">
+                          Registry processes:{' '}
+                          {workerRuntimeDiagnosticsQuery.data?.registry?.freshRegisteredProcessCount ?? 0} fresh /{' '}
+                          {workerRuntimeDiagnosticsQuery.data?.registry?.registeredProcessCount ?? 0} total
+                        </p>
+                        <p class="text-xs text-gray-600">
+                          Takeover: {workerRuntimeDiagnosticsQuery.data?.takeoverState?.status ?? 'N/A'} | Cutover:{' '}
+                          {workerRuntimeDiagnosticsQuery.data?.cutoverRefusal?.status ?? 'N/A'}
+                        </p>
+                      </div>
+                      <div class="overflow-x-auto">
+                        <table class="min-w-full text-left text-xs text-gray-600">
+                          <thead class="text-gray-500">
+                            <tr>
+                              <th class="py-2 pr-3 font-medium">Capability</th>
+                              <th class="py-2 pr-3 font-medium">Eligible</th>
+                              <th class="py-2 pr-3 font-medium">Fresh</th>
+                              <th class="py-2 pr-3 font-medium">Stale</th>
+                            </tr>
+                          </thead>
+                          <tbody class="divide-y divide-gray-200">
+                            <For each={workerRuntimeDiagnosticsQuery.data?.registry?.capabilities ?? []}>
+                              {(capability) => {
+                                return (
+                                  <tr>
+                                    <td class="py-2 pr-3 font-medium text-gray-700">{capability.capability}</td>
+                                    <td class="py-2 pr-3">
+                                      {capability.eligibleConsumerCount} / {capability.registeredConsumerCount}
+                                    </td>
+                                    <td class="py-2 pr-3">{capability.freshConsumerCount}</td>
+                                    <td class="py-2 pr-3">{capability.staleConsumerCount}</td>
+                                  </tr>
+                                )
+                              }}
+                            </For>
+                          </tbody>
+                        </table>
+                      </div>
+                    </Show>
                   </div>
                 </div>
               </div>

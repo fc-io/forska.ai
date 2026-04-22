@@ -420,6 +420,230 @@ test('admin maintenance runtime diagnostics route reports effective duckdb setti
   }
 })
 
+test('admin worker runtime diagnostics route reports local capabilities, registry state, and shared ack visibility', () => {
+  const duckdbPath = `/tmp/f1-admin-worker-runtime-diagnostics-${Date.now()}.duckdb`
+  const runRoute = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {Elysia} = await import('elysia')
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {getJudgmentJobSqliteHealthProjectionService} = await import('./src/server/services/judgmentJobSqliteHealthProjectionService.ts')
+        const {adminInvestigateRoutes} = await import('./src/server/routes/AdminInvestigateRoutes.ts')
+        const {upsertDuckdbOwnerConnectionHeartbeat} = await import('./src/server/utils/duckdbOwnerConnections.ts')
+        const {getRuntimeCutoverVersion} = await import('./src/server/utils/runtimeCutover.ts')
+        const {validateOwnerlessRouteBackends} = await import('./src/server/utils/ownerlessReadableBackends.ts')
+
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const nowIso = new Date().toISOString()
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+          VALUES ('connection-worker-diagnostics', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+        \`)
+        await database.run(\`
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+          VALUES ('model-worker-diagnostics', 'connection-worker-diagnostics', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.project (id, name, archived, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+          VALUES ('project-worker-diagnostics', 'Worker Diagnostics', FALSE, 'model-worker-diagnostics', TRUE, TRUE, FALSE, FALSE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+          VALUES ('job-worker-diagnostics', 'project-worker-diagnostics', 'running', 'active')
+        \`)
+        await getJudgmentJobSqliteHealthProjectionService().publishJudgmentJobSqliteHealthProjection({
+          jobId: 'job-worker-diagnostics',
+          projectedBy: 'judge-worker-diagnostics',
+          projectionSource: 'local-sqlite',
+          health: {
+            claimedOutboxCount: 0,
+            hasOutboxRows: false,
+            hasPendingCompletionAck: true,
+            hasQueueRows: false,
+            lastAckSeq: 7,
+            oldestUnackedCompletionAgeMs: 1234,
+            oldestUnexportedAgeMs: null,
+            orphanedJudgedRowCount: 0,
+            outboxRowCount: 0,
+            pendingCompletionAckCount: 2,
+            promptCounts: {claimed: 0, judged: 1, ready: 0, running: 0, skipped: 0},
+            retainedRowCount: 0,
+            sqliteFileBytes: 4096,
+            walBytes: 0,
+          },
+        })
+        await upsertDuckdbOwnerConnectionHeartbeat(
+          {
+            apiServerPort: 4101,
+            capabilities: ['duckdb-owner', 'maintenance'],
+            hostname: 'registry-host',
+            instanceId: \`maintenance-worker-server:registry-host:4101:1001:\${nowIso}\`,
+            listenPort: 4101,
+            memoryLimit: '20GB',
+            pid: 1001,
+            processStartedAt: nowIso,
+            runtimeProfile: 'local',
+            runtimeVersion: getRuntimeCutoverVersion(),
+            serverRole: 'maintenance-worker',
+            service: 'maintenance-worker-server',
+            startedAt: nowIso,
+            throughputProfile: {
+              batchSize: 8,
+              martRefreshDrainEligible: true,
+              maxCyclesPerWake: 4,
+              pollIntervalMs: 1500,
+              profile: 'maintenance',
+            },
+            takeover: {
+              candidate: false,
+              intent: 'none',
+              observedAt: nowIso,
+              ownerFreshness: 'owner_fresh',
+              ownerHeartbeatAt: nowIso,
+              ownerLeaseId: 'lease-worker-diagnostics',
+              ownerUrl: 'http://127.0.0.1:4101',
+            },
+            duckdbOwnerUrl: 'http://127.0.0.1:4101',
+          },
+          {databasePath: '${duckdbPath}'},
+        )
+        await upsertDuckdbOwnerConnectionHeartbeat(
+          {
+            apiServerPort: 4102,
+            capabilities: ['judging'],
+            hostname: 'registry-host',
+            instanceId: \`judge-worker-server:registry-host:4102:1002:\${nowIso}\`,
+            listenPort: 4102,
+            memoryLimit: null,
+            pid: 1002,
+            processStartedAt: nowIso,
+            runtimeProfile: 'local',
+            runtimeVersion: getRuntimeCutoverVersion(),
+            serverRole: 'judge-worker',
+            service: 'judge-worker-server',
+            startedAt: nowIso,
+            duckdbOwnerUrl: 'http://127.0.0.1:4101',
+          },
+          {databasePath: '${duckdbPath}'},
+        )
+        await validateOwnerlessRouteBackends()
+
+        const app = new Elysia().use(adminInvestigateRoutes)
+        const response = await app.handle(new Request('http://localhost/api/admin/worker-runtime-diagnostics'))
+        console.log(await response.text())
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_PATH: duckdbPath,
+        FORSKA_OWNERLESS_READ_ONLY_DUCKDB: 'disabled',
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runRoute.exitCode !== 0) {
+      throw new Error(
+        runRoute.stderr.toString()
+          || runRoute.stdout.toString()
+          || 'Admin worker runtime diagnostics route test failed',
+      )
+    }
+
+    const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
+      capabilities: string[]
+      cutoverRefusal: {
+        refusedRegisteredProcessCount: number
+        refusesMissingRuntimeVersion: boolean
+        runtimeVersion: string
+        status: string
+      }
+      duckdbOwnership: {canOwnDuckdb: boolean; ownsDuckdb: boolean}
+      localRole: string | null
+      ownerlessBackends: {validated: boolean; workerRuntimeDiagnostics: {backend: string; pathname: string} | null}
+      pendingCompletionAckVisibility: {
+        available: boolean
+        freshProjectionCount: number
+        hasPendingCompletionAck: boolean
+        jobCount: number
+        pendingCompletionAckCount: number
+      }
+      readPath: {judgmentJobs: {mode: string; sharedProjectionFreshnessMs: number}}
+      registry: {
+        capabilities: Array<{capability: string; eligibleConsumerCount: number; eligibleConsumerPresent: boolean}>
+        freshRegisteredProcessCount: number
+        registeredProcessCount: number
+        takeover: {status: string}
+      }
+      registryDerivedEligibleConsumers: Array<{
+        capability: string
+        eligibleConsumerCount: number
+        eligibleConsumerPresent: boolean
+      }>
+      routeServing: {duckdbOwnerPrivateApi: boolean; mode: string; publicProductApi: boolean}
+      serverRole: string
+      takeoverState: {status: string}
+    }
+    const maintenanceCapability = responseBody.registry.capabilities.find((capability) => {
+      return capability.capability === 'maintenance'
+    })
+    const judgingCapability = responseBody.registryDerivedEligibleConsumers.find((capability) => {
+      return capability.capability === 'judging'
+    })
+
+    expect(responseBody.localRole).toBe('dev-single')
+    expect(responseBody.serverRole).toBe('dev-single')
+    expect(responseBody.capabilities).toEqual(['api', 'duckdb-owner', 'maintenance', 'judging'])
+    expect(responseBody.duckdbOwnership).toMatchObject({canOwnDuckdb: true, ownsDuckdb: true})
+    expect(responseBody.routeServing).toMatchObject({
+      duckdbOwnerPrivateApi: true,
+      mode: 'public-and-duckdb-owner-private',
+      publicProductApi: true,
+    })
+    expect(responseBody.ownerlessBackends.validated).toBe(true)
+    expect(responseBody.ownerlessBackends.workerRuntimeDiagnostics).toMatchObject({
+      backend: 'ownerless-control-state',
+      pathname: '/api/admin/worker-runtime-diagnostics',
+    })
+    expect(responseBody.registry.registeredProcessCount).toBeGreaterThanOrEqual(3)
+    expect(responseBody.registry.freshRegisteredProcessCount).toBeGreaterThanOrEqual(3)
+    expect(maintenanceCapability?.eligibleConsumerPresent).toBe(true)
+    expect(maintenanceCapability?.eligibleConsumerCount).toBeGreaterThanOrEqual(1)
+    expect(judgingCapability?.eligibleConsumerPresent).toBe(true)
+    expect(responseBody.takeoverState.status).toBe(responseBody.registry.takeover.status)
+    expect(responseBody.cutoverRefusal.runtimeVersion).toBe('split-runtime-v1')
+    expect(responseBody.cutoverRefusal.status).toBe('enforced')
+    expect(responseBody.cutoverRefusal.refusesMissingRuntimeVersion).toBe(true)
+    expect(responseBody.cutoverRefusal.refusedRegisteredProcessCount).toBe(0)
+    expect(responseBody.readPath.judgmentJobs.mode).toBe('local-sqlite')
+    expect(responseBody.readPath.judgmentJobs.sharedProjectionFreshnessMs).toBe(30_000)
+    expect(responseBody.pendingCompletionAckVisibility).toMatchObject({
+      available: true,
+      freshProjectionCount: 1,
+      hasPendingCompletionAck: true,
+      jobCount: 1,
+      pendingCompletionAckCount: 2,
+    })
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+    removeFileIfExists(`${duckdbPath}.worker-registry`)
+  }
+})
+
 test('admin project mart large rebuild run route triggers bounded rebuild cycles for the selected project', () => {
   const duckdbPath = `/tmp/f1-admin-large-rebuild-run-route-${Date.now()}.duckdb`
   const runRoute = globalThis.Bun.spawnSync(

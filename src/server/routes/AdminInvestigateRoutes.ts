@@ -2,18 +2,247 @@ import {Elysia, t} from 'elysia'
 
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
+import {getApiReadOnlyAppDatabaseService} from '../services/appReadOnlyDatabaseService.ts'
 import {getAppQueryService} from '../services/getAppQueryService.ts'
+import {
+  getJudgmentJobSqliteHealthProjectionService,
+  type JudgmentJobSqliteHealthProjectionReader,
+} from '../services/judgmentJobSqliteHealthProjectionService.ts'
 import {runProjectMartLargeRebuildCycles} from '../services/projectMartLargeRebuildCyclesService.ts'
 import {getProjectMartLargeRebuildStateService} from '../services/projectMartLargeRebuildStateService.ts'
+import {type DuckdbOwnerConnectionRecord, getDuckdbOwnerConnectionsOverview} from '../utils/duckdbOwnerConnections.ts'
 import {getDuckdbBackgroundRuntimeDiagnostics} from '../utils/duckdbService.ts'
+import {getOwnerlessRouteBackendSelections} from '../utils/ownerlessReadableBackends.ts'
 import {getProjectMartLargeRebuildRuntimeMetrics} from '../utils/projectMartLargeRebuildRuntimeMetrics.ts'
 import {getProjectMartLargeRebuildHeartbeatConfig} from '../utils/projectMartLargeRebuildTuning.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
-import {getCurrentServerRole} from '../utils/serverRuntimeRole.ts'
+import {
+  getRuntimeCutoverVersion,
+  getRuntimeCutoverVersionMismatchMessage,
+  isRuntimeCutoverVersionCompatible,
+} from '../utils/runtimeCutover.ts'
+import {
+  getServerRoleCapabilities,
+  type ServerRole,
+  type ServerRoleCapability,
+  serverRoles,
+} from '../utils/serverRole.ts'
+import {
+  canCurrentServerOwnDuckdb,
+  getCurrentServerRole,
+  getKnownDuckdbOwnerUrl,
+  shouldCurrentServerMountDuckdbOwnerPrivateApi,
+  shouldCurrentServerMountPublicProductApi,
+  shouldCurrentServerProxyApiToOwner,
+  shouldCurrentServerRunJudgingLoops,
+} from '../utils/serverRuntimeRole.ts'
+import {duckdbOwnerPrivateApiPrefix} from './apiRouteClassification.ts'
 
 const appDatabaseService = getAppDatabaseService()
 const appQueryService = getAppQueryService()
 const projectMartLargeRebuildStateService = getProjectMartLargeRebuildStateService()
+export const workerRuntimeDiagnosticsPath = '/api/admin/worker-runtime-diagnostics'
+
+type JudgmentJobReadPathMode = 'local-sqlite' | 'owner-duckdb-projection' | 'ownerless-read-only-projection'
+type PendingCompletionAckVisibility = {
+  available: boolean
+  error: string | null
+  freshProjectionCount: number
+  hasPendingCompletionAck: boolean
+  jobCount: number
+  latestProjectedAt: string | null
+  oldestUnackedCompletionAgeMs: number | null
+  pendingCompletionAckCount: number
+}
+type PendingCompletionAckVisibilityRow = {
+  freshProjectionCount: number | null
+  hasPendingCompletionAckCount: number | null
+  jobCount: number | null
+  latestProjectedAt: unknown
+  oldestUnackedCompletionAgeMs: number | null
+  pendingCompletionAckCount: number | null
+}
+
+const getLocalServerRole = (): ServerRole | null => {
+  const configuredRole = process.env.SERVER_ROLE
+
+  return serverRoles.includes(configuredRole as ServerRole) ? (configuredRole as ServerRole) : null
+}
+
+const getErrorMessage = (error: unknown) => {
+  return error instanceof Error ? error.message : String(error)
+}
+
+const getWorkerDiagnosticsReadDatabase = (): JudgmentJobSqliteHealthProjectionReader => {
+  return canCurrentServerOwnDuckdb() ? appDatabaseService : getApiReadOnlyAppDatabaseService()
+}
+
+const getJudgmentJobReadPathMode = (): JudgmentJobReadPathMode => {
+  return shouldCurrentServerRunJudgingLoops()
+    ? 'local-sqlite'
+    : canCurrentServerOwnDuckdb()
+      ? 'owner-duckdb-projection'
+      : 'ownerless-read-only-projection'
+}
+
+const getIsoDateFromValue = (value: unknown) => {
+  return appQueryHelpers.getDateValue(value)?.toISOString() ?? null
+}
+
+const getPendingCompletionAckVisibilityFromSharedState = async (): Promise<PendingCompletionAckVisibility> => {
+  try {
+    const [row] = await getWorkerDiagnosticsReadDatabase().queryJson<PendingCompletionAckVisibilityRow>(`
+      SELECT
+        CAST((SELECT COUNT(*) FROM app.judgment_job) AS INTEGER) AS jobCount,
+        CAST(SUM(CASE WHEN fresh_until_at > current_timestamp THEN 1 ELSE 0 END) AS INTEGER) AS freshProjectionCount,
+        CAST(SUM(
+          CASE WHEN fresh_until_at > current_timestamp THEN pending_completion_ack_count ELSE 0 END
+        ) AS INTEGER) AS pendingCompletionAckCount,
+        CAST(SUM(
+          CASE WHEN fresh_until_at > current_timestamp AND has_pending_completion_ack THEN 1 ELSE 0 END
+        ) AS INTEGER) AS hasPendingCompletionAckCount,
+        MAX(
+          CASE WHEN fresh_until_at > current_timestamp THEN oldest_unacked_completion_age_ms ELSE NULL END
+        ) AS oldestUnackedCompletionAgeMs,
+        MAX(CASE WHEN fresh_until_at > current_timestamp THEN projected_at ELSE NULL END) AS latestProjectedAt
+      FROM app.judgment_job_sqlite_health_projection
+    `)
+
+    return {
+      available: true,
+      error: null,
+      freshProjectionCount: Number(row?.freshProjectionCount ?? 0),
+      hasPendingCompletionAck: Number(row?.hasPendingCompletionAckCount ?? 0) > 0,
+      jobCount: Number(row?.jobCount ?? 0),
+      latestProjectedAt: getIsoDateFromValue(row?.latestProjectedAt),
+      oldestUnackedCompletionAgeMs:
+        row?.oldestUnackedCompletionAgeMs == null ? null : Number(row.oldestUnackedCompletionAgeMs),
+      pendingCompletionAckCount: Number(row?.pendingCompletionAckCount ?? 0),
+    }
+  } catch (error) {
+    return {
+      available: false,
+      error: getErrorMessage(error),
+      freshProjectionCount: 0,
+      hasPendingCompletionAck: false,
+      jobCount: 0,
+      latestProjectedAt: null,
+      oldestUnackedCompletionAgeMs: null,
+      pendingCompletionAckCount: 0,
+    }
+  }
+}
+
+const getRouteServingMode = () => {
+  const publicProductApi = shouldCurrentServerMountPublicProductApi()
+  const duckdbOwnerPrivateApi = shouldCurrentServerMountDuckdbOwnerPrivateApi()
+  const ownerProxy = shouldCurrentServerProxyApiToOwner()
+  const judgingRuntime = shouldCurrentServerRunJudgingLoops()
+  const mode =
+    publicProductApi && duckdbOwnerPrivateApi
+      ? 'public-and-duckdb-owner-private'
+      : publicProductApi && ownerProxy
+        ? 'public-api-with-owner-proxy'
+        : duckdbOwnerPrivateApi
+          ? 'duckdb-owner-private-api'
+          : judgingRuntime
+            ? 'judging-runtime'
+            : 'diagnostics-only'
+
+  return {duckdbOwnerPrivateApi, duckdbOwnerPrivateApiPrefix, judgingRuntime, mode, ownerProxy, publicProductApi}
+}
+
+const getConfiguredCapabilities = (localRole: ServerRole | null): ServerRoleCapability[] => {
+  return localRole === null ? [] : getServerRoleCapabilities(localRole)
+}
+
+const getCutoverRefusedPeer = (record: DuckdbOwnerConnectionRecord) => {
+  return {
+    connectionId: record.connectionId,
+    instanceId: record.instanceId,
+    message: getRuntimeCutoverVersionMismatchMessage({
+      context: `worker registry process ${record.instanceId}`,
+      runtimeVersion: record.runtimeVersion,
+    }),
+    runtimeVersion: record.runtimeVersion,
+    serverRole: record.serverRole,
+  }
+}
+
+const getCutoverRefusalStatus = (records: DuckdbOwnerConnectionRecord[]) => {
+  const refusedRegisteredProcesses = records
+    .filter((record) => {
+      return !isRuntimeCutoverVersionCompatible(record.runtimeVersion)
+    })
+    .map(getCutoverRefusedPeer)
+
+  return {
+    refusedRegisteredProcessCount: refusedRegisteredProcesses.length,
+    refusedRegisteredProcesses,
+    refusesIncompatiblePeers: true,
+    refusesMissingRuntimeVersion: true,
+    runtimeVersion: getRuntimeCutoverVersion(),
+    status: refusedRegisteredProcesses.length > 0 ? 'refusing-incompatible-registry' : 'enforced',
+  }
+}
+
+const getWorkerRuntimeDiagnostics = async () => {
+  const localRole = getLocalServerRole()
+  const serverRole = getCurrentServerRole()
+  const capabilities = getServerRoleCapabilities(serverRole)
+  const ownerConnections = await getDuckdbOwnerConnectionsOverview()
+  const registeredProcesses = [ownerConnections.owner, ...ownerConnections.followers].filter(
+    (record): record is DuckdbOwnerConnectionRecord => {
+      return record !== null
+    },
+  )
+  const ownerlessBackendSelections = getOwnerlessRouteBackendSelections()
+  const workerRuntimeDiagnosticsBackend =
+    ownerlessBackendSelections.find((selection) => {
+      return selection.method === 'GET' && selection.pathname === workerRuntimeDiagnosticsPath
+    }) ?? null
+
+  return {
+    capabilities,
+    configuredCapabilities: getConfiguredCapabilities(localRole),
+    cutoverRefusal: getCutoverRefusalStatus(registeredProcesses),
+    duckdbOwnership: {
+      canOwnDuckdb: capabilities.includes('duckdb-owner'),
+      duckdbOwnerUrl: getKnownDuckdbOwnerUrl(),
+      ownerRecord: ownerConnections.owner,
+      ownsDuckdb: canCurrentServerOwnDuckdb(),
+    },
+    localRole,
+    ownerlessBackends: {
+      selections: ownerlessBackendSelections,
+      validated: ownerlessBackendSelections.length > 0,
+      workerRuntimeDiagnostics: workerRuntimeDiagnosticsBackend,
+    },
+    pendingCompletionAckVisibility: await getPendingCompletionAckVisibilityFromSharedState(),
+    readPath: {
+      judgmentJobs: {
+        mode: getJudgmentJobReadPathMode(),
+        sharedProjectionFreshnessMs: getJudgmentJobSqliteHealthProjectionService().getProjectionFreshnessMs(),
+      },
+    },
+    registry: ownerConnections.registry,
+    registryDerivedEligibleConsumers: ownerConnections.registry.capabilities.map((capability) => {
+      return {
+        capability: capability.capability,
+        eligibleConsumerCount: capability.eligibleConsumerCount,
+        eligibleConsumerPresent: capability.eligibleConsumerPresent,
+        freshConsumerCount: capability.freshConsumerCount,
+        registeredConsumerCount: capability.registeredConsumerCount,
+        staleConsumerCount: capability.staleConsumerCount,
+      }
+    }),
+    registeredProcesses,
+    routeServing: getRouteServingMode(),
+    runtimeVersion: ownerConnections.runtimeVersion,
+    serverRole,
+    takeoverState: ownerConnections.registry.takeover,
+  }
+}
 
 const parseArktypeOptions = (typeStr: string | null): string[] => {
   if (!typeStr) return []
@@ -728,6 +957,9 @@ export const adminInvestigateRoutes = new Elysia()
       serverRole: process.env.SERVER_ROLE ?? null,
       pid: process.pid,
     }
+  })
+  .get(workerRuntimeDiagnosticsPath, async () => {
+    return getWorkerRuntimeDiagnostics()
   })
   .get(
     '/api/admin/project-mart-large-rebuild-status',

@@ -243,13 +243,14 @@
         "Verify in browser that worker diagnostics show local capabilities and active worker registry clearly."
       ],
       "priority": 12,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-008",
         "US-009",
         "US-011"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-013",
@@ -389,6 +390,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-04-22T22:49:59.361Z"
+    "updatedAt": "2026-04-22T23:02:08.193Z"
   }
 }
