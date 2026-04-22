@@ -13,7 +13,7 @@ import {
 
 const gibibyte = 1024 ** 3
 const defaultLocalAppSettings = {
-  backgroundWriterDuckdbMemoryLimit: null,
+  maintenanceWorkerDuckdbMemoryLimit: null,
   codexBin: null,
   duckdbBin: null,
   projectMartLargeRebuildBatchSize: null,
@@ -22,23 +22,23 @@ const defaultLocalAppSettings = {
   projectMartLargeRebuildTuningMode: 'automatic' as const,
 }
 
-test('background server stack derives a low-memory worker duckdb limit', () => {
+test('background server stack derives a low-memory maintenance-worker DuckDB limit', () => {
   expect(getDefaultBackgroundMaintenanceDuckdbMemoryLimit(8 * gibibyte, 'linux')).toBe('4GB')
 })
 
-test('background server stack derives a mid-memory worker duckdb limit', () => {
+test('background server stack derives a mid-memory maintenance-worker DuckDB limit', () => {
   expect(getDefaultBackgroundMaintenanceDuckdbMemoryLimit(16 * gibibyte, 'linux')).toBe('8GB')
 })
 
-test('background server stack derives a higher-memory worker duckdb limit', () => {
+test('background server stack derives a higher-memory maintenance-worker DuckDB limit', () => {
   expect(getDefaultBackgroundMaintenanceDuckdbMemoryLimit(64 * gibibyte, 'linux')).toBe('20GB')
 })
 
-test('background server stack clamps darwin worker duckdb memory to the stable ceiling', () => {
+test('background server stack clamps darwin maintenance-worker DuckDB memory to the stable ceiling', () => {
   expect(getDefaultBackgroundMaintenanceDuckdbMemoryLimit(32 * gibibyte, 'darwin')).toBe('6400MiB')
 })
 
-test('background server stack defaults worker port to api port plus one', () => {
+test('background server stack defaults maintenance-worker port to api port plus one', () => {
   expect(getBackgroundServerStackConfig({API_SERVER_PORT: '3001'}, defaultLocalAppSettings)).toEqual({
     apiPort: 3001,
     maintenanceDuckdbMemoryLimit: getDefaultBackgroundMaintenanceDuckdbMemoryLimit(),
@@ -47,7 +47,7 @@ test('background server stack defaults worker port to api port plus one', () => 
   })
 })
 
-test('background server stack honors an explicit worker port override', () => {
+test('background server stack honors an explicit maintenance-worker port override', () => {
   expect(
     getBackgroundServerStackConfig(
       {API_SERVER_PORT: '4100', BACKGROUND_MAINTENANCE_PORT: '5100'},
@@ -61,7 +61,7 @@ test('background server stack honors an explicit worker port override', () => {
   })
 })
 
-test('background server stack honors an explicit worker duckdb memory override', () => {
+test('background server stack honors an explicit maintenance-worker DuckDB memory override', () => {
   expect(
     getBackgroundServerStackConfig(
       {API_SERVER_PORT: '4100', BACKGROUND_MAINTENANCE_DUCKDB_MEMORY_LIMIT: '1536MiB', DUCKDB_MEMORY_LIMIT: '20GB'},
@@ -86,12 +86,12 @@ test('background server stack falls back to the base duckdb memory limit when pr
   })
 })
 
-test('background server stack honors machine-local worker duckdb memory settings when env is unset', () => {
+test('background server stack honors machine-local maintenance-worker DuckDB memory settings when env is unset', () => {
   expect(
     getBackgroundServerStackConfig(
       {API_SERVER_PORT: '4100'},
       {
-        backgroundWriterDuckdbMemoryLimit: '12GB',
+        maintenanceWorkerDuckdbMemoryLimit: '12GB',
         codexBin: null,
         duckdbBin: null,
         projectMartLargeRebuildBatchSize: null,
@@ -108,7 +108,7 @@ test('background server stack honors machine-local worker duckdb memory settings
   })
 })
 
-test('background server stack builds api env that proxies to the worker', () => {
+test('background server stack builds api env that proxies to the maintenance worker', () => {
   expect(
     getBackgroundServerEnv({
       baseEnv: {API_SERVER_PORT: '3301', BACKGROUND_MAINTENANCE_PORT: '3302'},
@@ -133,11 +133,11 @@ test('background server stack builds maintenance-worker env on the sibling port'
   })
 })
 
-test('background server stack passes machine-local worker duckdb memory into worker env', () => {
+test('background server stack passes machine-local maintenance-worker DuckDB memory into maintenance-worker env', () => {
   expect(
     getBackgroundServerEnv({
       baseEnv: {API_SERVER_PORT: '3301', BACKGROUND_MAINTENANCE_PORT: '3302'},
-      localAppSettings: {...defaultLocalAppSettings, backgroundWriterDuckdbMemoryLimit: '18GB'},
+      localAppSettings: {...defaultLocalAppSettings, maintenanceWorkerDuckdbMemoryLimit: '18GB'},
       role: 'maintenance-worker',
     }),
   ).toMatchObject({
@@ -148,7 +148,7 @@ test('background server stack passes machine-local worker duckdb memory into wor
   })
 })
 
-test('background server stack async config reads worker duckdb memory from app.user_config', async () => {
+test('background server stack async config reads maintenance-worker DuckDB memory from app.user_config', async () => {
   const duckdbPath = `/tmp/f1-background-server-stack-${Date.now()}.duckdb`
   const duckdbInstance = await DuckDBInstance.create(duckdbPath)
   const connection = await duckdbInstance.connect()
@@ -157,9 +157,9 @@ test('background server stack async config reads worker duckdb memory from app.u
     CREATE SCHEMA IF NOT EXISTS app;
     CREATE TABLE app.user_config (
       id VARCHAR PRIMARY KEY,
-      background_writer_duckdb_memory_limit VARCHAR
+      maintenance_worker_duckdb_memory_limit VARCHAR
     );
-    INSERT INTO app.user_config (id, background_writer_duckdb_memory_limit)
+    INSERT INTO app.user_config (id, maintenance_worker_duckdb_memory_limit)
     VALUES ('local-user', '14GB');
   `)
   connection.closeSync()

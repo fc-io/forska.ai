@@ -6,7 +6,7 @@ import {getConfiguredDuckdbPath, getDuckdbPath} from './getDuckdbPath.ts'
 export type ProjectMartLargeRebuildTuningMode = 'automatic' | 'manual'
 
 export type LocalAppSettings = {
-  backgroundWriterDuckdbMemoryLimit: string | null
+  maintenanceWorkerDuckdbMemoryLimit: string | null
   codexBin: string | null
   duckdbBin: string | null
   projectMartLargeRebuildBatchSize: number | null
@@ -16,7 +16,7 @@ export type LocalAppSettings = {
 }
 
 const defaultLocalAppSettings: LocalAppSettings = {
-  backgroundWriterDuckdbMemoryLimit: null,
+  maintenanceWorkerDuckdbMemoryLimit: null,
   codexBin: null,
   duckdbBin: null,
   projectMartLargeRebuildBatchSize: null,
@@ -24,6 +24,8 @@ const defaultLocalAppSettings: LocalAppSettings = {
   projectMartLargeRebuildPollIntervalMs: null,
   projectMartLargeRebuildTuningMode: 'automatic',
 }
+const legacyMaintenanceWorkerDuckdbMemoryLimitKey = 'backgroundWriterDuckdbMemoryLimit'
+type ParsedLocalAppSettings = {settings: LocalAppSettings; shouldRewrite: boolean}
 
 const getNullableTrimmedValue = (value: string | null | undefined): string | null => {
   const normalized = String(value ?? '').trim()
@@ -58,39 +60,74 @@ const getLocalAppSettingsRecord = (value: unknown): Record<string, unknown> | nu
     : null
 }
 
-const parseLocalAppSettings = (raw: string): LocalAppSettings => {
+const getOptionalString = (record: Record<string, unknown> | null, key: string): string | null => {
+  const value = record?.[key]
+
+  return typeof value === 'string' ? value : null
+}
+
+const getMaintenanceWorkerDuckdbMemoryLimit = (record: Record<string, unknown> | null): string | null => {
+  const currentValue = getOptionalString(record, 'maintenanceWorkerDuckdbMemoryLimit')
+  const legacyValue = getOptionalString(record, legacyMaintenanceWorkerDuckdbMemoryLimitKey)
+
+  return getNullableTrimmedValue(currentValue === null ? legacyValue : currentValue)
+}
+
+const shouldRewriteLocalAppSettings = (record: Record<string, unknown> | null): boolean => {
+  return record !== null && legacyMaintenanceWorkerDuckdbMemoryLimitKey in record
+}
+
+const writeLocalAppSettings = (filePath: string, settings: LocalAppSettings): void => {
+  mkdirSync(dirname(filePath), {recursive: true})
+  writeFileSync(filePath, `${JSON.stringify(settings, null, 2)}\n`)
+}
+
+const parseLocalAppSettings = (raw: string): ParsedLocalAppSettings => {
   try {
     const parsed = JSON.parse(raw) as unknown
     const record = getLocalAppSettingsRecord(parsed)
 
     return {
-      backgroundWriterDuckdbMemoryLimit: getNullableTrimmedValue(
-        typeof record?.backgroundWriterDuckdbMemoryLimit === 'string' ? record.backgroundWriterDuckdbMemoryLimit : null,
-      ),
-      codexBin: getNullableTrimmedValue(typeof record?.codexBin === 'string' ? record.codexBin : null),
-      duckdbBin: getNullableTrimmedValue(typeof record?.duckdbBin === 'string' ? record.duckdbBin : null),
-      projectMartLargeRebuildBatchSize: getNullablePositiveInteger(record?.projectMartLargeRebuildBatchSize),
-      projectMartLargeRebuildMaxCyclesPerWake: getNullablePositiveInteger(
-        record?.projectMartLargeRebuildMaxCyclesPerWake,
-      ),
-      projectMartLargeRebuildPollIntervalMs: getNullablePositiveInteger(record?.projectMartLargeRebuildPollIntervalMs),
-      projectMartLargeRebuildTuningMode: getProjectMartLargeRebuildTuningMode(
-        record?.projectMartLargeRebuildTuningMode,
-      ),
+      settings: {
+        maintenanceWorkerDuckdbMemoryLimit: getMaintenanceWorkerDuckdbMemoryLimit(record),
+        codexBin: getNullableTrimmedValue(getOptionalString(record, 'codexBin')),
+        duckdbBin: getNullableTrimmedValue(getOptionalString(record, 'duckdbBin')),
+        projectMartLargeRebuildBatchSize: getNullablePositiveInteger(record?.projectMartLargeRebuildBatchSize),
+        projectMartLargeRebuildMaxCyclesPerWake: getNullablePositiveInteger(
+          record?.projectMartLargeRebuildMaxCyclesPerWake,
+        ),
+        projectMartLargeRebuildPollIntervalMs: getNullablePositiveInteger(
+          record?.projectMartLargeRebuildPollIntervalMs,
+        ),
+        projectMartLargeRebuildTuningMode: getProjectMartLargeRebuildTuningMode(
+          record?.projectMartLargeRebuildTuningMode,
+        ),
+      },
+      shouldRewrite: shouldRewriteLocalAppSettings(record),
     }
   } catch {
-    return defaultLocalAppSettings
+    return {settings: defaultLocalAppSettings, shouldRewrite: false}
   }
 }
 
 export const readLocalAppSettings = (): LocalAppSettings => {
   const filePath = getLocalAppSettingsPath()
 
-  return existsSync(filePath) ? parseLocalAppSettings(readFileSync(filePath, 'utf8')) : defaultLocalAppSettings
+  if (!existsSync(filePath)) {
+    return defaultLocalAppSettings
+  }
+
+  const parsed = parseLocalAppSettings(readFileSync(filePath, 'utf8'))
+
+  if (parsed.shouldRewrite) {
+    writeLocalAppSettings(filePath, parsed.settings)
+  }
+
+  return parsed.settings
 }
 
 export const updateLocalAppSettings = ({
-  backgroundWriterDuckdbMemoryLimit,
+  maintenanceWorkerDuckdbMemoryLimit,
   codexBin,
   duckdbBin,
   projectMartLargeRebuildBatchSize,
@@ -98,7 +135,7 @@ export const updateLocalAppSettings = ({
   projectMartLargeRebuildPollIntervalMs,
   projectMartLargeRebuildTuningMode,
 }: {
-  backgroundWriterDuckdbMemoryLimit: string | null
+  maintenanceWorkerDuckdbMemoryLimit: string | null
   codexBin: string | null
   duckdbBin: string | null
   projectMartLargeRebuildBatchSize: number | null
@@ -108,7 +145,7 @@ export const updateLocalAppSettings = ({
 }): LocalAppSettings => {
   const filePath = getLocalAppSettingsPath()
   const nextValue = {
-    backgroundWriterDuckdbMemoryLimit: getNullableTrimmedValue(backgroundWriterDuckdbMemoryLimit),
+    maintenanceWorkerDuckdbMemoryLimit: getNullableTrimmedValue(maintenanceWorkerDuckdbMemoryLimit),
     codexBin: getNullableTrimmedValue(codexBin),
     duckdbBin: getNullableTrimmedValue(duckdbBin),
     projectMartLargeRebuildBatchSize: getNullablePositiveInteger(projectMartLargeRebuildBatchSize),
@@ -117,8 +154,7 @@ export const updateLocalAppSettings = ({
     projectMartLargeRebuildTuningMode: getProjectMartLargeRebuildTuningMode(projectMartLargeRebuildTuningMode),
   } satisfies LocalAppSettings
 
-  mkdirSync(dirname(filePath), {recursive: true})
-  writeFileSync(filePath, `${JSON.stringify(nextValue, null, 2)}\n`)
+  writeLocalAppSettings(filePath, nextValue)
 
   return nextValue
 }

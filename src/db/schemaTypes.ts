@@ -40,7 +40,7 @@ export type UserRecord = {
   name: string
   email: string
   role: string | null
-  backgroundWriterDuckdbMemoryLimit: string | null
+  maintenanceWorkerDuckdbMemoryLimit: string | null
   projectMartLargeRebuildBatchSize: number | null
   projectMartLargeRebuildMaxCyclesPerWake: number | null
   projectMartLargeRebuildPollIntervalMs: number | null

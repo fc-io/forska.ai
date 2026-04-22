@@ -397,7 +397,7 @@ test('routes oversized automatic full refreshes into large rebuild state before 
   expect(context.acknowledgedProjects).toEqual([])
 })
 
-test('uses a smaller automatic full-refresh ceiling when the worker duckdb memory limit is low', async () => {
+test('uses a smaller automatic full-refresh ceiling when the maintenance-worker DuckDB memory limit is low', async () => {
   const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
   process.env.DUCKDB_MEMORY_LIMIT = '6400MiB'
 

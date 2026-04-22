@@ -7,7 +7,7 @@ import {handleApiResponse} from '../../../services/utils/handleApiResponse'
 
 type ProjectMartLargeRebuildTuningMode = 'automatic' | 'manual'
 type LocalUser = {
-  backgroundWriterDuckdbMemoryLimit?: string | null
+  maintenanceWorkerDuckdbMemoryLimit?: string | null
   codexBin?: string | null
   id: string
   name: string
@@ -46,7 +46,7 @@ type MaintenanceRuntimeDiagnostics = {
     pollIntervalMs?: number
     sources?: {batchSize?: string; maxCyclesPerWake?: string; pollIntervalMs?: string}
     stored?: {
-      backgroundWriterDuckdbMemoryLimit?: string | null
+      maintenanceWorkerDuckdbMemoryLimit?: string | null
       batchSize?: number | null
       maxCyclesPerWake?: number | null
       pollIntervalMs?: number | null
@@ -55,7 +55,7 @@ type MaintenanceRuntimeDiagnostics = {
   }
 }
 type UpdateLocalUserInput = {
-  backgroundWriterDuckdbMemoryLimit: string
+  maintenanceWorkerDuckdbMemoryLimit: string
   codexBin: string
   duckdbBin: string
   email: string
@@ -119,7 +119,7 @@ const formatTuningSummary = (value: {
 
 const updateLocalUser = async (input: UpdateLocalUserInput): Promise<LocalUser> => {
   const response = await apiClient.api.users.patch({
-    backgroundWriterDuckdbMemoryLimit: getNullableString(input.backgroundWriterDuckdbMemoryLimit),
+    maintenanceWorkerDuckdbMemoryLimit: getNullableString(input.maintenanceWorkerDuckdbMemoryLimit),
     codexBin: getNullableString(input.codexBin),
     duckdbBin: getNullableString(input.duckdbBin),
     email: input.email,
@@ -137,7 +137,7 @@ const updateLocalUser = async (input: UpdateLocalUserInput): Promise<LocalUser> 
 }
 
 const Settings = () => {
-  const [backgroundWriterDuckdbMemoryLimit, setBackgroundWriterDuckdbMemoryLimit] = createSignal('')
+  const [maintenanceWorkerDuckdbMemoryLimit, setMaintenanceWorkerDuckdbMemoryLimit] = createSignal('')
   const [displayName, setDisplayName] = createSignal('')
   const [profileEmail, setProfileEmail] = createSignal('')
   const [fullTextConversionModelId, setFullTextConversionModelId] = createSignal('')
@@ -173,7 +173,7 @@ const Settings = () => {
     return {
       mutationFn: updateLocalUser,
       onSuccess: (user: LocalUser) => {
-        setBackgroundWriterDuckdbMemoryLimit(user.backgroundWriterDuckdbMemoryLimit ?? '')
+        setMaintenanceWorkerDuckdbMemoryLimit(user.maintenanceWorkerDuckdbMemoryLimit ?? '')
         setDisplayName(user.name)
         setProfileEmail(user.email)
         setFullTextConversionModelId(user.fullTextConversionModelId ?? '')
@@ -191,7 +191,7 @@ const Settings = () => {
   })
 
   createEffect(() => {
-    setBackgroundWriterDuckdbMemoryLimit(localUserQuery.data?.backgroundWriterDuckdbMemoryLimit ?? '')
+    setMaintenanceWorkerDuckdbMemoryLimit(localUserQuery.data?.maintenanceWorkerDuckdbMemoryLimit ?? '')
     setDisplayName(localUserQuery.data?.name ?? '')
     setProfileEmail(localUserQuery.data?.email ?? '')
     setFullTextConversionModelId(localUserQuery.data?.fullTextConversionModelId ?? '')
@@ -224,8 +224,8 @@ const Settings = () => {
         !== String(localUserQuery.data?.projectMartLargeRebuildMaxCyclesPerWake ?? '').trim()
       || projectMartLargeRebuildPollIntervalMs().trim()
         !== String(localUserQuery.data?.projectMartLargeRebuildPollIntervalMs ?? '').trim()
-      || backgroundWriterDuckdbMemoryLimit().trim()
-        !== (localUserQuery.data?.backgroundWriterDuckdbMemoryLimit ?? '').trim()
+      || maintenanceWorkerDuckdbMemoryLimit().trim()
+        !== (localUserQuery.data?.maintenanceWorkerDuckdbMemoryLimit ?? '').trim()
       || unpaywallEmail().trim() !== (localUserQuery.data?.unpaywallEmail ?? '').trim()
       || duckdbBin().trim() !== (localUserQuery.data?.duckdbBin ?? '').trim()
       || codexBin().trim() !== (localUserQuery.data?.codexBin ?? '').trim()
@@ -306,7 +306,7 @@ const Settings = () => {
                 </p>
               </div>
               <div class="pt-2 border-t border-gray-200">
-                <h3 class="text-sm font-semibold text-gray-900 mb-3">Background rebuild tuning</h3>
+                <h3 class="text-sm font-semibold text-gray-900 mb-3">Maintenance rebuild tuning</h3>
                 <div class="space-y-4">
                   <div>
                     <label class="block text-sm font-medium text-gray-700 mb-2">Tuning mode</label>
@@ -333,9 +333,9 @@ const Settings = () => {
                     </label>
                     <input
                       type="text"
-                      value={backgroundWriterDuckdbMemoryLimit()}
+                      value={maintenanceWorkerDuckdbMemoryLimit()}
                       onInput={(event) => {
-                        setBackgroundWriterDuckdbMemoryLimit(event.currentTarget.value)
+                        setMaintenanceWorkerDuckdbMemoryLimit(event.currentTarget.value)
                       }}
                       class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
                       placeholder="20GB"
@@ -498,7 +498,7 @@ const Settings = () => {
                 disabled={updateLocalUserMutation.isPending || !isProfileDirty()}
                 onClick={() => {
                   updateLocalUserMutation.mutate({
-                    backgroundWriterDuckdbMemoryLimit: backgroundWriterDuckdbMemoryLimit(),
+                    maintenanceWorkerDuckdbMemoryLimit: maintenanceWorkerDuckdbMemoryLimit(),
                     codexBin: codexBin(),
                     duckdbBin: duckdbBin(),
                     email: profileEmail(),

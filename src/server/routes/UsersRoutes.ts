@@ -37,7 +37,7 @@ export const usersRoutes = new Elysia()
     '/api/users',
     async ({body}) => {
       const localAppSettings = updateLocalAppSettings({
-        backgroundWriterDuckdbMemoryLimit: getNullableString(body.backgroundWriterDuckdbMemoryLimit),
+        maintenanceWorkerDuckdbMemoryLimit: getNullableString(body.maintenanceWorkerDuckdbMemoryLimit),
         codexBin: getNullableString(body.codexBin),
         duckdbBin: getNullableString(body.duckdbBin),
         projectMartLargeRebuildBatchSize: getNullablePositiveInteger(body.projectMartLargeRebuildBatchSize),
@@ -48,7 +48,7 @@ export const usersRoutes = new Elysia()
         projectMartLargeRebuildTuningMode: getProjectMartLargeRebuildTuningMode(body.projectMartLargeRebuildTuningMode),
       })
       const userConfig = await getUserConfigQueryService().updateUserConfig({
-        backgroundWriterDuckdbMemoryLimit: getNullableString(body.backgroundWriterDuckdbMemoryLimit),
+        maintenanceWorkerDuckdbMemoryLimit: getNullableString(body.maintenanceWorkerDuckdbMemoryLimit),
         email: body.email,
         fullTextConversionModelId: getNullableString(body.fullTextConversionModelId),
         name: body.name,
@@ -65,7 +65,7 @@ export const usersRoutes = new Elysia()
     },
     {
       body: t.Object({
-        backgroundWriterDuckdbMemoryLimit: t.Union([t.String(), t.Null()]),
+        maintenanceWorkerDuckdbMemoryLimit: t.Union([t.String(), t.Null()]),
         codexBin: t.Union([t.String(), t.Null()]),
         duckdbBin: t.Union([t.String(), t.Null()]),
         email: t.String(),

@@ -104,7 +104,7 @@ test('projectMartLargeRebuildHeartbeat runs one bounded burst with resolved tuni
                 pollIntervalMs: 1000,
                 sources: {batchSize: 'automatic', maxCyclesPerWake: 'automatic', pollIntervalMs: 'automatic'},
                 stored: {
-                  backgroundWriterDuckdbMemoryLimit: null,
+                  maintenanceWorkerDuckdbMemoryLimit: null,
                   batchSize: null,
                   maxCyclesPerWake: null,
                   pollIntervalMs: null,
@@ -159,7 +159,7 @@ test('projectMartLargeRebuildHeartbeat resolves env overrides ahead of manual se
           activeLargeRebuildProjectCount: 1,
           envValues: process.env,
           storedSettings: {
-            backgroundWriterDuckdbMemoryLimit: '12GB',
+            maintenanceWorkerDuckdbMemoryLimit: '12GB',
             batchSize: 512,
             maxCyclesPerWake: 9,
             pollIntervalMs: 500,
@@ -207,7 +207,7 @@ test('projectMartLargeRebuildHeartbeat resolves machine-aware automatic config f
           activeLargeRebuildProjectCount: 1,
           envValues: {},
           storedSettings: {
-            backgroundWriterDuckdbMemoryLimit: null,
+            maintenanceWorkerDuckdbMemoryLimit: null,
             batchSize: null,
             maxCyclesPerWake: null,
             pollIntervalMs: null,
@@ -239,7 +239,7 @@ test('projectMartLargeRebuildHeartbeat resolves machine-aware automatic config f
   })
 })
 
-test('projectMartLargeRebuildHeartbeat falls back to the worker duckdb memory limit when stored tuning memory is unset', () => {
+test('projectMartLargeRebuildHeartbeat falls back to the maintenance-worker DuckDB memory limit when stored tuning memory is unset', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -255,7 +255,7 @@ test('projectMartLargeRebuildHeartbeat falls back to the worker duckdb memory li
           activeLargeRebuildProjectCount: 1,
           envValues: {DUCKDB_MEMORY_LIMIT: '6400MiB'},
           storedSettings: {
-            backgroundWriterDuckdbMemoryLimit: null,
+            maintenanceWorkerDuckdbMemoryLimit: null,
             batchSize: null,
             maxCyclesPerWake: null,
             pollIntervalMs: null,
@@ -272,7 +272,7 @@ test('projectMartLargeRebuildHeartbeat falls back to the worker duckdb memory li
     throw new Error(
       runScript.stderr.toString()
         || runScript.stdout.toString()
-        || 'projectMartLargeRebuildHeartbeat worker memory fallback test failed',
+        || 'projectMartLargeRebuildHeartbeat maintenance-worker memory fallback test failed',
     )
   }
 
@@ -284,6 +284,6 @@ test('projectMartLargeRebuildHeartbeat falls back to the worker duckdb memory li
     maxCyclesPerWake: 4,
     pollIntervalMs: 1000,
     sources: {batchSize: 'automatic', maxCyclesPerWake: 'automatic', pollIntervalMs: 'automatic'},
-    stored: {backgroundWriterDuckdbMemoryLimit: null},
+    stored: {maintenanceWorkerDuckdbMemoryLimit: null},
   })
 })

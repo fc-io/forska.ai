@@ -1,0 +1,1 @@
+ALTER TABLE app.user_config RENAME COLUMN background_writer_duckdb_memory_limit TO maintenance_worker_duckdb_memory_limit;

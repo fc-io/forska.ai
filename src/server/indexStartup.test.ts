@@ -48,6 +48,19 @@ const startServer = (envValues: Record<string, string>) => {
   })
 }
 
+const runStartupCommand = (args: string[], envValues: Record<string, string>, failureMessage: string) => {
+  const result = globalThis.Bun.spawnSync(args, {
+    cwd: process.cwd(),
+    env: {...process.env, ...envValues},
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+
+  if (result.exitCode !== 0) {
+    throw new Error(result.stderr.toString() || result.stdout.toString() || failureMessage)
+  }
+}
+
 test('maintenance-worker startup migrates DuckDB before judgment health queries run', async () => {
   const apiPort = 34988
   const duckdbPath = `/tmp/f1-index-startup-${Date.now()}.duckdb`
@@ -88,6 +101,65 @@ test('maintenance-worker startup migrates DuckDB before judgment health queries 
       retainedOutbox: 0,
       staleImport: 0,
     })
+  } finally {
+    await stopServer(server)
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+  }
+})
+
+test('maintenance-worker startup migrates pre-cutover user config naming', async () => {
+  const apiPort = 34990
+  const duckdbPath = `/tmp/f1-index-startup-user-config-cutover-${Date.now()}.duckdb`
+  const envValues = {
+    API_SERVER_PORT: String(apiPort),
+    DUCKDB_PATH: duckdbPath,
+    RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+    RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+    SERVER_ROLE: 'maintenance-worker',
+    VITE_PORT: '4310',
+  }
+
+  runStartupCommand(['bun', 'src/db/migrateDuckdb.ts'], envValues, 'Failed to prepare migrated DuckDB test database')
+  runStartupCommand(
+    [
+      'duckdb',
+      duckdbPath,
+      `
+        SET memory_limit = '20GB';
+        ALTER TABLE app.user_config RENAME COLUMN maintenance_worker_duckdb_memory_limit TO background_writer_duckdb_memory_limit;
+        DELETE FROM app_schema_migration WHERE name = '0044_maintenanceWorkerUserConfigNaming.sql';
+        INSERT INTO app.user_config (
+          id,
+          name,
+          email,
+          role,
+          background_writer_duckdb_memory_limit,
+          project_mart_large_rebuild_tuning_mode
+        )
+        VALUES ('local-user', 'Local User', 'local@example.com', NULL, '12GB', 'automatic');
+      `,
+    ],
+    envValues,
+    'Failed to prepare pre-cutover user config test database',
+  )
+
+  const server = startServer(envValues)
+
+  try {
+    await waitForServer(apiPort, 10_000)
+
+    const response = await fetch(`http://127.0.0.1:${apiPort}/api/users`, {signal: AbortSignal.timeout(5_000)})
+    const body = (await response.json()) as {
+      data: Array<{backgroundWriterDuckdbMemoryLimit?: string; maintenanceWorkerDuckdbMemoryLimit?: string}>
+    }
+    const [user] = body.data
+
+    expect(response.ok).toBe(true)
+    expect(user?.maintenanceWorkerDuckdbMemoryLimit).toBe('12GB')
+    expect(user?.backgroundWriterDuckdbMemoryLimit).toBeUndefined()
   } finally {
     await stopServer(server)
     removeFileIfExists(duckdbPath)

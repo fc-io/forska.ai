@@ -13,7 +13,7 @@ type ProjectMartLargeRebuildHeartbeatFieldSources = {
 }
 type ProjectMartLargeRebuildAutomaticProfile = 'large' | 'medium' | 'small'
 type StoredProjectMartLargeRebuildSettings = {
-  backgroundWriterDuckdbMemoryLimit: string | null
+  maintenanceWorkerDuckdbMemoryLimit: string | null
   batchSize: number | null
   maxCyclesPerWake: number | null
   pollIntervalMs: number | null
@@ -36,7 +36,7 @@ export type ProjectMartLargeRebuildHeartbeatConfig = {
   pollIntervalMs: number
   sources: ProjectMartLargeRebuildHeartbeatFieldSources
   stored: {
-    backgroundWriterDuckdbMemoryLimit: string | null
+    maintenanceWorkerDuckdbMemoryLimit: string | null
     batchSize: number | null
     maxCyclesPerWake: number | null
     pollIntervalMs: number | null
@@ -56,14 +56,14 @@ const getPositiveInteger = (value: number | string | null | undefined) => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null
 }
 
-const getResolvedBackgroundWriterDuckdbMemoryLimit = ({
+const getResolvedMaintenanceWorkerDuckdbMemoryLimit = ({
   envValues,
   storedSettings,
 }: {
   envValues: Record<string, string | undefined>
   storedSettings: StoredProjectMartLargeRebuildSettings
 }) => {
-  const storedValue = storedSettings.backgroundWriterDuckdbMemoryLimit?.trim()
+  const storedValue = storedSettings.maintenanceWorkerDuckdbMemoryLimit?.trim()
 
   return storedValue && storedValue.length > 0 ? storedValue : (envValues.DUCKDB_MEMORY_LIMIT ?? null)
 }
@@ -95,7 +95,7 @@ const getStoredProjectMartLargeRebuildSettings = async (): Promise<StoredProject
     const userConfig = await getUserConfigQueryService().getOrCreateUserConfig()
 
     return {
-      backgroundWriterDuckdbMemoryLimit: userConfig.backgroundWriterDuckdbMemoryLimit,
+      maintenanceWorkerDuckdbMemoryLimit: userConfig.maintenanceWorkerDuckdbMemoryLimit,
       batchSize: userConfig.projectMartLargeRebuildBatchSize,
       maxCyclesPerWake: userConfig.projectMartLargeRebuildMaxCyclesPerWake,
       pollIntervalMs: userConfig.projectMartLargeRebuildPollIntervalMs,
@@ -105,7 +105,7 @@ const getStoredProjectMartLargeRebuildSettings = async (): Promise<StoredProject
     const localAppSettings = readLocalAppSettings()
 
     return {
-      backgroundWriterDuckdbMemoryLimit: localAppSettings.backgroundWriterDuckdbMemoryLimit,
+      maintenanceWorkerDuckdbMemoryLimit: localAppSettings.maintenanceWorkerDuckdbMemoryLimit,
       batchSize: localAppSettings.projectMartLargeRebuildBatchSize,
       maxCyclesPerWake: localAppSettings.projectMartLargeRebuildMaxCyclesPerWake,
       pollIntervalMs: localAppSettings.projectMartLargeRebuildPollIntervalMs,
@@ -130,18 +130,18 @@ const getActiveLargeRebuildProjectCount = async () => {
 
 export const getAutomaticProjectMartLargeRebuildHeartbeatConfig = ({
   activeLargeRebuildProjectCount,
-  backgroundWriterDuckdbMemoryLimit = null,
+  maintenanceWorkerDuckdbMemoryLimit = null,
   totalMemoryBytes = totalmem(),
 }: {
   activeLargeRebuildProjectCount: number
-  backgroundWriterDuckdbMemoryLimit?: string | null
+  maintenanceWorkerDuckdbMemoryLimit?: string | null
   totalMemoryBytes?: number
 }): ProjectMartLargeRebuildAutomaticHeartbeatConfig => {
-  const workerDuckdbMemoryLimitMiB = parseDuckdbMemoryLimitToMiB(backgroundWriterDuckdbMemoryLimit)
+  const maintenanceWorkerDuckdbMemoryLimitMiB = parseDuckdbMemoryLimitToMiB(maintenanceWorkerDuckdbMemoryLimit)
   const effectiveTotalMemoryBytes =
-    workerDuckdbMemoryLimitMiB === null
+    maintenanceWorkerDuckdbMemoryLimitMiB === null
       ? totalMemoryBytes
-      : Math.min(totalMemoryBytes, workerDuckdbMemoryLimitMiB * mebibyte)
+      : Math.min(totalMemoryBytes, maintenanceWorkerDuckdbMemoryLimitMiB * mebibyte)
   const totalMemoryGb = Math.max(1, Math.floor(effectiveTotalMemoryBytes / gibibyte))
   const activeRebuildCount = Math.max(activeLargeRebuildProjectCount, 0)
 
@@ -188,10 +188,10 @@ export const resolveProjectMartLargeRebuildHeartbeatConfig = ({
   storedSettings: StoredProjectMartLargeRebuildSettings
   totalMemoryBytes?: number
 }): ProjectMartLargeRebuildHeartbeatConfig => {
-  const backgroundWriterDuckdbMemoryLimit = getResolvedBackgroundWriterDuckdbMemoryLimit({envValues, storedSettings})
+  const maintenanceWorkerDuckdbMemoryLimit = getResolvedMaintenanceWorkerDuckdbMemoryLimit({envValues, storedSettings})
   const automatic = getAutomaticProjectMartLargeRebuildHeartbeatConfig({
     activeLargeRebuildProjectCount,
-    backgroundWriterDuckdbMemoryLimit,
+    maintenanceWorkerDuckdbMemoryLimit,
     totalMemoryBytes,
   })
   const useManualValue = storedSettings.tuningMode === 'manual'
@@ -225,7 +225,7 @@ export const resolveProjectMartLargeRebuildHeartbeatConfig = ({
       pollIntervalMs: pollIntervalMs.source,
     },
     stored: {
-      backgroundWriterDuckdbMemoryLimit: storedSettings.backgroundWriterDuckdbMemoryLimit,
+      maintenanceWorkerDuckdbMemoryLimit: storedSettings.maintenanceWorkerDuckdbMemoryLimit,
       batchSize: storedSettings.batchSize,
       maxCyclesPerWake: storedSettings.maxCyclesPerWake,
       pollIntervalMs: storedSettings.pollIntervalMs,

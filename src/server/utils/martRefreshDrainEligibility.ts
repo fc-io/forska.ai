@@ -1,11 +1,14 @@
 import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 
-const lowMemoryMartRefreshWorkerDuckdbLimitMiB = 6400
+const lowMemoryMartRefreshMaintenanceWorkerDuckdbLimitMiB = 6400
 
 export const shouldRunMartRefreshDrainForDuckdbMemoryLimit = (duckdbMemoryLimit: string | undefined) => {
-  const workerDuckdbMemoryLimitMiB = parseDuckdbMemoryLimitToMiB(duckdbMemoryLimit)
+  const maintenanceWorkerDuckdbMemoryLimitMiB = parseDuckdbMemoryLimitToMiB(duckdbMemoryLimit)
 
-  return workerDuckdbMemoryLimitMiB === null || workerDuckdbMemoryLimitMiB > lowMemoryMartRefreshWorkerDuckdbLimitMiB
+  return (
+    maintenanceWorkerDuckdbMemoryLimitMiB === null
+    || maintenanceWorkerDuckdbMemoryLimitMiB > lowMemoryMartRefreshMaintenanceWorkerDuckdbLimitMiB
+  )
 }
 
 export const shouldCurrentRuntimeRunMartRefreshDrain = () => {

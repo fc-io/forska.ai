@@ -7,7 +7,7 @@ import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getDateValue, getSqlLiteral} from './appQueryHelpers.ts'
 
 type UserConfigRow = {
-  backgroundWriterDuckdbMemoryLimit: string | null
+  maintenanceWorkerDuckdbMemoryLimit: string | null
   id: string
   name: string
   email: string
@@ -36,7 +36,7 @@ const userConfigSelectClause = `
   name,
   email,
   role,
-  background_writer_duckdb_memory_limit AS backgroundWriterDuckdbMemoryLimit,
+  maintenance_worker_duckdb_memory_limit AS maintenanceWorkerDuckdbMemoryLimit,
   full_text_conversion_model_id AS fullTextConversionModelId,
   project_mart_large_rebuild_batch_size AS projectMartLargeRebuildBatchSize,
   project_mart_large_rebuild_max_cycles_per_wake AS projectMartLargeRebuildMaxCyclesPerWake,
@@ -72,7 +72,7 @@ const getProjectMartLargeRebuildTuningMode = (
 const hasStoredProjectMartLargeRebuildSettings = (
   userConfig: Pick<
     UserRecord,
-    | 'backgroundWriterDuckdbMemoryLimit'
+    | 'maintenanceWorkerDuckdbMemoryLimit'
     | 'projectMartLargeRebuildBatchSize'
     | 'projectMartLargeRebuildMaxCyclesPerWake'
     | 'projectMartLargeRebuildPollIntervalMs'
@@ -80,7 +80,7 @@ const hasStoredProjectMartLargeRebuildSettings = (
   >,
 ) => {
   return (
-    userConfig.backgroundWriterDuckdbMemoryLimit !== null
+    userConfig.maintenanceWorkerDuckdbMemoryLimit !== null
     || userConfig.projectMartLargeRebuildBatchSize !== null
     || userConfig.projectMartLargeRebuildMaxCyclesPerWake !== null
     || userConfig.projectMartLargeRebuildPollIntervalMs !== null
@@ -92,7 +92,7 @@ const getDefaultUserRecord = (): UserRecord => {
   const now = new Date()
 
   return {
-    backgroundWriterDuckdbMemoryLimit: null,
+    maintenanceWorkerDuckdbMemoryLimit: null,
     id: localUserDefaults.id,
     name: localUserDefaults.name,
     email: localUserDefaults.email,
@@ -110,7 +110,7 @@ const getDefaultUserRecord = (): UserRecord => {
 
 const getUserConfigValue = (row: UserConfigRow): UserRecord => {
   return {
-    backgroundWriterDuckdbMemoryLimit: getNullableTrimmedValue(row.backgroundWriterDuckdbMemoryLimit),
+    maintenanceWorkerDuckdbMemoryLimit: getNullableTrimmedValue(row.maintenanceWorkerDuckdbMemoryLimit),
     id: row.id,
     name: row.name,
     email: row.email,
@@ -143,7 +143,7 @@ const insertDefaultUserConfig = async (): Promise<UserRecord | null> => {
       name,
       email,
       role,
-      background_writer_duckdb_memory_limit,
+      maintenance_worker_duckdb_memory_limit,
       full_text_conversion_model_id,
       project_mart_large_rebuild_batch_size,
       project_mart_large_rebuild_max_cycles_per_wake,
@@ -173,34 +173,34 @@ const insertDefaultUserConfig = async (): Promise<UserRecord | null> => {
   return row ? getUserConfigValue(row) : null
 }
 
-const syncLegacyProjectMartLargeRebuildSettings = async (userConfig: UserRecord): Promise<UserRecord> => {
+const syncLocalProjectMartLargeRebuildSettings = async (userConfig: UserRecord): Promise<UserRecord> => {
   if (hasStoredProjectMartLargeRebuildSettings(userConfig)) {
     return userConfig
   }
 
-  const legacySettings = readLocalAppSettings()
-  const hasLegacySettings = hasStoredProjectMartLargeRebuildSettings({
-    backgroundWriterDuckdbMemoryLimit: legacySettings.backgroundWriterDuckdbMemoryLimit,
-    projectMartLargeRebuildBatchSize: legacySettings.projectMartLargeRebuildBatchSize,
-    projectMartLargeRebuildMaxCyclesPerWake: legacySettings.projectMartLargeRebuildMaxCyclesPerWake,
-    projectMartLargeRebuildPollIntervalMs: legacySettings.projectMartLargeRebuildPollIntervalMs,
-    projectMartLargeRebuildTuningMode: legacySettings.projectMartLargeRebuildTuningMode,
+  const localSettings = readLocalAppSettings()
+  const hasLocalSettings = hasStoredProjectMartLargeRebuildSettings({
+    maintenanceWorkerDuckdbMemoryLimit: localSettings.maintenanceWorkerDuckdbMemoryLimit,
+    projectMartLargeRebuildBatchSize: localSettings.projectMartLargeRebuildBatchSize,
+    projectMartLargeRebuildMaxCyclesPerWake: localSettings.projectMartLargeRebuildMaxCyclesPerWake,
+    projectMartLargeRebuildPollIntervalMs: localSettings.projectMartLargeRebuildPollIntervalMs,
+    projectMartLargeRebuildTuningMode: localSettings.projectMartLargeRebuildTuningMode,
   })
 
-  if (!hasLegacySettings) {
+  if (!hasLocalSettings) {
     return userConfig
   }
 
   return updateUserConfigRow({
-    backgroundWriterDuckdbMemoryLimit: legacySettings.backgroundWriterDuckdbMemoryLimit,
+    maintenanceWorkerDuckdbMemoryLimit: localSettings.maintenanceWorkerDuckdbMemoryLimit,
     current: userConfig,
     email: userConfig.email,
     fullTextConversionModelId: userConfig.fullTextConversionModelId,
     name: userConfig.name,
-    projectMartLargeRebuildBatchSize: legacySettings.projectMartLargeRebuildBatchSize,
-    projectMartLargeRebuildMaxCyclesPerWake: legacySettings.projectMartLargeRebuildMaxCyclesPerWake,
-    projectMartLargeRebuildPollIntervalMs: legacySettings.projectMartLargeRebuildPollIntervalMs,
-    projectMartLargeRebuildTuningMode: legacySettings.projectMartLargeRebuildTuningMode,
+    projectMartLargeRebuildBatchSize: localSettings.projectMartLargeRebuildBatchSize,
+    projectMartLargeRebuildMaxCyclesPerWake: localSettings.projectMartLargeRebuildMaxCyclesPerWake,
+    projectMartLargeRebuildPollIntervalMs: localSettings.projectMartLargeRebuildPollIntervalMs,
+    projectMartLargeRebuildTuningMode: localSettings.projectMartLargeRebuildTuningMode,
     unpaywallEmail: userConfig.unpaywallEmail,
   })
 }
@@ -210,7 +210,7 @@ const getOrCreateUserConfig = async (): Promise<UserRecord> => {
   const inserted = existing ? null : await insertDefaultUserConfig()
   const loaded = existing ?? inserted ?? (await getUserConfig())
 
-  return loaded ? syncLegacyProjectMartLargeRebuildSettings(loaded) : getDefaultUserRecord()
+  return loaded ? syncLocalProjectMartLargeRebuildSettings(loaded) : getDefaultUserRecord()
 }
 
 const getValidatedFullTextConversionModelId = async (value: string | null | undefined): Promise<string | null> => {
@@ -239,7 +239,7 @@ const getValidatedFullTextConversionModelId = async (value: string | null | unde
 }
 
 const updateUserConfigRow = async ({
-  backgroundWriterDuckdbMemoryLimit,
+  maintenanceWorkerDuckdbMemoryLimit,
   current,
   email,
   fullTextConversionModelId,
@@ -250,7 +250,7 @@ const updateUserConfigRow = async ({
   projectMartLargeRebuildTuningMode,
   unpaywallEmail,
 }: {
-  backgroundWriterDuckdbMemoryLimit: string | null
+  maintenanceWorkerDuckdbMemoryLimit: string | null
   current: UserRecord
   email: string
   fullTextConversionModelId: string | null
@@ -267,7 +267,7 @@ const updateUserConfigRow = async ({
     UPDATE app.user_config
     SET name = ${getSqlLiteral(getValueOrFallback(name, current.name))},
         email = ${getSqlLiteral(getValueOrFallback(email, current.email))},
-        background_writer_duckdb_memory_limit = ${getSqlLiteral(getNullableTrimmedValue(backgroundWriterDuckdbMemoryLimit))},
+        maintenance_worker_duckdb_memory_limit = ${getSqlLiteral(getNullableTrimmedValue(maintenanceWorkerDuckdbMemoryLimit))},
         full_text_conversion_model_id = ${getSqlLiteral(validatedFullTextConversionModelId)},
         project_mart_large_rebuild_batch_size = ${getSqlLiteral(getNullablePositiveInteger(projectMartLargeRebuildBatchSize))},
         project_mart_large_rebuild_max_cycles_per_wake = ${getSqlLiteral(getNullablePositiveInteger(projectMartLargeRebuildMaxCyclesPerWake))},
@@ -283,7 +283,7 @@ const updateUserConfigRow = async ({
 }
 
 const updateUserConfig = async ({
-  backgroundWriterDuckdbMemoryLimit,
+  maintenanceWorkerDuckdbMemoryLimit,
   email,
   fullTextConversionModelId,
   name,
@@ -293,7 +293,7 @@ const updateUserConfig = async ({
   projectMartLargeRebuildTuningMode,
   unpaywallEmail,
 }: {
-  backgroundWriterDuckdbMemoryLimit: string | null
+  maintenanceWorkerDuckdbMemoryLimit: string | null
   email: string
   fullTextConversionModelId: string | null
   name: string
@@ -306,7 +306,7 @@ const updateUserConfig = async ({
   const current = await getOrCreateUserConfig()
 
   return updateUserConfigRow({
-    backgroundWriterDuckdbMemoryLimit,
+    maintenanceWorkerDuckdbMemoryLimit,
     current,
     email,
     fullTextConversionModelId,
