@@ -1,8 +1,9 @@
 import {getAppDatabaseService, type JudgmentInsertRow} from '../../services/appDatabaseService.ts'
-import {getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getProjectMartRefreshStateService} from '../../services/projectMartRefreshStateService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getImportableJudgmentJobWhereSql} from './judgmentJobImportScope.ts'
+import {getJudgmentJobSqliteJobIds} from './judgmentJobPaths.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
 import {
   getJudgmentJobSqliteService,
@@ -190,19 +191,28 @@ const getExistingIds = async (
 ): Promise<Set<string>> => {
   const uniqueIds = getUniqueValues(ids)
 
-  return uniqueIds.length === 0
-    ? new Set()
-    : new Set(
-        (
-          await getAppDatabaseService().queryJson<{id: string}>(`
-          SELECT id
-          FROM ${tableName}
-          WHERE id IN (${getQuotedStringList(uniqueIds).join(', ')})
-        `)
-        ).map((row) => {
-          return row.id
-        }),
-      )
+  if (uniqueIds.length === 0) {
+    return new Set()
+  }
+
+  const rows = await Promise.all(
+    uniqueIds.map(async (id) => {
+      const [row] = await getAppDatabaseService().queryJson<{id: string}>(`
+        SELECT id
+        FROM ${tableName}
+        WHERE id = ${getSqlLiteral(id)}
+        LIMIT 1
+      `)
+
+      return row?.id ?? null
+    }),
+  )
+
+  return new Set(
+    rows.filter((id): id is string => {
+      return id !== null
+    }),
+  )
 }
 
 const getExistingForeignKeys = async (entries: JudgmentJobSqliteOutboxEntry[]): Promise<JudgmentOutboxForeignKeys> => {
@@ -317,15 +327,37 @@ const getImportCandidateJobIds = async (jobId?: string) => {
     return [jobId]
   }
 
-  const rows = await getAppDatabaseService().queryJson<{id: string}>(`
-    SELECT id
-    FROM app.judgment_job
-    WHERE ${getImportableJudgmentJobWhereSql()}
-    ORDER BY id ASC
-  `)
+  const trackedJobIds = getJudgmentJobSqliteJobIds().sort()
 
-  return rows.map((row) => {
-    return row.id
+  if (trackedJobIds.length === 0) {
+    const rows = await getAppDatabaseService().queryJson<{id: string}>(`
+      SELECT id
+      FROM app.judgment_job
+      WHERE (${getImportableJudgmentJobWhereSql()})
+      ORDER BY id ASC
+    `)
+
+    return rows.map((row) => {
+      return row.id
+    })
+  }
+
+  const rows = await Promise.all(
+    trackedJobIds.map(async (trackedJobId) => {
+      const [row] = await getAppDatabaseService().queryJson<{id: string}>(`
+        SELECT id
+        FROM app.judgment_job
+        WHERE id = ${getSqlLiteral(trackedJobId)}
+          AND (${getImportableJudgmentJobWhereSql()})
+        LIMIT 1
+      `)
+
+      return row?.id ?? null
+    }),
+  )
+
+  return rows.filter((trackedJobId): trackedJobId is string => {
+    return trackedJobId !== null
   })
 }
 

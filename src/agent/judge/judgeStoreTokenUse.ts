@@ -1,5 +1,6 @@
 import {markJudgmentRequestsPersisted} from '../../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {getTokenUseQueryService} from '../../server/services/tokenUseQueryService.ts'
+import {parseDuckdbMemoryLimitToMiB} from '../../server/utils/duckdbMemoryLimit.ts'
 import {inferenceRuntimeConfig} from '../../server/utils/getInferenceRuntimeConfig.ts'
 import {apiClient} from '../../services/apiClient.ts'
 
@@ -103,6 +104,17 @@ type TokenUseTotals = {
 
 const isServerEnvironment = (): boolean => {
   return typeof window === 'undefined' || typeof Bun !== 'undefined'
+}
+
+const shouldSkipTokenUsePersistence = () => {
+  const serverRole = String(process.env.SERVER_ROLE ?? '').trim()
+  const workerDuckdbMemoryLimitMiB = parseDuckdbMemoryLimitToMiB(process.env.DUCKDB_MEMORY_LIMIT)
+
+  return (
+    (serverRole === 'worker' || serverRole === 'writer')
+    && workerDuckdbMemoryLimitMiB !== null
+    && workerDuckdbMemoryLimitMiB <= 6400
+  )
 }
 
 const getStoredModelName = (tokenUseEntries: JudgeTokenUsageEntry[]): string | null => {
@@ -401,9 +413,9 @@ export const judgeStoreTokenUse = async (
 ): Promise<void> => {
   const totalTokenUse = buildTokenUseTotals(tokenUseEntries)
 
-  if (isServerEnvironment()) {
+  if (isServerEnvironment() && !shouldSkipTokenUsePersistence()) {
     await storeTokenUseDirectly(totalTokenUse, null, {startedAt, finishedAt, duration}, judgmentsJobId)
-  } else {
+  } else if (!isServerEnvironment()) {
     await storeTokenUseViaAPI(totalTokenUse, judgmentsJobId, {startedAt, finishedAt, duration})
   }
 

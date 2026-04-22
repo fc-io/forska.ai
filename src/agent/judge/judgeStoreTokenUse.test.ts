@@ -2,6 +2,17 @@ import {expect, mock, test} from 'bun:test'
 
 const envModulePath = new URL('../../server/utils/env.ts', import.meta.url).pathname
 const apiClientModulePath = new URL('../../services/apiClient.ts', import.meta.url).pathname
+const judgmentsRequestRuntimeModulePath = new URL(
+  '../../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts',
+  import.meta.url,
+).pathname
+const tokenUseQueryServiceModulePath = new URL('../../server/services/tokenUseQueryService.ts', import.meta.url)
+  .pathname
+
+const markJudgmentRequestsPersisted = mock(() => {})
+const insertTokenUse = mock(async () => {
+  return {id: 'token-use-1'}
+})
 
 void mock.module(envModulePath, () => {
   const mockedEnv = {
@@ -38,6 +49,18 @@ void mock.module(apiClientModulePath, () => {
           },
         },
       },
+    },
+  }
+})
+
+void mock.module(judgmentsRequestRuntimeModulePath, () => {
+  return {markJudgmentRequestsPersisted}
+})
+
+void mock.module(tokenUseQueryServiceModulePath, () => {
+  return {
+    getTokenUseQueryService: () => {
+      return {insertTokenUse}
     },
   }
 })
@@ -113,4 +136,42 @@ test('buildTokenUseTotals labels queue-retried recoverable failures as retry', (
   expect(totals.failedRequestsDetails).toHaveLength(1)
   expect(totals.failedRequestsDetails[0]?.failureType).toBe('retry')
   expect(totals.failedRequestsDetails[0]?.failedAttempts).toBe(2)
+})
+
+test('judgeStoreTokenUse skips low-memory worker persistence but clears pending persisted attempts', async () => {
+  const previousServerRole = process.env.SERVER_ROLE
+  const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
+
+  process.env.SERVER_ROLE = 'worker'
+  process.env.DUCKDB_MEMORY_LIMIT = '6400MiB'
+  insertTokenUse.mockClear()
+  markJudgmentRequestsPersisted.mockClear()
+
+  try {
+    const {judgeStoreTokenUse} = (await import(
+      `./judgeStoreTokenUse.ts?skip-token-use=${Date.now()}`
+    )) as typeof import('./judgeStoreTokenUse.ts')
+
+    await judgeStoreTokenUse(
+      [buildEntry({outcome: 'success', error: null})],
+      null,
+      {duration: 1000, finishedAt: '2026-04-21T12:00:01.000Z', startedAt: '2026-04-21T12:00:00.000Z'},
+      'job-1',
+    )
+
+    expect(insertTokenUse).not.toHaveBeenCalled()
+    expect(markJudgmentRequestsPersisted).toHaveBeenCalledWith('job-1', 1)
+  } finally {
+    if (previousServerRole === undefined) {
+      delete process.env.SERVER_ROLE
+    } else {
+      process.env.SERVER_ROLE = previousServerRole
+    }
+
+    if (previousDuckdbMemoryLimit === undefined) {
+      delete process.env.DUCKDB_MEMORY_LIMIT
+    } else {
+      process.env.DUCKDB_MEMORY_LIMIT = previousDuckdbMemoryLimit
+    }
+  }
 })

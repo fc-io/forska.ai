@@ -3066,7 +3066,7 @@ export const getUnassessedArticlesFromDuckdb = async (
 const getCandidateArticlesLimit = (numberOfPromptsToGet: number) => {
   const requested = Math.max(1, Math.trunc(numberOfPromptsToGet))
   const scaled = requested * 5
-  return Math.min(20_000, Math.max(2_000, scaled))
+  return Math.min(20_000, Math.max(100, scaled))
 }
 
 export const getUnassessedPairsFromDuckdb = async (params: UnassessedPairsParams): Promise<UnassessedPairsResult> => {

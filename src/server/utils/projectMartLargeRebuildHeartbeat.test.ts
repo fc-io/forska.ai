@@ -238,3 +238,52 @@ test('projectMartLargeRebuildHeartbeat resolves machine-aware automatic config f
     sources: {batchSize: 'automatic', maxCyclesPerWake: 'automatic', pollIntervalMs: 'automatic'},
   })
 })
+
+test('projectMartLargeRebuildHeartbeat falls back to the worker duckdb memory limit when stored tuning memory is unset', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const tuningModulePath = getModulePath('./src/server/utils/projectMartLargeRebuildTuning.ts')
+        const {resolveProjectMartLargeRebuildHeartbeatConfig} = await import(tuningModulePath + '?heartbeat=' + Date.now())
+        console.log(JSON.stringify({config: resolveProjectMartLargeRebuildHeartbeatConfig({
+          activeLargeRebuildProjectCount: 1,
+          envValues: {DUCKDB_MEMORY_LIMIT: '6400MiB'},
+          storedSettings: {
+            backgroundWriterDuckdbMemoryLimit: null,
+            batchSize: null,
+            maxCyclesPerWake: null,
+            pollIntervalMs: null,
+            tuningMode: 'automatic',
+          },
+          totalMemoryBytes: 64 * 1024 ** 3,
+        })}))
+      `,
+    ],
+    {cwd: process.cwd(), env: process.env},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'projectMartLargeRebuildHeartbeat worker memory fallback test failed',
+    )
+  }
+
+  const result = parseCallsResult(getLastJsonLine(runScript.stdout.toString()))
+
+  expect(result.config).toMatchObject({
+    automatic: {batchSize: 512, maxCyclesPerWake: 4, pollIntervalMs: 1000},
+    batchSize: 512,
+    maxCyclesPerWake: 4,
+    pollIntervalMs: 1000,
+    sources: {batchSize: 'automatic', maxCyclesPerWake: 'automatic', pollIntervalMs: 'automatic'},
+    stored: {backgroundWriterDuckdbMemoryLimit: null},
+  })
+})

@@ -935,56 +935,81 @@ const getExistingOutboxJobIds = (jobId?: string) => {
 }
 
 const getTrackedJudgmentJobIds = async (jobId?: string) => {
-  return jobId
-    ? getExistingOutboxJobIds(jobId)
-    : (
-        await getAppDatabaseService().queryJson<{id: string}>(`
-          SELECT id
-          FROM app.judgment_job
-          ORDER BY created_at ASC, id ASC
-        `)
-      )
-        .map((row) => {
-          return row.id
-        })
-        .filter((trackedJobId) => {
-          return existsSync(getJudgmentJobSqlitePath(trackedJobId))
-        })
+  return [...getExistingOutboxJobIds(jobId)].sort()
 }
 
 const getTrackedJudgmentJobIdsForProject = async (projectId: string) => {
-  return (
-    await getAppDatabaseService().queryJson<{id: string}>(`
-      SELECT id
-      FROM app.judgment_job
-      WHERE project_id = ${getSqlLiteral(projectId)}
-      ORDER BY created_at ASC, id ASC
-    `)
+  const trackedJobIds = getExistingOutboxJobIds().sort()
+
+  if (trackedJobIds.length === 0) {
+    return []
+  }
+
+  const rows = await Promise.all(
+    trackedJobIds.map(async (trackedJobId) => {
+      const [row] = await getAppDatabaseService().queryJson<{id: string}>(`
+        SELECT id
+        FROM app.judgment_job
+        WHERE id = ${getSqlLiteral(trackedJobId)}
+          AND project_id = ${getSqlLiteral(projectId)}
+        LIMIT 1
+      `)
+
+      return row?.id ?? null
+    }),
   )
-    .map((row) => {
-      return row.id
-    })
-    .filter((jobId) => {
-      return existsSync(getJudgmentJobSqlitePath(jobId))
-    })
+
+  return rows.filter((trackedJobId): trackedJobId is string => {
+    return trackedJobId !== null
+  })
 }
 
 const getTrackedProjectRefreshAckStates = async (projectId?: string) => {
-  const projectFilter = projectId ? `pmrs.project_id = ${getSqlLiteral(projectId)}` : 'TRUE'
+  const trackedJobIds = getExistingOutboxJobIds().sort()
 
-  return getAppDatabaseService().queryJson<ProjectRefreshAckStateRow>(`
-    SELECT
-      pmrs.project_id AS projectId,
-      CAST(pmrs.last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken
-    FROM app.project_mart_refresh_state pmrs
-    WHERE ${projectFilter}
-      AND EXISTS (
-        SELECT 1
-        FROM app.judgment_job jj
-        WHERE jj.project_id = pmrs.project_id
-      )
-    ORDER BY pmrs.project_id ASC
-  `)
+  if (trackedJobIds.length === 0) {
+    return []
+  }
+
+  const trackedProjectIds = Array.from(
+    new Set(
+      (
+        await Promise.all(
+          trackedJobIds.map(async (trackedJobId) => {
+            const [row] = await getAppDatabaseService().queryJson<{projectId: string}>(`
+              SELECT project_id AS projectId
+              FROM app.judgment_job
+              WHERE id = ${getSqlLiteral(trackedJobId)}
+              LIMIT 1
+            `)
+
+            return row?.projectId ?? null
+          }),
+        )
+      ).filter((trackedProjectId): trackedProjectId is string => {
+        return trackedProjectId !== null && (projectId === undefined || trackedProjectId === projectId)
+      }),
+    ),
+  )
+
+  const rows = await Promise.all(
+    trackedProjectIds.map(async (trackedProjectId) => {
+      const [row] = await getAppDatabaseService().queryJson<ProjectRefreshAckStateRow>(`
+        SELECT
+          project_id AS projectId,
+          CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken
+        FROM app.project_mart_refresh_state
+        WHERE project_id = ${getSqlLiteral(trackedProjectId)}
+        LIMIT 1
+      `)
+
+      return row ?? null
+    }),
+  )
+
+  return rows.filter((row): row is ProjectRefreshAckStateRow => {
+    return row !== null
+  })
 }
 
 const publishProjectRefreshAckForJobIds = async ({ackToken, jobIds}: {ackToken: number | null; jobIds: string[]}) => {

@@ -188,7 +188,7 @@ test('returns idle when no large rebuild work is claimable', async () => {
   const runtimeMetrics = getProjectMartLargeRebuildRuntimeMetrics()
 
   expect(result).toEqual({projectId: null, status: 'idle', workerId: 'worker-1'})
-  expect(context.callLog).toEqual(['clearArchived', 'claim'])
+  expect(context.callLog).toEqual(['claim'])
   expect(runtimeMetrics.totals.cyclesIdle).toBe(1)
   expect(runtimeMetrics.recentCycles).toHaveLength(1)
   expect(runtimeMetrics.recentCycles[0]).toMatchObject({
@@ -246,7 +246,6 @@ test('runs one prompt_answer_fact batch and advances the cursor', async () => {
     workerId: 'worker-1',
   })
   expect(context.callLog).toEqual([
-    'clearArchived',
     'claim',
     'state:project-1',
     'reset:project-1',
@@ -296,7 +295,6 @@ test('transitions from prompt_answer_fact to review_answer_dictionary when no ro
     workerId: 'worker-1',
   })
   expect(context.callLog).toEqual([
-    'clearArchived',
     'claim',
     'state:project-1',
     'batch:project-1',
@@ -333,7 +331,6 @@ test('transitions from review_answer_dictionary to review_article_filter_member'
     workerId: 'worker-1',
   })
   expect(context.callLog).toEqual([
-    'clearArchived',
     'claim',
     'dictionary:reset:project-1',
     'dictionary:rebuild:project-1',
@@ -362,7 +359,6 @@ test('transitions through filter_member rollup and serving to completion', async
   const filterResult = await runProjectMartLargeRebuildCycle({workerId: 'worker-1'}, filterContext.dependencies)
   expect(filterResult.status).toBe('progressed')
   expect(filterContext.callLog).toEqual([
-    'clearArchived',
     'claim',
     'state:project-1',
     'serving:setup:project-1',
@@ -390,7 +386,6 @@ test('transitions through filter_member rollup and serving to completion', async
   const rollupResult = await runProjectMartLargeRebuildCycle({workerId: 'worker-1'}, rollupContext.dependencies)
   expect(rollupResult.status).toBe('progressed')
   expect(rollupContext.callLog).toEqual([
-    'clearArchived',
     'claim',
     'state:project-1',
     'rollup:reset:project-1',
@@ -418,7 +413,6 @@ test('transitions through filter_member rollup and serving to completion', async
   const servingResult = await runProjectMartLargeRebuildCycle({workerId: 'worker-1'}, servingContext.dependencies)
   expect(servingResult).toEqual({projectId: 'project-1', status: 'completed', workerId: 'worker-1'})
   expect(servingContext.callLog).toEqual([
-    'clearArchived',
     'claim',
     'state:project-1',
     'batch:project-1',

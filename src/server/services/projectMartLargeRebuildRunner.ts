@@ -433,7 +433,6 @@ export const runProjectMartLargeRebuildCycle = async (
   const startedAtMs = Date.now()
   const startedAt = new Date(startedAtMs).toISOString()
   const startedQueueMetrics = getDuckdbQueueRuntimeMetricsSnapshot()
-  await dependencies.largeRebuildStateService.clearArchivedLargeRebuildStates()
 
   const [claim] = await dependencies.largeRebuildStateService.claimLargeRebuilds({
     leaseMs: options.leaseMs ?? defaultLeaseMs,

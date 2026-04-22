@@ -273,8 +273,6 @@ export const runProjectMartRefreshWorkerCycle = async (
 ): Promise<ProjectMartRefreshWorkerCycleResult> => {
   const workerId = options.workerId ?? getProjectMartRefreshWorkerId()
 
-  await dependencies.stateService.clearArchivedProjectRefreshStates({now: options.now})
-  await dependencies.largeRebuildStateService.clearArchivedLargeRebuildStates()
   await dependencies.sqliteService.reconcileProjectRefreshAcks()
 
   const claim = await getClaimedProject(dependencies, {...options, workerId})
@@ -303,6 +301,24 @@ export const runProjectMartRefreshWorkerCycle = async (
       dirtyArticleCount: dirtyArticleIds.length,
       incrementalArticleThreshold,
     })
+    const scopeArticleCount =
+      executionMode === 'full' ? await dependencies.projectInspector.getProjectScopeArticleCount(claim.projectId) : null
+
+    if (scopeArticleCount !== null && scopeArticleCount > maxFullProjectScopeArticles) {
+      await dependencies.largeRebuildStateService.queueLargeRebuild({
+        now: getWorkerNow(options.now),
+        projectId: claim.projectId,
+        rebuildPhase: 'prompt_answer_fact',
+        refreshToken: claim.claimedToken,
+      })
+      await dependencies.stateService.releaseProjectRefreshClaim({
+        now: getWorkerNow(options.now),
+        projectId: claim.projectId,
+        workerId,
+      })
+
+      return {claimedToken: claim.claimedToken, projectId: claim.projectId, status: 'completed', workerId}
+    }
 
     await dependencies.refreshService.refreshJudgmentFactsForProjectClaim({
       claimedToken: claim.claimedToken,
@@ -312,28 +328,8 @@ export const runProjectMartRefreshWorkerCycle = async (
 
     if (executionMode === 'incremental') {
       await refreshClaimArticleServingIncrementally(dirtyArticleIds, claim.projectId, dependencies.refreshService)
-    } else {
-      if (executionMode === 'full') {
-        const scopeArticleCount = await dependencies.projectInspector.getProjectScopeArticleCount(claim.projectId)
-
-        if (scopeArticleCount > maxFullProjectScopeArticles) {
-          await dependencies.largeRebuildStateService.queueLargeRebuild({
-            now: getWorkerNow(options.now),
-            projectId: claim.projectId,
-            rebuildPhase: 'prompt_answer_fact',
-            refreshToken: claim.claimedToken,
-          })
-          await dependencies.stateService.releaseProjectRefreshClaim({
-            now: getWorkerNow(options.now),
-            projectId: claim.projectId,
-            workerId,
-          })
-
-          return {claimedToken: claim.claimedToken, projectId: claim.projectId, status: 'completed', workerId}
-        }
-
-        await dependencies.refreshService.refreshProject(claim.projectId)
-      }
+    } else if (executionMode === 'full') {
+      await dependencies.refreshService.refreshProject(claim.projectId)
     }
 
     await dependencies.stateService.completeProjectRefresh({

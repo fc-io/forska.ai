@@ -875,12 +875,16 @@ const sendToLLMForJobs = async (
   }
 }
 
-export const judgmentsJobsSendToLLM = async (allJobs: RunningJudgmentJob[], serverJobId: string): Promise<void> => {
+export const judgmentsJobsSendToLLM = async (
+  allJobs: RunningJudgmentJob[],
+  serverJobId: string,
+  {filterJobs}: {filterJobs?: (jobs: RunningJudgmentJob[]) => Promise<RunningJudgmentJob[]>} = {},
+): Promise<void> => {
   if (isRunningJudgmentsJobsSendToLLM) return
   isRunningJudgmentsJobsSendToLLM = true
 
   try {
-    const sendableJobs = await requeueAndFilterRunningJobs({allJobs, serverJobId})
+    const sendableJobs = await requeueAndFilterRunningJobs({allJobs, filterJobs, serverJobId})
     const capacityBuckets = getCapacityBuckets({jobs: sendableJobs})
 
     await Promise.all(

@@ -1,6 +1,8 @@
 import {getStoredProviderModelRuntimeMatch} from '../../providers/providerRuntimeModelGuard.ts'
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
+import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
+import {getJudgmentJobSqliteJobIds} from './judgmentJobPaths.ts'
 import {filterRunningJobsBySqlitePreflight} from './judgmentJobSqlitePreflight.ts'
 
 const runningJobsLogger = createRateLimitedLogger({windowMs: 30_000})
@@ -37,8 +39,8 @@ export type RunningJudgmentJob = {
   storageState: string
 }
 
-const getRunningJobsFromDatabase = async (): Promise<RunningJudgmentJob[]> => {
-  return getAppDatabaseService().queryJson<RunningJudgmentJob>(`
+const getRunningJobFromDatabase = async (jobId: string): Promise<RunningJudgmentJob | null> => {
+  const [row] = await getAppDatabaseService().queryJson<RunningJudgmentJob>(`
     SELECT
       jj.id AS id,
       jj.project_id AS projectId,
@@ -53,12 +55,34 @@ const getRunningJobsFromDatabase = async (): Promise<RunningJudgmentJob[]> => {
     INNER JOIN app.project p ON jj.project_id = p.id
     INNER JOIN app.model m ON p.model_id = m.id
     LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
-    WHERE jj.status = 'running'
+    WHERE jj.id = ${getSqlLiteral(jobId)}
+      AND jj.status = 'running'
       AND jj.storage_state = 'active'
       AND p.archived = FALSE
       AND COALESCE(m.enabled, TRUE) = TRUE
       AND COALESCE(pc.enabled, TRUE) = TRUE
+    LIMIT 1
   `)
+
+  return row ?? null
+}
+
+const getRunningJobsFromDatabase = async (): Promise<RunningJudgmentJob[]> => {
+  const trackedJobIds = getJudgmentJobSqliteJobIds().sort()
+
+  if (trackedJobIds.length === 0) {
+    return []
+  }
+
+  const rows = await Promise.all(
+    trackedJobIds.map((jobId) => {
+      return getRunningJobFromDatabase(jobId)
+    }),
+  )
+
+  return rows.filter((row): row is RunningJudgmentJob => {
+    return row !== null
+  })
 }
 
 export const filterRunningJobsByRuntimeMatch = async (

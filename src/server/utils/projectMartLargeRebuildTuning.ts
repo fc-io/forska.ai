@@ -56,6 +56,18 @@ const getPositiveInteger = (value: number | string | null | undefined) => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : null
 }
 
+const getResolvedBackgroundWriterDuckdbMemoryLimit = ({
+  envValues,
+  storedSettings,
+}: {
+  envValues: Record<string, string | undefined>
+  storedSettings: StoredProjectMartLargeRebuildSettings
+}) => {
+  const storedValue = storedSettings.backgroundWriterDuckdbMemoryLimit?.trim()
+
+  return storedValue && storedValue.length > 0 ? storedValue : (envValues.DUCKDB_MEMORY_LIMIT ?? null)
+}
+
 const getFieldValue = ({
   automaticValue,
   envValue,
@@ -176,9 +188,10 @@ export const resolveProjectMartLargeRebuildHeartbeatConfig = ({
   storedSettings: StoredProjectMartLargeRebuildSettings
   totalMemoryBytes?: number
 }): ProjectMartLargeRebuildHeartbeatConfig => {
+  const backgroundWriterDuckdbMemoryLimit = getResolvedBackgroundWriterDuckdbMemoryLimit({envValues, storedSettings})
   const automatic = getAutomaticProjectMartLargeRebuildHeartbeatConfig({
     activeLargeRebuildProjectCount,
-    backgroundWriterDuckdbMemoryLimit: storedSettings.backgroundWriterDuckdbMemoryLimit,
+    backgroundWriterDuckdbMemoryLimit,
     totalMemoryBytes,
   })
   const useManualValue = storedSettings.tuningMode === 'manual'

@@ -1,6 +1,7 @@
 import {cron} from '@elysiajs/cron'
 import {Elysia} from 'elysia'
 
+import {parseDuckdbMemoryLimitToMiB} from '../utils/duckdbMemoryLimit.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {writeRuntimeFailureLogEvent} from '../utils/runtimeLogger.ts'
 import {isExpectedWriterRoleLossError, shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
@@ -40,10 +41,16 @@ const IMPORT_JUDGMENTS_INTERVAL = '*/1 * * * * *'
 const CHECK_LLM_STATUS = '*/30 * * * * *'
 const CLEANUP_STALE_REQUESTS = '0 */1 * * * *'
 const START_DELAY_MS = 1000
+const lowMemoryJudgmentsWorkerDuckdbLimitMiB = 6400
 
 let isAddingToQueue = false
 let addToQueueStartedAtMs: number | null = null
 let isImportingJudgments = false
+
+const shouldUseLowMemoryJudgmentsCronMode = () => {
+  const workerDuckdbMemoryLimitMiB = parseDuckdbMemoryLimitToMiB(process.env.DUCKDB_MEMORY_LIMIT)
+  return workerDuckdbMemoryLimitMiB !== null && workerDuckdbMemoryLimitMiB <= lowMemoryJudgmentsWorkerDuckdbLimitMiB
+}
 
 const runAddToQueue = async (): Promise<void> => {
   if (!shouldRunJudgingCron()) return
@@ -81,14 +88,20 @@ const sendToLLM = async (): Promise<void> => {
       }),
     )
     if (!shouldRunJudgingCron()) return
-    await judgmentsJobsSendToLLM(runningJobs, serverJobId)
+    await judgmentsJobsSendToLLM(runningJobs, serverJobId, {
+      filterJobs: shouldUseLowMemoryJudgmentsCronMode()
+        ? async (jobs: typeof runningJobs) => {
+            return jobs
+          }
+        : undefined,
+    })
   } catch (err) {
     logJudgingCronError('[cron] sendToLLM error:', err)
   }
 }
 
 const importJudgmentsCron = async (): Promise<void> => {
-  if (!shouldRunJudgingCron() || isImportingJudgments) return
+  if (!shouldRunJudgingCron() || isImportingJudgments || shouldUseLowMemoryJudgmentsCronMode()) return
 
   isImportingJudgments = true
 

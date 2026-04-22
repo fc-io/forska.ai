@@ -809,7 +809,7 @@ test('getUnassessedPairsFromDuckdb falls back to raw judgments when serving rows
   expect(result.promptEntries).toEqual([{articleId: 'article-1', promptId: 'prompt-1'}])
   expect(result.nextCursor?.lastArticleId).toBe('article-1')
   expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.article a')
-  expect(duckdbRunnerMockRef.current.queries[4]).toContain('LIMIT 1001')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('LIMIT 101')
   expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.judgment j')
   expect(duckdbRunnerMockRef.current.queries[5]).not.toContain('TO_JSON')
   expect(duckdbRunnerMockRef.current.queries[5]).not.toContain('explanation')
@@ -1957,6 +1957,7 @@ test('getUnassessedPairsFromDuckdb keeps prompt entries aligned across serving a
     numberOfPromptsToGet: 10,
     cursor: null,
   })
+  const servingQuery = duckdbRunnerMockRef.current.queries[4] ?? ''
 
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
     getPromptRows(),
@@ -1974,6 +1975,8 @@ test('getUnassessedPairsFromDuckdb keeps prompt entries aligned across serving a
   })
 
   expect(servingResult).toEqual(rawResult)
+  expect(servingQuery).toContain('LIMIT 101')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('LIMIT 101')
 })
 
 test('getUnassessedPairsFromDuckdb uses priority-aware cursor ordering for summary queue scans', async () => {

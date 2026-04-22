@@ -1,12 +1,13 @@
 import {randomUUID} from 'node:crypto'
 import {mkdirSync} from 'node:fs'
 import {access, copyFile, mkdir, rm} from 'node:fs/promises'
-import {tmpdir} from 'node:os'
+import {availableParallelism, tmpdir} from 'node:os'
 import {basename, join} from 'node:path'
 
 import {DuckDBConnection, DuckDBInstance, type DuckDBType, type DuckDBValue} from '@duckdb/node-api'
 import {Effect} from 'effect'
 
+import {parseDuckdbMemoryLimitToMiB} from './duckdbMemoryLimit.ts'
 import {getEnv} from './env.ts'
 import {ensureDuckdbPathDirectory} from './getDuckdbPath.ts'
 import {exitWithRuntimeLogFlush, writeRuntimeFailureLogEvent, writeRuntimeOperatorLogEvent} from './runtimeLogger.ts'
@@ -21,7 +22,10 @@ type DuckdbRuntimeConfig = {
   binary: string
   databasePath: string
   memoryLimit: string
+  preserveInsertionOrder: boolean
+  serializeConcurrentWork: boolean
   tempDirectory: string | null
+  threads: string
 }
 export type DuckdbSnapshot = {createdAt: string; snapshotPath: string}
 export type DuckdbAppendRuntimeMetrics = {
@@ -51,7 +55,12 @@ export type DuckdbQueueRuntimeMetrics = {
 }
 export type DuckdbBackgroundRuntimeDiagnostics = {
   configured: DuckdbRuntimeConfig
-  effective: {memoryLimit: string | null; tempDirectory: string | null}
+  effective: {
+    memoryLimit: string | null
+    preserveInsertionOrder: boolean | null
+    tempDirectory: string | null
+    threads: string | null
+  }
   instanceOptions: Record<string, string>
   queues: DuckdbQueueRuntimeMetrics
 }
@@ -183,6 +192,24 @@ const getTrimmedValue = (value: string | null | undefined) => {
   return normalized === '' ? null : normalized
 }
 
+const getDuckdbThreadCountValue = (memoryLimit: string) => {
+  const memoryLimitMiB = parseDuckdbMemoryLimitToMiB(memoryLimit)
+
+  if (memoryLimitMiB !== null && memoryLimitMiB <= 6400) {
+    return '1'
+  }
+
+  const memoryBoundThreadCount =
+    memoryLimitMiB === null || memoryLimitMiB > 8192 ? 8 : memoryLimitMiB > 4096 ? 4 : memoryLimitMiB > 2048 ? 2 : 1
+
+  return String(Math.max(1, Math.min(availableParallelism(), memoryBoundThreadCount)))
+}
+
+const shouldSerializeDuckdbConcurrentWork = (memoryLimit: string) => {
+  const memoryLimitMiB = parseDuckdbMemoryLimitToMiB(memoryLimit)
+  return memoryLimitMiB !== null && memoryLimitMiB <= 6400
+}
+
 const getDuckdbRuntimeConfigValue = () => {
   if (duckdbServiceState.duckdbRuntimeConfig) {
     return duckdbServiceState.duckdbRuntimeConfig
@@ -195,7 +222,10 @@ const getDuckdbRuntimeConfigValue = () => {
     binary: '@duckdb/node-api',
     databasePath: env.DUCKDB_PATH,
     memoryLimit: env.DUCKDB_MEMORY_LIMIT,
+    preserveInsertionOrder: false,
+    serializeConcurrentWork: shouldSerializeDuckdbConcurrentWork(env.DUCKDB_MEMORY_LIMIT),
     tempDirectory: getTrimmedValue(env.DUCKDB_TEMP_DIRECTORY),
+    threads: getDuckdbThreadCountValue(env.DUCKDB_MEMORY_LIMIT),
   }
 
   return duckdbServiceState.duckdbRuntimeConfig
@@ -213,8 +243,17 @@ const createDuckdbTempDirectory = (runtimeConfig: DuckdbRuntimeConfig) => {
 
 const getDuckdbInstanceOptions = (runtimeConfig: DuckdbRuntimeConfig): Record<string, string> => {
   return runtimeConfig.tempDirectory === null
-    ? {memory_limit: runtimeConfig.memoryLimit}
-    : {memory_limit: runtimeConfig.memoryLimit, temp_directory: runtimeConfig.tempDirectory}
+    ? {
+        memory_limit: runtimeConfig.memoryLimit,
+        preserve_insertion_order: String(runtimeConfig.preserveInsertionOrder),
+        threads: runtimeConfig.threads,
+      }
+    : {
+        memory_limit: runtimeConfig.memoryLimit,
+        preserve_insertion_order: String(runtimeConfig.preserveInsertionOrder),
+        temp_directory: runtimeConfig.tempDirectory,
+        threads: runtimeConfig.threads,
+      }
 }
 
 const getErrorMessage = (value: unknown): string | null => {
@@ -288,6 +327,36 @@ const isDuckdbRestartRequiredError = (error: unknown) => {
 const getCompactDuckdbErrorMessage = (error: unknown) => {
   const message = getNormalizedDuckdbError(error).message.replace(/\s+/g, ' ').trim()
   return message.length <= 280 ? message : `${message.slice(0, 277)}...`
+}
+
+const getDuckdbStatementPreview = (statement: string) => {
+  const normalizedStatement = statement.replace(/\s+/g, ' ').trim()
+  return normalizedStatement.length <= 280 ? normalizedStatement : `${normalizedStatement.slice(0, 277)}...`
+}
+
+const getDuckdbErrorWithStatementContext = (error: unknown, label: string, statement: string) => {
+  const normalizedError = getNormalizedDuckdbError(error)
+  const statementContext = `${label}: ${getDuckdbStatementPreview(statement)}`
+
+  return normalizedError.message.includes(statementContext)
+    ? normalizedError
+    : new Error(`${normalizedError.message} -- ${statementContext}`)
+}
+
+const withDuckdbStatementErrorContext = async <T>({
+  label,
+  statement,
+  work,
+}: {
+  label: string
+  statement: string
+  work: () => Promise<T>
+}): Promise<T> => {
+  try {
+    return await work()
+  } catch (error) {
+    throw getDuckdbErrorWithStatementContext(error, label, statement)
+  }
 }
 
 const recoverDuckdbRuntimeAfterFatalError = async (error: unknown) => {
@@ -1034,15 +1103,27 @@ export const getDuckdbRuntimeConfig = () => {
 
 export const getDuckdbBackgroundRuntimeDiagnostics = async (): Promise<DuckdbBackgroundRuntimeDiagnostics> => {
   const configured = getDuckdbRuntimeConfig()
-  const [settingsRow] = await runDuckdbBackgroundJsonQuery<{memoryLimit: string | null; tempDirectory: string | null}>(`
+  const [settingsRow] = await runDuckdbBackgroundJsonQuery<{
+    memoryLimit: string | null
+    preserveInsertionOrder: boolean | null
+    tempDirectory: string | null
+    threads: string | null
+  }>(`
     SELECT
       current_setting('memory_limit') AS memoryLimit,
+      current_setting('preserve_insertion_order') AS preserveInsertionOrder,
+      current_setting('threads') AS threads,
       current_setting('temp_directory') AS tempDirectory
   `)
 
   return {
     configured,
-    effective: {memoryLimit: settingsRow?.memoryLimit ?? null, tempDirectory: settingsRow?.tempDirectory ?? null},
+    effective: {
+      memoryLimit: settingsRow?.memoryLimit ?? null,
+      preserveInsertionOrder: settingsRow?.preserveInsertionOrder ?? null,
+      tempDirectory: settingsRow?.tempDirectory ?? null,
+      threads: settingsRow?.threads ?? null,
+    },
     instanceOptions: getDuckdbInstanceOptions(configured),
     queues: getDuckdbQueueRuntimeMetricsSnapshot(),
   }
@@ -1119,42 +1200,74 @@ export const getDuckdbAppendRuntimeMetrics = (): DuckdbAppendRuntimeMetrics => {
 }
 
 export const runDuckdbJsonQuery = async <T>(statement: string): Promise<T[]> => {
-  return withNormalizedDuckdbError(() => {
-    return enqueueDuckdbWork(async () => {
-      await ensureStartedDuckdbProcess()
-      return runDuckdbJsonQueryDirect<T>(statement)
-    })
+  return withDuckdbStatementErrorContext({
+    label: 'duckdb main query',
+    statement,
+    work: () => {
+      return withNormalizedDuckdbError(() => {
+        return enqueueDuckdbWork(async () => {
+          await ensureStartedDuckdbProcess()
+          return runDuckdbJsonQueryDirect<T>(statement)
+        })
+      })
+    },
   })
 }
 
 export const runDuckdbStatement = async (statement: string) => {
-  await withNormalizedDuckdbError(() => {
-    return enqueueDuckdbWork(async () => {
-      await ensureStartedDuckdbProcess()
-      await runDuckdbStatementDirect(statement)
-    })
+  await withDuckdbStatementErrorContext({
+    label: 'duckdb main statement',
+    statement,
+    work: () => {
+      return withNormalizedDuckdbError(() => {
+        return enqueueDuckdbWork(async () => {
+          await ensureStartedDuckdbProcess()
+          await runDuckdbStatementDirect(statement)
+        })
+      })
+    },
   })
 }
 
 export const runDuckdbBackgroundJsonQuery = async <T>(statement: string): Promise<T[]> => {
-  return withNormalizedDuckdbError(() => {
-    return waitForDuckdbAppendBarrier().then(() => {
-      return enqueueDuckdbBackgroundWork(async () => {
-        await ensureStartedDuckdbProcess()
-        return runDuckdbBackgroundJsonQueryDirect<T>(statement)
+  return withDuckdbStatementErrorContext({
+    label: 'duckdb background query',
+    statement,
+    work: () => {
+      return withNormalizedDuckdbError(() => {
+        return waitForDuckdbAppendBarrier().then(() => {
+          const enqueue = getDuckdbRuntimeConfigValue().serializeConcurrentWork
+            ? enqueueDuckdbWork
+            : enqueueDuckdbBackgroundWork
+
+          return enqueue(async () => {
+            await ensureStartedDuckdbProcess()
+            return runDuckdbBackgroundJsonQueryDirect<T>(statement)
+          })
+        })
       })
-    })
+    },
   })
 }
 
 export const runDuckdbBackgroundStatement = async (statement: string) => {
-  await withNormalizedDuckdbError(() => {
-    return waitForDuckdbAppendBarrier().then(() => {
-      return enqueueDuckdbBackgroundWork(async () => {
-        await ensureStartedDuckdbProcess()
-        await runDuckdbBackgroundStatementDirect(statement)
+  await withDuckdbStatementErrorContext({
+    label: 'duckdb background statement',
+    statement,
+    work: () => {
+      return withNormalizedDuckdbError(() => {
+        return waitForDuckdbAppendBarrier().then(() => {
+          const enqueue = getDuckdbRuntimeConfigValue().serializeConcurrentWork
+            ? enqueueDuckdbWork
+            : enqueueDuckdbBackgroundWork
+
+          return enqueue(async () => {
+            await ensureStartedDuckdbProcess()
+            await runDuckdbBackgroundStatementDirect(statement)
+          })
+        })
       })
-    })
+    },
   })
 }
 
@@ -1163,16 +1276,40 @@ export const runDuckdbAppendJsonQuery = async <T>(
   values?: DuckdbBoundValues,
   types?: DuckdbBoundTypes,
 ): Promise<T[]> => {
-  return withNormalizedDuckdbError(async () => {
-    await ensureStartedDuckdbProcess()
-    await waitForDuckdbAppendBarrier()
-    const appendLaneIndex = getNextDuckdbAppendLaneIndex()
+  return withDuckdbStatementErrorContext({
+    label: 'duckdb append query',
+    statement,
+    work: () => {
+      return withNormalizedDuckdbError(async () => {
+        await ensureStartedDuckdbProcess()
+        await waitForDuckdbAppendBarrier()
+        const appendLaneIndex = getNextDuckdbAppendLaneIndex()
 
-    return enqueueDuckdbAppendLaneWork(appendLaneIndex, (appendConnection) => {
-      return values === undefined && types === undefined
-        ? runDuckdbStatementsAndReadLastDirect<T>(appendConnection, splitDuckdbStatements(statement))
-        : runDuckdbSingleStatementAndReadAll<T>(appendConnection, statement, values, types)
-    })
+        return getDuckdbRuntimeConfigValue().serializeConcurrentWork
+          ? enqueueDuckdbWork(async () => {
+              const startedAtMs = Date.now()
+
+              incrementDuckdbAppendQueueDepth(appendLaneIndex)
+              recordDuckdbAppendBatchStart()
+
+              try {
+                const appendConnection = getDuckdbAppendConnection(appendLaneIndex)
+
+                return values === undefined && types === undefined
+                  ? runDuckdbStatementsAndReadLastDirect<T>(appendConnection, splitDuckdbStatements(statement))
+                  : runDuckdbSingleStatementAndReadAll<T>(appendConnection, statement, values, types)
+              } finally {
+                decrementDuckdbAppendQueueDepth(appendLaneIndex)
+                recordDuckdbAppendBatchCompletion(Date.now() - startedAtMs)
+              }
+            })
+          : enqueueDuckdbAppendLaneWork(appendLaneIndex, (appendConnection) => {
+              return values === undefined && types === undefined
+                ? runDuckdbStatementsAndReadLastDirect<T>(appendConnection, splitDuckdbStatements(statement))
+                : runDuckdbSingleStatementAndReadAll<T>(appendConnection, statement, values, types)
+            })
+      })
+    },
   })
 }
 

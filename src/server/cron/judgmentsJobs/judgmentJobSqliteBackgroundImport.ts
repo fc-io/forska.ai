@@ -2,6 +2,7 @@ import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getImportableJudgmentJobWhereSql} from './judgmentJobImportScope.ts'
+import {getJudgmentJobSqliteJobIds} from './judgmentJobPaths.ts'
 import {runJudgmentJobSqliteOutboxImportCycle} from './judgmentJobSqliteOutboxImport.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 
@@ -9,15 +10,37 @@ const judgmentJobSqliteBackgroundImportLogger = createRateLimitedLogger({windowM
 const isolatedImportFailureThreshold = 3
 
 const getImportableJudgmentJobIds = async () => {
-  const rows = await getAppDatabaseService().queryJson<{id: string}>(`
-    SELECT id
-    FROM app.judgment_job
-    WHERE ${getImportableJudgmentJobWhereSql()}
-    ORDER BY id ASC
-  `)
+  const trackedJobIds = getJudgmentJobSqliteJobIds().sort()
 
-  return rows.map((row) => {
-    return row.id
+  if (trackedJobIds.length === 0) {
+    const rows = await getAppDatabaseService().queryJson<{id: string}>(`
+      SELECT id
+      FROM app.judgment_job
+      WHERE (${getImportableJudgmentJobWhereSql()})
+      ORDER BY id ASC
+    `)
+
+    return rows.map((row) => {
+      return row.id
+    })
+  }
+
+  const rows = await Promise.all(
+    trackedJobIds.map(async (jobId) => {
+      const [row] = await getAppDatabaseService().queryJson<{id: string}>(`
+        SELECT id
+        FROM app.judgment_job
+        WHERE id = ${getSqlLiteral(jobId)}
+          AND (${getImportableJudgmentJobWhereSql()})
+        LIMIT 1
+      `)
+
+      return row?.id ?? null
+    }),
+  )
+
+  return rows.filter((jobId): jobId is string => {
+    return jobId !== null
   })
 }
 

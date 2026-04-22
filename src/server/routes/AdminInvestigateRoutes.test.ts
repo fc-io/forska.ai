@@ -317,9 +317,26 @@ test('admin worker runtime diagnostics route reports effective duckdb settings a
 
     const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
       duckdb: {
-        configured: {appendLaneCount: number; memoryLimit: string; tempDirectory: string | null}
-        effective: {memoryLimit: string | null; tempDirectory: string | null}
-        instanceOptions: {memory_limit: string; temp_directory?: string}
+        configured: {
+          appendLaneCount: number
+          memoryLimit: string
+          preserveInsertionOrder: boolean
+          serializeConcurrentWork: boolean
+          tempDirectory: string | null
+          threads: string
+        }
+        effective: {
+          memoryLimit: string | null
+          preserveInsertionOrder: boolean | null
+          tempDirectory: string | null
+          threads: string | null
+        }
+        instanceOptions: {
+          memory_limit: string
+          preserve_insertion_order: string
+          temp_directory?: string
+          threads: string
+        }
         queues: {
           background: {maxQueueDepth: number; queueDepth: number; tasksCompleted: number; tasksStarted: number}
           main: {maxQueueDepth: number; queueDepth: number; tasksCompleted: number; tasksStarted: number}
@@ -354,15 +371,25 @@ test('admin worker runtime diagnostics route reports effective duckdb settings a
     expect(responseBody.pid).toBeGreaterThan(0)
     expect(responseBody.duckdb.configured.appendLaneCount).toBeGreaterThan(0)
     expect(responseBody.duckdb.configured.memoryLimit).toBe('256MiB')
+    expect(responseBody.duckdb.configured.preserveInsertionOrder).toBe(false)
+    expect(responseBody.duckdb.configured.serializeConcurrentWork).toBe(true)
     expect(responseBody.duckdb.configured.tempDirectory).toBe(tempDirectory)
-    expect(responseBody.duckdb.instanceOptions).toEqual({memory_limit: '256MiB', temp_directory: tempDirectory})
+    expect(responseBody.duckdb.configured.threads).toBe('1')
+    expect(responseBody.duckdb.instanceOptions).toEqual({
+      memory_limit: '256MiB',
+      preserve_insertion_order: 'false',
+      temp_directory: tempDirectory,
+      threads: '1',
+    })
     expect(responseBody.duckdb.effective.memoryLimit).toBe('256.0 MiB')
+    expect(responseBody.duckdb.effective.preserveInsertionOrder).toBe(false)
     expect(responseBody.duckdb.effective.tempDirectory).toBe(tempDirectory)
-    expect(responseBody.duckdb.queues.main.tasksStarted).toBeGreaterThanOrEqual(0)
-    expect(responseBody.duckdb.queues.main.tasksCompleted).toBeGreaterThanOrEqual(0)
+    expect(responseBody.duckdb.effective.threads).toBe('1')
+    expect(responseBody.duckdb.queues.main.tasksStarted).toBeGreaterThan(0)
+    expect(responseBody.duckdb.queues.main.tasksCompleted).toBeGreaterThan(0)
     expect(responseBody.duckdb.queues.main.queueDepth).toBe(0)
-    expect(responseBody.duckdb.queues.background.tasksStarted).toBeGreaterThan(0)
-    expect(responseBody.duckdb.queues.background.tasksCompleted).toBeGreaterThan(0)
+    expect(responseBody.duckdb.queues.background.tasksStarted).toBe(0)
+    expect(responseBody.duckdb.queues.background.tasksCompleted).toBe(0)
     expect(responseBody.duckdb.queues.background.queueDepth).toBe(0)
     expect(responseBody.processMemory.rssBytes).toBeGreaterThan(0)
     expect(responseBody.processMemory.heapUsedBytes).toBeGreaterThan(0)
