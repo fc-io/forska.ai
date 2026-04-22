@@ -6,6 +6,13 @@ import {dirname} from 'node:path'
 
 import {Effect} from 'effect'
 
+import {
+  getRuntimeCutoverVersion,
+  getRuntimeCutoverVersionMismatchMessage,
+  isRuntimeCutoverVersionCompatible,
+  normalizeRuntimeCutoverVersion,
+  probeDuckdbOwnerCutoverCompatibility,
+} from './runtimeCutover.ts'
 import type {ServerRole} from './serverRole.ts'
 import {canServerRoleOwnDuckdb} from './serverRole.ts'
 
@@ -20,6 +27,7 @@ export type DuckdbOwnerLeaseMetadata = {
   machineFingerprint?: string
   leaseId: string
   pid: number
+  runtimeVersion?: string
   serverRole: ServerRole
 }
 
@@ -35,6 +43,7 @@ export type DuckdbOwnerLeaseHistoryEntry = {
   hostname: string
   leaseId: string
   pid: number
+  runtimeVersion?: string
   serverRole: ServerRole
 }
 
@@ -157,6 +166,13 @@ const getLeaseOwnerText = (metadata: DuckdbOwnerLeaseMetadata) => {
   return `${metadata.serverRole}@${metadata.hostname}:${metadata.apiServerPort} pid=${metadata.pid}`
 }
 
+const getLeaseRuntimeVersionMismatchMessage = (metadata: DuckdbOwnerLeaseMetadata) => {
+  return getRuntimeCutoverVersionMismatchMessage({
+    context: `DuckDB owner lease held by ${getLeaseOwnerText(metadata)}`,
+    runtimeVersion: metadata.runtimeVersion,
+  })
+}
+
 const isMissingFileError = (error: unknown) => {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT'
 }
@@ -206,6 +222,7 @@ const normalizeDuckdbOwnerLeaseMetadata = (
         ? value.leaseId
         : `${hostnameValue}:${pidValue}:${acquiredAt}`,
     pid: pidValue,
+    runtimeVersion: normalizeRuntimeCutoverVersion(value.runtimeVersion) ?? undefined,
     serverRole: value.serverRole ?? 'maintenance-worker',
   }
 }
@@ -225,6 +242,7 @@ const normalizeDuckdbOwnerLeaseHistoryEntry = (value: Partial<DuckdbOwnerLeaseHi
         ? value.leaseId
         : `${hostnameValue}:${portValue}:${at}`,
     pid: typeof value.pid === 'number' ? value.pid : 0,
+    runtimeVersion: normalizeRuntimeCutoverVersion(value.runtimeVersion) ?? undefined,
     serverRole: value.serverRole ?? 'maintenance-worker',
     duckdbOwnerUrl: typeof value.duckdbOwnerUrl === 'string' ? value.duckdbOwnerUrl : `http://127.0.0.1:${portValue}`,
   } satisfies DuckdbOwnerLeaseHistoryEntry
@@ -388,6 +406,7 @@ const appendUnexpectedLeaseReleaseHistory = (metadata: DuckdbOwnerLeaseMetadata)
     hostname: metadata.hostname,
     leaseId: metadata.leaseId,
     pid: metadata.pid,
+    runtimeVersion: metadata.runtimeVersion,
     serverRole: metadata.serverRole,
     duckdbOwnerUrl: getDuckdbOwnerLeaseUrl(metadata),
   })
@@ -414,6 +433,7 @@ const appendAcquiredDuckdbOwnerLeaseHistory = (databasePath: string, metadata: D
     hostname: metadata.hostname,
     leaseId: metadata.leaseId,
     pid: metadata.pid,
+    runtimeVersion: metadata.runtimeVersion,
     serverRole: metadata.serverRole,
     duckdbOwnerUrl: getDuckdbOwnerLeaseUrl(metadata),
   })
@@ -429,6 +449,42 @@ const failForActiveLease = (metadata: DuckdbOwnerLeaseMetadata) => {
       `DuckDB owner lease is held by ${getLeaseOwnerText(metadata)} since ${metadata.acquiredAt}. Stop that process or use SERVER_ROLE=maintenance-worker/dev-single there only.`,
     ),
   )
+}
+
+const failForIncompatibleLease = (metadata: DuckdbOwnerLeaseMetadata) => {
+  return Effect.fail(new Error(getLeaseRuntimeVersionMismatchMessage(metadata)))
+}
+
+const failForUnsafeIncompatibleLease = (metadata: DuckdbOwnerLeaseMetadata) => {
+  return isDuckdbOwnerLeaseStale(metadata)
+    ? failForIncompatibleLease(metadata)
+    : Effect.fail(new Error(`${getLeaseRuntimeVersionMismatchMessage(metadata)} The incompatible lease is fresh.`))
+}
+
+const assertIncompatibleLeaseCanBeReplaced = (metadata: DuckdbOwnerLeaseMetadata): Effect.Effect<void, unknown> => {
+  if (isRuntimeCutoverVersionCompatible(metadata.runtimeVersion)) {
+    return Effect.void
+  }
+
+  if (!isDuckdbOwnerLeaseStale(metadata)) {
+    return Effect.fail(new Error(`${getLeaseRuntimeVersionMismatchMessage(metadata)} The incompatible lease is fresh.`))
+  }
+
+  return Effect.tryPromise({
+    try: async () => {
+      const duckdbOwnerUrl = getDuckdbOwnerLeaseUrl(metadata)
+      const result = await probeDuckdbOwnerCutoverCompatibility(duckdbOwnerUrl, 'legacy DuckDB owner lease replacement')
+
+      if (result.status !== 'unreachable') {
+        throw new Error(
+          `${getLeaseRuntimeVersionMismatchMessage(metadata)} The incompatible peer is still reachable at ${duckdbOwnerUrl}.`,
+        )
+      }
+    },
+    catch: (error) => {
+      return error
+    },
+  })
 }
 
 export const isDuckdbOwnerLeaseProcessAlive = (metadata: DuckdbOwnerLeaseMetadata) => {
@@ -465,6 +521,7 @@ export const acquireDuckdbOwnerLease = (params: {
     machineFingerprint: currentMachineFingerprint,
     leaseId: randomUUID(),
     pid: process.pid,
+    runtimeVersion: getRuntimeCutoverVersion(),
     serverRole: params.serverRole,
   }
 
@@ -497,25 +554,46 @@ export const acquireDuckdbOwnerLease = (params: {
     }
 
     const currentLease = currentRecord.metadata
+    const replaceCurrentLease = () => {
+      return assertIncompatibleLeaseCanBeReplaced(currentLease).pipe(
+        Effect.flatMap(() => {
+          return appendUnexpectedLeaseReleaseHistory(currentLease)
+        }),
+        Effect.flatMap(() => {
+          return removeLeasePath(currentRecord.leasePath)
+        }),
+        Effect.flatMap(() => {
+          return acquireCurrentLeaseFile()
+        }),
+      )
+    }
 
     return isDuckdbOwnerLeaseOwnedByCurrentProcess(currentLease)
       ? currentRecord.leasePath === leasePath
-        ? Effect.succeed({leasePath, metadata: {...currentLease, machineFingerprint: currentMachineFingerprint}})
+        ? writeDuckdbOwnerLeaseMetadata(leasePath, {
+            ...currentLease,
+            machineFingerprint: currentMachineFingerprint,
+            runtimeVersion: getRuntimeCutoverVersion(),
+          }).pipe(
+            Effect.as({
+              leasePath,
+              metadata: {
+                ...currentLease,
+                machineFingerprint: currentMachineFingerprint,
+                runtimeVersion: getRuntimeCutoverVersion(),
+              },
+            }),
+          )
         : removeLeasePath(currentRecord.leasePath).pipe(
             Effect.flatMap(() => {
               return acquireCurrentLeaseFile()
             }),
           )
       : canRemoveStaleLease(currentLease) || canTakeOverStaleLease(currentLease, params.takeoverLeaseId)
-        ? appendUnexpectedLeaseReleaseHistory(currentLease).pipe(
-            Effect.flatMap(() => {
-              return removeLeasePath(currentRecord.leasePath)
-            }),
-            Effect.flatMap(() => {
-              return acquireCurrentLeaseFile()
-            }),
-          )
-        : failForActiveLease(currentLease)
+        ? replaceCurrentLease()
+        : isRuntimeCutoverVersionCompatible(currentLease.runtimeVersion)
+          ? failForActiveLease(currentLease)
+          : failForUnsafeIncompatibleLease(currentLease)
   }
 
   return getCurrentLeaseRecord(params.databasePath).pipe(
@@ -536,16 +614,22 @@ export const updateDuckdbOwnerLeaseHeartbeat = (
     Effect.flatMap((currentLease) => {
       return currentLease === null || currentLease.leaseId !== lease.metadata.leaseId
         ? Effect.fail(new Error('DuckDB owner lease is no longer owned by this process'))
-        : Effect.sync(() => {
-            return {
-              ...lease,
-              metadata: {...lease.metadata, heartbeatAt: new Date().toISOString()},
-            } satisfies DuckdbOwnerLease
-          }).pipe(
-            Effect.flatMap((nextLease) => {
-              return writeDuckdbOwnerLeaseMetadata(lease.leasePath, nextLease.metadata).pipe(Effect.as(nextLease))
-            }),
-          )
+        : !isRuntimeCutoverVersionCompatible(currentLease.runtimeVersion)
+          ? failForIncompatibleLease(currentLease)
+          : Effect.sync(() => {
+              return {
+                ...lease,
+                metadata: {
+                  ...lease.metadata,
+                  heartbeatAt: new Date().toISOString(),
+                  runtimeVersion: getRuntimeCutoverVersion(),
+                },
+              } satisfies DuckdbOwnerLease
+            }).pipe(
+              Effect.flatMap((nextLease) => {
+                return writeDuckdbOwnerLeaseMetadata(lease.leasePath, nextLease.metadata).pipe(Effect.as(nextLease))
+              }),
+            )
     }),
   )
 }
@@ -565,6 +649,7 @@ export const releaseDuckdbOwnerLease = (lease: DuckdbOwnerLease | null): Effect.
             hostname: lease.metadata.hostname,
             leaseId: lease.metadata.leaseId,
             pid: lease.metadata.pid,
+            runtimeVersion: lease.metadata.runtimeVersion,
             serverRole: lease.metadata.serverRole,
             duckdbOwnerUrl: getDuckdbOwnerLeaseUrl(lease.metadata),
           }).pipe(

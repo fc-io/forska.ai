@@ -2,9 +2,13 @@ import {hostname} from 'node:os'
 
 import {Elysia} from 'elysia'
 
-import {getDuckdbOwnerConnectionProxyHeaders} from '../utils/duckdbOwnerConnections.ts'
+import {
+  getDuckdbOwnerConnectionProxyHeaders,
+  getDuckdbOwnerConnectionRuntimeVersionError,
+} from '../utils/duckdbOwnerConnections.ts'
 import {env} from '../utils/env.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
+import {probeDuckdbOwnerCutoverCompatibility} from '../utils/runtimeCutover.ts'
 import {getCurrentServerDuckdbOwnerUrl, shouldCurrentServerProxyApiToOwner} from '../utils/serverRuntimeRole.ts'
 
 type DuckdbOwnerProxyRequestTemplate = {
@@ -81,11 +85,19 @@ const getDuckdbOwnerProxyRequest = (requestTemplate: DuckdbOwnerProxyRequestTemp
   })
 }
 
+const getIncompatibleDuckdbOwnerTargetResponse = async (duckdbOwnerUrl: string) => {
+  const result = await probeDuckdbOwnerCutoverCompatibility(duckdbOwnerUrl, 'DuckDB owner proxy target')
+
+  return result.status === 'incompatible' ? Response.json({data: null, error: result.message}, {status: 426}) : null
+}
+
 const fetchDuckdbOwnerProxyResponse = async (
   requestTemplate: DuckdbOwnerProxyRequestTemplate,
   duckdbOwnerUrl: string,
 ) => {
-  return fetch(getDuckdbOwnerProxyRequest(requestTemplate, duckdbOwnerUrl))
+  const incompatibleTargetResponse = await getIncompatibleDuckdbOwnerTargetResponse(duckdbOwnerUrl)
+
+  return incompatibleTargetResponse ?? fetch(getDuckdbOwnerProxyRequest(requestTemplate, duckdbOwnerUrl))
 }
 
 const getRetriedProxyResponse = async (
@@ -110,6 +122,15 @@ const getRetriedProxyResponse = async (
 
 const getDuckdbOwnerProxyUnavailableResponse = () => {
   return Response.json({data: null, error: 'DuckDB owner proxy target unavailable'}, {status: 502})
+}
+
+const getIncompatibleDuckdbOwnerPeerResponse = (request: Request) => {
+  const requestUrl = new URL(request.url)
+  const error = requestUrl.pathname.startsWith('/api/')
+    ? getDuckdbOwnerConnectionRuntimeVersionError(request.headers)
+    : null
+
+  return error === null ? null : Response.json({data: null, error: error.message}, {status: 426})
 }
 
 const forwardApiRequestToDuckdbOwner = async (request: Request): Promise<Response | null> => {
@@ -150,5 +171,11 @@ const forwardApiRequestToDuckdbOwner = async (request: Request): Promise<Respons
 }
 
 export const apiProxyRoutes = new Elysia().use(withErrorHandler()).onRequest(async ({request}) => {
+  const incompatiblePeerResponse = getIncompatibleDuckdbOwnerPeerResponse(request)
+
+  if (incompatiblePeerResponse !== null) {
+    return incompatiblePeerResponse
+  }
+
   return forwardApiRequestToDuckdbOwner(request)
 })

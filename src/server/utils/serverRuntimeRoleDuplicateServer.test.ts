@@ -4,6 +4,8 @@ import {join} from 'node:path'
 
 import {expect, test} from 'bun:test'
 
+import {getRuntimeCutoverVersion} from './runtimeCutover.ts'
+
 test('auto follower exits when another local process already owns the same writer port', () => {
   const tempDirectory = mkdtempSync('/tmp/f1-server-runtime-role-')
   const duckdbPath = join(tempDirectory, 'test.duckdb')
@@ -21,6 +23,7 @@ test('auto follower exits when another local process already owns the same write
         hostname: hostname(),
         leaseId: 'lease-id',
         pid: process.pid,
+        runtimeVersion: getRuntimeCutoverVersion(),
         serverRole: 'maintenance-worker',
       },
       null,
@@ -74,6 +77,7 @@ test('auto role resumes writer when the existing lease belongs to the current pr
         `
           const {writeFileSync} = await import('node:fs')
           const {hostname} = await import('node:os')
+          const {getRuntimeCutoverVersion} = await import('./src/server/utils/runtimeCutover.ts')
           const now = new Date().toISOString()
           const duckdbPath = process.env.DUCKDB_PATH
           const leasePath = duckdbPath + '.duckdb-owner.lock'
@@ -85,6 +89,7 @@ test('auto role resumes writer when the existing lease belongs to the current pr
             hostname: hostname(),
             leaseId: 'lease-id',
             pid: process.pid,
+            runtimeVersion: getRuntimeCutoverVersion(),
             serverRole: 'maintenance-worker',
           }
 

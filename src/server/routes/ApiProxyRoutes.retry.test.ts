@@ -4,9 +4,11 @@ import {Elysia} from 'elysia'
 const envModulePath = new URL('../utils/env.ts', import.meta.url).pathname
 const serverRuntimeRoleModulePath = new URL('../utils/serverRuntimeRole.ts', import.meta.url).pathname
 const duckdbOwnerConnectionsModulePath = new URL('../utils/duckdbOwnerConnections.ts', import.meta.url).pathname
+const runtimeCutoverModulePath = new URL('../utils/runtimeCutover.ts', import.meta.url).pathname
 type EnvModule = typeof import('../utils/env.ts')
 type ServerRuntimeRoleModule = typeof import('../utils/serverRuntimeRole.ts')
 type DuckdbOwnerConnectionsModule = typeof import('../utils/duckdbOwnerConnections.ts')
+type RuntimeCutoverModule = typeof import('../utils/runtimeCutover.ts')
 const actualEnvModule = (await import(`${envModulePath}?actual=${Date.now()}`)) as EnvModule
 const actualServerRuntimeRoleModule = (await import(
   `${serverRuntimeRoleModulePath}?actual=${Date.now()}`
@@ -14,6 +16,9 @@ const actualServerRuntimeRoleModule = (await import(
 const actualDuckdbOwnerConnectionsModule = (await import(
   `${duckdbOwnerConnectionsModulePath}?actual=${Date.now()}`
 )) as DuckdbOwnerConnectionsModule
+const actualRuntimeCutoverModule = (await import(
+  `${runtimeCutoverModulePath}?actual=${Date.now()}`
+)) as RuntimeCutoverModule
 
 const originalFetch = globalThis.fetch
 
@@ -58,6 +63,20 @@ const loadRoutes = async () => {
   return new Elysia().use(apiProxyRoutes)
 }
 
+const getRequestUrl = (request: Request | URL | string) => {
+  return typeof request === 'string' ? request : request instanceof URL ? request.toString() : request.url
+}
+
+const isOwnerConnectionsUrl = (url: string) => {
+  return url.endsWith('/api/duckdb_owner_connections')
+}
+
+const getCompatibleOwnerConnectionsResponse = () => {
+  const runtimeVersion = actualRuntimeCutoverModule.getRuntimeCutoverVersion()
+
+  return Response.json({data: {owner: {runtimeVersion}, runtimeVersion}})
+}
+
 afterEach(() => {
   getCurrentServerDuckdbOwnerUrl.mockClear()
   state.shouldProxy = true
@@ -68,13 +87,15 @@ afterEach(() => {
 test('api proxy retries idempotent GET requests after a transport failure', async () => {
   const app = await loadRoutes()
   const fetchMock = mock(async (request: Request | URL | string) => {
-    const url = typeof request === 'string' ? request : request instanceof URL ? request.toString() : request.url
+    const url = getRequestUrl(request)
 
     if (url.startsWith('http://owner-1:34991')) {
       throw new Error('owner-1 unavailable')
     }
 
-    return Response.json({data: {ok: true}, error: null})
+    return isOwnerConnectionsUrl(url)
+      ? getCompatibleOwnerConnectionsResponse()
+      : Response.json({data: {ok: true}, error: null})
   })
   globalThis.fetch = fetchMock as unknown as typeof fetch
   state.ownerUrls = ['http://owner-1:34991', 'http://owner-2:34992']
@@ -84,7 +105,7 @@ test('api proxy retries idempotent GET requests after a transport failure', asyn
 
   expect(response.status).toBe(200)
   expect(body.data.ok).toBe(true)
-  expect(fetchMock).toHaveBeenCalledTimes(2)
+  expect(fetchMock).toHaveBeenCalledTimes(4)
 })
 
 test('api proxy does not retry non-idempotent POST requests after a transport failure', async () => {
@@ -106,13 +127,19 @@ test('api proxy does not retry non-idempotent POST requests after a transport fa
 
   expect(response.status).toBe(502)
   expect(body.error).toContain('DuckDB owner proxy target unavailable')
-  expect(fetchMock).toHaveBeenCalledTimes(1)
+  expect(fetchMock).toHaveBeenCalledTimes(2)
 })
 
 test('api proxy retries idempotent DELETE requests after a temporary same-owner transport failure', async () => {
   const app = await loadRoutes()
   let shouldFail = true
-  const fetchMock = mock(async (_request: Request | URL | string) => {
+  const fetchMock = mock(async (request: Request | URL | string) => {
+    const url = getRequestUrl(request)
+
+    if (isOwnerConnectionsUrl(url)) {
+      return getCompatibleOwnerConnectionsResponse()
+    }
+
     if (shouldFail) {
       shouldFail = false
       throw new Error('owner unavailable')
@@ -128,5 +155,44 @@ test('api proxy retries idempotent DELETE requests after a temporary same-owner 
 
   expect(response.status).toBe(200)
   expect(body.data.ok).toBe(true)
-  expect(fetchMock).toHaveBeenCalledTimes(2)
+  expect(fetchMock).toHaveBeenCalledTimes(4)
+})
+
+test('api proxy rejects a pre-cutover DuckDB owner target before forwarding', async () => {
+  const app = await loadRoutes()
+  const fetchMock = mock(async (request: Request | URL | string) => {
+    const url = getRequestUrl(request)
+
+    return isOwnerConnectionsUrl(url)
+      ? Response.json({data: {owner: {apiServerPort: 34991}}})
+      : Response.json({data: {ok: true}, error: null})
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  const response = await app.handle(new Request('http://localhost/api/example', {method: 'GET'}))
+  const body = (await response.json()) as {data: null; error: string}
+
+  expect(response.status).toBe(426)
+  expect(body.error).toContain('Incompatible Forska split runtime version')
+  expect(fetchMock).toHaveBeenCalledTimes(1)
+})
+
+test('api proxy rejects pre-cutover owner-routed peer headers', async () => {
+  const app = await loadRoutes()
+  const fetchMock = mock(async () => {
+    return Response.json({data: {ok: true}, error: null})
+  })
+  globalThis.fetch = fetchMock as unknown as typeof fetch
+
+  const response = await app.handle(
+    new Request('http://localhost/api/example', {
+      headers: {'x-forska-api-server-port': '4010', 'x-forska-server-role': 'api'},
+      method: 'GET',
+    }),
+  )
+  const body = (await response.json()) as {data: null; error: string}
+
+  expect(response.status).toBe(426)
+  expect(body.error).toContain('Incompatible Forska split runtime version')
+  expect(fetchMock).not.toHaveBeenCalled()
 })

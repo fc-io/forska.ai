@@ -14,6 +14,12 @@ import {
 import {clearUnresponsiveDuckdbOwnerWarnings, recordUnresponsiveDuckdbOwnerWarning} from './duckdbOwnerWarnings.ts'
 import {getEnv} from './env.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
+import {
+  assertReachableDuckdbOwnerCutoverCompatible,
+  getRuntimeCutoverVersionMismatchMessage,
+  isRuntimeCutoverVersionCompatible,
+  probeDuckdbOwnerCutoverCompatibility,
+} from './runtimeCutover.ts'
 import {exitWithRuntimeLogFlush} from './runtimeLogger.ts'
 import {
   canServerRoleOwnDuckdb,
@@ -115,12 +121,13 @@ const setLastKnownDuckdbOwnerUrl = (duckdbOwnerUrl: string | null) => {
 }
 
 const isDuckdbOwnerUrlResponsive = async (duckdbOwnerUrl: string) => {
-  try {
-    const response = await fetch(`${duckdbOwnerUrl}/api/duckdb_owner_connections`, {signal: AbortSignal.timeout(1_000)})
-    return response.ok
-  } catch {
-    return false
+  const result = await probeDuckdbOwnerCutoverCompatibility(duckdbOwnerUrl, 'DuckDB owner URL')
+
+  if (result.status === 'incompatible') {
+    throw new Error(result.message)
   }
+
+  return result.status === 'compatible'
 }
 
 const runDuckdbOwnerDemotionHandlers = async (reason: string) => {
@@ -148,6 +155,35 @@ const shouldPromoteForStaleDuckdbOwnerLease = async (currentLease: DuckdbOwnerLe
   }
 
   return !isResponsive
+}
+
+const assertIncompatibleDuckdbOwnerLeaseIsReplaceable = async (currentLease: DuckdbOwnerLease['metadata']) => {
+  if (isRuntimeCutoverVersionCompatible(currentLease.runtimeVersion)) {
+    return
+  }
+
+  if (!isDuckdbOwnerLeaseStale(currentLease)) {
+    throw new Error(
+      `${getRuntimeCutoverVersionMismatchMessage({
+        context: `DuckDB owner lease at ${getDuckdbOwnerLeaseUrl(currentLease)}`,
+        runtimeVersion: currentLease.runtimeVersion,
+      })} The incompatible lease is fresh.`,
+    )
+  }
+
+  const result = await probeDuckdbOwnerCutoverCompatibility(
+    getDuckdbOwnerLeaseUrl(currentLease),
+    'legacy DuckDB owner lease',
+  )
+
+  if (result.status !== 'unreachable') {
+    throw new Error(
+      `${getRuntimeCutoverVersionMismatchMessage({
+        context: `DuckDB owner lease at ${getDuckdbOwnerLeaseUrl(currentLease)}`,
+        runtimeVersion: currentLease.runtimeVersion,
+      })} The incompatible peer is still reachable.`,
+    )
+  }
 }
 
 const recordDuckdbOwnerUnavailableWarning = (params: {
@@ -251,6 +287,10 @@ const refreshAutoFollowerRole = async () => {
     return
   }
 
+  if (currentLease !== null) {
+    await assertIncompatibleDuckdbOwnerLeaseIsReplaceable(currentLease)
+  }
+
   const shouldPromoteForDeadDuckdbOwner = currentLease !== null && !isDuckdbOwnerLeaseProcessAlive(currentLease)
   const shouldPromoteForStaleDuckdbOwner =
     currentLease !== null && (await shouldPromoteForStaleDuckdbOwnerLease(currentLease))
@@ -308,6 +348,12 @@ export const initializeServerRuntimeRole = async () => {
   setLastKnownDuckdbOwnerUrl(
     canServerRoleOwnDuckdb(env.SERVER_ROLE) ? getCurrentServerUrl() : getManualDuckdbOwnerUrl(),
   )
+
+  const manualDuckdbOwnerUrl = getManualDuckdbOwnerUrl()
+
+  if (shouldCurrentServerProxyApiToOwner() && manualDuckdbOwnerUrl !== null) {
+    await assertReachableDuckdbOwnerCutoverCompatible(manualDuckdbOwnerUrl, 'configured DuckDB owner URL')
+  }
 }
 
 export const startServerRuntimeRoleMonitor = () => {

@@ -1,11 +1,13 @@
 import {expect, test} from 'bun:test'
 
 import {
+  assertDuckdbOwnerConnectionHeartbeatCompatible,
   getDuckdbOwnerConnectionHeartbeatPayload,
   getRuntimeCapabilityRegistryOverview,
   recordDuckdbOwnerConnectionProxy,
   upsertDuckdbOwnerConnectionHeartbeat,
 } from './duckdbOwnerConnections.ts'
+import {getRuntimeCutoverVersion} from './runtimeCutover.ts'
 import {createRuntimeLogRecord} from './runtimeLogger.ts'
 import {initializeRuntimeProcessIdentity, resetRuntimeProcessIdentityForTests} from './runtimeProcessIdentity.ts'
 
@@ -18,6 +20,7 @@ const getDuckdbOwnerHeaders = (startedAt: string) => {
     'x-forska-pid': '12345',
     'x-forska-process-started-at': startedAt,
     'x-forska-runtime-profile': 'primary',
+    'x-forska-runtime-version': getRuntimeCutoverVersion(),
     'x-forska-server-role': 'api',
     'x-forska-service': 'api-server',
     'x-forska-started-at': startedAt,
@@ -51,7 +54,7 @@ test('tracks DuckDB owner connection heartbeats and proxy metadata', () => {
   expect(proxied?.proxyCount).toBe(1)
   expect(proxied?.runtimeProfile).toBe('primary')
   expect(proxied?.duckdbOwnerUrl).toBe('http://127.0.0.1:4011')
-  expect(proxied?.capabilities).toEqual(['api'])
+  expect(proxied?.capabilities).toEqual(['api', 'owner-proxy'])
 })
 
 test('uses the shared runtime process identity for runtime logs and owner heartbeats', () => {
@@ -79,6 +82,7 @@ test('uses the shared runtime process identity for runtime logs and owner heartb
   expect(heartbeat.listenPort).toBe(runtimeRecord.runtime.listenPort)
   expect(heartbeat.processStartedAt).toBe(runtimeRecord.runtime.processStartedAt)
   expect(heartbeat.runtimeProfile).toBe(runtimeRecord.runtime.runtimeProfile)
+  expect(heartbeat.runtimeVersion).toBe(getRuntimeCutoverVersion())
   expect(heartbeat.service).toBe(runtimeRecord.runtime.service)
   expect(heartbeat.startedAt).toBe(runtimeRecord.runtime.processStartedAt)
   resetRuntimeProcessIdentityForTests()
@@ -128,4 +132,19 @@ test('summarizes registered runtime capabilities from fresh heartbeats', () => {
       return capability.capability === 'maintenance'
     }),
   ).toMatchObject({eligibleConsumerCount: 1, eligibleConsumerPresent: true, registeredConsumerCount: 1})
+})
+
+test('rejects pre-cutover DuckDB owner connection heartbeats', () => {
+  const startedAt = new Date().toISOString()
+
+  expect(() => {
+    assertDuckdbOwnerConnectionHeartbeatCompatible({
+      apiServerPort: 4010,
+      hostname: 'test-host',
+      pid: 12345,
+      serverRole: 'api',
+      startedAt,
+      duckdbOwnerUrl: 'http://127.0.0.1:4011',
+    })
+  }).toThrow('Incompatible Forska split runtime version')
 })

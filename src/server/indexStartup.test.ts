@@ -404,3 +404,81 @@ test('maintenance-worker startup tolerates malformed DuckDB lease metadata files
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
   }
 })
+
+test('api startup refuses a reachable pre-cutover DuckDB owner peer', async () => {
+  const apiPort = 34987
+  const duckdbPath = `/tmp/f1-index-startup-cutover-peer-${Date.now()}.duckdb`
+  const preCutoverOwner = globalThis.Bun.serve({
+    port: 0,
+    fetch: () => {
+      return Response.json({data: {owner: {apiServerPort: 34986}}})
+    },
+  })
+
+  try {
+    await expectServerStartupFailure({
+      envValues: {
+        API_SERVER_PORT: String(apiPort),
+        DUCKDB_PATH: duckdbPath,
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_DUCKDB_OWNER_URL: `http://127.0.0.1:${preCutoverOwner.port}`,
+        SERVER_ROLE: 'api',
+        VITE_PORT: '4307',
+      },
+      expectedMessage: 'Incompatible Forska split runtime version',
+      port: apiPort,
+    })
+  } finally {
+    await preCutoverOwner.stop(true)
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+  }
+})
+
+test('maintenance-worker startup refuses a fresh pre-cutover legacy writer lease', async () => {
+  const apiPort = 34986
+  const duckdbPath = `/tmp/f1-index-startup-legacy-writer-cutover-${Date.now()}.duckdb`
+  const now = new Date().toISOString()
+
+  writeFileSync(
+    `${duckdbPath}.writer.lock`,
+    `${JSON.stringify(
+      {
+        acquiredAt: now,
+        apiServerPort: 3999,
+        databasePath: duckdbPath,
+        heartbeatAt: now,
+        hostname: hostname(),
+        leaseId: 'fresh-pre-cutover-writer-lease',
+        pid: 999_999,
+        serverRole: 'maintenance-worker',
+      },
+      null,
+      2,
+    )}\n`,
+  )
+
+  try {
+    await expectServerStartupFailure({
+      envValues: {
+        API_SERVER_PORT: String(apiPort),
+        DUCKDB_PATH: duckdbPath,
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_DUCKDB_OWNER_URL: '',
+        SERVER_ROLE: 'maintenance-worker',
+        VITE_PORT: '4306',
+      },
+      expectedMessage: 'Incompatible Forska split runtime version',
+      port: apiPort,
+    })
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+  }
+})

@@ -1,5 +1,5 @@
 import {spawnSync} from 'node:child_process'
-import {mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
+import {existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs'
 import {hostname} from 'node:os'
 import {join} from 'node:path'
 
@@ -11,12 +11,18 @@ import {
   type DuckdbOwnerLeaseMetadata,
   isDuckdbOwnerLeaseProcessAlive,
 } from './duckdbOwnerLease.ts'
+import {getRuntimeCutoverVersion} from './runtimeCutover.ts'
 
 const createLeasePaths = () => {
   const tempDirectory = mkdtempSync('/tmp/f1-duckdb-owner-lease-')
   const duckdbPath = join(tempDirectory, 'test.duckdb')
 
-  return {duckdbPath, leasePath: `${duckdbPath}.duckdb-owner.lock`, tempDirectory}
+  return {
+    duckdbPath,
+    legacyLeasePath: `${duckdbPath}.writer.lock`,
+    leasePath: `${duckdbPath}.duckdb-owner.lock`,
+    tempDirectory,
+  }
 }
 
 const readLeaseMetadata = (leasePath: string): DuckdbOwnerLeaseMetadata => {
@@ -24,7 +30,13 @@ const readLeaseMetadata = (leasePath: string): DuckdbOwnerLeaseMetadata => {
 }
 
 const writeLeaseMetadata = (leasePath: string, metadata: DuckdbOwnerLeaseMetadata) => {
-  writeFileSync(leasePath, `${JSON.stringify(metadata, null, 2)}\n`)
+  writeFileSync(leasePath, `${JSON.stringify({...metadata, runtimeVersion: getRuntimeCutoverVersion()}, null, 2)}\n`)
+}
+
+const writePreCutoverLeaseMetadata = (leasePath: string, metadata: DuckdbOwnerLeaseMetadata) => {
+  const {runtimeVersion: _runtimeVersion, ...preCutoverMetadata} = metadata
+
+  writeFileSync(leasePath, `${JSON.stringify(preCutoverMetadata, null, 2)}\n`)
 }
 
 const getNormalizedCommandOutput = (command: string, args: string[]) => {
@@ -363,6 +375,123 @@ test('maintenance-worker can take over a stale foreign lease when auto mode alre
 
     expect(nextLease.metadata.leaseId).not.toBe('stale-foreign-lease-id')
     expect(nextLease.metadata.machineFingerprint).toBeDefined()
+  } finally {
+    rmSync(tempDirectory, {force: true, recursive: true})
+  }
+})
+
+test('maintenance-worker refuses a fresh pre-cutover legacy writer lease', async () => {
+  const {duckdbPath, legacyLeasePath, tempDirectory} = createLeasePaths()
+  const now = new Date().toISOString()
+
+  try {
+    writePreCutoverLeaseMetadata(legacyLeasePath, {
+      acquiredAt: now,
+      apiServerPort: 3999,
+      databasePath: duckdbPath,
+      heartbeatAt: now,
+      hostname: 'legacy-writer-host.local',
+      machineFingerprint: 'legacy-writer-fingerprint',
+      leaseId: 'fresh-legacy-writer-lease-id',
+      pid: 999_999,
+      serverRole: 'maintenance-worker',
+    })
+
+    const acquireLeaseError = await Effect.runPromise(
+      acquireDuckdbOwnerLease({apiServerPort: 3999, databasePath: duckdbPath, serverRole: 'maintenance-worker'}),
+    )
+      .then(() => {
+        return null
+      })
+      .catch((error: unknown) => {
+        return error
+      })
+
+    expect(acquireLeaseError).toBeInstanceOf(Error)
+    expect((acquireLeaseError as Error).message).toContain('Incompatible Forska split runtime version')
+    expect((acquireLeaseError as Error).message).toContain('fresh')
+    expect(existsSync(legacyLeasePath)).toBe(true)
+  } finally {
+    rmSync(tempDirectory, {force: true, recursive: true})
+  }
+})
+
+test('maintenance-worker refuses a stale reachable pre-cutover legacy writer lease', async () => {
+  const {duckdbPath, legacyLeasePath, tempDirectory} = createLeasePaths()
+  const legacyWriterServer = globalThis.Bun.serve({
+    port: 0,
+    fetch: () => {
+      return Response.json({data: null, error: 'legacy writer'})
+    },
+  })
+
+  try {
+    writePreCutoverLeaseMetadata(legacyLeasePath, {
+      acquiredAt: '2026-03-01T00:00:00.000Z',
+      apiServerPort: legacyWriterServer.port,
+      databasePath: duckdbPath,
+      heartbeatAt: '2026-03-01T00:00:00.000Z',
+      hostname: hostname(),
+      leaseId: 'reachable-legacy-writer-lease-id',
+      pid: 999_999,
+      serverRole: 'maintenance-worker',
+    })
+
+    const acquireLeaseError = await Effect.runPromise(
+      acquireDuckdbOwnerLease({apiServerPort: 3999, databasePath: duckdbPath, serverRole: 'maintenance-worker'}),
+    )
+      .then(() => {
+        return null
+      })
+      .catch((error: unknown) => {
+        return error
+      })
+
+    expect(acquireLeaseError).toBeInstanceOf(Error)
+    expect((acquireLeaseError as Error).message).toContain('Incompatible Forska split runtime version')
+    expect((acquireLeaseError as Error).message).toContain('still reachable')
+    expect(existsSync(legacyLeasePath)).toBe(true)
+  } finally {
+    await legacyWriterServer.stop(true)
+    rmSync(tempDirectory, {force: true, recursive: true})
+  }
+})
+
+test('maintenance-worker replaces a stale unreachable pre-cutover legacy writer lease', async () => {
+  const {duckdbPath, legacyLeasePath, leasePath, tempDirectory} = createLeasePaths()
+  const stoppedLegacyWriterServer = globalThis.Bun.serve({
+    port: 0,
+    fetch: () => {
+      return Response.json({data: null, error: 'legacy writer'})
+    },
+  })
+  const legacyWriterPort = stoppedLegacyWriterServer.port
+
+  await stoppedLegacyWriterServer.stop(true)
+
+  try {
+    writePreCutoverLeaseMetadata(legacyLeasePath, {
+      acquiredAt: '2026-03-01T00:00:00.000Z',
+      apiServerPort: legacyWriterPort,
+      databasePath: duckdbPath,
+      heartbeatAt: '2026-03-01T00:00:00.000Z',
+      hostname: hostname(),
+      leaseId: 'unreachable-legacy-writer-lease-id',
+      pid: 999_999,
+      serverRole: 'maintenance-worker',
+    })
+
+    const nextLease = await Effect.runPromise(
+      acquireDuckdbOwnerLease({apiServerPort: 3999, databasePath: duckdbPath, serverRole: 'maintenance-worker'}),
+    )
+
+    if (nextLease === null) {
+      throw new Error('Expected legacy writer lease replacement')
+    }
+
+    expect(existsSync(legacyLeasePath)).toBe(false)
+    expect(readLeaseMetadata(leasePath).runtimeVersion).toBe(getRuntimeCutoverVersion())
+    expect(nextLease.metadata.runtimeVersion).toBe(getRuntimeCutoverVersion())
   } finally {
     rmSync(tempDirectory, {force: true, recursive: true})
   }

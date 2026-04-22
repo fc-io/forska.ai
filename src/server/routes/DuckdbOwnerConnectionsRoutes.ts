@@ -2,6 +2,7 @@ import {Elysia, t} from 'elysia'
 
 import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
 import {
+  assertDuckdbOwnerConnectionHeartbeatCompatible,
   getDuckdbOwnerConnectionsOverview,
   recordDuckdbOwnerConnectionProxy,
   upsertDuckdbOwnerConnectionHeartbeat,
@@ -16,6 +17,7 @@ const duckdbOwnerConnectionHeartbeatBody = t.Object({
   pid: t.Number(),
   processStartedAt: t.Optional(t.String()),
   runtimeProfile: t.Optional(t.Union([t.Literal('local'), t.Literal('primary'), t.Literal('secondary')])),
+  runtimeVersion: t.Optional(t.String()),
   serverRole: t.Union([
     t.Literal('api'),
     t.Literal('maintenance-worker'),
@@ -57,6 +59,7 @@ export const duckdbOwnerConnectionsRoutes = new Elysia()
   .post(
     '/api/duckdb_owner_connections/heartbeat',
     ({body}) => {
+      assertDuckdbOwnerConnectionHeartbeatCompatible(body)
       return {data: upsertDuckdbOwnerConnectionHeartbeat(body)}
     },
     {body: duckdbOwnerConnectionHeartbeatBody},

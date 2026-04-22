@@ -3,6 +3,14 @@ import {Effect} from 'effect'
 import {type DuckdbOwnerLeaseHistoryEntry, readDuckdbOwnerLeaseHistory} from './duckdbOwnerLease.ts'
 import {type DuckdbOwnerWarning, getDuckdbOwnerWarnings} from './duckdbOwnerWarnings.ts'
 import {env} from './env.ts'
+import {
+  assertRuntimeCutoverVersionCompatible,
+  getRuntimeCutoverVersion,
+  getRuntimeCutoverVersionMismatchMessage,
+  isRuntimeCutoverVersionCompatible,
+  normalizeRuntimeCutoverVersion,
+  splitRuntimeCutoverVersionHeader,
+} from './runtimeCutover.ts'
 import type {RuntimeLogProfile} from './runtimeLogger.ts'
 import {getRuntimeProcessIdentity, type RuntimeProcessServiceName} from './runtimeProcessIdentity.ts'
 import {getServerRoleCapabilities, type ServerRole, type ServerRoleCapability} from './serverRole.ts'
@@ -23,6 +31,7 @@ const duckdbOwnerConnectionHeaderNames = {
   pid: 'x-forska-pid',
   processStartedAt: 'x-forska-process-started-at',
   runtimeProfile: 'x-forska-runtime-profile',
+  runtimeVersion: splitRuntimeCutoverVersionHeader,
   serverRole: 'x-forska-server-role',
   service: 'x-forska-service',
   startedAt: 'x-forska-started-at',
@@ -39,6 +48,7 @@ type DuckdbOwnerConnectionIdentity = {
   pid: number
   processStartedAt: string
   runtimeProfile: RuntimeLogProfile
+  runtimeVersion: string
   serverRole: ServerRole
   service: RuntimeProcessServiceName
   startedAt: string
@@ -80,6 +90,7 @@ export type DuckdbOwnerConnectionsOverview = {
   followers: DuckdbOwnerConnectionRecord[]
   history: DuckdbOwnerLeaseHistoryEntry[]
   registry: RuntimeCapabilityRegistryOverview
+  runtimeVersion: string
   warnings: DuckdbOwnerWarning[]
   owner: DuckdbOwnerConnectionRecord | null
 }
@@ -92,6 +103,7 @@ export type DuckdbOwnerConnectionHeartbeatInput = {
   pid: number
   processStartedAt?: string
   runtimeProfile?: RuntimeLogProfile
+  runtimeVersion?: string | null
   serverRole: ServerRole
   service?: RuntimeProcessServiceName
   startedAt: string
@@ -132,6 +144,7 @@ const getCurrentDuckdbOwnerConnectionIdentity = (): DuckdbOwnerConnectionIdentit
     pid: process.pid,
     processStartedAt: runtimeIdentity.processStartedAt,
     runtimeProfile: runtimeIdentity.runtimeProfile,
+    runtimeVersion: getRuntimeCutoverVersion(),
     serverRole: getCurrentServerRole(),
     service: runtimeIdentity.service,
     startedAt: runtimeIdentity.processStartedAt,
@@ -244,6 +257,7 @@ const getDuckdbOwnerConnectionHeadersFromIdentity = (identity: DuckdbOwnerConnec
     [duckdbOwnerConnectionHeaderNames.pid]: String(identity.pid),
     [duckdbOwnerConnectionHeaderNames.processStartedAt]: identity.processStartedAt,
     [duckdbOwnerConnectionHeaderNames.runtimeProfile]: identity.runtimeProfile,
+    [duckdbOwnerConnectionHeaderNames.runtimeVersion]: identity.runtimeVersion,
     [duckdbOwnerConnectionHeaderNames.serverRole]: identity.serverRole,
     [duckdbOwnerConnectionHeaderNames.service]: identity.service,
     [duckdbOwnerConnectionHeaderNames.startedAt]: identity.startedAt,
@@ -267,6 +281,10 @@ const getServerRoleFromHeader = (value: string | null): ServerRole | null => {
 
 const getRuntimeProfileFromHeader = (value: string | null): RuntimeLogProfile | null => {
   return value === 'local' || value === 'primary' || value === 'secondary' ? value : null
+}
+
+const getRuntimeVersionFromHeader = (headers: Headers) => {
+  return normalizeRuntimeCutoverVersion(headers.get(duckdbOwnerConnectionHeaderNames.runtimeVersion))
 }
 
 const getRuntimeProcessServiceFromHeader = (value: string | null): RuntimeProcessServiceName | null => {
@@ -321,6 +339,7 @@ const getNormalizedDuckdbOwnerConnectionIdentity = (
     pid: input.pid,
     processStartedAt,
     runtimeProfile,
+    runtimeVersion: normalizeRuntimeCutoverVersion(input.runtimeVersion) ?? getRuntimeCutoverVersion(),
     serverRole: input.serverRole,
     service,
     startedAt: processStartedAt,
@@ -337,6 +356,7 @@ const getDuckdbOwnerConnectionIdentityFromHeaders = (headers: Headers): DuckdbOw
   const processStartedAt = headers.get(duckdbOwnerConnectionHeaderNames.processStartedAt) ?? undefined
   const runtimeProfile =
     getRuntimeProfileFromHeader(headers.get(duckdbOwnerConnectionHeaderNames.runtimeProfile)) ?? undefined
+  const runtimeVersion = getRuntimeVersionFromHeader(headers)
   const serverRole = getServerRoleFromHeader(headers.get(duckdbOwnerConnectionHeaderNames.serverRole))
   const service = getRuntimeProcessServiceFromHeader(headers.get(duckdbOwnerConnectionHeaderNames.service)) ?? undefined
   const startedAt = headers.get(duckdbOwnerConnectionHeaderNames.startedAt)
@@ -351,6 +371,7 @@ const getDuckdbOwnerConnectionIdentityFromHeaders = (headers: Headers): DuckdbOw
         pid,
         processStartedAt,
         runtimeProfile,
+        runtimeVersion,
         serverRole,
         service,
         startedAt,
@@ -383,6 +404,7 @@ const getUpdatedDuckdbOwnerConnectionRecord = (
     processStartedAt: normalizedInput.processStartedAt,
     proxyCount: updates.proxyCount ?? previous?.proxyCount ?? 0,
     runtimeProfile: normalizedInput.runtimeProfile,
+    runtimeVersion: normalizedInput.runtimeVersion,
     serverRole: normalizedInput.serverRole,
     service: normalizedInput.service,
     startedAt: normalizedInput.startedAt,
@@ -392,6 +414,33 @@ const getUpdatedDuckdbOwnerConnectionRecord = (
 
 export const getDuckdbOwnerConnectionProxyHeaders = () => {
   return getDuckdbOwnerConnectionHeadersFromIdentity(getCurrentDuckdbOwnerConnectionIdentity())
+}
+
+export const getDuckdbOwnerConnectionRuntimeVersionError = (headers: Headers) => {
+  const hasPeerHeaders =
+    headers.has(duckdbOwnerConnectionHeaderNames.apiServerPort)
+    || headers.has(duckdbOwnerConnectionHeaderNames.instanceId)
+    || headers.has(duckdbOwnerConnectionHeaderNames.serverRole)
+  const runtimeVersion = getRuntimeVersionFromHeader(headers)
+
+  return hasPeerHeaders && !isRuntimeCutoverVersionCompatible(runtimeVersion)
+    ? new Error(getRuntimeCutoverVersionMismatchMessage({context: 'DuckDB owner-routed API request', runtimeVersion}))
+    : null
+}
+
+export const assertDuckdbOwnerConnectionProxyHeadersCompatible = (headers: Headers) => {
+  const error = getDuckdbOwnerConnectionRuntimeVersionError(headers)
+
+  if (error !== null) {
+    throw error
+  }
+}
+
+export const assertDuckdbOwnerConnectionHeartbeatCompatible = (input: DuckdbOwnerConnectionHeartbeatInput) => {
+  assertRuntimeCutoverVersionCompatible({
+    context: 'DuckDB owner connection heartbeat',
+    runtimeVersion: input.runtimeVersion,
+  })
 }
 
 export const upsertDuckdbOwnerConnectionHeartbeat = (input: DuckdbOwnerConnectionHeartbeatInput) => {
@@ -407,6 +456,8 @@ export const upsertDuckdbOwnerConnectionHeartbeat = (input: DuckdbOwnerConnectio
 }
 
 export const recordDuckdbOwnerConnectionProxy = (headers: Headers, requestPath: string) => {
+  assertDuckdbOwnerConnectionProxyHeadersCompatible(headers)
+
   const input = getDuckdbOwnerConnectionIdentityFromHeaders(headers)
   const nowMs = Date.now()
 
@@ -457,6 +508,7 @@ export const getDuckdbOwnerConnectionsOverview = async (): Promise<DuckdbOwnerCo
     followers,
     history,
     registry: getRuntimeCapabilityRegistryOverview(owner === null ? followers : [owner, ...followers]),
+    runtimeVersion: getRuntimeCutoverVersion(),
     warnings,
     owner,
   }
