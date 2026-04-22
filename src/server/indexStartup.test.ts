@@ -439,6 +439,24 @@ test('api startup refuses a reachable pre-cutover DuckDB owner peer', async () =
   }
 })
 
+test('api startup refuses ownerless routes without a file-backed ownerless-readable backend', async () => {
+  const apiPort = 34985
+
+  await expectServerStartupFailure({
+    envValues: {
+      API_SERVER_PORT: String(apiPort),
+      DUCKDB_PATH: ':memory:',
+      RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+      RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+      SERVER_DUCKDB_OWNER_URL: '',
+      SERVER_ROLE: 'api',
+      VITE_PORT: '4305',
+    },
+    expectedMessage: 'ownerless control-state backend requires file-backed DUCKDB_PATH',
+    port: apiPort,
+  })
+})
+
 test('maintenance-worker startup refuses a fresh pre-cutover legacy writer lease', async () => {
   const apiPort = 34986
   const duckdbPath = `/tmp/f1-index-startup-legacy-writer-cutover-${Date.now()}.duckdb`

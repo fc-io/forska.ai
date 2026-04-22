@@ -197,7 +197,7 @@ const registerSharedMocks = (
     const runtimeConfig = inferenceConfig
 
     return {
-      getAppDatabaseService: () => {
+      getJudgeWorkerReadOnlyAppDatabaseService: () => {
         return {
           queryJson: async <T>(statement: string): Promise<T[]> => {
             return statement.includes('FROM app.project_mart_refresh_state pmrs')
@@ -811,7 +811,7 @@ test('claims promoted human pairs first when ready deficit is smaller than the f
 
   void mock.module(judgmentsJobsAddToQueueDependenciesModulePath, () => {
     return {
-      getAppDatabaseService: () => {
+      getJudgeWorkerReadOnlyAppDatabaseService: () => {
         return {
           queryJson: async <T>(statement: string): Promise<T[]> => {
             return statement.includes('FROM app.judgment_human jh')
@@ -920,7 +920,7 @@ test('top-up inserts later summary-backed rows ahead of new window peers without
 
   void mock.module(judgmentsJobsAddToQueueDependenciesModulePath, () => {
     return {
-      getAppDatabaseService: () => {
+      getJudgeWorkerReadOnlyAppDatabaseService: () => {
         return {
           queryJson: async <T>(statement: string): Promise<T[]> => {
             return statement.includes('FROM app.judgment_human_summary')
@@ -1389,7 +1389,7 @@ test('queue reuse skips unchanged scoped clone judgments and keeps changed setti
 
   void mock.module(judgmentsJobsAddToQueueDependenciesModulePath, () => {
     return {
-      getAppDatabaseService: () => {
+      getJudgeWorkerReadOnlyAppDatabaseService: () => {
         return {queryJson: dbQuery, run: dbRun}
       },
       getJudgmentJobSqliteService: () => {
@@ -1532,7 +1532,7 @@ test('queue reuse keeps cloned prompt edits queued when source judgments stay on
 
   void mock.module(judgmentsJobsAddToQueueDependenciesModulePath, () => {
     return {
-      getAppDatabaseService: () => {
+      getJudgeWorkerReadOnlyAppDatabaseService: () => {
         return {queryJson: dbQuery, run: dbRun}
       },
       getJudgmentJobSqliteService: () => {
@@ -1666,7 +1666,7 @@ test('queue reuse does not skip matching judgments outside the target project sc
 
   void mock.module(judgmentsJobsAddToQueueDependenciesModulePath, () => {
     return {
-      getAppDatabaseService: () => {
+      getJudgeWorkerReadOnlyAppDatabaseService: () => {
         return {queryJson: dbQuery, run: dbRun}
       },
       getJudgmentJobSqliteService: () => {

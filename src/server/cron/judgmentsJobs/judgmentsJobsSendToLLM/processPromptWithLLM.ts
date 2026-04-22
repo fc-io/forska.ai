@@ -4,9 +4,9 @@ import {judgeSinglePrompt, MAX_COMPLETION_TOKENS, RecoverableJudgeError} from '.
 import {JudgmentPersistenceError} from '../../../../agent/judge/storeSinglePromptJudgment.ts'
 import type {ArticleRecord, PublicationStatus} from '../../../../db/schemaTypes.ts'
 import {getProviderModelMetadataPromptTokenLimit} from '../../../providers/providerModelMetadata.ts'
-import {getAppDatabaseService} from '../../../services/appDatabaseService.ts'
 import {escapeSqlString} from '../../../services/appQueryHelpers.ts'
-import {getAppQueryService} from '../../../services/getAppQueryService.ts'
+import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../../services/appReadOnlyDatabaseService.ts'
+import {getJudgeWorkerReadOnlyAppQueryService} from '../../../services/getAppReadOnlyQueryService.ts'
 import {ensureFullText} from '../../../utils/ensureFullText.ts'
 import {processFulltextForLLM} from '../../../utils/fulltextProcessing.ts'
 import {createRateLimitedLogger} from '../../../utils/rateLimitedLogger.ts'
@@ -30,7 +30,7 @@ const checkJudgmentExistsInDatabase = async (promptToProcess: PromptToProcess): 
     }
   }
 
-  const [existing] = await getAppDatabaseService().queryJson<{id: string}>(`
+  const [existing] = await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{id: string}>(`
     SELECT id
     FROM app.judgment
     WHERE article_id = '${escapeSqlString(promptToProcess.articleId)}'
@@ -120,7 +120,7 @@ const getCachedArticle = async ({
   const cacheKey = `${articleId}:${includeFullText ? 'fulltext' : 'metadata'}`
 
   return withCachedLookup(cachedArticleLookups, cacheKey, async () => {
-    const [article] = await getAppQueryService().getFullArticlesByIds([articleId], {includeFullText})
+    const [article] = await getJudgeWorkerReadOnlyAppQueryService().getFullArticlesByIds([articleId], {includeFullText})
 
     return article
       ? ({
@@ -143,7 +143,7 @@ const getCachedPromptDefinition = async ({
   const cacheKey = `${projectId}:${promptId}`
 
   return withCachedLookup(cachedPromptLookups, cacheKey, async () => {
-    const [prompt] = await getAppDatabaseService().queryJson<PromptDefinition>(`
+    const [prompt] = await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<PromptDefinition>(`
       SELECT
         p.id AS id,
         p.original_text AS originalText,

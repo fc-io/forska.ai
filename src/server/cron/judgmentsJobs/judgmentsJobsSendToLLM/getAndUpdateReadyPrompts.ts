@@ -1,7 +1,7 @@
 import {getProviderConnectionConfigFromJson} from '../../../providers/providerDbUtils.ts'
 import {resolveProviderConnectionRuntimeMatch} from '../../../providers/providerRuntimeMatchResolver.ts'
-import {getAppDatabaseService} from '../../../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../../../services/appQueryHelpers.ts'
+import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../../services/appReadOnlyDatabaseService.ts'
 import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from '../judgmentJobSqliteService.ts'
 
 export type PromptToProcess = {
@@ -45,7 +45,7 @@ const getCodexPlaceholderBaseUrl = (): string => {
 }
 
 const isJobReadyToClaimPrompts = async (jobId: string): Promise<boolean> => {
-  const [job] = await getAppDatabaseService().queryJson<{id: string}>(`
+  const [job] = await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{id: string}>(`
     SELECT id
     FROM app.judgment_job
     WHERE id = ${getSqlLiteral(jobId)}

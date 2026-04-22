@@ -12,6 +12,7 @@ import {
 import {getProjectMartRefreshStateService} from '../services/projectMartRefreshStateService.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash'
 import {withErrorHandler} from '../utils/routeErrorHandler'
+import {promptsReadOnlyRoutes} from './promptsRoutes/promptsRoutesReadOnly.ts'
 
 type PromptRow = Pick<PromptRecord, 'id' | 'originalText' | 'transformedText' | 'promptHeading' | 'type'>
 
@@ -88,10 +89,6 @@ const applyHashUpdates = async (updates: PromptHashUpdate[]) => {
   )
 
   return updates.length
-}
-
-const normalizePromptListRow = <TRow extends Record<string, unknown>>(row: TRow) => {
-  return {...row, createdAt: getDateValue(row['createdAt']), updatedAt: getDateValue(row['updatedAt'])}
 }
 
 const getPromptReferenceCounts = async (id: string): Promise<PromptReferenceCounts> => {
@@ -260,82 +257,30 @@ const resolveJudgmentHumanPromptCollisions = async ({
   }
 }
 
-const promptsUserRoutes = new Elysia()
-  .use(withErrorHandler())
-  .get('/api/prompts', async () => {
-    const list = await getAppDatabaseService().queryJson<{
-      id: string
-      originalText: string
-      promptHeading: string | null
-      type: string | null
-      createdAt: unknown
-      updatedAt: unknown
-      archived: boolean
-    }>(`
-      SELECT
-        id,
-        original_text AS originalText,
-        prompt_heading AS promptHeading,
-        type,
-        created_at AS createdAt,
-        updated_at AS updatedAt,
-        archived
-      FROM app.prompt
-      WHERE archived = FALSE
-      ORDER BY created_at DESC
-    `)
-
-    return {data: list.map(normalizePromptListRow)}
-  })
-  .get('/api/prompts/archived', async () => {
-    const list = await getAppDatabaseService().queryJson<{
-      id: string
-      originalText: string
-      promptHeading: string | null
-      type: string | null
-      createdAt: unknown
-      updatedAt: unknown
-      archived: boolean
-    }>(`
-      SELECT
-        id,
-        original_text AS originalText,
-        prompt_heading AS promptHeading,
-        type,
-        created_at AS createdAt,
-        updated_at AS updatedAt,
-        archived
-      FROM app.prompt
-      WHERE archived = TRUE
-      ORDER BY created_at DESC
-    `)
-
-    return {data: list.map(normalizePromptListRow)}
-  })
-  .patch(
-    '/api/prompts/:id',
-    async ({params, body, set}) => {
-      const [existingPrompt] = await getAppDatabaseService().queryJson<{id: string}>(`
+const promptsUserRoutes = new Elysia().use(withErrorHandler()).patch(
+  '/api/prompts/:id',
+  async ({params, body, set}) => {
+    const [existingPrompt] = await getAppDatabaseService().queryJson<{id: string}>(`
         SELECT id
         FROM app.prompt
         WHERE id = '${escapeSqlString(params.id)}'
         LIMIT 1
       `)
 
-      if (!existingPrompt) {
-        set.status = 404
-        return {data: null, error: 'Prompt not found'}
-      }
+    if (!existingPrompt) {
+      set.status = 404
+      return {data: null, error: 'Prompt not found'}
+    }
 
-      const [updatedPrompt] = await getAppDatabaseService().queryJson<{
-        id: string
-        originalText: string
-        promptHeading: string | null
-        type: string | null
-        createdAt: unknown
-        updatedAt: unknown
-        archived: boolean
-      }>(`
+    const [updatedPrompt] = await getAppDatabaseService().queryJson<{
+      id: string
+      originalText: string
+      promptHeading: string | null
+      type: string | null
+      createdAt: unknown
+      updatedAt: unknown
+      archived: boolean
+    }>(`
         UPDATE app.prompt
         SET archived = ${body.archived ? 'TRUE' : 'FALSE'},
             updated_at = current_timestamp
@@ -350,10 +295,18 @@ const promptsUserRoutes = new Elysia()
           archived
       `)
 
-      return {data: updatedPrompt ? normalizePromptListRow(updatedPrompt) : null}
-    },
-    {body: t.Object({archived: t.Boolean()})},
-  )
+    return {
+      data: updatedPrompt
+        ? {
+            ...updatedPrompt,
+            createdAt: getDateValue(updatedPrompt.createdAt),
+            updatedAt: getDateValue(updatedPrompt.updatedAt),
+          }
+        : null,
+    }
+  },
+  {body: t.Object({archived: t.Boolean()})},
+)
 
 const promptsAdminRoutes = new Elysia()
   .use(withErrorHandler())
@@ -840,4 +793,8 @@ const promptsAdminRoutes = new Elysia()
     {body: t.Object({judgmentIds: t.Array(t.String())})},
   )
 
-export const promptsRoutes = new Elysia().use(withErrorHandler()).use(promptsUserRoutes).use(promptsAdminRoutes)
+export const promptsRoutes = new Elysia()
+  .use(withErrorHandler())
+  .use(promptsReadOnlyRoutes)
+  .use(promptsUserRoutes)
+  .use(promptsAdminRoutes)

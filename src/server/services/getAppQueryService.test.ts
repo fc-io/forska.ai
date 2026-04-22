@@ -1,5 +1,5 @@
 import {expect, test} from 'bun:test'
-import {existsSync, unlinkSync} from 'fs'
+import {existsSync, readFileSync, unlinkSync} from 'fs'
 
 const removeFileIfExists = (filePath: string) => {
   if (existsSync(filePath)) {
@@ -155,4 +155,88 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
   } finally {
     removeFileIfExists(duckdbPath)
   }
+})
+
+test('read-only app query helpers read DuckDB without accepting write-capable SQL', async () => {
+  const duckdbPath = `/tmp/f1-read-only-app-query-service-${Date.now()}.duckdb`
+  const init = globalThis.Bun.spawnSync([
+    'duckdb',
+    '-json',
+    duckdbPath,
+    `
+      CREATE SCHEMA app;
+      CREATE TABLE app.sample (value INTEGER NOT NULL);
+      INSERT INTO app.sample (value) VALUES (42);
+    `,
+  ])
+
+  if (init.exitCode !== 0) {
+    throw new Error(init.stderr.toString() || init.stdout.toString() || 'Failed to initialize read-only DuckDB test')
+  }
+
+  try {
+    const result = globalThis.Bun.spawnSync(
+      [
+        'bun',
+        '-e',
+        `
+          const {getJudgeWorkerReadOnlyAppDatabaseService, closeAppReadOnlyDatabaseServices} = await import('./src/server/services/appReadOnlyDatabaseService.ts')
+          const database = getJudgeWorkerReadOnlyAppDatabaseService()
+          const rows = await database.queryJson('SELECT value FROM app.sample LIMIT 1')
+          let writeError = null
+          try {
+            await database.queryJson('UPDATE app.sample SET value = 43 RETURNING value')
+          } catch (error) {
+            writeError = error instanceof Error ? error.message : String(error)
+          }
+          console.log(JSON.stringify({rows, writeError}))
+          await closeAppReadOnlyDatabaseServices()
+        `,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {...process.env, API_SERVER_PORT: '39992', DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'judge-worker'},
+      },
+    )
+
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'Failed to run read-only query test')
+    }
+
+    const parsed = JSON.parse(result.stdout.toString()) as {rows: Array<{value: number}>; writeError: string | null}
+
+    expect(parsed.rows).toEqual([{value: 42}])
+    expect(parsed.writeError).toContain('read-only DuckDB helper rejected a write-capable statement')
+  } finally {
+    removeFileIfExists(duckdbPath)
+  }
+})
+
+test('audited read-only modules do not import owner-capable database helpers', () => {
+  const auditedFiles = [
+    'src/server/services/appReadOnlyDatabaseService.ts',
+    'src/server/services/getAppReadOnlyQueryService.ts',
+    'src/server/routes/promptsRoutes/promptsRoutesReadOnly.ts',
+    'src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts',
+    'src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/processPromptWithLLM.ts',
+    'src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.ts',
+    'src/server/cron/judgmentsJobs/judgmentsJobsAddToQueueDependencies.ts',
+    'src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts',
+    'src/server/cron/judgmentsJobs/judgmentsJobsCronGetPrompts.ts',
+    'src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.ts',
+  ]
+  const forbiddenImports = ['appDatabaseService', 'getAppQueryService']
+  const violations = auditedFiles.flatMap((filePath) => {
+    const source = readFileSync(filePath, 'utf8')
+
+    return forbiddenImports
+      .filter((forbiddenImport) => {
+        return source.includes(forbiddenImport)
+      })
+      .map((forbiddenImport) => {
+        return `${filePath}:${forbiddenImport}`
+      })
+  })
+
+  expect(violations).toEqual([])
 })

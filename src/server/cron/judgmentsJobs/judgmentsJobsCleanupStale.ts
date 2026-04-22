@@ -1,5 +1,5 @@
-import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
 import {getJudgmentJobSqliteJobIds} from './judgmentJobPaths.ts'
 import {runJudgmentJobRepairAction} from './judgmentJobRepair.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
@@ -14,7 +14,7 @@ const getDrainingSqliteJobIds = async () => {
   return sqliteJobIds.length === 0
     ? []
     : (
-        await getAppDatabaseService().queryJson<{id: string}>(`
+        await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{id: string}>(`
           SELECT id
           FROM app.judgment_job
           WHERE id IN (${getQuotedStringList(sqliteJobIds).join(', ')})

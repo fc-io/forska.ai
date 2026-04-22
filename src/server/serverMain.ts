@@ -40,6 +40,7 @@ import {getAppServerRuntimeConfig} from './utils/getAppServerRuntimeConfig.ts'
 import {warmCodexAppServer} from './utils/getCodexAppServerClient.ts'
 import {inferenceRuntimeConfig} from './utils/getInferenceRuntimeConfig.ts'
 import {initializeJudgeWorkerJournalIdentity} from './utils/judgeWorkerJournalIdentity.ts'
+import {validateOwnerlessRouteBackends} from './utils/ownerlessReadableBackends.ts'
 import {writeRuntimeOperatorLogEvent} from './utils/runtimeLogger.ts'
 import {shouldServerRoleMountJudgingCrons, shouldServerRoleMountMaintenanceCrons} from './utils/serverRole.ts'
 import {
@@ -100,6 +101,7 @@ const allowedOrigins = [
 ]
 
 await initializeServerRuntimeRole()
+await validateOwnerlessRouteBackends()
 
 if (getCurrentServerRole() === 'judge-worker') {
   const judgeWorkerJournalIdentity = initializeJudgeWorkerJournalIdentity()

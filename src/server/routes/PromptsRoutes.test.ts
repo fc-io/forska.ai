@@ -23,6 +23,9 @@ beforeAll(async () => {
     import('./PromptsRoutes.ts'),
   ])
 
+  const {resetServerRuntimeRoleForTests} = await import('../utils/serverRuntimeRole.ts')
+
+  resetServerRuntimeRoleForTests()
   resetDuckdbServiceForTests()
   await migrateDuckdb()
 

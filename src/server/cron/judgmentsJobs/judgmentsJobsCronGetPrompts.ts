@@ -1,6 +1,6 @@
 import {getUnassessedPairsFromOlap} from '../../../services/olap/unassessedArticlesOlap.ts'
-import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString} from '../../services/appQueryHelpers.ts'
+import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import type {JobCursor} from './judgmentJobSqliteService.ts'
 
@@ -30,13 +30,13 @@ export const judgmentsJobsCronGetPrompts = async (
 ): Promise<QueuePromptsResult> => {
   const shouldPreferRawFallback = Boolean(preferRawFallback)
   const [projectResult, enabledPromptCount] = await Promise.all([
-    getAppDatabaseService().queryJson<{id: string; archived: boolean}>(`
+    getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{id: string; archived: boolean}>(`
       SELECT id, archived
       FROM app.project
       WHERE id = '${escapeSqlString(projectId)}'
       LIMIT 1
     `),
-    getAppDatabaseService().queryJson<{count: number}>(`
+    getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{count: number}>(`
       SELECT COUNT(*) AS count
       FROM app.project_prompt
       WHERE project_id = '${escapeSqlString(projectId)}'

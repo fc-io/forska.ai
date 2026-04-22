@@ -3,7 +3,7 @@ import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJu
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {
-  getAppDatabaseService,
+  getJudgeWorkerReadOnlyAppDatabaseService,
   getJudgmentJobSqliteService,
   getJudgmentsCapacity,
   inferenceRuntimeConfig,
@@ -194,7 +194,7 @@ const getAnsweredHumanPromptPairKeys = async (
   const batches = getPromptQueueEntryBatches(promptEntries)
   const matchingRows = await Promise.all(
     batches.map(async (batch) => {
-      return getAppDatabaseService().queryJson<{articleId: string; promptId: string}>(`
+      return getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{articleId: string; promptId: string}>(`
         WITH pairs(article_id, prompt_id) AS (
           VALUES ${batch
             .map((entry) => {
@@ -227,7 +227,7 @@ const getAnsweredHumanSummaryArticleIds = async (
   const batches = getPromptQueueEntryArticleIdBatches(promptEntries)
   const matchingRows = await Promise.all(
     batches.map(async (batch) => {
-      return getAppDatabaseService().queryJson<{articleId: string}>(`
+      return getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{articleId: string}>(`
         SELECT DISTINCT article_id AS articleId
         FROM app.judgment_human_summary
         WHERE project_id = ${getSqlLiteral(projectId)}
@@ -321,7 +321,10 @@ const filterAlreadyJudged = async (
     const batch = promptEntries.slice(i, i + sqliteBatchSize)
 
     // Find which pairs already have judgments
-    const existingJudgments = await getAppDatabaseService().queryJson<{articleId: string; promptId: string}>(`
+    const existingJudgments = await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{
+      articleId: string
+      promptId: string
+    }>(`
       WITH pairs(article_id, prompt_id) AS (
         VALUES ${batch
           .map((entry) => {
@@ -456,7 +459,7 @@ const hasSqliteExhaustedCooldown = (exhaustedAt: Date | null) => {
 }
 
 const getProjectDirtyToken = async (jobId: string): Promise<number | null> => {
-  const [row] = await getAppDatabaseService().queryJson<{dirtyToken: number | null}>(`
+  const [row] = await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{dirtyToken: number | null}>(`
     SELECT CAST(pmrs.dirty_token AS INTEGER) AS dirtyToken
     FROM app.judgment_job jj
     INNER JOIN app.project_mart_refresh_state pmrs ON pmrs.project_id = jj.project_id
@@ -634,7 +637,7 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
 }
 
 const getJobConfig = async (jobId: string): Promise<JobConfig | null> => {
-  const [config] = await getAppDatabaseService().queryJson<JobConfig>(`
+  const [config] = await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<JobConfig>(`
     SELECT
       COALESCE(p.human_judgment_mode, 'prompt') AS humanJudgmentMode,
       p.model_id AS modelId,

@@ -1,4 +1,4 @@
-export {getAppDatabaseService} from '../../services/appDatabaseService.ts'
+export {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
 export {inferenceRuntimeConfig} from '../../utils/getInferenceRuntimeConfig.ts'
 export {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 export {getJudgmentJobSqliteService, JudgmentJobLeaseError} from './judgmentJobSqliteService.ts'

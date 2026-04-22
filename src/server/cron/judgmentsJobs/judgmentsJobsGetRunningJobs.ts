@@ -1,6 +1,6 @@
 import {getStoredProviderModelRuntimeMatch} from '../../providers/providerRuntimeModelGuard.ts'
-import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getJudgmentJobSqliteJobIds} from './judgmentJobPaths.ts'
 import {filterRunningJobsBySqlitePreflight} from './judgmentJobSqlitePreflight.ts'
@@ -40,7 +40,7 @@ export type RunningJudgmentJob = {
 }
 
 const getRunningJobFromDatabase = async (jobId: string): Promise<RunningJudgmentJob | null> => {
-  const [row] = await getAppDatabaseService().queryJson<RunningJudgmentJob>(`
+  const [row] = await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<RunningJudgmentJob>(`
     SELECT
       jj.id AS id,
       jj.project_id AS projectId,
