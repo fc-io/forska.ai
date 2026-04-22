@@ -952,6 +952,123 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
   expect(body.storageHealth.oldestUnexportedAgeMs).toBeGreaterThanOrEqual(0)
 })
 
+test('judgment job health projection tracks completions waiting on maintenance visibility ack', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getAppDatabaseService} = await import('../services/appDatabaseService.ts')
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const now = Date.now()
+  const projectId = `sqlite-health-ack-project-${now}`
+  const modelId = `sqlite-health-ack-model-${now}`
+  const connectionId = `sqlite-health-ack-connection-${now}`
+  const jobId = `sqlite-health-ack-job-${now}`
+  const sqliteService = getJudgmentJobSqliteService()
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'running', 'active')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_mart_refresh_state (
+      project_id,
+      dirty_token,
+      last_completed_refresh_token,
+      refresh_status
+    ) VALUES (
+      '${projectId}',
+      10,
+      0,
+      'queued'
+    )
+  `)
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(
+    jobId,
+    [{articleId: `sqlite-health-ack-article-${now}`, promptId: `sqlite-health-ack-prompt-${now}`}],
+    'server-a',
+  )
+
+  const [claimedPrompt] = await sqliteService.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt for completion ack health test')
+  }
+
+  await sqliteService.recordJudgmentSuccess(jobId, {
+    answeredOriginal: 'yes',
+    answeredOriginalAsArray: ['yes'],
+    articleId: claimedPrompt.articleId,
+    chunkingStrategy: null,
+    confidenceOriginal: 80,
+    createdAt: new Date(),
+    explanation: 'completion ack',
+    isAnswered: true,
+    judgmentId: `sqlite-health-ack-judgment-${now}`,
+    modelId,
+    projectId,
+    promptId: claimedPrompt.promptId,
+    queuePromptId: claimedPrompt.recordId,
+    quotes: ['quote'],
+    rawResponseJson: {answer: 'yes'},
+    snapshotProjectId: projectId,
+    snapshotProjectModelName: 'Qwen 122B',
+    updatedAt: new Date(),
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
+
+  const claimedOutboxBatch = await sqliteService.claimPendingOutboxBatch({
+    claimedBy: 'server-a',
+    jobId,
+    maxBytes: 1024 * 1024,
+    maxRows: 10,
+  })
+
+  await sqliteService.completeOutboxClaim({claimId: claimedOutboxBatch?.claim.claimId ?? '', jobId})
+
+  const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}/health`))
+  const body = (await response.json()) as {
+    liveSqlite: {
+      hasPendingCompletionAck: boolean
+      oldestUnackedCompletionAgeMs: number | null
+      pendingCompletionAckCount: number
+    }
+  }
+  const [projectionBeforeAck] = await getAppDatabaseService().queryJson<{
+    pendingCompletionAckCount: number
+    projectionSource: string
+  }>(`
+    SELECT
+      pending_completion_ack_count AS pendingCompletionAckCount,
+      projection_source AS projectionSource
+    FROM app.judgment_job_sqlite_health_projection
+    WHERE job_id = '${jobId}'
+    LIMIT 1
+  `)
+
+  expect(response.status).toBe(200)
+  expect(body.liveSqlite.hasPendingCompletionAck).toBe(true)
+  expect(body.liveSqlite.pendingCompletionAckCount).toBe(1)
+  expect(body.liveSqlite.oldestUnackedCompletionAgeMs).toBeGreaterThanOrEqual(0)
+  expect(projectionBeforeAck).toEqual({pendingCompletionAckCount: 1, projectionSource: 'local-sqlite'})
+
+  await sqliteService.setLastProjectRefreshAckSeq(jobId, 10)
+
+  const ackedResponse = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}/health`))
+  const ackedBody = (await ackedResponse.json()) as {
+    liveSqlite: {hasPendingCompletionAck: boolean; pendingCompletionAckCount: number}
+  }
+
+  expect(ackedResponse.status).toBe(200)
+  expect(ackedBody.liveSqlite.hasPendingCompletionAck).toBe(false)
+  expect(ackedBody.liveSqlite.pendingCompletionAckCount).toBe(0)
+})
+
 test('returns safe SQLite health values for jobs without a local sqlite db', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')
@@ -988,10 +1105,15 @@ test('returns safe SQLite health values for jobs without a local sqlite db', asy
   expect(body.promptStats).toEqual({claimed: 0, judged: 0, ready: 0, running: 0, skipped: 0})
   expect(body.storageHealth).toEqual({
     claimedOutboxCount: 0,
+    hasOutboxRows: false,
+    hasPendingCompletionAck: false,
+    hasQueueRows: false,
     lastAckSeq: null,
+    oldestUnackedCompletionAgeMs: null,
     oldestUnexportedAgeMs: null,
     orphanedJudgedRowCount: 0,
     outboxRowCount: 0,
+    pendingCompletionAckCount: 0,
     promptCounts: {claimed: 0, judged: 0, ready: 0, running: 0, skipped: 0},
     retainedRowCount: 0,
     sqliteFileBytes: null,
@@ -1439,10 +1561,15 @@ test('judgment job health route returns missing job details', async () => {
   expect(body.recommendedNextAction).toBe('repair_missing_sqlite')
   expect(body.liveSqlite).toEqual({
     claimedOutboxCount: 0,
+    hasOutboxRows: false,
+    hasPendingCompletionAck: false,
+    hasQueueRows: false,
     lastAckSeq: null,
+    oldestUnackedCompletionAgeMs: null,
     oldestUnexportedAgeMs: null,
     orphanedJudgedRowCount: 0,
     outboxRowCount: 0,
+    pendingCompletionAckCount: 0,
     promptCounts: {claimed: 0, judged: 0, ready: 0, running: 0, skipped: 0},
     retainedRowCount: 0,
     sqliteFileBytes: null,

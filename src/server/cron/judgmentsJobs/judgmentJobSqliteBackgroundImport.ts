@@ -123,6 +123,7 @@ export const runJudgmentJobSqliteBackgroundImport = async ({claimedBy}: {claimed
   try {
     const result = await runJudgmentJobSqliteOutboxImportCycle({claimedBy, jobId})
     await recordImportSuccess({exitCode: 0, jobId})
+    await sqliteService.getHealthSnapshot(jobId)
     return result.status === 'idle'
       ? {attemptedCount: 1, failedCount: 0, skippedCount: 1, succeededCount: 0}
       : {attemptedCount: 1, failedCount: 0, skippedCount: 0, succeededCount: 1}

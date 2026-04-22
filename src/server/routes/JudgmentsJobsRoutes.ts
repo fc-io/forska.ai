@@ -34,11 +34,18 @@ import {
   getQuotedStringList,
   getSqlLiteral,
 } from '../services/appQueryHelpers.ts'
+import {getApiReadOnlyAppDatabaseService} from '../services/appReadOnlyDatabaseService.ts'
 import {deleteJudgmentJobSafelyTx} from '../services/judgmentJobDeleteService.ts'
+import {
+  getJudgmentJobSqliteHealthProjectionService,
+  type JudgmentJobSqliteHealthProjectionReader,
+  type JudgmentJobSqliteHealthProjectionRecord,
+  type JudgmentJobSqliteHealthSnapshotForProjection,
+} from '../services/judgmentJobSqliteHealthProjectionService.ts'
 import {HttpError} from '../utils/httpError.ts'
 import {getProjectMartLargeRebuildRuntimeMetrics} from '../utils/projectMartLargeRebuildRuntimeMetrics.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
-import {shouldCurrentServerRunJudgingLoops} from '../utils/serverRuntimeRole.ts'
+import {getCurrentServerRole, shouldCurrentServerRunJudgingLoops} from '../utils/serverRuntimeRole.ts'
 
 type TokenUsageDaySummary = {
   date: string
@@ -67,6 +74,9 @@ type JudgmentJobMutationState = {
   updatedAt: unknown
 }
 type JudgmentJobMutationQueryRunner = {queryJson: <T>(statement: string) => Promise<T[]>}
+type JudgmentJobSqliteHealthSnapshot = JudgmentJobSqliteHealthSnapshotForProjection & {
+  healthProjection?: {freshUntilAt: Date; projectedAt: Date; projectedBy: string | null; source: string}
+}
 type JudgmentJobHealthAction =
   | 'none'
   | 'repair_offline_required'
@@ -116,6 +126,30 @@ const systemSqliteFallbackStepsSchema = t.Array(
   t.Union([t.Literal('checkpoint'), t.Literal('diagnostic'), t.Literal('export')]),
 )
 
+const getJudgmentJobsReadDatabase = (): JudgmentJobSqliteHealthProjectionReader => {
+  return getCurrentServerRole() === 'api' ? getApiReadOnlyAppDatabaseService() : getAppDatabaseService()
+}
+
+const getMaintenanceUnavailableError = (message: string, cause?: unknown) => {
+  return new HttpError(503, `maintenance-unavailable: ${message}`, {cause})
+}
+
+const runJudgmentJobsRead = async <T>(operation: () => Promise<T>): Promise<T> => {
+  try {
+    return await operation()
+  } catch (error) {
+    if (error instanceof HttpError) {
+      throw error
+    }
+
+    if (getCurrentServerRole() === 'api') {
+      throw getMaintenanceUnavailableError('judgment job read model is unavailable', error)
+    }
+
+    throw error
+  }
+}
+
 const getUnassessedCountCacheKey = (
   projectId: string,
   projectModelId: string,
@@ -136,11 +170,11 @@ const getUnassessedCountCacheKey = (
   return `${projectId}|${projectModelId}|${from}|${to}|${routes}|${content}|${dirtyToken ?? 'null'}|${lastCompletedRefreshToken ?? 'null'}`
 }
 
-const getProjectMartFreshnessState = async (projectId: string): Promise<ProjectMartFreshnessState> => {
-  const [row] = await getAppDatabaseService().queryJson<{
-    dirtyToken: number | null
-    lastCompletedRefreshToken: number | null
-  }>(`
+const getProjectMartFreshnessState = async (
+  projectId: string,
+  db: JudgmentJobSqliteHealthProjectionReader = getAppDatabaseService(),
+): Promise<ProjectMartFreshnessState> => {
+  const [row] = await db.queryJson<{dirtyToken: number | null; lastCompletedRefreshToken: number | null}>(`
     SELECT
       CAST(dirty_token AS INTEGER) AS dirtyToken,
       CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken
@@ -222,8 +256,11 @@ const getEstimatedRemainingArticlePassCount = ({
   return null
 }
 
-const getJudgmentJobStorageProjection = async (projectId: string): Promise<JudgmentJobStorageProjection | null> => {
-  const [rebuildRow] = await getAppDatabaseService().queryJson<{
+const getJudgmentJobStorageProjection = async (
+  projectId: string,
+  db: JudgmentJobSqliteHealthProjectionReader = getAppDatabaseService(),
+): Promise<JudgmentJobStorageProjection | null> => {
+  const [rebuildRow] = await db.queryJson<{
     cursorArticleCreatedAt: string | null
     cursorArticleId: string | null
     rebuildPhase: string | null
@@ -244,12 +281,12 @@ const getJudgmentJobStorageProjection = async (projectId: string): Promise<Judgm
   }
 
   const [activeCountRows, scopeCountRows] = await Promise.all([
-    getAppDatabaseService().queryJson<{activeLargeRebuildProjectCount: number}>(`
+    db.queryJson<{activeLargeRebuildProjectCount: number}>(`
       SELECT CAST(COUNT(*) AS INTEGER) AS activeLargeRebuildProjectCount
       FROM app.project_mart_large_rebuild_state
       WHERE refresh_token > 0
     `),
-    getAppDatabaseService().queryJson<{remainingCurrentPhaseArticleCount: number; scopeArticleCount: number}>(`
+    db.queryJson<{remainingCurrentPhaseArticleCount: number; scopeArticleCount: number}>(`
       WITH route_scope AS (
         SELECT
           pir.project_id,
@@ -378,8 +415,10 @@ const aggregateTokenUsagePerDay = (
 }
 
 const getJobContext = async ({
+  db = getAppDatabaseService(),
   jobId,
 }: {
+  db?: JudgmentJobSqliteHealthProjectionReader
   jobId: string
 }): Promise<{
   job: {
@@ -411,7 +450,7 @@ const getJobContext = async ({
   importRouteIds: string[]
 }> => {
   const [jobWithProject, projectImportRoutes] = await Promise.all([
-    getAppDatabaseService().queryJson<{
+    db.queryJson<{
       id: string
       createdAt: unknown
       updatedAt: unknown
@@ -467,7 +506,7 @@ const getJobContext = async ({
       WHERE jj.id = '${escapeSqlString(jobId)}'
       LIMIT 1
     `),
-    getAppDatabaseService().queryJson<{importRouteId: string}>(`
+    db.queryJson<{importRouteId: string}>(`
       SELECT pir.import_route_id AS importRouteId
       FROM app.project_import_route pir
       INNER JOIN app.judgment_job jj ON jj.project_id = pir.project_id
@@ -528,8 +567,11 @@ const getJobContext = async ({
   }
 }
 
-const getProjectModelId = async (projectId: string): Promise<string> => {
-  const [project] = await getAppDatabaseService().queryJson<{modelId: string | null}>(`
+const getProjectModelId = async (
+  projectId: string,
+  db: JudgmentJobSqliteHealthProjectionReader = getAppDatabaseService(),
+): Promise<string> => {
+  const [project] = await db.queryJson<{modelId: string | null}>(`
     SELECT model_id AS modelId
     FROM app.project
     WHERE id = ${getSqlLiteral(projectId)}
@@ -559,21 +601,111 @@ const isStaleImportJob = (
   return Boolean(startedAt && isImportInFlight(job) && now - startedAt.getTime() >= staleImportThresholdMs)
 }
 
-const hasRetainedOutbox = (
-  sqliteHealth: Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['getHealthSnapshot']>>,
-) => {
+const getProjectedSqliteHealth = (
+  projection: JudgmentJobSqliteHealthProjectionRecord,
+): JudgmentJobSqliteHealthSnapshot => {
+  return {
+    claimedOutboxCount: projection.claimedOutboxCount,
+    hasOutboxRows: projection.hasOutboxRows,
+    hasPendingCompletionAck: projection.hasPendingCompletionAck,
+    hasQueueRows: projection.hasQueueRows,
+    lastAckSeq: projection.lastAckSeq,
+    oldestUnackedCompletionAgeMs: projection.oldestUnackedCompletionAgeMs,
+    oldestUnexportedAgeMs: projection.oldestUnexportedAgeMs,
+    orphanedJudgedRowCount: projection.orphanedJudgedRowCount,
+    outboxRowCount: projection.outboxRowCount,
+    pendingCompletionAckCount: projection.pendingCompletionAckCount,
+    healthProjection: {
+      freshUntilAt: projection.freshUntilAt,
+      projectedAt: projection.projectedAt,
+      projectedBy: projection.projectedBy,
+      source: projection.projectionSource,
+    },
+    promptCounts: projection.promptCounts,
+    retainedRowCount: projection.retainedRowCount,
+    sqliteFileBytes: projection.sqliteFileBytes,
+    walBytes: projection.walBytes,
+  }
+}
+
+const getSqliteHealthFromFreshProjection = async ({
+  db,
+  jobId,
+}: {
+  db: JudgmentJobSqliteHealthProjectionReader
+  jobId: string
+}): Promise<JudgmentJobSqliteHealthSnapshot> => {
+  const projection = await getJudgmentJobSqliteHealthProjectionService().getFreshJudgmentJobSqliteHealthProjection({
+    db,
+    jobId,
+  })
+
+  if (!projection) {
+    throw getMaintenanceUnavailableError(`fresh SQLite health projection is unavailable for judgment job ${jobId}`)
+  }
+
+  return getProjectedSqliteHealth(projection)
+}
+
+const getSqliteHealthForReadableRoute = async ({
+  db,
+  jobId,
+}: {
+  db: JudgmentJobSqliteHealthProjectionReader
+  jobId: string
+}): Promise<JudgmentJobSqliteHealthSnapshot> => {
+  return shouldCurrentServerRunJudgingLoops()
+    ? getJudgmentJobSqliteService().getHealthSnapshot(jobId)
+    : getSqliteHealthFromFreshProjection({db, jobId})
+}
+
+const getSqliteHealthMapForReadableRoute = async ({
+  db,
+  jobIds,
+}: {
+  db: JudgmentJobSqliteHealthProjectionReader
+  jobIds: string[]
+}) => {
+  if (shouldCurrentServerRunJudgingLoops()) {
+    const entries = await Promise.all(
+      jobIds.map(async (jobId) => {
+        return [jobId, await getJudgmentJobSqliteService().getHealthSnapshot(jobId)] as const
+      }),
+    )
+
+    return new Map(entries)
+  }
+
+  const projections = await getJudgmentJobSqliteHealthProjectionService().getFreshJudgmentJobSqliteHealthProjections({
+    db,
+    jobIds,
+  })
+  const missingJobIds = jobIds.filter((jobId) => {
+    return !projections.has(jobId)
+  })
+
+  if (missingJobIds.length > 0) {
+    throw getMaintenanceUnavailableError(
+      `fresh SQLite health projection is unavailable for judgment jobs ${missingJobIds.join(', ')}`,
+    )
+  }
+
+  return new Map(
+    Array.from(projections.entries()).map(([jobId, projection]) => {
+      return [jobId, getProjectedSqliteHealth(projection)] as const
+    }),
+  )
+}
+
+const hasRetainedOutbox = (sqliteHealth: JudgmentJobSqliteHealthSnapshot) => {
   return sqliteHealth.outboxRowCount > 0 || sqliteHealth.claimedOutboxCount > 0
 }
 
-const hasOrphanedJudgedQueue = (
-  sqliteHealth: Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['getHealthSnapshot']>>,
-) => {
+const hasOrphanedJudgedQueue = (sqliteHealth: JudgmentJobSqliteHealthSnapshot) => {
   return sqliteHealth.orphanedJudgedRowCount > 0
 }
 
-const hasLargeWal = (
-  sqliteHealth: Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['getHealthSnapshot']>>,
-) => {
+const hasLargeWal = (sqliteHealth: JudgmentJobSqliteHealthSnapshot) => {
   return sqliteHealth.walBytes >= largeWalThresholdBytes
 }
 
@@ -582,7 +714,7 @@ const getStoragePolicy = ({
   sqliteHealth,
 }: {
   job: {status: string; storageState: string}
-  sqliteHealth: Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['getHealthSnapshot']>>
+  sqliteHealth: JudgmentJobSqliteHealthSnapshot
 }) => {
   const hasLocalSqliteState = hasJudgmentJobLocalSqliteState(sqliteHealth)
 
@@ -598,7 +730,7 @@ const getJobHealthBadges = ({
   sqliteHealth,
 }: {
   job: {status: string; storageState: string; lastImportCompletedAt: Date | null; lastImportStartedAt: Date | null}
-  sqliteHealth: Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['getHealthSnapshot']>>
+  sqliteHealth: JudgmentJobSqliteHealthSnapshot
 }): JudgmentJobHealthBadge[] => {
   const badges: JudgmentJobHealthBadge[] = []
   const storagePolicy = getStoragePolicy({job, sqliteHealth})
@@ -635,7 +767,7 @@ const getRecommendedHealthAction = ({
   sqliteHealth,
 }: {
   job: {status: string; storageState: string; lastImportCompletedAt: Date | null; lastImportStartedAt: Date | null}
-  sqliteHealth: Awaited<ReturnType<ReturnType<typeof getJudgmentJobSqliteService>['getHealthSnapshot']>>
+  sqliteHealth: JudgmentJobSqliteHealthSnapshot
 }): JudgmentJobHealthAction => {
   const storagePolicy = getStoragePolicy({job, sqliteHealth})
 
@@ -930,51 +1062,58 @@ export const judgmentsJobsRoutes = new Elysia()
   .get(
     '/api/judgmentsjobs/:id/health',
     async ({params}) => {
-      const {job} = await getJobContext({jobId: params.id})
-      const sqliteHealth = await getJudgmentJobSqliteService().getHealthSnapshot(job.id)
-      const storagePolicy = getStoragePolicy({job, sqliteHealth})
-      const recommendedNextAction = getRecommendedHealthAction({job, sqliteHealth})
+      return runJudgmentJobsRead(async () => {
+        const db = getJudgmentJobsReadDatabase()
+        const {job} = await getJobContext({db, jobId: params.id})
+        const sqliteHealth = await getSqliteHealthForReadableRoute({db, jobId: job.id})
+        const storagePolicy = getStoragePolicy({job, sqliteHealth})
+        const recommendedNextAction = getRecommendedHealthAction({job, sqliteHealth})
 
-      return {
-        jobId: job.id,
-        storageState: job.storageState,
-        storagePolicy,
-        recommendedNextAction,
-        importMetadata: {
-          importFailureCount: job.importFailureCount,
-          lastImportCompletedAt: job.lastImportCompletedAt,
-          lastImportError: job.lastImportError,
-          lastImportErrorAt: job.lastImportErrorAt,
-          lastImportExitCode: job.lastImportExitCode,
-          lastImportStartedAt: job.lastImportStartedAt,
-          pauseRequestedAt: job.pauseRequestedAt,
-        },
-        quarantine: {quarantinedAt: job.quarantinedAt, quarantineReason: job.quarantineReason},
-        liveSqlite: sqliteHealth,
-      }
+        return {
+          jobId: job.id,
+          storageState: job.storageState,
+          storagePolicy,
+          recommendedNextAction,
+          importMetadata: {
+            importFailureCount: job.importFailureCount,
+            lastImportCompletedAt: job.lastImportCompletedAt,
+            lastImportError: job.lastImportError,
+            lastImportErrorAt: job.lastImportErrorAt,
+            lastImportExitCode: job.lastImportExitCode,
+            lastImportStartedAt: job.lastImportStartedAt,
+            pauseRequestedAt: job.pauseRequestedAt,
+          },
+          quarantine: {quarantinedAt: job.quarantinedAt, quarantineReason: job.quarantineReason},
+          liveSqlite: sqliteHealth,
+        }
+      })
     },
     {params: t.Object({id: t.String()})},
   )
   .get(
     '/api/judgmentsjobs/:id',
     async ({params}) => {
-      const {job, projectModelId} = await getJobContext({jobId: params.id})
-      const sqliteService = getJudgmentJobSqliteService()
-      const sqliteHealthPromise = sqliteService.getHealthSnapshot(job.id)
-      const leaseMetadataPromise = sqliteService.getJudgmentJobLeaseMetadata(job.id)
-      const storageProjectionPromise = getJudgmentJobStorageProjection(job.projectId)
+      return runJudgmentJobsRead(async () => {
+        const db = getJudgmentJobsReadDatabase()
+        const {job, projectModelId} = await getJobContext({db, jobId: params.id})
+        const sqliteService = getJudgmentJobSqliteService()
+        const sqliteHealthPromise = getSqliteHealthForReadableRoute({db, jobId: job.id})
+        const leaseMetadataPromise = shouldCurrentServerRunJudgingLoops()
+          ? sqliteService.getJudgmentJobLeaseMetadata(job.id)
+          : Promise.resolve(null)
+        const storageProjectionPromise = getJudgmentJobStorageProjection(job.projectId, db)
 
-      const [sqliteHealth, leaseMetadata, storageProjection, totalTokenUsage, tokenUsageRows, failedRequestRows] =
-        await Promise.all([
-          sqliteHealthPromise,
-          leaseMetadataPromise,
-          storageProjectionPromise,
-          getAppDatabaseService().queryJson<{
-            totalTokens: number | null
-            totalPromptTokens: number | null
-            totalCompletionTokens: number | null
-            totalRequests: number | null
-          }>(`
+        const [sqliteHealth, leaseMetadata, storageProjection, totalTokenUsage, tokenUsageRows, failedRequestRows] =
+          await Promise.all([
+            sqliteHealthPromise,
+            leaseMetadataPromise,
+            storageProjectionPromise,
+            db.queryJson<{
+              totalTokens: number | null
+              totalPromptTokens: number | null
+              totalCompletionTokens: number | null
+              totalRequests: number | null
+            }>(`
           SELECT
             SUM(total_tokens) AS totalTokens,
             SUM(total_prompt_tokens) AS totalPromptTokens,
@@ -983,13 +1122,13 @@ export const judgmentsJobsRoutes = new Elysia()
           FROM app.token_use
           WHERE judgment_job_id = '${escapeSqlString(job.id)}'
         `),
-          getAppDatabaseService().queryJson<{
-            createdAt: unknown
-            dailyTokens: number | null
-            dailyPromptTokens: number | null
-            dailyCompletionTokens: number | null
-            requests: number | null
-          }>(`
+            db.queryJson<{
+              createdAt: unknown
+              dailyTokens: number | null
+              dailyPromptTokens: number | null
+              dailyCompletionTokens: number | null
+              requests: number | null
+            }>(`
           SELECT
             created_at AS createdAt,
             total_tokens AS dailyTokens,
@@ -1000,121 +1139,122 @@ export const judgmentsJobsRoutes = new Elysia()
           WHERE judgment_job_id = '${escapeSqlString(job.id)}'
           ORDER BY created_at ASC
         `),
-          getAppDatabaseService().queryJson<{failedRequestsDetails: unknown}>(`
+            db.queryJson<{failedRequestsDetails: unknown}>(`
           SELECT TO_JSON(failed_requests_details) AS failedRequestsDetails
           FROM app.token_use
           WHERE judgment_job_id = '${escapeSqlString(job.id)}'
             AND has_failed_requests = TRUE
         `),
-        ])
-      const normalizedTokenUsageRows = tokenUsageRows.reduce<
-        Array<{
-          createdAt: Date
-          dailyTokens: number | string | null
-          dailyPromptTokens: number | string | null
-          dailyCompletionTokens: number | string | null
-          requests: number | string | null
-        }>
-      >((acc, row) => {
-        const createdAt = getDateValue(row.createdAt)
-        return createdAt ? [...acc, {...row, createdAt}] : acc
-      }, [])
-      const tokenUsagePerDay = aggregateTokenUsagePerDay(normalizedTokenUsageRows)
-      const requestRuntimeStats = getJudgmentRequestStats(job.id)
-      const failedRequestSummary = getFailedRequestSummary(failedRequestRows)
-      const storagePolicy = getStoragePolicy({job, sqliteHealth})
-      const recentTransfer = getJudgmentJobStorageTransferRuntime(job.id)
-      const providerConnection = await getProviderConnectionForStoredModel(projectModelId)
-      const effectiveBaseURL = providerConnection
-        ? getProviderConnectionEffectiveBaseURL({
-            baseURL: providerConnection.baseURL,
-            config: providerConnection.config,
-            providerKind: providerConnection.providerKind,
-            savedModelIds: [projectModelId],
-          })
-        : null
-      const endpointAvailability = effectiveBaseURL
-        ? getJudgmentEndpointAvailabilityDiagnostics(
-            getJudgmentEndpointAvailability({effectiveBaseURL, providerConnectionId: providerConnection?.id ?? null}),
-          )
-        : null
-      const effectiveProviderCap = getEffectiveProviderCap({
-        job: {
-          id: job.id,
-          maxInflightRequests: providerConnection?.maxInflightRequests ?? null,
-          modelId: projectModelId,
-          modelName: providerConnection?.label ?? null,
-          modelProvider: providerConnection?.providerKind ?? null,
-          projectId: job.projectId,
-          providerConnectionId: providerConnection?.id ?? null,
-          quarantineReason: job.quarantineReason,
-          storageState: job.storageState,
-        },
-      })
-      const dispatchStats = await getJudgmentDispatchProviderStats({
-        jobId: job.id,
-        providerConnectionId: providerConnection?.id ?? null,
-        providerMaxInflightRequests: effectiveProviderCap.maxInflight,
-        providerUsesFamilyDefault: effectiveProviderCap.usesFamilyDefault,
-      })
-      const providerActiveFillPct =
-        dispatchStats.providerActiveLimit > 0
-          ? Math.round((dispatchStats.providerActivePromptCount / dispatchStats.providerActiveLimit) * 100)
+          ])
+        const normalizedTokenUsageRows = tokenUsageRows.reduce<
+          Array<{
+            createdAt: Date
+            dailyTokens: number | string | null
+            dailyPromptTokens: number | string | null
+            dailyCompletionTokens: number | string | null
+            requests: number | string | null
+          }>
+        >((acc, row) => {
+          const createdAt = getDateValue(row.createdAt)
+          return createdAt ? [...acc, {...row, createdAt}] : acc
+        }, [])
+        const tokenUsagePerDay = aggregateTokenUsagePerDay(normalizedTokenUsageRows)
+        const requestRuntimeStats = getJudgmentRequestStats(job.id)
+        const failedRequestSummary = getFailedRequestSummary(failedRequestRows)
+        const storagePolicy = getStoragePolicy({job, sqliteHealth})
+        const recentTransfer = getJudgmentJobStorageTransferRuntime(job.id)
+        const providerConnection = await getProviderConnectionForStoredModel(projectModelId, db)
+        const effectiveBaseURL = providerConnection
+          ? getProviderConnectionEffectiveBaseURL({
+              baseURL: providerConnection.baseURL,
+              config: providerConnection.config,
+              providerKind: providerConnection.providerKind,
+              savedModelIds: [projectModelId],
+            })
           : null
-      const providerPrefetchFillPct =
-        dispatchStats.providerQueueLimit > 0
-          ? Math.round((dispatchStats.providerQueuedPromptCount / dispatchStats.providerQueueLimit) * 100)
+        const endpointAvailability = effectiveBaseURL
+          ? getJudgmentEndpointAvailabilityDiagnostics(
+              getJudgmentEndpointAvailability({effectiveBaseURL, providerConnectionId: providerConnection?.id ?? null}),
+            )
           : null
-
-      const promptStats = {
-        claimed: sqliteHealth.promptCounts.claimed,
-        judged: sqliteHealth.promptCounts.judged,
-        ready: sqliteHealth.promptCounts.ready,
-        running: sqliteHealth.promptCounts.running,
-        skipped: sqliteHealth.promptCounts.skipped,
-      }
-      const storageHealth = {
-        ...sqliteHealth,
-        ...(storageProjection ? {projection: storageProjection} : {}),
-        ...(recentTransfer ? {recentTransfer} : {}),
-      }
-
-      return {
-        ...job,
-        leaseMetadata,
-        promptStats,
-        storagePolicy,
-        storageHealth,
-        judgingRuntime: getJudgingRuntime(),
-        totalTokenUsage: {
-          totalTokens: Number(totalTokenUsage[0]?.totalTokens || 0),
-          totalPromptTokens: Number(totalTokenUsage[0]?.totalPromptTokens || 0),
-          totalCompletionTokens: Number(totalTokenUsage[0]?.totalCompletionTokens || 0),
-        },
-        requestStats: {
-          dispatch: {
-            jobActivePrompts: dispatchStats.jobActivePromptCount,
-            jobQueuedPrompts: dispatchStats.jobQueuedPromptCount,
-            providerActiveFillPct,
-            providerActiveLimit: dispatchStats.providerActiveLimit,
-            providerActivePrompts: dispatchStats.providerActivePromptCount,
-            providerPrefetchFillPct,
-            providerQueueLimit: dispatchStats.providerQueueLimit,
-            providerQueuedPrompts: dispatchStats.providerQueuedPromptCount,
+        const effectiveProviderCap = getEffectiveProviderCap({
+          job: {
+            id: job.id,
+            maxInflightRequests: providerConnection?.maxInflightRequests ?? null,
+            modelId: projectModelId,
+            modelName: providerConnection?.label ?? null,
+            modelProvider: providerConnection?.providerKind ?? null,
+            projectId: job.projectId,
+            providerConnectionId: providerConnection?.id ?? null,
+            quarantineReason: job.quarantineReason,
+            storageState: job.storageState,
           },
-          endpointAvailability,
-          failures: failedRequestSummary,
-          inFlight: requestRuntimeStats.inFlight,
-          attempts: Number(totalTokenUsage[0]?.totalRequests || 0) + requestRuntimeStats.pendingPersistedAttempts,
-        },
-        tokenUsagePerDay: tokenUsagePerDay.map((row) => {
-          const dailyTokens = Number(row.dailyTokens ?? 0)
-          const dailyPromptTokens = Number(row.dailyPromptTokens ?? 0)
-          const dailyCompletionTokens = Number(row.dailyCompletionTokens ?? 0)
-          const requests = Number(row.requests ?? 0)
-          return {...row, dailyTokens, dailyPromptTokens, dailyCompletionTokens, requests}
-        }),
-      }
+        })
+        const dispatchStats = await getJudgmentDispatchProviderStats({
+          jobId: job.id,
+          providerConnectionId: providerConnection?.id ?? null,
+          providerMaxInflightRequests: effectiveProviderCap.maxInflight,
+          providerUsesFamilyDefault: effectiveProviderCap.usesFamilyDefault,
+        })
+        const providerActiveFillPct =
+          dispatchStats.providerActiveLimit > 0
+            ? Math.round((dispatchStats.providerActivePromptCount / dispatchStats.providerActiveLimit) * 100)
+            : null
+        const providerPrefetchFillPct =
+          dispatchStats.providerQueueLimit > 0
+            ? Math.round((dispatchStats.providerQueuedPromptCount / dispatchStats.providerQueueLimit) * 100)
+            : null
+
+        const promptStats = {
+          claimed: sqliteHealth.promptCounts.claimed,
+          judged: sqliteHealth.promptCounts.judged,
+          ready: sqliteHealth.promptCounts.ready,
+          running: sqliteHealth.promptCounts.running,
+          skipped: sqliteHealth.promptCounts.skipped,
+        }
+        const storageHealth = {
+          ...sqliteHealth,
+          ...(storageProjection ? {projection: storageProjection} : {}),
+          ...(recentTransfer ? {recentTransfer} : {}),
+        }
+
+        return {
+          ...job,
+          leaseMetadata,
+          promptStats,
+          storagePolicy,
+          storageHealth,
+          judgingRuntime: getJudgingRuntime(),
+          totalTokenUsage: {
+            totalTokens: Number(totalTokenUsage[0]?.totalTokens || 0),
+            totalPromptTokens: Number(totalTokenUsage[0]?.totalPromptTokens || 0),
+            totalCompletionTokens: Number(totalTokenUsage[0]?.totalCompletionTokens || 0),
+          },
+          requestStats: {
+            dispatch: {
+              jobActivePrompts: dispatchStats.jobActivePromptCount,
+              jobQueuedPrompts: dispatchStats.jobQueuedPromptCount,
+              providerActiveFillPct,
+              providerActiveLimit: dispatchStats.providerActiveLimit,
+              providerActivePrompts: dispatchStats.providerActivePromptCount,
+              providerPrefetchFillPct,
+              providerQueueLimit: dispatchStats.providerQueueLimit,
+              providerQueuedPrompts: dispatchStats.providerQueuedPromptCount,
+            },
+            endpointAvailability,
+            failures: failedRequestSummary,
+            inFlight: requestRuntimeStats.inFlight,
+            attempts: Number(totalTokenUsage[0]?.totalRequests || 0) + requestRuntimeStats.pendingPersistedAttempts,
+          },
+          tokenUsagePerDay: tokenUsagePerDay.map((row) => {
+            const dailyTokens = Number(row.dailyTokens ?? 0)
+            const dailyPromptTokens = Number(row.dailyPromptTokens ?? 0)
+            const dailyCompletionTokens = Number(row.dailyCompletionTokens ?? 0)
+            const requests = Number(row.requests ?? 0)
+            return {...row, dailyTokens, dailyPromptTokens, dailyCompletionTokens, requests}
+          }),
+        }
+      })
     },
     {params: t.Object({id: t.String()})},
   )
@@ -1205,52 +1345,57 @@ export const judgmentsJobsRoutes = new Elysia()
     {query: t.Object({jobId: t.String()})},
   )
   .get('/api/judgmentsjobs', async () => {
-    const jobs = await getAppDatabaseService().queryJson<{
-      id: string
-      createdAt: unknown
-      updatedAt: unknown
-      projectId: string
-      status: string
-      error: unknown
-      storageState: string
-      quarantinedAt: unknown
-      quarantineReason: string | null
-      lastImportStartedAt: unknown
-      lastImportCompletedAt: unknown
-      lastImportErrorAt: unknown
-      lastImportError: string | null
-      lastImportExitCode: number | null
-      importFailureCount: number | null
-      pauseRequestedAt: unknown
-      projectName: string | null
-    }>(`
-      SELECT
-        jj.id AS id,
-        jj.created_at AS createdAt,
-        jj.updated_at AS updatedAt,
-        jj.project_id AS projectId,
-        jj.status AS status,
-        TO_JSON(jj.error) AS error,
-        jj.storage_state AS storageState,
-        jj.quarantined_at AS quarantinedAt,
-        jj.quarantine_reason AS quarantineReason,
-        jj.last_import_started_at AS lastImportStartedAt,
-        jj.last_import_completed_at AS lastImportCompletedAt,
-        jj.last_import_error_at AS lastImportErrorAt,
-        jj.last_import_error AS lastImportError,
-        jj.last_import_exit_code AS lastImportExitCode,
-        jj.import_failure_count AS importFailureCount,
-        jj.pause_requested_at AS pauseRequestedAt,
-        p.name AS projectName
-      FROM app.judgment_job jj
-      INNER JOIN app.project p ON jj.project_id = p.id
-      WHERE p.archived = FALSE
-      ORDER BY jj.created_at ASC
-    `)
-
-    const sqliteService = getJudgmentJobSqliteService()
-    const jobsWithHealth = await Promise.all(
-      jobs.map(async (job) => {
+    return runJudgmentJobsRead(async () => {
+      const db = getJudgmentJobsReadDatabase()
+      const jobs = await db.queryJson<{
+        id: string
+        createdAt: unknown
+        updatedAt: unknown
+        projectId: string
+        status: string
+        error: unknown
+        storageState: string
+        quarantinedAt: unknown
+        quarantineReason: string | null
+        lastImportStartedAt: unknown
+        lastImportCompletedAt: unknown
+        lastImportErrorAt: unknown
+        lastImportError: string | null
+        lastImportExitCode: number | null
+        importFailureCount: number | null
+        pauseRequestedAt: unknown
+        projectName: string | null
+      }>(`
+        SELECT
+          jj.id AS id,
+          jj.created_at AS createdAt,
+          jj.updated_at AS updatedAt,
+          jj.project_id AS projectId,
+          jj.status AS status,
+          TO_JSON(jj.error) AS error,
+          jj.storage_state AS storageState,
+          jj.quarantined_at AS quarantinedAt,
+          jj.quarantine_reason AS quarantineReason,
+          jj.last_import_started_at AS lastImportStartedAt,
+          jj.last_import_completed_at AS lastImportCompletedAt,
+          jj.last_import_error_at AS lastImportErrorAt,
+          jj.last_import_error AS lastImportError,
+          jj.last_import_exit_code AS lastImportExitCode,
+          jj.import_failure_count AS importFailureCount,
+          jj.pause_requested_at AS pauseRequestedAt,
+          p.name AS projectName
+        FROM app.judgment_job jj
+        INNER JOIN app.project p ON jj.project_id = p.id
+        WHERE p.archived = FALSE
+        ORDER BY jj.created_at ASC
+      `)
+      const sqliteHealthByJobId = await getSqliteHealthMapForReadableRoute({
+        db,
+        jobIds: jobs.map((job) => {
+          return job.id
+        }),
+      })
+      const jobsWithHealth = jobs.map((job) => {
         const normalizedJob = {
           ...job,
           createdAt: getDateValue(job.createdAt),
@@ -1263,49 +1408,62 @@ export const judgmentsJobsRoutes = new Elysia()
           importFailureCount: Number(job.importFailureCount ?? 0),
           pauseRequestedAt: getDateValue(job.pauseRequestedAt),
         }
-        const sqliteHealth = await sqliteService.getHealthSnapshot(job.id)
+        const sqliteHealth = sqliteHealthByJobId.get(job.id)
+
+        if (!sqliteHealth) {
+          throw getMaintenanceUnavailableError(
+            `fresh SQLite health projection is unavailable for judgment job ${job.id}`,
+          )
+        }
+
         const badges = getJobHealthBadges({job: normalizedJob, sqliteHealth})
 
         return {...normalizedJob, health: {badges, isHealthy: badges.length === 1 && badges[0] === 'Healthy'}}
-      }),
-    )
+      })
 
-    return {data: jobsWithHealth, error: null}
+      return {data: jobsWithHealth, error: null}
+    })
   })
   .get('/api/judgmentsjobs-health', async () => {
-    const jobs = await getAppDatabaseService().queryJson<{
-      id: string
-      status: string
-      storageState: string
-      quarantinedAt: unknown
-      quarantineReason: string | null
-      lastImportStartedAt: unknown
-      lastImportCompletedAt: unknown
-      lastImportErrorAt: unknown
-      lastImportError: string | null
-      lastImportExitCode: number | null
-      importFailureCount: number | null
-      pauseRequestedAt: unknown
-    }>(`
-      SELECT
-        id,
-        status,
-        storage_state AS storageState,
-        quarantined_at AS quarantinedAt,
-        quarantine_reason AS quarantineReason,
-        last_import_started_at AS lastImportStartedAt,
-        last_import_completed_at AS lastImportCompletedAt,
-        last_import_error_at AS lastImportErrorAt,
-        last_import_error AS lastImportError,
-        last_import_exit_code AS lastImportExitCode,
-        import_failure_count AS importFailureCount,
-        pause_requested_at AS pauseRequestedAt
-      FROM app.judgment_job
-      ORDER BY created_at ASC
-    `)
-    const sqliteService = getJudgmentJobSqliteService()
-    const jobsWithHealth = await Promise.all(
-      jobs.map(async (job) => {
+    return runJudgmentJobsRead(async () => {
+      const db = getJudgmentJobsReadDatabase()
+      const jobs = await db.queryJson<{
+        id: string
+        status: string
+        storageState: string
+        quarantinedAt: unknown
+        quarantineReason: string | null
+        lastImportStartedAt: unknown
+        lastImportCompletedAt: unknown
+        lastImportErrorAt: unknown
+        lastImportError: string | null
+        lastImportExitCode: number | null
+        importFailureCount: number | null
+        pauseRequestedAt: unknown
+      }>(`
+        SELECT
+          id,
+          status,
+          storage_state AS storageState,
+          quarantined_at AS quarantinedAt,
+          quarantine_reason AS quarantineReason,
+          last_import_started_at AS lastImportStartedAt,
+          last_import_completed_at AS lastImportCompletedAt,
+          last_import_error_at AS lastImportErrorAt,
+          last_import_error AS lastImportError,
+          last_import_exit_code AS lastImportExitCode,
+          import_failure_count AS importFailureCount,
+          pause_requested_at AS pauseRequestedAt
+        FROM app.judgment_job
+        ORDER BY created_at ASC
+      `)
+      const sqliteHealthByJobId = await getSqliteHealthMapForReadableRoute({
+        db,
+        jobIds: jobs.map((job) => {
+          return job.id
+        }),
+      })
+      const jobsWithHealth = jobs.map((job) => {
         const normalizedJob = {
           ...job,
           importFailureCount: Number(job.importFailureCount ?? 0),
@@ -1315,36 +1473,43 @@ export const judgmentsJobsRoutes = new Elysia()
           pauseRequestedAt: getDateValue(job.pauseRequestedAt),
           quarantinedAt: getDateValue(job.quarantinedAt),
         }
-        const sqliteHealth = await sqliteService.getHealthSnapshot(job.id)
+        const sqliteHealth = sqliteHealthByJobId.get(job.id)
+
+        if (!sqliteHealth) {
+          throw getMaintenanceUnavailableError(
+            `fresh SQLite health projection is unavailable for judgment job ${job.id}`,
+          )
+        }
+
         const action = getRecommendedHealthAction({job: normalizedJob, sqliteHealth})
 
         return {action, job: normalizedJob, sqliteHealth}
-      }),
-    )
+      })
 
-    return {
-      data: {
-        healthy: jobsWithHealth.filter(({action, job}) => {
-          return isHealthyJob({action, job})
-        }).length,
-        draining: jobsWithHealth.filter(({job}) => {
-          return job.storageState === 'draining'
-        }).length,
-        offlineRepairRequired: jobsWithHealth.filter(({action}) => {
-          return action === 'repair_offline_required'
-        }).length,
-        quarantined: jobsWithHealth.filter(({job}) => {
-          return job.storageState === 'quarantined'
-        }).length,
-        retainedOutbox: jobsWithHealth.filter(({sqliteHealth}) => {
-          return hasRetainedOutbox(sqliteHealth)
-        }).length,
-        staleImport: jobsWithHealth.filter(({job}) => {
-          return isStaleImportJob(job)
-        }).length,
-      },
-      error: null,
-    }
+      return {
+        data: {
+          healthy: jobsWithHealth.filter(({action, job}) => {
+            return isHealthyJob({action, job})
+          }).length,
+          draining: jobsWithHealth.filter(({job}) => {
+            return job.storageState === 'draining'
+          }).length,
+          offlineRepairRequired: jobsWithHealth.filter(({action}) => {
+            return action === 'repair_offline_required'
+          }).length,
+          quarantined: jobsWithHealth.filter(({job}) => {
+            return job.storageState === 'quarantined'
+          }).length,
+          retainedOutbox: jobsWithHealth.filter(({sqliteHealth}) => {
+            return hasRetainedOutbox(sqliteHealth)
+          }).length,
+          staleImport: jobsWithHealth.filter(({job}) => {
+            return isStaleImportJob(job)
+          }).length,
+        },
+        error: null,
+      }
+    })
   })
   .get('/api/judgmentsjobs-total-token-usage', async () => {
     const [totalUsage] = await getAppDatabaseService().queryJson<{

@@ -12,6 +12,7 @@ import {ensureCurrentDuckdbOwnerLease, withCurrentServerRoleOverride} from './se
 
 type DuckdbScriptAccessSnapshotResponse = {data?: AppDatabaseSnapshot; error?: string}
 
+const duckdbOwnerPrivateApiPrefix = '/__duckdb-owner-rpc'
 const duckdbStudioSnapshotPath = '/api/duckdbStudioSnapshots'
 
 const getDuckdbOwnerHealthUrl = (duckdbOwnerUrl: string) => {
@@ -24,7 +25,7 @@ const getNormalizedDuckdbOwnerUrl = (value: string | null | undefined) => {
 }
 
 const getDuckdbStudioUrl = (duckdbOwnerUrl: string) => {
-  return `${duckdbOwnerUrl}${duckdbStudioSnapshotPath}`
+  return `${duckdbOwnerUrl}${duckdbOwnerPrivateApiPrefix}${duckdbStudioSnapshotPath}`
 }
 
 const getDuckdbStudioUrls = async () => {
@@ -54,9 +55,11 @@ const isStudioServerUnavailable = (error: unknown) => {
   const errorText = getErrorText(error)
   return (
     errorText.includes('ECONNREFUSED')
+    || errorText.includes('FailedToOpenSocket')
     || errorText.includes('fetch failed')
     || errorText.includes('connection refused')
     || errorText.includes('Unable to connect')
+    || errorText.includes('Was there a typo in the url or port')
   )
 }
 

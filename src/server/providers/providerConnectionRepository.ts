@@ -422,8 +422,9 @@ export const getProviderConnection = async (id: string): Promise<ProviderConnect
 
 export const getProviderConnectionForStoredModel = async (
   modelId: string,
+  databaseRunner: DatabaseRunner = getAppDatabaseService(),
 ): Promise<ProviderConnectionRecord | null> => {
-  const [row] = await getAppDatabaseService().queryJson<ProviderConnectionRow>(`
+  const [row] = await databaseRunner.queryJson<ProviderConnectionRow>(`
     SELECT
       pc.id,
       pc.provider_kind AS providerKind,

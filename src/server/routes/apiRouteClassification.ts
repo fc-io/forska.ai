@@ -7,17 +7,26 @@ export type ApiRouteClassification =
   | 'duckdb-owner-diagnostics'
   | 'local-bootstrap'
   | 'non-api'
+  | 'ownerless-readable-diagnostics'
   | 'owner-dependent'
   | 'unclassified'
 
 const duckdbOwnerDiagnosticsPaths = ['/api/duckdb_owner_connections', '/api/duckdb_owner_connections/heartbeat']
 const ownerDependentPaths = [duckdbStudioSnapshotPath]
+const ownerlessReadableDiagnosticsPaths = ['/api/judgmentsjobs', '/api/judgmentsjobs-health']
 
 const normalizePathname = (pathname: string) => {
   return pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname
 }
 
-export const classifyApiRoute = (pathname: string): ApiRouteClassification => {
+const isJudgmentJobReadableDiagnosticsPath = (pathname: string, method: string) => {
+  const normalizedMethod = method.toUpperCase()
+  const dynamicMatch = pathname.match(/^\/api\/judgmentsjobs\/[^/]+(?:\/health)?$/)
+
+  return normalizedMethod === 'GET' && (ownerlessReadableDiagnosticsPaths.includes(pathname) || dynamicMatch !== null)
+}
+
+export const classifyApiRoute = (pathname: string, method = 'GET'): ApiRouteClassification => {
   const normalizedPathname = normalizePathname(pathname)
 
   return !normalizedPathname.startsWith('/api/')
@@ -26,9 +35,11 @@ export const classifyApiRoute = (pathname: string): ApiRouteClassification => {
       ? 'local-bootstrap'
       : duckdbOwnerDiagnosticsPaths.includes(normalizedPathname)
         ? 'duckdb-owner-diagnostics'
-        : ownerDependentPaths.includes(normalizedPathname)
-          ? 'owner-dependent'
-          : 'unclassified'
+        : isJudgmentJobReadableDiagnosticsPath(normalizedPathname, method)
+          ? 'ownerless-readable-diagnostics'
+          : ownerDependentPaths.includes(normalizedPathname)
+            ? 'owner-dependent'
+            : 'unclassified'
 }
 
 export const shouldApiRouteProxyToDuckdbOwner = (classification: ApiRouteClassification) => {

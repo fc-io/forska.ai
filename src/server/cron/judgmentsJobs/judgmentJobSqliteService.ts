@@ -6,6 +6,7 @@ import {Database} from 'bun:sqlite'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {getJudgmentJobSqliteHealthProjectionService} from '../../services/judgmentJobSqliteHealthProjectionService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {writeRuntimeFailureLogEvent} from '../../utils/runtimeLogger.ts'
 import {registerDuckdbOwnerDemotionHandler} from '../../utils/serverRuntimeRole.ts'
@@ -170,10 +171,15 @@ export type JudgmentJobSqliteOutboxClaim = {claimId: string; jobId: string; rowC
 
 export type JudgmentJobSqliteHealthSnapshot = {
   claimedOutboxCount: number
+  hasOutboxRows: boolean
+  hasPendingCompletionAck: boolean
+  hasQueueRows: boolean
   lastAckSeq: number | null
+  oldestUnackedCompletionAgeMs: number | null
   oldestUnexportedAgeMs: number | null
   orphanedJudgedRowCount: number
   outboxRowCount: number
+  pendingCompletionAckCount: number
   promptCounts: {claimed: number; judged: number; ready: number; running: number; skipped: number}
   retainedRowCount: number
   sqliteFileBytes: number | null
@@ -262,12 +268,14 @@ type ProjectRefreshAckStateRow = {lastCompletedRefreshToken: number | null; proj
 type ProjectRefreshVisibilityStateRow = {dirtyToken: number | null; lastCompletedRefreshToken: number | null}
 
 type WalCheckpointRow = {busy: number; checkpointed: number; log: number}
+type PendingCompletionAckRow = {count: number; exportedAt: string | null}
 
 const openDatabases = new Map<string, Database>()
 const ownedJobLeases = new Map<string, JudgmentJobLease>()
 const ownedJobLeaseOperationCounts = new Map<string, number>()
 const judgmentJobLeaseHeartbeatIntervalMs = 5_000
 const judgmentJobLeaseLogger = createRateLimitedLogger({windowMs: 30_000})
+const judgmentJobHealthProjectionLogger = createRateLimitedLogger({windowMs: 30_000})
 let judgmentJobLeaseHeartbeatStarted = false
 
 export class JudgmentJobLeaseError extends Error {
@@ -1128,6 +1136,43 @@ const getOldestUnexportedAgeMs = (database: Database) => {
   return createdAt ? Math.max(0, Date.now() - createdAt.getTime()) : null
 }
 
+const getPendingCompletionAckState = ({
+  database,
+  projectDirtyToken,
+  visibilityAckSeq,
+}: {
+  database: Database
+  projectDirtyToken: number | null
+  visibilityAckSeq: number | null
+}) => {
+  const isWaitingOnVisibilityAck =
+    visibilityAckSeq == null || (projectDirtyToken !== null && visibilityAckSeq < projectDirtyToken)
+
+  if (!isWaitingOnVisibilityAck) {
+    return {hasPendingCompletionAck: false, oldestUnackedCompletionAgeMs: null, pendingCompletionAckCount: 0}
+  }
+
+  const row = database
+    .query(
+      `
+      SELECT
+        COUNT(*) AS count,
+        MIN(exported_at) AS exportedAt
+      FROM judgment_outbox
+      WHERE exported_at IS NOT NULL
+    `,
+    )
+    .get() as PendingCompletionAckRow | null
+  const exportedAt = getDateValue(row?.exportedAt)
+  const pendingCompletionAckCount = Number(row?.count ?? 0)
+
+  return {
+    hasPendingCompletionAck: pendingCompletionAckCount > 0,
+    oldestUnackedCompletionAgeMs: exportedAt ? Math.max(0, Date.now() - exportedAt.getTime()) : null,
+    pendingCompletionAckCount,
+  }
+}
+
 const getRetainedQueueRowCount = (database: Database) => {
   const row = database.query(`SELECT COUNT(*) AS count FROM queue_prompt`).get() as {count: number} | null
 
@@ -1204,6 +1249,51 @@ const getSqliteFileByteSize = (jobId: string) => {
   return existsSync(sqlitePath) ? statSync(sqlitePath).size : null
 }
 
+const getHealthSnapshotFromDatabase = (
+  database: Database,
+  jobId: string,
+  projectRefreshState: ProjectRefreshVisibilityStateRow | null,
+): Omit<JudgmentJobSqliteHealthSnapshot, 'sqliteFileBytes' | 'walBytes'> => {
+  const scanState = getStoredScanState(database, jobId)
+  const outboxRowCount = getRetainedOutboxCount(database)
+  const retainedRowCount = getRetainedQueueRowCount(database)
+  const pendingCompletionAck = getPendingCompletionAckState({
+    database,
+    projectDirtyToken: projectRefreshState?.dirtyToken ?? null,
+    visibilityAckSeq: scanState.lastProjectRefreshAckSeq,
+  })
+
+  return {
+    claimedOutboxCount: getClaimedOutboxCount(database),
+    hasOutboxRows: outboxRowCount > 0,
+    hasQueueRows: retainedRowCount > 0,
+    lastAckSeq: scanState.lastProjectRefreshAckSeq,
+    oldestUnexportedAgeMs: getOldestUnexportedAgeMs(database),
+    orphanedJudgedRowCount: getOrphanedJudgedQueueRowCount(database),
+    outboxRowCount,
+    promptCounts: getPromptCounts(database),
+    retainedRowCount,
+    ...pendingCompletionAck,
+  }
+}
+
+const publishHealthProjection = async ({health, jobId}: {health: JudgmentJobSqliteHealthSnapshot; jobId: string}) => {
+  try {
+    await getJudgmentJobSqliteHealthProjectionService().publishJudgmentJobSqliteHealthProjection({
+      health,
+      jobId,
+      projectedBy: getDefaultJudgmentServerJobId(),
+      projectionSource: 'local-sqlite',
+    })
+  } catch (error) {
+    judgmentJobHealthProjectionLogger.warn(
+      `judgments:sqlite-health-projection:${jobId}`,
+      '[judgments] failed to publish SQLite health projection',
+      {error: error instanceof Error ? error.message : String(error), jobId},
+    )
+  }
+}
+
 const getSystemSqliteExportPath = (jobId: string) => {
   return `${getJudgmentJobSqlitePath(jobId)}.repair-export.sql`
 }
@@ -1269,10 +1359,15 @@ const runSystemSqliteFallbackStep = ({
 const getEmptyHealthSnapshot = (): JudgmentJobSqliteHealthSnapshot => {
   return {
     claimedOutboxCount: 0,
+    hasOutboxRows: false,
+    hasPendingCompletionAck: false,
+    hasQueueRows: false,
     lastAckSeq: null,
+    oldestUnackedCompletionAgeMs: null,
     oldestUnexportedAgeMs: null,
     orphanedJudgedRowCount: 0,
     outboxRowCount: 0,
+    pendingCompletionAckCount: 0,
     promptCounts: {claimed: 0, judged: 0, ready: 0, running: 0, skipped: 0},
     retainedRowCount: 0,
     sqliteFileBytes: null,
@@ -2768,21 +2863,22 @@ const sqliteService = {
   getHealthSnapshot: async (jobId: string): Promise<JudgmentJobSqliteHealthSnapshot> => {
     const sqlitePath = getJudgmentJobSqlitePath(jobId)
     const walPath = `${sqlitePath}-wal`
+    const projectRefreshState = await getProjectRefreshVisibilityStateForJob(jobId).catch(() => {
+      return null
+    })
     const liveSnapshot = withJobDatabase(jobId, false, (database) => {
-      return {
-        claimedOutboxCount: getClaimedOutboxCount(database),
-        lastAckSeq: getStoredScanState(database, jobId).lastProjectRefreshAckSeq,
-        oldestUnexportedAgeMs: getOldestUnexportedAgeMs(database),
-        orphanedJudgedRowCount: getOrphanedJudgedQueueRowCount(database),
-        outboxRowCount: getRetainedOutboxCount(database),
-        promptCounts: getPromptCounts(database),
-        retainedRowCount: getRetainedQueueRowCount(database),
-      }
+      return getHealthSnapshotFromDatabase(database, jobId, projectRefreshState)
     })
 
-    return liveSnapshot
-      ? {...liveSnapshot, sqliteFileBytes: getSqliteFileByteSize(jobId), walBytes: getFileByteSize(walPath)}
-      : getEmptyHealthSnapshot()
+    if (!liveSnapshot) {
+      return getEmptyHealthSnapshot()
+    }
+
+    const health = {...liveSnapshot, sqliteFileBytes: getSqliteFileByteSize(jobId), walBytes: getFileByteSize(walPath)}
+
+    await publishHealthProjection({health, jobId})
+
+    return health
   },
   getUnexportedOutboxCount: async (jobId: string): Promise<number> => {
     return (
@@ -3032,8 +3128,18 @@ const sqliteService = {
         }),
     )
   },
+  publishHealthProjections: async (jobIds?: string[]) => {
+    const candidateJobIds = jobIds ?? getExistingOutboxJobIds()
+    const snapshots = await Promise.all(
+      candidateJobIds.map(async (jobId) => {
+        return getJudgmentJobSqliteService().getHealthSnapshot(jobId)
+      }),
+    )
+
+    return snapshots.length
+  },
   completeOutboxClaim: async ({claimId, jobId}: {claimId: string; jobId: string}) => {
-    return (
+    const completedCount =
       (await withOwnedJobDatabase(jobId, false, (database) => {
         const now = new Date().toISOString()
         const result = database
@@ -3053,7 +3159,10 @@ const sqliteService = {
 
         return Number(result.changes ?? 0)
       })) ?? 0
-    )
+
+    await getJudgmentJobSqliteService().getHealthSnapshot(jobId)
+
+    return completedCount
   },
   completeClaimedOutboxRows: async ({
     claimId,
@@ -3482,7 +3591,7 @@ const sqliteService = {
     })
   },
   setLastProjectRefreshAckSeq: async (jobId: string, lastProjectRefreshAckSeq: number | null) => {
-    return withOwnedJobDatabase(jobId, false, (database) => {
+    const result = await withOwnedJobDatabase(jobId, false, (database) => {
       const now = new Date().toISOString()
       const nextAckSeq = getForwardOnlyAckSeq(
         getStoredScanState(database, jobId).lastProjectRefreshAckSeq,
@@ -3500,6 +3609,10 @@ const sqliteService = {
         )
         .run(nextAckSeq, now, jobId)
     })
+
+    await getJudgmentJobSqliteService().getHealthSnapshot(jobId)
+
+    return result
   },
   publishProjectRefreshAck: async ({ackToken, projectId}: {ackToken: number | null; projectId: string}) => {
     return publishProjectRefreshAckForProject({ackToken, projectId})

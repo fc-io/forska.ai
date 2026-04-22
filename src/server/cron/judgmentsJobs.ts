@@ -93,6 +93,11 @@ const sendToLLM = async (): Promise<void> => {
           }
         : undefined,
     })
+    await getJudgmentJobSqliteService().publishHealthProjections(
+      runningJobs.map((job) => {
+        return job.id
+      }),
+    )
   } catch (err) {
     logJudgingCronError('[cron] sendToLLM error:', err)
   }

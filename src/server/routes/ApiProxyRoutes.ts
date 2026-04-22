@@ -67,7 +67,7 @@ const getDuckdbOwnerProxyRequestTemplate = async (
   request: Request,
 ): Promise<DuckdbOwnerProxyRequestTemplate | null> => {
   const requestUrl = new URL(request.url)
-  const classification = classifyApiRoute(requestUrl.pathname)
+  const classification = classifyApiRoute(requestUrl.pathname, request.method)
   const requestHeaders = new Headers({
     ...Object.fromEntries(request.headers.entries()),
     ...getDuckdbOwnerConnectionProxyHeaders(),
@@ -139,7 +139,7 @@ const getDuckdbOwnerProxyFailureResponse = (requestTemplate: DuckdbOwnerProxyReq
 
 const getIncompatibleDuckdbOwnerPeerResponse = (request: Request) => {
   const requestUrl = new URL(request.url)
-  const classification = classifyApiRoute(requestUrl.pathname)
+  const classification = classifyApiRoute(requestUrl.pathname, request.method)
   const error = shouldApiRouteProxyToDuckdbOwner(classification)
     ? getDuckdbOwnerConnectionRuntimeVersionError(request.headers)
     : null
