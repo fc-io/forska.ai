@@ -4,7 +4,7 @@ import {Elysia} from 'elysia'
 
 import {env} from '../utils/env.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
-import {getCurrentServerWriterUrl, shouldCurrentServerProxyApiToWriter} from '../utils/serverRuntimeRole.ts'
+import {getCurrentServerDuckdbOwnerUrl, shouldCurrentServerProxyApiToOwner} from '../utils/serverRuntimeRole.ts'
 import {getWriterConnectionProxyHeaders} from '../utils/writerConnections.ts'
 
 type WriterProxyRequestTemplate = {
@@ -90,7 +90,7 @@ const getRetriedProxyResponse = async (requestTemplate: WriterProxyRequestTempla
     await waitForWriterProxyRetry()
 
     try {
-      const nextWriterUrl = (await getCurrentServerWriterUrl()) ?? currentWriterUrl
+      const nextWriterUrl = (await getCurrentServerDuckdbOwnerUrl()) ?? currentWriterUrl
       return await fetchWriterProxyResponse(requestTemplate, nextWriterUrl)
     } catch {
       continue
@@ -105,11 +105,11 @@ const getWriterProxyUnavailableResponse = () => {
 }
 
 const forwardApiRequestToWriter = async (request: Request): Promise<Response | null> => {
-  if (!shouldCurrentServerProxyApiToWriter()) {
+  if (!shouldCurrentServerProxyApiToOwner()) {
     return null
   }
 
-  const writerUrl = await getCurrentServerWriterUrl()
+  const writerUrl = await getCurrentServerDuckdbOwnerUrl()
 
   if (writerUrl === null) {
     return null

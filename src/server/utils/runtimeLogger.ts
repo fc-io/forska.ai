@@ -184,6 +184,8 @@ const getRuntimeProcessServerRole = (
   return normalizedValue === 'api'
     || normalizedValue === 'auto'
     || normalizedValue === 'dev-single'
+    || normalizedValue === 'judge-worker'
+    || normalizedValue === 'maintenance-worker'
     || normalizedValue === 'worker'
     || normalizedValue === 'writer'
     ? normalizedValue

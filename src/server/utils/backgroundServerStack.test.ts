@@ -100,17 +100,17 @@ test('background server stack builds api env that proxies to the worker', () => 
   ).toMatchObject({API_SERVER_PORT: '3301', SERVER_ROLE: 'api', SERVER_WRITER_URL: 'http://127.0.0.1:3302'})
 })
 
-test('background server stack builds worker env on the sibling port', () => {
+test('background server stack builds maintenance-worker env on the sibling port', () => {
   expect(
     getBackgroundServerEnv({
       baseEnv: {API_SERVER_PORT: '3301', BACKGROUND_WRITER_PORT: '3302'},
       localAppSettings: defaultLocalAppSettings,
-      role: 'worker',
+      role: 'maintenance-worker',
     }),
   ).toMatchObject({
     API_SERVER_PORT: '3302',
     DUCKDB_MEMORY_LIMIT: getDefaultBackgroundWorkerDuckdbMemoryLimit(),
-    SERVER_ROLE: 'worker',
+    SERVER_ROLE: 'maintenance-worker',
     SERVER_WRITER_URL: '',
   })
 })
@@ -120,9 +120,14 @@ test('background server stack passes machine-local worker duckdb memory into wor
     getBackgroundServerEnv({
       baseEnv: {API_SERVER_PORT: '3301', BACKGROUND_WRITER_PORT: '3302'},
       localAppSettings: {...defaultLocalAppSettings, backgroundWriterDuckdbMemoryLimit: '18GB'},
-      role: 'worker',
+      role: 'maintenance-worker',
     }),
-  ).toMatchObject({API_SERVER_PORT: '3302', DUCKDB_MEMORY_LIMIT: '18GB', SERVER_ROLE: 'worker', SERVER_WRITER_URL: ''})
+  ).toMatchObject({
+    API_SERVER_PORT: '3302',
+    DUCKDB_MEMORY_LIMIT: '18GB',
+    SERVER_ROLE: 'maintenance-worker',
+    SERVER_WRITER_URL: '',
+  })
 })
 
 test('background server stack async config reads worker duckdb memory from app.user_config', async () => {
@@ -154,12 +159,12 @@ test('background server stack async config reads worker duckdb memory from app.u
       await getBackgroundServerEnvAsync({
         baseEnv: {API_SERVER_PORT: '4100', DUCKDB_PATH: duckdbPath},
         localAppSettings: defaultLocalAppSettings,
-        role: 'worker',
+        role: 'maintenance-worker',
       }),
     ).toMatchObject({
       API_SERVER_PORT: '4101',
       DUCKDB_MEMORY_LIMIT: '14GB',
-      SERVER_ROLE: 'worker',
+      SERVER_ROLE: 'maintenance-worker',
       SERVER_WRITER_URL: '',
     })
   } finally {

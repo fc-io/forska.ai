@@ -274,7 +274,7 @@ test('api server without writer reports writer disabled warning', async () => {
     expect(body.data.writer).toBe(null)
     expect(
       body.data.warnings.some((warning) => {
-        return warning.kind === 'writer-disabled' && warning.message.includes('Writer is disabled')
+        return warning.kind === 'writer-disabled' && warning.message.includes('DuckDB owner proxying is disabled')
       }),
     ).toBe(true)
   } finally {

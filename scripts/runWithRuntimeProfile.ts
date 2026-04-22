@@ -9,7 +9,7 @@ export type RuntimeProfileMode =
   | 'server-stack'
   | 'stacked-server'
   | 'worker-only-server'
-type RuntimeProfileServerRole = 'api' | 'worker'
+type RuntimeProfileServerRole = 'api' | 'maintenance-worker'
 
 export type RuntimeProfileCommandOptions = {mode: RuntimeProfileMode; profileName: RuntimeProfileName}
 
@@ -72,7 +72,7 @@ const runtimeProfileModes: Record<RuntimeProfileMode, RuntimeProfileCommandConfi
   'worker-only-server': {
     command: ['bun', 'run', '--watch', 'src/server/index.ts'],
     env: (commandOptions) => {
-      return getRuntimeProfileServerEnv(commandOptions, 'worker')
+      return getRuntimeProfileServerEnv(commandOptions, 'maintenance-worker')
     },
   },
 }

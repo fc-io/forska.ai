@@ -142,7 +142,7 @@ const getWriterDisabledWarning = (): WriterWarning => {
     at: new Date().toISOString(),
     kind: 'writer-disabled',
     message:
-      'Writer is disabled for this server. Start `bun run dev:server:no-writer` only when you explicitly want a read-less API shell without DuckDB writes.',
+      'DuckDB owner proxying is disabled for this server. Start `bun run dev:server:no-writer` only when you explicitly want a read-less API shell without DuckDB writes.',
     severity: 'warning',
   }
 }
@@ -209,11 +209,11 @@ export const getWorkerRegistryOverview = (records: WriterConnectionRecord[]): Wo
   }).length
 
   return {
-    capabilities: (['api', 'duckdb-owner', 'maintenance', 'judging'] satisfies ServerRoleCapability[]).map(
-      (capability) => {
-        return getCapabilitySummary(capability, registeredWorkers)
-      },
-    ),
+    capabilities: (
+      ['api', 'owner-proxy', 'duckdb-owner', 'maintenance', 'judging'] satisfies ServerRoleCapability[]
+    ).map((capability) => {
+      return getCapabilitySummary(capability, registeredWorkers)
+    }),
     freshRegisteredWorkerCount: registeredWorkers.length - staleRegisteredWorkerCount,
     registeredWorkerCount: registeredWorkers.length,
     staleRegisteredWorkerCount,
@@ -249,7 +249,15 @@ const getNumberFromHeader = (value: string | null) => {
 }
 
 const getServerRoleFromHeader = (value: string | null): ServerRole | null => {
-  return value === 'writer' || value === 'api' || value === 'worker' || value === 'dev-single' ? value : null
+  return value === 'api'
+    || value === 'maintenance-worker'
+    || value === 'judge-worker'
+    || value === 'auto'
+    || value === 'dev-single'
+    || value === 'writer'
+    || value === 'worker'
+    ? value
+    : null
 }
 
 const getRuntimeProfileFromHeader = (value: string | null): RuntimeLogProfile | null => {

@@ -24,3 +24,9 @@ test('fixes sink-owning runtime service names in launcher child env', () => {
     'dev-single-server',
   )
 })
+
+test('worker-only launcher uses the maintenance-worker runtime role', () => {
+  expect(getRuntimeProfileCommandEnv({mode: 'worker-only-server', profileName: 'primary'}).SERVER_ROLE).toBe(
+    'maintenance-worker',
+  )
+})

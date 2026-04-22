@@ -1,8 +1,21 @@
-export const serverRoles = ['auto', 'writer', 'api', 'worker', 'dev-single'] as const
+export const productionServerRoles = ['api', 'maintenance-worker', 'judge-worker'] as const
+export const localServerRoles = ['auto', 'dev-single'] as const
+export const legacyServerRoles = ['writer', 'worker'] as const
+export const serverRoles = [...productionServerRoles, ...localServerRoles, ...legacyServerRoles] as const
 
 export type ServerRole = (typeof serverRoles)[number]
 export type EffectiveServerRole = Exclude<ServerRole, 'auto'>
-export type ServerRoleCapability = 'api' | 'duckdb-owner' | 'judging' | 'maintenance'
+export type ServerRoleCapability = 'api' | 'duckdb-owner' | 'judging' | 'maintenance' | 'owner-proxy'
+
+const serverRoleCapabilities = {
+  api: ['api', 'owner-proxy'],
+  auto: ['api', 'owner-proxy'],
+  'dev-single': ['api', 'duckdb-owner', 'maintenance', 'judging'],
+  'judge-worker': ['judging'],
+  'maintenance-worker': ['duckdb-owner', 'maintenance'],
+  worker: ['duckdb-owner', 'maintenance', 'judging'],
+  writer: ['duckdb-owner', 'maintenance', 'judging'],
+} satisfies Record<ServerRole, ServerRoleCapability[]>
 
 export const getEffectiveServerRole = (serverRole: ServerRole): EffectiveServerRole => {
   return serverRole === 'auto' ? 'api' : serverRole
@@ -13,23 +26,51 @@ export const isAutoServerRole = (serverRole: ServerRole) => {
 }
 
 export const canServerRoleOwnDuckdb = (serverRole: ServerRole) => {
-  return serverRole === 'writer' || serverRole === 'worker' || serverRole === 'dev-single'
+  return getServerRoleCapabilities(serverRole).includes('duckdb-owner')
+}
+
+export const canServerRoleRunMaintenanceLoops = (serverRole: ServerRole) => {
+  return getServerRoleCapabilities(serverRole).includes('maintenance')
+}
+
+export const shouldServerRoleRunMaintenanceLoops = canServerRoleRunMaintenanceLoops
+
+export const shouldServerRoleRunMaintenanceWork = canServerRoleRunMaintenanceLoops
+
+export const canServerRoleRunJudgingLoops = (serverRole: ServerRole) => {
+  return getServerRoleCapabilities(serverRole).includes('judging')
+}
+
+export const shouldServerRoleRunJudgingLoops = canServerRoleRunJudgingLoops
+
+export const shouldServerRoleRunJudgingWork = canServerRoleRunJudgingLoops
+
+export const canServerRoleProxyApiToOwner = (serverRole: ServerRole) => {
+  return getServerRoleCapabilities(serverRole).includes('owner-proxy')
+}
+
+export const shouldServerRoleProxyApiToOwner = canServerRoleProxyApiToOwner
+
+export const shouldServerRoleProxyApiToDuckdbOwner = canServerRoleProxyApiToOwner
+
+export const shouldServerRoleProxyApiToWriter = shouldServerRoleProxyApiToOwner
+
+export const getServerRoleCapabilities = (serverRole: ServerRole): ServerRoleCapability[] => {
+  return [...serverRoleCapabilities[serverRole]]
 }
 
 export const shouldServerRoleMountWriterCrons = (serverRole: ServerRole) => {
-  return serverRole === 'auto' || canServerRoleOwnDuckdb(serverRole)
+  return (
+    serverRole === 'auto'
+    || shouldServerRoleRunMaintenanceLoops(serverRole)
+    || shouldServerRoleRunJudgingLoops(serverRole)
+  )
 }
 
-export const shouldServerRoleProxyApiToWriter = (serverRole: ServerRole) => {
-  return serverRole === 'api'
+export const shouldServerRoleMountMaintenanceCrons = (serverRole: ServerRole) => {
+  return serverRole === 'auto' || shouldServerRoleRunMaintenanceLoops(serverRole)
 }
 
-export const getServerRoleCapabilities = (serverRole: ServerRole): ServerRoleCapability[] => {
-  return serverRole === 'api'
-    ? ['api']
-    : serverRole === 'dev-single' || serverRole === 'auto'
-      ? ['api', 'duckdb-owner', 'maintenance', 'judging']
-      : canServerRoleOwnDuckdb(serverRole)
-        ? ['duckdb-owner', 'maintenance', 'judging']
-        : []
+export const shouldServerRoleMountJudgingCrons = (serverRole: ServerRole) => {
+  return shouldServerRoleRunJudgingLoops(serverRole)
 }

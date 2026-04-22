@@ -71,13 +71,13 @@ const isWriterResponsive = async (writerUrl: string) => {
 
 const getActiveWriterGuardError = (params: {taskName: string; writerUrl: string}) => {
   return new Error(
-    `${params.taskName} requires exclusive DuckDB maintenance access, but the live writer is active at ${params.writerUrl}. Stop the dev/server process first, or use snapshot tools like \`bun run db:studio\` or \`bun run db:query:snapshot -- --sql="SELECT ..."\`.`,
+    `${params.taskName} requires exclusive DuckDB maintenance access, but the live DuckDB owner is active at ${params.writerUrl}. Stop the dev/server process first, or use snapshot tools like \`bun run db:studio\` or \`bun run db:query:snapshot -- --sql="SELECT ..."\`.`,
   )
 }
 
 const getStuckWriterGuardError = (params: {taskName: string; writerUrl: string}) => {
   return new Error(
-    `${params.taskName} found a stale DuckDB writer lease for ${params.writerUrl}. Stop that stuck process before running maintenance so the script does not race a wedged writer.`,
+    `${params.taskName} found a stale DuckDB owner lease for ${params.writerUrl}. Stop that stuck process before running maintenance so the script does not race a wedged owner.`,
   )
 }
 
@@ -140,7 +140,7 @@ const createRemoteSnapshotFromUrls = async (urls: string[]): Promise<AppDatabase
 }
 
 export const withDuckdbMaintenanceAccess = async <_T>(taskName: string, work: () => Promise<_T>) => {
-  return withCurrentServerRoleOverride('writer', async () => {
+  return withCurrentServerRoleOverride('maintenance-worker', async () => {
     await ensureDuckdbMaintenanceIsAvailable(taskName)
     await ensureCurrentDuckdbOwnerLease()
 

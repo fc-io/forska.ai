@@ -1,6 +1,6 @@
 import {runProjectMartRefreshWorker} from '../workers/projectMartRefreshWorker.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
-import {registerWriterDemotionHandler, shouldCurrentServerRunWriterWork} from './serverRuntimeRole.ts'
+import {registerWriterDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
 
 type ProjectMartRefreshWorkerHeartbeatOptions = {pollIntervalMs?: number}
 
@@ -21,7 +21,7 @@ const logProjectMartRefreshWorkerError = (error: unknown) => {
 }
 
 export const startProjectMartRefreshWorkerHeartbeat = (options: ProjectMartRefreshWorkerHeartbeatOptions = {}) => {
-  if (!shouldCurrentServerRunWriterWork()) {
+  if (!shouldCurrentServerRunMaintenanceLoops()) {
     return () => {}
   }
 

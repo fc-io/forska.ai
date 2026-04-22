@@ -6,7 +6,7 @@ import {Elysia} from 'elysia'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {inferenceRuntimeConfig} from '../utils/getInferenceRuntimeConfig.ts'
-import {isExpectedWriterRoleLossError, shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
+import {isExpectedWriterRoleLossError, shouldCurrentServerRunMaintenanceLoops} from '../utils/serverRuntimeRole.ts'
 
 type NvidiaSmiSample = {
   ts: Date
@@ -206,7 +206,7 @@ const buildRemoteToLocalMapping = (): Map<string, string> => {
 }
 
 const pollNvidiaSmi = async (): Promise<void> => {
-  if (!shouldCurrentServerRunWriterWork()) {
+  if (!shouldCurrentServerRunMaintenanceLoops()) {
     return
   }
 
@@ -235,7 +235,7 @@ const pollNvidiaSmi = async (): Promise<void> => {
     allSamples.push(...samples)
   }
 
-  if (allSamples.length === 0 || !shouldCurrentServerRunWriterWork()) return
+  if (allSamples.length === 0 || !shouldCurrentServerRunMaintenanceLoops()) return
 
   await getAppDatabaseService()
     .run(

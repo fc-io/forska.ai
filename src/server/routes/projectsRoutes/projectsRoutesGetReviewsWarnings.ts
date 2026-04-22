@@ -4,7 +4,7 @@ import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList} from '../../services/appQueryHelpers.ts'
 import {getDuckdbMartRefreshService} from '../../services/getDuckdbMartRefreshService.ts'
 import {shouldCurrentRuntimeRunMartRefreshDrain} from '../../utils/martRefreshDrainEligibility.ts'
-import {shouldCurrentServerRunWriterWork} from '../../utils/serverRuntimeRole.ts'
+import {shouldCurrentServerRunMaintenanceLoops} from '../../utils/serverRuntimeRole.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
 
 type ReviewsIndexingBlockedReason = 'paused_by_policy' | 'waiting_for_maintenance_worker' | null
@@ -266,12 +266,12 @@ const getHasReviewServingRows = async (projectId: string): Promise<boolean> => {
 
 const getReviewIndexingBlockedReason = (params: {
   canRunMartRefreshDrain: boolean
-  canRunWriterWork: boolean
+  canRunMaintenanceWork: boolean
   pendingRefreshCount: number
 }): ReviewsIndexingBlockedReason => {
-  return params.pendingRefreshCount === 0 || (params.canRunWriterWork && params.canRunMartRefreshDrain)
+  return params.pendingRefreshCount === 0 || (params.canRunMaintenanceWork && params.canRunMartRefreshDrain)
     ? null
-    : params.canRunWriterWork
+    : params.canRunMaintenanceWork
       ? 'paused_by_policy'
       : 'waiting_for_maintenance_worker'
 }
@@ -291,7 +291,7 @@ const triggerMartRefreshDrain = (pendingRefreshCount: number) => {
 
   if (
     pendingRefreshCount === 0
-    || !shouldCurrentServerRunWriterWork()
+    || !shouldCurrentServerRunMaintenanceLoops()
     || !shouldCurrentRuntimeRunMartRefreshDrain()
     || !martRefreshService.isAutoDrainEnabled()
   ) {
@@ -378,9 +378,9 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const isLargeRebuildRunning = projectLargeRebuildState.refreshStatus === 'running'
     const isLargeRebuildQueued = hasLargeRebuild && projectLargeRebuildState.refreshStatus === 'idle'
     const isLargeRebuildFailed = projectLargeRebuildState.refreshStatus === 'failed'
-    const canRunWriterWork = shouldCurrentServerRunWriterWork()
+    const canRunMaintenanceWork = shouldCurrentServerRunMaintenanceLoops()
     const canRunMartRefreshDrain = shouldCurrentRuntimeRunMartRefreshDrain()
-    const eligibleConsumerPresent = canRunWriterWork && canRunMartRefreshDrain
+    const eligibleConsumerPresent = canRunMaintenanceWork && canRunMartRefreshDrain
     const isProjectRunning =
       !projectRefreshState.isFresh
       && (hasLiveProcessingSnapshot || (projectRefreshState.refreshStatus === 'running' && hasActiveProjectLease))
@@ -412,8 +412,8 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const hasAnyArticlesInScope = hasCuratedArticles || hasRouteArticles
     const pendingRefreshCount = pendingProjectRefreshCount + pendingArticleRefreshCount
     const rawBlockedReason = getReviewIndexingBlockedReason({
+      canRunMaintenanceWork,
       canRunMartRefreshDrain,
-      canRunWriterWork,
       pendingRefreshCount,
     })
     const hasFailedRefresh =

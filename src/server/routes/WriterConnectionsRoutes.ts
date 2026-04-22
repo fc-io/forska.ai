@@ -16,7 +16,15 @@ const writerConnectionHeartbeatBody = t.Object({
   pid: t.Number(),
   processStartedAt: t.Optional(t.String()),
   runtimeProfile: t.Optional(t.Union([t.Literal('local'), t.Literal('primary'), t.Literal('secondary')])),
-  serverRole: t.Union([t.Literal('writer'), t.Literal('api'), t.Literal('worker'), t.Literal('dev-single')]),
+  serverRole: t.Union([
+    t.Literal('api'),
+    t.Literal('maintenance-worker'),
+    t.Literal('judge-worker'),
+    t.Literal('auto'),
+    t.Literal('dev-single'),
+    t.Literal('writer'),
+    t.Literal('worker'),
+  ]),
   service: t.Optional(
     t.Union([
       t.Literal('api-server'),

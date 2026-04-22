@@ -19,7 +19,7 @@ const originalFetch = globalThis.fetch
 
 const state: {shouldProxy: boolean; writerUrls: string[]} = {shouldProxy: true, writerUrls: ['http://writer-1:34991']}
 
-const getCurrentServerWriterUrl = mock(async () => {
+const getCurrentServerDuckdbOwnerUrl = mock(async () => {
   if (state.writerUrls.length === 0) {
     return null
   }
@@ -36,8 +36,8 @@ void mock.module(envModulePath, () => {
 void mock.module(serverRuntimeRoleModulePath, () => {
   return {
     ...actualServerRuntimeRoleModule,
-    getCurrentServerWriterUrl,
-    shouldCurrentServerProxyApiToWriter: () => {
+    getCurrentServerDuckdbOwnerUrl,
+    shouldCurrentServerProxyApiToOwner: () => {
       return state.shouldProxy
     },
   }
@@ -59,7 +59,7 @@ const loadRoutes = async () => {
 }
 
 afterEach(() => {
-  getCurrentServerWriterUrl.mockClear()
+  getCurrentServerDuckdbOwnerUrl.mockClear()
   state.shouldProxy = true
   state.writerUrls = ['http://writer-1:34991']
   globalThis.fetch = originalFetch

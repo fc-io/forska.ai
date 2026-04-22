@@ -7,7 +7,7 @@ import {DEFAULT_API_SERVER_PORT} from '../../utils/runtimePortDefaults.ts'
 import {getConfiguredDuckdbPath} from './getDuckdbPath.ts'
 import {type LocalAppSettings, readLocalAppSettings} from './localAppSettings.ts'
 
-type BackgroundServerRole = 'api' | 'worker'
+type BackgroundServerRole = 'api' | 'maintenance-worker' | 'worker'
 
 type BackgroundServerStackConfig = {
   apiPort: number
@@ -140,7 +140,7 @@ export const getBackgroundServerEnv = ({
         API_SERVER_PORT: String(config.workerPort),
         DUCKDB_MEMORY_LIMIT: config.workerDuckdbMemoryLimit,
         FORSKA_RUNTIME_SERVICE: 'worker-server',
-        SERVER_ROLE: 'worker',
+        SERVER_ROLE: 'maintenance-worker',
         SERVER_WRITER_URL: '',
       }
 }
@@ -170,7 +170,7 @@ export const getBackgroundServerEnvAsync = async ({
         API_SERVER_PORT: String(config.workerPort),
         DUCKDB_MEMORY_LIMIT: config.workerDuckdbMemoryLimit,
         FORSKA_RUNTIME_SERVICE: 'worker-server',
-        SERVER_ROLE: 'worker',
+        SERVER_ROLE: 'maintenance-worker',
         SERVER_WRITER_URL: '',
       }
 }

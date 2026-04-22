@@ -21,7 +21,7 @@ test('auto follower exits when another local process already owns the same write
         hostname: hostname(),
         leaseId: 'lease-id',
         pid: process.pid,
-        serverRole: 'writer',
+        serverRole: 'maintenance-worker',
       },
       null,
       2,
@@ -85,7 +85,7 @@ test('auto role resumes writer when the existing lease belongs to the current pr
             hostname: hostname(),
             leaseId: 'lease-id',
             pid: process.pid,
-            serverRole: 'writer',
+            serverRole: 'maintenance-worker',
           }
 
           writeFileSync(leasePath, JSON.stringify(lease, null, 2) + '\\n')
@@ -112,7 +112,7 @@ test('auto role resumes writer when the existing lease belongs to the current pr
     )
 
     expect(result.exitCode).toBe(0)
-    expect(result.stdout.toString()).toContain('role=writer')
+    expect(result.stdout.toString()).toContain('role=maintenance-worker')
   } finally {
     rmSync(tempDirectory, {force: true, recursive: true})
   }

@@ -1,14 +1,14 @@
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
-import {getCurrentServerWriterUrl, shouldCurrentServerProxyApiToWriter} from './serverRuntimeRole.ts'
+import {getCurrentServerDuckdbOwnerUrl, shouldCurrentServerProxyApiToOwner} from './serverRuntimeRole.ts'
 import {getWriterConnectionHeartbeatPayload, getWriterConnectionProxyHeaders} from './writerConnections.ts'
 
 const writerConnectionHeartbeatLogger = createRateLimitedLogger({windowMs: 30_000})
 const writerConnectionHeartbeatIntervalMs = 15_000
 
 const sendWriterConnectionHeartbeat = async () => {
-  const writerUrl = await getCurrentServerWriterUrl()
+  const writerUrl = await getCurrentServerDuckdbOwnerUrl()
 
-  if (!shouldCurrentServerProxyApiToWriter() || writerUrl === null) {
+  if (!shouldCurrentServerProxyApiToOwner() || writerUrl === null) {
     return
   }
 

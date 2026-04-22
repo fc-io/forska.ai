@@ -38,11 +38,12 @@ import {getAppServerRuntimeConfig} from './utils/getAppServerRuntimeConfig.ts'
 import {warmCodexAppServer} from './utils/getCodexAppServerClient.ts'
 import {inferenceRuntimeConfig} from './utils/getInferenceRuntimeConfig.ts'
 import {writeRuntimeOperatorLogEvent} from './utils/runtimeLogger.ts'
-import {shouldServerRoleMountWriterCrons} from './utils/serverRole.ts'
+import {shouldServerRoleMountJudgingCrons, shouldServerRoleMountMaintenanceCrons} from './utils/serverRole.ts'
 import {
+  canCurrentServerOwnDuckdb,
   getCurrentServerRole,
   initializeServerRuntimeRole,
-  shouldCurrentServerRunWriterWork,
+  shouldCurrentServerRunJudgingLoops,
 } from './utils/serverRuntimeRole.ts'
 import {startBackgroundWork} from './utils/startBackgroundWork.ts'
 
@@ -92,19 +93,24 @@ const allowedOrigins = [
   `http://localhost:${appServerRuntimeConfig.port}`,
   ...desktopAllowedOrigins,
 ]
-const shouldMountWriterCrons = shouldServerRoleMountWriterCrons(env.SERVER_ROLE)
-const writerCronRoutes = shouldMountWriterCrons
-  ? new Elysia().use(fullTextJobsCron).use(fullTextConversionJobsCron).use(judgmentsJobsCron).use(nvidiaSmiCron)
+const shouldMountMaintenanceCrons = shouldServerRoleMountMaintenanceCrons(env.SERVER_ROLE)
+const shouldMountJudgingCrons = shouldServerRoleMountJudgingCrons(env.SERVER_ROLE)
+const maintenanceCronRoutes = shouldMountMaintenanceCrons
+  ? new Elysia().use(fullTextJobsCron).use(fullTextConversionJobsCron).use(nvidiaSmiCron)
   : new Elysia()
+const judgingCronRoutes = shouldMountJudgingCrons ? new Elysia().use(judgmentsJobsCron) : new Elysia()
 
 await initializeServerRuntimeRole()
 
-if (shouldCurrentServerRunWriterWork()) {
+if (canCurrentServerOwnDuckdb()) {
   await migrateDuckdb()
+}
+
+if (shouldCurrentServerRunJudgingLoops()) {
   await getJudgmentJobSqliteService().recoverJudgmentJobLeasesOnStartup()
 }
 
-const shouldWarmCodex = getCurrentServerRole() !== 'worker'
+const shouldWarmCodex = getCurrentServerRole() !== 'maintenance-worker' && getCurrentServerRole() !== 'worker'
 
 export const app = new Elysia()
   .use(
@@ -117,7 +123,8 @@ export const app = new Elysia()
   )
   .use(apiProxyRoutes)
   .use(writerConnectionsRoutes)
-  .use(writerCronRoutes)
+  .use(maintenanceCronRoutes)
+  .use(judgingCronRoutes)
   .use(adminInvestigateRoutes)
   .use(comparisonProjectsRoutes)
   .use(judgmentsJobsRoutes)
@@ -162,13 +169,9 @@ writeRuntimeOperatorLogEvent({
   severity: 'INFO',
 })
 writeRuntimeOperatorLogEvent({
-  attrs: {
-    configuredRole: env.SERVER_ROLE,
-    duckdbWriter: shouldCurrentServerRunWriterWork(),
-    role: getCurrentServerRole(),
-  },
+  attrs: {configuredRole: env.SERVER_ROLE, duckdbOwner: canCurrentServerOwnDuckdb(), role: getCurrentServerRole()},
   event: 'server.startup.role-summary',
-  message: `[server] configured_role=${env.SERVER_ROLE} role=${getCurrentServerRole()} duckdb_writer=${shouldCurrentServerRunWriterWork()}`,
+  message: `[server] configured_role=${env.SERVER_ROLE} role=${getCurrentServerRole()} duckdb_owner=${canCurrentServerOwnDuckdb()}`,
   severity: 'INFO',
 })
 startBackgroundWork()

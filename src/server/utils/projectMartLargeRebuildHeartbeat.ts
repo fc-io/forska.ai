@@ -4,7 +4,7 @@ import {
   type ProjectMartLargeRebuildHeartbeatConfig,
 } from './projectMartLargeRebuildTuning.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
-import {registerWriterDemotionHandler, shouldCurrentServerRunWriterWork} from './serverRuntimeRole.ts'
+import {registerWriterDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
 
 type ProjectMartLargeRebuildHeartbeatOptions = {batchSize?: number; maxCyclesPerWake?: number; pollIntervalMs?: number}
 
@@ -25,7 +25,7 @@ const logLargeRebuildHeartbeatError = (error: unknown) => {
 }
 
 export const startProjectMartLargeRebuildHeartbeat = (options: ProjectMartLargeRebuildHeartbeatOptions = {}) => {
-  if (!shouldCurrentServerRunWriterWork()) {
+  if (!shouldCurrentServerRunMaintenanceLoops()) {
     return () => {}
   }
 

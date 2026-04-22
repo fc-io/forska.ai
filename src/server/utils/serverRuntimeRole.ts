@@ -16,6 +16,9 @@ import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {exitWithRuntimeLogFlush} from './runtimeLogger.ts'
 import {
   canServerRoleOwnDuckdb,
+  canServerRoleProxyApiToOwner,
+  canServerRoleRunJudgingLoops,
+  canServerRoleRunMaintenanceLoops,
   type EffectiveServerRole,
   getEffectiveServerRole,
   isAutoServerRole,
@@ -36,7 +39,11 @@ declare global {
 
 const autoServerRolePollIntervalMs = 5_000
 const autoServerRoleLogger = createRateLimitedLogger({windowMs: 30_000})
-const duckdbRoleErrorFragments = ['cannot own DuckDB', 'DuckDB writer lease is no longer owned by this process']
+const duckdbRoleErrorFragments = [
+  'cannot own DuckDB',
+  'DuckDB owner lease is no longer owned by this process',
+  'DuckDB writer lease is no longer owned by this process',
+]
 const getRuntimeEnv = () => {
   return getEnv()
 }
@@ -95,7 +102,9 @@ const getManualWriterUrl = () => {
 
 const isWriterDisabledByConfig = () => {
   return (
-    !isAutoServerRole(getRuntimeEnv().SERVER_ROLE) && getCurrentServerRole() === 'api' && getManualWriterUrl() === null
+    !isAutoServerRole(getRuntimeEnv().SERVER_ROLE)
+    && shouldCurrentServerProxyApiToOwner()
+    && getManualWriterUrl() === null
   )
 }
 
@@ -167,16 +176,16 @@ const promoteAutoServerToWriter = async (reason: string, takeoverLeaseId?: strin
       acquireDuckdbOwnerLease({
         apiServerPort: getRuntimeEnv().API_SERVER_PORT,
         databasePath: getRuntimeEnv().DUCKDB_PATH,
-        serverRole: 'writer',
+        serverRole: 'maintenance-worker',
         takeoverLeaseId,
       }),
     )
 
     serverRuntimeState.currentLease = currentLease
-    setCurrentServerRole('writer')
+    setCurrentServerRole('maintenance-worker')
     setLastKnownWriterUrl(getCurrentServerUrl())
     clearUnresponsiveWriterWarnings()
-    autoServerRoleLogger.force('server-role:writer', `[server] auto writer active (${reason})`, 'log', {
+    autoServerRoleLogger.force('server-role:duckdb-owner', `[server] auto DuckDB owner active (${reason})`, 'log', {
       apiServerPort: getRuntimeEnv().API_SERVER_PORT,
       reason,
     })
@@ -198,17 +207,17 @@ const resumeAutoWriterLeaseForCurrentProcess = async () => {
     acquireDuckdbOwnerLease({
       apiServerPort: getRuntimeEnv().API_SERVER_PORT,
       databasePath: getRuntimeEnv().DUCKDB_PATH,
-      serverRole: 'writer',
+      serverRole: 'maintenance-worker',
     }),
   )
 
   serverRuntimeState.currentLease = currentLease
-  setCurrentServerRole('writer')
+  setCurrentServerRole('maintenance-worker')
   setLastKnownWriterUrl(getCurrentServerUrl())
   clearUnresponsiveWriterWarnings()
   autoServerRoleLogger.force(
-    'server-role:writer-resume',
-    '[server] auto writer resumed from existing same-process lease',
+    'server-role:duckdb-owner-resume',
+    '[server] auto DuckDB owner resumed from existing same-process lease',
     'log',
     {apiServerPort: getRuntimeEnv().API_SERVER_PORT, pid: process.pid},
   )
@@ -278,7 +287,7 @@ const syncAutoServerRole = async () => {
     return
   }
 
-  if (serverRuntimeState.currentRole === 'writer') {
+  if (canCurrentServerOwnDuckdb()) {
     await refreshAutoWriterLease()
     return
   }
@@ -322,13 +331,33 @@ export const canCurrentServerOwnDuckdb = () => {
   return canServerRoleOwnDuckdb(getCurrentServerRole())
 }
 
+export const shouldCurrentServerRunMaintenanceLoops = () => {
+  return canServerRoleRunMaintenanceLoops(getCurrentServerRole())
+}
+
+export const canCurrentServerRunMaintenanceLoops = shouldCurrentServerRunMaintenanceLoops
+
+export const shouldCurrentServerRunMaintenanceWork = shouldCurrentServerRunMaintenanceLoops
+
+export const shouldCurrentServerRunJudgingLoops = () => {
+  return canServerRoleRunJudgingLoops(getCurrentServerRole())
+}
+
+export const canCurrentServerRunJudgingLoops = shouldCurrentServerRunJudgingLoops
+
+export const shouldCurrentServerRunJudgingWork = shouldCurrentServerRunJudgingLoops
+
 export const shouldCurrentServerRunWriterWork = () => {
   return canCurrentServerOwnDuckdb()
 }
 
-export const shouldCurrentServerProxyApiToWriter = () => {
-  return getCurrentServerRole() === 'api'
+export const shouldCurrentServerProxyApiToOwner = () => {
+  return canServerRoleProxyApiToOwner(getCurrentServerRole())
 }
+
+export const shouldCurrentServerProxyApiToDuckdbOwner = shouldCurrentServerProxyApiToOwner
+
+export const shouldCurrentServerProxyApiToWriter = shouldCurrentServerProxyApiToOwner
 
 export const isExpectedWriterRoleLossError = (error: unknown) => {
   const message =
@@ -352,7 +381,7 @@ export const getCurrentServerWriterUrl = async () => {
     return getCurrentServerUrl()
   }
 
-  if (!shouldCurrentServerProxyApiToWriter()) {
+  if (!shouldCurrentServerProxyApiToOwner()) {
     return null
   }
 
@@ -367,9 +396,13 @@ export const getCurrentServerWriterUrl = async () => {
   return canCurrentServerOwnDuckdb() ? null : readWriterUrlFromLease()
 }
 
+export const getCurrentServerDuckdbOwnerUrl = getCurrentServerWriterUrl
+
 export const getKnownWriterUrl = () => {
   return canCurrentServerOwnDuckdb() ? getCurrentServerUrl() : serverRuntimeState.lastKnownWriterUrl
 }
+
+export const getKnownDuckdbOwnerUrl = getKnownWriterUrl
 
 export const ensureCurrentDuckdbOwnerLease = async () => {
   if (!canCurrentServerOwnDuckdb()) {

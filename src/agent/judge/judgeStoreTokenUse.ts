@@ -111,7 +111,10 @@ const shouldSkipTokenUsePersistence = () => {
   const workerDuckdbMemoryLimitMiB = parseDuckdbMemoryLimitToMiB(process.env.DUCKDB_MEMORY_LIMIT)
 
   return (
-    (serverRole === 'worker' || serverRole === 'writer')
+    (serverRole === 'judge-worker'
+      || serverRole === 'maintenance-worker'
+      || serverRole === 'worker'
+      || serverRole === 'writer')
     && workerDuckdbMemoryLimitMiB !== null
     && workerDuckdbMemoryLimitMiB <= 6400
   )

@@ -38,7 +38,7 @@ import {deleteJudgmentJobSafelyTx} from '../services/judgmentJobDeleteService.ts
 import {HttpError} from '../utils/httpError.ts'
 import {getProjectMartLargeRebuildRuntimeMetrics} from '../utils/projectMartLargeRebuildRuntimeMetrics.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
-import {shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
+import {shouldCurrentServerRunJudgingLoops} from '../utils/serverRuntimeRole.ts'
 
 type TokenUsageDaySummary = {
   date: string
@@ -681,8 +681,8 @@ const assertProjectRuntimeModelMatch = async (projectId: string): Promise<void> 
 }
 
 const getJudgingRuntimeReason = (): string | null => {
-  return !shouldCurrentServerRunWriterWork()
-    ? 'This server is not the active writer, so it cannot process queued prompts.'
+  return !shouldCurrentServerRunJudgingLoops()
+    ? 'This server is not configured for judging loops, so it cannot process queued prompts.'
     : null
 }
 

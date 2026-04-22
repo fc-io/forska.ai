@@ -14,7 +14,7 @@ import {getUserConfigQueryService} from '../services/userConfigQueryService.ts'
 import {ConversionError, convertPdfToText} from '../utils/convertPdfToText.ts'
 import {env} from '../utils/env.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
-import {isExpectedWriterRoleLossError, shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
+import {isExpectedWriterRoleLossError, shouldCurrentServerRunMaintenanceLoops} from '../utils/serverRuntimeRole.ts'
 
 const CONVERSION_INTERVAL = '0 */2 * * * *' // Every 2 minutes
 const DOCLING_CONVERSION_TIMEOUT_MS = 600_000 // 10 minutes
@@ -400,7 +400,7 @@ const convertArticle = async ({
 let runningBatches = 0
 
 const runConversionBatch = async () => {
-  if (!env.RUN_SERVER_FULL_TEXT_CONVERSION_CRON || !shouldCurrentServerRunWriterWork()) return
+  if (!env.RUN_SERVER_FULL_TEXT_CONVERSION_CRON || !shouldCurrentServerRunMaintenanceLoops()) return
 
   if (runningBatches >= MAX_CONCURRENT_BATCHES) {
     fullTextConversionLogger.log(
@@ -418,7 +418,7 @@ const runConversionBatch = async () => {
     const concurrency = getConversionConcurrency(batchSize)
     const runtimeConfig = await getUserConfigQueryService().getFullTextConversionModelConfig()
 
-    if (!shouldCurrentServerRunWriterWork()) return
+    if (!shouldCurrentServerRunMaintenanceLoops()) return
 
     if (!runtimeConfig) {
       fullTextConversionLogger.log(

@@ -34,7 +34,7 @@ const waitForFile = async (filePath: string, timeoutMs: number): Promise<void> =
   })
 }
 
-test('second process cannot acquire DuckDB writer lease', async () => {
+test('second process cannot acquire DuckDB owner lease', async () => {
   const duckdbPath = `/tmp/f1-duckdb-lease-${Date.now()}.duckdb`
   const leasePath = `${duckdbPath}.writer.lock`
   const holder = globalThis.Bun.spawn(
@@ -49,7 +49,7 @@ test('second process cannot acquire DuckDB writer lease', async () => {
     ],
     {
       cwd: process.cwd(),
-      env: {...process.env, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer'},
+      env: {...process.env, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker'},
       stdout: 'pipe',
       stderr: 'pipe',
     },
@@ -67,13 +67,13 @@ test('second process cannot acquire DuckDB writer lease', async () => {
           await runDuckdbJsonQuery('SELECT 1 AS value')
         `,
       ],
-      {cwd: process.cwd(), env: {...process.env, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer'}},
+      {cwd: process.cwd(), env: {...process.env, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker'}},
     )
 
     const stderr = contender.stderr.toString() || contender.stdout.toString()
 
     expect(contender.exitCode).not.toBe(0)
-    expect(stderr).toContain('DuckDB writer lease is held by')
+    expect(stderr).toContain('DuckDB owner lease is held by')
   } finally {
     holder.kill('SIGTERM')
     await holder.exited

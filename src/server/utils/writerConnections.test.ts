@@ -107,14 +107,14 @@ test('summarizes registered worker capabilities from fresh heartbeats', () => {
     pid: 12346,
     processStartedAt: startedAt,
     runtimeProfile: 'primary',
-    serverRole: 'worker',
+    serverRole: 'maintenance-worker',
     service: 'worker-server',
     startedAt,
     writerUrl: 'http://127.0.0.1:4011',
   })
   const registry = getWorkerRegistryOverview([apiWorker, maintenanceWorker, maintenanceWorker])
 
-  expect(maintenanceWorker.capabilities).toEqual(['duckdb-owner', 'maintenance', 'judging'])
+  expect(maintenanceWorker.capabilities).toEqual(['duckdb-owner', 'maintenance'])
   expect(registry.registeredWorkerCount).toBe(2)
   expect(registry.freshRegisteredWorkerCount).toBe(2)
   expect(registry.staleRegisteredWorkerCount).toBe(0)

@@ -64,7 +64,7 @@ const getSummary = (staleClaims: StaleClaimRow[]) => {
 const runIsolatedRecovery = () => {
   const result = globalThis.Bun.spawnSync(['bun', 'scripts/runProjectMartRefreshWorkerOnceIsolated.ts'], {
     cwd: process.cwd(),
-    env: {...process.env, SERVER_ROLE: 'writer', SERVER_WRITER_URL: ''},
+    env: {...process.env, SERVER_ROLE: 'maintenance-worker', SERVER_WRITER_URL: ''},
     stderr: 'pipe',
     stdout: 'pipe',
   })

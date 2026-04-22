@@ -11,7 +11,7 @@ const envShape = arktype({
   DUCKDB_MEMORY_LIMIT: 'string',
   DUCKDB_APPEND_LANE_COUNT: 'number | string.integer.parse | null | undefined',
   DUCKDB_TEMP_DIRECTORY: 'string | null | undefined',
-  SERVER_ROLE: arktype('"auto" | "writer" | "api" | "worker" | "dev-single"'),
+  SERVER_ROLE: arktype('"api" | "maintenance-worker" | "judge-worker" | "auto" | "dev-single" | "writer" | "worker"'),
   SERVER_WRITER_URL: 'string | null | undefined',
   VITE_PORT: 'number | string.integer.parse',
   API_SERVER_PORT: 'number | string.integer.parse',

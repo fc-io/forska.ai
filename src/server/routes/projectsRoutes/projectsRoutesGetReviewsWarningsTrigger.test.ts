@@ -99,7 +99,7 @@ test('reviews warnings trigger mart refresh draining when backlog exists on a wr
         void mock.module(serverRuntimeRoleModulePath, () => {
           return {
             ...actualServerRuntimeRoleModule,
-            shouldCurrentServerRunWriterWork: () => {
+            shouldCurrentServerRunMaintenanceLoops: () => {
               return true
             },
           }

@@ -6,14 +6,14 @@ import {canCurrentServerOwnDuckdb, getCurrentServerRole} from '../utils/serverRu
 
 export const duckdbStudioSnapshotPath = '/api/duckdbStudioSnapshots'
 
-const ensureDuckdbStudioWriterRole = () => {
+const ensureDuckdbStudioOwnerRole = () => {
   if (!canCurrentServerOwnDuckdb()) {
-    throw new Error(`DuckDB studio snapshots require writer role; got ${getCurrentServerRole()}`)
+    throw new Error(`DuckDB studio snapshots require DuckDB owner role; got ${getCurrentServerRole()}`)
   }
 }
 
 export const duckdbStudioRoutes = new Elysia().use(withErrorHandler()).post(duckdbStudioSnapshotPath, async () => {
-  ensureDuckdbStudioWriterRole()
+  ensureDuckdbStudioOwnerRole()
   const data = await getAppDatabaseService().createSnapshot()
   return {data}
 })

@@ -46,7 +46,7 @@ const getShellHostname = () => {
   return getNormalizedCommandOutput('hostname', [])
 }
 
-test('writer reclaims stale local lease for shell hostname alias', async () => {
+test('maintenance-worker reclaims stale local lease for shell hostname alias', async () => {
   const shellHostname = getShellHostname()
 
   if (shellHostname === null || shellHostname === hostname()) {
@@ -65,11 +65,11 @@ test('writer reclaims stale local lease for shell hostname alias', async () => {
       machineFingerprint: 'outdated-machine-fingerprint',
       leaseId: 'shell-hostname-lease-id',
       pid: 999_999,
-      serverRole: 'writer',
+      serverRole: 'maintenance-worker',
     })
 
     const nextLease = await Effect.runPromise(
-      acquireDuckdbOwnerLease({apiServerPort: 3999, databasePath: duckdbPath, serverRole: 'writer'}),
+      acquireDuckdbOwnerLease({apiServerPort: 3999, databasePath: duckdbPath, serverRole: 'maintenance-worker'}),
     )
 
     if (nextLease === null) {
@@ -82,14 +82,14 @@ test('writer reclaims stale local lease for shell hostname alias', async () => {
   }
 })
 
-test('writer replaces an empty lease file left behind by a crashed writer', async () => {
+test('maintenance-worker replaces an empty lease file left behind by a crashed owner', async () => {
   const {duckdbPath, leasePath, tempDirectory} = createLeasePaths()
 
   try {
     writeFileSync(leasePath, '')
 
     const nextLease = await Effect.runPromise(
-      acquireDuckdbOwnerLease({apiServerPort: 3999, databasePath: duckdbPath, serverRole: 'writer'}),
+      acquireDuckdbOwnerLease({apiServerPort: 3999, databasePath: duckdbPath, serverRole: 'maintenance-worker'}),
     )
 
     if (nextLease === null) {
@@ -103,7 +103,7 @@ test('writer replaces an empty lease file left behind by a crashed writer', asyn
   }
 })
 
-test('writer reclaims stale legacy local lease for macOS local hostname alias', async () => {
+test('maintenance-worker reclaims stale legacy local lease for macOS local hostname alias', async () => {
   const darwinLocalHostname = getDarwinLocalHostname()
 
   if (darwinLocalHostname === null) {
@@ -121,11 +121,11 @@ test('writer reclaims stale legacy local lease for macOS local hostname alias', 
       hostname: `${darwinLocalHostname}.local`,
       leaseId: 'legacy-local-lease-id',
       pid: 999_999,
-      serverRole: 'writer',
+      serverRole: 'maintenance-worker',
     })
 
     const nextLease = await Effect.runPromise(
-      acquireDuckdbOwnerLease({apiServerPort: 3999, databasePath: duckdbPath, serverRole: 'writer'}),
+      acquireDuckdbOwnerLease({apiServerPort: 3999, databasePath: duckdbPath, serverRole: 'maintenance-worker'}),
     )
 
     if (nextLease === null) {
@@ -139,12 +139,12 @@ test('writer reclaims stale legacy local lease for macOS local hostname alias', 
   }
 })
 
-test('writer reclaims stale local lease after hostname change when machine fingerprint matches', async () => {
+test('maintenance-worker reclaims stale local lease after hostname change when machine fingerprint matches', async () => {
   const {duckdbPath, leasePath, tempDirectory} = createLeasePaths()
 
   try {
     const initialLease = await Effect.runPromise(
-      acquireDuckdbOwnerLease({apiServerPort: 3999, databasePath: duckdbPath, serverRole: 'writer'}),
+      acquireDuckdbOwnerLease({apiServerPort: 3999, databasePath: duckdbPath, serverRole: 'maintenance-worker'}),
     )
 
     if (initialLease === null) {
@@ -160,7 +160,7 @@ test('writer reclaims stale local lease after hostname change when machine finge
     })
 
     const nextLease = await Effect.runPromise(
-      acquireDuckdbOwnerLease({apiServerPort: 3999, databasePath: duckdbPath, serverRole: 'writer'}),
+      acquireDuckdbOwnerLease({apiServerPort: 3999, databasePath: duckdbPath, serverRole: 'maintenance-worker'}),
     )
 
     if (nextLease === null) {
@@ -175,7 +175,7 @@ test('writer reclaims stale local lease after hostname change when machine finge
   }
 })
 
-test('writer reclaims stale macOS local-hostname lease in a reduced PATH environment', () => {
+test('maintenance-worker reclaims stale macOS local-hostname lease in a reduced PATH environment', () => {
   const darwinLocalHostname = getDarwinLocalHostname()
 
   if (darwinLocalHostname === null) {
@@ -193,7 +193,7 @@ test('writer reclaims stale macOS local-hostname lease in a reduced PATH environ
       hostname: `${darwinLocalHostname}.local`,
       leaseId: 'legacy-local-reduced-path-lease-id',
       pid: 999_999,
-      serverRole: 'writer',
+      serverRole: 'maintenance-worker',
     })
 
     const result = globalThis.Bun.spawnSync(
@@ -205,7 +205,7 @@ test('writer reclaims stale macOS local-hostname lease in a reduced PATH environ
           import {acquireDuckdbOwnerLease} from './src/server/utils/duckdbOwnerLease.ts'
 
           const nextLease = await Effect.runPromise(
-            acquireDuckdbOwnerLease({apiServerPort: 3999, databasePath: ${JSON.stringify(duckdbPath)}, serverRole: 'writer'}),
+            acquireDuckdbOwnerLease({apiServerPort: 3999, databasePath: ${JSON.stringify(duckdbPath)}, serverRole: 'maintenance-worker'}),
           )
 
           console.log(JSON.stringify(nextLease))
@@ -235,7 +235,7 @@ test('writer reclaims stale macOS local-hostname lease in a reduced PATH environ
   }
 })
 
-test('writer does not reclaim stale foreign lease without matching machine fingerprint', async () => {
+test('maintenance-worker does not reclaim stale foreign lease without matching machine fingerprint', async () => {
   const {duckdbPath, leasePath, tempDirectory} = createLeasePaths()
 
   try {
@@ -248,11 +248,11 @@ test('writer does not reclaim stale foreign lease without matching machine finge
       machineFingerprint: 'foreign-machine-fingerprint',
       leaseId: 'foreign-lease-id',
       pid: 999_999,
-      serverRole: 'writer',
+      serverRole: 'maintenance-worker',
     })
 
     const acquireLeaseError = await Effect.runPromise(
-      acquireDuckdbOwnerLease({apiServerPort: 3999, databasePath: duckdbPath, serverRole: 'writer'}),
+      acquireDuckdbOwnerLease({apiServerPort: 3999, databasePath: duckdbPath, serverRole: 'maintenance-worker'}),
     )
       .then(() => {
         return null
@@ -262,13 +262,47 @@ test('writer does not reclaim stale foreign lease without matching machine finge
       })
 
     expect(acquireLeaseError).toBeInstanceOf(Error)
-    expect((acquireLeaseError as Error).message).toContain('DuckDB writer lease is held by')
+    expect((acquireLeaseError as Error).message).toContain('DuckDB owner lease is held by')
   } finally {
     rmSync(tempDirectory, {force: true, recursive: true})
   }
 })
 
-test('writer treats EPERM pid checks as an active process', () => {
+test('api and judge-worker cannot acquire DuckDB owner lease', async () => {
+  const {duckdbPath, tempDirectory} = createLeasePaths()
+
+  try {
+    const apiAcquireError = await Effect.runPromise(
+      acquireDuckdbOwnerLease({apiServerPort: 3999, databasePath: duckdbPath, serverRole: 'api'}),
+    )
+      .then(() => {
+        return null
+      })
+      .catch((error: unknown) => {
+        return error
+      })
+    const judgeAcquireError = await Effect.runPromise(
+      acquireDuckdbOwnerLease({apiServerPort: 3999, databasePath: duckdbPath, serverRole: 'judge-worker'}),
+    )
+      .then(() => {
+        return null
+      })
+      .catch((error: unknown) => {
+        return error
+      })
+
+    expect(apiAcquireError).toBeInstanceOf(Error)
+    expect(judgeAcquireError).toBeInstanceOf(Error)
+    expect((apiAcquireError as Error).message).toContain('SERVER_ROLE=api cannot open the local DuckDB owner')
+    expect((judgeAcquireError as Error).message).toContain(
+      'SERVER_ROLE=judge-worker cannot open the local DuckDB owner',
+    )
+  } finally {
+    rmSync(tempDirectory, {force: true, recursive: true})
+  }
+})
+
+test('maintenance-worker treats EPERM pid checks as an active process', () => {
   const originalKill = process.kill.bind(process)
   const seenCalls: Array<[number, number | undefined]> = []
 
@@ -288,7 +322,7 @@ test('writer treats EPERM pid checks as an active process', () => {
       hostname: hostname(),
       leaseId: 'foreign-eperm-lease-id',
       pid: 999_999,
-      serverRole: 'writer',
+      serverRole: 'maintenance-worker',
     })
 
     expect(isAlive).toBe(true)
@@ -298,7 +332,7 @@ test('writer treats EPERM pid checks as an active process', () => {
   }
 })
 
-test('writer can take over a stale foreign lease when auto mode already selected that lease', async () => {
+test('maintenance-worker can take over a stale foreign lease when auto mode already selected that lease', async () => {
   const {duckdbPath, leasePath, tempDirectory} = createLeasePaths()
 
   try {
@@ -311,14 +345,14 @@ test('writer can take over a stale foreign lease when auto mode already selected
       machineFingerprint: 'foreign-machine-fingerprint',
       leaseId: 'stale-foreign-lease-id',
       pid: 999_999,
-      serverRole: 'writer',
+      serverRole: 'maintenance-worker',
     })
 
     const nextLease = await Effect.runPromise(
       acquireDuckdbOwnerLease({
         apiServerPort: 3999,
         databasePath: duckdbPath,
-        serverRole: 'writer',
+        serverRole: 'maintenance-worker',
         takeoverLeaseId: 'stale-foreign-lease-id',
       }),
     )

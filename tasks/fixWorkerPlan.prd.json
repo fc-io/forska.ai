@@ -1,0 +1,384 @@
+{
+  "name": "Fix Worker Plan First Coding Slice",
+  "description": "Replace writer-era roles with explicit api, maintenance-worker, and judge-worker runtime surfaces; add shared worker and queue truth; and move LLM execution onto judge-worker with durable replay and honest product status.",
+  "branchName": "ralph/fix-worker-first-slice",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Define explicit runtime roles and capability helpers",
+      "description": "As a maintainer, I want explicit `api`, `maintenance-worker`, and `judge-worker` role capabilities so DuckDB ownership, maintenance work, judging, and owner proxying stop depending on writer-era role strings.",
+      "acceptanceCriteria": [
+        "Add final production roles for `api`, `maintenance-worker`, and `judge-worker`, keeping `dev-single` only as a local combined-testing role if still needed.",
+        "Add capability helpers for DuckDB ownership, maintenance loops, judging loops, and owner proxy behavior instead of coarse writer checks.",
+        "`api` and `judge-worker` cannot claim owner-only work, while `maintenance-worker` candidates can own DuckDB.",
+        "`bun test src/server/utils/serverRole.test.ts src/server/utils/serverRuntimeRoleDuplicateServer.test.ts src/server/utils/serverRuntimeRoleWriterWorkError.test.ts src/server/utils/duckdbOwnerLease.test.ts src/server/utils/duckdbServiceLease.test.ts` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-002",
+      "title": "Rename runtime and operator surfaces away from writer terminology",
+      "description": "As a maintainer, I want env names, runtime profiles, process identities, scripts, routes, and operator copy to use owner or maintenance-worker terminology so the shipped runtime no longer exposes writer-era contracts.",
+      "acceptanceCriteria": [
+        "Rename writer-era env vars, runtime-profile names, process identities, service labels, heartbeat payloads, log labels, and operator routes to owner or maintenance-worker naming.",
+        "Package scripts, dev-watch helpers, local run docs, backend-availability probes, navigation warnings, and admin route names no longer refer to `writer`, `worker`, `SERVER_WRITER_URL`, or `/api/writer_connections`.",
+        "No shipped runtime behavior still branches on removed `writer` or `worker` role strings.",
+        "`bun test src/server/indexStartup.test.ts src/server/utils/runtimeLogger.test.ts scripts/runWithRuntimeProfile.test.ts src/utils/runtimeProfile.test.ts` passes.",
+        "`bun test src/desktop/getDesktopRuntimeConfig.test.ts src/desktop/desktopSingleInstance.test.ts` passes.",
+        "`bun run build` passes.",
+        "`bun run desktop:build` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-003",
+      "title": "Migrate persisted config and settings UI to maintenance-worker naming",
+      "description": "As an operator, I want persisted config rows, local settings, stored types, and settings UI fields to use final maintenance-worker names so upgrades finish the naming cutover instead of carrying legacy aliases forward.",
+      "acceptanceCriteria": [
+        "Add the one-time DuckDB and local `forska.settings.json` rewrite from writer-era config keys to maintenance-worker naming without keeping steady-state public aliases.",
+        "Settings UI, rebuild-tuning fields, stored schema types, and client queries use final maintenance-worker naming only.",
+        "First boot against pre-cutover config rewrites or replaces legacy settings without requiring manual cleanup.",
+        "`bun run db:mig` passes.",
+        "`bun test src/server/indexStartup.test.ts src/server/services/getAppQueryService.test.ts scripts/runWithRuntimeProfile.test.ts src/utils/runtimeProfile.test.ts` passes.",
+        "`bun test src/desktop/getDesktopRuntimeConfig.test.ts src/desktop/desktopSingleInstance.test.ts` passes.",
+        "`bun run build` passes.",
+        "`bun run desktop:build` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-004",
+      "title": "Add the judge-worker durable journal identity contract",
+      "description": "As a maintainer, I want `judge-worker` startup to require a stable durable journal identity so accepted claims and completion outbox rows survive restarts and fail closed when the storage target is unsafe.",
+      "acceptanceCriteria": [
+        "Make `JUDGE_WORKER_ID` and optional `JUDGE_WORKER_JOURNAL_PATH` the canonical runtime contract, with deterministic durable app-data path derivation from the id when the path is omitted.",
+        "`judge-worker` startup refuses to run when the resolved journal target is missing, unstable, unwritable, non-durable, or collides with another live worker.",
+        "Runtime profiles, stack scripts, and desktop startup pass the same journal-identity contract through unchanged.",
+        "`bun test src/server/indexStartup.test.ts scripts/runWithRuntimeProfile.test.ts src/utils/runtimeProfile.test.ts src/desktop/getDesktopRuntimeConfig.test.ts src/desktop/desktopSingleInstance.test.ts` passes.",
+        "`bun run desktop:build` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-005",
+      "title": "Add cutover version refusal and legacy writer lease fencing",
+      "description": "As a maintainer, I want cutover-version checks and legacy writer lease fencing so the new split runtime refuses mixed-mode peers and unsafe lease takeover during the release.",
+      "acceptanceCriteria": [
+        "Add cutover runtime version checks to owner-routed APIs, heartbeat flows, and lease metadata.",
+        "Startup refuses incompatible pre-cutover peers instead of attempting mixed-mode operation.",
+        "Lease adoption or replacement refuses when a legacy writer is still reachable or its lease is still fresh.",
+        "`bun test src/server/indexStartup.test.ts src/server/utils/duckdbOwnerLease.test.ts src/server/utils/duckdbServiceLease.test.ts` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ]
+    },
+    {
+      "id": "US-006",
+      "title": "Split background startup and cron ownership by capability",
+      "description": "As a maintainer, I want maintenance loops, judging loops, and cron mounts to start by capability so the final role split keeps required background work on the right process after writer-role removal.",
+      "acceptanceCriteria": [
+        "`startBackgroundWork()` starts maintenance and judging loops by capability instead of one coarse writer gate.",
+        "`fullTextJobsCron`, `fullTextConversionJobsCron`, and `nvidiaSmiCron` run only on `maintenance-worker` in the cutover slice.",
+        "`maintenance-worker` can start as DuckDB owner and `judge-worker` can start without DuckDB write ownership.",
+        "`bun test src/server/utils/startBackgroundWork.test.ts src/server/utils/backgroundServerStack.test.ts` passes.",
+        "`bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-002"
+      ]
+    },
+    {
+      "id": "US-007",
+      "title": "Restrict public API mounting and add readiness plus fail-closed route classification",
+      "description": "As a maintainer, I want only `api` to mount the public product API and I want readiness plus route classification to fail closed so split-role startup stays safe before every route is audited.",
+      "acceptanceCriteria": [
+        "Only `api` mounts the public `/api/*` product route tree after cutover, while `maintenance-worker` and `judge-worker` stay on private RPC or diagnostics surfaces.",
+        "Add bootstrap-safe `GET /api/runtime/ready` and separate readiness from the renamed worker-registry surface.",
+        "Unclassified or owner-dependent routes fail closed to owner proxy instead of accidentally running locally on `api`.",
+        "`bun test src/server/routes/ApiProxyRoutes.test.ts src/server/routes/ApiProxyRoutes.retry.test.ts src/server/indexStartup.test.ts` passes.",
+        "`bun run build` passes.",
+        "`bun run desktop:build` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-006",
+        "US-005"
+      ]
+    },
+    {
+      "id": "US-008",
+      "title": "Add read-only query helpers and mandatory ownerless backend validation",
+      "description": "As a maintainer, I want audited read-only helpers and mandatory ownerless backend validation so ownerless health routes stay honest without silently falling back to owner-capable database paths.",
+      "acceptanceCriteria": [
+        "Audited `api-read-only` and `judge-worker` local-read flows use dedicated read-only helpers instead of owner-capable query or database service constructors.",
+        "Startup validates that each ownerless route has a configured ownerless-readable backend, with fail-closed fallback when live read-only DuckDB is unavailable or untrusted.",
+        "Runtime guards or boundary tests prevent silent fallback to owner-capable database helpers in read-only contexts.",
+        "`bun test src/server/routes/DuckdbStudioRoutes.test.ts src/server/routes/PromptsRoutes.test.ts src/server/routes/ApiProxyRoutes.test.ts src/server/routes/ApiProxyRoutes.retry.test.ts` passes.",
+        "`bun test src/server/indexStartup.test.ts src/server/utils/duckdbScriptAccess.test.ts src/server/services/getAppQueryService.test.ts` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-007"
+      ]
+    },
+    {
+      "id": "US-009",
+      "title": "Persist worker registry heartbeats and takeover intent",
+      "description": "As a maintainer, I want shared worker heartbeat and takeover records so any `api` process can see eligible maintenance capacity and whether owner loss means no candidate or takeover in progress.",
+      "acceptanceCriteria": [
+        "`api`, `maintenance-worker`, and `judge-worker` heartbeat through owner-backed registry storage with role, capabilities, memory limit, throughput profile, and freshness.",
+        "Registry queries expose eligible maintenance consumers across local and non-local worker processes instead of only the handling process.",
+        "Standby maintenance candidates publish ownerless-readable takeover intent and owner-freshness state so owner loss can surface `takeover_in_progress` honestly.",
+        "`bun run db:mig` passes.",
+        "`bun test src/server/routes/AdminInvestigateRoutes.test.ts src/server/utils/writerConnections.test.ts` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-007"
+      ]
+    },
+    {
+      "id": "US-010",
+      "title": "Persist project-scoped queue progress and maintenance recovery state",
+      "description": "As a maintainer, I want shared project-scoped and queue-scoped progress records so review and import status derives from fresh claims, scopes, and recovery state instead of local counters or queue depth.",
+      "acceptanceCriteria": [
+        "Persist fresh claim or lease rows for import and review work with project or article scope, required consumer role, `lastStartedAt`, `lastProgressedAt`, and freshness.",
+        "`processing` derives from fresh persisted claims or leases instead of queue depth or orphaned counters.",
+        "Shared projections include `retryAfterAt`, `recoveryMode`, and maintenance recovery context when those fields affect honest status.",
+        "`bun run db:mig` passes.",
+        "`bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarningsTrigger.test.ts` passes.",
+        "`bun test scripts/projectMartRefreshRecovery.test.ts scripts/recoverArchivedProjectRefreshQueue.test.ts` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-009"
+      ]
+    },
+    {
+      "id": "US-011",
+      "title": "Persist shared SQLite health and completion-handoff projections",
+      "description": "As a maintainer, I want shared judgment-job SQLite health and completion-handoff state so `api` can answer health honestly without local SQLite ownership and can show when judge completions are waiting on maintenance acknowledgment.",
+      "acceptanceCriteria": [
+        "Persist shared judgment-job SQLite health fields for outbox and queue presence, WAL signals, projection freshness, and projection source.",
+        "Shared state includes pending completion-ack visibility and oldest unacked completion age for `judge-worker` handoff.",
+        "`api` answers from shared or read-only truth when it is fresh enough and otherwise returns explicit maintenance-unavailable responses instead of guessing from missing local SQLite state.",
+        "`bun run db:mig` passes.",
+        "`bun test src/server/routes/JudgmentsJobsRoutes.test.ts src/server/routes/JudgmentsJobsRoutes.crashContainment.test.ts` passes.",
+        "`bun test scripts/recoverJudgmentJobWithSystemSqlite.test.ts scripts/dbBackup.test.ts` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-009"
+      ]
+    },
+    {
+      "id": "US-012",
+      "title": "Expose capabilities, registry state, and backend mode in diagnostics",
+      "description": "As an operator, I want worker diagnostics to show local intent, shared worker availability, and ownerless backend mode so I can understand why routes are blocked or where they are being served.",
+      "acceptanceCriteria": [
+        "`/api/admin/worker-runtime-diagnostics` returns local role, server role, capabilities, DuckDB ownership, route-serving mode, ownerless backend choice, registry-derived eligible consumers, takeover state, and cutover refusal status.",
+        "Diagnostics also expose read-path mode and pending completion-ack visibility when that shared state is available.",
+        "Tests cover the new diagnostics payload shape.",
+        "`bun test src/server/routes/AdminInvestigateRoutes.test.ts` passes.",
+        "`bun run build` passes.",
+        "`bun run desktop:build` passes.",
+        "`bun run lint` passes.",
+        "Verify in browser that worker diagnostics show local capabilities and active worker registry clearly."
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-008",
+        "US-009",
+        "US-011"
+      ]
+    },
+    {
+      "id": "US-013",
+      "title": "Make the review warnings API project-scoped and honest",
+      "description": "As a user, I want review-warning status to reflect the requested project's real consumer and queue state so the UI stops showing unrelated work as active progress.",
+      "acceptanceCriteria": [
+        "`/api/projectsreviewswarnings` exposes `requiredConsumerRole`, eligible and active consumer counts, `activeWorkCount`, `progressState`, `blockedReason`, `lastStartedAt`, `lastProgressedAt`, `retryAfterAt`, and `recoveryMode`.",
+        "The route derives those fields from project-scoped persisted claims or leases instead of pending count alone or unrelated project activity.",
+        "The route answers locally on `api` only when shared or read-only truth or the ownerless backend is sufficient to answer honestly.",
+        "`bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarningsTrigger.test.ts` passes.",
+        "`bun run build` passes.",
+        "`bun run desktop:build` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-008",
+        "US-010"
+      ]
+    },
+    {
+      "id": "US-014",
+      "title": "Update review UIs to render blocked, queued, and processing states honestly",
+      "description": "As a user, I want review pages to distinguish waiting, cooldown, and active processing states so the product stops presenting stalled indexing as generic progress.",
+      "acceptanceCriteria": [
+        "Review UI consumers show `in progress` only when `progressState = 'processing'`.",
+        "Review empty states and warnings distinguish blocked, queued, stalled, failed or cooldown, and actively processing states.",
+        "UI copy explicitly covers waiting for a maintenance worker and cooling down after memory pressure.",
+        "`bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarningsTrigger.test.ts` passes.",
+        "`bun run build` passes.",
+        "`bun run desktop:build` passes.",
+        "`bun run lint` passes.",
+        "Verify in browser that the review warning shows `waiting for maintenance worker` when no maintenance-worker heartbeat exists."
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-013"
+      ]
+    },
+    {
+      "id": "US-015",
+      "title": "Make judgment job health and summary routes honest about maintenance ownership",
+      "description": "As an operator, I want judgment-job health to distinguish blocked import, active import, cooldown, repair, and completion-ack backlog states so job status stays useful even when `api` does not own SQLite or DuckDB writes.",
+      "acceptanceCriteria": [
+        "`/api/judgmentsjobs/:id/health` and `/api/judgmentsjobs-health` expose import consumer presence and counts, `progressState`, `blockedReason`, `lastStartedAt`, `lastProgressedAt`, `retryAfterAt`, and `recoveryMode`.",
+        "Health responses distinguish active import, blocked import, cooldown or breaker block, completion waiting for owner acknowledgment, and repair-required states.",
+        "Shared import and running-work summaries preserve the job's model and content-setting identity instead of collapsing incompatible work into one generic backlog.",
+        "`bun test src/server/routes/JudgmentsJobsRoutes.test.ts src/server/routes/JudgmentsJobsRoutes.crashContainment.test.ts` passes.",
+        "`bun run build` passes.",
+        "`bun run desktop:build` passes.",
+        "`bun run lint` passes.",
+        "Verify in browser that judgment job health distinguishes blocked import from active import."
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-008",
+        "US-011"
+      ]
+    },
+    {
+      "id": "US-016",
+      "title": "Add immutable execution snapshots and owner-backed judgment APIs",
+      "description": "As a maintainer, I want immutable execution snapshots and owner-backed claim and completion endpoints so `judge-worker` can execute frozen work items without direct DuckDB writes or mutable input drift.",
+      "acceptanceCriteria": [
+        "Persist write-once execution snapshots before claim issuance and carry `claimId`, `executionSnapshotId`, and `executionSnapshotHash` through claim and completion flows.",
+        "Add owner-backed claim, completion, control, and immutable snapshot-fetch endpoints that preserve full work-item identity and validate snapshot identity on completion.",
+        "Completion handlers reject snapshot mismatch instead of binding work to current mutable prompt, provider, or article state.",
+        "`bun run db:mig` passes.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentDispatchRuntime.test.ts src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.test.ts` passes.",
+        "`bun test src/server/routes/JudgmentsJobsRoutes.test.ts src/server/services/appDatabaseServiceAppendJudgments.test.ts src/server/services/tokenUseQueryService.test.ts` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-004",
+        "US-005",
+        "US-007"
+      ]
+    },
+    {
+      "id": "US-017",
+      "title": "Move LLM execution onto judge-worker with durable replay-safe completion handoff",
+      "description": "As a maintainer, I want `judge-worker` to execute owner-issued claims and durably replay completions so maintenance stays the control plane while LLM work survives restarts and network failures.",
+      "acceptanceCriteria": [
+        "`judge-worker` writes accepted claims and completion payloads to a durable local SQLite journal or outbox before callback and replays unacked completions on restart.",
+        "`judge-worker` executes owner-issued claims without direct DuckDB writes or local judgment-job SQLite ownership while `maintenance-worker` remains the queue source of truth.",
+        "Token-use summaries travel in the durable completion outbox and are applied exactly once through the owner-backed completion path.",
+        "`bun test src/server/cron/judgmentsJobs/judgmentDispatchRuntime.test.ts src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts src/server/cron/judgmentsJobs/judgmentsRequestRuntime.test.ts src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.test.ts src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.test.ts` passes.",
+        "`bun test src/agent/judge/judgeStoreTokenUse.test.ts src/server/routes/JudgmentsJobsRoutes.test.ts` passes.",
+        "`bun run lint` passes."
+      ],
+      "priority": 17,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-004",
+        "US-006",
+        "US-016"
+      ]
+    },
+    {
+      "id": "US-018",
+      "title": "Add split-role dev mode and end-to-end verification docs",
+      "description": "As an operator, I want a documented split-role local stack so I can reproduce missing-maintenance, failover, readiness, journal-collision, and snapshot-fallback behavior before shipping the cutover.",
+      "acceptanceCriteria": [
+        "Runtime scripts can start `api`, `maintenance-worker`, and `judge-worker` together without manual file edits.",
+        "Local docs cover readiness versus worker-registry, missing-maintenance behavior, same-host maintenance failover, cutover refusal, judge-worker journal collision, and immutable snapshot-fetch fallback.",
+        "Runtime verification proves readiness stays bootstrap-safe, public and private route surfaces remain correct, and replay or fail-closed startup behaviors work as documented.",
+        "`bun test src/server/indexStartup.test.ts scripts/runWithRuntimeProfile.test.ts src/utils/runtimeProfile.test.ts` passes.",
+        "`bun test src/desktop/getDesktopRuntimeConfig.test.ts src/desktop/desktopSingleInstance.test.ts` passes.",
+        "`bun run build` passes.",
+        "`bun run desktop:build` passes.",
+        "`bun run lint` passes.",
+        "Verify at runtime that `GET /api/runtime/ready` stays usable while the worker-registry route reports missing maintenance or takeover in progress.",
+        "Verify at runtime that startup rejects incompatible writer-era peers or fresh reachable legacy writer leases.",
+        "Verify at runtime that a second `judge-worker` started with the same journal path refuses startup and that restarting with the same durable identity replays unacked completions.",
+        "Verify at runtime that disabling live read-only DuckDB still leaves ownerless routes answerable through the configured ownerless backend."
+      ],
+      "priority": 18,
+      "passes": false,
+      "notes": "",
+      "dependsOn": [
+        "US-003",
+        "US-012",
+        "US-014",
+        "US-015",
+        "US-017"
+      ]
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-04-22T19:52:33.543Z"
+  }
+}

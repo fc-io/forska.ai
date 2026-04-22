@@ -196,7 +196,7 @@ const normalizeDuckdbOwnerLeaseMetadata = (
         ? value.leaseId
         : `${hostnameValue}:${pidValue}:${acquiredAt}`,
     pid: pidValue,
-    serverRole: value.serverRole ?? 'writer',
+    serverRole: value.serverRole ?? 'maintenance-worker',
   }
 }
 
@@ -215,7 +215,7 @@ const normalizeDuckdbOwnerLeaseHistoryEntry = (value: Partial<DuckdbOwnerLeaseHi
         ? value.leaseId
         : `${hostnameValue}:${portValue}:${at}`,
     pid: typeof value.pid === 'number' ? value.pid : 0,
-    serverRole: value.serverRole ?? 'writer',
+    serverRole: value.serverRole ?? 'maintenance-worker',
     writerUrl: typeof value.writerUrl === 'string' ? value.writerUrl : `http://127.0.0.1:${portValue}`,
   } satisfies DuckdbOwnerLeaseHistoryEntry
 }
@@ -358,13 +358,13 @@ const acquireLeaseFile = (leasePath: string, metadata: DuckdbOwnerLeaseMetadata)
 }
 
 const failForNonOwnerRole = (serverRole: ServerRole) => {
-  return Effect.fail(new Error(`SERVER_ROLE=${serverRole} cannot open the local DuckDB writer`))
+  return Effect.fail(new Error(`SERVER_ROLE=${serverRole} cannot open the local DuckDB owner`))
 }
 
 const failForActiveLease = (metadata: DuckdbOwnerLeaseMetadata) => {
   return Effect.fail(
     new Error(
-      `DuckDB writer lease is held by ${getLeaseOwnerText(metadata)} since ${metadata.acquiredAt}. Stop that process or use SERVER_ROLE=writer/worker/dev-single there only.`,
+      `DuckDB owner lease is held by ${getLeaseOwnerText(metadata)} since ${metadata.acquiredAt}. Stop that process or use SERVER_ROLE=maintenance-worker/dev-single there only.`,
     ),
   )
 }
@@ -461,7 +461,7 @@ export const updateDuckdbOwnerLeaseHeartbeat = (
   return getCurrentLeaseMetadata(lease.metadata.databasePath).pipe(
     Effect.flatMap((currentLease) => {
       return currentLease === null || currentLease.leaseId !== lease.metadata.leaseId
-        ? Effect.fail(new Error('DuckDB writer lease is no longer owned by this process'))
+        ? Effect.fail(new Error('DuckDB owner lease is no longer owned by this process'))
         : Effect.sync(() => {
             return {
               ...lease,

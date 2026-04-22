@@ -4,7 +4,7 @@ import {Elysia} from 'elysia'
 import {parseDuckdbMemoryLimitToMiB} from '../utils/duckdbMemoryLimit.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {writeRuntimeFailureLogEvent} from '../utils/runtimeLogger.ts'
-import {isExpectedWriterRoleLossError, shouldCurrentServerRunWriterWork} from '../utils/serverRuntimeRole.ts'
+import {isExpectedWriterRoleLossError, shouldCurrentServerRunJudgingLoops} from '../utils/serverRuntimeRole.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentsJobs/judgmentJobServerIdentity.ts'
 import {runJudgmentJobSqliteBackgroundImport} from './judgmentsJobs/judgmentJobSqliteBackgroundImport.ts'
 import {getJudgmentJobSqliteService} from './judgmentsJobs/judgmentJobSqliteService.ts'
@@ -29,10 +29,8 @@ const logJudgingCronError = (label: string, error: unknown) => {
   }
 }
 
-// Per-job SQLite leases currently protect single-job exclusivity only. The
-// judging cron still runs on the current DuckDB writer process.
 const shouldRunJudgingCron = (): boolean => {
-  return shouldCurrentServerRunWriterWork()
+  return shouldCurrentServerRunJudgingLoops()
 }
 
 const NEW_ARTICLES_INTERVAL = '*/1 * * * * *'
@@ -124,7 +122,7 @@ const checkLLMStatusCron = async (): Promise<void> => {
 }
 
 const cleanupStaleQueueCron = async (): Promise<void> => {
-  if (!shouldCurrentServerRunWriterWork()) return
+  if (!shouldRunJudgingCron()) return
   try {
     await judgmentsJobsCleanupStale()
   } catch (err) {

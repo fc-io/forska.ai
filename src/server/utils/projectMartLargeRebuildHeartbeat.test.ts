@@ -84,7 +84,7 @@ test('projectMartLargeRebuildHeartbeat runs one bounded burst with resolved tuni
         void mock.module(serverRuntimeRoleModulePath, () => {
           return {
             registerWriterDemotionHandler: () => {},
-            shouldCurrentServerRunWriterWork: () => true,
+            shouldCurrentServerRunMaintenanceLoops: () => true,
           }
         })
         void mock.module(tuningModulePath, () => {
