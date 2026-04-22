@@ -110,7 +110,7 @@ const formatRepairMode = (value: 'none' | 'offline_repair_required' | 'safe_live
 
 const formatStartupHandling = (value: 'auto_drain' | 'idle' | 'skip_offline_repair' | null | undefined) => {
   return value === 'auto_drain'
-    ? 'Auto-drain on worker start'
+    ? 'Auto-drain on maintenance start'
     : value === 'skip_offline_repair'
       ? 'Skip and keep quarantined'
       : 'No startup action'

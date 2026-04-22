@@ -108,15 +108,12 @@ const isServerEnvironment = (): boolean => {
 
 const shouldSkipTokenUsePersistence = () => {
   const serverRole = String(process.env.SERVER_ROLE ?? '').trim()
-  const workerDuckdbMemoryLimitMiB = parseDuckdbMemoryLimitToMiB(process.env.DUCKDB_MEMORY_LIMIT)
+  const runtimeDuckdbMemoryLimitMiB = parseDuckdbMemoryLimitToMiB(process.env.DUCKDB_MEMORY_LIMIT)
 
   return (
-    (serverRole === 'judge-worker'
-      || serverRole === 'maintenance-worker'
-      || serverRole === 'worker'
-      || serverRole === 'writer')
-    && workerDuckdbMemoryLimitMiB !== null
-    && workerDuckdbMemoryLimitMiB <= 6400
+    (serverRole === 'judge-worker' || serverRole === 'maintenance-worker')
+    && runtimeDuckdbMemoryLimitMiB !== null
+    && runtimeDuckdbMemoryLimitMiB <= 6400
   )
 }
 

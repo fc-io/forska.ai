@@ -9,7 +9,7 @@ test('runtime profiles define primary and secondary isolated runtime roots', () 
       env: {
         API_SERVER_PORT: '3001',
         APP_SERVER_PORT: '8080',
-        BACKGROUND_WRITER_PORT: '3002',
+        BACKGROUND_MAINTENANCE_PORT: '3002',
         DUCKDB_PATH: 'data/runtime/primary/forska.duckdb',
         FORSKA_RUNTIME_PROFILE: 'primary',
         VITE_PORT: '3000',
@@ -21,7 +21,7 @@ test('runtime profiles define primary and secondary isolated runtime roots', () 
       env: {
         API_SERVER_PORT: '3101',
         APP_SERVER_PORT: '8180',
-        BACKGROUND_WRITER_PORT: '3102',
+        BACKGROUND_MAINTENANCE_PORT: '3102',
         DUCKDB_PATH: 'data/runtime/secondary/forska.duckdb',
         FORSKA_RUNTIME_PROFILE: 'secondary',
         VITE_PORT: '3100',
@@ -36,7 +36,7 @@ test('runtime profile helpers return the selected profile and env mapping', () =
   expect(getRuntimeProfileEnv('primary')).toEqual({
     API_SERVER_PORT: '3001',
     APP_SERVER_PORT: '8080',
-    BACKGROUND_WRITER_PORT: '3002',
+    BACKGROUND_MAINTENANCE_PORT: '3002',
     DUCKDB_PATH: 'data/runtime/primary/forska.duckdb',
     FORSKA_RUNTIME_PROFILE: 'primary',
     VITE_PORT: '3000',
@@ -53,7 +53,7 @@ test('runtime profile env merge keeps caller env and lets caller overrides win',
   ).toMatchObject({
     API_SERVER_PORT: '3101',
     APP_SERVER_PORT: '9090',
-    BACKGROUND_WRITER_PORT: '3102',
+    BACKGROUND_MAINTENANCE_PORT: '3102',
     CUSTOM_FLAG: 'present',
     DUCKDB_PATH: 'data/runtime/secondary/forska.duckdb',
     FORSKA_RUNTIME_PROFILE: 'secondary',

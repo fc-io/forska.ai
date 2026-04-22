@@ -2,7 +2,7 @@ import {Effect} from 'effect'
 
 import {type AppDatabaseSnapshot, getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {
-  getDuckdbOwnerLeaseWriterUrl,
+  getDuckdbOwnerLeaseUrl,
   isDuckdbOwnerLeaseProcessAlive,
   isDuckdbOwnerLeaseStale,
   readDuckdbOwnerLease,
@@ -14,34 +14,34 @@ type DuckdbScriptAccessSnapshotResponse = {data?: AppDatabaseSnapshot; error?: s
 
 const duckdbStudioSnapshotPath = '/api/duckdbStudioSnapshots'
 
-const getWriterHealthUrl = (writerUrl: string) => {
-  return `${writerUrl}/api/writer_connections`
+const getDuckdbOwnerHealthUrl = (duckdbOwnerUrl: string) => {
+  return `${duckdbOwnerUrl}/api/duckdb_owner_connections`
 }
 
-const getNormalizedWriterUrl = (value: string | null | undefined) => {
+const getNormalizedDuckdbOwnerUrl = (value: string | null | undefined) => {
   const raw = String(value ?? '').trim()
   return raw === '' ? null : raw.endsWith('/') ? raw.slice(0, -1) : raw
 }
 
-const getDuckdbStudioUrl = (writerUrl: string) => {
-  return `${writerUrl}${duckdbStudioSnapshotPath}`
+const getDuckdbStudioUrl = (duckdbOwnerUrl: string) => {
+  return `${duckdbOwnerUrl}${duckdbStudioSnapshotPath}`
 }
 
 const getDuckdbStudioUrls = async () => {
   const currentLease = await Effect.runPromise(readDuckdbOwnerLease(env.DUCKDB_PATH))
-  const leaseWriterUrl = currentLease === null ? null : getDuckdbOwnerLeaseWriterUrl(currentLease)
-  const configuredWriterUrl = getNormalizedWriterUrl(env.SERVER_WRITER_URL)
-  const localWriterUrl = getNormalizedWriterUrl(`http://127.0.0.1:${env.API_SERVER_PORT}`)
-  const writerUrls = [leaseWriterUrl, configuredWriterUrl, localWriterUrl]
-    .filter((writerUrl): writerUrl is string => {
-      return writerUrl !== null
+  const leaseDuckdbOwnerUrl = currentLease === null ? null : getDuckdbOwnerLeaseUrl(currentLease)
+  const configuredDuckdbOwnerUrl = getNormalizedDuckdbOwnerUrl(env.SERVER_DUCKDB_OWNER_URL)
+  const localDuckdbOwnerUrl = getNormalizedDuckdbOwnerUrl(`http://127.0.0.1:${env.API_SERVER_PORT}`)
+  const duckdbOwnerUrls = [leaseDuckdbOwnerUrl, configuredDuckdbOwnerUrl, localDuckdbOwnerUrl]
+    .filter((duckdbOwnerUrl): duckdbOwnerUrl is string => {
+      return duckdbOwnerUrl !== null
     })
-    .filter((writerUrl, index, values) => {
-      return values.indexOf(writerUrl) === index
+    .filter((duckdbOwnerUrl, index, values) => {
+      return values.indexOf(duckdbOwnerUrl) === index
     })
 
-  return writerUrls.map((writerUrl) => {
-    return getDuckdbStudioUrl(writerUrl)
+  return duckdbOwnerUrls.map((duckdbOwnerUrl) => {
+    return getDuckdbStudioUrl(duckdbOwnerUrl)
   })
 }
 
@@ -60,24 +60,24 @@ const isStudioServerUnavailable = (error: unknown) => {
   )
 }
 
-const isWriterResponsive = async (writerUrl: string) => {
+const isDuckdbOwnerResponsive = async (duckdbOwnerUrl: string) => {
   try {
-    const response = await fetch(getWriterHealthUrl(writerUrl), {signal: AbortSignal.timeout(1_000)})
+    const response = await fetch(getDuckdbOwnerHealthUrl(duckdbOwnerUrl), {signal: AbortSignal.timeout(1_000)})
     return response.ok
   } catch {
     return false
   }
 }
 
-const getActiveWriterGuardError = (params: {taskName: string; writerUrl: string}) => {
+const getActiveDuckdbOwnerGuardError = (params: {duckdbOwnerUrl: string; taskName: string}) => {
   return new Error(
-    `${params.taskName} requires exclusive DuckDB maintenance access, but the live DuckDB owner is active at ${params.writerUrl}. Stop the dev/server process first, or use snapshot tools like \`bun run db:studio\` or \`bun run db:query:snapshot -- --sql="SELECT ..."\`.`,
+    `${params.taskName} requires exclusive DuckDB maintenance access, but the live DuckDB owner is active at ${params.duckdbOwnerUrl}. Stop the dev/server process first, or use snapshot tools like \`bun run db:studio\` or \`bun run db:query:snapshot -- --sql="SELECT ..."\`.`,
   )
 }
 
-const getStuckWriterGuardError = (params: {taskName: string; writerUrl: string}) => {
+const getStuckDuckdbOwnerGuardError = (params: {duckdbOwnerUrl: string; taskName: string}) => {
   return new Error(
-    `${params.taskName} found a stale DuckDB owner lease for ${params.writerUrl}. Stop that stuck process before running maintenance so the script does not race a wedged owner.`,
+    `${params.taskName} found a stale DuckDB owner lease for ${params.duckdbOwnerUrl}. Stop that stuck process before running maintenance so the script does not race a wedged owner.`,
   )
 }
 
@@ -88,21 +88,21 @@ const ensureDuckdbMaintenanceIsAvailable = async (taskName: string) => {
     return
   }
 
-  const writerUrl = getDuckdbOwnerLeaseWriterUrl(currentLease)
+  const duckdbOwnerUrl = getDuckdbOwnerLeaseUrl(currentLease)
   const isProcessAlive = isDuckdbOwnerLeaseProcessAlive(currentLease)
   const isHeartbeatStale = isDuckdbOwnerLeaseStale(currentLease)
-  const isResponsive = await isWriterResponsive(writerUrl)
+  const isResponsive = await isDuckdbOwnerResponsive(duckdbOwnerUrl)
 
   if (isProcessAlive && !isHeartbeatStale) {
-    throw getActiveWriterGuardError({taskName, writerUrl})
+    throw getActiveDuckdbOwnerGuardError({duckdbOwnerUrl, taskName})
   }
 
   if (isProcessAlive && isHeartbeatStale) {
-    throw getStuckWriterGuardError({taskName, writerUrl})
+    throw getStuckDuckdbOwnerGuardError({duckdbOwnerUrl, taskName})
   }
 
   if (isResponsive) {
-    throw getActiveWriterGuardError({taskName, writerUrl})
+    throw getActiveDuckdbOwnerGuardError({duckdbOwnerUrl, taskName})
   }
 }
 

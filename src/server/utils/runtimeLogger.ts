@@ -68,7 +68,7 @@ const runtimeLogSharedFilePlatforms = ['darwin', 'linux'] as const
 const runtimeLogRetentionDays = 7
 const runtimeLogFlushTimeoutMs = 1_000
 const runtimeLogManagedFilePattern =
-  /^(api-server|app-server|dev-single-server|single-server|worker-server)-(\d{4}-\d{2}-\d{2})(?:-[A-Za-z0-9_.-]+)?\.jsonl$/
+  /^(api-server|app-server|dev-single-server|judge-worker-server|maintenance-worker-server|single-server)-(\d{4}-\d{2}-\d{2})(?:-[A-Za-z0-9_.-]+)?\.jsonl$/
 
 declare global {
   var __forskaRuntimeFailureHandlersInstalled: boolean | undefined
@@ -186,8 +186,6 @@ const getRuntimeProcessServerRole = (
     || normalizedValue === 'dev-single'
     || normalizedValue === 'judge-worker'
     || normalizedValue === 'maintenance-worker'
-    || normalizedValue === 'worker'
-    || normalizedValue === 'writer'
     ? normalizedValue
     : undefined
 }

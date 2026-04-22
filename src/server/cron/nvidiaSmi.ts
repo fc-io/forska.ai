@@ -6,7 +6,7 @@ import {Elysia} from 'elysia'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../services/appQueryHelpers.ts'
 import {inferenceRuntimeConfig} from '../utils/getInferenceRuntimeConfig.ts'
-import {isExpectedWriterRoleLossError, shouldCurrentServerRunMaintenanceLoops} from '../utils/serverRuntimeRole.ts'
+import {isExpectedDuckdbOwnerRoleLossError, shouldCurrentServerRunMaintenanceLoops} from '../utils/serverRuntimeRole.ts'
 
 type NvidiaSmiSample = {
   ts: Date
@@ -285,7 +285,7 @@ const pollNvidiaSmi = async (): Promise<void> => {
     `,
     )
     .catch((error) => {
-      if (!isExpectedWriterRoleLossError(error)) {
+      if (!isExpectedDuckdbOwnerRoleLossError(error)) {
         console.error('[nvidia-smi] db insert failed', error)
       }
     })

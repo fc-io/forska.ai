@@ -32,7 +32,7 @@ const waitForFile = async (filePath: string, timeoutMs: number): Promise<void> =
 
 test('maintenance scripts fail while a live writer holds DuckDB', async () => {
   const duckdbPath = `/tmp/f1-duckdb-maintenance-guard-${Date.now()}.duckdb`
-  const leasePath = `${duckdbPath}.writer.lock`
+  const leasePath = `${duckdbPath}.duckdb-owner.lock`
   const holder = globalThis.Bun.spawn(
     [
       'bun',
@@ -45,7 +45,7 @@ test('maintenance scripts fail while a live writer holds DuckDB', async () => {
     ],
     {
       cwd: process.cwd(),
-      env: {...process.env, API_SERVER_PORT: '36101', DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer'},
+      env: {...process.env, API_SERVER_PORT: '36101', DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker'},
       stdout: 'pipe',
       stderr: 'pipe',
     },
@@ -77,7 +77,7 @@ test('maintenance scripts fail while a live writer holds DuckDB', async () => {
     await holder.exited
     removeFileIfExists(duckdbPath)
     removeFileIfExists(leasePath)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
@@ -93,7 +93,7 @@ test('snapshot query script reads from a safe DuckDB snapshot', () => {
     expect(result.stdout.toString()).toContain('"value":1')
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })

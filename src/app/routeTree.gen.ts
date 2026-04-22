@@ -40,7 +40,6 @@ import { Route as ProjectsIdIndexRouteImport } from './routes/+projects/+$id/+in
 import { Route as CompareJudgmentsArchivedIndexRouteImport } from './routes/+compare-judgments/+archived/+index'
 import { Route as CompareJudgmentsIdIndexRouteImport } from './routes/+compare-judgments/+$id/+index'
 import { Route as ArticlesIdIndexRouteImport } from './routes/+articles/+$id/+index'
-import { Route as AdminWriterConnectionsIndexRouteImport } from './routes/+admin/+writer-connections/+index'
 import { Route as AdminUnexpectedAnswersIndexRouteImport } from './routes/+admin/+unexpected-answers/+index'
 import { Route as AdminSetup_statsIndexRouteImport } from './routes/+admin/+setup_stats/+index'
 import { Route as AdminProjectMartLargeRebuildIndexRouteImport } from './routes/+admin/+project-mart-large-rebuild/+index'
@@ -50,6 +49,7 @@ import { Route as AdminLlmIndexRouteImport } from './routes/+admin/+llm/+index'
 import { Route as AdminJobsIndexRouteImport } from './routes/+admin/+jobs/+index'
 import { Route as AdminGpuIndexRouteImport } from './routes/+admin/+gpu/+index'
 import { Route as AdminFailed_requestsIndexRouteImport } from './routes/+admin/+failed_requests/+index'
+import { Route as AdminDuckdbOwnerConnectionsIndexRouteImport } from './routes/+admin/+duckdb-owner-connections/+index'
 import { Route as AdminDuckdbAppendIndexRouteImport } from './routes/+admin/+duckdb-append/+index'
 import { Route as AdminDatasourcesIndexRouteImport } from './routes/+admin/+datasources/+index'
 import { Route as AdminAssessmentsIndexRouteImport } from './routes/+admin/+assessments/+index'
@@ -233,12 +233,6 @@ const ArticlesIdIndexRoute = ArticlesIdIndexRouteImport.update({
   path: '/articles/$id/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AdminWriterConnectionsIndexRoute =
-  AdminWriterConnectionsIndexRouteImport.update({
-    id: '/admin/writer-connections/',
-    path: '/admin/writer-connections/',
-    getParentRoute: () => rootRouteImport,
-  } as any)
 const AdminUnexpectedAnswersIndexRoute =
   AdminUnexpectedAnswersIndexRouteImport.update({
     id: '/admin/unexpected-answers/',
@@ -286,6 +280,12 @@ const AdminFailed_requestsIndexRoute =
   AdminFailed_requestsIndexRouteImport.update({
     id: '/admin/failed_requests/',
     path: '/admin/failed_requests/',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const AdminDuckdbOwnerConnectionsIndexRoute =
+  AdminDuckdbOwnerConnectionsIndexRouteImport.update({
+    id: '/admin/duckdb-owner-connections/',
+    path: '/admin/duckdb-owner-connections/',
     getParentRoute: () => rootRouteImport,
   } as any)
 const AdminDuckdbAppendIndexRoute = AdminDuckdbAppendIndexRouteImport.update({
@@ -420,6 +420,7 @@ export interface FileRoutesByFullPath {
   '/admin/assessments/': typeof AdminAssessmentsIndexRoute
   '/admin/datasources/': typeof AdminDatasourcesIndexRoute
   '/admin/duckdb-append/': typeof AdminDuckdbAppendIndexRoute
+  '/admin/duckdb-owner-connections/': typeof AdminDuckdbOwnerConnectionsIndexRoute
   '/admin/failed_requests/': typeof AdminFailed_requestsIndexRoute
   '/admin/gpu/': typeof AdminGpuIndexRoute
   '/admin/jobs/': typeof AdminJobsIndexRoute
@@ -429,7 +430,6 @@ export interface FileRoutesByFullPath {
   '/admin/project-mart-large-rebuild/': typeof AdminProjectMartLargeRebuildIndexRoute
   '/admin/setup_stats/': typeof AdminSetup_statsIndexRoute
   '/admin/unexpected-answers/': typeof AdminUnexpectedAnswersIndexRoute
-  '/admin/writer-connections/': typeof AdminWriterConnectionsIndexRoute
   '/articles/$id/': typeof ArticlesIdIndexRoute
   '/compare-judgments/$id/': typeof CompareJudgmentsIdIndexRoute
   '/compare-judgments/archived/': typeof CompareJudgmentsArchivedIndexRoute
@@ -483,6 +483,7 @@ export interface FileRoutesByTo {
   '/admin/assessments': typeof AdminAssessmentsIndexRoute
   '/admin/datasources': typeof AdminDatasourcesIndexRoute
   '/admin/duckdb-append': typeof AdminDuckdbAppendIndexRoute
+  '/admin/duckdb-owner-connections': typeof AdminDuckdbOwnerConnectionsIndexRoute
   '/admin/failed_requests': typeof AdminFailed_requestsIndexRoute
   '/admin/gpu': typeof AdminGpuIndexRoute
   '/admin/jobs': typeof AdminJobsIndexRoute
@@ -492,7 +493,6 @@ export interface FileRoutesByTo {
   '/admin/project-mart-large-rebuild': typeof AdminProjectMartLargeRebuildIndexRoute
   '/admin/setup_stats': typeof AdminSetup_statsIndexRoute
   '/admin/unexpected-answers': typeof AdminUnexpectedAnswersIndexRoute
-  '/admin/writer-connections': typeof AdminWriterConnectionsIndexRoute
   '/articles/$id': typeof ArticlesIdIndexRoute
   '/compare-judgments/$id': typeof CompareJudgmentsIdIndexRoute
   '/compare-judgments/archived': typeof CompareJudgmentsArchivedIndexRoute
@@ -547,6 +547,7 @@ export interface FileRoutesById {
   '/admin/assessments/': typeof AdminAssessmentsIndexRoute
   '/admin/datasources/': typeof AdminDatasourcesIndexRoute
   '/admin/duckdb-append/': typeof AdminDuckdbAppendIndexRoute
+  '/admin/duckdb-owner-connections/': typeof AdminDuckdbOwnerConnectionsIndexRoute
   '/admin/failed_requests/': typeof AdminFailed_requestsIndexRoute
   '/admin/gpu/': typeof AdminGpuIndexRoute
   '/admin/jobs/': typeof AdminJobsIndexRoute
@@ -556,7 +557,6 @@ export interface FileRoutesById {
   '/admin/project-mart-large-rebuild/': typeof AdminProjectMartLargeRebuildIndexRoute
   '/admin/setup_stats/': typeof AdminSetup_statsIndexRoute
   '/admin/unexpected-answers/': typeof AdminUnexpectedAnswersIndexRoute
-  '/admin/writer-connections/': typeof AdminWriterConnectionsIndexRoute
   '/articles/$id/': typeof ArticlesIdIndexRoute
   '/compare-judgments/$id/': typeof CompareJudgmentsIdIndexRoute
   '/compare-judgments/archived/': typeof CompareJudgmentsArchivedIndexRoute
@@ -612,6 +612,7 @@ export interface FileRouteTypes {
     | '/admin/assessments/'
     | '/admin/datasources/'
     | '/admin/duckdb-append/'
+    | '/admin/duckdb-owner-connections/'
     | '/admin/failed_requests/'
     | '/admin/gpu/'
     | '/admin/jobs/'
@@ -621,7 +622,6 @@ export interface FileRouteTypes {
     | '/admin/project-mart-large-rebuild/'
     | '/admin/setup_stats/'
     | '/admin/unexpected-answers/'
-    | '/admin/writer-connections/'
     | '/articles/$id/'
     | '/compare-judgments/$id/'
     | '/compare-judgments/archived/'
@@ -675,6 +675,7 @@ export interface FileRouteTypes {
     | '/admin/assessments'
     | '/admin/datasources'
     | '/admin/duckdb-append'
+    | '/admin/duckdb-owner-connections'
     | '/admin/failed_requests'
     | '/admin/gpu'
     | '/admin/jobs'
@@ -684,7 +685,6 @@ export interface FileRouteTypes {
     | '/admin/project-mart-large-rebuild'
     | '/admin/setup_stats'
     | '/admin/unexpected-answers'
-    | '/admin/writer-connections'
     | '/articles/$id'
     | '/compare-judgments/$id'
     | '/compare-judgments/archived'
@@ -738,6 +738,7 @@ export interface FileRouteTypes {
     | '/admin/assessments/'
     | '/admin/datasources/'
     | '/admin/duckdb-append/'
+    | '/admin/duckdb-owner-connections/'
     | '/admin/failed_requests/'
     | '/admin/gpu/'
     | '/admin/jobs/'
@@ -747,7 +748,6 @@ export interface FileRouteTypes {
     | '/admin/project-mart-large-rebuild/'
     | '/admin/setup_stats/'
     | '/admin/unexpected-answers/'
-    | '/admin/writer-connections/'
     | '/articles/$id/'
     | '/compare-judgments/$id/'
     | '/compare-judgments/archived/'
@@ -802,6 +802,7 @@ export interface RootRouteChildren {
   AdminAssessmentsIndexRoute: typeof AdminAssessmentsIndexRoute
   AdminDatasourcesIndexRoute: typeof AdminDatasourcesIndexRoute
   AdminDuckdbAppendIndexRoute: typeof AdminDuckdbAppendIndexRoute
+  AdminDuckdbOwnerConnectionsIndexRoute: typeof AdminDuckdbOwnerConnectionsIndexRoute
   AdminFailed_requestsIndexRoute: typeof AdminFailed_requestsIndexRoute
   AdminGpuIndexRoute: typeof AdminGpuIndexRoute
   AdminJobsIndexRoute: typeof AdminJobsIndexRoute
@@ -811,7 +812,6 @@ export interface RootRouteChildren {
   AdminProjectMartLargeRebuildIndexRoute: typeof AdminProjectMartLargeRebuildIndexRoute
   AdminSetup_statsIndexRoute: typeof AdminSetup_statsIndexRoute
   AdminUnexpectedAnswersIndexRoute: typeof AdminUnexpectedAnswersIndexRoute
-  AdminWriterConnectionsIndexRoute: typeof AdminWriterConnectionsIndexRoute
   ArticlesIdIndexRoute: typeof ArticlesIdIndexRoute
   CompareJudgmentsIdIndexRoute: typeof CompareJudgmentsIdIndexRoute
   CompareJudgmentsArchivedIndexRoute: typeof CompareJudgmentsArchivedIndexRoute
@@ -1068,13 +1068,6 @@ declare module '@tanstack/solid-router' {
       preLoaderRoute: typeof ArticlesIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/writer-connections/': {
-      id: '/admin/writer-connections/'
-      path: '/admin/writer-connections'
-      fullPath: '/admin/writer-connections/'
-      preLoaderRoute: typeof AdminWriterConnectionsIndexRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/admin/unexpected-answers/': {
       id: '/admin/unexpected-answers/'
       path: '/admin/unexpected-answers'
@@ -1136,6 +1129,13 @@ declare module '@tanstack/solid-router' {
       path: '/admin/failed_requests'
       fullPath: '/admin/failed_requests/'
       preLoaderRoute: typeof AdminFailed_requestsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/duckdb-owner-connections/': {
+      id: '/admin/duckdb-owner-connections/'
+      path: '/admin/duckdb-owner-connections'
+      fullPath: '/admin/duckdb-owner-connections/'
+      preLoaderRoute: typeof AdminDuckdbOwnerConnectionsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/duckdb-append/': {
@@ -1299,6 +1299,7 @@ const rootRouteChildren: RootRouteChildren = {
   AdminAssessmentsIndexRoute: AdminAssessmentsIndexRoute,
   AdminDatasourcesIndexRoute: AdminDatasourcesIndexRoute,
   AdminDuckdbAppendIndexRoute: AdminDuckdbAppendIndexRoute,
+  AdminDuckdbOwnerConnectionsIndexRoute: AdminDuckdbOwnerConnectionsIndexRoute,
   AdminFailed_requestsIndexRoute: AdminFailed_requestsIndexRoute,
   AdminGpuIndexRoute: AdminGpuIndexRoute,
   AdminJobsIndexRoute: AdminJobsIndexRoute,
@@ -1309,7 +1310,6 @@ const rootRouteChildren: RootRouteChildren = {
     AdminProjectMartLargeRebuildIndexRoute,
   AdminSetup_statsIndexRoute: AdminSetup_statsIndexRoute,
   AdminUnexpectedAnswersIndexRoute: AdminUnexpectedAnswersIndexRoute,
-  AdminWriterConnectionsIndexRoute: AdminWriterConnectionsIndexRoute,
   ArticlesIdIndexRoute: ArticlesIdIndexRoute,
   CompareJudgmentsIdIndexRoute: CompareJudgmentsIdIndexRoute,
   CompareJudgmentsArchivedIndexRoute: CompareJudgmentsArchivedIndexRoute,

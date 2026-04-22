@@ -53,6 +53,6 @@ test('duckdb studio route creates a readable snapshot', async () => {
     removeFileIfExists(snapshotPath)
     removeFileIfExists(`${snapshotPath}.wal`)
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
   }
 })

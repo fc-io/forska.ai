@@ -16,7 +16,7 @@ const createLeasePaths = () => {
   const tempDirectory = mkdtempSync('/tmp/f1-duckdb-owner-lease-')
   const duckdbPath = join(tempDirectory, 'test.duckdb')
 
-  return {duckdbPath, leasePath: `${duckdbPath}.writer.lock`, tempDirectory}
+  return {duckdbPath, leasePath: `${duckdbPath}.duckdb-owner.lock`, tempDirectory}
 }
 
 const readLeaseMetadata = (leasePath: string): DuckdbOwnerLeaseMetadata => {

@@ -56,29 +56,29 @@ const getBasePort = () => {
   return 38000 + Number(String(Date.now()).slice(-3))
 }
 
-test('db backup script creates a DuckDB backup while the writer server is running', async () => {
+test('db backup script creates a DuckDB backup while the owner server is running', async () => {
   const workingDirectory = mkdtempSync(join(tmpdir(), 'f1-db-backup-'))
   const duckdbPath = join(workingDirectory, 'live.duckdb')
-  const writerPort = getBasePort()
-  const backupPort = writerPort + 1
+  const ownerPort = getBasePort()
+  const backupPort = ownerPort + 1
   const seedResult = globalThis.Bun.spawnSync([
     'duckdb',
     duckdbPath,
     'CREATE TABLE backup_check(value INTEGER); INSERT INTO backup_check VALUES (42);',
   ])
-  const writerServer = startServer({
-    API_SERVER_PORT: String(writerPort),
+  const ownerServer = startServer({
+    API_SERVER_PORT: String(ownerPort),
     DUCKDB_PATH: duckdbPath,
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
     RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-    SERVER_ROLE: 'writer',
-    VITE_PORT: String(writerPort + 1000),
+    SERVER_ROLE: 'maintenance-worker',
+    VITE_PORT: String(ownerPort + 1000),
   })
 
   try {
     expect(seedResult.exitCode).toBe(0)
 
-    await waitForServer(writerPort, 10_000)
+    await waitForServer(ownerPort, 10_000)
 
     const result = globalThis.Bun.spawnSync(['bun', join(projectRoot, 'scripts/dbBackup.ts')], {
       cwd: workingDirectory,
@@ -109,9 +109,9 @@ test('db backup script creates a DuckDB backup while the writer server is runnin
     expect(queryResult?.exitCode ?? null).toBe(0)
     expect(queryResult?.stdout.toString() ?? '').toContain('"value":42')
   } finally {
-    await stopServer(writerServer)
+    await stopServer(ownerServer)
     rmSync(workingDirectory, {force: true, recursive: true})
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })

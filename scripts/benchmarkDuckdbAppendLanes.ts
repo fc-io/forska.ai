@@ -55,8 +55,8 @@ const removeBenchmarkFiles = (duckdbPath: string) => {
   const tempJobDir = join(dirname(duckdbPath), 'judgment-jobs')
 
   rmSync(duckdbPath, {force: true})
-  rmSync(`${duckdbPath}.writer.history.json`, {force: true})
-  rmSync(`${duckdbPath}.writer.lock`, {force: true})
+  rmSync(`${duckdbPath}.duckdb-owner.history.json`, {force: true})
+  rmSync(`${duckdbPath}.duckdb-owner.lock`, {force: true})
   rmSync(tempJobDir, {force: true, recursive: true})
 }
 

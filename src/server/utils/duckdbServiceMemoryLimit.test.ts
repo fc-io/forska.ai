@@ -9,7 +9,7 @@ const removeFileIfExists = (filePath: string) => {
 }
 
 const removeDuckdbFiles = (duckdbPath: string) => {
-  ;[duckdbPath, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(removeFileIfExists)
+  ;[duckdbPath, `${duckdbPath}.duckdb-owner.lock`, `${duckdbPath}.duckdb-owner.history.json`].map(removeFileIfExists)
 }
 
 const getSpawnOutput = (result: ReturnType<typeof globalThis.Bun.spawnSync>) => {
@@ -43,7 +43,7 @@ test('duckdb service defaults the runtime memory limit to 20GB', () => {
         ],
         {
           cwd: process.cwd(),
-          env: {...process.env, DUCKDB_PATH: duckdbPath, DUCKDB_MEMORY_LIMIT: '', SERVER_ROLE: 'writer'},
+          env: {...process.env, DUCKDB_PATH: duckdbPath, DUCKDB_MEMORY_LIMIT: '', SERVER_ROLE: 'maintenance-worker'},
         },
       ),
     )
@@ -74,7 +74,12 @@ test('duckdb service applies the configured startup tuning', () => {
         ],
         {
           cwd: process.cwd(),
-          env: {...process.env, DUCKDB_PATH: duckdbPath, DUCKDB_MEMORY_LIMIT: '256MiB', SERVER_ROLE: 'writer'},
+          env: {
+            ...process.env,
+            DUCKDB_PATH: duckdbPath,
+            DUCKDB_MEMORY_LIMIT: '256MiB',
+            SERVER_ROLE: 'maintenance-worker',
+          },
         },
       ),
     )
@@ -105,7 +110,12 @@ test('duckdb service uses one thread for the 6400MiB worker profile', () => {
         ],
         {
           cwd: process.cwd(),
-          env: {...process.env, DUCKDB_PATH: duckdbPath, DUCKDB_MEMORY_LIMIT: '6400MiB', SERVER_ROLE: 'writer'},
+          env: {
+            ...process.env,
+            DUCKDB_PATH: duckdbPath,
+            DUCKDB_MEMORY_LIMIT: '6400MiB',
+            SERVER_ROLE: 'maintenance-worker',
+          },
         },
       ),
     )
@@ -139,7 +149,7 @@ test('duckdb service serializes background work with the main queue on low-memor
             void mock.module(serverRuntimeRoleModulePath, () => {
               return {
                 ensureCurrentDuckdbOwnerLease: async () => {},
-                registerWriterDemotionHandler: () => {},
+                registerDuckdbOwnerDemotionHandler: () => {},
                 releaseCurrentDuckdbOwnerLease: async () => {},
               }
             })
@@ -196,7 +206,12 @@ test('duckdb service serializes background work with the main queue on low-memor
         ],
         {
           cwd: process.cwd(),
-          env: {...process.env, DUCKDB_PATH: duckdbPath, DUCKDB_MEMORY_LIMIT: '6400MiB', SERVER_ROLE: 'writer'},
+          env: {
+            ...process.env,
+            DUCKDB_PATH: duckdbPath,
+            DUCKDB_MEMORY_LIMIT: '6400MiB',
+            SERVER_ROLE: 'maintenance-worker',
+          },
         },
       ),
     )
@@ -232,7 +247,7 @@ test('duckdb service serializes append work with the main queue on low-memory wo
             void mock.module(serverRuntimeRoleModulePath, () => {
               return {
                 ensureCurrentDuckdbOwnerLease: async () => {},
-                registerWriterDemotionHandler: () => {},
+                registerDuckdbOwnerDemotionHandler: () => {},
                 releaseCurrentDuckdbOwnerLease: async () => {},
               }
             })
@@ -289,7 +304,12 @@ test('duckdb service serializes append work with the main queue on low-memory wo
         ],
         {
           cwd: process.cwd(),
-          env: {...process.env, DUCKDB_PATH: duckdbPath, DUCKDB_MEMORY_LIMIT: '6400MiB', SERVER_ROLE: 'writer'},
+          env: {
+            ...process.env,
+            DUCKDB_PATH: duckdbPath,
+            DUCKDB_MEMORY_LIMIT: '6400MiB',
+            SERVER_ROLE: 'maintenance-worker',
+          },
         },
       ),
     )
@@ -322,7 +342,7 @@ test('duckdb service treats empty interactive json output as an empty row set', 
             await closeDuckdbService()
           `,
         ],
-        {cwd: process.cwd(), env: {...process.env, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer'}},
+        {cwd: process.cwd(), env: {...process.env, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker'}},
       ),
     )
 

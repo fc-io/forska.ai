@@ -7,17 +7,11 @@ export type RuntimeProcessServiceName =
   | 'api-server'
   | 'app-server'
   | 'dev-single-server'
+  | 'judge-worker-server'
+  | 'maintenance-worker-server'
   | 'single-server'
-  | 'worker-server'
 
-export type RuntimeProcessServerRole =
-  | 'api'
-  | 'auto'
-  | 'dev-single'
-  | 'judge-worker'
-  | 'maintenance-worker'
-  | 'worker'
-  | 'writer'
+export type RuntimeProcessServerRole = 'api' | 'auto' | 'dev-single' | 'judge-worker' | 'maintenance-worker'
 
 export type RuntimeProcessIdentity = {
   hostname: string
@@ -53,8 +47,9 @@ const runtimeProcessServiceNames = [
   'api-server',
   'app-server',
   'dev-single-server',
+  'judge-worker-server',
+  'maintenance-worker-server',
   'single-server',
-  'worker-server',
 ] as const
 
 const getRuntimeProcessIdentityState = () => {

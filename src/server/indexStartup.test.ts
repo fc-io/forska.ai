@@ -48,7 +48,7 @@ const startServer = (envValues: Record<string, string>) => {
   })
 }
 
-test('writer startup migrates DuckDB before judgment health queries run', async () => {
+test('maintenance-worker startup migrates DuckDB before judgment health queries run', async () => {
   const apiPort = 34988
   const duckdbPath = `/tmp/f1-index-startup-${Date.now()}.duckdb`
   const server = startServer({
@@ -56,7 +56,7 @@ test('writer startup migrates DuckDB before judgment health queries run', async 
     DUCKDB_PATH: duckdbPath,
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
     RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-    SERVER_ROLE: 'writer',
+    SERVER_ROLE: 'maintenance-worker',
     VITE_PORT: '4308',
   })
 
@@ -92,24 +92,24 @@ test('writer startup migrates DuckDB before judgment health queries run', async 
     await stopServer(server)
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.wal`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
   }
 })
 
-test('writer startup tolerates malformed DuckDB lease metadata files', async () => {
+test('maintenance-worker startup tolerates malformed DuckDB lease metadata files', async () => {
   const apiPort = 34989
   const duckdbPath = `/tmp/f1-index-startup-malformed-lease-${Date.now()}.duckdb`
 
-  writeFileSync(`${duckdbPath}.writer.lock`, '')
-  writeFileSync(`${duckdbPath}.writer.history.json`, '[{"event":"acquired"')
+  writeFileSync(`${duckdbPath}.duckdb-owner.lock`, '')
+  writeFileSync(`${duckdbPath}.duckdb-owner.history.json`, '[{"event":"acquired"')
 
   const server = startServer({
     API_SERVER_PORT: String(apiPort),
     DUCKDB_PATH: duckdbPath,
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
     RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-    SERVER_ROLE: 'writer',
+    SERVER_ROLE: 'maintenance-worker',
     VITE_PORT: '4309',
   })
 
@@ -133,13 +133,13 @@ test('writer startup tolerates malformed DuckDB lease metadata files', async () 
 
     expect(response.ok).toBe(true)
     expect(body.error).toBe(null)
-    expect(existsSync(`${duckdbPath}.writer.lock`)).toBe(true)
-    expect(existsSync(`${duckdbPath}.writer.history.json`)).toBe(true)
+    expect(existsSync(`${duckdbPath}.duckdb-owner.lock`)).toBe(true)
+    expect(existsSync(`${duckdbPath}.duckdb-owner.history.json`)).toBe(true)
   } finally {
     await stopServer(server)
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.wal`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
   }
 })

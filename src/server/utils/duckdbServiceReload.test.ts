@@ -31,7 +31,7 @@ test('duckdb service reuses the same embedded runtime across module reloads', as
           await second.closeDuckdbService()
         `,
       ],
-      {cwd: process.cwd(), env: {...process.env, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer'}},
+      {cwd: process.cwd(), env: {...process.env, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker'}},
     )
 
     if (result.exitCode !== 0) {
@@ -71,7 +71,7 @@ test('duckdb service can close and reopen the database cleanly', async () => {
           await duckdbService.closeDuckdbService()
         `,
       ],
-      {cwd: process.cwd(), env: {...process.env, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer'}},
+      {cwd: process.cwd(), env: {...process.env, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker'}},
     )
 
     if (result.exitCode !== 0) {
@@ -101,7 +101,7 @@ test('duckdb service retries startup after a recoverable WAL replay failure', ()
         void mock.module(serverRuntimeRoleModulePath, () => {
           return {
             ensureCurrentDuckdbOwnerLease: async () => {},
-            registerWriterDemotionHandler: () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
             releaseCurrentDuckdbOwnerLease: async () => {},
           }
         })
@@ -157,8 +157,8 @@ test('duckdb service retries startup after a recoverable WAL replay failure', ()
         DUCKDB_TEMP_DIRECTORY: '/tmp/f1-duckdb-service-retry-test-temp',
         RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
         RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-        SERVER_ROLE: 'writer',
-        SERVER_WRITER_URL: '',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
         VITE_PORT: '3000',
       },
     },
@@ -189,7 +189,7 @@ test('duckdb service restarts and retries after a fatal invalidation error', () 
         void mock.module(serverRuntimeRoleModulePath, () => {
           return {
             ensureCurrentDuckdbOwnerLease: async () => {},
-            registerWriterDemotionHandler: () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
             releaseCurrentDuckdbOwnerLease: async () => {},
           }
         })
@@ -257,8 +257,8 @@ test('duckdb service restarts and retries after a fatal invalidation error', () 
         DUCKDB_TEMP_DIRECTORY: '/tmp/f1-duckdb-service-fatal-restart-test-temp',
         RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
         RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-        SERVER_ROLE: 'writer',
-        SERVER_WRITER_URL: '',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
         VITE_PORT: '3000',
       },
     },

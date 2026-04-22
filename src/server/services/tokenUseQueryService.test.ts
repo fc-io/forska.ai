@@ -89,8 +89,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await closeDatabase?.()
   rmSync(tempDbPath, {force: true})
-  rmSync(`${tempDbPath}.writer.history.json`, {force: true})
-  rmSync(`${tempDbPath}.writer.lock`, {force: true})
+  rmSync(`${tempDbPath}.duckdb-owner.history.json`, {force: true})
+  rmSync(`${tempDbPath}.duckdb-owner.lock`, {force: true})
 })
 
 test('insertTokenUse generates an id when one is not provided', async () => {

@@ -216,8 +216,8 @@ export const getDesktopRuntimeConfig = ({
     FORSKA_DESKTOP_MODE: 'true',
     FORSKA_RUNTIME_PROFILE: 'local',
     FORSKA_RUNTIME_SERVICE: 'dev-single-server',
+    SERVER_DUCKDB_OWNER_URL: '',
     SERVER_ROLE: 'dev-single',
-    SERVER_WRITER_URL: '',
   }
   const runtimeLogConfig = getRuntimeLogConfig({
     cwd: dataRoot,

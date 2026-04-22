@@ -7,13 +7,13 @@ import {DEFAULT_API_SERVER_PORT} from '../../utils/runtimePortDefaults.ts'
 import {getConfiguredDuckdbPath} from './getDuckdbPath.ts'
 import {type LocalAppSettings, readLocalAppSettings} from './localAppSettings.ts'
 
-type BackgroundServerRole = 'api' | 'maintenance-worker' | 'worker'
+type BackgroundServerRole = 'api' | 'maintenance-worker'
 
 type BackgroundServerStackConfig = {
   apiPort: number
-  workerDuckdbMemoryLimit: string
-  workerPort: number
-  writerUrl: string
+  duckdbOwnerUrl: string
+  maintenanceDuckdbMemoryLimit: string
+  maintenancePort: number
 }
 
 const mebibyte = 1024 ** 2
@@ -33,7 +33,7 @@ const getTrimmedValue = (value: string | null | undefined) => {
   return normalized === '' ? null : normalized
 }
 
-export const getDefaultBackgroundWorkerDuckdbMemoryLimit = (
+export const getDefaultBackgroundMaintenanceDuckdbMemoryLimit = (
   totalMemoryBytes = totalmem(),
   platform = process.platform,
 ) => {
@@ -43,14 +43,14 @@ export const getDefaultBackgroundWorkerDuckdbMemoryLimit = (
     platform === 'darwin'
       ? darwinMaximumBackgroundWorkerDuckdbMemoryLimitMiB
       : defaultMaximumBackgroundWorkerDuckdbMemoryLimitMiB
-  const workerDuckdbMemoryLimitMiB = Math.max(
+  const maintenanceDuckdbMemoryLimitMiB = Math.max(
     minimumBackgroundWorkerDuckdbMemoryLimitMiB,
     Math.min(maximumBackgroundWorkerDuckdbMemoryLimitMiB, derivedLimitMiB),
   )
 
-  return workerDuckdbMemoryLimitMiB % 1024 === 0
-    ? `${workerDuckdbMemoryLimitMiB / 1024}GB`
-    : `${workerDuckdbMemoryLimitMiB}MiB`
+  return maintenanceDuckdbMemoryLimitMiB % 1024 === 0
+    ? `${maintenanceDuckdbMemoryLimitMiB / 1024}GB`
+    : `${maintenanceDuckdbMemoryLimitMiB}MiB`
 }
 
 export const getBackgroundServerStackConfig = (
@@ -58,14 +58,14 @@ export const getBackgroundServerStackConfig = (
   localAppSettings: LocalAppSettings = readLocalAppSettings(),
 ): BackgroundServerStackConfig => {
   const apiPort = getIntegerPort(envValues.API_SERVER_PORT, DEFAULT_API_SERVER_PORT)
-  const workerPort = getIntegerPort(envValues.BACKGROUND_WRITER_PORT, apiPort + 1)
-  const workerDuckdbMemoryLimit =
-    getTrimmedValue(envValues.BACKGROUND_WRITER_DUCKDB_MEMORY_LIMIT)
+  const maintenancePort = getIntegerPort(envValues.BACKGROUND_MAINTENANCE_PORT, apiPort + 1)
+  const maintenanceDuckdbMemoryLimit =
+    getTrimmedValue(envValues.BACKGROUND_MAINTENANCE_DUCKDB_MEMORY_LIMIT)
     ?? getTrimmedValue(envValues.DUCKDB_MEMORY_LIMIT)
     ?? getTrimmedValue(localAppSettings.backgroundWriterDuckdbMemoryLimit)
-    ?? getDefaultBackgroundWorkerDuckdbMemoryLimit()
+    ?? getDefaultBackgroundMaintenanceDuckdbMemoryLimit()
 
-  return {apiPort, workerDuckdbMemoryLimit, workerPort, writerUrl: `http://127.0.0.1:${workerPort}`}
+  return {apiPort, duckdbOwnerUrl: `http://127.0.0.1:${maintenancePort}`, maintenanceDuckdbMemoryLimit, maintenancePort}
 }
 
 const getStoredBackgroundWorkerDuckdbMemoryLimitFromDb = async (
@@ -103,16 +103,16 @@ export const getBackgroundServerStackConfigAsync = async (
   localAppSettings: LocalAppSettings = readLocalAppSettings(),
 ): Promise<BackgroundServerStackConfig> => {
   const apiPort = getIntegerPort(envValues.API_SERVER_PORT, DEFAULT_API_SERVER_PORT)
-  const workerPort = getIntegerPort(envValues.BACKGROUND_WRITER_PORT, apiPort + 1)
+  const maintenancePort = getIntegerPort(envValues.BACKGROUND_MAINTENANCE_PORT, apiPort + 1)
   const storedWorkerDuckdbMemoryLimit = await getStoredBackgroundWorkerDuckdbMemoryLimitFromDb(envValues)
-  const workerDuckdbMemoryLimit =
-    getTrimmedValue(envValues.BACKGROUND_WRITER_DUCKDB_MEMORY_LIMIT)
+  const maintenanceDuckdbMemoryLimit =
+    getTrimmedValue(envValues.BACKGROUND_MAINTENANCE_DUCKDB_MEMORY_LIMIT)
     ?? getTrimmedValue(envValues.DUCKDB_MEMORY_LIMIT)
     ?? storedWorkerDuckdbMemoryLimit
     ?? getTrimmedValue(localAppSettings.backgroundWriterDuckdbMemoryLimit)
-    ?? getDefaultBackgroundWorkerDuckdbMemoryLimit()
+    ?? getDefaultBackgroundMaintenanceDuckdbMemoryLimit()
 
-  return {apiPort, workerDuckdbMemoryLimit, workerPort, writerUrl: `http://127.0.0.1:${workerPort}`}
+  return {apiPort, duckdbOwnerUrl: `http://127.0.0.1:${maintenancePort}`, maintenanceDuckdbMemoryLimit, maintenancePort}
 }
 
 export const getBackgroundServerEnv = ({
@@ -133,15 +133,15 @@ export const getBackgroundServerEnv = ({
         API_SERVER_PORT: String(config.apiPort),
         FORSKA_RUNTIME_SERVICE: 'api-server',
         SERVER_ROLE: 'api',
-        SERVER_WRITER_URL: config.writerUrl,
+        SERVER_DUCKDB_OWNER_URL: config.duckdbOwnerUrl,
       }
     : {
         ...resolvedBaseEnv,
-        API_SERVER_PORT: String(config.workerPort),
-        DUCKDB_MEMORY_LIMIT: config.workerDuckdbMemoryLimit,
-        FORSKA_RUNTIME_SERVICE: 'worker-server',
+        API_SERVER_PORT: String(config.maintenancePort),
+        DUCKDB_MEMORY_LIMIT: config.maintenanceDuckdbMemoryLimit,
+        FORSKA_RUNTIME_SERVICE: 'maintenance-worker-server',
         SERVER_ROLE: 'maintenance-worker',
-        SERVER_WRITER_URL: '',
+        SERVER_DUCKDB_OWNER_URL: '',
       }
 }
 
@@ -163,14 +163,14 @@ export const getBackgroundServerEnvAsync = async ({
         API_SERVER_PORT: String(config.apiPort),
         FORSKA_RUNTIME_SERVICE: 'api-server',
         SERVER_ROLE: 'api',
-        SERVER_WRITER_URL: config.writerUrl,
+        SERVER_DUCKDB_OWNER_URL: config.duckdbOwnerUrl,
       }
     : {
         ...resolvedBaseEnv,
-        API_SERVER_PORT: String(config.workerPort),
-        DUCKDB_MEMORY_LIMIT: config.workerDuckdbMemoryLimit,
-        FORSKA_RUNTIME_SERVICE: 'worker-server',
+        API_SERVER_PORT: String(config.maintenancePort),
+        DUCKDB_MEMORY_LIMIT: config.maintenanceDuckdbMemoryLimit,
+        FORSKA_RUNTIME_SERVICE: 'maintenance-worker-server',
         SERVER_ROLE: 'maintenance-worker',
-        SERVER_WRITER_URL: '',
+        SERVER_DUCKDB_OWNER_URL: '',
       }
 }

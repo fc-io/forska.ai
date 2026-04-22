@@ -49,7 +49,7 @@ bun run dev:server
 bun run dev:app
 ```
 
-That boots the primary profile on app `3000`, API `3001`, writer `3002`, with isolated runtime state under `data/runtime/primary/`.
+That boots the primary profile on app `3000`, API `3001`, DuckDB owner `3002`, with isolated runtime state under `data/runtime/primary/`.
 
 Secondary profile uses explicit aliases and its own runtime root:
 
@@ -59,20 +59,20 @@ bun run dev:secondary:server
 bun run dev:secondary:app
 ```
 
-That boots the secondary profile on app `3100`, API `3101`, writer `3102`, with isolated runtime state under `data/runtime/secondary/`.
+That boots the secondary profile on app `3100`, API `3101`, DuckDB owner `3102`, with isolated runtime state under `data/runtime/secondary/`.
 
 DuckDB and the judgment-job SQLite state isolate automatically because each profile uses its own root directory: `data/runtime/primary/` or `data/runtime/secondary/`.
 
-Split API and worker commands:
+Split API and maintenance commands:
 
 ```bash
 # primary
 bun run dev:server:api
-bun run dev:server:worker
+bun run dev:server:maintenance
 
 # secondary
 bun run dev:secondary:server:api
-bun run dev:secondary:server:worker
+bun run dev:secondary:server:maintenance
 ```
 
 Built app commands:

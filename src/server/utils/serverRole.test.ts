@@ -30,8 +30,6 @@ test('server role capabilities describe the current split of responsibilities', 
   expect(getServerRoleCapabilities('api')).toEqual(['api', 'owner-proxy'])
   expect(getServerRoleCapabilities('maintenance-worker')).toEqual(['duckdb-owner', 'maintenance'])
   expect(getServerRoleCapabilities('judge-worker')).toEqual(['judging'])
-  expect(getServerRoleCapabilities('worker')).toEqual(['duckdb-owner', 'maintenance', 'judging'])
-  expect(getServerRoleCapabilities('writer')).toEqual(['duckdb-owner', 'maintenance', 'judging'])
   expect(getServerRoleCapabilities('dev-single')).toEqual(['api', 'duckdb-owner', 'maintenance', 'judging'])
   expect(getServerRoleCapabilities('auto')).toEqual(['api', 'owner-proxy'])
 })

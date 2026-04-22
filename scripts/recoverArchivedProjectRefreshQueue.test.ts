@@ -11,7 +11,7 @@ const defaultEnv = {
   API_SERVER_PORT: '39001',
   RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
   RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-  SERVER_ROLE: 'writer',
+  SERVER_ROLE: 'maintenance-worker',
   VITE_PORT: '39901',
 }
 
@@ -304,7 +304,7 @@ test('archived refresh recovery script inspects and repairs lingering archived m
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.wal`)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })

@@ -9,7 +9,7 @@ const defaultEnv = {
   API_SERVER_PORT: '39102',
   RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
   RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-  SERVER_ROLE: 'writer',
+  SERVER_ROLE: 'maintenance-worker',
   VITE_PORT: '39912',
 }
 
@@ -386,7 +386,7 @@ test('isolated refresh command progresses one large rebuild batch when no normal
 
   const runScript = globalThis.Bun.spawnSync(['bun', runOnceScriptPath, '--worker-id=test-large-rebuild'], {
     cwd: projectRoot,
-    env: {...defaultEnv, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer', SERVER_WRITER_URL: ''},
+    env: {...defaultEnv, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker', SERVER_DUCKDB_OWNER_URL: ''},
   })
 
   if (runScript.exitCode !== 0) {
@@ -608,7 +608,7 @@ test('runProjectMartLargeRebuildCycle CLI advances one staged batch with conserv
 
   const runScript = globalThis.Bun.spawnSync(
     ['bun', 'scripts/runProjectMartLargeRebuildCycle.ts', '--worker-id=test-large-rebuild-cli'],
-    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer', SERVER_WRITER_URL: ''}},
+    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker', SERVER_DUCKDB_OWNER_URL: ''}},
   )
 
   if (runScript.exitCode !== 0) {
@@ -764,7 +764,7 @@ test('runProjectMartLargeRebuildCycles CLI returns structured bounded multi-cycl
       '--worker-id=test-large-rebuild-cycles-cli',
       '--max-cycles=3',
     ],
-    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer', SERVER_WRITER_URL: ''}},
+    {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker', SERVER_DUCKDB_OWNER_URL: ''}},
   )
 
   if (runScript.exitCode !== 0) {

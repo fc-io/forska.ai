@@ -9,7 +9,7 @@ const removeFileIfExists = (filePath: string) => {
 }
 
 const removeDuckdbFiles = (duckdbPath: string) => {
-  ;[duckdbPath, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(removeFileIfExists)
+  ;[duckdbPath, `${duckdbPath}.duckdb-owner.lock`, `${duckdbPath}.duckdb-owner.history.json`].map(removeFileIfExists)
 }
 
 const waitForTimeout = (timeoutMs: number) => {
@@ -47,7 +47,7 @@ test('duckdb shutdown hook bypasses a stuck queue on SIGTERM', async () => {
     ],
     {
       cwd: process.cwd(),
-      env: {...process.env, DUCKDB_MEMORY_LIMIT: '1GB', DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer'},
+      env: {...process.env, DUCKDB_MEMORY_LIMIT: '1GB', DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker'},
       stdout: 'pipe',
       stderr: 'pipe',
     },
@@ -89,7 +89,7 @@ test('duckdb shutdown hook bypasses a stuck append queue on SIGTERM', async () =
         DUCKDB_APPEND_LANE_COUNT: '2',
         DUCKDB_MEMORY_LIMIT: '1GB',
         DUCKDB_PATH: duckdbPath,
-        SERVER_ROLE: 'writer',
+        SERVER_ROLE: 'maintenance-worker',
       },
       stdout: 'pipe',
       stderr: 'pipe',

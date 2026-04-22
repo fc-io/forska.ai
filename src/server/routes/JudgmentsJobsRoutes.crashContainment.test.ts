@@ -85,8 +85,8 @@ test('repair route blocks live repair for quarantined crash-path jobs with offli
         await sqliteService.closeAll()
         await db.close()
         rmSync(tempDbPath, {force: true})
-        rmSync(tempDbPath + '.writer.history.json', {force: true})
-        rmSync(tempDbPath + '.writer.lock', {force: true})
+        rmSync(tempDbPath + '.duckdb-owner.history.json', {force: true})
+        rmSync(tempDbPath + '.duckdb-owner.lock', {force: true})
         rmSync(tempJobDir, {force: true, recursive: true})
       `,
     ],
@@ -209,8 +209,8 @@ test('delete route fails safely for quarantined crash-path jobs when isolated fl
         await sqliteService.closeAll()
         await db.close()
         rmSync(tempDbPath, {force: true})
-        rmSync(tempDbPath + '.writer.history.json', {force: true})
-        rmSync(tempDbPath + '.writer.lock', {force: true})
+        rmSync(tempDbPath + '.duckdb-owner.history.json', {force: true})
+        rmSync(tempDbPath + '.duckdb-owner.lock', {force: true})
         rmSync(tempJobDir, {force: true, recursive: true})
       `,
     ],

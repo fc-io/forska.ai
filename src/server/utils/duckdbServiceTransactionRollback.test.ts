@@ -42,8 +42,8 @@ test('duckdb transaction keeps the original error when rollback fails', () => {
         DUCKDB_TEMP_DIRECTORY: '/tmp/f1-duckdb-transaction-rollback-test-temp',
         RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
         RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-        SERVER_ROLE: 'writer',
-        SERVER_WRITER_URL: '',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
         VITE_PORT: '3000',
       },
     },
@@ -57,7 +57,7 @@ test('duckdb transaction keeps the original error when rollback fails', () => {
     expect(result.stdout.toString().trim()).toBe('original failure -- rollback failed: DuckDB connection not started')
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })

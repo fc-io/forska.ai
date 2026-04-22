@@ -1,7 +1,6 @@
 export const productionServerRoles = ['api', 'maintenance-worker', 'judge-worker'] as const
 export const localServerRoles = ['auto', 'dev-single'] as const
-export const legacyServerRoles = ['writer', 'worker'] as const
-export const serverRoles = [...productionServerRoles, ...localServerRoles, ...legacyServerRoles] as const
+export const serverRoles = [...productionServerRoles, ...localServerRoles] as const
 
 export type ServerRole = (typeof serverRoles)[number]
 export type EffectiveServerRole = Exclude<ServerRole, 'auto'>
@@ -13,8 +12,6 @@ const serverRoleCapabilities = {
   'dev-single': ['api', 'duckdb-owner', 'maintenance', 'judging'],
   'judge-worker': ['judging'],
   'maintenance-worker': ['duckdb-owner', 'maintenance'],
-  worker: ['duckdb-owner', 'maintenance', 'judging'],
-  writer: ['duckdb-owner', 'maintenance', 'judging'],
 } satisfies Record<ServerRole, ServerRoleCapability[]>
 
 export const getEffectiveServerRole = (serverRole: ServerRole): EffectiveServerRole => {
@@ -53,13 +50,11 @@ export const shouldServerRoleProxyApiToOwner = canServerRoleProxyApiToOwner
 
 export const shouldServerRoleProxyApiToDuckdbOwner = canServerRoleProxyApiToOwner
 
-export const shouldServerRoleProxyApiToWriter = shouldServerRoleProxyApiToOwner
-
 export const getServerRoleCapabilities = (serverRole: ServerRole): ServerRoleCapability[] => {
   return [...serverRoleCapabilities[serverRole]]
 }
 
-export const shouldServerRoleMountWriterCrons = (serverRole: ServerRole) => {
+export const shouldServerRoleMountRuntimeCrons = (serverRole: ServerRole) => {
   return (
     serverRole === 'auto'
     || shouldServerRoleRunMaintenanceLoops(serverRole)

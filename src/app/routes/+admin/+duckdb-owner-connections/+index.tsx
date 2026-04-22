@@ -4,11 +4,11 @@ import {format, formatDistanceToNow, isValid} from 'date-fns'
 import {For, Show} from 'solid-js'
 
 import {
-  fetchWriterConnections,
-  type WriterConnectionRow,
-  writerConnectionsQueryKey,
-  type WriterWarningRow,
-} from '../../../../utils/writerConnectionsQuery.ts'
+  type DuckdbOwnerConnectionRow,
+  duckdbOwnerConnectionsQueryKey,
+  type DuckdbOwnerWarningRow,
+  fetchDuckdbOwnerConnections,
+} from '../../../../utils/duckdbOwnerConnectionsQuery.ts'
 
 const formatTs = (value: Date | null) => {
   return value && isValid(value) ? format(value, 'yyyy-MM-dd HH:mm:ss') : '—'
@@ -18,11 +18,11 @@ const formatAgo = (value: Date | null) => {
   return value && isValid(value) ? `${formatDistanceToNow(value)} ago` : '—'
 }
 
-const getWriterConnectionStatusLabel = (row: WriterConnectionRow) => {
-  return row.isCurrentProcess ? 'writer' : row.isStale ? 'stale' : 'connected'
+const getDuckdbOwnerConnectionStatusLabel = (row: DuckdbOwnerConnectionRow) => {
+  return row.isCurrentProcess ? 'owner' : row.isStale ? 'stale' : 'connected'
 }
 
-const getWriterConnectionStatusClass = (row: WriterConnectionRow) => {
+const getDuckdbOwnerConnectionStatusClass = (row: DuckdbOwnerConnectionRow) => {
   return row.isCurrentProcess
     ? 'bg-emerald-100 text-emerald-700'
     : row.isStale
@@ -30,33 +30,33 @@ const getWriterConnectionStatusClass = (row: WriterConnectionRow) => {
       : 'bg-blue-100 text-blue-700'
 }
 
-const getWriterConnectionLastRoute = (row: WriterConnectionRow) => {
+const getDuckdbOwnerConnectionLastRoute = (row: DuckdbOwnerConnectionRow) => {
   return row.lastRequestPath ?? '—'
 }
 
-const getWriterTakeoverEventLabel = (event: 'acquired' | 'released') => {
-  return event === 'acquired' ? 'Writer acquired' : 'Writer released'
+const getDuckdbOwnerTakeoverEventLabel = (event: 'acquired' | 'released') => {
+  return event === 'acquired' ? 'Owner acquired' : 'Owner released'
 }
 
-const getWriterTakeoverEventClass = (event: 'acquired' | 'released') => {
+const getDuckdbOwnerTakeoverEventClass = (event: 'acquired' | 'released') => {
   return event === 'acquired' ? 'bg-emerald-100 text-emerald-700' : 'bg-stone-200 text-stone-700'
 }
 
-const getWriterWarningClass = (warning: WriterWarningRow) => {
+const getDuckdbOwnerWarningClass = (warning: DuckdbOwnerWarningRow) => {
   return warning.severity === 'error'
     ? 'border-red-200 bg-red-50 text-red-800'
     : 'border-amber-200 bg-amber-50 text-amber-800'
 }
 
-const getWriterWarningLabel = (warning: WriterWarningRow) => {
+const getDuckdbOwnerWarningLabel = (warning: DuckdbOwnerWarningRow) => {
   return warning.kind === 'write-failure'
     ? 'Operation error'
-    : warning.kind === 'writer-disabled'
-      ? 'Writer disabled'
-      : 'Writer unavailable'
+    : warning.kind === 'owner-proxy-disabled'
+      ? 'Owner proxy disabled'
+      : 'Owner unavailable'
 }
 
-const WriterConnectionSummaryCard = (props: {label: string; value: string}) => {
+const DuckdbOwnerConnectionSummaryCard = (props: {label: string; value: string}) => {
   return (
     <div class="rounded-xl border border-stone-200 bg-white px-4 py-4 shadow-sm">
       <div class="text-xs font-semibold uppercase tracking-wide text-stone-500">{props.label}</div>
@@ -65,11 +65,11 @@ const WriterConnectionSummaryCard = (props: {label: string; value: string}) => {
   )
 }
 
-const AdminWriterConnections = () => {
-  const writerConnectionsQuery = useQuery(() => {
+const AdminDuckdbOwnerConnections = () => {
+  const duckdbOwnerConnectionsQuery = useQuery(() => {
     return {
-      queryKey: writerConnectionsQueryKey,
-      queryFn: fetchWriterConnections,
+      queryKey: duckdbOwnerConnectionsQueryKey,
+      queryFn: fetchDuckdbOwnerConnections,
       refetchInterval: 10_000,
       refetchOnReconnect: true,
       refetchOnWindowFocus: true,
@@ -77,45 +77,45 @@ const AdminWriterConnections = () => {
     }
   })
 
-  const writer = () => {
-    return writerConnectionsQuery.data?.writer ?? null
+  const owner = () => {
+    return duckdbOwnerConnectionsQuery.data?.owner ?? null
   }
 
   const followers = () => {
-    return writerConnectionsQuery.data?.followers ?? []
+    return duckdbOwnerConnectionsQuery.data?.followers ?? []
   }
 
   const history = () => {
-    return writerConnectionsQuery.data?.history ?? []
+    return duckdbOwnerConnectionsQuery.data?.history ?? []
   }
 
   const warnings = () => {
-    return writerConnectionsQuery.data?.warnings ?? []
+    return duckdbOwnerConnectionsQuery.data?.warnings ?? []
   }
 
   return (
     <div class="min-h-screen bg-stone-50 p-6 mx-auto">
       <div class="mb-6 flex items-center justify-between gap-4">
         <div>
-          <h1 class="text-2xl font-bold text-stone-900">Writer Connections</h1>
-          <p class="mt-1 text-sm text-stone-500">Writer process and follower API processes currently observed.</p>
+          <h1 class="text-2xl font-bold text-stone-900">DuckDB Owner Connections</h1>
+          <p class="mt-1 text-sm text-stone-500">DuckDB owner process and follower API processes currently observed.</p>
         </div>
       </div>
 
-      <Show when={writerConnectionsQuery.isLoading}>
-        <p class="text-stone-500">Loading writer connections…</p>
+      <Show when={duckdbOwnerConnectionsQuery.isLoading}>
+        <p class="text-stone-500">Loading DuckDB owner connections…</p>
       </Show>
 
-      <Show when={writerConnectionsQuery.isError}>
+      <Show when={duckdbOwnerConnectionsQuery.isError}>
         <div class="rounded-xl border border-red-200 bg-red-50 p-4 text-red-700">
-          <div class="font-medium">Failed to load writer connections</div>
+          <div class="font-medium">Failed to load DuckDB owner connections</div>
           <div class="mt-2 text-sm">
-            The current writer may be unavailable. {writerConnectionsQuery.error?.message ?? ''}
+            The current DuckDB owner may be unavailable. {duckdbOwnerConnectionsQuery.error?.message ?? ''}
           </div>
           <button
             class="mt-3 rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700"
             onClick={() => {
-              return void writerConnectionsQuery.refetch()
+              return void duckdbOwnerConnectionsQuery.refetch()
             }}
           >
             Retry
@@ -123,13 +123,15 @@ const AdminWriterConnections = () => {
         </div>
       </Show>
 
-      <Show when={!writerConnectionsQuery.isLoading && !writerConnectionsQuery.isError && warnings().length > 0}>
+      <Show
+        when={!duckdbOwnerConnectionsQuery.isLoading && !duckdbOwnerConnectionsQuery.isError && warnings().length > 0}
+      >
         <div class="space-y-3 mb-6">
           <For each={warnings()}>
             {(warning) => {
               return (
-                <div class={`rounded-xl border px-4 py-4 shadow-sm ${getWriterWarningClass(warning)}`}>
-                  <div class="text-xs font-semibold uppercase tracking-wide">{getWriterWarningLabel(warning)}</div>
+                <div class={`rounded-xl border px-4 py-4 shadow-sm ${getDuckdbOwnerWarningClass(warning)}`}>
+                  <div class="text-xs font-semibold uppercase tracking-wide">{getDuckdbOwnerWarningLabel(warning)}</div>
                   <div class="mt-2 text-sm font-medium">{warning.message}</div>
                   <div class="mt-2 text-xs opacity-80">
                     {formatTs(warning.at)} ({formatAgo(warning.at)})
@@ -141,36 +143,36 @@ const AdminWriterConnections = () => {
         </div>
       </Show>
 
-      <Show when={!writerConnectionsQuery.isLoading && !writerConnectionsQuery.isError && writer()}>
-        {(writerRow) => {
+      <Show when={!duckdbOwnerConnectionsQuery.isLoading && !duckdbOwnerConnectionsQuery.isError && owner()}>
+        {(ownerRow) => {
           return (
             <div class="space-y-6">
               <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm">
                 <div class="flex flex-wrap items-start justify-between gap-4">
                   <div>
-                    <div class="text-sm font-semibold uppercase tracking-wide text-stone-500">Current Writer</div>
+                    <div class="text-sm font-semibold uppercase tracking-wide text-stone-500">Current DuckDB Owner</div>
                     <div class="mt-2 text-xl font-semibold text-stone-900">
-                      {writerRow().hostname}:{writerRow().apiServerPort}
+                      {ownerRow().hostname}:{ownerRow().apiServerPort}
                     </div>
-                    <div class="mt-2 text-sm text-stone-500">PID {writerRow().pid}</div>
+                    <div class="mt-2 text-sm text-stone-500">PID {ownerRow().pid}</div>
                   </div>
                   <div
-                    class={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${getWriterConnectionStatusClass(writerRow())}`}
+                    class={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${getDuckdbOwnerConnectionStatusClass(ownerRow())}`}
                   >
-                    {getWriterConnectionStatusLabel(writerRow())}
+                    {getDuckdbOwnerConnectionStatusLabel(ownerRow())}
                   </div>
                 </div>
                 <div class="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                  <WriterConnectionSummaryCard
+                  <DuckdbOwnerConnectionSummaryCard
                     label="Started"
-                    value={`${formatTs(writerRow().startedAt)} (${formatAgo(writerRow().startedAt)})`}
+                    value={`${formatTs(ownerRow().startedAt)} (${formatAgo(ownerRow().startedAt)})`}
                   />
-                  <WriterConnectionSummaryCard
+                  <DuckdbOwnerConnectionSummaryCard
                     label="Last Seen"
-                    value={`${formatTs(writerRow().lastSeenAt)} (${formatAgo(writerRow().lastSeenAt)})`}
+                    value={`${formatTs(ownerRow().lastSeenAt)} (${formatAgo(ownerRow().lastSeenAt)})`}
                   />
-                  <WriterConnectionSummaryCard label="Role" value={writerRow().serverRole} />
-                  <WriterConnectionSummaryCard label="Writer URL" value={writerRow().writerUrl ?? '—'} />
+                  <DuckdbOwnerConnectionSummaryCard label="Role" value={ownerRow().serverRole} />
+                  <DuckdbOwnerConnectionSummaryCard label="Owner URL" value={ownerRow().duckdbOwnerUrl ?? '—'} />
                 </div>
               </div>
 
@@ -178,7 +180,7 @@ const AdminWriterConnections = () => {
                 <div class="border-b border-stone-200 px-6 py-4">
                   <div class="text-lg font-semibold text-stone-900">Follower Processes</div>
                   <div class="mt-1 text-sm text-stone-500">
-                    API processes forwarding requests or heartbeats to the writer.
+                    API processes forwarding requests or heartbeats to the DuckDB owner.
                   </div>
                 </div>
 
@@ -226,9 +228,9 @@ const AdminWriterConnections = () => {
                               <tr class="hover:bg-stone-50">
                                 <td class="px-4 py-3">
                                   <span
-                                    class={`rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${getWriterConnectionStatusClass(row)}`}
+                                    class={`rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${getDuckdbOwnerConnectionStatusClass(row)}`}
                                   >
-                                    {getWriterConnectionStatusLabel(row)}
+                                    {getDuckdbOwnerConnectionStatusLabel(row)}
                                   </span>
                                 </td>
                                 <td class="px-4 py-3 text-sm text-stone-900">{row.hostname}</td>
@@ -241,7 +243,9 @@ const AdminWriterConnections = () => {
                                 </td>
                                 <td class="px-4 py-3 text-sm text-stone-900">{formatTs(row.lastHeartbeatAt)}</td>
                                 <td class="px-4 py-3 text-sm text-stone-900">{row.proxyCount}</td>
-                                <td class="px-4 py-3 text-xs text-stone-600">{getWriterConnectionLastRoute(row)}</td>
+                                <td class="px-4 py-3 text-xs text-stone-600">
+                                  {getDuckdbOwnerConnectionLastRoute(row)}
+                                </td>
                               </tr>
                             )
                           }}
@@ -256,7 +260,7 @@ const AdminWriterConnections = () => {
                 <div class="border-b border-stone-200 px-6 py-4">
                   <div class="text-lg font-semibold text-stone-900">Takeover History</div>
                   <div class="mt-1 text-sm text-stone-500">
-                    Recent writer acquire/release events for this DuckDB file.
+                    Recent owner acquire/release events for this DuckDB file.
                   </div>
                 </div>
 
@@ -298,9 +302,9 @@ const AdminWriterConnections = () => {
                               <tr class="hover:bg-stone-50">
                                 <td class="px-4 py-3">
                                   <span
-                                    class={`rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${getWriterTakeoverEventClass(event.event)}`}
+                                    class={`rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${getDuckdbOwnerTakeoverEventClass(event.event)}`}
                                   >
-                                    {getWriterTakeoverEventLabel(event.event)}
+                                    {getDuckdbOwnerTakeoverEventLabel(event.event)}
                                   </span>
                                 </td>
                                 <td class="px-4 py-3 text-sm text-stone-900">
@@ -328,15 +332,18 @@ const AdminWriterConnections = () => {
 
       <Show
         when={
-          !writerConnectionsQuery.isLoading && !writerConnectionsQuery.isError && !writer() && warnings().length > 0
+          !duckdbOwnerConnectionsQuery.isLoading
+          && !duckdbOwnerConnectionsQuery.isError
+          && !owner()
+          && warnings().length > 0
         }
       >
         <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm text-sm text-stone-600">
-          No active writer is attached to this server.
+          No active DuckDB owner is attached to this server.
         </div>
       </Show>
     </div>
   )
 }
 
-export const Route = createFileRoute('/admin/writer-connections/')({component: AdminWriterConnections})
+export const Route = createFileRoute('/admin/duckdb-owner-connections/')({component: AdminDuckdbOwnerConnections})

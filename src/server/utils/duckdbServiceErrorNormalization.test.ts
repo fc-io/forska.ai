@@ -22,7 +22,7 @@ test('duckdb service keeps the underlying Effect error detail', () => {
         API_SERVER_PORT: '3999',
         DUCKDB_PATH: ':memory:',
         SERVER_ROLE: 'api',
-        SERVER_WRITER_URL: '',
+        SERVER_DUCKDB_OWNER_URL: '',
       },
     },
   )
@@ -57,8 +57,8 @@ test('duckdb service includes statement context in query failures', () => {
         ...process.env,
         API_SERVER_PORT: '3999',
         DUCKDB_PATH: ':memory:',
-        SERVER_ROLE: 'writer',
-        SERVER_WRITER_URL: '',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
       },
     },
   )

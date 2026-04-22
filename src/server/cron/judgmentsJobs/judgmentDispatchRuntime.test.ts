@@ -256,7 +256,7 @@ test('runs same-provider batches concurrently up to the provider cap', async () 
 test('shutdown recovers active and queued prompts for a provider', async () => {
   const release = createSignal()
   const recovered = mock(async (prompts: PromptToProcess[], reason: string) => {
-    expect(reason).toBe('writer-demoted')
+    expect(reason).toBe('duckdb-owner-demoted')
     expect(
       prompts
         .map((prompt) => {
@@ -281,7 +281,7 @@ test('shutdown recovers active and queued prompts for a provider', async () => {
   await runtime.enqueueClaimedPrompts({label: 'shutdown', prompts: [createPrompt({recordId: 'record-queued'})]})
   await flush()
 
-  await runtime.shutdown('writer-demoted')
+  await runtime.shutdown('duckdb-owner-demoted')
   release.resolve()
 
   expect(recovered).toHaveBeenCalledTimes(1)

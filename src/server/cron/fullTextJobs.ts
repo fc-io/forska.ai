@@ -12,7 +12,7 @@ import {
 } from '../services/appQueryHelpers.ts'
 import {env} from '../utils/env.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
-import {isExpectedWriterRoleLossError, shouldCurrentServerRunMaintenanceLoops} from '../utils/serverRuntimeRole.ts'
+import {isExpectedDuckdbOwnerRoleLossError, shouldCurrentServerRunMaintenanceLoops} from '../utils/serverRuntimeRole.ts'
 import {fullTextArticleFetchFromArxiv} from './fullTextJobs/fullTextArticleFetchFromArxiv.ts'
 import {fullTextArticleFetchFromOriginalUrls} from './fullTextJobs/fullTextArticleFetchFromOriginalUrls.ts'
 import {fullTextArticleFetchFromUnpaywall} from './fullTextJobs/fullTextArticleFetchFromUnpaywall.ts'
@@ -285,7 +285,7 @@ const fetchFullTextForArticles = async () => {
       }),
     )
   } catch (error) {
-    if (!isExpectedWriterRoleLossError(error)) {
+    if (!isExpectedDuckdbOwnerRoleLossError(error)) {
       throw error
     }
   }

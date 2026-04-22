@@ -710,7 +710,7 @@ export const adminInvestigateRoutes = new Elysia()
   .get('/api/admin/duckdb-append-metrics', async () => {
     return appDatabaseService.getAppendMetrics()
   })
-  .get('/api/admin/worker-runtime-diagnostics', async () => {
+  .get('/api/admin/maintenance-runtime-diagnostics', async () => {
     const processMemory = process.memoryUsage()
 
     return {

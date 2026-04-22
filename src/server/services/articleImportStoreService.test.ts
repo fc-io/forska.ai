@@ -118,8 +118,8 @@ test('storeImportedArticlesWithTx upserts articles in DuckDB without current_tim
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.wal`)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
@@ -236,7 +236,7 @@ test('storeImportedArticlesWithTx reimports referenced articles without foreign 
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.wal`)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })

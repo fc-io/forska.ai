@@ -36,7 +36,7 @@ const waitForFile = async (filePath: string, timeoutMs: number): Promise<void> =
 
 test('second process cannot acquire DuckDB owner lease', async () => {
   const duckdbPath = `/tmp/f1-duckdb-lease-${Date.now()}.duckdb`
-  const leasePath = `${duckdbPath}.writer.lock`
+  const leasePath = `${duckdbPath}.duckdb-owner.lock`
   const holder = globalThis.Bun.spawn(
     [
       'bun',

@@ -8,7 +8,7 @@ import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {writeRuntimeFailureLogEvent} from '../../utils/runtimeLogger.ts'
-import {registerWriterDemotionHandler} from '../../utils/serverRuntimeRole.ts'
+import {registerDuckdbOwnerDemotionHandler} from '../../utils/serverRuntimeRole.ts'
 import {
   acquireJudgmentJobLease,
   isJudgmentJobLeaseHeldError,
@@ -3570,7 +3570,7 @@ const sqliteService = {
   },
 }
 
-registerWriterDemotionHandler(async () => {
+registerDuckdbOwnerDemotionHandler(async () => {
   await sqliteService.closeAll()
 })
 

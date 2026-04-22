@@ -139,8 +139,8 @@ test('mart refresh keeps a requeue that arrives during drain', () => {
     expect(result.totalCount).toBe(1)
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
@@ -223,8 +223,8 @@ test('mart refresh clears multiple queued project rebuilds in one drain', () => 
     expect(result.totalCount).toBe(2)
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
@@ -1517,8 +1517,8 @@ test('mart refresh prioritizes smaller queued project rebuilds ahead of larger o
     expect(result.projectRefreshOrder).toEqual(['small', 'large'])
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
@@ -1830,8 +1830,8 @@ test('mart refresh retries cleanly after a failed background transaction poisons
     expect(result.queuedAfterRetry).toBe(0)
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 }, 20_000)
 
@@ -2000,8 +2000,8 @@ test('mart refresh populates review article serving v3 tables', () => {
     ])
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
@@ -2163,8 +2163,8 @@ test('mart refresh updates serving rows incrementally after a judgment answer ch
     expect(result.detailRows).toEqual([{answeredOriginal: 'no'}])
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
@@ -2322,8 +2322,8 @@ test('mart refresh computes summary-mode human completeness from summary judgmen
     ])
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
@@ -2540,8 +2540,8 @@ test('mart refresh reuses shared judgments across projects with matching prompt 
     expect(result.sourceDetailCount).toBe(1)
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
@@ -2822,8 +2822,8 @@ test('mart refresh drops reused source judgments after a cloned project repoints
     ])
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
@@ -2949,8 +2949,8 @@ test('mart refresh deduplicates an article that is both curated and import-route
     expect(result.servingRows).toEqual([{articleId: 'article-shared-scope-test'}])
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
@@ -3092,8 +3092,8 @@ test('mart refresh keeps the previous serving generation during the next rebuild
     ])
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 }, 20_000)
 
@@ -3253,8 +3253,8 @@ test('mart refresh does not advance serving generation when rebuild fails', () =
     expect(result.failureText).toContain('simulated serving generation failure')
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 }, 20_000)
 
@@ -3352,8 +3352,8 @@ test('mart refresh skips schema repair writes when refresh_generation already ex
     expect(result.schemaRepairRuns).toBe(0)
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
@@ -3562,8 +3562,8 @@ test('mart refresh yields between drain passes after exceeding the time budget',
     expect(result.zeroDelayYieldCount).toBeGreaterThanOrEqual(1)
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
@@ -3692,7 +3692,7 @@ test('mart refresh deletes article tasks before a delayed project rebuild finish
     expect(result.queueRows).toEqual([{count: 1, refreshScope: 'judgment_article'}])
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })

@@ -1,6 +1,6 @@
 import {runProjectMartRefreshWorker} from '../workers/projectMartRefreshWorker.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
-import {registerWriterDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
+import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
 
 type ProjectMartRefreshWorkerHeartbeatOptions = {pollIntervalMs?: number}
 
@@ -46,7 +46,7 @@ export const startProjectMartRefreshWorkerHeartbeat = (options: ProjectMartRefre
     controller.abort()
   }
 
-  registerWriterDemotionHandler(() => {
+  registerDuckdbOwnerDemotionHandler(() => {
     stop()
   })
   process.once('exit', stop)

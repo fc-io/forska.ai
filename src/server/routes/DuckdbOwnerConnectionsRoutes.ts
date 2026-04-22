@@ -1,14 +1,14 @@
 import {Elysia, t} from 'elysia'
 
 import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
-import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {
-  getWriterConnectionsOverview,
-  recordWriterConnectionProxy,
-  upsertWriterConnectionHeartbeat,
-} from '../utils/writerConnections.ts'
+  getDuckdbOwnerConnectionsOverview,
+  recordDuckdbOwnerConnectionProxy,
+  upsertDuckdbOwnerConnectionHeartbeat,
+} from '../utils/duckdbOwnerConnections.ts'
+import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
-const writerConnectionHeartbeatBody = t.Object({
+const duckdbOwnerConnectionHeartbeatBody = t.Object({
   apiServerPort: t.Number(),
   hostname: t.String(),
   instanceId: t.Optional(t.String()),
@@ -22,31 +22,30 @@ const writerConnectionHeartbeatBody = t.Object({
     t.Literal('judge-worker'),
     t.Literal('auto'),
     t.Literal('dev-single'),
-    t.Literal('writer'),
-    t.Literal('worker'),
   ]),
   service: t.Optional(
     t.Union([
       t.Literal('api-server'),
       t.Literal('app-server'),
       t.Literal('dev-single-server'),
+      t.Literal('judge-worker-server'),
+      t.Literal('maintenance-worker-server'),
       t.Literal('single-server'),
-      t.Literal('worker-server'),
     ]),
   ),
   startedAt: t.String(),
-  writerUrl: t.Nullable(t.String()),
+  duckdbOwnerUrl: t.Nullable(t.String()),
 })
 
-export const writerConnectionsRoutes = new Elysia()
+export const duckdbOwnerConnectionsRoutes = new Elysia()
   .use(withErrorHandler())
   .onRequest(({request}) => {
-    recordWriterConnectionProxy(request.headers, new URL(request.url).pathname)
+    recordDuckdbOwnerConnectionProxy(request.headers, new URL(request.url).pathname)
   })
-  .get('/api/writer_connections', async () => {
+  .get('/api/duckdb_owner_connections', async () => {
     return {
       data: {
-        ...(await getWriterConnectionsOverview()),
+        ...(await getDuckdbOwnerConnectionsOverview()),
         martRefresh: {
           ...getDuckdbMartRefreshService().getDebugSnapshot(),
           progress: getDuckdbMartRefreshService().getProgressSnapshot(),
@@ -56,9 +55,9 @@ export const writerConnectionsRoutes = new Elysia()
     }
   })
   .post(
-    '/api/writer_connections/heartbeat',
+    '/api/duckdb_owner_connections/heartbeat',
     ({body}) => {
-      return {data: upsertWriterConnectionHeartbeat(body)}
+      return {data: upsertDuckdbOwnerConnectionHeartbeat(body)}
     },
-    {body: writerConnectionHeartbeatBody},
+    {body: duckdbOwnerConnectionHeartbeatBody},
   )

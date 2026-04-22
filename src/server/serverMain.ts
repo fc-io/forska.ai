@@ -14,6 +14,7 @@ import {articlesRoutes} from './routes/ArticlesRoutes.ts'
 import {comparisonProjectsRoutes} from './routes/ComparisonProjectsRoutes.ts'
 import {dataSourcesImportRoutes} from './routes/DataSourcesImportRoutes.ts'
 import {dataSourcesRoutes} from './routes/DataSourcesRoutes.ts'
+import {duckdbOwnerConnectionsRoutes} from './routes/DuckdbOwnerConnectionsRoutes.ts'
 import {duckdbStudioRoutes} from './routes/DuckdbStudioRoutes.ts'
 import {humanAssessmentRoutes} from './routes/HumanAssessmentRoutes.ts'
 import {importRoutes} from './routes/ImportRoutes.ts'
@@ -31,7 +32,6 @@ import {runtimeAssetsRoutes} from './routes/RuntimeAssetsRoutes.ts'
 import {subprojectsRoutes} from './routes/SubprojectsRoutes.ts'
 import {tokensRoutes} from './routes/TokensRoutes'
 import {usersRoutes} from './routes/UsersRoutes'
-import {writerConnectionsRoutes} from './routes/WriterConnectionsRoutes.ts'
 import {getCodexCliLoginStatus} from './utils/codexCliAuth.ts'
 import {env} from './utils/env'
 import {getAppServerRuntimeConfig} from './utils/getAppServerRuntimeConfig.ts'
@@ -110,7 +110,7 @@ if (shouldCurrentServerRunJudgingLoops()) {
   await getJudgmentJobSqliteService().recoverJudgmentJobLeasesOnStartup()
 }
 
-const shouldWarmCodex = getCurrentServerRole() !== 'maintenance-worker' && getCurrentServerRole() !== 'worker'
+const shouldWarmCodex = getCurrentServerRole() !== 'maintenance-worker'
 
 export const app = new Elysia()
   .use(
@@ -122,7 +122,7 @@ export const app = new Elysia()
     }),
   )
   .use(apiProxyRoutes)
-  .use(writerConnectionsRoutes)
+  .use(duckdbOwnerConnectionsRoutes)
   .use(maintenanceCronRoutes)
   .use(judgingCronRoutes)
   .use(adminInvestigateRoutes)

@@ -21,7 +21,9 @@ const getServerRoleRuntimeServiceName = (serverRole: string | null): RuntimeServ
       ? 'dev-single-server'
       : serverRole === 'auto'
         ? 'single-server'
-        : 'worker-server'
+        : serverRole === 'judge-worker'
+          ? 'judge-worker-server'
+          : 'maintenance-worker-server'
 }
 
 export const getRuntimeServiceNameForServerRole = (

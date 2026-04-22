@@ -13,7 +13,7 @@ import {ensureDuckdbPathDirectory} from './getDuckdbPath.ts'
 import {exitWithRuntimeLogFlush, writeRuntimeFailureLogEvent, writeRuntimeOperatorLogEvent} from './runtimeLogger.ts'
 import {
   ensureCurrentDuckdbOwnerLease,
-  registerWriterDemotionHandler,
+  registerDuckdbOwnerDemotionHandler,
   releaseCurrentDuckdbOwnerLease,
 } from './serverRuntimeRole.ts'
 
@@ -1433,7 +1433,7 @@ export const closeDuckdbService = async () => {
   })
 }
 
-registerWriterDemotionHandler(async () => {
+registerDuckdbOwnerDemotionHandler(async () => {
   if (duckdbServiceState.controlConnection !== null || duckdbServiceState.duckdbInstance !== null) {
     await closeDuckdbService()
   }

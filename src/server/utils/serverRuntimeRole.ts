@@ -3,7 +3,7 @@ import {Effect} from 'effect'
 import {
   acquireDuckdbOwnerLease,
   type DuckdbOwnerLease,
-  getDuckdbOwnerLeaseWriterUrl,
+  getDuckdbOwnerLeaseUrl,
   isDuckdbOwnerLeaseOwnedByCurrentProcess,
   isDuckdbOwnerLeaseProcessAlive,
   isDuckdbOwnerLeaseStale,
@@ -11,6 +11,7 @@ import {
   releaseDuckdbOwnerLease,
   updateDuckdbOwnerLeaseHeartbeat,
 } from './duckdbOwnerLease.ts'
+import {clearUnresponsiveDuckdbOwnerWarnings, recordUnresponsiveDuckdbOwnerWarning} from './duckdbOwnerWarnings.ts'
 import {getEnv} from './env.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {exitWithRuntimeLogFlush} from './runtimeLogger.ts'
@@ -23,14 +24,13 @@ import {
   getEffectiveServerRole,
   isAutoServerRole,
 } from './serverRole.ts'
-import {clearUnresponsiveWriterWarnings, recordUnresponsiveWriterWarning} from './writerWarnings.ts'
 
 type ServerRuntimeState = {
   autoMonitorStarted: boolean
   currentLease: DuckdbOwnerLease | null
   currentRole: EffectiveServerRole
-  lastKnownWriterUrl: string | null
-  writerDemotionHandlers: Array<(reason: string) => Promise<void> | void>
+  lastKnownDuckdbOwnerUrl: string | null
+  duckdbOwnerDemotionHandlers: Array<(reason: string) => Promise<void> | void>
 }
 
 declare global {
@@ -39,11 +39,7 @@ declare global {
 
 const autoServerRolePollIntervalMs = 5_000
 const autoServerRoleLogger = createRateLimitedLogger({windowMs: 30_000})
-const duckdbRoleErrorFragments = [
-  'cannot own DuckDB',
-  'DuckDB owner lease is no longer owned by this process',
-  'DuckDB writer lease is no longer owned by this process',
-]
+const duckdbRoleErrorFragments = ['cannot own DuckDB', 'DuckDB owner lease is no longer owned by this process']
 const getRuntimeEnv = () => {
   return getEnv()
 }
@@ -53,8 +49,8 @@ const getServerRuntimeState = () => {
     autoMonitorStarted: false,
     currentLease: null,
     currentRole: getEffectiveServerRole(getRuntimeEnv().SERVER_ROLE),
-    lastKnownWriterUrl: null,
-    writerDemotionHandlers: [],
+    lastKnownDuckdbOwnerUrl: null,
+    duckdbOwnerDemotionHandlers: [],
   }
 
   return globalThis.__forskaServerRuntimeState
@@ -70,19 +66,21 @@ const getCurrentServerLocalhostUrl = () => {
   return `http://localhost:${getRuntimeEnv().API_SERVER_PORT}`
 }
 
-const getNormalizedWriterUrl = (value: string | null | undefined) => {
+const getNormalizedDuckdbOwnerUrl = (value: string | null | undefined) => {
   const raw = String(value ?? '').trim()
   return raw === '' ? null : raw.endsWith('/') ? raw.slice(0, -1) : raw
 }
 
-const isCurrentServerUrl = (writerUrl: string | null | undefined) => {
-  const normalizedWriterUrl = getNormalizedWriterUrl(writerUrl)
+const isCurrentServerUrl = (duckdbOwnerUrl: string | null | undefined) => {
+  const normalizedDuckdbOwnerUrl = getNormalizedDuckdbOwnerUrl(duckdbOwnerUrl)
 
-  return normalizedWriterUrl === getCurrentServerUrl() || normalizedWriterUrl === getCurrentServerLocalhostUrl()
+  return (
+    normalizedDuckdbOwnerUrl === getCurrentServerUrl() || normalizedDuckdbOwnerUrl === getCurrentServerLocalhostUrl()
+  )
 }
 
-const exitForDuplicateLocalServer = (reason: string, writerUrl: string | null) => {
-  if (!isCurrentServerUrl(writerUrl)) {
+const exitForDuplicateLocalServer = (reason: string, duckdbOwnerUrl: string | null) => {
+  if (!isCurrentServerUrl(duckdbOwnerUrl)) {
     return false
   }
 
@@ -90,21 +88,21 @@ const exitForDuplicateLocalServer = (reason: string, writerUrl: string | null) =
     'server-role:duplicate-local-server',
     `[server] duplicate local API server detected; exiting (${reason})`,
     'warn',
-    {apiServerPort: getRuntimeEnv().API_SERVER_PORT, pid: process.pid, writerUrl},
+    {apiServerPort: getRuntimeEnv().API_SERVER_PORT, duckdbOwnerUrl, pid: process.pid},
   )
   void exitWithRuntimeLogFlush({code: 0})
   return true
 }
 
-const getManualWriterUrl = () => {
-  return getNormalizedWriterUrl(getRuntimeEnv().SERVER_WRITER_URL)
+const getManualDuckdbOwnerUrl = () => {
+  return getNormalizedDuckdbOwnerUrl(getRuntimeEnv().SERVER_DUCKDB_OWNER_URL)
 }
 
-const isWriterDisabledByConfig = () => {
+const isDuckdbOwnerProxyDisabledByConfig = () => {
   return (
     !isAutoServerRole(getRuntimeEnv().SERVER_ROLE)
     && shouldCurrentServerProxyApiToOwner()
-    && getManualWriterUrl() === null
+    && getManualDuckdbOwnerUrl() === null
   )
 }
 
@@ -112,65 +110,67 @@ const setCurrentServerRole = (nextRole: EffectiveServerRole) => {
   serverRuntimeState.currentRole = nextRole
 }
 
-const setLastKnownWriterUrl = (writerUrl: string | null) => {
-  serverRuntimeState.lastKnownWriterUrl = writerUrl
+const setLastKnownDuckdbOwnerUrl = (duckdbOwnerUrl: string | null) => {
+  serverRuntimeState.lastKnownDuckdbOwnerUrl = duckdbOwnerUrl
 }
 
-const isWriterUrlResponsive = async (writerUrl: string) => {
+const isDuckdbOwnerUrlResponsive = async (duckdbOwnerUrl: string) => {
   try {
-    const response = await fetch(`${writerUrl}/api/writer_connections`, {signal: AbortSignal.timeout(1_000)})
+    const response = await fetch(`${duckdbOwnerUrl}/api/duckdb_owner_connections`, {signal: AbortSignal.timeout(1_000)})
     return response.ok
   } catch {
     return false
   }
 }
 
-const runWriterDemotionHandlers = async (reason: string) => {
+const runDuckdbOwnerDemotionHandlers = async (reason: string) => {
   await Promise.all(
-    serverRuntimeState.writerDemotionHandlers.map(async (handler) => {
+    serverRuntimeState.duckdbOwnerDemotionHandlers.map(async (handler) => {
       return handler(reason)
     }),
   )
 }
 
-const shouldPromoteForStaleWriterLease = async (currentLease: DuckdbOwnerLease['metadata']) => {
+const shouldPromoteForStaleDuckdbOwnerLease = async (currentLease: DuckdbOwnerLease['metadata']) => {
   if (!isDuckdbOwnerLeaseStale(currentLease)) {
     return false
   }
 
-  const writerUrl = getDuckdbOwnerLeaseWriterUrl(currentLease)
-  const isResponsive = await isWriterUrlResponsive(writerUrl)
+  const duckdbOwnerUrl = getDuckdbOwnerLeaseUrl(currentLease)
+  const isResponsive = await isDuckdbOwnerUrlResponsive(duckdbOwnerUrl)
 
   if (isResponsive) {
-    autoServerRoleLogger.warn('server-role:stale-writer', '[server] stale writer heartbeat but HTTP still responds', {
-      writerUrl,
-    })
+    autoServerRoleLogger.warn(
+      'server-role:stale-duckdb-owner',
+      '[server] stale DuckDB owner heartbeat but HTTP still responds',
+      {duckdbOwnerUrl},
+    )
   }
 
   return !isResponsive
 }
 
-const recordWriterUnavailableWarning = (params: {
-  reason: 'writer-heartbeat-stale' | 'writer-process-dead'
-  writerUrl: string
+const recordDuckdbOwnerUnavailableWarning = (params: {
+  reason: 'duckdb-owner-heartbeat-stale' | 'duckdb-owner-process-dead'
+  duckdbOwnerUrl: string
 }) => {
-  return recordUnresponsiveWriterWarning({
+  return recordUnresponsiveDuckdbOwnerWarning({
     message:
-      params.reason === 'writer-process-dead'
-        ? `Writer process at ${params.writerUrl} stopped responding and a follower takeover started.`
-        : `Writer at ${params.writerUrl} had a stale heartbeat and did not answer HTTP health checks.`,
+      params.reason === 'duckdb-owner-process-dead'
+        ? `DuckDB owner process at ${params.duckdbOwnerUrl} stopped responding and a follower takeover started.`
+        : `DuckDB owner at ${params.duckdbOwnerUrl} had a stale heartbeat and did not answer HTTP health checks.`,
   })
 }
 
-const readWriterUrlFromLease = async () => {
+const readDuckdbOwnerUrlFromLease = async () => {
   const metadata = await Effect.runPromise(readDuckdbOwnerLease(getRuntimeEnv().DUCKDB_PATH))
-  const writerUrl = metadata === null ? null : getDuckdbOwnerLeaseWriterUrl(metadata)
+  const duckdbOwnerUrl = metadata === null ? null : getDuckdbOwnerLeaseUrl(metadata)
 
-  setLastKnownWriterUrl(writerUrl)
-  return writerUrl
+  setLastKnownDuckdbOwnerUrl(duckdbOwnerUrl)
+  return duckdbOwnerUrl
 }
 
-const promoteAutoServerToWriter = async (reason: string, takeoverLeaseId?: string) => {
+const promoteAutoServerToDuckdbOwner = async (reason: string, takeoverLeaseId?: string) => {
   try {
     const currentLease = await Effect.runPromise(
       acquireDuckdbOwnerLease({
@@ -183,26 +183,26 @@ const promoteAutoServerToWriter = async (reason: string, takeoverLeaseId?: strin
 
     serverRuntimeState.currentLease = currentLease
     setCurrentServerRole('maintenance-worker')
-    setLastKnownWriterUrl(getCurrentServerUrl())
-    clearUnresponsiveWriterWarnings()
+    setLastKnownDuckdbOwnerUrl(getCurrentServerUrl())
+    clearUnresponsiveDuckdbOwnerWarnings()
     autoServerRoleLogger.force('server-role:duckdb-owner', `[server] auto DuckDB owner active (${reason})`, 'log', {
       apiServerPort: getRuntimeEnv().API_SERVER_PORT,
       reason,
     })
     return true
   } catch (error) {
-    const writerUrl = await readWriterUrlFromLease()
+    const duckdbOwnerUrl = await readDuckdbOwnerUrlFromLease()
 
     setCurrentServerRole('api')
-    autoServerRoleLogger.log('server-role:api', '[server] auto follower active', {error, writerUrl})
-    if (exitForDuplicateLocalServer(reason, writerUrl)) {
+    autoServerRoleLogger.log('server-role:api', '[server] auto follower active', {duckdbOwnerUrl, error})
+    if (exitForDuplicateLocalServer(reason, duckdbOwnerUrl)) {
       return false
     }
     return false
   }
 }
 
-const resumeAutoWriterLeaseForCurrentProcess = async () => {
+const resumeAutoDuckdbOwnerLeaseForCurrentProcess = async () => {
   const currentLease = await Effect.runPromise(
     acquireDuckdbOwnerLease({
       apiServerPort: getRuntimeEnv().API_SERVER_PORT,
@@ -213,8 +213,8 @@ const resumeAutoWriterLeaseForCurrentProcess = async () => {
 
   serverRuntimeState.currentLease = currentLease
   setCurrentServerRole('maintenance-worker')
-  setLastKnownWriterUrl(getCurrentServerUrl())
-  clearUnresponsiveWriterWarnings()
+  setLastKnownDuckdbOwnerUrl(getCurrentServerUrl())
+  clearUnresponsiveDuckdbOwnerWarnings()
   autoServerRoleLogger.force(
     'server-role:duckdb-owner-resume',
     '[server] auto DuckDB owner resumed from existing same-process lease',
@@ -223,23 +223,23 @@ const resumeAutoWriterLeaseForCurrentProcess = async () => {
   )
 }
 
-const refreshAutoWriterLease = async () => {
+const refreshAutoDuckdbOwnerLease = async () => {
   if (serverRuntimeState.currentLease === null) {
-    await promoteAutoServerToWriter('writer-missing-lease')
+    await promoteAutoServerToDuckdbOwner('duckdb-owner-missing-lease')
     return
   }
 
   try {
     const nextLease = await Effect.runPromise(updateDuckdbOwnerLeaseHeartbeat(serverRuntimeState.currentLease))
     serverRuntimeState.currentLease = nextLease
-    setLastKnownWriterUrl(getCurrentServerUrl())
-    clearUnresponsiveWriterWarnings()
+    setLastKnownDuckdbOwnerUrl(getCurrentServerUrl())
+    clearUnresponsiveDuckdbOwnerWarnings()
   } catch (error) {
     serverRuntimeState.currentLease = null
     setCurrentServerRole('api')
-    await runWriterDemotionHandlers('lease-lost')
-    await readWriterUrlFromLease()
-    autoServerRoleLogger.warn('server-role:lost-writer', '[server] auto writer lease lost', error)
+    await runDuckdbOwnerDemotionHandlers('lease-lost')
+    await readDuckdbOwnerUrlFromLease()
+    autoServerRoleLogger.warn('server-role:lost-duckdb-owner', '[server] auto DuckDB owner lease lost', error)
   }
 }
 
@@ -247,38 +247,39 @@ const refreshAutoFollowerRole = async () => {
   const currentLease = await Effect.runPromise(readDuckdbOwnerLease(getRuntimeEnv().DUCKDB_PATH))
 
   if (currentLease !== null && isDuckdbOwnerLeaseOwnedByCurrentProcess(currentLease)) {
-    await resumeAutoWriterLeaseForCurrentProcess()
+    await resumeAutoDuckdbOwnerLeaseForCurrentProcess()
     return
   }
 
-  const shouldPromoteForDeadWriter = currentLease !== null && !isDuckdbOwnerLeaseProcessAlive(currentLease)
-  const shouldPromoteForStaleWriter = currentLease !== null && (await shouldPromoteForStaleWriterLease(currentLease))
+  const shouldPromoteForDeadDuckdbOwner = currentLease !== null && !isDuckdbOwnerLeaseProcessAlive(currentLease)
+  const shouldPromoteForStaleDuckdbOwner =
+    currentLease !== null && (await shouldPromoteForStaleDuckdbOwnerLease(currentLease))
 
-  if (currentLease === null || shouldPromoteForDeadWriter || shouldPromoteForStaleWriter) {
+  if (currentLease === null || shouldPromoteForDeadDuckdbOwner || shouldPromoteForStaleDuckdbOwner) {
     const reason =
       currentLease === null
         ? 'lease-missing'
-        : shouldPromoteForDeadWriter
-          ? 'writer-process-dead'
-          : 'writer-heartbeat-stale'
+        : shouldPromoteForDeadDuckdbOwner
+          ? 'duckdb-owner-process-dead'
+          : 'duckdb-owner-heartbeat-stale'
 
     if (currentLease !== null && reason !== 'lease-missing') {
-      recordWriterUnavailableWarning({reason, writerUrl: getDuckdbOwnerLeaseWriterUrl(currentLease)})
+      recordDuckdbOwnerUnavailableWarning({reason, duckdbOwnerUrl: getDuckdbOwnerLeaseUrl(currentLease)})
     }
 
-    await promoteAutoServerToWriter(reason, currentLease?.leaseId)
+    await promoteAutoServerToDuckdbOwner(reason, currentLease?.leaseId)
     return
   }
 
   setCurrentServerRole('api')
-  setLastKnownWriterUrl(getDuckdbOwnerLeaseWriterUrl(currentLease))
+  setLastKnownDuckdbOwnerUrl(getDuckdbOwnerLeaseUrl(currentLease))
 
-  if (exitForDuplicateLocalServer('writer-already-active-on-local-port', getDuckdbOwnerLeaseWriterUrl(currentLease))) {
+  if (exitForDuplicateLocalServer('duckdb-owner-already-active-on-local-port', getDuckdbOwnerLeaseUrl(currentLease))) {
     return
   }
 
-  if (await isWriterUrlResponsive(getDuckdbOwnerLeaseWriterUrl(currentLease))) {
-    clearUnresponsiveWriterWarnings()
+  if (await isDuckdbOwnerUrlResponsive(getDuckdbOwnerLeaseUrl(currentLease))) {
+    clearUnresponsiveDuckdbOwnerWarnings()
   }
 }
 
@@ -288,7 +289,7 @@ const syncAutoServerRole = async () => {
   }
 
   if (canCurrentServerOwnDuckdb()) {
-    await refreshAutoWriterLease()
+    await refreshAutoDuckdbOwnerLease()
     return
   }
 
@@ -304,7 +305,9 @@ export const initializeServerRuntimeRole = async () => {
   const env = getRuntimeEnv()
 
   setCurrentServerRole(getEffectiveServerRole(env.SERVER_ROLE))
-  setLastKnownWriterUrl(canServerRoleOwnDuckdb(env.SERVER_ROLE) ? getCurrentServerUrl() : getManualWriterUrl())
+  setLastKnownDuckdbOwnerUrl(
+    canServerRoleOwnDuckdb(env.SERVER_ROLE) ? getCurrentServerUrl() : getManualDuckdbOwnerUrl(),
+  )
 }
 
 export const startServerRuntimeRoleMonitor = () => {
@@ -347,7 +350,7 @@ export const canCurrentServerRunJudgingLoops = shouldCurrentServerRunJudgingLoop
 
 export const shouldCurrentServerRunJudgingWork = shouldCurrentServerRunJudgingLoops
 
-export const shouldCurrentServerRunWriterWork = () => {
+export const shouldCurrentServerRunDuckdbOwnerWork = () => {
   return canCurrentServerOwnDuckdb()
 }
 
@@ -357,9 +360,7 @@ export const shouldCurrentServerProxyApiToOwner = () => {
 
 export const shouldCurrentServerProxyApiToDuckdbOwner = shouldCurrentServerProxyApiToOwner
 
-export const shouldCurrentServerProxyApiToWriter = shouldCurrentServerProxyApiToOwner
-
-export const isExpectedWriterRoleLossError = (error: unknown) => {
+export const isExpectedDuckdbOwnerRoleLossError = (error: unknown) => {
   const message =
     error instanceof Error
       ? error.message
@@ -372,11 +373,11 @@ export const isExpectedWriterRoleLossError = (error: unknown) => {
   })
 }
 
-export const isCurrentServerWriterDisabled = () => {
-  return isWriterDisabledByConfig()
+export const isCurrentServerDuckdbOwnerProxyDisabled = () => {
+  return isDuckdbOwnerProxyDisabledByConfig()
 }
 
-export const getCurrentServerWriterUrl = async () => {
+export const getCurrentServerDuckdbOwnerUrl = async () => {
   if (canCurrentServerOwnDuckdb()) {
     return getCurrentServerUrl()
   }
@@ -386,23 +387,19 @@ export const getCurrentServerWriterUrl = async () => {
   }
 
   if (!isAutoServerRole(getRuntimeEnv().SERVER_ROLE)) {
-    const manualWriterUrl = getManualWriterUrl()
+    const manualDuckdbOwnerUrl = getManualDuckdbOwnerUrl()
 
-    setLastKnownWriterUrl(manualWriterUrl)
-    return manualWriterUrl
+    setLastKnownDuckdbOwnerUrl(manualDuckdbOwnerUrl)
+    return manualDuckdbOwnerUrl
   }
 
   await syncAutoServerRole()
-  return canCurrentServerOwnDuckdb() ? null : readWriterUrlFromLease()
+  return canCurrentServerOwnDuckdb() ? null : readDuckdbOwnerUrlFromLease()
 }
 
-export const getCurrentServerDuckdbOwnerUrl = getCurrentServerWriterUrl
-
-export const getKnownWriterUrl = () => {
-  return canCurrentServerOwnDuckdb() ? getCurrentServerUrl() : serverRuntimeState.lastKnownWriterUrl
+export const getKnownDuckdbOwnerUrl = () => {
+  return canCurrentServerOwnDuckdb() ? getCurrentServerUrl() : serverRuntimeState.lastKnownDuckdbOwnerUrl
 }
-
-export const getKnownDuckdbOwnerUrl = getKnownWriterUrl
 
 export const ensureCurrentDuckdbOwnerLease = async () => {
   if (!canCurrentServerOwnDuckdb()) {
@@ -422,7 +419,7 @@ export const ensureCurrentDuckdbOwnerLease = async () => {
   )
 
   serverRuntimeState.currentLease = nextLease
-  setLastKnownWriterUrl(getCurrentServerUrl())
+  setLastKnownDuckdbOwnerUrl(getCurrentServerUrl())
   return nextLease
 }
 
@@ -437,8 +434,8 @@ export const releaseCurrentDuckdbOwnerLease = async () => {
   await Effect.runPromise(releaseDuckdbOwnerLease(currentLease))
 }
 
-export const registerWriterDemotionHandler = (handler: (reason: string) => Promise<void> | void) => {
-  serverRuntimeState.writerDemotionHandlers = [...serverRuntimeState.writerDemotionHandlers, handler]
+export const registerDuckdbOwnerDemotionHandler = (handler: (reason: string) => Promise<void> | void) => {
+  serverRuntimeState.duckdbOwnerDemotionHandlers = [...serverRuntimeState.duckdbOwnerDemotionHandlers, handler]
 }
 
 export const resetServerRuntimeRoleForTests = () => {
@@ -447,21 +444,21 @@ export const resetServerRuntimeRoleForTests = () => {
   serverRuntimeState.autoMonitorStarted = false
   serverRuntimeState.currentLease = null
   serverRuntimeState.currentRole = getEffectiveServerRole(env.SERVER_ROLE)
-  serverRuntimeState.lastKnownWriterUrl = null
-  serverRuntimeState.writerDemotionHandlers = []
+  serverRuntimeState.lastKnownDuckdbOwnerUrl = null
+  serverRuntimeState.duckdbOwnerDemotionHandlers = []
 }
 
 export const withCurrentServerRoleOverride = async <_T>(nextRole: EffectiveServerRole, work: () => Promise<_T>) => {
   const previousRole = serverRuntimeState.currentRole
-  const previousWriterUrl = serverRuntimeState.lastKnownWriterUrl
+  const previousDuckdbOwnerUrl = serverRuntimeState.lastKnownDuckdbOwnerUrl
 
   setCurrentServerRole(nextRole)
-  setLastKnownWriterUrl(canServerRoleOwnDuckdb(nextRole) ? getCurrentServerUrl() : previousWriterUrl)
+  setLastKnownDuckdbOwnerUrl(canServerRoleOwnDuckdb(nextRole) ? getCurrentServerUrl() : previousDuckdbOwnerUrl)
 
   try {
     return await work()
   } finally {
     setCurrentServerRole(previousRole)
-    setLastKnownWriterUrl(previousWriterUrl)
+    setLastKnownDuckdbOwnerUrl(previousDuckdbOwnerUrl)
   }
 }

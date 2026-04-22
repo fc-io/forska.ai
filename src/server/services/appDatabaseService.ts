@@ -1,3 +1,4 @@
+import {clearDuckdbOwnerWriteFailure, recordDuckdbOwnerWriteFailure} from '../utils/duckdbOwnerWarnings.ts'
 import {
   closeDuckdbService,
   createDuckdbSnapshot,
@@ -14,7 +15,6 @@ import {
   runDuckdbStatement,
   runDuckdbTransaction,
 } from '../utils/duckdbService.ts'
-import {clearWriterWriteFailure, recordWriterWriteFailure} from '../utils/writerWarnings.ts'
 
 type AppDatabaseMaintenanceCommand = 'checkpoint' | 'force_checkpoint'
 type AppDatabaseSnapshot = DuckdbSnapshot
@@ -71,13 +71,13 @@ const resetAppDatabaseAppendMetricsState = () => {
   appDatabaseAppendMetricsState.rowsSkipped = 0
 }
 
-const withWriterWriteTracking = async <_T>(action: string, operation: () => Promise<_T>): Promise<_T> => {
+const withDuckdbOwnerWriteTracking = async <_T>(action: string, operation: () => Promise<_T>): Promise<_T> => {
   try {
     const result = await operation()
-    clearWriterWriteFailure()
+    clearDuckdbOwnerWriteFailure()
     return result
   } catch (error) {
-    recordWriterWriteFailure({action, error})
+    recordDuckdbOwnerWriteFailure({action, error})
     throw error
   }
 }
@@ -192,7 +192,7 @@ const appDatabaseService = {
   appendJudgments: async (rows: JudgmentInsertRow[]): Promise<AppendResult> => {
     return rows.length === 0
       ? {attempted: 0, inserted: 0, skipped: 0}
-      : withWriterWriteTracking('appendJudgments', async () => {
+      : withDuckdbOwnerWriteTracking('appendJudgments', async () => {
           appDatabaseAppendMetricsState.lastStartedAt = new Date().toISOString()
           const insertedRows = await runDuckdbAppendJsonQuery<{id: string}>(
             getAppendJudgmentsSql(rows),
@@ -215,30 +215,30 @@ const appDatabaseService = {
     resetAppDatabaseAppendMetricsState()
   },
   createSnapshot: async () => {
-    return withWriterWriteTracking('createSnapshot', createDuckdbSnapshot)
+    return withDuckdbOwnerWriteTracking('createSnapshot', createDuckdbSnapshot)
   },
   deleteSnapshot: deleteDuckdbSnapshot,
   getAppendMetrics: getAppDatabaseAppendMetrics,
   getRuntimeConfig: getDuckdbRuntimeConfig,
   maintenance: async (command: AppDatabaseMaintenanceCommand) => {
-    await withWriterWriteTracking(`maintenance:${command}`, () => {
+    await withDuckdbOwnerWriteTracking(`maintenance:${command}`, () => {
       return runDuckdbMaintenance(command)
     })
   },
   queryJson: runDuckdbJsonQuery,
   queryJsonBackground: runDuckdbBackgroundJsonQuery,
   run: async (statement: string) => {
-    await withWriterWriteTracking('run', () => {
+    await withDuckdbOwnerWriteTracking('run', () => {
       return runDuckdbStatement(statement)
     })
   },
   runBackground: async (statement: string) => {
-    await withWriterWriteTracking('runBackground', () => {
+    await withDuckdbOwnerWriteTracking('runBackground', () => {
       return runDuckdbBackgroundStatement(statement)
     })
   },
   transaction: async (operation: Parameters<typeof runDuckdbTransaction>[0]) => {
-    return withWriterWriteTracking('transaction', () => {
+    return withDuckdbOwnerWriteTracking('transaction', () => {
       return runDuckdbTransaction(operation)
     })
   },

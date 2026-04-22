@@ -6,9 +6,9 @@ export type RuntimeProfileMode =
   | 'app'
   | 'app-server'
   | 'duckdb-migration'
+  | 'maintenance-only-server'
   | 'server-stack'
   | 'stacked-server'
-  | 'worker-only-server'
 type RuntimeProfileServerRole = 'api' | 'maintenance-worker'
 
 export type RuntimeProfileCommandOptions = {mode: RuntimeProfileMode; profileName: RuntimeProfileName}
@@ -69,7 +69,7 @@ const runtimeProfileModes: Record<RuntimeProfileMode, RuntimeProfileCommandConfi
       return {...getRuntimeProfileBaseEnv(profileName), FORSKA_RUNTIME_SERVICE: 'dev-single-server'}
     },
   },
-  'worker-only-server': {
+  'maintenance-only-server': {
     command: ['bun', 'run', '--watch', 'src/server/index.ts'],
     env: (commandOptions) => {
       return getRuntimeProfileServerEnv(commandOptions, 'maintenance-worker')
@@ -101,15 +101,15 @@ const getMode = (): RuntimeProfileMode => {
     || mode === 'app'
     || mode === 'app-server'
     || mode === 'duckdb-migration'
+    || mode === 'maintenance-only-server'
     || mode === 'server-stack'
     || mode === 'stacked-server'
-    || mode === 'worker-only-server'
   ) {
     return mode
   }
 
   throw new Error(
-    `Expected --mode api-only-server|app|app-server|duckdb-migration|server-stack|stacked-server|worker-only-server, received ${String(mode)}`,
+    `Expected --mode api-only-server|app|app-server|duckdb-migration|maintenance-only-server|server-stack|stacked-server, received ${String(mode)}`,
   )
 }
 

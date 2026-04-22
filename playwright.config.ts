@@ -11,7 +11,7 @@ const smokeEnv = {
   RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
   RUN_SERVER_FULL_TEXT_FETCHING: 'false',
   SERVER_ROLE: 'dev-single',
-  SERVER_WRITER_URL: '',
+  SERVER_DUCKDB_OWNER_URL: '',
   VITE_PORT: String(appServerPort),
 }
 

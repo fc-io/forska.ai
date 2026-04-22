@@ -7,7 +7,7 @@ import {expect, test} from 'bun:test'
 test('auto follower exits when another local process already owns the same writer port', () => {
   const tempDirectory = mkdtempSync('/tmp/f1-server-runtime-role-')
   const duckdbPath = join(tempDirectory, 'test.duckdb')
-  const leasePath = `${duckdbPath}.writer.lock`
+  const leasePath = `${duckdbPath}.duckdb-owner.lock`
   const now = new Date().toISOString()
 
   writeFileSync(
@@ -49,7 +49,7 @@ test('auto follower exits when another local process already owns the same write
           RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
           RUN_SERVER_FULL_TEXT_FETCHING: 'false',
           SERVER_ROLE: 'auto',
-          SERVER_WRITER_URL: '',
+          SERVER_DUCKDB_OWNER_URL: '',
           VITE_PORT: '3000',
         },
       },
@@ -76,7 +76,7 @@ test('auto role resumes writer when the existing lease belongs to the current pr
           const {hostname} = await import('node:os')
           const now = new Date().toISOString()
           const duckdbPath = process.env.DUCKDB_PATH
-          const leasePath = duckdbPath + '.writer.lock'
+          const leasePath = duckdbPath + '.duckdb-owner.lock'
           const lease = {
             acquiredAt: now,
             apiServerPort: 3999,
@@ -105,7 +105,7 @@ test('auto role resumes writer when the existing lease belongs to the current pr
           RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
           RUN_SERVER_FULL_TEXT_FETCHING: 'false',
           SERVER_ROLE: 'auto',
-          SERVER_WRITER_URL: '',
+          SERVER_DUCKDB_OWNER_URL: '',
           VITE_PORT: '3000',
         },
       },

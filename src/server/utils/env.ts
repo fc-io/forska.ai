@@ -11,8 +11,8 @@ const envShape = arktype({
   DUCKDB_MEMORY_LIMIT: 'string',
   DUCKDB_APPEND_LANE_COUNT: 'number | string.integer.parse | null | undefined',
   DUCKDB_TEMP_DIRECTORY: 'string | null | undefined',
-  SERVER_ROLE: arktype('"api" | "maintenance-worker" | "judge-worker" | "auto" | "dev-single" | "writer" | "worker"'),
-  SERVER_WRITER_URL: 'string | null | undefined',
+  SERVER_ROLE: arktype('"api" | "maintenance-worker" | "judge-worker" | "auto" | "dev-single"'),
+  SERVER_DUCKDB_OWNER_URL: 'string | null | undefined',
   VITE_PORT: 'number | string.integer.parse',
   API_SERVER_PORT: 'number | string.integer.parse',
   RUN_SERVER_FULL_TEXT_FETCHING: arktype('"true" | "false" | boolean').pipe((v) => {
@@ -58,8 +58,8 @@ export const loadEnv = ({
   if (merged.SERVER_ROLE == null || String(merged.SERVER_ROLE).trim() === '') {
     ;(merged as Record<string, string>).SERVER_ROLE = 'auto'
   }
-  if (merged.SERVER_WRITER_URL == null || String(merged.SERVER_WRITER_URL).trim() === '') {
-    ;(merged as Record<string, string>).SERVER_WRITER_URL = ''
+  if (merged.SERVER_DUCKDB_OWNER_URL == null || String(merged.SERVER_DUCKDB_OWNER_URL).trim() === '') {
+    ;(merged as Record<string, string>).SERVER_DUCKDB_OWNER_URL = ''
   }
   if (merged.VITE_PORT == null || String(merged.VITE_PORT).trim() === '') {
     ;(merged as Record<string, string>).VITE_PORT = String(DEFAULT_VITE_PORT)

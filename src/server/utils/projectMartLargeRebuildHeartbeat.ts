@@ -4,7 +4,7 @@ import {
   type ProjectMartLargeRebuildHeartbeatConfig,
 } from './projectMartLargeRebuildTuning.ts'
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
-import {registerWriterDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
+import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
 
 type ProjectMartLargeRebuildHeartbeatOptions = {batchSize?: number; maxCyclesPerWake?: number; pollIntervalMs?: number}
 
@@ -126,7 +126,7 @@ export const startProjectMartLargeRebuildHeartbeat = (options: ProjectMartLargeR
     }
   }
 
-  registerWriterDemotionHandler(() => {
+  registerDuckdbOwnerDemotionHandler(() => {
     stop()
   })
   process.once('exit', stop)

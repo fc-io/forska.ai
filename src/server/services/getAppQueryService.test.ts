@@ -86,7 +86,7 @@ test('getAppQueryService reads native DuckDB app tables', async () => {
       ],
       {
         cwd: process.cwd(),
-        env: {...process.env, API_SERVER_PORT: '39991', DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'writer'},
+        env: {...process.env, API_SERVER_PORT: '39991', DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker'},
       },
     )
 

@@ -67,8 +67,8 @@ afterAll(async () => {
   await getRealSqliteService?.().closeAll()
   await closeDatabase?.()
   rmSync(tempDbPath, {force: true})
-  rmSync(`${tempDbPath}.writer.history.json`, {force: true})
-  rmSync(`${tempDbPath}.writer.lock`, {force: true})
+  rmSync(`${tempDbPath}.duckdb-owner.history.json`, {force: true})
+  rmSync(`${tempDbPath}.duckdb-owner.lock`, {force: true})
   rmSync(tempJobDir, {force: true, recursive: true})
 })
 

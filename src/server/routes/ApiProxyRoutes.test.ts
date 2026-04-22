@@ -82,16 +82,16 @@ const startServer = (envValues: Record<string, string>) => {
   })
 }
 
-test('api role proxies API requests to writer server', async () => {
-  const writerPort = 34991
+test('api role proxies API requests to DuckDB owner server', async () => {
+  const ownerPort = 34991
   const apiPort = 34992
   const duckdbPath = `/tmp/f1-duckdb-api-proxy-${Date.now()}.duckdb`
-  const writerServer = startServer({
-    API_SERVER_PORT: String(writerPort),
+  const ownerServer = startServer({
+    API_SERVER_PORT: String(ownerPort),
     DUCKDB_PATH: duckdbPath,
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
     RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-    SERVER_ROLE: 'writer',
+    SERVER_ROLE: 'maintenance-worker',
     VITE_PORT: '4311',
   })
   const apiServer = startServer({
@@ -100,12 +100,12 @@ test('api role proxies API requests to writer server', async () => {
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
     RUN_SERVER_FULL_TEXT_FETCHING: 'false',
     SERVER_ROLE: 'api',
-    SERVER_WRITER_URL: `http://127.0.0.1:${writerPort}`,
+    SERVER_DUCKDB_OWNER_URL: `http://127.0.0.1:${ownerPort}`,
     VITE_PORT: '4312',
   })
 
   try {
-    await waitForServer(writerPort, 10_000)
+    await waitForServer(ownerPort, 10_000)
     await waitForServer(apiPort, 10_000)
 
     const response = await fetch(`http://127.0.0.1:${apiPort}/api/duckdbStudioSnapshots`, {method: 'POST'})
@@ -120,13 +120,13 @@ test('api role proxies API requests to writer server', async () => {
     removeFileIfExists(`${body.data.snapshotPath}.wal`)
   } finally {
     await stopServer(apiServer)
-    await stopServer(writerServer)
+    await stopServer(ownerServer)
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
   }
 })
 
-test('api role rejects self-proxy writer URLs that point at the same port via a different local alias', async () => {
+test('api role rejects self-proxy DuckDB owner URLs that point at the same port via a different local alias', async () => {
   const apiPort = 34990
   const duckdbPath = `/tmp/f1-api-self-proxy-${Date.now()}.duckdb`
   const apiServer = startServer({
@@ -135,29 +135,29 @@ test('api role rejects self-proxy writer URLs that point at the same port via a 
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
     RUN_SERVER_FULL_TEXT_FETCHING: 'false',
     SERVER_ROLE: 'api',
-    SERVER_WRITER_URL: `http://0.0.0.0:${apiPort}`,
+    SERVER_DUCKDB_OWNER_URL: `http://0.0.0.0:${apiPort}`,
     VITE_PORT: '4310',
   })
 
   try {
     await waitForServer(apiPort, 10_000)
 
-    const response = await fetch(`http://127.0.0.1:${apiPort}/api/writer_connections`, {
+    const response = await fetch(`http://127.0.0.1:${apiPort}/api/duckdb_owner_connections`, {
       signal: AbortSignal.timeout(5_000),
     })
     const body = (await response.json()) as {error?: string}
 
     expect(response.ok).toBe(false)
-    expect(body.error ?? '').toContain('Writer proxy target must not point to this same API server')
+    expect(body.error ?? '').toContain('DuckDB owner proxy target must not point to this same API server')
   } finally {
     await stopServer(apiServer)
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
-test('api role rejects self-proxy writer URLs that use the machine hostname alias', async () => {
+test('api role rejects self-proxy DuckDB owner URLs that use the machine hostname alias', async () => {
   const apiPort = 34989
   const duckdbPath = `/tmp/f1-api-self-proxy-hostname-${Date.now()}.duckdb`
   const machineHostname = hostname().trim()
@@ -172,38 +172,38 @@ test('api role rejects self-proxy writer URLs that use the machine hostname alia
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
     RUN_SERVER_FULL_TEXT_FETCHING: 'false',
     SERVER_ROLE: 'api',
-    SERVER_WRITER_URL: `http://${machineHostname}:${apiPort}`,
+    SERVER_DUCKDB_OWNER_URL: `http://${machineHostname}:${apiPort}`,
     VITE_PORT: '4309',
   })
 
   try {
     await waitForServer(apiPort, 10_000)
 
-    const response = await fetch(`http://127.0.0.1:${apiPort}/api/writer_connections`, {
+    const response = await fetch(`http://127.0.0.1:${apiPort}/api/duckdb_owner_connections`, {
       signal: AbortSignal.timeout(5_000),
     })
     const body = (await response.json()) as {error?: string}
 
     expect(response.ok).toBe(false)
-    expect(body.error ?? '').toContain('Writer proxy target must not point to this same API server')
+    expect(body.error ?? '').toContain('DuckDB owner proxy target must not point to this same API server')
   } finally {
     await stopServer(apiServer)
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
-test('writer connections endpoint lists follower api processes', async () => {
-  const writerPort = 34993
+test('DuckDB owner connections endpoint lists follower api processes', async () => {
+  const ownerPort = 34993
   const apiPort = 34994
-  const duckdbPath = `/tmp/f1-writer-connections-${Date.now()}.duckdb`
-  const writerServer = startServer({
-    API_SERVER_PORT: String(writerPort),
+  const duckdbPath = `/tmp/f1-duckdb-owner-connections-${Date.now()}.duckdb`
+  const ownerServer = startServer({
+    API_SERVER_PORT: String(ownerPort),
     DUCKDB_PATH: duckdbPath,
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
     RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-    SERVER_ROLE: 'writer',
+    SERVER_ROLE: 'maintenance-worker',
     VITE_PORT: '4313',
   })
   const apiServer = startServer({
@@ -212,15 +212,15 @@ test('writer connections endpoint lists follower api processes', async () => {
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
     RUN_SERVER_FULL_TEXT_FETCHING: 'false',
     SERVER_ROLE: 'api',
-    SERVER_WRITER_URL: `http://127.0.0.1:${writerPort}`,
+    SERVER_DUCKDB_OWNER_URL: `http://127.0.0.1:${ownerPort}`,
     VITE_PORT: '4314',
   })
 
   try {
-    await waitForServer(writerPort, 10_000)
+    await waitForServer(ownerPort, 10_000)
     await waitForServer(apiPort, 10_000)
 
-    const response = await fetch(`http://127.0.0.1:${apiPort}/api/writer_connections`)
+    const response = await fetch(`http://127.0.0.1:${apiPort}/api/duckdb_owner_connections`)
     const body = (await response.json()) as {
       data: {
         followers: Array<{
@@ -229,7 +229,7 @@ test('writer connections endpoint lists follower api processes', async () => {
           lastRequestPath: string | null
           proxyCount: number
         }>
-        writer: {apiServerPort: number}
+        owner: {apiServerPort: number}
       }
     }
     const follower = body.data.followers.find((row) => {
@@ -237,58 +237,58 @@ test('writer connections endpoint lists follower api processes', async () => {
     })
 
     expect(response.ok).toBe(true)
-    expect(body.data.writer.apiServerPort).toBe(writerPort)
+    expect(body.data.owner.apiServerPort).toBe(ownerPort)
     expect(follower?.lastHeartbeatAt ?? null).not.toBe(null)
-    expect(follower?.lastRequestPath ?? null).toBe('/api/writer_connections')
+    expect(follower?.lastRequestPath ?? null).toBe('/api/duckdb_owner_connections')
     expect((follower?.proxyCount ?? 0) > 0).toBe(true)
   } finally {
     await stopServer(apiServer)
-    await stopServer(writerServer)
+    await stopServer(ownerServer)
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
   }
 })
 
-test('api server without writer reports writer disabled warning', async () => {
+test('api server without DuckDB owner reports owner proxy disabled warning', async () => {
   const apiPort = 34999
-  const duckdbPath = `/tmp/f1-writer-disabled-${Date.now()}.duckdb`
+  const duckdbPath = `/tmp/f1-owner-proxy-disabled-${Date.now()}.duckdb`
   const apiServer = startServer({
     API_SERVER_PORT: String(apiPort),
     DUCKDB_PATH: duckdbPath,
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
     RUN_SERVER_FULL_TEXT_FETCHING: 'false',
     SERVER_ROLE: 'api',
-    SERVER_WRITER_URL: '',
+    SERVER_DUCKDB_OWNER_URL: '',
     VITE_PORT: '4319',
   })
 
   try {
     await waitForServer(apiPort, 10_000)
 
-    const response = await fetch(`http://127.0.0.1:${apiPort}/api/writer_connections`)
+    const response = await fetch(`http://127.0.0.1:${apiPort}/api/duckdb_owner_connections`)
     const body = (await response.json()) as {
-      data: {warnings: Array<{kind: string; message: string}>; writer: null | {apiServerPort: number}}
+      data: {warnings: Array<{kind: string; message: string}>; owner: null | {apiServerPort: number}}
     }
 
     expect(response.ok).toBe(true)
-    expect(body.data.writer).toBe(null)
+    expect(body.data.owner).toBe(null)
     expect(
       body.data.warnings.some((warning) => {
-        return warning.kind === 'writer-disabled' && warning.message.includes('DuckDB owner proxying is disabled')
+        return warning.kind === 'owner-proxy-disabled' && warning.message.includes('DuckDB owner proxying is disabled')
       }),
     ).toBe(true)
   } finally {
     await stopServer(apiServer)
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
-test('auto role elects one writer and follower takes over after writer exit', async () => {
+test('auto role elects one DuckDB owner and follower takes over after owner exit', async () => {
   const firstPort = 34995
   const secondPort = 34996
-  const duckdbPath = `/tmp/f1-auto-writer-${Date.now()}.duckdb`
+  const duckdbPath = `/tmp/f1-auto-owner-${Date.now()}.duckdb`
   const firstServer = startServer({
     API_SERVER_PORT: String(firstPort),
     DUCKDB_PATH: duckdbPath,
@@ -313,28 +313,28 @@ test('auto role elects one writer and follower takes over after writer exit', as
     try {
       await waitForServer(secondPort, 10_000)
 
-      const initialResponse = await fetch(`http://127.0.0.1:${secondPort}/api/writer_connections`)
+      const initialResponse = await fetch(`http://127.0.0.1:${secondPort}/api/duckdb_owner_connections`)
       const initialBody = (await initialResponse.json()) as {
-        data: {history: Array<{apiServerPort: number; event: 'acquired' | 'released'}>; writer: {apiServerPort: number}}
+        data: {history: Array<{apiServerPort: number; event: 'acquired' | 'released'}>; owner: {apiServerPort: number}}
       }
 
       expect(initialResponse.ok).toBe(true)
-      expect(initialBody.data.writer.apiServerPort).toBe(firstPort)
+      expect(initialBody.data.owner.apiServerPort).toBe(firstPort)
 
       await stopServer(firstServer)
 
       await waitForCondition(async () => {
-        const response = await fetch(`http://127.0.0.1:${secondPort}/api/writer_connections`)
+        const response = await fetch(`http://127.0.0.1:${secondPort}/api/duckdb_owner_connections`)
         const body = (await response.json()) as {
           data: {
             history: Array<{apiServerPort: number; event: 'acquired' | 'released'}>
-            writer: {apiServerPort: number}
+            owner: {apiServerPort: number}
           }
         }
 
         return (
           response.ok
-          && body.data.writer.apiServerPort === secondPort
+          && body.data.owner.apiServerPort === secondPort
           && body.data.history.some((event) => {
             return event.apiServerPort === firstPort && event.event === 'acquired'
           })
@@ -352,29 +352,29 @@ test('auto role elects one writer and follower takes over after writer exit', as
     }
 
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
-test('auto follower does not take over from a responsive writer with a stale heartbeat', async () => {
-  const writerPort = 34997
+test('auto follower does not take over from a responsive owner with a stale heartbeat', async () => {
+  const ownerPort = 34997
   const followerPort = 34998
   const duckdbPath = `/tmp/f1-auto-stale-heartbeat-${Date.now()}.duckdb`
-  const leasePath = `${duckdbPath}.writer.lock`
-  const writerServer = startServer({
-    API_SERVER_PORT: String(writerPort),
+  const leasePath = `${duckdbPath}.duckdb-owner.lock`
+  const ownerServer = startServer({
+    API_SERVER_PORT: String(ownerPort),
     DUCKDB_PATH: duckdbPath,
     RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
     RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-    SERVER_ROLE: 'writer',
+    SERVER_ROLE: 'maintenance-worker',
     VITE_PORT: '4317',
   })
 
   try {
-    await waitForServer(writerPort, 10_000)
+    await waitForServer(ownerPort, 10_000)
 
-    const snapshotResponse = await fetch(`http://127.0.0.1:${writerPort}/api/duckdbStudioSnapshots`, {method: 'POST'})
+    const snapshotResponse = await fetch(`http://127.0.0.1:${ownerPort}/api/duckdbStudioSnapshots`, {method: 'POST'})
     const snapshotBody = (await snapshotResponse.json()) as {data: {snapshotPath: string}; error?: string}
 
     expect(snapshotResponse.ok).toBe(true)
@@ -402,13 +402,13 @@ test('auto follower does not take over from a responsive writer with a stale hea
         setTimeout(resolve, 300)
       })
 
-      const response = await fetch(`http://127.0.0.1:${followerPort}/api/writer_connections`)
+      const response = await fetch(`http://127.0.0.1:${followerPort}/api/duckdb_owner_connections`)
       const body = (await response.json()) as {
-        data: {history: Array<{apiServerPort: number; event: 'acquired' | 'released'}>; writer: {apiServerPort: number}}
+        data: {history: Array<{apiServerPort: number; event: 'acquired' | 'released'}>; owner: {apiServerPort: number}}
       }
 
       expect(response.ok).toBe(true)
-      expect(body.data.writer.apiServerPort).toBe(writerPort)
+      expect(body.data.owner.apiServerPort).toBe(ownerPort)
       expect(
         body.data.history.some((event) => {
           return event.apiServerPort === followerPort && event.event === 'acquired'
@@ -418,17 +418,17 @@ test('auto follower does not take over from a responsive writer with a stale hea
       await stopServer(followerServer)
     }
   } finally {
-    await stopServer(writerServer)
+    await stopServer(ownerServer)
     removeFileIfExists(duckdbPath)
     removeFileIfExists(leasePath)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
-test('auto role takes over a stale unreachable legacy writer lease on startup', async () => {
+test('auto role takes over a stale unreachable owner lease on startup', async () => {
   const serverPort = 34999
   const duckdbPath = `/tmp/f1-auto-stale-legacy-${Date.now()}.duckdb`
-  const leasePath = `${duckdbPath}.writer.lock`
+  const leasePath = `${duckdbPath}.duckdb-owner.lock`
 
   writeFileSync(
     leasePath,
@@ -442,7 +442,7 @@ test('auto role takes over a stale unreachable legacy writer lease on startup', 
         machineFingerprint: 'legacy-machine-fingerprint',
         leaseId: 'stale-legacy-lease-id',
         pid: 79362,
-        serverRole: 'writer',
+        serverRole: 'maintenance-worker',
       },
       null,
       2,
@@ -461,13 +461,13 @@ test('auto role takes over a stale unreachable legacy writer lease on startup', 
   try {
     await waitForServer(serverPort, 10_000)
 
-    const response = await fetch(`http://127.0.0.1:${serverPort}/api/writer_connections`)
+    const response = await fetch(`http://127.0.0.1:${serverPort}/api/duckdb_owner_connections`)
     const body = (await response.json()) as {
-      data: {history: Array<{apiServerPort: number; event: 'acquired' | 'released'}>; writer: {apiServerPort: number}}
+      data: {history: Array<{apiServerPort: number; event: 'acquired' | 'released'}>; owner: {apiServerPort: number}}
     }
 
     expect(response.ok).toBe(true)
-    expect(body.data.writer.apiServerPort).toBe(serverPort)
+    expect(body.data.owner.apiServerPort).toBe(serverPort)
     expect(
       body.data.history.some((event) => {
         return event.apiServerPort === serverPort && event.event === 'acquired'
@@ -477,6 +477,6 @@ test('auto role takes over a stale unreachable legacy writer lease on startup', 
     await stopServer(server)
     removeFileIfExists(duckdbPath)
     removeFileIfExists(leasePath)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })

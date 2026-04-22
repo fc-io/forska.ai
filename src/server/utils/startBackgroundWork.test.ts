@@ -20,7 +20,7 @@ const getLastJsonLine = (value: string) => {
   return lastLine
 }
 
-test('startBackgroundWork starts role monitor, writer heartbeat, and mart refresh heartbeat', () => {
+test('startBackgroundWork starts role monitor, owner heartbeat, and mart refresh heartbeat', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -35,7 +35,7 @@ test('startBackgroundWork starts role monitor, writer heartbeat, and mart refres
         const startBackgroundWorkModulePath = getModulePath('./src/server/utils/startBackgroundWork.ts')
         const martRefreshDrainHeartbeatModulePath = getModulePath('./src/server/utils/martRefreshDrainHeartbeat.ts')
         const serverRuntimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
-        const writerConnectionHeartbeatModulePath = getModulePath('./src/server/utils/writerConnectionHeartbeat.ts')
+        const duckdbOwnerConnectionHeartbeatModulePath = getModulePath('./src/server/utils/duckdbOwnerConnectionHeartbeat.ts')
         const calls = []
 
         void mock.module(martRefreshDrainHeartbeatModulePath, () => {
@@ -52,10 +52,10 @@ test('startBackgroundWork starts role monitor, writer heartbeat, and mart refres
             },
           }
         })
-        void mock.module(writerConnectionHeartbeatModulePath, () => {
+        void mock.module(duckdbOwnerConnectionHeartbeatModulePath, () => {
           return {
-            startWriterConnectionHeartbeat: () => {
-              calls.push('writerConnectionHeartbeat')
+            startDuckdbOwnerConnectionHeartbeat: () => {
+              calls.push('duckdbOwnerConnectionHeartbeat')
             },
           }
         })
@@ -74,5 +74,9 @@ test('startBackgroundWork starts role monitor, writer heartbeat, and mart refres
 
   const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {calls: string[]}
 
-  expect(result.calls).toEqual(['serverRuntimeRoleMonitor', 'writerConnectionHeartbeat', 'martRefreshDrainHeartbeat'])
+  expect(result.calls).toEqual([
+    'serverRuntimeRoleMonitor',
+    'duckdbOwnerConnectionHeartbeat',
+    'martRefreshDrainHeartbeat',
+  ])
 })

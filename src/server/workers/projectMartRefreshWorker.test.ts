@@ -782,8 +782,8 @@ test('incremental routing keeps review pages counts warnings and prompt queueing
   } finally {
     for (const path of [incrementalDuckdbPath, fullDuckdbPath]) {
       rmSync(path, {force: true})
-      rmSync(`${path}.writer.lock`, {force: true})
-      rmSync(`${path}.writer.history.json`, {force: true})
+      rmSync(`${path}.duckdb-owner.lock`, {force: true})
+      rmSync(`${path}.duckdb-owner.history.json`, {force: true})
     }
   }
 })

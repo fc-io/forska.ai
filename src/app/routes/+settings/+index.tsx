@@ -30,7 +30,7 @@ type StoredModel = {
   name: string
   provider: string
 }
-type WorkerRuntimeDiagnostics = {
+type MaintenanceRuntimeDiagnostics = {
   duckdb?: {effective?: {memoryLimit?: string | null}}
   projectMartLargeRebuildHeartbeat?: {
     automatic?: {
@@ -83,9 +83,9 @@ const fetchStoredModels = async (): Promise<StoredModel[]> => {
   return result.data ?? []
 }
 
-const fetchWorkerRuntimeDiagnostics = async (): Promise<WorkerRuntimeDiagnostics | null> => {
-  const response = await apiClient.api.admin['worker-runtime-diagnostics'].get()
-  return handleApiResponse<WorkerRuntimeDiagnostics>(response, 'Failed to load worker runtime diagnostics')
+const fetchMaintenanceRuntimeDiagnostics = async (): Promise<MaintenanceRuntimeDiagnostics | null> => {
+  const response = await apiClient.api.admin['maintenance-runtime-diagnostics'].get()
+  return handleApiResponse<MaintenanceRuntimeDiagnostics>(response, 'Failed to load maintenance runtime diagnostics')
 }
 
 const getNullableString = (value: string): string | null => {
@@ -160,10 +160,10 @@ const Settings = () => {
       refetchOnWindowFocus: false,
     }
   })
-  const workerRuntimeDiagnosticsQuery = useQuery(() => {
+  const maintenanceRuntimeDiagnosticsQuery = useQuery(() => {
     return {
-      queryKey: ['worker-runtime-diagnostics'],
-      queryFn: fetchWorkerRuntimeDiagnostics,
+      queryKey: ['maintenance-runtime-diagnostics'],
+      queryFn: fetchMaintenanceRuntimeDiagnostics,
       staleTime: 1_000,
       refetchInterval: 5_000,
       refetchOnWindowFocus: false,
@@ -185,7 +185,7 @@ const Settings = () => {
         setDuckdbBin(user.duckdbBin ?? '')
         setCodexBin(user.codexBin ?? '')
         void localUserQuery.refetch()
-        void workerRuntimeDiagnosticsQuery.refetch()
+        void maintenanceRuntimeDiagnosticsQuery.refetch()
       },
     }
   })
@@ -329,7 +329,7 @@ const Settings = () => {
                   </div>
                   <div>
                     <label class="block text-sm font-medium text-gray-700 mb-2">
-                      Worker DuckDB Memory Limit (restart required)
+                      Maintenance DuckDB Memory Limit (restart required)
                     </label>
                     <input
                       type="text"
@@ -341,9 +341,9 @@ const Settings = () => {
                       placeholder="20GB"
                     />
                     <p class="mt-2 text-xs text-gray-500">
-                      Optional machine-local override for the background writer DuckDB memory cap. Leave empty to use
-                      the automatic memory limit from your host RAM. DuckDB memory-limit changes require a server
-                      restart to take effect.
+                      Optional machine-local override for the maintenance DuckDB memory cap. Leave empty to use the
+                      automatic memory limit from your host RAM. DuckDB memory-limit changes require a server restart to
+                      take effect.
                     </p>
                   </div>
                   <Show when={projectMartLargeRebuildTuningMode() === 'manual'}>
@@ -387,58 +387,64 @@ const Settings = () => {
                     </div>
                   </Show>
                   <div class="rounded-md border border-gray-200 bg-gray-50 p-4 space-y-2">
-                    <p class="text-sm font-medium text-gray-900">Effective worker config</p>
-                    <Show when={workerRuntimeDiagnosticsQuery.isLoading}>
-                      <p class="text-xs text-gray-500">Loading worker runtime diagnostics...</p>
+                    <p class="text-sm font-medium text-gray-900">Effective maintenance config</p>
+                    <Show when={maintenanceRuntimeDiagnosticsQuery.isLoading}>
+                      <p class="text-xs text-gray-500">Loading maintenance runtime diagnostics...</p>
                     </Show>
-                    <Show when={workerRuntimeDiagnosticsQuery.isError}>
+                    <Show when={maintenanceRuntimeDiagnosticsQuery.isError}>
                       <p class="text-xs text-red-600">
-                        {workerRuntimeDiagnosticsQuery.error instanceof Error
-                          ? workerRuntimeDiagnosticsQuery.error.message
-                          : 'Failed to load worker runtime diagnostics'}
+                        {maintenanceRuntimeDiagnosticsQuery.error instanceof Error
+                          ? maintenanceRuntimeDiagnosticsQuery.error.message
+                          : 'Failed to load maintenance runtime diagnostics'}
                       </p>
                     </Show>
-                    <Show when={!workerRuntimeDiagnosticsQuery.isLoading && !workerRuntimeDiagnosticsQuery.isError}>
+                    <Show
+                      when={
+                        !maintenanceRuntimeDiagnosticsQuery.isLoading && !maintenanceRuntimeDiagnosticsQuery.isError
+                      }
+                    >
                       <p class="text-xs text-gray-600">
                         Current:{' '}
                         {formatTuningSummary(
-                          workerRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat ?? {},
+                          maintenanceRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat ?? {},
                         )}
                       </p>
                       <p class="text-xs text-gray-600">
                         Sources: batch{' '}
                         {formatTuningSource(
-                          workerRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.sources?.batchSize,
+                          maintenanceRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.sources?.batchSize,
                         )}
                         , poll{' '}
                         {formatTuningSource(
-                          workerRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.sources?.pollIntervalMs,
+                          maintenanceRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.sources
+                            ?.pollIntervalMs,
                         )}
                         , burst{' '}
                         {formatTuningSource(
-                          workerRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.sources
+                          maintenanceRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.sources
                             ?.maxCyclesPerWake,
                         )}
                       </p>
                       <p class="text-xs text-gray-600">
                         Automatic recommendation:{' '}
                         {formatTuningSummary(
-                          workerRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.automatic ?? {},
+                          maintenanceRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.automatic ?? {},
                         )}
                       </p>
                       <p class="text-xs text-gray-600">
                         Auto profile:{' '}
-                        {workerRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.automatic?.profile
+                        {maintenanceRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.automatic?.profile
                           ?? 'N/A'}{' '}
                         | Active rebuilds:{' '}
-                        {workerRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.automatic
+                        {maintenanceRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.automatic
                           ?.activeLargeRebuildProjectCount ?? 'N/A'}{' '}
-                        | Worker memory: {workerRuntimeDiagnosticsQuery.data?.duckdb?.effective?.memoryLimit ?? 'N/A'}
+                        | Maintenance memory:{' '}
+                        {maintenanceRuntimeDiagnosticsQuery.data?.duckdb?.effective?.memoryLimit ?? 'N/A'}
                       </p>
                     </Show>
                     <p class="text-xs text-gray-500">
-                      Heartbeat tuning changes apply to the running worker within a few seconds. DuckDB memory-limit
-                      changes are saved immediately but only apply after the next server restart.
+                      Heartbeat tuning changes apply to the running maintenance runtime within a few seconds. DuckDB
+                      memory-limit changes are saved immediately but only apply after the next server restart.
                     </p>
                   </div>
                 </div>

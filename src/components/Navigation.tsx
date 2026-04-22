@@ -2,6 +2,7 @@ import {useQuery} from '@tanstack/solid-query'
 import {Link, useLocation} from '@tanstack/solid-router'
 import {createMemo, createSignal, onCleanup, onMount, Show} from 'solid-js'
 
+import {duckdbOwnerConnectionsQueryKey, fetchDuckdbOwnerConnections} from '../utils/duckdbOwnerConnectionsQuery'
 import type {LlmMetricsSummary, LlmStatusResponse} from '../utils/llmStatusQuery'
 import {
   fetchLlmStatus,
@@ -9,7 +10,6 @@ import {
   getLlmStatusRefetchInterval,
   llmStatusQueryKey,
 } from '../utils/llmStatusQuery'
-import {fetchWriterConnections, writerConnectionsQueryKey} from '../utils/writerConnectionsQuery'
 
 const isEventTargetWithinElement = (target: EventTarget | null, element: HTMLElement | undefined) => {
   return target instanceof Node && !!element && element.contains(target)
@@ -89,10 +89,10 @@ export const Navigation = () => {
     return getLlmMetricsSummary(llmMetricsQuery.data ?? defaultLlmStatusResponse)
   }
 
-  const writerConnectionsQuery = useQuery(() => {
+  const duckdbOwnerConnectionsQuery = useQuery(() => {
     return {
-      queryKey: writerConnectionsQueryKey,
-      queryFn: fetchWriterConnections,
+      queryKey: duckdbOwnerConnectionsQueryKey,
+      queryFn: fetchDuckdbOwnerConnections,
       refetchInterval: 15_000,
       refetchOnReconnect: true,
       refetchOnWindowFocus: true,
@@ -104,16 +104,16 @@ export const Navigation = () => {
     return getLlmMetricsIndicator(llmMetrics(), Date.now())
   })
 
-  const writerWarning = createMemo(() => {
+  const duckdbOwnerWarning = createMemo(() => {
     return (
-      writerConnectionsQuery.data?.warnings.find((warning) => {
+      duckdbOwnerConnectionsQuery.data?.warnings.find((warning) => {
         return warning.kind !== 'write-failure'
       }) ?? null
     )
   })
 
-  const writerWarningClass = createMemo(() => {
-    return writerWarning()?.severity === 'error'
+  const duckdbOwnerWarningClass = createMemo(() => {
+    return duckdbOwnerWarning()?.severity === 'error'
       ? 'border-red-200 bg-red-50 text-red-800'
       : 'border-amber-200 bg-amber-50 text-amber-800'
   })
@@ -183,14 +183,14 @@ export const Navigation = () => {
 
   return (
     <nav class="relative bg-white shadow-sm border-b border-gray-200">
-      <Show when={writerWarning()}>
+      <Show when={duckdbOwnerWarning()}>
         {(warning) => {
           return (
-            <div class={`border-b px-4 py-2 text-sm ${writerWarningClass()}`}>
+            <div class={`border-b px-4 py-2 text-sm ${duckdbOwnerWarningClass()}`}>
               <div class="mx-auto flex max-w-7xl items-center justify-between gap-4 sm:px-2 lg:px-4">
                 <div>{warning().message}</div>
-                <Link to="/admin/writer-connections" class="shrink-0 font-semibold underline underline-offset-2">
-                  Writer status
+                <Link to="/admin/duckdb-owner-connections" class="shrink-0 font-semibold underline underline-offset-2">
+                  Owner status
                 </Link>
               </div>
             </div>
@@ -372,11 +372,11 @@ export const Navigation = () => {
                       Providers
                     </Link>
                     <Link
-                      to="/admin/writer-connections"
+                      to="/admin/duckdb-owner-connections"
                       class="rounded-md px-2 py-2 text-sm font-medium text-gray-700 hover:bg-white/60 hover:text-gray-900"
                       onClick={closeAdminMenu}
                     >
-                      Writer Connections
+                      DuckDB Owner Connections
                     </Link>
                     <Link
                       to="/admin/prompts/deduplicate"

@@ -9,34 +9,38 @@ import {
   getBackgroundServerStackConfigAsync,
 } from '../src/server/utils/backgroundServerStack.ts'
 
-type ManagedRole = 'api' | 'worker'
+type ManagedRole = 'api' | 'maintenance'
 type ServerProcess = Subprocess<'ignore', 'inherit', 'inherit'>
-type ServerStackLockMetadata = {apiPort: number; cwd: string; pid: number; startedAt: string; workerPort: number}
+type ServerStackLockMetadata = {apiPort: number; cwd: string; maintenancePort: number; pid: number; startedAt: string}
 
 type ManagedServerState = {
   apiProcess: ServerProcess | null
   apiReadyPromise: Promise<void> | null
   shuttingDown: boolean
-  workerProcess: ServerProcess | null
-  workerReadyPromise: Promise<void> | null
+  maintenanceProcess: ServerProcess | null
+  maintenanceReadyPromise: Promise<void> | null
 }
 
 const restartDelayMs = 1_000
 const startupTimeoutMs = 20_000
 const shutdownTimeoutMs = 20_000
 const forcedKillTimeoutMs = 5_000
-const writerPollIntervalMs = 250
+const duckdbOwnerPollIntervalMs = 250
 const parentMonitorIntervalMs = 1_000
 
 const config = await getBackgroundServerStackConfigAsync(process.env)
-const serverStackLockPath = join(tmpdir(), 'forska-server-stack', `${config.apiPort}-${config.workerPort}.lock.json`)
+const serverStackLockPath = join(
+  tmpdir(),
+  'forska-server-stack',
+  `${config.apiPort}-${config.maintenancePort}.lock.json`,
+)
 
-if (config.apiPort === config.workerPort) {
-  throw new Error(`API port ${config.apiPort} must differ from background writer port ${config.workerPort}`)
+if (config.apiPort === config.maintenancePort) {
+  throw new Error(`API port ${config.apiPort} must differ from maintenance-worker port ${config.maintenancePort}`)
 }
 
 console.log(
-  `[server:stack] api_port=${config.apiPort} worker_port=${config.workerPort} worker_duckdb_memory_limit=${config.workerDuckdbMemoryLimit}`,
+  `[server:stack] api_port=${config.apiPort} maintenance_port=${config.maintenancePort} maintenance_duckdb_memory_limit=${config.maintenanceDuckdbMemoryLimit}`,
 )
 
 const isMissingFileError = (error: unknown) => {
@@ -82,9 +86,9 @@ const acquireServerStackLock = async (): Promise<void> => {
   const metadata = {
     apiPort: config.apiPort,
     cwd: process.cwd(),
+    maintenancePort: config.maintenancePort,
     pid: process.pid,
     startedAt: new Date().toISOString(),
-    workerPort: config.workerPort,
   } satisfies ServerStackLockMetadata
 
   try {
@@ -112,7 +116,7 @@ const acquireServerStackLock = async (): Promise<void> => {
     }
 
     throw new Error(
-      `Another server stack is already running for ports ${config.apiPort}/${config.workerPort} (pid=${currentLock.pid}, startedAt=${currentLock.startedAt}). Stop it before starting a new one.`,
+      `Another server stack is already running for ports ${config.apiPort}/${config.maintenancePort} (pid=${currentLock.pid}, startedAt=${currentLock.startedAt}). Stop it before starting a new one.`,
       {cause: error},
     )
   }
@@ -121,9 +125,9 @@ const acquireServerStackLock = async (): Promise<void> => {
 const managedServerState: ManagedServerState = {
   apiProcess: null,
   apiReadyPromise: null,
+  maintenanceProcess: null,
+  maintenanceReadyPromise: null,
   shuttingDown: false,
-  workerProcess: null,
-  workerReadyPromise: null,
 }
 
 let parentMonitor: ReturnType<typeof setInterval> | null = null
@@ -153,22 +157,27 @@ const waitForProcessExit = async (pid: number, deadlineMs = Date.now() + shutdow
   return waitForProcessExit(pid, deadlineMs)
 }
 
-const isWriterReady = async (writerUrl: string) => {
+const isDuckdbOwnerReady = async (duckdbOwnerUrl: string) => {
   try {
-    const response = await fetch(`${writerUrl}/api/writer_connections`, {signal: AbortSignal.timeout(1_000)})
+    const response = await fetch(`${duckdbOwnerUrl}/api/duckdb_owner_connections`, {
+      signal: AbortSignal.timeout(1_000),
+    })
     return response.ok
   } catch {
     return false
   }
 }
 
-const waitForWriter = async (writerUrl: string, deadlineMs = Date.now() + startupTimeoutMs): Promise<void> => {
+const waitForDuckdbOwner = async (
+  duckdbOwnerUrl: string,
+  deadlineMs = Date.now() + startupTimeoutMs,
+): Promise<void> => {
   return Date.now() >= deadlineMs
-    ? Promise.reject(new Error(`Timed out waiting for background writer at ${writerUrl}`))
-    : (await isWriterReady(writerUrl))
+    ? Promise.reject(new Error(`Timed out waiting for maintenance DuckDB owner at ${duckdbOwnerUrl}`))
+    : (await isDuckdbOwnerReady(duckdbOwnerUrl))
       ? Promise.resolve()
-      : waitFor(writerPollIntervalMs).then(() => {
-          return waitForWriter(writerUrl, deadlineMs)
+      : waitFor(duckdbOwnerPollIntervalMs).then(() => {
+          return waitForDuckdbOwner(duckdbOwnerUrl, deadlineMs)
         })
 }
 
@@ -177,7 +186,7 @@ const isServerProcessRunning = (serverProcess: ServerProcess | null): serverProc
 }
 
 const getManagedServerProcess = (role: ManagedRole) => {
-  return role === 'api' ? managedServerState.apiProcess : managedServerState.workerProcess
+  return role === 'api' ? managedServerState.apiProcess : managedServerState.maintenanceProcess
 }
 
 const setManagedServerProcess = (role: ManagedRole, serverProcess: ServerProcess | null) => {
@@ -186,7 +195,7 @@ const setManagedServerProcess = (role: ManagedRole, serverProcess: ServerProcess
     return
   }
 
-  managedServerState.workerProcess = serverProcess
+  managedServerState.maintenanceProcess = serverProcess
 }
 
 const startServerProcess = async (role: ManagedRole): Promise<ServerProcess> => {
@@ -255,33 +264,33 @@ const ensureManagedServerProcess = async (role: ManagedRole): Promise<ServerProc
   return nextProcess
 }
 
-const ensureWorkerReadyAttempt = async (): Promise<void> => {
-  const workerProcess = await ensureManagedServerProcess('worker')
+const ensureMaintenanceReadyAttempt = async (): Promise<void> => {
+  const maintenanceProcess = await ensureManagedServerProcess('maintenance')
 
   try {
-    return await waitForWriter(config.writerUrl)
+    return await waitForDuckdbOwner(config.duckdbOwnerUrl)
   } catch (error) {
-    console.error('[server:stack] worker did not become ready; restarting', error)
-    await stopManagedServerProcess('worker', workerProcess)
+    console.error('[server:stack] maintenance worker did not become ready; restarting', error)
+    await stopManagedServerProcess('maintenance', maintenanceProcess)
     await waitFor(restartDelayMs)
-    return ensureWorkerReadyAttempt()
+    return ensureMaintenanceReadyAttempt()
   }
 }
 
-const ensureWorkerReady = () => {
-  if (managedServerState.workerReadyPromise) {
-    return managedServerState.workerReadyPromise
+const ensureMaintenanceReady = () => {
+  if (managedServerState.maintenanceReadyPromise) {
+    return managedServerState.maintenanceReadyPromise
   }
 
-  managedServerState.workerReadyPromise = ensureWorkerReadyAttempt().finally(() => {
-    managedServerState.workerReadyPromise = null
+  managedServerState.maintenanceReadyPromise = ensureMaintenanceReadyAttempt().finally(() => {
+    managedServerState.maintenanceReadyPromise = null
   })
 
-  return managedServerState.workerReadyPromise
+  return managedServerState.maintenanceReadyPromise
 }
 
 const ensureApiReadyAttempt = async (): Promise<void> => {
-  await ensureWorkerReady()
+  await ensureMaintenanceReady()
   await ensureManagedServerProcess('api')
 }
 
@@ -310,8 +319,8 @@ const monitorManagedServerExit = async (role: ManagedRole, serverProcess: Server
   console.error(`[server:stack] ${role} exited with code ${String(exitCode)}; restarting`)
   await waitFor(restartDelayMs)
 
-  return role === 'worker'
-    ? ensureWorkerReady().then(() => {
+  return role === 'maintenance'
+    ? ensureMaintenanceReady().then(() => {
         return ensureApiReady()
       })
     : ensureApiReady()
@@ -354,7 +363,7 @@ const shutdown = async (exitCode = 0) => {
 
   managedServerState.shuttingDown = true
   stopParentMonitor()
-  await Promise.all([stopManagedServerProcess('api'), stopManagedServerProcess('worker')])
+  await Promise.all([stopManagedServerProcess('api'), stopManagedServerProcess('maintenance')])
   await releaseServerStackLock()
   process.exit(exitCode)
 }
@@ -371,7 +380,7 @@ startParentMonitor()
 
 try {
   await acquireServerStackLock()
-  await ensureWorkerReady()
+  await ensureMaintenanceReady()
   await ensureApiReady()
   await new Promise(() => {})
 } catch (error) {

@@ -1,6 +1,6 @@
 import {Context, Effect, Fiber, Layer, ManagedRuntime} from 'effect'
 
-import {registerWriterDemotionHandler} from '../../utils/serverRuntimeRole.ts'
+import {registerDuckdbOwnerDemotionHandler} from '../../utils/serverRuntimeRole.ts'
 import {ConnectionError} from './connectionHealth.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
@@ -420,7 +420,7 @@ export const createJudgmentDispatchRuntime = (
 
 let judgmentDispatchRuntime = createJudgmentDispatchRuntime()
 
-registerWriterDemotionHandler(async (reason) => {
+registerDuckdbOwnerDemotionHandler(async (reason) => {
   await judgmentDispatchRuntime.shutdown(reason)
 })
 

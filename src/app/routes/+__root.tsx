@@ -3,7 +3,7 @@ import {createRootRoute, Outlet} from '@tanstack/solid-router'
 import {Match, Switch} from 'solid-js'
 
 import {Navigation} from '../../components/Navigation'
-import {fetchWriterConnections, writerConnectionsQueryKey} from '../../utils/writerConnectionsQuery'
+import {duckdbOwnerConnectionsQueryKey, fetchDuckdbOwnerConnections} from '../../utils/duckdbOwnerConnectionsQuery'
 import {RouterErrorSurface} from '../routerErrorSurface'
 import {env} from '../utils/client-env.ts'
 
@@ -19,7 +19,7 @@ const BackendUnavailableSurface = (props: {error: unknown; onRetry: () => void; 
         <h1 class="mt-3 text-3xl font-semibold tracking-tight text-stone-900">Forska cannot reach its local API</h1>
         <p class="mt-3 text-sm leading-6 text-stone-600">
           The UI is running, but the app cannot talk to the backend yet. This can happen after a crash, while the
-          backend is still restarting, or if another process is holding the local writer lock.
+          backend is still restarting, or if another process is holding the local DuckDB owner lock.
         </p>
         <div class="mt-6 rounded-2xl border border-stone-200 bg-stone-50 p-4 text-sm text-stone-700">
           <div class="font-medium text-stone-900">Backend origin</div>
@@ -50,8 +50,8 @@ const BackendUnavailableSurface = (props: {error: unknown; onRetry: () => void; 
 const RootComponent = () => {
   const backendAvailabilityQuery = useQuery(() => {
     return {
-      queryKey: writerConnectionsQueryKey,
-      queryFn: fetchWriterConnections,
+      queryKey: duckdbOwnerConnectionsQueryKey,
+      queryFn: fetchDuckdbOwnerConnections,
       refetchInterval: 15_000,
       refetchOnReconnect: true,
       refetchOnWindowFocus: true,

@@ -3,7 +3,7 @@ export type RuntimeProfileName = 'primary' | 'secondary'
 export type RuntimeProfileEnv = {
   API_SERVER_PORT: string
   APP_SERVER_PORT: string
-  BACKGROUND_WRITER_PORT: string
+  BACKGROUND_MAINTENANCE_PORT: string
   DUCKDB_PATH: string
   FORSKA_RUNTIME_PROFILE: RuntimeProfileName
   VITE_PORT: string
@@ -17,7 +17,7 @@ const runtimeProfileEntries: Record<RuntimeProfileName, RuntimeProfile> = {
     env: {
       API_SERVER_PORT: '3001',
       APP_SERVER_PORT: '8080',
-      BACKGROUND_WRITER_PORT: '3002',
+      BACKGROUND_MAINTENANCE_PORT: '3002',
       DUCKDB_PATH: 'data/runtime/primary/forska.duckdb',
       FORSKA_RUNTIME_PROFILE: 'primary',
       VITE_PORT: '3000',
@@ -29,7 +29,7 @@ const runtimeProfileEntries: Record<RuntimeProfileName, RuntimeProfile> = {
     env: {
       API_SERVER_PORT: '3101',
       APP_SERVER_PORT: '8180',
-      BACKGROUND_WRITER_PORT: '3102',
+      BACKGROUND_MAINTENANCE_PORT: '3102',
       DUCKDB_PATH: 'data/runtime/secondary/forska.duckdb',
       FORSKA_RUNTIME_PROFILE: 'secondary',
       VITE_PORT: '3100',

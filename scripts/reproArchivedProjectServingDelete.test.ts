@@ -206,7 +206,7 @@ const runHarness = (duckdbPath: string) => {
       DUCKDB_PATH: duckdbPath,
       RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
       RUN_SERVER_FULL_TEXT_FETCHING: 'false',
-      SERVER_ROLE: 'writer',
+      SERVER_ROLE: 'maintenance-worker',
       VITE_PORT: '39901',
     },
   })
@@ -329,7 +329,7 @@ test('archive serving repro harness captures delete and rewrite probe results on
   } finally {
     rmSync(workingDirectory, {force: true, recursive: true})
     removeFileIfExists(`${duckdbPath}.wal`)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })

@@ -124,8 +124,8 @@ test('admin append metrics route returns append lane metrics', () => {
     expect(responseBody.rowsSkipped).toBe(0)
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
@@ -266,14 +266,14 @@ test('admin project mart large rebuild status route returns explicit operator pr
     expect(responseBody.estimates.scopeArticleCount).toBe(0)
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
-test('admin worker runtime diagnostics route reports effective duckdb settings and process memory', () => {
-  const duckdbPath = `/tmp/f1-admin-worker-runtime-diagnostics-${Date.now()}.duckdb`
-  const tempDirectory = `/tmp/f1-admin-worker-runtime-diagnostics-temp-${Date.now()}`
+test('admin maintenance runtime diagnostics route reports effective duckdb settings and process memory', () => {
+  const duckdbPath = `/tmp/f1-admin-maintenance-runtime-diagnostics-${Date.now()}.duckdb`
+  const tempDirectory = `/tmp/f1-admin-maintenance-runtime-diagnostics-temp-${Date.now()}`
   const runRoute = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -284,7 +284,7 @@ test('admin worker runtime diagnostics route reports effective duckdb settings a
         const {closeDuckdbService} = await import('./src/server/utils/duckdbService.ts')
 
         const app = new Elysia().use(adminInvestigateRoutes)
-        const response = await app.handle(new Request('http://localhost/api/admin/worker-runtime-diagnostics'))
+        const response = await app.handle(new Request('http://localhost/api/admin/maintenance-runtime-diagnostics'))
         console.log(await response.text())
         await closeDuckdbService()
       `,
@@ -300,7 +300,7 @@ test('admin worker runtime diagnostics route reports effective duckdb settings a
         PROJECT_MART_LARGE_REBUILD_BATCH_SIZE: '8',
         PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE: '4',
         PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS: '1500',
-        SERVER_ROLE: 'worker',
+        SERVER_ROLE: 'maintenance-worker',
         VITE_PORT: '3000',
       },
     },
@@ -311,7 +311,7 @@ test('admin worker runtime diagnostics route reports effective duckdb settings a
       throw new Error(
         runRoute.stderr.toString()
           || runRoute.stdout.toString()
-          || 'Admin worker runtime diagnostics route test failed',
+          || 'Admin maintenance runtime diagnostics route test failed',
       )
     }
 
@@ -366,8 +366,8 @@ test('admin worker runtime diagnostics route reports effective duckdb settings a
       serverRole: string | null
     }
 
-    expect(responseBody.serverRole).toBe('worker')
-    expect(responseBody.role).toBe('worker')
+    expect(responseBody.serverRole).toBe('maintenance-worker')
+    expect(responseBody.role).toBe('maintenance-worker')
     expect(responseBody.pid).toBeGreaterThan(0)
     expect(responseBody.duckdb.configured.appendLaneCount).toBeGreaterThan(0)
     expect(responseBody.duckdb.configured.memoryLimit).toBe('256MiB')
@@ -415,8 +415,8 @@ test('admin worker runtime diagnostics route reports effective duckdb settings a
     })
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
@@ -589,8 +589,8 @@ test('admin project mart large rebuild run route triggers bounded rebuild cycles
     expect(responseBody.cycleResults[0]?.status).toBe('progressed')
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
@@ -676,8 +676,8 @@ test('admin project mart large rebuild pause and resume routes toggle operator s
     expect(responseBody.resumed.cursorArticleId).toBe('article-pause-1')
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })
 
@@ -755,7 +755,7 @@ test('admin project mart large rebuild note route persists operator notes withou
     expect(responseBody.operatorNote).toBe('Watch cursor after restarting worker')
   } finally {
     removeFileIfExists(duckdbPath)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
 })

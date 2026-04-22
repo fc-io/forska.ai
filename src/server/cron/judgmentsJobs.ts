@@ -4,7 +4,7 @@ import {Elysia} from 'elysia'
 import {parseDuckdbMemoryLimitToMiB} from '../utils/duckdbMemoryLimit.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {writeRuntimeFailureLogEvent} from '../utils/runtimeLogger.ts'
-import {isExpectedWriterRoleLossError, shouldCurrentServerRunJudgingLoops} from '../utils/serverRuntimeRole.ts'
+import {isExpectedDuckdbOwnerRoleLossError, shouldCurrentServerRunJudgingLoops} from '../utils/serverRuntimeRole.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentsJobs/judgmentJobServerIdentity.ts'
 import {runJudgmentJobSqliteBackgroundImport} from './judgmentsJobs/judgmentJobSqliteBackgroundImport.ts'
 import {getJudgmentJobSqliteService} from './judgmentsJobs/judgmentJobSqliteService.ts'
@@ -19,7 +19,7 @@ const serverJobId = getDefaultJudgmentServerJobId()
 const cronLogger = createRateLimitedLogger({windowMs: 30_000})
 
 const logJudgingCronError = (label: string, error: unknown) => {
-  if (!isExpectedWriterRoleLossError(error)) {
+  if (!isExpectedDuckdbOwnerRoleLossError(error)) {
     writeRuntimeFailureLogEvent({
       attrs: {error},
       event: 'judgments.cron.failure',

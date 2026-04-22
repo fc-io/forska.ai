@@ -638,15 +638,18 @@ test('Covidence prompt definition builds stage-specific text and reuses matching
     expect(parsed.promptRows[0]?.id).toBe('prompt-existing')
     expect(parsed.promptRows[1]?.promptHeading).toBe('Covidence title/abstract screening')
   } finally {
-    ;[duckdbPath, `${duckdbPath}.wal`, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(
-      (filePath) => {
-        if (existsSync(filePath)) {
-          unlinkSync(filePath)
-        }
+    ;[
+      duckdbPath,
+      `${duckdbPath}.wal`,
+      `${duckdbPath}.duckdb-owner.lock`,
+      `${duckdbPath}.duckdb-owner.history.json`,
+    ].map((filePath) => {
+      if (existsSync(filePath)) {
+        unlinkSync(filePath)
+      }
 
-        return filePath
-      },
-    )
+      return filePath
+    })
   }
 })
 
@@ -828,15 +831,18 @@ test('getOrCreateCovidenceProject creates one title/abstract project per route a
     expect(parsed.projectPromptRows[0]?.projectId).toBe(parsed.createdProject.id)
     expect(parsed.projectPromptRows[0]?.enabled).toBe(true)
   } finally {
-    ;[duckdbPath, `${duckdbPath}.wal`, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(
-      (filePath) => {
-        if (existsSync(filePath)) {
-          unlinkSync(filePath)
-        }
+    ;[
+      duckdbPath,
+      `${duckdbPath}.wal`,
+      `${duckdbPath}.duckdb-owner.lock`,
+      `${duckdbPath}.duckdb-owner.history.json`,
+    ].map((filePath) => {
+      if (existsSync(filePath)) {
+        unlinkSync(filePath)
+      }
 
-        return filePath
-      },
-    )
+      return filePath
+    })
   }
 })
 
@@ -1090,15 +1096,18 @@ test('full-text Covidence projects reuse the route-backed project and scope arti
     ).toBe(true)
   } finally {
     deleteCovidencePackageFiles(datasourceId)
-    ;[duckdbPath, `${duckdbPath}.wal`, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(
-      (filePath) => {
-        if (existsSync(filePath)) {
-          unlinkSync(filePath)
-        }
+    ;[
+      duckdbPath,
+      `${duckdbPath}.wal`,
+      `${duckdbPath}.duckdb-owner.lock`,
+      `${duckdbPath}.duckdb-owner.history.json`,
+    ].map((filePath) => {
+      if (existsSync(filePath)) {
+        unlinkSync(filePath)
+      }
 
-        return filePath
-      },
-    )
+      return filePath
+    })
   }
 })
 
@@ -1289,15 +1298,18 @@ test('syncCovidenceProjectScopeFromConfig marks removed and added full-text arti
     ])
   } finally {
     deleteCovidencePackageFiles(datasourceId)
-    ;[duckdbPath, `${duckdbPath}.wal`, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(
-      (filePath) => {
-        if (existsSync(filePath)) {
-          unlinkSync(filePath)
-        }
+    ;[
+      duckdbPath,
+      `${duckdbPath}.wal`,
+      `${duckdbPath}.duckdb-owner.lock`,
+      `${duckdbPath}.duckdb-owner.history.json`,
+    ].map((filePath) => {
+      if (existsSync(filePath)) {
+        unlinkSync(filePath)
+      }
 
-        return filePath
-      },
-    )
+      return filePath
+    })
   }
 })
 
@@ -1522,15 +1534,18 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts answered and unanswered titl
     ])
   } finally {
     deleteCovidencePackageFiles(datasourceId)
-    ;[duckdbPath, `${duckdbPath}.wal`, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(
-      (filePath) => {
-        if (existsSync(filePath)) {
-          unlinkSync(filePath)
-        }
+    ;[
+      duckdbPath,
+      `${duckdbPath}.wal`,
+      `${duckdbPath}.duckdb-owner.lock`,
+      `${duckdbPath}.duckdb-owner.history.json`,
+    ].map((filePath) => {
+      if (existsSync(filePath)) {
+        unlinkSync(filePath)
+      }
 
-        return filePath
-      },
-    )
+      return filePath
+    })
   }
 })
 
@@ -1682,15 +1697,18 @@ test('seedCovidenceHumanJudgmentsFromConfig treats disjoint screen irrelevant an
     })
   } finally {
     deleteCovidencePackageFiles(datasourceId)
-    ;[duckdbPath, `${duckdbPath}.wal`, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(
-      (filePath) => {
-        if (existsSync(filePath)) {
-          unlinkSync(filePath)
-        }
+    ;[
+      duckdbPath,
+      `${duckdbPath}.wal`,
+      `${duckdbPath}.duckdb-owner.lock`,
+      `${duckdbPath}.duckdb-owner.history.json`,
+    ].map((filePath) => {
+      if (existsSync(filePath)) {
+        unlinkSync(filePath)
+      }
 
-        return filePath
-      },
-    )
+      return filePath
+    })
   }
 })
 
@@ -1849,15 +1867,18 @@ test('syncCovidenceProjectPrompts persists summary-mode criteria metadata in pro
       },
     ])
   } finally {
-    ;[duckdbPath, `${duckdbPath}.wal`, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(
-      (filePath) => {
-        if (existsSync(filePath)) {
-          unlinkSync(filePath)
-        }
+    ;[
+      duckdbPath,
+      `${duckdbPath}.wal`,
+      `${duckdbPath}.duckdb-owner.lock`,
+      `${duckdbPath}.duckdb-owner.history.json`,
+    ].map((filePath) => {
+      if (existsSync(filePath)) {
+        unlinkSync(filePath)
+      }
 
-        return filePath
-      },
-    )
+      return filePath
+    })
   }
 })
 
@@ -2093,15 +2114,18 @@ test('syncCovidenceProjectPrompts keeps the exact reused prompt set for grouping
       }),
     ).toBe(true)
   } finally {
-    ;[duckdbPath, `${duckdbPath}.wal`, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(
-      (filePath) => {
-        if (existsSync(filePath)) {
-          unlinkSync(filePath)
-        }
+    ;[
+      duckdbPath,
+      `${duckdbPath}.wal`,
+      `${duckdbPath}.duckdb-owner.lock`,
+      `${duckdbPath}.duckdb-owner.history.json`,
+    ].map((filePath) => {
+      if (existsSync(filePath)) {
+        unlinkSync(filePath)
+      }
 
-        return filePath
-      },
-    )
+      return filePath
+    })
   }
 })
 
@@ -2375,15 +2399,18 @@ test('seedCovidenceHumanJudgmentsFromConfig upserts full-text included and exclu
     ])
   } finally {
     deleteCovidencePackageFiles(datasourceId)
-    ;[duckdbPath, `${duckdbPath}.wal`, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(
-      (filePath) => {
-        if (existsSync(filePath)) {
-          unlinkSync(filePath)
-        }
+    ;[
+      duckdbPath,
+      `${duckdbPath}.wal`,
+      `${duckdbPath}.duckdb-owner.lock`,
+      `${duckdbPath}.duckdb-owner.history.json`,
+    ].map((filePath) => {
+      if (existsSync(filePath)) {
+        unlinkSync(filePath)
+      }
 
-        return filePath
-      },
-    )
+      return filePath
+    })
   }
 })
 
@@ -2524,15 +2551,18 @@ test('seedCovidenceHumanJudgmentsFromConfig seeds one summary judgment row per i
     ])
   } finally {
     deleteCovidencePackageFiles(datasourceId)
-    ;[duckdbPath, `${duckdbPath}.wal`, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(
-      (filePath) => {
-        if (existsSync(filePath)) {
-          unlinkSync(filePath)
-        }
+    ;[
+      duckdbPath,
+      `${duckdbPath}.wal`,
+      `${duckdbPath}.duckdb-owner.lock`,
+      `${duckdbPath}.duckdb-owner.history.json`,
+    ].map((filePath) => {
+      if (existsSync(filePath)) {
+        unlinkSync(filePath)
+      }
 
-        return filePath
-      },
-    )
+      return filePath
+    })
   }
 })
 
@@ -2673,15 +2703,18 @@ test('importCovidencePackageFromConfig stores merged articles with raw metadata 
     expect(parsed.articles[1]?.articleTitle).toBe('Study B')
   } finally {
     deleteCovidencePackageFiles(datasourceId)
-    ;[duckdbPath, `${duckdbPath}.wal`, `${duckdbPath}.writer.lock`, `${duckdbPath}.writer.history.json`].map(
-      (filePath) => {
-        if (existsSync(filePath)) {
-          unlinkSync(filePath)
-        }
+    ;[
+      duckdbPath,
+      `${duckdbPath}.wal`,
+      `${duckdbPath}.duckdb-owner.lock`,
+      `${duckdbPath}.duckdb-owner.history.json`,
+    ].map((filePath) => {
+      if (existsSync(filePath)) {
+        unlinkSync(filePath)
+      }
 
-        return filePath
-      },
-    )
+      return filePath
+    })
   }
 })
 

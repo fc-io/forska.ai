@@ -1,15 +1,15 @@
 import {expect, test} from 'bun:test'
 
+import {
+  getDuckdbOwnerConnectionHeartbeatPayload,
+  getRuntimeCapabilityRegistryOverview,
+  recordDuckdbOwnerConnectionProxy,
+  upsertDuckdbOwnerConnectionHeartbeat,
+} from './duckdbOwnerConnections.ts'
 import {createRuntimeLogRecord} from './runtimeLogger.ts'
 import {initializeRuntimeProcessIdentity, resetRuntimeProcessIdentityForTests} from './runtimeProcessIdentity.ts'
-import {
-  getWorkerRegistryOverview,
-  getWriterConnectionHeartbeatPayload,
-  recordWriterConnectionProxy,
-  upsertWriterConnectionHeartbeat,
-} from './writerConnections.ts'
 
-const getWriterHeaders = (startedAt: string) => {
+const getDuckdbOwnerHeaders = (startedAt: string) => {
   return new Headers({
     'x-forska-api-server-port': '4010',
     'x-forska-hostname': 'test-host',
@@ -21,13 +21,13 @@ const getWriterHeaders = (startedAt: string) => {
     'x-forska-server-role': 'api',
     'x-forska-service': 'api-server',
     'x-forska-started-at': startedAt,
-    'x-forska-writer-url': 'http://127.0.0.1:4011/',
+    'x-forska-duckdb-owner-url': 'http://127.0.0.1:4011/',
   })
 }
 
-test('tracks writer connection heartbeats and proxy metadata', () => {
+test('tracks DuckDB owner connection heartbeats and proxy metadata', () => {
   const startedAt = new Date().toISOString()
-  const heartbeat = upsertWriterConnectionHeartbeat({
+  const heartbeat = upsertDuckdbOwnerConnectionHeartbeat({
     apiServerPort: 4010,
     hostname: 'test-host',
     instanceId: `api-server:test-host:4010:12345:${startedAt}`,
@@ -38,9 +38,9 @@ test('tracks writer connection heartbeats and proxy metadata', () => {
     serverRole: 'api',
     service: 'api-server',
     startedAt,
-    writerUrl: 'http://127.0.0.1:4011',
+    duckdbOwnerUrl: 'http://127.0.0.1:4011',
   })
-  const proxied = recordWriterConnectionProxy(getWriterHeaders(startedAt), '/api/projects')
+  const proxied = recordDuckdbOwnerConnectionProxy(getDuckdbOwnerHeaders(startedAt), '/api/projects')
 
   expect(heartbeat.connectionId).toBe(`api-server:test-host:4010:12345:${startedAt}`)
   expect(heartbeat.instanceId).toBe(heartbeat.connectionId)
@@ -50,11 +50,11 @@ test('tracks writer connection heartbeats and proxy metadata', () => {
   expect(proxied?.lastRequestPath).toBe('/api/projects')
   expect(proxied?.proxyCount).toBe(1)
   expect(proxied?.runtimeProfile).toBe('primary')
-  expect(proxied?.writerUrl).toBe('http://127.0.0.1:4011')
+  expect(proxied?.duckdbOwnerUrl).toBe('http://127.0.0.1:4011')
   expect(proxied?.capabilities).toEqual(['api'])
 })
 
-test('uses the shared runtime process identity for runtime logs and writer heartbeats', () => {
+test('uses the shared runtime process identity for runtime logs and owner heartbeats', () => {
   resetRuntimeProcessIdentityForTests()
   initializeRuntimeProcessIdentity({
     hostnameValue: 'shared-host',
@@ -66,13 +66,13 @@ test('uses the shared runtime process identity for runtime logs and writer heart
   })
 
   const runtimeRecord = createRuntimeLogRecord({
-    event: 'writer.identity.shared',
+    event: 'duckdb-owner.identity.shared',
     message: 'shared identity',
     serverRole: 'api',
     severity: 'INFO',
     timestamp: '2026-04-20T12:30:00.000Z',
   })
-  const heartbeat = getWriterConnectionHeartbeatPayload()
+  const heartbeat = getDuckdbOwnerConnectionHeartbeatPayload()
 
   expect(heartbeat.instanceId).toBe(runtimeRecord.runtime.instanceId)
   expect(heartbeat.hostname).toBe(runtimeRecord.runtime.hostname)
@@ -84,9 +84,9 @@ test('uses the shared runtime process identity for runtime logs and writer heart
   resetRuntimeProcessIdentityForTests()
 })
 
-test('summarizes registered worker capabilities from fresh heartbeats', () => {
+test('summarizes registered runtime capabilities from fresh heartbeats', () => {
   const startedAt = new Date().toISOString()
-  const apiWorker = upsertWriterConnectionHeartbeat({
+  const apiWorker = upsertDuckdbOwnerConnectionHeartbeat({
     apiServerPort: 4010,
     hostname: 'test-host',
     instanceId: `api-server:test-host:4010:12345:${startedAt}`,
@@ -97,27 +97,27 @@ test('summarizes registered worker capabilities from fresh heartbeats', () => {
     serverRole: 'api',
     service: 'api-server',
     startedAt,
-    writerUrl: 'http://127.0.0.1:4011',
+    duckdbOwnerUrl: 'http://127.0.0.1:4011',
   })
-  const maintenanceWorker = upsertWriterConnectionHeartbeat({
+  const maintenanceWorker = upsertDuckdbOwnerConnectionHeartbeat({
     apiServerPort: 4011,
     hostname: 'test-host',
-    instanceId: `worker-server:test-host:4011:12346:${startedAt}`,
+    instanceId: `maintenance-worker-server:test-host:4011:12346:${startedAt}`,
     listenPort: 4011,
     pid: 12346,
     processStartedAt: startedAt,
     runtimeProfile: 'primary',
     serverRole: 'maintenance-worker',
-    service: 'worker-server',
+    service: 'maintenance-worker-server',
     startedAt,
-    writerUrl: 'http://127.0.0.1:4011',
+    duckdbOwnerUrl: 'http://127.0.0.1:4011',
   })
-  const registry = getWorkerRegistryOverview([apiWorker, maintenanceWorker, maintenanceWorker])
+  const registry = getRuntimeCapabilityRegistryOverview([apiWorker, maintenanceWorker, maintenanceWorker])
 
   expect(maintenanceWorker.capabilities).toEqual(['duckdb-owner', 'maintenance'])
-  expect(registry.registeredWorkerCount).toBe(2)
-  expect(registry.freshRegisteredWorkerCount).toBe(2)
-  expect(registry.staleRegisteredWorkerCount).toBe(0)
+  expect(registry.registeredProcessCount).toBe(2)
+  expect(registry.freshRegisteredProcessCount).toBe(2)
+  expect(registry.staleRegisteredProcessCount).toBe(0)
   expect(
     registry.capabilities.find((capability) => {
       return capability.capability === 'api'

@@ -27,6 +27,10 @@ import {
   resolveRuntimeProcessIdentity,
 } from './runtimeProcessIdentity.ts'
 
+const getCurrentUtcLogDate = () => {
+  return new Date().toISOString().slice(0, 10)
+}
+
 test('defaults unresolved runtime log profile to local', () => {
   expect(getRuntimeLogProfile({envValues: {}})).toBe('local')
   expect(getRuntimeLogProfile({envValues: {FORSKA_RUNTIME_PROFILE: 'unknown'}})).toBe('local')
@@ -76,8 +80,8 @@ test('selects shared runtime log files only on tested platform allowlist', () =>
 
 test('selects stable runtime service names from server role before runtime imports', () => {
   expect(getRuntimeServiceNameForServerRole({SERVER_ROLE: 'api'})).toBe('api-server')
-  expect(getRuntimeServiceNameForServerRole({SERVER_ROLE: 'worker'})).toBe('worker-server')
-  expect(getRuntimeServiceNameForServerRole({SERVER_ROLE: 'writer'})).toBe('worker-server')
+  expect(getRuntimeServiceNameForServerRole({SERVER_ROLE: 'maintenance-worker'})).toBe('maintenance-worker-server')
+  expect(getRuntimeServiceNameForServerRole({SERVER_ROLE: 'judge-worker'})).toBe('judge-worker-server')
   expect(getRuntimeServiceNameForServerRole({SERVER_ROLE: 'dev-single'})).toBe('dev-single-server')
   expect(getRuntimeServiceNameForServerRole({SERVER_ROLE: 'auto'})).toBe('single-server')
   expect(getRuntimeServiceNameForServerRole({})).toBe('single-server')
@@ -91,16 +95,16 @@ test('resolves one runtime process identity with stable instance id shape', () =
       listenPort: 3002,
       pid: 48192,
       processStartedAt: '2026-04-12T10:10:00.000Z',
-      service: 'worker-server',
+      service: 'maintenance-worker-server',
     }),
   ).toEqual({
     hostname: 'test-host',
-    instanceId: 'worker-server:test-host:3002:48192:2026-04-12T10:10:00.000Z',
+    instanceId: 'maintenance-worker-server:test-host:3002:48192:2026-04-12T10:10:00.000Z',
     listenPort: 3002,
     pid: 48192,
     processStartedAt: '2026-04-12T10:10:00.000Z',
     runtimeProfile: 'primary',
-    service: 'worker-server',
+    service: 'maintenance-worker-server',
   })
 })
 
@@ -131,10 +135,15 @@ test('runtime JSONL sink writes one structured record to the service daily file'
     listenPort: 4011,
     pid: 222,
     processStartedAt: '2026-04-20T12:00:00.000Z',
-    service: 'worker-server',
+    service: 'maintenance-worker-server',
   })
   installRuntimeJsonlSink({
-    envValues: {FORSKA_RUNTIME_PROFILE: 'primary', LOG_DIR: logDir, LOG_LEVEL: 'INFO', SERVER_ROLE: 'worker'},
+    envValues: {
+      FORSKA_RUNTIME_PROFILE: 'primary',
+      LOG_DIR: logDir,
+      LOG_LEVEL: 'INFO',
+      SERVER_ROLE: 'maintenance-worker',
+    },
   })
 
   expect(
@@ -147,7 +156,7 @@ test('runtime JSONL sink writes one structured record to the service daily file'
     }),
   ).toBe(true)
 
-  const logContent = readFileSync(join(logDir, 'worker-server-2026-04-20.jsonl'), 'utf8')
+  const logContent = readFileSync(join(logDir, 'maintenance-worker-server-2026-04-20.jsonl'), 'utf8')
   const lines = logContent.split('\n').filter(Boolean)
   const [record] = lines.map((line) => {
     return JSON.parse(line) as Record<string, unknown>
@@ -160,13 +169,13 @@ test('runtime JSONL sink writes one structured record to the service daily file'
     message: 'structured sink test',
     runtime: {
       hostname: 'test-host',
-      instanceId: 'worker-server:test-host:4011:222:2026-04-20T12:00:00.000Z',
+      instanceId: 'maintenance-worker-server:test-host:4011:222:2026-04-20T12:00:00.000Z',
       listenPort: 4011,
       pid: 222,
       processStartedAt: '2026-04-20T12:00:00.000Z',
       runtimeProfile: 'primary',
-      serverRole: 'worker',
-      service: 'worker-server',
+      serverRole: 'maintenance-worker',
+      service: 'maintenance-worker-server',
     },
     severity: 'INFO',
     timestamp,
@@ -293,10 +302,10 @@ test('runtime JSONL sink uses instance suffixed fallback files when shared appen
     listenPort: 4012,
     pid: 223,
     processStartedAt: '2026-04-20T12:00:00.000Z',
-    service: 'worker-server',
+    service: 'maintenance-worker-server',
   })
   installRuntimeJsonlSink({
-    envValues: {LOG_DIR: logDir, LOG_LEVEL: 'INFO', SERVER_ROLE: 'worker'},
+    envValues: {LOG_DIR: logDir, LOG_LEVEL: 'INFO', SERVER_ROLE: 'maintenance-worker'},
     platform: 'win32',
     timestamp: '2026-04-20T12:00:00.000Z',
   })
@@ -312,10 +321,13 @@ test('runtime JSONL sink uses instance suffixed fallback files when shared appen
 
   expect(
     existsSync(
-      join(logDir, 'worker-server-2026-04-20-worker-server_test-host_4012_223_2026-04-20T12_00_00.000Z.jsonl'),
+      join(
+        logDir,
+        'maintenance-worker-server-2026-04-20-maintenance-worker-server_test-host_4012_223_2026-04-20T12_00_00.000Z.jsonl',
+      ),
     ),
   ).toBe(true)
-  expect(existsSync(join(logDir, 'worker-server-2026-04-20.jsonl'))).toBe(false)
+  expect(existsSync(join(logDir, 'maintenance-worker-server-2026-04-20.jsonl'))).toBe(false)
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
 })
@@ -324,8 +336,8 @@ test('runtime JSONL sink prunes managed files older than seven UTC days at boots
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
   const logDir = mkdtempSync(join(tmpdir(), 'forska-runtime-logger-'))
-  const oldFile = 'worker-server-2026-04-11.jsonl'
-  const retainedFile = 'worker-server-2026-04-13.jsonl'
+  const oldFile = 'maintenance-worker-server-2026-04-11.jsonl'
+  const retainedFile = 'maintenance-worker-server-2026-04-13.jsonl'
   const unmanagedFile = 'notes-2026-04-01.jsonl'
   writeFileSync(join(logDir, oldFile), '{}\n', 'utf8')
   writeFileSync(join(logDir, retainedFile), '{}\n', 'utf8')
@@ -336,10 +348,10 @@ test('runtime JSONL sink prunes managed files older than seven UTC days at boots
     listenPort: 4013,
     pid: 224,
     processStartedAt: '2026-04-20T12:00:00.000Z',
-    service: 'worker-server',
+    service: 'maintenance-worker-server',
   })
   installRuntimeJsonlSink({
-    envValues: {LOG_DIR: logDir, LOG_LEVEL: 'INFO', SERVER_ROLE: 'worker'},
+    envValues: {LOG_DIR: logDir, LOG_LEVEL: 'INFO', SERVER_ROLE: 'maintenance-worker'},
     timestamp: '2026-04-20T00:00:00.000Z',
   })
 
@@ -347,7 +359,7 @@ test('runtime JSONL sink prunes managed files older than seven UTC days at boots
   expect(existsSync(join(logDir, retainedFile))).toBe(true)
   expect(existsSync(join(logDir, unmanagedFile))).toBe(true)
 
-  writeFileSync(join(logDir, 'worker-server-2026-04-12.jsonl'), '{}\n', 'utf8')
+  writeFileSync(join(logDir, 'maintenance-worker-server-2026-04-12.jsonl'), '{}\n', 'utf8')
   expect(
     writeRuntimeLogEvent({
       event: 'runtime.logger.rollover',
@@ -356,7 +368,7 @@ test('runtime JSONL sink prunes managed files older than seven UTC days at boots
       timestamp: '2026-04-21T00:00:00.001Z',
     }),
   ).toBe(true)
-  expect(existsSync(join(logDir, 'worker-server-2026-04-12.jsonl'))).toBe(false)
+  expect(existsSync(join(logDir, 'maintenance-worker-server-2026-04-12.jsonl'))).toBe(false)
   resetRuntimeJsonlSinkForTests()
   resetRuntimeProcessIdentityForTests()
 })
@@ -479,10 +491,10 @@ test('failure-visible events always write terminal stderr and may duplicate to J
     listenPort: 4016,
     pid: 227,
     processStartedAt: '2026-04-20T12:00:00.000Z',
-    service: 'worker-server',
+    service: 'maintenance-worker-server',
   })
   installRuntimeJsonlSink({
-    envValues: {LOG_DIR: logDir, LOG_LEVEL: 'ERROR', SERVER_ROLE: 'worker'},
+    envValues: {LOG_DIR: logDir, LOG_LEVEL: 'ERROR', SERVER_ROLE: 'maintenance-worker'},
     timestamp: '2026-04-20T12:00:00.000Z',
   })
 
@@ -497,7 +509,7 @@ test('failure-visible events always write terminal stderr and may duplicate to J
     }),
   ).toBe(true)
 
-  const logContent = readFileSync(join(logDir, 'worker-server-2026-04-20.jsonl'), 'utf8')
+  const logContent = readFileSync(join(logDir, 'maintenance-worker-server-2026-04-20.jsonl'), 'utf8')
   const [record] = logContent
     .split('\n')
     .filter(Boolean)
@@ -552,17 +564,17 @@ test('file-only rate-limited logs write runtime JSONL without terminal output wh
     listenPort: 4014,
     pid: 225,
     processStartedAt: '2026-04-20T12:00:00.000Z',
-    service: 'worker-server',
+    service: 'maintenance-worker-server',
   })
   installRuntimeJsonlSink({
-    envValues: {LOG_DIR: logDir, LOG_LEVEL: 'INFO', SERVER_ROLE: 'worker'},
+    envValues: {LOG_DIR: logDir, LOG_LEVEL: 'INFO', SERVER_ROLE: 'maintenance-worker'},
     timestamp: '2026-04-20T12:00:00.000Z',
   })
   const logger = createRateLimitedLogger({sink: 'file-only', windowMs: 10})
 
   logger.warn('runtime.logger.file-only-installed', 'file warning', {batch: 1})
 
-  const logContent = readFileSync(join(logDir, 'worker-server-2026-04-20.jsonl'), 'utf8')
+  const logContent = readFileSync(join(logDir, `maintenance-worker-server-${getCurrentUtcLogDate()}.jsonl`), 'utf8')
   const [record] = logContent
     .split('\n')
     .filter(Boolean)
@@ -604,7 +616,7 @@ test('both-sink rate-limited logs write terminal output and runtime JSONL', () =
 
   logger.log('runtime.logger.both-sink', 'both sink log', {route: '/api/projects'})
 
-  const logContent = readFileSync(join(logDir, 'dev-single-server-2026-04-20.jsonl'), 'utf8')
+  const logContent = readFileSync(join(logDir, `dev-single-server-${getCurrentUtcLogDate()}.jsonl`), 'utf8')
   const [record] = logContent
     .split('\n')
     .filter(Boolean)

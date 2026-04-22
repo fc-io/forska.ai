@@ -55,8 +55,8 @@ const deleteSnapshotFile = (snapshotPath: string) => {
   return [
     snapshotPath,
     `${snapshotPath}.wal`,
-    `${snapshotPath}.writer.history.json`,
-    `${snapshotPath}.writer.lock`,
+    `${snapshotPath}.duckdb-owner.history.json`,
+    `${snapshotPath}.duckdb-owner.lock`,
   ].map((filePath) => {
     return existsSync(filePath) ? rmSync(filePath, {force: true, recursive: true}) : null
   })

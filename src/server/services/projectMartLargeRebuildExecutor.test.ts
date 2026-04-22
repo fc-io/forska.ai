@@ -101,8 +101,8 @@ const runScript = <T>(body: string) => {
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.wal`)
-    removeFileIfExists(`${duckdbPath}.writer.lock`)
-    removeFileIfExists(`${duckdbPath}.writer.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
     removeFileIfExists('/tmp/duckdb-temp')
   }
 }

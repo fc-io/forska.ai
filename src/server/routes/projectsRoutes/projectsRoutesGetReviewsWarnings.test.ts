@@ -338,8 +338,8 @@ afterAll(async () => {
   setAutoDrainEnabledForTests?.(true)
   await closeDatabase?.()
   rmSync(tempDbPath, {force: true})
-  rmSync(`${tempDbPath}.writer.history.json`, {force: true})
-  rmSync(`${tempDbPath}.writer.lock`, {force: true})
+  rmSync(`${tempDbPath}.duckdb-owner.history.json`, {force: true})
+  rmSync(`${tempDbPath}.duckdb-owner.lock`, {force: true})
 })
 
 test('reviews warnings report ready when serving rows are fresh', async () => {
