@@ -2,7 +2,11 @@ import {useQuery} from '@tanstack/solid-query'
 import {Link} from '@tanstack/solid-router'
 import {createMemo, Show} from 'solid-js'
 
-import {getReviewIndexingInProgressTitle} from './getReviewIndexingInProgressTitle.ts'
+import {
+  getReviewIndexingBlockedBody,
+  getReviewIndexingBlockedTitle,
+  getReviewIndexingInProgressTitle,
+} from './getReviewIndexingInProgressTitle.ts'
 import {ReviewsIndexingProgress} from './reviewsIndexingProgress.tsx'
 import {createReviewsWarningsQueryOptions, type ReviewsWarningsData} from './reviewsWarningsQuery.ts'
 
@@ -20,27 +24,31 @@ const getPendingRefreshLabel = (pendingRefreshCount: number) => {
 
 const getIndexingBannerTitle = (
   params: {
+    blockedReason: ReviewsWarningsData['indexing']['blockedReason']
     largeRebuild: null | {rebuildPhase: string | null}
     pendingArticleRefreshCount: number
     pendingProjectRefreshCount: number
-    status: 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
+    status: ReviewsWarningsData['indexing']['status']
   },
   projectId: string,
 ) => {
-  return params.status === 'failed'
-    ? params.largeRebuild?.rebuildPhase
-      ? `Large rebuild failed: ${params.largeRebuild.rebuildPhase}`
-      : 'Review indexing failed'
-    : params.status === 'stale'
-      ? 'Review index is catching up'
-      : params.largeRebuild?.rebuildPhase
-        ? `Large rebuild in progress: ${params.largeRebuild.rebuildPhase}`
-        : params.pendingArticleRefreshCount > 0 && params.pendingProjectRefreshCount === 0
-          ? 'New judgments are still being incorporated'
-          : getReviewIndexingInProgressTitle(projectId)
+  return params.status === 'blocked'
+    ? getReviewIndexingBlockedTitle(params.blockedReason)
+    : params.status === 'failed'
+      ? params.largeRebuild?.rebuildPhase
+        ? `Large rebuild failed: ${params.largeRebuild.rebuildPhase}`
+        : 'Review indexing failed'
+      : params.status === 'stale'
+        ? 'Review index is catching up'
+        : params.largeRebuild?.rebuildPhase
+          ? `Large rebuild in progress: ${params.largeRebuild.rebuildPhase}`
+          : params.pendingArticleRefreshCount > 0 && params.pendingProjectRefreshCount === 0
+            ? 'New judgments are still being incorporated'
+            : getReviewIndexingInProgressTitle(projectId)
 }
 
 const getIndexingBannerBody = (params: {
+  blockedReason: ReviewsWarningsData['indexing']['blockedReason']
   largeRebuild: null | {
     cursorArticleCreatedAt: string | null
     cursorArticleId: string | null
@@ -49,21 +57,23 @@ const getIndexingBannerBody = (params: {
   }
   pendingArticleRefreshCount: number
   pendingProjectRefreshCount: number
-  status: 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
+  status: ReviewsWarningsData['indexing']['status']
 }) => {
-  return params.status === 'failed'
-    ? params.largeRebuild?.lastError
-      ? `Large rebuild failed: ${params.largeRebuild.lastError}`
-      : 'The latest review index refresh failed, so review lists may be stale or incomplete until the writer retries the project.'
-    : params.status === 'stale'
-      ? 'This project has scoped articles, but the review index is missing or stale. Review lists may stay empty until the writer rebuilds the project.'
-      : params.largeRebuild?.rebuildPhase
-        ? 'This project is being rebuilt in bounded stages to avoid large-refresh crashes. Review lists and counts may change until the staged rebuild finishes.'
-        : params.pendingProjectRefreshCount > 0 && params.pendingArticleRefreshCount > 0
-          ? 'This project is still rebuilding its review index and folding in newly produced judgments. Counts and article lists may change until the backlog clears.'
-          : params.pendingProjectRefreshCount > 0
-            ? 'This project has scoped articles, but the review index is still updating in the background. Review lists may look partial or empty until indexing finishes.'
-            : "New judgments are still being folded into this project's review index. Counts and article lists may change until the backlog clears."
+  return params.status === 'blocked'
+    ? getReviewIndexingBlockedBody(params.blockedReason)
+    : params.status === 'failed'
+      ? params.largeRebuild?.lastError
+        ? `Large rebuild failed: ${params.largeRebuild.lastError}`
+        : 'The latest review index refresh failed, so review lists may be stale or incomplete until the maintenance worker retries the project.'
+      : params.status === 'stale'
+        ? 'This project has scoped articles, but the review index is missing or stale. Review lists may stay empty until the maintenance worker rebuilds the project.'
+        : params.largeRebuild?.rebuildPhase
+          ? 'This project is being rebuilt in bounded stages to avoid large-refresh crashes. Review lists and counts may change until the staged rebuild finishes.'
+          : params.pendingProjectRefreshCount > 0 && params.pendingArticleRefreshCount > 0
+            ? 'This project is still rebuilding its review index and folding in newly produced judgments. Counts and article lists may change until the backlog clears.'
+            : params.pendingProjectRefreshCount > 0
+              ? 'This project has scoped articles, but the review index is still updating in the background. Review lists may look partial or empty until indexing finishes.'
+              : "New judgments are still being folded into this project's review index. Counts and article lists may change until the backlog clears."
 }
 
 const getPendingRefreshMetaLabel = (params: {
@@ -124,13 +134,13 @@ export const ReviewsProjectWarnings = (props: {projectId: string}) => {
   const showIndexingBanner = createMemo(() => {
     const status = warningsData()?.indexing.status ?? 'ready'
 
-    return status === 'failed' || status === 'refreshing' || status === 'stale'
+    return status === 'blocked' || status === 'failed' || status === 'refreshing' || status === 'stale'
   })
 
   const indexingBannerTone = createMemo(() => {
     return warningsData()?.indexing.status === 'failed'
       ? 'bg-rose-50 border-rose-200 text-rose-900'
-      : warningsData()?.indexing.status === 'stale'
+      : warningsData()?.indexing.status === 'blocked' || warningsData()?.indexing.status === 'stale'
         ? 'bg-orange-50 border-orange-200 text-orange-900'
         : 'bg-sky-50 border-sky-200 text-sky-900'
   })

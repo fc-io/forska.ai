@@ -4,7 +4,12 @@ import {handleApiResponse} from '../../../services/utils/handleApiResponse.ts'
 export type ReviewsWarningsData = {
   enabledPromptCount: number
   indexing: {
+    activeConsumerCount: number
+    activeWorkCount: number
     articleRefreshesPerMinute: number | null
+    blockedReason: 'paused_by_policy' | 'waiting_for_maintenance_worker' | null
+    eligibleConsumerCount: number
+    eligibleConsumerPresent: boolean
     inFlightArticleRefreshCount: number
     inFlightProjectRefreshCount: number
     inFlightRefreshCount: number
@@ -16,15 +21,21 @@ export type ReviewsWarningsData = {
       refreshStatus: 'failed' | 'idle' | 'running' | null
       refreshToken: number | null
     }
+    lastProgressedAt: string | null
+    lastStartedAt: string | null
     oldestQueuedAt: string | null
     pendingArticleRefreshCount: number
     pendingProjectRefreshCount: number
     pendingRefreshCount: number
+    progressState: 'blocked' | 'completed' | 'failed' | 'processing' | 'queued' | 'stalled'
     projectRefreshesPerMinute: number | null
     queuedArticleRefreshCount: number
     queuedProjectRefreshCount: number
     queuedRefreshCount: number
-    status: 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
+    recoveryMode: 'none'
+    requiredConsumerRole: 'maintenance-worker'
+    retryAfterAt: string | null
+    status: 'blocked' | 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
   }
   projectId: string
   scope: {hasAnyArticlesInScope: boolean}

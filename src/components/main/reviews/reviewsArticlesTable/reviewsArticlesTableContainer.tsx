@@ -5,7 +5,11 @@ import {createEffect, createMemo, createSignal, Show} from 'solid-js'
 import type {LlmStatus} from '../../../../services/olap/olapTypes.ts'
 import {createArticlesReviewsCountQueryOptions} from '../../projects/projectsArticlesReviewsCountQuery.ts'
 import {createArticlesReviewsQueryOptions} from '../../projects/projectsArticlesReviewsQuery.ts'
-import {getReviewIndexingInProgressTitle} from '../getReviewIndexingInProgressTitle.ts'
+import {
+  getReviewIndexingBlockedBody,
+  getReviewIndexingBlockedTitle,
+  getReviewIndexingInProgressTitle,
+} from '../getReviewIndexingInProgressTitle.ts'
 import {ReviewsIndexingProgress} from '../reviewsIndexingProgress.tsx'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
 import {createReviewsWarningsQueryOptions} from '../reviewsWarningsQuery.ts'
@@ -146,36 +150,42 @@ export const ReviewsArticlesTableContainer = (props: ReviewsArticlesTableContain
   const emptyState = createMemo(() => {
     const warningsData = warningsQuery.data
 
-    return warningsData?.indexing.status === 'refreshing' && warningsData.scope.hasAnyArticlesInScope
-      ? warningsData.indexing.pendingArticleRefreshCount > 0 && warningsData.indexing.pendingProjectRefreshCount === 0
-        ? {
-            description:
-              'New judgments are still being folded into this project. Articles and counts here may change as the backlog clears.',
-            title: 'New judgments are still being incorporated',
-          }
-        : {
-            description:
-              'This project has scoped articles, but the review index is still updating. Articles with judgments may appear here soon.',
-            title: getReviewIndexingInProgressTitle(props.projectId),
-          }
-      : (warningsData?.indexing.status === 'failed' || warningsData?.indexing.status === 'stale')
-          && warningsData.scope.hasAnyArticlesInScope
-        ? {
-            description:
-              warningsData.indexing.status === 'failed'
-                ? 'The latest review refresh failed. Results may stay stale or incomplete until the writer retries the review index.'
-                : 'This project has scoped articles, but the review index is missing or stale. Results may stay empty until the writer rebuilds the review index.',
-            title: warningsData.indexing.status === 'failed' ? 'Review indexing failed' : 'Review index is catching up',
-          }
-        : hasPromptFilters()
+    return warningsData?.indexing.status === 'blocked' && warningsData.scope.hasAnyArticlesInScope
+      ? {
+          description: getReviewIndexingBlockedBody(warningsData.indexing.blockedReason),
+          title: getReviewIndexingBlockedTitle(warningsData.indexing.blockedReason),
+        }
+      : warningsData?.indexing.status === 'refreshing' && warningsData.scope.hasAnyArticlesInScope
+        ? warningsData.indexing.pendingArticleRefreshCount > 0 && warningsData.indexing.pendingProjectRefreshCount === 0
           ? {
-              description: 'Try clearing one or more prompt filters or widening the date range.',
-              title: 'No articles found for these filters',
+              description:
+                'New judgments are still being folded into this project. Articles and counts here may change as the backlog clears.',
+              title: 'New judgments are still being incorporated',
             }
           : {
-              description: 'No articles in this project have matching LLM judgments yet.',
-              title: 'No articles found with judgments',
+              description:
+                'This project has scoped articles, but the review index is still updating. Articles with judgments may appear here soon.',
+              title: getReviewIndexingInProgressTitle(props.projectId),
             }
+        : (warningsData?.indexing.status === 'failed' || warningsData?.indexing.status === 'stale')
+            && warningsData.scope.hasAnyArticlesInScope
+          ? {
+              description:
+                warningsData.indexing.status === 'failed'
+                  ? 'The latest review refresh failed. Results may stay stale or incomplete until the maintenance worker retries the review index.'
+                  : 'This project has scoped articles, but the review index is missing or stale. Results may stay empty until the maintenance worker rebuilds the review index.',
+              title:
+                warningsData.indexing.status === 'failed' ? 'Review indexing failed' : 'Review index is catching up',
+            }
+          : hasPromptFilters()
+            ? {
+                description: 'Try clearing one or more prompt filters or widening the date range.',
+                title: 'No articles found for these filters',
+              }
+            : {
+                description: 'No articles in this project have matching LLM judgments yet.',
+                title: 'No articles found with judgments',
+              }
   })
 
   const loadedArticles = () => {

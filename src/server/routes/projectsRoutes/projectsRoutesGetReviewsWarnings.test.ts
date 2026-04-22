@@ -14,17 +14,28 @@ type ReviewsWarningsResponse = {
   data: {
     enabledPromptCount: number
     indexing: {
+      activeConsumerCount: number
+      activeWorkCount: number
+      blockedReason: 'paused_by_policy' | 'waiting_for_maintenance_worker' | null
+      eligibleConsumerCount: number
+      eligibleConsumerPresent: boolean
       inFlightArticleRefreshCount: number
       inFlightProjectRefreshCount: number
       inFlightRefreshCount: number
+      lastProgressedAt: string | null
+      lastStartedAt: string | null
       oldestQueuedAt: string | null
       pendingArticleRefreshCount: number
       pendingProjectRefreshCount: number
       pendingRefreshCount: number
+      progressState: 'blocked' | 'completed' | 'failed' | 'processing' | 'queued' | 'stalled'
       queuedArticleRefreshCount: number
       queuedProjectRefreshCount: number
       queuedRefreshCount: number
-      status: 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
+      recoveryMode: 'none'
+      requiredConsumerRole: 'maintenance-worker'
+      retryAfterAt: string | null
+      status: 'blocked' | 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
     }
     projectId: string
     scope: {hasAnyArticlesInScope: boolean}
@@ -344,6 +355,7 @@ test('reviews warnings report ready when serving rows are fresh', async () => {
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
   expect(body.data.enabledPromptCount).toBe(1)
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('completed')
   expect(body.data.indexing.status).toBe('ready')
 })
 
@@ -384,6 +396,10 @@ test('reviews warnings report refreshing from ledger and worker progress state',
   expect(body.data.indexing.queuedRefreshCount).toBe(0)
   expect(body.data.indexing.inFlightRefreshCount).toBe(2)
   expect(body.data.indexing.pendingRefreshCount).toBe(2)
+  expect(body.data.indexing.activeConsumerCount).toBe(1)
+  expect(body.data.indexing.activeWorkCount).toBe(2)
+  expect(body.data.indexing.eligibleConsumerPresent).toBe(true)
+  expect(body.data.indexing.progressState).toBe('processing')
   expect(body.data.indexing.status).toBe('refreshing')
 })
 
@@ -397,6 +413,7 @@ test('reviews warnings report stale when scope exists but review rollups are mis
   expect(response.status).toBe(200)
   expect(body.data.scope.hasAnyArticlesInScope).toBe(true)
   expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.progressState).toBe('stalled')
   expect(body.data.indexing.status).toBe('stale')
 })
 
@@ -420,6 +437,7 @@ test('reviews warnings report failed when refresh work is still dirty after a fa
   expect(body.data.indexing.inFlightProjectRefreshCount).toBe(0)
   expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
   expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.progressState).toBe('failed')
   expect(body.data.indexing.status).toBe('failed')
 })
 
@@ -447,7 +465,68 @@ test('reviews warnings treat expired running leases as queued instead of in-flig
   expect(body.data.indexing.inFlightArticleRefreshCount).toBe(0)
   expect(body.data.indexing.pendingArticleRefreshCount).toBe(1)
   expect(body.data.indexing.pendingRefreshCount).toBe(2)
+  expect(body.data.indexing.progressState).toBe('queued')
   expect(body.data.indexing.status).toBe('refreshing')
+})
+
+test('reviews warnings report blocked when pending work has no local refresh consumer', async () => {
+  const projectId = 'project-blocked-no-consumer-warning'
+  const {withCurrentServerRoleOverride} = await import('../../utils/serverRuntimeRole.ts')
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {
+    dirtyToken: 2,
+    lastCompletedRefreshToken: 1,
+    lastRequestedAt: '2026-04-02T12:00:00.000Z',
+    refreshStatus: 'idle',
+  })
+
+  const {body, response} = await withCurrentServerRoleOverride('api', () => {
+    return postWarningsRequest(projectId)
+  })
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.activeConsumerCount).toBe(0)
+  expect(body.data.indexing.activeWorkCount).toBe(0)
+  expect(body.data.indexing.blockedReason).toBe('waiting_for_maintenance_worker')
+  expect(body.data.indexing.eligibleConsumerCount).toBe(0)
+  expect(body.data.indexing.eligibleConsumerPresent).toBe(false)
+  expect(body.data.indexing.pendingRefreshCount).toBe(1)
+  expect(body.data.indexing.progressState).toBe('blocked')
+  expect(body.data.indexing.requiredConsumerRole).toBe('maintenance-worker')
+  expect(body.data.indexing.status).toBe('blocked')
+})
+
+test('reviews warnings report blocked when memory policy disables mart refresh drain', async () => {
+  const projectId = 'project-blocked-low-memory-warning'
+  const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
+
+  process.env.DUCKDB_MEMORY_LIMIT = '6400MiB'
+
+  try {
+    await insertProjectFixture(projectId)
+    await insertProjectRefreshState(projectId, {
+      dirtyToken: 2,
+      lastCompletedRefreshToken: 1,
+      lastRequestedAt: '2026-04-02T12:00:00.000Z',
+      refreshStatus: 'idle',
+    })
+
+    const {body, response} = await postWarningsRequest(projectId)
+
+    expect(response.status).toBe(200)
+    expect(body.data.indexing.blockedReason).toBe('paused_by_policy')
+    expect(body.data.indexing.eligibleConsumerPresent).toBe(false)
+    expect(body.data.indexing.progressState).toBe('blocked')
+    expect(body.data.indexing.recoveryMode).toBe('none')
+    expect(body.data.indexing.status).toBe('blocked')
+  } finally {
+    if (previousDuckdbMemoryLimit === undefined) {
+      delete process.env.DUCKDB_MEMORY_LIMIT
+    } else {
+      process.env.DUCKDB_MEMORY_LIMIT = previousDuckdbMemoryLimit
+    }
+  }
 })
 
 test('reviews warnings report refreshing when a staged large rebuild is queued', async () => {

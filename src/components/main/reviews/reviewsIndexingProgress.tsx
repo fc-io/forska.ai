@@ -34,9 +34,17 @@ const getLargeRebuildFailureLabel = (indexing: ReviewsWarningsData['indexing']) 
   return lastError === null || lastError === undefined ? null : `last error: ${lastError}`
 }
 
+const shouldShowIndexingProgress = (indexing: ReviewsWarningsData['indexing']) => {
+  return (
+    indexing.status === 'refreshing'
+    || indexing.status === 'blocked'
+    || (indexing.status === 'failed' && getLargeRebuildFailureLabel(indexing) !== null)
+  )
+}
+
 export const ReviewsIndexingProgress = (props: ReviewsIndexingProgressProps) => {
   return (
-    <Show when={props.indexing.status === 'refreshing'}>
+    <Show when={shouldShowIndexingProgress(props.indexing)}>
       <div class={getProgressContainerClass(props.compact ?? false)}>
         <p>
           <span class="font-medium text-slate-700">Project refreshes:</span>{' '}

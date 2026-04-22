@@ -32,6 +32,8 @@ Adopt the explicit long-term role split in one migration: `api`, `maintenance-wo
 Terms used in this plan:
 
 - split deployment means `api`, `maintenance-worker`, and `judge-worker` run as separate processes, usually on separate ports; when `maintenance-worker` must adopt existing judgment-job SQLite state, the candidate processes must run on the same host and share the same data volume
+- non-local worker process means a worker process other than the process handling the current API request; it may run on the same machine on another port or on a separate host, depending on the deployment
+- worker-registry code should use names such as `registeredWorker`, `registeredWorkerHeartbeat`, or `nonLocalWorkerProcess` for process-relative registry concepts; reserve `remoteWorker` names for resources that are actually remote by network location, such as existing inference or GPU worker URLs
 - cutover release means the first shipped runtime that removes production dependence on `writer`, `auto`, and compatibility `worker`; it is not a special git branch requirement
 
 Do not ship an intermediate production topology.
@@ -366,6 +368,7 @@ Add a persisted worker registry and queue-progress source of truth.
 
 - store worker heartbeats in DuckDB, for example with fields like `instanceId`, `role`, `capabilities`, `memoryLimit`, `throughputProfile`, and `lastHeartbeatAt`
 - have every process heartbeat through the active DuckDB owner so the DuckDB registry remains authoritative while an owner is healthy
+- use the worker registry to count eligible consumers across all live worker processes, not just the local process serving the API request; an `api` process can then distinguish no maintenance worker from a healthy non-local `maintenance-worker` on another port or host
 - have standby `maintenance-worker` candidates also publish minimal ownerless-readable candidacy and takeover-intent state, including `lastSeenOwnerAt`, `lastTakeoverAttemptAt`, and current takeover status, through the mandatory control-state backend or shared lease metadata so `api` can distinguish missing maintenance from takeover in progress during owner loss
 - persist `maintenance-worker` recovery state needed for ownerless diagnostics and honest status, including configured DuckDB ceiling, derived startup rung, current active cap rung, controlled DuckDB restart-gate state, and heavy-work breaker cooldown when those fields affect operator or product truth
 - persist `lastStartedAt` per backlog type when a consumer actually begins a batch
@@ -814,7 +817,7 @@ Practical next steps:
 3. Update queue consumers to create claims or leases when work starts, refresh them while active, and stamp progress on successful batch completion.
 4. Make review refresh claims explicitly project-scoped from the first cutover slice, with article-refresh work preserving `projectId` plus `articleId` or equivalent batch scope.
 5. Add maintenance-owned writes for judgment-job SQLite health and claim projection refresh, including `jobId`, `projectId`, `queueRecordId`, `articleId`, prompt, model, and content-setting identity where queue truth depends on it.
-6. Add registry queries for eligible maintenance consumers by capability.
+6. Add registry queries for eligible maintenance consumers by capability across all fresh worker heartbeats.
 7. Add shared projection or heartbeat fields for `judge-worker` completion-outbox backlog and last acknowledged completion timestamp.
 8. Add maintenance-candidate takeover-intent writes and readers for the ownerless-readable backend.
 9. Add shared recovery-state projection for maintenance active cap, restart gate, breaker cooldown, and project-scoped retry-after or paused-at-floor maintenance states.
@@ -1207,7 +1210,7 @@ Suggested first implementation slice:
 3. add the dedicated read-only query path for audited `api` routes plus the mandatory ownerless-readable backend for routes that must answer without an active owner
 4. migrate writer-named env, runtime-profile, persisted-config, local-settings, settings UI, rebuild-tuning, client-query, package-script, dev-watch, CLI-helper, desktop-startup, route, lease, and runtime-service naming surfaces to owner or maintenance-worker naming, including one-time DuckDB and local settings rewrite
 5. add persisted worker heartbeat, project-scoped and article-scoped queue progress, shared SQLite health projection, and maintenance takeover intent
-6. expose local capabilities and registry-derived eligible consumers in diagnostics
+6. expose local capabilities and registry-derived eligible consumers across separate worker processes in diagnostics
 7. extend review warnings and judgment-job health APIs so they answer from shared or read-only state and report honest consumer semantics
 8. add owner-backed judging APIs that preserve `jobId`, `projectId`, `claimId`, `executionSnapshotId`, `executionSnapshotHash`, `queueRecordId`, `articleId`, and the benchmark-critical judgment config tuple, back them with an immutable execution snapshot store, add `JUDGE_WORKER_ID` or explicit `JUDGE_WORKER_JOURNAL_PATH` startup wiring, move `sendToLLM` onto `judge-worker` with a durable file-backed local SQLite claim journal and completion outbox keyed by that stable logical id or explicit journal path plus replay, and support maintenance-owned immutable snapshot fetch for separate-host `judge-worker` fallback
 9. add cutover-version checks and the cutover-migration fence so incompatible writer-era peers or fresh reachable legacy writer leases refuse startup or serving during the release
@@ -1345,7 +1348,7 @@ Changes:
 - Stop relying on one coarse owner gate for all crons.
 - Split the current `writerCronRoutes` bundle into explicit maintenance, judging, and process-local diagnostics mounts.
 - Mount `fullTextJobsCron`, `fullTextConversionJobsCron`, and `nvidiaSmiCron` on `maintenance-worker` in the cutover release instead of letting them disappear behind removed writer gating.
-- Keep `nvidiaSmiCron` maintenance-owned in the cutover release because it polls remote workers and persists shared operator telemetry into DuckDB; do not duplicate it across `api` or `judge-worker` processes.
+- Keep `nvidiaSmiCron` maintenance-owned in the cutover release because it polls separate GPU worker processes or hosts and persists shared operator telemetry into DuckDB; do not duplicate it across `api` or `judge-worker` processes.
 - Mount the public product route tree only on `api`; keep `maintenance-worker` on its private owner-backed RPC or control plus internal health surface, and keep `judge-worker` off public product routes entirely.
 - Add explicit route classification and keep `/api/*` proxy-by-default until routes are audited for local-read safety.
 - Expose the dedicated bootstrap-safe readiness route on `api` independently from the detailed worker-registry route.
@@ -1393,9 +1396,10 @@ Primary files:
 
 Changes:
 
-- Add durable worker heartbeat records for role, capabilities, memory limit, throughput profile, and last heartbeat.
+- Add durable worker heartbeat records for role, capabilities, memory limit, throughput profile, and last heartbeat, covering both the local process and non-local worker processes in the same deployment.
 - Have `api`, `maintenance-worker`, and `judge-worker` processes heartbeat through the owner API.
-- Add registry queries for eligible maintenance consumers.
+- Add registry queries for eligible maintenance consumers across all fresh worker heartbeats, not only the local runtime role.
+- Name worker-registry implementation types and variables around registered or non-local worker processes instead of `remoteWorker*`, unless the value specifically represents a network-remote worker URL or host.
 - Add ownerless-readable maintenance takeover-intent records so status routes can show `takeover_in_progress` during owner loss.
 - Persist queue-level claim or lease rows for import and refresh work, including claim freshness, `projectId` and `articleId` scope for review work, and `jobId` plus `projectId` plus `queueRecordId` plus `articleId` plus the benchmark-critical judgment config tuple where applicable.
 - Persist queue-level and project-scoped `lastStartedAt` for import and refresh work.
@@ -1429,7 +1433,7 @@ Changes:
   - whether the current process owns DuckDB
   - whether key status routes are served locally or owner-proxied
   - which ownerless-readable backend each ownerless route is using
-  - registry-derived eligible consumers by capability
+  - registry-derived eligible consumers by capability across separate worker processes
   - maintenance takeover intent and takeover status when present
   - active adaptive profile or queue policy if derivable
   - read path mode per key route or flow

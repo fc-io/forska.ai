@@ -3,7 +3,11 @@ import type {Accessor, Setter} from 'solid-js'
 import {createEffect, createMemo, createSignal, Show, Suspense} from 'solid-js'
 
 import {createArticlesUnassessedQueryOptions} from '../../projects/projectsArticlesUnassessedQuery.ts'
-import {getReviewIndexingInProgressTitle} from '../getReviewIndexingInProgressTitle.ts'
+import {
+  getReviewIndexingBlockedBody,
+  getReviewIndexingBlockedTitle,
+  getReviewIndexingInProgressTitle,
+} from '../getReviewIndexingInProgressTitle.ts'
 import {ReviewsIndexingProgress} from '../reviewsIndexingProgress.tsx'
 import {ReviewsPaginationControls} from '../reviewsPaginationControls.tsx'
 import {createReviewsWarningsQueryOptions} from '../reviewsWarningsQuery.ts'
@@ -62,36 +66,42 @@ export const ReviewsArticlesUnassessedTableContainer = (props: ReviewsArticlesUn
   const emptyState = createMemo(() => {
     const warningsData = warningsQuery.data
 
-    return warningsData?.indexing.status === 'refreshing' && warningsData.scope.hasAnyArticlesInScope
-      ? warningsData.indexing.pendingArticleRefreshCount > 0 && warningsData.indexing.pendingProjectRefreshCount === 0
-        ? {
-            description:
-              'New judgments are still being folded into this project. This list may change as the backlog clears.',
-            title: 'New judgments are still being incorporated',
-          }
-        : {
-            description:
-              'This project has scoped articles, but the review index is still updating. The unassessed list may appear empty until indexing finishes.',
-            title: getReviewIndexingInProgressTitle(props.projectId),
-          }
-      : (warningsData?.indexing.status === 'failed' || warningsData?.indexing.status === 'stale')
-          && warningsData.scope.hasAnyArticlesInScope
-        ? {
-            description:
-              warningsData.indexing.status === 'failed'
-                ? 'The latest review refresh failed. Unassessed results may stay stale or incomplete until the writer retries the review index.'
-                : 'This project has scoped articles, but the review index is missing or stale. Unassessed results may stay empty until the writer rebuilds the review index.',
-            title: warningsData.indexing.status === 'failed' ? 'Review indexing failed' : 'Review index is catching up',
-          }
-        : hasFilters()
+    return warningsData?.indexing.status === 'blocked' && warningsData.scope.hasAnyArticlesInScope
+      ? {
+          description: getReviewIndexingBlockedBody(warningsData.indexing.blockedReason),
+          title: getReviewIndexingBlockedTitle(warningsData.indexing.blockedReason),
+        }
+      : warningsData?.indexing.status === 'refreshing' && warningsData.scope.hasAnyArticlesInScope
+        ? warningsData.indexing.pendingArticleRefreshCount > 0 && warningsData.indexing.pendingProjectRefreshCount === 0
           ? {
-              description: 'Try widening the date range or clearing the title search.',
-              title: 'No unassessed articles match these filters',
+              description:
+                'New judgments are still being folded into this project. This list may change as the backlog clears.',
+              title: 'New judgments are still being incorporated',
             }
           : {
-              description: 'Every scoped article already has the required LLM judgments for this project.',
-              title: 'No unassessed articles found',
+              description:
+                'This project has scoped articles, but the review index is still updating. The unassessed list may appear empty until indexing finishes.',
+              title: getReviewIndexingInProgressTitle(props.projectId),
             }
+        : (warningsData?.indexing.status === 'failed' || warningsData?.indexing.status === 'stale')
+            && warningsData.scope.hasAnyArticlesInScope
+          ? {
+              description:
+                warningsData.indexing.status === 'failed'
+                  ? 'The latest review refresh failed. Unassessed results may stay stale or incomplete until the maintenance worker retries the review index.'
+                  : 'This project has scoped articles, but the review index is missing or stale. Unassessed results may stay empty until the maintenance worker rebuilds the review index.',
+              title:
+                warningsData.indexing.status === 'failed' ? 'Review indexing failed' : 'Review index is catching up',
+            }
+          : hasFilters()
+            ? {
+                description: 'Try widening the date range or clearing the title search.',
+                title: 'No unassessed articles match these filters',
+              }
+            : {
+                description: 'Every scoped article already has the required LLM judgments for this project.',
+                title: 'No unassessed articles found',
+              }
   })
 
   return (
