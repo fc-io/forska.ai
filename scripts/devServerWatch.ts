@@ -31,12 +31,26 @@ const healthProbeTimeoutMs = 1_500
 const parentMonitorIntervalMs = 1_000
 
 type ServerProcess = Subprocess<'inherit', 'inherit', 'inherit'>
-type DevWatcherLockMetadata = {apiPort: number; maintenancePort: number; pid: number; startedAt: string}
-type ServerStackLockMetadata = {apiPort: number; cwd: string; maintenancePort: number; pid: number; startedAt: string}
+type DevWatcherLockMetadata = {
+  apiPort: number
+  judgePort: number
+  maintenancePort: number
+  pid: number
+  startedAt: string
+}
+type ServerStackLockMetadata = {
+  apiPort: number
+  cwd: string
+  judgePort?: number
+  maintenancePort: number
+  pid: number
+  startedAt: string
+}
 type ExistingAction = 'attach' | 'cancel' | 'restart' | 'stop'
 type ExistingStackState = {
   apiHealth: {counts: null | Record<string, number>; reachable: boolean}
   duckdbLease: null | {alive: boolean; metadata: DuckdbOwnerLeaseMetadata; stale: boolean}
+  judgeHealth: {reachable: boolean}
   sqliteHealth: {
     jobCounts: null | Record<string, number>
     leasesAlive: number
@@ -59,12 +73,12 @@ const stackConfig = getBackgroundServerStackConfig(process.env)
 const serverStackLockPath = join(
   tmpdir(),
   'forska-server-stack',
-  `${stackConfig.apiPort}-${stackConfig.maintenancePort}.lock.json`,
+  `${stackConfig.apiPort}-${stackConfig.maintenancePort}-${stackConfig.judgePort}.lock.json`,
 )
 const devWatcherLockPath = join(
   tmpdir(),
   'forska-dev-server-watch',
-  `${stackConfig.apiPort}-${stackConfig.maintenancePort}.lock.json`,
+  `${stackConfig.apiPort}-${stackConfig.maintenancePort}-${stackConfig.judgePort}.lock.json`,
 )
 
 const log = (message: string) => {
@@ -178,6 +192,7 @@ const readJudgmentJobLeaseFiles = async (): Promise<JudgmentJobLeaseMetadata[]> 
 }
 
 const getExistingStackState = async (stackLock: ServerStackLockMetadata): Promise<ExistingStackState> => {
+  const judgePort = stackLock.judgePort ?? stackConfig.judgePort
   const [apiHealthResponse, maintenanceHealthResponse, duckdbLease, sqliteLeases] = await Promise.all([
     fetchJson<{data?: Record<string, number>}>(`http://127.0.0.1:${stackLock.apiPort}/api/judgmentsjobs-health`),
     fetchJson<{
@@ -186,6 +201,9 @@ const getExistingStackState = async (stackLock: ServerStackLockMetadata): Promis
     Effect.runPromise(readDuckdbOwnerLease(loadEnv().DUCKDB_PATH)),
     readJudgmentJobLeaseFiles(),
   ])
+  const judgeHealthResponse = await fetchJson<{data?: {ready?: boolean}}>(
+    `http://127.0.0.1:${judgePort}/api/runtime/ready`,
+  )
 
   return {
     apiHealth: {counts: apiHealthResponse?.data ?? null, reachable: apiHealthResponse !== null},
@@ -196,6 +214,7 @@ const getExistingStackState = async (stackLock: ServerStackLockMetadata): Promis
           stale: isDuckdbOwnerLeaseStale(duckdbLease),
         }
       : null,
+    judgeHealth: {reachable: judgeHealthResponse !== null},
     sqliteHealth: {
       jobCounts: apiHealthResponse?.data ?? null,
       leasesAlive: sqliteLeases.filter((lease) => {
@@ -210,12 +229,8 @@ const getExistingStackState = async (stackLock: ServerStackLockMetadata): Promis
     maintenanceHealth: {
       martRefresh: maintenanceHealthResponse?.data?.martRefresh?.progress
         ? {
-            articleQueued: Number(
-              maintenanceHealthResponse.data.martRefresh.progress.queuedArticleRefreshCount ?? 0,
-            ),
-            projectQueued: Number(
-              maintenanceHealthResponse.data.martRefresh.progress.queuedProjectRefreshCount ?? 0,
-            ),
+            articleQueued: Number(maintenanceHealthResponse.data.martRefresh.progress.queuedArticleRefreshCount ?? 0),
+            projectQueued: Number(maintenanceHealthResponse.data.martRefresh.progress.queuedProjectRefreshCount ?? 0),
           }
         : null,
       reachable: maintenanceHealthResponse !== null,
@@ -244,6 +259,7 @@ const printExistingStackState = async ({
     )
     output.write(`  api healthy: ${formatBool(existingStack.apiHealth.reachable)}\n`)
     output.write(`  maintenance healthy: ${formatBool(existingStack.maintenanceHealth.reachable)}\n`)
+    output.write(`  judge healthy: ${formatBool(existingStack.judgeHealth.reachable)}\n`)
     output.write(
       `  duckdb lease: ${
         existingStack.duckdbLease
@@ -272,7 +288,11 @@ const printExistingStackState = async ({
 }
 
 const getDefaultExistingAction = ({existingStack}: {existingStack: ExistingStackState | null}) => {
-  return existingStack?.apiHealth.reachable && existingStack?.maintenanceHealth.reachable ? 'attach' : 'restart'
+  return existingStack?.apiHealth.reachable
+    && existingStack?.maintenanceHealth.reachable
+    && existingStack.judgeHealth.reachable
+    ? 'attach'
+    : 'restart'
 }
 
 const promptForExistingAction = async ({
@@ -382,6 +402,7 @@ const releaseDevWatcherLock = async () => {
 const acquireDevWatcherLock = async (): Promise<void> => {
   const metadata = {
     apiPort: stackConfig.apiPort,
+    judgePort: stackConfig.judgePort,
     maintenancePort: stackConfig.maintenancePort,
     pid: process.pid,
     startedAt: new Date().toISOString(),

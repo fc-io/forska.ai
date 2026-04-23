@@ -9,13 +9,22 @@ import {
   getBackgroundServerStackConfigAsync,
 } from '../src/server/utils/backgroundServerStack.ts'
 
-type ManagedRole = 'api' | 'maintenance'
+type ManagedRole = 'api' | 'judge' | 'maintenance'
 type ServerProcess = Subprocess<'ignore', 'inherit', 'inherit'>
-type ServerStackLockMetadata = {apiPort: number; cwd: string; maintenancePort: number; pid: number; startedAt: string}
+type ServerStackLockMetadata = {
+  apiPort: number
+  cwd: string
+  judgePort: number
+  maintenancePort: number
+  pid: number
+  startedAt: string
+}
 
 type ManagedServerState = {
   apiProcess: ServerProcess | null
   apiReadyPromise: Promise<void> | null
+  judgeProcess: ServerProcess | null
+  judgeReadyPromise: Promise<void> | null
   shuttingDown: boolean
   maintenanceProcess: ServerProcess | null
   maintenanceReadyPromise: Promise<void> | null
@@ -32,15 +41,21 @@ const config = await getBackgroundServerStackConfigAsync(process.env)
 const serverStackLockPath = join(
   tmpdir(),
   'forska-server-stack',
-  `${config.apiPort}-${config.maintenancePort}.lock.json`,
+  `${config.apiPort}-${config.maintenancePort}-${config.judgePort}.lock.json`,
 )
 
-if (config.apiPort === config.maintenancePort) {
-  throw new Error(`API port ${config.apiPort} must differ from maintenance-worker port ${config.maintenancePort}`)
+if (
+  config.apiPort === config.maintenancePort
+  || config.apiPort === config.judgePort
+  || config.maintenancePort === config.judgePort
+) {
+  throw new Error(
+    `Split server ports must differ; received api=${config.apiPort} maintenance=${config.maintenancePort} judge=${config.judgePort}`,
+  )
 }
 
 console.log(
-  `[server:stack] api_port=${config.apiPort} maintenance_port=${config.maintenancePort} maintenance_duckdb_memory_limit=${config.maintenanceDuckdbMemoryLimit}`,
+  `[server:stack] api_port=${config.apiPort} maintenance_port=${config.maintenancePort} judge_port=${config.judgePort} maintenance_duckdb_memory_limit=${config.maintenanceDuckdbMemoryLimit}`,
 )
 
 const isMissingFileError = (error: unknown) => {
@@ -86,6 +101,7 @@ const acquireServerStackLock = async (): Promise<void> => {
   const metadata = {
     apiPort: config.apiPort,
     cwd: process.cwd(),
+    judgePort: config.judgePort,
     maintenancePort: config.maintenancePort,
     pid: process.pid,
     startedAt: new Date().toISOString(),
@@ -125,6 +141,8 @@ const acquireServerStackLock = async (): Promise<void> => {
 const managedServerState: ManagedServerState = {
   apiProcess: null,
   apiReadyPromise: null,
+  judgeProcess: null,
+  judgeReadyPromise: null,
   maintenanceProcess: null,
   maintenanceReadyPromise: null,
   shuttingDown: false,
@@ -159,9 +177,7 @@ const waitForProcessExit = async (pid: number, deadlineMs = Date.now() + shutdow
 
 const isDuckdbOwnerReady = async (duckdbOwnerUrl: string) => {
   try {
-    const response = await fetch(`${duckdbOwnerUrl}/api/duckdb_owner_connections`, {
-      signal: AbortSignal.timeout(1_000),
-    })
+    const response = await fetch(`${duckdbOwnerUrl}/api/duckdb_owner_connections`, {signal: AbortSignal.timeout(1_000)})
     return response.ok
   } catch {
     return false
@@ -186,7 +202,11 @@ const isServerProcessRunning = (serverProcess: ServerProcess | null): serverProc
 }
 
 const getManagedServerProcess = (role: ManagedRole) => {
-  return role === 'api' ? managedServerState.apiProcess : managedServerState.maintenanceProcess
+  return role === 'api'
+    ? managedServerState.apiProcess
+    : role === 'judge'
+      ? managedServerState.judgeProcess
+      : managedServerState.maintenanceProcess
 }
 
 const setManagedServerProcess = (role: ManagedRole, serverProcess: ServerProcess | null) => {
@@ -195,13 +215,22 @@ const setManagedServerProcess = (role: ManagedRole, serverProcess: ServerProcess
     return
   }
 
+  if (role === 'judge') {
+    managedServerState.judgeProcess = serverProcess
+    return
+  }
+
   managedServerState.maintenanceProcess = serverProcess
+}
+
+const getBackgroundServerRole = (role: ManagedRole) => {
+  return role === 'judge' ? 'judge-worker' : role === 'maintenance' ? 'maintenance-worker' : role
 }
 
 const startServerProcess = async (role: ManagedRole): Promise<ServerProcess> => {
   const serverProcess = spawn(getServerCommand(), {
     cwd: process.cwd(),
-    env: await getBackgroundServerEnvAsync({baseEnv: process.env, role}),
+    env: await getBackgroundServerEnvAsync({baseEnv: process.env, role: getBackgroundServerRole(role)}),
     stderr: 'inherit',
     stdin: 'ignore',
     stdout: 'inherit',
@@ -306,6 +335,55 @@ const ensureApiReady = () => {
   return managedServerState.apiReadyPromise
 }
 
+const getJudgeRuntimeReadyUrl = () => {
+  return `http://127.0.0.1:${config.judgePort}/api/runtime/ready`
+}
+
+const isJudgeReady = async () => {
+  try {
+    const response = await fetch(getJudgeRuntimeReadyUrl(), {signal: AbortSignal.timeout(1_000)})
+    return response.ok
+  } catch {
+    return false
+  }
+}
+
+const waitForJudgeReady = async (deadlineMs = Date.now() + startupTimeoutMs): Promise<void> => {
+  return Date.now() >= deadlineMs
+    ? Promise.reject(new Error(`Timed out waiting for judge-worker readiness at ${getJudgeRuntimeReadyUrl()}`))
+    : (await isJudgeReady())
+      ? Promise.resolve()
+      : waitFor(duckdbOwnerPollIntervalMs).then(() => {
+          return waitForJudgeReady(deadlineMs)
+        })
+}
+
+const ensureJudgeReadyAttempt = async (): Promise<void> => {
+  await ensureMaintenanceReady()
+  const judgeProcess = await ensureManagedServerProcess('judge')
+
+  try {
+    return await waitForJudgeReady()
+  } catch (error) {
+    console.error('[server:stack] judge worker did not become ready; restarting', error)
+    await stopManagedServerProcess('judge', judgeProcess)
+    await waitFor(restartDelayMs)
+    return ensureJudgeReadyAttempt()
+  }
+}
+
+const ensureJudgeReady = () => {
+  if (managedServerState.judgeReadyPromise) {
+    return managedServerState.judgeReadyPromise
+  }
+
+  managedServerState.judgeReadyPromise = ensureJudgeReadyAttempt().finally(() => {
+    managedServerState.judgeReadyPromise = null
+  })
+
+  return managedServerState.judgeReadyPromise
+}
+
 const monitorManagedServerExit = async (role: ManagedRole, serverProcess: ServerProcess): Promise<void> => {
   const exitCode = await serverProcess.exited.catch(() => {
     return null
@@ -321,9 +399,13 @@ const monitorManagedServerExit = async (role: ManagedRole, serverProcess: Server
 
   return role === 'maintenance'
     ? ensureMaintenanceReady().then(() => {
-        return ensureApiReady()
+        return Promise.all([ensureApiReady(), ensureJudgeReady()]).then(() => {
+          return undefined
+        })
       })
-    : ensureApiReady()
+    : role === 'judge'
+      ? ensureJudgeReady()
+      : ensureApiReady()
 }
 
 const stopParentMonitor = () => {
@@ -363,7 +445,11 @@ const shutdown = async (exitCode = 0) => {
 
   managedServerState.shuttingDown = true
   stopParentMonitor()
-  await Promise.all([stopManagedServerProcess('api'), stopManagedServerProcess('maintenance')])
+  await Promise.all([
+    stopManagedServerProcess('api'),
+    stopManagedServerProcess('judge'),
+    stopManagedServerProcess('maintenance'),
+  ])
   await releaseServerStackLock()
   process.exit(exitCode)
 }
@@ -381,7 +467,7 @@ startParentMonitor()
 try {
   await acquireServerStackLock()
   await ensureMaintenanceReady()
-  await ensureApiReady()
+  await Promise.all([ensureApiReady(), ensureJudgeReady()])
   await new Promise(() => {})
 } catch (error) {
   console.error('[server:stack] failed to start', error)

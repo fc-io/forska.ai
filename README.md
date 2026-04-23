@@ -49,7 +49,7 @@ bun run dev:server
 bun run dev:app
 ```
 
-That boots the primary profile on app `3000`, API `3001`, DuckDB owner `3002`, with isolated runtime state under `data/runtime/primary/`.
+That boots the primary profile on app `3000`, API `3001`, DuckDB owner/maintenance worker `3002`, judge worker `3003`, with isolated runtime state under `data/runtime/primary/`.
 
 Secondary profile uses explicit aliases and its own runtime root:
 
@@ -59,20 +59,22 @@ bun run dev:secondary:server
 bun run dev:secondary:app
 ```
 
-That boots the secondary profile on app `3100`, API `3101`, DuckDB owner `3102`, with isolated runtime state under `data/runtime/secondary/`.
+That boots the secondary profile on app `3100`, API `3101`, DuckDB owner/maintenance worker `3102`, judge worker `3103`, with isolated runtime state under `data/runtime/secondary/`.
 
 DuckDB and the judgment-job SQLite state isolate automatically because each profile uses its own root directory: `data/runtime/primary/` or `data/runtime/secondary/`.
 
-Split API and maintenance commands:
+Split API, maintenance, and judge commands:
 
 ```bash
 # primary
 bun run dev:server:api
 bun run dev:server:maintenance
+bun run dev:server:judge
 
 # secondary
 bun run dev:secondary:server:api
 bun run dev:secondary:server:maintenance
+bun run dev:secondary:server:judge
 ```
 
 Built app commands:
@@ -143,6 +145,8 @@ In the Forska UI:
 - If sync does not find the model, use `Add Model` and paste the model id returned by `/v1/models` into `Remote Model ID`
 
 More local runtime notes: [RUN LOCAL](./docs/README_RUN_LOCAL.md)
+
+Split-runtime verification drills: [SPLIT RUNTIME VERIFICATION](./docs/README_SPLIT_RUNTIME_VERIFICATION.md)
 
 Large rebuild tuning guidance: [RUN LOCAL](./docs/README_RUN_LOCAL.md#project-mart-large-rebuild-tuning)
 

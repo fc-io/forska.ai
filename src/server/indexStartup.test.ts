@@ -2,13 +2,17 @@ import {existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs
 import {hostname} from 'node:os'
 import {join} from 'node:path'
 
+import {Database} from 'bun:sqlite'
 import {expect, test} from 'bun:test'
+
+import {upsertDuckdbOwnerConnectionHeartbeat} from './utils/duckdbOwnerConnections.ts'
+import {getRuntimeCutoverVersion} from './utils/runtimeCutover.ts'
 
 type SpawnedServer = ReturnType<typeof globalThis.Bun.spawn>
 
 const removeFileIfExists = (filePath: string) => {
   if (existsSync(filePath)) {
-    rmSync(filePath, {force: true})
+    rmSync(filePath, {force: true, recursive: true})
   }
 }
 
@@ -133,6 +137,76 @@ const getJudgeWorkerStartupEnv = ({
   }
 }
 
+const writeUnackedJudgeWorkerCompletion = (journalPath: string) => {
+  const database = new Database(journalPath, {create: true})
+  const now = new Date().toISOString()
+  const payload = {
+    articleId: 'article-replay-startup',
+    claimId: 'claim-replay-startup',
+    executionSnapshotHash: 'a'.repeat(64),
+    executionSnapshotId: 'snapshot-replay-startup',
+    jobId: 'job-replay-startup',
+    modelId: 'model-replay-startup',
+    projectId: 'project-replay-startup',
+    promptId: 'prompt-replay-startup',
+    queueRecordId: 'queue-replay-startup',
+    status: 'judged',
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  }
+
+  database.exec(`
+    PRAGMA journal_mode = WAL;
+    CREATE TABLE completion_outbox (
+      claim_id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      queue_record_id TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      token_use_json TEXT,
+      status TEXT NOT NULL,
+      acked_at TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_attempt_at TEXT,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `)
+  database
+    .query(
+      `
+        INSERT INTO completion_outbox (
+          claim_id,
+          job_id,
+          queue_record_id,
+          payload_json,
+          token_use_json,
+          status,
+          acked_at,
+          attempts,
+          last_attempt_at,
+          last_error,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, NULL, ?, NULL, 0, NULL, NULL, ?, ?)
+      `,
+    )
+    .run(payload.claimId, payload.jobId, payload.queueRecordId, JSON.stringify(payload), payload.status, now, now)
+  database.close(false)
+}
+
+const getCompletionAckedAt = (journalPath: string, claimId: string) => {
+  const database = new Database(journalPath, {readonly: true})
+  const row = database
+    .query('SELECT acked_at AS ackedAt FROM completion_outbox WHERE claim_id = ? LIMIT 1')
+    .get(claimId) as {ackedAt: string | null} | null
+
+  database.close(false)
+  return row?.ackedAt ?? null
+}
+
 test('judge-worker startup refuses a missing durable journal identity', async () => {
   const testDirectory = getStartupTestDirectory()
   const apiPort = 34991
@@ -250,6 +324,87 @@ test('judge-worker startup refuses a journal target held by another live worker'
   }
 })
 
+test('second judge-worker startup refuses the same live journal path', async () => {
+  const testDirectory = getStartupTestDirectory()
+  const firstPort = 34979
+  const secondPort = 34978
+  const journalPath = join(testDirectory, 'journal.sqlite')
+  const firstServer = startServer(
+    getJudgeWorkerStartupEnv({
+      apiPort: firstPort,
+      duckdbPath: join(testDirectory, 'forska.duckdb'),
+      journalPath,
+      workerId: 'startup-live-collision-worker',
+    }),
+  )
+
+  try {
+    await waitForServer(firstPort, 10_000)
+
+    await expectServerStartupFailure({
+      envValues: getJudgeWorkerStartupEnv({
+        apiPort: secondPort,
+        duckdbPath: join(testDirectory, 'forska.duckdb'),
+        journalPath,
+        workerId: 'startup-live-collision-worker',
+      }),
+      expectedMessage: 'collides with another live worker',
+      port: secondPort,
+    })
+  } finally {
+    await stopServer(firstServer)
+    rmSync(testDirectory, {force: true, recursive: true})
+  }
+})
+
+test('judge-worker startup replays unacked completions for the same durable identity', async () => {
+  const testDirectory = getStartupTestDirectory()
+  const apiPort = 34977
+  const journalPath = join(testDirectory, 'journal.sqlite')
+  const completionRequests: unknown[] = []
+  const ownerServer = globalThis.Bun.serve({
+    port: 0,
+    fetch: async (request) => {
+      const requestUrl = new URL(request.url)
+
+      if (requestUrl.pathname === '/__duckdb-owner-rpc/api/judgmentsjobs/job-replay-startup/completions') {
+        const body = (await request.json()) as {claimId: string; queueRecordId: string}
+
+        completionRequests.push(body)
+        return Response.json({
+          data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'acked'},
+          error: null,
+        })
+      }
+
+      return Response.json({data: {ready: true}, error: null})
+    },
+  })
+
+  writeUnackedJudgeWorkerCompletion(journalPath)
+
+  const server = startServer({
+    ...getJudgeWorkerStartupEnv({
+      apiPort,
+      duckdbPath: join(testDirectory, 'forska.duckdb'),
+      journalPath,
+      workerId: 'startup-replay-worker',
+    }),
+    SERVER_DUCKDB_OWNER_URL: `http://127.0.0.1:${ownerServer.port}`,
+  })
+
+  try {
+    await waitForServer(apiPort, 10_000)
+
+    expect(completionRequests).toHaveLength(1)
+    expect(getCompletionAckedAt(journalPath, 'claim-replay-startup')).not.toBe(null)
+  } finally {
+    await stopServer(server)
+    await ownerServer.stop(true)
+    rmSync(testDirectory, {force: true, recursive: true})
+  }
+})
+
 test('maintenance-worker startup migrates DuckDB before judgment health queries run', async () => {
   const apiPort = 34988
   const duckdbPath = `/tmp/f1-index-startup-${Date.now()}.duckdb`
@@ -282,7 +437,7 @@ test('maintenance-worker startup migrates DuckDB before judgment health queries 
 
     expect(response.ok).toBe(true)
     expect(body.error).toBe(null)
-    expect(body.data).toEqual({
+    expect(body.data).toMatchObject({
       draining: 0,
       healthy: 0,
       offlineRepairRequired: 0,
@@ -402,6 +557,119 @@ test('maintenance-worker startup tolerates malformed DuckDB lease metadata files
     await stopServer(server)
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+  }
+})
+
+test('maintenance-worker keeps product routes private to owner RPC', async () => {
+  const apiPort = 34984
+  const duckdbPath = `/tmp/f1-index-startup-private-surface-${Date.now()}.duckdb`
+  const server = startServer({
+    API_SERVER_PORT: String(apiPort),
+    DUCKDB_PATH: duckdbPath,
+    RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+    RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+    SERVER_ROLE: 'maintenance-worker',
+    VITE_PORT: '4304',
+  })
+
+  try {
+    await waitForServer(apiPort, 10_000)
+
+    const publicResponse = await fetch(`http://127.0.0.1:${apiPort}/api/users`, {signal: AbortSignal.timeout(5_000)})
+    const privateResponse = await fetch(`http://127.0.0.1:${apiPort}/__duckdb-owner-rpc/api/users`, {
+      signal: AbortSignal.timeout(5_000),
+    })
+    const privateBody = (await privateResponse.json()) as {data: unknown[]; error: string | null}
+
+    expect(publicResponse.status).toBe(404)
+    expect(privateResponse.ok).toBe(true)
+    expect(privateBody.error ?? null).toBe(null)
+    expect(Array.isArray(privateBody.data)).toBe(true)
+  } finally {
+    await stopServer(server)
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+  }
+})
+
+test('api readiness stays usable while ownerless registry reports missing maintenance and takeover', async () => {
+  const apiPort = 34983
+  const duckdbPath = `/tmp/f1-index-startup-ownerless-registry-${Date.now()}.duckdb`
+  const nowIso = new Date().toISOString()
+
+  await upsertDuckdbOwnerConnectionHeartbeat(
+    {
+      apiServerPort: 4199,
+      capabilities: ['api'],
+      duckdbOwnerUrl: 'http://127.0.0.1:4198',
+      hostname: 'registry-startup-host',
+      instanceId: `single-server:registry-startup-host:4199:1001:${nowIso}`,
+      listenPort: 4199,
+      memoryLimit: '20GB',
+      pid: 1001,
+      processStartedAt: nowIso,
+      runtimeProfile: 'local',
+      runtimeVersion: getRuntimeCutoverVersion(),
+      serverRole: 'auto',
+      service: 'single-server',
+      startedAt: nowIso,
+      takeover: {
+        candidate: true,
+        intent: 'takeover_in_progress',
+        observedAt: nowIso,
+        ownerFreshness: 'owner_dead',
+        ownerHeartbeatAt: '2026-04-22T20:00:00.000Z',
+        ownerLeaseId: 'startup-lost-owner',
+        ownerUrl: 'http://127.0.0.1:4198',
+      },
+    },
+    {databasePath: duckdbPath},
+  )
+
+  const server = startServer({
+    API_SERVER_PORT: String(apiPort),
+    DUCKDB_PATH: duckdbPath,
+    FORSKA_OWNERLESS_READ_ONLY_DUCKDB: 'disabled',
+    RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+    RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+    SERVER_DUCKDB_OWNER_URL: '',
+    SERVER_ROLE: 'api',
+    VITE_PORT: '4303',
+  })
+
+  try {
+    await waitForServer(apiPort, 10_000)
+
+    const readyResponse = await fetch(`http://127.0.0.1:${apiPort}/api/runtime/ready`, {
+      signal: AbortSignal.timeout(5_000),
+    })
+    const registryResponse = await fetch(`http://127.0.0.1:${apiPort}/api/duckdb_owner_connections`, {
+      signal: AbortSignal.timeout(5_000),
+    })
+    const registryBody = (await registryResponse.json()) as {
+      data: {
+        registry: {
+          capabilities: Array<{capability: string; eligibleConsumerPresent: boolean}>
+          takeover: {status: string}
+        }
+      }
+    }
+    const maintenanceCapability = registryBody.data.registry.capabilities.find((capability) => {
+      return capability.capability === 'maintenance'
+    })
+
+    expect(readyResponse.ok).toBe(true)
+    expect(registryResponse.ok).toBe(true)
+    expect(maintenanceCapability?.eligibleConsumerPresent).toBe(false)
+    expect(registryBody.data.registry.takeover.status).toBe('takeover_in_progress')
+  } finally {
+    await stopServer(server)
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.worker-registry`)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
   }

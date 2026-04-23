@@ -41,6 +41,7 @@ test('background server stack clamps darwin maintenance-worker DuckDB memory to 
 test('background server stack defaults maintenance-worker port to api port plus one', () => {
   expect(getBackgroundServerStackConfig({API_SERVER_PORT: '3001'}, defaultLocalAppSettings)).toEqual({
     apiPort: 3001,
+    judgePort: 3003,
     maintenanceDuckdbMemoryLimit: getDefaultBackgroundMaintenanceDuckdbMemoryLimit(),
     maintenancePort: 3002,
     duckdbOwnerUrl: 'http://127.0.0.1:3002',
@@ -55,6 +56,7 @@ test('background server stack honors an explicit maintenance-worker port overrid
     ),
   ).toEqual({
     apiPort: 4100,
+    judgePort: 5101,
     maintenanceDuckdbMemoryLimit: getDefaultBackgroundMaintenanceDuckdbMemoryLimit(),
     maintenancePort: 5100,
     duckdbOwnerUrl: 'http://127.0.0.1:5100',
@@ -69,6 +71,7 @@ test('background server stack honors an explicit maintenance-worker DuckDB memor
     ),
   ).toEqual({
     apiPort: 4100,
+    judgePort: 4102,
     maintenanceDuckdbMemoryLimit: '1536MiB',
     maintenancePort: 4101,
     duckdbOwnerUrl: 'http://127.0.0.1:4101',
@@ -80,6 +83,7 @@ test('background server stack falls back to the base duckdb memory limit when pr
     getBackgroundServerStackConfig({API_SERVER_PORT: '4100', DUCKDB_MEMORY_LIMIT: '2GB'}, defaultLocalAppSettings),
   ).toEqual({
     apiPort: 4100,
+    judgePort: 4102,
     maintenanceDuckdbMemoryLimit: '2GB',
     maintenancePort: 4101,
     duckdbOwnerUrl: 'http://127.0.0.1:4101',
@@ -102,6 +106,7 @@ test('background server stack honors machine-local maintenance-worker DuckDB mem
     ),
   ).toEqual({
     apiPort: 4100,
+    judgePort: 4102,
     maintenanceDuckdbMemoryLimit: '12GB',
     maintenancePort: 4101,
     duckdbOwnerUrl: 'http://127.0.0.1:4101',
@@ -194,6 +199,7 @@ test('background server stack async config reads maintenance-worker DuckDB memor
       ),
     ).toEqual({
       apiPort: 4100,
+      judgePort: 4102,
       maintenanceDuckdbMemoryLimit: '14GB',
       maintenancePort: 4101,
       duckdbOwnerUrl: 'http://127.0.0.1:4101',

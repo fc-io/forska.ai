@@ -42,6 +42,7 @@ bun run dev:app
 Ports and storage:
 
 - Primary app `3000`, API `3001`, DuckDB owner `3002`
+- Primary judge worker `3003`
 - Primary runtime root `data/runtime/primary/`
 
 Secondary profile commands:
@@ -54,20 +55,23 @@ bun run dev:secondary:app
 Ports and storage:
 
 - Secondary app `3100`, API `3101`, DuckDB owner `3102`
+- Secondary judge worker `3103`
 - Secondary runtime root `data/runtime/secondary/`
 
 DuckDB and judgment-job SQLite isolation come from those separate profile roots. Each profile keeps its own `forska.duckdb` and adjacent runtime state under its own `data/runtime/<profile>/` directory.
 
-Split API and maintenance commands:
+Split API, maintenance, and judge commands:
 
 ```bash
 # primary
 bun run dev:server:api
 bun run dev:server:maintenance
+bun run dev:server:judge
 
 # secondary
 bun run dev:secondary:server:api
 bun run dev:secondary:server:maintenance
+bun run dev:secondary:server:judge
 ```
 
 Built app commands:
@@ -85,6 +89,8 @@ bun run start:secondary:app-server
 ```
 
 Open the local URL printed by Vite for dev mode, or the app server URL for built mode.
+
+Split runtime cutover and failure drills are documented in [SPLIT RUNTIME VERIFICATION](./README_SPLIT_RUNTIME_VERIFICATION.md).
 
 Do not create or edit `.env` files for normal local dev.
 

@@ -12,6 +12,7 @@ type BackgroundServerRole = 'api' | 'judge-worker' | 'maintenance-worker'
 type BackgroundServerStackConfig = {
   apiPort: number
   duckdbOwnerUrl: string
+  judgePort: number
   maintenanceDuckdbMemoryLimit: string
   maintenancePort: number
 }
@@ -65,13 +66,20 @@ export const getBackgroundServerStackConfig = (
 ): BackgroundServerStackConfig => {
   const apiPort = getIntegerPort(envValues.API_SERVER_PORT, DEFAULT_API_SERVER_PORT)
   const maintenancePort = getIntegerPort(envValues.BACKGROUND_MAINTENANCE_PORT, apiPort + 1)
+  const judgePort = getIntegerPort(envValues.BACKGROUND_JUDGE_PORT, maintenancePort + 1)
   const maintenanceDuckdbMemoryLimit =
     getTrimmedValue(envValues.BACKGROUND_MAINTENANCE_DUCKDB_MEMORY_LIMIT)
     ?? getTrimmedValue(envValues.DUCKDB_MEMORY_LIMIT)
     ?? getTrimmedValue(localAppSettings.maintenanceWorkerDuckdbMemoryLimit)
     ?? getDefaultBackgroundMaintenanceDuckdbMemoryLimit()
 
-  return {apiPort, duckdbOwnerUrl: `http://127.0.0.1:${maintenancePort}`, maintenanceDuckdbMemoryLimit, maintenancePort}
+  return {
+    apiPort,
+    duckdbOwnerUrl: `http://127.0.0.1:${maintenancePort}`,
+    judgePort,
+    maintenanceDuckdbMemoryLimit,
+    maintenancePort,
+  }
 }
 
 const getStoredBackgroundMaintenanceDuckdbMemoryLimitFromDb = async (
@@ -110,6 +118,7 @@ export const getBackgroundServerStackConfigAsync = async (
 ): Promise<BackgroundServerStackConfig> => {
   const apiPort = getIntegerPort(envValues.API_SERVER_PORT, DEFAULT_API_SERVER_PORT)
   const maintenancePort = getIntegerPort(envValues.BACKGROUND_MAINTENANCE_PORT, apiPort + 1)
+  const judgePort = getIntegerPort(envValues.BACKGROUND_JUDGE_PORT, maintenancePort + 1)
   const storedMaintenanceDuckdbMemoryLimit = await getStoredBackgroundMaintenanceDuckdbMemoryLimitFromDb(envValues)
   const maintenanceDuckdbMemoryLimit =
     getTrimmedValue(envValues.BACKGROUND_MAINTENANCE_DUCKDB_MEMORY_LIMIT)
@@ -118,7 +127,13 @@ export const getBackgroundServerStackConfigAsync = async (
     ?? getTrimmedValue(localAppSettings.maintenanceWorkerDuckdbMemoryLimit)
     ?? getDefaultBackgroundMaintenanceDuckdbMemoryLimit()
 
-  return {apiPort, duckdbOwnerUrl: `http://127.0.0.1:${maintenancePort}`, maintenanceDuckdbMemoryLimit, maintenancePort}
+  return {
+    apiPort,
+    duckdbOwnerUrl: `http://127.0.0.1:${maintenancePort}`,
+    judgePort,
+    maintenanceDuckdbMemoryLimit,
+    maintenancePort,
+  }
 }
 
 export const getBackgroundServerEnv = ({
@@ -132,7 +147,6 @@ export const getBackgroundServerEnv = ({
 }) => {
   const resolvedBaseEnv = getResolvedBackgroundBaseEnv(baseEnv)
   const config = getBackgroundServerStackConfig(resolvedBaseEnv, localAppSettings ?? readLocalAppSettings())
-  const judgePort = getIntegerPort(resolvedBaseEnv.BACKGROUND_JUDGE_PORT, config.maintenancePort + 1)
 
   if (role === 'api') {
     return {
@@ -147,7 +161,7 @@ export const getBackgroundServerEnv = ({
   return role === 'judge-worker'
     ? {
         ...resolvedBaseEnv,
-        API_SERVER_PORT: String(judgePort),
+        API_SERVER_PORT: String(config.judgePort),
         FORSKA_RUNTIME_SERVICE: 'judge-worker-server',
         SERVER_ROLE: 'judge-worker',
         SERVER_DUCKDB_OWNER_URL: config.duckdbOwnerUrl,
@@ -173,7 +187,6 @@ export const getBackgroundServerEnvAsync = async ({
 }) => {
   const resolvedBaseEnv = getResolvedBackgroundBaseEnv(baseEnv)
   const config = await getBackgroundServerStackConfigAsync(resolvedBaseEnv, localAppSettings ?? readLocalAppSettings())
-  const judgePort = getIntegerPort(resolvedBaseEnv.BACKGROUND_JUDGE_PORT, config.maintenancePort + 1)
 
   if (role === 'api') {
     return {
@@ -188,7 +201,7 @@ export const getBackgroundServerEnvAsync = async ({
   return role === 'judge-worker'
     ? {
         ...resolvedBaseEnv,
-        API_SERVER_PORT: String(judgePort),
+        API_SERVER_PORT: String(config.judgePort),
         FORSKA_RUNTIME_SERVICE: 'judge-worker-server',
         SERVER_ROLE: 'judge-worker',
         SERVER_DUCKDB_OWNER_URL: config.duckdbOwnerUrl,
