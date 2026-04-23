@@ -171,6 +171,35 @@ const insertTokenUse = async (values: Record<string, unknown>) => {
   return row ? getTokenUseValue(row) : null
 }
 
+const insertTokenUseOnce = async (values: Record<string, unknown>) => {
+  const insertValues = getInsertTokenUseValues(values)
+  const columns = Object.keys(insertValues)
+  const [insertedRow] = await getAppDatabaseService().queryJson<TokenUseRow>(`
+    INSERT INTO app.token_use (${columns.join(', ')})
+    VALUES (${columns
+      .map((column) => {
+        return getTokenUseInsertLiteral(column, insertValues[column])
+      })
+      .join(', ')})
+    ON CONFLICT(id) DO NOTHING
+    RETURNING ${tokenUseSelectClause}
+  `)
+
+  if (insertedRow) {
+    return getTokenUseValue(insertedRow)
+  }
+
+  const id = typeof insertValues.id === 'string' ? insertValues.id : ''
+  const [existingRow] = await getAppDatabaseService().queryJson<TokenUseRow>(`
+    SELECT ${tokenUseSelectClause}
+    FROM app.token_use
+    WHERE id = ${getSqlLiteral(id)}
+    LIMIT 1
+  `)
+
+  return existingRow ? getTokenUseValue(existingRow) : null
+}
+
 const getLargestSingleRequestRows = async (orderColumn: 'total_prompt_tokens' | 'total_completion_tokens') => {
   const rows = await getAppDatabaseService().queryJson<TokenUseRow>(`
     SELECT ${tokenUseSelectClause}
@@ -427,6 +456,7 @@ export const tokenUseQueryService = {
   getTimelineRowsForProject,
   getTotals,
   insertTokenUse,
+  insertTokenUseOnce,
 }
 
 export const getTokenUseQueryService = () => {

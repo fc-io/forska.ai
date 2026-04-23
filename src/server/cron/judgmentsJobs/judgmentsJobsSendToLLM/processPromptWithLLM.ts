@@ -11,6 +11,12 @@ import {ensureFullText} from '../../../utils/ensureFullText.ts'
 import {processFulltextForLLM} from '../../../utils/fulltextProcessing.ts'
 import {createRateLimitedLogger} from '../../../utils/rateLimitedLogger.ts'
 import {ConnectionError, formatConnectionOutageMessage} from '../connectionHealth.ts'
+import {
+  enqueueJudgeWorkerCompletion,
+  flushJudgeWorkerCompletionOutboxForClaim,
+  hasUnackedJudgeWorkerCompletion,
+  shouldUseJudgeWorkerOwnerHandoff,
+} from '../judgeWorkerCompletionJournal.ts'
 import {getJudgmentEndpointAvailability} from '../judgmentEndpointAvailability.ts'
 import {getJudgmentJobSqliteService} from '../judgmentJobSqliteService.ts'
 import type {PromptToProcess} from './getAndUpdateReadyPrompts.ts'
@@ -238,10 +244,18 @@ const processSinglePrompt = async (
 }
 
 const markAsJudged = async (jobId: string, recordId: string): Promise<void> => {
+  if (shouldUseJudgeWorkerOwnerHandoff()) {
+    return undefined
+  }
+
   await getJudgmentJobSqliteService().markPromptAsJudged(jobId, recordId)
 }
 
 const markAsRetry = async (jobId: string, recordId: string, retryAfterMs: number | null): Promise<void> => {
+  if (shouldUseJudgeWorkerOwnerHandoff()) {
+    return undefined
+  }
+
   await getJudgmentJobSqliteService().markPromptAsRetry(jobId, recordId, retryAfterMs)
 }
 
@@ -250,6 +264,10 @@ const markAsSkipped = async (
   recordId: string,
   skipReason: 'no_fulltext' | 'conversion_failed' | 'fulltext_too_large',
 ): Promise<void> => {
+  if (shouldUseJudgeWorkerOwnerHandoff()) {
+    return undefined
+  }
+
   await getJudgmentJobSqliteService().markPromptAsSkipped(jobId, recordId, skipReason)
 }
 
@@ -367,11 +385,51 @@ const releasePromptTerminalState = async (
   recordId: string,
   terminalState: PromptTerminalState,
 ): Promise<void> => {
+  if (shouldUseJudgeWorkerOwnerHandoff()) {
+    return undefined
+  }
+
   return terminalState.kind === 'judged'
     ? markAsJudged(jobId, recordId)
     : terminalState.kind === 'ready'
       ? markAsRetry(jobId, recordId, terminalState.retryAfterMs)
       : markAsSkipped(jobId, recordId, terminalState.skipReason)
+}
+
+const enqueueJudgeWorkerTerminalCompletion = async (
+  promptToProcess: PromptToProcess,
+  terminalState: PromptTerminalState,
+): Promise<void> => {
+  if (terminalState.kind === 'judged' && (await hasUnackedJudgeWorkerCompletion(promptToProcess.claimId))) {
+    return undefined
+  }
+
+  await enqueueJudgeWorkerCompletion({
+    articleId: promptToProcess.articleId,
+    claimId: promptToProcess.claimId,
+    executionSnapshotHash: promptToProcess.executionSnapshotHash,
+    executionSnapshotId: promptToProcess.executionSnapshotId,
+    jobId: promptToProcess.jobId,
+    modelId: promptToProcess.modelId,
+    projectId: promptToProcess.projectId,
+    promptId: promptToProcess.promptId,
+    queueRecordId: promptToProcess.recordId,
+    retryAfterMs: terminalState.kind === 'ready' ? terminalState.retryAfterMs : undefined,
+    skipReason: terminalState.kind === 'skipped' ? terminalState.skipReason : undefined,
+    status: terminalState.kind === 'ready' ? 'retry' : terminalState.kind === 'skipped' ? 'skipped' : 'failed',
+    useAbstract: promptToProcess.useAbstract,
+    useFulltext: promptToProcess.useFulltext,
+    useFulltextNoImages: promptToProcess.useFulltextNoImages,
+    useTitle: promptToProcess.useTitle,
+  })
+}
+
+const releaseJudgeWorkerTerminalState = async (
+  promptToProcess: PromptToProcess,
+  terminalState: PromptTerminalState,
+): Promise<void> => {
+  await enqueueJudgeWorkerTerminalCompletion(promptToProcess, terminalState)
+  await flushJudgeWorkerCompletionOutboxForClaim(promptToProcess.claimId)
 }
 
 const getRecoverableRetryDelayMs = (_failureCode: string): number | null => {
@@ -386,11 +444,15 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
   return Effect.scoped(
     Effect.acquireRelease(
       Effect.promise(() => {
-        return getJudgmentJobSqliteService().markPromptAsRunning(promptToProcess.jobId, promptToProcess.recordId)
+        return shouldUseJudgeWorkerOwnerHandoff()
+          ? Promise.resolve()
+          : getJudgmentJobSqliteService().markPromptAsRunning(promptToProcess.jobId, promptToProcess.recordId)
       }),
       () => {
         return Effect.promise(() => {
-          return releasePromptTerminalState(promptToProcess.jobId, promptToProcess.recordId, terminalState)
+          return shouldUseJudgeWorkerOwnerHandoff()
+            ? releaseJudgeWorkerTerminalState(promptToProcess, terminalState)
+            : releasePromptTerminalState(promptToProcess.jobId, promptToProcess.recordId, terminalState)
         })
       },
     ).pipe(
@@ -468,12 +530,14 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
             }
 
             if (error instanceof RecoverableJudgeError) {
-              const consumed = await getJudgmentJobSqliteService().consumePromptExtraRetry({
-                errorCode: error.failureCode,
-                jobId: promptToProcess.jobId,
-                maxExtraRetries: maxRecoverablePromptExtraRetries,
-                recordId: promptToProcess.recordId,
-              })
+              const consumed = shouldUseJudgeWorkerOwnerHandoff()
+                ? true
+                : await getJudgmentJobSqliteService().consumePromptExtraRetry({
+                    errorCode: error.failureCode,
+                    jobId: promptToProcess.jobId,
+                    maxExtraRetries: maxRecoverablePromptExtraRetries,
+                    recordId: promptToProcess.recordId,
+                  })
 
               if (consumed) {
                 terminalState = {kind: 'ready', retryAfterMs: getRecoverableRetryDelayMs(error.failureCode)}

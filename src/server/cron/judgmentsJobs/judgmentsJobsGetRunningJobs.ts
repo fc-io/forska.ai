@@ -2,6 +2,7 @@ import {getStoredProviderModelRuntimeMatch} from '../../providers/providerRuntim
 import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
+import {shouldUseJudgeWorkerOwnerHandoff} from './judgeWorkerCompletionJournal.ts'
 import {getJudgmentJobSqliteJobIds} from './judgmentJobPaths.ts'
 import {filterRunningJobsBySqlitePreflight} from './judgmentJobSqlitePreflight.ts'
 
@@ -68,21 +69,46 @@ const getRunningJobFromDatabase = async (jobId: string): Promise<RunningJudgment
 }
 
 const getRunningJobsFromDatabase = async (): Promise<RunningJudgmentJob[]> => {
-  const trackedJobIds = getJudgmentJobSqliteJobIds().sort()
+  if (!shouldUseJudgeWorkerOwnerHandoff()) {
+    const trackedJobIds = getJudgmentJobSqliteJobIds().sort()
 
-  if (trackedJobIds.length === 0) {
-    return []
+    if (trackedJobIds.length === 0) {
+      return []
+    }
+
+    const rows = await Promise.all(
+      trackedJobIds.map((jobId) => {
+        return getRunningJobFromDatabase(jobId)
+      }),
+    )
+
+    return rows.filter((row): row is RunningJudgmentJob => {
+      return row !== null
+    })
   }
 
-  const rows = await Promise.all(
-    trackedJobIds.map((jobId) => {
-      return getRunningJobFromDatabase(jobId)
-    }),
-  )
-
-  return rows.filter((row): row is RunningJudgmentJob => {
-    return row !== null
-  })
+  return getJudgeWorkerReadOnlyAppDatabaseService().queryJson<RunningJudgmentJob>(`
+    SELECT
+      jj.id AS id,
+      jj.project_id AS projectId,
+      pc.max_inflight_requests AS maxInflightRequests,
+      pc.provider_kind AS modelProvider,
+      m.id AS modelId,
+      m.remote_model_id AS modelName,
+      jj.quarantine_reason AS quarantineReason,
+      m.provider_connection_id AS providerConnectionId,
+      jj.storage_state AS storageState
+    FROM app.judgment_job jj
+    INNER JOIN app.project p ON jj.project_id = p.id
+    INNER JOIN app.model m ON p.model_id = m.id
+    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    WHERE jj.status = 'running'
+      AND jj.storage_state = 'active'
+      AND p.archived = FALSE
+      AND COALESCE(m.enabled, TRUE) = TRUE
+      AND COALESCE(pc.enabled, TRUE) = TRUE
+    ORDER BY jj.created_at ASC, jj.id ASC
+  `)
 }
 
 export const filterRunningJobsByRuntimeMatch = async (

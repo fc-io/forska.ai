@@ -4,7 +4,11 @@ import {Elysia} from 'elysia'
 import {parseDuckdbMemoryLimitToMiB} from '../utils/duckdbMemoryLimit.ts'
 import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {writeRuntimeFailureLogEvent} from '../utils/runtimeLogger.ts'
-import {isExpectedDuckdbOwnerRoleLossError, shouldCurrentServerRunJudgingLoops} from '../utils/serverRuntimeRole.ts'
+import {
+  isExpectedDuckdbOwnerRoleLossError,
+  shouldCurrentServerRunJudgingLoops,
+  shouldCurrentServerRunMaintenanceLoops,
+} from '../utils/serverRuntimeRole.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentsJobs/judgmentJobServerIdentity.ts'
 import {runJudgmentJobSqliteBackgroundImport} from './judgmentsJobs/judgmentJobSqliteBackgroundImport.ts'
 import {getJudgmentJobSqliteService} from './judgmentsJobs/judgmentJobSqliteService.ts'
@@ -33,6 +37,10 @@ const shouldRunJudgingCron = (): boolean => {
   return shouldCurrentServerRunJudgingLoops()
 }
 
+const shouldRunJudgmentMaintenanceCron = (): boolean => {
+  return shouldCurrentServerRunMaintenanceLoops()
+}
+
 const NEW_ARTICLES_INTERVAL = '*/1 * * * * *'
 const LLM_PROCESSING_INTERVAL = '*/1 * * * * *'
 const IMPORT_JUDGMENTS_INTERVAL = '*/1 * * * * *'
@@ -51,7 +59,7 @@ const shouldUseLowMemoryJudgmentsCronMode = () => {
 }
 
 const runAddToQueue = async (): Promise<void> => {
-  if (!shouldRunJudgingCron()) return
+  if (!shouldRunJudgmentMaintenanceCron()) return
   if (isImportingJudgments) return
 
   if (isAddingToQueue) {
@@ -80,11 +88,13 @@ const sendToLLM = async (): Promise<void> => {
   if (isImportingJudgments) return
   try {
     const runningJobs = await judgmentsJobsGetRunningJobs({applyRuntimeMatchFilter: false})
-    await getJudgmentJobSqliteService().syncOwnedLeases(
-      runningJobs.map((job) => {
-        return job.id
-      }),
-    )
+    if (shouldRunJudgmentMaintenanceCron()) {
+      await getJudgmentJobSqliteService().syncOwnedLeases(
+        runningJobs.map((job) => {
+          return job.id
+        }),
+      )
+    }
     if (!shouldRunJudgingCron()) return
     await judgmentsJobsSendToLLM(runningJobs, serverJobId, {
       filterJobs: shouldUseLowMemoryJudgmentsCronMode()
@@ -93,18 +103,20 @@ const sendToLLM = async (): Promise<void> => {
           }
         : undefined,
     })
-    await getJudgmentJobSqliteService().publishHealthProjections(
-      runningJobs.map((job) => {
-        return job.id
-      }),
-    )
+    if (shouldRunJudgmentMaintenanceCron()) {
+      await getJudgmentJobSqliteService().publishHealthProjections(
+        runningJobs.map((job) => {
+          return job.id
+        }),
+      )
+    }
   } catch (err) {
     logJudgingCronError('[cron] sendToLLM error:', err)
   }
 }
 
 const importJudgmentsCron = async (): Promise<void> => {
-  if (!shouldRunJudgingCron() || isImportingJudgments || shouldUseLowMemoryJudgmentsCronMode()) return
+  if (!shouldRunJudgmentMaintenanceCron() || isImportingJudgments || shouldUseLowMemoryJudgmentsCronMode()) return
 
   isImportingJudgments = true
 
@@ -127,7 +139,7 @@ const checkLLMStatusCron = async (): Promise<void> => {
 }
 
 const cleanupStaleQueueCron = async (): Promise<void> => {
-  if (!shouldRunJudgingCron()) return
+  if (!shouldRunJudgmentMaintenanceCron()) return
   try {
     await judgmentsJobsCleanupStale()
   } catch (err) {

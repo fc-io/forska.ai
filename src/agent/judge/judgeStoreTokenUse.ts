@@ -1,3 +1,4 @@
+import {attachTokenUseToPendingJudgeWorkerCompletion} from '../../server/cron/judgmentsJobs/judgeWorkerCompletionJournal.ts'
 import {markJudgmentRequestsPersisted} from '../../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {getTokenUseQueryService} from '../../server/services/tokenUseQueryService.ts'
 import {parseDuckdbMemoryLimitToMiB} from '../../server/utils/duckdbMemoryLimit.ts'
@@ -84,7 +85,7 @@ const isConnectionError = (error: string | null): boolean => {
   return lowerError.includes('connection error')
 }
 
-type TokenUseTotals = {
+export type TokenUseTotals = {
   modelName: string | null
   totalRequests: number
   totalPromptTokens: number
@@ -111,10 +112,14 @@ const shouldSkipTokenUsePersistence = () => {
   const runtimeDuckdbMemoryLimitMiB = parseDuckdbMemoryLimitToMiB(process.env.DUCKDB_MEMORY_LIMIT)
 
   return (
-    (serverRole === 'judge-worker' || serverRole === 'maintenance-worker')
+    (serverRole === 'judge-worker' || serverRole === 'maintenance-worker' || serverRole === 'worker')
     && runtimeDuckdbMemoryLimitMiB !== null
     && runtimeDuckdbMemoryLimitMiB <= 6400
   )
+}
+
+const shouldJournalTokenUseWithCompletion = () => {
+  return String(process.env.SERVER_ROLE ?? '').trim() === 'judge-worker'
 }
 
 const getStoredModelName = (tokenUseEntries: JudgeTokenUsageEntry[]): string | null => {
@@ -207,6 +212,52 @@ const storeTokenUseViaAPI = async (
     console.error(new Error(errorMessage))
     throw new Error(errorMessage)
   }
+}
+
+const storeTokenUseInJudgeWorkerCompletionOutbox = async (
+  totalTokenUse: TokenUseTotals,
+  tokenUseEntries: JudgeTokenUsageEntry[],
+  judgmentsJobId: string,
+  {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
+): Promise<void> => {
+  const firstEntry = tokenUseEntries[0]
+
+  if (!firstEntry) {
+    return
+  }
+
+  await attachTokenUseToPendingJudgeWorkerCompletion({
+    articleId: firstEntry.articleId,
+    jobId: judgmentsJobId,
+    promptIds: firstEntry.promptIds,
+    tokenUse: {
+      dpSize: inferenceRuntimeConfig.dpSize,
+      duration,
+      failedRequests: totalTokenUse.failedRequests,
+      failedRequestsDetails: totalTokenUse.failedRequestsDetails,
+      finishedAt,
+      gpuGpusPerNode: inferenceRuntimeConfig.gpuGpusPerNode,
+      gpuNnodes: inferenceRuntimeConfig.gpuNnodes,
+      gpuShape: inferenceRuntimeConfig.gpuShape,
+      gpuTotalGpus: inferenceRuntimeConfig.gpuTotalGpus,
+      hasFailedRequests: totalTokenUse.hasFailedRequests,
+      modelName: totalTokenUse.modelName,
+      sglangMaxRunningRequests: inferenceRuntimeConfig.sglangMaxRunningRequests,
+      startedAt,
+      successfulRequests: totalTokenUse.successfulRequests,
+      tpSize: inferenceRuntimeConfig.tpSize,
+      totalCompletionTokens: totalTokenUse.totalCompletionTokens,
+      totalFailedCompletionTokens: totalTokenUse.totalFailedCompletionTokens,
+      totalFailedPromptTokens: totalTokenUse.totalFailedPromptTokens,
+      totalFailedTokens: totalTokenUse.totalFailedTokens,
+      totalPromptTokens: totalTokenUse.totalPromptTokens,
+      totalRequests: totalTokenUse.totalRequests,
+      totalSuccessCompletionTokens: totalTokenUse.totalSuccessCompletionTokens,
+      totalSuccessPromptTokens: totalTokenUse.totalSuccessPromptTokens,
+      totalSuccessTokens: totalTokenUse.totalSuccessTokens,
+      totalTokens: totalTokenUse.totalTokens,
+    },
+  })
 }
 
 export const buildTokenUseTotals = (tokenUseEntries: JudgeTokenUsageEntry[]): TokenUseTotals => {
@@ -413,7 +464,13 @@ export const judgeStoreTokenUse = async (
 ): Promise<void> => {
   const totalTokenUse = buildTokenUseTotals(tokenUseEntries)
 
-  if (isServerEnvironment() && !shouldSkipTokenUsePersistence()) {
+  if (isServerEnvironment() && shouldJournalTokenUseWithCompletion()) {
+    await storeTokenUseInJudgeWorkerCompletionOutbox(totalTokenUse, tokenUseEntries, judgmentsJobId, {
+      startedAt,
+      finishedAt,
+      duration,
+    })
+  } else if (isServerEnvironment() && !shouldSkipTokenUsePersistence()) {
     await storeTokenUseDirectly(totalTokenUse, null, {startedAt, finishedAt, duration}, judgmentsJobId)
   } else if (!isServerEnvironment()) {
     await storeTokenUseViaAPI(totalTokenUse, judgmentsJobId, {startedAt, finishedAt, duration})

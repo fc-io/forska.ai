@@ -115,6 +115,7 @@ type QueuePromptOutboxInsert = {
   isAnswered: boolean
   judgmentId: string
   claimId?: string
+  completionTokenUseId?: string | null
   executionSnapshotHash?: string
   executionSnapshotId?: string
   modelId: string
@@ -307,6 +308,21 @@ type PromptClaimIdentityRow = {
   executionSnapshotHash: string | null
   executionSnapshotId: string | null
   promptId: string
+}
+
+type PromptCompletionAck = {
+  claimId: string
+  queuePromptId: string
+  status: 'failed' | 'judged' | 'retry' | 'skipped'
+  tokenUseId?: string | null
+}
+
+type PromptCompletionAckRow = {
+  claimId: string
+  completedAt: string
+  queuePromptId: string
+  status: 'failed' | 'judged' | 'retry' | 'skipped'
+  tokenUseId: string | null
 }
 
 type JudgmentJobStorageRow = {id: string}
@@ -656,6 +672,15 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       export_attempts INTEGER NOT NULL DEFAULT 0,
       last_error TEXT
     );
+    CREATE TABLE IF NOT EXISTS completion_ack (
+      claim_id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      queue_prompt_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      token_use_id TEXT,
+      completed_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
     CREATE INDEX IF NOT EXISTS idx_judgment_outbox_exported
       ON judgment_outbox(exported_at, outbox_seq);
   `)
@@ -663,6 +688,7 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
   ensureJobScanStateSchema(database)
   ensureQueuePromptSchema(database)
   ensureOutboxClaimSchema(database)
+  ensureCompletionAckSchema(database)
 
   openDatabases.set(jobId, database)
   return database
@@ -765,6 +791,7 @@ const judgmentJobSqliteRequiredSchema = {
     'export_claimed_at',
     'export_claimed_by',
   ],
+  completion_ack: ['claim_id', 'job_id', 'queue_prompt_id', 'status', 'completed_at', 'updated_at'],
 } as const
 
 const jobScanStateColumns = [
@@ -996,6 +1023,20 @@ const ensureQueuePromptSchema = (database: Database) => {
   database.exec(`
     CREATE INDEX IF NOT EXISTS idx_queue_prompt_status_ready_insert_seq
       ON queue_prompt(status, ready_insert_seq, id)
+  `)
+}
+
+const ensureCompletionAckSchema = (database: Database) => {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS completion_ack (
+      claim_id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL,
+      queue_prompt_id TEXT NOT NULL,
+      status TEXT NOT NULL,
+      token_use_id TEXT,
+      completed_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
   `)
 }
 
@@ -1565,6 +1606,7 @@ const upgradeJudgmentJobSqliteSchemaInPlace = (jobId: string) => {
     ensureJobScanStateSchema(cachedDatabase)
     ensureQueuePromptSchema(cachedDatabase)
     ensureOutboxClaimSchema(cachedDatabase)
+    ensureCompletionAckSchema(cachedDatabase)
     return
   }
 
@@ -1590,6 +1632,8 @@ const upgradeJudgmentJobSqliteSchemaInPlace = (jobId: string) => {
     if (existingTables.has('judgment_outbox')) {
       ensureOutboxClaimSchema(database)
     }
+
+    ensureCompletionAckSchema(database)
   } finally {
     database?.close(false)
   }
@@ -2782,6 +2826,52 @@ const getPromptClaimIdentityFromOutboxInsert = (
     : null
 }
 
+const recordPromptCompletionAckFromDatabase = (database: Database, jobId: string, ack: PromptCompletionAck): void => {
+  const now = new Date().toISOString()
+
+  database
+    .query(
+      `
+        INSERT INTO completion_ack (
+          claim_id,
+          job_id,
+          queue_prompt_id,
+          status,
+          token_use_id,
+          completed_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(claim_id) DO UPDATE SET
+          token_use_id = COALESCE(completion_ack.token_use_id, EXCLUDED.token_use_id),
+          updated_at = EXCLUDED.updated_at
+      `,
+    )
+    .run(ack.claimId, jobId, ack.queuePromptId, ack.status, ack.tokenUseId ?? null, now, now)
+}
+
+const getPromptCompletionAckFromDatabase = (
+  database: Database,
+  jobId: string,
+  claimId: string,
+): PromptCompletionAckRow | null => {
+  return database
+    .query(
+      `
+        SELECT
+          claim_id AS claimId,
+          queue_prompt_id AS queuePromptId,
+          status,
+          token_use_id AS tokenUseId,
+          completed_at AS completedAt
+        FROM completion_ack
+        WHERE job_id = ?
+          AND claim_id = ?
+        LIMIT 1
+      `,
+    )
+    .get(jobId, claimId) as PromptCompletionAckRow | null
+}
+
 const sqliteService = {
   addReadyPrompts: async (
     jobId: string,
@@ -3310,6 +3400,13 @@ const sqliteService = {
       }) ?? null
     )
   },
+  getPromptCompletionAck: async (jobId: string, claimId: string): Promise<PromptCompletionAckRow | null> => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        return getPromptCompletionAckFromDatabase(database, jobId, claimId)
+      }) ?? null
+    )
+  },
   assertPromptClaimIdentity: async (identity: PromptClaimIdentity): Promise<PromptClaimIdentity> => {
     return (
       (await withOwnedJobDatabase(identity.jobId, false, (database) => {
@@ -3607,22 +3704,28 @@ const sqliteService = {
       }),
     )
   },
-  markPromptAsJudged: async (jobId: string, recordId: string) => {
+  markPromptAsJudged: async (jobId: string, recordId: string, completionAck?: PromptCompletionAck) => {
     return withOwnedJobDatabase(jobId, false, (database) => {
       const now = new Date().toISOString()
-      database
-        .query(
-          `
-        UPDATE queue_prompt
-        SET status = 'judged',
-            terminal_kind = NULL,
-            skip_reason = NULL,
-            judged_at = ?,
-            updated_at = ?
-        WHERE id = ?
-      `,
-        )
-        .run(now, now, recordId)
+      database.transaction(() => {
+        database
+          .query(
+            `
+          UPDATE queue_prompt
+          SET status = 'judged',
+              terminal_kind = NULL,
+              skip_reason = NULL,
+              judged_at = ?,
+              updated_at = ?
+          WHERE id = ?
+        `,
+          )
+          .run(now, now, recordId)
+
+        if (completionAck) {
+          recordPromptCompletionAckFromDatabase(database, jobId, completionAck)
+        }
+      })()
     })
   },
   markPromptAsRunning: async (jobId: string, recordId: string) => {
@@ -3642,7 +3745,12 @@ const sqliteService = {
         .run(now, now, recordId)
     })
   },
-  markPromptAsRetry: async (jobId: string, recordId: string, retryAfterMs: number | null = null) => {
+  markPromptAsRetry: async (
+    jobId: string,
+    recordId: string,
+    retryAfterMs: number | null = null,
+    completionAck?: PromptCompletionAck,
+  ) => {
     return withOwnedJobDatabase(jobId, false, (database) => {
       const now = new Date().toISOString()
       const retryAfterAt = retryAfterMs && retryAfterMs > 0 ? new Date(Date.now() + retryAfterMs).toISOString() : null
@@ -3677,6 +3785,10 @@ const sqliteService = {
         `,
           )
           .run(retryAfterAt, now, nextReadyInsertSeq, recordId)
+
+        if (completionAck) {
+          recordPromptCompletionAckFromDatabase(database, jobId, completionAck)
+        }
       })()
     })
   },
@@ -3736,22 +3848,29 @@ const sqliteService = {
     jobId: string,
     recordId: string,
     skipReason: 'conversion_failed' | 'fulltext_too_large' | 'no_fulltext',
+    completionAck?: PromptCompletionAck,
   ) => {
     return withOwnedJobDatabase(jobId, false, (database) => {
       const now = new Date().toISOString()
-      database
-        .query(
-          `
-        UPDATE queue_prompt
-        SET status = 'judged',
-            terminal_kind = 'skipped',
-            skip_reason = ?,
-            judged_at = ?,
-            updated_at = ?
-        WHERE id = ?
-      `,
-        )
-        .run(skipReason, now, now, recordId)
+      database.transaction(() => {
+        database
+          .query(
+            `
+          UPDATE queue_prompt
+          SET status = 'judged',
+              terminal_kind = 'skipped',
+              skip_reason = ?,
+              judged_at = ?,
+              updated_at = ?
+          WHERE id = ?
+        `,
+          )
+          .run(skipReason, now, now, recordId)
+
+        if (completionAck) {
+          recordPromptCompletionAckFromDatabase(database, jobId, completionAck)
+        }
+      })()
     })
   },
   recordJudgmentSuccess: async (jobId: string, outboxInsert: QueuePromptOutboxInsert) => {
@@ -3837,6 +3956,15 @@ const sqliteService = {
         `,
           )
           .run(input.updatedAt.toISOString(), input.updatedAt.toISOString(), input.queuePromptId)
+
+        if (input.claimId) {
+          recordPromptCompletionAckFromDatabase(database, jobId, {
+            claimId: input.claimId,
+            queuePromptId: input.queuePromptId,
+            status: 'judged',
+            tokenUseId: input.completionTokenUseId ?? null,
+          })
+        }
 
         return Number(insertResult.changes ?? 0)
       })(outboxInsert)

@@ -2,6 +2,12 @@ import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {ConnectionError} from './connectionHealth.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
+import {
+  enqueueJudgeWorkerCompletion,
+  flushJudgeWorkerCompletionOutboxForClaim,
+  replayJudgeWorkerCompletionOutbox,
+  shouldUseJudgeWorkerOwnerHandoff,
+} from './judgeWorkerCompletionJournal.ts'
 import {enqueueClaimedJudgmentPrompts, getJudgmentDispatchQueueCapacity} from './judgmentDispatchRuntime.ts'
 import {getJudgmentEndpointAvailability} from './judgmentEndpointAvailability.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
@@ -208,6 +214,14 @@ export const getCapacityBuckets = ({
 }
 
 const getReadyCountsByJob = async (jobIds: string[]): Promise<Map<string, number>> => {
+  if (shouldUseJudgeWorkerOwnerHandoff()) {
+    return new Map(
+      jobIds.map((jobId) => {
+        return [jobId, Number.MAX_SAFE_INTEGER] as const
+      }),
+    )
+  }
+
   const sqliteService = getJudgmentJobSqliteService()
   const pairs = await Promise.all(
     jobIds.map(async (jobId) => {
@@ -253,6 +267,31 @@ const getDispatchQueueCapacityByConnection = async (jobs: RunningJudgmentJob[]):
 }
 
 const requeueRejectedPrompts = async (prompts: PromptToProcess[]) => {
+  if (shouldUseJudgeWorkerOwnerHandoff()) {
+    await Promise.all(
+      prompts.map(async (prompt) => {
+        await enqueueJudgeWorkerCompletion({
+          articleId: prompt.articleId,
+          claimId: prompt.claimId,
+          executionSnapshotHash: prompt.executionSnapshotHash,
+          executionSnapshotId: prompt.executionSnapshotId,
+          jobId: prompt.jobId,
+          modelId: prompt.modelId,
+          projectId: prompt.projectId,
+          promptId: prompt.promptId,
+          queueRecordId: prompt.recordId,
+          status: 'retry',
+          useAbstract: prompt.useAbstract,
+          useFulltext: prompt.useFulltext,
+          useFulltextNoImages: prompt.useFulltextNoImages,
+          useTitle: prompt.useTitle,
+        })
+        await flushJudgeWorkerCompletionOutboxForClaim(prompt.claimId)
+      }),
+    )
+    return
+  }
+
   const sqliteService = getJudgmentJobSqliteService()
 
   await Promise.all(
@@ -724,6 +763,10 @@ export const requeueAndFilterRunningJobs = async ({
   requeueSentPrompts?: (params: {jobIds: string[]; serverJobId: string}) => Promise<number>
   serverJobId: string
 }): Promise<RunningJudgmentJob[]> => {
+  if (shouldUseJudgeWorkerOwnerHandoff()) {
+    return filterJobs(allJobs)
+  }
+
   await requeueSentPrompts({
     jobIds: allJobs.map((job) => {
       return job.id
@@ -884,6 +927,10 @@ export const judgmentsJobsSendToLLM = async (
   isRunningJudgmentsJobsSendToLLM = true
 
   try {
+    if (shouldUseJudgeWorkerOwnerHandoff()) {
+      await replayJudgeWorkerCompletionOutbox()
+    }
+
     const sendableJobs = await requeueAndFilterRunningJobs({allJobs, filterJobs, serverJobId})
     const capacityBuckets = getCapacityBuckets({jobs: sendableJobs})
 

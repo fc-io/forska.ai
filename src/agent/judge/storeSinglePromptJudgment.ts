@@ -1,6 +1,10 @@
 import {randomUUID} from 'crypto'
 
 import type {ArticleRecord, JudgmentChunkingStrategy} from '../../db/schemaTypes.ts'
+import {
+  enqueueJudgeWorkerCompletion,
+  shouldUseJudgeWorkerOwnerHandoff,
+} from '../../server/cron/judgmentsJobs/judgeWorkerCompletionJournal.ts'
 import {getJudgmentJobSqliteService} from '../../server/cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
 import {escapeSqlString} from '../../server/services/appQueryHelpers.ts'
@@ -13,6 +17,67 @@ export class JudgmentPersistenceError extends Error {
     super(message, options)
     this.name = 'JudgmentPersistenceError'
   }
+}
+
+const enqueueOwnerBackedCompletion = async ({
+  article,
+  claimIdentity,
+  contentSettings,
+  judgmentsJobId,
+  promptId,
+  queueRecordId,
+  modelId,
+  projectId,
+  snapshotProjectModelName: _snapshotProjectModelName,
+  judgment,
+  chunkingStrategy,
+}: {
+  article: ArticleRecord
+  claimIdentity?: {claimId: string; executionSnapshotHash: string; executionSnapshotId: string}
+  contentSettings: ContentSettings
+  judgmentsJobId: string
+  promptId: string
+  queueRecordId: string
+  modelId: string
+  projectId: string
+  snapshotProjectModelName?: string | null
+  judgment: SinglePromptJudgmentResult
+  chunkingStrategy: JudgmentChunkingStrategy | null
+}): Promise<void> => {
+  if (!claimIdentity) {
+    throw new JudgmentPersistenceError(`Missing owner-backed claim identity for ${judgmentsJobId}:${queueRecordId}`)
+  }
+
+  const rawAnswer = judgment.answer
+  const answeredOriginal = Array.isArray(rawAnswer) ? JSON.stringify(rawAnswer) : rawAnswer
+  const answeredOriginalAsArray = judgeStoreJudgmentGetStringAsArrayOfStrings(rawAnswer) ?? []
+
+  await enqueueJudgeWorkerCompletion({
+    answeredOriginal,
+    answeredOriginalAsArray,
+    articleId: article.id,
+    chunkingStrategy,
+    claimId: claimIdentity.claimId,
+    confidenceOriginal: 50,
+    executionSnapshotHash: claimIdentity.executionSnapshotHash,
+    executionSnapshotId: claimIdentity.executionSnapshotId,
+    explanation: judgment.explanation || null,
+    isAnswered: true,
+    jobId: judgmentsJobId,
+    judgment,
+    judgmentId: randomUUID(),
+    modelId,
+    projectId,
+    promptId,
+    queueRecordId,
+    quotes: judgment.quotes,
+    rawResponseJson: judgment,
+    status: 'judged',
+    useAbstract: contentSettings.useAbstract,
+    useFulltext: contentSettings.useFulltext,
+    useFulltextNoImages: contentSettings.useFulltextNoImages,
+    useTitle: contentSettings.useTitle,
+  })
 }
 
 export const storeSinglePromptJudgment = async ({
@@ -41,6 +106,23 @@ export const storeSinglePromptJudgment = async ({
   chunkingStrategy: JudgmentChunkingStrategy | null
 }): Promise<void> => {
   try {
+    if (shouldUseJudgeWorkerOwnerHandoff()) {
+      await enqueueOwnerBackedCompletion({
+        article,
+        claimIdentity,
+        contentSettings,
+        judgmentsJobId,
+        promptId,
+        queueRecordId,
+        modelId,
+        projectId,
+        snapshotProjectModelName,
+        judgment,
+        chunkingStrategy,
+      })
+      return
+    }
+
     const snapshotValues = {snapshotProjectId: projectId, snapshotProjectModelName} as const
     const useTitle = contentSettings.useTitle
     const useAbstract = contentSettings.useAbstract

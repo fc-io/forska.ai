@@ -5,6 +5,7 @@ import {migrateDuckdb} from '../db/migrateDuckdb.ts'
 import {fullTextConversionJobsCron} from './cron/fullTextConversionJobs.ts'
 import {fullTextJobsCron} from './cron/fullTextJobs.ts'
 import {judgmentsJobsCron} from './cron/judgmentsJobs.ts'
+import {replayJudgeWorkerCompletionOutbox} from './cron/judgmentsJobs/judgeWorkerCompletionJournal.ts'
 import {getJudgmentJobSqliteService} from './cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {nvidiaSmiCron} from './cron/nvidiaSmi.ts'
 import {adminInvestigateRoutes} from './routes/AdminInvestigateRoutes.ts'
@@ -118,7 +119,11 @@ if (canCurrentServerOwnDuckdb()) {
   await migrateDuckdb()
 }
 
-if (shouldCurrentServerRunJudgingLoops()) {
+if (getCurrentServerRole() === 'judge-worker') {
+  await replayJudgeWorkerCompletionOutbox()
+}
+
+if (getCurrentServerRole() !== 'judge-worker' && shouldCurrentServerRunJudgingLoops()) {
   await getJudgmentJobSqliteService().recoverJudgmentJobLeasesOnStartup()
 }
 
@@ -127,7 +132,8 @@ const shouldMountJudgingCrons = shouldServerRoleMountJudgingCrons(getCurrentServ
 const maintenanceCronRoutes = shouldMountMaintenanceCrons
   ? new Elysia().use(fullTextJobsCron).use(fullTextConversionJobsCron).use(nvidiaSmiCron)
   : new Elysia()
-const judgingCronRoutes = shouldMountJudgingCrons ? new Elysia().use(judgmentsJobsCron) : new Elysia()
+const judgmentCronRoutes =
+  shouldMountJudgingCrons || shouldMountMaintenanceCrons ? new Elysia().use(judgmentsJobsCron) : new Elysia()
 const shouldWarmCodex = getCurrentServerRole() !== 'maintenance-worker'
 const getProductApiRoutes = () => {
   return new Elysia()
@@ -177,7 +183,7 @@ export const app = new Elysia()
   .use(runtimeReadyRoutes)
   .use(duckdbOwnerConnectionsRoutes)
   .use(maintenanceCronRoutes)
-  .use(judgingCronRoutes)
+  .use(judgmentCronRoutes)
   .use(publicProductApiRoutes)
   .use(duckdbOwnerPrivateApiRoutes)
   .listen({port: env.API_SERVER_PORT, idleTimeout: 255})

@@ -2,6 +2,11 @@ import {Context, Effect, Fiber, Layer, ManagedRuntime} from 'effect'
 
 import {registerDuckdbOwnerDemotionHandler} from '../../utils/serverRuntimeRole.ts'
 import {ConnectionError} from './connectionHealth.ts'
+import {
+  enqueueJudgeWorkerCompletion,
+  flushJudgeWorkerCompletionOutboxForClaim,
+  shouldUseJudgeWorkerOwnerHandoff,
+} from './judgeWorkerCompletionJournal.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 import {processPromptWithLLM} from './judgmentsJobsSendToLLM/processPromptWithLLM.ts'
@@ -63,6 +68,31 @@ type JudgmentDispatchRuntimeHandle = {
 const JudgmentDispatchRuntime = Context.GenericTag<JudgmentDispatchRuntimeService>('JudgmentDispatchRuntime')
 
 const defaultRecoverPrompts = async (prompts: PromptToProcess[], _reason: string): Promise<void> => {
+  if (shouldUseJudgeWorkerOwnerHandoff()) {
+    await Promise.all(
+      prompts.map(async (prompt) => {
+        await enqueueJudgeWorkerCompletion({
+          articleId: prompt.articleId,
+          claimId: prompt.claimId,
+          executionSnapshotHash: prompt.executionSnapshotHash,
+          executionSnapshotId: prompt.executionSnapshotId,
+          jobId: prompt.jobId,
+          modelId: prompt.modelId,
+          projectId: prompt.projectId,
+          promptId: prompt.promptId,
+          queueRecordId: prompt.recordId,
+          status: 'retry',
+          useAbstract: prompt.useAbstract,
+          useFulltext: prompt.useFulltext,
+          useFulltextNoImages: prompt.useFulltextNoImages,
+          useTitle: prompt.useTitle,
+        })
+        await flushJudgeWorkerCompletionOutboxForClaim(prompt.claimId)
+      }),
+    )
+    return
+  }
+
   const sqliteService = getJudgmentJobSqliteService()
 
   await Promise.all(

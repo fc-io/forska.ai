@@ -49,6 +49,7 @@ import {
   type JudgmentJobSqliteHealthProjectionRecord,
   type JudgmentJobSqliteHealthSnapshotForProjection,
 } from '../services/judgmentJobSqliteHealthProjectionService.ts'
+import {getTokenUseQueryService} from '../services/tokenUseQueryService.ts'
 import {getDuckdbOwnerConnectionsOverview} from '../utils/duckdbOwnerConnections.ts'
 import {HttpError} from '../utils/httpError.ts'
 import {getProjectMartLargeRebuildRuntimeMetrics} from '../utils/projectMartLargeRebuildRuntimeMetrics.ts'
@@ -230,6 +231,34 @@ type JudgmentCompletionBody = JudgmentCompletionIdentity & {
   retryAfterMs?: number | null
   skipReason?: 'conversion_failed' | 'fulltext_too_large' | 'no_fulltext'
   status?: 'completed' | 'failed' | 'judged' | 'retry' | 'skipped' | 'succeeded'
+  tokenUse?: JudgmentCompletionTokenUseSummary | null
+}
+type JudgmentCompletionTokenUseSummary = {
+  dpSize?: number | null
+  duration?: number | null
+  failedRequests: number
+  failedRequestsDetails: unknown[]
+  finishedAt?: string | null
+  gpuGpusPerNode?: number | null
+  gpuNnodes?: number | null
+  gpuShape?: string | null
+  gpuTotalGpus?: number | null
+  hasFailedRequests: boolean
+  modelName: string | null
+  sglangMaxRunningRequests?: number | null
+  startedAt?: string | null
+  successfulRequests: number
+  tpSize?: number | null
+  totalCompletionTokens: number
+  totalFailedCompletionTokens: number
+  totalFailedPromptTokens: number
+  totalFailedTokens: number
+  totalPromptTokens: number
+  totalRequests: number
+  totalSuccessCompletionTokens: number
+  totalSuccessPromptTokens: number
+  totalSuccessTokens: number
+  totalTokens: number
 }
 type JudgmentClaimRequestBody = {claimedBy?: string; limit?: number}
 type JudgmentSnapshotQuery = {executionSnapshotHash?: string; hash?: string}
@@ -285,6 +314,38 @@ const judgmentCompletionBodySchema = t.Object({
       t.Literal('retry'),
       t.Literal('skipped'),
       t.Literal('succeeded'),
+    ]),
+  ),
+  tokenUse: t.Optional(
+    t.Union([
+      t.Null(),
+      t.Object({
+        dpSize: t.Optional(t.Union([t.Number(), t.Null()])),
+        duration: t.Optional(t.Union([t.Number(), t.Null()])),
+        failedRequests: t.Number(),
+        failedRequestsDetails: t.Array(t.Any()),
+        finishedAt: t.Optional(t.Union([t.String(), t.Null()])),
+        gpuGpusPerNode: t.Optional(t.Union([t.Number(), t.Null()])),
+        gpuNnodes: t.Optional(t.Union([t.Number(), t.Null()])),
+        gpuShape: t.Optional(t.Union([t.String(), t.Null()])),
+        gpuTotalGpus: t.Optional(t.Union([t.Number(), t.Null()])),
+        hasFailedRequests: t.Boolean(),
+        modelName: t.Union([t.String(), t.Null()]),
+        sglangMaxRunningRequests: t.Optional(t.Union([t.Number(), t.Null()])),
+        startedAt: t.Optional(t.Union([t.String(), t.Null()])),
+        successfulRequests: t.Number(),
+        tpSize: t.Optional(t.Union([t.Number(), t.Null()])),
+        totalCompletionTokens: t.Number(),
+        totalFailedCompletionTokens: t.Number(),
+        totalFailedPromptTokens: t.Number(),
+        totalFailedTokens: t.Number(),
+        totalPromptTokens: t.Number(),
+        totalRequests: t.Number(),
+        totalSuccessCompletionTokens: t.Number(),
+        totalSuccessPromptTokens: t.Number(),
+        totalSuccessTokens: t.Number(),
+        totalTokens: t.Number(),
+      }),
     ]),
   ),
 })
@@ -369,27 +430,125 @@ const assertCompletionSnapshotIdentity = async (identity: JudgmentCompletionIden
   }
 }
 
+const getCompletionTokenUseId = (body: JudgmentCompletionBody) => {
+  return `judgment-completion-token-use:${body.claimId}`
+}
+
+const getCompletionTokenUseIdOrNull = (body: JudgmentCompletionBody): string | null => {
+  return body.tokenUse && body.tokenUse.totalRequests > 0 ? getCompletionTokenUseId(body) : null
+}
+
+const applyCompletionTokenUseOnce = async (body: JudgmentCompletionBody): Promise<string | null> => {
+  const tokenUse = body.tokenUse
+
+  if (!tokenUse || tokenUse.totalRequests <= 0) {
+    return null
+  }
+
+  const tokenUseId = getCompletionTokenUseId(body)
+  const startedAt = tokenUse.startedAt ? new Date(tokenUse.startedAt) : null
+  const finishedAt = tokenUse.finishedAt ? new Date(tokenUse.finishedAt) : null
+
+  await getTokenUseQueryService().insertTokenUseOnce({
+    id: tokenUseId,
+    judgment_job_id: body.jobId,
+    gpu_nnodes: tokenUse.gpuNnodes ?? null,
+    gpu_gpus_per_node: tokenUse.gpuGpusPerNode ?? null,
+    gpu_total_gpus: tokenUse.gpuTotalGpus ?? null,
+    tp_size: tokenUse.tpSize ?? null,
+    dp_size: tokenUse.dpSize ?? null,
+    gpu_shape: tokenUse.gpuShape ?? null,
+    sglang_max_running_requests: tokenUse.sglangMaxRunningRequests ?? null,
+    sglang_model: tokenUse.modelName,
+    requests: tokenUse.totalRequests,
+    total_prompt_tokens: tokenUse.totalPromptTokens,
+    total_completion_tokens: tokenUse.totalCompletionTokens,
+    total_tokens: tokenUse.totalTokens,
+    successful_requests: tokenUse.successfulRequests,
+    failed_requests: tokenUse.failedRequests,
+    has_failed_requests: tokenUse.hasFailedRequests,
+    failed_requests_details: tokenUse.failedRequestsDetails.length > 0 ? tokenUse.failedRequestsDetails : null,
+    total_success_prompt_tokens: tokenUse.totalSuccessPromptTokens,
+    total_success_completion_tokens: tokenUse.totalSuccessCompletionTokens,
+    total_success_tokens: tokenUse.totalSuccessTokens,
+    total_failed_prompt_tokens: tokenUse.totalFailedPromptTokens,
+    total_failed_completion_tokens: tokenUse.totalFailedCompletionTokens,
+    total_failed_tokens: tokenUse.totalFailedTokens,
+    started_at: startedAt,
+    finished_at: finishedAt,
+    duration: tokenUse.duration == null ? null : Math.round(tokenUse.duration),
+  })
+
+  return tokenUseId
+}
+
+const getExistingCompletionAckResponse = async (jobId: string, body: JudgmentCompletionBody) => {
+  const existingAck = await getJudgmentJobSqliteService().getPromptCompletionAck(jobId, body.claimId)
+
+  if (!existingAck) {
+    return null
+  }
+
+  const snapshotValid = await isJudgmentExecutionSnapshotIdentityValid({...body, jobId})
+
+  if (!snapshotValid || existingAck.queuePromptId !== body.queueRecordId) {
+    throw new HttpError(409, 'snapshot identity mismatch for replayed judgment completion')
+  }
+
+  await applyCompletionTokenUseOnce(body)
+
+  return {
+    data: {claimId: body.claimId, queueRecordId: existingAck.queuePromptId, status: existingAck.status},
+    error: null,
+  }
+}
+
 const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletionBody) => {
   if (body.jobId !== jobId) {
     throw new HttpError(409, 'jobId mismatch for judgment completion')
   }
 
+  const existingAckResponse = await getExistingCompletionAckResponse(jobId, body)
+
+  if (existingAckResponse) {
+    return existingAckResponse
+  }
+
   const identity = {...body, jobId}
 
   await assertCompletionSnapshotIdentity(identity)
+  const tokenUseId = getCompletionTokenUseIdOrNull(body)
 
   if (body.status === 'retry') {
-    await getJudgmentJobSqliteService().markPromptAsRetry(jobId, body.queueRecordId, body.retryAfterMs ?? null)
+    await getJudgmentJobSqliteService().markPromptAsRetry(jobId, body.queueRecordId, body.retryAfterMs ?? null, {
+      claimId: body.claimId,
+      queuePromptId: body.queueRecordId,
+      status: 'retry',
+      tokenUseId,
+    })
+    await applyCompletionTokenUseOnce(body)
     return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'retry'}, error: null}
   }
 
   if (body.status === 'skipped') {
-    await getJudgmentJobSqliteService().markPromptAsSkipped(jobId, body.queueRecordId, body.skipReason ?? 'no_fulltext')
+    await getJudgmentJobSqliteService().markPromptAsSkipped(
+      jobId,
+      body.queueRecordId,
+      body.skipReason ?? 'no_fulltext',
+      {claimId: body.claimId, queuePromptId: body.queueRecordId, status: 'skipped', tokenUseId},
+    )
+    await applyCompletionTokenUseOnce(body)
     return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'skipped'}, error: null}
   }
 
   if (body.status === 'failed') {
-    await getJudgmentJobSqliteService().markPromptAsJudged(jobId, body.queueRecordId)
+    await getJudgmentJobSqliteService().markPromptAsJudged(jobId, body.queueRecordId, {
+      claimId: body.claimId,
+      queuePromptId: body.queueRecordId,
+      status: 'failed',
+      tokenUseId,
+    })
+    await applyCompletionTokenUseOnce(body)
     return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'failed'}, error: null}
   }
 
@@ -414,6 +573,7 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
     projectId: body.projectId,
     promptId: body.promptId,
     queuePromptId: body.queueRecordId,
+    completionTokenUseId: tokenUseId,
     quotes: body.quotes ?? judgment.quotes ?? null,
     rawResponseJson: body.rawResponseJson ?? body.judgment ?? null,
     snapshotProjectId: body.projectId,
@@ -424,6 +584,7 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
     useFulltextNoImages: body.useFulltextNoImages,
     useTitle: body.useTitle,
   })
+  await applyCompletionTokenUseOnce(body)
 
   return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'judged'}, error: null}
 }
