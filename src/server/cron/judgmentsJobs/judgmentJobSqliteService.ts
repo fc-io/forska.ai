@@ -6,6 +6,7 @@ import {Database} from 'bun:sqlite'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {createJudgmentExecutionSnapshotForClaim} from '../../services/judgmentExecutionSnapshotService.ts'
 import {getJudgmentJobSqliteHealthProjectionService} from '../../services/judgmentJobSqliteHealthProjectionService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {writeRuntimeFailureLogEvent} from '../../utils/runtimeLogger.ts'
@@ -85,7 +86,21 @@ type QueuePromptRow = {articleId: string; id: string; promptId: string}
 
 type QueuePromptInsert = {articleId: string; promptId: string}
 
-type QueuePromptClaim = {articleId: string; jobId: string; promptId: string; recordId: string}
+type QueuePromptClaim = {
+  articleId: string
+  claimId: string
+  executionSnapshotHash: string
+  executionSnapshotId: string
+  jobId: string
+  modelId: string
+  projectId: string
+  promptId: string
+  recordId: string
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
 
 const queuePromptReadyOrderColumnName = 'ready_insert_seq'
 
@@ -99,6 +114,9 @@ type QueuePromptOutboxInsert = {
   explanation: string | null
   isAnswered: boolean
   judgmentId: string
+  claimId?: string
+  executionSnapshotHash?: string
+  executionSnapshotId?: string
   modelId: string
   projectId: string | null
   promptId: string
@@ -124,6 +142,9 @@ type OutboxRow = {
   explanation: string | null
   jobId: string
   judgmentId: string
+  claimId: string | null
+  executionSnapshotHash: string | null
+  executionSnapshotId: string | null
   modelId: string
   outboxSeq: number
   projectId: string | null
@@ -151,6 +172,9 @@ export type JudgmentJobSqliteOutboxEntry = {
   isAnswered: boolean
   jobId: string
   judgmentId: string
+  claimId: string | null
+  executionSnapshotHash: string | null
+  executionSnapshotId: string | null
   modelId: string
   outboxSeq: number
   projectId: string | null
@@ -261,6 +285,30 @@ type RetentionPruneResult = {outboxRowsDeleted: number; queuePromptRowsDeleted: 
 
 type PromptDispatchCounts = {claimed: number; running: number}
 
+type PromptClaimIdentity = {
+  articleId: string
+  claimId: string
+  executionSnapshotHash: string
+  executionSnapshotId: string
+  jobId: string
+  modelId: string
+  projectId: string
+  promptId: string
+  queueRecordId: string
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
+
+type PromptClaimIdentityRow = {
+  articleId: string
+  claimId: string | null
+  executionSnapshotHash: string | null
+  executionSnapshotId: string | null
+  promptId: string
+}
+
 type JudgmentJobStorageRow = {id: string}
 
 type ProjectRefreshAckStateRow = {lastCompletedRefreshToken: number | null; projectId: string}
@@ -289,6 +337,13 @@ export class JudgmentJobSqlitePreflightError extends Error {
   constructor(message: string, options?: {cause?: unknown}) {
     super(message, options)
     this.name = 'JudgmentJobSqlitePreflightError'
+  }
+}
+
+export class JudgmentPromptClaimIdentityError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'JudgmentPromptClaimIdentityError'
   }
 }
 
@@ -554,6 +609,8 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       skip_reason TEXT,
       server_id TEXT,
       claim_id TEXT,
+      execution_snapshot_id TEXT,
+      execution_snapshot_hash TEXT,
       sent_at TEXT,
       judged_at TEXT,
       extra_retry_count INTEGER NOT NULL DEFAULT 0,
@@ -569,6 +626,9 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       job_id TEXT NOT NULL,
       queue_prompt_id TEXT NOT NULL UNIQUE,
       judgment_id TEXT NOT NULL UNIQUE,
+      claim_id TEXT,
+      execution_snapshot_id TEXT,
+      execution_snapshot_hash TEXT,
       article_id TEXT NOT NULL,
       prompt_id TEXT NOT NULL,
       model_id TEXT NOT NULL,
@@ -680,6 +740,8 @@ const judgmentJobSqliteRequiredSchema = {
     'status',
     'server_id',
     'claim_id',
+    'execution_snapshot_id',
+    'execution_snapshot_hash',
     'sent_at',
     'ready_insert_seq',
     'created_at',
@@ -690,6 +752,9 @@ const judgmentJobSqliteRequiredSchema = {
     'job_id',
     'queue_prompt_id',
     'judgment_id',
+    'claim_id',
+    'execution_snapshot_id',
+    'execution_snapshot_hash',
     'article_id',
     'prompt_id',
     'model_id',
@@ -714,6 +779,14 @@ const queuePromptColumns = [
   {name: 'extra_retry_count', sql: 'INTEGER NOT NULL DEFAULT 0'},
   {name: 'last_recoverable_error_code', sql: 'TEXT'},
   {name: 'retry_after_at', sql: 'TEXT'},
+  {name: 'execution_snapshot_id', sql: 'TEXT'},
+  {name: 'execution_snapshot_hash', sql: 'TEXT'},
+] as const
+
+const judgmentOutboxColumns = [
+  {name: 'claim_id', sql: 'TEXT'},
+  {name: 'execution_snapshot_id', sql: 'TEXT'},
+  {name: 'execution_snapshot_hash', sql: 'TEXT'},
 ] as const
 
 const legacyJobScanStateAckColumns = [
@@ -761,6 +834,20 @@ const addMissingQueuePromptColumns = (
 
   database.exec(`ALTER TABLE queue_prompt ADD COLUMN ${currentColumn.name} ${currentColumn.sql}`)
   return addMissingQueuePromptColumns(database, columns.slice(1))
+}
+
+const addMissingJudgmentOutboxColumns = (
+  database: Database,
+  columns: ReadonlyArray<(typeof judgmentOutboxColumns)[number]>,
+): void => {
+  const [currentColumn] = columns
+
+  if (!currentColumn) {
+    return
+  }
+
+  database.exec(`ALTER TABLE judgment_outbox ADD COLUMN ${currentColumn.name} ${currentColumn.sql}`)
+  return addMissingJudgmentOutboxColumns(database, columns.slice(1))
 }
 
 const renameLegacyJobScanStateAckColumns = (
@@ -823,8 +910,12 @@ const ensureOutboxClaimSchema = (database: Database) => {
   const missingColumns = outboxClaimColumns.filter((column) => {
     return !existingColumnNames.has(column.name)
   })
+  const missingIdentityColumns = judgmentOutboxColumns.filter((column) => {
+    return !existingColumnNames.has(column.name)
+  })
 
   addMissingOutboxClaimColumns(database, missingColumns)
+  addMissingJudgmentOutboxColumns(database, missingIdentityColumns)
   database.exec(`
     CREATE INDEX IF NOT EXISTS idx_judgment_outbox_claim
       ON judgment_outbox(exported_at, export_claimed_at, outbox_seq)
@@ -1822,6 +1913,9 @@ const getOutboxEntry = (row: OutboxRow) => {
     isAnswered: true,
     jobId: row.jobId,
     judgmentId: row.judgmentId,
+    claimId: row.claimId,
+    executionSnapshotHash: row.executionSnapshotHash,
+    executionSnapshotId: row.executionSnapshotId,
     modelId: row.modelId,
     outboxSeq: Number(row.outboxSeq),
     projectId: row.projectId,
@@ -2052,6 +2146,9 @@ const getClaimableOutboxRows = (database: Database, limit: number) => {
           job_id AS jobId,
           queue_prompt_id AS queuePromptId,
           judgment_id AS judgmentId,
+          claim_id AS claimId,
+          execution_snapshot_id AS executionSnapshotId,
+          execution_snapshot_hash AS executionSnapshotHash,
           article_id AS articleId,
           prompt_id AS promptId,
           model_id AS modelId,
@@ -2090,6 +2187,9 @@ const getClaimedOutboxRows = (database: Database, claimId: string) => {
           job_id AS jobId,
           queue_prompt_id AS queuePromptId,
           judgment_id AS judgmentId,
+          claim_id AS claimId,
+          execution_snapshot_id AS executionSnapshotId,
+          execution_snapshot_hash AS executionSnapshotHash,
           article_id AS articleId,
           prompt_id AS promptId,
           model_id AS modelId,
@@ -2453,6 +2553,8 @@ const repairOrphanedJudgedQueueRowsForJob = async ({
                           skip_reason = NULL,
                           server_id = NULL,
                           claim_id = NULL,
+                          execution_snapshot_id = NULL,
+                          execution_snapshot_hash = NULL,
                           sent_at = NULL,
                           retry_after_at = NULL,
                           judged_at = NULL,
@@ -2477,6 +2579,207 @@ const repairOrphanedJudgedQueueRowsForJob = async ({
       serverJobId,
     )) ?? emptyOrphanedJudgedQueueRepairCounts()
   )
+}
+
+const getReadyQueuePromptRows = (database: Database, limit: number): QueuePromptRow[] => {
+  return database
+    .query(
+      `
+        SELECT id, article_id AS articleId, prompt_id AS promptId
+        FROM queue_prompt
+        WHERE status = 'ready'
+          AND (retry_after_at IS NULL OR retry_after_at <= ?)
+        ORDER BY ready_insert_seq ASC, id ASC
+        LIMIT ?
+      `,
+    )
+    .all(new Date().toISOString(), limit) as QueuePromptRow[]
+}
+
+const markReadyQueuePromptClaimed = ({
+  claim,
+  database,
+  row,
+  serverJobId,
+}: {
+  claim: Omit<QueuePromptClaim, 'articleId' | 'jobId' | 'promptId' | 'recordId'>
+  database: Database
+  row: QueuePromptRow
+  serverJobId: string
+}) => {
+  const now = new Date().toISOString()
+  const result = database
+    .query(
+      `
+        UPDATE queue_prompt
+        SET status = 'claimed',
+            sent_at = ?,
+            updated_at = ?,
+            server_id = ?,
+            claim_id = ?,
+            execution_snapshot_id = ?,
+            execution_snapshot_hash = ?
+        WHERE id = ?
+          AND status = 'ready'
+      `,
+    )
+    .run(now, now, serverJobId, claim.claimId, claim.executionSnapshotId, claim.executionSnapshotHash, row.id) as {
+    changes?: number
+  }
+
+  return Number(result.changes ?? 0) === 1
+}
+
+const claimReadyQueuePromptRow = async ({
+  database,
+  jobId,
+  row,
+  serverJobId,
+}: {
+  database: Database
+  jobId: string
+  row: QueuePromptRow
+  serverJobId: string
+}): Promise<QueuePromptClaim[]> => {
+  const claimId = randomUUID()
+  const snapshot = await createJudgmentExecutionSnapshotForClaim({
+    articleId: row.articleId,
+    claimId,
+    claimedBy: serverJobId,
+    jobId,
+    promptId: row.promptId,
+    queueRecordId: row.id,
+  })
+  const claim = {claimId, ...snapshot}
+  const claimed = markReadyQueuePromptClaimed({claim, database, row, serverJobId})
+
+  return claimed ? [{articleId: row.articleId, jobId, promptId: row.promptId, recordId: row.id, ...claim}] : []
+}
+
+const claimReadyQueuePromptRows = async ({
+  database,
+  jobId,
+  rows,
+  serverJobId,
+}: {
+  database: Database
+  jobId: string
+  rows: QueuePromptRow[]
+  serverJobId: string
+}): Promise<QueuePromptClaim[]> => {
+  return rows.reduce<Promise<QueuePromptClaim[]>>(async (claimedPromise, row) => {
+    const claimed = await claimedPromise
+    const nextClaim = await claimReadyQueuePromptRow({database, jobId, row, serverJobId})
+
+    return [...claimed, ...nextClaim]
+  }, Promise.resolve([]))
+}
+
+const getPromptClaimIdentityFromDatabase = (
+  database: Database,
+  jobId: string,
+  queueRecordId: string,
+): PromptClaimIdentity | null => {
+  const row = database
+    .query(
+      `
+        SELECT
+          qp.article_id AS articleId,
+          qp.prompt_id AS promptId,
+          qp.claim_id AS claimId,
+          qp.execution_snapshot_id AS executionSnapshotId,
+          qp.execution_snapshot_hash AS executionSnapshotHash
+        FROM queue_prompt qp
+        WHERE qp.id = ?
+          AND qp.job_id = ?
+        LIMIT 1
+      `,
+    )
+    .get(queueRecordId, jobId) as PromptClaimIdentityRow | null
+  const jobInfo = getOrphanedJudgedQueueRepairJobInfo(database, jobId)
+
+  return row?.claimId && row.executionSnapshotId && row.executionSnapshotHash && jobInfo
+    ? {
+        articleId: row.articleId,
+        claimId: row.claimId,
+        executionSnapshotHash: row.executionSnapshotHash,
+        executionSnapshotId: row.executionSnapshotId,
+        jobId,
+        modelId: jobInfo.modelId,
+        projectId: jobInfo.projectId,
+        promptId: row.promptId,
+        queueRecordId,
+        useAbstract: jobInfo.useAbstract,
+        useFulltext: jobInfo.useFulltext,
+        useFulltextNoImages: jobInfo.useFulltextNoImages,
+        useTitle: jobInfo.useTitle,
+      }
+    : null
+}
+
+const getPromptClaimIdentityMismatch = (expected: PromptClaimIdentity, actual: PromptClaimIdentity | null) => {
+  if (!actual) {
+    return 'missing claimed prompt identity'
+  }
+
+  const mismatchedKey = (
+    [
+      'articleId',
+      'claimId',
+      'executionSnapshotHash',
+      'executionSnapshotId',
+      'jobId',
+      'modelId',
+      'projectId',
+      'promptId',
+      'queueRecordId',
+      'useAbstract',
+      'useFulltext',
+      'useFulltextNoImages',
+      'useTitle',
+    ] as const
+  ).find((key) => {
+    return actual[key] !== expected[key]
+  })
+
+  return mismatchedKey ? `snapshot claim identity mismatch for ${mismatchedKey}` : null
+}
+
+const assertPromptClaimIdentityFromDatabase = (
+  database: Database,
+  expected: PromptClaimIdentity,
+): PromptClaimIdentity => {
+  const actual = getPromptClaimIdentityFromDatabase(database, expected.jobId, expected.queueRecordId)
+  const mismatch = getPromptClaimIdentityMismatch(expected, actual)
+
+  if (mismatch) {
+    throw new JudgmentPromptClaimIdentityError(mismatch)
+  }
+
+  return actual as PromptClaimIdentity
+}
+
+const getPromptClaimIdentityFromOutboxInsert = (
+  jobId: string,
+  input: QueuePromptOutboxInsert,
+): PromptClaimIdentity | null => {
+  return input.claimId && input.executionSnapshotId && input.executionSnapshotHash && input.projectId
+    ? {
+        articleId: input.articleId,
+        claimId: input.claimId,
+        executionSnapshotHash: input.executionSnapshotHash,
+        executionSnapshotId: input.executionSnapshotId,
+        jobId,
+        modelId: input.modelId,
+        projectId: input.projectId,
+        promptId: input.promptId,
+        queueRecordId: input.queuePromptId,
+        useAbstract: input.useAbstract,
+        useFulltext: input.useFulltext,
+        useFulltextNoImages: input.useFulltextNoImages,
+        useTitle: input.useTitle,
+      }
+    : null
 }
 
 const sqliteService = {
@@ -2554,47 +2857,20 @@ const sqliteService = {
     return insertedCount ?? 0
   },
   claimReadyPrompts: async (jobId: string, serverJobId: string, limit: number): Promise<QueuePromptClaim[]> => {
-    const claimed = await withOwnedJobDatabase(
-      jobId,
-      false,
-      (database) => {
-        const selectReady = database.query(`
-        SELECT id, article_id AS articleId, prompt_id AS promptId
-        FROM queue_prompt
-        WHERE status = 'ready'
-          AND (retry_after_at IS NULL OR retry_after_at <= ?)
-        ORDER BY ready_insert_seq ASC, id ASC
-        LIMIT ?
-      `)
-        const markClaimed = database.query(`
-        UPDATE queue_prompt
-        SET status = 'claimed',
-            sent_at = ?,
-            updated_at = ?,
-            server_id = ?,
-            claim_id = ?
-        WHERE id = ?
-          AND status = 'ready'
-      `)
+    startOwnedJobLeaseOperation(jobId)
 
-        return database.transaction((requestedLimit: number) => {
-          const now = new Date().toISOString()
-          const readyRows = selectReady.all(now, requestedLimit) as QueuePromptRow[]
+    try {
+      await ensureOwnedJobLease(jobId, serverJobId)
+      const database = getOpenDatabase(jobId, false)
 
-          return readyRows.flatMap((row) => {
-            const claimId = randomUUID()
-            const result = markClaimed.run(now, now, serverJobId, claimId, row.id) as {changes?: number}
+      if (!database) {
+        return []
+      }
 
-            return result.changes === 1
-              ? [{articleId: row.articleId, jobId, promptId: row.promptId, recordId: row.id}]
-              : []
-          })
-        })(limit)
-      },
-      serverJobId,
-    )
-
-    return claimed ?? []
+      return claimReadyQueuePromptRows({database, jobId, rows: getReadyQueuePromptRows(database, limit), serverJobId})
+    } finally {
+      finishOwnedJobLeaseOperation(jobId)
+    }
   },
   clearActiveQueue: async (jobId: string) => {
     return withOwnedJobDatabase(jobId, false, (database) => {
@@ -3027,6 +3303,20 @@ const sqliteService = {
       }) ?? false
     )
   },
+  getPromptClaimIdentity: async (jobId: string, queueRecordId: string): Promise<PromptClaimIdentity | null> => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        return getPromptClaimIdentityFromDatabase(database, jobId, queueRecordId)
+      }) ?? null
+    )
+  },
+  assertPromptClaimIdentity: async (identity: PromptClaimIdentity): Promise<PromptClaimIdentity> => {
+    return (
+      (await withOwnedJobDatabase(identity.jobId, false, (database) => {
+        return assertPromptClaimIdentityFromDatabase(database, identity)
+      })) ?? Promise.reject(new JudgmentPromptClaimIdentityError('missing SQLite job database'))
+    )
+  },
   initializeJob: async (jobId: string) => {
     const jobInfo = await getJobInfoForInitialization(jobId)
 
@@ -3380,6 +3670,8 @@ const sqliteService = {
               retry_after_at = ?,
               updated_at = ?,
               claim_id = NULL,
+              execution_snapshot_id = NULL,
+              execution_snapshot_hash = NULL,
               ready_insert_seq = ?
           WHERE id = ?
         `,
@@ -3430,7 +3722,9 @@ const sqliteService = {
             sent_at = NULL,
             retry_after_at = NULL,
             updated_at = ?,
-            claim_id = NULL
+            claim_id = NULL,
+            execution_snapshot_id = NULL,
+            execution_snapshot_hash = NULL
         WHERE id = ?
           AND status IN ('claimed', 'running', 'sent')
       `,
@@ -3463,6 +3757,12 @@ const sqliteService = {
   recordJudgmentSuccess: async (jobId: string, outboxInsert: QueuePromptOutboxInsert) => {
     return withOwnedJobDatabase(jobId, false, (database) => {
       const insertedRows = database.transaction((input: QueuePromptOutboxInsert) => {
+        const expectedIdentity = getPromptClaimIdentityFromOutboxInsert(jobId, input)
+
+        if (expectedIdentity) {
+          assertPromptClaimIdentityFromDatabase(database, expectedIdentity)
+        }
+
         const insertResult = database
           .query(
             `
@@ -3470,6 +3770,9 @@ const sqliteService = {
             job_id,
             queue_prompt_id,
             judgment_id,
+            claim_id,
+            execution_snapshot_id,
+            execution_snapshot_hash,
             article_id,
             prompt_id,
             model_id,
@@ -3490,13 +3793,16 @@ const sqliteService = {
             raw_response_json,
             created_at,
             updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
           )
           .run(
             jobId,
             input.queuePromptId,
             input.judgmentId,
+            input.claimId ?? null,
+            input.executionSnapshotId ?? null,
+            input.executionSnapshotHash ?? null,
             input.articleId,
             input.promptId,
             input.modelId,
@@ -3561,7 +3867,9 @@ const sqliteService = {
               retry_after_at = NULL,
               updated_at = ?,
               server_id = ?,
-              claim_id = NULL
+              claim_id = NULL,
+              execution_snapshot_id = NULL,
+              execution_snapshot_hash = NULL
           WHERE status IN ('claimed', 'running', 'sent')
             AND COALESCE(server_id, '') <> ?
             AND sent_at <= ?

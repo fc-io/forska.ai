@@ -24,6 +24,9 @@ const createSignal = () => {
 const createPrompt = (overrides: Partial<PromptToProcess> = {}): PromptToProcess => {
   return {
     articleId: 'article-a',
+    claimId: 'claim-a',
+    executionSnapshotHash: 'snapshot-hash-a',
+    executionSnapshotId: 'snapshot-a',
     jobId: 'job-a',
     modelBaseUrl: 'http://runtime.test/v1',
     modelId: 'model-a',

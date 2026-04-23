@@ -906,6 +906,7 @@ export const judgeSinglePrompt = async ({
   modelConfig,
   modelContext,
   projectId,
+  claimIdentity,
   contentSettings,
 }: {
   article: ArticlesType[number]
@@ -916,6 +917,7 @@ export const judgeSinglePrompt = async ({
   modelConfig: ModelConfigInput
   modelContext: number
   projectId: string
+  claimIdentity?: {claimId: string; executionSnapshotHash: string; executionSnapshotId: string}
   contentSettings: ContentSettings
 }): Promise<void> => {
   const {
@@ -1052,11 +1054,14 @@ export const judgeSinglePrompt = async ({
 
         await storeSinglePromptJudgment({
           article,
+          claimIdentity,
+          contentSettings,
           judgmentsJobId,
           promptId: prompt.id,
           queueRecordId,
           modelId,
           projectId,
+          snapshotProjectModelName: modelName,
           judgment: quoteValidationResult.judgment,
           chunkingStrategy: null,
         })
@@ -1593,11 +1598,14 @@ export const judgeSinglePrompt = async ({
 
           await storeSinglePromptJudgment({
             article,
+            claimIdentity,
+            contentSettings,
             judgmentsJobId,
             promptId: prompt.id,
             queueRecordId,
             modelId,
             projectId,
+            snapshotProjectModelName: modelName,
             judgment: judgmentToStore,
             chunkingStrategy,
           })

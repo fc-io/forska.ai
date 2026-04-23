@@ -30,6 +30,23 @@ const isJudgmentJobReadableDiagnosticsPath = (pathname: string, method: string) 
   return normalizedMethod === 'GET' && (ownerlessReadableDiagnosticsPaths.includes(pathname) || dynamicMatch !== null)
 }
 
+const isOwnerBackedJudgmentJobPath = (pathname: string, method: string) => {
+  const normalizedMethod = method.toUpperCase()
+  const claimOrCompletionMatch = pathname.match(/^\/api\/judgmentsjobs\/[^/]+\/(?:claim|claims|complete|completions)$/)
+  const controlMatch = pathname.match(
+    /^\/api\/judgmentsjobs\/[^/]+(?:\/(?:checkpoint|drain|preflight|quarantine|repair|start-clean|unquarantine))?$/,
+  )
+  const snapshotMatch =
+    pathname.match(/^\/api\/judgmentsjobs\/execution-snapshots\/[^/]+$/)
+    || pathname.match(/^\/api\/judgmentsjobs-execution-snapshots\/[^/]+$/)
+
+  return (
+    snapshotMatch !== null
+    || claimOrCompletionMatch !== null
+    || (controlMatch !== null && ['DELETE', 'PATCH', 'POST'].includes(normalizedMethod))
+  )
+}
+
 export const classifyApiRoute = (pathname: string, method = 'GET'): ApiRouteClassification => {
   const normalizedPathname = normalizePathname(pathname)
 
@@ -41,9 +58,11 @@ export const classifyApiRoute = (pathname: string, method = 'GET'): ApiRouteClas
         ? 'duckdb-owner-diagnostics'
         : isJudgmentJobReadableDiagnosticsPath(normalizedPathname, method)
           ? 'ownerless-readable-diagnostics'
-          : ownerDependentPaths.includes(normalizedPathname)
+          : isOwnerBackedJudgmentJobPath(normalizedPathname, method)
             ? 'owner-dependent'
-            : 'unclassified'
+            : ownerDependentPaths.includes(normalizedPathname)
+              ? 'owner-dependent'
+              : 'unclassified'
 }
 
 export const shouldApiRouteProxyToDuckdbOwner = (classification: ApiRouteClassification) => {

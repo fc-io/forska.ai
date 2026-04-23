@@ -4,6 +4,7 @@ import type {ArticleRecord, JudgmentChunkingStrategy} from '../../db/schemaTypes
 import {getJudgmentJobSqliteService} from '../../server/cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
 import {escapeSqlString} from '../../server/services/appQueryHelpers.ts'
+import type {ContentSettings} from './judgeGetPrompt.ts'
 import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
 import type {SinglePromptJudgmentResult} from './parseSinglePromptJudgment.ts'
 
@@ -16,65 +17,37 @@ export class JudgmentPersistenceError extends Error {
 
 export const storeSinglePromptJudgment = async ({
   article,
+  claimIdentity,
+  contentSettings = {useAbstract: true, useFulltext: false, useFulltextNoImages: false, useTitle: true},
   judgmentsJobId,
   promptId,
   queueRecordId,
   modelId,
   projectId,
+  snapshotProjectModelName = null,
   judgment,
   chunkingStrategy,
 }: {
   article: ArticleRecord
+  claimIdentity?: {claimId: string; executionSnapshotHash: string; executionSnapshotId: string}
+  contentSettings?: ContentSettings
   judgmentsJobId: string
   promptId: string
   queueRecordId: string
   modelId: string
   projectId: string
+  snapshotProjectModelName?: string | null
   judgment: SinglePromptJudgmentResult
   chunkingStrategy: JudgmentChunkingStrategy | null
 }): Promise<void> => {
   try {
-    // Prepare snapshot context (best-effort, only fetching fields we still store)
-    const [projectRow] = await getAppDatabaseService().queryJson<{
-      id: string
-      useTitle: boolean
-      useAbstract: boolean
-      useFulltext: boolean
-      useFulltextNoImages: boolean
-    }>(`
-      SELECT
-        id,
-        use_title AS useTitle,
-        use_abstract AS useAbstract,
-        use_fulltext AS useFulltext,
-        use_fulltext_no_images AS useFulltextNoImages
-      FROM app.project
-      WHERE id = '${escapeSqlString(projectId)}'
-      LIMIT 1
-    `)
-
-    const [modelRow] = await getAppDatabaseService().queryJson<{modelName: string | null; provider: string | null}>(`
-      SELECT
-        COALESCE(m.display_name, m.name, m.remote_model_id) AS modelName,
-        pc.provider_kind AS provider
-      FROM app.model m
-      LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
-      WHERE m.id = '${escapeSqlString(modelId)}'
-      LIMIT 1
-    `)
-
-    const useTitle = projectRow?.useTitle ?? true
-    const useAbstract = projectRow?.useAbstract ?? true
-    const useFulltext = projectRow?.useFulltext ?? false
-    const useFulltextNoImages = projectRow?.useFulltextNoImages ?? false
-
-    const snapshotValues = {
-      snapshotProjectId: projectRow?.id ?? null,
-      snapshotProjectModelName: modelRow?.modelName ?? null,
-    } as const
+    const snapshotValues = {snapshotProjectId: projectId, snapshotProjectModelName} as const
+    const useTitle = contentSettings.useTitle
+    const useAbstract = contentSettings.useAbstract
+    const useFulltext = contentSettings.useFulltext
+    const useFulltextNoImages = contentSettings.useFulltextNoImages
 
     const rawAnswer = judgment.answer
-    // Serialize array answers to JSON for the text column
     const answeredOriginal = Array.isArray(rawAnswer) ? JSON.stringify(rawAnswer) : rawAnswer
     const answeredOriginalAsArray = judgeStoreJudgmentGetStringAsArrayOfStrings(rawAnswer)
     const answeredExplanation = judgment.explanation
@@ -120,10 +93,13 @@ export const storeSinglePromptJudgment = async ({
         answeredOriginal,
         answeredOriginalAsArray: answeredOriginalAsArray ?? [],
         articleId: article.id,
+        claimId: claimIdentity?.claimId,
         chunkingStrategy,
         confidenceOriginal: 50,
         createdAt: new Date(),
         explanation: answeredExplanation || null,
+        executionSnapshotHash: claimIdentity?.executionSnapshotHash,
+        executionSnapshotId: claimIdentity?.executionSnapshotId,
         isAnswered: true,
         judgmentId: randomUUID(),
         modelId,

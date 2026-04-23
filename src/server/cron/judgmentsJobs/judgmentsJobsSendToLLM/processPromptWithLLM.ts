@@ -223,6 +223,11 @@ const processSinglePrompt = async (
     },
     modelContext,
     projectId: promptToProcess.projectId,
+    claimIdentity: {
+      claimId: promptToProcess.claimId,
+      executionSnapshotHash: promptToProcess.executionSnapshotHash,
+      executionSnapshotId: promptToProcess.executionSnapshotId,
+    },
     contentSettings: {
       useTitle: promptToProcess.useTitle,
       useAbstract: promptToProcess.useAbstract,

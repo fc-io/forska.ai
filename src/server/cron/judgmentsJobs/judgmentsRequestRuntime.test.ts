@@ -1,7 +1,10 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 import {Effect, Fiber} from 'effect'
 
+import * as realReadOnlyDatabaseModule from '../../services/appReadOnlyDatabaseService.ts'
+import * as realReadOnlyQueryModule from '../../services/getAppReadOnlyQueryService.ts'
 import {classifyConnectionFailure, ConnectionError, recordConnectionFailure} from './connectionHealth.ts'
+import * as realSqliteModule from './judgmentJobSqliteService.ts'
 
 type JudgmentsRequestRuntimeModule = typeof import('./judgmentsRequestRuntime.ts')
 type ProcessPromptModule = typeof import('./judgmentsJobsSendToLLM/processPromptWithLLM.ts')
@@ -15,10 +18,15 @@ const providerConnectionRepositoryModulePath = new URL(
 const providerHealthServiceModulePath = new URL('../../providers/providerHealthService.ts', import.meta.url).pathname
 const judgmentsCapacityModulePath = new URL('./getJudgmentsCapacity.ts', import.meta.url).pathname
 const judgeModulePath = new URL('../../../agent/judge.ts', import.meta.url).pathname
-const appDatabaseServiceModulePath = new URL('../../services/appDatabaseService.ts', import.meta.url).pathname
-const appQueryServiceModulePath = new URL('../../services/getAppQueryService.ts', import.meta.url).pathname
+const appReadOnlyDatabaseServiceModulePath = new URL('../../services/appReadOnlyDatabaseService.ts', import.meta.url)
+  .pathname
+const appReadOnlyQueryServiceModulePath = new URL('../../services/getAppReadOnlyQueryService.ts', import.meta.url)
+  .pathname
 const ensureFullTextModulePath = new URL('../../utils/ensureFullText.ts', import.meta.url).pathname
 const sqliteServiceModulePath = new URL('./judgmentJobSqliteService.ts', import.meta.url).pathname
+const getRealJudgeWorkerReadOnlyAppDatabaseService = realReadOnlyDatabaseModule.getJudgeWorkerReadOnlyAppDatabaseService
+const getRealJudgeWorkerReadOnlyAppQueryService = realReadOnlyQueryModule.getJudgeWorkerReadOnlyAppQueryService
+const getRealJudgmentJobSqliteService = realSqliteModule.getJudgmentJobSqliteService
 
 const createJudgmentsCapacity = ({
   maxInflight = 2,
@@ -113,6 +121,7 @@ const ensureFullTextMock = mock(async (article: {fullText: string | null}) => {
   return {reason: 'no_fulltext' as const, shouldSkip: true, text: article.fullText ?? 'Full text'}
 })
 const sqliteStateTransitions: string[] = []
+let usePromptRuntimeMocks = false
 const sqliteServiceMock = {
   hasJob: mock((_jobId: string) => {
     return true
@@ -162,22 +171,26 @@ const loadRuntime = (): Promise<JudgmentsRequestRuntimeModule> => {
 }
 
 const registerPromptModuleMocks = () => {
+  usePromptRuntimeMocks = true
+
   void mock.module(judgeModulePath, () => {
     return {judgeSinglePrompt, MAX_COMPLETION_TOKENS: 4000, RecoverableJudgeError}
   })
 
-  void mock.module(appDatabaseServiceModulePath, () => {
+  void mock.module(appReadOnlyDatabaseServiceModulePath, () => {
     return {
-      getAppDatabaseService: () => {
-        return {queryJson}
+      ...realReadOnlyDatabaseModule,
+      getJudgeWorkerReadOnlyAppDatabaseService: () => {
+        return usePromptRuntimeMocks ? {queryJson} : getRealJudgeWorkerReadOnlyAppDatabaseService()
       },
     }
   })
 
-  void mock.module(appQueryServiceModulePath, () => {
+  void mock.module(appReadOnlyQueryServiceModulePath, () => {
     return {
-      getAppQueryService: () => {
-        return {getFullArticlesByIds}
+      ...realReadOnlyQueryModule,
+      getJudgeWorkerReadOnlyAppQueryService: () => {
+        return usePromptRuntimeMocks ? {getFullArticlesByIds} : getRealJudgeWorkerReadOnlyAppQueryService()
       },
     }
   })
@@ -188,8 +201,9 @@ const registerPromptModuleMocks = () => {
 
   void mock.module(sqliteServiceModulePath, () => {
     return {
+      ...realSqliteModule,
       getJudgmentJobSqliteService: () => {
-        return sqliteServiceMock
+        return usePromptRuntimeMocks ? sqliteServiceMock : getRealJudgmentJobSqliteService()
       },
     }
   })
@@ -206,6 +220,9 @@ const loadProcessPromptModule = (): Promise<ProcessPromptModule> => {
 const createPromptToProcess = (): PromptToProcess => {
   return {
     articleId: 'article-a',
+    claimId: 'claim-a',
+    executionSnapshotHash: 'snapshot-hash-a',
+    executionSnapshotId: 'snapshot-a',
     jobId: 'job-a',
     modelBaseUrl: 'http://runtime.test/v1',
     modelId: 'model-a',
@@ -265,6 +282,7 @@ afterEach(async () => {
   sqliteServiceMock.markPromptAsRunning.mockClear()
   sqliteServiceMock.markPromptAsSkipped.mockClear()
   sqliteStateTransitions.splice(0, sqliteStateTransitions.length)
+  usePromptRuntimeMocks = false
   testProviderConnectionHealth.mockImplementation(async (_connection: unknown, _options: unknown) => {
     return {lastError: null, message: 'ok', modelCount: 1, ok: true}
   })

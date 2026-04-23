@@ -14,7 +14,10 @@ import {
 } from '../cron/judgmentsJobs/judgmentJobSqliteIsolatedImport.ts'
 import {flushJudgmentJobSqliteOutbox} from '../cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts'
 import {assertJudgmentJobCanRunSqlitePreflight} from '../cron/judgmentsJobs/judgmentJobSqlitePreflight.ts'
-import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
+import {
+  getJudgmentJobSqliteService,
+  JudgmentPromptClaimIdentityError,
+} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {
   getJudgmentJobRepairMode,
   getJudgmentJobStartupHandling,
@@ -35,6 +38,10 @@ import {
   getSqlLiteral,
 } from '../services/appQueryHelpers.ts'
 import {getApiReadOnlyAppDatabaseService} from '../services/appReadOnlyDatabaseService.ts'
+import {
+  getJudgmentExecutionSnapshot,
+  isJudgmentExecutionSnapshotIdentityValid,
+} from '../services/judgmentExecutionSnapshotService.ts'
 import {deleteJudgmentJobSafelyTx} from '../services/judgmentJobDeleteService.ts'
 import {
   getJudgmentJobSqliteHealthProjectionService,
@@ -194,6 +201,38 @@ type JudgmentJobHealthProgress = {
   }
   workIdentity: JudgmentJobWorkIdentity
 }
+type JudgmentCompletionIdentity = {
+  articleId: string
+  claimId: string
+  executionSnapshotHash: string
+  executionSnapshotId: string
+  jobId: string
+  modelId: string
+  projectId: string
+  promptId: string
+  queueRecordId: string
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
+type JudgmentCompletionBody = JudgmentCompletionIdentity & {
+  answeredOriginal?: unknown
+  answeredOriginalAsArray?: unknown
+  chunkingStrategy?: string | null
+  confidenceOriginal?: number
+  explanation?: string | null
+  isAnswered?: boolean
+  judgment?: unknown
+  judgmentId?: string
+  quotes?: unknown
+  rawResponseJson?: unknown
+  retryAfterMs?: number | null
+  skipReason?: 'conversion_failed' | 'fulltext_too_large' | 'no_fulltext'
+  status?: 'completed' | 'failed' | 'judged' | 'retry' | 'skipped' | 'succeeded'
+}
+type JudgmentClaimRequestBody = {claimedBy?: string; limit?: number}
+type JudgmentSnapshotQuery = {executionSnapshotHash?: string; hash?: string}
 const unassessedCountTTLms = 10_000
 const staleImportThresholdMs = 15 * 60 * 1_000
 const largeWalThresholdBytes = 64 * 1_024 * 1_024
@@ -207,6 +246,52 @@ const articleScopedLargeRebuildPhases = new Set([
 const systemSqliteFallbackStepsSchema = t.Array(
   t.Union([t.Literal('checkpoint'), t.Literal('diagnostic'), t.Literal('export')]),
 )
+const judgmentClaimRequestSchema = t.Optional(
+  t.Object({claimedBy: t.Optional(t.String()), limit: t.Optional(t.Number())}),
+)
+const judgmentCompletionBodySchema = t.Object({
+  articleId: t.String(),
+  claimId: t.String(),
+  executionSnapshotHash: t.String(),
+  executionSnapshotId: t.String(),
+  jobId: t.String(),
+  modelId: t.String(),
+  projectId: t.String(),
+  promptId: t.String(),
+  queueRecordId: t.String(),
+  useAbstract: t.Boolean(),
+  useFulltext: t.Boolean(),
+  useFulltextNoImages: t.Boolean(),
+  useTitle: t.Boolean(),
+  answeredOriginal: t.Optional(t.Any()),
+  answeredOriginalAsArray: t.Optional(t.Any()),
+  chunkingStrategy: t.Optional(t.Union([t.String(), t.Null()])),
+  confidenceOriginal: t.Optional(t.Number()),
+  explanation: t.Optional(t.Union([t.String(), t.Null()])),
+  isAnswered: t.Optional(t.Boolean()),
+  judgment: t.Optional(t.Any()),
+  judgmentId: t.Optional(t.String()),
+  quotes: t.Optional(t.Any()),
+  rawResponseJson: t.Optional(t.Any()),
+  retryAfterMs: t.Optional(t.Union([t.Number(), t.Null()])),
+  skipReason: t.Optional(
+    t.Union([t.Literal('conversion_failed'), t.Literal('fulltext_too_large'), t.Literal('no_fulltext')]),
+  ),
+  status: t.Optional(
+    t.Union([
+      t.Literal('completed'),
+      t.Literal('failed'),
+      t.Literal('judged'),
+      t.Literal('retry'),
+      t.Literal('skipped'),
+      t.Literal('succeeded'),
+    ]),
+  ),
+})
+const judgmentSnapshotQuerySchema = t.Object({
+  executionSnapshotHash: t.Optional(t.String()),
+  hash: t.Optional(t.String()),
+})
 
 const getJudgmentJobsReadDatabase = (): JudgmentJobSqliteHealthProjectionReader => {
   return getCurrentServerRole() === 'api' ? getApiReadOnlyAppDatabaseService() : getAppDatabaseService()
@@ -214,6 +299,149 @@ const getJudgmentJobsReadDatabase = (): JudgmentJobSqliteHealthProjectionReader 
 
 const getMaintenanceUnavailableError = (message: string, cause?: unknown) => {
   return new HttpError(503, `maintenance-unavailable: ${message}`, {cause})
+}
+
+const getNormalizedClaimLimit = (limit: number | null | undefined) => {
+  return Number.isFinite(limit) ? Math.max(0, Math.min(100, Math.floor(limit ?? 0))) : 1
+}
+
+const claimJudgmentJobPrompts = async (jobId: string, body: JudgmentClaimRequestBody | undefined) => {
+  const claims = await getJudgmentJobSqliteService().claimReadyPrompts(
+    jobId,
+    body?.claimedBy ?? judgmentJobServerId,
+    getNormalizedClaimLimit(body?.limit ?? 1),
+  )
+
+  return {data: {claims}, error: null}
+}
+
+const getJudgmentValueRecord = (body: JudgmentCompletionBody): Record<string, unknown> => {
+  return body.judgment && typeof body.judgment === 'object' && !Array.isArray(body.judgment)
+    ? (body.judgment as Record<string, unknown>)
+    : body
+}
+
+const getStringArray = (value: unknown): string[] => {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => {
+        return typeof entry === 'string'
+      })
+    : []
+}
+
+const getCompletionAnsweredOriginal = (value: unknown): string | null => {
+  return Array.isArray(value)
+    ? JSON.stringify(getStringArray(value))
+    : typeof value === 'string'
+      ? value
+      : value == null
+        ? null
+        : JSON.stringify(value)
+}
+
+const getCompletionAnsweredOriginalAsArray = (value: unknown, fallback: unknown): string[] => {
+  const explicit = getStringArray(value)
+
+  return explicit.length > 0
+    ? explicit
+    : Array.isArray(fallback)
+      ? getStringArray(fallback)
+      : typeof fallback === 'string'
+        ? [fallback]
+        : []
+}
+
+const assertCompletionSnapshotIdentity = async (identity: JudgmentCompletionIdentity) => {
+  const snapshotValid = await isJudgmentExecutionSnapshotIdentityValid(identity)
+
+  if (!snapshotValid) {
+    throw new HttpError(409, 'snapshot identity mismatch for judgment completion')
+  }
+
+  try {
+    await getJudgmentJobSqliteService().assertPromptClaimIdentity(identity)
+  } catch (error) {
+    if (error instanceof JudgmentPromptClaimIdentityError) {
+      throw new HttpError(409, error.message)
+    }
+
+    throw error
+  }
+}
+
+const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletionBody) => {
+  if (body.jobId !== jobId) {
+    throw new HttpError(409, 'jobId mismatch for judgment completion')
+  }
+
+  const identity = {...body, jobId}
+
+  await assertCompletionSnapshotIdentity(identity)
+
+  if (body.status === 'retry') {
+    await getJudgmentJobSqliteService().markPromptAsRetry(jobId, body.queueRecordId, body.retryAfterMs ?? null)
+    return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'retry'}, error: null}
+  }
+
+  if (body.status === 'skipped') {
+    await getJudgmentJobSqliteService().markPromptAsSkipped(jobId, body.queueRecordId, body.skipReason ?? 'no_fulltext')
+    return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'skipped'}, error: null}
+  }
+
+  if (body.status === 'failed') {
+    await getJudgmentJobSqliteService().markPromptAsJudged(jobId, body.queueRecordId)
+    return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'failed'}, error: null}
+  }
+
+  const judgment = getJudgmentValueRecord(body)
+  const answer = judgment.answer ?? body.answeredOriginal
+  const now = new Date()
+
+  await getJudgmentJobSqliteService().recordJudgmentSuccess(jobId, {
+    answeredOriginal: getCompletionAnsweredOriginal(body.answeredOriginal ?? answer),
+    answeredOriginalAsArray: getCompletionAnsweredOriginalAsArray(body.answeredOriginalAsArray, answer),
+    articleId: body.articleId,
+    claimId: body.claimId,
+    chunkingStrategy: body.chunkingStrategy ?? null,
+    confidenceOriginal: body.confidenceOriginal ?? 50,
+    createdAt: getDateValue(judgment.createdAt) ?? now,
+    explanation: body.explanation ?? (typeof judgment.explanation === 'string' ? judgment.explanation : null),
+    executionSnapshotHash: body.executionSnapshotHash,
+    executionSnapshotId: body.executionSnapshotId,
+    isAnswered: body.isAnswered ?? true,
+    judgmentId: body.judgmentId ?? crypto.randomUUID(),
+    modelId: body.modelId,
+    projectId: body.projectId,
+    promptId: body.promptId,
+    queuePromptId: body.queueRecordId,
+    quotes: body.quotes ?? judgment.quotes ?? null,
+    rawResponseJson: body.rawResponseJson ?? body.judgment ?? null,
+    snapshotProjectId: body.projectId,
+    snapshotProjectModelName: null,
+    updatedAt: getDateValue(judgment.updatedAt) ?? now,
+    useAbstract: body.useAbstract,
+    useFulltext: body.useFulltext,
+    useFulltextNoImages: body.useFulltextNoImages,
+    useTitle: body.useTitle,
+  })
+
+  return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'judged'}, error: null}
+}
+
+const fetchJudgmentExecutionSnapshot = async (executionSnapshotId: string, query: JudgmentSnapshotQuery) => {
+  const executionSnapshotHash = query.executionSnapshotHash ?? query.hash
+
+  if (!executionSnapshotHash) {
+    throw new HttpError(400, 'executionSnapshotHash is required')
+  }
+
+  const snapshot = await getJudgmentExecutionSnapshot({executionSnapshotHash, executionSnapshotId})
+
+  if (!snapshot) {
+    throw new HttpError(404, 'judgment execution snapshot not found')
+  }
+
+  return {data: snapshot, error: null}
 }
 
 const runJudgmentJobsRead = async <T>(operation: () => Promise<T>): Promise<T> => {
@@ -1563,6 +1791,48 @@ export const judgmentsJobsRoutes = new Elysia()
       })
     },
     {params: t.Object({id: t.String()})},
+  )
+  .post(
+    '/api/judgmentsjobs/:id/claims',
+    async ({params, body}) => {
+      return claimJudgmentJobPrompts(params.id, body)
+    },
+    {body: judgmentClaimRequestSchema, params: t.Object({id: t.String()})},
+  )
+  .post(
+    '/api/judgmentsjobs/:id/claim',
+    async ({params, body}) => {
+      return claimJudgmentJobPrompts(params.id, body)
+    },
+    {body: judgmentClaimRequestSchema, params: t.Object({id: t.String()})},
+  )
+  .post(
+    '/api/judgmentsjobs/:id/completions',
+    async ({params, body}) => {
+      return completeJudgmentJobPrompt(params.id, body)
+    },
+    {body: judgmentCompletionBodySchema, params: t.Object({id: t.String()})},
+  )
+  .post(
+    '/api/judgmentsjobs/:id/complete',
+    async ({params, body}) => {
+      return completeJudgmentJobPrompt(params.id, body)
+    },
+    {body: judgmentCompletionBodySchema, params: t.Object({id: t.String()})},
+  )
+  .get(
+    '/api/judgmentsjobs/execution-snapshots/:executionSnapshotId',
+    async ({params, query}) => {
+      return fetchJudgmentExecutionSnapshot(params.executionSnapshotId, query)
+    },
+    {params: t.Object({executionSnapshotId: t.String()}), query: judgmentSnapshotQuerySchema},
+  )
+  .get(
+    '/api/judgmentsjobs-execution-snapshots/:executionSnapshotId',
+    async ({params, query}) => {
+      return fetchJudgmentExecutionSnapshot(params.executionSnapshotId, query)
+    },
+    {params: t.Object({executionSnapshotId: t.String()}), query: judgmentSnapshotQuerySchema},
   )
   .get(
     '/api/judgmentsjobs/:id',

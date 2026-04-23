@@ -344,6 +344,170 @@ const insertUnassessedServingFixture = async ({jobId, projectId}: {jobId: string
   `)
 }
 
+test('owner-backed claim route returns immutable execution snapshot identity and snapshot fetch returns payload', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const sqliteService = getJudgmentJobSqliteService()
+  const projectId = `snapshot-claim-project-${Date.now()}`
+  const modelId = `snapshot-claim-model-${Date.now()}`
+  const connectionId = `snapshot-claim-connection-${Date.now()}`
+  const jobId = `snapshot-claim-job-${Date.now()}`
+  const articleId = `snapshot-claim-article-${Date.now()}`
+  const promptId = `snapshot-claim-prompt-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
+
+  const claimResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/claims`, {
+      body: JSON.stringify({claimedBy: 'judge-worker-a', limit: 1}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const claimBody = (await claimResponse.json()) as {
+    data: {
+      claims: Array<{
+        articleId: string
+        claimId: string
+        executionSnapshotHash: string
+        executionSnapshotId: string
+        modelId: string
+        projectId: string
+        promptId: string
+        recordId: string
+      }>
+    }
+  }
+  const [claim] = claimBody.data.claims
+
+  expect(claimResponse.status).toBe(200)
+  expect(claim).toMatchObject({articleId, modelId, projectId, promptId})
+  expect(typeof claim?.claimId).toBe('string')
+  expect(typeof claim?.executionSnapshotId).toBe('string')
+  expect(claim?.executionSnapshotHash).toHaveLength(64)
+
+  const snapshotResponse = await app.handle(
+    new Request(
+      `http://localhost/api/judgmentsjobs/execution-snapshots/${claim?.executionSnapshotId}?executionSnapshotHash=${claim?.executionSnapshotHash}`,
+    ),
+  )
+  const snapshotBody = (await snapshotResponse.json()) as {
+    data: {articleId: string; claimId: string; payload: {identity: {queueRecordId: string}}}
+  }
+
+  expect(snapshotResponse.status).toBe(200)
+  expect(snapshotBody.data.articleId).toBe(articleId)
+  expect(snapshotBody.data.claimId).toBe(claim?.claimId)
+  expect(snapshotBody.data.payload.identity.queueRecordId).toBe(claim?.recordId)
+
+  await sqliteService.closeAll()
+})
+
+test('owner-backed completion rejects snapshot mismatch before accepting the claimed work', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const sqliteService = getJudgmentJobSqliteService()
+  const projectId = `snapshot-complete-project-${Date.now()}`
+  const modelId = `snapshot-complete-model-${Date.now()}`
+  const connectionId = `snapshot-complete-connection-${Date.now()}`
+  const jobId = `snapshot-complete-job-${Date.now()}`
+  const articleId = `snapshot-complete-article-${Date.now()}`
+  const promptId = `snapshot-complete-prompt-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
+
+  const claimResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/claims`, {
+      body: JSON.stringify({claimedBy: 'judge-worker-a', limit: 1}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const claimBody = (await claimResponse.json()) as {
+    data: {
+      claims: Array<{
+        articleId: string
+        claimId: string
+        executionSnapshotHash: string
+        executionSnapshotId: string
+        modelId: string
+        projectId: string
+        promptId: string
+        recordId: string
+        useAbstract: boolean
+        useFulltext: boolean
+        useFulltextNoImages: boolean
+        useTitle: boolean
+      }>
+    }
+  }
+  const [claim] = claimBody.data.claims
+
+  if (!claim) {
+    throw new Error('Expected owner-backed claim')
+  }
+
+  const completionBody = {
+    articleId: claim.articleId,
+    claimId: claim.claimId,
+    executionSnapshotHash: claim.executionSnapshotHash,
+    executionSnapshotId: claim.executionSnapshotId,
+    jobId,
+    judgment: {answer: 'yes', explanation: 'because', quotes: ['quote']},
+    modelId: claim.modelId,
+    projectId: claim.projectId,
+    promptId: claim.promptId,
+    queueRecordId: claim.recordId,
+    useAbstract: claim.useAbstract,
+    useFulltext: claim.useFulltext,
+    useFulltextNoImages: claim.useFulltextNoImages,
+    useTitle: claim.useTitle,
+  }
+  const mismatchResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/completions`, {
+      body: JSON.stringify({...completionBody, executionSnapshotHash: `bad-${claim.executionSnapshotHash.slice(4)}`}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+
+  expect(mismatchResponse.status).toBe(409)
+  expect(await sqliteService.getOutboxCount(jobId)).toBe(0)
+
+  const completionResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/completions`, {
+      body: JSON.stringify(completionBody),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const completionResponseBody = (await completionResponse.json()) as {data: {status: string}}
+
+  expect(completionResponse.status).toBe(200)
+  expect(completionResponseBody.data.status).toBe('judged')
+  expect(await sqliteService.getOutboxCount(jobId)).toBe(1)
+
+  await sqliteService.closeAll()
+})
+
 test('creating a judgments job fails when the runtime model check fails', async () => {
   if (!app) {
     throw new Error('Test app not initialized')

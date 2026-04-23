@@ -7,6 +7,9 @@ import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from '../judgmentJob
 export type PromptToProcess = {
   jobId: string
   articleId: string
+  claimId: string
+  executionSnapshotHash: string
+  executionSnapshotId: string
   promptId: string
   recordId: string
   projectId: string
