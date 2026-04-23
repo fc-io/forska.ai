@@ -1,14 +1,16 @@
 import {rmSync} from 'node:fs'
 import {writeFile} from 'node:fs/promises'
 import {hostname} from 'node:os'
-import {dirname, join} from 'node:path'
+import {join} from 'node:path'
 
 import {afterAll, afterEach, beforeAll, expect, test} from 'bun:test'
 
 import type {ArticleRecord} from '../../../db/schemaTypes.ts'
+import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
 
-const tempDbPath = `/tmp/f1-judgment-job-sqlite-import-${process.pid}-${Date.now()}.duckdb`
-const tempJobDir = join(dirname(tempDbPath), 'judgment-jobs')
+const tempRuntimeRoot = createTempRuntimeRoot('f1-judgment-job-sqlite-import')
+const tempDbPath = tempRuntimeRoot.duckdbPath
+const tempJobDir = tempRuntimeRoot.judgmentJobsDirectory
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath
@@ -93,10 +95,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await sqliteService?.().closeAll()
   await closeDatabase?.()
-  rmSync(tempDbPath, {force: true})
-  rmSync(`${tempDbPath}.duckdb-owner.history.json`, {force: true})
-  rmSync(`${tempDbPath}.duckdb-owner.lock`, {force: true})
-  rmSync(tempJobDir, {force: true, recursive: true})
+  tempRuntimeRoot.cleanup()
 })
 
 afterEach(async () => {
@@ -146,6 +145,9 @@ test('background import selects the next active or draining job for a single imp
             JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
             getJudgmentJobSqliteService: () => {
               return {
+                getHealthSnapshot: async () => {
+                  return null
+                },
                 hasOwnedLease: () => false,
                 syncOwnedLeases: async (jobIds) => {
                   syncedLeaseJobIds = jobIds
@@ -374,6 +376,9 @@ test('background import releases an owned sqlite lease before importing the next
             JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
             getJudgmentJobSqliteService: () => {
               return {
+                getHealthSnapshot: async () => {
+                  return null
+                },
                 hasOwnedLease: (jobId) => jobId === 'owned-job',
                 releaseOwnedLease: async (jobId) => {
                   releasedOwnedLeaseJobIds.push(jobId)

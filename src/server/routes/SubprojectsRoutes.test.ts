@@ -1,11 +1,11 @@
-import {rmSync} from 'node:fs'
-
 import {afterAll, beforeAll, expect, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
+import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash.ts'
 
-const tempDbPath = `/tmp/f1-subprojects-routes-${process.pid}-${Date.now()}.duckdb`
+const tempRuntimeRoot = createTempRuntimeRoot('f1-subprojects-routes')
+const tempDbPath = tempRuntimeRoot.duckdbPath
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath
@@ -139,7 +139,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await flushMartRefreshes?.()
   await closeDatabase?.()
-  rmSync(tempDbPath, {force: true})
+  tempRuntimeRoot.cleanup()
 })
 
 test('subproject route reuses selected prompt ids from source projects', async () => {

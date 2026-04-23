@@ -1,7 +1,9 @@
 import {afterAll, beforeAll, expect, test} from 'bun:test'
-import {rmSync} from 'fs'
 
-const tempDbPath = `/tmp/f1-token-use-query-service-${process.pid}-${Date.now()}.duckdb`
+import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
+
+const tempRuntimeRoot = createTempRuntimeRoot('f1-token-use-query-service')
+const tempDbPath = tempRuntimeRoot.duckdbPath
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath
@@ -88,9 +90,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await closeDatabase?.()
-  rmSync(tempDbPath, {force: true})
-  rmSync(`${tempDbPath}.duckdb-owner.history.json`, {force: true})
-  rmSync(`${tempDbPath}.duckdb-owner.lock`, {force: true})
+  tempRuntimeRoot.cleanup()
 })
 
 test('insertTokenUse generates an id when one is not provided', async () => {

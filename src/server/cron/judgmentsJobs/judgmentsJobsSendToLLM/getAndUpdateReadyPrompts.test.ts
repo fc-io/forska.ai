@@ -1,9 +1,9 @@
 import {afterAll, beforeAll, expect, test} from 'bun:test'
-import {rmSync} from 'fs'
-import {dirname, join} from 'path'
 
-const tempDbPath = `/tmp/f1-get-and-update-ready-prompts-${process.pid}-${Date.now()}.duckdb`
-const tempJobDir = join(dirname(tempDbPath), 'judgment-jobs')
+import {createTempRuntimeRoot} from '../../../test/createTempRuntimeRoot.ts'
+
+const tempRuntimeRoot = createTempRuntimeRoot('f1-get-and-update-ready-prompts')
+const tempDbPath = tempRuntimeRoot.duckdbPath
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath
@@ -74,10 +74,7 @@ afterAll(async () => {
 
   await getJudgmentJobSqliteService().closeAll()
   await closeDatabase?.()
-  rmSync(tempDbPath, {force: true})
-  rmSync(`${tempDbPath}.duckdb-owner.history.json`, {force: true})
-  rmSync(`${tempDbPath}.duckdb-owner.lock`, {force: true})
-  rmSync(tempJobDir, {force: true, recursive: true})
+  tempRuntimeRoot.cleanup()
 })
 
 test('claims ready rows from the per-job SQLite queue', async () => {

@@ -1,7 +1,9 @@
 import {afterAll, beforeAll, expect, test} from 'bun:test'
-import {rmSync} from 'fs'
 
-const tempDbPath = `/tmp/f1-provider-connection-repository-${process.pid}-${Date.now()}.duckdb`
+import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
+
+const tempRuntimeRoot = createTempRuntimeRoot('f1-provider-connection-repository')
+const tempDbPath = tempRuntimeRoot.duckdbPath
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath
@@ -79,7 +81,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await closeDatabase?.()
-  rmSync(tempDbPath, {force: true})
+  tempRuntimeRoot.cleanup()
 })
 
 test('deleteProviderConnection removes an unreferenced connection and its models in one transaction', async () => {

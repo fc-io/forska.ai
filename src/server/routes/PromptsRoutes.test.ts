@@ -1,9 +1,10 @@
-import {rmSync} from 'node:fs'
-
 import {afterAll, beforeAll, expect, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
-const tempDbPath = `/tmp/f1-prompts-routes-${process.pid}-${Date.now()}.duckdb`
+import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
+
+const tempRuntimeRoot = createTempRuntimeRoot('f1-prompts-routes')
+const tempDbPath = tempRuntimeRoot.duckdbPath
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath
@@ -45,9 +46,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await closeDatabase?.()
-  rmSync(tempDbPath, {force: true})
-  rmSync(`${tempDbPath}.duckdb-owner.history.json`, {force: true})
-  rmSync(`${tempDbPath}.duckdb-owner.lock`, {force: true})
+  tempRuntimeRoot.cleanup()
 })
 
 const insertPromptFixture = async ({promptId}: {promptId: string}) => {

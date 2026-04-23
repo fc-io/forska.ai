@@ -1,8 +1,10 @@
 import {afterAll, beforeAll, expect, test} from 'bun:test'
 import {Elysia} from 'elysia'
-import {rmSync} from 'fs'
 
-const tempDbPath = `/tmp/f1-provider-project-flow-${process.pid}-${Date.now()}.duckdb`
+import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
+
+const tempRuntimeRoot = createTempRuntimeRoot('f1-provider-project-flow')
+const tempDbPath = tempRuntimeRoot.duckdbPath
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath
@@ -54,7 +56,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await closeDatabase?.()
-  rmSync(tempDbPath, {force: true})
+  tempRuntimeRoot.cleanup()
 })
 
 test('provider to model to project flow works through routes', async () => {

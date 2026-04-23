@@ -2,12 +2,12 @@ import {Database} from 'bun:sqlite'
 import {afterAll, afterEach, beforeAll, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 import {existsSync, rmSync, writeFileSync} from 'fs'
-import {dirname, join} from 'path'
 
+import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
 import {HttpError} from '../utils/httpError.ts'
 
-const tempDbPath = `/tmp/f1-judgments-jobs-routes-${process.pid}-${Date.now()}.duckdb`
-const tempJobDir = join(dirname(tempDbPath), 'judgment-jobs')
+const tempRuntimeRoot = createTempRuntimeRoot('f1-judgments-jobs-routes')
+const tempDbPath = tempRuntimeRoot.duckdbPath
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath
@@ -111,10 +111,7 @@ afterAll(async () => {
 
   await getJudgmentJobSqliteService().closeAll()
   await closeDatabase?.()
-  rmSync(tempDbPath, {force: true})
-  rmSync(`${tempDbPath}.duckdb-owner.history.json`, {force: true})
-  rmSync(`${tempDbPath}.duckdb-owner.lock`, {force: true})
-  rmSync(tempJobDir, {force: true, recursive: true})
+  tempRuntimeRoot.cleanup()
   mock.restore()
 })
 

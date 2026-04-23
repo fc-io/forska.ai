@@ -1,12 +1,10 @@
-import {rmSync} from 'node:fs'
-import {dirname, join} from 'node:path'
-
 import {afterAll, beforeAll, expect, test} from 'bun:test'
 
+import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
 import type {AppDatabaseAppendMetrics, AppendResult, JudgmentInsertRow} from './appDatabaseService.ts'
 
-const tempDbPath = `/tmp/f1-app-database-append-judgments-${process.pid}-${Date.now()}.duckdb`
-const tempJobDir = join(dirname(tempDbPath), 'judgment-jobs')
+const tempRuntimeRoot = createTempRuntimeRoot('f1-app-database-append-judgments')
+const tempDbPath = tempRuntimeRoot.duckdbPath
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath
@@ -55,10 +53,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await closeDatabase?.()
-  rmSync(tempDbPath, {force: true})
-  rmSync(`${tempDbPath}.duckdb-owner.history.json`, {force: true})
-  rmSync(`${tempDbPath}.duckdb-owner.lock`, {force: true})
-  rmSync(tempJobDir, {force: true, recursive: true})
+  tempRuntimeRoot.cleanup()
 })
 
 test('appendJudgments uses append lanes and preserves dedupe semantics', async () => {

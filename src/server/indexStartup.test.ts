@@ -675,6 +675,76 @@ test('api readiness stays usable while ownerless registry reports missing mainte
   }
 })
 
+test('api judgment health falls back to owner proxy when live read-only DuckDB is disabled', async () => {
+  const testDirectory = getStartupTestDirectory()
+  const maintenancePort = 34982
+  const apiPort = 34981
+  const duckdbPath = join(testDirectory, 'forska.duckdb')
+  const maintenanceServer = startServer({
+    API_SERVER_PORT: String(maintenancePort),
+    DUCKDB_PATH: duckdbPath,
+    RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+    RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+    SERVER_ROLE: 'maintenance-worker',
+    VITE_PORT: '4302',
+  })
+  const apiServer = startServer({
+    API_SERVER_PORT: String(apiPort),
+    DUCKDB_PATH: duckdbPath,
+    FORSKA_DISABLE_LIVE_READ_ONLY_DUCKDB: 'true',
+    RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+    RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+    SERVER_DUCKDB_OWNER_URL: `http://127.0.0.1:${maintenancePort}`,
+    SERVER_ROLE: 'api',
+    VITE_PORT: '4301',
+  })
+
+  try {
+    await waitForServer(maintenancePort, 10_000)
+    await waitForServer(apiPort, 10_000)
+
+    const response = await fetch(`http://127.0.0.1:${apiPort}/api/judgmentsjobs-health`, {
+      signal: AbortSignal.timeout(5_000),
+    })
+    const body = (await response.json()) as {
+      data: {
+        activeImport: number
+        blockedImport: number
+        completionAckBacklog: number
+        cooldown: number
+        draining: number
+        healthy: number
+        offlineRepairRequired: number
+        quarantined: number
+        repairRequired: number
+        retainedOutbox: number
+        staleImport: number
+      }
+      error: string | null
+    }
+
+    expect(response.ok).toBe(true)
+    expect(body.error).toBe(null)
+    expect(body.data).toMatchObject({
+      activeImport: 0,
+      blockedImport: 0,
+      completionAckBacklog: 0,
+      cooldown: 0,
+      draining: 0,
+      healthy: 0,
+      offlineRepairRequired: 0,
+      quarantined: 0,
+      repairRequired: 0,
+      retainedOutbox: 0,
+      staleImport: 0,
+    })
+  } finally {
+    await stopServer(apiServer)
+    await stopServer(maintenanceServer)
+    rmSync(testDirectory, {force: true, recursive: true})
+  }
+})
+
 test('api startup refuses a reachable pre-cutover DuckDB owner peer', async () => {
   const apiPort = 34987
   const duckdbPath = `/tmp/f1-index-startup-cutover-peer-${Date.now()}.duckdb`

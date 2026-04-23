@@ -25,12 +25,11 @@ test('repair route blocks live repair for quarantined crash-path jobs with offli
       'bun',
       '-e',
       `
-        import {rmSync} from 'node:fs'
-        import {dirname, join} from 'node:path'
         const {mock} = await import('bun:test')
+        const {createTempRuntimeRoot} = await import('./src/server/test/createTempRuntimeRoot.ts')
 
-        const tempDbPath = '/tmp/f1-judgments-routes-crash-repair-' + process.pid + '-' + Date.now() + '.duckdb'
-        const tempJobDir = join(dirname(tempDbPath), 'judgment-jobs')
+        const tempRuntimeRoot = createTempRuntimeRoot('f1-judgments-routes-crash-repair')
+        const tempDbPath = tempRuntimeRoot.duckdbPath
         process.env.SERVER_ROLE = 'dev-single'
         process.env.DUCKDB_PATH = tempDbPath
         process.env.API_SERVER_PORT = '3998'
@@ -84,10 +83,7 @@ test('repair route blocks live repair for quarantined crash-path jobs with offli
 
         await sqliteService.closeAll()
         await db.close()
-        rmSync(tempDbPath, {force: true})
-        rmSync(tempDbPath + '.duckdb-owner.history.json', {force: true})
-        rmSync(tempDbPath + '.duckdb-owner.lock', {force: true})
-        rmSync(tempJobDir, {force: true, recursive: true})
+        tempRuntimeRoot.cleanup()
       `,
     ],
     {cwd: process.cwd(), env: {...process.env}},
@@ -118,12 +114,11 @@ test('delete route fails safely for quarantined crash-path jobs when isolated fl
       'bun',
       '-e',
       `
-        import {rmSync} from 'node:fs'
-        import {dirname, join} from 'node:path'
         const {mock} = await import('bun:test')
+        const {createTempRuntimeRoot} = await import('./src/server/test/createTempRuntimeRoot.ts')
 
-        const tempDbPath = '/tmp/f1-judgments-routes-crash-delete-' + process.pid + '-' + Date.now() + '.duckdb'
-        const tempJobDir = join(dirname(tempDbPath), 'judgment-jobs')
+        const tempRuntimeRoot = createTempRuntimeRoot('f1-judgments-routes-crash-delete')
+        const tempDbPath = tempRuntimeRoot.duckdbPath
         process.env.SERVER_ROLE = 'dev-single'
         process.env.DUCKDB_PATH = tempDbPath
         process.env.API_SERVER_PORT = '3999'
@@ -208,10 +203,7 @@ test('delete route fails safely for quarantined crash-path jobs when isolated fl
 
         await sqliteService.closeAll()
         await db.close()
-        rmSync(tempDbPath, {force: true})
-        rmSync(tempDbPath + '.duckdb-owner.history.json', {force: true})
-        rmSync(tempDbPath + '.duckdb-owner.lock', {force: true})
-        rmSync(tempJobDir, {force: true, recursive: true})
+        tempRuntimeRoot.cleanup()
       `,
     ],
     {cwd: process.cwd(), env: {...process.env}},

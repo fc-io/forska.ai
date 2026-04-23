@@ -4,11 +4,12 @@ import {dirname, join} from 'node:path'
 import {Database} from 'bun:sqlite'
 import {afterAll, beforeAll, expect, spyOn, test} from 'bun:test'
 
+import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
 import type {JudgmentJobLeaseMetadata} from './judgmentJobLease.ts'
 import {getJudgmentJobLeasePath, getJudgmentJobSqlitePath} from './judgmentJobPaths.ts'
 
-const tempDbPath = `/tmp/f1-judgment-job-sqlite-service-${process.pid}-${Date.now()}.duckdb`
-const tempJobDir = join(dirname(tempDbPath), 'judgment-jobs')
+const tempRuntimeRoot = createTempRuntimeRoot('f1-judgment-job-sqlite-service')
+const tempDbPath = tempRuntimeRoot.duckdbPath
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath
@@ -97,10 +98,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await sqliteService?.().closeAll()
   await closeDatabase?.()
-  rmSync(tempDbPath, {force: true})
-  rmSync(`${tempDbPath}.duckdb-owner.history.json`, {force: true})
-  rmSync(`${tempDbPath}.duckdb-owner.lock`, {force: true})
-  rmSync(tempJobDir, {force: true, recursive: true})
+  tempRuntimeRoot.cleanup()
 })
 
 test('claims and requeues prompts from the per-job SQLite queue', async () => {

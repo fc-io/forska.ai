@@ -1,9 +1,10 @@
-import {rmSync} from 'node:fs'
-
 import {afterAll, afterEach, beforeAll, expect, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
-const tempDbPath = `/tmp/f1-project-reviews-warnings-${process.pid}-${Date.now()}.duckdb`
+import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
+
+const tempRuntimeRoot = createTempRuntimeRoot('f1-project-reviews-warnings')
+const tempDbPath = tempRuntimeRoot.duckdbPath
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath
@@ -380,9 +381,7 @@ afterEach(() => {
 afterAll(async () => {
   setAutoDrainEnabledForTests?.(true)
   await closeDatabase?.()
-  rmSync(tempDbPath, {force: true})
-  rmSync(`${tempDbPath}.duckdb-owner.history.json`, {force: true})
-  rmSync(`${tempDbPath}.duckdb-owner.lock`, {force: true})
+  tempRuntimeRoot.cleanup()
 })
 
 test('reviews warnings report ready when serving rows are fresh', async () => {

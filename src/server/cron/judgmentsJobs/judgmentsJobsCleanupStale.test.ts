@@ -1,13 +1,13 @@
-import {existsSync, rmSync} from 'node:fs'
-import {dirname, join} from 'node:path'
+import {existsSync} from 'node:fs'
 
 import {Database} from 'bun:sqlite'
 import {afterAll, beforeAll, expect, test} from 'bun:test'
 
+import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
 import {getJudgmentJobSqlitePath} from './judgmentJobPaths.ts'
 
-const tempDbPath = `/tmp/f1-judgments-jobs-cleanup-stale-${process.pid}-${Date.now()}.duckdb`
-const tempJobDir = join(dirname(tempDbPath), 'judgment-jobs')
+const tempRuntimeRoot = createTempRuntimeRoot('f1-judgments-jobs-cleanup-stale')
+const tempDbPath = tempRuntimeRoot.duckdbPath
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath
@@ -61,10 +61,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await sqliteService?.().closeAll()
   await closeDatabase?.()
-  rmSync(tempDbPath, {force: true})
-  rmSync(`${tempDbPath}.duckdb-owner.history.json`, {force: true})
-  rmSync(`${tempDbPath}.duckdb-owner.lock`, {force: true})
-  rmSync(tempJobDir, {force: true, recursive: true})
+  tempRuntimeRoot.cleanup()
 })
 
 test('cleanupStale automatically repairs recoverable orphaned judged queue rows for draining jobs', async () => {

@@ -1,10 +1,9 @@
-import {rmSync} from 'node:fs'
-import {dirname, join} from 'node:path'
-
 import {afterAll, afterEach, beforeAll, expect, mock, test} from 'bun:test'
 
-const tempDbPath = `/tmp/f1-judgments-jobs-add-to-queue-${process.pid}-${Date.now()}.duckdb`
-const tempJobDir = join(dirname(tempDbPath), 'judgment-jobs')
+import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
+
+const tempRuntimeRoot = createTempRuntimeRoot('f1-judgments-jobs-add-to-queue')
+const tempDbPath = tempRuntimeRoot.duckdbPath
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath
@@ -66,10 +65,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await getRealSqliteService?.().closeAll()
   await closeDatabase?.()
-  rmSync(tempDbPath, {force: true})
-  rmSync(`${tempDbPath}.duckdb-owner.history.json`, {force: true})
-  rmSync(`${tempDbPath}.duckdb-owner.lock`, {force: true})
-  rmSync(tempJobDir, {force: true, recursive: true})
+  tempRuntimeRoot.cleanup()
 })
 
 type MockCursor = {lastArticleId: string; lastDate: Date; priorityBucket: number}

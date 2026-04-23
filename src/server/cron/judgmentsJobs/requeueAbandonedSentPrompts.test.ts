@@ -1,10 +1,10 @@
 import {Database} from 'bun:sqlite'
 import {afterAll, beforeAll, expect, test} from 'bun:test'
-import {rmSync} from 'fs'
-import {dirname, join} from 'path'
 
-const tempDbPath = `/tmp/f1-requeue-abandoned-prompts-${process.pid}-${Date.now()}.duckdb`
-const tempJobDir = join(dirname(tempDbPath), 'judgment-jobs')
+import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
+
+const tempRuntimeRoot = createTempRuntimeRoot('f1-requeue-abandoned-prompts')
+const tempDbPath = tempRuntimeRoot.duckdbPath
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath
@@ -62,10 +62,7 @@ afterAll(async () => {
 
   await getJudgmentJobSqliteService().closeAll()
   await closeDatabase?.()
-  rmSync(tempDbPath, {force: true})
-  rmSync(`${tempDbPath}.duckdb-owner.history.json`, {force: true})
-  rmSync(`${tempDbPath}.duckdb-owner.lock`, {force: true})
-  rmSync(tempJobDir, {force: true, recursive: true})
+  tempRuntimeRoot.cleanup()
 })
 
 test('requeues sent SQLite prompts claimed by an older server job', async () => {

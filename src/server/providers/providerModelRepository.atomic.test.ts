@@ -1,7 +1,9 @@
 import {afterAll, beforeAll, expect, test} from 'bun:test'
-import {rmSync} from 'fs'
 
-const tempDbPath = `/tmp/f1-provider-model-repository-${process.pid}-${Date.now()}.duckdb`
+import {createTempRuntimeRoot} from '../test/createTempRuntimeRoot.ts'
+
+const tempRuntimeRoot = createTempRuntimeRoot('f1-provider-model-repository')
+const tempDbPath = tempRuntimeRoot.duckdbPath
 
 process.env.SERVER_ROLE = 'dev-single'
 process.env.DUCKDB_PATH = tempDbPath
@@ -80,7 +82,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await closeDatabase?.()
-  rmSync(tempDbPath, {force: true})
+  tempRuntimeRoot.cleanup()
 })
 
 test('updateProviderModel disables model row and provider config in one transaction', async () => {
