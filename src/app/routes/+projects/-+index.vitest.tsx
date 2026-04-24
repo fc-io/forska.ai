@@ -11,13 +11,31 @@ type MockButtonProps = ParentProps<
 >
 
 const mockState = vi.hoisted(() => {
-  return {queryResult: {data: [{id: 'project-1'}], error: null, isError: false, isLoading: false}}
+  return {
+    modelsQueryResult: {data: [{id: 'model-1'}], error: null, isError: false, isLoading: false},
+    projectsQueryResult: {data: [{id: 'project-1'}], error: null, isError: false, isLoading: false},
+    providerConnectionsQueryResult: {
+      data: {catalog: [], connections: [{id: 'provider-1', models: [{id: 'model-1'}]}], runtime: null},
+      error: null,
+      isError: false,
+      isLoading: false,
+    },
+  }
 })
 
 vi.mock('@tanstack/solid-query', () => {
   return {
-    useQuery: () => {
-      return mockState.queryResult
+    useQuery: (options: () => {queryKey: unknown[]}) => {
+      const queryKey = options().queryKey
+      const rootKey = queryKey[0]
+
+      if (rootKey === 'provider-connections') {
+        return mockState.providerConnectionsQueryResult
+      }
+      if (rootKey === 'models') {
+        return mockState.modelsQueryResult
+      }
+      return mockState.projectsQueryResult
     },
   }
 })
@@ -80,7 +98,14 @@ describe('projects index route', () => {
   beforeEach(() => {
     vi.resetModules()
     document.body.innerHTML = ''
-    mockState.queryResult = {data: [{id: 'project-1'}], error: null, isError: false, isLoading: false}
+    mockState.modelsQueryResult = {data: [{id: 'model-1'}], error: null, isError: false, isLoading: false}
+    mockState.projectsQueryResult = {data: [{id: 'project-1'}], error: null, isError: false, isLoading: false}
+    mockState.providerConnectionsQueryResult = {
+      data: {catalog: [], connections: [{id: 'provider-1', models: [{id: 'model-1'}]}], runtime: null},
+      error: null,
+      isError: false,
+      isLoading: false,
+    }
   })
 
   afterEach(() => {
@@ -102,6 +127,51 @@ describe('projects index route', () => {
         {href: '/projects/create', label: 'Create New Project'},
       ])
       expect(container.querySelector('[data-testid="projects-grid"]')?.textContent).toBe('1')
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('shows provider setup guidance when providers are missing', async () => {
+    mockState.projectsQueryResult = {data: [], error: null, isError: false, isLoading: false}
+    mockState.providerConnectionsQueryResult = {
+      data: {catalog: [], connections: [], runtime: null},
+      error: null,
+      isError: false,
+      isLoading: false,
+    }
+    mockState.modelsQueryResult = {data: [], error: null, isError: false, isLoading: false}
+
+    const {container, dispose} = await renderProjectsPage()
+
+    try {
+      expect(container.textContent).toContain('No providers configured')
+      expect(container.textContent).toContain('Add a provider and enable at least one model before creating a project.')
+      expect(container.querySelector('a[href="/providers/add-provider"]')?.textContent?.trim()).toBe('Add Provider')
+      expect(container.textContent).toContain('No projects found')
+    } finally {
+      dispose()
+      container.remove()
+    }
+  })
+
+  test('shows model setup guidance when selectable models are missing', async () => {
+    mockState.projectsQueryResult = {data: [], error: null, isError: false, isLoading: false}
+    mockState.providerConnectionsQueryResult = {
+      data: {catalog: [], connections: [{id: 'provider-1', models: []}], runtime: null},
+      error: null,
+      isError: false,
+      isLoading: false,
+    }
+    mockState.modelsQueryResult = {data: [], error: null, isError: false, isLoading: false}
+
+    const {container, dispose} = await renderProjectsPage()
+
+    try {
+      expect(container.textContent).toContain('No models available')
+      expect(container.textContent).toContain('Open Providers to sync or add a model for an enabled provider.')
+      expect(container.querySelector('a[href="/providers"]')?.textContent?.trim()).toBe('Manage Providers')
     } finally {
       dispose()
       container.remove()

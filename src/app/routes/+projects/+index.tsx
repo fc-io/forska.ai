@@ -1,15 +1,60 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link} from '@tanstack/solid-router'
-import {Show} from 'solid-js'
+import {Match, Show, Switch} from 'solid-js'
 
 import {ProjectsGrid} from '../../../components/main/ProjectsGrid'
 import {Button} from '../../../components/ui/button'
+import {apiClient} from '../../../services/apiClient'
 import {fetchProjects} from '../../../services/projectsService'
+import {handleApiResponse} from '../../../services/utils/handleApiResponse'
+import {fetchProviderConnections} from '../+admin/+models/providerConnectionsClient.ts'
+
+type ModelOption = {id: string}
+type ModelsResponse = {data: ModelOption[]}
+type ProviderSetupState = 'missing-model' | 'missing-provider'
+
+const fetchSelectableModels = async () => {
+  const response = await apiClient.api.models.get()
+  const result = handleApiResponse<ModelsResponse>(
+    response as unknown as {data?: ModelsResponse; error?: unknown; status?: number},
+    'Failed to load models',
+  )
+
+  return result.data ?? []
+}
 
 export const ProjectsPage = () => {
   const projects = useQuery(() => {
     return {queryKey: ['projects'], queryFn: fetchProjects, staleTime: 5 * 60 * 1000}
   })
+  const providerConnections = useQuery(() => {
+    return {
+      queryKey: ['provider-connections'],
+      queryFn: fetchProviderConnections,
+      staleTime: 60 * 1000,
+      suspense: false,
+    }
+  })
+  const selectableModels = useQuery(() => {
+    return {queryKey: ['models'], queryFn: fetchSelectableModels, staleTime: 5 * 60 * 1000, suspense: false}
+  })
+  const providerSetupState = (): ProviderSetupState | null => {
+    if (
+      providerConnections.isLoading
+      || providerConnections.isError
+      || selectableModels.isLoading
+      || selectableModels.isError
+    ) {
+      return null
+    }
+    if ((providerConnections.data?.connections.length ?? 0) === 0) {
+      return 'missing-provider'
+    }
+    if ((selectableModels.data?.length ?? 0) === 0) {
+      return 'missing-model'
+    }
+    return null
+  }
 
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
@@ -35,6 +80,29 @@ export const ProjectsPage = () => {
           </Button>
         </div>
       </div>
+
+      <Switch>
+        <Match when={providerSetupState() === 'missing-provider'}>
+          <div class="text-center py-12 mb-6 rounded-lg border border-dashed border-gray-300 bg-white">
+            <h2 class="text-xl font-semibold mb-4">No providers configured</h2>
+            <p class="text-muted-foreground mb-6">
+              Add a provider and enable at least one model before creating a project.
+            </p>
+            <Button as={Link} to="/providers/add-provider">
+              Add Provider
+            </Button>
+          </div>
+        </Match>
+        <Match when={providerSetupState() === 'missing-model'}>
+          <div class="text-center py-12 mb-6 rounded-lg border border-dashed border-gray-300 bg-white">
+            <h2 class="text-xl font-semibold mb-4">No models available</h2>
+            <p class="text-muted-foreground mb-6">Open Providers to sync or add a model for an enabled provider.</p>
+            <Button as={Link} to="/providers">
+              Manage Providers
+            </Button>
+          </div>
+        </Match>
+      </Switch>
 
       <Show when={!projects.isLoading} fallback={<div class="text-center py-8">Loading projects...</div>}>
         <Show when={projects.isError}>
