@@ -112,6 +112,15 @@ const getSubmittedMaxInflightRequests = (value: string): {error: string | null; 
     : {error: 'Prompts in Progress limit must be empty or a positive integer', value: null}
 }
 
+const areStringArraysEqual = (left: string[], right: string[]): boolean => {
+  return (
+    left.length === right.length
+    && left.every((value, index) => {
+      return value === right[index]
+    })
+  )
+}
+
 const getMaxInflightRequestsHelpText = (providerKind: string | null | undefined): string => {
   const normalizedProviderKind = getNormalizedProviderKind(providerKind)
   const isCodex = normalizedProviderKind === 'codex'
@@ -362,6 +371,18 @@ const hasProviderPageModelDraftChanges = ({
     : false
 }
 
+const getChangedProviderPageModelDrafts = ({
+  drafts,
+  sourceMap,
+}: {
+  drafts: ProviderPageModelDraft[]
+  sourceMap: Map<string, ProviderPageModel>
+}) => {
+  return drafts.filter((draft) => {
+    return hasProviderPageModelDraftChanges({draft, source: sourceMap.get(draft.id)})
+  })
+}
+
 const getConnectionFormState = (connection: ProviderConnection | null): ConnectionFormState => {
   return {
     apiKey: '',
@@ -387,6 +408,45 @@ const getSubmittedModelOptions = ({
   thinkingValue: ProviderModelThinkingOption
 }): ProviderModelOptions | undefined => {
   return supportsThinking ? {thinking: thinkingValue} : undefined
+}
+
+const hasConnectionFormChanges = ({connection, form}: {connection: ProviderConnection; form: ConnectionFormState}) => {
+  const submittedMaxInflightRequests = getSubmittedMaxInflightRequests(form.maxInflightRequests)
+  const submittedWorkerUrls = getWorkerUrlsFromInputValue(form.manualWorkerUrls)
+  const savedWorkerUrls = connection.config.manualWorkerUrls ?? []
+
+  return (
+    getTrimmedValue(form.apiKey).length > 0
+    || getNullableTrimmedValue(form.baseURL) !== connection.baseURL
+    || form.enabled !== connection.enabled
+    || form.label !== connection.label
+    || form.workerUrlMode !== connection.config.workerUrlMode
+    || !areStringArraysEqual(submittedWorkerUrls, savedWorkerUrls)
+    || (submittedMaxInflightRequests.error
+      ? form.maxInflightRequests.trim() !== getMaxInflightRequestsInputValue(connection.maxInflightRequests)
+      : submittedMaxInflightRequests.value !== connection.maxInflightRequests)
+  )
+}
+
+const getModelChangeCountLabel = (modelChangeCount: number) => {
+  return modelChangeCount === 1 ? '1 model change' : `${modelChangeCount} model changes`
+}
+
+const getSaveSuccessMessage = ({
+  modelChangeCount,
+  providerChanged,
+}: {
+  modelChangeCount: number
+  providerChanged: boolean
+}) => {
+  const savedParts = [
+    providerChanged ? 'provider changes' : null,
+    modelChangeCount > 0 ? getModelChangeCountLabel(modelChangeCount) : null,
+  ].filter((part): part is string => {
+    return Boolean(part)
+  })
+
+  return savedParts.length > 0 ? `Saved ${savedParts.join(' and ')}` : 'No changes to save'
 }
 
 const ProviderDetailPage = () => {
@@ -603,38 +663,33 @@ const ProviderDetailPage = () => {
     })
   })
 
-  const submitConnectionForm = async () => {
+  const saveConnectionForm = async () => {
     const connection = selectedConnection()
 
     if (!connection) {
-      return
+      return false
     }
-
-    setPageError('')
-    setPageMessage('')
 
     const maxInflightRequests = getSubmittedMaxInflightRequests(connectionForm.maxInflightRequests)
 
     if (maxInflightRequests.error) {
       setPageError(maxInflightRequests.error)
-      return
+      return false
     }
 
-    try {
-      await updateConnectionMutation.mutateAsync({
-        apiKey: getTrimmedValue(connectionForm.apiKey) || undefined,
-        baseURL: getNullableTrimmedValue(connectionForm.baseURL),
-        enabled: connectionForm.enabled,
-        id: connection.id,
-        label: connectionForm.label,
-        llamaCppMode: connection.config.llamaCppMode,
-        manualWorkerUrls: getWorkerUrlsFromInputValue(connectionForm.manualWorkerUrls),
-        maxInflightRequests: maxInflightRequests.value,
-        workerUrlMode: connectionForm.workerUrlMode,
-      })
-    } catch (error) {
-      setPageError(error instanceof Error ? error.message : 'Failed to save provider connection')
-    }
+    await updateConnectionMutation.mutateAsync({
+      apiKey: getTrimmedValue(connectionForm.apiKey) || undefined,
+      baseURL: getNullableTrimmedValue(connectionForm.baseURL),
+      enabled: connectionForm.enabled,
+      id: connection.id,
+      label: connectionForm.label,
+      llamaCppMode: connection.config.llamaCppMode,
+      manualWorkerUrls: getWorkerUrlsFromInputValue(connectionForm.manualWorkerUrls),
+      maxInflightRequests: maxInflightRequests.value,
+      workerUrlMode: connectionForm.workerUrlMode,
+    })
+
+    return true
   }
 
   const clearStoredSecret = async () => {
@@ -774,10 +829,22 @@ const ProviderDetailPage = () => {
   const hasModelDraftChanges = createMemo(() => {
     const sourceMap = providerModelSourceMap()
 
-    return modelDrafts().some((draft) => {
-      return hasProviderPageModelDraftChanges({draft, source: sourceMap.get(draft.id)})
-    })
+    return getChangedProviderPageModelDrafts({drafts: modelDrafts(), sourceMap}).length > 0
   })
+
+  const hasConnectionDraftChanges = createMemo(() => {
+    const connection = selectedConnection()
+
+    return connection ? hasConnectionFormChanges({connection, form: connectionForm}) : false
+  })
+
+  const hasUnsavedChanges = createMemo(() => {
+    return hasConnectionDraftChanges() || hasModelDraftChanges()
+  })
+
+  const isSavingChanges = () => {
+    return updateConnectionMutation.isPending || updateModelMutation.isPending
+  }
 
   const allModelDraftsEnabled = createMemo(() => {
     return (
@@ -890,62 +957,84 @@ const ProviderDetailPage = () => {
     })
   }
 
-  const submitModelsForm = async (event: Event) => {
-    event.preventDefault()
-    setPageError('')
-    setPageMessage('')
+  const saveModelDrafts = async () => {
     const sourceMap = providerModelSourceMap()
-    const changedDrafts = modelDrafts().filter((draft) => {
-      return hasProviderPageModelDraftChanges({draft, source: sourceMap.get(draft.id)})
-    })
+    const changedDrafts = getChangedProviderPageModelDrafts({drafts: modelDrafts(), sourceMap})
 
     if (changedDrafts.length === 0) {
-      setPageMessage('No model changes to save')
+      return 0
+    }
+
+    await Promise.all(
+      changedDrafts.map(async (draft) => {
+        const persistedModelId =
+          draft.persistedId
+          ?? (draft.provider === 'codex' || draft.provider === 'anthropic'
+            ? await ensureSelectableModelId({
+                id: draft.id,
+                modelName: getTrimmedModelValue(draft.remoteModelId ?? draft.modelName),
+                name: draft.displayNameValue,
+                provider: draft.provider,
+                version: getTrimmedModelValue(draft.variant ?? draft.version),
+              })
+            : draft.id)
+
+        return updateModelMutation.mutateAsync({
+          displayName: draft.displayNameValue,
+          enabled: draft.enabled,
+          id: persistedModelId,
+          options: getSubmittedModelOptions({
+            supportsThinking: supportsProviderModelThinking(draft),
+            thinkingValue: draft.thinkingValue,
+          }),
+          variant:
+            draft.provider === 'codex'
+              ? (getTrimmedModelValue(draft.variant ?? draft.version) ?? undefined)
+              : (getTrimmedModelValue(draft.variantValue) ?? undefined),
+        })
+      }),
+    )
+    await providerConnectionsQuery.refetch()
+
+    if (isCodexConnection()) {
+      await codexDiscoveredModelsQuery.refetch()
+    }
+
+    return changedDrafts.length
+  }
+
+  const saveChanges = async () => {
+    const providerChanged = hasConnectionDraftChanges()
+    const modelChanged = hasModelDraftChanges()
+
+    setPageError('')
+    setPageMessage('')
+
+    if (!providerChanged && !modelChanged) {
+      setPageMessage('No changes to save')
       return
     }
 
     try {
-      await Promise.all(
-        changedDrafts.map(async (draft) => {
-          const persistedModelId =
-            draft.persistedId
-            ?? (draft.provider === 'codex' || draft.provider === 'anthropic'
-              ? await ensureSelectableModelId({
-                  id: draft.id,
-                  modelName: getTrimmedModelValue(draft.remoteModelId ?? draft.modelName),
-                  name: draft.displayNameValue,
-                  provider: draft.provider,
-                  version: getTrimmedModelValue(draft.variant ?? draft.version),
-                })
-              : draft.id)
+      const savedProvider = providerChanged ? await saveConnectionForm() : false
 
-          return updateModelMutation.mutateAsync({
-            displayName: draft.displayNameValue,
-            enabled: draft.enabled,
-            id: persistedModelId,
-            options: getSubmittedModelOptions({
-              supportsThinking: supportsProviderModelThinking(draft),
-              thinkingValue: draft.thinkingValue,
-            }),
-            variant:
-              draft.provider === 'codex'
-                ? (getTrimmedModelValue(draft.variant ?? draft.version) ?? undefined)
-                : (getTrimmedModelValue(draft.variantValue) ?? undefined),
-          })
-        }),
-      )
-      await providerConnectionsQuery.refetch()
-
-      if (isCodexConnection()) {
-        await codexDiscoveredModelsQuery.refetch()
+      if (providerChanged && !savedProvider) {
+        return
       }
 
-      setPageMessage(
-        changedDrafts.length === 1 ? 'Saved 1 model change' : `Saved ${changedDrafts.length} model changes`,
-      )
+      const modelChangeCount = modelChanged ? await saveModelDrafts() : 0
+
+      setPageError('')
+      setPageMessage(getSaveSuccessMessage({modelChangeCount, providerChanged: savedProvider}))
     } catch (error) {
-      setPageError(error instanceof Error ? error.message : 'Failed to update models')
+      setPageMessage('')
+      setPageError(error instanceof Error ? error.message : 'Failed to save changes')
     }
+  }
+
+  const submitSaveForm = (event: Event) => {
+    event.preventDefault()
+    return void saveChanges()
   }
 
   const startCodexDeviceLogin = async () => {
@@ -982,9 +1071,21 @@ const ProviderDetailPage = () => {
               Manage provider settings here, then choose which models stay enabled for this provider.
             </p>
           </div>
-          <Button as={Link} to={'/providers' as never} variant="outline">
-            Back to Providers
-          </Button>
+          <div class="flex flex-wrap gap-2 sm:justify-end">
+            <Show when={selectedConnection()}>
+              <Button
+                disabled={isSavingChanges() || !hasUnsavedChanges()}
+                onClick={() => {
+                  return void saveChanges()
+                }}
+              >
+                {isSavingChanges() ? 'Saving...' : 'Save Changes'}
+              </Button>
+            </Show>
+            <Button as={Link} to={'/providers' as never} variant="outline">
+              Back to Providers
+            </Button>
+          </div>
         </div>
 
         <Show when={pageMessage()}>
@@ -1144,16 +1245,6 @@ const ProviderDetailPage = () => {
                       </Show>
 
                       <div class="flex flex-wrap gap-3">
-                        <button
-                          class="rounded-md bg-blue-600 px-4 py-3 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                          disabled={updateConnectionMutation.isPending}
-                          onClick={() => {
-                            return void submitConnectionForm()
-                          }}
-                          type="button"
-                        >
-                          {updateConnectionMutation.isPending ? 'Saving...' : 'Save Provider'}
-                        </button>
                         <button
                           class="rounded-md border border-gray-300 px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
                           disabled={testConnectionMutation.isPending}
@@ -1388,7 +1479,7 @@ const ProviderDetailPage = () => {
                     <form
                       class="space-y-4"
                       onSubmit={(event) => {
-                        return void submitModelsForm(event)
+                        return submitSaveForm(event)
                       }}
                     >
                       <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1415,13 +1506,6 @@ const ProviderDetailPage = () => {
                             type="button"
                           >
                             Deselect all
-                          </button>
-                          <button
-                            class="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                            disabled={updateModelMutation.isPending || !hasModelDraftChanges()}
-                            type="submit"
-                          >
-                            {updateModelMutation.isPending ? 'Saving...' : 'Save Models'}
                           </button>
                         </div>
                       </div>
