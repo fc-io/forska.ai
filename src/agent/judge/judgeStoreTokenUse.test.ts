@@ -2,6 +2,10 @@ import {expect, mock, test} from 'bun:test'
 
 const envModulePath = new URL('../../server/utils/env.ts', import.meta.url).pathname
 const apiClientModulePath = new URL('../../services/apiClient.ts', import.meta.url).pathname
+const judgeWorkerCompletionJournalModulePath = new URL(
+  '../../server/cron/judgmentsJobs/judgeWorkerCompletionJournal.ts',
+  import.meta.url,
+).pathname
 const judgmentsRequestRuntimeModulePath = new URL(
   '../../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts',
   import.meta.url,
@@ -10,6 +14,7 @@ const tokenUseQueryServiceModulePath = new URL('../../server/services/tokenUseQu
   .pathname
 
 const markJudgmentRequestsPersisted = mock(() => {})
+const attachTokenUseToPendingJudgeWorkerCompletion = mock(async () => true)
 const insertTokenUse = mock(async () => {
   return {id: 'token-use-1'}
 })
@@ -51,6 +56,10 @@ void mock.module(apiClientModulePath, () => {
       },
     },
   }
+})
+
+void mock.module(judgeWorkerCompletionJournalModulePath, () => {
+  return {attachTokenUseToPendingJudgeWorkerCompletion}
 })
 
 void mock.module(judgmentsRequestRuntimeModulePath, () => {
@@ -138,12 +147,13 @@ test('buildTokenUseTotals labels queue-retried recoverable failures as retry', (
   expect(totals.failedRequestsDetails[0]?.failedAttempts).toBe(2)
 })
 
-test('judgeStoreTokenUse skips low-memory worker persistence but clears pending persisted attempts', async () => {
+test('judgeStoreTokenUse journals low-memory judge-worker token use and clears pending persisted attempts', async () => {
   const previousServerRole = process.env.SERVER_ROLE
   const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
 
-  process.env.SERVER_ROLE = 'worker'
+  process.env.SERVER_ROLE = 'judge-worker'
   process.env.DUCKDB_MEMORY_LIMIT = '6400MiB'
+  attachTokenUseToPendingJudgeWorkerCompletion.mockClear()
   insertTokenUse.mockClear()
   markJudgmentRequestsPersisted.mockClear()
 
@@ -160,6 +170,14 @@ test('judgeStoreTokenUse skips low-memory worker persistence but clears pending 
     )
 
     expect(insertTokenUse).not.toHaveBeenCalled()
+    expect(attachTokenUseToPendingJudgeWorkerCompletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        articleId: 'article-1',
+        jobId: 'job-1',
+        promptIds: ['prompt-1'],
+        tokenUse: expect.objectContaining({totalTokens: 15}),
+      }),
+    )
     expect(markJudgmentRequestsPersisted).toHaveBeenCalledWith('job-1', 1)
   } finally {
     if (previousServerRole === undefined) {
