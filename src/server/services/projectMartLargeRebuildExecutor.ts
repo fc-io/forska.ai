@@ -147,6 +147,122 @@ const getProjectRefreshArticleIdsSql = (articleIds: string[]) => {
     .join(', ')
 }
 
+const getProjectScopeResetSql = (projectId: string) => {
+  const projectLiteral = getSqlLiteral(projectId)
+
+  return `
+    BEGIN TRANSACTION;
+    DELETE FROM mart.project_scope_article WHERE project_id = ${projectLiteral};
+    COMMIT;
+  `
+}
+
+const getProjectScopeBatchInsertSql = (projectId: string, rows: ProjectMartLargeRebuildScopeBatchRow[]) => {
+  return `
+    BEGIN TRANSACTION;
+    INSERT INTO mart.project_scope_article (
+      project_id,
+      article_id,
+      in_curated_scope,
+      in_route_scope,
+      article_created_at,
+      article_updated_at
+    )
+    VALUES ${rows
+      .map((row) => {
+        return `(${getSqlLiteral(projectId)}, ${getSqlLiteral(row.articleId)}, ${getSqlLiteral(row.inCuratedScope)}, ${getSqlLiteral(row.inRouteScope)}, ${getSqlLiteral(row.articleCreatedAt)}, ${getSqlLiteral(row.articleUpdatedAt)})`
+      })
+      .join(', ')};
+    COMMIT;
+  `
+}
+
+const getProjectJudgmentFactResetSql = (projectId: string) => {
+  const projectLiteral = getSqlLiteral(projectId)
+
+  return `
+    BEGIN TRANSACTION;
+    DELETE FROM mart.judgment_fact WHERE project_id = ${projectLiteral};
+    COMMIT;
+  `
+}
+
+const getProjectJudgmentFactBatchInsertSql = (projectId: string, articleIds: string[]) => {
+  const projectLiteral = getSqlLiteral(projectId)
+  const articleIdsSql = getProjectRefreshArticleIdsSql(articleIds)
+
+  return `
+    BEGIN TRANSACTION;
+    INSERT INTO mart.judgment_fact (
+      judgment_id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      snapshot_project_id,
+      snapshot_project_model_name,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      chunking_strategy,
+      is_answered,
+      answered_original,
+      answered_original_as_array,
+      normalized_answers,
+      confidence_original,
+      explanation,
+      quotes,
+      article_title,
+      article_created_at,
+      article_updated_at,
+      article_import_route,
+      article_publication_status,
+      created_at,
+      updated_at
+    )
+    SELECT
+      judgment.id,
+      judgment.article_id,
+      judgment.prompt_id,
+      judgment.model_id,
+      judgment.project_id,
+      judgment.snapshot_project_id,
+      judgment.snapshot_project_model_name,
+      judgment.use_title,
+      judgment.use_abstract,
+      judgment.use_fulltext,
+      judgment.use_fulltext_no_images,
+      judgment.chunking_strategy,
+      judgment.is_answered,
+      NULLIF(TRIM(COALESCE(judgment.answered_original, '')), ''),
+      judgment.answered_original_as_array,
+      CASE
+        WHEN judgment.answered_original_as_array IS NOT NULL AND ARRAY_LENGTH(judgment.answered_original_as_array) > 0
+          THEN judgment.answered_original_as_array
+        WHEN NULLIF(TRIM(COALESCE(judgment.answered_original, '')), '') IS NOT NULL
+          THEN [TRIM(COALESCE(judgment.answered_original, ''))]
+        ELSE NULL
+      END,
+      judgment.confidence_original,
+      judgment.explanation,
+      judgment.quotes,
+      article.article_title,
+      article.article_created_at,
+      article.article_updated_at,
+      article.import_route,
+      article.publication_status,
+      judgment.created_at,
+      judgment.updated_at
+    FROM app.judgment judgment
+    INNER JOIN app.article article ON article.id = judgment.article_id
+    WHERE judgment.deleted_at IS NULL
+      AND judgment.project_id = ${projectLiteral}
+      AND judgment.article_id IN (${articleIdsSql});
+    COMMIT;
+  `
+}
+
 const getProjectPromptAnswerFactResetSql = (projectId: string) => {
   const projectLiteral = getSqlLiteral(projectId)
 
@@ -615,6 +731,44 @@ const getNextBatchCursor = (rows: ProjectMartLargeRebuildScopeBatchRow[]) => {
   return lastRow ? {articleCreatedAt: lastRow.articleCreatedAt, articleId: lastRow.articleId} : null
 }
 
+const resetProjectScope = async (
+  projectId: string,
+  dependencies: ProjectMartLargeRebuildExecutorDependencies = defaultProjectMartLargeRebuildExecutorDependencies,
+) => {
+  await dependencies.database.run(getProjectScopeResetSql(projectId))
+}
+
+const rebuildProjectScopeBatch = async (
+  projectId: string,
+  rows: ProjectMartLargeRebuildScopeBatchRow[],
+  dependencies: ProjectMartLargeRebuildExecutorDependencies = defaultProjectMartLargeRebuildExecutorDependencies,
+) => {
+  if (rows.length === 0) {
+    return
+  }
+
+  await dependencies.database.run(getProjectScopeBatchInsertSql(projectId, rows))
+}
+
+const resetProjectJudgmentFact = async (
+  projectId: string,
+  dependencies: ProjectMartLargeRebuildExecutorDependencies = defaultProjectMartLargeRebuildExecutorDependencies,
+) => {
+  await dependencies.database.run(getProjectJudgmentFactResetSql(projectId))
+}
+
+const rebuildProjectJudgmentFactBatch = async (
+  projectId: string,
+  articleIds: string[],
+  dependencies: ProjectMartLargeRebuildExecutorDependencies = defaultProjectMartLargeRebuildExecutorDependencies,
+) => {
+  if (articleIds.length === 0) {
+    return
+  }
+
+  await dependencies.database.run(getProjectJudgmentFactBatchInsertSql(projectId, articleIds))
+}
+
 const resetProjectPromptAnswerFact = async (
   projectId: string,
   dependencies: ProjectMartLargeRebuildExecutorDependencies = defaultProjectMartLargeRebuildExecutorDependencies,
@@ -709,12 +863,16 @@ const projectMartLargeRebuildExecutor = {
   finalizeProjectReviewServing,
   getNextBatchCursor,
   getProjectScopeSourceBatch,
+  rebuildProjectJudgmentFactBatch,
   rebuildProjectPromptAnswerFactBatch,
+  rebuildProjectScopeBatch,
   rebuildProjectReviewAnswerDictionary,
   rebuildProjectReviewArticleFilterMemberBatch,
   rebuildProjectReviewArticleRollupBatch,
   rebuildProjectReviewServingBatch,
+  resetProjectJudgmentFact,
   resetProjectPromptAnswerFact,
+  resetProjectScope,
   resetProjectReviewAnswerDictionary,
   resetProjectReviewArticleRollup,
   setupProjectReviewServingStaging,

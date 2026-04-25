@@ -144,6 +144,7 @@ const getPromptsToFetchCount = (
 type PromptQueueEntry = {articleId: string; promptId: string}
 
 const sqliteBatchSize = 1000
+const orphanedLocalQueueAutoRepairMaxRows = 1_000
 
 const getPromptQueueEntryKey = (entry: PromptQueueEntry) => {
   return `${entry.articleId}:${entry.promptId}`
@@ -310,6 +311,8 @@ const filterAlreadyJudged = async (
   promptEntries: PromptQueueEntry[],
   jobId: string,
   projectId: string,
+  readyDeficit: number,
+  serverJobId: string,
 ): Promise<PromptQueueEntry[]> => {
   if (promptEntries.length === 0) return []
 
@@ -407,6 +410,35 @@ const filterAlreadyJudged = async (
     )
   }
 
+  if (filtered.length > 0 && filteredForLocalJudgments.length === 0 && readyDeficit > 0) {
+    const sqliteHealth = await sqliteService.getHealthSnapshot(jobId)
+
+    if (sqliteHealth.orphanedJudgedRowCount > 0) {
+      const autoRepairMaxRows = Math.min(readyDeficit, orphanedLocalQueueAutoRepairMaxRows)
+      const repairResult = await sqliteService.repairOrphanedJudgedQueueRows({
+        jobId,
+        maxRows: autoRepairMaxRows,
+        serverJobId,
+      })
+
+      addToQueueWarningLogger.warn(
+        `judgmentQueue.addToQueue.orphanedLocalQueue.${jobId}`,
+        '[addToQueue] auto-repaired orphaned judged rows blocking ready-fill candidates',
+        {
+          autoRepairMaxRows,
+          component: addToQueueComponent,
+          event: 'orphanedLocalQueue',
+          jobId,
+          locallySkipped,
+          orphanedJudgedRowCount: sqliteHealth.orphanedJudgedRowCount,
+          projectId,
+          repairedDeletedRows: repairResult.deletedRows,
+          repairedRequeuedRows: repairResult.requeuedRows,
+        },
+      )
+    }
+  }
+
   return filteredForLocalJudgments
 }
 
@@ -480,6 +512,12 @@ const getWrapVisibilityToken = ({
   return projectDirtyToken ?? lastProjectRefreshAckSeq
 }
 
+const getMaxVisibilityToken = (tokens: Array<number | null>) => {
+  return tokens.reduce<number | null>((maxToken, token) => {
+    return token == null ? maxToken : maxToken == null ? token : Math.max(maxToken, token)
+  }, null)
+}
+
 const hasWrapVisibility = ({
   lastProjectRefreshAckSeq,
   wrapVisibilityAckSeq,
@@ -536,12 +574,24 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
   }
 
   const scanState = await sqliteService.getScanState(job.id)
+  const exhaustedProjectDirtyToken = scanState.exhaustedAt ? await getProjectDirtyToken(job.id) : null
+  const wrapVisibilityAckSeq = getMaxVisibilityToken([
+    scanState.wrapVisibilityAckSeq,
+    scanState.exhaustedAt
+      ? getWrapVisibilityToken({
+          lastProjectRefreshAckSeq: scanState.lastProjectRefreshAckSeq,
+          projectDirtyToken: exhaustedProjectDirtyToken,
+        })
+      : null,
+  ])
+  const shouldForceRawFallback = !hasWrapVisibility({
+    lastProjectRefreshAckSeq: scanState.lastProjectRefreshAckSeq,
+    wrapVisibilityAckSeq,
+  })
 
-  if (hasSqliteExhaustedCooldown(scanState.exhaustedAt)) {
+  if (hasSqliteExhaustedCooldown(scanState.exhaustedAt) && !shouldForceRawFallback) {
     return
   }
-
-  const shouldForceRawFallback = !hasWrapVisibility(scanState)
 
   const baseCursor = scanState.exhaustedAt ? null : scanState.cursor
   const initializeScanState = scanState.exhaustedAt
@@ -549,7 +599,7 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
         cursor: null,
         exhaustedAt: null,
         scanEpoch: scanState.scanEpoch + 1,
-        wrapVisibilityAckSeq: shouldForceRawFallback ? scanState.wrapVisibilityAckSeq : null,
+        wrapVisibilityAckSeq: shouldForceRawFallback ? wrapVisibilityAckSeq : null,
       })
     : Promise.resolve()
 
@@ -577,7 +627,13 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
       cursor,
       shouldForceRawFallback,
     )
-    const filteredEntries = await filterAlreadyJudged(promptData.promptEntries, job.id, job.projectId)
+    const filteredEntries = await filterAlreadyJudged(
+      promptData.promptEntries,
+      job.id,
+      job.projectId,
+      readyDeficit,
+      serverJobId,
+    )
     const {humanFirstEntries, prioritizedEntries} = await getPrioritizedPromptQueueEntries(filteredEntries, {
       humanJudgmentMode: jobConfig.humanJudgmentMode ?? 'prompt',
       projectId: job.projectId,
@@ -598,7 +654,7 @@ const topUpSqliteQueueForJob = async (params: AddToQueueJobParams): Promise<void
       ? {
           cursor: promptData.nextCursor,
           exhaustedAt: null,
-          wrapVisibilityAckSeq: shouldForceRawFallback ? scanState.wrapVisibilityAckSeq : null,
+          wrapVisibilityAckSeq: shouldForceRawFallback ? wrapVisibilityAckSeq : null,
         }
       : {
           cursor: null,

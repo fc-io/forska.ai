@@ -256,7 +256,7 @@ test('runProjectMartRefreshWorkerOnce routes oversized full refreshes into stage
   expect(state.refreshStatus).toBe('idle')
   expect(state.lastError).toBeNull()
   expect(state.activeRefreshToken).toBe(0)
-  expect(largeRebuildState).toEqual({rebuildPhase: 'prompt_answer_fact', refreshStatus: 'idle', refreshToken: 1})
+  expect(largeRebuildState).toEqual({rebuildPhase: 'judgment_fact', refreshStatus: 'idle', refreshToken: 1})
 })
 
 test('isolated refresh command progresses one large rebuild batch when no normal refresh claim is available', () => {

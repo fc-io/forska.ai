@@ -25,6 +25,7 @@ const createRunnerContext = (params: {
     leaseExpiresAt: Date
     projectId: string
     rebuildPhase:
+      | 'judgment_fact'
       | 'prompt_answer_fact'
       | 'review_answer_dictionary'
       | 'review_article_filter_member'
@@ -52,6 +53,7 @@ const createRunnerContext = (params: {
     projectId: string
     rebuildPhase?: string
   }> = []
+  const scopeBatches: string[][] = []
   const rebuildBatches: string[][] = []
   const dictionaryRebuilds: string[] = []
   const dictionaryResets: string[] = []
@@ -69,6 +71,16 @@ const createRunnerContext = (params: {
         callLog.push(`batch:${projectId}`)
         return params.batchRows ?? []
       }),
+      rebuildProjectScopeBatch: mock(async (projectId: string, rows: Array<{articleId: string}>) => {
+        const articleIds = rows.map((row) => {
+          return row.articleId
+        })
+        callLog.push(`scope:rebuild:${projectId}:${articleIds.join(',')}`)
+        scopeBatches.push(articleIds)
+      }),
+      rebuildProjectJudgmentFactBatch: mock(async (projectId: string, articleIds: string[]) => {
+        callLog.push(`judgment:rebuild:${projectId}:${articleIds.join(',')}`)
+      }),
       rebuildProjectPromptAnswerFactBatch: mock(async (projectId: string, articleIds: string[]) => {
         callLog.push(`rebuild:${projectId}:${articleIds.join(',')}`)
         rebuildBatches.push(articleIds)
@@ -85,6 +97,12 @@ const createRunnerContext = (params: {
       }),
       rebuildProjectReviewServingBatch: mock(async (projectId: string, articleIds: string[]) => {
         callLog.push(`serving:rebuild:${projectId}:${articleIds.join(',')}`)
+      }),
+      resetProjectScope: mock(async (projectId: string) => {
+        callLog.push(`scope:reset:${projectId}`)
+      }),
+      resetProjectJudgmentFact: mock(async (projectId: string) => {
+        callLog.push(`judgment:reset:${projectId}`)
       }),
       resetProjectPromptAnswerFact: mock(async (projectId: string) => {
         callLog.push(`reset:${projectId}`)
@@ -178,6 +196,7 @@ const createRunnerContext = (params: {
     publishedAcks,
     rebuildBatches,
     resets,
+    scopeBatches,
   }
 }
 
@@ -199,6 +218,110 @@ test('returns idle when no large rebuild work is claimable', async () => {
     status: 'idle',
     workerId: 'worker-1',
   })
+})
+
+test('runs one judgment_fact scope batch and advances the cursor', async () => {
+  const context = createRunnerContext({
+    batchRows: [
+      {
+        articleCreatedAt: new Date('2026-04-01T00:00:00.000Z'),
+        articleId: 'article-1',
+        articleUpdatedAt: new Date('2026-04-01T01:00:00.000Z'),
+        inCuratedScope: true,
+        inRouteScope: false,
+      },
+      {
+        articleCreatedAt: new Date('2026-04-02T00:00:00.000Z'),
+        articleId: 'article-2',
+        articleUpdatedAt: new Date('2026-04-02T01:00:00.000Z'),
+        inCuratedScope: false,
+        inRouteScope: true,
+      },
+    ],
+    claim: {
+      leaseExpiresAt: new Date('2026-04-03T10:00:00.000Z'),
+      projectId: 'project-1',
+      rebuildPhase: 'judgment_fact',
+      refreshToken: 9,
+      workerId: 'worker-1',
+    },
+    state: {
+      cursorArticleCreatedAt: null,
+      cursorArticleId: null,
+      projectId: 'project-1',
+      rebuildPhase: 'judgment_fact',
+      targetGeneration: null,
+    },
+  })
+
+  const result = await runProjectMartLargeRebuildCycle({workerId: 'worker-1'}, context.dependencies)
+  const runtimeMetrics = getProjectMartLargeRebuildRuntimeMetrics()
+
+  expect(result).toEqual({
+    articleCount: 2,
+    nextCursor: {articleCreatedAt: new Date('2026-04-02T00:00:00.000Z'), articleId: 'article-2'},
+    projectId: 'project-1',
+    status: 'progressed',
+    workerId: 'worker-1',
+  })
+  expect(context.callLog).toEqual([
+    'claim',
+    'state:project-1',
+    'scope:reset:project-1',
+    'judgment:reset:project-1',
+    'batch:project-1',
+    'scope:rebuild:project-1:article-1,article-2',
+    'judgment:rebuild:project-1:article-1,article-2',
+    'advance:project-1:article-2:judgment_fact',
+  ])
+  expect(context.scopeBatches).toEqual([['article-1', 'article-2']])
+  expect(runtimeMetrics.totals.cyclesProgressed).toBe(1)
+  expect(runtimeMetrics.totals.rowsProcessed).toBe(2)
+  expect(runtimeMetrics.recentCycles[0]).toMatchObject({
+    articleCount: 2,
+    error: null,
+    phase: 'judgment_fact',
+    projectId: 'project-1',
+    status: 'progressed',
+    workerId: 'worker-1',
+  })
+})
+
+test('transitions from judgment_fact to prompt_answer_fact when no rows remain for the current cursor', async () => {
+  const context = createRunnerContext({
+    batchRows: [],
+    claim: {
+      leaseExpiresAt: new Date('2026-04-03T10:00:00.000Z'),
+      projectId: 'project-1',
+      rebuildPhase: 'judgment_fact',
+      refreshToken: 9,
+      workerId: 'worker-1',
+    },
+    state: {
+      cursorArticleCreatedAt: new Date('2026-04-02T00:00:00.000Z'),
+      cursorArticleId: 'article-2',
+      projectId: 'project-1',
+      rebuildPhase: 'judgment_fact',
+      targetGeneration: null,
+    },
+  })
+
+  const result = await runProjectMartLargeRebuildCycle({workerId: 'worker-1'}, context.dependencies)
+
+  expect(result).toEqual({
+    articleCount: 0,
+    nextCursor: null,
+    projectId: 'project-1',
+    status: 'progressed',
+    workerId: 'worker-1',
+  })
+  expect(context.callLog).toEqual([
+    'claim',
+    'state:project-1',
+    'batch:project-1',
+    'advance:project-1:null:prompt_answer_fact',
+  ])
+  expect(context.completed).toEqual([])
 })
 
 test('runs one prompt_answer_fact batch and advances the cursor', async () => {

@@ -96,8 +96,14 @@ type MockSqliteService = {
   ) => Promise<Array<{articleId: string; promptId: string}>>
   getReadyCount: () => Promise<number>
   getScanState: () => Promise<MockScanState>
+  getHealthSnapshot?: (jobId: string) => Promise<{orphanedJudgedRowCount: number}>
   hasJob: () => boolean
   initializeJob: () => Promise<void>
+  repairOrphanedJudgedQueueRows?: (input: {
+    jobId: string
+    maxRows: number
+    serverJobId: string
+  }) => Promise<{deletedRows: number; requeuedRows: number}>
   setScanState: (jobId: string, state: Record<string, unknown>) => Promise<void>
   syncOwnedLeases: () => Promise<void>
 }
@@ -303,6 +309,72 @@ test('uses raw OLAP fallback when exhausted SQLite jobs are waiting on mart visi
 
   const module = (await import(
     `${judgmentsJobsAddToQueueModulePath}?blocked=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(getPromptsCalls.count).toBe(1)
+  expect(preferRawFallbackValues).toEqual([true])
+  expect(setScanStateCalls).toHaveLength(2)
+  expect(setScanStateCalls[0]).toEqual({
+    jobId: 'job-1',
+    state: {cursor: null, exhaustedAt: null, scanEpoch: 4, wrapVisibilityAckSeq: 12},
+  })
+})
+
+test('continues raw OLAP fallback during exhausted cooldown when mart visibility is stale', async () => {
+  const getPromptsCalls = {count: 0}
+  const preferRawFallbackValues: boolean[] = []
+  const setScanStateCalls: Array<{jobId: string; state: Record<string, unknown>}> = []
+  const sqliteService: MockSqliteService = {
+    addReadyPrompts: async () => {
+      return 0
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    getReadyCount: async () => {
+      return 0
+    },
+    getScanState: async () => {
+      return {
+        cursor: null,
+        exhaustedAt: new Date(),
+        lastProjectRefreshAckSeq: 11,
+        scanEpoch: 3,
+        wrapVisibilityAckSeq: 12,
+      }
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    setScanState: async (jobId: string, state: Record<string, unknown>) => {
+      setScanStateCalls.push({jobId, state})
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    getPromptsImpl: async (_projectId, _jobId, _numberOfPromptsToGet, _cursor, preferRawFallback) => {
+      preferRawFallbackValues.push(Boolean(preferRawFallback))
+      return {nextCursor: null, promptEntries: []}
+    },
+    projectDirtyToken: 12,
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?cooldown-raw-fallback=${Date.now()}`
   )) as JudgmentsJobsAddToQueueModule
 
   await module.judgmentsJobsAddToQueue('server-1')
@@ -686,6 +758,67 @@ test('filters out locally judged SQLite prompt pairs before adding ready prompts
 
   expect(getPromptsCalls.count).toBe(1)
   expect(addReadyPromptsCalls).toEqual([[{articleId: 'article-new', promptId: 'prompt-1'}]])
+})
+
+test('auto repairs orphaned local queue rows when they block ready fill', async () => {
+  const getPromptsCalls = {count: 0}
+  const repairCalls: Array<{jobId: string; maxRows: number; serverJobId: string}> = []
+  let readyCountCalls = 0
+  const sqliteService: MockSqliteService = {
+    addReadyPrompts: async () => {
+      return 0
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutLocallyJudgedPrompts: async () => {
+      return []
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    getHealthSnapshot: async () => {
+      return {orphanedJudgedRowCount: 4}
+    },
+    getReadyCount: async () => {
+      readyCountCalls += 1
+      return readyCountCalls === 1 ? 0 : 1
+    },
+    getScanState: async () => {
+      return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    repairOrphanedJudgedQueueRows: async (input) => {
+      repairCalls.push(input)
+      return {deletedRows: 0, requeuedRows: 1}
+    },
+    setScanState: async () => {
+      return undefined
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    getPromptsImpl: async () => {
+      return {nextCursor: null, promptEntries: [{articleId: 'article-local', promptId: 'prompt-1'}]}
+    },
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?auto-repair-orphaned-local-queue=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(getPromptsCalls.count).toBe(1)
+  expect(repairCalls).toEqual([{jobId: 'job-1', maxRows: 1, serverJobId: 'server-1'}])
 })
 
 test('prioritizes answered human pairs within the fetched window and logs inserted prioritized entries', async () => {

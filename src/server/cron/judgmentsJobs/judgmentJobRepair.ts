@@ -10,7 +10,14 @@ import {
 } from './judgmentJobSqliteService.ts'
 import {getJudgmentJobRepairMode} from './judgmentJobStoragePolicy.ts'
 
-export type JudgmentJobRepairAction = 'checkpoint' | 'drain' | 'preflight' | 'quarantine' | 'repair' | 'unquarantine'
+export type JudgmentJobRepairAction =
+  | 'checkpoint'
+  | 'drain'
+  | 'preflight'
+  | 'quarantine'
+  | 'repair'
+  | 'repair_orphaned_queue'
+  | 'unquarantine'
 
 type JudgmentJobRepairJobState = {
   id: string
@@ -526,6 +533,95 @@ const runDrainAction = async ({
   }
 }
 
+const runRepairOrphanedQueueAction = async ({
+  claimedBy,
+  job,
+  jobId,
+  systemSqliteFallbackSteps,
+}: {
+  claimedBy: string
+  job: JudgmentJobRepairJobState
+  jobId: string
+  systemSqliteFallbackSteps: JudgmentJobSystemSqliteFallbackStep[]
+}) => {
+  const sqliteService = getJudgmentJobSqliteService()
+
+  if (!sqliteService.hasJob(jobId)) {
+    return {
+      changes: getEmptyRepairChanges(),
+      message: `SQLite job DB is missing for ${jobId}`,
+      ok: false,
+      preflight: null,
+    }
+  }
+
+  const preflightOutcome = await getPreflightOutcome(jobId)
+  const initialFallbackResults = preflightOutcome.ok
+    ? []
+    : await runSystemSqliteFallback({claimedBy, jobId, steps: systemSqliteFallbackSteps})
+  const fallbackCheckpointed = initialFallbackResults.some((result) => {
+    return result.step === 'checkpoint' && result.ok
+  })
+  const recoveredPreflightOutcome =
+    !preflightOutcome.ok && fallbackCheckpointed ? await getPreflightOutcome(jobId) : preflightOutcome
+
+  if (!recoveredPreflightOutcome.ok) {
+    await setJobQuarantine({jobId, reason: recoveredPreflightOutcome.message})
+
+    return {
+      changes: {...getEmptyRepairChanges(), quarantined: true},
+      message: appendFallbackMessage({
+        baseMessage: recoveredPreflightOutcome.message,
+        fallbackResults: initialFallbackResults,
+      }),
+      ok: false,
+      preflight: recoveredPreflightOutcome.preflight,
+      systemSqliteFallbackResults: initialFallbackResults,
+    }
+  }
+
+  if (getRepairMode({hasLocalSqlite: true, job}) === 'offline_repair_required') {
+    return {
+      changes: getEmptyRepairChanges(),
+      message:
+        `Orphaned queue repair is disabled for ${jobId} because this quarantined job still has local SQLite state. `
+        + `Keep the job quarantined and run offline repair after stopping the server stack.`,
+      ok: false,
+      preflight: recoveredPreflightOutcome.preflight,
+      systemSqliteFallbackResults: initialFallbackResults,
+    }
+  }
+
+  const orphanedQueueRepair = await sqliteService.repairOrphanedJudgedQueueRows({
+    jobId,
+    maxRows: retentionPruneChunkSize,
+    serverJobId: claimedBy,
+  })
+  const restoredLocalQueue = orphanedQueueRepair.requeuedRows > 0
+
+  if (restoredLocalQueue) {
+    await restoreJobForResumedLocalQueue(jobId)
+  }
+
+  return {
+    changes: {
+      ...getEmptyRepairChanges(),
+      deletedOrphanedJudgedRows: orphanedQueueRepair.deletedRows,
+      requeuedOrphanedJudgedRows: orphanedQueueRepair.requeuedRows,
+      unquarantined: restoredLocalQueue,
+    },
+    message: appendFallbackMessage({
+      baseMessage:
+        `Orphaned queue repair processed up to ${retentionPruneChunkSize} row(s) for ${jobId}: `
+        + `${orphanedQueueRepair.requeuedRows} requeued, ${orphanedQueueRepair.deletedRows} deleted.`,
+      fallbackResults: initialFallbackResults,
+    }),
+    ok: true,
+    preflight: recoveredPreflightOutcome.preflight,
+    systemSqliteFallbackResults: initialFallbackResults,
+  }
+}
+
 const runRepairAction = async ({
   allowOfflineRepairForQuarantinedLocalState = false,
   claimedBy,
@@ -704,13 +800,20 @@ export const runJudgmentJobRepairAction = async ({
                     jobId,
                     systemSqliteFallbackSteps: normalizedFallbackSteps,
                   })
-                : await runRepairAction({
-                    allowOfflineRepairForQuarantinedLocalState,
-                    claimedBy: requestedBy,
-                    job,
-                    jobId,
-                    systemSqliteFallbackSteps: normalizedFallbackSteps,
-                  })
+                : action === 'repair_orphaned_queue'
+                  ? await runRepairOrphanedQueueAction({
+                      claimedBy: requestedBy,
+                      job,
+                      jobId,
+                      systemSqliteFallbackSteps: normalizedFallbackSteps,
+                    })
+                  : await runRepairAction({
+                      allowOfflineRepairForQuarantinedLocalState,
+                      claimedBy: requestedBy,
+                      job,
+                      jobId,
+                      systemSqliteFallbackSteps: normalizedFallbackSteps,
+                    })
 
     return getRepairResult({
       action,

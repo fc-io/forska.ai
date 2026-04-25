@@ -428,6 +428,7 @@ test('maintenance-worker startup migrates DuckDB before judgment health queries 
         draining: number
         healthy: number
         offlineRepairRequired: number
+        orphanedLocalQueue: number
         quarantined: number
         retainedOutbox: number
         staleImport: number
@@ -441,6 +442,7 @@ test('maintenance-worker startup migrates DuckDB before judgment health queries 
       draining: 0,
       healthy: 0,
       offlineRepairRequired: 0,
+      orphanedLocalQueue: 0,
       quarantined: 0,
       retainedOutbox: 0,
       staleImport: 0,
@@ -542,6 +544,7 @@ test('maintenance-worker startup tolerates malformed DuckDB lease metadata files
         draining: number
         healthy: number
         offlineRepairRequired: number
+        orphanedLocalQueue: number
         quarantined: number
         retainedOutbox: number
         staleImport: number

@@ -21,8 +21,9 @@ import {
 const batchSafeRepairActions: Array<{action: JudgmentJobRepairAction; label: string}> = [
   {action: 'preflight', label: 'Preflight'},
   {action: 'checkpoint', label: 'Checkpoint WAL'},
+  {action: 'repair_orphaned_queue', label: 'Repair Orphaned Queue'},
   {action: 'drain', label: 'Drain Storage'},
-  {action: 'repair', label: 'Repair Storage'},
+  {action: 'repair', label: 'Repair All Storage'},
 ]
 
 const healthFilters = Object.entries(judgmentJobsHealthFilterLabels).map(([value, label]) => {

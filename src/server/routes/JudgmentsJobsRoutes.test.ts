@@ -244,6 +244,30 @@ const insertOutboxFixture = async ({
   })
 }
 
+const insertOrphanedJudgedQueueFixture = async ({
+  articleId,
+  jobId,
+  promptId,
+}: {
+  articleId: string
+  jobId: string
+  promptId: string
+}) => {
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const sqliteService = getJudgmentJobSqliteService()
+
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
+
+  const [claimedPrompt] = await sqliteService.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt for orphaned queue test')
+  }
+
+  await sqliteService.markPromptAsJudged(jobId, claimedPrompt.recordId)
+}
+
 const insertUnassessedServingFixture = async ({jobId, projectId}: {jobId: string; projectId: string}) => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
@@ -1875,6 +1899,7 @@ test('judgment job health summary aggregates storage risk counts', async () => {
       healthy: number
       draining: number
       offlineRepairRequired: number
+      orphanedLocalQueue: number
       quarantined: number
       retainedOutbox: number
       staleImport: number
@@ -1898,6 +1923,10 @@ test('judgment job health summary aggregates storage risk counts', async () => {
   const retainedModelId = `health-summary-retained-model-${now}`
   const retainedConnectionId = `health-summary-retained-connection-${now}`
   const retainedJobId = `health-summary-retained-job-${now}`
+  const orphanedProjectId = `health-summary-orphaned-project-${now}`
+  const orphanedModelId = `health-summary-orphaned-model-${now}`
+  const orphanedConnectionId = `health-summary-orphaned-connection-${now}`
+  const orphanedJobId = `health-summary-orphaned-job-${now}`
   const staleProjectId = `health-summary-stale-project-${now}`
   const staleModelId = `health-summary-stale-model-${now}`
   const staleConnectionId = `health-summary-stale-connection-${now}`
@@ -1943,6 +1972,21 @@ test('judgment job health summary aggregates storage risk counts', async () => {
   `)
   await insertOutboxFixture({jobId: retainedJobId, modelId: retainedModelId, projectId: retainedProjectId})
 
+  await insertProjectFixture({
+    connectionId: orphanedConnectionId,
+    modelId: orphanedModelId,
+    projectId: orphanedProjectId,
+  })
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${orphanedJobId}', '${orphanedProjectId}', 'running', 'active')
+  `)
+  await insertOrphanedJudgedQueueFixture({
+    articleId: `health-summary-orphaned-article-${now}`,
+    jobId: orphanedJobId,
+    promptId: `health-summary-orphaned-prompt-${now}`,
+  })
+
   await insertProjectFixture({connectionId: staleConnectionId, modelId: staleModelId, projectId: staleProjectId})
   await runDatabase(`
     INSERT INTO app.judgment_job (id, project_id, status, storage_state, last_import_started_at)
@@ -1955,6 +1999,7 @@ test('judgment job health summary aggregates storage risk counts', async () => {
       healthy: number
       draining: number
       offlineRepairRequired: number
+      orphanedLocalQueue: number
       quarantined: number
       retainedOutbox: number
       staleImport: number
@@ -1966,6 +2011,7 @@ test('judgment job health summary aggregates storage risk counts', async () => {
     healthy: baselineBody.data.healthy + 1,
     draining: baselineBody.data.draining + 1,
     offlineRepairRequired: baselineBody.data.offlineRepairRequired,
+    orphanedLocalQueue: baselineBody.data.orphanedLocalQueue + 1,
     quarantined: baselineBody.data.quarantined + 1,
     retainedOutbox: baselineBody.data.retainedOutbox + 1,
     staleImport: baselineBody.data.staleImport + 1,
@@ -2273,6 +2319,10 @@ test('judgment jobs list includes inline health badges for risky jobs', async ()
   const retainedModelId = `list-health-retained-model-${now}`
   const retainedConnectionId = `list-health-retained-connection-${now}`
   const retainedJobId = `list-health-retained-job-${now}`
+  const orphanedProjectId = `list-health-orphaned-project-${now}`
+  const orphanedModelId = `list-health-orphaned-model-${now}`
+  const orphanedConnectionId = `list-health-orphaned-connection-${now}`
+  const orphanedJobId = `list-health-orphaned-job-${now}`
   const staleProjectId = `list-health-stale-project-${now}`
   const staleModelId = `list-health-stale-model-${now}`
   const staleConnectionId = `list-health-stale-connection-${now}`
@@ -2310,6 +2360,21 @@ test('judgment jobs list includes inline health badges for risky jobs', async ()
   `)
   await insertOutboxFixture({jobId: retainedJobId, modelId: retainedModelId, projectId: retainedProjectId})
 
+  await insertProjectFixture({
+    connectionId: orphanedConnectionId,
+    modelId: orphanedModelId,
+    projectId: orphanedProjectId,
+  })
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${orphanedJobId}', '${orphanedProjectId}', 'running', 'active')
+  `)
+  await insertOrphanedJudgedQueueFixture({
+    articleId: `list-health-orphaned-article-${now}`,
+    jobId: orphanedJobId,
+    promptId: `list-health-orphaned-prompt-${now}`,
+  })
+
   await insertProjectFixture({connectionId: staleConnectionId, modelId: staleModelId, projectId: staleProjectId})
   await runDatabase(`
     INSERT INTO app.judgment_job (id, project_id, status, storage_state, last_import_started_at)
@@ -2328,6 +2393,9 @@ test('judgment jobs list includes inline health badges for risky jobs', async ()
   const retainedJob = body.data.find((job) => {
     return job.id === retainedJobId
   })
+  const orphanedJob = body.data.find((job) => {
+    return job.id === orphanedJobId
+  })
   const staleJob = body.data.find((job) => {
     return job.id === staleJobId
   })
@@ -2336,6 +2404,7 @@ test('judgment jobs list includes inline health badges for risky jobs', async ()
   expect(drainingJob?.health).toEqual({badges: ['Draining'], isHealthy: false})
   expect(quarantinedJob?.health).toEqual({badges: ['Quarantined'], isHealthy: false})
   expect(retainedJob?.health).toEqual({badges: ['Retained Outbox'], isHealthy: false})
+  expect(orphanedJob?.health).toEqual({badges: ['Orphaned Local Queue'], isHealthy: false})
   expect(staleJob?.health).toEqual({badges: ['Stale Import'], isHealthy: false})
 })
 
@@ -2521,6 +2590,64 @@ test('repair route requeues orphaned judged queue rows and restores resumable lo
   expect(healthBody.storageHealth.promptCounts.judged).toBe(0)
   expect(healthBody.storageHealth.outboxRowCount).toBe(0)
   expect(healthBody.storageHealth.orphanedJudgedRowCount).toBe(0)
+})
+
+test('repair orphaned queue route requeues only orphaned judged queue rows', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `repair-orphaned-queue-project-${Date.now()}`
+  const modelId = `repair-orphaned-queue-model-${Date.now()}`
+  const connectionId = `repair-orphaned-queue-connection-${Date.now()}`
+  const jobId = `repair-orphaned-queue-job-${Date.now()}`
+  const articleId = `repair-orphaned-queue-article-${Date.now()}`
+  const promptId = `repair-orphaned-queue-prompt-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.article (id, article_id, article_title, article_created_at, article_updated_at)
+    VALUES (
+      '${articleId}',
+      'external-${articleId}',
+      'Repair orphaned queue article',
+      TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+      TIMESTAMPTZ '2026-04-01T00:00:00.000Z'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES ('${promptId}', 'Repair orphaned queue prompt', '${promptId}-hash')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'paused', 'draining')
+  `)
+  await insertOrphanedJudgedQueueFixture({articleId, jobId, promptId})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/repair-orphaned-queue`, {method: 'POST'}),
+  )
+  const body = (await response.json()) as {
+    data: {
+      action: string
+      changes: {deletedOrphanedJudgedRows: number; requeuedOrphanedJudgedRows: number}
+      job: {status: string; storageState: string}
+      liveSqlite: {orphanedJudgedRowCount?: number; promptCounts: {judged: number; ready: number}}
+      ok: boolean
+    }
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.action).toBe('repair_orphaned_queue')
+  expect(body.data.ok).toBe(true)
+  expect(body.data.changes.requeuedOrphanedJudgedRows).toBe(1)
+  expect(body.data.changes.deletedOrphanedJudgedRows).toBe(0)
+  expect(body.data.job.status).toBe('paused')
+  expect(body.data.job.storageState).toBe('active')
+  expect(body.data.liveSqlite.promptCounts.ready).toBe(1)
+  expect(body.data.liveSqlite.promptCounts.judged).toBe(0)
+  expect(body.data.liveSqlite.orphanedJudgedRowCount).toBe(0)
 })
 
 test('repair route captures explicit system sqlite fallback results without changing normal repair flows', async () => {

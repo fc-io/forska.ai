@@ -1,7 +1,20 @@
 import {fetchJudgmentsJobs} from '../../../../services/judgmentsJobsService'
 
-export type JobHealthBadge = 'Healthy' | 'Draining' | 'Large WAL' | 'Quarantined' | 'Retained Outbox' | 'Stale Import'
-export type JobHealthFilter = 'draining' | 'quarantined' | 'retainedOutbox' | 'largeWal' | 'staleImport'
+export type JobHealthBadge =
+  | 'Healthy'
+  | 'Draining'
+  | 'Large WAL'
+  | 'Orphaned Local Queue'
+  | 'Quarantined'
+  | 'Retained Outbox'
+  | 'Stale Import'
+export type JobHealthFilter =
+  | 'draining'
+  | 'quarantined'
+  | 'orphanedLocalQueue'
+  | 'retainedOutbox'
+  | 'largeWal'
+  | 'staleImport'
 export type JudgmentsJobsData = Awaited<ReturnType<typeof fetchJudgmentsJobs>>
 export type JudgmentsJobListItem = JudgmentsJobsData[number]
 
@@ -17,6 +30,7 @@ export const judgmentsJobsQueryKey = ['judgments-jobs'] as const
 export const judgmentJobsHealthFilterLabels: Record<JobHealthFilter, string> = {
   draining: 'Draining',
   quarantined: 'Quarantined',
+  orphanedLocalQueue: 'Orphaned Local Queue',
   retainedOutbox: 'Retained Outbox',
   largeWal: 'Large WAL',
   staleImport: 'Stale Import',
@@ -71,6 +85,8 @@ export const getHealthBadgeColor = (badge: JobHealthBadge) => {
       return 'bg-amber-50 text-amber-700 ring-amber-200'
     case 'Quarantined':
       return 'bg-red-50 text-red-700 ring-red-200'
+    case 'Orphaned Local Queue':
+      return 'bg-rose-50 text-rose-700 ring-rose-200'
     case 'Retained Outbox':
       return 'bg-violet-50 text-violet-700 ring-violet-200'
     case 'Large WAL':
@@ -109,11 +125,13 @@ export const jobMatchesHealthFilter = (job: JudgmentsJobListItem, filter: JobHea
     ? job.storageState === 'draining'
     : filter === 'quarantined'
       ? job.storageState === 'quarantined'
-      : filter === 'retainedOutbox'
-        ? job.health.badges.includes('Retained Outbox')
-        : filter === 'largeWal'
-          ? job.health.badges.includes('Large WAL')
-          : job.health.badges.includes('Stale Import')
+      : filter === 'orphanedLocalQueue'
+        ? job.health.badges.includes('Orphaned Local Queue')
+        : filter === 'retainedOutbox'
+          ? job.health.badges.includes('Retained Outbox')
+          : filter === 'largeWal'
+            ? job.health.badges.includes('Large WAL')
+            : job.health.badges.includes('Stale Import')
 }
 
 export const getJobRiskScore = (job: JudgmentsJobListItem) => {
@@ -124,13 +142,15 @@ export const getJobRiskScore = (job: JudgmentsJobListItem) => {
         ? 16
         : badge === 'Draining'
           ? 8
-          : badge === 'Stale Import'
+          : badge === 'Orphaned Local Queue'
             ? 4
-            : badge === 'Retained Outbox'
-              ? 2
-              : badge === 'Large WAL'
-                ? 1
-                : 0)
+            : badge === 'Stale Import'
+              ? 4
+              : badge === 'Retained Outbox'
+                ? 2
+                : badge === 'Large WAL'
+                  ? 1
+                  : 0)
     )
   }, 0)
 }

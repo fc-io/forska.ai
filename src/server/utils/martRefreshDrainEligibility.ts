@@ -7,7 +7,7 @@ export const shouldRunMartRefreshDrainForDuckdbMemoryLimit = (duckdbMemoryLimit:
 
   return (
     maintenanceWorkerDuckdbMemoryLimitMiB === null
-    || maintenanceWorkerDuckdbMemoryLimitMiB > lowMemoryMartRefreshMaintenanceWorkerDuckdbLimitMiB
+    || maintenanceWorkerDuckdbMemoryLimitMiB >= lowMemoryMartRefreshMaintenanceWorkerDuckdbLimitMiB
   )
 }
 

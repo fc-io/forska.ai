@@ -308,7 +308,7 @@ export const runProjectMartRefreshWorkerCycle = async (
       await dependencies.largeRebuildStateService.queueLargeRebuild({
         now: getWorkerNow(options.now),
         projectId: claim.projectId,
-        rebuildPhase: 'prompt_answer_fact',
+        rebuildPhase: 'judgment_fact',
         refreshToken: claim.claimedToken,
       })
       await dependencies.stateService.releaseProjectRefreshClaim({

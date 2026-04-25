@@ -125,11 +125,14 @@ const HealthSummaryStrip = () => {
         return {
           draining: job.storageState === 'draining' ? acc.draining + 1 : acc.draining,
           quarantined: job.storageState === 'quarantined' ? acc.quarantined + 1 : acc.quarantined,
+          orphanedLocalQueue: job.health.badges.includes('Orphaned Local Queue')
+            ? acc.orphanedLocalQueue + 1
+            : acc.orphanedLocalQueue,
           retainedOutbox: job.health.badges.includes('Retained Outbox') ? acc.retainedOutbox + 1 : acc.retainedOutbox,
           staleImport: job.health.badges.includes('Stale Import') ? acc.staleImport + 1 : acc.staleImport,
         }
       },
-      {draining: 0, quarantined: 0, retainedOutbox: 0, staleImport: 0},
+      {draining: 0, quarantined: 0, orphanedLocalQueue: 0, retainedOutbox: 0, staleImport: 0},
     )
   })
 
@@ -143,6 +146,9 @@ const HealthSummaryStrip = () => {
           </span>
           <span class="rounded-full bg-red-50 px-3 py-1 text-red-700 ring-1 ring-inset ring-red-200">
             {counts().quarantined} quarantined
+          </span>
+          <span class="rounded-full bg-rose-50 px-3 py-1 text-rose-700 ring-1 ring-inset ring-rose-200">
+            {counts().orphanedLocalQueue} orphaned local queue
           </span>
           <span class="rounded-full bg-violet-50 px-3 py-1 text-violet-700 ring-1 ring-inset ring-violet-200">
             {counts().retainedOutbox} retained outbox

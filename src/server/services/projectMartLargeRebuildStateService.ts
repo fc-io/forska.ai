@@ -170,11 +170,14 @@ const queueLargeRebuild = async ({
     await tx.run(`
       UPDATE app.project_mart_large_rebuild_state
       SET
-        refresh_token = GREATEST(refresh_token, ${refreshToken}),
-        rebuild_phase = ${getSqlLiteral(rebuildPhase)},
-        cursor_article_created_at = ${queuedCursorArticleCreatedAtSql},
-        cursor_article_id = ${queuedCursorArticleIdSql},
-        target_generation = ${targetGeneration === undefined ? 'target_generation' : getSqlLiteral(targetGeneration)},
+        refresh_token = CASE WHEN refresh_token > 0 THEN refresh_token ELSE ${refreshToken} END,
+        rebuild_phase = CASE WHEN refresh_token > 0 THEN rebuild_phase ELSE ${getSqlLiteral(rebuildPhase)} END,
+        cursor_article_created_at = CASE WHEN refresh_token > 0 THEN cursor_article_created_at ELSE ${queuedCursorArticleCreatedAtSql} END,
+        cursor_article_id = CASE WHEN refresh_token > 0 THEN cursor_article_id ELSE ${queuedCursorArticleIdSql} END,
+        target_generation = CASE
+          WHEN refresh_token > 0 THEN target_generation
+          ELSE ${targetGeneration === undefined ? 'target_generation' : getSqlLiteral(targetGeneration)}
+        END,
         refresh_status = CASE WHEN refresh_status = 'paused' THEN 'paused' ELSE 'idle' END,
         last_error = NULL,
         worker_id = NULL,

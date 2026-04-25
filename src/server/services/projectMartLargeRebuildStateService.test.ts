@@ -175,7 +175,7 @@ test('queueLargeRebuild creates and resets queued rebuild state', () => {
   expect(result.row.lastError).toBeNull()
 })
 
-test('queueLargeRebuild preserves cursor progress when requeued in the same phase', () => {
+test('queueLargeRebuild preserves active work when another rebuild is already queued', () => {
   const result = runScript<{
     row: {
       cursorArticleCreatedAt: string | null
@@ -201,13 +201,13 @@ test('queueLargeRebuild preserves cursor progress when requeued in the same phas
     await database.close()
   `)
 
-  expect(result.row?.refreshToken).toBe(11)
+  expect(result.row?.refreshToken).toBe(7)
   expect(result.row?.rebuildPhase).toBe('prompt_answer_fact')
   expect(result.row?.cursorArticleId).toBe('article-1')
   expect(new Date(result.row?.cursorArticleCreatedAt ?? '').toISOString()).toBe('2026-04-03T08:00:00.000Z')
 })
 
-test('queueLargeRebuild resets cursor progress when requeued into a new phase', () => {
+test('queueLargeRebuild does not rewind active work when requeued into a new phase', () => {
   const result = runScript<{
     row: {
       cursorArticleCreatedAt: string | null
@@ -233,10 +233,10 @@ test('queueLargeRebuild resets cursor progress when requeued into a new phase', 
     await database.close()
   `)
 
-  expect(result.row?.refreshToken).toBe(11)
-  expect(result.row?.rebuildPhase).toBe('review_article_filter_member')
-  expect(result.row?.cursorArticleId).toBeNull()
-  expect(result.row?.cursorArticleCreatedAt).toBeNull()
+  expect(result.row?.refreshToken).toBe(7)
+  expect(result.row?.rebuildPhase).toBe('prompt_answer_fact')
+  expect(result.row?.cursorArticleId).toBe('article-1')
+  expect(new Date(result.row?.cursorArticleCreatedAt ?? '').toISOString()).toBe('2026-04-03T08:00:00.000Z')
 })
 
 test('claim heartbeat complete fail and reset large rebuild state', () => {

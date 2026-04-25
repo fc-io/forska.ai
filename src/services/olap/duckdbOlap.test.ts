@@ -815,6 +815,39 @@ test('getUnassessedPairsFromDuckdb falls back to raw judgments when serving rows
   expect(duckdbRunnerMockRef.current.queries[5]).not.toContain('explanation')
 })
 
+test('getUnassessedPairsFromDuckdb compares raw queue cursors at millisecond precision', async () => {
+  duckdbRunnerMockRef.current = createDuckdbRunnerMock([
+    getPromptRows(),
+    getProjectRows('model-1'),
+    getScopeRouteRows(),
+    [],
+    [getDuckdbScopedArticleRow({id: 'article-1'})],
+    [],
+  ])
+
+  const {getUnassessedPairsFromDuckdb} = await loadDuckdbOlap()
+  await getUnassessedPairsFromDuckdb({
+    projectId: 'project-1',
+    jobId: 'job-1',
+    numberOfPromptsToGet: 10,
+    cursor: {lastArticleId: 'article-cursor', lastDate: new Date('2026-04-24T09:09:01.566Z'), priorityBucket: 0},
+  })
+
+  const rawQuery = duckdbRunnerMockRef.current.queries[4] ?? ''
+  const activityExpression =
+    "COALESCE(a.article_updated_at, a.article_created_at, a.created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')"
+
+  expect(rawQuery).toContain(
+    `date_trunc('millisecond', ${activityExpression}) < TIMESTAMPTZ '2026-04-24T09:09:01.566Z'`,
+  )
+  expect(rawQuery).toContain(
+    `date_trunc('millisecond', ${activityExpression}) = TIMESTAMPTZ '2026-04-24T09:09:01.566Z'`,
+  )
+  expect(rawQuery).toContain(
+    `ORDER BY CAST(0 AS INTEGER) DESC, date_trunc('millisecond', ${activityExpression}) DESC, a.id DESC`,
+  )
+})
+
 test('getDatabaseBasedFiltersFromDuckdb returns values when project modelId is null', async () => {
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
     getPromptRows(),
@@ -2017,7 +2050,7 @@ test('getUnassessedPairsFromDuckdb uses priority-aware cursor ordering for summa
     "CASE WHEN list_contains(s.human_answered_prompt_ids, 'summary') THEN 1 ELSE 0 END < 0",
   )
   expect(servingQuery).toContain(
-    "ORDER BY CASE WHEN list_contains(s.human_answered_prompt_ids, 'summary') THEN 1 ELSE 0 END DESC, COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') DESC, s.article_id DESC",
+    "ORDER BY CASE WHEN list_contains(s.human_answered_prompt_ids, 'summary') THEN 1 ELSE 0 END DESC, date_trunc('millisecond', COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')) DESC, s.article_id DESC",
   )
   expect(servingQuery).not.toContain('FROM app.judgment_human_summary')
 })
@@ -2071,7 +2104,7 @@ test('getUnassessedPairsFromDuckdb slices serving candidates after summary prior
     "CASE WHEN list_contains(s.human_answered_prompt_ids, 'summary') THEN 1 ELSE 0 END AS priorityBucket",
   )
   expect(servingQuery).toContain(
-    "ORDER BY CASE WHEN list_contains(s.human_answered_prompt_ids, 'summary') THEN 1 ELSE 0 END DESC, COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') DESC, s.article_id DESC",
+    "ORDER BY CASE WHEN list_contains(s.human_answered_prompt_ids, 'summary') THEN 1 ELSE 0 END DESC, date_trunc('millisecond', COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')) DESC, s.article_id DESC",
   )
 })
 
@@ -2453,7 +2486,7 @@ test('getUnassessedPairsFromDuckdb keeps prompt-mode queue scans date-first with
   ])
   expect(servingQuery).toContain('CAST(0 AS INTEGER) AS priorityBucket')
   expect(servingQuery).toContain(
-    "ORDER BY CAST(0 AS INTEGER) DESC, COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') DESC, s.article_id DESC",
+    "ORDER BY CAST(0 AS INTEGER) DESC, date_trunc('millisecond', COALESCE(s.article_updated_at, s.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')) DESC, s.article_id DESC",
   )
   expect(servingQuery).not.toContain("list_contains(s.human_answered_prompt_ids, 'summary')")
 })

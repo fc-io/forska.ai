@@ -23,6 +23,7 @@ const repairActions = new Set<JudgmentJobRepairAction>([
   'preflight',
   'quarantine',
   'repair',
+  'repair_orphaned_queue',
   'unquarantine',
 ])
 const systemSqliteFallbackSteps = new Set<JudgmentJobSystemSqliteFallbackStep>(['checkpoint', 'diagnostic', 'export'])
@@ -70,7 +71,9 @@ export const runJudgmentJobRepair = async () => {
     console.log(
       JSON.stringify({
         action: options.action,
-        error: 'Expected --jobId=<job-id> and --action=<preflight|drain|checkpoint|quarantine|unquarantine|repair>',
+        error:
+          'Expected --jobId=<job-id> and '
+          + '--action=<preflight|drain|checkpoint|quarantine|unquarantine|repair|repair_orphaned_queue>',
         jobId: options.jobId,
         status: 'failed',
         systemSqliteFallbackSteps: options.systemSqliteFallbackSteps,

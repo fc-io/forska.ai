@@ -152,6 +152,137 @@ test('project scope source batch resumes from a cursor without repeating rows', 
   expect(result.resumedBatch).toEqual([{articleId: 'article-3'}])
 })
 
+test('project scope reset and batch rebuild populate bounded scope rows', () => {
+  const result = runScript<{rows: Array<{articleId: string; inCuratedScope: boolean; inRouteScope: boolean}>}>(`
+    const batch = await executor.getProjectScopeSourceBatch({batchSize: 2, projectId: 'large-rebuild-executor-project'})
+
+    await executor.resetProjectScope('large-rebuild-executor-project')
+    await executor.rebuildProjectScopeBatch('large-rebuild-executor-project', batch)
+
+    const rows = await database.queryJson(\`
+      SELECT
+        article_id AS articleId,
+        in_curated_scope AS inCuratedScope,
+        in_route_scope AS inRouteScope
+      FROM mart.project_scope_article
+      WHERE project_id = 'large-rebuild-executor-project'
+      ORDER BY article_created_at ASC NULLS FIRST, article_id ASC
+    \`)
+
+    console.log(JSON.stringify({rows}))
+    await database.close()
+  `)
+
+  expect(result.rows).toEqual([
+    {articleId: 'article-4', inCuratedScope: false, inRouteScope: true},
+    {articleId: 'article-1', inCuratedScope: true, inRouteScope: false},
+  ])
+})
+
+test('project judgment fact reset and batch rebuild populate bounded project judgments', () => {
+  const result = runScript<{rows: Array<{answer: string | null; articleId: string; judgmentId: string}>}>(`
+    await database.run(\`
+      INSERT INTO app.prompt (id, original_text, content_hash)
+      VALUES ('prompt-judgment-fact', 'Prompt judgment fact', 'hash-judgment-fact')
+    \`)
+    await database.run(\`
+      INSERT INTO app.judgment (
+        id,
+        article_id,
+        prompt_id,
+        model_id,
+        project_id,
+        snapshot_project_id,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images,
+        is_answered,
+        answered_original,
+        answered_original_as_array,
+        confidence_original
+      ) VALUES
+        ('judgment-fact-1', 'article-1', 'prompt-judgment-fact', 'large-rebuild-executor-model', 'large-rebuild-executor-project', 'large-rebuild-executor-project', TRUE, TRUE, FALSE, FALSE, TRUE, ' yes ', NULL, 90),
+        ('judgment-fact-2', 'article-2', 'prompt-judgment-fact', 'large-rebuild-executor-model', 'large-rebuild-executor-project', 'large-rebuild-executor-project', TRUE, TRUE, FALSE, FALSE, TRUE, 'no', ['no'], 80)
+    \`)
+    await database.run(\`
+      INSERT INTO mart.judgment_fact (
+        judgment_id,
+        article_id,
+        prompt_id,
+        model_id,
+        project_id,
+        snapshot_project_id,
+        snapshot_project_model_name,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images,
+        chunking_strategy,
+        is_answered,
+        answered_original,
+        answered_original_as_array,
+        normalized_answers,
+        confidence_original,
+        explanation,
+        quotes,
+        article_title,
+        article_created_at,
+        article_updated_at,
+        article_import_route,
+        article_publication_status,
+        created_at,
+        updated_at
+      ) VALUES (
+        'stale-judgment-fact',
+        'article-3',
+        'prompt-judgment-fact',
+        'large-rebuild-executor-model',
+        'large-rebuild-executor-project',
+        'large-rebuild-executor-project',
+        NULL,
+        TRUE,
+        TRUE,
+        FALSE,
+        FALSE,
+        NULL,
+        TRUE,
+        'stale',
+        ['stale'],
+        ['stale'],
+        1,
+        NULL,
+        NULL,
+        'Article 3',
+        TIMESTAMPTZ '2026-04-02T00:00:00.000Z',
+        TIMESTAMPTZ '2026-04-02T01:00:00.000Z',
+        NULL,
+        NULL,
+        TIMESTAMPTZ '2026-04-03T00:00:00.000Z',
+        TIMESTAMPTZ '2026-04-03T00:00:00.000Z'
+      )
+    \`)
+
+    await executor.resetProjectJudgmentFact('large-rebuild-executor-project')
+    await executor.rebuildProjectJudgmentFactBatch('large-rebuild-executor-project', ['article-1'])
+
+    const rows = await database.queryJson(\`
+      SELECT
+        judgment_id AS judgmentId,
+        article_id AS articleId,
+        answered_original AS answer
+      FROM mart.judgment_fact
+      WHERE project_id = 'large-rebuild-executor-project'
+      ORDER BY judgment_id ASC
+    \`)
+
+    console.log(JSON.stringify({rows}))
+    await database.close()
+  `)
+
+  expect(result.rows).toEqual([{answer: 'yes', articleId: 'article-1', judgmentId: 'judgment-fact-1'}])
+})
+
 test('large rebuild executor defaults to the background DuckDB queue', () => {
   const result = runScript<{
     afterRead: {background: {tasksStarted: number}; main: {tasksStarted: number}}

@@ -386,11 +386,11 @@ test('routes oversized automatic full refreshes into large rebuild state before 
     'claim:worker-1:1:30000',
     'load:project-1',
     'scope:project-1',
-    'largeRebuild:project-1:prompt_answer_fact:9',
+    'largeRebuild:project-1:judgment_fact:9',
     'release:project-1',
   ])
   expect(context.queuedLargeRebuilds).toEqual([
-    {projectId: 'project-1', rebuildPhase: 'prompt_answer_fact', refreshToken: 9},
+    {projectId: 'project-1', rebuildPhase: 'judgment_fact', refreshToken: 9},
   ])
   expect(context.failed).toEqual([])
   expect(context.completed).toEqual([])
@@ -423,9 +423,9 @@ test('uses a smaller automatic full-refresh ceiling when the maintenance-worker 
 
     expect(result).toEqual({claimedToken: 9, projectId: 'project-1', status: 'completed', workerId: 'worker-1'})
     expect(context.queuedLargeRebuilds).toEqual([
-      {projectId: 'project-1', rebuildPhase: 'prompt_answer_fact', refreshToken: 9},
+      {projectId: 'project-1', rebuildPhase: 'judgment_fact', refreshToken: 9},
     ])
-    expect(context.callLog).toContain('largeRebuild:project-1:prompt_answer_fact:9')
+    expect(context.callLog).toContain('largeRebuild:project-1:judgment_fact:9')
     expect(context.callLog).not.toContain('judgment:article-1')
     expect(context.callLog).not.toContain('project:project-1')
   } finally {

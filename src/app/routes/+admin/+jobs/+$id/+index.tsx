@@ -192,7 +192,14 @@ type JobData = {
   error?: string[]
 }
 
-type JobRepairAction = 'checkpoint' | 'drain' | 'preflight' | 'quarantine' | 'repair' | 'unquarantine'
+type JobRepairAction =
+  | 'checkpoint'
+  | 'drain'
+  | 'preflight'
+  | 'quarantine'
+  | 'repair'
+  | 'repair_orphaned_queue'
+  | 'unquarantine'
 
 const shouldShowFulltextSkippedFromJob = (job: unknown) => {
   return isRecord(job) ? Boolean(job.useFulltext || job.useFulltextNoImages) : false
@@ -433,12 +440,16 @@ const AdminJudgmentJobDetail = () => {
               return [
                 {action: 'preflight', label: 'Run Preflight'},
                 {action: 'checkpoint', label: 'Checkpoint WAL'},
+                {action: 'repair_orphaned_queue', label: 'Repair Orphaned Queue'},
                 {action: 'drain', label: 'Drain Storage'},
-                {action: 'repair', label: 'Repair Storage'},
+                {action: 'repair', label: 'Repair All Storage'},
               ] as const
             }
             const isLiveRepairButtonDisabled = (action: JobRepairAction) => {
-              return isOfflineRepairOnly() && (action === 'drain' || action === 'repair')
+              return (
+                isOfflineRepairOnly()
+                && (action === 'drain' || action === 'repair' || action === 'repair_orphaned_queue')
+              )
             }
             const recoveryGuidance = () => {
               const hasRetainedLocalState =
@@ -462,7 +473,7 @@ const AdminJudgmentJobDetail = () => {
                   ? {
                       lines: [
                         'This job has judged local queue rows with no SQLite outbox payload.',
-                        'Use Repair Storage to move recoverable orphaned rows back to Ready state.',
+                        'Use Repair Orphaned Queue to move recoverable rows back to Ready state in bounded batches.',
                         'Do not use Drain Storage until the orphaned local queue count reaches zero.',
                       ],
                       title: 'Repair required',
@@ -828,9 +839,13 @@ const AdminJudgmentJobDetail = () => {
                       <p class="font-medium mt-1">{storageHealth()?.outboxRowCount ?? 0}</p>
                       <p class="text-xs text-gray-500 mt-1">
                         Claimed: {storageHealth()?.claimedOutboxCount ?? 0} | Retained:{' '}
-                        {storageHealth()?.retainedRowCount ?? 0} | Orphaned judged:{' '}
-                        {storageHealth()?.orphanedJudgedRowCount ?? 0}
+                        {storageHealth()?.retainedRowCount ?? 0}
                       </p>
+                    </div>
+                    <div class="bg-gray-50 rounded-lg p-4">
+                      <p class="text-sm text-gray-500">Orphaned Local Queue</p>
+                      <p class="font-medium mt-1">{storageHealth()?.orphanedJudgedRowCount ?? 0}</p>
+                      <p class="text-xs text-gray-500 mt-1">Repair processes up to 1,000 rows per action.</p>
                     </div>
                     <div class="bg-gray-50 rounded-lg p-4 md:col-span-2 xl:col-span-1">
                       <p class="text-sm text-gray-500">Recent Outbox Flow</p>

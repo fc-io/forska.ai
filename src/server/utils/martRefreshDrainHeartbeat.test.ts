@@ -20,28 +20,51 @@ const getLastJsonLine = (value: string) => {
   return lastLine
 }
 
-test('startMartRefreshDrainHeartbeat is inert and returns a stop function', () => {
+test('startMartRefreshDrainHeartbeat starts protected consumers at the low-memory cap', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
       '-e',
       `
+        const {mock} = await import('bun:test')
+
         const getModulePath = (relativePath) => {
           return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
         }
 
         const martRefreshDrainHeartbeatModulePath = getModulePath('./src/server/utils/martRefreshDrainHeartbeat.ts')
-        const {startMartRefreshDrainHeartbeat} = await import(martRefreshDrainHeartbeatModulePath + '?inert=' + Date.now())
+        const projectMartLargeRebuildHeartbeatModulePath = getModulePath('./src/server/utils/projectMartLargeRebuildHeartbeat.ts')
+        const projectMartRefreshWorkerHeartbeatModulePath = getModulePath('./src/server/utils/projectMartRefreshWorkerHeartbeat.ts')
+        const events = []
+
+        process.env.DUCKDB_MEMORY_LIMIT = '6400MiB'
+
+        void mock.module(projectMartLargeRebuildHeartbeatModulePath, () => {
+          return {
+            startProjectMartLargeRebuildHeartbeat: (options) => {
+              events.push(['largeRebuildStart', options.pollIntervalMs])
+              return () => {
+                events.push(['largeRebuildStop'])
+              }
+            },
+          }
+        })
+        void mock.module(projectMartRefreshWorkerHeartbeatModulePath, () => {
+          return {
+            startProjectMartRefreshWorkerHeartbeat: (options) => {
+              events.push(['refreshWorkerStart', options.pollIntervalMs])
+              return () => {
+                events.push(['refreshWorkerStop'])
+              }
+            },
+          }
+        })
+
+        const {startMartRefreshDrainHeartbeat} = await import(martRefreshDrainHeartbeatModulePath + '?low-memory=' + Date.now())
         const stop = startMartRefreshDrainHeartbeat({intervalMs: 10})
 
-        try {
-          await new Promise((resolve) => {
-            setTimeout(resolve, 25)
-          })
-          console.log(JSON.stringify({stopType: typeof stop}))
-        } finally {
-          stop()
-        }
+        stop()
+        console.log(JSON.stringify({events, stopType: typeof stop}))
       `,
     ],
     {cwd: process.cwd(), env: {...process.env}},
@@ -49,11 +72,20 @@ test('startMartRefreshDrainHeartbeat is inert and returns a stop function', () =
 
   if (runScript.exitCode !== 0) {
     throw new Error(
-      runScript.stderr.toString() || runScript.stdout.toString() || 'Mart refresh heartbeat inert test failed',
+      runScript.stderr.toString() || runScript.stdout.toString() || 'Mart refresh heartbeat low-memory test failed',
     )
   }
 
-  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {stopType: string}
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    events: Array<Array<number | string>>
+    stopType: string
+  }
 
+  expect(result.events).toEqual([
+    ['refreshWorkerStart', 10],
+    ['largeRebuildStart', 10],
+    ['refreshWorkerStop'],
+    ['largeRebuildStop'],
+  ])
   expect(result.stopType).toBe('function')
 })

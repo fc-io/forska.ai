@@ -110,6 +110,7 @@ type JudgmentJobHealthBadge =
   | 'Draining'
   | 'Large WAL'
   | 'Offline Repair'
+  | 'Orphaned Local Queue'
   | 'Quarantined'
   | 'Retained Outbox'
   | 'Stale Import'
@@ -277,6 +278,7 @@ const staleImportThresholdMs = 15 * 60 * 1_000
 const largeWalThresholdBytes = 64 * 1_024 * 1_024
 const unassessedCountCache = new Map<string, UnassessedCountCacheValue>()
 const articleScopedLargeRebuildPhases = new Set([
+  'judgment_fact',
   'prompt_answer_fact',
   'review_article_filter_member',
   'review_article_rollup',
@@ -1285,6 +1287,10 @@ const getJobHealthBadges = ({
 
   if (isStaleImportJob(job)) {
     badges.push('Stale Import')
+  }
+
+  if (hasOrphanedJudgedQueue(sqliteHealth)) {
+    badges.push('Orphaned Local Queue')
   }
 
   if (hasRetainedOutbox(sqliteHealth)) {
@@ -2538,6 +2544,9 @@ export const judgmentsJobsRoutes = new Elysia()
             quarantined: jobsWithHealth.filter(({job}) => {
               return job.storageState === 'quarantined'
             }).length,
+            orphanedLocalQueue: jobsWithHealth.filter(({sqliteHealth}) => {
+              return hasOrphanedJudgedQueue(sqliteHealth)
+            }).length,
             retainedOutbox: jobsWithHealth.filter(({sqliteHealth}) => {
               return hasRetainedOutbox(sqliteHealth)
             }).length,
@@ -2798,6 +2807,29 @@ export const judgmentsJobsRoutes = new Elysia()
       return {
         data: await runJudgmentJobRepairAction({
           action: 'repair',
+          claimedBy: body?.claimedBy,
+          jobId: params.id,
+          systemSqliteFallbackSteps: body?.systemSqliteFallbackSteps,
+        }),
+        error: null,
+      }
+    },
+    {
+      params: t.Object({id: t.String()}),
+      body: t.Optional(
+        t.Object({
+          claimedBy: t.Optional(t.String()),
+          systemSqliteFallbackSteps: t.Optional(systemSqliteFallbackStepsSchema),
+        }),
+      ),
+    },
+  )
+  .post(
+    '/api/judgmentsjobs/:id/repair-orphaned-queue',
+    async ({params, body}) => {
+      return {
+        data: await runJudgmentJobRepairAction({
+          action: 'repair_orphaned_queue',
           claimedBy: body?.claimedBy,
           jobId: params.id,
           systemSqliteFallbackSteps: body?.systemSqliteFallbackSteps,

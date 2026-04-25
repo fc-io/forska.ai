@@ -1528,19 +1528,24 @@ const getDuckdbUnassessedPairsCursorWhereClause = (params: {
 }) => {
   const cursor = getUnassessedPairsCursor(params.cursor)
   const priorityBucket = cursor?.priorityBucket ?? 0
+  const cursorActivityExpression = getDuckdbUnassessedPairsCursorActivityExpression(params.activityExpression)
 
   return `(
     ${params.priorityBucketExpression} < ${priorityBucket}
     OR (
       ${params.priorityBucketExpression} = ${priorityBucket}
-      AND ${params.activityExpression} < ${getDuckdbTimestampLiteral(params.cursor.lastDate)}
+      AND ${cursorActivityExpression} < ${getDuckdbTimestampLiteral(params.cursor.lastDate)}
     )
     OR (
       ${params.priorityBucketExpression} = ${priorityBucket}
-      AND ${params.activityExpression} = ${getDuckdbTimestampLiteral(params.cursor.lastDate)}
+      AND ${cursorActivityExpression} = ${getDuckdbTimestampLiteral(params.cursor.lastDate)}
       AND ${params.articleIdExpression} < ${getDuckdbSqlString(params.cursor.lastArticleId)}
     )
   )`
+}
+
+const getDuckdbUnassessedPairsCursorActivityExpression = (activityExpression: string) => {
+  return `date_trunc('millisecond', ${activityExpression})`
 }
 
 const getDuckdbUnassessedPairsOrderByClause = (params: {
@@ -1548,7 +1553,7 @@ const getDuckdbUnassessedPairsOrderByClause = (params: {
   articleIdExpression: string
   priorityBucketExpression: string
 }) => {
-  return `${params.priorityBucketExpression} DESC, ${params.activityExpression} DESC, ${params.articleIdExpression} DESC`
+  return `${params.priorityBucketExpression} DESC, ${getDuckdbUnassessedPairsCursorActivityExpression(params.activityExpression)} DESC, ${params.articleIdExpression} DESC`
 }
 
 const getCreatedSortMs = (article: ScopedArticleRow) => {

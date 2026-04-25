@@ -235,7 +235,7 @@ export const runProjectMartRefreshWorkerOnceIsolated = async () => {
             await largeRebuildStateService.queueLargeRebuild({
               now: new Date(),
               projectId: claim.projectId,
-              rebuildPhase: 'prompt_answer_fact',
+              rebuildPhase: 'judgment_fact',
               refreshToken: claim.claimedToken,
             })
             await stateService.releaseProjectRefreshClaim({projectId: claim.projectId, workerId: options.workerId})

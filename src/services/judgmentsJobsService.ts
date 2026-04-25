@@ -1,7 +1,14 @@
 import {apiClient} from './apiClient.ts'
 import {handleApiResponse} from './utils/handleApiResponse'
 
-export type JudgmentJobRepairAction = 'checkpoint' | 'drain' | 'preflight' | 'quarantine' | 'repair' | 'unquarantine'
+export type JudgmentJobRepairAction =
+  | 'checkpoint'
+  | 'drain'
+  | 'preflight'
+  | 'quarantine'
+  | 'repair'
+  | 'repair_orphaned_queue'
+  | 'unquarantine'
 export type JudgmentJobPromptStats = {claimed: number; judged: number; ready: number; running: number; skipped: number}
 export type JudgmentJobRequestStats = {
   attempts: number
@@ -62,6 +69,7 @@ type JudgmentJobRepairResponse = {
     claimedOutboxCount: number
     lastAckSeq: number | null
     oldestUnexportedAgeMs: number | null
+    orphanedJudgedRowCount: number
     outboxRowCount: number
     promptCounts: {claimed: number; judged: number; ready: number; running: number; skipped: number}
     retainedRowCount: number
@@ -206,7 +214,9 @@ export const runJudgmentsJobRepairAction = async ({
             ? await apiClient.api.judgmentsjobs({id: jobId}).quarantine.post({reason})
             : action === 'unquarantine'
               ? await apiClient.api.judgmentsjobs({id: jobId}).unquarantine.post()
-              : await apiClient.api.judgmentsjobs({id: jobId}).repair.post({})
+              : action === 'repair_orphaned_queue'
+                ? await apiClient.api.judgmentsjobs({id: jobId})['repair-orphaned-queue'].post({})
+                : await apiClient.api.judgmentsjobs({id: jobId}).repair.post({})
 
   const result = handleApiResponse(response, `Failed to ${action} local storage`)
   return ('data' in result ? result.data : result) as JudgmentJobRepairResponse
