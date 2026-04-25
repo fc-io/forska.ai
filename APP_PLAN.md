@@ -8,20 +8,65 @@
 - Require no manual Bun, Node, DuckDB CLI, or repo checkout for normal end users.
 - Store user data, caches, logs, and imported assets in per-user app directories instead of the repo root.
 
+## Current Status Summary
+
+- Status as of 2026-04-25: this is an active desktop feasibility spike, not a releasable installer yet.
+- The local ElectroBun dev path is working enough to prove the basic shape: desktop shell, Bun backend sidecar, packaged frontend loading, API bridge, startup UI, logs, and single-instance protection.
+- The release path is still unproven: unsigned artifacts, Windows launch, native dependency packaging, signed installers, and remote upgrades are not complete.
+- Current plan progress is roughly one quarter done by checklist count, with the remaining work concentrated in packaging, cross-platform hardening, native dependency verification, signing, release operations, and upgrades.
+
+### Done Now
+
+- ElectroBun is selected as the first shell, with Electron kept as the fallback.
+- `bun run desktop:dev` and `bun run desktop:build` exist.
+- The desktop shell starts a separate Bun backend in `SERVER_ROLE=dev-single`.
+- The desktop shell waits for backend readiness before showing the main UI.
+- Startup splash and startup error screens exist.
+- Desktop single-instance protection exists.
+- Frontend API origin can come from desktop runtime config while browser dev mode keeps its normal behavior.
+- Provider runtime records, Covidence import files, DuckDB path defaults, and backend launcher logs have at least an initial app-owned path story.
+- `src/server/utils/duckdbBinary.ts` no longer assumes `:` for `PATH` parsing on Windows.
+
+### Not Done Yet
+
+- There is no confirmed unsigned macOS artifact smoke test.
+- There is no confirmed unsigned Windows artifact smoke test.
+- Packaged `@duckdb/node-api`, Bun SQLite, DuckDB migrations, SQLite job state, and restart/crash recovery are not verified.
+- The Windows strategy for `sqlite3`, subprocess lookup, spaces in profile paths, firewall prompts, and loopback behavior is unresolved.
+- Release signing, notarization, installer generation, CI artifact publishing, and remote upgrades are not implemented.
+- App diagnostics, "Open data folder", "Open logs folder", and recovery UX for locked or corrupt local state are not implemented.
+
+### Recommended Next Steps
+
+- Finish the desktop runtime path audit so all writable files land under app-owned user directories in packaged mode.
+- Run a local macOS artifact smoke test: build, launch, quit, relaunch, confirm API, confirm data/log paths.
+- Run a Windows artifact smoke test on a native Windows machine or CI runner.
+- Verify native dependencies and migrations inside packaged artifacts before investing in signing and auto-update UX.
+- Decide the external binary policy for Bun, DuckDB CLI, `sqlite3`, and Codex CLI.
+- Add the remote upgrade pipeline only after basic unsigned artifacts are reliable on macOS and Windows.
+
+### Windows Current Answer
+
+- Source/dev mode on Windows should be treated as possible but unverified.
+- Packaged Windows usage is not ready for end users until a native Windows artifact has passed launch, quit, relaunch, API connectivity, data path, and native dependency smoke tests.
+- Build Windows artifacts on Windows or on a native Windows CI runner; do not rely on macOS cross-building for the release decision.
+
 ## Current Repo Fit
 
 - This repo is already close to a desktop product shape: Bun/Elysia backend, Solid/Vite frontend, DuckDB local data, SQLite local job state, and single-user local-first defaults.
 - `src/server/utils/getDuckdbPath.ts` already has platform-aware default DB locations for macOS, Windows, and Linux.
 - The main packaging risk is not the UI. The risk is the runtime surface: Bun APIs, native DB dependencies, local subprocesses, CLI fallbacks, and repo-root file assumptions.
-- `src/appServer.ts` exists mainly to serve the built web app in a browser. A desktop shell can remove that extra process if the renderer loads packaged assets directly.
+- `src/appServer.ts` exists mainly to serve the built web app in a browser. The desktop shell can avoid that extra process by loading packaged renderer assets directly.
 
-## Repo Hotspots To Fix
+## Repo Findings And Hotspots
 
-- `src/utils/providerRuntimeRecords.ts` writes runtime records under `cache/providerRuntimeRecords`, which should move to an app cache path.
-- `src/server/services/covidenceImportService.ts` writes imports under `assets/covidence_imports`, which should move to a user-data or imports path.
-- `src/server/utils/duckdbBinary.ts` splits `PATH` on `:`, which is not Windows-safe.
-- `src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts` shells out to `sqlite3` for fallback repair flows, so Windows packaging needs an explicit strategy there.
-- `src/server/utils/getCodexAppServerClient.ts` assumes Bun-global and macOS-style binary lookup paths, so packaged builds need platform-aware resolution.
+- [x] `src/utils/providerRuntimeRecords.ts` now goes through `resolveRuntimeWritablePath({pathValue: 'cache/providerRuntimeRecords'})`, so desktop mode can move runtime records under the desktop data root.
+- [x] `src/server/services/covidenceImportService.ts` now uses runtime path helpers for `assets/covidence_imports`, so desktop mode can move imports under the desktop data root.
+- [x] `src/server/utils/duckdbBinary.ts` uses platform-aware `PATH` separators and `.exe` candidates.
+- [ ] `src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts` still shells out to `sqlite3` for fallback repair flows, so Windows packaging needs an explicit strategy.
+- [ ] `src/server/utils/getCodexAppServerClient.ts` still needs a platform-aware packaged-build audit for Bun-global and macOS-style binary lookup assumptions.
+- [ ] Packaged builds still need an audit of every runtime write that can touch `cache/`, `assets/`, temp files, lock files, exports, logs, DuckDB, SQLite, or generated diagnostics.
+- [ ] `electrobun.config.ts` currently has no `release.baseUrl`, and `src/desktop/index.ts` does not use ElectroBun's `Updater`, so remote upgrades are not wired yet.
 
 ## Options
 
@@ -78,12 +123,14 @@
 - Run one packaged Bun backend process in `SERVER_ROLE=dev-single` first unless load testing proves the split API/worker model is necessary on user machines.
 - Load the built frontend directly inside the desktop shell and inject the API origin from the shell, so `src/appServer.ts` becomes optional instead of required.
 - Keep desktop support additive, not replacing the existing browser/server entrypoints.
+- Add remote upgrades only after unsigned macOS and Windows artifacts are repeatable and native dependencies are verified in packaged mode.
 - Treat Electron as the fallback shell if ElectroBun blocks signed installers, native module packaging, or stable macOS/Windows distribution.
 - Keep Tauri as the likely later optimization path if installer size becomes a priority.
 
 ## ElectroBun Success And Fallback Criteria
 
 - Stay on ElectroBun if we can boot the app reliably on macOS and Windows, bundle the Bun backend, package `@duckdb/node-api`, and produce installable signed artifacts.
+- Stay on ElectroBun if its update mechanism can check, download, apply, and relaunch signed macOS and Windows builds without damaging local user data.
 - Fall back to Electron if ElectroBun blocks any of these for too long: app startup reliability, native module packaging, code signing, notarization, Windows installer generation, or update strategy.
 - Preserve the current backend/frontend split so a shell swap stays low-risk if fallback is needed.
 
@@ -114,7 +161,7 @@
 - [x] Load the existing frontend build inside the ElectroBun window without changing current browser dev commands.
 - [x] Add a desktop runtime config path so the frontend can read a shell-provided API origin while browser mode keeps its current behavior.
 - [x] Launch the Bun backend as a separate desktop sidecar in `SERVER_ROLE=dev-single` and wait for a ready signal before showing the main window.
-- [ ] Add a minimal desktop-mode path helper for DB, cache, imports, temp files, and logs so packaged runs stop depending on repo-root writes.
+- [ ] Complete the desktop-mode path helper and audit for DB, cache, imports, temp files, exports, lock files, and logs so packaged runs stop depending on repo-root writes.
 - [ ] Verify migrations, DuckDB boot, SQLite job state, and `@duckdb/node-api` all work in desktop mode on a local smoke run.
 - [ ] Produce one unsigned macOS artifact and confirm launch, quit, relaunch, and basic in-app API connectivity.
 - [ ] Produce one unsigned Windows artifact and confirm launch, quit, relaunch, and basic in-app API connectivity.
@@ -140,7 +187,8 @@
 - Packaged `@duckdb/node-api` verification is still pending on macOS and Windows.
 - Windows strategy for the `sqlite3` fallback flow in `judgmentJobSqliteService.ts` is still unresolved.
 - Packaged Codex CLI and Bun binary path resolution still need a platform-aware audit.
-- Signing, notarization, installer generation, and update strategy are not started.
+- Signing, notarization, installer generation, and remote upgrade strategy are not started.
+- `electrobun.config.ts` has no release host configured, and the desktop shell does not call `Updater.checkForUpdate`, `Updater.downloadUpdate`, or `Updater.applyUpdate`.
 
 ### Spike Quality Gates
 
@@ -298,12 +346,31 @@
 - [ ] App recovers from forced quit during active work.
 - [ ] Uninstall leaves or removes data according to the chosen product rule.
 
-### 15. Release Operations
+### 15. Remote Upgrade Strategy
+
+- [ ] Decide whether remote upgrades ship in v1 or wait until after stable signed installer releases.
+- [ ] Add a release host decision: S3, Cloudflare R2, GitHub Releases, or another static host.
+- [ ] Add `release.baseUrl` to `electrobun.config.ts` once the release host is chosen.
+- [ ] Add release channels, at minimum `stable`; optionally add `canary` for internal smoke builds.
+- [ ] Add build scripts for channel builds, for example `desktop:build:stable` and `desktop:build:canary`.
+- [ ] Add native CI jobs that build macOS and Windows artifacts on their own OS runners.
+- [ ] Upload all generated update metadata, full artifacts, and patch artifacts to the release host.
+- [ ] Keep older patch artifacts available so older installed versions can step through upgrades.
+- [ ] Add desktop updater wiring in the shell with explicit states: idle, checking, available, downloading, ready, applying, failed, and up to date.
+- [ ] Add a manual "Check for updates" affordance in Settings or diagnostics before enabling background update checks.
+- [ ] Decide whether update downloads should happen automatically or only after user confirmation.
+- [ ] Before applying an update, pause or drain background work, stop the backend sidecar cleanly, then apply and relaunch.
+- [ ] Preserve user data across upgrades by keeping DuckDB, SQLite, imports, logs, settings, and provider secrets outside the install directory.
+- [ ] Add an upgrade compatibility policy for database migrations: never downgrade schemas silently, record app version at migration time, and surface failed migrations with a recovery path.
+- [ ] Add a rollback policy: publish a higher version to recover from a bad release rather than replacing an existing version in place.
+- [ ] Add signed-update verification gates before enabling updates for normal users.
+- [ ] Document the Electron fallback equivalent: `electron-builder` plus `electron-updater`, should ElectroBun updates fail the smoke gates.
+
+### 16. Release Operations
 
 - [ ] Add CI jobs for desktop artifact builds.
 - [ ] Add versioning rules for app releases versus backend changes.
 - [ ] Add a manual release checklist for signing, smoke tests, and rollback.
-- [ ] Decide whether auto-update ships in v1 or only after stable installer releases.
 - [ ] Publish platform-specific install docs and troubleshooting notes.
 
 ## Quality Gates
@@ -322,6 +389,9 @@
 - macOS verify: clean install, first launch, restart, import one dataset, configure one provider, then quit and relaunch successfully.
 - Windows verify: clean install, first launch, restart, import one dataset, configure one provider, then quit and relaunch successfully.
 - Packaged app verify: all writable files land in app-owned user directories, not the repo root or install directory.
+- Upgrade verify: install version N-1, create local data, publish version N, check for update, download, apply, relaunch, and confirm local data is intact.
+- Upgrade verify: failed update download or failed apply leaves the current app version and user data usable.
+- Upgrade verify: app version, release channel, update status, data path, and log path are visible in diagnostics.
 
 ## Commands Run For This Plan
 
@@ -344,4 +414,5 @@
 - First launch creates local storage safely and runs required migrations.
 - Restart, crash recovery, import flows, and background work all function in packaged mode.
 - User data lives in stable per-user OS app directories.
+- Remote upgrades can update the app without touching local user data, and failures leave the previous app usable.
 - The same packaging strategy leaves a clear path for Linux later.
