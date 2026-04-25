@@ -23,6 +23,7 @@ const appReadOnlyDatabaseServiceModulePath = new URL('../../services/appReadOnly
 const appReadOnlyQueryServiceModulePath = new URL('../../services/getAppReadOnlyQueryService.ts', import.meta.url)
   .pathname
 const ensureFullTextModulePath = new URL('../../utils/ensureFullText.ts', import.meta.url).pathname
+const judgeWorkerCompletionJournalModulePath = new URL('./judgeWorkerCompletionJournal.ts', import.meta.url).pathname
 const sqliteServiceModulePath = new URL('./judgmentJobSqliteService.ts', import.meta.url).pathname
 const getRealJudgeWorkerReadOnlyAppDatabaseService = realReadOnlyDatabaseModule.getJudgeWorkerReadOnlyAppDatabaseService
 const getRealJudgeWorkerReadOnlyAppQueryService = realReadOnlyQueryModule.getJudgeWorkerReadOnlyAppQueryService
@@ -120,8 +121,78 @@ const getFullArticlesByIds = mock(async (_articleIds: string[], _options: unknow
 const ensureFullTextMock = mock(async (article: {fullText: string | null}) => {
   return {reason: 'no_fulltext' as const, shouldSkip: true, text: article.fullText ?? 'Full text'}
 })
+const createOwnerBackedSnapshot = (overrides: Partial<Record<string, unknown>> = {}) => {
+  return {
+    articleId: 'article-a',
+    claimId: 'claim-a',
+    createdAt: null,
+    createdBy: 'server-a',
+    executionSnapshotHash: 'snapshot-hash-a',
+    executionSnapshotId: 'snapshot-a',
+    jobId: 'job-a',
+    modelId: 'model-a',
+    payload: {
+      article: {
+        articleCreatedAt: '2026-04-25T10:00:00.000Z',
+        articleId: 'external-article-a',
+        articleSummary: 'Snapshot summary',
+        articleTitle: 'Snapshot title',
+        articleUpdatedAt: '2026-04-25T10:05:00.000Z',
+        articleVersion: 1,
+        contentHash: 'content-hash-a',
+        doi: null,
+        fullText: 'Snapshot full text',
+        fullTextAssets: null,
+        fullTextCharCount: 18,
+        fullTextConversionAttempts: null,
+        fullTextConversionError: null,
+        fullTextConversionMetadata: null,
+        fullTextConversionModelId: null,
+        fullTextConversionStatus: null,
+        fullTextFetchedAt: null,
+        fullTextHtml: null,
+        fullTextOriginalFormat: null,
+        fullTextPdf: '/tmp/article-a.pdf',
+        fullTextSource: 'manual_pdf',
+        id: 'article-a',
+        importRoute: 'import-route-a',
+        originalData: null,
+        publicationStatus: null,
+        url: null,
+      },
+      prompt: {
+        id: 'prompt-a',
+        order: 1,
+        originalText: 'Snapshot prompt text',
+        promptHeading: 'Snapshot prompt heading',
+        type: 'single',
+      },
+    },
+    projectId: 'project-a',
+    promptId: 'prompt-a',
+    queueRecordId: 'record-a',
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+    ...overrides,
+  }
+}
+const enqueueJudgeWorkerCompletion = mock(async (_payload: unknown) => {
+  return undefined
+})
+const flushJudgeWorkerCompletionOutboxForClaim = mock(async (_claimId: string) => {
+  return {ackedCount: 0, failedCount: 0}
+})
+const getOwnerBackedJudgmentExecutionSnapshot = mock(async (_input: unknown) => {
+  return createOwnerBackedSnapshot()
+})
+const hasUnackedJudgeWorkerCompletion = mock(async (_claimId: string) => {
+  return false
+})
 const sqliteStateTransitions: string[] = []
 let usePromptRuntimeMocks = false
+let useJudgeWorkerOwnerHandoffMocks = false
 const sqliteServiceMock = {
   hasJob: mock((_jobId: string) => {
     return true
@@ -199,6 +270,18 @@ const registerPromptModuleMocks = () => {
     return {ensureFullText: ensureFullTextMock}
   })
 
+  void mock.module(judgeWorkerCompletionJournalModulePath, () => {
+    return {
+      enqueueJudgeWorkerCompletion,
+      flushJudgeWorkerCompletionOutboxForClaim,
+      getOwnerBackedJudgmentExecutionSnapshot,
+      hasUnackedJudgeWorkerCompletion,
+      shouldUseJudgeWorkerOwnerHandoff: () => {
+        return useJudgeWorkerOwnerHandoffMocks
+      },
+    }
+  })
+
   void mock.module(sqliteServiceModulePath, () => {
     return {
       ...realSqliteModule,
@@ -274,6 +357,10 @@ afterEach(async () => {
   queryJson.mockClear()
   getFullArticlesByIds.mockClear()
   ensureFullTextMock.mockClear()
+  enqueueJudgeWorkerCompletion.mockClear()
+  flushJudgeWorkerCompletionOutboxForClaim.mockClear()
+  getOwnerBackedJudgmentExecutionSnapshot.mockClear()
+  hasUnackedJudgeWorkerCompletion.mockClear()
   sqliteServiceMock.hasJob.mockClear()
   sqliteServiceMock.hasLocalJudgment.mockClear()
   sqliteServiceMock.markPromptAsJudged.mockClear()
@@ -283,6 +370,7 @@ afterEach(async () => {
   sqliteServiceMock.markPromptAsSkipped.mockClear()
   sqliteStateTransitions.splice(0, sqliteStateTransitions.length)
   usePromptRuntimeMocks = false
+  useJudgeWorkerOwnerHandoffMocks = false
   testProviderConnectionHealth.mockImplementation(async (_connection: unknown, _options: unknown) => {
     return {lastError: null, message: 'ok', modelCount: 1, ok: true}
   })
@@ -304,6 +392,18 @@ afterEach(async () => {
   })
   ensureFullTextMock.mockImplementation(async (article: {fullText: string | null}) => {
     return {reason: 'no_fulltext' as const, shouldSkip: true, text: article.fullText ?? 'Full text'}
+  })
+  enqueueJudgeWorkerCompletion.mockImplementation(async (_payload: unknown) => {
+    return undefined
+  })
+  flushJudgeWorkerCompletionOutboxForClaim.mockImplementation(async (_claimId: string) => {
+    return {ackedCount: 0, failedCount: 0}
+  })
+  getOwnerBackedJudgmentExecutionSnapshot.mockImplementation(async (_input: unknown) => {
+    return createOwnerBackedSnapshot()
+  })
+  hasUnackedJudgeWorkerCompletion.mockImplementation(async (_claimId: string) => {
+    return false
   })
   sqliteServiceMock.consumePromptExtraRetry.mockImplementation(async () => {
     return true
@@ -910,6 +1010,152 @@ test('prompt release marks running then judged on success', async () => {
   expect(sqliteStateTransitions).toEqual(['running', 'judged'])
   expect(sqliteServiceMock.markPromptAsRetry).not.toHaveBeenCalled()
   expect(sqliteServiceMock.markPromptAsSkipped).not.toHaveBeenCalled()
+})
+
+test('judge-worker prompt execution uses owner-backed snapshots instead of live DuckDB reads', async () => {
+  useJudgeWorkerOwnerHandoffMocks = true
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+
+  queryJson.mockImplementation(async () => {
+    throw new Error('owner-backed prompt execution should not query live DuckDB')
+  })
+  getFullArticlesByIds.mockImplementation(async () => {
+    throw new Error('owner-backed prompt execution should not read live article rows')
+  })
+  ensureFullTextMock.mockImplementation(async () => {
+    throw new Error('owner-backed prompt execution should not convert fulltext locally')
+  })
+  hasUnackedJudgeWorkerCompletion.mockImplementation(async () => {
+    return true
+  })
+  getOwnerBackedJudgmentExecutionSnapshot.mockImplementation(async () => {
+    return createOwnerBackedSnapshot({
+      payload: {
+        article: {
+          articleCreatedAt: '2026-04-25T10:00:00.000Z',
+          articleId: 'external-article-a',
+          articleSummary: 'Owner-backed summary',
+          articleTitle: 'Owner-backed title',
+          articleUpdatedAt: '2026-04-25T10:05:00.000Z',
+          articleVersion: 1,
+          contentHash: 'content-hash-a',
+          doi: null,
+          fullText: 'Owner-backed full text',
+          fullTextAssets: null,
+          fullTextCharCount: 22,
+          fullTextConversionAttempts: null,
+          fullTextConversionError: null,
+          fullTextConversionMetadata: null,
+          fullTextConversionModelId: null,
+          fullTextConversionStatus: null,
+          fullTextFetchedAt: null,
+          fullTextHtml: null,
+          fullTextOriginalFormat: null,
+          fullTextPdf: '/tmp/article-a.pdf',
+          fullTextSource: 'manual_pdf',
+          id: 'article-a',
+          importRoute: 'import-route-owner',
+          originalData: null,
+          publicationStatus: null,
+          url: null,
+        },
+        prompt: {
+          id: 'prompt-a',
+          order: 1,
+          originalText: 'Owner-backed prompt text',
+          promptHeading: 'Owner-backed prompt heading',
+          type: 'single',
+        },
+      },
+      useFulltext: true,
+    })
+  })
+
+  await processPromptWithLLM({...createPromptToProcess(), useFulltext: true})
+
+  const firstJudgeCall = judgeSinglePrompt.mock.calls[0]?.[0] as
+    | {
+        article: {articleTitle: string; fullText: string | null; importRoute: string | null}
+        prompt: {originalText: string; promptHeading: string | null}
+      }
+    | undefined
+
+  expect(firstJudgeCall?.article).toMatchObject({
+    articleTitle: 'Owner-backed title',
+    fullText: 'Owner-backed full text',
+    importRoute: 'import-route-owner',
+  })
+  expect(firstJudgeCall?.prompt).toMatchObject({
+    originalText: 'Owner-backed prompt text',
+    promptHeading: 'Owner-backed prompt heading',
+  })
+  expect(queryJson).not.toHaveBeenCalled()
+  expect(getFullArticlesByIds).not.toHaveBeenCalled()
+  expect(ensureFullTextMock).not.toHaveBeenCalled()
+  expect(sqliteStateTransitions).toEqual([])
+  expect(enqueueJudgeWorkerCompletion).not.toHaveBeenCalled()
+  expect(flushJudgeWorkerCompletionOutboxForClaim).toHaveBeenCalledWith('claim-a')
+})
+
+test('judge-worker prompt execution requeues when snapshot fulltext is not yet frozen', async () => {
+  useJudgeWorkerOwnerHandoffMocks = true
+  const {processPromptWithLLM} = await loadProcessPromptModule()
+
+  ensureFullTextMock.mockImplementation(async () => {
+    throw new Error('owner-backed prompt execution should not convert fulltext locally')
+  })
+  getOwnerBackedJudgmentExecutionSnapshot.mockImplementation(async () => {
+    return createOwnerBackedSnapshot({
+      payload: {
+        article: {
+          articleCreatedAt: '2026-04-25T10:00:00.000Z',
+          articleId: 'external-article-a',
+          articleSummary: 'Owner-backed summary',
+          articleTitle: 'Owner-backed title',
+          articleUpdatedAt: '2026-04-25T10:05:00.000Z',
+          articleVersion: 1,
+          contentHash: 'content-hash-a',
+          doi: null,
+          fullText: null,
+          fullTextAssets: null,
+          fullTextCharCount: null,
+          fullTextConversionAttempts: null,
+          fullTextConversionError: null,
+          fullTextConversionMetadata: null,
+          fullTextConversionModelId: null,
+          fullTextConversionStatus: null,
+          fullTextFetchedAt: null,
+          fullTextHtml: null,
+          fullTextOriginalFormat: null,
+          fullTextPdf: '/tmp/article-a.pdf',
+          fullTextSource: 'manual_pdf',
+          id: 'article-a',
+          importRoute: 'import-route-owner',
+          originalData: null,
+          publicationStatus: null,
+          url: null,
+        },
+        prompt: {
+          id: 'prompt-a',
+          order: 1,
+          originalText: 'Owner-backed prompt text',
+          promptHeading: 'Owner-backed prompt heading',
+          type: 'single',
+        },
+      },
+      useFulltext: true,
+    })
+  })
+
+  await processPromptWithLLM({...createPromptToProcess(), useFulltext: true})
+
+  expect(judgeSinglePrompt).not.toHaveBeenCalled()
+  expect(ensureFullTextMock).not.toHaveBeenCalled()
+  expect(sqliteStateTransitions).toEqual([])
+  expect(enqueueJudgeWorkerCompletion).toHaveBeenCalledWith(
+    expect.objectContaining({claimId: 'claim-a', status: 'retry'}),
+  )
+  expect(flushJudgeWorkerCompletionOutboxForClaim).toHaveBeenCalledWith('claim-a')
 })
 
 test('prompt release marks running then ready on connection failure', async () => {

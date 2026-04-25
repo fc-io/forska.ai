@@ -6,6 +6,7 @@ import {getDateValue, getJsonValue, getSqlLiteral} from './appQueryHelpers.ts'
 type JudgmentExecutionSnapshotRow = {
   articleCreatedAt: unknown
   articleId: string | null
+  articleImportRoute: string | null
   articleImportId: string | null
   articleSummary: string | null
   articleTitle: string | null
@@ -207,12 +208,13 @@ const getSnapshotRow = async ({
       pr.updated_at AS promptUpdatedAt,
       pp.prompt_order AS promptOrder,
       a.id AS articleId,
-      a.article_id AS externalArticleId,
-      a.article_title AS articleTitle,
-      a.article_summary AS articleSummary,
-      a.article_version AS articleVersion,
-      a.article_created_at AS articleCreatedAt,
-      a.article_updated_at AS articleUpdatedAt,
+       a.article_id AS externalArticleId,
+       a.article_title AS articleTitle,
+       a.article_summary AS articleSummary,
+       a.import_route AS articleImportRoute,
+       a.article_version AS articleVersion,
+       a.article_created_at AS articleCreatedAt,
+       a.article_updated_at AS articleUpdatedAt,
       a.doi AS doi,
       a.url AS url,
       a.full_text AS fullText,
@@ -290,6 +292,7 @@ const getSnapshotPayload = (row: JudgmentExecutionSnapshotRow) => {
       fullTextConversionStatus: row.fullTextConversionStatus,
       fullTextFetchedAt: getDateIsoValue(row.fullTextFetchedAt),
       fullTextHtml: row.fullTextHtml,
+      importRoute: row.articleImportRoute,
       fullTextOriginalFormat: row.fullTextOriginalFormat,
       fullTextPdf: row.fullTextPdf,
       fullTextSource: row.fullTextSource,

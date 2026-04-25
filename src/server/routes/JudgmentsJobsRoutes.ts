@@ -1,6 +1,7 @@
 import {Elysia, t} from 'elysia'
 
 import {getUnassessedArticlesFromOlap, getUnassessedCountFromOlap} from '../../services/olap/unassessedArticlesOlap.ts'
+import type {OwnerBackedJudgmentJobInfo} from '../cron/judgmentsJobs/judgeWorkerCompletionJournal.ts'
 import {getJudgmentDispatchProviderStats} from '../cron/judgmentsJobs/judgmentDispatchRuntime.ts'
 import {
   getJudgmentEndpointAvailability,
@@ -24,6 +25,7 @@ import {
   hasJudgmentJobLocalSqliteState,
 } from '../cron/judgmentsJobs/judgmentJobStoragePolicy.ts'
 import {getJudgmentJobStorageTransferRuntime} from '../cron/judgmentsJobs/judgmentJobStorageTransferRuntime.ts'
+import type {RunningJudgmentJob} from '../cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts'
 import {getEffectiveProviderCap} from '../cron/judgmentsJobs/judgmentsJobsSendToLLM.ts'
 import {getJudgmentRequestStats} from '../cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {getProviderConnectionForStoredModel} from '../providers/providerConnectionRepository.ts'
@@ -419,6 +421,90 @@ const getJudgmentJobsOwnerProxyData = async <T>(request: Request): Promise<T | n
 
 const getNormalizedClaimLimit = (limit: number | null | undefined) => {
   return Number.isFinite(limit) ? Math.max(0, Math.min(100, Math.floor(limit ?? 0))) : 1
+}
+
+const getOwnerBackedRunningJudgmentJobs = async (): Promise<RunningJudgmentJob[]> => {
+  return getAppDatabaseService().queryJson<RunningJudgmentJob>(`
+    SELECT
+      jj.id AS id,
+      jj.project_id AS projectId,
+      pc.max_inflight_requests AS maxInflightRequests,
+      pc.provider_kind AS modelProvider,
+      m.id AS modelId,
+      m.remote_model_id AS modelName,
+      jj.quarantine_reason AS quarantineReason,
+      m.provider_connection_id AS providerConnectionId,
+      jj.storage_state AS storageState
+    FROM app.judgment_job jj
+    INNER JOIN app.project p ON jj.project_id = p.id
+    INNER JOIN app.model m ON p.model_id = m.id
+    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    WHERE jj.status = 'running'
+      AND jj.storage_state = 'active'
+      AND p.archived = FALSE
+      AND COALESCE(m.enabled, TRUE) = TRUE
+      AND COALESCE(pc.enabled, TRUE) = TRUE
+    ORDER BY jj.created_at ASC, jj.id ASC
+  `)
+}
+
+const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBackedJudgmentJobInfo | null> => {
+  const [row] = await getAppDatabaseService().queryJson<{
+    modelBaseUrl: string | null
+    modelId: string | null
+    modelMetadataJson: unknown
+    modelName: string | null
+    modelProvider: string | null
+    modelSecretRef: string | null
+    modelVersion: string | null
+    projectId: string | null
+    providerConfigJson: unknown
+    useAbstract: boolean | null
+    useFulltext: boolean | null
+    useFulltextNoImages: boolean | null
+    useTitle: boolean | null
+  }>(`
+    SELECT
+      jj.project_id AS projectId,
+      p.model_id AS modelId,
+      pc.secret_ref AS modelSecretRef,
+      COALESCE(pc.provider_kind, 'unknown') AS modelProvider,
+      COALESCE(m.remote_model_id, m.name, m.display_name) AS modelName,
+      m.variant AS modelVersion,
+      TO_JSON(m.metadata_json) AS modelMetadataJson,
+      pc.base_url AS modelBaseUrl,
+      TO_JSON(pc.config_json) AS providerConfigJson,
+      p.use_title AS useTitle,
+      p.use_abstract AS useAbstract,
+      p.use_fulltext AS useFulltext,
+      p.use_fulltext_no_images AS useFulltextNoImages
+    FROM app.judgment_job jj
+    INNER JOIN app.project p ON p.id = jj.project_id
+    INNER JOIN app.model m ON m.id = p.model_id
+    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
+    WHERE jj.id = ${getSqlLiteral(jobId)}
+      AND jj.status = 'running'
+      AND jj.storage_state = 'active'
+    LIMIT 1
+  `)
+
+  return row?.projectId && row.modelId && row.modelName
+    ? {
+        modelBaseUrl: row.modelBaseUrl ?? null,
+        modelId: row.modelId,
+        modelMetadataJson: getJsonValue(row.modelMetadataJson),
+        modelName: row.modelName,
+        modelProvider: row.modelProvider ?? 'unknown',
+        modelSecretRef: row.modelSecretRef ?? null,
+        modelVersion: row.modelVersion ?? null,
+        projectId: row.projectId,
+        providerConfigJson: getJsonValue(row.providerConfigJson),
+        useAbstract: row.useAbstract ?? true,
+        useFulltext: row.useFulltext ?? false,
+        useFulltextNoImages: row.useFulltextNoImages ?? false,
+        useTitle: row.useTitle ?? true,
+      }
+    : null
 }
 
 const claimJudgmentJobPrompts = async (jobId: string, body: JudgmentClaimRequestBody | undefined) => {
@@ -2054,6 +2140,16 @@ export const judgmentsJobsRoutes = new Elysia()
       return completeJudgmentJobPrompt(params.id, body)
     },
     {body: judgmentCompletionBodySchema, params: t.Object({id: t.String()})},
+  )
+  .get('/api/judgmentsjobs-running', async () => {
+    return {data: {jobs: await getOwnerBackedRunningJudgmentJobs()}, error: null}
+  })
+  .get(
+    '/api/judgmentsjobs/:id/runtime',
+    async ({params}) => {
+      return {data: {job: await getOwnerBackedJudgmentJobRuntime(params.id)}, error: null}
+    },
+    {params: t.Object({id: t.String()})},
   )
   .get(
     '/api/judgmentsjobs/execution-snapshots/:executionSnapshotId',

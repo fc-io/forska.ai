@@ -4,8 +4,10 @@ import {dirname} from 'node:path'
 import {Database} from 'bun:sqlite'
 
 import {duckdbOwnerPrivateApiPrefix} from '../../routes/apiRouteClassification.ts'
+import type {JudgmentExecutionSnapshotRecord} from '../../services/judgmentExecutionSnapshotService.ts'
 import {getEnv} from '../../utils/env.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
+import type {RunningJudgmentJob} from './judgmentsJobsGetRunningJobs.ts'
 import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 
 export type JudgeWorkerTokenUseSummary = {
@@ -59,6 +61,22 @@ export type JudgeWorkerCompletionPayload = {
   retryAfterMs?: number | null
   skipReason?: 'conversion_failed' | 'fulltext_too_large' | 'no_fulltext'
   status?: 'completed' | 'failed' | 'judged' | 'retry' | 'skipped' | 'succeeded'
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
+
+export type OwnerBackedJudgmentJobInfo = {
+  modelBaseUrl: string | null
+  modelId: string
+  modelMetadataJson: unknown
+  modelName: string
+  modelProvider: string
+  modelSecretRef: string | null
+  modelVersion: string | null
+  projectId: string
+  providerConfigJson: unknown
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
@@ -163,11 +181,20 @@ const openJournalDatabase = (): Database => {
   return database
 }
 
-const postOwnerJson = async <T>(path: string, body: unknown): Promise<T> => {
+const requestOwnerJson = async <T>({
+  body,
+  method,
+  path,
+}: {
+  body?: unknown
+  method: 'GET' | 'POST'
+  path: string
+}): Promise<T> => {
+  const hasBody = body !== undefined
   const response = await fetch(`${getOwnerUrl()}${duckdbOwnerPrivateApiPrefix}${path}`, {
-    body: JSON.stringify(body),
-    headers: {'content-type': 'application/json'},
-    method: 'POST',
+    body: hasBody ? JSON.stringify(body) : undefined,
+    headers: hasBody ? {'content-type': 'application/json'} : undefined,
+    method,
   })
   const text = await response.text()
   const parsed = text.length > 0 ? (JSON.parse(text) as {data?: T; error?: unknown}) : {}
@@ -180,11 +207,11 @@ const postOwnerJson = async <T>(path: string, body: unknown): Promise<T> => {
     )
   }
 
-  if (!parsed.data) {
+  if (!('data' in parsed)) {
     throw new Error('owner-backed judgment request returned no data')
   }
 
-  return parsed.data
+  return parsed.data as T
 }
 
 export const claimOwnerJudgmentJobPrompts = async ({
@@ -196,18 +223,51 @@ export const claimOwnerJudgmentJobPrompts = async ({
   jobId: string
   limit: number
 }): Promise<PromptToProcess[]> => {
-  const data = await postOwnerJson<{claims: PromptToProcess[]}>(`/api/judgmentsjobs/${jobId}/claims`, {
-    claimedBy,
-    limit,
+  const data = await requestOwnerJson<{claims: PromptToProcess[]}>({
+    body: {claimedBy, limit},
+    method: 'POST',
+    path: `/api/judgmentsjobs/${jobId}/claims`,
   })
 
   return data.claims
 }
 
+export const getOwnerBackedJudgmentJobInfo = async (jobId: string): Promise<OwnerBackedJudgmentJobInfo | null> => {
+  const data = await requestOwnerJson<{job: OwnerBackedJudgmentJobInfo | null}>({
+    method: 'GET',
+    path: `/api/judgmentsjobs/${jobId}/runtime`,
+  })
+
+  return data.job
+}
+
+export const getOwnerBackedRunningJudgmentJobs = async (): Promise<RunningJudgmentJob[]> => {
+  const data = await requestOwnerJson<{jobs: RunningJudgmentJob[]}>({method: 'GET', path: '/api/judgmentsjobs-running'})
+
+  return data.jobs
+}
+
+export const getOwnerBackedJudgmentExecutionSnapshot = async ({
+  executionSnapshotHash,
+  executionSnapshotId,
+}: {
+  executionSnapshotHash: string
+  executionSnapshotId: string
+}): Promise<JudgmentExecutionSnapshotRecord> => {
+  return requestOwnerJson<JudgmentExecutionSnapshotRecord>({
+    method: 'GET',
+    path: `/api/judgmentsjobs/execution-snapshots/${encodeURIComponent(executionSnapshotId)}?executionSnapshotHash=${encodeURIComponent(executionSnapshotHash)}`,
+  })
+}
+
 const sendCompletionToOwner = async (
   payload: JudgeWorkerCompletionPayload & {tokenUse?: JudgeWorkerTokenUseSummary},
 ) => {
-  const data = await postOwnerJson<CompletionSendResult>(`/api/judgmentsjobs/${payload.jobId}/completions`, payload)
+  const data = await requestOwnerJson<CompletionSendResult>({
+    body: payload,
+    method: 'POST',
+    path: `/api/judgmentsjobs/${payload.jobId}/completions`,
+  })
 
   return data
 }

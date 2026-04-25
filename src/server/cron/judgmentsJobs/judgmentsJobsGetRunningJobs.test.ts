@@ -1,4 +1,4 @@
-import {expect, mock, test} from 'bun:test'
+import {afterEach, expect, mock, test} from 'bun:test'
 
 import {filterRunningJobsByRuntimeMatch, type RunningJudgmentJob} from './judgmentsJobsGetRunningJobs.ts'
 
@@ -19,6 +19,82 @@ const getJob = (id: string): RunningJudgmentJob => {
     storageState: 'active',
   }
 }
+
+afterEach(() => {
+  mock.restore()
+})
+
+test('judge-worker running jobs come from the owner-backed API', async () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const judgmentsJobsGetRunningJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts')
+        const judgeWorkerCompletionJournalModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgeWorkerCompletionJournal.ts')
+        const readOnlyDatabaseServiceModulePath = getModulePath('./src/server/services/appReadOnlyDatabaseService.ts')
+        const sqlitePreflightModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqlitePreflight.ts')
+        let readOnlyQueries = 0
+
+        void mock.module(judgeWorkerCompletionJournalModulePath, () => {
+          return {
+            getOwnerBackedRunningJudgmentJobs: async () => [{
+              id: 'job-owner-backed',
+              maxInflightRequests: null,
+              modelId: 'job-owner-backed-model',
+              modelName: 'Qwen/Qwen3.5-35B-A3B',
+              modelProvider: 'sglang',
+              quarantineReason: null,
+              providerConnectionId: 'job-owner-backed-connection',
+              projectId: 'job-owner-backed-project',
+              storageState: 'active',
+            }],
+            shouldUseJudgeWorkerOwnerHandoff: () => true,
+          }
+        })
+        void mock.module(readOnlyDatabaseServiceModulePath, () => {
+          return {
+            getJudgeWorkerReadOnlyAppDatabaseService: () => {
+              return {
+                queryJson: async () => {
+                  readOnlyQueries += 1
+                  return []
+                },
+              }
+            },
+          }
+        })
+        void mock.module(sqlitePreflightModulePath, () => {
+          return {
+            filterRunningJobsBySqlitePreflight: async (jobs) => jobs,
+          }
+        })
+
+        const {judgmentsJobsGetRunningJobs} = await import(judgmentsJobsGetRunningJobsModulePath + '?owner-backed=' + Date.now())
+        const jobs = await judgmentsJobsGetRunningJobs({applyRuntimeMatchFilter: false})
+        console.log(JSON.stringify({jobs, readOnlyQueries}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'owner-backed running jobs test failed',
+    )
+  }
+
+  const result = JSON.parse(runScript.stdout.toString()) as {jobs: RunningJudgmentJob[]; readOnlyQueries: number}
+
+  expect(result.jobs).toEqual([getJob('job-owner-backed')])
+  expect(result.readOnlyQueries).toBe(0)
+})
 
 test('filterRunningJobsByRuntimeMatch filters out jobs with runtime mismatch', async () => {
   const getRuntimeMatch = mock(async ({modelId}: {modelId: string}) => {

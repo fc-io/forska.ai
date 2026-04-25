@@ -14,6 +14,7 @@ import {ConnectionError, formatConnectionOutageMessage} from '../connectionHealt
 import {
   enqueueJudgeWorkerCompletion,
   flushJudgeWorkerCompletionOutboxForClaim,
+  getOwnerBackedJudgmentExecutionSnapshot,
   hasUnackedJudgeWorkerCompletion,
   shouldUseJudgeWorkerOwnerHandoff,
 } from '../judgeWorkerCompletionJournal.ts'
@@ -77,6 +78,7 @@ const processPromptLogger = createRateLimitedLogger({sink: 'file-only', windowMs
 const processPromptFailureLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
 const processPromptComponent = 'processPromptWithLLM'
 const cachedArticleLookups = new Map<string, Promise<ArticleRecord | null>>()
+const cachedOwnerBackedPromptLookups = new Map<string, Promise<{article: ArticleRecord; prompt: PromptDefinition}>>()
 const cachedPromptLookups = new Map<string, Promise<PromptDefinition | null>>()
 
 const DEFAULT_MODEL_CONTEXT = 32768
@@ -114,6 +116,105 @@ const withCachedLookup = async <T>(cache: Map<string, Promise<T>>, key: string, 
   trimCachedLookups(cache, 5000)
 
   return pending
+}
+
+const isObjectRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+const getStringValue = (value: unknown): string | null => {
+  return typeof value === 'string' ? value : null
+}
+
+const getNumberValue = (value: unknown): number | null => {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+const getDateOrNull = (value: unknown): Date | null => {
+  const isoValue = getStringValue(value)
+
+  return isoValue ? new Date(isoValue) : null
+}
+
+const getPublicationStatus = (value: unknown): PublicationStatus | null => {
+  return value === 'accepted'
+    || value === 'preprint'
+    || value === 'published'
+    || value === 'retracted'
+    || value === 'submitted'
+    ? value
+    : null
+}
+
+const getOwnerBackedPromptInput = async (
+  promptToProcess: PromptToProcess,
+): Promise<{article: ArticleRecord; prompt: PromptDefinition}> => {
+  const cacheKey = `${promptToProcess.executionSnapshotId}:${promptToProcess.executionSnapshotHash}`
+
+  return withCachedLookup(cachedOwnerBackedPromptLookups, cacheKey, async () => {
+    const snapshot = await getOwnerBackedJudgmentExecutionSnapshot({
+      executionSnapshotHash: promptToProcess.executionSnapshotHash,
+      executionSnapshotId: promptToProcess.executionSnapshotId,
+    })
+    const payload = isObjectRecord(snapshot.payload) ? snapshot.payload : null
+    const articlePayload = payload && isObjectRecord(payload.article) ? payload.article : null
+    const promptPayload = payload && isObjectRecord(payload.prompt) ? payload.prompt : null
+    const articleId = getStringValue(articlePayload?.id) ?? promptToProcess.articleId
+    const promptId = getStringValue(promptPayload?.id) ?? promptToProcess.promptId
+    const promptOriginalText = getStringValue(promptPayload?.originalText)
+
+    if (!articlePayload || !promptPayload || promptOriginalText === null) {
+      throw new Error(
+        `owner-backed execution snapshot is missing required prompt data for claim ${promptToProcess.claimId}`,
+      )
+    }
+
+    return {
+      article: {
+        id: articleId,
+        createdAt: getDateOrNull(articlePayload.articleCreatedAt) ?? new Date(0),
+        updatedAt: getDateOrNull(articlePayload.articleUpdatedAt) ?? new Date(0),
+        articleTitle: getStringValue(articlePayload.articleTitle) ?? '',
+        articleAuthors: null,
+        articleCreatedAt: getDateOrNull(articlePayload.articleCreatedAt),
+        articleUpdatedAt: getDateOrNull(articlePayload.articleUpdatedAt),
+        articleId: getStringValue(articlePayload.articleId),
+        articleSummary: getStringValue(articlePayload.articleSummary),
+        articleVersion: getNumberValue(articlePayload.articleVersion),
+        arxivId: null,
+        biorxivId: null,
+        medrxivId: null,
+        doi: getStringValue(articlePayload.doi),
+        pubmedId: null,
+        url: getStringValue(articlePayload.url),
+        fullTextFetchedAt: getDateOrNull(articlePayload.fullTextFetchedAt),
+        fullText: getStringValue(articlePayload.fullText),
+        fullTextHtml: getStringValue(articlePayload.fullTextHtml),
+        fullTextSource: getStringValue(articlePayload.fullTextSource),
+        fullTextOriginalFormat: getStringValue(articlePayload.fullTextOriginalFormat),
+        fullTextPDF: getStringValue(articlePayload.fullTextPdf),
+        fullTextAssets: articlePayload.fullTextAssets ?? null,
+        fullTextConversionStatus: getStringValue(articlePayload.fullTextConversionStatus),
+        fullTextConversionError: getStringValue(articlePayload.fullTextConversionError),
+        fullTextConversionAttempts: getNumberValue(articlePayload.fullTextConversionAttempts),
+        fullTextConversionModelId: getStringValue(articlePayload.fullTextConversionModelId),
+        fullTextConversionMetadata: articlePayload.fullTextConversionMetadata ?? null,
+        fullTextCharCount: getNumberValue(articlePayload.fullTextCharCount),
+        contentHash: getStringValue(articlePayload.contentHash),
+        importRoute: getStringValue(articlePayload.importRoute),
+        originalData: articlePayload.originalData ?? null,
+        sourceMetadata: null,
+        publicationStatus: getPublicationStatus(articlePayload.publicationStatus),
+      },
+      prompt: {
+        id: promptId,
+        originalText: promptOriginalText,
+        promptHeading: getStringValue(promptPayload.promptHeading),
+        order: getNumberValue(promptPayload.order),
+        type: getStringValue(promptPayload.type),
+      },
+    }
+  })
 }
 
 const getCachedArticle = async ({
@@ -271,7 +372,10 @@ const markAsSkipped = async (
   await getJudgmentJobSqliteService().markPromptAsSkipped(jobId, recordId, skipReason)
 }
 
-const preparePrompt = async (promptToProcess: PromptToProcess, modelContext: number): Promise<PreparedPromptResult> => {
+const prepareLocalPrompt = async (
+  promptToProcess: PromptToProcess,
+  modelContext: number,
+): Promise<PreparedPromptResult> => {
   const judgmentExists = await checkJudgmentExistsInDatabase(promptToProcess)
   if (judgmentExists) {
     processPromptLogger.log('llm.prompt.skipped.alreadyJudged', '[llm] Skipped - judgment already exists', {
@@ -378,6 +482,83 @@ const preparePrompt = async (promptToProcess: PromptToProcess, modelContext: num
   }
 
   return {articleForJudging, kind: 'run', prompt}
+}
+
+const prepareOwnerBackedPrompt = async (
+  promptToProcess: PromptToProcess,
+  modelContext: number,
+): Promise<PreparedPromptResult> => {
+  const needsFulltext = promptToProcess.useFulltext || promptToProcess.useFulltextNoImages
+  const ownerBackedInput = await getOwnerBackedPromptInput(promptToProcess)
+  let articleWithFulltext = ownerBackedInput.article
+
+  if (needsFulltext) {
+    if (!articleWithFulltext.fullText) {
+      if (articleWithFulltext.fullTextConversionStatus === 'failed' || !articleWithFulltext.fullTextPDF) {
+        const skipReason =
+          articleWithFulltext.fullTextConversionStatus === 'failed' ? 'conversion_failed' : 'no_fulltext'
+
+        processPromptLogger.log(`fulltext:skip:${skipReason}`, '[fulltext] Skipping article', {
+          articleId: articleWithFulltext.id,
+          component: processPromptComponent,
+          event: 'fulltextSkip',
+          jobId: promptToProcess.jobId,
+          promptId: promptToProcess.promptId,
+          recordId: promptToProcess.recordId,
+          skipReason,
+        })
+
+        return {kind: 'skipped', skipReason}
+      }
+
+      processPromptLogger.log(
+        'fulltext.transientFailure.requeue',
+        '[fulltext] Snapshot missing fulltext, requeuing prompt',
+        {
+          articleId: articleWithFulltext.id,
+          component: processPromptComponent,
+          event: 'fulltextTransientRequeue',
+          jobId: promptToProcess.jobId,
+          promptId: promptToProcess.promptId,
+          recordId: promptToProcess.recordId,
+        },
+      )
+
+      return {kind: 'ready'}
+    }
+
+    const processResult = processFulltextForLLM(articleWithFulltext.fullText, {
+      stripImages: promptToProcess.useFulltextNoImages,
+      promptTokenLimit: modelContext,
+    })
+
+    if (!processResult.withinBudget) {
+      processPromptLogger.log('fulltext:large:chunked-mode', '[fulltext] Large fulltext will rely on chunked judging', {
+        articleId: articleWithFulltext.id,
+        component: processPromptComponent,
+        event: 'largeFulltextChunkedMode',
+        jobId: promptToProcess.jobId,
+        maxTokens: processResult.maxTokens,
+        promptId: promptToProcess.promptId,
+        recordId: promptToProcess.recordId,
+        tokenCount: processResult.tokenCount,
+      })
+    }
+
+    articleWithFulltext = {...articleWithFulltext, fullText: processResult.processedText}
+  }
+
+  return {
+    articleForJudging: needsFulltext ? articleWithFulltext : {...articleWithFulltext, fullText: null},
+    kind: 'run',
+    prompt: ownerBackedInput.prompt,
+  }
+}
+
+const preparePrompt = async (promptToProcess: PromptToProcess, modelContext: number): Promise<PreparedPromptResult> => {
+  return shouldUseJudgeWorkerOwnerHandoff()
+    ? prepareOwnerBackedPrompt(promptToProcess, modelContext)
+    : prepareLocalPrompt(promptToProcess, modelContext)
 }
 
 const releasePromptTerminalState = async (

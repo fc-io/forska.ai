@@ -4,6 +4,7 @@ import {getSqlLiteral} from '../../../services/appQueryHelpers.ts'
 import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../../services/appReadOnlyDatabaseService.ts'
 import {
   claimOwnerJudgmentJobPrompts,
+  getOwnerBackedJudgmentJobInfo,
   recordAcceptedJudgeWorkerClaims,
   shouldUseJudgeWorkerOwnerHandoff,
 } from '../judgeWorkerCompletionJournal.ts'
@@ -37,22 +38,6 @@ export type PromptToProcess = {
 
 export type PromptRuntime = {modelBaseUrl: string; modelProvider: string; modelWorkerUrls: string[]}
 
-type OwnerBackedJobInfo = {
-  modelBaseUrl: string | null
-  modelId: string
-  modelMetadataJson: unknown
-  modelName: string
-  modelProvider: string
-  modelSecretRef: string | null
-  modelVersion: string | null
-  projectId: string
-  providerConfigJson: unknown
-  useAbstract: boolean
-  useFulltext: boolean
-  useFulltextNoImages: boolean
-  useTitle: boolean
-}
-
 const normalizeProvider = (value: string | null | undefined): string => {
   const v = String(value ?? '')
     .trim()
@@ -79,81 +64,6 @@ const isJobReadyToClaimPrompts = async (jobId: string): Promise<boolean> => {
   `)
 
   return Boolean(job)
-}
-
-const parseJsonText = (value: unknown): unknown => {
-  if (value == null) {
-    return null
-  }
-
-  if (typeof value !== 'string') {
-    return value
-  }
-
-  try {
-    return JSON.parse(value) as unknown
-  } catch {
-    return value
-  }
-}
-
-const getOwnerBackedJobInfo = async (jobId: string): Promise<OwnerBackedJobInfo | null> => {
-  const [row] = await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{
-    modelBaseUrl: string | null
-    modelId: string | null
-    modelMetadataJson: unknown
-    modelName: string | null
-    modelProvider: string | null
-    modelSecretRef: string | null
-    modelVersion: string | null
-    projectId: string | null
-    providerConfigJson: unknown
-    useAbstract: boolean | null
-    useFulltext: boolean | null
-    useFulltextNoImages: boolean | null
-    useTitle: boolean | null
-  }>(`
-    SELECT
-      jj.project_id AS projectId,
-      p.model_id AS modelId,
-      pc.secret_ref AS modelSecretRef,
-      COALESCE(pc.provider_kind, 'unknown') AS modelProvider,
-      COALESCE(m.remote_model_id, m.name, m.display_name) AS modelName,
-      m.variant AS modelVersion,
-      TO_JSON(m.metadata_json) AS modelMetadataJson,
-      pc.base_url AS modelBaseUrl,
-      TO_JSON(pc.config_json) AS providerConfigJson,
-      p.use_title AS useTitle,
-      p.use_abstract AS useAbstract,
-      p.use_fulltext AS useFulltext,
-      p.use_fulltext_no_images AS useFulltextNoImages
-    FROM app.judgment_job jj
-    INNER JOIN app.project p ON p.id = jj.project_id
-    INNER JOIN app.model m ON m.id = p.model_id
-    LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
-    WHERE jj.id = ${getSqlLiteral(jobId)}
-      AND jj.status = 'running'
-      AND jj.storage_state = 'active'
-    LIMIT 1
-  `)
-
-  return row?.projectId && row.modelId && row.modelName
-    ? {
-        modelBaseUrl: row.modelBaseUrl ?? null,
-        modelId: row.modelId,
-        modelMetadataJson: parseJsonText(row.modelMetadataJson),
-        modelName: row.modelName,
-        modelProvider: row.modelProvider ?? 'unknown',
-        modelSecretRef: row.modelSecretRef ?? null,
-        modelVersion: row.modelVersion ?? null,
-        projectId: row.projectId,
-        providerConfigJson: parseJsonText(row.providerConfigJson),
-        useAbstract: row.useAbstract ?? true,
-        useFulltext: row.useFulltext ?? false,
-        useFulltextNoImages: row.useFulltextNoImages ?? false,
-        useTitle: row.useTitle ?? true,
-      }
-    : null
 }
 
 const getModelRuntime = async ({
@@ -261,11 +171,7 @@ const getOwnerBackedReadyRows = async (
   jobId: string,
   limit: number,
 ): Promise<PromptToProcess[]> => {
-  if (!(await isJobReadyToClaimPrompts(jobId))) {
-    return []
-  }
-
-  const jobInfo = await getOwnerBackedJobInfo(jobId)
+  const jobInfo = await getOwnerBackedJudgmentJobInfo(jobId)
 
   if (!jobInfo) {
     console.error('[getAndUpdateReadyPrompts] owner-backed job info not found for jobId:', jobId)
@@ -322,13 +228,13 @@ const getOwnerBackedReadyRows = async (
 }
 
 export const getReadyPromptRuntime = async (jobId: string): Promise<PromptRuntime | null> => {
-  if (!(await isJobReadyToClaimPrompts(jobId))) {
+  if (!shouldUseJudgeWorkerOwnerHandoff() && !(await isJobReadyToClaimPrompts(jobId))) {
     return null
   }
 
   const sqliteService = getJudgmentJobSqliteService()
   const jobInfo = shouldUseJudgeWorkerOwnerHandoff()
-    ? await getOwnerBackedJobInfo(jobId)
+    ? await getOwnerBackedJudgmentJobInfo(jobId)
     : await sqliteService.getJobInfo(jobId)
 
   if (!jobInfo) {
