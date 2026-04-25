@@ -43,7 +43,7 @@
 - `sourceAppVersion`
 - `packageFingerprint` as a stable hash over manifest core and payload checksums, excluding volatile timestamps, so re-exports of the same logical package can warn on duplicate re-import
 - `project` summary with source id, name, counts, human judgment mode, and current model reference
-- `warnings` for omitted secrets, omitted deleted judgments, local-only config, and unresolved runtime-specific data
+- `warnings` for omitted secrets, omitted deleted judgments, omitted article conversion-runtime fields, local-only config, and unresolved runtime-specific data
 - `payloads` with row counts, checksums, and byte sizes for each payload file
 
 ## Exported Data Scope
@@ -54,7 +54,7 @@
 - Prompt definitions and project prompt links from `app.prompt` and `app.project_prompt`, including order, enabled state, archive state, and criteria fields.
 - Project route scope from `app.project_import_route` and referenced `app.import_route` rows.
 - Project article links from `app.project_article`.
-- Referenced article rows from `app.article` and `app.article_import_route`, including article identity fields (`article_id`, DOI, PubMed id, arXiv id, medRxiv id, bioRxiv id), citation metadata, title, summary, authors, article version, article timestamps, URL, publication status, `original_data`, `source_metadata`, `full_text`, `full_text_html`, `full_text_pdf`, `full_text_source`, `full_text_original_format`, `full_text_fetched_at`, `full_text_assets`, and `full_text_char_count`.
+- Referenced article rows from `app.article` and `app.article_import_route`, including article identity fields (`article_id`, DOI, PubMed id, arXiv id, medRxiv id, bioRxiv id), citation metadata, title, summary, authors, article version, article timestamps, URL, publication status, `content_hash`, `original_data`, `source_metadata`, `full_text`, `full_text_html`, `full_text_pdf`, `full_text_source`, `full_text_original_format`, `full_text_fetched_at`, `full_text_assets`, and `full_text_char_count`.
 - All active project judgments from `app.judgment` where `deleted_at IS NULL`.
 - Linked judgment assessments from `app.judgment_assessment` for exported judgments.
 - Project human judgments from `app.judgment_human`.
@@ -66,6 +66,7 @@
 
 - API keys, secret refs, auth tokens, device login state, or any provider secret store values.
 - Local Codex login status and local Codex binary paths like `codexBin`.
+- Article full-text conversion runtime state in v1: `full_text_conversion_status`, `full_text_conversion_error`, `full_text_conversion_attempts`, `full_text_conversion_model_id`, and `full_text_conversion_metadata`; surface this as an omission warning because it is machine-local pipeline state, not portable package content.
 - Runtime-detection cache, worker health, endpoint health, logs, temp files, or machine-local status snapshots.
 - `app.judgment_job`, `app.token_use`, `app.llm_status`, `app.nvidia_smi`, or any job-runtime artifacts.
 - `app.project_mart_refresh_state`, `app.project_mart_refresh_article_state`, `app.project_mart_large_rebuild_state`, or any `mart.*` tables.
@@ -107,9 +108,9 @@
 ### Mapping Strategy
 
 - `project`: always create a new target id.
-- `prompt`: resolve through the existing immutable-prompt behavior, not a project-local detached prompt table. Reuse an existing `app.prompt` row when the imported prompt content hash matches; otherwise create a new immutable prompt row. Always create fresh `app.project_prompt` link rows for the imported project, and do not assume imported prompt ids will be unique to that project.
-- `import_route`: match by `route`; if a route is missing on the target, show it in preview and require the user to accept omitting that route link or cancel the import.
-- `article`: match only on exact stable identifiers in priority order: `article_id`, normalized DOI, normalized PubMed id, normalized arXiv id, normalized medRxiv id, and normalized bioRxiv id. If no exact match exists, create a new article. Because only `article_id` is globally unique today, analyze must show the matched identifier type and all exact candidates when secondary identifiers produce multiple matches, and block commit until resolved. Never heuristic auto-link in v1.
+- `prompt`: resolve through the existing immutable-prompt behavior, not a project-local detached prompt table. Reuse an existing `app.prompt` row when the imported prompt content hash matches; otherwise create a new immutable prompt row. If the matched canonical prompt row is archived and the imported prompt definition should be active, reuse that row and reactivate it so import matches the current create and edit semantics. Always create fresh `app.project_prompt` link rows for the imported project, preserve imported project-link archive and enablement state there, and do not assume imported prompt ids will be unique to that project.
+- `import_route`: match by `route`; if a route is missing on the target, omit that route link in v1, show it in preview, include it in overlap and post-import warnings, and continue without blocking the import.
+- `article`: auto-match only when one target article satisfies every exported stable identifier that is present. Resolve and display exact identifiers in priority order: `article_id`, normalized DOI, normalized PubMed id, normalized arXiv id, normalized medRxiv id, and normalized bioRxiv id. If no exact match exists, create a new article. Because only `article_id` is globally unique today, analyze must show the matched identifier type and all exact candidates when secondary identifiers produce multiple matches, and it must also block commit whenever any non-empty exported stable identifier points at a different target row than another exported identifier. Never heuristic auto-link in v1.
 - `project_article`: always create a new link row for the imported project, even when the article row is reused, and set `imported_from_project_id` to `NULL` in v1. This intentionally differs from clone and Covidence-managed imports and must not imply local source-project ownership or managed re-sync behavior.
 - `provider_connection`: match by provider kind plus safe connection fingerprint only when the target connection is enabled and its saved config would still leave the required imported models selectable. Otherwise treat it as unresolved and let the user choose an existing connection, or create a new connection from sanitized prefilled fields and then complete any required credential or auth step.
 - `model`: match by mapped provider connection plus `remote_model_id` and `variant` only when the resolved target model is enabled and selectable. Otherwise materialize it during import after the user resolves the provider step, using `/api/provider-connections/:id/models` or `/api/provider-connections/:id/sync-models` for normal providers and `POST /api/models/ensure` for Codex.
@@ -148,12 +149,14 @@
 
 - Do not write the project into the main tables until the final confirmation step.
 - Use a server-side import session so large uploads, preview state, and asset extraction do not live only in browser memory.
-- Store staged uploads in an app temp/runtime path, not under the repo root.
+- Store staged uploads under the runtime-writable root in `tmp/project-transfer/...` so browser/dev mode and desktop mode share one contract. In desktop this lives outside the repo; in browser/dev it uses the current runtime root, which is repo-local today.
 - Stream the uploaded `.forska-project.zip` directly to temp storage instead of buffering the whole file in browser or server memory.
-- Give each import session a TTL, package size cap, extracted asset size cap, and cleanup on commit, cancel, expiry, and best-effort startup recovery.
+- Give each import session a TTL plus cleanup on commit, cancel, expiry, and best-effort startup recovery. Do not add product-level hard package-size caps in v1; fail only when local machine resources are insufficient for the requested import.
 - Validate zip members before extraction and reject duplicate normalized paths, checksum mismatches, absolute paths, and `..` traversal.
+- Before extraction and before asset promotion, estimate required disk usage and fail early with a clear insufficient-storage error if the current machine cannot hold the package safely.
 - For very large packages, run extraction, checksum validation, and analyze work as a server-side background job tied to the import session; the UI polls progress instead of waiting on one long request.
 - Keep a small-package fast path so modest imports can still analyze inline without extra job orchestration.
+- Any import analyze or commit step that mutates session state, writes transfer history, promotes assets, or writes database rows must run on the active DuckDB writer. Follower or API-only servers may expose readonly session polling but must not execute those mutating steps.
 
 ### Import Steps
 
@@ -191,11 +194,13 @@
 - Add a service layer under something like `src/server/services/projectTransfer/` for package assembly, session parsing, mapping, and commit logic.
 - Validate incoming import payloads with ArkType at the route boundary.
 - Reuse the existing provider connection and provider auth services during dependency resolution instead of duplicating credential setup logic inside project import.
-- Anchor staged uploads, extracted assets, and rewritten file paths to the runtime-writable root so browser mode and desktop mode share the same contract.
+- Anchor staged uploads, extracted assets, and rewritten file paths to the runtime-writable root so browser mode and desktop mode share the same contract. Do not assume browser/dev paths live outside the repo root; they live under the current runtime root today.
 - Support threshold-based execution modes: inline for small packages, background session jobs for large export assembly and large import analyze or commit work.
+- Treat those thresholds as execution-mode switches only, not as product limits. Packages larger than the inline thresholds must move to background work instead of being rejected just for size.
 - Record completed imports in a small transfer-history store with package fingerprint, source project summary, imported project id, imported at, and counts so analyze can warn on exact duplicate packages later.
 - Keep the final commit transactional and fail-fast when any required model mapping is unresolved.
 - If final-path asset promotion succeeds but the database transaction fails, delete the promoted files before the session is marked failed.
+- Transfer session creation plus background export assembly, import analyze, dependency-resolution mutations, transfer-history writes, and import commit execution must be owned by the active DuckDB writer process. Follower servers may serve readonly polling and download responses, but they must reject or proxy transfer mutations.
 
 ### Logging
 
@@ -256,12 +261,19 @@
   - Inline import analyze when uploaded zip bytes are `<= 128 MB` and declared extracted payload-plus-asset bytes are `<= 512 MB`.
   - Background import analyze when either import threshold is exceeded.
   - Background commit when the analyzed plan contains `>= 25,000` articles, `>= 250,000` judgments, or `>= 2 GB` of extracted assets.
-  - Reject packages larger than `8 GB` compressed, `20 GB` extracted, or `50,000` archive members.
+  - Do not reject a package only because it exceeds these thresholds. Thresholds switch work from inline requests to background execution.
+  - Instead of hard product-size ceilings, gate execution on current machine resources such as free disk space, writable temp space, and practical job progressability.
 
 - `Session storage layout`
   - Store working files under runtime-writable temp paths such as `tmp/project-transfer/import/<sessionId>/` and `tmp/project-transfer/export/<sessionId>/`.
+  - These paths are relative to the runtime-writable root. In desktop mode that root is outside the repo; in browser/dev mode it is the current runtime root, which is repo-local today.
   - Import session folders should contain `upload.zip`, `manifest.json`, `extracted/`, `analysis.json`, and `progress.json`.
   - Export session folders should contain `build/`, `manifest.json`, `package.zip`, and `progress.json`.
+  - Session creation should record estimated compressed and extracted bytes so the server can compare required storage against current machine capacity before expensive work starts.
+
+- `Writer ownership`
+  - Transfer session creation and all background export, analyze, dependency-resolution mutation, history-write, asset-promotion, and commit work must run on the active DuckDB writer.
+  - Readonly session polling may be served by follower servers, but follower servers must not mutate transfer sessions or start background transfer work.
 
 - `Import session states`
   - `uploading`, `queued`, `extracting`, `analyzing`, `awaiting_resolution`, `ready_to_commit`, `committing`, `completed`, `failed`, `cancelled`, `expired`.
@@ -285,6 +297,7 @@
   - Analyze should always produce `reusedArticleCount`, `newArticleCount`, `omittedRouteLinkCount`, `duplicateImportMatchCount`, and `judgmentConflictCount`.
   - `judgmentConflictCount` should count only post-remap judgment insert conflicts that would still block commit. Because prompt rows may be reused through immutable prompt matching, this count can be non-zero even in normal v1 imports.
   - Duplicate-package warnings and overlap summaries are informational; they never silently change the import plan.
+  - `omittedRouteLinkCount` represents missing target import routes that are intentionally skipped with warning in v1.
 
 - `Provider/model resolution contract`
   - Auto-match only enabled provider connections and enabled/selectable models.
@@ -301,6 +314,7 @@
 
 - `Article conflict review`
   - Because DOI, PubMed id, arXiv id, medRxiv id, and bioRxiv id are not unique in the current schema, analyze must return all exact candidates, the matched identifier type, and a blocking resolution requirement whenever more than one target article matches.
+  - Auto-match is allowed only when all non-empty exported stable identifiers converge on the same target article row. If identifiers disagree, analyze must block commit and require explicit user resolution.
 
 - `Provenance semantics`
   - `project_article.imported_from_project_id = NULL` is an intentional package-import semantic and must not trigger clone-style or Covidence-managed resync behavior.
@@ -351,10 +365,12 @@
 - [ ] Implement final-path asset promotion plus the final transaction that creates the new project, immutable prompt rows or links, article links, judgments, human judgments, summaries, reviews, and assessments with remapped ids.
 - [ ] Leave `project_prompt.origin_project_id` and `project_article.imported_from_project_id` null in v1 as intentional package-import semantics, and surface source-package provenance outside those columns.
 - [ ] Mark the new project dirty, queue mart refresh, navigate to the imported project, and surface post-import warnings for omitted links or unfinished provider setup.
+- [ ] Add a rollback-path test that promotes assets, forces the database transaction to fail, and verifies promoted files plus session temp files are best-effort cleaned up.
 
 #### Quality Gates
 
 - [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferCommit.test.ts`
+- [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferCommitRollback.test.ts`
 - [ ] `bun test src/server/routes/providerProjectFlow.e2e.test.ts`
 - [ ] `bun test src/app/routes/+projects/-+index.vitest.tsx`
 
@@ -377,10 +393,11 @@
 - Imported prompt links and imported project-article links will leave `origin_project_id` and `imported_from_project_id` null in v1. Source-package provenance lives in the manifest, import session summary, transfer history, and post-import warnings instead.
 - Generic provider model materialization must use provider-connection model routes; `POST /api/models/ensure` stays Codex-only.
 - Local provider URLs and worker URLs are transferable only as review hints, not as trustworthy defaults.
-- Missing import routes need a clear product rule: block, omit with warning, or map manually.
 - Large project packages need tuned thresholds for switching from inline requests to background jobs so the small-package UX stays fast without risking timeouts or memory spikes.
+- Missing import routes will be omitted with warning in v1.
+- Large project packages should be accepted as long as the current machine has enough resources; thresholds exist only to move work into background jobs.
 - Package fingerprint semantics must stay stable across equivalent re-exports while still distinguishing meaningful content changes.
-- Asset rewrite logic must work in browser mode and desktop mode without writing into repo-root paths.
+- Asset rewrite logic must work in browser mode and desktop mode while always using runtime-owned paths. In desktop those paths live outside the repo; in browser/dev they live under the current runtime root.
 
 ## Done Criteria
 
@@ -405,6 +422,7 @@
 - Add and run `bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts`
 - Add and run `bun test src/server/services/projectTransfer/projectTransferDuplicateDetection.test.ts`
 - Add and run `bun test src/server/services/projectTransfer/projectTransferCommit.test.ts`
+- Add and run `bun test src/server/services/projectTransfer/projectTransferCommitRollback.test.ts`
 - `bun test src/server/routes/providerProjectFlow.e2e.test.ts`
 - `bun test src/app/routes/+projects/-+index.vitest.tsx`
 - Add and run `bun test src/app/routes/+projects/-+import.vitest.tsx`
