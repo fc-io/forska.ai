@@ -25,16 +25,23 @@
 
 - `manifest.json`
 - `project.json`
-- `providers.json`
+- `providerConnections.json`
 - `models.json`
 - `prompts.json`
+- `projectPrompts.json`
+- `importRoutes.json`
+- `projectImportRoutes.json`
 - `articles.ndjson`
+- `articleImportRoutes.ndjson`
+- `projectArticles.ndjson`
 - `judgments.ndjson`
 - `judgmentAssessments.ndjson`
 - `humanJudgments.ndjson`
 - `humanJudgmentSummaries.ndjson`
 - `reviews.ndjson`
 - `assets/` for any exported local article files that must be rewritten on import
+
+- Keep `project.json` limited to project-scoped settings. Store project prompt links, project route links, article route links, and project article links in their own payload files so link metadata survives round-trip without overloading one document.
 
 ### Manifest Fields
 
@@ -108,9 +115,9 @@
 ### Mapping Strategy
 
 - `project`: always create a new target id.
-- `prompt`: resolve through the existing immutable-prompt behavior, not a project-local detached prompt table. Reuse an existing `app.prompt` row when the imported prompt content hash matches; otherwise create a new immutable prompt row. If the matched canonical prompt row is archived and the imported prompt definition should be active, reuse that row and reactivate it so import matches the current create and edit semantics. Always create fresh `app.project_prompt` link rows for the imported project, preserve imported project-link archive and enablement state there, and do not assume imported prompt ids will be unique to that project.
+- `prompt`: resolve through the existing immutable-prompt behavior, not a project-local detached prompt table. Recompute the canonical prompt content hash from the imported prompt fields and use the same `getOrCreateImmutablePromptTx` semantics as create, edit, and subproject flows instead of trusting a serialized hash blindly. Reuse an existing `app.prompt` row when the canonical hash matches; otherwise create a new immutable prompt row. If the matched canonical prompt row is archived and the imported prompt definition should be active, reuse that row and reactivate it so import matches the current create and edit semantics. Always create fresh `app.project_prompt` link rows for the imported project, preserve imported project-link archive and enablement state there, and do not assume imported prompt ids will be unique to that project.
 - `import_route`: match by `route`; if a route is missing on the target, omit that route link in v1, show it in preview, include it in overlap and post-import warnings, and continue without blocking the import.
-- `article`: auto-match only when one target article satisfies every exported stable identifier that is present. Resolve and display exact identifiers in priority order: `article_id`, normalized DOI, normalized PubMed id, normalized arXiv id, normalized medRxiv id, and normalized bioRxiv id. If no exact match exists, create a new article. Because only `article_id` is globally unique today, analyze must show the matched identifier type and all exact candidates when secondary identifiers produce multiple matches, and it must also block commit whenever any non-empty exported stable identifier points at a different target row than another exported identifier. Never heuristic auto-link in v1.
+- `article`: auto-match only when one target article satisfies every exported stable identifier that is present. Resolve and display exact identifiers in priority order: `article_id`, normalized DOI, normalized PubMed id, normalized arXiv id, normalized medRxiv id, and normalized bioRxiv id. Use the existing shared DOI normalization helper and add explicit shared normalization helpers for the remaining identifier families before analyze matching logic is locked so export and import compare the same canonical forms. If no exact match exists, create a new article. Because only `article_id` is globally unique today, analyze must show the matched identifier type and all exact candidates when secondary identifiers produce multiple matches, and it must also block commit whenever any non-empty exported stable identifier points at a different target row than another exported identifier. Never heuristic auto-link in v1.
 - `project_article`: always create a new link row for the imported project, even when the article row is reused, and set `imported_from_project_id` to `NULL` in v1. This intentionally differs from clone and Covidence-managed imports and must not imply local source-project ownership or managed re-sync behavior.
 - `provider_connection`: match by provider kind plus safe connection fingerprint only when the target connection is enabled and its saved config would still leave the required imported models selectable. Otherwise treat it as unresolved and let the user choose an existing connection, or create a new connection from sanitized prefilled fields and then complete any required credential or auth step.
 - `model`: match by mapped provider connection plus `remote_model_id` and `variant` only when the resolved target model is enabled and selectable. Otherwise materialize it during import after the user resolves the provider step, using `/api/provider-connections/:id/models` or `/api/provider-connections/:id/sync-models` for normal providers and `POST /api/models/ensure` for Codex.
@@ -126,7 +133,8 @@
 - If an article references local file-backed content such as PDFs or extracted assets, export the actual files into `assets/` and not just the stored path string.
 - On import, validate asset paths before extraction, reject absolute paths and `..` traversal, and never commit rows that still point at session-temp paths.
 - During analyze, extract assets only into the import-session temp area.
-- Before the database transaction starts, copy validated assets from temp into their final runtime-owned import location, rewrite stored paths to those final locations, and record every created path for cleanup.
+- During analyze, derive an asset-promotion plan after article matching and non-destructive merge decisions are known so commit only promotes files that created or updated rows will actually reference.
+- Before the database transaction starts, copy only those validated and still-needed assets from temp into final runtime-owned paths under `assets/...`, rewrite stored paths to those runtime-relative `assets/...` locations, and record every created path for cleanup. This keeps imported files compatible with the existing `/api/runtime-asset` serving contract.
 - If any asset copy or rewrite fails, abort before any database write starts.
 - If the database transaction fails after asset copies succeeded, best-effort delete the files created for that import session and leave the session failed.
 - If an article match already exists on the target, merge non-destructively: fill missing target fields, do not erase richer target data, and still link the article to the imported project.
@@ -166,7 +174,7 @@
    - Create an import session and extract payload files into temp storage.
    - If the package crosses the configured threshold, continue extraction and analyze asynchronously and show progress until the session is ready.
 2. Review package.
-   - Show project name, source app version, counts for prompts, articles, judgments, human judgments, reviews, providers, and models.
+   - Show project name, source app version, counts for prompts, project prompt links, import routes, project route links, articles, article route links, project article links, judgments, human judgments, human summary judgments, reviews, provider connections, and models.
    - Show explicit warnings for fields that were intentionally not exported.
    - Show exact-duplicate import warnings when the package fingerprint matches a prior completed import on this machine.
 3. Resolve providers and models.
@@ -176,13 +184,15 @@
    - Let the user create missing models from the resolved provider connection.
 4. Review import plan.
    - Show which articles will be reused versus newly created.
-   - Show which import routes will be linked versus omitted.
+   - Show which import routes will be linked versus omitted. Missing routes stay warnings in v1 and do not block commit by themselves.
+   - Show which article route links and project article links will be created for the imported project.
    - Show the final model mapping for the project and all imported judgments.
+   - Show any blocking article-match conflicts or post-remap judgment conflicts. In v1 these are review-time blockers, not an in-wizard per-row remap tool.
    - Show overlap counts and any prior-import warning again before confirmation.
 5. Confirm import.
-   - Run asset promotion into final runtime-owned paths before the database transaction, then run one transaction that creates the project, prompts, links, articles, judgments, human judgments, reviews, and assessments.
-   - For large imports, let the server own the long-running commit work and expose session progress while the transactional write is in flight.
-   - Mark the new project dirty and queue mart refresh after the transaction succeeds.
+    - Run asset promotion into final runtime-owned paths before the database transaction, then run one transaction that creates the project, prompts, links, articles, judgments, human judgments, human summary judgments, reviews, and assessments.
+    - For large imports, let the server own the long-running commit work and expose session progress while the transactional write is in flight.
+    - Mark the new project dirty inside the same transaction via the existing refresh-state service so the normal mart refresh worker picks it up, following the current create, edit, clone, and import flows.
 6. Finish.
    - Navigate to the new project.
    - Show post-import warnings, such as omitted route links or provider connections that still need credential setup.
@@ -192,15 +202,16 @@
 - Keep the current CSV export logic in `src/server/routes/ProjectExportRoutes.ts` unchanged.
 - Add a dedicated project-transfer route module, for example `src/server/routes/ProjectTransferRoutes.ts`, so package export and package import do not bloat the CSV export file.
 - Add a service layer under something like `src/server/services/projectTransfer/` for package assembly, session parsing, mapping, and commit logic.
-- Validate incoming import payloads with ArkType at the route boundary.
+- Validate HTTP params and JSON bodies with Elysia `t` at the route boundary. For the large package upload endpoint, allow a dedicated streaming multipart handler instead of assuming a plain `t.File()` body is sufficient. Use ArkType for manifest and payload-file schemas inside the transfer service where the versioned package contract needs richer validation.
 - Reuse the existing provider connection and provider auth services during dependency resolution instead of duplicating credential setup logic inside project import.
-- Anchor staged uploads, extracted assets, and rewritten file paths to the runtime-writable root so browser mode and desktop mode share the same contract. Do not assume browser/dev paths live outside the repo root; they live under the current runtime root today.
+- Anchor staged uploads, extracted assets, and rewritten file paths to the runtime-writable root via `resolveRuntimeWritablePath` and `resolveRuntimeFilePath` so browser mode and desktop mode share the same contract. Do not assume browser/dev paths live outside the repo root; they live under the current runtime root today.
+- Reuse the existing `/api/*` writer-proxy architecture for transfer routes, but make project-transfer uploads streaming-safe. The current `ApiProxyRoutes.ts` proxy path reads request bodies into memory, which conflicts with the large-package upload goal unless those routes bypass that path or the proxy is upgraded to stream upload bodies through to the writer.
 - Support threshold-based execution modes: inline for small packages, background session jobs for large export assembly and large import analyze or commit work.
 - Treat those thresholds as execution-mode switches only, not as product limits. Packages larger than the inline thresholds must move to background work instead of being rejected just for size.
 - Record completed imports in a small transfer-history store with package fingerprint, source project summary, imported project id, imported at, and counts so analyze can warn on exact duplicate packages later.
 - Keep the final commit transactional and fail-fast when any required model mapping is unresolved.
 - If final-path asset promotion succeeds but the database transaction fails, delete the promoted files before the session is marked failed.
-- Transfer session creation plus background export assembly, import analyze, dependency-resolution mutations, transfer-history writes, and import commit execution must be owned by the active DuckDB writer process. Follower servers may serve readonly polling and download responses, but they must reject or proxy transfer mutations.
+- Transfer session creation plus background export assembly, import analyze, dependency-resolution mutations, transfer-history writes, and import commit execution must be owned by the active DuckDB writer process. Follow the existing writer-proxy behavior for `/api/*` requests instead of inventing a separate leader-discovery path, and only serve polling or download responses directly when that response path is already safe on the current server.
 
 ### Logging
 
@@ -227,7 +238,8 @@
 - `src/app/routes/+projects/+index.tsx`
 - new `src/app/routes/+projects/+import.tsx`
 - likely new client helpers near `src/app/routes/+admin/+models/providerConnectionsClient.ts`
-- possibly a small shared provider-model resolution component reused from `src/app/routes/+projects/+create.tsx`
+- extract a small shared provider-model resolution component from `src/app/routes/+projects/+create.tsx` only if the import flow ends up reusing enough of that UI to justify it
+- do not blindly reuse `src/services/ensureSelectableModelId.ts` for non-Codex import resolution because its Anthropic ensure path binds to the first enabled Anthropic connection, not a user-selected mapped connection
 - update route tests in `src/app/routes/+projects/-+index.vitest.tsx`
 
 ## Phase Checklist
@@ -248,6 +260,11 @@
   - Write NDJSON payload rows in a locked deterministic order, sorted by stable source identifiers before bytes are emitted.
   - Compute `packageFingerprint` from canonical JSON built from: `schemaVersion`, normalized project source summary, sorted payload paths with checksums and row counts, sorted asset paths with checksums, and omission-warning codes.
   - Exclude `exportedAt`, `sourceAppVersion`, byte sizes, temp ids, and any session-local values from `packageFingerprint` so equivalent re-exports stay stable.
+
+- `Identifier normalization`
+  - Reuse the existing shared DOI normalization helper.
+  - Add shared normalization helpers for PubMed id, arXiv id, medRxiv id, and bioRxiv id before article overlap matching is implemented so analyze and commit use one canonical definition.
+  - Use those same helpers for duplicate and overlap summaries so preview counts match commit behavior.
 
 - `Zip rules`
   - Root entries must be relative POSIX-style paths with `/` separators.
@@ -277,8 +294,8 @@
 
 - `Import session states`
   - `uploading`, `queued`, `extracting`, `analyzing`, `awaiting_resolution`, `ready_to_commit`, `committing`, `completed`, `failed`, `cancelled`, `expired`.
-  - `awaiting_resolution` means the package is parsed but still has unresolved providers, models, routes, article conflicts, or judgment conflicts.
-  - `ready_to_commit` means every blocking dependency is resolved and the review plan is frozen for commit.
+  - `awaiting_resolution` means the package is parsed but still has blocking provider or model dependencies to resolve, or it has blocking article or judgment conflicts that prevent commit. Missing import routes stay warnings in v1 and do not keep the session unresolved on their own.
+  - `ready_to_commit` means every blocking dependency is resolved, no blocking article or judgment conflicts remain, and the review plan is frozen for commit.
 
 - `Export session states`
   - `queued`, `assembling`, `packaging`, `ready`, `failed`, `expired`.
@@ -302,19 +319,22 @@
 - `Provider/model resolution contract`
   - Auto-match only enabled provider connections and enabled/selectable models.
   - If a provider requires an API key or managed auth, a sanitized imported descriptor may prefill the form, but the dependency stays unresolved until the user supplies the key or completes the auth flow.
+  - Use `GET /api/provider-connections/:id/discovered-models` when the review UI needs to show provider-discovered candidates before creation.
   - For non-Codex imports, create missing models through `/api/provider-connections/:id/models` and use `/api/provider-connections/:id/sync-models` only as a helper when provider discovery is useful.
+  - Do not reuse the generic `ensureSelectableModelId` client helper for non-Codex import resolution because import must materialize models on the exact mapped provider connection, not whichever enabled connection happens to be first.
   - Use `POST /api/models/ensure` only for Codex.
 
 - `Asset commit contract`
   - Analyze may extract files only into session-temp storage.
-  - Commit must copy assets to final runtime-owned import paths before the database transaction starts.
-  - Persisted rows must reference only final runtime paths, never temp paths.
+  - Analyze must freeze an asset-promotion plan after article matching and merge decisions so commit knows exactly which files are still needed.
+  - Commit must copy only needed assets to final runtime-owned `assets/...` paths before the database transaction starts.
+  - Persisted rows must reference only final runtime-relative `assets/...` paths, never temp paths or absolute paths.
   - If asset copy fails, abort before the database transaction.
   - If the database transaction fails, best-effort delete all files copied for that import session.
 
 - `Article conflict review`
-  - Because DOI, PubMed id, arXiv id, medRxiv id, and bioRxiv id are not unique in the current schema, analyze must return all exact candidates, the matched identifier type, and a blocking resolution requirement whenever more than one target article matches.
-  - Auto-match is allowed only when all non-empty exported stable identifiers converge on the same target article row. If identifiers disagree, analyze must block commit and require explicit user resolution.
+  - Because DOI, PubMed id, arXiv id, medRxiv id, and bioRxiv id are not unique in the current schema, analyze must return all exact candidates, the matched identifier type, and a blocking conflict whenever more than one target article matches.
+  - Auto-match is allowed only when all non-empty exported stable identifiers converge on the same target article row. If identifiers disagree, analyze must block commit and surface the conflict for review instead of guessing.
 
 - `Provenance semantics`
   - `project_article.imported_from_project_id = NULL` is an intentional package-import semantic and must not trigger clone-style or Covidence-managed resync behavior.
@@ -322,11 +342,13 @@
 #### Phase 1 Implementation Breakdown
 
 - `Database contract` owner files: new `src/db/duckdbMigrations/00xx_projectTransferHistory.sql`, `src/db/schemaTypes.ts`. Add the duplicate-history table and typed record first so later phases can rely on it.
-- `Route shell` owner files: new `src/server/routes/ProjectTransferRoutes.ts`, `src/server/index.ts`. Mount the new route module and lock the Phase 1 request and response shapes at the server boundary.
+- `Route shell` owner files: new `src/server/routes/ProjectTransferRoutes.ts`, `src/server/serverMain.ts`, and, if transfer uploads stay on the standard `/api/*` path, `src/server/routes/ApiProxyRoutes.ts`. Mount the new route module in `serverMain.ts`, keep upload proxying compatible with large request bodies, and lock the Phase 1 request and response shapes at the server boundary.
+- `Upload route contract` owner files: new `src/server/routes/ProjectTransferRoutes.ts` plus whatever local streaming helper it needs. Lock the session-create and analyze response shapes early, but do not force the upload path into a non-streaming `t.File()` pattern if that would break the large-package requirements.
 - `Manifest contract` owner files: new `src/server/services/projectTransfer/projectTransferSchemas.ts`, new `src/server/services/projectTransfer/projectTransferManifest.ts`, new `src/server/services/projectTransfer/projectTransferFingerprint.ts`. Centralize manifest fields, omission warnings, checksum rules, and stable fingerprinting.
 - `Zip and path rules` owner files: new `src/server/services/projectTransfer/projectTransferZip.ts`, new `src/server/services/projectTransfer/projectTransferPaths.ts`. Own normalized archive member validation, allowed payload paths, and path-safety helpers.
 - `Session and history contract` owner files: new `src/server/services/projectTransfer/projectTransferSession.ts`, new `src/server/services/projectTransfer/projectTransferHistoryRepository.ts`. Define session states, progress payloads, temp-layout metadata, and duplicate-history reads and writes.
-- `Phase 1 tests` owner files: new `src/server/services/projectTransfer/projectTransferManifest.test.ts`, new `src/server/routes/ProjectTransferRoutes.test.ts`. Cover manifest validation, fingerprint stability, zip/path rejection, and route-level contract failures.
+- `Article data contract` owner files: extend `src/server/services/getAppQueryService.ts` or add a project-transfer-specific query helper so export assembly can actually include every locked article field, including `original_data`, instead of assuming the current shared full-article query already returns them all.
+- `Phase 1 tests` owner files: new `src/server/services/projectTransfer/projectTransferManifest.test.ts`, new `src/server/routes/ProjectTransferRoutes.test.ts`, and existing `src/server/routes/ApiProxyRoutes.test.ts` plus `src/server/routes/ApiProxyRoutes.retry.test.ts` if upload proxy behavior changes. Cover manifest validation, fingerprint stability, zip/path rejection, route-level contract failures, and the chosen writer-proxy behavior for transfer uploads.
 
 #### Quality Gates
 
@@ -336,6 +358,7 @@
 ### Phase 2 - Export Assembly
 
 - [ ] Build server-side package export assembly with manifest generation, JSON/NDJSON payload writers, active-judgment filtering, package fingerprinting, and sanitized provider/model export.
+- [ ] Extend the article export query layer so package assembly can actually export the locked article field set, including `original_data` alongside `source_metadata` and the selected full-text fields.
 - [ ] Collect local article assets, copy them into `assets/`, and record the metadata needed for safe import-time path rewriting.
 - [ ] Add `POST /api/projects/:id/export-project`, support inline download for small packages, and add a background export session path for large packages.
 - [ ] Wire the new `Export Project` action in `src/components/main/ProjectsGrid.tsx`, including a `preparing download` state when the export runs asynchronously.
@@ -348,6 +371,7 @@
 ### Phase 3 - Analyze And Resolve Dependencies
 
 - [ ] Build upload/analyze session endpoints, staged extraction, TTL cleanup, preview summaries, unresolved-warning reporting, and background progress for large packages.
+- [ ] Make project-transfer uploads compatible with the existing writer-proxy topology: either stream upload bodies through `ApiProxyRoutes.ts` or bypass that proxy for transfer uploads so large packages are not buffered in memory on follower servers.
 - [ ] Implement provider connection auto-match, existing-connection selection, managed-provider auth handoff, non-Codex provider-model materialization through provider-connection model routes, and Codex `POST /api/models/ensure` materialization.
 - [ ] Implement conservative article matching, route-link omission review, and conflict detection before commit.
 - [ ] Implement exact duplicate-package detection from package fingerprint plus overlap summaries for partial matches.
@@ -356,6 +380,8 @@
 #### Quality Gates
 
 - [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferAnalyze.test.ts`
+- [ ] Add and run `bun test src/server/routes/ApiProxyRoutes.test.ts`
+- [ ] Add and run `bun test src/server/routes/ApiProxyRoutes.retry.test.ts`
 - [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts`
 - [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferDuplicateDetection.test.ts`
 - [ ] Add and run `bun test src/app/routes/+projects/-+import.vitest.tsx`
@@ -364,7 +390,7 @@
 
 - [ ] Implement final-path asset promotion plus the final transaction that creates the new project, immutable prompt rows or links, article links, judgments, human judgments, summaries, reviews, and assessments with remapped ids.
 - [ ] Leave `project_prompt.origin_project_id` and `project_article.imported_from_project_id` null in v1 as intentional package-import semantics, and surface source-package provenance outside those columns.
-- [ ] Mark the new project dirty, queue mart refresh, navigate to the imported project, and surface post-import warnings for omitted links or unfinished provider setup.
+- [ ] Mark the new project dirty with the existing refresh-state service as part of the import transaction, navigate to the imported project, and surface post-import warnings for omitted links or unfinished provider setup.
 - [ ] Add a rollback-path test that promotes assets, forces the database transaction to fail, and verifies promoted files plus session temp files are best-effort cleaned up.
 
 #### Quality Gates
@@ -394,6 +420,8 @@
 - Generic provider model materialization must use provider-connection model routes; `POST /api/models/ensure` stays Codex-only.
 - Local provider URLs and worker URLs are transferable only as review hints, not as trustworthy defaults.
 - Large project packages need tuned thresholds for switching from inline requests to background jobs so the small-package UX stays fast without risking timeouts or memory spikes.
+- Large upload support depends on the writer-proxy path. If project-transfer uploads keep using the generic `/api/*` proxy, `ApiProxyRoutes.ts` must stop buffering request bodies into an `ArrayBuffer`, or transfer uploads must be routed straight to the writer.
+- Asset promotion must be driven by the final analyzed merge plan; otherwise reused target articles can leave behind successfully copied but unreferenced files.
 - Missing import routes will be omitted with warning in v1.
 - Large project packages should be accepted as long as the current machine has enough resources; thresholds exist only to move work into background jobs.
 - Package fingerprint semantics must stay stable across equivalent re-exports while still distinguishing meaningful content changes.
@@ -408,7 +436,7 @@
 - Missing providers and models can be resolved during import: non-Codex through provider-connection model flows, Codex through Codex setup plus `POST /api/models/ensure`.
 - API keys, Codex login state, and other secrets are never exported.
 - Exact duplicate package imports warn before confirmation, and overlapping imports show clear reuse-versus-create counts.
-- Imported prompts, articles, judgments, human judgments, reviews, and assessments all point to correct target ids after import.
+- Imported prompts, articles, judgments, human judgments, human summary judgments, reviews, and assessments all point to correct target ids after import.
 - The imported project renders correctly in review flows after mart refresh.
 - The browser flow still works, and the shared desktop flow still works.
 
@@ -419,6 +447,8 @@
 - Add and run `bun test src/server/services/projectTransfer/projectTransferManifest.test.ts`
 - Add and run `bun test src/server/services/projectTransfer/projectTransferExport.test.ts`
 - Add and run `bun test src/server/services/projectTransfer/projectTransferAnalyze.test.ts`
+- Add and run `bun test src/server/routes/ApiProxyRoutes.test.ts`
+- Add and run `bun test src/server/routes/ApiProxyRoutes.retry.test.ts`
 - Add and run `bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts`
 - Add and run `bun test src/server/services/projectTransfer/projectTransferDuplicateDetection.test.ts`
 - Add and run `bun test src/server/services/projectTransfer/projectTransferCommit.test.ts`
