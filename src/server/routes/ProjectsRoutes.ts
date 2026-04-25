@@ -87,7 +87,6 @@ type ProjectRow = {
   id: string
   name: string
   description: string | null
-  engine: string | null
   modelId: string
   useTitle: boolean
   useAbstract: boolean
@@ -116,7 +115,6 @@ const getProjectRowSql = (projectId: string) => {
       id,
       name,
       description,
-      engine,
       model_id AS modelId,
       use_title AS useTitle,
       use_abstract AS useAbstract,
@@ -383,7 +381,6 @@ export const projectsRoutes = new Elysia()
         id: string
         name: string
         description: string | null
-        engine: string | null
         modelId: string
         useTitle: boolean
         useAbstract: boolean
@@ -405,7 +402,6 @@ export const projectsRoutes = new Elysia()
         p.id AS id,
         p.name AS name,
         p.description AS description,
-        p.engine AS engine,
         p.model_id AS modelId,
         p.use_title AS useTitle,
         p.use_abstract AS useAbstract,
@@ -456,7 +452,6 @@ export const projectsRoutes = new Elysia()
         id: string
         name: string
         description: string | null
-        engine: string | null
         modelId: string
         useTitle: boolean
         useAbstract: boolean
@@ -478,7 +473,6 @@ export const projectsRoutes = new Elysia()
         p.id AS id,
         p.name AS name,
         p.description AS description,
-        p.engine AS engine,
         p.model_id AS modelId,
         p.use_title AS useTitle,
         p.use_abstract AS useAbstract,
@@ -540,7 +534,6 @@ export const projectsRoutes = new Elysia()
         id: string
         name: string
         description: string | null
-        engine: string | null
         modelId: string
         useTitle: boolean
         useAbstract: boolean
@@ -558,7 +551,6 @@ export const projectsRoutes = new Elysia()
         id,
         name,
         description,
-        engine,
         model_id AS modelId,
         use_title AS useTitle,
         use_abstract AS useAbstract,
@@ -772,7 +764,6 @@ export const projectsRoutes = new Elysia()
           id: string
           name: string
           description: string | null
-          engine: string | null
           modelId: string
           useTitle: boolean
           useAbstract: boolean
@@ -812,7 +803,6 @@ export const projectsRoutes = new Elysia()
             id,
             name,
             description,
-            engine,
             model_id AS modelId,
             use_title AS useTitle,
             use_abstract AS useAbstract,
@@ -1447,7 +1437,6 @@ export const projectsRoutes = new Elysia()
         id: string
         name: string
         description: string | null
-        engine: string | null
         modelId: string
         humanJudgmentMode: 'prompt' | 'summary' | null
         useTitle: boolean
@@ -1462,7 +1451,6 @@ export const projectsRoutes = new Elysia()
         id,
         name,
         description,
-        engine,
         model_id AS modelId,
         human_judgment_mode AS humanJudgmentMode,
         use_title AS useTitle,
@@ -1497,7 +1485,6 @@ export const projectsRoutes = new Elysia()
         id: string
         name: string
         description: string | null
-        engine: string | null
         modelId: string
         humanJudgmentMode: 'prompt' | 'summary' | null
         useTitle: boolean
@@ -1514,7 +1501,6 @@ export const projectsRoutes = new Elysia()
           id,
           name,
           description,
-          engine,
           model_id,
           human_judgment_mode,
           use_title,
@@ -1529,7 +1515,6 @@ export const projectsRoutes = new Elysia()
           '${escapeSqlString(clonedProjectId)}',
           ${getSqlLiteral(`${sourceProject.name} - Copy`)},
           ${getSqlLiteral(sourceProject.description)},
-          ${getSqlLiteral(sourceProject.engine)},
           '${escapeSqlString(sourceProject.modelId)}',
           ${getSqlLiteral(sourceProject.humanJudgmentMode ?? 'prompt')},
           ${sourceProject.useTitle ? 'TRUE' : 'FALSE'},
@@ -1544,7 +1529,6 @@ export const projectsRoutes = new Elysia()
           id,
           name,
           description,
-          engine,
           model_id AS modelId,
           human_judgment_mode AS humanJudgmentMode,
           use_title AS useTitle,

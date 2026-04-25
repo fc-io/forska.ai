@@ -155,7 +155,6 @@ export type ProjectRecord = {
   id: string
   name: string
   description: string | null
-  engine: Engine | null
   modelId: string
   humanJudgmentMode: HumanJudgmentMode | null
   useTitle: boolean
