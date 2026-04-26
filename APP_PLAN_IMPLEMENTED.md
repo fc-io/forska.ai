@@ -1,16 +1,17 @@
 # App Packaging Plan Implemented
 
-- Shared strategy lives in `APP_PLAN.md`.
+- This file tracks completed desktop packaging work plus landed decisions.
 - Remaining work lives in `APP_PLAN_TODO.md`.
 
 ## Current Status Summary
 
-- Status as of 2026-04-25: this is still an active desktop feasibility spike. See `APP_PLAN_TODO.md` for remaining blockers and release work.
+- Status as of 2026-04-26: this is still an active desktop feasibility spike. See `APP_PLAN_TODO.md` for remaining blockers and release work.
 - The local ElectroBun dev path is working enough to prove the basic shape: desktop shell, Bun backend sidecar, packaged frontend loading, API bridge, startup UI, logs, and single-instance protection.
 
 ### Done Now
 
 - ElectroBun is selected as the first shell, with Electron kept as the fallback.
+- Tauri remains the likely later optimization path if installer size becomes the main priority.
 - `bun run desktop:dev` and `bun run desktop:build` exist.
 - The desktop shell starts a separate Bun backend in `SERVER_ROLE=dev-single`.
 - The desktop shell waits for backend readiness before showing the main UI.
@@ -18,7 +19,17 @@
 - Desktop single-instance protection exists.
 - Frontend API origin can come from desktop runtime config while browser dev mode keeps its normal behavior.
 - Provider runtime records, Covidence import files, DuckDB path defaults, and backend launcher logs have at least an initial app-owned path story.
+- Shared runtime writable-path helpers and desktop runtime log env wiring exist.
+- The desktop backend already uses the shared structured runtime JSONL model under the desktop data root, while `backend.log` remains launcher capture.
 - `src/server/utils/duckdbBinary.ts` no longer assumes `:` for `PATH` parsing on Windows.
+
+## Landed Strategy Decisions
+
+- ElectroBun remains the active first-shell implementation track.
+- Electron remains the fallback if ElectroBun blocks signed installers, native module packaging, or stable macOS/Windows distribution.
+- Packaged desktop currently targets one Bun backend sidecar in `SERVER_ROLE=dev-single` first.
+- Packaged desktop loads the built frontend directly inside the shell and does not depend on `src/appServer.ts` at startup.
+- Desktop support remains additive to the normal browser/server workflows.
 
 ## Repo Findings And Hotspots
 
@@ -46,7 +57,7 @@
 - [x] Lock the first-shell choice to ElectroBun.
 - [x] Confirm v1 runtime shape: one Bun backend process in `dev-single` mode.
 - [x] Decide whether the ElectroBun shell launches a separate backend process or embeds startup in-process. Default: separate backend process.
-- [x] Confirm that `src/appServer.ts` is removed from the packaged path or kept only for web builds.
+- [x] Confirm that packaged desktop startup does not depend on `src/appServer.ts`, even though current artifacts still copy `src/`.
 - [x] Confirm that current browser/server commands remain first-class supported workflows.
 - [x] Define explicit fallback triggers for switching the shell layer to Electron.
 
@@ -68,9 +79,12 @@
 
 ### 4. Data, Cache, Import, And Log Paths
 
+- [x] Add shared runtime writable-path helpers for repo mode and desktop mode.
 - [x] Move provider runtime records from `cache/providerRuntimeRecords` to an app cache directory.
 - [x] Move Covidence import storage from `assets/covidence_imports` to an app data or imports directory.
 - [x] Add log-file locations for backend stdout, stderr, crash details, and migration failures.
+- [x] Wire desktop runtime config into `LOG_DIR`, `LOG_LEVEL`, `LOG_STDERR_LEVEL`, and `FORSKA_RUNTIME_PROFILE`.
+- [x] Keep the desktop backend on the shared structured runtime JSONL model under the desktop data root.
 
 ### 5. Cross-Platform Hardening
 
