@@ -1,7 +1,8 @@
-# App Packaging Plan TODO
+# App Packaging Full Plan TODO
 
-- This file tracks remaining desktop packaging work plus the active goals, strategy, architecture, spike scope, done criteria, and quality gates.
+- This file tracks the full remaining desktop packaging and release work beyond landed items.
 - Completed work lives in `APP_PLAN_IMPLEMENTED.md`.
+- The active ElectroBun feasibility spike and phase-1 execution plan live in `APP_PLAN_TODO_SPIKE.md`.
 
 ## Goals
 
@@ -49,7 +50,7 @@
 
 ## Current Status Summary
 
-- Status as of 2026-04-26: this is an active desktop feasibility spike, not a releasable installer yet.
+- Status as of 2026-04-26: the overall packaging effort is still downstream of an active desktop feasibility spike tracked in `APP_PLAN_TODO_SPIKE.md`.
 - The release path is still unproven: unsigned artifacts, Windows launch, native dependency packaging, signed installers, and remote upgrades are not complete.
 - Current plan progress is still early and foundational, with the remaining work concentrated in packaging, cross-platform hardening, native dependency verification, signing, release operations, and upgrades.
 
@@ -137,71 +138,21 @@
 - [ ] Packaged builds still need the remaining audit of runtime writes that can touch `cache/`, `assets/`, temp files, lock files, exports, DuckDB, SQLite, or generated diagnostics.
 - [ ] `electrobun.config.ts` currently has no `release.baseUrl`, and `src/desktop/index.ts` does not use ElectroBun's `Updater`, so remote upgrades are not wired yet.
 
-## ElectroBun Feasibility Spike
+## Active Spike
 
-### Goal
-
-- Prove ElectroBun can run Forska as a desktop app on macOS and Windows without breaking the current browser-based workflow.
-
-### Non-Goals
-
-- Signed installers.
-- Auto-update.
-- Tray or menu bar polish.
-- Linux packaging.
-- Full product UX polish.
-
-### Deliverables
-
-- A minimal ElectroBun shell scaffold in the repo.
-- One Bun backend sidecar boot path for desktop mode.
-- A renderer path that loads the existing built frontend inside the desktop shell.
-- A short blocker list with a go/no-go recommendation for continuing on ElectroBun.
-
-### Exit Criteria
-
-- A desktop window opens and loads the app UI.
-- The desktop shell starts the Bun backend successfully.
-- The frontend can talk to the local API in desktop mode.
-- Local writable state lands in app-owned directories rather than the repo root or install directory.
-- `bun run dev:server` plus `bun run dev:app` still work in a normal browser.
-- There is a clear list of remaining blockers for signed release packaging.
-
-### Remaining First Tasks
-
-- [ ] Lock the packaged runtime shape for the spike: bundle Bun, decide whether desktop ships backend source or a compiled backend artifact, and use that same shape for all unsigned smoke tests.
-- [ ] Finish the remaining desktop-mode runtime-write audit for DB, cache, imports, temp files, exports, lock files, and diagnostics so packaged runs stop depending on repo-root writes.
-- [ ] Verify migrations, DuckDB boot, SQLite job state, and `@duckdb/node-api` all work in desktop mode on a local smoke run using the chosen packaged shape.
-- [ ] Produce one unsigned macOS artifact on the chosen packaged shape and confirm launch, quit, relaunch, and basic in-app API connectivity on clean-machine assumptions with no Bun, DuckDB CLI, `sqlite3`, or `codex` installed.
-- [ ] Produce one unsigned Windows artifact on the chosen packaged shape and confirm launch, quit, relaunch, and basic in-app API connectivity on clean-machine assumptions with no Bun, DuckDB CLI, `sqlite3`, or `codex` installed.
-- [ ] Record blockers, required repo refactors, and an explicit continue-or-fallback decision versus Electron.
-
-### Current Spike Status
-
-- Still open before calling the spike complete: packaged Bun/backend runtime-shape lock-in, unsigned macOS and Windows artifact smoke tests, packaged native dependency verification, and a final blocker list plus continue-or-fallback call.
-
-### Current Blockers
-
-- Unsigned macOS and Windows artifact creation and relaunch smoke tests are still pending.
-- Packaged Bun bundling is not implemented yet, and backend source-vs-compiled artifact shape is not locked yet for clean-machine validation.
-- Packaged `@duckdb/node-api` verification is still pending on macOS and Windows.
-- Clean-machine validation that packaged startup and normal API flows do not require `sqlite3` or other unbundled CLIs is still pending.
-- Optional Codex CLI lookup, install guidance, and missing-binary behavior are not yet verified on packaged macOS and Windows builds.
-- Desktop API port selection and occupied-port recovery are not implemented; packaged desktop still defaults to port `32101` unless overridden.
-- Signing, notarization, installer generation, and remote upgrade strategy are not started.
-- `electrobun.config.ts` has no release host configured, and the desktop shell does not call `Updater.checkForUpdate`, `Updater.downloadUpdate`, or `Updater.applyUpdate`.
+- See `APP_PLAN_TODO_SPIKE.md` for the active ElectroBun feasibility spike, the source-first runtime-shape decision, and the current phase-1 execution plan.
 
 ## Detailed Checklist
 
 ### 1. Architecture Decision
 
-- [ ] Time-box an ElectroBun feasibility spike for macOS and Windows packaging.
+- [ ] Close the active ElectroBun feasibility spike in `APP_PLAN_TODO_SPIKE.md` with a continue-or-fallback decision.
 - [ ] Define supported targets for v1: macOS Intel/Apple Silicon, Windows x64, and Linux later.
 - [ ] Define what "works offline" means versus what still needs network access for providers and remote runtimes.
 
 ### 2. Desktop Shell Bootstrap
 
-- See `APP_PLAN_IMPLEMENTED.md` for landed shell bootstrap work; remaining shell-adjacent tasks are tracked under sections 5, 8, 9, and 15 below.
+- See `APP_PLAN_IMPLEMENTED.md` for landed shell bootstrap work and `APP_PLAN_TODO_SPIKE.md` for the active phase-1 shell work; remaining release tasks are tracked under sections 5, 8, 9, and 15 below.
 
 ### 3. Frontend Runtime Wiring
 
