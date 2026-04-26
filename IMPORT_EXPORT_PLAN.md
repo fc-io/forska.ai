@@ -63,9 +63,10 @@
 - On import, create the target project as an active new project with a new id and current target timestamps; do not copy source `id`, `created_at`, `updated_at`, or `archived` into the live target row.
 - Prompt definitions and project prompt links from `app.prompt` and `app.project_prompt`, including `original_text`, `transformed_text`, `prompt_heading`, `type`, prompt-row archived state, link order, link enabled state, link archived state, and criteria fields (`criteria_disposition`, `criteria_section_key`, and `criteria_section_label`, including the `combined` disposition).
 - Project route scope from `app.project_import_route` and referenced `app.import_route` rows.
-- Project article links from `app.project_article`.
+- Project article links from `app.project_article` only for articles in the exported, date-bounded article set.
 - Exported article set as the union of route-scoped articles from `app.project_import_route` joined through `app.article_import_route` and curated article links from `app.project_article`.
-- Current project article scope means the exported article set after applying the project's `date_from` and `date_to` bounds, matching review/mart and judgment-job selection.
+- Current project article scope means the exported article set after applying the project's `date_from` and `date_to` bounds to the union of route-scoped and curated articles.
+- Do not infer export scope from `mart.project_scope_article` alone because that mart stores project membership before date filtering; package export and import analysis must apply the same article date predicates used by review serving and lock parity with judgment queue selection, including raw fallback paths.
 - Referenced article rows from `app.article` for the exported article set, including article identity fields (`article_id`, DOI, PubMed id, arXiv id, medRxiv id, bioRxiv id), citation metadata, title, summary, authors, article version, article timestamps, legacy `import_route`, URL, publication status, `content_hash`, `original_data`, `source_metadata`, `full_text`, `full_text_html`, `full_text_pdf`, `full_text_source`, `full_text_original_format`, `full_text_fetched_at`, `full_text_assets`, and `full_text_char_count`.
 - Article route links from `app.article_import_route` for exported articles and exported import routes so route provenance can be reconstructed only when the target route and planned article-route writes are safe to link.
 - Active current-review judgments from `app.judgment` where `deleted_at IS NULL`, scoped by current project article scope, enabled exported prompt links, current `model_id`, and content toggles (`use_title`, `use_abstract`, `use_fulltext`, `use_fulltext_no_images`). Include source ids and remappable project references plus `is_answered`, `answered_original`, `answered_original_as_array`, `confidence_original`, `explanation`, `quotes`, `chunking_strategy`, `delete_generation`, `snapshot_project_model_name`, and timestamps. Do not export every row with a matching `project_id` unless it also satisfies that benchmark-critical judgment configuration.
@@ -140,7 +141,7 @@
 
 - Preserve enough article content for imported judgments and review screens to stay meaningful.
 - If an article references local file-backed content such as PDFs or extracted assets, export the actual files into `assets/` and not just the stored path string.
-- On import, validate asset paths and `assetManifest.json` references before extraction, reject absolute paths and `..` traversal, and never commit rows that still point at session-temp paths.
+- On import, validate asset paths and `assetManifest.json` references before extraction, reject absolute paths, backslash traversal, `..` traversal, symlinks, and normalized-path changes, and never commit rows that still point at session-temp paths.
 - During analyze, extract assets only into the import-session temp area.
 - During analyze, derive an asset-promotion plan after article matching and non-destructive merge decisions are known so commit only promotes files that created or updated rows will actually reference.
 - Before the database transaction starts, copy only those validated and still-needed assets from temp into final runtime-owned paths under `assets/...`, rewrite stored paths to those runtime-relative `assets/...` locations, and record every created path for cleanup. This keeps imported files compatible with the existing `/api/runtime-asset` serving contract.
@@ -170,7 +171,7 @@
 - Store staged uploads under the runtime-writable root in `tmp/project-transfer/...` so browser/dev mode and desktop mode share one contract. In desktop this lives outside the repo; in browser/dev it uses the current runtime root, which is repo-local today.
 - Stream the uploaded `.forska-project.zip` directly to temp storage instead of buffering the whole file in browser or server memory.
 - Give each import session a TTL plus cleanup on commit, cancel, expiry, and best-effort startup recovery. Do not add product-level hard package-size caps in v1; fail only when local machine resources are insufficient for the requested import.
-- Validate zip members before extraction and reject duplicate normalized paths, checksum mismatches, absolute paths, and `..` traversal.
+- Validate zip members before extraction and reject duplicate normalized paths, checksum mismatches, absolute paths, backslash traversal, `..` traversal, symlinks, and normalized-path changes.
 - Before extraction and before asset promotion, estimate required disk usage and fail early with a clear insufficient-storage error if the current machine cannot hold the package safely.
 - For very large packages, run extraction, checksum validation, and analyze work as a server-side background job tied to the import session; the UI polls progress instead of waiting on one long request.
 - Keep a small-package fast path so modest imports can still analyze inline without extra job orchestration.
@@ -281,8 +282,8 @@
   - Use those same helpers for duplicate and overlap summaries so preview counts match commit behavior.
 
 - `Zip rules`
-  - Root entries must be relative POSIX-style paths with `/` separators.
-  - Reject archive members that are absolute paths, contain `..`, normalize to the same path as another member, or are symlinks.
+  - Root entries must be relative POSIX-style paths with `/` separators and no backslashes.
+  - Reject archive members that are absolute paths, contain a `..` path segment, normalize to a different path, normalize to the same path as another member, or are symlinks.
   - Require `manifest.json` at the archive root.
   - Allow payload files only from the locked manifest file list plus `assets/**`.
   - Treat manifest-declared sizes as untrusted advisory values. Compare them against zip entry compressed and uncompressed sizes before extraction, then verify actual extracted bytes and checksums before analyze can proceed.
@@ -324,7 +325,7 @@
 - `Duplicate history store`
   - Add a small app table such as `app.project_transfer_history` with: `id`, `direction`, `package_fingerprint`, `schema_version`, `source_project_id`, `source_project_name`, `target_project_id`, `payload_counts_json`, `created_at`.
   - Record one row after each completed import and optionally after each completed export.
-  - During analyze, match on `package_fingerprint` first and use the history row only for warning and display, never for automatic merge behavior.
+  - During analyze, match duplicate-import warnings on `direction = 'import'` plus `package_fingerprint`, and use the history row only for warning and display, never for automatic merge behavior. Export-history rows may support audit or download UX, but they must not produce `already imported` warnings.
 
 - `Overlap summary contract`
   - Analyze should always produce `reusedArticleCount`, `newArticleCount`, `omittedRouteLinkCount`, `omittedArticleRouteLinkCount`, `routeArticleSnapshotLinkCount`, `duplicateImportMatchCount`, and `judgmentConflictCount`.
@@ -620,3 +621,23 @@ Sixth review-pass commands:
 - `git status --short`
 
 No Bun tests were run because this pass only changed the Markdown plan.
+
+Seventh review-pass commands:
+- `git status --short`
+- `sed -n '1,260p' IMPORT_EXPORT_PLAN.md`
+- `sed -n '261,520p' IMPORT_EXPORT_PLAN.md`
+- `sed -n '521,680p' IMPORT_EXPORT_PLAN.md`
+- `git diff -- IMPORT_EXPORT_PLAN.md`
+- `rg -n 'full_text|source_metadata|original_data|publication_status|content_hash|article_id VARCHAR|UNIQUE\(article_id\)|CREATE TABLE IF NOT EXISTS app\.(article|judgment|project_prompt|project_article|judgment_human_summary|provider_connection|model)' src/db/duckdbMigrations/*.sql`
+- `rg -n 'provider-connections/:id/(discovered-models|sync-models|models)|models/ensure|provider-auth|runtime-asset|project_export|export-project|ensureSelectableModelId' src/server src/app src/services -g '*.ts' -g '*.tsx'`
+- `rg -n "api/provider-connections/:id/test|/test'|/test\"|provider-connections.*test" src/server/routes/ProviderConnectionsRoutes.ts src/app/routes/+admin/+models/providerConnectionsClient.ts`
+- `rg -n 'date_from|date_to|article_created_at|project_scope_article|UnassessedPairs|getScopedActivityArticleWindow|getDuckdbServingBaseWhereParts' src/services/olap/duckdbOlap.ts src/server/services/getDuckdbMartRefreshService.ts src/server/cron/judgmentsJobs -g '*.ts'`
+- `sed -n '220,310p' src/server/routes/ProviderConnectionsRoutes.ts`
+- `test -f src/db/schemaTypes.ts && echo exists || echo missing`
+- `rg --files src/db | sort`
+- `rg -n 'schemaTypes|type .*Table|duckdbMigrations' src/db src/server -g '*.ts'`
+- `git diff --check -- IMPORT_EXPORT_PLAN.md`
+- `sed -n '62,74p' IMPORT_EXPORT_PLAN.md`
+- `sed -n '282,290p' IMPORT_EXPORT_PLAN.md`
+
+No Bun tests were run because this review only changed the Markdown plan.
