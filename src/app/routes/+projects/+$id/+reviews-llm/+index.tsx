@@ -45,7 +45,7 @@ const Reviews = () => {
   })
 
   const handleArchiveProject = async () => {
-    const projectName = projectQuery.data?.project.name ?? 'this project'
+    const projectName = projectQuery.data?.project?.name ?? 'this project'
     if (
       !confirm(
         `Are you sure you want to archive the project "${projectName}"? The project will be hidden from project lists but can be restored later.`,
@@ -90,7 +90,7 @@ const Reviews = () => {
             <Button as={Link} to="/projects/$id" params={{id: params().id} as never} variant="outline">
               Project Details
             </Button>
-            <Show when={projectQuery.data?.project.humanJudgmentMode !== 'summary'}>
+            <Show when={projectAccessQuery.data?.humanJudgmentMode !== 'summary'}>
               <Button
                 as={Link}
                 to="/projects/$id/humanAssessment"
