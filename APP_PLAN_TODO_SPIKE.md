@@ -36,7 +36,7 @@
 
 - An unsigned macOS artifact opens a desktop window, starts the packaged Bun backend, and reaches a healthy app state.
 - The artifact does not rely on repo checkout, Bun on `PATH`, DuckDB CLI, `sqlite3`, or `codex` for startup or normal app usage.
-- First launch, quit, relaunch, one import, and one provider setup work with app-owned user directories.
+- First launch, quit, relaunch, one import, and one non-Codex provider or manual provider setup work with app-owned user directories and no host CLI dependency.
 - Browser workflows still work with `bun run dev:server` and `bun run dev:app`.
 - At least one native Windows artifact smoke run is executed on the same source-first runtime shape and its results are captured.
 - The spike ends with an explicit continue-or-fallback decision versus Electron.
@@ -62,6 +62,10 @@ Deliverables:
 - Backend entrypoint resolution is artifact-relative and deterministic.
 - Startup errors include resolved Bun path, backend entrypoint, API origin, data root, and log path.
 Quality Gates:
+- `bun run lint`
+- `bun test src/desktop/getDesktopRuntimeConfig.test.ts`
+- `bun test src/app/utils/getDesktopApiOrigin.test.ts`
+- `bun test src/app/utils/getApiRequestUrl.test.ts`
 - `bun run build`
 - `bun run desktop:build`
 - Browser verify: `bun run dev:server` and `bun run dev:app` still boot after runtime-shape changes.
@@ -85,6 +89,7 @@ Deliverables:
 - FHIR EHR import temp spooling uses an explicit runtime temp location with cleanup in desktop mode, or is documented as intentionally OS-temp-only and verified not to touch the repo or install directory.
 - DB-stored `assets/...` references keep working in browser and desktop flows.
 Quality Gates:
+- `bun run lint`
 - `bun test src/server/utils/runtimeWritablePath.test.ts`
 - `bun test src/server/services/covidenceImportService.test.ts`
 - `bun test src/server/services/structuredFileImportService.test.ts`
@@ -108,6 +113,7 @@ Deliverables:
 - Migrations run on first launch and relaunch.
 - Restart and crash recovery leave local data usable.
 Quality Gates:
+- `bun run lint`
 - `bun test src/server/utils/getDuckdbPath.test.ts`
 - `bun test src/server/utils/backgroundServerStack.test.ts`
 - `bun test src/server/utils/duckdbServiceNodeApiSpike.test.ts`
@@ -126,6 +132,7 @@ Deliverables:
 - Occupied desktop API port either falls back to a free loopback port or shows an actionable startup error.
 - Packaged mode stays loopback-only.
 Quality Gates:
+- `bun run lint`
 - `bun test src/desktop/getDesktopRuntimeConfig.test.ts`
 - `bun test src/desktop/desktopSingleInstance.test.ts`
 - macOS verify: launch with the default port already occupied.
@@ -154,7 +161,7 @@ Quality Gates:
 - `bun test src/server/utils/getCodexAppServerClient.test.ts`
 - Add `src/server/routes/ModelsRoutes.test.ts` coverage for missing-`codex` status and login behavior, then run `bun test src/server/routes/ModelsRoutes.test.ts`.
 - `bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts`
-- Packaged app verify: startup, API, import, provider setup, quit, and relaunch all work with no `codex` or `sqlite3` installed.
+- Packaged app verify: startup, API, import, non-Codex provider or manual provider setup, quit, and relaunch all work with no `codex` or `sqlite3` installed.
 - Packaged app verify: opening Providers or Settings with no `codex` installed shows in-app guidance and no browser-dev-only instruction.
 
 ### 6. macOS Smoke Run
@@ -172,14 +179,21 @@ Manual Checks:
 - Confirm startup diagnostics show the artifact Bun path, not a host `bun` path.
 - Confirm the backend reaches `/api/runtime/ready`.
 - Import one dataset.
-- Configure one provider.
+- Configure one non-Codex provider or manual provider record that does not require a host CLI.
 - Quit and relaunch.
 - Confirm writes land under the per-user desktop data root, not the repo root or install directory.
 - Confirm deleting or misplacing the bundled Bun in a throwaway artifact copy produces an actionable startup error rather than falling back to host Bun.
+Quality Gates:
+- All commands complete successfully.
+- All manual checks pass outside the repo checkout with no host `bun`, `codex`, or `sqlite3` exposure unless the exposure is explicitly recorded.
+- Smoke result, command output summary, artifact path, data root, log path, and any host-tool exposure are recorded in `APP_PLAN_IMPLEMENTED.md` if it passes, or in this file under the relevant blocker if it fails.
 
 ### 7. Native Windows Smoke Run
 
 - Goal: run the same source-first artifact assumptions on native Windows before making the continue-or-fallback call.
+Commands:
+- `bun run build`
+- `bun run desktop:build`
 Preconditions:
 - macOS source-first artifact passes the full smoke run.
 - Run on native Windows outside the repo checkout with no `FORSKA_DESKTOP_BUN_BIN` and no host `bun`, `codex`, or `sqlite3` on `PATH`, or explicitly record any unavoidable host-tool exposure.
@@ -187,11 +201,15 @@ Manual Checks:
 - Launch, quit, relaunch.
 - API connectivity.
 - Import one dataset.
-- Configure one provider.
+- Configure one non-Codex provider or manual provider record that does not require a host CLI.
 - Data root and log path.
 - Spaces in user profile paths.
 - No `sqlite3` or `codex` required for core flows.
 - Startup diagnostics show the artifact Bun path, not a host `bun` path.
+Quality Gates:
+- All commands complete successfully on native Windows.
+- All manual checks pass outside the repo checkout with no host `bun`, `codex`, or `sqlite3` exposure unless the exposure is explicitly recorded.
+- Smoke result, command output summary, artifact path, data root, log path, Windows version, and any host-tool exposure are recorded in `APP_PLAN_IMPLEMENTED.md` if it passes, or in this file under the relevant blocker if it fails.
 
 ## Continue Or Fallback Decision
 
