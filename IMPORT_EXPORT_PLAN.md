@@ -39,6 +39,7 @@
 - `humanJudgments.ndjson`
 - `humanJudgmentSummaries.ndjson`
 - `reviews.ndjson`
+- `assetManifest.json` for exported file assets, checksums, byte sizes, and the payload paths or fields that reference each packaged asset
 - `assets/` for any exported local article files that must be rewritten on import
 
 - Keep `project.json` limited to project-scoped settings. Store project prompt links, project route links, article route links, and project article links in their own payload files so link metadata survives round-trip without overloading one document.
@@ -50,24 +51,28 @@
 - `sourceAppVersion`
 - `packageFingerprint` as a stable hash over manifest core and payload checksums, excluding volatile timestamps, so re-exports of the same logical package can warn on duplicate re-import
 - `project` summary with source id, name, counts, human judgment mode, and current model reference
-- `warnings` for omitted secrets, omitted deleted judgments, omitted article conversion-runtime fields, local-only config, and unresolved runtime-specific data
+- `warnings` for omitted secrets, omitted deleted judgments, omitted pending or unanswered human-assessment workflow rows, omitted article conversion-runtime fields, local-only config, and unresolved runtime-specific data
 - `payloads` with row counts, checksums, and byte sizes for each payload file
+- `assets` summary with asset count, total byte size, and the `assetManifest.json` checksum so import can verify detailed asset references before rewriting file-backed content
 
 ## Exported Data Scope
 
 ### Include
 
-- Project settings from `app.project`, including name, description, date bounds, content toggles, and `human_judgment_mode`.
+- Project settings from `app.project`, including name, description, current `model_id` source reference, date bounds, content toggles, and `human_judgment_mode`.
 - Prompt definitions and project prompt links from `app.prompt` and `app.project_prompt`, including `original_text`, `transformed_text`, `prompt_heading`, `type`, prompt-row archived state, link order, link enabled state, link archived state, and criteria fields.
 - Project route scope from `app.project_import_route` and referenced `app.import_route` rows.
 - Project article links from `app.project_article`.
-- Referenced article rows from `app.article` and `app.article_import_route`, including article identity fields (`article_id`, DOI, PubMed id, arXiv id, medRxiv id, bioRxiv id), citation metadata, title, summary, authors, article version, article timestamps, legacy `import_route`, URL, publication status, `content_hash`, `original_data`, `source_metadata`, `full_text`, `full_text_html`, `full_text_pdf`, `full_text_source`, `full_text_original_format`, `full_text_fetched_at`, `full_text_assets`, and `full_text_char_count`.
-- All active project judgments from `app.judgment` where `deleted_at IS NULL`.
+- Exported article set as the union of route-scoped articles from `app.project_import_route` joined through `app.article_import_route` and curated article links from `app.project_article`.
+- Current project article scope means the exported article set after applying the project's `date_from` and `date_to` bounds, matching review/mart and judgment-job selection.
+- Referenced article rows from `app.article` for the exported article set, including article identity fields (`article_id`, DOI, PubMed id, arXiv id, medRxiv id, bioRxiv id), citation metadata, title, summary, authors, article version, article timestamps, legacy `import_route`, URL, publication status, `content_hash`, `original_data`, `source_metadata`, `full_text`, `full_text_html`, `full_text_pdf`, `full_text_source`, `full_text_original_format`, `full_text_fetched_at`, `full_text_assets`, and `full_text_char_count`.
+- Article route links from `app.article_import_route` for exported articles and exported import routes so mapped route scope can be reconstructed without including unrelated article rows or unrelated route links.
+- Active current-review judgments from `app.judgment` where `deleted_at IS NULL`, scoped by current project article scope, enabled exported prompt links, current `model_id`, and content toggles (`use_title`, `use_abstract`, `use_fulltext`, `use_fulltext_no_images`). Do not export every row with a matching `project_id` unless it also satisfies that benchmark-critical judgment configuration.
 - Linked judgment assessments from `app.judgment_assessment` for exported judgments.
-- Project human judgments from `app.judgment_human`.
-- Project summary human judgments from `app.judgment_human_summary`.
-- Project review state from `app.review`.
-- All provider and model descriptors needed by the project row and by imported judgments, not just the project's current `model_id`.
+- Project human judgments from `app.judgment_human`, limited to answered, non-empty rows in current project article scope and enabled exported prompt links.
+- Project summary human judgments from `app.judgment_human_summary`, limited to non-empty summary answers in current project article scope.
+- Project review state from `app.review`, limited to current project article scope.
+- All provider and model descriptors needed by the project row and by exported judgments.
 
 ### Do Not Include
 
@@ -76,6 +81,7 @@
 - Article full-text conversion runtime state in v1: `full_text_conversion_status`, `full_text_conversion_error`, `full_text_conversion_attempts`, `full_text_conversion_model_id`, and `full_text_conversion_metadata`; surface this as an omission warning because it is machine-local pipeline state, not portable package content.
 - Runtime-detection cache, worker health, endpoint health, logs, temp files, or machine-local status snapshots.
 - `app.judgment_job`, `app.token_use`, `app.llm_status`, `app.nvidia_smi`, or any job-runtime artifacts.
+- Pending or unanswered human-assessment workflow rows in v1; preserve durable answered review signal, not local assessment session state.
 - `app.project_mart_refresh_state`, `app.project_mart_refresh_article_state`, `app.project_mart_large_rebuild_state`, or any `mart.*` tables.
 - Soft-deleted judgments in v1; deleted rows stay out of the package.
 
@@ -85,7 +91,7 @@
 - Include safe fields such as `providerKind`, `label`, `authMode`, `baseURL`, `maxInflightRequests`, and reviewable config values.
 - Treat machine-local values such as manual worker URLs as hints that the importer must confirm or edit, not as silent defaults.
 - Export models with enough identity to re-link judgments correctly: `remoteModelId`, `name`, `displayName`, `variant`, provider kind, connection reference, and metadata. `remoteModelId` is nullable in the current schema, so the package must preserve the fallback local model name too.
-- Export the full dependency set for all model ids referenced by the project and its judgments.
+- Export the full dependency set for the project model and every model id referenced by the exported judgment payload.
 - Reuse the existing provider setup flows during import instead of inventing a separate import-only credential path.
 - Treat exported provider descriptors as safe prefill only. If the target provider needs an API key or interactive auth, the import flow must still collect that credential or complete that auth step before the dependency is considered resolved.
 - Use the normal provider endpoints for dependency setup where possible: `/api/provider-auth/:providerKind/*`, `/api/provider-connections`, `/api/provider-connections/:id`, and `/api/provider-connections/:id/test` for connection setup and verification, `/api/provider-connections/:id/models` and `/api/provider-connections/:id/sync-models` for non-Codex model materialization, and `POST /api/models/ensure` only for Codex model materialization.
@@ -121,6 +127,7 @@
 - `project_article`: always create a new link row for the imported project, even when the article row is reused, and set `imported_from_project_id` to `NULL` in v1. This intentionally differs from clone and Covidence-managed imports and must not imply local source-project ownership or managed re-sync behavior.
 - `provider_connection`: match by provider kind plus safe connection fingerprint only when the target connection is enabled and its saved config would still leave the required imported models selectable. Otherwise treat it as unresolved and let the user choose an existing connection, or enter the normal provider setup flow with sanitized fields prefilled and complete any required credential or auth step there.
 - `model`: match by mapped provider connection plus `remote_model_id` and `variant` only when the resolved target model is enabled and selectable. If the exported model has `remote_model_id = NULL`, only auto-match an existing enabled target model on the mapped connection when exact fallback identity fields from the package, such as `name`, `displayName`, and `variant`, still converge on one row; otherwise keep it unresolved because the current non-Codex create route requires a remote model id. For resolvable non-Codex models with a remote model id, materialize them during import after the user resolves the provider step, using `/api/provider-connections/:id/models` or `/api/provider-connections/:id/sync-models`; use `POST /api/models/ensure` only for Codex.
+- `judgment`: create fresh target ids after article, prompt, model, and content-setting remap succeeds. Preserve the exported judgment id only as `sourceId` for assessment remapping and conflict reporting.
 
 ### Source Project Provenance Fields
 
@@ -131,7 +138,7 @@
 
 - Preserve enough article content for imported judgments and review screens to stay meaningful.
 - If an article references local file-backed content such as PDFs or extracted assets, export the actual files into `assets/` and not just the stored path string.
-- On import, validate asset paths before extraction, reject absolute paths and `..` traversal, and never commit rows that still point at session-temp paths.
+- On import, validate asset paths and `assetManifest.json` references before extraction, reject absolute paths and `..` traversal, and never commit rows that still point at session-temp paths.
 - During analyze, extract assets only into the import-session temp area.
 - During analyze, derive an asset-promotion plan after article matching and non-destructive merge decisions are known so commit only promotes files that created or updated rows will actually reference.
 - Before the database transaction starts, copy only those validated and still-needed assets from temp into final runtime-owned paths under `assets/...`, rewrite stored paths to those runtime-relative `assets/...` locations, and record every created path for cleanup. This keeps imported files compatible with the existing `/api/runtime-asset` serving contract.
@@ -142,7 +149,7 @@
 
 ## Judgment Integrity Rules
 
-- Export and import only active judgments where `deleted_at IS NULL` in v1.
+- Export and import only active current-review judgments where `deleted_at IS NULL` in v1.
 - Import judgments only after article, prompt, and model mappings are fully resolved.
 - Rewrite every judgment foreign key to target ids before insert.
 - Because imported prompts may reuse existing immutable prompt rows, imported judgments can still collide with existing target judgments after article, prompt, and model remapping.
@@ -174,7 +181,7 @@
    - Create an import session and extract payload files into temp storage.
    - If the package crosses the configured threshold, continue extraction and analyze asynchronously and show progress until the session is ready.
 2. Review package.
-   - Show project name, source app version, counts for prompts, project prompt links, import routes, project route links, articles, article route links, project article links, judgments, human judgments, human summary judgments, reviews, provider connections, and models.
+   - Show project name, source app version, counts for prompts, project prompt links, import routes, project route links, articles, article route links, project article links, judgments, human judgments, human summary judgments, reviews, provider connections, models, and packaged assets.
    - Show explicit warnings for fields that were intentionally not exported.
    - Show exact-duplicate import warnings when the package fingerprint matches a prior completed import on this machine.
 3. Resolve providers and models.
@@ -190,9 +197,9 @@
    - Show any blocking article-match conflicts or post-remap judgment conflicts. In v1 these are review-time blockers, not an in-wizard per-row remap tool.
    - Show overlap counts and any prior-import warning again before confirmation.
 5. Confirm import.
-    - Run asset promotion into final runtime-owned paths before the database transaction, then run one transaction that creates the project, prompts, links, articles, judgments, human judgments, human summary judgments, reviews, and assessments.
-    - For large imports, let the server own the long-running commit work and expose session progress while the transactional write is in flight.
-    - Mark the new project dirty inside the same transaction via the existing refresh-state service so the normal mart refresh worker picks it up, following the current create, edit, clone, and import flows.
+   - Run asset promotion into final runtime-owned paths before the database transaction, then run one transaction that creates the project, prompts, links, articles, judgments, human judgments, human summary judgments, reviews, and assessments.
+   - For large imports, let the server own the long-running commit work and expose session progress while the transactional write is in flight.
+   - Mark the new project dirty inside the same transaction via the existing refresh-state service so the normal mart refresh worker picks it up, following the current create, edit, clone, and import flows.
 6. Finish.
    - Navigate to the new project.
    - Show post-import warnings, such as omitted route links or provider connections that still need credential setup.
@@ -247,9 +254,9 @@
 
 ### Phase 1 - Contract And Schemas
 
-- [ ] Lock the manifest schema, payload file list, and explicit exported field set, including article fields and omission warnings.
+- [ ] Lock the manifest schema, payload file list, and explicit exported field set, including article fields, current-review judgment scope, answered human/review row scope, and omission warnings.
 - [ ] Define import-session state, source-to-target id maps, unresolved dependency statuses, immutable-prompt link rules, asset cleanup rules, and post-remap judgment-conflict reporting.
-- [ ] Pick the zip implementation and lock checksum, package fingerprint, path-normalization, and size-limit rules before writing route handlers.
+- [ ] Pick the zip implementation and lock checksum, package fingerprint, path-normalization, threshold, and resource-gate rules before writing route handlers.
 - [ ] Define the thresholds that switch export, analyze, and commit work from inline requests to background session jobs.
 
 #### Phase 1 Spec
@@ -259,7 +266,7 @@
   - Compute manifest `payloads[*].checksum` over the exact file bytes written into the package.
   - Serialize JSON payloads with canonical key ordering and stable formatting.
   - Write NDJSON payload rows in a locked deterministic order, sorted by stable source identifiers before bytes are emitted.
-  - Compute `packageFingerprint` from canonical JSON built from: `schemaVersion`, normalized project source summary, sorted payload paths with checksums and row counts, sorted asset paths with checksums, and omission-warning codes.
+  - Compute `packageFingerprint` from canonical JSON built from: `schemaVersion`, normalized project source summary, sorted payload paths with checksums and row counts, sorted asset-manifest entries with checksums, and omission-warning codes.
   - Exclude `exportedAt`, `sourceAppVersion`, byte sizes, temp ids, and any session-local values from `packageFingerprint` so equivalent re-exports stay stable.
 
 - `Identifier normalization`
@@ -272,11 +279,12 @@
   - Reject archive members that are absolute paths, contain `..`, normalize to the same path as another member, or are symlinks.
   - Require `manifest.json` at the archive root.
   - Allow payload files only from the locked manifest file list plus `assets/**`.
+  - Treat manifest-declared sizes as untrusted advisory values. Compare them against zip entry compressed and uncompressed sizes before extraction, then verify actual extracted bytes and checksums before analyze can proceed.
 
 - `Size thresholds`
   - Inline export when estimated package bytes are `<= 128 MB` and estimated asset bytes are `<= 64 MB`.
   - Background export session when either estimate exceeds those thresholds.
-  - Inline import analyze when uploaded zip bytes are `<= 128 MB` and declared extracted payload-plus-asset bytes are `<= 512 MB`.
+  - Inline import analyze when uploaded zip bytes are `<= 128 MB` and verified zip-entry uncompressed payload-plus-asset bytes are `<= 512 MB`.
   - Background import analyze when either import threshold is exceeded.
   - Background commit when the analyzed plan contains `>= 25,000` articles, `>= 250,000` judgments, or `>= 2 GB` of extracted assets.
   - Do not reject a package only because it exceeds these thresholds. Thresholds switch work from inline requests to background execution.
@@ -288,6 +296,7 @@
   - Import session folders should contain `upload.zip`, `manifest.json`, `extracted/`, `analysis.json`, and `progress.json`.
   - Export session folders should contain `build/`, `manifest.json`, `package.zip`, and `progress.json`.
   - Session creation should record estimated compressed and extracted bytes so the server can compare required storage against current machine capacity before expensive work starts.
+  - Export and import session folders both need TTL cleanup on expiry and best-effort startup recovery so abandoned package files do not accumulate.
 
 - `Writer ownership`
   - Transfer session creation and all background export, analyze, dependency-resolution mutation, history-write, asset-promotion, and commit work must run on the active DuckDB writer.
@@ -307,7 +316,7 @@
   - Background phases should be monotonic and resumable enough for UI polling after refresh.
 
 - `Duplicate history store`
-  - Add a small app table such as `app.project_transfer_history` with: `id`, `direction`, `package_fingerprint`, `schema_version`, `source_project_source_id`, `source_project_name`, `target_project_id`, `payload_counts_json`, `created_at`.
+  - Add a small app table such as `app.project_transfer_history` with: `id`, `direction`, `package_fingerprint`, `schema_version`, `source_project_id`, `source_project_name`, `target_project_id`, `payload_counts_json`, `created_at`.
   - Record one row after each completed import and optionally after each completed export.
   - During analyze, match on `package_fingerprint` first and use the history row only for warning and display, never for automatic merge behavior.
 
@@ -349,7 +358,7 @@
 - `Manifest contract` owner files: new `src/server/services/projectTransfer/projectTransferSchemas.ts`, new `src/server/services/projectTransfer/projectTransferManifest.ts`, new `src/server/services/projectTransfer/projectTransferFingerprint.ts`. Centralize manifest fields, omission warnings, checksum rules, and stable fingerprinting.
 - `Zip and path rules` owner files: new `src/server/services/projectTransfer/projectTransferZip.ts`, new `src/server/services/projectTransfer/projectTransferPaths.ts`. Own normalized archive member validation, allowed payload paths, and path-safety helpers.
 - `Session and history contract` owner files: new `src/server/services/projectTransfer/projectTransferSession.ts`, new `src/server/services/projectTransfer/projectTransferHistoryRepository.ts`. Define session states, progress payloads, temp-layout metadata, and duplicate-history reads and writes.
-- `Article data contract` owner files: extend `src/server/services/getAppQueryService.ts` or add a project-transfer-specific query helper so export assembly can actually include every locked article field, including `original_data`, instead of assuming the current shared full-article query already returns them all.
+- `Article and judgment data contract` owner files: extend `src/server/services/getAppQueryService.ts` or add a project-transfer-specific query helper so export assembly can actually include every locked article field, including `original_data`, and export only the active current-review judgment rows matching the project article scope, prompt links, model, and content toggles instead of assuming the current shared full-article or judgment queries already return the package contract.
 - `Prompt data contract` owner files: add a project-transfer prompt query helper or extend the existing project prompt reads so export includes `original_text`, `transformed_text`, `prompt_heading`, `type`, prompt-row archived state, and project-link fields. Immutable prompt reuse depends on those canonical prompt fields, not just project-link metadata.
 - `Phase 1 tests` owner files: new `src/server/services/projectTransfer/projectTransferManifest.test.ts`, new `src/server/routes/ProjectTransferRoutes.test.ts`, and existing `src/server/routes/ApiProxyRoutes.test.ts` plus `src/server/routes/ApiProxyRoutes.retry.test.ts` if upload proxy behavior changes. Cover manifest validation, fingerprint stability, zip/path rejection, route-level contract failures, and the chosen writer-proxy behavior for transfer uploads.
 
@@ -363,7 +372,7 @@
 
 - [ ] Build server-side package export assembly with manifest generation, JSON/NDJSON payload writers, active-judgment filtering, package fingerprinting, and sanitized provider/model export.
 - [ ] Extend the article export query layer so package assembly can actually export the locked article field set, including `original_data` alongside `source_metadata` and the selected full-text fields.
-- [ ] Collect local article assets, copy them into `assets/`, and record the metadata needed for safe import-time path rewriting.
+- [ ] Collect local article assets, copy them into `assets/`, and write `assetManifest.json` metadata for safe import-time path rewriting.
 - [ ] Add `POST /api/projects/:id/export-project`, support inline download for small packages, and add a background export session path for large packages.
 - [ ] Wire the new `Export Project` action in `src/components/main/ProjectsGrid.tsx`, including a `preparing download` state when the export runs asynchronously.
 
@@ -470,4 +479,36 @@
 
 ## Commands Run For This Plan
 
-- No shell commands. This plan is based on repo file inspection and route/schema review.
+- `sed -n '1,260p' IMPORT_EXPORT_PLAN.md`
+- `sed -n '261,620p' IMPORT_EXPORT_PLAN.md`
+- `sed -n '1,380p' src/db/duckdbMigrations/0000_nativeDuckdbSchema.sql`
+- `sed -n '1,220p' src/components/main/ProjectsGrid.tsx`
+- `sed -n '1,220p' src/app/routes/+projects/+index.tsx`
+- `sed -n '1,260p' src/server/routes/ApiProxyRoutes.ts`
+- `rg -n 'human_judgment_mode|criteria_|source_metadata|provider_connection|remote_model|enabled|deleted_at|snapshot_project_model_name|full_text_conversion' src/db/duckdbMigrations/*.sql`
+- `rg -n 'api/provider-connections|discovered-models|sync-models|models/ensure|provider-auth' src/server/routes src/app/routes src/services`
+- `sed -n '1,180p' src/server/routes/apiRouteClassification.ts`
+- `sed -n '1,100p' src/server/routes/ProviderModelsRoutes.ts`
+- `sed -n '360,460p' src/server/routes/ModelsRoutes.ts`
+- `rg -n 'getOrCreateImmutablePromptTx|content_hash|hash' src/server src/services src/utils -g '*.ts'`
+- `git diff --check`
+- `sed -n '1,220p' IMPORT_EXPORT_PLAN.md`
+- `sed -n '221,520p' IMPORT_EXPORT_PLAN.md`
+- `git diff -- IMPORT_EXPORT_PLAN.md`
+- `git status --short`
+- `rg -n 'getProjectReviewConfig|enabled|archived' src/server/services/appQueryServiceCore.ts src/server/routes/ProjectsRoutes.ts src/services/olap/duckdbOlap.ts`
+- `sed -n '342,412p' src/server/services/appQueryServiceCore.ts`
+- `rg -n 'dateFrom|dateTo|date_from|date_to' src/services/olap/duckdbOlap.ts src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.ts src/server/routes/JudgmentsJobsRoutes.ts`
+- `sed -n '1060,1105p' src/services/olap/duckdbOlap.ts`
+- `sed -n '56,82p' IMPORT_EXPORT_PLAN.md`
+- `sed -n '40,135p' IMPORT_EXPORT_PLAN.md`
+- `sed -n '300,380p' IMPORT_EXPORT_PLAN.md`
+- `rg -n 'Project human judgments|Project summary human judgments|Article route links|Do Not Include|warnings|Commands Run' IMPORT_EXPORT_PLAN.md`
+- `rg -n 'pending|unanswered|Project human judgments|Project summary human judgments|Article route links|answered human' IMPORT_EXPORT_PLAN.md`
+- `sed -n '1040,1135p' src/server/services/getDuckdbMartRefreshService.ts`
+- `sed -n '150,235p' src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHuman.ts`
+- `sed -n '1,235p' src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.ts`
+- `sed -n '1,230p' src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.ts`
+- `git diff --stat`
+
+No Bun tests were run because this pass only changed the Markdown plan.
