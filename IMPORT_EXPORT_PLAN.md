@@ -66,7 +66,7 @@
 - Project article links from `app.project_article` only for articles in the exported, date-bounded article set.
 - Exported article set as the union of route-scoped articles from `app.project_import_route` joined through `app.article_import_route` and curated article links from `app.project_article`.
 - Current project article scope means the exported article set after applying the project's `date_from` and `date_to` bounds to the union of route-scoped and curated articles.
-- Do not infer export scope from `mart.project_scope_article` alone because that mart stores project membership before date filtering; package export and import analysis must apply the same article date predicates used by review serving and lock parity with judgment queue selection, including raw fallback paths.
+- Do not infer export scope from `mart.project_scope_article` alone because that mart stores project membership before date filtering; package export and import analysis must apply the same article date predicates used by review serving and raw review-query fallback paths. Treat judgment-queue raw fallback behavior as a parity risk until its date-bound filtering is verified or patched, and do not use queue output itself as export scope unless it matches the date-bounded review scope.
 - Referenced article rows from `app.article` for the exported article set, including article identity fields (`article_id`, DOI, PubMed id, arXiv id, medRxiv id, bioRxiv id), citation metadata, title, summary, authors, article version, article timestamps, legacy `import_route`, URL, publication status, `content_hash`, `original_data`, `source_metadata`, `full_text`, `full_text_html`, `full_text_pdf`, `full_text_source`, `full_text_original_format`, `full_text_fetched_at`, `full_text_assets`, and `full_text_char_count`.
 - Article route links from `app.article_import_route` for exported articles and exported import routes so route provenance can be reconstructed only when the target route and planned article-route writes are safe to link.
 - Active current-review judgments from `app.judgment` where `deleted_at IS NULL`, scoped by current project article scope, enabled exported prompt links, current `model_id`, and content toggles (`use_title`, `use_abstract`, `use_fulltext`, `use_fulltext_no_images`). Include source ids and remappable project references plus `is_answered`, `answered_original`, `answered_original_as_array`, `confidence_original`, `explanation`, `quotes`, `chunking_strategy`, `delete_generation`, `snapshot_project_model_name`, and timestamps. Do not export every row with a matching `project_id` unless it also satisfies that benchmark-critical judgment configuration.
@@ -91,7 +91,7 @@
 
 - Export provider connections as sanitized dependency descriptors, not as trusted live credentials.
 - Include safe fields such as `providerKind`, `label`, `authMode`, `baseURL`, `maxInflightRequests`, and reviewable config values.
-- Treat machine-local values such as manual worker URLs as hints that the importer must confirm or edit, not as silent defaults.
+- Treat machine-local values such as local base URLs and manual worker URLs as hints that the importer must confirm or edit, not as silent defaults.
 - Export models with enough identity to re-link judgments correctly: `remoteModelId`, `name`, `displayName`, `variant`, `source`, provider kind, connection reference, and metadata. `remoteModelId` is nullable in the current schema, so the package must preserve the fallback local model name too.
 - Export the full dependency set for the project model and every model id referenced by the exported judgment payload.
 - Reuse the existing provider setup flows during import instead of inventing a separate import-only credential path.
@@ -128,7 +128,7 @@
 - `import_route`: match by `route`; if a route is missing on the target, omit the related project/article route links in v1, show it in preview, include it in overlap and post-import warnings, and continue without blocking the import. Do not persist `app.article.import_route` on created rows unless the mapped target route is present and the corresponding article-route write is safe after the checks below; when reusing a target article, never overwrite an existing legacy route with a missing or unsafe source route. Preserve omitted source routes only in package/session provenance. Before creating any `app.project_import_route` link, analyze must prove the mapped target route would not expand the imported project beyond the exported article set after id remapping, planned article-route inserts, and the imported project's date bounds. Analyze must also prove any new `app.article_import_route` rows for that mapped route would not expand the current date-bounded article scope of existing target projects already linked to that route. If a matched route would pull in extra target articles or push imported articles into unrelated target projects, omit the project-route link and unsafe article-route writes, then use snapshot `app.project_article` links for the exported route-scoped articles instead.
 - `article`: auto-match only when all non-empty exported stable identifiers converge on one target article or on no target article. Resolve and display exact identifiers in priority order: `article_id`, normalized DOI, normalized PubMed id, normalized arXiv id, normalized medRxiv id, and normalized bioRxiv id. Use the existing shared DOI normalization helper and add explicit shared normalization helpers for the remaining identifier families before analyze matching logic is locked so export and import compare the same canonical forms. If no exact match exists, create a new article. If one identifier matches a target row and another exported identifier is missing on that row, reuse the row and fill the missing value during the non-destructive merge; if the target row has a different non-empty value for any exported stable identifier, block as an article conflict. Because only `article_id` is globally unique today, analyze must show the matched identifier type and all exact candidates when secondary identifiers produce multiple matches, and it must also block commit whenever any non-empty exported stable identifier points at a different target row than another exported identifier. Never heuristic auto-link in v1.
 - `project_article`: always create a new link row for the imported project for each exported source `app.project_article` link, even when the article row is reused, and set `imported_from_project_id` to `NULL` in v1. Also create snapshot project-article links for exported route-scoped articles whenever a missing or unsafe target route prevents creating the equivalent project-route link. If the same target article is both source-curated and route-scope fallback, insert one `app.project_article` row and keep both reasons in the import plan summary. This intentionally differs from clone and Covidence-managed imports and must not imply local source-project ownership or managed re-sync behavior.
-- `provider_connection`: match by provider kind plus safe connection fingerprint only when the target connection is enabled and its saved config would still leave the required imported models selectable. Otherwise treat it as unresolved and let the user choose an existing connection, or enter the normal provider setup flow with sanitized fields prefilled and complete any required credential or auth step there.
+- `provider_connection`: match by provider kind plus safe connection fingerprint only when exactly one target connection is enabled and its saved config would still leave the required imported models selectable. If local-only identity was excluded from the fingerprint, or the safe fingerprint matches multiple target connections, treat the dependency as unresolved and let the user choose an existing connection, or enter the normal provider setup flow with sanitized fields prefilled and complete any required credential or auth step there.
 - `model`: match by mapped provider connection plus `remote_model_id` and `variant` only when the resolved target model is enabled and selectable. If the exported model has `remote_model_id = NULL`, only auto-match an existing enabled target model on the mapped connection when exact fallback identity fields from the package, such as `name`, `displayName`, and `variant`, still converge on one row; otherwise keep it unresolved because the current non-Codex create route requires a remote model id. For resolvable non-Codex models with a remote model id, materialize them during import after the user resolves the provider step, using `POST /api/provider-connections/:id/models` for explicit creation and `POST /api/provider-connections/:id/sync-models` only when provider discovery should refresh or materialize catalog-backed rows on that same mapped connection; use `POST /api/models/ensure` only for Codex.
 - `judgment`: create fresh target ids after article, prompt, model, and content-setting remap succeeds. Preserve the exported judgment id only as `sourceId` for assessment remapping and conflict reporting.
 
@@ -144,9 +144,10 @@
 - On import, validate asset paths and `assetManifest.json` references before extraction, reject absolute paths, backslash traversal, `..` traversal, symlinks, and normalized-path changes, and never commit rows that still point at session-temp paths.
 - During analyze, extract assets only into the import-session temp area.
 - During analyze, derive an asset-promotion plan after article matching and non-destructive merge decisions are known so commit only promotes files that created or updated rows will actually reference.
+- Final asset destinations must live under a package/session-specific prefix such as `assets/project-transfer/<sessionId>/...`, fail if the destination already exists, and never overwrite existing runtime assets.
 - Before the database transaction starts, copy only those validated and still-needed assets from temp into final runtime-owned paths under `assets/...`, rewrite stored paths to those runtime-relative `assets/...` locations, and record every created path for cleanup. This keeps imported files compatible with the existing `/api/runtime-asset` serving contract.
 - If any asset copy or rewrite fails, abort before any database write starts.
-- If the database transaction fails after asset copies succeeded, best-effort delete the files created for that import session and leave the session failed.
+- If the database transaction fails after asset copies succeeded, best-effort delete only the files created for that import session and leave the session failed.
 - If an article match already exists on the target, merge non-destructively inside the import transaction: fill missing target fields, do not erase richer target data, and still link the article to the imported project.
 - If the non-destructive merge updates any reused article row, mark every project currently referencing those updated articles dirty inside the same transaction, in addition to marking the new imported project dirty.
 - Title, year, author, and source-metadata heuristics may help the review UI explain likely matches, but they must not silently auto-link an article in v1.
@@ -224,7 +225,7 @@
 - Treat those thresholds as execution-mode switches only, not as product limits. Packages larger than the inline thresholds must move to background work instead of being rejected just for size.
 - Record completed imports in a small transfer-history store with package fingerprint, source project summary, imported project id, imported at, and counts so analyze can warn on exact duplicate packages later.
 - Keep the final commit transactional and fail-fast when any required model mapping is unresolved.
-- If final-path asset promotion succeeds but the database transaction fails, delete the promoted files before the session is marked failed.
+- If final-path asset promotion succeeds but the database transaction fails, best-effort delete only the promoted files created for that import session before the session is marked failed.
 - Transfer session creation plus background export assembly, import analyze, dependency-resolution mutations, transfer-history writes, and import commit execution must be owned by the active DuckDB writer process. Follow the existing writer-proxy behavior for `/api/*` requests instead of inventing a separate leader-discovery path, and only serve polling or download responses directly when that response path is already safe on the current server.
 
 ### Logging
@@ -324,6 +325,7 @@
 
 - `Duplicate history store`
   - Add a small app table such as `app.project_transfer_history` with: `id`, `direction`, `package_fingerprint`, `schema_version`, `source_project_id`, `source_project_name`, `target_project_id`, `payload_counts_json`, `created_at`.
+  - Add an index on `(direction, package_fingerprint)` so duplicate-import analysis stays cheap, plus any narrow lookup index needed for project-history display.
   - Record one row after each completed import and optionally after each completed export.
   - During analyze, match duplicate-import warnings on `direction = 'import'` plus `package_fingerprint`, and use the history row only for warning and display, never for automatic merge behavior. Export-history rows may support audit or download UX, but they must not produce `already imported` warnings.
 
@@ -344,6 +346,7 @@
 
 - `Provider/model resolution contract`
   - Auto-match only enabled provider connections and enabled/selectable models.
+  - Define the provider connection fingerprint from normalized provider kind, auth mode, max inflight requests, sanitized config fields that affect model selectability, and effective base URL only when that URL is not machine-local. Exclude secret refs, secret presence, health-check state, runtime detection cache, machine-local base URLs, and machine-local worker URLs from automatic matching unless the user explicitly confirms those local hints during resolution.
   - If a provider requires an API key or managed auth, a sanitized imported descriptor may prefill the form, but the dependency stays unresolved until the user supplies the key or completes the auth flow.
   - Use `GET /api/provider-connections/:id/discovered-models` when the review UI needs to show provider-discovered candidates before creation.
   - For non-Codex imports, create missing models through `POST /api/provider-connections/:id/models` and use `POST /api/provider-connections/:id/sync-models` only as a helper when provider discovery is useful for the same mapped connection.
@@ -354,8 +357,10 @@
 - `Asset commit contract`
   - Analyze may extract files only into session-temp storage.
   - Analyze must freeze an asset-promotion plan after article matching and merge decisions so commit knows exactly which files are still needed.
-  - Commit must copy only needed assets to final runtime-owned `assets/...` paths before the database transaction starts.
+  - Commit must copy only needed assets to new, import-session-owned, final runtime-owned `assets/...` paths before the database transaction starts.
+  - Commit must fail before database writes if any final destination already exists or would overwrite an unrelated runtime asset.
   - Persisted rows must reference only final runtime-relative `assets/...` paths, never temp paths or absolute paths.
+  - After a successful commit, session cleanup must remove only temp upload/extraction files. Promoted final assets are now project runtime assets and must not be deleted by session TTL cleanup.
   - Runtime asset paths must be normalized and rejected if they are absolute, escape `assets/`, contain `..`, use backslash traversal, or normalize differently from the stored relative POSIX path.
   - If asset copy fails, abort before the database transaction.
   - If the database transaction fails, best-effort delete all files copied for that import session.
@@ -503,141 +508,15 @@
 - Browser verify: export a project package, import it through `/projects/import`, and confirm the imported project shows the expected prompts, articles, judgments, and reviews.
 - Desktop verify: export and import the same package in the desktop build and confirm file picking, upload, and post-import project navigation work.
 
-## Commands Run For This Plan
+## Commands Run For Latest Review
 
-- `sed -n '1,260p' IMPORT_EXPORT_PLAN.md`
-- `sed -n '261,620p' IMPORT_EXPORT_PLAN.md`
-- `sed -n '1,380p' src/db/duckdbMigrations/0000_nativeDuckdbSchema.sql`
-- `sed -n '1,220p' src/components/main/ProjectsGrid.tsx`
-- `sed -n '1,220p' src/app/routes/+projects/+index.tsx`
-- `sed -n '1,260p' src/server/routes/ApiProxyRoutes.ts`
-- `rg -n 'human_judgment_mode|criteria_|source_metadata|provider_connection|remote_model|enabled|deleted_at|snapshot_project_model_name|full_text_conversion' src/db/duckdbMigrations/*.sql`
-- `rg -n 'api/provider-connections|discovered-models|sync-models|models/ensure|provider-auth' src/server/routes src/app/routes src/services`
-- `sed -n '1,180p' src/server/routes/apiRouteClassification.ts`
-- `sed -n '1,100p' src/server/routes/ProviderModelsRoutes.ts`
-- `sed -n '360,460p' src/server/routes/ModelsRoutes.ts`
-- `rg -n 'getOrCreateImmutablePromptTx|content_hash|hash' src/server src/services src/utils -g '*.ts'`
-- `git diff --check`
-- `sed -n '1,220p' IMPORT_EXPORT_PLAN.md`
-- `sed -n '221,520p' IMPORT_EXPORT_PLAN.md`
-- `git diff -- IMPORT_EXPORT_PLAN.md`
 - `git status --short`
-- `rg -n 'getProjectReviewConfig|enabled|archived' src/server/services/appQueryServiceCore.ts src/server/routes/ProjectsRoutes.ts src/services/olap/duckdbOlap.ts`
-- `sed -n '342,412p' src/server/services/appQueryServiceCore.ts`
-- `rg -n 'dateFrom|dateTo|date_from|date_to' src/services/olap/duckdbOlap.ts src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.ts src/server/routes/JudgmentsJobsRoutes.ts`
-- `sed -n '1060,1105p' src/services/olap/duckdbOlap.ts`
-- `sed -n '56,82p' IMPORT_EXPORT_PLAN.md`
-- `sed -n '40,135p' IMPORT_EXPORT_PLAN.md`
-- `sed -n '300,380p' IMPORT_EXPORT_PLAN.md`
-- `rg -n 'Project human judgments|Project summary human judgments|Article route links|Do Not Include|warnings|Commands Run' IMPORT_EXPORT_PLAN.md`
-- `rg -n 'pending|unanswered|Project human judgments|Project summary human judgments|Article route links|answered human' IMPORT_EXPORT_PLAN.md`
-- `sed -n '1040,1135p' src/server/services/getDuckdbMartRefreshService.ts`
-- `sed -n '150,235p' src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHuman.ts`
-- `sed -n '1,235p' src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostInit.ts`
-- `sed -n '1,230p' src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.ts`
-- `git diff --stat`
-
-Additional review-pass commands:
-- `sed -n '1,240p' IMPORT_EXPORT_PLAN.md`
-- `sed -n '241,520p' IMPORT_EXPORT_PLAN.md`
-- `git diff -- IMPORT_EXPORT_PLAN.md`
-- `rg -n 'provider-connections.*(models|sync|discovered)|models/ensure|provider-auth' src/server/routes src/app/routes src/services`
-- `sed -n '1,260p' src/db/duckdbMigrations/0000_nativeDuckdbSchema.sql`
-- `rg -n 'judgment_human_summary|CREATE TABLE.*summary|answer' src/db/duckdbMigrations src/server src/app`
-- `sed -n '1,220p' src/server/routes/RuntimeAssetsRoutes.ts`
-- `sed -n '1,120p' src/server/utils/runtimeWritablePath.ts`
-- `rg -n 'without including unrelated|satisfies every|missing routes|omitted route|route-scoped|RuntimeAssetsRoutes|current-plus-planned|RuntimeAssetsRoutes.test|unsafe route' IMPORT_EXPORT_PLAN.md`
-- `git diff --check`
-- `git status --short`
-
-Third review-pass commands:
-- `pwd`
-- `git status --short`
-- `rg --files -g '*import*' -g '*export*' -g '*Import*' -g '*Export*' -g '!*node_modules*'`
-- `rg -n '00xx|resolveRuntimeFilePath|runtime-asset|date bounds|Commands Run|Quality Gates|models/ensure|provider-connection model routes|projectTransferHistory|current project article scope|article_id is globally unique|Do not blindly reuse|schemaTypes' IMPORT_EXPORT_PLAN.md`
-- `sed -n '1,340p' src/db/duckdbMigrations/0000_nativeDuckdbSchema.sql`
-- `sed -n '1,260p' src/server/routes/ProviderModelsRoutes.ts`
-- `sed -n '400,540p' src/server/routes/ModelsRoutes.ts`
-- `sed -n '1,220p' src/server/routes/RuntimeAssetsRoutes.ts`
-- `sed -n '1,220p' src/server/utils/runtimeWritablePath.ts`
-- `sed -n '320,430p' src/server/services/projectMartRefreshStateService.ts`
-- `ls src/db/duckdbMigrations | tail -20`
-
-Fourth review-pass commands:
-- `sed -n '1,260p' IMPORT_EXPORT_PLAN.md`
-- `sed -n '261,620p' IMPORT_EXPORT_PLAN.md`
-- `rg -n 'getJudgmentConfigClause|criteria_disposition|full_text_assets|source_metadata|original_data|project_transfer_history|DELETE .*/api/projects/import|POST .*/api/projects/import|export-project' src/server src/app src/db -g '*.ts' -g '*.sql'`
-- `sed -n '120,240p' src/server/serverMain.ts`
-- `rg --files src/app/routes/+projects | sort`
-- `rg -n 'getDirtyProjectsForArticleIds|markArticleProjectsDirtyAtomically' src/server/services/projectMartRefreshStateService.ts`
-- `sed -n '1,80p' src/server/services/projectVisibleJudgmentRule.ts`
-- `rg -n 'omittedArticleRouteLinkCount|article-route|existing target project|unrelated existing|Effect.gen|ArkType|t\\.File|date_from|date_to' IMPORT_EXPORT_PLAN.md`
-- `git diff --check`
-- `git diff --stat -- IMPORT_EXPORT_PLAN.md`
-- `git status --short`
-
-Fifth review-pass commands:
-- `sed -n '1,260p' IMPORT_EXPORT_PLAN.md`
-- `sed -n '261,620p' IMPORT_EXPORT_PLAN.md`
-- `git diff -- IMPORT_EXPORT_PLAN.md`
-- `rg -n 'criteria|import_route|legacy|article-route|Quality Gates|Commands Run|No Bun|0048|models/ensure|runtime' IMPORT_EXPORT_PLAN.md`
-- `rg -n '\.importRoute|import_route|criteria_section|criteria_disposition|prompt_order|project_prompt|origin_project_id' src/server src/services src/app -g '*.ts' -g '*.tsx'`
-- `sed -n '1,140p' src/server/services/articleImportStoreService.ts`
-- `sed -n '150,245p' src/server/services/insertArticlesIntoProject.ts`
-- `sed -n '1560,1635p' src/server/routes/ProjectsRoutes.ts`
-- `rg -n 'CREATE TABLE app.article|import_route VARCHAR|article_title' src/db/duckdbMigrations/0000_nativeDuckdbSchema.sql src/db/duckdbMigrations/*.sql`
-- `sed -n '1,90p' src/db/duckdbMigrations/0000_nativeDuckdbSchema.sql`
-- `sed -n '180,330p' src/server/services/articleImportStoreService.ts`
-- `sed -n '100,155p' src/db/duckdbMigrations/0000_nativeDuckdbSchema.sql`
-- `git diff --check`
-- `git diff --stat -- IMPORT_EXPORT_PLAN.md`
-- `git status --short`
-
-Sixth review-pass commands:
-- `git status --short`
-- `sed -n '1,260p' IMPORT_EXPORT_PLAN.md`
-- `sed -n '261,650p' IMPORT_EXPORT_PLAN.md`
-- `git diff -- IMPORT_EXPORT_PLAN.md`
-- `rg -n 'provider_connection|remote_model_id|model_provider|model_source|CREATE TABLE IF NOT EXISTS app.model|ALTER TABLE app.model|judgment_human|judgment_assessment|CREATE TABLE IF NOT EXISTS app.review|CREATE TABLE IF NOT EXISTS app.judgment' src/db/duckdbMigrations/*.sql`
-- `sed -n '155,260p' src/db/duckdbMigrations/0000_nativeDuckdbSchema.sql`
-- `sed -n '260,370p' src/db/duckdbMigrations/0000_nativeDuckdbSchema.sql`
-- `sed -n '1,120p' src/db/duckdbMigrations/0014_providerConnections.sql`
-- `sed -n '48,80p' src/db/duckdbMigrations/0029_dropModelProviderConnectionForeignKey.sql`
-- `sed -n '180,225p' src/db/duckdbMigrations/0044_dropProjectEngine.sql`
-- `sed -n '1,80p' src/db/duckdbMigrations/0039_humanJudgmentSummaryMode.sql`
-- `rg -n 'delete_generation|deleted_at|UNIQUE\(article_id, prompt_id, model_id|CREATE UNIQUE INDEX.*judgment|WHERE deleted_at IS NULL' src/db src/server src/services -g '*.sql' -g '*.ts'`
-- `rg -n 'answered_original|answered_original_as_array|confidence_original|explanation|quotes|chunking_strategy|judgment_assessment|judgment_human_summary|reviewed_' IMPORT_EXPORT_PLAN.md`
-- `rg -n 'source_metadata|publication_status|full_text_assets|content_hash|full_text_pdf' src/db/duckdbMigrations/*.sql`
-- `rg -n 'human_judgment_mode|project_prompt_criteria_disposition|combined|criteriaDisposition' src/db/duckdbMigrations src/server src/services -g '*.sql' -g '*.ts'`
-- `rg -n 'judgment_execution_snapshot|execution snapshot|payload_json|payload_hash' src/server src/services src/db -g '*.ts' -g '*.sql'`
-- `sed -n '120,180p' src/server/services/appDatabaseService.ts`
-- `sed -n '130,170p' src/server/routes/PromptsRoutes.ts`
-- `sed -n '760,790p' src/server/routes/PromptsRoutes.ts`
-- `sed -n '130,150p' src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts`
-- `sed -n '1,260p' src/server/routes/ProviderModelsRoutes.ts`
-- `rg -n 'discovered-models|sync-models|provider-connections/:id/models|providerConnections' src/server/routes src/app/routes/+admin/+models -g '*.ts' -g '*.tsx'`
-- `git diff --check`
-- `git diff --stat -- IMPORT_EXPORT_PLAN.md`
-- `git status --short`
-
-No Bun tests were run because this pass only changed the Markdown plan.
-
-Seventh review-pass commands:
-- `git status --short`
-- `sed -n '1,260p' IMPORT_EXPORT_PLAN.md`
-- `sed -n '261,520p' IMPORT_EXPORT_PLAN.md`
-- `sed -n '521,680p' IMPORT_EXPORT_PLAN.md`
-- `git diff -- IMPORT_EXPORT_PLAN.md`
-- `rg -n 'full_text|source_metadata|original_data|publication_status|content_hash|article_id VARCHAR|UNIQUE\(article_id\)|CREATE TABLE IF NOT EXISTS app\.(article|judgment|project_prompt|project_article|judgment_human_summary|provider_connection|model)' src/db/duckdbMigrations/*.sql`
-- `rg -n 'provider-connections/:id/(discovered-models|sync-models|models)|models/ensure|provider-auth|runtime-asset|project_export|export-project|ensureSelectableModelId' src/server src/app src/services -g '*.ts' -g '*.tsx'`
-- `rg -n "api/provider-connections/:id/test|/test'|/test\"|provider-connections.*test" src/server/routes/ProviderConnectionsRoutes.ts src/app/routes/+admin/+models/providerConnectionsClient.ts`
-- `rg -n 'date_from|date_to|article_created_at|project_scope_article|UnassessedPairs|getScopedActivityArticleWindow|getDuckdbServingBaseWhereParts' src/services/olap/duckdbOlap.ts src/server/services/getDuckdbMartRefreshService.ts src/server/cron/judgmentsJobs -g '*.ts'`
-- `sed -n '220,310p' src/server/routes/ProviderConnectionsRoutes.ts`
-- `test -f src/db/schemaTypes.ts && echo exists || echo missing`
-- `rg --files src/db | sort`
-- `rg -n 'schemaTypes|type .*Table|duckdbMigrations' src/db src/server -g '*.ts'`
+- `sed -n '1,180p' IMPORT_EXPORT_PLAN.md`
+- `sed -n '181,360p' IMPORT_EXPORT_PLAN.md`
+- `sed -n '361,540p' IMPORT_EXPORT_PLAN.md`
+- `sed -n '220,260p' IMPORT_EXPORT_PLAN.md`
+- `sed -n '500,535p' IMPORT_EXPORT_PLAN.md`
 - `git diff --check -- IMPORT_EXPORT_PLAN.md`
-- `sed -n '62,74p' IMPORT_EXPORT_PLAN.md`
-- `sed -n '282,290p' IMPORT_EXPORT_PLAN.md`
-
-No Bun tests were run because this review only changed the Markdown plan.
+- `git diff --stat -- IMPORT_EXPORT_PLAN.md`
+- `git diff -- IMPORT_EXPORT_PLAN.md`
+- No Bun tests were run because this review only changed the Markdown plan.
