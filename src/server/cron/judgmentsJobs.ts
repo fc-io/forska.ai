@@ -147,21 +147,13 @@ const cleanupStaleQueueCron = async (): Promise<void> => {
   }
 }
 
-export const judgmentsJobsCron = new Elysia()
+export const judgmentsJobsMaintenanceCron = new Elysia()
   .use(
     cron({
       name: 'judgments-jobs-add-to-queue',
       pattern: NEW_ARTICLES_INTERVAL,
       startAt: new Date(Date.now() + START_DELAY_MS),
       run: runAddToQueue,
-    }),
-  )
-  .use(
-    cron({
-      name: 'judgments-jobs-send-to-llm',
-      pattern: LLM_PROCESSING_INTERVAL,
-      startAt: new Date(Date.now() + START_DELAY_MS),
-      run: sendToLLM,
     }),
   )
   .use(
@@ -174,17 +166,29 @@ export const judgmentsJobsCron = new Elysia()
   )
   .use(
     cron({
-      name: 'judgments-jobs-check-llm-status',
-      pattern: CHECK_LLM_STATUS,
-      startAt: new Date(Date.now() + START_DELAY_MS),
-      run: checkLLMStatusCron,
-    }),
-  )
-  .use(
-    cron({
       name: 'judgments-jobs-cleanup-stale',
       pattern: CLEANUP_STALE_REQUESTS,
       startAt: new Date(Date.now() + START_DELAY_MS),
       run: cleanupStaleQueueCron,
     }),
   )
+
+export const judgmentsJobsJudgingCron = new Elysia()
+  .use(
+    cron({
+      name: 'judgments-jobs-send-to-llm',
+      pattern: LLM_PROCESSING_INTERVAL,
+      startAt: new Date(Date.now() + START_DELAY_MS),
+      run: sendToLLM,
+    }),
+  )
+  .use(
+    cron({
+      name: 'judgments-jobs-check-llm-status',
+      pattern: CHECK_LLM_STATUS,
+      startAt: new Date(Date.now() + START_DELAY_MS),
+      run: checkLLMStatusCron,
+    }),
+  )
+
+export const judgmentsJobsCron = new Elysia().use(judgmentsJobsMaintenanceCron).use(judgmentsJobsJudgingCron)

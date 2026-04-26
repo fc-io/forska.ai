@@ -6,6 +6,7 @@ import {
   productionServerRoles,
   shouldServerRoleMountJudgingCrons,
   shouldServerRoleMountMaintenanceCrons,
+  shouldServerRoleRunCodexStartup,
 } from './serverRole.ts'
 
 test('maintenance-worker role can own duckdb', () => {
@@ -38,4 +39,12 @@ test('server role capabilities describe the current split of responsibilities', 
   expect(getServerRoleCapabilities('judge-worker')).toEqual(['judging'])
   expect(getServerRoleCapabilities('dev-single')).toEqual(['api', 'duckdb-owner', 'maintenance', 'judging'])
   expect(getServerRoleCapabilities('auto')).toEqual(['api', 'owner-proxy'])
+})
+
+test('codex startup runs only on api-facing roles', () => {
+  expect(shouldServerRoleRunCodexStartup('api')).toBe(true)
+  expect(shouldServerRoleRunCodexStartup('dev-single')).toBe(true)
+  expect(shouldServerRoleRunCodexStartup('judge-worker')).toBe(false)
+  expect(shouldServerRoleRunCodexStartup('maintenance-worker')).toBe(false)
+  expect(shouldServerRoleRunCodexStartup('auto')).toBe(false)
 })

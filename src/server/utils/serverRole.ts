@@ -73,3 +73,7 @@ export const shouldServerRoleMountMaintenanceCrons = (serverRole: ServerRole) =>
 export const shouldServerRoleMountJudgingCrons = (serverRole: ServerRole) => {
   return shouldServerRoleRunJudgingLoops(serverRole)
 }
+
+export const shouldServerRoleRunCodexStartup = (serverRole: ServerRole) => {
+  return serverRole === 'api' || serverRole === 'dev-single'
+}

@@ -4,7 +4,7 @@ import {Elysia} from 'elysia'
 import {migrateDuckdb} from '../db/migrateDuckdb.ts'
 import {fullTextConversionJobsCron} from './cron/fullTextConversionJobs.ts'
 import {fullTextJobsCron} from './cron/fullTextJobs.ts'
-import {judgmentsJobsCron} from './cron/judgmentsJobs.ts'
+import {judgmentsJobsJudgingCron, judgmentsJobsMaintenanceCron} from './cron/judgmentsJobs.ts'
 import {replayJudgeWorkerCompletionOutbox} from './cron/judgmentsJobs/judgeWorkerCompletionJournal.ts'
 import {getJudgmentJobSqliteService} from './cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {nvidiaSmiCron} from './cron/nvidiaSmi.ts'
@@ -43,7 +43,11 @@ import {inferenceRuntimeConfig} from './utils/getInferenceRuntimeConfig.ts'
 import {initializeJudgeWorkerJournalIdentity} from './utils/judgeWorkerJournalIdentity.ts'
 import {validateOwnerlessRouteBackends} from './utils/ownerlessReadableBackends.ts'
 import {writeRuntimeOperatorLogEvent} from './utils/runtimeLogger.ts'
-import {shouldServerRoleMountJudgingCrons, shouldServerRoleMountMaintenanceCrons} from './utils/serverRole.ts'
+import {
+  shouldServerRoleMountJudgingCrons,
+  shouldServerRoleMountMaintenanceCrons,
+  shouldServerRoleRunCodexStartup,
+} from './utils/serverRole.ts'
 import {
   canCurrentServerOwnDuckdb,
   getCurrentServerRole,
@@ -130,11 +134,14 @@ if (getCurrentServerRole() !== 'judge-worker' && shouldCurrentServerRunJudgingLo
 const shouldMountMaintenanceCrons = shouldServerRoleMountMaintenanceCrons(getCurrentServerRole())
 const shouldMountJudgingCrons = shouldServerRoleMountJudgingCrons(getCurrentServerRole())
 const maintenanceCronRoutes = shouldMountMaintenanceCrons
-  ? new Elysia().use(fullTextJobsCron).use(fullTextConversionJobsCron).use(nvidiaSmiCron)
+  ? new Elysia()
+      .use(fullTextJobsCron)
+      .use(fullTextConversionJobsCron)
+      .use(nvidiaSmiCron)
+      .use(judgmentsJobsMaintenanceCron)
   : new Elysia()
-const judgmentCronRoutes =
-  shouldMountJudgingCrons || shouldMountMaintenanceCrons ? new Elysia().use(judgmentsJobsCron) : new Elysia()
-const shouldWarmCodex = getCurrentServerRole() !== 'maintenance-worker'
+const judgmentCronRoutes = shouldMountJudgingCrons ? new Elysia().use(judgmentsJobsJudgingCron) : new Elysia()
+const shouldWarmCodex = shouldServerRoleRunCodexStartup(getCurrentServerRole())
 const getProductApiRoutes = () => {
   return new Elysia()
     .use(adminInvestigateRoutes)
