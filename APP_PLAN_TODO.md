@@ -8,7 +8,8 @@
 - Ship Forska as an installable desktop app for macOS and Windows first, with Linux later.
 - Keep the current local-first model: local UI, local API/background work, local DuckDB/SQLite state, optional remote providers.
 - Preserve the current browser-based workflow so `bun run dev:server`, `bun run dev:app`, and the non-desktop local web flow keep working.
-- Require no manual Bun, Node, DuckDB CLI, or repo checkout for normal end users.
+- Require no manual Bun, Node, DuckDB CLI, `sqlite3`, or repo checkout for normal end users.
+- Keep Codex CLI as an optional bring-your-own integration: users install it separately only if they want Codex features.
 - Store user data, caches, logs, and imported assets in per-user app directories instead of the repo root.
 
 ## Current Repo Fit
@@ -16,7 +17,7 @@
 - This repo is already close to a desktop product shape: Bun/Elysia backend, Solid/Vite frontend, DuckDB local data, SQLite local job state, and single-user local-first defaults.
 - `src/server/utils/getDuckdbPath.ts` already has platform-aware default DB locations for macOS, Windows, and Linux.
 - The main packaging risk is the runtime surface, not the UI: Bun APIs, native DB dependencies, local subprocesses, CLI fallbacks, and repo-root file assumptions.
-- `src/appServer.ts` exists mainly to serve the built web app in a browser. The desktop shell can avoid that extra process by loading packaged renderer assets directly.
+- `src/appServer.ts` exists mainly to serve the built web app in a browser. The current ElectroBun spike already loads packaged renderer assets directly in the desktop shell, so `src/appServer.ts` is optional at desktop startup.
 
 ## Working Strategy
 
@@ -33,6 +34,8 @@
 - Run one packaged Bun backend process in `SERVER_ROLE=dev-single` first unless load testing proves split API/worker roles are necessary on user machines.
 - Load the built frontend directly inside the desktop shell and inject the API origin from the shell, so `src/appServer.ts` becomes optional instead of required.
 - Keep desktop support additive, not replacing the existing browser/server entrypoints.
+- Treat Codex CLI as optional user-installed tooling in packaged builds; desktop startup and normal app flows must not depend on it.
+- Do not bundle `sqlite3`; keep any `sqlite3` fallback or repair flows out of packaged startup, API serving, and normal user flows.
 - Add remote upgrades only after unsigned macOS and Windows artifacts are repeatable and native dependencies are verified in packaged mode.
 - Treat Electron as the fallback shell if ElectroBun blocks signed installers, native module packaging, or stable macOS/Windows distribution.
 - Keep Tauri as the likely later optimization path if installer size becomes a priority.
@@ -56,15 +59,18 @@
 - There is no confirmed unsigned Windows artifact smoke test.
 - Packaged Bun bundling is not implemented yet, and the backend artifact shape is not locked yet for clean-machine smoke tests.
 - Packaged `@duckdb/node-api`, Bun SQLite, DuckDB migrations, SQLite job state, and restart/crash recovery are not verified.
-- The Windows strategy for `sqlite3`, subprocess lookup, spaces in profile paths, firewall prompts, and loopback behavior is unresolved.
+- Core packaged validation that normal startup and API flows do not require `sqlite3` or other unbundled CLIs is still pending.
+- The Windows strategy for subprocess lookup, spaces in profile paths, firewall prompts, and loopback behavior is unresolved.
+- Optional Codex CLI lookup and missing-binary handling are not yet verified on packaged macOS or Windows builds.
 - Release signing, notarization, installer generation, CI artifact publishing, and remote upgrades are not implemented.
-- App diagnostics, "Open data folder", "Open logs folder", and recovery UX for locked or corrupt local state are not implemented.
+- Settings already exposes server and worker runtime diagnostics, but desktop-specific diagnostics and shell actions are not implemented yet: surfaced app version, API port, data path, DB path, log path, update state, plus "Open data folder", "Open logs folder", and recovery UX for locked or corrupt local state.
 
 ### Recommended Next Steps
 
 - Finish the remaining desktop runtime-write audit so all writable files land under app-owned user directories in packaged mode.
 - Lock the packaged runtime shape first: bundle Bun, decide whether desktop ships backend source or a compiled backend artifact, and make clean-machine smoke tests validate that exact shape.
 - Verify native dependencies and migrations inside packaged artifacts before investing in signing and auto-update UX.
+- Prove the packaged app boots and serves normal user flows on clean machines without `codex`, `sqlite3`, or DuckDB CLI installed.
 - Run a local macOS artifact smoke test on the chosen packaged shape, without relying on repo checkout or Bun already being on `PATH`.
 - Run a Windows artifact smoke test on a native Windows machine or CI runner with the same clean-machine assumptions.
 - Add the remote upgrade pipeline only after basic unsigned artifacts are reliable on macOS and Windows.
@@ -92,24 +98,33 @@
 - First launch creates local storage safely and runs required migrations.
 - Restart, crash recovery, import flows, and background work all function in packaged mode.
 - User data lives in stable per-user OS app directories.
+- Core packaged startup and normal app usage work without `codex`, DuckDB CLI, or `sqlite3` installed; optional Codex usage is install-guided.
 - Remote upgrades can update the app without touching local user data, and failures leave the previous app usable, once remote upgrades are intentionally in scope.
 - The same packaging strategy leaves a clear path for Linux later.
 
 ## Quality Gates
 
 - `bun run build`
+- `bun run desktop:build`
 - `bun run lint`
 - `bun test src/server/utils/getDuckdbPath.test.ts`
+- `bun test src/server/utils/runtimeWritablePath.test.ts`
 - `bun test src/server/utils/backgroundServerStack.test.ts`
 - `bun test src/server/utils/duckdbBinary.test.ts`
+- `bun test src/desktop/getDesktopRuntimeConfig.test.ts`
+- `bun test src/desktop/desktopSingleInstance.test.ts`
+- `bun test src/app/utils/getDesktopApiOrigin.test.ts`
 - `bun test src/app/utils/getApiRequestUrl.test.ts`
-- Add and run targeted ElectroBun packaging smoke tests once the shell exists.
+- `bun test src/app/utils/getRuntimeAssetUrl.test.ts`
+- Run targeted ElectroBun packaging smoke tests on the chosen packaged Bun/backend shape.
 - ElectroBun verify: unsigned macOS artifact opens a desktop window, starts the backend, and reaches a healthy app state.
 - ElectroBun verify: unsigned Windows artifact opens a desktop window, starts the backend, and reaches a healthy app state.
 - Browser verify: `bun run dev:server` and `bun run dev:app` still boot successfully and the app works in a normal browser.
 - Browser verify: existing built web flow still serves and loads correctly outside the desktop shell.
 - macOS verify: clean install, first launch, restart, import one dataset, configure one provider, then quit and relaunch successfully.
 - Windows verify: clean install, first launch, restart, import one dataset, configure one provider, then quit and relaunch successfully.
+- Packaged app verify: core startup, API, import, provider setup, quit, and relaunch work on a clean machine with no Bun, Node, DuckDB CLI, `sqlite3`, or `codex` installed.
+- Packaged app verify: missing `codex` does not block startup and the app surfaces install guidance before any Codex-only action.
 - Packaged app verify: all writable files land in app-owned user directories, not the repo root or install directory.
 - Release-only after remote upgrades are intentionally in scope: install version N-1, create local data, publish version N, check for update, download, apply, relaunch, and confirm local data is intact.
 - Release-only after remote upgrades are intentionally in scope: failed update download or failed apply leaves the current app version and user data usable.
@@ -117,8 +132,8 @@
 
 ## Repo Findings And Hotspots
 
-- [ ] `src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts` still shells out to `sqlite3` for fallback repair flows, so Windows packaging needs an explicit strategy.
-- [ ] `src/server/utils/getCodexAppServerClient.ts` still needs a platform-aware packaged-build audit for Bun-global and macOS-style binary lookup assumptions.
+- [ ] `src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts` still shells out to `sqlite3` for fallback repair flows, so packaged desktop needs to keep that path maintenance-only and out of core runtime requirements.
+- [ ] `src/server/utils/getCodexAppServerClient.ts` still needs a platform-aware packaged-build audit so optional user-installed Codex lookup works consistently and fails gracefully when `codex` is absent.
 - [ ] Packaged builds still need the remaining audit of runtime writes that can touch `cache/`, `assets/`, temp files, lock files, exports, DuckDB, SQLite, or generated diagnostics.
 - [ ] `electrobun.config.ts` currently has no `release.baseUrl`, and `src/desktop/index.ts` does not use ElectroBun's `Updater`, so remote upgrades are not wired yet.
 
@@ -157,8 +172,8 @@
 - [ ] Lock the packaged runtime shape for the spike: bundle Bun, decide whether desktop ships backend source or a compiled backend artifact, and use that same shape for all unsigned smoke tests.
 - [ ] Finish the remaining desktop-mode runtime-write audit for DB, cache, imports, temp files, exports, lock files, and diagnostics so packaged runs stop depending on repo-root writes.
 - [ ] Verify migrations, DuckDB boot, SQLite job state, and `@duckdb/node-api` all work in desktop mode on a local smoke run using the chosen packaged shape.
-- [ ] Produce one unsigned macOS artifact on the chosen packaged shape and confirm launch, quit, relaunch, and basic in-app API connectivity on clean-machine assumptions.
-- [ ] Produce one unsigned Windows artifact on the chosen packaged shape and confirm launch, quit, relaunch, and basic in-app API connectivity on clean-machine assumptions.
+- [ ] Produce one unsigned macOS artifact on the chosen packaged shape and confirm launch, quit, relaunch, and basic in-app API connectivity on clean-machine assumptions with no Bun, DuckDB CLI, `sqlite3`, or `codex` installed.
+- [ ] Produce one unsigned Windows artifact on the chosen packaged shape and confirm launch, quit, relaunch, and basic in-app API connectivity on clean-machine assumptions with no Bun, DuckDB CLI, `sqlite3`, or `codex` installed.
 - [ ] Record blockers, required repo refactors, and an explicit continue-or-fallback decision versus Electron.
 
 ### Current Spike Status
@@ -170,8 +185,8 @@
 - Unsigned macOS and Windows artifact creation and relaunch smoke tests are still pending.
 - Packaged Bun bundling is not implemented yet, and backend source-vs-compiled artifact shape is not locked yet for clean-machine validation.
 - Packaged `@duckdb/node-api` verification is still pending on macOS and Windows.
-- Windows strategy for the `sqlite3` fallback flow in `judgmentJobSqliteService.ts` is still unresolved.
-- Packaged Codex CLI and Bun binary path resolution still need a platform-aware audit.
+- Clean-machine validation that packaged startup and normal API flows do not require `sqlite3` or other unbundled CLIs is still pending.
+- Optional Codex CLI lookup, install guidance, and missing-binary behavior are not yet verified on packaged macOS and Windows builds.
 - Desktop API port selection and occupied-port recovery are not implemented; packaged desktop still defaults to port `32101` unless overridden.
 - Signing, notarization, installer generation, and remote upgrade strategy are not started.
 - `electrobun.config.ts` has no release host configured, and the desktop shell does not call `Updater.checkForUpdate`, `Updater.downloadUpdate`, or `Updater.applyUpdate`.
@@ -183,6 +198,10 @@
 - [ ] Time-box an ElectroBun feasibility spike for macOS and Windows packaging.
 - [ ] Define supported targets for v1: macOS Intel/Apple Silicon, Windows x64, and Linux later.
 - [ ] Define what "works offline" means versus what still needs network access for providers and remote runtimes.
+
+### 2. Desktop Shell Bootstrap
+
+- See `APP_PLAN_IMPLEMENTED.md` for landed shell bootstrap work; remaining shell-adjacent tasks are tracked under sections 5, 8, 9, and 15 below.
 
 ### 3. Frontend Runtime Wiring
 
@@ -199,7 +218,7 @@
 
 - [ ] Audit runtime code paths that derive writable locations from `process.cwd()` and replace them with explicit runtime paths.
 - [ ] Audit path parsing and separators for Windows correctness.
-- [ ] Audit hard-coded Bun global paths and macOS-specific binary lookup assumptions for Codex and DuckDB.
+- [ ] Audit hard-coded Bun global paths and macOS-specific binary lookup assumptions for optional Codex and DuckDB CLI discovery.
 - [ ] Make the packaged desktop DB-path source of truth explicit: either keep `src/desktop/getDesktopRuntimeConfig.ts` as the packaged owner or route packaged defaults back through `src/server/utils/getDuckdbPath.ts`.
 - [ ] Audit spawned subprocess commands for Windows-safe quoting and executable lookup.
 - [ ] Audit temp-file, lock-file, and export-file naming for spaces and Windows path rules.
@@ -208,10 +227,10 @@
 ### 6. External Binary Strategy
 
 - [ ] Bundle Bun in the packaged app and make the first clean-machine artifact smoke tests validate that packaged runtime.
-- [ ] Decide whether the packaged app bundles `sqlite3` fallback tooling or disables that fallback on platforms where it is unavailable.
-- [ ] Decide whether the packaged app bundles a DuckDB CLI or keeps it optional for diagnostics only.
-- [ ] Define the support policy for Codex CLI integration in packaged builds.
-- [ ] Make all optional external tools clearly discoverable in Settings with platform-specific guidance.
+- [ ] Do not bundle `sqlite3`; keep any `sqlite3`-based repair or export paths out of packaged startup, API serving, and normal user flows.
+- [ ] Keep DuckDB CLI optional for diagnostics only, not required for packaged startup or core flows.
+- [ ] Keep Codex CLI as an optional bring-your-own integration in packaged builds; users install and configure it separately if they want it.
+- [ ] Make all optional external tools clearly discoverable in Settings with platform-specific install guidance and unavailable-state UX.
 
 ### 7. Native Dependency Packaging
 
