@@ -1,5 +1,5 @@
 import {createHash} from 'node:crypto'
-import {mkdir, readdir, readFile, rename, unlink, writeFile} from 'node:fs/promises'
+import {mkdir, readdir, readFile, rename, rm, unlink, writeFile} from 'node:fs/promises'
 import {join} from 'node:path'
 
 import {Effect} from 'effect'
@@ -1068,4 +1068,15 @@ export const getDuckdbOwnerConnectionsOverview = async (
 
 export const getDuckdbOwnerConnectionHeartbeatPayload = async (): Promise<DuckdbOwnerConnectionIdentity> => {
   return getCurrentDuckdbOwnerConnectionHeartbeatIdentity()
+}
+
+export const resetDuckdbOwnerConnectionsForTests = async (options: DuckdbOwnerConnectionStorageOptions = {}) => {
+  const databasePath = options.databasePath ?? env.DUCKDB_PATH
+  const storageDirectory = getWorkerRegistryStorageDirectory(databasePath)
+
+  duckdbOwnerConnectionState.recordsByConnectionId.clear()
+
+  if (storageDirectory !== null) {
+    await rm(storageDirectory, {force: true, recursive: true})
+  }
 }

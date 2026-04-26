@@ -1440,19 +1440,25 @@ const assertProjectRuntimeModelMatch = async (projectId: string): Promise<void> 
   return assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
 }
 
-const getJudgingRuntimeReason = (): string | null => {
-  return !shouldCurrentServerRunJudgingLoops()
-    ? 'This server is not configured for judging loops, so it cannot process queued prompts.'
-    : null
+const getJudgingRuntimeReason = async (): Promise<string | null> => {
+  if (shouldCurrentServerRunJudgingLoops()) {
+    return null
+  }
+
+  const importConsumer = await getJudgmentImportConsumerAvailability()
+
+  return importConsumer.eligibleConsumerPresent
+    ? null
+    : `No eligible ${importConsumer.requiredConsumerRole} is currently registered, so queued prompts cannot be processed.`
 }
 
-const getJudgingRuntime = (): {enabled: boolean; reason: string | null} => {
-  const reason = getJudgingRuntimeReason()
+const getJudgingRuntime = async (): Promise<{enabled: boolean; reason: string | null}> => {
+  const reason = await getJudgingRuntimeReason()
   return {enabled: reason === null, reason}
 }
 
-const assertJudgingRuntimeCanRun = (): void => {
-  const reason = getJudgingRuntimeReason()
+const assertJudgingRuntimeCanRun = async (): Promise<void> => {
+  const reason = await getJudgingRuntimeReason()
 
   if (reason) {
     throw new HttpError(400, reason)
@@ -1981,7 +1987,7 @@ export const judgmentsJobsRoutes = new Elysia()
         return {error: 'A job already exists for this project', data: null}
       }
 
-      assertJudgingRuntimeCanRun()
+      await assertJudgingRuntimeCanRun()
       await assertProjectRuntimeModelMatch(body.projectId)
 
       const [job] = await getAppDatabaseService().queryJson<{
@@ -2179,17 +2185,25 @@ export const judgmentsJobsRoutes = new Elysia()
             : Promise.resolve(null)
           const storageProjectionPromise = getJudgmentJobStorageProjection(job.projectId, db)
 
-          const [sqliteHealth, leaseMetadata, storageProjection, totalTokenUsage, tokenUsageRows, failedRequestRows] =
-            await Promise.all([
-              sqliteHealthPromise,
-              leaseMetadataPromise,
-              storageProjectionPromise,
-              db.queryJson<{
-                totalTokens: number | null
-                totalPromptTokens: number | null
-                totalCompletionTokens: number | null
-                totalRequests: number | null
-              }>(`
+          const judgingRuntimePromise = getJudgingRuntime()
+          const [
+            sqliteHealth,
+            leaseMetadata,
+            storageProjection,
+            totalTokenUsage,
+            tokenUsageRows,
+            failedRequestRows,
+            judgingRuntime,
+          ] = await Promise.all([
+            sqliteHealthPromise,
+            leaseMetadataPromise,
+            storageProjectionPromise,
+            db.queryJson<{
+              totalTokens: number | null
+              totalPromptTokens: number | null
+              totalCompletionTokens: number | null
+              totalRequests: number | null
+            }>(`
           SELECT
             SUM(total_tokens) AS totalTokens,
             SUM(total_prompt_tokens) AS totalPromptTokens,
@@ -2198,13 +2212,13 @@ export const judgmentsJobsRoutes = new Elysia()
           FROM app.token_use
           WHERE judgment_job_id = '${escapeSqlString(job.id)}'
         `),
-              db.queryJson<{
-                createdAt: unknown
-                dailyTokens: number | null
-                dailyPromptTokens: number | null
-                dailyCompletionTokens: number | null
-                requests: number | null
-              }>(`
+            db.queryJson<{
+              createdAt: unknown
+              dailyTokens: number | null
+              dailyPromptTokens: number | null
+              dailyCompletionTokens: number | null
+              requests: number | null
+            }>(`
           SELECT
             created_at AS createdAt,
             total_tokens AS dailyTokens,
@@ -2215,13 +2229,14 @@ export const judgmentsJobsRoutes = new Elysia()
           WHERE judgment_job_id = '${escapeSqlString(job.id)}'
           ORDER BY created_at ASC
         `),
-              db.queryJson<{failedRequestsDetails: unknown}>(`
+            db.queryJson<{failedRequestsDetails: unknown}>(`
           SELECT TO_JSON(failed_requests_details) AS failedRequestsDetails
           FROM app.token_use
           WHERE judgment_job_id = '${escapeSqlString(job.id)}'
             AND has_failed_requests = TRUE
         `),
-            ])
+            judgingRuntimePromise,
+          ])
           const normalizedTokenUsageRows = tokenUsageRows.reduce<
             Array<{
               createdAt: Date
@@ -2303,7 +2318,7 @@ export const judgmentsJobsRoutes = new Elysia()
             promptStats,
             storagePolicy,
             storageHealth,
-            judgingRuntime: getJudgingRuntime(),
+            judgingRuntime,
             totalTokenUsage: {
               totalTokens: Number(totalTokenUsage[0]?.totalTokens || 0),
               totalPromptTokens: Number(totalTokenUsage[0]?.totalPromptTokens || 0),
@@ -2688,7 +2703,7 @@ export const judgmentsJobsRoutes = new Elysia()
       const sqliteService = getJudgmentJobSqliteService()
 
       if (body.status === 'running') {
-        assertJudgingRuntimeCanRun()
+        await assertJudgingRuntimeCanRun()
         const {job, projectModelId} = await getJobContext({jobId: params.id})
         await assertStoredProviderModelRuntimeMatch({modelId: projectModelId})
 
@@ -2771,7 +2786,7 @@ export const judgmentsJobsRoutes = new Elysia()
   .post(
     '/api/judgmentsjobs/:id/start-clean',
     async ({params}) => {
-      assertJudgingRuntimeCanRun()
+      await assertJudgingRuntimeCanRun()
 
       const sqliteService = getJudgmentJobSqliteService()
       const {job, projectModelId} = await getJobContext({jobId: params.id})

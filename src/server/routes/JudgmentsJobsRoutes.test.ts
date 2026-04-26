@@ -142,11 +142,38 @@ afterEach(async () => {
     await import('../cron/judgmentsJobs/judgmentEndpointAvailability.ts')
   const {resetJudgmentJobStorageTransferRuntimeForTests} =
     await import('../cron/judgmentsJobs/judgmentJobStorageTransferRuntime.ts')
+  const {resetDuckdbOwnerConnectionsForTests} = await import('../utils/duckdbOwnerConnections.ts')
 
   resetProjectMartLargeRebuildRuntimeMetricsForTests()
   resetJudgmentEndpointAvailabilityForTests()
   resetJudgmentJobStorageTransferRuntimeForTests()
+  await resetDuckdbOwnerConnectionsForTests()
 })
+
+const registerJudgeWorkerHeartbeat = async () => {
+  const [{upsertDuckdbOwnerConnectionHeartbeat}, {getRuntimeCutoverVersion}] = await Promise.all([
+    import('../utils/duckdbOwnerConnections.ts'),
+    import('../utils/runtimeCutover.ts'),
+  ])
+  const nowIso = new Date().toISOString()
+
+  await upsertDuckdbOwnerConnectionHeartbeat({
+    apiServerPort: 4102,
+    capabilities: ['judging'],
+    hostname: 'judging-test-host',
+    instanceId: `judge-worker-server:judging-test-host:4102:1002:${nowIso}`,
+    listenPort: 4102,
+    memoryLimit: null,
+    pid: 1002,
+    processStartedAt: nowIso,
+    runtimeProfile: 'local',
+    runtimeVersion: getRuntimeCutoverVersion(),
+    serverRole: 'judge-worker',
+    service: 'judge-worker-server',
+    startedAt: nowIso,
+    duckdbOwnerUrl: `http://127.0.0.1:${process.env.API_SERVER_PORT}`,
+  })
+}
 
 const insertProjectFixture = async ({
   connectionId,
@@ -1444,6 +1471,63 @@ test('job details expose provider dispatch saturation stats', async () => {
     providerPrefetchFillPct: 50,
     providerQueueLimit: 80,
     providerQueuedPrompts: 40,
+  })
+})
+
+test('job detail treats a registered remote judge worker as judging runtime availability', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {withCurrentServerRoleOverride} = await import('../utils/serverRuntimeRole.ts')
+  const projectId = `remote-judge-runtime-project-${Date.now()}`
+  const modelId = `remote-judge-runtime-model-${Date.now()}`
+  const connectionId = `remote-judge-runtime-connection-${Date.now()}`
+  const jobId = `remote-judge-runtime-job-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await registerJudgeWorkerHeartbeat()
+
+  await withCurrentServerRoleOverride('maintenance-worker', async () => {
+    const response = await app?.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
+    const body = (await response?.json()) as {judgingRuntime: {enabled: boolean; reason: string | null}}
+
+    expect(response?.status).toBe(200)
+    expect(body.judgingRuntime).toEqual({enabled: true, reason: null})
+  })
+})
+
+test('job creation succeeds on the owner when a remote judge worker is registered', async () => {
+  if (!app) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {withCurrentServerRoleOverride} = await import('../utils/serverRuntimeRole.ts')
+  const projectId = `remote-judge-create-project-${Date.now()}`
+  const modelId = `remote-judge-create-model-${Date.now()}`
+  const connectionId = `remote-judge-create-connection-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await registerJudgeWorkerHeartbeat()
+
+  await withCurrentServerRoleOverride('maintenance-worker', async () => {
+    const response = await app?.handle(
+      new Request('http://localhost/api/judgmentsjobs', {
+        body: JSON.stringify({projectId}),
+        headers: {'content-type': 'application/json'},
+        method: 'POST',
+      }),
+    )
+    const body = (await response?.json()) as {data: {projectId: string; status: string}; error: string | null}
+
+    expect(response?.status).toBe(200)
+    expect(body.error).toBeNull()
+    expect(body.data.projectId).toBe(projectId)
+    expect(body.data.status).toBe('running')
   })
 })
 
