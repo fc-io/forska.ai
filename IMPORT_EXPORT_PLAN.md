@@ -65,7 +65,7 @@
 - Project route scope from `app.project_import_route` and referenced `app.import_route` rows.
 - Project article links from `app.project_article` only for articles in the exported, date-bounded article set.
 - Exported article set as the union of route-scoped articles from `app.project_import_route` joined through `app.article_import_route` and curated article links from `app.project_article`.
-- Current project article scope means the exported article set after applying the project's `date_from` and `date_to` bounds to the union of route-scoped and curated articles.
+- Current project article scope means the exported article set after applying the project's `date_from` and `date_to` bounds to `app.article.article_created_at` for the union of route-scoped and curated articles.
 - Do not infer export scope from `mart.project_scope_article` alone because that mart stores project membership before date filtering; package export and import analysis must apply the same article date predicates used by review serving and raw review-query fallback paths. Treat judgment-queue raw fallback behavior as a parity risk until its date-bound filtering is verified or patched, and do not use queue output itself as export scope unless it matches the date-bounded review scope.
 - Referenced article rows from `app.article` for the exported article set, including article identity fields (`article_id`, DOI, PubMed id, arXiv id, medRxiv id, bioRxiv id), citation metadata, title, summary, authors, article version, article timestamps, legacy `import_route`, URL, publication status, `content_hash`, `original_data`, `source_metadata`, `full_text`, `full_text_html`, `full_text_pdf`, `full_text_source`, `full_text_original_format`, `full_text_fetched_at`, `full_text_assets`, and `full_text_char_count`.
 - Article route links from `app.article_import_route` for exported articles and exported import routes so route provenance can be reconstructed only when the target route and planned article-route writes are safe to link.
@@ -96,7 +96,7 @@
 - Export the full dependency set for the project model and every model id referenced by the exported judgment payload.
 - Reuse the existing provider setup flows during import instead of inventing a separate import-only credential path.
 - Treat exported provider descriptors as safe prefill only. If the target provider needs an API key or interactive auth, the import flow must still collect that credential or complete that auth step before the dependency is considered resolved.
-- Use the normal provider endpoints for dependency setup where possible: `/api/provider-auth/:providerKind/*`, `/api/provider-connections`, `/api/provider-connections/:id`, and `/api/provider-connections/:id/test` for connection setup and verification, `/api/provider-connections/:id/models` and `/api/provider-connections/:id/sync-models` for non-Codex model materialization, and `POST /api/models/ensure` only for Codex model materialization.
+- Use the normal provider endpoints for dependency setup where possible: `/api/provider-auth/:providerKind/*`, `/api/provider-connections`, `/api/provider-connections/:id`, and `/api/provider-connections/:id/test` for connection setup and verification, `/api/provider-connections/:id/discovered-models` for candidate review, `/api/provider-connections/:id/models` and `/api/provider-connections/:id/sync-models` for non-Codex model materialization, and `POST /api/models/ensure` only for Codex model materialization.
 - Even though the current `POST /api/models/ensure` route still supports Anthropic for project-create style flows, package import must not use that Anthropic path because it binds to the first enabled Anthropic connection instead of the user-resolved mapped connection.
 
 ### Codex Special Handling
@@ -118,13 +118,13 @@
 - Import never merges into an existing project in v1; each successful import creates a new project.
 - During analyze, compute or validate the package fingerprint and compare it with previously completed imports recorded by the app.
 - If the fingerprint matches a prior import exactly, show a non-blocking `already imported on this machine` warning with the prior imported project name, id, and timestamp.
-- If the package is not an exact duplicate but overlaps existing data, show an overlap summary instead of a duplicate warning: reused article count, new article count, omitted route-link count, omitted article-route-link count, route-scoped article snapshot-link count, and any post-remap conflicts that would still block judgment inserts.
+- If the package is not an exact duplicate but overlaps existing data, show an overlap summary instead of a duplicate warning: reused article count, new article count, omitted route-link count, omitted article-route-link count, route-scoped article snapshot-link count, and any post-remap conflicts that would still block commit.
 - Exact package duplicates stay allowed because users may intentionally create parallel copies, but the warning must appear before final confirmation.
 
 ### Mapping Strategy
 
 - `project`: always create a new target id, keep source project timestamps and archived state in provenance only, and create the imported project as unarchived.
-- `prompt`: resolve through the existing immutable-prompt behavior, not a project-local detached prompt table. Recompute the canonical prompt content hash from the imported prompt fields and use the same `getOrCreateImmutablePromptTx` semantics as create, edit, and subproject flows instead of trusting a serialized hash blindly. Reuse an existing `app.prompt` row when the canonical hash matches; otherwise create a new immutable prompt row. If the matched canonical prompt row is archived and the exported `app.prompt.archived` value is `FALSE`, reuse that row and reactivate it so import matches the current create and edit semantics. Always create fresh `app.project_prompt` link rows for the imported project, preserve imported project-link archive and enablement state there, and do not assume imported prompt ids will be unique to that project.
+- `prompt`: resolve through the existing immutable-prompt behavior, not a project-local detached prompt table. Recompute the canonical prompt content hash from the imported prompt fields and use the same `getOrCreateImmutablePromptTx` semantics as create, edit, and subproject flows instead of trusting a serialized hash blindly. Reuse an existing `app.prompt` row when the canonical hash matches; otherwise create a new immutable prompt row. If the matched canonical prompt row is archived and the exported `app.prompt.archived` value is `FALSE`, reuse that row and reactivate it so import matches the current create and edit semantics. Always create fresh `app.project_prompt` link rows for the imported project, preserve imported project-link archive and enablement state there, and do not assume target prompt rows are private to the imported project. After canonical prompt remapping, block import if two distinct exported project-prompt links resolve to the same target prompt id because `app.project_prompt` is unique by `(project_id, prompt_id)` and v1 cannot preserve both link metadata rows.
 - `import_route`: match by `route`; if a route is missing on the target, omit the related project/article route links in v1, show it in preview, include it in overlap and post-import warnings, and continue without blocking the import. Do not persist `app.article.import_route` on created rows unless the mapped target route is present and the corresponding article-route write is safe after the checks below; when reusing a target article, never overwrite an existing legacy route with a missing or unsafe source route. Preserve omitted source routes only in package/session provenance. Before creating any `app.project_import_route` link, analyze must prove the mapped target route would not expand the imported project beyond the exported article set after id remapping, planned article-route inserts, and the imported project's date bounds. Analyze must also prove any new `app.article_import_route` rows for that mapped route would not expand the current date-bounded article scope of existing target projects already linked to that route. If a matched route would pull in extra target articles or push imported articles into unrelated target projects, omit the project-route link and unsafe article-route writes, then use snapshot `app.project_article` links for the exported route-scoped articles instead.
 - `article`: auto-match only when all non-empty exported stable identifiers converge on one target article or on no target article. Resolve and display exact identifiers in priority order: `article_id`, normalized DOI, normalized PubMed id, normalized arXiv id, normalized medRxiv id, and normalized bioRxiv id. Use the existing shared DOI normalization helper and add explicit shared normalization helpers for the remaining identifier families before analyze matching logic is locked so export and import compare the same canonical forms. If no exact match exists, create a new article. If one identifier matches a target row and another exported identifier is missing on that row, reuse the row and fill the missing value during the non-destructive merge; if the target row has a different non-empty value for any exported stable identifier, block as an article conflict. Because only `article_id` is globally unique today, analyze must show the matched identifier type and all exact candidates when secondary identifiers produce multiple matches, and it must also block commit whenever any non-empty exported stable identifier points at a different target row than another exported identifier. Never heuristic auto-link in v1.
 - `project_article`: always create a new link row for the imported project for each exported source `app.project_article` link, even when the article row is reused, and set `imported_from_project_id` to `NULL` in v1. Also create snapshot project-article links for exported route-scoped articles whenever a missing or unsafe target route prevents creating the equivalent project-route link. If the same target article is both source-curated and route-scope fallback, insert one `app.project_article` row and keep both reasons in the import plan summary. This intentionally differs from clone and Covidence-managed imports and must not imply local source-project ownership or managed re-sync behavior.
@@ -158,7 +158,7 @@
 - Import judgments only after article, prompt, and model mappings are fully resolved.
 - Rewrite every judgment foreign key to target ids before insert.
 - Because imported prompts may reuse existing immutable prompt rows, imported judgments can still collide with existing target judgments after article, prompt, and model remapping.
-- Still validate judgment identity after all ids are remapped, and treat the effective uniqueness key as article, prompt, model, content toggles, and `delete_generation`. If any post-remap collision remains within the package or against existing target data, block the import and show a conflict instead of silently merging or reusing a target judgment.
+- Still validate judgment identity after all ids are remapped, and treat the effective uniqueness key as article, prompt, model, content toggles, and `delete_generation`. If any post-remap collision remains within the package or against existing target data, including soft-deleted target rows that still occupy the database unique key, block the import and show a conflict instead of silently merging or reusing a target judgment.
 - Preserve answer payloads, explanation, quotes, chunking strategy, and timestamps where safe.
 - Rewrite `project_id` to the new imported project id.
 - Rewrite `snapshot_project_id` to the new imported project id so the imported project's review and mart queries continue to work.
@@ -199,7 +199,7 @@
    - Show which import routes will be linked versus omitted. Missing routes, route links that would expand the imported project scope, and article-route writes that would expand existing target projects stay warnings in v1 and do not block commit by themselves.
    - Show which article route links will be created or omitted, plus which source-curated project article links and route-scope fallback snapshot project article links will be created for the imported project.
    - Show the final model mapping for the project and all imported judgments.
-   - Show any blocking article-match conflicts or post-remap judgment conflicts. In v1 these are review-time blockers, not an in-wizard per-row remap tool.
+   - Show any blocking article-match conflicts, project-prompt remap conflicts, or post-remap judgment conflicts. In v1 these are review-time blockers, not an in-wizard per-row remap tool.
    - Show overlap counts and any prior-import warning again before confirmation.
 5. Confirm import.
    - Run asset promotion into final runtime-owned paths before the database transaction, then run one transaction that creates the project, prompts, links, articles, judgments, human judgments, human summary judgments, reviews, and assessments.
@@ -312,8 +312,8 @@
 
 - `Import session states`
   - `uploading`, `queued`, `extracting`, `analyzing`, `awaiting_resolution`, `ready_to_commit`, `committing`, `completed`, `failed`, `cancelled`, `expired`.
-  - `awaiting_resolution` means the package is parsed but still has blocking provider or model dependencies to resolve, or it has blocking article or judgment conflicts that prevent commit. Missing import routes stay warnings in v1 and do not keep the session unresolved on their own.
-  - `ready_to_commit` means every blocking dependency is resolved, no blocking article or judgment conflicts remain, and the review plan is frozen for commit.
+  - `awaiting_resolution` means the package is parsed but still has blocking provider or model dependencies to resolve, or it has blocking article, project-prompt, or judgment conflicts that prevent commit. Missing import routes stay warnings in v1 and do not keep the session unresolved on their own.
+  - `ready_to_commit` means every blocking dependency is resolved, no blocking article, project-prompt, or judgment conflicts remain, and the review plan is frozen for commit.
 
 - `Export session states`
   - `queued`, `assembling`, `packaging`, `ready`, `failed`, `expired`.
@@ -330,7 +330,9 @@
   - During analyze, match duplicate-import warnings on `direction = 'import'` plus `package_fingerprint`, and use the history row only for warning and display, never for automatic merge behavior. Export-history rows may support audit or download UX, but they must not produce `already imported` warnings.
 
 - `Overlap summary contract`
-  - Analyze should always produce `reusedArticleCount`, `newArticleCount`, `omittedRouteLinkCount`, `omittedArticleRouteLinkCount`, `routeArticleSnapshotLinkCount`, `duplicateImportMatchCount`, and `judgmentConflictCount`.
+  - Analyze should always produce `reusedArticleCount`, `newArticleCount`, `omittedRouteLinkCount`, `omittedArticleRouteLinkCount`, `routeArticleSnapshotLinkCount`, `duplicateImportMatchCount`, `articleConflictCount`, `projectPromptConflictCount`, and `judgmentConflictCount`.
+  - `articleConflictCount` should count blocking stable-identifier conflicts, ambiguous secondary-identifier matches, and distinct exported articles that would collapse to the same target article id.
+  - `projectPromptConflictCount` should count distinct exported project-prompt links that canonical prompt remapping would collapse to one target prompt id.
   - `judgmentConflictCount` should count only post-remap judgment insert conflicts that would still block commit. Because prompt rows may be reused through immutable prompt matching, this count can be non-zero even in normal v1 imports.
   - Duplicate-package warnings and overlap summaries are informational; they never silently change the import plan.
   - `omittedRouteLinkCount` represents missing target import routes or matched routes that cannot be safely linked without expanding the imported project scope or an existing target project scope.
@@ -339,8 +341,8 @@
 
 - `Route-scope fidelity contract`
   - A full-fidelity import must not let a reused target import route pull unrelated target articles into the imported project or push imported package articles into unrelated existing target projects.
-  - Analyze must compare the exported route-scoped article set after article id remapping against the target route's current article set plus planned package article-route links, filtered through the imported project's `date_from` and `date_to`, before deciding to create an `app.project_import_route` link.
-  - Analyze must also compare every planned new article-route link against existing active target projects already linked to that route, using each project's current date bounds, before deciding the article-route insert is safe.
+  - Analyze must compare the exported route-scoped article set after article id remapping against the target route's current article set plus planned package article-route links, filtered through the imported project's `date_from` and `date_to` against `app.article.article_created_at`, before deciding to create an `app.project_import_route` link.
+  - Analyze must also compare every planned new article-route link against existing active target projects already linked to that route, using each project's current date bounds against `app.article.article_created_at`, before deciding the article-route insert is safe.
   - If a target route is missing, its current-plus-planned route set would add articles not present in the package, or planned article-route inserts would expand another target project's current scope, omit the project-route link, skip the unsafe article-route writes, preserve the exported articles with snapshot project-article links, and show a warning with the affected route and article counts.
   - Existing target article-route links may be reused for provenance. New article-route links may be inserted only when the safety checks prove they do not create cross-project scope side effects; they must not be treated as enough to preserve project membership unless the project-route link is also safe to create.
 
@@ -369,6 +371,7 @@
   - Because DOI, PubMed id, arXiv id, medRxiv id, and bioRxiv id are not unique in the current schema, analyze must return all exact candidates, the matched identifier type, and a blocking conflict whenever more than one target article matches.
   - Auto-match is allowed only when all non-empty exported stable identifiers converge on the same target article row or are absent from the target. Missing identifier values on the matched target row may be filled by the non-destructive merge, but conflicting non-empty target values must block commit.
   - If identifiers disagree across target rows, analyze must block commit and surface the conflict for review instead of guessing.
+  - If two distinct exported article rows resolve to the same target article id after stable-identifier matching, analyze must block commit unless they are the same source article already deduplicated by the package article set. V1 should not silently collapse separate source article rows because that can erase separate project links, reviews, human judgments, or judgments after remapping.
 
 - `Provenance semantics`
   - `project_article.imported_from_project_id = NULL` is an intentional package-import semantic and must not trigger clone-style or Covidence-managed resync behavior.
@@ -412,7 +415,7 @@
 - [ ] Build upload/analyze session endpoints, staged extraction, TTL cleanup, preview summaries, unresolved-warning reporting, and background progress for large packages.
 - [ ] Make project-transfer uploads compatible with the existing writer-proxy topology: either stream upload bodies through `ApiProxyRoutes.ts` or bypass that proxy for transfer uploads so large packages are not buffered in memory on follower servers.
 - [ ] Implement provider connection auto-match, existing-connection selection, managed-provider auth handoff, non-Codex provider-model materialization through provider-connection model routes, and Codex `POST /api/models/ensure` materialization.
-- [ ] Implement conservative article matching, route-link and article-route side-effect omission review, route-scope fallback snapshot links, and conflict detection before commit.
+- [ ] Implement conservative article matching, project-prompt remap conflict detection, route-link and article-route side-effect omission review, route-scope fallback snapshot links, and conflict detection before commit.
 - [ ] Implement exact duplicate-package detection from package fingerprint plus overlap summaries for partial matches.
 - [ ] Build the `/projects/import` wizard for upload, package review, dependency resolution, and final plan review.
 
@@ -510,12 +513,26 @@
 
 ## Commands Run For Latest Review
 
+- `pwd`
 - `git status --short`
-- `sed -n '1,180p' IMPORT_EXPORT_PLAN.md`
-- `sed -n '181,360p' IMPORT_EXPORT_PLAN.md`
-- `sed -n '361,540p' IMPORT_EXPORT_PLAN.md`
-- `sed -n '220,260p' IMPORT_EXPORT_PLAN.md`
-- `sed -n '500,535p' IMPORT_EXPORT_PLAN.md`
+- `sed -n '1,240p' IMPORT_EXPORT_PLAN.md`
+- `sed -n '1,260p' IMPORT_EXPORT_PLAN.md`
+- `sed -n '260,560p' IMPORT_EXPORT_PLAN.md`
+- `nl -ba IMPORT_EXPORT_PLAN.md | sed -n '220,520p'`
+- `rg --files`
+- `rg -n "provider-connections|discovered-models|sync-models|models|ensure|runtime-asset|ArrayBuffer|writer|ProjectExportRoutes|export" src/server/routes src/server/providers src/services src/app/routes/+admin/+models src/components/main/ProjectsGrid.tsx src/app/routes/+projects/+index.tsx`
+- `rg -n "providerConnections|providers\\.json|providerConnections\\.json|projectPrompts\\.json|projectImportRoutes\\.json|articleImportRoutes\\.ndjson|projectArticles\\.ndjson" IMPORT_EXPORT_PLAN.md tasks/importExportPlan.prd.json`
+- `rg -n "src/server/index\\.ts|src/server/serverMain\\.ts|Mount the new route|mount" IMPORT_EXPORT_PLAN.md tasks/importExportPlan.prd.json`
+- `sed -n '247,570p' src/server/routes/ProviderConnectionsRoutes.ts`
+- `sed -n '357,470p' src/server/routes/ModelsRoutes.ts`
+- `sed -n '1,230p' src/server/routes/ProviderModelsRoutes.ts`
+- `sed -n '1,220p' src/server/routes/ApiProxyRoutes.ts`
+- `sed -n '1,130p' src/server/routes/apiRouteClassification.ts`
+- `sed -n '1,220p' src/server/serverMain.ts`
+- `sed -n '1,80p' src/server/index.ts`
+- `sed -n '560,618p' src/server/services/getDuckdbMartRefreshService.ts`
+- `sed -n '1,220p' src/server/services/projectVisibleJudgmentRule.ts`
+- `rg -n "article or judgment|article, prompt|project-prompt|project prompt|providerConnections\\.json|providers\\.json|src/server/index\\.ts|src/server/serverMain\\.ts|source_metadata|sourceMetadata" IMPORT_EXPORT_PLAN.md tasks/importExportPlan.prd.json`
 - `git diff --check -- IMPORT_EXPORT_PLAN.md`
 - `git diff --stat -- IMPORT_EXPORT_PLAN.md`
 - `git diff -- IMPORT_EXPORT_PLAN.md`
