@@ -406,6 +406,8 @@
 - [ ] Add and run `bun test src/server/routes/ProjectTransferRoutes.test.ts`
 - [ ] Add and run `bun test src/server/routes/RuntimeAssetsRoutes.test.ts`
 - [ ] Add and run `bun test src/server/routes/apiRouteClassification.test.ts` if transfer routes change classification behavior
+- [ ] Add and run `bun test src/server/routes/ApiProxyRoutes.test.ts` if transfer routes change upload proxy behavior
+- [ ] Add and run `bun test src/server/routes/ApiProxyRoutes.retry.test.ts` if transfer routes change upload proxy retry behavior
 
 ### Phase 2 - Export Assembly
 
@@ -413,12 +415,13 @@
 - [ ] Extend the article export query layer so package assembly can actually export the locked article field set, including the package payload fields `originalData` and `sourceMetadata` backed by `app.article.original_data` and `app.article.source_metadata`, plus the selected full-text fields.
 - [ ] Collect local article assets, copy them into `assets/`, and write `assetManifest.json` metadata for safe import-time path rewriting.
 - [ ] Add `POST /api/projects/:id/export-project`, support inline download for small packages, and add a background export session path for large packages.
-- [ ] Wire the new `Export Project` action in `src/components/main/ProjectsGrid.tsx`, including a `preparing download` state when the export runs asynchronously.
+- [ ] Wire the new `Export Project` action in `src/components/main/ProjectsGrid.tsx`, including a `preparing download` state when the export runs asynchronously, and add a focused grid action test for the new button placement and async state.
 
 #### Quality Gates
 
 - [ ] Add and run `bun test src/server/routes/ProjectTransferRoutes.test.ts`
 - [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferExport.test.ts`
+- [ ] Add and run `bun test src/components/main/projectsGrid.vitest.tsx`
 
 ### Phase 3 - Analyze And Resolve Dependencies
 
@@ -513,6 +516,7 @@
 - Add and run `bun test src/server/services/projectTransfer/projectTransferCommitRollback.test.ts`
 - `bun test src/server/routes/providerProjectFlow.e2e.test.ts`
 - `bun test src/app/routes/+projects/-+index.vitest.tsx`
+- Add and run `bun test src/components/main/projectsGrid.vitest.tsx`
 - Add and run `bun test src/app/routes/+projects/-+import.vitest.tsx`
 - `bun run db:mig`
 - `bun run build`
