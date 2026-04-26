@@ -20,6 +20,10 @@ type NumericFilter = {
 
 type PromptFilter = EnumFilter | NumericFilter
 
+const getSelectedPromptValues = (value: string[] | null | undefined): string[] => {
+  return Array.isArray(value) ? value : []
+}
+
 interface ReviewsFilterControlsProps {
   projectId: string
   covidenceDuplicatesOnly: boolean
@@ -99,19 +103,21 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
 
   const setPromptMulti = (promptId: string, values: string[] | null) => {
     props.setPromptFilters((prev) => {
-      return {...prev, [promptId]: values && values.length > 0 ? values : null}
+      return {...(prev ?? {}), [promptId]: values && values.length > 0 ? values : null}
     })
     props.setCurrentPage(1)
   }
 
   const getAllowedValues = (filter: PromptFilter): Set<string> => {
     if (filter.filterType === 'numeric') {
-      const binValues = filter.bins.map((bin) => {
+      const bins = Array.isArray(filter.bins) ? filter.bins : []
+      const specialValues = Array.isArray(filter.specialValues) ? filter.specialValues : []
+      const binValues = bins.map((bin) => {
         return `bin:${bin.min}:${bin.max}`
       })
-      return new Set([...binValues, ...filter.specialValues])
+      return new Set([...binValues, ...specialValues])
     }
-    return new Set(filter.answeredOriginalValues)
+    return new Set(Array.isArray(filter.answeredOriginalValues) ? filter.answeredOriginalValues : [])
   }
 
   createEffect(() => {
@@ -132,13 +138,14 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
     )
     props.setPromptFilters((prev) => {
       const next: Record<string, string[] | null> = {}
-      for (const [promptId, value] of Object.entries(prev)) {
+      for (const [promptId, value] of Object.entries(prev ?? {})) {
         if (value === null) {
           next[promptId] = null
         } else {
           const allowed = allowedByPrompt[promptId]
+          const selectedValues = getSelectedPromptValues(value)
           next[promptId] = allowed
-            ? value.filter((v) => {
+            ? selectedValues.filter((v) => {
                 return allowed.has(v)
               })
             : null
@@ -307,15 +314,20 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
 
             const getOptionsForFilter = (filter: PromptFilter): Array<{value: string; label: string}> => {
               if (filter.filterType === 'numeric') {
-                const binOptions = filter.bins.map((bin) => {
+                const bins = Array.isArray(filter.bins) ? filter.bins : []
+                const specialValues = Array.isArray(filter.specialValues) ? filter.specialValues : []
+                const binOptions = bins.map((bin) => {
                   return {value: `bin:${bin.min}:${bin.max}`, label: bin.label}
                 })
-                const specialOptions = filter.specialValues.map((sv) => {
+                const specialOptions = specialValues.map((sv) => {
                   return {value: sv, label: sv}
                 })
                 return [...binOptions, ...specialOptions]
               }
-              return filter.answeredOriginalValues.map((v) => {
+              const answeredOriginalValues = Array.isArray(filter.answeredOriginalValues)
+                ? filter.answeredOriginalValues
+                : []
+              return answeredOriginalValues.map((v) => {
                 return {value: v, label: v}
               })
             }
@@ -338,7 +350,7 @@ export const ReviewsFilterControls = (props: ReviewsFilterControlsProps) => {
                   <For each={filters}>
                     {(promptFilter) => {
                       const current = createMemo(() => {
-                        return props.promptFilters()[promptFilter.promptId] ?? []
+                        return getSelectedPromptValues(props.promptFilters()[promptFilter.promptId])
                       })
                       const options = createMemo(() => {
                         return getOptionsForFilter(promptFilter)

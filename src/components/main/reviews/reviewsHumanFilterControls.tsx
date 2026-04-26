@@ -5,6 +5,10 @@ import {createEffect, createMemo, For, Show, Suspense} from 'solid-js'
 
 import {apiClient} from '../../../services/apiClient.ts'
 
+const getSelectedPromptValues = (value: string[] | null | undefined): string[] => {
+  return Array.isArray(value) ? value : []
+}
+
 interface ReviewsHumanFilterControlsProps {
   projectId: string
   covidenceDuplicatesOnly: boolean
@@ -84,7 +88,7 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
 
   const setPromptMulti = (promptId: string, values: string[] | null) => {
     props.setPromptFilters((prev) => {
-      return {...prev, [promptId]: values && values.length > 0 ? values : null}
+      return {...(prev ?? {}), [promptId]: values && values.length > 0 ? values : null}
     })
     props.setCurrentPage(1)
   }
@@ -120,13 +124,14 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
     )
     props.setPromptFilters((prev) => {
       const next: Record<string, string[] | null> = {}
-      for (const [promptId, value] of Object.entries(prev)) {
+      for (const [promptId, value] of Object.entries(prev ?? {})) {
         if (value === null) {
           next[promptId] = null
         } else {
           const allowed = allowedByPrompt[promptId]
+          const selectedValues = getSelectedPromptValues(value)
           next[promptId] = allowed
-            ? value.filter((v) => {
+            ? selectedValues.filter((v) => {
                 return allowed.has(v)
               })
             : null
@@ -248,7 +253,7 @@ export const ReviewsHumanFilterControls = (props: ReviewsHumanFilterControlsProp
                   <For each={filters}>
                     {(promptFilter) => {
                       const current = createMemo(() => {
-                        return props.promptFilters()[promptFilter.promptId] ?? []
+                        return getSelectedPromptValues(props.promptFilters()[promptFilter.promptId])
                       })
                       const options = createMemo(() => {
                         return promptFilter.answeredOriginalValues
