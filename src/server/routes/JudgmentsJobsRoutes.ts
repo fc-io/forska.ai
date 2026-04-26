@@ -68,14 +68,6 @@ import {
 } from '../utils/serverRuntimeRole.ts'
 import {duckdbOwnerPrivateApiPrefix} from './apiRouteClassification.ts'
 
-type TokenUsageDaySummary = {
-  date: string
-  dailyTokens: number
-  dailyPromptTokens: number
-  dailyCompletionTokens: number
-  requests: number
-}
-
 const judgmentJobServerId = getDefaultJudgmentServerJobId()
 
 type JudgmentJobMutationState = {
@@ -995,49 +987,6 @@ const getJudgmentJobStorageProjection = async (
   }
 }
 
-const getUtcDayKey = (value: Date) => {
-  return value.toISOString().slice(0, 10)
-}
-
-const aggregateTokenUsagePerDay = (
-  rows: Array<{
-    createdAt: Date
-    dailyTokens: number | string | null
-    dailyPromptTokens: number | string | null
-    dailyCompletionTokens: number | string | null
-    requests: number | string | null
-  }>,
-): TokenUsageDaySummary[] => {
-  const dailyMap = rows.reduce<Map<string, TokenUsageDaySummary>>((map, row) => {
-    const dayKey = getUtcDayKey(row.createdAt)
-    const current = map.get(dayKey) ?? {
-      date: `${dayKey}T00:00:00.000Z`,
-      dailyTokens: 0,
-      dailyPromptTokens: 0,
-      dailyCompletionTokens: 0,
-      requests: 0,
-    }
-
-    map.set(dayKey, {
-      ...current,
-      dailyTokens: current.dailyTokens + Number(row.dailyTokens ?? 0),
-      dailyPromptTokens: current.dailyPromptTokens + Number(row.dailyPromptTokens ?? 0),
-      dailyCompletionTokens: current.dailyCompletionTokens + Number(row.dailyCompletionTokens ?? 0),
-      requests: current.requests + Number(row.requests ?? 0),
-    })
-
-    return map
-  }, new Map<string, TokenUsageDaySummary>())
-
-  return Array.from(dailyMap.entries())
-    .sort((left, right) => {
-      return left[0].localeCompare(right[0])
-    })
-    .map(([, value]) => {
-      return value
-    })
-}
-
 const getJobContext = async ({
   db = getAppDatabaseService(),
   jobId,
@@ -1914,27 +1863,62 @@ const isAnthropicRefusalDetail = (detail: FailedRequestDetailRecord): boolean =>
   )
 }
 
-const getFailedRequestSummary = (rows: Array<{failedRequestsDetails: unknown}>): FailedRequestSummary => {
+const getAnthropicRefusalSummary = (rows: Array<{failedRequestsDetails: unknown}>) => {
   const detailRecords = rows.flatMap((row) => {
     return getFailedRequestDetailRecords(row.failedRequestsDetails)
   })
-  const anthropicRefusalArticleIds = detailRecords.reduce((set, detail) => {
-    if (!isAnthropicRefusalDetail(detail)) {
-      return set
-    }
+  const refusalRecords = detailRecords.filter((detail) => {
+    return isAnthropicRefusalDetail(detail)
+  })
+  const articleIds = new Set(
+    refusalRecords.flatMap((detail) => {
+      const articleId = typeof detail.articleId === 'string' ? detail.articleId : null
+      return articleId ? [articleId] : []
+    }),
+  )
 
-    const articleId = typeof detail.articleId === 'string' ? detail.articleId : null
+  return {anthropicRefusalArticles: articleIds.size, anthropicRefusals: refusalRecords.length}
+}
 
-    return articleId ? new Set([...set, articleId]) : set
-  }, new Set<string>())
+const getFailedRequestSummaryFromDatabase = async ({
+  db,
+  jobId,
+}: {
+  db: JudgmentJobSqliteHealthProjectionReader
+  jobId: string
+}): Promise<FailedRequestSummary> => {
+  const [countRows, refusalCandidateRows] = await Promise.all([
+    db.queryJson<{persistedFailedRequests: number | string | null}>(`
+    SELECT
+      SUM(
+        CASE
+          WHEN json_type(failed_requests_details) = 'ARRAY' THEN json_array_length(failed_requests_details)
+          ELSE 0
+        END
+      ) AS persistedFailedRequests
+    FROM app.token_use
+    WHERE judgment_job_id = ${getSqlLiteral(jobId)}
+      AND has_failed_requests = TRUE
+    `),
+    db.queryJson<{failedRequestsDetails: unknown}>(`
+      WITH failed_rows AS (
+        SELECT
+          failed_requests_details,
+          CAST(failed_requests_details AS VARCHAR) AS detailText
+        FROM app.token_use
+        WHERE judgment_job_id = ${getSqlLiteral(jobId)}
+          AND has_failed_requests = TRUE
+      )
+      SELECT TO_JSON(failed_requests_details) AS failedRequestsDetails
+      FROM failed_rows
+      WHERE contains(detailText, ${getSqlLiteral('anthropic_refusal_empty_response')})
+        OR contains(detailText, ${getSqlLiteral('anthropic_empty_response')})
+    `),
+  ])
+  const [countRow] = countRows
+  const anthropicRefusalSummary = getAnthropicRefusalSummary(refusalCandidateRows)
 
-  return {
-    anthropicRefusalArticles: anthropicRefusalArticleIds.size,
-    anthropicRefusals: detailRecords.filter((detail) => {
-      return isAnthropicRefusalDetail(detail)
-    }).length,
-    persistedFailedRequests: detailRecords.length,
-  }
+  return {...anthropicRefusalSummary, persistedFailedRequests: Number(countRow?.persistedFailedRequests ?? 0)}
 }
 
 const resetJudgmentJobLocalSqliteState = async ({jobId, storageState}: {jobId: string; storageState: string}) => {
@@ -2191,8 +2175,8 @@ export const judgmentsJobsRoutes = new Elysia()
             leaseMetadata,
             storageProjection,
             totalTokenUsage,
-            tokenUsageRows,
-            failedRequestRows,
+            tokenUsagePerDayRows,
+            failedRequestSummary,
             judgingRuntime,
           ] = await Promise.all([
             sqliteHealthPromise,
@@ -2213,45 +2197,27 @@ export const judgmentsJobsRoutes = new Elysia()
           WHERE judgment_job_id = '${escapeSqlString(job.id)}'
         `),
             db.queryJson<{
-              createdAt: unknown
+              date: string
               dailyTokens: number | null
               dailyPromptTokens: number | null
               dailyCompletionTokens: number | null
               requests: number | null
             }>(`
           SELECT
-            created_at AS createdAt,
-            total_tokens AS dailyTokens,
-            total_prompt_tokens AS dailyPromptTokens,
-            total_completion_tokens AS dailyCompletionTokens,
-            requests
+            strftime(created_at, '%Y-%m-%d') || 'T00:00:00.000Z' AS date,
+            SUM(total_tokens) AS dailyTokens,
+            SUM(total_prompt_tokens) AS dailyPromptTokens,
+            SUM(total_completion_tokens) AS dailyCompletionTokens,
+            SUM(requests) AS requests
           FROM app.token_use
           WHERE judgment_job_id = '${escapeSqlString(job.id)}'
-          ORDER BY created_at ASC
+          GROUP BY strftime(created_at, '%Y-%m-%d')
+          ORDER BY date ASC
         `),
-            db.queryJson<{failedRequestsDetails: unknown}>(`
-          SELECT TO_JSON(failed_requests_details) AS failedRequestsDetails
-          FROM app.token_use
-          WHERE judgment_job_id = '${escapeSqlString(job.id)}'
-            AND has_failed_requests = TRUE
-        `),
+            getFailedRequestSummaryFromDatabase({db, jobId: job.id}),
             judgingRuntimePromise,
           ])
-          const normalizedTokenUsageRows = tokenUsageRows.reduce<
-            Array<{
-              createdAt: Date
-              dailyTokens: number | string | null
-              dailyPromptTokens: number | string | null
-              dailyCompletionTokens: number | string | null
-              requests: number | string | null
-            }>
-          >((acc, row) => {
-            const createdAt = getDateValue(row.createdAt)
-            return createdAt ? [...acc, {...row, createdAt}] : acc
-          }, [])
-          const tokenUsagePerDay = aggregateTokenUsagePerDay(normalizedTokenUsageRows)
           const requestRuntimeStats = getJudgmentRequestStats(job.id)
-          const failedRequestSummary = getFailedRequestSummary(failedRequestRows)
           const storagePolicy = getStoragePolicy({job, sqliteHealth})
           const recentTransfer = getJudgmentJobStorageTransferRuntime(job.id)
           const providerConnection = await getProviderConnectionForStoredModel(projectModelId, db)
@@ -2340,7 +2306,7 @@ export const judgmentsJobsRoutes = new Elysia()
               inFlight: requestRuntimeStats.inFlight,
               attempts: Number(totalTokenUsage[0]?.totalRequests || 0) + requestRuntimeStats.pendingPersistedAttempts,
             },
-            tokenUsagePerDay: tokenUsagePerDay.map((row) => {
+            tokenUsagePerDay: tokenUsagePerDayRows.map((row) => {
               const dailyTokens = Number(row.dailyTokens ?? 0)
               const dailyPromptTokens = Number(row.dailyPromptTokens ?? 0)
               const dailyCompletionTokens = Number(row.dailyCompletionTokens ?? 0)
