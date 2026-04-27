@@ -5,6 +5,10 @@ import {getImportableJudgmentJobWhereSql} from './judgmentJobImportScope.ts'
 import {getJudgmentJobSqliteJobIds} from './judgmentJobPaths.ts'
 import {runJudgmentJobSqliteOutboxImportCycle} from './judgmentJobSqliteOutboxImport.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
+import {
+  getJudgmentJobSqliteErrorMessage,
+  isTransientJudgmentJobSqliteLockMessage,
+} from './judgmentJobSqliteTransientLock.ts'
 
 const judgmentJobSqliteBackgroundImportLogger = createRateLimitedLogger({windowMs: 30_000})
 const isolatedImportFailureThreshold = 3
@@ -103,6 +107,26 @@ const recordImportFailure = async ({
   `)
 }
 
+const recordTransientImportFailure = async ({
+  errorMessage,
+  exitCode,
+  jobId,
+}: {
+  errorMessage: string
+  exitCode: number
+  jobId: string
+}) => {
+  return getAppDatabaseService().queryJson<{importFailureCount: number; storageState: string}>(`
+    UPDATE app.judgment_job
+    SET last_import_error_at = current_timestamp,
+        last_import_error = ${getSqlLiteral(errorMessage)},
+        last_import_exit_code = ${getSqlLiteral(exitCode)},
+        updated_at = current_timestamp
+    WHERE id = ${getSqlLiteral(jobId)}
+    RETURNING import_failure_count AS importFailureCount, storage_state AS storageState
+  `)
+}
+
 export const runJudgmentJobSqliteBackgroundImport = async ({claimedBy}: {claimedBy: string}) => {
   const sqliteService = getJudgmentJobSqliteService()
 
@@ -128,8 +152,10 @@ export const runJudgmentJobSqliteBackgroundImport = async ({claimedBy}: {claimed
       ? {attemptedCount: 1, failedCount: 0, skippedCount: 1, succeededCount: 0}
       : {attemptedCount: 1, failedCount: 0, skippedCount: 0, succeededCount: 1}
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    const [failureState] = await recordImportFailure({errorMessage, exitCode: 1, jobId})
+    const errorMessage = getJudgmentJobSqliteErrorMessage(error)
+    const [failureState] = isTransientJudgmentJobSqliteLockMessage(errorMessage)
+      ? await recordTransientImportFailure({errorMessage, exitCode: 1, jobId})
+      : await recordImportFailure({errorMessage, exitCode: 1, jobId})
 
     judgmentJobSqliteBackgroundImportLogger.warn(
       `judgment-job-sqlite-background-import:failed:${jobId}`,

@@ -19,6 +19,7 @@ import {
   getJudgmentJobSqliteService,
   JudgmentPromptClaimIdentityError,
 } from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
+import {isTransientJudgmentJobSqliteLockMessage} from '../cron/judgmentsJobs/judgmentJobSqliteTransientLock.ts'
 import {
   getJudgmentJobRepairMode,
   getJudgmentJobStartupHandling,
@@ -1867,12 +1868,27 @@ const getJudgmentJobMutationState = async (
   return job ?? null
 }
 
-const getJudgmentJobMutationStorageAssignments = (status?: string) => {
-  return status === 'paused'
-    ? "storage_state = 'draining', pause_requested_at = current_timestamp"
-    : status === 'running'
-      ? "storage_state = 'active', pause_requested_at = NULL"
-      : null
+const getJudgmentJobMutationStorageAssignments = ({
+  clearTransientQuarantine,
+  status,
+}: {
+  clearTransientQuarantine: boolean
+  status?: string
+}) => {
+  const statusAssignments =
+    status === 'paused'
+      ? "storage_state = 'draining', pause_requested_at = current_timestamp"
+      : status === 'running'
+        ? "storage_state = 'active', pause_requested_at = NULL"
+        : null
+  const quarantineAssignments = clearTransientQuarantine
+    ? 'quarantined_at = NULL, quarantine_reason = NULL, import_failure_count = 0, last_import_error = NULL, last_import_error_at = NULL'
+    : null
+  const assignments = [statusAssignments, quarantineAssignments].filter((assignment): assignment is string => {
+    return assignment !== null
+  })
+
+  return assignments.length > 0 ? assignments.join(', ') : null
 }
 
 const getFailedRequestDetailRecords = (value: unknown): FailedRequestDetailRecord[] => {
@@ -2055,7 +2071,10 @@ const resetJudgmentJobLocalSqliteState = async ({jobId, storageState}: {jobId: s
     const flushResult = await runJudgmentJobSqliteIsolatedFlush({claimedBy: judgmentJobServerId, jobId})
 
     if (flushResult.errorMessage !== null) {
-      if (!isJudgmentJobSqliteIsolatedImportLeaseConflict(flushResult.errorMessage)) {
+      if (
+        !isJudgmentJobSqliteIsolatedImportLeaseConflict(flushResult.errorMessage)
+        && !isTransientJudgmentJobSqliteLockMessage(flushResult.errorMessage)
+      ) {
         await runJudgmentJobRepairAction({action: 'quarantine', jobId, reason: flushResult.errorMessage})
       }
 
@@ -2770,6 +2789,7 @@ export const judgmentsJobsRoutes = new Elysia()
     '/api/judgmentsjobs/:id',
     async ({params, body}) => {
       const sqliteService = getJudgmentJobSqliteService()
+      let clearTransientQuarantine = false
 
       if (body.status === 'running') {
         await assertJudgingRuntimeCanRun()
@@ -2780,15 +2800,20 @@ export const judgmentsJobsRoutes = new Elysia()
           await sqliteService.initializeJob(params.id)
         }
 
-        await assertJudgmentJobCanRunSqlitePreflight({
+        const preflightResult = await assertJudgmentJobCanRunSqlitePreflight({
           jobId: params.id,
           quarantineReason: job.quarantineReason,
           storageState: job.storageState,
         })
+
+        clearTransientQuarantine = preflightResult.clearTransientQuarantine
       }
 
       const updatedJob = (await getAppDatabaseService().transaction(async (tx) => {
-        const storageAssignments = getJudgmentJobMutationStorageAssignments(body.status)
+        const storageAssignments = getJudgmentJobMutationStorageAssignments({
+          clearTransientQuarantine,
+          status: body.status,
+        })
         await tx.run(`
           UPDATE app.judgment_job
           SET status = ${getSqlLiteral(body.status)},
@@ -3058,7 +3083,10 @@ export const judgmentsJobsRoutes = new Elysia()
         const flushResult = await runJudgmentJobSqliteIsolatedFlush({claimedBy: judgmentJobServerId, jobId: params.id})
 
         if (flushResult.errorMessage !== null) {
-          if (!isJudgmentJobSqliteIsolatedImportLeaseConflict(flushResult.errorMessage)) {
+          if (
+            !isJudgmentJobSqliteIsolatedImportLeaseConflict(flushResult.errorMessage)
+            && !isTransientJudgmentJobSqliteLockMessage(flushResult.errorMessage)
+          ) {
             await runJudgmentJobRepairAction({action: 'quarantine', jobId: params.id, reason: flushResult.errorMessage})
           }
 

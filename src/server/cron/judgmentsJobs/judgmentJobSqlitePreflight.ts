@@ -3,13 +3,18 @@ import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {HttpError} from '../../utils/httpError.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
+import {
+  getJudgmentJobSqliteErrorMessage,
+  isTransientJudgmentJobSqliteLockMessage,
+} from './judgmentJobSqliteTransientLock.ts'
 
 const judgmentJobSqlitePreflightLogger = createRateLimitedLogger({windowMs: 30_000})
 
 type JudgmentJobSqlitePreflightCandidate = {id: string; quarantineReason?: string | null; storageState?: string}
+export type JudgmentJobSqlitePreflightRunResult = {clearTransientQuarantine: boolean}
 
 const getPreflightFailureMessage = (error: unknown) => {
-  return error instanceof Error ? error.message : String(error)
+  return getJudgmentJobSqliteErrorMessage(error)
 }
 
 const getQuarantinedJobErrorMessage = ({jobId, reason}: {jobId: string; reason: string | null | undefined}) => {
@@ -19,6 +24,10 @@ const getQuarantinedJobErrorMessage = ({jobId, reason}: {jobId: string; reason: 
 
 const getDrainingJobErrorMessage = (jobId: string) => {
   return `Job ${jobId} is draining. Wait for the local SQLite judgments to finish exporting before starting or resuming it.`
+}
+
+const getTransientLockedJobErrorMessage = ({jobId, reason}: {jobId: string; reason: string}) => {
+  return `Job ${jobId} SQLite preflight hit a transient lock. ${reason} Forska will retry automatically once the lock clears; the job was not quarantined.`
 }
 
 const quarantineJobForPreflightFailure = async ({errorMessage, jobId}: {errorMessage: string; jobId: string}) => {
@@ -55,6 +64,16 @@ export const filterRunningJobsBySqlitePreflight = async <T extends JudgmentJobSq
         return job
       } catch (error) {
         const errorMessage = getPreflightFailureMessage(error)
+
+        if (isTransientJudgmentJobSqliteLockMessage(errorMessage)) {
+          judgmentJobSqlitePreflightLogger.warn(
+            `judgment-job-sqlite-preflight:skip-transient-lock:${job.id}`,
+            '[judgments] skipping running job because the SQLite job DB is temporarily locked',
+            {errorMessage, jobId: job.id},
+          )
+          return null
+        }
+
         await quarantineJobForPreflightFailure({errorMessage, jobId: job.id})
         judgmentJobSqlitePreflightLogger.warn(
           `judgment-job-sqlite-preflight:quarantined:${job.id}`,
@@ -79,8 +98,24 @@ export const assertJudgmentJobCanRunSqlitePreflight = async ({
   jobId: string
   quarantineReason?: string | null
   storageState: string
-}) => {
+}): Promise<JudgmentJobSqlitePreflightRunResult> => {
+  const sqliteService = getJudgmentJobSqliteService()
+
   if (storageState === 'quarantined') {
+    if (isTransientJudgmentJobSqliteLockMessage(quarantineReason)) {
+      try {
+        await sqliteService.runIsolatedPreflight(jobId)
+        return {clearTransientQuarantine: true}
+      } catch (error) {
+        const errorMessage = getPreflightFailureMessage(error)
+        const message = isTransientJudgmentJobSqliteLockMessage(errorMessage)
+          ? getTransientLockedJobErrorMessage({jobId, reason: errorMessage})
+          : getQuarantinedJobErrorMessage({jobId, reason: errorMessage})
+
+        throw new HttpError(409, message)
+      }
+    }
+
     throw new HttpError(409, getQuarantinedJobErrorMessage({jobId, reason: quarantineReason}))
   }
 
@@ -88,16 +123,20 @@ export const assertJudgmentJobCanRunSqlitePreflight = async ({
     throw new HttpError(409, getDrainingJobErrorMessage(jobId))
   }
 
-  const sqliteService = getJudgmentJobSqliteService()
-
   if (!sqliteService.hasJob(jobId)) {
-    return
+    return {clearTransientQuarantine: false}
   }
 
   try {
     await sqliteService.runIsolatedPreflight(jobId)
+    return {clearTransientQuarantine: false}
   } catch (error) {
     const errorMessage = getPreflightFailureMessage(error)
+
+    if (isTransientJudgmentJobSqliteLockMessage(errorMessage)) {
+      throw new HttpError(409, getTransientLockedJobErrorMessage({jobId, reason: errorMessage}))
+    }
+
     await quarantineJobForPreflightFailure({errorMessage, jobId})
     throw new HttpError(409, getQuarantinedJobErrorMessage({jobId, reason: errorMessage}))
   }

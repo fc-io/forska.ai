@@ -337,6 +337,115 @@ test('background import records metadata and quarantines repeated failures for t
   ).toBe(true)
 })
 
+test('background import records transient SQLite locks without increasing quarantine failure count', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const appDatabaseServiceModulePath = getModulePath('./src/server/services/appDatabaseService.ts')
+        const sqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
+        const outboxImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts')
+        const backgroundImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts')
+        const queryStatements = []
+        const runStatements = []
+        const attemptedJobIds = []
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                queryJson: async (statement) => {
+                  queryStatements.push(statement)
+
+                  if (statement.includes("storage_state = 'draining'") && statement.includes('status IN')) {
+                    return [{id: 'lock-job'}]
+                  }
+
+                  if (statement.includes("WHERE id = 'lock-job'")) {
+                    return [{importFailureCount: 2, storageState: 'active'}]
+                  }
+
+                  return []
+                },
+                run: async (statement) => {
+                  runStatements.push(statement)
+                },
+              }
+            },
+          }
+        })
+
+        void mock.module(sqliteServiceModulePath, () => {
+          return {
+            JudgmentJobLeaseError: class JudgmentJobLeaseError extends Error {},
+            getJudgmentJobSqliteService: () => {
+              return {
+                hasOwnedLease: () => false,
+                syncOwnedLeases: async () => {},
+              }
+            },
+          }
+        })
+
+        void mock.module(outboxImportModulePath, () => {
+          return {
+            runJudgmentJobSqliteOutboxImportCycle: async ({jobId}) => {
+              attemptedJobIds.push(jobId)
+              throw new Error('SQLITE_BUSY: database is locked')
+            },
+          }
+        })
+
+        const {runJudgmentJobSqliteBackgroundImport} = await import(backgroundImportModulePath + '?transient-lock=' + Date.now())
+        const summary = await runJudgmentJobSqliteBackgroundImport({claimedBy: 'test-server'})
+
+        console.log(JSON.stringify({attemptedJobIds, queryStatements, runStatements, summary}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'SQLite background import transient lock regression test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    attemptedJobIds: string[]
+    queryStatements: string[]
+    runStatements: string[]
+    summary: {attemptedCount: number; failedCount: number; skippedCount: number; succeededCount: number}
+  }
+
+  expect(result.attemptedJobIds).toEqual(['lock-job'])
+  expect(result.summary).toEqual({attemptedCount: 1, failedCount: 1, skippedCount: 0, succeededCount: 0})
+  expect(
+    result.queryStatements.some((statement) => {
+      return statement.includes('import_failure_count = import_failure_count + 1')
+    }),
+  ).toBe(false)
+  expect(
+    result.queryStatements.some((statement) => {
+      return statement.includes("THEN 'quarantined'")
+    }),
+  ).toBe(false)
+  expect(
+    result.queryStatements.some((statement) => {
+      return statement.includes("WHERE id = 'lock-job'") && statement.includes('last_import_error')
+    }),
+  ).toBe(true)
+})
+
 test('background import releases an owned sqlite lease before importing the next job', () => {
   const runScript = globalThis.Bun.spawnSync(
     [

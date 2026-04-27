@@ -8,6 +8,10 @@ import {
   type JudgmentJobSystemSqliteFallbackResult,
   type JudgmentJobSystemSqliteFallbackStep,
 } from './judgmentJobSqliteService.ts'
+import {
+  getJudgmentJobSqliteErrorMessage,
+  isTransientJudgmentJobSqliteLockMessage,
+} from './judgmentJobSqliteTransientLock.ts'
 import {getJudgmentJobRepairMode} from './judgmentJobStoragePolicy.ts'
 
 export type JudgmentJobRepairAction =
@@ -356,7 +360,7 @@ const getPreflightOutcome = async (jobId: string) => {
     const preflight = await getJudgmentJobSqliteService().runIsolatedPreflight(jobId)
     return {message: `SQLite preflight succeeded for ${jobId}`, ok: true, preflight}
   } catch (error) {
-    return {message: error instanceof Error ? error.message : String(error), ok: false, preflight: null}
+    return {message: getJudgmentJobSqliteErrorMessage(error), ok: false, preflight: null}
   }
 }
 
@@ -566,6 +570,19 @@ const runRepairOrphanedQueueAction = async ({
     !preflightOutcome.ok && fallbackCheckpointed ? await getPreflightOutcome(jobId) : preflightOutcome
 
   if (!recoveredPreflightOutcome.ok) {
+    if (isTransientJudgmentJobSqliteLockMessage(recoveredPreflightOutcome.message)) {
+      return {
+        changes: getEmptyRepairChanges(),
+        message: appendFallbackMessage({
+          baseMessage: recoveredPreflightOutcome.message,
+          fallbackResults: initialFallbackResults,
+        }),
+        ok: false,
+        preflight: recoveredPreflightOutcome.preflight,
+        systemSqliteFallbackResults: initialFallbackResults,
+      }
+    }
+
     await setJobQuarantine({jobId, reason: recoveredPreflightOutcome.message})
 
     return {
@@ -654,6 +671,19 @@ const runRepairAction = async ({
   const repairMode = getRepairMode({hasLocalSqlite: !initializedSqlite, job})
 
   if (!recoveredPreflightOutcome.ok) {
+    if (isTransientJudgmentJobSqliteLockMessage(recoveredPreflightOutcome.message)) {
+      return {
+        changes: {...getEmptyRepairChanges(), initializedSqlite},
+        message: appendFallbackMessage({
+          baseMessage: recoveredPreflightOutcome.message,
+          fallbackResults: initialFallbackResults,
+        }),
+        ok: false,
+        preflight: recoveredPreflightOutcome.preflight,
+        systemSqliteFallbackResults: initialFallbackResults,
+      }
+    }
+
     await setJobQuarantine({jobId, reason: recoveredPreflightOutcome.message})
 
     return {

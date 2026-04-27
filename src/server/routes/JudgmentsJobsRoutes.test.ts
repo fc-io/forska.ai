@@ -880,6 +880,76 @@ test('starting a job with a failing SQLite preflight quarantines it without star
   }
 })
 
+test('starting a job with a transient locked SQLite preflight does not quarantine it', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `preflight-locked-project-${Date.now()}`
+  const modelId = `preflight-locked-model-${Date.now()}`
+  const connectionId = `preflight-locked-connection-${Date.now()}`
+  const jobId = `preflight-locked-job-${Date.now()}`
+  const {getAppDatabaseService} = await import('../services/appDatabaseService.ts')
+  const {getJudgmentJobSqlitePath} = await import('../cron/judgmentsJobs/judgmentJobPaths.ts')
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+  const sqliteService = getJudgmentJobSqliteService()
+  let didBegin = false
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'paused', 'active')
+  `)
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.closeAll()
+
+  const sqliteDatabase = new Database(sqlitePath)
+
+  try {
+    sqliteDatabase.exec('BEGIN EXCLUSIVE')
+    didBegin = true
+
+    const response = await app.handle(
+      new Request(`http://localhost/api/judgmentsjobs/${jobId}`, {
+        body: JSON.stringify({status: 'running'}),
+        headers: {'content-type': 'application/json'},
+        method: 'PATCH',
+      }),
+    )
+    const body = await response.text()
+    const [job] = await getAppDatabaseService().queryJson<{
+      quarantineReason: string | null
+      status: string
+      storageState: string
+    }>(`
+      SELECT
+        quarantine_reason AS quarantineReason,
+        status AS status,
+        storage_state AS storageState
+      FROM app.judgment_job
+      WHERE id = '${jobId}'
+      LIMIT 1
+    `)
+
+    expect(response.status).toBe(409)
+    expect(body).toContain('transient lock')
+    expect(body).toContain('was not quarantined')
+    expect(job?.status).toBe('paused')
+    expect(job?.storageState).toBe('active')
+    expect(job?.quarantineReason).toBeNull()
+  } finally {
+    if (didBegin) {
+      sqliteDatabase.exec('ROLLBACK')
+    }
+    sqliteDatabase.close(false)
+    await sqliteService.closeAll()
+    rmSync(sqlitePath, {force: true})
+    rmSync(`${sqlitePath}-shm`, {force: true})
+    rmSync(`${sqlitePath}-wal`, {force: true})
+  }
+})
+
 test('pausing an existing judgments job succeeds when queued prompts reference the job', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')

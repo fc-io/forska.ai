@@ -224,3 +224,47 @@ test('cleanupStale clears stale running prompts before finalizing draining jobs'
   ).toEqual([{status: 'paused', storageState: 'drained'}])
   expect(existsSync(sqlitePath)).toBe(false)
 })
+
+test('cleanupStale clears transient locked quarantine after SQLite preflight succeeds', async () => {
+  if (!judgmentsJobsCleanupStale || !queryDatabase || !runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `cleanup-stale-lock-connection-${Date.now()}`
+  const modelId = `cleanup-stale-lock-model-${Date.now()}`
+  const projectId = `cleanup-stale-lock-project-${Date.now()}`
+  const jobId = `cleanup-stale-lock-job-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Cleanup stale transient lock test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state, quarantined_at, quarantine_reason)
+    VALUES ('${jobId}', '${projectId}', 'failed', 'quarantined', current_timestamp, 'database is locked')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.releaseOwnedLease(jobId)
+  await judgmentsJobsCleanupStale()
+
+  expect(
+    await queryDatabase<{quarantineReason: string | null; status: string; storageState: string}>(`
+      SELECT
+        quarantine_reason AS quarantineReason,
+        status,
+        storage_state AS storageState
+      FROM app.judgment_job
+      WHERE id = '${jobId}'
+    `),
+  ).toEqual([{quarantineReason: null, status: 'paused', storageState: 'active'}])
+})
