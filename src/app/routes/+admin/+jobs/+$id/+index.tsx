@@ -744,13 +744,11 @@ const AdminJudgmentJobDetail = () => {
                         <p class="text-xs text-indigo-600 mt-1">Total runtime request attempts, not distinct prompts</p>
                       </div>
                       <div class="bg-rose-50 rounded-lg p-4">
-                        <p class="text-sm text-rose-700 mb-1">Failed Requests</p>
+                        <p class="text-sm text-rose-700 mb-1">Failed Attempts</p>
                         <p class="text-2xl font-bold text-rose-900">
                           {data()?.requestStats?.failures?.persistedFailedRequests ?? 0}
                         </p>
-                        <p class="text-xs text-rose-700 mt-1">
-                          Persisted failed request details captured in token usage rows
-                        </p>
+                        <p class="text-xs text-rose-700 mt-1">Failed request attempts captured in token usage rows</p>
                       </div>
                       <div class="bg-fuchsia-50 rounded-lg p-4">
                         <p class="text-sm text-fuchsia-700 mb-1">Anthropic Refusals</p>

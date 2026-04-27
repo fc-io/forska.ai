@@ -126,6 +126,7 @@ type FailedRequestSummary = {
   anthropicRefusals: number
   persistedFailedRequests: number
 }
+type AnthropicRefusalSummary = Pick<FailedRequestSummary, 'anthropicRefusalArticles' | 'anthropicRefusals'>
 type JudgmentJobBlockedReason =
   | 'endpoint_circuit_breaker'
   | 'endpoint_cooldown'
@@ -1880,15 +1881,16 @@ const getAnthropicRefusalSummary = (rows: Array<{failedRequestsDetails: unknown}
   return {anthropicRefusalArticles: articleIds.size, anthropicRefusals: refusalRecords.length}
 }
 
-const getFailedRequestSummaryFromDatabase = async ({
+const emptyAnthropicRefusalSummary: AnthropicRefusalSummary = {anthropicRefusalArticles: 0, anthropicRefusals: 0}
+
+const getPersistedFailedRequestCountFromLegacyDetails = async ({
   db,
   jobId,
 }: {
   db: JudgmentJobSqliteHealthProjectionReader
   jobId: string
-}): Promise<FailedRequestSummary> => {
-  const [countRows, refusalCandidateRows] = await Promise.all([
-    db.queryJson<{persistedFailedRequests: number | string | null}>(`
+}): Promise<number> => {
+  const [row] = await db.queryJson<{persistedFailedRequests: number | string | null}>(`
     SELECT
       SUM(
         CASE
@@ -1899,26 +1901,92 @@ const getFailedRequestSummaryFromDatabase = async ({
     FROM app.token_use
     WHERE judgment_job_id = ${getSqlLiteral(jobId)}
       AND has_failed_requests = TRUE
-    `),
-    db.queryJson<{failedRequestsDetails: unknown}>(`
-      WITH failed_rows AS (
-        SELECT
-          failed_requests_details,
-          CAST(failed_requests_details AS VARCHAR) AS detailText
-        FROM app.token_use
-        WHERE judgment_job_id = ${getSqlLiteral(jobId)}
-          AND has_failed_requests = TRUE
-      )
-      SELECT TO_JSON(failed_requests_details) AS failedRequestsDetails
-      FROM failed_rows
-      WHERE contains(detailText, ${getSqlLiteral('anthropic_refusal_empty_response')})
-        OR contains(detailText, ${getSqlLiteral('anthropic_empty_response')})
-    `),
-  ])
-  const [countRow] = countRows
-  const anthropicRefusalSummary = getAnthropicRefusalSummary(refusalCandidateRows)
+      AND failed_requests IS NULL
+  `)
 
-  return {...anthropicRefusalSummary, persistedFailedRequests: Number(countRow?.persistedFailedRequests ?? 0)}
+  return Number(row?.persistedFailedRequests ?? 0)
+}
+
+const getPersistedFailedRequestCount = async ({
+  db,
+  jobId,
+}: {
+  db: JudgmentJobSqliteHealthProjectionReader
+  jobId: string
+}): Promise<number> => {
+  const [row] = await db.queryJson<{
+    persistedFailedRequests: number | string | null
+    legacyFailedRequestRows: number | string | null
+  }>(`
+    SELECT
+      SUM(COALESCE(failed_requests, 0)) AS persistedFailedRequests,
+      SUM(CASE WHEN failed_requests IS NULL THEN 1 ELSE 0 END) AS legacyFailedRequestRows
+    FROM app.token_use
+    WHERE judgment_job_id = ${getSqlLiteral(jobId)}
+      AND has_failed_requests = TRUE
+  `)
+  const persistedFailedRequests = Number(row?.persistedFailedRequests ?? 0)
+  const legacyFailedRequestRows = Number(row?.legacyFailedRequestRows ?? 0)
+  const legacyPersistedFailedRequests =
+    legacyFailedRequestRows > 0 ? await getPersistedFailedRequestCountFromLegacyDetails({db, jobId}) : 0
+
+  return persistedFailedRequests + legacyPersistedFailedRequests
+}
+
+const getAnthropicRefusalSummaryFromDatabase = async ({
+  db,
+  jobId,
+}: {
+  db: JudgmentJobSqliteHealthProjectionReader
+  jobId: string
+}): Promise<AnthropicRefusalSummary> => {
+  const rows = await db.queryJson<{failedRequestsDetails: unknown}>(`
+    WITH failed_rows AS (
+      SELECT
+        failed_requests_details,
+        CAST(failed_requests_details AS VARCHAR) AS detailText
+      FROM app.token_use
+      WHERE judgment_job_id = ${getSqlLiteral(jobId)}
+        AND has_failed_requests = TRUE
+    )
+    SELECT TO_JSON(failed_requests_details) AS failedRequestsDetails
+    FROM failed_rows
+    WHERE contains(detailText, ${getSqlLiteral('anthropic_refusal_empty_response')})
+      OR contains(detailText, ${getSqlLiteral('anthropic_empty_response')})
+  `)
+
+  return getAnthropicRefusalSummary(rows)
+}
+
+const getAnthropicRefusalSummaryForProvider = ({
+  db,
+  jobId,
+  modelProvider,
+}: {
+  db: JudgmentJobSqliteHealthProjectionReader
+  jobId: string
+  modelProvider: string | null
+}): Promise<AnthropicRefusalSummary> => {
+  return modelProvider === 'anthropic'
+    ? getAnthropicRefusalSummaryFromDatabase({db, jobId})
+    : Promise.resolve(emptyAnthropicRefusalSummary)
+}
+
+const getFailedRequestSummaryFromDatabase = async ({
+  db,
+  jobId,
+  modelProvider,
+}: {
+  db: JudgmentJobSqliteHealthProjectionReader
+  jobId: string
+  modelProvider: string | null
+}): Promise<FailedRequestSummary> => {
+  const [persistedFailedRequests, anthropicRefusalSummary] = await Promise.all([
+    getPersistedFailedRequestCount({db, jobId}),
+    getAnthropicRefusalSummaryForProvider({db, jobId, modelProvider}),
+  ])
+
+  return {...anthropicRefusalSummary, persistedFailedRequests}
 }
 
 const resetJudgmentJobLocalSqliteState = async ({jobId, storageState}: {jobId: string; storageState: string}) => {
@@ -2164,10 +2232,18 @@ export const judgmentsJobsRoutes = new Elysia()
           const {job, projectModelId} = await getJobContext({db, jobId: params.id})
           const sqliteService = getJudgmentJobSqliteService()
           const sqliteHealthPromise = getSqliteHealthForReadableRoute({db, jobId: job.id})
+          const providerConnectionPromise = getProviderConnectionForStoredModel(projectModelId, db)
           const leaseMetadataPromise = shouldCurrentServerRunJudgingLoops()
             ? sqliteService.getJudgmentJobLeaseMetadata(job.id)
             : Promise.resolve(null)
           const storageProjectionPromise = getJudgmentJobStorageProjection(job.projectId, db)
+          const failedRequestSummaryPromise = providerConnectionPromise.then((providerConnection) => {
+            return getFailedRequestSummaryFromDatabase({
+              db,
+              jobId: job.id,
+              modelProvider: providerConnection?.providerKind ?? null,
+            })
+          })
 
           const judgingRuntimePromise = getJudgingRuntime()
           const [
@@ -2175,9 +2251,9 @@ export const judgmentsJobsRoutes = new Elysia()
             leaseMetadata,
             storageProjection,
             totalTokenUsage,
-            tokenUsagePerDayRows,
             failedRequestSummary,
             judgingRuntime,
+            providerConnection,
           ] = await Promise.all([
             sqliteHealthPromise,
             leaseMetadataPromise,
@@ -2196,31 +2272,13 @@ export const judgmentsJobsRoutes = new Elysia()
           FROM app.token_use
           WHERE judgment_job_id = '${escapeSqlString(job.id)}'
         `),
-            db.queryJson<{
-              date: string
-              dailyTokens: number | null
-              dailyPromptTokens: number | null
-              dailyCompletionTokens: number | null
-              requests: number | null
-            }>(`
-          SELECT
-            strftime(created_at, '%Y-%m-%d') || 'T00:00:00.000Z' AS date,
-            SUM(total_tokens) AS dailyTokens,
-            SUM(total_prompt_tokens) AS dailyPromptTokens,
-            SUM(total_completion_tokens) AS dailyCompletionTokens,
-            SUM(requests) AS requests
-          FROM app.token_use
-          WHERE judgment_job_id = '${escapeSqlString(job.id)}'
-          GROUP BY strftime(created_at, '%Y-%m-%d')
-          ORDER BY date ASC
-        `),
-            getFailedRequestSummaryFromDatabase({db, jobId: job.id}),
+            failedRequestSummaryPromise,
             judgingRuntimePromise,
+            providerConnectionPromise,
           ])
           const requestRuntimeStats = getJudgmentRequestStats(job.id)
           const storagePolicy = getStoragePolicy({job, sqliteHealth})
           const recentTransfer = getJudgmentJobStorageTransferRuntime(job.id)
-          const providerConnection = await getProviderConnectionForStoredModel(projectModelId, db)
           const effectiveBaseURL = providerConnection
             ? getProviderConnectionEffectiveBaseURL({
                 baseURL: providerConnection.baseURL,
@@ -2306,13 +2364,6 @@ export const judgmentsJobsRoutes = new Elysia()
               inFlight: requestRuntimeStats.inFlight,
               attempts: Number(totalTokenUsage[0]?.totalRequests || 0) + requestRuntimeStats.pendingPersistedAttempts,
             },
-            tokenUsagePerDay: tokenUsagePerDayRows.map((row) => {
-              const dailyTokens = Number(row.dailyTokens ?? 0)
-              const dailyPromptTokens = Number(row.dailyPromptTokens ?? 0)
-              const dailyCompletionTokens = Number(row.dailyCompletionTokens ?? 0)
-              const requests = Number(row.requests ?? 0)
-              return {...row, dailyTokens, dailyPromptTokens, dailyCompletionTokens, requests}
-            }),
           }
         },
         request,

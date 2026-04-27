@@ -178,10 +178,12 @@ const registerJudgeWorkerHeartbeat = async () => {
 const insertProjectFixture = async ({
   connectionId,
   modelId,
+  providerKind = 'sglang',
   projectId,
 }: {
   connectionId: string
   modelId: string
+  providerKind?: string
   projectId: string
 }) => {
   if (!runDatabase) {
@@ -190,7 +192,7 @@ const insertProjectFixture = async ({
 
   await runDatabase(`
     INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode)
-    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none')
+    VALUES ('${connectionId}', '${providerKind}', 'SGLang', TRUE, 'none')
   `)
   await runDatabase(`
     INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
@@ -1025,7 +1027,7 @@ test('reads SQLite-backed skipped prompt stats separately from judged prompts', 
   const connectionId = `sqlite-stats-connection-${Date.now()}`
   const jobId = `sqlite-stats-job-${Date.now()}`
 
-  await insertProjectFixture({connectionId, modelId, projectId})
+  await insertProjectFixture({connectionId, modelId, projectId, providerKind: 'anthropic'})
   await runDatabase(`
     INSERT INTO app.judgment_job (id, project_id, status)
     VALUES ('${jobId}', '${projectId}', 'running')
