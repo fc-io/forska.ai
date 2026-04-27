@@ -13,14 +13,15 @@
 - Add an `Import Project` button in `src/app/routes/+projects/+index.tsx` immediately to the left of `Create Covidence Project`.
 - Keep `Export data` mapped to the current `/projects/$id/export` CSV page.
 - Make `Import Project` open a dedicated wizard route at `/projects/import` because the import flow needs multiple review and setup steps.
-- Make `Export Project` a direct package download from the grid unless implementation complexity forces a small intermediate page.
+- Make `Export Project` start a package export from the grid in v1: small exports download directly, and large exports create an export session that the grid polls until the package is ready. Do not add an intermediate export page in v1.
 
 ## Package Shape
 
 - Export one zip file, for example `my-project-2026-04-17.forska-project.zip`.
 - Put a versioned manifest at the root so imports can validate compatibility before any write starts.
 - Store the package as plain JSON or NDJSON plus file assets so it is inspectable and diffable.
-- Lock manifest and payload field names to camelCase JSON keys. Keep raw DB snake_case names only in SQL and prose, and use explicit serializers for fields such as `originalData`, `sourceMetadata`, `fullTextPDF`, and `deleteGeneration` so export, analyze, and import never mix package keys with column names.
+- Lock manifest and payload field names to camelCase JSON keys. Keep raw DB snake_case names only in SQL and prose, and use explicit serializers for fields such as `originalData`, `sourceMetadata`, `fullTextPdf`, and `deleteGeneration` so export, analyze, and import never mix package keys with column names. When this plan names source columns such as `model_id`, `article_id`, or `original_data`, treat them as source-column references only; package schemas must use package keys such as `sourceModelId`, `articleId`, and `originalData`.
+- Apply the same package-boundary redaction contract to all free-form JSON and string fields, including article `originalData`, article `sourceMetadata`, provider `metadataJson`, provider config, URLs, and full-text-derived fields: recursively drop or rewrite secret-like keys, credentials, token-like query parameters, URL fragments, signed URLs, source-machine absolute paths, and local-only runtime paths, then emit structured omission warnings for every rewrite.
 
 ### Suggested Contents
 
@@ -41,6 +42,7 @@
 - `humanJudgmentSummaries.ndjson`
 - `reviews.ndjson`
 - `assetManifest.json` for exported file assets, checksums, byte sizes, and the payload paths or fields that reference each packaged asset
+- `assetManifest.entries[]` must include each asset's package path, checksum, byte size, and explicit `references[]` with payload file, source row id, JSON pointer or field path, and reference kind so import can rewrite `fullTextPdf`, `fullTextAssets`, and any asset URLs embedded in `fullTextHtml` deterministically
 - `assets/` for any exported local article files that must be rewritten on import
 
 - Keep `project.json` limited to project-scoped settings. Store project prompt links, project route links, article route links, and project article links in their own payload files so link metadata survives round-trip without overloading one document.
@@ -73,7 +75,7 @@
 - Article route links from `app.article_import_route` for exported articles and exported import routes so route provenance can be reconstructed only when the target route and planned article-route writes are safe to link.
 - Active current-review judgments from `app.judgment` where `deleted_at IS NULL`, scoped by current project article scope, enabled exported prompt links, current `model_id`, and content toggles (`use_title`, `use_abstract`, `use_fulltext`, `use_fulltext_no_images`). Include source ids and remappable project references plus `is_answered`, `answered_original`, `answered_original_as_array`, `confidence_original`, `explanation`, `quotes`, `chunking_strategy`, `delete_generation`, `snapshot_project_model_name`, and timestamps. Do not export every row with a matching `project_id` unless it also satisfies that benchmark-critical judgment configuration.
 - Linked judgment assessments from `app.judgment_assessment` for exported judgments. Preserve `assessment_is_correct`, `assessment_comment`, and timestamps.
-- Project human judgments from `app.judgment_human`, limited to answered, non-empty rows in current project article scope and enabled exported prompt links, only when the exported project's normalized human-judgment mode is `prompt`. Preserve `answer`, `comment`, `is_answered`, and timestamps.
+- Project human judgments from `app.judgment_human`, limited to `is_answered = TRUE` rows in current project article scope and exported project prompt links, only when the exported project's normalized human-judgment mode is `prompt`. Preserve `answer`, `comment`, `is_answered`, and timestamps; do not require a non-empty `answer` because optional prompt answers may be null or empty while answered state and comments are still durable review data.
 - Project summary human judgments from `app.judgment_human_summary`, limited to non-empty summary answers in current project article scope, only when the exported project's normalized human-judgment mode is `summary`. Preserve `answer`, `origin`, and timestamps.
 - Project review state from `app.review`, limited to current project article scope, including `opened`, every reviewed-section boolean, every reviewed-section comment, and timestamps.
 - All provider and model descriptors needed by the project row and by exported judgments.
@@ -84,9 +86,9 @@
 - Local Codex login status and local Codex binary paths like `codexBin`.
 - Article full-text conversion runtime state in v1: `full_text_conversion_status`, `full_text_conversion_error`, `full_text_conversion_attempts`, `full_text_conversion_model_id`, and `full_text_conversion_metadata`; surface this as an omission warning because it is machine-local pipeline state, not portable package content.
 - Runtime-detection cache, worker health, endpoint health, logs, temp files, or machine-local status snapshots.
-- `app.judgment_job`, `app.judgment_execution_snapshot`, `app.token_use`, `app.llm_status`, `app.nvidia_smi`, or any job-runtime artifacts.
+- `app.judgment_job`, `app.judgment_job_sqlite_health_projection`, `app.judgment_execution_snapshot`, `app.maintenance_work_lease`, `app.token_use`, `app.llm_status`, `app.nvidia_smi`, or any job-runtime artifacts.
 - Pending or unanswered human judgment workflow rows in v1; preserve durable answered review signal, not local assessment session state.
-- `app.project_mart_refresh_state`, `app.project_mart_refresh_article_state`, `app.project_mart_large_rebuild_state`, or any `mart.*` tables.
+- `app.project_mart_refresh_state`, `app.project_mart_refresh_article_state`, `app.project_mart_refresh_article_quarantine`, `app.project_mart_large_rebuild_state`, or any `mart.*` tables.
 - Derived review-serving support tables such as `app.project_article_ordinal`, `app.review_answer_dictionary`, and `app.project_review_serving_generation`; rebuild them through the normal mart refresh path after import.
 - Soft-deleted judgments in v1; deleted rows stay out of the package.
 
@@ -134,6 +136,7 @@
 - `project`: always create a new target id, keep source project timestamps and archived state in provenance only, and create the imported project as unarchived.
 - `prompt`: resolve through the existing immutable-prompt behavior, not a project-local detached prompt table. Recompute the canonical prompt content hash from the imported prompt fields and use the same `getOrCreateImmutablePromptTx` semantics as create, edit, and subproject flows instead of trusting a serialized hash blindly. Reuse an existing `app.prompt` row when the canonical hash matches; otherwise create a new immutable prompt row. If the matched canonical prompt row is archived and the exported `app.prompt.archived` value is `FALSE`, reuse that row and reactivate it so import matches the current create and edit semantics. Always create fresh `app.project_prompt` link rows for the imported project, preserve imported project-link archive and enablement state there, and do not assume target prompt rows are private to the imported project. After canonical prompt remapping, block import if two distinct exported project-prompt links resolve to the same target prompt id because `app.project_prompt` is unique by `(project_id, prompt_id)` and v1 cannot preserve both link metadata rows.
 - `import_route`: match by `route` among active target import routes; if a route is missing or inactive on the target, omit the related project/article route links in v1, show it in preview, include it in overlap and post-import warnings, and continue without blocking the import. Do not reactivate target import routes in v1. Do not persist `app.article.import_route` on created rows unless the exported legacy route value resolves to exactly one mapped active target route and the corresponding article-route write is safe after the checks below; when multiple source routes are present or the source legacy route is missing, inactive, ambiguous, or unsafe, leave the legacy field `NULL` on newly created articles. When reusing a target article, never overwrite an existing legacy route with a missing, inactive, ambiguous, or unsafe source route. Preserve omitted source routes only in package/session provenance. Before creating any `app.project_import_route` link, analyze must prove the mapped target route would not expand the imported project beyond the exported article set after id remapping and planned article-route inserts, independent of the imported project's current date bounds. Also compute the date-bounded current-scope comparison for preview parity, but treat any extra route article outside the current date bounds as a future-expansion risk because route links stay dynamic if the user later changes project dates. Analyze must also prove any new `app.article_import_route` rows for that mapped route would not expand the current date-bounded article scope of existing active target projects already linked to that route, and must show any out-of-date-bound existing-project future-expansion risk as a warning. If a matched route would pull in extra target articles, could later pull in extra target articles after date-bound changes, or would push imported articles into unrelated active target projects, omit the project-route link and unsafe article-route writes, then use snapshot `app.project_article` links for the exported route-scoped articles instead.
+- `article legacy route`: for reused target articles where `app.article.import_route IS NULL`, fill that legacy field only when the exported legacy route resolves to exactly one mapped active target route and the corresponding article-route write is safe under the same checks as new article-route writes; otherwise leave the target legacy field unchanged.
 - `article`: auto-match only when all non-empty exported stable identifiers converge on one target article or on no target article. Resolve and display exact identifiers in priority order: `article_id`, normalized DOI, normalized PubMed id, normalized arXiv id, normalized medRxiv id, and normalized bioRxiv id. Use the existing shared DOI normalization helper and add explicit shared normalization helpers for the remaining identifier families before analyze matching logic is locked so export and import compare the same canonical forms. If no exact match exists, create a new article. If one identifier matches a target row and another exported identifier is missing on that row, reuse the row and fill the missing value during the non-destructive merge; if the target row has a different non-empty value for any exported stable identifier, block as an article conflict. Because only `article_id` is globally unique today, analyze must show the matched identifier type and all exact candidates when secondary identifiers produce multiple matches, and it must also block commit whenever any non-empty exported stable identifier points at a different target row than another exported identifier. Never heuristic auto-link in v1.
 - `project_article`: always create a new link row for the imported project for each exported source `app.project_article` link, even when the article row is reused, and set `imported_from_project_id` to `NULL` in v1. Also create snapshot project-article links for exported route-scoped articles whenever a missing, inactive, or unsafe target route prevents creating the equivalent project-route link. If the same target article is both source-curated and route-scope fallback, insert one `app.project_article` row and keep both reasons in the import plan summary. This intentionally differs from clone and Covidence-managed imports and must not imply local source-project ownership or managed re-sync behavior.
 - `provider_connection`: match by provider kind plus safe connection fingerprint only when exactly one enabled target connection matches that fingerprint and its saved config would still leave the required imported models selectable. If local-only identity was excluded from the fingerprint, or the safe fingerprint matches multiple target connections, treat the dependency as unresolved and let the user choose an existing connection, or open the import-wizard provider setup wrapper with sanitized fields prefilled and complete any required credential or auth step there.
@@ -149,11 +152,15 @@
 
 - Preserve enough article content for imported judgments and review screens to stay meaningful.
 - If an article references local file-backed content such as PDFs or extracted assets, export the actual files into `assets/` and not just the stored path string.
+- Before copying any export asset, validate that the persisted source path is a runtime-relative `assets/...` path with no raw absolute path or backslash input, resolves by `realpath` under the runtime asset root, and is a regular non-symlink file. If the path is absolute, outside the runtime asset root, a symlink, missing, unreadable, or otherwise unsafe, fail export or omit-and-warn before manifest finalization.
 - Export must not produce manifest asset references for files that were not copied and checksummed. If a referenced runtime asset is missing, unreadable, or fails checksum after copy, either fail the export clearly or omit and rewrite the affected package field with an explicit warning before manifest checksums and the package fingerprint are finalized.
+- When omitting an unavailable asset instead of failing export, rewrite the referencing payload field to `null` or remove only that asset reference according to the field schema, add a structured omission warning with the payload path and field name, and compute checksums and the package fingerprint after that rewrite.
+- Use field-specific asset rewriters for `fullTextPdf`, `fullTextAssets`, and asset URLs embedded in `fullTextHtml`. Reject analyze or commit if any persisted package-derived article field still contains a temp path, absolute path, source-machine path, source `/api/runtime-asset` URL, or asset reference not declared in `assetManifest.json`.
 - On import, validate asset paths and `assetManifest.json` references before extraction, reject absolute paths, backslash traversal, `..` traversal, symlinks, and normalized-path changes, and never commit rows that still point at session-temp paths.
 - During analyze, extract assets only into the import-session temp area.
 - During analyze, derive an asset-promotion plan after article matching and non-destructive merge decisions are known so commit only promotes files that created or updated rows will actually reference.
 - Final asset destinations must live under a package/session-specific prefix such as `assets/project-transfer/<sessionId>/...`, fail if the destination already exists, and never overwrite existing runtime assets.
+- Generate final asset suffixes from server-owned asset ids or checksum-based names plus a safe extension inferred from content or validated metadata; do not derive final runtime filenames from raw package filenames. Keep original package filenames only as provenance in the promotion manifest.
 - Before the database transaction starts, copy only those validated and still-needed assets from temp into final runtime-owned paths under `assets/...`, rewrite stored paths to those runtime-relative `assets/...` locations, and record every created path for cleanup. This keeps imported files compatible with the existing `/api/runtime-asset` serving contract.
 - Persist the asset-promotion manifest before database writes and update it as each final file is copied so failed-session TTL cleanup and startup recovery can remove orphaned promoted files for sessions that never reach `completed`.
 - If any asset copy or rewrite fails, abort before any database write starts.
@@ -176,6 +183,7 @@
 - Insert imported judgment rows with `snapshot_project_id` set to the new imported project id so the imported project's review and mart queries continue to work.
 - Preserve `snapshot_project_model_name` from the imported payload, but prefer the resolved target model label when a safe replacement is available.
 - Re-link `app.judgment_assessment` through the new judgment ids, `app.judgment_human` through the new project, prompt, and article ids, and `app.judgment_human_summary` plus `app.review` through the new project and article ids.
+- Before commit, validate package-internal duplicates and target conflicts for every unique key the import writes, not only project-prompt and judgment natural keys: non-null `app.article(article_id)`, `app.project_import_route(project_id, import_route_id)`, `app.article_import_route(article_id, import_route_id)`, `app.project_article(project_id, article_id)`, `app.judgment_assessment(judgment_id)`, `app.judgment_human(project_id, article_id, prompt_id)`, `app.judgment_human_summary(project_id, article_id)`, and `app.review(project_id, article_id)`. Malformed packages must fail before insert instead of relying on source DB constraints or target `ON CONFLICT` behavior.
 
 ## Import UX
 
@@ -185,7 +193,9 @@
 - Stream the uploaded `.forska-project.zip` directly to temp storage instead of buffering the whole file in browser or server memory.
 - Give each import session a TTL plus cleanup on commit, cancel, expiry, and best-effort startup recovery. Do not add product-level hard package-size caps in v1; fail only when local machine resources are insufficient for the requested import.
 - Freeze the analyzed import plan with a plan revision when the session enters `ready_to_commit`. Dependency-resolution and commit mutations must verify the active plan revision so stale browser tabs cannot commit an older dependency mapping or article plan.
+- After a session reaches `ready_to_commit`, dependency-resolution mutations must be rejected unless they explicitly reopen the session to `awaiting_resolution`, create a new `planRevision`, and recompute stale-sensitive blockers.
 - Treat commit as single-flight and idempotent per import session. A retry after the session reaches `completed` must return the existing imported project id and completion payload from durable session state or transfer history keyed by that import session id instead of creating a second imported project. Never use package fingerprint alone for commit idempotency because users may intentionally import the same package multiple times.
+- Use a server-generated `commitId` and an atomic compare-and-set transition from `ready_to_commit` to `committing` with a writer lease or fencing token before asset promotion starts. Stale `committing` recovery must first look up transfer history by import session id before allowing a retry or marking promoted files orphaned.
 - Validate zip member paths before extraction and verify checksums as bytes are extracted; reject duplicate normalized paths, checksum mismatches, absolute paths, backslash traversal, `..` traversal, symlinks, and normalized-path changes.
 - Before extraction and before asset promotion, estimate required disk usage and fail early with a clear insufficient-storage error if the current machine cannot hold the package safely.
 - For very large packages, run extraction, checksum validation, and analyze work as a server-side background job tied to the import session; the UI polls progress instead of waiting on one long request.
@@ -236,9 +246,10 @@
 - Anchor staged uploads, extracted assets, and rewritten file paths to the runtime-writable root with relative POSIX paths that have already passed package path validation. Prefer `resolveRuntimeWritablePath` for untrusted package-derived paths; reserve `resolveRuntimeFilePath` for already-trusted persisted runtime paths because it intentionally accepts absolute paths. Do not assume browser/dev paths live outside the repo root; they live under the current runtime root today.
 - Harden `/api/runtime-asset` path normalization while adding imported assets so serving `assets/...` paths rejects raw absolute paths, raw backslashes, backslash traversal, `..` segments, and paths that normalize differently even if a bad path somehow reaches persisted article content.
 - Reuse the existing `/api/*` writer-proxy architecture for transfer routes, but make project-transfer uploads streaming-safe. The current `ApiProxyRoutes.ts` proxy path reads request bodies into memory, which conflicts with the large-package upload goal unless those routes bypass that path or the proxy is upgraded to stream upload bodies through to the writer.
+- Before implementing Phase 3 uploads, choose one concrete proxy contract: upgrade `ApiProxyRoutes.ts` to stream request bodies to the owner for project-transfer upload routes, or classify upload routes as explicit writer-direct/bypass routes with tests proving followers cannot mutate sessions locally. Do not leave large uploads on the generic buffered proxy path.
 - Support threshold-based execution modes: inline for small packages, background session jobs for large export assembly and large import analyze or commit work.
 - Treat those thresholds as execution-mode switches only, not as product limits. Packages larger than the inline thresholds must move to background work instead of being rejected just for size.
-- Record completed imports in a small transfer-history store with import session id, package fingerprint, source project summary, imported project id, imported project name snapshot, imported at, and counts so analyze can warn on exact duplicate packages later and commit retries can reconstruct the correct completion response for the same session without confusing intentional same-package imports.
+- Record completed imports in a small transfer-history store with import session id, package fingerprint, source project summary, imported project id, imported project name snapshot, imported at, counts, and the exact completion payload so analyze can warn on exact duplicate packages later and commit retries can reconstruct the correct completion response for the same session without confusing intentional same-package imports.
 - Keep the final commit transactional and fail-fast when any required provider or model mapping is unresolved.
 - At commit start, revalidate the frozen plan assumptions that can change after analyze: provider connections and models still enabled/selectable, article identifier matches still converge, route-scope safety still holds, and post-remap judgment uniqueness conflicts are still absent. If revalidation fails, do not write project rows; move the session back to an unresolved review state with fresh blockers.
 - Commit requests for a session that is already `completed` must return the recorded completion payload without replaying writes. Commit requests while another commit is in flight must join, poll, or reject with the current session state rather than running a second transaction. If session completion state is missing after a crash but a transfer-history row exists for that import session id, reconstruct the completion response from transfer history instead of creating another project.
@@ -288,6 +299,7 @@
 - [ ] Define import-session state, plan revisions, source-to-target id maps, unresolved dependency statuses, immutable-prompt link rules, asset cleanup rules, and post-remap judgment-conflict reporting.
 - [ ] Pick the zip implementation and lock checksum, package fingerprint, path-normalization, threshold, and resource-gate rules before writing route handlers.
 - [ ] Define the thresholds that switch export, analyze, and commit work from inline requests to background session jobs.
+- [ ] Define the import-session cancel contract for `DELETE /api/projects/import/:sessionId`, including allowed source states, rejection after terminal states, temp cleanup, and writer-only ownership.
 
 #### Phase 1 Spec
 
@@ -307,24 +319,26 @@
 - `Zip rules`
   - Root entries must be relative POSIX-style paths with `/` separators and no backslashes.
   - Reject archive members that are absolute paths, contain a `..` path segment, normalize to a different path, normalize to the same path as another member, or are symlinks.
+  - Reject NUL bytes, overlong path segments, overlong normalized paths, and archive members that collide after Unicode NFC normalization plus case folding, or detect the active temp filesystem's case sensitivity and reject collisions under that filesystem's rules.
   - Require `manifest.json` at the archive root.
   - Allow payload files only from the locked manifest file list plus `assets/**`.
-  - Treat manifest-declared sizes as untrusted advisory values. Compare them against zip entry compressed and uncompressed sizes before extraction, then verify actual extracted bytes and checksums before analyze can proceed.
+  - Treat manifest-declared sizes and zip directory sizes as untrusted advisory values. Compare them during preflight when available, but enforce authoritative streamed compressed and uncompressed byte counters per entry and for the whole archive, abort on budget or checksum mismatch, and never rely on directory sizes as the only enforcement.
 
 - `Size thresholds`
   - Inline export when estimated package bytes are `<= 128 MB` and estimated asset bytes are `<= 64 MB`.
   - Background export session when either estimate exceeds those thresholds.
-  - Inline import analyze when uploaded zip bytes are `<= 128 MB` and verified zip-entry uncompressed payload-plus-asset bytes are `<= 512 MB`.
-  - Background import analyze when either import threshold is exceeded.
+  - Inline import analyze when uploaded zip bytes are `<= 128 MB` and preflight estimated uncompressed payload-plus-asset bytes are `<= 512 MB`; if streamed verified bytes exceed the inline threshold during extraction, transition the session to background analyze before analysis continues.
+  - Background import analyze when either import threshold is exceeded by upload bytes, preflight estimates, or streamed verified bytes.
   - Background commit when the analyzed plan contains `>= 25,000` articles, `>= 250,000` judgments, or `>= 2 GB` of extracted assets.
   - Do not reject a package only because it exceeds these thresholds. Thresholds switch work from inline requests to background execution.
-  - Instead of hard product-size ceilings, gate execution on current machine resources such as free disk space, writable temp space, and practical job progressability.
+  - Instead of hard product-size ceilings, gate execution on current machine resources: the runtime temp root must be writable, free temp bytes must be at least uploaded zip bytes plus verified uncompressed bytes plus 10%, free runtime asset bytes must be at least planned promoted asset bytes plus 10%, and background jobs must update progress at least once per configured byte or row interval.
+  - Add parser and resource safety gates before extraction and parsing: archive member count or inode availability, maximum normalized path length and segment length, maximum manifest and payload file sizes, maximum NDJSON line size, maximum JSON depth and object member count, streaming parse requirements for large payloads, and a decompression ratio or expanded-byte budget that aborts when actual streamed bytes exceed the verified plan. Treat these as configurable or machine-resource-derived safety ceilings, not product package-size limits.
 
 - `Session storage layout`
   - Store working files under runtime-writable temp paths such as `tmp/project-transfer/import/<sessionId>/` and `tmp/project-transfer/export/<sessionId>/`.
   - These paths are relative to the runtime-writable root. In desktop mode that root is outside the repo; in browser/dev mode it is the current runtime root, which is repo-local today.
   - Import session folders should contain `upload.zip`, `manifest.json`, `extracted/`, `analysis.json`, `plan.json`, `promotionManifest.json`, `completion.json`, and `progress.json`.
-  - `plan.json` stores the frozen plan plus `planRevision`; dependency-resolution mutations read the current revision and write a new revision whenever mappings or derived conflicts change.
+  - `plan.json` stores the frozen plan plus `planRevision`; dependency-resolution mutations read the current revision and write a new revision whenever mappings or derived conflicts change. If the session is already `ready_to_commit`, those mutations must first reopen the session to `awaiting_resolution` so no stale ready plan remains committable.
   - `promotionManifest.json` starts empty before promotion and is append-only during asset copy so startup recovery can remove only session-owned promoted files for non-completed sessions.
   - `completion.json` is written after the database transaction commits and stores the imported project id, project name snapshot, completed transfer-history id, package fingerprint, final counts, and post-import warnings needed for idempotent retry responses.
   - The completed transfer-history row is written inside the final database transaction and includes the import session id. If a crash happens after the database transaction commits but before `completion.json` is written, session recovery must reconstruct `completion.json` and mark the session completed from transfer history rather than treating promoted assets as orphaned.
@@ -335,10 +349,11 @@
 - `Writer ownership`
   - Transfer session creation and all background export, analyze, dependency-resolution mutation, history-write, asset-promotion, and commit work must run on the active DuckDB writer.
   - Readonly session polling should stay on the owner-proxied `/api/*` path in v1. Follower-local polling is only safe if `apiRouteClassification.ts` is explicitly updated for those paths, and follower servers must never mutate transfer sessions or start background transfer work.
+  - Active background export, analyze, and commit jobs must update a durable session heartbeat and owner token. TTL cleanup must atomically transition only stale non-terminal sessions to `expired` or `failed` before deleting files, and startup recovery or cleanup must run only on the active DuckDB writer after checking transfer history and heartbeat staleness.
 
 - `Import session states`
   - `uploading`, `queued`, `extracting`, `analyzing`, `awaiting_resolution`, `ready_to_commit`, `committing`, `completed`, `failed`, `cancelled`, `expired`.
-  - `awaiting_resolution` means the package is parsed but still has blocking provider or model dependencies to resolve, or it has blocking article, project-prompt, or judgment conflicts that prevent commit. Missing or inactive import routes stay warnings in v1 and do not keep the session unresolved on their own.
+  - `awaiting_resolution` means the package is parsed but still has provider or model dependencies to resolve, or it has blocking article, project-prompt, or judgment conflicts that prevent commit. Article, project-prompt, and judgment conflicts are not remapped in-wizard in v1; expose `canCommit: false` plus a resolution kind such as `requires_new_package_or_target_changes` until the package or target data changes. Missing or inactive import routes stay warnings in v1 and do not keep the session unresolved on their own.
   - `ready_to_commit` means every blocking dependency is resolved, no blocking article, project-prompt, or judgment conflicts remain, and the review plan is frozen for commit.
 
 - `Export session states`
@@ -350,9 +365,11 @@
   - Background phases should be monotonic and resumable enough for UI polling after refresh.
 
 - `Duplicate history store`
-  - Add a small app table such as `app.project_transfer_history` with: `id`, `direction`, nullable `session_id`, nullable `commit_id`, `package_fingerprint`, `schema_version`, nullable `source_project_id`, `source_project_name`, nullable `target_project_id`, nullable `target_project_name`, `payload_counts_json`, and `created_at`. Do not require live foreign keys for snapshot fields unless delete behavior is explicitly handled.
-  - Add an index on `(direction, package_fingerprint)` so duplicate-import analysis stays cheap, a unique or effectively unique import retry lookup on `(direction, session_id)` for non-null import session ids, and any narrow lookup index needed for project-history display.
-  - Record one row inside the final successful import transaction with the import session id and commit id, and optionally after each completed export. Direct small exports may leave `session_id` null; completed imports must not.
+  - Add a small app table such as `app.project_transfer_history` with: `id`, `direction`, nullable `session_id`, nullable `commit_id`, `package_fingerprint`, `schema_version`, nullable `source_project_id`, `source_project_name`, nullable `target_project_id`, nullable `target_project_name`, `payload_counts_json`, nullable `completion_payload_json`, and `created_at`. For completed imports, `completion_payload_json` must contain the exact commit response needed to reconstruct `completion.json` after a crash, including final counts and post-import warnings. Export rows may leave it null. Do not require live foreign keys for snapshot fields unless delete behavior is explicitly handled.
+  - Lock migration constraints explicitly: `direction NOT NULL CHECK direction IN ('import', 'export')`, `package_fingerprint NOT NULL`, `schema_version NOT NULL`, `created_at NOT NULL`, `session_id NOT NULL` for completed import rows, `target_project_id NOT NULL` for completed import rows, and a unique or effectively unique import lookup on `(direction, session_id)` for non-null import session ids.
+  - Enforce a DB-level or repository-level invariant that completed import history rows have non-null `completion_payload_json`, `session_id`, `commit_id`, `target_project_id`, and `target_project_name`; commit retry and crash recovery may reconstruct completion only from rows satisfying that invariant.
+  - Add an index on `(direction, package_fingerprint)` so duplicate-import analysis stays cheap, plus any narrow lookup index needed for project-history display.
+  - Record one row inside the final successful import transaction with the import session id, commit id, and completion payload, and optionally after each completed export. Direct small exports may leave `session_id` null; completed imports must not.
   - During analyze, match duplicate-import warnings on `direction = 'import'` plus `package_fingerprint`, and use the history row only for warning and display, never for automatic merge behavior. During commit retry or crash recovery, look up completion by `direction = 'import'` plus `session_id`, not by package fingerprint. Export-history rows may support audit or download UX, but they must not produce `already imported` warnings.
 
 - `Overlap summary contract`
@@ -364,7 +381,7 @@
   - `judgmentConflictCount` should count only post-remap judgment insert conflicts that would still block commit. Because prompt rows may be reused through immutable prompt matching, this count can be non-zero even in normal v1 imports.
   - Duplicate-package warnings and overlap summaries are informational; they never silently change the import plan and never override normal blocking conflict checks.
   - `omittedRouteLinkCount` represents missing or inactive target import routes, or matched routes that cannot be safely linked without expanding the imported project scope or an existing active target project scope.
-  - `omittedArticleRouteLinkCount` represents exported article-route links skipped because the target route is missing, inactive, or because inserting them would expand another active target project's current date-bounded route scope.
+  - `omittedArticleRouteLinkCount` represents exported article-route links skipped because the target route is missing, inactive, because inserting them would expand another active target project's current date-bounded route scope, or because inserting them would create a future-expansion risk for another active target project.
   - `routeArticleSnapshotLinkCount` represents exported route-scoped articles that will be preserved as direct `app.project_article` links because the corresponding project-route link was omitted.
 
 - `Route-scope fidelity contract`
@@ -410,22 +427,25 @@
 
 #### Phase 1 Implementation Breakdown
 
-- `Database contract` owner files: the next numbered DuckDB migration, currently `src/db/duckdbMigrations/0048_projectTransferHistory.sql`, plus `src/db/schemaTypes.ts`. Add the duplicate-history table and typed record first so later phases can rely on it, and make sure typed judgment rows expose `deleteGeneration` or that project-transfer-specific row types do not accidentally drop it.
+- `Database contract` owner files: the next numbered DuckDB migration, currently `src/db/duckdbMigrations/0048_projectTransferHistory.sql`, plus `src/db/schemaTypes.ts`. Add the duplicate-history table and typed record first so later phases can rely on it, make sure typed judgment rows expose `deleteGeneration`, account for nullable `JudgmentHumanRecord.projectId`, and add project-transfer-specific row types for exported reviews and any rows not fully modeled by current shared schema types.
 - `Route shell` owner files: new `src/server/routes/ProjectTransferRoutes.ts`, `src/server/serverMain.ts`, and, if transfer uploads stay on or bypass the standard `/api/*` proxy path, `src/server/routes/ApiProxyRoutes.ts` plus `src/server/routes/apiRouteClassification.ts`. Mount the new route module in `serverMain.ts`, keep upload proxying compatible with large request bodies, and lock the Phase 1 request and response shapes at the server boundary.
 - `Upload route contract` owner files: new `src/server/routes/ProjectTransferRoutes.ts` plus whatever local streaming helper it needs. Lock the session-create and analyze response shapes early, but do not force the upload path into a non-streaming `t.File()` pattern if that would break the large-package requirements.
 - `Manifest contract` owner files: new `src/server/services/projectTransfer/projectTransferSchemas.ts`, new `src/server/services/projectTransfer/projectTransferManifest.ts`, new `src/server/services/projectTransfer/projectTransferFingerprint.ts`. Centralize manifest fields, omission warnings, checksum rules, and stable fingerprinting.
 - `Zip and path rules` owner files: new `src/server/services/projectTransfer/projectTransferZip.ts`, new `src/server/services/projectTransfer/projectTransferPaths.ts`. Own normalized archive member validation, allowed payload paths, runtime-relative asset path validation, and path-safety helpers.
 - `Session and history contract` owner files: new `src/server/services/projectTransfer/projectTransferSession.ts`, new `src/server/services/projectTransfer/projectTransferHistoryRepository.ts`. Define session states, progress payloads, temp-layout metadata, and duplicate-history reads and writes.
-- `Article and judgment data contract` owner files: extend `src/server/services/appQueryServiceCore.ts` or add a project-transfer-specific query helper so export assembly can actually include every locked article field plus the locked camelCase package serializer mapping for fields such as `originalData` and `sourceMetadata`. Export only the active current-review judgment rows matching the project article scope, prompt links, model, and content toggles instead of assuming the current shared full-article or judgment queries already return the package contract. Include explicit judgment answer fields, `deleteGeneration`, remappable project references, linked assessment fields, and timestamps; do not rely on the current shared `JudgmentRecord` shape unless it has been updated to include `deleteGeneration`; exclude `app.judgment_execution_snapshot` as job-runtime state.
+- `Session recovery contract` owner files: new `src/server/services/projectTransfer/projectTransferSessionRecovery.ts` plus tests. Own startup recovery, TTL cleanup, heartbeat staleness checks, writer-only cleanup, and promoted-asset orphan decisions.
+- `Article and judgment data contract` owner files: extend `src/server/services/appQueryServiceCore.ts` or add a project-transfer-specific query helper so export assembly can actually include every locked article field plus the locked camelCase package serializer mapping for fields such as `originalData`, `sourceMetadata`, `fullTextPdf`, and `deleteGeneration`. Export only the active current-review judgment rows matching the project article scope, prompt links, model, and content toggles instead of assuming the current shared full-article or judgment queries already return the package contract. Include explicit judgment answer fields, `deleteGeneration`, remappable project references, linked assessment fields, and timestamps; do not rely on the current shared `JudgmentRecord` shape unless it has been updated to include `deleteGeneration`; exclude `app.judgment_execution_snapshot` and `app.judgment_job_sqlite_health_projection` as job-runtime state.
 - `Prompt data contract` owner files: add a project-transfer prompt query helper or extend the existing project prompt reads so export includes `original_text`, `transformed_text`, `prompt_heading`, `type`, prompt-row archived state, and project-link fields: `prompt_order`, `enabled`, `archived`, `criteria_disposition`, `criteria_section_key`, and `criteria_section_label`. Immutable prompt reuse depends on those canonical prompt fields, not just project-link metadata.
 - `Runtime asset route hardening` owner files: `src/server/routes/RuntimeAssetsRoutes.ts` and new `src/server/routes/RuntimeAssetsRoutes.test.ts`. Keep `/api/runtime-asset` compatible with valid `assets/...` paths while rejecting traversal, raw backslashes, backslash traversal, normalized-path changes, and absolute paths before resolving through runtime path helpers.
-- `Phase 1 tests` owner files: new `src/server/services/projectTransfer/projectTransferManifest.test.ts`, new `src/server/services/projectTransfer/projectTransferPaths.test.ts`, new `src/server/routes/ProjectTransferRoutes.test.ts`, new `src/server/routes/apiRouteClassification.test.ts` if transfer routes change classification behavior, and existing `src/server/routes/ApiProxyRoutes.test.ts` plus `src/server/routes/ApiProxyRoutes.retry.test.ts` if upload proxy behavior changes. Cover manifest validation, fingerprint stability, zip/path rejection, runtime asset path rejection, route-level contract failures, and the chosen writer-proxy behavior for transfer uploads.
+- `Phase 1 tests` owner files: new `src/server/services/projectTransfer/projectTransferManifest.test.ts`, new `src/server/services/projectTransfer/projectTransferPaths.test.ts`, new `src/server/services/projectTransfer/projectTransferSessionRecovery.test.ts`, new `src/server/routes/ProjectTransferRoutes.test.ts`, new `src/server/routes/apiRouteClassification.test.ts` if transfer routes change classification behavior, and existing `src/server/routes/ApiProxyRoutes.test.ts` plus `src/server/routes/ApiProxyRoutes.retry.test.ts` if upload proxy behavior changes. Cover manifest validation, fingerprint stability, zip/path rejection, runtime asset path rejection, route-level contract failures, writer-only recovery/cleanup, and the chosen writer-proxy behavior for transfer uploads.
 
 #### Quality Gates
 
 - [ ] `bun run db:mig`
 - [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferManifest.test.ts`
 - [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferPaths.test.ts`
+- [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferSessionRecovery.test.ts`
+- [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferHistoryRepository.test.ts`
 - [ ] Add and run `bun test src/server/routes/ProjectTransferRoutes.test.ts`
 - [ ] Add and run `bun test src/server/routes/RuntimeAssetsRoutes.test.ts`
 - [ ] Add and run `bun test src/server/routes/apiRouteClassification.test.ts` if transfer routes change classification behavior
@@ -436,41 +456,61 @@
 
 - [ ] Build server-side package export assembly from a consistent DuckDB read snapshot with manifest generation, JSON/NDJSON payload writers, active-judgment filtering, package fingerprinting, and sanitized provider/model export.
 - [ ] Extend the article export query layer so package assembly can actually export the locked article field set, including the package payload fields `originalData` and `sourceMetadata` backed by `app.article.original_data` and `app.article.source_metadata`, plus the selected full-text fields.
+- [ ] Implement package-boundary redaction serializers and omission warnings across article fields, provider fields, URLs, provider metadata/config, and full-text-derived fields before checksums and the package fingerprint are finalized.
 - [ ] Collect local article assets, copy and checksum them into `assets/`, and write `assetManifest.json` metadata for safe import-time path rewriting without leaving references to missing or uncopied files.
 - [ ] Add `POST /api/projects/:id/export-project`, support inline download for small packages, and add a background export session path for large packages.
+- [ ] Emit structured runtime events for export assembly progress, omitted assets, redaction warnings, checksum failures, and package finalization.
 - [ ] Wire the new `Export Project` action in `src/components/main/ProjectsGrid.tsx`, including a `preparing download` state when the export runs asynchronously, and add a focused grid action test for the new button placement and async state.
 
 #### Quality Gates
 
 - [ ] Add and run `bun test src/server/routes/ProjectTransferRoutes.test.ts`
 - [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferExport.test.ts`
+- [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferRedaction.test.ts`
+- [ ] Cover missing, unreadable, symlinked, outside-root, and checksum-changing export assets in project-transfer export tests
+- [ ] Add and run `bun test src/server/routes/ApiProxyRoutes.test.ts` with coverage proving large export download responses stream through the owner proxy without being materialized into memory on follower servers
+- [ ] `bun test src/server/routes/ProjectsRoutes.test.ts`
+- [ ] Cover both small inline export responses and large export-session download responses in route/proxy tests
 - [ ] Add and run `bun test src/components/main/ProjectsGrid.vitest.tsx`
 
 ### Phase 3 - Analyze And Resolve Dependencies
 
 - [ ] Build upload/analyze session endpoints, staged extraction, TTL cleanup, preview summaries, unresolved-warning reporting, and background progress for large packages.
+- [ ] Implement `DELETE /api/projects/import/:sessionId` cancellation with writer-owned state transitions, temp cleanup, and rejection for `committing`, `completed`, `failed`, `cancelled`, and `expired` sessions unless the request is an idempotent repeat.
 - [ ] Make project-transfer uploads compatible with the existing writer-proxy topology: current `ApiProxyRoutes.ts` calls `request.clone().arrayBuffer()` for proxied non-GET/non-HEAD requests, so a large upload endpoint such as `POST /api/projects/import/analyze` cannot meet the streaming requirement on follower servers unless the proxy is upgraded to stream request bodies or that upload path bypasses the generic proxy and reaches the writer directly. If bypassing or adding follower-local behavior, update `apiRouteClassification.ts` and its tests explicitly.
+- [ ] Lock the chosen large-upload proxy contract before implementation: either streamed owner proxying or explicit writer-direct/bypass routing. Add a follower-path test that uploads a large body and proves the request is not handled by the generic full-body `ArrayBuffer` buffering path.
 - [ ] Implement provider connection auto-match, existing-connection selection, an import-wizard provider setup wrapper that reuses the current provider form/client helpers without dropping hidden provider config on existing connections, managed-provider auth handoff through the current `begin` and `finish` routes, non-Codex provider-model materialization through provider-connection model routes, exact database-model identity and selectability verification after every materialization route returns an id, Anthropic virtual-id handling, the full Codex status/login/ensure flow, and `planRevision` handling for all dependency-resolution mutations. Add route/query-state handoff only if the flow leaves the wizard for standalone provider pages.
 - [ ] Implement conservative article matching, project-prompt remap conflict detection, route-link and article-route side-effect omission review, route-scope fallback snapshot links, and conflict detection before commit.
 - [ ] Implement exact duplicate-package detection from package fingerprint plus overlap summaries for partial matches.
+- [ ] Expose every overlap summary contract field in analyze/session responses and the import plan UI, including `canCommit` and a resolution kind such as `requires_new_package_or_target_changes` for conflicts that v1 cannot resolve in-wizard.
+- [ ] Emit structured runtime events for upload, extraction, checksum validation, analyze progress, dependency-resolution blockers, and cancel cleanup.
 - [ ] Build the `/projects/import` wizard for upload, package review, dependency resolution, and final plan review.
 
 #### Quality Gates
 
 - [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferAnalyze.test.ts`
+- [ ] Add and run `bun test src/server/routes/ProjectTransferRoutes.test.ts`
 - [ ] Add and run `bun test src/server/routes/ApiProxyRoutes.test.ts`
 - [ ] Add and run `bun test src/server/routes/ApiProxyRoutes.retry.test.ts`
+- [ ] Add and run `bun test src/server/routes/apiRouteClassification.test.ts` if transfer upload, polling, or download routes change classification behavior or add a proxy bypass
 - [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts`
+- [ ] Add provider resolution coverage proving import-wizard edits to existing provider connections preserve `archived`, `disabledModelIds`, manual worker config, and secret refs, or proving existing-connection edits are forbidden and users must create a new connection or return through the normal provider UI
+- [ ] Add `returnTo` or import-session handoff coverage if dependency setup leaves the wizard for standalone provider pages
 - [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferDuplicateDetection.test.ts`
 - [ ] Add and run `bun test src/app/routes/+projects/-+import.vitest.tsx`
+- [ ] `bun test src/app/routes/+projects/-+index.vitest.tsx`
+- [ ] `bun run build`
 
 ### Phase 4 - Commit And Post-Import Behavior
 
 - [ ] Implement final-path asset promotion plus the final transaction that creates the new active project, immutable prompt rows or links, article rows and links, judgments, human judgments, human summary judgments, reviews, and assessments with remapped ids, plus mart refresh dirty state and the completed transfer-history row.
-- [ ] Revalidate the frozen plan at commit time before asset promotion, reject stale `planRevision` commits without writes, write transfer history with the import session id inside the successful transaction, persist `completion.json` after transaction success, and make completed-session commit retries return the recorded imported project for that same session instead of replaying the import.
+- [ ] Apply immutable prompt remapping semantics exactly, including reactivating an archived canonical prompt when the exported prompt row was active. Treat any prompt reactivation dirtying or revalidation the same way current create/edit flows do; if current flows treat it as metadata-only, document that in the commit test.
+- [ ] Implement a dedicated project-transfer judgment writer instead of the shared append path. It must explicitly write `delete_generation`, `deleted_at` as null or validated package state, `snapshot_project_id`, `snapshot_project_model_name`, timestamps, and imported answer fields, and it must fail on uniqueness conflicts rather than using `ON CONFLICT ... DO NOTHING`.
+- [ ] Revalidate the frozen plan at commit time before asset promotion, reject stale `planRevision` commits without writes, write transfer history with the import session id, `commitId`, and completion payload inside the successful transaction, persist `completion.json` after transaction success, and make completed-session commit retries return the recorded imported project for that same session instead of replaying the import.
 - [ ] Do not route full-fidelity package articles through `src/server/services/articleImportStoreService.ts`; implement the project-transfer commit writer so it can preserve the locked article field set and omit missing, inactive, or unsafe import route links and legacy route fields with warning instead of auto-creating them.
 - [ ] Leave `project_prompt.origin_project_id` and `project_article.imported_from_project_id` null in v1 as intentional package-import semantics, and surface source-package provenance outside those columns.
 - [ ] Mark the new project with `getProjectMartRefreshStateService().markProjectsDirtyAtomically({projects: ..., runner: tx})` and any existing projects affected by reused-article field merges with `getProjectMartRefreshStateService().markArticleProjectsDirtyAtomically({articleIds: ..., runner: tx})` as part of the import transaction, navigate to the imported project, and surface post-import warnings for omitted links or non-blocking provider/model provenance notes.
+- [ ] Emit structured runtime events for commit progress, asset promotion, transactional success, rollback cleanup, and commit recovery decisions.
 - [ ] Add a rollback-path test that promotes assets, forces the database transaction to fail, verifies promoted final assets are best-effort deleted, and verifies session temp files remain governed by failed-session TTL cleanup instead of being treated as committed assets.
 - [ ] Add a crash-recovery test that simulates a successful database transaction and transfer-history write before `completion.json` is written, verifies recovery reconstructs completion from the session id, and verifies promoted final assets are not deleted as orphans.
 
@@ -479,6 +519,8 @@
 - [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferCommit.test.ts`
 - [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferCommitRollback.test.ts`
 - [ ] Add and run `bun test src/server/services/projectTransfer/projectTransferCommitRecovery.test.ts`
+- [ ] Add commit retry/recovery coverage that reconstructs completion only from transfer-history rows satisfying the completed-import invariants, refuses or repairs incomplete rows safely, covers concurrent commit requests, and covers stale `committing` ownership recovery
+- [ ] `bun run db:mig` if commit/history schema or typed DB records changed in this phase
 - [ ] `bun test src/server/routes/providerProjectFlow.e2e.test.ts`
 - [ ] `bun test src/app/routes/+projects/-+index.vitest.tsx`
 
@@ -486,6 +528,7 @@
 
 - [ ] Verify the browser flow for direct download on small exports, background `preparing download` behavior on large exports, upload, dependency resolution, commit, and post-import review screens.
 - [ ] Verify the desktop flow for package download, runtime-writable asset extraction, upload, duplicate warnings, and navigation to the imported project.
+- [ ] Verify browser and desktop runtime asset extraction and promotion paths, plus upload and download behavior, because desktop runtime paths live outside the repo while browser/dev paths live under the runtime root.
 - [ ] Run the repo-native build and lint checks for touched layers without fixing unrelated issues.
 
 #### Quality Gates
@@ -532,10 +575,14 @@
 - Add and run `bun test src/server/routes/RuntimeAssetsRoutes.test.ts`
 - Add and run `bun test src/server/services/projectTransfer/projectTransferManifest.test.ts`
 - Add and run `bun test src/server/services/projectTransfer/projectTransferPaths.test.ts`
+- Add and run `bun test src/server/services/projectTransfer/projectTransferSessionRecovery.test.ts`
+- Add and run `bun test src/server/services/projectTransfer/projectTransferHistoryRepository.test.ts`
 - Add and run `bun test src/server/services/projectTransfer/projectTransferExport.test.ts`
+- Add and run `bun test src/server/services/projectTransfer/projectTransferRedaction.test.ts`
 - Add and run `bun test src/server/services/projectTransfer/projectTransferAnalyze.test.ts`
 - Add and run `bun test src/server/routes/ApiProxyRoutes.test.ts`
 - Add and run `bun test src/server/routes/ApiProxyRoutes.retry.test.ts`
+- Add and run `bun test src/server/routes/apiRouteClassification.test.ts` if transfer routes change classification behavior
 - Add and run `bun test src/server/services/projectTransfer/projectTransferDependencyResolution.test.ts`
 - Add and run `bun test src/server/services/projectTransfer/projectTransferDuplicateDetection.test.ts`
 - Add and run `bun test src/server/services/projectTransfer/projectTransferCommit.test.ts`
