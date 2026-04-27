@@ -56,6 +56,12 @@ export const ownerlessRouteDeclarations = [
     pathname: '/api/admin/worker-runtime-diagnostics',
     routeKind: 'diagnostics',
   },
+  {
+    backends: ['process-runtime-state'],
+    method: 'GET',
+    pathname: '/api/admin/judgment-dispatch-runtime/:jobId',
+    routeKind: 'diagnostics',
+  },
 ] satisfies OwnerlessRouteDeclaration[]
 
 const getRouteLabel = (route: OwnerlessRouteDeclaration) => {

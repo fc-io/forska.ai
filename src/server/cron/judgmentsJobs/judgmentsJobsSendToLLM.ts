@@ -8,7 +8,11 @@ import {
   replayJudgeWorkerCompletionOutbox,
   shouldUseJudgeWorkerOwnerHandoff,
 } from './judgeWorkerCompletionJournal.ts'
-import {enqueueClaimedJudgmentPrompts, getJudgmentDispatchQueueCapacity} from './judgmentDispatchRuntime.ts'
+import {
+  enqueueClaimedJudgmentPrompts,
+  getJudgmentDispatchJobPromptIds,
+  getJudgmentDispatchQueueCapacity,
+} from './judgmentDispatchRuntime.ts'
 import {getJudgmentEndpointAvailability} from './judgmentEndpointAvailability.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 import {filterRunningJobsByRuntimeMatch, type RunningJudgmentJob} from './judgmentsJobsGetRunningJobs.ts'
@@ -840,14 +844,21 @@ const sendToLLMForJobs = async (
   })
 
   const promptClaimResults = await Promise.allSettled(
-    requestsToSendByJob.map(({job, limit}) => {
+    requestsToSendByJob.map(async ({job, limit}) => {
       const providerCap = getEffectiveDispatchProviderCap({job})
+      const protectedRecordIds = shouldUseJudgeWorkerOwnerHandoff() ? await getJudgmentDispatchJobPromptIds(job.id) : []
 
-      return getAndUpdateReadyPrompts(serverJobId, job.id, limit, {
-        providerConnectionId: job.providerConnectionId,
-        providerMaxInflightRequests: providerCap.maxInflight,
-        providerUsesFamilyDefault: providerCap.usesFamilyDefault,
-      })
+      return getAndUpdateReadyPrompts(
+        serverJobId,
+        job.id,
+        limit,
+        {
+          providerConnectionId: job.providerConnectionId,
+          providerMaxInflightRequests: providerCap.maxInflight,
+          providerUsesFamilyDefault: providerCap.usesFamilyDefault,
+        },
+        {protectedRecordIds},
+      )
     }),
   )
 

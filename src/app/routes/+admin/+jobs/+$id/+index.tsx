@@ -704,10 +704,10 @@ const AdminJudgmentJobDetail = () => {
                         </Show>
                         <Show when={data()?.requestStats?.dispatch}>
                           <p class="text-xs text-sky-700 mt-1">
-                            Local active prompts: {data()?.requestStats?.dispatch?.jobActivePrompts ?? 0}
+                            Worker active prompts: {data()?.requestStats?.dispatch?.jobActivePrompts ?? 0}
                           </p>
                           <p class="text-xs text-sky-700 mt-1">
-                            Local queued prompts: {data()?.requestStats?.dispatch?.jobQueuedPrompts ?? 0}
+                            Worker queued prompts: {data()?.requestStats?.dispatch?.jobQueuedPrompts ?? 0}
                           </p>
                         </Show>
                       </div>
@@ -761,21 +761,21 @@ const AdminJudgmentJobDetail = () => {
                       </div>
                       <Show when={data()?.requestStats?.dispatch}>
                         <div class="bg-cyan-50 rounded-lg p-4">
-                          <p class="text-sm text-cyan-700 mb-1">Local Active Prompts</p>
+                          <p class="text-sm text-cyan-700 mb-1">Worker Active Prompts</p>
                           <p class="text-2xl font-bold text-cyan-900">
                             {data()?.requestStats?.dispatch?.jobActivePrompts ?? 0}
                           </p>
                           <p class="text-xs text-cyan-700 mt-1">
-                            This job&apos;s prompts currently occupying provider-local active slots on this server
+                            This job&apos;s prompts currently occupying worker active slots
                           </p>
                         </div>
                         <div class="bg-teal-50 rounded-lg p-4">
-                          <p class="text-sm text-teal-700 mb-1">Local Queued Prompts</p>
+                          <p class="text-sm text-teal-700 mb-1">Worker Queued Prompts</p>
                           <p class="text-2xl font-bold text-teal-900">
                             {data()?.requestStats?.dispatch?.jobQueuedPrompts ?? 0}
                           </p>
                           <p class="text-xs text-teal-700 mt-1">
-                            This job&apos;s prompts already claimed locally and waiting for a provider slot
+                            This job&apos;s prompts already claimed and waiting for a provider slot
                           </p>
                         </div>
                         <div class="bg-violet-50 rounded-lg p-4">

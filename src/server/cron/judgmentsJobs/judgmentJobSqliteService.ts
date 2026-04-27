@@ -2484,9 +2484,7 @@ const pruneVisibilityAckedRetentionForJobIds = async ({
 
   const currentResult = await pruneVisibilityAckedRetentionForJob({jobId: currentJobId, maxRows, serverJobId}).catch(
     (error: unknown) => {
-      return error instanceof JudgmentJobLeaseError
-        ? emptyRetentionPruneResult()
-        : Promise.reject(error)
+      return error instanceof JudgmentJobLeaseError ? emptyRetentionPruneResult() : Promise.reject(error)
     },
   )
   const remainingRows = maxRows - currentResult.outboxRowsDeleted
@@ -3985,7 +3983,7 @@ const sqliteService = {
   },
   requeueAbandonedSentPrompts: async ({
     jobId,
-    protectedRecordIds = [],
+    protectedRecordIds,
     serverJobId,
     staleBefore,
   }: {
@@ -3999,9 +3997,14 @@ const sqliteService = {
         jobId,
         false,
         (database) => {
-          const protectedIds = Array.from(new Set(protectedRecordIds))
+          const shouldRecoverCurrentServer = protectedRecordIds !== undefined
+          const protectedIds = Array.from(new Set(protectedRecordIds ?? []))
           const currentServerRecoveryPredicate =
-            protectedIds.length > 0 ? `id NOT IN (${getSqlPlaceholders(protectedIds.length).join(', ')})` : '1 = 1'
+            shouldRecoverCurrentServer && protectedIds.length > 0
+              ? `id NOT IN (${getSqlPlaceholders(protectedIds.length).join(', ')})`
+              : shouldRecoverCurrentServer
+                ? '1 = 1'
+                : '0 = 1'
           const result = database
             .query(
               `

@@ -50,6 +50,9 @@ const state = {
       return 1
     },
   ),
+  getJudgmentDispatchJobPromptIds: mock(async (_jobId: string) => {
+    return []
+  }),
   enqueueClaimedJudgmentPrompts: mock(async (_input: {label: string; prompts: unknown[]}) => {
     return {acceptedCount: 0, rejectedPrompts: []}
   }),
@@ -65,6 +68,7 @@ const registerModuleMocks = () => {
   void mock.module(judgmentDispatchRuntimeModulePath, () => {
     return {
       enqueueClaimedJudgmentPrompts: state.enqueueClaimedJudgmentPrompts,
+      getJudgmentDispatchJobPromptIds: state.getJudgmentDispatchJobPromptIds,
       getJudgmentDispatchProviderStats: state.getJudgmentDispatchProviderStats,
       getJudgmentDispatchQueueCapacity: state.getJudgmentDispatchQueueCapacity,
     }
@@ -458,6 +462,91 @@ test('owner-backed claim route returns immutable execution snapshot identity and
   expect(snapshotBody.data.articleId).toBe(articleId)
   expect(snapshotBody.data.claimId).toBe(claim?.claimId)
   expect(snapshotBody.data.payload.identity.queueRecordId).toBe(claim?.recordId)
+
+  await sqliteService.closeAll()
+})
+
+test('owner-backed claim requeues stale unprotected worker claims before claiming', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getJudgmentJobSqlitePath} = await import('../cron/judgmentsJobs/judgmentJobPaths.ts')
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const sqliteService = getJudgmentJobSqliteService()
+  const projectId = `snapshot-requeue-project-${Date.now()}`
+  const modelId = `snapshot-requeue-model-${Date.now()}`
+  const connectionId = `snapshot-requeue-connection-${Date.now()}`
+  const jobId = `snapshot-requeue-job-${Date.now()}`
+  const staleArticleId = `snapshot-requeue-stale-article-${Date.now()}`
+  const freshArticleId = `snapshot-requeue-fresh-article-${Date.now()}`
+  const stalePromptId = `snapshot-requeue-stale-prompt-${Date.now()}`
+  const freshPromptId = `snapshot-requeue-fresh-prompt-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(
+    jobId,
+    [
+      {articleId: staleArticleId, promptId: stalePromptId},
+      {articleId: freshArticleId, promptId: freshPromptId},
+    ],
+    'server-a',
+  )
+
+  const staleClaimResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/claims`, {
+      body: JSON.stringify({claimedBy: 'judge-worker-old', limit: 1}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const staleClaimBody = (await staleClaimResponse.json()) as {data: {claims: Array<{recordId: string}>}}
+  const [staleClaim] = staleClaimBody.data.claims
+
+  if (!staleClaim) {
+    throw new Error('Expected stale owner-backed claim')
+  }
+
+  const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+
+  try {
+    sqliteDatabase
+      .query(
+        `
+          UPDATE queue_prompt
+          SET sent_at = ?, updated_at = ?
+          WHERE id = ?
+        `,
+      )
+      .run('2026-04-01T00:00:00.000Z', '2026-04-01T00:00:00.000Z', staleClaim.recordId)
+  } finally {
+    sqliteDatabase.close()
+  }
+
+  const nextClaimResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/claims`, {
+      body: JSON.stringify({claimedBy: 'judge-worker-new', limit: 2, protectedRecordIds: []}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const nextClaimBody = (await nextClaimResponse.json()) as {
+    data: {claims: Array<{articleId: string; recordId: string}>}
+  }
+
+  expect(nextClaimResponse.status).toBe(200)
+  expect(
+    nextClaimBody.data.claims.map((claim) => {
+      return claim.articleId
+    }),
+  ).toEqual([staleArticleId, freshArticleId])
+  expect(await sqliteService.getClaimedCount(jobId)).toBe(2)
+  expect(await sqliteService.getReadyCount(jobId)).toBe(0)
 
   await sqliteService.closeAll()
 })

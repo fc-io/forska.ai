@@ -254,13 +254,15 @@ export const claimOwnerJudgmentJobPrompts = async ({
   claimedBy,
   jobId,
   limit,
+  protectedRecordIds,
 }: {
   claimedBy: string
   jobId: string
   limit: number
+  protectedRecordIds?: string[]
 }): Promise<PromptToProcess[]> => {
   const data = await requestOwnerJson<{claims: PromptToProcess[]}>({
-    body: {claimedBy, limit},
+    body: {claimedBy, limit, protectedRecordIds},
     method: 'POST',
     path: `/api/judgmentsjobs/${jobId}/claims`,
   })

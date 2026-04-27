@@ -2,7 +2,7 @@ import {Elysia, t} from 'elysia'
 
 import {getUnassessedArticlesFromOlap, getUnassessedCountFromOlap} from '../../services/olap/unassessedArticlesOlap.ts'
 import type {OwnerBackedJudgmentJobInfo} from '../cron/judgmentsJobs/judgeWorkerCompletionJournal.ts'
-import {getJudgmentDispatchProviderStats} from '../cron/judgmentsJobs/judgmentDispatchRuntime.ts'
+import {getAggregatedJudgmentDispatchTelemetry} from '../cron/judgmentsJobs/judgmentDispatchTelemetry.ts'
 import {
   getJudgmentEndpointAvailability,
   getJudgmentEndpointAvailabilityDiagnostics,
@@ -27,7 +27,6 @@ import {
 import {getJudgmentJobStorageTransferRuntime} from '../cron/judgmentsJobs/judgmentJobStorageTransferRuntime.ts'
 import type {RunningJudgmentJob} from '../cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts'
 import {getEffectiveProviderCap} from '../cron/judgmentsJobs/judgmentsJobsSendToLLM.ts'
-import {getJudgmentRequestStats} from '../cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {getProviderConnectionForStoredModel} from '../providers/providerConnectionRepository.ts'
 import {assertStoredProviderModelRuntimeMatch} from '../providers/providerRuntimeModelGuard.ts'
 import {getProviderConnectionEffectiveBaseURL} from '../providers/providerRuntimeState.ts'
@@ -267,9 +266,10 @@ type JudgmentCompletionTokenUseSummary = {
   totalSuccessTokens: number
   totalTokens: number
 }
-type JudgmentClaimRequestBody = {claimedBy?: string; limit?: number}
+type JudgmentClaimRequestBody = {claimedBy?: string; limit?: number; protectedRecordIds?: string[]}
 type JudgmentSnapshotQuery = {executionSnapshotHash?: string; hash?: string}
 const unassessedCountTTLms = 10_000
+const abandonedClaimGraceMs = 30_000
 const staleImportThresholdMs = 15 * 60 * 1_000
 const largeWalThresholdBytes = 64 * 1_024 * 1_024
 const unassessedCountCache = new Map<string, UnassessedCountCacheValue>()
@@ -284,7 +284,11 @@ const systemSqliteFallbackStepsSchema = t.Array(
   t.Union([t.Literal('checkpoint'), t.Literal('diagnostic'), t.Literal('export')]),
 )
 const judgmentClaimRequestSchema = t.Optional(
-  t.Object({claimedBy: t.Optional(t.String()), limit: t.Optional(t.Number())}),
+  t.Object({
+    claimedBy: t.Optional(t.String()),
+    limit: t.Optional(t.Number()),
+    protectedRecordIds: t.Optional(t.Array(t.String())),
+  }),
 )
 const judgmentCompletionBodySchema = t.Object({
   articleId: t.String(),
@@ -519,9 +523,19 @@ const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBac
 }
 
 const claimJudgmentJobPrompts = async (jobId: string, body: JudgmentClaimRequestBody | undefined) => {
+  const claimedBy = body?.claimedBy ?? judgmentJobServerId
+  const requeueInput = {
+    jobId,
+    serverJobId: claimedBy,
+    staleBefore: new Date(Date.now() - abandonedClaimGraceMs),
+    ...(body?.protectedRecordIds !== undefined ? {protectedRecordIds: body.protectedRecordIds} : {}),
+  }
+
+  await getJudgmentJobSqliteService().requeueAbandonedSentPrompts(requeueInput)
+
   const claims = await getJudgmentJobSqliteService().claimReadyPrompts(
     jobId,
-    body?.claimedBy ?? judgmentJobServerId,
+    claimedBy,
     getNormalizedClaimLimit(body?.limit ?? 1),
   )
 
@@ -2313,7 +2327,6 @@ export const judgmentsJobsRoutes = new Elysia()
             judgingRuntimePromise,
             providerConnectionPromise,
           ])
-          const requestRuntimeStats = getJudgmentRequestStats(job.id)
           const storagePolicy = getStoragePolicy({job, sqliteHealth})
           const recentTransfer = getJudgmentJobStorageTransferRuntime(job.id)
           const effectiveBaseURL = providerConnection
@@ -2345,12 +2358,14 @@ export const judgmentsJobsRoutes = new Elysia()
               storageState: job.storageState,
             },
           })
-          const dispatchStats = await getJudgmentDispatchProviderStats({
+          const dispatchTelemetry = await getAggregatedJudgmentDispatchTelemetry({
             jobId: job.id,
             providerConnectionId: providerConnection?.id ?? null,
             providerMaxInflightRequests: effectiveProviderCap.maxInflight,
             providerUsesFamilyDefault: effectiveProviderCap.usesFamilyDefault,
           })
+          const dispatchStats = dispatchTelemetry.dispatch
+          const requestRuntimeStats = dispatchTelemetry.request
           const providerActiveFillPct =
             dispatchStats.providerActiveLimit > 0
               ? Math.round((dispatchStats.providerActivePromptCount / dispatchStats.providerActiveLimit) * 100)

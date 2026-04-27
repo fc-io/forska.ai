@@ -20,6 +20,7 @@ import {duckdbOwnerConnectionsRoutes} from './routes/DuckdbOwnerConnectionsRoute
 import {duckdbStudioRoutes} from './routes/DuckdbStudioRoutes.ts'
 import {humanAssessmentRoutes} from './routes/HumanAssessmentRoutes.ts'
 import {importRoutes} from './routes/ImportRoutes.ts'
+import {judgmentDispatchTelemetryRoutes} from './routes/JudgmentDispatchTelemetryRoutes.ts'
 import {judgmentsJobsRoutes} from './routes/JudgmentsJobsRoutes.ts'
 import {judgmentsRoutes} from './routes/JudgmentsRoutes.ts'
 import {llmStatusRoutes} from './routes/LlmStatusRoutes.ts'
@@ -189,6 +190,7 @@ export const app = new Elysia()
   .use(apiProxyRoutes)
   .use(runtimeReadyRoutes)
   .use(duckdbOwnerConnectionsRoutes)
+  .use(judgmentDispatchTelemetryRoutes)
   .use(maintenanceCronRoutes)
   .use(judgmentCronRoutes)
   .use(publicProductApiRoutes)

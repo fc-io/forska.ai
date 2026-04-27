@@ -26,8 +26,14 @@ const normalizePathname = (pathname: string) => {
 const isJudgmentJobReadableDiagnosticsPath = (pathname: string, method: string) => {
   const normalizedMethod = method.toUpperCase()
   const dynamicMatch = pathname.match(/^\/api\/judgmentsjobs\/[^/]+(?:\/health)?$/)
+  const dispatchTelemetryMatch = pathname.match(/^\/api\/admin\/judgment-dispatch-runtime\/[^/]+$/)
 
-  return normalizedMethod === 'GET' && (ownerlessReadableDiagnosticsPaths.includes(pathname) || dynamicMatch !== null)
+  return (
+    normalizedMethod === 'GET'
+    && (ownerlessReadableDiagnosticsPaths.includes(pathname)
+      || dynamicMatch !== null
+      || dispatchTelemetryMatch !== null)
+  )
 }
 
 const isOwnerBackedJudgmentJobPath = (pathname: string, method: string) => {

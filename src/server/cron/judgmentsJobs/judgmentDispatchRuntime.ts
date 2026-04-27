@@ -11,7 +11,7 @@ import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 import {processPromptWithLLM} from './judgmentsJobsSendToLLM/processPromptWithLLM.ts'
 
-type ProviderQueueInput = {
+export type ProviderQueueInput = {
   providerConnectionId: string | null
   providerMaxInflightRequests: number | null
   providerUsesFamilyDefault: boolean

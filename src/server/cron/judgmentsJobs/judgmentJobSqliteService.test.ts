@@ -209,6 +209,11 @@ test('requeues stale same-server prompts only when they are not protected by dis
     throw new Error('Failed to claim SQLite queue prompts for protected requeue test')
   }
 
+  expect(
+    await service.requeueAbandonedSentPrompts({jobId, serverJobId, staleBefore: new Date(Date.now() + 1000)}),
+  ).toBe(0)
+  expect(await service.getClaimedCount(jobId)).toBe(2)
+
   const requeued = await service.requeueAbandonedSentPrompts({
     jobId,
     protectedRecordIds: [protectedPrompt.recordId],

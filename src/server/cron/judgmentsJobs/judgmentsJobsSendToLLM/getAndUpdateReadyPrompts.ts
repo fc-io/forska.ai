@@ -196,6 +196,7 @@ const getOwnerBackedReadyRows = async (
   serverJobId: string,
   jobId: string,
   limit: number,
+  protectedRecordIds: string[],
 ): Promise<PromptToProcess[]> => {
   const jobInfo = await getOwnerBackedJudgmentJobInfo(jobId)
 
@@ -207,7 +208,7 @@ const getOwnerBackedReadyRows = async (
   const provider = normalizeProvider(jobInfo.modelProvider)
 
   if (isCodexProvider(provider)) {
-    const claims = await claimOwnerJudgmentJobPrompts({claimedBy: serverJobId, jobId, limit})
+    const claims = await claimOwnerJudgmentJobPrompts({claimedBy: serverJobId, jobId, limit, protectedRecordIds})
     const runtime = getCodexPromptRuntime()
     const prompts = claims.map((prompt) => {
       return {
@@ -255,7 +256,7 @@ const getOwnerBackedReadyRows = async (
     return []
   }
 
-  const claims = await claimOwnerJudgmentJobPrompts({claimedBy: serverJobId, jobId, limit})
+  const claims = await claimOwnerJudgmentJobPrompts({claimedBy: serverJobId, jobId, limit, protectedRecordIds})
   const baseUrl = String(runtime.baseURL)
   const prompts = claims.map((prompt) => {
     return {
@@ -336,9 +337,10 @@ export const getAndUpdateReadyPrompts = async (
     providerMaxInflightRequests: number | null
     providerUsesFamilyDefault: boolean
   },
+  options: {protectedRecordIds?: string[]} = {},
 ): Promise<PromptToProcess[]> => {
   const prompts = shouldUseJudgeWorkerOwnerHandoff()
-    ? await getOwnerBackedReadyRows(serverJobId, jobId, limit)
+    ? await getOwnerBackedReadyRows(serverJobId, jobId, limit, options.protectedRecordIds ?? [])
     : await getSqliteReadyRows(serverJobId, jobId, limit)
 
   return prompts.map((prompt) => {
