@@ -9,6 +9,7 @@ import {
 } from '../cron/judgmentsJobs/judgmentEndpointAvailability.ts'
 import {
   runAutomaticOrphanedQueueRepairForJob,
+  runJudgmentJobAutomaticOrphanedQueueRepairAction,
   runJudgmentJobRepairAction,
 } from '../cron/judgmentsJobs/judgmentJobRepair.ts'
 import {getDefaultJudgmentServerJobId} from '../cron/judgmentsJobs/judgmentJobServerIdentity.ts'
@@ -3056,12 +3057,7 @@ export const judgmentsJobsRoutes = new Elysia()
     '/api/judgmentsjobs/:id/repair-orphaned-queue',
     async ({params, body}) => {
       return {
-        data: await runJudgmentJobRepairAction({
-          action: 'repair_orphaned_queue',
-          claimedBy: body?.claimedBy,
-          jobId: params.id,
-          systemSqliteFallbackSteps: body?.systemSqliteFallbackSteps,
-        }),
+        data: await runJudgmentJobAutomaticOrphanedQueueRepairAction({claimedBy: body?.claimedBy, jobId: params.id}),
         error: null,
       }
     },

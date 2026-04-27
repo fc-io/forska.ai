@@ -115,6 +115,7 @@ type RepairActionRunnerInput = {
 type AutomaticOrphanedQueueRepairStopReason = 'batch_limit' | 'cleared' | 'no_progress' | 'repair_failed' | 'time_limit'
 export type AutomaticOrphanedQueueRepairJobResult = {
   deletedRows: number
+  errorMessage: string | null
   jobId: string
   processedBatches: number
   remainingOrphanedJudgedRows: number
@@ -147,6 +148,10 @@ type AutomaticOrphanedQueueRepairLoopInput = Required<Pick<AutomaticOrphanedQueu
   startedAt: number
 }
 type AutomaticOrphanedQueueRepairJobsInput = Omit<AutomaticOrphanedQueueRepairInput, 'jobId'> & {jobIds: string[]}
+type AutomaticOrphanedQueueRepairJobsState = {
+  processedBatches: number
+  results: AutomaticOrphanedQueueRepairJobResult[]
+}
 
 const defaultManualQuarantineReason = 'Manually quarantined by operator'
 const retentionPruneChunkSize = 1_000
@@ -311,6 +316,20 @@ const hasAutomaticOrphanedQueueRepairTimeRemaining = ({
   return maxDurationMs > 0 && Date.now() - startedAt < maxDurationMs
 }
 
+const getRemainingAutomaticOrphanedQueueRepairDurationMs = ({
+  maxDurationMs,
+  startedAt,
+}: {
+  maxDurationMs: number
+  startedAt: number
+}) => {
+  return Math.max(0, maxDurationMs - (Date.now() - startedAt))
+}
+
+const getAutomaticOrphanedQueueRepairErrorMessage = (error: unknown) => {
+  return error instanceof Error ? error.message : String(error)
+}
+
 const getRunningStartupLocalSqliteJobIds = async () => {
   const sqliteJobIds = getJudgmentJobSqliteService().listJobIds()
 
@@ -334,6 +353,33 @@ const getAutomaticOrphanedQueueRepairIncomplete = (result: AutomaticOrphanedQueu
   return result.remainingOrphanedJudgedRows > 0 || result.stoppedReason === 'repair_failed'
 }
 
+const getFailedAutomaticOrphanedQueueRepairResult = ({
+  errorMessage,
+  jobId,
+}: {
+  errorMessage: string
+  jobId: string
+}): AutomaticOrphanedQueueRepairJobResult => {
+  return {
+    deletedRows: 0,
+    errorMessage,
+    jobId,
+    processedBatches: 0,
+    remainingOrphanedJudgedRows: 0,
+    requeuedRows: 0,
+    stoppedReason: 'repair_failed',
+  }
+}
+
+const getAutomaticOrphanedQueueRepairMessage = (result: AutomaticOrphanedQueueRepairJobResult) => {
+  const baseMessage =
+    `Orphaned queue repair processed ${result.processedBatches} batch(es) for ${result.jobId}: `
+    + `${result.requeuedRows} requeued, ${result.deletedRows} deleted, `
+    + `${result.remainingOrphanedJudgedRows} remaining; stopped: ${result.stoppedReason}.`
+
+  return result.errorMessage ? `${baseMessage} ${result.errorMessage}` : baseMessage
+}
+
 const assertAutomaticOrphanedQueueRepairCompleted = (result: AutomaticOrphanedQueueRepairJobResult) => {
   if (!getAutomaticOrphanedQueueRepairIncomplete(result)) {
     return
@@ -341,7 +387,7 @@ const assertAutomaticOrphanedQueueRepairCompleted = (result: AutomaticOrphanedQu
 
   throw new HttpError(
     409,
-    `Automatic orphaned queue repair for ${result.jobId} stopped after ${result.processedBatches} batch(es): ${result.stoppedReason}. ${result.remainingOrphanedJudgedRows} orphaned local queue row(s) remain. Retry start or run the orphaned queue repair action again.`,
+    `${getAutomaticOrphanedQueueRepairMessage(result)} Retry start or run the orphaned queue repair action again.`,
   )
 }
 
@@ -385,6 +431,7 @@ const runAutomaticOrphanedQueueRepairLoop = async ({
     if (!preflightOutcome.ok) {
       return {
         deletedRows,
+        errorMessage: preflightOutcome.message,
         jobId,
         processedBatches,
         remainingOrphanedJudgedRows: 0,
@@ -400,6 +447,7 @@ const runAutomaticOrphanedQueueRepairLoop = async ({
   if (orphanedRowsBeforeRepair <= 0) {
     return {
       deletedRows,
+      errorMessage: null,
       jobId,
       processedBatches,
       remainingOrphanedJudgedRows: 0,
@@ -411,6 +459,7 @@ const runAutomaticOrphanedQueueRepairLoop = async ({
   if (processedBatches >= maxBatches) {
     return {
       deletedRows,
+      errorMessage: null,
       jobId,
       processedBatches,
       remainingOrphanedJudgedRows: orphanedRowsBeforeRepair,
@@ -422,6 +471,7 @@ const runAutomaticOrphanedQueueRepairLoop = async ({
   if (!hasAutomaticOrphanedQueueRepairTimeRemaining({maxDurationMs, startedAt})) {
     return {
       deletedRows,
+      errorMessage: null,
       jobId,
       processedBatches,
       remainingOrphanedJudgedRows: orphanedRowsBeforeRepair,
@@ -440,6 +490,7 @@ const runAutomaticOrphanedQueueRepairLoop = async ({
   if (!repairResult.ok) {
     return {
       deletedRows: nextDeletedRows,
+      errorMessage: repairResult.message,
       jobId,
       processedBatches: nextProcessedBatches,
       remainingOrphanedJudgedRows: nextRemainingOrphanedRows,
@@ -451,6 +502,7 @@ const runAutomaticOrphanedQueueRepairLoop = async ({
   return processedRows <= 0 || nextRemainingOrphanedRows >= orphanedRowsBeforeRepair
     ? {
         deletedRows: nextDeletedRows,
+        errorMessage: null,
         jobId,
         processedBatches: nextProcessedBatches,
         remainingOrphanedJudgedRows: nextRemainingOrphanedRows,
@@ -491,6 +543,15 @@ export const runAutomaticOrphanedQueueRepairForJob = async ({
     processedBatches: 0,
     requeuedRows: 0,
     startedAt: Date.now(),
+  }).catch((error: unknown) => {
+    if (failOnIncomplete) {
+      throw error
+    }
+
+    return getFailedAutomaticOrphanedQueueRepairResult({
+      errorMessage: getAutomaticOrphanedQueueRepairErrorMessage(error),
+      jobId,
+    })
   })
 
   if (failOnIncomplete) {
@@ -508,24 +569,73 @@ export const runAutomaticOrphanedQueueRepairForJobs = async ({
   maxDurationMs,
   preflightBeforeRepair,
 }: AutomaticOrphanedQueueRepairJobsInput): Promise<AutomaticOrphanedQueueRepairSummary> => {
-  const results = await jobIds.reduce<Promise<AutomaticOrphanedQueueRepairJobResult[]>>(
-    async (resultsPromise, jobId) => {
-      const previousResults = await resultsPromise
+  const normalizedMaxBatches = normalizePositiveInteger({
+    defaultValue: automaticOrphanedQueueRepairMaxBatches,
+    value: maxBatches,
+  })
+  const normalizedMaxDurationMs = normalizePositiveInteger({
+    defaultValue: automaticOrphanedQueueRepairMaxDurationMs,
+    value: maxDurationMs,
+  })
+  const startedAt = Date.now()
+  const finalState = await jobIds.reduce<Promise<AutomaticOrphanedQueueRepairJobsState>>(
+    async (statePromise, jobId) => {
+      const state = await statePromise
+      const remainingBatchCount = Math.max(0, normalizedMaxBatches - state.processedBatches)
+      const remainingDurationMs = getRemainingAutomaticOrphanedQueueRepairDurationMs({
+        maxDurationMs: normalizedMaxDurationMs,
+        startedAt,
+      })
+
+      if (remainingBatchCount <= 0 || remainingDurationMs <= 0) {
+        return state
+      }
+
       const result = await runAutomaticOrphanedQueueRepairForJob({
         claimedBy,
         failOnIncomplete,
         jobId,
-        maxBatches,
-        maxDurationMs,
+        maxBatches: remainingBatchCount,
+        maxDurationMs: remainingDurationMs,
         preflightBeforeRepair,
       })
 
-      return [...previousResults, result]
+      return {processedBatches: state.processedBatches + result.processedBatches, results: [...state.results, result]}
     },
-    Promise.resolve([]),
+    Promise.resolve({processedBatches: 0, results: []}),
   )
 
-  return getAutomaticOrphanedQueueRepairSummary(results)
+  return getAutomaticOrphanedQueueRepairSummary(finalState.results)
+}
+
+export const runJudgmentJobAutomaticOrphanedQueueRepairAction = async ({
+  claimedBy,
+  jobId,
+}: {
+  claimedBy?: string | null
+  jobId: string
+}) => {
+  const requestedBy = claimedBy ?? getDefaultJudgmentServerJobId()
+  const result = await runAutomaticOrphanedQueueRepairForJob({
+    claimedBy: requestedBy,
+    failOnIncomplete: false,
+    jobId,
+    preflightBeforeRepair: true,
+  })
+
+  return getRepairResult({
+    action: 'repair_orphaned_queue',
+    changes: {
+      ...getEmptyRepairChanges(),
+      deletedOrphanedJudgedRows: result.deletedRows,
+      requeuedOrphanedJudgedRows: result.requeuedRows,
+      unquarantined: result.requeuedRows > 0,
+    },
+    jobId,
+    message: getAutomaticOrphanedQueueRepairMessage(result),
+    ok: !getAutomaticOrphanedQueueRepairIncomplete(result),
+    requestedBy,
+  })
 }
 
 export const runStartupAutomaticOrphanedQueueRepair = async (

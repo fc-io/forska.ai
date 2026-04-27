@@ -162,15 +162,22 @@ test('startup automatic repair requeues orphaned rows for running active SQLite 
   const modelId = `startup-repair-model-${now}`
   const projectId = `startup-repair-project-${now}`
   const runningJobId = `startup-repair-running-job-${now}`
+  const secondRunningJobId = `startup-repair-second-running-job-${now}`
   const pausedJobId = `startup-repair-paused-job-${now}`
 
   await insertProjectFixture({connectionId, modelId, projectId})
   await insertJobFixture({jobId: runningJobId, projectId, status: 'running', storageState: 'active'})
+  await insertJobFixture({jobId: secondRunningJobId, projectId, status: 'running', storageState: 'active'})
   await insertJobFixture({jobId: pausedJobId, projectId, status: 'paused', storageState: 'active'})
   await insertOrphanedJudgedQueueFixture({
     articleId: `startup-repair-running-article-${now}`,
     jobId: runningJobId,
     promptId: `startup-repair-running-prompt-${now}`,
+  })
+  await insertOrphanedJudgedQueueFixture({
+    articleId: `startup-repair-second-running-article-${now}`,
+    jobId: secondRunningJobId,
+    promptId: `startup-repair-second-running-prompt-${now}`,
   })
   await insertOrphanedJudgedQueueFixture({
     articleId: `startup-repair-paused-article-${now}`,
@@ -192,6 +199,10 @@ test('startup automatic repair requeues orphaned rows for running active SQLite 
   expect(await service.getHealthSnapshot(runningJobId)).toMatchObject({
     orphanedJudgedRowCount: 0,
     promptCounts: {claimed: 0, judged: 0, ready: 1, running: 0, skipped: 0},
+  })
+  expect(await service.getHealthSnapshot(secondRunningJobId)).toMatchObject({
+    orphanedJudgedRowCount: 1,
+    promptCounts: {claimed: 0, judged: 1, ready: 0, running: 0, skipped: 0},
   })
   expect(await service.getHealthSnapshot(pausedJobId)).toMatchObject({
     orphanedJudgedRowCount: 1,
@@ -217,7 +228,7 @@ test('startup automatic repair preflights running jobs before live health reads'
   writeFileSync(sqlitePath, 'not a sqlite database')
 
   try {
-    const summary = await repairModule.runStartupAutomaticOrphanedQueueRepair({maxBatches: 1})
+    const summary = await repairModule.runStartupAutomaticOrphanedQueueRepair({maxBatches: 100})
     const result = summary.results.find((entry) => {
       return entry.jobId === jobId
     })
