@@ -43,6 +43,7 @@ type JudgmentDispatchRuntimeService = {
     label: string
     prompts: PromptToProcess[]
   }) => Effect.Effect<{acceptedCount: number; rejectedPrompts: PromptToProcess[]}>
+  getJobDispatchPromptIds: (jobId: string) => Effect.Effect<string[]>
   getProviderDispatchStats: (
     input: ProviderQueueInput & {jobId: string},
   ) => Effect.Effect<JudgmentDispatchProviderStats>
@@ -60,6 +61,7 @@ type JudgmentDispatchRuntimeHandle = {
     label: string
     prompts: PromptToProcess[]
   }) => Promise<{acceptedCount: number; rejectedPrompts: PromptToProcess[]}>
+  getJobDispatchPromptIds: (jobId: string) => Promise<string[]>
   getProviderDispatchStats: (input: ProviderQueueInput & {jobId: string}) => Promise<JudgmentDispatchProviderStats>
   getProviderQueueCapacity: (input: ProviderQueueInput) => Promise<number>
   shutdown: (reason?: string) => Promise<void>
@@ -204,7 +206,7 @@ const createJudgmentDispatchRuntimeLayer = (
                     return undefined
                   }
 
-                  return undefined
+                  await recoverPrompts([nextPrompt.prompt], 'processing-error')
                 })
               }),
               Effect.ensuring(
@@ -285,6 +287,18 @@ const createJudgmentDispatchRuntimeLayer = (
           providerQueueLimit: state.maxQueuedPrompts,
           providerQueuedPromptCount: state.queuedPrompts.length,
         }
+      }
+
+      const getJobDispatchPromptIds = (jobId: string): string[] => {
+        return Array.from(providerStates.values()).flatMap((state) => {
+          return [...state.activePrompts, ...state.queuedPrompts]
+            .filter((entry) => {
+              return entry.prompt.jobId === jobId
+            })
+            .map((entry) => {
+              return entry.prompt.recordId
+            })
+        })
       }
 
       const cleanupProviderState = (state: ProviderDispatchState): Effect.Effect<void> => {
@@ -374,6 +388,11 @@ const createJudgmentDispatchRuntimeLayer = (
             return getProviderDispatchStats(input)
           })
         },
+        getJobDispatchPromptIds: (jobId) => {
+          return Effect.sync(() => {
+            return getJobDispatchPromptIds(jobId)
+          })
+        },
         getProviderQueueCapacity: (input) => {
           return Effect.gen(function* () {
             const state = yield* getOrCreateProviderState(input)
@@ -431,6 +450,11 @@ export const createJudgmentDispatchRuntime = (
         return service.getProviderDispatchStats(input)
       })
     },
+    getJobDispatchPromptIds: (jobId) => {
+      return withService((service) => {
+        return service.getJobDispatchPromptIds(jobId)
+      })
+    },
     getProviderQueueCapacity: (input) => {
       return withService((service) => {
         return service.getProviderQueueCapacity(input)
@@ -464,6 +488,10 @@ export const getJudgmentDispatchQueueCapacity = (input: ProviderQueueInput) => {
 
 export const getJudgmentDispatchProviderStats = (input: ProviderQueueInput & {jobId: string}) => {
   return judgmentDispatchRuntime.getProviderDispatchStats(input)
+}
+
+export const getJudgmentDispatchJobPromptIds = (jobId: string) => {
+  return judgmentDispatchRuntime.getJobDispatchPromptIds(jobId)
 }
 
 export const shutdownJudgmentDispatchRuntime = async (reason = 'shutdown') => {

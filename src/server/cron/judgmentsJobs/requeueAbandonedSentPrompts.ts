@@ -1,3 +1,4 @@
+import {getJudgmentDispatchJobPromptIds} from './judgmentDispatchRuntime.ts'
 import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from './judgmentJobSqliteService.ts'
 
 export const abandonedSentPromptGraceMs = 30_000
@@ -16,8 +17,9 @@ export const requeueAbandonedSentPrompts = async ({
   const sqliteRequeuedCounts = await Promise.all(
     jobIds.map(async (jobId) => {
       try {
+        const protectedRecordIds = await getJudgmentDispatchJobPromptIds(jobId)
         await sqliteService.ensureOwnedLease(jobId, serverJobId)
-        return sqliteService.requeueAbandonedSentPrompts({jobId, serverJobId, staleBefore: cutoff})
+        return sqliteService.requeueAbandonedSentPrompts({jobId, protectedRecordIds, serverJobId, staleBefore: cutoff})
       } catch (error) {
         if (error instanceof JudgmentJobLeaseError) {
           return 0

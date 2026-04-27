@@ -3985,10 +3985,12 @@ const sqliteService = {
   },
   requeueAbandonedSentPrompts: async ({
     jobId,
+    protectedRecordIds = [],
     serverJobId,
     staleBefore,
   }: {
     jobId: string
+    protectedRecordIds?: string[]
     serverJobId: string
     staleBefore: Date
   }): Promise<number> => {
@@ -3997,6 +3999,9 @@ const sqliteService = {
         jobId,
         false,
         (database) => {
+          const protectedIds = Array.from(new Set(protectedRecordIds))
+          const currentServerRecoveryPredicate =
+            protectedIds.length > 0 ? `id NOT IN (${getSqlPlaceholders(protectedIds.length).join(', ')})` : '1 = 1'
           const result = database
             .query(
               `
@@ -4010,11 +4015,13 @@ const sqliteService = {
               execution_snapshot_id = NULL,
               execution_snapshot_hash = NULL
           WHERE status IN ('claimed', 'running', 'sent')
-            AND COALESCE(server_id, '') <> ?
             AND sent_at <= ?
+            AND (COALESCE(server_id, '') <> ? OR ${currentServerRecoveryPredicate})
         `,
             )
-            .run(new Date().toISOString(), serverJobId, serverJobId, staleBefore.toISOString()) as {changes?: number}
+            .run(new Date().toISOString(), serverJobId, staleBefore.toISOString(), serverJobId, ...protectedIds) as {
+            changes?: number
+          }
 
           return Number(result.changes ?? 0)
         },

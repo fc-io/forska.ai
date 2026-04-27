@@ -206,8 +206,27 @@ test('reports job-local and provider dispatch stats separately', async () => {
     providerQueueLimit: 1,
     providerQueuedPromptCount: 1,
   })
+  expect(await runtime.getJobDispatchPromptIds('job-a')).toEqual(['record-active', 'record-queued'])
 
   release.resolve()
+  await runtime.shutdown('test-complete')
+})
+
+test('recovers active prompt when processor fails before terminal cleanup', async () => {
+  const recovered = mock(async (_prompts: PromptToProcess[], _reason: string) => {})
+  const runtime = createJudgmentDispatchRuntime({
+    processPrompt: async () => {
+      throw new Error('lease lost before terminal cleanup')
+    },
+    recoverPrompts: recovered,
+  })
+
+  await runtime.enqueueClaimedPrompts({label: 'recover-active', prompts: [createPrompt({recordId: 'record-active'})]})
+  await flush()
+
+  expect(recovered).toHaveBeenCalledWith([createPrompt({recordId: 'record-active'})], 'processing-error')
+  expect(await runtime.getJobDispatchPromptIds('job-a')).toEqual([])
+
   await runtime.shutdown('test-complete')
 })
 
