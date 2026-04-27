@@ -53,6 +53,10 @@ type TokenUseProjection = {
   totalFailedTokens?: number | string | null
 }
 
+type TokenUseProjectionDatabaseRow = Omit<TokenUseProjection, 'createdAt'> & {createdAt: unknown}
+
+type TokenTimelineInterval = '1min' | '5min' | '15min' | '1h' | '24h' | '1w' | '1m'
+
 type ModelInfo = {provider: string | null; modelName: string | null; version: string | null}
 type FailedRequestDetailRecord = Record<string, unknown>
 
@@ -115,6 +119,28 @@ const getTokenUseValue = (row: TokenUseRow): TokenUseRecord => {
     totalFailedCompletionTokens: row.totalFailedCompletionTokens,
     totalFailedTokens: row.totalFailedTokens,
   }
+}
+
+const getTimelineProjectionRows = (rows: TokenUseProjectionDatabaseRow[]): TokenUseProjection[] => {
+  return rows.flatMap((row) => {
+    const createdAt = getDateValue(row.createdAt)
+
+    return createdAt ? [{...row, createdAt}] : []
+  })
+}
+
+const timelineBucketExpressions: Record<TokenTimelineInterval, string> = {
+  '1min': "date_trunc('minute', created_at)",
+  '5min': "time_bucket(INTERVAL '5 minutes', created_at)",
+  '15min': "time_bucket(INTERVAL '15 minutes', created_at)",
+  '1h': "date_trunc('hour', created_at)",
+  '24h': "date_trunc('day', created_at)",
+  '1w': "time_bucket(INTERVAL '1 week', created_at)",
+  '1m': "date_trunc('month', created_at)",
+}
+
+const getTimelineBucketExpression = (interval: TokenTimelineInterval): string => {
+  return timelineBucketExpressions[interval]
 }
 
 const tokenUseSelectClause = `
@@ -242,17 +268,7 @@ const getTotals = async (params: {startTime?: string; endTime?: string}) => {
 }
 
 const getTimelineRowsForProject = async (params: {projectId: string; startDate: Date; endDate: Date}) => {
-  const rows = await getAppDatabaseService().queryJson<{
-    createdAt: unknown
-    totalPromptTokens: number | null
-    totalCompletionTokens: number | null
-    totalTokens: number | null
-    requests: number | null
-    totalSuccessPromptTokens: number | null
-    totalSuccessCompletionTokens: number | null
-    totalSuccessTokens: number | null
-    totalFailedTokens: number | null
-  }>(`
+  const rows = await getAppDatabaseService().queryJson<TokenUseProjectionDatabaseRow>(`
     SELECT
       tu.created_at AS createdAt,
       tu.total_prompt_tokens AS totalPromptTokens,
@@ -270,24 +286,11 @@ const getTimelineRowsForProject = async (params: {projectId: string; startDate: 
       AND tu.created_at < ${getTimestampLiteral(params.endDate)}
   `)
 
-  return rows.reduce<TokenUseProjection[]>((acc, row) => {
-    const createdAt = getDateValue(row.createdAt)
-    return createdAt ? [...acc, {...row, createdAt}] : acc
-  }, [])
+  return getTimelineProjectionRows(rows)
 }
 
 const getTimelineRowsAllJobs = async (params: {startDate: Date; endDate: Date}) => {
-  const rows = await getAppDatabaseService().queryJson<{
-    createdAt: unknown
-    totalPromptTokens: number | null
-    totalCompletionTokens: number | null
-    totalTokens: number | null
-    requests: number | null
-    totalSuccessPromptTokens: number | null
-    totalSuccessCompletionTokens: number | null
-    totalSuccessTokens: number | null
-    totalFailedTokens: number | null
-  }>(`
+  const rows = await getAppDatabaseService().queryJson<TokenUseProjectionDatabaseRow>(`
     SELECT
       created_at AS createdAt,
       total_prompt_tokens AS totalPromptTokens,
@@ -304,10 +307,35 @@ const getTimelineRowsAllJobs = async (params: {startDate: Date; endDate: Date}) 
       AND created_at < ${getTimestampLiteral(params.endDate)}
   `)
 
-  return rows.reduce<TokenUseProjection[]>((acc, row) => {
-    const createdAt = getDateValue(row.createdAt)
-    return createdAt ? [...acc, {...row, createdAt}] : acc
-  }, [])
+  return getTimelineProjectionRows(rows)
+}
+
+const getTimelineBucketRowsAllJobs = async (params: {
+  endDate: Date
+  interval: TokenTimelineInterval
+  startDate: Date
+}) => {
+  const bucketExpression = getTimelineBucketExpression(params.interval)
+  const rows = await getAppDatabaseService().queryJson<TokenUseProjectionDatabaseRow>(`
+    SELECT
+      ${bucketExpression} AS createdAt,
+      SUM(COALESCE(total_prompt_tokens, 0)) AS totalPromptTokens,
+      SUM(COALESCE(total_completion_tokens, 0)) AS totalCompletionTokens,
+      SUM(COALESCE(total_tokens, 0)) AS totalTokens,
+      SUM(COALESCE(requests, 0)) AS requests,
+      SUM(COALESCE(total_success_prompt_tokens, 0)) AS totalSuccessPromptTokens,
+      SUM(COALESCE(total_success_completion_tokens, 0)) AS totalSuccessCompletionTokens,
+      SUM(COALESCE(total_success_tokens, 0)) AS totalSuccessTokens,
+      SUM(COALESCE(total_failed_tokens, 0)) AS totalFailedTokens
+    FROM app.token_use
+    WHERE judgment_job_id IS NOT NULL
+      AND created_at >= ${getTimestampLiteral(params.startDate)}
+      AND created_at < ${getTimestampLiteral(params.endDate)}
+    GROUP BY 1
+    ORDER BY 1
+  `)
+
+  return getTimelineProjectionRows(rows)
 }
 
 const getFailedRequestsRows = async (params: {limit: number; offset: number}) => {
@@ -450,6 +478,7 @@ export const tokenUseQueryService = {
   getFailedRequestsCount,
   getFailedRequestsRows,
   getLargestSingleRequestRows,
+  getTimelineBucketRowsAllJobs,
   getModelInfoMap,
   getPromptHeadingMap,
   getTimelineRowsAllJobs,

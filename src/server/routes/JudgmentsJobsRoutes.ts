@@ -61,6 +61,7 @@ import {getProjectMartLargeRebuildRuntimeMetrics} from '../utils/projectMartLarg
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {probeDuckdbOwnerCutoverCompatibility} from '../utils/runtimeCutover.ts'
 import {
+  canCurrentServerOwnDuckdb,
   getCurrentServerDuckdbOwnerUrl,
   getCurrentServerRole,
   shouldCurrentServerProxyApiToOwner,
@@ -398,16 +399,33 @@ const getJudgmentJobsOwnerProxyData = async <T>(request: Request): Promise<T | n
       method: request.method,
     }),
   )
-  const body = (await response.json()) as T
+  const rawBody = await response.text()
+  const body = (() => {
+    if (rawBody.trim() === '') {
+      return null
+    }
+
+    try {
+      return JSON.parse(rawBody) as T
+    } catch {
+      return null
+    }
+  })()
 
   if (response.ok) {
-    return body
+    if (body !== null) {
+      return body
+    }
+
+    throw new HttpError(502, 'DuckDB owner proxy target returned invalid JSON')
   }
 
   const errorMessage =
     typeof body === 'object' && body !== null && 'error' in body && typeof body.error === 'string'
       ? body.error
-      : 'DuckDB owner proxy target unavailable'
+      : rawBody.trim() !== ''
+        ? rawBody.trim()
+        : 'DuckDB owner proxy target unavailable'
 
   throw new HttpError(response.status, errorMessage)
 }
@@ -1230,7 +1248,11 @@ const getSqliteHealthForReadableRoute = async ({
 }): Promise<JudgmentJobSqliteHealthSnapshot> => {
   return shouldCurrentServerRunJudgingLoops()
     ? getJudgmentJobSqliteService().getHealthSnapshot(jobId)
-    : getSqliteHealthFromFreshProjection({db, jobId})
+    : getSqliteHealthFromFreshProjection({db, jobId}).catch((error: unknown) => {
+        return canCurrentServerOwnDuckdb()
+          ? getJudgmentJobSqliteService().getHealthSnapshot(jobId)
+          : Promise.reject(error)
+      })
 }
 
 const getSqliteHealthMapForReadableRoute = async ({
@@ -1259,9 +1281,24 @@ const getSqliteHealthMapForReadableRoute = async ({
   })
 
   if (missingJobIds.length > 0) {
-    throw getMaintenanceUnavailableError(
-      `fresh SQLite health projection is unavailable for judgment jobs ${missingJobIds.join(', ')}`,
+    if (!canCurrentServerOwnDuckdb()) {
+      throw getMaintenanceUnavailableError(
+        `fresh SQLite health projection is unavailable for judgment jobs ${missingJobIds.join(', ')}`,
+      )
+    }
+
+    const missingEntries = await Promise.all(
+      missingJobIds.map(async (jobId) => {
+        return [jobId, await getJudgmentJobSqliteService().getHealthSnapshot(jobId)] as const
+      }),
     )
+
+    return new Map([
+      ...Array.from(projections.entries()).map(([jobId, projection]) => {
+        return [jobId, getProjectedSqliteHealth(projection)] as const
+      }),
+      ...missingEntries,
+    ])
   }
 
   return new Map(

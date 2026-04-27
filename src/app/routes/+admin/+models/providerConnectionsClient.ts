@@ -189,7 +189,7 @@ type ProviderConnectionsPayload = {
   connections: ProviderConnection[]
   runtime: ProviderRuntimeSummary
 }
-type ProviderConnectionsResponse = {data: ProviderConnectionsPayload; error: null}
+type ProviderConnectionsResponse = {data?: ProviderConnectionsPayload | null; error?: unknown}
 type ProviderConnectionDiscoveredModelsResponse = {data: {models: ProviderListedModel[]}; error: null}
 type ProviderConnectionMutationResponse = {data: {connection: ProviderConnection}; error: null}
 type ProviderConnectionDeleteResponse = {
@@ -243,6 +243,29 @@ export type ProviderAuthLifecycleResult = {
 }
 type ProviderAuthLifecycleResponse = {data: {result: ProviderAuthLifecycleResult}; error: null}
 
+const isProviderConnectionsPayload = (value: unknown): value is ProviderConnectionsPayload => {
+  return Boolean(
+    value
+    && typeof value === 'object'
+    && Array.isArray((value as {catalog?: unknown}).catalog)
+    && Array.isArray((value as {connections?: unknown}).connections)
+    && (value as {runtime?: unknown}).runtime
+    && typeof (value as {runtime?: unknown}).runtime === 'object',
+  )
+}
+
+const getProviderConnectionsPayload = (
+  result: ProviderConnectionsPayload | ProviderConnectionsResponse,
+): ProviderConnectionsPayload => {
+  const candidate = isProviderConnectionsPayload(result) ? result : result.data
+
+  if (!isProviderConnectionsPayload(candidate)) {
+    throw new Error('Failed to load provider connections')
+  }
+
+  return candidate
+}
+
 const postProviderAuthLifecycle = async ({
   body,
   providerKind,
@@ -269,9 +292,16 @@ const postProviderAuthLifecycle = async ({
 
 export const fetchProviderConnections = async () => {
   const response = await apiClient.api['provider-connections'].get()
-  const result = handleApiResponse<ProviderConnectionsResponse>(response, 'Failed to load provider connections')
+  const result = handleApiResponse<ProviderConnectionsPayload | ProviderConnectionsResponse>(
+    response as unknown as {
+      data?: ProviderConnectionsPayload | ProviderConnectionsResponse | null
+      error?: unknown
+      status?: number
+    },
+    'Failed to load provider connections',
+  )
 
-  return result.data
+  return getProviderConnectionsPayload(result)
 }
 
 export const createProviderConnection = async (input: {

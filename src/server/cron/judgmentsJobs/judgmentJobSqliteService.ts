@@ -1156,9 +1156,12 @@ const publishProjectRefreshAckForJobIds = async ({ackToken, jobIds}: {ackToken: 
   return jobIds.reduce<Promise<number>>(async (updatedCountPromise, currentJobId) => {
     const updatedCount = await updatedCountPromise
 
-    await sqliteService.setLastProjectRefreshAckSeq(currentJobId, ackToken)
-
-    return updatedCount + 1
+    try {
+      await sqliteService.setLastProjectRefreshAckSeq(currentJobId, ackToken)
+      return updatedCount + 1
+    } catch (error) {
+      return error instanceof JudgmentJobLeaseError ? updatedCount : Promise.reject(error)
+    }
   }, Promise.resolve(0))
 }
 
@@ -2479,7 +2482,13 @@ const pruneVisibilityAckedRetentionForJobIds = async ({
     return emptyRetentionPruneResult()
   }
 
-  const currentResult = await pruneVisibilityAckedRetentionForJob({jobId: currentJobId, maxRows, serverJobId})
+  const currentResult = await pruneVisibilityAckedRetentionForJob({jobId: currentJobId, maxRows, serverJobId}).catch(
+    (error: unknown) => {
+      return error instanceof JudgmentJobLeaseError
+        ? emptyRetentionPruneResult()
+        : Promise.reject(error)
+    },
+  )
   const remainingRows = maxRows - currentResult.outboxRowsDeleted
 
   return remainingRows <= 0
@@ -3634,6 +3643,8 @@ const sqliteService = {
             .run(staleBefore.toISOString()) as {changes?: number}
 
           return Number(result.changes ?? 0)
+        }).catch((error: unknown) => {
+          return error instanceof JudgmentJobLeaseError ? 0 : Promise.reject(error)
         })
       }),
     )

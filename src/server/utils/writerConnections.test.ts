@@ -2,10 +2,31 @@ import {rmSync} from 'node:fs'
 
 import {expect, test} from 'bun:test'
 
-import {getDuckdbOwnerConnectionsOverview, upsertDuckdbOwnerConnectionHeartbeat} from './duckdbOwnerConnections.ts'
+import {
+  getDuckdbOwnerConnectionsOverview,
+  recordDuckdbOwnerConnectionProxy,
+  upsertDuckdbOwnerConnectionHeartbeat,
+} from './duckdbOwnerConnections.ts'
 
 const removeFileIfExists = (filePath: string) => {
   rmSync(filePath, {force: true, recursive: true})
+}
+
+const getDuckdbOwnerHeaders = (startedAt: string) => {
+  return new Headers({
+    'x-forska-api-server-port': '4010',
+    'x-forska-hostname': 'test-host',
+    'x-forska-instance-id': `api-server:test-host:4010:12345:${startedAt}`,
+    'x-forska-listen-port': '4010',
+    'x-forska-pid': '12345',
+    'x-forska-process-started-at': startedAt,
+    'x-forska-runtime-profile': 'primary',
+    'x-forska-runtime-version': 'split-runtime-v1',
+    'x-forska-server-role': 'api',
+    'x-forska-service': 'api-server',
+    'x-forska-started-at': startedAt,
+    'x-forska-duckdb-owner-url': 'http://127.0.0.1:4011/',
+  })
 }
 
 test('worker registry overview reads persisted maintenance heartbeats across processes', async () => {
@@ -115,6 +136,35 @@ test('worker registry overview surfaces takeover in progress from ownerless-read
       takeoverInProgressCount: 1,
     })
   } finally {
+    removeFileIfExists(`${duckdbPath}.worker-registry`)
+  }
+})
+
+test('worker registry persists concurrent proxied requests that share the same millisecond timestamp', async () => {
+  const duckdbPath = `/tmp/f1-worker-registry-concurrent-${Date.now()}.duckdb`
+  const startedAt = new Date().toISOString()
+  const headers = getDuckdbOwnerHeaders(startedAt)
+  const originalDateNow = Date.now
+
+  Date.now = () => {
+    return 1_777_232_927_974
+  }
+
+  try {
+    await Promise.all(
+      Array.from({length: 12}, async () => {
+        return recordDuckdbOwnerConnectionProxy(headers, '/api/projects', {databasePath: duckdbPath})
+      }),
+    )
+
+    const overview = await getDuckdbOwnerConnectionsOverview({databasePath: duckdbPath})
+    const [follower] = overview.followers
+
+    expect(overview.registry.registeredProcessCount).toBe(1)
+    expect(follower?.lastRequestPath).toBe('/api/projects')
+    expect(follower?.proxyCount).toBeGreaterThan(0)
+  } finally {
+    Date.now = originalDateNow
     removeFileIfExists(`${duckdbPath}.worker-registry`)
   }
 })

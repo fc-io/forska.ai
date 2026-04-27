@@ -1,6 +1,5 @@
 import {getTokenUseQueryService} from '../../services/tokenUseQueryService.ts'
 import {
-  aggregateTokenTimelineRows,
   calculateUsageStats,
   getHighestUsagePeriod,
   type TokenTimelineInterval,
@@ -31,15 +30,9 @@ export const tokensRoutesGetTimelineAllJobsStats = async ({interval}: TimelineAl
 
   const startDate = getHighestUsagePeriod(interval)
   const endDate = new Date()
-  const usageRows = await getTokenUseQueryService().getTimelineRowsAllJobs({startDate, endDate})
-  const {usedData} = aggregateTokenTimelineRows({
-    rows: usageRows,
-    interval,
-    startDate: startDate.toISOString(),
-    endDate: endDate.toISOString(),
-  })
-  const usageStatsInput = usedData.map((row) => {
-    return {timestamp: row.timestamp, totalTokens: row.totalTokens}
+  const usageRows = await getTokenUseQueryService().getTimelineBucketRowsAllJobs({interval, startDate, endDate})
+  const usageStatsInput = usageRows.map((row) => {
+    return {timestamp: row.createdAt.toISOString(), totalTokens: Number(row.totalTokens ?? 0)}
   })
   const {highestUsage, p90Usage} = calculateUsageStats(usageStatsInput)
 

@@ -1,5 +1,6 @@
 import {getProviderConnection} from '../../providers/providerConnectionRepository.ts'
 import {testProviderConnectionHealth} from '../../providers/providerHealthService.ts'
+import type {ProviderConnectionRecord} from '../../providers/providerTypes.ts'
 import {workerLoadBalancer} from '../../utils/workerLoadBalancer.ts'
 import {
   classifyConnectionFailure,
@@ -164,17 +165,19 @@ const getProbeFailure = ({
 const probeJudgmentEndpointAvailability = async ({
   baseURL,
   provider,
+  providerConnection,
   providerConnectionId,
 }: {
   baseURL: string
   provider: string | null | undefined
+  providerConnection?: ProviderConnectionRecord | null
   providerConnectionId: string | null
 }): Promise<void> => {
   if (!providerConnectionId) {
     return undefined
   }
 
-  const connection = await getProviderConnection(providerConnectionId)
+  const connection = providerConnection ?? (await getProviderConnection(providerConnectionId))
 
   if (!connection) {
     const failure = classifyConnectionFailure({
@@ -635,12 +638,14 @@ export const withJudgmentRequest = async <T>(
     providerConnectionId,
     providerMaxInflightRequests,
     providerUsesFamilyDefault,
+    providerConnection,
     workerUrls,
   }: {
     judgmentsJobId: string
     provider: string | null | undefined
     fallbackBaseURL: string
     providerConnectionId: string | null
+    providerConnection?: ProviderConnectionRecord | null
     providerMaxInflightRequests: number | null
     providerUsesFamilyDefault: boolean
     workerUrls: string[]
@@ -659,7 +664,12 @@ export const withJudgmentRequest = async <T>(
 
   try {
     if (slot.requiresProbe) {
-      await probeJudgmentEndpointAvailability({baseURL: slot.baseURL, provider, providerConnectionId})
+      await probeJudgmentEndpointAvailability({
+        baseURL: slot.baseURL,
+        provider,
+        providerConnection,
+        providerConnectionId,
+      })
     }
 
     return await run(slot.baseURL)

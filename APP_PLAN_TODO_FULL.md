@@ -24,16 +24,17 @@
 
 ### Packaging Options
 
-- ElectroBun: best first implementation track if the goal is to stay Bun-native end to end. Keep one packaged Bun backend process for API, migrations, and background work. Pros: best runtime alignment with the existing backend, least conceptual overhead for a Bun-first team, and the best chance of preserving the current backend boot model. Cons: highest uncertainty around production packaging, signing, updates, and native dependency edge cases.
-- Electron + Bun sidecar: best fallback if ElectroBun blocks release work. Pros: lowest rewrite risk, mature macOS and Windows installer/signing ecosystem, and strong native module plus auto-update tooling. Cons: the largest bundle size and higher RAM use.
-- Tauri + Bun sidecar: likely later optimization path if installer size becomes the main priority. Pros: smaller installers and a strong native shell story. Cons: more moving parts and higher first-release integration risk than Electron.
+- ElectroBun: best first implementation track if the goal is to stay Bun-native end to end. Use a packaged Bun backend stack for API serving, maintenance-worker DuckDB ownership, and judge-worker work. Pros: best runtime alignment with the existing backend, least conceptual overhead for a Bun-first team, and the best chance of preserving the current backend boot model. Cons: highest uncertainty around production packaging, signing, updates, and native dependency edge cases.
+- Electron + Bun backend stack: best fallback if ElectroBun blocks release work. Pros: lowest rewrite risk, mature macOS and Windows installer/signing ecosystem, and strong native module plus auto-update tooling. Cons: the largest bundle size and higher RAM use.
+- Tauri + Bun backend stack: likely later optimization path if installer size becomes the main priority. Pros: smaller installers and a strong native shell story. Cons: more moving parts and higher first-release integration risk than Electron.
 - Local service + browser wrapper: fastest internal alpha path. Pros: minimal desktop-shell work. Cons: it does not feel like a normal desktop app and gives worse lifecycle, startup, update, and UX control.
 
 ### Active Recommendation
 
 - Use ElectroBun first.
-- Run one packaged Bun backend process in `SERVER_ROLE=dev-single` first unless load testing proves split API/worker roles are necessary on user machines.
+- Run the packaged Bun backend as a multi-worker stack with API, maintenance-worker, and judge-worker roles; keep `SERVER_ROLE=dev-single` only as a transitional local-dev path.
 - Load the built frontend directly inside the desktop shell and inject the API origin from the shell, so `src/appServer.ts` becomes optional instead of required.
+- Use a source-first backend artifact for the active spike and first clean-machine smoke tests; only revisit a compiled backend artifact later if the spike or release work exposes a concrete need.
 - Keep desktop support additive, not replacing the existing browser/server entrypoints.
 - Treat Codex CLI as optional user-installed tooling in packaged builds; desktop startup and normal app flows must not depend on it.
 - Do not bundle `sqlite3`; keep any `sqlite3` fallback or repair flows out of packaged startup, API serving, and normal user flows.
@@ -58,18 +59,19 @@
 
 - There is no confirmed unsigned macOS artifact smoke test.
 - There is no confirmed unsigned Windows artifact smoke test.
-- Packaged Bun bundling is not implemented yet, and the backend artifact shape is not locked yet for clean-machine smoke tests.
+- The current ElectroBun desktop launcher still starts one `SERVER_ROLE=dev-single` backend sidecar; packaged multi-worker lifecycle, ports, readiness, logs, shutdown, and restart behavior are not implemented or verified yet.
+- Packaged Bun bundling is not implemented yet, and the active source-first backend artifact shape is not yet validated by clean-machine smoke tests.
 - Packaged `@duckdb/node-api`, Bun SQLite, DuckDB migrations, SQLite job state, and restart/crash recovery are not verified.
 - Core packaged validation that normal startup and API flows do not require `sqlite3` or other unbundled CLIs is still pending.
 - The Windows strategy for subprocess lookup, spaces in profile paths, firewall prompts, and loopback behavior is unresolved.
 - Optional Codex CLI lookup and missing-binary handling are not yet verified on packaged macOS or Windows builds.
 - Release signing, notarization, installer generation, CI artifact publishing, and remote upgrades are not implemented.
-- Settings already exposes server and worker runtime diagnostics, but desktop-specific diagnostics and shell actions are not implemented yet: surfaced app version, API port, data path, DB path, log path, update state, plus "Open data folder", "Open logs folder", and recovery UX for locked or corrupt local state.
+- Settings already exposes server and worker runtime diagnostics, but desktop-specific diagnostics and shell actions are not implemented yet: surfaced app version, backend stack ports, data path, DB path, log path, update state, plus "Open data folder", "Open logs folder", and recovery UX for locked or corrupt local state.
 
 ### Recommended Next Steps
 
 - Finish the remaining desktop runtime-write audit so all writable files land under app-owned user directories in packaged mode.
-- Lock the packaged runtime shape first: bundle Bun, decide whether desktop ships backend source or a compiled backend artifact, and make clean-machine smoke tests validate that exact shape.
+- Lock the packaged runtime shape around the active source-first multi-worker spike artifact: bundle Bun, validate backend source packaging on clean-machine smoke tests, and revisit a compiled backend artifact only if later release work needs it.
 - Verify native dependencies and migrations inside packaged artifacts before investing in signing and auto-update UX.
 - Prove the packaged app boots and serves normal user flows on clean machines without `codex`, `sqlite3`, or DuckDB CLI installed.
 - Run a local macOS artifact smoke test on the chosen packaged shape, without relying on repo checkout or Bun already being on `PATH`.
@@ -85,7 +87,10 @@
 ## Target Architecture
 
 - ElectroBun shell owns window lifecycle, single-instance lock, menus, logs, crash reporting, and app updates.
-- Bun backend sidecar owns API routes, background work, migrations, DuckDB, SQLite, imports, and provider orchestration.
+- Bun backend stack owns API routes, background work, migrations, DuckDB, SQLite, imports, and provider orchestration.
+- API role owns routes and frontend-facing readiness.
+- Maintenance-worker role owns DuckDB ownership, migrations, and maintenance work.
+- Judge-worker role owns judging work and its runtime health.
 - Frontend is a packaged Vite build loaded by the shell, not by a separate local static server.
 - Frontend gets API origin from desktop runtime config instead of assuming browser localhost behavior.
 - Browser/web mode remains a supported entry path for local dev and non-desktop usage.
@@ -94,7 +99,7 @@
 ## Done Criteria
 
 - A normal user can install Forska on macOS or Windows without installing Bun, Node, or checking out the repo.
-- The app opens as a normal desktop window and manages its own backend lifecycle.
+- The app opens as a normal desktop window and manages its own backend stack lifecycle.
 - The existing browser-based run mode still works for local development and non-desktop usage.
 - First launch creates local storage safely and runs required migrations.
 - Restart, crash recovery, import flows, and background work all function in packaged mode.
@@ -108,9 +113,11 @@
 - `bun run build`
 - `bun run desktop:build`
 - `bun run lint`
+- `bun test scripts/runWithRuntimeProfile.test.ts`
 - `bun test src/server/utils/getDuckdbPath.test.ts`
 - `bun test src/server/utils/runtimeWritablePath.test.ts`
 - `bun test src/server/utils/backgroundServerStack.test.ts`
+- `bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts`
 - `bun test src/server/utils/duckdbBinary.test.ts`
 - `bun test src/desktop/getDesktopRuntimeConfig.test.ts`
 - `bun test src/desktop/desktopSingleInstance.test.ts`
@@ -118,8 +125,9 @@
 - `bun test src/app/utils/getApiRequestUrl.test.ts`
 - `bun test src/app/utils/getRuntimeAssetUrl.test.ts`
 - Run targeted ElectroBun packaging smoke tests on the chosen packaged Bun/backend shape.
-- ElectroBun verify: unsigned macOS artifact opens a desktop window, starts the backend, and reaches a healthy app state.
-- ElectroBun verify: unsigned Windows artifact opens a desktop window, starts the backend, and reaches a healthy app state.
+- ElectroBun verify: unsigned macOS artifact opens a desktop window, starts the backend stack, and reaches a healthy app state.
+- ElectroBun verify: unsigned Windows artifact opens a desktop window, starts the backend stack, and reaches a healthy app state.
+- ElectroBun verify: packaged backend diagnostics show API, maintenance-worker, and judge-worker roles with per-role readiness and logs.
 - Browser verify: `bun run dev:server` and `bun run dev:app` still boot successfully and the app works in a normal browser.
 - Browser verify: existing built web flow still serves and loads correctly outside the desktop shell.
 - macOS verify: clean install, first launch, restart, import one dataset, configure one provider, then quit and relaunch successfully.
@@ -134,7 +142,8 @@
 ## Repo Findings And Hotspots
 
 - [ ] `src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts` still shells out to `sqlite3` for fallback repair flows, so packaged desktop needs to keep that path maintenance-only and out of core runtime requirements.
-- [ ] `src/server/utils/getCodexAppServerClient.ts` still needs a platform-aware packaged-build audit so optional user-installed Codex lookup works consistently and fails gracefully when `codex` is absent.
+- [ ] `src/server/utils/getCodexAppServerClient.ts` still needs a platform-aware packaged-build audit plus packaged-app guidance surfaces so optional user-installed Codex lookup works consistently and fails gracefully when `codex` is absent.
+- [ ] `src/desktop/index.ts` still launches one `SERVER_ROLE=dev-single` backend sidecar; packaged desktop needs to launch and supervise the multi-worker stack instead.
 - [ ] Packaged builds still need the remaining audit of runtime writes that can touch `cache/`, `assets/`, temp files, lock files, exports, DuckDB, SQLite, or generated diagnostics.
 - [ ] `electrobun.config.ts` currently has no `release.baseUrl`, and `src/desktop/index.ts` does not use ElectroBun's `Updater`, so remote upgrades are not wired yet.
 
@@ -147,12 +156,15 @@
 ### 1. Architecture Decision
 
 - [ ] Close the active ElectroBun feasibility spike in `APP_PLAN_TODO_SPIKE.md` with a continue-or-fallback decision.
+- [ ] Confirm the packaged backend runtime shape: API role, maintenance-worker role, and judge-worker role launched by the desktop shell.
 - [ ] Define supported targets for v1: macOS Intel/Apple Silicon, Windows x64, and Linux later.
 - [ ] Define what "works offline" means versus what still needs network access for providers and remote runtimes.
 
 ### 2. Desktop Shell Bootstrap
 
 - See `APP_PLAN_IMPLEMENTED.md` for landed shell bootstrap work and `APP_PLAN_TODO_SPIKE.md` for the active phase-1 shell work; remaining release tasks are tracked under sections 5, 8, 9, and 15 below.
+- [ ] Replace packaged desktop `SERVER_ROLE=dev-single` launch with multi-worker stack launch while preserving browser dev flow.
+- [ ] Add desktop ownership for API, maintenance-worker, and judge-worker child processes, including readiness, logs, shutdown, relaunch, and crash recovery.
 
 ### 3. Frontend Runtime Wiring
 
@@ -173,7 +185,7 @@
 - [ ] Make the packaged desktop DB-path source of truth explicit: either keep `src/desktop/getDesktopRuntimeConfig.ts` as the packaged owner or route packaged defaults back through `src/server/utils/getDuckdbPath.ts`.
 - [ ] Audit spawned subprocess commands for Windows-safe quoting and executable lookup.
 - [ ] Audit temp-file, lock-file, and export-file naming for spaces and Windows path rules.
-- [ ] Add a packaged desktop API-port strategy that handles occupied ports with either a free-loopback fallback or an actionable startup failure path.
+- [ ] Add a packaged desktop stack-port strategy that handles occupied API, maintenance-worker, and judge-worker ports with either free-loopback fallbacks or actionable startup failure paths.
 
 ### 6. External Binary Strategy
 
@@ -190,11 +202,13 @@
 - [ ] Verify Bun SQLite behavior in the packaged backend.
 - [ ] Verify migrations run correctly on first launch and app restart.
 - [ ] Verify lock files and writer lease behavior survive restart and crash recovery.
+- [ ] Verify packaged API, maintenance-worker, and judge-worker roles start with the expected capabilities and recover without requiring `dev-single`.
 
 ### 8. Build And Packaging Pipeline
 
 - [ ] Package backend entrypoints, runtime assets, migrations, native modules, and ElectroBun shell assets.
-- [ ] Decide whether to ship backend source files or a compiled backend artifact before the first clean-machine artifact smoke tests.
+- [ ] Package the backend stack entrypoint or equivalent role entrypoints for API, maintenance-worker, and judge-worker startup.
+- [ ] Use backend source files for the first clean-machine artifact smoke tests, then decide after the spike whether release artifacts stay source-first or move to a compiled backend artifact.
 - [ ] Create local macOS ElectroBun artifacts for smoke testing on the chosen packaged Bun/backend shape.
 - [ ] Create local Windows ElectroBun artifacts for smoke testing on the chosen packaged Bun/backend shape.
 - [ ] Make artifact naming consistent by version, platform, and architecture.
@@ -204,7 +218,7 @@
 
 - [ ] Add a first-run experience that explains local storage, provider setup, and optional remote runtimes.
 - [ ] Add a clear recovery path when the local DB is locked, corrupt, or mid-migration.
-- [ ] Add app-level diagnostics: version, data path, API port, DB path, log path, and backend health.
+- [ ] Add app-level diagnostics: version, data path, backend stack ports, DB path, log path, and backend health.
 - [ ] Decide whether the app should minimize to tray/menu bar or fully quit.
 - [ ] Decide what happens on uninstall: keep user data by default or offer explicit cleanup.
 
@@ -248,8 +262,9 @@
 - [ ] Import flow works and stores files in app-owned paths.
 - [ ] Provider setup works for at least one local/manual provider and one remote provider.
 - [ ] Background jobs still run in packaged mode.
+- [ ] API, maintenance-worker, and judge-worker role readiness and restart behavior work in packaged mode.
 - [ ] App recovers from forced quit during active work.
-- [ ] Occupied desktop API port either falls back to a free loopback port or fails with an actionable recovery message.
+- [ ] Occupied desktop API, maintenance-worker, or judge-worker ports either fall back to free loopback ports or fail with actionable recovery messages.
 - [ ] Uninstall leaves or removes data according to the chosen product rule.
 
 ### 15. Remote Upgrade Strategy
@@ -265,7 +280,7 @@
 - [ ] Add desktop updater wiring in the shell with explicit states: idle, checking, available, downloading, ready, applying, failed, and up to date.
 - [ ] Add a manual "Check for updates" affordance in Settings or diagnostics before enabling background update checks.
 - [ ] Decide whether update downloads should happen automatically or only after user confirmation.
-- [ ] Before applying an update, pause or drain background work, stop the backend sidecar cleanly, then apply and relaunch.
+- [ ] Before applying an update, pause or drain background work, stop the backend stack cleanly, then apply and relaunch.
 - [ ] Preserve user data across upgrades by keeping DuckDB, SQLite, imports, logs, settings, and provider secrets outside the install directory.
 - [ ] Add an upgrade compatibility policy for database migrations: never downgrade schemas silently, record app version at migration time, and surface failed migrations with a recovery path.
 - [ ] Add a rollback policy: publish a higher version to recover from a bad release rather than replacing an existing version in place.

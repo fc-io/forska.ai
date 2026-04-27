@@ -9,11 +9,14 @@ import {
   type ProviderModelRecord,
 } from './providerTypes.ts'
 
-export type StoredProviderInvocationInput = ProviderInvokeRequest & {baseURLOverride?: string | null; modelId: string}
+export type StoredProviderInvocationContext = {connection: ProviderConnectionRecord; model: ProviderModelRecord}
+export type StoredProviderInvocationInput = ProviderInvokeRequest & {
+  baseURLOverride?: string | null
+  invocationContext?: StoredProviderInvocationContext
+  modelId: string
+}
 
-const getStoredProviderInvocationContext = async (
-  modelId: string,
-): Promise<{connection: ProviderConnectionRecord; model: ProviderModelRecord}> => {
+const getStoredProviderInvocationContext = async (modelId: string): Promise<StoredProviderInvocationContext> => {
   const [connection, models] = await Promise.all([
     getProviderConnectionForStoredModel(modelId),
     getProviderModels([modelId]),
@@ -29,6 +32,7 @@ const getStoredProviderInvocationContext = async (
 
 export const invokeStoredProviderModel = async ({
   baseURLOverride,
+  invocationContext,
   maxCompletionTokens,
   modelId,
   outputSchema,
@@ -36,9 +40,11 @@ export const invokeStoredProviderModel = async ({
   systemPrompt,
   temperature,
 }: StoredProviderInvocationInput): Promise<ProviderInvocationResult> => {
-  const {connection, model} = await getStoredProviderInvocationContext(modelId)
+  const {connection, model} = invocationContext ?? (await getStoredProviderInvocationContext(modelId))
   const definition = requireProviderRegistryEntry(connection.providerKind)
-  const runtimeCredentials = await resolveProviderRuntimeCredentials(connection)
+  const runtimeCredentials = invocationContext
+    ? await definition.resolveRuntimeCredentials({catalog: definition.catalog, connection})
+    : await resolveProviderRuntimeCredentials(connection)
   const nextRuntimeCredentials = baseURLOverride
     ? {...runtimeCredentials, baseURL: baseURLOverride}
     : runtimeCredentials

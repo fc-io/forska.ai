@@ -133,3 +133,48 @@ test('getFailedRequestById normalizes legacy failed request detail strings', asy
   expect(firstDetail?.promptIds).toEqual(['prompt-legacy'])
   expect(firstDetail?.error).toBe('Invalid JSON response')
 })
+
+test('getTimelineBucketRowsAllJobs aggregates token rows before returning them', async () => {
+  if (!tokenUseQueryService) {
+    throw new Error('Token use query service not initialized')
+  }
+
+  const startDate = new Date('2030-01-01T00:00:00.000Z')
+  const endDate = new Date('2030-01-01T00:10:00.000Z')
+  const rows = [
+    {id: 'bucket-row-1', createdAt: '2030-01-01T00:01:00.000Z', jobId: 'job-bucket', requests: 1, tokens: 12},
+    {id: 'bucket-row-2', createdAt: '2030-01-01T00:04:00.000Z', jobId: 'job-bucket', requests: 2, tokens: 20},
+    {id: 'bucket-row-3', createdAt: '2030-01-01T00:06:00.000Z', jobId: 'job-bucket', requests: 1, tokens: 7},
+    {id: 'bucket-row-ignored', createdAt: '2030-01-01T00:02:00.000Z', jobId: null, requests: 1, tokens: 999},
+  ]
+
+  await Promise.all(
+    rows.map((row) => {
+      return tokenUseQueryService.insertTokenUse({
+        id: row.id,
+        judgment_job_id: row.jobId,
+        requests: row.requests,
+        total_prompt_tokens: row.tokens,
+        total_completion_tokens: 0,
+        total_tokens: row.tokens,
+        created_at: new Date(row.createdAt),
+        updated_at: new Date(row.createdAt),
+      })
+    }),
+  )
+
+  const buckets = await tokenUseQueryService.getTimelineBucketRowsAllJobs({interval: '5min', startDate, endDate})
+
+  expect(
+    buckets.map((row) => {
+      return {
+        requests: Number(row.requests ?? 0),
+        timestamp: row.createdAt.toISOString(),
+        tokens: Number(row.totalTokens),
+      }
+    }),
+  ).toEqual([
+    {requests: 3, timestamp: '2030-01-01T00:00:00.000Z', tokens: 32},
+    {requests: 1, timestamp: '2030-01-01T00:05:00.000Z', tokens: 7},
+  ])
+})

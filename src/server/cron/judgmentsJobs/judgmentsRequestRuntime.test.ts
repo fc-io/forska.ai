@@ -1002,6 +1002,61 @@ test('failed resume probe blocks the real request and preserves the normalized f
   expect(testProviderConnectionHealth).toHaveBeenCalledTimes(1)
 })
 
+test('resume probe can use supplied provider connection without repository lookup', async () => {
+  const {withJudgmentRequest} = await loadRuntime()
+  let now = 1_000
+  Date.now = () => {
+    return now
+  }
+
+  const providerConnectionId = 'connection-owner-probe'
+  const fallbackBaseURL = 'http://owner-probe-runtime.test/v1'
+  const providerConnection = {
+    authMode: null,
+    baseURL: fallbackBaseURL,
+    config: {manualWorkerUrls: [], workerUrlMode: 'manual' as const},
+    createdAt: null,
+    enabled: true,
+    hasSecret: false,
+    id: providerConnectionId,
+    label: 'Owner probe connection',
+    lastCheckedAt: null,
+    lastError: null,
+    maxInflightRequests: 2,
+    providerKind: 'openai' as const,
+    secretRef: null,
+    updatedAt: null,
+  }
+  const failure = classifyConnectionFailure({
+    context: {effectiveBaseURL: fallbackBaseURL, endpointPath: '/v1/chat/completions', providerKind: 'openai'},
+    error: {status: 503},
+  })
+  let runStarted = false
+
+  recordConnectionFailure({effectiveBaseURL: fallbackBaseURL, failure, providerConnectionId})
+  now += 30_001
+
+  await withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-owner-probe',
+      provider: 'openai',
+      fallbackBaseURL,
+      providerConnection,
+      providerConnectionId,
+      providerMaxInflightRequests: 2,
+      providerUsesFamilyDefault: false,
+      workerUrls: [],
+    },
+    async () => {
+      runStarted = true
+    },
+  )
+
+  expect(runStarted).toBe(true)
+  expect(getProviderConnection).not.toHaveBeenCalled()
+  expect(testProviderConnectionHealth).toHaveBeenCalledWith(providerConnection, {effectiveBaseURL: fallbackBaseURL})
+})
+
 test('prompt release marks running then judged on success', async () => {
   const {processPromptWithLLM} = await loadProcessPromptModule()
 
@@ -1076,6 +1131,18 @@ test('judge-worker prompt execution uses owner-backed snapshots instead of live 
   const firstJudgeCall = judgeSinglePrompt.mock.calls[0]?.[0] as
     | {
         article: {articleTitle: string; fullText: string | null; importRoute: string | null}
+        modelConfig: {
+          providerInvocationContext?: {
+            connection: {baseURL: string | null; id: string; providerKind: string; secretRef: string | null}
+            model: {
+              id: string
+              metadataJson: unknown
+              modelName: string | null
+              provider: string
+              variant: string | null
+            }
+          }
+        }
         prompt: {originalText: string; promptHeading: string | null}
       }
     | undefined
@@ -1088,6 +1155,10 @@ test('judge-worker prompt execution uses owner-backed snapshots instead of live 
   expect(firstJudgeCall?.prompt).toMatchObject({
     originalText: 'Owner-backed prompt text',
     promptHeading: 'Owner-backed prompt heading',
+  })
+  expect(firstJudgeCall?.modelConfig.providerInvocationContext).toMatchObject({
+    connection: {baseURL: 'http://runtime.test/v1', id: 'connection-a', providerKind: 'openai', secretRef: null},
+    model: {id: 'model-a', metadataJson: null, modelName: 'model-a', provider: 'openai', variant: null},
   })
   expect(queryJson).not.toHaveBeenCalled()
   expect(getFullArticlesByIds).not.toHaveBeenCalled()

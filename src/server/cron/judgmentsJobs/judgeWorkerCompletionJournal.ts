@@ -91,8 +91,21 @@ type CompletionOutboxRow = {
   tokenUseJson: string | null
 }
 
+type CompletionReplayResult = {ackedCount: number; discardedCount: number; failedCount: number}
 type CompletionSendResult = {claimId: string; queueRecordId: string; status: string}
 type PendingTokenUseRow = {tokenUseJson: string}
+
+class OwnerBackedJudgmentRequestError extends Error {
+  responseText: string
+  status: number
+
+  constructor({message, responseText, status}: {message: string; responseText: string; status: number}) {
+    super(message)
+    this.name = 'OwnerBackedJudgmentRequestError'
+    this.responseText = responseText
+    this.status = status
+  }
+}
 
 const completionJournalLogger = createRateLimitedLogger({windowMs: 30_000})
 
@@ -106,6 +119,18 @@ export const shouldUseJudgeWorkerOwnerHandoff = (): boolean => {
 
 const parseJson = <T>(value: string): T => {
   return JSON.parse(value) as T
+}
+
+const getErrorMessageValue = (value: unknown): string => {
+  return typeof value === 'string' ? value : value == null ? '' : JSON.stringify(value)
+}
+
+const tryParseOwnerResponse = <T>(text: string): {data?: T; error?: unknown} | null => {
+  try {
+    return text.length > 0 ? (JSON.parse(text) as {data?: T; error?: unknown}) : {}
+  } catch {
+    return null
+  }
 }
 
 const getJournalPath = (): string => {
@@ -197,14 +222,25 @@ const requestOwnerJson = async <T>({
     method,
   })
   const text = await response.text()
-  const parsed = text.length > 0 ? (JSON.parse(text) as {data?: T; error?: unknown}) : {}
+  const parsed = tryParseOwnerResponse<T>(text)
+  const parsedError = parsed && 'error' in parsed ? parsed.error : undefined
 
-  if (!response.ok || parsed.error) {
-    throw new Error(
-      `owner-backed judgment request failed (${response.status}): ${
-        typeof parsed.error === 'string' ? parsed.error : text
-      }`,
-    )
+  if (!response.ok || parsedError) {
+    const responseError = getErrorMessageValue(parsedError) || text || response.statusText
+
+    throw new OwnerBackedJudgmentRequestError({
+      message: `owner-backed judgment request failed (${response.status}): ${responseError}`,
+      responseText: text,
+      status: response.status,
+    })
+  }
+
+  if (!parsed) {
+    throw new OwnerBackedJudgmentRequestError({
+      message: `owner-backed judgment request returned invalid JSON (${response.status}): ${text}`,
+      responseText: text,
+      status: response.status,
+    })
   }
 
   if (!('data' in parsed)) {
@@ -432,6 +468,37 @@ const markCompletionAcked = (database: Database, claimId: string): void => {
     .run(now, now, claimId)
 }
 
+const markCompletionDiscarded = (database: Database, claimId: string, error: unknown): void => {
+  const now = new Date().toISOString()
+
+  database
+    .query(
+      `
+        UPDATE completion_outbox
+        SET attempts = attempts + 1,
+            last_attempt_at = ?,
+            last_error = ?,
+            status = 'discarded_stale',
+            acked_at = ?,
+            updated_at = ?
+        WHERE claim_id = ?
+          AND acked_at IS NULL
+      `,
+    )
+    .run(now, error instanceof Error ? error.message : String(error), now, now, claimId)
+}
+
+const isStaleCompletionReplayError = (error: unknown): boolean => {
+  const text = error instanceof OwnerBackedJudgmentRequestError ? error.responseText || error.message : ''
+  const normalized = text.toLowerCase()
+
+  return (
+    error instanceof OwnerBackedJudgmentRequestError
+    && error.status === 409
+    && normalized.includes('missing claimed prompt identity')
+  )
+}
+
 const getCompletionPayloadFromRow = (row: CompletionOutboxRow) => {
   const payload = parseJson<JudgeWorkerCompletionPayload>(row.payloadJson)
   const tokenUse = row.tokenUseJson ? parseJson<JudgeWorkerTokenUseSummary>(row.tokenUseJson) : undefined
@@ -439,12 +506,10 @@ const getCompletionPayloadFromRow = (row: CompletionOutboxRow) => {
   return tokenUse ? {...payload, tokenUse} : payload
 }
 
-const replayCompletionRows = async (
-  rows: CompletionOutboxRow[],
-): Promise<{ackedCount: number; failedCount: number}> => {
+const replayCompletionRows = async (rows: CompletionOutboxRow[]): Promise<CompletionReplayResult> => {
   const database = openJournalDatabase()
 
-  return rows.reduce<Promise<{ackedCount: number; failedCount: number}>>(
+  return rows.reduce<Promise<CompletionReplayResult>>(
     async (summaryPromise, row) => {
       const summary = await summaryPromise
 
@@ -453,6 +518,16 @@ const replayCompletionRows = async (
         markCompletionAcked(database, row.claimId)
         return {...summary, ackedCount: summary.ackedCount + 1}
       } catch (error) {
+        if (isStaleCompletionReplayError(error)) {
+          markCompletionDiscarded(database, row.claimId, error)
+          completionJournalLogger.warn(
+            `judge-worker:completion-replay-discarded:${row.claimId}`,
+            '[judge-worker] owner completion replay discarded as stale',
+            {claimId: row.claimId, error: error instanceof Error ? error.message : String(error), jobId: row.jobId},
+          )
+          return {...summary, discardedCount: summary.discardedCount + 1}
+        }
+
         markCompletionAttemptFailed(database, row.claimId, error)
         completionJournalLogger.warn(
           `judge-worker:completion-replay-failed:${row.claimId}`,
@@ -462,17 +537,15 @@ const replayCompletionRows = async (
         return {...summary, failedCount: summary.failedCount + 1}
       }
     },
-    Promise.resolve({ackedCount: 0, failedCount: 0}),
+    Promise.resolve({ackedCount: 0, discardedCount: 0, failedCount: 0}),
   )
 }
 
-export const replayJudgeWorkerCompletionOutbox = async (): Promise<{ackedCount: number; failedCount: number}> => {
+export const replayJudgeWorkerCompletionOutbox = async (): Promise<CompletionReplayResult> => {
   return replayCompletionRows(getUnackedCompletionRows(openJournalDatabase()))
 }
 
-export const flushJudgeWorkerCompletionOutboxForClaim = async (
-  claimId: string,
-): Promise<{ackedCount: number; failedCount: number}> => {
+export const flushJudgeWorkerCompletionOutboxForClaim = async (claimId: string): Promise<CompletionReplayResult> => {
   return replayCompletionRows(getUnackedCompletionRows(openJournalDatabase(), claimId))
 }
 

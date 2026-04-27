@@ -8,6 +8,7 @@ import {
   getBackgroundServerEnvAsync,
   getBackgroundServerStackConfigAsync,
 } from '../src/server/utils/backgroundServerStack.ts'
+import {readJudgeWorkerJournalLock} from '../src/server/utils/judgeWorkerJournalIdentity.ts'
 
 type ManagedRole = 'api' | 'judge' | 'maintenance'
 type ServerProcess = Subprocess<'ignore', 'inherit', 'inherit'>
@@ -227,10 +228,53 @@ const getBackgroundServerRole = (role: ManagedRole) => {
   return role === 'judge' ? 'judge-worker' : role === 'maintenance' ? 'maintenance-worker' : role
 }
 
+const stopExternalProcess = async ({pid, processName}: {pid: number; processName: string}) => {
+  if (!isProcessAlive(pid)) {
+    return
+  }
+
+  process.kill(pid, 'SIGTERM')
+
+  if (await waitForProcessExit(pid)) {
+    return
+  }
+
+  console.error(`[server:stack] ${processName} pid=${pid} did not exit after SIGTERM; sending SIGKILL`)
+
+  if (isProcessAlive(pid)) {
+    process.kill(pid, 'SIGKILL')
+  }
+
+  if (await waitForProcessExit(pid, Date.now() + forcedKillTimeoutMs)) {
+    return
+  }
+
+  throw new Error(`Timed out waiting for ${processName} pid=${pid} to exit`)
+}
+
+const stopConflictingJudgeWorker = async (envValues: Record<string, string | undefined>) => {
+  const currentLock = readJudgeWorkerJournalLock({cwd: process.cwd(), envValues})
+
+  if (currentLock === null || !currentLock.ownedByCurrentHost || !currentLock.processAlive) {
+    return
+  }
+
+  console.log(
+    `[server:stack] taking over existing judge worker pid=${currentLock.metadata.pid} journal=${currentLock.identity.journalPath}`,
+  )
+  await stopExternalProcess({pid: currentLock.metadata.pid, processName: 'judge worker'})
+}
+
 const startServerProcess = async (role: ManagedRole): Promise<ServerProcess> => {
+  const env = await getBackgroundServerEnvAsync({baseEnv: process.env, role: getBackgroundServerRole(role)})
+
+  if (role === 'judge') {
+    await stopConflictingJudgeWorker(env)
+  }
+
   const serverProcess = spawn(getServerCommand(), {
     cwd: process.cwd(),
-    env: await getBackgroundServerEnvAsync({baseEnv: process.env, role: getBackgroundServerRole(role)}),
+    env,
     stderr: 'inherit',
     stdin: 'ignore',
     stdout: 'inherit',

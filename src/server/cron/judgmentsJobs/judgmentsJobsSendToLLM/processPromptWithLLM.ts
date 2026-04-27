@@ -3,10 +3,12 @@ import {Effect} from 'effect'
 import {judgeSinglePrompt, MAX_COMPLETION_TOKENS, RecoverableJudgeError} from '../../../../agent/judge.ts'
 import {JudgmentPersistenceError} from '../../../../agent/judge/storeSinglePromptJudgment.ts'
 import type {ArticleRecord, PublicationStatus} from '../../../../db/schemaTypes.ts'
+import type {StoredProviderInvocationContext} from '../../../providers/providerInvocationService.ts'
 import {getProviderModelMetadataPromptTokenLimit} from '../../../providers/providerModelMetadata.ts'
 import {escapeSqlString} from '../../../services/appQueryHelpers.ts'
 import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../../services/appReadOnlyDatabaseService.ts'
 import {getJudgeWorkerReadOnlyAppQueryService} from '../../../services/getAppReadOnlyQueryService.ts'
+import {normalizeProviderKind} from '../../../services/providerCatalog.ts'
 import {ensureFullText} from '../../../utils/ensureFullText.ts'
 import {processFulltextForLLM} from '../../../utils/fulltextProcessing.ts'
 import {createRateLimitedLogger} from '../../../utils/rateLimitedLogger.ts'
@@ -92,6 +94,47 @@ let promptPreparationInFlight = 0
 
 const getModelContext = (metadataJson: unknown): number => {
   return getProviderModelMetadataPromptTokenLimit(metadataJson, MAX_COMPLETION_TOKENS) ?? DEFAULT_PROMPT_TOKEN_LIMIT
+}
+
+const getOwnerBackedProviderInvocationContext = (promptToProcess: PromptToProcess): StoredProviderInvocationContext => {
+  const providerKind = normalizeProviderKind(promptToProcess.modelProvider)
+  const providerConnectionId = promptToProcess.providerConnectionId ?? `owner-backed:${promptToProcess.modelId}`
+
+  return {
+    connection: {
+      authMode: null,
+      baseURL: promptToProcess.modelBaseUrl,
+      config: {manualWorkerUrls: promptToProcess.modelWorkerUrls, workerUrlMode: 'manual'},
+      createdAt: null,
+      enabled: true,
+      hasSecret: Boolean(promptToProcess.modelSecretRef),
+      id: providerConnectionId,
+      label: providerConnectionId,
+      lastCheckedAt: null,
+      lastError: null,
+      maxInflightRequests: promptToProcess.providerMaxInflightRequests,
+      providerKind,
+      secretRef: promptToProcess.modelSecretRef,
+      updatedAt: null,
+    },
+    model: {
+      baseURL: promptToProcess.modelBaseUrl,
+      createdAt: null,
+      displayName: promptToProcess.modelName,
+      enabled: true,
+      id: promptToProcess.modelId,
+      metadataJson: promptToProcess.modelMetadataJson,
+      modelName: promptToProcess.modelName,
+      name: promptToProcess.modelName,
+      provider: providerKind,
+      providerConnectionId: promptToProcess.providerConnectionId,
+      remoteModelId: promptToProcess.modelName,
+      source: null,
+      updatedAt: null,
+      variant: promptToProcess.modelVersion,
+      version: promptToProcess.modelVersion,
+    },
+  }
 }
 
 const trimCachedLookups = <T>(cache: Map<string, Promise<T>>, maxSize: number): void => {
@@ -324,6 +367,9 @@ const processSinglePrompt = async (
       baseURL: promptToProcess.modelBaseUrl,
       provider: promptToProcess.modelProvider,
       providerConnectionId: promptToProcess.providerConnectionId,
+      providerInvocationContext: shouldUseJudgeWorkerOwnerHandoff()
+        ? getOwnerBackedProviderInvocationContext(promptToProcess)
+        : undefined,
       providerMaxInflightRequests: promptToProcess.providerMaxInflightRequests,
       providerUsesFamilyDefault: promptToProcess.providerUsesFamilyDefault,
       workerUrls: promptToProcess.modelWorkerUrls,

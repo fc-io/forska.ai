@@ -10,6 +10,26 @@ export type ProjectAccess = {
   name: string
 }
 
+export type ProjectListItem = {
+  archived: boolean
+  createdAt: Date | string | null
+  dateFrom: Date | string | null
+  dateTo: Date | string | null
+  description: string | null
+  humanJudgmentMode: 'prompt' | 'summary' | null
+  id: string
+  modelId: string
+  modelName: string | null
+  modelProvider: string | null
+  modelVersion: string | null
+  name: string
+  updatedAt: Date | string | null
+  useAbstract: boolean
+  useFulltext: boolean
+  useFulltextNoImages: boolean
+  useTitle: boolean
+}
+
 const getResponseData = <T>(
   response: {data?: T | {data: T} | null; error?: unknown; status?: number},
   errorMessage: string,
@@ -21,26 +41,68 @@ const getResponseData = <T>(
     : result
 }
 
+const isProjectListItem = (value: unknown): value is ProjectListItem => {
+  return (
+    typeof value === 'object'
+    && value !== null
+    && 'archived' in value
+    && typeof value.archived === 'boolean'
+    && 'humanJudgmentMode' in value
+    && (value.humanJudgmentMode === 'prompt'
+      || value.humanJudgmentMode === 'summary'
+      || value.humanJudgmentMode === null)
+    && 'id' in value
+    && typeof value.id === 'string'
+    && 'modelId' in value
+    && typeof value.modelId === 'string'
+    && 'name' in value
+    && typeof value.name === 'string'
+    && 'useAbstract' in value
+    && typeof value.useAbstract === 'boolean'
+    && 'useFulltext' in value
+    && typeof value.useFulltext === 'boolean'
+    && 'useFulltextNoImages' in value
+    && typeof value.useFulltextNoImages === 'boolean'
+    && 'useTitle' in value
+    && typeof value.useTitle === 'boolean'
+  )
+}
+
+const getProjectsListResponseData = (
+  response: {data?: unknown; error?: unknown; status?: number},
+  errorMessage: string,
+) => {
+  const result = getResponseData<unknown>(response, errorMessage)
+
+  if (typeof result === 'string' && result.trim().length > 0) {
+    throw new Error(result)
+  }
+
+  if (!Array.isArray(result)) {
+    throw new Error(`${errorMessage}: invalid project list response`)
+  }
+
+  if (
+    result.some((project) => {
+      return !isProjectListItem(project)
+    })
+  ) {
+    throw new Error(`${errorMessage}: invalid project list response`)
+  }
+
+  return result as ProjectListItem[]
+}
+
 export const fetchProjects = async () => {
   const response = await apiClient.api.projects.get()
 
-  if (response.error) {
-    console.error('Error fetching projects:', response.error)
-    throw new Error('Failed to fetch projects')
-  }
-
-  return response.data?.data ?? []
+  return getProjectsListResponseData(response, 'Failed to fetch projects')
 }
 
 export const fetchArchivedProjects = async () => {
   const response = await apiClient.api.projects.archived.get()
 
-  if (response.error) {
-    console.error('Error fetching archived projects:', response.error)
-    throw new Error('Failed to fetch archived projects')
-  }
-
-  return response.data?.data ?? []
+  return getProjectsListResponseData(response, 'Failed to fetch archived projects')
 }
 
 const invalidateProjectsQueries = async (queryClient: QueryClient): Promise<void> => {

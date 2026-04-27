@@ -8,6 +8,7 @@
 
 - Status as of 2026-04-26: this is still an active desktop feasibility spike. See `APP_PLAN_TODO_SPIKE.md` for current spike blockers and `APP_PLAN_TODO_FULL.md` for remaining release work.
 - The local ElectroBun dev path is working enough to prove the basic shape: desktop shell, Bun backend sidecar, packaged frontend loading, API bridge, startup UI, logs, and single-instance protection.
+- The landed desktop launcher still starts one `SERVER_ROLE=dev-single` backend sidecar; the planned packaged target has moved to a multi-worker backend stack tracked in the TODO plans.
 
 ### Done Now
 
@@ -28,7 +29,8 @@
 
 - ElectroBun remains the active first-shell implementation track.
 - Electron remains the fallback if ElectroBun blocks signed installers, native module packaging, or stable macOS/Windows distribution.
-- Packaged desktop currently targets one Bun backend sidecar in `SERVER_ROLE=dev-single` first.
+- Current desktop implementation launches one Bun backend sidecar in `SERVER_ROLE=dev-single`; this is landed transitional behavior, not the final packaged backend-stack target.
+- Packaged desktop planning now targets API, maintenance-worker, and judge-worker roles once the launcher adopts the multi-worker stack.
 - Packaged desktop loads the built frontend directly inside the shell and does not depend on `src/appServer.ts` at startup.
 - Desktop support remains additive to the normal browser/server workflows.
 
@@ -56,7 +58,7 @@
 ### 1. Architecture Decision
 
 - [x] Lock the first-shell choice to ElectroBun.
-- [x] Confirm v1 runtime shape: one Bun backend process in `dev-single` mode.
+- [x] Confirm the initial local ElectroBun dev runtime shape: one Bun backend process in `dev-single` mode.
 - [x] Decide whether the ElectroBun shell launches a separate backend process or embeds startup in-process. Default: separate backend process.
 - [x] Confirm that packaged desktop startup does not depend on `src/appServer.ts`, even though current artifacts still copy `src/`.
 - [x] Confirm that current browser/server commands remain first-class supported workflows.
@@ -104,7 +106,7 @@
 ### 14. Test Matrix
 
 - [x] Existing browser dev flow still works with `bun run dev:server` plus `bun run dev:app`.
-- [x] First launch creates data directories and runs migrations.
+- [x] Local ElectroBun dev first launch creates data directories and runs migrations; packaged first-launch migration verification remains tracked in `APP_PLAN_TODO_SPIKE.md`.
 
 ## Commands Run For This Plan
 

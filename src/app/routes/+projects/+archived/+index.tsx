@@ -8,7 +8,7 @@ import {ArchivedProjectsTable} from './archivedProjectsTable'
 
 export const ArchivedProjectsPage = () => {
   const projects = useQuery(() => {
-    return {queryKey: ['projects', 'archived'], queryFn: fetchArchivedProjects}
+    return {queryKey: ['projects', 'archived'], queryFn: fetchArchivedProjects, refetchOnMount: 'always'}
   })
 
   return (

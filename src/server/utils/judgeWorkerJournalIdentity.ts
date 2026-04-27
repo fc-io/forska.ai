@@ -25,7 +25,7 @@ export type JudgeWorkerJournalIdentity = {
   workerId: string | null
 }
 
-type JudgeWorkerJournalLockMetadata = {
+export type JudgeWorkerJournalLockMetadata = {
   acquiredAt: string
   hostname: string
   journalPath: string
@@ -33,6 +33,13 @@ type JudgeWorkerJournalLockMetadata = {
   machineFingerprint?: string
   pid: number
   workerId: string | null
+}
+
+export type JudgeWorkerJournalLockSnapshot = {
+  identity: JudgeWorkerJournalIdentity
+  metadata: JudgeWorkerJournalLockMetadata
+  ownedByCurrentHost: boolean
+  processAlive: boolean
 }
 
 type JudgeWorkerJournalLease = {
@@ -339,6 +346,28 @@ export const acquireJudgeWorkerJournalIdentity = ({
   assertWritableJournalTarget(identity)
 
   return acquireLock(identity, isProcessAliveValue)
+}
+
+export const readJudgeWorkerJournalLock = ({
+  cwd = process.cwd(),
+  envValues = process.env,
+  isProcessAliveValue = isProcessAlive,
+}: AcquireJudgeWorkerJournalIdentityOptions = {}): JudgeWorkerJournalLockSnapshot | null => {
+  const identity = resolveJudgeWorkerJournalIdentity({cwd, envValues})
+  const metadata = readLockMetadata(identity.lockPath)
+
+  if (metadata === null) {
+    return null
+  }
+
+  const ownedByCurrentHost = isLockOwnedByCurrentMachine(metadata)
+
+  return {
+    identity,
+    metadata,
+    ownedByCurrentHost,
+    processAlive: ownedByCurrentHost ? isProcessAliveValue(metadata.pid) : true,
+  }
 }
 
 export const initializeJudgeWorkerJournalIdentity = (

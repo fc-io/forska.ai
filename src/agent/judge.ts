@@ -12,7 +12,10 @@ import {
 } from '../server/cron/judgmentsJobs/connectionHealth.ts'
 import {getJudgmentEndpointAvailability} from '../server/cron/judgmentsJobs/judgmentEndpointAvailability.ts'
 import {withJudgmentRequest} from '../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
-import {invokeStoredProviderModel} from '../server/providers/providerInvocationService.ts'
+import {
+  invokeStoredProviderModel,
+  type StoredProviderInvocationContext,
+} from '../server/providers/providerInvocationService.ts'
 import {ProviderInvocationError} from '../server/providers/providerTypes.ts'
 import {inferenceRuntimeConfig} from '../server/utils/getInferenceRuntimeConfig.ts'
 import {rateLimitedLogger} from '../server/utils/rateLimitedLogger.ts'
@@ -46,6 +49,7 @@ type ModelConfigInput = {
   baseURL: string
   provider: string | null
   providerConnectionId: string | null
+  providerInvocationContext?: StoredProviderInvocationContext
   providerMaxInflightRequests: number | null
   providerUsesFamilyDefault: boolean
   workerUrls: string[]
@@ -543,6 +547,7 @@ const generateSinglePromptResponse = async ({
   baseURL,
   provider,
   providerConnectionId,
+  providerInvocationContext,
   providerMaxInflightRequests,
   providerUsesFamilyDefault,
   workerUrls,
@@ -555,6 +560,7 @@ const generateSinglePromptResponse = async ({
   baseURL: string
   provider: string | null
   providerConnectionId: string | null
+  providerInvocationContext?: StoredProviderInvocationContext
   providerMaxInflightRequests: number | null
   providerUsesFamilyDefault: boolean
   workerUrls: string[]
@@ -567,6 +573,7 @@ const generateSinglePromptResponse = async ({
       judgmentsJobId,
       provider,
       fallbackBaseURL: baseURL,
+      providerConnection: providerInvocationContext?.connection,
       providerConnectionId,
       providerMaxInflightRequests,
       providerUsesFamilyDefault,
@@ -576,6 +583,7 @@ const generateSinglePromptResponse = async ({
       try {
         const result = await invokeStoredProviderModel({
           baseURLOverride: requestBaseURL,
+          invocationContext: providerInvocationContext,
           maxCompletionTokens: MAX_COMPLETION_TOKENS,
           modelId,
           outputSchema,
@@ -926,6 +934,7 @@ export const judgeSinglePrompt = async ({
     modelId,
     provider,
     providerConnectionId,
+    providerInvocationContext,
     providerMaxInflightRequests,
     providerUsesFamilyDefault,
     workerUrls,
@@ -979,6 +988,7 @@ export const judgeSinglePrompt = async ({
           baseURL,
           provider,
           providerConnectionId,
+          providerInvocationContext,
           providerMaxInflightRequests,
           providerUsesFamilyDefault,
           workerUrls,
@@ -1295,6 +1305,7 @@ export const judgeSinglePrompt = async ({
                 baseURL,
                 provider,
                 providerConnectionId,
+                providerInvocationContext,
                 providerMaxInflightRequests,
                 providerUsesFamilyDefault,
                 workerUrls,
@@ -1551,6 +1562,7 @@ export const judgeSinglePrompt = async ({
             baseURL,
             provider,
             providerConnectionId,
+            providerInvocationContext,
             providerMaxInflightRequests,
             providerUsesFamilyDefault,
             workerUrls,

@@ -7,8 +7,11 @@ import {
   recordDuckdbOwnerConnectionProxy,
   upsertDuckdbOwnerConnectionHeartbeat,
 } from '../utils/duckdbOwnerConnections.ts'
+import {createRateLimitedLogger} from '../utils/rateLimitedLogger.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 import {runtimeReadyPath} from '../utils/runtimeReadyContract.ts'
+
+const duckdbOwnerConnectionsRouteLogger = createRateLimitedLogger({windowMs: 30_000})
 
 const duckdbOwnerConnectionCapability = t.Union([
   t.Literal('api'),
@@ -86,7 +89,13 @@ export const duckdbOwnerConnectionsRoutes = new Elysia()
     const pathname = new URL(request.url).pathname
 
     if (pathname !== runtimeReadyPath) {
-      await recordDuckdbOwnerConnectionProxy(request.headers, pathname)
+      await recordDuckdbOwnerConnectionProxy(request.headers, pathname).catch((error: unknown) => {
+        return duckdbOwnerConnectionsRouteLogger.warn(
+          'duckdb-owner-connections:proxy-record-failed',
+          '[duckdb-owner] failed to record proxied request metadata',
+          {error: error instanceof Error ? error.message : String(error), pathname},
+        )
+      })
     }
   })
   .get('/api/duckdb_owner_connections', async () => {

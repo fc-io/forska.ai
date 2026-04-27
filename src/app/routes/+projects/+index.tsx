@@ -25,7 +25,7 @@ const fetchSelectableModels = async () => {
 
 export const ProjectsPage = () => {
   const projects = useQuery(() => {
-    return {queryKey: ['projects'], queryFn: fetchProjects, staleTime: 5 * 60 * 1000}
+    return {queryKey: ['projects'], queryFn: fetchProjects, staleTime: 5 * 60 * 1000, refetchOnMount: 'always'}
   })
   const providerConnections = useQuery(() => {
     return {

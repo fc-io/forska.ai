@@ -22,6 +22,10 @@ const getProjectModelLabel = (project: Project) => {
   return project.modelName || 'Unknown model'
 }
 
+const getProjectName = (project: Project) => {
+  return typeof project.name === 'string' && project.name.trim().length > 0 ? project.name : 'Untitled project'
+}
+
 const getProjectContentUsedLabel = (project: Project) => {
   const fulltextLabel = project.useFulltextNoImages ? 'fulltext (no images)' : project.useFulltext ? 'fulltext' : null
   const parts = [project.useTitle ? 'title' : null, project.useAbstract ? 'abstract' : null, fulltextLabel].filter(
@@ -51,7 +55,7 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
   })
   const sortedProjects = createMemo(() => {
     return [...props.projects].sort((a, b) => {
-      return a.name.localeCompare(b.name)
+      return getProjectName(a).localeCompare(getProjectName(b))
     })
   })
   const providerModelById = createMemo(() => {
@@ -154,7 +158,7 @@ export const ProjectsGrid = (props: IndexProjectsGridProps) => {
               <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
                 <div class="flex items-start justify-between gap-3 mb-3">
                   <div class="flex flex-col gap-1 min-w-0">
-                    <h2 class="text-xl font-semibold truncate">{project.name}</h2>
+                    <h2 class="text-xl font-semibold truncate">{getProjectName(project)}</h2>
                     <p class="text-sm text-muted-foreground">
                       Model: {getProjectModelLabel(project)} · Content: {getProjectContentUsedLabel(project)}
                     </p>

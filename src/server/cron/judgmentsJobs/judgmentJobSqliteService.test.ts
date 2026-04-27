@@ -1547,6 +1547,67 @@ test('publishes a refresh ack token to every tracked sqlite job for the same pro
   expect((await service.getScanState(secondJobId)).lastProjectRefreshAckSeq).toBe(17)
 })
 
+test('publishProjectRefreshAck skips tracked jobs with an active competing lease', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-project-ack-skip-${Date.now()}`
+  const modelId = `model-project-ack-skip-${Date.now()}`
+  const projectId = `project-project-ack-skip-${Date.now()}`
+  const firstJobId = `job-project-ack-skip-a-${Date.now()}`
+  const secondJobId = `job-project-ack-skip-b-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Project Ack Skip Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${firstJobId}', '${projectId}', 'running')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${secondJobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(firstJobId)
+  await service.initializeJob(secondJobId)
+  await service.releaseOwnedLease(secondJobId)
+
+  writeFileSync(
+    getJudgmentJobLeasePath(secondJobId),
+    JSON.stringify(
+      {
+        acquiredAt: new Date().toISOString(),
+        apiServerPort: Number(process.env.API_SERVER_PORT ?? 0),
+        heartbeatAt: new Date().toISOString(),
+        hostname: 'foreign-host',
+        jobId: secondJobId,
+        leaseId: `active-${crypto.randomUUID()}`,
+        machineFingerprint: 'foreign-fingerprint',
+        pid: 123_456,
+        serverJobId: 'foreign-owner',
+      },
+      null,
+      2,
+    ),
+  )
+
+  expect(await service.publishProjectRefreshAck({ackToken: 17, projectId})).toBe(1)
+  expect((await service.getScanState(firstJobId)).lastProjectRefreshAckSeq).toBe(17)
+  expect((await service.getScanState(secondJobId)).lastProjectRefreshAckSeq).toBeNull()
+})
+
 test('reconciles sqlite refresh ack fanout from ledger state after a partial post-completion crash', async () => {
   if (!runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')
@@ -1628,6 +1689,80 @@ test('reconciles sqlite refresh ack fanout from ledger state after a partial pos
   expect(await service.reconcileProjectRefreshAcks({projectId})).toBe(2)
   expect((await service.getScanState(firstJobId)).lastProjectRefreshAckSeq).toBe(dirtyState?.dirtyToken ?? 0)
   expect((await service.getScanState(secondJobId)).lastProjectRefreshAckSeq).toBe(dirtyState?.dirtyToken ?? 0)
+})
+
+test('reconcileProjectRefreshAcks skips tracked jobs with an active competing lease', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const {getProjectMartRefreshStateService} = await import('../../services/projectMartRefreshStateService.ts')
+  const refreshStateService = getProjectMartRefreshStateService()
+  const service = sqliteService()
+  const connectionId = `connection-project-ack-reconcile-skip-${Date.now()}`
+  const modelId = `model-project-ack-reconcile-skip-${Date.now()}`
+  const projectId = `project-project-ack-reconcile-skip-${Date.now()}`
+  const firstJobId = `job-project-ack-reconcile-skip-a-${Date.now()}`
+  const secondJobId = `job-project-ack-reconcile-skip-b-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Project Ack Reconcile Skip Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${firstJobId}', '${projectId}', 'running')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${secondJobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(firstJobId)
+  await service.initializeJob(secondJobId)
+  await service.releaseOwnedLease(secondJobId)
+
+  const [dirtyState] = await refreshStateService.markProjectsDirtyAtomically({projects: [{projectId}]})
+  const [claim] = await refreshStateService.claimDirtyProjects({leaseMs: 1_000, limit: 1, workerId: 'worker-ack-skip'})
+
+  expect(claim?.claimedToken).toBe(dirtyState?.dirtyToken)
+
+  await refreshStateService.completeProjectRefresh({
+    completedToken: dirtyState?.dirtyToken ?? 0,
+    projectId,
+    workerId: 'worker-ack-skip',
+  })
+
+  writeFileSync(
+    getJudgmentJobLeasePath(secondJobId),
+    JSON.stringify(
+      {
+        acquiredAt: new Date().toISOString(),
+        apiServerPort: Number(process.env.API_SERVER_PORT ?? 0),
+        heartbeatAt: new Date().toISOString(),
+        hostname: 'foreign-host',
+        jobId: secondJobId,
+        leaseId: `active-${crypto.randomUUID()}`,
+        machineFingerprint: 'foreign-fingerprint',
+        pid: 123_456,
+        serverJobId: 'foreign-owner',
+      },
+      null,
+      2,
+    ),
+  )
+
+  expect(await service.reconcileProjectRefreshAcks({projectId})).toBe(1)
+  expect((await service.getScanState(firstJobId)).lastProjectRefreshAckSeq).toBe(dirtyState?.dirtyToken ?? 0)
+  expect((await service.getScanState(secondJobId)).lastProjectRefreshAckSeq).toBeNull()
 })
 
 test('isolated SQLite preflight upgrades legacy ack columns before readonly validation', async () => {
@@ -1881,6 +2016,59 @@ test('claims, reaps, releases, and completes outbox batches', async () => {
   expect(thirdClaim?.rows).toHaveLength(1)
   expect(await service.completeOutboxClaim({claimId: thirdClaim?.claim.claimId ?? '', jobId})).toBe(1)
   expect(await service.getUnexportedOutboxCount(jobId)).toBe(0)
+})
+
+test('reapStaleOutboxClaims skips jobs with an active competing lease', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const connectionId = `connection-reap-skip-${Date.now()}`
+  const modelId = `model-reap-skip-${Date.now()}`
+  const projectId = `project-reap-skip-${Date.now()}`
+  const jobId = `job-reap-skip-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Reap Skip Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.releaseOwnedLease(jobId)
+
+  writeFileSync(
+    getJudgmentJobLeasePath(jobId),
+    JSON.stringify(
+      {
+        acquiredAt: new Date().toISOString(),
+        apiServerPort: Number(process.env.API_SERVER_PORT ?? 0),
+        heartbeatAt: new Date().toISOString(),
+        hostname: 'foreign-host',
+        jobId,
+        leaseId: `active-${crypto.randomUUID()}`,
+        machineFingerprint: 'foreign-fingerprint',
+        pid: 123_456,
+        serverJobId: 'foreign-owner',
+      },
+      null,
+      2,
+    ),
+  )
+
+  expect(await service.reapStaleOutboxClaims({jobId, staleBefore: new Date(Date.now() + 1000)})).toBe(0)
 })
 
 test('computes a per-job SQLite health snapshot', async () => {
@@ -2138,6 +2326,80 @@ test('prunes only visibility-acked exported outbox rows in bounded batches', asy
       return row.status === 'judged'
     })?.count ?? 0,
   ).toBe(0)
+})
+
+test('pruneVisibilityAckedRetention skips jobs with an active competing lease', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const {getProjectMartRefreshStateService} = await import('../../services/projectMartRefreshStateService.ts')
+  const refreshStateService = getProjectMartRefreshStateService()
+  const service = sqliteService()
+  const connectionId = `connection-prune-skip-${Date.now()}`
+  const modelId = `model-prune-skip-${Date.now()}`
+  const projectId = `project-prune-skip-${Date.now()}`
+  const jobId = `job-prune-skip-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Prune Skip Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  await service.initializeJob(jobId)
+
+  const claimedOutboxBatch = await service.claimPendingOutboxBatch({
+    claimedBy: 'server-a',
+    jobId,
+    maxBytes: 1024 * 1024,
+    maxRows: 10,
+  })
+  const [dirtyState] = await refreshStateService.markProjectsDirtyAtomically({projects: [{projectId}]})
+
+  await service.completeOutboxClaim({claimId: claimedOutboxBatch?.claim.claimId ?? '', jobId})
+  await refreshStateService.completeProjectRefresh({
+    completedToken: dirtyState?.dirtyToken ?? 0,
+    projectId,
+    workerId: 'worker-prune-skip',
+  })
+  await service.setLastProjectRefreshAckSeq(jobId, dirtyState?.dirtyToken ?? null)
+  await service.releaseOwnedLease(jobId)
+
+  writeFileSync(
+    getJudgmentJobLeasePath(jobId),
+    JSON.stringify(
+      {
+        acquiredAt: new Date().toISOString(),
+        apiServerPort: Number(process.env.API_SERVER_PORT ?? 0),
+        heartbeatAt: new Date().toISOString(),
+        hostname: 'foreign-host',
+        jobId,
+        leaseId: `active-${crypto.randomUUID()}`,
+        machineFingerprint: 'foreign-fingerprint',
+        pid: 123_456,
+        serverJobId: 'foreign-owner',
+      },
+      null,
+      2,
+    ),
+  )
+
+  expect(await service.pruneVisibilityAckedRetention({jobId, maxRows: 10})).toEqual({
+    outboxRowsDeleted: 0,
+    queuePromptRowsDeleted: 0,
+  })
 })
 
 test('published refresh ack tokens unlock retention pruning for every sqlite job in the project', async () => {

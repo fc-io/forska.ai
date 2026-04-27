@@ -146,6 +146,7 @@ test('background server stack builds judge-worker env without DuckDB ownership',
         BACKGROUND_JUDGE_PORT: '3303',
         BACKGROUND_MAINTENANCE_PORT: '3302',
         JUDGE_WORKER_ID: 'test-judge-worker',
+        JUDGE_WORKER_JOURNAL_PATH: 'data/custom/judge.sqlite',
       },
       localAppSettings: defaultLocalAppSettings,
       role: 'judge-worker',
@@ -154,6 +155,29 @@ test('background server stack builds judge-worker env without DuckDB ownership',
     API_SERVER_PORT: '3303',
     FORSKA_RUNTIME_SERVICE: 'judge-worker-server',
     JUDGE_WORKER_ID: 'test-judge-worker',
+    JUDGE_WORKER_JOURNAL_PATH: '',
+    SERVER_ROLE: 'judge-worker',
+    SERVER_DUCKDB_OWNER_URL: 'http://127.0.0.1:3302',
+  })
+})
+
+test('background server stack async judge-worker env clears inherited explicit journal paths', async () => {
+  await expect(
+    getBackgroundServerEnvAsync({
+      baseEnv: {
+        API_SERVER_PORT: '3301',
+        BACKGROUND_JUDGE_PORT: '3303',
+        BACKGROUND_MAINTENANCE_PORT: '3302',
+        JUDGE_WORKER_ID: 'test-judge-worker',
+        JUDGE_WORKER_JOURNAL_PATH: 'data/custom/judge.sqlite',
+      },
+      localAppSettings: defaultLocalAppSettings,
+      role: 'judge-worker',
+    }),
+  ).resolves.toMatchObject({
+    API_SERVER_PORT: '3303',
+    JUDGE_WORKER_ID: 'test-judge-worker',
+    JUDGE_WORKER_JOURNAL_PATH: '',
     SERVER_ROLE: 'judge-worker',
     SERVER_DUCKDB_OWNER_URL: 'http://127.0.0.1:3302',
   })

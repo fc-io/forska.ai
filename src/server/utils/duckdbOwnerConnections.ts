@@ -1,4 +1,4 @@
-import {createHash} from 'node:crypto'
+import {createHash, randomUUID} from 'node:crypto'
 import {mkdir, readdir, readFile, rename, rm, unlink, writeFile} from 'node:fs/promises'
 import {join} from 'node:path'
 
@@ -825,10 +825,30 @@ const writeWorkerRegistryRecord = async (record: DuckdbOwnerConnectionStoredReco
     return
   }
 
-  await mkdir(storageDirectory, {recursive: true})
-  const temporaryPath = `${recordPath}.${process.pid}.${Date.now()}.tmp`
-  await writeFile(temporaryPath, JSON.stringify({storageVersion: workerRegistryStorageVersion, ...record}, null, 2))
-  await rename(temporaryPath, recordPath)
+  const payload = JSON.stringify({storageVersion: workerRegistryStorageVersion, ...record}, null, 2)
+
+  const persistRecord = async (retriesRemaining: number): Promise<void> => {
+    await mkdir(storageDirectory, {recursive: true})
+    const temporaryPath = `${recordPath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`
+
+    await writeFile(temporaryPath, payload)
+
+    return rename(temporaryPath, recordPath).catch((error: unknown) => {
+      if (!isMissingFileError(error) || retriesRemaining <= 0) {
+        throw error
+      }
+
+      return unlink(temporaryPath)
+        .catch(() => {
+          return undefined
+        })
+        .then(() => {
+          return persistRecord(retriesRemaining - 1)
+        })
+    })
+  }
+
+  return persistRecord(1)
 }
 
 const readWorkerRegistryRecords = async (

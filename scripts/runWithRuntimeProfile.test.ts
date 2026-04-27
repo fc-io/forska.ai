@@ -40,6 +40,24 @@ const waitForRuntimeReady = async (port: number, timeoutMs: number): Promise<Run
   return waitForRuntimeReadyUntil(port, Date.now() + timeoutMs)
 }
 
+const waitForProcessExit = async (processToWaitFor: SpawnedProcess, timeoutMs: number) => {
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error(`Timed out waiting for pid=${processToWaitFor.pid ?? 'unknown'} to exit`))
+    }, timeoutMs)
+
+    processToWaitFor.exited
+      .then(() => {
+        clearTimeout(timeout)
+        resolve()
+      })
+      .catch((error) => {
+        clearTimeout(timeout)
+        reject(error)
+      })
+  })
+}
+
 const stopProcess = async (processToStop: SpawnedProcess) => {
   if (processToStop.exitCode === null) {
     processToStop.kill('SIGTERM')
@@ -88,6 +106,26 @@ test('judge-only launcher uses the judge-worker runtime role and journal identit
     SERVER_DUCKDB_OWNER_URL: 'http://127.0.0.1:3102',
     SERVER_ROLE: 'judge-worker',
   })
+})
+
+test('judge-only launcher clears inherited explicit journal paths', () => {
+  const previousJournalPath = process.env.JUDGE_WORKER_JOURNAL_PATH
+  process.env.JUDGE_WORKER_JOURNAL_PATH = 'data/custom/judge.sqlite'
+
+  try {
+    expect(getRuntimeProfileCommandEnv({mode: 'judge-only-server', profileName: 'primary'})).toMatchObject({
+      JUDGE_WORKER_ID: 'primary-judge-worker',
+      JUDGE_WORKER_JOURNAL_PATH: '',
+      SERVER_ROLE: 'judge-worker',
+    })
+  } finally {
+    if (previousJournalPath === undefined) {
+      delete process.env.JUDGE_WORKER_JOURNAL_PATH
+      return
+    }
+
+    process.env.JUDGE_WORKER_JOURNAL_PATH = previousJournalPath
+  }
 })
 
 test('stacked server launcher carries split-role port and journal identity wiring', () => {
@@ -143,3 +181,78 @@ test('server stack script starts api, maintenance-worker, and judge-worker toget
     removePathIfExists(dataRoot)
   }
 })
+
+test(
+  'server stack startup takes over a live conflicting judge worker before spawning its own judge role',
+  {timeout: 30_000},
+  async () => {
+    const dataRoot = join(process.cwd(), 'data', 'runtime', `run-with-runtime-profile-judge-takeover-${Date.now()}`)
+    const duckdbPath = join(dataRoot, 'forska.duckdb')
+    const standaloneJudgePort = 34770
+    const apiPort = 34771
+    const maintenancePort = 34772
+    const judgePort = 34773
+
+    mkdirSync(dataRoot, {recursive: true})
+
+    const conflictingJudgeProcess = globalThis.Bun.spawn(['bun', 'run', 'src/server/index.ts'], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: String(standaloneJudgePort),
+        DUCKDB_PATH: duckdbPath,
+        JUDGE_WORKER_ID: 'run-with-runtime-profile-stack-judge',
+        JUDGE_WORKER_JOURNAL_PATH: '',
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_DUCKDB_OWNER_URL: '',
+        SERVER_ROLE: 'judge-worker',
+        VITE_PORT: '34769',
+      },
+      stderr: 'pipe',
+      stdout: 'pipe',
+    })
+
+    let stackProcess: SpawnedProcess | null = null
+
+    try {
+      await waitForRuntimeReady(standaloneJudgePort, 20_000)
+
+      stackProcess = globalThis.Bun.spawn(['bun', 'scripts/startServerStack.ts'], {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          API_SERVER_PORT: String(apiPort),
+          BACKGROUND_JUDGE_PORT: String(judgePort),
+          BACKGROUND_MAINTENANCE_PORT: String(maintenancePort),
+          DUCKDB_PATH: duckdbPath,
+          JUDGE_WORKER_ID: 'run-with-runtime-profile-stack-judge',
+          JUDGE_WORKER_JOURNAL_PATH: '',
+          RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+          RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+          VITE_PORT: '34769',
+        },
+        stderr: 'pipe',
+        stdout: 'pipe',
+      })
+
+      const [apiReady, maintenanceReady, judgeReady] = await Promise.all([
+        waitForRuntimeReady(apiPort, 20_000),
+        waitForRuntimeReady(maintenancePort, 20_000),
+        waitForRuntimeReady(judgePort, 20_000),
+        waitForProcessExit(conflictingJudgeProcess, 20_000),
+      ])
+
+      expect(apiReady.data).toMatchObject({ready: true, role: 'api'})
+      expect(maintenanceReady.data).toMatchObject({ready: true, role: 'maintenance-worker'})
+      expect(judgeReady.data).toMatchObject({ready: true, role: 'judge-worker'})
+    } finally {
+      if (stackProcess !== null) {
+        await stopProcess(stackProcess)
+      }
+
+      await stopProcess(conflictingJudgeProcess)
+      removePathIfExists(dataRoot)
+    }
+  },
+)
