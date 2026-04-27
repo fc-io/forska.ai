@@ -27,8 +27,8 @@
 
 - `package.json` already has `desktop:dev` and `desktop:build`.
 - `src/desktop/index.ts` already launches one `SERVER_ROLE=dev-single` backend sidecar, bridges `/api` requests, and waits for `/api/runtime/ready`; it does not yet launch or own the packaged multi-worker stack.
-- `scripts/startServerStack.ts` already manages API, maintenance-worker, and judge-worker subprocesses for the `server-stack` runtime-profile path, but desktop packaging has not adopted that lifecycle yet.
-- `scripts/runWithRuntimeProfile.ts` and `scripts/startServerStack.ts` still use bare `bun`/`bunx` commands and repo-relative entrypoints for current dev and server-stack launch paths.
+- `scripts/startServerStack.ts` already manages API, maintenance-worker, and judge-worker subprocesses for the `server-stack` runtime-profile path and the `stacked-server` dev path through `scripts/devServerWatch.ts`, but desktop packaging has not adopted that lifecycle yet.
+- `scripts/runWithRuntimeProfile.ts`, `scripts/devServerWatch.ts`, and `scripts/startServerStack.ts` still use bare `bun`/`bunx` commands and repo-relative entrypoints for current dev and server-stack launch paths.
 - `src/desktop/getDesktopRuntimeConfig.ts` still resolves Bun from `FORSKA_DESKTOP_BUN_BIN`, host lookup, or bare `bun` instead of an artifact-relative bundled Bun, and still defaults desktop API to `32101`.
 - `electrobun.config.ts` still copies `src` and `node_modules` directly, so the packaged runtime shape is not locked yet; it does not copy `scripts`, which matters if packaged startup launches `scripts/startServerStack.ts`, and its `watchIgnore` entries also miss the dot-prefixed `.desktopArtifacts` and `.desktopBuild` folders configured for generated output.
 - `bun run lint` currently runs `bunx eslint src`, so work in `scripts/` or root config files needs explicit targeted ESLint coverage until the repo lint script is broadened.
@@ -37,9 +37,9 @@
 - `src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts` still shells out to `sqlite3` for maintenance fallback flows.
 - `src/services/olap/duckdbRunner.ts` can still shell out to the DuckDB CLI for non-default DuckDB paths; the default app DB path is covered by the shared app database service.
 - `src/server/cron/nvidiaSmi.ts` can still shell out to `ssh` and remote `nvidia-smi` for optional remote-worker telemetry.
-- `src/server/utils/duckdbOwnerLease.ts` can still shell out to system identity helpers such as `hostname`, `scutil`, and `ioreg` while building DuckDB owner lease metadata.
+- `src/server/utils/localMachineIdentity.ts`, consumed by DuckDB owner lease and judge-worker journal identity helpers, can still shell out to system identity helpers such as `hostname`, `/usr/sbin/scutil`, and `/usr/sbin/ioreg` while building local-machine metadata.
 - Runtime writable helpers are already wired into the known Covidence, structured import, uploaded PDF, fetched PDF, runtime asset serving, and PDF conversion local-file read paths; the remaining work is an audit plus packaged-mode verification rather than first implementation for those paths.
-- Direct automated coverage is still missing for some listed runtime-write paths: uploaded PDF storage, fetched PDF storage, runtime asset serving, PDF conversion local-file reads, and FHIR desktop temp-spooling behavior.
+- Direct automated coverage is still missing for some listed runtime-write paths: uploaded PDF storage, fetched PDF storage, runtime asset serving, PDF conversion local-file reads, FHIR `assets/...` input resolution, and FHIR desktop temp-spooling behavior.
 
 ## Exit Criteria
 
@@ -65,6 +65,7 @@ Files:
 
 - `electrobun.config.ts`
 - `scripts/runWithRuntimeProfile.ts`
+- `scripts/devServerWatch.ts`
 - `scripts/startServerStack.ts`
 - `src/desktop/getDesktopRuntimeConfig.ts`
 - `src/desktop/index.ts`
@@ -88,7 +89,7 @@ Deliverables:
 Quality Gates:
 
 - `bun run lint`
-- `bunx eslint electrobun.config.ts scripts/runWithRuntimeProfile.ts scripts/startServerStack.ts`
+- `bunx eslint electrobun.config.ts scripts/runWithRuntimeProfile.ts scripts/devServerWatch.ts scripts/startServerStack.ts`
 - `bun test scripts/runWithRuntimeProfile.test.ts`
 - `bun test src/desktop/getDesktopRuntimeConfig.test.ts`
 - `bun test src/app/utils/getDesktopApiOrigin.test.ts`
@@ -114,12 +115,13 @@ Files:
 - `src/server/cron/fullTextJobs/fullTextArticleFetchFromUnpaywall.ts`
 - `src/server/cron/fullTextJobs/fullTextArticleFetchFromOriginalUrls.ts`
 - `src/server/routes/RuntimeAssetsRoutes.ts`
+- `src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostFhirEhrPatients.ts`
 - `src/server/utils/convertPdfToText.ts`
 - `src/agent/fhirEhrPatientsWorkflow/fhirEhrPatientsWorkflowStoreEntries.ts`
 
 Deliverables:
 
-- Structured imports, uploaded PDFs, fetched PDFs, and runtime asset reads resolve through app-owned paths in desktop mode.
+- Structured imports, uploaded PDFs, fetched PDFs, FHIR EHR input folders, and runtime asset reads resolve through app-owned paths in desktop mode.
 - PDF conversion resolves DB-stored `assets/...` PDF paths through runtime file-path helpers before reading local files.
 - FHIR EHR import temp spooling uses an explicit runtime temp location with cleanup in desktop mode, or is documented as intentionally OS-temp-only and verified not to touch the repo or install directory.
 - DB-stored `assets/...` references keep working in browser and desktop flows.
@@ -135,9 +137,10 @@ Quality Gates:
 - Add `src/server/cron/fullTextJobs/fullTextArticleFetchFromArxiv.test.ts`, `src/server/cron/fullTextJobs/fullTextArticleFetchFromUnpaywall.test.ts`, and `src/server/cron/fullTextJobs/fullTextArticleFetchFromOriginalUrls.test.ts` coverage for desktop paths, then run those three `bun test <file>` commands.
 - Add `src/server/routes/RuntimeAssetsRoutes.test.ts` coverage for desktop-mode `assets/...` serving, then run `bun test src/server/routes/RuntimeAssetsRoutes.test.ts`.
 - Add `src/server/utils/convertPdfToText.test.ts` coverage for desktop-mode PDF file reads, then run `bun test src/server/utils/convertPdfToText.test.ts`.
+- Add `src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostFhirEhrPatients.test.ts` coverage for desktop-mode `assets/...` FHIR input resolution, then run `bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostFhirEhrPatients.test.ts`.
 - Extend `src/agent/importerStoreEntries.test.ts` with desktop-mode FHIR temp-spooling coverage, then run `bun test src/agent/importerStoreEntries.test.ts`.
 - Browser verify: existing built web flow still serves and loads runtime assets correctly.
-- Manual verify: uploaded PDFs, fetched PDFs, runtime asset reads, and FHIR EHR temp spooling do not touch the repo root or install directory in desktop mode.
+- Manual verify: uploaded PDFs, fetched PDFs, runtime asset reads, FHIR EHR input resolution, and FHIR EHR temp spooling do not touch the repo root or install directory in desktop mode.
 
 ### 3. Native Dependency And Startup Verification
 
@@ -170,8 +173,12 @@ Quality Gates:
 - `bunx eslint scripts/runWithRuntimeProfile.ts scripts/startServerStack.ts`
 - `bun test src/server/utils/getDuckdbPath.test.ts`
 - `bun test src/server/utils/backgroundServerStack.test.ts`
+- `bun test src/server/utils/serverRole.test.ts`
 - `bun test scripts/runWithRuntimeProfile.test.ts`
 - `bun test src/server/utils/duckdbServiceNodeApiSpike.test.ts`
+- Add `src/server/services/readOnlyDuckdbService.test.ts` coverage for packaged-mode read-only DuckDB startup, then run `bun test src/server/services/readOnlyDuckdbService.test.ts`.
+- `bun test src/server/cron/judgmentsJobs/judgeWorkerCompletionJournal.test.ts`
+- `bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts`
 - `bun test src/server/indexStartup.test.ts`
 - macOS verify: first launch, quit, relaunch.
 
@@ -219,6 +226,8 @@ Files:
 - `src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts`
 - `src/server/cron/nvidiaSmi.ts`
 - `src/server/utils/duckdbOwnerLease.ts`
+- `src/server/utils/judgeWorkerJournalIdentity.ts`
+- `src/server/utils/localMachineIdentity.ts`
 - `src/services/olap/duckdbRunner.ts`
 - `src/server/utils/duckdbBinary.ts`
 - `src/app/routes/+admin/+models/providerConnectionsClient.ts`
@@ -237,26 +246,32 @@ Deliverables:
 - `sqlite3` remains maintenance-only, is not invoked during packaged startup, restart, recovery, or core smoke flows, and explicit repair/diagnostic routes report degraded maintenance results if unavailable instead of unhandled spawn failures.
 - DuckDB CLI use stays out of the default app database query path in packaged mode; non-default or diagnostic paths either remain developer-only or degrade with clear guidance if the CLI is unavailable.
 - Optional `ssh` and `nvidia-smi` telemetry remains disabled unless remote worker URLs are configured, and missing binaries never block startup or core desktop flows.
-- DuckDB owner lease identity helpers remain best-effort; missing `hostname`, `scutil`, or `ioreg` must not block packaged startup or ownership recovery.
+- DuckDB owner lease and judge-worker journal identity helpers remain best-effort; missing `hostname`, `/usr/sbin/scutil`, or `/usr/sbin/ioreg` must not block packaged startup, ownership recovery, or journal lock recovery.
 
 Quality Gates:
 
 - `bun run lint`
 - `bun run build`
-- `bun test src/server/utils/getCodexAppServerClient.test.ts`
+- Extend `src/server/utils/getCodexAppServerClient.test.ts` coverage for Codex app-server spawn or exit diagnostics, then run `bun test src/server/utils/getCodexAppServerClient.test.ts`.
+- Add `src/server/utils/codexCliAuth.test.ts` coverage for missing `codex` status and device-login behavior, then run `bun test src/server/utils/codexCliAuth.test.ts`.
 - Add `src/server/routes/ModelsRoutes.test.ts` coverage for missing-`codex` status and login behavior, then run `bun test src/server/routes/ModelsRoutes.test.ts`.
-- `bun test src/server/routes/ProviderConnectionsRoutes.test.ts`
+- Extend `src/server/routes/ProviderConnectionsRoutes.test.ts` coverage for missing-`codex` provider-auth begin and finish behavior, then run `bun test src/server/routes/ProviderConnectionsRoutes.test.ts`.
 - `bun test src/server/providers/providerAuthService.test.ts`
-- `bun test src/server/providers/adapters/directAdapters.test.ts`
+- Extend `src/server/providers/adapters/directAdapters.test.ts` coverage for Codex adapter unsupported-state behavior when runtime status reports missing `codex`, then run `bun test src/server/providers/adapters/directAdapters.test.ts`.
+- Extend `src/server/providers/transports/codexAppTransport.test.ts` coverage for missing-`codex` runtime status guidance, then run `bun test src/server/providers/transports/codexAppTransport.test.ts`.
 - `bun test src/app/routes/+admin/+models/providerUiState.test.ts`
 - `bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts`
 - `bun test src/server/routes/JudgmentsJobsRoutes.test.ts`
 - `bun test src/services/olap/duckdbRunnerAppDatabase.test.ts`
-- `bun test src/server/utils/duckdbBinary.test.ts`
+- Extend `src/services/olap/duckdbRunner.test.ts` coverage for missing DuckDB CLI behavior on non-default DB paths, then run `bun test src/services/olap/duckdbRunner.test.ts`.
+- Extend `src/server/utils/duckdbBinary.test.ts` coverage for missing DuckDB CLI resolution, then run `bun test src/server/utils/duckdbBinary.test.ts`.
 - `bun test src/server/utils/duckdbOwnerLease.test.ts`
+- `bun test src/server/utils/judgeWorkerJournalIdentity.test.ts`
+- Add `src/server/utils/localMachineIdentity.test.ts` coverage for missing identity-helper binaries, then run `bun test src/server/utils/localMachineIdentity.test.ts`.
 - Add `src/server/cron/nvidiaSmi.test.ts` coverage for missing `ssh`/`nvidia-smi` telemetry behavior, then run `bun test src/server/cron/nvidiaSmi.test.ts`.
+- Browser verify: Providers, Add Provider, Codex provider detail, and Settings show missing-Codex guidance without browser-dev-only instructions.
 - Packaged app verify: startup, API, import, non-Codex provider or manual provider setup, quit, and relaunch all work with no `codex`, DuckDB CLI, `sqlite3`, `ssh`, or `nvidia-smi` exposure.
-- Packaged app verify: opening Providers or Settings with no `codex` installed shows in-app guidance and no browser-dev-only instruction.
+- Packaged app verify: opening Providers, Add Provider, Codex provider detail, and Settings with no `codex` installed shows in-app guidance and no browser-dev-only instruction.
 
 ### 6. macOS Smoke Run
 
