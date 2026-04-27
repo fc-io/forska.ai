@@ -196,3 +196,114 @@ test('claims ready rows from the per-job SQLite queue', async () => {
     }
   }
 })
+
+test('owner-backed codex prompts bypass runtime autodetect', async () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const readyPromptsModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts')
+        const judgeWorkerCompletionJournalModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgeWorkerCompletionJournal.ts')
+        const providerRuntimeMatchResolverModulePath = getModulePath('./src/server/providers/providerRuntimeMatchResolver.ts')
+        let acceptedClaimCount = 0
+        let runtimeMatchCalls = 0
+
+        void mock.module(judgeWorkerCompletionJournalModulePath, () => {
+          return {
+            claimOwnerJudgmentJobPrompts: async () => [{
+              articleId: 'article-codex',
+              claimId: 'claim-codex',
+              executionSnapshotHash: 'snapshot-hash-codex',
+              executionSnapshotId: 'snapshot-codex',
+              jobId: 'job-codex',
+              modelBaseUrl: 'unused',
+              modelId: 'model-unused',
+              modelMetadataJson: null,
+              modelName: 'unused',
+              modelProvider: 'codex',
+              modelSecretRef: null,
+              modelVersion: null,
+              modelWorkerUrls: [],
+              projectId: 'project-unused',
+              promptId: 'prompt-codex',
+              providerConnectionId: null,
+              providerMaxInflightRequests: null,
+              providerUsesFamilyDefault: true,
+              recordId: 'record-codex',
+              useAbstract: true,
+              useFulltext: false,
+              useFulltextNoImages: false,
+              useTitle: true,
+            }],
+            getOwnerBackedJudgmentJobInfo: async () => ({
+              modelBaseUrl: null,
+              modelId: 'model-codex',
+              modelMetadataJson: {provider: 'codex'},
+              modelName: 'gpt-5.5',
+              modelProvider: 'codex',
+              modelSecretRef: null,
+              modelVersion: 'xhigh',
+              projectId: 'project-codex',
+              providerConfigJson: {},
+              useAbstract: true,
+              useFulltext: false,
+              useFulltextNoImages: false,
+              useTitle: true,
+            }),
+            recordAcceptedJudgeWorkerClaims: async (prompts) => {
+              acceptedClaimCount += prompts.length
+            },
+            shouldUseJudgeWorkerOwnerHandoff: () => true,
+          }
+        })
+        void mock.module(providerRuntimeMatchResolverModulePath, () => {
+          return {
+            resolveProviderConnectionRuntimeMatch: async () => {
+              runtimeMatchCalls += 1
+              throw new Error('runtime autodetect should not run for codex')
+            },
+          }
+        })
+
+        const {getAndUpdateReadyPrompts, getReadyPromptRuntime} = await import(readyPromptsModulePath + '?codex-owner-backed=' + Date.now())
+        const runtime = await getReadyPromptRuntime('job-codex')
+        const prompts = await getAndUpdateReadyPrompts('server-job-codex', 'job-codex', 1, {
+          providerConnectionId: 'connection-codex',
+          providerMaxInflightRequests: 20,
+          providerUsesFamilyDefault: false,
+        })
+
+        console.log(JSON.stringify({acceptedClaimCount, prompts, runtime, runtimeMatchCalls}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env, SERVER_ROLE: 'judge-worker'}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'owner-backed codex test failed')
+  }
+
+  const result = JSON.parse(runScript.stdout.toString()) as {
+    acceptedClaimCount: number
+    prompts: Array<{modelBaseUrl: string; modelId: string; providerConnectionId: string | null}>
+    runtime: {modelBaseUrl: string; modelProvider: string; modelWorkerUrls: string[]}
+    runtimeMatchCalls: number
+  }
+
+  expect(result.runtime).toEqual({modelBaseUrl: 'codex://app-server', modelProvider: 'codex', modelWorkerUrls: []})
+  expect(result.prompts).toHaveLength(1)
+  expect(result.prompts[0]).toMatchObject({
+    modelBaseUrl: 'codex://app-server',
+    modelId: 'model-codex',
+    providerConnectionId: 'connection-codex',
+  })
+  expect(result.acceptedClaimCount).toBe(1)
+  expect(result.runtimeMatchCalls).toBe(0)
+})

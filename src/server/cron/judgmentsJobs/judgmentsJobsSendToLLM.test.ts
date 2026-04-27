@@ -101,6 +101,52 @@ test('requeues stale sent prompts before runtime filtering', async () => {
   expect(sendableJobs).toEqual(firstJob ? [firstJob] : [])
 })
 
+test('judge-worker owner-backed dispatch skips local requeue and runtime filtering', async () => {
+  const previousServerRole = process.env.SERVER_ROLE
+  const requeueSentPrompts = mock(async (_params: {jobIds: string[]; serverJobId: string}) => {
+    return 0
+  })
+  const filterJobs = mock(async (_jobs: RunningJudgmentJob[]) => {
+    return []
+  })
+  const allJobs: RunningJudgmentJob[] = [
+    {
+      id: 'job-owner-backed',
+      maxInflightRequests: 20,
+      modelId: 'model-owner-backed',
+      modelName: 'Model Owner Backed',
+      modelProvider: 'codex',
+      projectId: 'project-owner-backed',
+      providerConnectionId: 'connection-owner-backed',
+      quarantineReason: null,
+      storageState: 'active',
+    },
+  ]
+
+  process.env.SERVER_ROLE = 'judge-worker'
+
+  try {
+    const sendableJobs = await requeueAndFilterRunningJobs({
+      allJobs,
+      filterJobs,
+      requeueSentPrompts,
+      serverJobId: 'server-job-current',
+    })
+
+    expect(sendableJobs).toEqual(allJobs)
+    expect(requeueSentPrompts).not.toHaveBeenCalled()
+    expect(filterJobs).not.toHaveBeenCalled()
+  } finally {
+    if (previousServerRole === undefined) {
+      delete process.env.SERVER_ROLE
+    }
+
+    if (previousServerRole !== undefined) {
+      process.env.SERVER_ROLE = previousServerRole
+    }
+  }
+})
+
 test('groups jobs with saved provider inflight overrides by connection', () => {
   const buckets = getCapacityBuckets({
     getCodexDefaultMaxInflight: () => {

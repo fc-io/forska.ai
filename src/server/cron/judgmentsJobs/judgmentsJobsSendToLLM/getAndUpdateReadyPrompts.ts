@@ -53,6 +53,10 @@ const getCodexPlaceholderBaseUrl = (): string => {
   return 'codex://app-server'
 }
 
+const getCodexPromptRuntime = (): PromptRuntime => {
+  return {modelBaseUrl: getCodexPlaceholderBaseUrl(), modelProvider: 'codex', modelWorkerUrls: []}
+}
+
 const isJobReadyToClaimPrompts = async (jobId: string): Promise<boolean> => {
   const [job] = await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{id: string}>(`
     SELECT id
@@ -127,6 +131,28 @@ const getSqliteReadyRows = async (serverJobId: string, jobId: string, limit: num
   }
 
   const provider = normalizeProvider(jobInfo.modelProvider)
+
+  if (isCodexProvider(provider)) {
+    const claimedRows = await sqliteService.claimReadyPrompts(jobId, serverJobId, limit)
+    const runtime = getCodexPromptRuntime()
+
+    return claimedRows.map((prompt) => {
+      return {
+        ...prompt,
+        modelBaseUrl: runtime.modelBaseUrl,
+        modelMetadataJson: jobInfo.modelMetadataJson,
+        modelName: jobInfo.modelName,
+        modelProvider: provider,
+        modelSecretRef: jobInfo.modelSecretRef,
+        modelVersion: jobInfo.modelVersion,
+        providerConnectionId: null,
+        providerMaxInflightRequests: null,
+        providerUsesFamilyDefault: true,
+        modelWorkerUrls: runtime.modelWorkerUrls,
+      }
+    })
+  }
+
   const runtime = await getModelRuntime({
     baseURL: jobInfo.modelBaseUrl,
     modelName: jobInfo.modelName,
@@ -147,7 +173,7 @@ const getSqliteReadyRows = async (serverJobId: string, jobId: string, limit: num
   }
 
   const claimedRows = await sqliteService.claimReadyPrompts(jobId, serverJobId, limit)
-  const baseUrl = isCodexProvider(provider) ? getCodexPlaceholderBaseUrl() : String(runtime.baseURL)
+  const baseUrl = String(runtime.baseURL)
 
   return claimedRows.map((prompt) => {
     return {
@@ -179,6 +205,37 @@ const getOwnerBackedReadyRows = async (
   }
 
   const provider = normalizeProvider(jobInfo.modelProvider)
+
+  if (isCodexProvider(provider)) {
+    const claims = await claimOwnerJudgmentJobPrompts({claimedBy: serverJobId, jobId, limit})
+    const runtime = getCodexPromptRuntime()
+    const prompts = claims.map((prompt) => {
+      return {
+        ...prompt,
+        modelBaseUrl: runtime.modelBaseUrl,
+        modelId: jobInfo.modelId,
+        modelMetadataJson: jobInfo.modelMetadataJson,
+        modelName: jobInfo.modelName,
+        modelProvider: provider,
+        modelSecretRef: jobInfo.modelSecretRef,
+        modelVersion: jobInfo.modelVersion,
+        providerConnectionId: null,
+        providerMaxInflightRequests: null,
+        providerUsesFamilyDefault: true,
+        modelWorkerUrls: runtime.modelWorkerUrls,
+        projectId: jobInfo.projectId,
+        useAbstract: jobInfo.useAbstract,
+        useFulltext: jobInfo.useFulltext,
+        useFulltextNoImages: jobInfo.useFulltextNoImages,
+        useTitle: jobInfo.useTitle,
+      }
+    })
+
+    await recordAcceptedJudgeWorkerClaims(prompts)
+
+    return prompts
+  }
+
   const runtime = await getModelRuntime({
     baseURL: jobInfo.modelBaseUrl,
     modelName: jobInfo.modelName,
@@ -199,7 +256,7 @@ const getOwnerBackedReadyRows = async (
   }
 
   const claims = await claimOwnerJudgmentJobPrompts({claimedBy: serverJobId, jobId, limit})
-  const baseUrl = isCodexProvider(provider) ? getCodexPlaceholderBaseUrl() : String(runtime.baseURL)
+  const baseUrl = String(runtime.baseURL)
   const prompts = claims.map((prompt) => {
     return {
       ...prompt,
@@ -243,6 +300,11 @@ export const getReadyPromptRuntime = async (jobId: string): Promise<PromptRuntim
   }
 
   const provider = normalizeProvider(jobInfo.modelProvider)
+
+  if (isCodexProvider(provider)) {
+    return getCodexPromptRuntime()
+  }
+
   const runtime = await getModelRuntime({
     baseURL: jobInfo.modelBaseUrl,
     modelName: jobInfo.modelName,
@@ -262,11 +324,7 @@ export const getReadyPromptRuntime = async (jobId: string): Promise<PromptRuntim
     return null
   }
 
-  return {
-    modelBaseUrl: isCodexProvider(provider) ? getCodexPlaceholderBaseUrl() : String(runtime.baseURL),
-    modelProvider: provider,
-    modelWorkerUrls: runtime.workerUrls,
-  }
+  return {modelBaseUrl: String(runtime.baseURL), modelProvider: provider, modelWorkerUrls: runtime.workerUrls}
 }
 
 export const getAndUpdateReadyPrompts = async (

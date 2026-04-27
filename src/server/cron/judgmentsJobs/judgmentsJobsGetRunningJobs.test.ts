@@ -24,7 +24,7 @@ afterEach(() => {
   mock.restore()
 })
 
-test('judge-worker running jobs come from the owner-backed API', async () => {
+test('judge-worker running jobs come from the owner-backed API without local runtime filtering', async () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -38,9 +38,11 @@ test('judge-worker running jobs come from the owner-backed API', async () => {
 
         const judgmentsJobsGetRunningJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts')
         const judgeWorkerCompletionJournalModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgeWorkerCompletionJournal.ts')
+        const providerRuntimeModelGuardModulePath = getModulePath('./src/server/providers/providerRuntimeModelGuard.ts')
         const readOnlyDatabaseServiceModulePath = getModulePath('./src/server/services/appReadOnlyDatabaseService.ts')
         const sqlitePreflightModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqlitePreflight.ts')
         let readOnlyQueries = 0
+        let runtimeChecks = 0
 
         void mock.module(judgeWorkerCompletionJournalModulePath, () => {
           return {
@@ -70,6 +72,14 @@ test('judge-worker running jobs come from the owner-backed API', async () => {
             },
           }
         })
+        void mock.module(providerRuntimeModelGuardModulePath, () => {
+          return {
+            getStoredProviderModelRuntimeMatch: async () => {
+              runtimeChecks += 1
+              return {message: null, ok: true, reason: null}
+            },
+          }
+        })
         void mock.module(sqlitePreflightModulePath, () => {
           return {
             filterRunningJobsBySqlitePreflight: async (jobs) => jobs,
@@ -77,8 +87,8 @@ test('judge-worker running jobs come from the owner-backed API', async () => {
         })
 
         const {judgmentsJobsGetRunningJobs} = await import(judgmentsJobsGetRunningJobsModulePath + '?owner-backed=' + Date.now())
-        const jobs = await judgmentsJobsGetRunningJobs({applyRuntimeMatchFilter: false})
-        console.log(JSON.stringify({jobs, readOnlyQueries}))
+        const jobs = await judgmentsJobsGetRunningJobs()
+        console.log(JSON.stringify({jobs, readOnlyQueries, runtimeChecks}))
       `,
     ],
     {cwd: process.cwd(), env: {...process.env}},
@@ -90,10 +100,15 @@ test('judge-worker running jobs come from the owner-backed API', async () => {
     )
   }
 
-  const result = JSON.parse(runScript.stdout.toString()) as {jobs: RunningJudgmentJob[]; readOnlyQueries: number}
+  const result = JSON.parse(runScript.stdout.toString()) as {
+    jobs: RunningJudgmentJob[]
+    readOnlyQueries: number
+    runtimeChecks: number
+  }
 
   expect(result.jobs).toEqual([getJob('job-owner-backed')])
   expect(result.readOnlyQueries).toBe(0)
+  expect(result.runtimeChecks).toBe(0)
 })
 
 test('filterRunningJobsByRuntimeMatch filters out jobs with runtime mismatch', async () => {

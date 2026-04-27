@@ -130,5 +130,7 @@ export const judgmentsJobsGetRunningJobs = async ({
   const jobs = await getRunningJobsFromDatabase()
   const preflightedJobs = await filterRunningJobsBySqlitePreflight(jobs)
 
-  return applyRuntimeMatchFilter ? filterRunningJobsByRuntimeMatch(preflightedJobs) : preflightedJobs
+  return applyRuntimeMatchFilter && !shouldUseJudgeWorkerOwnerHandoff()
+    ? filterRunningJobsByRuntimeMatch(preflightedJobs)
+    : preflightedJobs
 }

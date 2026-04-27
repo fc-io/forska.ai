@@ -764,7 +764,7 @@ export const requeueAndFilterRunningJobs = async ({
   serverJobId: string
 }): Promise<RunningJudgmentJob[]> => {
   if (shouldUseJudgeWorkerOwnerHandoff()) {
-    return filterJobs(allJobs)
+    return allJobs
   }
 
   await requeueSentPrompts({
