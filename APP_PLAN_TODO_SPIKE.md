@@ -39,7 +39,7 @@
 - `src/server/cron/nvidiaSmi.ts` can still shell out to `ssh` and remote `nvidia-smi` for optional remote-worker telemetry.
 - `src/server/utils/localMachineIdentity.ts`, consumed by DuckDB owner lease and judge-worker journal identity helpers, can still shell out to system identity helpers such as `hostname`, `/usr/sbin/scutil`, and `/usr/sbin/ioreg` while building local-machine metadata.
 - Runtime writable helpers are already wired into the known Covidence, structured import, uploaded PDF, fetched PDF, runtime asset serving, and PDF conversion local-file read paths; the remaining work is mostly audit plus packaged-mode verification, but `assets/...` request/input validation still needs explicit escape hardening.
-- Less-visible writable state also needs packaged-mode verification under the desktop data root: provider runtime records, local app settings, DuckDB temp files, DuckDB owner lease/history files, worker-registry files, judgment-job SQLite/WAL/lease/repair-export files, and runtime logs.
+- Less-visible writable state also needs packaged-mode verification under the desktop data root: provider runtime records, local app settings, DuckDB temp files, DuckDB owner lease/history files, worker-registry files, judgment-job SQLite/WAL/lease/repair-export files, desktop/backend-stack lock metadata, and runtime logs.
 - Direct automated coverage is still missing for some listed runtime-write paths: uploaded PDF storage, fetched PDF storage, runtime asset serving, runtime asset path traversal rejection, PDF conversion local-file reads, FHIR `assets/...` input resolution, FHIR `assets/...` escape rejection, and FHIR desktop temp-spooling behavior.
 
 ## Exit Criteria
@@ -71,6 +71,9 @@ Files:
 - `src/desktop/getDesktopRuntimeConfig.ts`
 - `src/desktop/index.ts`
 - `src/desktop/desktopBackendStack.ts`
+- `src/desktop/desktopSingleInstance.ts`
+- `src/server/routes/ApiProxyRoutes.ts`
+- `src/server/routes/apiRouteClassification.ts`
 - `src/server/utils/backgroundServerStack.ts`
 - `src/server/utils/serverRole.ts`
 - `package.json` if helper scripts become necessary
@@ -82,9 +85,11 @@ Deliverables:
 - Backend entrypoint resolution is artifact-relative and deterministic.
 - Any reused stack launcher accepts artifact-relative Bun and backend entrypoint inputs instead of hard-coded bare `bun`, `bun run`, `bunx`, package-script, `PATH`, and `process.cwd()` source assumptions in packaged mode.
 - The source-first artifact either includes every launched backend stack entrypoint such as `scripts/startServerStack.ts`, or moves the packaged stack launcher under copied `src` paths.
-- Packaged child processes may use the artifact root for source lookup, but all writable env paths, DuckDB paths, temp paths, and log paths point at the desktop data root.
+- Packaged child processes may use the artifact root for source lookup, but all writable env paths, DuckDB paths, temp paths, lock/metadata paths, and log paths point at the desktop data root.
 - Packaged desktop launches and owns API, maintenance-worker, and judge-worker roles instead of relying on `SERVER_ROLE=dev-single`.
-- The desktop launcher assigns deterministic loopback ports, `SERVER_DUCKDB_OWNER_URL`, role env, a stable `JUDGE_WORKER_ID`, cleared inherited `JUDGE_WORKER_JOURNAL_PATH`, data paths, and log paths for the stack.
+- The API role proxies owner-dependent requests, including request bodies for POST/PATCH/PUT routes, to the maintenance-worker private API without changing browser or desktop client call sites.
+- The desktop launcher assigns deterministic loopback ports, `SERVER_DUCKDB_OWNER_URL`, role env, a stable `JUDGE_WORKER_ID`, cleared inherited `JUDGE_WORKER_JOURNAL_PATH`, data paths, lock/metadata paths, and log paths for the stack.
+- Before falling back to alternate ports, the desktop launcher distinguishes foreign port occupancy from an existing same-data-root Forska backend stack, reclaims stale same-data-root metadata, and refuses to start a second stack against the same desktop data root while a live stack remains.
 - Startup readiness, role logs, child-process shutdown, relaunch, and crash recovery are surfaced per role.
 - Initial packaged startup has bounded role restart/readiness attempts; repeated role crashes or readiness timeouts fail with actionable diagnostics instead of looping until the shell-level timeout.
 - Startup errors include resolved Bun path, backend entrypoint, API origin, data root, and log path.
@@ -99,6 +104,7 @@ Quality Gates:
 - `bun test src/desktop/getDesktopRuntimeConfig.test.ts`
 - `bun test src/app/utils/getDesktopApiOrigin.test.ts`
 - `bun test src/app/utils/getApiRequestUrl.test.ts`
+- `bun test src/server/routes/ApiProxyRoutes.test.ts`
 - `bun test src/server/utils/backgroundServerStack.test.ts`
 - `bun run build`
 - `bun run desktop:build`
@@ -129,7 +135,7 @@ Files:
 Deliverables:
 
 - Structured imports, uploaded PDFs, fetched PDFs, FHIR EHR input folders, and runtime asset reads resolve through app-owned paths in desktop mode.
-- Runtime asset and FHIR `assets/...` inputs reject absolute paths, drive-letter paths, empty normalized asset keys, `..` segments, and backslash-based escapes before resolving any local file.
+- Runtime asset, Covidence package, structured-file package, and FHIR `assets/...` inputs reject absolute paths, drive-letter paths, empty normalized asset keys, `..` segments, and backslash-based escapes before resolving any local file.
 - Resolved runtime asset paths are verified to stay inside the runtime writable root's `assets/` tree, or inside a narrower expected package folder when a flow owns one.
 - PDF conversion resolves DB-stored `assets/...` PDF paths through runtime file-path helpers before reading local files.
 - FHIR EHR import temp spooling uses an explicit runtime temp location with cleanup in desktop mode; OS temp remains acceptable only for non-desktop mode or for a separately recorded product/security exception.
@@ -141,13 +147,13 @@ Quality Gates:
 - `bun run lint`
 - Extend `src/server/utils/runtimeWritablePath.test.ts` coverage for desktop asset-path escape rejection or the shared safe-asset-path helper, then run `bun test src/server/utils/runtimeWritablePath.test.ts`.
 - `bun test src/app/utils/getRuntimeAssetUrl.test.ts`
-- `bun test src/server/services/covidenceImportService.test.ts`
-- `bun test src/server/services/structuredFileImportService.test.ts`
+- Extend `src/server/services/covidenceImportService.test.ts` coverage for desktop package paths and package-path escape rejection, then run `bun test src/server/services/covidenceImportService.test.ts`.
+- Extend `src/server/services/structuredFileImportService.test.ts` coverage for desktop package paths and package-path escape rejection, then run `bun test src/server/services/structuredFileImportService.test.ts`.
 - Add `src/server/routes/ArticleAdminRoutes.test.ts` coverage for uploaded PDF desktop paths, then run `bun test src/server/routes/ArticleAdminRoutes.test.ts`.
 - Add `src/server/cron/fullTextJobs/fullTextArticleFetchFromArxiv.test.ts`, `src/server/cron/fullTextJobs/fullTextArticleFetchFromUnpaywall.test.ts`, and `src/server/cron/fullTextJobs/fullTextArticleFetchFromOriginalUrls.test.ts` coverage for desktop paths, then run `bun test src/server/cron/fullTextJobs/fullTextArticleFetchFromArxiv.test.ts`, `bun test src/server/cron/fullTextJobs/fullTextArticleFetchFromUnpaywall.test.ts`, and `bun test src/server/cron/fullTextJobs/fullTextArticleFetchFromOriginalUrls.test.ts`.
-- Add `src/server/routes/RuntimeAssetsRoutes.test.ts` coverage for desktop-mode `assets/...` serving and rejection of `assets/../...`, absolute, drive-letter, and backslash escape inputs, then run `bun test src/server/routes/RuntimeAssetsRoutes.test.ts`.
+- Add `src/server/routes/RuntimeAssetsRoutes.test.ts` coverage for desktop-mode `assets/...` serving and rejection of `assets/../...`, absolute, drive-letter, encoded traversal, and backslash escape inputs, then run `bun test src/server/routes/RuntimeAssetsRoutes.test.ts`.
 - Add `src/server/utils/convertPdfToText.test.ts` coverage for desktop-mode PDF file reads, then run `bun test src/server/utils/convertPdfToText.test.ts`.
-- Add `src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostFhirEhrPatients.test.ts` coverage for desktop-mode `assets/...` FHIR input resolution and escape rejection, then run `bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostFhirEhrPatients.test.ts`.
+- Add `src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostFhirEhrPatients.test.ts` coverage for desktop-mode `assets/...` FHIR input resolution and escape rejection, including encoded traversal, then run `bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostFhirEhrPatients.test.ts`.
 - Extend `src/agent/importerStoreEntries.test.ts` with desktop-mode FHIR temp-spooling coverage that asserts spool files are created under the runtime temp/data root and are cleaned up on success and failure, then run `bun test src/agent/importerStoreEntries.test.ts`.
 - Add `src/utils/providerRuntimeRecords.test.ts` coverage for desktop-mode `cache/providerRuntimeRecords` resolution, then run `bun test src/utils/providerRuntimeRecords.test.ts`.
 - Browser verify: existing built web flow still serves and loads runtime assets correctly.
@@ -179,7 +185,7 @@ Deliverables:
 - `@duckdb/node-api` loads in the packaged backend.
 - `bun:sqlite` works for job state and restart.
 - Migrations run on first launch and relaunch.
-- DuckDB temp directories, owner lease/history files, worker-registry files, local app settings, judgment-job SQLite/WAL/lease/repair-export files, judge-worker journals, and runtime logs resolve under the desktop data root in packaged mode.
+- DuckDB temp directories, owner lease/history files, worker-registry files, local app settings, judgment-job SQLite/WAL/lease/repair-export files, judge-worker journals, desktop/backend-stack lock metadata, and runtime logs resolve under the desktop data root in packaged mode.
 - Restart and crash recovery leave local data usable.
 - API, maintenance-worker, and judge-worker roles each start with the expected capabilities and recover without requiring `dev-single`.
 
@@ -263,6 +269,7 @@ Deliverables:
 
 - Missing `codex` does not block startup.
 - Codex-only flows surface install and configuration guidance before use.
+- Codex login/start buttons are disabled or replaced with Settings/install guidance when runtime status reports that the CLI binary is unavailable.
 - Codex guidance matches the actual configuration surface; it does not point to unsupported env vars such as `CODEX_BIN` unless that env var is implemented.
 - `/api/models/codex/status` and `/api/models/codex/login` handle missing `codex` without unhandled spawn errors, and the login route does not start a device-login subprocess when status already reports that the CLI binary is unavailable.
 - `/api/provider-auth/codex/begin` and `/api/provider-auth/codex/finish` handle missing `codex` consistently with the direct Codex status/login routes.
@@ -293,9 +300,9 @@ Quality Gates:
 - `bun test src/server/utils/judgeWorkerJournalIdentity.test.ts`
 - Add `src/server/utils/localMachineIdentity.test.ts` coverage for missing and slow identity-helper binaries, then run `bun test src/server/utils/localMachineIdentity.test.ts`.
 - Add `src/server/cron/nvidiaSmi.test.ts` coverage for missing `ssh`/`nvidia-smi` telemetry behavior, then run `bun test src/server/cron/nvidiaSmi.test.ts`.
-- Browser verify: Providers, Add Provider, Codex provider detail, and Settings show missing-Codex guidance without browser-dev-only instructions.
+- Browser verify: Providers, Add Provider, Codex provider detail, and Settings show missing-Codex guidance without browser-dev-only instructions and without enabled login/start actions when the CLI is unavailable.
 - Packaged app verify: startup, API, import, non-Codex provider or manual provider setup, quit, and relaunch all work with no `codex`, DuckDB CLI, `sqlite3`, `ssh`, or `nvidia-smi` exposure.
-- Packaged app verify: opening Providers, Add Provider, Codex provider detail, and Settings with no `codex` installed shows in-app guidance and no browser-dev-only instruction.
+- Packaged app verify: opening Providers, Add Provider, Codex provider detail, and Settings with no `codex` installed shows in-app guidance, no browser-dev-only instruction, and no enabled login/start action that would spawn a missing binary.
 
 ### 6. macOS Smoke Run
 
@@ -319,7 +326,7 @@ Manual Checks:
 - Confirm startup diagnostics show the artifact Bun path, not a host `bun` path.
 - Confirm artifact-relative backend paths work when the artifact parent path contains spaces.
 - Confirm the backend stack reaches `/api/runtime/ready` and logs API, maintenance-worker, and judge-worker role readiness.
-- Import one dataset.
+- Import one local file-backed dataset through the packaged UI/API path, using a flow that exercises multipart upload and runtime asset storage.
 - Configure one non-Codex provider or manual provider record that does not require a host CLI.
 - Quit and relaunch.
 - Confirm writes land under the per-user desktop data root, not the repo root or install directory.
@@ -350,7 +357,7 @@ Manual Checks:
 - Launch, quit, relaunch.
 - API connectivity.
 - API, maintenance-worker, and judge-worker role readiness.
-- Import one dataset.
+- Import one local file-backed dataset through the packaged UI/API path, using a flow that exercises multipart upload and runtime asset storage.
 - Configure one non-Codex provider or manual provider record that does not require a host CLI.
 - Data root and log path.
 - Spaces in user profile paths and artifact/install paths.
