@@ -1,10 +1,11 @@
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {getDateValue, getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {getDateValue, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {HttpError} from '../../utils/httpError.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
 import {runJudgmentJobSqliteIsolatedFlush} from './judgmentJobSqliteIsolatedImport.ts'
 import {
   getJudgmentJobSqliteService,
+  JudgmentJobLeaseError,
   type JudgmentJobSystemSqliteFallbackResult,
   type JudgmentJobSystemSqliteFallbackStep,
 } from './judgmentJobSqliteService.ts'
@@ -102,8 +103,55 @@ type RawRepairJobRow = {
   updatedAt: unknown
 }
 
+type RepairActionRunnerInput = {
+  action: JudgmentJobRepairAction
+  allowOfflineRepairForQuarantinedLocalState?: boolean
+  job: JudgmentJobRepairJobState
+  jobId: string
+  normalizedFallbackSteps: JudgmentJobSystemSqliteFallbackStep[]
+  reason?: string | null
+  requestedBy: string
+}
+type AutomaticOrphanedQueueRepairStopReason = 'batch_limit' | 'cleared' | 'no_progress' | 'repair_failed' | 'time_limit'
+export type AutomaticOrphanedQueueRepairJobResult = {
+  deletedRows: number
+  jobId: string
+  processedBatches: number
+  remainingOrphanedJudgedRows: number
+  requeuedRows: number
+  stoppedReason: AutomaticOrphanedQueueRepairStopReason
+}
+export type AutomaticOrphanedQueueRepairSummary = {
+  deletedRows: number
+  incompleteJobCount: number
+  jobCount: number
+  requeuedRows: number
+  results: AutomaticOrphanedQueueRepairJobResult[]
+}
+type AutomaticOrphanedQueueRepairInput = {
+  claimedBy?: string | null
+  failOnIncomplete?: boolean
+  jobId: string
+  maxBatches?: number
+  maxDurationMs?: number
+  preflightBeforeRepair?: boolean
+}
+type AutomaticOrphanedQueueRepairLoopInput = Required<Pick<AutomaticOrphanedQueueRepairInput, 'jobId'>> & {
+  claimedBy: string
+  deletedRows: number
+  maxBatches: number
+  maxDurationMs: number
+  preflightBeforeRepair: boolean
+  processedBatches: number
+  requeuedRows: number
+  startedAt: number
+}
+type AutomaticOrphanedQueueRepairJobsInput = Omit<AutomaticOrphanedQueueRepairInput, 'jobId'> & {jobIds: string[]}
+
 const defaultManualQuarantineReason = 'Manually quarantined by operator'
 const retentionPruneChunkSize = 1_000
+const automaticOrphanedQueueRepairMaxBatches = 100
+const automaticOrphanedQueueRepairMaxDurationMs = 30_000
 const allowedSystemSqliteFallbackSteps = new Set<JudgmentJobSystemSqliteFallbackStep>([
   'checkpoint',
   'diagnostic',
@@ -249,6 +297,250 @@ const appendFallbackMessage = ({
   return ranSteps.length === 0 ? baseMessage : `${baseMessage} System sqlite3 fallback ran: ${ranSteps.join(', ')}.`
 }
 
+const normalizePositiveInteger = ({defaultValue, value}: {defaultValue: number; value?: number}) => {
+  return Number.isFinite(value) ? Math.max(0, Math.floor(value ?? defaultValue)) : defaultValue
+}
+
+const hasAutomaticOrphanedQueueRepairTimeRemaining = ({
+  maxDurationMs,
+  startedAt,
+}: {
+  maxDurationMs: number
+  startedAt: number
+}) => {
+  return maxDurationMs > 0 && Date.now() - startedAt < maxDurationMs
+}
+
+const getRunningStartupLocalSqliteJobIds = async () => {
+  const sqliteJobIds = getJudgmentJobSqliteService().listJobIds()
+
+  return sqliteJobIds.length === 0
+    ? []
+    : (
+        await getAppDatabaseService().queryJson<{id: string}>(`
+          SELECT id
+          FROM app.judgment_job
+          WHERE id IN (${getQuotedStringList(sqliteJobIds).join(', ')})
+            AND status = ${getSqlLiteral('running')}
+            AND storage_state = ${getSqlLiteral('active')}
+          ORDER BY updated_at ASC NULLS FIRST, id ASC
+        `)
+      ).map((row) => {
+        return row.id
+      })
+}
+
+const getAutomaticOrphanedQueueRepairIncomplete = (result: AutomaticOrphanedQueueRepairJobResult) => {
+  return result.remainingOrphanedJudgedRows > 0 || result.stoppedReason === 'repair_failed'
+}
+
+const assertAutomaticOrphanedQueueRepairCompleted = (result: AutomaticOrphanedQueueRepairJobResult) => {
+  if (!getAutomaticOrphanedQueueRepairIncomplete(result)) {
+    return
+  }
+
+  throw new HttpError(
+    409,
+    `Automatic orphaned queue repair for ${result.jobId} stopped after ${result.processedBatches} batch(es): ${result.stoppedReason}. ${result.remainingOrphanedJudgedRows} orphaned local queue row(s) remain. Retry start or run the orphaned queue repair action again.`,
+  )
+}
+
+const getAutomaticOrphanedQueueRepairSummary = (
+  results: AutomaticOrphanedQueueRepairJobResult[],
+): AutomaticOrphanedQueueRepairSummary => {
+  return results.reduce(
+    (summary, result) => {
+      return {
+        deletedRows: summary.deletedRows + result.deletedRows,
+        incompleteJobCount: summary.incompleteJobCount + (getAutomaticOrphanedQueueRepairIncomplete(result) ? 1 : 0),
+        jobCount: summary.jobCount + 1,
+        requeuedRows: summary.requeuedRows + result.requeuedRows,
+        results: [...summary.results, result],
+      }
+    },
+    {
+      deletedRows: 0,
+      incompleteJobCount: 0,
+      jobCount: 0,
+      requeuedRows: 0,
+      results: [] as AutomaticOrphanedQueueRepairJobResult[],
+    },
+  )
+}
+
+const runAutomaticOrphanedQueueRepairLoop = async ({
+  claimedBy,
+  deletedRows,
+  jobId,
+  maxBatches,
+  maxDurationMs,
+  preflightBeforeRepair,
+  processedBatches,
+  requeuedRows,
+  startedAt,
+}: AutomaticOrphanedQueueRepairLoopInput): Promise<AutomaticOrphanedQueueRepairJobResult> => {
+  if (preflightBeforeRepair && processedBatches === 0) {
+    const preflightOutcome = await getPreflightOutcome(jobId)
+
+    if (!preflightOutcome.ok) {
+      return {
+        deletedRows,
+        jobId,
+        processedBatches,
+        remainingOrphanedJudgedRows: 0,
+        requeuedRows,
+        stoppedReason: 'repair_failed',
+      }
+    }
+  }
+
+  const healthBeforeRepair = await getJudgmentJobSqliteService().getHealthSnapshot(jobId)
+  const orphanedRowsBeforeRepair = healthBeforeRepair.orphanedJudgedRowCount
+
+  if (orphanedRowsBeforeRepair <= 0) {
+    return {
+      deletedRows,
+      jobId,
+      processedBatches,
+      remainingOrphanedJudgedRows: 0,
+      requeuedRows,
+      stoppedReason: 'cleared',
+    }
+  }
+
+  if (processedBatches >= maxBatches) {
+    return {
+      deletedRows,
+      jobId,
+      processedBatches,
+      remainingOrphanedJudgedRows: orphanedRowsBeforeRepair,
+      requeuedRows,
+      stoppedReason: 'batch_limit',
+    }
+  }
+
+  if (!hasAutomaticOrphanedQueueRepairTimeRemaining({maxDurationMs, startedAt})) {
+    return {
+      deletedRows,
+      jobId,
+      processedBatches,
+      remainingOrphanedJudgedRows: orphanedRowsBeforeRepair,
+      requeuedRows,
+      stoppedReason: 'time_limit',
+    }
+  }
+
+  const repairResult = await runJudgmentJobRepairAction({action: 'repair_orphaned_queue', claimedBy, jobId})
+  const nextDeletedRows = deletedRows + repairResult.changes.deletedOrphanedJudgedRows
+  const nextRequeuedRows = requeuedRows + repairResult.changes.requeuedOrphanedJudgedRows
+  const nextProcessedBatches = processedBatches + 1
+  const nextRemainingOrphanedRows = repairResult.liveSqlite.orphanedJudgedRowCount
+  const processedRows = repairResult.changes.deletedOrphanedJudgedRows + repairResult.changes.requeuedOrphanedJudgedRows
+
+  if (!repairResult.ok) {
+    return {
+      deletedRows: nextDeletedRows,
+      jobId,
+      processedBatches: nextProcessedBatches,
+      remainingOrphanedJudgedRows: nextRemainingOrphanedRows,
+      requeuedRows: nextRequeuedRows,
+      stoppedReason: 'repair_failed',
+    }
+  }
+
+  return processedRows <= 0 || nextRemainingOrphanedRows >= orphanedRowsBeforeRepair
+    ? {
+        deletedRows: nextDeletedRows,
+        jobId,
+        processedBatches: nextProcessedBatches,
+        remainingOrphanedJudgedRows: nextRemainingOrphanedRows,
+        requeuedRows: nextRequeuedRows,
+        stoppedReason: 'no_progress',
+      }
+    : runAutomaticOrphanedQueueRepairLoop({
+        claimedBy,
+        deletedRows: nextDeletedRows,
+        jobId,
+        maxBatches,
+        maxDurationMs,
+        preflightBeforeRepair,
+        processedBatches: nextProcessedBatches,
+        requeuedRows: nextRequeuedRows,
+        startedAt,
+      })
+}
+
+export const runAutomaticOrphanedQueueRepairForJob = async ({
+  claimedBy,
+  failOnIncomplete = false,
+  jobId,
+  maxBatches,
+  maxDurationMs,
+  preflightBeforeRepair = false,
+}: AutomaticOrphanedQueueRepairInput): Promise<AutomaticOrphanedQueueRepairJobResult> => {
+  const result = await runAutomaticOrphanedQueueRepairLoop({
+    claimedBy: claimedBy ?? getDefaultJudgmentServerJobId(),
+    deletedRows: 0,
+    jobId,
+    maxBatches: normalizePositiveInteger({defaultValue: automaticOrphanedQueueRepairMaxBatches, value: maxBatches}),
+    maxDurationMs: normalizePositiveInteger({
+      defaultValue: automaticOrphanedQueueRepairMaxDurationMs,
+      value: maxDurationMs,
+    }),
+    preflightBeforeRepair,
+    processedBatches: 0,
+    requeuedRows: 0,
+    startedAt: Date.now(),
+  })
+
+  if (failOnIncomplete) {
+    assertAutomaticOrphanedQueueRepairCompleted(result)
+  }
+
+  return result
+}
+
+export const runAutomaticOrphanedQueueRepairForJobs = async ({
+  claimedBy,
+  failOnIncomplete = false,
+  jobIds,
+  maxBatches,
+  maxDurationMs,
+  preflightBeforeRepair,
+}: AutomaticOrphanedQueueRepairJobsInput): Promise<AutomaticOrphanedQueueRepairSummary> => {
+  const results = await jobIds.reduce<Promise<AutomaticOrphanedQueueRepairJobResult[]>>(
+    async (resultsPromise, jobId) => {
+      const previousResults = await resultsPromise
+      const result = await runAutomaticOrphanedQueueRepairForJob({
+        claimedBy,
+        failOnIncomplete,
+        jobId,
+        maxBatches,
+        maxDurationMs,
+        preflightBeforeRepair,
+      })
+
+      return [...previousResults, result]
+    },
+    Promise.resolve([]),
+  )
+
+  return getAutomaticOrphanedQueueRepairSummary(results)
+}
+
+export const runStartupAutomaticOrphanedQueueRepair = async (
+  options: Omit<AutomaticOrphanedQueueRepairJobsInput, 'jobIds'> = {},
+) => {
+  const jobIds = await getRunningStartupLocalSqliteJobIds()
+
+  return runAutomaticOrphanedQueueRepairForJobs({
+    ...options,
+    failOnIncomplete: false,
+    jobIds,
+    preflightBeforeRepair: true,
+  })
+}
+
 const runSystemSqliteFallback = async ({
   claimedBy,
   jobId,
@@ -318,6 +610,71 @@ const markJobDraining = async (jobId: string) => {
 
 const getRepairMode = ({hasLocalSqlite, job}: {hasLocalSqlite: boolean; job: JudgmentJobRepairJobState}) => {
   return getJudgmentJobRepairMode({hasLocalSqliteState: hasLocalSqlite, job})
+}
+
+const runRepairActionForInput = ({
+  action,
+  allowOfflineRepairForQuarantinedLocalState,
+  job,
+  jobId,
+  normalizedFallbackSteps,
+  reason,
+  requestedBy,
+}: RepairActionRunnerInput): Promise<RepairActionOutcome> => {
+  return action === 'preflight'
+    ? runPreflightAction({jobId})
+    : action === 'checkpoint'
+      ? runCheckpointAction({claimedBy: requestedBy, jobId, systemSqliteFallbackSteps: normalizedFallbackSteps})
+      : action === 'quarantine'
+        ? runQuarantineAction({jobId, reason})
+        : action === 'unquarantine'
+          ? runUnquarantineAction({jobId})
+          : action === 'drain'
+            ? runDrainAction({claimedBy: requestedBy, job, jobId, systemSqliteFallbackSteps: normalizedFallbackSteps})
+            : action === 'repair_orphaned_queue'
+              ? runRepairOrphanedQueueAction({
+                  claimedBy: requestedBy,
+                  job,
+                  jobId,
+                  systemSqliteFallbackSteps: normalizedFallbackSteps,
+                })
+              : runRepairAction({
+                  allowOfflineRepairForQuarantinedLocalState,
+                  claimedBy: requestedBy,
+                  job,
+                  jobId,
+                  systemSqliteFallbackSteps: normalizedFallbackSteps,
+                })
+}
+
+const recoverStaleLeaseForRepair = async ({jobId}: {jobId: string}) => {
+  const recovery = await getJudgmentJobSqliteService().recoverJudgmentJobLeasesOnStartup({jobIds: [jobId]})
+
+  return recovery.recovered.includes(jobId) || recovery.deleted.includes(jobId)
+}
+
+const getLeaseConflictMessage = async (jobId: string) => {
+  const lease = await getJudgmentJobSqliteService().getJudgmentJobLeaseMetadata(jobId)
+  const owner = lease ? ` held by ${lease.hostname} pid=${lease.pid} since ${lease.acquiredAt}` : ''
+
+  return `SQLite job lease for ${jobId} is currently unavailable${owner}. Pause the job or wait for the active worker to finish, then retry repair.`
+}
+
+const recoverAndRetryRepairAction = async (
+  input: RepairActionRunnerInput,
+  error: unknown,
+): Promise<RepairActionOutcome> => {
+  if (!(error instanceof JudgmentJobLeaseError)) {
+    throw error
+  }
+
+  const recovered = await recoverStaleLeaseForRepair({jobId: input.jobId})
+
+  if (recovered) {
+    return runRepairActionForInput(input)
+  }
+
+  throw new HttpError(409, await getLeaseConflictMessage(input.jobId))
 }
 
 const runLiveSafeFlush = async ({claimedBy, jobId}: {claimedBy: string; jobId: string}) => {
@@ -808,42 +1165,20 @@ export const runJudgmentJobRepairAction = async ({
   const sqliteService = getJudgmentJobSqliteService()
   const job = await getRepairJob(jobId)
   const normalizedFallbackSteps = normalizeSystemSqliteFallbackSteps(systemSqliteFallbackSteps)
+  const repairActionInput = {
+    action,
+    allowOfflineRepairForQuarantinedLocalState,
+    job,
+    jobId,
+    normalizedFallbackSteps,
+    reason,
+    requestedBy,
+  }
 
   try {
-    const outcome =
-      action === 'preflight'
-        ? await runPreflightAction({jobId})
-        : action === 'checkpoint'
-          ? await runCheckpointAction({
-              claimedBy: requestedBy,
-              jobId,
-              systemSqliteFallbackSteps: normalizedFallbackSteps,
-            })
-          : action === 'quarantine'
-            ? await runQuarantineAction({jobId, reason})
-            : action === 'unquarantine'
-              ? await runUnquarantineAction({jobId})
-              : action === 'drain'
-                ? await runDrainAction({
-                    claimedBy: requestedBy,
-                    job,
-                    jobId,
-                    systemSqliteFallbackSteps: normalizedFallbackSteps,
-                  })
-                : action === 'repair_orphaned_queue'
-                  ? await runRepairOrphanedQueueAction({
-                      claimedBy: requestedBy,
-                      job,
-                      jobId,
-                      systemSqliteFallbackSteps: normalizedFallbackSteps,
-                    })
-                  : await runRepairAction({
-                      allowOfflineRepairForQuarantinedLocalState,
-                      claimedBy: requestedBy,
-                      job,
-                      jobId,
-                      systemSqliteFallbackSteps: normalizedFallbackSteps,
-                    })
+    const outcome = await runRepairActionForInput(repairActionInput).catch((error: unknown) => {
+      return recoverAndRetryRepairAction(repairActionInput, error)
+    })
 
     return getRepairResult({
       action,

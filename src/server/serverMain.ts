@@ -6,6 +6,7 @@ import {fullTextConversionJobsCron} from './cron/fullTextConversionJobs.ts'
 import {fullTextJobsCron} from './cron/fullTextJobs.ts'
 import {judgmentsJobsJudgingCron, judgmentsJobsMaintenanceCron} from './cron/judgmentsJobs.ts'
 import {replayJudgeWorkerCompletionOutbox} from './cron/judgmentsJobs/judgeWorkerCompletionJournal.ts'
+import {runStartupAutomaticOrphanedQueueRepair} from './cron/judgmentsJobs/judgmentJobRepair.ts'
 import {getJudgmentJobSqliteService} from './cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {nvidiaSmiCron} from './cron/nvidiaSmi.ts'
 import {adminInvestigateRoutes} from './routes/AdminInvestigateRoutes.ts'
@@ -130,6 +131,23 @@ if (getCurrentServerRole() === 'judge-worker') {
 
 if (getCurrentServerRole() !== 'judge-worker' && shouldCurrentServerRunJudgingLoops()) {
   await getJudgmentJobSqliteService().recoverJudgmentJobLeasesOnStartup()
+  const startupOrphanedQueueRepair = await runStartupAutomaticOrphanedQueueRepair()
+
+  if (
+    startupOrphanedQueueRepair.requeuedRows > 0
+    || startupOrphanedQueueRepair.deletedRows > 0
+    || startupOrphanedQueueRepair.incompleteJobCount > 0
+  ) {
+    writeRuntimeOperatorLogEvent({
+      attrs: startupOrphanedQueueRepair,
+      event: 'judgment-job.startup-orphaned-queue-repair',
+      message:
+        `[judgments] startup orphaned queue repair processed ${startupOrphanedQueueRepair.jobCount} job(s), `
+        + `${startupOrphanedQueueRepair.requeuedRows} requeued, ${startupOrphanedQueueRepair.deletedRows} deleted, `
+        + `${startupOrphanedQueueRepair.incompleteJobCount} incomplete`,
+      severity: startupOrphanedQueueRepair.incompleteJobCount > 0 ? 'WARN' : 'INFO',
+    })
+  }
 }
 
 const shouldMountMaintenanceCrons = shouldServerRoleMountMaintenanceCrons(getCurrentServerRole())

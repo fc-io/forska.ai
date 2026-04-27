@@ -2895,6 +2895,57 @@ test('repair orphaned queue route requeues only orphaned judged queue rows', asy
   expect(body.data.liveSqlite.orphanedJudgedRowCount).toBe(0)
 })
 
+test('starting a job automatically repairs orphaned judged queue rows before running', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `start-repair-orphaned-queue-project-${Date.now()}`
+  const modelId = `start-repair-orphaned-queue-model-${Date.now()}`
+  const connectionId = `start-repair-orphaned-queue-connection-${Date.now()}`
+  const jobId = `start-repair-orphaned-queue-job-${Date.now()}`
+  const articleId = `start-repair-orphaned-queue-article-${Date.now()}`
+  const promptId = `start-repair-orphaned-queue-prompt-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.article (id, article_id, article_title, article_created_at, article_updated_at)
+    VALUES (
+      '${articleId}',
+      'external-${articleId}',
+      'Start repair orphaned queue article',
+      TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+      TIMESTAMPTZ '2026-04-01T00:00:00.000Z'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES ('${promptId}', 'Start repair orphaned queue prompt', '${promptId}-hash')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'paused', 'draining')
+  `)
+  await insertOrphanedJudgedQueueFixture({articleId, jobId, promptId})
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}`, {
+      body: JSON.stringify({status: 'running'}),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+  const body = (await response.json()) as {data: {jobId: string; status: string; storageState: string}}
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const health = await getJudgmentJobSqliteService().getHealthSnapshot(jobId)
+
+  expect(response.status).toBe(200)
+  expect(body.data).toMatchObject({jobId, status: 'running', storageState: 'active'})
+  expect(health.orphanedJudgedRowCount).toBe(0)
+  expect(health.promptCounts.ready).toBe(1)
+  expect(health.promptCounts.judged).toBe(0)
+})
+
 test('repair route captures explicit system sqlite fallback results without changing normal repair flows', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')

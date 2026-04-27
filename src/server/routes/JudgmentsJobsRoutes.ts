@@ -7,7 +7,10 @@ import {
   getJudgmentEndpointAvailability,
   getJudgmentEndpointAvailabilityDiagnostics,
 } from '../cron/judgmentsJobs/judgmentEndpointAvailability.ts'
-import {runJudgmentJobRepairAction} from '../cron/judgmentsJobs/judgmentJobRepair.ts'
+import {
+  runAutomaticOrphanedQueueRepairForJob,
+  runJudgmentJobRepairAction,
+} from '../cron/judgmentsJobs/judgmentJobRepair.ts'
 import {getDefaultJudgmentServerJobId} from '../cron/judgmentsJobs/judgmentJobServerIdentity.ts'
 import {
   isJudgmentJobSqliteIsolatedImportLeaseConflict,
@@ -2800,13 +2803,33 @@ export const judgmentsJobsRoutes = new Elysia()
           await sqliteService.initializeJob(params.id)
         }
 
+        if (job.storageState === 'active') {
+          const preflightResult = await assertJudgmentJobCanRunSqlitePreflight({
+            jobId: params.id,
+            quarantineReason: job.quarantineReason,
+            storageState: job.storageState,
+          })
+
+          clearTransientQuarantine = preflightResult.clearTransientQuarantine
+        }
+
+        if (job.storageState === 'active' || job.storageState === 'draining') {
+          await runAutomaticOrphanedQueueRepairForJob({
+            claimedBy: judgmentJobServerId,
+            failOnIncomplete: true,
+            jobId: params.id,
+            preflightBeforeRepair: job.storageState === 'draining',
+          })
+        }
+
+        const {job: repairedJob} = await getJobContext({jobId: params.id})
         const preflightResult = await assertJudgmentJobCanRunSqlitePreflight({
           jobId: params.id,
-          quarantineReason: job.quarantineReason,
-          storageState: job.storageState,
+          quarantineReason: repairedJob.quarantineReason,
+          storageState: repairedJob.storageState,
         })
 
-        clearTransientQuarantine = preflightResult.clearTransientQuarantine
+        clearTransientQuarantine = clearTransientQuarantine || preflightResult.clearTransientQuarantine
       }
 
       const updatedJob = (await getAppDatabaseService().transaction(async (tx) => {
