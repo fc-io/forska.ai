@@ -15,6 +15,7 @@ import {homedir, hostname, tmpdir} from 'node:os'
 import {dirname, isAbsolute, join, normalize, resolve, sep} from 'node:path'
 
 import {getConfiguredDuckdbPath} from './getDuckdbPath.ts'
+import {getLocalMachineFingerprint, isLockOwnedByCurrentMachine} from './localMachineIdentity.ts'
 import {resolveRuntimeFilePath} from './runtimeWritablePath.ts'
 
 export type JudgeWorkerJournalIdentity = {
@@ -29,6 +30,7 @@ type JudgeWorkerJournalLockMetadata = {
   hostname: string
   journalPath: string
   leaseId: string
+  machineFingerprint?: string
   pid: number
   workerId: string | null
 }
@@ -243,6 +245,10 @@ const readLockMetadata = (lockPath: string): JudgeWorkerJournalLockMetadata | nu
           hostname: parsed.hostname,
           journalPath: parsed.journalPath,
           leaseId: parsed.leaseId,
+          machineFingerprint:
+            typeof parsed.machineFingerprint === 'string' && parsed.machineFingerprint.length > 0
+              ? parsed.machineFingerprint
+              : undefined,
           pid: parsed.pid,
           workerId: typeof parsed.workerId === 'string' ? parsed.workerId : null,
         }
@@ -259,10 +265,6 @@ const isProcessAlive = (pid: number) => {
   } catch (error) {
     return typeof error === 'object' && error !== null && 'code' in error && error.code === 'EPERM'
   }
-}
-
-const isLockOwnedByCurrentHost = (metadata: JudgeWorkerJournalLockMetadata) => {
-  return metadata.hostname.trim().toLowerCase() === hostname().trim().toLowerCase()
 }
 
 const removeLockForLease = (lockPath: string, leaseId: string) => {
@@ -289,6 +291,7 @@ const acquireLock = (
     hostname: hostname(),
     journalPath: identity.journalPath,
     leaseId: randomUUID(),
+    machineFingerprint: getLocalMachineFingerprint(),
     pid: process.pid,
     workerId: identity.workerId,
   } satisfies JudgeWorkerJournalLockMetadata
@@ -314,7 +317,7 @@ const acquireLock = (
       throw new Error(`Judge-worker journal lock is present but unreadable: ${identity.lockPath}`, {cause: error})
     }
 
-    if (isLockOwnedByCurrentHost(currentLock) && !isProcessAliveValue(currentLock.pid)) {
+    if (isLockOwnedByCurrentMachine(currentLock) && !isProcessAliveValue(currentLock.pid)) {
       rmSync(identity.lockPath, {force: true})
       return acquireLock(identity, isProcessAliveValue)
     }

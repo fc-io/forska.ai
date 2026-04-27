@@ -1,11 +1,11 @@
-import {spawnSync} from 'node:child_process'
-import {createHash, randomUUID} from 'node:crypto'
+import {randomUUID} from 'node:crypto'
 import {mkdir, readFile, unlink, writeFile} from 'node:fs/promises'
-import {hostname, networkInterfaces} from 'node:os'
+import {hostname} from 'node:os'
 import {dirname} from 'node:path'
 
 import {Effect} from 'effect'
 
+import {getLocalMachineFingerprint, isLockOwnedByCurrentMachine} from './localMachineIdentity.ts'
 import {
   getRuntimeCutoverVersion,
   getRuntimeCutoverVersionMismatchMessage,
@@ -48,99 +48,6 @@ export type DuckdbOwnerLeaseHistoryEntry = {
 }
 
 const duckdbOwnerLeaseHistoryLimit = 50
-
-const normalizeHostname = (value: string | null | undefined) => {
-  return typeof value === 'string' ? value.trim().toLowerCase() : ''
-}
-
-const isNonEmptyString = (value: string | null | undefined): value is string => {
-  return value !== null && value !== undefined && value !== ''
-}
-
-const getCommandOutput = (command: string, args: string[]) => {
-  const result = spawnSync(command, args, {encoding: 'utf8'})
-
-  if (result.error) {
-    return null
-  }
-
-  const output = normalizeHostname(result.stdout)
-
-  return result.status === 0 && output !== '' ? output : null
-}
-
-const getDarwinLocalHostname = () => {
-  return process.platform === 'darwin' ? getCommandOutput('/usr/sbin/scutil', ['--get', 'LocalHostName']) : null
-}
-
-const getDarwinPlatformUuid = () => {
-  if (process.platform !== 'darwin') {
-    return null
-  }
-
-  const result = spawnSync('/usr/sbin/ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice'], {encoding: 'utf8'})
-
-  if (result.error) {
-    return null
-  }
-
-  const platformUuid = /"IOPlatformUUID" = "([^"]+)"/.exec(String(result.stdout ?? ''))?.[1]
-
-  return result.status === 0 && platformUuid !== undefined ? normalizeHostname(platformUuid) : null
-}
-
-const getShellHostname = () => {
-  return getCommandOutput('hostname', [])
-}
-
-const getCurrentHostnameAliases = () => {
-  const currentHostname = normalizeHostname(hostname())
-  const darwinLocalHostname = getDarwinLocalHostname()
-  const shellHostname = getShellHostname()
-  const aliases = [
-    currentHostname,
-    currentHostname.split('.')[0],
-    shellHostname,
-    shellHostname === null ? null : shellHostname.split('.')[0],
-    darwinLocalHostname,
-    darwinLocalHostname === null ? null : `${darwinLocalHostname}.local`,
-  ].filter(isNonEmptyString)
-
-  return Array.from(new Set(aliases))
-}
-
-const getCurrentMachineFingerprintSource = () => {
-  const darwinPlatformUuid = getDarwinPlatformUuid()
-
-  if (darwinPlatformUuid !== null) {
-    return darwinPlatformUuid
-  }
-
-  const macAddresses = Array.from(
-    new Set(
-      Object.values(networkInterfaces())
-        .flatMap((addresses) => {
-          return (addresses ?? []).map((address) => {
-            return address.mac.trim().toLowerCase()
-          })
-        })
-        .filter((macAddress) => {
-          return macAddress !== '' && macAddress !== '00:00:00:00:00:00'
-        }),
-    ),
-  ).sort()
-
-  return macAddresses.length > 0 ? macAddresses.join('|') : normalizeHostname(hostname())
-}
-
-const currentMachineFingerprint = createHash('sha256').update(getCurrentMachineFingerprintSource()).digest('hex')
-const currentHostnameAliases = getCurrentHostnameAliases()
-
-const isLeaseOwnedByCurrentMachine = (metadata: DuckdbOwnerLeaseMetadata) => {
-  const matchesCurrentHostname = currentHostnameAliases.includes(normalizeHostname(metadata.hostname))
-
-  return matchesCurrentHostname || metadata.machineFingerprint === currentMachineFingerprint
-}
 
 const getDuckdbOwnerLeasePath = (databasePath: string) => {
   return databasePath === ':memory:' ? null : `${databasePath}.duckdb-owner.lock`
@@ -387,11 +294,11 @@ const removeLeasePath = (leasePath: string) => {
 }
 
 export const isDuckdbOwnerLeaseOwnedByCurrentProcess = (metadata: DuckdbOwnerLeaseMetadata) => {
-  return isLeaseOwnedByCurrentMachine(metadata) && metadata.pid === process.pid
+  return isLockOwnedByCurrentMachine(metadata) && metadata.pid === process.pid
 }
 
 const canRemoveStaleLease = (metadata: DuckdbOwnerLeaseMetadata) => {
-  return isLeaseOwnedByCurrentMachine(metadata) && (!isProcessAlive(metadata.pid) || isDuckdbOwnerLeaseStale(metadata))
+  return isLockOwnedByCurrentMachine(metadata) && (!isProcessAlive(metadata.pid) || isDuckdbOwnerLeaseStale(metadata))
 }
 
 const canTakeOverStaleLease = (metadata: DuckdbOwnerLeaseMetadata, takeoverLeaseId: string | undefined) => {
@@ -488,7 +395,7 @@ const assertIncompatibleLeaseCanBeReplaced = (metadata: DuckdbOwnerLeaseMetadata
 }
 
 export const isDuckdbOwnerLeaseProcessAlive = (metadata: DuckdbOwnerLeaseMetadata) => {
-  return isLeaseOwnedByCurrentMachine(metadata) ? isProcessAlive(metadata.pid) : true
+  return isLockOwnedByCurrentMachine(metadata) ? isProcessAlive(metadata.pid) : true
 }
 
 export const isDuckdbOwnerLeaseStale = (metadata: DuckdbOwnerLeaseMetadata, nowMs = Date.now()) => {
@@ -518,7 +425,7 @@ export const acquireDuckdbOwnerLease = (params: {
     databasePath: params.databasePath,
     heartbeatAt: acquiredAt,
     hostname: hostname(),
-    machineFingerprint: currentMachineFingerprint,
+    machineFingerprint: getLocalMachineFingerprint(),
     leaseId: randomUUID(),
     pid: process.pid,
     runtimeVersion: getRuntimeCutoverVersion(),
@@ -572,14 +479,14 @@ export const acquireDuckdbOwnerLease = (params: {
       ? currentRecord.leasePath === leasePath
         ? writeDuckdbOwnerLeaseMetadata(leasePath, {
             ...currentLease,
-            machineFingerprint: currentMachineFingerprint,
+            machineFingerprint: getLocalMachineFingerprint(),
             runtimeVersion: getRuntimeCutoverVersion(),
           }).pipe(
             Effect.as({
               leasePath,
               metadata: {
                 ...currentLease,
-                machineFingerprint: currentMachineFingerprint,
+                machineFingerprint: getLocalMachineFingerprint(),
                 runtimeVersion: getRuntimeCutoverVersion(),
               },
             }),
