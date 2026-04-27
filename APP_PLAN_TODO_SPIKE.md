@@ -13,32 +13,37 @@
 ## Locked Decisions
 
 - Use ElectroBun first and keep Electron as the fallback shell.
-- Use one Bun backend sidecar in `SERVER_ROLE=dev-single`.
+- Target packaged desktop startup on a multi-worker Bun backend stack: `SERVER_ROLE=api`, `SERVER_ROLE=maintenance-worker`, and `SERVER_ROLE=judge-worker`.
+- Keep the current `SERVER_ROLE=dev-single` desktop sidecar only as a transitional local-dev path until packaged launcher work switches over.
 - Use a source-first backend artifact for this spike.
 - Bundle Bun in the packaged app.
 - Load the built frontend directly in the desktop shell.
 - Do not bundle `sqlite3`.
-- Keep DuckDB CLI optional for diagnostics only.
+- Keep DuckDB CLI out of packaged startup and core flows; any non-default DB, diagnostic, or developer-only CLI path must be optional and failure-tolerant.
 - Keep Codex CLI as optional bring-your-own tooling.
 - Do not start signed installers, auto-update, or release-ops work in this spike.
 
 ## Current Starting Point
 
 - `package.json` already has `desktop:dev` and `desktop:build`.
-- `src/desktop/index.ts` already launches the backend sidecar, bridges `/api` requests, and waits for `/api/runtime/ready`.
+- `src/desktop/index.ts` already launches one `SERVER_ROLE=dev-single` backend sidecar, bridges `/api` requests, and waits for `/api/runtime/ready`; it does not yet launch or own the packaged multi-worker stack.
+- `scripts/startServerStack.ts` already manages API, maintenance-worker, and judge-worker subprocesses for the `server-stack` runtime-profile path, but desktop packaging has not adopted that lifecycle yet.
+- `scripts/runWithRuntimeProfile.ts` and `scripts/startServerStack.ts` still use bare `bun`/`bunx` commands and repo-relative entrypoints for current dev and server-stack launch paths.
 - `src/desktop/getDesktopRuntimeConfig.ts` still resolves Bun from `FORSKA_DESKTOP_BUN_BIN`, host lookup, or bare `bun` instead of an artifact-relative bundled Bun, and still defaults desktop API to `32101`.
-- `electrobun.config.ts` still copies `src` and `node_modules` directly, so the packaged runtime shape is not locked yet; its `watchIgnore` entries also miss the dot-prefixed `.desktopArtifacts` and `.desktopBuild` folders configured for generated output.
+- `electrobun.config.ts` still copies `src` and `node_modules` directly, so the packaged runtime shape is not locked yet; it does not copy `scripts`, which matters if packaged startup launches `scripts/startServerStack.ts`, and its `watchIgnore` entries also miss the dot-prefixed `.desktopArtifacts` and `.desktopBuild` folders configured for generated output.
+- `bun run lint` currently runs `bunx eslint src`, so work in `scripts/` or root config files needs explicit targeted ESLint coverage until the repo lint script is broadened.
 - `src/server/utils/getCodexAppServerClient.ts` still falls back to host-installed `codex`.
 - `src/server/serverMain.ts` still logs Codex guidance that points packaged users at a browser-dev URL instead of an in-app desktop flow.
 - `src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts` still shells out to `sqlite3` for maintenance fallback flows.
 - `src/services/olap/duckdbRunner.ts` can still shell out to the DuckDB CLI for non-default DuckDB paths; the default app DB path is covered by the shared app database service.
 - `src/server/cron/nvidiaSmi.ts` can still shell out to `ssh` and remote `nvidia-smi` for optional remote-worker telemetry.
+- `src/server/utils/duckdbOwnerLease.ts` can still shell out to system identity helpers such as `hostname`, `scutil`, and `ioreg` while building DuckDB owner lease metadata.
 - Runtime writable helpers are already wired into the known Covidence, structured import, uploaded PDF, fetched PDF, runtime asset serving, and PDF conversion local-file read paths; the remaining work is an audit plus packaged-mode verification rather than first implementation for those paths.
 - Direct automated coverage is still missing for some listed runtime-write paths: uploaded PDF storage, fetched PDF storage, runtime asset serving, PDF conversion local-file reads, and FHIR desktop temp-spooling behavior.
 
 ## Exit Criteria
 
-- An unsigned macOS artifact opens a desktop window, starts the packaged Bun backend, and reaches a healthy app state.
+- An unsigned macOS artifact opens a desktop window, starts the packaged Bun backend stack, and reaches a healthy app state across API, maintenance-worker, and judge-worker roles.
 - The artifact does not rely on repo checkout, Bun on `PATH`, DuckDB CLI, `sqlite3`, `codex`, or optional telemetry CLIs such as `ssh` and `nvidia-smi` for startup or normal app usage.
 - First launch, quit, relaunch, one import, and one non-Codex provider or manual provider setup work with app-owned user directories and no host CLI dependency.
 - Browser workflows still work with `bun run dev:server` and `bun run dev:app`.
@@ -47,7 +52,7 @@
 
 ## Phase 1 Recommendation
 
-- Start with the smallest artifact that can pass real smoke tests: packaged Bun plus backend source plus packaged frontend assets.
+- Start with the smallest artifact that can pass real smoke tests: packaged Bun plus backend source, the multi-worker backend stack, and packaged frontend assets.
 - Do not spend time on compiled backend artifacts, signed installers, updater wiring, or release channels before the source-first shape passes macOS smoke tests and completes one native Windows smoke run.
 
 ## Phase 1 Workstreams
@@ -59,8 +64,12 @@ Goal: remove host-Bun and repo-root assumptions from the packaged desktop boot p
 Files:
 
 - `electrobun.config.ts`
+- `scripts/runWithRuntimeProfile.ts`
+- `scripts/startServerStack.ts`
 - `src/desktop/getDesktopRuntimeConfig.ts`
 - `src/desktop/index.ts`
+- `src/server/utils/backgroundServerStack.ts`
+- `src/server/utils/serverRole.ts`
 - `package.json` if helper scripts become necessary
 
 Deliverables:
@@ -68,15 +77,23 @@ Deliverables:
 - Packaged mode resolves only the bundled Bun from the artifact; `desktop:dev` may keep explicit or host Bun lookup, but that path must stay visibly separate from packaged startup.
 - Missing bundled Bun fails with actionable diagnostics instead of silently falling back to host Bun.
 - Backend entrypoint resolution is artifact-relative and deterministic.
+- Any reused stack launcher accepts artifact-relative Bun and backend entrypoint inputs instead of hard-coded bare `bun` and `process.cwd()` source assumptions.
+- The source-first artifact either includes every launched backend stack entrypoint such as `scripts/startServerStack.ts`, or moves the packaged stack launcher under copied `src` paths.
+- Packaged desktop launches and owns API, maintenance-worker, and judge-worker roles instead of relying on `SERVER_ROLE=dev-single`.
+- The desktop launcher assigns deterministic loopback ports, `SERVER_DUCKDB_OWNER_URL`, role env, data paths, and log paths for the stack.
+- Startup readiness, role logs, child-process shutdown, relaunch, and crash recovery are surfaced per role.
 - Startup errors include resolved Bun path, backend entrypoint, API origin, data root, and log path.
 - ElectroBun watch ignores match the actual dot-prefixed build and artifact folders.
 
 Quality Gates:
 
 - `bun run lint`
+- `bunx eslint electrobun.config.ts scripts/runWithRuntimeProfile.ts scripts/startServerStack.ts`
+- `bun test scripts/runWithRuntimeProfile.test.ts`
 - `bun test src/desktop/getDesktopRuntimeConfig.test.ts`
 - `bun test src/app/utils/getDesktopApiOrigin.test.ts`
 - `bun test src/app/utils/getApiRequestUrl.test.ts`
+- `bun test src/server/utils/backgroundServerStack.test.ts`
 - `bun run build`
 - `bun run desktop:build`
 - Browser verify: `bun run dev:server` and `bun run dev:app` still boot after runtime-shape changes.
@@ -130,7 +147,10 @@ Files:
 
 - `src/server/index.ts`
 - `src/server/serverMain.ts`
+- `scripts/runWithRuntimeProfile.ts`
+- `scripts/startServerStack.ts`
 - `src/server/utils/backgroundServerStack.ts`
+- `src/server/utils/serverRole.ts`
 - `src/server/utils/duckdbService.ts`
 - `src/server/services/readOnlyDuckdbService.ts`
 - `src/server/cron/judgmentsJobs/judgeWorkerCompletionJournal.ts`
@@ -142,30 +162,34 @@ Deliverables:
 - `bun:sqlite` works for job state and restart.
 - Migrations run on first launch and relaunch.
 - Restart and crash recovery leave local data usable.
+- API, maintenance-worker, and judge-worker roles each start with the expected capabilities and recover without requiring `dev-single`.
 
 Quality Gates:
 
 - `bun run lint`
+- `bunx eslint scripts/runWithRuntimeProfile.ts scripts/startServerStack.ts`
 - `bun test src/server/utils/getDuckdbPath.test.ts`
 - `bun test src/server/utils/backgroundServerStack.test.ts`
+- `bun test scripts/runWithRuntimeProfile.test.ts`
 - `bun test src/server/utils/duckdbServiceNodeApiSpike.test.ts`
 - `bun test src/server/indexStartup.test.ts`
 - macOS verify: first launch, quit, relaunch.
 
 ### 4. Port And Loopback Hardening
 
-Goal: packaged desktop should not fail opaquely when the default port is already taken.
+Goal: packaged desktop should not fail opaquely when any default backend stack port is already taken.
 
 Files:
 
 - `src/desktop/getDesktopRuntimeConfig.ts`
 - `src/desktop/index.ts`
+- `src/server/utils/backgroundServerStack.ts`
 - `src/server/serverMain.ts`
 - `src/utils/runtimePortDefaults.ts` if shared defaults need to change
 
 Deliverables:
 
-- Occupied desktop API port either falls back to a free loopback port or shows an actionable startup error.
+- Occupied desktop API, maintenance-worker, or judge-worker ports either fall back to free loopback ports or show an actionable startup error.
 - Packaged mode stays loopback-only.
 
 Quality Gates:
@@ -173,7 +197,9 @@ Quality Gates:
 - `bun run lint`
 - `bun test src/desktop/getDesktopRuntimeConfig.test.ts`
 - `bun test src/desktop/desktopSingleInstance.test.ts`
-- macOS verify: launch with the default port already occupied.
+- `bun test src/server/utils/backgroundServerStack.test.ts`
+- `bun run desktop:build`
+- macOS verify: launch with the default API, maintenance-worker, and judge-worker ports already occupied.
 
 ### 5. Optional CLI Behavior
 
@@ -192,6 +218,7 @@ Files:
 - `src/server/providers/transports/codexAppTransport.ts`
 - `src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts`
 - `src/server/cron/nvidiaSmi.ts`
+- `src/server/utils/duckdbOwnerLease.ts`
 - `src/services/olap/duckdbRunner.ts`
 - `src/server/utils/duckdbBinary.ts`
 - `src/app/routes/+admin/+models/providerConnectionsClient.ts`
@@ -210,19 +237,23 @@ Deliverables:
 - `sqlite3` remains maintenance-only, is not invoked during packaged startup, restart, recovery, or core smoke flows, and explicit repair/diagnostic routes report degraded maintenance results if unavailable instead of unhandled spawn failures.
 - DuckDB CLI use stays out of the default app database query path in packaged mode; non-default or diagnostic paths either remain developer-only or degrade with clear guidance if the CLI is unavailable.
 - Optional `ssh` and `nvidia-smi` telemetry remains disabled unless remote worker URLs are configured, and missing binaries never block startup or core desktop flows.
+- DuckDB owner lease identity helpers remain best-effort; missing `hostname`, `scutil`, or `ioreg` must not block packaged startup or ownership recovery.
 
 Quality Gates:
 
 - `bun run lint`
+- `bun run build`
 - `bun test src/server/utils/getCodexAppServerClient.test.ts`
 - Add `src/server/routes/ModelsRoutes.test.ts` coverage for missing-`codex` status and login behavior, then run `bun test src/server/routes/ModelsRoutes.test.ts`.
 - `bun test src/server/routes/ProviderConnectionsRoutes.test.ts`
 - `bun test src/server/providers/providerAuthService.test.ts`
 - `bun test src/server/providers/adapters/directAdapters.test.ts`
+- `bun test src/app/routes/+admin/+models/providerUiState.test.ts`
 - `bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts`
 - `bun test src/server/routes/JudgmentsJobsRoutes.test.ts`
 - `bun test src/services/olap/duckdbRunnerAppDatabase.test.ts`
 - `bun test src/server/utils/duckdbBinary.test.ts`
+- `bun test src/server/utils/duckdbOwnerLease.test.ts`
 - Add `src/server/cron/nvidiaSmi.test.ts` coverage for missing `ssh`/`nvidia-smi` telemetry behavior, then run `bun test src/server/cron/nvidiaSmi.test.ts`.
 - Packaged app verify: startup, API, import, non-Codex provider or manual provider setup, quit, and relaunch all work with no `codex`, DuckDB CLI, `sqlite3`, `ssh`, or `nvidia-smi` exposure.
 - Packaged app verify: opening Providers or Settings with no `codex` installed shows in-app guidance and no browser-dev-only instruction.
@@ -234,8 +265,7 @@ Goal: validate the chosen source-first shape under clean-machine assumptions.
 Build Commands:
 
 - Run from the repo on a build machine with Bun available.
-- `bun run build`
-- `bun run desktop:build`
+- `bun run desktop:build` (currently invokes `bun run build` before `electrobun build`)
 
 Artifact Run Preconditions:
 
@@ -247,7 +277,7 @@ Manual Checks:
 
 - Open the unsigned artifact.
 - Confirm startup diagnostics show the artifact Bun path, not a host `bun` path.
-- Confirm the backend reaches `/api/runtime/ready`.
+- Confirm the backend stack reaches `/api/runtime/ready` and logs API, maintenance-worker, and judge-worker role readiness.
 - Import one dataset.
 - Configure one non-Codex provider or manual provider record that does not require a host CLI.
 - Quit and relaunch.
@@ -267,8 +297,7 @@ Goal: run the same source-first artifact assumptions on native Windows before ma
 Build Commands:
 
 - Run on native Windows or a native Windows CI runner with Bun available.
-- `bun run build`
-- `bun run desktop:build`
+- `bun run desktop:build` (currently invokes `bun run build` before `electrobun build`)
 
 Artifact Run Preconditions:
 
@@ -279,6 +308,7 @@ Manual Checks:
 
 - Launch, quit, relaunch.
 - API connectivity.
+- API, maintenance-worker, and judge-worker role readiness.
 - Import one dataset.
 - Configure one non-Codex provider or manual provider record that does not require a host CLI.
 - Data root and log path.
