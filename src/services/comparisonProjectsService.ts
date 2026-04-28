@@ -100,6 +100,8 @@ export type ComparisonProjectJudgmentsColumn = ComparisonProjectDifferenceColumn
   modelId: string | null
   modelLabel: string
   contentLabel: string | null
+  sourceProjectId: string | null
+  sourceProjectName: string | null
 }
 
 export type ComparisonProjectContentVariant = {key: string; label: string}

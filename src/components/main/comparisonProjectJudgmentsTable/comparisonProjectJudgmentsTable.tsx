@@ -7,7 +7,10 @@ import type {
   ComparisonProjectJudgmentsRow,
 } from '../../../services/comparisonProjectsService.ts'
 
-export type ComparisonProjectJudgmentsTableColumn = ComparisonProjectJudgmentsColumn & {sourceProjectId: string | null}
+export type ComparisonProjectJudgmentsTableColumn = ComparisonProjectJudgmentsColumn & {
+  sourceProjectId: string | null
+  sourceProjectName: string | null
+}
 
 type ComparisonProjectJudgmentsTableProps = {
   columns: ComparisonProjectJudgmentsTableColumn[]
@@ -73,6 +76,15 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                     class={`w-[18rem] min-w-[18rem] max-w-[18rem] px-4 py-3 text-left text-xs font-medium uppercase tracking-wider ${column.kind === 'human' ? 'bg-amber-50 text-amber-800' : 'text-gray-500'}`}
                   >
                     <div class="space-y-1 normal-case tracking-normal">
+                      <Show when={column.sourceProjectName}>
+                        {(sourceProjectName) => {
+                          return (
+                            <div class="truncate text-xs font-semibold text-gray-900" title={sourceProjectName()}>
+                              {sourceProjectName()}
+                            </div>
+                          )
+                        }}
+                      </Show>
                       <div class="text-sm font-semibold">{column.promptLabel}</div>
                       <div class="text-xs font-medium uppercase tracking-wide opacity-80">
                         <div>{modelLabelParts.name}</div>

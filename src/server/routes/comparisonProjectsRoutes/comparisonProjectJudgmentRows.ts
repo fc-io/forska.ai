@@ -22,6 +22,7 @@ export type ComparisonProjectJudgmentLlmRow = {
   createdAt: Date
   promptId: string
   modelId: string
+  sourceProjectId: string | null
   answeredOriginal: string | null
   answeredOriginalAsArray: string[] | null
   useTitle: boolean
@@ -102,8 +103,13 @@ export const getComparisonProjectColumnId = (
   promptId: string,
   modelId?: string | null,
   contentKey?: string | null,
+  sourceProjectId?: string | null,
 ) => {
-  return kind === 'human' ? `human:${promptId}` : `llm:${modelId}:${contentKey ?? 'default'}:${promptId}`
+  return kind === 'human'
+    ? `human:${promptId}`
+    : sourceProjectId
+      ? `llm:${sourceProjectId}:${modelId}:${contentKey ?? 'default'}:${promptId}`
+      : `llm:${modelId}:${contentKey ?? 'default'}:${promptId}`
 }
 
 const isDefined = <T>(value: T | null | undefined): value is T => {
@@ -231,7 +237,13 @@ export const getComparisonProjectScopedArticleBatch = async (params: {
 export const getComparisonProjectLlmCells = (rows: readonly ComparisonProjectJudgmentLlmRow[]) => {
   return rows.reduce<Record<string, Record<string, string | null>>>((articleMap, row) => {
     const articleCells = articleMap[row.articleId] ?? {}
-    const columnId = getComparisonProjectColumnId('llm', row.promptId, row.modelId, getComparisonProjectContentKey(row))
+    const columnId = getComparisonProjectColumnId(
+      'llm',
+      row.promptId,
+      row.modelId,
+      getComparisonProjectContentKey(row),
+      row.sourceProjectId,
+    )
 
     return {...articleMap, [row.articleId]: {...articleCells, [columnId]: getJudgmentDisplayAnswer(row)}}
   }, {})

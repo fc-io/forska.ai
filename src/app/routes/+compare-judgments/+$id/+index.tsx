@@ -65,6 +65,10 @@ const getHumanColumnSourceProjectId = (comparisonProject?: {
     : (comparisonProject?.sourceProjects[0]?.id ?? null)
 }
 
+const getSourceProjectName = (sourceProject: {name: string} | undefined) => {
+  return sourceProject?.name ?? null
+}
+
 const getColumnSourceProjectId = (
   column: ComparisonProjectJudgmentsColumn,
   comparisonProject?: {
@@ -78,6 +82,34 @@ const getColumnSourceProjectId = (
     : (comparisonProject?.sourceProjects.find((sourceProject) => {
         return sourceProject.modelId === column.modelId
       })?.id ?? null)
+}
+
+const getColumnSourceProjectName = (
+  column: ComparisonProjectJudgmentsColumn,
+  comparisonProject?: {
+    humanJudgmentMode: 'prompt' | 'summary'
+    summarySourceProjectId: string | null
+    sourceProjects: Array<{id: string; modelId: string; name: string}>
+  },
+) => {
+  if (column.sourceProjectName) {
+    return column.sourceProjectName
+  }
+
+  if (column.kind === 'human') {
+    const sourceProjectId = getHumanColumnSourceProjectId(comparisonProject)
+    return getSourceProjectName(
+      comparisonProject?.sourceProjects.find((sourceProject) => {
+        return sourceProject.id === sourceProjectId
+      }),
+    )
+  }
+
+  return getSourceProjectName(
+    comparisonProject?.sourceProjects.find((sourceProject) => {
+      return sourceProject.id === column.sourceProjectId || sourceProject.modelId === column.modelId
+    }),
+  )
 }
 
 const CompareProjectJudgmentsPage = () => {
@@ -147,7 +179,11 @@ const CompareProjectJudgmentsPage = () => {
 
     return getOrderedComparisonProjectColumns(comparisonProject?.columns ?? [], comparisonProject?.prompts ?? []).map(
       (column) => {
-        return {...column, sourceProjectId: getColumnSourceProjectId(column, comparisonProject)}
+        return {
+          ...column,
+          sourceProjectId: column.sourceProjectId ?? getColumnSourceProjectId(column, comparisonProject),
+          sourceProjectName: getColumnSourceProjectName(column, comparisonProject),
+        }
       },
     )
   })

@@ -482,9 +482,15 @@ const queryJson = async (
   }
 
   if (statement.includes('FROM app.project_prompt') && statement.includes('pp.project_id IN')) {
-    return sourceProjectPromptRows.filter((promptRow) => {
+    const promptRowsForSelectedProjects = sourceProjectPromptRows.filter((promptRow) => {
       return statement.includes(`'${promptRow.projectId}'`)
     })
+
+    return statement.includes('AS sourceProjectId')
+      ? promptRowsForSelectedProjects.map((promptRow) => {
+          return {...promptRow, id: promptRow.promptId, sourceProjectId: promptRow.projectId}
+        })
+      : promptRowsForSelectedProjects
   }
 
   if (statement.includes('FROM app.project_import_route') && statement.includes('pir.project_id IN')) {
@@ -1140,7 +1146,33 @@ test('comparison project create-from-project keeps prompt sources in prompt mode
   expect(state.sourceProjectLinks).toEqual([{id: 'comparison-project-source-1', sourceProjectId: 'prompt-project-1'}])
 })
 
-test('comparison project create-from-project rejects incompatible additional summary projects', async () => {
+test('comparison project create-from-project allows additional summary projects with different summary prompts', async () => {
+  mockDatabaseStateRef.current = {...createMockDatabaseState(), failPromptInsert: false, promptLinks: []}
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects/from-project', {
+      body: JSON.stringify({
+        compareWithHumans: true,
+        description: 'Different prompt multi-project summary comparison',
+        name: 'Different prompt multi-project summary comparison',
+        sourceProjectId: 'source-project-1',
+        sourceProjectIds: ['source-project-mismatch'],
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+
+  expect(response.status).toBe(200)
+  expect(getMockDatabaseState().sourceProjectLinks).toEqual([
+    {id: 'comparison-project-source-1', sourceProjectId: 'source-project-1'},
+    {id: 'comparison-project-source-2', sourceProjectId: 'source-project-mismatch'},
+  ])
+})
+
+test('comparison project create-from-project rejects non-summary additional projects in summary mode', async () => {
   mockDatabaseStateRef.current = {...createMockDatabaseState(), failPromptInsert: false, promptLinks: []}
 
   const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
@@ -1150,9 +1182,10 @@ test('comparison project create-from-project rejects incompatible additional sum
       body: JSON.stringify({
         compareWithHumans: true,
         description: 'Broken multi-project summary comparison',
+        humanJudgmentMode: 'summary',
         name: 'Broken multi-project summary comparison',
         sourceProjectId: 'source-project-1',
-        sourceProjectIds: ['source-project-mismatch'],
+        sourceProjectIds: ['prompt-project-1'],
       }),
       headers: {'content-type': 'application/json'},
       method: 'POST',
@@ -1161,7 +1194,7 @@ test('comparison project create-from-project rejects incompatible additional sum
   const bodyText = await response.text()
 
   expect(response.status).toBe(500)
-  expect(bodyText).toContain('Additional projects must match the summary source project prompt criteria exactly')
+  expect(bodyText).toContain('Additional projects require summary-capable source projects')
   expect(getMockDatabaseState().sourceProjectLinks).toEqual([])
 })
 
@@ -1706,7 +1739,7 @@ test('summary comparison project export streams synthetic summary csv columns', 
       'Date added',
       'Overall decision - Model 1 - Article Title and Abstract',
       'Overall decision - Model 2 - Article Title and Abstract',
-      'Overall decision - Human',
+      'Summary Source - Overall decision - Human',
     ].join(','),
     ['Article 1', 'Article 1 summary', '2026-03-30T00:00:00.000Z', 'no', 'yes', 'maybe'].join(','),
   ])
@@ -1895,9 +1928,17 @@ test('summary comparison judgments scope to explicit source project links when a
       method: 'POST',
     }),
   )
+  const judgmentsBody = (await judgmentsResponse.json()) as {
+    data: {data: Array<{cells: Record<string, string | null>}>; totalCount: number}
+  }
+  const [row] = judgmentsBody.data.data
   const state = getMockDatabaseState()
 
   expect(judgmentsResponse.status).toBe(200)
+  expect(judgmentsBody.data.totalCount).toBe(1)
+  expect(row?.cells['llm:source-project-1:model-1:1100:summary']).toBe('no')
+  expect(row?.cells['llm:source-project-2:model-2:1100:summary']).toBe('yes')
+  expect(row?.cells['human:summary']).toBe('maybe')
   expect(
     state.queryStatements.some((statement) => {
       return (

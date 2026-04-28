@@ -46,20 +46,6 @@ const getSummaryCriteriaLabel = (prompt: ComparisonProjectSource['prompts'][numb
   return labelParts.join(' · ')
 }
 
-const getSummaryPromptContractValue = (sourceProject: ComparisonProjectSource | undefined) => {
-  return JSON.stringify(
-    getSummaryPrompts(sourceProject).map((prompt) => {
-      return {
-        promptId: prompt.id,
-        order: prompt.order,
-        criteriaDisposition: prompt.criteriaDisposition,
-        criteriaSectionKey: prompt.criteriaSectionKey,
-        criteriaSectionLabel: prompt.criteriaSectionLabel,
-      }
-    }),
-  )
-}
-
 const getAdditionalSummaryProjectReason = (
   primarySourceProject: ComparisonProjectSource | undefined,
   additionalSourceProject: ComparisonProjectSource,
@@ -76,9 +62,7 @@ const getAdditionalSummaryProjectReason = (
     return 'No prompts with summary criteria metadata.'
   }
 
-  return getSummaryPromptContractValue(primarySourceProject) === getSummaryPromptContractValue(additionalSourceProject)
-    ? null
-    : 'Summary prompts do not match the primary project.'
+  return null
 }
 
 const CreateCompareJudgmentsFromProjectPage = () => {
@@ -424,8 +408,8 @@ const CreateCompareJudgmentsFromProjectPage = () => {
                 <div>
                   <p class="text-sm font-medium text-gray-900">Additional Projects to Compare With</p>
                   <p class="text-xs text-muted-foreground mt-1">
-                    The primary project stays the summary source. Additional projects add compatible articles and
-                    models.
+                    The primary project stays the human summary source. Additional projects add their own summary
+                    results.
                   </p>
                 </div>
                 <span class="text-xs text-muted-foreground">
@@ -497,7 +481,8 @@ const CreateCompareJudgmentsFromProjectPage = () => {
                 </span>
               </div>
               <p class="text-sm text-muted-foreground mb-3">
-                These prompts come from the primary project and must match on any additional projects you include.
+                Human summary judgments come from the primary project. Each additional project uses its own summary
+                prompts to derive LLM overall decisions.
               </p>
               <Show when={selectedSourceProjectSummaryPrompts().length === 0}>
                 <p class="text-sm text-muted-foreground">

@@ -50,6 +50,7 @@ const getLlmRow = (params: {
     createdAt: new Date('2026-04-04T00:00:00.000Z'),
     modelId: params.modelId ?? 'model-1',
     promptId: params.promptId,
+    sourceProjectId: null,
     useAbstract: true,
     useFulltext: false,
     useFulltextNoImages: false,

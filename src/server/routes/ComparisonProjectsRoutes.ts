@@ -79,6 +79,14 @@ type ComparisonProjectJudgmentsColumn = ComparisonProjectDifferenceColumn & {
   modelId: string | null
   modelLabel: string
   contentLabel: string | null
+  sourceProjectId: string | null
+  sourceProjectName: string | null
+}
+type ComparisonProjectSourceSummaryPromptConfig = ComparisonProjectPromptConfig & {sourceProjectId: string}
+type ComparisonProjectSummaryPromptGroup = {
+  modelId: string | null
+  prompts: ComparisonProjectPromptConfig[]
+  sourceProjectId: string | null
 }
 type ComparisonProjectScope = {
   id: string
@@ -100,6 +108,7 @@ type ComparisonProjectScope = {
   sourceProjects: ComparisonProjectLinkedSourceProject[]
   contentVariants: ComparisonProjectContentVariant[]
   prompts: ComparisonProjectPromptConfig[]
+  sourceProjectSummaryPrompts: ComparisonProjectSourceSummaryPromptConfig[]
   models: ComparisonProjectModelConfig[]
   importRouteIds: string[]
   columns: ComparisonProjectJudgmentsColumn[]
@@ -190,20 +199,6 @@ const getSourceProjectSummaryPromptSelections = (sourceProject: ComparisonProjec
         criteriaSectionLabel: prompt.criteriaSectionLabel,
       }
     })
-}
-
-const getPromptSelectionContractValue = (promptSelections: PromptSelection[]) => {
-  return JSON.stringify(
-    promptSelections.map((promptSelection) => {
-      return {
-        promptId: promptSelection.promptId,
-        order: promptSelection.order,
-        criteriaDisposition: promptSelection.criteriaDisposition ?? null,
-        criteriaSectionKey: promptSelection.criteriaSectionKey ?? null,
-        criteriaSectionLabel: promptSelection.criteriaSectionLabel ?? null,
-      }
-    }),
-  )
 }
 
 const comparisonProjectTable = 'app.comparison_project'
@@ -778,6 +773,56 @@ const getSummarySourceProject = async (summarySourceProjectId: string | null) =>
     : null
 }
 
+const getComparisonProjectSourceSummaryPromptConfigs = async (sourceProjectIds: string[]) => {
+  if (sourceProjectIds.length === 0) {
+    return []
+  }
+
+  const rows = await appDatabaseService.queryJson<{
+    sourceProjectId: string
+    id: string
+    promptHeading: string | null
+    order: number | null
+    criteriaDisposition: ProjectPromptCriteriaDisposition | null
+    criteriaSectionKey: string | null
+    criteriaSectionLabel: string | null
+  }>(`
+    SELECT
+      pp.project_id AS sourceProjectId,
+      p.id AS id,
+      p.prompt_heading AS promptHeading,
+      pp.prompt_order AS "order",
+      pp.criteria_disposition AS criteriaDisposition,
+      pp.criteria_section_key AS criteriaSectionKey,
+      pp.criteria_section_label AS criteriaSectionLabel
+    FROM ${projectPromptTable} pp
+    INNER JOIN ${promptTable} p ON p.id = pp.prompt_id
+    WHERE pp.project_id IN (${getInClause(sourceProjectIds)})
+      AND pp.enabled = TRUE
+      AND pp.criteria_disposition IS NOT NULL
+      AND pp.criteria_section_key IS NOT NULL
+    ORDER BY pp.project_id ASC, pp.prompt_order ASC, p.created_at ASC
+  `)
+  const fallbackOrderByProjectId = new Map<string, number>()
+
+  return rows.map<ComparisonProjectSourceSummaryPromptConfig>((row) => {
+    const fallbackOrder = fallbackOrderByProjectId.get(row.sourceProjectId) ?? 0
+    const order = row.order ?? fallbackOrder
+    fallbackOrderByProjectId.set(row.sourceProjectId, fallbackOrder + 1)
+
+    return {
+      id: row.id,
+      sourceProjectId: row.sourceProjectId,
+      promptHeading: row.promptHeading,
+      promptLabel: getPromptLabel(row.promptHeading, order),
+      order,
+      criteriaDisposition: row.criteriaDisposition,
+      criteriaSectionKey: row.criteriaSectionKey,
+      criteriaSectionLabel: row.criteriaSectionLabel,
+    }
+  })
+}
+
 const getValidatedComparisonSourceProjectIds = async (db: AppQueryRunner, sourceProjectIds: string[]) => {
   const uniqueSourceProjectIds = getUniqueStringValues(sourceProjectIds)
 
@@ -844,16 +889,12 @@ const getValidatedCreateFromProjectSummarySelections = (params: {
     throw new Error('Selected summary source project has no prompts with summary criteria metadata')
   }
 
-  const summaryPromptContractValue = getPromptSelectionContractValue(summaryPromptSelections)
-  const mismatchedSourceProject = params.selectedSourceProjects.find((sourceProject) => {
-    return (
-      getPromptSelectionContractValue(getSourceProjectSummaryPromptSelections(sourceProject))
-      !== summaryPromptContractValue
-    )
+  const sourceProjectWithoutSummaryPrompts = params.selectedSourceProjects.find((sourceProject) => {
+    return getSourceProjectSummaryPromptSelections(sourceProject).length === 0
   })
 
-  if (mismatchedSourceProject) {
-    throw new Error('Additional projects must match the summary source project prompt criteria exactly')
+  if (sourceProjectWithoutSummaryPrompts) {
+    throw new Error('All selected summary projects must have prompts with summary criteria metadata')
   }
 
   return summaryPromptSelections
@@ -1042,12 +1083,60 @@ const getComparisonProjectColumns = (
   contentVariants: ComparisonProjectContentVariant[],
   compareWithHumans: boolean,
   humanJudgmentMode: HumanJudgmentMode,
+  summarySourceProjectId: string | null,
+  sourceProjects: ComparisonProjectLinkedSourceProject[],
+  useSourceProjectLlmColumns: boolean,
 ) => {
+  const modelRowsById = modelRows.reduce<Map<string, ComparisonProjectModelConfig>>((rowMap, modelRow) => {
+    rowMap.set(modelRow.id, modelRow)
+    return rowMap
+  }, new Map<string, ComparisonProjectModelConfig>())
+  const sourceProjectsById = sourceProjects.reduce<Map<string, ComparisonProjectLinkedSourceProject>>(
+    (rowMap, sourceProject) => {
+      rowMap.set(sourceProject.id, sourceProject)
+      return rowMap
+    },
+    new Map<string, ComparisonProjectLinkedSourceProject>(),
+  )
   const shownPromptRows =
     compareWithHumans && humanJudgmentMode === 'summary'
       ? [{id: summaryPromptId, promptLabel: summaryPromptLabel}]
       : promptRows
-  const llmColumns = shownPromptRows.flatMap((promptRow) => {
+  const sourceProjectLlmColumns = useSourceProjectLlmColumns
+    ? sourceProjects.flatMap((sourceProject) => {
+        const modelRow = modelRowsById.get(sourceProject.modelId)
+
+        return modelRow
+          ? contentVariants.map<ComparisonProjectJudgmentsColumn>((contentVariant) => {
+              return {
+                id: getComparisonProjectColumnId(
+                  'llm',
+                  summaryPromptId,
+                  modelRow.id,
+                  contentVariant.key,
+                  sourceProject.id,
+                ),
+                kind: 'llm',
+                promptId: summaryPromptId,
+                promptLabel: summaryPromptLabel,
+                modelId: modelRow.id,
+                modelLabel: appendProviderModelThinkingBadgeLabel({
+                  label: modelRow.name,
+                  thinking: getProviderModelThinkingBadgeValue({
+                    provider: modelRow.provider,
+                    thinking: getProviderModelMetadataOptions(getJsonValue(modelRow.metadataJson)).thinking,
+                    version: modelRow.version,
+                  }),
+                }),
+                contentLabel: contentVariant.label,
+                sourceProjectId: sourceProject.id,
+                sourceProjectName: sourceProject.name,
+              }
+            })
+          : []
+      })
+    : []
+  const modelLlmColumns = shownPromptRows.flatMap((promptRow) => {
     return modelRows.flatMap((modelRow) => {
       return contentVariants.map<ComparisonProjectJudgmentsColumn>((contentVariant) => {
         return {
@@ -1065,10 +1154,14 @@ const getComparisonProjectColumns = (
             }),
           }),
           contentLabel: contentVariant.label,
+          sourceProjectId: null,
+          sourceProjectName: null,
         }
       })
     })
   })
+  const llmColumns = sourceProjectLlmColumns.length > 0 ? sourceProjectLlmColumns : modelLlmColumns
+  const humanSourceProject = summarySourceProjectId ? sourceProjectsById.get(summarySourceProjectId) : null
   const humanColumns = compareWithHumans
     ? shownPromptRows.map<ComparisonProjectJudgmentsColumn>((promptRow) => {
         return {
@@ -1079,6 +1172,8 @@ const getComparisonProjectColumns = (
           modelId: null,
           modelLabel: 'Human',
           contentLabel: null,
+          sourceProjectId: humanJudgmentMode === 'summary' ? summarySourceProjectId : null,
+          sourceProjectName: humanJudgmentMode === 'summary' ? (humanSourceProject?.name ?? null) : null,
         }
       })
     : []
@@ -1196,12 +1291,17 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
         : []
   const useImportRoutesForScope = linkedSourceProjectIds.length === 0
   const contentVariants = getComparisonProjectContentVariants(normalizedComparisonProjectRow)
+  const useSourceProjectLlmColumns = getIsSummaryMode(normalizedComparisonProjectRow) && !useImportRoutesForScope
+  const sourceProjectSummaryPrompts = useSourceProjectLlmColumns
+    ? await getComparisonProjectSourceSummaryPromptConfigs(sourceProjectIds)
+    : []
+  const modelPromptConfigs = sourceProjectSummaryPrompts.length > 0 ? sourceProjectSummaryPrompts : promptConfigs
   const [summarySourceProject, sourceProjects, modelRows] = await Promise.all([
     getSummarySourceProject(normalizedComparisonProjectRow.summarySourceProjectId),
     getComparisonProjectSourceProjects(sourceProjectIds),
     getComparisonProjectModels(
       {...normalizedComparisonProjectRow, sourceProjectIds, useImportRoutesForScope, contentVariants},
-      promptConfigs.map((prompt) => {
+      modelPromptConfigs.map((prompt) => {
         return prompt.id
       }),
       importRouteIds,
@@ -1213,6 +1313,9 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
     contentVariants,
     normalizedComparisonProjectRow.compareWithHumans,
     normalizedComparisonProjectRow.humanJudgmentMode,
+    normalizedComparisonProjectRow.summarySourceProjectId,
+    sourceProjects,
+    useSourceProjectLlmColumns,
   )
 
   return {
@@ -1223,6 +1326,7 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
     sourceProjects,
     contentVariants,
     prompts: promptConfigs,
+    sourceProjectSummaryPrompts,
     models: modelRows,
     importRouteIds,
     columns,
@@ -1288,7 +1392,7 @@ const getComparisonProjectEditFormData = async (comparisonProjectId: string) => 
             m.variant AS version
           FROM ${modelTable} m
           LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
-          WHERE id IN (${getInClause(configuredModelIds)})
+          WHERE m.id IN (${getInClause(configuredModelIds)})
         `)
       : []
   const modelRowsById = configuredModelRows.reduce<Map<string, (typeof configuredModelRows)[number]>>(
@@ -1417,9 +1521,18 @@ const getComparisonProjectEditFormData = async (comparisonProjectId: string) => 
 }
 
 const getComparisonProjectLlmRows = async (scope: ComparisonProjectScope, articleIds: string[]) => {
-  const promptIds = scope.prompts.map((prompt) => {
+  const summarySourcePromptIds =
+    getIsSummaryMode(scope) && !scope.useImportRoutesForScope
+      ? scope.sourceProjectSummaryPrompts.map((prompt) => {
+          return prompt.id
+        })
+      : []
+  const fallbackPromptIds = scope.prompts.map((prompt) => {
     return prompt.id
   })
+  const promptIds = getUniqueStringValues(
+    summarySourcePromptIds.length > 0 ? summarySourcePromptIds : fallbackPromptIds,
+  )
   const modelIds = scope.models.map((model) => {
     return model.id
   })
@@ -1472,6 +1585,7 @@ const getComparisonProjectLlmRows = async (scope: ComparisonProjectScope, articl
       return {
         ...row,
         createdAt: getRequiredDateValue(row.createdAt),
+        sourceProjectId: null,
         answeredOriginalAsArray: getStringArrayRowValue(row, 'answeredOriginalAsArray'),
       }
     })
@@ -1480,10 +1594,86 @@ const getComparisonProjectLlmRows = async (scope: ComparisonProjectScope, articl
     })
 }
 
-const getSummaryCriteria = (scope: ComparisonProjectScope) => {
-  return scope.prompts.map((prompt) => {
+const getSummaryCriteria = (prompts: ComparisonProjectPromptConfig[]) => {
+  return prompts.map((prompt) => {
     return {promptId: prompt.id, criteriaDisposition: prompt.criteriaDisposition}
   })
+}
+
+const getComparisonProjectSummaryPromptGroups = (
+  scope: ComparisonProjectScope,
+): ComparisonProjectSummaryPromptGroup[] => {
+  if (!getIsSummaryMode(scope) || scope.useImportRoutesForScope) {
+    return [{sourceProjectId: null, modelId: null, prompts: scope.prompts}]
+  }
+
+  const promptRowsBySourceProjectId = scope.sourceProjectSummaryPrompts.reduce<
+    Map<string, ComparisonProjectPromptConfig[]>
+  >((rowMap, prompt) => {
+    const currentPrompts = rowMap.get(prompt.sourceProjectId) ?? []
+    rowMap.set(prompt.sourceProjectId, [...currentPrompts, prompt])
+    return rowMap
+  }, new Map<string, ComparisonProjectPromptConfig[]>())
+  const sourceProjectGroups = scope.sourceProjects.reduce<ComparisonProjectSummaryPromptGroup[]>(
+    (groups, sourceProject) => {
+      const prompts = promptRowsBySourceProjectId.get(sourceProject.id) ?? []
+
+      return prompts.length > 0
+        ? [...groups, {sourceProjectId: sourceProject.id, modelId: sourceProject.modelId, prompts}]
+        : groups
+    },
+    [],
+  )
+
+  return sourceProjectGroups.length > 0
+    ? sourceProjectGroups
+    : [{sourceProjectId: null, modelId: null, prompts: scope.prompts}]
+}
+
+const getComparisonProjectLlmRowsForSummaryGroup = (
+  rows: ComparisonProjectLlmRow[],
+  summaryPromptGroup: ComparisonProjectSummaryPromptGroup,
+) => {
+  const promptIds = new Set(
+    summaryPromptGroup.prompts.map((prompt) => {
+      return prompt.id
+    }),
+  )
+
+  return rows.filter((row) => {
+    return (
+      promptIds.has(row.promptId) && (summaryPromptGroup.modelId === null || row.modelId === summaryPromptGroup.modelId)
+    )
+  })
+}
+
+const getComparisonProjectLlmSummaryRow = (
+  rows: ComparisonProjectLlmRow[],
+  summaryPromptGroup: ComparisonProjectSummaryPromptGroup,
+) => {
+  const groupRows = getComparisonProjectLlmRowsForSummaryGroup(rows, summaryPromptGroup)
+  const [firstRow] = groupRows
+
+  if (!firstRow) {
+    return null
+  }
+
+  const normalizedAnswers = Array.from(getLatestComparisonProjectLlmRowsByPromptId(groupRows).values()).reduce<
+    Record<string, 'yes' | 'no' | 'maybe' | null>
+  >((answerMap, row) => {
+    return {...answerMap, [row.promptId]: getNormalizedSummaryAnswer(row)}
+  }, {})
+  const summaryAnswer = deriveStrictSummaryAnswer(getSummaryCriteria(summaryPromptGroup.prompts), normalizedAnswers)
+
+  return summaryAnswer
+    ? {
+        ...firstRow,
+        promptId: summaryPromptId,
+        sourceProjectId: summaryPromptGroup.sourceProjectId,
+        answeredOriginal: summaryAnswer,
+        answeredOriginalAsArray: null,
+      }
+    : null
 }
 
 const getLatestComparisonProjectLlmRowsByPromptId = (rows: ComparisonProjectLlmRow[]) => {
@@ -1501,6 +1691,8 @@ const getComparisonProjectLlmSummaryRows = (scope: ComparisonProjectScope, rows:
     return rows
   }
 
+  const summaryPromptGroups = getComparisonProjectSummaryPromptGroups(scope)
+
   const rowGroups = rows.reduce<Map<string, ComparisonProjectLlmRow[]>>((rowMap, row) => {
     const key = `${row.articleId}:${row.modelId}:${getComparisonProjectContentKey(row)}`
     const currentRows = rowMap.get(key) ?? []
@@ -1509,23 +1701,10 @@ const getComparisonProjectLlmSummaryRows = (scope: ComparisonProjectScope, rows:
   }, new Map<string, ComparisonProjectLlmRow[]>())
 
   return Array.from(rowGroups.values())
-    .map<ComparisonProjectLlmRow | null>((groupRows) => {
-      const [firstRow] = groupRows
-
-      if (!firstRow) {
-        return null
-      }
-
-      const normalizedAnswers = Array.from(getLatestComparisonProjectLlmRowsByPromptId(groupRows).values()).reduce<
-        Record<string, 'yes' | 'no' | 'maybe' | null>
-      >((answerMap, row) => {
-        return {...answerMap, [row.promptId]: getNormalizedSummaryAnswer(row)}
-      }, {})
-      const summaryAnswer = deriveStrictSummaryAnswer(getSummaryCriteria(scope), normalizedAnswers)
-
-      return summaryAnswer
-        ? {...firstRow, promptId: summaryPromptId, answeredOriginal: summaryAnswer, answeredOriginalAsArray: null}
-        : null
+    .flatMap((groupRows) => {
+      return summaryPromptGroups.map((summaryPromptGroup) => {
+        return getComparisonProjectLlmSummaryRow(groupRows, summaryPromptGroup)
+      })
     })
     .filter(isDefined)
 }
@@ -1627,7 +1806,7 @@ const getComparisonProjectExportCellValue = (value: string | null | undefined) =
 }
 
 const getComparisonProjectExportColumnHeader = (column: ComparisonProjectJudgmentsColumn) => {
-  return [column.promptLabel, column.modelLabel, column.contentLabel]
+  return [column.sourceProjectName, column.promptLabel, column.modelLabel, column.contentLabel]
     .map((part) => {
       return part?.trim() ?? ''
     })
