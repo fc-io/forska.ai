@@ -100,8 +100,9 @@ test('judgment import cron stays enabled at the low-memory cap', () => {
         })
         void mock.module(runtimeRoleModulePath, () => {
           return {
-            isExpectedWriterRoleLossError: () => false,
-            shouldCurrentServerRunWriterWork: () => true,
+            isExpectedDuckdbOwnerRoleLossError: () => false,
+            shouldCurrentServerRunJudgingLoops: () => true,
+            shouldCurrentServerRunMaintenanceLoops: () => true,
           }
         })
         void mock.module(runtimeLoggerModulePath, () => {

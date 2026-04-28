@@ -116,17 +116,55 @@ const formatStartupHandling = (value: 'auto_drain' | 'idle' | 'skip_offline_repa
       : 'No startup action'
 }
 
+const getDrainingResumeBlockedReason = ({
+  hasLocalSqliteState,
+  oldestUnexportedAgeMs,
+  outboxRowCount,
+  pendingCompletionAckCount,
+}: {
+  hasLocalSqliteState?: boolean
+  oldestUnexportedAgeMs?: number | null
+  outboxRowCount?: number
+  pendingCompletionAckCount?: number
+}) => {
+  const pendingAckCount = Number(pendingCompletionAckCount ?? 0)
+  const pendingOutboxCount = Number(outboxRowCount ?? 0)
+
+  if (pendingAckCount > 0) {
+    return `Resume is blocked while ${pendingAckCount.toLocaleString()} imported local judgment row(s) wait for project refresh visibility ACK. Drain cleanup will finish after the refresh catches up.`
+  }
+
+  if (pendingOutboxCount > 0) {
+    return `Resume is blocked while ${pendingOutboxCount.toLocaleString()} local judgment row(s) export to DuckDB. Oldest unexported age: ${formatDuration(oldestUnexportedAgeMs)}.`
+  }
+
+  if (hasLocalSqliteState === false) {
+    return 'Resume is blocked because this job is marked as draining, but no local SQLite state is visible. Run Repair All Storage or Start Job Clean.'
+  }
+
+  return 'Resume is blocked while local storage is draining. Wait for drain cleanup to finish or run a targeted repair action.'
+}
+
 const getResumeBlockedReason = ({
   hasLocalSqliteState,
+  oldestUnexportedAgeMs,
+  outboxRowCount,
+  pendingCompletionAckCount,
   storageState,
 }: {
   hasLocalSqliteState?: boolean
+  oldestUnexportedAgeMs?: number | null
+  outboxRowCount?: number
+  pendingCompletionAckCount?: number
   storageState?: string | null
 }) => {
   if (storageState === 'draining') {
-    return hasLocalSqliteState === false
-      ? 'Resume is blocked because this job is marked as draining, but no local SQLite state is visible. Run Repair All Storage or Start Job Clean.'
-      : 'Resume is blocked while local storage is draining. Wait for drain cleanup to finish or run a targeted repair action.'
+    return getDrainingResumeBlockedReason({
+      hasLocalSqliteState,
+      oldestUnexportedAgeMs,
+      outboxRowCount,
+      pendingCompletionAckCount,
+    })
   }
 
   return storageState === 'quarantined'
@@ -162,10 +200,13 @@ type JobData = {
   requestStats?: Partial<JudgmentJobRequestStats>
   storageHealth?: {
     claimedOutboxCount?: number
+    hasPendingCompletionAck?: boolean
     lastAckSeq?: number | null
+    oldestUnackedCompletionAgeMs?: number | null
     oldestUnexportedAgeMs?: number | null
     orphanedJudgedRowCount?: number
     outboxRowCount?: number
+    pendingCompletionAckCount?: number
     recentTransfer?: {
       addedRows?: number
       addedRowsPerMinute?: number
@@ -444,6 +485,9 @@ const AdminJudgmentJobDetail = () => {
             const resumeBlockedReason = () => {
               return getResumeBlockedReason({
                 hasLocalSqliteState: storagePolicy()?.hasLocalSqliteState,
+                oldestUnexportedAgeMs: storageHealth()?.oldestUnexportedAgeMs,
+                outboxRowCount: storageHealth()?.outboxRowCount,
+                pendingCompletionAckCount: storageHealth()?.pendingCompletionAckCount,
                 storageState: data()?.storageState,
               })
             }
@@ -856,6 +900,9 @@ const AdminJudgmentJobDetail = () => {
                         Claimed: {storageHealth()?.claimedOutboxCount ?? 0} | Retained:{' '}
                         {storageHealth()?.retainedRowCount ?? 0}
                       </p>
+                      <p class="text-xs text-gray-500 mt-1">
+                        Pending refresh ACK: {storageHealth()?.pendingCompletionAckCount ?? 0}
+                      </p>
                     </div>
                     <div class="bg-gray-50 rounded-lg p-4">
                       <p class="text-sm text-gray-500">Orphaned Local Queue</p>
@@ -888,6 +935,9 @@ const AdminJudgmentJobDetail = () => {
                       <p class="text-sm text-gray-500">Oldest Unexported</p>
                       <p class="font-medium mt-1">{formatDuration(storageHealth()?.oldestUnexportedAgeMs)}</p>
                       <p class="text-xs text-gray-500 mt-1">Last ACK seq: {storageHealth()?.lastAckSeq ?? 'N/A'}</p>
+                      <p class="text-xs text-gray-500 mt-1">
+                        Oldest pending refresh ACK: {formatDuration(storageHealth()?.oldestUnackedCompletionAgeMs)}
+                      </p>
                     </div>
                     <div class="bg-gray-50 rounded-lg p-4 md:col-span-2 xl:col-span-1">
                       <p class="text-sm text-gray-500">Projected Storage Drain</p>

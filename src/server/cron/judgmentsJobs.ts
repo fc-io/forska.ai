@@ -116,7 +116,7 @@ const sendToLLM = async (): Promise<void> => {
 }
 
 const importJudgmentsCron = async (): Promise<void> => {
-  if (!shouldRunJudgmentMaintenanceCron() || isImportingJudgments || shouldUseLowMemoryJudgmentsCronMode()) return
+  if (!shouldRunJudgmentMaintenanceCron() || isImportingJudgments) return
 
   isImportingJudgments = true
 
