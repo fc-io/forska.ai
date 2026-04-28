@@ -101,6 +101,9 @@ Files:
 - `electrobun.config.ts`
 - `src/desktop/getDesktopRuntimeConfig.ts`
 - `src/desktop/getDesktopRuntimeConfig.test.ts`
+- `src/desktop/index.ts` if packaged-runner diagnostics, startup error fields, or spawn behavior need to change
+- `src/desktop/desktopArtifactManifest.ts` (new, if manifest logic is not kept in `getDesktopRuntimeConfig.ts`)
+- `src/desktop/desktopArtifactManifest.test.ts` (new, if manifest logic is not kept in `getDesktopRuntimeConfig.test.ts`)
 - `scripts/runBunTests.ts`
 - `scripts/runBunTests.test.ts` (new)
 - `package.json` only if a helper script is required
@@ -108,20 +111,25 @@ Files:
 Deliverables:
 
 - Decide and document the packaged backend runner path: verified ElectroBun `process.execPath` child launch or a copied platform-specific Bun binary.
+- Record the runner proof result in `APP_PLAN_IMPLEMENTED.md`, including the exact command or smoke check used, resolved runner path, backend entrypoint path, exit code, and whether the test ran inside the built artifact with host `bun`, `bunx`, `node`, and `npm` removed from `PATH`.
 - Produce actionable startup diagnostics for a missing/unusable packaged runner with no host-Bun fallback in packaged mode.
 - Lock artifact-relative `views/mainview`, backend entrypoint, migration SQL, source roots, native module roots, and required metadata expectations in an artifact manifest or equivalent testable helper.
+- Verify `viewsRoot` resolves to the artifact root's `views` directory, with `views://mainview/index.html` loading `views/mainview/index.html`; it must not depend on `src/views`, repo `dist`, or `process.cwd()`.
 - Fix ElectroBun watch ignores and Bun test discovery ignores for `.desktopArtifacts/` and `.desktopBuild/`.
+- Refactor `scripts/runBunTests.ts` only as needed to export pure ignore/discovery helpers without running `main()` during import, so `.desktopArtifacts/` and `.desktopBuild/` ignore behavior is unit-testable.
 - Keep `desktop:dev` visibly separate from packaged runner resolution and allow it to keep explicit host-Bun lookup only in dev mode.
 
 Quality Gates:
 
 - `bun run lint`
 - `bunx eslint electrobun.config.ts scripts/runBunTests.ts scripts/runBunTests.test.ts src/desktop/getDesktopRuntimeConfig.ts src/desktop/getDesktopRuntimeConfig.test.ts`
+- `bunx eslint src/desktop/desktopArtifactManifest.ts src/desktop/desktopArtifactManifest.test.ts` if a separate artifact-manifest helper is added
 - `bun test src/desktop/getDesktopRuntimeConfig.test.ts`
+- `bun test src/desktop/desktopArtifactManifest.test.ts` if a separate artifact-manifest helper is added
 - `bun test scripts/runBunTests.test.ts`
 - `bun run build`
 - `bun run desktop:build`
-- Inspect the built artifact, or run the artifact-manifest test, to confirm required backend/frontend/migration/native-module files are present while tests, fixtures, generated desktop output folders, and dev-only files are absent unless intentionally documented.
+- Inspect the built artifact, or run the artifact-manifest test, and fail unless it includes the chosen backend runner, backend entrypoint, `src/server/index.ts`, `src/db/migrateDuckdb.ts`, `src/db/duckdbMigrations/*.sql`, `views/mainview/index.html`, `views/mainview/assets/`, `node_modules/@duckdb/node-api/`, and required runtime metadata such as `package.json` or `tsconfig.json` if the chosen runner needs them; fail if `.desktopArtifacts/`, `.desktopBuild/`, copied `*.test.ts`, fixtures, or dev-only files are present unless explicitly documented.
 - Browser verify: `bun run dev:server` and `bun run dev:app` still boot after the runner/artifact changes.
 
 ## Phase 1 Recommendation
