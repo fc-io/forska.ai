@@ -2895,6 +2895,84 @@ test('repair orphaned queue route requeues only orphaned judged queue rows', asy
   expect(body.data.liveSqlite.orphanedJudgedRowCount).toBe(0)
 })
 
+test('repair orphaned queue route continues across multiple batches until clear', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getJudgmentJobSqlitePath} = await import('../cron/judgmentsJobs/judgmentJobPaths.ts')
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const now = Date.now()
+  const orphanedRowCount = 1_001
+  const projectId = `repair-orphaned-multi-project-${now}`
+  const modelId = `repair-orphaned-multi-model-${now}`
+  const connectionId = `repair-orphaned-multi-connection-${now}`
+  const jobId = `repair-orphaned-multi-job-${now}`
+  const sqliteService = getJudgmentJobSqliteService()
+  const promptEntries = Array.from({length: orphanedRowCount}, (_value, index) => {
+    return {
+      articleId: `repair-orphaned-multi-article-${now}-${index}`,
+      promptId: `repair-orphaned-multi-prompt-${now}-${index}`,
+    }
+  })
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.article (id, article_id, article_title, article_created_at, article_updated_at)
+    VALUES ${promptEntries
+      .map((entry, index) => {
+        return `('${entry.articleId}', 'external-${entry.articleId}', 'Repair orphaned multi article ${index}', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T00:00:00.000Z')`
+      })
+      .join(', ')}
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES ${promptEntries
+      .map((entry, index) => {
+        return `('${entry.promptId}', 'Repair orphaned multi prompt ${index}', '${entry.promptId}-hash')`
+      })
+      .join(', ')}
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'paused', 'draining')
+  `)
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(jobId, promptEntries, 'server-a')
+  await sqliteService.closeAll()
+
+  const sqliteDatabase = new Database(getJudgmentJobSqlitePath(jobId))
+
+  try {
+    sqliteDatabase
+      .query(`UPDATE queue_prompt SET status = 'judged', updated_at = ? WHERE job_id = ?`)
+      .run(new Date().toISOString(), jobId)
+  } finally {
+    sqliteDatabase.close(false)
+  }
+
+  const response = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/repair-orphaned-queue`, {method: 'POST'}),
+  )
+  const body = (await response.json()) as {
+    data: {
+      changes: {deletedOrphanedJudgedRows: number; requeuedOrphanedJudgedRows: number}
+      liveSqlite: {orphanedJudgedRowCount?: number; promptCounts: {judged: number; ready: number}}
+      message: string
+      ok: boolean
+    }
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.ok).toBe(true)
+  expect(body.data.message).toContain('processed 2 batch(es)')
+  expect(body.data.changes.requeuedOrphanedJudgedRows).toBe(orphanedRowCount)
+  expect(body.data.changes.deletedOrphanedJudgedRows).toBe(0)
+  expect(body.data.liveSqlite.promptCounts.ready).toBe(orphanedRowCount)
+  expect(body.data.liveSqlite.promptCounts.judged).toBe(0)
+  expect(body.data.liveSqlite.orphanedJudgedRowCount).toBe(0)
+})
+
 test('starting a job automatically repairs orphaned judged queue rows before running', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')
