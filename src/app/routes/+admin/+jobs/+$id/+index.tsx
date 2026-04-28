@@ -271,8 +271,12 @@ const activeJudgmentsJobStatuses = new Set([
   'waiting_on_llm_connection',
 ])
 
-const getJudgmentsJobRefetchInterval = (status: string | null | undefined) => {
-  return activeJudgmentsJobStatuses.has(status ?? '') ? 1000 * 30 : false
+const getJudgmentsJobRefetchInterval = (job: Pick<JobData, 'status' | 'storageState'> | null | undefined) => {
+  return job?.storageState === 'draining'
+    ? 1000 * 5
+    : activeJudgmentsJobStatuses.has(job?.status ?? '')
+      ? 1000 * 30
+      : false
 }
 
 const TokenUsageTimelinePanelFallback = () => {
@@ -308,9 +312,10 @@ const AdminJudgmentJobDetail = () => {
         return response
       },
       refetchInterval: (query: {state: {data?: unknown}}) => {
-        const status =
-          isRecord(query.state.data) && typeof query.state.data.status === 'string' ? query.state.data.status : null
-        return getJudgmentsJobRefetchInterval(status)
+        const queryData = isRecord(query.state.data)
+          ? (query.state.data as Pick<JobData, 'status' | 'storageState'>)
+          : null
+        return getJudgmentsJobRefetchInterval(queryData)
       },
       refetchOnWindowFocus: true,
       suspense: false,
@@ -341,7 +346,7 @@ const AdminJudgmentJobDetail = () => {
     return {
       queryKey: ['judgments-job-unassessed-count', id()],
       enabled: Boolean(id()),
-      refetchInterval: getJudgmentsJobRefetchInterval(job.data?.status ?? null),
+      refetchInterval: getJudgmentsJobRefetchInterval(job.data),
       refetchOnWindowFocus: true,
       suspense: false,
       queryFn: async () => {

@@ -386,9 +386,6 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
     if (!data || data.length === 0) {
       return []
     }
-    if (selectedInterval() === '1min') {
-      return data.length > 1 ? data.slice(0, -1) : []
-    }
     return data
   })
 
