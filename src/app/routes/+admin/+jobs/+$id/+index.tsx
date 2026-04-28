@@ -116,6 +116,24 @@ const formatStartupHandling = (value: 'auto_drain' | 'idle' | 'skip_offline_repa
       : 'No startup action'
 }
 
+const getResumeBlockedReason = ({
+  hasLocalSqliteState,
+  storageState,
+}: {
+  hasLocalSqliteState?: boolean
+  storageState?: string | null
+}) => {
+  if (storageState === 'draining') {
+    return hasLocalSqliteState === false
+      ? 'Resume is blocked because this job is marked as draining, but no local SQLite state is visible. Run Repair All Storage or Start Job Clean.'
+      : 'Resume is blocked while local storage is draining. Wait for drain cleanup to finish or run a targeted repair action.'
+  }
+
+  return storageState === 'quarantined'
+    ? 'Resume is blocked while local storage is quarantined. Repair or unquarantine the local storage first.'
+    : null
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return Boolean(value && typeof value === 'object')
 }
@@ -424,11 +442,10 @@ const AdminJudgmentJobDetail = () => {
               return getHeartbeatAgeMs(leaseMetadata()?.heartbeatAt)
             }
             const resumeBlockedReason = () => {
-              return data()?.storageState === 'draining'
-                ? 'Resume is blocked while local storage is draining. Wait for drain cleanup to finish or run a targeted repair action.'
-                : data()?.storageState === 'quarantined'
-                  ? 'Resume is blocked while local storage is quarantined. Repair or unquarantine the local storage first.'
-                  : null
+              return getResumeBlockedReason({
+                hasLocalSqliteState: storagePolicy()?.hasLocalSqliteState,
+                storageState: data()?.storageState,
+              })
             }
             const isResumeBlocked = () => {
               return Boolean(resumeBlockedReason())
@@ -1082,7 +1099,7 @@ const AdminJudgmentJobDetail = () => {
                       <Show when={data()?.status === 'paused' || data()?.status === 'failed'}>
                         <button
                           class="px-4 py-2 bg-slate-700 text-white rounded-md hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
-                          disabled={isStarting() || isStartingClean() || isResumeBlocked()}
+                          disabled={isStarting() || isStartingClean()}
                           onClick={() => {
                             const jobId = data()?.id
 

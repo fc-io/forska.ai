@@ -1,3 +1,4 @@
+import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../services/appReadOnlyDatabaseService.ts'
 import {isJudgmentJobLeaseProcessAlive, isJudgmentJobLeaseStale} from './judgmentJobLease.ts'
@@ -9,6 +10,7 @@ import {getTransientJudgmentJobSqliteLockReasonSql} from './judgmentJobSqliteTra
 import {abandonedSentPromptGraceMs} from './requeueAbandonedSentPrompts.ts'
 
 const sqliteRetentionCleanupBatchSize = 100
+const sqliteCleanupTerminalStatuses = ['completed', 'paused', 'project_removed'] as const
 const transientLockedQuarantineRecoveryBatchSize = 5
 
 const getDrainingSqliteJobIds = async () => {
@@ -46,6 +48,37 @@ const getTransientLockedQuarantinedSqliteJobIds = async () => {
       ).map((row) => {
         return row.id
       })
+}
+
+const getMissingLocalSqliteDrainingJobIds = async () => {
+  const sqliteJobIds = getJudgmentJobSqliteJobIds()
+  const localSqliteExclusion =
+    sqliteJobIds.length === 0 ? '' : `AND id NOT IN (${getQuotedStringList(sqliteJobIds).join(', ')})`
+
+  return (
+    await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<{id: string}>(`
+      SELECT id
+      FROM app.judgment_job
+      WHERE storage_state = ${getSqlLiteral('draining')}
+        AND status IN (${getQuotedStringList([...sqliteCleanupTerminalStatuses]).join(', ')})
+        ${localSqliteExclusion}
+    `)
+  ).map((row) => {
+    return row.id
+  })
+}
+
+const finalizeMissingLocalSqliteDrainingJobs = async (jobIds: string[]): Promise<void> => {
+  return jobIds.length === 0
+    ? Promise.resolve()
+    : getAppDatabaseService().run(`
+        UPDATE app.judgment_job
+        SET storage_state = ${getSqlLiteral('drained')},
+            updated_at = current_timestamp
+        WHERE id IN (${getQuotedStringList(jobIds).join(', ')})
+          AND storage_state = ${getSqlLiteral('draining')}
+          AND status IN (${getQuotedStringList([...sqliteCleanupTerminalStatuses]).join(', ')})
+      `)
 }
 
 const hasFreshLiveJudgmentJobLease = async (jobId: string) => {
@@ -134,8 +167,9 @@ export const judgmentsJobsCleanupStale = async (): Promise<void> => {
   const sixteenMinutesAgo = new Date(Date.now() - 16 * 60 * 1000)
   const serverJobId = getDefaultJudgmentServerJobId()
   const sqliteService = getJudgmentJobSqliteService()
-  const [drainingJobIds, transientLockedQuarantinedJobIds] = await Promise.all([
+  const [drainingJobIds, missingLocalSqliteDrainingJobIds, transientLockedQuarantinedJobIds] = await Promise.all([
     getDrainingSqliteJobIds(),
+    getMissingLocalSqliteDrainingJobIds(),
     getTransientLockedQuarantinedSqliteJobIds(),
   ])
 
@@ -144,6 +178,7 @@ export const judgmentsJobsCleanupStale = async (): Promise<void> => {
   await recoverDrainingQueueRows({jobIds: drainingJobIds, serverJobId})
   await sqliteService.pruneVisibilityAckedRetention({maxRows: sqliteRetentionCleanupBatchSize})
   await repairOrphanedDrainingJobs(drainingJobIds)
+  await finalizeMissingLocalSqliteDrainingJobs(missingLocalSqliteDrainingJobIds)
   await sqliteService.finalizeDrainingJobs()
   await sqliteService.deleteDrainedJobs()
 }
