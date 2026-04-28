@@ -28,7 +28,7 @@ We also plan to release all the code for the system as open source.
 
 ## Resource Usage
 
-The app stores article metadata and cached PDFs locally with DuckDB and SQLite. The local API/app can call local/manual providers or tunnel to HPC-hosted inference.
+The app stores article metadata and cached PDFs locally with DuckDB and SQLite. The local API/app can call providers configured in the Forska UI.
 
 Out plan is that the system will be efficiently run on a:
 ssc.large.highmem, 4 vCPU, 16 GB RAM with 4-8 TB of additional storage
@@ -150,20 +150,4 @@ Split-runtime verification drills: [SPLIT RUNTIME VERIFICATION](./docs/README_SP
 
 Large rebuild tuning guidance: [RUN LOCAL](./docs/README_RUN_LOCAL.md#project-mart-large-rebuild-tuning)
 
-## Run remotely on HPC:
-
-[RUN REMOTE](./docs/README_RUN_REMOTE.md)
-
-## Alvis Quick Start
-
-- Sync the image to Alvis: `bun run alvis:sglang:pull`
-- Launch the default Alvis shape: `bun run alvis:launch:a100:fat`
-- Or launch the 4x non-fat A100 shape: `bun run alvis:launch:a100:4`
-- Test the tunnel directly: `curl http://localhost:30001/v1/models`
-- Optional local API dev server: `bun run alvis:dev:server`
-- Optional local app: `bun run dev:app`
-- Full setup and sbatch details: `docs/README_RUN_REMOTE.md`
-
-## For running with SLURM/SBATCH
-
-[SBATCH.md](./docs/README_SBATCH.md)
+Remote HPC launch tooling now lives in the sibling `../hpc-manager` project.
