@@ -201,7 +201,7 @@ test('getStoredProviderModelRuntimeMatch returns a mismatch message when SGLang 
 test('getStoredProviderModelRuntimeMatch validates against the matched saved connection runtime', async () => {
   state.getProviderConnectionForStoredModel.mockImplementationOnce(async (_modelId: string) => {
     return {
-      baseURL: 'https://alvis-tunnel.example/v1',
+      baseURL: 'https://remote-tunnel.example/v1',
       config: {manualWorkerUrls: ['http://127.0.0.1:30020'], workerUrlMode: 'runtime'},
       id: 'connection-1',
       providerKind: 'sglang',
@@ -216,7 +216,7 @@ test('getStoredProviderModelRuntimeMatch validates against the matched saved con
         providerKind: 'sglang',
       },
       {
-        baseURL: 'https://alvis-tunnel.example/v1',
+        baseURL: 'https://remote-tunnel.example/v1',
         config: {manualWorkerUrls: ['http://127.0.0.1:30020'], workerUrlMode: 'runtime'},
         enabled: true,
         providerKind: 'sglang',
@@ -238,7 +238,7 @@ test('getStoredProviderModelRuntimeMatch validates against the matched saved con
   state.listModels.mockImplementationOnce(async (input: unknown) => {
     const {runtimeCredentials} = input as {runtimeCredentials: {baseURL: string}}
 
-    expect(runtimeCredentials.baseURL).toBe('https://alvis-tunnel.example/v1')
+    expect(runtimeCredentials.baseURL).toBe('https://remote-tunnel.example/v1')
 
     return [
       {
@@ -252,7 +252,7 @@ test('getStoredProviderModelRuntimeMatch validates against the matched saved con
     ]
   })
   state.resolveMatchedProviderRuntimeCredentials.mockImplementationOnce(async (_connection: unknown) => {
-    return {apiKey: null, baseURL: 'https://alvis-tunnel.example/v1', headers: {}, secretRef: null}
+    return {apiKey: null, baseURL: 'https://remote-tunnel.example/v1', headers: {}, secretRef: null}
   })
   const {getStoredProviderModelRuntimeMatch} = await loadGuard()
 

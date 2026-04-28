@@ -19,8 +19,8 @@ const buildRuntimeRecord = (overrides: Partial<ProviderRuntimeRecord> = {}): Pro
     sglangApiMaxBurstRequests: 64,
     sglangApiMaxInflightRequests: 48,
     sglangMaxRunningRequests: 32,
-    sourceCluster: 'alvis',
-    sshJumpHost: 'alvis2',
+    sourceCluster: 'remote',
+    sshJumpHost: 'remote-jump',
     status: 'active',
     stoppedAt: null,
     tpSize: 8,
@@ -71,7 +71,7 @@ test('getInferenceRuntimeConfig prioritizes launcher runtime metadata', () => {
       FORSKA_RUNTIME_SGLANG_API_MAX_BURST_REQUESTS: '64',
       FORSKA_RUNTIME_SGLANG_API_MAX_INFLIGHT_REQUESTS: '48',
       FORSKA_RUNTIME_SGLANG_MAX_RUNNING_REQUESTS: '32',
-      FORSKA_RUNTIME_SSH_JUMP_HOST: 'alvis2',
+      FORSKA_RUNTIME_SSH_JUMP_HOST: 'remote-jump',
       FORSKA_RUNTIME_TP_SIZE: '8',
       GPU_NNODES: '1',
       JUDGE_FIRST_REQUEST_LOG_FULL: 'true',
@@ -90,7 +90,7 @@ test('getInferenceRuntimeConfig prioritizes launcher runtime metadata', () => {
   expect(runtimeConfig.remoteWorkerUrls).toEqual(['http://10.0.0.1:30000', 'http://10.0.0.2:30000'])
   expect(runtimeConfig.displayWorkerUrls).toEqual(['http://localhost:30001', 'http://10.0.0.2:30000'])
   expect(runtimeConfig.providerKind).toBe('sglang')
-  expect(runtimeConfig.sshJumpHost).toBe('alvis2')
+  expect(runtimeConfig.sshJumpHost).toBe('remote-jump')
   expect(runtimeConfig.judgeFirstRequestLogFull).toBe(true)
 })
 
@@ -101,7 +101,7 @@ test('getInferenceRuntimeConfig falls back to legacy runtime wiring names when l
       GPU_NNODES: '1',
       GPU_GPUS_PER_NODE: '2',
       GPU_TOTAL_GPUS: '2',
-      NVIDIA_SMI_SSH_JUMP_HOST: 'alog',
+      NVIDIA_SMI_SSH_JUMP_HOST: 'remote-jump',
       NVIDIA_SMI_WORKER_URLS: 'http://10.1.0.1:30000',
       NVIDIA_SMI_WORKER_URLS_LOCAL: 'http://localhost:30001',
       SGLANG_API_MAX_BURST_REQUESTS: '16',
@@ -118,7 +118,7 @@ test('getInferenceRuntimeConfig falls back to legacy runtime wiring names when l
   expect(runtimeConfig.sglangApiMaxBurstRequests).toBe(16)
   expect(runtimeConfig.remoteWorkerUrls).toEqual(['http://10.1.0.1:30000'])
   expect(runtimeConfig.displayWorkerUrls).toEqual(['http://localhost:30001'])
-  expect(runtimeConfig.sshJumpHost).toBe('alog')
+  expect(runtimeConfig.sshJumpHost).toBe('remote-jump')
 })
 
 test('getInferenceRuntimeConfig prefers an active launcher runtime record over env wiring', () => {
@@ -137,7 +137,7 @@ test('getInferenceRuntimeConfig prefers an active launcher runtime record over e
   expect(runtimeConfig.providerKind).toBe('sglang')
   expect(runtimeConfig.remoteWorkerUrls).toEqual(['http://10.0.0.1:30000', 'http://10.0.0.2:30000'])
   expect(runtimeConfig.displayWorkerUrls).toEqual(['http://localhost:30001', 'http://10.0.0.2:30000'])
-  expect(runtimeConfig.sshJumpHost).toBe('alvis2')
+  expect(runtimeConfig.sshJumpHost).toBe('remote-jump')
 })
 
 test('getInferenceRuntimeConfig ignores stopped and stale launcher runtime records', () => {

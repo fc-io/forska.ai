@@ -64,13 +64,7 @@ const getBaseURLFromWorkerUrl = (workerUrl: string): string => {
 const getRuntimeSourceLabel = (cluster: string | null | undefined): string => {
   const normalizedCluster = getTrimmedValue(cluster)?.toLowerCase() ?? null
 
-  return normalizedCluster === 'alvis'
-    ? 'Alvis'
-    : normalizedCluster === 'mn5'
-      ? 'MN5'
-      : normalizedCluster
-        ? normalizedCluster.charAt(0).toUpperCase() + normalizedCluster.slice(1)
-        : 'local'
+  return normalizedCluster ? normalizedCluster.charAt(0).toUpperCase() + normalizedCluster.slice(1) : 'local'
 }
 
 const getLocalSourceMetadata = (): ProviderRuntimeSourceMetadata => {
