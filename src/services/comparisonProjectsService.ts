@@ -70,6 +70,8 @@ export type ComparisonProjectEditFormData = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  sourceProjectIds: string[]
+  sourceProjects: ComparisonProjectLinkedSourceProject[]
   promptSelections: Array<{promptId: string; order: number}>
   availablePrompts: Array<{
     id: string
@@ -92,6 +94,8 @@ export type UpdateComparisonProjectInput = {
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean
+  importRoutes?: string[]
+  sourceProjectIds?: string[]
   promptSelections: Array<{promptId: string; order: number}>
 }
 

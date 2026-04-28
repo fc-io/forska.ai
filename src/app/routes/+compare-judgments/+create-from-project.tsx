@@ -38,14 +38,6 @@ const getSummaryPrompts = (sourceProject: ComparisonProjectSource | undefined) =
   })
 }
 
-const getSummaryCriteriaLabel = (prompt: ComparisonProjectSource['prompts'][number]) => {
-  const labelParts = [prompt.criteriaDisposition, prompt.criteriaSectionLabel ?? prompt.criteriaSectionKey].filter(
-    Boolean,
-  )
-
-  return labelParts.join(' · ')
-}
-
 const getAdditionalSummaryProjectReason = (
   primarySourceProject: ComparisonProjectSource | undefined,
   additionalSourceProject: ComparisonProjectSource,
@@ -208,7 +200,7 @@ const CreateCompareJudgmentsFromProjectPage = () => {
         <Button as={Link} to="/compare-judgments" variant="outline" size="sm">
           ← Back to Compare Judgments
         </Button>
-        <h1 class="text-3xl font-bold">Compare Project</h1>
+        <h1 class="text-3xl font-bold">Create Compare Project</h1>
       </div>
 
       <div class="bg-card border rounded-lg p-6">
@@ -472,52 +464,8 @@ const CreateCompareJudgmentsFromProjectPage = () => {
             </details>
           </Show>
 
-          <Show when={summaryModeEnabled()}>
-            <div>
-              <div class="flex items-center justify-between mb-2">
-                <label class="block text-sm font-medium">Summary Prompts Used</label>
-                <span class="text-xs text-muted-foreground">
-                  {selectedSourceProjectSummaryPrompts().length} inherited
-                </span>
-              </div>
-              <p class="text-sm text-muted-foreground mb-3">
-                Human summary judgments come from the primary project. Each additional project uses its own summary
-                prompts to derive LLM overall decisions.
-              </p>
-              <Show when={selectedSourceProjectSummaryPrompts().length === 0}>
-                <p class="text-sm text-muted-foreground">
-                  Select a compatible primary project to preview summary prompts.
-                </p>
-              </Show>
-              <Show when={selectedSourceProjectSummaryPrompts().length > 0}>
-                <div class="space-y-2">
-                  <For each={selectedSourceProjectSummaryPrompts()}>
-                    {(prompt) => {
-                      return (
-                        <div class="border border-input rounded-md p-3 bg-background">
-                          <div class="flex items-center gap-2 flex-wrap">
-                            <span class="text-sm font-medium text-gray-900">
-                              {prompt.promptHeading?.trim() || `Prompt ${prompt.order + 1}`}
-                            </span>
-                            <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">
-                              Used for overall summary
-                            </span>
-                            <Show when={getSummaryCriteriaLabel(prompt)}>
-                              <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700">
-                                {getSummaryCriteriaLabel(prompt)}
-                              </span>
-                            </Show>
-                          </div>
-                        </div>
-                      )
-                    }}
-                  </For>
-                </div>
-              </Show>
-              <Show when={additionalProjectValidationError()}>
-                <p class="mt-2 text-sm text-red-600">{additionalProjectValidationError()}</p>
-              </Show>
-            </div>
+          <Show when={summaryModeEnabled() && additionalProjectValidationError()}>
+            <p class="text-sm text-red-600">{additionalProjectValidationError()}</p>
           </Show>
 
           <div class="flex gap-3 pt-4">

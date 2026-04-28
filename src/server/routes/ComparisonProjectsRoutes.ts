@@ -1433,7 +1433,7 @@ const getComparisonProjectEditFormData = async (comparisonProjectId: string) => 
       ORDER BY created_at DESC
     `
 
-  const [selectedPromptRows, availablePromptRows] = await Promise.all([
+  const [selectedPromptRows, availablePromptRows, sourceProjectLinkRows] = await Promise.all([
     appDatabaseService.queryJson<{
       id: string
       originalText: string
@@ -1464,7 +1464,15 @@ const getComparisonProjectEditFormData = async (comparisonProjectId: string) => 
       createdAt: unknown
       archived: boolean
     }>(availablePromptsQuery),
+    appDatabaseService.queryJson<{sourceProjectId: string}>(`
+      SELECT source_project_id AS sourceProjectId
+      FROM ${comparisonProjectSourceProjectTable}
+      WHERE comparison_project_id = ${getSqlLiteral(comparisonProjectId)}
+    `),
   ])
+  const sourceProjectIds = sourceProjectLinkRows.map((sourceProjectLinkRow) => {
+    return sourceProjectLinkRow.sourceProjectId
+  })
   const normalizedSelectedPromptRows = selectedPromptRows.map((promptRow) => {
     return {...promptRow, createdAt: getRequiredDateValue(promptRow.createdAt)}
   })
@@ -1502,11 +1510,16 @@ const getComparisonProjectEditFormData = async (comparisonProjectId: string) => 
         }
       }),
   ]
-  const summarySourceProject = await getSummarySourceProject(normalizedComparisonProjectRow.summarySourceProjectId)
+  const [summarySourceProject, sourceProjects] = await Promise.all([
+    getSummarySourceProject(normalizedComparisonProjectRow.summarySourceProjectId),
+    getComparisonProjectSourceProjects(sourceProjectIds),
+  ])
 
   return {
     ...normalizedComparisonProjectRow,
     summarySourceProject,
+    sourceProjectIds,
+    sourceProjects,
     selectedModelIds: configuredModelIds
       .map((modelId) => {
         const modelRow = modelRowsById.get(modelId)
@@ -2370,6 +2383,49 @@ const updateComparisonProjectWithModelIdsChange = async (params: {
   }) as Promise<ComparisonProjectRecordRow | null>
 }
 
+const updateComparisonProjectWithScopeLinksChange = async (params: {
+  comparisonProjectId: string
+  importRoutes?: string[]
+  setParts: string[]
+  sourceProjectIds?: string[]
+  promptSelections: PromptSelection[]
+}): Promise<ComparisonProjectRecordRow | null> => {
+  return appDatabaseService.transaction(async (tx) => {
+    const updatedComparisonProjectRecord = await updateComparisonProjectTx(tx, {
+      comparisonProjectId: params.comparisonProjectId,
+      setParts: params.setParts,
+    })
+
+    if (!updatedComparisonProjectRecord) {
+      throw new Error('Comparison project not found')
+    }
+
+    await tx.run(`
+      DELETE FROM ${comparisonProjectPromptTable}
+      WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+    `)
+    await insertComparisonProjectPromptLinks(tx, params.comparisonProjectId, params.promptSelections)
+
+    if (params.importRoutes !== undefined) {
+      await tx.run(`
+        DELETE FROM ${comparisonProjectImportRouteTable}
+        WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+      `)
+      await insertComparisonProjectRouteLinks(tx, params.comparisonProjectId, params.importRoutes)
+    }
+
+    if (params.sourceProjectIds !== undefined) {
+      await tx.run(`
+        DELETE FROM ${comparisonProjectSourceProjectTable}
+        WHERE comparison_project_id = ${getSqlLiteral(params.comparisonProjectId)}
+      `)
+      await insertComparisonProjectSourceProjectLinks(tx, params.comparisonProjectId, params.sourceProjectIds)
+    }
+
+    return updatedComparisonProjectRecord
+  }) as Promise<ComparisonProjectRecordRow | null>
+}
+
 const createComparisonProjectRecord = async (
   tx: AppTx,
   body: {
@@ -2741,6 +2797,12 @@ export const comparisonProjectsRoutes = new Elysia()
         promptSelections: body.promptSelections,
         summarySourceProjectId,
       })
+      const uniqueImportRoutes =
+        body.importRoutes === undefined ? undefined : getUniqueStringValues(body.importRoutes ?? [])
+      const validatedSourceProjectIds =
+        body.sourceProjectIds === undefined
+          ? undefined
+          : await getValidatedComparisonSourceProjectIds(appDatabaseService, body.sourceProjectIds ?? [])
       const baseSetParts = [
         `name = ${getSqlLiteral(body.name)}`,
         `description = ${getSqlLiteral(body.description?.trim() || null)}`,
@@ -2754,34 +2816,43 @@ export const comparisonProjectsRoutes = new Elysia()
         `updated_at = current_timestamp`,
       ]
       const hasModelIdsChange = !hasSameStringArrayValue(validatedModelIds, existingModelIds)
+      const hasScopeLinksChange = uniqueImportRoutes !== undefined || validatedSourceProjectIds !== undefined
       const setParts = hasModelIdsChange
         ? [...baseSetParts, `model_ids = ${getSqlLiteral(validatedModelIds)}`]
         : baseSetParts
 
-      const updatedComparisonProjectRow = hasModelIdsChange
-        ? await updateComparisonProjectWithModelIdsChange({
+      const updatedComparisonProjectRow = hasScopeLinksChange
+        ? await updateComparisonProjectWithScopeLinksChange({
             comparisonProjectId: params.id,
+            importRoutes: uniqueImportRoutes,
             setParts,
+            sourceProjectIds: validatedSourceProjectIds,
             promptSelections: validatedPromptSelections,
           })
-        : ((await appDatabaseService.transaction(async (tx) => {
-            const updatedComparisonProjectRecord = await updateComparisonProjectTx(tx, {
+        : hasModelIdsChange
+          ? await updateComparisonProjectWithModelIdsChange({
               comparisonProjectId: params.id,
               setParts,
+              promptSelections: validatedPromptSelections,
             })
+          : ((await appDatabaseService.transaction(async (tx) => {
+              const updatedComparisonProjectRecord = await updateComparisonProjectTx(tx, {
+                comparisonProjectId: params.id,
+                setParts,
+              })
 
-            if (!updatedComparisonProjectRecord) {
-              throw new Error('Comparison project not found')
-            }
+              if (!updatedComparisonProjectRecord) {
+                throw new Error('Comparison project not found')
+              }
 
-            await tx.run(`
+              await tx.run(`
               DELETE FROM ${comparisonProjectPromptTable}
               WHERE comparison_project_id = ${getSqlLiteral(params.id)}
             `)
-            await insertComparisonProjectPromptLinks(tx, params.id, validatedPromptSelections)
+              await insertComparisonProjectPromptLinks(tx, params.id, validatedPromptSelections)
 
-            return updatedComparisonProjectRecord
-          })) as ComparisonProjectRecordRow | null)
+              return updatedComparisonProjectRecord
+            })) as ComparisonProjectRecordRow | null)
 
       if (!updatedComparisonProjectRow) {
         throw new Error('Comparison project not found')
@@ -2801,6 +2872,8 @@ export const comparisonProjectsRoutes = new Elysia()
         useAbstract: t.Boolean(),
         useFulltext: t.Boolean(),
         useFulltextNoImages: t.Boolean(),
+        importRoutes: t.Optional(t.Array(t.String())),
+        sourceProjectIds: t.Optional(t.Array(t.String())),
         promptSelections: t.Array(t.Object({promptId: t.String(), order: t.Number()})),
       }),
     },
