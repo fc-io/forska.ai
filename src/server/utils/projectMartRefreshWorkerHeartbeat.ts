@@ -26,6 +26,8 @@ export const startProjectMartRefreshWorkerHeartbeat = (options: ProjectMartRefre
   }
 
   const controller = new AbortController()
+  let stopped = false
+  let restartTimer: ReturnType<typeof setTimeout> | null = null
 
   projectMartRefreshWorkerLogger.log(
     'project-mart-refresh-worker:loop-start',
@@ -38,11 +40,28 @@ export const startProjectMartRefreshWorkerHeartbeat = (options: ProjectMartRefre
     },
   )
 
-  void runProjectMartRefreshWorker({pollIntervalMs: options.pollIntervalMs, signal: controller.signal}).catch(
-    logProjectMartRefreshWorkerError,
-  )
+  const startLoop = () => {
+    void runProjectMartRefreshWorker({pollIntervalMs: options.pollIntervalMs, signal: controller.signal}).catch(
+      (error) => {
+        logProjectMartRefreshWorkerError(error)
+
+        if (stopped || controller.signal.aborted) {
+          return
+        }
+
+        restartTimer = setTimeout(startLoop, options.pollIntervalMs ?? 0)
+        restartTimer.unref()
+      },
+    )
+  }
+
+  startLoop()
 
   const stop = () => {
+    stopped = true
+    if (restartTimer) {
+      clearTimeout(restartTimer)
+    }
     controller.abort()
   }
 

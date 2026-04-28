@@ -1,7 +1,7 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {formatDate} from 'date-fns'
-import {createSignal, For, Show, Suspense} from 'solid-js'
+import {createEffect, createSignal, For, onCleanup, Show, Suspense} from 'solid-js'
 
 import {RuntimeModelNotice} from '../../../../../components/main/runtimeModelNotice.tsx'
 import {TokenUsageTimeline} from '../../../../../components/TokenUsageTimeline'
@@ -273,7 +273,7 @@ const activeJudgmentsJobStatuses = new Set([
 
 const getJudgmentsJobRefetchInterval = (job: Pick<JobData, 'status' | 'storageState'> | null | undefined) => {
   return job?.storageState === 'draining'
-    ? 1000 * 5
+    ? 1000 * 10
     : activeJudgmentsJobStatuses.has(job?.status ?? '')
       ? 1000 * 30
       : false
@@ -310,12 +310,6 @@ const AdminJudgmentJobDetail = () => {
         const response = await getJudgmentsJobById(id())
 
         return response
-      },
-      refetchInterval: (query: {state: {data?: unknown}}) => {
-        const queryData = isRecord(query.state.data)
-          ? (query.state.data as Pick<JobData, 'status' | 'storageState'>)
-          : null
-        return getJudgmentsJobRefetchInterval(queryData)
       },
       refetchOnWindowFocus: true,
       suspense: false,
@@ -355,6 +349,23 @@ const AdminJudgmentJobDetail = () => {
         return Number(data?.count || 0)
       },
     }
+  })
+  createEffect(() => {
+    const intervalMs = getJudgmentsJobRefetchInterval(job.data)
+
+    if (!intervalMs) {
+      return
+    }
+
+    const interval = setInterval(() => {
+      if (!job.isFetching) {
+        void job.refetch()
+      }
+    }, intervalMs)
+
+    onCleanup(() => {
+      clearInterval(interval)
+    })
   })
   const handleStartJob = async (jobId: string) => {
     setActionError('')
@@ -444,8 +455,10 @@ const AdminJudgmentJobDetail = () => {
         </Show>
 
         <Show when={job.data}>
-          {(jobData) => {
-            const data = jobData as unknown as () => JobData | undefined
+          {(_jobData) => {
+            const data = () => {
+              return job.data as JobData | undefined
+            }
             const jobDetails = () => {
               return data()
             }

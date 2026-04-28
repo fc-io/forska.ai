@@ -102,6 +102,25 @@ test('classifies Codex websocket 403 as transient throttling', () => {
   expect(failure.statusCode).toBe(403)
 })
 
+test('keeps Codex transient upstream resets out of the outage path', () => {
+  const error = new Error(
+    'codex app-server: turn failed: Unexpected content type: Some("text/plain; body: upstream connect error or disconnect/reset before headers. reset reason: connection termination"), when send initialized notification',
+  )
+  const failure = classifyConnectionFailure({
+    context: {effectiveBaseURL: 'codex://app-server', endpointPath: null, providerKind: 'codex'},
+    error,
+  })
+
+  recordConnectionFailure({effectiveBaseURL: 'codex://app-server', failure, providerConnectionId: null})
+
+  expect(failure.kind).toBe('other')
+  expect(failure.shouldPauseConnection).toBe(false)
+  expect(isConnectionError(error)).toBe(false)
+  expect(
+    getJudgmentEndpointAvailability({effectiveBaseURL: 'codex://app-server', providerConnectionId: null}).status,
+  ).toBe('healthy')
+})
+
 test('classifies circuit-open failures with typed connection errors', () => {
   const error = createConnectionError({
     context: {effectiveBaseURL: 'http://127.0.0.1:1234/v1', endpointPath: null, providerKind: 'sglang'},

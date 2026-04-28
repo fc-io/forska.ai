@@ -132,6 +132,24 @@ const isCodexWebsocketForbiddenError = ({
   )
 }
 
+const isCodexTransientUpstreamError = ({
+  error,
+  providerKind,
+}: {
+  error: unknown
+  providerKind: string | null
+}): boolean => {
+  const message = getErrorMessage(error).toLowerCase()
+  const isCodexContext =
+    providerKind === 'codex' || message.includes('codex app-server') || message.includes('rmcp::transport::worker')
+  const isTransientUpstreamReset =
+    message.includes('unexpected content type')
+    && message.includes('upstream connect error')
+    && (message.includes('disconnect/reset before headers') || message.includes('reset reason: connection termination'))
+
+  return isCodexContext && isTransientUpstreamReset
+}
+
 const getLikelyCause = ({
   endpointPath,
   kind,
@@ -220,25 +238,28 @@ export const classifyConnectionFailure = ({
     providerKind: normalizedContext.providerKind,
     statusCode,
   })
+  const isCodexTransientUpstream = isCodexTransientUpstreamError({error, providerKind: normalizedContext.providerKind})
   const kind: ConnectionFailureKind = isCircuitOpenError(error)
     ? 'circuit_open'
     : statusCode === 429
       ? 'rate_limited'
       : isCodexWebsocketForbidden
         ? 'rate_limited'
-        : isRequiredOpenAICompatibleEndpoint && statusCode === 404
-          ? 'endpoint_unavailable'
-          : isRequiredOpenAICompatibleEndpoint && (statusCode === 405 || statusCode === 501)
-            ? 'endpoint_misconfigured'
-            : statusCode === 408
-              ? 'network_unavailable'
-              : statusCode != null && statusCode >= 500
-                ? 'endpoint_unavailable'
-                : statusCode != null && statusCode >= 400
-                  ? 'other'
-                  : isNetworkError(error)
-                    ? 'network_unavailable'
-                    : 'other'
+        : isCodexTransientUpstream
+          ? 'other'
+          : isRequiredOpenAICompatibleEndpoint && statusCode === 404
+            ? 'endpoint_unavailable'
+            : isRequiredOpenAICompatibleEndpoint && (statusCode === 405 || statusCode === 501)
+              ? 'endpoint_misconfigured'
+              : statusCode === 408
+                ? 'network_unavailable'
+                : statusCode != null && statusCode >= 500
+                  ? 'endpoint_unavailable'
+                  : statusCode != null && statusCode >= 400
+                    ? 'other'
+                    : isNetworkError(error)
+                      ? 'network_unavailable'
+                      : 'other'
   const likelyCause = getLikelyCause({endpointPath, kind, statusCode})
 
   return {
