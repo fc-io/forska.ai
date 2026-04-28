@@ -122,7 +122,7 @@ const isLeaseOwnedByCurrentProcess = (metadata: JudgmentJobLeaseMetadata) => {
 const canReclaimLease = (metadata: JudgmentJobLeaseMetadata, takeoverLeaseId?: string) => {
   return (
     (isLeaseOwnedByCurrentMachine(metadata) && !isJudgmentJobLeaseProcessAlive(metadata))
-    || (isLeaseOwnedByCurrentMachine(metadata) && isJudgmentJobLeaseStale(metadata))
+    || isJudgmentJobLeaseStale(metadata)
     || (takeoverLeaseId !== undefined && metadata.leaseId === takeoverLeaseId && isJudgmentJobLeaseStale(metadata))
   )
 }

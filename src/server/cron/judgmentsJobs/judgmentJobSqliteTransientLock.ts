@@ -4,6 +4,8 @@ const transientJudgmentJobSqliteLockFragments = [
   'database is locked',
   'database is busy',
   'database table is locked',
+  'failed to acquire sqlite job lease',
+  'sqlite job lease',
   'sqlite_busy',
   'sqlite_locked',
 ] as const

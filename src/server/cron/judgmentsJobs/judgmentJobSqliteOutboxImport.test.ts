@@ -337,7 +337,7 @@ test('background import records metadata and quarantines repeated failures for t
   ).toBe(true)
 })
 
-test('background import records transient SQLite locks without increasing quarantine failure count', () => {
+test('background import records transient SQLite locks and lease conflicts without increasing quarantine failure count', () => {
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
@@ -356,6 +356,12 @@ test('background import records transient SQLite locks without increasing quaran
         const queryStatements = []
         const runStatements = []
         const attemptedJobIds = []
+        const errorMessages = [
+          'SQLITE_BUSY: database is locked',
+          'Failed to acquire SQLite job lease for lock-job: Judgment job lease for lock-job is held by host pid=1177 serverJobId=server since 2026-04-28T08:19:22.327Z: EEXIST: file already exists, open lock-job.lease.json',
+        ]
+        const summaries = []
+        let currentErrorMessage = errorMessages[0]
 
         void mock.module(appDatabaseServiceModulePath, () => {
           return {
@@ -398,15 +404,18 @@ test('background import records transient SQLite locks without increasing quaran
           return {
             runJudgmentJobSqliteOutboxImportCycle: async ({jobId}) => {
               attemptedJobIds.push(jobId)
-              throw new Error('SQLITE_BUSY: database is locked')
+              throw new Error(currentErrorMessage)
             },
           }
         })
 
         const {runJudgmentJobSqliteBackgroundImport} = await import(backgroundImportModulePath + '?transient-lock=' + Date.now())
-        const summary = await runJudgmentJobSqliteBackgroundImport({claimedBy: 'test-server'})
+        for (const errorMessage of errorMessages) {
+          currentErrorMessage = errorMessage
+          summaries.push(await runJudgmentJobSqliteBackgroundImport({claimedBy: 'test-server'}))
+        }
 
-        console.log(JSON.stringify({attemptedJobIds, queryStatements, runStatements, summary}))
+        console.log(JSON.stringify({attemptedJobIds, queryStatements, runStatements, summaries}))
       `,
     ],
     {cwd: process.cwd(), env: {...process.env}},
@@ -416,7 +425,7 @@ test('background import records transient SQLite locks without increasing quaran
     throw new Error(
       runScript.stderr.toString()
         || runScript.stdout.toString()
-        || 'SQLite background import transient lock regression test failed',
+        || 'SQLite background import transient lock and lease conflict regression test failed',
     )
   }
 
@@ -424,11 +433,14 @@ test('background import records transient SQLite locks without increasing quaran
     attemptedJobIds: string[]
     queryStatements: string[]
     runStatements: string[]
-    summary: {attemptedCount: number; failedCount: number; skippedCount: number; succeededCount: number}
+    summaries: Array<{attemptedCount: number; failedCount: number; skippedCount: number; succeededCount: number}>
   }
 
-  expect(result.attemptedJobIds).toEqual(['lock-job'])
-  expect(result.summary).toEqual({attemptedCount: 1, failedCount: 1, skippedCount: 0, succeededCount: 0})
+  expect(result.attemptedJobIds).toEqual(['lock-job', 'lock-job'])
+  expect(result.summaries).toEqual([
+    {attemptedCount: 1, failedCount: 1, skippedCount: 0, succeededCount: 0},
+    {attemptedCount: 1, failedCount: 1, skippedCount: 0, succeededCount: 0},
+  ])
   expect(
     result.queryStatements.some((statement) => {
       return statement.includes('import_failure_count = import_failure_count + 1')

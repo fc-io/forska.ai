@@ -91,3 +91,25 @@ test('reclaims a stale same-host lease', async () => {
   expect(storedLease.leaseId).not.toBe('stale-lease-id')
   expect(storedLease.serverJobId).toBe('server-job-new')
 })
+
+test('reclaims a stale lease from a previous hostname', async () => {
+  const {acquireJudgmentJobLease} = await import('./judgmentJobLease.ts')
+  const jobId = `job-stale-hostname-${Date.now()}`
+
+  await writeLeaseMetadata(jobId, {
+    acquiredAt: '2026-03-01T00:00:00.000Z',
+    apiServerPort: 3999,
+    heartbeatAt: '2026-03-01T00:00:00.000Z',
+    hostname: 'previous-hostname.local',
+    jobId,
+    leaseId: 'stale-previous-hostname-lease-id',
+    pid: 999_999,
+    serverJobId: 'server-job-old-hostname',
+  })
+
+  const lease = await acquireJudgmentJobLease({apiServerPort: 3001, jobId, serverJobId: 'server-job-new-hostname'})
+  const storedLease = JSON.parse(readFileSync(lease.leasePath, 'utf8')) as {leaseId: string; serverJobId: string}
+
+  expect(storedLease.leaseId).not.toBe('stale-previous-hostname-lease-id')
+  expect(storedLease.serverJobId).toBe('server-job-new-hostname')
+})
