@@ -6,6 +6,7 @@ import {Database} from 'bun:sqlite'
 import {duckdbOwnerPrivateApiPrefix} from '../../routes/apiRouteClassification.ts'
 import type {JudgmentExecutionSnapshotRecord} from '../../services/judgmentExecutionSnapshotService.ts'
 import {getEnv} from '../../utils/env.ts'
+import {getCurrentJudgeWorkerJournalIdentity} from '../../utils/judgeWorkerJournalIdentity.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import type {RunningJudgmentJob} from './judgmentsJobsGetRunningJobs.ts'
 import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
@@ -134,7 +135,7 @@ const tryParseOwnerResponse = <T>(text: string): {data?: T; error?: unknown} | n
 }
 
 const getJournalPath = (): string => {
-  return getEnv().JUDGE_WORKER_JOURNAL_PATH
+  return getCurrentJudgeWorkerJournalIdentity()?.journalPath ?? getEnv().JUDGE_WORKER_JOURNAL_PATH
 }
 
 const getOwnerUrl = (): string => {

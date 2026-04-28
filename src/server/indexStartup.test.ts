@@ -405,6 +405,52 @@ test('judge-worker startup replays unacked completions for the same durable iden
   }
 })
 
+test('judge-worker startup replays unacked completions from worker-id durable journal', async () => {
+  const testDirectory = getStartupTestDirectory()
+  const apiPort = 34976
+  const workerId = 'startup-worker-id-replay-worker'
+  const journalDirectory = join(testDirectory, 'judge-worker-journals')
+  const journalPath = join(journalDirectory, `${workerId}.sqlite`)
+  const completionRequests: unknown[] = []
+  const ownerServer = globalThis.Bun.serve({
+    port: 0,
+    fetch: async (request) => {
+      const requestUrl = new URL(request.url)
+
+      if (requestUrl.pathname === '/__duckdb-owner-rpc/api/judgmentsjobs/job-replay-startup/completions') {
+        const body = (await request.json()) as {claimId: string; queueRecordId: string}
+
+        completionRequests.push(body)
+        return Response.json({
+          data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'acked'},
+          error: null,
+        })
+      }
+
+      return Response.json({data: {ready: true}, error: null})
+    },
+  })
+
+  mkdirSync(journalDirectory, {recursive: true})
+  writeUnackedJudgeWorkerCompletion(journalPath)
+
+  const server = startServer({
+    ...getJudgeWorkerStartupEnv({apiPort, duckdbPath: join(testDirectory, 'forska.duckdb'), workerId}),
+    SERVER_DUCKDB_OWNER_URL: `http://127.0.0.1:${ownerServer.port}`,
+  })
+
+  try {
+    await waitForServer(apiPort, 10_000)
+
+    expect(completionRequests).toHaveLength(1)
+    expect(getCompletionAckedAt(journalPath, 'claim-replay-startup')).not.toBe(null)
+  } finally {
+    await stopServer(server)
+    await ownerServer.stop(true)
+    rmSync(testDirectory, {force: true, recursive: true})
+  }
+})
+
 test('maintenance-worker startup migrates DuckDB before judgment health queries run', async () => {
   const apiPort = 34988
   const duckdbPath = `/tmp/f1-index-startup-${Date.now()}.duckdb`
