@@ -66,7 +66,10 @@
 
 ## Implementation Readiness
 
-- Status: ready to start implementation with the order below; not ready to release until the macOS and Windows smoke runs pass and the continue-or-fallback decision is recorded.
+- Status: ready to start the first implementation slice with the handoff checklist below; not ready to release until the macOS and Windows smoke runs pass and the continue-or-fallback decision is recorded.
+- The first implementation slice is the only slice ready for immediate coding. Later workstreams stay blocked by the dependency rules and by the runner/artifact outputs from slice 1.
+- No product decision blocks slice 1. The expected implementation decisions are the packaged backend runner choice and whether manifest logic stays in `getDesktopRuntimeConfig.ts` or moves to `src/desktop/desktopArtifactManifest.ts`.
+- The runner proof must produce exactly one recorded outcome before backend stack orchestration starts: ElectroBun `process.execPath` is accepted as the packaged backend runner, or a separate copied platform-specific Bun binary is required.
 - The implementation unit is a small slice, not a whole workstream. Each slice must leave `bun run dev:server`, `bun run dev:app`, and the desktop build path either passing or with an explicitly recorded blocker.
 - Do not start signed installers, updater wiring, release channels, Linux packaging, or compiled-backend artifact work during this spike.
 - Do not treat a manual smoke step as passing if the required provider endpoint, host-tool isolation, API-key secret-store backend, or platform machine is unavailable; record it as unverified or blocked.
@@ -118,6 +121,17 @@ Deliverables:
 - Fix ElectroBun watch ignores and Bun test discovery ignores for `.desktopArtifacts/` and `.desktopBuild/`.
 - Refactor `scripts/runBunTests.ts` only as needed to export pure ignore/discovery helpers without running `main()` during import, so `.desktopArtifacts/` and `.desktopBuild/` ignore behavior is unit-testable.
 - Keep `desktop:dev` visibly separate from packaged runner resolution and allow it to keep explicit host-Bun lookup only in dev mode.
+
+Handoff Checklist:
+
+- Start with failing tests for artifact-manifest/runtime-config behavior and `scripts/runBunTests.ts` ignore behavior before changing packaging rules.
+- Make desktop runtime mode explicit in the config helper, with separate dev and packaged runner resolution; packaged mode must not infer safety from `FORSKA_DESKTOP_BUN_BIN`, `process.cwd()`, or inherited shell env.
+- Run the packaged runner proof from inside an actual built artifact with host `bun`, `bunx`, `node`, and `npm` removed from `PATH`; capture resolved runner path, backend entrypoint path, stdout/stderr summary, and exit code.
+- Accept ElectroBun `process.execPath` only if it can launch the backend TypeScript entrypoint from the built artifact under the host-tool-isolated proof. If it cannot, switch this slice to a copied platform-specific Bun binary and keep host-Bun fallback disabled in packaged mode.
+- Lock one artifact-root helper that resolves the packaged runner, backend entrypoints, `views/mainview`, `src/db/duckdbMigrations`, required source roots, native module roots, and required metadata; prefer one helper over scattered path joins.
+- Decide whether packaged startup will launch `scripts/startServerStack.ts` or a copied `src` entrypoint. If it launches the script, include `scripts` in the source-first artifact manifest; otherwise keep the packaged stack entrypoint under copied `src` paths.
+- Update `electrobun.config.ts` copy/watch-ignore rules and Bun test discovery ignores together so generated `.desktopArtifacts/` and `.desktopBuild/` files cannot re-enter watch or test runs.
+- Record the runner proof and artifact manifest result in `APP_PLAN_IMPLEMENTED.md` before marking the slice complete, including any files intentionally copied despite being tests, fixtures, or dev-only assets.
 
 Quality Gates:
 
