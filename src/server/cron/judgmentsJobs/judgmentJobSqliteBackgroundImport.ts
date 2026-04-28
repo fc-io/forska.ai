@@ -12,40 +12,143 @@ import {
 
 const judgmentJobSqliteBackgroundImportLogger = createRateLimitedLogger({windowMs: 30_000})
 const isolatedImportFailureThreshold = 3
+const drainingRetentionPruneChunkSize = 1_000
 
-const getImportableJudgmentJobIds = async () => {
+type ImportableJudgmentJobRow = {id: string; storageState?: string | null}
+type ImportableJudgmentJob = {id: string; storageState: string}
+type RetentionPruneResult = {outboxRowsDeleted: number; queuePromptRowsDeleted: number}
+
+const normalizeImportableJudgmentJob = (row: ImportableJudgmentJobRow): ImportableJudgmentJob => {
+  return {id: row.id, storageState: row.storageState ?? 'active'}
+}
+
+const getImportableJudgmentJobPriority = (job: ImportableJudgmentJob) => {
+  return job.storageState === 'draining' ? 0 : 1
+}
+
+const sortImportableJudgmentJobs = (jobs: ImportableJudgmentJob[]) => {
+  return [...jobs].sort((left, right) => {
+    const priorityDifference = getImportableJudgmentJobPriority(left) - getImportableJudgmentJobPriority(right)
+
+    return priorityDifference === 0 ? left.id.localeCompare(right.id) : priorityDifference
+  })
+}
+
+const getNormalizedImportableJudgmentJobs = (rows: ImportableJudgmentJobRow[]) => {
+  return sortImportableJudgmentJobs(
+    rows.map((row) => {
+      return normalizeImportableJudgmentJob(row)
+    }),
+  )
+}
+
+const getImportableJudgmentJobs = async () => {
   const trackedJobIds = getJudgmentJobSqliteJobIds().sort()
 
   if (trackedJobIds.length === 0) {
-    const rows = await getAppDatabaseService().queryJson<{id: string}>(`
-      SELECT id
+    const rows = await getAppDatabaseService().queryJson<ImportableJudgmentJobRow>(`
+      SELECT
+        id,
+        storage_state AS storageState
       FROM app.judgment_job
       WHERE (${getImportableJudgmentJobWhereSql()})
-      ORDER BY id ASC
+      ORDER BY CASE WHEN storage_state = 'draining' THEN 0 ELSE 1 END, id ASC
     `)
 
-    return rows.map((row) => {
-      return row.id
-    })
+    return getNormalizedImportableJudgmentJobs(rows)
   }
 
   const rows = await Promise.all(
     trackedJobIds.map(async (jobId) => {
-      const [row] = await getAppDatabaseService().queryJson<{id: string}>(`
-        SELECT id
+      const [row] = await getAppDatabaseService().queryJson<ImportableJudgmentJobRow>(`
+        SELECT
+          id,
+          storage_state AS storageState
         FROM app.judgment_job
         WHERE id = ${getSqlLiteral(jobId)}
           AND (${getImportableJudgmentJobWhereSql()})
         LIMIT 1
       `)
 
-      return row?.id ?? null
+      return row ?? null
     }),
   )
 
-  return rows.filter((jobId): jobId is string => {
-    return jobId !== null
+  return getNormalizedImportableJudgmentJobs(
+    rows.filter((row): row is ImportableJudgmentJobRow => {
+      return row !== null
+    }),
+  )
+}
+
+const getEmptyRetentionPruneResult = (): RetentionPruneResult => {
+  return {outboxRowsDeleted: 0, queuePromptRowsDeleted: 0}
+}
+
+const addRetentionPruneResults = (left: RetentionPruneResult, right: RetentionPruneResult): RetentionPruneResult => {
+  return {
+    outboxRowsDeleted: left.outboxRowsDeleted + right.outboxRowsDeleted,
+    queuePromptRowsDeleted: left.queuePromptRowsDeleted + right.queuePromptRowsDeleted,
+  }
+}
+
+const pruneDrainingRetentionUntilStable = async ({
+  claimedBy,
+  jobId,
+  total = getEmptyRetentionPruneResult(),
+}: {
+  claimedBy: string
+  jobId: string
+  total?: RetentionPruneResult
+}): Promise<RetentionPruneResult> => {
+  const current = await getJudgmentJobSqliteService().pruneVisibilityAckedRetention({
+    jobId,
+    maxRows: drainingRetentionPruneChunkSize,
+    serverJobId: claimedBy,
   })
+
+  return current.outboxRowsDeleted === 0 && current.queuePromptRowsDeleted === 0
+    ? total
+    : pruneDrainingRetentionUntilStable({claimedBy, jobId, total: addRetentionPruneResults(total, current)})
+}
+
+const finishDrainingJobCleanup = async ({claimedBy, jobId}: {claimedBy: string; jobId: string}) => {
+  const sqliteService = getJudgmentJobSqliteService()
+  const pruned = await pruneDrainingRetentionUntilStable({claimedBy, jobId})
+  const finalized = (await sqliteService.finalizeDrainingJobs({jobId, serverJobId: claimedBy})).includes(jobId)
+  const checkpointed = await sqliteService.checkpointWal({jobId, serverJobId: claimedBy})
+
+  return {...pruned, checkpointed, finalized}
+}
+
+const runDrainingJobFastImport = async ({claimedBy, jobId}: {claimedBy: string; jobId: string}) => {
+  const {runJudgmentJobSqliteIsolatedFlush} = await import('./judgmentJobSqliteIsolatedImport.ts')
+  const flushResult = await runJudgmentJobSqliteIsolatedFlush({claimedBy, jobId})
+
+  if (flushResult.errorMessage !== null) {
+    throw new Error(flushResult.errorMessage)
+  }
+
+  const cleanupResult = await finishDrainingJobCleanup({claimedBy, jobId})
+  const changed =
+    flushResult.importedCount > 0
+    || cleanupResult.outboxRowsDeleted > 0
+    || cleanupResult.queuePromptRowsDeleted > 0
+    || cleanupResult.finalized
+
+  return {changed, exitCode: flushResult.exitCode}
+}
+
+const runActiveJobImport = async ({claimedBy, jobId}: {claimedBy: string; jobId: string}) => {
+  const result = await runJudgmentJobSqliteOutboxImportCycle({claimedBy, jobId})
+
+  return {changed: result.status !== 'idle', exitCode: 0}
+}
+
+const runImportableJudgmentJob = async ({claimedBy, job}: {claimedBy: string; job: ImportableJudgmentJob}) => {
+  return job.storageState === 'draining'
+    ? runDrainingJobFastImport({claimedBy, jobId: job.id})
+    : runActiveJobImport({claimedBy, jobId: job.id})
 }
 
 const recordImportStart = async (jobId: string) => {
@@ -132,11 +235,13 @@ export const runJudgmentJobSqliteBackgroundImport = async ({claimedBy}: {claimed
 
   await sqliteService.syncOwnedLeases([])
 
-  const [jobId = null] = await getImportableJudgmentJobIds()
+  const [job = null] = await getImportableJudgmentJobs()
 
-  if (!jobId) {
+  if (!job) {
     return {attemptedCount: 0, failedCount: 0, skippedCount: 0, succeededCount: 0}
   }
+
+  const jobId = job.id
 
   await recordImportStart(jobId)
 
@@ -145,10 +250,10 @@ export const runJudgmentJobSqliteBackgroundImport = async ({claimedBy}: {claimed
   }
 
   try {
-    const result = await runJudgmentJobSqliteOutboxImportCycle({claimedBy, jobId})
-    await recordImportSuccess({exitCode: 0, jobId})
+    const result = await runImportableJudgmentJob({claimedBy, job})
+    await recordImportSuccess({exitCode: result.exitCode, jobId})
     await sqliteService.getHealthSnapshot(jobId)
-    return result.status === 'idle'
+    return !result.changed
       ? {attemptedCount: 1, failedCount: 0, skippedCount: 1, succeededCount: 0}
       : {attemptedCount: 1, failedCount: 0, skippedCount: 0, succeededCount: 1}
   } catch (error) {

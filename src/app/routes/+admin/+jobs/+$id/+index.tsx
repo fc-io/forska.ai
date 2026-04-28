@@ -135,7 +135,9 @@ const getDrainingResumeBlockedReason = ({
   }
 
   if (pendingOutboxCount > 0) {
-    return `Resume is blocked while ${pendingOutboxCount.toLocaleString()} local judgment row(s) export to DuckDB. Oldest unexported age: ${formatDuration(oldestUnexportedAgeMs)}.`
+    return oldestUnexportedAgeMs == null
+      ? `Resume is blocked while ${pendingOutboxCount.toLocaleString()} exported local judgment row(s) finish retention cleanup.`
+      : `Resume is blocked while ${pendingOutboxCount.toLocaleString()} local judgment row(s) export to DuckDB. Oldest unexported age: ${formatDuration(oldestUnexportedAgeMs)}.`
   }
 
   if (hasLocalSqliteState === false) {
