@@ -10,7 +10,7 @@
 ## Implementation Readiness
 
 - This plan is ready to implement in phases, but Phase 1 must land the contract, route-ordering, session/history schema, zip, proxy-streaming, and path-safety foundations before any export/import product handler writes final app tables.
-- V1 project-transfer uploads use the normal owner-proxied `/api/*` path with streaming request-body forwarding to the DuckDB owner. Do not add a writer-direct or follower-local upload bypass in v1. `PUT /api/projects/import/:sessionId/upload` must never use the current generic `request.clone().arrayBuffer()` proxy path; it must stream the original request body, fail closed when no owner is available, and disable retry for non-replayable upload streams. Small non-transfer API requests may keep the existing buffered retry behavior.
+- V1 project-transfer uploads use the normal owner-proxied `/api/*` path with streaming request-body forwarding to the DuckDB owner. Do not add a writer-direct or follower-local upload bypass in v1. `PUT /api/projects/import/:sessionId/upload` must never use the current generic `request.clone().arrayBuffer()` proxy path; it must resolve the owner and fail closed before consuming the request body when no owner is available, stream the original request body, and disable retry for non-replayable upload streams. Small non-transfer API requests may keep the existing buffered retry behavior.
 - V1 zip handling uses `@zip.js/zip.js` through a small project-transfer wrapper. Phase 1 must add the dependency and prove streaming read/write, ZIP64 handling, checksum verification, duplicate normalized path rejection, and symlink rejection before route handlers depend on it.
 - V1 import-wizard dependency resolution must not edit existing provider connections in place. Users may select an existing connection, create a new connection, complete provider auth, or leave through the normal provider UI with a session return path. If any import-wizard path calls `PATCH /api/provider-connections/:id` or edits an existing connection, first patch and test provider by-id/PATCH parity for hidden persisted fields such as archived state, disabled model ids, manual worker settings, secret refs, and `maxInflightRequests`.
 - When renaming existing files by case, use a Git-safe temporary filename step on macOS, then update all imports and mocks in the same change so CI sees the case change.
@@ -242,7 +242,7 @@
 ### Import Steps
 
 1. Upload package.
-   - Create an import session, then stream the `.forska-project.zip` upload into that session's runtime temp storage.
+   - Create an `awaiting_upload` import session, then transition it to `uploading` while streaming the `.forska-project.zip` upload into that session's runtime temp storage.
    - Validate zip structure and `manifest.json`.
    - Extract payload files into the session temp storage.
    - If the package crosses the configured threshold, continue extraction and analyze asynchronously and show progress until the session is ready.
@@ -287,7 +287,7 @@
 - Anchor staged uploads, extracted assets, and rewritten file paths to the runtime-writable root with relative POSIX paths that have already passed package path validation. Prefer `resolveRuntimeWritablePath` for untrusted package-derived paths; reserve `resolveRuntimeFilePath` for already-trusted persisted runtime paths because it intentionally accepts absolute paths. Do not assume browser/dev paths live outside the repo root; they live under the current runtime root today.
 - Harden `/api/runtime-asset` path normalization while adding imported assets so serving `assets/...` paths rejects raw absolute paths, raw backslashes, backslash traversal, `..` segments, and paths that normalize differently even if a bad path somehow reaches persisted article content.
 - Reuse the existing `/api/*` writer-proxy architecture for transfer routes, and upgrade the project-transfer upload proxy path to be streaming-safe. The current `ApiProxyRoutes.ts` proxy path reads request bodies into memory; Phase 1 must add an allowlisted streaming owner-proxy path for `PUT /api/projects/import/:sessionId/upload` before Phase 3 upload/analyze work starts.
-- Project-transfer upload routes stay owner-proxied in v1. Do not classify upload routes as follower-local or writer-direct bypass routes. The streaming upload proxy path must fail closed without a DuckDB owner, must not buffer the upload body into an `ArrayBuffer`, and must not retry after a partially streamed upload body could have reached the owner.
+- Project-transfer upload routes stay owner-proxied in v1. Do not classify upload routes as follower-local or writer-direct bypass routes. The streaming upload proxy path must check for a DuckDB owner before consuming the request stream, fail closed without an owner, must not buffer the upload body into an `ArrayBuffer`, and must not retry after a partially streamed upload body could have reached the owner.
 - Support threshold-based execution modes: inline for small packages, background session jobs for large export assembly and large import analyze or commit work.
 - Treat those thresholds as execution-mode switches only, not as product limits. Packages larger than the inline thresholds must move to background work instead of being rejected just for size.
 - Record completed imports in a small transfer-history store with import session id, package fingerprint, source project summary, imported project id, imported project name snapshot, imported at, counts, and the exact completion payload so analyze can warn on exact duplicate packages later and commit retries can reconstruct the correct completion response for the same session without confusing intentional same-package imports.
@@ -314,9 +314,9 @@
 - `GET /api/projects/export/:exportId/download`
   - always returns `200 application/zip` with `Content-Disposition` and checksum/fingerprint response headers once the export session is ready; returns session-state JSON or an error status when not ready
 - `POST /api/projects/import/sessions`
-  - creates an import session and returns `{sessionId, status, expiresAt, uploadUrl, analyzeUrl}` before any upload bytes are accepted
+  - creates an import session in `awaiting_upload` and returns `{sessionId, status, expiresAt, uploadUrl, analyzeUrl}` before any upload bytes are accepted
 - `PUT /api/projects/import/:sessionId/upload`
-  - streams one package as `application/zip` or a multipart field named `package`; returns `202 application/json` with updated session metadata after the upload is durably staged
+  - atomically transitions `awaiting_upload` to `uploading`, streams one package as `application/zip` or a multipart field named `package`, and returns `202 application/json` with updated session metadata after the upload is durably staged
 - `POST /api/projects/import/:sessionId/analyze`
   - validates/extracts the staged package and starts or continues analyze work; returns inline analysis for small packages or `202` session metadata for background analyze
 - Because the new static prefixes under `/api/projects/export/...` and `/api/projects/import/...` sit beside the existing generic `/api/projects/:id` route, mount or order `projectTransferRoutes` so those transfer routes cannot be swallowed as project ids, and add route tests for `POST /api/projects/:id/export-project`, `GET /api/projects/export/:exportId`, `GET /api/projects/export/:exportId/download`, `POST /api/projects/import/sessions`, `PUT /api/projects/import/:sessionId/upload`, `POST /api/projects/import/:sessionId/analyze`, `GET /api/projects/import/:sessionId`, and the existing CSV `POST /api/projects/:id/export` route so the old export page is not shadowed by the new transfer routes.
@@ -334,7 +334,7 @@
 - `src/app/routes/+projects/+archived/archivedProjectsTable.tsx`
 - `src/app/routes/+projects/+index.tsx`
 - new `src/app/routes/+projects/+import.tsx`
-- generated `src/app/routeTree.gen.ts` after adding `src/app/routes/+projects/+import.tsx`; do not edit it by hand, and run `bun run build` or the app dev pipeline so the generated static `/projects/import` route is committed
+- generated `src/app/routeTree.gen.ts` after adding `src/app/routes/+projects/+import.tsx`; do not edit it by hand, and run `bun run build` or the app dev pipeline so the generated static `/projects/import` route is included in the change
 - add small client helpers near `src/app/routes/+admin/+models/providerConnectionsClient.ts` only when the import wizard needs transfer-specific provider/model calls that do not belong in the route component
 - `src/app/utils/decodeAndSanitize.ts` or a small sibling HTML runtime-asset rewrite helper, plus `src/components/main/projects/reviews/review/reviewArticleDetails.tsx`, if imported `fullTextHtml` can contain promoted runtime asset references; keep browser and desktop URL generation through `getRuntimeAssetUrl`
 - keep new export-package state and helper logic out of the already-large projects grid body when it becomes non-trivial; use a sibling owner folder/helper instead of growing the component further
@@ -350,8 +350,8 @@
 
 - [ ] Lock the manifest schema, payload file list, supported schema-version policy, and explicit exported field set, including article fields, current-review judgment scope, answered human judgment scope, review row scope, and omission warnings.
 - [ ] Define import-session state, plan revisions, source-to-target id maps, unresolved dependency statuses, immutable-prompt link rules, asset cleanup rules, and post-remap judgment-conflict reporting.
-- [ ] Add `@zip.js/zip.js` with Bun, commit the resulting `package.json` and `bun.lock` changes, and validate the project-transfer wrapper before writing route handlers.
-- [ ] Implement the allowlisted streaming owner-proxy path for `PUT /api/projects/import/:sessionId/upload`, including fail-closed no-owner behavior and disabled retries for non-replayable upload streams, before upload route handlers depend on it.
+- [ ] Add `@zip.js/zip.js` with Bun, include the resulting `package.json` and `bun.lock` changes, and validate the project-transfer wrapper before writing route handlers.
+- [ ] Implement the allowlisted streaming owner-proxy path for `PUT /api/projects/import/:sessionId/upload`, including fail-closed no-owner behavior before consuming the request body and disabled retries for non-replayable upload streams, before upload route handlers depend on it.
 - [ ] Lock checksum, package fingerprint, path-normalization, threshold, and resource-gate rules before writing route handlers.
 - [ ] Define the thresholds that switch export, analyze, and commit work from inline requests to background session jobs.
 - [ ] Define the import-session cancel contract for `DELETE /api/projects/import/:sessionId`, including allowed source states, rejection after terminal states, temp cleanup, and writer-only ownership.
@@ -400,7 +400,7 @@
 - `Session storage layout`
   - Store working files under runtime-writable temp paths such as `tmp/project-transfer/import/<sessionId>/` and `tmp/project-transfer/export/<sessionId>/`.
   - These paths are relative to the runtime-writable root. In desktop mode that root is outside the repo; in browser/dev mode it is the current runtime root, which is repo-local today.
-  - Import session folders must contain `upload.zip`, `manifest.json`, `extracted/`, `analysis.json`, `plan.json`, `promotionManifest.json`, `completion.json`, and `progress.json`, but these files are artifacts or cached response payloads, not the source of atomic session truth.
+  - Import session folders must contain the phase-appropriate artifacts `upload.zip`, `manifest.json`, `extracted/`, `analysis.json`, `plan.json`, `promotionManifest.json`, `completion.json`, and `progress.json` as they are produced over the session lifecycle. For example, `upload.zip` does not exist until the upload transition succeeds, and `completion.json` does not exist before a successful commit. These files are artifacts or cached response payloads, not the source of atomic session truth.
   - `plan.json` stores a copy of the frozen plan plus `planRevision`; dependency-resolution mutations read the current revision from the durable session store, write a new revision there, and then refresh the artifact file. If the session is already `ready_to_commit`, those mutations must first reopen the session to `awaiting_resolution` through the same compare-and-set path so no stale ready plan remains committable.
   - `promotionManifest.json` starts empty before promotion and is append-only during asset copy. Each entry records the intended final path before the copy starts, then its copied/checksummed state after success, so startup recovery can remove only session-owned promoted files for non-completed sessions without missing files created immediately before a crash.
   - `completion.json` is written after the database transaction commits and stores the imported project id, project name snapshot, completed transfer-history id, package fingerprint, final counts, and post-import warnings needed for idempotent retry responses.
@@ -421,7 +421,8 @@
   - Active background export, analyze, and commit jobs must update a durable session heartbeat and owner token. TTL cleanup must atomically transition only stale non-terminal sessions to `expired` or `failed` before deleting files, and startup recovery or cleanup must run only on the active DuckDB writer after checking transfer history and heartbeat staleness.
 
 - `Import session states`
-  - `uploading`, `queued`, `extracting`, `analyzing`, `awaiting_resolution`, `ready_to_commit`, `committing`, `completed`, `failed`, `cancelled`, `expired`.
+  - `awaiting_upload`, `uploading`, `queued`, `extracting`, `analyzing`, `awaiting_resolution`, `ready_to_commit`, `committing`, `completed`, `failed`, `cancelled`, `expired`.
+  - `awaiting_upload` means the server-side session row and temp directory exist, but no upload body has been durably staged yet. Upload starts with a compare-and-set transition from `awaiting_upload` to `uploading` so duplicate browser tabs cannot stream two packages into the same session. Upload staging failures that leave no durable package may transition back to `awaiting_upload` with `error_json`; failures after a durable package is partially staged must transition to `failed` or require session cancellation instead of accepting a second body into the same session.
   - `awaiting_resolution` means the package is parsed but still has provider or model dependencies to resolve, or it has blocking package-settings, article, project-prompt, judgment, or human/review fidelity conflicts that prevent commit. Article, project-prompt, judgment, and human/review fidelity conflicts are not remapped in-wizard in v1; expose `canCommit: false` plus a resolution kind such as `requires_new_package_or_target_changes` until the package or target data changes. Missing or inactive import routes stay warnings in v1 and do not keep the session unresolved on their own.
   - `ready_to_commit` means every blocking dependency is resolved, no blocking package-settings, article, project-prompt, judgment, or human/review fidelity conflicts remain, and the review plan is frozen for commit.
 
@@ -431,6 +432,7 @@
 
 - `Progress contract`
   - Session responses must expose `phase`, `status`, `planRevision`, `percent`, `bytesProcessed`, `bytesTotal`, `rowCountProcessed`, `rowCountTotal`, `warningCount`, `startedAt`, `updatedAt`, and `expiresAt`.
+  - `percent`, `bytesTotal`, and `rowCountTotal` may be `null` while totals are unknown; once a total is known for a phase, progress for that phase must be monotonic and must not jump backward across polling responses.
   - Background phases must be monotonic and resumable enough for UI polling after refresh.
 
 - `Duplicate history store`
@@ -529,6 +531,7 @@
 - [ ] Add and run `bun test src/server/routes/ApiProxyRoutes.retry.test.ts` with coverage that non-replayable streaming uploads are not retried after a partial owner request
 - [ ] `bun run lint`
 - [ ] `bun run build`
+- [ ] `bun run desktop:build`
 
 ### Phase 2 - Export Assembly
 
@@ -565,7 +568,7 @@
 ### Phase 3 - Analyze And Resolve Dependencies
 
 - [ ] Build upload/analyze session endpoints, staged extraction, TTL cleanup, preview summaries, unresolved-warning reporting, and background progress for large packages.
-- [ ] Implement `DELETE /api/projects/import/:sessionId` cancellation with writer-owned state transitions, temp cleanup, and rejection for `committing`, `completed`, `failed`, `cancelled`, and `expired` sessions unless the request is an idempotent repeat.
+- [ ] Implement `DELETE /api/projects/import/:sessionId` cancellation with writer-owned state transitions, temp cleanup from `awaiting_upload`, `uploading`, `queued`, `extracting`, `analyzing`, `awaiting_resolution`, and `ready_to_commit`, plus rejection for `committing`, `completed`, `failed`, `cancelled`, and `expired` sessions unless the request is an idempotent repeat.
 - [ ] Make project-transfer uploads use the Phase 1 streaming owner-proxy support for `PUT /api/projects/import/:sessionId/upload`; current `ApiProxyRoutes.ts` calls `request.clone().arrayBuffer()` for proxied non-GET/non-HEAD requests, and Phase 3 is blocked if that generic buffered path can still handle project-transfer uploads.
 - [ ] Add a follower-path test that uploads a large body, proves the request is forwarded through the streaming owner-proxy path, proves the body is not materialized through the generic full-body `ArrayBuffer` path, and proves non-replayable upload streams are not retried after a partial owner request.
 - [ ] Implement provider connection auto-match, existing-connection selection, a new-connection setup wrapper that reuses the current provider form/client helpers with sanitized fields prefilled, managed-provider auth handoff through the current `begin` and `finish` routes, non-Codex provider-model materialization through provider-connection model routes, exact database-model identity and selectability verification after every materialization route returns an id, Anthropic virtual-id handling, the full Codex status/login/ensure flow, and `planRevision` handling for all dependency-resolution mutations. Do not enable in-wizard edits of existing provider connections in v1. Add route/query-state handoff only if the flow leaves the wizard for standalone provider pages.
@@ -620,6 +623,8 @@
 - [ ] `bun test src/server/routes/providerProjectFlow.e2e.test.ts`
 - [ ] `bunx vitest run src/app/routes/+projects/-+index.vitest.tsx`
 - [ ] `bun run lint`
+- [ ] `bun run build`
+- [ ] `bun run desktop:build`
 
 ### Phase 5 - Browser And Desktop Verification
 
