@@ -6,7 +6,11 @@ import {
   type JudgmentJobSqliteOutboxImportCycleResult,
   runJudgmentJobSqliteOutboxImportCycleForClaimedBatch,
 } from './judgmentJobSqliteOutboxImport.ts'
-import type {JudgmentJobSqliteClaimedOutboxBatch, JudgmentJobSqliteOutboxEntry} from './judgmentJobSqliteService.ts'
+import {
+  getJudgmentJobSqliteService,
+  type JudgmentJobSqliteClaimedOutboxBatch,
+  type JudgmentJobSqliteOutboxEntry,
+} from './judgmentJobSqliteService.ts'
 
 const isolatedImportFlushMaxCycles = 1_000
 const isolatedImportEntrypointPath = fileURLToPath(
@@ -251,6 +255,8 @@ export const runJudgmentJobSqliteIsolatedFlush = async ({
 
   const result = await runJudgmentJobSqliteIsolatedImportCycle({claimedBy, jobId})
   const cycleResult = result.result
+
+  await getJudgmentJobSqliteService().releaseOwnedLease(jobId)
 
   return result.errorMessage !== null
     ? {
