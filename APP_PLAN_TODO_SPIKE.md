@@ -66,11 +66,12 @@
 
 ## Implementation Readiness
 
-- Status: ready to start the first implementation slice with the handoff checklist below; not ready to release until the macOS and Windows smoke runs pass and the continue-or-fallback decision is recorded.
+- Status: ready to implement the first slice with the contract and handoff checklist below; not ready to release until the macOS and Windows smoke runs pass and the continue-or-fallback decision is recorded.
 - The first implementation slice is the only slice ready for immediate coding. Later workstreams stay blocked by the dependency rules and by the runner/artifact outputs from slice 1.
 - No product decision blocks slice 1. The expected implementation decisions are the packaged backend runner choice and whether manifest logic stays in `getDesktopRuntimeConfig.ts` or moves to `src/desktop/desktopArtifactManifest.ts`.
 - The runner proof must produce exactly one recorded outcome before backend stack orchestration starts: ElectroBun `process.execPath` is accepted as the packaged backend runner, or a separate copied platform-specific Bun binary is required.
 - The implementation unit is a small slice, not a whole workstream. Each slice must leave `bun run dev:server`, `bun run dev:app`, and the desktop build path either passing or with an explicitly recorded blocker.
+- The implementation-ready gap was the missing slice-1 contract, not missing product scope. The sections below now define packaged/dev mode boundaries, manifest fields, env sanitization expectations, runner-proof output, staging-script fallback, and the recording template needed to start coding.
 - Do not start signed installers, updater wiring, release channels, Linux packaging, or compiled-backend artifact work during this spike.
 - Do not treat a manual smoke step as passing if the required provider endpoint, host-tool isolation, API-key secret-store backend, or platform machine is unavailable; record it as unverified or blocked.
 - Every completed slice moves landed details into `APP_PLAN_IMPLEMENTED.md`, removes or rewrites stale TODO bullets in this file, and lists commands run or explicitly skipped.
@@ -107,9 +108,56 @@ Files:
 - `src/desktop/index.ts` if packaged-runner diagnostics, startup error fields, or spawn behavior need to change
 - `src/desktop/desktopArtifactManifest.ts` (new, if manifest logic is not kept in `getDesktopRuntimeConfig.ts`)
 - `src/desktop/desktopArtifactManifest.test.ts` (new, if manifest logic is not kept in `getDesktopRuntimeConfig.test.ts`)
+- `src/desktop/desktopRunnerProbe.ts` (new, only if a minimal copied TypeScript child entrypoint is needed to prove the packaged runner before launching the full backend)
 - `scripts/runBunTests.ts`
 - `scripts/runBunTests.test.ts` (new)
+- `scripts/prepareDesktopArtifactSource.ts` (new, only if ElectroBun copy rules cannot express the needed include/exclude manifest directly)
+- `scripts/prepareDesktopArtifactSource.test.ts` (new, if a staging script is added)
 - `package.json` only if a helper script is required
+- `APP_PLAN_IMPLEMENTED.md`
+- `APP_PLAN_TODO_SPIKE.md`
+
+Implementation Contract:
+
+- Add an explicit desktop runtime mode boundary, either as a `desktopRuntimeMode: 'dev' | 'packaged'` input or as an equivalent testable helper output. `desktop:dev` may keep host Bun lookup and `FORSKA_DESKTOP_BUN_BIN`; packaged mode must not use `FORSKA_DESKTOP_BUN_BIN`, bare `bun`, `bunx`, `node`, `npm`, `process.cwd()`, or inherited API-port overrides as fallback runtime inputs.
+- The packaged artifact root must be resolved once and passed into path helpers. Do not infer artifact safety from the launcher cwd, from source `import.meta.dir` pointing at repo `src/desktop`, or from the presence of host Bun on `PATH`.
+- Lock one manifest/helper contract with these fields or direct equivalents: runtime mode, artifact root, runner source, runner path, backend stack entrypoint, server entrypoint, frontend `views/mainview/index.html`, frontend assets root, `src/db/duckdbMigrations`, required copied source roots, required runtime metadata, native dependency closure roots, and excluded generated/test/dev-only paths.
+- Treat the native dependency requirement as the full `@duckdb/node-api` runtime dependency closure, not only the top-level `node_modules/@duckdb/node-api/` folder. If the exact native package paths differ by platform, record them in the manifest result rather than hard-coding a macOS-only expectation.
+- If ElectroBun `copy` rules cannot include required runtime files while excluding `.desktopArtifacts/`, `.desktopBuild/`, tests, fixtures, and dev-only files, add a small staging script and point the ElectroBun copy step at the staged source-first artifact. Do not keep copying broad `src` or `node_modules` trees blindly without a manifest/test explaining every retained test, fixture, or dev-only file.
+- Keep `viewsRoot` and `windowUrl` as an explicit pair: `viewsRoot` resolves to the copied artifact `views` root, and `windowUrl` stays `views://mainview/index.html`. The helper/test must prove that this maps to `views/mainview/index.html` without using repo `dist`, `src/views`, or cwd.
+- Build packaged child envs from a minimal documented OS base plus forced desktop-owned values. The test must set dangerous sentinel host values for runtime/profile/provider/telemetry/topology/project-mart/full-text/DuckDB/log/test/judgment/Codex env keys and prove they are absent or overwritten in packaged child envs.
+- The minimal OS env allowlist should be platform-aware. Keep only process essentials such as user/home/profile and Windows system loader variables when required, then force `TMPDIR`/`TMP`/`TEMP` to desktop runtime temp paths. If any `PATH` value remains in packaged children, it must point only at app-owned or OS system directories needed to run the child, not at host developer tool directories.
+- Runner diagnostics must include resolved runtime mode, runner source, runner path, backend entrypoint, artifact root, views root, data root, runtime temp path, log path, and the reason packaged mode refused any host fallback.
+- If startup error rendering is touched while adding runner diagnostics, render dynamic messages/logs as escaped text or through a testable startup-page helper. Do not add new raw HTML interpolation of command output or paths.
+
+Runner Proof Procedure:
+
+- Build with `bun run desktop:build`, then run the built app or runner probe from the built artifact outside normal repo cwd assumptions.
+- Run at least one proof with host `bun`, `bunx`, `node`, and `npm` absent from `PATH`, or record exactly why a tool cannot be hidden. Do not set `FORSKA_DESKTOP_BUN_BIN` for packaged proof.
+- The proof target may be a minimal copied TypeScript child entrypoint before the full backend stack is launched, but it must exercise the same chosen packaged runner and artifact-relative TypeScript/module resolution path that the backend will use.
+- Accept `process.execPath` only if the child can start from the built artifact, import TypeScript successfully, print the expected proof payload, and exit 0 under host-tool isolation. If not, switch the slice to a copied platform-specific Bun binary and keep packaged host fallback disabled.
+- Record the exact proof command or manual launch path, artifact path, runner path, backend/probe entrypoint path, stdout/stderr summary, exit code, host-tool isolation result, and chosen runner outcome in `APP_PLAN_IMPLEMENTED.md` before marking slice 1 complete.
+
+Decision Record Template:
+
+```markdown
+### Packaged Runner Proof - YYYY-MM-DD
+
+- Result: `process.execPath` accepted | copied Bun required | blocked
+- Artifact path:
+- Runtime mode:
+- Runner source:
+- Runner path:
+- Backend/probe entrypoint:
+- Host-tool isolation: passed | failed | unverified, with reason
+- Command or launch steps:
+- Exit code:
+- stdout/stderr summary:
+- Manifest summary:
+- Files intentionally retained despite test/fixture/dev-only classification:
+- Commands run:
+- Commands skipped, with reason:
+```
 
 Deliverables:
 
@@ -138,12 +186,15 @@ Quality Gates:
 - `bun run lint`
 - `bunx eslint electrobun.config.ts scripts/runBunTests.ts scripts/runBunTests.test.ts src/desktop/getDesktopRuntimeConfig.ts src/desktop/getDesktopRuntimeConfig.test.ts`
 - `bunx eslint src/desktop/desktopArtifactManifest.ts src/desktop/desktopArtifactManifest.test.ts` if a separate artifact-manifest helper is added
+- `bunx eslint src/desktop/desktopRunnerProbe.ts` if a runner probe is added
+- `bunx eslint scripts/prepareDesktopArtifactSource.ts scripts/prepareDesktopArtifactSource.test.ts` if a staging script is added
 - `bun test src/desktop/getDesktopRuntimeConfig.test.ts`
 - `bun test src/desktop/desktopArtifactManifest.test.ts` if a separate artifact-manifest helper is added
 - `bun test scripts/runBunTests.test.ts`
+- `bun test scripts/prepareDesktopArtifactSource.test.ts` if a staging script is added
 - `bun run build`
 - `bun run desktop:build`
-- Inspect the built artifact, or run the artifact-manifest test, and fail unless it includes the chosen backend runner, backend entrypoint, `src/server/index.ts`, `src/db/migrateDuckdb.ts`, `src/db/duckdbMigrations/*.sql`, `views/mainview/index.html`, `views/mainview/assets/`, `node_modules/@duckdb/node-api/`, and required runtime metadata such as `package.json` or `tsconfig.json` if the chosen runner needs them; fail if `.desktopArtifacts/`, `.desktopBuild/`, copied `*.test.ts`, fixtures, or dev-only files are present unless explicitly documented.
+- Inspect the built artifact, or run the artifact-manifest test, and fail unless it includes the chosen backend runner, backend entrypoint, `src/server/index.ts`, `src/db/migrateDuckdb.ts`, `src/db/duckdbMigrations/*.sql`, `views/mainview/index.html`, `views/mainview/assets/`, the `@duckdb/node-api` native runtime dependency closure, and required runtime metadata such as `package.json` or `tsconfig.json` if the chosen runner needs them; fail if `.desktopArtifacts/`, `.desktopBuild/`, copied `*.test.ts`, fixtures, or dev-only files are present unless explicitly documented.
 - Browser verify: `bun run dev:server` and `bun run dev:app` still boot after the runner/artifact changes.
 
 ## Phase 1 Recommendation
