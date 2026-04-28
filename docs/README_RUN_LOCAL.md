@@ -10,7 +10,7 @@ Prereqs
 
 - Bun
 - Optional: Docker for Docling
-- Optional: local/manual inference or a remote HPC runtime
+- Optional: local/manual inference endpoint
 
 ## 1) Install
 
@@ -123,17 +123,7 @@ VITE_SERVER_API=http://localhost:3004 bun run dev:app
 - Set user-facing app settings in Forska Settings
 - Keep core product behavior in the app, not env files
 
-## 5) Optional remote inference
-
-```bash
-bun run alvis:dev:server
-# or
-bun run mn5:dev:server
-```
-
-Those launch helpers pass short-lived runtime metadata to the local API server. The provider connection and model still belong in `/providers`.
-
-## 6) Optional Docling
+## 5) Optional Docling
 
 ```bash
 docker compose up docling
@@ -226,5 +216,4 @@ Most local users should not set any env vars beyond one-off inline overrides.
 - Advanced server role wiring: `SERVER_ROLE`, `SERVER_DUCKDB_OWNER_URL`
 - Background job toggles: `RUN_SERVER_FULL_TEXT_FETCHING`, `RUN_SERVER_FULL_TEXT_CONVERSION_CRON`, `FULL_TEXT_CONVERSION_BATCH_SIZE`, `FULL_TEXT_CONVERSION_CONCURRENCY`
 - Project mart rebuild tuning: `PROJECT_MART_LARGE_REBUILD_BATCH_SIZE`, `PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS`, `PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE`, `BACKGROUND_MAINTENANCE_DUCKDB_MEMORY_LIMIT`
-- Runtime and launcher metadata: `FORSKA_RUNTIME_*`, `GPU_*`, `TP_SIZE`, `PP_SIZE`, `DP_SIZE`, `NVIDIA_SMI_WORKER_URLS`, `NVIDIA_SMI_WORKER_URLS_LOCAL`, `NVIDIA_SMI_SSH_JUMP_HOST`
-- Scheduler and transport tuning: `CODEX_MAX_INFLIGHT`, `JUDGE_CHUNK_MAX_PARALLEL`, `JUDGE_FIRST_REQUEST_LOG_FULL`, `JUDGE_FIRST_REQUEST_PREVIEW_CHARS`, `JUDGMENTS_ADD_TO_QUEUE_MAX_BATCH_SIZE`, `JUDGMENTS_READY_TARGET_MULTIPLIER`, `SGLANG_API_MAX_BURST_REQUESTS`, `SGLANG_API_MAX_INFLIGHT_REQUESTS`, `SGLANG_MAX_RUNNING_REQUESTS`, `BUN_CONFIG_MAX_HTTP_REQUESTS`
+- Scheduler and transport tuning: `CODEX_MAX_INFLIGHT`, `JUDGE_CHUNK_MAX_PARALLEL`, `JUDGE_FIRST_REQUEST_LOG_FULL`, `JUDGE_FIRST_REQUEST_PREVIEW_CHARS`, `JUDGMENTS_ADD_TO_QUEUE_MAX_BATCH_SIZE`, `JUDGMENTS_READY_TARGET_MULTIPLIER`, `BUN_CONFIG_MAX_HTTP_REQUESTS`
