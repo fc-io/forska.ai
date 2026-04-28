@@ -39,7 +39,7 @@
 - `src/server/utils/getCodexAppServerClient.ts` still falls back to host-installed `codex`.
 - `src/server/serverMain.ts` still logs Codex guidance that points packaged users at a browser-dev URL instead of an in-app desktop flow.
 - `src/server/serverMain.ts` still warms/probes Codex on API and `dev-single` startup when Codex startup is enabled, so packaged API startup can still spawn or search for `codex` before the user opens a Codex flow.
-- `src/app/routes/+projects/+create.tsx` and `src/app/routes/+projects/+$id/+edit.tsx` still expose a "Create default model" action backed by `/api/judgments/model`, and `src/server/routes/JudgmentsRoutes.ts` still seeds a local SGLang `Qwen3-32B-FP8` model at `http://localhost:30000/v1`; packaged desktop needs explicit in-app provider setup/guidance instead of silently creating unreachable local-runtime defaults.
+- `src/app/routes/+projects/+create.tsx`, `src/app/routes/+projects/+$id/+edit.tsx`, and `src/app/routes/+admin/+datasources/+covidence-import.tsx` still expose a "Create default model" action backed by `/api/judgments/model`, and `src/server/routes/JudgmentsRoutes.ts` still seeds a local SGLang `Qwen3-32B-FP8` model at `http://localhost:30000/v1`; packaged desktop needs explicit in-app provider setup/guidance instead of silently creating unreachable local-runtime defaults.
 - `src/server/services/providerSecretStore.ts` still shells out to macOS `security` for API-key provider secrets and has no Windows credential-store implementation; API-key provider setup can therefore depend on an OS CLI/PATH helper or fail on Windows even when secretless/manual provider setup works.
 - `src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts` still shells out to `sqlite3` for maintenance fallback flows.
 - `src/services/olap/duckdbRunner.ts` can still shell out to the DuckDB CLI for non-default DuckDB paths; the default app DB path is covered by the shared app database service.
@@ -63,6 +63,66 @@
 - Browser workflows still work with `bun run dev:server` and `bun run dev:app`.
 - At least one native Windows artifact smoke run is executed on the same source-first runtime shape and its results are captured.
 - The spike ends with an explicit continue-or-fallback decision versus Electron.
+
+## Implementation Readiness
+
+- Status: ready to start implementation with the order below; not ready to release until the macOS and Windows smoke runs pass and the continue-or-fallback decision is recorded.
+- The implementation unit is a small slice, not a whole workstream. Each slice must leave `bun run dev:server`, `bun run dev:app`, and the desktop build path either passing or with an explicitly recorded blocker.
+- Do not start signed installers, updater wiring, release channels, Linux packaging, or compiled-backend artifact work during this spike.
+- Do not treat a manual smoke step as passing if the required provider endpoint, host-tool isolation, API-key secret-store backend, or platform machine is unavailable; record it as unverified or blocked.
+- Every completed slice moves landed details into `APP_PLAN_IMPLEMENTED.md`, removes or rewrites stale TODO bullets in this file, and lists commands run or explicitly skipped.
+
+## Phase 1 Implementation Order
+
+1. Packaged runner proof and artifact manifest: prove whether ElectroBun's packaged `process.execPath` can launch backend TypeScript children or copy a separate platform-specific Bun binary, then lock the artifact-relative runner path, backend entrypoints, frontend views root, migration SQL location, native module roots, and copy/exclude manifest.
+2. Runtime config and env sanitization: split dev and packaged desktop config, build packaged child envs from an explicit safe base, assign data/temp/log/lock paths, clear host runtime/provider/telemetry/topology/project-mart/full-text/DuckDB/log/test env leakage, and keep desktop launcher imports free of server/native-DB top-level side effects.
+3. Backend stack orchestration: add the packaged API, maintenance-worker, and judge-worker lifecycle helper with deterministic ports, readiness, logs, shutdown, restart limits, stale-stack handling, per-role diagnostics, and `dev-single` retained only for the transitional dev path.
+4. API proxy and desktop bridge: implement owner-route proxying plus desktop request forwarding for JSON, multipart, binary bodies, aborts, timeouts, filtered headers, large upload/download behavior, and `Content-Disposition` preservation without changing browser client call sites.
+5. Runtime-write audit and safe asset paths: move remaining packaged writes under desktop data/temp roots, introduce one safe `assets/...` resolver, harden escape rejection and symlink containment, and preserve existing DB-stored asset keys.
+6. Native dependency, restart, and worker state verification: verify packaged `@duckdb/node-api`, `bun:sqlite`, migrations, DuckDB/read-only temp paths, judgment-job SQLite/WAL/leases, worker journals, owner leases, logs, and crash recovery in the multi-worker stack.
+7. Optional CLI, provider, and secret-store behavior: make missing `codex`, DuckDB CLI, `sqlite3`, `ssh`, `nvidia-smi`, and OS credential helpers degraded or explicitly unsupported in packaged mode, and prevent default-model/provider flows from silently seeding unreachable local runtimes.
+8. macOS smoke run: build and run the unsigned artifact outside the repo checkout, including a path-with-spaces run and host-tool isolation, then record the result.
+9. Native Windows smoke run: repeat the same source-first runtime shape on native Windows, including path-with-spaces and host-tool isolation, then record the result.
+10. Continue-or-fallback decision: continue with ElectroBun only if both smoke runs pass the exit criteria, otherwise record the fallback reason and switch the next plan to Electron.
+
+## Dependency Rules
+
+- The packaged backend runner decision in step 1 blocks backend stack orchestration and isolated repair/import child-process work.
+- The sanitized packaged env from step 2 blocks trustworthy native dependency verification, provider-runtime verification, and smoke runs.
+- The bridge/proxy large-transfer decision in step 4 must be closed before import and CSV export/download smoke checks can pass.
+- The safe asset-path helper from step 5 must land before adding more desktop-mode tests around Covidence, structured imports, uploaded PDFs, fetched PDFs, FHIR input folders, or runtime asset serving.
+- The provider secret-store decision in step 7 must be closed before counting API-key provider setup as passing on macOS or Windows.
+- macOS smoke starts only after steps 1 through 7 have passed their relevant quality gates; Windows smoke starts only after the same source-first shape passes macOS smoke.
+
+## First Implementation Slice
+
+Files:
+
+- `electrobun.config.ts`
+- `src/desktop/getDesktopRuntimeConfig.ts`
+- `src/desktop/getDesktopRuntimeConfig.test.ts`
+- `scripts/runBunTests.ts`
+- `scripts/runBunTests.test.ts` (new)
+- `package.json` only if a helper script is required
+
+Deliverables:
+
+- Decide and document the packaged backend runner path: verified ElectroBun `process.execPath` child launch or a copied platform-specific Bun binary.
+- Produce actionable startup diagnostics for a missing/unusable packaged runner with no host-Bun fallback in packaged mode.
+- Lock artifact-relative `views/mainview`, backend entrypoint, migration SQL, source roots, native module roots, and required metadata expectations in an artifact manifest or equivalent testable helper.
+- Fix ElectroBun watch ignores and Bun test discovery ignores for `.desktopArtifacts/` and `.desktopBuild/`.
+- Keep `desktop:dev` visibly separate from packaged runner resolution and allow it to keep explicit host-Bun lookup only in dev mode.
+
+Quality Gates:
+
+- `bun run lint`
+- `bunx eslint electrobun.config.ts scripts/runBunTests.ts scripts/runBunTests.test.ts src/desktop/getDesktopRuntimeConfig.ts src/desktop/getDesktopRuntimeConfig.test.ts`
+- `bun test src/desktop/getDesktopRuntimeConfig.test.ts`
+- `bun test scripts/runBunTests.test.ts`
+- `bun run build`
+- `bun run desktop:build`
+- Inspect the built artifact, or run the artifact-manifest test, to confirm required backend/frontend/migration/native-module files are present while tests, fixtures, generated desktop output folders, and dev-only files are absent unless intentionally documented.
+- Browser verify: `bun run dev:server` and `bun run dev:app` still boot after the runner/artifact changes.
 
 ## Phase 1 Recommendation
 
@@ -409,6 +469,7 @@ Files:
 - `src/app/routes/+admin/+models/providerUiState.ts`
 - `src/app/routes/+projects/+create.tsx`
 - `src/app/routes/+projects/+$id/+edit.tsx`
+- `src/app/routes/+admin/+datasources/+covidence-import.tsx`
 - `src/utils/getSglangRuntimeModelNotice.ts`
 - `src/app/routes/+providers/+index.tsx`
 - `src/app/routes/+providers/+add-provider.tsx`
@@ -432,8 +493,8 @@ Deliverables:
 - Packaged desktop guidance points users to in-app Providers or Settings flows rather than `http://localhost:${env.VITE_PORT}/providers`.
 - Packaged API startup does not call `warmCodexAppServer`, `getCodexCliLoginStatus`, or device-login startup until the user opens a Codex-specific flow; user-initiated Codex status checks remain bounded and degraded when the CLI is absent.
 - Non-Codex model listing and project/model-selection routes such as `/api/models` do not spawn `codex` merely because a saved Codex connection or model exists; missing Codex degrades to stored/manual Codex metadata and guidance without blocking non-Codex workflows.
-- `/api/judgments/model` and the project create/edit "Create default model" actions do not silently create a local SGLang `localhost:30000` Qwen model in packaged desktop. If the legacy route is retained, it requires explicit user-selected provider/name/baseURL values, stores metadata consistent with those values, and surfaces missing-local-runtime guidance before the model can be selected for judging.
-- Project create/edit model pickers guide users to Providers or Settings when no selectable model exists, and saved SGLang/local-runtime models show an explicit missing-runtime or mismatch notice instead of looking like a packaged default that is ready to run.
+- `/api/judgments/model` and the project create/edit plus Covidence import "Create default model" actions do not silently create a local SGLang `localhost:30000` Qwen model in packaged desktop. If the legacy route is retained, it requires explicit user-selected provider/name/baseURL values, stores metadata consistent with those values, and surfaces missing-local-runtime guidance before the model can be selected for judging.
+- Project create/edit and Covidence import model pickers guide users to Providers or Settings when no selectable model exists, and saved SGLang/local-runtime models show an explicit missing-runtime or mismatch notice instead of looking like a packaged default that is ready to run.
 - Provider runtime detection and runtime-state cards are user-initiated, bounded, and degraded when saved local runtimes are unreachable; they do not inherit host provider-runtime env or block project/model-selection routes in packaged mode.
 - Packaged startup and secretless/manual provider setup do not touch provider secret-storage CLIs or OS credential helpers.
 - Existing `env:*` provider secret refs and host API-key environment variables are not silently read by packaged desktop unless the user has explicitly configured an app-owned packaged secret surface; missing env-backed secrets degrade to clear Settings/Providers guidance.
@@ -466,7 +527,7 @@ Quality Gates:
 - Extend `src/server/providers/transports/codexAppTransport.test.ts` coverage for missing-`codex` runtime status guidance, then run `bun test src/server/providers/transports/codexAppTransport.test.ts`.
 - `bun test src/app/routes/+admin/+models/providerUiState.test.ts`
 - `bun test src/app/routes/+providers/providerCatalogUi.test.ts`
-- Add `src/app/routes/+projects/-+create.vitest.tsx` coverage and extend `src/app/routes/+projects/+$id/-+edit.vitest.tsx` for no-model packaged guidance, disabled/default-model behavior, and SGLang missing-runtime notices; then run `bunx vitest run src/app/routes/+projects/-+create.vitest.tsx src/app/routes/+projects/+$id/-+edit.vitest.tsx`.
+- Add `src/app/routes/+projects/-+create.vitest.tsx` and `src/app/routes/+admin/+datasources/-+covidence-import.vitest.tsx` coverage and extend `src/app/routes/+projects/+$id/-+edit.vitest.tsx` for no-model packaged guidance, disabled/default-model behavior, and SGLang missing-runtime notices; then run `bunx vitest run src/app/routes/+projects/-+create.vitest.tsx src/app/routes/+projects/+$id/-+edit.vitest.tsx src/app/routes/+admin/+datasources/-+covidence-import.vitest.tsx`.
 - `bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts`
 - `bun test src/server/routes/JudgmentsJobsRoutes.test.ts`
 - Extend `src/services/olap/duckdbRunnerAppDatabase.test.ts` coverage for equivalent default DB paths staying on the app database service without resolving the DuckDB CLI, including Windows path case behavior, then run `bun test src/services/olap/duckdbRunnerAppDatabase.test.ts`.
@@ -476,10 +537,10 @@ Quality Gates:
 - `bun test src/server/utils/judgeWorkerJournalIdentity.test.ts`
 - Add `src/server/utils/localMachineIdentity.test.ts` coverage for missing and slow identity-helper binaries, then run `bun test src/server/utils/localMachineIdentity.test.ts`.
 - Add `src/server/cron/nvidiaSmi.test.ts` coverage for missing `ssh`/`nvidia-smi` telemetry behavior, then run `bun test src/server/cron/nvidiaSmi.test.ts`.
-- Browser verify: Providers, Add Provider, Codex provider detail, Settings, Project Create, and Project Edit show missing-Codex or missing-local-runtime guidance without browser-dev-only instructions and without enabled login/start/default-model actions that would spawn or seed unavailable tooling.
+- Browser verify: Providers, Add Provider, Codex provider detail, Settings, Project Create, Project Edit, and Covidence Import show missing-Codex or missing-local-runtime guidance without browser-dev-only instructions and without enabled login/start/default-model actions that would spawn or seed unavailable tooling.
 - Packaged app verify: startup, API, import, CSV export/download, secretless/manual non-Codex provider setup, quit, and relaunch all work with no host Bun/Node/npm/bunx, `codex`, DuckDB CLI, `sqlite3`, `ssh`, or `nvidia-smi` exposure.
 - Packaged app verify: API-key provider setup either succeeds through the supported packaged secret-store backend or shows explicit unsupported secret-storage guidance before attempting to spawn an unavailable helper.
-- Packaged app verify: opening Providers, Add Provider, Codex provider detail, Settings, Project Create, and Project Edit with no `codex` and no local SGLang runtime installed shows in-app guidance, no browser-dev-only instruction, and no enabled login/start/default-model action that would spawn a missing binary or seed an unreachable localhost model.
+- Packaged app verify: opening Providers, Add Provider, Codex provider detail, Settings, Project Create, Project Edit, and Covidence Import with no `codex` and no local SGLang runtime installed shows in-app guidance, no browser-dev-only instruction, and no enabled login/start/default-model action that would spawn a missing binary or seed an unreachable localhost model.
 
 ### 6. macOS Smoke Run
 
