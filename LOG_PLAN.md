@@ -201,7 +201,7 @@ Example line:
 
 - Interactive CLI and JSON-contract scripts.
   Sink: `terminal-only`.
-  Files: `scripts/startServerStack.ts`, `scripts/devServerWatch.ts`, `scripts/alvisLaunch.ts`, `scripts/mn5Launch.ts`, `scripts/recoverProjectMartRefreshClaims.ts`, `scripts/runProjectMartLargeRebuildCycle.ts`, `scripts/runProjectMartRefreshWorkerOnce.ts`, `scripts/runJudgmentJobRepair.ts`, `scripts/dbQuerySnapshot.ts`.
+  Files: `scripts/startServerStack.ts`, `scripts/devServerWatch.ts`, `scripts/recoverProjectMartRefreshClaims.ts`, `scripts/runProjectMartLargeRebuildCycle.ts`, `scripts/runProjectMartRefreshWorkerOnce.ts`, `scripts/runJudgmentJobRepair.ts`, `scripts/dbQuerySnapshot.ts`.
   Reason: these are interactive CLI tools or JSON-emitting scripts already consumed by people, tests, or wrapper scripts.
 - Implementation rule: these entrypoints must not install the runtime file sink, and importing shared server modules from them must not silently start JSONL file logging.
 

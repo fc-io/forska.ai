@@ -27,10 +27,10 @@
     },
     {
       "id": "US-002",
-      "title": "Persist launcher runtime records for Alvis and MN5",
-      "description": "As a maintainer, I want the Alvis and MN5 launchers to write local runtime records so the server can discover tunneled runtimes without special dev-server env injection.",
+      "title": "Persist remote launcher runtime records",
+      "description": "As a maintainer, I want remote runtime launchers to write local runtime records so the server can discover tunneled runtimes without special dev-server env injection.",
       "acceptanceCriteria": [
-        "`alvis:launch*` and `mn5:launch` write or refresh a small local runtime metadata record with provider kind, model, local tunnel URLs, remote URLs, job id, and source cluster.",
+        "Remote runtime launchers write or refresh a small local runtime metadata record with provider kind, model, local tunnel URLs, remote URLs, job id, and source cluster.",
         "Launcher metadata is removed or marked stale when the runtime stops so dead jobs do not remain eligible for auto-adoption.",
         "The runtime record format is stable enough for the server detector to load without SSHing into the scheduler on ordinary API requests.",
         "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
@@ -154,7 +154,7 @@
       "acceptanceCriteria": [
         "The provider runtime model guard validates against the matched effective runtime for the saved provider connection instead of the old global-by-kind snapshot.",
         "Judgment job creation and prompt send paths resolve their effective base URL and worker URLs from the matched provider connection runtime.",
-        "A saved manual Alvis or MN5 provider can pass runtime validation and start judgments through the matched tunneled runtime without `alvis:dev:server` or `mn5:dev:server`.",
+        "A saved manual remote provider can pass runtime validation and start judgments through the matched tunneled runtime without a cluster-specific dev server.",
         "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
         "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
         "bun test src/server/providers/providerRuntimeModelGuard.test.ts passes",
@@ -178,7 +178,7 @@
       "acceptanceCriteria": [
         "`/api/provider-connections` returns per-connection match status, effective runtime URLs, detected model names, source metadata, and human-readable reasons.",
         "The response remains compatible for existing provider-connection consumers that still need saved connection data.",
-        "The API can distinguish `matched local`, `matched Alvis`, `matched MN5`, `manual-only`, `ambiguous`, and `unreachable` states without rewriting the saved provider record.",
+        "The API can distinguish `matched local`, `matched remote`, `manual-only`, `ambiguous`, and `unreachable` states without rewriting the saved provider record.",
         "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
         "bun test src/server/routes/providerProjectFlow.e2e.test.ts passes",
         "bun test src/server/providers/providerRuntimeModelGuard.test.ts passes",
@@ -200,7 +200,7 @@
       "title": "Show matched runtime status and detected models in the Providers UI",
       "description": "As a user, I want the Providers page to show which live runtime each saved provider matches so I can understand whether Forska will use my local server, tunneled cluster job, or only the saved manual settings.",
       "acceptanceCriteria": [
-        "The Providers UI shows per-connection states such as `matched local`, `matched Alvis`, `matched MN5`, `manual-only`, `ambiguous`, and `unreachable`.",
+        "The Providers UI shows per-connection states such as `matched local`, `matched remote`, `manual-only`, `ambiguous`, and `unreachable`.",
         "The Providers UI shows the effective runtime URL or worker URLs together with detected served model names and match reasons.",
         "Saved manual provider settings remain editable and visible without hidden rewriting when a runtime is matched.",
         "bun test src/server/routes/ProviderConnectionsRoutes.test.ts passes",
@@ -210,7 +210,7 @@
         "bun test src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.test.ts passes",
         "bun run lint passes",
         "bun run build passes",
-        "Browser verify in `/providers`: local manual provider matches a live local runtime, manual Alvis or MN5 provider matches a live tunneled runtime, ambiguous match stays non-adopted and visible, and creating a judgment job succeeds through the matched runtime"
+        "Browser verify in `/providers`: local manual provider matches a live local runtime, a manual remote provider matches a live tunneled runtime, ambiguous match stays non-adopted and visible, and creating a judgment job succeeds through the matched runtime"
       ],
       "priority": 9,
       "passes": true,
