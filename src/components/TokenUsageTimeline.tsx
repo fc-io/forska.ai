@@ -1,20 +1,7 @@
 import {type DateValue, fromDate} from '@internationalized/date'
 import {useQuery} from '@tanstack/solid-query'
-import {
-  type ActiveElement,
-  BarController,
-  BarElement,
-  CategoryScale,
-  Chart,
-  type ChartData,
-  type ChartOptions,
-  Legend,
-  LinearScale,
-  Tooltip,
-  type TooltipItem,
-} from 'chart.js'
 import {format} from 'date-fns'
-import {type Accessor, createEffect, createMemo, createSignal, onCleanup, onMount, Show} from 'solid-js'
+import {type Accessor, createEffect, createMemo, createSignal, For, onCleanup, Show} from 'solid-js'
 
 import {apiClient} from '../services/apiClient.ts'
 import {TokenUsageTimelineDatePicker} from './TokenUsageTimeline/TokenUsageTimelineDatePicker.tsx'
@@ -42,6 +29,130 @@ type TokenTimelineData = {
 type UsageStat = {timestamp: string; totalTokens: number}
 
 type TokenUsageTimelineProps = {projectId?: string; allJobs?: boolean}
+
+type TokenTimelineBucket = {
+  completionTokens: number
+  failedTokens: number
+  label: string
+  promptTokens: number
+  timestamp: string
+  totalRequests: number
+  totalTokens: number
+}
+
+type TokenTimelineTooltip = {bucket: TokenTimelineBucket; title: string; x: number; y: number}
+
+const timelineChartDimensions = {bottom: 34, height: 256, left: 78, right: 16, top: 24, width: 1000} as const
+
+const tokenAxisFormatter = new Intl.NumberFormat('en-US', {maximumFractionDigits: 1, notation: 'compact'})
+const niceTokenCeilingMultipliers = [1, 1.25, 1.5, 2, 2.5, 5, 10] as const
+
+const timelinePlotWidth = timelineChartDimensions.width - timelineChartDimensions.left - timelineChartDimensions.right
+const timelinePlotHeight = timelineChartDimensions.height - timelineChartDimensions.top - timelineChartDimensions.bottom
+const timelineChartBottom = timelineChartDimensions.height - timelineChartDimensions.bottom
+
+const getAlignedSvgStrokePosition = (value: number) => {
+  return Math.round(value) + 0.5
+}
+
+const getAlignedSvgBarPosition = (value: number) => {
+  return Math.round(value)
+}
+
+const getAlignedSvgBarSize = (value: number) => {
+  return value > 0 ? Math.max(1, Math.round(value)) : 0
+}
+
+const getTimelineBucketTokenSplit = (bucket: TokenTimelineData) => {
+  const successPrompt = bucket.totalSuccessPromptTokens ?? 0
+  const successCompletion = bucket.totalSuccessCompletionTokens ?? 0
+  const failedTokens = bucket.totalFailedTokens ?? 0
+  const hasNewSplits = successPrompt + successCompletion + failedTokens > 0
+
+  return hasNewSplits
+    ? {completionTokens: successCompletion, failedTokens, promptTokens: successPrompt}
+    : {
+        completionTokens: bucket.totalCompletionTokens ?? 0,
+        failedTokens: 0,
+        promptTokens: bucket.totalPromptTokens ?? 0,
+      }
+}
+
+const getTimelineBucketLabel = (params: {interval: TimeInterval; timestamp: string}) => {
+  const date = new Date(params.timestamp)
+  return params.interval === '1min' || params.interval === '5min' || params.interval === '15min'
+    ? format(date, 'HH:mm')
+    : params.interval === '1h'
+      ? format(date, 'MMM d HH:mm')
+      : params.interval === '1m'
+        ? format(new Date(date.getFullYear(), date.getMonth(), 1), 'MMM yyyy')
+        : format(date, 'MMM d')
+}
+
+const getTimelineBuckets = (params: {data: TokenTimelineData[]; interval: TimeInterval}) => {
+  return params.data.map((bucket) => {
+    const split = getTimelineBucketTokenSplit(bucket)
+
+    return {
+      ...split,
+      label: getTimelineBucketLabel({interval: params.interval, timestamp: bucket.timestamp}),
+      timestamp: bucket.timestamp,
+      totalRequests: bucket.totalRequests ?? 0,
+      totalTokens: bucket.totalTokens ?? split.promptTokens + split.completionTokens + split.failedTokens,
+    }
+  })
+}
+
+const getNiceTokenCeiling = (value: number) => {
+  if (value <= 0) {
+    return 1
+  }
+
+  const magnitude = 10 ** Math.floor(Math.log10(value))
+  const normalizedValue = value / magnitude
+  const multiplier = niceTokenCeilingMultipliers.find((candidate) => {
+    return normalizedValue <= candidate
+  })
+
+  return (multiplier ?? 10) * magnitude
+}
+
+const getTimelineY = (value: number, maxValue: number) => {
+  return timelineChartBottom - (value / maxValue) * timelinePlotHeight
+}
+
+const getTimelineRenderBuckets = (params: {buckets: TokenTimelineBucket[]; maxValue: number}) => {
+  const slotWidth = params.buckets.length > 0 ? timelinePlotWidth / params.buckets.length : timelinePlotWidth
+  const barWidth = getAlignedSvgBarSize(Math.max(3, Math.min(34, slotWidth * 0.58)))
+
+  return params.buckets.map((bucket, index) => {
+    const promptHeight = getAlignedSvgBarSize((bucket.promptTokens / params.maxValue) * timelinePlotHeight)
+    const completionHeight = getAlignedSvgBarSize((bucket.completionTokens / params.maxValue) * timelinePlotHeight)
+    const failedHeight = getAlignedSvgBarSize((bucket.failedTokens / params.maxValue) * timelinePlotHeight)
+    const promptY = timelineChartBottom - promptHeight
+    const completionY = promptY - completionHeight
+    const failedY = completionY - failedHeight
+    const x = getAlignedSvgBarPosition(timelineChartDimensions.left + index * slotWidth + (slotWidth - barWidth) / 2)
+
+    return {...bucket, barWidth, completionHeight, completionY, failedHeight, failedY, promptHeight, promptY, x}
+  })
+}
+
+const getTimelineYTicks = (maxValue: number) => {
+  return [0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+    const value = maxValue * ratio
+    return {
+      label: tokenAxisFormatter.format(value),
+      value,
+      y: getAlignedSvgStrokePosition(getTimelineY(value, maxValue)),
+    }
+  })
+}
+
+const shouldShowTimelineXLabel = (params: {index: number; total: number}) => {
+  const step = Math.max(1, Math.ceil(params.total / 8))
+  return params.index === 0 || params.index === params.total - 1 || params.index % step === 0
+}
 
 type TokenUsageTimelineStatsProps = {
   allJobs: boolean
@@ -116,11 +227,10 @@ const TokenUsageTimelineStats = (props: TokenUsageTimelineStatsProps) => {
 export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
   const [selectedInterval, setSelectedInterval] = createSignal<TimeInterval>('1min')
   const [customRange, setCustomRange] = createSignal<TokenUsageTimelineDateRange | null>(null)
-  const [chartReady, setChartReady] = createSignal(false)
-  const [chartCanvas, setChartCanvas] = createSignal<HTMLCanvasElement | null>(null)
-  const [chartInstance, setChartInstance] = createSignal<Chart<'bar'> | null>(null)
   const [pendingPickerValues, setPendingPickerValues] = createSignal<DateValue[] | undefined>(undefined)
+  const [tooltip, setTooltip] = createSignal<TokenTimelineTooltip | null>(null)
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone
+  let timelineChartContainer: HTMLDivElement | undefined
   const hasCustomRange = createMemo(() => {
     return customRange() !== null
   })
@@ -406,255 +516,88 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
     return {start: bucketStart, end: bucketEnd}
   }
 
-  const chartData = createMemo<ChartData<'bar'> | null>(() => {
-    const data = filteredTimelineData()
-    if (data.length === 0) {
+  const timelineBuckets = createMemo(() => {
+    return getTimelineBuckets({data: filteredTimelineData(), interval: selectedInterval()})
+  })
+
+  const timelineMaxValue = createMemo(() => {
+    const maxBucketValue = timelineBuckets().reduce((maxValue, bucket) => {
+      return Math.max(maxValue, bucket.promptTokens + bucket.completionTokens + bucket.failedTokens)
+    }, 0)
+
+    return getNiceTokenCeiling(maxBucketValue)
+  })
+
+  const timelineRenderBuckets = createMemo(() => {
+    return getTimelineRenderBuckets({buckets: timelineBuckets(), maxValue: timelineMaxValue()})
+  })
+
+  const timelineYTicks = createMemo(() => {
+    return getTimelineYTicks(timelineMaxValue())
+  })
+
+  const hasTimelineData = createMemo(() => {
+    return timelineBuckets().length > 0
+  })
+
+  const hasFailedTokens = createMemo(() => {
+    return timelineBuckets().some((bucket) => {
+      return bucket.failedTokens > 0
+    })
+  })
+
+  const handleBucketClick = (bucket: TokenTimelineBucket, index: number) => {
+    const currentInterval = selectedInterval()
+
+    if (currentInterval === '1min') {
+      return
+    }
+
+    const drillDownInterval = lowerIntervalMap[currentInterval]
+
+    const range = computeBucketRange({
+      index,
+      interval: currentInterval,
+      timestamp: bucket.timestamp,
+      total: timelineBuckets().length,
+    })
+    setCustomRange({start: new Date(range.start), end: new Date(range.end)})
+    setSelectedInterval(drillDownInterval)
+  }
+
+  const getBucketTooltipTitle = (bucket: TokenTimelineBucket, index: number) => {
+    const interval = selectedInterval()
+    const range = computeBucketRange({interval, timestamp: bucket.timestamp, index, total: timelineBuckets().length})
+    if (interval === '1m') {
+      const startStr = format(range.start, 'MMM d')
+      const endStr = format(range.end, 'MMM d HH:mm')
+      return `${startStr} – ${endStr}`
+    }
+    const startStr = format(range.start, 'MMM d HH:mm')
+    const endStr = format(range.end, 'MMM d HH:mm')
+    return `${startStr} – ${endStr}`
+  }
+
+  const getTooltipPosition = (event: PointerEvent) => {
+    const containerRect = timelineChartContainer?.getBoundingClientRect()
+    if (!containerRect) {
       return null
     }
 
-    const barThickness =
-      selectedInterval() === '1min' ? 3 : selectedInterval() === '5min' ? 4 : selectedInterval() === '15min' ? 6 : 8
+    const x = Math.min(Math.max(event.clientX - containerRect.left, 128), containerRect.width - 128)
+    const y = Math.max(event.clientY - containerRect.top, 24)
 
-    const promptData: number[] = []
-    const completionData: number[] = []
-    const failedData: (number | null)[] = []
-
-    data.forEach((bucket) => {
-      const successPrompt = bucket.totalSuccessPromptTokens ?? 0
-      const successCompletion = bucket.totalSuccessCompletionTokens ?? 0
-      const failedTokens = bucket.totalFailedTokens ?? 0
-
-      const hasNewSplits = successPrompt + successCompletion + failedTokens > 0
-
-      if (hasNewSplits) {
-        promptData.push(successPrompt)
-        completionData.push(successCompletion)
-        // Use null for 0 failed tokens so Chart.js doesn't render any segment
-        failedData.push(failedTokens > 0 ? failedTokens : null)
-      } else {
-        promptData.push(bucket.totalPromptTokens ?? 0)
-        completionData.push(bucket.totalCompletionTokens ?? 0)
-        failedData.push(null)
-      }
-    })
-
-    // Only include Failed Tokens dataset if there are actually failed tokens
-    const hasAnyFailedTokens = failedData.some((val) => {
-      return val !== null && val > 0
-    })
-
-    const datasets: {
-      label: string
-      data: (number | null)[]
-      backgroundColor: string
-      borderColor: string
-      borderWidth: number
-      barThickness: number
-    }[] = [
-      {
-        label: 'Prompt Tokens',
-        data: promptData,
-        backgroundColor: 'rgb(59, 130, 246)',
-        borderColor: 'rgb(59, 130, 246)',
-        borderWidth: 0,
-        barThickness,
-      },
-      {
-        label: 'Completion Tokens',
-        data: completionData,
-        backgroundColor: 'rgb(147, 197, 253)',
-        borderColor: 'rgb(147, 197, 253)',
-        borderWidth: 0,
-        barThickness,
-      },
-    ]
-
-    // Only add the Failed Tokens dataset when there are actual failures
-    if (hasAnyFailedTokens) {
-      datasets.push({
-        label: 'Failed Tokens',
-        data: failedData,
-        backgroundColor: 'rgb(239, 68, 68)',
-        borderColor: 'rgb(239, 68, 68)',
-        borderWidth: 0,
-        barThickness,
-      })
-    }
-
-    return {
-      labels: data.map((d) => {
-        const date = new Date(d.timestamp)
-        return selectedInterval() === '1min' || selectedInterval() === '5min' || selectedInterval() === '15min'
-          ? format(date, 'HH:mm')
-          : selectedInterval() === '1h'
-            ? format(date, 'MMM d HH:mm')
-            : selectedInterval() === '1m'
-              ? format(new Date(date.getFullYear(), date.getMonth(), 1), 'MMM yyyy')
-              : format(date, 'MMM d')
-      }),
-      datasets,
-    }
-  })
-
-  const chartOptions: ChartOptions<'bar'> = {
-    responsive: true,
-    maintainAspectRatio: false,
-    interaction: {mode: 'index' as const, intersect: false},
-    animation: {duration: 0.4},
-    onClick: (_event: unknown, elements: ActiveElement[]) => {
-      const element = elements?.[0]
-      if (!element) {
-        return
-      }
-      const currentInterval = selectedInterval()
-      if (currentInterval === '1min') {
-        return
-      }
-      const data = filteredTimelineData()
-      const dataIndex = element.index
-      if (dataIndex == null || !data[dataIndex]) {
-        return
-      }
-      const drillDownInterval = lowerIntervalMap[currentInterval]
-      if (!drillDownInterval) {
-        return
-      }
-      const range = computeBucketRange({
-        interval: currentInterval,
-        timestamp: data[dataIndex].timestamp,
-        index: dataIndex,
-        total: data.length,
-      })
-      setCustomRange({start: new Date(range.start), end: new Date(range.end)})
-      setSelectedInterval(drillDownInterval)
-    },
-    plugins: {
-      legend: {
-        display: true,
-        position: 'top' as const,
-        align: 'end' as const,
-        labels: {boxWidth: 12, padding: 10, font: {size: 11}},
-      },
-      tooltip: {
-        filter: (tooltipItem: TooltipItem<'bar'>) => {
-          const rawLabel = tooltipItem.dataset.label || ''
-          if (rawLabel.startsWith('Failed') && (tooltipItem.parsed.y ?? 0) <= 0) {
-            return false
-          }
-          return true
-        },
-        callbacks: {
-          title: (tooltipItems: TooltipItem<'bar'>[]) => {
-            const idx = tooltipItems?.[0]?.dataIndex
-            const data = filteredTimelineData()
-            if (idx == null || !data[idx]) return ''
-            const interval = selectedInterval()
-            const range = computeBucketRange({interval, timestamp: data[idx].timestamp, index: idx, total: data.length})
-            if (interval === '1m') {
-              const startStr = format(range.start, 'MMM d')
-              const endStr = format(range.end, 'MMM d HH:mm')
-              return `${startStr} – ${endStr}`
-            }
-            const startStr = format(range.start, 'MMM d HH:mm')
-            const endStr = format(range.end, 'MMM d HH:mm')
-            return `${startStr} – ${endStr}`
-          },
-          label: (context: TooltipItem<'bar'>): string => {
-            const label = (context.dataset.label || '').replace(' Tokens', '')
-            const value = (context.parsed.y ?? 0).toLocaleString()
-            return `${label}: ${value}`
-          },
-          footer: (tooltipItems: TooltipItem<'bar'>[]) => {
-            const idx = tooltipItems?.[0]?.dataIndex
-            const data = filteredTimelineData()
-            if (idx == null || !data[idx]) return ''
-            const total =
-              data[idx].totalTokens
-              ?? tooltipItems.reduce((sum, item) => {
-                return sum + (item.parsed.y ?? 0)
-              }, 0)
-            const requests = data[idx].totalRequests ?? 0
-            return `Total: ${total.toLocaleString()}\nPrompts Judged: ${requests.toLocaleString()}`
-          },
-        },
-      },
-    },
-    scales: {
-      x: {grid: {display: false}, ticks: {maxRotation: 0, autoSkip: true, maxTicksLimit: 20}, stacked: true},
-      y: {
-        beginAtZero: true,
-        grid: {color: 'rgba(0, 0, 0, 0.05)'},
-        ticks: {
-          callback: (value) => {
-            return Number(value).toLocaleString()
-          },
-        },
-        stacked: true,
-      },
-    },
+    return {x, y}
   }
 
-  const destroyChart = () => {
-    const existingChart = chartInstance()
-    if (!existingChart) {
-      return
-    }
-    existingChart.destroy()
-    setChartInstance(null)
-  }
-
-  createEffect(() => {
-    const canvas = chartCanvas()
-    const data = chartData()
-    const ownerWindow = canvas?.ownerDocument?.defaultView
-
-    if (!canvas || !chartReady() || !data || tokenData.isLoading || tokenData.isError || !ownerWindow) {
-      destroyChart()
+  const showBucketTooltip = (bucket: TokenTimelineBucket, index: number, event: PointerEvent) => {
+    const position = getTooltipPosition(event)
+    if (!position) {
       return
     }
 
-    const existingChart = chartInstance()
-    const frameId = ownerWindow.requestAnimationFrame(() => {
-      const context = canvas.getContext('2d')
-      if (!context || !canvas.isConnected) {
-        existingChart?.destroy()
-        setChartInstance(null)
-        return
-      }
-
-      if (!existingChart) {
-        const nextChart = new Chart(context, {type: 'bar', data, options: chartOptions})
-        nextChart.resize()
-        nextChart.update()
-        setChartInstance(nextChart)
-        return
-      }
-
-      existingChart.data = data
-      existingChart.options = chartOptions
-      existingChart.resize()
-      existingChart.update()
-    })
-
-    onCleanup(() => {
-      ownerWindow.cancelAnimationFrame(frameId)
-    })
-  })
-
-  onMount(() => {
-    Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend)
-    const frameId = requestAnimationFrame(() => {
-      setChartReady(true)
-    })
-
-    onCleanup(() => {
-      cancelAnimationFrame(frameId)
-    })
-  })
-
-  onCleanup(() => {
-    destroyChart()
-  })
+    setTooltip({bucket, title: getBucketTooltipTitle(bucket, index), x: position.x, y: position.y})
+  }
 
   return (
     <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
@@ -714,46 +657,210 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
         </div>
       </div>
 
-      <Show when={tokenData.isLoading}>
-        <div class="h-64 flex items-center justify-center">
-          <p class="text-gray-500">Loading token usage data...</p>
-        </div>
-      </Show>
-
-      <Show when={tokenData.isError}>
-        <div class="h-64 flex items-center justify-center">
-          <div class="text-center">
-            <p class="text-red-600 mb-2">Failed to load token usage data</p>
-            <button
-              onClick={() => {
-                return void tokenData.refetch()
-              }}
-              class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm"
-            >
-              Retry
-            </button>
-          </div>
-        </div>
-      </Show>
-
-      <Show when={!tokenData.isLoading && !tokenData.isError && chartReady() && chartData()}>
-        <div class="h-64">
-          <canvas ref={setChartCanvas} class="h-full w-full" />
-        </div>
-      </Show>
-
-      <Show
-        when={
-          !tokenData.isLoading
-          && !tokenData.isError
-          && tokenData.data
-          && (tokenData.data?.data as TokenTimelineData[])?.length === 0
-        }
+      <div
+        ref={(element) => {
+          timelineChartContainer = element
+        }}
+        class="relative h-64"
       >
-        <div class="h-64 flex items-center justify-center">
-          <p class="text-gray-500">No token usage data available for this period</p>
-        </div>
-      </Show>
+        <Show when={hasTimelineData() && !tokenData.isError}>
+          <>
+            <div class="absolute right-3 top-0 z-10 flex items-center gap-3 text-xs text-gray-600">
+              <span class="inline-flex items-center gap-1">
+                <span class="h-2.5 w-2.5 rounded-sm bg-blue-500" /> Prompt Tokens
+              </span>
+              <span class="inline-flex items-center gap-1">
+                <span class="h-2.5 w-2.5 rounded-sm bg-blue-300" /> Completion Tokens
+              </span>
+              <Show when={hasFailedTokens()}>
+                <span class="inline-flex items-center gap-1">
+                  <span class="h-2.5 w-2.5 rounded-sm bg-red-500" /> Failed Tokens
+                </span>
+              </Show>
+            </div>
+            <svg
+              aria-label="Token usage timeline"
+              class="h-full w-full"
+              onPointerLeave={() => {
+                setTooltip(null)
+              }}
+              role="img"
+              viewBox={`0 0 ${timelineChartDimensions.width} ${timelineChartDimensions.height}`}
+            >
+              <For each={timelineYTicks()}>
+                {(tick) => {
+                  return (
+                    <g>
+                      <line
+                        shape-rendering="crispEdges"
+                        stroke="rgba(0, 0, 0, 0.06)"
+                        vector-effect="non-scaling-stroke"
+                        x1={timelineChartDimensions.left}
+                        x2={timelineChartDimensions.width - timelineChartDimensions.right}
+                        y1={tick.y}
+                        y2={tick.y}
+                      />
+                      <text
+                        class="fill-gray-500 text-[11px]"
+                        dominant-baseline="middle"
+                        text-anchor="end"
+                        x={timelineChartDimensions.left - 10}
+                        y={tick.y}
+                      >
+                        {tick.label}
+                      </text>
+                    </g>
+                  )
+                }}
+              </For>
+              <line
+                shape-rendering="crispEdges"
+                stroke="rgba(0, 0, 0, 0.14)"
+                vector-effect="non-scaling-stroke"
+                x1={timelineChartDimensions.left}
+                x2={timelineChartDimensions.width - timelineChartDimensions.right}
+                y1={getAlignedSvgStrokePosition(timelineChartBottom)}
+                y2={getAlignedSvgStrokePosition(timelineChartBottom)}
+              />
+              <For each={timelineRenderBuckets()}>
+                {(bucket, index) => {
+                  return (
+                    <g
+                      class={selectedInterval() === '1min' ? 'cursor-default' : 'cursor-pointer'}
+                      onClick={() => {
+                        return handleBucketClick(bucket, index())
+                      }}
+                      onPointerMove={(event) => {
+                        return showBucketTooltip(bucket, index(), event)
+                      }}
+                    >
+                      <rect
+                        fill="rgb(59, 130, 246)"
+                        height={bucket.promptHeight}
+                        shape-rendering="crispEdges"
+                        width={bucket.barWidth}
+                        x={bucket.x}
+                        y={bucket.promptY}
+                      />
+                      <rect
+                        fill="rgb(147, 197, 253)"
+                        height={bucket.completionHeight}
+                        shape-rendering="crispEdges"
+                        width={bucket.barWidth}
+                        x={bucket.x}
+                        y={bucket.completionY}
+                      />
+                      <Show when={bucket.failedHeight > 0}>
+                        <rect
+                          fill="rgb(239, 68, 68)"
+                          height={bucket.failedHeight}
+                          shape-rendering="crispEdges"
+                          width={bucket.barWidth}
+                          x={bucket.x}
+                          y={bucket.failedY}
+                        />
+                      </Show>
+                      <Show when={shouldShowTimelineXLabel({index: index(), total: timelineRenderBuckets().length})}>
+                        <text
+                          class="fill-gray-500 text-[11px]"
+                          text-anchor="middle"
+                          x={bucket.x + bucket.barWidth / 2}
+                          y={timelineChartDimensions.height - 10}
+                        >
+                          {bucket.label}
+                        </text>
+                      </Show>
+                    </g>
+                  )
+                }}
+              </For>
+            </svg>
+            <Show when={tooltip()}>
+              {(currentTooltip) => {
+                return (
+                  <div
+                    class="pointer-events-none absolute z-20 min-w-56 rounded-md bg-gray-950/90 px-3 py-2 text-xs text-white shadow-xl ring-1 ring-black/10 backdrop-blur-sm"
+                    style={{
+                      left: `${currentTooltip().x}px`,
+                      top: `${currentTooltip().y}px`,
+                      transform: 'translate(-50%, calc(-100% - 12px))',
+                    }}
+                  >
+                    <div class="mb-2 font-semibold leading-tight text-white">{currentTooltip().title}</div>
+                    <div class="space-y-1 text-gray-100">
+                      <div class="flex items-center justify-between gap-5">
+                        <span class="inline-flex items-center gap-2">
+                          <span class="h-2.5 w-2.5 rounded-sm bg-blue-500" /> Prompt
+                        </span>
+                        <span class="font-medium tabular-nums">
+                          {currentTooltip().bucket.promptTokens.toLocaleString()}
+                        </span>
+                      </div>
+                      <div class="flex items-center justify-between gap-5">
+                        <span class="inline-flex items-center gap-2">
+                          <span class="h-2.5 w-2.5 rounded-sm bg-blue-300" /> Completion
+                        </span>
+                        <span class="font-medium tabular-nums">
+                          {currentTooltip().bucket.completionTokens.toLocaleString()}
+                        </span>
+                      </div>
+                      <Show when={currentTooltip().bucket.failedTokens > 0}>
+                        <div class="flex items-center justify-between gap-5">
+                          <span class="inline-flex items-center gap-2">
+                            <span class="h-2.5 w-2.5 rounded-sm bg-red-500" /> Failed
+                          </span>
+                          <span class="font-medium tabular-nums">
+                            {currentTooltip().bucket.failedTokens.toLocaleString()}
+                          </span>
+                        </div>
+                      </Show>
+                    </div>
+                    <div class="mt-2 border-t border-white/20 pt-2 leading-5 text-gray-100">
+                      <div>Total: {currentTooltip().bucket.totalTokens.toLocaleString()}</div>
+                      <div>Prompts Judged: {currentTooltip().bucket.totalRequests.toLocaleString()}</div>
+                    </div>
+                  </div>
+                )
+              }}
+            </Show>
+          </>
+        </Show>
+
+        <Show when={tokenData.isLoading && !hasTimelineData()}>
+          <div class="absolute inset-0 flex items-center justify-center">
+            <p class="text-gray-500">Loading token usage data...</p>
+          </div>
+        </Show>
+
+        <Show when={tokenData.isError}>
+          <div class="absolute inset-0 flex items-center justify-center bg-white/80">
+            <div class="text-center">
+              <p class="text-red-600 mb-2">Failed to load token usage data</p>
+              <button
+                onClick={() => {
+                  return void tokenData.refetch()
+                }}
+                class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        </Show>
+
+        <Show
+          when={
+            !tokenData.isLoading
+            && !tokenData.isError
+            && tokenData.data
+            && (tokenData.data?.data as TokenTimelineData[])?.length === 0
+          }
+        >
+          <div class="absolute inset-0 flex items-center justify-center">
+            <p class="text-gray-500">No token usage data available for this period</p>
+          </div>
+        </Show>
+      </div>
     </div>
   )
 }
