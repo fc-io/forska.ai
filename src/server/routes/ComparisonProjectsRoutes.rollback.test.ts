@@ -655,6 +655,12 @@ const queryJson = async (
 }
 
 const registerModuleMocks = () => {
+  let detachedComparisonProjectLinks: {
+    promptLinks: MockDatabaseState['promptLinks']
+    routeLinks: MockDatabaseState['routeLinks']
+    sourceProjectLinks: MockDatabaseState['sourceProjectLinks']
+  } | null = null
+
   void mock.module(providerModelRepositoryModulePath, () => {
     return {
       assertSelectableProviderModelIds: async (_db: unknown, params: {modelIds: string[]}) => {
@@ -672,7 +678,43 @@ const registerModuleMocks = () => {
             return (await queryJson(statement, getMockDatabaseState())) as T[]
           },
           run: async (statement: string) => {
-            getMockDatabaseState().rootRunStatements.push(statement)
+            const state = getMockDatabaseState()
+            state.rootRunStatements.push(statement)
+
+            if (statement.includes('CREATE TEMP TABLE')) {
+              detachedComparisonProjectLinks = {
+                promptLinks: state.promptLinks.map((link) => {
+                  return {...link}
+                }),
+                routeLinks: state.routeLinks.map((link) => {
+                  return {...link}
+                }),
+                sourceProjectLinks: state.sourceProjectLinks.map((link) => {
+                  return {...link}
+                }),
+              }
+              return
+            }
+
+            if (statement.includes('INSERT INTO app.comparison_project_prompt') && detachedComparisonProjectLinks) {
+              state.promptLinks = detachedComparisonProjectLinks.promptLinks
+              state.routeLinks = detachedComparisonProjectLinks.routeLinks
+              state.sourceProjectLinks = detachedComparisonProjectLinks.sourceProjectLinks
+              detachedComparisonProjectLinks = null
+              return
+            }
+
+            if (statement.includes('DELETE FROM app.comparison_project_prompt')) {
+              state.promptLinks.splice(0, state.promptLinks.length)
+            }
+
+            if (statement.includes('DELETE FROM app.comparison_project_import_route')) {
+              state.routeLinks.splice(0, state.routeLinks.length)
+            }
+
+            if (statement.includes('DELETE FROM app.comparison_project_source_project')) {
+              state.sourceProjectLinks.splice(0, state.sourceProjectLinks.length)
+            }
           },
           transaction: async <T>(
             work: (runner: {
@@ -708,6 +750,14 @@ const registerModuleMocks = () => {
               },
               run: async (statement: string) => {
                 if (statement.includes('UPDATE app.comparison_project')) {
+                  if (
+                    pendingPromptLinks.length > 0
+                    || pendingRouteLinks.length > 0
+                    || pendingSourceProjectLinks.length > 0
+                  ) {
+                    throw new Error('comparison project FK detach violation')
+                  }
+
                   state.lastUpdateStatement = statement
                   if (statement.includes("human_judgment_mode = 'summary'")) {
                     pendingComparisonProject.humanJudgmentMode = 'summary'
@@ -739,6 +789,11 @@ const registerModuleMocks = () => {
 
                 if (statement.includes('DELETE FROM app.comparison_project_import_route')) {
                   pendingRouteLinks.splice(0, pendingRouteLinks.length)
+                  return
+                }
+
+                if (statement.includes('DELETE FROM app.comparison_project_source_project')) {
+                  pendingSourceProjectLinks.splice(0, pendingSourceProjectLinks.length)
                   return
                 }
 
@@ -808,6 +863,11 @@ const registerModuleMocks = () => {
                     id: `comparison-project-source-${pendingSourceProjectLinks.length + 1}`,
                     sourceProjectId,
                   })
+                  return
+                }
+
+                if (statement.includes('DROP TABLE temp_comparison_project_update_')) {
+                  detachedComparisonProjectLinks = null
                   return
                 }
 
@@ -891,7 +951,7 @@ test('comparison project model relink failure keeps original links intact', asyn
   expect(response.status).toBe(500)
   expect(bodyText).toContain('comparison project prompt insert failed')
   expect(state.transactionCalls).toBe(1)
-  expect(state.rootRunStatements).toHaveLength(0)
+  expect(state.rootRunStatements.length).toBeGreaterThan(0)
   expect(state.comparisonProject.modelIds).toEqual(['model-1'])
   expect(state.routeLinks).toEqual([{id: 'comparison-project-route-1', importRouteId: 'import-route-1'}])
   expect(state.promptLinks).toEqual([{id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'}])

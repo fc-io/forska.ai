@@ -439,14 +439,8 @@ const EditComparisonProjectPage = () => {
   return (
     <div class="p-6 max-w-4xl mx-auto">
       <div class="flex items-center gap-4 mb-6">
-        <Button
-          as={Link}
-          to="/compare-judgments/$id"
-          params={{id: comparisonProjectId()} as never}
-          variant="outline"
-          size="sm"
-        >
-          ← Back to Comparison
+        <Button as={Link} to="/compare-judgments" variant="outline" size="sm">
+          ← Back to Compare Judgments
         </Button>
         <h1 class="text-3xl font-bold">Edit Compare Project</h1>
       </div>
