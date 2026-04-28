@@ -12,8 +12,30 @@ const getSpeedLabel = (speedPerMinute: number | null) => {
   return speedPerMinute === null ? '0/min' : speedPerMinute < 1 ? '0/min' : `${Math.round(speedPerMinute)}/min`
 }
 
+const getLargeRebuildSpeedLabel = (speedPerMinute: number | null) => {
+  return speedPerMinute === null ? 'measuring throughput' : getSpeedLabel(speedPerMinute)
+}
+
+const getCountLabel = (count: number) => {
+  return count.toLocaleString()
+}
+
 const getLaneDescription = (processingCount: number, queuedCount: number, speedPerMinute: number | null) => {
   return `processing ${processingCount}, queued ${queuedCount}, ${getSpeedLabel(speedPerMinute)}`
+}
+
+const getLargeRebuildArticleProgressLabel = (indexing: ReviewsWarningsData['indexing']) => {
+  const progress = indexing.largeRebuild?.progress
+
+  return progress === null || progress === undefined || progress.remainingCurrentPhaseArticleCount === null
+    ? null
+    : `remaining ${getCountLabel(progress.remainingCurrentPhaseArticleCount)} of ${getCountLabel(progress.scopeArticleCount)}, ${getLargeRebuildSpeedLabel(progress.rowsPerMinute)}`
+}
+
+const getDirtyArticleAckLabel = (indexing: ReviewsWarningsData['indexing']) => {
+  return indexing.largeRebuild === null || indexing.pendingArticleRefreshCount === 0
+    ? null
+    : `${getCountLabel(indexing.pendingArticleRefreshCount)} waiting for staged rebuild finalization`
 }
 
 const getLargeRebuildPhaseLabel = (indexing: ReviewsWarningsData['indexing']) => {
@@ -73,14 +95,40 @@ export const ReviewsIndexingProgress = (props: ReviewsIndexingProgressProps) => 
             props.indexing.projectRefreshesPerMinute,
           )}
         </p>
-        <p>
-          <span class="font-medium text-slate-700">Article refreshes:</span>{' '}
-          {getLaneDescription(
-            props.indexing.inFlightArticleRefreshCount,
-            props.indexing.queuedArticleRefreshCount,
-            props.indexing.articleRefreshesPerMinute,
-          )}
-        </p>
+        <Show
+          when={props.indexing.largeRebuild === null}
+          fallback={
+            <>
+              <Show when={getLargeRebuildArticleProgressLabel(props.indexing)}>
+                {(progressLabel) => {
+                  return (
+                    <p>
+                      <span class="font-medium text-slate-700">Large rebuild articles:</span> {progressLabel()}
+                    </p>
+                  )
+                }}
+              </Show>
+              <Show when={getDirtyArticleAckLabel(props.indexing)}>
+                {(ackLabel) => {
+                  return (
+                    <p>
+                      <span class="font-medium text-slate-700">Dirty article ACKs:</span> {ackLabel()}
+                    </p>
+                  )
+                }}
+              </Show>
+            </>
+          }
+        >
+          <p>
+            <span class="font-medium text-slate-700">Article refreshes:</span>{' '}
+            {getLaneDescription(
+              props.indexing.inFlightArticleRefreshCount,
+              props.indexing.queuedArticleRefreshCount,
+              props.indexing.articleRefreshesPerMinute,
+            )}
+          </p>
+        </Show>
         <Show when={getLargeRebuildPhaseLabel(props.indexing)}>
           {(phaseLabel) => {
             return (

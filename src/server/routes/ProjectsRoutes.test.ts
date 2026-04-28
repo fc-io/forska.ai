@@ -1684,6 +1684,113 @@ test('clone route preserves summary mode criteria and human summary judgments', 
   await flushMartRefreshes()
 })
 
+test('editing a cloned summary project prompt preserves summary criteria metadata', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+    throw new Error('Test app not initialized')
+  }
+
+  const connectionId = 'clone-summary-edit-criteria-connection'
+  const modelId = 'clone-summary-edit-criteria-model'
+  const sourceProjectId = 'clone-summary-edit-criteria-source'
+  const originalPromptId = 'clone-summary-edit-criteria-prompt-original'
+  const originalPromptText = 'Original summary inclusion prompt'
+  const editedPromptText = 'Edited summary inclusion prompt'
+  const promptHeading = 'Population include'
+  const type = "'yes' | 'no' | 'maybe'"
+
+  await insertProjectFixture({connectionId, humanJudgmentMode: 'summary', modelId, projectId: sourceProjectId})
+  await insertProjectPromptFixture({
+    contentHash: computePromptContentHash(originalPromptText, null, promptHeading, type),
+    criteriaDisposition: 'include',
+    criteriaSectionKey: 'population',
+    criteriaSectionLabel: 'Population',
+    order: 0,
+    originProjectId: sourceProjectId,
+    originalText: originalPromptText,
+    projectId: sourceProjectId,
+    projectPromptId: 'clone-summary-edit-criteria-project-prompt-original',
+    promptHeading,
+    promptId: originalPromptId,
+    type,
+  })
+
+  const cloneResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${sourceProjectId}/clone`, {method: 'POST'}),
+  )
+  const cloneBody = (await cloneResponse.json()) as {data: {id: string}}
+  const clonedProjectId = cloneBody.data.id
+
+  expect(cloneResponse.status).toBe(200)
+
+  const editResponse = await app.handle(
+    new Request(`http://localhost/api/projects/${clonedProjectId}/edit`, {
+      body: JSON.stringify({
+        name: 'Clone with edited summary prompt',
+        description: null,
+        prompts: [
+          {originalId: originalPromptId, originalText: editedPromptText, promptHeading, type, order: 0, enabled: true},
+        ],
+        dateFrom: null,
+        dateTo: null,
+        modelId,
+        importRoutes: [],
+        useTitle: true,
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+      }),
+      headers: {'content-type': 'application/json'},
+      method: 'PATCH',
+    }),
+  )
+
+  expect(editResponse.status).toBe(200)
+
+  const promptRows = await queryDatabase<{
+    criteriaDisposition: string | null
+    criteriaSectionKey: string | null
+    criteriaSectionLabel: string | null
+    originalText: string
+    projectId: string
+    promptId: string
+  }>(`
+    SELECT
+      pp.project_id AS projectId,
+      pp.prompt_id AS promptId,
+      pp.criteria_disposition AS criteriaDisposition,
+      pp.criteria_section_key AS criteriaSectionKey,
+      pp.criteria_section_label AS criteriaSectionLabel,
+      p.original_text AS originalText
+    FROM app.project_prompt pp
+    INNER JOIN app.prompt p ON p.id = pp.prompt_id
+    WHERE pp.project_id IN ('${sourceProjectId}', '${clonedProjectId}')
+    ORDER BY pp.project_id ASC
+  `)
+  const sourcePromptRow = promptRows.find((row) => {
+    return row.projectId === sourceProjectId
+  })
+  const clonedPromptRow = promptRows.find((row) => {
+    return row.projectId === clonedProjectId
+  })
+
+  expect(sourcePromptRow).toEqual({
+    criteriaDisposition: 'include',
+    criteriaSectionKey: 'population',
+    criteriaSectionLabel: 'Population',
+    originalText: originalPromptText,
+    projectId: sourceProjectId,
+    promptId: originalPromptId,
+  })
+  expect(clonedPromptRow?.promptId).not.toBe(originalPromptId)
+  expect(clonedPromptRow?.criteriaDisposition).toBe('include')
+  expect(clonedPromptRow?.criteriaSectionKey).toBe('population')
+  expect(clonedPromptRow?.criteriaSectionLabel).toBe('Population')
+  expect(clonedPromptRow?.originalText).toBe(editedPromptText)
+  expect(clonedPromptRow?.projectId).toBe(clonedProjectId)
+
+  await flushMartRefreshes()
+})
+
 test('editing a cloned project prompt keeps source prompt links and judgments isolated', async () => {
   if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')

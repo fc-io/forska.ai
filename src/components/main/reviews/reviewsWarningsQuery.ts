@@ -18,6 +18,11 @@ export type ReviewsWarningsData = {
       cursorArticleId: string | null
       lastError: string | null
       operatorNote: string | null
+      progress: null | {
+        remainingCurrentPhaseArticleCount: number | null
+        rowsPerMinute: number | null
+        scopeArticleCount: number
+      }
       rebuildPhase: string | null
       refreshStatus: 'failed' | 'idle' | 'paused' | 'running' | null
       refreshToken: number | null

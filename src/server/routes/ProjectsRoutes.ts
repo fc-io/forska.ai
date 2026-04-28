@@ -1,5 +1,6 @@
 import {Elysia, t} from 'elysia'
 
+import type {ProjectPromptCriteriaDisposition} from '../../db/schemaTypes.ts'
 import {
   appendProviderModelThinkingBadgeLabel,
   getProviderModelThinkingBadgeValue,
@@ -329,10 +330,41 @@ const upsertProjectPromptTx = async (
     archived: boolean
     enabled: boolean
     originProjectId: string | null
+    criteriaDisposition: ProjectPromptCriteriaDisposition | null
+    criteriaSectionKey: string | null
+    criteriaSectionLabel: string | null
   },
 ) => {
+  const hasCriteriaMetadata =
+    params.criteriaDisposition !== null || params.criteriaSectionKey !== null || params.criteriaSectionLabel !== null
+  const criteriaUpdateParts = hasCriteriaMetadata
+    ? [
+        'criteria_disposition = EXCLUDED.criteria_disposition',
+        'criteria_section_key = EXCLUDED.criteria_section_key',
+        'criteria_section_label = EXCLUDED.criteria_section_label',
+      ]
+    : []
+  const updateParts = [
+    'prompt_order = EXCLUDED.prompt_order',
+    'archived = EXCLUDED.archived',
+    'enabled = EXCLUDED.enabled',
+    ...criteriaUpdateParts,
+    'updated_at = now()',
+  ]
+
   await tx.run(`
-    INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, archived, enabled, origin_project_id)
+    INSERT INTO app.project_prompt (
+      id,
+      project_id,
+      prompt_id,
+      prompt_order,
+      archived,
+      enabled,
+      origin_project_id,
+      criteria_disposition,
+      criteria_section_key,
+      criteria_section_label
+    )
     VALUES (
       '${escapeSqlString(crypto.randomUUID())}',
       '${escapeSqlString(params.projectId)}',
@@ -340,13 +372,13 @@ const upsertProjectPromptTx = async (
       ${params.order},
       ${params.archived ? 'TRUE' : 'FALSE'},
       ${params.enabled ? 'TRUE' : 'FALSE'},
-      ${getSqlLiteral(params.originProjectId)}
+      ${getSqlLiteral(params.originProjectId)},
+      ${getSqlLiteral(params.criteriaDisposition)},
+      ${getSqlLiteral(params.criteriaSectionKey)},
+      ${getSqlLiteral(params.criteriaSectionLabel)}
     )
     ON CONFLICT(project_id, prompt_id) DO UPDATE SET
-      prompt_order = EXCLUDED.prompt_order,
-      archived = EXCLUDED.archived,
-      enabled = EXCLUDED.enabled,
-      updated_at = now()
+      ${updateParts.join(',\n      ')}
   `)
 }
 
@@ -1100,13 +1132,19 @@ export const projectsRoutes = new Elysia()
               originProjectId: string | null
               archived: boolean
               enabled: boolean
+              criteriaDisposition: ProjectPromptCriteriaDisposition | null
+              criteriaSectionKey: string | null
+              criteriaSectionLabel: string | null
             }>(`
             SELECT
               id,
               prompt_id AS promptId,
               origin_project_id AS originProjectId,
               archived,
-              enabled
+              enabled,
+              criteria_disposition AS criteriaDisposition,
+              criteria_section_key AS criteriaSectionKey,
+              criteria_section_label AS criteriaSectionLabel
             FROM app.project_prompt
             WHERE project_id = '${escapeSqlString(params.id)}'
           `)
@@ -1214,6 +1252,9 @@ export const projectsRoutes = new Elysia()
                   archived: archived ?? currentAssociation?.archived ?? false,
                   enabled: enabled ?? currentAssociation?.enabled ?? true,
                   originProjectId: null,
+                  criteriaDisposition: currentAssociation?.criteriaDisposition ?? null,
+                  criteriaSectionKey: currentAssociation?.criteriaSectionKey ?? null,
+                  criteriaSectionLabel: currentAssociation?.criteriaSectionLabel ?? null,
                 })
               } else {
                 const targetPromptId = await getOrCreateImmutablePromptTx(tx, {
@@ -1235,6 +1276,9 @@ export const projectsRoutes = new Elysia()
                   archived: archived ?? false,
                   enabled: enabled ?? true,
                   originProjectId: null,
+                  criteriaDisposition: null,
+                  criteriaSectionKey: null,
+                  criteriaSectionLabel: null,
                 })
               }
             }

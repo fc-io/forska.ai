@@ -162,3 +162,31 @@ test('renders memory-pressure cooldown without active progress copy', async () =
     dispose()
   }
 })
+
+test('renders staged large rebuild progress separately from dirty article ACKs', async () => {
+  const {container, dispose} = await renderWarnings(
+    getWarningsData({
+      largeRebuild: {
+        cursorArticleCreatedAt: null,
+        cursorArticleId: 'article-148',
+        lastError: null,
+        operatorNote: null,
+        progress: {remainingCurrentPhaseArticleCount: 12, rowsPerMinute: 600, scopeArticleCount: 148},
+        rebuildPhase: 'review_article_serving',
+        refreshStatus: 'idle',
+        refreshToken: 5,
+      },
+      pendingArticleRefreshCount: 148,
+      pendingRefreshCount: 149,
+      queuedArticleRefreshCount: 148,
+    }),
+  )
+
+  try {
+    expect(container.textContent).toContain('Large rebuild articles: remaining 12 of 148, 600/min')
+    expect(container.textContent).toContain('Dirty article ACKs: 148 waiting for staged rebuild finalization')
+    expect(container.textContent).not.toContain('Article refreshes: processing 0, queued 148, 0/min')
+  } finally {
+    dispose()
+  }
+})

@@ -23,6 +23,13 @@ type ReviewsWarningsResponse = {
       inFlightArticleRefreshCount: number
       inFlightProjectRefreshCount: number
       inFlightRefreshCount: number
+      largeRebuild: null | {
+        progress: null | {
+          remainingCurrentPhaseArticleCount: number | null
+          rowsPerMinute: number | null
+          scopeArticleCount: number
+        }
+      }
       lastProgressedAt: string | null
       lastStartedAt: string | null
       oldestQueuedAt: string | null
@@ -636,6 +643,29 @@ test('reviews warnings report refreshing when a staged large rebuild is queued',
   expect(body.data.indexing.inFlightProjectRefreshCount).toBe(0)
   expect(body.data.indexing.pendingProjectRefreshCount).toBe(1)
   expect(body.data.indexing.status).toBe('refreshing')
+})
+
+test('reviews warnings expose large rebuild cursor progress separately from dirty article ACKs', async () => {
+  const projectId = 'project-large-rebuild-progress-warning'
+  const articleId = `article-${projectId}`
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 5, lastCompletedRefreshToken: 4, refreshStatus: 'idle'})
+  await insertDirtyArticleRefreshState(projectId, articleId, 5)
+  await insertLargeRebuildState(projectId, {
+    cursorArticleId: articleId,
+    rebuildPhase: 'review_article_serving',
+    refreshStatus: 'idle',
+    refreshToken: 5,
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.queuedArticleRefreshCount).toBe(1)
+  expect(body.data.indexing.pendingArticleRefreshCount).toBe(1)
+  expect(body.data.indexing.largeRebuild?.progress?.scopeArticleCount).toBe(1)
+  expect(body.data.indexing.largeRebuild?.progress?.remainingCurrentPhaseArticleCount).toBe(0)
 })
 
 test('reviews warnings report failed when a staged large rebuild has failed', async () => {

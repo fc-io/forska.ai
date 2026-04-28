@@ -1,7 +1,7 @@
 import {Elysia, t} from 'elysia'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
-import {escapeSqlString} from '../../services/appQueryHelpers.ts'
+import {escapeSqlString, getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getDuckdbMartRefreshService} from '../../services/getDuckdbMartRefreshService.ts'
 import {
   type FreshMaintenanceWorkLeaseRecord,
@@ -9,6 +9,7 @@ import {
 } from '../../services/maintenanceWorkLeaseService.ts'
 import {getDuckdbOwnerConnectionsOverview} from '../../utils/duckdbOwnerConnections.ts'
 import {shouldCurrentRuntimeRunMartRefreshDrain} from '../../utils/martRefreshDrainEligibility.ts'
+import {getProjectMartLargeRebuildRuntimeMetrics} from '../../utils/projectMartLargeRebuildRuntimeMetrics.ts'
 import {shouldCurrentServerRunMaintenanceLoops} from '../../utils/serverRuntimeRole.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
 
@@ -20,6 +21,11 @@ type ReviewsIndexingRecoveryMode = 'archived_project_mart_recovery' | 'none' | '
 type ProjectMartRefreshStatus = 'failed' | 'idle' | 'paused' | 'running'
 
 type RefreshCountInfo = {oldestQueuedAt: string | null; queuedRefreshCount: number}
+type ProjectLargeRebuildProgress = {
+  remainingCurrentPhaseArticleCount: number | null
+  rowsPerMinute: number | null
+  scopeArticleCount: number
+}
 
 type ProjectLargeRebuildState = {
   cursorArticleCreatedAt: string | null
@@ -36,7 +42,15 @@ type ProjectLargeRebuildState = {
   workerId: string | null
 }
 
-const getLargeRebuildDetails = (state: ProjectLargeRebuildState) => {
+const articleScopedLargeRebuildPhases = new Set([
+  'judgment_fact',
+  'prompt_answer_fact',
+  'review_article_filter_member',
+  'review_article_rollup',
+  'review_article_serving',
+])
+
+const getLargeRebuildDetails = (state: ProjectLargeRebuildState, progress: ProjectLargeRebuildProgress | null) => {
   return state.refreshToken === null || state.refreshToken <= 0
     ? null
     : {
@@ -44,6 +58,7 @@ const getLargeRebuildDetails = (state: ProjectLargeRebuildState) => {
         cursorArticleId: state.cursorArticleId,
         lastError: state.lastError,
         operatorNote: state.operatorNote,
+        progress,
         rebuildPhase: state.rebuildPhase,
         refreshStatus: state.refreshStatus,
         refreshToken: state.refreshToken,
@@ -221,6 +236,99 @@ const getPendingArticleRefreshInfo = async (projectId: string): Promise<RefreshC
   const [row] = rows
 
   return {oldestQueuedAt: row?.oldestQueuedAt ?? null, queuedRefreshCount: Number(row?.queuedRefreshCount ?? 0)}
+}
+
+const getProjectLargeRebuildRowsPerMs = (projectId: string) => {
+  const cycles = getProjectMartLargeRebuildRuntimeMetrics()
+    .recentCycles.filter((cycle) => {
+      return cycle.projectId === projectId && cycle.status === 'progressed' && cycle.articleCount > 0
+    })
+    .slice(-12)
+
+  if (cycles.length === 0) {
+    return null
+  }
+
+  const totalRows = cycles.reduce((sum, cycle) => {
+    return sum + cycle.articleCount
+  }, 0)
+
+  if (totalRows <= 0) {
+    return null
+  }
+
+  const firstStartedAt = new Date(cycles[0]?.startedAt ?? '').getTime()
+  const lastEndedAt = new Date(cycles[cycles.length - 1]?.endedAt ?? '').getTime()
+  const totalDurationMs = cycles.reduce((sum, cycle) => {
+    return sum + cycle.durationMs
+  }, 0)
+  const elapsedMs =
+    Number.isFinite(firstStartedAt) && Number.isFinite(lastEndedAt)
+      ? Math.max(lastEndedAt - firstStartedAt, totalDurationMs, 1)
+      : Math.max(totalDurationMs, 1)
+
+  return totalRows / elapsedMs
+}
+
+const getLargeRebuildProgress = async (
+  projectId: string,
+  state: ProjectLargeRebuildState,
+): Promise<ProjectLargeRebuildProgress> => {
+  const projectLiteral = getSqlLiteral(projectId)
+  const cursorArticleIdLiteral = getSqlLiteral(state.cursorArticleId)
+  const cursorArticleCreatedAtLiteral = getSqlLiteral(state.cursorArticleCreatedAt)
+  const rows = await getAppDatabaseService().queryJson<{
+    remainingCurrentPhaseArticleCount: number
+    scopeArticleCount: number
+  }>(`
+    WITH route_scope AS (
+      SELECT air.article_id AS articleId
+      FROM app.project_import_route pir
+      INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
+      WHERE pir.project_id = ${projectLiteral}
+    ),
+    curated_scope AS (
+      SELECT pa.article_id AS articleId
+      FROM app.project_article pa
+      WHERE pa.project_id = ${projectLiteral}
+    ),
+    aggregated_scope AS (
+      SELECT articleId
+      FROM route_scope
+      UNION
+      SELECT articleId
+      FROM curated_scope
+    )
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS scopeArticleCount,
+      CAST(
+        COALESCE(
+          SUM(
+            CASE
+              WHEN ${cursorArticleIdLiteral} IS NULL THEN 1
+              WHEN COALESCE(article.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') > COALESCE(${cursorArticleCreatedAtLiteral}, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') THEN 1
+              WHEN COALESCE(article.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') = COALESCE(${cursorArticleCreatedAtLiteral}, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')
+                AND aggregated_scope.articleId > ${cursorArticleIdLiteral} THEN 1
+              ELSE 0
+            END
+          ),
+          0
+        ) AS INTEGER
+      ) AS remainingCurrentPhaseArticleCount
+    FROM aggregated_scope
+    INNER JOIN app.article article ON article.id = aggregated_scope.articleId
+  `)
+  const scopeArticleCount = Number(rows[0]?.scopeArticleCount ?? 0)
+  const remainingCurrentPhaseArticleCount = articleScopedLargeRebuildPhases.has(state.rebuildPhase ?? '')
+    ? Number(rows[0]?.remainingCurrentPhaseArticleCount ?? scopeArticleCount)
+    : null
+  const rowsPerMs = getProjectLargeRebuildRowsPerMs(projectId)
+
+  return {
+    remainingCurrentPhaseArticleCount,
+    rowsPerMinute: rowsPerMs === null ? null : Math.round(rowsPerMs * 60 * 1000),
+    scopeArticleCount,
+  }
 }
 
 const getLatestTimestamp = (...values: Array<string | null>) => {
@@ -453,6 +561,9 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const hasActiveLargeRebuildLease =
       getHasActiveLease(projectLargeRebuildState.leaseExpiresAt, currentNow) || freshLargeRebuildLeaseCount > 0
     const hasLargeRebuild = projectLargeRebuildState.refreshToken !== null && projectLargeRebuildState.refreshToken > 0
+    const largeRebuildProgress = hasLargeRebuild
+      ? await getLargeRebuildProgress(projectId, projectLargeRebuildState)
+      : null
     const isLargeRebuildRunning = projectLargeRebuildState.refreshStatus === 'running' && hasActiveLargeRebuildLease
     const isLargeRebuildQueued = hasLargeRebuild && projectLargeRebuildState.refreshStatus === 'idle'
     const isLargeRebuildFailed = projectLargeRebuildState.refreshStatus === 'failed'
@@ -538,7 +649,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
           inFlightArticleRefreshCount,
           inFlightProjectRefreshCount,
           inFlightRefreshCount,
-          largeRebuild: getLargeRebuildDetails(projectLargeRebuildState),
+          largeRebuild: getLargeRebuildDetails(projectLargeRebuildState, largeRebuildProgress),
           lastProgressedAt: getLatestTimestamp(
             projectRefreshState.lastCompletedAt,
             isProjectRunning ? projectRefreshState.updatedAt : null,

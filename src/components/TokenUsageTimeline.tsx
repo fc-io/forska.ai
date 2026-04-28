@@ -613,21 +613,32 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
       return
     }
 
-    const context = canvas.getContext('2d')
-    if (!context) {
-      destroyChart()
-      return
-    }
-
     const existingChart = chartInstance()
-    if (!existingChart) {
-      setChartInstance(new Chart(context, {type: 'bar', data, options: chartOptions}))
-      return
-    }
+    const frameId = ownerWindow.requestAnimationFrame(() => {
+      const context = canvas.getContext('2d')
+      if (!context || !canvas.isConnected) {
+        existingChart?.destroy()
+        setChartInstance(null)
+        return
+      }
 
-    existingChart.data = data
-    existingChart.options = chartOptions
-    existingChart.update()
+      if (!existingChart) {
+        const nextChart = new Chart(context, {type: 'bar', data, options: chartOptions})
+        nextChart.resize()
+        nextChart.update()
+        setChartInstance(nextChart)
+        return
+      }
+
+      existingChart.data = data
+      existingChart.options = chartOptions
+      existingChart.resize()
+      existingChart.update()
+    })
+
+    onCleanup(() => {
+      ownerWindow.cancelAnimationFrame(frameId)
+    })
   })
 
   onMount(() => {
