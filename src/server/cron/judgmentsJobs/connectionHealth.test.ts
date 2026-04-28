@@ -89,6 +89,19 @@ test('keeps prompt validation failures out of the outage path', () => {
   expect(isConnectionError({status: 422})).toBe(false)
 })
 
+test('classifies Codex websocket 403 as transient throttling', () => {
+  const failure = classifyConnectionFailure({
+    context: {effectiveBaseURL: 'codex://app-server', endpointPath: null, providerKind: 'codex'},
+    error: new Error(
+      'codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 403 Forbidden, url: wss://chatgpt.com/backend-api/codex/responses',
+    ),
+  })
+
+  expect(failure.kind).toBe('rate_limited')
+  expect(failure.shouldPauseConnection).toBe(true)
+  expect(failure.statusCode).toBe(403)
+})
+
 test('classifies circuit-open failures with typed connection errors', () => {
   const error = createConnectionError({
     context: {effectiveBaseURL: 'http://127.0.0.1:1234/v1', endpointPath: null, providerKind: 'sglang'},

@@ -338,6 +338,8 @@ const openDatabases = new Map<string, Database>()
 const ownedJobLeases = new Map<string, JudgmentJobLease>()
 const ownedJobLeaseOperationCounts = new Map<string, number>()
 const judgmentJobLeaseHeartbeatIntervalMs = 5_000
+const judgmentJobLeaseOperationDrainPollMs = 25
+const judgmentJobLeaseOperationDrainTimeoutMs = 10_000
 const judgmentJobLeaseLogger = createRateLimitedLogger({windowMs: 30_000})
 const judgmentJobHealthProjectionLogger = createRateLimitedLogger({windowMs: 30_000})
 let judgmentJobLeaseHeartbeatStarted = false
@@ -510,6 +512,26 @@ const finishOwnedJobLeaseOperation = (jobId: string) => {
 
 const hasOwnedJobLeaseOperation = (jobId: string) => {
   return getOwnedJobLeaseOperationCount(jobId) > 0
+}
+
+const waitForOwnedJobLeaseOperationsToDrain = async (jobId: string, startedAtMs = Date.now()): Promise<void> => {
+  if (!hasOwnedJobLeaseOperation(jobId)) {
+    return
+  }
+
+  if (Date.now() - startedAtMs >= judgmentJobLeaseOperationDrainTimeoutMs) {
+    judgmentJobLeaseLogger.warn(
+      `judgment-job-lease:operation-drain-timeout:${jobId}`,
+      '[judgments] timed out waiting for SQLite job operations before releasing lease',
+      {activeOperations: getOwnedJobLeaseOperationCount(jobId), jobId},
+    )
+    return
+  }
+
+  await new Promise((resolve) => {
+    setTimeout(resolve, judgmentJobLeaseOperationDrainPollMs)
+  })
+  return waitForOwnedJobLeaseOperationsToDrain(jobId, startedAtMs)
 }
 
 const heartbeatOwnedJobLease = async (jobId: string) => {
@@ -2173,6 +2195,8 @@ const withOwnedJobDatabase = async <T>(
 }
 
 const releaseOwnedJobLease = async (jobId: string) => {
+  await waitForOwnedJobLeaseOperationsToDrain(jobId)
+
   const currentLease = ownedJobLeases.get(jobId)
 
   releaseOwnedJobLeaseState(jobId)
@@ -2682,12 +2706,10 @@ const markReadyQueuePromptClaimed = ({
 }
 
 const claimReadyQueuePromptRow = async ({
-  database,
   jobId,
   row,
   serverJobId,
 }: {
-  database: Database
   jobId: string
   row: QueuePromptRow
   serverJobId: string
@@ -2702,25 +2724,25 @@ const claimReadyQueuePromptRow = async ({
     queueRecordId: row.id,
   })
   const claim = {claimId, ...snapshot}
-  const claimed = markReadyQueuePromptClaimed({claim, database, row, serverJobId})
+  await ensureOwnedJobLease(jobId, serverJobId)
+  const database = getOpenDatabase(jobId, false)
+  const claimed = database ? markReadyQueuePromptClaimed({claim, database, row, serverJobId}) : false
 
   return claimed ? [{articleId: row.articleId, jobId, promptId: row.promptId, recordId: row.id, ...claim}] : []
 }
 
 const claimReadyQueuePromptRows = async ({
-  database,
   jobId,
   rows,
   serverJobId,
 }: {
-  database: Database
   jobId: string
   rows: QueuePromptRow[]
   serverJobId: string
 }): Promise<QueuePromptClaim[]> => {
   return rows.reduce<Promise<QueuePromptClaim[]>>(async (claimedPromise, row) => {
     const claimed = await claimedPromise
-    const nextClaim = await claimReadyQueuePromptRow({database, jobId, row, serverJobId})
+    const nextClaim = await claimReadyQueuePromptRow({jobId, row, serverJobId})
 
     return [...claimed, ...nextClaim]
   }, Promise.resolve([]))
@@ -2964,7 +2986,7 @@ const sqliteService = {
         return []
       }
 
-      return claimReadyQueuePromptRows({database, jobId, rows: getReadyQueuePromptRows(database, limit), serverJobId})
+      return await claimReadyQueuePromptRows({jobId, rows: getReadyQueuePromptRows(database, limit), serverJobId})
     } finally {
       finishOwnedJobLeaseOperation(jobId)
     }

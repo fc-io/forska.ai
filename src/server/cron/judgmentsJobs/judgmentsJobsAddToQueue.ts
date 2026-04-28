@@ -3,6 +3,10 @@ import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJu
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {
+  getJudgmentJobSqliteErrorMessage,
+  isTransientJudgmentJobSqliteLockError,
+} from './judgmentJobSqliteTransientLock.ts'
+import {
   getJudgeWorkerReadOnlyAppDatabaseService,
   getJudgmentJobSqliteService,
   getJudgmentsCapacity,
@@ -714,7 +718,26 @@ const getJobConfig = async (jobId: string): Promise<JobConfig | null> => {
 type AddToQueueJobParams = {job: Job; readyTargetPerJob: number; addToQueueMaxBatchSize: number; serverJobId: string}
 
 const addToQueueForJob = async (params: AddToQueueJobParams): Promise<void> => {
-  return topUpSqliteQueueForJob(params)
+  try {
+    return await topUpSqliteQueueForJob(params)
+  } catch (error) {
+    if (isTransientJudgmentJobSqliteLockError(error)) {
+      addToQueueWarningLogger.warn(
+        `judgmentQueue.addToQueue.transientSqliteLock.${params.job.id}`,
+        '[addToQueue] skipped SQLite job after transient lock',
+        {
+          component: addToQueueComponent,
+          errorMessage: getJudgmentJobSqliteErrorMessage(error),
+          event: 'transientSqliteLock',
+          jobId: params.job.id,
+          projectId: params.job.projectId,
+        },
+      )
+      return
+    }
+
+    throw error
+  }
 }
 
 export const judgmentsJobsAddToQueue = async (serverJobId: string): Promise<void> => {

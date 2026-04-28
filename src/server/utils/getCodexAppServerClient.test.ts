@@ -13,7 +13,7 @@ type MockJsonRpcRequest = {id?: number; method?: string; params?: {input?: Array
 
 type MockNotification =
   | {inputText: string; kind: 'item'; text: string}
-  | {inputText: string; kind: 'complete'; status: 'completed' | 'failed'}
+  | {error?: unknown; inputText: string; kind: 'complete'; status: 'completed' | 'failed'}
 
 const createMockConcurrentCodexClient = ({
   notifications,
@@ -67,7 +67,13 @@ const createMockConcurrentCodexClient = ({
 
         send({
           method: 'turn/completed',
-          params: {turn: {id: turnIdByInputText.get(notification.inputText), status: notification.status}},
+          params: {
+            turn: {
+              error: notification.error,
+              id: turnIdByInputText.get(notification.inputText),
+              status: notification.status,
+            },
+          },
         })
       })
     }, 0)
@@ -280,4 +286,101 @@ test('runJsonTurn ignores failed partial agent text when only the successful tur
     {status: 'rejected', reason: 'codex app-server: turn failed'},
   ])
   expect(threadReadInputs).toEqual(['success request'])
+})
+
+test('runJsonTurn preserves failed turn error detail', async () => {
+  const {client} = createMockConcurrentCodexClient({
+    notifications: [
+      {
+        error: {message: 'Unable to connect. Is the computer able to access the url?'},
+        inputText: 'failed request',
+        kind: 'complete',
+        status: 'failed',
+      },
+      {inputText: 'success request', kind: 'complete', status: 'completed'},
+    ],
+    threadReadTextByInputText: {'failed request': '', 'success request': 'success thread-read text'},
+  })
+
+  const results = await Promise.allSettled([
+    client.runJsonTurn({model: 'gpt-5.4', inputText: 'success request', outputSchema: {type: 'object'}}),
+    client.runJsonTurn({model: 'gpt-5.4', inputText: 'failed request', outputSchema: {type: 'object'}}),
+  ])
+
+  expect(getNormalizedResults(results)).toEqual([
+    {status: 'fulfilled', text: 'success thread-read text'},
+    {
+      status: 'rejected',
+      reason: 'codex app-server: turn failed: Unable to connect. Is the computer able to access the url?',
+    },
+  ])
+})
+
+test('runJsonTurn rejects active turns when app-server exits', async () => {
+  const stdout = new EventEmitter()
+  const stderr = new EventEmitter()
+  const proc = new EventEmitter() as EventEmitter & {
+    stderr: EventEmitter
+    stdin: {write: (data: string) => boolean}
+    stdout: EventEmitter
+  }
+
+  const send = (message: unknown) => {
+    stdout.emit('data', Buffer.from(`${JSON.stringify(message)}\n`))
+  }
+
+  proc.stdout = stdout
+  proc.stderr = stderr
+  proc.stdin = {
+    write(payload) {
+      String(payload)
+        .split('\n')
+        .map((line) => {
+          return line.trim()
+        })
+        .filter((line) => {
+          return line.length > 0
+        })
+        .forEach((line) => {
+          const message = JSON.parse(line) as MockJsonRpcRequest
+
+          if (message.method === 'initialize') {
+            send({id: message.id, result: {}})
+            return
+          }
+
+          if (message.method === 'thread/start') {
+            send({id: message.id, result: {thread: {id: 'thread-exits'}}})
+            return
+          }
+
+          if (message.method === 'turn/start') {
+            send({id: message.id, result: {turn: {id: 'turn-exits'}}})
+            setTimeout(() => {
+              proc.emit('exit', 133, null)
+            }, 0)
+          }
+        })
+
+      return true
+    },
+  }
+  const spawnProcess: SpawnCodexAppServer = () => {
+    return proc
+  }
+  const client = createCodexAppServerClient({spawnProcess})
+  const result = await client
+    .runJsonTurn({model: 'gpt-5.4', inputText: 'active request', outputSchema: {type: 'object'}, timeoutMs: 10_000})
+    .then(
+      () => {
+        return null
+      },
+      (error: unknown) => {
+        return error
+      },
+    )
+
+  expect(result).toBeInstanceOf(Error)
+  expect(result instanceof Error ? result.message : '').toContain('codex app-server exited')
+  expect(result instanceof Error ? result.message : '').toContain('code=133')
 })

@@ -120,6 +120,8 @@ const martRefreshYieldDelayMs = 0
 const knownNoopProjectRefreshReasons = ['humanAssessmentRoutesPostInit']
 const martRefreshBatchEpochSql = "TIMESTAMPTZ '1970-01-01T00:00:00.000Z'"
 const martRefreshProjectPurgeRetryableErrorFragment = 'Failed to delete all rows from index'
+const martPromptAnswerFactLookupIndexName = 'idx_mart_prompt_answer_fact_lookup'
+const martPromptAnswerFactResetReplacementTableName = 'mart.prompt_answer_fact_project_refresh_rewrite'
 const martReviewArticleServingPurgeReplacementTableName = 'mart.review_article_serving_project_purge_rewrite'
 const martReviewArticleServingOrderIndexName = 'idx_mart_review_article_serving_order'
 const martRefreshFatalInvalidationErrorFragments = [
@@ -849,7 +851,49 @@ const getProjectPromptAnswerFactResetSql = (projectId: string) => {
 
   return `
     BEGIN TRANSACTION;
-    DELETE FROM mart.prompt_answer_fact WHERE project_id = ${projectLiteral};
+    DROP TABLE IF EXISTS ${martPromptAnswerFactResetReplacementTableName};
+    CREATE TABLE ${martPromptAnswerFactResetReplacementTableName} (
+      project_id VARCHAR NOT NULL,
+      article_id VARCHAR NOT NULL,
+      prompt_id VARCHAR NOT NULL,
+      judgment_id VARCHAR NOT NULL,
+      model_id VARCHAR NOT NULL,
+      answer_value VARCHAR NOT NULL,
+      answered_original VARCHAR,
+      article_created_at TIMESTAMPTZ,
+      article_updated_at TIMESTAMPTZ,
+      judgment_created_at TIMESTAMPTZ NOT NULL,
+      PRIMARY KEY(project_id, judgment_id, answer_value)
+    );
+    INSERT INTO ${martPromptAnswerFactResetReplacementTableName} (
+      project_id,
+      article_id,
+      prompt_id,
+      judgment_id,
+      model_id,
+      answer_value,
+      answered_original,
+      article_created_at,
+      article_updated_at,
+      judgment_created_at
+    )
+    SELECT
+      project_id,
+      article_id,
+      prompt_id,
+      judgment_id,
+      model_id,
+      answer_value,
+      answered_original,
+      article_created_at,
+      article_updated_at,
+      judgment_created_at
+    FROM mart.prompt_answer_fact
+    WHERE project_id != ${projectLiteral};
+    DROP TABLE mart.prompt_answer_fact;
+    ALTER TABLE ${martPromptAnswerFactResetReplacementTableName} RENAME TO prompt_answer_fact;
+    CREATE INDEX IF NOT EXISTS ${martPromptAnswerFactLookupIndexName}
+    ON mart.prompt_answer_fact(project_id, prompt_id, answer_value, article_id);
     COMMIT;
   `
 }

@@ -18,6 +18,7 @@ type JsonRpcMessage = JsonRpcResponse | JsonRpcRequest
 type Pending = {resolve: (value: unknown) => void; reject: (error: unknown) => void}
 
 type Listener = (msg: JsonRpcMessage) => void
+type LifecycleListener = (error: Error) => void
 
 type CodexAppServerProcess = {
   on: ((event: 'error', listener: (error: Error) => void) => unknown)
@@ -153,6 +154,32 @@ const getString = (value: unknown): string | null => {
   return typeof value === 'string' ? value : null
 }
 
+const getCodexErrorMessage = (value: unknown): string | null => {
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    return trimmed.length > 0 ? trimmed : null
+  }
+
+  if (!isRecord(value)) {
+    return null
+  }
+
+  const message = getString(value.message) ?? getString(value.error) ?? getString(value.details)
+  if (message) return message
+
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return null
+  }
+}
+
+const getCodexTurnFailedError = (value: unknown): Error => {
+  const detail = getCodexErrorMessage(value)
+
+  return new Error(detail ? `codex app-server: turn failed: ${detail}` : 'codex app-server: turn failed')
+}
+
 const getCodexTokenUsageBreakdown = (value: unknown): CodexTokenUsageBreakdown | null => {
   if (!isRecord(value)) return null
 
@@ -206,6 +233,37 @@ const appendDebug = (current: string, chunk: string): string => {
   return next
 }
 
+const codexWebsocketForbiddenLogIntervalMs = 60_000
+let lastCodexWebsocketForbiddenLogAt = 0
+
+const isCodexWebsocketForbiddenStderr = (value: string): boolean => {
+  const normalized = value.toLowerCase()
+
+  return (
+    normalized.includes('responses_websocket')
+    && normalized.includes('http error: 403 forbidden')
+    && normalized.includes('backend-api/codex/responses')
+  )
+}
+
+const logCodexStderr = (value: string): void => {
+  const trimmed = value.trim()
+  if (trimmed.length === 0) return
+
+  if (!isCodexWebsocketForbiddenStderr(trimmed)) {
+    console.error(`[codex] ${trimmed}`)
+    return
+  }
+
+  const now = Date.now()
+  if (now - lastCodexWebsocketForbiddenLogAt < codexWebsocketForbiddenLogIntervalMs) return
+
+  lastCodexWebsocketForbiddenLogAt = now
+  console.warn(
+    '[codex] Codex websocket returned 403 Forbidden; treating it as transient Codex throttling/backpressure. If it repeats, lower CODEX_MAX_INFLIGHT.',
+  )
+}
+
 export const warmCodexAppServer = async (): Promise<void> => {
   try {
     const client = getCodexAppServerClient()
@@ -225,12 +283,14 @@ export const createCodexAppServerClient = ({
   let nextId = 1
   const pending = new Map<JsonRpcId, Pending>()
   const listeners = new Set<Listener>()
+  const lifecycleListeners = new Set<LifecycleListener>()
   const codexBin = getCodexBinPath()
 
   const proc = spawnProcess(codexBin, ['app-server'], {stdio: ['pipe', 'pipe', 'pipe']})
 
   let rawStdout = ''
   let rawStderr = ''
+  let closedError: Error | null = null
 
   let buffer = ''
   proc.stdout.on('data', (data: Buffer) => {
@@ -260,8 +320,7 @@ export const createCodexAppServerClient = ({
   proc.stderr.on('data', (data: Buffer) => {
     const text = data.toString('utf8')
     rawStderr = appendDebug(rawStderr, text)
-    const trimmed = text.trim()
-    if (trimmed.length > 0) console.error(`[codex] ${trimmed}`)
+    logCodexStderr(text)
   })
 
   const buildExitError = (code: number | null, signal: string | null): Error => {
@@ -283,24 +342,30 @@ export const createCodexAppServerClient = ({
     return new Error(`codex app-server exited (${details}). ${hint}`)
   }
 
-  proc.on('exit', (code, signal) => {
-    const error = buildExitError(code, signal)
+  const failAppServer = (error: Error): void => {
+    if (closedError) return
+
+    closedError = error
     pending.forEach((p) => {
       p.reject(error)
     })
     pending.clear()
+    lifecycleListeners.forEach((listener) => {
+      listener(error)
+    })
+    lifecycleListeners.clear()
     singleton = null
+  }
+
+  proc.on('exit', (code, signal) => {
+    failAppServer(buildExitError(code, signal))
   })
 
   proc.on('error', (error) => {
     const err = new Error(
       `codex app-server failed to start (${String(error)}). Configure the Codex binary in Settings if needed.`,
     )
-    pending.forEach((p) => {
-      p.reject(err)
-    })
-    pending.clear()
-    singleton = null
+    failAppServer(err)
   })
 
   const send = (message: unknown): void => {
@@ -308,6 +373,10 @@ export const createCodexAppServerClient = ({
   }
 
   const request = async (method: string, params: unknown, timeoutMs?: number): Promise<unknown> => {
+    if (closedError) {
+      throw closedError
+    }
+
     const id = nextId
     nextId += 1
 
@@ -330,7 +399,11 @@ export const createCodexAppServerClient = ({
         },
       })
 
-      send({method, id, params})
+      try {
+        send({method, id, params})
+      } catch (error) {
+        failAppServer(error instanceof Error ? error : new Error(String(error)))
+      }
     })
   }
 
@@ -430,14 +503,28 @@ export const createCodexAppServerClient = ({
     }
 
     return await new Promise<{text: string; usage: CodexThreadTokenUsage | null}>((resolve, reject) => {
-      const timeout = setTimeout(() => {
+      let handler: Listener = () => {
+        return undefined
+      }
+      const onClosed: LifecycleListener = (error) => {
+        fail(error)
+      }
+      const cleanup = (): void => {
+        clearTimeout(timeout)
         listeners.delete(handler)
-        reject(new Error('codex app-server: turn timeout'))
+        lifecycleListeners.delete(onClosed)
+      }
+      const fail = (error: Error): void => {
+        cleanup()
+        reject(error)
+      }
+      const timeout = setTimeout(() => {
+        fail(new Error('codex app-server: turn timeout'))
       }, params.timeoutMs ?? CODEx_DEFAULT_TIMEOUT_MS)
 
       let turnUsage: CodexThreadTokenUsage | null = null
 
-      const handler: Listener = (msg) => {
+      handler = (msg) => {
         const tokenUsageUpdate = getCodexThreadTokenUsageUpdate(msg)
         if (tokenUsageUpdate && tokenUsageUpdate.turnId === turnId) {
           turnUsage = tokenUsageUpdate.tokenUsage
@@ -445,15 +532,16 @@ export const createCodexAppServerClient = ({
         }
 
         if (isNotification(msg) && msg.method === 'turn/completed') {
-          const completedTurnId = (msg.params as {turn?: {id?: unknown; status?: unknown; error?: unknown}} | undefined)
-            ?.turn?.id
-          const status = (msg.params as {turn?: {status?: unknown}} | undefined)?.turn?.status
+          const completionParams = msg.params as
+            | {error?: unknown; turn?: {error?: unknown; id?: unknown; status?: unknown}}
+            | undefined
+          const completedTurnId = completionParams?.turn?.id
+          const status = completionParams?.turn?.status
           if (completedTurnId !== turnId) return
-          clearTimeout(timeout)
-          listeners.delete(handler)
+          cleanup()
 
           if (status === 'failed') {
-            reject(new Error('codex app-server: turn failed'))
+            reject(getCodexTurnFailedError(completionParams?.turn?.error ?? completionParams?.error))
             return undefined
           }
 
@@ -466,6 +554,11 @@ export const createCodexAppServerClient = ({
       }
 
       listeners.add(handler)
+      lifecycleListeners.add(onClosed)
+
+      if (closedError) {
+        fail(closedError)
+      }
     })
   }
 

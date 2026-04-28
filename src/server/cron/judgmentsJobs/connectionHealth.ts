@@ -46,8 +46,10 @@ const getNormalizedEndpointPath = (value: string | null | undefined): string | n
 }
 
 const getErrorStatusCode = (error: unknown): number | null => {
-  if (!error || typeof error !== 'object') return null
-  const raw = 'status' in error ? (error as {status?: unknown}).status : null
+  const message = getErrorMessage(error)
+  const statusFromMessage = message.match(/HTTP error:\s*(\d{3})/i)?.[1]
+  if (!error || typeof error !== 'object') return statusFromMessage ? Number(statusFromMessage) : null
+  const raw = 'status' in error ? (error as {status?: unknown}).status : statusFromMessage
   const status = typeof raw === 'number' ? raw : Number(raw)
   return Number.isFinite(status) ? status : null
 }
@@ -109,6 +111,25 @@ const isNetworkError = (error: unknown): boolean => {
   }
 
   return false
+}
+
+const isCodexWebsocketForbiddenError = ({
+  error,
+  providerKind,
+  statusCode,
+}: {
+  error: unknown
+  providerKind: string | null
+  statusCode: number | null
+}): boolean => {
+  const message = getErrorMessage(error).toLowerCase()
+
+  return (
+    providerKind === 'codex'
+    && statusCode === 403
+    && message.includes('responses_websocket')
+    && message.includes('backend-api/codex/responses')
+  )
 }
 
 const getLikelyCause = ({
@@ -194,21 +215,30 @@ export const classifyConnectionFailure = ({
   const isRequiredOpenAICompatibleEndpoint = Boolean(
     endpointPath && openAICompatibleRequiredEndpoints.has(endpointPath),
   )
+  const isCodexWebsocketForbidden = isCodexWebsocketForbiddenError({
+    error,
+    providerKind: normalizedContext.providerKind,
+    statusCode,
+  })
   const kind: ConnectionFailureKind = isCircuitOpenError(error)
     ? 'circuit_open'
     : statusCode === 429
       ? 'rate_limited'
-      : isRequiredOpenAICompatibleEndpoint && statusCode === 404
-        ? 'endpoint_unavailable'
-        : isRequiredOpenAICompatibleEndpoint && (statusCode === 405 || statusCode === 501)
-          ? 'endpoint_misconfigured'
-          : statusCode === 408
-            ? 'network_unavailable'
-            : statusCode != null && statusCode >= 500
-              ? 'endpoint_unavailable'
-              : isNetworkError(error)
-                ? 'network_unavailable'
-                : 'other'
+      : isCodexWebsocketForbidden
+        ? 'rate_limited'
+        : isRequiredOpenAICompatibleEndpoint && statusCode === 404
+          ? 'endpoint_unavailable'
+          : isRequiredOpenAICompatibleEndpoint && (statusCode === 405 || statusCode === 501)
+            ? 'endpoint_misconfigured'
+            : statusCode === 408
+              ? 'network_unavailable'
+              : statusCode != null && statusCode >= 500
+                ? 'endpoint_unavailable'
+                : statusCode != null && statusCode >= 400
+                  ? 'other'
+                  : isNetworkError(error)
+                    ? 'network_unavailable'
+                    : 'other'
   const likelyCause = getLikelyCause({endpointPath, kind, statusCode})
 
   return {

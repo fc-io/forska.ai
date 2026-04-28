@@ -24,6 +24,9 @@ type GetProjectScopeBatchParams = {
 
 const defaultProjectMartLargeRebuildBatchSize = 1_000
 const batchEpochSql = "TIMESTAMPTZ '1970-01-01T00:00:00.000Z'"
+const reviewArticleServingCleanupTableName = 'mart.review_article_serving_generation_cleanup_rewrite'
+const reviewArticleFilterMemberCleanupTableName = 'mart.review_article_filter_member_generation_cleanup_rewrite'
+const reviewArticleServingDetailCleanupTableName = 'mart.review_article_serving_detail_generation_cleanup_rewrite'
 
 const getProjectMartLargeRebuildExecutorDatabase = (): ProjectMartLargeRebuildExecutorDependencies['database'] => {
   const database = getAppDatabaseService()
@@ -158,8 +161,18 @@ const getProjectScopeResetSql = (projectId: string) => {
 }
 
 const getProjectScopeBatchInsertSql = (projectId: string, rows: ProjectMartLargeRebuildScopeBatchRow[]) => {
+  const projectLiteral = getSqlLiteral(projectId)
+  const articleIdsSql = getProjectRefreshArticleIdsSql(
+    rows.map((row) => {
+      return row.articleId
+    }),
+  )
+
   return `
     BEGIN TRANSACTION;
+    DELETE FROM mart.project_scope_article
+    WHERE project_id = ${projectLiteral}
+      AND article_id IN (${articleIdsSql});
     INSERT INTO mart.project_scope_article (
       project_id,
       article_id,
@@ -193,6 +206,9 @@ const getProjectJudgmentFactBatchInsertSql = (projectId: string, articleIds: str
 
   return `
     BEGIN TRANSACTION;
+    DELETE FROM mart.judgment_fact
+    WHERE project_id = ${projectLiteral}
+      AND article_id IN (${articleIdsSql});
     INSERT INTO mart.judgment_fact (
       judgment_id,
       article_id,
@@ -279,6 +295,9 @@ const getProjectPromptAnswerFactBatchInsertSql = (projectId: string, articleIds:
 
   return `
     BEGIN TRANSACTION;
+    DELETE FROM mart.prompt_answer_fact
+    WHERE project_id = ${projectLiteral}
+      AND article_id IN (${articleIdsSql});
     INSERT INTO mart.prompt_answer_fact (
       project_id,
       article_id,
@@ -410,6 +429,10 @@ const getProjectReviewArticleFilterMemberBatchInsertSql = (projectId: string, ar
 
   return `
     BEGIN TRANSACTION;
+    DELETE FROM mart.review_article_filter_member
+    WHERE project_id = ${projectLiteral}
+      AND generation = (SELECT active_generation + 1 FROM app.project_review_serving_generation WHERE project_id = ${projectLiteral})
+      AND article_id IN (${articleIdsSql});
     INSERT INTO mart.review_article_filter_member (
       project_id,
       generation,
@@ -459,6 +482,9 @@ const getProjectReviewArticleRollupBatchInsertSql = (projectId: string, articleI
 
   return `
     BEGIN TRANSACTION;
+    DELETE FROM mart.review_article_rollup
+    WHERE project_id = ${projectLiteral}
+      AND article_id IN (${articleIdsSql});
     INSERT INTO mart.review_article_rollup (
       project_id,
       article_id,
@@ -622,6 +648,14 @@ const getProjectReviewServingBatchInsertSql = (projectId: string, articleIds: st
 
   return `
     BEGIN TRANSACTION;
+    DELETE FROM mart.review_article_serving_detail
+    WHERE project_id = ${projectLiteral}
+      AND generation = (SELECT active_generation + 1 FROM app.project_review_serving_generation WHERE project_id = ${projectLiteral})
+      AND article_id IN (${articleIdsSql});
+    DELETE FROM mart.review_article_serving
+    WHERE project_id = ${projectLiteral}
+      AND generation = (SELECT active_generation + 1 FROM app.project_review_serving_generation WHERE project_id = ${projectLiteral})
+      AND article_id IN (${articleIdsSql});
     INSERT INTO mart.review_article_serving (
       project_id, generation, article_id, article_created_at, article_updated_at, article_title, article_external_id,
       journal_title, url, full_text_pdf, full_text_fetched_at, full_text_conversion_status, source_metadata,
@@ -694,7 +728,7 @@ const getProjectReviewServingBatchInsertSql = (projectId: string, articleIds: st
   `
 }
 
-const getProjectReviewServingFinalizeSql = (projectId: string) => {
+const getProjectReviewServingPromoteSql = (projectId: string) => {
   const projectLiteral = getSqlLiteral(projectId)
 
   return `
@@ -702,16 +736,232 @@ const getProjectReviewServingFinalizeSql = (projectId: string) => {
     UPDATE app.project_review_serving_generation
     SET active_generation = active_generation + 1,
         generation_updated_at = current_timestamp
-    WHERE project_id = ${projectLiteral};
-    DELETE FROM mart.review_article_filter_member
     WHERE project_id = ${projectLiteral}
-      AND generation < (SELECT active_generation - 1 FROM app.project_review_serving_generation WHERE project_id = ${projectLiteral});
-    DELETE FROM mart.review_article_serving
+      AND EXISTS (
+        SELECT 1
+        FROM mart.review_article_serving
+        WHERE project_id = ${projectLiteral}
+          AND generation = app.project_review_serving_generation.active_generation + 1
+      );
+    COMMIT;
+  `
+}
+
+const getProjectReviewServingOldGenerationCleanupThresholdSql = (projectLiteral: string) => {
+  return `(
+    SELECT active_generation - 1
+    FROM app.project_review_serving_generation
     WHERE project_id = ${projectLiteral}
-      AND generation < (SELECT active_generation - 1 FROM app.project_review_serving_generation WHERE project_id = ${projectLiteral});
-    DELETE FROM mart.review_article_serving_detail
-    WHERE project_id = ${projectLiteral}
-      AND generation < (SELECT active_generation - 1 FROM app.project_review_serving_generation WHERE project_id = ${projectLiteral});
+  )`
+}
+
+const getProjectReviewServingGenerationCleanupWhereSql = (projectLiteral: string) => {
+  return `project_id != ${projectLiteral} OR generation >= ${getProjectReviewServingOldGenerationCleanupThresholdSql(projectLiteral)}`
+}
+
+const getProjectReviewServingGenerationCleanupSql = (projectId: string) => {
+  const projectLiteral = getSqlLiteral(projectId)
+
+  return `
+    BEGIN TRANSACTION;
+    DROP TABLE IF EXISTS ${reviewArticleServingCleanupTableName};
+    CREATE TABLE ${reviewArticleServingCleanupTableName} (
+      project_id VARCHAR NOT NULL,
+      generation BIGINT NOT NULL,
+      article_id VARCHAR NOT NULL,
+      article_created_at TIMESTAMPTZ,
+      article_updated_at TIMESTAMPTZ,
+      article_title VARCHAR NOT NULL,
+      article_external_id VARCHAR,
+      journal_title VARCHAR,
+      url VARCHAR,
+      full_text_pdf VARCHAR,
+      full_text_fetched_at TIMESTAMPTZ,
+      full_text_conversion_status VARCHAR,
+      source_metadata JSON,
+      has_all_llm_judgments BOOLEAN NOT NULL,
+      llm_judged_prompt_count INTEGER NOT NULL,
+      llm_judged_prompt_ids VARCHAR[],
+      enabled_prompt_count INTEGER NOT NULL,
+      human_answered_prompt_count INTEGER NOT NULL,
+      human_answered_prompt_ids VARCHAR[],
+      has_all_human_answers BOOLEAN NOT NULL,
+      review_opened BOOLEAN NOT NULL,
+      review_sections_completed INTEGER NOT NULL,
+      latest_llm_created_at TIMESTAMPTZ,
+      latest_human_updated_at TIMESTAMPTZ,
+      latest_review_updated_at TIMESTAMPTZ,
+      serving_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      PRIMARY KEY(project_id, generation, article_id)
+    );
+    INSERT INTO ${reviewArticleServingCleanupTableName} (
+      project_id,
+      generation,
+      article_id,
+      article_created_at,
+      article_updated_at,
+      article_title,
+      article_external_id,
+      journal_title,
+      url,
+      full_text_pdf,
+      full_text_fetched_at,
+      full_text_conversion_status,
+      source_metadata,
+      has_all_llm_judgments,
+      llm_judged_prompt_count,
+      llm_judged_prompt_ids,
+      enabled_prompt_count,
+      human_answered_prompt_count,
+      human_answered_prompt_ids,
+      has_all_human_answers,
+      review_opened,
+      review_sections_completed,
+      latest_llm_created_at,
+      latest_human_updated_at,
+      latest_review_updated_at,
+      serving_updated_at
+    )
+    SELECT DISTINCT
+      project_id,
+      generation,
+      article_id,
+      article_created_at,
+      article_updated_at,
+      article_title,
+      article_external_id,
+      journal_title,
+      url,
+      full_text_pdf,
+      full_text_fetched_at,
+      full_text_conversion_status,
+      source_metadata,
+      has_all_llm_judgments,
+      llm_judged_prompt_count,
+      llm_judged_prompt_ids,
+      enabled_prompt_count,
+      human_answered_prompt_count,
+      human_answered_prompt_ids,
+      has_all_human_answers,
+      review_opened,
+      review_sections_completed,
+      latest_llm_created_at,
+      latest_human_updated_at,
+      latest_review_updated_at,
+      serving_updated_at
+    FROM mart.review_article_serving
+    WHERE ${getProjectReviewServingGenerationCleanupWhereSql(projectLiteral)};
+    DROP TABLE mart.review_article_serving;
+    ALTER TABLE ${reviewArticleServingCleanupTableName} RENAME TO review_article_serving;
+    CREATE INDEX IF NOT EXISTS idx_mart_review_article_serving_order
+    ON mart.review_article_serving(project_id, generation, has_all_llm_judgments, article_created_at, article_id);
+    COMMIT;
+  `
+}
+
+const getProjectReviewArticleFilterMemberGenerationCleanupSql = (projectId: string) => {
+  const projectLiteral = getSqlLiteral(projectId)
+
+  return `
+    BEGIN TRANSACTION;
+    DROP TABLE IF EXISTS ${reviewArticleFilterMemberCleanupTableName};
+    CREATE TABLE ${reviewArticleFilterMemberCleanupTableName} (
+      project_id VARCHAR NOT NULL,
+      generation BIGINT NOT NULL,
+      prompt_id VARCHAR NOT NULL,
+      answer_id INTEGER NOT NULL,
+      article_id VARCHAR NOT NULL,
+      article_created_at TIMESTAMPTZ,
+      numeric_answer_value BIGINT,
+      member_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      PRIMARY KEY(project_id, generation, prompt_id, answer_id, article_id)
+    );
+    INSERT INTO ${reviewArticleFilterMemberCleanupTableName} (
+      project_id,
+      generation,
+      prompt_id,
+      answer_id,
+      article_id,
+      article_created_at,
+      numeric_answer_value,
+      member_updated_at
+    )
+    SELECT DISTINCT
+      project_id,
+      generation,
+      prompt_id,
+      answer_id,
+      article_id,
+      article_created_at,
+      numeric_answer_value,
+      member_updated_at
+    FROM mart.review_article_filter_member
+    WHERE ${getProjectReviewServingGenerationCleanupWhereSql(projectLiteral)};
+    DROP TABLE mart.review_article_filter_member;
+    ALTER TABLE ${reviewArticleFilterMemberCleanupTableName} RENAME TO review_article_filter_member;
+    CREATE INDEX IF NOT EXISTS idx_mart_review_article_filter_member_lookup
+    ON mart.review_article_filter_member(project_id, generation, prompt_id, answer_id, article_id);
+    COMMIT;
+  `
+}
+
+const getProjectReviewServingDetailGenerationCleanupSql = (projectId: string) => {
+  const projectLiteral = getSqlLiteral(projectId)
+
+  return `
+    BEGIN TRANSACTION;
+    DROP TABLE IF EXISTS ${reviewArticleServingDetailCleanupTableName};
+    CREATE TABLE ${reviewArticleServingDetailCleanupTableName} (
+      project_id VARCHAR NOT NULL,
+      generation BIGINT NOT NULL,
+      article_id VARCHAR NOT NULL,
+      prompt_id VARCHAR NOT NULL,
+      prompt_order INTEGER,
+      judgment_id VARCHAR NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL,
+      article_created_at TIMESTAMPTZ,
+      article_updated_at TIMESTAMPTZ,
+      model_id VARCHAR NOT NULL,
+      answered_original VARCHAR,
+      answered_original_as_array VARCHAR[],
+      detail_updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+      PRIMARY KEY(project_id, generation, judgment_id)
+    );
+    INSERT INTO ${reviewArticleServingDetailCleanupTableName} (
+      project_id,
+      generation,
+      article_id,
+      prompt_id,
+      prompt_order,
+      judgment_id,
+      created_at,
+      article_created_at,
+      article_updated_at,
+      model_id,
+      answered_original,
+      answered_original_as_array,
+      detail_updated_at
+    )
+    SELECT DISTINCT
+      project_id,
+      generation,
+      article_id,
+      prompt_id,
+      prompt_order,
+      judgment_id,
+      created_at,
+      article_created_at,
+      article_updated_at,
+      model_id,
+      answered_original,
+      answered_original_as_array,
+      detail_updated_at
+    FROM mart.review_article_serving_detail
+    WHERE ${getProjectReviewServingGenerationCleanupWhereSql(projectLiteral)};
+    DROP TABLE mart.review_article_serving_detail;
+    ALTER TABLE ${reviewArticleServingDetailCleanupTableName} RENAME TO review_article_serving_detail;
+    CREATE INDEX IF NOT EXISTS idx_mart_review_article_serving_detail_lookup
+    ON mart.review_article_serving_detail(project_id, generation, article_id, prompt_order, created_at);
     COMMIT;
   `
 }
@@ -856,7 +1106,10 @@ const finalizeProjectReviewServing = async (
   projectId: string,
   dependencies: ProjectMartLargeRebuildExecutorDependencies = defaultProjectMartLargeRebuildExecutorDependencies,
 ) => {
-  await dependencies.database.run(getProjectReviewServingFinalizeSql(projectId))
+  await dependencies.database.run(getProjectReviewServingPromoteSql(projectId))
+  await dependencies.database.run(getProjectReviewServingGenerationCleanupSql(projectId))
+  await dependencies.database.run(getProjectReviewArticleFilterMemberGenerationCleanupSql(projectId))
+  await dependencies.database.run(getProjectReviewServingDetailGenerationCleanupSql(projectId))
 }
 
 const projectMartLargeRebuildExecutor = {

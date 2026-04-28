@@ -262,6 +262,68 @@ afterEach(() => {
   mock.restore()
 })
 
+test('skips a transient SQLite lock for one job and continues filling later jobs', async () => {
+  const getPromptsCalls = {count: 0}
+  const addReadyJobIds: string[] = []
+  const sqliteService: MockSqliteService = {
+    addReadyPrompts: async (jobId) => {
+      addReadyJobIds.push(jobId)
+
+      if (jobId === 'job-locked') {
+        throw new Error('SQLITE_BUSY: database is locked')
+      }
+
+      return 1
+    },
+    ensureOwnedLease: async () => {
+      return undefined
+    },
+    filterOutLocallyJudgedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    filterOutExistingQueuedPrompts: async (_jobId, entries) => {
+      return entries
+    },
+    getReadyCount: async () => {
+      return 0
+    },
+    getScanState: async () => {
+      return {cursor: null, exhaustedAt: null, lastProjectRefreshAckSeq: null, scanEpoch: 0, wrapVisibilityAckSeq: null}
+    },
+    hasJob: () => {
+      return true
+    },
+    initializeJob: async () => {
+      return undefined
+    },
+    setScanState: async () => {
+      return undefined
+    },
+    syncOwnedLeases: async () => {
+      return undefined
+    },
+  }
+
+  registerSharedMocks(sqliteService, getPromptsCalls, {
+    getPromptsImpl: async (_projectId, jobId) => {
+      return {nextCursor: null, promptEntries: [{articleId: `article-${jobId}`, promptId: 'prompt-1'}]}
+    },
+    runningJobs: [
+      getRunningJob({id: 'job-locked', projectId: 'project-locked'}),
+      getRunningJob({id: 'job-open', projectId: 'project-open'}),
+    ],
+  })
+
+  const module = (await import(
+    `${judgmentsJobsAddToQueueModulePath}?transient-sqlite-lock=${Date.now()}`
+  )) as JudgmentsJobsAddToQueueModule
+
+  await module.judgmentsJobsAddToQueue('server-1')
+
+  expect(addReadyJobIds).toEqual(['job-locked', 'job-open'])
+  expect(getPromptsCalls.count).toBe(2)
+})
+
 test('uses raw OLAP fallback when exhausted SQLite jobs are waiting on mart visibility', async () => {
   const getPromptsCalls = {count: 0}
   const preferRawFallbackValues: boolean[] = []

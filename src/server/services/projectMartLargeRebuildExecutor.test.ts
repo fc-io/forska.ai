@@ -179,6 +179,79 @@ test('project scope reset and batch rebuild populate bounded scope rows', () => 
   ])
 })
 
+test('project scope and judgment fact batch rebuilds are replay safe', () => {
+  const result = runScript<{
+    judgmentRows: Array<{articleId: string; judgmentId: string}>
+    scopeRows: Array<{articleId: string}>
+  }>(`
+    await database.run(\`
+      INSERT INTO app.prompt (id, original_text, content_hash)
+      VALUES ('prompt-replay-safe', 'Prompt replay safe', 'hash-replay-safe')
+    \`)
+    await database.run(\`
+      INSERT INTO app.judgment (
+        id,
+        article_id,
+        prompt_id,
+        model_id,
+        project_id,
+        snapshot_project_id,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images,
+        is_answered,
+        answered_original,
+        answered_original_as_array,
+        confidence_original
+      ) VALUES (
+        'judgment-replay-safe',
+        'article-1',
+        'prompt-replay-safe',
+        'large-rebuild-executor-model',
+        'large-rebuild-executor-project',
+        'large-rebuild-executor-project',
+        TRUE,
+        TRUE,
+        FALSE,
+        FALSE,
+        TRUE,
+        'yes',
+        ['yes'],
+        90
+      )
+    \`)
+
+    const batch = await executor.getProjectScopeSourceBatch({batchSize: 2, projectId: 'large-rebuild-executor-project'})
+
+    await executor.resetProjectScope('large-rebuild-executor-project')
+    await executor.resetProjectJudgmentFact('large-rebuild-executor-project')
+    await executor.rebuildProjectScopeBatch('large-rebuild-executor-project', batch)
+    await executor.rebuildProjectScopeBatch('large-rebuild-executor-project', batch)
+    await executor.rebuildProjectJudgmentFactBatch('large-rebuild-executor-project', ['article-1'])
+    await executor.rebuildProjectJudgmentFactBatch('large-rebuild-executor-project', ['article-1'])
+
+    const scopeRows = await database.queryJson(\`
+      SELECT article_id AS articleId
+      FROM mart.project_scope_article
+      WHERE project_id = 'large-rebuild-executor-project'
+      ORDER BY article_id ASC
+    \`)
+    const judgmentRows = await database.queryJson(\`
+      SELECT judgment_id AS judgmentId, article_id AS articleId
+      FROM mart.judgment_fact
+      WHERE project_id = 'large-rebuild-executor-project'
+      ORDER BY judgment_id ASC
+    \`)
+
+    console.log(JSON.stringify({judgmentRows, scopeRows}))
+    await database.close()
+  `)
+
+  expect(result.scopeRows).toEqual([{articleId: 'article-1'}, {articleId: 'article-4'}])
+  expect(result.judgmentRows).toEqual([{articleId: 'article-1', judgmentId: 'judgment-replay-safe'}])
+})
+
 test('project judgment fact reset and batch rebuild populate bounded project judgments', () => {
   const result = runScript<{rows: Array<{answer: string | null; articleId: string; judgmentId: string}>}>(`
     await database.run(\`
@@ -394,6 +467,7 @@ test('prompt answer fact reset and batch rebuild operate on bounded article sets
 
     await executor.resetProjectPromptAnswerFact('large-rebuild-executor-project')
     await executor.rebuildProjectPromptAnswerFactBatch('large-rebuild-executor-project', ['article-1'])
+    await executor.rebuildProjectPromptAnswerFactBatch('large-rebuild-executor-project', ['article-1'])
 
     const batchRows = await database.queryJson(\`
       SELECT article_id AS articleId, prompt_id AS promptId, answer_value AS answerValue
@@ -402,6 +476,7 @@ test('prompt answer fact reset and batch rebuild operate on bounded article sets
       ORDER BY article_id ASC, answer_value ASC
     \`)
 
+    await executor.rebuildProjectPromptAnswerFactBatch('large-rebuild-executor-project', ['article-2'])
     await executor.rebuildProjectPromptAnswerFactBatch('large-rebuild-executor-project', ['article-2'])
 
     const remainingRows = await database.queryJson(\`
@@ -944,7 +1019,7 @@ test('review answer dictionary reset and rebuild derive prompt answer ids from p
   ])
 })
 
-test('filter member rollup and serving staging rebuild end to end on bounded article sets', () => {
+test('filter member rollup and serving staging rebuild replay safely on bounded article sets', () => {
   const result = runScript<{
     filterRows: Array<{answerId: number; articleId: string; generation: string; promptId: string}>
     rollupRows: Array<{articleId: string; enabledPromptCount: number; hasAllLlmJudgments: boolean}>
@@ -1024,8 +1099,11 @@ test('filter member rollup and serving staging rebuild end to end on bounded art
     await executor.rebuildProjectReviewAnswerDictionary('large-rebuild-executor-project')
     await executor.setupProjectReviewServingStaging('large-rebuild-executor-project')
     await executor.rebuildProjectReviewArticleFilterMemberBatch('large-rebuild-executor-project', ['article-1', 'article-2'])
+    await executor.rebuildProjectReviewArticleFilterMemberBatch('large-rebuild-executor-project', ['article-1', 'article-2'])
     await executor.resetProjectReviewArticleRollup('large-rebuild-executor-project')
     await executor.rebuildProjectReviewArticleRollupBatch('large-rebuild-executor-project', ['article-1', 'article-2'])
+    await executor.rebuildProjectReviewArticleRollupBatch('large-rebuild-executor-project', ['article-1', 'article-2'])
+    await executor.rebuildProjectReviewServingBatch('large-rebuild-executor-project', ['article-1', 'article-2'])
     await executor.rebuildProjectReviewServingBatch('large-rebuild-executor-project', ['article-1', 'article-2'])
     await executor.finalizeProjectReviewServing('large-rebuild-executor-project')
 
@@ -1069,5 +1147,36 @@ test('filter member rollup and serving staging rebuild end to end on bounded art
   expect(result.servingRows).toEqual([
     {articleId: 'article-1', generation: '1'},
     {articleId: 'article-2', generation: '1'},
+  ])
+})
+
+test('review serving finalize rewrites stale generations without over-promoting', () => {
+  const result = runScript<{
+    activeGeneration: Array<{activeGeneration: string}>
+    generationRows: Array<{generation: string; rowCount: string; tableName: string}>
+  }>(`
+    await database.run("INSERT INTO app.project_review_serving_generation (project_id, active_generation) VALUES ('large-rebuild-executor-project', 2)")
+    await database.run("INSERT INTO mart.review_article_serving (project_id, generation, article_id, article_created_at, article_updated_at, article_title, has_all_llm_judgments, llm_judged_prompt_count, enabled_prompt_count, human_answered_prompt_count, has_all_human_answers, review_opened, review_sections_completed) VALUES ('large-rebuild-executor-project', 1, 'article-1', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z', 'Article 1', TRUE, 1, 1, 0, FALSE, FALSE, 0), ('large-rebuild-executor-project', 2, 'article-1', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z', 'Article 1', TRUE, 1, 1, 0, FALSE, FALSE, 0), ('large-rebuild-executor-project', 3, 'article-1', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z', 'Article 1', TRUE, 1, 1, 0, FALSE, FALSE, 0)")
+    await database.run("INSERT INTO mart.review_article_filter_member (project_id, generation, prompt_id, answer_id, article_id) VALUES ('large-rebuild-executor-project', 1, 'prompt-1', 1, 'article-1'), ('large-rebuild-executor-project', 2, 'prompt-1', 1, 'article-1'), ('large-rebuild-executor-project', 3, 'prompt-1', 1, 'article-1')")
+    await database.run("INSERT INTO mart.review_article_serving_detail (project_id, generation, article_id, prompt_id, judgment_id, created_at, model_id) VALUES ('large-rebuild-executor-project', 1, 'article-1', 'prompt-1', 'judgment-old', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', 'large-rebuild-executor-model'), ('large-rebuild-executor-project', 2, 'article-1', 'prompt-1', 'judgment-current', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', 'large-rebuild-executor-model'), ('large-rebuild-executor-project', 3, 'article-1', 'prompt-1', 'judgment-next', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', 'large-rebuild-executor-model')")
+
+    await executor.finalizeProjectReviewServing('large-rebuild-executor-project')
+    await executor.finalizeProjectReviewServing('large-rebuild-executor-project')
+
+    const activeGeneration = await database.queryJson("SELECT CAST(active_generation AS VARCHAR) AS activeGeneration FROM app.project_review_serving_generation WHERE project_id = 'large-rebuild-executor-project'")
+    const generationRows = await database.queryJson("SELECT 'filter_member' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_filter_member WHERE project_id = 'large-rebuild-executor-project' GROUP BY generation UNION ALL SELECT 'serving' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_serving WHERE project_id = 'large-rebuild-executor-project' GROUP BY generation UNION ALL SELECT 'serving_detail' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_serving_detail WHERE project_id = 'large-rebuild-executor-project' GROUP BY generation ORDER BY tableName ASC, generation ASC")
+
+    console.log(JSON.stringify({activeGeneration, generationRows}))
+    await database.close()
+  `)
+
+  expect(result.activeGeneration).toEqual([{activeGeneration: '3'}])
+  expect(result.generationRows).toEqual([
+    {generation: '2', rowCount: '1', tableName: 'filter_member'},
+    {generation: '3', rowCount: '1', tableName: 'filter_member'},
+    {generation: '2', rowCount: '1', tableName: 'serving'},
+    {generation: '3', rowCount: '1', tableName: 'serving'},
+    {generation: '2', rowCount: '1', tableName: 'serving_detail'},
+    {generation: '3', rowCount: '1', tableName: 'serving_detail'},
   ])
 })

@@ -357,6 +357,22 @@ test('mart refresh rebuilds large projects in article batches', () => {
                     events.push('prompt:reset')
                   }
 
+                  if (statement.includes('CREATE TABLE mart.prompt_answer_fact_project_refresh_rewrite')) {
+                    events.push('prompt:rewrite-created')
+                  }
+
+                  if (statement.includes('DROP TABLE mart.prompt_answer_fact;')) {
+                    events.push('prompt:rewrite-drop-old')
+                  }
+
+                  if (statement.includes('RENAME TO prompt_answer_fact')) {
+                    events.push('prompt:rewrite-swap')
+                  }
+
+                  if (statement.includes('CREATE INDEX IF NOT EXISTS idx_mart_prompt_answer_fact_lookup')) {
+                    events.push('prompt:rewrite-index')
+                  }
+
                   if (statement.includes('INSERT INTO mart.prompt_answer_fact (')) {
                     recordBatchEvent('prompt', statement)
                   }
@@ -417,6 +433,10 @@ test('mart refresh rebuilds large projects in article batches', () => {
 
   expect(result.events).toContain('scope:batch-1')
   expect(result.events).toContain('scope:batch-2')
+  expect(result.events).toContain('prompt:rewrite-created')
+  expect(result.events).toContain('prompt:rewrite-drop-old')
+  expect(result.events).toContain('prompt:rewrite-swap')
+  expect(result.events).toContain('prompt:rewrite-index')
   expect(result.events).toContain('prompt:batch-1')
   expect(result.events).toContain('prompt:batch-2')
   expect(result.events).toContain('filter-row:batch-1')
@@ -425,6 +445,7 @@ test('mart refresh rebuilds large projects in article batches', () => {
   expect(result.events).toContain('rollup:batch-2')
   expect(result.events).toContain('serving:batch-1')
   expect(result.events).toContain('serving:batch-2')
+  expect(result.events).not.toContain('prompt:reset')
   expect(result.events).not.toContain('prompt:all')
   expect(result.events).not.toContain('rollup:all')
   expect(result.events).not.toContain('serving:all')

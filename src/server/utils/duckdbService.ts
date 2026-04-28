@@ -118,6 +118,7 @@ const duckdbStartupRetryableErrorFragments = [
   'Failure while replaying WAL file',
   'Calling DatabaseManager::GetDefaultDatabase with no default database set',
 ]
+const duckdbAbortedTransactionErrorFragments = ['Current transaction is aborted']
 const duckdbRestartRequiredErrorFragments = [
   'database has been invalidated because of a previous fatal error',
   'must be restarted prior to being used again',
@@ -320,6 +321,14 @@ const isDuckdbRestartRequiredError = (error: unknown) => {
   const message = getNormalizedDuckdbError(error).message
 
   return duckdbRestartRequiredErrorFragments.some((fragment) => {
+    return message.includes(fragment)
+  })
+}
+
+const isDuckdbAbortedTransactionError = (error: unknown) => {
+  const message = getNormalizedDuckdbError(error).message
+
+  return duckdbAbortedTransactionErrorFragments.some((fragment) => {
     return message.includes(fragment)
   })
 }
@@ -1044,32 +1053,103 @@ const runDuckdbSingleStatementAndReadAll = async <T>(
   return reader.getRowObjectsJson() as T[]
 }
 
-const runDuckdbStatementsDirect = async (duckdbConnection: DuckDBConnection, statements: string[]): Promise<void> => {
-  const [currentStatement = ''] = statements
+const runDuckdbStatementsDirect = async (
+  duckdbConnection: DuckDBConnection,
+  statements: string[],
+  canRetryAfterRollback = true,
+): Promise<void> => {
+  try {
+    const [currentStatement = ''] = statements
 
-  if (!currentStatement) {
-    return
+    if (!currentStatement) {
+      return
+    }
+
+    await runDuckdbSingleStatement(duckdbConnection, currentStatement)
+    return await runDuckdbStatementsDirect(duckdbConnection, statements.slice(1), canRetryAfterRollback)
+  } catch (error) {
+    const shouldRetryAfterRollback = canRetryAfterRollback && isDuckdbAbortedTransactionError(error)
+    const shouldRollback = shouldRetryAfterRollback || hasDuckdbTransactionStart(statements)
+
+    if (!shouldRollback) {
+      throw error
+    }
+
+    const rollbackError = await getDuckdbRollbackError(duckdbConnection)
+
+    if (rollbackError !== null) {
+      throw getChainedDuckdbError(error, rollbackError, 'rollback failed')
+    }
+
+    if (!shouldRetryAfterRollback) {
+      throw error
+    }
+
+    try {
+      return await runDuckdbStatementsDirect(duckdbConnection, statements, false)
+    } catch (retryError) {
+      throw getChainedDuckdbError(error, retryError, 'rollback retry failed')
+    }
   }
-
-  await runDuckdbSingleStatement(duckdbConnection, currentStatement)
-  return runDuckdbStatementsDirect(duckdbConnection, statements.slice(1))
 }
 
 const runDuckdbStatementsAndReadLastDirect = async <T>(
   duckdbConnection: DuckDBConnection,
   statements: string[],
+  canRetryAfterRollback = true,
 ): Promise<T[]> => {
-  const [currentStatement = ''] = statements
+  try {
+    const [currentStatement = ''] = statements
 
-  if (!currentStatement) {
-    return []
+    if (!currentStatement) {
+      return []
+    }
+
+    if (statements.length === 1) {
+      return await runDuckdbSingleStatementAndReadAll<T>(duckdbConnection, currentStatement)
+    }
+
+    await runDuckdbSingleStatement(duckdbConnection, currentStatement)
+    return await runDuckdbStatementsAndReadLastDirect<T>(duckdbConnection, statements.slice(1), canRetryAfterRollback)
+  } catch (error) {
+    const shouldRetryAfterRollback = canRetryAfterRollback && isDuckdbAbortedTransactionError(error)
+    const shouldRollback = shouldRetryAfterRollback || hasDuckdbTransactionStart(statements)
+
+    if (!shouldRollback) {
+      throw error
+    }
+
+    const rollbackError = await getDuckdbRollbackError(duckdbConnection)
+
+    if (rollbackError !== null) {
+      throw getChainedDuckdbError(error, rollbackError, 'rollback failed')
+    }
+
+    if (!shouldRetryAfterRollback) {
+      throw error
+    }
+
+    try {
+      return await runDuckdbStatementsAndReadLastDirect<T>(duckdbConnection, statements, false)
+    } catch (retryError) {
+      throw getChainedDuckdbError(error, retryError, 'rollback retry failed')
+    }
   }
+}
 
-  return statements.length === 1
-    ? runDuckdbSingleStatementAndReadAll<T>(duckdbConnection, currentStatement)
-    : runDuckdbSingleStatement(duckdbConnection, currentStatement).then(() => {
-        return runDuckdbStatementsAndReadLastDirect<T>(duckdbConnection, statements.slice(1))
-      })
+const hasDuckdbTransactionStart = (statements: string[]) => {
+  return statements.some((statement) => {
+    return /^BEGIN\b/i.test(statement.trim())
+  })
+}
+
+const getDuckdbRollbackError = async (duckdbConnection?: DuckDBConnection): Promise<Error | null> => {
+  try {
+    await runDuckdbSingleStatement(duckdbConnection ?? getDuckdbConnection(), 'ROLLBACK')
+    return null
+  } catch (error) {
+    return getNormalizedDuckdbError(error)
+  }
 }
 
 const runDuckdbJsonQueryDirect = async <T>(statement: string): Promise<T[]> => {
@@ -1086,15 +1166,6 @@ const runDuckdbBackgroundJsonQueryDirect = async <T>(statement: string): Promise
 
 const runDuckdbBackgroundStatementDirect = async (statement: string) => {
   await runDuckdbStatementsDirect(getDuckdbBackgroundConnection(), splitDuckdbStatements(statement))
-}
-
-const getDuckdbRollbackError = async (): Promise<Error | null> => {
-  try {
-    await runDuckdbStatementDirect('ROLLBACK')
-    return null
-  } catch (error) {
-    return getNormalizedDuckdbError(error)
-  }
 }
 
 export const getDuckdbRuntimeConfig = () => {
