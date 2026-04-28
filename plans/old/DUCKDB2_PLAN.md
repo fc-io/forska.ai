@@ -61,7 +61,7 @@ Goal: remove the legacy analytics path only after DuckDB matches the old contrac
 
 - [x] Decide the no-auth runtime contract: single local actor/system actor, no login/session requirement, and a replacement for any current user-derived audit fields.
 - [x] Inventory current no-auth bridge/runtime callers: `src/auth.ts`, `src/server/utils/getLocalUser.ts`, `src/server/routes/UsersRoutes.ts`, `src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesGetOverview.ts`, `src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts`, `src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostOpenalex.ts`.
-- [x] Inventory remaining Better Auth/schema/tooling leftovers: `auth-schema.ts`, `src/seedAuth.ts`, `src/seed.ts`, `scripts/resetPassword.ts`, old schema-tooling configs, `src/server/utils/env.ts`, `package.json`, `docs/README_RUN_REMOTE.md`, `docs/README_SBATCH.md`.
+- [x] Inventory remaining Better Auth/schema/tooling leftovers: `auth-schema.ts`, `src/seedAuth.ts`, `src/seed.ts`, `scripts/resetPassword.ts`, old schema-tooling configs, `src/server/utils/env.ts`, `package.json`, and old remote-run docs.
 - [x] Remove Better Auth middleware/routes/session checks from server code and replace current user/session lookups with the chosen no-auth actor model.
 - [ ] Remove auth-gated UI flows, redirects, and user-management screens that only exist for login/session management; settings now reads the system actor/env only.
 - [x] Remove Better Auth tables/migrations/scripts/env vars after runtime code no longer depends on them.

@@ -10,7 +10,7 @@
 
 - `README.md` says the product goal is a local-first single-user app with no admin role, but `src/server/index.ts` still mounts routes such as `AdminInvestigateRoutes`, `ArticleAdminRoutes`, `DuckdbStudioRoutes`, `NvidiaSmiRoutes`, `LlmStatusRoutes`, `ApiProxyRoutes`, `TokensRoutes`, and `UsersRoutes`.
 - `src/appServer.ts` is a second HTTP entrypoint and proxies `/api/*` to the API server, so the public network surface is broader than `src/server/routes/` alone.
-- `package.json` still includes remote/HPC and operational scripts for Alvis, MN5, backups, remote DB merge flows, and SSH-based workflows that may not belong in a public repo.
+- `package.json` still includes operational scripts for backups, remote DB merge flows, and SSH-based workflows that may not belong in a public repo.
 - `.gitignore` already excludes `.env`, `data/`, `.secrets/`, logs, and imported assets, which is a good start, but that does not say anything about older commits.
 - The repo does not currently have a root `LICENSE`, `SECURITY.md`, or `CONTRIBUTING` file.
 - There is no current `.github/` workflow scaffold, so public-repo guardrails such as secret scans and denylisted-path checks will need to be added explicitly rather than assumed.
@@ -20,7 +20,7 @@
 - Which code, docs, scripts, and assets are safe to publish as-is?
 - What are all current network entrypoints, transitively mounted routes, proxy paths, and default bind interfaces?
 - Which current API routes are real product surface versus internal-only/debug/operator surface?
-- Which publication artifacts are safe to publish: Dockerfiles, compose files, CI config, sbatch files, remote-run docs, and release helpers?
+- Which publication artifacts are safe to publish: Dockerfiles, compose files, CI config, remote-run docs, and release helpers?
 - Which old routes still appear in git history, tags, or release artifacts?
 - Have any secrets, internal URLs, SSH aliases, hostnames, tokens, or private datasets ever been committed?
 - Is it safer to rewrite history or to publish a new clean public repo from an audited snapshot?
@@ -56,7 +56,7 @@
 - Exclude all old git history, private branches, and private tags from the public repo seed.
 - Exclude runtime and generated material: `.env*`, `data/`, `cache/`, `dist/`, `desktopBuild/`, `node_modules/`, `test-results/`, `tmp/`, logs, and local machine artifacts.
 - Exclude structured runtime telemetry such as `logs/runtime/` JSONL files and desktop `backend.log`; confirm those paths stay gitignored and never enter the public seed.
-- Exclude private infra and ops material by default: `forska-*.sbatch`, `old_sbatch/`, `mn5-tunnel-debug.txt`, remote backup helpers, cluster launch helpers, and any script tied to SSH aliases, stack roots, or private environments.
+- Exclude private infra and ops material by default: remote backup helpers, cluster launch helpers, and any script tied to SSH aliases, stack roots, or private environments.
 - Exclude non-public publication artifacts by default: `Dockerfile.sglang`, `Dockerfile.sglang-gateway`, remote-only compose overrides, remote-run docs, CI or release config with private runners or registries, and any release helper that assumes private infrastructure.
 - Exclude ambiguous or internal planning material by default: root plan files, `plans/`, `future/`, `tasks/`, and any document that is not clearly meant for public users or contributors.
 - Exclude all datasets, imported assets, cached PDFs, snapshots, and example files unless they are explicitly reviewed, licensed for redistribution, and scrubbed of sensitive content.
@@ -71,7 +71,7 @@
 - Start from a minimum public carry-over set, not from the full private repo contents.
 - Create an allowlist for what belongs in the public repo: source, tests, docs, sample data, migrations, and scripts needed for normal local development.
 - Create a denylist for what stays private: operational runbooks, backup flows, cluster launch helpers, internal hostnames, unpublished datasets, and anything tied to private infrastructure.
-- Inventory publication artifacts separately: Dockerfiles, compose files, CI/workflow config, release helpers, sbatch files, and remote-run docs. Mark each keep/remove/private.
+- Inventory publication artifacts separately: Dockerfiles, compose files, CI/workflow config, release helpers, and remote-run docs. Mark each keep/remove/private.
 - Record a simple release rule: public contributors should be able to clone, install, migrate, and run locally without private infra access.
 
 ### 2. Inventory the current server and API surface
@@ -146,7 +146,7 @@
 ### 10. Establish public-repo guardrails
 
 - Add a fresh public CI/workflow set rather than copying private automation blindly.
-- Run secret scanning on pull requests and on the default branch, and add denylisted-path checks for private docs, sbatch files, remote helpers, and restricted sample data.
+- Run secret scanning on pull requests and on the default branch, and add denylisted-path checks for private docs, remote helpers, and restricted sample data.
 - Keep a supported-route or network-surface manifest and treat unexpected endpoint or listener changes as review failures.
 - Add a fresh-clone smoke test based only on public docs so new contributors can validate the supported OSS flow without private infra access.
 - Require explicit review before adding new Dockerfiles, remote-run docs, infra scripts, or release helpers to the public repo.
@@ -156,9 +156,9 @@
 - Current tree network surface inventory: `rg "/api/|Routes|listen\\(" src/server src/appServer.ts docs scripts`
 - Current tree transitive mount search: `rg "\\.use\\([A-Za-z].*Routes" src/server`
 - Current tree hotspot search: `rg "AdminInvestigate|ArticleAdmin|DuckdbStudio|NvidiaSmi|LlmStatus|ApiProxy|Tokens|Users" src docs scripts`
-- Publication artifact search: `rg "alvis|mn5|ssh|sbatch|STACK_ROOT|SSH_ALIAS|docker" README.md docs scripts package.json Dockerfile* *.sbatch`
+- Publication artifact search: `rg "ssh|STACK_ROOT|SSH_ALIAS|docker" README.md docs scripts package.json Dockerfile*`
 - Runtime logging surface search: `rg "LOG_DIR|LOG_LEVEL|LOG_STDERR_LEVEL|FORSKA_RUNTIME_PROFILE|runtimeLogger|logs/runtime" src docs scripts`
-- History search by path or string: `git log --all -- src/server src/appServer.ts docs scripts Dockerfile* '*.sbatch'` and `git log --all -S"/api/" -- src/server src/appServer.ts docs scripts`
+- History search by path or string: `git log --all -- src/server src/appServer.ts docs scripts Dockerfile*` and `git log --all -S"/api/" -- src/server src/appServer.ts docs scripts`
 - Full-history secret scan: run a dedicated tool such as `gitleaks` or `trufflehog` against all refs, then manually review hits
 - Rewrite option if needed: `git filter-repo` or BFG, followed by a fresh scan of all remaining refs
 
@@ -200,6 +200,6 @@
 - Manual verify: the network surface inventory covers `src/server/index.ts`, `src/appServer.ts`, nested mounts, and proxy entrypoints
 - Manual verify: supported OSS listeners bind only to loopback by default, or every broader bind is documented and approved
 - Manual verify: full-history secret and sensitive-artifact scans rerun clean for all refs that could become public, or every hit is rotated/revoked and excluded from the public seed
-- Manual verify: public seed allowlist and denylist diff is reviewed, including scripts, Dockerfiles, remote docs, and `*.sbatch`
+- Manual verify: public seed allowlist and denylist diff is reviewed, including scripts, Dockerfiles, and remote docs
 - Manual verify: a fresh clone can `bun install`, `bun run db:mig`, `bun run build`, and boot the supported local OSS flow using only public docs
 - Manual verify: public-repo guardrails are enabled for secret scanning, denylisted-path checks, and unexpected route or listener changes
