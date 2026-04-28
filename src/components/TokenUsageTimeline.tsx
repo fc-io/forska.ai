@@ -11,9 +11,9 @@ import {
   type TokenUsageTimelineDateRange,
 } from './TokenUsageTimeline/TokenUsageTimelineDateRange.ts'
 
-type TimeInterval = '1min' | '5min' | '15min' | '1h' | '24h' | '1w' | '1m'
+export type TimeInterval = '1min' | '5min' | '15min' | '1h' | '24h' | '1w' | '1m'
 
-type TokenTimelineData = {
+export type TokenTimelineData = {
   timestamp: string
   totalPromptTokens: number
   totalCompletionTokens: number
@@ -152,6 +152,48 @@ const getTimelineYTicks = (maxValue: number) => {
 const shouldShowTimelineXLabel = (params: {index: number; total: number}) => {
   const step = Math.max(1, Math.ceil(params.total / 8))
   return params.index === 0 || params.index === params.total - 1 || params.index % step === 0
+}
+
+const getMinuteBucketStart = (date: Date) => {
+  const bucketStart = new Date(date)
+  bucketStart.setSeconds(0, 0)
+  return bucketStart
+}
+
+const isEmptyTokenTimelineBucket = (bucket: TokenTimelineData) => {
+  return (
+    Number(bucket.totalPromptTokens ?? 0) === 0
+    && Number(bucket.totalCompletionTokens ?? 0) === 0
+    && Number(bucket.totalTokens ?? 0) === 0
+    && Number(bucket.totalRequests ?? 0) === 0
+    && Number(bucket.totalSuccessPromptTokens ?? 0) === 0
+    && Number(bucket.totalSuccessCompletionTokens ?? 0) === 0
+    && Number(bucket.totalSuccessTokens ?? 0) === 0
+    && Number(bucket.totalFailedTokens ?? 0) === 0
+    && Number(bucket.count ?? 0) === 0
+  )
+}
+
+export const getTokenTimelineDisplayData = ({
+  data,
+  interval,
+  now = new Date(),
+}: {
+  data: TokenTimelineData[]
+  interval: TimeInterval
+  now?: Date
+}) => {
+  const trailingBucket = data.at(-1)
+  const currentMinuteStart = getMinuteBucketStart(now).getTime()
+  const trailingBucketTime = trailingBucket ? new Date(trailingBucket.timestamp).getTime() : null
+  const shouldDropTrailingBucket =
+    interval === '1min' && trailingBucket
+      ? trailingBucketTime !== null
+        && trailingBucketTime >= currentMinuteStart
+        && isEmptyTokenTimelineBucket(trailingBucket)
+      : false
+
+  return shouldDropTrailingBucket ? data.slice(0, -1) : data
 }
 
 type TokenUsageTimelineStatsProps = {
@@ -496,7 +538,7 @@ export const TokenUsageTimeline = (props: TokenUsageTimelineProps) => {
     if (!data || data.length === 0) {
       return []
     }
-    return data
+    return getTokenTimelineDisplayData({data, interval: selectedInterval()})
   })
 
   const computeBucketRange = (params: {interval: TimeInterval; timestamp: string; index: number; total: number}) => {
