@@ -187,6 +187,105 @@ test('cleanupStale finalizes terminal draining jobs without local SQLite files',
   expect(existsSync(sqlitePath)).toBe(false)
 })
 
+test('cleanupStale clears acked draining retention beyond the legacy small batch in one run', async () => {
+  if (!judgmentsJobsCleanupStale || !queryDatabase || !runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const {getProjectMartRefreshStateService} = await import('../../services/projectMartRefreshStateService.ts')
+  const service = sqliteService()
+  const refreshStateService = getProjectMartRefreshStateService()
+  const rowCount = 150
+  const timestamp = Date.now()
+  const connectionId = `cleanup-stale-retention-connection-${timestamp}`
+  const modelId = `cleanup-stale-retention-model-${timestamp}`
+  const projectId = `cleanup-stale-retention-project-${timestamp}`
+  const jobId = `cleanup-stale-retention-job-${timestamp}`
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+  const prompts = Array.from({length: rowCount}, (_, index) => {
+    return {
+      articleId: `cleanup-stale-retention-article-${timestamp}-${index}`,
+      promptId: `cleanup-stale-retention-prompt-${timestamp}-${index}`,
+    }
+  })
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Cleanup stale retention drain test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'paused', 'draining')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(jobId, prompts, 'server-a')
+
+  const claimedPrompts = await service.claimReadyPrompts(jobId, 'server-a', rowCount)
+
+  await Promise.all(
+    claimedPrompts.map((claimedPrompt, index) => {
+      return service.recordJudgmentSuccess(jobId, {
+        answeredOriginal: 'yes',
+        answeredOriginalAsArray: ['yes'],
+        articleId: claimedPrompt.articleId,
+        chunkingStrategy: null,
+        confidenceOriginal: 50,
+        createdAt: new Date(),
+        explanation: 'because',
+        isAnswered: true,
+        judgmentId: `cleanup-stale-retention-judgment-${timestamp}-${index}`,
+        modelId,
+        projectId,
+        promptId: claimedPrompt.promptId,
+        queuePromptId: claimedPrompt.recordId,
+        quotes: ['quote'],
+        rawResponseJson: {answer: 'yes'},
+        snapshotProjectId: projectId,
+        snapshotProjectModelName: 'Qwen 35B',
+        updatedAt: new Date(),
+        useAbstract: true,
+        useFulltext: false,
+        useFulltextNoImages: false,
+        useTitle: true,
+      })
+    }),
+  )
+
+  const claimedOutboxBatch = await service.claimPendingOutboxBatch({
+    claimedBy: 'server-a',
+    jobId,
+    maxBytes: 1024 * 1024,
+    maxRows: rowCount,
+  })
+  const [dirtyState] = await refreshStateService.markProjectsDirtyAtomically({projects: [{projectId}]})
+
+  await service.completeOutboxClaim({claimId: claimedOutboxBatch?.claim.claimId ?? '', jobId})
+  await service.setLastProjectRefreshAckSeq(jobId, dirtyState?.dirtyToken ?? null)
+
+  expect((await service.getHealthSnapshot(jobId)).pendingCompletionAckCount).toBe(0)
+  expect(await service.getOutboxCount(jobId)).toBe(rowCount)
+
+  await judgmentsJobsCleanupStale()
+
+  expect(
+    await queryDatabase<{storageState: string}>(`
+      SELECT storage_state AS storageState
+      FROM app.judgment_job
+      WHERE id = '${jobId}'
+    `),
+  ).toEqual([{storageState: 'drained'}])
+  expect(existsSync(sqlitePath)).toBe(false)
+})
+
 test('cleanupStale clears stale running prompts before finalizing draining jobs', async () => {
   if (!judgmentsJobsCleanupStale || !queryDatabase || !runDatabase || !sqliteService) {
     throw new Error('Test database not initialized')

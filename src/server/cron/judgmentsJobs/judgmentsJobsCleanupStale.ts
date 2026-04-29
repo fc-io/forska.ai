@@ -9,9 +9,22 @@ import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from './judgmentJobS
 import {getTransientJudgmentJobSqliteLockReasonSql} from './judgmentJobSqliteTransientLock.ts'
 import {abandonedSentPromptGraceMs} from './requeueAbandonedSentPrompts.ts'
 
-const sqliteRetentionCleanupBatchSize = 100
+type RetentionPruneResult = {outboxRowsDeleted: number; queuePromptRowsDeleted: number}
+
+const sqliteRetentionCleanupBatchSize = 1_000
 const sqliteCleanupTerminalStatuses = ['completed', 'paused', 'project_removed'] as const
 const transientLockedQuarantineRecoveryBatchSize = 5
+
+const getEmptyRetentionPruneResult = (): RetentionPruneResult => {
+  return {outboxRowsDeleted: 0, queuePromptRowsDeleted: 0}
+}
+
+const addRetentionPruneResults = (left: RetentionPruneResult, right: RetentionPruneResult): RetentionPruneResult => {
+  return {
+    outboxRowsDeleted: left.outboxRowsDeleted + right.outboxRowsDeleted,
+    queuePromptRowsDeleted: left.queuePromptRowsDeleted + right.queuePromptRowsDeleted,
+  }
+}
 
 const getDrainingSqliteJobIds = async () => {
   const sqliteJobIds = getJudgmentJobSqliteJobIds()
@@ -141,6 +154,43 @@ const repairOrphanedDrainingJobs = async (jobIds: string[]): Promise<void> => {
   return repairOrphanedDrainingJobs(jobIds.slice(1))
 }
 
+const pruneVisibilityAckedRetentionUntilStable = async ({
+  jobId,
+  serverJobId,
+  total = getEmptyRetentionPruneResult(),
+}: {
+  jobId: string
+  serverJobId: string
+  total?: RetentionPruneResult
+}): Promise<RetentionPruneResult> => {
+  const current = await getJudgmentJobSqliteService().pruneVisibilityAckedRetention({
+    jobId,
+    maxRows: sqliteRetentionCleanupBatchSize,
+    serverJobId,
+  })
+
+  return current.outboxRowsDeleted === 0 && current.queuePromptRowsDeleted === 0
+    ? total
+    : pruneVisibilityAckedRetentionUntilStable({jobId, serverJobId, total: addRetentionPruneResults(total, current)})
+}
+
+const pruneDrainingVisibilityAckedRetention = async ({
+  jobIds,
+  serverJobId,
+}: {
+  jobIds: string[]
+  serverJobId: string
+}): Promise<void> => {
+  const [currentJobId = ''] = jobIds
+
+  if (!currentJobId) {
+    return
+  }
+
+  await pruneVisibilityAckedRetentionUntilStable({jobId: currentJobId, serverJobId})
+  return pruneDrainingVisibilityAckedRetention({jobIds: jobIds.slice(1), serverJobId})
+}
+
 const recoverTransientLockedQuarantinedJobs = async ({
   jobIds,
   serverJobId,
@@ -177,6 +227,7 @@ export const judgmentsJobsCleanupStale = async (): Promise<void> => {
   await sqliteService.reapStaleOutboxClaims({staleBefore: sixteenMinutesAgo})
   await recoverDrainingQueueRows({jobIds: drainingJobIds, serverJobId})
   await sqliteService.pruneVisibilityAckedRetention({maxRows: sqliteRetentionCleanupBatchSize})
+  await pruneDrainingVisibilityAckedRetention({jobIds: drainingJobIds, serverJobId})
   await repairOrphanedDrainingJobs(drainingJobIds)
   await finalizeMissingLocalSqliteDrainingJobs(missingLocalSqliteDrainingJobIds)
   await sqliteService.finalizeDrainingJobs()
