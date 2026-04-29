@@ -1,11 +1,18 @@
+import {existsSync, mkdirSync, rmSync, unlinkSync, writeFileSync} from 'node:fs'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
+
 import {DuckDBInstance} from '@duckdb/node-api'
 import {expect, test} from 'bun:test'
-import {existsSync, unlinkSync} from 'fs'
 
 const removeFileIfExists = (filePath: string) => {
   if (existsSync(filePath)) {
     unlinkSync(filePath)
   }
+}
+
+const removePathIfExists = (path: string) => {
+  rmSync(path, {force: true, recursive: true})
 }
 
 test('duckdb service reuses the same embedded runtime across module reloads', async () => {
@@ -171,6 +178,125 @@ test('duckdb service retries startup after a recoverable WAL replay failure', ()
   const parsed = JSON.parse(result.stdout.toString()) as {createCount: number; rows: Array<{value: number}>}
 
   expect(parsed).toEqual({createCount: 2, rows: [{value: 1}]})
+})
+
+test('duckdb service quarantines a WAL that repeatedly fails replay during startup', () => {
+  const dataRoot = join(tmpdir(), `f1-duckdb-service-wal-recovery-${Date.now()}`)
+  const duckdbPath = join(dataRoot, 'test.duckdb')
+
+  mkdirSync(dataRoot, {recursive: true})
+  writeFileSync(duckdbPath, 'database')
+  writeFileSync(`${duckdbPath}.wal`, 'wal')
+
+  const result = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {existsSync, readdirSync} = await import('node:fs')
+        const {mock} = await import('bun:test')
+
+        const duckdbPath = ${JSON.stringify(duckdbPath)}
+        const serverRuntimeRoleModulePath = new URL('./src/server/utils/serverRuntimeRole.ts', 'file://' + process.cwd() + '/').pathname
+
+        let createCount = 0
+
+        void mock.module(serverRuntimeRoleModulePath, () => {
+          return {
+            ensureCurrentDuckdbOwnerLease: async () => {},
+            registerDuckdbOwnerDemotionHandler: () => {},
+            releaseCurrentDuckdbOwnerLease: async () => {},
+          }
+        })
+
+        void mock.module('@duckdb/node-api', () => {
+          class MockConnection {
+            async run() {}
+            async runAndReadAll() {
+              return {
+                getRowObjectsJson() {
+                  return [{value: 1}]
+                },
+              }
+            }
+            interrupt() {}
+            closeSync() {}
+          }
+
+          class MockInstance {
+            static async create() {
+              createCount += 1
+
+              if (createCount <= 2) {
+                throw new Error('INTERNAL Error: Failure while replaying WAL file "' + duckdbPath + '.wal": Calling DatabaseManager::GetDefaultDatabase with no default database set')
+              }
+
+              return new MockInstance()
+            }
+
+            async connect() {
+              return new MockConnection()
+            }
+
+            closeSync() {}
+          }
+
+          return {DuckDBConnection: MockConnection, DuckDBInstance: MockInstance}
+        })
+
+        const duckdbService = await import('./src/server/utils/duckdbService.ts?wal-recovery-test=' + Date.now())
+        const rows = await duckdbService.runDuckdbJsonQuery('SELECT 1 AS value')
+        const recoveryDirectory = duckdbPath + '.startup-recovery'
+        const recoveryFiles = existsSync(recoveryDirectory) ? readdirSync(recoveryDirectory).sort() : []
+        console.log(JSON.stringify({createCount, recoveryFiles, rows, walExists: existsSync(duckdbPath + '.wal')}))
+        await duckdbService.closeDuckdbService()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3999',
+        DUCKDB_MEMORY_LIMIT: '20GB',
+        DUCKDB_PATH: duckdbPath,
+        DUCKDB_TEMP_DIRECTORY: join(dataRoot, 'duckdb-temp'),
+        RUN_SERVER_FULL_TEXT_CONVERSION_CRON: 'false',
+        RUN_SERVER_FULL_TEXT_FETCHING: 'false',
+        SERVER_ROLE: 'maintenance-worker',
+        SERVER_DUCKDB_OWNER_URL: '',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.toString() || result.stdout.toString() || 'DuckDB WAL recovery subprocess failed')
+    }
+
+    const parsed = JSON.parse(result.stdout.toString()) as {
+      createCount: number
+      recoveryFiles: string[]
+      rows: Array<{value: number}>
+      walExists: boolean
+    }
+
+    expect(parsed.createCount).toBe(3)
+    expect(parsed.rows).toEqual([{value: 1}])
+    expect(parsed.walExists).toBe(false)
+    expect(
+      parsed.recoveryFiles.filter((fileName) => {
+        return fileName.endsWith('.duckdb')
+      }),
+    ).toHaveLength(1)
+    expect(
+      parsed.recoveryFiles.filter((fileName) => {
+        return fileName.endsWith('.failed-replay.wal')
+      }),
+    ).toHaveLength(1)
+  } finally {
+    removePathIfExists(dataRoot)
+  }
 })
 
 test('duckdb service restarts and retries after a fatal invalidation error', () => {

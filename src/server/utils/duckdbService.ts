@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto'
 import {mkdirSync} from 'node:fs'
-import {access, copyFile, mkdir, rm} from 'node:fs/promises'
+import {access, copyFile, mkdir, rename, rm} from 'node:fs/promises'
 import {availableParallelism, tmpdir} from 'node:os'
 import {basename, join} from 'node:path'
 
@@ -115,6 +115,10 @@ type EffectFiberFailure = {
 }
 
 const duckdbStartupRetryableErrorFragments = [
+  'Failure while replaying WAL file',
+  'Calling DatabaseManager::GetDefaultDatabase with no default database set',
+]
+const duckdbWalReplayRecoveryErrorFragments = [
   'Failure while replaying WAL file',
   'Calling DatabaseManager::GetDefaultDatabase with no default database set',
 ]
@@ -343,6 +347,27 @@ const getDuckdbStatementPreview = (statement: string) => {
   return normalizedStatement.length <= 280 ? normalizedStatement : `${normalizedStatement.slice(0, 277)}...`
 }
 
+const getDuckdbRecoveryPathPart = () => {
+  return `${new Date().toISOString().replaceAll(':', '-')}.${randomUUID()}`
+}
+
+const isMissingFileError = (error: unknown) => {
+  return error instanceof Error && 'code' in error && error.code === 'ENOENT'
+}
+
+const pathExists = async (filePath: string) => {
+  try {
+    await access(filePath)
+    return true
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return false
+    }
+
+    throw error
+  }
+}
+
 const getDuckdbErrorWithStatementContext = (error: unknown, label: string, statement: string) => {
   const normalizedError = getNormalizedDuckdbError(error)
   const statementContext = `${label}: ${getDuckdbStatementPreview(statement)}`
@@ -403,6 +428,60 @@ const isDuckdbStartupRetryableError = (error: unknown) => {
 
   return duckdbStartupRetryableErrorFragments.some((fragment) => {
     return message.includes(fragment)
+  })
+}
+
+const isDuckdbWalReplayRecoveryError = (error: unknown) => {
+  const message = getNormalizedDuckdbError(error).message
+
+  return duckdbWalReplayRecoveryErrorFragments.every((fragment) => {
+    return message.includes(fragment)
+  })
+}
+
+const copyDuckdbDatabaseBeforeWalRecovery = async ({
+  databaseBackupPath,
+  databasePath,
+}: {
+  databaseBackupPath: string
+  databasePath: string
+}) => {
+  if (!(await pathExists(databasePath))) {
+    return null
+  }
+
+  await copyFile(databasePath, databaseBackupPath)
+  return databaseBackupPath
+}
+
+const quarantineFailedDuckdbWalReplay = async (runtimeConfig: DuckdbRuntimeConfig, error: unknown) => {
+  if (runtimeConfig.databasePath === ':memory:') {
+    throw new Error('DuckDB WAL replay recovery is unavailable for :memory: databases')
+  }
+
+  const walPath = `${runtimeConfig.databasePath}.wal`
+
+  if (!(await pathExists(walPath))) {
+    throw new Error(`DuckDB WAL replay recovery could not find ${walPath}`)
+  }
+
+  const recoveryPathPart = getDuckdbRecoveryPathPart()
+  const recoveryDirectory = `${runtimeConfig.databasePath}.startup-recovery`
+  const databaseBackupPath = join(recoveryDirectory, `${recoveryPathPart}.duckdb`)
+  const walQuarantinePath = join(recoveryDirectory, `${recoveryPathPart}.failed-replay.wal`)
+
+  await mkdir(recoveryDirectory, {recursive: true})
+  const preservedDatabasePath = await copyDuckdbDatabaseBeforeWalRecovery({
+    databaseBackupPath,
+    databasePath: runtimeConfig.databasePath,
+  })
+  await rename(walPath, walQuarantinePath)
+  writeRuntimeFailureLogEvent({
+    attrs: {databasePath: runtimeConfig.databasePath, error, preservedDatabasePath, walPath, walQuarantinePath},
+    event: 'duckdb.startup.wal-quarantine',
+    message: '[duckdb] quarantined failed startup WAL replay; retrying from last checkpoint',
+    severity: 'WARN',
+    terminalArgs: [`database_backup=${preservedDatabasePath ?? 'none'}`, `wal=${walQuarantinePath}`],
   })
 }
 
@@ -805,21 +884,42 @@ const ensureStartedDuckdbProcess = async () => {
     return duckdbServiceState.startupPromise
   }
 
-  duckdbServiceState.startupPromise = startDuckdbProcess()
-    .catch(async (error) => {
-      if (!isDuckdbStartupRetryableError(error)) {
-        throw error
+  const retryAfterRecoverableStartupFailure = async (error: unknown) => {
+    if (!isDuckdbStartupRetryableError(error)) {
+      throw error
+    }
+
+    writeRuntimeFailureLogEvent({
+      attrs: {error},
+      event: 'duckdb.startup.retry',
+      message: '[duckdb] retrying startup after recoverable initialization failure',
+      severity: 'WARN',
+      terminalArgs: [error],
+    })
+
+    try {
+      return await startDuckdbProcess()
+    } catch (retryError) {
+      if (!isDuckdbWalReplayRecoveryError(retryError)) {
+        throw retryError
       }
 
-      writeRuntimeFailureLogEvent({
-        attrs: {error},
-        event: 'duckdb.startup.retry',
-        message: '[duckdb] retrying startup after recoverable initialization failure',
-        severity: 'WARN',
-        terminalArgs: [error],
-      })
-      return startDuckdbProcess()
-    })
+      try {
+        await quarantineFailedDuckdbWalReplay(getDuckdbRuntimeConfigValue(), retryError)
+      } catch (recoveryError) {
+        throw getChainedDuckdbError(retryError, recoveryError, 'WAL replay recovery failed')
+      }
+
+      try {
+        return await startDuckdbProcess()
+      } catch (recoveryRetryError) {
+        throw getChainedDuckdbError(retryError, recoveryRetryError, 'WAL replay recovery retry failed')
+      }
+    }
+  }
+
+  duckdbServiceState.startupPromise = startDuckdbProcess()
+    .catch(retryAfterRecoverableStartupFailure)
     .finally(() => {
       duckdbServiceState.startupPromise = null
     })
