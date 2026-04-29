@@ -18,12 +18,12 @@
 - [x] Audit the direct `process.env` reads outside `src/server/utils/env.ts`.
 - [ ] Remove or centralize remaining direct `process.env` reads.
 - [x] Mark legacy old-stack script envs separately so they do not block app-first cleanup.
-- Remaining script env users kept separate: launcher/operator scripts `scripts/alvisCommon.ts`, `scripts/alvisSglangPull.ts`, `scripts/sbatchPut.ts`; legacy old-stack `scripts/env.ts`, `scripts/dbReindexAll.ts`, `scripts/dbRepairAllIndexes.ts`, `scripts/dbRepairJudgmentsIndex.ts`, `src/db/getDatabaseUrl.ts`.
+- Remaining script env users kept separate: launcher/operator scripts now live in the sibling HPC tooling project; legacy old-stack `scripts/env.ts`, `scripts/dbReindexAll.ts`, `scripts/dbRepairAllIndexes.ts`, `scripts/dbRepairJudgmentsIndex.ts`, `src/db/getDatabaseUrl.ts`.
 
 ## Next Focus
 
 - [x] Keep local/manual provider base URLs and worker URLs in DuckDB via provider connections, not env.
-- [x] Keep sbatch/Slurm worker URLs coming from launcher/runtime discovery rather than persisted app config.
+- [x] Keep remote worker URLs coming from launcher/runtime discovery rather than persisted app config.
 - [x] Remove global `WORKER_URLS` as product config; only keep short-lived runtime wiring if a launcher still needs to pass discovered URLs.
 - [x] Remove global env usage for `SGLANG_MODEL`, `SGLANG_CONTEXT_LENGTH`, and `CODEX_CONTEXT_LENGTH`.
 - [x] Prefer deriving model identity/capabilities from provider/runtime discovery; only persist per-model/per-provider capability data when discovery is missing.
@@ -54,7 +54,7 @@
 
 - [x] Move away from global `WORKER_URLS` env in app runtime.
 - [x] Keep local/manual provider worker URLs in DuckDB only where they are real saved app config.
-- [x] Keep sbatch/Slurm worker URLs out of persisted app config; derive them from launch/runtime state.
+- [x] Keep remote worker URLs out of persisted app config; derive them from launch/runtime state.
 - [x] Decide config shape: keep provider/model-owned config in DuckDB for provider/model settings; only add `app.runtime_config` later if true cross-provider runtime state appears.
 - [x] Remove global env usage for `SGLANG_MODEL`, `SGLANG_CONTEXT_LENGTH`, and `CODEX_CONTEXT_LENGTH`.
 - [x] Prefer deriving `SGLANG_MODEL` from launch/runtime/provider state rather than storing one global value.
@@ -93,6 +93,6 @@
 
 - [x] A normal user can install and run Forska without editing shell env for core product features.
 - [x] Unpaywall contact email and persisted local provider/model config live in DuckDB and the UI/API.
-- [x] Remote sbatch/Slurm worker URLs are runtime-discovered rather than stored as app config.
+- [x] Remote worker URLs are runtime-discovered rather than stored as app config.
 - [x] `OPENALEX_MAILTO` and the OpenAlex article import flow are gone.
 - [x] The remaining env surface is small, explicit, and operational rather than product-facing.

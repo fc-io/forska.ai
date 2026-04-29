@@ -3,7 +3,7 @@
 ## Goal
 
 - Let each provider connection set its own API-server cap for `Prompts in Progress`.
-- Keep this separate from SGLang sbatch/runtime settings like `SGLANG_API_MAX_INFLIGHT_REQUESTS`.
+- Keep this separate from SGLang runtime launch settings like `SGLANG_API_MAX_INFLIGHT_REQUESTS`.
 - Apply the cap across all jobs using the same provider connection, not per job.
 - Keep current behavior unchanged when the provider-level value is unset.
 

@@ -11,7 +11,7 @@
 
 - `scripts/getForskaRuntimeEnv.ts` + `src/server/utils/getInferenceRuntimeConfig.ts` produce one global runtime snapshot.
 - `src/server/providers/providerRuntimeState.ts` applies that snapshot by `providerKind`, so one active SGLang tunnel can affect every `sglang` connection in runtime mode.
-- `bun run dev:server` vs `bun run alvis:dev:server` is operational knowledge, not provider state.
+- `bun run dev:server` vs cluster-specific dev-server commands is operational knowledge, not provider state.
 
 ## Core Decision
 
@@ -24,7 +24,7 @@
 ## Scope Now
 
 - Detect live local endpoints from saved manual URLs.
-- Detect remote runtimes from launcher metadata written by `alvis:launch*` / `mn5:launch` plus local tunnel endpoints.
+- Detect remote runtimes from launcher metadata plus local tunnel endpoints.
 - Probe detected endpoints for served models via `/v1/models` or provider-native discovery.
 - Attach detection state to provider connections and saved models in `/providers`.
 - Use matched runtime for connection test, model sync, runtime guard, and judgments.
@@ -68,7 +68,7 @@
   - saved `baseURL` equals detected local or remote base URL
   - saved `manualWorkerUrls` intersect detected local or remote worker URLs
 - Boost match when saved model ids intersect detected served models.
-- Add optional source hints later if needed, e.g. `alvis`, `mn5`, `sshJumpHost`.
+- Add optional source hints later if needed, e.g. `sourceCluster` and `sshJumpHost`.
 - Never auto-adopt on provider kind alone.
 
 ## Implementation Order
@@ -76,7 +76,7 @@
 1. Detection source layer.
    - Add a server-side detector service with TTL + backoff, not aggressive polling.
    - Local detector probes saved provider endpoints.
-   - Launcher detector reads local runtime metadata files from `alvis:launch*` / `mn5:launch` instead of relying on global env.
+   - Launcher detector reads local runtime metadata files instead of relying on global env.
    - Treat active judgments/runtime usage as freshness; avoid extra probe traffic while the runtime is clearly alive.
 2. Launcher metadata.
    - Make launch scripts write a small local runtime record on start, refresh, and stop.
@@ -87,19 +87,19 @@
    - Move `providerRuntimeState` from global-by-kind behavior to per-connection overlay behavior.
 4. API + UI.
    - Extend `/api/provider-connections` payload with detection and match state.
-   - Show states like `matched local`, `matched Alvis`, `ambiguous`, `manual only`.
+   - Show states like `matched local`, `matched remote`, `ambiguous`, `manual only`.
    - Show detected served models and why a connection did or did not match.
 5. Model/runtime use sites.
    - Make connection test, model sync, runtime guard, and judgments use matched effective runtime.
    - Mark saved models as `available now` when detected runtime serves them.
 6. Migration + cleanup.
    - Keep current global `FORSKA_RUNTIME_*` flow only as a compatibility bridge.
-   - Remove `alvis:dev:server` / `mn5:dev:server` specialness once ordinary `dev:server` uses provider-aware detection.
+   - Remove cluster-specific dev-server specialness once ordinary `dev:server` uses provider-aware detection.
 
 ## Done Criteria
 
 - A manual local SGLang provider auto-matches a live local endpoint.
-- A manual Alvis or MN5 provider auto-matches the running tunneled job without `*:dev:server`.
+- A manual remote provider auto-matches the running tunneled job without cluster-specific dev-server commands.
 - Ambiguous matches stay visible and unadopted.
 - Judgment job creation uses the matched runtime, not the old global fallback.
 - Provider page shows which saved models are currently served.
@@ -115,6 +115,6 @@
 - `bun run build`
 - Browser verify:
   - local manual provider matches a live local runtime
-  - manual Alvis or MN5 provider matches a live tunneled runtime
+  - manual remote provider matches a live tunneled runtime
   - ambiguous match stays non-adopted and visible
   - creating a judgment job succeeds through the matched runtime

@@ -1,6 +1,6 @@
 {
   "name": "Provider Inflight Limit Plan",
-  "description": "Add a provider-connection level API-server cap for Prompts in Progress so Forska can limit concurrency per provider, including Codex, independently of runtime or sbatch settings.",
+  "description": "Add a provider-connection level API-server cap for Prompts in Progress so Forska can limit concurrency per provider, including Codex, independently of runtime launch settings.",
   "branchName": "ralph/provider-inflight-limit",
   "userStories": [
     {
