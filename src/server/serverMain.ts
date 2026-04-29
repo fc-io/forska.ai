@@ -221,6 +221,7 @@ writeRuntimeOperatorLogEvent({
   attrs: {
     apiServerPort: env.API_SERVER_PORT,
     bunConfigMaxHttpRequests: inferenceRuntimeConfig.bunConfigMaxHttpRequests,
+    duckdbPath: env.DUCKDB_PATH,
     gpuGpusPerNode: inferenceRuntimeConfig.gpuGpusPerNode,
     gpuNnodes: inferenceRuntimeConfig.gpuNnodes,
     gpuShape: inferenceRuntimeConfig.gpuShape,
@@ -232,7 +233,7 @@ writeRuntimeOperatorLogEvent({
     dpSize: inferenceRuntimeConfig.dpSize,
   },
   event: 'server.startup.port-bound',
-  message: `🦊 Elysia is running on :${env.API_SERVER_PORT} (nodes=${inferenceRuntimeConfig.gpuNnodes}, gpus/node=${inferenceRuntimeConfig.gpuGpusPerNode}, total_gpus=${inferenceRuntimeConfig.gpuTotalGpus}, shape=${inferenceRuntimeConfig.gpuShape ?? 'not set'}, tp=${inferenceRuntimeConfig.tpSize}, pp=${inferenceRuntimeConfig.ppSize}, dp=${inferenceRuntimeConfig.dpSize}, SGLANG_MAX_RUNNING_REQUESTS=${inferenceRuntimeConfig.sglangMaxRunningRequests}, SGLANG_API_MAX_INFLIGHT_REQUESTS=${inferenceRuntimeConfig.sglangApiMaxInflightRequests}, BUN_CONFIG_MAX_HTTP_REQUESTS=${inferenceRuntimeConfig.bunConfigMaxHttpRequests ?? 'not set'})`,
+  message: `[duckdb] path=${env.DUCKDB_PATH}\n🦊 Elysia is running on :${env.API_SERVER_PORT} (nodes=${inferenceRuntimeConfig.gpuNnodes}, gpus/node=${inferenceRuntimeConfig.gpuGpusPerNode}, total_gpus=${inferenceRuntimeConfig.gpuTotalGpus}, shape=${inferenceRuntimeConfig.gpuShape ?? 'not set'}, tp=${inferenceRuntimeConfig.tpSize}, pp=${inferenceRuntimeConfig.ppSize}, dp=${inferenceRuntimeConfig.dpSize}, SGLANG_MAX_RUNNING_REQUESTS=${inferenceRuntimeConfig.sglangMaxRunningRequests}, SGLANG_API_MAX_INFLIGHT_REQUESTS=${inferenceRuntimeConfig.sglangApiMaxInflightRequests}, BUN_CONFIG_MAX_HTTP_REQUESTS=${inferenceRuntimeConfig.bunConfigMaxHttpRequests ?? 'not set'})`,
   severity: 'INFO',
 })
 writeRuntimeOperatorLogEvent({
