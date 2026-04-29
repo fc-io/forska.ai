@@ -4,10 +4,7 @@ import {dirname, join} from 'node:path'
 
 import {spawn, type Subprocess} from 'bun'
 
-import {
-  getBackgroundServerEnvAsync,
-  getBackgroundServerStackConfigAsync,
-} from '../src/server/utils/backgroundServerStack.ts'
+import {getBackgroundServerEnv, getBackgroundServerStackConfig} from '../src/server/utils/backgroundServerStack.ts'
 import {readJudgeWorkerJournalLock} from '../src/server/utils/judgeWorkerJournalIdentity.ts'
 
 type ManagedRole = 'api' | 'judge' | 'maintenance'
@@ -38,7 +35,7 @@ const forcedKillTimeoutMs = 5_000
 const duckdbOwnerPollIntervalMs = 250
 const parentMonitorIntervalMs = 1_000
 
-const config = await getBackgroundServerStackConfigAsync(process.env)
+const config = getBackgroundServerStackConfig(process.env)
 const serverStackLockPath = join(
   tmpdir(),
   'forska-server-stack',
@@ -266,7 +263,7 @@ const stopConflictingJudgeWorker = async (envValues: Record<string, string | und
 }
 
 const startServerProcess = async (role: ManagedRole): Promise<ServerProcess> => {
-  const env = await getBackgroundServerEnvAsync({baseEnv: process.env, role: getBackgroundServerRole(role)})
+  const env = getBackgroundServerEnv({baseEnv: process.env, role: getBackgroundServerRole(role)})
 
   if (role === 'judge') {
     await stopConflictingJudgeWorker(env)
