@@ -5,6 +5,7 @@ import {dirname} from 'node:path'
 import {validateReadOnlyDuckdbService} from '../services/readOnlyDuckdbService.ts'
 import {getEnv} from './env.ts'
 import {runtimeReadyPath} from './runtimeReadyContract.ts'
+import {canCurrentServerOwnDuckdb} from './serverRuntimeRole.ts'
 
 export type OwnerlessReadableBackend = 'live-read-only-duckdb' | 'ownerless-control-state' | 'process-runtime-state'
 
@@ -92,6 +93,10 @@ const validateOwnerlessControlStateBackend = async () => {
 }
 
 const validateLiveReadOnlyDuckdbBackend = async () => {
+  if (canCurrentServerOwnDuckdb()) {
+    throw new Error('live read-only DuckDB backend is not used by DuckDB owner roles')
+  }
+
   await validateReadOnlyDuckdbService('api-read-only')
 }
 
