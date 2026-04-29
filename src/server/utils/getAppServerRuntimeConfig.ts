@@ -40,7 +40,7 @@ export const getAppServerRuntimeConfig = ({
   const parsed = appServerRuntimeShape.assert({
     APP_SERVER_API_HOST: getFirstConfiguredValue({
       envValues,
-      fallback: 'localhost',
+      fallback: '127.0.0.1',
       keys: ['APP_SERVER_API_HOST', 'SERVER_HOST', 'API_HOST'],
     }),
     APP_SERVER_API_PORT: getFirstConfiguredValue({

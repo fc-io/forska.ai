@@ -103,7 +103,9 @@ const appServerRuntimeConfig = getAppServerRuntimeConfig()
 const desktopAllowedOrigins = process.env.FORSKA_DESKTOP_MODE === 'true' ? ['null', 'views://mainview'] : []
 const allowedOrigins = [
   `http://localhost:${env.VITE_PORT}`,
+  `http://127.0.0.1:${env.VITE_PORT}`,
   `http://localhost:${appServerRuntimeConfig.port}`,
+  `http://127.0.0.1:${appServerRuntimeConfig.port}`,
   ...desktopAllowedOrigins,
 ]
 

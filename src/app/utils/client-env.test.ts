@@ -28,3 +28,21 @@ test('keeps the direct origin for normal web mode', () => {
     }),
   ).toBe('http://127.0.0.1:3001')
 })
+
+test('uses the direct API server for the primary local vite profile', () => {
+  expect(resolveClientApiOrigin({locationOrigin: 'http://localhost:3000', locationProtocol: 'http:'})).toBe(
+    'http://127.0.0.1:3001',
+  )
+})
+
+test('uses the direct API server for the secondary local vite profile', () => {
+  expect(resolveClientApiOrigin({locationOrigin: 'http://127.0.0.1:3100', locationProtocol: 'http:'})).toBe(
+    'http://127.0.0.1:3101',
+  )
+})
+
+test('keeps same-origin API calls outside local vite profiles', () => {
+  expect(resolveClientApiOrigin({locationOrigin: 'http://localhost:8080', locationProtocol: 'http:'})).toBe(
+    'http://localhost:8080',
+  )
+})

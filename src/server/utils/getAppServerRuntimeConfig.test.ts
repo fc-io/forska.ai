@@ -5,7 +5,7 @@ import {getAppServerRuntimeConfig} from './getAppServerRuntimeConfig.ts'
 test('uses local app-server defaults without env files', () => {
   const runtimeConfig = getAppServerRuntimeConfig({envValues: {}})
 
-  expect(runtimeConfig.apiHost).toBe('localhost')
+  expect(runtimeConfig.apiHost).toBe('127.0.0.1')
   expect(runtimeConfig.apiPort).toBe(3001)
   expect(runtimeConfig.apiScheme).toBe('http')
   expect(runtimeConfig.logDir).toBe(`${process.cwd()}/logs/runtime/local`)
