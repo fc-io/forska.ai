@@ -1,4 +1,4 @@
-import {useQuery} from '@tanstack/solid-query'
+import {useQuery, useQueryClient} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
 import {createEffect, createMemo, createSignal, For, on, onMount, Show} from 'solid-js'
 
@@ -9,8 +9,11 @@ import {
 import {Button} from '../../../../components/ui/button'
 import {
   type ComparisonProjectJudgmentsColumn,
+  type ComparisonProjectJudgmentsPage,
   fetchComparisonProjectJudgmentsMetadata,
   fetchComparisonProjectJudgmentsPage,
+  resetComparisonProjectConflictResolution,
+  setComparisonProjectConflictResolution,
 } from '../../../../services/comparisonProjectsService'
 import {getOrderedComparisonProjectColumns} from '../../../../utils/comparisonProjectColumnOrder.ts'
 import {
@@ -53,6 +56,41 @@ const getRangeLabel = (page: number, limit: number, totalCount: number) => {
 
 const getHumanJudgmentModeLabel = (humanJudgmentMode: 'prompt' | 'summary') => {
   return humanJudgmentMode === 'summary' ? 'Summary overall decisions' : 'Prompt-by-prompt decisions'
+}
+
+const getConflictResolutionPromptLabel = (prompt: {
+  criteriaDisposition: string | null
+  criteriaSectionKey: string | null
+  criteriaSectionLabel: string | null
+  promptLabel: string
+}) => {
+  const criteriaLabel = [prompt.criteriaDisposition, prompt.criteriaSectionLabel ?? prompt.criteriaSectionKey]
+    .filter(Boolean)
+    .join(' · ')
+
+  return criteriaLabel ? `${prompt.promptLabel} (${criteriaLabel})` : prompt.promptLabel
+}
+
+const getPromptTypeOptions = (type: string | null) => {
+  const matches = type?.match(/['"]([^'"]+)['"]/g) ?? []
+
+  return matches.map((match) => {
+    return match.slice(1, -1)
+  })
+}
+
+const getUniqueConflictResolutionOptions = (options: Array<{label: string; value: string}>) => {
+  return Array.from(
+    options
+      .reduce<Map<string, {label: string; value: string}>>((optionMap, option) => {
+        if (!optionMap.has(option.value)) {
+          optionMap.set(option.value, option)
+        }
+
+        return optionMap
+      }, new Map<string, {label: string; value: string}>())
+      .values(),
+  )
 }
 
 const getHumanColumnSourceProjectId = (comparisonProject?: {
@@ -116,6 +154,7 @@ const CompareProjectJudgmentsPage = () => {
   const params = Route.useParams()
   const search = Route.useSearch()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const initialUrlState = getInitialCompareProjectJudgmentsUrlState(search() as Record<string, unknown>)
   const comparisonProjectId = () => {
     const routeParams = params()
@@ -128,6 +167,8 @@ const CompareProjectJudgmentsPage = () => {
   const [differenceFilter, setDifferenceFilter] = createSignal<ComparisonProjectDifferenceFilter>(
     initialUrlState.differenceFilter,
   )
+  const [conflictResolutionPendingArticleId, setConflictResolutionPendingArticleId] = createSignal<string | null>(null)
+  const [conflictResolutionError, setConflictResolutionError] = createSignal<string | null>(null)
   const [searchInitialized, setSearchInitialized] = createSignal(false)
 
   onMount(() => {
@@ -144,16 +185,19 @@ const CompareProjectJudgmentsPage = () => {
       staleTime: 5 * 60 * 1000,
     }
   })
+  const getCurrentJudgmentsPageQueryKey = () => {
+    return [
+      'comparison-project-judgments-page',
+      comparisonProjectId(),
+      currentPage(),
+      pageLimit(),
+      rowFilter(),
+      differenceFilter(),
+    ] as const
+  }
   const judgmentsPageQuery = useQuery(() => {
     return {
-      queryKey: [
-        'comparison-project-judgments-page',
-        comparisonProjectId(),
-        currentPage(),
-        pageLimit(),
-        rowFilter(),
-        differenceFilter(),
-      ],
+      queryKey: getCurrentJudgmentsPageQueryKey(),
       queryFn: () => {
         return fetchComparisonProjectJudgmentsPage(
           comparisonProjectId(),
@@ -186,6 +230,21 @@ const CompareProjectJudgmentsPage = () => {
         }
       },
     )
+  })
+  const conflictResolutionOptions = createMemo(() => {
+    const comparisonProject = comparisonProjectQuery.data
+
+    return comparisonProject?.compareWithHumans && comparisonProject.humanJudgmentMode === 'summary'
+      ? getUniqueConflictResolutionOptions(
+          comparisonProject.prompts.flatMap((prompt) => {
+            return getPromptTypeOptions(prompt.type).map((option) => {
+              return {label: option, value: option}
+            })
+          }),
+        )
+      : (comparisonProject?.prompts ?? []).map((prompt) => {
+          return {label: getConflictResolutionPromptLabel(prompt), value: prompt.id}
+        })
   })
   const isSummaryMode = createMemo(() => {
     const comparisonProject = comparisonProjectQuery.data
@@ -237,6 +296,52 @@ const CompareProjectJudgmentsPage = () => {
   const hasRowFilters = createMemo(() => {
     return rowFilter() !== 'all' || differenceFilter() !== 'all'
   })
+  const updateCurrentJudgmentsPageConflictResolution = (
+    articleId: string,
+    conflictResolution: {articleId: string; label: string; value: string} | null,
+  ) => {
+    queryClient.setQueryData<ComparisonProjectJudgmentsPage>(getCurrentJudgmentsPageQueryKey(), (currentPageData) => {
+      return currentPageData
+        ? {
+            ...currentPageData,
+            data: currentPageData.data.map((row) => {
+              return row.id === articleId ? {...row, conflictResolution} : row
+            }),
+          }
+        : currentPageData
+    })
+  }
+  const refetchCurrentJudgmentsPage = async () => {
+    await queryClient.invalidateQueries({queryKey: ['comparison-project-judgments-page', comparisonProjectId()]})
+  }
+  const handleConflictResolutionSelect = async (articleId: string, value: string) => {
+    setConflictResolutionPendingArticleId(articleId)
+    setConflictResolutionError(null)
+
+    try {
+      const conflictResolution = await setComparisonProjectConflictResolution(comparisonProjectId(), {articleId, value})
+      updateCurrentJudgmentsPageConflictResolution(articleId, conflictResolution)
+      await refetchCurrentJudgmentsPage()
+    } catch (error) {
+      setConflictResolutionError(error instanceof Error ? error.message : 'Failed to save conflict resolution')
+    } finally {
+      setConflictResolutionPendingArticleId(null)
+    }
+  }
+  const handleConflictResolutionReset = async (articleId: string) => {
+    setConflictResolutionPendingArticleId(articleId)
+    setConflictResolutionError(null)
+
+    try {
+      await resetComparisonProjectConflictResolution(comparisonProjectId(), {articleId})
+      updateCurrentJudgmentsPageConflictResolution(articleId, null)
+      await refetchCurrentJudgmentsPage()
+    } catch (error) {
+      setConflictResolutionError(error instanceof Error ? error.message : 'Failed to reset conflict resolution')
+    } finally {
+      setConflictResolutionPendingArticleId(null)
+    }
+  }
 
   return (
     <div class="min-h-screen bg-gray-50 p-6 mx-auto">
@@ -323,6 +428,9 @@ const CompareProjectJudgmentsPage = () => {
                         return <p class="mt-1 text-xs text-gray-500">Summary source: {summarySourceProject().name}</p>
                       }}
                     </Show>
+                    <p class="mt-1 text-xs text-gray-500">
+                      Conflict resolution: {comparisonProject().allowConflictResolution ? 'Enabled' : 'Disabled'}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -446,6 +554,12 @@ const CompareProjectJudgmentsPage = () => {
                   </div>
                 </Show>
 
+                <Show when={conflictResolutionError()}>
+                  <div class="rounded-lg border border-red-200 bg-red-50 p-4 text-red-700">
+                    {conflictResolutionError()}
+                  </div>
+                </Show>
+
                 <Show
                   when={!judgmentsPageQuery.isPending && !judgmentsPageQuery.isError && orderedColumns().length === 0}
                 >
@@ -462,7 +576,15 @@ const CompareProjectJudgmentsPage = () => {
                     && serverFilteredRows().length > 0
                   }
                 >
-                  <ComparisonProjectJudgmentsTable columns={orderedColumns()} rows={serverFilteredRows()} />
+                  <ComparisonProjectJudgmentsTable
+                    columns={orderedColumns()}
+                    conflictResolutionEnabled={comparisonProject().allowConflictResolution}
+                    conflictResolutionPendingArticleId={conflictResolutionPendingArticleId()}
+                    conflictResolutionOptions={conflictResolutionOptions()}
+                    onConflictResolutionReset={handleConflictResolutionReset}
+                    onConflictResolutionSelect={handleConflictResolutionSelect}
+                    rows={serverFilteredRows()}
+                  />
                 </Show>
 
                 <Show

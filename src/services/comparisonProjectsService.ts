@@ -11,6 +11,7 @@ export type CreateComparisonProjectInput = {
   description?: string | null
   modelIds?: string[]
   compareWithHumans?: boolean
+  allowConflictResolution?: boolean
   humanJudgmentMode?: HumanJudgmentMode
   summarySourceProjectId?: string | null
   useTitle: boolean
@@ -26,6 +27,7 @@ export type CreateComparisonProjectFromProjectInput = {
   name: string
   description?: string | null
   compareWithHumans?: boolean
+  allowConflictResolution?: boolean
   humanJudgmentMode?: HumanJudgmentMode
   summarySourceProjectId?: string | null
   sourceProjectId: string
@@ -61,6 +63,7 @@ export type ComparisonProjectEditFormData = {
   name: string
   description: string | null
   compareWithHumans: boolean
+  allowConflictResolution: boolean
   humanJudgmentMode: HumanJudgmentMode
   summarySourceProjectId: string | null
   updatedAt: Date | string
@@ -87,6 +90,7 @@ export type UpdateComparisonProjectInput = {
   name: string
   description?: string | null
   compareWithHumans: boolean
+  allowConflictResolution: boolean
   humanJudgmentMode?: HumanJudgmentMode
   summarySourceProjectId?: string | null
   modelIds?: string[]
@@ -137,6 +141,7 @@ export type ComparisonProjectJudgmentsMetadata = {
   name: string
   description: string | null
   compareWithHumans: boolean
+  allowConflictResolution: boolean
   humanJudgmentMode: HumanJudgmentMode
   summarySourceProjectId: string | null
   summarySourceProject: ComparisonProjectSummarySourceProject | null
@@ -153,6 +158,7 @@ export type ComparisonProjectJudgmentsMetadata = {
     id: string
     promptHeading: string | null
     promptLabel: string
+    type: string | null
     order: number
     criteriaDisposition: ProjectPromptCriteriaDisposition | null
     criteriaSectionKey: string | null
@@ -168,6 +174,8 @@ export type ComparisonProjectJudgmentsRow = {
   articleSummary: string | null
   articleCreatedAt: Date | string | null
   cells: Record<string, string | null>
+  hasConflict: boolean
+  conflictResolution: {articleId: string; label: string; value: string} | null
 }
 
 export type ComparisonProjectJudgmentsPage = {
@@ -261,6 +269,31 @@ export const fetchComparisonProjectJudgmentsPage = async (
   const response = await apiClient.api['comparison-projects']({id: comparisonProjectId}).judgments.post(body)
 
   return getResponseData<ComparisonProjectJudgmentsPage>(response, 'Failed to fetch comparison project judgments')
+}
+
+export const setComparisonProjectConflictResolution = async (
+  comparisonProjectId: string,
+  input: {articleId: string; value: string},
+) => {
+  const response = await apiClient.api['comparison-projects']({id: comparisonProjectId})['conflict-resolution'].post(
+    input,
+  )
+
+  return getResponseData<{articleId: string; label: string; value: string}>(
+    response,
+    'Failed to save conflict resolution',
+  )
+}
+
+export const resetComparisonProjectConflictResolution = async (
+  comparisonProjectId: string,
+  input: {articleId: string},
+) => {
+  const response = await apiClient.api['comparison-projects']({id: comparisonProjectId})[
+    'conflict-resolution'
+  ].reset.post(input)
+
+  return getResponseData<{articleId: string}>(response, 'Failed to reset conflict resolution')
 }
 
 export const archiveComparisonProject = async (comparisonProjectId: string): Promise<void> => {

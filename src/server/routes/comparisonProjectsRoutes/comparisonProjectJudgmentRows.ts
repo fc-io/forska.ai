@@ -1,6 +1,7 @@
 import {
   type ComparisonProjectDifferenceColumn,
   type ComparisonProjectDifferenceFilter,
+  getComparisonProjectHasAnyConflict,
   getComparisonProjectHasDifferenceFilterMatch,
 } from '../../../utils/comparisonProjectDifferenceFilter.ts'
 import {
@@ -44,6 +45,7 @@ export type ComparisonProjectJudgmentRow = {
   articleSummary: string | null
   articleCreatedAt: Date | null
   cells: Record<string, string | null>
+  hasConflict: boolean
 }
 
 export type ComparisonProjectScopedArticleBatchRequest = {limit: number; offset: number}
@@ -352,6 +354,7 @@ export const getComparisonProjectBatchRows = (params: ComparisonProjectBatchRows
             articleSummary: article.articleSummary,
             articleCreatedAt: article.articleCreatedAt,
             cells: articleCells,
+            hasConflict: getComparisonProjectHasAnyConflict(articleCells, params.columns),
           }
         : null
     })

@@ -169,3 +169,10 @@ export const getComparisonProjectHasDifferenceFilterMatch = (
       ? getHasLlmVsLlmDifference(promptAnswerBuckets)
       : getHasAnyDisagreement(promptAnswerBuckets)
 }
+
+export const getComparisonProjectHasAnyConflict = (
+  cells: Record<string, string | null>,
+  columns: readonly ComparisonProjectDifferenceColumn[],
+) => {
+  return getHasAnyDisagreement(getPromptAnswerBuckets(cells, columns))
+}

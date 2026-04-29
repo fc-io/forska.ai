@@ -7,15 +7,18 @@ const providerModelRepositoryModulePath = new URL('../providers/providerModelRep
 type MockDatabaseState = {
   comparisonProject: {
     archived?: boolean
+    allowConflictResolution?: boolean
     compareWithHumans: boolean
     humanJudgmentMode: 'prompt' | 'summary' | null
     id: string
     modelIds: string[]
     summarySourceProjectId: string | null
   }
+  conflictResolutionRows: Array<{answerValue: string | null; articleId: string; promptId: string | null}>
   extraLlmRows: MockLlmJudgmentRow[]
   failPromptInsert: boolean
   includeSingleAnswerArticle: boolean
+  lastConflictResolutionInsertStatement: string | null
   lastPromptInsertStatement: string | null
   lastUpdateStatement: string | null
   promptLinks: Array<{
@@ -204,6 +207,7 @@ const getMockDatabaseState = () => {
 const getComparisonProjectRow = (comparisonProject: MockDatabaseState['comparisonProject']) => {
   return {
     archived: comparisonProject.archived ?? false,
+    allowConflictResolution: comparisonProject.allowConflictResolution ?? false,
     compareWithHumans: comparisonProject.compareWithHumans,
     createdAt: new Date('2026-03-29T00:00:00.000Z'),
     description: 'Rollback test project',
@@ -365,6 +369,7 @@ const queryJson = async (
   statement: string,
   state: {
     comparisonProject: MockDatabaseState['comparisonProject']
+    conflictResolutionRows: MockDatabaseState['conflictResolutionRows']
     extraLlmRows: MockDatabaseState['extraLlmRows']
     promptLinks: MockDatabaseState['promptLinks']
     routeLinks: Array<{id: string; importRouteId: string}>
@@ -382,6 +387,18 @@ const queryJson = async (
     && statement.includes('WHERE id =')
   ) {
     return [getComparisonProjectRow(state.comparisonProject)]
+  }
+
+  if (statement.includes('INSERT INTO app.comparison_project_conflict_resolution')) {
+    getMockDatabaseState().lastConflictResolutionInsertStatement = statement
+
+    return [{articleId: statement.includes("'article-2'") ? 'article-2' : 'article-1'}]
+  }
+
+  if (statement.includes('FROM app.comparison_project_conflict_resolution')) {
+    return state.conflictResolutionRows.filter((row) => {
+      return statement.includes(`'${row.articleId}'`)
+    })
   }
 
   if (statement.includes('INSERT INTO app.comparison_project') && statement.includes('RETURNING')) {
@@ -741,6 +758,7 @@ const registerModuleMocks = () => {
                 getMockDatabaseState().queryStatements.push(statement)
                 return (await queryJson(statement, {
                   comparisonProject: pendingComparisonProject,
+                  conflictResolutionRows: state.conflictResolutionRows,
                   extraLlmRows: state.extraLlmRows,
                   includeSingleAnswerArticle: state.includeSingleAnswerArticle,
                   promptLinks: pendingPromptLinks,
@@ -761,6 +779,14 @@ const registerModuleMocks = () => {
                   state.lastUpdateStatement = statement
                   if (statement.includes("human_judgment_mode = 'summary'")) {
                     pendingComparisonProject.humanJudgmentMode = 'summary'
+                  }
+
+                  if (statement.includes('allow_conflict_resolution = TRUE')) {
+                    pendingComparisonProject.allowConflictResolution = true
+                  }
+
+                  if (statement.includes('allow_conflict_resolution = FALSE')) {
+                    pendingComparisonProject.allowConflictResolution = false
                   }
 
                   if (statement.includes("human_judgment_mode = 'prompt'")) {
@@ -897,9 +923,11 @@ const createMockDatabaseState = (): MockDatabaseState => {
       modelIds: ['model-1'],
       summarySourceProjectId: null,
     },
+    conflictResolutionRows: [],
     extraLlmRows: [],
     failPromptInsert: true,
     includeSingleAnswerArticle: false,
+    lastConflictResolutionInsertStatement: null,
     lastPromptInsertStatement: null,
     lastUpdateStatement: null,
     promptLinks: [{id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'}],
@@ -931,6 +959,7 @@ test('comparison project model relink failure keeps original links intact', asyn
   const response = await app.handle(
     new Request('http://localhost/api/comparison-projects/comparison-project-1', {
       body: JSON.stringify({
+        allowConflictResolution: false,
         compareWithHumans: false,
         description: 'Rollback test project',
         modelIds: ['model-2'],
@@ -965,6 +994,7 @@ test('comparison project update persists summary mode contract fields', async ()
   const response = await app.handle(
     new Request('http://localhost/api/comparison-projects/comparison-project-1', {
       body: JSON.stringify({
+        allowConflictResolution: false,
         compareWithHumans: true,
         description: 'Rollback test project',
         humanJudgmentMode: 'summary',
@@ -1327,6 +1357,7 @@ test('comparison project update rejects summary mode without human comparison', 
   const response = await app.handle(
     new Request('http://localhost/api/comparison-projects/comparison-project-1', {
       body: JSON.stringify({
+        allowConflictResolution: false,
         compareWithHumans: false,
         description: 'Rollback test project',
         humanJudgmentMode: 'summary',
@@ -1360,6 +1391,7 @@ test('comparison project update rejects summary prompts outside source project',
   const response = await app.handle(
     new Request('http://localhost/api/comparison-projects/comparison-project-1', {
       body: JSON.stringify({
+        allowConflictResolution: false,
         compareWithHumans: true,
         description: 'Rollback test project',
         humanJudgmentMode: 'summary',
@@ -1586,6 +1618,42 @@ test('summary comparison judgments apply rowFilter modes to shown summary column
   expect(allRowsWithDifferenceTotalCount).toBe(1)
 })
 
+test('comparison conflict resolution upsert uses DuckDB-safe timestamp function', async () => {
+  mockDatabaseStateRef.current = {
+    ...createMockDatabaseState(),
+    comparisonProject: {
+      allowConflictResolution: true,
+      compareWithHumans: false,
+      humanJudgmentMode: 'prompt',
+      id: 'comparison-project-1',
+      modelIds: ['model-1', 'model-2'],
+      summarySourceProjectId: null,
+    },
+    failPromptInsert: false,
+    promptLinks: [
+      {id: 'comparison-project-prompt-1', order: 0, promptId: 'prompt-1'},
+      {id: 'comparison-project-prompt-2', order: 1, promptId: 'prompt-2'},
+    ],
+  }
+
+  const {comparisonProjectsRoutes} = await loadComparisonProjectsRoutes()
+  const app = new Elysia().use(comparisonProjectsRoutes)
+  const response = await app.handle(
+    new Request('http://localhost/api/comparison-projects/comparison-project-1/conflict-resolution', {
+      body: JSON.stringify({articleId: 'article-1', value: 'prompt-2'}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const body = (await response.json()) as {data: {label: string; value: string}}
+  const insertStatement = getMockDatabaseState().lastConflictResolutionInsertStatement ?? ''
+
+  expect(response.status).toBe(200)
+  expect(body.data).toEqual({articleId: 'article-1', label: 'Prompt 2', value: 'prompt-2'})
+  expect(insertStatement).toContain('updated_at = now()')
+  expect(insertStatement).not.toContain('updated_at = current_timestamp')
+})
+
 test('comparison export filters match judgments endpoint row and difference filters', async () => {
   mockDatabaseStateRef.current = {
     ...createMockDatabaseState(),
@@ -1697,12 +1765,14 @@ test('comparison project export streams ordered csv rows with article context an
   mockDatabaseStateRef.current = {
     ...createMockDatabaseState(),
     comparisonProject: {
+      allowConflictResolution: true,
       compareWithHumans: true,
       humanJudgmentMode: 'prompt',
       id: 'comparison-project-1',
       modelIds: ['model-1', 'model-2'],
       summarySourceProjectId: null,
     },
+    conflictResolutionRows: [{answerValue: null, articleId: 'article-1', promptId: 'prompt-2'}],
     extraLlmRows: [
       {
         ...getMockLlmJudgmentRow({answer: 'yes', articleId: 'article-1', modelId: 'model-1', promptId: 'prompt-1'}),
@@ -1732,6 +1802,7 @@ test('comparison project export streams ordered csv rows with article context an
       'Title',
       'Abstract/Summary',
       'Date added',
+      'Conflict Handling',
       'Prompt 1 - Model 1 - Article Title and Abstract',
       'Prompt 1 - Model 2 - Article Title and Abstract',
       'Prompt 1 - Human',
@@ -1739,9 +1810,18 @@ test('comparison project export streams ordered csv rows with article context an
       'Prompt 2 - Model 2 - Article Title and Abstract',
       'Prompt 2 - Human',
     ].join(','),
-    ['Article 1', 'Article 1 summary', '2026-03-30T00:00:00.000Z', 'yes; maybe', 'yes', 'yes', 'yes', 'no', 'no'].join(
-      ',',
-    ),
+    [
+      'Article 1',
+      'Article 1 summary',
+      '2026-03-30T00:00:00.000Z',
+      'Prompt 2',
+      'yes; maybe',
+      'yes',
+      'yes',
+      'yes',
+      'no',
+      'no',
+    ].join(','),
   ])
   expect(
     state.queryStatements.some((statement) => {

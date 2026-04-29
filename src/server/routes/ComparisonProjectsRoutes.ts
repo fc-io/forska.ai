@@ -23,6 +23,7 @@ import {getProviderModelMetadataOptions} from '../providers/providerModelMetadat
 import {assertSelectableProviderModelIds} from '../providers/providerModelRepository.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
+import {HttpError} from '../utils/httpError.ts'
 import {
   deriveStrictSummaryAnswer,
   getNormalizedSummaryAnswer,
@@ -35,8 +36,10 @@ import {
   type ComparisonProjectJudgmentLlmRow,
   type ComparisonProjectJudgmentRow,
   forEachComparisonProjectJudgmentRowBatch,
+  getComparisonProjectBatchRows,
   getComparisonProjectColumnId,
   getComparisonProjectContentKey,
+  getComparisonProjectRequiredColumnIds,
   getComparisonProjectScopedArticleBatch,
 } from './comparisonProjectsRoutes/comparisonProjectJudgmentRows.ts'
 
@@ -64,6 +67,7 @@ type ComparisonProjectPromptConfig = {
   id: string
   promptHeading: string | null
   promptLabel: string
+  type: string | null
   order: number
   criteriaDisposition: ProjectPromptCriteriaDisposition | null
   criteriaSectionKey: string | null
@@ -95,6 +99,7 @@ type ComparisonProjectScope = {
   name: string
   description: string | null
   compareWithHumans: boolean
+  allowConflictResolution: boolean
   humanJudgmentMode: HumanJudgmentMode
   summarySourceProjectId: string | null
   useTitle: boolean
@@ -117,6 +122,11 @@ type ComparisonProjectScope = {
 }
 type ComparisonProjectLlmRow = ComparisonProjectJudgmentLlmRow
 type ComparisonProjectHumanRow = ComparisonProjectJudgmentHumanRow
+type ComparisonProjectConflictResolution = {articleId: string; label: string; value: string}
+type ComparisonProjectExportRow = ComparisonProjectJudgmentRow & {
+  conflictResolution?: ComparisonProjectConflictResolution | null
+}
+type ComparisonProjectConflictResolutionOption = {label: string; value: string}
 type ComparisonProjectSourcePrompt = {
   id: string
   promptHeading: string | null
@@ -207,6 +217,7 @@ const comparisonProjectTable = 'app.comparison_project'
 const comparisonProjectPromptTable = 'app.comparison_project_prompt'
 const comparisonProjectImportRouteTable = 'app.comparison_project_import_route'
 const comparisonProjectSourceProjectTable = 'app.comparison_project_source_project'
+const comparisonProjectConflictResolutionTable = 'app.comparison_project_conflict_resolution'
 const promptTable = 'app.prompt'
 const importRouteTable = 'app.import_route'
 const projectTable = 'app.project'
@@ -341,6 +352,7 @@ const getComparisonProjectRecordSql = (comparisonProjectId: string) => {
       description,
       model_ids AS modelIds,
       compare_with_humans AS compareWithHumans,
+      COALESCE(allow_conflict_resolution, FALSE) AS allowConflictResolution,
       human_judgment_mode AS humanJudgmentMode,
       summary_source_project_id AS summarySourceProjectId,
       use_title AS useTitle,
@@ -640,6 +652,7 @@ const getComparisonProjectsList = async (archived: boolean) => {
     name: string
     description: string | null
     compareWithHumans: boolean
+    allowConflictResolution: boolean
     humanJudgmentMode: HumanJudgmentMode | null
     summarySourceProjectId: string | null
     useTitle: boolean
@@ -656,6 +669,7 @@ const getComparisonProjectsList = async (archived: boolean) => {
       cp.name AS name,
       cp.description AS description,
       cp.compare_with_humans AS compareWithHumans,
+      COALESCE(cp.allow_conflict_resolution, FALSE) AS allowConflictResolution,
       cp.human_judgment_mode AS humanJudgmentMode,
       cp.summary_source_project_id AS summarySourceProjectId,
       cp.use_title AS useTitle,
@@ -892,6 +906,7 @@ const getComparisonProjectSourceSummaryPromptConfigs = async (sourceProjectIds: 
     sourceProjectId: string
     id: string
     promptHeading: string | null
+    type: string | null
     order: number | null
     criteriaDisposition: ProjectPromptCriteriaDisposition | null
     criteriaSectionKey: string | null
@@ -901,6 +916,7 @@ const getComparisonProjectSourceSummaryPromptConfigs = async (sourceProjectIds: 
       pp.project_id AS sourceProjectId,
       p.id AS id,
       p.prompt_heading AS promptHeading,
+      p.type AS type,
       pp.prompt_order AS "order",
       pp.criteria_disposition AS criteriaDisposition,
       pp.criteria_section_key AS criteriaSectionKey,
@@ -925,6 +941,7 @@ const getComparisonProjectSourceSummaryPromptConfigs = async (sourceProjectIds: 
       sourceProjectId: row.sourceProjectId,
       promptHeading: row.promptHeading,
       promptLabel: getPromptLabel(row.promptHeading, order),
+      type: row.type,
       order,
       criteriaDisposition: row.criteriaDisposition,
       criteriaSectionKey: row.criteriaSectionKey,
@@ -1297,6 +1314,7 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
     name: string
     description: string | null
     compareWithHumans: boolean
+    allowConflictResolution: boolean
     humanJudgmentMode: HumanJudgmentMode | null
     summarySourceProjectId: string | null
     useTitle: boolean
@@ -1312,6 +1330,7 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
       name,
       description,
       compare_with_humans AS compareWithHumans,
+      COALESCE(allow_conflict_resolution, FALSE) AS allowConflictResolution,
       human_judgment_mode AS humanJudgmentMode,
       summary_source_project_id AS summarySourceProjectId,
       use_title AS useTitle,
@@ -1340,6 +1359,7 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
     appDatabaseService.queryJson<{
       id: string
       promptHeading: string | null
+      type: string | null
       order: number | null
       criteriaDisposition: ProjectPromptCriteriaDisposition | null
       criteriaSectionKey: string | null
@@ -1348,6 +1368,7 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
       SELECT
         p.id AS id,
         p.prompt_heading AS promptHeading,
+        p.type AS type,
         cpp.prompt_order AS "order",
         cpp.criteria_disposition AS criteriaDisposition,
         cpp.criteria_section_key AS criteriaSectionKey,
@@ -1376,6 +1397,7 @@ const getComparisonProjectScope = async (comparisonProjectId: string): Promise<C
       id: promptRow.id,
       promptHeading: promptRow.promptHeading,
       promptLabel: getPromptLabel(promptRow.promptHeading, order),
+      type: promptRow.type,
       order,
       criteriaDisposition: promptRow.criteriaDisposition,
       criteriaSectionKey: promptRow.criteriaSectionKey,
@@ -1463,6 +1485,7 @@ const getComparisonProjectEditFormData = async (comparisonProjectId: string) => 
       name,
       description,
       compare_with_humans AS compareWithHumans,
+      COALESCE(allow_conflict_resolution, FALSE) AS allowConflictResolution,
       human_judgment_mode AS humanJudgmentMode,
       summary_source_project_id AS summarySourceProjectId,
       updated_at AS updatedAt,
@@ -1902,6 +1925,233 @@ const getComparisonProjectHumanRows = async (scope: ComparisonProjectScope, arti
     : getComparisonProjectPromptHumanRows(scope, articleIds)
 }
 
+const getComparisonProjectPromptTypeOptions = (type: string | null) => {
+  const matches = type?.match(/['"]([^'"]+)['"]/g) ?? []
+
+  return matches.map((match) => {
+    return match.slice(1, -1)
+  })
+}
+
+const getUniqueComparisonProjectConflictResolutionOptions = (options: ComparisonProjectConflictResolutionOption[]) => {
+  return Array.from(
+    options
+      .reduce<Map<string, ComparisonProjectConflictResolutionOption>>((optionMap, option) => {
+        if (!optionMap.has(option.value)) {
+          optionMap.set(option.value, option)
+        }
+
+        return optionMap
+      }, new Map<string, ComparisonProjectConflictResolutionOption>())
+      .values(),
+  )
+}
+
+const getComparisonProjectPromptResolutionOptions = (scope: ComparisonProjectScope) => {
+  return scope.prompts.map<ComparisonProjectConflictResolutionOption>((prompt) => {
+    return {label: prompt.promptLabel, value: prompt.id}
+  })
+}
+
+const getComparisonProjectSummaryAnswerResolutionOptions = (scope: ComparisonProjectScope) => {
+  return getUniqueComparisonProjectConflictResolutionOptions(
+    scope.prompts.flatMap((prompt) => {
+      return getComparisonProjectPromptTypeOptions(prompt.type).map<ComparisonProjectConflictResolutionOption>(
+        (option) => {
+          return {label: option, value: option}
+        },
+      )
+    }),
+  )
+}
+
+const getComparisonProjectConflictResolutionOptions = (scope: ComparisonProjectScope) => {
+  return getIsSummaryMode(scope)
+    ? getComparisonProjectSummaryAnswerResolutionOptions(scope)
+    : getComparisonProjectPromptResolutionOptions(scope)
+}
+
+const getComparisonProjectConflictResolutionOptionByValue = (scope: ComparisonProjectScope) => {
+  return getComparisonProjectConflictResolutionOptions(scope).reduce<
+    Map<string, ComparisonProjectConflictResolutionOption>
+  >((optionMap, option) => {
+    optionMap.set(option.value, option)
+    return optionMap
+  }, new Map<string, ComparisonProjectConflictResolutionOption>())
+}
+
+const getComparisonProjectRowsForArticles = async (scope: ComparisonProjectScope, articleIds: string[]) => {
+  const uniqueArticleIds = getUniqueStringValues(articleIds)
+
+  if (uniqueArticleIds.length === 0) {
+    return []
+  }
+
+  const articleScopeConditions = getArticleScopeConditions(
+    scope.importRouteIds,
+    scope.sourceProjectIds,
+    scope.useImportRoutesForScope,
+  )
+  const articleScopeWhereClause = getWhereClause([
+    ...articleScopeConditions,
+    `a.id IN (${getInClause(uniqueArticleIds)})`,
+  ])
+  const articles = await getComparisonProjectScopedArticleBatch({
+    articleTable,
+    limit: uniqueArticleIds.length,
+    offset: 0,
+    queryRunner: appDatabaseService,
+    whereClause: articleScopeWhereClause,
+  })
+  const [rawLlmRows, humanRows] = await Promise.all([
+    getComparisonProjectLlmRows(scope, uniqueArticleIds),
+    getComparisonProjectHumanRows(scope, uniqueArticleIds),
+  ])
+
+  return getComparisonProjectBatchRows({
+    articles,
+    columns: scope.columns,
+    differenceFilter: 'all',
+    humanRows,
+    isSummaryMode: getIsSummaryMode(scope),
+    llmRows: getComparisonProjectLlmSummaryRows(scope, rawLlmRows),
+    requiredHumanColumnIds: getComparisonProjectRequiredColumnIds(scope.columns, 'human'),
+    requiredLlmColumnIds: getComparisonProjectRequiredColumnIds(scope.columns, 'llm'),
+    rowFilter: 'all',
+  })
+}
+
+const getComparisonProjectConflictResolutions = async (
+  scope: ComparisonProjectScope,
+  rows: ComparisonProjectJudgmentRow[],
+) => {
+  const articleIds = rows
+    .filter((row) => {
+      return row.hasConflict
+    })
+    .map((row) => {
+      return row.id
+    })
+
+  if (!scope.allowConflictResolution || articleIds.length === 0) {
+    return new Map<string, ComparisonProjectConflictResolution>()
+  }
+
+  const optionByValue = getComparisonProjectConflictResolutionOptionByValue(scope)
+  const resolutionRows = await appDatabaseService.queryJson<{
+    answerValue: string | null
+    articleId: string
+    promptId: string | null
+  }>(`
+    SELECT
+      article_id AS articleId,
+      prompt_id AS promptId,
+      answer_value AS answerValue
+    FROM ${comparisonProjectConflictResolutionTable}
+    WHERE comparison_project_id = ${getSqlLiteral(scope.id)}
+      AND article_id IN (${getInClause(articleIds)})
+  `)
+
+  return resolutionRows.reduce<Map<string, ComparisonProjectConflictResolution>>((resolutionMap, row) => {
+    const value = getIsSummaryMode(scope) ? row.answerValue : row.promptId
+    const option = value ? optionByValue.get(value) : null
+
+    if (!option) {
+      return resolutionMap
+    }
+
+    resolutionMap.set(row.articleId, {articleId: row.articleId, label: option.label, value: option.value})
+    return resolutionMap
+  }, new Map<string, ComparisonProjectConflictResolution>())
+}
+
+const getComparisonProjectRowsWithConflictResolutions = async (
+  scope: ComparisonProjectScope,
+  rows: ComparisonProjectJudgmentRow[],
+) => {
+  const conflictResolutions = await getComparisonProjectConflictResolutions(scope, rows)
+
+  return rows.map((row) => {
+    return {...row, conflictResolution: row.hasConflict ? (conflictResolutions.get(row.id) ?? null) : null}
+  })
+}
+
+const getComparisonProjectConflictResolutionTargetRow = async (scope: ComparisonProjectScope, articleId: string) => {
+  if (!scope.allowConflictResolution) {
+    throw new HttpError(400, 'Conflict resolution is not enabled for this comparison project')
+  }
+
+  const [row] = await getComparisonProjectRowsForArticles(scope, [articleId])
+
+  if (!row?.hasConflict) {
+    throw new HttpError(400, 'Conflict resolution is only available for conflicting articles')
+  }
+
+  return row
+}
+
+const getValidatedComparisonProjectConflictResolutionOption = (scope: ComparisonProjectScope, value: string) => {
+  const option = getComparisonProjectConflictResolutionOptionByValue(scope).get(value)
+
+  if (!option) {
+    throw new HttpError(
+      400,
+      getIsSummaryMode(scope)
+        ? 'Conflict resolution answer must be one of the summary prompt options'
+        : 'Conflict resolution prompt must belong to the comparison project',
+    )
+  }
+
+  return option
+}
+
+const setComparisonProjectConflictResolution = async (params: {
+  articleId: string
+  value: string
+  scope: ComparisonProjectScope
+}) => {
+  await getComparisonProjectConflictResolutionTargetRow(params.scope, params.articleId)
+  const option = getValidatedComparisonProjectConflictResolutionOption(params.scope, params.value)
+  const isSummaryMode = getIsSummaryMode(params.scope)
+  const [resolutionRow] = await appDatabaseService.queryJson<{articleId: string}>(`
+    INSERT INTO ${comparisonProjectConflictResolutionTable} (
+      id,
+      comparison_project_id,
+      article_id,
+      prompt_id,
+      answer_value
+    )
+    VALUES (
+      ${getSqlLiteral(crypto.randomUUID())},
+      ${getSqlLiteral(params.scope.id)},
+      ${getSqlLiteral(params.articleId)},
+      ${getSqlLiteral(isSummaryMode ? null : option.value)},
+      ${getSqlLiteral(isSummaryMode ? option.value : null)}
+    )
+    ON CONFLICT(comparison_project_id, article_id) DO UPDATE SET
+      prompt_id = excluded.prompt_id,
+      answer_value = excluded.answer_value,
+      updated_at = now()
+    RETURNING article_id AS articleId
+  `)
+
+  if (!resolutionRow) {
+    throw new Error('Failed to save conflict resolution')
+  }
+
+  return {...resolutionRow, label: option.label, value: option.value}
+}
+
+const resetComparisonProjectConflictResolution = async (params: {articleId: string; scope: ComparisonProjectScope}) => {
+  await appDatabaseService.run(`
+    DELETE FROM ${comparisonProjectConflictResolutionTable}
+    WHERE comparison_project_id = ${getSqlLiteral(params.scope.id)}
+      AND article_id = ${getSqlLiteral(params.articleId)}
+  `)
+
+  return {articleId: params.articleId}
+}
+
 const escapeComparisonProjectCsvValue = (value: string) => {
   return value.includes(',') || value.includes('"') || value.includes('\n') || value.includes('\r')
     ? `"${value.replace(/"/g, '""')}"`
@@ -1939,25 +2189,35 @@ const getComparisonProjectExportColumnHeader = (column: ComparisonProjectJudgmen
     .join(' - ')
 }
 
-const getComparisonProjectExportHeaders = (columns: readonly ComparisonProjectJudgmentsColumn[]) => {
+const getComparisonProjectExportHeaders = (
+  columns: readonly ComparisonProjectJudgmentsColumn[],
+  includeConflictResolution: boolean,
+) => {
   return [
     'Title',
     'Abstract/Summary',
     'Date added',
+    ...(includeConflictResolution ? ['Conflict Handling'] : []),
     ...columns.map((column) => {
       return getComparisonProjectExportColumnHeader(column)
     }),
   ]
 }
 
+const getComparisonProjectExportConflictResolutionValue = (row: ComparisonProjectExportRow) => {
+  return row.conflictResolution?.label ?? (row.hasConflict ? '' : 'No conflict')
+}
+
 const getComparisonProjectExportRowValues = (
-  row: ComparisonProjectJudgmentRow,
+  row: ComparisonProjectExportRow,
   columns: readonly ComparisonProjectJudgmentsColumn[],
+  includeConflictResolution: boolean,
 ) => {
   return [
     row.articleTitle?.trim() || 'Untitled',
     row.articleSummary ?? '',
     getComparisonProjectExportDateValue(row.articleCreatedAt),
+    ...(includeConflictResolution ? [getComparisonProjectExportConflictResolutionValue(row)] : []),
     ...columns.map((column) => {
       return getComparisonProjectExportCellValue(row.cells[column.id])
     }),
@@ -1966,11 +2226,14 @@ const getComparisonProjectExportRowValues = (
 
 const enqueueComparisonProjectExportRows = (
   controller: ReadableStreamDefaultController<string>,
-  rows: ComparisonProjectJudgmentRow[],
+  rows: ComparisonProjectExportRow[],
   columns: readonly ComparisonProjectJudgmentsColumn[],
+  includeConflictResolution: boolean,
 ) => {
   rows.reduce((count, row) => {
-    controller.enqueue(getComparisonProjectCsvLine(getComparisonProjectExportRowValues(row, columns)))
+    controller.enqueue(
+      getComparisonProjectCsvLine(getComparisonProjectExportRowValues(row, columns, includeConflictResolution)),
+    )
     return count + 1
   }, 0)
 }
@@ -1986,7 +2249,8 @@ const getComparisonProjectExportResponse = (
 ) => {
   const orderedColumns = getOrderedComparisonProjectColumns(scope.columns, scope.prompts)
   const normalizedDifferenceFilter = getNormalizedComparisonProjectDifferenceFilter(differenceFilter, orderedColumns)
-  const headers = getComparisonProjectExportHeaders(orderedColumns)
+  const includeConflictResolution = scope.allowConflictResolution
+  const headers = getComparisonProjectExportHeaders(orderedColumns, includeConflictResolution)
   const filename = getComparisonProjectExportFilename(scope)
   const responseHeaders = {
     'Content-Disposition': `attachment; filename="${filename}"`,
@@ -2026,8 +2290,11 @@ const getComparisonProjectExportResponse = (
                 whereClause: articleScopeWhereClause,
               })
             },
-            onRows: (rows) => {
-              enqueueComparisonProjectExportRows(controller, rows, orderedColumns)
+            onRows: async (rows) => {
+              const exportRows = includeConflictResolution
+                ? await getComparisonProjectRowsWithConflictResolutions(scope, rows)
+                : rows
+              enqueueComparisonProjectExportRows(controller, exportRows, orderedColumns, includeConflictResolution)
             },
             rowFilter,
           })
@@ -2117,8 +2384,9 @@ const getComparisonProjectJudgmentsPage = async (
   const totalPages = totalCount > 0 ? Math.ceil(totalCount / limit) : 0
   const safePage = totalPages > 0 ? Math.min(Math.max(page, 1), totalPages) : 1
   const data = safePage === requestedPage ? pageState.pageRows : pageState.lastPageRows
+  const rowsWithConflictResolutions = await getComparisonProjectRowsWithConflictResolutions(scope, data)
 
-  return {data, totalCount, page: safePage, limit, totalPages}
+  return {data: rowsWithConflictResolutions, totalCount, page: safePage, limit, totalPages}
 }
 
 const insertComparisonProjectPromptLinks = async (
@@ -2545,6 +2813,7 @@ const createComparisonProjectRecord = async (
     description?: string | null
     modelIds?: string[]
     compareWithHumans?: boolean
+    allowConflictResolution?: boolean
     humanJudgmentMode?: HumanJudgmentMode
     summarySourceProjectId?: string | null
     useTitle?: boolean
@@ -2583,6 +2852,7 @@ const createComparisonProjectRecord = async (
     description: string | null
     modelIds: unknown
     compareWithHumans: boolean
+    allowConflictResolution: boolean
     humanJudgmentMode: HumanJudgmentMode | null
     summarySourceProjectId: string | null
     useTitle: boolean
@@ -2599,6 +2869,7 @@ const createComparisonProjectRecord = async (
       description,
       model_ids,
       compare_with_humans,
+      allow_conflict_resolution,
       human_judgment_mode,
       summary_source_project_id,
       use_title,
@@ -2612,6 +2883,7 @@ const createComparisonProjectRecord = async (
       ${getSqlLiteral(body.description?.trim() || null)},
       ${getSqlLiteral(validatedModelIds)},
       ${getBooleanLiteral(body.compareWithHumans ?? false)},
+      ${getBooleanLiteral(body.allowConflictResolution ?? false)},
       ${getSqlLiteral(humanJudgmentMode)},
       ${getSqlLiteral(summarySourceProjectId)},
       ${getBooleanLiteral(useTitle)},
@@ -2625,6 +2897,7 @@ const createComparisonProjectRecord = async (
       description,
       model_ids AS modelIds,
       compare_with_humans AS compareWithHumans,
+      allow_conflict_resolution AS allowConflictResolution,
       human_judgment_mode AS humanJudgmentMode,
       summary_source_project_id AS summarySourceProjectId,
       use_title AS useTitle,
@@ -2720,6 +2993,7 @@ export const comparisonProjectsRoutes = new Elysia()
           description: body.description,
           modelIds: selectedModelIds,
           compareWithHumans: body.compareWithHumans,
+          allowConflictResolution: body.allowConflictResolution,
           humanJudgmentMode,
           summarySourceProjectId,
           useTitle: sourceProject.useTitle,
@@ -2739,6 +3013,7 @@ export const comparisonProjectsRoutes = new Elysia()
         name: t.String(),
         description: t.Optional(t.Union([t.String(), t.Null()])),
         compareWithHumans: t.Optional(t.Boolean()),
+        allowConflictResolution: t.Optional(t.Boolean()),
         humanJudgmentMode: t.Optional(t.Union([t.Literal('prompt'), t.Literal('summary')])),
         summarySourceProjectId: t.Optional(t.Union([t.String(), t.Null()])),
         sourceProjectId: t.String(),
@@ -2810,6 +3085,40 @@ export const comparisonProjectsRoutes = new Elysia()
     },
   )
   .post(
+    '/api/comparison-projects/:id/conflict-resolution',
+    async (context) => {
+      const {params, body, set} = context
+      const scope = await getComparisonProjectScope(params.id)
+
+      if (!scope) {
+        set.status = 404
+        return {data: null, error: 'Comparison project not found'}
+      }
+
+      const data = await setComparisonProjectConflictResolution({articleId: body.articleId, value: body.value, scope})
+
+      return {data}
+    },
+    {body: t.Object({articleId: t.String(), value: t.String()})},
+  )
+  .post(
+    '/api/comparison-projects/:id/conflict-resolution/reset',
+    async (context) => {
+      const {params, body, set} = context
+      const scope = await getComparisonProjectScope(params.id)
+
+      if (!scope) {
+        set.status = 404
+        return {data: null, error: 'Comparison project not found'}
+      }
+
+      const data = await resetComparisonProjectConflictResolution({articleId: body.articleId, scope})
+
+      return {data}
+    },
+    {body: t.Object({articleId: t.String()})},
+  )
+  .post(
     '/api/comparison-projects/:id/export',
     async (context) => {
       const {params, body, set} = context
@@ -2855,6 +3164,7 @@ export const comparisonProjectsRoutes = new Elysia()
         description: t.Optional(t.Union([t.String(), t.Null()])),
         modelIds: t.Optional(t.Array(t.String())),
         compareWithHumans: t.Optional(t.Boolean()),
+        allowConflictResolution: t.Optional(t.Boolean()),
         humanJudgmentMode: t.Optional(t.Union([t.Literal('prompt'), t.Literal('summary')])),
         summarySourceProjectId: t.Optional(t.Union([t.String(), t.Null()])),
         useTitle: t.Boolean(),
@@ -2919,6 +3229,7 @@ export const comparisonProjectsRoutes = new Elysia()
         `name = ${getSqlLiteral(body.name)}`,
         `description = ${getSqlLiteral(body.description?.trim() || null)}`,
         `compare_with_humans = ${getBooleanLiteral(body.compareWithHumans)}`,
+        `allow_conflict_resolution = ${getBooleanLiteral(body.allowConflictResolution)}`,
         `human_judgment_mode = ${getSqlLiteral(humanJudgmentMode)}`,
         `summary_source_project_id = ${getSqlLiteral(summarySourceProjectId)}`,
         `use_title = ${getBooleanLiteral(useTitle)}`,
@@ -2951,6 +3262,7 @@ export const comparisonProjectsRoutes = new Elysia()
         name: t.String(),
         description: t.Optional(t.Union([t.String(), t.Null()])),
         compareWithHumans: t.Boolean(),
+        allowConflictResolution: t.Boolean(),
         humanJudgmentMode: t.Optional(t.Union([t.Literal('prompt'), t.Literal('summary')])),
         summarySourceProjectId: t.Optional(t.Union([t.String(), t.Null()])),
         modelIds: t.Optional(t.Array(t.String())),

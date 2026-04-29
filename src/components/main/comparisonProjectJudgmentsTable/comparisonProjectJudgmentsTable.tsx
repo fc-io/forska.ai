@@ -13,7 +13,12 @@ export type ComparisonProjectJudgmentsTableColumn = ComparisonProjectJudgmentsCo
 }
 
 type ComparisonProjectJudgmentsTableProps = {
+  conflictResolutionEnabled?: boolean
+  conflictResolutionOptions?: Array<{label: string; value: string}>
+  conflictResolutionPendingArticleId?: string | null
   columns: ComparisonProjectJudgmentsTableColumn[]
+  onConflictResolutionReset?: (articleId: string) => void | Promise<void>
+  onConflictResolutionSelect?: (articleId: string, value: string) => void | Promise<void>
   rows: ComparisonProjectJudgmentsRow[]
 }
 
@@ -59,6 +64,13 @@ const getRowHighlightClasses = (state: 'match' | 'mismatch' | 'neutral') => {
 }
 
 export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgmentsTableProps) => {
+  const conflictResolutionOptions = () => {
+    return props.conflictResolutionOptions ?? []
+  }
+  const getIsConflictResolutionPending = (articleId: string) => {
+    return props.conflictResolutionPendingArticleId === articleId
+  }
+
   return (
     <div class="overflow-x-auto bg-white rounded-lg shadow border border-gray-200">
       <table class="min-w-full table-fixed divide-y divide-gray-200">
@@ -67,6 +79,11 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
             <th class="sticky left-0 z-20 w-[22rem] min-w-[22rem] max-w-[22rem] bg-gray-50 px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
               Title
             </th>
+            <Show when={props.conflictResolutionEnabled}>
+              <th class="w-[13rem] min-w-[13rem] max-w-[13rem] bg-gray-50 px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                Conflict Handling
+              </th>
+            </Show>
             <For each={props.columns}>
               {(column) => {
                 const modelLabelParts = getModelLabelParts(column.modelLabel)
@@ -125,6 +142,80 @@ export const ComparisonProjectJudgmentsTable = (props: ComparisonProjectJudgment
                       </Show>
                     </div>
                   </td>
+                  <Show when={props.conflictResolutionEnabled}>
+                    <td class={`w-[13rem] min-w-[13rem] max-w-[13rem] px-4 py-4 text-sm ${rowHighlightClasses.cell}`}>
+                      <Show when={row.hasConflict} fallback={<span class="text-gray-400">No conflict</span>}>
+                        <Show
+                          when={row.conflictResolution}
+                          fallback={
+                            <Show
+                              when={conflictResolutionOptions().length > 0}
+                              fallback={<span class="text-gray-400">No options available</span>}
+                            >
+                              <select
+                                value=""
+                                disabled={getIsConflictResolutionPending(row.id)}
+                                class="w-full max-w-[180px] rounded-md border border-gray-300 bg-white px-2 py-1 text-sm disabled:opacity-60"
+                                onChange={(event) => {
+                                  const value = event.currentTarget.value
+
+                                  if (value) {
+                                    void props.onConflictResolutionSelect?.(row.id, value)
+                                  }
+                                }}
+                              >
+                                <option value="" disabled selected>
+                                  Conflict resolution:
+                                </option>
+                                <For each={conflictResolutionOptions()}>
+                                  {(option) => {
+                                    return <option value={option.value}>{option.label}</option>
+                                  }}
+                                </For>
+                              </select>
+                            </Show>
+                          }
+                        >
+                          {(resolution) => {
+                            return (
+                              <div class="flex items-start justify-between gap-2">
+                                <span
+                                  class="min-w-0 whitespace-pre-wrap break-words leading-6 text-gray-800"
+                                  title={resolution().label}
+                                >
+                                  {resolution().label}
+                                </span>
+                                <button
+                                  type="button"
+                                  class="inline-flex size-7 shrink-0 items-center justify-center rounded border border-gray-300 bg-white text-gray-600 shadow-sm hover:border-gray-400 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-60"
+                                  title="Reset conflict resolution"
+                                  aria-label={`Reset conflict resolution for ${row.articleTitle?.trim() || 'article'}`}
+                                  disabled={getIsConflictResolutionPending(row.id)}
+                                  onClick={() => {
+                                    void props.onConflictResolutionReset?.(row.id)
+                                  }}
+                                >
+                                  <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2.5"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    class="size-4"
+                                  >
+                                    <path d="M18 6L6 18" />
+                                    <path d="M6 6l12 12" />
+                                  </svg>
+                                </button>
+                              </div>
+                            )
+                          }}
+                        </Show>
+                      </Show>
+                    </td>
+                  </Show>
                   <For each={props.columns}>
                     {(column) => {
                       const cellValue = row.cells[column.id]?.trim() || null

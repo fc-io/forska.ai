@@ -174,6 +174,7 @@ const EditComparisonProjectPage = () => {
   const [comparisonProjectName, setComparisonProjectName] = createSignal('')
   const [description, setDescription] = createSignal('')
   const [compareWithHumans, setCompareWithHumans] = createSignal(false)
+  const [allowConflictResolution, setAllowConflictResolution] = createSignal(false)
   const [summaryModeEnabled, setSummaryModeEnabled] = createSignal(false)
   const [humanJudgmentMode, setHumanJudgmentMode] = createSignal<HumanJudgmentMode>('prompt')
   const [selectedSourceProjectId, setSelectedSourceProjectId] = createSignal('')
@@ -249,6 +250,9 @@ const EditComparisonProjectPage = () => {
   const selectedProjectCount = createMemo(() => {
     return selectedSourceProjectId() ? 1 + selectedAdditionalSourceProjectIds().length : 0
   })
+  const isConflictResolutionAvailable = createMemo(() => {
+    return isSourceProjectBacked() ? summaryModeEnabled() : compareWithHumans() && humanJudgmentMode() === 'summary'
+  })
   const selectedHumanJudgmentModeLabel = createMemo(() => {
     return getHumanJudgmentModeLabel(humanJudgmentMode())
   })
@@ -305,6 +309,12 @@ const EditComparisonProjectPage = () => {
   })
 
   createEffect(() => {
+    if (!isConflictResolutionAvailable()) {
+      setAllowConflictResolution(false)
+    }
+  })
+
+  createEffect(() => {
     const comparisonProject = comparisonProjectQuery.data
     const comparisonProjectVersion = comparisonProject
       ? `${comparisonProject.id}:${new Date(comparisonProject.updatedAt).toISOString()}`
@@ -317,6 +327,7 @@ const EditComparisonProjectPage = () => {
     setComparisonProjectName(comparisonProject.name)
     setDescription(comparisonProject.description ?? '')
     setCompareWithHumans(comparisonProject.compareWithHumans)
+    setAllowConflictResolution(comparisonProject.allowConflictResolution)
     setHumanJudgmentMode(comparisonProject.humanJudgmentMode)
     setSummaryModeEnabled(comparisonProject.compareWithHumans && comparisonProject.humanJudgmentMode === 'summary')
     setSelectedModelIds(getSelectedModelIds(comparisonProject))
@@ -388,6 +399,7 @@ const EditComparisonProjectPage = () => {
             name: comparisonProjectName().trim(),
             description: description().trim() || null,
             compareWithHumans: compareWithHumans(),
+            allowConflictResolution: selectedHumanJudgmentMode === 'summary' && allowConflictResolution(),
             humanJudgmentMode: selectedHumanJudgmentMode,
             summarySourceProjectId: selectedHumanJudgmentMode === 'summary' ? selectedSourceProjectId() : null,
             modelIds: resolvedModelIds.length > 0 ? resolvedModelIds : undefined,
@@ -409,6 +421,7 @@ const EditComparisonProjectPage = () => {
             name: comparisonProjectName().trim(),
             description: description().trim() || null,
             compareWithHumans: compareWithHumans(),
+            allowConflictResolution: selectedHumanJudgmentMode === 'summary' && allowConflictResolution(),
             humanJudgmentMode: selectedHumanJudgmentMode,
             summarySourceProjectId:
               selectedHumanJudgmentMode === 'summary' ? comparisonProjectQuery.data?.summarySourceProjectId : null,
@@ -1102,6 +1115,35 @@ const EditComparisonProjectPage = () => {
                 </Show>
               </div>
             </Show>
+
+            <div class="border border-input rounded-md p-4 bg-muted/20">
+              <label
+                class="flex items-start gap-3"
+                classList={{
+                  'cursor-pointer': isConflictResolutionAvailable(),
+                  'opacity-60': !isConflictResolutionAvailable(),
+                }}
+              >
+                <input
+                  type="checkbox"
+                  class="mt-1"
+                  checked={isConflictResolutionAvailable() && allowConflictResolution()}
+                  disabled={!isConflictResolutionAvailable()}
+                  onChange={(event) => {
+                    return setAllowConflictResolution(event.currentTarget.checked)
+                  }}
+                />
+                <div class="flex-1">
+                  <p class="text-sm font-medium text-gray-900">Allow conflict resolution</p>
+                  <p class="text-xs text-muted-foreground mt-1">
+                    Add an article-level conflict handling column on the judgments comparison page.
+                  </p>
+                  <Show when={!isConflictResolutionAvailable()}>
+                    <p class="text-xs text-muted-foreground mt-1">Available in Summary mode only.</p>
+                  </Show>
+                </div>
+              </label>
+            </div>
 
             <div class="flex gap-3 pt-4">
               <Button type="submit" disabled={!canSubmit()}>

@@ -190,6 +190,7 @@ export type ComparisonProjectRecord = {
   description: string | null
   modelIds: string[] | null
   compareWithHumans: boolean
+  allowConflictResolution: boolean
   humanJudgmentMode: HumanJudgmentMode | null
   summarySourceProjectId: string | null
   useTitle: boolean
@@ -215,6 +216,16 @@ export type ComparisonProjectSourceProjectLinkRecord = {
   updatedAt: Date
   comparisonProjectId: string
   sourceProjectId: string
+}
+
+export type ComparisonProjectConflictResolutionRecord = {
+  id: string
+  comparisonProjectId: string
+  articleId: string
+  promptId: string | null
+  answerValue: string | null
+  createdAt: Date
+  updatedAt: Date
 }
 
 export type JudgmentsJobRecord = {

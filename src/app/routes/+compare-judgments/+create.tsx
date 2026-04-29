@@ -1,6 +1,6 @@
 import {useQuery} from '@tanstack/solid-query'
 import {createFileRoute, Link, useNavigate} from '@tanstack/solid-router'
-import {createMemo, createSignal, For, Show} from 'solid-js'
+import {createEffect, createMemo, createSignal, For, Show} from 'solid-js'
 
 import {Button} from '../../../components/ui/button'
 import {apiClient} from '../../../services/apiClient'
@@ -123,6 +123,7 @@ const CreateCompareJudgmentsPage = () => {
   const [useFulltext, setUseFulltext] = createSignal(false)
   const [useFulltextNoImages, setUseFulltextNoImages] = createSignal(false)
   const [compareWithHumans, setCompareWithHumans] = createSignal(false)
+  const [allowConflictResolution, setAllowConflictResolution] = createSignal(false)
   const [summaryModeEnabled, setSummaryModeEnabled] = createSignal(false)
   const [selectedSummarySourceProjectId, setSelectedSummarySourceProjectId] = createSignal('')
   const [isLoading, setIsLoading] = createSignal(false)
@@ -153,6 +154,9 @@ const CreateCompareJudgmentsPage = () => {
   })
   const summarySourcePrompts = createMemo(() => {
     return getSummarySourcePrompts(selectedSummarySourceProject())
+  })
+  const isConflictResolutionAvailable = createMemo(() => {
+    return summaryModeEnabled()
   })
   const selectableExistingPrompts = createMemo(() => {
     return sortedExistingPrompts()
@@ -205,6 +209,12 @@ const CreateCompareJudgmentsPage = () => {
     )
   })
 
+  createEffect(() => {
+    if (!isConflictResolutionAvailable()) {
+      setAllowConflictResolution(false)
+    }
+  })
+
   const handleSubmit = async (event: Event) => {
     event.preventDefault()
     setError(null)
@@ -228,6 +238,7 @@ const CreateCompareJudgmentsPage = () => {
       name: comparisonProjectName(),
       description: description().trim() || undefined,
       compareWithHumans: compareWithHumans(),
+      allowConflictResolution: isConflictResolutionAvailable() && allowConflictResolution(),
       humanJudgmentMode: summaryModeEnabled() ? 'summary' : 'prompt',
       summarySourceProjectId: summaryModeEnabled() ? selectedSummarySourceProjectId() : null,
       useTitle: compareTitleAndAbstract(),
@@ -444,6 +455,35 @@ const CreateCompareJudgmentsPage = () => {
                 <p class="text-xs text-muted-foreground mt-1">
                   Save that this comparison should include human judgments in future result views.
                 </p>
+              </div>
+            </label>
+          </div>
+
+          <div class="border border-input rounded-md p-4 bg-muted/20">
+            <label
+              class="flex items-start gap-3"
+              classList={{
+                'cursor-pointer': isConflictResolutionAvailable(),
+                'opacity-60': !isConflictResolutionAvailable(),
+              }}
+            >
+              <input
+                type="checkbox"
+                class="mt-1"
+                checked={isConflictResolutionAvailable() && allowConflictResolution()}
+                disabled={!isConflictResolutionAvailable()}
+                onChange={(event) => {
+                  return setAllowConflictResolution(event.currentTarget.checked)
+                }}
+              />
+              <div class="flex-1">
+                <p class="text-sm font-medium text-gray-900">Allow conflict resolution</p>
+                <p class="text-xs text-muted-foreground mt-1">
+                  Add an article-level conflict handling column on the judgments comparison page.
+                </p>
+                <Show when={!isConflictResolutionAvailable()}>
+                  <p class="text-xs text-muted-foreground mt-1">Available in Summary mode only.</p>
+                </Show>
               </div>
             </label>
           </div>
