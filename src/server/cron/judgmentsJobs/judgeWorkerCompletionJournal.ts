@@ -85,16 +85,20 @@ export type OwnerBackedJudgmentJobInfo = {
 }
 
 type CompletionOutboxRow = {
+  ackedAt: string | null
   claimId: string
   jobId: string
   payloadJson: string
   queueRecordId: string
+  status: string
   tokenUseJson: string | null
+  updatedAt: string
 }
 
 type CompletionReplayResult = {ackedCount: number; discardedCount: number; failedCount: number}
 type CompletionSendResult = {claimId: string; queueRecordId: string; status: string}
-type PendingTokenUseRow = {tokenUseJson: string}
+type PendingTokenUseJsonRow = {tokenUseJson: string}
+type PendingTokenUseRow = {articleId: string; jobId: string; promptId: string; tokenUseJson: string}
 
 class OwnerBackedJudgmentRequestError extends Error {
   responseText: string
@@ -109,6 +113,7 @@ class OwnerBackedJudgmentRequestError extends Error {
 }
 
 const completionJournalLogger = createRateLimitedLogger({windowMs: 30_000})
+const successCompletionTokenUseReplayGraceMs = 30_000
 
 let journalDatabase: Database | null = null
 
@@ -352,12 +357,15 @@ const getPendingTokenUseJson = (database: Database, payload: JudgeWorkerCompleti
         LIMIT 1
       `,
     )
-    .get(payload.jobId, payload.articleId, payload.promptId) as PendingTokenUseRow | null
+    .get(payload.jobId, payload.articleId, payload.promptId) as PendingTokenUseJsonRow | null
 
   return row?.tokenUseJson ?? null
 }
 
-const deletePendingTokenUse = (database: Database, payload: JudgeWorkerCompletionPayload): void => {
+const deletePendingTokenUseByIdentity = (
+  database: Database,
+  input: {articleId: string; jobId: string; promptId: string},
+): void => {
   database
     .query(
       `
@@ -367,7 +375,27 @@ const deletePendingTokenUse = (database: Database, payload: JudgeWorkerCompletio
           AND prompt_id = ?
       `,
     )
-    .run(payload.jobId, payload.articleId, payload.promptId)
+    .run(input.jobId, input.articleId, input.promptId)
+}
+
+const deletePendingTokenUse = (database: Database, payload: JudgeWorkerCompletionPayload): void => {
+  deletePendingTokenUseByIdentity(database, payload)
+}
+
+const getPendingTokenUseRows = (database: Database): PendingTokenUseRow[] => {
+  return database
+    .query(
+      `
+        SELECT
+          job_id AS jobId,
+          article_id AS articleId,
+          prompt_id AS promptId,
+          token_use_json AS tokenUseJson
+        FROM pending_token_use
+        ORDER BY created_at ASC
+      `,
+    )
+    .all() as PendingTokenUseRow[]
 }
 
 export const enqueueJudgeWorkerCompletion = async (payload: JudgeWorkerCompletionPayload): Promise<void> => {
@@ -377,7 +405,7 @@ export const enqueueJudgeWorkerCompletion = async (payload: JudgeWorkerCompletio
   const pendingTokenUseJson = getPendingTokenUseJson(database, payload)
 
   database.transaction(() => {
-    database
+    const result = database
       .query(
         `
           INSERT INTO completion_outbox (
@@ -409,9 +437,35 @@ export const enqueueJudgeWorkerCompletion = async (payload: JudgeWorkerCompletio
         status,
         now,
         now,
-      )
-    deletePendingTokenUse(database, payload)
+      ) as {changes?: number}
+    const insertedOrUpdated = Number(result.changes ?? 0) > 0
+    const reactivated =
+      !insertedOrUpdated && pendingTokenUseJson
+        ? reactivateAckedCompletionWithTokenUse(database, payload.claimId, pendingTokenUseJson) > 0
+        : false
+
+    if (insertedOrUpdated || reactivated) {
+      deletePendingTokenUse(database, payload)
+    }
   })()
+}
+
+const reactivateAckedCompletionWithTokenUse = (database: Database, claimId: string, tokenUseJson: string): number => {
+  const result = database
+    .query(
+      `
+        UPDATE completion_outbox
+        SET token_use_json = COALESCE(token_use_json, ?),
+            acked_at = NULL,
+            last_error = NULL,
+            updated_at = ?
+        WHERE claim_id = ?
+          AND acked_at IS NOT NULL
+      `,
+    )
+    .run(tokenUseJson, new Date().toISOString(), claimId) as {changes?: number}
+
+  return Number(result.changes ?? 0)
 }
 
 const getUnackedCompletionRows = (database: Database, claimId?: string): CompletionOutboxRow[] => {
@@ -419,11 +473,14 @@ const getUnackedCompletionRows = (database: Database, claimId?: string): Complet
     .query(
       `
         SELECT
+          acked_at AS ackedAt,
           claim_id AS claimId,
           job_id AS jobId,
           queue_record_id AS queueRecordId,
           payload_json AS payloadJson,
-          token_use_json AS tokenUseJson
+          status,
+          token_use_json AS tokenUseJson,
+          updated_at AS updatedAt
         FROM completion_outbox
         WHERE acked_at IS NULL
           ${claimId ? 'AND claim_id = ?' : ''}
@@ -431,6 +488,78 @@ const getUnackedCompletionRows = (database: Database, claimId?: string): Complet
       `,
     )
     .all(...(claimId ? [claimId] : [])) as CompletionOutboxRow[]
+}
+
+const getCompletionRows = (database: Database): CompletionOutboxRow[] => {
+  return database
+    .query(
+      `
+        SELECT
+          acked_at AS ackedAt,
+          claim_id AS claimId,
+          job_id AS jobId,
+          queue_record_id AS queueRecordId,
+          payload_json AS payloadJson,
+          status,
+          token_use_json AS tokenUseJson,
+          updated_at AS updatedAt
+        FROM completion_outbox
+        ORDER BY created_at DESC, claim_id DESC
+      `,
+    )
+    .all() as CompletionOutboxRow[]
+}
+
+const completionStatusNeedsTokenUseBeforeReplay = (status: string): boolean => {
+  return status === 'completed' || status === 'judged' || status === 'succeeded'
+}
+
+const completionRowIsReplayable = (row: CompletionOutboxRow): boolean => {
+  const updatedAt = new Date(row.updatedAt).getTime()
+  const ageMs = Number.isFinite(updatedAt) ? Date.now() - updatedAt : successCompletionTokenUseReplayGraceMs
+
+  return (
+    !completionStatusNeedsTokenUseBeforeReplay(row.status)
+    || row.tokenUseJson !== null
+    || ageMs >= successCompletionTokenUseReplayGraceMs
+  )
+}
+
+const completionRowMatchesPendingTokenUse = (row: CompletionOutboxRow, pending: PendingTokenUseRow): boolean => {
+  const payload = parseJson<JudgeWorkerCompletionPayload>(row.payloadJson)
+
+  return (
+    payload.jobId === pending.jobId && payload.articleId === pending.articleId && payload.promptId === pending.promptId
+  )
+}
+
+const reactivateAckedCompletionsWithPendingTokenUse = (database: Database): number => {
+  const pendingRows = getPendingTokenUseRows(database)
+  const completionRows = getCompletionRows(database)
+
+  return database.transaction((rows: PendingTokenUseRow[]) => {
+    return rows.reduce((count, pending) => {
+      const completionRow = completionRows.find((row) => {
+        return (
+          row.ackedAt !== null
+          && completionStatusNeedsTokenUseBeforeReplay(row.status)
+          && completionRowMatchesPendingTokenUse(row, pending)
+        )
+      })
+
+      if (!completionRow) {
+        return count
+      }
+
+      const changed = reactivateAckedCompletionWithTokenUse(database, completionRow.claimId, pending.tokenUseJson)
+
+      if (changed > 0) {
+        deletePendingTokenUseByIdentity(database, pending)
+      }
+
+      return count + changed
+    }, 0)
+  })(pendingRows)
 }
 
 const markCompletionAttemptFailed = (database: Database, claimId: string, error: unknown): void => {
@@ -511,8 +640,9 @@ const getCompletionPayloadFromRow = (row: CompletionOutboxRow) => {
 
 const replayCompletionRows = async (rows: CompletionOutboxRow[]): Promise<CompletionReplayResult> => {
   const database = openJournalDatabase()
+  const replayableRows = rows.filter(completionRowIsReplayable)
 
-  return rows.reduce<Promise<CompletionReplayResult>>(
+  return replayableRows.reduce<Promise<CompletionReplayResult>>(
     async (summaryPromise, row) => {
       const summary = await summaryPromise
 
@@ -545,7 +675,10 @@ const replayCompletionRows = async (rows: CompletionOutboxRow[]): Promise<Comple
 }
 
 export const replayJudgeWorkerCompletionOutbox = async (): Promise<CompletionReplayResult> => {
-  return replayCompletionRows(getUnackedCompletionRows(openJournalDatabase()))
+  const database = openJournalDatabase()
+  reactivateAckedCompletionsWithPendingTokenUse(database)
+
+  return replayCompletionRows(getUnackedCompletionRows(database))
 }
 
 export const flushJudgeWorkerCompletionOutboxForClaim = async (claimId: string): Promise<CompletionReplayResult> => {
@@ -573,8 +706,22 @@ export const attachTokenUseToPendingJudgeWorkerCompletion = async ({
 
     return payload.jobId === jobId && payload.articleId === articleId && promptIds.includes(payload.promptId)
   })
+  const ackedSuccessRow = row
+    ? null
+    : getCompletionRows(database).find((completionRow) => {
+        const payload = parseJson<JudgeWorkerCompletionPayload>(completionRow.payloadJson)
 
-  if (!row) {
+        return (
+          completionRow.ackedAt !== null
+          && completionStatusNeedsTokenUseBeforeReplay(completionRow.status)
+          && payload.jobId === jobId
+          && payload.articleId === articleId
+          && promptIds.includes(payload.promptId)
+        )
+      })
+  const completionRow = row ?? ackedSuccessRow
+
+  if (!completionRow) {
     const [promptId] = promptIds
 
     if (!promptId) {
@@ -608,12 +755,13 @@ export const attachTokenUseToPendingJudgeWorkerCompletion = async ({
       `
         UPDATE completion_outbox
         SET token_use_json = ?,
+            acked_at = NULL,
+            last_error = NULL,
             updated_at = ?
         WHERE claim_id = ?
-          AND acked_at IS NULL
       `,
     )
-    .run(JSON.stringify(tokenUse), new Date().toISOString(), row.claimId)
+    .run(JSON.stringify(tokenUse), new Date().toISOString(), completionRow.claimId)
 
   return true
 }
