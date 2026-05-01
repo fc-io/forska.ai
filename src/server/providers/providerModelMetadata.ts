@@ -170,7 +170,7 @@ const getReasoningEffortsFromEntry = (value: unknown): string[] => {
     ? reasoningEffortKeys.reduce<string | null>((resolved, key) => {
         return resolved ?? getTrimmedValue(record[key])
       }, null)
-    : null
+    : getTrimmedValue(value)
 
   return reasoningEffort ? [reasoningEffort] : []
 }

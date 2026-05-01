@@ -6,10 +6,14 @@ import {createStore} from 'solid-js/store'
 import {Button} from '../../../../components/ui/button.tsx'
 import {ensureSelectableModelId} from '../../../../services/ensureSelectableModelId.ts'
 import {getAnthropicSupportedThinkingEfforts} from '../../../../utils/anthropicThinking.ts'
-import {stripProviderModelThinkingBadgeLabel} from '../../../../utils/providerModelLabel.ts'
+import {
+  appendProviderModelThinkingBadgeLabel,
+  stripProviderModelThinkingBadgeLabel,
+} from '../../../../utils/providerModelLabel.ts'
 import {
   getProviderModelOptions,
   getProviderModelSupportedOptions,
+  getProviderModelThinkingOption,
   type ProviderModelOptions,
   type ProviderModelThinkingOption,
 } from '../../../../utils/providerModelOptions.ts'
@@ -75,11 +79,23 @@ type ManualModelFormState = {
   variant: string
 }
 
-type ProviderPageModel = ProviderModel & {persistedId: string | null}
+type ProviderPageModel = ProviderModel & {
+  isThinkingDefaultRow?: boolean
+  isThinkingOptionRow?: boolean
+  persistedId: string | null
+  thinkingLabelValue?: string
+}
 type ProviderPageModelDraft = ProviderPageModel & {
   displayNameValue: string
   thinkingValue: ProviderModelThinkingOption
   variantValue: string
+}
+
+const providerPageBinaryThinkingOptions: ProviderModelThinkingOption[] = ['disabled', 'enabled']
+
+const providerPageThinkingVariantByOption: Partial<Record<ProviderModelThinkingOption, string>> = {
+  disabled: 'non-thinking',
+  enabled: 'thinking',
 }
 
 const getTrimmedModelValue = (value: string | null | undefined): string | null => {
@@ -172,6 +188,19 @@ const getCompactVariantModelDisplayName = (model: {
   return isCompactVariantProvider(model.provider) ? stripProviderModelThinkingBadgeLabel(rawLabel) : rawLabel
 }
 
+const getProviderPageModelDisplayName = (model: {
+  displayName: string | null
+  isThinkingOptionRow?: boolean
+  modelName: string | null
+  name: string
+  provider: string | null | undefined
+  remoteModelId: string | null
+}) => {
+  return model.isThinkingOptionRow
+    ? stripProviderModelThinkingBadgeLabel(model.displayName ?? model.name)
+    : getCompactVariantModelDisplayName(model)
+}
+
 const getCompactVariantLabel = (model: {
   provider: string | null | undefined
   variant: string | null
@@ -228,11 +257,285 @@ const getProviderModelThinkingValue = (model: {
   variant: string | null
   version: string | null
 }): ProviderModelThinkingOption => {
+  return getProviderModelConfiguredThinkingValue(model) ?? 'disabled'
+}
+
+const getProviderModelConfiguredThinkingValue = (model: {
+  metadataJson: unknown
+  modelName: string | null
+  remoteModelId: string | null
+  variant: string | null
+  version: string | null
+}): ProviderModelThinkingOption | null => {
   const thinking =
     getProviderModelOptions(model.metadataJson).thinking
     ?? getProviderModelOptions({variant: model.variant ?? model.version}).thinking
 
-  return thinking ?? 'disabled'
+  return thinking
+}
+
+const getProviderPageThinkingVariant = (thinking: ProviderModelThinkingOption) => {
+  return providerPageThinkingVariantByOption[thinking] ?? thinking
+}
+
+const getProviderPageThinkingOptionFromVariant = (
+  value: string | null | undefined,
+): ProviderModelThinkingOption | null => {
+  return getProviderModelThinkingOption(value)
+}
+
+const getProviderPageThinkingLabel = (thinking: ProviderModelThinkingOption) => {
+  return thinking
+}
+
+const getProviderPageThinkingRowLabel = (model: {
+  thinkingLabelValue?: string
+  thinkingValue: ProviderModelThinkingOption
+}) => {
+  return model.thinkingLabelValue ?? getProviderPageThinkingLabel(model.thinkingValue)
+}
+
+const getProviderPageMetadataRecord = (value: unknown): Record<string, unknown> | null => {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
+}
+
+const getProviderPageModelMetadataWithThinking = ({
+  metadataJson,
+  thinking,
+}: {
+  metadataJson: unknown
+  thinking: ProviderModelThinkingOption
+}) => {
+  const metadataRecord = getProviderPageMetadataRecord(metadataJson)
+  const optionsRecord = getProviderPageMetadataRecord(metadataRecord?.options)
+  const options = {...(optionsRecord ?? {}), thinking}
+
+  return metadataRecord ? {...metadataRecord, options} : {options}
+}
+
+const getProviderPageThinkingModelName = (model: {
+  displayName: string | null
+  modelName: string | null
+  name: string
+  remoteModelId: string | null
+}) => {
+  return (
+    getTrimmedModelValue(model.remoteModelId)
+    ?? getTrimmedModelValue(model.modelName)
+    ?? getTrimmedModelValue(model.displayName)
+    ?? model.name
+  )
+}
+
+const getUniqueProviderPageThinkingOptions = (values: Array<ProviderModelThinkingOption | null>) => {
+  return Array.from(
+    new Set(
+      values.filter((value): value is ProviderModelThinkingOption => {
+        return Boolean(value)
+      }),
+    ),
+  )
+}
+
+const getProviderPageReasoningThinkingOptions = (metadataJson: unknown) => {
+  return getUniqueProviderPageThinkingOptions(
+    getProviderModelReasoningEfforts(metadataJson).map((effort) => {
+      return getProviderModelThinkingOption(effort)
+    }),
+  )
+}
+
+const getProviderPageThinkingOptionsForModel = (model: ProviderModel) => {
+  const reasoningOptions = getProviderPageReasoningThinkingOptions(model.metadataJson)
+  const configuredThinking = getProviderModelConfiguredThinkingValue(model)
+  const supportedOptions =
+    reasoningOptions.length > 0
+      ? reasoningOptions
+      : supportsProviderModelThinking(model)
+        ? providerPageBinaryThinkingOptions
+        : []
+
+  return getUniqueProviderPageThinkingOptions([...supportedOptions, configuredThinking])
+}
+
+const getProviderPageThinkingOptionsForGroup = (models: ProviderModel[]) => {
+  return getUniqueProviderPageThinkingOptions(
+    models.flatMap((model) => {
+      return getProviderPageThinkingOptionsForModel(model)
+    }),
+  )
+}
+
+const getProviderPageThinkingGroupKey = (model: ProviderModel) => {
+  return [model.providerConnectionId ?? 'connection', model.provider, getProviderPageThinkingModelName(model)].join(':')
+}
+
+const getProviderPageThinkingVirtualModelId = ({
+  model,
+  thinking,
+}: {
+  model: ProviderModel
+  thinking: ProviderModelThinkingOption
+}) => {
+  return `${getProviderPageThinkingGroupKey(model)}:thinking:${thinking}`
+}
+
+const isProviderPageExpandableThinkingModel = (model: ProviderModel) => {
+  const variant = getTrimmedModelValue(model.variant ?? model.version)
+  const configuredThinking = getProviderModelConfiguredThinkingValue(model)
+  const thinkingOptions = getProviderPageThinkingOptionsForModel(model)
+
+  return (
+    thinkingOptions.length > 0
+    && (!variant || Boolean(configuredThinking) || Boolean(getProviderPageThinkingOptionFromVariant(variant)))
+  )
+}
+
+const getProviderPageStoredThinkingModel = ({
+  hasDefaultDisabledThinking,
+  models,
+  thinking,
+}: {
+  hasDefaultDisabledThinking: boolean
+  models: ProviderModel[]
+  thinking: ProviderModelThinkingOption
+}) => {
+  const variant = getProviderPageThinkingVariant(thinking)
+  const exactVariantModel = models.find((model) => {
+    return getTrimmedModelValue(model.variant ?? model.version) === variant
+  })
+
+  return (
+    exactVariantModel
+    ?? models.find((model) => {
+      const configuredThinking = getProviderModelConfiguredThinkingValue(model)
+
+      return (
+        !getProviderPageThinkingOptionFromVariant(model.variant ?? model.version)
+        && (configuredThinking === thinking
+          || (hasDefaultDisabledThinking && thinking === 'disabled' && !configuredThinking))
+      )
+    })
+  )
+}
+
+const getProviderPageThinkingDisplayName = ({
+  model,
+  thinking,
+}: {
+  model: ProviderModel
+  thinking: ProviderModelThinkingOption
+}) => {
+  return appendProviderModelThinkingBadgeLabel({
+    label: model.displayName ?? model.name,
+    thinking: getProviderPageThinkingLabel(thinking),
+  })
+}
+
+const getProviderPageThinkingModel = ({
+  model,
+  persistedId,
+  thinking,
+}: {
+  model: ProviderModel
+  persistedId: string | null
+  thinking: ProviderModelThinkingOption
+}): ProviderPageModel => {
+  const displayName = getProviderPageThinkingDisplayName({model, thinking})
+  const variant = getProviderPageThinkingVariant(thinking)
+
+  return {
+    ...model,
+    displayName,
+    enabled: persistedId ? model.enabled : false,
+    id: persistedId ?? getProviderPageThinkingVirtualModelId({model, thinking}),
+    isThinkingOptionRow: true,
+    metadataJson: getProviderPageModelMetadataWithThinking({metadataJson: model.metadataJson, thinking}),
+    name: displayName,
+    persistedId,
+    thinkingLabelValue: getProviderPageThinkingLabel(thinking),
+    variant,
+    version: variant,
+  }
+}
+
+const getProviderPageDefaultThinkingModel = (model: ProviderModel): ProviderPageModel => {
+  return {
+    ...model,
+    isThinkingDefaultRow: true,
+    isThinkingOptionRow: true,
+    persistedId: model.id,
+    thinkingLabelValue: 'default',
+  }
+}
+
+const getProviderPageThinkingModels = (models: ProviderModel[]): ProviderPageModel[] => {
+  const expandableModels = models.filter(isProviderPageExpandableThinkingModel)
+  const expandableModelIds = new Set(
+    expandableModels.map((model) => {
+      return model.id
+    }),
+  )
+  const groups = expandableModels.reduce<Map<string, ProviderModel[]>>((acc, model) => {
+    const key = getProviderPageThinkingGroupKey(model)
+    const current = acc.get(key) ?? []
+
+    acc.set(key, [...current, model])
+
+    return acc
+  }, new Map())
+  const usedModelIds = new Set<string>()
+  const thinkingModels = Array.from(groups.values()).flatMap((group) => {
+    const sourceModel = group[0]
+
+    if (!sourceModel) {
+      return []
+    }
+
+    const thinkingOptions = getProviderPageThinkingOptionsForGroup(group)
+    const hasDefaultDisabledThinking = thinkingOptions.includes('disabled')
+
+    const defaultThinkingModels = hasDefaultDisabledThinking
+      ? []
+      : group
+          .filter((model) => {
+            return (
+              !getProviderModelConfiguredThinkingValue(model)
+              && !getProviderPageThinkingOptionFromVariant(model.variant ?? model.version)
+            )
+          })
+          .map((model) => {
+            usedModelIds.add(model.id)
+
+            return getProviderPageDefaultThinkingModel(model)
+          })
+    const thinkingModels = thinkingOptions.map((thinking) => {
+      const storedModel = getProviderPageStoredThinkingModel({hasDefaultDisabledThinking, models: group, thinking})
+
+      if (storedModel) {
+        usedModelIds.add(storedModel.id)
+      }
+
+      return getProviderPageThinkingModel({
+        model: storedModel ?? sourceModel,
+        persistedId: storedModel?.id ?? null,
+        thinking,
+      })
+    })
+
+    return [...defaultThinkingModels, ...thinkingModels]
+  })
+  const remainingModels = models
+    .filter((model) => {
+      return !expandableModelIds.has(model.id) && !usedModelIds.has(model.id)
+    })
+    .map((model) => {
+      return {...model, persistedId: model.id}
+    })
+
+  return [...thinkingModels, ...remainingModels]
 }
 
 const getProviderPageModels = ({
@@ -298,9 +601,7 @@ const getProviderPageModels = ({
   }
 
   if (connection.providerKind !== 'codex') {
-    return connection.models.map((model) => {
-      return {...model, persistedId: model.id}
-    })
+    return getProviderPageThinkingModels(connection.models)
   }
 
   const storedModelMap = new Map(
@@ -408,6 +709,25 @@ const getSubmittedModelOptions = ({
   thinkingValue: ProviderModelThinkingOption
 }): ProviderModelOptions | undefined => {
   return supportsThinking ? {thinking: thinkingValue} : undefined
+}
+
+const createProviderPageThinkingModel = async (draft: ProviderPageModelDraft) => {
+  if (!draft.providerConnectionId) {
+    throw new Error('Provider model connection is missing')
+  }
+
+  const result = await addManualProviderModel({
+    displayName: draft.displayNameValue,
+    id: draft.providerConnectionId,
+    options: getSubmittedModelOptions({
+      supportsThinking: !draft.isThinkingDefaultRow,
+      thinkingValue: draft.thinkingValue,
+    }),
+    remoteModelId: getProviderPageThinkingModelName(draft),
+    variant: getProviderPageThinkingVariant(draft.thinkingValue),
+  })
+
+  return result.modelId
 }
 
 const hasConnectionFormChanges = ({connection, form}: {connection: ProviderConnection; form: ConnectionFormState}) => {
@@ -784,6 +1104,8 @@ const ProviderDetailPage = () => {
       return
     }
 
+    const supportsThinking = isQwen35Model(manualModelForm.remoteModelId)
+
     setPageError('')
     setPageMessage('')
 
@@ -791,12 +1113,11 @@ const ProviderDetailPage = () => {
       await addManualModelMutation.mutateAsync({
         displayName: getTrimmedValue(manualModelForm.displayName) || undefined,
         id: connection.id,
-        options: getSubmittedModelOptions({
-          supportsThinking: isQwen35Model(manualModelForm.remoteModelId),
-          thinkingValue: manualModelForm.thinking,
-        }),
+        options: getSubmittedModelOptions({supportsThinking, thinkingValue: manualModelForm.thinking}),
         remoteModelId: manualModelForm.remoteModelId,
-        variant: getTrimmedValue(manualModelForm.variant) || undefined,
+        variant: supportsThinking
+          ? getProviderPageThinkingVariant(manualModelForm.thinking)
+          : getTrimmedValue(manualModelForm.variant) || undefined,
       })
     } catch (error) {
       setPageError(error instanceof Error ? error.message : 'Failed to add manual model')
@@ -840,6 +1161,22 @@ const ProviderDetailPage = () => {
 
   const hasUnsavedChanges = createMemo(() => {
     return hasConnectionDraftChanges() || hasModelDraftChanges()
+  })
+
+  const hasThinkingOptionRows = createMemo(() => {
+    return modelDrafts().some((draft) => {
+      return draft.isThinkingOptionRow
+    })
+  })
+
+  const shouldUseCompactModelsTable = createMemo(() => {
+    return (
+      isCompactVariantConnection()
+      || (modelDrafts().length > 0
+        && modelDrafts().every((draft) => {
+          return draft.isThinkingOptionRow
+        }))
+    )
   })
 
   const isSavingChanges = () => {
@@ -977,14 +1314,16 @@ const ProviderDetailPage = () => {
                 provider: draft.provider,
                 version: getTrimmedModelValue(draft.variant ?? draft.version),
               })
-            : draft.id)
+            : draft.isThinkingOptionRow
+              ? await createProviderPageThinkingModel(draft)
+              : draft.id)
 
         return updateModelMutation.mutateAsync({
           displayName: draft.displayNameValue,
           enabled: draft.enabled,
           id: persistedModelId,
           options: getSubmittedModelOptions({
-            supportsThinking: supportsProviderModelThinking(draft),
+            supportsThinking: supportsProviderModelThinking(draft) && !draft.isThinkingDefaultRow,
             thinkingValue: draft.thinkingValue,
           }),
           variant:
@@ -1436,7 +1775,9 @@ const ProviderDetailPage = () => {
                       <p class="text-sm text-gray-500">
                         {isCompactVariantConnection()
                           ? getCompactVariantModelsDescription(selectedConnection()?.providerKind)
-                          : 'Enable, disable, rename, and configure the models available on this provider.'}
+                          : hasThinkingOptionRows()
+                            ? 'Enable or disable each model and thinking combination available on this provider.'
+                            : 'Enable, disable, rename, and configure the models available on this provider.'}
                       </p>
                     </div>
                     <div class="text-xs font-medium uppercase tracking-wide text-gray-500">
@@ -1512,7 +1853,7 @@ const ProviderDetailPage = () => {
 
                       <div class="overflow-x-auto rounded-lg border border-gray-200">
                         <Show
-                          when={isCompactVariantConnection()}
+                          when={shouldUseCompactModelsTable()}
                           fallback={
                             <table class="min-w-full divide-y divide-gray-200 text-sm">
                               <thead class="bg-gray-50">
@@ -1534,17 +1875,26 @@ const ProviderDetailPage = () => {
                                     return (
                                       <tr>
                                         <td class="px-4 py-3 align-top">
-                                          <input
-                                            class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
-                                            onInput={(event) => {
-                                              return updateModelDraft({
-                                                id: model.id,
-                                                updates: {displayNameValue: event.currentTarget.value},
-                                              })
-                                            }}
-                                            type="text"
-                                            value={model.displayNameValue}
-                                          />
+                                          <Show
+                                            when={model.isThinkingOptionRow}
+                                            fallback={
+                                              <input
+                                                class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
+                                                onInput={(event) => {
+                                                  return updateModelDraft({
+                                                    id: model.id,
+                                                    updates: {displayNameValue: event.currentTarget.value},
+                                                  })
+                                                }}
+                                                type="text"
+                                                value={model.displayNameValue}
+                                              />
+                                            }
+                                          >
+                                            <div class="text-sm font-medium text-gray-900">
+                                              {getProviderPageModelDisplayName(model)}
+                                            </div>
+                                          </Show>
                                           <div class="mt-2 text-xs text-gray-500">
                                             {model.remoteModelId ?? model.modelName ?? '-'} • {model.source ?? 'manual'}
                                           </div>
@@ -1566,39 +1916,50 @@ const ProviderDetailPage = () => {
                                           </Show>
                                         </td>
                                         <td class="px-4 py-3 align-top">
-                                          <input
-                                            class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
-                                            onInput={(event) => {
-                                              return updateModelDraft({
-                                                id: model.id,
-                                                updates: {variantValue: event.currentTarget.value},
-                                              })
-                                            }}
-                                            type="text"
-                                            value={model.variantValue}
-                                          />
-                                          <Show when={supportsProviderModelThinking(model)}>
-                                            <div class="mt-2">
-                                              <label class="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
-                                                Thinking
-                                              </label>
-                                              <select
-                                                class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
-                                                onChange={(event) => {
-                                                  return updateModelDraft({
-                                                    id: model.id,
-                                                    updates: {
-                                                      thinkingValue: event.currentTarget
-                                                        .value as ProviderModelThinkingOption,
-                                                    },
-                                                  })
-                                                }}
-                                                value={model.thinkingValue}
-                                              >
-                                                <option value="disabled">Disabled</option>
-                                                <option value="enabled">Enabled</option>
-                                              </select>
-                                            </div>
+                                          <Show
+                                            when={model.isThinkingOptionRow}
+                                            fallback={
+                                              <>
+                                                <input
+                                                  class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
+                                                  onInput={(event) => {
+                                                    return updateModelDraft({
+                                                      id: model.id,
+                                                      updates: {variantValue: event.currentTarget.value},
+                                                    })
+                                                  }}
+                                                  type="text"
+                                                  value={model.variantValue}
+                                                />
+                                                <Show when={supportsProviderModelThinking(model)}>
+                                                  <div class="mt-2">
+                                                    <label class="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                                                      Thinking
+                                                    </label>
+                                                    <select
+                                                      class="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900"
+                                                      onChange={(event) => {
+                                                        return updateModelDraft({
+                                                          id: model.id,
+                                                          updates: {
+                                                            thinkingValue: event.currentTarget
+                                                              .value as ProviderModelThinkingOption,
+                                                          },
+                                                        })
+                                                      }}
+                                                      value={model.thinkingValue}
+                                                    >
+                                                      <option value="disabled">Disabled</option>
+                                                      <option value="enabled">Enabled</option>
+                                                    </select>
+                                                  </div>
+                                                </Show>
+                                              </>
+                                            }
+                                          >
+                                            <span class={getCompactVariantBadgeClass(model.provider)}>
+                                              {getProviderPageThinkingRowLabel(model)}
+                                            </span>
                                           </Show>
                                           <div class="mt-2 text-xs text-gray-500">
                                             Created {formatTimestamp(model.createdAt)}
@@ -1652,7 +2013,7 @@ const ProviderDetailPage = () => {
                                             class="font-medium"
                                             title={model.remoteModelId ?? model.modelName ?? model.name}
                                           >
-                                            {getCompactVariantModelDisplayName(model)}
+                                            {getProviderPageModelDisplayName(model)}
                                           </span>
                                           <Show when={model.persistedId}>
                                             <span class="rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-gray-500">
@@ -1663,7 +2024,9 @@ const ProviderDetailPage = () => {
                                       </td>
                                       <td class="px-4 py-2 align-middle">
                                         <span class={getCompactVariantBadgeClass(model.provider)}>
-                                          {getCompactVariantLabel(model)}
+                                          {model.isThinkingOptionRow
+                                            ? getProviderPageThinkingRowLabel(model)
+                                            : getCompactVariantLabel(model)}
                                         </span>
                                       </td>
                                       <td class="px-4 py-2 align-middle">

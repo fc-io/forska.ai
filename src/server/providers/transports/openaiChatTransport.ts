@@ -18,10 +18,15 @@ type OpenAIChatCompletionRequest = {
   messages: Array<{content: string; role: 'system' | 'user'}>
   model: string
   presence_penalty?: number
+  reasoning_effort?: string
   response_format: ReturnType<typeof getJsonSchemaResponseFormat>
   temperature: number
   top_k?: number
   top_p?: number
+}
+
+const getOpenAIReasoningEffort = (thinking: ProviderModelOptions['thinking']): string | null => {
+  return thinking && thinking !== 'enabled' && thinking !== 'disabled' ? thinking : null
 }
 
 const getQwen35SamplingConfig = (): Pick<
@@ -69,10 +74,12 @@ export const getOpenAIChatCompletionRequest = ({
     temperature,
   }
   const thinking = getProviderModelOptions(modelOptions).thinking
+  const reasoningEffort = getOpenAIReasoningEffort(thinking)
+  const request = reasoningEffort ? {...defaultRequest, reasoning_effort: reasoningEffort} : defaultRequest
 
   return isQwen35Model(modelName)
     ? {...defaultRequest, ...getQwen35SamplingConfig(), chat_template_kwargs: {enable_thinking: thinking === 'enabled'}}
-    : defaultRequest
+    : request
 }
 
 export const listOpenAIChatModels = async ({

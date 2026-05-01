@@ -56,6 +56,25 @@ test('normalized provider model metadata merges runtime metadata and reasoning e
   expect(getProviderModelMetadataSource(metadata)).toBe('provider+runtime')
 })
 
+test('normalized provider model metadata reads string reasoning effort entries', () => {
+  const metadata = getNormalizedProviderModelMetadata({
+    listedModel: {
+      displayName: 'openai/gpt-oss-120b',
+      metadataJson: null,
+      modelName: 'openai/gpt-oss-120b',
+      remoteModelId: 'openai/gpt-oss-120b',
+      variant: null,
+      version: null,
+    },
+    providerKind: 'sglang',
+    rawMetadata: {supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh']},
+    source: 'provider',
+  })
+
+  expect(getProviderModelMetadataReasoningEfforts(metadata)).toEqual(['low', 'medium', 'high', 'xhigh'])
+  expect(getProviderModelMetadataSupportedOptions(metadata)).toEqual({thinking: true})
+})
+
 test('normalized provider model metadata does not keep raw provider payloads', () => {
   const metadata = getNormalizedProviderModelMetadata({
     listedModel: {

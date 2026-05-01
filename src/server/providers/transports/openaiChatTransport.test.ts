@@ -74,6 +74,21 @@ test('keeps default request settings for non-Qwen models', () => {
   expect(request.chat_template_kwargs).toBeUndefined()
 })
 
+test('uses OpenAI-compatible reasoning effort for thinking levels', () => {
+  const request = getOpenAIChatCompletionRequest({
+    maxCompletionTokens: 2000,
+    modelName: 'openai/gpt-oss-120b',
+    modelOptions: {thinking: 'high'},
+    outputSchema: {type: 'object'},
+    prompt: 'Prompt',
+    systemPrompt: 'System',
+    temperature: 0.2,
+  })
+
+  expect(request.reasoning_effort).toBe('high')
+  expect(request.chat_template_kwargs).toBeUndefined()
+})
+
 test('lists OpenAI models without transport-specific variants', () => {
   expect(getOpenAIListedModels({metadataJson: {id: 'Qwen/Qwen3.5-27B'}, modelName: 'Qwen/Qwen3.5-27B'})).toEqual([
     {

@@ -1,6 +1,6 @@
 import {getQwen35ThinkingVariant} from './qwen35Thinking.ts'
 
-export const providerModelThinkingOptions = ['disabled', 'enabled'] as const
+export const providerModelThinkingOptions = ['disabled', 'enabled', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
 export type ProviderModelThinkingOption = (typeof providerModelThinkingOptions)[number]
 
@@ -23,7 +23,9 @@ const getLegacyThinkingOption = (value: unknown): ProviderModelThinkingOption | 
 export const getProviderModelThinkingOption = (value: unknown): ProviderModelThinkingOption | null => {
   const normalized = typeof value === 'string' ? value.trim().toLowerCase() : null
 
-  return normalized === 'enabled' || normalized === 'disabled' ? normalized : getLegacyThinkingOption(value)
+  return normalized && providerModelThinkingOptions.includes(normalized as ProviderModelThinkingOption)
+    ? (normalized as ProviderModelThinkingOption)
+    : getLegacyThinkingOption(value)
 }
 
 export const getProviderModelOptions = (value: unknown): ProviderModelOptions => {
@@ -43,8 +45,9 @@ export const getProviderModelSupportedOptions = (value: unknown): ProviderModelS
   const discovery = getJsonRecord(metadataRecord?.discovery)
   const capabilities = getJsonRecord(discovery?.capabilities)
   const supportedOptions = getJsonRecord(capabilities?.supportedOptions)
+  const reasoningEfforts = Array.isArray(capabilities?.reasoningEfforts) ? capabilities.reasoningEfforts : []
 
-  return {thinking: supportedOptions?.thinking === true}
+  return {thinking: supportedOptions?.thinking === true || reasoningEfforts.length > 0}
 }
 
 export const getPersistedProviderModelOptions = (options: ProviderModelOptions): ProviderModelOptions | null => {
