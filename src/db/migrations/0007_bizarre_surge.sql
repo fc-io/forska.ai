@@ -1,1 +1,0 @@
-ALTER TABLE "articles" ADD COLUMN "full_text_pdf" text;

@@ -1,1 +1,0 @@
-CREATE INDEX "judgments_created_idx" ON "judgments" USING btree ("created_at");

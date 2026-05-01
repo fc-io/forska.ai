@@ -1,3 +1,0 @@
-ALTER TABLE "project_prompts" ADD COLUMN "origin_project_id" uuid;--> statement-breakpoint
-ALTER TABLE "project_prompts" ADD COLUMN "enabled" boolean DEFAULT true NOT NULL;--> statement-breakpoint
-ALTER TABLE "project_prompts" ADD CONSTRAINT "project_prompts_origin_project_id_projects_id_fk" FOREIGN KEY ("origin_project_id") REFERENCES "public"."projects"("id") ON DELETE set null ON UPDATE no action;

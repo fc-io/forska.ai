@@ -1,1 +1,0 @@
-ALTER TABLE "projects" ADD COLUMN "engine" "engine_enum";

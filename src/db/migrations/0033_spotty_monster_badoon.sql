@@ -1,1 +1,0 @@
-CREATE INDEX "project_articles_imported_from_project_idx" ON "project_articles" USING btree ("imported_from_project_id");
