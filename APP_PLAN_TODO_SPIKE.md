@@ -2,7 +2,7 @@
 
 - This file tracks the active ElectroBun feasibility spike and the next phase-1 execution plan.
 - Full packaging and release work live in `APP_PLAN_TODO_FULL.md`.
-- Completed work lives in `APP_PLAN_IMPLEMENTED.md`.
+- Completed work lives in `plans/old/APP_PLAN_IMPLEMENTED.md`.
 
 ## Goal
 
@@ -74,7 +74,7 @@
 - The implementation-ready gap was the missing slice-1 contract, not missing product scope. The sections below now define packaged/dev mode boundaries, manifest fields, env sanitization expectations, runner-proof output, staging-script fallback, and the recording template needed to start coding.
 - Do not start signed installers, updater wiring, release channels, Linux packaging, or compiled-backend artifact work during this spike.
 - Do not treat a manual smoke step as passing if the required provider endpoint, host-tool isolation, API-key secret-store backend, or platform machine is unavailable; record it as unverified or blocked.
-- Every completed slice moves landed details into `APP_PLAN_IMPLEMENTED.md`, removes or rewrites stale TODO bullets in this file, and lists commands run or explicitly skipped.
+- Every completed slice moves landed details into `plans/old/APP_PLAN_IMPLEMENTED.md`, removes or rewrites stale TODO bullets in this file, and lists commands run or explicitly skipped.
 
 ## Phase 1 Implementation Order
 
@@ -114,7 +114,7 @@ Files:
 - `scripts/prepareDesktopArtifactSource.ts` (new, only if ElectroBun copy rules cannot express the needed include/exclude manifest directly)
 - `scripts/prepareDesktopArtifactSource.test.ts` (new, if a staging script is added)
 - `package.json` only if a helper script is required
-- `APP_PLAN_IMPLEMENTED.md`
+- `plans/old/APP_PLAN_IMPLEMENTED.md`
 - `APP_PLAN_TODO_SPIKE.md`
 
 Implementation Contract:
@@ -136,7 +136,7 @@ Runner Proof Procedure:
 - Run at least one proof with host `bun`, `bunx`, `node`, and `npm` absent from `PATH`, or record exactly why a tool cannot be hidden. Do not set `FORSKA_DESKTOP_BUN_BIN` for packaged proof.
 - The proof target may be a minimal copied TypeScript child entrypoint before the full backend stack is launched, but it must exercise the same chosen packaged runner and artifact-relative TypeScript/module resolution path that the backend will use.
 - Accept `process.execPath` only if the child can start from the built artifact, import TypeScript successfully, print the expected proof payload, and exit 0 under host-tool isolation. If not, switch the slice to a copied platform-specific Bun binary and keep packaged host fallback disabled.
-- Record the exact proof command or manual launch path, artifact path, runner path, backend/probe entrypoint path, stdout/stderr summary, exit code, host-tool isolation result, and chosen runner outcome in `APP_PLAN_IMPLEMENTED.md` before marking slice 1 complete.
+- Record the exact proof command or manual launch path, artifact path, runner path, backend/probe entrypoint path, stdout/stderr summary, exit code, host-tool isolation result, and chosen runner outcome in `plans/old/APP_PLAN_IMPLEMENTED.md` before marking slice 1 complete.
 
 Decision Record Template:
 
@@ -162,7 +162,7 @@ Decision Record Template:
 Deliverables:
 
 - Decide and document the packaged backend runner path: verified ElectroBun `process.execPath` child launch or a copied platform-specific Bun binary.
-- Record the runner proof result in `APP_PLAN_IMPLEMENTED.md`, including the exact command or smoke check used, resolved runner path, backend entrypoint path, exit code, and whether the test ran inside the built artifact with host `bun`, `bunx`, `node`, and `npm` removed from `PATH`.
+- Record the runner proof result in `plans/old/APP_PLAN_IMPLEMENTED.md`, including the exact command or smoke check used, resolved runner path, backend entrypoint path, exit code, and whether the test ran inside the built artifact with host `bun`, `bunx`, `node`, and `npm` removed from `PATH`.
 - Produce actionable startup diagnostics for a missing/unusable packaged runner with no host-Bun fallback in packaged mode.
 - Lock artifact-relative `views/mainview`, backend entrypoint, migration SQL, source roots, native module roots, and required metadata expectations in an artifact manifest or equivalent testable helper.
 - Verify `viewsRoot` resolves to the artifact root's `views` directory, with `views://mainview/index.html` loading `views/mainview/index.html`; it must not depend on `src/views`, repo `dist`, or `process.cwd()`.
@@ -179,7 +179,7 @@ Handoff Checklist:
 - Lock one artifact-root helper that resolves the packaged runner, backend entrypoints, `views/mainview`, `src/db/duckdbMigrations`, required source roots, native module roots, and required metadata; prefer one helper over scattered path joins.
 - Decide whether packaged startup will launch `scripts/startServerStack.ts` or a copied `src` entrypoint. If it launches the script, include `scripts` in the source-first artifact manifest; otherwise keep the packaged stack entrypoint under copied `src` paths.
 - Update `electrobun.config.ts` copy/watch-ignore rules and Bun test discovery ignores together so generated `.desktopArtifacts/` and `.desktopBuild/` files cannot re-enter watch or test runs.
-- Record the runner proof and artifact manifest result in `APP_PLAN_IMPLEMENTED.md` before marking the slice complete, including any files intentionally copied despite being tests, fixtures, or dev-only assets.
+- Record the runner proof and artifact manifest result in `plans/old/APP_PLAN_IMPLEMENTED.md` before marking the slice complete, including any files intentionally copied despite being tests, fixtures, or dev-only assets.
 
 Quality Gates:
 
@@ -650,7 +650,7 @@ Quality Gates:
 
 - All commands complete successfully.
 - All manual checks pass outside the repo checkout with no host `bun`, `node`, `npm`, `bunx`, DuckDB CLI, `codex`, `sqlite3`, `ssh`, or `nvidia-smi` exposure unless the exposure is explicitly recorded; any provider secret-store helper exposure is recorded separately.
-- Smoke result, command output summary, artifact path, artifact parent path space-check result, data root, runtime temp path, log path, export/download result, provider secret-store backend if tested, judging invocation result, and any host-tool exposure are recorded in `APP_PLAN_IMPLEMENTED.md` if it passes, or in this file under the relevant blocker if it fails.
+- Smoke result, command output summary, artifact path, artifact parent path space-check result, data root, runtime temp path, log path, export/download result, provider secret-store backend if tested, judging invocation result, and any host-tool exposure are recorded in `plans/old/APP_PLAN_IMPLEMENTED.md` if it passes, or in this file under the relevant blocker if it fails.
 
 ### 7. Native Windows Smoke Run
 
@@ -685,7 +685,7 @@ Quality Gates:
 
 - All commands complete successfully on native Windows.
 - All manual checks pass outside the repo checkout with no host `bun`, `node`, `npm`, `bunx`, DuckDB CLI, `codex`, `sqlite3`, `ssh`, or `nvidia-smi` exposure unless the exposure is explicitly recorded; any provider secret-store helper exposure is recorded separately.
-- Smoke result, command output summary, artifact path, artifact parent path space-check result, data root, runtime temp path, log path, export/download result, provider secret-store backend if tested, judging invocation result, Windows version, and any host-tool exposure are recorded in `APP_PLAN_IMPLEMENTED.md` if it passes, or in this file under the relevant blocker if it fails.
+- Smoke result, command output summary, artifact path, artifact parent path space-check result, data root, runtime temp path, log path, export/download result, provider secret-store backend if tested, judging invocation result, Windows version, and any host-tool exposure are recorded in `plans/old/APP_PLAN_IMPLEMENTED.md` if it passes, or in this file under the relevant blocker if it fails.
 
 ## Continue Or Fallback Decision
 

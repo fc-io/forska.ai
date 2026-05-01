@@ -1,7 +1,7 @@
 # App Packaging Full Plan TODO
 
 - This file tracks the full remaining desktop packaging and release work beyond landed items.
-- Completed work lives in `APP_PLAN_IMPLEMENTED.md`.
+- Completed work lives in `plans/old/APP_PLAN_IMPLEMENTED.md`.
 - The active ElectroBun feasibility spike and phase-1 execution plan live in `APP_PLAN_TODO_SPIKE.md`.
 
 ## Goals
@@ -162,7 +162,7 @@
 
 ### 2. Desktop Shell Bootstrap
 
-- See `APP_PLAN_IMPLEMENTED.md` for landed shell bootstrap work and `APP_PLAN_TODO_SPIKE.md` for the active phase-1 shell work; remaining release tasks are tracked under sections 5, 8, 9, and 15 below.
+- See `plans/old/APP_PLAN_IMPLEMENTED.md` for landed shell bootstrap work and `APP_PLAN_TODO_SPIKE.md` for the active phase-1 shell work; remaining release tasks are tracked under sections 5, 8, 9, and 15 below.
 - [ ] Replace packaged desktop `SERVER_ROLE=dev-single` launch with multi-worker stack launch while preserving browser dev flow.
 - [ ] Add desktop ownership for API, maintenance-worker, and judge-worker child processes, including readiness, logs, shutdown, relaunch, and crash recovery.
 
