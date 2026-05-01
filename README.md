@@ -150,4 +150,4 @@ Split-runtime verification drills: [SPLIT RUNTIME VERIFICATION](./docs/README_SP
 
 Large rebuild tuning guidance: [RUN LOCAL](./docs/README_RUN_LOCAL.md#project-mart-large-rebuild-tuning)
 
-Remote HPC launch tooling now lives in the sibling `../hpc-manager` project.
+Remote HPC launch tooling and Docker helpers for SGLang/Docling now live in the sibling `../hpc-manager` project.

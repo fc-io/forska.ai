@@ -1,1 +1,0 @@
-ALTER TABLE "datasource" ADD COLUMN "archived" boolean DEFAULT false NOT NULL;

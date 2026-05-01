@@ -1,2 +1,0 @@
-ALTER TABLE "project_articles" ADD COLUMN "imported_from_project_id" uuid;--> statement-breakpoint
-ALTER TABLE "project_articles" ADD CONSTRAINT "project_articles_imported_from_project_id_projects_id_fk" FOREIGN KEY ("imported_from_project_id") REFERENCES "public"."projects"("id") ON DELETE set null ON UPDATE no action;

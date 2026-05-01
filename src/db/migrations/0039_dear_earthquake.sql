@@ -1,1 +1,0 @@
-ALTER TABLE "projects" ADD COLUMN "archived" boolean DEFAULT false NOT NULL;

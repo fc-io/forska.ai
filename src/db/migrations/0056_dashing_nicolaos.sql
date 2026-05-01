@@ -1,2 +1,0 @@
-ALTER TYPE "public"."judgments_jobs_prompts_skip_reason_enum" ADD VALUE 'fulltext_too_large';--> statement-breakpoint
-ALTER TABLE "projects" ADD COLUMN "use_fulltext_no_images" boolean DEFAULT false NOT NULL;

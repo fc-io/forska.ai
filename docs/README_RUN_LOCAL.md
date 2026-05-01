@@ -2,14 +2,10 @@
 
 Current local-first flow. Core product config lives in the app.
 
-Legacy note
-
-- Old Docker/Postgres docs/scripts still exist for repair/import work. Ignore them for normal app use.
-
 Prereqs
 
 - Bun
-- Optional: Docker for Docling
+- Optional: `../hpc-manager` for local Docling/SGLang Docker helpers or remote inference launchers
 - Optional: local/manual inference endpoint
 
 ## 1) Install
@@ -126,7 +122,8 @@ VITE_SERVER_API=http://localhost:3004 bun run dev:app
 ## 5) Optional Docling
 
 ```bash
-docker compose up docling
+cd ../hpc-manager
+bun run docker:docling
 ```
 
 Then add a `Docling Serve` provider in `/providers`, add a manual model for it, and select that model in `/settings` as the PDF conversion model.

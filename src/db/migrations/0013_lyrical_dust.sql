@@ -1,1 +1,0 @@
-ALTER TABLE "token_use" ADD COLUMN "sglang_model" text;

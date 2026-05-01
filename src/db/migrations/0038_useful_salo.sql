@@ -1,1 +1,0 @@
-CREATE INDEX "judgments_jobs_prompts_article_prompt_job_idx" ON "judgments_jobs_prompts" USING btree ("article_id","prompt_id","job_id");
