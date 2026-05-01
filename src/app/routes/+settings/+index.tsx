@@ -31,7 +31,7 @@ type StoredModel = {
   provider: string
 }
 type MaintenanceRuntimeDiagnostics = {
-  duckdb?: {effective?: {memoryLimit?: string | null}}
+  duckdb?: {configured?: {databasePath?: string | null}; effective?: {memoryLimit?: string | null}}
   projectMartLargeRebuildHeartbeat?: {
     automatic?: {
       activeLargeRebuildProjectCount?: number
@@ -470,6 +470,12 @@ const Settings = () => {
                         !maintenanceRuntimeDiagnosticsQuery.isLoading && !maintenanceRuntimeDiagnosticsQuery.isError
                       }
                     >
+                      <p class="text-xs text-gray-600">
+                        DuckDB path:{' '}
+                        <span class="font-mono break-all">
+                          {maintenanceRuntimeDiagnosticsQuery.data?.duckdb?.configured?.databasePath ?? 'N/A'}
+                        </span>
+                      </p>
                       <p class="text-xs text-gray-600">
                         Current:{' '}
                         {formatTuningSummary(
