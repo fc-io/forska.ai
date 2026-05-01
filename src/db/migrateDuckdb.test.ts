@@ -16,6 +16,23 @@ const getDuckdbMigrationFiles = () => {
     })
 }
 
+test('DuckDB migrations drop the obsolete review article filter row mart without recreating it', () => {
+  const migrationFiles = getDuckdbMigrationFiles()
+  const legacyCreateMigrations = migrationFiles.filter((fileName) => {
+    const migrationSql = readFileSync(resolve(migrationsFolder, fileName), 'utf8')
+
+    return migrationSql.includes('CREATE TABLE IF NOT EXISTS mart.review_article_filter_row')
+  })
+  const dropMigrationSql = readFileSync(
+    resolve(migrationsFolder, '0051_dropReviewArticleFilterRowMart.sql'),
+    'utf8',
+  ).trim()
+
+  expect(migrationFiles).not.toContain('0005_reviewArticleFilterRowMart.sql')
+  expect(legacyCreateMigrations).toEqual([])
+  expect(dropMigrationSql).toBe('DROP TABLE IF EXISTS mart.review_article_filter_row;')
+})
+
 test('migrateDuckdb preserves the original failure when rollback is already inactive', async () => {
   process.env.DUCKDB_PATH = '/tmp/forska-migrate-duckdb-test.duckdb'
 

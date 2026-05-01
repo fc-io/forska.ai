@@ -191,6 +191,24 @@ const comparisonProjectSourceProjectCreateSql = `
   )
 `
 
+const comparisonProjectConflictResolutionCreateSql = `
+  CREATE TABLE app.comparison_project_conflict_resolution (
+    id VARCHAR PRIMARY KEY,
+    comparison_project_id VARCHAR NOT NULL REFERENCES app.comparison_project(id),
+    article_id VARCHAR NOT NULL REFERENCES app.article(id),
+    prompt_id VARCHAR REFERENCES app.prompt(id),
+    answer_value VARCHAR,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    UNIQUE(comparison_project_id, article_id)
+  )
+`
+
+const comparisonProjectConflictResolutionIndexSql = `
+  CREATE INDEX IF NOT EXISTS idx_app_comparison_project_conflict_resolution_lookup
+  ON app.comparison_project_conflict_resolution(comparison_project_id, article_id)
+`
+
 const projectArticleCreateSql = `
   CREATE TABLE app.project_article (
     id VARCHAR PRIMARY KEY,
@@ -511,6 +529,9 @@ const rebuildComparisonProjectGroupTx = async (tx: AppTx, projectIdsSql: string)
   const comparisonProjectSourceProjectTempTableName = getTempTableName(
     'delete_archived_comparison_project_source_project',
   )
+  const comparisonProjectConflictResolutionTempTableName = getTempTableName(
+    'delete_archived_comparison_project_conflict_resolution',
+  )
 
   return runStatements(tx, [
     `
@@ -540,10 +561,15 @@ const rebuildComparisonProjectGroupTx = async (tx: AppTx, projectIdsSql: string)
     `CREATE TEMP TABLE ${comparisonProjectPromptTempTableName} AS SELECT * FROM app.comparison_project_prompt`,
     `CREATE TEMP TABLE ${comparisonProjectImportRouteTempTableName} AS SELECT * FROM app.comparison_project_import_route`,
     `
+      CREATE TEMP TABLE ${comparisonProjectConflictResolutionTempTableName} AS
+      SELECT * FROM app.comparison_project_conflict_resolution
+    `,
+    `
       CREATE TEMP TABLE ${comparisonProjectSourceProjectTempTableName} AS
       SELECT * FROM app.comparison_project_source_project
       WHERE source_project_id NOT IN (${projectIdsSql})
     `,
+    `DROP TABLE app.comparison_project_conflict_resolution`,
     `DROP TABLE app.comparison_project_prompt`,
     `DROP TABLE app.comparison_project_import_route`,
     `DROP TABLE app.comparison_project_source_project`,
@@ -556,6 +582,10 @@ const rebuildComparisonProjectGroupTx = async (tx: AppTx, projectIdsSql: string)
     `INSERT INTO app.comparison_project_import_route SELECT * FROM ${comparisonProjectImportRouteTempTableName}`,
     comparisonProjectSourceProjectCreateSql,
     `INSERT INTO app.comparison_project_source_project SELECT * FROM ${comparisonProjectSourceProjectTempTableName}`,
+    comparisonProjectConflictResolutionCreateSql,
+    `INSERT INTO app.comparison_project_conflict_resolution SELECT * FROM ${comparisonProjectConflictResolutionTempTableName}`,
+    comparisonProjectConflictResolutionIndexSql,
+    `DROP TABLE ${comparisonProjectConflictResolutionTempTableName}`,
     `DROP TABLE ${comparisonProjectSourceProjectTempTableName}`,
     `DROP TABLE ${comparisonProjectImportRouteTempTableName}`,
     `DROP TABLE ${comparisonProjectPromptTempTableName}`,

@@ -993,44 +993,6 @@ const getProjectReviewAnswerDictionaryRebuildSql = (projectId: string) => {
   `
 }
 
-const getProjectReviewArticleFilterRowResetSql = (projectId: string) => {
-  const projectLiteral = getSqlLiteral(projectId)
-
-  return `
-    BEGIN TRANSACTION;
-    DELETE FROM mart.review_article_filter_row WHERE project_id = ${projectLiteral};
-    COMMIT;
-  `
-}
-
-const getProjectReviewArticleFilterRowBatchInsertSql = (projectId: string, articleIds: string[]) => {
-  const projectLiteral = getSqlLiteral(projectId)
-  const articleIdsSql = getProjectRefreshArticleIdsSql(articleIds)
-
-  return `
-    BEGIN TRANSACTION;
-    INSERT INTO mart.review_article_filter_row (
-      project_id,
-      article_id,
-      prompt_id,
-      answer_value,
-      numeric_answer_value,
-      filter_updated_at
-    )
-    SELECT
-      project_id,
-      article_id,
-      prompt_id,
-      answer_value,
-      TRY_CAST(answer_value AS BIGINT),
-      current_timestamp
-    FROM mart.prompt_answer_fact
-    WHERE project_id = ${projectLiteral}
-      AND article_id IN (${articleIdsSql});
-    COMMIT;
-  `
-}
-
 const getProjectReviewArticleRollupResetSql = (projectId: string) => {
   const projectLiteral = getSqlLiteral(projectId)
 
@@ -2128,16 +2090,6 @@ const rebuildProjectPromptAnswerFact = async (projectId: string): Promise<void> 
   })
 }
 
-const rebuildProjectReviewArticleFilterRow = async (projectId: string): Promise<void> => {
-  await runMartRefreshBackgroundStatement(getProjectReviewArticleFilterRowResetSql(projectId))
-  return refreshProjectScopeArticleBatches({
-    processBatch: async (articleIds) => {
-      return runMartRefreshBackgroundStatement(getProjectReviewArticleFilterRowBatchInsertSql(projectId, articleIds))
-    },
-    projectId,
-  })
-}
-
 const rebuildProjectReviewArticleRollup = async (projectId: string): Promise<void> => {
   await runMartRefreshBackgroundStatement(getProjectReviewArticleRollupResetSql(projectId))
   return refreshProjectScopeArticleBatches({
@@ -2248,7 +2200,6 @@ export const archivedProjectMartTableNames = [
   'mart.review_article_filter_member',
   'mart.review_article_serving',
   'mart.review_article_rollup',
-  'mart.review_article_filter_row',
   'mart.prompt_answer_fact',
   'mart.project_scope_article',
 ]
@@ -2848,7 +2799,6 @@ const refreshProject = async (projectId: string) => {
   await refreshJudgmentFactsForProjectScope(projectId)
   await rebuildProjectPromptAnswerFact(projectId)
   await runMartRefreshBackgroundStatement(getProjectReviewAnswerDictionaryRebuildSql(projectId))
-  await rebuildProjectReviewArticleFilterRow(projectId)
   await rebuildProjectReviewArticleRollup(projectId)
   await rebuildProjectReviewServing(projectId)
   return recordProjectRefreshCompletion()

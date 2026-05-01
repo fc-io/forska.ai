@@ -698,6 +698,21 @@ test('delete archived route removes archived project rows and keeps cross-projec
     VALUES ('${promptId}', 'Delete archived prompt', 'delete-archived-prompt-hash')
   `)
   await runDatabase(`
+    INSERT INTO app.comparison_project_conflict_resolution (
+      id,
+      comparison_project_id,
+      article_id,
+      prompt_id,
+      answer_value
+    ) VALUES (
+      'delete-archived-comparison-conflict-resolution',
+      '${survivorComparisonProjectId}',
+      '${articleId}',
+      '${promptId}',
+      'yes'
+    )
+  `)
+  await runDatabase(`
     INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, origin_project_id)
     VALUES
       ('delete-archived-project-prompt-owned', '${sourceProjectId}', '${promptId}', 0, '${sourceProjectId}'),
@@ -897,21 +912,6 @@ test('delete archived route removes archived project rows and keeps cross-projec
     )
   `)
   await runDatabase(`
-    INSERT INTO mart.review_article_filter_row (
-      project_id,
-      article_id,
-      prompt_id,
-      answer_value,
-      numeric_answer_value
-    ) VALUES (
-      '${sourceProjectId}',
-      '${articleId}',
-      '${promptId}',
-      'yes',
-      1
-    )
-  `)
-  await runDatabase(`
     INSERT INTO mart.review_article_serving (
       project_id,
       generation,
@@ -1106,11 +1106,6 @@ test('delete archived route removes archived project rows and keeps cross-projec
     FROM mart.review_article_rollup
     WHERE project_id = '${sourceProjectId}'
   `)
-  const [filterRowRowCount] = await queryDatabase<{count: number}>(`
-    SELECT COUNT(*) AS count
-    FROM mart.review_article_filter_row
-    WHERE project_id = '${sourceProjectId}'
-  `)
   const [servingRowCount] = await queryDatabase<{count: number}>(`
     SELECT COUNT(*) AS count
     FROM mart.review_article_serving
@@ -1161,6 +1156,11 @@ test('delete archived route removes archived project rows and keeps cross-projec
     FROM app.comparison_project_source_project
     WHERE comparison_project_id = '${survivorComparisonProjectId}'
   `)
+  const [comparisonProjectConflictResolutionRow] = await queryDatabase<{answerValue: string | null; count: number}>(`
+      SELECT COUNT(*) AS count, MAX(answer_value) AS answerValue
+      FROM app.comparison_project_conflict_resolution
+      WHERE comparison_project_id = '${survivorComparisonProjectId}'
+    `)
 
   expect(Number(projectRow?.count ?? 0)).toBe(0)
   expect(Number(projectPromptRowCount?.count ?? 0)).toBe(0)
@@ -1176,7 +1176,6 @@ test('delete archived route removes archived project rows and keeps cross-projec
   expect(Number(projectScopeArticleRowCount?.count ?? 0)).toBe(0)
   expect(Number(promptAnswerFactRowCount?.count ?? 0)).toBe(0)
   expect(Number(rollupRowCount?.count ?? 0)).toBe(0)
-  expect(Number(filterRowRowCount?.count ?? 0)).toBe(0)
   expect(Number(servingRowCount?.count ?? 0)).toBe(0)
   expect(Number(filterMemberRowCount?.count ?? 0)).toBe(0)
   expect(Number(servingDetailRowCount?.count ?? 0)).toBe(0)
@@ -1185,6 +1184,8 @@ test('delete archived route removes archived project rows and keeps cross-projec
   expect(Number(comparisonProjectRow?.count ?? 0)).toBe(1)
   expect(comparisonProjectRow?.summarySourceProjectId).toBe(null)
   expect(Number(comparisonProjectSourceLinkRowCount?.count ?? 0)).toBe(0)
+  expect(Number(comparisonProjectConflictResolutionRow?.count ?? 0)).toBe(1)
+  expect(comparisonProjectConflictResolutionRow?.answerValue).toBe('yes')
   expect(judgmentProjectId?.projectId).toBe(null)
   expect(judgmentHumanProjectId?.projectId).toBe(null)
 })

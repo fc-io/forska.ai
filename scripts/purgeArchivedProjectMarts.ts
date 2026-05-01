@@ -7,7 +7,6 @@ const projectScopedTables = [
   'mart.prompt_answer_fact',
   'mart.review_article_judgment_detail',
   'app.review_answer_dictionary',
-  'mart.review_article_filter_row',
   'mart.review_article_filter_posting',
   'mart.review_article_rollup',
   'app.project_article_ordinal',

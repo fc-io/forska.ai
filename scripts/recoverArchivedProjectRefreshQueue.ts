@@ -8,7 +8,6 @@ const archivedProjectMartTables = [
   'mart.review_article_filter_member',
   'mart.review_article_serving',
   'mart.review_article_rollup',
-  'mart.review_article_filter_row',
   'mart.prompt_answer_fact',
   'mart.project_scope_article',
   'app.review_answer_dictionary',

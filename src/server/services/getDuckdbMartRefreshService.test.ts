@@ -384,14 +384,6 @@ test('mart refresh rebuilds large projects in article batches', () => {
                     events.push('dictionary:rebuild')
                   }
 
-                  if (statement.includes('DELETE FROM mart.review_article_filter_row')) {
-                    events.push('filter-row:reset')
-                  }
-
-                  if (statement.includes('INSERT INTO mart.review_article_filter_row (')) {
-                    recordBatchEvent('filter-row', statement)
-                  }
-
                   if (statement.includes('DELETE FROM mart.review_article_rollup')) {
                     events.push('rollup:reset')
                   }
@@ -442,8 +434,6 @@ test('mart refresh rebuilds large projects in article batches', () => {
   expect(result.events).toContain('prompt:rewrite-index')
   expect(result.events).toContain('prompt:batch-1')
   expect(result.events).toContain('prompt:batch-2')
-  expect(result.events).toContain('filter-row:batch-1')
-  expect(result.events).toContain('filter-row:batch-2')
   expect(result.events).toContain('rollup:batch-1')
   expect(result.events).toContain('rollup:batch-2')
   expect(result.events).toContain('serving:batch-1')
@@ -478,13 +468,11 @@ test('mart refresh recovers archived projects in row batches', () => {
               ? 'mart.review_article_filter_member'
             : statement.includes('FROM mart.review_article_rollup')
                   ? 'mart.review_article_rollup'
-                  : statement.includes('FROM mart.review_article_filter_row')
-                    ? 'mart.review_article_filter_row'
-                    : statement.includes('FROM mart.prompt_answer_fact')
-                      ? 'mart.prompt_answer_fact'
-                      : statement.includes('FROM mart.project_scope_article')
-                        ? 'mart.project_scope_article'
-                        : 'unknown'
+                  : statement.includes('FROM mart.prompt_answer_fact')
+                    ? 'mart.prompt_answer_fact'
+                    : statement.includes('FROM mart.project_scope_article')
+                      ? 'mart.project_scope_article'
+                      : 'unknown'
         }
 
         const getBatchRows = (statement) => {
@@ -591,10 +579,6 @@ test('mart refresh recovers archived projects in row batches', () => {
 
                   if (statement.includes('DELETE FROM mart.review_article_rollup')) {
                     recordDeleteEvent('rollup', statement)
-                  }
-
-                  if (statement.includes('DELETE FROM mart.review_article_filter_row')) {
-                    recordDeleteEvent('filter-row', statement)
                   }
 
                   if (statement.includes('DELETE FROM mart.prompt_answer_fact')) {
