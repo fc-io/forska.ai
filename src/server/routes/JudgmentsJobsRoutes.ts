@@ -95,6 +95,7 @@ type JudgmentJobMutationQueryRunner = {queryJson: <T>(statement: string) => Prom
 type JudgmentJobSqliteHealthSnapshot = JudgmentJobSqliteHealthSnapshotForProjection & {
   healthProjection?: {freshUntilAt: Date; projectedAt: Date; projectedBy: string | null; source: string}
 }
+type JudgmentJobSqliteHealthReadableJob = {id: string; storageState: string}
 type JudgmentJobHealthAction =
   | 'none'
   | 'repair_offline_required'
@@ -1239,6 +1240,39 @@ const getProjectedSqliteHealth = (
   }
 }
 
+const getEmptySqliteHealthSnapshot = (): JudgmentJobSqliteHealthSnapshot => {
+  return {
+    claimedOutboxCount: 0,
+    hasOutboxRows: false,
+    hasPendingCompletionAck: false,
+    hasQueueRows: false,
+    lastAckSeq: null,
+    oldestUnackedCompletionAgeMs: null,
+    oldestUnexportedAgeMs: null,
+    orphanedJudgedRowCount: 0,
+    outboxRowCount: 0,
+    pendingCompletionAckCount: 0,
+    promptCounts: {claimed: 0, judged: 0, ready: 0, running: 0, skipped: 0},
+    retainedRowCount: 0,
+    sqliteFileBytes: null,
+    walBytes: 0,
+  }
+}
+
+const getReadableJobSqliteHealthFallback = (
+  job: Pick<JudgmentJobSqliteHealthReadableJob, 'storageState'> | undefined,
+) => {
+  return job?.storageState === 'drained' ? getEmptySqliteHealthSnapshot() : null
+}
+
+const getReadableJobSqliteHealthFallbackEntries = (jobs: JudgmentJobSqliteHealthReadableJob[]) => {
+  return jobs.flatMap((job) => {
+    const fallback = getReadableJobSqliteHealthFallback(job)
+
+    return fallback ? [[job.id, fallback] as const] : []
+  })
+}
+
 const getSqliteHealthFromFreshProjection = async ({
   db,
   jobId,
@@ -1260,27 +1294,37 @@ const getSqliteHealthFromFreshProjection = async ({
 
 const getSqliteHealthForReadableRoute = async ({
   db,
+  job,
   jobId,
 }: {
   db: JudgmentJobSqliteHealthProjectionReader
+  job?: Pick<JudgmentJobSqliteHealthReadableJob, 'storageState'>
   jobId: string
 }): Promise<JudgmentJobSqliteHealthSnapshot> => {
   return shouldCurrentServerRunJudgingLoops()
     ? getJudgmentJobSqliteService().getHealthSnapshot(jobId)
     : getSqliteHealthFromFreshProjection({db, jobId}).catch((error: unknown) => {
+        const fallback = getReadableJobSqliteHealthFallback(job)
+
         return canCurrentServerOwnDuckdb()
           ? getJudgmentJobSqliteService().getHealthSnapshot(jobId)
-          : Promise.reject(error)
+          : fallback
+            ? Promise.resolve(fallback)
+            : Promise.reject(error)
       })
 }
 
 const getSqliteHealthMapForReadableRoute = async ({
   db,
-  jobIds,
+  jobs,
 }: {
   db: JudgmentJobSqliteHealthProjectionReader
-  jobIds: string[]
+  jobs: JudgmentJobSqliteHealthReadableJob[]
 }) => {
+  const jobIds = jobs.map((job) => {
+    return job.id
+  })
+
   if (shouldCurrentServerRunJudgingLoops()) {
     const entries = await Promise.all(
       jobIds.map(async (jobId) => {
@@ -1295,19 +1339,44 @@ const getSqliteHealthMapForReadableRoute = async ({
     db,
     jobIds,
   })
-  const missingJobIds = jobIds.filter((jobId) => {
-    return !projections.has(jobId)
+  const missingJobs = jobs.filter((job) => {
+    return !projections.has(job.id)
   })
 
-  if (missingJobIds.length > 0) {
+  if (missingJobs.length > 0) {
     if (!canCurrentServerOwnDuckdb()) {
-      throw getMaintenanceUnavailableError(
-        `fresh SQLite health projection is unavailable for judgment jobs ${missingJobIds.join(', ')}`,
+      const fallbackEntries = getReadableJobSqliteHealthFallbackEntries(missingJobs)
+      const fallbackJobIds = new Set(
+        fallbackEntries.map(([jobId]) => {
+          return jobId
+        }),
       )
+      const missingJobIds = missingJobs
+        .filter((job) => {
+          return !fallbackJobIds.has(job.id)
+        })
+        .map((job) => {
+          return job.id
+        })
+
+      if (missingJobIds.length > 0) {
+        throw getMaintenanceUnavailableError(
+          `fresh SQLite health projection is unavailable for judgment jobs ${missingJobIds.join(', ')}`,
+        )
+      }
+
+      return new Map([
+        ...Array.from(projections.entries()).map(([jobId, projection]) => {
+          return [jobId, getProjectedSqliteHealth(projection)] as const
+        }),
+        ...fallbackEntries,
+      ])
     }
 
     const missingEntries = await Promise.all(
-      missingJobIds.map(async (jobId) => {
+      missingJobs.map(async (job) => {
+        const jobId = job.id
+
         return [jobId, await getJudgmentJobSqliteService().getHealthSnapshot(jobId)] as const
       }),
     )
@@ -2202,7 +2271,7 @@ export const judgmentsJobsRoutes = new Elysia()
           const {job, projectModelId} = await getJobContext({db, jobId: params.id})
           const workIdentity = getJudgmentJobWorkIdentity({job, modelId: projectModelId})
           const [sqliteHealth, importConsumer, importWorkLeasesByJobId, endpointHealth] = await Promise.all([
-            getSqliteHealthForReadableRoute({db, jobId: job.id}),
+            getSqliteHealthForReadableRoute({db, job, jobId: job.id}),
             getJudgmentImportConsumerAvailability(),
             getJudgmentImportWorkLeasesByJobId({db, jobIds: [job.id], now: currentNow}),
             getJudgmentJobEndpointHealth({db, modelId: projectModelId}),
@@ -2305,7 +2374,7 @@ export const judgmentsJobsRoutes = new Elysia()
           const db = getJudgmentJobsReadDatabase()
           const {job, projectModelId} = await getJobContext({db, jobId: params.id})
           const sqliteService = getJudgmentJobSqliteService()
-          const sqliteHealthPromise = getSqliteHealthForReadableRoute({db, jobId: job.id})
+          const sqliteHealthPromise = getSqliteHealthForReadableRoute({db, job, jobId: job.id})
           const providerConnectionPromise = getProviderConnectionForStoredModel(projectModelId, db)
           const leaseMetadataPromise = shouldCurrentServerRunJudgingLoops()
             ? sqliteService.getJudgmentJobLeaseMetadata(job.id)
@@ -2578,12 +2647,7 @@ export const judgmentsJobsRoutes = new Elysia()
         WHERE p.archived = FALSE
         ORDER BY jj.created_at ASC
       `)
-        const sqliteHealthByJobId = await getSqliteHealthMapForReadableRoute({
-          db,
-          jobIds: jobs.map((job) => {
-            return job.id
-          }),
-        })
+        const sqliteHealthByJobId = await getSqliteHealthMapForReadableRoute({db, jobs})
         const jobsWithHealth = jobs.map((job) => {
           const normalizedJob = {
             ...job,
@@ -2666,7 +2730,7 @@ export const judgmentsJobsRoutes = new Elysia()
         const jobIds = jobs.map((job) => {
           return job.id
         })
-        const sqliteHealthByJobId = await getSqliteHealthMapForReadableRoute({db, jobIds})
+        const sqliteHealthByJobId = await getSqliteHealthMapForReadableRoute({db, jobs})
         const [importConsumer, importWorkLeasesByJobId] = await Promise.all([
           getJudgmentImportConsumerAvailability(),
           getJudgmentImportWorkLeasesByJobId({db, jobIds, now: currentNow}),
