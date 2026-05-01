@@ -1699,6 +1699,21 @@ const getJudgmentProjectClaimRefreshSql = ({
   })
 }
 
+const getJudgmentProjectScopeBatchRefreshSql = (projectId: string, articleIds: string[]) => {
+  const projectLiteral = getSqlLiteral(projectId)
+  const articleIdsSql = getProjectRefreshArticleIdsSql(articleIds)
+
+  return getJudgmentFactSafeRefreshSql({
+    dirtyArticlesSql: `
+      SELECT article_id
+      FROM mart.project_scope_article
+      WHERE project_id = ${projectLiteral}
+        AND article_id IN (${articleIdsSql})
+    `,
+    rebuildTableName: 'mart.judgment_fact_rebuild',
+  })
+}
+
 const getQueuedArticleTasks = async () => {
   await ensureMartRefreshQueueSchema()
   return getAppDatabaseService().queryJson<MartRefreshTaskRow>(getQueuedArticleTasksSql())
@@ -2092,6 +2107,15 @@ const refreshProjectScopeArticleBatches = async ({
 const rebuildProjectScope = async (projectId: string): Promise<void> => {
   await runMartRefreshBackgroundStatement(getProjectScopeResetSql(projectId))
   return refreshProjectScopeBatches(projectId)
+}
+
+const refreshJudgmentFactsForProjectScope = async (projectId: string): Promise<void> => {
+  return refreshProjectScopeArticleBatches({
+    processBatch: async (articleIds) => {
+      return runMartRefreshBackgroundStatement(getJudgmentProjectScopeBatchRefreshSql(projectId, articleIds))
+    },
+    projectId,
+  })
 }
 
 const rebuildProjectPromptAnswerFact = async (projectId: string): Promise<void> => {
@@ -2821,6 +2845,7 @@ const refreshProject = async (projectId: string) => {
   }
 
   await rebuildProjectScope(projectId)
+  await refreshJudgmentFactsForProjectScope(projectId)
   await rebuildProjectPromptAnswerFact(projectId)
   await runMartRefreshBackgroundStatement(getProjectReviewAnswerDictionaryRebuildSql(projectId))
   await rebuildProjectReviewArticleFilterRow(projectId)

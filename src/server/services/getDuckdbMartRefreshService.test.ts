@@ -46,7 +46,10 @@ test('mart refresh keeps a requeue that arrives during drain', () => {
               return {
                 ...service,
                 runBackground: async (statement) => {
-                  if (statement.includes('DROP TABLE mart.judgment_fact') && statement.includes('article-requeue-test')) {
+                  if (
+                    statement.includes('DROP TABLE mart.judgment_fact')
+                    && statement.includes("SELECT 'article-requeue-test' AS article_id")
+                  ) {
                     refreshRuns += 1
 
                     if (!hasRequeued && martRefreshService) {
@@ -2026,6 +2029,130 @@ test('mart refresh populates review article serving v3 tables', () => {
   }
 })
 
+test('mart refresh repairs missing judgment facts during a full project refresh', () => {
+  const duckdbPath = `/tmp/f1-mart-refresh-stale-judgment-fact-${Date.now()}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts')
+
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+
+        await database.run(
+          "INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url) VALUES ('connection-stale-fact-refresh', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')"
+        )
+        await database.run(
+          "INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('model-stale-fact-refresh', 'connection-stale-fact-refresh', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)"
+        )
+        await database.run(
+          "INSERT INTO app.project (id, name, model_id, human_judgment_mode, use_title, use_abstract, use_fulltext, use_fulltext_no_images) VALUES ('project-stale-fact-refresh', 'Stale Fact Refresh Project', 'model-stale-fact-refresh', 'summary', TRUE, TRUE, FALSE, FALSE)"
+        )
+        await database.run(
+          "INSERT INTO app.prompt (id, original_text, content_hash) VALUES ('prompt-stale-fact-refresh-1', 'Prompt one', 'hash-stale-fact-refresh-1'), ('prompt-stale-fact-refresh-2', 'Prompt two', 'hash-stale-fact-refresh-2')"
+        )
+        await database.run(
+          "INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled) VALUES ('project-prompt-stale-fact-refresh-1', 'project-stale-fact-refresh', 'prompt-stale-fact-refresh-1', 0, TRUE), ('project-prompt-stale-fact-refresh-2', 'project-stale-fact-refresh', 'prompt-stale-fact-refresh-2', 1, TRUE)"
+        )
+        await database.run(
+          "INSERT INTO app.article (id, article_title, article_created_at, article_updated_at, article_id) VALUES ('article-stale-fact-refresh', 'Stale Fact Article', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z', 'external-stale-fact-refresh')"
+        )
+        await database.run(
+          "INSERT INTO app.project_article (id, project_id, article_id) VALUES ('project-article-stale-fact-refresh', 'project-stale-fact-refresh', 'article-stale-fact-refresh')"
+        )
+        await database.run(
+          "INSERT INTO app.judgment (id, article_id, prompt_id, model_id, project_id, snapshot_project_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, is_answered, answered_original, answered_original_as_array, confidence_original) VALUES ('judgment-stale-fact-refresh-1', 'article-stale-fact-refresh', 'prompt-stale-fact-refresh-1', 'model-stale-fact-refresh', 'project-stale-fact-refresh', 'project-stale-fact-refresh', TRUE, TRUE, FALSE, FALSE, TRUE, 'yes', ['yes'], 90), ('judgment-stale-fact-refresh-2', 'article-stale-fact-refresh', 'prompt-stale-fact-refresh-2', 'model-stale-fact-refresh', 'project-stale-fact-refresh', 'project-stale-fact-refresh', TRUE, TRUE, FALSE, FALSE, TRUE, 'no', ['no'], 80)"
+        )
+        await database.run(
+          "INSERT INTO app.judgment_human_summary (id, project_id, article_id, answer, origin) VALUES ('human-summary-stale-fact-refresh', 'project-stale-fact-refresh', 'article-stale-fact-refresh', 'no', 'manual_override')"
+        )
+
+        const martRefreshService = getDuckdbMartRefreshService()
+
+        await martRefreshService.refreshProject('project-stale-fact-refresh')
+
+        const factRows = await database.queryJson(\`
+          SELECT judgment_id AS judgmentId, prompt_id AS promptId
+          FROM mart.judgment_fact
+          WHERE article_id = 'article-stale-fact-refresh'
+          ORDER BY prompt_id ASC
+        \`)
+        const servingRows = await database.queryJson(\`
+          SELECT
+            has_all_human_answers AS hasAllHumanAnswers,
+            has_all_llm_judgments AS hasAllLlmJudgments,
+            llm_judged_prompt_count AS llmJudgedPromptCount
+          FROM mart.review_article_serving serving
+          INNER JOIN app.project_review_serving_generation generation
+            ON generation.project_id = serving.project_id
+           AND generation.active_generation = serving.generation
+          WHERE serving.project_id = 'project-stale-fact-refresh'
+            AND serving.article_id = 'article-stale-fact-refresh'
+        \`)
+        const detailRows = await database.queryJson(\`
+          SELECT judgment_id AS judgmentId, prompt_id AS promptId
+          FROM mart.review_article_serving_detail detail
+          INNER JOIN app.project_review_serving_generation generation
+            ON generation.project_id = detail.project_id
+           AND generation.active_generation = detail.generation
+          WHERE detail.project_id = 'project-stale-fact-refresh'
+            AND detail.article_id = 'article-stale-fact-refresh'
+          ORDER BY prompt_id ASC
+        \`)
+
+        console.log(JSON.stringify({detailRows, factRows, servingRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(
+        runScript.stderr.toString()
+          || runScript.stdout.toString()
+          || 'Mart stale judgment fact repair regression test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      detailRows: Array<{judgmentId: string; promptId: string}>
+      factRows: Array<{judgmentId: string; promptId: string}>
+      servingRows: Array<{hasAllHumanAnswers: boolean; hasAllLlmJudgments: boolean; llmJudgedPromptCount: number}>
+    }
+
+    expect(result.factRows).toEqual([
+      {judgmentId: 'judgment-stale-fact-refresh-1', promptId: 'prompt-stale-fact-refresh-1'},
+      {judgmentId: 'judgment-stale-fact-refresh-2', promptId: 'prompt-stale-fact-refresh-2'},
+    ])
+    expect(result.servingRows).toEqual([{hasAllHumanAnswers: true, hasAllLlmJudgments: true, llmJudgedPromptCount: 2}])
+    expect(result.detailRows).toEqual([
+      {judgmentId: 'judgment-stale-fact-refresh-1', promptId: 'prompt-stale-fact-refresh-1'},
+      {judgmentId: 'judgment-stale-fact-refresh-2', promptId: 'prompt-stale-fact-refresh-2'},
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('mart refresh updates serving rows incrementally after a judgment answer changes', () => {
   const duckdbPath = `/tmp/f1-mart-refresh-serving-incremental-${Date.now()}.duckdb`
   const runScript = globalThis.Bun.spawnSync(
@@ -3480,7 +3607,11 @@ test('mart refresh yields between drain passes after exceeding the time budget',
               return {
                 ...service,
                 runBackground: async (statement) => {
-                  if (statement.includes('DROP TABLE mart.judgment_fact') && statement.includes('article-yield-test-')) {
+                  if (
+                    statement.includes('DROP TABLE mart.judgment_fact')
+                    && statement.includes('article-yield-test-')
+                    && statement.includes(' AS article_id')
+                  ) {
                     delayedRefreshRuns += 1
 
                     if (!hasDelayed) {

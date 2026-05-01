@@ -200,15 +200,13 @@ const getProjectJudgmentFactResetSql = (projectId: string) => {
   `
 }
 
-const getProjectJudgmentFactBatchInsertSql = (projectId: string, articleIds: string[]) => {
-  const projectLiteral = getSqlLiteral(projectId)
+const getProjectJudgmentFactBatchInsertSql = (_projectId: string, articleIds: string[]) => {
   const articleIdsSql = getProjectRefreshArticleIdsSql(articleIds)
 
   return `
     BEGIN TRANSACTION;
     DELETE FROM mart.judgment_fact
-    WHERE project_id = ${projectLiteral}
-      AND article_id IN (${articleIdsSql});
+    WHERE article_id IN (${articleIdsSql});
     INSERT INTO mart.judgment_fact (
       judgment_id,
       article_id,
@@ -273,7 +271,6 @@ const getProjectJudgmentFactBatchInsertSql = (projectId: string, articleIds: str
     FROM app.judgment judgment
     INNER JOIN app.article article ON article.id = judgment.article_id
     WHERE judgment.deleted_at IS NULL
-      AND judgment.project_id = ${projectLiteral}
       AND judgment.article_id IN (${articleIdsSql});
     COMMIT;
   `

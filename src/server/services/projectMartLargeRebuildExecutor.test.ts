@@ -356,6 +356,57 @@ test('project judgment fact reset and batch rebuild populate bounded project jud
   expect(result.rows).toEqual([{answer: 'yes', articleId: 'article-1', judgmentId: 'judgment-fact-1'}])
 })
 
+test('project judgment fact batch rebuild repairs shared facts for scoped articles', () => {
+  const result = runScript<{
+    factRows: Array<{judgmentId: string; projectId: string}>
+    promptAnswerRows: Array<{answerValue: string; judgmentId: string; projectId: string}>
+  }>(`
+    await database.run(
+      "INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images) VALUES ('large-rebuild-shared-source', 'Large Rebuild Shared Source', 'large-rebuild-executor-model', TRUE, TRUE, FALSE, FALSE), ('large-rebuild-shared-target', 'Large Rebuild Shared Target', 'large-rebuild-executor-model', TRUE, TRUE, FALSE, FALSE)"
+    )
+    await database.run(
+      "INSERT INTO app.prompt (id, original_text, content_hash) VALUES ('large-rebuild-shared-prompt', 'Large rebuild shared prompt', 'large-rebuild-shared-prompt-hash')"
+    )
+    await database.run(
+      "INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled) VALUES ('large-rebuild-shared-source-prompt', 'large-rebuild-shared-source', 'large-rebuild-shared-prompt', 1, TRUE), ('large-rebuild-shared-target-prompt', 'large-rebuild-shared-target', 'large-rebuild-shared-prompt', 1, TRUE)"
+    )
+    await database.run(
+      "INSERT INTO app.judgment (id, article_id, prompt_id, model_id, project_id, snapshot_project_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, is_answered, answered_original, answered_original_as_array, confidence_original) VALUES ('large-rebuild-shared-source-judgment', 'article-1', 'large-rebuild-shared-prompt', 'large-rebuild-executor-model', 'large-rebuild-shared-source', 'large-rebuild-shared-source', TRUE, TRUE, FALSE, FALSE, TRUE, 'yes', ['yes'], 90)"
+    )
+    await database.run(
+      "INSERT INTO mart.project_scope_article (project_id, article_id, in_curated_scope, in_route_scope, article_created_at, article_updated_at) VALUES ('large-rebuild-shared-target', 'article-1', TRUE, FALSE, TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z')"
+    )
+
+    await executor.resetProjectJudgmentFact('large-rebuild-shared-target')
+    await executor.rebuildProjectJudgmentFactBatch('large-rebuild-shared-target', ['article-1'])
+    await executor.resetProjectPromptAnswerFact('large-rebuild-shared-target')
+    await executor.rebuildProjectPromptAnswerFactBatch('large-rebuild-shared-target', ['article-1'])
+
+    const factRows = await database.queryJson(\`
+      SELECT judgment_id AS judgmentId, project_id AS projectId
+      FROM mart.judgment_fact
+      WHERE judgment_id = 'large-rebuild-shared-source-judgment'
+      ORDER BY judgment_id ASC
+    \`)
+    const promptAnswerRows = await database.queryJson(\`
+      SELECT answer_value AS answerValue, judgment_id AS judgmentId, project_id AS projectId
+      FROM mart.prompt_answer_fact
+      WHERE project_id = 'large-rebuild-shared-target'
+      ORDER BY judgment_id ASC
+    \`)
+
+    console.log(JSON.stringify({factRows, promptAnswerRows}))
+    await database.close()
+  `)
+
+  expect(result.factRows).toEqual([
+    {judgmentId: 'large-rebuild-shared-source-judgment', projectId: 'large-rebuild-shared-source'},
+  ])
+  expect(result.promptAnswerRows).toEqual([
+    {answerValue: 'yes', judgmentId: 'large-rebuild-shared-source-judgment', projectId: 'large-rebuild-shared-target'},
+  ])
+})
+
 test('large rebuild executor defaults to the background DuckDB queue', () => {
   const result = runScript<{
     afterRead: {background: {tasksStarted: number}; main: {tasksStarted: number}}

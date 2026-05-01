@@ -408,6 +408,78 @@ test('reviews warnings report ready when serving rows are fresh', async () => {
   expect(body.data.indexing.status).toBe('ready')
 })
 
+test('reviews warnings queues repair when visible judgments are missing from judgment facts', async () => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const projectId = 'project-missing-judgment-fact-warning'
+  const articleId = `article-${projectId}`
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedRefreshToken: 1, refreshStatus: 'idle'})
+  await insertReviewServingRow(projectId, articleId)
+  await runDatabase(`
+    INSERT INTO mart.project_scope_article (
+      project_id,
+      article_id,
+      in_curated_scope,
+      in_route_scope,
+      article_created_at,
+      article_updated_at
+    ) VALUES (
+      '${projectId}',
+      '${articleId}',
+      TRUE,
+      FALSE,
+      TIMESTAMPTZ '2026-04-02 12:00:00+00',
+      NULL
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment (
+      id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      snapshot_project_id,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      is_answered,
+      answered_original,
+      answered_original_as_array,
+      confidence_original
+    ) VALUES (
+      'judgment-${projectId}',
+      '${articleId}',
+      'prompt-${projectId}',
+      'model-${projectId}',
+      '${projectId}',
+      '${projectId}',
+      TRUE,
+      TRUE,
+      FALSE,
+      FALSE,
+      TRUE,
+      'yes',
+      ['yes'],
+      90
+    )
+  `)
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.queuedProjectRefreshCount).toBe(1)
+  expect(body.data.indexing.queuedArticleRefreshCount).toBe(1)
+  expect(body.data.indexing.pendingRefreshCount).toBe(2)
+  expect(body.data.indexing.progressState).toBe('queued')
+  expect(body.data.indexing.status).toBe('refreshing')
+})
+
 test('reviews warnings report refreshing from ledger and worker progress state', async () => {
   if (!runDatabase || !setProgressSnapshotForTests) {
     throw new Error('Test dependencies not initialized')

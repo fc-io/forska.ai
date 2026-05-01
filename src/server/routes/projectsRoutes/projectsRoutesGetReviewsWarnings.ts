@@ -7,6 +7,8 @@ import {
   type FreshMaintenanceWorkLeaseRecord,
   getMaintenanceWorkLeaseService,
 } from '../../services/maintenanceWorkLeaseService.ts'
+import {getProjectMartRefreshStateService} from '../../services/projectMartRefreshStateService.ts'
+import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJudgmentRule.ts'
 import {getDuckdbOwnerConnectionsOverview} from '../../utils/duckdbOwnerConnections.ts'
 import {shouldCurrentRuntimeRunMartRefreshDrain} from '../../utils/martRefreshDrainEligibility.ts'
 import {getProjectMartLargeRebuildRuntimeMetrics} from '../../utils/projectMartLargeRebuildRuntimeMetrics.ts'
@@ -49,6 +51,7 @@ const articleScopedLargeRebuildPhases = new Set([
   'review_article_rollup',
   'review_article_serving',
 ])
+const missingJudgmentFactRepairArticleLimit = 4
 
 const getLargeRebuildDetails = (state: ProjectLargeRebuildState, progress: ProjectLargeRebuildProgress | null) => {
   return state.refreshToken === null || state.refreshToken <= 0
@@ -379,6 +382,62 @@ const getHasReviewServingRows = async (projectId: string): Promise<boolean> => {
   return rows.length > 0
 }
 
+const getMissingVisibleJudgmentFactArticleIds = async (projectId: string): Promise<string[]> => {
+  const projectLiteral = getSqlLiteral(projectId)
+  const rows = await getAppDatabaseService().queryJson<{articleId: string}>(`
+    SELECT judgment.article_id AS articleId
+    FROM mart.project_scope_article scope_article
+    INNER JOIN app.project project
+      ON project.id = scope_article.project_id
+     AND project.archived = FALSE
+    INNER JOIN app.project_prompt project_prompt
+      ON project_prompt.project_id = scope_article.project_id
+     AND project_prompt.enabled = TRUE
+    INNER JOIN app.judgment judgment
+      ON ${getProjectVisibleJudgmentScopeSql({
+        judgmentAlias: 'judgment',
+        projectAlias: 'project',
+        projectPromptAlias: 'project_prompt',
+        projectScopeAlias: 'scope_article',
+      })}
+    LEFT JOIN mart.judgment_fact judgment_fact ON judgment_fact.judgment_id = judgment.id
+    WHERE scope_article.project_id = ${projectLiteral}
+      AND judgment.deleted_at IS NULL
+      AND judgment_fact.judgment_id IS NULL
+    GROUP BY judgment.article_id
+    ORDER BY judgment.article_id ASC
+    LIMIT ${missingJudgmentFactRepairArticleLimit}
+  `)
+
+  return rows.map((row) => {
+    return row.articleId
+  })
+}
+
+const queueMissingVisibleJudgmentFactRepair = async (projectId: string): Promise<void> => {
+  const [projectRefreshState, projectLargeRebuildState] = await Promise.all([
+    getProjectRefreshState(projectId),
+    getProjectLargeRebuildState(projectId),
+  ])
+  const hasLargeRebuild = projectLargeRebuildState.refreshToken !== null && projectLargeRebuildState.refreshToken > 0
+
+  if (!projectRefreshState.isFresh || hasLargeRebuild) {
+    return
+  }
+
+  const articleIds = await getMissingVisibleJudgmentFactArticleIds(projectId)
+
+  if (articleIds.length === 0) {
+    return
+  }
+
+  await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+    projects: [{articleIds, projectId}],
+    reason: 'missingVisibleJudgmentFacts',
+    requestedBy: 'reviews-warnings',
+  })
+}
+
 const getReviewIndexingBlockedReason = (params: {
   canRunMartRefreshDrain: boolean
   canRunMaintenanceWork: boolean
@@ -521,6 +580,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
   async ({body}) => {
     const projectId = body.projectId
     await assertProjectIsActive(projectId)
+    await queueMissingVisibleJudgmentFactRepair(projectId)
     const martRefreshService = getDuckdbMartRefreshService()
     const throughputSnapshot = martRefreshService.getThroughputSnapshot()
     const currentNow = new Date()
