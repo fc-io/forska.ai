@@ -3076,7 +3076,7 @@ const refreshProjectActiveServingForArticles = async (projectId: string, article
       })
 }
 
-const refreshProjectArticleServingForArticles = async (projectId: string, articleIds: string[]): Promise<void> => {
+const refreshProjectArticleMartsBatch = async (projectId: string, articleIds: string[]): Promise<void> => {
   const refreshArticleIds = getUniqueValues(articleIds)
 
   if (refreshArticleIds.length === 0) {
@@ -3093,8 +3093,12 @@ const refreshProjectArticleServingForArticles = async (projectId: string, articl
   return refreshProjectActiveServingForArticles(projectId, refreshArticleIds)
 }
 
+const refreshProjectArticleServingForArticles = async (projectId: string, articleIds: string[]): Promise<void> => {
+  return refreshProjectArticleMartsBatch(projectId, articleIds)
+}
+
 const refreshProjectArticleServing = async (projectId: string, articleId: string): Promise<void> => {
-  return refreshProjectArticleServingForArticles(projectId, [articleId])
+  return refreshProjectArticleMartsBatch(projectId, [articleId])
 }
 
 const refreshProjectsForArticle = async (projectIds: string[], articleId: string): Promise<void> => {
@@ -3532,6 +3536,7 @@ const duckdbMartRefreshService = {
   refreshJudgmentFactsForProjectClaim,
   refreshProject,
   refreshProjectScopeArticles,
+  refreshProjectArticleMartsBatch,
   refreshProjectArticleServing,
   refreshProjectArticleServingForArticles,
   resetProgressSnapshotForTests: () => {

@@ -201,6 +201,12 @@ test('project review details falls back to app judgments when detail mart rows a
 })
 
 test('project review details merges detail mart rows, raw fallback rows, and placeholders', async () => {
+  let detailStatement = ''
+  const getDetailRows = (statement: string) => {
+    detailStatement = statement
+    return [getProjectReviewDetailJudgmentRow({judgmentId: 'judgment-detail', judgmentPromptId: 'prompt-1'})]
+  }
+
   fullArticlesByIdsRef.current = async () => {
     return [{articleTitle: 'Article 1', id: 'article-1'}]
   }
@@ -213,7 +219,7 @@ test('project review details merges detail mart rows, raw fallback rows, and pla
       : statement.includes('FROM app.project_mart_refresh_state')
         ? [getFreshnessRow()]
         : statement.includes('FROM mart.review_article_serving_detail j')
-          ? [getProjectReviewDetailJudgmentRow({judgmentId: 'judgment-detail', judgmentPromptId: 'prompt-1'})]
+          ? getDetailRows(statement)
           : statement.includes('FROM app.judgment j')
             ? [
                 getArticleJudgmentRow({judgmentId: 'judgment-detail', judgmentPromptId: 'prompt-1'}),
@@ -249,6 +255,8 @@ test('project review details merges detail mart rows, raw fallback rows, and pla
       return assessment.id
     }),
   ).toEqual(['assessment-1'])
+  expect(detailStatement).toContain('WITH active_generation AS')
+  expect(detailStatement).toContain('active.generation = j.generation')
 })
 
 test('project review details reuses project-visible raw judgments from another source project', async () => {

@@ -135,11 +135,8 @@ const createWorkerTestContext = (params: {
         callLog.push(`scopeArticle:${projectId}:${articleId}`)
       })
     }),
-    refreshProjectArticleServing: mock(async (projectId: string, articleId: string) => {
-      callLog.push(`serving:${projectId}:${articleId}`)
-    }),
-    refreshProjectArticleServingForArticles: mock(async (projectId: string, articleIds: string[]) => {
-      callLog.push(`servingBatch:${projectId}:${articleIds.join(',')}`)
+    refreshProjectArticleMartsBatch: mock(async (projectId: string, articleIds: string[]) => {
+      callLog.push(`articleMartsBatch:${projectId}:${articleIds.join(',')}`)
     }),
   }
   const remainingReconciledProjectIds = [...(params.reconciledProjectIds ?? [])]
@@ -321,7 +318,7 @@ test('uses incremental article-aware refresh routing for small deltas', async ()
     'scopeArticle:project-1:article-2',
     'judgment:article-1',
     'judgment:article-2',
-    'servingBatch:project-1:article-1,article-2',
+    'articleMartsBatch:project-1:article-1,article-2',
     'complete:project-1:3',
     'ack:project-1:3',
   ])

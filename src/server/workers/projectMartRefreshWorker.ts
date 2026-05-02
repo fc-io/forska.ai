@@ -76,8 +76,7 @@ type ProjectMartRefreshRunnerService = {
   }) => Promise<void>
   refreshProject: (projectId: string) => Promise<void>
   refreshProjectScopeArticles: (projectId: string, articleIds: string[]) => Promise<void>
-  refreshProjectArticleServing: (projectId: string, articleId: string) => Promise<void>
-  refreshProjectArticleServingForArticles: (projectId: string, articleIds: string[]) => Promise<void>
+  refreshProjectArticleMartsBatch: (projectId: string, articleIds: string[]) => Promise<void>
 }
 
 type ProjectMartRefreshWorkerDependencies = {
@@ -326,7 +325,7 @@ export const runProjectMartRefreshWorkerCycle = async (
         lastCompletedToken: claim.lastCompletedToken,
         projectId: claim.projectId,
       })
-      await dependencies.refreshService.refreshProjectArticleServingForArticles(claim.projectId, dirtyArticleIds)
+      await dependencies.refreshService.refreshProjectArticleMartsBatch(claim.projectId, dirtyArticleIds)
     } else if (executionMode === 'full') {
       await dependencies.refreshService.refreshProject(claim.projectId)
       await dependencies.refreshService.refreshJudgmentFactsForProjectClaim({

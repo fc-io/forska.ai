@@ -2506,7 +2506,7 @@ test('mart refresh updates prompt facts and rollups for the same dirty article b
 
         await martRefreshService.refreshJudgmentArticle('article-dirty-answer-a')
         await martRefreshService.refreshJudgmentArticle('article-dirty-answer-b')
-        await martRefreshService.refreshProjectArticleServingForArticles('project-dirty-answer-batch', [
+        await martRefreshService.refreshProjectArticleMartsBatch('project-dirty-answer-batch', [
           'article-dirty-answer-a',
           'article-dirty-answer-b',
         ])
@@ -2543,6 +2543,24 @@ test('mart refresh updates prompt facts and rollups for the same dirty article b
           WHERE member.project_id = 'project-dirty-answer-batch'
           ORDER BY member.article_id ASC, dictionary.answer_value ASC
         \`)
+        const activeDetailRows = await database.queryJson(\`
+          SELECT detail.article_id AS articleId, detail.answered_original AS answeredOriginal
+          FROM mart.review_article_serving_detail detail
+          INNER JOIN app.project_review_serving_generation generation
+            ON generation.project_id = detail.project_id
+           AND generation.active_generation = detail.generation
+          WHERE detail.project_id = 'project-dirty-answer-batch'
+          ORDER BY detail.article_id ASC, detail.answered_original ASC
+        \`)
+        const activeServingRows = await database.queryJson(\`
+          SELECT serving.article_id AS articleId
+          FROM mart.review_article_serving serving
+          INNER JOIN app.project_review_serving_generation generation
+            ON generation.project_id = serving.project_id
+           AND generation.active_generation = serving.generation
+          WHERE serving.project_id = 'project-dirty-answer-batch'
+          ORDER BY serving.article_id ASC
+        \`)
         const dictionaryRows = await database.queryJson(\`
           SELECT answer_value AS answerValue, CAST(answer_id AS INTEGER) AS answerId
           FROM app.review_answer_dictionary
@@ -2552,7 +2570,9 @@ test('mart refresh updates prompt facts and rollups for the same dirty article b
         \`)
 
         console.log(JSON.stringify({
+          activeDetailRows,
           activeFilterRows,
+          activeServingRows,
           dictionaryRows,
           initialDictionaryRows,
           promptRows,
@@ -2583,7 +2603,9 @@ test('mart refresh updates prompt facts and rollups for the same dirty article b
     }
 
     const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      activeDetailRows: Array<{answeredOriginal: string; articleId: string}>
       activeFilterRows: Array<{answerId: number; answerValue: string; articleId: string}>
+      activeServingRows: Array<{articleId: string}>
       dictionaryRows: Array<{answerId: number; answerValue: string}>
       initialDictionaryRows: Array<{answerId: number; answerValue: string}>
       promptRows: Array<{answerValue: string; articleId: string}>
@@ -2622,6 +2644,183 @@ test('mart refresh updates prompt facts and rollups for the same dirty article b
       {answerId: 5, answerValue: 'zzz', articleId: 'article-dirty-answer-b'},
       {answerId: 2, answerValue: 'no', articleId: 'article-dirty-answer-clean'},
     ])
+    expect(result.activeDetailRows).toEqual([
+      {answeredOriginal: 'aaa', articleId: 'article-dirty-answer-a'},
+      {answeredOriginal: 'zzz', articleId: 'article-dirty-answer-b'},
+      {answeredOriginal: 'no', articleId: 'article-dirty-answer-clean'},
+    ])
+    expect(result.activeServingRows).toEqual([
+      {articleId: 'article-dirty-answer-a'},
+      {articleId: 'article-dirty-answer-b'},
+      {articleId: 'article-dirty-answer-clean'},
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
+test('refreshProjectArticleMartsBatch refreshes active data used by olap filters and article review details', () => {
+  const duckdbPath = `/tmp/f1-mart-refresh-active-consumer-batch-${Date.now()}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {Elysia} = await import('elysia')
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {queryArticlesReviewsFromDuckdb} = await import('./src/services/olap/duckdbOlap.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts')
+        const {projectsRoutesPostArticleReviewDetails} = await import('./src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts')
+
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const martRefreshService = getDuckdbMartRefreshService()
+        const projectId = 'project-active-consumer-batch'
+        const articleId = 'article-active-consumer-batch'
+        const promptId = 'prompt-active-consumer-batch'
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+          VALUES ('connection-active-consumer-batch', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+        \`)
+        await database.run(\`
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+          VALUES ('model-active-consumer-batch', 'connection-active-consumer-batch', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+          VALUES ('project-active-consumer-batch', 'Active Consumer Batch Project', 'model-active-consumer-batch', TRUE, TRUE, FALSE, FALSE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.prompt (id, original_text, content_hash)
+          VALUES ('prompt-active-consumer-batch', 'Prompt body', 'hash-active-consumer-batch')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+          VALUES ('project-prompt-active-consumer-batch', 'project-active-consumer-batch', 'prompt-active-consumer-batch', 1, TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.article (id, article_title, article_created_at, article_updated_at, article_id)
+          VALUES ('article-active-consumer-batch', 'Active Consumer Batch Article', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z', 'external-active-consumer-batch')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_article (id, project_id, article_id)
+          VALUES ('project-article-active-consumer-batch', 'project-active-consumer-batch', 'article-active-consumer-batch')
+        \`)
+        await database.run(\`
+          INSERT INTO app.judgment (
+            id,
+            article_id,
+            prompt_id,
+            model_id,
+            project_id,
+            snapshot_project_id,
+            use_title,
+            use_abstract,
+            use_fulltext,
+            use_fulltext_no_images,
+            is_answered,
+            answered_original,
+            answered_original_as_array,
+            confidence_original
+          )
+          VALUES ('judgment-active-consumer-batch', 'article-active-consumer-batch', 'prompt-active-consumer-batch', 'model-active-consumer-batch', 'project-active-consumer-batch', 'project-active-consumer-batch', TRUE, TRUE, FALSE, FALSE, TRUE, 'old', ['old'], 90)
+        \`)
+
+        await martRefreshService.refreshJudgmentArticle(articleId)
+        await martRefreshService.refreshProject(projectId)
+
+        await database.run(\`
+          UPDATE app.judgment
+          SET answered_original = 'new',
+              answered_original_as_array = ['new'],
+              updated_at = TIMESTAMPTZ '2026-04-02T00:00:00.000Z'
+          WHERE id = 'judgment-active-consumer-batch'
+        \`)
+
+        await martRefreshService.refreshJudgmentArticle(articleId)
+        await martRefreshService.refreshProjectArticleMartsBatch(projectId, [articleId])
+
+        const filteredNew = await queryArticlesReviewsFromDuckdb({
+          projectId,
+          page: 1,
+          limit: 10,
+          prompts: {[promptId]: ['new']},
+        })
+        const filteredOld = await queryArticlesReviewsFromDuckdb({
+          projectId,
+          page: 1,
+          limit: 10,
+          prompts: {[promptId]: ['old']},
+        })
+        const detailsApp = new Elysia().use(projectsRoutesPostArticleReviewDetails)
+        const detailsResponse = await detailsApp.handle(
+          new Request('http://localhost/api/projectsreview', {
+            body: JSON.stringify({articleId, projectId}),
+            headers: {'content-type': 'application/json'},
+            method: 'POST',
+          }),
+        )
+        const details = await detailsResponse.json()
+
+        console.log(JSON.stringify({
+          detailAnswers: details.judgments.map((judgment) => {
+            return judgment.answeredOriginal
+          }),
+          detailStatus: detailsResponse.status,
+          newFilterAnswers: filteredNew.data.flatMap((article) => {
+            return article.judgments.map((judgment) => {
+              return judgment.answeredOriginal
+            })
+          }),
+          newFilterIds: filteredNew.data.map((article) => {
+            return article.id
+          }),
+          oldFilterIds: filteredOld.data.map((article) => {
+            return article.id
+          }),
+        }))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(
+        runScript.stderr.toString()
+          || runScript.stdout.toString()
+          || 'Active consumer batch refresh regression test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      detailAnswers: string[]
+      detailStatus: number
+      newFilterAnswers: string[]
+      newFilterIds: string[]
+      oldFilterIds: string[]
+    }
+
+    expect(result.detailStatus).toBe(200)
+    expect(result.detailAnswers).toEqual(['new'])
+    expect(result.newFilterAnswers).toEqual(['new'])
+    expect(result.newFilterIds).toEqual(['article-active-consumer-batch'])
+    expect(result.oldFilterIds).toEqual([])
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)

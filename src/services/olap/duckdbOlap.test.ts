@@ -605,7 +605,10 @@ test('queryArticlesReviewsFromDuckdb uses filter member mart when available', as
   expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM app.review_answer_dictionary d')
   expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_filter_member member')
   expect(duckdbRunnerMockRef.current.queries[5]).toContain('FROM mart.review_article_serving s')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('WITH active_generation AS')
+  expect(duckdbRunnerMockRef.current.queries[5]).toContain('active.generation = member.generation')
   expect(duckdbRunnerMockRef.current.queries[7]).toContain('FROM mart.review_article_serving_detail j')
+  expect(duckdbRunnerMockRef.current.queries[7]).toContain('active.generation = j.generation')
 })
 
 test('countArticlesReviewsFromDuckdb counts rows when project modelId is null', async () => {
