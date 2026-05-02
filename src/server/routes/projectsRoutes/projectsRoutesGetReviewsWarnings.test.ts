@@ -864,6 +864,69 @@ test('reviews warnings use live scope denominator during project scope setup', a
   expect(body.data.indexing.largeRebuild?.progress?.remainingCurrentPhaseArticleCount).toBe(1)
 })
 
+test('reviews warnings keep later phase denominator frozen after route scope changes', async () => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const projectId = 'project-large-rebuild-frozen-route-warning'
+  const frozenArticleId = `article-${projectId}`
+  const routeArticleId = `article-${projectId}-route`
+
+  await insertProjectFixture(projectId)
+  await runDatabase(`
+    UPDATE app.article
+    SET article_created_at = TIMESTAMPTZ '2026-04-01T00:00:00.000Z'
+    WHERE id = '${frozenArticleId}'
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title, article_created_at)
+    VALUES ('${routeArticleId}', 'Route article after setup', TIMESTAMPTZ '2026-04-02T00:00:00.000Z')
+  `)
+  await runDatabase(`
+    INSERT INTO app.import_route (id, route, name, active)
+    VALUES ('route-${projectId}', 'route-${projectId}', 'Route after setup', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_import_route (id, project_id, import_route_id)
+    VALUES ('project-route-${projectId}', '${projectId}', 'route-${projectId}')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article_import_route (id, article_id, import_route_id)
+    VALUES ('article-route-${projectId}', '${routeArticleId}', 'route-${projectId}')
+  `)
+  await runDatabase(`
+    INSERT INTO mart.project_scope_article (
+      project_id,
+      article_id,
+      in_curated_scope,
+      in_route_scope,
+      article_created_at,
+      article_updated_at
+    ) VALUES (
+      '${projectId}',
+      '${frozenArticleId}',
+      TRUE,
+      FALSE,
+      TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+      NULL
+    )
+  `)
+  await insertLargeRebuildState(projectId, {
+    cursorArticleCreatedAt: '2026-04-01T00:00:00.000Z',
+    cursorArticleId: frozenArticleId,
+    rebuildPhase: 'prompt_answer_fact',
+    refreshStatus: 'idle',
+    refreshToken: 5,
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.largeRebuild?.progress?.scopeArticleCount).toBe(1)
+  expect(body.data.indexing.largeRebuild?.progress?.remainingCurrentPhaseArticleCount).toBe(0)
+})
+
 test('reviews warnings report failed when a staged large rebuild has failed', async () => {
   const projectId = 'project-large-rebuild-failed-warning'
 

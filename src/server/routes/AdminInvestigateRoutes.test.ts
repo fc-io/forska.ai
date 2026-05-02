@@ -212,8 +212,16 @@ test('admin project mart large rebuild status route returns explicit operator pr
         \`)
 
         const app = new Elysia().use(adminInvestigateRoutes)
-        const response = await app.handle(new Request('http://localhost/api/admin/project-mart-large-rebuild-status?projectId=project-admin-large-rebuild'))
-        console.log(await response.text())
+        const setupResponse = await app.handle(new Request('http://localhost/api/admin/project-mart-large-rebuild-status?projectId=project-admin-large-rebuild'))
+        const setupBody = await setupResponse.json()
+        await database.run(\`
+          UPDATE app.project_mart_large_rebuild_state
+          SET rebuild_phase = 'prompt_answer_fact'
+          WHERE project_id = 'project-admin-large-rebuild'
+        \`)
+        const laterResponse = await app.handle(new Request('http://localhost/api/admin/project-mart-large-rebuild-status?projectId=project-admin-large-rebuild'))
+        const laterBody = await laterResponse.json()
+        console.log(JSON.stringify({later: laterBody, laterStatus: laterResponse.status, setup: setupBody, setupStatus: setupResponse.status}))
         await database.close()
       `,
     ],
@@ -237,39 +245,52 @@ test('admin project mart large rebuild status route returns explicit operator pr
     }
 
     const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
-      estimates: {
-        currentPhaseProgressPercent: number
-        overallProgressPercent: number
-        remainingPhaseArticleCount: number
-        scannedPhaseArticleCount: number
-        scopeArticleCount: number
+      later: {
+        estimates: {
+          currentPhaseProgressPercent: number
+          overallProgressPercent: number
+          remainingPhaseArticleCount: number
+          scannedPhaseArticleCount: number
+          scopeArticleCount: number
+        }
       }
-      largeRebuild: {
-        cursorArticleCreatedAt: string | null
-        cursorArticleId: string | null
-        lastError: string | null
-        operatorNote: string | null
-        rebuildPhase: string | null
-        refreshStatus: string | null
-        refreshToken: number | null
-      } | null
-      project: {archived: boolean; id: string; name: string}
-      refreshState: {
-        activeRefreshToken: number
-        dirtyToken: number
-        lastCompletedRefreshToken: number
-        lastError: string | null
-        refreshStatus: string
-        workerId: string | null
-      } | null
+      laterStatus: number
+      setup: {
+        estimates: {
+          currentPhaseProgressPercent: number
+          overallProgressPercent: number
+          remainingPhaseArticleCount: number
+          scannedPhaseArticleCount: number
+          scopeArticleCount: number
+        }
+        largeRebuild: {
+          cursorArticleCreatedAt: string | null
+          cursorArticleId: string | null
+          lastError: string | null
+          operatorNote: string | null
+          rebuildPhase: string | null
+          refreshStatus: string | null
+          refreshToken: number | null
+        } | null
+        project: {archived: boolean; id: string; name: string}
+        refreshState: {
+          activeRefreshToken: number
+          dirtyToken: number
+          lastCompletedRefreshToken: number
+          lastError: string | null
+          refreshStatus: string
+          workerId: string | null
+        } | null
+      }
+      setupStatus: number
     }
+    const setupBody = responseBody.setup
+    const laterBody = responseBody.later
 
-    expect(responseBody.project).toEqual({
-      archived: false,
-      id: 'project-admin-large-rebuild',
-      name: 'Admin Large Rebuild',
-    })
-    expect(responseBody.refreshState).toEqual({
+    expect(responseBody.setupStatus).toBe(200)
+    expect(responseBody.laterStatus).toBe(200)
+    expect(setupBody.project).toEqual({archived: false, id: 'project-admin-large-rebuild', name: 'Admin Large Rebuild'})
+    expect(setupBody.refreshState).toEqual({
       activeRefreshToken: 0,
       dirtyToken: 7,
       lastCompletedRefreshToken: 3,
@@ -277,18 +298,22 @@ test('admin project mart large rebuild status route returns explicit operator pr
       refreshStatus: 'idle',
       workerId: null,
     })
-    expect(responseBody.largeRebuild?.cursorArticleCreatedAt).toBe('2026-04-01 02:00:00+02')
-    expect(responseBody.largeRebuild?.cursorArticleId).toBe('article-progress-1')
-    expect(responseBody.largeRebuild?.lastError).toBeNull()
-    expect(responseBody.largeRebuild?.operatorNote).toBeNull()
-    expect(responseBody.largeRebuild?.rebuildPhase).toBe('project_scope_article')
-    expect(responseBody.largeRebuild?.refreshStatus).toBe('idle')
-    expect(responseBody.largeRebuild?.refreshToken).toBe(7)
-    expect(responseBody.estimates.overallProgressPercent).toBeGreaterThanOrEqual(0)
-    expect(responseBody.estimates.currentPhaseProgressPercent).toBe(50)
-    expect(responseBody.estimates.remainingPhaseArticleCount).toBe(1)
-    expect(responseBody.estimates.scannedPhaseArticleCount).toBe(1)
-    expect(responseBody.estimates.scopeArticleCount).toBe(2)
+    expect(setupBody.largeRebuild?.cursorArticleCreatedAt).toBe('2026-04-01 02:00:00+02')
+    expect(setupBody.largeRebuild?.cursorArticleId).toBe('article-progress-1')
+    expect(setupBody.largeRebuild?.lastError).toBeNull()
+    expect(setupBody.largeRebuild?.operatorNote).toBeNull()
+    expect(setupBody.largeRebuild?.rebuildPhase).toBe('project_scope_article')
+    expect(setupBody.largeRebuild?.refreshStatus).toBe('idle')
+    expect(setupBody.largeRebuild?.refreshToken).toBe(7)
+    expect(setupBody.estimates.overallProgressPercent).toBeGreaterThanOrEqual(0)
+    expect(setupBody.estimates.currentPhaseProgressPercent).toBe(50)
+    expect(setupBody.estimates.remainingPhaseArticleCount).toBe(1)
+    expect(setupBody.estimates.scannedPhaseArticleCount).toBe(1)
+    expect(setupBody.estimates.scopeArticleCount).toBe(2)
+    expect(laterBody.estimates.currentPhaseProgressPercent).toBe(100)
+    expect(laterBody.estimates.remainingPhaseArticleCount).toBe(0)
+    expect(laterBody.estimates.scannedPhaseArticleCount).toBe(1)
+    expect(laterBody.estimates.scopeArticleCount).toBe(1)
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)

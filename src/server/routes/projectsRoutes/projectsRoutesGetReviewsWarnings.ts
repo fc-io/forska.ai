@@ -7,11 +7,15 @@ import {
   type FreshMaintenanceWorkLeaseRecord,
   getMaintenanceWorkLeaseService,
 } from '../../services/maintenanceWorkLeaseService.ts'
+import {
+  getProjectMartLargeRebuildRowsPerMs,
+  getProjectMartLargeRebuildScopeProgress,
+  isArticleScopedLargeRebuildPhase,
+} from '../../services/projectMartLargeRebuildProgressService.ts'
 import {getProjectMartRefreshStateService} from '../../services/projectMartRefreshStateService.ts'
 import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJudgmentRule.ts'
 import {getDuckdbOwnerConnectionsOverview} from '../../utils/duckdbOwnerConnections.ts'
 import {shouldCurrentRuntimeRunMartRefreshDrain} from '../../utils/martRefreshDrainEligibility.ts'
-import {getProjectMartLargeRebuildRuntimeMetrics} from '../../utils/projectMartLargeRebuildRuntimeMetrics.ts'
 import {shouldCurrentServerRunMaintenanceLoops} from '../../utils/serverRuntimeRole.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
 
@@ -52,15 +56,6 @@ type QuarantinedArticleRefresh = {
   updatedAt: string | null
 }
 
-const articleScopedLargeRebuildPhases = new Set([
-  'project_scope_article',
-  'judgment_fact',
-  'prompt_answer_fact',
-  'review_answer_dictionary',
-  'review_article_filter_member',
-  'review_article_rollup',
-  'review_article_serving',
-])
 const missingJudgmentFactRepairArticleLimit = 4
 
 const getLargeRebuildDetails = (state: ProjectLargeRebuildState, progress: ProjectLargeRebuildProgress | null) => {
@@ -272,143 +267,19 @@ const getQuarantinedArticleRefreshes = async (projectId: string): Promise<Quaran
   })
 }
 
-const getProjectLargeRebuildRowsPerMs = (projectId: string) => {
-  const cycles = getProjectMartLargeRebuildRuntimeMetrics()
-    .recentCycles.filter((cycle) => {
-      return (
-        cycle.projectId === projectId
-        && cycle.status === 'progressed'
-        && (cycle.committedRowCount ?? cycle.articleCount) > 0
-      )
-    })
-    .slice(-12)
-
-  if (cycles.length === 0) {
-    return null
-  }
-
-  const totalRows = cycles.reduce((sum, cycle) => {
-    return sum + (cycle.committedRowCount ?? cycle.articleCount)
-  }, 0)
-
-  if (totalRows <= 0) {
-    return null
-  }
-
-  const firstStartedAt = new Date(cycles[0]?.startedAt ?? '').getTime()
-  const lastEndedAt = new Date(cycles[cycles.length - 1]?.endedAt ?? '').getTime()
-  const totalDurationMs = cycles.reduce((sum, cycle) => {
-    return sum + cycle.durationMs
-  }, 0)
-  const elapsedMs =
-    Number.isFinite(firstStartedAt) && Number.isFinite(lastEndedAt)
-      ? Math.max(lastEndedAt - firstStartedAt, totalDurationMs, 1)
-      : Math.max(totalDurationMs, 1)
-
-  return totalRows / elapsedMs
-}
-
-const getRemainingCurrentPhaseArticleCountSql = ({
-  articleCreatedAtColumn,
-  articleIdColumn,
-  cursorArticleCreatedAt,
-  cursorArticleId,
-}: {
-  articleCreatedAtColumn: string
-  articleIdColumn: string
-  cursorArticleCreatedAt: string | null
-  cursorArticleId: string | null
-}) => {
-  return `CAST(
-    COALESCE(
-      SUM(
-        CASE
-          WHEN ${getSqlLiteral(cursorArticleId)} IS NULL THEN 1
-          WHEN COALESCE(${articleCreatedAtColumn}, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') > COALESCE(${getSqlLiteral(cursorArticleCreatedAt)}, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') THEN 1
-          WHEN COALESCE(${articleCreatedAtColumn}, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') = COALESCE(${getSqlLiteral(cursorArticleCreatedAt)}, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')
-            AND ${articleIdColumn} > ${getSqlLiteral(cursorArticleId)} THEN 1
-          ELSE 0
-        END
-      ),
-      0
-    ) AS INTEGER
-  )`
-}
-
-const getLiveProjectScopeProgressSql = (projectId: string, state: ProjectLargeRebuildState) => {
-  const projectLiteral = getSqlLiteral(projectId)
-
-  return `
-    WITH route_scope AS (
-      SELECT air.article_id AS articleId
-      FROM app.project_import_route pir
-      INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
-      WHERE pir.project_id = ${projectLiteral}
-    ),
-    curated_scope AS (
-      SELECT pa.article_id AS articleId
-      FROM app.project_article pa
-      WHERE pa.project_id = ${projectLiteral}
-    ),
-    aggregated_scope AS (
-      SELECT articleId
-      FROM route_scope
-      UNION
-      SELECT articleId
-      FROM curated_scope
-    )
-    SELECT
-      CAST(COUNT(*) AS INTEGER) AS scopeArticleCount,
-      ${getRemainingCurrentPhaseArticleCountSql({
-        articleCreatedAtColumn: 'article.article_created_at',
-        articleIdColumn: 'aggregated_scope.articleId',
-        cursorArticleCreatedAt: state.cursorArticleCreatedAt,
-        cursorArticleId: state.cursorArticleId,
-      })} AS remainingCurrentPhaseArticleCount
-    FROM aggregated_scope
-    INNER JOIN app.article article ON article.id = aggregated_scope.articleId
-  `
-}
-
-const getFrozenProjectScopeProgressSql = (projectId: string, state: ProjectLargeRebuildState) => {
-  return `
-    SELECT
-      CAST(COUNT(*) AS INTEGER) AS scopeArticleCount,
-      ${getRemainingCurrentPhaseArticleCountSql({
-        articleCreatedAtColumn: 'scope_article.article_created_at',
-        articleIdColumn: 'scope_article.article_id',
-        cursorArticleCreatedAt: state.cursorArticleCreatedAt,
-        cursorArticleId: state.cursorArticleId,
-      })} AS remainingCurrentPhaseArticleCount
-    FROM mart.project_scope_article scope_article
-    WHERE scope_article.project_id = ${getSqlLiteral(projectId)}
-  `
-}
-
-const getProjectScopeProgressSql = (projectId: string, state: ProjectLargeRebuildState) => {
-  return state.rebuildPhase === 'project_scope_article'
-    ? getLiveProjectScopeProgressSql(projectId, state)
-    : getFrozenProjectScopeProgressSql(projectId, state)
-}
-
 const getLargeRebuildProgress = async (
   projectId: string,
   state: ProjectLargeRebuildState,
 ): Promise<ProjectLargeRebuildProgress> => {
-  const rows = await getAppDatabaseService().queryJson<{
-    remainingCurrentPhaseArticleCount: number
-    scopeArticleCount: number
-  }>(getProjectScopeProgressSql(projectId, state))
-  const scopeArticleCount = Number(rows[0]?.scopeArticleCount ?? 0)
-  const remainingCurrentPhaseArticleCount = articleScopedLargeRebuildPhases.has(state.rebuildPhase ?? '')
-    ? Number(rows[0]?.remainingCurrentPhaseArticleCount ?? scopeArticleCount)
-    : null
-  const rowsPerMs = getProjectLargeRebuildRowsPerMs(projectId)
+  const scopeProgress = await getProjectMartLargeRebuildScopeProgress({projectId, state})
+  const rowsPerMs = getProjectMartLargeRebuildRowsPerMs({projectId, rebuildPhase: state.rebuildPhase})
 
   return {
-    remainingCurrentPhaseArticleCount,
+    remainingCurrentPhaseArticleCount: isArticleScopedLargeRebuildPhase(state.rebuildPhase)
+      ? scopeProgress.remainingCurrentPhaseArticleCount
+      : null,
     rowsPerMinute: rowsPerMs === null ? null : Math.round(rowsPerMs * 60 * 1000),
-    scopeArticleCount,
+    scopeArticleCount: scopeProgress.scopeArticleCount,
   }
 }
 

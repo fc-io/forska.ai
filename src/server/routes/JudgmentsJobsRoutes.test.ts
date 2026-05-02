@@ -1848,11 +1848,40 @@ test('job details include projected storage drain when a large rebuild is active
   `)
 
   recordProjectMartLargeRebuildCycleMetric({
+    articleCount: 50,
+    committedRowCount: 50,
+    durationMs: 1000,
+    duckdbQueues: null,
+    endedAt: new Date(now - 7000).toISOString(),
+    error: null,
+    lastCommittedCursor: null,
+    phase: 'prompt_answer_fact',
+    projectId,
+    startedAt: new Date(now - 8000).toISOString(),
+    status: 'progressed',
+    workerId: 'test-worker',
+  })
+  recordProjectMartLargeRebuildCycleMetric({
+    articleCount: 100,
+    committedRowCount: 100,
+    durationMs: 1000,
+    duckdbQueues: null,
+    endedAt: new Date(now - 5000).toISOString(),
+    error: null,
+    lastCommittedCursor: {articleCreatedAt: '2026-04-03T00:00:00.000Z', articleId: articleIdC},
+    phase: 'judgment_fact',
+    projectId,
+    startedAt: new Date(now - 6000).toISOString(),
+    status: 'progressed',
+    workerId: 'test-worker',
+  })
+  recordProjectMartLargeRebuildCycleMetric({
     articleCount: 1,
     durationMs: 1000,
     duckdbQueues: null,
     endedAt: new Date(now - 3000).toISOString(),
     error: null,
+    lastCommittedCursor: {articleCreatedAt: '2026-04-01T00:00:00.000Z', articleId: articleIdA},
     phase: 'prompt_answer_fact',
     projectId,
     startedAt: new Date(now - 4000).toISOString(),
@@ -1865,6 +1894,7 @@ test('job details include projected storage drain when a large rebuild is active
     duckdbQueues: null,
     endedAt: new Date(now).toISOString(),
     error: null,
+    lastCommittedCursor: {articleCreatedAt: '2026-04-01T00:00:00.000Z', articleId: articleIdA},
     phase: 'prompt_answer_fact',
     projectId,
     startedAt: new Date(now - 1000).toISOString(),
