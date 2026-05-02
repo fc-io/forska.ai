@@ -132,6 +132,12 @@ type JudgmentJobStorageProjection = {
   rowsPerMinute: number | null
   scopeArticleCount: number | null
 }
+type JudgmentJobStorageProjectionRebuildRow = {
+  cursorArticleCreatedAt: string | null
+  cursorArticleId: string | null
+  rebuildPhase: string | null
+  refreshToken: number | null
+}
 type FailedRequestDetailRecord = Record<string, unknown>
 type FailedRequestSummary = {
   anthropicRefusalArticles: number
@@ -986,16 +992,103 @@ const getEstimatedRemainingArticlePassCount = ({
   return null
 }
 
+const getRemainingCurrentPhaseArticleCountSql = ({
+  articleCreatedAtColumn,
+  articleIdColumn,
+  cursorArticleCreatedAt,
+  cursorArticleId,
+}: {
+  articleCreatedAtColumn: string
+  articleIdColumn: string
+  cursorArticleCreatedAt: string | null
+  cursorArticleId: string | null
+}) => {
+  return `CAST(
+    COALESCE(
+      SUM(
+        CASE
+          WHEN ${getSqlLiteral(cursorArticleId)} IS NULL THEN 1
+          WHEN COALESCE(${articleCreatedAtColumn}, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') > COALESCE(${getSqlLiteral(cursorArticleCreatedAt)}, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') THEN 1
+          WHEN COALESCE(${articleCreatedAtColumn}, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') = COALESCE(${getSqlLiteral(cursorArticleCreatedAt)}, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')
+            AND ${articleIdColumn} > ${getSqlLiteral(cursorArticleId)} THEN 1
+          ELSE 0
+        END
+      ),
+      0
+    ) AS INTEGER
+  )`
+}
+
+const getLiveProjectScopeProjectionSql = (projectId: string, rebuildRow: JudgmentJobStorageProjectionRebuildRow) => {
+  return `
+    WITH route_scope AS (
+      SELECT
+        pir.project_id,
+        air.article_id,
+        TRUE AS in_route_scope,
+        FALSE AS in_curated_scope
+      FROM app.project_import_route pir
+      INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
+      WHERE pir.project_id = ${getSqlLiteral(projectId)}
+    ),
+    curated_scope AS (
+      SELECT
+        pa.project_id,
+        pa.article_id,
+        FALSE AS in_route_scope,
+        TRUE AS in_curated_scope
+      FROM app.project_article pa
+      WHERE pa.project_id = ${getSqlLiteral(projectId)}
+    ),
+    combined_scope AS (
+      SELECT * FROM route_scope
+      UNION ALL
+      SELECT * FROM curated_scope
+    ),
+    aggregated_scope AS (
+      SELECT project_id, article_id
+      FROM combined_scope
+      GROUP BY project_id, article_id
+    )
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS scopeArticleCount,
+      ${getRemainingCurrentPhaseArticleCountSql({
+        articleCreatedAtColumn: 'article.article_created_at',
+        articleIdColumn: 'aggregated_scope.article_id',
+        cursorArticleCreatedAt: rebuildRow.cursorArticleCreatedAt,
+        cursorArticleId: rebuildRow.cursorArticleId,
+      })} AS remainingCurrentPhaseArticleCount
+    FROM aggregated_scope
+    INNER JOIN app.article article ON article.id = aggregated_scope.article_id
+  `
+}
+
+const getFrozenProjectScopeProjectionSql = (projectId: string, rebuildRow: JudgmentJobStorageProjectionRebuildRow) => {
+  return `
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS scopeArticleCount,
+      ${getRemainingCurrentPhaseArticleCountSql({
+        articleCreatedAtColumn: 'scope_article.article_created_at',
+        articleIdColumn: 'scope_article.article_id',
+        cursorArticleCreatedAt: rebuildRow.cursorArticleCreatedAt,
+        cursorArticleId: rebuildRow.cursorArticleId,
+      })} AS remainingCurrentPhaseArticleCount
+    FROM mart.project_scope_article scope_article
+    WHERE scope_article.project_id = ${getSqlLiteral(projectId)}
+  `
+}
+
+const getProjectScopeProjectionSql = (projectId: string, rebuildRow: JudgmentJobStorageProjectionRebuildRow) => {
+  return rebuildRow.rebuildPhase === 'judgment_fact'
+    ? getLiveProjectScopeProjectionSql(projectId, rebuildRow)
+    : getFrozenProjectScopeProjectionSql(projectId, rebuildRow)
+}
+
 const getJudgmentJobStorageProjection = async (
   projectId: string,
   db: JudgmentJobSqliteHealthProjectionReader = getAppDatabaseService(),
 ): Promise<JudgmentJobStorageProjection | null> => {
-  const [rebuildRow] = await db.queryJson<{
-    cursorArticleCreatedAt: string | null
-    cursorArticleId: string | null
-    rebuildPhase: string | null
-    refreshToken: number | null
-  }>(`
+  const [rebuildRow] = await db.queryJson<JudgmentJobStorageProjectionRebuildRow>(`
     SELECT
       cursor_article_created_at AS cursorArticleCreatedAt,
       cursor_article_id AS cursorArticleId,
@@ -1006,7 +1099,7 @@ const getJudgmentJobStorageProjection = async (
     LIMIT 1
   `)
 
-  if ((rebuildRow?.refreshToken ?? 0) <= 0) {
+  if (!rebuildRow || (rebuildRow.refreshToken ?? 0) <= 0) {
     return null
   }
 
@@ -1016,55 +1109,9 @@ const getJudgmentJobStorageProjection = async (
       FROM app.project_mart_large_rebuild_state
       WHERE refresh_token > 0
     `),
-    db.queryJson<{remainingCurrentPhaseArticleCount: number; scopeArticleCount: number}>(`
-      WITH route_scope AS (
-        SELECT
-          pir.project_id,
-          air.article_id,
-          TRUE AS in_route_scope,
-          FALSE AS in_curated_scope
-        FROM app.project_import_route pir
-        INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
-        WHERE pir.project_id = ${getSqlLiteral(projectId)}
-      ),
-      curated_scope AS (
-        SELECT
-          pa.project_id,
-          pa.article_id,
-          FALSE AS in_route_scope,
-          TRUE AS in_curated_scope
-        FROM app.project_article pa
-        WHERE pa.project_id = ${getSqlLiteral(projectId)}
-      ),
-      combined_scope AS (
-        SELECT * FROM route_scope
-        UNION ALL
-        SELECT * FROM curated_scope
-      ),
-      aggregated_scope AS (
-        SELECT project_id, article_id
-        FROM combined_scope
-        GROUP BY project_id, article_id
-      )
-      SELECT
-        CAST(COUNT(*) AS INTEGER) AS scopeArticleCount,
-        CAST(
-          COALESCE(
-            SUM(
-              CASE
-                WHEN ${getSqlLiteral(rebuildRow.cursorArticleId)} IS NULL THEN 1
-                WHEN COALESCE(article.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') > COALESCE(${getSqlLiteral(rebuildRow.cursorArticleCreatedAt)}, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') THEN 1
-                WHEN COALESCE(article.article_created_at, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') = COALESCE(${getSqlLiteral(rebuildRow.cursorArticleCreatedAt)}, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')
-                  AND aggregated_scope.article_id > ${getSqlLiteral(rebuildRow.cursorArticleId)} THEN 1
-                ELSE 0
-              END
-            ),
-            0
-          ) AS INTEGER
-        ) AS remainingCurrentPhaseArticleCount
-      FROM aggregated_scope
-      INNER JOIN app.article article ON article.id = aggregated_scope.article_id
-    `),
+    db.queryJson<{remainingCurrentPhaseArticleCount: number; scopeArticleCount: number}>(
+      getProjectScopeProjectionSql(projectId, rebuildRow),
+    ),
   ])
 
   const scopeArticleCount = scopeCountRows[0]?.scopeArticleCount ?? 0

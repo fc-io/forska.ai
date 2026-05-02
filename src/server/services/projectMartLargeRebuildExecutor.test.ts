@@ -179,6 +179,27 @@ test('project scope reset and batch rebuild populate bounded scope rows', () => 
   ])
 })
 
+test('project scope mart batch reads frozen scope rows instead of live scope', () => {
+  const result = runScript<{rows: Array<{articleId: string; inCuratedScope: boolean; inRouteScope: boolean}>}>(`
+    const batch = await executor.getProjectScopeSourceBatch({batchSize: 2, projectId: 'large-rebuild-executor-project'})
+
+    await executor.resetProjectScope('large-rebuild-executor-project')
+    await executor.rebuildProjectScopeBatch('large-rebuild-executor-project', batch)
+
+    const rows = await executor.getProjectScopeMartBatch({batchSize: 10, projectId: 'large-rebuild-executor-project'})
+
+    console.log(JSON.stringify({
+      rows: rows.map((row) => ({articleId: row.articleId, inCuratedScope: row.inCuratedScope, inRouteScope: row.inRouteScope})),
+    }))
+    await database.close()
+  `)
+
+  expect(result.rows).toEqual([
+    {articleId: 'article-4', inCuratedScope: false, inRouteScope: true},
+    {articleId: 'article-1', inCuratedScope: true, inRouteScope: false},
+  ])
+})
+
 test('project scope and judgment fact batch rebuilds are replay safe', () => {
   const result = runScript<{
     judgmentRows: Array<{articleId: string; judgmentId: string}>

@@ -157,6 +157,39 @@ const getProjectScopeSourceBatchSql = ({
   `
 }
 
+const getProjectScopeMartBatchSql = ({
+  batchSize,
+  cursor,
+  projectId,
+}: {
+  batchSize: number
+  cursor: ProjectMartLargeRebuildBatchCursor | null
+  projectId: string
+}) => {
+  const projectLiteral = getSqlLiteral(projectId)
+
+  return `
+    SELECT
+      scope_article.article_id AS articleId,
+      scope_article.article_created_at AS articleCreatedAt,
+      scope_article.article_updated_at AS articleUpdatedAt,
+      scope_article.in_curated_scope AS inCuratedScope,
+      scope_article.in_route_scope AS inRouteScope
+    FROM mart.project_scope_article scope_article
+    WHERE scope_article.project_id = ${projectLiteral}
+      ${getBatchCursorWhereSql({
+        articleCreatedAtColumn: 'scope_article.article_created_at',
+        articleIdColumn: 'scope_article.article_id',
+        cursor,
+      })}
+    ORDER BY ${getBatchOrderSql({
+      articleCreatedAtColumn: 'scope_article.article_created_at',
+      articleIdColumn: 'scope_article.article_id',
+    })}
+    LIMIT ${batchSize}
+  `
+}
+
 const getProjectRefreshArticleIdsSql = (articleIds: string[]) => {
   return articleIds
     .map((articleId) => {
@@ -796,14 +829,12 @@ const getProjectReviewServingGenerationCleanupDeleteSql = ({
   tableName: ProjectMartLargeRebuildGenerationCleanupTableName
 }) => {
   return `
-    BEGIN TRANSACTION;
     DELETE FROM ${tableName}
     WHERE rowid IN (${rowIds
       .map((rowId) => {
         return getSqlLiteral(rowId)
       })
       .join(', ')});
-    COMMIT;
   `
 }
 
@@ -827,6 +858,15 @@ const getProjectScopeSourceBatch = async (
 ) => {
   return dependencies.database.queryJson<ProjectMartLargeRebuildScopeBatchRow>(
     getProjectScopeSourceBatchSql({batchSize, cursor, projectId}),
+  )
+}
+
+const getProjectScopeMartBatch = async (
+  {batchSize = defaultProjectMartLargeRebuildBatchSize, cursor = null, projectId}: GetProjectScopeBatchParams,
+  dependencies: ProjectMartLargeRebuildExecutorDependencies = defaultProjectMartLargeRebuildExecutorDependencies,
+) => {
+  return dependencies.database.queryJson<ProjectMartLargeRebuildScopeBatchRow>(
+    getProjectScopeMartBatchSql({batchSize, cursor, projectId}),
   )
 }
 
@@ -1044,6 +1084,7 @@ const finalizeProjectReviewServing = async (
 const projectMartLargeRebuildExecutor = {
   finalizeProjectReviewServing,
   getNextBatchCursor,
+  getProjectScopeMartBatch,
   getProjectScopeSourceBatch,
   rebuildProjectJudgmentFactBatch,
   rebuildProjectPromptAnswerFactBatch,

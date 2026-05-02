@@ -16,6 +16,11 @@ type ProjectMartLargeRebuildRunnerDependencies = {
   executor: {
     finalizeProjectReviewServing: (projectId: string) => Promise<void>
     getNextBatchCursor: (rows: ProjectMartLargeRebuildScopeBatchRow[]) => ProjectMartLargeRebuildBatchCursor | null
+    getProjectScopeMartBatch: (params: {
+      batchSize?: number
+      cursor?: ProjectMartLargeRebuildBatchCursor | null
+      projectId: string
+    }) => Promise<ProjectMartLargeRebuildScopeBatchRow[]>
     getProjectScopeSourceBatch: (params: {
       batchSize?: number
       cursor?: ProjectMartLargeRebuildBatchCursor | null
@@ -242,7 +247,7 @@ const runPromptAnswerFactPhase = async (
     await dependencies.executor.resetProjectPromptAnswerFact(claim.projectId)
   }
 
-  const batchRows = await dependencies.executor.getProjectScopeSourceBatch({
+  const batchRows = await dependencies.executor.getProjectScopeMartBatch({
     batchSize: options.batchSize,
     cursor: initialCursor,
     projectId: claim.projectId,
@@ -333,7 +338,7 @@ const runReviewArticleFilterMemberPhase = async (
     await dependencies.executor.setupProjectReviewServingStaging(claim.projectId)
   }
 
-  const batchRows = await dependencies.executor.getProjectScopeSourceBatch({
+  const batchRows = await dependencies.executor.getProjectScopeMartBatch({
     batchSize: options.batchSize,
     cursor: initialCursor,
     projectId: claim.projectId,
@@ -397,7 +402,7 @@ const runReviewArticleRollupPhase = async (
     await dependencies.executor.resetProjectReviewArticleRollup(claim.projectId)
   }
 
-  const batchRows = await dependencies.executor.getProjectScopeSourceBatch({
+  const batchRows = await dependencies.executor.getProjectScopeMartBatch({
     batchSize: options.batchSize,
     cursor: initialCursor,
     projectId: claim.projectId,
@@ -456,7 +461,7 @@ const runReviewArticleServingPhase = async (
     rebuildState.cursorArticleId === null
       ? null
       : {articleCreatedAt: rebuildState.cursorArticleCreatedAt, articleId: rebuildState.cursorArticleId}
-  const batchRows = await dependencies.executor.getProjectScopeSourceBatch({
+  const batchRows = await dependencies.executor.getProjectScopeMartBatch({
     batchSize: options.batchSize,
     cursor: initialCursor,
     projectId: claim.projectId,

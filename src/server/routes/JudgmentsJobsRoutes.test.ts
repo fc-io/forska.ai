@@ -1797,6 +1797,7 @@ test('job details include projected storage drain when a large rebuild is active
   const jobId = `sqlite-health-projection-job-${Date.now()}`
   const articleIdA = `sqlite-health-projection-article-a-${Date.now()}`
   const articleIdB = `sqlite-health-projection-article-b-${Date.now()}`
+  const articleIdC = `sqlite-health-projection-article-c-${Date.now()}`
   const now = Date.now()
   const {recordProjectMartLargeRebuildCycleMetric} = await import('../utils/projectMartLargeRebuildRuntimeMetrics.ts')
 
@@ -1810,13 +1811,21 @@ test('job details include projected storage drain when a large rebuild is active
     INSERT INTO app.article (id, article_id, article_title, article_created_at, article_updated_at)
     VALUES
       ('${articleIdA}', 'external-${articleIdA}', 'Projection article A', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T00:00:00.000Z'),
-      ('${articleIdB}', 'external-${articleIdB}', 'Projection article B', TIMESTAMPTZ '2026-04-02T00:00:00.000Z', TIMESTAMPTZ '2026-04-02T00:00:00.000Z')
+      ('${articleIdB}', 'external-${articleIdB}', 'Projection article B', TIMESTAMPTZ '2026-04-02T00:00:00.000Z', TIMESTAMPTZ '2026-04-02T00:00:00.000Z'),
+      ('${articleIdC}', 'external-${articleIdC}', 'Projection article C', TIMESTAMPTZ '2026-04-03T00:00:00.000Z', TIMESTAMPTZ '2026-04-03T00:00:00.000Z')
   `)
   await runDatabase(`
     INSERT INTO app.project_article (id, project_id, article_id)
     VALUES
       ('project-article-${articleIdA}', '${projectId}', '${articleIdA}'),
-      ('project-article-${articleIdB}', '${projectId}', '${articleIdB}')
+      ('project-article-${articleIdB}', '${projectId}', '${articleIdB}'),
+      ('project-article-${articleIdC}', '${projectId}', '${articleIdC}')
+  `)
+  await runDatabase(`
+    INSERT INTO mart.project_scope_article (project_id, article_id, in_curated_scope, in_route_scope, article_created_at, article_updated_at)
+    VALUES
+      ('${projectId}', '${articleIdA}', TRUE, FALSE, TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T00:00:00.000Z'),
+      ('${projectId}', '${articleIdB}', TRUE, FALSE, TIMESTAMPTZ '2026-04-02T00:00:00.000Z', TIMESTAMPTZ '2026-04-02T00:00:00.000Z')
   `)
   await runDatabase(`
     INSERT INTO app.project_mart_large_rebuild_state (

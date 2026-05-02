@@ -21,6 +21,13 @@ const createRunnerContext = (params: {
     inCuratedScope: boolean
     inRouteScope: boolean
   }>
+  martBatchRows?: Array<{
+    articleCreatedAt: Date | null
+    articleId: string
+    articleUpdatedAt: Date | null
+    inCuratedScope: boolean
+    inRouteScope: boolean
+  }>
   claim?: {
     leaseExpiresAt: Date
     projectId: string
@@ -67,8 +74,12 @@ const createRunnerContext = (params: {
         const [lastRow] = rows.slice(-1)
         return lastRow ? {articleCreatedAt: lastRow.articleCreatedAt, articleId: lastRow.articleId} : null
       },
+      getProjectScopeMartBatch: mock(async ({projectId}: {projectId: string}) => {
+        callLog.push(`mart-batch:${projectId}`)
+        return params.martBatchRows ?? params.batchRows ?? []
+      }),
       getProjectScopeSourceBatch: mock(async ({projectId}: {projectId: string}) => {
-        callLog.push(`batch:${projectId}`)
+        callLog.push(`source-batch:${projectId}`)
         return params.batchRows ?? []
       }),
       rebuildProjectScopeBatch: mock(async (projectId: string, rows: Array<{articleId: string}>) => {
@@ -269,7 +280,7 @@ test('runs one judgment_fact scope batch and advances the cursor', async () => {
     'state:project-1',
     'scope:reset:project-1',
     'judgment:reset:project-1',
-    'batch:project-1',
+    'source-batch:project-1',
     'scope:rebuild:project-1:article-1,article-2',
     'judgment:rebuild:project-1:article-1,article-2',
     'advance:project-1:article-2:judgment_fact',
@@ -318,7 +329,7 @@ test('transitions from judgment_fact to prompt_answer_fact when no rows remain f
   expect(context.callLog).toEqual([
     'claim',
     'state:project-1',
-    'batch:project-1',
+    'source-batch:project-1',
     'advance:project-1:null:prompt_answer_fact',
   ])
   expect(context.completed).toEqual([])
@@ -372,7 +383,7 @@ test('runs one prompt_answer_fact batch and advances the cursor', async () => {
     'claim',
     'state:project-1',
     'reset:project-1',
-    'batch:project-1',
+    'mart-batch:project-1',
     'rebuild:project-1:article-1,article-2',
     'advance:project-1:article-2:prompt_answer_fact',
   ])
@@ -420,7 +431,7 @@ test('transitions from prompt_answer_fact to review_answer_dictionary when no ro
   expect(context.callLog).toEqual([
     'claim',
     'state:project-1',
-    'batch:project-1',
+    'mart-batch:project-1',
     'advance:project-1:null:review_answer_dictionary',
   ])
   expect(context.completed).toEqual([])
@@ -485,7 +496,7 @@ test('transitions through filter_member rollup and serving to completion', async
     'claim',
     'state:project-1',
     'serving:setup:project-1',
-    'batch:project-1',
+    'mart-batch:project-1',
     'advance:project-1:null:review_article_rollup',
   ])
 
@@ -512,7 +523,7 @@ test('transitions through filter_member rollup and serving to completion', async
     'claim',
     'state:project-1',
     'rollup:reset:project-1',
-    'batch:project-1',
+    'mart-batch:project-1',
     'advance:project-1:null:review_article_serving',
   ])
 
@@ -538,7 +549,7 @@ test('transitions through filter_member rollup and serving to completion', async
   expect(servingContext.callLog).toEqual([
     'claim',
     'state:project-1',
-    'batch:project-1',
+    'mart-batch:project-1',
     'serving:finalize:project-1',
     'refresh:complete:project-1:9',
     'complete:project-1',
