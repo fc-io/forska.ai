@@ -496,6 +496,46 @@ test('owner-backed claim route returns immutable execution snapshot identity and
   await sqliteService.closeAll()
 })
 
+test('owner-backed claim route honors claim limits above 100', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const sqliteService = getJudgmentJobSqliteService()
+  const projectId = `large-claim-project-${Date.now()}`
+  const modelId = `large-claim-model-${Date.now()}`
+  const connectionId = `large-claim-connection-${Date.now()}`
+  const jobId = `large-claim-job-${Date.now()}`
+  const promptPairs = Array.from({length: 101}).map((_, index) => {
+    return {articleId: `large-claim-article-${index}`, promptId: `large-claim-prompt-${index}`}
+  })
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(jobId, promptPairs, 'server-a')
+
+  const claimResponse = await app.handle(
+    new Request(`http://localhost/api/judgmentsjobs/${jobId}/claims`, {
+      body: JSON.stringify({claimedBy: 'judge-worker-a', limit: 101}),
+      headers: {'content-type': 'application/json'},
+      method: 'POST',
+    }),
+  )
+  const claimBody = (await claimResponse.json()) as {data: {claims: Array<{recordId: string}>}}
+
+  expect(claimResponse.status).toBe(200)
+  expect(claimBody.data.claims).toHaveLength(101)
+  expect(await sqliteService.getClaimedCount(jobId)).toBe(101)
+  expect(await sqliteService.getReadyCount(jobId)).toBe(0)
+
+  await sqliteService.closeAll()
+})
+
 test('owner-backed claim requeues stale unprotected worker claims before claiming', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')

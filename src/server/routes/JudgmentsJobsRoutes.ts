@@ -450,7 +450,7 @@ const getJudgmentJobsOwnerProxyData = async <T>(request: Request): Promise<T | n
 }
 
 const getNormalizedClaimLimit = (limit: number | null | undefined) => {
-  return Number.isFinite(limit) ? Math.max(0, Math.min(100, Math.floor(limit ?? 0))) : 1
+  return Number.isFinite(limit) ? Math.max(0, Math.floor(limit ?? 0)) : 1
 }
 
 const getOwnerBackedRunningJudgmentJobs = async (): Promise<RunningJudgmentJob[]> => {

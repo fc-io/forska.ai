@@ -279,6 +279,13 @@ const hasHealthyWorker = ({
   })
 }
 
+const getWorkerMaxActiveRequests = (providerScope: ProviderRequestScope): number => {
+  const runtimeLimit = getNonCodexCapacity().perWorkerMaxInflightRequests
+  const providerLimit = Math.max(1, providerScope.providerMaxInflightRequests ?? 1)
+
+  return providerScope.providerUsesFamilyDefault ? runtimeLimit : Math.max(runtimeLimit, providerLimit)
+}
+
 const drainCodexWaiters = (): void => {
   const waiter = codexWaiters[0]
   const maxInflight = getCodexMaxInflight()
@@ -389,7 +396,7 @@ const tryAcquireWorkerSlot = ({
   const releaseProviderRequest = acquireProviderRequestRelease(providerScope)
   if (!releaseProviderRequest) return {type: 'waiting'}
 
-  const maxActiveRequests = getNonCodexCapacity().perWorkerMaxInflightRequests
+  const maxActiveRequests = getWorkerMaxActiveRequests(providerScope)
   const healthyWorkerUrl = workerLoadBalancer.acquireWorkerUrl({
     maxActiveRequests,
     workerUrls: workerUrls.filter((url) => {
@@ -405,7 +412,7 @@ const tryAcquireWorkerSlot = ({
   }
 
   const probeEligibleWorkerUrl = workerLoadBalancer.acquireWorkerUrl({
-    maxActiveRequests: getNonCodexCapacity().perWorkerMaxInflightRequests,
+    maxActiveRequests,
     workerUrls: workerUrls.filter((url) => {
       return canRequestEndpointNow({baseURL: `${url}/v1`, providerScope})
     }),

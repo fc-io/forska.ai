@@ -687,7 +687,7 @@ test('fallback requests plateau at local runtime capacity when using family defa
   await secondRequest
 })
 
-test('worker requests plateau at worker capacity when it is lower than the saved provider cap', async () => {
+test('worker requests honor saved provider caps even when local worker capacity is lower', async () => {
   getJudgmentsCapacityMock.mockImplementation((_runningJobCount: number) => {
     return createJudgmentsCapacity({maxInflight: 4, perWorkerMaxInflightRequests: 1, workerCount: 2})
   })
@@ -695,6 +695,7 @@ test('worker requests plateau at worker capacity when it is lower than the saved
   const {withJudgmentRequest} = await loadRuntime()
   const firstRelease = createSignal()
   const secondRelease = createSignal()
+  const thirdRelease = createSignal()
   let firstStarted = false
   let secondStarted = false
   let thirdStarted = false
@@ -744,6 +745,81 @@ test('worker requests plateau at worker capacity when it is lower than the saved
       providerMaxInflightRequests: 3,
       providerUsesFamilyDefault: false,
       workerUrls: ['http://worker-runtime-a.test', 'http://worker-runtime-b.test'],
+    },
+    async () => {
+      thirdStarted = true
+      await thirdRelease.promise
+    },
+  )
+
+  await flush()
+  expect(thirdStarted).toBe(true)
+
+  firstRelease.resolve()
+  secondRelease.resolve()
+  thirdRelease.resolve()
+  await firstRequest
+  await secondRequest
+  await thirdRequest
+})
+
+test('worker requests plateau at runtime worker capacity when using family defaults', async () => {
+  getJudgmentsCapacityMock.mockImplementation((_runningJobCount: number) => {
+    return createJudgmentsCapacity({maxInflight: 4, perWorkerMaxInflightRequests: 1, workerCount: 2})
+  })
+
+  const {withJudgmentRequest} = await loadRuntime()
+  const firstRelease = createSignal()
+  const secondRelease = createSignal()
+  let firstStarted = false
+  let secondStarted = false
+  let thirdStarted = false
+
+  const firstRequest = withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-worker-default-1',
+      provider: 'sglang',
+      fallbackBaseURL: 'http://unused-runtime.test/v1',
+      providerConnectionId: 'connection-worker-default',
+      providerMaxInflightRequests: 3,
+      providerUsesFamilyDefault: true,
+      workerUrls: ['http://worker-default-a.test', 'http://worker-default-b.test'],
+    },
+    async () => {
+      firstStarted = true
+      await firstRelease.promise
+    },
+  )
+
+  const secondRequest = withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-worker-default-2',
+      provider: 'sglang',
+      fallbackBaseURL: 'http://unused-runtime.test/v1',
+      providerConnectionId: 'connection-worker-default',
+      providerMaxInflightRequests: 3,
+      providerUsesFamilyDefault: true,
+      workerUrls: ['http://worker-default-a.test', 'http://worker-default-b.test'],
+    },
+    async () => {
+      secondStarted = true
+      await secondRelease.promise
+    },
+  )
+
+  await flush()
+  expect(firstStarted).toBe(true)
+  expect(secondStarted).toBe(true)
+
+  const thirdRequest = withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-worker-default-3',
+      provider: 'sglang',
+      fallbackBaseURL: 'http://unused-runtime.test/v1',
+      providerConnectionId: 'connection-worker-default',
+      providerMaxInflightRequests: 3,
+      providerUsesFamilyDefault: true,
+      workerUrls: ['http://worker-default-a.test', 'http://worker-default-b.test'],
     },
     async () => {
       thirdStarted = true
