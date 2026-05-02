@@ -1,7 +1,7 @@
 {
   "name": "Rebuild Better Plan",
-  "branchName": "ralph/rebuild-better",
   "description": "Make project review mart maintenance bounded, incremental, resumable, and non-blocking for 2M-article projects while preserving correct active-generation reads.",
+  "branchName": "ralph/rebuild-better",
   "userStories": [
     {
       "id": "US-001",
@@ -17,9 +17,10 @@
         "bun run lint passes"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "",
-      "dependsOn": []
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-002",
@@ -37,7 +38,9 @@
       "priority": 2,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001"]
+      "dependsOn": [
+        "US-001"
+      ]
     },
     {
       "id": "US-003",
@@ -56,7 +59,9 @@
       "priority": 3,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001"]
+      "dependsOn": [
+        "US-001"
+      ]
     },
     {
       "id": "US-004",
@@ -74,7 +79,10 @@
       "priority": 4,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-002", "US-003"]
+      "dependsOn": [
+        "US-002",
+        "US-003"
+      ]
     },
     {
       "id": "US-005",
@@ -94,7 +102,9 @@
       "priority": 5,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-004"]
+      "dependsOn": [
+        "US-004"
+      ]
     },
     {
       "id": "US-006",
@@ -113,7 +123,13 @@
       "priority": 6,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001", "US-002", "US-003", "US-004", "US-005"]
+      "dependsOn": [
+        "US-001",
+        "US-002",
+        "US-003",
+        "US-004",
+        "US-005"
+      ]
     },
     {
       "id": "US-007",
@@ -132,7 +148,10 @@
       "priority": 7,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001", "US-006"]
+      "dependsOn": [
+        "US-001",
+        "US-006"
+      ]
     },
     {
       "id": "US-008",
@@ -171,7 +190,9 @@
       "priority": 9,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-008"]
+      "dependsOn": [
+        "US-008"
+      ]
     },
     {
       "id": "US-010",
@@ -190,7 +211,9 @@
       "priority": 10,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-008"]
+      "dependsOn": [
+        "US-008"
+      ]
     },
     {
       "id": "US-011",
@@ -209,7 +232,9 @@
       "priority": 11,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-010"]
+      "dependsOn": [
+        "US-010"
+      ]
     },
     {
       "id": "US-012",
@@ -229,7 +254,10 @@
       "priority": 12,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-009", "US-011"]
+      "dependsOn": [
+        "US-009",
+        "US-011"
+      ]
     },
     {
       "id": "US-013",
@@ -248,7 +276,9 @@
       "priority": 13,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-008"]
+      "dependsOn": [
+        "US-008"
+      ]
     },
     {
       "id": "US-014",
@@ -269,7 +299,10 @@
       "priority": 14,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-008", "US-013"]
+      "dependsOn": [
+        "US-008",
+        "US-013"
+      ]
     },
     {
       "id": "US-015",
@@ -288,7 +321,9 @@
       "priority": 15,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-006"]
+      "dependsOn": [
+        "US-006"
+      ]
     },
     {
       "id": "US-016",
@@ -307,7 +342,10 @@
       "priority": 16,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-010", "US-015"]
+      "dependsOn": [
+        "US-010",
+        "US-015"
+      ]
     },
     {
       "id": "US-017",
@@ -347,7 +385,15 @@
       "priority": 17,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-007", "US-012", "US-014", "US-016"]
+      "dependsOn": [
+        "US-007",
+        "US-012",
+        "US-014",
+        "US-016"
+      ]
     }
-  ]
+  ],
+  "metadata": {
+    "updatedAt": "2026-05-02T09:22:59.578Z"
+  }
 }

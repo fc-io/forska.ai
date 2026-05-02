@@ -56,6 +56,22 @@ const createWorkerTestContext = (params: {
       callLog.push('clearArchivedRefreshStates')
       return null
     }),
+    completeDirtyArticleBatchForClaim: mock(
+      async ({
+        claimedToken,
+        projectId,
+        workerId,
+      }: {
+        articleIds: string[]
+        claimedToken: number
+        projectId: string
+        workerId: string
+      }) => {
+        callLog.push(`complete:${projectId}:${claimedToken}`)
+        completed.push({completedToken: claimedToken, projectId, workerId})
+        return {completedState: null, isClaimComplete: true}
+      },
+    ),
     completeProjectRefresh: mock(
       async ({completedToken, projectId, workerId}: {completedToken: number; projectId: string; workerId: string}) => {
         callLog.push(`complete:${projectId}:${completedToken}`)
@@ -70,13 +86,20 @@ const createWorkerTestContext = (params: {
         return null
       },
     ),
-    getDirtyArticlesForClaim: mock(
-      async ({projectId}: {claimedToken: number; lastCompletedToken: number; projectId: string}) => {
-        callLog.push(`load:${projectId}`)
+    getDirtyArticleBatchForClaim: mock(
+      async ({
+        batchSize,
+        projectId,
+      }: {
+        batchSize: number
+        claimedToken: number
+        projectId: string
+        workerId: string
+      }) => {
+        callLog.push(`batch:${projectId}:${batchSize}`)
+        const articleIds = params.articlesByProject?.[projectId] ?? []
 
-        return (params.articlesByProject?.[projectId] ?? []).map((articleId) => {
-          return {articleId}
-        })
+        return {articleIds: articleIds.slice(0, batchSize), hasMore: articleIds.length > batchSize}
       },
     ),
     heartbeatClaim: mock(
@@ -256,7 +279,7 @@ test('refreshes judgment facts before the project rebuild', async () => {
   expect(context.callLog).toEqual([
     'reconcile:all',
     'claim:worker-1:1:30000',
-    'load:project-1',
+    'batch:project-1:1',
     'scope:project-1',
     'judgment:article-2',
     'judgment:article-1',
@@ -285,7 +308,7 @@ test('uses incremental article-aware refresh routing for small deltas', async ()
   expect(context.callLog).toEqual([
     'reconcile:all',
     'claim:worker-1:1:30000',
-    'load:project-1',
+    'batch:project-1:3',
     'judgment:article-1',
     'judgment:article-2',
     'serving:project-1:article-1',
@@ -314,7 +337,7 @@ test('falls back to a full project refresh when the dirty-article delta exceeds 
   expect(context.callLog).toEqual([
     'reconcile:all',
     'claim:worker-1:1:30000',
-    'load:project-1',
+    'batch:project-1:4',
     'scope:project-1',
     'judgment:article-1',
     'judgment:article-2',
@@ -384,7 +407,7 @@ test('routes oversized automatic full refreshes into large rebuild state before 
   expect(context.callLog).toEqual([
     'reconcile:all',
     'claim:worker-1:1:30000',
-    'load:project-1',
+    'batch:project-1:4',
     'scope:project-1',
     'largeRebuild:project-1:judgment_fact:9',
     'release:project-1',
@@ -460,7 +483,7 @@ test('can process work reclaimed after an expired lease', async () => {
   expect(context.callLog).toEqual([
     'reconcile:all',
     'claim:worker-2:1:5000',
-    'load:project-1',
+    'batch:project-1:1',
     'scope:project-1',
     'judgment:article-1',
     'project:project-1',

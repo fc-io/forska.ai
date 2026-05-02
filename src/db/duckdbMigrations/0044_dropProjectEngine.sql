@@ -275,6 +275,15 @@ CREATE TABLE app.project_mart_refresh_article_state (
   CHECK (first_dirty_token <= last_dirty_token)
 );
 
+CREATE INDEX IF NOT EXISTS idx_app_project_mart_refresh_state_claim
+ON app.project_mart_refresh_state(refresh_status, dirty_token, last_completed_refresh_token);
+
+CREATE INDEX IF NOT EXISTS idx_app_project_mart_refresh_state_stale_work
+ON app.project_mart_refresh_state(refresh_status, lease_expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_app_project_mart_refresh_article_state_dirty_range
+ON app.project_mart_refresh_article_state(project_id, last_dirty_token, first_dirty_token);
+
 CREATE TABLE app.project_mart_large_rebuild_state (
   project_id VARCHAR PRIMARY KEY REFERENCES app.project(id),
   refresh_token BIGINT NOT NULL DEFAULT 0,

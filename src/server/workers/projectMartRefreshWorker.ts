@@ -19,6 +19,13 @@ type ProjectMartRefreshStateWorkerService = {
     workerId: string
   }) => Promise<ProjectRefreshClaim[]>
   clearArchivedProjectRefreshStates: (params?: {now?: Date}) => Promise<unknown>
+  completeDirtyArticleBatchForClaim: (params: {
+    articleIds: string[]
+    claimedToken: number
+    now?: Date
+    projectId: string
+    workerId: string
+  }) => Promise<{completedState: unknown; isClaimComplete: boolean}>
   completeProjectRefresh: (params: {
     completedToken: number
     now?: Date
@@ -26,11 +33,12 @@ type ProjectMartRefreshStateWorkerService = {
     workerId: string
   }) => Promise<unknown>
   failProjectRefresh: (params: {error: string; now?: Date; projectId: string; workerId: string}) => Promise<unknown>
-  getDirtyArticlesForClaim: (params: {
+  getDirtyArticleBatchForClaim: (params: {
+    batchSize: number
     claimedToken: number
-    lastCompletedToken: number
     projectId: string
-  }) => Promise<Array<{articleId: string}>>
+    workerId: string
+  }) => Promise<{articleIds: string[]; hasMore: boolean}>
   heartbeatClaim: (params: {
     leaseMs: number
     now?: Date
@@ -208,6 +216,10 @@ const getProjectMartRefreshExecutionMode = ({
   return dirtyArticleCount === 0 ? 'idle' : dirtyArticleCount <= incrementalArticleThreshold ? 'incremental' : 'full'
 }
 
+const getDirtyArticleRoutingBatchSize = (incrementalArticleThreshold: number) => {
+  return Math.max(1, incrementalArticleThreshold + 1)
+}
+
 const getFullRefreshBlockedErrorText = ({
   dirtyArticleCount,
   maxFullProjectScopeArticles,
@@ -285,16 +297,15 @@ export const runProjectMartRefreshWorkerCycle = async (
   let refreshCompleted = false
 
   try {
-    const dirtyArticles = await dependencies.stateService.getDirtyArticlesForClaim({
-      claimedToken: claim.claimedToken,
-      lastCompletedToken: claim.lastCompletedToken,
-      projectId: claim.projectId,
-    })
-    const dirtyArticleIds = dirtyArticles.map((row) => {
-      return row.articleId
-    })
     const incrementalArticleThreshold =
       options.incrementalArticleThreshold ?? defaultProjectMartRefreshWorkerIncrementalArticleThreshold
+    const dirtyArticleBatch = await dependencies.stateService.getDirtyArticleBatchForClaim({
+      batchSize: getDirtyArticleRoutingBatchSize(incrementalArticleThreshold),
+      claimedToken: claim.claimedToken,
+      projectId: claim.projectId,
+      workerId,
+    })
+    const dirtyArticleIds = dirtyArticleBatch.articleIds
     const maxFullProjectScopeArticles =
       options.maxFullProjectScopeArticles ?? getProjectMartRefreshWorkerMaxFullProjectScopeArticles()
     const executionMode = getProjectMartRefreshExecutionMode({
@@ -332,12 +343,22 @@ export const runProjectMartRefreshWorkerCycle = async (
       await dependencies.refreshService.refreshProject(claim.projectId)
     }
 
-    await dependencies.stateService.completeProjectRefresh({
-      completedToken: claim.claimedToken,
-      now: getWorkerNow(options.now),
-      projectId: claim.projectId,
-      workerId,
-    })
+    if (executionMode === 'full') {
+      await dependencies.stateService.completeProjectRefresh({
+        completedToken: claim.claimedToken,
+        now: getWorkerNow(options.now),
+        projectId: claim.projectId,
+        workerId,
+      })
+    } else {
+      await dependencies.stateService.completeDirtyArticleBatchForClaim({
+        articleIds: dirtyArticleIds,
+        claimedToken: claim.claimedToken,
+        now: getWorkerNow(options.now),
+        projectId: claim.projectId,
+        workerId,
+      })
+    }
     refreshCompleted = true
     await dependencies.sqliteService.publishProjectRefreshAck({
       ackToken: claim.claimedToken,
