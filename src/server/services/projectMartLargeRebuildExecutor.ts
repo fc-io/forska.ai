@@ -254,26 +254,20 @@ const getProjectScopeBatchInsertSql = (projectId: string, rows: ProjectMartLarge
   `
 }
 
-const getProjectJudgmentFactResetSql = (projectId: string) => {
+const getProjectJudgmentFactBatchInsertSql = (projectId: string, articleIds: string[]) => {
   const projectLiteral = getSqlLiteral(projectId)
-
-  return `
-    BEGIN TRANSACTION;
-    DELETE FROM mart.judgment_fact WHERE project_id = ${projectLiteral};
-    COMMIT;
-  `
-}
-
-const getProjectJudgmentFactBatchInsertSql = (_projectId: string, articleIds: string[]) => {
   const articleRowsSql = getProjectRefreshArticleIdRowsSql(articleIds)
 
   return `
     BEGIN TRANSACTION;
     DROP TABLE IF EXISTS temp_project_judgment_fact_article;
     CREATE TEMP TABLE temp_project_judgment_fact_article AS
-    SELECT DISTINCT article_id
+    SELECT DISTINCT requested_article.article_id
     FROM (VALUES ${articleRowsSql}) AS requested_article(article_id)
-    WHERE article_id IS NOT NULL;
+    INNER JOIN mart.project_scope_article scope_article
+      ON scope_article.project_id = ${projectLiteral}
+     AND scope_article.article_id = requested_article.article_id
+    WHERE requested_article.article_id IS NOT NULL;
     DELETE FROM mart.judgment_fact
     WHERE EXISTS (
       SELECT 1
@@ -943,13 +937,6 @@ const rebuildProjectScopeBatch = async (
   await dependencies.database.run(getProjectScopeBatchInsertSql(projectId, rows))
 }
 
-const resetProjectJudgmentFact = async (
-  projectId: string,
-  dependencies: ProjectMartLargeRebuildExecutorDependencies = defaultProjectMartLargeRebuildExecutorDependencies,
-) => {
-  await dependencies.database.run(getProjectJudgmentFactResetSql(projectId))
-}
-
 const rebuildProjectJudgmentFactBatch = async (
   projectId: string,
   articleIds: string[],
@@ -1147,7 +1134,6 @@ const projectMartLargeRebuildExecutor = {
   rebuildProjectReviewArticleFilterMemberBatch,
   rebuildProjectReviewArticleRollupBatch,
   rebuildProjectReviewServingBatch,
-  resetProjectJudgmentFact,
   resetProjectPromptAnswerFact,
   resetProjectScope,
   resetProjectReviewAnswerDictionary,

@@ -118,9 +118,6 @@ const createRunnerContext = (params: {
       resetProjectScope: mock(async (projectId: string) => {
         callLog.push(`scope:reset:${projectId}`)
       }),
-      resetProjectJudgmentFact: mock(async (projectId: string) => {
-        callLog.push(`judgment:reset:${projectId}`)
-      }),
       resetProjectPromptAnswerFact: mock(async (projectId: string) => {
         callLog.push(`reset:${projectId}`)
       }),
@@ -397,7 +394,6 @@ test('runs one judgment_fact batch from frozen scope and advances the cursor', a
   expect(context.callLog).toEqual([
     'claim',
     'state:project-1',
-    'judgment:reset:project-1',
     'mart-batch:project-1',
     'judgment:rebuild:project-1:article-1,article-2',
     'advance:project-1:article-2:judgment_fact',

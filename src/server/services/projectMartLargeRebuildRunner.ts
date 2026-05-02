@@ -41,7 +41,6 @@ type ProjectMartLargeRebuildRunnerDependencies = {
       articleIds: string[],
       targetGeneration: number,
     ) => Promise<void>
-    resetProjectJudgmentFact: (projectId: string) => Promise<void>
     resetProjectScope: (projectId: string) => Promise<void>
     resetProjectPromptAnswerFact: (projectId: string) => Promise<void>
     resetProjectReviewAnswerDictionary: (projectId: string) => Promise<void>
@@ -275,10 +274,6 @@ const runJudgmentFactPhase = async (
     rebuildState.cursorArticleId === null
       ? null
       : {articleCreatedAt: rebuildState.cursorArticleCreatedAt, articleId: rebuildState.cursorArticleId}
-
-  if (initialCursor === null) {
-    await dependencies.executor.resetProjectJudgmentFact(claim.projectId)
-  }
 
   const batchRows = await dependencies.executor.getProjectScopeMartBatch({
     batchSize: options.batchSize,

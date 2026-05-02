@@ -200,11 +200,15 @@ test('project scope mart batch reads frozen scope rows instead of live scope', (
   ])
 })
 
-test('project scope and judgment fact batch rebuilds are replay safe', () => {
+test('project scope and judgment fact batch rebuilds are replay safe without removing unrelated facts', () => {
   const result = runScript<{
     judgmentRows: Array<{articleId: string; judgmentId: string}>
     scopeRows: Array<{articleId: string}>
   }>(`
+    await database.run(\`
+      INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+      VALUES ('large-rebuild-replay-unrelated-project', 'Large Rebuild Replay Unrelated Project', 'large-rebuild-executor-model', TRUE, TRUE, FALSE, FALSE)
+    \`)
     await database.run(\`
       INSERT INTO app.prompt (id, original_text, content_hash)
       VALUES ('prompt-replay-safe', 'Prompt replay safe', 'hash-replay-safe')
@@ -242,63 +246,6 @@ test('project scope and judgment fact batch rebuilds are replay safe', () => {
         90
       )
     \`)
-
-    const batch = await executor.getProjectScopeSourceBatch({batchSize: 2, projectId: 'large-rebuild-executor-project'})
-
-    await executor.resetProjectScope('large-rebuild-executor-project')
-    await executor.resetProjectJudgmentFact('large-rebuild-executor-project')
-    await executor.rebuildProjectScopeBatch('large-rebuild-executor-project', batch)
-    await executor.rebuildProjectScopeBatch('large-rebuild-executor-project', batch)
-    await executor.rebuildProjectJudgmentFactBatch('large-rebuild-executor-project', ['article-1'])
-    await executor.rebuildProjectJudgmentFactBatch('large-rebuild-executor-project', ['article-1'])
-
-    const scopeRows = await database.queryJson(\`
-      SELECT article_id AS articleId
-      FROM mart.project_scope_article
-      WHERE project_id = 'large-rebuild-executor-project'
-      ORDER BY article_id ASC
-    \`)
-    const judgmentRows = await database.queryJson(\`
-      SELECT judgment_id AS judgmentId, article_id AS articleId
-      FROM mart.judgment_fact
-      WHERE project_id = 'large-rebuild-executor-project'
-      ORDER BY judgment_id ASC
-    \`)
-
-    console.log(JSON.stringify({judgmentRows, scopeRows}))
-    await database.close()
-  `)
-
-  expect(result.scopeRows).toEqual([{articleId: 'article-1'}, {articleId: 'article-4'}])
-  expect(result.judgmentRows).toEqual([{articleId: 'article-1', judgmentId: 'judgment-replay-safe'}])
-})
-
-test('project judgment fact reset and batch rebuild populate bounded project judgments', () => {
-  const result = runScript<{rows: Array<{answer: string | null; articleId: string; judgmentId: string}>}>(`
-    await database.run(\`
-      INSERT INTO app.prompt (id, original_text, content_hash)
-      VALUES ('prompt-judgment-fact', 'Prompt judgment fact', 'hash-judgment-fact')
-    \`)
-    await database.run(\`
-      INSERT INTO app.judgment (
-        id,
-        article_id,
-        prompt_id,
-        model_id,
-        project_id,
-        snapshot_project_id,
-        use_title,
-        use_abstract,
-        use_fulltext,
-        use_fulltext_no_images,
-        is_answered,
-        answered_original,
-        answered_original_as_array,
-        confidence_original
-      ) VALUES
-        ('judgment-fact-1', 'article-1', 'prompt-judgment-fact', 'large-rebuild-executor-model', 'large-rebuild-executor-project', 'large-rebuild-executor-project', TRUE, TRUE, FALSE, FALSE, TRUE, ' yes ', NULL, 90),
-        ('judgment-fact-2', 'article-2', 'prompt-judgment-fact', 'large-rebuild-executor-model', 'large-rebuild-executor-project', 'large-rebuild-executor-project', TRUE, TRUE, FALSE, FALSE, TRUE, 'no', ['no'], 80)
-    \`)
     await database.run(\`
       INSERT INTO mart.judgment_fact (
         judgment_id,
@@ -328,12 +275,12 @@ test('project judgment fact reset and batch rebuild populate bounded project jud
         created_at,
         updated_at
       ) VALUES (
-        'stale-judgment-fact',
-        'article-3',
-        'prompt-judgment-fact',
+        'unrelated-replay-safe-fact',
+        'article-2',
+        'prompt-replay-safe',
         'large-rebuild-executor-model',
-        'large-rebuild-executor-project',
-        'large-rebuild-executor-project',
+        'large-rebuild-replay-unrelated-project',
+        'large-rebuild-replay-unrelated-project',
         NULL,
         TRUE,
         TRUE,
@@ -341,15 +288,15 @@ test('project judgment fact reset and batch rebuild populate bounded project jud
         FALSE,
         NULL,
         TRUE,
-        'stale',
-        ['stale'],
-        ['stale'],
-        1,
+        'unrelated',
+        ['unrelated'],
+        ['unrelated'],
+        80,
         NULL,
         NULL,
-        'Article 3',
-        TIMESTAMPTZ '2026-04-02T00:00:00.000Z',
-        TIMESTAMPTZ '2026-04-02T01:00:00.000Z',
+        'Article 2',
+        TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+        TIMESTAMPTZ '2026-04-01T02:00:00.000Z',
         NULL,
         NULL,
         TIMESTAMPTZ '2026-04-03T00:00:00.000Z',
@@ -357,8 +304,197 @@ test('project judgment fact reset and batch rebuild populate bounded project jud
       )
     \`)
 
-    await executor.resetProjectJudgmentFact('large-rebuild-executor-project')
+    const batch = await executor.getProjectScopeSourceBatch({batchSize: 2, projectId: 'large-rebuild-executor-project'})
+
+    await executor.resetProjectScope('large-rebuild-executor-project')
+    await executor.rebuildProjectScopeBatch('large-rebuild-executor-project', batch)
+    await executor.rebuildProjectScopeBatch('large-rebuild-executor-project', batch)
     await executor.rebuildProjectJudgmentFactBatch('large-rebuild-executor-project', ['article-1'])
+    await executor.rebuildProjectJudgmentFactBatch('large-rebuild-executor-project', ['article-1'])
+
+    const scopeRows = await database.queryJson(\`
+      SELECT article_id AS articleId
+      FROM mart.project_scope_article
+      WHERE project_id = 'large-rebuild-executor-project'
+      ORDER BY article_id ASC
+    \`)
+    const judgmentRows = await database.queryJson(\`
+      SELECT judgment_id AS judgmentId, article_id AS articleId
+      FROM mart.judgment_fact
+      WHERE judgment_id IN ('judgment-replay-safe', 'unrelated-replay-safe-fact')
+      ORDER BY judgment_id ASC
+    \`)
+
+    console.log(JSON.stringify({judgmentRows, scopeRows}))
+    await database.close()
+  `)
+
+  expect(result.scopeRows).toEqual([{articleId: 'article-1'}, {articleId: 'article-4'}])
+  expect(result.judgmentRows).toEqual([
+    {articleId: 'article-1', judgmentId: 'judgment-replay-safe'},
+    {articleId: 'article-2', judgmentId: 'unrelated-replay-safe-fact'},
+  ])
+})
+
+test('project judgment fact batch rebuild replaces only affected scoped article facts', () => {
+  const result = runScript<{rows: Array<{answer: string | null; articleId: string; judgmentId: string}>}>(`
+    await database.run(\`
+      INSERT INTO app.prompt (id, original_text, content_hash)
+      VALUES ('prompt-judgment-fact', 'Prompt judgment fact', 'hash-judgment-fact')
+    \`)
+    await database.run(\`
+      INSERT INTO app.judgment (
+        id,
+        article_id,
+        prompt_id,
+        model_id,
+        project_id,
+        snapshot_project_id,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images,
+        is_answered,
+        answered_original,
+        answered_original_as_array,
+        confidence_original
+      ) VALUES
+        ('judgment-fact-1', 'article-1', 'prompt-judgment-fact', 'large-rebuild-executor-model', 'large-rebuild-executor-project', 'large-rebuild-executor-project', TRUE, TRUE, FALSE, FALSE, TRUE, ' yes ', NULL, 90),
+        ('judgment-fact-2', 'article-2', 'prompt-judgment-fact', 'large-rebuild-executor-model', 'large-rebuild-executor-project', 'large-rebuild-executor-project', TRUE, TRUE, FALSE, FALSE, TRUE, 'no', ['no'], 80)
+    \`)
+    await database.run(\`
+      INSERT INTO mart.project_scope_article (
+        project_id,
+        article_id,
+        in_curated_scope,
+        in_route_scope,
+        article_created_at,
+        article_updated_at
+      ) VALUES (
+        'large-rebuild-executor-project',
+        'article-1',
+        TRUE,
+        FALSE,
+        TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+        TIMESTAMPTZ '2026-04-01T01:00:00.000Z'
+      )
+    \`)
+    await database.run(\`
+      INSERT INTO mart.judgment_fact (
+        judgment_id,
+        article_id,
+        prompt_id,
+        model_id,
+        project_id,
+        snapshot_project_id,
+        snapshot_project_model_name,
+        use_title,
+        use_abstract,
+        use_fulltext,
+        use_fulltext_no_images,
+        chunking_strategy,
+        is_answered,
+        answered_original,
+        answered_original_as_array,
+        normalized_answers,
+        confidence_original,
+        explanation,
+        quotes,
+        article_title,
+        article_created_at,
+        article_updated_at,
+        article_import_route,
+        article_publication_status,
+        created_at,
+        updated_at
+      ) VALUES
+        (
+          'stale-affected-judgment-fact',
+          'article-1',
+          'prompt-judgment-fact',
+          'large-rebuild-executor-model',
+          'large-rebuild-executor-project',
+          'large-rebuild-executor-project',
+          NULL,
+          TRUE,
+          TRUE,
+          FALSE,
+          FALSE,
+          NULL,
+          TRUE,
+          'stale affected',
+          ['stale affected'],
+          ['stale affected'],
+          1,
+          NULL,
+          NULL,
+          'Article 1',
+          TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+          TIMESTAMPTZ '2026-04-01T01:00:00.000Z',
+          NULL,
+          NULL,
+          TIMESTAMPTZ '2026-04-03T00:00:00.000Z',
+          TIMESTAMPTZ '2026-04-03T00:00:00.000Z'
+        ),
+        (
+          'stale-unscoped-requested-judgment-fact',
+          'article-2',
+          'prompt-judgment-fact',
+          'large-rebuild-executor-model',
+          'large-rebuild-executor-project',
+          'large-rebuild-executor-project',
+          NULL,
+          TRUE,
+          TRUE,
+          FALSE,
+          FALSE,
+          NULL,
+          TRUE,
+          'stale unscoped',
+          ['stale unscoped'],
+          ['stale unscoped'],
+          1,
+          NULL,
+          NULL,
+          'Article 2',
+          TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+          TIMESTAMPTZ '2026-04-01T02:00:00.000Z',
+          NULL,
+          NULL,
+          TIMESTAMPTZ '2026-04-03T00:00:00.000Z',
+          TIMESTAMPTZ '2026-04-03T00:00:00.000Z'
+        ),
+        (
+          'stale-unrelated-judgment-fact',
+          'article-3',
+          'prompt-judgment-fact',
+          'large-rebuild-executor-model',
+          'large-rebuild-executor-project',
+          'large-rebuild-executor-project',
+          NULL,
+          TRUE,
+          TRUE,
+          FALSE,
+          FALSE,
+          NULL,
+          TRUE,
+          'stale unrelated',
+          ['stale unrelated'],
+          ['stale unrelated'],
+          1,
+          NULL,
+          NULL,
+          'Article 3',
+          TIMESTAMPTZ '2026-04-02T00:00:00.000Z',
+          TIMESTAMPTZ '2026-04-02T01:00:00.000Z',
+          NULL,
+          NULL,
+          TIMESTAMPTZ '2026-04-03T00:00:00.000Z',
+          TIMESTAMPTZ '2026-04-03T00:00:00.000Z'
+        )
+    \`)
+
+    await executor.rebuildProjectJudgmentFactBatch('large-rebuild-executor-project', ['article-1', 'article-2'])
 
     const rows = await database.queryJson(\`
       SELECT
@@ -367,14 +503,18 @@ test('project judgment fact reset and batch rebuild populate bounded project jud
         answered_original AS answer
       FROM mart.judgment_fact
       WHERE project_id = 'large-rebuild-executor-project'
-      ORDER BY judgment_id ASC
+      ORDER BY article_id ASC, judgment_id ASC
     \`)
 
     console.log(JSON.stringify({rows}))
     await database.close()
   `)
 
-  expect(result.rows).toEqual([{answer: 'yes', articleId: 'article-1', judgmentId: 'judgment-fact-1'}])
+  expect(result.rows).toEqual([
+    {answer: 'yes', articleId: 'article-1', judgmentId: 'judgment-fact-1'},
+    {answer: 'stale unscoped', articleId: 'article-2', judgmentId: 'stale-unscoped-requested-judgment-fact'},
+    {answer: 'stale unrelated', articleId: 'article-3', judgmentId: 'stale-unrelated-judgment-fact'},
+  ])
 })
 
 test('project judgment fact batch rebuild repairs shared facts for scoped articles', () => {
@@ -398,7 +538,6 @@ test('project judgment fact batch rebuild repairs shared facts for scoped articl
       "INSERT INTO mart.project_scope_article (project_id, article_id, in_curated_scope, in_route_scope, article_created_at, article_updated_at) VALUES ('large-rebuild-shared-target', 'article-1', TRUE, FALSE, TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z')"
     )
 
-    await executor.resetProjectJudgmentFact('large-rebuild-shared-target')
     await executor.rebuildProjectJudgmentFactBatch('large-rebuild-shared-target', ['article-1'])
     await executor.resetProjectPromptAnswerFact('large-rebuild-shared-target')
     await executor.rebuildProjectPromptAnswerFactBatch('large-rebuild-shared-target', ['article-1'])
