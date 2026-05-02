@@ -33,6 +33,8 @@ import {getJudgmentJobStorageTransferRuntime} from '../cron/judgmentsJobs/judgme
 import type {RunningJudgmentJob} from '../cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts'
 import {getEffectiveProviderCap} from '../cron/judgmentsJobs/judgmentsJobsSendToLLM.ts'
 import {getProviderConnectionForStoredModel} from '../providers/providerConnectionRepository.ts'
+import {getProviderConnectionConfigFromJson} from '../providers/providerDbUtils.ts'
+import {resolveProviderConnectionRuntimeMatch} from '../providers/providerRuntimeMatchResolver.ts'
 import {assertStoredProviderModelRuntimeMatch} from '../providers/providerRuntimeModelGuard.ts'
 import {getProviderConnectionEffectiveBaseURL} from '../providers/providerRuntimeState.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
@@ -114,6 +116,10 @@ type JudgmentJobHealthBadge =
   | 'Quarantined'
   | 'Retained Outbox'
   | 'Stale Import'
+type OwnerBackedRuntimeResolution = Pick<
+  OwnerBackedJudgmentJobInfo,
+  'resolvedRuntime' | 'runtimeMatchReason' | 'runtimeMatchStatus' | 'runtimeResolutionMode'
+>
 type UnassessedCountCacheValue = {value: number; expiresAt: number}
 type ProjectMartFreshnessState = {dirtyToken: number | null; isFresh: boolean; lastCompletedRefreshToken: number | null}
 type JudgmentJobStorageProjection = {
@@ -469,6 +475,63 @@ const getOwnerBackedRunningJudgmentJobs = async (): Promise<RunningJudgmentJob[]
   `)
 }
 
+const normalizeOwnerBackedProvider = (value: string | null | undefined): string => {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase()
+
+  return normalized.length > 0 ? normalized : 'unknown'
+}
+
+const getCodexOwnerBackedRuntime = (): OwnerBackedRuntimeResolution => {
+  return {
+    resolvedRuntime: {modelBaseUrl: 'codex://app-server', modelProvider: 'codex', modelWorkerUrls: []},
+    runtimeMatchReason: 'manual-provider',
+    runtimeMatchStatus: 'matched',
+    runtimeResolutionMode: 'manual',
+  }
+}
+
+const getOwnerBackedRuntimeMatch = async ({
+  baseURL,
+  modelName,
+  providerConfigJson,
+  providerKind,
+}: {
+  baseURL: string | null
+  modelName: string
+  providerConfigJson: unknown
+  providerKind: string
+}): Promise<OwnerBackedRuntimeResolution> => {
+  if (providerKind === 'codex') {
+    return getCodexOwnerBackedRuntime()
+  }
+
+  const config = getProviderConnectionConfigFromJson({providerKind, value: providerConfigJson})
+  const runtimeMatch = await resolveProviderConnectionRuntimeMatch({
+    baseURL,
+    config,
+    providerKind,
+    savedModelIds: [modelName],
+  })
+  const shouldUseMatchedRuntime = runtimeMatch.resolutionMode === 'manual' || runtimeMatch.status === 'matched'
+  const resolvedRuntime =
+    shouldUseMatchedRuntime && runtimeMatch.effectiveBaseURL
+      ? {
+          modelBaseUrl: runtimeMatch.effectiveBaseURL,
+          modelProvider: providerKind,
+          modelWorkerUrls: runtimeMatch.effectiveWorkerUrls,
+        }
+      : null
+
+  return {
+    resolvedRuntime,
+    runtimeMatchReason: runtimeMatch.reason,
+    runtimeMatchStatus: runtimeMatch.status,
+    runtimeResolutionMode: runtimeMatch.resolutionMode,
+  }
+}
+
 const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBackedJudgmentJobInfo | null> => {
   const [row] = await getAppDatabaseService().queryJson<{
     modelBaseUrl: string | null
@@ -509,23 +572,35 @@ const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBac
     LIMIT 1
   `)
 
-  return row?.projectId && row.modelId && row.modelName
-    ? {
-        modelBaseUrl: row.modelBaseUrl ?? null,
-        modelId: row.modelId,
-        modelMetadataJson: getJsonValue(row.modelMetadataJson),
-        modelName: row.modelName,
-        modelProvider: row.modelProvider ?? 'unknown',
-        modelSecretRef: row.modelSecretRef ?? null,
-        modelVersion: row.modelVersion ?? null,
-        projectId: row.projectId,
-        providerConfigJson: getJsonValue(row.providerConfigJson),
-        useAbstract: row.useAbstract ?? true,
-        useFulltext: row.useFulltext ?? false,
-        useFulltextNoImages: row.useFulltextNoImages ?? false,
-        useTitle: row.useTitle ?? true,
-      }
-    : null
+  if (!row?.projectId || !row.modelId || !row.modelName) {
+    return null
+  }
+
+  const providerKind = normalizeOwnerBackedProvider(row.modelProvider)
+  const providerConfigJson = getJsonValue(row.providerConfigJson)
+  const runtimeMatch = await getOwnerBackedRuntimeMatch({
+    baseURL: row.modelBaseUrl ?? null,
+    modelName: row.modelName,
+    providerConfigJson,
+    providerKind,
+  })
+
+  return {
+    modelBaseUrl: row.modelBaseUrl ?? null,
+    modelId: row.modelId,
+    modelMetadataJson: getJsonValue(row.modelMetadataJson),
+    modelName: row.modelName,
+    modelProvider: providerKind,
+    modelSecretRef: row.modelSecretRef ?? null,
+    modelVersion: row.modelVersion ?? null,
+    projectId: row.projectId,
+    providerConfigJson,
+    ...runtimeMatch,
+    useAbstract: row.useAbstract ?? true,
+    useFulltext: row.useFulltext ?? false,
+    useFulltextNoImages: row.useFulltextNoImages ?? false,
+    useTitle: row.useTitle ?? true,
+  }
 }
 
 const claimJudgmentJobPrompts = async (jobId: string, body: JudgmentClaimRequestBody | undefined) => {

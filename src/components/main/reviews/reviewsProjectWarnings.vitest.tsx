@@ -183,8 +183,10 @@ test('renders staged large rebuild progress separately from dirty article ACKs',
   )
 
   try {
-    expect(container.textContent).toContain('Large rebuild articles: remaining 12 of 148, 600/min')
-    expect(container.textContent).toContain('Dirty article ACKs: 148 waiting for staged rebuild finalization')
+    expect(container.textContent).toContain('Current phase articles: remaining 12 of 148 in this phase, 600/min')
+    expect(container.textContent).toContain('Dirty article ACKs: 148 waiting until the staged rebuild finalizes')
+    expect(container.textContent).toContain('Large rebuild: current phase 6 of 6 (review_article_serving)')
+    expect(container.textContent).toContain('Article counts are per phase and reset when the rebuild advances')
     expect(container.textContent).not.toContain('Article refreshes: processing 0, queued 148, 0/min')
   } finally {
     dispose()

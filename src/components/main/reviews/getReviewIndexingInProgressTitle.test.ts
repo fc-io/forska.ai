@@ -96,3 +96,26 @@ test('review indexing blocked copy distinguishes worker wait from memory cooldow
   expect(getReviewIndexingBlockedTitle('paused_by_policy')).toBe('Review indexing cooling down after memory pressure')
   expect(getReviewIndexingBlockedBody('paused_by_policy')).toContain('cooling down after memory pressure')
 })
+
+test('large rebuild copy explains phase counters reset', () => {
+  const copy = getReviewIndexingStateCopy({
+    indexing: getIndexing({
+      largeRebuild: {
+        cursorArticleCreatedAt: null,
+        cursorArticleId: null,
+        lastError: null,
+        operatorNote: null,
+        progress: {remainingCurrentPhaseArticleCount: 10, rowsPerMinute: 600, scopeArticleCount: 20},
+        rebuildPhase: 'prompt_answer_fact',
+        refreshStatus: 'idle',
+        refreshToken: 1,
+      },
+      progressState: 'queued',
+    }),
+    projectId: 'project-1',
+    surface: 'banner',
+  })
+
+  expect(copy.title).toBe('Large rebuild phase queued: prompt_answer_fact')
+  expect(copy.description).toContain('article counter resets when the phase changes')
+})

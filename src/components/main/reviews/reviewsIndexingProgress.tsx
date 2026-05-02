@@ -4,6 +4,15 @@ import type {ReviewsWarningsData} from './reviewsWarningsQuery.ts'
 
 type ReviewsIndexingProgressProps = {compact?: boolean; indexing: ReviewsWarningsData['indexing']}
 
+const largeRebuildPhaseOrder = [
+  'judgment_fact',
+  'prompt_answer_fact',
+  'review_answer_dictionary',
+  'review_article_filter_member',
+  'review_article_rollup',
+  'review_article_serving',
+] as const
+
 const getProgressContainerClass = (compact: boolean) => {
   return compact ? 'mt-3 space-y-1 text-xs text-slate-600' : 'mt-3 space-y-1.5 text-xs text-slate-600'
 }
@@ -29,19 +38,30 @@ const getLargeRebuildArticleProgressLabel = (indexing: ReviewsWarningsData['inde
 
   return progress === null || progress === undefined || progress.remainingCurrentPhaseArticleCount === null
     ? null
-    : `remaining ${getCountLabel(progress.remainingCurrentPhaseArticleCount)} of ${getCountLabel(progress.scopeArticleCount)}, ${getLargeRebuildSpeedLabel(progress.rowsPerMinute)}`
+    : `remaining ${getCountLabel(progress.remainingCurrentPhaseArticleCount)} of ${getCountLabel(progress.scopeArticleCount)} in this phase, ${getLargeRebuildSpeedLabel(progress.rowsPerMinute)}`
 }
 
 const getDirtyArticleAckLabel = (indexing: ReviewsWarningsData['indexing']) => {
   return indexing.largeRebuild === null || indexing.pendingArticleRefreshCount === 0
     ? null
-    : `${getCountLabel(indexing.pendingArticleRefreshCount)} waiting for staged rebuild finalization`
+    : `${getCountLabel(indexing.pendingArticleRefreshCount)} waiting until the staged rebuild finalizes`
 }
 
 const getLargeRebuildPhaseLabel = (indexing: ReviewsWarningsData['indexing']) => {
   const rebuildPhase = indexing.largeRebuild?.rebuildPhase
+  const phaseIndex = largeRebuildPhaseOrder.indexOf(rebuildPhase as (typeof largeRebuildPhaseOrder)[number])
 
-  return rebuildPhase === null || rebuildPhase === undefined ? null : `phase ${rebuildPhase}`
+  return rebuildPhase === null || rebuildPhase === undefined
+    ? null
+    : phaseIndex === -1
+      ? `current phase ${rebuildPhase}`
+      : `current phase ${phaseIndex + 1} of ${largeRebuildPhaseOrder.length} (${rebuildPhase})`
+}
+
+const getLargeRebuildPhaseNoteLabel = (indexing: ReviewsWarningsData['indexing']) => {
+  return indexing.largeRebuild === null
+    ? null
+    : 'Article counts are per phase and reset when the rebuild advances; this is not a full restart.'
 }
 
 const getLargeRebuildCursorLabel = (indexing: ReviewsWarningsData['indexing']) => {
@@ -103,7 +123,7 @@ export const ReviewsIndexingProgress = (props: ReviewsIndexingProgressProps) => 
                 {(progressLabel) => {
                   return (
                     <p>
-                      <span class="font-medium text-slate-700">Large rebuild articles:</span> {progressLabel()}
+                      <span class="font-medium text-slate-700">Current phase articles:</span> {progressLabel()}
                     </p>
                   )
                 }}
@@ -134,6 +154,15 @@ export const ReviewsIndexingProgress = (props: ReviewsIndexingProgressProps) => 
             return (
               <p>
                 <span class="font-medium text-slate-700">Large rebuild:</span> {phaseLabel()}
+              </p>
+            )
+          }}
+        </Show>
+        <Show when={getLargeRebuildPhaseNoteLabel(props.indexing)}>
+          {(phaseNoteLabel) => {
+            return (
+              <p>
+                <span class="font-medium text-slate-700">Phase note:</span> {phaseNoteLabel()}
               </p>
             )
           }}

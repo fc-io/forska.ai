@@ -5,6 +5,7 @@ import {getJudgeWorkerReadOnlyAppDatabaseService} from '../../../services/appRea
 import {
   claimOwnerJudgmentJobPrompts,
   getOwnerBackedJudgmentJobInfo,
+  type OwnerBackedJudgmentJobInfo,
   recordAcceptedJudgeWorkerClaims,
   shouldUseJudgeWorkerOwnerHandoff,
 } from '../judgeWorkerCompletionJournal.ts'
@@ -55,6 +56,27 @@ const getCodexPlaceholderBaseUrl = (): string => {
 
 const getCodexPromptRuntime = (): PromptRuntime => {
   return {modelBaseUrl: getCodexPlaceholderBaseUrl(), modelProvider: 'codex', modelWorkerUrls: []}
+}
+
+const getOwnerBackedPromptRuntime = (jobId: string, jobInfo: OwnerBackedJudgmentJobInfo): PromptRuntime | null => {
+  if (jobInfo.resolvedRuntime) {
+    return {
+      modelBaseUrl: jobInfo.resolvedRuntime.modelBaseUrl,
+      modelProvider: normalizeProvider(jobInfo.resolvedRuntime.modelProvider),
+      modelWorkerUrls: jobInfo.resolvedRuntime.modelWorkerUrls,
+    }
+  }
+
+  console.error('Prompt missing required owner-provided model runtime:', {
+    jobId,
+    modelName: jobInfo.modelName,
+    modelProvider: jobInfo.modelProvider,
+    runtimeMatchReason: jobInfo.runtimeMatchReason,
+    runtimeResolutionMode: jobInfo.runtimeResolutionMode,
+    runtimeStatus: jobInfo.runtimeMatchStatus,
+  })
+
+  return null
 }
 
 const isJobReadyToClaimPrompts = async (jobId: string): Promise<boolean> => {
@@ -205,73 +227,27 @@ const getOwnerBackedReadyRows = async (
     return []
   }
 
-  const provider = normalizeProvider(jobInfo.modelProvider)
+  const runtime = getOwnerBackedPromptRuntime(jobId, jobInfo)
 
-  if (isCodexProvider(provider)) {
-    const claims = await claimOwnerJudgmentJobPrompts({claimedBy: serverJobId, jobId, limit, protectedRecordIds})
-    const runtime = getCodexPromptRuntime()
-    const prompts = claims.map((prompt) => {
-      return {
-        ...prompt,
-        modelBaseUrl: runtime.modelBaseUrl,
-        modelId: jobInfo.modelId,
-        modelMetadataJson: jobInfo.modelMetadataJson,
-        modelName: jobInfo.modelName,
-        modelProvider: provider,
-        modelSecretRef: jobInfo.modelSecretRef,
-        modelVersion: jobInfo.modelVersion,
-        providerConnectionId: null,
-        providerMaxInflightRequests: null,
-        providerUsesFamilyDefault: true,
-        modelWorkerUrls: runtime.modelWorkerUrls,
-        projectId: jobInfo.projectId,
-        useAbstract: jobInfo.useAbstract,
-        useFulltext: jobInfo.useFulltext,
-        useFulltextNoImages: jobInfo.useFulltextNoImages,
-        useTitle: jobInfo.useTitle,
-      }
-    })
-
-    await recordAcceptedJudgeWorkerClaims(prompts)
-
-    return prompts
-  }
-
-  const runtime = await getModelRuntime({
-    baseURL: jobInfo.modelBaseUrl,
-    modelName: jobInfo.modelName,
-    providerConfigJson: jobInfo.providerConfigJson,
-    providerKind: provider,
-  })
-
-  if (!isCodexProvider(provider) && !runtime.baseURL) {
-    console.error('Prompt missing required matched model baseURL:', {
-      jobId,
-      modelName: jobInfo.modelName,
-      modelProvider: jobInfo.modelProvider,
-      runtimeMatchReason: runtime.reason,
-      runtimeResolutionMode: runtime.resolutionMode,
-      runtimeStatus: runtime.status,
-    })
+  if (!runtime) {
     return []
   }
 
   const claims = await claimOwnerJudgmentJobPrompts({claimedBy: serverJobId, jobId, limit, protectedRecordIds})
-  const baseUrl = String(runtime.baseURL)
   const prompts = claims.map((prompt) => {
     return {
       ...prompt,
-      modelBaseUrl: baseUrl,
+      modelBaseUrl: runtime.modelBaseUrl,
       modelId: jobInfo.modelId,
       modelMetadataJson: jobInfo.modelMetadataJson,
       modelName: jobInfo.modelName,
-      modelProvider: provider,
+      modelProvider: runtime.modelProvider,
       modelSecretRef: jobInfo.modelSecretRef,
       modelVersion: jobInfo.modelVersion,
       providerConnectionId: null,
       providerMaxInflightRequests: null,
       providerUsesFamilyDefault: true,
-      modelWorkerUrls: runtime.workerUrls,
+      modelWorkerUrls: runtime.modelWorkerUrls,
       projectId: jobInfo.projectId,
       useAbstract: jobInfo.useAbstract,
       useFulltext: jobInfo.useFulltext,
@@ -286,14 +262,22 @@ const getOwnerBackedReadyRows = async (
 }
 
 export const getReadyPromptRuntime = async (jobId: string): Promise<PromptRuntime | null> => {
-  if (!shouldUseJudgeWorkerOwnerHandoff() && !(await isJobReadyToClaimPrompts(jobId))) {
+  if (shouldUseJudgeWorkerOwnerHandoff()) {
+    const jobInfo = await getOwnerBackedJudgmentJobInfo(jobId)
+
+    if (!jobInfo) {
+      console.error('[getReadyPromptRuntime] owner-backed job info not found for jobId:', jobId)
+      return null
+    }
+
+    return getOwnerBackedPromptRuntime(jobId, jobInfo)
+  }
+
+  if (!(await isJobReadyToClaimPrompts(jobId))) {
     return null
   }
 
-  const sqliteService = getJudgmentJobSqliteService()
-  const jobInfo = shouldUseJudgeWorkerOwnerHandoff()
-    ? await getOwnerBackedJudgmentJobInfo(jobId)
-    : await sqliteService.getJobInfo(jobId)
+  const jobInfo = await getJudgmentJobSqliteService().getJobInfo(jobId)
 
   if (!jobInfo) {
     console.error('[getReadyPromptRuntime] SQLite job info not found for jobId:', jobId)

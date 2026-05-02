@@ -252,6 +252,10 @@ test('owner-backed codex prompts bypass runtime autodetect', async () => {
               modelVersion: 'xhigh',
               projectId: 'project-codex',
               providerConfigJson: {},
+              resolvedRuntime: {modelBaseUrl: 'codex://app-server', modelProvider: 'codex', modelWorkerUrls: []},
+              runtimeMatchReason: 'manual-provider',
+              runtimeMatchStatus: 'matched',
+              runtimeResolutionMode: 'manual',
               useAbstract: true,
               useFulltext: false,
               useFulltextNoImages: false,
@@ -306,4 +310,164 @@ test('owner-backed codex prompts bypass runtime autodetect', async () => {
   })
   expect(result.acceptedClaimCount).toBe(1)
   expect(result.runtimeMatchCalls).toBe(0)
+})
+
+test('owner-backed non-Codex prompts use owner-provided runtime without autodetect', async () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const readyPromptsModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts')
+        const judgeWorkerCompletionJournalModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgeWorkerCompletionJournal.ts')
+        const providerRuntimeMatchResolverModulePath = getModulePath('./src/server/providers/providerRuntimeMatchResolver.ts')
+        const providerRuntimeDetectorModulePath = getModulePath('./src/server/providers/providerRuntimeDetector.ts')
+        const providerConnectionRepositoryModulePath = getModulePath('./src/server/providers/providerConnectionRepository.ts')
+        const ownerRuntime = {
+          modelBaseUrl: 'http://owner-sglang:30000/v1',
+          modelProvider: 'sglang',
+          modelWorkerUrls: ['http://owner-sglang-worker:30001'],
+        }
+        let acceptedClaimCount = 0
+        let listProviderConnectionCalls = 0
+        let runtimeMatchCalls = 0
+        let runtimeSummaryCalls = 0
+
+        void mock.module(judgeWorkerCompletionJournalModulePath, () => {
+          return {
+            claimOwnerJudgmentJobPrompts: async () => [{
+              articleId: 'article-sglang',
+              claimId: 'claim-sglang',
+              executionSnapshotHash: 'snapshot-hash-sglang',
+              executionSnapshotId: 'snapshot-sglang',
+              jobId: 'job-sglang',
+              modelBaseUrl: 'unused',
+              modelId: 'model-unused',
+              modelMetadataJson: null,
+              modelName: 'unused',
+              modelProvider: 'sglang',
+              modelSecretRef: null,
+              modelVersion: null,
+              modelWorkerUrls: [],
+              projectId: 'project-unused',
+              promptId: 'prompt-sglang',
+              providerConnectionId: null,
+              providerMaxInflightRequests: null,
+              providerUsesFamilyDefault: true,
+              recordId: 'record-sglang',
+              useAbstract: true,
+              useFulltext: true,
+              useFulltextNoImages: false,
+              useTitle: true,
+            }],
+            getOwnerBackedJudgmentJobInfo: async () => ({
+              modelBaseUrl: 'http://saved-sglang:30000/v1',
+              modelId: 'model-sglang',
+              modelMetadataJson: {provider: 'sglang'},
+              modelName: 'Qwen/Qwen3.5-35B-A3B',
+              modelProvider: 'sglang',
+              modelSecretRef: null,
+              modelVersion: null,
+              projectId: 'project-sglang',
+              providerConfigJson: {manualWorkerUrls: [], workerUrlMode: 'runtime'},
+              resolvedRuntime: ownerRuntime,
+              runtimeMatchReason: 'runtime-auto-detect',
+              runtimeMatchStatus: 'matched',
+              runtimeResolutionMode: 'auto-detect',
+              useAbstract: true,
+              useFulltext: true,
+              useFulltextNoImages: false,
+              useTitle: true,
+            }),
+            recordAcceptedJudgeWorkerClaims: async (prompts) => {
+              acceptedClaimCount += prompts.length
+            },
+            shouldUseJudgeWorkerOwnerHandoff: () => true,
+          }
+        })
+        void mock.module(providerRuntimeMatchResolverModulePath, () => {
+          return {
+            resolveProviderConnectionRuntimeMatch: async () => {
+              runtimeMatchCalls += 1
+              throw new Error('runtime autodetect should not run for owner-backed non-Codex jobs')
+            },
+          }
+        })
+        void mock.module(providerRuntimeDetectorModulePath, () => {
+          return {
+            getDetectedProviderRuntimeSummaries: async () => {
+              runtimeSummaryCalls += 1
+              throw new Error('runtime summaries should not be read for owner-backed non-Codex jobs')
+            },
+            getDetectedProviderRuntimeSummary: async () => {
+              runtimeSummaryCalls += 1
+              throw new Error('runtime summary should not be read for owner-backed non-Codex jobs')
+            },
+          }
+        })
+        void mock.module(providerConnectionRepositoryModulePath, () => {
+          return {
+            listProviderConnections: async () => {
+              listProviderConnectionCalls += 1
+              throw new Error('provider connections should not be listed for owner-backed non-Codex jobs')
+            },
+          }
+        })
+
+        const {getAndUpdateReadyPrompts, getReadyPromptRuntime} = await import(readyPromptsModulePath + '?sglang-owner-backed=' + Date.now())
+        const runtime = await getReadyPromptRuntime('job-sglang')
+        const prompts = await getAndUpdateReadyPrompts('server-job-sglang', 'job-sglang', 1, {
+          providerConnectionId: 'connection-sglang',
+          providerMaxInflightRequests: 8,
+          providerUsesFamilyDefault: false,
+        })
+
+        console.log(JSON.stringify({acceptedClaimCount, listProviderConnectionCalls, prompts, runtime, runtimeMatchCalls, runtimeSummaryCalls}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env, SERVER_ROLE: 'judge-worker'}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(runScript.stderr.toString() || runScript.stdout.toString() || 'owner-backed non-Codex test failed')
+  }
+
+  const result = JSON.parse(runScript.stdout.toString()) as {
+    acceptedClaimCount: number
+    listProviderConnectionCalls: number
+    prompts: Array<{
+      modelBaseUrl: string
+      modelId: string
+      modelProvider: string
+      modelWorkerUrls: string[]
+      providerConnectionId: string | null
+    }>
+    runtime: {modelBaseUrl: string; modelProvider: string; modelWorkerUrls: string[]}
+    runtimeMatchCalls: number
+    runtimeSummaryCalls: number
+  }
+
+  expect(result.runtime).toEqual({
+    modelBaseUrl: 'http://owner-sglang:30000/v1',
+    modelProvider: 'sglang',
+    modelWorkerUrls: ['http://owner-sglang-worker:30001'],
+  })
+  expect(result.prompts).toHaveLength(1)
+  expect(result.prompts[0]).toMatchObject({
+    modelBaseUrl: 'http://owner-sglang:30000/v1',
+    modelId: 'model-sglang',
+    modelProvider: 'sglang',
+    modelWorkerUrls: ['http://owner-sglang-worker:30001'],
+    providerConnectionId: 'connection-sglang',
+  })
+  expect(result.acceptedClaimCount).toBe(1)
+  expect(result.listProviderConnectionCalls).toBe(0)
+  expect(result.runtimeMatchCalls).toBe(0)
+  expect(result.runtimeSummaryCalls).toBe(0)
 })

@@ -78,6 +78,10 @@ export type OwnerBackedJudgmentJobInfo = {
   modelVersion: string | null
   projectId: string
   providerConfigJson: unknown
+  resolvedRuntime: {modelBaseUrl: string; modelProvider: string; modelWorkerUrls: string[]} | null
+  runtimeMatchReason: string
+  runtimeMatchStatus: 'ambiguous' | 'manual-only' | 'matched' | 'unreachable'
+  runtimeResolutionMode: 'auto-detect' | 'manual'
   useAbstract: boolean
   useFulltext: boolean
   useFulltextNoImages: boolean

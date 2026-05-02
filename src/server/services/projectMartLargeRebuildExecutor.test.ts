@@ -1201,23 +1201,29 @@ test('filter member rollup and serving staging rebuild replay safely on bounded 
   ])
 })
 
-test('review serving finalize rewrites stale generations without over-promoting', () => {
+test('review serving finalize deletes stale generations without over-promoting', () => {
   const result = runScript<{
     activeGeneration: Array<{activeGeneration: string}>
     generationRows: Array<{generation: string; rowCount: string; tableName: string}>
+    otherGenerationRows: Array<{generation: string; rowCount: string; tableName: string}>
   }>(`
     await database.run("INSERT INTO app.project_review_serving_generation (project_id, active_generation) VALUES ('large-rebuild-executor-project', 2)")
+    await database.run("INSERT INTO app.project_review_serving_generation (project_id, active_generation) VALUES ('other-project', 3)")
     await database.run("INSERT INTO mart.review_article_serving (project_id, generation, article_id, article_created_at, article_updated_at, article_title, has_all_llm_judgments, llm_judged_prompt_count, enabled_prompt_count, human_answered_prompt_count, has_all_human_answers, review_opened, review_sections_completed) VALUES ('large-rebuild-executor-project', 1, 'article-1', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z', 'Article 1', TRUE, 1, 1, 0, FALSE, FALSE, 0), ('large-rebuild-executor-project', 2, 'article-1', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z', 'Article 1', TRUE, 1, 1, 0, FALSE, FALSE, 0), ('large-rebuild-executor-project', 3, 'article-1', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z', 'Article 1', TRUE, 1, 1, 0, FALSE, FALSE, 0)")
+    await database.run("INSERT INTO mart.review_article_serving (project_id, generation, article_id, article_created_at, article_updated_at, article_title, has_all_llm_judgments, llm_judged_prompt_count, enabled_prompt_count, human_answered_prompt_count, has_all_human_answers, review_opened, review_sections_completed) VALUES ('other-project', 1, 'article-1', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z', 'Article 1', TRUE, 1, 1, 0, FALSE, FALSE, 0)")
     await database.run("INSERT INTO mart.review_article_filter_member (project_id, generation, prompt_id, answer_id, article_id) VALUES ('large-rebuild-executor-project', 1, 'prompt-1', 1, 'article-1'), ('large-rebuild-executor-project', 2, 'prompt-1', 1, 'article-1'), ('large-rebuild-executor-project', 3, 'prompt-1', 1, 'article-1')")
+    await database.run("INSERT INTO mart.review_article_filter_member (project_id, generation, prompt_id, answer_id, article_id) VALUES ('other-project', 1, 'prompt-1', 1, 'article-1')")
     await database.run("INSERT INTO mart.review_article_serving_detail (project_id, generation, article_id, prompt_id, judgment_id, created_at, model_id) VALUES ('large-rebuild-executor-project', 1, 'article-1', 'prompt-1', 'judgment-old', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', 'large-rebuild-executor-model'), ('large-rebuild-executor-project', 2, 'article-1', 'prompt-1', 'judgment-current', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', 'large-rebuild-executor-model'), ('large-rebuild-executor-project', 3, 'article-1', 'prompt-1', 'judgment-next', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', 'large-rebuild-executor-model')")
+    await database.run("INSERT INTO mart.review_article_serving_detail (project_id, generation, article_id, prompt_id, judgment_id, created_at, model_id) VALUES ('other-project', 1, 'article-1', 'prompt-1', 'judgment-other', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', 'large-rebuild-executor-model')")
 
     await executor.finalizeProjectReviewServing('large-rebuild-executor-project')
     await executor.finalizeProjectReviewServing('large-rebuild-executor-project')
 
     const activeGeneration = await database.queryJson("SELECT CAST(active_generation AS VARCHAR) AS activeGeneration FROM app.project_review_serving_generation WHERE project_id = 'large-rebuild-executor-project'")
     const generationRows = await database.queryJson("SELECT 'filter_member' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_filter_member WHERE project_id = 'large-rebuild-executor-project' GROUP BY generation UNION ALL SELECT 'serving' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_serving WHERE project_id = 'large-rebuild-executor-project' GROUP BY generation UNION ALL SELECT 'serving_detail' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_serving_detail WHERE project_id = 'large-rebuild-executor-project' GROUP BY generation ORDER BY tableName ASC, generation ASC")
+    const otherGenerationRows = await database.queryJson("SELECT 'filter_member' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_filter_member WHERE project_id = 'other-project' GROUP BY generation UNION ALL SELECT 'serving' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_serving WHERE project_id = 'other-project' GROUP BY generation UNION ALL SELECT 'serving_detail' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_serving_detail WHERE project_id = 'other-project' GROUP BY generation ORDER BY tableName ASC, generation ASC")
 
-    console.log(JSON.stringify({activeGeneration, generationRows}))
+    console.log(JSON.stringify({activeGeneration, generationRows, otherGenerationRows}))
     await database.close()
   `)
 
@@ -1229,5 +1235,10 @@ test('review serving finalize rewrites stale generations without over-promoting'
     {generation: '3', rowCount: '1', tableName: 'serving'},
     {generation: '2', rowCount: '1', tableName: 'serving_detail'},
     {generation: '3', rowCount: '1', tableName: 'serving_detail'},
+  ])
+  expect(result.otherGenerationRows).toEqual([
+    {generation: '1', rowCount: '1', tableName: 'filter_member'},
+    {generation: '1', rowCount: '1', tableName: 'serving'},
+    {generation: '1', rowCount: '1', tableName: 'serving_detail'},
   ])
 })

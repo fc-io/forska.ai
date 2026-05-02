@@ -55,12 +55,12 @@ const getLargeRebuildDetailLabel = (data: ReviewsWarningsData) => {
         : data?.indexing.progressState === 'stalled'
           ? `Large rebuild stalled: ${phaseLabel}`
           : data?.indexing.progressState === 'queued' || data?.indexing.largeRebuild?.refreshStatus === 'idle'
-            ? `Large rebuild queued: ${phaseLabel}`
+            ? `Current rebuild phase queued: ${phaseLabel}`
             : data?.indexing.progressState !== 'processing'
               ? null
               : cursorArticleId
-                ? `Resuming from article ${cursorArticleId}`
-                : `Large rebuild in progress: ${phaseLabel}`
+                ? `Current rebuild phase resuming from article ${cursorArticleId}`
+                : `Current rebuild phase in progress: ${phaseLabel}`
 }
 
 export const ReviewsProjectWarnings = (props: {projectId: string}) => {

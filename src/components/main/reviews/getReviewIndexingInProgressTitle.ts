@@ -49,6 +49,12 @@ const getLargeRebuildPhase = (indexing: ReviewsWarningsData['indexing']) => {
   return indexing.largeRebuild?.rebuildPhase ?? null
 }
 
+const getLargeRebuildPhasedDescription = (state: 'active' | 'queued') => {
+  return state === 'queued'
+    ? 'This staged rebuild is queued for its current phase. Large rebuilds run several passes over the same article scope, so the article counter resets when the phase changes.'
+    : 'This project is being rebuilt in bounded phases. Each phase scans the same article scope, so current-phase article counts reset when the rebuild advances.'
+}
+
 const getArticleRefreshQueuedDescription = (surface: ReviewIndexingCopySurface) => {
   return surface === 'unassessedEmpty'
     ? "New judgments are queued to be folded into this project's review index. This list may change once the backlog clears."
@@ -90,11 +96,7 @@ const getQueuedReviewIndexingCopy = (params: ReviewIndexingCopyParams): ReviewIn
   const phase = getLargeRebuildPhase(params.indexing)
 
   return phase
-    ? {
-        description:
-          'This staged rebuild is queued for the maintenance worker. Review lists and counts may change once the backlog clears.',
-        title: `Large rebuild queued: ${phase}`,
-      }
+    ? {description: getLargeRebuildPhasedDescription('queued'), title: `Large rebuild phase queued: ${phase}`}
     : hasOnlyArticleRefreshWork(params.indexing)
       ? {
           description: getArticleRefreshQueuedDescription(params.surface),
@@ -107,11 +109,7 @@ const getProcessingReviewIndexingCopy = (params: ReviewIndexingCopyParams): Revi
   const phase = getLargeRebuildPhase(params.indexing)
 
   return phase
-    ? {
-        description:
-          'This project is being rebuilt in bounded stages to avoid large-refresh crashes. Review lists and counts may change until the staged rebuild finishes.',
-        title: `Large rebuild in progress: ${phase}`,
-      }
+    ? {description: getLargeRebuildPhasedDescription('active'), title: `Large rebuild phase in progress: ${phase}`}
     : hasOnlyArticleRefreshWork(params.indexing)
       ? {
           description: getArticleRefreshProcessingDescription(params.surface),

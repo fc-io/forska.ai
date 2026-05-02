@@ -16,8 +16,28 @@ process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 
 const providerRuntimeModelGuardModulePath = new URL('../providers/providerRuntimeModelGuard.ts', import.meta.url)
   .pathname
+const providerRuntimeMatchResolverModulePath = new URL('../providers/providerRuntimeMatchResolver.ts', import.meta.url)
+  .pathname
 const judgmentDispatchRuntimeModulePath = new URL('../cron/judgmentsJobs/judgmentDispatchRuntime.ts', import.meta.url)
   .pathname
+
+const getDefaultRuntimeMatch = () => {
+  return {
+    candidate: null,
+    detectedModelNames: ['Qwen/Qwen3.5-122B-A10B'],
+    effectiveBaseURL: 'http://owner-sglang:30000/v1',
+    effectiveWorkerUrls: ['http://owner-sglang-worker:30001'],
+    localUrls: ['http://owner-sglang:30000/v1'],
+    modelNames: ['Qwen/Qwen3.5-122B-A10B'],
+    reason: 'runtime-auto-detect',
+    reasons: ['runtime-auto-detect'],
+    remoteUrls: [],
+    resolutionMode: 'auto-detect',
+    source: 'detected-runtime',
+    sourceMetadata: null,
+    status: 'matched',
+  }
+}
 
 const state = {
   assertStoredProviderModelRuntimeMatch: mock(async (_input: {modelId: string}) => {}),
@@ -56,6 +76,9 @@ const state = {
   enqueueClaimedJudgmentPrompts: mock(async (_input: {label: string; prompts: unknown[]}) => {
     return {acceptedCount: 0, rejectedPrompts: []}
   }),
+  resolveProviderConnectionRuntimeMatch: mock(async (_input: unknown) => {
+    return getDefaultRuntimeMatch()
+  }),
 }
 
 const registerModuleMocks = () => {
@@ -64,6 +87,9 @@ const registerModuleMocks = () => {
       assertStoredProviderModelRuntimeMatch: state.assertStoredProviderModelRuntimeMatch,
       getStoredProviderModelRuntimeMatch: state.getStoredProviderModelRuntimeMatch,
     }
+  })
+  void mock.module(providerRuntimeMatchResolverModulePath, () => {
+    return {resolveProviderConnectionRuntimeMatch: state.resolveProviderConnectionRuntimeMatch}
   })
   void mock.module(judgmentDispatchRuntimeModulePath, () => {
     return {
@@ -140,6 +166,10 @@ afterEach(async () => {
   state.enqueueClaimedJudgmentPrompts.mockImplementation(async (_input) => {
     return {acceptedCount: 0, rejectedPrompts: []}
   })
+  state.resolveProviderConnectionRuntimeMatch.mockImplementation(async (_input: unknown) => {
+    return getDefaultRuntimeMatch()
+  })
+  state.resolveProviderConnectionRuntimeMatch.mockClear()
   const {resetProjectMartLargeRebuildRuntimeMetricsForTests} =
     await import('../utils/projectMartLargeRebuildRuntimeMetrics.ts')
   const {resetJudgmentEndpointAvailabilityForTests} =
@@ -645,6 +675,70 @@ test('owner-backed completion rejects snapshot mismatch before accepting the cla
   expect(await sqliteService.getOutboxCount(jobId)).toBe(1)
 
   await sqliteService.closeAll()
+})
+
+test('owner-backed runtime route returns resolved non-Codex runtime diagnostics', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `runtime-owner-project-${Date.now()}`
+  const modelId = `runtime-owner-model-${Date.now()}`
+  const connectionId = `runtime-owner-connection-${Date.now()}`
+  const jobId = `runtime-owner-job-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    UPDATE app.provider_connection
+    SET base_url = 'http://saved-sglang:30000/v1',
+        config_json = '{"manualWorkerUrls":[],"workerUrlMode":"runtime"}'
+    WHERE id = '${connectionId}'
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  state.resolveProviderConnectionRuntimeMatch.mockImplementationOnce(async (input: unknown) => {
+    expect(input).toMatchObject({
+      baseURL: 'http://saved-sglang:30000/v1',
+      config: {manualWorkerUrls: [], workerUrlMode: 'runtime'},
+      providerKind: 'sglang',
+      savedModelIds: ['Qwen/Qwen3.5-122B-A10B'],
+    })
+
+    return getDefaultRuntimeMatch()
+  })
+
+  const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}/runtime`))
+  const body = (await response.json()) as {
+    data: {
+      job: {
+        modelBaseUrl: string | null
+        modelId: string
+        modelProvider: string
+        resolvedRuntime: {modelBaseUrl: string; modelProvider: string; modelWorkerUrls: string[]} | null
+        runtimeMatchReason: string
+        runtimeMatchStatus: string
+        runtimeResolutionMode: string
+      } | null
+    }
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.data.job).toMatchObject({
+    modelBaseUrl: 'http://saved-sglang:30000/v1',
+    modelId,
+    modelProvider: 'sglang',
+    resolvedRuntime: {
+      modelBaseUrl: 'http://owner-sglang:30000/v1',
+      modelProvider: 'sglang',
+      modelWorkerUrls: ['http://owner-sglang-worker:30001'],
+    },
+    runtimeMatchReason: 'runtime-auto-detect',
+    runtimeMatchStatus: 'matched',
+    runtimeResolutionMode: 'auto-detect',
+  })
+  expect(state.resolveProviderConnectionRuntimeMatch).toHaveBeenCalledTimes(1)
 })
 
 test('creating a judgments job fails when the runtime model check fails', async () => {
