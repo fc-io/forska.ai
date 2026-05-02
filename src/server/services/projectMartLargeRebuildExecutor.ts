@@ -206,6 +206,14 @@ const getProjectRefreshArticleIdRowsSql = (articleIds: string[]) => {
     .join(', ')
 }
 
+const getProjectReviewServingTargetGenerationSql = (targetGeneration: number) => {
+  if (!Number.isSafeInteger(targetGeneration) || targetGeneration <= 0) {
+    throw new Error(`Invalid project review serving target generation: ${targetGeneration}`)
+  }
+
+  return getSqlLiteral(targetGeneration)
+}
+
 const getProjectScopeResetSql = (projectId: string) => {
   const projectLiteral = getSqlLiteral(projectId)
 
@@ -463,8 +471,9 @@ const getProjectReviewAnswerDictionaryRebuildSql = (projectId: string) => {
   `
 }
 
-const getProjectReviewServingSetupSql = (projectId: string) => {
+const getProjectReviewServingSetupSql = (projectId: string, targetGeneration: number) => {
   const projectLiteral = getSqlLiteral(projectId)
+  const targetGenerationLiteral = getProjectReviewServingTargetGenerationSql(targetGeneration)
 
   return `
     BEGIN TRANSACTION;
@@ -479,26 +488,31 @@ const getProjectReviewServingSetupSql = (projectId: string) => {
     ) ON CONFLICT(project_id) DO NOTHING;
     DELETE FROM mart.review_article_serving
     WHERE project_id = ${projectLiteral}
-      AND generation = (SELECT active_generation + 1 FROM app.project_review_serving_generation WHERE project_id = ${projectLiteral});
+      AND generation = ${targetGenerationLiteral};
     DELETE FROM mart.review_article_filter_member
     WHERE project_id = ${projectLiteral}
-      AND generation = (SELECT active_generation + 1 FROM app.project_review_serving_generation WHERE project_id = ${projectLiteral});
+      AND generation = ${targetGenerationLiteral};
     DELETE FROM mart.review_article_serving_detail
     WHERE project_id = ${projectLiteral}
-      AND generation = (SELECT active_generation + 1 FROM app.project_review_serving_generation WHERE project_id = ${projectLiteral});
+      AND generation = ${targetGenerationLiteral};
     COMMIT;
   `
 }
 
-const getProjectReviewArticleFilterMemberBatchInsertSql = (projectId: string, articleIds: string[]) => {
+const getProjectReviewArticleFilterMemberBatchInsertSql = (
+  projectId: string,
+  articleIds: string[],
+  targetGeneration: number,
+) => {
   const projectLiteral = getSqlLiteral(projectId)
   const articleIdsSql = getProjectRefreshArticleIdsSql(articleIds)
+  const targetGenerationLiteral = getProjectReviewServingTargetGenerationSql(targetGeneration)
 
   return `
     BEGIN TRANSACTION;
     DELETE FROM mart.review_article_filter_member
     WHERE project_id = ${projectLiteral}
-      AND generation = (SELECT active_generation + 1 FROM app.project_review_serving_generation WHERE project_id = ${projectLiteral})
+      AND generation = ${targetGenerationLiteral}
       AND article_id IN (${articleIdsSql});
     INSERT INTO mart.review_article_filter_member (
       project_id,
@@ -512,7 +526,7 @@ const getProjectReviewArticleFilterMemberBatchInsertSql = (projectId: string, ar
     )
     SELECT DISTINCT
       fact.project_id,
-      (SELECT active_generation + 1 FROM app.project_review_serving_generation WHERE project_id = ${projectLiteral}),
+      ${targetGenerationLiteral},
       fact.prompt_id,
       dict.answer_id,
       fact.article_id,
@@ -709,19 +723,20 @@ const getProjectReviewArticleRollupBatchInsertSql = (projectId: string, articleI
   `
 }
 
-const getProjectReviewServingBatchInsertSql = (projectId: string, articleIds: string[]) => {
+const getProjectReviewServingBatchInsertSql = (projectId: string, articleIds: string[], targetGeneration: number) => {
   const projectLiteral = getSqlLiteral(projectId)
   const articleIdsSql = getProjectRefreshArticleIdsSql(articleIds)
+  const targetGenerationLiteral = getProjectReviewServingTargetGenerationSql(targetGeneration)
 
   return `
     BEGIN TRANSACTION;
     DELETE FROM mart.review_article_serving_detail
     WHERE project_id = ${projectLiteral}
-      AND generation = (SELECT active_generation + 1 FROM app.project_review_serving_generation WHERE project_id = ${projectLiteral})
+      AND generation = ${targetGenerationLiteral}
       AND article_id IN (${articleIdsSql});
     DELETE FROM mart.review_article_serving
     WHERE project_id = ${projectLiteral}
-      AND generation = (SELECT active_generation + 1 FROM app.project_review_serving_generation WHERE project_id = ${projectLiteral})
+      AND generation = ${targetGenerationLiteral}
       AND article_id IN (${articleIdsSql});
     INSERT INTO mart.review_article_serving (
       project_id, generation, article_id, article_created_at, article_updated_at, article_title, article_external_id,
@@ -732,7 +747,7 @@ const getProjectReviewServingBatchInsertSql = (projectId: string, articleIds: st
     )
     SELECT
       rollup.project_id,
-      (SELECT active_generation + 1 FROM app.project_review_serving_generation WHERE project_id = ${projectLiteral}),
+      ${targetGenerationLiteral},
       rollup.article_id,
       rollup.article_created_at,
       rollup.article_updated_at,
@@ -767,7 +782,7 @@ const getProjectReviewServingBatchInsertSql = (projectId: string, articleIds: st
     )
     SELECT
       scope_article.project_id,
-      (SELECT active_generation + 1 FROM app.project_review_serving_generation WHERE project_id = ${projectLiteral}),
+      ${targetGenerationLiteral},
       judgment_fact.article_id,
       judgment_fact.prompt_id,
       project_prompt.prompt_order,
@@ -795,20 +810,31 @@ const getProjectReviewServingBatchInsertSql = (projectId: string, articleIds: st
   `
 }
 
-const getProjectReviewServingPromoteSql = (projectId: string) => {
+const getProjectReviewServingPromoteSql = (projectId: string, targetGeneration: number) => {
   const projectLiteral = getSqlLiteral(projectId)
+  const targetGenerationLiteral = getProjectReviewServingTargetGenerationSql(targetGeneration)
 
   return `
     BEGIN TRANSACTION;
+    INSERT INTO app.project_review_serving_generation (
+      project_id,
+      active_generation,
+      generation_updated_at
+    ) VALUES (
+      ${projectLiteral},
+      0,
+      current_timestamp
+    ) ON CONFLICT(project_id) DO NOTHING;
     UPDATE app.project_review_serving_generation
-    SET active_generation = active_generation + 1,
+    SET active_generation = ${targetGenerationLiteral},
         generation_updated_at = current_timestamp
     WHERE project_id = ${projectLiteral}
+      AND active_generation < ${targetGenerationLiteral}
       AND EXISTS (
         SELECT 1
         FROM mart.review_article_serving
         WHERE project_id = ${projectLiteral}
-          AND generation = app.project_review_serving_generation.active_generation + 1
+          AND generation = ${targetGenerationLiteral}
       );
     COMMIT;
   `
@@ -971,21 +997,25 @@ const rebuildProjectReviewAnswerDictionary = async (
 
 const setupProjectReviewServingStaging = async (
   projectId: string,
+  targetGeneration: number,
   dependencies: ProjectMartLargeRebuildExecutorDependencies = defaultProjectMartLargeRebuildExecutorDependencies,
 ) => {
-  await dependencies.database.run(getProjectReviewServingSetupSql(projectId))
+  await dependencies.database.run(getProjectReviewServingSetupSql(projectId, targetGeneration))
 }
 
 const rebuildProjectReviewArticleFilterMemberBatch = async (
   projectId: string,
   articleIds: string[],
+  targetGeneration: number,
   dependencies: ProjectMartLargeRebuildExecutorDependencies = defaultProjectMartLargeRebuildExecutorDependencies,
 ) => {
   if (articleIds.length === 0) {
     return
   }
 
-  await dependencies.database.run(getProjectReviewArticleFilterMemberBatchInsertSql(projectId, articleIds))
+  await dependencies.database.run(
+    getProjectReviewArticleFilterMemberBatchInsertSql(projectId, articleIds, targetGeneration),
+  )
 }
 
 const resetProjectReviewArticleRollup = async (
@@ -1010,13 +1040,14 @@ const rebuildProjectReviewArticleRollupBatch = async (
 const rebuildProjectReviewServingBatch = async (
   projectId: string,
   articleIds: string[],
+  targetGeneration: number,
   dependencies: ProjectMartLargeRebuildExecutorDependencies = defaultProjectMartLargeRebuildExecutorDependencies,
 ) => {
   if (articleIds.length === 0) {
     return
   }
 
-  await dependencies.database.run(getProjectReviewServingBatchInsertSql(projectId, articleIds))
+  await dependencies.database.run(getProjectReviewServingBatchInsertSql(projectId, articleIds, targetGeneration))
 }
 
 const getProjectReviewServingGenerationCleanupBatchRows = async (
@@ -1097,9 +1128,10 @@ const cleanupProjectReviewServingGenerations = async (
 
 const finalizeProjectReviewServing = async (
   projectId: string,
+  targetGeneration: number,
   dependencies: ProjectMartLargeRebuildExecutorDependencies = defaultProjectMartLargeRebuildExecutorDependencies,
 ) => {
-  await dependencies.database.run(getProjectReviewServingPromoteSql(projectId))
+  await dependencies.database.run(getProjectReviewServingPromoteSql(projectId, targetGeneration))
   await cleanupProjectReviewServingGenerations(projectId, dependencies)
 }
 

@@ -30,10 +30,13 @@ type LargeRebuildClaim = {
   projectId: string
   rebuildPhase: ProjectMartLargeRebuildPhase
   refreshToken: number
+  targetGeneration?: number | null
   workerId: string
 }
 
 type HeartbeatLargeRebuildClaimParams = {leaseMs: number; now?: Date; projectId: string; workerId: string}
+
+type EnsureLargeRebuildTargetGenerationParams = {now?: Date; projectId: string; runner?: LargeRebuildStateRunner}
 
 type CompleteLargeRebuildParams = {now?: Date; projectId: string; workerId: string}
 
@@ -176,7 +179,7 @@ const queueLargeRebuild = async ({
         cursor_article_id = CASE WHEN refresh_token > 0 THEN cursor_article_id ELSE ${queuedCursorArticleIdSql} END,
         target_generation = CASE
           WHEN refresh_token > 0 THEN target_generation
-          ELSE ${targetGeneration === undefined ? 'target_generation' : getSqlLiteral(targetGeneration)}
+          ELSE ${targetGeneration === undefined ? 'NULL' : getSqlLiteral(targetGeneration)}
         END,
         refresh_status = CASE WHEN refresh_status = 'paused' THEN 'paused' ELSE 'idle' END,
         last_error = NULL,
@@ -251,6 +254,7 @@ const claimLargeRebuilds = async ({
         project_id AS projectId,
         rebuild_phase AS rebuildPhase,
         CAST(refresh_token AS INTEGER) AS refreshToken,
+        CAST(target_generation AS INTEGER) AS targetGeneration,
         worker_id AS workerId,
         lease_expires_at AS leaseExpiresAt
     `)
@@ -289,6 +293,7 @@ const heartbeatLargeRebuildClaim = async ({leaseMs, now, projectId, workerId}: H
       project_id AS projectId,
       rebuild_phase AS rebuildPhase,
       CAST(refresh_token AS INTEGER) AS refreshToken,
+      CAST(target_generation AS INTEGER) AS targetGeneration,
       worker_id AS workerId,
       lease_expires_at AS leaseExpiresAt
   `)
@@ -309,6 +314,45 @@ const heartbeatLargeRebuildClaim = async ({leaseMs, now, projectId, workerId}: H
   return claim ?? null
 }
 
+const ensureLargeRebuildTargetGeneration = async ({
+  now,
+  projectId,
+  runner,
+}: EnsureLargeRebuildTargetGenerationParams) => {
+  return withTransaction(runner, async (tx) => {
+    const currentNow = getNow(now)
+
+    await tx.run(`
+      INSERT INTO app.project_review_serving_generation (
+        project_id,
+        active_generation,
+        generation_updated_at
+      ) VALUES (
+        ${getSqlLiteral(projectId)},
+        0,
+        current_timestamp
+      ) ON CONFLICT(project_id) DO NOTHING
+    `)
+    await tx.run(`
+      UPDATE app.project_mart_large_rebuild_state
+      SET
+        target_generation = COALESCE(
+          target_generation,
+          (
+            SELECT active_generation + 1
+            FROM app.project_review_serving_generation
+            WHERE project_id = ${getSqlLiteral(projectId)}
+          )
+        ),
+        updated_at = ${getTimestampLiteral(currentNow)}
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND refresh_token > 0
+    `)
+
+    return getLargeRebuildStateRecord(tx, projectId)
+  })
+}
+
 const completeLargeRebuild = async ({now, projectId, workerId}: CompleteLargeRebuildParams) => {
   const currentNow = getNow(now)
   const [completed] = await getAppDatabaseService().queryJson<LargeRebuildStateRow>(`
@@ -317,6 +361,7 @@ const completeLargeRebuild = async ({now, projectId, workerId}: CompleteLargeReb
       refresh_token = 0,
       cursor_article_created_at = NULL,
       cursor_article_id = NULL,
+      target_generation = NULL,
       refresh_status = CASE WHEN refresh_status = 'paused' THEN 'paused' ELSE 'idle' END,
       last_completed_at = ${getTimestampLiteral(currentNow)},
       last_error = NULL,
@@ -529,6 +574,7 @@ const projectMartLargeRebuildStateService = {
   clearArchivedLargeRebuildStates,
   clearLargeRebuildState,
   completeLargeRebuild,
+  ensureLargeRebuildTargetGeneration,
   failLargeRebuild,
   getLargeRebuildState,
   heartbeatLargeRebuildClaim,
@@ -546,6 +592,7 @@ export const getProjectMartLargeRebuildStateService = () => {
 export type {
   ClaimLargeRebuildsParams,
   CompleteLargeRebuildParams,
+  EnsureLargeRebuildTargetGenerationParams,
   FailLargeRebuildParams,
   HeartbeatLargeRebuildClaimParams,
   LargeRebuildClaim,

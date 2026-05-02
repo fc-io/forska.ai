@@ -207,6 +207,37 @@ test('queueLargeRebuild preserves active work when another rebuild is already qu
   expect(new Date(result.row?.cursorArticleCreatedAt ?? '').toISOString()).toBe('2026-04-03T08:00:00.000Z')
 })
 
+test('queueLargeRebuild clears completed target generation for the next rebuild', () => {
+  const result = runScript<{completedTargetGeneration: number | null; queuedTargetGeneration: number | null}>(`
+    await service.queueLargeRebuild({
+      projectId: 'large-rebuild-project-1',
+      rebuildPhase: 'review_article_serving',
+      refreshToken: 7,
+      targetGeneration: 3,
+    })
+    await service.claimLargeRebuilds({leaseMs: 5000, limit: 1, workerId: 'worker-1'})
+    const completed = await service.completeLargeRebuild({
+      projectId: 'large-rebuild-project-1',
+      workerId: 'worker-1',
+    })
+    await service.queueLargeRebuild({
+      projectId: 'large-rebuild-project-1',
+      rebuildPhase: 'project_scope_article',
+      refreshToken: 8,
+    })
+    const queued = await service.getLargeRebuildState('large-rebuild-project-1')
+
+    console.log(JSON.stringify({
+      completedTargetGeneration: completed?.targetGeneration ?? null,
+      queuedTargetGeneration: queued?.targetGeneration ?? null,
+    }))
+    await database.close()
+  `)
+
+  expect(result.completedTargetGeneration).toBeNull()
+  expect(result.queuedTargetGeneration).toBeNull()
+})
+
 test('queueLargeRebuild does not rewind active work when requeued into a new phase', () => {
   const result = runScript<{
     row: {
@@ -237,6 +268,52 @@ test('queueLargeRebuild does not rewind active work when requeued into a new pha
   expect(result.row?.rebuildPhase).toBe('prompt_answer_fact')
   expect(result.row?.cursorArticleId).toBe('article-1')
   expect(new Date(result.row?.cursorArticleCreatedAt ?? '').toISOString()).toBe('2026-04-03T08:00:00.000Z')
+})
+
+test('ensureLargeRebuildTargetGeneration initializes once from the next serving generation', () => {
+  const result = runScript<{
+    initializedTargetGeneration: number | null
+    preservedTargetGeneration: number | null
+    servingGenerationRows: Array<{activeGeneration: number}>
+  }>(`
+    await database.run(\`
+      INSERT INTO app.project_review_serving_generation (project_id, active_generation)
+      VALUES ('large-rebuild-project-1', 4)
+    \`)
+    await service.queueLargeRebuild({
+      projectId: 'large-rebuild-project-1',
+      rebuildPhase: 'review_article_filter_member',
+      refreshToken: 7,
+    })
+
+    const initialized = await service.ensureLargeRebuildTargetGeneration({
+      projectId: 'large-rebuild-project-1',
+    })
+    await database.run(\`
+      UPDATE app.project_review_serving_generation
+      SET active_generation = 9
+      WHERE project_id = 'large-rebuild-project-1'
+    \`)
+    const preserved = await service.ensureLargeRebuildTargetGeneration({
+      projectId: 'large-rebuild-project-1',
+    })
+    const servingGenerationRows = await database.queryJson(\`
+      SELECT CAST(active_generation AS INTEGER) AS activeGeneration
+      FROM app.project_review_serving_generation
+      WHERE project_id = 'large-rebuild-project-1'
+    \`)
+
+    console.log(JSON.stringify({
+      initializedTargetGeneration: initialized?.targetGeneration ?? null,
+      preservedTargetGeneration: preserved?.targetGeneration ?? null,
+      servingGenerationRows,
+    }))
+    await database.close()
+  `)
+
+  expect(result.initializedTargetGeneration).toBe(5)
+  expect(result.preservedTargetGeneration).toBe(5)
+  expect(result.servingGenerationRows).toEqual([{activeGeneration: 9}])
 })
 
 test('claim heartbeat complete fail and reset large rebuild state', () => {
@@ -302,6 +379,49 @@ test('claim heartbeat complete fail and reset large rebuild state', () => {
   expect(result.reset?.cursorArticleId).toBe('article-99')
   expect(result.reset?.targetGeneration).toBe(12)
   expect(result.reset?.lastError).toBeNull()
+})
+
+test('claimLargeRebuilds preserves target generation across expired lease resume', () => {
+  const result = runScript<{
+    firstClaim: Array<{projectId: string; targetGeneration: number | null; workerId: string}>
+    resumedClaim: Array<{projectId: string; targetGeneration: number | null; workerId: string}>
+    row: {targetGeneration: number | null; workerId: string | null} | null
+  }>(`
+    await service.queueLargeRebuild({
+      cursorArticleCreatedAt: new Date('2026-04-03T08:00:00.000Z'),
+      cursorArticleId: 'article-1',
+      projectId: 'large-rebuild-project-1',
+      rebuildPhase: 'review_article_filter_member',
+      refreshToken: 7,
+      targetGeneration: 13,
+    })
+
+    const firstClaim = await service.claimLargeRebuilds({
+      leaseMs: 1000,
+      limit: 1,
+      now: new Date('2026-04-03T09:00:00.000Z'),
+      workerId: 'worker-1',
+    })
+    const resumedClaim = await service.claimLargeRebuilds({
+      leaseMs: 1000,
+      limit: 1,
+      now: new Date('2026-04-03T09:00:02.000Z'),
+      workerId: 'worker-2',
+    })
+    const row = await service.getLargeRebuildState('large-rebuild-project-1')
+
+    console.log(JSON.stringify({firstClaim, resumedClaim, row}))
+    await database.close()
+  `)
+
+  expect(result.firstClaim).toMatchObject([
+    {projectId: 'large-rebuild-project-1', targetGeneration: 13, workerId: 'worker-1'},
+  ])
+  expect(result.resumedClaim).toMatchObject([
+    {projectId: 'large-rebuild-project-1', targetGeneration: 13, workerId: 'worker-2'},
+  ])
+  expect(result.row?.targetGeneration).toBe(13)
+  expect(result.row?.workerId).toBe('worker-2')
 })
 
 test('claimLargeRebuilds rotates to less recently started work instead of starving other projects', () => {

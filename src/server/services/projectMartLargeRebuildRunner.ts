@@ -14,7 +14,7 @@ import {getProjectMartRefreshStateService} from './projectMartRefreshStateServic
 
 type ProjectMartLargeRebuildRunnerDependencies = {
   executor: {
-    finalizeProjectReviewServing: (projectId: string) => Promise<void>
+    finalizeProjectReviewServing: (projectId: string, targetGeneration: number) => Promise<void>
     getNextBatchCursor: (rows: ProjectMartLargeRebuildScopeBatchRow[]) => ProjectMartLargeRebuildBatchCursor | null
     getProjectScopeMartBatch: (params: {
       batchSize?: number
@@ -30,15 +30,23 @@ type ProjectMartLargeRebuildRunnerDependencies = {
     rebuildProjectScopeBatch: (projectId: string, rows: ProjectMartLargeRebuildScopeBatchRow[]) => Promise<void>
     rebuildProjectPromptAnswerFactBatch: (projectId: string, articleIds: string[]) => Promise<void>
     rebuildProjectReviewAnswerDictionary: (projectId: string) => Promise<void>
-    rebuildProjectReviewArticleFilterMemberBatch: (projectId: string, articleIds: string[]) => Promise<void>
+    rebuildProjectReviewArticleFilterMemberBatch: (
+      projectId: string,
+      articleIds: string[],
+      targetGeneration: number,
+    ) => Promise<void>
     rebuildProjectReviewArticleRollupBatch: (projectId: string, articleIds: string[]) => Promise<void>
-    rebuildProjectReviewServingBatch: (projectId: string, articleIds: string[]) => Promise<void>
+    rebuildProjectReviewServingBatch: (
+      projectId: string,
+      articleIds: string[],
+      targetGeneration: number,
+    ) => Promise<void>
     resetProjectJudgmentFact: (projectId: string) => Promise<void>
     resetProjectScope: (projectId: string) => Promise<void>
     resetProjectPromptAnswerFact: (projectId: string) => Promise<void>
     resetProjectReviewAnswerDictionary: (projectId: string) => Promise<void>
     resetProjectReviewArticleRollup: (projectId: string) => Promise<void>
-    setupProjectReviewServingStaging: (projectId: string) => Promise<void>
+    setupProjectReviewServingStaging: (projectId: string, targetGeneration: number) => Promise<void>
   }
   largeRebuildStateService: {
     claimLargeRebuilds: (params: {
@@ -50,6 +58,16 @@ type ProjectMartLargeRebuildRunnerDependencies = {
     }) => Promise<LargeRebuildClaim[]>
     clearArchivedLargeRebuildStates: () => Promise<unknown>
     completeLargeRebuild: (params: {now?: Date; projectId: string; workerId: string}) => Promise<unknown>
+    ensureLargeRebuildTargetGeneration: (params: {
+      now?: Date
+      projectId: string
+    }) => Promise<{
+      cursorArticleCreatedAt: Date | null
+      cursorArticleId: string | null
+      projectId: string
+      rebuildPhase: string
+      targetGeneration: number | null
+    } | null>
     failLargeRebuild: (params: {error: string; now?: Date; projectId: string; workerId: string}) => Promise<unknown>
     getLargeRebuildState: (
       projectId: string,
@@ -133,6 +151,27 @@ const getErrorText = (error: unknown) => {
 
 const getCursorDateValue = (value: Date | string | null) => {
   return value === null || value instanceof Date ? value : new Date(value)
+}
+
+const ensureProjectReviewServingTargetGeneration = async (
+  claim: LargeRebuildClaim,
+  options: ProjectMartLargeRebuildRunnerOptions,
+  dependencies: ProjectMartLargeRebuildRunnerDependencies,
+) => {
+  const rebuildState = await dependencies.largeRebuildStateService.ensureLargeRebuildTargetGeneration({
+    now: getNow(options.now),
+    projectId: claim.projectId,
+  })
+
+  if (!rebuildState) {
+    throw new Error(`Missing large rebuild state for ${claim.projectId}`)
+  }
+
+  if (rebuildState.targetGeneration === null) {
+    throw new Error(`Missing large rebuild target generation for ${claim.projectId}`)
+  }
+
+  return rebuildState.targetGeneration
 }
 
 const startHeartbeat = (
@@ -362,6 +401,12 @@ const runReviewAnswerDictionaryPhase = async (
   options: ProjectMartLargeRebuildRunnerOptions,
   dependencies: ProjectMartLargeRebuildRunnerDependencies,
 ): Promise<ProjectMartLargeRebuildRunnerResult> => {
+  const rebuildState = await dependencies.largeRebuildStateService.getLargeRebuildState(claim.projectId)
+
+  if (!rebuildState) {
+    throw new Error(`Missing large rebuild state for ${claim.projectId}`)
+  }
+
   await dependencies.executor.resetProjectReviewAnswerDictionary(claim.projectId)
   await dependencies.executor.rebuildProjectReviewAnswerDictionary(claim.projectId)
   await dependencies.largeRebuildStateService.resetLargeRebuild({
@@ -370,6 +415,7 @@ const runReviewAnswerDictionaryPhase = async (
     now: getNow(options.now),
     projectId: claim.projectId,
     rebuildPhase: 'review_article_filter_member',
+    targetGeneration: rebuildState.targetGeneration,
   })
   return {
     articleCount: 0,
@@ -395,9 +441,10 @@ const runReviewArticleFilterMemberPhase = async (
     rebuildState.cursorArticleId === null
       ? null
       : {articleCreatedAt: rebuildState.cursorArticleCreatedAt, articleId: rebuildState.cursorArticleId}
+  const targetGeneration = await ensureProjectReviewServingTargetGeneration(claim, options, dependencies)
 
   if (initialCursor === null) {
-    await dependencies.executor.setupProjectReviewServingStaging(claim.projectId)
+    await dependencies.executor.setupProjectReviewServingStaging(claim.projectId, targetGeneration)
   }
 
   const batchRows = await dependencies.executor.getProjectScopeMartBatch({
@@ -413,6 +460,7 @@ const runReviewArticleFilterMemberPhase = async (
       now: getNow(options.now),
       projectId: claim.projectId,
       rebuildPhase: 'review_article_rollup',
+      targetGeneration,
     })
     return {
       articleCount: 0,
@@ -426,7 +474,11 @@ const runReviewArticleFilterMemberPhase = async (
   const articleIds = batchRows.map((row) => {
     return row.articleId
   })
-  await dependencies.executor.rebuildProjectReviewArticleFilterMemberBatch(claim.projectId, articleIds)
+  await dependencies.executor.rebuildProjectReviewArticleFilterMemberBatch(
+    claim.projectId,
+    articleIds,
+    targetGeneration,
+  )
   const nextCursor = dependencies.executor.getNextBatchCursor(batchRows)
   await dependencies.largeRebuildStateService.resetLargeRebuild({
     cursorArticleCreatedAt: nextCursor === null ? null : getCursorDateValue(nextCursor.articleCreatedAt),
@@ -434,6 +486,7 @@ const runReviewArticleFilterMemberPhase = async (
     now: getNow(options.now),
     projectId: claim.projectId,
     rebuildPhase: 'review_article_filter_member',
+    targetGeneration,
   })
   return {
     articleCount: articleIds.length,
@@ -477,6 +530,7 @@ const runReviewArticleRollupPhase = async (
       now: getNow(options.now),
       projectId: claim.projectId,
       rebuildPhase: 'review_article_serving',
+      targetGeneration: rebuildState.targetGeneration,
     })
     return {
       articleCount: 0,
@@ -498,6 +552,7 @@ const runReviewArticleRollupPhase = async (
     now: getNow(options.now),
     projectId: claim.projectId,
     rebuildPhase: 'review_article_rollup',
+    targetGeneration: rebuildState.targetGeneration,
   })
   return {
     articleCount: articleIds.length,
@@ -523,6 +578,7 @@ const runReviewArticleServingPhase = async (
     rebuildState.cursorArticleId === null
       ? null
       : {articleCreatedAt: rebuildState.cursorArticleCreatedAt, articleId: rebuildState.cursorArticleId}
+  const targetGeneration = await ensureProjectReviewServingTargetGeneration(claim, options, dependencies)
   const batchRows = await dependencies.executor.getProjectScopeMartBatch({
     batchSize: options.batchSize,
     cursor: initialCursor,
@@ -530,7 +586,7 @@ const runReviewArticleServingPhase = async (
   })
 
   if (batchRows.length === 0) {
-    await dependencies.executor.finalizeProjectReviewServing(claim.projectId)
+    await dependencies.executor.finalizeProjectReviewServing(claim.projectId, targetGeneration)
     await dependencies.refreshStateService.finalizeProjectRefreshAfterLargeRebuild({
       completedToken: claim.refreshToken,
       now: getNow(options.now),
@@ -551,7 +607,7 @@ const runReviewArticleServingPhase = async (
   const articleIds = batchRows.map((row) => {
     return row.articleId
   })
-  await dependencies.executor.rebuildProjectReviewServingBatch(claim.projectId, articleIds)
+  await dependencies.executor.rebuildProjectReviewServingBatch(claim.projectId, articleIds, targetGeneration)
   const nextCursor = dependencies.executor.getNextBatchCursor(batchRows)
   await dependencies.largeRebuildStateService.resetLargeRebuild({
     cursorArticleCreatedAt: nextCursor === null ? null : getCursorDateValue(nextCursor.articleCreatedAt),
@@ -559,6 +615,7 @@ const runReviewArticleServingPhase = async (
     now: getNow(options.now),
     projectId: claim.projectId,
     rebuildPhase: 'review_article_serving',
+    targetGeneration,
   })
   return {
     articleCount: articleIds.length,

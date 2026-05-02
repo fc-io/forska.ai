@@ -680,16 +680,18 @@ test('large rebuild and incremental refresh agree on shared clone judgment reuse
     \`)
 
     const rebuildLargeProject = async (projectId) => {
+      const targetGeneration = 1
+
       await executor.resetProjectPromptAnswerFact(projectId)
       await executor.rebuildProjectPromptAnswerFactBatch(projectId, ['shared-reuse-article'])
       await executor.resetProjectReviewAnswerDictionary(projectId)
       await executor.rebuildProjectReviewAnswerDictionary(projectId)
-      await executor.setupProjectReviewServingStaging(projectId)
-      await executor.rebuildProjectReviewArticleFilterMemberBatch(projectId, ['shared-reuse-article'])
+      await executor.setupProjectReviewServingStaging(projectId, targetGeneration)
+      await executor.rebuildProjectReviewArticleFilterMemberBatch(projectId, ['shared-reuse-article'], targetGeneration)
       await executor.resetProjectReviewArticleRollup(projectId)
       await executor.rebuildProjectReviewArticleRollupBatch(projectId, ['shared-reuse-article'])
-      await executor.rebuildProjectReviewServingBatch(projectId, ['shared-reuse-article'])
-      await executor.finalizeProjectReviewServing(projectId)
+      await executor.rebuildProjectReviewServingBatch(projectId, ['shared-reuse-article'], targetGeneration)
+      await executor.finalizeProjectReviewServing(projectId, targetGeneration)
     }
 
     await rebuildLargeProject('shared-reuse-large-project')
@@ -792,18 +794,28 @@ test('large rebuild drops reused source judgments after a cloned project repoint
     const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts')
 
     const martRefreshService = getDuckdbMartRefreshService()
+    const targetGenerationByProject = {}
+
+    const getNextTargetGeneration = (projectId) => {
+      const targetGeneration = (targetGenerationByProject[projectId] ?? 0) + 1
+      targetGenerationByProject[projectId] = targetGeneration
+
+      return targetGeneration
+    }
 
     const rebuildLargeProject = async (projectId) => {
+      const targetGeneration = getNextTargetGeneration(projectId)
+
       await executor.resetProjectPromptAnswerFact(projectId)
       await executor.rebuildProjectPromptAnswerFactBatch(projectId, ['prompt-edit-large-article'])
       await executor.resetProjectReviewAnswerDictionary(projectId)
       await executor.rebuildProjectReviewAnswerDictionary(projectId)
-      await executor.setupProjectReviewServingStaging(projectId)
-      await executor.rebuildProjectReviewArticleFilterMemberBatch(projectId, ['prompt-edit-large-article'])
+      await executor.setupProjectReviewServingStaging(projectId, targetGeneration)
+      await executor.rebuildProjectReviewArticleFilterMemberBatch(projectId, ['prompt-edit-large-article'], targetGeneration)
       await executor.resetProjectReviewArticleRollup(projectId)
       await executor.rebuildProjectReviewArticleRollupBatch(projectId, ['prompt-edit-large-article'])
-      await executor.rebuildProjectReviewServingBatch(projectId, ['prompt-edit-large-article'])
-      await executor.finalizeProjectReviewServing(projectId)
+      await executor.rebuildProjectReviewServingBatch(projectId, ['prompt-edit-large-article'], targetGeneration)
+      await executor.finalizeProjectReviewServing(projectId, targetGeneration)
     }
 
     const getActiveDetailRows = async (projectId) => {
@@ -1167,17 +1179,23 @@ test('filter member rollup and serving staging rebuild replay safely on bounded 
         ('judgment-2', 'article-2', 'prompt-1', 'large-rebuild-executor-model', 'large-rebuild-executor-project', 'large-rebuild-executor-project', 'Project', TRUE, TRUE, FALSE, FALSE, NULL, TRUE, 'no', ['no'], ['no'], 1, NULL, NULL, 'Article 2', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T02:00:00.000Z', NULL, NULL, TIMESTAMPTZ '2026-04-03T00:00:00.000Z', TIMESTAMPTZ '2026-04-03T00:00:00.000Z')
     \`)
 
+    await database.run(\`
+      INSERT INTO app.project_review_serving_generation (project_id, active_generation)
+      VALUES ('large-rebuild-executor-project', 5)
+    \`)
+    const targetGeneration = 9
+
     await executor.resetProjectReviewAnswerDictionary('large-rebuild-executor-project')
     await executor.rebuildProjectReviewAnswerDictionary('large-rebuild-executor-project')
-    await executor.setupProjectReviewServingStaging('large-rebuild-executor-project')
-    await executor.rebuildProjectReviewArticleFilterMemberBatch('large-rebuild-executor-project', ['article-1', 'article-2'])
-    await executor.rebuildProjectReviewArticleFilterMemberBatch('large-rebuild-executor-project', ['article-1', 'article-2'])
+    await executor.setupProjectReviewServingStaging('large-rebuild-executor-project', targetGeneration)
+    await executor.rebuildProjectReviewArticleFilterMemberBatch('large-rebuild-executor-project', ['article-1', 'article-2'], targetGeneration)
+    await executor.rebuildProjectReviewArticleFilterMemberBatch('large-rebuild-executor-project', ['article-1', 'article-2'], targetGeneration)
     await executor.resetProjectReviewArticleRollup('large-rebuild-executor-project')
     await executor.rebuildProjectReviewArticleRollupBatch('large-rebuild-executor-project', ['article-1', 'article-2'])
     await executor.rebuildProjectReviewArticleRollupBatch('large-rebuild-executor-project', ['article-1', 'article-2'])
-    await executor.rebuildProjectReviewServingBatch('large-rebuild-executor-project', ['article-1', 'article-2'])
-    await executor.rebuildProjectReviewServingBatch('large-rebuild-executor-project', ['article-1', 'article-2'])
-    await executor.finalizeProjectReviewServing('large-rebuild-executor-project')
+    await executor.rebuildProjectReviewServingBatch('large-rebuild-executor-project', ['article-1', 'article-2'], targetGeneration)
+    await executor.rebuildProjectReviewServingBatch('large-rebuild-executor-project', ['article-1', 'article-2'], targetGeneration)
+    await executor.finalizeProjectReviewServing('large-rebuild-executor-project', targetGeneration)
 
     const filterRows = await database.queryJson(\`
       SELECT prompt_id AS promptId, answer_id AS answerId, article_id AS articleId, generation AS generation
@@ -1208,17 +1226,17 @@ test('filter member rollup and serving staging rebuild replay safely on bounded 
   `)
 
   expect(result.filterRows).toEqual([
-    {promptId: 'prompt-1', answerId: 2, articleId: 'article-1', generation: '1'},
-    {promptId: 'prompt-1', answerId: 1, articleId: 'article-2', generation: '1'},
+    {promptId: 'prompt-1', answerId: 2, articleId: 'article-1', generation: '9'},
+    {promptId: 'prompt-1', answerId: 1, articleId: 'article-2', generation: '9'},
   ])
   expect(result.rollupRows).toEqual([
     {articleId: 'article-1', enabledPromptCount: 1, hasAllLlmJudgments: true},
     {articleId: 'article-2', enabledPromptCount: 1, hasAllLlmJudgments: true},
   ])
-  expect(result.servingGeneration).toEqual([{activeGeneration: '1'}])
+  expect(result.servingGeneration).toEqual([{activeGeneration: '9'}])
   expect(result.servingRows).toEqual([
-    {articleId: 'article-1', generation: '1'},
-    {articleId: 'article-2', generation: '1'},
+    {articleId: 'article-1', generation: '9'},
+    {articleId: 'article-2', generation: '9'},
   ])
 })
 
@@ -1237,8 +1255,8 @@ test('review serving finalize deletes stale generations without over-promoting',
     await database.run("INSERT INTO mart.review_article_serving_detail (project_id, generation, article_id, prompt_id, judgment_id, created_at, model_id) VALUES ('large-rebuild-executor-project', 1, 'article-1', 'prompt-1', 'judgment-old', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', 'large-rebuild-executor-model'), ('large-rebuild-executor-project', 2, 'article-1', 'prompt-1', 'judgment-current', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', 'large-rebuild-executor-model'), ('large-rebuild-executor-project', 3, 'article-1', 'prompt-1', 'judgment-next', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', 'large-rebuild-executor-model')")
     await database.run("INSERT INTO mart.review_article_serving_detail (project_id, generation, article_id, prompt_id, judgment_id, created_at, model_id) VALUES ('other-project', 1, 'article-1', 'prompt-1', 'judgment-other', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', 'large-rebuild-executor-model')")
 
-    await executor.finalizeProjectReviewServing('large-rebuild-executor-project')
-    await executor.finalizeProjectReviewServing('large-rebuild-executor-project')
+    await executor.finalizeProjectReviewServing('large-rebuild-executor-project', 3)
+    await executor.finalizeProjectReviewServing('large-rebuild-executor-project', 3)
 
     const activeGeneration = await database.queryJson("SELECT CAST(active_generation AS VARCHAR) AS activeGeneration FROM app.project_review_serving_generation WHERE project_id = 'large-rebuild-executor-project'")
     const generationRows = await database.queryJson("SELECT 'filter_member' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_filter_member WHERE project_id = 'large-rebuild-executor-project' GROUP BY generation UNION ALL SELECT 'serving' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_serving WHERE project_id = 'large-rebuild-executor-project' GROUP BY generation UNION ALL SELECT 'serving_detail' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_serving_detail WHERE project_id = 'large-rebuild-executor-project' GROUP BY generation ORDER BY tableName ASC, generation ASC")

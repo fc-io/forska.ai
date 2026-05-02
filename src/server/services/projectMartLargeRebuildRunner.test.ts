@@ -60,6 +60,7 @@ const createRunnerContext = (params: {
     cursorArticleId: string | null
     projectId: string
     rebuildPhase?: string
+    targetGeneration?: number | null
   }> = []
   const scopeBatches: string[][] = []
   const rebuildBatches: string[][] = []
@@ -68,8 +69,8 @@ const createRunnerContext = (params: {
   const claim = params.claim ?? null
   const dependencies: ProjectMartLargeRebuildRunnerDependencies = {
     executor: {
-      finalizeProjectReviewServing: mock(async (projectId: string) => {
-        callLog.push(`serving:finalize:${projectId}`)
+      finalizeProjectReviewServing: mock(async (projectId: string, targetGeneration: number) => {
+        callLog.push(`serving:finalize:${projectId}:${targetGeneration}`)
       }),
       getNextBatchCursor: (rows: Array<{articleCreatedAt: Date | string | null; articleId: string}>) => {
         const [lastRow] = rows.slice(-1)
@@ -101,15 +102,19 @@ const createRunnerContext = (params: {
         callLog.push(`dictionary:rebuild:${projectId}`)
         dictionaryRebuilds.push(projectId)
       }),
-      rebuildProjectReviewArticleFilterMemberBatch: mock(async (projectId: string, articleIds: string[]) => {
-        callLog.push(`filter:rebuild:${projectId}:${articleIds.join(',')}`)
-      }),
+      rebuildProjectReviewArticleFilterMemberBatch: mock(
+        async (projectId: string, articleIds: string[], targetGeneration: number) => {
+          callLog.push(`filter:rebuild:${projectId}:${articleIds.join(',')}:${targetGeneration}`)
+        },
+      ),
       rebuildProjectReviewArticleRollupBatch: mock(async (projectId: string, articleIds: string[]) => {
         callLog.push(`rollup:rebuild:${projectId}:${articleIds.join(',')}`)
       }),
-      rebuildProjectReviewServingBatch: mock(async (projectId: string, articleIds: string[]) => {
-        callLog.push(`serving:rebuild:${projectId}:${articleIds.join(',')}`)
-      }),
+      rebuildProjectReviewServingBatch: mock(
+        async (projectId: string, articleIds: string[], targetGeneration: number) => {
+          callLog.push(`serving:rebuild:${projectId}:${articleIds.join(',')}:${targetGeneration}`)
+        },
+      ),
       resetProjectScope: mock(async (projectId: string) => {
         callLog.push(`scope:reset:${projectId}`)
       }),
@@ -126,8 +131,8 @@ const createRunnerContext = (params: {
       resetProjectReviewArticleRollup: mock(async (projectId: string) => {
         callLog.push(`rollup:reset:${projectId}`)
       }),
-      setupProjectReviewServingStaging: mock(async (projectId: string) => {
-        callLog.push(`serving:setup:${projectId}`)
+      setupProjectReviewServingStaging: mock(async (projectId: string, targetGeneration: number) => {
+        callLog.push(`serving:setup:${projectId}:${targetGeneration}`)
       }),
     },
     largeRebuildStateService: {
@@ -142,6 +147,13 @@ const createRunnerContext = (params: {
         callLog.push(`complete:${projectId}`)
         completed.push(projectId)
         return null
+      }),
+      ensureLargeRebuildTargetGeneration: mock(async ({projectId}: {projectId: string}) => {
+        callLog.push(`target:${projectId}`)
+
+        return params.state === null || params.state === undefined
+          ? null
+          : {...params.state, targetGeneration: params.state.targetGeneration ?? 1}
       }),
       failLargeRebuild: mock(async ({error, projectId}: {error: string; projectId: string}) => {
         callLog.push(`fail:${projectId}:${error}`)
@@ -162,11 +174,13 @@ const createRunnerContext = (params: {
           cursorArticleId,
           projectId,
           rebuildPhase,
+          targetGeneration,
         }: {
           cursorArticleCreatedAt?: Date | null
           cursorArticleId?: string | null
           projectId: string
           rebuildPhase?: string
+          targetGeneration?: number | null
         }) => {
           callLog.push(`advance:${projectId}:${cursorArticleId ?? 'null'}:${rebuildPhase ?? 'same'}`)
           resets.push({
@@ -174,6 +188,7 @@ const createRunnerContext = (params: {
             cursorArticleId: cursorArticleId ?? null,
             projectId,
             rebuildPhase,
+            targetGeneration,
           })
           return null
         },
@@ -568,10 +583,12 @@ test('transitions from review_answer_dictionary to review_article_filter_member'
   })
   expect(context.callLog).toEqual([
     'claim',
+    'state:project-1',
     'dictionary:reset:project-1',
     'dictionary:rebuild:project-1',
     'advance:project-1:null:review_article_filter_member',
   ])
+  expect(context.resets[0]?.targetGeneration).toBeNull()
 })
 
 test('transitions through filter_member rollup and serving to completion', async () => {
@@ -597,10 +614,12 @@ test('transitions through filter_member rollup and serving to completion', async
   expect(filterContext.callLog).toEqual([
     'claim',
     'state:project-1',
-    'serving:setup:project-1',
+    'target:project-1',
+    'serving:setup:project-1:1',
     'mart-batch:project-1',
     'advance:project-1:null:review_article_rollup',
   ])
+  expect(filterContext.resets[0]?.targetGeneration).toBe(1)
 
   const rollupContext = createRunnerContext({
     batchRows: [],
@@ -651,14 +670,62 @@ test('transitions through filter_member rollup and serving to completion', async
   expect(servingContext.callLog).toEqual([
     'claim',
     'state:project-1',
+    'target:project-1',
     'mart-batch:project-1',
-    'serving:finalize:project-1',
+    'serving:finalize:project-1:1',
     'refresh:complete:project-1:9',
     'complete:project-1',
     'ack:project-1:9',
   ])
   expect(servingContext.finalizedRefreshes).toEqual([{completedToken: 9, projectId: 'project-1'}])
   expect(servingContext.publishedAcks).toEqual([{ackToken: 9, projectId: 'project-1'}])
+})
+
+test('resumes review_article_filter_member with the stored target generation', async () => {
+  const context = createRunnerContext({
+    batchRows: [
+      {
+        articleCreatedAt: new Date('2026-04-03T00:00:00.000Z'),
+        articleId: 'article-3',
+        articleUpdatedAt: new Date('2026-04-03T01:00:00.000Z'),
+        inCuratedScope: true,
+        inRouteScope: false,
+      },
+    ],
+    claim: {
+      leaseExpiresAt: new Date('2026-04-03T10:00:00.000Z'),
+      projectId: 'project-1',
+      rebuildPhase: 'review_article_filter_member',
+      refreshToken: 9,
+      workerId: 'worker-2',
+    },
+    state: {
+      cursorArticleCreatedAt: new Date('2026-04-02T00:00:00.000Z'),
+      cursorArticleId: 'article-2',
+      projectId: 'project-1',
+      rebuildPhase: 'review_article_filter_member',
+      targetGeneration: 7,
+    },
+  })
+
+  const result = await runProjectMartLargeRebuildCycle({workerId: 'worker-2'}, context.dependencies)
+
+  expect(result).toEqual({
+    articleCount: 1,
+    nextCursor: {articleCreatedAt: new Date('2026-04-03T00:00:00.000Z'), articleId: 'article-3'},
+    projectId: 'project-1',
+    status: 'progressed',
+    workerId: 'worker-2',
+  })
+  expect(context.callLog).toEqual([
+    'claim',
+    'state:project-1',
+    'target:project-1',
+    'mart-batch:project-1',
+    'filter:rebuild:project-1:article-3:7',
+    'advance:project-1:article-3:review_article_filter_member',
+  ])
+  expect(context.resets[0]?.targetGeneration).toBe(7)
 })
 
 test('fails unsupported phases explicitly', async () => {
