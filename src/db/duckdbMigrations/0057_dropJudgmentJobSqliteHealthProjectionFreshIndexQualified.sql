@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS app.idx_app_judgment_job_sqlite_health_projection_fresh;

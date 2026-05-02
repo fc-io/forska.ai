@@ -1107,22 +1107,16 @@ const getTrackedJudgmentJobIdsForProject = async (projectId: string) => {
     return []
   }
 
-  const rows = await Promise.all(
-    trackedJobIds.map(async (trackedJobId) => {
-      const [row] = await getAppDatabaseService().queryJson<{id: string}>(`
-        SELECT id
-        FROM app.judgment_job
-        WHERE id = ${getSqlLiteral(trackedJobId)}
-          AND project_id = ${getSqlLiteral(projectId)}
-        LIMIT 1
-      `)
-
-      return row?.id ?? null
-    }),
-  )
-
-  return rows.filter((trackedJobId): trackedJobId is string => {
-    return trackedJobId !== null
+  return (
+    await getAppDatabaseService().queryJson<{id: string}>(`
+      SELECT id
+      FROM app.judgment_job
+      WHERE id IN (${getQuotedStringList(trackedJobIds).join(', ')})
+        AND project_id = ${getSqlLiteral(projectId)}
+      ORDER BY id
+    `)
+  ).map((row) => {
+    return row.id
   })
 }
 
@@ -1133,45 +1127,21 @@ const getTrackedProjectRefreshAckStates = async (projectId?: string) => {
     return []
   }
 
-  const trackedProjectIds = Array.from(
-    new Set(
-      (
-        await Promise.all(
-          trackedJobIds.map(async (trackedJobId) => {
-            const [row] = await getAppDatabaseService().queryJson<{projectId: string}>(`
-              SELECT project_id AS projectId
-              FROM app.judgment_job
-              WHERE id = ${getSqlLiteral(trackedJobId)}
-              LIMIT 1
-            `)
+  const projectFilter = projectId === undefined ? '' : `AND project_id = ${getSqlLiteral(projectId)}`
 
-            return row?.projectId ?? null
-          }),
-        )
-      ).filter((trackedProjectId): trackedProjectId is string => {
-        return trackedProjectId !== null && (projectId === undefined || trackedProjectId === projectId)
-      }),
-    ),
-  )
-
-  const rows = await Promise.all(
-    trackedProjectIds.map(async (trackedProjectId) => {
-      const [row] = await getAppDatabaseService().queryJson<ProjectRefreshAckStateRow>(`
-        SELECT
-          project_id AS projectId,
-          CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken
-        FROM app.project_mart_refresh_state
-        WHERE project_id = ${getSqlLiteral(trackedProjectId)}
-        LIMIT 1
-      `)
-
-      return row ?? null
-    }),
-  )
-
-  return rows.filter((row): row is ProjectRefreshAckStateRow => {
-    return row !== null
-  })
+  return getAppDatabaseService().queryJson<ProjectRefreshAckStateRow>(`
+    SELECT
+      project_id AS projectId,
+      CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken
+    FROM app.project_mart_refresh_state
+    WHERE project_id IN (
+      SELECT DISTINCT project_id
+      FROM app.judgment_job
+      WHERE id IN (${getQuotedStringList(trackedJobIds).join(', ')})
+        ${projectFilter}
+    )
+    ORDER BY project_id
+  `)
 }
 
 const publishProjectRefreshAckForJobIds = async ({ackToken, jobIds}: {ackToken: number | null; jobIds: string[]}) => {

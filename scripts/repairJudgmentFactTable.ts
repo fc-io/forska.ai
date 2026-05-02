@@ -32,13 +32,10 @@ const judgmentFactCreateSql = `
   )
 `
 
-const judgmentFactIndexSql = `
-  CREATE INDEX idx_mart_judgment_fact_lookup
-  ON mart.judgment_fact(article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
-`
-
 const getCount = async (tableName: string) => {
-  const [row] = await getAppDatabaseService().queryJson<{count: number | string}>(`SELECT COUNT(*) AS count FROM ${tableName}`)
+  const [row] = await getAppDatabaseService().queryJson<{count: number | string}>(
+    `SELECT COUNT(*) AS count FROM ${tableName}`,
+  )
   return Number(row?.count ?? 0)
 }
 
@@ -120,7 +117,6 @@ const rebuildJudgmentFact = async () => {
       updated_at
     FROM ${tempTableName}
   `)
-  await getAppDatabaseService().run(judgmentFactIndexSql)
   await getAppDatabaseService().run(`DROP TABLE ${tempTableName}`)
 }
 
@@ -134,15 +130,7 @@ export const repairJudgmentFactTable = async () => {
     const afterCount = await getCount('mart.judgment_fact')
     const duplicatesAfter = await getDuplicateJudgmentIds()
 
-    console.log(
-      JSON.stringify({
-        afterCount,
-        beforeCount,
-        duplicateJudgmentIds,
-        duplicatesAfter,
-        status: 'ok',
-      }),
-    )
+    console.log(JSON.stringify({afterCount, beforeCount, duplicateJudgmentIds, duplicatesAfter, status: 'ok'}))
   })
 }
 
