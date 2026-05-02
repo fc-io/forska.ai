@@ -16,6 +16,7 @@ type LocalUser = {
   fullTextConversionModelId?: string | null
   projectMartLargeRebuildBatchSize?: number | null
   projectMartLargeRebuildMaxCyclesPerWake?: number | null
+  projectMartLargeRebuildMaxWakeMs?: number | null
   projectMartLargeRebuildPollIntervalMs?: number | null
   projectMartLargeRebuildTuningMode?: ProjectMartLargeRebuildTuningMode | null
   unpaywallEmail?: string | null
@@ -37,18 +38,21 @@ type MaintenanceRuntimeDiagnostics = {
       activeLargeRebuildProjectCount?: number
       batchSize?: number
       maxCyclesPerWake?: number
+      maxWakeMs?: number
       pollIntervalMs?: number
       profile?: string
       totalMemoryGb?: number
     }
     batchSize?: number
     maxCyclesPerWake?: number
+    maxWakeMs?: number
     pollIntervalMs?: number
-    sources?: {batchSize?: string; maxCyclesPerWake?: string; pollIntervalMs?: string}
+    sources?: {batchSize?: string; maxCyclesPerWake?: string; maxWakeMs?: string; pollIntervalMs?: string}
     stored?: {
       maintenanceWorkerDuckdbMemoryLimit?: string | null
       batchSize?: number | null
       maxCyclesPerWake?: number | null
+      maxWakeMs?: number | null
       pollIntervalMs?: number | null
       tuningMode?: ProjectMartLargeRebuildTuningMode
     }
@@ -101,6 +105,7 @@ type UpdateLocalUserInput = {
   fullTextConversionModelId: string
   projectMartLargeRebuildBatchSize: string
   projectMartLargeRebuildMaxCyclesPerWake: string
+  projectMartLargeRebuildMaxWakeMs: string
   projectMartLargeRebuildPollIntervalMs: string
   projectMartLargeRebuildTuningMode: ProjectMartLargeRebuildTuningMode
   unpaywallEmail: string
@@ -153,10 +158,11 @@ const formatTuningSource = (value: string | null | undefined) => {
 const formatTuningSummary = (value: {
   batchSize?: number | null
   maxCyclesPerWake?: number | null
+  maxWakeMs?: number | null
   pollIntervalMs?: number | null
 }) => {
-  return value.batchSize && value.maxCyclesPerWake && value.pollIntervalMs
-    ? `batch ${value.batchSize}, poll ${value.pollIntervalMs}ms, burst ${value.maxCyclesPerWake}`
+  return value.batchSize && value.maxCyclesPerWake && value.maxWakeMs && value.pollIntervalMs
+    ? `batch ${value.batchSize}, poll ${value.pollIntervalMs}ms, burst ${value.maxCyclesPerWake}, budget ${value.maxWakeMs}ms`
     : 'N/A'
 }
 
@@ -184,6 +190,7 @@ const updateLocalUser = async (input: UpdateLocalUserInput): Promise<LocalUser> 
     name: input.name,
     projectMartLargeRebuildBatchSize: getNullablePositiveInteger(input.projectMartLargeRebuildBatchSize),
     projectMartLargeRebuildMaxCyclesPerWake: getNullablePositiveInteger(input.projectMartLargeRebuildMaxCyclesPerWake),
+    projectMartLargeRebuildMaxWakeMs: getNullablePositiveInteger(input.projectMartLargeRebuildMaxWakeMs),
     projectMartLargeRebuildPollIntervalMs: getNullablePositiveInteger(input.projectMartLargeRebuildPollIntervalMs),
     projectMartLargeRebuildTuningMode: input.projectMartLargeRebuildTuningMode,
     unpaywallEmail: getNullableString(input.unpaywallEmail),
@@ -200,6 +207,7 @@ const Settings = () => {
   const [fullTextConversionModelId, setFullTextConversionModelId] = createSignal('')
   const [projectMartLargeRebuildBatchSize, setProjectMartLargeRebuildBatchSize] = createSignal('')
   const [projectMartLargeRebuildMaxCyclesPerWake, setProjectMartLargeRebuildMaxCyclesPerWake] = createSignal('')
+  const [projectMartLargeRebuildMaxWakeMs, setProjectMartLargeRebuildMaxWakeMs] = createSignal('')
   const [projectMartLargeRebuildPollIntervalMs, setProjectMartLargeRebuildPollIntervalMs] = createSignal('')
   const [projectMartLargeRebuildTuningMode, setProjectMartLargeRebuildTuningMode] =
     createSignal<ProjectMartLargeRebuildTuningMode>('automatic')
@@ -245,6 +253,7 @@ const Settings = () => {
         setFullTextConversionModelId(user.fullTextConversionModelId ?? '')
         setProjectMartLargeRebuildBatchSize(String(user.projectMartLargeRebuildBatchSize ?? ''))
         setProjectMartLargeRebuildMaxCyclesPerWake(String(user.projectMartLargeRebuildMaxCyclesPerWake ?? ''))
+        setProjectMartLargeRebuildMaxWakeMs(String(user.projectMartLargeRebuildMaxWakeMs ?? ''))
         setProjectMartLargeRebuildPollIntervalMs(String(user.projectMartLargeRebuildPollIntervalMs ?? ''))
         setProjectMartLargeRebuildTuningMode(user.projectMartLargeRebuildTuningMode ?? 'automatic')
         setUnpaywallEmail(user.unpaywallEmail ?? '')
@@ -266,6 +275,7 @@ const Settings = () => {
     setProjectMartLargeRebuildMaxCyclesPerWake(
       String(localUserQuery.data?.projectMartLargeRebuildMaxCyclesPerWake ?? ''),
     )
+    setProjectMartLargeRebuildMaxWakeMs(String(localUserQuery.data?.projectMartLargeRebuildMaxWakeMs ?? ''))
     setProjectMartLargeRebuildPollIntervalMs(String(localUserQuery.data?.projectMartLargeRebuildPollIntervalMs ?? ''))
     setProjectMartLargeRebuildTuningMode(localUserQuery.data?.projectMartLargeRebuildTuningMode ?? 'automatic')
     setUnpaywallEmail(localUserQuery.data?.unpaywallEmail ?? '')
@@ -289,6 +299,8 @@ const Settings = () => {
         !== String(localUserQuery.data?.projectMartLargeRebuildBatchSize ?? '').trim()
       || projectMartLargeRebuildMaxCyclesPerWake().trim()
         !== String(localUserQuery.data?.projectMartLargeRebuildMaxCyclesPerWake ?? '').trim()
+      || projectMartLargeRebuildMaxWakeMs().trim()
+        !== String(localUserQuery.data?.projectMartLargeRebuildMaxWakeMs ?? '').trim()
       || projectMartLargeRebuildPollIntervalMs().trim()
         !== String(localUserQuery.data?.projectMartLargeRebuildPollIntervalMs ?? '').trim()
       || maintenanceWorkerDuckdbMemoryLimit().trim()
@@ -391,7 +403,7 @@ const Settings = () => {
                     </select>
                     <p class="mt-2 text-xs text-gray-500">
                       Automatic mode tunes the rebuild heartbeat from machine memory and active rebuild count. Manual
-                      mode lets you pin batch size, poll interval, and burst size.
+                      mode lets you pin batch size, poll interval, burst size, and wake budget.
                     </p>
                   </div>
                   <div>
@@ -414,7 +426,7 @@ const Settings = () => {
                     </p>
                   </div>
                   <Show when={projectMartLargeRebuildTuningMode() === 'manual'}>
-                    <div class="grid gap-4 md:grid-cols-3">
+                    <div class="grid gap-4 md:grid-cols-4">
                       <div>
                         <label class="block text-sm font-medium text-gray-700 mb-2">Batch Size</label>
                         <input
@@ -447,6 +459,18 @@ const Settings = () => {
                           value={projectMartLargeRebuildMaxCyclesPerWake()}
                           onInput={(event) => {
                             setProjectMartLargeRebuildMaxCyclesPerWake(event.currentTarget.value)
+                          }}
+                          class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
+                        />
+                      </div>
+                      <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Max Wake (ms)</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={projectMartLargeRebuildMaxWakeMs()}
+                          onInput={(event) => {
+                            setProjectMartLargeRebuildMaxWakeMs(event.currentTarget.value)
                           }}
                           class="w-full px-3 py-3 border border-gray-300 rounded-md bg-white text-gray-900 sm:text-sm"
                         />
@@ -496,6 +520,10 @@ const Settings = () => {
                         {formatTuningSource(
                           maintenanceRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.sources
                             ?.maxCyclesPerWake,
+                        )}
+                        , budget{' '}
+                        {formatTuningSource(
+                          maintenanceRuntimeDiagnosticsQuery.data?.projectMartLargeRebuildHeartbeat?.sources?.maxWakeMs,
                         )}
                       </p>
                       <p class="text-xs text-gray-600">
@@ -660,6 +688,7 @@ const Settings = () => {
                     name: displayName(),
                     projectMartLargeRebuildBatchSize: projectMartLargeRebuildBatchSize(),
                     projectMartLargeRebuildMaxCyclesPerWake: projectMartLargeRebuildMaxCyclesPerWake(),
+                    projectMartLargeRebuildMaxWakeMs: projectMartLargeRebuildMaxWakeMs(),
                     projectMartLargeRebuildPollIntervalMs: projectMartLargeRebuildPollIntervalMs(),
                     projectMartLargeRebuildTuningMode: projectMartLargeRebuildTuningMode(),
                     unpaywallEmail: unpaywallEmail(),

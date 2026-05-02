@@ -15,6 +15,7 @@ type UserConfigRow = {
   fullTextConversionModelId: string | null
   projectMartLargeRebuildBatchSize: number | null
   projectMartLargeRebuildMaxCyclesPerWake: number | null
+  projectMartLargeRebuildMaxWakeMs: number | null
   projectMartLargeRebuildPollIntervalMs: number | null
   projectMartLargeRebuildTuningMode: string | null
   unpaywallEmail: string | null
@@ -40,6 +41,7 @@ const userConfigSelectClause = `
   full_text_conversion_model_id AS fullTextConversionModelId,
   project_mart_large_rebuild_batch_size AS projectMartLargeRebuildBatchSize,
   project_mart_large_rebuild_max_cycles_per_wake AS projectMartLargeRebuildMaxCyclesPerWake,
+  project_mart_large_rebuild_max_wake_ms AS projectMartLargeRebuildMaxWakeMs,
   project_mart_large_rebuild_poll_interval_ms AS projectMartLargeRebuildPollIntervalMs,
   project_mart_large_rebuild_tuning_mode AS projectMartLargeRebuildTuningMode,
   unpaywall_email AS unpaywallEmail,
@@ -75,6 +77,7 @@ const hasStoredProjectMartLargeRebuildSettings = (
     | 'maintenanceWorkerDuckdbMemoryLimit'
     | 'projectMartLargeRebuildBatchSize'
     | 'projectMartLargeRebuildMaxCyclesPerWake'
+    | 'projectMartLargeRebuildMaxWakeMs'
     | 'projectMartLargeRebuildPollIntervalMs'
     | 'projectMartLargeRebuildTuningMode'
   >,
@@ -83,6 +86,7 @@ const hasStoredProjectMartLargeRebuildSettings = (
     userConfig.maintenanceWorkerDuckdbMemoryLimit !== null
     || userConfig.projectMartLargeRebuildBatchSize !== null
     || userConfig.projectMartLargeRebuildMaxCyclesPerWake !== null
+    || userConfig.projectMartLargeRebuildMaxWakeMs !== null
     || userConfig.projectMartLargeRebuildPollIntervalMs !== null
     || userConfig.projectMartLargeRebuildTuningMode === 'manual'
   )
@@ -100,6 +104,7 @@ const getDefaultUserRecord = (): UserRecord => {
     fullTextConversionModelId: localUserDefaults.fullTextConversionModelId,
     projectMartLargeRebuildBatchSize: null,
     projectMartLargeRebuildMaxCyclesPerWake: null,
+    projectMartLargeRebuildMaxWakeMs: null,
     projectMartLargeRebuildPollIntervalMs: null,
     projectMartLargeRebuildTuningMode: 'automatic',
     unpaywallEmail: localUserDefaults.unpaywallEmail,
@@ -118,6 +123,7 @@ const getUserConfigValue = (row: UserConfigRow): UserRecord => {
     fullTextConversionModelId: row.fullTextConversionModelId,
     projectMartLargeRebuildBatchSize: getNullablePositiveInteger(row.projectMartLargeRebuildBatchSize),
     projectMartLargeRebuildMaxCyclesPerWake: getNullablePositiveInteger(row.projectMartLargeRebuildMaxCyclesPerWake),
+    projectMartLargeRebuildMaxWakeMs: getNullablePositiveInteger(row.projectMartLargeRebuildMaxWakeMs),
     projectMartLargeRebuildPollIntervalMs: getNullablePositiveInteger(row.projectMartLargeRebuildPollIntervalMs),
     projectMartLargeRebuildTuningMode: getProjectMartLargeRebuildTuningMode(row.projectMartLargeRebuildTuningMode),
     unpaywallEmail: row.unpaywallEmail,
@@ -147,6 +153,7 @@ const insertDefaultUserConfig = async (): Promise<UserRecord | null> => {
       full_text_conversion_model_id,
       project_mart_large_rebuild_batch_size,
       project_mart_large_rebuild_max_cycles_per_wake,
+      project_mart_large_rebuild_max_wake_ms,
       project_mart_large_rebuild_poll_interval_ms,
       project_mart_large_rebuild_tuning_mode,
       unpaywall_email
@@ -158,6 +165,7 @@ const insertDefaultUserConfig = async (): Promise<UserRecord | null> => {
       ${getSqlLiteral(localUserDefaults.role)},
       NULL,
       ${getSqlLiteral(localUserDefaults.fullTextConversionModelId)},
+      NULL,
       NULL,
       NULL,
       NULL,
@@ -183,6 +191,7 @@ const syncLocalProjectMartLargeRebuildSettings = async (userConfig: UserRecord):
     maintenanceWorkerDuckdbMemoryLimit: localSettings.maintenanceWorkerDuckdbMemoryLimit,
     projectMartLargeRebuildBatchSize: localSettings.projectMartLargeRebuildBatchSize,
     projectMartLargeRebuildMaxCyclesPerWake: localSettings.projectMartLargeRebuildMaxCyclesPerWake,
+    projectMartLargeRebuildMaxWakeMs: localSettings.projectMartLargeRebuildMaxWakeMs,
     projectMartLargeRebuildPollIntervalMs: localSettings.projectMartLargeRebuildPollIntervalMs,
     projectMartLargeRebuildTuningMode: localSettings.projectMartLargeRebuildTuningMode,
   })
@@ -199,6 +208,7 @@ const syncLocalProjectMartLargeRebuildSettings = async (userConfig: UserRecord):
     name: userConfig.name,
     projectMartLargeRebuildBatchSize: localSettings.projectMartLargeRebuildBatchSize,
     projectMartLargeRebuildMaxCyclesPerWake: localSettings.projectMartLargeRebuildMaxCyclesPerWake,
+    projectMartLargeRebuildMaxWakeMs: localSettings.projectMartLargeRebuildMaxWakeMs,
     projectMartLargeRebuildPollIntervalMs: localSettings.projectMartLargeRebuildPollIntervalMs,
     projectMartLargeRebuildTuningMode: localSettings.projectMartLargeRebuildTuningMode,
     unpaywallEmail: userConfig.unpaywallEmail,
@@ -246,6 +256,7 @@ const updateUserConfigRow = async ({
   name,
   projectMartLargeRebuildBatchSize,
   projectMartLargeRebuildMaxCyclesPerWake,
+  projectMartLargeRebuildMaxWakeMs,
   projectMartLargeRebuildPollIntervalMs,
   projectMartLargeRebuildTuningMode,
   unpaywallEmail,
@@ -257,6 +268,7 @@ const updateUserConfigRow = async ({
   name: string
   projectMartLargeRebuildBatchSize: number | null
   projectMartLargeRebuildMaxCyclesPerWake: number | null
+  projectMartLargeRebuildMaxWakeMs: number | null
   projectMartLargeRebuildPollIntervalMs: number | null
   projectMartLargeRebuildTuningMode: UserRecord['projectMartLargeRebuildTuningMode']
   unpaywallEmail: string | null
@@ -271,6 +283,7 @@ const updateUserConfigRow = async ({
         full_text_conversion_model_id = ${getSqlLiteral(validatedFullTextConversionModelId)},
         project_mart_large_rebuild_batch_size = ${getSqlLiteral(getNullablePositiveInteger(projectMartLargeRebuildBatchSize))},
         project_mart_large_rebuild_max_cycles_per_wake = ${getSqlLiteral(getNullablePositiveInteger(projectMartLargeRebuildMaxCyclesPerWake))},
+        project_mart_large_rebuild_max_wake_ms = ${getSqlLiteral(getNullablePositiveInteger(projectMartLargeRebuildMaxWakeMs))},
         project_mart_large_rebuild_poll_interval_ms = ${getSqlLiteral(getNullablePositiveInteger(projectMartLargeRebuildPollIntervalMs))},
         project_mart_large_rebuild_tuning_mode = ${getSqlLiteral(getProjectMartLargeRebuildTuningMode(projectMartLargeRebuildTuningMode))},
         unpaywall_email = ${getSqlLiteral(getNullableTrimmedValue(unpaywallEmail))},
@@ -289,6 +302,7 @@ const updateUserConfig = async ({
   name,
   projectMartLargeRebuildBatchSize,
   projectMartLargeRebuildMaxCyclesPerWake,
+  projectMartLargeRebuildMaxWakeMs,
   projectMartLargeRebuildPollIntervalMs,
   projectMartLargeRebuildTuningMode,
   unpaywallEmail,
@@ -299,6 +313,7 @@ const updateUserConfig = async ({
   name: string
   projectMartLargeRebuildBatchSize: number | null
   projectMartLargeRebuildMaxCyclesPerWake: number | null
+  projectMartLargeRebuildMaxWakeMs: number | null
   projectMartLargeRebuildPollIntervalMs: number | null
   projectMartLargeRebuildTuningMode: UserRecord['projectMartLargeRebuildTuningMode']
   unpaywallEmail: string | null
@@ -313,6 +328,7 @@ const updateUserConfig = async ({
     name,
     projectMartLargeRebuildBatchSize,
     projectMartLargeRebuildMaxCyclesPerWake,
+    projectMartLargeRebuildMaxWakeMs,
     projectMartLargeRebuildPollIntervalMs,
     projectMartLargeRebuildTuningMode,
     unpaywallEmail,

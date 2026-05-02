@@ -31,6 +31,7 @@ test('local app settings rewrite legacy maintenance-worker memory key', () => {
         duckdbBin: ' /opt/duckdb ',
         projectMartLargeRebuildBatchSize: 256,
         projectMartLargeRebuildMaxCyclesPerWake: 3,
+        projectMartLargeRebuildMaxWakeMs: 1500,
         projectMartLargeRebuildPollIntervalMs: 750,
         projectMartLargeRebuildTuningMode: 'manual',
       },
@@ -51,6 +52,7 @@ test('local app settings rewrite legacy maintenance-worker memory key', () => {
       duckdbBin: '/opt/duckdb',
       projectMartLargeRebuildBatchSize: 256,
       projectMartLargeRebuildMaxCyclesPerWake: 3,
+      projectMartLargeRebuildMaxWakeMs: 1500,
       projectMartLargeRebuildPollIntervalMs: 750,
       projectMartLargeRebuildTuningMode: 'manual',
     })

@@ -1,5 +1,5 @@
 import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
-import {getDuckdbQueueRuntimeMetricsSnapshot} from '../utils/duckdbService.ts'
+import {getDuckdbQueueRuntimeMetricsSnapshot, getDuckdbTempSpillMetricsSnapshot} from '../utils/duckdbService.ts'
 import {
   getProjectMartLargeRebuildCycleQueueDelta,
   recordProjectMartLargeRebuildCycleMetric,
@@ -154,6 +154,19 @@ const getErrorText = (error: unknown) => {
 
 const getCursorDateValue = (value: Date | string | null) => {
   return value === null || value instanceof Date ? value : new Date(value)
+}
+
+const getMetricCursorDateValue = (value: Date | string | null) => {
+  return value instanceof Date ? value.toISOString() : value
+}
+
+const getLastCommittedCursor = (result: ProjectMartLargeRebuildRunnerResult) => {
+  return result.status === 'progressed' && result.nextCursor !== null
+    ? {
+        articleCreatedAt: getMetricCursorDateValue(result.nextCursor.articleCreatedAt),
+        articleId: result.nextCursor.articleId,
+      }
+    : null
 }
 
 const ensureProjectReviewServingTargetGeneration = async (
@@ -689,6 +702,7 @@ export const runProjectMartLargeRebuildCycle = async (
 
       recordProjectMartLargeRebuildCycleMetric({
         articleCount: cleanupResult.deletedRowCount,
+        committedRowCount: cleanupResult.deletedRowCount,
         durationMs: Date.now() - startedAtMs,
         duckdbQueues: getProjectMartLargeRebuildCycleQueueDelta({
           finished: getDuckdbQueueRuntimeMetricsSnapshot(),
@@ -696,10 +710,12 @@ export const runProjectMartLargeRebuildCycle = async (
         }),
         endedAt: new Date().toISOString(),
         error: null,
+        lastCommittedCursor: null,
         phase: 'review_article_serving_generation_cleanup',
         projectId: result.projectId,
         startedAt,
         status: result.status,
+        tempSpill: getDuckdbTempSpillMetricsSnapshot(),
         workerId: options.workerId,
       })
 
@@ -713,6 +729,7 @@ export const runProjectMartLargeRebuildCycle = async (
     } satisfies ProjectMartLargeRebuildRunnerResult
     recordProjectMartLargeRebuildCycleMetric({
       articleCount: 0,
+      committedRowCount: 0,
       durationMs: Date.now() - startedAtMs,
       duckdbQueues: getProjectMartLargeRebuildCycleQueueDelta({
         finished: getDuckdbQueueRuntimeMetricsSnapshot(),
@@ -720,10 +737,12 @@ export const runProjectMartLargeRebuildCycle = async (
       }),
       endedAt: new Date().toISOString(),
       error: null,
+      lastCommittedCursor: null,
       phase: null,
       projectId: null,
       startedAt,
       status: result.status,
+      tempSpill: getDuckdbTempSpillMetricsSnapshot(),
       workerId: options.workerId,
     })
     return result
@@ -754,6 +773,7 @@ export const runProjectMartLargeRebuildCycle = async (
 
     recordProjectMartLargeRebuildCycleMetric({
       articleCount: result.status === 'progressed' ? result.articleCount : 0,
+      committedRowCount: result.status === 'progressed' ? result.articleCount : 0,
       durationMs: Date.now() - startedAtMs,
       duckdbQueues: getProjectMartLargeRebuildCycleQueueDelta({
         finished: getDuckdbQueueRuntimeMetricsSnapshot(),
@@ -761,10 +781,12 @@ export const runProjectMartLargeRebuildCycle = async (
       }),
       endedAt: new Date().toISOString(),
       error: null,
+      lastCommittedCursor: getLastCommittedCursor(result),
       phase: claim.rebuildPhase,
       projectId: claim.projectId,
       startedAt,
       status: result.status,
+      tempSpill: getDuckdbTempSpillMetricsSnapshot(),
       workerId: options.workerId,
     })
 
@@ -779,6 +801,7 @@ export const runProjectMartLargeRebuildCycle = async (
     })
     recordProjectMartLargeRebuildCycleMetric({
       articleCount: 0,
+      committedRowCount: 0,
       durationMs: Date.now() - startedAtMs,
       duckdbQueues: getProjectMartLargeRebuildCycleQueueDelta({
         finished: getDuckdbQueueRuntimeMetricsSnapshot(),
@@ -786,10 +809,12 @@ export const runProjectMartLargeRebuildCycle = async (
       }),
       endedAt: new Date().toISOString(),
       error: errorText,
+      lastCommittedCursor: null,
       phase: claim.rebuildPhase,
       projectId: claim.projectId,
       startedAt,
       status: 'failed',
+      tempSpill: getDuckdbTempSpillMetricsSnapshot(),
       workerId: options.workerId,
     })
     return {error: errorText, projectId: claim.projectId, status: 'failed', workerId: options.workerId}

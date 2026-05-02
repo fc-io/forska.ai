@@ -933,7 +933,11 @@ const getProjectMartFreshnessState = async (
 const getProjectLargeRebuildRowsPerMs = (projectId: string) => {
   const cycles = getProjectMartLargeRebuildRuntimeMetrics()
     .recentCycles.filter((cycle) => {
-      return cycle.projectId === projectId && cycle.status === 'progressed' && cycle.articleCount > 0
+      return (
+        cycle.projectId === projectId
+        && cycle.status === 'progressed'
+        && (cycle.committedRowCount ?? cycle.articleCount) > 0
+      )
     })
     .slice(-12)
 
@@ -942,7 +946,7 @@ const getProjectLargeRebuildRowsPerMs = (projectId: string) => {
   }
 
   const totalRows = cycles.reduce((sum, cycle) => {
-    return sum + cycle.articleCount
+    return sum + (cycle.committedRowCount ?? cycle.articleCount)
   }, 0)
 
   if (totalRows <= 0) {

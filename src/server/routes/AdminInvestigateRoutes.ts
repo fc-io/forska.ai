@@ -1055,6 +1055,7 @@ export const adminInvestigateRoutes = new Elysia()
         batchSize: body.batchSize ?? 1,
         maxCycles: body.maxCycles,
         maxNoProgressBackoffs: body.maxNoProgressBackoffs,
+        maxWakeMs: body.maxWakeMs,
         projectId: body.projectId,
         until: body.until ?? 'max-cycles',
         workerId: body.workerId ?? `admin-project-mart-large-rebuild:${process.pid}`,
@@ -1065,6 +1066,7 @@ export const adminInvestigateRoutes = new Elysia()
         batchSize: t.Optional(t.Numeric()),
         maxCycles: t.Numeric(),
         maxNoProgressBackoffs: t.Optional(t.Numeric()),
+        maxWakeMs: t.Optional(t.Numeric()),
         projectId: t.String(),
         until: t.Optional(
           t.Union([

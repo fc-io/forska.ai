@@ -95,3 +95,48 @@ test('runProjectMartLargeRebuildCycles keeps an untargeted burst on the first pr
     }),
   ).toEqual(['project-first', 'project-first', 'project-first'])
 })
+
+test('runProjectMartLargeRebuildCycles stops successfully when the wake budget is exhausted after committed progress', async () => {
+  let nowMs = 0
+  const requestedProjectIds: Array<string | undefined> = []
+  const result = await runProjectMartLargeRebuildCycles(
+    {maxCycles: 5, maxWakeMs: 100, projectId: 'project-budget', workerId: 'worker-budget'},
+    {
+      getSnapshot: async () => {
+        return {rebuildPhase: 'prompt_answer_fact', refreshStatus: 'running'}
+      },
+      now: () => {
+        return nowMs
+      },
+      runCycle: async ({projectId, workerId}) => {
+        requestedProjectIds.push(projectId)
+        nowMs += 150
+
+        return {
+          articleCount: 2,
+          nextCursor: {articleCreatedAt: '2026-04-03T00:00:00.000Z', articleId: 'article-budget'},
+          projectId: 'project-budget',
+          status: 'progressed',
+          workerId,
+        }
+      },
+      wait: async () => {
+        return undefined
+      },
+    },
+  )
+
+  expect(result.status).toBe('completed')
+  expect(result.stopReason).toBe('budget-exhausted')
+  expect(result.completedCycles).toBe(1)
+  expect(result.elapsedMs).toBe(150)
+  expect(result.maxWakeMs).toBe(100)
+  expect(requestedProjectIds).toEqual(['project-budget'])
+  expect(result.cycleResults[0]).toEqual({
+    articleCount: 2,
+    nextCursor: {articleCreatedAt: '2026-04-03T00:00:00.000Z', articleId: 'article-budget'},
+    projectId: 'project-budget',
+    status: 'progressed',
+    workerId: 'worker-budget',
+  })
+})

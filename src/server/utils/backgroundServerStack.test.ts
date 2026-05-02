@@ -18,6 +18,7 @@ const defaultLocalAppSettings = {
   duckdbBin: null,
   projectMartLargeRebuildBatchSize: null,
   projectMartLargeRebuildMaxCyclesPerWake: null,
+  projectMartLargeRebuildMaxWakeMs: null,
   projectMartLargeRebuildPollIntervalMs: null,
   projectMartLargeRebuildTuningMode: 'automatic' as const,
 }
@@ -100,6 +101,7 @@ test('background server stack honors machine-local maintenance-worker DuckDB mem
         duckdbBin: null,
         projectMartLargeRebuildBatchSize: null,
         projectMartLargeRebuildMaxCyclesPerWake: null,
+        projectMartLargeRebuildMaxWakeMs: null,
         projectMartLargeRebuildPollIntervalMs: null,
         projectMartLargeRebuildTuningMode: 'automatic',
       },

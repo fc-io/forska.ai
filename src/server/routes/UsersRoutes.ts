@@ -44,6 +44,7 @@ export const usersRoutes = new Elysia()
         projectMartLargeRebuildMaxCyclesPerWake: getNullablePositiveInteger(
           body.projectMartLargeRebuildMaxCyclesPerWake,
         ),
+        projectMartLargeRebuildMaxWakeMs: getNullablePositiveInteger(body.projectMartLargeRebuildMaxWakeMs),
         projectMartLargeRebuildPollIntervalMs: getNullablePositiveInteger(body.projectMartLargeRebuildPollIntervalMs),
         projectMartLargeRebuildTuningMode: getProjectMartLargeRebuildTuningMode(body.projectMartLargeRebuildTuningMode),
       })
@@ -56,6 +57,7 @@ export const usersRoutes = new Elysia()
         projectMartLargeRebuildMaxCyclesPerWake: getNullablePositiveInteger(
           body.projectMartLargeRebuildMaxCyclesPerWake,
         ),
+        projectMartLargeRebuildMaxWakeMs: getNullablePositiveInteger(body.projectMartLargeRebuildMaxWakeMs),
         projectMartLargeRebuildPollIntervalMs: getNullablePositiveInteger(body.projectMartLargeRebuildPollIntervalMs),
         projectMartLargeRebuildTuningMode: getProjectMartLargeRebuildTuningMode(body.projectMartLargeRebuildTuningMode),
         unpaywallEmail: getNullableString(body.unpaywallEmail),
@@ -73,6 +75,7 @@ export const usersRoutes = new Elysia()
         name: t.String(),
         projectMartLargeRebuildBatchSize: t.Union([t.Numeric(), t.Null()]),
         projectMartLargeRebuildMaxCyclesPerWake: t.Union([t.Numeric(), t.Null()]),
+        projectMartLargeRebuildMaxWakeMs: t.Union([t.Numeric(), t.Null()]),
         projectMartLargeRebuildPollIntervalMs: t.Union([t.Numeric(), t.Null()]),
         projectMartLargeRebuildTuningMode: t.Union([t.Literal('automatic'), t.Literal('manual'), t.Null()]),
         unpaywallEmail: t.Union([t.String(), t.Null()]),

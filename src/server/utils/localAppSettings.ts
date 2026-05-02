@@ -11,6 +11,7 @@ export type LocalAppSettings = {
   duckdbBin: string | null
   projectMartLargeRebuildBatchSize: number | null
   projectMartLargeRebuildMaxCyclesPerWake: number | null
+  projectMartLargeRebuildMaxWakeMs: number | null
   projectMartLargeRebuildPollIntervalMs: number | null
   projectMartLargeRebuildTuningMode: ProjectMartLargeRebuildTuningMode
 }
@@ -21,6 +22,7 @@ const defaultLocalAppSettings: LocalAppSettings = {
   duckdbBin: null,
   projectMartLargeRebuildBatchSize: null,
   projectMartLargeRebuildMaxCyclesPerWake: null,
+  projectMartLargeRebuildMaxWakeMs: null,
   projectMartLargeRebuildPollIntervalMs: null,
   projectMartLargeRebuildTuningMode: 'automatic',
 }
@@ -96,6 +98,7 @@ const parseLocalAppSettings = (raw: string): ParsedLocalAppSettings => {
         projectMartLargeRebuildMaxCyclesPerWake: getNullablePositiveInteger(
           record?.projectMartLargeRebuildMaxCyclesPerWake,
         ),
+        projectMartLargeRebuildMaxWakeMs: getNullablePositiveInteger(record?.projectMartLargeRebuildMaxWakeMs),
         projectMartLargeRebuildPollIntervalMs: getNullablePositiveInteger(
           record?.projectMartLargeRebuildPollIntervalMs,
         ),
@@ -132,6 +135,7 @@ export const updateLocalAppSettings = ({
   duckdbBin,
   projectMartLargeRebuildBatchSize,
   projectMartLargeRebuildMaxCyclesPerWake,
+  projectMartLargeRebuildMaxWakeMs,
   projectMartLargeRebuildPollIntervalMs,
   projectMartLargeRebuildTuningMode,
 }: {
@@ -140,6 +144,7 @@ export const updateLocalAppSettings = ({
   duckdbBin: string | null
   projectMartLargeRebuildBatchSize: number | null
   projectMartLargeRebuildMaxCyclesPerWake: number | null
+  projectMartLargeRebuildMaxWakeMs: number | null
   projectMartLargeRebuildPollIntervalMs: number | null
   projectMartLargeRebuildTuningMode: ProjectMartLargeRebuildTuningMode
 }): LocalAppSettings => {
@@ -150,6 +155,7 @@ export const updateLocalAppSettings = ({
     duckdbBin: getNullableTrimmedValue(duckdbBin),
     projectMartLargeRebuildBatchSize: getNullablePositiveInteger(projectMartLargeRebuildBatchSize),
     projectMartLargeRebuildMaxCyclesPerWake: getNullablePositiveInteger(projectMartLargeRebuildMaxCyclesPerWake),
+    projectMartLargeRebuildMaxWakeMs: getNullablePositiveInteger(projectMartLargeRebuildMaxWakeMs),
     projectMartLargeRebuildPollIntervalMs: getNullablePositiveInteger(projectMartLargeRebuildPollIntervalMs),
     projectMartLargeRebuildTuningMode: getProjectMartLargeRebuildTuningMode(projectMartLargeRebuildTuningMode),
   } satisfies LocalAppSettings

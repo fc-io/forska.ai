@@ -6,7 +6,12 @@ import {
 import {createRateLimitedLogger} from './rateLimitedLogger.ts'
 import {registerDuckdbOwnerDemotionHandler, shouldCurrentServerRunMaintenanceLoops} from './serverRuntimeRole.ts'
 
-type ProjectMartLargeRebuildHeartbeatOptions = {batchSize?: number; maxCyclesPerWake?: number; pollIntervalMs?: number}
+type ProjectMartLargeRebuildHeartbeatOptions = {
+  batchSize?: number
+  maxCyclesPerWake?: number
+  maxWakeMs?: number
+  pollIntervalMs?: number
+}
 
 const largeRebuildLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 const largeRebuildWarningLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
@@ -43,6 +48,7 @@ export const startProjectMartLargeRebuildHeartbeat = (options: ProjectMartLargeR
       ...resolvedConfig,
       batchSize: options.batchSize ?? resolvedConfig.batchSize,
       maxCyclesPerWake: options.maxCyclesPerWake ?? resolvedConfig.maxCyclesPerWake,
+      maxWakeMs: options.maxWakeMs ?? resolvedConfig.maxWakeMs,
       pollIntervalMs: options.pollIntervalMs ?? resolvedConfig.pollIntervalMs,
     }
   }
@@ -51,6 +57,7 @@ export const startProjectMartLargeRebuildHeartbeat = (options: ProjectMartLargeR
     const nextConfigKey = JSON.stringify({
       batchSize: resolvedConfig.batchSize,
       maxCyclesPerWake: resolvedConfig.maxCyclesPerWake,
+      maxWakeMs: resolvedConfig.maxWakeMs,
       pollIntervalMs: resolvedConfig.pollIntervalMs,
       sources: resolvedConfig.sources,
     })
@@ -70,6 +77,7 @@ export const startProjectMartLargeRebuildHeartbeat = (options: ProjectMartLargeR
         configLogCount,
         event: 'loopConfig',
         maxCyclesPerWake: resolvedConfig.maxCyclesPerWake,
+        maxWakeMs: resolvedConfig.maxWakeMs,
         pollIntervalMs: resolvedConfig.pollIntervalMs,
         runCount,
         sources: resolvedConfig.sources,
@@ -106,6 +114,7 @@ export const startProjectMartLargeRebuildHeartbeat = (options: ProjectMartLargeR
       await runProjectMartLargeRebuildCycles({
         batchSize: resolvedConfig.batchSize,
         maxCycles: resolvedConfig.maxCyclesPerWake,
+        maxWakeMs: resolvedConfig.maxWakeMs,
         workerId: `project-mart-large-rebuild-heartbeat:${process.pid}`,
       })
     } catch (error) {

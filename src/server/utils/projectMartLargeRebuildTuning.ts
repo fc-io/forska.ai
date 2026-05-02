@@ -9,6 +9,7 @@ type ProjectMartLargeRebuildConfigSource = 'automatic' | 'env' | 'manual'
 type ProjectMartLargeRebuildHeartbeatFieldSources = {
   batchSize: ProjectMartLargeRebuildConfigSource
   maxCyclesPerWake: ProjectMartLargeRebuildConfigSource
+  maxWakeMs: ProjectMartLargeRebuildConfigSource
   pollIntervalMs: ProjectMartLargeRebuildConfigSource
 }
 type ProjectMartLargeRebuildAutomaticProfile = 'large' | 'medium' | 'small'
@@ -16,6 +17,7 @@ type StoredProjectMartLargeRebuildSettings = {
   maintenanceWorkerDuckdbMemoryLimit: string | null
   batchSize: number | null
   maxCyclesPerWake: number | null
+  maxWakeMs: number | null
   pollIntervalMs: number | null
   tuningMode: LocalAppSettings['projectMartLargeRebuildTuningMode']
 }
@@ -24,6 +26,7 @@ export type ProjectMartLargeRebuildAutomaticHeartbeatConfig = {
   activeLargeRebuildProjectCount: number
   batchSize: number
   maxCyclesPerWake: number
+  maxWakeMs: number
   pollIntervalMs: number
   profile: ProjectMartLargeRebuildAutomaticProfile
   totalMemoryGb: number
@@ -33,12 +36,14 @@ export type ProjectMartLargeRebuildHeartbeatConfig = {
   automatic: ProjectMartLargeRebuildAutomaticHeartbeatConfig
   batchSize: number
   maxCyclesPerWake: number
+  maxWakeMs: number
   pollIntervalMs: number
   sources: ProjectMartLargeRebuildHeartbeatFieldSources
   stored: {
     maintenanceWorkerDuckdbMemoryLimit: string | null
     batchSize: number | null
     maxCyclesPerWake: number | null
+    maxWakeMs: number | null
     pollIntervalMs: number | null
     tuningMode: StoredProjectMartLargeRebuildSettings['tuningMode']
   }
@@ -98,6 +103,7 @@ const getStoredProjectMartLargeRebuildSettings = async (): Promise<StoredProject
       maintenanceWorkerDuckdbMemoryLimit: userConfig.maintenanceWorkerDuckdbMemoryLimit,
       batchSize: userConfig.projectMartLargeRebuildBatchSize,
       maxCyclesPerWake: userConfig.projectMartLargeRebuildMaxCyclesPerWake,
+      maxWakeMs: userConfig.projectMartLargeRebuildMaxWakeMs,
       pollIntervalMs: userConfig.projectMartLargeRebuildPollIntervalMs,
       tuningMode: userConfig.projectMartLargeRebuildTuningMode,
     }
@@ -108,6 +114,7 @@ const getStoredProjectMartLargeRebuildSettings = async (): Promise<StoredProject
       maintenanceWorkerDuckdbMemoryLimit: localAppSettings.maintenanceWorkerDuckdbMemoryLimit,
       batchSize: localAppSettings.projectMartLargeRebuildBatchSize,
       maxCyclesPerWake: localAppSettings.projectMartLargeRebuildMaxCyclesPerWake,
+      maxWakeMs: localAppSettings.projectMartLargeRebuildMaxWakeMs,
       pollIntervalMs: localAppSettings.projectMartLargeRebuildPollIntervalMs,
       tuningMode: localAppSettings.projectMartLargeRebuildTuningMode,
     }
@@ -150,6 +157,7 @@ export const getAutomaticProjectMartLargeRebuildHeartbeatConfig = ({
       activeLargeRebuildProjectCount: activeRebuildCount,
       batchSize: activeRebuildCount <= 1 ? 512 : activeRebuildCount === 2 ? 256 : 128,
       maxCyclesPerWake: 4,
+      maxWakeMs: 2_000,
       pollIntervalMs: 1000,
       profile: 'small',
       totalMemoryGb,
@@ -161,6 +169,7 @@ export const getAutomaticProjectMartLargeRebuildHeartbeatConfig = ({
       activeLargeRebuildProjectCount: activeRebuildCount,
       batchSize: activeRebuildCount <= 1 ? 2048 : activeRebuildCount === 2 ? 1024 : 512,
       maxCyclesPerWake: 8,
+      maxWakeMs: 3_000,
       pollIntervalMs: 500,
       profile: 'medium',
       totalMemoryGb,
@@ -171,6 +180,7 @@ export const getAutomaticProjectMartLargeRebuildHeartbeatConfig = ({
     activeLargeRebuildProjectCount: activeRebuildCount,
     batchSize: activeRebuildCount <= 1 ? 4096 : activeRebuildCount === 2 ? 2048 : 1024,
     maxCyclesPerWake: 16,
+    maxWakeMs: 5_000,
     pollIntervalMs: 250,
     profile: 'large',
     totalMemoryGb,
@@ -207,6 +217,12 @@ export const resolveProjectMartLargeRebuildHeartbeatConfig = ({
     manualValue: storedSettings.maxCyclesPerWake,
     useManualValue,
   })
+  const maxWakeMs = getFieldValue({
+    automaticValue: automatic.maxWakeMs,
+    envValue: getPositiveInteger(envValues.PROJECT_MART_LARGE_REBUILD_MAX_WAKE_MS),
+    manualValue: storedSettings.maxWakeMs,
+    useManualValue,
+  })
   const pollIntervalMs = getFieldValue({
     automaticValue: automatic.pollIntervalMs,
     envValue: getPositiveInteger(envValues.PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS),
@@ -218,16 +234,19 @@ export const resolveProjectMartLargeRebuildHeartbeatConfig = ({
     automatic,
     batchSize: batchSize.value,
     maxCyclesPerWake: maxCyclesPerWake.value,
+    maxWakeMs: maxWakeMs.value,
     pollIntervalMs: pollIntervalMs.value,
     sources: {
       batchSize: batchSize.source,
       maxCyclesPerWake: maxCyclesPerWake.source,
+      maxWakeMs: maxWakeMs.source,
       pollIntervalMs: pollIntervalMs.source,
     },
     stored: {
       maintenanceWorkerDuckdbMemoryLimit: storedSettings.maintenanceWorkerDuckdbMemoryLimit,
       batchSize: storedSettings.batchSize,
       maxCyclesPerWake: storedSettings.maxCyclesPerWake,
+      maxWakeMs: storedSettings.maxWakeMs,
       pollIntervalMs: storedSettings.pollIntervalMs,
       tuningMode: storedSettings.tuningMode,
     },

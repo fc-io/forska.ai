@@ -307,6 +307,35 @@ test('admin maintenance runtime diagnostics route reports effective duckdb setti
         const {Elysia} = await import('elysia')
         const {adminInvestigateRoutes} = await import('./src/server/routes/AdminInvestigateRoutes.ts')
         const {closeDuckdbService} = await import('./src/server/utils/duckdbService.ts')
+        const {
+          recordProjectMartLargeRebuildCycleMetric,
+          resetProjectMartLargeRebuildRuntimeMetricsForTests,
+        } = await import('./src/server/utils/projectMartLargeRebuildRuntimeMetrics.ts')
+
+        resetProjectMartLargeRebuildRuntimeMetricsForTests()
+        recordProjectMartLargeRebuildCycleMetric({
+          articleCount: 99,
+          committedRowCount: 37,
+          durationMs: 2000,
+          duckdbQueues: null,
+          endedAt: '2026-05-02T10:00:02.000Z',
+          error: null,
+          lastCommittedCursor: {articleCreatedAt: '2026-04-02T00:00:00.000Z', articleId: 'article-runtime-metric'},
+          phase: 'prompt_answer_fact',
+          processMemory: {rssBytes: 123456},
+          projectId: 'project-runtime-metric',
+          queueWaitMs: 12,
+          startedAt: '2026-05-02T10:00:00.000Z',
+          status: 'progressed',
+          tempSpill: {
+            available: true,
+            error: null,
+            fileCount: 2,
+            tempDirectory: '${tempDirectory}',
+            totalBytes: 4096,
+          },
+          workerId: 'metric-worker',
+        })
 
         const app = new Elysia().use(adminInvestigateRoutes)
         const response = await app.handle(new Request('http://localhost/api/admin/maintenance-runtime-diagnostics'))
@@ -324,6 +353,7 @@ test('admin maintenance runtime diagnostics route reports effective duckdb setti
         DUCKDB_TEMP_DIRECTORY: tempDirectory,
         PROJECT_MART_LARGE_REBUILD_BATCH_SIZE: '8',
         PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE: '4',
+        PROJECT_MART_LARGE_REBUILD_MAX_WAKE_MS: '1250',
         PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS: '1500',
         SERVER_ROLE: 'maintenance-worker',
         VITE_PORT: '3000',
@@ -366,19 +396,43 @@ test('admin maintenance runtime diagnostics route reports effective duckdb setti
           background: {maxQueueDepth: number; queueDepth: number; tasksCompleted: number; tasksStarted: number}
           main: {maxQueueDepth: number; queueDepth: number; tasksCompleted: number; tasksStarted: number}
         }
+        tempSpill: {
+          available: boolean
+          error: string | null
+          fileCount: number | null
+          tempDirectory: string | null
+          totalBytes: number | null
+        }
       }
       pid: number
       processMemory: {heapUsedBytes: number; rssBytes: number}
       projectMartLargeRebuildHeartbeat: {
-        automatic: {batchSize: number; maxCyclesPerWake: number; pollIntervalMs: number}
+        automatic: {batchSize: number; maxCyclesPerWake: number; maxWakeMs: number; pollIntervalMs: number}
         batchSize: number
         maxCyclesPerWake: number
+        maxWakeMs: number
         pollIntervalMs: number
-        sources: {batchSize: string; maxCyclesPerWake: string; pollIntervalMs: string}
+        sources: {batchSize: string; maxCyclesPerWake: string; maxWakeMs: string; pollIntervalMs: string}
         stored: {tuningMode: string}
       }
       projectMartLargeRebuildRuntimeMetrics: {
-        recentCycles: unknown[]
+        perPhase: Array<{
+          committedRowCount: number
+          durationMs: number
+          lastCommittedCursor: {articleCreatedAt: string | null; articleId: string} | null
+          lastRssBytes: number | null
+          lastTempSpill: {available: boolean; tempDirectory: string | null; totalBytes: number | null} | null
+          phase: string | null
+          queueWaitMs: number | null
+          rowsPerSecond: number | null
+        }>
+        recentCycles: Array<{
+          committedRowCount: number
+          lastCommittedCursor: {articleCreatedAt: string | null; articleId: string} | null
+          queueWaitMs: number | null
+          rowsPerSecond: number | null
+          tempSpill: {available: boolean; tempDirectory: string | null; totalBytes: number | null} | null
+        }>
         totals: {
           cyclesCompleted: number
           cyclesFailed: number
@@ -410,6 +464,9 @@ test('admin maintenance runtime diagnostics route reports effective duckdb setti
     expect(responseBody.duckdb.effective.preserveInsertionOrder).toBe(false)
     expect(responseBody.duckdb.effective.tempDirectory).toBe(tempDirectory)
     expect(responseBody.duckdb.effective.threads).toBe('1')
+    expect(responseBody.duckdb.tempSpill.available).toBe(true)
+    expect(responseBody.duckdb.tempSpill.tempDirectory).toBe(tempDirectory)
+    expect(responseBody.duckdb.tempSpill.totalBytes).toBeGreaterThanOrEqual(0)
     expect(responseBody.duckdb.queues.main.tasksStarted).toBeGreaterThan(0)
     expect(responseBody.duckdb.queues.main.tasksCompleted).toBeGreaterThan(0)
     expect(responseBody.duckdb.queues.main.queueDepth).toBe(0)
@@ -420,26 +477,46 @@ test('admin maintenance runtime diagnostics route reports effective duckdb setti
     expect(responseBody.processMemory.heapUsedBytes).toBeGreaterThan(0)
     expect(responseBody.projectMartLargeRebuildHeartbeat.batchSize).toBe(8)
     expect(responseBody.projectMartLargeRebuildHeartbeat.maxCyclesPerWake).toBe(4)
+    expect(responseBody.projectMartLargeRebuildHeartbeat.maxWakeMs).toBe(1250)
     expect(responseBody.projectMartLargeRebuildHeartbeat.pollIntervalMs).toBe(1500)
     expect(responseBody.projectMartLargeRebuildHeartbeat.sources).toEqual({
       batchSize: 'env',
       maxCyclesPerWake: 'env',
+      maxWakeMs: 'env',
       pollIntervalMs: 'env',
     })
     expect(responseBody.projectMartLargeRebuildHeartbeat.stored.tuningMode).toBe('automatic')
     expect(responseBody.projectMartLargeRebuildHeartbeat.automatic.batchSize).toBeGreaterThan(0)
     expect(responseBody.projectMartLargeRebuildHeartbeat.automatic.maxCyclesPerWake).toBeGreaterThan(0)
+    expect(responseBody.projectMartLargeRebuildHeartbeat.automatic.maxWakeMs).toBeGreaterThan(0)
     expect(responseBody.projectMartLargeRebuildHeartbeat.automatic.pollIntervalMs).toBeGreaterThan(0)
-    expect(responseBody.projectMartLargeRebuildRuntimeMetrics.recentCycles).toEqual([])
+    expect(responseBody.projectMartLargeRebuildRuntimeMetrics.recentCycles[0]).toMatchObject({
+      committedRowCount: 37,
+      lastCommittedCursor: {articleCreatedAt: '2026-04-02T00:00:00.000Z', articleId: 'article-runtime-metric'},
+      queueWaitMs: 12,
+      rowsPerSecond: 18.5,
+      tempSpill: {available: true, tempDirectory, totalBytes: 4096},
+    })
+    expect(responseBody.projectMartLargeRebuildRuntimeMetrics.perPhase[0]).toMatchObject({
+      committedRowCount: 37,
+      durationMs: 2000,
+      lastCommittedCursor: {articleCreatedAt: '2026-04-02T00:00:00.000Z', articleId: 'article-runtime-metric'},
+      lastRssBytes: 123456,
+      lastTempSpill: {available: true, tempDirectory, totalBytes: 4096},
+      phase: 'prompt_answer_fact',
+      queueWaitMs: 12,
+      rowsPerSecond: 18.5,
+    })
     expect(responseBody.projectMartLargeRebuildRuntimeMetrics.totals).toEqual({
       cyclesCompleted: 0,
       cyclesFailed: 0,
       cyclesIdle: 0,
-      cyclesProgressed: 0,
-      rowsProcessed: 0,
+      cyclesProgressed: 1,
+      rowsProcessed: 37,
     })
   } finally {
     removeFileIfExists(duckdbPath)
+    removeFileIfExists(tempDirectory)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
   }
@@ -796,7 +873,7 @@ test('admin project mart large rebuild run route triggers bounded rebuild cycles
           new Request('http://localhost/api/admin/project-mart-large-rebuild-run', {
             method: 'POST',
             headers: {'content-type': 'application/json'},
-            body: JSON.stringify({projectId: 'project-admin-large-rebuild-run', maxCycles: 1, until: 'max-cycles', batchSize: 1, workerId: 'admin-runner'}),
+            body: JSON.stringify({projectId: 'project-admin-large-rebuild-run', maxCycles: 1, maxWakeMs: 10_000, until: 'max-cycles', batchSize: 1, workerId: 'admin-runner'}),
           }),
         )
         console.log(await response.text())
@@ -825,6 +902,7 @@ test('admin project mart large rebuild run route triggers bounded rebuild cycles
     const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
       completedCycles: number
       cycleResults: Array<{projectId: string | null; status: string}>
+      maxWakeMs: number | null
       status: string
       stopReason: string
       workerId: string
@@ -833,6 +911,7 @@ test('admin project mart large rebuild run route triggers bounded rebuild cycles
     expect(responseBody.status).toBe('completed')
     expect(responseBody.stopReason).toBe('max-cycles')
     expect(responseBody.completedCycles).toBe(1)
+    expect(responseBody.maxWakeMs).toBe(10_000)
     expect(responseBody.workerId).toBe('admin-runner')
     expect(responseBody.cycleResults[0]?.projectId).toBe('project-admin-large-rebuild-run')
     expect(responseBody.cycleResults[0]?.status).toBe('progressed')

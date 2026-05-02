@@ -46,6 +46,7 @@ const runProjectMartLargeRebuildCyclesCli = async () => {
       leaseMs: getNumberArgValue(['--leaseMs', '--lease-ms']) ?? defaultLeaseMs,
       maxCycles: Math.max(1, Math.trunc(getNumberArgValue(['--maxCycles', '--max-cycles']) ?? defaultMaxCycles)),
       maxNoProgressBackoffs: getNumberArgValue(['--maxNoProgressBackoffs', '--max-no-progress-backoffs']),
+      maxWakeMs: getNumberArgValue(['--maxWakeMs', '--max-wake-ms']),
       projectId: getArgValue(['--projectId', '--project-id']),
       until: getUntil(),
       workerId,

@@ -2,6 +2,7 @@ import {getAppDatabaseService} from './appDatabaseService.ts'
 import {runProjectMartLargeRebuildCycle} from './projectMartLargeRebuildRunner.ts'
 
 export type ProjectMartLargeRebuildStopReason =
+  | 'budget-exhausted'
   | 'completed'
   | 'failed'
   | 'idle'
@@ -18,6 +19,7 @@ export type ProjectMartLargeRebuildCyclesOptions = {
   leaseMs?: number
   maxCycles: number
   maxNoProgressBackoffs?: number
+  maxWakeMs?: number
   projectId?: string
   until?: ProjectMartLargeRebuildUntil
   workerId: string
@@ -41,7 +43,9 @@ export type ProjectMartLargeRebuildCyclesResult = {
   batchSize: number
   completedCycles: number
   cycleResults: ProjectMartLargeRebuildCycleSummary[]
+  elapsedMs: number
   maxCycles: number
+  maxWakeMs: number | null
   status: 'completed' | 'failed'
   stopReason: ProjectMartLargeRebuildStopReason
   totalBackoffMs: number
@@ -60,6 +64,7 @@ type ProjectMartLargeRebuildCyclesDependencies = {
     projectId?: string
     workerId: string
   }) => Promise<Awaited<ReturnType<typeof runProjectMartLargeRebuildCycle>>>
+  now?: () => number
   wait: (ms: number) => Promise<void>
 }
 
@@ -84,6 +89,7 @@ const getSnapshot = async (projectId: string | null): Promise<ProjectMartLargeRe
 
 const defaultDependencies: ProjectMartLargeRebuildCyclesDependencies = {
   getSnapshot,
+  now: Date.now,
   runCycle: runProjectMartLargeRebuildCycle,
   wait: (ms: number) => {
     return new Promise((resolve) => {
@@ -165,12 +171,34 @@ const getBackoffMs = (noProgressStreak: number) => {
   return Math.min(2_000, 250 * 2 ** Math.max(0, noProgressStreak - 1))
 }
 
+const getPositiveInteger = (value: number | null | undefined) => {
+  return Number.isInteger(value) && value > 0 ? Math.trunc(value) : null
+}
+
+const getNowMs = (dependencies: ProjectMartLargeRebuildCyclesDependencies) => {
+  return dependencies.now?.() ?? Date.now()
+}
+
+const hasWakeBudgetExpired = ({
+  dependencies,
+  maxWakeMs,
+  startedAtMs,
+}: {
+  dependencies: ProjectMartLargeRebuildCyclesDependencies
+  maxWakeMs: number | null
+  startedAtMs: number
+}) => {
+  return maxWakeMs !== null && getNowMs(dependencies) - startedAtMs >= maxWakeMs
+}
+
 const getResult = ({
   backoffCount,
   batchSize,
   completedCycles,
   cycleResults,
+  elapsedMs,
   maxCycles,
+  maxWakeMs,
   status,
   stopReason,
   totalBackoffMs,
@@ -182,7 +210,9 @@ const getResult = ({
     batchSize,
     completedCycles,
     cycleResults,
+    elapsedMs,
     maxCycles,
+    maxWakeMs,
     status,
     stopReason,
     totalBackoffMs,
@@ -198,6 +228,7 @@ export const runProjectMartLargeRebuildCycles = async (
     leaseMs,
     maxCycles,
     maxNoProgressBackoffs,
+    maxWakeMs,
     projectId,
     until,
     workerId,
@@ -207,8 +238,10 @@ export const runProjectMartLargeRebuildCycles = async (
   const cycleResults: ProjectMartLargeRebuildCycleSummary[] = []
   const normalizedUntil = getNormalizedUntil(until)
   const effectiveBatchSize = batchSize ?? 1
+  const effectiveMaxWakeMs = getPositiveInteger(maxWakeMs)
   const allowedNoProgressBackoffs = maxNoProgressBackoffs ?? defaultMaxNoProgressBackoffs
   const hasPinnedProjectId = projectId != null
+  const startedAtMs = getNowMs(dependencies)
   let stopReason: ProjectMartLargeRebuildStopReason = 'max-cycles'
   let lastCursorKey: string | null = null
   let noProgressStreak = 0
@@ -225,7 +258,9 @@ export const runProjectMartLargeRebuildCycles = async (
       batchSize: effectiveBatchSize,
       completedCycles: 0,
       cycleResults,
+      elapsedMs: getNowMs(dependencies) - startedAtMs,
       maxCycles,
+      maxWakeMs: effectiveMaxWakeMs,
       status: 'completed',
       stopReason: 'paused',
       totalBackoffMs,
@@ -255,7 +290,9 @@ export const runProjectMartLargeRebuildCycles = async (
         batchSize: effectiveBatchSize,
         completedCycles: cycleResults.length,
         cycleResults,
+        elapsedMs: getNowMs(dependencies) - startedAtMs,
         maxCycles,
+        maxWakeMs: effectiveMaxWakeMs,
         status: 'failed',
         stopReason,
         totalBackoffMs,
@@ -271,7 +308,9 @@ export const runProjectMartLargeRebuildCycles = async (
         batchSize: effectiveBatchSize,
         completedCycles: cycleResults.length,
         cycleResults,
+        elapsedMs: getNowMs(dependencies) - startedAtMs,
         maxCycles,
+        maxWakeMs: effectiveMaxWakeMs,
         status: 'completed',
         stopReason,
         totalBackoffMs,
@@ -281,6 +320,24 @@ export const runProjectMartLargeRebuildCycles = async (
     }
 
     if (summary.status === 'maintenance') {
+      if (hasWakeBudgetExpired({dependencies, maxWakeMs: effectiveMaxWakeMs, startedAtMs})) {
+        stopReason = 'budget-exhausted'
+        return getResult({
+          backoffCount,
+          batchSize: effectiveBatchSize,
+          completedCycles: cycleResults.length,
+          cycleResults,
+          elapsedMs: getNowMs(dependencies) - startedAtMs,
+          maxCycles,
+          maxWakeMs: effectiveMaxWakeMs,
+          status: 'completed',
+          stopReason,
+          totalBackoffMs,
+          until: normalizedUntil,
+          workerId,
+        })
+      }
+
       continue
     }
 
@@ -303,7 +360,9 @@ export const runProjectMartLargeRebuildCycles = async (
         batchSize: effectiveBatchSize,
         completedCycles: cycleResults.length,
         cycleResults,
+        elapsedMs: getNowMs(dependencies) - startedAtMs,
         maxCycles,
+        maxWakeMs: effectiveMaxWakeMs,
         status: 'completed',
         stopReason,
         totalBackoffMs,
@@ -324,7 +383,9 @@ export const runProjectMartLargeRebuildCycles = async (
           batchSize: effectiveBatchSize,
           completedCycles: cycleResults.length,
           cycleResults,
+          elapsedMs: getNowMs(dependencies) - startedAtMs,
           maxCycles,
+          maxWakeMs: effectiveMaxWakeMs,
           status: 'failed',
           stopReason,
           totalBackoffMs,
@@ -350,7 +411,27 @@ export const runProjectMartLargeRebuildCycles = async (
         batchSize: effectiveBatchSize,
         completedCycles: cycleResults.length,
         cycleResults,
+        elapsedMs: getNowMs(dependencies) - startedAtMs,
         maxCycles,
+        maxWakeMs: effectiveMaxWakeMs,
+        status: 'completed',
+        stopReason,
+        totalBackoffMs,
+        until: normalizedUntil,
+        workerId,
+      })
+    }
+
+    if (hasWakeBudgetExpired({dependencies, maxWakeMs: effectiveMaxWakeMs, startedAtMs})) {
+      stopReason = 'budget-exhausted'
+      return getResult({
+        backoffCount,
+        batchSize: effectiveBatchSize,
+        completedCycles: cycleResults.length,
+        cycleResults,
+        elapsedMs: getNowMs(dependencies) - startedAtMs,
+        maxCycles,
+        maxWakeMs: effectiveMaxWakeMs,
         status: 'completed',
         stopReason,
         totalBackoffMs,
@@ -365,7 +446,9 @@ export const runProjectMartLargeRebuildCycles = async (
     batchSize: effectiveBatchSize,
     completedCycles: cycleResults.length,
     cycleResults,
+    elapsedMs: getNowMs(dependencies) - startedAtMs,
     maxCycles,
+    maxWakeMs: effectiveMaxWakeMs,
     status: 'completed',
     stopReason,
     totalBackoffMs,

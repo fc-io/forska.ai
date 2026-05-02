@@ -23,33 +23,37 @@ const getLastJsonLine = (value: string) => {
 const parseCallsResult = (
   value: string,
 ): {
-  calls: Array<{batchSize: number; maxCycles: number; workerId: string}>
+  calls: Array<{batchSize: number; maxCycles: number; maxWakeMs: number; workerId: string}>
   config?: {
     automatic: {
       activeLargeRebuildProjectCount: number
       batchSize: number
       maxCyclesPerWake: number
+      maxWakeMs: number
       pollIntervalMs: number
     }
     batchSize: number
     maxCyclesPerWake: number
+    maxWakeMs: number
     pollIntervalMs: number
-    sources: {batchSize: string; maxCyclesPerWake: string; pollIntervalMs: string}
+    sources: {batchSize: string; maxCyclesPerWake: string; maxWakeMs: string; pollIntervalMs: string}
   }
 } => {
   return JSON.parse(value) as {
-    calls: Array<{batchSize: number; maxCycles: number; workerId: string}>
+    calls: Array<{batchSize: number; maxCycles: number; maxWakeMs: number; workerId: string}>
     config?: {
       automatic: {
         activeLargeRebuildProjectCount: number
         batchSize: number
         maxCyclesPerWake: number
+        maxWakeMs: number
         pollIntervalMs: number
       }
       batchSize: number
       maxCyclesPerWake: number
+      maxWakeMs: number
       pollIntervalMs: number
-      sources: {batchSize: string; maxCyclesPerWake: string; pollIntervalMs: string}
+      sources: {batchSize: string; maxCyclesPerWake: string; maxWakeMs: string; pollIntervalMs: string}
     }
   }
 }
@@ -95,18 +99,21 @@ test('projectMartLargeRebuildHeartbeat runs one bounded burst with resolved tuni
                   activeLargeRebuildProjectCount: 2,
                   batchSize: 128,
                   maxCyclesPerWake: 4,
+                  maxWakeMs: 2000,
                   pollIntervalMs: 1000,
                   profile: 'medium',
                   totalMemoryGb: 32,
                 },
                 batchSize: 128,
                 maxCyclesPerWake: 4,
+                maxWakeMs: 2000,
                 pollIntervalMs: 1000,
-                sources: {batchSize: 'automatic', maxCyclesPerWake: 'automatic', pollIntervalMs: 'automatic'},
+                sources: {batchSize: 'automatic', maxCyclesPerWake: 'automatic', maxWakeMs: 'automatic', pollIntervalMs: 'automatic'},
                 stored: {
                   maintenanceWorkerDuckdbMemoryLimit: null,
                   batchSize: null,
                   maxCyclesPerWake: null,
+                  maxWakeMs: null,
                   pollIntervalMs: null,
                   tuningMode: 'automatic',
                 },
@@ -136,6 +143,7 @@ test('projectMartLargeRebuildHeartbeat runs one bounded burst with resolved tuni
   expect(result.calls).toHaveLength(1)
   expect(result.calls[0]?.batchSize).toBe(128)
   expect(result.calls[0]?.maxCycles).toBe(4)
+  expect(result.calls[0]?.maxWakeMs).toBe(2000)
   expect(result.calls[0]?.workerId).toContain('project-mart-large-rebuild-heartbeat:')
 })
 
@@ -151,6 +159,7 @@ test('projectMartLargeRebuildHeartbeat resolves env overrides ahead of manual se
 
         process.env.PROJECT_MART_LARGE_REBUILD_BATCH_SIZE = '32'
         process.env.PROJECT_MART_LARGE_REBUILD_MAX_CYCLES_PER_WAKE = '7'
+        process.env.PROJECT_MART_LARGE_REBUILD_MAX_WAKE_MS = '1750'
         process.env.PROJECT_MART_LARGE_REBUILD_POLL_INTERVAL_MS = '2500'
 
         const tuningModulePath = getModulePath('./src/server/utils/projectMartLargeRebuildTuning.ts')
@@ -162,6 +171,7 @@ test('projectMartLargeRebuildHeartbeat resolves env overrides ahead of manual se
             maintenanceWorkerDuckdbMemoryLimit: '12GB',
             batchSize: 512,
             maxCyclesPerWake: 9,
+            maxWakeMs: 999,
             pollIntervalMs: 500,
             tuningMode: 'manual',
           },
@@ -183,11 +193,12 @@ test('projectMartLargeRebuildHeartbeat resolves env overrides ahead of manual se
   const result = parseCallsResult(getLastJsonLine(runScript.stdout.toString()))
 
   expect(result.config).toMatchObject({
-    automatic: {batchSize: 512, maxCyclesPerWake: 4, pollIntervalMs: 1000},
+    automatic: {batchSize: 512, maxCyclesPerWake: 4, maxWakeMs: 2000, pollIntervalMs: 1000},
     batchSize: 32,
     maxCyclesPerWake: 7,
+    maxWakeMs: 1750,
     pollIntervalMs: 2500,
-    sources: {batchSize: 'env', maxCyclesPerWake: 'env', pollIntervalMs: 'env'},
+    sources: {batchSize: 'env', maxCyclesPerWake: 'env', maxWakeMs: 'env', pollIntervalMs: 'env'},
   })
 })
 
@@ -210,6 +221,7 @@ test('projectMartLargeRebuildHeartbeat resolves machine-aware automatic config f
             maintenanceWorkerDuckdbMemoryLimit: null,
             batchSize: null,
             maxCyclesPerWake: null,
+            maxWakeMs: null,
             pollIntervalMs: null,
             tuningMode: 'automatic',
           },
@@ -231,11 +243,17 @@ test('projectMartLargeRebuildHeartbeat resolves machine-aware automatic config f
   const result = parseCallsResult(getLastJsonLine(runScript.stdout.toString()))
 
   expect(result.config).toMatchObject({
-    automatic: {batchSize: 4096, maxCyclesPerWake: 16, pollIntervalMs: 250},
+    automatic: {batchSize: 4096, maxCyclesPerWake: 16, maxWakeMs: 5000, pollIntervalMs: 250},
     batchSize: 4096,
     maxCyclesPerWake: 16,
+    maxWakeMs: 5000,
     pollIntervalMs: 250,
-    sources: {batchSize: 'automatic', maxCyclesPerWake: 'automatic', pollIntervalMs: 'automatic'},
+    sources: {
+      batchSize: 'automatic',
+      maxCyclesPerWake: 'automatic',
+      maxWakeMs: 'automatic',
+      pollIntervalMs: 'automatic',
+    },
   })
 })
 
@@ -258,6 +276,7 @@ test('projectMartLargeRebuildHeartbeat falls back to the maintenance-worker Duck
             maintenanceWorkerDuckdbMemoryLimit: null,
             batchSize: null,
             maxCyclesPerWake: null,
+            maxWakeMs: null,
             pollIntervalMs: null,
             tuningMode: 'automatic',
           },
@@ -279,11 +298,17 @@ test('projectMartLargeRebuildHeartbeat falls back to the maintenance-worker Duck
   const result = parseCallsResult(getLastJsonLine(runScript.stdout.toString()))
 
   expect(result.config).toMatchObject({
-    automatic: {batchSize: 512, maxCyclesPerWake: 4, pollIntervalMs: 1000},
+    automatic: {batchSize: 512, maxCyclesPerWake: 4, maxWakeMs: 2000, pollIntervalMs: 1000},
     batchSize: 512,
     maxCyclesPerWake: 4,
+    maxWakeMs: 2000,
     pollIntervalMs: 1000,
-    sources: {batchSize: 'automatic', maxCyclesPerWake: 'automatic', pollIntervalMs: 'automatic'},
+    sources: {
+      batchSize: 'automatic',
+      maxCyclesPerWake: 'automatic',
+      maxWakeMs: 'automatic',
+      pollIntervalMs: 'automatic',
+    },
     stored: {maintenanceWorkerDuckdbMemoryLimit: null},
   })
 })

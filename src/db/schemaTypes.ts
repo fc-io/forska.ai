@@ -44,6 +44,7 @@ export type UserRecord = {
   maintenanceWorkerDuckdbMemoryLimit: string | null
   projectMartLargeRebuildBatchSize: number | null
   projectMartLargeRebuildMaxCyclesPerWake: number | null
+  projectMartLargeRebuildMaxWakeMs: number | null
   projectMartLargeRebuildPollIntervalMs: number | null
   projectMartLargeRebuildTuningMode: 'automatic' | 'manual'
   unpaywallEmail: string | null

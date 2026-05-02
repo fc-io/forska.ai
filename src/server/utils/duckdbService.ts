@@ -1,5 +1,5 @@
 import {randomUUID} from 'node:crypto'
-import {mkdirSync} from 'node:fs'
+import {mkdirSync, readdirSync, statSync} from 'node:fs'
 import {access, copyFile, mkdir, rename, rm} from 'node:fs/promises'
 import {availableParallelism, tmpdir} from 'node:os'
 import {basename, join} from 'node:path'
@@ -53,6 +53,13 @@ export type DuckdbQueueRuntimeMetrics = {
   background: DuckdbSingleQueueRuntimeMetrics
   main: DuckdbSingleQueueRuntimeMetrics
 }
+export type DuckdbTempSpillMetrics = {
+  available: boolean
+  error: string | null
+  fileCount: number | null
+  tempDirectory: string | null
+  totalBytes: number | null
+}
 export type DuckdbBackgroundRuntimeDiagnostics = {
   configured: DuckdbRuntimeConfig
   effective: {
@@ -63,6 +70,7 @@ export type DuckdbBackgroundRuntimeDiagnostics = {
   }
   instanceOptions: Record<string, string>
   queues: DuckdbQueueRuntimeMetrics
+  tempSpill: DuckdbTempSpillMetrics
 }
 type DuckdbTransactionRunner = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -259,6 +267,23 @@ const getDuckdbInstanceOptions = (runtimeConfig: DuckdbRuntimeConfig): Record<st
         temp_directory: runtimeConfig.tempDirectory,
         threads: runtimeConfig.threads,
       }
+}
+
+const getDirectorySizeSnapshot = (directoryPath: string): {fileCount: number; totalBytes: number} => {
+  return readdirSync(directoryPath, {withFileTypes: true}).reduce(
+    (snapshot, entry) => {
+      const entryPath = join(directoryPath, entry.name)
+      const entrySnapshot = entry.isDirectory()
+        ? getDirectorySizeSnapshot(entryPath)
+        : {fileCount: 1, totalBytes: statSync(entryPath).size}
+
+      return {
+        fileCount: snapshot.fileCount + entrySnapshot.fileCount,
+        totalBytes: snapshot.totalBytes + entrySnapshot.totalBytes,
+      }
+    },
+    {fileCount: 0, totalBytes: 0},
+  )
 }
 
 const getErrorMessage = (value: unknown): string | null => {
@@ -1272,6 +1297,28 @@ export const getDuckdbRuntimeConfig = () => {
   return {...getDuckdbRuntimeConfigValue()}
 }
 
+export const getDuckdbTempSpillMetricsSnapshot = (): DuckdbTempSpillMetrics => {
+  const tempDirectory = getDuckdbRuntimeConfigValue().tempDirectory
+
+  if (tempDirectory === null) {
+    return {available: false, error: null, fileCount: null, tempDirectory: null, totalBytes: null}
+  }
+
+  try {
+    const snapshot = getDirectorySizeSnapshot(tempDirectory)
+
+    return {...snapshot, available: true, error: null, tempDirectory}
+  } catch (error) {
+    return {
+      available: false,
+      error: getErrorMessage(error) ?? String(error),
+      fileCount: null,
+      tempDirectory,
+      totalBytes: null,
+    }
+  }
+}
+
 export const getDuckdbBackgroundRuntimeDiagnostics = async (): Promise<DuckdbBackgroundRuntimeDiagnostics> => {
   const configured = getDuckdbRuntimeConfig()
   const [settingsRow] = await runDuckdbBackgroundJsonQuery<{
@@ -1297,6 +1344,7 @@ export const getDuckdbBackgroundRuntimeDiagnostics = async (): Promise<DuckdbBac
     },
     instanceOptions: getDuckdbInstanceOptions(configured),
     queues: getDuckdbQueueRuntimeMetricsSnapshot(),
+    tempSpill: getDuckdbTempSpillMetricsSnapshot(),
   }
 }
 
