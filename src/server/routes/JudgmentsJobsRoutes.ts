@@ -295,6 +295,7 @@ const articleScopedLargeRebuildPhases = new Set([
   'project_scope_article',
   'judgment_fact',
   'prompt_answer_fact',
+  'review_answer_dictionary',
   'review_article_filter_member',
   'review_article_rollup',
   'review_article_serving',
@@ -983,7 +984,7 @@ const getEstimatedRemainingArticlePassCount = ({
   }
 
   if (currentPhase === 'review_answer_dictionary') {
-    return scopeArticleCount * 3
+    return (remainingCurrentPhaseArticleCount ?? scopeArticleCount) + scopeArticleCount * 3
   }
 
   if (currentPhase === 'review_article_filter_member') {

@@ -426,18 +426,9 @@ const getProjectPromptAnswerFactBatchInsertSql = (projectId: string, articleIds:
   `
 }
 
-const getProjectReviewAnswerDictionaryResetSql = (projectId: string) => {
+const getProjectReviewAnswerDictionaryMissingBatchInsertSql = (projectId: string, articleIds: string[]) => {
   const projectLiteral = getSqlLiteral(projectId)
-
-  return `
-    BEGIN TRANSACTION;
-    DELETE FROM app.review_answer_dictionary WHERE project_id = ${projectLiteral};
-    COMMIT;
-  `
-}
-
-const getProjectReviewAnswerDictionaryRebuildSql = (projectId: string) => {
-  const projectLiteral = getSqlLiteral(projectId)
+  const articleIdsSql = getProjectRefreshArticleIdsSql(articleIds)
 
   return `
     BEGIN TRANSACTION;
@@ -449,18 +440,58 @@ const getProjectReviewAnswerDictionaryRebuildSql = (projectId: string) => {
       numeric_answer_value,
       dictionary_updated_at
     )
+    WITH answer_values AS (
+      SELECT DISTINCT
+        fact.project_id,
+        fact.prompt_id,
+        fact.answer_value
+      FROM mart.prompt_answer_fact fact
+      INNER JOIN mart.project_scope_article scope_article
+        ON scope_article.project_id = fact.project_id
+       AND scope_article.article_id = fact.article_id
+      WHERE fact.project_id = ${projectLiteral}
+        AND fact.article_id IN (${articleIdsSql})
+    ),
+    missing_answer_values AS (
+      SELECT answer_values.project_id, answer_values.prompt_id, answer_values.answer_value
+      FROM answer_values
+      LEFT JOIN app.review_answer_dictionary dictionary
+        ON dictionary.project_id = answer_values.project_id
+       AND dictionary.prompt_id = answer_values.prompt_id
+       AND dictionary.answer_value = answer_values.answer_value
+      WHERE dictionary.answer_id IS NULL
+    ),
+    missing_prompt AS (
+      SELECT DISTINCT project_id, prompt_id
+      FROM missing_answer_values
+    ),
+    current_answer_id AS (
+      SELECT
+        dictionary.project_id,
+        dictionary.prompt_id,
+        COALESCE(MAX(dictionary.answer_id), 0) AS max_answer_id
+      FROM app.review_answer_dictionary dictionary
+      INNER JOIN missing_prompt
+        ON missing_prompt.project_id = dictionary.project_id
+       AND missing_prompt.prompt_id = dictionary.prompt_id
+      WHERE dictionary.project_id = ${projectLiteral}
+      GROUP BY dictionary.project_id, dictionary.prompt_id
+    )
     SELECT
-      project_id,
-      prompt_id,
-      DENSE_RANK() OVER (PARTITION BY project_id, prompt_id ORDER BY answer_value ASC) AS answer_id,
-      answer_value,
-      TRY_CAST(answer_value AS BIGINT),
+      missing_answer_values.project_id,
+      missing_answer_values.prompt_id,
+      COALESCE(current_answer_id.max_answer_id, 0)
+        + ROW_NUMBER() OVER (
+          PARTITION BY missing_answer_values.project_id, missing_answer_values.prompt_id
+          ORDER BY missing_answer_values.answer_value ASC
+        ) AS answer_id,
+      missing_answer_values.answer_value,
+      TRY_CAST(missing_answer_values.answer_value AS BIGINT),
       current_timestamp
-    FROM (
-      SELECT DISTINCT project_id, prompt_id, answer_value
-      FROM mart.prompt_answer_fact
-      WHERE project_id = ${projectLiteral}
-    ) answer_values;
+    FROM missing_answer_values
+    LEFT JOIN current_answer_id
+      ON current_answer_id.project_id = missing_answer_values.project_id
+     AND current_answer_id.prompt_id = missing_answer_values.prompt_id;
     COMMIT;
   `
 }
@@ -968,18 +999,16 @@ const rebuildProjectPromptAnswerFactBatch = async (
   await dependencies.database.run(getProjectPromptAnswerFactBatchInsertSql(projectId, articleIds))
 }
 
-const resetProjectReviewAnswerDictionary = async (
+const rebuildProjectReviewAnswerDictionaryBatch = async (
   projectId: string,
+  articleIds: string[],
   dependencies: ProjectMartLargeRebuildExecutorDependencies = defaultProjectMartLargeRebuildExecutorDependencies,
 ) => {
-  await dependencies.database.run(getProjectReviewAnswerDictionaryResetSql(projectId))
-}
+  if (articleIds.length === 0) {
+    return
+  }
 
-const rebuildProjectReviewAnswerDictionary = async (
-  projectId: string,
-  dependencies: ProjectMartLargeRebuildExecutorDependencies = defaultProjectMartLargeRebuildExecutorDependencies,
-) => {
-  await dependencies.database.run(getProjectReviewAnswerDictionaryRebuildSql(projectId))
+  await dependencies.database.run(getProjectReviewAnswerDictionaryMissingBatchInsertSql(projectId, articleIds))
 }
 
 const setupProjectReviewServingStaging = async (
@@ -1130,13 +1159,12 @@ const projectMartLargeRebuildExecutor = {
   rebuildProjectJudgmentFactBatch,
   rebuildProjectPromptAnswerFactBatch,
   rebuildProjectScopeBatch,
-  rebuildProjectReviewAnswerDictionary,
+  rebuildProjectReviewAnswerDictionaryBatch,
   rebuildProjectReviewArticleFilterMemberBatch,
   rebuildProjectReviewArticleRollupBatch,
   rebuildProjectReviewServingBatch,
   resetProjectPromptAnswerFact,
   resetProjectScope,
-  resetProjectReviewAnswerDictionary,
   resetProjectReviewArticleRollup,
   setupProjectReviewServingStaging,
 }

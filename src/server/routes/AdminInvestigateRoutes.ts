@@ -342,6 +342,7 @@ const articleScopedLargeRebuildPhases = new Set([
   'project_scope_article',
   'judgment_fact',
   'prompt_answer_fact',
+  'review_answer_dictionary',
   'review_article_filter_member',
   'review_article_rollup',
   'review_article_serving',
@@ -570,9 +571,7 @@ const getProjectMartLargeRebuildOperatorStatus = async (
   const boundedRemainingPhaseArticleCount = Math.max(0, Math.min(scopeArticleCount, rawRemainingPhaseArticleCount))
   const scannedPhaseArticleCount = articleScopedLargeRebuildPhases.has(activeLargeRebuild?.rebuildPhase ?? '')
     ? Math.max(0, scopeArticleCount - boundedRemainingPhaseArticleCount)
-    : activeLargeRebuild?.rebuildPhase === 'review_answer_dictionary'
-      ? scopeArticleCount
-      : 0
+    : 0
   const remainingPhaseArticleCount = articleScopedLargeRebuildPhases.has(activeLargeRebuild?.rebuildPhase ?? '')
     ? boundedRemainingPhaseArticleCount
     : 0
@@ -580,11 +579,9 @@ const getProjectMartLargeRebuildOperatorStatus = async (
     ? scopeArticleCount === 0
       ? 100
       : Math.max(0, Math.min(100, Math.round((scannedPhaseArticleCount / scopeArticleCount) * 100)))
-    : activeLargeRebuild?.rebuildPhase === 'review_answer_dictionary'
+    : activeLargeRebuild?.rebuildPhase === null
       ? 100
-      : activeLargeRebuild?.rebuildPhase === null
-        ? 100
-        : 0
+      : 0
   const overallProgressPercent = getOverallProgressPercent({
     currentPhaseProgressPercent,
     rebuildPhase: activeLargeRebuild?.rebuildPhase ?? null,

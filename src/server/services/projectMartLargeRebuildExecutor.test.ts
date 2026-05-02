@@ -823,8 +823,7 @@ test('large rebuild and incremental refresh agree on shared clone judgment reuse
 
       await executor.resetProjectPromptAnswerFact(projectId)
       await executor.rebuildProjectPromptAnswerFactBatch(projectId, ['shared-reuse-article'])
-      await executor.resetProjectReviewAnswerDictionary(projectId)
-      await executor.rebuildProjectReviewAnswerDictionary(projectId)
+      await executor.rebuildProjectReviewAnswerDictionaryBatch(projectId, ['shared-reuse-article'])
       await executor.setupProjectReviewServingStaging(projectId, targetGeneration)
       await executor.rebuildProjectReviewArticleFilterMemberBatch(projectId, ['shared-reuse-article'], targetGeneration)
       await executor.resetProjectReviewArticleRollup(projectId)
@@ -947,8 +946,7 @@ test('large rebuild drops reused source judgments after a cloned project repoint
 
       await executor.resetProjectPromptAnswerFact(projectId)
       await executor.rebuildProjectPromptAnswerFactBatch(projectId, ['prompt-edit-large-article'])
-      await executor.resetProjectReviewAnswerDictionary(projectId)
-      await executor.rebuildProjectReviewAnswerDictionary(projectId)
+      await executor.rebuildProjectReviewAnswerDictionaryBatch(projectId, ['prompt-edit-large-article'])
       await executor.setupProjectReviewServingStaging(projectId, targetGeneration)
       await executor.rebuildProjectReviewArticleFilterMemberBatch(projectId, ['prompt-edit-large-article'], targetGeneration)
       await executor.resetProjectReviewArticleRollup(projectId)
@@ -1184,8 +1182,24 @@ test('large rebuild drops reused source judgments after a cloned project repoint
   ])
 })
 
-test('review answer dictionary reset and rebuild derive prompt answer ids from prompt_answer_fact', () => {
-  const result = runScript<{rows: Array<{answerId: number; answerValue: string; promptId: string}>}>(`
+test('review answer dictionary batch appends missing values without renumbering existing ids', () => {
+  const result = runScript<{
+    afterFirstRows: Array<{answerId: number; answerValue: string; promptId: string}>
+    rows: Array<{answerId: number; answerValue: string; promptId: string}>
+  }>(`
+    await database.run(\`
+      INSERT INTO mart.project_scope_article (
+        project_id,
+        article_id,
+        in_curated_scope,
+        in_route_scope,
+        article_created_at,
+        article_updated_at
+      ) VALUES
+        ('large-rebuild-executor-project', 'article-1', TRUE, FALSE, TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z'),
+        ('large-rebuild-executor-project', 'article-2', TRUE, TRUE, TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T02:00:00.000Z'),
+        ('large-rebuild-executor-project', 'article-3', FALSE, TRUE, TIMESTAMPTZ '2026-04-02T00:00:00.000Z', TIMESTAMPTZ '2026-04-02T01:00:00.000Z')
+    \`)
     await database.run(\`
       INSERT INTO app.review_answer_dictionary (
         project_id,
@@ -1194,14 +1208,23 @@ test('review answer dictionary reset and rebuild derive prompt answer ids from p
         answer_value,
         numeric_answer_value,
         dictionary_updated_at
-      ) VALUES (
-        'large-rebuild-executor-project',
-        'prompt-old',
-        1,
-        'stale',
-        NULL,
-        TIMESTAMPTZ '2026-03-01T00:00:00.000Z'
-      )
+      ) VALUES
+        (
+          'large-rebuild-executor-project',
+          'prompt-1',
+          7,
+          'yes',
+          NULL,
+          TIMESTAMPTZ '2026-03-01T00:00:00.000Z'
+        ),
+        (
+          'large-rebuild-executor-project',
+          'prompt-old',
+          1,
+          'stale',
+          NULL,
+          TIMESTAMPTZ '2026-03-01T00:00:00.000Z'
+        )
     \`)
     await database.run(\`
       INSERT INTO mart.prompt_answer_fact (
@@ -1218,11 +1241,18 @@ test('review answer dictionary reset and rebuild derive prompt answer ids from p
       ) VALUES
         ('large-rebuild-executor-project', 'article-1', 'prompt-1', 'judgment-1', 'large-rebuild-executor-model', 'yes', 'yes', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z', TIMESTAMPTZ '2026-04-03T00:00:00.000Z'),
         ('large-rebuild-executor-project', 'article-2', 'prompt-1', 'judgment-2', 'large-rebuild-executor-model', 'no', 'no', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T02:00:00.000Z', TIMESTAMPTZ '2026-04-03T00:00:00.000Z'),
-        ('large-rebuild-executor-project', 'article-3', 'prompt-2', 'judgment-3', 'large-rebuild-executor-model', '3', '3', TIMESTAMPTZ '2026-04-02T00:00:00.000Z', TIMESTAMPTZ '2026-04-02T01:00:00.000Z', TIMESTAMPTZ '2026-04-03T00:00:00.000Z')
+        ('large-rebuild-executor-project', 'article-3', 'prompt-2', 'judgment-3', 'large-rebuild-executor-model', '3', '3', TIMESTAMPTZ '2026-04-02T00:00:00.000Z', TIMESTAMPTZ '2026-04-02T01:00:00.000Z', TIMESTAMPTZ '2026-04-03T00:00:00.000Z'),
+        ('large-rebuild-executor-project', 'article-4', 'prompt-1', 'judgment-4', 'large-rebuild-executor-model', 'maybe', 'maybe', NULL, TIMESTAMPTZ '2026-04-03T01:00:00.000Z', TIMESTAMPTZ '2026-04-03T00:00:00.000Z')
     \`)
 
-    await executor.resetProjectReviewAnswerDictionary('large-rebuild-executor-project')
-    await executor.rebuildProjectReviewAnswerDictionary('large-rebuild-executor-project')
+    await executor.rebuildProjectReviewAnswerDictionaryBatch('large-rebuild-executor-project', ['article-1'])
+    const afterFirstRows = await database.queryJson(\`
+      SELECT prompt_id AS promptId, answer_id AS answerId, answer_value AS answerValue
+      FROM app.review_answer_dictionary
+      WHERE project_id = 'large-rebuild-executor-project'
+      ORDER BY prompt_id ASC, answer_id ASC
+    \`)
+    await executor.rebuildProjectReviewAnswerDictionaryBatch('large-rebuild-executor-project', ['article-1', 'article-2', 'article-3', 'article-4'])
 
     const rows = await database.queryJson(\`
       SELECT prompt_id AS promptId, answer_id AS answerId, answer_value AS answerValue
@@ -1231,20 +1261,32 @@ test('review answer dictionary reset and rebuild derive prompt answer ids from p
       ORDER BY prompt_id ASC, answer_id ASC
     \`)
 
-    console.log(JSON.stringify({rows}))
+    console.log(JSON.stringify({afterFirstRows, rows}))
     await database.close()
   `)
 
+  expect(result.afterFirstRows).toEqual([
+    {promptId: 'prompt-1', answerId: 7, answerValue: 'yes'},
+    {promptId: 'prompt-old', answerId: 1, answerValue: 'stale'},
+  ])
   expect(result.rows).toEqual([
-    {promptId: 'prompt-1', answerId: 1, answerValue: 'no'},
-    {promptId: 'prompt-1', answerId: 2, answerValue: 'yes'},
+    {promptId: 'prompt-1', answerId: 7, answerValue: 'yes'},
+    {promptId: 'prompt-1', answerId: 8, answerValue: 'no'},
     {promptId: 'prompt-2', answerId: 1, answerValue: '3'},
+    {promptId: 'prompt-old', answerId: 1, answerValue: 'stale'},
   ])
 })
 
 test('filter member rollup and serving staging rebuild replay safely on bounded article sets', () => {
   const result = runScript<{
-    filterRows: Array<{answerId: number; articleId: string; generation: string; promptId: string}>
+    filterRows: Array<{answerId: number; answerValue: string; articleId: string; generation: string; promptId: string}>
+    filterRowsBeforePromotion: Array<{
+      answerId: number
+      answerValue: string
+      articleId: string
+      generation: string
+      promptId: string
+    }>
     rollupRows: Array<{articleId: string; enabledPromptCount: number; hasAllLlmJudgments: boolean}>
     servingGeneration: Array<{activeGeneration: string}>
     servingRows: Array<{articleId: string; generation: string}>
@@ -1322,10 +1364,47 @@ test('filter member rollup and serving staging rebuild replay safely on bounded 
       INSERT INTO app.project_review_serving_generation (project_id, active_generation)
       VALUES ('large-rebuild-executor-project', 5)
     \`)
-    const targetGeneration = 9
+    await database.run(\`
+      INSERT INTO app.review_answer_dictionary (
+        project_id,
+        prompt_id,
+        answer_id,
+        answer_value,
+        numeric_answer_value,
+        dictionary_updated_at
+      ) VALUES (
+        'large-rebuild-executor-project',
+        'prompt-1',
+        7,
+        'yes',
+        NULL,
+        TIMESTAMPTZ '2026-03-01T00:00:00.000Z'
+      )
+    \`)
+    await database.run(\`
+      INSERT INTO mart.review_article_filter_member (
+        project_id,
+        generation,
+        prompt_id,
+        answer_id,
+        article_id,
+        article_created_at,
+        numeric_answer_value,
+        member_updated_at
+      ) VALUES (
+        'large-rebuild-executor-project',
+        5,
+        'prompt-1',
+        7,
+        'article-1',
+        TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+        NULL,
+        TIMESTAMPTZ '2026-03-01T00:00:00.000Z'
+      )
+    \`)
+    const targetGeneration = 6
 
-    await executor.resetProjectReviewAnswerDictionary('large-rebuild-executor-project')
-    await executor.rebuildProjectReviewAnswerDictionary('large-rebuild-executor-project')
+    await executor.rebuildProjectReviewAnswerDictionaryBatch('large-rebuild-executor-project', ['article-1', 'article-2'])
     await executor.setupProjectReviewServingStaging('large-rebuild-executor-project', targetGeneration)
     await executor.rebuildProjectReviewArticleFilterMemberBatch('large-rebuild-executor-project', ['article-1', 'article-2'], targetGeneration)
     await executor.rebuildProjectReviewArticleFilterMemberBatch('large-rebuild-executor-project', ['article-1', 'article-2'], targetGeneration)
@@ -1334,13 +1413,37 @@ test('filter member rollup and serving staging rebuild replay safely on bounded 
     await executor.rebuildProjectReviewArticleRollupBatch('large-rebuild-executor-project', ['article-1', 'article-2'])
     await executor.rebuildProjectReviewServingBatch('large-rebuild-executor-project', ['article-1', 'article-2'], targetGeneration)
     await executor.rebuildProjectReviewServingBatch('large-rebuild-executor-project', ['article-1', 'article-2'], targetGeneration)
+    const filterRowsBeforePromotion = await database.queryJson(\`
+      SELECT
+        member.prompt_id AS promptId,
+        member.answer_id AS answerId,
+        dictionary.answer_value AS answerValue,
+        member.article_id AS articleId,
+        CAST(member.generation AS VARCHAR) AS generation
+      FROM mart.review_article_filter_member member
+      LEFT JOIN app.review_answer_dictionary dictionary
+        ON dictionary.project_id = member.project_id
+       AND dictionary.prompt_id = member.prompt_id
+       AND dictionary.answer_id = member.answer_id
+      WHERE member.project_id = 'large-rebuild-executor-project'
+      ORDER BY member.generation ASC, member.article_id ASC
+    \`)
     await executor.finalizeProjectReviewServing('large-rebuild-executor-project', targetGeneration)
 
     const filterRows = await database.queryJson(\`
-      SELECT prompt_id AS promptId, answer_id AS answerId, article_id AS articleId, generation AS generation
-      FROM mart.review_article_filter_member
-      WHERE project_id = 'large-rebuild-executor-project'
-      ORDER BY article_id ASC
+      SELECT
+        member.prompt_id AS promptId,
+        member.answer_id AS answerId,
+        dictionary.answer_value AS answerValue,
+        member.article_id AS articleId,
+        CAST(member.generation AS VARCHAR) AS generation
+      FROM mart.review_article_filter_member member
+      LEFT JOIN app.review_answer_dictionary dictionary
+        ON dictionary.project_id = member.project_id
+       AND dictionary.prompt_id = member.prompt_id
+       AND dictionary.answer_id = member.answer_id
+      WHERE member.project_id = 'large-rebuild-executor-project'
+      ORDER BY member.generation ASC, member.article_id ASC
     \`)
     const rollupRows = await database.queryJson(\`
       SELECT article_id AS articleId, enabled_prompt_count AS enabledPromptCount, has_all_llm_judgments AS hasAllLlmJudgments
@@ -1360,22 +1463,28 @@ test('filter member rollup and serving staging rebuild replay safely on bounded 
       ORDER BY article_id ASC
     \`)
 
-    console.log(JSON.stringify({filterRows, rollupRows, servingGeneration, servingRows}))
+    console.log(JSON.stringify({filterRows, filterRowsBeforePromotion, rollupRows, servingGeneration, servingRows}))
     await database.close()
   `)
 
+  expect(result.filterRowsBeforePromotion).toEqual([
+    {promptId: 'prompt-1', answerId: 7, answerValue: 'yes', articleId: 'article-1', generation: '5'},
+    {promptId: 'prompt-1', answerId: 7, answerValue: 'yes', articleId: 'article-1', generation: '6'},
+    {promptId: 'prompt-1', answerId: 8, answerValue: 'no', articleId: 'article-2', generation: '6'},
+  ])
   expect(result.filterRows).toEqual([
-    {promptId: 'prompt-1', answerId: 2, articleId: 'article-1', generation: '9'},
-    {promptId: 'prompt-1', answerId: 1, articleId: 'article-2', generation: '9'},
+    {promptId: 'prompt-1', answerId: 7, answerValue: 'yes', articleId: 'article-1', generation: '5'},
+    {promptId: 'prompt-1', answerId: 7, answerValue: 'yes', articleId: 'article-1', generation: '6'},
+    {promptId: 'prompt-1', answerId: 8, answerValue: 'no', articleId: 'article-2', generation: '6'},
   ])
   expect(result.rollupRows).toEqual([
     {articleId: 'article-1', enabledPromptCount: 1, hasAllLlmJudgments: true},
     {articleId: 'article-2', enabledPromptCount: 1, hasAllLlmJudgments: true},
   ])
-  expect(result.servingGeneration).toEqual([{activeGeneration: '9'}])
+  expect(result.servingGeneration).toEqual([{activeGeneration: '6'}])
   expect(result.servingRows).toEqual([
-    {articleId: 'article-1', generation: '9'},
-    {articleId: 'article-2', generation: '9'},
+    {articleId: 'article-1', generation: '6'},
+    {articleId: 'article-2', generation: '6'},
   ])
 })
 

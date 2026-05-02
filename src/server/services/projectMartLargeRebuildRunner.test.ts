@@ -64,8 +64,7 @@ const createRunnerContext = (params: {
   }> = []
   const scopeBatches: string[][] = []
   const rebuildBatches: string[][] = []
-  const dictionaryRebuilds: string[] = []
-  const dictionaryResets: string[] = []
+  const dictionaryRebuildBatches: string[][] = []
   const claim = params.claim ?? null
   const dependencies: ProjectMartLargeRebuildRunnerDependencies = {
     executor: {
@@ -98,9 +97,9 @@ const createRunnerContext = (params: {
         callLog.push(`rebuild:${projectId}:${articleIds.join(',')}`)
         rebuildBatches.push(articleIds)
       }),
-      rebuildProjectReviewAnswerDictionary: mock(async (projectId: string) => {
-        callLog.push(`dictionary:rebuild:${projectId}`)
-        dictionaryRebuilds.push(projectId)
+      rebuildProjectReviewAnswerDictionaryBatch: mock(async (projectId: string, articleIds: string[]) => {
+        callLog.push(`dictionary:rebuild:${projectId}:${articleIds.join(',')}`)
+        dictionaryRebuildBatches.push(articleIds)
       }),
       rebuildProjectReviewArticleFilterMemberBatch: mock(
         async (projectId: string, articleIds: string[], targetGeneration: number) => {
@@ -120,10 +119,6 @@ const createRunnerContext = (params: {
       }),
       resetProjectPromptAnswerFact: mock(async (projectId: string) => {
         callLog.push(`reset:${projectId}`)
-      }),
-      resetProjectReviewAnswerDictionary: mock(async (projectId: string) => {
-        callLog.push(`dictionary:reset:${projectId}`)
-        dictionaryResets.push(projectId)
       }),
       resetProjectReviewArticleRollup: mock(async (projectId: string) => {
         callLog.push(`rollup:reset:${projectId}`)
@@ -213,8 +208,7 @@ const createRunnerContext = (params: {
     callLog,
     completed,
     dependencies,
-    dictionaryRebuilds,
-    dictionaryResets,
+    dictionaryRebuildBatches,
     failed,
     finalizedRefreshes,
     publishedAcks,
@@ -550,7 +544,61 @@ test('transitions from prompt_answer_fact to review_answer_dictionary when no ro
   expect(context.completed).toEqual([])
 })
 
-test('transitions from review_answer_dictionary to review_article_filter_member', async () => {
+test('runs one review_answer_dictionary batch and advances the cursor without resetting dictionary ids', async () => {
+  const context = createRunnerContext({
+    batchRows: [
+      {
+        articleCreatedAt: new Date('2026-04-01T00:00:00.000Z'),
+        articleId: 'article-1',
+        articleUpdatedAt: new Date('2026-04-01T01:00:00.000Z'),
+        inCuratedScope: true,
+        inRouteScope: false,
+      },
+      {
+        articleCreatedAt: new Date('2026-04-02T00:00:00.000Z'),
+        articleId: 'article-2',
+        articleUpdatedAt: new Date('2026-04-02T01:00:00.000Z'),
+        inCuratedScope: true,
+        inRouteScope: false,
+      },
+    ],
+    claim: {
+      leaseExpiresAt: new Date('2026-04-03T10:00:00.000Z'),
+      projectId: 'project-1',
+      rebuildPhase: 'review_answer_dictionary',
+      refreshToken: 9,
+      workerId: 'worker-1',
+    },
+    state: {
+      cursorArticleCreatedAt: null,
+      cursorArticleId: null,
+      projectId: 'project-1',
+      rebuildPhase: 'review_answer_dictionary',
+      targetGeneration: 4,
+    },
+  })
+
+  const result = await runProjectMartLargeRebuildCycle({workerId: 'worker-1'}, context.dependencies)
+
+  expect(result).toEqual({
+    articleCount: 2,
+    nextCursor: {articleCreatedAt: new Date('2026-04-02T00:00:00.000Z'), articleId: 'article-2'},
+    projectId: 'project-1',
+    status: 'progressed',
+    workerId: 'worker-1',
+  })
+  expect(context.callLog).toEqual([
+    'claim',
+    'state:project-1',
+    'mart-batch:project-1',
+    'dictionary:rebuild:project-1:article-1,article-2',
+    'advance:project-1:article-2:review_answer_dictionary',
+  ])
+  expect(context.dictionaryRebuildBatches).toEqual([['article-1', 'article-2']])
+  expect(context.resets[0]?.targetGeneration).toBe(4)
+})
+
+test('transitions from review_answer_dictionary to review_article_filter_member when no rows remain', async () => {
   const context = createRunnerContext({
     claim: {
       leaseExpiresAt: new Date('2026-04-03T10:00:00.000Z'),
@@ -580,8 +628,7 @@ test('transitions from review_answer_dictionary to review_article_filter_member'
   expect(context.callLog).toEqual([
     'claim',
     'state:project-1',
-    'dictionary:reset:project-1',
-    'dictionary:rebuild:project-1',
+    'mart-batch:project-1',
     'advance:project-1:null:review_article_filter_member',
   ])
   expect(context.resets[0]?.targetGeneration).toBeNull()

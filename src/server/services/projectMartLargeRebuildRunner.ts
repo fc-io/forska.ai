@@ -29,7 +29,7 @@ type ProjectMartLargeRebuildRunnerDependencies = {
     rebuildProjectJudgmentFactBatch: (projectId: string, articleIds: string[]) => Promise<void>
     rebuildProjectScopeBatch: (projectId: string, rows: ProjectMartLargeRebuildScopeBatchRow[]) => Promise<void>
     rebuildProjectPromptAnswerFactBatch: (projectId: string, articleIds: string[]) => Promise<void>
-    rebuildProjectReviewAnswerDictionary: (projectId: string) => Promise<void>
+    rebuildProjectReviewAnswerDictionaryBatch: (projectId: string, articleIds: string[]) => Promise<void>
     rebuildProjectReviewArticleFilterMemberBatch: (
       projectId: string,
       articleIds: string[],
@@ -43,7 +43,6 @@ type ProjectMartLargeRebuildRunnerDependencies = {
     ) => Promise<void>
     resetProjectScope: (projectId: string) => Promise<void>
     resetProjectPromptAnswerFact: (projectId: string) => Promise<void>
-    resetProjectReviewAnswerDictionary: (projectId: string) => Promise<void>
     resetProjectReviewArticleRollup: (projectId: string) => Promise<void>
     setupProjectReviewServingStaging: (projectId: string, targetGeneration: number) => Promise<void>
   }
@@ -402,19 +401,51 @@ const runReviewAnswerDictionaryPhase = async (
     throw new Error(`Missing large rebuild state for ${claim.projectId}`)
   }
 
-  await dependencies.executor.resetProjectReviewAnswerDictionary(claim.projectId)
-  await dependencies.executor.rebuildProjectReviewAnswerDictionary(claim.projectId)
+  const initialCursor =
+    rebuildState.cursorArticleId === null
+      ? null
+      : {articleCreatedAt: rebuildState.cursorArticleCreatedAt, articleId: rebuildState.cursorArticleId}
+
+  const batchRows = await dependencies.executor.getProjectScopeMartBatch({
+    batchSize: options.batchSize,
+    cursor: initialCursor,
+    projectId: claim.projectId,
+  })
+
+  if (batchRows.length === 0) {
+    await dependencies.largeRebuildStateService.resetLargeRebuild({
+      cursorArticleCreatedAt: null,
+      cursorArticleId: null,
+      now: getNow(options.now),
+      projectId: claim.projectId,
+      rebuildPhase: 'review_article_filter_member',
+      targetGeneration: rebuildState.targetGeneration,
+    })
+    return {
+      articleCount: 0,
+      nextCursor: null,
+      projectId: claim.projectId,
+      status: 'progressed',
+      workerId: options.workerId,
+    }
+  }
+
+  const articleIds = batchRows.map((row) => {
+    return row.articleId
+  })
+  await dependencies.executor.rebuildProjectReviewAnswerDictionaryBatch(claim.projectId, articleIds)
+  const nextCursor = dependencies.executor.getNextBatchCursor(batchRows)
   await dependencies.largeRebuildStateService.resetLargeRebuild({
-    cursorArticleCreatedAt: null,
-    cursorArticleId: null,
+    cursorArticleCreatedAt: nextCursor === null ? null : getCursorDateValue(nextCursor.articleCreatedAt),
+    cursorArticleId: nextCursor?.articleId ?? null,
     now: getNow(options.now),
     projectId: claim.projectId,
-    rebuildPhase: 'review_article_filter_member',
+    rebuildPhase: 'review_answer_dictionary',
     targetGeneration: rebuildState.targetGeneration,
   })
   return {
-    articleCount: 0,
-    nextCursor: null,
+    articleCount: articleIds.length,
+    nextCursor,
     projectId: claim.projectId,
     status: 'progressed',
     workerId: options.workerId,
