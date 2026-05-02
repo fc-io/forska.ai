@@ -540,6 +540,14 @@ const getProjectRefreshArticleIdsSql = (articleIds: string[]) => {
   return getQuotedStringList(articleIds).join(', ')
 }
 
+const getProjectRefreshArticleIdRowsSql = (articleIds: string[]) => {
+  return articleIds
+    .map((articleId) => {
+      return `(${getSqlLiteral(articleId)})`
+    })
+    .join(', ')
+}
+
 const getProjectScopeResetSql = (projectId: string) => {
   const projectLiteral = getSqlLiteral(projectId)
 
@@ -1448,11 +1456,6 @@ const _judgmentFactCreateSql = `
   )
 `
 
-const judgmentFactIndexSql = `
-  CREATE INDEX idx_mart_judgment_fact_lookup
-  ON mart.judgment_fact(article_id, prompt_id, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
-`
-
 const getJudgmentFactRefreshSourceSql = (articleFilterSql: string) => {
   return `
     SELECT
@@ -1495,46 +1498,21 @@ const getJudgmentFactRefreshSourceSql = (articleFilterSql: string) => {
   `
 }
 
-const getJudgmentFactSafeRefreshSql = ({
-  dirtyArticlesSql,
-  rebuildTableName,
-}: {
-  dirtyArticlesSql: string
-  rebuildTableName: string
-}) => {
+const getJudgmentFactSafeRefreshSql = ({dirtyArticlesSql}: {dirtyArticlesSql: string}) => {
   return `
     BEGIN TRANSACTION;
-    CREATE TEMP TABLE temp_dirty_judgment_fact_article AS ${dirtyArticlesSql};
-    DROP TABLE IF EXISTS ${rebuildTableName};
-    CREATE TABLE ${rebuildTableName} (
-      judgment_id VARCHAR PRIMARY KEY,
-      article_id VARCHAR NOT NULL,
-      prompt_id VARCHAR NOT NULL,
-      model_id VARCHAR NOT NULL,
-      project_id VARCHAR,
-      snapshot_project_id VARCHAR,
-      snapshot_project_model_name VARCHAR,
-      use_title BOOLEAN NOT NULL,
-      use_abstract BOOLEAN NOT NULL,
-      use_fulltext BOOLEAN NOT NULL,
-      use_fulltext_no_images BOOLEAN NOT NULL,
-      chunking_strategy VARCHAR,
-      is_answered BOOLEAN NOT NULL,
-      answered_original VARCHAR,
-      answered_original_as_array VARCHAR[],
-      normalized_answers VARCHAR[],
-      confidence_original INTEGER,
-      explanation VARCHAR,
-      quotes JSON,
-      article_title VARCHAR NOT NULL,
-      article_created_at TIMESTAMPTZ,
-      article_updated_at TIMESTAMPTZ,
-      article_import_route VARCHAR,
-      article_publication_status VARCHAR,
-      created_at TIMESTAMPTZ NOT NULL,
-      updated_at TIMESTAMPTZ NOT NULL
+    DROP TABLE IF EXISTS temp_dirty_judgment_fact_article;
+    CREATE TEMP TABLE temp_dirty_judgment_fact_article AS
+    SELECT DISTINCT article_id
+    FROM (${dirtyArticlesSql}) dirty_article_source
+    WHERE article_id IS NOT NULL;
+    DELETE FROM mart.judgment_fact
+    WHERE EXISTS (
+      SELECT 1
+      FROM temp_dirty_judgment_fact_article dirty_article
+      WHERE dirty_article.article_id = mart.judgment_fact.article_id
     );
-    INSERT INTO ${rebuildTableName} (
+    INSERT INTO mart.judgment_fact (
       judgment_id,
       article_id,
       prompt_id,
@@ -1562,70 +1540,13 @@ const getJudgmentFactSafeRefreshSql = ({
       created_at,
       updated_at
     )
-    SELECT
-      judgment_id,
-      article_id,
-      prompt_id,
-      model_id,
-      project_id,
-      snapshot_project_id,
-      snapshot_project_model_name,
-      use_title,
-      use_abstract,
-      use_fulltext,
-      use_fulltext_no_images,
-      chunking_strategy,
-      is_answered,
-      answered_original,
-      answered_original_as_array,
-      normalized_answers,
-      confidence_original,
-      explanation,
-      quotes,
-      article_title,
-      article_created_at,
-      article_updated_at,
-      article_import_route,
-      article_publication_status,
-      created_at,
-      updated_at
-    FROM mart.judgment_fact
-    WHERE article_id NOT IN (
-      SELECT article_id
-      FROM temp_dirty_judgment_fact_article
-    );
-    INSERT INTO ${rebuildTableName} (
-      judgment_id,
-      article_id,
-      prompt_id,
-      model_id,
-      project_id,
-      snapshot_project_id,
-      snapshot_project_model_name,
-      use_title,
-      use_abstract,
-      use_fulltext,
-      use_fulltext_no_images,
-      chunking_strategy,
-      is_answered,
-      answered_original,
-      answered_original_as_array,
-      normalized_answers,
-      confidence_original,
-      explanation,
-      quotes,
-      article_title,
-      article_created_at,
-      article_updated_at,
-      article_import_route,
-      article_publication_status,
-      created_at,
-      updated_at
-    )
-    ${getJudgmentFactRefreshSourceSql('judgment.article_id IN (SELECT article_id FROM temp_dirty_judgment_fact_article)')};
-    DROP TABLE mart.judgment_fact;
-    ALTER TABLE ${rebuildTableName} RENAME TO judgment_fact;
-    ${judgmentFactIndexSql};
+    ${getJudgmentFactRefreshSourceSql(`
+      EXISTS (
+        SELECT 1
+        FROM temp_dirty_judgment_fact_article dirty_article
+        WHERE dirty_article.article_id = judgment.article_id
+      )
+    `)};
     DROP TABLE temp_dirty_judgment_fact_article;
     COMMIT;
   `
@@ -1634,10 +1555,7 @@ const getJudgmentFactSafeRefreshSql = ({
 const getJudgmentArticleRefreshSql = (articleId: string) => {
   const articleLiteral = getSqlLiteral(articleId)
 
-  return getJudgmentFactSafeRefreshSql({
-    dirtyArticlesSql: `SELECT ${articleLiteral} AS article_id`,
-    rebuildTableName: 'mart.judgment_fact_rebuild',
-  })
+  return getJudgmentFactSafeRefreshSql({dirtyArticlesSql: `SELECT ${articleLiteral} AS article_id`})
 }
 
 const getJudgmentProjectClaimRefreshSql = ({
@@ -1657,22 +1575,21 @@ const getJudgmentProjectClaimRefreshSql = ({
         AND first_dirty_token <= ${claimedToken}
         AND last_dirty_token > ${lastCompletedToken}
     `,
-    rebuildTableName: 'mart.judgment_fact_rebuild',
   })
 }
 
 const getJudgmentProjectScopeBatchRefreshSql = (projectId: string, articleIds: string[]) => {
   const projectLiteral = getSqlLiteral(projectId)
-  const articleIdsSql = getProjectRefreshArticleIdsSql(articleIds)
+  const articleRowsSql = getProjectRefreshArticleIdRowsSql(articleIds)
 
   return getJudgmentFactSafeRefreshSql({
     dirtyArticlesSql: `
-      SELECT article_id
-      FROM mart.project_scope_article
-      WHERE project_id = ${projectLiteral}
-        AND article_id IN (${articleIdsSql})
+      SELECT requested_article.article_id
+      FROM (VALUES ${articleRowsSql}) AS requested_article(article_id)
+      INNER JOIN mart.project_scope_article scope_article
+        ON scope_article.project_id = ${projectLiteral}
+       AND scope_article.article_id = requested_article.article_id
     `,
-    rebuildTableName: 'mart.judgment_fact_rebuild',
   })
 }
 

@@ -198,6 +198,14 @@ const getProjectRefreshArticleIdsSql = (articleIds: string[]) => {
     .join(', ')
 }
 
+const getProjectRefreshArticleIdRowsSql = (articleIds: string[]) => {
+  return articleIds
+    .map((articleId) => {
+      return `(${getSqlLiteral(articleId)})`
+    })
+    .join(', ')
+}
+
 const getProjectScopeResetSql = (projectId: string) => {
   const projectLiteral = getSqlLiteral(projectId)
 
@@ -249,12 +257,21 @@ const getProjectJudgmentFactResetSql = (projectId: string) => {
 }
 
 const getProjectJudgmentFactBatchInsertSql = (_projectId: string, articleIds: string[]) => {
-  const articleIdsSql = getProjectRefreshArticleIdsSql(articleIds)
+  const articleRowsSql = getProjectRefreshArticleIdRowsSql(articleIds)
 
   return `
     BEGIN TRANSACTION;
+    DROP TABLE IF EXISTS temp_project_judgment_fact_article;
+    CREATE TEMP TABLE temp_project_judgment_fact_article AS
+    SELECT DISTINCT article_id
+    FROM (VALUES ${articleRowsSql}) AS requested_article(article_id)
+    WHERE article_id IS NOT NULL;
     DELETE FROM mart.judgment_fact
-    WHERE article_id IN (${articleIdsSql});
+    WHERE EXISTS (
+      SELECT 1
+      FROM temp_project_judgment_fact_article dirty_article
+      WHERE dirty_article.article_id = mart.judgment_fact.article_id
+    );
     INSERT INTO mart.judgment_fact (
       judgment_id,
       article_id,
@@ -319,7 +336,12 @@ const getProjectJudgmentFactBatchInsertSql = (_projectId: string, articleIds: st
     FROM app.judgment judgment
     INNER JOIN app.article article ON article.id = judgment.article_id
     WHERE judgment.deleted_at IS NULL
-      AND judgment.article_id IN (${articleIdsSql});
+      AND EXISTS (
+        SELECT 1
+        FROM temp_project_judgment_fact_article dirty_article
+        WHERE dirty_article.article_id = judgment.article_id
+      );
+    DROP TABLE temp_project_judgment_fact_article;
     COMMIT;
   `
 }

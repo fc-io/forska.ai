@@ -47,7 +47,7 @@ test('mart refresh keeps a requeue that arrives during drain', () => {
                 ...service,
                 runBackground: async (statement) => {
                   if (
-                    statement.includes('DROP TABLE mart.judgment_fact')
+                    statement.includes('temp_dirty_judgment_fact_article')
                     && statement.includes("SELECT 'article-requeue-test' AS article_id")
                   ) {
                     refreshRuns += 1
@@ -1739,7 +1739,7 @@ test('mart refresh retries cleanly after a failed background transaction poisons
                 runBackground: async (statement) => {
                   if (
                     shouldFailBackgroundRefresh
-                    && statement.includes('DROP TABLE mart.judgment_fact')
+                    && statement.includes('temp_dirty_judgment_fact_article')
                     && statement.includes('article-background-rollback-test')
                   ) {
                     shouldFailBackgroundRefresh = false
@@ -2129,6 +2129,111 @@ test('mart refresh repairs missing judgment facts during a full project refresh'
       {judgmentId: 'judgment-stale-fact-refresh-1', promptId: 'prompt-stale-fact-refresh-1'},
       {judgmentId: 'judgment-stale-fact-refresh-2', promptId: 'prompt-stale-fact-refresh-2'},
     ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.wal`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
+test('mart refresh replaces dirty article facts while preserving shared and unrelated facts', () => {
+  const duckdbPath = `/tmp/f1-mart-refresh-dirty-judgment-facts-${Date.now()}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts')
+
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const martRefreshService = getDuckdbMartRefreshService()
+
+        await database.run(
+          "INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url) VALUES ('connection-dirty-fact-preserve', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')"
+        )
+        await database.run(
+          "INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled) VALUES ('model-dirty-fact-preserve', 'connection-dirty-fact-preserve', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)"
+        )
+        await database.run(
+          "INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images) VALUES ('project-dirty-fact-source', 'Dirty Fact Source', 'model-dirty-fact-preserve', TRUE, TRUE, FALSE, FALSE), ('project-dirty-fact-target', 'Dirty Fact Target', 'model-dirty-fact-preserve', TRUE, TRUE, FALSE, FALSE), ('project-dirty-fact-unrelated', 'Dirty Fact Unrelated', 'model-dirty-fact-preserve', TRUE, TRUE, FALSE, FALSE)"
+        )
+        await database.run(
+          "INSERT INTO app.prompt (id, original_text, content_hash) VALUES ('prompt-dirty-fact-shared', 'Shared prompt', 'hash-dirty-fact-shared'), ('prompt-dirty-fact-stale', 'Stale prompt', 'hash-dirty-fact-stale'), ('prompt-dirty-fact-unrelated', 'Unrelated prompt', 'hash-dirty-fact-unrelated')"
+        )
+        await database.run(
+          "INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled) VALUES ('project-prompt-dirty-fact-source', 'project-dirty-fact-source', 'prompt-dirty-fact-shared', 1, TRUE), ('project-prompt-dirty-fact-target', 'project-dirty-fact-target', 'prompt-dirty-fact-shared', 1, TRUE), ('project-prompt-dirty-fact-unrelated', 'project-dirty-fact-unrelated', 'prompt-dirty-fact-unrelated', 1, TRUE)"
+        )
+        await database.run(
+          "INSERT INTO app.article (id, article_title, article_created_at, article_updated_at, article_id) VALUES ('article-dirty-fact-shared', 'Dirty Shared Article', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z', 'external-dirty-shared'), ('article-dirty-fact-unrelated', 'Unrelated Article', TIMESTAMPTZ '2026-04-02T00:00:00.000Z', TIMESTAMPTZ '2026-04-02T01:00:00.000Z', 'external-dirty-unrelated')"
+        )
+        await database.run(
+          "INSERT INTO app.project_article (id, project_id, article_id) VALUES ('project-article-dirty-fact-source', 'project-dirty-fact-source', 'article-dirty-fact-shared'), ('project-article-dirty-fact-target', 'project-dirty-fact-target', 'article-dirty-fact-shared'), ('project-article-dirty-fact-unrelated', 'project-dirty-fact-unrelated', 'article-dirty-fact-unrelated')"
+        )
+        await database.run(
+          "INSERT INTO app.judgment (id, article_id, prompt_id, model_id, project_id, snapshot_project_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images, is_answered, answered_original, answered_original_as_array, confidence_original) VALUES ('judgment-dirty-fact-shared-source', 'article-dirty-fact-shared', 'prompt-dirty-fact-shared', 'model-dirty-fact-preserve', 'project-dirty-fact-source', 'project-dirty-fact-source', TRUE, TRUE, FALSE, FALSE, TRUE, 'yes', ['yes'], 90), ('judgment-dirty-fact-stale', 'article-dirty-fact-shared', 'prompt-dirty-fact-stale', 'model-dirty-fact-preserve', 'project-dirty-fact-source', 'project-dirty-fact-source', TRUE, TRUE, FALSE, FALSE, TRUE, 'stale', ['stale'], 50), ('judgment-dirty-fact-unrelated', 'article-dirty-fact-unrelated', 'prompt-dirty-fact-unrelated', 'model-dirty-fact-preserve', 'project-dirty-fact-unrelated', 'project-dirty-fact-unrelated', TRUE, TRUE, FALSE, FALSE, TRUE, 'no', ['no'], 80)"
+        )
+
+        await martRefreshService.refreshJudgmentArticle('article-dirty-fact-shared')
+        await martRefreshService.refreshJudgmentArticle('article-dirty-fact-unrelated')
+        await database.run(
+          "UPDATE app.judgment SET deleted_at = current_timestamp, delete_generation = 1 WHERE id = 'judgment-dirty-fact-stale'"
+        )
+        await martRefreshService.refreshJudgmentArticle('article-dirty-fact-shared')
+        await martRefreshService.refreshProject('project-dirty-fact-target')
+
+        const factRows = await database.queryJson(\`
+          SELECT article_id AS articleId, judgment_id AS judgmentId
+          FROM mart.judgment_fact
+          WHERE article_id IN ('article-dirty-fact-shared', 'article-dirty-fact-unrelated')
+          ORDER BY article_id ASC, judgment_id ASC
+        \`)
+        const targetAnswerRows = await database.queryJson(\`
+          SELECT answer_value AS answerValue, judgment_id AS judgmentId
+          FROM mart.prompt_answer_fact
+          WHERE project_id = 'project-dirty-fact-target'
+          ORDER BY judgment_id ASC
+        \`)
+
+        console.log(JSON.stringify({factRows, targetAnswerRows}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(
+        runScript.stderr.toString()
+          || runScript.stdout.toString()
+          || 'Mart dirty judgment fact replacement regression test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      factRows: Array<{articleId: string; judgmentId: string}>
+      targetAnswerRows: Array<{answerValue: string; judgmentId: string}>
+    }
+
+    expect(result.factRows).toEqual([
+      {articleId: 'article-dirty-fact-shared', judgmentId: 'judgment-dirty-fact-shared-source'},
+      {articleId: 'article-dirty-fact-unrelated', judgmentId: 'judgment-dirty-fact-unrelated'},
+    ])
+    expect(result.targetAnswerRows).toEqual([{answerValue: 'yes', judgmentId: 'judgment-dirty-fact-shared-source'}])
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.wal`)
@@ -3592,7 +3697,7 @@ test('mart refresh yields between drain passes after exceeding the time budget',
                 ...service,
                 runBackground: async (statement) => {
                   if (
-                    statement.includes('DROP TABLE mart.judgment_fact')
+                    statement.includes('temp_dirty_judgment_fact_article')
                     && statement.includes('article-yield-test-')
                     && statement.includes(' AS article_id')
                   ) {
