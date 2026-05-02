@@ -103,12 +103,12 @@ type ProjectReviewDetailJudgmentRow = {
   judgmentModelId: string
   judgmentPromptId: string
   judgmentProjectId: string | null
-  judgmentUseTitle: boolean
-  judgmentUseAbstract: boolean
-  judgmentUseFulltext: boolean
-  judgmentUseFulltextNoImages: boolean
+  judgmentUseTitle: boolean | null
+  judgmentUseAbstract: boolean | null
+  judgmentUseFulltext: boolean | null
+  judgmentUseFulltextNoImages: boolean | null
   judgmentChunkingStrategy: string | null
-  judgmentIsAnswered: boolean
+  judgmentIsAnswered: boolean | null
   judgmentAnsweredOriginal: string | null
   judgmentAnsweredOriginalAsArray: unknown
   judgmentConfidenceOriginal: number | null
@@ -184,24 +184,24 @@ const getProjectReviewDetailJudgmentRows = async (params: {
     SELECT
       j.judgment_id AS judgmentId,
       j.created_at AS judgmentCreatedAt,
-      jf.updated_at AS judgmentUpdatedAt,
+      j.judgment_updated_at AS judgmentUpdatedAt,
       j.article_id AS judgmentArticleId,
       j.model_id AS judgmentModelId,
       j.prompt_id AS judgmentPromptId,
-      jf.project_id AS judgmentProjectId,
-      jf.use_title AS judgmentUseTitle,
-      jf.use_abstract AS judgmentUseAbstract,
-      jf.use_fulltext AS judgmentUseFulltext,
-      jf.use_fulltext_no_images AS judgmentUseFulltextNoImages,
-      jf.chunking_strategy AS judgmentChunkingStrategy,
-      jf.is_answered AS judgmentIsAnswered,
+      j.judgment_project_id AS judgmentProjectId,
+      j.use_title AS judgmentUseTitle,
+      j.use_abstract AS judgmentUseAbstract,
+      j.use_fulltext AS judgmentUseFulltext,
+      j.use_fulltext_no_images AS judgmentUseFulltextNoImages,
+      j.chunking_strategy AS judgmentChunkingStrategy,
+      j.is_answered AS judgmentIsAnswered,
       j.answered_original AS judgmentAnsweredOriginal,
       TO_JSON(j.answered_original_as_array) AS judgmentAnsweredOriginalAsArray,
-      jf.confidence_original AS judgmentConfidenceOriginal,
-      jf.explanation AS judgmentExplanation,
-      TO_JSON(jf.quotes) AS judgmentQuotes,
-      jf.snapshot_project_id AS judgmentSnapshotProjectId,
-      jf.snapshot_project_model_name AS judgmentSnapshotProjectModelName,
+      j.confidence_original AS judgmentConfidenceOriginal,
+      j.explanation AS judgmentExplanation,
+      TO_JSON(j.quotes) AS judgmentQuotes,
+      j.snapshot_project_id AS judgmentSnapshotProjectId,
+      j.snapshot_project_model_name AS judgmentSnapshotProjectModelName,
       p.original_text AS promptOriginalText,
       p.prompt_heading AS promptHeading,
       TO_JSON(m.metadata_json) AS modelMetadataJson,
@@ -212,9 +212,8 @@ const getProjectReviewDetailJudgmentRows = async (params: {
     INNER JOIN active_generation active
       ON active.projectId = j.project_id
      AND active.generation = j.generation
-    INNER JOIN mart.judgment_fact jf ON jf.judgment_id = j.judgment_id
-    INNER JOIN app.prompt p ON p.id = jf.prompt_id
-    LEFT JOIN app.model m ON m.id = jf.model_id
+    INNER JOIN app.prompt p ON p.id = j.prompt_id
+    LEFT JOIN app.model m ON m.id = j.model_id
     LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
     WHERE j.project_id = '${escapeSqlString(params.projectId)}'
       AND j.article_id = '${escapeSqlString(params.articleId)}'
@@ -360,12 +359,12 @@ const getProjectReviewDetailJudgmentValue = (row: ProjectReviewDetailJudgmentRow
     modelId: row.judgmentModelId,
     promptId: row.judgmentPromptId,
     projectId: row.judgmentProjectId,
-    useTitle: row.judgmentUseTitle,
-    useAbstract: row.judgmentUseAbstract,
-    useFulltext: row.judgmentUseFulltext,
-    useFulltextNoImages: row.judgmentUseFulltextNoImages,
+    useTitle: row.judgmentUseTitle ?? true,
+    useAbstract: row.judgmentUseAbstract ?? true,
+    useFulltext: row.judgmentUseFulltext ?? false,
+    useFulltextNoImages: row.judgmentUseFulltextNoImages ?? false,
     chunkingStrategy: row.judgmentChunkingStrategy as JudgmentChunkingStrategy,
-    isAnswered: row.judgmentIsAnswered,
+    isAnswered: row.judgmentIsAnswered ?? false,
     answeredOriginal: row.judgmentAnsweredOriginal,
     answeredOriginalAsArray: Array.isArray(answeredOriginalAsArray)
       ? answeredOriginalAsArray.filter((value): value is string => {
@@ -504,9 +503,7 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
         throw new Error('Project not found')
       }
 
-      const projectReviewDetailJudgmentRows = martFreshness.isFresh
-        ? await getProjectReviewDetailJudgmentRows({projectId, articleId})
-        : []
+      const projectReviewDetailJudgmentRows = await getProjectReviewDetailJudgmentRows({projectId, articleId})
 
       const promptIds = projectPromptRows.map((p) => {
         return p.id
@@ -547,9 +544,17 @@ export const projectsRoutesPostArticleReviewDetails = new Elysia().post(
           return detail.judgment.id
         }),
       )
+      const projectReviewDetailPromptIdSet = new Set<string>(
+        projectReviewDetailJudgmentDetails.map((detail) => {
+          return detail.judgment.promptId
+        }),
+      )
       const fallbackAppJudgmentDetails: ReviewJudgmentDetail[] = appScopedArticleJudgments
         .filter((row) => {
-          return !projectReviewDetailJudgmentIdSet.has(row.judgmentId)
+          return (
+            !projectReviewDetailJudgmentIdSet.has(row.judgmentId)
+            && !projectReviewDetailPromptIdSet.has(row.judgmentPromptId)
+          )
         })
         .map((row) => {
           return {

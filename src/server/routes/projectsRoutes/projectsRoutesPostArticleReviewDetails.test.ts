@@ -300,7 +300,7 @@ test('project review details reuses project-visible raw judgments from another s
   ).toEqual([])
 })
 
-test('project review details bypasses stale detail mart rows and surfaces stale freshness', async () => {
+test('project review details keeps active detail mart rows while surfacing stale freshness', async () => {
   let detailQueryCount = 0
 
   fullArticlesByIdsRef.current = async () => {
@@ -315,10 +315,19 @@ test('project review details bypasses stale detail mart rows and surfaces stale 
       : statement.includes('FROM app.project_mart_refresh_state')
         ? [getFreshnessRow({dirtyToken: 4, lastCompletedRefreshToken: 3, refreshStatus: 'failed'})]
         : statement.includes('FROM mart.review_article_serving_detail j')
-          ? ((detailQueryCount += 1), [getProjectReviewDetailJudgmentRow({judgmentId: 'stale-detail'})])
+          ? ((detailQueryCount += 1),
+            [
+              getProjectReviewDetailJudgmentRow({
+                judgmentAnsweredOriginal: 'old',
+                judgmentExplanation: 'old detail',
+                judgmentId: 'stale-detail',
+              }),
+            ])
           : statement.includes('FROM app.judgment j')
             ? [
                 getArticleJudgmentRow({
+                  judgmentAnsweredOriginal: 'new',
+                  judgmentExplanation: 'new detail',
                   judgmentId: 'judgment-fallback',
                   judgmentProjectId: 'project-other',
                   judgmentPromptId: 'prompt-1',
@@ -330,27 +339,29 @@ test('project review details bypasses stale detail mart rows and surfaces stale 
 
   const response = await postReviewDetailsRequest()
   const body = (await response.json()) as {
-    allJudgments: Array<{id: string}>
-    judgments: Array<{id: string}>
+    allJudgments: Array<{answeredOriginal: string; explanation: string; id: string}>
+    judgments: Array<{answeredOriginal: string; explanation: string; id: string}>
     martFreshness: {isFresh: boolean; state: string}
   }
 
   expect(response.status).toBe(200)
-  expect(detailQueryCount).toBe(0)
+  expect(detailQueryCount).toBe(1)
   expect(body.martFreshness).toMatchObject({isFresh: false, state: 'stale'})
   expect(
     body.judgments.map((judgment) => {
       return judgment.id
     }),
-  ).toEqual(['judgment-fallback'])
+  ).toEqual(['stale-detail'])
+  expect(body.judgments[0]).toMatchObject({answeredOriginal: 'old', explanation: 'old detail'})
   expect(
     body.allJudgments.map((judgment) => {
       return judgment.id
     }),
-  ).toEqual([])
+  ).toEqual(['judgment-fallback'])
+  expect(body.allJudgments[0]).toMatchObject({answeredOriginal: 'new', explanation: 'new detail'})
 })
 
-test('project review details surfaces running freshness while bypassing detail mart rows', async () => {
+test('project review details keeps active detail mart rows while surfacing running freshness', async () => {
   let detailQueryCount = 0
 
   fullArticlesByIdsRef.current = async () => {
@@ -365,10 +376,19 @@ test('project review details surfaces running freshness while bypassing detail m
       : statement.includes('FROM app.project_mart_refresh_state')
         ? [getFreshnessRow({dirtyToken: 5, lastCompletedRefreshToken: 4, refreshStatus: 'running'})]
         : statement.includes('FROM mart.review_article_serving_detail j')
-          ? ((detailQueryCount += 1), [getProjectReviewDetailJudgmentRow({judgmentId: 'running-detail'})])
+          ? ((detailQueryCount += 1),
+            [
+              getProjectReviewDetailJudgmentRow({
+                judgmentAnsweredOriginal: 'old',
+                judgmentExplanation: 'old detail',
+                judgmentId: 'running-detail',
+              }),
+            ])
           : statement.includes('FROM app.judgment j')
             ? [
                 getArticleJudgmentRow({
+                  judgmentAnsweredOriginal: 'new',
+                  judgmentExplanation: 'new detail',
                   judgmentId: 'judgment-fallback',
                   judgmentProjectId: 'project-other',
                   judgmentPromptId: 'prompt-1',
@@ -380,24 +400,26 @@ test('project review details surfaces running freshness while bypassing detail m
 
   const response = await postReviewDetailsRequest()
   const body = (await response.json()) as {
-    allJudgments: Array<{id: string}>
-    judgments: Array<{id: string}>
+    allJudgments: Array<{answeredOriginal: string; explanation: string; id: string}>
+    judgments: Array<{answeredOriginal: string; explanation: string; id: string}>
     martFreshness: {isFresh: boolean; state: string}
   }
 
   expect(response.status).toBe(200)
-  expect(detailQueryCount).toBe(0)
+  expect(detailQueryCount).toBe(1)
   expect(body.martFreshness).toMatchObject({isFresh: false, state: 'running'})
   expect(
     body.judgments.map((judgment) => {
       return judgment.id
     }),
-  ).toEqual(['judgment-fallback'])
+  ).toEqual(['running-detail'])
+  expect(body.judgments[0]).toMatchObject({answeredOriginal: 'old', explanation: 'old detail'})
   expect(
     body.allJudgments.map((judgment) => {
       return judgment.id
     }),
-  ).toEqual([])
+  ).toEqual(['judgment-fallback'])
+  expect(body.allJudgments[0]).toMatchObject({answeredOriginal: 'new', explanation: 'new detail'})
 })
 
 test('project review details raw fallback query uses project-visible scope without judgment project ownership', async () => {

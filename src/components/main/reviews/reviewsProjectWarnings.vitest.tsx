@@ -30,6 +30,17 @@ vi.mock('@tanstack/solid-router', () => {
 })
 
 const getWarningsData = (indexing: Partial<ReviewsWarningsData['indexing']>): ReviewsWarningsData => {
+  const queueMetrics = {
+    lastDurationMs: null,
+    lastWaitMs: null,
+    maxQueueDepth: 0,
+    queueDepth: 0,
+    tasksCompleted: 0,
+    tasksStarted: 0,
+    totalDurationMs: 0,
+    totalWaitMs: 0,
+  }
+
   return {
     enabledPromptCount: 1,
     indexing: {
@@ -37,6 +48,12 @@ const getWarningsData = (indexing: Partial<ReviewsWarningsData['indexing']>): Re
       activeWorkCount: 0,
       articleRefreshesPerMinute: null,
       blockedReason: null,
+      diagnostics: {
+        duckdbQueues: {background: queueMetrics, main: queueMetrics},
+        largeRebuild: {currentPhase: null, lastCycle: null},
+        processMemory: {rssBytes: 0},
+        tempSpill: {available: false, error: null, fileCount: null, tempDirectory: null, totalBytes: null},
+      },
       eligibleConsumerCount: 1,
       eligibleConsumerPresent: true,
       inFlightArticleRefreshCount: 0,
@@ -44,6 +61,7 @@ const getWarningsData = (indexing: Partial<ReviewsWarningsData['indexing']>): Re
       inFlightRefreshCount: 0,
       largeRebuild: null,
       lastProgressedAt: null,
+      lastProcessedAt: null,
       lastStartedAt: null,
       oldestQueuedAt: '2026-04-02T12:00:00.000Z',
       pendingArticleRefreshCount: 0,

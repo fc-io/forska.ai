@@ -13,11 +13,28 @@ import {
 import type {ReviewsWarningsData} from './reviewsWarningsQuery.ts'
 
 const getIndexing = (overrides: Partial<ReviewsWarningsData['indexing']>): ReviewsWarningsData['indexing'] => {
+  const queueMetrics = {
+    lastDurationMs: null,
+    lastWaitMs: null,
+    maxQueueDepth: 0,
+    queueDepth: 0,
+    tasksCompleted: 0,
+    tasksStarted: 0,
+    totalDurationMs: 0,
+    totalWaitMs: 0,
+  }
+
   return {
     activeConsumerCount: 0,
     activeWorkCount: 0,
     articleRefreshesPerMinute: null,
     blockedReason: null,
+    diagnostics: {
+      duckdbQueues: {background: queueMetrics, main: queueMetrics},
+      largeRebuild: {currentPhase: null, lastCycle: null},
+      processMemory: {rssBytes: 0},
+      tempSpill: {available: false, error: null, fileCount: null, tempDirectory: null, totalBytes: null},
+    },
     eligibleConsumerCount: 1,
     eligibleConsumerPresent: true,
     inFlightArticleRefreshCount: 0,
@@ -25,6 +42,7 @@ const getIndexing = (overrides: Partial<ReviewsWarningsData['indexing']>): Revie
     inFlightRefreshCount: 0,
     largeRebuild: null,
     lastProgressedAt: null,
+    lastProcessedAt: null,
     lastStartedAt: null,
     oldestQueuedAt: null,
     pendingArticleRefreshCount: 0,
@@ -35,6 +53,8 @@ const getIndexing = (overrides: Partial<ReviewsWarningsData['indexing']>): Revie
     queuedArticleRefreshCount: 0,
     queuedProjectRefreshCount: 1,
     queuedRefreshCount: 1,
+    quarantinedArticleRefreshCount: 0,
+    quarantinedArticles: [],
     recoveryContext: null,
     recoveryMode: 'none',
     requiredConsumerRole: 'maintenance-worker',

@@ -2786,6 +2786,299 @@ test('refreshProjectArticleMartsBatch refreshes active data used by olap filters
   }
 })
 
+test('active review API and OLAP reads stay generation-bound through queued running promotion and cleanup', () => {
+  const duckdbPath = `/tmp/f1-mart-refresh-active-read-gates-${Date.now()}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {Elysia} = await import('elysia')
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {queryArticlesReviewsFromDuckdb} = await import('./src/services/olap/duckdbOlap.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts')
+        const {getProjectMartLargeRebuildExecutor} = await import('./src/server/services/projectMartLargeRebuildExecutor.ts')
+        const {projectsRoutesGetArticlesReviews} = await import('./src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviews.ts')
+        const {projectsRoutesPostArticleReviewDetails} = await import('./src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.ts')
+
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const martRefreshService = getDuckdbMartRefreshService()
+        const executor = getProjectMartLargeRebuildExecutor()
+        const projectId = 'project-active-read-gates'
+        const articleId = 'article-active-read-gates'
+        const promptId = 'prompt-active-read-gates'
+        const reviewsApp = new Elysia().use(projectsRoutesGetArticlesReviews)
+        const detailsApp = new Elysia().use(projectsRoutesPostArticleReviewDetails)
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+          VALUES ('connection-active-read-gates', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+        \`)
+        await database.run(\`
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+          VALUES ('model-active-read-gates', 'connection-active-read-gates', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+          VALUES ('project-active-read-gates', 'Active Read Gates Project', 'model-active-read-gates', TRUE, TRUE, FALSE, FALSE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.prompt (id, original_text, content_hash)
+          VALUES ('prompt-active-read-gates', 'Prompt body', 'hash-active-read-gates')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+          VALUES ('project-prompt-active-read-gates', 'project-active-read-gates', 'prompt-active-read-gates', 1, TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.article (id, article_title, article_created_at, article_updated_at, article_id)
+          VALUES ('article-active-read-gates', 'Active Read Gates Article', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z', 'external-active-read-gates')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_article (id, project_id, article_id)
+          VALUES ('project-article-active-read-gates', 'project-active-read-gates', 'article-active-read-gates')
+        \`)
+        await database.run(\`
+          INSERT INTO app.judgment (
+            id,
+            article_id,
+            prompt_id,
+            model_id,
+            project_id,
+            snapshot_project_id,
+            use_title,
+            use_abstract,
+            use_fulltext,
+            use_fulltext_no_images,
+            is_answered,
+            answered_original,
+            answered_original_as_array,
+            confidence_original,
+            explanation,
+            updated_at
+          )
+          VALUES ('judgment-active-read-gates', 'article-active-read-gates', 'prompt-active-read-gates', 'model-active-read-gates', 'project-active-read-gates', 'project-active-read-gates', TRUE, TRUE, FALSE, FALSE, TRUE, 'old', ['old'], 90, 'old detail', TIMESTAMPTZ '2026-04-01T02:00:00.000Z')
+        \`)
+
+        await martRefreshService.refreshJudgmentArticle(articleId)
+        await martRefreshService.refreshProject(projectId)
+
+        const getReviewApiResult = async (answer) => {
+          const response = await reviewsApp.handle(
+            new Request('http://localhost/api/articlesreviews', {
+              body: JSON.stringify({projectId, page: '1', limit: '10', prompts: {[promptId]: [answer]}}),
+              headers: {'content-type': 'application/json'},
+              method: 'POST',
+            }),
+          )
+          const body = await response.json()
+          return {body, status: response.status}
+        }
+        const getDetailsResult = async () => {
+          const response = await detailsApp.handle(
+            new Request('http://localhost/api/projectsreview', {
+              body: JSON.stringify({articleId, projectId}),
+              headers: {'content-type': 'application/json'},
+              method: 'POST',
+            }),
+          )
+          const body = await response.json()
+          return {body, status: response.status}
+        }
+        const getReviewIds = (result) => {
+          return result.data.map((article) => {
+            return article.id
+          })
+        }
+        const getReviewAnswers = (result) => {
+          return result.data.flatMap((article) => {
+            return article.judgments.map((judgment) => {
+              return judgment.answeredOriginal
+            })
+          })
+        }
+        const getFilterSnapshot = async (answer) => {
+          const direct = await queryArticlesReviewsFromDuckdb({projectId, page: 1, limit: 10, prompts: {[promptId]: [answer]}})
+          const api = await getReviewApiResult(answer)
+          return {
+            apiAnswers: getReviewAnswers(api.body),
+            apiIds: getReviewIds(api.body),
+            apiStatus: api.status,
+            directAnswers: getReviewAnswers(direct),
+            directIds: getReviewIds(direct),
+          }
+        }
+        const getSnapshot = async (label) => {
+          const oldFilter = await getFilterSnapshot('old')
+          const newFilter = await getFilterSnapshot('new')
+          const details = await getDetailsResult()
+          return {
+            detailJudgments: details.body.judgments.map((judgment) => {
+              return {answer: judgment.answeredOriginal, explanation: judgment.explanation}
+            }),
+            detailStatus: details.status,
+            label,
+            newFilter,
+            oldFilter,
+          }
+        }
+
+        const beforeRefresh = await getSnapshot('before-refresh')
+
+        await database.run(\`
+          UPDATE app.judgment
+          SET answered_original = 'new',
+              answered_original_as_array = ['new'],
+              confidence_original = 77,
+              explanation = 'new detail',
+              updated_at = TIMESTAMPTZ '2026-04-02T00:00:00.000Z'
+          WHERE id = 'judgment-active-read-gates'
+        \`)
+        await martRefreshService.refreshJudgmentArticle(articleId)
+        await database.run(\`
+          INSERT INTO app.project_mart_refresh_state (
+            project_id,
+            dirty_token,
+            active_refresh_token,
+            last_completed_refresh_token,
+            last_requested_at,
+            refresh_status
+          ) VALUES (
+            'project-active-read-gates',
+            2,
+            0,
+            1,
+            TIMESTAMPTZ '2026-04-02T00:01:00.000Z',
+            'idle'
+          )
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_mart_refresh_article_state (
+            project_id,
+            article_id,
+            first_dirty_token,
+            last_dirty_token,
+            updated_at
+          ) VALUES (
+            'project-active-read-gates',
+            'article-active-read-gates',
+            2,
+            2,
+            TIMESTAMPTZ '2026-04-02T00:01:00.000Z'
+          )
+        \`)
+
+        const queued = await getSnapshot('queued')
+
+        await database.run(\`
+          UPDATE app.project_mart_refresh_state
+          SET active_refresh_token = 2,
+              refresh_status = 'running',
+              last_started_at = TIMESTAMPTZ '2026-04-02T00:02:00.000Z',
+              lease_expires_at = TIMESTAMPTZ '2035-04-02T00:02:30.000Z',
+              worker_id = 'active-read-gates-worker'
+          WHERE project_id = 'project-active-read-gates'
+        \`)
+
+        const running = await getSnapshot('running')
+        const targetGeneration = 3
+
+        await executor.rebuildProjectPromptAnswerFactBatch(projectId, [articleId])
+        await executor.rebuildProjectReviewAnswerDictionaryBatch(projectId, [articleId])
+        await executor.resetProjectReviewArticleRollup(projectId)
+        await executor.rebuildProjectReviewArticleRollupBatch(projectId, [articleId])
+        await executor.setupProjectReviewServingStaging(projectId, targetGeneration)
+        await executor.rebuildProjectReviewArticleFilterMemberBatch(projectId, [articleId], targetGeneration)
+        await executor.rebuildProjectReviewServingBatch(projectId, [articleId], targetGeneration)
+        await executor.finalizeProjectReviewServing(projectId, targetGeneration)
+        await database.run(\`
+          UPDATE app.project_mart_refresh_state
+          SET last_completed_refresh_token = 2,
+              last_completed_at = TIMESTAMPTZ '2026-04-02T00:03:00.000Z',
+              refresh_status = 'idle',
+              active_refresh_token = 0,
+              lease_expires_at = NULL,
+              worker_id = NULL
+          WHERE project_id = 'project-active-read-gates'
+        \`)
+
+        const afterPromotion = await getSnapshot('after-promotion')
+        const cleanupResult = await executor.cleanupProjectReviewServingGenerationsBatch({batchSize: 100, projectId})
+        const afterCleanup = await getSnapshot('after-cleanup')
+
+        console.log(JSON.stringify({afterCleanup, afterPromotion, beforeRefresh, cleanupResult, queued, running}))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(
+        runScript.stderr.toString() || runScript.stdout.toString() || 'Active read final gates test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      afterCleanup: Record<string, unknown>
+      afterPromotion: Record<string, unknown>
+      beforeRefresh: Record<string, unknown>
+      cleanupResult: {deletedRowCount: number}
+      queued: Record<string, unknown>
+      running: Record<string, unknown>
+    }
+    const getComparableSnapshot = (snapshot: Record<string, unknown>) => {
+      return {detailJudgments: snapshot.detailJudgments, newFilter: snapshot.newFilter, oldFilter: snapshot.oldFilter}
+    }
+    const oldActiveSnapshot = {
+      detailJudgments: [{answer: 'old', explanation: 'old detail'}],
+      newFilter: {apiAnswers: [], apiIds: [], apiStatus: 200, directAnswers: [], directIds: []},
+      oldFilter: {
+        apiAnswers: ['old'],
+        apiIds: ['article-active-read-gates'],
+        apiStatus: 200,
+        directAnswers: ['old'],
+        directIds: ['article-active-read-gates'],
+      },
+    }
+    const newActiveSnapshot = {
+      detailJudgments: [{answer: 'new', explanation: 'new detail'}],
+      newFilter: {
+        apiAnswers: ['new'],
+        apiIds: ['article-active-read-gates'],
+        apiStatus: 200,
+        directAnswers: ['new'],
+        directIds: ['article-active-read-gates'],
+      },
+      oldFilter: {apiAnswers: [], apiIds: [], apiStatus: 200, directAnswers: [], directIds: []},
+    }
+
+    expect(getComparableSnapshot(result.beforeRefresh)).toEqual(oldActiveSnapshot)
+    expect(getComparableSnapshot(result.queued)).toEqual(oldActiveSnapshot)
+    expect(getComparableSnapshot(result.running)).toEqual(oldActiveSnapshot)
+    expect(getComparableSnapshot(result.afterPromotion)).toEqual(newActiveSnapshot)
+    expect(getComparableSnapshot(result.afterCleanup)).toEqual(newActiveSnapshot)
+    expect(result.cleanupResult.deletedRowCount).toBeGreaterThan(0)
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('mart refresh maintains project scope article deltas before downstream dirty article refreshes', () => {
   const duckdbPath = `/tmp/f1-mart-refresh-scope-deltas-${Date.now()}.duckdb`
   const runScript = globalThis.Bun.spawnSync(

@@ -8,6 +8,55 @@ export type ReviewsWarningsData = {
     activeWorkCount: number
     articleRefreshesPerMinute: number | null
     blockedReason: 'paused_by_policy' | 'waiting_for_maintenance_worker' | null
+    diagnostics: {
+      duckdbQueues: {
+        background: {
+          lastDurationMs: number | null
+          lastWaitMs: number | null
+          maxQueueDepth: number
+          queueDepth: number
+          tasksCompleted: number
+          tasksStarted: number
+          totalDurationMs: number
+          totalWaitMs: number
+        }
+        main: {
+          lastDurationMs: number | null
+          lastWaitMs: number | null
+          maxQueueDepth: number
+          queueDepth: number
+          tasksCompleted: number
+          tasksStarted: number
+          totalDurationMs: number
+          totalWaitMs: number
+        }
+      }
+      largeRebuild: {
+        currentPhase: null | {
+          committedRowCount: number
+          cycleCount: number
+          durationMs: number
+          lastEndedAt: string | null
+          lastRssBytes: number | null
+          lastTempSpill: ReviewsWarningsDuckdbTempSpill | null
+          maxRssBytes: number | null
+          maxTempSpillBytes: number | null
+          phase: string | null
+          queueWaitMs: number | null
+          rowsPerSecond: number | null
+        }
+        lastCycle: null | {
+          endedAt: string
+          phase: string | null
+          queueWaitMs: number | null
+          rowsPerSecond: number | null
+          rssBytes: number | null
+          tempSpill: ReviewsWarningsDuckdbTempSpill | null
+        }
+      }
+      processMemory: {rssBytes: number}
+      tempSpill: ReviewsWarningsDuckdbTempSpill
+    }
     eligibleConsumerCount: number
     eligibleConsumerPresent: boolean
     inFlightArticleRefreshCount: number
@@ -28,6 +77,7 @@ export type ReviewsWarningsData = {
       refreshToken: number | null
     }
     lastProgressedAt: string | null
+    lastProcessedAt: string | null
     lastStartedAt: string | null
     oldestQueuedAt: string | null
     pendingArticleRefreshCount: number
@@ -54,6 +104,14 @@ export type ReviewsWarningsData = {
   }
   projectId: string
   scope: {hasAnyArticlesInScope: boolean}
+}
+
+type ReviewsWarningsDuckdbTempSpill = {
+  available: boolean
+  error: string | null
+  fileCount: number | null
+  tempDirectory: string | null
+  totalBytes: number | null
 }
 
 export const createReviewsWarningsQueryOptions = (projectId: string) => {

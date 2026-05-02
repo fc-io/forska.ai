@@ -15,7 +15,14 @@ import {
 import {getProjectMartRefreshStateService} from '../../services/projectMartRefreshStateService.ts'
 import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJudgmentRule.ts'
 import {getDuckdbOwnerConnectionsOverview} from '../../utils/duckdbOwnerConnections.ts'
+import {
+  type DuckdbQueueRuntimeMetrics,
+  type DuckdbTempSpillMetrics,
+  getDuckdbQueueRuntimeMetricsSnapshot,
+  getDuckdbTempSpillMetricsSnapshot,
+} from '../../utils/duckdbService.ts'
 import {shouldCurrentRuntimeRunMartRefreshDrain} from '../../utils/martRefreshDrainEligibility.ts'
+import {getProjectMartLargeRebuildRuntimeMetrics} from '../../utils/projectMartLargeRebuildRuntimeMetrics.ts'
 import {shouldCurrentServerRunMaintenanceLoops} from '../../utils/serverRuntimeRole.ts'
 import {assertProjectIsActive} from './projectAccessGuard.ts'
 
@@ -31,6 +38,39 @@ type ProjectLargeRebuildProgress = {
   remainingCurrentPhaseArticleCount: number | null
   rowsPerMinute: number | null
   scopeArticleCount: number
+}
+type ProjectLargeRebuildRuntimeCycle = ReturnType<
+  typeof getProjectMartLargeRebuildRuntimeMetrics
+>['recentCycles'][number]
+type ProjectLargeRebuildRuntimeCycleDiagnostic = {
+  endedAt: string
+  phase: string | null
+  queueWaitMs: number | null
+  rowsPerSecond: number | null
+  rssBytes: number | null
+  tempSpill: DuckdbTempSpillMetrics | null
+}
+type ProjectLargeRebuildRuntimePhaseDiagnostic = {
+  committedRowCount: number
+  cycleCount: number
+  durationMs: number
+  lastEndedAt: string | null
+  lastRssBytes: number | null
+  lastTempSpill: DuckdbTempSpillMetrics | null
+  maxRssBytes: number | null
+  maxTempSpillBytes: number | null
+  phase: string | null
+  queueWaitMs: number | null
+  rowsPerSecond: number | null
+}
+type ReviewsRuntimeDiagnostics = {
+  duckdbQueues: DuckdbQueueRuntimeMetrics
+  largeRebuild: {
+    currentPhase: ProjectLargeRebuildRuntimePhaseDiagnostic | null
+    lastCycle: ProjectLargeRebuildRuntimeCycleDiagnostic | null
+  }
+  processMemory: {rssBytes: number}
+  tempSpill: DuckdbTempSpillMetrics
 }
 
 type ProjectLargeRebuildState = {
@@ -71,6 +111,104 @@ const getLargeRebuildDetails = (state: ProjectLargeRebuildState, progress: Proje
         refreshStatus: state.refreshStatus,
         refreshToken: state.refreshToken,
       }
+}
+
+const getRowsPerSecond = (rows: number, durationMs: number) => {
+  return rows > 0 && durationMs > 0 ? Number((rows / (durationMs / 1000)).toFixed(2)) : null
+}
+
+const getMaxNullableNumber = (left: number | null, right: number | null) => {
+  return left === null ? right : right === null ? left : Math.max(left, right)
+}
+
+const getNullableNumberSum = (values: Array<number | null>) => {
+  return values.every((value) => {
+    return value === null
+  })
+    ? null
+    : values.reduce((sum, value) => {
+        return sum + (value ?? 0)
+      }, 0)
+}
+
+const getLargeRebuildRuntimeCycleDiagnostic = (
+  cycle: ProjectLargeRebuildRuntimeCycle | null,
+): ProjectLargeRebuildRuntimeCycleDiagnostic | null => {
+  return cycle === null
+    ? null
+    : {
+        endedAt: cycle.endedAt,
+        phase: cycle.phase,
+        queueWaitMs: cycle.queueWaitMs,
+        rowsPerSecond: cycle.rowsPerSecond,
+        rssBytes: cycle.processMemory.rssBytes,
+        tempSpill: cycle.tempSpill,
+      }
+}
+
+const getLargeRebuildRuntimePhaseDiagnostic = (
+  phase: string | null,
+  cycles: ProjectLargeRebuildRuntimeCycle[],
+): ProjectLargeRebuildRuntimePhaseDiagnostic | null => {
+  const [lastCycle = null] = cycles.slice(-1)
+  const committedRowCount = cycles.reduce((sum, cycle) => {
+    return sum + cycle.committedRowCount
+  }, 0)
+  const durationMs = cycles.reduce((sum, cycle) => {
+    return sum + cycle.durationMs
+  }, 0)
+  const queueWaitMs = getNullableNumberSum(
+    cycles.map((cycle) => {
+      return cycle.queueWaitMs
+    }),
+  )
+  const maxRssBytes = cycles.reduce<number | null>((maxValue, cycle) => {
+    return getMaxNullableNumber(maxValue, cycle.processMemory.rssBytes)
+  }, null)
+  const maxTempSpillBytes = cycles.reduce<number | null>((maxValue, cycle) => {
+    return getMaxNullableNumber(maxValue, cycle.tempSpill?.totalBytes ?? null)
+  }, null)
+
+  return cycles.length === 0
+    ? null
+    : {
+        committedRowCount,
+        cycleCount: cycles.length,
+        durationMs,
+        lastEndedAt: lastCycle?.endedAt ?? null,
+        lastRssBytes: lastCycle?.processMemory.rssBytes ?? null,
+        lastTempSpill: lastCycle?.tempSpill ?? null,
+        maxRssBytes,
+        maxTempSpillBytes,
+        phase,
+        queueWaitMs,
+        rowsPerSecond: getRowsPerSecond(committedRowCount, durationMs),
+      }
+}
+
+const getReviewsRuntimeDiagnostics = (
+  projectId: string,
+  state: ProjectLargeRebuildState,
+): ReviewsRuntimeDiagnostics => {
+  const projectMartLargeRebuildRuntimeMetrics = getProjectMartLargeRebuildRuntimeMetrics()
+  const projectCycles = projectMartLargeRebuildRuntimeMetrics.recentCycles.filter((cycle) => {
+    return cycle.projectId === projectId
+  })
+  const currentPhaseCycles = projectCycles.filter((cycle) => {
+    return cycle.phase === state.rebuildPhase
+  })
+  const [lastProjectCycle = null] = projectCycles.slice(-1)
+  const processMemory = process.memoryUsage()
+
+  return {
+    duckdbQueues: getDuckdbQueueRuntimeMetricsSnapshot(),
+    largeRebuild: {
+      currentPhase: getLargeRebuildRuntimePhaseDiagnostic(state.rebuildPhase, currentPhaseCycles),
+      lastCycle: getLargeRebuildRuntimeCycleDiagnostic(lastProjectCycle),
+    },
+    processMemory: {rssBytes: processMemory.rss},
+    tempSpill: getDuckdbTempSpillMetricsSnapshot(),
+  }
 }
 
 type ProjectRefreshState = {
@@ -652,6 +790,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
           activeWorkCount,
           articleRefreshesPerMinute: throughputSnapshot.articleRefreshesPerMinute,
           blockedReason,
+          diagnostics: getReviewsRuntimeDiagnostics(projectId, projectLargeRebuildState),
           eligibleConsumerCount: Math.max(
             maintenanceConsumerAvailability.eligibleConsumerCount,
             eligibleConsumerPresent ? 1 : 0,
@@ -669,6 +808,10 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
             ...freshMaintenanceLeases.map((lease) => {
               return lease.lastProgressedAt
             }),
+          ),
+          lastProcessedAt: getLatestTimestamp(
+            projectRefreshState.lastCompletedAt,
+            projectLargeRebuildState.lastCompletedAt,
           ),
           lastStartedAt: getLatestTimestamp(
             projectRefreshState.lastStartedAt,

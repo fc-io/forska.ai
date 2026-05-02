@@ -644,12 +644,12 @@ test('countArticlesReviewsFromDuckdb falls back to raw judgments when serving ro
   expect(duckdbRunnerMockRef.current.queries[4]).not.toContain('FROM mart.review_article_rollup r')
 })
 
-test('countArticlesReviewsFromDuckdb falls back to raw judgments when serving ledger freshness is stale', async () => {
+test('countArticlesReviewsFromDuckdb keeps active serving reads independent of refresh freshness', async () => {
   duckdbRunnerMockRef.current = createDuckdbRunnerMock([
     getPromptRows(),
     getProjectRows('model-1'),
     getScopeRouteRows(),
-    [],
+    [{projectId: 'project-1'}],
     [{totalCount: 2}],
   ])
 
@@ -657,8 +657,8 @@ test('countArticlesReviewsFromDuckdb falls back to raw judgments when serving le
   const result = await countArticlesReviewsFromDuckdb({projectId: 'project-1', limit: 10})
 
   expect(result).toEqual({totalCount: 2, totalPages: 1})
-  expect(duckdbRunnerMockRef.current.queries[3]).toContain('LEFT JOIN app.project_mart_refresh_state refresh_state')
-  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM app.judgment j')
+  expect(duckdbRunnerMockRef.current.queries[3]).not.toContain('app.project_mart_refresh_state')
+  expect(duckdbRunnerMockRef.current.queries[4]).toContain('FROM mart.review_article_serving s')
 })
 
 test('countArticlesReviewsFromDuckdb uses new serving filter members when rows exist', async () => {

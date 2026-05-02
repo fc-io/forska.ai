@@ -345,13 +345,6 @@ const getDuckdbSqlArrayLiteral = (values: string[]) => {
   return `[${getDuckdbSqlStringList(values).join(', ')}]`
 }
 
-const getProjectMartFreshnessClause = () => {
-  return `(
-    refresh_state.project_id IS NULL
-    OR CAST(refresh_state.dirty_token AS BIGINT) <= CAST(refresh_state.last_completed_refresh_token AS BIGINT)
-  )`
-}
-
 const getDuckdbPromptTypeById = (scope: ProjectOlapScope) => {
   return scope.promptRows.reduce<Record<string, string | null>>((rowMap, row) => {
     return {...rowMap, [row.id]: row.type}
@@ -1095,10 +1088,7 @@ const getHasReviewArticleServingRows = async (scope: ProjectOlapScope) => {
     active_generation AS (
       SELECT generation.project_id AS projectId, generation.active_generation AS generation
       FROM app.project_review_serving_generation generation
-      LEFT JOIN app.project_mart_refresh_state refresh_state
-        ON refresh_state.project_id = generation.project_id
       WHERE generation.project_id = ${getDuckdbSqlString(scope.projectId)}
-        AND ${getProjectMartFreshnessClause()}
     ),
     scope_counts AS (
       SELECT COUNT(*) AS scopeRowCount
@@ -1126,13 +1116,10 @@ const getHasReviewArticleFilterMemberRows = async (projectId: string) => {
   const rows = await runDuckdbJsonQuery<{projectId: string}>(`
     SELECT generation.project_id AS projectId
     FROM app.project_review_serving_generation generation
-    LEFT JOIN app.project_mart_refresh_state refresh_state
-      ON refresh_state.project_id = generation.project_id
     INNER JOIN mart.review_article_filter_member member
       ON member.project_id = generation.project_id
      AND member.generation = generation.active_generation
     WHERE generation.project_id = ${getDuckdbSqlString(projectId)}
-      AND ${getProjectMartFreshnessClause()}
     LIMIT 1
   `)
 
@@ -1143,13 +1130,10 @@ const getHasReviewArticleJudgmentDetailRows = async (projectId: string) => {
   const rows = await runDuckdbJsonQuery<{projectId: string}>(`
     SELECT generation.project_id AS projectId
     FROM app.project_review_serving_generation generation
-    LEFT JOIN app.project_mart_refresh_state refresh_state
-      ON refresh_state.project_id = generation.project_id
     INNER JOIN mart.review_article_serving_detail detail
       ON detail.project_id = generation.project_id
      AND detail.generation = generation.active_generation
     WHERE generation.project_id = ${getDuckdbSqlString(projectId)}
-      AND ${getProjectMartFreshnessClause()}
     LIMIT 1
   `)
 

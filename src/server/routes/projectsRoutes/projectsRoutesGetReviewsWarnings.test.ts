@@ -18,6 +18,26 @@ type ReviewsWarningsResponse = {
       activeConsumerCount: number
       activeWorkCount: number
       blockedReason: 'paused_by_policy' | 'waiting_for_maintenance_worker' | null
+      diagnostics: {
+        duckdbQueues: {background: {queueDepth: number}; main: {queueDepth: number}}
+        largeRebuild: {
+          currentPhase: null | {
+            committedRowCount: number
+            lastRssBytes: number | null
+            maxTempSpillBytes: number | null
+            queueWaitMs: number | null
+            rowsPerSecond: number | null
+          }
+          lastCycle: null | {
+            phase: string | null
+            queueWaitMs: number | null
+            rowsPerSecond: number | null
+            rssBytes: number | null
+          }
+        }
+        processMemory: {rssBytes: number}
+        tempSpill: {available: boolean; totalBytes: number | null}
+      }
       eligibleConsumerCount: number
       eligibleConsumerPresent: boolean
       inFlightArticleRefreshCount: number
@@ -31,6 +51,7 @@ type ReviewsWarningsResponse = {
         }
       }
       lastProgressedAt: string | null
+      lastProcessedAt: string | null
       lastStartedAt: string | null
       oldestQueuedAt: string | null
       pendingArticleRefreshCount: number
@@ -807,6 +828,106 @@ test('reviews warnings expose large rebuild cursor progress separately from dirt
   expect(body.data.indexing.pendingArticleRefreshCount).toBe(1)
   expect(body.data.indexing.largeRebuild?.progress?.scopeArticleCount).toBe(1)
   expect(body.data.indexing.largeRebuild?.progress?.remainingCurrentPhaseArticleCount).toBe(0)
+})
+
+test('reviews warnings expose non-blocking runtime diagnostics for active rebuild work', async () => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const projectId = 'project-large-rebuild-diagnostics-warning'
+  const articleId = `article-${projectId}`
+  const {recordProjectMartLargeRebuildCycleMetric, resetProjectMartLargeRebuildRuntimeMetricsForTests} =
+    await import('../../utils/projectMartLargeRebuildRuntimeMetrics.ts')
+
+  resetProjectMartLargeRebuildRuntimeMetricsForTests()
+
+  try {
+    await insertProjectFixture(projectId)
+    await insertProjectRefreshState(projectId, {dirtyToken: 5, lastCompletedRefreshToken: 4, refreshStatus: 'idle'})
+    await runDatabase(`
+      UPDATE app.project_mart_refresh_state
+      SET last_completed_at = TIMESTAMPTZ '2026-04-02T12:04:00.000Z'
+      WHERE project_id = '${projectId}'
+    `)
+    await insertDirtyArticleRefreshState(projectId, articleId, 5)
+    await runDatabase(`
+      INSERT INTO mart.project_scope_article (
+        project_id,
+        article_id,
+        in_curated_scope,
+        in_route_scope,
+        article_created_at,
+        article_updated_at
+      ) VALUES (
+        '${projectId}',
+        '${articleId}',
+        TRUE,
+        FALSE,
+        TIMESTAMPTZ '2026-04-02T12:00:00.000Z',
+        NULL
+      )
+    `)
+    await insertLargeRebuildState(projectId, {
+      cursorArticleCreatedAt: '2026-04-02T12:00:00.000Z',
+      cursorArticleId: articleId,
+      rebuildPhase: 'prompt_answer_fact',
+      refreshStatus: 'running',
+      refreshToken: 5,
+    })
+    await runDatabase(`
+      UPDATE app.project_mart_large_rebuild_state
+      SET last_completed_at = TIMESTAMPTZ '2026-04-02T12:06:00.000Z'
+      WHERE project_id = '${projectId}'
+    `)
+    recordProjectMartLargeRebuildCycleMetric({
+      articleCount: 40,
+      committedRowCount: 30,
+      durationMs: 2000,
+      duckdbQueues: null,
+      endedAt: '2026-05-02T10:00:02.000Z',
+      error: null,
+      lastCommittedCursor: {articleCreatedAt: '2026-04-02T12:00:00.000Z', articleId},
+      phase: 'prompt_answer_fact',
+      processMemory: {rssBytes: 123456},
+      projectId,
+      queueWaitMs: 25,
+      startedAt: '2026-05-02T10:00:00.000Z',
+      status: 'progressed',
+      tempSpill: {
+        available: true,
+        error: null,
+        fileCount: 1,
+        tempDirectory: '/tmp/project-large-rebuild-diagnostics-warning',
+        totalBytes: 8192,
+      },
+      workerId: 'diagnostic-worker',
+    })
+
+    const {body, response} = await postWarningsRequest(projectId)
+
+    expect(response.status).toBe(200)
+    expect(body.data.indexing.lastProcessedAt).toBe('2026-04-02 12:06:00+00')
+    expect(body.data.indexing.diagnostics.duckdbQueues.main.queueDepth).toBeGreaterThanOrEqual(0)
+    expect(body.data.indexing.diagnostics.duckdbQueues.background.queueDepth).toBeGreaterThanOrEqual(0)
+    expect(body.data.indexing.diagnostics.processMemory.rssBytes).toBeGreaterThan(0)
+    expect(typeof body.data.indexing.diagnostics.tempSpill.available).toBe('boolean')
+    expect(body.data.indexing.diagnostics.largeRebuild.lastCycle).toMatchObject({
+      phase: 'prompt_answer_fact',
+      queueWaitMs: 25,
+      rowsPerSecond: 15,
+      rssBytes: 123456,
+    })
+    expect(body.data.indexing.diagnostics.largeRebuild.currentPhase).toMatchObject({
+      committedRowCount: 30,
+      lastRssBytes: 123456,
+      maxTempSpillBytes: 8192,
+      queueWaitMs: 25,
+      rowsPerSecond: 15,
+    })
+  } finally {
+    resetProjectMartLargeRebuildRuntimeMetricsForTests()
+  }
 })
 
 test('reviews warnings use live scope denominator during project scope setup', async () => {

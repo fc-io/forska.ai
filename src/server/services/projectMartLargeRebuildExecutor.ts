@@ -808,7 +808,10 @@ const getProjectReviewServingBatchInsertSql = (projectId: string, articleIds: st
       AND rollup.article_id IN (${articleIdsSql});
     INSERT INTO mart.review_article_serving_detail (
       project_id, generation, article_id, prompt_id, prompt_order, judgment_id, created_at,
-      article_created_at, article_updated_at, model_id, answered_original, answered_original_as_array, detail_updated_at
+      article_created_at, article_updated_at, model_id, judgment_project_id, judgment_updated_at, use_title,
+      use_abstract, use_fulltext, use_fulltext_no_images, chunking_strategy, is_answered, confidence_original,
+      explanation, quotes, snapshot_project_id, snapshot_project_model_name, answered_original,
+      answered_original_as_array, detail_updated_at
     )
     SELECT
       scope_article.project_id,
@@ -821,6 +824,19 @@ const getProjectReviewServingBatchInsertSql = (projectId: string, articleIds: st
       judgment_fact.article_created_at,
       judgment_fact.article_updated_at,
       judgment_fact.model_id,
+      judgment_fact.project_id,
+      judgment_fact.updated_at,
+      judgment_fact.use_title,
+      judgment_fact.use_abstract,
+      judgment_fact.use_fulltext,
+      judgment_fact.use_fulltext_no_images,
+      judgment_fact.chunking_strategy,
+      judgment_fact.is_answered,
+      judgment_fact.confidence_original,
+      judgment_fact.explanation,
+      judgment_fact.quotes,
+      judgment_fact.snapshot_project_id,
+      judgment_fact.snapshot_project_model_name,
       judgment_fact.answered_original,
       judgment_fact.answered_original_as_array,
       current_timestamp
