@@ -77,6 +77,7 @@ type ProjectMartRefreshRunnerService = {
   refreshProject: (projectId: string) => Promise<void>
   refreshProjectScopeArticles: (projectId: string, articleIds: string[]) => Promise<void>
   refreshProjectArticleServing: (projectId: string, articleId: string) => Promise<void>
+  refreshProjectArticleServingForArticles: (projectId: string, articleIds: string[]) => Promise<void>
 }
 
 type ProjectMartRefreshWorkerDependencies = {
@@ -191,20 +192,6 @@ const getClaimedProject = async (
   })
 
   return claim ?? null
-}
-
-const refreshClaimArticleServingIncrementally = async (
-  articleIds: string[],
-  projectId: string,
-  refreshService: ProjectMartRefreshRunnerService,
-): Promise<void> => {
-  const [articleId = ''] = articleIds
-
-  return articleId === ''
-    ? Promise.resolve()
-    : refreshService.refreshProjectArticleServing(projectId, articleId).then(() => {
-        return refreshClaimArticleServingIncrementally(articleIds.slice(1), projectId, refreshService)
-      })
 }
 
 const getProjectMartRefreshExecutionMode = ({
@@ -339,7 +326,7 @@ export const runProjectMartRefreshWorkerCycle = async (
         lastCompletedToken: claim.lastCompletedToken,
         projectId: claim.projectId,
       })
-      await refreshClaimArticleServingIncrementally(dirtyArticleIds, claim.projectId, dependencies.refreshService)
+      await dependencies.refreshService.refreshProjectArticleServingForArticles(claim.projectId, dirtyArticleIds)
     } else if (executionMode === 'full') {
       await dependencies.refreshService.refreshProject(claim.projectId)
       await dependencies.refreshService.refreshJudgmentFactsForProjectClaim({

@@ -3076,17 +3076,25 @@ const refreshProjectActiveServingForArticles = async (projectId: string, article
       })
 }
 
-const refreshProjectArticleServing = async (projectId: string, articleId: string): Promise<void> => {
-  const articleIds = [articleId]
+const refreshProjectArticleServingForArticles = async (projectId: string, articleIds: string[]): Promise<void> => {
+  const refreshArticleIds = getUniqueValues(articleIds)
+
+  if (refreshArticleIds.length === 0) {
+    return
+  }
 
   if (!(await getHasActiveProjectReviewServingGeneration(projectId))) {
     return refreshProject(projectId)
   }
 
-  await refreshProjectPromptAnswerFactForArticles(projectId, articleIds)
-  await refreshProjectReviewAnswerDictionaryForArticles(projectId, articleIds)
-  await refreshProjectReviewArticleRollupForArticles(projectId, articleIds)
-  return refreshProjectActiveServingForArticles(projectId, articleIds)
+  await refreshProjectPromptAnswerFactForArticles(projectId, refreshArticleIds)
+  await refreshProjectReviewAnswerDictionaryForArticles(projectId, refreshArticleIds)
+  await refreshProjectReviewArticleRollupForArticles(projectId, refreshArticleIds)
+  return refreshProjectActiveServingForArticles(projectId, refreshArticleIds)
+}
+
+const refreshProjectArticleServing = async (projectId: string, articleId: string): Promise<void> => {
+  return refreshProjectArticleServingForArticles(projectId, [articleId])
 }
 
 const refreshProjectsForArticle = async (projectIds: string[], articleId: string): Promise<void> => {
@@ -3525,6 +3533,7 @@ const duckdbMartRefreshService = {
   refreshProject,
   refreshProjectScopeArticles,
   refreshProjectArticleServing,
+  refreshProjectArticleServingForArticles,
   resetProgressSnapshotForTests: () => {
     martRefreshQueueCompletedAtColumnReady = null
     martRefreshQueueCompletedAtColumnVerified = false

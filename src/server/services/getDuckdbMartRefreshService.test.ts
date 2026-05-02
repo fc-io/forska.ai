@@ -2405,6 +2405,230 @@ test('mart refresh updates serving rows incrementally after a judgment answer ch
   }
 })
 
+test('mart refresh updates prompt facts and rollups for the same dirty article batch without renumbering dictionary ids', () => {
+  const duckdbPath = `/tmp/f1-mart-refresh-dirty-answer-batch-${Date.now()}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts')
+
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const martRefreshService = getDuckdbMartRefreshService()
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+          VALUES ('connection-dirty-answer-batch', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+        \`)
+        await database.run(\`
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+          VALUES ('model-dirty-answer-batch', 'connection-dirty-answer-batch', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+          VALUES ('project-dirty-answer-batch', 'Dirty Answer Batch Project', 'model-dirty-answer-batch', TRUE, TRUE, FALSE, FALSE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.prompt (id, original_text, content_hash)
+          VALUES ('prompt-dirty-answer-batch', 'Prompt body', 'hash-dirty-answer-batch')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+          VALUES ('project-prompt-dirty-answer-batch', 'project-dirty-answer-batch', 'prompt-dirty-answer-batch', 1, TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.article (id, article_title, article_created_at, article_updated_at, article_id)
+          VALUES
+            ('article-dirty-answer-a', 'Dirty Answer A', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z', 'external-dirty-answer-a'),
+            ('article-dirty-answer-b', 'Dirty Answer B', TIMESTAMPTZ '2026-04-02T00:00:00.000Z', TIMESTAMPTZ '2026-04-02T01:00:00.000Z', 'external-dirty-answer-b'),
+            ('article-dirty-answer-clean', 'Dirty Answer Clean', TIMESTAMPTZ '2026-04-03T00:00:00.000Z', TIMESTAMPTZ '2026-04-03T01:00:00.000Z', 'external-dirty-answer-clean')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_article (id, project_id, article_id)
+          VALUES
+            ('project-article-dirty-answer-a', 'project-dirty-answer-batch', 'article-dirty-answer-a'),
+            ('project-article-dirty-answer-b', 'project-dirty-answer-batch', 'article-dirty-answer-b'),
+            ('project-article-dirty-answer-clean', 'project-dirty-answer-batch', 'article-dirty-answer-clean')
+        \`)
+        await database.run(\`
+          INSERT INTO app.judgment (
+            id,
+            article_id,
+            prompt_id,
+            model_id,
+            project_id,
+            snapshot_project_id,
+            use_title,
+            use_abstract,
+            use_fulltext,
+            use_fulltext_no_images,
+            is_answered,
+            answered_original,
+            answered_original_as_array,
+            confidence_original
+          )
+          VALUES
+            ('judgment-dirty-answer-a', 'article-dirty-answer-a', 'prompt-dirty-answer-batch', 'model-dirty-answer-batch', 'project-dirty-answer-batch', 'project-dirty-answer-batch', TRUE, TRUE, FALSE, FALSE, TRUE, 'maybe', ['maybe'], 90),
+            ('judgment-dirty-answer-b', 'article-dirty-answer-b', 'prompt-dirty-answer-batch', 'model-dirty-answer-batch', 'project-dirty-answer-batch', 'project-dirty-answer-batch', TRUE, TRUE, FALSE, FALSE, TRUE, 'yes', ['yes'], 90),
+            ('judgment-dirty-answer-clean', 'article-dirty-answer-clean', 'prompt-dirty-answer-batch', 'model-dirty-answer-batch', 'project-dirty-answer-batch', 'project-dirty-answer-batch', TRUE, TRUE, FALSE, FALSE, TRUE, 'no', ['no'], 90)
+        \`)
+
+        await martRefreshService.queueProjectRefresh('project-dirty-answer-batch', 'dirty-answer-batch-initial')
+        await martRefreshService.flush()
+
+        const initialDictionaryRows = await database.queryJson(\`
+          SELECT answer_value AS answerValue, CAST(answer_id AS INTEGER) AS answerId
+          FROM app.review_answer_dictionary
+          WHERE project_id = 'project-dirty-answer-batch'
+            AND prompt_id = 'prompt-dirty-answer-batch'
+          ORDER BY answer_id ASC
+        \`)
+
+        await database.run(\`
+          UPDATE app.judgment
+          SET answered_original = 'aaa',
+              answered_original_as_array = ['aaa'],
+              updated_at = current_timestamp
+          WHERE id = 'judgment-dirty-answer-a'
+        \`)
+        await database.run(\`
+          UPDATE app.judgment
+          SET answered_original = 'zzz',
+              answered_original_as_array = ['zzz'],
+              updated_at = current_timestamp
+          WHERE id = 'judgment-dirty-answer-b'
+        \`)
+
+        await martRefreshService.refreshJudgmentArticle('article-dirty-answer-a')
+        await martRefreshService.refreshJudgmentArticle('article-dirty-answer-b')
+        await martRefreshService.refreshProjectArticleServingForArticles('project-dirty-answer-batch', [
+          'article-dirty-answer-a',
+          'article-dirty-answer-b',
+        ])
+
+        const promptRows = await database.queryJson(\`
+          SELECT article_id AS articleId, answer_value AS answerValue
+          FROM mart.prompt_answer_fact
+          WHERE project_id = 'project-dirty-answer-batch'
+          ORDER BY article_id ASC, answer_value ASC
+        \`)
+        const rollupRows = await database.queryJson(\`
+          SELECT
+            rollup.article_id AS articleId,
+            fact.answer_value AS answerValue,
+            CAST(rollup.llm_judged_prompt_count AS INTEGER) AS llmJudgedPromptCount,
+            rollup.has_all_llm_judgments AS hasAllLlmJudgments
+          FROM mart.review_article_rollup rollup
+          LEFT JOIN mart.prompt_answer_fact fact
+            ON fact.project_id = rollup.project_id
+           AND fact.article_id = rollup.article_id
+          WHERE rollup.project_id = 'project-dirty-answer-batch'
+          ORDER BY rollup.article_id ASC, fact.answer_value ASC
+        \`)
+        const activeFilterRows = await database.queryJson(\`
+          SELECT member.article_id AS articleId, dictionary.answer_value AS answerValue, CAST(dictionary.answer_id AS INTEGER) AS answerId
+          FROM mart.review_article_filter_member member
+          INNER JOIN app.project_review_serving_generation generation
+            ON generation.project_id = member.project_id
+           AND generation.active_generation = member.generation
+          INNER JOIN app.review_answer_dictionary dictionary
+            ON dictionary.project_id = member.project_id
+           AND dictionary.prompt_id = member.prompt_id
+           AND dictionary.answer_id = member.answer_id
+          WHERE member.project_id = 'project-dirty-answer-batch'
+          ORDER BY member.article_id ASC, dictionary.answer_value ASC
+        \`)
+        const dictionaryRows = await database.queryJson(\`
+          SELECT answer_value AS answerValue, CAST(answer_id AS INTEGER) AS answerId
+          FROM app.review_answer_dictionary
+          WHERE project_id = 'project-dirty-answer-batch'
+            AND prompt_id = 'prompt-dirty-answer-batch'
+          ORDER BY answer_id ASC
+        \`)
+
+        console.log(JSON.stringify({
+          activeFilterRows,
+          dictionaryRows,
+          initialDictionaryRows,
+          promptRows,
+          rollupRows,
+        }))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(
+        runScript.stderr.toString()
+          || runScript.stdout.toString()
+          || 'Mart dirty answer batch refresh regression test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      activeFilterRows: Array<{answerId: number; answerValue: string; articleId: string}>
+      dictionaryRows: Array<{answerId: number; answerValue: string}>
+      initialDictionaryRows: Array<{answerId: number; answerValue: string}>
+      promptRows: Array<{answerValue: string; articleId: string}>
+      rollupRows: Array<{
+        answerValue: string
+        articleId: string
+        hasAllLlmJudgments: boolean
+        llmJudgedPromptCount: number
+      }>
+    }
+
+    expect(result.initialDictionaryRows).toEqual([
+      {answerId: 1, answerValue: 'maybe'},
+      {answerId: 2, answerValue: 'no'},
+      {answerId: 3, answerValue: 'yes'},
+    ])
+    expect(result.dictionaryRows).toEqual([
+      {answerId: 1, answerValue: 'maybe'},
+      {answerId: 2, answerValue: 'no'},
+      {answerId: 3, answerValue: 'yes'},
+      {answerId: 4, answerValue: 'aaa'},
+      {answerId: 5, answerValue: 'zzz'},
+    ])
+    expect(result.promptRows).toEqual([
+      {answerValue: 'aaa', articleId: 'article-dirty-answer-a'},
+      {answerValue: 'zzz', articleId: 'article-dirty-answer-b'},
+      {answerValue: 'no', articleId: 'article-dirty-answer-clean'},
+    ])
+    expect(result.rollupRows).toEqual([
+      {answerValue: 'aaa', articleId: 'article-dirty-answer-a', hasAllLlmJudgments: true, llmJudgedPromptCount: 1},
+      {answerValue: 'zzz', articleId: 'article-dirty-answer-b', hasAllLlmJudgments: true, llmJudgedPromptCount: 1},
+      {answerValue: 'no', articleId: 'article-dirty-answer-clean', hasAllLlmJudgments: true, llmJudgedPromptCount: 1},
+    ])
+    expect(result.activeFilterRows).toEqual([
+      {answerId: 4, answerValue: 'aaa', articleId: 'article-dirty-answer-a'},
+      {answerId: 5, answerValue: 'zzz', articleId: 'article-dirty-answer-b'},
+      {answerId: 2, answerValue: 'no', articleId: 'article-dirty-answer-clean'},
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('mart refresh maintains project scope article deltas before downstream dirty article refreshes', () => {
   const duckdbPath = `/tmp/f1-mart-refresh-scope-deltas-${Date.now()}.duckdb`
   const runScript = globalThis.Bun.spawnSync(
