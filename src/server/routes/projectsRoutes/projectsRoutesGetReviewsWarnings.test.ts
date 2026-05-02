@@ -40,6 +40,14 @@ type ReviewsWarningsResponse = {
       queuedArticleRefreshCount: number
       queuedProjectRefreshCount: number
       queuedRefreshCount: number
+      quarantinedArticleRefreshCount: number
+      quarantinedArticles: Array<{
+        articleId: string
+        createdAt: string | null
+        detectedBy: string | null
+        error: string
+        updatedAt: string | null
+      }>
       recoveryContext: Record<string, unknown> | null
       recoveryMode: 'archived_project_mart_recovery' | 'none' | 'retry_backoff'
       requiredConsumerRole: 'maintenance-worker'
@@ -408,6 +416,49 @@ test('reviews warnings report ready when serving rows are fresh', async () => {
   expect(body.data.indexing.status).toBe('ready')
 })
 
+test('reviews warnings expose quarantined article refreshes without pending healthy work', async () => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const projectId = 'project-quarantined-article-warning'
+  const articleId = `article-${projectId}`
+
+  await insertProjectFixture(projectId)
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedRefreshToken: 1, refreshStatus: 'idle'})
+  await insertDirtyArticleRefreshState(projectId, articleId, 1)
+  await insertReviewServingRow(projectId, articleId)
+  await runDatabase(`
+    INSERT INTO app.project_mart_refresh_article_quarantine (
+      article_id,
+      error,
+      detected_by,
+      created_at,
+      updated_at
+    ) VALUES (
+      '${articleId}',
+      'native crash repro',
+      'test-suite',
+      TIMESTAMPTZ '2026-04-02T12:02:00.000Z',
+      TIMESTAMPTZ '2026-04-02T12:03:00.000Z'
+    )
+  `)
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.pendingArticleRefreshCount).toBe(0)
+  expect(body.data.indexing.pendingRefreshCount).toBe(0)
+  expect(body.data.indexing.quarantinedArticleRefreshCount).toBe(1)
+  expect(
+    body.data.indexing.quarantinedArticles.map((article) => {
+      return {articleId: article.articleId, detectedBy: article.detectedBy, error: article.error}
+    }),
+  ).toEqual([{articleId, detectedBy: 'test-suite', error: 'native crash repro'}])
+  expect(body.data.indexing.progressState).toBe('completed')
+  expect(body.data.indexing.status).toBe('ready')
+})
+
 test('reviews warnings queues repair when visible judgments are missing from judgment facts', async () => {
   if (!runDatabase) {
     throw new Error('Database not initialized')
@@ -674,7 +725,7 @@ test('reviews warnings report blocked when memory policy disables mart refresh d
   const projectId = 'project-blocked-low-memory-warning'
   const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
 
-  process.env.DUCKDB_MEMORY_LIMIT = '6400MiB'
+  process.env.DUCKDB_MEMORY_LIMIT = '5120MiB'
 
   try {
     await insertProjectFixture(projectId)

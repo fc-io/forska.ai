@@ -35,6 +35,7 @@ const createWorkerTestContext = (params: {
   articlesByProject?: Record<string, string[]>
   claims?: ClaimPlan[]
   onRefreshProjectArticleMartsBatch?: (projectId: string, articleIds: string[]) => Promise<void>
+  quarantinedArticlesByProject?: Record<string, string[]>
   reconciledProjectIds?: string[]
   scopeArticleCountByProject?: Record<string, number>
 }) => {
@@ -42,6 +43,11 @@ const createWorkerTestContext = (params: {
   const claims = [...(params.claims ?? [])]
   const dirtyArticlesByProject = Object.fromEntries(
     Object.entries(params.articlesByProject ?? {}).map(([projectId, articleIds]) => {
+      return [projectId, [...articleIds]]
+    }),
+  )
+  const quarantinedArticlesByProject = Object.fromEntries(
+    Object.entries(params.quarantinedArticlesByProject ?? {}).map(([projectId, articleIds]) => {
       return [projectId, [...articleIds]]
     }),
   )
@@ -78,7 +84,10 @@ const createWorkerTestContext = (params: {
         dirtyArticlesByProject[projectId] = (dirtyArticlesByProject[projectId] ?? []).filter((articleId) => {
           return !articleIds.includes(articleId)
         })
-        const remainingArticleCount = dirtyArticlesByProject[projectId]?.length ?? 0
+        const quarantinedArticleIds = new Set(quarantinedArticlesByProject[projectId] ?? [])
+        const remainingArticleCount = (dirtyArticlesByProject[projectId] ?? []).filter((articleId) => {
+          return !quarantinedArticleIds.has(articleId)
+        }).length
 
         return {completedState: remainingArticleCount === 0 ? {} : null, isClaimComplete: remainingArticleCount === 0}
       },
@@ -108,7 +117,10 @@ const createWorkerTestContext = (params: {
         workerId: string
       }) => {
         callLog.push(`batch:${projectId}:${batchSize}`)
-        const articleIds = dirtyArticlesByProject[projectId] ?? []
+        const quarantinedArticleIds = new Set(quarantinedArticlesByProject[projectId] ?? [])
+        const articleIds = (dirtyArticlesByProject[projectId] ?? []).filter((articleId) => {
+          return !quarantinedArticleIds.has(articleId)
+        })
 
         return {articleIds: articleIds.slice(0, batchSize), hasMore: articleIds.length > batchSize}
       },
@@ -299,6 +311,41 @@ test('processes dirty articles through bounded batches until the claim is comple
     'complete:project-1:2',
     'ack:project-1:2',
   ])
+})
+
+test('completes dirty claims when the state service skips quarantined articles', async () => {
+  const context = createWorkerTestContext({
+    articlesByProject: {'project-1': ['article-quarantined', 'article-healthy']},
+    claims: [
+      {
+        claimedToken: 2,
+        lastCompletedToken: 1,
+        leaseExpiresAt: new Date('2026-04-02T13:10:30.000Z'),
+        projectId: 'project-1',
+        workerId: 'worker-1',
+      },
+    ],
+    quarantinedArticlesByProject: {'project-1': ['article-quarantined']},
+  })
+
+  const result = await runProjectMartRefreshWorkerCycle(
+    {dirtyArticleBatchSize: 5, workerId: 'worker-1'},
+    context.dependencies,
+  )
+
+  expect(result).toEqual({claimedToken: 2, projectId: 'project-1', status: 'completed', workerId: 'worker-1'})
+  expect(context.callLog).toEqual([
+    'reconcile:all',
+    'claim:worker-1:1:30000',
+    'batch:project-1:5',
+    'scopeArticle:project-1:article-healthy',
+    'judgment:article-healthy',
+    'articleMartsBatch:project-1:article-healthy',
+    'complete:project-1:2',
+    'ack:project-1:2',
+  ])
+  expect(context.failed).toEqual([])
+  expect(context.acknowledgedProjects).toEqual([{ackToken: 2, projectId: 'project-1'}])
 })
 
 test('uses dirty article batch size for article-aware refresh routing', async () => {

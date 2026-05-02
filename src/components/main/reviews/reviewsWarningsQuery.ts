@@ -38,6 +38,14 @@ export type ReviewsWarningsData = {
     queuedArticleRefreshCount: number
     queuedProjectRefreshCount: number
     queuedRefreshCount: number
+    quarantinedArticleRefreshCount: number
+    quarantinedArticles: Array<{
+      articleId: string
+      createdAt: string | null
+      detectedBy: string | null
+      error: string
+      updatedAt: string | null
+    }>
     recoveryContext: Record<string, unknown> | null
     recoveryMode: 'archived_project_mart_recovery' | 'none' | 'retry_backoff'
     requiredConsumerRole: 'maintenance-worker'

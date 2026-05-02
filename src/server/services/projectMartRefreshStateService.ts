@@ -146,29 +146,6 @@ const getProjectRefreshArticleQuarantineRecord = async (runner: RefreshStateRunn
   return row ?? null
 }
 
-const getQuarantinedArticleIds = async (runner: RefreshStateRunner, articleIds: string[]) => {
-  const uniqueArticleIds = getUniqueValues(articleIds)
-
-  if (uniqueArticleIds.length === 0) {
-    return []
-  }
-
-  const rows = await runner.queryJson<{articleId: string}>(`
-    SELECT article_id AS articleId
-    FROM app.project_mart_refresh_article_quarantine
-    WHERE article_id IN (${getQuotedStringList(uniqueArticleIds).join(', ')})
-    ORDER BY article_id ASC
-  `)
-
-  return rows.map((row) => {
-    return row.articleId
-  })
-}
-
-const getQuarantinedRefreshArticleError = ({articleId, error}: {articleId: string; error: string}) => {
-  return `Quarantined project mart refresh article ${articleId}: ${error}`
-}
-
 const markSingleProjectDirty = async (
   runner: RefreshStateRunner,
   project: {articleIds: string[]; projectId: string},
@@ -212,31 +189,6 @@ const markSingleProjectDirty = async (
         last_dirty_token = GREATEST(app.project_mart_refresh_article_state.last_dirty_token, EXCLUDED.last_dirty_token),
         updated_at = EXCLUDED.updated_at
     `)
-
-    const quarantinedArticleIds = await getQuarantinedArticleIds(runner, project.articleIds)
-    const [firstQuarantinedArticleId = ''] = quarantinedArticleIds
-
-    if (firstQuarantinedArticleId !== '') {
-      const quarantineRecord = await getProjectRefreshArticleQuarantineRecord(runner, firstQuarantinedArticleId)
-
-      await runner.run(`
-        UPDATE app.project_mart_refresh_state
-        SET
-          refresh_status = 'failed',
-          last_failed_at = ${getTimestampLiteral(params.now)},
-          last_error = ${getSqlLiteral(
-            getQuarantinedRefreshArticleError({
-              articleId: firstQuarantinedArticleId,
-              error: quarantineRecord?.error ?? 'quarantined article refresh blocked',
-            }),
-          )},
-          worker_id = NULL,
-          lease_expires_at = NULL,
-          active_refresh_token = 0,
-          updated_at = ${getTimestampLiteral(params.now)}
-        WHERE project_id = ${getSqlLiteral(project.projectId)}
-      `)
-    }
   }
 
   return state
@@ -456,15 +408,6 @@ const claimDirtyProjects = async ({
       AND state.dirty_token > state.last_completed_refresh_token
       AND NOT EXISTS (
         SELECT 1
-        FROM app.project_mart_refresh_article_state article_state
-        INNER JOIN app.project_mart_refresh_article_quarantine quarantine
-          ON quarantine.article_id = article_state.article_id
-        WHERE article_state.project_id = state.project_id
-          AND article_state.first_dirty_token <= state.dirty_token
-          AND article_state.last_dirty_token > state.last_completed_refresh_token
-      )
-      AND NOT EXISTS (
-        SELECT 1
         FROM app.project_mart_large_rebuild_state large_rebuild
         WHERE large_rebuild.project_id = state.project_id
           AND large_rebuild.refresh_token >= state.dirty_token
@@ -594,12 +537,15 @@ const getDirtyArticleBatchForClaim = async ({
     FROM app.project_mart_refresh_state state
     INNER JOIN app.project_mart_refresh_article_state article_state
       ON article_state.project_id = state.project_id
+    LEFT JOIN app.project_mart_refresh_article_quarantine quarantine
+      ON quarantine.article_id = article_state.article_id
     WHERE state.project_id = ${getSqlLiteral(projectId)}
       AND state.worker_id = ${getSqlLiteral(workerId)}
       AND state.refresh_status = 'running'
       AND state.active_refresh_token = ${claimedToken}
       AND article_state.first_dirty_token <= state.active_refresh_token
       AND article_state.last_dirty_token > state.last_completed_refresh_token
+      AND quarantine.article_id IS NULL
     ORDER BY article_state.article_id ASC
     LIMIT ${normalizedBatchSize + 1}
   `)
@@ -720,8 +666,6 @@ const quarantineProjectRefreshArticle = async ({
 }: QuarantineProjectRefreshArticleParams) => {
   return withTransaction(runner, async (tx) => {
     const currentNow = getNow(now)
-    const quarantineError = getQuarantinedRefreshArticleError({articleId, error})
-
     await tx.run(`
       INSERT INTO app.project_mart_refresh_article_quarantine (
         article_id,
@@ -740,23 +684,6 @@ const quarantineProjectRefreshArticle = async ({
         error = EXCLUDED.error,
         detected_by = EXCLUDED.detected_by,
         updated_at = EXCLUDED.updated_at
-    `)
-
-    await tx.run(`
-      UPDATE app.project_mart_refresh_state
-      SET
-        refresh_status = 'failed',
-        last_failed_at = ${getTimestampLiteral(currentNow)},
-        last_error = ${getSqlLiteral(quarantineError)},
-        worker_id = NULL,
-        lease_expires_at = NULL,
-        active_refresh_token = 0,
-        updated_at = ${getTimestampLiteral(currentNow)}
-      WHERE project_id IN (
-        SELECT DISTINCT project_id
-        FROM app.project_mart_refresh_article_state
-        WHERE article_id = ${getSqlLiteral(articleId)}
-      )
     `)
 
     return getProjectRefreshArticleQuarantineRecord(tx, articleId)
@@ -778,6 +705,11 @@ const cleanupCompletedProjectRefreshArticleState = async ({
     DELETE FROM app.project_mart_refresh_article_state
     WHERE project_id = ${getSqlLiteral(projectId)}
       AND last_dirty_token <= ${completedToken}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.project_mart_refresh_article_quarantine quarantine
+        WHERE quarantine.article_id = app.project_mart_refresh_article_state.article_id
+      )
   `)
   await tx.run(`
     UPDATE app.project_mart_refresh_article_state
@@ -787,6 +719,11 @@ const cleanupCompletedProjectRefreshArticleState = async ({
     WHERE project_id = ${getSqlLiteral(projectId)}
       AND first_dirty_token <= ${completedToken}
       AND last_dirty_token > ${completedToken}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.project_mart_refresh_article_quarantine quarantine
+        WHERE quarantine.article_id = app.project_mart_refresh_article_state.article_id
+      )
   `)
 }
 
@@ -891,6 +828,11 @@ const completeDirtyArticleBatchForClaim = async ({
       WHERE project_id = ${getSqlLiteral(projectId)}
         AND first_dirty_token <= ${claimedToken}
         AND last_dirty_token > ${claimState.lastCompletedRefreshToken}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM app.project_mart_refresh_article_quarantine quarantine
+          WHERE quarantine.article_id = app.project_mart_refresh_article_state.article_id
+        )
     `)
 
     return Number(remaining?.rowCount ?? 0) === 0

@@ -44,6 +44,14 @@ type ProjectLargeRebuildState = {
   workerId: string | null
 }
 
+type QuarantinedArticleRefresh = {
+  articleId: string
+  createdAt: string | null
+  detectedBy: string | null
+  error: string
+  updatedAt: string | null
+}
+
 const articleScopedLargeRebuildPhases = new Set([
   'judgment_fact',
   'prompt_answer_fact',
@@ -229,7 +237,10 @@ const getPendingArticleRefreshInfo = async (projectId: string): Promise<RefreshC
     INNER JOIN scoped_article ON scoped_article.articleId = article_state.article_id
     LEFT JOIN app.project_mart_refresh_state refresh_state
       ON refresh_state.project_id = article_state.project_id
+    LEFT JOIN app.project_mart_refresh_article_quarantine quarantine
+      ON quarantine.article_id = article_state.article_id
     WHERE article_state.project_id = '${escapeSqlString(projectId)}'
+      AND quarantine.article_id IS NULL
       AND (
         refresh_state.project_id IS NULL
         OR refresh_state.last_completed_refresh_token IS NULL
@@ -239,6 +250,24 @@ const getPendingArticleRefreshInfo = async (projectId: string): Promise<RefreshC
   const [row] = rows
 
   return {oldestQueuedAt: row?.oldestQueuedAt ?? null, queuedRefreshCount: Number(row?.queuedRefreshCount ?? 0)}
+}
+
+const getTimestampValue = (value: Date | string | null) => {
+  return value instanceof Date ? value.toISOString() : value
+}
+
+const getQuarantinedArticleRefreshes = async (projectId: string): Promise<QuarantinedArticleRefresh[]> => {
+  const rows = await getProjectMartRefreshStateService().getQuarantinedArticlesForProject({projectId})
+
+  return rows.map((row) => {
+    return {
+      articleId: row.articleId,
+      createdAt: getTimestampValue(row.createdAt),
+      detectedBy: row.detectedBy,
+      error: row.error,
+      updatedAt: getTimestampValue(row.updatedAt),
+    }
+  })
 }
 
 const getProjectLargeRebuildRowsPerMs = (projectId: string) => {
@@ -591,6 +620,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       projectRefreshState,
       projectLargeRebuildState,
       pendingArticleRefreshInfo,
+      quarantinedArticleRefreshes,
       hasReviewServingRows,
       freshMaintenanceLeases,
       maintenanceRecoveryContext,
@@ -602,6 +632,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       getProjectRefreshState(projectId),
       getProjectLargeRebuildState(projectId),
       getPendingArticleRefreshInfo(projectId),
+      getQuarantinedArticleRefreshes(projectId),
       getHasReviewServingRows(projectId),
       getMaintenanceWorkLeaseService().getFreshProjectMaintenanceWorkLeases(projectId, currentNow),
       getMaintenanceWorkLeaseService().getProjectMaintenanceRecoveryContext(projectId, currentNow),
@@ -737,6 +768,8 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
           queuedArticleRefreshCount,
           queuedProjectRefreshCount,
           queuedRefreshCount,
+          quarantinedArticleRefreshCount: quarantinedArticleRefreshes.length,
+          quarantinedArticles: quarantinedArticleRefreshes,
           progressState: getReviewsIndexingProgressState({inFlightRefreshCount, status: indexingStatus}),
           recoveryContext: maintenanceRecoveryContext?.recoveryContext ?? null,
           recoveryMode: (maintenanceRecoveryContext?.recoveryMode ?? 'none') as ReviewsIndexingRecoveryMode,
