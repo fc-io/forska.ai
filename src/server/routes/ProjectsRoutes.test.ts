@@ -16,7 +16,7 @@ let app: {handle: (request: Request) => Promise<Response>} | null = null
 let closeDatabase: (() => Promise<void>) | null = null
 let flushMartRefreshes: (() => Promise<void>) | null = null
 let queueJudgmentArticleRefresh: ((articleId: string, reason: string) => Promise<void>) | null = null
-let queueProjectRefresh: ((projectId: string, reason: string) => Promise<void>) | null = null
+let refreshProject: ((projectId: string) => Promise<void>) | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 
@@ -429,8 +429,8 @@ beforeAll(async () => {
   queueJudgmentArticleRefresh = (articleId: string, reason: string) => {
     return getDuckdbMartRefreshService().queueJudgmentArticleRefresh(articleId, reason)
   }
-  queueProjectRefresh = (projectId: string, reason: string) => {
-    return getDuckdbMartRefreshService().queueProjectRefresh(projectId, reason)
+  refreshProject = (projectId: string) => {
+    return getDuckdbMartRefreshService().refreshProject(projectId)
   }
   queryDatabase = (statement: string) => {
     return database.queryJson(statement)
@@ -493,7 +493,7 @@ test('archive route clears refresh state for archived projects without depending
   await flushMartRefreshes()
 })
 
-test('archive route leaves downstream serving rows in place while clearing refresh state', async () => {
+test('archive route purges downstream serving rows while clearing refresh state', async () => {
   if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
     throw new Error('Test app not initialized')
   }
@@ -531,8 +531,8 @@ test('archive route leaves downstream serving rows in place while clearing refre
     LIMIT 1
   `)
 
-  expect(Number(servingRowCount?.count ?? 0)).toBe(398)
-  expect(Number(generationRowCount?.count ?? 0)).toBe(1)
+  expect(Number(servingRowCount?.count ?? 0)).toBe(0)
+  expect(Number(generationRowCount?.count ?? 0)).toBe(0)
   expect(refreshState).toBeUndefined()
 
   await flushMartRefreshes()
@@ -2189,7 +2189,7 @@ test('unchanged cloned project reruns reuse shared judgments when prompt model a
     || !runDatabase
     || !flushMartRefreshes
     || !queueJudgmentArticleRefresh
-    || !queueProjectRefresh
+    || !refreshProject
   ) {
     throw new Error('Test app not initialized')
   }
@@ -2236,7 +2236,7 @@ test('unchanged cloned project reruns reuse shared judgments when prompt model a
     promptId,
   })
   await queueJudgmentArticleRefresh(articleId, 'ProjectsRoutes.test.cloneUnchangedRerunJudgmentFact')
-  await queueProjectRefresh(sourceProjectId, 'ProjectsRoutes.test.cloneUnchangedRerunSource')
+  await refreshProject(sourceProjectId)
   await flushMartRefreshes()
 
   const cloneResponse = await app.handle(
@@ -2247,7 +2247,7 @@ test('unchanged cloned project reruns reuse shared judgments when prompt model a
 
   expect(cloneResponse.status).toBe(200)
 
-  await queueProjectRefresh(clonedProjectId, 'ProjectsRoutes.test.cloneUnchangedRerunClone')
+  await refreshProject(clonedProjectId)
   await flushMartRefreshes()
   await flushMartRefreshes()
   await assertSourceCloneRerunState({articleId, promptId, sourceJudgmentId, sourceProjectId})

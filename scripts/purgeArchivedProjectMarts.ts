@@ -77,7 +77,7 @@ const logCounts = (label: string, counts: TableCountRow[]) => {
     })
 }
 
-const refreshArchivedProjects = async (projectIds: string[], index = 0): Promise<void> => {
+const purgeArchivedProjects = async (projectIds: string[], index = 0): Promise<void> => {
   const currentProjectId = projectIds[index]
 
   if (!currentProjectId) {
@@ -85,12 +85,11 @@ const refreshArchivedProjects = async (projectIds: string[], index = 0): Promise
   }
 
   console.log(
-    `[purgeArchivedProjectMarts] refreshing archived project ${index + 1}/${projectIds.length}: ${currentProjectId}`,
+    `[purgeArchivedProjectMarts] purging archived project ${index + 1}/${projectIds.length}: ${currentProjectId}`,
   )
-  await getDuckdbMartRefreshService().queueProjectRefresh(currentProjectId, 'purgeArchivedProjectMarts')
-  await getDuckdbMartRefreshService().flush()
+  await getDuckdbMartRefreshService().purgeArchivedProjectMartData(currentProjectId)
 
-  return refreshArchivedProjects(projectIds, index + 1)
+  return purgeArchivedProjects(projectIds, index + 1)
 }
 
 const runPurgeArchivedProjectMarts = async () => {
@@ -112,7 +111,7 @@ const runPurgeArchivedProjectMarts = async () => {
       return
     }
 
-    await refreshArchivedProjects(await getArchivedProjectIds())
+    await purgeArchivedProjects(await getArchivedProjectIds())
     await getAppDatabaseService().maintenance('checkpoint')
 
     const afterCounts = await getArchivedMartRowCounts()

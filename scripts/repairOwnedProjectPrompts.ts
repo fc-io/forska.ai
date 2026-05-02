@@ -1,7 +1,7 @@
 import {flushJudgmentJobSqliteOutbox} from '../src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts'
 import {getJudgmentJobSqliteService} from '../src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
-import {getDuckdbMartRefreshService} from '../src/server/services/getDuckdbMartRefreshService.ts'
+import {getProjectMartRefreshStateService} from '../src/server/services/projectMartRefreshStateService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 
 type RepairOptions = {apply: boolean; deleteEmptyJobs: boolean; flush: boolean; projectId: string | null}
@@ -19,7 +19,7 @@ type CandidateRow = {
 }
 
 type SummaryRow = {blockedLinks: number; blockedProjects: number; safeLinks: number; safeProjects: number}
-type TransactionRunner = {run: (statement: string) => Promise<void>}
+type TransactionRunner = {queryJson: <T>(statement: string) => Promise<T[]>; run: (statement: string) => Promise<void>}
 type EmptyJobCandidateRow = {jobId: string; jobStatus: string; projectId: string; projectName: string}
 type EmptyJobInspection = {
   hasSqliteJob: boolean
@@ -287,19 +287,20 @@ const repairCandidateRows = async (tx: TransactionRunner, rows: CandidateRow[], 
   return [currentRow.projectId, ...rest]
 }
 
-const queueProjectRefreshes = async (projectIds: string[], index = 0): Promise<void> => {
-  const currentProjectId = projectIds[index]
-
-  if (!currentProjectId) {
-    return
-  }
-
-  await getDuckdbMartRefreshService().queueProjectRefresh(currentProjectId, 'repairOwnedProjectPrompts')
-  return queueProjectRefreshes(projectIds, index + 1)
-}
-
 const getUniqueProjectIds = (projectIds: string[]) => {
   return Array.from(new Set(projectIds))
+}
+
+const markProjectRefreshesDirty = async (tx: TransactionRunner, projectIds: string[]) => {
+  const refreshStateService = getProjectMartRefreshStateService()
+  const uniqueProjectIds = getUniqueProjectIds(projectIds)
+  const dirtyProjects = await refreshStateService.getDirtyProjectsForProjectIds(tx, uniqueProjectIds)
+
+  return refreshStateService.markProjectsDirtyAtomically({
+    projects: dirtyProjects,
+    reason: 'repairOwnedProjectPrompts',
+    runner: tx,
+  })
 }
 
 const logPreview = (rows: CandidateRow[]) => {
@@ -369,18 +370,17 @@ const main = async () => {
     }
 
     const repairedProjectIds = (await getAppDatabaseService().transaction(async (tx) => {
-      return getUniqueProjectIds(await repairCandidateRows(tx, safeRows))
+      const projectIds = getUniqueProjectIds(await repairCandidateRows(tx, safeRows))
+      await markProjectRefreshesDirty(tx, projectIds)
+      return projectIds
     })) as string[]
 
     console.log(`[repairOwnedProjectPrompts] repaired projects: ${repairedProjectIds.length}`)
     console.log(`[repairOwnedProjectPrompts] repaired prompt links: ${safeRows.length}`)
-
-    await queueProjectRefreshes(repairedProjectIds)
-    console.log(`[repairOwnedProjectPrompts] queued refreshes: ${repairedProjectIds.length}`)
+    console.log(`[repairOwnedProjectPrompts] marked project refresh dirty: ${repairedProjectIds.length}`)
 
     if (options.flush) {
-      await getDuckdbMartRefreshService().flush()
-      console.log('[repairOwnedProjectPrompts] flushed queued refreshes')
+      console.log('[repairOwnedProjectPrompts] --flush skipped; project dirty state is drained by project mart workers')
     }
 
     await getAppDatabaseService().maintenance('checkpoint')

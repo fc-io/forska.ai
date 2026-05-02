@@ -1,7 +1,7 @@
 import {getArticleSourceMetadata, getOriginalDoi, normalizeDoi} from '../../utils/articleSourceMetadata.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
-import {getDuckdbMartRefreshService} from './getDuckdbMartRefreshService.ts'
+import {getProjectMartRefreshStateService} from './projectMartRefreshStateService.ts'
 
 export type ArticleImportStoreTx = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -348,7 +348,27 @@ export const queueImportedArticleRefreshes = async (importRouteIds: string[]) =>
     return
   }
 
-  await getDuckdbMartRefreshService().queueProjectRefreshesByImportRouteIds(importRouteIds, 'articleImportStoreService')
+  await getAppDatabaseService().transaction(async (tx) => {
+    const projectRows = await tx.queryJson<{projectId: string}>(`
+      SELECT DISTINCT project_import_route.project_id AS projectId
+      FROM app.project_import_route project_import_route
+      INNER JOIN app.project project ON project.id = project_import_route.project_id
+      WHERE project_import_route.import_route_id IN (${getQuotedStringList(importRouteIds).join(', ')})
+        AND project.archived = FALSE
+      ORDER BY projectId ASC
+    `)
+    const projectIds = projectRows.map((row) => {
+      return row.projectId
+    })
+    const refreshStateService = getProjectMartRefreshStateService()
+    const dirtyProjects = await refreshStateService.getDirtyProjectsForProjectIds(tx, projectIds)
+
+    await refreshStateService.markProjectsDirtyAtomically({
+      projects: dirtyProjects,
+      reason: 'articleImportStoreService',
+      runner: tx,
+    })
+  })
 }
 
 export const storeImportedArticlesWithTx = async (tx: ArticleImportStoreTx, rows: ArticleImportStoreRow[]) => {

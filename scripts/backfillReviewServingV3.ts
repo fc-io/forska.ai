@@ -44,9 +44,8 @@ const backfillProjects = async (projectIds: string[], index = 0): Promise<void> 
     return
   }
 
-  console.log(`[backfillReviewServingV3] ${index + 1}/${projectIds.length} ${currentProjectId}`)
-  await getDuckdbMartRefreshService().queueProjectRefresh(currentProjectId, 'backfillReviewServingV3')
-  await getDuckdbMartRefreshService().flush()
+  console.log(`[backfillReviewServingV3] queueing large rebuild ${index + 1}/${projectIds.length} ${currentProjectId}`)
+  await getDuckdbMartRefreshService().queueProjectLargeRebuild(currentProjectId, 'backfillReviewServingV3')
   return backfillProjects(projectIds, index + 1)
 }
 

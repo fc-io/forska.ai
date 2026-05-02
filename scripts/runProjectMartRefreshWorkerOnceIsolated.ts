@@ -50,24 +50,6 @@ const getExecutionMode = ({
   return dirtyArticleCount === 0 ? 'idle' : dirtyArticleCount <= incrementalArticleThreshold ? 'incremental' : 'full'
 }
 
-const getProjectScopeArticleCount = async (projectId: string) => {
-  const [row] = await getAppDatabaseService().queryJson<{count: number | string}>(`
-    SELECT COUNT(*) AS count
-    FROM (
-      SELECT article_id
-      FROM app.project_article
-      WHERE project_id = '${projectId}'
-      UNION
-      SELECT air.article_id
-      FROM app.project_import_route pir
-      INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
-      WHERE pir.project_id = '${projectId}'
-    ) scope
-  `)
-
-  return Number(row?.count ?? 0)
-}
-
 const getCliOptions = (): CliOptions => {
   const workerId =
     getArgValue(['--workerId', '--worker-id']) ?? `project-mart-refresh-worker-isolated:${hostname()}:${process.pid}`
@@ -92,20 +74,6 @@ const getCliOptions = (): CliOptions => {
 
 const getErrorText = (error: unknown) => {
   return error instanceof Error ? error.message : String(error)
-}
-
-const refreshClaimArticleServingIncrementally = async (
-  articleIds: string[],
-  projectId: string,
-  refreshService: ReturnType<typeof getDuckdbMartRefreshService>,
-): Promise<void> => {
-  const [articleId = ''] = articleIds
-
-  return articleId === ''
-    ? Promise.resolve()
-    : refreshService.refreshProjectArticleServing(projectId, articleId).then(() => {
-        return refreshClaimArticleServingIncrementally(articleIds.slice(1), projectId, refreshService)
-      })
 }
 
 const claimProject = async ({
@@ -219,39 +187,29 @@ export const runProjectMartRefreshWorkerOnceIsolated = async () => {
         incrementalArticleThreshold: options.incrementalArticleThreshold,
       })
 
-      await refreshService.refreshJudgmentFactsForProjectClaim({
-        claimedToken: claim.claimedToken,
-        lastCompletedToken: claim.lastCompletedToken,
-        projectId: claim.projectId,
-      })
-
       if (executionMode === 'incremental') {
-        await refreshClaimArticleServingIncrementally(dirtyArticleIds, claim.projectId, refreshService)
-      } else {
-        if (executionMode === 'full') {
-          const scopeArticleCount = await getProjectScopeArticleCount(claim.projectId)
+        await refreshService.refreshProjectScopeArticles(claim.projectId, dirtyArticleIds)
+        await refreshService.refreshJudgmentFactsForArticles(dirtyArticleIds)
+        await refreshService.refreshProjectArticleMartsBatch(claim.projectId, dirtyArticleIds)
+      }
 
-          if (scopeArticleCount > options.maxFullProjectScopeArticles) {
-            await largeRebuildStateService.queueLargeRebuild({
-              now: new Date(),
-              projectId: claim.projectId,
-              rebuildPhase: 'judgment_fact',
-              refreshToken: claim.claimedToken,
-            })
-            await stateService.releaseProjectRefreshClaim({projectId: claim.projectId, workerId: options.workerId})
-            console.log(
-              JSON.stringify({
-                claimedToken: claim.claimedToken,
-                projectId: claim.projectId,
-                status: 'completed',
-                workerId: options.workerId,
-              }),
-            )
-            return
-          }
-
-          await refreshService.refreshProject(claim.projectId)
-        }
+      if (executionMode === 'full') {
+        await largeRebuildStateService.queueLargeRebuild({
+          now: new Date(),
+          projectId: claim.projectId,
+          rebuildPhase: 'project_scope_article',
+          refreshToken: claim.claimedToken,
+        })
+        await stateService.releaseProjectRefreshClaim({projectId: claim.projectId, workerId: options.workerId})
+        console.log(
+          JSON.stringify({
+            claimedToken: claim.claimedToken,
+            projectId: claim.projectId,
+            status: 'completed',
+            workerId: options.workerId,
+          }),
+        )
+        return
       }
 
       await stateService.completeProjectRefresh({

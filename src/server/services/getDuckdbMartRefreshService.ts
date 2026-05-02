@@ -3,9 +3,11 @@ import {hostname} from 'node:os'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
 import {getMaintenanceWorkLeaseService} from './maintenanceWorkLeaseService.ts'
+import {getProjectMartLargeRebuildStateService} from './projectMartLargeRebuildStateService.ts'
+import {getProjectMartRefreshStateService, type MarkedProjectDirtyState} from './projectMartRefreshStateService.ts'
 import {getProjectVisibleJudgmentScopeSql} from './projectVisibleJudgmentRule.ts'
 
-type MartRefreshScope = 'judgment_article' | 'project'
+type MartRefreshScope = 'judgment_article'
 
 type MartRefreshTaskRow = {
   articleId: string | null
@@ -96,8 +98,6 @@ let martRefreshQueueCompletedAtColumnReady: Promise<void> | null = null
 let martRefreshQueueCompletedAtColumnVerified = false
 let martRefreshQueueGenerationColumnReady: Promise<void> | null = null
 let martRefreshQueueGenerationColumnVerified = false
-let martRefreshKnownNoopQueueRowsReady: Promise<void> | null = null
-let martRefreshKnownNoopQueueRowsVerified = false
 let martRefreshReviewArticleRollupReady: Promise<void> | null = null
 let martRefreshReviewArticleRollupVerified = false
 let martRefreshAutoDrainEnabled = true
@@ -108,7 +108,6 @@ let martRefreshProjectCompletionTimes: number[] = []
 
 const martRefreshArticleBatchLimit = 4
 const martRefreshDrainBudgetMs = 100
-const martRefreshProjectBatchLimit = 1
 const martRefreshProjectPurgeRowBatchSize = 10
 const martRefreshProjectRebuildArticleBatchSize = 20_000
 const martReviewArticleServingRewriteBatchSize = 1_000
@@ -117,7 +116,6 @@ const martRefreshQueueLeaseMs = 30_000
 const martRefreshScheduleDelayMs = 250
 const martRefreshThroughputWindowMs = 15_000
 const martRefreshYieldDelayMs = 0
-const knownNoopProjectRefreshReasons = ['humanAssessmentRoutesPostInit']
 const martRefreshBatchEpochSql = "TIMESTAMPTZ '1970-01-01T00:00:00.000Z'"
 const martRefreshProjectPurgeRetryableErrorFragment = 'Failed to delete all rows from index'
 const martPromptAnswerFactLookupIndexName = 'idx_mart_prompt_answer_fact_lookup'
@@ -226,10 +224,6 @@ const setProcessingArticleRefreshes = (articleIds: string[]) => {
   setMartRefreshProgressSnapshot({...martRefreshProgressSnapshot, processingArticleIds: articleIds})
 }
 
-const setProcessingProjectRefreshes = (projectIds: string[]) => {
-  setMartRefreshProgressSnapshot({...martRefreshProgressSnapshot, processingProjectIds: projectIds})
-}
-
 const getHasMartRefreshQueueGenerationColumn = async (): Promise<boolean> => {
   const rows = await getAppDatabaseService().queryJson<{count: number}>(`
     SELECT COUNT(*) AS count
@@ -313,44 +307,6 @@ const getQueuedArticleTasksSql = () => {
   `
 }
 
-const getQueuedProjectTasksSql = () => {
-  return `
-    WITH queued_project_task AS (
-      SELECT
-        queue.id,
-        queue.refresh_scope AS refreshScope,
-        queue.project_id AS projectId,
-        queue.article_id AS articleId,
-        queue.created_at AS createdAt,
-        COALESCE(queue.refresh_generation, 0) AS refreshGeneration
-      FROM app.mart_refresh_queue queue
-      INNER JOIN app.project project
-        ON project.id = queue.project_id
-       AND project.archived = FALSE
-      WHERE queue.completed_at IS NULL
-        AND queue.refresh_scope = 'project'
-    ),
-    project_scope_size AS (
-      SELECT
-        project_scope_article.project_id AS projectId,
-        COUNT(*) AS scopeCount
-      FROM mart.project_scope_article project_scope_article
-      INNER JOIN queued_project_task ON queued_project_task.projectId = project_scope_article.project_id
-      GROUP BY project_scope_article.project_id
-    )
-    SELECT
-      queued_project_task.id,
-      queued_project_task.refreshScope,
-      queued_project_task.projectId,
-      queued_project_task.articleId,
-      queued_project_task.refreshGeneration
-    FROM queued_project_task
-    LEFT JOIN project_scope_size ON project_scope_size.projectId = queued_project_task.projectId
-    ORDER BY COALESCE(project_scope_size.scopeCount, 0) ASC, EPOCH(queued_project_task.createdAt) ASC, queued_project_task.id ASC
-    LIMIT ${martRefreshProjectBatchLimit}
-  `
-}
-
 const ensureMartRefreshQueueGenerationColumn = async (): Promise<void> => {
   if (martRefreshQueueGenerationColumnVerified) {
     return
@@ -396,44 +352,6 @@ const ensureMartRefreshQueueCompletedAtColumn = async (): Promise<void> => {
 const ensureMartRefreshQueueSchema = async (): Promise<void> => {
   await ensureMartRefreshQueueGenerationColumn()
   return ensureMartRefreshQueueCompletedAtColumn()
-}
-
-const pruneKnownNoopQueuedProjectRefreshes = async (): Promise<void> => {
-  if (knownNoopProjectRefreshReasons.length === 0) {
-    return
-  }
-
-  await ensureMartRefreshQueueSchema()
-
-  return getAppDatabaseService().run(`
-    UPDATE app.mart_refresh_queue
-    SET completed_at = NOW(),
-        updated_at = NOW()
-    WHERE completed_at IS NULL
-      AND refresh_scope = 'project'
-      AND reason IN (${getQuotedStringList(knownNoopProjectRefreshReasons).join(', ')})
-  `)
-}
-
-const ensureKnownNoopQueuedProjectRefreshesPruned = async (): Promise<void> => {
-  if (martRefreshKnownNoopQueueRowsVerified) {
-    return
-  }
-
-  if (martRefreshKnownNoopQueueRowsReady) {
-    return martRefreshKnownNoopQueueRowsReady
-  }
-
-  martRefreshKnownNoopQueueRowsReady = pruneKnownNoopQueuedProjectRefreshes()
-    .then(() => {
-      martRefreshKnownNoopQueueRowsVerified = true
-    })
-    .catch((error) => {
-      martRefreshKnownNoopQueueRowsReady = null
-      return Promise.reject(error)
-    })
-
-  return martRefreshKnownNoopQueueRowsReady
 }
 
 const createReviewArticleRollupTable = async () => {
@@ -1939,40 +1857,13 @@ const getQueuedArticleTasks = async () => {
   return getAppDatabaseService().queryJson<MartRefreshTaskRow>(getQueuedArticleTasksSql())
 }
 
-const getQueuedProjectTasks = async () => {
-  await ensureMartRefreshQueueSchema()
-  return getAppDatabaseService().queryJson<MartRefreshTaskRow>(getQueuedProjectTasksSql())
-}
-
-const _getQueuedProjectTasksForProject = async (projectId: string) => {
-  await ensureMartRefreshQueueSchema()
-
-  return getAppDatabaseService().queryJson<MartRefreshTaskRow>(`
-    SELECT
-      id,
-      refresh_scope AS refreshScope,
-      project_id AS projectId,
-      article_id AS articleId,
-      COALESCE(refresh_generation, 0) AS refreshGeneration
-    FROM app.mart_refresh_queue
-    WHERE completed_at IS NULL
-      AND refresh_scope = 'project'
-      AND project_id = ${getSqlLiteral(projectId)}
-    ORDER BY EPOCH(created_at) ASC, id ASC
-  `)
-}
-
 const getHasQueuedDrainableTasks = async () => {
   await ensureMartRefreshQueueSchema()
   const rows = await getAppDatabaseService().queryJson<{count: number}>(`
     SELECT COUNT(*) AS count
-    FROM app.mart_refresh_queue queue
-    LEFT JOIN app.project project ON project.id = queue.project_id
-    WHERE queue.completed_at IS NULL
-      AND (
-        queue.refresh_scope = 'judgment_article'
-        OR (queue.refresh_scope = 'project' AND project.archived = FALSE)
-      )
+    FROM app.mart_refresh_queue
+    WHERE completed_at IS NULL
+      AND refresh_scope = 'judgment_article'
   `)
 
   return Number(rows[0]?.count ?? 0) > 0
@@ -2010,52 +1901,99 @@ const getUniqueValues = (values: Array<string | null | undefined>) => {
   )
 }
 
+const queueLargeRebuildsForDirtyStates = async (
+  states: MarkedProjectDirtyState[],
+  runner: {queryJson: <T>(statement: string) => Promise<T[]>; run: (statement: string) => Promise<void>},
+) => {
+  return states.reduce<Promise<MarkedProjectDirtyState[]>>(async (accPromise, state) => {
+    const acc = await accPromise
+
+    await getProjectMartLargeRebuildStateService().queueLargeRebuild({
+      projectId: state.projectId,
+      rebuildPhase: 'project_scope_article',
+      refreshToken: state.dirtyToken,
+      runner,
+    })
+
+    return [...acc, state]
+  }, Promise.resolve([]))
+}
+
+const queueProjectLargeRebuilds = async (projectIds: string[], reason: string) => {
+  const refreshStateService = getProjectMartRefreshStateService()
+  const uniqueProjectIds = getUniqueValues(projectIds)
+
+  return uniqueProjectIds.length === 0
+    ? []
+    : (getAppDatabaseService().transaction(async (tx) => {
+        const dirtyProjects = await refreshStateService.getDirtyProjectsForProjectIds(tx, uniqueProjectIds)
+        const states = await refreshStateService.markProjectsDirtyAtomically({
+          projects: dirtyProjects,
+          reason,
+          runner: tx,
+        })
+
+        return queueLargeRebuildsForDirtyStates(states, tx)
+      }) as Promise<MarkedProjectDirtyState[]>)
+}
+
+const markProjectRefreshesDirty = async (projectIds: string[], reason: string) => {
+  const refreshStateService = getProjectMartRefreshStateService()
+  const uniqueProjectIds = getUniqueValues(projectIds)
+
+  return uniqueProjectIds.length === 0
+    ? []
+    : (getAppDatabaseService().transaction(async (tx) => {
+        const dirtyProjects = await refreshStateService.getDirtyProjectsForProjectIds(tx, uniqueProjectIds)
+
+        return refreshStateService.markProjectsDirtyAtomically({projects: dirtyProjects, reason, runner: tx})
+      }) as Promise<MarkedProjectDirtyState[]>)
+}
+
+const queueProjectLargeRebuildForDirtyArticles = async (projectId: string, articleIds: string[], reason: string) => {
+  const refreshArticleIds = getUniqueValues(articleIds)
+
+  return refreshArticleIds.length === 0
+    ? []
+    : (getAppDatabaseService().transaction(async (tx) => {
+        const states = await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+          projects: [{articleIds: refreshArticleIds, projectId}],
+          reason,
+          runner: tx,
+        })
+
+        return queueLargeRebuildsForDirtyStates(states, tx)
+      }) as Promise<MarkedProjectDirtyState[]>)
+}
+
 const claimQueuedMaintenanceWorkTask = async (task: MartRefreshTaskRow) => {
   const workerId = getMartRefreshQueueWorkerId()
 
-  return task.refreshScope === 'project' && task.projectId
+  return task.articleId
     ? getMaintenanceWorkLeaseService().claimMaintenanceWorkLease({
+        articleId: task.articleId,
         consumerId: workerId,
         leaseMs: martRefreshQueueLeaseMs,
-        projectId: task.projectId,
         queueId: task.id,
         requiredConsumerRole: 'maintenance-worker',
-        scopeKind: 'project',
-        workKind: 'review_index_project_refresh',
+        scopeKind: 'article',
+        workKind: 'review_index_article_refresh',
       })
-    : task.refreshScope === 'judgment_article' && task.articleId
-      ? getMaintenanceWorkLeaseService().claimMaintenanceWorkLease({
-          articleId: task.articleId,
-          consumerId: workerId,
-          leaseMs: martRefreshQueueLeaseMs,
-          queueId: task.id,
-          requiredConsumerRole: 'maintenance-worker',
-          scopeKind: 'article',
-          workKind: 'review_index_article_refresh',
-        })
-      : Promise.resolve(null)
+    : Promise.resolve(null)
 }
 
 const completeQueuedMaintenanceWorkTask = async (task: MartRefreshTaskRow) => {
   const workerId = getMartRefreshQueueWorkerId()
 
-  return task.refreshScope === 'project' && task.projectId
+  return task.articleId
     ? getMaintenanceWorkLeaseService().completeMaintenanceWorkLease({
+        articleId: task.articleId,
         consumerId: workerId,
-        projectId: task.projectId,
         queueId: task.id,
-        scopeKind: 'project',
-        workKind: 'review_index_project_refresh',
+        scopeKind: 'article',
+        workKind: 'review_index_article_refresh',
       })
-    : task.refreshScope === 'judgment_article' && task.articleId
-      ? getMaintenanceWorkLeaseService().completeMaintenanceWorkLease({
-          articleId: task.articleId,
-          consumerId: workerId,
-          queueId: task.id,
-          scopeKind: 'article',
-          workKind: 'review_index_article_refresh',
-        })
-      : Promise.resolve()
+    : Promise.resolve()
 }
 
 const failQueuedMaintenanceWorkTask = async (task: MartRefreshTaskRow, error: unknown) => {
@@ -2063,31 +2001,19 @@ const failQueuedMaintenanceWorkTask = async (task: MartRefreshTaskRow, error: un
   const retryAfterAt = new Date(Date.now() + martRefreshRetryDelayMs)
   const recoveryContext = {error: error instanceof Error ? error.message : String(error), queueId: task.id}
 
-  return task.refreshScope === 'project' && task.projectId
+  return task.articleId
     ? getMaintenanceWorkLeaseService().failMaintenanceWorkLease({
+        articleId: task.articleId,
         consumerId: workerId,
         leaseMs: martRefreshQueueLeaseMs,
-        projectId: task.projectId,
         queueId: task.id,
         recoveryContext,
         requiredConsumerRole: 'maintenance-worker',
         retryAfterAt,
-        scopeKind: 'project',
-        workKind: 'review_index_project_refresh',
+        scopeKind: 'article',
+        workKind: 'review_index_article_refresh',
       })
-    : task.refreshScope === 'judgment_article' && task.articleId
-      ? getMaintenanceWorkLeaseService().failMaintenanceWorkLease({
-          articleId: task.articleId,
-          consumerId: workerId,
-          leaseMs: martRefreshQueueLeaseMs,
-          queueId: task.id,
-          recoveryContext,
-          requiredConsumerRole: 'maintenance-worker',
-          retryAfterAt,
-          scopeKind: 'article',
-          workKind: 'review_index_article_refresh',
-        })
-      : Promise.resolve()
+    : Promise.resolve()
 }
 
 const claimQueuedMaintenanceWorkTasks = async (tasks: MartRefreshTaskRow[]): Promise<void> => {
@@ -3084,7 +3010,12 @@ const refreshProjectArticleMartsBatch = async (projectId: string, articleIds: st
   }
 
   if (!(await getHasActiveProjectReviewServingGeneration(projectId))) {
-    return refreshProject(projectId)
+    await queueProjectLargeRebuildForDirtyArticles(
+      projectId,
+      refreshArticleIds,
+      'missingActiveProjectReviewServingGeneration',
+    )
+    return
   }
 
   await refreshProjectPromptAnswerFactForArticles(projectId, refreshArticleIds)
@@ -3184,29 +3115,15 @@ const refreshJudgmentFactsForArticles = async (articleIds: string[]): Promise<vo
   recordArticleRefreshCompletion()
 }
 
-const refreshProjects = async (projectIds: string[]): Promise<void> => {
-  const [currentProjectId = ''] = projectIds
-
-  if (!currentProjectId) {
-    return
-  }
-
-  await refreshProject(currentProjectId)
-  setProcessingProjectRefreshes(projectIds.slice(1))
-  return refreshProjects(projectIds.slice(1))
-}
-
 const processQueuedMartRefreshPass = async (): Promise<boolean> => {
   updateMartRefreshDebugSnapshot({
     lastPassStartedAt: new Date().toISOString(),
     passCount: martRefreshDebugSnapshot.passCount + 1,
   })
-  await ensureKnownNoopQueuedProjectRefreshesPruned()
-  const [queuedArticleTasks, queuedProjectTasks] = await Promise.all([getQueuedArticleTasks(), getQueuedProjectTasks()])
-  const queuedTasks = [...queuedArticleTasks, ...queuedProjectTasks]
-  updateMartRefreshDebugSnapshot({lastQueuedTaskCount: queuedTasks.length})
+  const queuedArticleTasks = await getQueuedArticleTasks()
+  updateMartRefreshDebugSnapshot({lastQueuedTaskCount: queuedArticleTasks.length})
 
-  if (queuedTasks.length === 0) {
+  if (queuedArticleTasks.length === 0) {
     updateMartRefreshDebugSnapshot({lastHasMoreQueuedTasks: false, lastPassCompletedAt: new Date().toISOString()})
     return false
   }
@@ -3216,26 +3133,13 @@ const processQueuedMartRefreshPass = async (): Promise<boolean> => {
       return task.articleId
     }),
   )
-  const claimedQueuedProjectIds = getUniqueValues(
-    queuedProjectTasks.map((task) => {
-      return task.projectId
-    }),
-  )
 
-  setClaimedQueuedRefreshes(claimedQueuedArticleIds, claimedQueuedProjectIds)
-  await claimQueuedMaintenanceWorkTasks(queuedTasks)
+  setClaimedQueuedRefreshes(claimedQueuedArticleIds, [])
+  await claimQueuedMaintenanceWorkTasks(queuedArticleTasks)
 
   try {
     await refreshQueuedArticleTasks(claimedQueuedArticleIds)
     await completeQueuedTasks(queuedArticleTasks)
-    setMartRefreshProgressSnapshot({
-      claimedQueuedArticleIds: [],
-      claimedQueuedProjectIds,
-      processingArticleIds: [],
-      processingProjectIds: claimedQueuedProjectIds,
-    })
-    await refreshProjects(claimedQueuedProjectIds)
-    await completeQueuedTasks(queuedProjectTasks)
 
     const hasMoreQueuedTasks = await getHasQueuedDrainableTasks()
 
@@ -3245,7 +3149,7 @@ const processQueuedMartRefreshPass = async (): Promise<boolean> => {
     })
     return hasMoreQueuedTasks
   } catch (error) {
-    await failQueuedMaintenanceWorkTasks(queuedTasks, error)
+    await failQueuedMaintenanceWorkTasks(queuedArticleTasks, error)
     updateMartRefreshDebugSnapshot({
       lastErrorAt: new Date().toISOString(),
       lastErrorMessage: error instanceof Error ? error.message : String(error),
@@ -3299,9 +3203,7 @@ const _scheduleQueuedMartRefreshes = (delayMs = martRefreshScheduleDelayMs) => {
 }
 
 const getMartRefreshTaskKeys = (task: QueueMartRefreshTask) => {
-  return task.refreshScope === 'project'
-    ? {articleKey: '', projectKey: task.projectId ?? ''}
-    : {articleKey: task.articleId ?? '', projectKey: ''}
+  return {articleKey: task.articleId ?? '', projectKey: ''}
 }
 
 const getQueueMartRefreshTaskValueSql = (task: QueueMartRefreshTask) => {
@@ -3385,14 +3287,12 @@ const recoverQueuedArchivedProjectRefresh = async (projectId: string) => {
     throw new Error(`Queued archived-project recovery requires an archived project: ${projectId}`)
   }
 
-  const queuedProjectTasks = await _getQueuedProjectTasksForProject(projectId)
   const workerId = getMartRefreshQueueWorkerId()
 
   await getMaintenanceWorkLeaseService().claimMaintenanceWorkLease({
     consumerId: workerId,
     leaseMs: martRefreshQueueLeaseMs,
     projectId,
-    recoveryContext: {queuedProjectTaskCount: queuedProjectTasks.length},
     recoveryMode: 'archived_project_mart_recovery',
     requiredConsumerRole: 'maintenance-worker',
     scopeKind: 'project',
@@ -3407,15 +3307,14 @@ const recoverQueuedArchivedProjectRefresh = async (projectId: string) => {
   })
 
   try {
-    await refreshProjects([projectId])
-    await completeQueuedTasks(queuedProjectTasks)
+    await purgeArchivedProjectMartData(projectId)
     await getMaintenanceWorkLeaseService().completeMaintenanceWorkLease({
       consumerId: workerId,
       projectId,
       scopeKind: 'project',
       workKind: 'review_index_archived_project_recovery',
     })
-    return {completedTaskCount: Math.max(queuedProjectTasks.length, 1), projectId}
+    return {completedTaskCount: 1, projectId}
   } catch (error) {
     await getMaintenanceWorkLeaseService().failMaintenanceWorkLease({
       consumerId: workerId,
@@ -3434,11 +3333,7 @@ const recoverQueuedArchivedProjectRefresh = async (projectId: string) => {
 }
 
 const queueProjectRefreshes = async (projectIds: string[], reason: string) => {
-  return queueMartRefreshTasks(
-    getUniqueValues(projectIds).map((projectId) => {
-      return {projectId, reason, refreshScope: 'project' as const}
-    }),
-  )
+  return queueProjectLargeRebuilds(projectIds, reason)
 }
 
 const queueJudgmentArticleRefreshes = async (articleIds: string[], reason: string) => {
@@ -3462,7 +3357,7 @@ const queueProjectRefreshesByImportRouteIds = async (importRouteIds: string[], r
       AND project.archived = FALSE
   `)
 
-  return queueProjectRefreshes(
+  return markProjectRefreshesDirty(
     rows.map((row) => {
       return row.projectId
     }),
@@ -3483,7 +3378,7 @@ const queueProjectRefreshesByPromptIds = async (promptIds: string[], reason: str
       AND project.archived = FALSE
   `)
 
-  return queueProjectRefreshes(
+  return markProjectRefreshesDirty(
     rows.map((row) => {
       return row.projectId
     }),
@@ -3533,7 +3428,6 @@ const duckdbMartRefreshService = {
   ensureQueueSchema: ensureMartRefreshQueueSchema,
   flush: flushQueuedMartRefreshes,
   getQueuedArticleTasksSqlForTests: getQueuedArticleTasksSql,
-  getQueuedProjectTasksSqlForTests: getQueuedProjectTasksSql,
   isAutoDrainEnabled: isMartRefreshAutoDrainEnabled,
   getDebugSnapshot: getMartRefreshDebugSnapshot,
   getProgressSnapshot: getMartRefreshProgressSnapshot,
@@ -3551,6 +3445,11 @@ const duckdbMartRefreshService = {
   queueProjectRefreshes,
   queueProjectRefreshesByImportRouteIds,
   queueProjectRefreshesByPromptIds,
+  queueProjectLargeRebuild: async (projectId: string, reason: string) => {
+    await queueProjectLargeRebuilds([projectId], reason)
+  },
+  queueProjectLargeRebuilds,
+  purgeArchivedProjectMartData,
   recoverQueuedArchivedProjectRefresh,
   refreshJudgmentArticle,
   refreshJudgmentFactsForArticles,
@@ -3565,8 +3464,6 @@ const duckdbMartRefreshService = {
     martRefreshQueueCompletedAtColumnVerified = false
     martRefreshQueueGenerationColumnReady = null
     martRefreshQueueGenerationColumnVerified = false
-    martRefreshKnownNoopQueueRowsReady = null
-    martRefreshKnownNoopQueueRowsVerified = false
     martRefreshReviewArticleRollupReady = null
     martRefreshReviewArticleRollupVerified = false
     resetMartRefreshDebugSnapshot()
