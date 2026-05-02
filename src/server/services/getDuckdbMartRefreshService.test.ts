@@ -2405,6 +2405,251 @@ test('mart refresh updates serving rows incrementally after a judgment answer ch
   }
 })
 
+test('mart refresh maintains project scope article deltas before downstream dirty article refreshes', () => {
+  const duckdbPath = `/tmp/f1-mart-refresh-scope-deltas-${Date.now()}.duckdb`
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
+        const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts')
+
+        await migrateDuckdb()
+
+        const database = getAppDatabaseService()
+        const martRefreshService = getDuckdbMartRefreshService()
+
+        await database.run(\`
+          INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+          VALUES ('connection-scope-delta-test', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+        \`)
+        await database.run(\`
+          INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+          VALUES ('model-scope-delta-test', 'connection-scope-delta-test', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+          VALUES
+            ('project-scope-delta-target', 'Scope Delta Target', 'model-scope-delta-test', TRUE, TRUE, FALSE, FALSE),
+            ('project-scope-delta-other', 'Scope Delta Other', 'model-scope-delta-test', TRUE, TRUE, FALSE, FALSE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.prompt (id, original_text, content_hash)
+          VALUES ('prompt-scope-delta-test', 'Prompt body', 'hash-scope-delta-test')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_prompt (id, project_id, prompt_id, prompt_order, enabled)
+          VALUES
+            ('project-prompt-scope-delta-target', 'project-scope-delta-target', 'prompt-scope-delta-test', 1, TRUE),
+            ('project-prompt-scope-delta-other', 'project-scope-delta-other', 'prompt-scope-delta-test', 1, TRUE)
+        \`)
+        await database.run(\`
+          INSERT INTO app.article (id, article_title, article_created_at, article_updated_at, article_id)
+          VALUES
+            ('article-scope-delta-retained', 'Scope Delta Retained', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z', 'external-scope-delta-retained'),
+            ('article-scope-delta-added', 'Scope Delta Added', TIMESTAMPTZ '2026-04-02T00:00:00.000Z', TIMESTAMPTZ '2026-04-02T01:00:00.000Z', 'external-scope-delta-added'),
+            ('article-scope-delta-removed', 'Scope Delta Removed', TIMESTAMPTZ '2026-04-03T00:00:00.000Z', TIMESTAMPTZ '2026-04-03T01:00:00.000Z', 'external-scope-delta-removed'),
+            ('article-scope-delta-other', 'Scope Delta Other', TIMESTAMPTZ '2026-04-04T00:00:00.000Z', TIMESTAMPTZ '2026-04-04T01:00:00.000Z', 'external-scope-delta-other')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_article (id, project_id, article_id)
+          VALUES
+            ('project-article-scope-delta-target-retained', 'project-scope-delta-target', 'article-scope-delta-retained'),
+            ('project-article-scope-delta-target-removed', 'project-scope-delta-target', 'article-scope-delta-removed'),
+            ('project-article-scope-delta-other-removed', 'project-scope-delta-other', 'article-scope-delta-removed'),
+            ('project-article-scope-delta-other-other', 'project-scope-delta-other', 'article-scope-delta-other')
+        \`)
+        await database.run(\`
+          INSERT INTO app.judgment (
+            id,
+            article_id,
+            prompt_id,
+            model_id,
+            project_id,
+            snapshot_project_id,
+            use_title,
+            use_abstract,
+            use_fulltext,
+            use_fulltext_no_images,
+            is_answered,
+            answered_original,
+            answered_original_as_array,
+            confidence_original
+          )
+          VALUES
+            ('judgment-scope-delta-retained', 'article-scope-delta-retained', 'prompt-scope-delta-test', 'model-scope-delta-test', 'project-scope-delta-target', 'project-scope-delta-target', TRUE, TRUE, FALSE, FALSE, TRUE, 'yes', ['yes'], 90),
+            ('judgment-scope-delta-added', 'article-scope-delta-added', 'prompt-scope-delta-test', 'model-scope-delta-test', 'project-scope-delta-target', 'project-scope-delta-target', TRUE, TRUE, FALSE, FALSE, TRUE, 'maybe', ['maybe'], 80),
+            ('judgment-scope-delta-removed', 'article-scope-delta-removed', 'prompt-scope-delta-test', 'model-scope-delta-test', 'project-scope-delta-other', 'project-scope-delta-other', TRUE, TRUE, FALSE, FALSE, TRUE, 'no', ['no'], 70),
+            ('judgment-scope-delta-other', 'article-scope-delta-other', 'prompt-scope-delta-test', 'model-scope-delta-test', 'project-scope-delta-other', 'project-scope-delta-other', TRUE, TRUE, FALSE, FALSE, TRUE, 'other', ['other'], 60)
+        \`)
+
+        await martRefreshService.refreshJudgmentArticle('article-scope-delta-retained')
+        await martRefreshService.refreshJudgmentArticle('article-scope-delta-added')
+        await martRefreshService.refreshJudgmentArticle('article-scope-delta-removed')
+        await martRefreshService.refreshJudgmentArticle('article-scope-delta-other')
+        await martRefreshService.refreshProject('project-scope-delta-target')
+        await martRefreshService.refreshProject('project-scope-delta-other')
+
+        await database.run(\`
+          UPDATE app.article
+          SET article_updated_at = TIMESTAMPTZ '2026-04-05T05:00:00.000Z'
+          WHERE id = 'article-scope-delta-retained'
+        \`)
+        await database.run(\`
+          DELETE FROM app.project_article
+          WHERE project_id = 'project-scope-delta-target'
+            AND article_id = 'article-scope-delta-removed'
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_article (id, project_id, article_id)
+          VALUES ('project-article-scope-delta-target-added', 'project-scope-delta-target', 'article-scope-delta-added')
+        \`)
+
+        await martRefreshService.refreshProjectScopeArticles('project-scope-delta-target', [
+          'article-scope-delta-retained',
+          'article-scope-delta-added',
+          'article-scope-delta-removed',
+        ])
+        await martRefreshService.refreshJudgmentArticle('article-scope-delta-retained')
+        await martRefreshService.refreshJudgmentArticle('article-scope-delta-added')
+        await martRefreshService.refreshProjectArticleServing('project-scope-delta-target', 'article-scope-delta-retained')
+        await martRefreshService.refreshProjectArticleServing('project-scope-delta-target', 'article-scope-delta-added')
+        await martRefreshService.refreshProjectArticleServing('project-scope-delta-target', 'article-scope-delta-removed')
+
+        const targetScopeRows = await database.queryJson(\`
+          SELECT
+            article_id AS articleId,
+            CAST(article_updated_at AS VARCHAR) AS articleUpdatedAt,
+            in_curated_scope AS inCuratedScope
+          FROM mart.project_scope_article
+          WHERE project_id = 'project-scope-delta-target'
+          ORDER BY article_id ASC
+        \`)
+        const targetPromptRows = await database.queryJson(\`
+          SELECT article_id AS articleId, answer_value AS answerValue
+          FROM mart.prompt_answer_fact
+          WHERE project_id = 'project-scope-delta-target'
+          ORDER BY article_id ASC
+        \`)
+        const activeServingRows = await database.queryJson(\`
+          SELECT serving.article_id AS articleId, CAST(serving.article_updated_at AS VARCHAR) AS articleUpdatedAt
+          FROM mart.review_article_serving serving
+          INNER JOIN app.project_review_serving_generation generation
+            ON generation.project_id = serving.project_id
+           AND generation.active_generation = serving.generation
+          WHERE serving.project_id = 'project-scope-delta-target'
+          ORDER BY serving.article_id ASC
+        \`)
+        const activeFilterRows = await database.queryJson(\`
+          SELECT member.article_id AS articleId
+          FROM mart.review_article_filter_member member
+          INNER JOIN app.project_review_serving_generation generation
+            ON generation.project_id = member.project_id
+           AND generation.active_generation = member.generation
+          WHERE member.project_id = 'project-scope-delta-target'
+          ORDER BY member.article_id ASC
+        \`)
+        const activeDetailRows = await database.queryJson(\`
+          SELECT detail.article_id AS articleId
+          FROM mart.review_article_serving_detail detail
+          INNER JOIN app.project_review_serving_generation generation
+            ON generation.project_id = detail.project_id
+           AND generation.active_generation = detail.generation
+          WHERE detail.project_id = 'project-scope-delta-target'
+          ORDER BY detail.article_id ASC
+        \`)
+        const otherRows = await database.queryJson(\`
+          SELECT 'prompt' AS tableName, article_id AS articleId
+          FROM mart.prompt_answer_fact
+          WHERE project_id = 'project-scope-delta-other'
+          UNION ALL
+          SELECT 'serving' AS tableName, serving.article_id AS articleId
+          FROM mart.review_article_serving serving
+          INNER JOIN app.project_review_serving_generation generation
+            ON generation.project_id = serving.project_id
+           AND generation.active_generation = serving.generation
+          WHERE serving.project_id = 'project-scope-delta-other'
+          ORDER BY tableName ASC, articleId ASC
+        \`)
+
+        console.log(JSON.stringify({
+          activeDetailRows,
+          activeFilterRows,
+          activeServingRows,
+          otherRows,
+          targetPromptRows,
+          targetScopeRows,
+        }))
+        await database.close()
+      `,
+    ],
+    {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        API_SERVER_PORT: '3001',
+        DUCKDB_PATH: duckdbPath,
+        SERVER_ROLE: 'dev-single',
+        VITE_PORT: '3000',
+      },
+    },
+  )
+
+  try {
+    if (runScript.exitCode !== 0) {
+      throw new Error(
+        runScript.stderr.toString() || runScript.stdout.toString() || 'Mart scope delta refresh test failed',
+      )
+    }
+
+    const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+      activeDetailRows: Array<{articleId: string}>
+      activeFilterRows: Array<{articleId: string}>
+      activeServingRows: Array<{articleId: string; articleUpdatedAt: string}>
+      otherRows: Array<{articleId: string; tableName: string}>
+      targetPromptRows: Array<{answerValue: string; articleId: string}>
+      targetScopeRows: Array<{articleId: string; articleUpdatedAt: string; inCuratedScope: boolean}>
+    }
+
+    expect(
+      result.targetScopeRows.map((row) => {
+        return row.articleId
+      }),
+    ).toEqual(['article-scope-delta-added', 'article-scope-delta-retained'])
+    expect(result.targetScopeRows[1]?.articleUpdatedAt).toContain('2026-04-05')
+    expect(result.targetPromptRows).toEqual([
+      {answerValue: 'maybe', articleId: 'article-scope-delta-added'},
+      {answerValue: 'yes', articleId: 'article-scope-delta-retained'},
+    ])
+    expect(
+      result.activeServingRows.map((row) => {
+        return row.articleId
+      }),
+    ).toEqual(['article-scope-delta-added', 'article-scope-delta-retained'])
+    expect(result.activeServingRows[1]?.articleUpdatedAt).toContain('2026-04-05')
+    expect(result.activeFilterRows).toEqual([
+      {articleId: 'article-scope-delta-added'},
+      {articleId: 'article-scope-delta-retained'},
+    ])
+    expect(result.activeDetailRows).toEqual([
+      {articleId: 'article-scope-delta-added'},
+      {articleId: 'article-scope-delta-retained'},
+    ])
+    expect(result.otherRows).toEqual([
+      {articleId: 'article-scope-delta-other', tableName: 'prompt'},
+      {articleId: 'article-scope-delta-removed', tableName: 'prompt'},
+      {articleId: 'article-scope-delta-other', tableName: 'serving'},
+      {articleId: 'article-scope-delta-removed', tableName: 'serving'},
+    ])
+  } finally {
+    removeFileIfExists(duckdbPath)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)
+    removeFileIfExists(`${duckdbPath}.duckdb-owner.history.json`)
+  }
+})
+
 test('mart refresh computes summary-mode human completeness from summary judgments', () => {
   const duckdbPath = `/tmp/f1-mart-refresh-summary-human-${Date.now()}.duckdb`
   const runScript = globalThis.Bun.spawnSync(

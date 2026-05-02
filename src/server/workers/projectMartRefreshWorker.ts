@@ -75,6 +75,7 @@ type ProjectMartRefreshRunnerService = {
     projectId: string
   }) => Promise<void>
   refreshProject: (projectId: string) => Promise<void>
+  refreshProjectScopeArticles: (projectId: string, articleIds: string[]) => Promise<void>
   refreshProjectArticleServing: (projectId: string, articleId: string) => Promise<void>
 }
 
@@ -331,16 +332,21 @@ export const runProjectMartRefreshWorkerCycle = async (
       return {claimedToken: claim.claimedToken, projectId: claim.projectId, status: 'completed', workerId}
     }
 
-    await dependencies.refreshService.refreshJudgmentFactsForProjectClaim({
-      claimedToken: claim.claimedToken,
-      lastCompletedToken: claim.lastCompletedToken,
-      projectId: claim.projectId,
-    })
-
     if (executionMode === 'incremental') {
+      await dependencies.refreshService.refreshProjectScopeArticles(claim.projectId, dirtyArticleIds)
+      await dependencies.refreshService.refreshJudgmentFactsForProjectClaim({
+        claimedToken: claim.claimedToken,
+        lastCompletedToken: claim.lastCompletedToken,
+        projectId: claim.projectId,
+      })
       await refreshClaimArticleServingIncrementally(dirtyArticleIds, claim.projectId, dependencies.refreshService)
     } else if (executionMode === 'full') {
       await dependencies.refreshService.refreshProject(claim.projectId)
+      await dependencies.refreshService.refreshJudgmentFactsForProjectClaim({
+        claimedToken: claim.claimedToken,
+        lastCompletedToken: claim.lastCompletedToken,
+        projectId: claim.projectId,
+      })
     }
 
     if (executionMode === 'full') {

@@ -364,6 +364,14 @@ const getDirtyProjectsForProjectIds = async (runner: RefreshStateRunner, project
           AND project.archived = FALSE
           AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
           AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
+        UNION
+        SELECT
+          scope_article.project_id AS projectId,
+          scope_article.article_id AS articleId
+        FROM mart.project_scope_article scope_article
+        INNER JOIN app.project project ON project.id = scope_article.project_id
+        WHERE scope_article.project_id IN (${getQuotedStringList(uniqueProjectIds).join(', ')})
+          AND project.archived = FALSE
       ) scoped_articles
       ORDER BY projectId ASC, articleId ASC
     `),

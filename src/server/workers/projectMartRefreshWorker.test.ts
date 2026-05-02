@@ -130,6 +130,11 @@ const createWorkerTestContext = (params: {
       callLog.push(`project:${projectId}`)
       return params.onRefreshProject?.(projectId)
     }),
+    refreshProjectScopeArticles: mock(async (projectId: string, articleIds: string[]) => {
+      articleIds.forEach((articleId) => {
+        callLog.push(`scopeArticle:${projectId}:${articleId}`)
+      })
+    }),
     refreshProjectArticleServing: mock(async (projectId: string, articleId: string) => {
       callLog.push(`serving:${projectId}:${articleId}`)
     }),
@@ -260,7 +265,7 @@ test('claims at most one project per cycle', async () => {
   expect(context.acknowledgedProjects).toEqual([{ackToken: 3, projectId: 'project-1'}])
 })
 
-test('refreshes judgment facts before the project rebuild', async () => {
+test('uses full project rebuilds before claim fact cleanup for large deltas', async () => {
   const context = createWorkerTestContext({
     articlesByProject: {'project-1': ['article-2', 'article-1']},
     claims: [
@@ -281,9 +286,9 @@ test('refreshes judgment facts before the project rebuild', async () => {
     'claim:worker-1:1:30000',
     'batch:project-1:1',
     'scope:project-1',
+    'project:project-1',
     'judgment:article-2',
     'judgment:article-1',
-    'project:project-1',
     'complete:project-1:2',
     'ack:project-1:2',
   ])
@@ -309,6 +314,8 @@ test('uses incremental article-aware refresh routing for small deltas', async ()
     'reconcile:all',
     'claim:worker-1:1:30000',
     'batch:project-1:3',
+    'scopeArticle:project-1:article-1',
+    'scopeArticle:project-1:article-2',
     'judgment:article-1',
     'judgment:article-2',
     'serving:project-1:article-1',
@@ -339,11 +346,11 @@ test('falls back to a full project refresh when the dirty-article delta exceeds 
     'claim:worker-1:1:30000',
     'batch:project-1:4',
     'scope:project-1',
+    'project:project-1',
     'judgment:article-1',
     'judgment:article-2',
     'judgment:article-3',
     'judgment:article-4',
-    'project:project-1',
     'complete:project-1:5',
     'ack:project-1:5',
   ])
@@ -485,8 +492,8 @@ test('can process work reclaimed after an expired lease', async () => {
     'claim:worker-2:1:5000',
     'batch:project-1:1',
     'scope:project-1',
-    'judgment:article-1',
     'project:project-1',
+    'judgment:article-1',
     'complete:project-1:4',
     'ack:project-1:4',
   ])
