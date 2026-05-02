@@ -3165,6 +3165,25 @@ const refreshJudgmentFactsForProjectClaim = async ({
   recordArticleRefreshCompletion()
 }
 
+const refreshJudgmentFactsForArticles = async (articleIds: string[]): Promise<void> => {
+  const refreshArticleIds = getUniqueValues(articleIds)
+
+  if (refreshArticleIds.length === 0) {
+    return
+  }
+
+  await runMartRefreshBackgroundStatement(
+    getJudgmentFactSafeRefreshSql({
+      dirtyArticlesSql: `
+        SELECT requested_article.article_id
+        FROM (VALUES ${getProjectRefreshArticleIdRowsSql(refreshArticleIds)}) AS requested_article(article_id)
+      `,
+    }),
+  )
+  await yieldToEventLoop()
+  recordArticleRefreshCompletion()
+}
+
 const refreshProjects = async (projectIds: string[]): Promise<void> => {
   const [currentProjectId = ''] = projectIds
 
@@ -3519,6 +3538,7 @@ const duckdbMartRefreshService = {
   getDebugSnapshot: getMartRefreshDebugSnapshot,
   getProgressSnapshot: getMartRefreshProgressSnapshot,
   getThroughputSnapshot: getMartRefreshThroughputSnapshot,
+  hasActiveProjectReviewServingGeneration: getHasActiveProjectReviewServingGeneration,
   queueJudgmentArticleRefresh: async (articleId: string, reason: string) => {
     await queueJudgmentArticleRefreshes([articleId], reason)
   },
@@ -3533,6 +3553,7 @@ const duckdbMartRefreshService = {
   queueProjectRefreshesByPromptIds,
   recoverQueuedArchivedProjectRefresh,
   refreshJudgmentArticle,
+  refreshJudgmentFactsForArticles,
   refreshJudgmentFactsForProjectClaim,
   refreshProject,
   refreshProjectScopeArticles,

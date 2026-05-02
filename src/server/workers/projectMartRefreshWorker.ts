@@ -9,7 +9,6 @@ import {
   getProjectMartRefreshStateService,
   type ProjectRefreshClaim,
 } from '../services/projectMartRefreshStateService.ts'
-import {parseDuckdbMemoryLimitToMiB} from '../utils/duckdbMemoryLimit.ts'
 
 type ProjectMartRefreshStateWorkerService = {
   claimDirtyProjects: (params: {
@@ -68,13 +67,9 @@ type ProjectMartLargeRebuildStateWorkerService = {
 }
 
 type ProjectMartRefreshRunnerService = {
+  hasActiveProjectReviewServingGeneration: (projectId: string) => Promise<boolean>
   refreshJudgmentArticle: (articleId: string) => Promise<void>
-  refreshJudgmentFactsForProjectClaim: (params: {
-    claimedToken: number
-    lastCompletedToken: number
-    projectId: string
-  }) => Promise<void>
-  refreshProject: (projectId: string) => Promise<void>
+  refreshJudgmentFactsForArticles: (articleIds: string[]) => Promise<void>
   refreshProjectScopeArticles: (projectId: string, articleIds: string[]) => Promise<void>
   refreshProjectArticleMartsBatch: (projectId: string, articleIds: string[]) => Promise<void>
 }
@@ -92,10 +87,9 @@ type ProjectMartRefreshWorkerDependencies = {
 }
 
 type ProjectMartRefreshWorkerCycleOptions = {
+  dirtyArticleBatchSize?: number
   heartbeatMs?: number
-  incrementalArticleThreshold?: number
   leaseMs?: number
-  maxFullProjectScopeArticles?: number
   now?: Date
   workerId?: string
 }
@@ -112,37 +106,8 @@ type ProjectMartRefreshWorkerCycleResult =
 
 const defaultProjectMartRefreshWorkerLeaseMs = 30_000
 const defaultProjectMartRefreshWorkerHeartbeatMs = 10_000
-const defaultProjectMartRefreshWorkerIncrementalArticleThreshold = 3
-const defaultProjectMartRefreshWorkerMaxFullProjectScopeArticles = 100_000
+const defaultProjectMartRefreshWorkerDirtyArticleBatchSize = 3
 const defaultProjectMartRefreshWorkerPollIntervalMs = 2_000
-const lowMemoryProjectMartRefreshWorkerMaxFullProjectScopeArticles = 10_000
-const mediumMemoryProjectMartRefreshWorkerMaxFullProjectScopeArticles = 20_000
-const lowMemoryProjectMartRefreshWorkerDuckdbLimitMiB = 6400
-const mediumMemoryProjectMartRefreshWorkerDuckdbLimitMiB = 8192
-
-const getAutomaticProjectMartRefreshWorkerMaxFullProjectScopeArticles = (workerDuckdbMemoryLimitMiB: number | null) => {
-  if (workerDuckdbMemoryLimitMiB === null) {
-    return defaultProjectMartRefreshWorkerMaxFullProjectScopeArticles
-  }
-
-  if (workerDuckdbMemoryLimitMiB <= lowMemoryProjectMartRefreshWorkerDuckdbLimitMiB) {
-    return lowMemoryProjectMartRefreshWorkerMaxFullProjectScopeArticles
-  }
-
-  return workerDuckdbMemoryLimitMiB <= mediumMemoryProjectMartRefreshWorkerDuckdbLimitMiB
-    ? mediumMemoryProjectMartRefreshWorkerMaxFullProjectScopeArticles
-    : defaultProjectMartRefreshWorkerMaxFullProjectScopeArticles
-}
-
-const getProjectMartRefreshWorkerMaxFullProjectScopeArticles = () => {
-  const parsed = Number(process.env.PROJECT_MART_REFRESH_MAX_FULL_SCOPE_ARTICLES ?? '')
-
-  return Number.isFinite(parsed) && parsed > 0
-    ? parsed
-    : getAutomaticProjectMartRefreshWorkerMaxFullProjectScopeArticles(
-        parseDuckdbMemoryLimitToMiB(process.env.DUCKDB_MEMORY_LIMIT),
-      )
-}
 
 const getProjectScopeArticleCount = async (projectId: string) => {
   const [row] = await getAppDatabaseService().queryJson<{count: number | string}>(`
@@ -193,52 +158,10 @@ const getClaimedProject = async (
   return claim ?? null
 }
 
-const getProjectMartRefreshExecutionMode = ({
-  dirtyArticleCount,
-  incrementalArticleThreshold,
-}: {
-  dirtyArticleCount: number
-  incrementalArticleThreshold: number
-}) => {
-  return dirtyArticleCount === 0 ? 'idle' : dirtyArticleCount <= incrementalArticleThreshold ? 'incremental' : 'full'
-}
+const getDirtyArticleBatchSize = (options: ProjectMartRefreshWorkerCycleOptions) => {
+  const configuredBatchSize = options.dirtyArticleBatchSize ?? defaultProjectMartRefreshWorkerDirtyArticleBatchSize
 
-const getDirtyArticleRoutingBatchSize = (incrementalArticleThreshold: number) => {
-  return Math.max(1, incrementalArticleThreshold + 1)
-}
-
-const getFullRefreshBlockedErrorText = ({
-  dirtyArticleCount,
-  maxFullProjectScopeArticles,
-  projectId,
-  scopeArticleCount,
-}: {
-  dirtyArticleCount: number
-  maxFullProjectScopeArticles: number
-  projectId: string
-  scopeArticleCount: number
-}) => {
-  return `Blocked automatic full refresh for project ${projectId}: scope_article_count=${scopeArticleCount}, dirty_article_count=${dirtyArticleCount}, max_full_project_scope_articles=${maxFullProjectScopeArticles}. Use guarded/manual recovery after reducing scope or raising PROJECT_MART_REFRESH_MAX_FULL_SCOPE_ARTICLES deliberately.`
-}
-
-const _assertFullRefreshIsSafe = async ({
-  dependencies,
-  dirtyArticleCount,
-  maxFullProjectScopeArticles,
-  projectId,
-}: {
-  dependencies: ProjectMartRefreshWorkerDependencies
-  dirtyArticleCount: number
-  maxFullProjectScopeArticles: number
-  projectId: string
-}) => {
-  const scopeArticleCount = await dependencies.projectInspector.getProjectScopeArticleCount(projectId)
-
-  if (scopeArticleCount > maxFullProjectScopeArticles) {
-    throw new Error(
-      getFullRefreshBlockedErrorText({dirtyArticleCount, maxFullProjectScopeArticles, projectId, scopeArticleCount}),
-    )
-  }
+  return Math.max(1, Math.floor(configuredBatchSize))
 }
 
 const getErrorText = (error: unknown) => {
@@ -266,6 +189,75 @@ const startClaimHeartbeat = (
   }
 }
 
+const queueBoundedInitialProjectMartSetup = async ({
+  claim,
+  dependencies,
+  options,
+  workerId,
+}: {
+  claim: ProjectRefreshClaim
+  dependencies: ProjectMartRefreshWorkerDependencies
+  options: ProjectMartRefreshWorkerCycleOptions
+  workerId: string
+}) => {
+  await dependencies.projectInspector.getProjectScopeArticleCount(claim.projectId)
+  await dependencies.largeRebuildStateService.queueLargeRebuild({
+    now: getWorkerNow(options.now),
+    projectId: claim.projectId,
+    rebuildPhase: 'judgment_fact',
+    refreshToken: claim.claimedToken,
+  })
+  await dependencies.stateService.releaseProjectRefreshClaim({
+    now: getWorkerNow(options.now),
+    projectId: claim.projectId,
+    workerId,
+  })
+}
+
+const processDirtyArticleBatchForClaim = async ({
+  claim,
+  dependencies,
+  options,
+  workerId,
+}: {
+  claim: ProjectRefreshClaim
+  dependencies: ProjectMartRefreshWorkerDependencies
+  options: ProjectMartRefreshWorkerCycleOptions
+  workerId: string
+}): Promise<boolean> => {
+  const dirtyArticleBatch = await dependencies.stateService.getDirtyArticleBatchForClaim({
+    batchSize: getDirtyArticleBatchSize(options),
+    claimedToken: claim.claimedToken,
+    projectId: claim.projectId,
+    workerId,
+  })
+  const dirtyArticleIds = dirtyArticleBatch.articleIds
+
+  if (dirtyArticleIds.length > 0) {
+    await dependencies.refreshService.refreshProjectScopeArticles(claim.projectId, dirtyArticleIds)
+    await dependencies.refreshService.refreshJudgmentFactsForArticles(dirtyArticleIds)
+    await dependencies.refreshService.refreshProjectArticleMartsBatch(claim.projectId, dirtyArticleIds)
+  }
+
+  const completion = await dependencies.stateService.completeDirtyArticleBatchForClaim({
+    articleIds: dirtyArticleIds,
+    claimedToken: claim.claimedToken,
+    now: getWorkerNow(options.now),
+    projectId: claim.projectId,
+    workerId,
+  })
+
+  if (completion.isClaimComplete) {
+    return true
+  }
+
+  if (dirtyArticleIds.length === 0) {
+    throw new Error(`Project mart refresh claim made no progress for ${claim.projectId}`)
+  }
+
+  return processDirtyArticleBatchForClaim({claim, dependencies, options, workerId})
+}
+
 export const runProjectMartRefreshWorkerCycle = async (
   options: ProjectMartRefreshWorkerCycleOptions = {},
   dependencies: ProjectMartRefreshWorkerDependencies = defaultProjectMartRefreshWorkerDependencies,
@@ -284,73 +276,13 @@ export const runProjectMartRefreshWorkerCycle = async (
   let refreshCompleted = false
 
   try {
-    const incrementalArticleThreshold =
-      options.incrementalArticleThreshold ?? defaultProjectMartRefreshWorkerIncrementalArticleThreshold
-    const dirtyArticleBatch = await dependencies.stateService.getDirtyArticleBatchForClaim({
-      batchSize: getDirtyArticleRoutingBatchSize(incrementalArticleThreshold),
-      claimedToken: claim.claimedToken,
-      projectId: claim.projectId,
-      workerId,
-    })
-    const dirtyArticleIds = dirtyArticleBatch.articleIds
-    const maxFullProjectScopeArticles =
-      options.maxFullProjectScopeArticles ?? getProjectMartRefreshWorkerMaxFullProjectScopeArticles()
-    const executionMode = getProjectMartRefreshExecutionMode({
-      dirtyArticleCount: dirtyArticleIds.length,
-      incrementalArticleThreshold,
-    })
-    const scopeArticleCount =
-      executionMode === 'full' ? await dependencies.projectInspector.getProjectScopeArticleCount(claim.projectId) : null
-
-    if (scopeArticleCount !== null && scopeArticleCount > maxFullProjectScopeArticles) {
-      await dependencies.largeRebuildStateService.queueLargeRebuild({
-        now: getWorkerNow(options.now),
-        projectId: claim.projectId,
-        rebuildPhase: 'judgment_fact',
-        refreshToken: claim.claimedToken,
-      })
-      await dependencies.stateService.releaseProjectRefreshClaim({
-        now: getWorkerNow(options.now),
-        projectId: claim.projectId,
-        workerId,
-      })
+    if (!(await dependencies.refreshService.hasActiveProjectReviewServingGeneration(claim.projectId))) {
+      await queueBoundedInitialProjectMartSetup({claim, dependencies, options, workerId})
 
       return {claimedToken: claim.claimedToken, projectId: claim.projectId, status: 'completed', workerId}
     }
 
-    if (executionMode === 'incremental') {
-      await dependencies.refreshService.refreshProjectScopeArticles(claim.projectId, dirtyArticleIds)
-      await dependencies.refreshService.refreshJudgmentFactsForProjectClaim({
-        claimedToken: claim.claimedToken,
-        lastCompletedToken: claim.lastCompletedToken,
-        projectId: claim.projectId,
-      })
-      await dependencies.refreshService.refreshProjectArticleMartsBatch(claim.projectId, dirtyArticleIds)
-    } else if (executionMode === 'full') {
-      await dependencies.refreshService.refreshProject(claim.projectId)
-      await dependencies.refreshService.refreshJudgmentFactsForProjectClaim({
-        claimedToken: claim.claimedToken,
-        lastCompletedToken: claim.lastCompletedToken,
-        projectId: claim.projectId,
-      })
-    }
-
-    if (executionMode === 'full') {
-      await dependencies.stateService.completeProjectRefresh({
-        completedToken: claim.claimedToken,
-        now: getWorkerNow(options.now),
-        projectId: claim.projectId,
-        workerId,
-      })
-    } else {
-      await dependencies.stateService.completeDirtyArticleBatchForClaim({
-        articleIds: dirtyArticleIds,
-        claimedToken: claim.claimedToken,
-        now: getWorkerNow(options.now),
-        projectId: claim.projectId,
-        workerId,
-      })
-    }
+    await processDirtyArticleBatchForClaim({claim, dependencies, options, workerId})
     refreshCompleted = true
     await dependencies.sqliteService.publishProjectRefreshAck({
       ackToken: claim.claimedToken,
@@ -403,11 +335,10 @@ export const runProjectMartRefreshWorker = async (
 }
 
 export {
+  defaultProjectMartRefreshWorkerDirtyArticleBatchSize,
   defaultProjectMartRefreshWorkerHeartbeatMs,
-  defaultProjectMartRefreshWorkerIncrementalArticleThreshold,
   defaultProjectMartRefreshWorkerLeaseMs,
   defaultProjectMartRefreshWorkerPollIntervalMs,
-  getProjectMartRefreshExecutionMode,
   getProjectMartRefreshWorkerId,
 }
 

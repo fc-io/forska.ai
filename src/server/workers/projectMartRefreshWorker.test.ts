@@ -3,8 +3,7 @@ import {rmSync} from 'node:fs'
 import {beforeEach, expect, mock, test} from 'bun:test'
 
 import {
-  defaultProjectMartRefreshWorkerIncrementalArticleThreshold,
-  getProjectMartRefreshExecutionMode,
+  defaultProjectMartRefreshWorkerDirtyArticleBatchSize,
   type ProjectMartRefreshRunnerService,
   type ProjectMartRefreshStateWorkerService,
   type ProjectMartRefreshWorkerDependencies,
@@ -32,14 +31,20 @@ const getLastJsonLine = (output: string) => {
 
 const createWorkerTestContext = (params: {
   ackPublishShouldThrow?: boolean
+  activeServingGenerationByProject?: Record<string, boolean>
   articlesByProject?: Record<string, string[]>
   claims?: ClaimPlan[]
-  onRefreshProject?: (projectId: string) => Promise<void>
+  onRefreshProjectArticleMartsBatch?: (projectId: string, articleIds: string[]) => Promise<void>
   reconciledProjectIds?: string[]
   scopeArticleCountByProject?: Record<string, number>
 }) => {
   const callLog: string[] = []
   const claims = [...(params.claims ?? [])]
+  const dirtyArticlesByProject = Object.fromEntries(
+    Object.entries(params.articlesByProject ?? {}).map(([projectId, articleIds]) => {
+      return [projectId, [...articleIds]]
+    }),
+  )
   const acknowledgedProjects: Array<{ackToken: number | null; projectId: string}> = []
   const completed: Array<{completedToken: number; projectId: string; workerId: string}> = []
   const failed: Array<{error: string; projectId: string; workerId: string}> = []
@@ -58,6 +63,7 @@ const createWorkerTestContext = (params: {
     }),
     completeDirtyArticleBatchForClaim: mock(
       async ({
+        articleIds,
         claimedToken,
         projectId,
         workerId,
@@ -69,7 +75,12 @@ const createWorkerTestContext = (params: {
       }) => {
         callLog.push(`complete:${projectId}:${claimedToken}`)
         completed.push({completedToken: claimedToken, projectId, workerId})
-        return {completedState: null, isClaimComplete: true}
+        dirtyArticlesByProject[projectId] = (dirtyArticlesByProject[projectId] ?? []).filter((articleId) => {
+          return !articleIds.includes(articleId)
+        })
+        const remainingArticleCount = dirtyArticlesByProject[projectId]?.length ?? 0
+
+        return {completedState: remainingArticleCount === 0 ? {} : null, isClaimComplete: remainingArticleCount === 0}
       },
     ),
     completeProjectRefresh: mock(
@@ -97,7 +108,7 @@ const createWorkerTestContext = (params: {
         workerId: string
       }) => {
         callLog.push(`batch:${projectId}:${batchSize}`)
-        const articleIds = params.articlesByProject?.[projectId] ?? []
+        const articleIds = dirtyArticlesByProject[projectId] ?? []
 
         return {articleIds: articleIds.slice(0, batchSize), hasMore: articleIds.length > batchSize}
       },
@@ -116,19 +127,16 @@ const createWorkerTestContext = (params: {
     }),
   }
   const refreshService: ProjectMartRefreshRunnerService = {
+    hasActiveProjectReviewServingGeneration: mock(async (projectId: string) => {
+      return params.activeServingGenerationByProject?.[projectId] ?? true
+    }),
     refreshJudgmentArticle: mock(async (articleId: string) => {
       callLog.push(`judgment:${articleId}`)
     }),
-    refreshJudgmentFactsForProjectClaim: mock(
-      async ({projectId}: {claimedToken: number; lastCompletedToken: number; projectId: string}) => {
-        ;(params.articlesByProject?.[projectId] ?? []).forEach((articleId) => {
-          callLog.push(`judgment:${articleId}`)
-        })
-      },
-    ),
-    refreshProject: mock(async (projectId: string) => {
-      callLog.push(`project:${projectId}`)
-      return params.onRefreshProject?.(projectId)
+    refreshJudgmentFactsForArticles: mock(async (articleIds: string[]) => {
+      articleIds.forEach((articleId) => {
+        callLog.push(`judgment:${articleId}`)
+      })
     }),
     refreshProjectScopeArticles: mock(async (projectId: string, articleIds: string[]) => {
       articleIds.forEach((articleId) => {
@@ -137,6 +145,7 @@ const createWorkerTestContext = (params: {
     }),
     refreshProjectArticleMartsBatch: mock(async (projectId: string, articleIds: string[]) => {
       callLog.push(`articleMartsBatch:${projectId}:${articleIds.join(',')}`)
+      return params.onRefreshProjectArticleMartsBatch?.(projectId, articleIds)
     }),
   }
   const remainingReconciledProjectIds = [...(params.reconciledProjectIds ?? [])]
@@ -201,12 +210,6 @@ beforeEach(() => {
   mock.restore()
 })
 
-test('classifies refresh execution mode as idle incremental or full', () => {
-  expect(getProjectMartRefreshExecutionMode({dirtyArticleCount: 0, incrementalArticleThreshold: 3})).toBe('idle')
-  expect(getProjectMartRefreshExecutionMode({dirtyArticleCount: 3, incrementalArticleThreshold: 3})).toBe('incremental')
-  expect(getProjectMartRefreshExecutionMode({dirtyArticleCount: 4, incrementalArticleThreshold: 3})).toBe('full')
-})
-
 test('one-shot worker reuses single-cycle behavior and exits after one claim attempt', async () => {
   const context = createWorkerTestContext({
     claims: [
@@ -265,7 +268,7 @@ test('claims at most one project per cycle', async () => {
   expect(context.acknowledgedProjects).toEqual([{ackToken: 3, projectId: 'project-1'}])
 })
 
-test('uses full project rebuilds before claim fact cleanup for large deltas', async () => {
+test('processes dirty articles through bounded batches until the claim is complete', async () => {
   const context = createWorkerTestContext({
     articlesByProject: {'project-1': ['article-2', 'article-1']},
     claims: [
@@ -279,22 +282,26 @@ test('uses full project rebuilds before claim fact cleanup for large deltas', as
     ],
   })
 
-  await runProjectMartRefreshWorkerCycle({incrementalArticleThreshold: 0, workerId: 'worker-1'}, context.dependencies)
+  await runProjectMartRefreshWorkerCycle({dirtyArticleBatchSize: 1, workerId: 'worker-1'}, context.dependencies)
 
   expect(context.callLog).toEqual([
     'reconcile:all',
     'claim:worker-1:1:30000',
     'batch:project-1:1',
-    'scope:project-1',
-    'project:project-1',
+    'scopeArticle:project-1:article-2',
     'judgment:article-2',
+    'articleMartsBatch:project-1:article-2',
+    'complete:project-1:2',
+    'batch:project-1:1',
+    'scopeArticle:project-1:article-1',
     'judgment:article-1',
+    'articleMartsBatch:project-1:article-1',
     'complete:project-1:2',
     'ack:project-1:2',
   ])
 })
 
-test('uses incremental article-aware refresh routing for small deltas', async () => {
+test('uses dirty article batch size for article-aware refresh routing', async () => {
   const context = createWorkerTestContext({
     articlesByProject: {'project-1': ['article-1', 'article-2']},
     claims: [
@@ -308,12 +315,12 @@ test('uses incremental article-aware refresh routing for small deltas', async ()
     ],
   })
 
-  await runProjectMartRefreshWorkerCycle({incrementalArticleThreshold: 2, workerId: 'worker-1'}, context.dependencies)
+  await runProjectMartRefreshWorkerCycle({dirtyArticleBatchSize: 2, workerId: 'worker-1'}, context.dependencies)
 
   expect(context.callLog).toEqual([
     'reconcile:all',
     'claim:worker-1:1:30000',
-    'batch:project-1:3',
+    'batch:project-1:2',
     'scopeArticle:project-1:article-1',
     'scopeArticle:project-1:article-2',
     'judgment:article-1',
@@ -324,7 +331,7 @@ test('uses incremental article-aware refresh routing for small deltas', async ()
   ])
 })
 
-test('falls back to a full project refresh when the dirty-article delta exceeds the threshold', async () => {
+test('does not route large dirty-article deltas into full project refreshes', async () => {
   const context = createWorkerTestContext({
     articlesByProject: {'project-1': ['article-1', 'article-2', 'article-3', 'article-4']},
     claims: [
@@ -338,21 +345,28 @@ test('falls back to a full project refresh when the dirty-article delta exceeds 
     ],
   })
 
-  await runProjectMartRefreshWorkerCycle({incrementalArticleThreshold: 3, workerId: 'worker-1'}, context.dependencies)
+  await runProjectMartRefreshWorkerCycle({dirtyArticleBatchSize: 3, workerId: 'worker-1'}, context.dependencies)
 
   expect(context.callLog).toEqual([
     'reconcile:all',
     'claim:worker-1:1:30000',
-    'batch:project-1:4',
-    'scope:project-1',
-    'project:project-1',
+    'batch:project-1:3',
+    'scopeArticle:project-1:article-1',
+    'scopeArticle:project-1:article-2',
+    'scopeArticle:project-1:article-3',
     'judgment:article-1',
     'judgment:article-2',
     'judgment:article-3',
+    'articleMartsBatch:project-1:article-1,article-2,article-3',
+    'complete:project-1:5',
+    'batch:project-1:3',
+    'scopeArticle:project-1:article-4',
     'judgment:article-4',
+    'articleMartsBatch:project-1:article-4',
     'complete:project-1:5',
     'ack:project-1:5',
   ])
+  expect(context.queuedLargeRebuilds).toEqual([])
 })
 
 test('records failures when a claimed refresh errors', async () => {
@@ -367,30 +381,33 @@ test('records failures when a claimed refresh errors', async () => {
         workerId: 'worker-1',
       },
     ],
-    onRefreshProject: async () => {
-      throw new Error('project refresh exploded')
+    onRefreshProjectArticleMartsBatch: async () => {
+      throw new Error('article marts batch exploded')
     },
   })
 
   const result = await runProjectMartRefreshWorkerCycle(
-    {incrementalArticleThreshold: 0, workerId: 'worker-1'},
+    {dirtyArticleBatchSize: 1, workerId: 'worker-1'},
     context.dependencies,
   )
 
   expect(result).toEqual({
     claimedToken: 7,
-    error: 'project refresh exploded',
+    error: 'article marts batch exploded',
     projectId: 'project-1',
     status: 'failed',
     workerId: 'worker-1',
   })
-  expect(context.failed).toEqual([{error: 'project refresh exploded', projectId: 'project-1', workerId: 'worker-1'}])
+  expect(context.failed).toEqual([
+    {error: 'article marts batch exploded', projectId: 'project-1', workerId: 'worker-1'},
+  ])
   expect(context.completed).toEqual([])
   expect(context.acknowledgedProjects).toEqual([])
 })
 
-test('routes oversized automatic full refreshes into large rebuild state before project rebuilds', async () => {
+test('queues bounded initial setup when no active serving generation exists', async () => {
   const context = createWorkerTestContext({
+    activeServingGenerationByProject: {'project-1': false},
     articlesByProject: {'project-1': ['article-1', 'article-2', 'article-3', 'article-4']},
     claims: [
       {
@@ -405,7 +422,7 @@ test('routes oversized automatic full refreshes into large rebuild state before 
   })
 
   const result = await runProjectMartRefreshWorkerCycle(
-    {incrementalArticleThreshold: 3, maxFullProjectScopeArticles: 100_000, workerId: 'worker-1'},
+    {dirtyArticleBatchSize: 3, workerId: 'worker-1'},
     context.dependencies,
   )
 
@@ -413,7 +430,6 @@ test('routes oversized automatic full refreshes into large rebuild state before 
   expect(context.callLog).toEqual([
     'reconcile:all',
     'claim:worker-1:1:30000',
-    'batch:project-1:4',
     'scope:project-1',
     'largeRebuild:project-1:judgment_fact:9',
     'release:project-1',
@@ -426,44 +442,32 @@ test('routes oversized automatic full refreshes into large rebuild state before 
   expect(context.acknowledgedProjects).toEqual([])
 })
 
-test('uses a smaller automatic full-refresh ceiling when the maintenance-worker DuckDB memory limit is low', async () => {
-  const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
-  process.env.DUCKDB_MEMORY_LIMIT = '6400MiB'
+test('large active projects keep normal dirty churn on the batch path', async () => {
+  const context = createWorkerTestContext({
+    articlesByProject: {'project-1': ['article-1', 'article-2', 'article-3', 'article-4']},
+    claims: [
+      {
+        claimedToken: 9,
+        lastCompletedToken: 8,
+        leaseExpiresAt: new Date('2026-04-02T13:20:30.000Z'),
+        projectId: 'project-1',
+        workerId: 'worker-1',
+      },
+    ],
+    scopeArticleCountByProject: {'project-1': 2_000_000},
+  })
 
-  try {
-    const context = createWorkerTestContext({
-      articlesByProject: {'project-1': ['article-1', 'article-2', 'article-3', 'article-4']},
-      claims: [
-        {
-          claimedToken: 9,
-          lastCompletedToken: 8,
-          leaseExpiresAt: new Date('2026-04-02T13:20:30.000Z'),
-          projectId: 'project-1',
-          workerId: 'worker-1',
-        },
-      ],
-      scopeArticleCountByProject: {'project-1': 19_252},
-    })
+  const result = await runProjectMartRefreshWorkerCycle(
+    {dirtyArticleBatchSize: 2, workerId: 'worker-1'},
+    context.dependencies,
+  )
 
-    const result = await runProjectMartRefreshWorkerCycle(
-      {incrementalArticleThreshold: 3, workerId: 'worker-1'},
-      context.dependencies,
-    )
-
-    expect(result).toEqual({claimedToken: 9, projectId: 'project-1', status: 'completed', workerId: 'worker-1'})
-    expect(context.queuedLargeRebuilds).toEqual([
-      {projectId: 'project-1', rebuildPhase: 'judgment_fact', refreshToken: 9},
-    ])
-    expect(context.callLog).toContain('largeRebuild:project-1:judgment_fact:9')
-    expect(context.callLog).not.toContain('judgment:article-1')
-    expect(context.callLog).not.toContain('project:project-1')
-  } finally {
-    if (previousDuckdbMemoryLimit === undefined) {
-      delete process.env.DUCKDB_MEMORY_LIMIT
-    } else {
-      process.env.DUCKDB_MEMORY_LIMIT = previousDuckdbMemoryLimit
-    }
-  }
+  expect(result).toEqual({claimedToken: 9, projectId: 'project-1', status: 'completed', workerId: 'worker-1'})
+  expect(context.queuedLargeRebuilds).toEqual([])
+  expect(context.callLog).not.toContain('scope:project-1')
+  expect(context.callLog).not.toContain('largeRebuild:project-1:judgment_fact:9')
+  expect(context.callLog).not.toContain('project:project-1')
+  expect(context.acknowledgedProjects).toEqual([{ackToken: 9, projectId: 'project-1'}])
 })
 
 test('can process work reclaimed after an expired lease', async () => {
@@ -481,7 +485,7 @@ test('can process work reclaimed after an expired lease', async () => {
   })
 
   const result = await runProjectMartRefreshWorkerCycle(
-    {incrementalArticleThreshold: 0, leaseMs: 5_000, workerId: 'worker-2'},
+    {dirtyArticleBatchSize: 1, leaseMs: 5_000, workerId: 'worker-2'},
     context.dependencies,
   )
 
@@ -490,9 +494,9 @@ test('can process work reclaimed after an expired lease', async () => {
     'reconcile:all',
     'claim:worker-2:1:5000',
     'batch:project-1:1',
-    'scope:project-1',
-    'project:project-1',
+    'scopeArticle:project-1:article-1',
     'judgment:article-1',
+    'articleMartsBatch:project-1:article-1',
     'complete:project-1:4',
     'ack:project-1:4',
   ])
@@ -542,8 +546,8 @@ test('replays sqlite ack publication after a post-completion crash without rerun
   expect(reconcileContext.failed).toEqual([])
 })
 
-test('incremental routing keeps review pages counts warnings and prompt queueing aligned with full refresh', () => {
-  const runWorkerMode = (duckdbPath: string, threshold: number) => {
+test('dirty batch routing keeps review pages counts warnings and prompt queueing aligned across batch sizes', () => {
+  const runWorkerMode = (duckdbPath: string, dirtyArticleBatchSize: number) => {
     const runScript = globalThis.Bun.spawnSync(
       [
         'bun',
@@ -552,6 +556,7 @@ test('incremental routing keeps review pages counts warnings and prompt queueing
           const {Elysia} = await import('elysia')
           const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
           const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+          const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts')
           const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
           const {projectsRoutesGetReviewsWarnings} = await import('./src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts')
           const {judgmentsJobsCronGetPrompts} = await import('./src/server/cron/judgmentsJobs/judgmentsJobsCronGetPrompts.ts')
@@ -561,6 +566,7 @@ test('incremental routing keeps review pages counts warnings and prompt queueing
           await migrateDuckdb()
 
           const database = getAppDatabaseService()
+          const martRefreshService = getDuckdbMartRefreshService()
           const refreshStateService = getProjectMartRefreshStateService()
 
           await database.run(\`
@@ -666,14 +672,7 @@ test('incremental routing keeps review pages counts warnings and prompt queueing
               )
           \`)
 
-          await refreshStateService.markProjectsDirtyAtomically({
-            projects: [{
-              articleIds: ['article-worker-routing-1', 'article-worker-routing-2'],
-              projectId: 'project-worker-routing-test',
-            }],
-            reason: 'projectMartRefreshWorker.test.initial',
-          })
-          await runProjectMartRefreshWorkerCycle({incrementalArticleThreshold: 0, workerId: 'worker-routing-initial'})
+          await martRefreshService.refreshProject('project-worker-routing-test')
 
           await database.run(\`
             UPDATE app.judgment
@@ -692,7 +691,7 @@ test('incremental routing keeps review pages counts warnings and prompt queueing
           })
 
           await runProjectMartRefreshWorkerCycle({
-            incrementalArticleThreshold: Number(process.env.WORKER_INCREMENTAL_THRESHOLD ?? '0'),
+            dirtyArticleBatchSize: Number(process.env.WORKER_DIRTY_ARTICLE_BATCH_SIZE ?? '1'),
             workerId: 'worker-routing-delta',
           })
 
@@ -759,21 +758,21 @@ test('incremental routing keeps review pages counts warnings and prompt queueing
           DUCKDB_PATH: duckdbPath,
           SERVER_ROLE: 'dev-single',
           VITE_PORT: '3000',
-          WORKER_INCREMENTAL_THRESHOLD: String(threshold),
+          WORKER_DIRTY_ARTICLE_BATCH_SIZE: String(dirtyArticleBatchSize),
         },
       },
     )
 
     if (runScript.exitCode !== 0) {
       throw new Error(
-        runScript.stderr.toString() || runScript.stdout.toString() || 'Worker incremental routing parity test failed',
+        runScript.stderr.toString() || runScript.stdout.toString() || 'Worker dirty batch routing parity test failed',
       )
     }
 
     const resultLine = getLastJsonLine(runScript.stdout.toString())
 
     if (!resultLine) {
-      throw new Error(runScript.stdout.toString() || 'Missing JSON result from worker incremental routing test')
+      throw new Error(runScript.stdout.toString() || 'Missing JSON result from worker dirty batch routing test')
     }
 
     return JSON.parse(resultLine) as {
@@ -785,18 +784,18 @@ test('incremental routing keeps review pages counts warnings and prompt queueing
     }
   }
 
-  const incrementalDuckdbPath = `/tmp/f1-worker-routing-incremental-${Date.now()}.duckdb`
-  const fullDuckdbPath = `/tmp/f1-worker-routing-full-${Date.now()}.duckdb`
+  const singleBatchDuckdbPath = `/tmp/f1-worker-routing-single-batch-${Date.now()}.duckdb`
+  const defaultBatchDuckdbPath = `/tmp/f1-worker-routing-default-batch-${Date.now()}.duckdb`
 
   try {
-    const incrementalResult = runWorkerMode(
-      incrementalDuckdbPath,
-      defaultProjectMartRefreshWorkerIncrementalArticleThreshold,
+    const singleBatchResult = runWorkerMode(singleBatchDuckdbPath, 1)
+    const defaultBatchResult = runWorkerMode(
+      defaultBatchDuckdbPath,
+      defaultProjectMartRefreshWorkerDirtyArticleBatchSize,
     )
-    const fullRefreshResult = runWorkerMode(fullDuckdbPath, 0)
 
-    expect(incrementalResult).toEqual(fullRefreshResult)
-    expect(incrementalResult.reviews.data).toEqual([
+    expect(singleBatchResult).toEqual(defaultBatchResult)
+    expect(singleBatchResult.reviews.data).toEqual([
       {id: 'article-worker-routing-2', isFullyJudged: false, judgedPromptIds: ['prompt-worker-routing-1']},
       {
         id: 'article-worker-routing-1',
@@ -804,12 +803,12 @@ test('incremental routing keeps review pages counts warnings and prompt queueing
         judgedPromptIds: ['prompt-worker-routing-1', 'prompt-worker-routing-2'],
       },
     ])
-    expect(incrementalResult.unassessedCount).toBe(1)
-    expect(incrementalResult.promptEntries).toEqual([
+    expect(singleBatchResult.unassessedCount).toBe(1)
+    expect(singleBatchResult.promptEntries).toEqual([
       {articleId: 'article-worker-routing-2', promptId: 'prompt-worker-routing-2'},
     ])
   } finally {
-    for (const path of [incrementalDuckdbPath, fullDuckdbPath]) {
+    for (const path of [singleBatchDuckdbPath, defaultBatchDuckdbPath]) {
       rmSync(path, {force: true})
       rmSync(`${path}.duckdb-owner.lock`, {force: true})
       rmSync(`${path}.duckdb-owner.history.json`, {force: true})
