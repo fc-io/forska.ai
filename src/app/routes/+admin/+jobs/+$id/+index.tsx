@@ -297,6 +297,7 @@ const AdminJudgmentJobDetail = () => {
   const [isDeleting, setIsDeleting] = createSignal(false)
   const [isStarting, setIsStarting] = createSignal(false)
   const [isStartingClean, setIsStartingClean] = createSignal(false)
+  const [isPausing, setIsPausing] = createSignal(false)
   const [isRepairing, setIsRepairing] = createSignal<JobRepairAction | null>(null)
   const [actionError, setActionError] = createSignal('')
   const [actionNotice, setActionNotice] = createSignal('')
@@ -396,6 +397,20 @@ const AdminJudgmentJobDetail = () => {
       setActionError(getActionErrorMessage(error, 'Failed to start job clean'))
     } finally {
       setIsStartingClean(false)
+    }
+  }
+  const handlePauseJob = async (jobId: string) => {
+    setActionError('')
+    setActionNotice('')
+    setIsPausing(true)
+
+    try {
+      await pauseJudgmentsJob(jobId)
+      await job.refetch()
+    } catch (error) {
+      setActionError(getActionErrorMessage(error, 'Failed to pause job'))
+    } finally {
+      setIsPausing(false)
     }
   }
   const handleRepairAction = async ({
@@ -1125,23 +1140,22 @@ const AdminJudgmentJobDetail = () => {
                     <div class="flex gap-3">
                       <Show when={data()?.status === 'running'}>
                         <button
-                          class="px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700"
+                          class="px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                          disabled={isPausing()}
                           onClick={() => {
                             const jobId = data()?.id
                             if (jobId) {
-                              void pauseJudgmentsJob(jobId).then(() => {
-                                return job.refetch()
-                              })
+                              return void handlePauseJob(jobId)
                             }
                           }}
                         >
-                          Pause Job
+                          {isPausing() ? 'Pausing...' : 'Pause Job'}
                         </button>
                       </Show>
                       <Show when={data()?.status === 'paused'}>
                         <button
                           class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                          disabled={isStarting() || isStartingClean() || isResumeBlocked()}
+                          disabled={isStarting() || isStartingClean() || isPausing() || isResumeBlocked()}
                           onClick={() => {
                             const jobId = data()?.id
                             if (jobId) {
@@ -1155,7 +1169,7 @@ const AdminJudgmentJobDetail = () => {
                       <Show when={data()?.status === 'failed'}>
                         <button
                           class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                          disabled={isStarting() || isStartingClean() || isResumeBlocked()}
+                          disabled={isStarting() || isStartingClean() || isPausing() || isResumeBlocked()}
                           onClick={() => {
                             const jobId = data()?.id
                             if (jobId) {
@@ -1169,7 +1183,7 @@ const AdminJudgmentJobDetail = () => {
                       <Show when={data()?.status === 'paused' || data()?.status === 'failed'}>
                         <button
                           class="px-4 py-2 bg-slate-700 text-white rounded-md hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed"
-                          disabled={isStarting() || isStartingClean()}
+                          disabled={isStarting() || isStartingClean() || isPausing()}
                           onClick={() => {
                             const jobId = data()?.id
 
@@ -1190,7 +1204,7 @@ const AdminJudgmentJobDetail = () => {
                       </Show>
                       <button
                         class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                        disabled={isDeleting() || isStarting() || isStartingClean()}
+                        disabled={isDeleting() || isStarting() || isStartingClean() || isPausing()}
                         onClick={() => {
                           const jobId = data()?.id
                           if (!jobId) return
