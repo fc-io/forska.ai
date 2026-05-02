@@ -1,0 +1,353 @@
+{
+  "name": "Rebuild Better Plan",
+  "branchName": "ralph/rebuild-better",
+  "description": "Make project review mart maintenance bounded, incremental, resumable, and non-blocking for 2M-article projects while preserving correct active-generation reads.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add bounded dirty-article batch claims",
+      "description": "As a maintainer, I want dirty project refresh claims to expose bounded DB-side article batches so large projects never load all dirty article ids into JavaScript.",
+      "acceptanceCriteria": [
+        "Add a project refresh state service API that returns a deterministic dirty article batch for a project claim using a configurable batch size.",
+        "The batch query filters by claimed token and last completed token in the database and does not materialize every dirty article id before choosing a refresh path.",
+        "Add per-batch completion state so processed articles can be cleared while `last_completed_refresh_token` only advances when all claim work through that token is durable.",
+        "Cover one-article, exactly batch-sized, multi-batch, and large-scope cases in service tests.",
+        "bun test src/server/services/projectMartRefreshStateService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Refresh global judgment facts by dirty article batch",
+      "description": "As a maintainer, I want `mart.judgment_fact` refreshes to replace only facts for dirty articles so unrelated project and article facts remain available during churn.",
+      "acceptanceCriteria": [
+        "Replace the table-rebuild judgment fact refresh path with a batch refresh that deletes and reinserts rows by dirty `article_id` values only.",
+        "Deleted or stale judgments for dirty articles are removed from `mart.judgment_fact` without deleting facts for unrelated articles.",
+        "The batch refresh uses a temp or staging batch table instead of generated `IN (...)` lists for article ids.",
+        "Tests prove shared article facts still visible to unrelated projects are preserved.",
+        "bun test src/server/services/getDuckdbMartRefreshService.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-003",
+      "title": "Maintain project scope article deltas in batches",
+      "description": "As a maintainer, I want dirty article refreshes to update `mart.project_scope_article` first so every downstream mart uses the same project/article source of truth.",
+      "acceptanceCriteria": [
+        "Refresh retained dirty articles in `mart.project_scope_article` before downstream fact and serving work so scope flags and article timestamps are current.",
+        "Added scope articles append scope rows and are included in downstream dirty-batch refresh work.",
+        "Removed scope articles delete only the affected `project_id + article_id` rows from project-scoped marts and active serving tables.",
+        "Tests cover retained metadata changes, scope add, scope remove, and preservation of unrelated projects and articles.",
+        "bun test src/server/services/getDuckdbMartRefreshService.test.ts passes",
+        "bun test src/server/services/projectMartRefreshStateService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-004",
+      "title": "Refresh prompt answer and rollup marts by batch",
+      "description": "As a maintainer, I want dirty batches to refresh project answer facts and rollups so serving rows cannot diverge from supporting marts.",
+      "acceptanceCriteria": [
+        "Delete and reinsert affected `project_id + article_id` rows in `mart.prompt_answer_fact` for each dirty batch.",
+        "Delete and reinsert affected `project_id + article_id` rows in `mart.review_article_rollup` for each dirty batch.",
+        "Append missing `app.review_answer_dictionary` values without resetting or renumbering existing answer ids.",
+        "Tests prove prompt answer facts, rollups, and dictionary ids stay in sync for the same dirty article set.",
+        "bun test src/server/services/getDuckdbMartRefreshService.test.ts passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-002", "US-003"]
+    },
+    {
+      "id": "US-005",
+      "title": "Refresh active serving generation by article batch",
+      "description": "As a maintainer, I want active serving rows, details, and filter members refreshed for many dirty articles in one bounded transaction so readers see internally consistent active-generation data.",
+      "acceptanceCriteria": [
+        "Add `refreshProjectArticleMartsBatch(projectId, articleIds)` as the default dirty-article refresh path for active-generation serving data.",
+        "Delete and reinsert affected active-generation rows in `mart.review_article_serving`, `mart.review_article_serving_detail`, and `mart.review_article_filter_member` for the batch.",
+        "The active generation remains consistent across serving, detail, and filter-member rows after refresh.",
+        "Tests prove OLAP review filters and article review details return the refreshed active-generation data.",
+        "bun test src/server/services/getDuckdbMartRefreshService.test.ts passes",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.test.ts passes",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesOlapParity.test.ts passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-004"]
+    },
+    {
+      "id": "US-006",
+      "title": "Route dirty refresh worker through batch maintenance",
+      "description": "As a maintainer, I want the project mart refresh worker to use bounded dirty batches for normal churn so large projects never fall back to full project refreshes automatically.",
+      "acceptanceCriteria": [
+        "Remove the dirty-article threshold path that routes normal churn into full refresh or large rebuild work.",
+        "The worker processes dirty articles through DB-side batches and calls the batch mart refresh path until the claim is complete.",
+        "When a project has no active serving generation, the per-article path queues bounded initial setup or guarded large rebuild work instead of calling `refreshProject(projectId)`.",
+        "ACKs are published only after all batches through the claim are durable.",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/utils/projectMartRefreshWorkerHeartbeat.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001", "US-002", "US-003", "US-004", "US-005"]
+    },
+    {
+      "id": "US-007",
+      "title": "Skip quarantined dirty articles without blocking claims",
+      "description": "As a maintainer, I want quarantined dirty articles isolated from healthy dirty work so one bad article cannot block a whole project refresh claim.",
+      "acceptanceCriteria": [
+        "Dirty article batch selection skips quarantined articles while continuing to process non-quarantined dirty articles in the same project.",
+        "Quarantined dirty articles remain visible through quarantine state and warnings until repaired or cleared.",
+        "Project refresh state does not fail or block solely because one dirty article in the project is quarantined.",
+        "Tests cover quarantined and non-quarantined dirty articles in the same project claim.",
+        "bun test src/server/services/projectMartRefreshStateService.test.ts passes",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001", "US-006"]
+    },
+    {
+      "id": "US-008",
+      "title": "Split large rebuild scope setup into resumable work",
+      "description": "As an operator, I want large rebuild scope materialization to finish independently before fact phases so later phases use frozen scope rows and can resume safely.",
+      "acceptanceCriteria": [
+        "Large rebuild setup builds `mart.project_scope_article` in bounded batches before judgment fact work depends on it.",
+        "Scope setup has either a first-class `project_scope_article` phase or a persisted sub-phase cursor that can resume separately from judgment fact work.",
+        "If a first-class phase is added, `ProjectMartLargeRebuildPhase`, phase order lists, read-model lists, admin/job/warnings progress code, and tests are updated together.",
+        "Tests prove scope setup resumes independently and progress does not treat partially materialized scope as the final denominator.",
+        "bun test src/server/services/projectMartLargeRebuildStateService.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildRunner.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildCyclesService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-009",
+      "title": "Use stored target generation for rebuild staging",
+      "description": "As a maintainer, I want one fixed target serving generation per large rebuild so staging writes and promotion remain consistent across restarts.",
+      "acceptanceCriteria": [
+        "Initialize missing `target_generation` from the next serving generation before the first large rebuild staging write.",
+        "Carry the stored `target_generation` unchanged across phase transitions and lease resumes.",
+        "Executor SQL uses stored `target_generation` for every staging write and promotion instead of deriving `active_generation + 1` repeatedly.",
+        "Tests cover restart or lease expiry mid-phase with the same target generation preserved.",
+        "bun test src/server/services/projectMartLargeRebuildStateService.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildRunner.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-008"]
+    },
+    {
+      "id": "US-010",
+      "title": "Make large rebuild judgment facts global-safe",
+      "description": "As a maintainer, I want large rebuild judgment fact batches to preserve shared global facts so unrelated projects can continue reading during rebuilds.",
+      "acceptanceCriteria": [
+        "Remove project-owned `mart.judgment_fact` reset behavior from large rebuild execution.",
+        "Rebuild judgment facts in scoped article batches that delete only affected article facts and reinsert current non-deleted judgments.",
+        "Facts still visible to other projects sharing articles, prompts, models, and content settings are preserved.",
+        "Tests replay completed batches idempotently and prove unrelated project facts remain available.",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildRunner.test.ts passes",
+        "bun test src/server/services/getDuckdbMartRefreshService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-008"]
+    },
+    {
+      "id": "US-011",
+      "title": "Make rebuild dictionary maintenance append-only",
+      "description": "As a maintainer, I want large rebuild dictionary maintenance to avoid renumbering active answer ids so active-generation filter members remain valid while rebuilds run.",
+      "acceptanceCriteria": [
+        "Large rebuild dictionary maintenance appends missing `app.review_answer_dictionary` values without resetting or renumbering existing answers, or introduces generationed dictionary state before any renumbering path is allowed.",
+        "Dictionary work is bounded enough for 2M-article projects and does not rely on one project-wide reset plus full `DISTINCT` scan.",
+        "Active `mart.review_article_filter_member` rows continue to reference valid dictionary ids throughout rebuild and cleanup lag.",
+        "Tests prove dictionary ids remain stable after incremental refresh, rebuild, promotion, and cleanup lag.",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildRunner.test.ts passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-010"]
+    },
+    {
+      "id": "US-012",
+      "title": "Split serving promotion from old-generation cleanup",
+      "description": "As a maintainer, I want large rebuild promotion to be a short active-generation update while old-generation cleanup runs later in bounded maintenance work.",
+      "acceptanceCriteria": [
+        "Serving finalization promotes staged rows by setting `active_generation` to the stored `target_generation` only.",
+        "Old-generation cleanup is removed from inline finalization and moved into separate bounded maintenance batches behind refresh and judging work.",
+        "Promotion does not use full-table `DROP TABLE` or rewrite behavior and does not wait for cleanup to finish.",
+        "Tests prove cleanup can lag without changing active-generation review results or filter counts.",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildRunner.test.ts passes",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesOlapParity.test.ts passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-009", "US-011"]
+    },
+    {
+      "id": "US-013",
+      "title": "Add large rebuild wake budget and committed metrics",
+      "description": "As an operator, I want large rebuild wake cycles to yield by wall-clock budget and expose committed phase throughput so background maintenance cannot monopolize the DuckDB queue.",
+      "acceptanceCriteria": [
+        "The automatic large-rebuild heartbeat and admin run route accept and enforce a wall-clock time budget alongside `maxCycles` and `batchSize`.",
+        "Runtime diagnostics report rows/sec from committed batch row counts, batch duration, queue wait, RSS, last committed cursor, and available DuckDB temp spill measurements per phase.",
+        "Long cycles stop for budget exhaustion without marking rebuild work failed when the current committed cursor is safe to resume.",
+        "Tests cover heartbeat configuration, admin route options, cycle stop reasons, and metrics derived from committed work.",
+        "bun test src/server/services/projectMartLargeRebuildCyclesService.test.ts passes",
+        "bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts passes",
+        "bun test src/server/routes/AdminInvestigateRoutes.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-008"]
+    },
+    {
+      "id": "US-014",
+      "title": "Read large rebuild progress from frozen scope",
+      "description": "As a user, I want rebuild warnings and diagnostics to report progress against frozen scope rows so route or curated scope changes during rebuild do not corrupt progress estimates.",
+      "acceptanceCriteria": [
+        "After scope setup completes, project warnings, judgment job storage projection, and admin rebuild status read progress estimates from `mart.project_scope_article` instead of live route or curated scope CTEs.",
+        "Progress read models handle the scope setup phase or sub-phase without treating partial scope as the final denominator.",
+        "Rows/minute and remaining-work displays are tied to committed cursors and phase-specific row counts.",
+        "Tests prove route or curated scope changes mid-rebuild do not change later-phase progress denominators.",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts passes",
+        "bun test src/server/routes/JudgmentsJobsRoutes.test.ts passes",
+        "bun test src/server/routes/AdminInvestigateRoutes.test.ts passes",
+        "bun test src/components/main/reviews/getReviewIndexingInProgressTitle.test.ts passes",
+        "bun run lint passes",
+        "bun run build passes"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-008", "US-013"]
+    },
+    {
+      "id": "US-015",
+      "title": "Migrate obsolete project refresh queue callers",
+      "description": "As a maintainer, I want former project refresh queue callers to write dirty state or guarded large rebuild work directly so normal maintenance no longer depends on `refreshProject(projectId)`.",
+      "acceptanceCriteria": [
+        "Migrate `queueProjectRefresh`, prompt-change, import-route/import-store, archive, unarchive, backfill, purge, and repair-script callers to dirty-state marking or guarded large rebuild enqueueing.",
+        "Delete obsolete project-task handling from `app.mart_refresh_queue` after callers move, while preserving judgment-article queue behavior if still needed.",
+        "Normal paths no longer call direct `refreshProject(projectId)` for project queue work.",
+        "Tests prove former project refresh triggers write dirty-state or large-rebuild work directly and no longer depend on project queue compatibility.",
+        "bun test src/server/services/getDuckdbMartRefreshService.test.ts passes",
+        "bun test src/server/routes/ProjectsRoutes.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-006"]
+    },
+    {
+      "id": "US-016",
+      "title": "Bound archived-project cleanup and repair global facts",
+      "description": "As a maintainer, I want archived-project purge and delete cleanup to run in bounded work while keeping global judgment facts correct for surviving projects.",
+      "acceptanceCriteria": [
+        "Archived-project mart cleanup runs in bounded batches behind active refresh and judging work rather than unbounded deletes or table rebuilds on normal paths.",
+        "Archived project deletion refreshes or detaches affected `mart.judgment_fact` ownership metadata without deleting facts still visible to non-archived projects.",
+        "Queued project refresh rows for archived or deleted projects are completed or pruned so they cannot remain stuck forever.",
+        "Tests cover archived cleanup, archived delete, global fact preservation, and queue-row pruning.",
+        "bun test src/server/routes/ProjectsRoutes.test.ts passes",
+        "bun test src/server/services/getDuckdbMartRefreshService.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-010", "US-015"]
+    },
+    {
+      "id": "US-017",
+      "title": "Validate active review reads and final gates",
+      "description": "As a reviewer, I want API, OLAP, browser, and desktop review flows to keep using correct active-generation data while refresh or rebuild work is queued, running, promoted, and cleaned up.",
+      "acceptanceCriteria": [
+        "API and OLAP review filters return the same active-generation results before refresh, during queued or running work, after promotion, and after cleanup.",
+        "Article review details return the same active-generation judgment labels and details across incremental refresh and large rebuild transitions.",
+        "Review warnings expose dirty counts, last processed batch time, rebuild progress, queue wait, RSS, and available spill or throughput diagnostics without blocking reads.",
+        "Manual 2M synthetic run confirms incremental dirty batch stays small, API remains responsive, restart resumes, and promotion is fast.",
+        "Manual browser and desktop reviews-page smoke confirms active data remains usable while refresh or rebuild work is queued or running.",
+        "bun test src/server/workers/projectMartRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartRefreshStateService.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildStateService.test.ts passes",
+        "bun test src/server/services/getDuckdbMartRefreshService.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildRunner.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildCyclesService.test.ts passes",
+        "bun test src/db/migrateDuckdb.test.ts passes",
+        "bun test src/server/utils/projectMartLargeRebuildHeartbeat.test.ts passes",
+        "bun test src/server/utils/projectMartRefreshWorkerHeartbeat.test.ts passes",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts passes",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarningsTrigger.test.ts passes",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.test.ts passes",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHuman.test.ts passes",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.test.ts passes",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesOlapParity.test.ts passes",
+        "bun test src/server/routes/ProjectsRoutes.test.ts passes",
+        "bun test src/server/routes/JudgmentsJobsRoutes.test.ts passes",
+        "bun test src/server/routes/AdminInvestigateRoutes.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun test src/components/main/reviews/getReviewIndexingInProgressTitle.test.ts passes",
+        "bun run lint passes",
+        "bun run build passes"
+      ],
+      "priority": 17,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-007", "US-012", "US-014", "US-016"]
+    }
+  ]
+}
