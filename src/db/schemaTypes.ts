@@ -28,6 +28,7 @@ export type ProjectPromptCriteriaDisposition = 'include' | 'exclude' | 'combined
 export type JudgmentHumanSummaryAnswer = 'yes' | 'no' | 'maybe'
 export type JudgmentHumanSummaryOrigin = 'covidence_import' | 'manual_override'
 export type ProjectMartLargeRebuildPhase =
+  | 'project_scope_article'
   | 'judgment_fact'
   | 'prompt_answer_fact'
   | 'review_answer_dictionary'

@@ -116,11 +116,11 @@ test('large rebuild state migration creates typed schema and indexes', () => {
     'last_completed_at',
     'last_failed_at',
     'last_error',
+    'operator_note',
     'worker_id',
     'lease_expires_at',
     'created_at',
     'updated_at',
-    'operator_note',
   ])
   expect(
     result.indexes.map((index) => {

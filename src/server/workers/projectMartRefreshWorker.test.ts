@@ -478,11 +478,11 @@ test('queues bounded initial setup when no active serving generation exists', as
     'reconcile:all',
     'claim:worker-1:1:30000',
     'scope:project-1',
-    'largeRebuild:project-1:judgment_fact:9',
+    'largeRebuild:project-1:project_scope_article:9',
     'release:project-1',
   ])
   expect(context.queuedLargeRebuilds).toEqual([
-    {projectId: 'project-1', rebuildPhase: 'judgment_fact', refreshToken: 9},
+    {projectId: 'project-1', rebuildPhase: 'project_scope_article', refreshToken: 9},
   ])
   expect(context.failed).toEqual([])
   expect(context.completed).toEqual([])
@@ -512,7 +512,7 @@ test('large active projects keep normal dirty churn on the batch path', async ()
   expect(result).toEqual({claimedToken: 9, projectId: 'project-1', status: 'completed', workerId: 'worker-1'})
   expect(context.queuedLargeRebuilds).toEqual([])
   expect(context.callLog).not.toContain('scope:project-1')
-  expect(context.callLog).not.toContain('largeRebuild:project-1:judgment_fact:9')
+  expect(context.callLog).not.toContain('largeRebuild:project-1:project_scope_article:9')
   expect(context.callLog).not.toContain('project:project-1')
   expect(context.acknowledgedProjects).toEqual([{ackToken: 9, projectId: 'project-1'}])
 })

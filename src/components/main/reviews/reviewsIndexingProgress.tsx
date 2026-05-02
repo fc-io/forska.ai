@@ -5,6 +5,7 @@ import type {ReviewsWarningsData} from './reviewsWarningsQuery.ts'
 type ReviewsIndexingProgressProps = {compact?: boolean; indexing: ReviewsWarningsData['indexing']}
 
 const largeRebuildPhaseOrder = [
+  'project_scope_article',
   'judgment_fact',
   'prompt_answer_fact',
   'review_answer_dictionary',

@@ -72,6 +72,7 @@ type ProjectMartLargeRebuildRunnerDependencies = {
       now?: Date
       projectId: string
       rebuildPhase?:
+        | 'project_scope_article'
         | 'judgment_fact'
         | 'prompt_answer_fact'
         | 'review_answer_dictionary'
@@ -155,7 +156,7 @@ const startHeartbeat = (
   }
 }
 
-const runJudgmentFactPhase = async (
+const runProjectScopeArticlePhase = async (
   claim: LargeRebuildClaim,
   options: ProjectMartLargeRebuildRunnerOptions,
   dependencies: ProjectMartLargeRebuildRunnerDependencies,
@@ -173,10 +174,74 @@ const runJudgmentFactPhase = async (
 
   if (initialCursor === null) {
     await dependencies.executor.resetProjectScope(claim.projectId)
-    await dependencies.executor.resetProjectJudgmentFact(claim.projectId)
   }
 
   const batchRows = await dependencies.executor.getProjectScopeSourceBatch({
+    batchSize: options.batchSize,
+    cursor: initialCursor,
+    projectId: claim.projectId,
+  })
+
+  if (batchRows.length === 0) {
+    await dependencies.largeRebuildStateService.resetLargeRebuild({
+      cursorArticleCreatedAt: null,
+      cursorArticleId: null,
+      now: getNow(options.now),
+      projectId: claim.projectId,
+      rebuildPhase: 'judgment_fact',
+      targetGeneration: rebuildState.targetGeneration,
+    })
+    return {
+      articleCount: 0,
+      nextCursor: null,
+      projectId: claim.projectId,
+      status: 'progressed',
+      workerId: options.workerId,
+    }
+  }
+
+  await dependencies.executor.rebuildProjectScopeBatch(claim.projectId, batchRows)
+  const nextCursor = dependencies.executor.getNextBatchCursor(batchRows)
+
+  await dependencies.largeRebuildStateService.resetLargeRebuild({
+    cursorArticleCreatedAt: nextCursor === null ? null : getCursorDateValue(nextCursor.articleCreatedAt),
+    cursorArticleId: nextCursor?.articleId ?? null,
+    now: getNow(options.now),
+    projectId: claim.projectId,
+    rebuildPhase: 'project_scope_article',
+    targetGeneration: rebuildState.targetGeneration,
+  })
+
+  return {
+    articleCount: batchRows.length,
+    nextCursor,
+    projectId: claim.projectId,
+    status: 'progressed',
+    workerId: options.workerId,
+  }
+}
+
+const runJudgmentFactPhase = async (
+  claim: LargeRebuildClaim,
+  options: ProjectMartLargeRebuildRunnerOptions,
+  dependencies: ProjectMartLargeRebuildRunnerDependencies,
+): Promise<ProjectMartLargeRebuildRunnerResult> => {
+  const rebuildState = await dependencies.largeRebuildStateService.getLargeRebuildState(claim.projectId)
+
+  if (!rebuildState) {
+    throw new Error(`Missing large rebuild state for ${claim.projectId}`)
+  }
+
+  const initialCursor =
+    rebuildState.cursorArticleId === null
+      ? null
+      : {articleCreatedAt: rebuildState.cursorArticleCreatedAt, articleId: rebuildState.cursorArticleId}
+
+  if (initialCursor === null) {
+    await dependencies.executor.resetProjectJudgmentFact(claim.projectId)
+  }
+
+  const batchRows = await dependencies.executor.getProjectScopeMartBatch({
     batchSize: options.batchSize,
     cursor: initialCursor,
     projectId: claim.projectId,
@@ -200,13 +265,10 @@ const runJudgmentFactPhase = async (
     }
   }
 
-  await dependencies.executor.rebuildProjectScopeBatch(claim.projectId, batchRows)
-  await dependencies.executor.rebuildProjectJudgmentFactBatch(
-    claim.projectId,
-    batchRows.map((row) => {
-      return row.articleId
-    }),
-  )
+  const articleIds = batchRows.map((row) => {
+    return row.articleId
+  })
+  await dependencies.executor.rebuildProjectJudgmentFactBatch(claim.projectId, articleIds)
   const nextCursor = dependencies.executor.getNextBatchCursor(batchRows)
 
   await dependencies.largeRebuildStateService.resetLargeRebuild({
@@ -219,7 +281,7 @@ const runJudgmentFactPhase = async (
   })
 
   return {
-    articleCount: batchRows.length,
+    articleCount: articleIds.length,
     nextCursor,
     projectId: claim.projectId,
     status: 'progressed',
@@ -552,7 +614,9 @@ export const runProjectMartLargeRebuildCycle = async (
   try {
     let result: ProjectMartLargeRebuildRunnerResult
 
-    if (claim.rebuildPhase === 'judgment_fact') {
+    if (claim.rebuildPhase === 'project_scope_article') {
+      result = await runProjectScopeArticlePhase(claim, options, dependencies)
+    } else if (claim.rebuildPhase === 'judgment_fact') {
       result = await runJudgmentFactPhase(claim, options, dependencies)
     } else if (claim.rebuildPhase === 'prompt_answer_fact') {
       result = await runPromptAnswerFactPhase(claim, options, dependencies)

@@ -329,6 +329,7 @@ type ProjectMartLargeRebuildOperatorStatus = {
 }
 
 const largeRebuildPhaseOrder = [
+  'project_scope_article',
   'judgment_fact',
   'prompt_answer_fact',
   'review_answer_dictionary',
@@ -338,6 +339,7 @@ const largeRebuildPhaseOrder = [
 ] as const
 
 const articleScopedLargeRebuildPhases = new Set([
+  'project_scope_article',
   'judgment_fact',
   'prompt_answer_fact',
   'review_article_filter_member',
@@ -397,6 +399,95 @@ const getEstimatedRemainingCyclesAtBatchSize1 = ({
 
 const getActiveLargeRebuild = <T extends {refreshToken: number | null}>(largeRebuild: T | null | undefined) => {
   return largeRebuild && largeRebuild.refreshToken !== null && largeRebuild.refreshToken > 0 ? largeRebuild : null
+}
+
+type ProjectMartLargeRebuildProgressState = {
+  cursorArticleCreatedAt: string | null
+  cursorArticleId: string | null
+  rebuildPhase: string | null
+}
+
+const getLargeRebuildRemainingPhaseArticleCountSql = ({
+  articleCreatedAtColumn,
+  articleIdColumn,
+  cursorArticleCreatedAt,
+  cursorArticleId,
+}: {
+  articleCreatedAtColumn: string
+  articleIdColumn: string
+  cursorArticleCreatedAt: string | null
+  cursorArticleId: string | null
+}) => {
+  return `CAST(
+    COALESCE(
+      SUM(
+        CASE
+          WHEN ${appQueryHelpers.getSqlLiteral(cursorArticleId)} IS NULL THEN 1
+          WHEN COALESCE(${articleCreatedAtColumn}, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') > COALESCE(${appQueryHelpers.getSqlLiteral(cursorArticleCreatedAt)}, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') THEN 1
+          WHEN COALESCE(${articleCreatedAtColumn}, TIMESTAMPTZ '1970-01-01T00:00:00.000Z') = COALESCE(${appQueryHelpers.getSqlLiteral(cursorArticleCreatedAt)}, TIMESTAMPTZ '1970-01-01T00:00:00.000Z')
+            AND ${articleIdColumn} > ${appQueryHelpers.getSqlLiteral(cursorArticleId)} THEN 1
+          ELSE 0
+        END
+      ),
+      0
+    ) AS INTEGER
+  )`
+}
+
+const getLiveProjectScopeProgressSql = (projectId: string, largeRebuild: ProjectMartLargeRebuildProgressState) => {
+  const projectLiteral = appQueryHelpers.getSqlLiteral(projectId)
+
+  return `
+    WITH route_scope AS (
+      SELECT air.article_id AS articleId
+      FROM app.project_import_route pir
+      INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
+      WHERE pir.project_id = ${projectLiteral}
+    ),
+    curated_scope AS (
+      SELECT pa.article_id AS articleId
+      FROM app.project_article pa
+      WHERE pa.project_id = ${projectLiteral}
+    ),
+    aggregated_scope AS (
+      SELECT articleId
+      FROM route_scope
+      UNION
+      SELECT articleId
+      FROM curated_scope
+    )
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS scopeArticleCount,
+      ${getLargeRebuildRemainingPhaseArticleCountSql({
+        articleCreatedAtColumn: 'article.article_created_at',
+        articleIdColumn: 'aggregated_scope.articleId',
+        cursorArticleCreatedAt: largeRebuild.cursorArticleCreatedAt,
+        cursorArticleId: largeRebuild.cursorArticleId,
+      })} AS remainingPhaseArticleCount
+    FROM aggregated_scope
+    INNER JOIN app.article article ON article.id = aggregated_scope.articleId
+  `
+}
+
+const getFrozenProjectScopeProgressSql = (projectId: string, largeRebuild: ProjectMartLargeRebuildProgressState) => {
+  return `
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS scopeArticleCount,
+      ${getLargeRebuildRemainingPhaseArticleCountSql({
+        articleCreatedAtColumn: 'scope_article.article_created_at',
+        articleIdColumn: 'scope_article.article_id',
+        cursorArticleCreatedAt: largeRebuild.cursorArticleCreatedAt,
+        cursorArticleId: largeRebuild.cursorArticleId,
+      })} AS remainingPhaseArticleCount
+    FROM mart.project_scope_article scope_article
+    WHERE project_id = ${appQueryHelpers.getSqlLiteral(projectId)}
+  `
+}
+
+const getProjectScopeProgressSql = (projectId: string, largeRebuild: ProjectMartLargeRebuildProgressState) => {
+  return largeRebuild.rebuildPhase === 'project_scope_article'
+    ? getLiveProjectScopeProgressSql(projectId, largeRebuild)
+    : getFrozenProjectScopeProgressSql(projectId, largeRebuild)
 }
 
 const getProjectMartLargeRebuildOperatorStatus = async (
@@ -464,36 +555,26 @@ const getProjectMartLargeRebuildOperatorStatus = async (
   `)
   const activeLargeRebuild = getActiveLargeRebuild(largeRebuild)
 
-  const [scopeRow] = await appDatabaseService.queryJson<{scopeArticleCount: number}>(`
-    SELECT CAST(COUNT(*) AS INTEGER) AS scopeArticleCount
-    FROM mart.project_scope_article
-    WHERE project_id = '${appQueryHelpers.escapeSqlString(projectId)}'
-  `)
-
-  const [scannedRow] = await appDatabaseService.queryJson<{scannedPhaseArticleCount: number}>(`
-    SELECT CAST(COUNT(*) AS INTEGER) AS scannedPhaseArticleCount
-    FROM mart.project_scope_article
-    WHERE project_id = '${appQueryHelpers.escapeSqlString(projectId)}'
-      AND (
-        '${appQueryHelpers.escapeSqlString(activeLargeRebuild?.cursorArticleId ?? '')}' <> ''
-        AND (
-          article_created_at < ${appQueryHelpers.getSqlLiteral(activeLargeRebuild?.cursorArticleCreatedAt ?? null)}
-          OR (
-            article_created_at = ${appQueryHelpers.getSqlLiteral(activeLargeRebuild?.cursorArticleCreatedAt ?? null)}
-            AND article_id <= ${appQueryHelpers.getSqlLiteral(activeLargeRebuild?.cursorArticleId ?? null)}
-          )
-        )
-      )
-  `)
-
-  const scopeArticleCount = scopeRow?.scopeArticleCount ?? 0
+  const [scopeProgressRow] = await appDatabaseService.queryJson<{
+    remainingPhaseArticleCount: number
+    scopeArticleCount: number
+  }>(
+    getProjectScopeProgressSql(projectId, {
+      cursorArticleCreatedAt: activeLargeRebuild?.cursorArticleCreatedAt ?? null,
+      cursorArticleId: activeLargeRebuild?.cursorArticleId ?? null,
+      rebuildPhase: activeLargeRebuild?.rebuildPhase ?? null,
+    }),
+  )
+  const scopeArticleCount = scopeProgressRow?.scopeArticleCount ?? 0
+  const rawRemainingPhaseArticleCount = scopeProgressRow?.remainingPhaseArticleCount ?? scopeArticleCount
+  const boundedRemainingPhaseArticleCount = Math.max(0, Math.min(scopeArticleCount, rawRemainingPhaseArticleCount))
   const scannedPhaseArticleCount = articleScopedLargeRebuildPhases.has(activeLargeRebuild?.rebuildPhase ?? '')
-    ? Math.min(scopeArticleCount, Math.max(0, scannedRow?.scannedPhaseArticleCount ?? 0))
+    ? Math.max(0, scopeArticleCount - boundedRemainingPhaseArticleCount)
     : activeLargeRebuild?.rebuildPhase === 'review_answer_dictionary'
       ? scopeArticleCount
       : 0
   const remainingPhaseArticleCount = articleScopedLargeRebuildPhases.has(activeLargeRebuild?.rebuildPhase ?? '')
-    ? Math.max(0, scopeArticleCount - scannedPhaseArticleCount)
+    ? boundedRemainingPhaseArticleCount
     : 0
   const currentPhaseProgressPercent = articleScopedLargeRebuildPhases.has(activeLargeRebuild?.rebuildPhase ?? '')
     ? scopeArticleCount === 0

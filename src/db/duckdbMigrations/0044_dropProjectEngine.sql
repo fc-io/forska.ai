@@ -287,7 +287,7 @@ ON app.project_mart_refresh_article_state(project_id, last_dirty_token, first_di
 CREATE TABLE app.project_mart_large_rebuild_state (
   project_id VARCHAR PRIMARY KEY REFERENCES app.project(id),
   refresh_token BIGINT NOT NULL DEFAULT 0,
-  rebuild_phase VARCHAR NOT NULL DEFAULT 'judgment_fact',
+  rebuild_phase VARCHAR NOT NULL DEFAULT 'project_scope_article',
   cursor_article_created_at TIMESTAMPTZ,
   cursor_article_id VARCHAR,
   target_generation BIGINT,
@@ -302,6 +302,12 @@ CREATE TABLE app.project_mart_large_rebuild_state (
   created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
 );
+
+CREATE INDEX IF NOT EXISTS idx_app_project_mart_large_rebuild_state_claim
+ON app.project_mart_large_rebuild_state(refresh_status, refresh_token, rebuild_phase);
+
+CREATE INDEX IF NOT EXISTS idx_app_project_mart_large_rebuild_state_stale_work
+ON app.project_mart_large_rebuild_state(refresh_status, lease_expires_at);
 
 CREATE TABLE app.comparison_project (
   id VARCHAR PRIMARY KEY,

@@ -775,7 +775,25 @@ test('reviews warnings expose large rebuild cursor progress separately from dirt
   await insertProjectFixture(projectId)
   await insertProjectRefreshState(projectId, {dirtyToken: 5, lastCompletedRefreshToken: 4, refreshStatus: 'idle'})
   await insertDirtyArticleRefreshState(projectId, articleId, 5)
+  await runDatabase(`
+    INSERT INTO mart.project_scope_article (
+      project_id,
+      article_id,
+      in_curated_scope,
+      in_route_scope,
+      article_created_at,
+      article_updated_at
+    ) VALUES (
+      '${projectId}',
+      '${articleId}',
+      TRUE,
+      FALSE,
+      TIMESTAMPTZ '2026-04-02T12:00:00.000Z',
+      NULL
+    )
+  `)
   await insertLargeRebuildState(projectId, {
+    cursorArticleCreatedAt: '2026-04-02T12:00:00.000Z',
     cursorArticleId: articleId,
     rebuildPhase: 'review_article_serving',
     refreshStatus: 'idle',
@@ -789,6 +807,61 @@ test('reviews warnings expose large rebuild cursor progress separately from dirt
   expect(body.data.indexing.pendingArticleRefreshCount).toBe(1)
   expect(body.data.indexing.largeRebuild?.progress?.scopeArticleCount).toBe(1)
   expect(body.data.indexing.largeRebuild?.progress?.remainingCurrentPhaseArticleCount).toBe(0)
+})
+
+test('reviews warnings use live scope denominator during project scope setup', async () => {
+  if (!runDatabase) {
+    throw new Error('Database not initialized')
+  }
+
+  const projectId = 'project-large-rebuild-scope-progress-warning'
+  const articleIdA = `article-${projectId}`
+  const articleIdB = `article-${projectId}-b`
+
+  await insertProjectFixture(projectId)
+  await runDatabase(`
+    UPDATE app.article
+    SET article_created_at = TIMESTAMPTZ '2026-04-01T00:00:00.000Z'
+    WHERE id = '${articleIdA}'
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title, article_created_at)
+    VALUES ('${articleIdB}', 'Indexed article B', TIMESTAMPTZ '2026-04-02T00:00:00.000Z')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('project-article-${projectId}-b', '${projectId}', '${articleIdB}')
+  `)
+  await runDatabase(`
+    INSERT INTO mart.project_scope_article (
+      project_id,
+      article_id,
+      in_curated_scope,
+      in_route_scope,
+      article_created_at,
+      article_updated_at
+    ) VALUES (
+      '${projectId}',
+      '${articleIdA}',
+      TRUE,
+      FALSE,
+      TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+      NULL
+    )
+  `)
+  await insertLargeRebuildState(projectId, {
+    cursorArticleCreatedAt: '2026-04-01T00:00:00.000Z',
+    cursorArticleId: articleIdA,
+    rebuildPhase: 'project_scope_article',
+    refreshStatus: 'idle',
+    refreshToken: 5,
+  })
+
+  const {body, response} = await postWarningsRequest(projectId)
+
+  expect(response.status).toBe(200)
+  expect(body.data.indexing.largeRebuild?.progress?.scopeArticleCount).toBe(2)
+  expect(body.data.indexing.largeRebuild?.progress?.remainingCurrentPhaseArticleCount).toBe(1)
 })
 
 test('reviews warnings report failed when a staged large rebuild has failed', async () => {

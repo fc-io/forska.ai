@@ -292,6 +292,7 @@ const staleImportThresholdMs = 15 * 60 * 1_000
 const largeWalThresholdBytes = 64 * 1_024 * 1_024
 const unassessedCountCache = new Map<string, UnassessedCountCacheValue>()
 const articleScopedLargeRebuildPhases = new Set([
+  'project_scope_article',
   'judgment_fact',
   'prompt_answer_fact',
   'review_article_filter_member',
@@ -969,6 +970,14 @@ const getEstimatedRemainingArticlePassCount = ({
   remainingCurrentPhaseArticleCount: number | null
   scopeArticleCount: number
 }) => {
+  if (currentPhase === 'project_scope_article') {
+    return (remainingCurrentPhaseArticleCount ?? scopeArticleCount) + scopeArticleCount * 5
+  }
+
+  if (currentPhase === 'judgment_fact') {
+    return (remainingCurrentPhaseArticleCount ?? scopeArticleCount) + scopeArticleCount * 4
+  }
+
   if (currentPhase === 'prompt_answer_fact') {
     return (remainingCurrentPhaseArticleCount ?? scopeArticleCount) + scopeArticleCount * 3
   }
@@ -1079,7 +1088,7 @@ const getFrozenProjectScopeProjectionSql = (projectId: string, rebuildRow: Judgm
 }
 
 const getProjectScopeProjectionSql = (projectId: string, rebuildRow: JudgmentJobStorageProjectionRebuildRow) => {
-  return rebuildRow.rebuildPhase === 'judgment_fact'
+  return rebuildRow.rebuildPhase === 'project_scope_article'
     ? getLiveProjectScopeProjectionSql(projectId, rebuildRow)
     : getFrozenProjectScopeProjectionSql(projectId, rebuildRow)
 }

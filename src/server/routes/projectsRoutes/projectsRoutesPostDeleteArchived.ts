@@ -345,7 +345,7 @@ const projectMartLargeRebuildStateCreateSql = `
   CREATE TABLE app.project_mart_large_rebuild_state (
     project_id VARCHAR PRIMARY KEY REFERENCES app.project(id),
     refresh_token BIGINT NOT NULL DEFAULT 0,
-    rebuild_phase VARCHAR NOT NULL DEFAULT 'judgment_fact',
+    rebuild_phase VARCHAR NOT NULL DEFAULT 'project_scope_article',
     cursor_article_created_at TIMESTAMPTZ,
     cursor_article_id VARCHAR,
     target_generation BIGINT,

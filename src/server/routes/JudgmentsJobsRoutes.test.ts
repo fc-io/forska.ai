@@ -1839,7 +1839,7 @@ test('job details include projected storage drain when a large rebuild is active
     ) VALUES (
       '${projectId}',
       11,
-      'prompt_answer_fact',
+      'project_scope_article',
       TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
       '${articleIdA}',
       'running',
@@ -1872,8 +1872,8 @@ test('job details include projected storage drain when a large rebuild is active
     workerId: 'test-worker',
   })
 
-  const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
-  const body = (await response.json()) as {
+  let response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
+  let body = (await response.json()) as {
     storageHealth: {
       projection?: {
         activeLargeRebuildProjectCount: number
@@ -1891,6 +1891,20 @@ test('job details include projected storage drain when a large rebuild is active
   expect(response.status).toBe(200)
   expect(body.storageHealth.projection).toBeDefined()
   expect(body.storageHealth.projection?.activeLargeRebuildProjectCount).toBe(1)
+  expect(body.storageHealth.projection?.currentPhase).toBe('project_scope_article')
+  expect(body.storageHealth.projection?.remainingCurrentPhaseArticleCount).toBe(2)
+  expect(body.storageHealth.projection?.scopeArticleCount).toBe(3)
+
+  await runDatabase(`
+    UPDATE app.project_mart_large_rebuild_state
+    SET rebuild_phase = 'prompt_answer_fact'
+    WHERE project_id = '${projectId}'
+  `)
+
+  response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
+  body = (await response.json()) as typeof body
+
+  expect(response.status).toBe(200)
   expect(body.storageHealth.projection?.currentPhase).toBe('prompt_answer_fact')
   expect(body.storageHealth.projection?.remainingCurrentPhaseArticleCount).toBe(1)
   expect(body.storageHealth.projection?.scopeArticleCount).toBe(2)

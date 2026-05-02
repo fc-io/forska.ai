@@ -157,6 +157,22 @@ test('admin project mart large rebuild status route returns explicit operator pr
           VALUES ('project-admin-large-rebuild', 'Admin Large Rebuild', FALSE, 'model-admin-large-rebuild', TRUE, TRUE, FALSE, FALSE)
         \`)
         await database.run(\`
+          INSERT INTO app.article (id, article_title, article_created_at)
+          VALUES
+            ('article-progress-1', 'Admin progress article 1', TIMESTAMPTZ '2026-04-01T00:00:00.000Z'),
+            ('article-progress-2', 'Admin progress article 2', TIMESTAMPTZ '2026-04-02T00:00:00.000Z')
+        \`)
+        await database.run(\`
+          INSERT INTO app.project_article (id, project_id, article_id)
+          VALUES
+            ('project-article-progress-1', 'project-admin-large-rebuild', 'article-progress-1'),
+            ('project-article-progress-2', 'project-admin-large-rebuild', 'article-progress-2')
+        \`)
+        await database.run(\`
+          INSERT INTO mart.project_scope_article (project_id, article_id, in_curated_scope, in_route_scope, article_created_at, article_updated_at)
+          VALUES ('project-admin-large-rebuild', 'article-progress-1', TRUE, FALSE, TIMESTAMPTZ '2026-04-01T00:00:00.000Z', NULL)
+        \`)
+        await database.run(\`
           INSERT INTO app.project_mart_refresh_state (
             project_id,
             dirty_token,
@@ -187,7 +203,7 @@ test('admin project mart large rebuild status route returns explicit operator pr
           ) VALUES (
             'project-admin-large-rebuild',
             7,
-            'prompt_answer_fact',
+            'project_scope_article',
             TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
             'article-progress-1',
             'idle',
@@ -221,7 +237,13 @@ test('admin project mart large rebuild status route returns explicit operator pr
     }
 
     const responseBody = JSON.parse(getLastJsonLine(runRoute.stdout.toString())) as {
-      estimates: {overallProgressPercent: number; scopeArticleCount: number}
+      estimates: {
+        currentPhaseProgressPercent: number
+        overallProgressPercent: number
+        remainingPhaseArticleCount: number
+        scannedPhaseArticleCount: number
+        scopeArticleCount: number
+      }
       largeRebuild: {
         cursorArticleCreatedAt: string | null
         cursorArticleId: string | null
@@ -259,11 +281,14 @@ test('admin project mart large rebuild status route returns explicit operator pr
     expect(responseBody.largeRebuild?.cursorArticleId).toBe('article-progress-1')
     expect(responseBody.largeRebuild?.lastError).toBeNull()
     expect(responseBody.largeRebuild?.operatorNote).toBeNull()
-    expect(responseBody.largeRebuild?.rebuildPhase).toBe('prompt_answer_fact')
+    expect(responseBody.largeRebuild?.rebuildPhase).toBe('project_scope_article')
     expect(responseBody.largeRebuild?.refreshStatus).toBe('idle')
     expect(responseBody.largeRebuild?.refreshToken).toBe(7)
     expect(responseBody.estimates.overallProgressPercent).toBeGreaterThanOrEqual(0)
-    expect(responseBody.estimates.scopeArticleCount).toBe(0)
+    expect(responseBody.estimates.currentPhaseProgressPercent).toBe(50)
+    expect(responseBody.estimates.remainingPhaseArticleCount).toBe(1)
+    expect(responseBody.estimates.scannedPhaseArticleCount).toBe(1)
+    expect(responseBody.estimates.scopeArticleCount).toBe(2)
   } finally {
     removeFileIfExists(duckdbPath)
     removeFileIfExists(`${duckdbPath}.duckdb-owner.lock`)

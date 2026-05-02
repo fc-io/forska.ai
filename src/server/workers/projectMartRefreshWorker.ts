@@ -55,6 +55,7 @@ type ProjectMartLargeRebuildStateWorkerService = {
     now?: Date
     projectId: string
     rebuildPhase:
+      | 'project_scope_article'
       | 'judgment_fact'
       | 'prompt_answer_fact'
       | 'review_answer_dictionary'
@@ -204,7 +205,7 @@ const queueBoundedInitialProjectMartSetup = async ({
   await dependencies.largeRebuildStateService.queueLargeRebuild({
     now: getWorkerNow(options.now),
     projectId: claim.projectId,
-    rebuildPhase: 'judgment_fact',
+    rebuildPhase: 'project_scope_article',
     refreshToken: claim.claimedToken,
   })
   await dependencies.stateService.releaseProjectRefreshClaim({
