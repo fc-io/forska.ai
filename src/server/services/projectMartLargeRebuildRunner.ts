@@ -22,6 +22,7 @@ type ProjectMartLargeRebuildRunnerDependencies = {
       batchSize?: number
       projectId?: string
     }) => Promise<{deletedRowCount: number}>
+    createProjectPromptAnswerFactLookupIndex: () => Promise<void>
     finalizeProjectReviewServing: (projectId: string, targetGeneration: number) => Promise<void>
     getNextBatchCursor: (rows: ProjectMartLargeRebuildScopeBatchRow[]) => ProjectMartLargeRebuildBatchCursor | null
     getProjectScopeMartBatch: (params: {
@@ -372,6 +373,7 @@ const runPromptAnswerFactPhase = async (
   })
 
   if (batchRows.length === 0) {
+    await dependencies.executor.createProjectPromptAnswerFactLookupIndex()
     await dependencies.largeRebuildStateService.resetLargeRebuild({
       cursorArticleCreatedAt: null,
       cursorArticleId: null,

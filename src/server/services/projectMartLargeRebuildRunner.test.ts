@@ -83,6 +83,9 @@ const createRunnerContext = (params: {
         callLog.push('cleanup')
         return {deletedRowCount: params.cleanupDeletedRowCount ?? 0}
       }),
+      createProjectPromptAnswerFactLookupIndex: mock(async () => {
+        callLog.push('prompt-answer:index:create')
+      }),
       finalizeProjectReviewServing: mock(async (projectId: string, targetGeneration: number) => {
         callLog.push(`serving:finalize:${projectId}:${targetGeneration}`)
       }),
@@ -596,6 +599,7 @@ test('transitions from prompt_answer_fact to review_answer_dictionary when no ro
     'claim',
     'state:project-1',
     'mart-batch:project-1',
+    'prompt-answer:index:create',
     'advance:project-1:null:review_answer_dictionary',
   ])
   expect(context.completed).toEqual([])

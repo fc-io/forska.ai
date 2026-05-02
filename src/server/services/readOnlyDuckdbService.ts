@@ -177,6 +177,18 @@ const enqueueReadOnlyDuckdbWork = async <T>(work: () => Promise<T>): Promise<T> 
   return queuedWork
 }
 
+const runEphemeralReadOnlyDuckdbJsonQuery = async <T>(context: ReadOnlyDuckdbContext, statement: string) => {
+  const connection = await ensureReadOnlyDuckdbServiceStarted(context)
+
+  try {
+    const reader = await connection.runAndReadAll(statement)
+
+    return reader.getRowObjectsJson() as T[]
+  } finally {
+    closeReadOnlyDuckdbServiceDirect()
+  }
+}
+
 const shouldUseOwnerGuardedJudgeWorkerReadPath = (context: ReadOnlyDuckdbContext) => {
   return context === 'judge-worker' && canCurrentServerOwnDuckdb()
 }
@@ -199,11 +211,8 @@ export const runReadOnlyDuckdbJsonQuery = async <T>(
     return runOwnerGuardedJudgeWorkerReadQuery<T>(context, statement)
   }
 
-  return enqueueReadOnlyDuckdbWork(async () => {
-    const connection = await ensureReadOnlyDuckdbServiceStarted(context)
-    const reader = await connection.runAndReadAll(statement)
-
-    return reader.getRowObjectsJson() as T[]
+  return enqueueReadOnlyDuckdbWork(() => {
+    return runEphemeralReadOnlyDuckdbJsonQuery<T>(context, statement)
   })
 }
 

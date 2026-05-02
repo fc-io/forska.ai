@@ -591,6 +591,30 @@ test('large rebuild executor defaults to the background DuckDB queue', () => {
   expect(result.afterWrite.main.tasksStarted).toBe(result.afterRead.main.tasksStarted)
 })
 
+test('prompt answer fact batch rebuild drops the lookup index before article deletes', () => {
+  const result = runScript<{statements: string[]}>(`
+    const statements = []
+    const dependencies = {
+      database: {
+        queryJson: async () => [],
+        run: async (statement) => {
+          statements.push(statement)
+        },
+      },
+    }
+
+    await executor.rebuildProjectPromptAnswerFactBatch('split-project', ['article-1', 'article-2'], dependencies)
+
+    console.log(JSON.stringify({statements}))
+    await database.close()
+  `)
+
+  expect(result.statements).toHaveLength(1)
+  expect(result.statements[0]).toContain('DROP INDEX IF EXISTS mart.idx_mart_prompt_answer_fact_lookup')
+  expect(result.statements[0]).toContain("'article-1'")
+  expect(result.statements[0]).toContain("'article-2'")
+})
+
 test('prompt answer fact reset and batch rebuild operate on bounded article sets', () => {
   const result = runScript<{
     batchRows: Array<{answerValue: string; articleId: string; promptId: string}>

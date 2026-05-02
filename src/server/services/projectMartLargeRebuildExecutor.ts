@@ -37,6 +37,8 @@ type GetProjectScopeBatchParams = {
 const defaultProjectMartLargeRebuildBatchSize = 1_000
 const projectReviewServingGenerationCleanupBatchSize = 10_000
 const batchEpochSql = "TIMESTAMPTZ '1970-01-01T00:00:00.000Z'"
+const promptAnswerFactLookupIndexName = 'idx_mart_prompt_answer_fact_lookup'
+const promptAnswerFactLookupIndexQualifiedName = `mart.${promptAnswerFactLookupIndexName}`
 const projectReviewServingGenerationCleanupRetryableErrorFragments = [
   'Failed to delete all rows from index',
   'Out of Memory Error',
@@ -358,8 +360,16 @@ const getProjectPromptAnswerFactResetSql = (projectId: string) => {
 
   return `
     BEGIN TRANSACTION;
+    DROP INDEX IF EXISTS ${promptAnswerFactLookupIndexQualifiedName};
     DELETE FROM mart.prompt_answer_fact WHERE project_id = ${projectLiteral};
     COMMIT;
+  `
+}
+
+const getProjectPromptAnswerFactLookupIndexCreateSql = () => {
+  return `
+    CREATE INDEX IF NOT EXISTS ${promptAnswerFactLookupIndexName}
+    ON mart.prompt_answer_fact(project_id, prompt_id, answer_value, article_id);
   `
 }
 
@@ -369,6 +379,7 @@ const getProjectPromptAnswerFactBatchInsertSql = (projectId: string, articleIds:
 
   return `
     BEGIN TRANSACTION;
+    DROP INDEX IF EXISTS ${promptAnswerFactLookupIndexQualifiedName};
     DELETE FROM mart.prompt_answer_fact
     WHERE project_id = ${projectLiteral}
       AND article_id IN (${articleIdsSql});
@@ -1000,6 +1011,12 @@ const resetProjectPromptAnswerFact = async (
   await dependencies.database.run(getProjectPromptAnswerFactResetSql(projectId))
 }
 
+const createProjectPromptAnswerFactLookupIndex = async (
+  dependencies: ProjectMartLargeRebuildExecutorDependencies = defaultProjectMartLargeRebuildExecutorDependencies,
+) => {
+  await dependencies.database.run(getProjectPromptAnswerFactLookupIndexCreateSql())
+}
+
 const rebuildProjectPromptAnswerFactBatch = async (
   projectId: string,
   articleIds: string[],
@@ -1178,6 +1195,7 @@ const finalizeProjectReviewServing = async (
 
 const projectMartLargeRebuildExecutor = {
   cleanupProjectReviewServingGenerationsBatch,
+  createProjectPromptAnswerFactLookupIndex,
   finalizeProjectReviewServing,
   getNextBatchCursor,
   getProjectScopeMartBatch,
