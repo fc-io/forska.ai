@@ -2468,11 +2468,15 @@ export const judgmentsJobsRoutes = new Elysia()
               ? Math.round((dispatchStats.providerQueuedPromptCount / dispatchStats.providerQueueLimit) * 100)
               : null
 
+          const activePromptsNotMarkedRunning = Math.max(
+            0,
+            dispatchStats.jobActivePromptCount - sqliteHealth.promptCounts.running,
+          )
           const promptStats = {
-            claimed: sqliteHealth.promptCounts.claimed,
+            claimed: Math.max(0, sqliteHealth.promptCounts.claimed - activePromptsNotMarkedRunning),
             judged: sqliteHealth.promptCounts.judged,
             ready: sqliteHealth.promptCounts.ready,
-            running: sqliteHealth.promptCounts.running,
+            running: Math.max(sqliteHealth.promptCounts.running, dispatchStats.jobActivePromptCount),
             skipped: sqliteHealth.promptCounts.skipped,
           }
           const storageHealth = {

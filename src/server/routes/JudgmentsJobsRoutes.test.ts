@@ -1769,6 +1769,56 @@ test('job details expose provider dispatch saturation stats', async () => {
   })
 })
 
+test('job details count active worker prompts as running prompt flow', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const {getJudgmentJobSqliteService} = await import('../cron/judgmentsJobs/judgmentJobSqliteService.ts')
+  const projectId = `dispatch-flow-project-${Date.now()}`
+  const modelId = `dispatch-flow-model-${Date.now()}`
+  const connectionId = `dispatch-flow-connection-${Date.now()}`
+  const jobId = `dispatch-flow-job-${Date.now()}`
+  const sqliteService = getJudgmentJobSqliteService()
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'running', 'active')
+  `)
+  await sqliteService.initializeJob(jobId)
+  await sqliteService.addReadyPrompts(
+    jobId,
+    [
+      {articleId: `dispatch-flow-article-a-${Date.now()}`, promptId: `dispatch-flow-prompt-a-${Date.now()}`},
+      {articleId: `dispatch-flow-article-b-${Date.now()}`, promptId: `dispatch-flow-prompt-b-${Date.now()}`},
+    ],
+    'server-a',
+  )
+  await sqliteService.claimReadyPrompts(jobId, 'server-a', 2)
+
+  state.getJudgmentDispatchProviderStats.mockImplementationOnce(async (_input) => {
+    return {
+      jobActivePromptCount: 1,
+      jobQueuedPromptCount: 1,
+      providerActiveLimit: 80,
+      providerActivePromptCount: 1,
+      providerQueueLimit: 80,
+      providerQueuedPromptCount: 1,
+    }
+  })
+
+  const response = await app.handle(new Request(`http://localhost/api/judgmentsjobs/${jobId}`))
+  const body = (await response.json()) as {
+    promptStats: {claimed: number; judged: number; ready: number; running: number; skipped: number}
+    storageHealth: {promptCounts: {claimed: number; judged: number; ready: number; running: number; skipped: number}}
+  }
+
+  expect(response.status).toBe(200)
+  expect(body.storageHealth.promptCounts).toEqual({claimed: 2, judged: 0, ready: 0, running: 0, skipped: 0})
+  expect(body.promptStats).toEqual({claimed: 1, judged: 0, ready: 0, running: 1, skipped: 0})
+})
+
 test('job detail treats a registered remote judge worker as judging runtime availability', async () => {
   if (!app || !runDatabase) {
     throw new Error('Test app not initialized')

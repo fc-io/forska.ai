@@ -59,6 +59,8 @@ type ClaimableJobRequest<T> = JobRequestAllocation<T> & {dispatchMode: 'full' | 
 const schedulerLogger = createRateLimitedLogger({sink: 'file-only', windowMs: 30_000})
 const schedulerFailureLogger = createRateLimitedLogger({sink: 'both', windowMs: 30_000})
 const sendToLLMComponent = 'judgmentsJobsSendToLLM'
+const initialPromptClaimDispatchChunkSize = 16
+const promptClaimDispatchChunkSize = 64
 
 const anthropicConnectionWarmupStartedAt = new Map<string, number>()
 
@@ -303,6 +305,143 @@ const requeueRejectedPrompts = async (prompts: PromptToProcess[]) => {
       return sqliteService.markPromptAsRetry(prompt.jobId, prompt.recordId)
     }),
   )
+}
+
+const getPromptClaimChunkLimit = (limit: number, chunkSize: number): number => {
+  const normalizedLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0
+
+  return Math.min(normalizedLimit, chunkSize)
+}
+
+const getSteadyPromptClaimChunkLimits = (limit: number): number[] => {
+  const chunkLimit = getPromptClaimChunkLimit(limit, promptClaimDispatchChunkSize)
+
+  return chunkLimit <= 0 ? [] : [chunkLimit, ...getSteadyPromptClaimChunkLimits(limit - chunkLimit)]
+}
+
+export const getPromptClaimChunkLimits = (limit: number): number[] => {
+  const chunkLimit = getPromptClaimChunkLimit(limit, initialPromptClaimDispatchChunkSize)
+
+  return chunkLimit <= 0 ? [] : [chunkLimit, ...getSteadyPromptClaimChunkLimits(limit - chunkLimit)]
+}
+
+const enqueueClaimedPromptBatch = async ({
+  label,
+  prompts,
+}: {
+  label: string
+  prompts: PromptToProcess[]
+}): Promise<{acceptedCount: number; rejectedPrompts: PromptToProcess[]}> => {
+  const enqueueResult =
+    prompts.length > 0 ? await enqueueClaimedJudgmentPrompts({label, prompts}) : {acceptedCount: 0, rejectedPrompts: []}
+  const rejectedPrompts = enqueueResult.rejectedPrompts
+
+  if (rejectedPrompts.length > 0) {
+    await requeueRejectedPrompts(rejectedPrompts)
+    schedulerLogger.warn(
+      'scheduler:dispatch-queue-full',
+      `[capacity:${label}] requeued claimed prompts because dispatch queues were full`,
+      {component: sendToLLMComponent, event: 'dispatchQueueFullRequeue', label, requeuedCount: rejectedPrompts.length},
+    )
+  }
+
+  return enqueueResult
+}
+
+const logPromptClaimFailure = ({
+  error,
+  jobId,
+  label,
+  requested,
+}: {
+  error: unknown
+  jobId: string
+  label: string
+  requested: number
+}): void => {
+  const safeError =
+    error instanceof Error ? {name: error.name, message: error.message, stack: error.stack} : {message: String(error)}
+
+  schedulerFailureLogger.error(
+    `llm.claimPrompts.failed.${label}.${jobId}`,
+    `[capacity:${label}] failed to claim prompts`,
+    {component: sendToLLMComponent, error: safeError, event: 'claimPromptsFailed', jobId, label, requested},
+  )
+}
+
+const claimAndEnqueuePromptChunk = async ({
+  job,
+  label,
+  limit,
+  serverJobId,
+}: {
+  job: RunningJudgmentJob
+  label: string
+  limit: number
+  serverJobId: string
+}): Promise<{fetched: number; rejected: number}> => {
+  const providerCap = getEffectiveDispatchProviderCap({job})
+  const protectedRecordIds = shouldUseJudgeWorkerOwnerHandoff() ? await getJudgmentDispatchJobPromptIds(job.id) : []
+  const prompts = await getAndUpdateReadyPrompts(
+    serverJobId,
+    job.id,
+    limit,
+    {
+      providerConnectionId: job.providerConnectionId,
+      providerMaxInflightRequests: providerCap.maxInflight,
+      providerUsesFamilyDefault: providerCap.usesFamilyDefault,
+    },
+    {protectedRecordIds},
+  )
+  const enqueueResult = await enqueueClaimedPromptBatch({label, prompts})
+
+  return {fetched: prompts.length, rejected: enqueueResult.rejectedPrompts.length}
+}
+
+const claimAndEnqueuePromptChunks = async ({
+  chunkLimits,
+  job,
+  label,
+  serverJobId,
+}: {
+  chunkLimits: number[]
+  job: RunningJudgmentJob
+  label: string
+  serverJobId: string
+}): Promise<number> => {
+  const [chunkLimit, ...remainingChunkLimits] = chunkLimits
+
+  if (!chunkLimit) {
+    return 0
+  }
+
+  try {
+    const chunkResult = await claimAndEnqueuePromptChunk({job, label, limit: chunkLimit, serverJobId})
+    const shouldContinue =
+      chunkResult.fetched === chunkLimit && chunkResult.rejected === 0 && remainingChunkLimits.length > 0
+
+    return shouldContinue
+      ? chunkResult.fetched
+          + (await claimAndEnqueuePromptChunks({chunkLimits: remainingChunkLimits, job, label, serverJobId}))
+      : chunkResult.fetched
+  } catch (error) {
+    logPromptClaimFailure({error, jobId: job.id, label, requested: chunkLimit})
+    return 0
+  }
+}
+
+const claimAndEnqueuePromptRequest = async ({
+  job,
+  label,
+  limit,
+  serverJobId,
+}: {
+  job: RunningJudgmentJob
+  label: string
+  limit: number
+  serverJobId: string
+}): Promise<number> => {
+  return claimAndEnqueuePromptChunks({chunkLimits: getPromptClaimChunkLimits(limit), job, label, serverJobId})
 }
 
 const getEndpointAvailabilityKey = ({
@@ -843,60 +982,16 @@ const sendToLLMForJobs = async (
     }),
   })
 
-  const promptClaimResults = await Promise.allSettled(
-    requestsToSendByJob.map(async ({job, limit}) => {
-      const providerCap = getEffectiveDispatchProviderCap({job})
-      const protectedRecordIds = shouldUseJudgeWorkerOwnerHandoff() ? await getJudgmentDispatchJobPromptIds(job.id) : []
-
-      return getAndUpdateReadyPrompts(
-        serverJobId,
-        job.id,
-        limit,
-        {
-          providerConnectionId: job.providerConnectionId,
-          providerMaxInflightRequests: providerCap.maxInflight,
-          providerUsesFamilyDefault: providerCap.usesFamilyDefault,
-        },
-        {protectedRecordIds},
-      )
+  const promptFetchedCounts = await Promise.all(
+    requestsToSendByJob.map(({job, limit}) => {
+      return claimAndEnqueuePromptRequest({job, label, limit, serverJobId})
     }),
   )
 
-  promptClaimResults.forEach((result, index) => {
-    if (result.status === 'rejected') {
-      const request = requestsToSendByJob[index]
-      const reason: unknown = result.reason
-      const safeError =
-        reason instanceof Error
-          ? {name: reason.name, message: reason.message, stack: reason.stack}
-          : {message: String(reason)}
-
-      schedulerFailureLogger.error(
-        `llm.claimPrompts.failed.${label}.${request?.job.id ?? 'unknown'}`,
-        `[capacity:${label}] failed to claim prompts`,
-        {
-          component: sendToLLMComponent,
-          error: safeError,
-          event: 'claimPromptsFailed',
-          jobId: request?.job.id,
-          label,
-          requested: request?.limit,
-        },
-      )
-    }
-  })
-
-  const promptsToProcess = promptClaimResults
-    .filter((result) => {
-      return result.status === 'fulfilled'
-    })
-    .map((result) => {
-      return result.value
-    })
-
-  const totalPromptsFetched = promptsToProcess.reduce((sum, arr) => {
-    return sum + arr.length
+  const totalPromptsFetched = promptFetchedCounts.reduce((sum, count) => {
+    return sum + count
   }, 0)
+
   if (totalPromptsFetched !== requestsToSend) {
     schedulerFailureLogger.warn(`llm.claimPrompts.mismatch.${label}`, `[capacity:${label}] claim count mismatch`, {
       component: sendToLLMComponent,
@@ -905,27 +1000,6 @@ const sendToLLMForJobs = async (
       requested: requestsToSend,
       totalPromptsFetched,
     })
-  }
-
-  const enqueueResults = await Promise.all(
-    promptsToProcess.map(async (prompts) => {
-      return prompts.length > 0
-        ? enqueueClaimedJudgmentPrompts({label, prompts})
-        : {acceptedCount: 0, rejectedPrompts: []}
-    }),
-  )
-
-  const rejectedPrompts = enqueueResults.flatMap((result) => {
-    return result.rejectedPrompts
-  })
-
-  if (rejectedPrompts.length > 0) {
-    await requeueRejectedPrompts(rejectedPrompts)
-    schedulerLogger.warn(
-      'scheduler:dispatch-queue-full',
-      `[capacity:${label}] requeued claimed prompts because dispatch queues were full`,
-      {component: sendToLLMComponent, event: 'dispatchQueueFullRequeue', label, requeuedCount: rejectedPrompts.length},
-    )
   }
 }
 

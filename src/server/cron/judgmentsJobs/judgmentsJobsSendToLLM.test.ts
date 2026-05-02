@@ -7,6 +7,7 @@ import {
   getDispatchAvailability,
   getEffectiveDispatchProviderCap,
   getEffectiveProviderCap,
+  getPromptClaimChunkLimits,
   getRequestsToSendByProviderConnection,
   processClaimedPromptsByConnection,
   requeueAndFilterRunningJobs,
@@ -614,6 +615,12 @@ test('claims against dispatcher queue headroom even when a live request is alrea
 
   expect(allocations[0]?.limit).toBe(2)
   expect(allocations[0]?.jobs[0]?.limit).toBe(2)
+})
+
+test('splits large prompt claims into dispatch chunks', () => {
+  expect(getPromptClaimChunkLimits(0)).toEqual([])
+  expect(getPromptClaimChunkLimits(33)).toEqual([16, 17])
+  expect(getPromptClaimChunkLimits(145)).toEqual([16, 64, 64, 1])
 })
 
 test('dispatch availability skips 404 misroutes during cooldown, probes once after expiry, and skips misconfigured endpoints', () => {
