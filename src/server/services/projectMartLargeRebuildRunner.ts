@@ -4,6 +4,7 @@ import {
   getProjectMartLargeRebuildCycleQueueDelta,
   recordProjectMartLargeRebuildCycleMetric,
 } from '../utils/projectMartLargeRebuildRuntimeMetrics.ts'
+import {getDuckdbMartRefreshService} from './getDuckdbMartRefreshService.ts'
 import {
   getProjectMartLargeRebuildExecutor,
   type ProjectMartLargeRebuildBatchCursor,
@@ -13,6 +14,9 @@ import {getProjectMartLargeRebuildStateService, type LargeRebuildClaim} from './
 import {getProjectMartRefreshStateService} from './projectMartRefreshStateService.ts'
 
 type ProjectMartLargeRebuildRunnerDependencies = {
+  archivedProjectCleanupService: {
+    purgeNextArchivedProjectMartBatch: () => Promise<{deletedRowCount: number; projectId: string | null}>
+  }
   executor: {
     cleanupProjectReviewServingGenerationsBatch: (params?: {
       batchSize?: number
@@ -138,6 +142,7 @@ const defaultLeaseMs = 30_000
 const defaultHeartbeatMs = 10_000
 
 const defaultDependencies: ProjectMartLargeRebuildRunnerDependencies = {
+  archivedProjectCleanupService: getDuckdbMartRefreshService(),
   executor: getProjectMartLargeRebuildExecutor(),
   largeRebuildStateService: getProjectMartLargeRebuildStateService(),
   refreshStateService: getProjectMartRefreshStateService(),
@@ -712,6 +717,38 @@ export const runProjectMartLargeRebuildCycle = async (
         error: null,
         lastCommittedCursor: null,
         phase: 'review_article_serving_generation_cleanup',
+        projectId: result.projectId,
+        startedAt,
+        status: result.status,
+        tempSpill: getDuckdbTempSpillMetricsSnapshot(),
+        workerId: options.workerId,
+      })
+
+      return result
+    }
+
+    const archivedCleanupResult = await dependencies.archivedProjectCleanupService.purgeNextArchivedProjectMartBatch()
+
+    if (archivedCleanupResult.deletedRowCount > 0) {
+      const result = {
+        cleanupRowCount: archivedCleanupResult.deletedRowCount,
+        projectId: archivedCleanupResult.projectId,
+        status: 'maintenance',
+        workerId: options.workerId,
+      } satisfies ProjectMartLargeRebuildRunnerResult
+
+      recordProjectMartLargeRebuildCycleMetric({
+        articleCount: archivedCleanupResult.deletedRowCount,
+        committedRowCount: archivedCleanupResult.deletedRowCount,
+        durationMs: Date.now() - startedAtMs,
+        duckdbQueues: getProjectMartLargeRebuildCycleQueueDelta({
+          finished: getDuckdbQueueRuntimeMetricsSnapshot(),
+          started: startedQueueMetrics,
+        }),
+        endedAt: new Date().toISOString(),
+        error: null,
+        lastCommittedCursor: null,
+        phase: 'archived_project_mart_cleanup',
         projectId: result.projectId,
         startedAt,
         status: result.status,

@@ -15,6 +15,7 @@ process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 let app: {handle: (request: Request) => Promise<Response>} | null = null
 let closeDatabase: (() => Promise<void>) | null = null
 let flushMartRefreshes: (() => Promise<void>) | null = null
+let purgeArchivedProjectMartDataBatch: ((projectId: string) => Promise<{deletedRowCount: number}>) | null = null
 let queueJudgmentArticleRefresh: ((articleId: string, reason: string) => Promise<void>) | null = null
 let refreshProject: ((projectId: string) => Promise<void>) | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
@@ -426,6 +427,9 @@ beforeAll(async () => {
   flushMartRefreshes = () => {
     return getDuckdbMartRefreshService().flush()
   }
+  purgeArchivedProjectMartDataBatch = (projectId: string) => {
+    return getDuckdbMartRefreshService().purgeArchivedProjectMartDataBatch(projectId)
+  }
   queueJudgmentArticleRefresh = (articleId: string, reason: string) => {
     return getDuckdbMartRefreshService().queueJudgmentArticleRefresh(articleId, reason)
   }
@@ -493,8 +497,8 @@ test('archive route clears refresh state for archived projects without depending
   await flushMartRefreshes()
 })
 
-test('archive route purges downstream serving rows while clearing refresh state', async () => {
-  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes) {
+test('archive route leaves archived mart cleanup to bounded maintenance batches while clearing refresh state', async () => {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes || !purgeArchivedProjectMartDataBatch) {
     throw new Error('Test app not initialized')
   }
 
@@ -531,9 +535,19 @@ test('archive route purges downstream serving rows while clearing refresh state'
     LIMIT 1
   `)
 
-  expect(Number(servingRowCount?.count ?? 0)).toBe(0)
-  expect(Number(generationRowCount?.count ?? 0)).toBe(0)
+  expect(Number(servingRowCount?.count ?? 0)).toBe(398)
+  expect(Number(generationRowCount?.count ?? 0)).toBe(1)
   expect(refreshState).toBeUndefined()
+
+  const cleanupBatch = await purgeArchivedProjectMartDataBatch(projectId)
+  const [servingRowCountAfterBatch] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM mart.review_article_serving
+    WHERE project_id = '${projectId}'
+  `)
+
+  expect(cleanupBatch.deletedRowCount).toBe(10)
+  expect(Number(servingRowCountAfterBatch?.count ?? 0)).toBe(388)
 
   await flushMartRefreshes()
 })
@@ -666,6 +680,11 @@ test('delete archived route removes archived project rows and keeps cross-projec
     modelId: 'delete-archived-survivor-model',
     projectId: survivorProjectId,
   })
+  await runDatabase(`
+    UPDATE app.project
+    SET model_id = 'delete-archived-source-model'
+    WHERE id = '${survivorProjectId}'
+  `)
   await runDatabase(`
     INSERT INTO app.comparison_project (
       id,
@@ -827,6 +846,82 @@ test('delete archived route removes archived project rows and keeps cross-projec
     )
   `)
   await runDatabase(`
+    INSERT INTO app.mart_refresh_queue (
+      id,
+      refresh_scope,
+      project_id,
+      article_id,
+      project_key,
+      article_key,
+      reason
+    ) VALUES (
+      'delete-archived-project-queue-row',
+      'project',
+      '${sourceProjectId}',
+      NULL,
+      '${sourceProjectId}',
+      '',
+      'delete-archived-stale-project-queue'
+    )
+  `)
+  await runDatabase(`
+    INSERT INTO mart.judgment_fact (
+      judgment_id,
+      article_id,
+      prompt_id,
+      model_id,
+      project_id,
+      snapshot_project_id,
+      snapshot_project_model_name,
+      use_title,
+      use_abstract,
+      use_fulltext,
+      use_fulltext_no_images,
+      chunking_strategy,
+      is_answered,
+      answered_original,
+      answered_original_as_array,
+      normalized_answers,
+      confidence_original,
+      explanation,
+      quotes,
+      article_title,
+      article_created_at,
+      article_updated_at,
+      article_import_route,
+      article_publication_status,
+      created_at,
+      updated_at
+    ) VALUES (
+      'delete-archived-judgment',
+      '${articleId}',
+      '${promptId}',
+      'delete-archived-source-model',
+      '${sourceProjectId}',
+      '${sourceProjectId}',
+      'Delete archived source',
+      TRUE,
+      TRUE,
+      FALSE,
+      FALSE,
+      NULL,
+      TRUE,
+      'yes',
+      ['yes'],
+      ['yes'],
+      90,
+      NULL,
+      NULL,
+      'Delete archived article',
+      TIMESTAMPTZ '2025-09-09 00:00:00+00',
+      NULL,
+      NULL,
+      NULL,
+      current_timestamp,
+      current_timestamp
+    )
+  `)
+  await runDatabase(`
     INSERT INTO mart.project_scope_article (
       project_id,
       article_id,
@@ -834,14 +929,23 @@ test('delete archived route removes archived project rows and keeps cross-projec
       in_route_scope,
       article_created_at,
       article_updated_at
-    ) VALUES (
-      '${sourceProjectId}',
-      '${articleId}',
-      TRUE,
-      TRUE,
-      TIMESTAMPTZ '2025-09-09 00:00:00+00',
-      NULL
-    )
+    ) VALUES
+      (
+        '${sourceProjectId}',
+        '${articleId}',
+        TRUE,
+        TRUE,
+        TIMESTAMPTZ '2025-09-09 00:00:00+00',
+        NULL
+      ),
+      (
+        '${survivorProjectId}',
+        '${articleId}',
+        TRUE,
+        FALSE,
+        TIMESTAMPTZ '2025-09-09 00:00:00+00',
+        NULL
+      )
   `)
   await runDatabase(`
     INSERT INTO mart.prompt_answer_fact (
@@ -1081,6 +1185,11 @@ test('delete archived route removes archived project rows and keeps cross-projec
     FROM app.project_mart_refresh_article_state
     WHERE project_id = '${sourceProjectId}'
   `)
+  const [projectQueueRowCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.mart_refresh_queue
+    WHERE id = 'delete-archived-project-queue-row'
+  `)
   const [reviewAnswerDictionaryRowCount] = await queryDatabase<{count: number}>(`
     SELECT COUNT(*) AS count
     FROM app.review_answer_dictionary
@@ -1139,6 +1248,30 @@ test('delete archived route removes archived project rows and keeps cross-projec
     WHERE id = 'delete-archived-judgment'
     LIMIT 1
   `)
+  const [judgmentFactProjectId] = await queryDatabase<{projectId: string | null; rowCount: number}>(`
+    SELECT COUNT(*) AS rowCount, MAX(project_id) AS projectId
+    FROM mart.judgment_fact
+    WHERE judgment_id = 'delete-archived-judgment'
+  `)
+  const [survivorVisibleJudgmentFact] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM mart.project_scope_article scope_article
+    INNER JOIN app.project project
+      ON project.id = scope_article.project_id
+    INNER JOIN app.project_prompt project_prompt
+      ON project_prompt.project_id = scope_article.project_id
+     AND project_prompt.enabled = TRUE
+    INNER JOIN mart.judgment_fact judgment_fact
+      ON judgment_fact.article_id = scope_article.article_id
+     AND judgment_fact.prompt_id = project_prompt.prompt_id
+     AND judgment_fact.model_id = project.model_id
+     AND judgment_fact.use_title = project.use_title
+     AND judgment_fact.use_abstract = project.use_abstract
+     AND judgment_fact.use_fulltext = project.use_fulltext
+     AND judgment_fact.use_fulltext_no_images = project.use_fulltext_no_images
+    WHERE scope_article.project_id = '${survivorProjectId}'
+      AND judgment_fact.judgment_id = 'delete-archived-judgment'
+  `)
   const [judgmentHumanProjectId] = await queryDatabase<{projectId: string | null}>(`
     SELECT project_id AS projectId
     FROM app.judgment_human
@@ -1171,6 +1304,7 @@ test('delete archived route removes archived project rows and keeps cross-projec
   expect(Number(tokenUseRowCount?.count ?? 0)).toBe(0)
   expect(Number(projectRefreshStateRowCount?.count ?? 0)).toBe(0)
   expect(Number(projectRefreshArticleStateRowCount?.count ?? 0)).toBe(0)
+  expect(Number(projectQueueRowCount?.count ?? 0)).toBe(0)
   expect(Number(reviewAnswerDictionaryRowCount?.count ?? 0)).toBe(0)
   expect(Number(servingGenerationRowCount?.count ?? 0)).toBe(0)
   expect(Number(projectScopeArticleRowCount?.count ?? 0)).toBe(0)
@@ -1187,6 +1321,9 @@ test('delete archived route removes archived project rows and keeps cross-projec
   expect(Number(comparisonProjectConflictResolutionRow?.count ?? 0)).toBe(1)
   expect(comparisonProjectConflictResolutionRow?.answerValue).toBe('yes')
   expect(judgmentProjectId?.projectId).toBe(null)
+  expect(Number(judgmentFactProjectId?.rowCount ?? 0)).toBe(1)
+  expect(judgmentFactProjectId?.projectId).toBe(null)
+  expect(Number(survivorVisibleJudgmentFact?.count ?? 0)).toBe(1)
   expect(judgmentHumanProjectId?.projectId).toBe(null)
 })
 

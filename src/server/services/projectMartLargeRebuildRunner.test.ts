@@ -28,6 +28,7 @@ const createRunnerContext = (params: {
     inCuratedScope: boolean
     inRouteScope: boolean
   }>
+  archivedCleanupDeletedRowCount?: number
   claim?: {
     leaseExpiresAt: Date
     projectId: string
@@ -68,6 +69,15 @@ const createRunnerContext = (params: {
   const dictionaryRebuildBatches: string[][] = []
   const claim = params.claim ?? null
   const dependencies: ProjectMartLargeRebuildRunnerDependencies = {
+    archivedProjectCleanupService: {
+      purgeNextArchivedProjectMartBatch: mock(async () => {
+        callLog.push('archived-cleanup')
+        return {
+          deletedRowCount: params.archivedCleanupDeletedRowCount ?? 0,
+          projectId: params.archivedCleanupDeletedRowCount ? 'archived-project-1' : null,
+        }
+      }),
+    },
     executor: {
       cleanupProjectReviewServingGenerationsBatch: mock(async () => {
         callLog.push('cleanup')
@@ -230,7 +240,7 @@ test('returns idle when no large rebuild work is claimable', async () => {
   const runtimeMetrics = getProjectMartLargeRebuildRuntimeMetrics()
 
   expect(result).toEqual({projectId: null, status: 'idle', workerId: 'worker-1'})
-  expect(context.callLog).toEqual(['claim', 'cleanup'])
+  expect(context.callLog).toEqual(['claim', 'cleanup', 'archived-cleanup'])
   expect(runtimeMetrics.totals.cyclesIdle).toBe(1)
   expect(runtimeMetrics.recentCycles).toHaveLength(1)
   expect(runtimeMetrics.recentCycles[0]).toMatchObject({
@@ -240,6 +250,28 @@ test('returns idle when no large rebuild work is claimable', async () => {
     projectId: null,
     status: 'idle',
     workerId: 'worker-1',
+  })
+})
+
+test('runs one archived project mart cleanup batch after active rebuild maintenance is idle', async () => {
+  const context = createRunnerContext({archivedCleanupDeletedRowCount: 5})
+
+  const result = await runProjectMartLargeRebuildCycle({batchSize: 3, workerId: 'worker-1'}, context.dependencies)
+  const runtimeMetrics = getProjectMartLargeRebuildRuntimeMetrics()
+
+  expect(result).toEqual({
+    cleanupRowCount: 5,
+    projectId: 'archived-project-1',
+    status: 'maintenance',
+    workerId: 'worker-1',
+  })
+  expect(context.callLog).toEqual(['claim', 'cleanup', 'archived-cleanup'])
+  expect(runtimeMetrics.totals.rowsProcessed).toBe(5)
+  expect(runtimeMetrics.recentCycles[0]).toMatchObject({
+    articleCount: 5,
+    phase: 'archived_project_mart_cleanup',
+    projectId: 'archived-project-1',
+    status: 'maintenance',
   })
 })
 

@@ -25,6 +25,14 @@ type ProjectPurgeBatchRow = {rowId: bigint | number | string}
 
 type ArchivedProjectMartPurgeMode = 'delete_batches' | 'rewrite'
 
+type ArchivedProjectMartCleanupBatchResult = {
+  deletedRowCount: number
+  projectId: string | null
+  tableName: string | null
+}
+
+type ArchivedProjectMartCleanupCandidateRow = {projectId: string; tableName: string}
+
 type ReviewArticleServingRewriteBatchCursor = {rowId: bigint | number | string}
 
 type ProjectRefreshScopeBatchRow = ProjectRefreshBatchRow & {
@@ -109,6 +117,7 @@ let martRefreshProjectCompletionTimes: number[] = []
 const martRefreshArticleBatchLimit = 4
 const martRefreshDrainBudgetMs = 100
 const martRefreshProjectPurgeRowBatchSize = 10
+const martRefreshProjectQueuePruneBatchSize = 50
 const martRefreshProjectRebuildArticleBatchSize = 20_000
 const martReviewArticleServingRewriteBatchSize = 1_000
 const martRefreshRetryDelayMs = 5000
@@ -304,6 +313,17 @@ const getQueuedArticleTasksSql = () => {
       AND refresh_scope = 'judgment_article'
     ORDER BY EPOCH(created_at) ASC, id ASC
     LIMIT ${martRefreshArticleBatchLimit}
+  `
+}
+
+const getObsoleteProjectQueueRowsSql = () => {
+  return `
+    SELECT id
+    FROM app.mart_refresh_queue
+    WHERE completed_at IS NULL
+      AND refresh_scope = 'project'
+    ORDER BY EPOCH(created_at) ASC, id ASC
+    LIMIT ${martRefreshProjectQueuePruneBatchSize}
   `
 }
 
@@ -661,8 +681,8 @@ const getProjectScopeBatchSql = (projectId: string, cursor: ProjectRefreshBatchC
   `
 }
 
-const getArchivedProjectMartPurgeMode = (tableName: string): ArchivedProjectMartPurgeMode => {
-  return tableName === 'mart.review_article_serving' ? 'rewrite' : 'delete_batches'
+const getArchivedProjectMartPurgeMode = (_tableName: string): ArchivedProjectMartPurgeMode => {
+  return 'delete_batches'
 }
 
 const getProjectTablePurgeBatchSql = ({projectId, tableName}: {projectId: string; tableName: string}) => {
@@ -1863,10 +1883,51 @@ const getHasQueuedDrainableTasks = async () => {
     SELECT COUNT(*) AS count
     FROM app.mart_refresh_queue
     WHERE completed_at IS NULL
-      AND refresh_scope = 'judgment_article'
+      AND refresh_scope IN ('judgment_article', 'project')
   `)
 
   return Number(rows[0]?.count ?? 0) > 0
+}
+
+const getObsoleteProjectQueueRows = async () => {
+  await ensureMartRefreshQueueSchema()
+  return getAppDatabaseService().queryJson<{id: string}>(getObsoleteProjectQueueRowsSql())
+}
+
+const pruneObsoleteProjectQueueRowsBatch = async () => {
+  const rows = await getObsoleteProjectQueueRows()
+  const queueIds = rows.map((row) => {
+    return row.id
+  })
+
+  if (queueIds.length === 0) {
+    return {hasMore: false, prunedRowCount: 0}
+  }
+
+  await getAppDatabaseService().run(`
+    DELETE FROM app.mart_refresh_queue
+    WHERE id IN (${getQuotedStringList(queueIds).join(', ')})
+  `)
+
+  return {hasMore: queueIds.length === martRefreshProjectQueuePruneBatchSize, prunedRowCount: queueIds.length}
+}
+
+const pruneProjectQueueRowsForProjects = async (projectIds: string[]) => {
+  const uniqueProjectIds = getUniqueValues(projectIds)
+
+  if (uniqueProjectIds.length === 0) {
+    return
+  }
+
+  await ensureMartRefreshQueueSchema()
+  await getAppDatabaseService().run(`
+    DELETE FROM app.mart_refresh_queue
+    WHERE refresh_scope = 'project'
+      AND (
+        project_id IN (${getQuotedStringList(uniqueProjectIds).join(', ')})
+        OR project_key IN (${getQuotedStringList(uniqueProjectIds).join(', ')})
+      )
+  `)
 }
 
 const completeQueuedTask = async (task: MartRefreshTaskRow) => {
@@ -2379,6 +2440,25 @@ const deleteProjectTablePurgeBatches = async ({
         })
 }
 
+const deleteProjectTablePurgeBatch = async ({
+  projectId,
+  tableName,
+}: {
+  projectId: string
+  tableName: string
+}): Promise<number> => {
+  const batchRows = await getProjectTablePurgeBatchRows({projectId, tableName})
+  const rowIds = batchRows.map((row) => {
+    return row.rowId
+  })
+
+  return rowIds.length === 0
+    ? 0
+    : deleteProjectTablePurgeRowIds({rowIds, tableName}).then(() => {
+        return rowIds.length
+      })
+}
+
 const purgeArchivedProjectMartTable = async ({
   projectId,
   tableName,
@@ -2400,18 +2480,81 @@ export const archivedProjectMartTableNames = [
   'mart.project_scope_article',
 ]
 
+const archivedProjectCleanupTableNames = [
+  ...archivedProjectMartTableNames,
+  'app.review_answer_dictionary',
+  'app.project_review_serving_generation',
+]
+
+const getArchivedProjectMartCleanupCandidateSql = () => {
+  return `
+    SELECT tableName, projectId
+    FROM (
+      ${archivedProjectCleanupTableNames
+        .map((tableName, tableIndex) => {
+          return `
+            SELECT
+              ${getSqlLiteral(tableName)} AS tableName,
+              cleanup_row.project_id AS projectId,
+              ${tableIndex} AS tableOrder
+            FROM ${tableName} cleanup_row
+            INNER JOIN app.project project
+              ON project.id = cleanup_row.project_id
+             AND project.archived = TRUE
+            GROUP BY cleanup_row.project_id
+          `
+        })
+        .join(' UNION ALL ')}
+    ) candidate
+    ORDER BY tableOrder ASC, projectId ASC
+    LIMIT 1
+  `
+}
+
+const purgeArchivedProjectMartDataBatch = async (projectId: string): Promise<ArchivedProjectMartCleanupBatchResult> => {
+  const rows = await archivedProjectCleanupTableNames.reduce<
+    Promise<Array<{deletedRowCount: number; tableName: string}>>
+  >((promise, tableName) => {
+    return promise.then(async (acc) => {
+      if (acc.length > 0) {
+        return acc
+      }
+
+      const deletedRowCount = await deleteProjectTablePurgeBatch({projectId, tableName})
+
+      return deletedRowCount === 0 ? acc : [{deletedRowCount, tableName}]
+    })
+  }, Promise.resolve([]))
+  const [row] = rows
+
+  return row
+    ? {deletedRowCount: row.deletedRowCount, projectId, tableName: row.tableName}
+    : {deletedRowCount: 0, projectId, tableName: null}
+}
+
+const purgeNextArchivedProjectMartBatch = async (): Promise<ArchivedProjectMartCleanupBatchResult> => {
+  const [candidate] = await queryMartRefreshBackgroundJson<ArchivedProjectMartCleanupCandidateRow>(
+    getArchivedProjectMartCleanupCandidateSql(),
+  )
+
+  if (!candidate) {
+    return {deletedRowCount: 0, projectId: null, tableName: null}
+  }
+
+  const deletedRowCount = await deleteProjectTablePurgeBatch({
+    projectId: candidate.projectId,
+    tableName: candidate.tableName,
+  })
+
+  return {deletedRowCount, projectId: candidate.projectId, tableName: candidate.tableName}
+}
+
 const purgeArchivedProjectMartData = async (projectId: string): Promise<void> => {
-  await archivedProjectMartTableNames.reduce<Promise<void>>((promise, tableName) => {
+  await archivedProjectCleanupTableNames.reduce<Promise<void>>((promise, tableName) => {
     return promise.then(() => {
       return purgeArchivedProjectMartTable({projectId, tableName})
     })
   }, Promise.resolve())
-  await runMartRefreshBackgroundStatement(`
-    BEGIN TRANSACTION;
-    DELETE FROM app.review_answer_dictionary WHERE project_id = ${getSqlLiteral(projectId)};
-    DELETE FROM app.project_review_serving_generation WHERE project_id = ${getSqlLiteral(projectId)};
-    COMMIT;
-  `)
 }
 
 const _getProjectArticleServingRefreshSql = (projectId: string, articleId: string) => {
@@ -3124,8 +3267,17 @@ const processQueuedMartRefreshPass = async (): Promise<boolean> => {
   updateMartRefreshDebugSnapshot({lastQueuedTaskCount: queuedArticleTasks.length})
 
   if (queuedArticleTasks.length === 0) {
-    updateMartRefreshDebugSnapshot({lastHasMoreQueuedTasks: false, lastPassCompletedAt: new Date().toISOString()})
-    return false
+    const obsoleteProjectQueueRows = await pruneObsoleteProjectQueueRowsBatch()
+    const archivedProjectCleanup = obsoleteProjectQueueRows.hasMore
+      ? {deletedRowCount: 0}
+      : await purgeNextArchivedProjectMartBatch()
+    const hasMoreQueuedTasks = obsoleteProjectQueueRows.hasMore || archivedProjectCleanup.deletedRowCount > 0
+
+    updateMartRefreshDebugSnapshot({
+      lastHasMoreQueuedTasks: hasMoreQueuedTasks,
+      lastPassCompletedAt: new Date().toISOString(),
+    })
+    return hasMoreQueuedTasks
   }
 
   const claimedQueuedArticleIds = getUniqueValues(
@@ -3308,6 +3460,7 @@ const recoverQueuedArchivedProjectRefresh = async (projectId: string) => {
 
   try {
     await purgeArchivedProjectMartData(projectId)
+    await pruneProjectQueueRowsForProjects([projectId])
     await getMaintenanceWorkLeaseService().completeMaintenanceWorkLease({
       consumerId: workerId,
       projectId,
@@ -3449,7 +3602,10 @@ const duckdbMartRefreshService = {
     await queueProjectLargeRebuilds([projectId], reason)
   },
   queueProjectLargeRebuilds,
+  pruneProjectQueueRowsForProjects,
   purgeArchivedProjectMartData,
+  purgeArchivedProjectMartDataBatch,
+  purgeNextArchivedProjectMartBatch,
   recoverQueuedArchivedProjectRefresh,
   refreshJudgmentArticle,
   refreshJudgmentFactsForArticles,

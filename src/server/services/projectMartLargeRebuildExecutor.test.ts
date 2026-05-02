@@ -799,9 +799,20 @@ test('large rebuild and incremental refresh agree on shared clone judgment reuse
     const martRefreshService = getDuckdbMartRefreshService()
     await martRefreshService.queueJudgmentArticleRefresh('shared-reuse-article', 'shared-reuse-source-judgment')
     await martRefreshService.flush()
-    await martRefreshService.queueProjectRefresh('shared-reuse-incremental-project', 'shared-reuse-incremental')
-    await martRefreshService.queueProjectRefresh('shared-changed-incremental-project', 'shared-changed-incremental')
-    await martRefreshService.flush()
+    await database.run(\`
+      INSERT INTO app.project_review_serving_generation (project_id, active_generation)
+      VALUES
+        ('shared-reuse-incremental-project', 1),
+        ('shared-changed-incremental-project', 1)
+    \`)
+
+    const refreshIncrementalProject = async (projectId) => {
+      await martRefreshService.refreshProjectScopeArticles(projectId, ['shared-reuse-article'])
+      await martRefreshService.refreshProjectArticleMartsBatch(projectId, ['shared-reuse-article'])
+    }
+
+    await refreshIncrementalProject('shared-reuse-incremental-project')
+    await refreshIncrementalProject('shared-changed-incremental-project')
 
     await database.run(\`
       DELETE FROM mart.project_scope_article

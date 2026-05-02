@@ -2,7 +2,7 @@ import {Elysia, t} from 'elysia'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getQuotedStringList} from '../../services/appQueryHelpers.ts'
-import {archivedProjectMartTableNames} from '../../services/getDuckdbMartRefreshService.ts'
+import {getDuckdbMartRefreshService} from '../../services/getDuckdbMartRefreshService.ts'
 import {
   archivedProjectCleanupHandledProjectForeignKeys,
   assertArchivedProjectCleanupProjectForeignKeysTx,
@@ -386,15 +386,6 @@ const getProjectIdsSql = (projectIds: string[]) => {
 
 const getTempTableName = (prefix: string) => {
   return `temp_${prefix}_${crypto.randomUUID().replaceAll('-', '_')}`
-}
-
-const getArchivedProjectPurgeStatements = (projectIdsSql: string) => {
-  return archivedProjectMartTableNames.map((tableName) => {
-    return `
-      DELETE FROM ${tableName}
-      WHERE project_id IN (${projectIdsSql})
-    `
-  })
 }
 
 const hasTableTx = async (tx: AppTx, params: {schema: string; table: string}) => {
@@ -800,6 +791,17 @@ const rebuildProjectDeleteTablesTx = async (tx: AppTx, projectIds: string[]) => 
   await rebuildJudgmentGroupTx(tx, projectIdsSql)
 }
 
+const purgeArchivedProjectMarts = async (projectIds: string[]): Promise<void> => {
+  const [currentProjectId] = projectIds
+
+  if (!currentProjectId) {
+    return
+  }
+
+  await getDuckdbMartRefreshService().purgeArchivedProjectMartData(currentProjectId)
+  return purgeArchivedProjectMarts(projectIds.slice(1))
+}
+
 const deleteArchivedProjectsTx = async (tx: AppTx, projectIds: string[]) => {
   const projectIdsSql = getProjectIdsSql(projectIds)
 
@@ -810,14 +812,18 @@ const deleteArchivedProjectsTx = async (tx: AppTx, projectIds: string[]) => {
 
   return runStatements(tx, [
     `
-      DELETE FROM app.review_answer_dictionary
+      UPDATE mart.judgment_fact
+      SET project_id = NULL
       WHERE project_id IN (${projectIdsSql})
     `,
     `
-      DELETE FROM app.project_review_serving_generation
-      WHERE project_id IN (${projectIdsSql})
+      DELETE FROM app.mart_refresh_queue
+      WHERE refresh_scope = 'project'
+        AND (
+          project_id IN (${projectIdsSql})
+          OR project_key IN (${projectIdsSql})
+        )
     `,
-    ...getArchivedProjectPurgeStatements(projectIdsSql),
     `
       DELETE FROM app.project
       WHERE id IN (${projectIdsSql})
@@ -836,6 +842,7 @@ export const projectsRoutesPostDeleteArchived = new Elysia().post(
 
     await assertAllProjectsExistAndArchived(projectIds)
     await assertAllJudgmentJobsAreTerminal(projectIds)
+    await purgeArchivedProjectMarts(projectIds)
     await getAppDatabaseService().transaction(async (tx) => {
       await deleteArchivedProjectsTx(tx, projectIds)
     })

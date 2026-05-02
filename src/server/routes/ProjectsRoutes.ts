@@ -1443,7 +1443,7 @@ export const projectsRoutes = new Elysia()
       throw new Error('Project not found')
     }
 
-    await getDuckdbMartRefreshService().purgeArchivedProjectMartData(params.id)
+    await getDuckdbMartRefreshService().pruneProjectQueueRowsForProjects([params.id])
 
     return {success: true}
   })
