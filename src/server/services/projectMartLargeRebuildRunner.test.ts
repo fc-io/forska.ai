@@ -42,6 +42,7 @@ const createRunnerContext = (params: {
     refreshToken: number
     workerId: string
   }
+  cleanupDeletedRowCount?: number
   state?: {
     cursorArticleCreatedAt: Date | null
     cursorArticleId: string | null
@@ -68,6 +69,10 @@ const createRunnerContext = (params: {
   const claim = params.claim ?? null
   const dependencies: ProjectMartLargeRebuildRunnerDependencies = {
     executor: {
+      cleanupProjectReviewServingGenerationsBatch: mock(async () => {
+        callLog.push('cleanup')
+        return {deletedRowCount: params.cleanupDeletedRowCount ?? 0}
+      }),
       finalizeProjectReviewServing: mock(async (projectId: string, targetGeneration: number) => {
         callLog.push(`serving:finalize:${projectId}:${targetGeneration}`)
       }),
@@ -225,7 +230,7 @@ test('returns idle when no large rebuild work is claimable', async () => {
   const runtimeMetrics = getProjectMartLargeRebuildRuntimeMetrics()
 
   expect(result).toEqual({projectId: null, status: 'idle', workerId: 'worker-1'})
-  expect(context.callLog).toEqual(['claim'])
+  expect(context.callLog).toEqual(['claim', 'cleanup'])
   expect(runtimeMetrics.totals.cyclesIdle).toBe(1)
   expect(runtimeMetrics.recentCycles).toHaveLength(1)
   expect(runtimeMetrics.recentCycles[0]).toMatchObject({
@@ -234,6 +239,26 @@ test('returns idle when no large rebuild work is claimable', async () => {
     phase: null,
     projectId: null,
     status: 'idle',
+    workerId: 'worker-1',
+  })
+})
+
+test('runs one old serving generation cleanup batch when no large rebuild work is claimable', async () => {
+  const context = createRunnerContext({cleanupDeletedRowCount: 7})
+
+  const result = await runProjectMartLargeRebuildCycle({batchSize: 3, workerId: 'worker-1'}, context.dependencies)
+  const runtimeMetrics = getProjectMartLargeRebuildRuntimeMetrics()
+
+  expect(result).toEqual({cleanupRowCount: 7, projectId: null, status: 'maintenance', workerId: 'worker-1'})
+  expect(context.callLog).toEqual(['claim', 'cleanup'])
+  expect(runtimeMetrics.totals.rowsProcessed).toBe(7)
+  expect(runtimeMetrics.totals.cyclesIdle).toBe(0)
+  expect(runtimeMetrics.recentCycles[0]).toMatchObject({
+    articleCount: 7,
+    error: null,
+    phase: 'review_article_serving_generation_cleanup',
+    projectId: null,
+    status: 'maintenance',
     workerId: 'worker-1',
   })
 })

@@ -14,6 +14,10 @@ import {getProjectMartRefreshStateService} from './projectMartRefreshStateServic
 
 type ProjectMartLargeRebuildRunnerDependencies = {
   executor: {
+    cleanupProjectReviewServingGenerationsBatch: (params?: {
+      batchSize?: number
+      projectId?: string
+    }) => Promise<{deletedRowCount: number}>
     finalizeProjectReviewServing: (projectId: string, targetGeneration: number) => Promise<void>
     getNextBatchCursor: (rows: ProjectMartLargeRebuildScopeBatchRow[]) => ProjectMartLargeRebuildBatchCursor | null
     getProjectScopeMartBatch: (params: {
@@ -119,6 +123,7 @@ type ProjectMartLargeRebuildRunnerOptions = {
 
 type ProjectMartLargeRebuildRunnerResult =
   | {projectId: null; status: 'idle'; workerId: string}
+  | {cleanupRowCount: number; projectId: string | null; status: 'maintenance'; workerId: string}
   | {
       articleCount: number
       nextCursor: ProjectMartLargeRebuildBatchCursor | null
@@ -669,6 +674,38 @@ export const runProjectMartLargeRebuildCycle = async (
   })
 
   if (!claim) {
+    const cleanupResult = await dependencies.executor.cleanupProjectReviewServingGenerationsBatch({
+      batchSize: options.batchSize,
+      projectId: options.projectId,
+    })
+
+    if (cleanupResult.deletedRowCount > 0) {
+      const result = {
+        cleanupRowCount: cleanupResult.deletedRowCount,
+        projectId: options.projectId ?? null,
+        status: 'maintenance',
+        workerId: options.workerId,
+      } satisfies ProjectMartLargeRebuildRunnerResult
+
+      recordProjectMartLargeRebuildCycleMetric({
+        articleCount: cleanupResult.deletedRowCount,
+        durationMs: Date.now() - startedAtMs,
+        duckdbQueues: getProjectMartLargeRebuildCycleQueueDelta({
+          finished: getDuckdbQueueRuntimeMetricsSnapshot(),
+          started: startedQueueMetrics,
+        }),
+        endedAt: new Date().toISOString(),
+        error: null,
+        phase: 'review_article_serving_generation_cleanup',
+        projectId: result.projectId,
+        startedAt,
+        status: result.status,
+        workerId: options.workerId,
+      })
+
+      return result
+    }
+
     const result = {
       projectId: null,
       status: 'idle',

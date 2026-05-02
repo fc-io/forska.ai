@@ -1,6 +1,6 @@
 import type {DuckdbQueueRuntimeMetrics} from './duckdbService.ts'
 
-type ProjectMartLargeRebuildCycleStatus = 'completed' | 'failed' | 'idle' | 'progressed'
+type ProjectMartLargeRebuildCycleStatus = 'completed' | 'failed' | 'idle' | 'maintenance' | 'progressed'
 
 type ProjectMartLargeRebuildCycleQueueDelta = {
   lastDurationMs: number | null

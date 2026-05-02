@@ -1488,9 +1488,11 @@ test('filter member rollup and serving staging rebuild replay safely on bounded 
   ])
 })
 
-test('review serving finalize deletes stale generations without over-promoting', () => {
+test('review serving finalize promotes without waiting for stale generation cleanup', () => {
   const result = runScript<{
     activeGeneration: Array<{activeGeneration: string}>
+    cleanupResult: {deletedRowCount: number}
+    generationRowsAfterCleanup: Array<{generation: string; rowCount: string; tableName: string}>
     generationRows: Array<{generation: string; rowCount: string; tableName: string}>
     otherGenerationRows: Array<{generation: string; rowCount: string; tableName: string}>
   }>(`
@@ -1508,14 +1510,28 @@ test('review serving finalize deletes stale generations without over-promoting',
 
     const activeGeneration = await database.queryJson("SELECT CAST(active_generation AS VARCHAR) AS activeGeneration FROM app.project_review_serving_generation WHERE project_id = 'large-rebuild-executor-project'")
     const generationRows = await database.queryJson("SELECT 'filter_member' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_filter_member WHERE project_id = 'large-rebuild-executor-project' GROUP BY generation UNION ALL SELECT 'serving' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_serving WHERE project_id = 'large-rebuild-executor-project' GROUP BY generation UNION ALL SELECT 'serving_detail' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_serving_detail WHERE project_id = 'large-rebuild-executor-project' GROUP BY generation ORDER BY tableName ASC, generation ASC")
+    const cleanupResult = await executor.cleanupProjectReviewServingGenerationsBatch({batchSize: 1, projectId: 'large-rebuild-executor-project'})
+    const generationRowsAfterCleanup = await database.queryJson("SELECT 'filter_member' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_filter_member WHERE project_id = 'large-rebuild-executor-project' GROUP BY generation UNION ALL SELECT 'serving' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_serving WHERE project_id = 'large-rebuild-executor-project' GROUP BY generation UNION ALL SELECT 'serving_detail' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_serving_detail WHERE project_id = 'large-rebuild-executor-project' GROUP BY generation ORDER BY tableName ASC, generation ASC")
     const otherGenerationRows = await database.queryJson("SELECT 'filter_member' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_filter_member WHERE project_id = 'other-project' GROUP BY generation UNION ALL SELECT 'serving' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_serving WHERE project_id = 'other-project' GROUP BY generation UNION ALL SELECT 'serving_detail' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_serving_detail WHERE project_id = 'other-project' GROUP BY generation ORDER BY tableName ASC, generation ASC")
 
-    console.log(JSON.stringify({activeGeneration, generationRows, otherGenerationRows}))
+    console.log(JSON.stringify({activeGeneration, cleanupResult, generationRows, generationRowsAfterCleanup, otherGenerationRows}))
     await database.close()
   `)
 
   expect(result.activeGeneration).toEqual([{activeGeneration: '3'}])
   expect(result.generationRows).toEqual([
+    {generation: '1', rowCount: '1', tableName: 'filter_member'},
+    {generation: '2', rowCount: '1', tableName: 'filter_member'},
+    {generation: '3', rowCount: '1', tableName: 'filter_member'},
+    {generation: '1', rowCount: '1', tableName: 'serving'},
+    {generation: '2', rowCount: '1', tableName: 'serving'},
+    {generation: '3', rowCount: '1', tableName: 'serving'},
+    {generation: '1', rowCount: '1', tableName: 'serving_detail'},
+    {generation: '2', rowCount: '1', tableName: 'serving_detail'},
+    {generation: '3', rowCount: '1', tableName: 'serving_detail'},
+  ])
+  expect(result.cleanupResult.deletedRowCount).toBe(3)
+  expect(result.generationRowsAfterCleanup).toEqual([
     {generation: '2', rowCount: '1', tableName: 'filter_member'},
     {generation: '3', rowCount: '1', tableName: 'filter_member'},
     {generation: '2', rowCount: '1', tableName: 'serving'},
@@ -1527,5 +1543,85 @@ test('review serving finalize deletes stale generations without over-promoting',
     {generation: '1', rowCount: '1', tableName: 'filter_member'},
     {generation: '1', rowCount: '1', tableName: 'serving'},
     {generation: '1', rowCount: '1', tableName: 'serving_detail'},
+  ])
+})
+
+test('active review and filter counts ignore stale generation cleanup lag', () => {
+  const result = runScript<{
+    activeCountsAfterCleanup: Array<{filterCount: string; reviewCount: string}>
+    activeCountsBeforeCleanup: Array<{filterCount: string; reviewCount: string}>
+    cleanupResult: {deletedRowCount: number}
+    generationRowsAfterCleanup: Array<{generation: string; rowCount: string; tableName: string}>
+    generationRowsBeforeCleanup: Array<{generation: string; rowCount: string; tableName: string}>
+  }>(`
+    await database.run("INSERT INTO app.project_review_serving_generation (project_id, active_generation) VALUES ('large-rebuild-executor-project', 2)")
+    await database.run("INSERT INTO mart.review_article_serving (project_id, generation, article_id, article_created_at, article_updated_at, article_title, has_all_llm_judgments, llm_judged_prompt_count, enabled_prompt_count, human_answered_prompt_count, has_all_human_answers, review_opened, review_sections_completed) VALUES ('large-rebuild-executor-project', 1, 'article-1', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T01:00:00.000Z', 'Article 1 stale', TRUE, 1, 1, 0, FALSE, FALSE, 0), ('large-rebuild-executor-project', 2, 'article-2', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T02:00:00.000Z', 'Article 2 previous', TRUE, 1, 1, 0, FALSE, FALSE, 0), ('large-rebuild-executor-project', 3, 'article-3', TIMESTAMPTZ '2026-04-02T00:00:00.000Z', TIMESTAMPTZ '2026-04-02T01:00:00.000Z', 'Article 3 active', TRUE, 1, 1, 0, FALSE, FALSE, 0)")
+    await database.run("INSERT INTO mart.review_article_filter_member (project_id, generation, prompt_id, answer_id, article_id) VALUES ('large-rebuild-executor-project', 1, 'prompt-1', 1, 'article-1'), ('large-rebuild-executor-project', 2, 'prompt-1', 1, 'article-2'), ('large-rebuild-executor-project', 3, 'prompt-1', 1, 'article-3')")
+    await database.run("INSERT INTO mart.review_article_serving_detail (project_id, generation, article_id, prompt_id, judgment_id, created_at, model_id) VALUES ('large-rebuild-executor-project', 1, 'article-1', 'prompt-1', 'judgment-stale', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', 'large-rebuild-executor-model'), ('large-rebuild-executor-project', 2, 'article-2', 'prompt-1', 'judgment-previous', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', 'large-rebuild-executor-model'), ('large-rebuild-executor-project', 3, 'article-3', 'prompt-1', 'judgment-active', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', 'large-rebuild-executor-model')")
+
+    await executor.finalizeProjectReviewServing('large-rebuild-executor-project', 3)
+
+    const getActiveCounts = async () => {
+      return database.queryJson(\`
+        SELECT
+          CAST((
+            SELECT COUNT(*)
+            FROM mart.review_article_serving serving
+            INNER JOIN app.project_review_serving_generation generation
+              ON generation.project_id = serving.project_id
+             AND generation.active_generation = serving.generation
+            WHERE serving.project_id = 'large-rebuild-executor-project'
+          ) AS VARCHAR) AS reviewCount,
+          CAST((
+            SELECT COUNT(*)
+            FROM mart.review_article_filter_member member
+            INNER JOIN app.project_review_serving_generation generation
+              ON generation.project_id = member.project_id
+             AND generation.active_generation = member.generation
+            WHERE member.project_id = 'large-rebuild-executor-project'
+              AND member.prompt_id = 'prompt-1'
+          ) AS VARCHAR) AS filterCount
+      \`)
+    }
+    const getGenerationRows = async () => {
+      return database.queryJson("SELECT 'filter_member' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_filter_member WHERE project_id = 'large-rebuild-executor-project' GROUP BY generation UNION ALL SELECT 'serving' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_serving WHERE project_id = 'large-rebuild-executor-project' GROUP BY generation UNION ALL SELECT 'serving_detail' AS tableName, CAST(generation AS VARCHAR) AS generation, CAST(COUNT(*) AS VARCHAR) AS rowCount FROM mart.review_article_serving_detail WHERE project_id = 'large-rebuild-executor-project' GROUP BY generation ORDER BY tableName ASC, generation ASC")
+    }
+    const activeCountsBeforeCleanup = await getActiveCounts()
+    const generationRowsBeforeCleanup = await getGenerationRows()
+    const cleanupResult = await executor.cleanupProjectReviewServingGenerationsBatch({batchSize: 1, projectId: 'large-rebuild-executor-project'})
+    const activeCountsAfterCleanup = await getActiveCounts()
+    const generationRowsAfterCleanup = await getGenerationRows()
+
+    console.log(JSON.stringify({
+      activeCountsAfterCleanup,
+      activeCountsBeforeCleanup,
+      cleanupResult,
+      generationRowsAfterCleanup,
+      generationRowsBeforeCleanup,
+    }))
+    await database.close()
+  `)
+
+  expect(result.activeCountsBeforeCleanup).toEqual([{filterCount: '1', reviewCount: '1'}])
+  expect(result.generationRowsBeforeCleanup).toEqual([
+    {generation: '1', rowCount: '1', tableName: 'filter_member'},
+    {generation: '2', rowCount: '1', tableName: 'filter_member'},
+    {generation: '3', rowCount: '1', tableName: 'filter_member'},
+    {generation: '1', rowCount: '1', tableName: 'serving'},
+    {generation: '2', rowCount: '1', tableName: 'serving'},
+    {generation: '3', rowCount: '1', tableName: 'serving'},
+    {generation: '1', rowCount: '1', tableName: 'serving_detail'},
+    {generation: '2', rowCount: '1', tableName: 'serving_detail'},
+    {generation: '3', rowCount: '1', tableName: 'serving_detail'},
+  ])
+  expect(result.cleanupResult.deletedRowCount).toBe(3)
+  expect(result.activeCountsAfterCleanup).toEqual([{filterCount: '1', reviewCount: '1'}])
+  expect(result.generationRowsAfterCleanup).toEqual([
+    {generation: '2', rowCount: '1', tableName: 'filter_member'},
+    {generation: '3', rowCount: '1', tableName: 'filter_member'},
+    {generation: '2', rowCount: '1', tableName: 'serving'},
+    {generation: '3', rowCount: '1', tableName: 'serving'},
+    {generation: '2', rowCount: '1', tableName: 'serving_detail'},
+    {generation: '3', rowCount: '1', tableName: 'serving_detail'},
   ])
 })

@@ -25,6 +25,7 @@ export type ProjectMartLargeRebuildCyclesOptions = {
 
 export type ProjectMartLargeRebuildCycleSummary =
   | {projectId: null; status: 'idle'; workerId: string}
+  | {cleanupRowCount: number; projectId: string | null; status: 'maintenance'; workerId: string}
   | {projectId: string; status: 'completed'; workerId: string}
   | {error: string; projectId: string; status: 'failed'; workerId: string}
   | {
@@ -116,7 +117,14 @@ const toCycleSummary = (
       ? {error: result.error, projectId: result.projectId, status: result.status, workerId: result.workerId}
       : result.status === 'completed'
         ? {projectId: result.projectId, status: result.status, workerId: result.workerId}
-        : {projectId: result.projectId, status: result.status, workerId: result.workerId}
+        : result.status === 'maintenance'
+          ? {
+              cleanupRowCount: result.cleanupRowCount,
+              projectId: result.projectId,
+              status: result.status,
+              workerId: result.workerId,
+            }
+          : {projectId: result.projectId, status: result.status, workerId: result.workerId}
 }
 
 const getProgressCursorKey = ({
@@ -270,6 +278,10 @@ export const runProjectMartLargeRebuildCycles = async (
         until: normalizedUntil,
         workerId,
       })
+    }
+
+    if (summary.status === 'maintenance') {
+      continue
     }
 
     const snapshotProjectId = summary.projectId ?? projectId ?? null
