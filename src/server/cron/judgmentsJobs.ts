@@ -130,7 +130,7 @@ const importJudgmentsCron = async (): Promise<void> => {
 }
 
 const checkLLMStatusCron = async (): Promise<void> => {
-  if (!shouldRunJudgingCron()) return
+  if (!shouldRunJudgmentMaintenanceCron()) return
   try {
     await judgmentsJobsCheckLLMStatus()
   } catch (err) {
@@ -172,16 +172,6 @@ export const judgmentsJobsMaintenanceCron = new Elysia()
       run: cleanupStaleQueueCron,
     }),
   )
-
-export const judgmentsJobsJudgingCron = new Elysia()
-  .use(
-    cron({
-      name: 'judgments-jobs-send-to-llm',
-      pattern: LLM_PROCESSING_INTERVAL,
-      startAt: new Date(Date.now() + START_DELAY_MS),
-      run: sendToLLM,
-    }),
-  )
   .use(
     cron({
       name: 'judgments-jobs-check-llm-status',
@@ -190,5 +180,14 @@ export const judgmentsJobsJudgingCron = new Elysia()
       run: checkLLMStatusCron,
     }),
   )
+
+export const judgmentsJobsJudgingCron = new Elysia().use(
+  cron({
+    name: 'judgments-jobs-send-to-llm',
+    pattern: LLM_PROCESSING_INTERVAL,
+    startAt: new Date(Date.now() + START_DELAY_MS),
+    run: sendToLLM,
+  }),
+)
 
 export const judgmentsJobsCron = new Elysia().use(judgmentsJobsMaintenanceCron).use(judgmentsJobsJudgingCron)

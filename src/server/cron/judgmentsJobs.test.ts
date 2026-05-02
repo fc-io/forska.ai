@@ -136,3 +136,142 @@ test('judgment import cron stays enabled at the low-memory cap', () => {
 
   expect(result.importCalls).toEqual(['server-low-memory'])
 })
+
+test('llm status cron is owned by maintenance worker instead of judge worker', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const getModulePath = (relativePath) => {
+          return new URL(relativePath, 'file://' + process.cwd() + '/').pathname
+        }
+
+        const judgmentsJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs.ts')
+        const serverIdentityModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobServerIdentity.ts')
+        const backgroundImportModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteBackgroundImport.ts')
+        const sqliteServiceModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts')
+        const addToQueueModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsAddToQueue.ts')
+        const checkStatusModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsCheckLLMStatus.ts')
+        const cleanupModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsCleanupStale.ts')
+        const getRunningJobsModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts')
+        const sendToLlmModulePath = getModulePath('./src/server/cron/judgmentsJobs/judgmentsJobsSendToLLM.ts')
+        const runtimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
+        const runtimeLoggerModulePath = getModulePath('./src/server/utils/runtimeLogger.ts')
+        const checkCalls = []
+        let shouldRunJudging = false
+        let shouldRunMaintenance = true
+
+        void mock.module('elysia', () => {
+          return {
+            Elysia: class {
+              constructor() {
+                this.uses = []
+              }
+
+              use(plugin) {
+                this.uses.push(plugin)
+                return this
+              }
+            },
+          }
+        })
+        void mock.module('@elysiajs/cron', () => {
+          return {
+            cron: (config) => {
+              return {config, name: config.name}
+            },
+          }
+        })
+        void mock.module(serverIdentityModulePath, () => {
+          return {getDefaultJudgmentServerJobId: () => 'server-llm-status'}
+        })
+        void mock.module(backgroundImportModulePath, () => {
+          return {runJudgmentJobSqliteBackgroundImport: async () => ({})}
+        })
+        void mock.module(sqliteServiceModulePath, () => {
+          return {
+            getJudgmentJobSqliteService: () => {
+              return {publishHealthProjections: async () => {}, syncOwnedLeases: async () => {}}
+            },
+          }
+        })
+        void mock.module(addToQueueModulePath, () => {
+          return {judgmentsJobsAddToQueue: async () => {}}
+        })
+        void mock.module(checkStatusModulePath, () => {
+          return {
+            judgmentsJobsCheckLLMStatus: async () => {
+              checkCalls.push('called')
+            },
+          }
+        })
+        void mock.module(cleanupModulePath, () => {
+          return {judgmentsJobsCleanupStale: async () => {}}
+        })
+        void mock.module(getRunningJobsModulePath, () => {
+          return {judgmentsJobsGetRunningJobs: async () => []}
+        })
+        void mock.module(sendToLlmModulePath, () => {
+          return {judgmentsJobsSendToLLM: async () => {}}
+        })
+        void mock.module(runtimeRoleModulePath, () => {
+          return {
+            isExpectedDuckdbOwnerRoleLossError: () => false,
+            shouldCurrentServerRunJudgingLoops: () => shouldRunJudging,
+            shouldCurrentServerRunMaintenanceLoops: () => shouldRunMaintenance,
+          }
+        })
+        void mock.module(runtimeLoggerModulePath, () => {
+          return {
+            getRuntimeLogProfile: () => 'local',
+            isRuntimeJsonlSinkInstalled: () => false,
+            writeRuntimeFailureLogEvent: () => {},
+            writeRuntimeLogEvent: () => false,
+          }
+        })
+
+        const cronModule = await import(judgmentsJobsModulePath + '?llm-status-role=' + Date.now())
+        const maintenanceNames = cronModule.judgmentsJobsMaintenanceCron.uses.map((plugin) => {
+          return plugin.name
+        })
+        const judgingNames = cronModule.judgmentsJobsJudgingCron.uses.map((plugin) => {
+          return plugin.name
+        })
+        const checkCron = cronModule.judgmentsJobsMaintenanceCron.uses.find((plugin) => {
+          return plugin.name === 'judgments-jobs-check-llm-status'
+        })
+
+        if (!checkCron) {
+          throw new Error('Expected llm status cron on maintenance worker')
+        }
+
+        await checkCron.config.run()
+        shouldRunMaintenance = false
+        shouldRunJudging = true
+        await checkCron.config.run()
+
+        console.log(JSON.stringify({checkCalls, judgingNames, maintenanceNames}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'LLM status cron role ownership test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
+    checkCalls: string[]
+    judgingNames: string[]
+    maintenanceNames: string[]
+  }
+
+  expect(result.maintenanceNames).toContain('judgments-jobs-check-llm-status')
+  expect(result.judgingNames).not.toContain('judgments-jobs-check-llm-status')
+  expect(result.checkCalls).toEqual(['called'])
+})
