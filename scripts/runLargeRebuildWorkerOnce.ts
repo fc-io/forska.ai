@@ -36,11 +36,11 @@ const getCliOptions = (): CliOptions => {
     batchSize: getNumberArgValue(['--batchSize', '--batch-size']) ?? defaultBatchSize,
     heartbeatMs: getNumberArgValue(['--heartbeatMs', '--heartbeat-ms']) ?? defaultHeartbeatMs,
     leaseMs: getNumberArgValue(['--leaseMs', '--lease-ms']) ?? defaultLeaseMs,
-    workerId: getArgValue(['--workerId', '--worker-id']) ?? `project-mart-large-rebuild-cycle:${hostname()}:${process.pid}`,
+    workerId: getArgValue(['--workerId', '--worker-id']) ?? `large-rebuild-worker-once:${hostname()}:${process.pid}`,
   }
 }
 
-const runLargeRebuildCycleCli = async () => {
+const runLargeRebuildWorkerOnceCli = async () => {
   const options = getCliOptions()
 
   try {
@@ -52,4 +52,4 @@ const runLargeRebuildCycleCli = async () => {
   }
 }
 
-void runLargeRebuildCycleCli()
+void runLargeRebuildWorkerOnceCli()

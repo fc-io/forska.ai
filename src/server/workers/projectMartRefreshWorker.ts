@@ -3,7 +3,7 @@ import {hostname} from 'node:os'
 import {sleep} from '../../utils/sleep.ts'
 import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
-import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
+import {getDuckdbMartMaintenanceService} from '../services/getDuckdbMartMaintenanceService.ts'
 import {
   type DirtyMaterializationClaim,
   getProjectMartDirtyMaterializationService,
@@ -69,7 +69,7 @@ type ProjectMartDirtyMaterializationWorkerService = {
 
 type ProjectMartLargeRebuildStateWorkerService = {
   clearArchivedLargeRebuildStates: () => Promise<unknown>
-  queueLargeRebuild: (params: {
+  requestLargeRebuild: (params: {
     cursorArticleCreatedAt?: Date | null
     cursorArticleId?: string | null
     now?: Date
@@ -159,7 +159,7 @@ const defaultProjectMartRefreshWorkerDependencies: ProjectMartRefreshWorkerDepen
   materializationService: getProjectMartDirtyMaterializationService(),
   nowMs: Date.now,
   projectInspector: {getProjectScopeArticleCount},
-  refreshService: getDuckdbMartRefreshService(),
+  refreshService: getDuckdbMartMaintenanceService(),
   sleep,
   sqliteService: getJudgmentJobSqliteService(),
   stateService: getProjectMartDirtyRefreshStateService(),
@@ -309,7 +309,7 @@ const processDirtyMaterializationBatchForClaim = async ({
   return processDirtyMaterializationBatchForClaim({claim, dependencies, options})
 }
 
-const queueBoundedInitialProjectMartSetup = async ({
+const requestBoundedInitialProjectMartSetup = async ({
   claim,
   dependencies,
   options,
@@ -321,7 +321,7 @@ const queueBoundedInitialProjectMartSetup = async ({
   workerId: string
 }) => {
   await dependencies.projectInspector.getProjectScopeArticleCount(claim.projectId)
-  await dependencies.largeRebuildStateService.queueLargeRebuild({
+  await dependencies.largeRebuildStateService.requestLargeRebuild({
     now: getWorkerNow(options.now),
     projectId: claim.projectId,
     rebuildPhase: 'project_scope_article',
@@ -447,7 +447,7 @@ export const runProjectMartRefreshWorkerCycle = async (
 
   try {
     if (!(await dependencies.refreshService.hasActiveProjectReviewServingGeneration(claim.projectId))) {
-      await queueBoundedInitialProjectMartSetup({claim, dependencies, options, workerId})
+      await requestBoundedInitialProjectMartSetup({claim, dependencies, options, workerId})
 
       return {claimedToken: claim.claimedToken, projectId: claim.projectId, status: 'completed', workerId}
     }

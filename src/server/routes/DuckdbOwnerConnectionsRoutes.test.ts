@@ -2,7 +2,7 @@ import {expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 const duckdbOwnerConnectionsModulePath = new URL('../utils/duckdbOwnerConnections.ts', import.meta.url).pathname
-const martRefreshServiceModulePath = new URL('../services/getDuckdbMartRefreshService.ts', import.meta.url).pathname
+const martRefreshServiceModulePath = new URL('../services/getDuckdbMartMaintenanceService.ts', import.meta.url).pathname
 
 void mock.module(duckdbOwnerConnectionsModulePath, () => {
   return {
@@ -40,7 +40,7 @@ void mock.module(duckdbOwnerConnectionsModulePath, () => {
 
 void mock.module(martRefreshServiceModulePath, () => {
   return {
-    getDuckdbMartRefreshService: () => {
+    getDuckdbMartMaintenanceService: () => {
       return {
         getThroughputSnapshot: () => {
           return {}

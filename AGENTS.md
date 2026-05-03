@@ -16,7 +16,7 @@ bun run lint:fix
 bun test
 bun test path/to/file.test.ts
 bun run db:mig
-bun run db:duck:rebuild-marts
+bun run db:duck:request-review-serving-large-rebuild
 ```
 
 ## Plans And Reports

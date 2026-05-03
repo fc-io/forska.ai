@@ -77,7 +77,7 @@ test('Covidence datasource create stores package files and persists cursor confi
         const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').pathname
         const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
         const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
-        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartMaintenanceService.ts', 'file://' + process.cwd() + '/').pathname
 
         const state = {
           deleteCalls: [],
@@ -102,7 +102,7 @@ test('Covidence datasource create stores package files and persists cursor confi
 
         void mock.module(duckdbMartRefreshServiceModulePath, () => {
           return {
-            getDuckdbMartRefreshService: () => {
+            getDuckdbMartMaintenanceService: () => {
               return {
                 markProjectRefreshesDirtyByImportRouteIds: async (importRouteIds, reason) => {
                   state.martQueueCalls.push({importRouteIds, reason})
@@ -312,7 +312,7 @@ test('Covidence datasource create deletes stored files when the transaction fail
         const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').pathname
         const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
         const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
-        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartMaintenanceService.ts', 'file://' + process.cwd() + '/').pathname
 
         const state = {
           deleteCalls: [],
@@ -329,7 +329,7 @@ test('Covidence datasource create deletes stored files when the transaction fail
 
         void mock.module(duckdbMartRefreshServiceModulePath, () => {
           return {
-            getDuckdbMartRefreshService: () => {
+            getDuckdbMartMaintenanceService: () => {
               return {
                 markProjectRefreshesDirtyByImportRouteIds: async () => {},
               }
@@ -465,7 +465,7 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
         const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').pathname
         const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
         const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
-        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartMaintenanceService.ts', 'file://' + process.cwd() + '/').pathname
 
         const state = {
           deleteCalls: [],
@@ -492,7 +492,7 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
 
         void mock.module(duckdbMartRefreshServiceModulePath, () => {
           return {
-            getDuckdbMartRefreshService: () => {
+            getDuckdbMartMaintenanceService: () => {
               return {
                 markProjectRefreshesDirtyByImportRouteIds: async (importRouteIds, reason) => {
                   state.martQueueCalls.push({importRouteIds, reason})
@@ -831,7 +831,7 @@ test('Covidence datasource create also creates or reuses a full-text project wit
         const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').pathname
         const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
         const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
-        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartMaintenanceService.ts', 'file://' + process.cwd() + '/').pathname
 
         const state = {
           deleteCalls: [],
@@ -858,7 +858,7 @@ test('Covidence datasource create also creates or reuses a full-text project wit
 
         void mock.module(duckdbMartRefreshServiceModulePath, () => {
           return {
-            getDuckdbMartRefreshService: () => {
+            getDuckdbMartMaintenanceService: () => {
               return {
                 markProjectRefreshesDirtyByImportRouteIds: async (importRouteIds, reason) => {
                   state.martQueueCalls.push({importRouteIds, reason})
@@ -1225,7 +1225,7 @@ test('Covidence datasource create skips prompt creation when normalized eligibil
         const articleImportStoreServiceModulePath = new URL('./src/server/services/articleImportStoreService.ts', 'file://' + process.cwd() + '/').pathname
         const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
         const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
-        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartMaintenanceService.ts', 'file://' + process.cwd() + '/').pathname
 
         const state = {
           deleteCalls: [],
@@ -1252,7 +1252,7 @@ test('Covidence datasource create skips prompt creation when normalized eligibil
 
         void mock.module(duckdbMartRefreshServiceModulePath, () => {
           return {
-            getDuckdbMartRefreshService: () => {
+            getDuckdbMartMaintenanceService: () => {
               return {
                 markProjectRefreshesDirtyByImportRouteIds: async (importRouteIds, reason) => {
                   state.martQueueCalls.push({importRouteIds, reason})

@@ -42,7 +42,7 @@ test('Covidence reimport reloads config and updates the existing datasource rout
         const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
         const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
         const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
-        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartMaintenanceService.ts', 'file://' + process.cwd() + '/').pathname
 
         const state = {clearCalls: [], martQueueCalls: [], queueCalls: [], scopeCalls: [], seedCalls: [], txStatements: []}
 
@@ -56,7 +56,7 @@ test('Covidence reimport reloads config and updates the existing datasource rout
 
         void mock.module(duckdbMartRefreshServiceModulePath, () => {
           return {
-            getDuckdbMartRefreshService: () => {
+            getDuckdbMartMaintenanceService: () => {
               return {
                 markProjectRefreshesDirtyByImportRouteIds: async (importRouteIds, reason) => {
                   state.martQueueCalls.push({importRouteIds, reason})
@@ -250,7 +250,7 @@ test('Covidence reimport clears and reseeds full-text project judgments', () => 
         const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
         const covidenceImportServiceModulePath = new URL('./src/server/services/covidenceImportService.ts', 'file://' + process.cwd() + '/').pathname
         const dataSourceQueryServiceModulePath = new URL('./src/server/services/dataSourceQueryService.ts', 'file://' + process.cwd() + '/').pathname
-        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        const duckdbMartRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartMaintenanceService.ts', 'file://' + process.cwd() + '/').pathname
 
         const state = {clearCalls: [], martQueueCalls: [], queueCalls: [], scopeCalls: [], seedCalls: [], txStatements: []}
 
@@ -264,7 +264,7 @@ test('Covidence reimport clears and reseeds full-text project judgments', () => 
 
         void mock.module(duckdbMartRefreshServiceModulePath, () => {
           return {
-            getDuckdbMartRefreshService: () => {
+            getDuckdbMartMaintenanceService: () => {
               return {
                 markProjectRefreshesDirtyByImportRouteIds: async (importRouteIds, reason) => {
                   state.martQueueCalls.push({importRouteIds, reason})

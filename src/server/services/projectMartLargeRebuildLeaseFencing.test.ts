@@ -95,7 +95,7 @@ test('stale large rebuild lease cannot promote or complete after claim transfer'
     stalePromoted: boolean
     staleReset: {projectId: string} | null
   }>(`
-    await stateService.queueLargeRebuild({
+    await stateService.requestLargeRebuild({
       projectId: 'large-rebuild-fence-project',
       rebuildPhase: 'review_article_serving',
       refreshToken: 7,
@@ -246,7 +246,7 @@ test('old generation cleanup skips target generation and deletes only leased gen
       projectId: 'large-rebuild-fence-project',
       workerId: 'cleanup-worker',
     })
-    await stateService.queueLargeRebuild({
+    await stateService.requestLargeRebuild({
       projectId: 'large-rebuild-fence-project',
       rebuildPhase: 'review_article_serving',
       refreshToken: 8,

@@ -814,7 +814,7 @@ const rederiveReplacementWork = async (
 
     return largeRebuildProjectIdSet.has(state.projectId)
       ? getProjectMartLargeRebuildStateService()
-          .queueLargeRebuild({
+          .requestLargeRebuild({
             projectId: state.projectId,
             rebuildPhase: 'project_scope_article',
             refreshToken: state.dirtyToken,

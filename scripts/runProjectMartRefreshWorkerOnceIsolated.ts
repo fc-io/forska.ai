@@ -1,7 +1,7 @@
 import {hostname} from 'node:os'
 
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
-import {getDuckdbMartRefreshService} from '../src/server/services/getDuckdbMartRefreshService.ts'
+import {getDuckdbMartMaintenanceService} from '../src/server/services/getDuckdbMartMaintenanceService.ts'
 import {getMaintenanceWorkLeaseService} from '../src/server/services/maintenanceWorkLeaseService.ts'
 import {getProjectMartDirtyRefreshStateService} from '../src/server/services/projectMartDirtyRefreshStateService.ts'
 import {runProjectMartLargeRebuildCycle} from '../src/server/services/projectMartLargeRebuildRunner.ts'
@@ -168,7 +168,7 @@ export const runProjectMartRefreshWorkerOnceIsolated = async () => {
   const options = getCliOptions()
   const largeRebuildStateService = getProjectMartLargeRebuildStateService()
   const stateService = getProjectMartDirtyRefreshStateService()
-  const refreshService = getDuckdbMartRefreshService()
+  const refreshService = getDuckdbMartMaintenanceService()
 
   try {
     const claim = await claimProject({
@@ -210,7 +210,7 @@ export const runProjectMartRefreshWorkerOnceIsolated = async () => {
       }
 
       if (executionMode === 'full') {
-        await largeRebuildStateService.queueLargeRebuild({
+        await largeRebuildStateService.requestLargeRebuild({
           now: new Date(),
           projectId: claim.projectId,
           rebuildPhase: 'project_scope_article',
