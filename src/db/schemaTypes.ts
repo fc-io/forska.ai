@@ -430,6 +430,8 @@ export type ProjectMartLargeRebuildStateRecord = {
   cursorArticleCreatedAt: Date | null
   cursorArticleId: string | null
   targetGeneration: number | null
+  sourceDirtyToken: number | null
+  sourceHighWaterDirtyToken: number | null
   refreshStatus: ProjectMartRefreshStatus
   lastStartedAt: Date | null
   lastCompletedAt: Date | null
@@ -438,6 +440,7 @@ export type ProjectMartLargeRebuildStateRecord = {
   operatorNote: string | null
   workerId: string | null
   leaseExpiresAt: Date | null
+  supersededAt: Date | null
   createdAt: Date
   updatedAt: Date
 }

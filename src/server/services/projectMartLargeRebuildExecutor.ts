@@ -1,5 +1,6 @@
 import {getAppDatabaseService} from './appDatabaseService.ts'
-import {getSqlLiteral} from './appQueryHelpers.ts'
+import {getSqlLiteral, getTimestampLiteral} from './appQueryHelpers.ts'
+import {getMaintenanceWorkLeaseService} from './maintenanceWorkLeaseService.ts'
 import {getProjectVisibleJudgmentScopeSql} from './projectVisibleJudgmentRule.ts'
 
 type ProjectMartLargeRebuildBatchCursor = {articleCreatedAt: Date | string | null; articleId: string}
@@ -12,7 +13,13 @@ type ProjectMartLargeRebuildScopeBatchRow = {
   inRouteScope: boolean
 }
 
-type ProjectMartLargeRebuildGenerationCleanupBatchRow = {rowId: bigint | number | string}
+type ProjectMartLargeRebuildGenerationCleanupBatchRow = {
+  generation: bigint | number | string
+  projectId: string
+  rowId: bigint | number | string
+}
+
+type ProjectMartLargeRebuildGenerationCleanupTargetRow = {generation: bigint | number | string; projectId: string}
 
 type ProjectMartLargeRebuildGenerationCleanupBatchResult = {
   deletedRowCount: number
@@ -36,6 +43,8 @@ type GetProjectScopeBatchParams = {
 
 const defaultProjectMartLargeRebuildBatchSize = 1_000
 const projectReviewServingGenerationCleanupBatchSize = 10_000
+const projectReviewServingGenerationCleanupDefaultLeaseMs = 30_000
+const projectReviewServingGenerationCleanupDefaultWorkerId = 'project-review-serving-generation-cleanup'
 const batchEpochSql = "TIMESTAMPTZ '1970-01-01T00:00:00.000Z'"
 const promptAnswerFactLookupIndexName = 'idx_mart_prompt_answer_fact_lookup'
 const promptAnswerFactLookupIndexQualifiedName = `mart.${promptAnswerFactLookupIndexName}`
@@ -219,6 +228,10 @@ const getProjectReviewServingTargetGenerationSql = (targetGeneration: number) =>
   }
 
   return getSqlLiteral(targetGeneration)
+}
+
+const getProjectReviewServingCleanupGenerationSql = (generation: bigint | number | string) => {
+  return `CAST(${getSqlLiteral(generation)} AS BIGINT)`
 }
 
 const getProjectScopeResetSql = (projectId: string) => {
@@ -867,71 +880,200 @@ const getProjectReviewServingBatchInsertSql = (projectId: string, articleIds: st
   `
 }
 
-const getProjectReviewServingPromoteSql = (projectId: string, targetGeneration: number) => {
+const getPromotionGuardSql = ({
+  expectedRebuildPhase,
+  expectedRefreshToken,
+  expectedTargetGeneration,
+  now,
+  projectLiteral,
+  targetGeneration,
+  targetGenerationLiteral,
+  workerId,
+}: {
+  expectedRebuildPhase?: string
+  expectedRefreshToken?: number
+  expectedTargetGeneration?: number | null
+  now?: Date
+  projectLiteral: string
+  targetGeneration: number
+  targetGenerationLiteral: string
+  workerId?: string
+}) => {
+  return workerId === undefined
+    ? ''
+    : `
+      AND EXISTS (
+        SELECT 1
+        FROM app.project_mart_large_rebuild_state rebuild_state
+        WHERE rebuild_state.project_id = ${projectLiteral}
+          AND rebuild_state.worker_id = ${getSqlLiteral(workerId)}
+          AND rebuild_state.refresh_status = 'running'
+          AND rebuild_state.refresh_token = ${expectedRefreshToken ?? -1}
+          AND rebuild_state.rebuild_phase = ${getSqlLiteral(expectedRebuildPhase ?? 'review_article_serving')}
+          AND rebuild_state.target_generation IS NOT DISTINCT FROM ${getSqlLiteral(
+            expectedTargetGeneration === undefined ? targetGeneration : expectedTargetGeneration,
+          )}
+          AND rebuild_state.target_generation IS NOT DISTINCT FROM ${targetGenerationLiteral}
+          AND rebuild_state.superseded_at IS NULL
+          AND rebuild_state.lease_expires_at IS NOT NULL
+          AND rebuild_state.lease_expires_at > ${now === undefined ? 'current_timestamp' : getTimestampLiteral(now)}
+      )
+    `
+}
+
+const getProjectReviewServingPromoteSql = (
+  projectId: string,
+  targetGeneration: number,
+  guard?: {
+    expectedRebuildPhase?: string
+    expectedRefreshToken?: number
+    expectedTargetGeneration?: number | null
+    now?: Date
+    workerId?: string
+  },
+) => {
   const projectLiteral = getSqlLiteral(projectId)
   const targetGenerationLiteral = getProjectReviewServingTargetGenerationSql(targetGeneration)
 
   return `
-    BEGIN TRANSACTION;
-    INSERT INTO app.project_review_serving_generation (
-      project_id,
-      active_generation,
-      generation_updated_at
-    ) VALUES (
-      ${projectLiteral},
-      0,
-      current_timestamp
-    ) ON CONFLICT(project_id) DO NOTHING;
     UPDATE app.project_review_serving_generation
     SET active_generation = ${targetGenerationLiteral},
         generation_updated_at = current_timestamp
     WHERE project_id = ${projectLiteral}
       AND active_generation < ${targetGenerationLiteral}
+      ${getPromotionGuardSql({...guard, projectLiteral, targetGeneration, targetGenerationLiteral})}
       AND EXISTS (
         SELECT 1
         FROM mart.review_article_serving
         WHERE project_id = ${projectLiteral}
           AND generation = ${targetGenerationLiteral}
-      );
-    COMMIT;
+      )
+    RETURNING CAST(active_generation AS INTEGER) AS activeGeneration;
   `
 }
 
-const getProjectReviewServingGenerationCleanupBatchSql = ({
-  batchSize,
+const getProjectReviewServingGenerationCleanupTargetSql = ({
   projectId,
   tableName,
 }: {
-  batchSize: number
   projectId?: string
   tableName: ProjectMartLargeRebuildGenerationCleanupTableName
 }) => {
   return `
-    SELECT cleanup_row.rowid AS rowId
+    SELECT
+      cleanup_row.project_id AS projectId,
+      CAST(cleanup_row.generation AS VARCHAR) AS generation
     FROM ${tableName} cleanup_row
     INNER JOIN app.project_review_serving_generation generation
       ON generation.project_id = cleanup_row.project_id
     WHERE cleanup_row.generation < generation.active_generation - 1
       ${projectId === undefined ? '' : `AND cleanup_row.project_id = ${getSqlLiteral(projectId)}`}
-    ORDER BY cleanup_row.project_id ASC, cleanup_row.generation ASC, cleanup_row.rowid ASC
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.project_mart_large_rebuild_state rebuild_state
+        WHERE rebuild_state.project_id = cleanup_row.project_id
+          AND rebuild_state.refresh_token > 0
+          AND rebuild_state.superseded_at IS NULL
+          AND rebuild_state.target_generation IS NOT DISTINCT FROM cleanup_row.generation
+      )
+    GROUP BY cleanup_row.project_id, cleanup_row.generation
+    ORDER BY cleanup_row.project_id ASC, cleanup_row.generation ASC
+    LIMIT 1
+  `
+}
+
+const getProjectReviewServingGenerationCleanupBatchSql = ({
+  batchSize,
+  generation,
+  projectId,
+  tableName,
+}: {
+  batchSize: number
+  generation: bigint | number | string
+  projectId: string
+  tableName: ProjectMartLargeRebuildGenerationCleanupTableName
+}) => {
+  return `
+    SELECT
+      cleanup_row.project_id AS projectId,
+      CAST(cleanup_row.generation AS VARCHAR) AS generation,
+      cleanup_row.rowid AS rowId
+    FROM ${tableName} cleanup_row
+    INNER JOIN app.project_review_serving_generation generation
+      ON generation.project_id = cleanup_row.project_id
+    WHERE cleanup_row.project_id = ${getSqlLiteral(projectId)}
+      AND cleanup_row.generation IS NOT DISTINCT FROM ${getProjectReviewServingCleanupGenerationSql(generation)}
+      AND cleanup_row.generation < generation.active_generation - 1
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.project_mart_large_rebuild_state rebuild_state
+        WHERE rebuild_state.project_id = cleanup_row.project_id
+          AND rebuild_state.refresh_token > 0
+          AND rebuild_state.superseded_at IS NULL
+          AND rebuild_state.target_generation IS NOT DISTINCT FROM cleanup_row.generation
+      )
+    ORDER BY cleanup_row.rowid ASC
     LIMIT ${Math.max(1, Math.floor(batchSize))}
   `
 }
 
 const getProjectReviewServingGenerationCleanupDeleteSql = ({
+  generation,
+  leaseExpiresAt,
+  projectId,
   rowIds,
   tableName,
+  workerId,
 }: {
+  generation: bigint | number | string
+  leaseExpiresAt: Date
+  projectId: string
   rowIds: Array<bigint | number | string>
   tableName: ProjectMartLargeRebuildGenerationCleanupTableName
+  workerId: string
 }) => {
+  const leaseId = getMaintenanceWorkLeaseService().getMaintenanceWorkLeaseId({
+    projectId,
+    queueId: `generation:${generation}`,
+    scopeKind: 'queue',
+    workKind: 'review_index_serving_generation_cleanup',
+  })
+
   return `
     DELETE FROM ${tableName}
     WHERE rowid IN (${rowIds
       .map((rowId) => {
         return getSqlLiteral(rowId)
       })
-      .join(', ')});
+      .join(', ')})
+      AND project_id = ${getSqlLiteral(projectId)}
+      AND generation IS NOT DISTINCT FROM ${getProjectReviewServingCleanupGenerationSql(generation)}
+      AND EXISTS (
+        SELECT 1
+        FROM app.maintenance_work_lease cleanup_lease
+        WHERE cleanup_lease.id = ${getSqlLiteral(leaseId)}
+          AND cleanup_lease.consumer_id = ${getSqlLiteral(workerId)}
+          AND cleanup_lease.completed_at IS NULL
+          AND cleanup_lease.lease_expires_at IS NOT NULL
+          AND cleanup_lease.lease_expires_at >= ${getTimestampLiteral(leaseExpiresAt)}
+      )
+      AND EXISTS (
+        SELECT 1
+        FROM app.project_review_serving_generation active_generation
+        WHERE active_generation.project_id = ${getSqlLiteral(projectId)}
+          AND ${tableName}.generation < active_generation.active_generation - 1
+          AND ${tableName}.generation <> active_generation.active_generation
+          AND ${tableName}.generation <> active_generation.active_generation - 1
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.project_mart_large_rebuild_state rebuild_state
+        WHERE rebuild_state.project_id = ${getSqlLiteral(projectId)}
+          AND rebuild_state.refresh_token > 0
+          AND rebuild_state.superseded_at IS NULL
+          AND rebuild_state.target_generation IS NOT DISTINCT FROM ${tableName}.generation
+      )
+    RETURNING project_id AS projectId;
   `
 }
 
@@ -1099,38 +1241,83 @@ const rebuildProjectReviewServingBatch = async (
 const getProjectReviewServingGenerationCleanupBatchRows = async (
   {
     batchSize,
+    generation,
     projectId,
     tableName,
-  }: {batchSize: number; projectId?: string; tableName: ProjectMartLargeRebuildGenerationCleanupTableName},
+  }: {
+    batchSize: number
+    generation: bigint | number | string
+    projectId: string
+    tableName: ProjectMartLargeRebuildGenerationCleanupTableName
+  },
   dependencies: ProjectMartLargeRebuildExecutorDependencies,
 ) => {
   return dependencies.database.queryJson<ProjectMartLargeRebuildGenerationCleanupBatchRow>(
-    getProjectReviewServingGenerationCleanupBatchSql({batchSize, projectId, tableName}),
+    getProjectReviewServingGenerationCleanupBatchSql({batchSize, generation, projectId, tableName}),
   )
 }
 
 const deleteProjectReviewServingGenerationCleanupRowIds = async (
   {
+    generation,
+    leaseExpiresAt,
+    projectId,
     rowIds,
     tableName,
-  }: {rowIds: Array<bigint | number | string>; tableName: ProjectMartLargeRebuildGenerationCleanupTableName},
+    workerId,
+  }: {
+    generation: bigint | number | string
+    leaseExpiresAt: Date
+    projectId: string
+    rowIds: Array<bigint | number | string>
+    tableName: ProjectMartLargeRebuildGenerationCleanupTableName
+    workerId: string
+  },
   dependencies: ProjectMartLargeRebuildExecutorDependencies,
-): Promise<void> => {
+): Promise<number> => {
   return rowIds.length === 0
-    ? Promise.resolve()
+    ? Promise.resolve(0)
     : dependencies.database
-        .run(getProjectReviewServingGenerationCleanupDeleteSql({rowIds, tableName}))
+        .queryJson<{projectId: string}>(
+          getProjectReviewServingGenerationCleanupDeleteSql({
+            generation,
+            leaseExpiresAt,
+            projectId,
+            rowIds,
+            tableName,
+            workerId,
+          }),
+        )
+        .then((deletedRows) => {
+          return deletedRows.length
+        })
         .catch((error) => {
           return !isProjectReviewServingGenerationCleanupRetryableError(error) || rowIds.length === 1
             ? Promise.reject(error)
             : deleteProjectReviewServingGenerationCleanupRowIds(
-                {rowIds: getProjectReviewServingGenerationCleanupDeleteRetryParts(rowIds)[0], tableName},
+                {
+                  generation,
+                  leaseExpiresAt,
+                  projectId,
+                  rowIds: getProjectReviewServingGenerationCleanupDeleteRetryParts(rowIds)[0],
+                  tableName,
+                  workerId,
+                },
                 dependencies,
-              ).then(() => {
+              ).then((deletedLeftCount) => {
                 return deleteProjectReviewServingGenerationCleanupRowIds(
-                  {rowIds: getProjectReviewServingGenerationCleanupDeleteRetryParts(rowIds)[1], tableName},
+                  {
+                    generation,
+                    leaseExpiresAt,
+                    projectId,
+                    rowIds: getProjectReviewServingGenerationCleanupDeleteRetryParts(rowIds)[1],
+                    tableName,
+                    workerId,
+                  },
                   dependencies,
-                )
+                ).then((deletedRightCount) => {
+                  return deletedLeftCount + deletedRightCount
+                })
               })
         })
 }
@@ -1138,13 +1325,23 @@ const deleteProjectReviewServingGenerationCleanupRowIds = async (
 const deleteProjectReviewServingGenerationCleanupBatch = async (
   {
     batchSize,
+    generation,
+    leaseExpiresAt,
     projectId,
     tableName,
-  }: {batchSize: number; projectId?: string; tableName: ProjectMartLargeRebuildGenerationCleanupTableName},
+    workerId,
+  }: {
+    batchSize: number
+    generation: bigint | number | string
+    leaseExpiresAt: Date
+    projectId: string
+    tableName: ProjectMartLargeRebuildGenerationCleanupTableName
+    workerId: string
+  },
   dependencies: ProjectMartLargeRebuildExecutorDependencies,
 ): Promise<number> => {
   const batchRows = await getProjectReviewServingGenerationCleanupBatchRows(
-    {batchSize, projectId, tableName},
+    {batchSize, generation, projectId, tableName},
     dependencies,
   )
   const rowIds = batchRows.map((row) => {
@@ -1153,27 +1350,95 @@ const deleteProjectReviewServingGenerationCleanupBatch = async (
 
   return rowIds.length === 0
     ? Promise.resolve(0)
-    : deleteProjectReviewServingGenerationCleanupRowIds({rowIds, tableName}, dependencies).then(() => {
-        return rowIds.length
-      })
+    : deleteProjectReviewServingGenerationCleanupRowIds(
+        {generation, leaseExpiresAt, projectId, rowIds, tableName, workerId},
+        dependencies,
+      )
+}
+
+const getProjectReviewServingGenerationCleanupTarget = async (
+  {projectId, tableName}: {projectId?: string; tableName: ProjectMartLargeRebuildGenerationCleanupTableName},
+  dependencies: ProjectMartLargeRebuildExecutorDependencies,
+) => {
+  const [target] = await dependencies.database.queryJson<ProjectMartLargeRebuildGenerationCleanupTargetRow>(
+    getProjectReviewServingGenerationCleanupTargetSql({projectId, tableName}),
+  )
+
+  return target ?? null
+}
+
+const claimProjectReviewServingGenerationCleanupLease = async ({
+  generation,
+  leaseMs,
+  now,
+  projectId,
+  tableName,
+  workerId,
+}: {
+  generation: bigint | number | string
+  leaseMs: number
+  now: Date
+  projectId: string
+  tableName: ProjectMartLargeRebuildGenerationCleanupTableName
+  workerId: string
+}) => {
+  const lease = await getMaintenanceWorkLeaseService().claimMaintenanceWorkLease({
+    consumerId: workerId,
+    leaseMs,
+    now,
+    projectId,
+    queueId: `generation:${generation}`,
+    recoveryContext: {generation, tableName},
+    requiredConsumerRole: 'maintenance-worker',
+    scopeKind: 'queue',
+    workKind: 'review_index_serving_generation_cleanup',
+  })
+
+  return lease?.leaseExpiresAt === null || lease?.leaseExpiresAt === undefined ? null : new Date(lease.leaseExpiresAt)
 }
 
 const cleanupProjectReviewServingGenerationsBatch = async (
   {
     batchSize = projectReviewServingGenerationCleanupBatchSize,
+    leaseMs = projectReviewServingGenerationCleanupDefaultLeaseMs,
+    now,
     projectId,
-  }: {batchSize?: number; projectId?: string} = {},
+    workerId = projectReviewServingGenerationCleanupDefaultWorkerId,
+  }: {batchSize?: number; leaseMs?: number; now?: Date; projectId?: string; workerId?: string} = {},
   dependencies: ProjectMartLargeRebuildExecutorDependencies = defaultProjectMartLargeRebuildExecutorDependencies,
 ): Promise<ProjectMartLargeRebuildGenerationCleanupBatchResult> => {
   const normalizedBatchSize = Math.max(1, Math.floor(batchSize))
+  const currentNow = now ?? new Date()
   const tables = await projectReviewServingGenerationCleanupTableNames.reduce<
     Promise<Array<{deletedRowCount: number; tableName: ProjectMartLargeRebuildGenerationCleanupTableName}>>
   >((promise, tableName) => {
     return promise.then(async (acc) => {
-      const deletedRowCount = await deleteProjectReviewServingGenerationCleanupBatch(
-        {batchSize: normalizedBatchSize, projectId, tableName},
-        dependencies,
-      )
+      const target = await getProjectReviewServingGenerationCleanupTarget({projectId, tableName}, dependencies)
+      const leaseExpiresAt =
+        target === null
+          ? null
+          : await claimProjectReviewServingGenerationCleanupLease({
+              generation: target.generation,
+              leaseMs,
+              now: currentNow,
+              projectId: target.projectId,
+              tableName,
+              workerId,
+            })
+      const deletedRowCount =
+        target === null || leaseExpiresAt === null
+          ? 0
+          : await deleteProjectReviewServingGenerationCleanupBatch(
+              {
+                batchSize: normalizedBatchSize,
+                generation: target.generation,
+                leaseExpiresAt,
+                projectId: target.projectId,
+                tableName,
+                workerId,
+              },
+              dependencies,
+            )
 
       return [...acc, {deletedRowCount, tableName}]
     })
@@ -1188,9 +1453,32 @@ const cleanupProjectReviewServingGenerationsBatch = async (
 const finalizeProjectReviewServing = async (
   projectId: string,
   targetGeneration: number,
+  guard?: {
+    expectedRebuildPhase?: string
+    expectedRefreshToken?: number
+    expectedTargetGeneration?: number | null
+    now?: Date
+    workerId?: string
+  },
   dependencies: ProjectMartLargeRebuildExecutorDependencies = defaultProjectMartLargeRebuildExecutorDependencies,
 ) => {
-  await dependencies.database.run(getProjectReviewServingPromoteSql(projectId, targetGeneration))
+  await dependencies.database.run(`
+    INSERT INTO app.project_review_serving_generation (
+      project_id,
+      active_generation,
+      generation_updated_at
+    ) VALUES (
+      ${getSqlLiteral(projectId)},
+      0,
+      current_timestamp
+    ) ON CONFLICT(project_id) DO NOTHING
+  `)
+
+  const [promoted] = await dependencies.database.queryJson<{activeGeneration: number}>(
+    getProjectReviewServingPromoteSql(projectId, targetGeneration, guard),
+  )
+
+  return Boolean(promoted)
 }
 
 const projectMartLargeRebuildExecutor = {

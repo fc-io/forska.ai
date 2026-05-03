@@ -10,6 +10,7 @@ type MaintenanceWorkKind =
   | 'review_index_article_refresh'
   | 'review_index_large_rebuild'
   | 'review_index_project_refresh'
+  | 'review_index_serving_generation_cleanup'
 
 type MaintenanceWorkLeaseIdentity = {
   articleId?: string | null
@@ -289,6 +290,7 @@ const getFreshProjectMaintenanceWorkLeases = async (projectId: string, now = new
         'review_index_project_refresh',
         'review_index_article_refresh',
         'review_index_large_rebuild',
+        'review_index_serving_generation_cleanup',
         'review_index_archived_project_recovery'
       )
       AND (
