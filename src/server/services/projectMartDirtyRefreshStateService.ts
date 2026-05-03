@@ -120,6 +120,8 @@ type DirtyTokenCompletionBarrier = {barrierKind: DirtyTokenBarrierKind; barrierT
 
 type CompletedThroughDirtyTokenParams = {completedToken: number; projectId: string; tx: RefreshStateRunner}
 
+const dirtyRefreshArticleInputTableName = 'temp_project_mart_dirty_refresh_article_input'
+
 const getNow = (value?: Date) => {
   return value ?? new Date()
 }
@@ -130,6 +132,30 @@ const getLeaseExpiry = (now: Date, leaseMs: number) => {
 
 const getUniqueValues = (values: string[]) => {
   return Array.from(new Set(values))
+}
+
+const createDirtyRefreshArticleInputTable = async (runner: RefreshStateRunner, articleIds: string[]) => {
+  await runner.run(`
+    DROP TABLE IF EXISTS ${dirtyRefreshArticleInputTableName};
+    CREATE TEMP TABLE ${dirtyRefreshArticleInputTableName} AS
+    SELECT DISTINCT article_id
+    FROM UNNEST(${getSqlLiteral(articleIds)}) AS article_input(article_id)
+    WHERE article_id IS NOT NULL;
+  `)
+}
+
+const dropDirtyRefreshArticleInputTable = async (runner: RefreshStateRunner) => {
+  await runner.run(`
+    DROP TABLE IF EXISTS ${dirtyRefreshArticleInputTableName}
+  `)
+}
+
+const getDirtyRefreshArticleInputExistsSql = (articleIdColumn: string) => {
+  return `EXISTS (
+        SELECT 1
+        FROM ${dirtyRefreshArticleInputTableName} article_input
+        WHERE article_input.article_id = ${articleIdColumn}
+      )`
 }
 
 const getNormalizedBatchSize = (batchSize: number) => {
@@ -239,6 +265,7 @@ const markSingleProjectDirty = async (
   }
 
   if (project.articleIds !== undefined && project.articleIds.length > 0) {
+    await createDirtyRefreshArticleInputTable(runner, project.articleIds)
     await runner.run(`
       INSERT INTO app.project_mart_refresh_article_state (
         project_id,
@@ -246,16 +273,20 @@ const markSingleProjectDirty = async (
         first_dirty_token,
         last_dirty_token,
         updated_at
-      ) VALUES ${project.articleIds
-        .map((articleId) => {
-          return `(${getQuotedStringList([project.projectId, articleId]).join(', ')}, ${state.dirtyToken}, ${state.dirtyToken}, ${getTimestampLiteral(params.now)})`
-        })
-        .join(', ')}
+      )
+      SELECT
+        ${getSqlLiteral(project.projectId)},
+        article_input.article_id,
+        ${state.dirtyToken},
+        ${state.dirtyToken},
+        ${getTimestampLiteral(params.now)}
+      FROM ${dirtyRefreshArticleInputTableName} article_input
       ON CONFLICT(project_id, article_id) DO UPDATE SET
         first_dirty_token = LEAST(app.project_mart_refresh_article_state.first_dirty_token, EXCLUDED.first_dirty_token),
         last_dirty_token = GREATEST(app.project_mart_refresh_article_state.last_dirty_token, EXCLUDED.last_dirty_token),
         updated_at = EXCLUDED.updated_at
     `)
+    await dropDirtyRefreshArticleInputTable(runner)
   }
 
   return state
@@ -302,6 +333,7 @@ const getDirtyProjectsForArticleIds = async (runner: RefreshStateRunner, article
     return []
   }
 
+  await createDirtyRefreshArticleInputTable(runner, uniqueArticleIds)
   const rows = await runner.queryJson<DirtyProjectArticleRow>(`
     SELECT projectId, articleId
     FROM (
@@ -310,7 +342,7 @@ const getDirtyProjectsForArticleIds = async (runner: RefreshStateRunner, article
         project_article.article_id AS articleId
       FROM app.project_article project_article
       INNER JOIN app.project project ON project.id = project_article.project_id
-      WHERE project_article.article_id IN (${getQuotedStringList(uniqueArticleIds).join(', ')})
+      WHERE ${getDirtyRefreshArticleInputExistsSql('project_article.article_id')}
         AND project.archived = FALSE
       UNION
       SELECT
@@ -320,11 +352,12 @@ const getDirtyProjectsForArticleIds = async (runner: RefreshStateRunner, article
       INNER JOIN app.project_import_route project_import_route
         ON project_import_route.import_route_id = article_import_route.import_route_id
       INNER JOIN app.project project ON project.id = project_import_route.project_id
-      WHERE article_import_route.article_id IN (${getQuotedStringList(uniqueArticleIds).join(', ')})
+      WHERE ${getDirtyRefreshArticleInputExistsSql('article_import_route.article_id')}
         AND project.archived = FALSE
     ) resolved_projects
     ORDER BY projectId ASC, articleId ASC
   `)
+  await dropDirtyRefreshArticleInputTable(runner)
 
   return Array.from(
     rows
@@ -701,12 +734,15 @@ const getQuarantinedArticlesForProject = async ({
   runner,
 }: GetQuarantinedArticlesForProjectParams) => {
   const activeRunner = runner ?? getAppDatabaseService()
+  const uniqueArticleIds = articleIds && articleIds.length > 0 ? getUniqueValues(articleIds) : []
   const idsFilter =
-    articleIds && articleIds.length > 0
-      ? `AND quarantine.article_id IN (${getQuotedStringList(getUniqueValues(articleIds)).join(', ')})`
-      : ''
+    uniqueArticleIds.length > 0 ? `AND ${getDirtyRefreshArticleInputExistsSql('quarantine.article_id')}` : ''
 
-  return activeRunner.queryJson<ProjectMartDirtyRefreshArticleQuarantineRecord>(`
+  if (uniqueArticleIds.length > 0) {
+    await createDirtyRefreshArticleInputTable(activeRunner, uniqueArticleIds)
+  }
+
+  const rows = await activeRunner.queryJson<ProjectMartDirtyRefreshArticleQuarantineRecord>(`
     SELECT
       quarantine.project_id AS projectId,
       quarantine.article_id AS articleId,
@@ -722,6 +758,12 @@ const getQuarantinedArticlesForProject = async ({
       ${idsFilter}
     ORDER BY quarantine.dirty_token ASC, quarantine.article_id ASC
   `)
+
+  if (uniqueArticleIds.length > 0) {
+    await dropDirtyRefreshArticleInputTable(activeRunner)
+  }
+
+  return rows
 }
 
 const quarantineProjectRefreshArticle = async ({
@@ -1093,12 +1135,12 @@ const completeDirtyArticleBatchForClaim = async ({
     const batchArticleIds = getUniqueValues(articleIds)
 
     if (batchArticleIds.length > 0) {
-      const batchArticleIdsSql = getQuotedStringList(batchArticleIds).join(', ')
+      await createDirtyRefreshArticleInputTable(tx, batchArticleIds)
 
       await tx.run(`
         DELETE FROM app.project_mart_refresh_article_state
         WHERE project_id = ${getSqlLiteral(projectId)}
-          AND article_id IN (${batchArticleIdsSql})
+          AND ${getDirtyRefreshArticleInputExistsSql('app.project_mart_refresh_article_state.article_id')}
           AND first_dirty_token <= ${claimedToken}
           AND last_dirty_token > ${claimState.lastCompletedDirtyToken}
           AND last_dirty_token <= ${claimedToken}
@@ -1117,7 +1159,7 @@ const completeDirtyArticleBatchForClaim = async ({
           first_dirty_token = GREATEST(first_dirty_token, ${claimedToken + 1}),
           updated_at = ${getTimestampLiteral(currentNow)}
         WHERE project_id = ${getSqlLiteral(projectId)}
-          AND article_id IN (${batchArticleIdsSql})
+          AND ${getDirtyRefreshArticleInputExistsSql('app.project_mart_refresh_article_state.article_id')}
           AND first_dirty_token <= ${claimedToken}
           AND last_dirty_token > ${claimState.lastCompletedDirtyToken}
           AND last_dirty_token > ${claimedToken}
@@ -1130,6 +1172,7 @@ const completeDirtyArticleBatchForClaim = async ({
               AND quarantine.resolved_at IS NULL
           )
       `)
+      await dropDirtyRefreshArticleInputTable(tx)
     }
 
     const [remaining] = await tx.queryJson<{rowCount: number}>(`

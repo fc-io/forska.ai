@@ -568,6 +568,63 @@ test('prompt answer incremental refresh drops lookup index before row deletes an
   expect(createIndexStatementIndex).toBeLessThan(dictionaryStatementIndex)
 })
 
+test('dirty project article batch refresh uses a temp article table without project-wide deletes', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        const statements = []
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                queryJsonBackground: async () => [{count: 1}],
+                runBackground: async (statement) => {
+                  statements.push(statement)
+                },
+              }
+            },
+          }
+        })
+
+        const martRefreshService = (await import(martRefreshServiceModulePath + '?dirty-batch-shape=' + Date.now())).getDuckdbMartRefreshService()
+        const articleIds = Array.from({length: 10}, (_value, index) => 'article-dirty-batch-' + index)
+
+        await martRefreshService.refreshDirtyProjectArticleBatch('project-dirty-batch-shape', articleIds)
+
+        console.log(JSON.stringify({statements}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString() || runScript.stdout.toString() || 'Dirty batch SQL shape regression test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {statements: string[]}
+  const [statement = ''] = result.statements
+
+  expect(result.statements).toHaveLength(1)
+  expect(statement).toContain('CREATE TEMP TABLE temp_project_mart_refresh_article_batch')
+  expect(statement).not.toContain('FROM (VALUES')
+  expect(statement).not.toContain('article_id IN (')
+  expect(statement).not.toMatch(
+    /DELETE FROM mart\\.project_scope_article\\s+WHERE project_id = 'project-dirty-batch-shape'\\s*;/,
+  )
+  expect(statement).not.toMatch(
+    /DELETE FROM mart\\.prompt_answer_fact\\s+WHERE project_id = 'project-dirty-batch-shape'\\s*;/,
+  )
+})
+
 test('mart refresh recovers archived projects in row batches', () => {
   const runScript = globalThis.Bun.spawnSync(
     [

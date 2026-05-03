@@ -206,9 +206,7 @@ export const runProjectMartRefreshWorkerOnceIsolated = async () => {
       })
 
       if (executionMode === 'incremental') {
-        await refreshService.refreshProjectScopeArticles(claim.projectId, dirtyArticleIds)
-        await refreshService.refreshJudgmentFactsForArticles(dirtyArticleIds)
-        await refreshService.refreshProjectArticleMartsBatch(claim.projectId, dirtyArticleIds)
+        await refreshService.refreshDirtyProjectArticleBatch(claim.projectId, dirtyArticleIds)
       }
 
       if (executionMode === 'full') {

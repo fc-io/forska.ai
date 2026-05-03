@@ -23,6 +23,11 @@ test('dirty refresh worker parks quarantine-blocked claims without publishing AC
       hasActiveProjectReviewServingGeneration: mock(async () => {
         return true
       }),
+      refreshDirtyProjectArticleBatch: mock(async (_projectId: string, articleIds: string[]) => {
+        await dependencies.refreshService.refreshProjectScopeArticles(_projectId, articleIds)
+        await dependencies.refreshService.refreshJudgmentFactsForArticles(articleIds)
+        await dependencies.refreshService.refreshProjectArticleMartsBatch(_projectId, articleIds)
+      }),
       refreshJudgmentArticle: mock(async () => {
         return undefined
       }),
