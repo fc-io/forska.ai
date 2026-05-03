@@ -67,6 +67,7 @@ type CompleteDirtyArticleBatchForClaimParams = {
 
 type ProjectRefreshBatchCompletion = {
   completedState: ProjectMartDirtyRefreshStateRecord | null
+  isBlockedByQuarantine: boolean
   isClaimComplete: boolean
 }
 
@@ -83,12 +84,24 @@ type ClearArchivedProjectRefreshStatesParams = {now?: Date; runner?: RefreshStat
 type QuarantineProjectRefreshArticleParams = {
   articleId: string
   detectedBy?: string | null
+  dirtyToken?: number | null
   error: string
   now?: Date
+  projectId?: string | null
   runner?: RefreshStateRunner
 }
 
 type GetQuarantinedArticlesForProjectParams = {articleIds?: string[]; projectId: string; runner?: RefreshStateRunner}
+
+type ResolveProjectRefreshArticleQuarantineParams = {
+  articleId?: string
+  dirtyToken?: number
+  now?: Date
+  projectId: string
+  runner?: RefreshStateRunner
+}
+
+type CleanupResolvedProjectRefreshArticleQuarantinesParams = {limit: number; runner?: RefreshStateRunner}
 
 type FailProjectRefreshParams = {error: string; now?: Date; projectId: string; workerId: string}
 
@@ -100,6 +113,10 @@ type ProjectRefreshStateRow = {
   refreshStatus: ProjectMartRefreshStatus
   workerId: string | null
 }
+
+type DirtyTokenBarrierKind = 'dirty_article' | 'materialization' | 'quarantine'
+
+type DirtyTokenCompletionBarrier = {barrierKind: DirtyTokenBarrierKind; barrierToken: number} | null
 
 type CompletedThroughDirtyTokenParams = {completedToken: number; projectId: string; tx: RefreshStateRunner}
 
@@ -142,16 +159,24 @@ const ensureProjectRefreshStateRow = async (runner: RefreshStateRunner, projectI
   `)
 }
 
-const getProjectRefreshArticleQuarantineRecord = async (runner: RefreshStateRunner, articleId: string) => {
+const getProjectRefreshArticleQuarantineRecord = async (
+  runner: RefreshStateRunner,
+  params: {articleId: string; dirtyToken: number; projectId: string},
+) => {
   const [row] = await runner.queryJson<ProjectMartRefreshArticleQuarantineRecord>(`
     SELECT
+      project_id AS projectId,
       article_id AS articleId,
+      CAST(dirty_token AS INTEGER) AS dirtyToken,
       error,
       detected_by AS detectedBy,
+      resolved_at AS resolvedAt,
       created_at AS createdAt,
       updated_at AS updatedAt
     FROM app.project_mart_refresh_article_quarantine
-    WHERE article_id = ${getSqlLiteral(articleId)}
+    WHERE project_id = ${getSqlLiteral(params.projectId)}
+      AND article_id = ${getSqlLiteral(params.articleId)}
+      AND dirty_token = ${params.dirtyToken}
     LIMIT 1
   `)
 
@@ -409,19 +434,21 @@ const claimDirtyProjects = async ({
           AND materialization.target_dirty_token <= state.dirty_token
           AND materialization.materialization_status <> 'completed'
       )
-      AND NOT EXISTS (
-        SELECT 1
-        FROM app.project_mart_refresh_article_state article_state
-        INNER JOIN app.project_mart_refresh_article_quarantine quarantine
-          ON quarantine.article_id = article_state.article_id
-        WHERE article_state.project_id = state.project_id
-          AND article_state.last_dirty_token > 0
-          AND article_state.first_dirty_token <= state.dirty_token
-      )
       AND (
         state.refresh_status <> 'running'
         OR state.lease_expires_at IS NULL
         OR state.lease_expires_at <= ${getTimestampLiteral(currentNow)}
+      )
+      AND (
+        state.refresh_status <> 'blocked_by_quarantine'
+        OR state.dirty_token > state.active_dirty_token
+        OR NOT EXISTS (
+          SELECT 1
+          FROM app.project_mart_refresh_article_quarantine quarantine
+          WHERE quarantine.project_id = state.project_id
+            AND quarantine.dirty_token <= state.dirty_token
+            AND quarantine.resolved_at IS NULL
+        )
       )
     ORDER BY state.last_requested_at ASC, state.project_id ASC
     LIMIT ${Math.max(0, Math.floor(limit))}
@@ -448,19 +475,21 @@ const claimDirtyProjects = async ({
             AND materialization.target_dirty_token <= app.project_mart_refresh_state.dirty_token
             AND materialization.materialization_status <> 'completed'
         )
-        AND NOT EXISTS (
-          SELECT 1
-          FROM app.project_mart_refresh_article_state article_state
-          INNER JOIN app.project_mart_refresh_article_quarantine quarantine
-          ON quarantine.article_id = article_state.article_id
-        WHERE article_state.project_id = app.project_mart_refresh_state.project_id
-            AND article_state.last_dirty_token > 0
-            AND article_state.first_dirty_token <= app.project_mart_refresh_state.dirty_token
-        )
         AND (
           refresh_status <> 'running'
           OR lease_expires_at IS NULL
           OR lease_expires_at <= ${getTimestampLiteral(currentNow)}
+        )
+        AND (
+          refresh_status <> 'blocked_by_quarantine'
+          OR dirty_token > active_dirty_token
+          OR NOT EXISTS (
+            SELECT 1
+            FROM app.project_mart_refresh_article_quarantine quarantine
+            WHERE quarantine.project_id = app.project_mart_refresh_state.project_id
+              AND quarantine.dirty_token <= app.project_mart_refresh_state.dirty_token
+              AND quarantine.resolved_at IS NULL
+          )
         )
       RETURNING
         project_id AS projectId,
@@ -560,14 +589,17 @@ const getDirtyArticleBatchForClaim = async ({
     INNER JOIN app.project_mart_refresh_article_state article_state
       ON article_state.project_id = state.project_id
     LEFT JOIN app.project_mart_refresh_article_quarantine quarantine
-      ON quarantine.article_id = article_state.article_id
+      ON quarantine.project_id = article_state.project_id
+      AND quarantine.article_id = article_state.article_id
+      AND quarantine.dirty_token <= state.active_dirty_token
+      AND quarantine.resolved_at IS NULL
     WHERE state.project_id = ${getSqlLiteral(projectId)}
       AND state.worker_id = ${getSqlLiteral(workerId)}
       AND state.refresh_status = 'running'
       AND state.active_dirty_token = ${claimedToken}
       AND article_state.first_dirty_token <= state.active_dirty_token
       AND article_state.last_dirty_token > state.last_completed_dirty_token
-      AND quarantine.article_id IS NULL
+      AND quarantine.project_id IS NULL
     ORDER BY article_state.article_id ASC
     LIMIT ${normalizedBatchSize + 1}
   `)
@@ -618,6 +650,10 @@ const releaseProjectRefreshClaim = async ({now, projectId, workerId}: ReleasePro
 const clearProjectRefreshState = async ({now: _now, projectId, runner}: ClearProjectRefreshStateParams) => {
   return withTransaction(runner, async (tx) => {
     await tx.run(`
+      DELETE FROM app.project_mart_refresh_article_quarantine
+      WHERE project_id = ${getSqlLiteral(projectId)}
+    `)
+    await tx.run(`
       DELETE FROM app.project_mart_refresh_article_state
       WHERE project_id = ${getSqlLiteral(projectId)}
     `)
@@ -632,6 +668,14 @@ const clearProjectRefreshState = async ({now: _now, projectId, runner}: ClearPro
 
 const clearArchivedProjectRefreshStates = async ({runner}: ClearArchivedProjectRefreshStatesParams = {}) => {
   return withTransaction(runner, async (tx) => {
+    await tx.run(`
+      DELETE FROM app.project_mart_refresh_article_quarantine
+      WHERE project_id IN (
+        SELECT id
+        FROM app.project
+        WHERE archived = TRUE
+      )
+    `)
     await tx.run(`
       DELETE FROM app.project_mart_refresh_article_state
       WHERE project_id IN (
@@ -664,51 +708,163 @@ const getQuarantinedArticlesForProject = async ({
 
   return activeRunner.queryJson<ProjectMartRefreshArticleQuarantineRecord>(`
     SELECT
+      quarantine.project_id AS projectId,
       quarantine.article_id AS articleId,
+      CAST(quarantine.dirty_token AS INTEGER) AS dirtyToken,
       quarantine.error,
       quarantine.detected_by AS detectedBy,
+      quarantine.resolved_at AS resolvedAt,
       quarantine.created_at AS createdAt,
       quarantine.updated_at AS updatedAt
     FROM app.project_mart_refresh_article_quarantine quarantine
-    INNER JOIN app.project_mart_refresh_article_state article_state
-      ON article_state.article_id = quarantine.article_id
-    WHERE article_state.project_id = ${getSqlLiteral(projectId)}
+    WHERE quarantine.project_id = ${getSqlLiteral(projectId)}
+      AND quarantine.resolved_at IS NULL
       ${idsFilter}
-    GROUP BY 1, 2, 3, 4, 5
-    ORDER BY quarantine.article_id ASC
+    ORDER BY quarantine.dirty_token ASC, quarantine.article_id ASC
   `)
 }
 
 const quarantineProjectRefreshArticle = async ({
   articleId,
   detectedBy = null,
+  dirtyToken = null,
   error,
   now,
+  projectId = null,
   runner,
 }: QuarantineProjectRefreshArticleParams) => {
   return withTransaction(runner, async (tx) => {
     const currentNow = getNow(now)
-    await tx.run(`
-      INSERT INTO app.project_mart_refresh_article_quarantine (
-        article_id,
-        error,
-        detected_by,
-        created_at,
-        updated_at
-      ) VALUES (
-        ${getSqlLiteral(articleId)},
-        ${getSqlLiteral(error)},
-        ${getSqlLiteral(detectedBy)},
-        ${getTimestampLiteral(currentNow)},
-        ${getTimestampLiteral(currentNow)}
-      )
-      ON CONFLICT(article_id) DO UPDATE SET
-        error = EXCLUDED.error,
-        detected_by = EXCLUDED.detected_by,
-        updated_at = EXCLUDED.updated_at
+    const projectFilter = projectId === null ? '' : `AND article_state.project_id = ${getSqlLiteral(projectId)}`
+    const dirtyTokenSql =
+      dirtyToken === null
+        ? 'GREATEST(article_state.first_dirty_token, refresh_state.last_completed_dirty_token + 1, 1)'
+        : String(dirtyToken)
+    const dirtyTokenFilter =
+      dirtyToken === null
+        ? 'AND article_state.last_dirty_token > refresh_state.last_completed_dirty_token'
+        : `AND article_state.first_dirty_token <= ${dirtyToken} AND article_state.last_dirty_token >= ${dirtyToken}`
+    const candidates = await tx.queryJson<{dirtyToken: number; projectId: string}>(`
+      SELECT
+        article_state.project_id AS projectId,
+        CAST(${dirtyTokenSql} AS INTEGER) AS dirtyToken
+      FROM app.project_mart_refresh_article_state article_state
+      INNER JOIN app.project_mart_refresh_state refresh_state
+        ON refresh_state.project_id = article_state.project_id
+      WHERE article_state.article_id = ${getSqlLiteral(articleId)}
+        ${projectFilter}
+        ${dirtyTokenFilter}
+      ORDER BY article_state.project_id ASC
     `)
 
-    return getProjectRefreshArticleQuarantineRecord(tx, articleId)
+    return candidates.reduce<Promise<ProjectMartRefreshArticleQuarantineRecord | null>>(
+      async (accPromise, candidate) => {
+        const acc = await accPromise
+        await tx.run(`
+        INSERT INTO app.project_mart_refresh_article_quarantine (
+          project_id,
+          article_id,
+          dirty_token,
+          error,
+          detected_by,
+          resolved_at,
+          created_at,
+          updated_at
+        ) VALUES (
+          ${getSqlLiteral(candidate.projectId)},
+          ${getSqlLiteral(articleId)},
+          ${candidate.dirtyToken},
+          ${getSqlLiteral(error)},
+          ${getSqlLiteral(detectedBy)},
+          NULL,
+          ${getTimestampLiteral(currentNow)},
+          ${getTimestampLiteral(currentNow)}
+        )
+        ON CONFLICT(project_id, article_id, dirty_token) DO UPDATE SET
+          error = EXCLUDED.error,
+          detected_by = EXCLUDED.detected_by,
+          resolved_at = NULL,
+          updated_at = EXCLUDED.updated_at
+      `)
+        const record = await getProjectRefreshArticleQuarantineRecord(tx, {
+          articleId,
+          dirtyToken: candidate.dirtyToken,
+          projectId: candidate.projectId,
+        })
+
+        return acc ?? record
+      },
+      Promise.resolve(null),
+    )
+  })
+}
+
+const resolveProjectRefreshArticleQuarantine = async ({
+  articleId,
+  dirtyToken,
+  now,
+  projectId,
+  runner,
+}: ResolveProjectRefreshArticleQuarantineParams) => {
+  return withTransaction(runner, async (tx) => {
+    const currentNow = getNow(now)
+    const articleFilter = articleId === undefined ? '' : `AND article_id = ${getSqlLiteral(articleId)}`
+    const dirtyTokenFilter = dirtyToken === undefined ? '' : `AND dirty_token = ${dirtyToken}`
+
+    await tx.run(`
+      UPDATE app.project_mart_refresh_article_quarantine
+      SET
+        resolved_at = ${getTimestampLiteral(currentNow)},
+        updated_at = ${getTimestampLiteral(currentNow)}
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND resolved_at IS NULL
+        ${articleFilter}
+        ${dirtyTokenFilter}
+    `)
+
+    return getQuarantinedArticlesForProject({projectId, runner: tx})
+  })
+}
+
+const cleanupResolvedProjectRefreshArticleQuarantines = async ({
+  limit,
+  runner,
+}: CleanupResolvedProjectRefreshArticleQuarantinesParams) => {
+  const normalizedLimit = Math.max(0, Math.floor(limit))
+
+  if (normalizedLimit === 0) {
+    return 0
+  }
+
+  return withTransaction(runner, async (tx) => {
+    const rows = await tx.queryJson<{articleId: string; dirtyToken: number; projectId: string}>(`
+      SELECT
+        quarantine.project_id AS projectId,
+        quarantine.article_id AS articleId,
+        CAST(quarantine.dirty_token AS INTEGER) AS dirtyToken
+      FROM app.project_mart_refresh_article_quarantine quarantine
+      INNER JOIN app.project_mart_refresh_state refresh_state
+        ON refresh_state.project_id = quarantine.project_id
+      WHERE quarantine.resolved_at IS NOT NULL
+        AND refresh_state.last_completed_dirty_token >= quarantine.dirty_token
+      ORDER BY quarantine.resolved_at ASC, quarantine.project_id ASC, quarantine.article_id ASC, quarantine.dirty_token ASC
+      LIMIT ${normalizedLimit}
+    `)
+
+    if (rows.length === 0) {
+      return 0
+    }
+
+    await tx.run(`
+      DELETE FROM app.project_mart_refresh_article_quarantine
+      WHERE ${rows
+        .map((row) => {
+          return `(project_id = ${getSqlLiteral(row.projectId)} AND article_id = ${getSqlLiteral(row.articleId)} AND dirty_token = ${row.dirtyToken})`
+        })
+        .join(' OR ')}
+    `)
+
+    return rows.length
   })
 }
 
@@ -730,7 +886,10 @@ const cleanupCompletedProjectRefreshArticleState = async ({
       AND NOT EXISTS (
         SELECT 1
         FROM app.project_mart_refresh_article_quarantine quarantine
-        WHERE quarantine.article_id = app.project_mart_refresh_article_state.article_id
+        WHERE quarantine.project_id = app.project_mart_refresh_article_state.project_id
+          AND quarantine.article_id = app.project_mart_refresh_article_state.article_id
+          AND quarantine.dirty_token <= ${completedToken}
+          AND quarantine.resolved_at IS NULL
       )
   `)
   await tx.run(`
@@ -744,9 +903,63 @@ const cleanupCompletedProjectRefreshArticleState = async ({
       AND NOT EXISTS (
         SELECT 1
         FROM app.project_mart_refresh_article_quarantine quarantine
-        WHERE quarantine.article_id = app.project_mart_refresh_article_state.article_id
+        WHERE quarantine.project_id = app.project_mart_refresh_article_state.project_id
+          AND quarantine.article_id = app.project_mart_refresh_article_state.article_id
+          AND quarantine.dirty_token <= ${completedToken}
+          AND quarantine.resolved_at IS NULL
       )
   `)
+}
+
+const getDirtyTokenCompletionBarrier = async ({completedToken, projectId, tx}: CompletedThroughDirtyTokenParams) => {
+  const [barrier] = await tx.queryJson<{barrierKind: DirtyTokenBarrierKind; barrierToken: number | null}>(`
+    WITH dirty_token_barriers AS (
+      SELECT
+        CAST(target_dirty_token AS INTEGER) AS barrierToken,
+        ${getSqlLiteral('materialization')} AS barrierKind
+      FROM app.project_mart_dirty_materialization_state
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND target_dirty_token <= ${completedToken}
+        AND materialization_status <> 'completed'
+      UNION ALL
+      SELECT
+        CAST(dirty_token AS INTEGER) AS barrierToken,
+        ${getSqlLiteral('quarantine')} AS barrierKind
+      FROM app.project_mart_refresh_article_quarantine
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND dirty_token <= ${completedToken}
+        AND resolved_at IS NULL
+      UNION ALL
+      SELECT
+        CAST(GREATEST(article_state.first_dirty_token, 1) AS INTEGER) AS barrierToken,
+        ${getSqlLiteral('dirty_article')} AS barrierKind
+      FROM app.project_mart_refresh_article_state article_state
+      WHERE article_state.project_id = ${getSqlLiteral(projectId)}
+        AND article_state.last_dirty_token > 0
+        AND article_state.first_dirty_token <= ${completedToken}
+        AND NOT EXISTS (
+          SELECT 1
+          FROM app.project_mart_refresh_article_quarantine quarantine
+          WHERE quarantine.project_id = article_state.project_id
+            AND quarantine.article_id = article_state.article_id
+            AND quarantine.dirty_token <= ${completedToken}
+            AND quarantine.resolved_at IS NULL
+        )
+    )
+    SELECT
+      barrierKind,
+      CAST(barrierToken AS INTEGER) AS barrierToken
+    FROM dirty_token_barriers
+    ORDER BY barrierToken ASC
+    LIMIT 1
+  `)
+
+  return barrier?.barrierToken == null
+    ? null
+    : ({
+        barrierKind: barrier.barrierKind,
+        barrierToken: Number(barrier.barrierToken),
+      } satisfies DirtyTokenCompletionBarrier)
 }
 
 const getCompletedThroughDirtyToken = async ({completedToken, projectId, tx}: CompletedThroughDirtyTokenParams) => {
@@ -762,34 +975,7 @@ const getCompletedThroughDirtyToken = async ({completedToken, projectId, tx}: Co
     return lastCompletedDirtyToken
   }
 
-  const [barrier] = await tx.queryJson<{barrierToken: number | null}>(`
-    WITH dirty_token_barriers AS (
-      SELECT CAST(target_dirty_token AS INTEGER) AS barrierToken
-      FROM app.project_mart_dirty_materialization_state
-      WHERE project_id = ${getSqlLiteral(projectId)}
-        AND target_dirty_token <= ${completedToken}
-        AND materialization_status <> 'completed'
-      UNION ALL
-      SELECT CAST(GREATEST(article_state.first_dirty_token, 1) AS INTEGER) AS barrierToken
-      FROM app.project_mart_refresh_article_state article_state
-      INNER JOIN app.project_mart_refresh_article_quarantine quarantine
-        ON quarantine.article_id = article_state.article_id
-      WHERE article_state.project_id = ${getSqlLiteral(projectId)}
-        AND article_state.last_dirty_token > 0
-        AND article_state.first_dirty_token <= ${completedToken}
-      UNION ALL
-      SELECT CAST(GREATEST(article_state.first_dirty_token, 1) AS INTEGER) AS barrierToken
-      FROM app.project_mart_refresh_article_state article_state
-      LEFT JOIN app.project_mart_refresh_article_quarantine quarantine
-        ON quarantine.article_id = article_state.article_id
-      WHERE article_state.project_id = ${getSqlLiteral(projectId)}
-        AND article_state.last_dirty_token > 0
-        AND article_state.first_dirty_token <= ${completedToken}
-        AND quarantine.article_id IS NULL
-    )
-    SELECT CAST(MIN(barrierToken) AS INTEGER) AS barrierToken
-    FROM dirty_token_barriers
-  `)
+  const barrier = await getDirtyTokenCompletionBarrier({completedToken, projectId, tx})
   const barrierToken = barrier?.barrierToken ?? null
 
   return barrierToken === null ? completedToken : Math.max(lastCompletedDirtyToken, barrierToken - 1)
@@ -807,7 +993,7 @@ const completeRunningProjectRefreshState = async ({
   projectId: string
   tx: RefreshStateRunner
   workerId: string
-}) => {
+}): Promise<ProjectRefreshBatchCompletion> => {
   const [claimState] = await tx.queryJson<ProjectRefreshStateRow>(`
     SELECT
       project_id AS projectId,
@@ -825,26 +1011,37 @@ const completeRunningProjectRefreshState = async ({
   `)
 
   if (!claimState) {
-    return null
+    return {completedState: null, isBlockedByQuarantine: false, isClaimComplete: false}
   }
 
   await cleanupCompletedProjectRefreshArticleState({completedToken, currentNow, projectId, tx})
 
+  const completionBarrier = await getDirtyTokenCompletionBarrier({completedToken, projectId, tx})
   const completedThroughToken = await getCompletedThroughDirtyToken({completedToken, projectId, tx})
   const isCompletedThroughClaim = completedThroughToken >= completedToken
+  const isBlockedByQuarantine = !isCompletedThroughClaim && completionBarrier?.barrierKind === 'quarantine'
+  const isClaimFinished = isCompletedThroughClaim || isBlockedByQuarantine
   const [completed] = await tx.queryJson<ProjectRefreshStateRow>(`
     UPDATE app.project_mart_refresh_state
     SET
-      active_dirty_token = CASE WHEN ${getSqlLiteral(isCompletedThroughClaim)} THEN 0 ELSE active_dirty_token END,
+      active_dirty_token = CASE
+        WHEN ${getSqlLiteral(isCompletedThroughClaim)} THEN 0
+        WHEN ${getSqlLiteral(isBlockedByQuarantine)} THEN ${completedToken}
+        ELSE active_dirty_token
+      END,
       last_completed_dirty_token = GREATEST(last_completed_dirty_token, ${completedThroughToken}),
-      refresh_status = CASE WHEN ${getSqlLiteral(isCompletedThroughClaim)} THEN 'idle' ELSE refresh_status END,
+      refresh_status = CASE
+        WHEN ${getSqlLiteral(isCompletedThroughClaim)} THEN 'idle'
+        WHEN ${getSqlLiteral(isBlockedByQuarantine)} THEN 'blocked_by_quarantine'
+        ELSE refresh_status
+      END,
       last_completed_at = CASE
         WHEN ${completedThroughToken} > last_completed_dirty_token THEN ${getTimestampLiteral(currentNow)}
         ELSE last_completed_at
       END,
-      last_error = CASE WHEN ${getSqlLiteral(isCompletedThroughClaim)} THEN NULL ELSE last_error END,
-      worker_id = CASE WHEN ${getSqlLiteral(isCompletedThroughClaim)} THEN NULL ELSE worker_id END,
-      lease_expires_at = CASE WHEN ${getSqlLiteral(isCompletedThroughClaim)} THEN NULL ELSE lease_expires_at END,
+      last_error = CASE WHEN ${getSqlLiteral(isClaimFinished)} THEN NULL ELSE last_error END,
+      worker_id = CASE WHEN ${getSqlLiteral(isClaimFinished)} THEN NULL ELSE worker_id END,
+      lease_expires_at = CASE WHEN ${getSqlLiteral(isClaimFinished)} THEN NULL ELSE lease_expires_at END,
       updated_at = ${getTimestampLiteral(currentNow)}
     WHERE project_id = ${getSqlLiteral(projectId)}
       AND worker_id = ${getSqlLiteral(workerId)}
@@ -859,11 +1056,15 @@ const completeRunningProjectRefreshState = async ({
       worker_id AS workerId
   `)
 
-  if (!completed || !isCompletedThroughClaim) {
-    return null
+  if (!completed) {
+    return {completedState: null, isBlockedByQuarantine: false, isClaimComplete: false}
   }
 
-  return getProjectRefreshStateRecord(tx, projectId)
+  return {
+    completedState: isCompletedThroughClaim ? await getProjectRefreshStateRecord(tx, projectId) : null,
+    isBlockedByQuarantine,
+    isClaimComplete: isCompletedThroughClaim,
+  }
 }
 
 const completeDirtyArticleBatchForClaim = async ({
@@ -874,7 +1075,7 @@ const completeDirtyArticleBatchForClaim = async ({
   workerId,
 }: CompleteDirtyArticleBatchForClaimParams): Promise<ProjectRefreshBatchCompletion> => {
   const currentNow = getNow(now)
-  const completedState = await getAppDatabaseService().transaction(async (tx) => {
+  const completion = await getAppDatabaseService().transaction(async (tx) => {
     const [claimState] = await tx.queryJson<{lastCompletedDirtyToken: number}>(`
       SELECT CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken
       FROM app.project_mart_refresh_state
@@ -886,7 +1087,7 @@ const completeDirtyArticleBatchForClaim = async ({
     `)
 
     if (!claimState) {
-      return null
+      return {completedState: null, isBlockedByQuarantine: false, isClaimComplete: false}
     }
 
     const batchArticleIds = getUniqueValues(articleIds)
@@ -901,6 +1102,14 @@ const completeDirtyArticleBatchForClaim = async ({
           AND first_dirty_token <= ${claimedToken}
           AND last_dirty_token > ${claimState.lastCompletedDirtyToken}
           AND last_dirty_token <= ${claimedToken}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM app.project_mart_refresh_article_quarantine quarantine
+            WHERE quarantine.project_id = app.project_mart_refresh_article_state.project_id
+              AND quarantine.article_id = app.project_mart_refresh_article_state.article_id
+              AND quarantine.dirty_token <= ${claimedToken}
+              AND quarantine.resolved_at IS NULL
+          )
       `)
       await tx.run(`
         UPDATE app.project_mart_refresh_article_state
@@ -912,6 +1121,14 @@ const completeDirtyArticleBatchForClaim = async ({
           AND first_dirty_token <= ${claimedToken}
           AND last_dirty_token > ${claimState.lastCompletedDirtyToken}
           AND last_dirty_token > ${claimedToken}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM app.project_mart_refresh_article_quarantine quarantine
+            WHERE quarantine.project_id = app.project_mart_refresh_article_state.project_id
+              AND quarantine.article_id = app.project_mart_refresh_article_state.article_id
+              AND quarantine.dirty_token <= ${claimedToken}
+              AND quarantine.resolved_at IS NULL
+          )
       `)
     }
 
@@ -924,16 +1141,19 @@ const completeDirtyArticleBatchForClaim = async ({
         AND NOT EXISTS (
           SELECT 1
           FROM app.project_mart_refresh_article_quarantine quarantine
-          WHERE quarantine.article_id = app.project_mart_refresh_article_state.article_id
+          WHERE quarantine.project_id = app.project_mart_refresh_article_state.project_id
+            AND quarantine.article_id = app.project_mart_refresh_article_state.article_id
+            AND quarantine.dirty_token <= ${claimedToken}
+            AND quarantine.resolved_at IS NULL
         )
     `)
 
     return Number(remaining?.rowCount ?? 0) === 0
       ? completeRunningProjectRefreshState({completedToken: claimedToken, currentNow, projectId, tx, workerId})
-      : null
+      : {completedState: null, isBlockedByQuarantine: false, isClaimComplete: false}
   })
 
-  if (completedState) {
+  if (completion.isClaimComplete || completion.isBlockedByQuarantine) {
     await getMaintenanceWorkLeaseService().completeMaintenanceWorkLease({
       consumerId: workerId,
       now: currentNow,
@@ -943,16 +1163,16 @@ const completeDirtyArticleBatchForClaim = async ({
     })
   }
 
-  return {completedState, isClaimComplete: Boolean(completedState)}
+  return completion
 }
 
 const completeProjectRefresh = async ({completedToken, now, projectId, workerId}: CompleteProjectRefreshParams) => {
   const currentNow = getNow(now)
-  const completedState = await getAppDatabaseService().transaction(async (tx) => {
+  const completion = (await getAppDatabaseService().transaction(async (tx) => {
     return completeRunningProjectRefreshState({completedToken, currentNow, projectId, tx, workerId})
-  })
+  })) as ProjectRefreshBatchCompletion
 
-  if (completedState) {
+  if (completion.isClaimComplete || completion.isBlockedByQuarantine) {
     await getMaintenanceWorkLeaseService().completeMaintenanceWorkLease({
       consumerId: workerId,
       now: currentNow,
@@ -962,7 +1182,7 @@ const completeProjectRefresh = async ({completedToken, now, projectId, workerId}
     })
   }
 
-  return completedState
+  return completion.completedState
 }
 
 const finalizeProjectRefreshAfterLargeRebuild = async ({
@@ -974,18 +1194,23 @@ const finalizeProjectRefreshAfterLargeRebuild = async ({
   const completedState = await getAppDatabaseService().transaction(async (tx) => {
     await cleanupCompletedProjectRefreshArticleState({completedToken, currentNow, projectId, tx})
 
+    const completionBarrier = await getDirtyTokenCompletionBarrier({completedToken, projectId, tx})
     const completedThroughToken = await getCompletedThroughDirtyToken({completedToken, projectId, tx})
     const isCompletedThroughRebuild = completedThroughToken >= completedToken
+    const isBlockedByQuarantine = !isCompletedThroughRebuild && completionBarrier?.barrierKind === 'quarantine'
+    const isRebuildFinished = isCompletedThroughRebuild || isBlockedByQuarantine
     const [completed] = await tx.queryJson<ProjectRefreshStateRow>(`
       UPDATE app.project_mart_refresh_state
       SET
         active_dirty_token = CASE
           WHEN ${getSqlLiteral(isCompletedThroughRebuild)} AND active_dirty_token <= ${completedToken} THEN 0
+          WHEN ${getSqlLiteral(isBlockedByQuarantine)} AND active_dirty_token <= ${completedToken} THEN ${completedToken}
           ELSE active_dirty_token
         END,
         last_completed_dirty_token = GREATEST(last_completed_dirty_token, ${completedThroughToken}),
         refresh_status = CASE
           WHEN ${getSqlLiteral(isCompletedThroughRebuild)} AND active_dirty_token <= ${completedToken} THEN 'idle'
+          WHEN ${getSqlLiteral(isBlockedByQuarantine)} AND active_dirty_token <= ${completedToken} THEN 'blocked_by_quarantine'
           ELSE refresh_status
         END,
         last_completed_at = CASE
@@ -993,15 +1218,15 @@ const finalizeProjectRefreshAfterLargeRebuild = async ({
           ELSE last_completed_at
         END,
         last_error = CASE
-          WHEN ${getSqlLiteral(isCompletedThroughRebuild)} AND active_dirty_token <= ${completedToken} THEN NULL
+          WHEN ${getSqlLiteral(isRebuildFinished)} AND active_dirty_token <= ${completedToken} THEN NULL
           ELSE last_error
         END,
         worker_id = CASE
-          WHEN ${getSqlLiteral(isCompletedThroughRebuild)} AND active_dirty_token <= ${completedToken} THEN NULL
+          WHEN ${getSqlLiteral(isRebuildFinished)} AND active_dirty_token <= ${completedToken} THEN NULL
           ELSE worker_id
         END,
         lease_expires_at = CASE
-          WHEN ${getSqlLiteral(isCompletedThroughRebuild)} AND active_dirty_token <= ${completedToken} THEN NULL
+          WHEN ${getSqlLiteral(isRebuildFinished)} AND active_dirty_token <= ${completedToken} THEN NULL
           ELSE lease_expires_at
         END,
         updated_at = ${getTimestampLiteral(currentNow)}
@@ -1073,6 +1298,7 @@ const failProjectRefresh = async ({error, now, projectId, workerId}: FailProject
 
 const projectMartDirtyRefreshStateService = {
   claimDirtyProjects,
+  cleanupResolvedProjectRefreshArticleQuarantines,
   clearArchivedProjectRefreshStates,
   clearProjectRefreshState,
   completeDirtyArticleBatchForClaim,
@@ -1088,6 +1314,7 @@ const projectMartDirtyRefreshStateService = {
   markProjectsDirtyAtomically,
   quarantineProjectRefreshArticle,
   releaseProjectRefreshClaim,
+  resolveProjectRefreshArticleQuarantine,
 }
 
 export const getProjectMartDirtyRefreshStateService = () => {
@@ -1096,6 +1323,7 @@ export const getProjectMartDirtyRefreshStateService = () => {
 
 export {
   claimDirtyProjects,
+  cleanupResolvedProjectRefreshArticleQuarantines,
   completeDirtyArticleBatchForClaim,
   completeProjectRefresh,
   failProjectRefresh,
@@ -1106,10 +1334,12 @@ export {
   heartbeatClaim,
   markArticleProjectsDirtyAtomically,
   markProjectsDirtyAtomically,
+  resolveProjectRefreshArticleQuarantine,
 }
 
 export type {
   ClaimDirtyProjectsParams,
+  CleanupResolvedProjectRefreshArticleQuarantinesParams,
   CompleteDirtyArticleBatchForClaimParams,
   CompleteProjectRefreshParams,
   DirtyArticleBatchForClaim,
@@ -1124,4 +1354,5 @@ export type {
   MarkProjectsDirtyAtomicallyParams,
   ProjectRefreshBatchCompletion,
   ProjectRefreshClaim,
+  ResolveProjectRefreshArticleQuarantineParams,
 }

@@ -269,11 +269,15 @@ test('rebuild2 cutover clears obsolete state and rederives replacement work unde
     \`)
     await database.run(\`
       INSERT INTO app.project_mart_refresh_article_quarantine (
+        project_id,
         article_id,
+        dirty_token,
         error,
         detected_by
       ) VALUES (
+        'rebuild2-project',
         'rebuild2-article',
+        5,
         'legacy quarantine',
         'legacy-worker'
       )

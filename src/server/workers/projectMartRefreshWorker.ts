@@ -29,7 +29,7 @@ type ProjectMartRefreshStateWorkerService = {
     now?: Date
     projectId: string
     workerId: string
-  }) => Promise<{completedState: unknown; isClaimComplete: boolean}>
+  }) => Promise<{completedState: unknown; isBlockedByQuarantine?: boolean; isClaimComplete: boolean}>
   completeProjectRefresh: (params: {
     completedToken: number
     now?: Date
@@ -123,6 +123,7 @@ type ProjectMartRefreshWorkerLoopOptions = ProjectMartRefreshWorkerCycleOptions 
 
 type ProjectMartRefreshWorkerCycleResult =
   | {projectId: null; status: 'idle'; workerId: string}
+  | {claimedToken: number; projectId: string; status: 'blocked_by_quarantine'; workerId: string}
   | {claimedToken: number; projectId: string; status: 'completed'; workerId: string}
   | {claimedToken: number; error: string; projectId: string; status: 'failed'; workerId: string}
 
@@ -314,7 +315,7 @@ const processDirtyArticleBatchForClaim = async ({
   dependencies: ProjectMartRefreshWorkerDependencies
   options: ProjectMartRefreshWorkerCycleOptions
   workerId: string
-}): Promise<boolean> => {
+}): Promise<'blocked_by_quarantine' | 'completed'> => {
   const dirtyArticleBatch = await dependencies.stateService.getDirtyArticleBatchForClaim({
     batchSize: getDirtyArticleBatchSize(options),
     claimedToken: claim.claimedToken,
@@ -338,7 +339,11 @@ const processDirtyArticleBatchForClaim = async ({
   })
 
   if (completion.isClaimComplete) {
-    return true
+    return 'completed'
+  }
+
+  if (completion.isBlockedByQuarantine) {
+    return 'blocked_by_quarantine'
   }
 
   if (dirtyArticleIds.length === 0) {
@@ -404,7 +409,11 @@ export const runProjectMartRefreshWorkerCycle = async (
       return {claimedToken: claim.claimedToken, projectId: claim.projectId, status: 'completed', workerId}
     }
 
-    await processDirtyArticleBatchForClaim({claim, dependencies, options, workerId})
+    const articleRefreshStatus = await processDirtyArticleBatchForClaim({claim, dependencies, options, workerId})
+    if (articleRefreshStatus === 'blocked_by_quarantine') {
+      return {claimedToken: claim.claimedToken, projectId: claim.projectId, status: 'blocked_by_quarantine', workerId}
+    }
+
     refreshCompleted = true
     await dependencies.sqliteService.publishProjectRefreshAck({
       ackToken: claim.claimedToken,

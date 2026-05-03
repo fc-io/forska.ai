@@ -31,7 +31,7 @@ type ReviewsIndexingProgressState = 'blocked' | 'completed' | 'failed' | 'proces
 type ReviewsIndexingStatus = 'blocked' | 'failed' | 'not-needed' | 'ready' | 'refreshing' | 'stale'
 type ReviewsIndexingRecoveryMode = 'archived_project_mart_recovery' | 'none' | 'retry_backoff'
 
-type ProjectMartRefreshStatus = 'failed' | 'idle' | 'paused' | 'running'
+type ProjectMartRefreshStatus = 'blocked_by_quarantine' | 'failed' | 'idle' | 'paused' | 'running'
 
 type RefreshCountInfo = {oldestQueuedAt: string | null; queuedRefreshCount: number}
 type ProjectLargeRebuildProgress = {
@@ -373,9 +373,11 @@ const getPendingArticleRefreshInfo = async (projectId: string): Promise<RefreshC
     LEFT JOIN app.project_mart_refresh_state refresh_state
       ON refresh_state.project_id = article_state.project_id
     LEFT JOIN app.project_mart_refresh_article_quarantine quarantine
-      ON quarantine.article_id = article_state.article_id
+      ON quarantine.project_id = article_state.project_id
+      AND quarantine.article_id = article_state.article_id
+      AND quarantine.resolved_at IS NULL
     WHERE article_state.project_id = '${escapeSqlString(projectId)}'
-      AND quarantine.article_id IS NULL
+      AND quarantine.project_id IS NULL
       AND (
         refresh_state.project_id IS NULL
         OR refresh_state.last_completed_dirty_token IS NULL

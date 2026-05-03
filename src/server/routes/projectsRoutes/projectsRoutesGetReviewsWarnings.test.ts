@@ -443,13 +443,17 @@ test('reviews warnings expose quarantined article refreshes without pending heal
   await insertReviewServingRow(projectId, articleId)
   await runDatabase(`
     INSERT INTO app.project_mart_refresh_article_quarantine (
+      project_id,
       article_id,
+      dirty_token,
       error,
       detected_by,
       created_at,
       updated_at
     ) VALUES (
+      '${projectId}',
       '${articleId}',
+      1,
       'native crash repro',
       'test-suite',
       TIMESTAMPTZ '2026-04-02T12:02:00.000Z',

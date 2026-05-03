@@ -22,7 +22,7 @@ export type JudgmentsJobsPromptsSkipReason = 'no_fulltext' | 'conversion_failed'
 export type JudgmentChunkingStrategy = 'patient_h3_greedy' | 'article_heading_greedy' | 'article_paragraph_greedy'
 export type Engine = 'sglang' | 'vllm'
 export type ModelSource = 'discovered' | 'manual'
-export type ProjectMartRefreshStatus = 'idle' | 'running' | 'failed' | 'paused'
+export type ProjectMartRefreshStatus = 'blocked_by_quarantine' | 'idle' | 'running' | 'failed' | 'paused'
 export type HumanJudgmentMode = 'prompt' | 'summary'
 export type ProjectPromptCriteriaDisposition = 'include' | 'exclude' | 'combined'
 export type JudgmentHumanSummaryAnswer = 'yes' | 'no' | 'maybe'
@@ -390,9 +390,12 @@ export type ProjectMartRefreshArticleStateRecord = {
 }
 
 export type ProjectMartRefreshArticleQuarantineRecord = {
+  projectId: string
   articleId: string
+  dirtyToken: number
   error: string
   detectedBy: string | null
+  resolvedAt: Date | null
   createdAt: Date
   updatedAt: Date
 }

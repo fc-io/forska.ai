@@ -32,8 +32,12 @@ const unquarantineProjectMartRefreshArticle = async () => {
     `)
 
     await getAppDatabaseService().run(`
-      DELETE FROM app.project_mart_refresh_article_quarantine
+      UPDATE app.project_mart_refresh_article_quarantine
+      SET
+        resolved_at = current_timestamp,
+        updated_at = current_timestamp
       WHERE article_id = '${articleId}'
+        AND resolved_at IS NULL
     `)
     await getAppDatabaseService().run(`
       UPDATE app.project_mart_refresh_state
@@ -49,8 +53,7 @@ const unquarantineProjectMartRefreshArticle = async () => {
         FROM app.project_mart_refresh_article_state
         WHERE article_id = '${articleId}'
       )
-        AND refresh_status = 'failed'
-        AND last_error LIKE 'Quarantined project mart refresh article ${articleId}%'
+        AND refresh_status IN ('blocked_by_quarantine', 'failed')
     `)
 
     console.log(

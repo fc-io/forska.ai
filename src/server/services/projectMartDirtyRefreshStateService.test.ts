@@ -1490,6 +1490,7 @@ test('dirty project claims keep quarantined articles as completion barriers', ()
   expect(result.claims).toEqual([{projectId: 'refresh-project-1'}])
   expect(result.batch).toEqual({articleIds: ['refresh-article-2'], hasMore: false})
   expect(result.completion?.isClaimComplete).toBe(false)
+  expect(result.completion?.isBlockedByQuarantine).toBe(true)
   expect(result.completion?.completedState).toBeNull()
   expect(result.claimsAfterCompletion).toEqual([])
   expect(
@@ -1507,8 +1508,8 @@ test('dirty project claims keep quarantined articles as completion barriers', ()
     dirtyToken: 1,
     lastCompletedDirtyToken: 0,
     lastError: null,
-    refreshStatus: 'running',
-    workerId: 'worker-1',
+    refreshStatus: 'blocked_by_quarantine',
+    workerId: null,
   })
 })
 

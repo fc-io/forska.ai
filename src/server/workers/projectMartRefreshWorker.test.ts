@@ -84,9 +84,18 @@ const createWorkerTestContext = (params: {
         dirtyArticlesByProject[projectId] = (dirtyArticlesByProject[projectId] ?? []).filter((articleId) => {
           return !articleIds.includes(articleId)
         })
-        const remainingArticleCount = (dirtyArticlesByProject[projectId] ?? []).length
+        const remainingArticleIds = dirtyArticlesByProject[projectId] ?? []
+        const quarantinedArticleIds = new Set(quarantinedArticlesByProject[projectId] ?? [])
+        const remainingHealthyArticleCount = remainingArticleIds.filter((articleId) => {
+          return !quarantinedArticleIds.has(articleId)
+        }).length
+        const isBlockedByQuarantine = remainingHealthyArticleCount === 0 && remainingArticleIds.length > 0
 
-        return {completedState: remainingArticleCount === 0 ? {} : null, isClaimComplete: remainingArticleCount === 0}
+        return {
+          completedState: remainingArticleIds.length === 0 ? {} : null,
+          isBlockedByQuarantine,
+          isClaimComplete: remainingArticleIds.length === 0,
+        }
       },
     ),
     completeProjectRefresh: mock(
@@ -310,7 +319,7 @@ test('processes dirty articles through bounded batches until the claim is comple
   ])
 })
 
-test('fails dirty claims held behind quarantined article barriers', async () => {
+test('parks dirty claims held behind quarantined article barriers', async () => {
   const context = createWorkerTestContext({
     articlesByProject: {'project-1': ['article-quarantined', 'article-healthy']},
     claims: [
@@ -332,9 +341,8 @@ test('fails dirty claims held behind quarantined article barriers', async () => 
 
   expect(result).toEqual({
     claimedToken: 2,
-    error: 'Project mart refresh claim made no progress for project-1',
     projectId: 'project-1',
-    status: 'failed',
+    status: 'blocked_by_quarantine',
     workerId: 'worker-1',
   })
   expect(context.callLog).toEqual([
@@ -345,13 +353,8 @@ test('fails dirty claims held behind quarantined article barriers', async () => 
     'judgment:article-healthy',
     'articleMartsBatch:project-1:article-healthy',
     'complete:project-1:2',
-    'batch:project-1:5',
-    'complete:project-1:2',
-    'fail:project-1:Project mart refresh claim made no progress for project-1',
   ])
-  expect(context.failed).toEqual([
-    {error: 'Project mart refresh claim made no progress for project-1', projectId: 'project-1', workerId: 'worker-1'},
-  ])
+  expect(context.failed).toEqual([])
   expect(context.acknowledgedProjects).toEqual([])
 })
 
