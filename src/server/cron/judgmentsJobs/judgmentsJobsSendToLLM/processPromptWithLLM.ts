@@ -374,10 +374,15 @@ const processSinglePrompt = async (
       providerInvocationContext: shouldUseJudgeWorkerOwnerHandoff()
         ? getOwnerBackedProviderInvocationContext(promptToProcess)
         : undefined,
+      providerFamily: promptToProcess.providerFamily,
+      providerId: promptToProcess.providerId,
       providerKey: promptToProcess.providerKey,
+      providerLimit: promptToProcess.providerLimit,
       providerLimitVersion: promptToProcess.providerLimitVersion,
       providerMaxInflightRequests: promptToProcess.providerMaxInflightRequests,
+      providerName: promptToProcess.providerName,
       providerUsesFamilyDefault: promptToProcess.providerUsesFamilyDefault,
+      resolvedDefaultCapacity: promptToProcess.resolvedDefaultCapacity,
       workerUrls: promptToProcess.modelWorkerUrls,
     },
     modelContext,

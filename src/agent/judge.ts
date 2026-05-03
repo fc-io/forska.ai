@@ -55,10 +55,15 @@ type ModelConfigInput = {
   provider: string | null
   providerConnectionId: string | null
   providerInvocationContext?: StoredProviderInvocationContext
+  providerFamily?: string | null
+  providerId?: string | null
   providerKey?: string | null
+  providerLimit?: number | null
   providerLimitVersion?: string | null
   providerMaxInflightRequests: number | null
+  providerName?: string | null
   providerUsesFamilyDefault: boolean
+  resolvedDefaultCapacity?: number | null
   workerUrls: string[]
 }
 
@@ -676,10 +681,15 @@ const generateSinglePromptResponse = async ({
   provider,
   providerConnectionId,
   providerInvocationContext,
+  providerFamily,
+  providerId,
   providerKey,
+  providerLimit,
   providerLimitVersion,
   providerMaxInflightRequests,
+  providerName,
   providerUsesFamilyDefault,
+  resolvedDefaultCapacity,
   workerUrls,
   outputSchema,
 }: {
@@ -696,10 +706,15 @@ const generateSinglePromptResponse = async ({
   provider: string | null
   providerConnectionId: string | null
   providerInvocationContext?: StoredProviderInvocationContext
+  providerFamily?: string | null
+  providerId?: string | null
   providerKey?: string | null
+  providerLimit?: number | null
   providerLimitVersion?: string | null
   providerMaxInflightRequests: number | null
+  providerName?: string | null
   providerUsesFamilyDefault: boolean
+  resolvedDefaultCapacity?: number | null
   workerUrls: string[]
   outputSchema: unknown
 }): Promise<GeneratedPromptResponse> => {
@@ -713,10 +728,15 @@ const generateSinglePromptResponse = async ({
       fallbackBaseURL: baseURL,
       providerConnection: providerInvocationContext?.connection,
       providerConnectionId,
+      providerFamily,
+      providerId,
       providerKey,
+      providerLimit,
       providerLimitVersion,
       providerMaxInflightRequests,
+      providerName,
       providerUsesFamilyDefault,
+      resolvedDefaultCapacity,
       requestAttemptManifestOwner: getRequestAttemptManifestOwner({
         articleId,
         claimId,
@@ -1095,10 +1115,15 @@ export const judgeSinglePrompt = async ({
     provider,
     providerConnectionId,
     providerInvocationContext,
+    providerFamily,
+    providerId,
     providerKey,
+    providerLimit,
     providerLimitVersion,
     providerMaxInflightRequests,
+    providerName,
     providerUsesFamilyDefault,
+    resolvedDefaultCapacity,
     workerUrls,
   } = modelConfig
 
@@ -1156,10 +1181,15 @@ export const judgeSinglePrompt = async ({
           provider,
           providerConnectionId,
           providerInvocationContext,
+          providerFamily,
+          providerId,
           providerKey,
+          providerLimit,
           providerLimitVersion,
           providerMaxInflightRequests,
+          providerName,
           providerUsesFamilyDefault,
+          resolvedDefaultCapacity,
           workerUrls,
           outputSchema: getSinglePromptOutputSchema(),
         })
@@ -1537,10 +1567,15 @@ export const judgeSinglePrompt = async ({
                 provider,
                 providerConnectionId,
                 providerInvocationContext,
+                providerFamily,
+                providerId,
                 providerKey,
+                providerLimit,
                 providerLimitVersion,
                 providerMaxInflightRequests,
+                providerName,
                 providerUsesFamilyDefault,
+                resolvedDefaultCapacity,
                 workerUrls,
                 outputSchema: evidenceOutputSchema,
               })
@@ -1819,10 +1854,15 @@ export const judgeSinglePrompt = async ({
             provider,
             providerConnectionId,
             providerInvocationContext,
+            providerFamily,
+            providerId,
             providerKey,
+            providerLimit,
             providerLimitVersion,
             providerMaxInflightRequests,
+            providerName,
             providerUsesFamilyDefault,
+            resolvedDefaultCapacity,
             workerUrls,
             outputSchema: getSinglePromptOutputSchema(),
           })

@@ -5,10 +5,17 @@ import * as realReadOnlyDatabaseModule from '../../services/appReadOnlyDatabaseS
 import * as realReadOnlyQueryModule from '../../services/getAppReadOnlyQueryService.ts'
 import {classifyConnectionFailure, ConnectionError, recordConnectionFailure} from './connectionHealth.ts'
 import * as realSqliteModule from './judgmentJobSqliteService.ts'
+import * as realProviderAdmissionLeaseModule from './providerAdmissionLease.ts'
 
 type JudgmentsRequestRuntimeModule = typeof import('./judgmentsRequestRuntime.ts')
 type ProcessPromptModule = typeof import('./judgmentsJobsSendToLLM/processPromptWithLLM.ts')
 type PromptToProcess = import('./judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts').PromptToProcess
+type ProviderAdmissionLeaseAcquireInput = Parameters<
+  typeof realProviderAdmissionLeaseModule.acquireProviderAdmissionLeasePersisted
+>[0]
+type ProviderAdmissionLeaseReleaseInput = Parameters<
+  typeof realProviderAdmissionLeaseModule.releaseProviderAdmissionLeaseWithResultThroughOwner
+>[0]
 type ProviderHealthResult = {lastError: string | null; message: string; modelCount: number | null; ok: boolean}
 
 const providerConnectionRepositoryModulePath = new URL(
@@ -25,6 +32,7 @@ const appReadOnlyQueryServiceModulePath = new URL('../../services/getAppReadOnly
 const ensureFullTextModulePath = new URL('../../utils/ensureFullText.ts', import.meta.url).pathname
 const judgeWorkerCompletionJournalModulePath = new URL('./judgeWorkerCompletionJournal.ts', import.meta.url).pathname
 const sqliteServiceModulePath = new URL('./judgmentJobSqliteService.ts', import.meta.url).pathname
+const providerAdmissionLeaseModulePath = new URL('./providerAdmissionLease.ts', import.meta.url).pathname
 const getRealJudgeWorkerReadOnlyAppDatabaseService = realReadOnlyDatabaseModule.getJudgeWorkerReadOnlyAppDatabaseService
 const getRealJudgeWorkerReadOnlyAppQueryService = realReadOnlyQueryModule.getJudgeWorkerReadOnlyAppQueryService
 const getRealJudgmentJobSqliteService = realSqliteModule.getJudgmentJobSqliteService
@@ -90,6 +98,13 @@ const testProviderConnectionHealth = mock(
 )
 const getJudgmentsCapacityMock = mock((_runningJobCount: number) => {
   return createJudgmentsCapacity()
+})
+const acquireProviderAdmissionLeasePersisted = mock(async (input: ProviderAdmissionLeaseAcquireInput) => {
+  return realProviderAdmissionLeaseModule.acquireProviderAdmissionLease(input)
+})
+const releaseProviderAdmissionLeaseWithResultThroughOwner = mock(async (input: ProviderAdmissionLeaseReleaseInput) => {
+  const released = realProviderAdmissionLeaseModule.releaseProviderAdmissionLease(input)
+  return released ? ({released: true} as const) : ({reason: 'missing', released: false} as const)
 })
 class RecoverableJudgeError extends Error {
   failureCode: string
@@ -231,6 +246,14 @@ const registerModuleMocks = () => {
   void mock.module(judgmentsCapacityModulePath, () => {
     return {getJudgmentsCapacity: getJudgmentsCapacityMock}
   })
+
+  void mock.module(providerAdmissionLeaseModulePath, () => {
+    return {
+      ...realProviderAdmissionLeaseModule,
+      acquireProviderAdmissionLeasePersisted,
+      releaseProviderAdmissionLeaseWithResultThroughOwner,
+    }
+  })
 }
 
 const loadRuntime = (): Promise<JudgmentsRequestRuntimeModule> => {
@@ -353,6 +376,8 @@ afterEach(async () => {
   getProviderConnection.mockClear()
   testProviderConnectionHealth.mockClear()
   getJudgmentsCapacityMock.mockClear()
+  acquireProviderAdmissionLeasePersisted.mockClear()
+  releaseProviderAdmissionLeaseWithResultThroughOwner.mockClear()
   judgeSinglePrompt.mockClear()
   queryJson.mockClear()
   getFullArticlesByIds.mockClear()
@@ -377,6 +402,15 @@ afterEach(async () => {
   getJudgmentsCapacityMock.mockImplementation((_runningJobCount: number) => {
     return createJudgmentsCapacity()
   })
+  acquireProviderAdmissionLeasePersisted.mockImplementation(async (input: ProviderAdmissionLeaseAcquireInput) => {
+    return realProviderAdmissionLeaseModule.acquireProviderAdmissionLease(input)
+  })
+  releaseProviderAdmissionLeaseWithResultThroughOwner.mockImplementation(
+    async (input: ProviderAdmissionLeaseReleaseInput) => {
+      const released = realProviderAdmissionLeaseModule.releaseProviderAdmissionLease(input)
+      return released ? ({released: true} as const) : ({reason: 'missing', released: false} as const)
+    },
+  )
   judgeSinglePrompt.mockImplementation(async (_input: unknown) => {
     return undefined
   })
@@ -959,6 +993,150 @@ test('codex requests enforce saved provider caps per connection', async () => {
   await flush()
   await secondRequest
   await thirdRequest
+
+  expect(secondStarted).toBe(true)
+})
+
+test('provider admission request leases gate starts before local provider slots', async () => {
+  const {withJudgmentRequest} = await loadRuntime()
+  const firstRelease = createSignal()
+  let heldLease: ProviderAdmissionLeaseReleaseInput | null = null
+  let firstStarted = false
+  let secondStarted = false
+
+  acquireProviderAdmissionLeasePersisted.mockImplementation(async (input: ProviderAdmissionLeaseAcquireInput) => {
+    if (heldLease) {
+      return {
+        acquired: false,
+        activeLeaseCount: 1,
+        currentSnapshot: {...input.snapshot, providerLimit: 1},
+        providerLimit: 1,
+        providerLimitVersion: input.snapshot.providerLimitVersion,
+        reason: 'capacity',
+        staleProviderLimitSnapshot: false,
+      }
+    }
+
+    heldLease = {
+      holderToken: input.holderToken,
+      leaseIdentity: input.leaseIdentity,
+      providerKey: input.snapshot.providerKey,
+    }
+
+    return {
+      acquired: true,
+      activeLeaseCount: 1,
+      alreadyHeld: false,
+      currentSnapshot: {...input.snapshot, providerLimit: 1},
+      providerLimit: 1,
+      providerLimitVersion: input.snapshot.providerLimitVersion,
+      staleProviderLimitSnapshot: false,
+    }
+  })
+  releaseProviderAdmissionLeaseWithResultThroughOwner.mockImplementation(
+    async (input: ProviderAdmissionLeaseReleaseInput) => {
+      heldLease = heldLease?.leaseIdentity === input.leaseIdentity ? null : heldLease
+      return {released: true}
+    },
+  )
+
+  const firstRequest = withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-provider-lease-1',
+      provider: 'openai',
+      fallbackBaseURL: 'http://provider-lease-runtime.test/v1',
+      providerConnectionId: 'connection-provider-lease',
+      providerMaxInflightRequests: 2,
+      providerUsesFamilyDefault: false,
+      workerUrls: [],
+    },
+    async () => {
+      firstStarted = true
+      await firstRelease.promise
+    },
+  )
+
+  await flush()
+  expect(firstStarted).toBe(true)
+
+  const secondRequest = withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-provider-lease-2',
+      provider: 'openai',
+      fallbackBaseURL: 'http://provider-lease-runtime.test/v1',
+      providerConnectionId: 'connection-provider-lease',
+      providerMaxInflightRequests: 2,
+      providerUsesFamilyDefault: false,
+      workerUrls: [],
+    },
+    async () => {
+      secondStarted = true
+    },
+  )
+
+  await flush()
+  expect(secondStarted).toBe(false)
+
+  firstRelease.resolve()
+  await firstRequest
+  await flush()
+  await secondRequest
+
+  expect(secondStarted).toBe(true)
+  expect(acquireProviderAdmissionLeasePersisted.mock.calls.length).toBeGreaterThan(2)
+})
+
+test('provider admission release fencing failure still clears the local request slot', async () => {
+  const {withJudgmentRequest} = await loadRuntime()
+  let secondStarted = false
+
+  acquireProviderAdmissionLeasePersisted.mockImplementation(async (input: ProviderAdmissionLeaseAcquireInput) => {
+    return {
+      acquired: true,
+      activeLeaseCount: 1,
+      alreadyHeld: false,
+      currentSnapshot: input.snapshot,
+      providerLimit: input.snapshot.providerLimit,
+      providerLimitVersion: input.snapshot.providerLimitVersion,
+      staleProviderLimitSnapshot: false,
+    }
+  })
+  releaseProviderAdmissionLeaseWithResultThroughOwner.mockImplementationOnce(async () => {
+    throw new Error('not current owner')
+  })
+  releaseProviderAdmissionLeaseWithResultThroughOwner.mockImplementation(async () => {
+    return {reason: 'notHolder', released: false}
+  })
+
+  await withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-release-fencing-1',
+      provider: 'openai',
+      fallbackBaseURL: 'http://release-fencing-runtime.test/v1',
+      providerConnectionId: 'connection-release-fencing',
+      providerMaxInflightRequests: 1,
+      providerUsesFamilyDefault: false,
+      workerUrls: [],
+    },
+    async () => {
+      return undefined
+    },
+  )
+
+  await withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-release-fencing-2',
+      provider: 'openai',
+      fallbackBaseURL: 'http://release-fencing-runtime.test/v1',
+      providerConnectionId: 'connection-release-fencing',
+      providerMaxInflightRequests: 1,
+      providerUsesFamilyDefault: false,
+      workerUrls: [],
+    },
+    async () => {
+      secondStarted = true
+    },
+  )
 
   expect(secondStarted).toBe(true)
 })

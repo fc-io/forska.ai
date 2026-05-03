@@ -1,4 +1,4 @@
-import {afterEach, expect, test} from 'bun:test'
+import {afterEach, expect, mock, test} from 'bun:test'
 
 import {
   getRequestAttemptLifecycleState,
@@ -7,15 +7,45 @@ import {
   mutateRequestAttemptManifestEntries,
   withDurableCloseoutRef,
 } from './judgmentRequestAttemptManifest.ts'
-import {
-  getJudgmentRequestStats,
-  markJudgmentRequestAttemptsPersisted,
-  resetJudgmentRequestRuntimeForTests,
-  withJudgmentRequest,
-} from './judgmentsRequestRuntime.ts'
+import * as realProviderAdmissionLeaseModule from './providerAdmissionLease.ts'
 
-afterEach(() => {
+type JudgmentsRequestRuntimeModule = typeof import('./judgmentsRequestRuntime.ts')
+type ProviderAdmissionLeaseAcquireInput = Parameters<
+  typeof realProviderAdmissionLeaseModule.acquireProviderAdmissionLeasePersisted
+>[0]
+type ProviderAdmissionLeaseReleaseInput = Parameters<
+  typeof realProviderAdmissionLeaseModule.releaseProviderAdmissionLeaseWithResultThroughOwner
+>[0]
+
+const providerAdmissionLeaseModulePath = new URL('./providerAdmissionLease.ts', import.meta.url).pathname
+
+const acquireProviderAdmissionLeasePersisted = async (input: ProviderAdmissionLeaseAcquireInput) => {
+  return realProviderAdmissionLeaseModule.acquireProviderAdmissionLease(input)
+}
+
+const releaseProviderAdmissionLeaseWithResultThroughOwner = async (input: ProviderAdmissionLeaseReleaseInput) => {
+  const released = realProviderAdmissionLeaseModule.releaseProviderAdmissionLease(input)
+  return released ? ({released: true} as const) : ({reason: 'missing', released: false} as const)
+}
+
+const loadRuntime = (): Promise<JudgmentsRequestRuntimeModule> => {
+  void mock.module(providerAdmissionLeaseModulePath, () => {
+    return {
+      ...realProviderAdmissionLeaseModule,
+      acquireProviderAdmissionLeasePersisted,
+      releaseProviderAdmissionLeaseWithResultThroughOwner,
+    }
+  })
+
+  return import(
+    `./judgmentsRequestRuntime.ts?test=${Date.now()}-${Math.random()}`
+  ) as Promise<JudgmentsRequestRuntimeModule>
+}
+
+afterEach(async () => {
+  const {resetJudgmentRequestRuntimeForTests} = await loadRuntime()
   resetJudgmentRequestRuntimeForTests()
+  mock.restore()
 })
 
 const baseManifestAttempt = {
@@ -46,6 +76,7 @@ const getFirstManifestEntry = (entries: JudgmentRequestAttemptJsonEntry[]): Judg
 }
 
 test('withJudgmentRequest exposes exact request attempt context', async () => {
+  const {getJudgmentRequestStats, markJudgmentRequestAttemptsPersisted, withJudgmentRequest} = await loadRuntime()
   const jobId = 'request-attempt-lifecycle-job'
   const seenAttempts: string[] = []
 

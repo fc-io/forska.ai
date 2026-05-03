@@ -395,10 +395,16 @@ const claimAndEnqueuePromptChunk = async ({
     job.id,
     limit,
     {
+      providerFamily: job.providerFamily,
+      providerId: job.providerId,
       providerKey: job.providerKey,
       providerConnectionId: job.providerConnectionId,
+      providerLimit: job.providerLimit,
+      providerLimitVersion: job.providerLimitVersion,
       providerMaxInflightRequests: providerCap.maxInflight,
+      providerName: job.providerName,
       providerUsesFamilyDefault: providerCap.usesFamilyDefault,
+      resolvedDefaultCapacity: job.resolvedDefaultCapacity,
     },
     {protectedRecordIds},
   )

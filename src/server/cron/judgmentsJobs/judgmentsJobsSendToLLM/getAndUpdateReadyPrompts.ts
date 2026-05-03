@@ -333,10 +333,16 @@ export const getAndUpdateReadyPrompts = async (
   jobId: string,
   limit: number,
   requestRuntime: {
+    providerFamily?: string | null
+    providerId?: string | null
     providerKey?: string | null
     providerConnectionId: string | null
+    providerLimit?: number | null
+    providerLimitVersion?: string | null
     providerMaxInflightRequests: number | null
+    providerName?: string | null
     providerUsesFamilyDefault: boolean
+    resolvedDefaultCapacity?: number | null
   },
   options: {protectedRecordIds?: string[]} = {},
 ): Promise<PromptToProcess[]> => {

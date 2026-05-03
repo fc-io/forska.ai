@@ -21,12 +21,21 @@ import {
   getJudgmentEndpointAvailability,
   resetJudgmentEndpointAvailabilityForTests,
 } from './judgmentEndpointAvailability.ts'
+import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
 import type {
   JudgmentRequestAttemptLiveContext,
   JudgmentRequestAttemptManifestOwner,
   JudgmentRequestAttemptRuntimeContext,
 } from './judgmentRequestAttemptManifest.ts'
 import {recordRequestAttemptManifestStage} from './judgmentRequestAttemptManifestStore.ts'
+import {
+  acquireProviderAdmissionLeasePersisted,
+  getProviderAdmissionRequestLeaseIdentity,
+  getProviderBucketSnapshot,
+  type ProviderBucketSnapshot,
+  releaseProviderAdmissionLeaseWithResultThroughOwner,
+  resetProviderAdmissionLeaseForTests,
+} from './providerAdmissionLease.ts'
 import {getNormalizedProviderKeyProvider, getProviderKey} from './providerKey.ts'
 
 type RequestSlot = {baseURL: string; release: () => void; requiresProbe: boolean}
@@ -36,15 +45,22 @@ type RequestWaiter<T> = {resolve: (value: T) => void; reject: (error: unknown) =
 type ProviderRequestScope = {
   modelId?: string | null
   modelProvider?: string | null
+  providerFamily?: string | null
+  providerId?: string | null
   providerKey?: string | null
   providerConnectionId: string | null
+  providerLimit?: number | null
   providerLimitVersion?: string | null
   providerMaxInflightRequests: number | null
+  providerName?: string | null
   providerUsesFamilyDefault: boolean
+  resolvedDefaultCapacity?: number | null
 }
+type ProviderAdmissionRetryWaiter = () => void
 type CodexProviderWaiter = RequestWaiter<() => void> & {providerScope: ProviderRequestScope}
 type FallbackWaiter = RequestWaiter<RequestSlot> & {baseURL: string; providerScope: ProviderRequestScope}
 type WorkerWaiter = RequestWaiter<RequestSlot> & {providerScope: ProviderRequestScope; workerUrls: string[]}
+type ProviderRequestAdmissionLease = {holderToken: string; leaseIdentity: string; providerKey: string}
 
 type JobRequestState = {inFlight: number; pendingRequestAttemptIds: Set<string>}
 type ProviderRequestState = {inFlight: number}
@@ -60,14 +76,25 @@ const codexWaiters: RequestWaiter<() => void>[] = []
 const codexProviderWaiters: CodexProviderWaiter[] = []
 const workerWaiters: WorkerWaiter[] = []
 const fallbackWaiters: FallbackWaiter[] = []
+const providerAdmissionRetryWaiters: ProviderAdmissionRetryWaiter[] = []
 const jobRequestStates = new Map<string, JobRequestState>()
 const providerRequestStates = new Map<string, ProviderRequestState>()
 const fallbackInFlightByProviderKey = new Map<string, number>()
 
 let codexInFlight = 0
+const providerAdmissionLeaseRetryDelayMs = 250
 
 const normalizeProvider = (value: string | null | undefined): string => {
   return getNormalizedProviderKeyProvider(value)
+}
+
+const getTrimmedValue = (value: string | null | undefined): string | null => {
+  const trimmed = value?.trim() ?? ''
+  return trimmed.length > 0 ? trimmed : null
+}
+
+const getPositiveIntegerValue = (value: number | null | undefined): number | null => {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(1, Math.trunc(value)) : null
 }
 
 const getNonCodexCapacity = () => {
@@ -161,6 +188,119 @@ const createRequestAttemptContext = (providerScope: ProviderRequestScope) => {
     providerKey: getProviderRequestKey(providerScope),
     requestAttemptId: randomUUID(),
   }
+}
+
+const getCompleteProviderBucketSnapshot = (providerScope: ProviderRequestScope): ProviderBucketSnapshot | null => {
+  const providerKey = getTrimmedValue(providerScope.providerKey)
+  const providerLimitVersion = getTrimmedValue(providerScope.providerLimitVersion)
+  const providerLimit = getPositiveIntegerValue(providerScope.providerLimit)
+  const resolvedDefaultCapacity = getPositiveIntegerValue(providerScope.resolvedDefaultCapacity)
+  const providerFamily = getTrimmedValue(providerScope.providerFamily)
+  const providerId = getTrimmedValue(providerScope.providerId) ?? providerKey
+  const providerName = getTrimmedValue(providerScope.providerName) ?? providerFamily
+
+  return providerKey && providerLimitVersion && providerLimit && resolvedDefaultCapacity && providerFamily && providerId
+    ? {
+        maxInflightRequests: providerScope.providerUsesFamilyDefault ? null : providerScope.providerMaxInflightRequests,
+        providerFamily,
+        providerId,
+        providerKey,
+        providerLimit,
+        providerLimitVersion,
+        providerName: providerName ?? providerFamily,
+        providerUsesFamilyDefault: providerScope.providerUsesFamilyDefault,
+        resolvedDefaultCapacity,
+      }
+    : null
+}
+
+const getProviderAdmissionSnapshot = (providerScope: ProviderRequestScope): ProviderBucketSnapshot => {
+  const completeSnapshot = getCompleteProviderBucketSnapshot(providerScope)
+
+  if (completeSnapshot) {
+    return completeSnapshot
+  }
+
+  return getProviderBucketSnapshot({
+    maxInflightRequests: providerScope.providerUsesFamilyDefault ? null : providerScope.providerMaxInflightRequests,
+    modelId: providerScope.modelId,
+    modelProvider: providerScope.modelProvider,
+    providerConnectionId: providerScope.providerConnectionId,
+    providerName: providerScope.providerName,
+    useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
+  })
+}
+
+const getProviderRequestLeaseHolderToken = (requestAttemptId: string): string => {
+  return `${getDefaultJudgmentServerJobId()}:request:${requestAttemptId}`
+}
+
+const removeProviderAdmissionRetryWaiter = (waiter: ProviderAdmissionRetryWaiter): void => {
+  const index = providerAdmissionRetryWaiters.indexOf(waiter)
+
+  if (index >= 0) {
+    providerAdmissionRetryWaiters.splice(index, 1)
+  }
+}
+
+const waitForProviderAdmissionRetry = async (): Promise<void> => {
+  return new Promise((resolve) => {
+    let timeout: ReturnType<typeof setTimeout> | null = null
+    const waiter = (): void => {
+      if (timeout) {
+        clearTimeout(timeout)
+      }
+      removeProviderAdmissionRetryWaiter(waiter)
+      resolve()
+    }
+
+    timeout = setTimeout(waiter, providerAdmissionLeaseRetryDelayMs)
+    providerAdmissionRetryWaiters.push(waiter)
+  })
+}
+
+const notifyProviderAdmissionRetryWaiters = (): void => {
+  providerAdmissionRetryWaiters.splice(0, providerAdmissionRetryWaiters.length).map((waiter) => {
+    waiter()
+    return waiter
+  })
+}
+
+const acquireProviderRequestAdmissionLease = async ({
+  requestAttempt,
+  snapshot,
+}: {
+  requestAttempt: JudgmentRequestAttemptRuntimeContext
+  snapshot: ProviderBucketSnapshot
+}): Promise<ProviderRequestAdmissionLease> => {
+  const holderToken = getProviderRequestLeaseHolderToken(requestAttempt.requestAttemptId)
+  const leaseIdentity = getProviderAdmissionRequestLeaseIdentity(requestAttempt.requestAttemptId)
+  const result = await acquireProviderAdmissionLeasePersisted({
+    holderToken,
+    leaseIdentity,
+    leaseKind: 'request',
+    requestAttemptId: requestAttempt.requestAttemptId,
+    snapshot,
+  })
+
+  if (result.acquired) {
+    return {holderToken, leaseIdentity, providerKey: snapshot.providerKey}
+  }
+
+  if (result.reason === 'staleProviderLimitSnapshot') {
+    return acquireProviderRequestAdmissionLease({requestAttempt, snapshot: result.currentSnapshot})
+  }
+
+  await waitForProviderAdmissionRetry()
+
+  return acquireProviderRequestAdmissionLease({requestAttempt, snapshot: result.currentSnapshot})
+}
+
+const releaseProviderRequestAdmissionLease = async (lease: ProviderRequestAdmissionLease): Promise<void> => {
+  await releaseProviderAdmissionLeaseWithResultThroughOwner(lease).catch(() => {
+    return {reason: 'notHolder' as const, released: false as const}
+  })
+  notifyProviderAdmissionRetryWaiters()
 }
 
 const getErrorMessage = (error: unknown): string => {
@@ -825,10 +965,15 @@ export const withJudgmentRequest = async <T>(
     fallbackBaseURL,
     modelId,
     providerKey,
+    providerFamily,
+    providerId,
+    providerLimit,
     providerConnectionId,
     providerLimitVersion,
     providerMaxInflightRequests,
+    providerName,
     providerUsesFamilyDefault,
+    resolvedDefaultCapacity,
     providerConnection,
     requestAttemptManifestOwner,
     workerUrls,
@@ -839,10 +984,15 @@ export const withJudgmentRequest = async <T>(
     modelId?: string | null
     providerConnectionId: string | null
     providerKey?: string | null
+    providerFamily?: string | null
+    providerId?: string | null
+    providerLimit?: number | null
     providerLimitVersion?: string | null
     providerConnection?: ProviderConnectionRecord | null
     providerMaxInflightRequests: number | null
+    providerName?: string | null
     providerUsesFamilyDefault: boolean
+    resolvedDefaultCapacity?: number | null
     requestAttemptManifestOwner?: JudgmentRequestAttemptManifestOwner | null
     workerUrls: string[]
   },
@@ -852,16 +1002,40 @@ export const withJudgmentRequest = async <T>(
     modelId,
     modelProvider: provider,
     providerKey,
+    providerFamily,
+    providerId,
+    providerLimit,
     providerConnectionId,
     providerLimitVersion,
     providerMaxInflightRequests,
+    providerName,
     providerUsesFamilyDefault,
+    resolvedDefaultCapacity,
   }
   const requestAttemptContext = createRequestAttemptContext(providerScope)
+  const providerAdmissionSnapshot = getProviderAdmissionSnapshot(providerScope)
   await recordRequestAttemptManifestStage({
     closeoutKind: 'slot_wait',
     owner: requestAttemptManifestOwner,
     requestAttempt: requestAttemptContext,
+  })
+  const providerAdmissionLease = await acquireProviderRequestAdmissionLease({
+    requestAttempt: requestAttemptContext,
+    snapshot: providerAdmissionSnapshot,
+  }).catch(async (error) => {
+    const finishedAt = new Date().toISOString()
+    await recordRequestAttemptManifestStage({
+      closeoutKind: 'slot_wait',
+      error: getErrorMessage(error),
+      finishedAt,
+      outcome: 'failure',
+      owner: requestAttemptManifestOwner,
+      requestAttempt: requestAttemptContext,
+    })
+    throw attachRuntimeRequestAttemptFieldsToError(
+      error,
+      getRuntimeRequestAttemptErrorFields({finishedAt, requestAttempt: requestAttemptContext}),
+    )
   })
   const slot = await acquireRequestSlot({
     fallbackBaseURL,
@@ -874,6 +1048,7 @@ export const withJudgmentRequest = async <T>(
     providerUsesFamilyDefault,
     workerUrls,
   }).catch(async (error) => {
+    await releaseProviderRequestAdmissionLease(providerAdmissionLease)
     const finishedAt = new Date().toISOString()
     await recordRequestAttemptManifestStage({
       closeoutKind: 'slot_wait',
@@ -930,6 +1105,7 @@ export const withJudgmentRequest = async <T>(
   } finally {
     markRequestFinished(judgmentsJobId)
     slot.release()
+    await releaseProviderRequestAdmissionLease(providerAdmissionLease)
   }
 }
 
@@ -938,9 +1114,11 @@ export const resetJudgmentRequestRuntimeForTests = (): void => {
   codexProviderWaiters.splice(0, codexProviderWaiters.length)
   workerWaiters.splice(0, workerWaiters.length)
   fallbackWaiters.splice(0, fallbackWaiters.length)
+  providerAdmissionRetryWaiters.splice(0, providerAdmissionRetryWaiters.length)
   jobRequestStates.clear()
   providerRequestStates.clear()
   fallbackInFlightByProviderKey.clear()
   codexInFlight = 0
   resetJudgmentEndpointAvailabilityForTests()
+  resetProviderAdmissionLeaseForTests()
 }
