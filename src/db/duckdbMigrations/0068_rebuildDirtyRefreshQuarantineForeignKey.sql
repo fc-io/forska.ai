@@ -1,7 +1,7 @@
-DROP INDEX IF EXISTS app.idx_app_project_mart_refresh_article_quarantine_barrier;
-DROP INDEX IF EXISTS app.idx_app_project_mart_refresh_article_quarantine_updated_at;
+DROP INDEX IF EXISTS app.idx_app_project_mart_dirty_refresh_article_quarantine_barrier;
+DROP INDEX IF EXISTS app.idx_app_project_mart_dirty_refresh_article_quarantine_updated_at;
 
-CREATE TEMP TABLE project_mart_dirty_refresh_article_quarantine_name_rebuild AS
+CREATE TEMP TABLE project_mart_dirty_refresh_article_quarantine_rebuild AS
 SELECT
   project_id,
   article_id,
@@ -11,9 +11,9 @@ SELECT
   resolved_at,
   created_at,
   updated_at
-FROM app.project_mart_refresh_article_quarantine;
+FROM app.project_mart_dirty_refresh_article_quarantine;
 
-DROP TABLE app.project_mart_refresh_article_quarantine;
+DROP TABLE app.project_mart_dirty_refresh_article_quarantine;
 
 CREATE TABLE app.project_mart_dirty_refresh_article_quarantine (
   project_id VARCHAR NOT NULL REFERENCES app.project(id),
@@ -46,9 +46,9 @@ SELECT
   resolved_at,
   created_at,
   updated_at
-FROM project_mart_dirty_refresh_article_quarantine_name_rebuild;
+FROM project_mart_dirty_refresh_article_quarantine_rebuild;
 
-DROP TABLE project_mart_dirty_refresh_article_quarantine_name_rebuild;
+DROP TABLE project_mart_dirty_refresh_article_quarantine_rebuild;
 
 CREATE INDEX IF NOT EXISTS idx_app_project_mart_dirty_refresh_article_quarantine_barrier
 ON app.project_mart_dirty_refresh_article_quarantine(project_id, resolved_at, dirty_token);

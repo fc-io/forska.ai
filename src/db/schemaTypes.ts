@@ -166,6 +166,7 @@ export type ProjectRecord = {
   dateFrom: Date | null
   dateTo: Date | null
   archived: boolean
+  deletePendingAt: Date | null
   createdAt: Date
   updatedAt: Date
 }

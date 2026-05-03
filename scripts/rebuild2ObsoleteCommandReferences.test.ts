@@ -43,10 +43,13 @@ const obsoletePatterns = [
   /db:duck:recover-project-refresh-claims/,
   /db:duck:repair-project-refresh-ledger/,
   /db:duck:repair-judgment-fact/,
+  /db:duck:purge-archived-marts/,
   /inspectProjectMartRefreshRisk/,
   /recoverProjectMartRefreshClaims/,
   /repairProjectMartRefreshLedger/,
   /repairJudgmentFactTable/,
+  /purgeArchivedProjectMarts/,
+  /reproArchivedProjectServingDelete/,
   /app\.mart_refresh_queue/,
 ] as const
 

@@ -11,6 +11,13 @@ export const getProjectAccess = async (projectId: string) => {
     SELECT id, name, archived, human_judgment_mode AS humanJudgmentMode
     FROM app.project
     WHERE id = '${escapeSqlString(projectId)}'
+      AND delete_pending_at IS NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.archived_project_delete_tombstone tombstone
+        WHERE tombstone.project_id = app.project.id
+          AND tombstone.completed_at IS NULL
+      )
     LIMIT 1
   `)
 

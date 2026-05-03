@@ -128,6 +128,13 @@ const getProjectRowSql = (projectId: string) => {
       updated_at AS updatedAt
     FROM app.project
     WHERE id = '${escapeSqlString(projectId)}'
+      AND delete_pending_at IS NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.archived_project_delete_tombstone tombstone
+        WHERE tombstone.project_id = app.project.id
+          AND tombstone.completed_at IS NULL
+      )
     LIMIT 1
   `
 }
@@ -142,6 +149,13 @@ const updateProjectTx = async (tx: AppTx, params: {projectId: string; updatePart
     UPDATE app.project
     SET ${params.updateParts.join(', ')}
     WHERE id = '${escapeSqlString(params.projectId)}'
+      AND delete_pending_at IS NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.archived_project_delete_tombstone tombstone
+        WHERE tombstone.project_id = app.project.id
+          AND tombstone.completed_at IS NULL
+      )
   `)
 
   return getProjectRow(tx, params.projectId)
@@ -407,6 +421,13 @@ export const projectsRoutes = new Elysia()
         FROM app.project p
         LEFT JOIN app.judgment_job jj ON jj.project_id = p.id
         WHERE jj.id IS NULL
+          AND p.delete_pending_at IS NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM app.archived_project_delete_tombstone tombstone
+            WHERE tombstone.project_id = p.id
+              AND tombstone.completed_at IS NULL
+          )
         ORDER BY p.created_at DESC
       `)
 
@@ -459,6 +480,13 @@ export const projectsRoutes = new Elysia()
       LEFT JOIN app.model m ON p.model_id = m.id
       LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
       WHERE p.archived = FALSE
+        AND p.delete_pending_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM app.archived_project_delete_tombstone tombstone
+          WHERE tombstone.project_id = p.id
+            AND tombstone.completed_at IS NULL
+        )
       ORDER BY p.name ASC
     `,
       )
@@ -530,6 +558,13 @@ export const projectsRoutes = new Elysia()
       LEFT JOIN app.model m ON p.model_id = m.id
       LEFT JOIN app.provider_connection pc ON pc.id = m.provider_connection_id
       WHERE p.archived = TRUE
+        AND p.delete_pending_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM app.archived_project_delete_tombstone tombstone
+          WHERE tombstone.project_id = p.id
+            AND tombstone.completed_at IS NULL
+        )
       ORDER BY p.created_at DESC
     `,
       )
@@ -602,6 +637,13 @@ export const projectsRoutes = new Elysia()
         updated_at AS updatedAt
       FROM app.project
       WHERE id = '${escapeSqlString(params.id)}'
+        AND delete_pending_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM app.archived_project_delete_tombstone tombstone
+          WHERE tombstone.project_id = app.project.id
+            AND tombstone.completed_at IS NULL
+        )
       LIMIT 1
     `,
       )
@@ -1068,6 +1110,13 @@ export const projectsRoutes = new Elysia()
           use_fulltext_no_images AS useFulltextNoImages
         FROM app.project
         WHERE id = '${escapeSqlString(params.id)}'
+          AND delete_pending_at IS NULL
+          AND NOT EXISTS (
+            SELECT 1
+            FROM app.archived_project_delete_tombstone tombstone
+            WHERE tombstone.project_id = app.project.id
+              AND tombstone.completed_at IS NULL
+          )
         LIMIT 1
       `)
 
@@ -1509,6 +1558,13 @@ export const projectsRoutes = new Elysia()
         date_to AS dateTo
       FROM app.project
       WHERE id = '${escapeSqlString(params.id)}'
+        AND delete_pending_at IS NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM app.archived_project_delete_tombstone tombstone
+          WHERE tombstone.project_id = app.project.id
+            AND tombstone.completed_at IS NULL
+        )
       LIMIT 1
     `,
       )

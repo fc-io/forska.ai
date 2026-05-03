@@ -4,7 +4,7 @@ import {
   getProjectMartLargeRebuildCycleQueueDelta,
   recordProjectMartLargeRebuildCycleMetric,
 } from '../utils/projectMartLargeRebuildRuntimeMetrics.ts'
-import {getDuckdbMartMaintenanceService} from './getDuckdbMartMaintenanceService.ts'
+import {getArchivedProjectCleanupService} from './archivedProjectCleanupService.ts'
 import {getProjectMartDirtyRefreshStateService} from './projectMartDirtyRefreshStateService.ts'
 import {
   getProjectMartLargeRebuildExecutor,
@@ -15,7 +15,7 @@ import {getProjectMartLargeRebuildStateService, type LargeRebuildClaim} from './
 
 type ProjectMartLargeRebuildRunnerDependencies = {
   archivedProjectCleanupService: {
-    purgeNextArchivedProjectMartBatch: () => Promise<{deletedRowCount: number; projectId: string | null}>
+    cleanupNextArchivedProjectBatch: () => Promise<{deletedRowCount: number; projectId: string | null}>
   }
   executor: {
     cleanupProjectReviewServingGenerationsBatch: (params?: {
@@ -194,7 +194,7 @@ const defaultLeaseMs = 30_000
 const defaultHeartbeatMs = 10_000
 
 const defaultDependencies: ProjectMartLargeRebuildRunnerDependencies = {
-  archivedProjectCleanupService: getDuckdbMartMaintenanceService(),
+  archivedProjectCleanupService: getArchivedProjectCleanupService(),
   executor: getProjectMartLargeRebuildExecutor(),
   largeRebuildStateService: getProjectMartLargeRebuildStateService(),
   refreshStateService: getProjectMartDirtyRefreshStateService(),
@@ -877,7 +877,7 @@ export const runProjectMartLargeRebuildCycle = async (
       return result
     }
 
-    const archivedCleanupResult = await dependencies.archivedProjectCleanupService.purgeNextArchivedProjectMartBatch()
+    const archivedCleanupResult = await dependencies.archivedProjectCleanupService.cleanupNextArchivedProjectBatch()
 
     if (archivedCleanupResult.deletedRowCount > 0) {
       const result = {
@@ -898,7 +898,7 @@ export const runProjectMartLargeRebuildCycle = async (
         endedAt: new Date().toISOString(),
         error: null,
         lastCommittedCursor: null,
-        phase: 'archived_project_mart_cleanup',
+        phase: 'archived_project_cleanup',
         projectId: result.projectId,
         startedAt,
         status: result.status,
