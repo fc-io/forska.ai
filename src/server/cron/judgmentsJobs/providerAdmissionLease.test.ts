@@ -2,7 +2,12 @@ import {afterEach, expect, test} from 'bun:test'
 
 import {
   acquireProviderAdmissionLease,
+  getProviderAdmissionLeaseTiming,
+  getProviderAdmissionProbeLeaseIdentity,
+  getProviderAdmissionRequestLeaseIdentity,
   getProviderBucketSnapshot,
+  providerAdmissionLeaseHeartbeatIntervalMs,
+  providerAdmissionLeaseTtlMs,
   publishProviderBucketSnapshot,
   releaseProviderAdmissionLease,
   resetProviderAdmissionLeaseForTests,
@@ -37,6 +42,56 @@ test('provider bucket snapshot resolves null maxInflightRequests to the family d
     resolvedDefaultCapacity: 6,
   })
   expect(snapshot.providerLimitVersion).toHaveLength(64)
+})
+
+test('request and probe lease identities are non-null canonical values', () => {
+  expect(getProviderAdmissionRequestLeaseIdentity(' request-attempt-a ')).toBe('request:request-attempt-a')
+  expect(
+    getProviderAdmissionProbeLeaseIdentity({
+      endpointAvailabilityKey: 'connection-a::http://localhost:30001',
+      probeAttemptId: 'probe-attempt-a',
+    }),
+  ).toBe('probe:connection-a::http://localhost:30001:probe-attempt-a')
+  expect(() => {
+    getProviderAdmissionRequestLeaseIdentity(' ')
+  }).toThrow('requestAttemptId is required')
+  expect(() => {
+    getProviderAdmissionProbeLeaseIdentity({
+      endpointAvailabilityKey: 'connection-a::http://localhost:30001',
+      probeAttemptId: '',
+    })
+  }).toThrow('probeAttemptId is required')
+})
+
+test('provider admission lease timing uses the injected owner clock', () => {
+  const timing = getProviderAdmissionLeaseTiming({
+    clock: {
+      now: () => {
+        return new Date('2026-05-04T10:00:00.000Z')
+      },
+    },
+  })
+
+  expect(timing).toEqual({
+    acquiredAt: new Date('2026-05-04T10:00:00.000Z'),
+    expiresAt: new Date('2026-05-04T10:01:00.000Z'),
+    heartbeatAt: new Date('2026-05-04T10:00:00.000Z'),
+    heartbeatIntervalMs: providerAdmissionLeaseHeartbeatIntervalMs,
+    ttlMs: providerAdmissionLeaseTtlMs,
+  })
+})
+
+test('provider admission lease timing clamps custom ttl to a positive expiry window', () => {
+  const timing = getProviderAdmissionLeaseTiming({
+    clock: {
+      now: () => {
+        return new Date('2026-05-04T10:00:00.000Z')
+      },
+    },
+    ttlMs: 0,
+  })
+
+  expect(timing).toMatchObject({expiresAt: new Date('2026-05-04T10:00:00.001Z'), heartbeatIntervalMs: 1, ttlMs: 1})
 })
 
 test('stale providerLimitVersion callers refresh instead of acquiring a new lease', () => {

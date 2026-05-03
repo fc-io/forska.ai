@@ -6,6 +6,9 @@ import {getNormalizedProviderKeyProvider, getProviderKey} from './providerKey.ts
 
 type Capacity = {maxInflight: number; maxBurst: number; workerCount: number}
 
+export type ProviderAdmissionLeaseKind = 'probe' | 'request'
+export type ProviderAdmissionLeaseClock = {now: () => Date}
+
 export type ProviderBucketSnapshot = {
   maxInflightRequests: number | null
   providerFamily: string
@@ -60,7 +63,68 @@ type ProviderAdmissionLease = {
 
 const currentProviderSnapshots = new Map<string, ProviderBucketSnapshot>()
 const providerAdmissionLeases = new Map<string, ProviderAdmissionLease>()
-const defaultLeaseTtlMs = 60_000
+
+export const providerAdmissionLeaseTtlMs = 60_000
+export const providerAdmissionLeaseHeartbeatIntervalMs = 15_000
+
+const defaultProviderAdmissionLeaseClock: ProviderAdmissionLeaseClock = {
+  now: () => {
+    return new Date()
+  },
+}
+
+const getNormalizedLeaseDurationMs = (value: number): number => {
+  return Number.isFinite(value) ? Math.max(1, Math.trunc(value)) : providerAdmissionLeaseTtlMs
+}
+
+const getRequiredLeaseIdentityPart = ({label, value}: {label: string; value: string}): string => {
+  const trimmed = value.trim()
+
+  if (trimmed.length === 0) {
+    throw new Error(`${label} is required for provider admission lease identity`)
+  }
+
+  return trimmed
+}
+
+export const getProviderAdmissionRequestLeaseIdentity = (requestAttemptId: string): string => {
+  return `request:${getRequiredLeaseIdentityPart({label: 'requestAttemptId', value: requestAttemptId})}`
+}
+
+export const getProviderAdmissionProbeLeaseIdentity = ({
+  endpointAvailabilityKey,
+  probeAttemptId,
+}: {
+  endpointAvailabilityKey: string
+  probeAttemptId: string
+}): string => {
+  const endpointKey = getRequiredLeaseIdentityPart({label: 'endpointAvailabilityKey', value: endpointAvailabilityKey})
+  const probeId = getRequiredLeaseIdentityPart({label: 'probeAttemptId', value: probeAttemptId})
+
+  return `probe:${endpointKey}:${probeId}`
+}
+
+export const getProviderAdmissionLeaseTiming = ({
+  clock = defaultProviderAdmissionLeaseClock,
+  ttlMs = providerAdmissionLeaseTtlMs,
+}: {clock?: ProviderAdmissionLeaseClock; ttlMs?: number} = {}): {
+  acquiredAt: Date
+  expiresAt: Date
+  heartbeatAt: Date
+  heartbeatIntervalMs: number
+  ttlMs: number
+} => {
+  const currentNow = clock.now()
+  const normalizedTtlMs = getNormalizedLeaseDurationMs(ttlMs)
+
+  return {
+    acquiredAt: new Date(currentNow.getTime()),
+    expiresAt: new Date(currentNow.getTime() + normalizedTtlMs),
+    heartbeatAt: new Date(currentNow.getTime()),
+    heartbeatIntervalMs: Math.min(providerAdmissionLeaseHeartbeatIntervalMs, normalizedTtlMs),
+    ttlMs: normalizedTtlMs,
+  }
+}
 
 const getTrimmedValue = (value: string | null | undefined): string | null => {
   const trimmed = String(value ?? '').trim()
@@ -207,7 +271,7 @@ export const acquireProviderAdmissionLease = ({
   leaseIdentity,
   nowMs = Date.now(),
   snapshot,
-  ttlMs = defaultLeaseTtlMs,
+  ttlMs = providerAdmissionLeaseTtlMs,
 }: {
   holderToken: string
   leaseIdentity: string
@@ -261,7 +325,7 @@ export const acquireProviderAdmissionLease = ({
   }
 
   providerAdmissionLeases.set(leaseKey, {
-    expiresAtMs: nowMs + Math.max(1, ttlMs),
+    expiresAtMs: nowMs + getNormalizedLeaseDurationMs(ttlMs),
     holderToken,
     leaseIdentity,
     providerKey: snapshot.providerKey,
