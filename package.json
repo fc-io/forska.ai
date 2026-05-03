@@ -55,6 +55,7 @@
     "db:duck:recover-project-refresh-claims": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/recoverProjectMartRefreshClaims.ts",
     "db:duck:repair-project-refresh-ledger": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/repairProjectMartRefreshLedger.ts",
     "db:duck:repair-judgment-fact": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/repairJudgmentFactTable.ts",
+    "db:duck:rebuild2-cutover": "SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/rebuild2Cutover.ts",
     "db:duck:rebuild-marts": "bun scripts/backfillReviewServingV3.ts",
     "db:duck:backfill-review-serving-v3": "bun scripts/backfillReviewServingV3.ts",
     "db:duck:purge-archived-marts": "bun scripts/purgeArchivedProjectMarts.ts",
