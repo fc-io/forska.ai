@@ -5,9 +5,11 @@ import {migrateDuckdb} from '../db/migrateDuckdb.ts'
 import {fullTextConversionJobsCron} from './cron/fullTextConversionJobs.ts'
 import {fullTextJobsCron} from './cron/fullTextJobs.ts'
 import {judgmentsJobsJudgingCron, judgmentsJobsMaintenanceCron} from './cron/judgmentsJobs.ts'
-import {replayJudgeWorkerCompletionOutbox} from './cron/judgmentsJobs/judgeWorkerCompletionJournal.ts'
+import {runJudgeWorkerRolloutCleanup} from './cron/judgmentsJobs/judgeWorkerCompletionJournal.ts'
 import {runStartupAutomaticOrphanedQueueRepair} from './cron/judgmentsJobs/judgmentJobRepair.ts'
+import {getDefaultJudgmentServerJobId} from './cron/judgmentsJobs/judgmentJobServerIdentity.ts'
 import {getJudgmentJobSqliteService} from './cron/judgmentsJobs/judgmentJobSqliteService.ts'
+import {runStartupJudgmentRolloutCleanup} from './cron/judgmentsJobs/judgmentStartupRolloutCleanup.ts'
 import {nvidiaSmiCron} from './cron/nvidiaSmi.ts'
 import {adminInvestigateRoutes} from './routes/AdminInvestigateRoutes.ts'
 import {apiProxyRoutes} from './routes/ApiProxyRoutes.ts'
@@ -128,11 +130,31 @@ if (canCurrentServerOwnDuckdb()) {
 }
 
 if (getCurrentServerRole() === 'judge-worker') {
-  await replayJudgeWorkerCompletionOutbox()
+  await runJudgeWorkerRolloutCleanup()
 }
 
 if (getCurrentServerRole() !== 'judge-worker' && shouldCurrentServerRunJudgingLoops()) {
   await getJudgmentJobSqliteService().recoverJudgmentJobLeasesOnStartup()
+  const startupRolloutCleanup = await runStartupJudgmentRolloutCleanup({claimedBy: getDefaultJudgmentServerJobId()})
+
+  if (
+    startupRolloutCleanup.discardedRuntimeRows > 0
+    || startupRolloutCleanup.drainingJobCount > 0
+    || startupRolloutCleanup.failedJobCount > 0
+    || startupRolloutCleanup.importedOutboxRows > 0
+  ) {
+    writeRuntimeOperatorLogEvent({
+      attrs: startupRolloutCleanup,
+      event: 'judgment-job.startup-rollout-cleanup',
+      message:
+        `[judgments] startup rollout cleanup processed ${startupRolloutCleanup.jobCount} job(s), `
+        + `${startupRolloutCleanup.importedOutboxRows} imported, `
+        + `${startupRolloutCleanup.discardedRuntimeRows} runtime row(s) discarded, `
+        + `${startupRolloutCleanup.drainingJobCount} draining, ${startupRolloutCleanup.failedJobCount} failed`,
+      severity: 'INFO',
+    })
+  }
+
   const startupOrphanedQueueRepair = await runStartupAutomaticOrphanedQueueRepair()
 
   if (

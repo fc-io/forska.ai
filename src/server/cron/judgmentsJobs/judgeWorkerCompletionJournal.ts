@@ -24,6 +24,7 @@ import {
   shouldExhaustRequestAttemptManifestCas,
   stringifyManifestEntries,
   stringifyRequestAttempts,
+  withDurableCloseoutRef,
 } from './judgmentRequestAttemptManifest.ts'
 import type {RunningJudgmentJob} from './judgmentsJobsGetRunningJobs.ts'
 import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
@@ -139,6 +140,17 @@ type PendingTokenUseRow = {
   requestAttemptsJson: string | null
   tokenUseJson: string
 }
+type AcceptedClaimRolloutRow = AcceptedClaimManifestRow & {
+  claimId: string
+  jobId: string
+  payloadJson: string
+  queueRecordId: string
+}
+type JudgeWorkerRolloutCleanupResult = {
+  acceptedClaimsDeleted: number
+  closeoutIntentsInserted: number
+  replay: CompletionReplayResult
+}
 
 class OwnerBackedJudgmentRequestError extends Error {
   responseText: string
@@ -166,6 +178,8 @@ export const shouldUseJudgeWorkerOwnerHandoff = (): boolean => {
 const parseJson = <T>(value: string): T => {
   return JSON.parse(value) as T
 }
+
+const robustSendRolloutDiscardedReason = 'robustSendRolloutDiscarded'
 
 const getErrorMessageValue = (value: unknown): string => {
   return typeof value === 'string' ? value : value == null ? '' : JSON.stringify(value)
@@ -758,6 +772,154 @@ const getPendingTokenUseRows = (database: Database): PendingTokenUseRow[] => {
     .all() as PendingTokenUseRow[]
 }
 
+const getAcceptedClaimRolloutRows = (database: Database): AcceptedClaimRolloutRow[] => {
+  return database
+    .query(
+      `
+        SELECT
+          claim_id AS claimId,
+          job_id AS jobId,
+          queue_record_id AS queueRecordId,
+          payload_json AS payloadJson,
+          request_attempt_manifest_json AS requestAttemptManifestJson,
+          request_attempt_manifest_version AS requestAttemptManifestVersion,
+          request_attempt_manifest_repair_json AS requestAttemptManifestRepairJson
+        FROM accepted_claim
+        ORDER BY accepted_at ASC, claim_id ASC
+      `,
+    )
+    .all() as AcceptedClaimRolloutRow[]
+}
+
+const acceptedClaimHasCompletionOutboxIntent = (database: Database, claimId: string): boolean => {
+  const row = database
+    .query(
+      `
+        SELECT claim_id AS claimId
+        FROM completion_outbox
+        WHERE claim_id = ?
+        LIMIT 1
+      `,
+    )
+    .get(claimId) as {claimId: string} | null
+
+  return row !== null
+}
+
+const getRolloutCloseoutRequestAttempts = ({
+  now,
+  row,
+}: {
+  now: string
+  row: AcceptedClaimRolloutRow
+}): JudgmentRequestAttemptJsonEntry[] => {
+  const requestAttempts = parseRequestAttempts(row.requestAttemptManifestJson).map((attempt) => {
+    return {
+      ...attempt,
+      closeoutKind: 'completion_outbox' as const,
+      closeoutReason: robustSendRolloutDiscardedReason,
+      finishedAt: attempt.finishedAt ?? now,
+      outcome: attempt.outcome === 'success' ? ('success' as const) : ('failure' as const),
+      updatedAt: now,
+    }
+  })
+
+  return withDurableCloseoutRef({
+    closeoutKind: 'completion_outbox',
+    ref: {claimId: row.claimId, jobId: row.jobId, queueRecordId: row.queueRecordId},
+    requestAttempts,
+  })
+}
+
+const getRolloutCompletionPayload = (row: AcceptedClaimRolloutRow): JudgeWorkerCompletionPayload => {
+  const prompt = parseJson<PromptToProcess>(row.payloadJson)
+  const requestAttempts = getRolloutCloseoutRequestAttempts({now: new Date().toISOString(), row})
+
+  return {
+    articleId: prompt.articleId,
+    claimId: row.claimId,
+    executionSnapshotHash: prompt.executionSnapshotHash,
+    executionSnapshotId: prompt.executionSnapshotId,
+    jobId: row.jobId,
+    modelId: prompt.modelId,
+    projectId: prompt.projectId,
+    promptId: prompt.promptId,
+    queueRecordId: row.queueRecordId,
+    requestAttempts,
+    retryAfterMs: null,
+    status: 'retry',
+    useAbstract: prompt.useAbstract,
+    useFulltext: prompt.useFulltext,
+    useFulltextNoImages: prompt.useFulltextNoImages,
+    useTitle: prompt.useTitle,
+  }
+}
+
+const insertRolloutCloseoutIntent = (database: Database, row: AcceptedClaimRolloutRow): number => {
+  const payload = getRolloutCompletionPayload(row)
+  const requestAttemptsJson = stringifyRequestAttempts(payload.requestAttempts)
+  const now = new Date().toISOString()
+  const result = database
+    .query(
+      `
+        INSERT INTO completion_outbox (
+          claim_id,
+          job_id,
+          queue_record_id,
+          payload_json,
+          request_attempts_json,
+          status,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(claim_id) DO UPDATE SET
+          request_attempts_json = COALESCE(completion_outbox.request_attempts_json, EXCLUDED.request_attempts_json),
+          updated_at = EXCLUDED.updated_at
+        WHERE completion_outbox.acked_at IS NULL
+      `,
+    )
+    .run(
+      payload.claimId,
+      payload.jobId,
+      payload.queueRecordId,
+      JSON.stringify(payload),
+      requestAttemptsJson,
+      payload.status ?? 'retry',
+      now,
+      now,
+    ) as {changes?: number}
+
+  return Number(result.changes ?? 0)
+}
+
+const recordRolloutCloseoutIntents = (database: Database): number => {
+  return database.transaction((rows: AcceptedClaimRolloutRow[]) => {
+    return rows.reduce((count, row) => {
+      return acceptedClaimHasCompletionOutboxIntent(database, row.claimId)
+        ? count
+        : count + insertRolloutCloseoutIntent(database, row)
+    }, 0)
+  })(getAcceptedClaimRolloutRows(database))
+}
+
+const deleteAcceptedClaimsWithOwnerAck = (database: Database): number => {
+  const result = database
+    .query(
+      `
+        DELETE FROM accepted_claim
+        WHERE claim_id IN (
+          SELECT ac.claim_id
+          FROM accepted_claim ac
+          INNER JOIN completion_outbox co ON co.claim_id = ac.claim_id
+          WHERE co.acked_at IS NOT NULL
+        )
+      `,
+    )
+    .run() as {changes?: number}
+
+  return Number(result.changes ?? 0)
+}
+
 export const enqueueJudgeWorkerCompletion = async (payload: JudgeWorkerCompletionPayload): Promise<void> => {
   const database = openJournalDatabase()
   const now = new Date().toISOString()
@@ -1086,6 +1248,27 @@ export const replayJudgeWorkerCompletionOutbox = async (): Promise<CompletionRep
   reactivateAckedCompletionsWithPendingTokenUse(database)
 
   return replayCompletionRows(getUnackedCompletionRows(database))
+}
+
+export const runJudgeWorkerRolloutCleanup = async (): Promise<JudgeWorkerRolloutCleanupResult> => {
+  const firstReplay = await replayJudgeWorkerCompletionOutbox()
+  const database = openJournalDatabase()
+  const closeoutIntentsInserted = recordRolloutCloseoutIntents(database)
+  const secondReplay =
+    closeoutIntentsInserted > 0
+      ? await replayJudgeWorkerCompletionOutbox()
+      : {ackedCount: 0, discardedCount: 0, failedCount: 0}
+  const acceptedClaimsDeleted = deleteAcceptedClaimsWithOwnerAck(database)
+
+  return {
+    acceptedClaimsDeleted,
+    closeoutIntentsInserted,
+    replay: {
+      ackedCount: firstReplay.ackedCount + secondReplay.ackedCount,
+      discardedCount: firstReplay.discardedCount + secondReplay.discardedCount,
+      failedCount: firstReplay.failedCount + secondReplay.failedCount,
+    },
+  }
 }
 
 export const flushJudgeWorkerCompletionOutboxForClaim = async (claimId: string): Promise<CompletionReplayResult> => {

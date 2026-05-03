@@ -3232,6 +3232,46 @@ const sqliteService = {
       })()
     })
   },
+  discardActiveRuntimeRows: async (jobId: string, serverJobId?: string): Promise<number> => {
+    return (
+      (await withOwnedJobDatabase(
+        jobId,
+        false,
+        (database) => {
+          const now = new Date().toISOString()
+
+          return database.transaction(() => {
+            const result = database
+              .query(
+                `
+                  DELETE FROM queue_prompt
+                  WHERE status IN ('ready', 'claimed', 'running', 'sent')
+                `,
+              )
+              .run() as {changes?: number}
+
+            database
+              .query(
+                `
+                  UPDATE job_scan_state
+                  SET cursor_last_date = NULL,
+                      cursor_last_article_id = NULL,
+                      cursor_priority_bucket = 0,
+                      scan_epoch = 0,
+                      exhausted_at = NULL,
+                      updated_at = ?
+                  WHERE job_id = ?
+                `,
+              )
+              .run(now, jobId)
+
+            return Number(result.changes ?? 0)
+          })()
+        },
+        serverJobId,
+      )) ?? 0
+    )
+  },
   closeAll: async () => {
     await Promise.all(
       Array.from(ownedJobLeases.keys()).map((jobId) => {

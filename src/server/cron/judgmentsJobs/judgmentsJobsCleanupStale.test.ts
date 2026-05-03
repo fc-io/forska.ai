@@ -17,6 +17,7 @@ process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 
 let closeDatabase: (() => Promise<void>) | null = null
 let judgmentsJobsCleanupStale: (() => Promise<void>) | null = null
+let runStartupJudgmentRolloutCleanup: ((input: {claimedBy: string}) => Promise<unknown>) | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
 let sqliteService: Awaited<typeof import('./judgmentJobSqliteService.ts')>['getJudgmentJobSqliteService'] | null = null
@@ -29,6 +30,7 @@ beforeAll(async () => {
     {resetServerRuntimeRoleForTests},
     sqliteModule,
     cleanupModule,
+    rolloutCleanupModule,
   ] = await Promise.all([
     import('../../../db/migrateDuckdb.ts'),
     import('../../services/appDatabaseService.ts'),
@@ -36,6 +38,7 @@ beforeAll(async () => {
     import('../../utils/serverRuntimeRole.ts'),
     import('./judgmentJobSqliteService.ts'),
     import('./judgmentsJobsCleanupStale.ts'),
+    import('./judgmentStartupRolloutCleanup.ts'),
   ])
 
   resetDuckdbServiceForTests()
@@ -49,6 +52,7 @@ beforeAll(async () => {
     return database.close()
   }
   judgmentsJobsCleanupStale = cleanupModule.judgmentsJobsCleanupStale
+  runStartupJudgmentRolloutCleanup = rolloutCleanupModule.runStartupJudgmentRolloutCleanup
   queryDatabase = <T>(statement: string) => {
     return database.queryJson<T>(statement)
   }
@@ -56,6 +60,196 @@ beforeAll(async () => {
     return database.run(statement)
   }
   sqliteService = sqliteModule.getJudgmentJobSqliteService
+})
+
+test('startup rollout cleanup preserves local completion evidence before discarding active runtime rows', async () => {
+  if (!queryDatabase || !runDatabase || !runStartupJudgmentRolloutCleanup || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const timestamp = Date.now()
+  const connectionId = `startup-rollout-connection-${timestamp}`
+  const modelId = `startup-rollout-model-${timestamp}`
+  const projectId = `startup-rollout-project-${timestamp}`
+  const jobId = `startup-rollout-job-${timestamp}`
+  const judgedArticleId = `startup-rollout-judged-article-${timestamp}`
+  const judgedPromptId = `startup-rollout-judged-prompt-${timestamp}`
+  const readyArticleId = `startup-rollout-ready-article-${timestamp}`
+  const readyPromptId = `startup-rollout-ready-prompt-${timestamp}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Startup rollout cleanup test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_id, article_title, article_created_at, article_updated_at)
+    VALUES
+      ('${judgedArticleId}', 'external-${judgedArticleId}', 'Startup rollout judged article', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T00:00:00.000Z'),
+      ('${readyArticleId}', 'external-${readyArticleId}', 'Startup rollout ready article', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T00:00:00.000Z')
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES
+      ('${judgedPromptId}', 'Startup rollout judged prompt', '${judgedPromptId}-hash'),
+      ('${readyPromptId}', 'Startup rollout ready prompt', '${readyPromptId}-hash')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'running', 'active')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(
+    jobId,
+    [
+      {articleId: judgedArticleId, promptId: judgedPromptId},
+      {articleId: readyArticleId, promptId: readyPromptId},
+    ],
+    'server-a',
+  )
+
+  const [claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt for startup rollout cleanup test')
+  }
+
+  await service.recordJudgmentSuccess(jobId, {
+    answeredOriginal: 'yes',
+    answeredOriginalAsArray: ['yes'],
+    articleId: claimedPrompt.articleId,
+    chunkingStrategy: null,
+    confidenceOriginal: 50,
+    createdAt: new Date(),
+    explanation: 'because',
+    isAnswered: true,
+    judgmentId: `startup-rollout-judgment-${timestamp}`,
+    modelId,
+    projectId,
+    promptId: claimedPrompt.promptId,
+    queuePromptId: claimedPrompt.recordId,
+    quotes: ['quote'],
+    rawResponseJson: {answer: 'yes'},
+    snapshotProjectId: projectId,
+    snapshotProjectModelName: 'Qwen 35B',
+    updatedAt: new Date(),
+    useAbstract: true,
+    useFulltext: false,
+    useFulltextNoImages: false,
+    useTitle: true,
+  })
+
+  expect(await service.getUnexportedOutboxCount(jobId)).toBe(1)
+
+  await runStartupJudgmentRolloutCleanup({claimedBy: 'server-a'})
+
+  const health = await service.getHealthSnapshot(jobId)
+  const [job] = await queryDatabase<{error: unknown; status: string; storageState: string}>(`
+    SELECT
+      TO_JSON(error) AS error,
+      status,
+      storage_state AS storageState
+    FROM app.judgment_job
+    WHERE id = '${jobId}'
+  `)
+  const [judgmentCount] = await queryDatabase<{count: number}>(`
+    SELECT COUNT(*) AS count
+    FROM app.judgment
+    WHERE article_id = '${judgedArticleId}'
+      AND prompt_id = '${judgedPromptId}'
+      AND model_id = '${modelId}'
+  `)
+
+  expect(job).toEqual({error: null, status: 'paused', storageState: 'draining'})
+  expect(Number(judgmentCount?.count ?? 0)).toBe(1)
+  expect(health.outboxRowCount).toBe(1)
+  expect(health.pendingCompletionAckCount).toBe(1)
+  expect(health.promptCounts).toEqual({claimed: 0, judged: 1, ready: 0, running: 0, skipped: 0})
+
+  await service.deleteJob(jobId)
+  await runDatabase(`
+    UPDATE app.judgment_job
+    SET status = 'completed',
+        storage_state = 'drained'
+    WHERE id = '${jobId}'
+  `)
+})
+
+test('startup rollout cleanup fails local jobs only when no completion evidence remains', async () => {
+  if (!queryDatabase || !runDatabase || !runStartupJudgmentRolloutCleanup || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const timestamp = Date.now()
+  const connectionId = `startup-rollout-empty-connection-${timestamp}`
+  const modelId = `startup-rollout-empty-model-${timestamp}`
+  const projectId = `startup-rollout-empty-project-${timestamp}`
+  const jobId = `startup-rollout-empty-job-${timestamp}`
+  const articleId = `startup-rollout-empty-article-${timestamp}`
+  const promptId = `startup-rollout-empty-prompt-${timestamp}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Startup rollout no evidence test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_id, article_title, article_created_at, article_updated_at)
+    VALUES ('${articleId}', 'external-${articleId}', 'Startup rollout no evidence article', TIMESTAMPTZ '2026-04-01T00:00:00.000Z', TIMESTAMPTZ '2026-04-01T00:00:00.000Z')
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES ('${promptId}', 'Startup rollout no evidence prompt', '${promptId}-hash')
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'running', 'active')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
+
+  await runStartupJudgmentRolloutCleanup({claimedBy: 'server-a'})
+
+  const health = await service.getHealthSnapshot(jobId)
+  const [job] = await queryDatabase<{error: unknown; status: string; storageState: string}>(`
+    SELECT
+      TO_JSON(error) AS error,
+      status,
+      storage_state AS storageState
+    FROM app.judgment_job
+    WHERE id = '${jobId}'
+  `)
+
+  expect(job).toEqual({error: '["robustSendRolloutDiscarded"]', status: 'failed', storageState: 'active'})
+  expect(health.outboxRowCount).toBe(0)
+  expect(health.pendingCompletionAckCount).toBe(0)
+  expect(health.promptCounts).toEqual({claimed: 0, judged: 0, ready: 0, running: 0, skipped: 0})
+
+  await service.deleteJob(jobId)
+  await runDatabase(`
+    UPDATE app.judgment_job
+    SET status = 'completed',
+        storage_state = 'drained'
+    WHERE id = '${jobId}'
+  `)
 })
 
 afterAll(async () => {
