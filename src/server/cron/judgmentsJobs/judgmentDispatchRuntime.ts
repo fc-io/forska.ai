@@ -15,6 +15,7 @@ import {getProviderKey} from './providerKey.ts'
 export type ProviderQueueInput = {
   modelId?: string | null
   modelProvider?: string | null
+  providerKey?: string | null
   providerConnectionId: string | null
   providerMaxInflightRequests: number | null
   providerUsesFamilyDefault: boolean
@@ -108,12 +109,15 @@ const defaultRecoverPrompts = async (prompts: PromptToProcess[], _reason: string
 }
 
 const getProviderDispatchKey = (input: ProviderQueueInput): string => {
-  return getProviderKey({
-    modelId: input.modelId,
-    modelProvider: input.modelProvider,
-    providerConnectionId: input.providerConnectionId,
-    useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
-  })
+  return (
+    input.providerKey
+    ?? getProviderKey({
+      modelId: input.modelId,
+      modelProvider: input.modelProvider,
+      providerConnectionId: input.providerConnectionId,
+      useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
+    })
+  )
 }
 
 const getProviderActivePromptLimit = ({providerMaxInflightRequests}: ProviderQueueInput): number => {
@@ -128,6 +132,7 @@ const getPromptProviderQueueInput = (prompt: PromptToProcess): ProviderQueueInpu
   return {
     modelId: prompt.modelId,
     modelProvider: prompt.modelProvider,
+    providerKey: prompt.providerKey,
     providerConnectionId: prompt.providerConnectionId,
     providerMaxInflightRequests: prompt.providerMaxInflightRequests,
     providerUsesFamilyDefault: prompt.providerUsesFamilyDefault,

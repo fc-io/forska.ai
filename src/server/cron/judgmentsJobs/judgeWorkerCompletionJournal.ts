@@ -10,6 +10,7 @@ import {getCurrentJudgeWorkerJournalIdentity} from '../../utils/judgeWorkerJourn
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import type {RunningJudgmentJob} from './judgmentsJobsGetRunningJobs.ts'
 import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
+import type {ProviderBucketSnapshot} from './providerAdmissionLease.ts'
 
 export type JudgeWorkerTokenUseSummary = {
   failedRequests: number
@@ -68,7 +69,7 @@ export type JudgeWorkerCompletionPayload = {
   useTitle: boolean
 }
 
-export type OwnerBackedJudgmentJobInfo = {
+export type OwnerBackedJudgmentJobInfo = ProviderBucketSnapshot & {
   modelBaseUrl: string | null
   modelId: string
   modelMetadataJson: unknown

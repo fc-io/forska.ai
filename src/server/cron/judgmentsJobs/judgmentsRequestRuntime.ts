@@ -28,7 +28,9 @@ type RequestWaiter<T> = {resolve: (value: T) => void; reject: (error: unknown) =
 type ProviderRequestScope = {
   modelId?: string | null
   modelProvider?: string | null
+  providerKey?: string | null
   providerConnectionId: string | null
+  providerLimitVersion?: string | null
   providerMaxInflightRequests: number | null
   providerUsesFamilyDefault: boolean
 }
@@ -59,12 +61,15 @@ const getNonCodexCapacity = () => {
 }
 
 const getProviderRequestKey = (providerScope: ProviderRequestScope): string => {
-  return getProviderKey({
-    modelId: providerScope.modelId,
-    modelProvider: providerScope.modelProvider,
-    providerConnectionId: providerScope.providerConnectionId,
-    useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
-  })
+  return (
+    providerScope.providerKey
+    ?? getProviderKey({
+      modelId: providerScope.modelId,
+      modelProvider: providerScope.modelProvider,
+      providerConnectionId: providerScope.providerConnectionId,
+      useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
+    })
+  )
 }
 
 const getProviderRequestState = (providerKey: string): ProviderRequestState => {
@@ -704,7 +709,9 @@ const acquireRequestSlot = async ({
   provider,
   fallbackBaseURL,
   modelId,
+  providerKey,
   providerConnectionId,
+  providerLimitVersion,
   providerMaxInflightRequests,
   providerUsesFamilyDefault,
   workerUrls,
@@ -713,6 +720,8 @@ const acquireRequestSlot = async ({
   fallbackBaseURL: string
   modelId?: string | null
   providerConnectionId: string | null
+  providerKey?: string | null
+  providerLimitVersion?: string | null
   providerMaxInflightRequests: number | null
   providerUsesFamilyDefault: boolean
   workerUrls: string[]
@@ -720,7 +729,9 @@ const acquireRequestSlot = async ({
   const providerScope = {
     modelId,
     modelProvider: provider,
+    providerKey,
     providerConnectionId,
+    providerLimitVersion,
     providerMaxInflightRequests,
     providerUsesFamilyDefault,
   }
@@ -753,7 +764,9 @@ export const withJudgmentRequest = async <T>(
     provider,
     fallbackBaseURL,
     modelId,
+    providerKey,
     providerConnectionId,
+    providerLimitVersion,
     providerMaxInflightRequests,
     providerUsesFamilyDefault,
     providerConnection,
@@ -764,6 +777,8 @@ export const withJudgmentRequest = async <T>(
     fallbackBaseURL: string
     modelId?: string | null
     providerConnectionId: string | null
+    providerKey?: string | null
+    providerLimitVersion?: string | null
     providerConnection?: ProviderConnectionRecord | null
     providerMaxInflightRequests: number | null
     providerUsesFamilyDefault: boolean
@@ -776,6 +791,8 @@ export const withJudgmentRequest = async <T>(
     modelId,
     provider,
     providerConnectionId,
+    providerKey,
+    providerLimitVersion,
     providerMaxInflightRequests,
     providerUsesFamilyDefault,
     workerUrls,

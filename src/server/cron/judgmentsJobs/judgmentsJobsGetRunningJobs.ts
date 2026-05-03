@@ -5,6 +5,7 @@ import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getOwnerBackedRunningJudgmentJobs, shouldUseJudgeWorkerOwnerHandoff} from './judgeWorkerCompletionJournal.ts'
 import {getJudgmentJobSqliteJobIds} from './judgmentJobPaths.ts'
 import {filterRunningJobsBySqlitePreflight} from './judgmentJobSqlitePreflight.ts'
+import {getProviderBucketSnapshot, type ProviderBucketSnapshot} from './providerAdmissionLease.ts'
 
 const runningJobsLogger = createRateLimitedLogger({windowMs: 30_000})
 
@@ -34,19 +35,59 @@ export type RunningJudgmentJob = {
   modelId: string
   modelName: string | null
   modelProvider: string | null
+  providerFamily?: string
+  providerId?: string
+  providerKey?: string
+  providerLimit?: number
+  providerLimitVersion?: string
+  providerName?: string
+  providerUsesFamilyDefault?: boolean
   quarantineReason: string | null
   providerConnectionId: string | null
   projectId: string
+  resolvedDefaultCapacity?: number
   storageState: string
 }
 
+type RunningJudgmentJobRow = Omit<RunningJudgmentJob, 'providerName'> & {
+  providerConnectionUpdatedAt?: Date | string | null
+  providerName?: string | null
+}
+
+const getRunningJobProviderSnapshot = (
+  job: RunningJudgmentJobRow,
+  useOwnerBackedSyntheticProviderId: boolean,
+): ProviderBucketSnapshot => {
+  return getProviderBucketSnapshot({
+    maxInflightRequests: job.maxInflightRequests,
+    modelId: job.modelId,
+    modelProvider: job.modelProvider,
+    providerConnectionId: job.providerConnectionId,
+    providerConnectionUpdatedAt: job.providerConnectionUpdatedAt,
+    providerName: job.providerName ?? job.modelName,
+    useOwnerBackedSyntheticProviderId,
+  })
+}
+
+export const attachProviderBucketSnapshotToRunningJob = (
+  job: RunningJudgmentJobRow,
+  useOwnerBackedSyntheticProviderId = false,
+): RunningJudgmentJob => {
+  const snapshot = getRunningJobProviderSnapshot(job, useOwnerBackedSyntheticProviderId)
+  const {providerConnectionUpdatedAt: _providerConnectionUpdatedAt, ...runningJob} = job
+
+  return {...runningJob, ...snapshot}
+}
+
 const getRunningJobFromDatabase = async (jobId: string): Promise<RunningJudgmentJob | null> => {
-  const [row] = await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<RunningJudgmentJob>(`
+  const [row] = await getJudgeWorkerReadOnlyAppDatabaseService().queryJson<RunningJudgmentJobRow>(`
     SELECT
       jj.id AS id,
       jj.project_id AS projectId,
       pc.max_inflight_requests AS maxInflightRequests,
       pc.provider_kind AS modelProvider,
+      pc.label AS providerName,
+      pc.updated_at AS providerConnectionUpdatedAt,
       m.id AS modelId,
       m.remote_model_id AS modelName,
       jj.quarantine_reason AS quarantineReason,
@@ -65,7 +106,7 @@ const getRunningJobFromDatabase = async (jobId: string): Promise<RunningJudgment
     LIMIT 1
   `)
 
-  return row ?? null
+  return row ? attachProviderBucketSnapshotToRunningJob(row) : null
 }
 
 const getRunningJobsFromDatabase = async (): Promise<RunningJudgmentJob[]> => {

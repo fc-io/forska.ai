@@ -22,7 +22,6 @@ import {
 } from '../judgeWorkerCompletionJournal.ts'
 import {getJudgmentEndpointAvailability} from '../judgmentEndpointAvailability.ts'
 import {getJudgmentJobSqliteService} from '../judgmentJobSqliteService.ts'
-import {getProviderKey} from '../providerKey.ts'
 import type {PromptToProcess} from './getAndUpdateReadyPrompts.ts'
 
 const checkJudgmentExistsInDatabase = async (promptToProcess: PromptToProcess): Promise<boolean> => {
@@ -99,12 +98,11 @@ const getModelContext = (metadataJson: unknown): number => {
 
 const getOwnerBackedProviderInvocationContext = (promptToProcess: PromptToProcess): StoredProviderInvocationContext => {
   const providerKind = normalizeProviderKind(promptToProcess.modelProvider)
-  const providerConnectionId = getProviderKey({
-    modelId: promptToProcess.modelId,
-    modelProvider: promptToProcess.modelProvider,
-    providerConnectionId: promptToProcess.providerConnectionId,
-    useOwnerBackedSyntheticProviderId: true,
-  })
+  const providerConnectionId =
+    promptToProcess.providerId
+    ?? promptToProcess.providerConnectionId
+    ?? promptToProcess.providerKey
+    ?? promptToProcess.modelId
 
   return {
     connection: {
@@ -115,10 +113,10 @@ const getOwnerBackedProviderInvocationContext = (promptToProcess: PromptToProces
       enabled: true,
       hasSecret: Boolean(promptToProcess.modelSecretRef),
       id: providerConnectionId,
-      label: providerConnectionId,
+      label: promptToProcess.providerName ?? providerConnectionId,
       lastCheckedAt: null,
       lastError: null,
-      maxInflightRequests: promptToProcess.providerMaxInflightRequests,
+      maxInflightRequests: promptToProcess.maxInflightRequests ?? null,
       providerKind,
       secretRef: promptToProcess.modelSecretRef,
       updatedAt: null,
@@ -133,7 +131,7 @@ const getOwnerBackedProviderInvocationContext = (promptToProcess: PromptToProces
       modelName: promptToProcess.modelName,
       name: promptToProcess.modelName,
       provider: providerKind,
-      providerConnectionId: promptToProcess.providerConnectionId,
+      providerConnectionId,
       remoteModelId: promptToProcess.modelName,
       source: null,
       updatedAt: null,
@@ -376,6 +374,8 @@ const processSinglePrompt = async (
       providerInvocationContext: shouldUseJudgeWorkerOwnerHandoff()
         ? getOwnerBackedProviderInvocationContext(promptToProcess)
         : undefined,
+      providerKey: promptToProcess.providerKey,
+      providerLimitVersion: promptToProcess.providerLimitVersion,
       providerMaxInflightRequests: promptToProcess.providerMaxInflightRequests,
       providerUsesFamilyDefault: promptToProcess.providerUsesFamilyDefault,
       workerUrls: promptToProcess.modelWorkerUrls,

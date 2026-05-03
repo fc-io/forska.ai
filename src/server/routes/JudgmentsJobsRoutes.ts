@@ -30,8 +30,12 @@ import {
   hasJudgmentJobLocalSqliteState,
 } from '../cron/judgmentsJobs/judgmentJobStoragePolicy.ts'
 import {getJudgmentJobStorageTransferRuntime} from '../cron/judgmentsJobs/judgmentJobStorageTransferRuntime.ts'
-import type {RunningJudgmentJob} from '../cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts'
+import {
+  attachProviderBucketSnapshotToRunningJob,
+  type RunningJudgmentJob,
+} from '../cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts'
 import {getEffectiveProviderCap} from '../cron/judgmentsJobs/judgmentsJobsSendToLLM.ts'
+import {getProviderBucketSnapshot, type ProviderBucketSnapshot} from '../cron/judgmentsJobs/providerAdmissionLease.ts'
 import {getProviderConnectionForStoredModel} from '../providers/providerConnectionRepository.ts'
 import {getProviderConnectionConfigFromJson} from '../providers/providerDbUtils.ts'
 import {resolveProviderConnectionRuntimeMatch} from '../providers/providerRuntimeMatchResolver.ts'
@@ -124,6 +128,7 @@ type OwnerBackedRuntimeResolution = Pick<
   OwnerBackedJudgmentJobInfo,
   'resolvedRuntime' | 'runtimeMatchReason' | 'runtimeMatchStatus' | 'runtimeResolutionMode'
 >
+type OwnerBackedProviderSnapshot = ProviderBucketSnapshot
 type UnassessedCountCacheValue = {value: number; expiresAt: number}
 type ProjectMartFreshnessState = {dirtyToken: number | null; isFresh: boolean; lastCompletedRefreshToken: number | null}
 type JudgmentJobStorageProjection = {
@@ -454,12 +459,19 @@ const getNormalizedClaimLimit = (limit: number | null | undefined) => {
 }
 
 const getOwnerBackedRunningJudgmentJobs = async (): Promise<RunningJudgmentJob[]> => {
-  return getAppDatabaseService().queryJson<RunningJudgmentJob>(`
+  const rows = await getAppDatabaseService().queryJson<
+    Omit<RunningJudgmentJob, 'providerName'> & {
+      providerConnectionUpdatedAt: Date | string | null
+      providerName: string | null
+    }
+  >(`
     SELECT
       jj.id AS id,
       jj.project_id AS projectId,
       pc.max_inflight_requests AS maxInflightRequests,
       pc.provider_kind AS modelProvider,
+      pc.label AS providerName,
+      pc.updated_at AS providerConnectionUpdatedAt,
       m.id AS modelId,
       m.remote_model_id AS modelName,
       jj.quarantine_reason AS quarantineReason,
@@ -476,6 +488,10 @@ const getOwnerBackedRunningJudgmentJobs = async (): Promise<RunningJudgmentJob[]
       AND COALESCE(pc.enabled, TRUE) = TRUE
     ORDER BY jj.created_at ASC, jj.id ASC
   `)
+
+  return rows.map((row) => {
+    return attachProviderBucketSnapshotToRunningJob(row, true)
+  })
 }
 
 const normalizeOwnerBackedProvider = (value: string | null | undefined): string => {
@@ -537,6 +553,7 @@ const getOwnerBackedRuntimeMatch = async ({
 
 const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBackedJudgmentJobInfo | null> => {
   const [row] = await getAppDatabaseService().queryJson<{
+    maxInflightRequests: number | null
     modelBaseUrl: string | null
     modelId: string | null
     modelMetadataJson: unknown
@@ -546,6 +563,9 @@ const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBac
     modelVersion: string | null
     projectId: string | null
     providerConfigJson: unknown
+    providerConnectionId: string | null
+    providerConnectionUpdatedAt: Date | string | null
+    providerName: string | null
     useAbstract: boolean | null
     useFulltext: boolean | null
     useFulltextNoImages: boolean | null
@@ -554,12 +574,16 @@ const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBac
     SELECT
       jj.project_id AS projectId,
       p.model_id AS modelId,
+      pc.id AS providerConnectionId,
       pc.secret_ref AS modelSecretRef,
       COALESCE(pc.provider_kind, 'unknown') AS modelProvider,
+      pc.label AS providerName,
       COALESCE(m.remote_model_id, m.name, m.display_name) AS modelName,
       m.variant AS modelVersion,
       TO_JSON(m.metadata_json) AS modelMetadataJson,
       pc.base_url AS modelBaseUrl,
+      pc.max_inflight_requests AS maxInflightRequests,
+      pc.updated_at AS providerConnectionUpdatedAt,
       TO_JSON(pc.config_json) AS providerConfigJson,
       p.use_title AS useTitle,
       p.use_abstract AS useAbstract,
@@ -581,6 +605,15 @@ const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBac
 
   const providerKind = normalizeOwnerBackedProvider(row.modelProvider)
   const providerConfigJson = getJsonValue(row.providerConfigJson)
+  const providerSnapshot: OwnerBackedProviderSnapshot = getProviderBucketSnapshot({
+    maxInflightRequests: row.maxInflightRequests ?? null,
+    modelId: row.modelId,
+    modelProvider: providerKind,
+    providerConnectionId: row.providerConnectionId ?? null,
+    providerConnectionUpdatedAt: row.providerConnectionUpdatedAt,
+    providerName: row.providerName ?? row.modelName,
+    useOwnerBackedSyntheticProviderId: true,
+  })
   const runtimeMatch = await getOwnerBackedRuntimeMatch({
     baseURL: row.modelBaseUrl ?? null,
     modelName: row.modelName,
@@ -597,6 +630,7 @@ const getOwnerBackedJudgmentJobRuntime = async (jobId: string): Promise<OwnerBac
     modelSecretRef: row.modelSecretRef ?? null,
     modelVersion: row.modelVersion ?? null,
     projectId: row.projectId,
+    ...providerSnapshot,
     providerConfigJson,
     ...runtimeMatch,
     useAbstract: row.useAbstract ?? true,

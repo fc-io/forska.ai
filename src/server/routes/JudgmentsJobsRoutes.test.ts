@@ -753,9 +753,18 @@ test('owner-backed runtime route returns resolved non-Codex runtime diagnostics'
   const body = (await response.json()) as {
     data: {
       job: {
+        maxInflightRequests: number | null
         modelBaseUrl: string | null
         modelId: string
         modelProvider: string
+        providerFamily: string
+        providerId: string
+        providerKey: string
+        providerLimit: number
+        providerLimitVersion: string
+        providerName: string
+        providerUsesFamilyDefault: boolean
+        resolvedDefaultCapacity: number
         resolvedRuntime: {modelBaseUrl: string; modelProvider: string; modelWorkerUrls: string[]} | null
         runtimeMatchReason: string
         runtimeMatchStatus: string
@@ -766,9 +775,15 @@ test('owner-backed runtime route returns resolved non-Codex runtime diagnostics'
 
   expect(response.status).toBe(200)
   expect(body.data.job).toMatchObject({
+    maxInflightRequests: null,
     modelBaseUrl: 'http://saved-sglang:30000/v1',
     modelId,
     modelProvider: 'sglang',
+    providerFamily: 'sglang',
+    providerId: connectionId,
+    providerKey: connectionId,
+    providerName: 'SGLang',
+    providerUsesFamilyDefault: true,
     resolvedRuntime: {
       modelBaseUrl: 'http://owner-sglang:30000/v1',
       modelProvider: 'sglang',
@@ -778,7 +793,66 @@ test('owner-backed runtime route returns resolved non-Codex runtime diagnostics'
     runtimeMatchStatus: 'matched',
     runtimeResolutionMode: 'auto-detect',
   })
+  expect(body.data.job?.providerLimit).toBeGreaterThan(0)
+  expect(body.data.job?.resolvedDefaultCapacity).toBe(body.data.job?.providerLimit)
+  expect(body.data.job?.providerLimitVersion).toHaveLength(64)
   expect(state.resolveProviderConnectionRuntimeMatch).toHaveBeenCalledTimes(1)
+})
+
+test('owner-backed running jobs route returns provider bucket snapshots', async () => {
+  if (!app || !runDatabase) {
+    throw new Error('Test app not initialized')
+  }
+
+  const projectId = `running-owner-project-${Date.now()}`
+  const modelId = `running-owner-model-${Date.now()}`
+  const connectionId = `running-owner-connection-${Date.now()}`
+  const jobId = `running-owner-job-${Date.now()}`
+
+  await insertProjectFixture({connectionId, modelId, projectId})
+  await runDatabase(`
+    UPDATE app.provider_connection
+    SET max_inflight_requests = 3
+    WHERE id = '${connectionId}'
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+
+  const response = await app.handle(new Request('http://localhost/api/judgmentsjobs-running'))
+  const body = (await response.json()) as {
+    data: {
+      jobs: Array<{
+        id: string
+        maxInflightRequests: number | null
+        providerFamily: string
+        providerId: string
+        providerKey: string
+        providerLimit: number
+        providerLimitVersion: string
+        providerName: string
+        providerUsesFamilyDefault: boolean
+        resolvedDefaultCapacity: number
+      }>
+    }
+  }
+  const job = body.data.jobs.find((entry) => {
+    return entry.id === jobId
+  })
+
+  expect(response.status).toBe(200)
+  expect(job).toMatchObject({
+    maxInflightRequests: 3,
+    providerFamily: 'sglang',
+    providerId: connectionId,
+    providerKey: connectionId,
+    providerLimit: 3,
+    providerName: 'SGLang',
+    providerUsesFamilyDefault: false,
+  })
+  expect(job?.resolvedDefaultCapacity).toBeGreaterThan(0)
+  expect(job?.providerLimitVersion).toHaveLength(64)
 })
 
 test('creating a judgments job fails when the runtime model check fails', async () => {

@@ -50,6 +50,8 @@ type ModelConfigInput = {
   provider: string | null
   providerConnectionId: string | null
   providerInvocationContext?: StoredProviderInvocationContext
+  providerKey?: string | null
+  providerLimitVersion?: string | null
   providerMaxInflightRequests: number | null
   providerUsesFamilyDefault: boolean
   workerUrls: string[]
@@ -548,6 +550,8 @@ const generateSinglePromptResponse = async ({
   provider,
   providerConnectionId,
   providerInvocationContext,
+  providerKey,
+  providerLimitVersion,
   providerMaxInflightRequests,
   providerUsesFamilyDefault,
   workerUrls,
@@ -561,6 +565,8 @@ const generateSinglePromptResponse = async ({
   provider: string | null
   providerConnectionId: string | null
   providerInvocationContext?: StoredProviderInvocationContext
+  providerKey?: string | null
+  providerLimitVersion?: string | null
   providerMaxInflightRequests: number | null
   providerUsesFamilyDefault: boolean
   workerUrls: string[]
@@ -576,6 +582,8 @@ const generateSinglePromptResponse = async ({
       fallbackBaseURL: baseURL,
       providerConnection: providerInvocationContext?.connection,
       providerConnectionId,
+      providerKey,
+      providerLimitVersion,
       providerMaxInflightRequests,
       providerUsesFamilyDefault,
       workerUrls,
@@ -936,6 +944,8 @@ export const judgeSinglePrompt = async ({
     provider,
     providerConnectionId,
     providerInvocationContext,
+    providerKey,
+    providerLimitVersion,
     providerMaxInflightRequests,
     providerUsesFamilyDefault,
     workerUrls,
@@ -990,6 +1000,8 @@ export const judgeSinglePrompt = async ({
           provider,
           providerConnectionId,
           providerInvocationContext,
+          providerKey,
+          providerLimitVersion,
           providerMaxInflightRequests,
           providerUsesFamilyDefault,
           workerUrls,
@@ -1333,6 +1345,8 @@ export const judgeSinglePrompt = async ({
                 provider,
                 providerConnectionId,
                 providerInvocationContext,
+                providerKey,
+                providerLimitVersion,
                 providerMaxInflightRequests,
                 providerUsesFamilyDefault,
                 workerUrls,
@@ -1597,6 +1611,8 @@ export const judgeSinglePrompt = async ({
             provider,
             providerConnectionId,
             providerInvocationContext,
+            providerKey,
+            providerLimitVersion,
             providerMaxInflightRequests,
             providerUsesFamilyDefault,
             workerUrls,

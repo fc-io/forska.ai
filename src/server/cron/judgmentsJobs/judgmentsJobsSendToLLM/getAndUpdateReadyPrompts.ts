@@ -20,6 +20,7 @@ export type PromptToProcess = {
   promptId: string
   recordId: string
   projectId: string
+  maxInflightRequests?: number | null
   modelId: string
   modelMetadataJson: unknown
   modelProvider: string
@@ -28,8 +29,15 @@ export type PromptToProcess = {
   modelVersion: string | null
   modelBaseUrl: string
   providerConnectionId: string | null
+  providerFamily?: string
+  providerId?: string
+  providerKey?: string
+  providerLimit?: number
+  providerLimitVersion?: string
   providerMaxInflightRequests: number | null
+  providerName?: string
   providerUsesFamilyDefault: boolean
+  resolvedDefaultCapacity?: number
   modelWorkerUrls: string[]
   useTitle: boolean
   useAbstract: boolean
@@ -237,6 +245,7 @@ const getOwnerBackedReadyRows = async (
   const prompts = claims.map((prompt) => {
     return {
       ...prompt,
+      maxInflightRequests: jobInfo.maxInflightRequests,
       modelBaseUrl: runtime.modelBaseUrl,
       modelId: jobInfo.modelId,
       modelMetadataJson: jobInfo.modelMetadataJson,
@@ -244,9 +253,16 @@ const getOwnerBackedReadyRows = async (
       modelProvider: runtime.modelProvider,
       modelSecretRef: jobInfo.modelSecretRef,
       modelVersion: jobInfo.modelVersion,
-      providerConnectionId: null,
-      providerMaxInflightRequests: null,
-      providerUsesFamilyDefault: true,
+      providerConnectionId: jobInfo.providerId,
+      providerFamily: jobInfo.providerFamily,
+      providerId: jobInfo.providerId,
+      providerKey: jobInfo.providerKey,
+      providerLimit: jobInfo.providerLimit,
+      providerLimitVersion: jobInfo.providerLimitVersion,
+      providerMaxInflightRequests: jobInfo.providerLimit,
+      providerName: jobInfo.providerName,
+      providerUsesFamilyDefault: jobInfo.providerUsesFamilyDefault,
+      resolvedDefaultCapacity: jobInfo.resolvedDefaultCapacity,
       modelWorkerUrls: runtime.modelWorkerUrls,
       projectId: jobInfo.projectId,
       useAbstract: jobInfo.useAbstract,
@@ -317,15 +333,18 @@ export const getAndUpdateReadyPrompts = async (
   jobId: string,
   limit: number,
   requestRuntime: {
+    providerKey?: string | null
     providerConnectionId: string | null
     providerMaxInflightRequests: number | null
     providerUsesFamilyDefault: boolean
   },
   options: {protectedRecordIds?: string[]} = {},
 ): Promise<PromptToProcess[]> => {
-  const prompts = shouldUseJudgeWorkerOwnerHandoff()
-    ? await getOwnerBackedReadyRows(serverJobId, jobId, limit, options.protectedRecordIds ?? [])
-    : await getSqliteReadyRows(serverJobId, jobId, limit)
+  if (shouldUseJudgeWorkerOwnerHandoff()) {
+    return getOwnerBackedReadyRows(serverJobId, jobId, limit, options.protectedRecordIds ?? [])
+  }
+
+  const prompts = await getSqliteReadyRows(serverJobId, jobId, limit)
 
   return prompts.map((prompt) => {
     return {...prompt, ...requestRuntime}

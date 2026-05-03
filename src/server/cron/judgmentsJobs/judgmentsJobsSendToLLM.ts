@@ -25,6 +25,7 @@ import {
 } from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 import {processPromptWithLLM} from './judgmentsJobsSendToLLM/processPromptWithLLM.ts'
 import {getJudgmentRequestStats} from './judgmentsRequestRuntime.ts'
+import {getProviderBucketSnapshot} from './providerAdmissionLease.ts'
 import {getNormalizedProviderKeyProvider, getProviderKey} from './providerKey.ts'
 import {requeueAbandonedSentPrompts} from './requeueAbandonedSentPrompts.ts'
 
@@ -98,21 +99,27 @@ const getCapacityFromMaxInflight = (maxInflightRequests: number): Capacity => {
 }
 
 const getJobProviderKey = (job: RunningJudgmentJob): string => {
-  return getProviderKey({
-    modelId: job.modelId,
-    modelProvider: job.modelProvider,
-    providerConnectionId: job.providerConnectionId,
-    useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
-  })
+  return (
+    job.providerKey
+    ?? getProviderKey({
+      modelId: job.modelId,
+      modelProvider: job.modelProvider,
+      providerConnectionId: job.providerConnectionId,
+      useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
+    })
+  )
 }
 
 const getPromptProviderKey = (prompt: PromptToProcess): string => {
-  return getProviderKey({
-    modelId: prompt.modelId,
-    modelProvider: prompt.modelProvider,
-    providerConnectionId: prompt.providerConnectionId,
-    useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
-  })
+  return (
+    prompt.providerKey
+    ?? getProviderKey({
+      modelId: prompt.modelId,
+      modelProvider: prompt.modelProvider,
+      providerConnectionId: prompt.providerConnectionId,
+      useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
+    })
+  )
 }
 
 const getProviderBucketLabel = (job: RunningJudgmentJob, providerKey: string): string => {
@@ -132,23 +139,14 @@ const getProviderKeyBucketCapacity = ({
 
   return !firstJob
     ? getCapacityFromMaxInflight(1)
-    : firstJob.providerConnectionId || firstJob.maxInflightRequests != null || isCodexJob(firstJob)
+    : firstJob.providerKey
+        || firstJob.providerConnectionId
+        || firstJob.maxInflightRequests != null
+        || isCodexJob(firstJob)
       ? getCapacityFromMaxInflight(
           getEffectiveProviderCap({getCodexDefaultMaxInflight, getNonCodexCapacity, job: firstJob}).maxInflight,
         )
       : getNonCodexCapacity(jobs.length)
-}
-
-const getProviderFamilyDefaultMaxInflight = ({
-  getCodexDefaultMaxInflight,
-  getNonCodexCapacity,
-  job,
-}: {
-  getCodexDefaultMaxInflight: () => number
-  getNonCodexCapacity: (runningJobCount: number) => Capacity
-  job: RunningJudgmentJob
-}): number => {
-  return isCodexJob(job) ? getCodexDefaultMaxInflight() : getNonCodexCapacity(1).maxInflight
 }
 
 export const getEffectiveProviderCap = ({
@@ -160,15 +158,18 @@ export const getEffectiveProviderCap = ({
   getNonCodexCapacity?: (runningJobCount: number) => Capacity
   job: RunningJudgmentJob
 }): {maxInflight: number; usesFamilyDefault: boolean} => {
-  const savedMaxInflight = job.maxInflightRequests
-  const providerFamilyDefaultMaxInflight = getProviderFamilyDefaultMaxInflight({
+  const snapshot = getProviderBucketSnapshot({
     getCodexDefaultMaxInflight,
     getNonCodexCapacity,
-    job,
+    maxInflightRequests: job.maxInflightRequests,
+    modelId: job.modelId,
+    modelProvider: job.modelProvider,
+    providerConnectionId: job.providerConnectionId,
+    providerName: job.providerName ?? job.modelName,
+    useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
   })
-  const maxInflight = Math.max(1, savedMaxInflight ?? providerFamilyDefaultMaxInflight)
 
-  return {maxInflight, usesFamilyDefault: savedMaxInflight == null}
+  return {maxInflight: snapshot.providerLimit, usesFamilyDefault: snapshot.providerUsesFamilyDefault}
 }
 
 export const getEffectiveDispatchProviderCap = ({
@@ -267,6 +268,7 @@ const getDispatchQueueCapacityByConnection = async (jobs: RunningJudgmentJob[]):
         await getJudgmentDispatchQueueCapacity({
           modelId: job.modelId,
           modelProvider: job.modelProvider,
+          providerKey: job.providerKey,
           providerConnectionId: job.providerConnectionId,
           providerMaxInflightRequests: dispatchProviderCap.maxInflight,
           providerUsesFamilyDefault: dispatchProviderCap.usesFamilyDefault,
@@ -393,6 +395,7 @@ const claimAndEnqueuePromptChunk = async ({
     job.id,
     limit,
     {
+      providerKey: job.providerKey,
       providerConnectionId: job.providerConnectionId,
       providerMaxInflightRequests: providerCap.maxInflight,
       providerUsesFamilyDefault: providerCap.usesFamilyDefault,
