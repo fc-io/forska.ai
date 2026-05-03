@@ -209,7 +209,7 @@ const createRunnerContext = (params: {
         async ({completedToken, projectId}: {completedToken: number; projectId: string}) => {
           callLog.push(`refresh:complete:${projectId}:${completedToken}`)
           finalizedRefreshes.push({completedToken, projectId})
-          return null
+          return {}
         },
       ),
     },

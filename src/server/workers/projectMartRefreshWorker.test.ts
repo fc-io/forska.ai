@@ -84,10 +84,7 @@ const createWorkerTestContext = (params: {
         dirtyArticlesByProject[projectId] = (dirtyArticlesByProject[projectId] ?? []).filter((articleId) => {
           return !articleIds.includes(articleId)
         })
-        const quarantinedArticleIds = new Set(quarantinedArticlesByProject[projectId] ?? [])
-        const remainingArticleCount = (dirtyArticlesByProject[projectId] ?? []).filter((articleId) => {
-          return !quarantinedArticleIds.has(articleId)
-        }).length
+        const remainingArticleCount = (dirtyArticlesByProject[projectId] ?? []).length
 
         return {completedState: remainingArticleCount === 0 ? {} : null, isClaimComplete: remainingArticleCount === 0}
       },
@@ -313,7 +310,7 @@ test('processes dirty articles through bounded batches until the claim is comple
   ])
 })
 
-test('completes dirty claims when the state service skips quarantined articles', async () => {
+test('fails dirty claims held behind quarantined article barriers', async () => {
   const context = createWorkerTestContext({
     articlesByProject: {'project-1': ['article-quarantined', 'article-healthy']},
     claims: [
@@ -333,7 +330,13 @@ test('completes dirty claims when the state service skips quarantined articles',
     context.dependencies,
   )
 
-  expect(result).toEqual({claimedToken: 2, projectId: 'project-1', status: 'completed', workerId: 'worker-1'})
+  expect(result).toEqual({
+    claimedToken: 2,
+    error: 'Project mart refresh claim made no progress for project-1',
+    projectId: 'project-1',
+    status: 'failed',
+    workerId: 'worker-1',
+  })
   expect(context.callLog).toEqual([
     'reconcile:all',
     'claim:worker-1:1:30000',
@@ -342,10 +345,14 @@ test('completes dirty claims when the state service skips quarantined articles',
     'judgment:article-healthy',
     'articleMartsBatch:project-1:article-healthy',
     'complete:project-1:2',
-    'ack:project-1:2',
+    'batch:project-1:5',
+    'complete:project-1:2',
+    'fail:project-1:Project mart refresh claim made no progress for project-1',
   ])
-  expect(context.failed).toEqual([])
-  expect(context.acknowledgedProjects).toEqual([{ackToken: 2, projectId: 'project-1'}])
+  expect(context.failed).toEqual([
+    {error: 'Project mart refresh claim made no progress for project-1', projectId: 'project-1', workerId: 'worker-1'},
+  ])
+  expect(context.acknowledgedProjects).toEqual([])
 })
 
 test('uses dirty article batch size for article-aware refresh routing', async () => {
