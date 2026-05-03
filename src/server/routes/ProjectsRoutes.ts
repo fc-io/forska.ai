@@ -18,8 +18,8 @@ import {
 } from '../services/appQueryHelpers.ts'
 import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
 import {getOrCreateImmutablePromptTx} from '../services/immutablePromptService.ts'
+import {getProjectMartDirtyRefreshStateService} from '../services/projectMartDirtyRefreshStateService.ts'
 import {getProjectMartLargeRebuildStateService} from '../services/projectMartLargeRebuildStateService.ts'
-import {getProjectMartRefreshStateService} from '../services/projectMartRefreshStateService.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {assertProjectIsActive, getProjectAccess} from './projectsRoutes/projectAccessGuard.ts'
 import {projectsRoutesGetArticlesReviews} from './projectsRoutes/projectsRoutesGetArticlesReviews.ts'
@@ -943,11 +943,11 @@ export const projectsRoutes = new Elysia()
           `)
         }
 
-        const dirtyProjects = await getProjectMartRefreshStateService().getDirtyProjectsForProjectIds(tx, [
+        const dirtyProjects = await getProjectMartDirtyRefreshStateService().getDirtyProjectsForProjectIds(tx, [
           createdProject.id,
         ])
 
-        await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+        await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
           projects: dirtyProjects,
           reason: 'ProjectsRoutes.post',
           runner: tx,
@@ -1361,9 +1361,11 @@ export const projectsRoutes = new Elysia()
             )
           }
 
-          const dirtyProjects = await getProjectMartRefreshStateService().getDirtyProjectsForProjectIds(tx, [params.id])
+          const dirtyProjects = await getProjectMartDirtyRefreshStateService().getDirtyProjectsForProjectIds(tx, [
+            params.id,
+          ])
 
-          await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+          await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
             projects: dirtyProjects,
             reason: 'ProjectsRoutes.edit',
             runner: tx,
@@ -1432,7 +1434,7 @@ export const projectsRoutes = new Elysia()
               updated_at = current_timestamp
           WHERE project_id = '${escapeSqlString(params.id)}'
         `)
-        await getProjectMartRefreshStateService().clearProjectRefreshState({projectId: params.id, runner: tx})
+        await getProjectMartDirtyRefreshStateService().clearProjectRefreshState({projectId: params.id, runner: tx})
         await getProjectMartLargeRebuildStateService().clearLargeRebuildState({projectId: params.id, runner: tx})
       }
 
@@ -1455,7 +1457,7 @@ export const projectsRoutes = new Elysia()
       })
 
       if (updatedProject) {
-        await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+        await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
           projects: [{projectId: params.id}],
           reason: 'ProjectsRoutes.unarchive',
           runner: tx,
@@ -1704,11 +1706,11 @@ export const projectsRoutes = new Elysia()
         `)
       }
 
-      const dirtyProjects = await getProjectMartRefreshStateService().getDirtyProjectsForProjectIds(tx, [
+      const dirtyProjects = await getProjectMartDirtyRefreshStateService().getDirtyProjectsForProjectIds(tx, [
         clonedProject.id,
       ])
 
-      await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+      await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
         projects: dirtyProjects,
         reason: 'ProjectsRoutes.clone',
         runner: tx,

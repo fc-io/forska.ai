@@ -7,12 +7,12 @@ import {
   type FreshMaintenanceWorkLeaseRecord,
   getMaintenanceWorkLeaseService,
 } from '../../services/maintenanceWorkLeaseService.ts'
+import {getProjectMartDirtyRefreshStateService} from '../../services/projectMartDirtyRefreshStateService.ts'
 import {
   getProjectMartLargeRebuildRowsPerMs,
   getProjectMartLargeRebuildScopeProgress,
   isArticleScopedLargeRebuildPhase,
 } from '../../services/projectMartLargeRebuildProgressService.ts'
-import {getProjectMartRefreshStateService} from '../../services/projectMartRefreshStateService.ts'
 import {getProjectVisibleJudgmentScopeSql} from '../../services/projectVisibleJudgmentRule.ts'
 import {getDuckdbOwnerConnectionsOverview} from '../../utils/duckdbOwnerConnections.ts'
 import {
@@ -215,7 +215,7 @@ type ProjectRefreshState = {
   dirtyToken: number | null
   isFresh: boolean
   lastCompletedAt: string | null
-  lastCompletedRefreshToken: number | null
+  lastCompletedDirtyToken: number | null
   lastRequestedAt: string | null
   lastStartedAt: string | null
   leaseExpiresAt: string | null
@@ -262,7 +262,7 @@ const getProjectRefreshState = async (projectId: string): Promise<ProjectRefresh
   const [row] = await getAppDatabaseService().queryJson<{
     dirtyToken: number | null
     lastCompletedAt: string | null
-    lastCompletedRefreshToken: number | null
+    lastCompletedDirtyToken: number | null
     lastRequestedAt: string | null
     lastStartedAt: string | null
     leaseExpiresAt: string | null
@@ -273,7 +273,7 @@ const getProjectRefreshState = async (projectId: string): Promise<ProjectRefresh
     SELECT
       CAST(dirty_token AS INTEGER) AS dirtyToken,
       last_completed_at AS lastCompletedAt,
-      CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+      CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken,
       last_requested_at AS lastRequestedAt,
       last_started_at AS lastStartedAt,
       lease_expires_at AS leaseExpiresAt,
@@ -286,15 +286,15 @@ const getProjectRefreshState = async (projectId: string): Promise<ProjectRefresh
   `)
 
   const dirtyToken = row?.dirtyToken ?? null
-  const lastCompletedRefreshToken = row?.lastCompletedRefreshToken ?? null
+  const lastCompletedDirtyToken = row?.lastCompletedDirtyToken ?? null
   const refreshStatus = row?.refreshStatus ?? null
-  const isFresh = dirtyToken === null || (lastCompletedRefreshToken !== null && lastCompletedRefreshToken >= dirtyToken)
+  const isFresh = dirtyToken === null || (lastCompletedDirtyToken !== null && lastCompletedDirtyToken >= dirtyToken)
 
   return {
     dirtyToken,
     isFresh,
     lastCompletedAt: row?.lastCompletedAt ?? null,
-    lastCompletedRefreshToken,
+    lastCompletedDirtyToken,
     lastRequestedAt: row?.lastRequestedAt ?? null,
     lastStartedAt: row?.lastStartedAt ?? null,
     leaseExpiresAt: row?.leaseExpiresAt ?? null,
@@ -378,8 +378,8 @@ const getPendingArticleRefreshInfo = async (projectId: string): Promise<RefreshC
       AND quarantine.article_id IS NULL
       AND (
         refresh_state.project_id IS NULL
-        OR refresh_state.last_completed_refresh_token IS NULL
-        OR CAST(article_state.last_dirty_token AS BIGINT) > CAST(refresh_state.last_completed_refresh_token AS BIGINT)
+        OR refresh_state.last_completed_dirty_token IS NULL
+        OR CAST(article_state.last_dirty_token AS BIGINT) > CAST(refresh_state.last_completed_dirty_token AS BIGINT)
       )
   `)
   const [row] = rows
@@ -392,7 +392,7 @@ const getTimestampValue = (value: Date | string | null) => {
 }
 
 const getQuarantinedArticleRefreshes = async (projectId: string): Promise<QuarantinedArticleRefresh[]> => {
-  const rows = await getProjectMartRefreshStateService().getQuarantinedArticlesForProject({projectId})
+  const rows = await getProjectMartDirtyRefreshStateService().getQuarantinedArticlesForProject({projectId})
 
   return rows.map((row) => {
     return {
@@ -461,7 +461,7 @@ const getHasReviewServingRows = async (projectId: string): Promise<boolean> => {
     WHERE generation.project_id = '${escapeSqlString(projectId)}'
       AND (
         refresh_state.project_id IS NULL
-        OR CAST(refresh_state.dirty_token AS BIGINT) <= CAST(refresh_state.last_completed_refresh_token AS BIGINT)
+        OR CAST(refresh_state.dirty_token AS BIGINT) <= CAST(refresh_state.last_completed_dirty_token AS BIGINT)
       )
     LIMIT 1
   `)
@@ -518,7 +518,7 @@ const queueMissingVisibleJudgmentFactRepair = async (projectId: string): Promise
     return
   }
 
-  await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+  await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
     projects: [{articleIds, projectId}],
     reason: 'missingVisibleJudgmentFacts',
     requestedBy: 'reviews-warnings',

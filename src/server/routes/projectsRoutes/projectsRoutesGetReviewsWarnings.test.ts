@@ -89,7 +89,7 @@ type MartRefreshProgressSnapshot = {
 
 type RefreshStateOverrides = {
   dirtyToken?: number
-  lastCompletedRefreshToken?: number
+  lastCompletedDirtyToken?: number
   lastFailedAt?: string | null
   lastRequestedAt?: string | null
   lastStartedAt?: string | null
@@ -156,7 +156,7 @@ const insertProjectRefreshState = async (projectId: string, overrides: RefreshSt
   }
 
   const dirtyToken = overrides.dirtyToken ?? 1
-  const lastCompletedRefreshToken = overrides.lastCompletedRefreshToken ?? 0
+  const lastCompletedDirtyToken = overrides.lastCompletedDirtyToken ?? 0
   const lastRequestedAt = overrides.lastRequestedAt ?? '2026-04-02T12:00:00.000Z'
   const lastStartedAt = overrides.lastStartedAt ?? null
   const lastFailedAt = overrides.lastFailedAt ?? null
@@ -168,8 +168,8 @@ const insertProjectRefreshState = async (projectId: string, overrides: RefreshSt
     INSERT INTO app.project_mart_refresh_state (
       project_id,
       dirty_token,
-      active_refresh_token,
-      last_completed_refresh_token,
+      active_dirty_token,
+      last_completed_dirty_token,
       last_requested_at,
       refresh_status,
       last_started_at,
@@ -180,7 +180,7 @@ const insertProjectRefreshState = async (projectId: string, overrides: RefreshSt
       '${projectId}',
       ${dirtyToken},
       ${refreshStatus === 'running' ? dirtyToken : 0},
-      ${lastCompletedRefreshToken},
+      ${lastCompletedDirtyToken},
       ${lastRequestedAt === null ? 'NULL' : `TIMESTAMPTZ '${lastRequestedAt}'`},
       '${refreshStatus}',
       ${lastStartedAt === null ? 'NULL' : `TIMESTAMPTZ '${lastStartedAt}'`},
@@ -424,7 +424,7 @@ test('reviews warnings report ready when serving rows are fresh', async () => {
   const projectId = 'project-ready-warning'
 
   await insertProjectFixture(projectId)
-  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedRefreshToken: 1, refreshStatus: 'idle'})
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
   await insertReviewServingRow(projectId, `article-${projectId}`)
 
   const {body, response} = await postWarningsRequest(projectId)
@@ -446,7 +446,7 @@ test('reviews warnings expose quarantined article refreshes without pending heal
   const articleId = `article-${projectId}`
 
   await insertProjectFixture(projectId)
-  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedRefreshToken: 1, refreshStatus: 'idle'})
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
   await insertDirtyArticleRefreshState(projectId, articleId, 1)
   await insertReviewServingRow(projectId, articleId)
   await runDatabase(`
@@ -489,7 +489,7 @@ test('reviews warnings queues repair when visible judgments are missing from jud
   const articleId = `article-${projectId}`
 
   await insertProjectFixture(projectId)
-  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedRefreshToken: 1, refreshStatus: 'idle'})
+  await insertProjectRefreshState(projectId, {dirtyToken: 1, lastCompletedDirtyToken: 1, refreshStatus: 'idle'})
   await insertReviewServingRow(projectId, articleId)
   await runDatabase(`
     INSERT INTO mart.project_scope_article (
@@ -562,7 +562,7 @@ test('reviews warnings report refreshing from ledger and worker progress state',
   await insertProjectFixture(projectId)
   await insertProjectRefreshState(projectId, {
     dirtyToken: 2,
-    lastCompletedRefreshToken: 1,
+    lastCompletedDirtyToken: 1,
     lastRequestedAt: '2026-04-02T12:00:00.000Z',
     lastStartedAt: '2026-04-02T12:05:00.000Z',
     leaseExpiresAt: '2035-04-02T12:05:30.000Z',
@@ -636,7 +636,7 @@ test('reviews warnings report active project-scoped claims without inferring unr
   await insertProjectFixture(projectId)
   await insertProjectRefreshState(projectId, {
     dirtyToken: 2,
-    lastCompletedRefreshToken: 1,
+    lastCompletedDirtyToken: 1,
     lastRequestedAt: '2026-04-02T12:00:00.000Z',
     lastStartedAt: '2026-04-02T12:05:00.000Z',
     leaseExpiresAt: '2035-04-02T12:05:30.000Z',
@@ -668,7 +668,7 @@ test('reviews warnings report failed when refresh work is still dirty after a fa
   await insertProjectFixture(projectId)
   await insertProjectRefreshState(projectId, {
     dirtyToken: 3,
-    lastCompletedRefreshToken: 2,
+    lastCompletedDirtyToken: 2,
     lastFailedAt: '2026-04-02T12:07:00.000Z',
     lastRequestedAt: '2026-04-02T12:00:00.000Z',
     refreshStatus: 'failed',
@@ -692,7 +692,7 @@ test('reviews warnings treat expired running leases as queued instead of in-flig
   await insertProjectFixture(projectId)
   await insertProjectRefreshState(projectId, {
     dirtyToken: 2,
-    lastCompletedRefreshToken: 1,
+    lastCompletedDirtyToken: 1,
     lastRequestedAt: '2026-04-02T12:00:00.000Z',
     lastStartedAt: '2026-04-02T12:05:00.000Z',
     leaseExpiresAt: '2026-04-02T12:05:30.000Z',
@@ -721,7 +721,7 @@ test('reviews warnings report blocked when pending work has no local refresh con
   await insertProjectFixture(projectId)
   await insertProjectRefreshState(projectId, {
     dirtyToken: 2,
-    lastCompletedRefreshToken: 1,
+    lastCompletedDirtyToken: 1,
     lastRequestedAt: '2026-04-02T12:00:00.000Z',
     refreshStatus: 'idle',
   })
@@ -752,7 +752,7 @@ test('reviews warnings report blocked when memory policy disables mart refresh d
     await insertProjectFixture(projectId)
     await insertProjectRefreshState(projectId, {
       dirtyToken: 2,
-      lastCompletedRefreshToken: 1,
+      lastCompletedDirtyToken: 1,
       lastRequestedAt: '2026-04-02T12:00:00.000Z',
       refreshStatus: 'idle',
     })
@@ -794,7 +794,7 @@ test('reviews warnings expose large rebuild cursor progress separately from dirt
   const articleId = `article-${projectId}`
 
   await insertProjectFixture(projectId)
-  await insertProjectRefreshState(projectId, {dirtyToken: 5, lastCompletedRefreshToken: 4, refreshStatus: 'idle'})
+  await insertProjectRefreshState(projectId, {dirtyToken: 5, lastCompletedDirtyToken: 4, refreshStatus: 'idle'})
   await insertDirtyArticleRefreshState(projectId, articleId, 5)
   await runDatabase(`
     INSERT INTO mart.project_scope_article (
@@ -844,7 +844,7 @@ test('reviews warnings expose non-blocking runtime diagnostics for active rebuil
 
   try {
     await insertProjectFixture(projectId)
-    await insertProjectRefreshState(projectId, {dirtyToken: 5, lastCompletedRefreshToken: 4, refreshStatus: 'idle'})
+    await insertProjectRefreshState(projectId, {dirtyToken: 5, lastCompletedDirtyToken: 4, refreshStatus: 'idle'})
     await runDatabase(`
       UPDATE app.project_mart_refresh_state
       SET last_completed_at = TIMESTAMPTZ '2026-04-02T12:04:00.000Z'

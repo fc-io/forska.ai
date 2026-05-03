@@ -1,8 +1,8 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 
 const appDatabaseServiceModulePath = new URL('../../services/appDatabaseService.ts', import.meta.url).pathname
-const projectMartRefreshStateServiceModulePath = new URL(
-  '../../services/projectMartRefreshStateService.ts',
+const projectMartDirtyRefreshStateServiceModulePath = new URL(
+  '../../services/projectMartDirtyRefreshStateService.ts',
   import.meta.url,
 ).pathname
 
@@ -49,9 +49,9 @@ const registerModuleMocks = () => {
     }
   })
 
-  void mock.module(projectMartRefreshStateServiceModulePath, () => {
+  void mock.module(projectMartDirtyRefreshStateServiceModulePath, () => {
     return {
-      getProjectMartRefreshStateService: () => {
+      getProjectMartDirtyRefreshStateService: () => {
         return {
           markProjectsDirtyAtomically: async (params: {
             projects: Array<{articleIds?: string[]; projectId: string}>

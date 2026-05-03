@@ -1676,8 +1676,8 @@ test('reconciles sqlite refresh ack fanout from ledger state after a partial pos
     throw new Error('Test database not initialized')
   }
 
-  const {getProjectMartRefreshStateService} = await import('../../services/projectMartRefreshStateService.ts')
-  const refreshStateService = getProjectMartRefreshStateService()
+  const {getProjectMartDirtyRefreshStateService} = await import('../../services/projectMartDirtyRefreshStateService.ts')
+  const refreshStateService = getProjectMartDirtyRefreshStateService()
   const service = sqliteService()
   const connectionId = `connection-project-ack-reconcile-${Date.now()}`
   const modelId = `model-project-ack-reconcile-${Date.now()}`
@@ -1759,8 +1759,8 @@ test('reconcileProjectRefreshAcks skips tracked jobs with an active competing le
     throw new Error('Test database not initialized')
   }
 
-  const {getProjectMartRefreshStateService} = await import('../../services/projectMartRefreshStateService.ts')
-  const refreshStateService = getProjectMartRefreshStateService()
+  const {getProjectMartDirtyRefreshStateService} = await import('../../services/projectMartDirtyRefreshStateService.ts')
+  const refreshStateService = getProjectMartDirtyRefreshStateService()
   const service = sqliteService()
   const connectionId = `connection-project-ack-reconcile-skip-${Date.now()}`
   const modelId = `model-project-ack-reconcile-skip-${Date.now()}`
@@ -2139,8 +2139,8 @@ test('computes a per-job SQLite health snapshot', async () => {
     throw new Error('Test database not initialized')
   }
 
-  const {getProjectMartRefreshStateService} = await import('../../services/projectMartRefreshStateService.ts')
-  const refreshStateService = getProjectMartRefreshStateService()
+  const {getProjectMartDirtyRefreshStateService} = await import('../../services/projectMartDirtyRefreshStateService.ts')
+  const refreshStateService = getProjectMartDirtyRefreshStateService()
   const service = sqliteService()
   const connectionId = `connection-health-${Date.now()}`
   const modelId = `model-health-${Date.now()}`
@@ -2282,8 +2282,8 @@ test('prunes only visibility-acked exported outbox rows in bounded batches', asy
     throw new Error('Test database not initialized')
   }
 
-  const {getProjectMartRefreshStateService} = await import('../../services/projectMartRefreshStateService.ts')
-  const refreshStateService = getProjectMartRefreshStateService()
+  const {getProjectMartDirtyRefreshStateService} = await import('../../services/projectMartDirtyRefreshStateService.ts')
+  const refreshStateService = getProjectMartDirtyRefreshStateService()
   const service = sqliteService()
   const connectionId = `connection-retention-${Date.now()}`
   const modelId = `model-retention-${Date.now()}`
@@ -2396,8 +2396,8 @@ test('pruneVisibilityAckedRetention skips jobs with an active competing lease', 
     throw new Error('Test database not initialized')
   }
 
-  const {getProjectMartRefreshStateService} = await import('../../services/projectMartRefreshStateService.ts')
-  const refreshStateService = getProjectMartRefreshStateService()
+  const {getProjectMartDirtyRefreshStateService} = await import('../../services/projectMartDirtyRefreshStateService.ts')
+  const refreshStateService = getProjectMartDirtyRefreshStateService()
   const service = sqliteService()
   const connectionId = `connection-prune-skip-${Date.now()}`
   const modelId = `model-prune-skip-${Date.now()}`
@@ -2470,8 +2470,8 @@ test('published refresh ack tokens unlock retention pruning for every sqlite job
     throw new Error('Test database not initialized')
   }
 
-  const {getProjectMartRefreshStateService} = await import('../../services/projectMartRefreshStateService.ts')
-  const refreshStateService = getProjectMartRefreshStateService()
+  const {getProjectMartDirtyRefreshStateService} = await import('../../services/projectMartDirtyRefreshStateService.ts')
+  const refreshStateService = getProjectMartDirtyRefreshStateService()
   const service = sqliteService()
   const now = Date.now()
   const connectionId = `connection-retention-replay-${now}`
@@ -2624,8 +2624,8 @@ test('keeps skipped and unacked prompt rows during visibility-acked retention cl
     throw new Error('Test database not initialized')
   }
 
-  const {getProjectMartRefreshStateService} = await import('../../services/projectMartRefreshStateService.ts')
-  const refreshStateService = getProjectMartRefreshStateService()
+  const {getProjectMartDirtyRefreshStateService} = await import('../../services/projectMartDirtyRefreshStateService.ts')
+  const refreshStateService = getProjectMartDirtyRefreshStateService()
   const service = sqliteService()
   const connectionId = `connection-retention-skip-${Date.now()}`
   const modelId = `model-retention-skip-${Date.now()}`

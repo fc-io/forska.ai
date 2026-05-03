@@ -90,7 +90,7 @@ type ProjectReviewConfig = {
 type ProjectReviewDetailMartFreshness = {
   dirtyToken: number | null
   isFresh: boolean
-  lastCompletedRefreshToken: number | null
+  lastCompletedDirtyToken: number | null
   refreshStatus: ProjectMartRefreshStatus | null
   state: 'fresh' | 'running' | 'stale'
 }
@@ -226,12 +226,12 @@ const getProjectReviewDetailJudgmentRows = async (params: {
 const getProjectReviewDetailMartFreshness = async (projectId: string): Promise<ProjectReviewDetailMartFreshness> => {
   const [row] = await getAppDatabaseService().queryJson<{
     dirtyToken: number | null
-    lastCompletedRefreshToken: number | null
+    lastCompletedDirtyToken: number | null
     refreshStatus: ProjectMartRefreshStatus | null
   }>(`
     SELECT
       CAST(dirty_token AS INTEGER) AS dirtyToken,
-      CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+      CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken,
       refresh_status AS refreshStatus
     FROM app.project_mart_refresh_state
     WHERE project_id = '${escapeSqlString(projectId)}'
@@ -239,12 +239,12 @@ const getProjectReviewDetailMartFreshness = async (projectId: string): Promise<P
   `)
 
   const dirtyToken = row?.dirtyToken ?? null
-  const lastCompletedRefreshToken = row?.lastCompletedRefreshToken ?? null
+  const lastCompletedDirtyToken = row?.lastCompletedDirtyToken ?? null
   const refreshStatus = row?.refreshStatus ?? null
-  const isFresh = dirtyToken === null || (lastCompletedRefreshToken !== null && lastCompletedRefreshToken >= dirtyToken)
+  const isFresh = dirtyToken === null || (lastCompletedDirtyToken !== null && lastCompletedDirtyToken >= dirtyToken)
   const state = isFresh ? 'fresh' : refreshStatus === 'running' ? 'running' : 'stale'
 
-  return {dirtyToken, isFresh, lastCompletedRefreshToken, refreshStatus, state}
+  return {dirtyToken, isFresh, lastCompletedDirtyToken, refreshStatus, state}
 }
 
 const getArticleJudgmentRows = async (params: {

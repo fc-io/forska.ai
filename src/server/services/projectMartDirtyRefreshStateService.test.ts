@@ -2,7 +2,7 @@ import {rmSync} from 'node:fs'
 
 import {expect, test} from 'bun:test'
 
-import type {ProjectMartRefreshArticleStateRecord, ProjectMartRefreshStateRecord} from '../../db/schemaTypes.ts'
+import type {ProjectMartDirtyRefreshStateRecord, ProjectMartRefreshArticleStateRecord} from '../../db/schemaTypes.ts'
 
 const removeFileIfExists = (filePath: string) => {
   rmSync(filePath, {force: true, recursive: true})
@@ -93,14 +93,14 @@ test('project mart refresh state migrations create typed bounded refresh schemas
     articleStateIndexes: Array<{indexName: string}>
     refreshStateColumns: Array<{columnName: string}>
     refreshStateIndexes: Array<{indexName: string}>
-    row: ProjectMartRefreshStateRecord
+    row: ProjectMartDirtyRefreshStateRecord
   }>(`
     await database.run(\`
       INSERT INTO app.project_mart_refresh_state (
         project_id,
         dirty_token,
-        active_refresh_token,
-        last_completed_refresh_token,
+        active_dirty_token,
+        last_completed_dirty_token,
         last_request_reason,
         requested_by,
         refresh_status,
@@ -167,8 +167,8 @@ test('project mart refresh state migrations create typed bounded refresh schemas
       SELECT
         project_id AS projectId,
         CAST(dirty_token AS INTEGER) AS dirtyToken,
-        CAST(active_refresh_token AS INTEGER) AS activeRefreshToken,
-        CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+        CAST(active_dirty_token AS INTEGER) AS activeDirtyToken,
+        CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken,
         last_requested_at AS lastRequestedAt,
         last_request_reason AS lastRequestReason,
         requested_by AS requestedBy,
@@ -238,8 +238,8 @@ test('project mart refresh state migrations create typed bounded refresh schemas
   ).toEqual([
     'project_id',
     'dirty_token',
-    'active_refresh_token',
-    'last_completed_refresh_token',
+    'active_dirty_token',
+    'last_completed_dirty_token',
     'last_requested_at',
     'last_request_reason',
     'requested_by',
@@ -260,8 +260,8 @@ test('project mart refresh state migrations create typed bounded refresh schemas
   ).toEqual(['idx_app_project_mart_refresh_state_claim', 'idx_app_project_mart_refresh_state_stale_work'])
   expect(result.row.projectId).toBe('refresh-project-1')
   expect(result.row.dirtyToken).toBe(7)
-  expect(result.row.activeRefreshToken).toBe(7)
-  expect(result.row.lastCompletedRefreshToken).toBe(5)
+  expect(result.row.activeDirtyToken).toBe(7)
+  expect(result.row.lastCompletedDirtyToken).toBe(5)
   expect(result.row.lastRequestReason).toBe('judgment-import')
   expect(result.row.requestedBy).toBe('worker-test')
   expect(result.row.refreshStatus).toBe('running')
@@ -298,12 +298,12 @@ test('markProjectsDirtyAtomically bumps tokens once per project and merges unres
     articleRows: ProjectMartRefreshArticleStateRecord[]
     marks: Array<{dirtyToken: number; projectId: string}>
     secondMarks: Array<{dirtyToken: number; projectId: string}>
-    stateRows: ProjectMartRefreshStateRecord[]
+    stateRows: ProjectMartDirtyRefreshStateRecord[]
     unresolvedArticles: Array<{articleId: string}>
   }>(`
-    const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
+    const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
 
-    const service = getProjectMartRefreshStateService()
+    const service = getProjectMartDirtyRefreshStateService()
     const marks = await service.markProjectsDirtyAtomically({
       projects: [
         {projectId: 'refresh-project-1', articleIds: ['refresh-article-1', 'refresh-article-1']},
@@ -324,8 +324,8 @@ test('markProjectsDirtyAtomically bumps tokens once per project and merges unres
       SELECT
         project_id AS projectId,
         CAST(dirty_token AS INTEGER) AS dirtyToken,
-        CAST(active_refresh_token AS INTEGER) AS activeRefreshToken,
-        CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+        CAST(active_dirty_token AS INTEGER) AS activeDirtyToken,
+        CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken,
         last_requested_at AS lastRequestedAt,
         last_request_reason AS lastRequestReason,
         requested_by AS requestedBy,
@@ -396,11 +396,11 @@ test('markArticleProjectsDirtyAtomically resolves active affected projects befor
   const result = runRefreshStateScript<{
     articleRows: ProjectMartRefreshArticleStateRecord[]
     marks: Array<{dirtyToken: number; projectId: string}>
-    stateRows: ProjectMartRefreshStateRecord[]
+    stateRows: ProjectMartDirtyRefreshStateRecord[]
   }>(`
-    const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
+    const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
 
-    const service = getProjectMartRefreshStateService()
+    const service = getProjectMartDirtyRefreshStateService()
 
     await database.run(\`
       INSERT INTO app.import_route (id, route, name)
@@ -441,8 +441,8 @@ test('markArticleProjectsDirtyAtomically resolves active affected projects befor
       SELECT
         project_id AS projectId,
         CAST(dirty_token AS INTEGER) AS dirtyToken,
-        CAST(active_refresh_token AS INTEGER) AS activeRefreshToken,
-        CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+        CAST(active_dirty_token AS INTEGER) AS activeDirtyToken,
+        CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken,
         last_requested_at AS lastRequestedAt,
         last_request_reason AS lastRequestReason,
         requested_by AS requestedBy,
@@ -506,9 +506,9 @@ test('getDirtyProjectsForProjectIds includes current and previously materialized
     dirtyProjects: Array<{articleIds: string[]; projectId: string}>
     dirtyRows: ProjectMartRefreshArticleStateRecord[]
   }>(`
-    const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
+    const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
 
-    const service = getProjectMartRefreshStateService()
+    const service = getProjectMartDirtyRefreshStateService()
 
     await database.run(\`
       INSERT INTO app.project_article (id, project_id, article_id)
@@ -598,9 +598,9 @@ test('claimDirtyProjects supports heartbeat extension and lease expiry recovery'
       workerId: string
     }>
   }>(`
-    const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
+    const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
 
-    const service = getProjectMartRefreshStateService()
+    const service = getProjectMartDirtyRefreshStateService()
     await service.markProjectsDirtyAtomically({
       projects: [{projectId: 'refresh-project-1', articleIds: ['refresh-article-1']}],
       reason: 'project-update',
@@ -663,14 +663,14 @@ test('claimDirtyProjects supports heartbeat extension and lease expiry recovery'
 
 test('completeProjectRefresh trims resolved article state and failProjectRefresh records failures', () => {
   const result = runRefreshStateScript<{
-    completedState: ProjectMartRefreshStateRecord | null
-    failedState: ProjectMartRefreshStateRecord | null
+    completedState: ProjectMartDirtyRefreshStateRecord | null
+    failedState: ProjectMartDirtyRefreshStateRecord | null
     remainingArticlesAfterComplete: ProjectMartRefreshArticleStateRecord[]
     unresolvedAfterComplete: Array<{articleId: string}>
   }>(`
-    const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
+    const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
 
-    const service = getProjectMartRefreshStateService()
+    const service = getProjectMartDirtyRefreshStateService()
     await service.markProjectsDirtyAtomically({
       projects: [{projectId: 'refresh-project-1', articleIds: ['refresh-article-1']}],
       reason: 'project-update',
@@ -740,8 +740,8 @@ test('completeProjectRefresh trims resolved article state and failProjectRefresh
 
   expect(result.completedState?.projectId).toBe('refresh-project-1')
   expect(result.completedState?.dirtyToken).toBe(2)
-  expect(result.completedState?.lastCompletedRefreshToken).toBe(1)
-  expect(result.completedState?.activeRefreshToken).toBe(0)
+  expect(result.completedState?.lastCompletedDirtyToken).toBe(1)
+  expect(result.completedState?.activeDirtyToken).toBe(0)
   expect(result.completedState?.refreshStatus).toBe('idle')
   expect(result.completedState?.workerId).toBeNull()
   expect(
@@ -755,8 +755,8 @@ test('completeProjectRefresh trims resolved article state and failProjectRefresh
   expect(result.unresolvedAfterComplete).toEqual([{articleId: 'refresh-article-1'}, {articleId: 'refresh-article-2'}])
   expect(result.failedState?.projectId).toBe('refresh-project-1')
   expect(result.failedState?.dirtyToken).toBe(2)
-  expect(result.failedState?.lastCompletedRefreshToken).toBe(1)
-  expect(result.failedState?.activeRefreshToken).toBe(0)
+  expect(result.failedState?.lastCompletedDirtyToken).toBe(1)
+  expect(result.failedState?.activeDirtyToken).toBe(0)
   expect(result.failedState?.refreshStatus).toBe('failed')
   expect(result.failedState?.lastError).toBe('refresh exploded')
   expect(result.failedState?.workerId).toBeNull()
@@ -766,13 +766,13 @@ test('completeProjectRefresh trims resolved article state and failProjectRefresh
 test('getDirtyArticleBatchForClaim completes a one-article claim batch', () => {
   const result = runRefreshStateScript<{
     batch: {articleIds: string[]; hasMore: boolean}
-    completion: {completedState: ProjectMartRefreshStateRecord | null; isClaimComplete: boolean}
+    completion: {completedState: ProjectMartDirtyRefreshStateRecord | null; isClaimComplete: boolean}
     remainingRow: {rowCount: number}
-    state: ProjectMartRefreshStateRecord
+    state: ProjectMartDirtyRefreshStateRecord
   }>(`
-    const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
+    const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
 
-    const service = getProjectMartRefreshStateService()
+    const service = getProjectMartDirtyRefreshStateService()
     await service.markProjectsDirtyAtomically({
       projects: [{projectId: 'refresh-project-1', articleIds: ['refresh-article-1']}],
       reason: 'project-update',
@@ -807,8 +807,8 @@ test('getDirtyArticleBatchForClaim completes a one-article claim batch', () => {
       SELECT
         project_id AS projectId,
         CAST(dirty_token AS INTEGER) AS dirtyToken,
-        CAST(active_refresh_token AS INTEGER) AS activeRefreshToken,
-        CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+        CAST(active_dirty_token AS INTEGER) AS activeDirtyToken,
+        CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken,
         refresh_status AS refreshStatus,
         worker_id AS workerId
       FROM app.project_mart_refresh_state
@@ -822,12 +822,12 @@ test('getDirtyArticleBatchForClaim completes a one-article claim batch', () => {
 
   expect(result.batch).toEqual({articleIds: ['refresh-article-1'], hasMore: false})
   expect(result.completion.isClaimComplete).toBe(true)
-  expect(result.completion.completedState?.lastCompletedRefreshToken).toBe(1)
+  expect(result.completion.completedState?.lastCompletedDirtyToken).toBe(1)
   expect(result.remainingRow.rowCount).toBe(0)
   expect(result.state).toMatchObject({
-    activeRefreshToken: 0,
+    activeDirtyToken: 0,
     dirtyToken: 1,
-    lastCompletedRefreshToken: 1,
+    lastCompletedDirtyToken: 1,
     refreshStatus: 'idle',
     workerId: null,
   })
@@ -836,12 +836,12 @@ test('getDirtyArticleBatchForClaim completes a one-article claim batch', () => {
 test('getDirtyArticleBatchForClaim completes an exactly batch-sized claim', () => {
   const result = runRefreshStateScript<{
     batch: {articleIds: string[]; hasMore: boolean}
-    completion: {completedState: ProjectMartRefreshStateRecord | null; isClaimComplete: boolean}
+    completion: {completedState: ProjectMartDirtyRefreshStateRecord | null; isClaimComplete: boolean}
     remainingRow: {rowCount: number}
   }>(`
-    const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
+    const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
 
-    const service = getProjectMartRefreshStateService()
+    const service = getProjectMartDirtyRefreshStateService()
     await service.markProjectsDirtyAtomically({
       projects: [{projectId: 'refresh-project-1', articleIds: ['refresh-article-2', 'refresh-article-1']}],
       reason: 'project-update',
@@ -879,22 +879,22 @@ test('getDirtyArticleBatchForClaim completes an exactly batch-sized claim', () =
 
   expect(result.batch).toEqual({articleIds: ['refresh-article-1', 'refresh-article-2'], hasMore: false})
   expect(result.completion.isClaimComplete).toBe(true)
-  expect(result.completion.completedState?.lastCompletedRefreshToken).toBe(1)
+  expect(result.completion.completedState?.lastCompletedDirtyToken).toBe(1)
   expect(result.remainingRow.rowCount).toBe(0)
 })
 
 test('completeDirtyArticleBatchForClaim clears multi-batch work before advancing the claim token', () => {
   const result = runRefreshStateScript<{
     firstBatch: {articleIds: string[]; hasMore: boolean}
-    firstCompletion: {completedState: ProjectMartRefreshStateRecord | null; isClaimComplete: boolean}
+    firstCompletion: {completedState: ProjectMartDirtyRefreshStateRecord | null; isClaimComplete: boolean}
     rowsAfterFirstBatch: ProjectMartRefreshArticleStateRecord[]
     secondBatch: {articleIds: string[]; hasMore: boolean}
-    secondCompletion: {completedState: ProjectMartRefreshStateRecord | null; isClaimComplete: boolean}
-    stateAfterFirstBatch: ProjectMartRefreshStateRecord
+    secondCompletion: {completedState: ProjectMartDirtyRefreshStateRecord | null; isClaimComplete: boolean}
+    stateAfterFirstBatch: ProjectMartDirtyRefreshStateRecord
   }>(`
-    const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
+    const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
 
-    const service = getProjectMartRefreshStateService()
+    const service = getProjectMartDirtyRefreshStateService()
     await database.run(\`
       INSERT INTO app.article (id, article_title)
       VALUES ('refresh-article-3', 'Refresh Article 3')
@@ -931,8 +931,8 @@ test('completeDirtyArticleBatchForClaim clears multi-batch work before advancing
       SELECT
         project_id AS projectId,
         CAST(dirty_token AS INTEGER) AS dirtyToken,
-        CAST(active_refresh_token AS INTEGER) AS activeRefreshToken,
-        CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+        CAST(active_dirty_token AS INTEGER) AS activeDirtyToken,
+        CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken,
         refresh_status AS refreshStatus,
         worker_id AS workerId
       FROM app.project_mart_refresh_state
@@ -980,9 +980,9 @@ test('completeDirtyArticleBatchForClaim clears multi-batch work before advancing
   expect(result.firstCompletion.isClaimComplete).toBe(false)
   expect(result.firstCompletion.completedState).toBeNull()
   expect(result.stateAfterFirstBatch).toMatchObject({
-    activeRefreshToken: 1,
+    activeDirtyToken: 1,
     dirtyToken: 1,
-    lastCompletedRefreshToken: 0,
+    lastCompletedDirtyToken: 0,
     refreshStatus: 'running',
     workerId: 'worker-1',
   })
@@ -993,20 +993,20 @@ test('completeDirtyArticleBatchForClaim clears multi-batch work before advancing
   ).toEqual([{articleId: 'refresh-article-3', firstDirtyToken: 1, lastDirtyToken: 1}])
   expect(result.secondBatch).toEqual({articleIds: ['refresh-article-3'], hasMore: false})
   expect(result.secondCompletion.isClaimComplete).toBe(true)
-  expect(result.secondCompletion.completedState?.lastCompletedRefreshToken).toBe(1)
+  expect(result.secondCompletion.completedState?.lastCompletedDirtyToken).toBe(1)
 })
 
 test('getDirtyArticleBatchForClaim keeps large-scope reads bounded and deterministic', () => {
   const result = runRefreshStateScript<{
     batch: {articleIds: string[]; hasMore: boolean}
-    completion: {completedState: ProjectMartRefreshStateRecord | null; isClaimComplete: boolean}
+    completion: {completedState: ProjectMartDirtyRefreshStateRecord | null; isClaimComplete: boolean}
     nextBatch: {articleIds: string[]; hasMore: boolean}
     remainingRow: {rowCount: number}
-    state: ProjectMartRefreshStateRecord
+    state: ProjectMartDirtyRefreshStateRecord
   }>(`
-    const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
+    const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
 
-    const service = getProjectMartRefreshStateService()
+    const service = getProjectMartDirtyRefreshStateService()
     const largeArticleIds = Array.from({length: 40}, (_value, index) => {
       return \`large-refresh-article-\${String(index + 1).padStart(3, '0')}\`
     })
@@ -1053,8 +1053,8 @@ test('getDirtyArticleBatchForClaim keeps large-scope reads bounded and determini
       SELECT
         project_id AS projectId,
         CAST(dirty_token AS INTEGER) AS dirtyToken,
-        CAST(active_refresh_token AS INTEGER) AS activeRefreshToken,
-        CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+        CAST(active_dirty_token AS INTEGER) AS activeDirtyToken,
+        CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken,
         refresh_status AS refreshStatus,
         worker_id AS workerId
       FROM app.project_mart_refresh_state
@@ -1087,9 +1087,9 @@ test('getDirtyArticleBatchForClaim keeps large-scope reads bounded and determini
   expect(result.completion).toMatchObject({completedState: null, isClaimComplete: false})
   expect(result.remainingRow.rowCount).toBe(33)
   expect(result.state).toMatchObject({
-    activeRefreshToken: 1,
+    activeDirtyToken: 1,
     dirtyToken: 1,
-    lastCompletedRefreshToken: 0,
+    lastCompletedDirtyToken: 0,
     refreshStatus: 'running',
     workerId: 'worker-1',
   })
@@ -1107,12 +1107,12 @@ test('getDirtyArticleBatchForClaim keeps large-scope reads bounded and determini
 
 test('finalizeProjectRefreshAfterLargeRebuild advances refresh completion after claim release', () => {
   const result = runRefreshStateScript<{
-    finalizedState: ProjectMartRefreshStateRecord | null
+    finalizedState: ProjectMartDirtyRefreshStateRecord | null
     remainingArticlesAfterFinalize: ProjectMartRefreshArticleStateRecord[]
     unresolvedAfterFinalize: Array<{articleId: string}>
   }>(`
-    const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
-    const service = getProjectMartRefreshStateService()
+    const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
+    const service = getProjectMartDirtyRefreshStateService()
 
     await service.markProjectsDirtyAtomically({
       projects: [{projectId: 'refresh-project-1', articleIds: ['refresh-article-1']}],
@@ -1174,8 +1174,8 @@ test('finalizeProjectRefreshAfterLargeRebuild advances refresh completion after 
 
   expect(result.finalizedState?.projectId).toBe('refresh-project-1')
   expect(result.finalizedState?.dirtyToken).toBe(2)
-  expect(result.finalizedState?.lastCompletedRefreshToken).toBe(1)
-  expect(result.finalizedState?.activeRefreshToken).toBe(0)
+  expect(result.finalizedState?.lastCompletedDirtyToken).toBe(1)
+  expect(result.finalizedState?.activeDirtyToken).toBe(0)
   expect(result.finalizedState?.refreshStatus).toBe('idle')
   expect(result.finalizedState?.workerId).toBeNull()
   expect(
@@ -1195,8 +1195,8 @@ test('clearArchivedProjectRefreshStates removes archived refresh debt and claimD
     archivedRefreshRows: number
     archivedArticleRows: number
   }>(`
-    const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
-    const service = getProjectMartRefreshStateService()
+    const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
+    const service = getProjectMartDirtyRefreshStateService()
 
     await database.run(\`
       UPDATE app.project
@@ -1243,20 +1243,20 @@ test('dirty project claims skip quarantined articles and complete healthy work',
     batch: {articleIds: string[]; hasMore: boolean} | null
     claims: Array<{projectId: string}>
     claimsAfterCompletion: Array<{projectId: string}>
-    completion: {completedState: ProjectMartRefreshStateRecord | null; isClaimComplete: boolean} | null
+    completion: {completedState: ProjectMartDirtyRefreshStateRecord | null; isClaimComplete: boolean} | null
     quarantine: {articleId: string; detectedBy: string | null; error: string} | null
     quarantinedArticles: Array<{articleId: string; detectedBy: string | null; error: string}>
     refreshState: {
-      activeRefreshToken: number
+      activeDirtyToken: number
       dirtyToken: number
-      lastCompletedRefreshToken: number
+      lastCompletedDirtyToken: number
       lastError: string | null
       refreshStatus: string
       workerId: string | null
     } | null
   }>(`
-    const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
-    const service = getProjectMartRefreshStateService()
+    const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
+    const service = getProjectMartDirtyRefreshStateService()
 
     await service.markProjectsDirtyAtomically({
       projects: [{articleIds: ['refresh-article-1', 'refresh-article-2'], projectId: 'refresh-project-1'}],
@@ -1302,9 +1302,9 @@ test('dirty project claims skip quarantined articles and complete healthy work',
     \`)
     const [refreshState] = await database.queryJson(\`
       SELECT
-        CAST(active_refresh_token AS INTEGER) AS activeRefreshToken,
+        CAST(active_dirty_token AS INTEGER) AS activeDirtyToken,
         CAST(dirty_token AS INTEGER) AS dirtyToken,
-        CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+        CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken,
         last_error AS lastError,
         refresh_status AS refreshStatus,
         worker_id AS workerId
@@ -1332,7 +1332,7 @@ test('dirty project claims skip quarantined articles and complete healthy work',
   expect(result.claims).toEqual([{projectId: 'refresh-project-1'}])
   expect(result.batch).toEqual({articleIds: ['refresh-article-2'], hasMore: false})
   expect(result.completion?.isClaimComplete).toBe(true)
-  expect(result.completion?.completedState?.lastCompletedRefreshToken).toBe(1)
+  expect(result.completion?.completedState?.lastCompletedDirtyToken).toBe(1)
   expect(result.claimsAfterCompletion).toEqual([])
   expect(
     result.articleRows.map((row) => {
@@ -1345,9 +1345,9 @@ test('dirty project claims skip quarantined articles and complete healthy work',
     }),
   ).toEqual([{articleId: 'refresh-article-1', detectedBy: 'test-suite', error: 'native crash repro'}])
   expect(result.refreshState).toMatchObject({
-    activeRefreshToken: 0,
+    activeDirtyToken: 0,
     dirtyToken: 1,
-    lastCompletedRefreshToken: 1,
+    lastCompletedDirtyToken: 1,
     lastError: null,
     refreshStatus: 'idle',
     workerId: null,
@@ -1356,9 +1356,9 @@ test('dirty project claims skip quarantined articles and complete healthy work',
 
 test('claimDirtyProjects skips projects already handed off to large rebuild state', () => {
   const result = runRefreshStateScript<{claims: Array<{projectId: string}>}>(`
-    const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
+    const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
     const {getProjectMartLargeRebuildStateService} = await import('./src/server/services/projectMartLargeRebuildStateService.ts')
-    const refreshStateService = getProjectMartRefreshStateService()
+    const refreshStateService = getProjectMartDirtyRefreshStateService()
     const largeRebuildStateService = getProjectMartLargeRebuildStateService()
 
     await refreshStateService.markProjectsDirtyAtomically({

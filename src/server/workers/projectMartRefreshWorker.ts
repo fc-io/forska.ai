@@ -4,11 +4,11 @@ import {sleep} from '../../utils/sleep.ts'
 import {getJudgmentJobSqliteService} from '../cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
-import {getProjectMartLargeRebuildStateService} from '../services/projectMartLargeRebuildStateService.ts'
 import {
-  getProjectMartRefreshStateService,
+  getProjectMartDirtyRefreshStateService,
   type ProjectRefreshClaim,
-} from '../services/projectMartRefreshStateService.ts'
+} from '../services/projectMartDirtyRefreshStateService.ts'
+import {getProjectMartLargeRebuildStateService} from '../services/projectMartLargeRebuildStateService.ts'
 
 type ProjectMartRefreshStateWorkerService = {
   claimDirtyProjects: (params: {
@@ -134,7 +134,7 @@ const defaultProjectMartRefreshWorkerDependencies: ProjectMartRefreshWorkerDepen
   refreshService: getDuckdbMartRefreshService(),
   sleep,
   sqliteService: getJudgmentJobSqliteService(),
-  stateService: getProjectMartRefreshStateService(),
+  stateService: getProjectMartDirtyRefreshStateService(),
 }
 
 const getProjectMartRefreshWorkerId = () => {

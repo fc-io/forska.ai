@@ -11,7 +11,7 @@ type CliOptions = {
 
 type RefreshStateRow = {
   dirtyToken: number | string | null
-  lastCompletedRefreshToken: number | string | null
+  lastCompletedDirtyToken: number | string | null
   leaseExpiresAt: string | null
   refreshStatus: string | null
   workerId: string | null
@@ -59,7 +59,7 @@ const getRefreshState = async (projectId: string) => {
   const [row] = await getAppDatabaseService().queryJson<RefreshStateRow>(`
     SELECT
       dirty_token AS dirtyToken,
-      last_completed_refresh_token AS lastCompletedRefreshToken,
+      last_completed_dirty_token AS lastCompletedDirtyToken,
       lease_expires_at AS leaseExpiresAt,
       refresh_status AS refreshStatus,
       worker_id AS workerId
@@ -104,7 +104,7 @@ const getRiskSnapshot = async ({incrementalArticleThreshold, projectId}: CliOpti
     dirtyArticleCount,
     dirtyToken: toNumber(refreshState?.dirtyToken),
     hasTrackedJudgmentJobs,
-    lastCompletedRefreshToken: toNumber(refreshState?.lastCompletedRefreshToken),
+    lastCompletedDirtyToken: toNumber(refreshState?.lastCompletedDirtyToken),
     leaseExpiresAt: refreshState?.leaseExpiresAt ?? null,
     plannedRefreshMode: getProjectMartRefreshExecutionMode({dirtyArticleCount, incrementalArticleThreshold}),
     projectId,

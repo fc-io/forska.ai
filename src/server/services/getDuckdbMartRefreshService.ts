@@ -3,8 +3,11 @@ import {hostname} from 'node:os'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
 import {getMaintenanceWorkLeaseService} from './maintenanceWorkLeaseService.ts'
+import {
+  getProjectMartDirtyRefreshStateService,
+  type MarkedProjectDirtyState,
+} from './projectMartDirtyRefreshStateService.ts'
 import {getProjectMartLargeRebuildStateService} from './projectMartLargeRebuildStateService.ts'
-import {getProjectMartRefreshStateService, type MarkedProjectDirtyState} from './projectMartRefreshStateService.ts'
 import {getProjectVisibleJudgmentScopeSql} from './projectVisibleJudgmentRule.ts'
 
 type MartRefreshScope = 'judgment_article'
@@ -2040,7 +2043,7 @@ const queueLargeRebuildsForDirtyStates = async (
 }
 
 const queueProjectLargeRebuilds = async (projectIds: string[], reason: string) => {
-  const refreshStateService = getProjectMartRefreshStateService()
+  const refreshStateService = getProjectMartDirtyRefreshStateService()
   const uniqueProjectIds = getUniqueValues(projectIds)
 
   return uniqueProjectIds.length === 0
@@ -2058,7 +2061,7 @@ const queueProjectLargeRebuilds = async (projectIds: string[], reason: string) =
 }
 
 const markProjectRefreshesDirty = async (projectIds: string[], reason: string) => {
-  const refreshStateService = getProjectMartRefreshStateService()
+  const refreshStateService = getProjectMartDirtyRefreshStateService()
   const uniqueProjectIds = getUniqueValues(projectIds)
 
   return uniqueProjectIds.length === 0
@@ -2076,7 +2079,7 @@ const queueProjectLargeRebuildForDirtyArticles = async (projectId: string, artic
   return refreshArticleIds.length === 0
     ? []
     : (getAppDatabaseService().transaction(async (tx) => {
-        const states = await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+        const states = await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
           projects: [{articleIds: refreshArticleIds, projectId}],
           reason,
           runner: tx,

@@ -1,6 +1,6 @@
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList} from './appQueryHelpers.ts'
-import {getProjectMartRefreshStateService} from './projectMartRefreshStateService.ts'
+import {getProjectMartDirtyRefreshStateService} from './projectMartDirtyRefreshStateService.ts'
 
 const chunk = <T>(arr: T[], size: number): T[][] => {
   const out: T[][] = []
@@ -197,7 +197,7 @@ export const insertArticlesIntoProject = async (
     }
 
     if (toInsert.length > 0 || linkedPrompts > 0) {
-      await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+      await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
         projects: [{articleIds: validIds, projectId}],
         reason: 'insertArticlesIntoProject',
         runner: tx,

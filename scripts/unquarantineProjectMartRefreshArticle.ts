@@ -42,7 +42,7 @@ const unquarantineProjectMartRefreshArticle = async () => {
         last_error = NULL,
         worker_id = NULL,
         lease_expires_at = NULL,
-        active_refresh_token = 0,
+        active_dirty_token = 0,
         updated_at = current_timestamp
       WHERE project_id IN (
         SELECT DISTINCT project_id

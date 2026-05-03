@@ -1,7 +1,7 @@
 import {getAppDatabaseService, type JudgmentInsertRow} from '../../services/appDatabaseService.ts'
 import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {getMaintenanceWorkLeaseService} from '../../services/maintenanceWorkLeaseService.ts'
-import {getProjectMartRefreshStateService} from '../../services/projectMartRefreshStateService.ts'
+import {getProjectMartDirtyRefreshStateService} from '../../services/projectMartDirtyRefreshStateService.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {getImportableJudgmentJobWhereSql} from './judgmentJobImportScope.ts'
 import {getJudgmentJobSqliteJobIds} from './judgmentJobPaths.ts'
@@ -303,7 +303,7 @@ const markRefreshStateDirtyForEntries = async (entries: JudgmentJobSqliteOutboxE
     return
   }
 
-  await getProjectMartRefreshStateService().markArticleProjectsDirtyAtomically({
+  await getProjectMartDirtyRefreshStateService().markArticleProjectsDirtyAtomically({
     articleIds,
     reason: 'sqliteJudgmentOutboxImport',
     requestedBy: requestedBy ?? null,

@@ -5,13 +5,13 @@ import {
   recordProjectMartLargeRebuildCycleMetric,
 } from '../utils/projectMartLargeRebuildRuntimeMetrics.ts'
 import {getDuckdbMartRefreshService} from './getDuckdbMartRefreshService.ts'
+import {getProjectMartDirtyRefreshStateService} from './projectMartDirtyRefreshStateService.ts'
 import {
   getProjectMartLargeRebuildExecutor,
   type ProjectMartLargeRebuildBatchCursor,
   type ProjectMartLargeRebuildScopeBatchRow,
 } from './projectMartLargeRebuildExecutor.ts'
 import {getProjectMartLargeRebuildStateService, type LargeRebuildClaim} from './projectMartLargeRebuildStateService.ts'
-import {getProjectMartRefreshStateService} from './projectMartRefreshStateService.ts'
 
 type ProjectMartLargeRebuildRunnerDependencies = {
   archivedProjectCleanupService: {
@@ -146,7 +146,7 @@ const defaultDependencies: ProjectMartLargeRebuildRunnerDependencies = {
   archivedProjectCleanupService: getDuckdbMartRefreshService(),
   executor: getProjectMartLargeRebuildExecutor(),
   largeRebuildStateService: getProjectMartLargeRebuildStateService(),
-  refreshStateService: getProjectMartRefreshStateService(),
+  refreshStateService: getProjectMartDirtyRefreshStateService(),
   sqliteService: getJudgmentJobSqliteService(),
 }
 

@@ -3,7 +3,7 @@ import {Elysia, t} from 'elysia'
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import {escapeSqlString} from '../services/appQueryHelpers.ts'
 import {insertArticlesIntoProject} from '../services/insertArticlesIntoProject.ts'
-import {getProjectMartRefreshStateService} from '../services/projectMartRefreshStateService.ts'
+import {getProjectMartDirtyRefreshStateService} from '../services/projectMartDirtyRefreshStateService.ts'
 
 export const projectArticlesRoutes = new Elysia()
   .get(
@@ -89,7 +89,7 @@ export const projectArticlesRoutes = new Elysia()
           AND article_id = '${escapeSqlString(articleId)}'
       `)
 
-      await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+      await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
         projects: [{articleIds: [articleId], projectId}],
         reason: 'ProjectArticlesRoutes.delete',
         runner: tx,

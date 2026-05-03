@@ -3021,8 +3021,8 @@ test('active review API and OLAP reads stay generation-bound through queued runn
           INSERT INTO app.project_mart_refresh_state (
             project_id,
             dirty_token,
-            active_refresh_token,
-            last_completed_refresh_token,
+            active_dirty_token,
+            last_completed_dirty_token,
             last_requested_at,
             refresh_status
           ) VALUES (
@@ -3054,7 +3054,7 @@ test('active review API and OLAP reads stay generation-bound through queued runn
 
         await database.run(\`
           UPDATE app.project_mart_refresh_state
-          SET active_refresh_token = 2,
+          SET active_dirty_token = 2,
               refresh_status = 'running',
               last_started_at = TIMESTAMPTZ '2026-04-02T00:02:00.000Z',
               lease_expires_at = TIMESTAMPTZ '2035-04-02T00:02:30.000Z',
@@ -3075,10 +3075,10 @@ test('active review API and OLAP reads stay generation-bound through queued runn
         await executor.finalizeProjectReviewServing(projectId, targetGeneration)
         await database.run(\`
           UPDATE app.project_mart_refresh_state
-          SET last_completed_refresh_token = 2,
+          SET last_completed_dirty_token = 2,
               last_completed_at = TIMESTAMPTZ '2026-04-02T00:03:00.000Z',
               refresh_status = 'idle',
-              active_refresh_token = 0,
+              active_dirty_token = 0,
               lease_expires_at = NULL,
               worker_id = NULL
           WHERE project_id = 'project-active-read-gates'

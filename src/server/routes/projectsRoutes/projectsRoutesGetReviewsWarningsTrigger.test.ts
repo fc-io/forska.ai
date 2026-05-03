@@ -40,7 +40,7 @@ test('reviews warnings trigger mart refresh draining when backlog exists on a wr
                 ? [
                     {
                       dirtyToken: 2,
-                      lastCompletedRefreshToken: 1,
+                      lastCompletedDirtyToken: 1,
                       lastRequestedAt: '2026-03-25T12:00:00.000Z',
                       refreshStatus: 'idle',
                     },

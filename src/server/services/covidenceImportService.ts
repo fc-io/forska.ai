@@ -14,7 +14,7 @@ import {
   storeImportedArticles,
   syncImportedArticlesWithTx,
 } from './articleImportStoreService.ts'
-import {getProjectMartRefreshStateService} from './projectMartRefreshStateService.ts'
+import {getProjectMartDirtyRefreshStateService} from './projectMartDirtyRefreshStateService.ts'
 
 type CovidenceImportMode = 'title_abstract' | 'full_text'
 type CovidenceFileRole = 'all' | 'irrelevant' | 'full_text' | 'excluded' | 'included'
@@ -1938,7 +1938,7 @@ const syncCovidenceSeededProjectArticles = async (params: {
 
   return params.articleIds.length === 0
     ? scopeChanged
-      ? getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+      ? getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
           projects: [{articleIds: currentArticleIds, projectId: params.projectId}],
           reason: 'syncCovidenceProjectScopeFromConfig',
           runner: queryRunner,
@@ -1958,7 +1958,7 @@ const syncCovidenceSeededProjectArticles = async (params: {
         )
         .then(() => {
           return scopeChanged
-            ? getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+            ? getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
                 projects: [
                   {
                     articleIds: Array.from(new Set([...currentArticleIds, ...nextArticleIds])),
@@ -1977,7 +1977,7 @@ const markCovidenceSeededHumanJudgmentsDirty = async (params: {
   projectId: string
   tx?: CovidenceProjectTx
 }) => {
-  await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+  await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
     projects: [{articleIds: params.articleIds, projectId: params.projectId}],
     reason: 'seedCovidenceHumanJudgmentsFromConfig',
     runner: params.tx,

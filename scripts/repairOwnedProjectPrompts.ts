@@ -1,7 +1,7 @@
 import {flushJudgmentJobSqliteOutbox} from '../src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts'
 import {getJudgmentJobSqliteService} from '../src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
-import {getProjectMartRefreshStateService} from '../src/server/services/projectMartRefreshStateService.ts'
+import {getProjectMartDirtyRefreshStateService} from '../src/server/services/projectMartDirtyRefreshStateService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 
 type RepairOptions = {apply: boolean; deleteEmptyJobs: boolean; flush: boolean; projectId: string | null}
@@ -292,7 +292,7 @@ const getUniqueProjectIds = (projectIds: string[]) => {
 }
 
 const markProjectRefreshesDirty = async (tx: TransactionRunner, projectIds: string[]) => {
-  const refreshStateService = getProjectMartRefreshStateService()
+  const refreshStateService = getProjectMartDirtyRefreshStateService()
   const uniqueProjectIds = getUniqueProjectIds(projectIds)
   const dirtyProjects = await refreshStateService.getDirtyProjectsForProjectIds(tx, uniqueProjectIds)
 

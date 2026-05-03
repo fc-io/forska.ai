@@ -361,11 +361,11 @@ export type ProjectArticleRecord = {
   articleId: string
 }
 
-export type ProjectMartRefreshStateRecord = {
+export type ProjectMartDirtyRefreshStateRecord = {
   projectId: string
   dirtyToken: number
-  activeRefreshToken: number
-  lastCompletedRefreshToken: number
+  activeDirtyToken: number
+  lastCompletedDirtyToken: number
   lastRequestedAt: Date
   lastRequestReason: string | null
   requestedBy: string | null
@@ -393,6 +393,28 @@ export type ProjectMartRefreshArticleQuarantineRecord = {
   articleId: string
   error: string
   detectedBy: string | null
+  createdAt: Date
+  updatedAt: Date
+}
+
+export type ProjectMartDirtyMaterializationStateRecord = {
+  projectId: string
+  sourceKind: string
+  targetDirtyToken: number
+  cursorArticleCreatedAt: Date | null
+  cursorArticleId: string | null
+  insertedRowCount: number
+  sourceScopeGeneration: number | null
+  sourceScopeHighWaterArticleCreatedAt: Date | null
+  sourceScopeHighWaterArticleId: string | null
+  sourceScopeFingerprint: string | null
+  materializationStatus: string
+  materializationOwner: string | null
+  leaseExpiresAt: Date | null
+  lastStartedAt: Date | null
+  lastCompletedAt: Date | null
+  lastFailedAt: Date | null
+  lastError: string | null
   createdAt: Date
   updatedAt: Date
 }

@@ -1,7 +1,7 @@
 {
   "name": "Rebuild 2 Plan",
-  "branchName": "ralph/rebuild-2",
   "description": "Finish the rebuild2 mart-maintenance cutover so dirty-refresh, large-rebuild, archived cleanup, quarantine, and judgment import paths are bounded, fenced, and resumable for 2M-article projects.",
+  "branchName": "ralph/rebuild-2",
   "userStories": [
     {
       "id": "US-001",
@@ -18,9 +18,10 @@
         "bun run lint passes"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "",
-      "dependsOn": []
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-002",
@@ -38,7 +39,9 @@
       "priority": 2,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001"]
+      "dependsOn": [
+        "US-001"
+      ]
     },
     {
       "id": "US-003",
@@ -57,7 +60,10 @@
       "priority": 3,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001", "US-002"]
+      "dependsOn": [
+        "US-001",
+        "US-002"
+      ]
     },
     {
       "id": "US-004",
@@ -79,7 +85,10 @@
       "priority": 4,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001", "US-002"]
+      "dependsOn": [
+        "US-001",
+        "US-002"
+      ]
     },
     {
       "id": "US-005",
@@ -99,7 +108,11 @@
       "priority": 5,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001", "US-003", "US-004"]
+      "dependsOn": [
+        "US-001",
+        "US-003",
+        "US-004"
+      ]
     },
     {
       "id": "US-006",
@@ -118,7 +131,10 @@
       "priority": 6,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-004", "US-005"]
+      "dependsOn": [
+        "US-004",
+        "US-005"
+      ]
     },
     {
       "id": "US-007",
@@ -139,7 +155,9 @@
       "priority": 7,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-006"]
+      "dependsOn": [
+        "US-006"
+      ]
     },
     {
       "id": "US-008",
@@ -158,7 +176,9 @@
       "priority": 8,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-003"]
+      "dependsOn": [
+        "US-003"
+      ]
     },
     {
       "id": "US-009",
@@ -177,7 +197,10 @@
       "priority": 9,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-006", "US-008"]
+      "dependsOn": [
+        "US-006",
+        "US-008"
+      ]
     },
     {
       "id": "US-010",
@@ -197,7 +220,10 @@
       "priority": 10,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-003", "US-008"]
+      "dependsOn": [
+        "US-003",
+        "US-008"
+      ]
     },
     {
       "id": "US-011",
@@ -218,7 +244,10 @@
       "priority": 11,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-001", "US-010"]
+      "dependsOn": [
+        "US-001",
+        "US-010"
+      ]
     },
     {
       "id": "US-012",
@@ -240,7 +269,10 @@
       "priority": 12,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-007", "US-011"]
+      "dependsOn": [
+        "US-007",
+        "US-011"
+      ]
     },
     {
       "id": "US-013",
@@ -260,7 +292,11 @@
       "priority": 13,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-002", "US-006", "US-012"]
+      "dependsOn": [
+        "US-002",
+        "US-006",
+        "US-012"
+      ]
     },
     {
       "id": "US-014",
@@ -279,7 +315,11 @@
       "priority": 14,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-006", "US-011", "US-013"]
+      "dependsOn": [
+        "US-006",
+        "US-011",
+        "US-013"
+      ]
     },
     {
       "id": "US-015",
@@ -299,7 +339,10 @@
       "priority": 15,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-011", "US-014"]
+      "dependsOn": [
+        "US-011",
+        "US-014"
+      ]
     },
     {
       "id": "US-016",
@@ -323,7 +366,12 @@
       "priority": 16,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-002", "US-008", "US-011", "US-014"]
+      "dependsOn": [
+        "US-002",
+        "US-008",
+        "US-011",
+        "US-014"
+      ]
     },
     {
       "id": "US-017",
@@ -343,7 +391,9 @@
       "priority": 17,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-016"]
+      "dependsOn": [
+        "US-016"
+      ]
     },
     {
       "id": "US-018",
@@ -361,7 +411,11 @@
       "priority": 18,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-007", "US-012", "US-013"]
+      "dependsOn": [
+        "US-007",
+        "US-012",
+        "US-013"
+      ]
     },
     {
       "id": "US-019",
@@ -382,7 +436,17 @@
       "priority": 19,
       "passes": false,
       "notes": "",
-      "dependsOn": ["US-010", "US-011", "US-015", "US-016", "US-017", "US-018"]
+      "dependsOn": [
+        "US-010",
+        "US-011",
+        "US-015",
+        "US-016",
+        "US-017",
+        "US-018"
+      ]
     }
-  ]
+  ],
+  "metadata": {
+    "updatedAt": "2026-05-03T20:14:45.070Z"
+  }
 }

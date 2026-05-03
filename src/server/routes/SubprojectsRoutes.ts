@@ -4,7 +4,7 @@ import {assertSelectableProviderModelId} from '../providers/providerModelReposit
 import {getAppDatabaseService} from '../services/appDatabaseService.ts'
 import * as appQueryHelpers from '../services/appQueryHelpers.ts'
 import {getOrCreateImmutablePromptTx} from '../services/immutablePromptService.ts'
-import {getProjectMartRefreshStateService} from '../services/projectMartRefreshStateService.ts'
+import {getProjectMartDirtyRefreshStateService} from '../services/projectMartDirtyRefreshStateService.ts'
 import {hasMatchingJudgmentAnswer} from '../utils/judgmentAnswers.ts'
 import {withErrorHandler} from '../utils/routeErrorHandler.ts'
 
@@ -522,7 +522,7 @@ export const subprojectsRoutes = new Elysia()
           `)
         }
 
-        await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+        await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
           projects: [{articleIds, projectId: createdProject.id}],
           reason: 'SubprojectsRoutes.post',
           runner: tx,

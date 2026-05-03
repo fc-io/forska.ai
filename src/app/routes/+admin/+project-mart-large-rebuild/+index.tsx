@@ -31,9 +31,9 @@ type ProjectMartLargeRebuildStatus = {
   } | null
   project: {archived: boolean; id: string; name: string}
   refreshState: {
-    activeRefreshToken: number
+    activeDirtyToken: number
     dirtyToken: number
-    lastCompletedRefreshToken: number
+    lastCompletedDirtyToken: number
     lastError: string | null
     refreshStatus: string
     workerId: string | null
@@ -745,7 +745,7 @@ const AdminProjectMartLargeRebuildPage = () => {
                           Last Completed Token
                         </div>
                         <div class="mt-1 font-medium text-stone-900">
-                          {formatValue(status().refreshState?.lastCompletedRefreshToken)}
+                          {formatValue(status().refreshState?.lastCompletedDirtyToken)}
                         </div>
                       </div>
                     </div>
@@ -836,7 +836,7 @@ const AdminProjectMartLargeRebuildPage = () => {
                           <dt class="text-xs font-semibold uppercase tracking-wide text-stone-500">
                             Active Refresh Token
                           </dt>
-                          <dd class="mt-1 text-stone-900">{formatValue(status().refreshState?.activeRefreshToken)}</dd>
+                          <dd class="mt-1 text-stone-900">{formatValue(status().refreshState?.activeDirtyToken)}</dd>
                         </div>
                         <div>
                           <dt class="text-xs font-semibold uppercase tracking-wide text-stone-500">

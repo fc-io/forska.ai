@@ -1,10 +1,10 @@
-import {getProjectMartRefreshStateService} from '../src/server/services/projectMartRefreshStateService.ts'
+import {getProjectMartDirtyRefreshStateService} from '../src/server/services/projectMartDirtyRefreshStateService.ts'
 import {getDuckdbMartRefreshService} from '../src/server/services/getDuckdbMartRefreshService.ts'
 
 const projectId = process.argv[2]
 if (!projectId) throw new Error('project id arg required')
 
-const svc = getProjectMartRefreshStateService()
+const svc = getProjectMartDirtyRefreshStateService()
 const projectRows = await svc.getDirtyArticlesForClaim({
   projectId,
   claimedToken: 999999,

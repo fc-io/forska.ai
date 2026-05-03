@@ -11,6 +11,7 @@ const nonTransactionalDuckdbMigrationFiles = new Set([
   '0013_rebuildArticleWithoutOpenalexId.sql',
   '0021_rebuildModelWithProviderConnections.sql',
   '0040_projectPromptCriteriaDispositionCombined.sql',
+  '0059_projectMartDirtyMaterializationState.sql',
 ])
 
 const getDuckdbMigrationFiles = (folder: string) => {
