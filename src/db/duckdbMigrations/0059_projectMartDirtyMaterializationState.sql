@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS app.project_mart_dirty_materialization_state (
   source_scope_high_water_article_created_at TIMESTAMPTZ,
   source_scope_high_water_article_id VARCHAR,
   source_scope_fingerprint VARCHAR,
+  source_scope_expected_row_count BIGINT,
   materialization_status VARCHAR NOT NULL DEFAULT 'pending',
   materialization_owner VARCHAR,
   lease_expires_at TIMESTAMPTZ,

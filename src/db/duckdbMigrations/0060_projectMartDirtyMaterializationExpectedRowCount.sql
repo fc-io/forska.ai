@@ -1,0 +1,2 @@
+ALTER TABLE app.project_mart_dirty_materialization_state
+ADD COLUMN IF NOT EXISTS source_scope_expected_row_count BIGINT;

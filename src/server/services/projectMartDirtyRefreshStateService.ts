@@ -6,6 +6,10 @@ import type {
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral, getTimestampLiteral} from './appQueryHelpers.ts'
 import {getMaintenanceWorkLeaseService} from './maintenanceWorkLeaseService.ts'
+import {
+  getProjectMartDirtyMaterializationService,
+  projectScopeDirtyMaterializationSourceKind,
+} from './projectMartDirtyMaterializationService.ts'
 
 type RefreshStateRunner = {queryJson: <T>(statement: string) => Promise<T[]>; run: (statement: string) => Promise<void>}
 
@@ -32,6 +36,8 @@ type MarkedProjectDirtyState = {dirtyToken: number; projectId: string}
 type DirtyProjectArticleRow = {articleId: string; projectId: string}
 
 type DirtyProjectIdRow = {projectId: string}
+
+type NormalizedDirtyProject = {articleIds?: string[]; projectId: string}
 
 type ClaimDirtyProjectsParams = {leaseMs: number; limit: number; now?: Date; workerId: string}
 
@@ -114,15 +120,16 @@ const getNormalizedBatchSize = (batchSize: number) => {
 const normalizeDirtyProjects = (projects: DirtyProjectInput[]) => {
   return projects.reduce((acc, project) => {
     const existing = acc.get(project.projectId)
-    const articleIds = getUniqueValues(project.articleIds ?? [])
+    const articleIds = project.articleIds === undefined ? undefined : getUniqueValues(project.articleIds)
+    const normalizedArticleIds =
+      articleIds === undefined || (existing !== undefined && existing.articleIds === undefined)
+        ? undefined
+        : getUniqueValues([...(existing?.articleIds ?? []), ...articleIds])
 
-    acc.set(project.projectId, {
-      articleIds: getUniqueValues([...(existing?.articleIds ?? []), ...articleIds]),
-      projectId: project.projectId,
-    })
+    acc.set(project.projectId, {articleIds: normalizedArticleIds, projectId: project.projectId})
 
     return acc
-  }, new Map<string, {articleIds: string[]; projectId: string}>())
+  }, new Map<string, NormalizedDirtyProject>())
 }
 
 const ensureProjectRefreshStateRow = async (runner: RefreshStateRunner, projectId: string) => {
@@ -151,7 +158,7 @@ const getProjectRefreshArticleQuarantineRecord = async (runner: RefreshStateRunn
 
 const markSingleProjectDirty = async (
   runner: RefreshStateRunner,
-  project: {articleIds: string[]; projectId: string},
+  project: NormalizedDirtyProject,
   params: {now: Date; requestedBy: string | null; reason: string | null},
 ): Promise<MarkedProjectDirtyState> => {
   await ensureProjectRefreshStateRow(runner, project.projectId)
@@ -174,7 +181,37 @@ const markSingleProjectDirty = async (
     throw new Error(`Failed to mark project refresh state dirty for ${project.projectId}`)
   }
 
-  if (project.articleIds.length > 0) {
+  if (project.articleIds === undefined) {
+    const sourceSnapshot =
+      await getProjectMartDirtyMaterializationService().getProjectScopeDirtyMaterializationSnapshot({
+        projectId: project.projectId,
+        runner,
+      })
+
+    await getProjectMartDirtyMaterializationService().queueDirtyMaterialization({
+      projectId: project.projectId,
+      runner,
+      sourceKind: projectScopeDirtyMaterializationSourceKind,
+      targetDirtyToken: state.dirtyToken,
+      ...sourceSnapshot,
+      now: params.now,
+    })
+
+    if (sourceSnapshot.sourceScopeExpectedRowCount === 0) {
+      await runner.run(`
+        UPDATE app.project_mart_dirty_materialization_state
+        SET
+          materialization_status = 'completed',
+          last_completed_at = ${getTimestampLiteral(params.now)},
+          updated_at = ${getTimestampLiteral(params.now)}
+        WHERE project_id = ${getSqlLiteral(project.projectId)}
+          AND source_kind = ${getSqlLiteral(projectScopeDirtyMaterializationSourceKind)}
+          AND target_dirty_token = ${state.dirtyToken}
+      `)
+    }
+  }
+
+  if (project.articleIds !== undefined && project.articleIds.length > 0) {
     await runner.run(`
       INSERT INTO app.project_mart_refresh_article_state (
         project_id,
@@ -285,65 +322,13 @@ const getDirtyProjectsForProjectIds = async (runner: RefreshStateRunner, project
     return []
   }
 
-  const [projectRows, articleRows] = await Promise.all([
-    runner.queryJson<DirtyProjectIdRow>(`
-      SELECT id AS projectId
-      FROM app.project
-      WHERE id IN (${getQuotedStringList(uniqueProjectIds).join(', ')})
-        AND archived = FALSE
-      ORDER BY id ASC
-    `),
-    runner.queryJson<DirtyProjectArticleRow>(`
-      SELECT projectId, articleId
-      FROM (
-        SELECT
-          project_article.project_id AS projectId,
-          project_article.article_id AS articleId
-        FROM app.project_article project_article
-        INNER JOIN app.project project ON project.id = project_article.project_id
-        INNER JOIN app.article article ON article.id = project_article.article_id
-        WHERE project_article.project_id IN (${getQuotedStringList(uniqueProjectIds).join(', ')})
-          AND project.archived = FALSE
-          AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
-          AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
-        UNION
-        SELECT
-          project_import_route.project_id AS projectId,
-          article_import_route.article_id AS articleId
-        FROM app.article_import_route article_import_route
-        INNER JOIN app.project_import_route project_import_route
-          ON project_import_route.import_route_id = article_import_route.import_route_id
-        INNER JOIN app.project project ON project.id = project_import_route.project_id
-        INNER JOIN app.article article ON article.id = article_import_route.article_id
-        WHERE project_import_route.project_id IN (${getQuotedStringList(uniqueProjectIds).join(', ')})
-          AND project.archived = FALSE
-          AND (project.date_from IS NULL OR article.article_created_at >= project.date_from)
-          AND (project.date_to IS NULL OR article.article_created_at <= project.date_to)
-        UNION
-        SELECT
-          scope_article.project_id AS projectId,
-          scope_article.article_id AS articleId
-        FROM mart.project_scope_article scope_article
-        INNER JOIN app.project project ON project.id = scope_article.project_id
-        WHERE scope_article.project_id IN (${getQuotedStringList(uniqueProjectIds).join(', ')})
-          AND project.archived = FALSE
-      ) scoped_articles
-      ORDER BY projectId ASC, articleId ASC
-    `),
-  ])
-
-  return projectRows.map((project) => {
-    return {
-      articleIds: articleRows
-        .filter((row) => {
-          return row.projectId === project.projectId
-        })
-        .map((row) => {
-          return row.articleId
-        }),
-      projectId: project.projectId,
-    }
-  })
+  return runner.queryJson<DirtyProjectIdRow>(`
+    SELECT id AS projectId
+    FROM app.project
+    WHERE id IN (${getQuotedStringList(uniqueProjectIds).join(', ')})
+      AND archived = FALSE
+    ORDER BY id ASC
+  `)
 }
 
 const markProjectsDirtyAtomically = async ({
@@ -415,6 +400,13 @@ const claimDirtyProjects = async ({
         WHERE large_rebuild.project_id = state.project_id
           AND large_rebuild.refresh_token >= state.dirty_token
       )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.project_mart_dirty_materialization_state materialization
+        WHERE materialization.project_id = state.project_id
+          AND materialization.target_dirty_token = state.dirty_token
+          AND materialization.materialization_status <> 'completed'
+      )
       AND (
         state.refresh_status <> 'running'
         OR state.lease_expires_at IS NULL
@@ -438,6 +430,13 @@ const claimDirtyProjects = async ({
         updated_at = ${getTimestampLiteral(currentNow)}
       WHERE project_id = ${getSqlLiteral(row.projectId)}
         AND dirty_token > last_completed_dirty_token
+        AND NOT EXISTS (
+          SELECT 1
+          FROM app.project_mart_dirty_materialization_state materialization
+          WHERE materialization.project_id = app.project_mart_refresh_state.project_id
+            AND materialization.target_dirty_token = app.project_mart_refresh_state.dirty_token
+            AND materialization.materialization_status <> 'completed'
+        )
         AND (
           refresh_status <> 'running'
           OR lease_expires_at IS NULL
