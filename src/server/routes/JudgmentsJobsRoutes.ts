@@ -1036,7 +1036,7 @@ export const getProjectMartFreshnessState = async (
         SELECT 1
         FROM app.project_mart_dirty_materialization_state materialization
         WHERE materialization.project_id = state.project_id
-          AND materialization.target_dirty_token = state.dirty_token
+          AND materialization.target_dirty_token <= state.dirty_token
           AND materialization.materialization_status <> 'completed'
       ) AS hasIncompleteDirtyMaterialization
     FROM app.project_mart_refresh_state

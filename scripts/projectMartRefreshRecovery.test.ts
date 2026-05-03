@@ -256,7 +256,7 @@ test('runProjectMartRefreshWorkerOnce routes oversized full refreshes into stage
   expect(state.refreshStatus).toBe('idle')
   expect(state.lastError).toBeNull()
   expect(state.activeDirtyToken).toBe(0)
-  expect(largeRebuildState).toEqual({rebuildPhase: 'judgment_fact', refreshStatus: 'idle', refreshToken: 1})
+  expect(largeRebuildState).toEqual({rebuildPhase: 'project_scope_article', refreshStatus: 'idle', refreshToken: 1})
 })
 
 test('isolated refresh command progresses one large rebuild batch when no normal refresh claim is available', () => {
@@ -408,7 +408,7 @@ test('isolated refresh command progresses one large rebuild batch when no normal
   expect(result.status).toBe('progressed')
   expect(result.workerId).toBe('test-large-rebuild')
   expect(result.nextCursor?.articleId).toBe('article-1')
-  expect(String(result.nextCursor?.articleCreatedAt ?? '')).toContain('2026-03-10')
+  expect(String(result.nextCursor?.articleCreatedAt ?? '')).toContain('2026-04-01')
 
   const [promptAnswerFactCount] = runQuery(
     duckdbPath,

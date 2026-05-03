@@ -101,6 +101,8 @@ type ProjectRefreshStateRow = {
   workerId: string | null
 }
 
+type CompletedThroughDirtyTokenParams = {completedToken: number; projectId: string; tx: RefreshStateRunner}
+
 const getNow = (value?: Date) => {
   return value ?? new Date()
 }
@@ -404,8 +406,17 @@ const claimDirtyProjects = async ({
         SELECT 1
         FROM app.project_mart_dirty_materialization_state materialization
         WHERE materialization.project_id = state.project_id
-          AND materialization.target_dirty_token = state.dirty_token
+          AND materialization.target_dirty_token <= state.dirty_token
           AND materialization.materialization_status <> 'completed'
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.project_mart_refresh_article_state article_state
+        INNER JOIN app.project_mart_refresh_article_quarantine quarantine
+          ON quarantine.article_id = article_state.article_id
+        WHERE article_state.project_id = state.project_id
+          AND article_state.last_dirty_token > 0
+          AND article_state.first_dirty_token <= state.dirty_token
       )
       AND (
         state.refresh_status <> 'running'
@@ -431,11 +442,20 @@ const claimDirtyProjects = async ({
       WHERE project_id = ${getSqlLiteral(row.projectId)}
         AND dirty_token > last_completed_dirty_token
         AND NOT EXISTS (
-          SELECT 1
-          FROM app.project_mart_dirty_materialization_state materialization
-          WHERE materialization.project_id = app.project_mart_refresh_state.project_id
-            AND materialization.target_dirty_token = app.project_mart_refresh_state.dirty_token
+        SELECT 1
+        FROM app.project_mart_dirty_materialization_state materialization
+        WHERE materialization.project_id = app.project_mart_refresh_state.project_id
+            AND materialization.target_dirty_token <= app.project_mart_refresh_state.dirty_token
             AND materialization.materialization_status <> 'completed'
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM app.project_mart_refresh_article_state article_state
+          INNER JOIN app.project_mart_refresh_article_quarantine quarantine
+          ON quarantine.article_id = article_state.article_id
+        WHERE article_state.project_id = app.project_mart_refresh_state.project_id
+            AND article_state.last_dirty_token > 0
+            AND article_state.first_dirty_token <= app.project_mart_refresh_state.dirty_token
         )
         AND (
           refresh_status <> 'running'
@@ -729,6 +749,52 @@ const cleanupCompletedProjectRefreshArticleState = async ({
   `)
 }
 
+const getCompletedThroughDirtyToken = async ({completedToken, projectId, tx}: CompletedThroughDirtyTokenParams) => {
+  const [state] = await tx.queryJson<{lastCompletedDirtyToken: number}>(`
+    SELECT CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken
+    FROM app.project_mart_refresh_state
+    WHERE project_id = ${getSqlLiteral(projectId)}
+    LIMIT 1
+  `)
+  const lastCompletedDirtyToken = Number(state?.lastCompletedDirtyToken ?? 0)
+
+  if (completedToken <= lastCompletedDirtyToken) {
+    return lastCompletedDirtyToken
+  }
+
+  const [barrier] = await tx.queryJson<{barrierToken: number | null}>(`
+    WITH dirty_token_barriers AS (
+      SELECT CAST(target_dirty_token AS INTEGER) AS barrierToken
+      FROM app.project_mart_dirty_materialization_state
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND target_dirty_token <= ${completedToken}
+        AND materialization_status <> 'completed'
+      UNION ALL
+      SELECT CAST(GREATEST(article_state.first_dirty_token, 1) AS INTEGER) AS barrierToken
+      FROM app.project_mart_refresh_article_state article_state
+      INNER JOIN app.project_mart_refresh_article_quarantine quarantine
+        ON quarantine.article_id = article_state.article_id
+      WHERE article_state.project_id = ${getSqlLiteral(projectId)}
+        AND article_state.last_dirty_token > 0
+        AND article_state.first_dirty_token <= ${completedToken}
+      UNION ALL
+      SELECT CAST(GREATEST(article_state.first_dirty_token, 1) AS INTEGER) AS barrierToken
+      FROM app.project_mart_refresh_article_state article_state
+      LEFT JOIN app.project_mart_refresh_article_quarantine quarantine
+        ON quarantine.article_id = article_state.article_id
+      WHERE article_state.project_id = ${getSqlLiteral(projectId)}
+        AND article_state.last_dirty_token > 0
+        AND article_state.first_dirty_token <= ${completedToken}
+        AND quarantine.article_id IS NULL
+    )
+    SELECT CAST(MIN(barrierToken) AS INTEGER) AS barrierToken
+    FROM dirty_token_barriers
+  `)
+  const barrierToken = barrier?.barrierToken ?? null
+
+  return barrierToken === null ? completedToken : Math.max(lastCompletedDirtyToken, barrierToken - 1)
+}
+
 const completeRunningProjectRefreshState = async ({
   completedToken,
   currentNow,
@@ -742,16 +808,43 @@ const completeRunningProjectRefreshState = async ({
   tx: RefreshStateRunner
   workerId: string
 }) => {
+  const [claimState] = await tx.queryJson<ProjectRefreshStateRow>(`
+    SELECT
+      project_id AS projectId,
+      CAST(dirty_token AS INTEGER) AS dirtyToken,
+      CAST(active_dirty_token AS INTEGER) AS activeDirtyToken,
+      CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken,
+      refresh_status AS refreshStatus,
+      worker_id AS workerId
+    FROM app.project_mart_refresh_state
+    WHERE project_id = ${getSqlLiteral(projectId)}
+      AND worker_id = ${getSqlLiteral(workerId)}
+      AND refresh_status = 'running'
+      AND active_dirty_token = ${completedToken}
+    LIMIT 1
+  `)
+
+  if (!claimState) {
+    return null
+  }
+
+  await cleanupCompletedProjectRefreshArticleState({completedToken, currentNow, projectId, tx})
+
+  const completedThroughToken = await getCompletedThroughDirtyToken({completedToken, projectId, tx})
+  const isCompletedThroughClaim = completedThroughToken >= completedToken
   const [completed] = await tx.queryJson<ProjectRefreshStateRow>(`
     UPDATE app.project_mart_refresh_state
     SET
-      active_dirty_token = 0,
-      last_completed_dirty_token = GREATEST(last_completed_dirty_token, ${completedToken}),
-      refresh_status = 'idle',
-      last_completed_at = ${getTimestampLiteral(currentNow)},
-      last_error = NULL,
-      worker_id = NULL,
-      lease_expires_at = NULL,
+      active_dirty_token = CASE WHEN ${getSqlLiteral(isCompletedThroughClaim)} THEN 0 ELSE active_dirty_token END,
+      last_completed_dirty_token = GREATEST(last_completed_dirty_token, ${completedThroughToken}),
+      refresh_status = CASE WHEN ${getSqlLiteral(isCompletedThroughClaim)} THEN 'idle' ELSE refresh_status END,
+      last_completed_at = CASE
+        WHEN ${completedThroughToken} > last_completed_dirty_token THEN ${getTimestampLiteral(currentNow)}
+        ELSE last_completed_at
+      END,
+      last_error = CASE WHEN ${getSqlLiteral(isCompletedThroughClaim)} THEN NULL ELSE last_error END,
+      worker_id = CASE WHEN ${getSqlLiteral(isCompletedThroughClaim)} THEN NULL ELSE worker_id END,
+      lease_expires_at = CASE WHEN ${getSqlLiteral(isCompletedThroughClaim)} THEN NULL ELSE lease_expires_at END,
       updated_at = ${getTimestampLiteral(currentNow)}
     WHERE project_id = ${getSqlLiteral(projectId)}
       AND worker_id = ${getSqlLiteral(workerId)}
@@ -766,11 +859,9 @@ const completeRunningProjectRefreshState = async ({
       worker_id AS workerId
   `)
 
-  if (!completed) {
+  if (!completed || !isCompletedThroughClaim) {
     return null
   }
-
-  await cleanupCompletedProjectRefreshArticleState({completedToken, currentNow, projectId, tx})
 
   return getProjectRefreshStateRecord(tx, projectId)
 }
@@ -881,16 +972,38 @@ const finalizeProjectRefreshAfterLargeRebuild = async ({
 }: FinalizeProjectRefreshAfterLargeRebuildParams) => {
   const currentNow = getNow(now)
   const completedState = await getAppDatabaseService().transaction(async (tx) => {
+    await cleanupCompletedProjectRefreshArticleState({completedToken, currentNow, projectId, tx})
+
+    const completedThroughToken = await getCompletedThroughDirtyToken({completedToken, projectId, tx})
+    const isCompletedThroughRebuild = completedThroughToken >= completedToken
     const [completed] = await tx.queryJson<ProjectRefreshStateRow>(`
       UPDATE app.project_mart_refresh_state
       SET
-        active_dirty_token = CASE WHEN active_dirty_token <= ${completedToken} THEN 0 ELSE active_dirty_token END,
-        last_completed_dirty_token = GREATEST(last_completed_dirty_token, ${completedToken}),
-        refresh_status = CASE WHEN active_dirty_token <= ${completedToken} THEN 'idle' ELSE refresh_status END,
-        last_completed_at = ${getTimestampLiteral(currentNow)},
-        last_error = CASE WHEN active_dirty_token <= ${completedToken} THEN NULL ELSE last_error END,
-        worker_id = CASE WHEN active_dirty_token <= ${completedToken} THEN NULL ELSE worker_id END,
-        lease_expires_at = CASE WHEN active_dirty_token <= ${completedToken} THEN NULL ELSE lease_expires_at END,
+        active_dirty_token = CASE
+          WHEN ${getSqlLiteral(isCompletedThroughRebuild)} AND active_dirty_token <= ${completedToken} THEN 0
+          ELSE active_dirty_token
+        END,
+        last_completed_dirty_token = GREATEST(last_completed_dirty_token, ${completedThroughToken}),
+        refresh_status = CASE
+          WHEN ${getSqlLiteral(isCompletedThroughRebuild)} AND active_dirty_token <= ${completedToken} THEN 'idle'
+          ELSE refresh_status
+        END,
+        last_completed_at = CASE
+          WHEN ${completedThroughToken} > last_completed_dirty_token THEN ${getTimestampLiteral(currentNow)}
+          ELSE last_completed_at
+        END,
+        last_error = CASE
+          WHEN ${getSqlLiteral(isCompletedThroughRebuild)} AND active_dirty_token <= ${completedToken} THEN NULL
+          ELSE last_error
+        END,
+        worker_id = CASE
+          WHEN ${getSqlLiteral(isCompletedThroughRebuild)} AND active_dirty_token <= ${completedToken} THEN NULL
+          ELSE worker_id
+        END,
+        lease_expires_at = CASE
+          WHEN ${getSqlLiteral(isCompletedThroughRebuild)} AND active_dirty_token <= ${completedToken} THEN NULL
+          ELSE lease_expires_at
+        END,
         updated_at = ${getTimestampLiteral(currentNow)}
       WHERE project_id = ${getSqlLiteral(projectId)}
       RETURNING
@@ -902,11 +1015,9 @@ const finalizeProjectRefreshAfterLargeRebuild = async ({
         worker_id AS workerId
     `)
 
-    if (!completed) {
+    if (!completed || !isCompletedThroughRebuild) {
       return null
     }
-
-    await cleanupCompletedProjectRefreshArticleState({completedToken, currentNow, projectId, tx})
 
     return getProjectRefreshStateRecord(tx, projectId)
   })

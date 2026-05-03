@@ -638,7 +638,7 @@ const runReviewArticleServingPhase = async (
 
   if (batchRows.length === 0) {
     await dependencies.executor.finalizeProjectReviewServing(claim.projectId, targetGeneration)
-    await dependencies.refreshStateService.finalizeProjectRefreshAfterLargeRebuild({
+    const completedRefreshState = await dependencies.refreshStateService.finalizeProjectRefreshAfterLargeRebuild({
       completedToken: claim.refreshToken,
       now: getNow(options.now),
       projectId: claim.projectId,
@@ -648,10 +648,14 @@ const runReviewArticleServingPhase = async (
       projectId: claim.projectId,
       workerId: options.workerId,
     })
-    await dependencies.sqliteService.publishProjectRefreshAck({
-      ackToken: claim.refreshToken,
-      projectId: claim.projectId,
-    })
+
+    if (completedRefreshState) {
+      await dependencies.sqliteService.publishProjectRefreshAck({
+        ackToken: claim.refreshToken,
+        projectId: claim.projectId,
+      })
+    }
+
     return {projectId: claim.projectId, status: 'completed', workerId: options.workerId}
   }
 

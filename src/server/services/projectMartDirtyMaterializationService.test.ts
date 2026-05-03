@@ -571,6 +571,106 @@ test('project-wide dirty materialization inserts scoped article state in databas
   })
 })
 
+test('dirty project claims stay behind earlier incomplete materialization tokens', () => {
+  const result = runDirtyMaterializationScript<{
+    claimsAfterMaterialization: Array<{claimedToken: number; lastCompletedToken: number; projectId: string}>
+    claimsBeforeMaterialization: Array<{claimedToken: number; projectId: string}>
+    materializationState: ProjectMartDirtyMaterializationStateRecord | null
+  }>(`
+    const {getProjectMartDirtyMaterializationService} = await import(
+      './src/server/services/projectMartDirtyMaterializationService.ts'
+    )
+    const {getProjectMartDirtyRefreshStateService} = await import(
+      './src/server/services/projectMartDirtyRefreshStateService.ts'
+    )
+    const materializationService = getProjectMartDirtyMaterializationService()
+    const refreshStateService = getProjectMartDirtyRefreshStateService()
+
+    await database.run(\`
+      INSERT INTO app.article (id, article_id, article_title, article_created_at, article_updated_at)
+      VALUES (
+        'dirty-materialization-barrier-article-1',
+        'barrier-external-1',
+        'Barrier Article 1',
+        TIMESTAMPTZ '2026-04-01T00:00:00.000Z',
+        TIMESTAMPTZ '2026-04-01T01:00:00.000Z'
+      )
+    \`)
+    await database.run(\`
+      INSERT INTO app.project_article (id, project_id, article_id)
+      VALUES (
+        'dirty-materialization-barrier-project-article-1',
+        'dirty-materialization-project',
+        'dirty-materialization-barrier-article-1'
+      )
+    \`)
+
+    await refreshStateService.markProjectsDirtyAtomically({
+      projects: [{projectId: 'dirty-materialization-project'}],
+      reason: 'project-wide-materialization-barrier-test',
+      now: new Date('2026-04-04T12:00:00.000Z'),
+    })
+    await refreshStateService.markProjectsDirtyAtomically({
+      projects: [{
+        projectId: 'dirty-materialization-project',
+        articleIds: ['dirty-materialization-barrier-article-1'],
+      }],
+      reason: 'article-dirty-after-materialization-barrier',
+      now: new Date('2026-04-04T12:00:01.000Z'),
+    })
+
+    const claimsBeforeMaterialization = await refreshStateService.claimDirtyProjects({
+      workerId: 'refresh-worker-before-barrier',
+      limit: 1,
+      leaseMs: 5000,
+      now: new Date('2026-04-04T12:00:02.000Z'),
+    })
+    const [materializationClaim] = await materializationService.claimDirtyMaterializations({
+      sourceKind: 'project_scope_article',
+      workerId: 'dirty-materialization-worker',
+      limit: 1,
+      leaseMs: 5000,
+      now: new Date('2026-04-04T12:00:03.000Z'),
+    })
+    await materializationService.materializeProjectScopeDirtyBatch({
+      ...materializationClaim,
+      batchSize: 5,
+      now: new Date('2026-04-04T12:00:04.000Z'),
+    })
+    const finalMaterializationBatch = await materializationService.materializeProjectScopeDirtyBatch({
+      ...materializationClaim,
+      batchSize: 5,
+      now: new Date('2026-04-04T12:00:05.000Z'),
+    })
+    const claimsAfterMaterialization = await refreshStateService.claimDirtyProjects({
+      workerId: 'refresh-worker-after-barrier',
+      limit: 1,
+      leaseMs: 5000,
+      now: new Date('2026-04-04T12:00:06.000Z'),
+    })
+
+    console.log(JSON.stringify({
+      claimsAfterMaterialization,
+      claimsBeforeMaterialization,
+      materializationState: finalMaterializationBatch.materializationState,
+    }))
+    await database.close()
+  `)
+
+  expect(result.claimsBeforeMaterialization).toEqual([])
+  expect(result.materializationState).toMatchObject({
+    materializationStatus: 'completed',
+    sourceScopeExpectedRowCount: 1,
+    targetDirtyToken: 1,
+  })
+  expect(result.claimsAfterMaterialization).toHaveLength(1)
+  expect(result.claimsAfterMaterialization[0]).toMatchObject({
+    claimedToken: 2,
+    lastCompletedToken: 0,
+    projectId: 'dirty-materialization-project',
+  })
+})
+
 test('project-wide dirty materialization marks unreconciled when the source fingerprint changes', () => {
   const result = runDirtyMaterializationScript<{
     claimAfterMutation: Array<{claimedToken: number; projectId: string}>

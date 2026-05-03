@@ -797,6 +797,130 @@ test('completeProjectRefresh trims resolved article state and failProjectRefresh
   expect(result.failedState?.lastFailedAt).toBeTruthy()
 })
 
+test('dirty completion advances only through contiguous materialization barriers', () => {
+  const result = runRefreshStateScript<{
+    completionAfterBarrier: {completedState: ProjectMartDirtyRefreshStateRecord | null; isClaimComplete: boolean}
+    completionBeforeBarrier: {completedState: ProjectMartDirtyRefreshStateRecord | null; isClaimComplete: boolean}
+    refreshStateAfterBarrier: {
+      activeDirtyToken: number
+      dirtyToken: number
+      lastCompletedDirtyToken: number
+      refreshStatus: string
+      workerId: string | null
+    }
+    refreshStateBeforeBarrier: {
+      activeDirtyToken: number
+      dirtyToken: number
+      lastCompletedDirtyToken: number
+      refreshStatus: string
+      workerId: string | null
+    }
+  }>(`
+    const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
+
+    const service = getProjectMartDirtyRefreshStateService()
+    await database.run(\`
+      INSERT INTO app.project_article (id, project_id, article_id)
+      VALUES ('refresh-project-1-materialization-article', 'refresh-project-1', 'refresh-article-2')
+    \`)
+    await service.markProjectsDirtyAtomically({
+      projects: [{projectId: 'refresh-project-1'}],
+      reason: 'project-wide-barrier',
+      now: new Date('2026-04-02T12:11:00.000Z'),
+    })
+    await database.run(\`
+      UPDATE app.project_mart_dirty_materialization_state
+      SET materialization_status = 'failed'
+      WHERE project_id = 'refresh-project-1'
+        AND source_kind = 'project_scope_article'
+        AND target_dirty_token = 1
+    \`)
+    await service.markProjectsDirtyAtomically({
+      projects: [{projectId: 'refresh-project-1', articleIds: ['refresh-article-1']}],
+      reason: 'article-after-barrier',
+      now: new Date('2026-04-02T12:11:01.000Z'),
+    })
+    await database.run(\`
+      UPDATE app.project_mart_refresh_state
+      SET
+        active_dirty_token = 2,
+        refresh_status = 'running',
+        worker_id = 'worker-1',
+        lease_expires_at = TIMESTAMPTZ '2026-04-02T12:12:00.000Z'
+      WHERE project_id = 'refresh-project-1'
+    \`)
+    const completionBeforeBarrier = await service.completeDirtyArticleBatchForClaim({
+      articleIds: ['refresh-article-1'],
+      claimedToken: 2,
+      projectId: 'refresh-project-1',
+      workerId: 'worker-1',
+      now: new Date('2026-04-02T12:11:03.000Z'),
+    })
+    const [refreshStateBeforeBarrier] = await database.queryJson(\`
+      SELECT
+        CAST(active_dirty_token AS INTEGER) AS activeDirtyToken,
+        CAST(dirty_token AS INTEGER) AS dirtyToken,
+        CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken,
+        refresh_status AS refreshStatus,
+        worker_id AS workerId
+      FROM app.project_mart_refresh_state
+      WHERE project_id = 'refresh-project-1'
+      LIMIT 1
+    \`)
+    await database.run(\`
+      UPDATE app.project_mart_dirty_materialization_state
+      SET materialization_status = 'completed'
+      WHERE project_id = 'refresh-project-1'
+        AND source_kind = 'project_scope_article'
+        AND target_dirty_token = 1
+    \`)
+    const completionAfterBarrier = await service.completeDirtyArticleBatchForClaim({
+      articleIds: [],
+      claimedToken: 2,
+      projectId: 'refresh-project-1',
+      workerId: 'worker-1',
+      now: new Date('2026-04-02T12:11:04.000Z'),
+    })
+    const [refreshStateAfterBarrier] = await database.queryJson(\`
+      SELECT
+        CAST(active_dirty_token AS INTEGER) AS activeDirtyToken,
+        CAST(dirty_token AS INTEGER) AS dirtyToken,
+        CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken,
+        refresh_status AS refreshStatus,
+        worker_id AS workerId
+      FROM app.project_mart_refresh_state
+      WHERE project_id = 'refresh-project-1'
+      LIMIT 1
+    \`)
+
+    console.log(JSON.stringify({
+      completionAfterBarrier,
+      completionBeforeBarrier,
+      refreshStateAfterBarrier,
+      refreshStateBeforeBarrier,
+    }))
+    await database.close()
+  `)
+
+  expect(result.completionBeforeBarrier).toMatchObject({completedState: null, isClaimComplete: false})
+  expect(result.refreshStateBeforeBarrier).toEqual({
+    activeDirtyToken: 2,
+    dirtyToken: 2,
+    lastCompletedDirtyToken: 0,
+    refreshStatus: 'running',
+    workerId: 'worker-1',
+  })
+  expect(result.completionAfterBarrier.isClaimComplete).toBe(true)
+  expect(result.completionAfterBarrier.completedState?.lastCompletedDirtyToken).toBe(2)
+  expect(result.refreshStateAfterBarrier).toEqual({
+    activeDirtyToken: 0,
+    dirtyToken: 2,
+    lastCompletedDirtyToken: 2,
+    refreshStatus: 'idle',
+    workerId: null,
+  })
+})
+
 test('getDirtyArticleBatchForClaim completes a one-article claim batch', () => {
   const result = runRefreshStateScript<{
     batch: {articleIds: string[]; hasMore: boolean}
@@ -1271,7 +1395,7 @@ test('clearArchivedProjectRefreshStates removes archived refresh debt and claimD
   expect(result.archivedArticleRows).toBe(0)
 })
 
-test('dirty project claims skip quarantined articles and complete healthy work', () => {
+test('dirty project claims keep quarantined articles as completion barriers', () => {
   const result = runRefreshStateScript<{
     articleRows: ProjectMartRefreshArticleStateRecord[]
     batch: {articleIds: string[]; hasMore: boolean} | null
@@ -1296,12 +1420,12 @@ test('dirty project claims skip quarantined articles and complete healthy work',
       projects: [{articleIds: ['refresh-article-1', 'refresh-article-2'], projectId: 'refresh-project-1'}],
       reason: 'refresh-state-test.quarantine',
     })
+    const claims = await service.claimDirtyProjects({leaseMs: 5000, limit: 5, workerId: 'worker-1'})
     const quarantine = await service.quarantineProjectRefreshArticle({
       articleId: 'refresh-article-1',
       detectedBy: 'test-suite',
       error: 'native crash repro',
     })
-    const claims = await service.claimDirtyProjects({leaseMs: 5000, limit: 5, workerId: 'worker-1'})
     const [claim] = claims
     const batch = claim
       ? await service.getDirtyArticleBatchForClaim({
@@ -1365,8 +1489,8 @@ test('dirty project claims skip quarantined articles and complete healthy work',
   expect(result.quarantine?.error).toBe('native crash repro')
   expect(result.claims).toEqual([{projectId: 'refresh-project-1'}])
   expect(result.batch).toEqual({articleIds: ['refresh-article-2'], hasMore: false})
-  expect(result.completion?.isClaimComplete).toBe(true)
-  expect(result.completion?.completedState?.lastCompletedDirtyToken).toBe(1)
+  expect(result.completion?.isClaimComplete).toBe(false)
+  expect(result.completion?.completedState).toBeNull()
   expect(result.claimsAfterCompletion).toEqual([])
   expect(
     result.articleRows.map((row) => {
@@ -1379,12 +1503,12 @@ test('dirty project claims skip quarantined articles and complete healthy work',
     }),
   ).toEqual([{articleId: 'refresh-article-1', detectedBy: 'test-suite', error: 'native crash repro'}])
   expect(result.refreshState).toMatchObject({
-    activeDirtyToken: 0,
+    activeDirtyToken: 1,
     dirtyToken: 1,
-    lastCompletedDirtyToken: 1,
+    lastCompletedDirtyToken: 0,
     lastError: null,
-    refreshStatus: 'idle',
-    workerId: null,
+    refreshStatus: 'running',
+    workerId: 'worker-1',
   })
 })
 

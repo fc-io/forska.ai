@@ -1341,6 +1341,41 @@ const getTrackedProjectRefreshAckStates = async (projectId?: string) => {
   `)
 }
 
+const getContiguousProjectRefreshAckToken = async ({
+  ackToken,
+  projectId,
+}: {
+  ackToken: number | null
+  projectId: string
+}) => {
+  if (ackToken === null) {
+    return null
+  }
+
+  const [barrier] = await getAppDatabaseService().queryJson<{barrierToken: number | null}>(`
+    WITH project_refresh_ack_barriers AS (
+      SELECT CAST(target_dirty_token AS INTEGER) AS barrierToken
+      FROM app.project_mart_dirty_materialization_state
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND target_dirty_token <= ${ackToken}
+        AND materialization_status <> 'completed'
+      UNION ALL
+      SELECT CAST(GREATEST(article_state.first_dirty_token, 1) AS INTEGER) AS barrierToken
+      FROM app.project_mart_refresh_article_state article_state
+      INNER JOIN app.project_mart_refresh_article_quarantine quarantine
+        ON quarantine.article_id = article_state.article_id
+      WHERE article_state.project_id = ${getSqlLiteral(projectId)}
+        AND article_state.last_dirty_token > 0
+        AND article_state.first_dirty_token <= ${ackToken}
+    )
+    SELECT CAST(MIN(barrierToken) AS INTEGER) AS barrierToken
+    FROM project_refresh_ack_barriers
+  `)
+  const barrierToken = barrier?.barrierToken ?? null
+
+  return barrierToken === null ? ackToken : Math.max(0, barrierToken - 1)
+}
+
 const publishProjectRefreshAckForJobIds = async ({ackToken, jobIds}: {ackToken: number | null; jobIds: string[]}) => {
   return jobIds.reduce<Promise<number>>(async (updatedCountPromise, currentJobId) => {
     const updatedCount = await updatedCountPromise
@@ -1361,7 +1396,10 @@ const publishProjectRefreshAckForProject = async ({
   ackToken: number | null
   projectId: string
 }) => {
-  return publishProjectRefreshAckForJobIds({ackToken, jobIds: await getTrackedJudgmentJobIdsForProject(projectId)})
+  return publishProjectRefreshAckForJobIds({
+    ackToken: await getContiguousProjectRefreshAckToken({ackToken, projectId}),
+    jobIds: await getTrackedJudgmentJobIdsForProject(projectId),
+  })
 }
 
 const reconcileProjectRefreshAcks = async ({projectId}: {projectId?: string} = {}) => {

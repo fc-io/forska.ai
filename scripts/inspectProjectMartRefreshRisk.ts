@@ -1,8 +1,4 @@
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
-import {
-  defaultProjectMartRefreshWorkerIncrementalArticleThreshold,
-  getProjectMartRefreshExecutionMode,
-} from '../src/server/workers/projectMartRefreshWorker.ts'
 
 type CliOptions = {
   incrementalArticleThreshold: number
@@ -18,6 +14,18 @@ type RefreshStateRow = {
 }
 
 type CountRow = {count: number | string}
+
+const defaultProjectMartRefreshWorkerIncrementalArticleThreshold = 3
+
+const getProjectMartRefreshExecutionMode = ({
+  dirtyArticleCount,
+  incrementalArticleThreshold,
+}: {
+  dirtyArticleCount: number
+  incrementalArticleThreshold: number
+}) => {
+  return dirtyArticleCount === 0 ? 'idle' : dirtyArticleCount <= incrementalArticleThreshold ? 'incremental' : 'full'
+}
 
 const getArgValue = (names: string[]) => {
   const matchedArgument = process.argv.slice(2).find((argument) => {

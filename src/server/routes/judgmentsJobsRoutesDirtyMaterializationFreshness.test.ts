@@ -50,7 +50,7 @@ const runFreshnessScript = <T>(body: string) => {
   }
 }
 
-test('judgment job freshness treats incomplete dirty materialization as stale', () => {
+test('judgment job freshness treats earlier incomplete dirty materialization as stale', () => {
   const result = runFreshnessScript<{
     completed: {dirtyToken: number | null; hasIncompleteDirtyMaterialization: boolean; isFresh: boolean}
     pending: {dirtyToken: number | null; hasIncompleteDirtyMaterialization: boolean; isFresh: boolean}
@@ -96,7 +96,7 @@ test('judgment job freshness treats incomplete dirty materialization as stale', 
       ) VALUES (
         'freshness-project',
         'project_scope_article',
-        3,
+        2,
         10,
         'pending'
       )
@@ -109,7 +109,7 @@ test('judgment job freshness treats incomplete dirty materialization as stale', 
       SET materialization_status = 'completed'
       WHERE project_id = 'freshness-project'
         AND source_kind = 'project_scope_article'
-        AND target_dirty_token = 3
+        AND target_dirty_token = 2
     \`)
 
     const completed = await getProjectMartFreshnessState('freshness-project')

@@ -106,6 +106,22 @@ const claimProject = async ({
       updated_at = TIMESTAMPTZ '${currentNow.toISOString()}'
     WHERE project_id = '${projectId}'
       AND dirty_token > last_completed_dirty_token
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.project_mart_dirty_materialization_state materialization
+        WHERE materialization.project_id = app.project_mart_refresh_state.project_id
+          AND materialization.target_dirty_token <= app.project_mart_refresh_state.dirty_token
+          AND materialization.materialization_status <> 'completed'
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM app.project_mart_refresh_article_state article_state
+        INNER JOIN app.project_mart_refresh_article_quarantine quarantine
+          ON quarantine.article_id = article_state.article_id
+        WHERE article_state.project_id = app.project_mart_refresh_state.project_id
+          AND article_state.last_dirty_token > 0
+          AND article_state.first_dirty_token <= app.project_mart_refresh_state.dirty_token
+      )
       AND (
         refresh_status <> 'running'
         OR lease_expires_at IS NULL
