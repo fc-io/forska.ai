@@ -15,7 +15,7 @@ process.env.VITE_PORT = process.env.VITE_PORT ?? '3000'
 let app: {handle: (request: Request) => Promise<Response>} | null = null
 let closeDatabase: (() => Promise<void>) | null = null
 let flushMartRefreshes: (() => Promise<void>) | null = null
-let purgeArchivedProjectMartDataBatch: ((projectId: string) => Promise<{deletedRowCount: number}>) | null = null
+let cleanupArchivedProjectMartDataBatch: ((projectId: string) => Promise<{deletedRowCount: number}>) | null = null
 let markArticleProjectsDirty: ((articleId: string, reason: string) => Promise<void>) | null = null
 let refreshProject: ((projectId: string) => Promise<void>) | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
@@ -427,8 +427,8 @@ beforeAll(async () => {
     return database.close()
   }
   flushMartRefreshes = async () => {}
-  purgeArchivedProjectMartDataBatch = (projectId: string) => {
-    return getDuckdbMartMaintenanceService().purgeArchivedProjectMartDataBatch(projectId)
+  cleanupArchivedProjectMartDataBatch = (projectId: string) => {
+    return getDuckdbMartMaintenanceService().cleanupArchivedProjectMartDataBatch(projectId)
   }
   markArticleProjectsDirty = async (articleId: string, reason: string) => {
     await getProjectMartDirtyRefreshStateService().markArticleProjectsDirtyAtomically({articleIds: [articleId], reason})
@@ -498,7 +498,7 @@ test('archive route clears refresh state for archived projects without depending
 })
 
 test('archive route leaves archived mart cleanup to bounded maintenance batches while clearing refresh state', async () => {
-  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes || !purgeArchivedProjectMartDataBatch) {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes || !cleanupArchivedProjectMartDataBatch) {
     throw new Error('Test app not initialized')
   }
 
@@ -539,7 +539,7 @@ test('archive route leaves archived mart cleanup to bounded maintenance batches 
   expect(Number(generationRowCount?.count ?? 0)).toBe(1)
   expect(refreshState).toBeUndefined()
 
-  const cleanupBatch = await purgeArchivedProjectMartDataBatch(projectId)
+  const cleanupBatch = await cleanupArchivedProjectMartDataBatch(projectId)
   const [servingRowCountAfterBatch] = await queryDatabase<{count: number}>(`
     SELECT COUNT(*) AS count
     FROM mart.review_article_serving

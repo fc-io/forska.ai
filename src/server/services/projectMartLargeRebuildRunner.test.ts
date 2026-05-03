@@ -73,7 +73,7 @@ const createRunnerContext = (params: {
   const claim = params.claim ?? null
   const dependencies: ProjectMartLargeRebuildRunnerDependencies = {
     archivedProjectCleanupService: {
-      purgeNextArchivedProjectMartBatch: mock(async () => {
+      cleanupNextArchivedProjectBatch: mock(async () => {
         callLog.push('archived-cleanup')
         return {
           deletedRowCount: params.archivedCleanupDeletedRowCount ?? 0,
@@ -280,7 +280,7 @@ test('runs one archived project mart cleanup batch after active rebuild maintena
   expect(runtimeMetrics.totals.rowsProcessed).toBe(5)
   expect(runtimeMetrics.recentCycles[0]).toMatchObject({
     articleCount: 5,
-    phase: 'archived_project_mart_cleanup',
+    phase: 'archived_project_cleanup',
     projectId: 'archived-project-1',
     status: 'maintenance',
   })

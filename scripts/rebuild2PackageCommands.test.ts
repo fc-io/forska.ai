@@ -23,6 +23,7 @@ test('package exposes final rebuild2 command surface and removes obsolete mart r
         || `${name} ${command}`.includes('recover-project-refresh-claims')
         || `${name} ${command}`.includes('repair-project-refresh-ledger')
         || `${name} ${command}`.includes('repair-judgment-fact')
+        || `${name} ${command}`.includes('purge-archived-marts')
         || command.includes('recoverArchivedProjectRefreshQueue')
         || command.includes('quarantineProjectMartRefreshArticle')
         || command.includes('unquarantineProjectMartRefreshArticle')
@@ -30,6 +31,8 @@ test('package exposes final rebuild2 command surface and removes obsolete mart r
         || command.includes('recoverProjectMartRefreshClaims')
         || command.includes('repairProjectMartRefreshLedger')
         || command.includes('repairJudgmentFactTable')
+        || command.includes('purgeArchivedProjectMarts')
+        || command.includes('reproArchivedProjectServingDelete')
       )
     })
     .map(([name]) => {
@@ -65,6 +68,9 @@ test('package exposes final rebuild2 command surface and removes obsolete mart r
   )
   expect(packageJson.scripts['db:duck:request-judgment-fact-repair']).toBe(
     'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/requestJudgmentFactRepair.ts',
+  )
+  expect(packageJson.scripts['db:duck:run-archived-project-bounded-cleanup']).toBe(
+    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/runArchivedProjectBoundedCleanup.ts',
   )
   expect(obsoleteCommandMatches).toEqual([])
 })

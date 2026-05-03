@@ -11,9 +11,9 @@ type ProjectRefreshBatchCursor = {articleCreatedAt: Date | string | null; articl
 
 type ProjectRefreshBatchRow = {articleCreatedAt: Date | string | null; articleId: string}
 
-type ProjectPurgeBatchRow = {rowId: bigint | number | string}
+type ProjectCleanupBatchRow = {rowId: bigint | number | string}
 
-type ArchivedProjectMartPurgeMode = 'delete_batches' | 'rewrite'
+type ArchivedProjectMartCleanupMode = 'delete_batches' | 'rewrite'
 
 type ArchivedProjectMartCleanupBatchResult = {
   deletedRowCount: number
@@ -36,17 +36,17 @@ let martRefreshReviewArticleRollupVerified = false
 let martRefreshArticleCompletionTimes: number[] = []
 let martRefreshProjectCompletionTimes: number[] = []
 
-const martRefreshProjectPurgeRowBatchSize = 10
+const martRefreshProjectCleanupRowBatchSize = 10
 const martRefreshProjectRebuildArticleBatchSize = 20_000
 const martReviewArticleServingRewriteBatchSize = 1_000
 const martRefreshThroughputWindowMs = 15_000
 const martRefreshYieldDelayMs = 0
 const martRefreshBatchEpochSql = "TIMESTAMPTZ '1970-01-01T00:00:00.000Z'"
-const martRefreshProjectPurgeRetryableErrorFragment = 'Failed to delete all rows from index'
+const martRefreshProjectCleanupRetryableErrorFragment = 'Failed to delete all rows from index'
 const martPromptAnswerFactLookupIndexName = 'idx_mart_prompt_answer_fact_lookup'
 const martPromptAnswerFactLookupIndexQualifiedName = `mart.${martPromptAnswerFactLookupIndexName}`
 const martPromptAnswerFactResetReplacementTableName = 'mart.prompt_answer_fact_project_refresh_rewrite'
-const martReviewArticleServingPurgeReplacementTableName = 'mart.review_article_serving_project_purge_rewrite'
+const martReviewArticleServingCleanupReplacementTableName = 'mart.review_article_serving_project_cleanup_rewrite'
 const martReviewArticleServingOrderIndexName = 'idx_mart_review_article_serving_order'
 const martRefreshArticleBatchTableName = 'temp_project_mart_refresh_article_batch'
 const martRefreshJudgmentFactArticleBatchTableName = 'temp_dirty_judgment_fact_article'
@@ -413,11 +413,11 @@ const getProjectScopeBatchSql = (projectId: string, cursor: ProjectRefreshBatchC
   `
 }
 
-const getArchivedProjectMartPurgeMode = (_tableName: string): ArchivedProjectMartPurgeMode => {
+const getArchivedProjectMartCleanupMode = (_tableName: string): ArchivedProjectMartCleanupMode => {
   return 'delete_batches'
 }
 
-const getProjectTablePurgeBatchSql = ({projectId, tableName}: {projectId: string; tableName: string}) => {
+const getProjectTableCleanupBatchSql = ({projectId, tableName}: {projectId: string; tableName: string}) => {
   const projectLiteral = getSqlLiteral(projectId)
 
   return `
@@ -426,11 +426,11 @@ const getProjectTablePurgeBatchSql = ({projectId, tableName}: {projectId: string
     FROM ${tableName}
     WHERE project_id = ${projectLiteral}
     ORDER BY rowid ASC
-    LIMIT ${martRefreshProjectPurgeRowBatchSize}
+    LIMIT ${martRefreshProjectCleanupRowBatchSize}
   `
 }
 
-const getProjectTablePurgeDeleteSql = ({
+const getProjectTableCleanupDeleteSql = ({
   rowIds,
   tableName,
 }: {
@@ -449,11 +449,11 @@ const getProjectTablePurgeDeleteSql = ({
   `
 }
 
-const getReviewArticleServingRewritePurgeSetupSql = () => {
+const getReviewArticleServingRewriteCleanupSetupSql = () => {
   return `
     BEGIN TRANSACTION;
-    DROP TABLE IF EXISTS ${martReviewArticleServingPurgeReplacementTableName};
-    CREATE TABLE ${martReviewArticleServingPurgeReplacementTableName} (
+    DROP TABLE IF EXISTS ${martReviewArticleServingCleanupReplacementTableName};
+    CREATE TABLE ${martReviewArticleServingCleanupReplacementTableName} (
       project_id VARCHAR NOT NULL,
       generation BIGINT NOT NULL,
       article_id VARCHAR NOT NULL,
@@ -509,7 +509,7 @@ const getReviewArticleServingRewriteCopyBatchSql = ({
 const getReviewArticleServingRewriteBatchInsertSql = (rowIds: Array<bigint | number | string>) => {
   return `
     BEGIN TRANSACTION;
-    INSERT INTO ${martReviewArticleServingPurgeReplacementTableName}
+    INSERT INTO ${martReviewArticleServingCleanupReplacementTableName}
     (
       project_id,
       generation,
@@ -575,16 +575,16 @@ const getReviewArticleServingRewriteBatchInsertSql = (rowIds: Array<bigint | num
   `
 }
 
-const getReviewArticleServingRewritePurgeFinalizeSql = () => {
+const getReviewArticleServingRewriteCleanupFinalizeSql = () => {
   return `
     BEGIN TRANSACTION;
     DROP TABLE mart.review_article_serving;
-    ALTER TABLE ${martReviewArticleServingPurgeReplacementTableName} RENAME TO review_article_serving;
+    ALTER TABLE ${martReviewArticleServingCleanupReplacementTableName} RENAME TO review_article_serving;
     COMMIT;
   `
 }
 
-const getReviewArticleServingRewritePurgeIndexSql = () => {
+const getReviewArticleServingRewriteCleanupIndexSql = () => {
   return `
     BEGIN TRANSACTION;
     CREATE INDEX IF NOT EXISTS ${martReviewArticleServingOrderIndexName}
@@ -593,16 +593,18 @@ const getReviewArticleServingRewritePurgeIndexSql = () => {
   `
 }
 
-const getProjectPurgeDeleteRetryParts = (rowIds: Array<bigint | number | string>) => {
+const getProjectCleanupDeleteRetryParts = (rowIds: Array<bigint | number | string>) => {
   const middleIndex = Math.ceil(rowIds.length / 2)
 
   return [rowIds.slice(0, middleIndex), rowIds.slice(middleIndex)] as const
 }
 
-const isProjectPurgeDeleteRetryableError = (error: unknown) => {
+const isProjectCleanupDeleteRetryableError = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error)
 
-  return message.includes(martRefreshProjectPurgeRetryableErrorFragment) && !isMartRefreshFatalInvalidationError(error)
+  return (
+    message.includes(martRefreshProjectCleanupRetryableErrorFragment) && !isMartRefreshFatalInvalidationError(error)
+  )
 }
 
 const getProjectPromptAnswerFactResetSql = (projectId: string) => {
@@ -1916,14 +1918,14 @@ const getProjectScopeBatchRows = async (
   return queryMartRefreshBackgroundJson<ProjectRefreshBatchRow>(getProjectScopeBatchSql(projectId, cursor))
 }
 
-const getProjectTablePurgeBatchRows = async ({
+const getProjectTableCleanupBatchRows = async ({
   projectId,
   tableName,
 }: {
   projectId: string
   tableName: string
-}): Promise<ProjectPurgeBatchRow[]> => {
-  return queryMartRefreshBackgroundJson<ProjectPurgeBatchRow>(getProjectTablePurgeBatchSql({projectId, tableName}))
+}): Promise<ProjectCleanupBatchRow[]> => {
+  return queryMartRefreshBackgroundJson<ProjectCleanupBatchRow>(getProjectTableCleanupBatchSql({projectId, tableName}))
 }
 
 const getReviewArticleServingRewriteBatchRows = async ({
@@ -1932,8 +1934,8 @@ const getReviewArticleServingRewriteBatchRows = async ({
 }: {
   cursor: ReviewArticleServingRewriteBatchCursor | null
   projectId: string
-}): Promise<ProjectPurgeBatchRow[]> => {
-  return queryMartRefreshBackgroundJson<ProjectPurgeBatchRow>(
+}): Promise<ProjectCleanupBatchRow[]> => {
+  return queryMartRefreshBackgroundJson<ProjectCleanupBatchRow>(
     getReviewArticleServingRewriteCopyBatchSql({cursor, projectId}),
   )
 }
@@ -2065,13 +2067,13 @@ const copyReviewArticleServingRewriteBatches = async ({
 }
 
 const rewriteReviewArticleServingForArchivedProject = async (projectId: string): Promise<void> => {
-  await runMartRefreshBackgroundStatement(getReviewArticleServingRewritePurgeSetupSql())
+  await runMartRefreshBackgroundStatement(getReviewArticleServingRewriteCleanupSetupSql())
   await copyReviewArticleServingRewriteBatches({projectId})
-  await runMartRefreshBackgroundStatement(getReviewArticleServingRewritePurgeFinalizeSql())
-  return runMartRefreshBackgroundStatement(getReviewArticleServingRewritePurgeIndexSql())
+  await runMartRefreshBackgroundStatement(getReviewArticleServingRewriteCleanupFinalizeSql())
+  return runMartRefreshBackgroundStatement(getReviewArticleServingRewriteCleanupIndexSql())
 }
 
-const deleteProjectTablePurgeRowIds = async ({
+const deleteProjectTableCleanupRowIds = async ({
   rowIds,
   tableName,
 }: {
@@ -2080,67 +2082,72 @@ const deleteProjectTablePurgeRowIds = async ({
 }): Promise<void> => {
   return rowIds.length === 0
     ? Promise.resolve()
-    : runMartRefreshBackgroundStatement(getProjectTablePurgeDeleteSql({rowIds, tableName})).catch((error) => {
-        return !isProjectPurgeDeleteRetryableError(error) || rowIds.length === 1
+    : runMartRefreshBackgroundStatement(getProjectTableCleanupDeleteSql({rowIds, tableName})).catch((error) => {
+        return !isProjectCleanupDeleteRetryableError(error) || rowIds.length === 1
           ? Promise.reject(error)
-          : deleteProjectTablePurgeRowIds({rowIds: getProjectPurgeDeleteRetryParts(rowIds)[0], tableName}).then(() => {
-              return deleteProjectTablePurgeRowIds({rowIds: getProjectPurgeDeleteRetryParts(rowIds)[1], tableName})
-            })
+          : deleteProjectTableCleanupRowIds({rowIds: getProjectCleanupDeleteRetryParts(rowIds)[0], tableName}).then(
+              () => {
+                return deleteProjectTableCleanupRowIds({
+                  rowIds: getProjectCleanupDeleteRetryParts(rowIds)[1],
+                  tableName,
+                })
+              },
+            )
       })
 }
 
-const deleteProjectTablePurgeBatches = async ({
+const deleteProjectTableCleanupBatches = async ({
   projectId,
   tableName,
 }: {
   projectId: string
   tableName: string
 }): Promise<void> => {
-  const batchRows = await getProjectTablePurgeBatchRows({projectId, tableName})
+  const batchRows = await getProjectTableCleanupBatchRows({projectId, tableName})
   const rowIds = batchRows.map((row) => {
     return row.rowId
   })
 
   return rowIds.length === 0
     ? Promise.resolve()
-    : deleteProjectTablePurgeRowIds({rowIds, tableName})
+    : deleteProjectTableCleanupRowIds({rowIds, tableName})
         .then(() => {
           return yieldToEventLoop()
         })
         .then(() => {
-          return deleteProjectTablePurgeBatches({projectId, tableName})
+          return deleteProjectTableCleanupBatches({projectId, tableName})
         })
 }
 
-const deleteProjectTablePurgeBatch = async ({
+const deleteProjectTableCleanupBatch = async ({
   projectId,
   tableName,
 }: {
   projectId: string
   tableName: string
 }): Promise<number> => {
-  const batchRows = await getProjectTablePurgeBatchRows({projectId, tableName})
+  const batchRows = await getProjectTableCleanupBatchRows({projectId, tableName})
   const rowIds = batchRows.map((row) => {
     return row.rowId
   })
 
   return rowIds.length === 0
     ? 0
-    : deleteProjectTablePurgeRowIds({rowIds, tableName}).then(() => {
+    : deleteProjectTableCleanupRowIds({rowIds, tableName}).then(() => {
         return rowIds.length
       })
 }
 
-const purgeArchivedProjectMartTable = async ({
+const cleanupArchivedProjectMartTable = async ({
   projectId,
   tableName,
 }: {
   projectId: string
   tableName: string
 }): Promise<void> => {
-  return getArchivedProjectMartPurgeMode(tableName) === 'rewrite'
+  return getArchivedProjectMartCleanupMode(tableName) === 'rewrite'
     ? rewriteReviewArticleServingForArchivedProject(projectId)
-    : deleteProjectTablePurgeBatches({projectId, tableName})
+    : deleteProjectTableCleanupBatches({projectId, tableName})
 }
 
 export const archivedProjectMartTableNames = [
@@ -2183,7 +2190,9 @@ const getArchivedProjectMartCleanupCandidateSql = () => {
   `
 }
 
-const purgeArchivedProjectMartDataBatch = async (projectId: string): Promise<ArchivedProjectMartCleanupBatchResult> => {
+const cleanupArchivedProjectMartDataBatch = async (
+  projectId: string,
+): Promise<ArchivedProjectMartCleanupBatchResult> => {
   const rows = await archivedProjectCleanupTableNames.reduce<
     Promise<Array<{deletedRowCount: number; tableName: string}>>
   >((promise, tableName) => {
@@ -2192,7 +2201,7 @@ const purgeArchivedProjectMartDataBatch = async (projectId: string): Promise<Arc
         return acc
       }
 
-      const deletedRowCount = await deleteProjectTablePurgeBatch({projectId, tableName})
+      const deletedRowCount = await deleteProjectTableCleanupBatch({projectId, tableName})
 
       return deletedRowCount === 0 ? acc : [{deletedRowCount, tableName}]
     })
@@ -2204,7 +2213,7 @@ const purgeArchivedProjectMartDataBatch = async (projectId: string): Promise<Arc
     : {deletedRowCount: 0, projectId, tableName: null}
 }
 
-const purgeNextArchivedProjectMartBatch = async (): Promise<ArchivedProjectMartCleanupBatchResult> => {
+const cleanupNextArchivedProjectMartBatch = async (): Promise<ArchivedProjectMartCleanupBatchResult> => {
   const [candidate] = await queryMartRefreshBackgroundJson<ArchivedProjectMartCleanupCandidateRow>(
     getArchivedProjectMartCleanupCandidateSql(),
   )
@@ -2213,7 +2222,7 @@ const purgeNextArchivedProjectMartBatch = async (): Promise<ArchivedProjectMartC
     return {deletedRowCount: 0, projectId: null, tableName: null}
   }
 
-  const deletedRowCount = await deleteProjectTablePurgeBatch({
+  const deletedRowCount = await deleteProjectTableCleanupBatch({
     projectId: candidate.projectId,
     tableName: candidate.tableName,
   })
@@ -2221,10 +2230,10 @@ const purgeNextArchivedProjectMartBatch = async (): Promise<ArchivedProjectMartC
   return {deletedRowCount, projectId: candidate.projectId, tableName: candidate.tableName}
 }
 
-const purgeArchivedProjectMartData = async (projectId: string): Promise<void> => {
+const cleanupArchivedProjectMartData = async (projectId: string): Promise<void> => {
   await archivedProjectCleanupTableNames.reduce<Promise<void>>((promise, tableName) => {
     return promise.then(() => {
-      return purgeArchivedProjectMartTable({projectId, tableName})
+      return cleanupArchivedProjectMartTable({projectId, tableName})
     })
   }, Promise.resolve())
 }
@@ -2900,7 +2909,7 @@ const refreshProject = async (projectId: string) => {
   await ensureReviewArticleRollupTable()
 
   if (await getProjectIsArchived(projectId)) {
-    await purgeArchivedProjectMartData(projectId)
+    await cleanupArchivedProjectMartData(projectId)
     return recordProjectRefreshCompletion()
   }
 
@@ -2973,9 +2982,9 @@ const duckdbMartMaintenanceService = {
     return requestProjectLargeRebuilds([projectId], reason)
   },
   requestProjectLargeRebuilds,
-  purgeArchivedProjectMartData,
-  purgeArchivedProjectMartDataBatch,
-  purgeNextArchivedProjectMartBatch,
+  cleanupArchivedProjectMartData,
+  cleanupArchivedProjectMartDataBatch,
+  cleanupNextArchivedProjectMartBatch,
   refreshJudgmentArticle,
   refreshJudgmentFactsForArticles,
   refreshJudgmentFactsForProjectClaim,
