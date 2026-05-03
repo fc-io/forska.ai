@@ -1,12 +1,13 @@
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {
-  runProjectMartRefreshWorker,
   type ProjectMartRefreshWorkerLoopOptions,
+  runProjectMartRefreshWorker,
 } from '../src/server/workers/projectMartRefreshWorker.ts'
 
 type CliOptions = {
   heartbeatMs: number | undefined
   leaseMs: number | undefined
+  maxWakeMs: number | undefined
   pollIntervalMs: number | undefined
   workerId: string | undefined
 }
@@ -32,6 +33,7 @@ const getCliOptions = (): CliOptions => {
   return {
     heartbeatMs: getNumberArgValue(['--heartbeatMs', '--heartbeat-ms']),
     leaseMs: getNumberArgValue(['--leaseMs', '--lease-ms']),
+    maxWakeMs: getNumberArgValue(['--maxWakeMs', '--max-wake-ms']),
     pollIntervalMs: getNumberArgValue(['--pollIntervalMs', '--poll-interval-ms']),
     workerId: getArgValue(['--workerId', '--worker-id']),
   }
@@ -46,6 +48,7 @@ export const runProjectMartRefreshWorkerCli = async () => {
   const workerOptions: ProjectMartRefreshWorkerLoopOptions = {
     heartbeatMs: options.heartbeatMs,
     leaseMs: options.leaseMs,
+    maxWakeMs: options.maxWakeMs,
     pollIntervalMs: options.pollIntervalMs,
     signal: abortController.signal,
     workerId: options.workerId,
@@ -59,6 +62,7 @@ export const runProjectMartRefreshWorkerCli = async () => {
       JSON.stringify({
         heartbeatMs: workerOptions.heartbeatMs,
         leaseMs: workerOptions.leaseMs,
+        maxWakeMs: workerOptions.maxWakeMs,
         pollIntervalMs: workerOptions.pollIntervalMs,
         status: 'starting',
         workerId: workerOptions.workerId,

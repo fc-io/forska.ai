@@ -1,13 +1,14 @@
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {
-  runProjectMartRefreshWorkerOnce,
   type ProjectMartRefreshWorkerCycleOptions,
+  runProjectMartRefreshWorkerOnce,
 } from '../src/server/workers/projectMartRefreshWorker.ts'
 
 type CliOptions = {
   heartbeatMs: number | undefined
   incrementalArticleThreshold: number | undefined
   leaseMs: number | undefined
+  maxWakeMs: number | undefined
   workerId: string | undefined
 }
 
@@ -31,8 +32,12 @@ const getNumberArgValue = (names: string[]) => {
 const getCliOptions = (): CliOptions => {
   return {
     heartbeatMs: getNumberArgValue(['--heartbeatMs', '--heartbeat-ms']),
-    incrementalArticleThreshold: getNumberArgValue(['--incrementalArticleThreshold', '--incremental-article-threshold']),
+    incrementalArticleThreshold: getNumberArgValue([
+      '--incrementalArticleThreshold',
+      '--incremental-article-threshold',
+    ]),
     leaseMs: getNumberArgValue(['--leaseMs', '--lease-ms']),
+    maxWakeMs: getNumberArgValue(['--maxWakeMs', '--max-wake-ms']),
     workerId: getArgValue(['--workerId', '--worker-id']),
   }
 }
@@ -43,6 +48,7 @@ export const runProjectMartRefreshWorkerOnceCli = async () => {
     heartbeatMs: options.heartbeatMs,
     incrementalArticleThreshold: options.incrementalArticleThreshold,
     leaseMs: options.leaseMs,
+    maxWakeMs: options.maxWakeMs,
     workerId: options.workerId,
   }
 

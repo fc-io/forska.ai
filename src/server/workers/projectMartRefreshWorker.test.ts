@@ -148,6 +148,11 @@ const createWorkerTestContext = (params: {
     hasActiveProjectReviewServingGeneration: mock(async (projectId: string) => {
       return params.activeServingGenerationByProject?.[projectId] ?? true
     }),
+    refreshDirtyProjectArticleBatch: mock(async (projectId: string, articleIds: string[]) => {
+      await refreshService.refreshProjectScopeArticles(projectId, articleIds)
+      await refreshService.refreshJudgmentFactsForArticles(articleIds)
+      await refreshService.refreshProjectArticleMartsBatch(projectId, articleIds)
+    }),
     refreshJudgmentArticle: mock(async (articleId: string) => {
       callLog.push(`judgment:${articleId}`)
     }),
@@ -221,7 +226,7 @@ const createWorkerTestContext = (params: {
     stateService,
   }
 
-  return {acknowledgedProjects, callLog, completed, dependencies, failed, heartbeatCalls, queuedLargeRebuilds}
+  return {acknowledgedProjects, callLog, completed, dependencies, failed, heartbeatCalls, queuedLargeRebuilds, released}
 }
 
 beforeEach(() => {
@@ -525,6 +530,46 @@ test('large active projects keep normal dirty churn on the batch path', async ()
   expect(context.callLog).not.toContain('largeRebuild:project-1:project_scope_article:9')
   expect(context.callLog).not.toContain('project:project-1')
   expect(context.acknowledgedProjects).toEqual([{ackToken: 9, projectId: 'project-1'}])
+})
+
+test('stops a dirty refresh wake after a committed batch when the wake budget is exhausted', async () => {
+  const context = createWorkerTestContext({
+    articlesByProject: {'project-1': ['article-1', 'article-2']},
+    claims: [
+      {
+        claimedToken: 6,
+        lastCompletedToken: 5,
+        leaseExpiresAt: new Date('2026-04-02T13:25:30.000Z'),
+        projectId: 'project-1',
+        workerId: 'worker-1',
+      },
+    ],
+  })
+  const nowMsValues = [0, 200]
+
+  context.dependencies.nowMs = mock(() => {
+    return nowMsValues.shift() ?? 200
+  })
+
+  const result = await runProjectMartRefreshWorkerCycle(
+    {dirtyArticleBatchSize: 1, maxWakeMs: 100, workerId: 'worker-1'},
+    context.dependencies,
+  )
+
+  expect(result).toEqual({claimedToken: 6, projectId: 'project-1', status: 'budget_exhausted', workerId: 'worker-1'})
+  expect(context.callLog).toEqual([
+    'reconcile:all',
+    'claim:worker-1:1:30000',
+    'batch:project-1:1',
+    'scopeArticle:project-1:article-1',
+    'judgment:article-1',
+    'articleMartsBatch:project-1:article-1',
+    'complete:project-1:6',
+    'release:project-1',
+  ])
+  expect(context.completed).toEqual([{completedToken: 6, projectId: 'project-1', workerId: 'worker-1'}])
+  expect(context.released).toEqual([{projectId: 'project-1', workerId: 'worker-1'}])
+  expect(context.acknowledgedProjects).toEqual([])
 })
 
 test('can process work reclaimed after an expired lease', async () => {

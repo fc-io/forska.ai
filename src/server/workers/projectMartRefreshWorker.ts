@@ -89,6 +89,7 @@ type ProjectMartLargeRebuildStateWorkerService = {
 
 type ProjectMartRefreshRunnerService = {
   hasActiveProjectReviewServingGeneration: (projectId: string) => Promise<boolean>
+  refreshDirtyProjectArticleBatch: (projectId: string, articleIds: string[]) => Promise<void>
   refreshJudgmentArticle: (articleId: string) => Promise<void>
   refreshJudgmentFactsForArticles: (articleIds: string[]) => Promise<void>
   refreshProjectScopeArticles: (projectId: string, articleIds: string[]) => Promise<void>
@@ -98,6 +99,7 @@ type ProjectMartRefreshRunnerService = {
 type ProjectMartRefreshWorkerDependencies = {
   largeRebuildStateService: ProjectMartLargeRebuildStateWorkerService
   materializationService?: ProjectMartDirtyMaterializationWorkerService
+  nowMs?: () => number
   projectInspector: {getProjectScopeArticleCount: (projectId: string) => Promise<number>}
   refreshService: ProjectMartRefreshRunnerService
   sleep: typeof sleep
@@ -112,6 +114,7 @@ type ProjectMartRefreshWorkerCycleOptions = {
   dirtyArticleBatchSize?: number
   heartbeatMs?: number
   leaseMs?: number
+  maxWakeMs?: number
   now?: Date
   workerId?: string
 }
@@ -124,6 +127,7 @@ type ProjectMartRefreshWorkerLoopOptions = ProjectMartRefreshWorkerCycleOptions 
 type ProjectMartRefreshWorkerCycleResult =
   | {projectId: null; status: 'idle'; workerId: string}
   | {claimedToken: number; projectId: string; status: 'blocked_by_quarantine'; workerId: string}
+  | {claimedToken: number; projectId: string; status: 'budget_exhausted'; workerId: string}
   | {claimedToken: number; projectId: string; status: 'completed'; workerId: string}
   | {claimedToken: number; error: string; projectId: string; status: 'failed'; workerId: string}
 
@@ -153,6 +157,7 @@ const getProjectScopeArticleCount = async (projectId: string) => {
 const defaultProjectMartRefreshWorkerDependencies: ProjectMartRefreshWorkerDependencies = {
   largeRebuildStateService: getProjectMartLargeRebuildStateService(),
   materializationService: getProjectMartDirtyMaterializationService(),
+  nowMs: Date.now,
   projectInspector: {getProjectScopeArticleCount},
   refreshService: getDuckdbMartRefreshService(),
   sleep,
@@ -166,6 +171,30 @@ const getProjectMartRefreshWorkerId = () => {
 
 const getWorkerNow = (now?: Date) => {
   return now ?? new Date()
+}
+
+const getWorkerNowMs = (dependencies: ProjectMartRefreshWorkerDependencies) => {
+  return dependencies.nowMs?.() ?? Date.now()
+}
+
+const getPositiveInteger = (value: number | null | undefined) => {
+  return Number.isInteger(value) && value > 0 ? Math.trunc(value) : null
+}
+
+const hasWakeBudgetExpired = ({
+  dependencies,
+  maxWakeMs,
+  startedAtMs,
+}: {
+  dependencies: ProjectMartRefreshWorkerDependencies
+  maxWakeMs: number | null
+  startedAtMs: number
+}) => {
+  return maxWakeMs !== null && getWorkerNowMs(dependencies) - startedAtMs >= maxWakeMs
+}
+
+const shouldSleepBeforeNextWorkerCycle = (result: ProjectMartRefreshWorkerCycleResult) => {
+  return result.status === 'idle' || result.status === 'budget_exhausted'
 }
 
 const getClaimedProject = async (
@@ -308,14 +337,18 @@ const queueBoundedInitialProjectMartSetup = async ({
 const processDirtyArticleBatchForClaim = async ({
   claim,
   dependencies,
+  maxWakeMs,
   options,
+  startedAtMs,
   workerId,
 }: {
   claim: ProjectRefreshClaim
   dependencies: ProjectMartRefreshWorkerDependencies
+  maxWakeMs: number | null
   options: ProjectMartRefreshWorkerCycleOptions
+  startedAtMs: number
   workerId: string
-}): Promise<'blocked_by_quarantine' | 'completed'> => {
+}): Promise<'blocked_by_quarantine' | 'budget_exhausted' | 'completed'> => {
   const dirtyArticleBatch = await dependencies.stateService.getDirtyArticleBatchForClaim({
     batchSize: getDirtyArticleBatchSize(options),
     claimedToken: claim.claimedToken,
@@ -325,9 +358,7 @@ const processDirtyArticleBatchForClaim = async ({
   const dirtyArticleIds = dirtyArticleBatch.articleIds
 
   if (dirtyArticleIds.length > 0) {
-    await dependencies.refreshService.refreshProjectScopeArticles(claim.projectId, dirtyArticleIds)
-    await dependencies.refreshService.refreshJudgmentFactsForArticles(dirtyArticleIds)
-    await dependencies.refreshService.refreshProjectArticleMartsBatch(claim.projectId, dirtyArticleIds)
+    await dependencies.refreshService.refreshDirtyProjectArticleBatch(claim.projectId, dirtyArticleIds)
   }
 
   const completion = await dependencies.stateService.completeDirtyArticleBatchForClaim({
@@ -350,7 +381,17 @@ const processDirtyArticleBatchForClaim = async ({
     throw new Error(`Project mart refresh claim made no progress for ${claim.projectId}`)
   }
 
-  return processDirtyArticleBatchForClaim({claim, dependencies, options, workerId})
+  if (hasWakeBudgetExpired({dependencies, maxWakeMs, startedAtMs})) {
+    await dependencies.stateService.releaseProjectRefreshClaim({
+      now: getWorkerNow(options.now),
+      projectId: claim.projectId,
+      workerId,
+    })
+
+    return 'budget_exhausted'
+  }
+
+  return processDirtyArticleBatchForClaim({claim, dependencies, maxWakeMs, options, startedAtMs, workerId})
 }
 
 export const runProjectMartRefreshWorkerCycle = async (
@@ -358,6 +399,8 @@ export const runProjectMartRefreshWorkerCycle = async (
   dependencies: ProjectMartRefreshWorkerDependencies = defaultProjectMartRefreshWorkerDependencies,
 ): Promise<ProjectMartRefreshWorkerCycleResult> => {
   const workerId = options.workerId ?? getProjectMartRefreshWorkerId()
+  const maxWakeMs = getPositiveInteger(options.maxWakeMs)
+  const startedAtMs = getWorkerNowMs(dependencies)
 
   await dependencies.sqliteService.reconcileProjectRefreshAcks()
 
@@ -409,9 +452,20 @@ export const runProjectMartRefreshWorkerCycle = async (
       return {claimedToken: claim.claimedToken, projectId: claim.projectId, status: 'completed', workerId}
     }
 
-    const articleRefreshStatus = await processDirtyArticleBatchForClaim({claim, dependencies, options, workerId})
+    const articleRefreshStatus = await processDirtyArticleBatchForClaim({
+      claim,
+      dependencies,
+      maxWakeMs,
+      options,
+      startedAtMs,
+      workerId,
+    })
     if (articleRefreshStatus === 'blocked_by_quarantine') {
       return {claimedToken: claim.claimedToken, projectId: claim.projectId, status: 'blocked_by_quarantine', workerId}
+    }
+
+    if (articleRefreshStatus === 'budget_exhausted') {
+      return {claimedToken: claim.claimedToken, projectId: claim.projectId, status: 'budget_exhausted', workerId}
     }
 
     refreshCompleted = true
@@ -458,7 +512,7 @@ export const runProjectMartRefreshWorker = async (
     return
   }
 
-  return cycleResult.status === 'idle'
+  return shouldSleepBeforeNextWorkerCycle(cycleResult)
     ? dependencies.sleep(options.pollIntervalMs ?? defaultProjectMartRefreshWorkerPollIntervalMs).then(() => {
         return runProjectMartRefreshWorker(options, dependencies)
       })

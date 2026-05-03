@@ -1,5 +1,5 @@
 import {getAppDatabaseService} from './appDatabaseService.ts'
-import {getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
+import {getSqlLiteral} from './appQueryHelpers.ts'
 import {
   getProjectMartDirtyRefreshStateService,
   type MarkedProjectDirtyState,
@@ -48,6 +48,8 @@ const martPromptAnswerFactLookupIndexQualifiedName = `mart.${martPromptAnswerFac
 const martPromptAnswerFactResetReplacementTableName = 'mart.prompt_answer_fact_project_refresh_rewrite'
 const martReviewArticleServingPurgeReplacementTableName = 'mart.review_article_serving_project_purge_rewrite'
 const martReviewArticleServingOrderIndexName = 'idx_mart_review_article_serving_order'
+const martRefreshArticleBatchTableName = 'temp_project_mart_refresh_article_batch'
+const martRefreshJudgmentFactArticleBatchTableName = 'temp_dirty_judgment_fact_article'
 const martRefreshFatalInvalidationErrorFragments = [
   'database has been invalidated because of a previous fatal error',
   'must be restarted prior to being used again',
@@ -195,16 +197,28 @@ const getProjectRefreshBatchArticleIds = (rows: ProjectRefreshBatchRow[]) => {
   })
 }
 
-const getProjectRefreshArticleIdsSql = (articleIds: string[]) => {
-  return getQuotedStringList(articleIds).join(', ')
+const getProjectRefreshArticleBatchSetupSql = (articleIds: string[]) => {
+  return `
+    DROP TABLE IF EXISTS ${martRefreshArticleBatchTableName};
+    CREATE TEMP TABLE ${martRefreshArticleBatchTableName} AS
+    SELECT DISTINCT article_id
+    FROM UNNEST(${getSqlLiteral(articleIds)}) AS article_batch(article_id)
+    WHERE article_id IS NOT NULL;
+  `
 }
 
-const getProjectRefreshArticleIdRowsSql = (articleIds: string[]) => {
-  return articleIds
-    .map((articleId) => {
-      return `(${getSqlLiteral(articleId)})`
-    })
-    .join(', ')
+const getProjectRefreshArticleBatchCleanupSql = () => {
+  return `
+    DROP TABLE IF EXISTS ${martRefreshArticleBatchTableName};
+  `
+}
+
+const getProjectRefreshArticleBatchExistsSql = (articleIdColumn: string) => {
+  return `EXISTS (
+        SELECT 1
+        FROM ${martRefreshArticleBatchTableName} refresh_article_batch
+        WHERE refresh_article_batch.article_id = ${articleIdColumn}
+      )`
 }
 
 const getProjectScopeResetSql = (projectId: string) => {
@@ -300,23 +314,22 @@ const getProjectScopeBatchInsertSql = (projectId: string, rows: ProjectRefreshSc
 }
 
 const getProjectScopeArticleBatchRefreshSql = (projectId: string, articleIds: string[]) => {
-  const projectLiteral = getSqlLiteral(projectId)
-  const articleRowsSql = getProjectRefreshArticleIdRowsSql(articleIds)
-
   return `
     BEGIN TRANSACTION;
-    DROP TABLE IF EXISTS temp_project_scope_article_refresh;
-    CREATE TEMP TABLE temp_project_scope_article_refresh AS
-    SELECT DISTINCT article_id
-    FROM (VALUES ${articleRowsSql}) AS requested_article(article_id)
-    WHERE article_id IS NOT NULL;
+    ${getProjectRefreshArticleBatchSetupSql(articleIds)}
+    ${getProjectScopeArticleBatchRefreshBodySql(projectId)}
+    ${getProjectRefreshArticleBatchCleanupSql()}
+    COMMIT;
+  `
+}
+
+const getProjectScopeArticleBatchRefreshBodySql = (projectId: string) => {
+  const projectLiteral = getSqlLiteral(projectId)
+
+  return `
     DELETE FROM mart.project_scope_article
     WHERE project_id = ${projectLiteral}
-      AND EXISTS (
-        SELECT 1
-        FROM temp_project_scope_article_refresh requested_article
-        WHERE requested_article.article_id = mart.project_scope_article.article_id
-      );
+      AND ${getProjectRefreshArticleBatchExistsSql('mart.project_scope_article.article_id')};
     INSERT INTO mart.project_scope_article (
       project_id,
       article_id,
@@ -333,7 +346,7 @@ const getProjectScopeArticleBatchRefreshSql = (projectId: string, articleIds: st
         FALSE AS in_curated_scope
       FROM app.project_import_route pir
       INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
-      INNER JOIN temp_project_scope_article_refresh requested_article
+      INNER JOIN ${martRefreshArticleBatchTableName} requested_article
         ON requested_article.article_id = air.article_id
       WHERE pir.project_id = ${projectLiteral}
     ),
@@ -344,7 +357,7 @@ const getProjectScopeArticleBatchRefreshSql = (projectId: string, articleIds: st
         FALSE AS in_route_scope,
         TRUE AS in_curated_scope
       FROM app.project_article pa
-      INNER JOIN temp_project_scope_article_refresh requested_article
+      INNER JOIN ${martRefreshArticleBatchTableName} requested_article
         ON requested_article.article_id = pa.article_id
       WHERE pa.project_id = ${projectLiteral}
     ),
@@ -375,8 +388,6 @@ const getProjectScopeArticleBatchRefreshSql = (projectId: string, articleIds: st
      AND project.archived = FALSE
     INNER JOIN app.article article ON article.id = aggregated_scope.article_id
     WHERE aggregated_scope.project_id = ${projectLiteral};
-    DROP TABLE temp_project_scope_article_refresh;
-    COMMIT;
   `
 }
 
@@ -651,9 +662,8 @@ const getProjectPromptAnswerFactLookupIndexCreateSql = () => {
   `
 }
 
-const getProjectPromptAnswerFactBatchInsertBodySql = (projectId: string, articleIds: string[]) => {
+const getProjectPromptAnswerFactBatchInsertBodySql = (projectId: string) => {
   const projectLiteral = getSqlLiteral(projectId)
-  const articleIdsSql = getProjectRefreshArticleIdsSql(articleIds)
 
   return `
     INSERT INTO mart.prompt_answer_fact (
@@ -693,7 +703,7 @@ const getProjectPromptAnswerFactBatchInsertBodySql = (projectId: string, article
           projectScopeAlias: 'scope_article',
         })}
       WHERE scope_article.project_id = ${projectLiteral}
-        AND scope_article.article_id IN (${articleIdsSql})
+        AND ${getProjectRefreshArticleBatchExistsSql('scope_article.article_id')}
     )
     SELECT DISTINCT
       eligible_project_judgment.project_id,
@@ -717,23 +727,32 @@ const getProjectPromptAnswerFactBatchInsertBodySql = (projectId: string, article
 const getProjectPromptAnswerFactBatchInsertSql = (projectId: string, articleIds: string[]) => {
   return `
     BEGIN TRANSACTION;
-    ${getProjectPromptAnswerFactBatchInsertBodySql(projectId, articleIds)}
+    ${getProjectRefreshArticleBatchSetupSql(articleIds)}
+    ${getProjectPromptAnswerFactBatchInsertBodySql(projectId)}
+    ${getProjectRefreshArticleBatchCleanupSql()}
     COMMIT;
   `
 }
 
 const getProjectPromptAnswerFactBatchRefreshSql = (projectId: string, articleIds: string[]) => {
-  const projectLiteral = getSqlLiteral(projectId)
-  const articleIdsSql = getProjectRefreshArticleIdsSql(articleIds)
-
   return `
     BEGIN TRANSACTION;
+    ${getProjectRefreshArticleBatchSetupSql(articleIds)}
+    ${getProjectPromptAnswerFactBatchRefreshBodySql(projectId)}
+    ${getProjectRefreshArticleBatchCleanupSql()}
+    COMMIT;
+  `
+}
+
+const getProjectPromptAnswerFactBatchRefreshBodySql = (projectId: string) => {
+  const projectLiteral = getSqlLiteral(projectId)
+
+  return `
     DROP INDEX IF EXISTS ${martPromptAnswerFactLookupIndexQualifiedName};
     DELETE FROM mart.prompt_answer_fact
     WHERE project_id = ${projectLiteral}
-      AND article_id IN (${articleIdsSql});
-    ${getProjectPromptAnswerFactBatchInsertBodySql(projectId, articleIds)}
-    COMMIT;
+      AND ${getProjectRefreshArticleBatchExistsSql('mart.prompt_answer_fact.article_id')};
+    ${getProjectPromptAnswerFactBatchInsertBodySql(projectId)}
   `
 }
 
@@ -768,11 +787,19 @@ const getProjectReviewAnswerDictionaryRebuildSql = (projectId: string) => {
 }
 
 const getProjectReviewAnswerDictionaryMissingBatchInsertSql = (projectId: string, articleIds: string[]) => {
-  const projectLiteral = getSqlLiteral(projectId)
-  const articleIdsSql = getProjectRefreshArticleIdsSql(articleIds)
-
   return `
     BEGIN TRANSACTION;
+    ${getProjectRefreshArticleBatchSetupSql(articleIds)}
+    ${getProjectReviewAnswerDictionaryMissingBatchInsertBodySql(projectId)}
+    ${getProjectRefreshArticleBatchCleanupSql()}
+    COMMIT;
+  `
+}
+
+const getProjectReviewAnswerDictionaryMissingBatchInsertBodySql = (projectId: string) => {
+  const projectLiteral = getSqlLiteral(projectId)
+
+  return `
     INSERT INTO app.review_answer_dictionary (
       project_id,
       prompt_id,
@@ -788,7 +815,7 @@ const getProjectReviewAnswerDictionaryMissingBatchInsertSql = (projectId: string
         answer_value
       FROM mart.prompt_answer_fact
       WHERE project_id = ${projectLiteral}
-        AND article_id IN (${articleIdsSql})
+        AND ${getProjectRefreshArticleBatchExistsSql('mart.prompt_answer_fact.article_id')}
     ),
     missing_answer_values AS (
       SELECT answer_values.project_id, answer_values.prompt_id, answer_values.answer_value
@@ -823,7 +850,6 @@ const getProjectReviewAnswerDictionaryMissingBatchInsertSql = (projectId: string
     LEFT JOIN current_answer_id
       ON current_answer_id.project_id = missing_answer_values.project_id
      AND current_answer_id.prompt_id = missing_answer_values.prompt_id;
-    COMMIT;
   `
 }
 
@@ -838,14 +864,22 @@ const getProjectReviewArticleRollupResetSql = (projectId: string) => {
 }
 
 const getProjectReviewArticleRollupBatchInsertSql = (projectId: string, articleIds: string[]) => {
-  const projectLiteral = getSqlLiteral(projectId)
-  const articleIdsSql = getProjectRefreshArticleIdsSql(articleIds)
-
   return `
     BEGIN TRANSACTION;
+    ${getProjectRefreshArticleBatchSetupSql(articleIds)}
+    ${getProjectReviewArticleRollupBatchInsertBodySql(projectId)}
+    ${getProjectRefreshArticleBatchCleanupSql()}
+    COMMIT;
+  `
+}
+
+const getProjectReviewArticleRollupBatchInsertBodySql = (projectId: string) => {
+  const projectLiteral = getSqlLiteral(projectId)
+
+  return `
     DELETE FROM mart.review_article_rollup
     WHERE project_id = ${projectLiteral}
-      AND article_id IN (${articleIdsSql});
+      AND ${getProjectRefreshArticleBatchExistsSql('mart.review_article_rollup.article_id')};
     INSERT INTO mart.review_article_rollup (
       project_id,
       article_id,
@@ -895,7 +929,7 @@ const getProjectReviewArticleRollupBatchInsertSql = (projectId: string, articleI
           projectScopeAlias: 'scope_article',
         })}
       WHERE scope_article.project_id = ${projectLiteral}
-        AND scope_article.article_id IN (${articleIdsSql})
+        AND ${getProjectRefreshArticleBatchExistsSql('scope_article.article_id')}
       GROUP BY scope_article.project_id, judgment_fact.article_id, judgment_fact.prompt_id
     ),
     llm_project_rollup AS (
@@ -919,7 +953,7 @@ const getProjectReviewArticleRollupBatchInsertSql = (projectId: string, articleI
         ON enabled_prompt.project_id = judgment_human.project_id
        AND enabled_prompt.prompt_id = judgment_human.prompt_id
       WHERE judgment_human.project_id = ${projectLiteral}
-        AND judgment_human.article_id IN (${articleIdsSql})
+        AND ${getProjectRefreshArticleBatchExistsSql('judgment_human.article_id')}
         AND EXISTS (
           SELECT 1
           FROM app.project project
@@ -952,7 +986,7 @@ const getProjectReviewArticleRollupBatchInsertSql = (projectId: string, articleI
         ON project.id = judgment_human_summary.project_id
        AND project.human_judgment_mode = 'summary'
       WHERE judgment_human_summary.project_id = ${projectLiteral}
-        AND judgment_human_summary.article_id IN (${articleIdsSql})
+        AND ${getProjectRefreshArticleBatchExistsSql('judgment_human_summary.article_id')}
         AND NULLIF(TRIM(COALESCE(judgment_human_summary.answer, '')), '') IS NOT NULL
       GROUP BY judgment_human_summary.project_id, judgment_human_summary.article_id
     ),
@@ -980,7 +1014,7 @@ const getProjectReviewArticleRollupBatchInsertSql = (projectId: string, articleI
         ) AS review_sections_completed
       FROM app.review review
       WHERE review.project_id = ${projectLiteral}
-        AND review.article_id IN (${articleIdsSql})
+        AND ${getProjectRefreshArticleBatchExistsSql('review.article_id')}
       GROUP BY project_id, article_id
     )
     SELECT
@@ -1021,8 +1055,7 @@ const getProjectReviewArticleRollupBatchInsertSql = (projectId: string, articleI
       ON review_state.project_id = scope_article.project_id
      AND review_state.article_id = scope_article.article_id
     WHERE scope_article.project_id = ${projectLiteral}
-      AND scope_article.article_id IN (${articleIdsSql});
-    COMMIT;
+      AND ${getProjectRefreshArticleBatchExistsSql('scope_article.article_id')};
   `
 }
 
@@ -1068,11 +1101,19 @@ const getProjectReviewServingSetupSql = (projectId: string) => {
 }
 
 const getProjectReviewServingBatchSql = (projectId: string, articleIds: string[]) => {
-  const projectLiteral = getSqlLiteral(projectId)
-  const articleIdsSql = getProjectRefreshArticleIdsSql(articleIds)
-
   return `
     BEGIN TRANSACTION;
+    ${getProjectRefreshArticleBatchSetupSql(articleIds)}
+    ${getProjectReviewServingBatchBodySql(projectId)}
+    ${getProjectRefreshArticleBatchCleanupSql()}
+    COMMIT;
+  `
+}
+
+const getProjectReviewServingBatchBodySql = (projectId: string) => {
+  const projectLiteral = getSqlLiteral(projectId)
+
+  return `
     INSERT INTO mart.review_article_serving (
       project_id,
       generation,
@@ -1135,7 +1176,7 @@ const getProjectReviewServingBatchSql = (projectId: string, articleIds: string[]
     FROM mart.review_article_rollup rollup
     INNER JOIN app.article article ON article.id = rollup.article_id
     WHERE rollup.project_id = ${projectLiteral}
-      AND rollup.article_id IN (${articleIdsSql});
+      AND ${getProjectRefreshArticleBatchExistsSql('rollup.article_id')};
     INSERT INTO mart.review_article_filter_member (
       project_id,
       generation,
@@ -1168,7 +1209,7 @@ const getProjectReviewServingBatchSql = (projectId: string, articleIds: string[]
       ON rollup.project_id = fact.project_id
      AND rollup.article_id = fact.article_id
     WHERE fact.project_id = ${projectLiteral}
-      AND fact.article_id IN (${articleIdsSql});
+      AND ${getProjectRefreshArticleBatchExistsSql('fact.article_id')};
     INSERT INTO mart.review_article_serving_detail (
       project_id,
       generation,
@@ -1241,20 +1282,27 @@ const getProjectReviewServingBatchSql = (projectId: string, articleIds: string[]
         projectScopeAlias: 'scope_article',
       })}
     WHERE scope_article.project_id = ${projectLiteral}
-      AND scope_article.article_id IN (${articleIdsSql});
-    COMMIT;
+      AND ${getProjectRefreshArticleBatchExistsSql('scope_article.article_id')};
   `
 }
 
 const getProjectReviewActiveServingBatchRefreshSql = (projectId: string, articleIds: string[]) => {
-  const projectLiteral = getSqlLiteral(projectId)
-  const articleIdsSql = getProjectRefreshArticleIdsSql(articleIds)
-
   return `
     BEGIN TRANSACTION;
+    ${getProjectRefreshArticleBatchSetupSql(articleIds)}
+    ${getProjectReviewActiveServingBatchRefreshBodySql(projectId)}
+    ${getProjectRefreshArticleBatchCleanupSql()}
+    COMMIT;
+  `
+}
+
+const getProjectReviewActiveServingBatchRefreshBodySql = (projectId: string) => {
+  const projectLiteral = getSqlLiteral(projectId)
+
+  return `
     DELETE FROM mart.review_article_serving_detail
     WHERE project_id = ${projectLiteral}
-      AND article_id IN (${articleIdsSql})
+      AND ${getProjectRefreshArticleBatchExistsSql('mart.review_article_serving_detail.article_id')}
       AND generation = (
         SELECT active_generation
         FROM app.project_review_serving_generation
@@ -1262,7 +1310,7 @@ const getProjectReviewActiveServingBatchRefreshSql = (projectId: string, article
       );
     DELETE FROM mart.review_article_filter_member
     WHERE project_id = ${projectLiteral}
-      AND article_id IN (${articleIdsSql})
+      AND ${getProjectRefreshArticleBatchExistsSql('mart.review_article_filter_member.article_id')}
       AND generation = (
         SELECT active_generation
         FROM app.project_review_serving_generation
@@ -1270,7 +1318,7 @@ const getProjectReviewActiveServingBatchRefreshSql = (projectId: string, article
       );
     DELETE FROM mart.review_article_serving
     WHERE project_id = ${projectLiteral}
-      AND article_id IN (${articleIdsSql})
+      AND ${getProjectRefreshArticleBatchExistsSql('mart.review_article_serving.article_id')}
       AND generation = (
         SELECT active_generation
         FROM app.project_review_serving_generation
@@ -1338,7 +1386,7 @@ const getProjectReviewActiveServingBatchRefreshSql = (projectId: string, article
     FROM mart.review_article_rollup rollup
     INNER JOIN app.article article ON article.id = rollup.article_id
     WHERE rollup.project_id = ${projectLiteral}
-      AND rollup.article_id IN (${articleIdsSql});
+      AND ${getProjectRefreshArticleBatchExistsSql('rollup.article_id')};
     INSERT INTO mart.review_article_filter_member (
       project_id,
       generation,
@@ -1371,7 +1419,7 @@ const getProjectReviewActiveServingBatchRefreshSql = (projectId: string, article
       ON rollup.project_id = fact.project_id
      AND rollup.article_id = fact.article_id
     WHERE fact.project_id = ${projectLiteral}
-      AND fact.article_id IN (${articleIdsSql});
+      AND ${getProjectRefreshArticleBatchExistsSql('fact.article_id')};
     INSERT INTO mart.review_article_serving_detail (
       project_id,
       generation,
@@ -1444,7 +1492,22 @@ const getProjectReviewActiveServingBatchRefreshSql = (projectId: string, article
         projectScopeAlias: 'scope_article',
       })}
     WHERE scope_article.project_id = ${projectLiteral}
-      AND scope_article.article_id IN (${articleIdsSql});
+      AND ${getProjectRefreshArticleBatchExistsSql('scope_article.article_id')};
+  `
+}
+
+const getDirtyProjectArticleBatchRefreshSql = (projectId: string, articleIds: string[]) => {
+  return `
+    BEGIN TRANSACTION;
+    ${getProjectRefreshArticleBatchSetupSql(articleIds)}
+    ${getProjectScopeArticleBatchRefreshBodySql(projectId)}
+    ${getJudgmentProjectScopeBatchRefreshBodySql(projectId)}
+    ${getProjectPromptAnswerFactBatchRefreshBodySql(projectId)}
+    ${getProjectPromptAnswerFactLookupIndexCreateSql()}
+    ${getProjectReviewAnswerDictionaryMissingBatchInsertBodySql(projectId)}
+    ${getProjectReviewArticleRollupBatchInsertBodySql(projectId)}
+    ${getProjectReviewActiveServingBatchRefreshBodySql(projectId)}
+    ${getProjectRefreshArticleBatchCleanupSql()}
     COMMIT;
   `
 }
@@ -1559,15 +1622,22 @@ const getJudgmentFactRefreshSourceSql = (articleFilterSql: string) => {
 const getJudgmentFactSafeRefreshSql = ({dirtyArticlesSql}: {dirtyArticlesSql: string}) => {
   return `
     BEGIN TRANSACTION;
-    DROP TABLE IF EXISTS temp_dirty_judgment_fact_article;
-    CREATE TEMP TABLE temp_dirty_judgment_fact_article AS
+    ${getJudgmentFactSafeRefreshBodySql({dirtyArticlesSql})}
+    COMMIT;
+  `
+}
+
+const getJudgmentFactSafeRefreshBodySql = ({dirtyArticlesSql}: {dirtyArticlesSql: string}) => {
+  return `
+    DROP TABLE IF EXISTS ${martRefreshJudgmentFactArticleBatchTableName};
+    CREATE TEMP TABLE ${martRefreshJudgmentFactArticleBatchTableName} AS
     SELECT DISTINCT article_id
     FROM (${dirtyArticlesSql}) dirty_article_source
     WHERE article_id IS NOT NULL;
     DELETE FROM mart.judgment_fact
     WHERE EXISTS (
       SELECT 1
-      FROM temp_dirty_judgment_fact_article dirty_article
+      FROM ${martRefreshJudgmentFactArticleBatchTableName} dirty_article
       WHERE dirty_article.article_id = mart.judgment_fact.article_id
     );
     INSERT INTO mart.judgment_fact (
@@ -1601,12 +1671,11 @@ const getJudgmentFactSafeRefreshSql = ({dirtyArticlesSql}: {dirtyArticlesSql: st
     ${getJudgmentFactRefreshSourceSql(`
       EXISTS (
         SELECT 1
-        FROM temp_dirty_judgment_fact_article dirty_article
+        FROM ${martRefreshJudgmentFactArticleBatchTableName} dirty_article
         WHERE dirty_article.article_id = judgment.article_id
       )
     `)};
-    DROP TABLE temp_dirty_judgment_fact_article;
-    COMMIT;
+    DROP TABLE ${martRefreshJudgmentFactArticleBatchTableName};
   `
 }
 
@@ -1637,13 +1706,22 @@ const getJudgmentProjectClaimRefreshSql = ({
 }
 
 const getJudgmentProjectScopeBatchRefreshSql = (projectId: string, articleIds: string[]) => {
-  const projectLiteral = getSqlLiteral(projectId)
-  const articleRowsSql = getProjectRefreshArticleIdRowsSql(articleIds)
+  return `
+    BEGIN TRANSACTION;
+    ${getProjectRefreshArticleBatchSetupSql(articleIds)}
+    ${getJudgmentProjectScopeBatchRefreshBodySql(projectId)}
+    ${getProjectRefreshArticleBatchCleanupSql()}
+    COMMIT;
+  `
+}
 
-  return getJudgmentFactSafeRefreshSql({
+const getJudgmentProjectScopeBatchRefreshBodySql = (projectId: string) => {
+  const projectLiteral = getSqlLiteral(projectId)
+
+  return getJudgmentFactSafeRefreshBodySql({
     dirtyArticlesSql: `
       SELECT requested_article.article_id
-      FROM (VALUES ${articleRowsSql}) AS requested_article(article_id)
+      FROM ${martRefreshArticleBatchTableName} requested_article
       INNER JOIN mart.project_scope_article scope_article
         ON scope_article.project_id = ${projectLiteral}
        AND scope_article.article_id = requested_article.article_id
@@ -2789,6 +2867,27 @@ const refreshProjectArticleMartsBatch = async (projectId: string, articleIds: st
   return refreshProjectActiveServingForArticles(projectId, refreshArticleIds)
 }
 
+const refreshDirtyProjectArticleBatch = async (projectId: string, articleIds: string[]): Promise<void> => {
+  const refreshArticleIds = getUniqueValues(articleIds)
+
+  if (refreshArticleIds.length === 0) {
+    return
+  }
+
+  if (!(await getHasActiveProjectReviewServingGeneration(projectId))) {
+    await queueProjectLargeRebuildForDirtyArticles(
+      projectId,
+      refreshArticleIds,
+      'missingActiveProjectReviewServingGeneration',
+    )
+    return
+  }
+
+  await runMartRefreshBackgroundStatement(getDirtyProjectArticleBatchRefreshSql(projectId, refreshArticleIds))
+  await yieldToEventLoop()
+  recordArticleRefreshCompletion()
+}
+
 const refreshProjectArticleServingForArticles = async (projectId: string, articleIds: string[]): Promise<void> => {
   return refreshProjectArticleMartsBatch(projectId, articleIds)
 }
@@ -2844,12 +2943,18 @@ const refreshJudgmentFactsForArticles = async (articleIds: string[]): Promise<vo
   }
 
   await runMartRefreshBackgroundStatement(
-    getJudgmentFactSafeRefreshSql({
-      dirtyArticlesSql: `
-        SELECT requested_article.article_id
-        FROM (VALUES ${getProjectRefreshArticleIdRowsSql(refreshArticleIds)}) AS requested_article(article_id)
-      `,
-    }),
+    `
+      BEGIN TRANSACTION;
+      ${getProjectRefreshArticleBatchSetupSql(refreshArticleIds)}
+      ${getJudgmentFactSafeRefreshBodySql({
+        dirtyArticlesSql: `
+          SELECT requested_article.article_id
+          FROM ${martRefreshArticleBatchTableName} requested_article
+        `,
+      })}
+      ${getProjectRefreshArticleBatchCleanupSql()}
+      COMMIT;
+    `,
   )
   await yieldToEventLoop()
   recordArticleRefreshCompletion()
@@ -2874,6 +2979,7 @@ const duckdbMartRefreshService = {
   refreshJudgmentArticle,
   refreshJudgmentFactsForArticles,
   refreshJudgmentFactsForProjectClaim,
+  refreshDirtyProjectArticleBatch,
   refreshProject,
   refreshProjectScopeArticles,
   refreshProjectArticleMartsBatch,
