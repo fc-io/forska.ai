@@ -1,5 +1,13 @@
 import {createHash} from 'node:crypto'
 
+import {duckdbOwnerPrivateApiPrefix} from '../../routes/apiRouteClassification.ts'
+import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
+import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
+import {
+  canCurrentServerOwnDuckdb,
+  ensureCurrentDuckdbOwnerLease,
+  getCurrentServerDuckdbOwnerUrl,
+} from '../../utils/serverRuntimeRole.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {getNormalizedProviderKeyProvider, getProviderKey} from './providerKey.ts'
@@ -39,6 +47,7 @@ export type ProviderAdmissionLeaseAcquireResult =
       activeLeaseCount: number
       alreadyHeld: boolean
       currentSnapshot: ProviderBucketSnapshot
+      lease?: ProviderAdmissionLeaseRecord
       providerLimit: number
       providerLimitVersion: string
       staleProviderLimitSnapshot: boolean
@@ -46,26 +55,93 @@ export type ProviderAdmissionLeaseAcquireResult =
   | {
       acquired: false
       activeLeaseCount: number
+      alreadyHeld?: boolean
       currentSnapshot: ProviderBucketSnapshot
+      lease?: ProviderAdmissionLeaseRecord
       providerLimit: number
       providerLimitVersion: string
-      reason: 'capacity' | 'staleProviderLimitSnapshot'
+      reason: 'alreadyHeld' | 'capacity' | 'staleProviderLimitSnapshot'
       staleProviderLimitSnapshot: boolean
     }
 
 type ProviderAdmissionLease = {
+  acquiredAtMs: number
   expiresAtMs: number
+  heartbeatAtMs: number
   holderToken: string
   leaseIdentity: string
   providerKey: string
   providerLimitVersion: string
 }
 
+export type ProviderAdmissionLeaseRecord = {
+  acquiredAt: string
+  acquiredAtMs: number
+  endpointAvailabilityKey: string | null
+  expiresAt: string
+  expiresAtMs: number
+  heartbeatAt: string
+  heartbeatAtMs: number
+  holderToken: string
+  leaseIdentity: string
+  leaseKind: ProviderAdmissionLeaseKind
+  probeAttemptId: string | null
+  providerKey: string
+  requestAttemptId: string | null
+}
+
+export type ProviderAdmissionLeaseAcquireInput = {
+  endpointAvailabilityKey?: string | null
+  holderToken: string
+  leaseIdentity: string
+  leaseKind?: ProviderAdmissionLeaseKind
+  nowMs?: number
+  probeAttemptId?: string | null
+  requestAttemptId?: string | null
+  snapshot: ProviderBucketSnapshot
+  ttlMs?: number
+}
+
+export type ProviderAdmissionLeaseReleaseInput = {holderToken: string; leaseIdentity: string; providerKey: string}
+
+export type ProviderAdmissionLeaseHeartbeatInput = ProviderAdmissionLeaseReleaseInput & {nowMs?: number; ttlMs?: number}
+
+export type ProviderAdmissionLeaseHeartbeatResult =
+  | {heartbeat: true; lease: ProviderAdmissionLeaseRecord}
+  | {heartbeat: false; reason: 'missing' | 'notHolder'}
+
+export type ProviderAdmissionLeaseExpiryInput = {nowMs?: number; providerKey: string}
+
+export type ProviderAdmissionLeaseExpiryResult = {expiredLeaseCount: number}
+
+type ProviderAdmissionLeaseIdentityParts = {
+  endpointAvailabilityKey: string | null
+  leaseKind: ProviderAdmissionLeaseKind
+  probeAttemptId: string | null
+  requestAttemptId: string | null
+}
+
+type ProviderAdmissionLeaseRow = {
+  acquiredAt: Date | string
+  endpointAvailabilityKey: string | null
+  expiresAt: Date | string
+  heartbeatAt: Date | string
+  holderToken: string
+  leaseIdentity: string
+  leaseKind: ProviderAdmissionLeaseKind
+  probeAttemptId: string | null
+  providerKey: string
+  requestAttemptId: string | null
+}
+
 const currentProviderSnapshots = new Map<string, ProviderBucketSnapshot>()
 const providerAdmissionLeases = new Map<string, ProviderAdmissionLease>()
+const providerAdmissionLeaseOperationQueues = new Map<string, Promise<void>>()
 
 export const providerAdmissionLeaseTtlMs = 60_000
 export const providerAdmissionLeaseHeartbeatIntervalMs = 15_000
+export const providerAdmissionLeaseOwnerApiPath = '/api/provideradmissionleases'
+export const providerAdmissionLeaseOwnerApiAliasPath = '/api/provider-admission-leases'
 
 const defaultProviderAdmissionLeaseClock: ProviderAdmissionLeaseClock = {
   now: () => {
@@ -75,6 +151,10 @@ const defaultProviderAdmissionLeaseClock: ProviderAdmissionLeaseClock = {
 
 const getNormalizedLeaseDurationMs = (value: number): number => {
   return Number.isFinite(value) ? Math.max(1, Math.trunc(value)) : providerAdmissionLeaseTtlMs
+}
+
+const getNormalizedTimestampMs = (value: number): number => {
+  return Number.isFinite(value) ? Math.trunc(value) : Date.now()
 }
 
 const getRequiredLeaseIdentityPart = ({label, value}: {label: string; value: string}): string => {
@@ -243,8 +323,331 @@ const getLeaseKey = ({leaseIdentity, providerKey}: {leaseIdentity: string; provi
   return `${providerKey}\n${leaseIdentity}`
 }
 
+const getDateFromMs = (value: number): Date => {
+  return new Date(value)
+}
+
+const getTimestampMs = (value: Date | string): number => {
+  return value instanceof Date ? value.getTime() : new Date(value).getTime()
+}
+
+const getIsoTimestamp = (value: Date | string): string => {
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString()
+}
+
+const getCountValue = (value: unknown): number => {
+  return typeof value === 'number'
+    ? value
+    : typeof value === 'bigint'
+      ? Number(value)
+      : typeof value === 'string'
+        ? Number(value)
+        : 0
+}
+
+const getProviderAdmissionLeaseRecord = (row: ProviderAdmissionLeaseRow): ProviderAdmissionLeaseRecord => {
+  const acquiredAtMs = getTimestampMs(row.acquiredAt)
+  const heartbeatAtMs = getTimestampMs(row.heartbeatAt)
+  const expiresAtMs = getTimestampMs(row.expiresAt)
+
+  return {
+    acquiredAt: getIsoTimestamp(row.acquiredAt),
+    acquiredAtMs,
+    endpointAvailabilityKey: row.endpointAvailabilityKey,
+    expiresAt: getIsoTimestamp(row.expiresAt),
+    expiresAtMs,
+    heartbeatAt: getIsoTimestamp(row.heartbeatAt),
+    heartbeatAtMs,
+    holderToken: row.holderToken,
+    leaseIdentity: row.leaseIdentity,
+    leaseKind: row.leaseKind,
+    probeAttemptId: row.probeAttemptId,
+    providerKey: row.providerKey,
+    requestAttemptId: row.requestAttemptId,
+  }
+}
+
+const getProviderAdmissionLeaseSelectSql = () => {
+  return `
+    SELECT
+      provider_key AS providerKey,
+      lease_kind AS leaseKind,
+      lease_identity AS leaseIdentity,
+      request_attempt_id AS requestAttemptId,
+      endpoint_availability_key AS endpointAvailabilityKey,
+      probe_attempt_id AS probeAttemptId,
+      holder_token AS holderToken,
+      acquired_at AS acquiredAt,
+      heartbeat_at AS heartbeatAt,
+      expires_at AS expiresAt
+    FROM app.provider_admission_lease
+  `
+}
+
 const getCurrentSnapshot = (snapshot: ProviderBucketSnapshot): ProviderBucketSnapshot => {
   return currentProviderSnapshots.get(snapshot.providerKey) ?? publishProviderBucketSnapshot(snapshot)
+}
+
+const getRequestLeaseIdentityParts = (
+  requestAttemptId: string | null | undefined,
+): ProviderAdmissionLeaseIdentityParts | null => {
+  const normalizedRequestAttemptId = getTrimmedValue(requestAttemptId)
+
+  return normalizedRequestAttemptId === null
+    ? null
+    : {
+        endpointAvailabilityKey: null,
+        leaseKind: 'request',
+        probeAttemptId: null,
+        requestAttemptId: normalizedRequestAttemptId,
+      }
+}
+
+const getProbeLeaseIdentityParts = ({
+  endpointAvailabilityKey,
+  probeAttemptId,
+}: {
+  endpointAvailabilityKey: string | null | undefined
+  probeAttemptId: string | null | undefined
+}): ProviderAdmissionLeaseIdentityParts | null => {
+  const normalizedEndpointAvailabilityKey = getTrimmedValue(endpointAvailabilityKey)
+  const normalizedProbeAttemptId = getTrimmedValue(probeAttemptId)
+
+  return normalizedEndpointAvailabilityKey === null || normalizedProbeAttemptId === null
+    ? null
+    : {
+        endpointAvailabilityKey: normalizedEndpointAvailabilityKey,
+        leaseKind: 'probe',
+        probeAttemptId: normalizedProbeAttemptId,
+        requestAttemptId: null,
+      }
+}
+
+const parseRequestLeaseIdentity = (leaseIdentity: string): ProviderAdmissionLeaseIdentityParts | null => {
+  const requestPrefix = 'request:'
+
+  return leaseIdentity.startsWith(requestPrefix)
+    ? getRequestLeaseIdentityParts(leaseIdentity.slice(requestPrefix.length))
+    : null
+}
+
+const parseProbeLeaseIdentity = (leaseIdentity: string): ProviderAdmissionLeaseIdentityParts | null => {
+  const probePrefix = 'probe:'
+  const rawIdentity = leaseIdentity.startsWith(probePrefix) ? leaseIdentity.slice(probePrefix.length) : ''
+  const delimiterIndex = rawIdentity.lastIndexOf(':')
+
+  return delimiterIndex <= 0 || delimiterIndex >= rawIdentity.length - 1
+    ? null
+    : getProbeLeaseIdentityParts({
+        endpointAvailabilityKey: rawIdentity.slice(0, delimiterIndex),
+        probeAttemptId: rawIdentity.slice(delimiterIndex + 1),
+      })
+}
+
+const getLeaseIdentityParts = (input: {
+  endpointAvailabilityKey?: string | null
+  leaseIdentity: string
+  leaseKind?: ProviderAdmissionLeaseKind
+  probeAttemptId?: string | null
+  requestAttemptId?: string | null
+}): ProviderAdmissionLeaseIdentityParts => {
+  const explicitParts =
+    input.leaseKind === 'request'
+      ? getRequestLeaseIdentityParts(input.requestAttemptId)
+      : input.leaseKind === 'probe'
+        ? getProbeLeaseIdentityParts({
+            endpointAvailabilityKey: input.endpointAvailabilityKey,
+            probeAttemptId: input.probeAttemptId,
+          })
+        : null
+  const parsedParts =
+    explicitParts ?? parseRequestLeaseIdentity(input.leaseIdentity) ?? parseProbeLeaseIdentity(input.leaseIdentity)
+  const expectedLeaseIdentity =
+    parsedParts?.leaseKind === 'request'
+      ? getProviderAdmissionRequestLeaseIdentity(parsedParts.requestAttemptId ?? '')
+      : parsedParts?.leaseKind === 'probe'
+        ? getProviderAdmissionProbeLeaseIdentity({
+            endpointAvailabilityKey: parsedParts.endpointAvailabilityKey ?? '',
+            probeAttemptId: parsedParts.probeAttemptId ?? '',
+          })
+        : null
+
+  if (parsedParts === null || expectedLeaseIdentity !== input.leaseIdentity) {
+    throw new Error(`provider admission lease identity is not canonical: ${input.leaseIdentity}`)
+  }
+
+  return parsedParts
+}
+
+const getProviderAdmissionLeaseInsertSql = ({
+  expiresAt,
+  input,
+  parts,
+  startedAt,
+}: {
+  expiresAt: Date
+  input: ProviderAdmissionLeaseAcquireInput
+  parts: ProviderAdmissionLeaseIdentityParts
+  startedAt: Date
+}) => {
+  return `
+    INSERT INTO app.provider_admission_lease (
+      provider_key,
+      lease_kind,
+      lease_identity,
+      request_attempt_id,
+      endpoint_availability_key,
+      probe_attempt_id,
+      holder_token,
+      acquired_at,
+      heartbeat_at,
+      expires_at
+    ) VALUES (
+      ${getSqlLiteral(input.snapshot.providerKey)},
+      ${getSqlLiteral(parts.leaseKind)},
+      ${getSqlLiteral(input.leaseIdentity)},
+      ${getSqlLiteral(parts.requestAttemptId)},
+      ${getSqlLiteral(parts.endpointAvailabilityKey)},
+      ${getSqlLiteral(parts.probeAttemptId)},
+      ${getSqlLiteral(input.holderToken)},
+      ${getSqlLiteral(startedAt)},
+      ${getSqlLiteral(startedAt)},
+      ${getSqlLiteral(expiresAt)}
+    )
+  `
+}
+
+const getProviderAdmissionLeaseOwnerUrl = async (): Promise<string> => {
+  const configuredUrl = String(process.env.SERVER_DUCKDB_OWNER_URL ?? '').trim()
+  const ownerUrl = configuredUrl.length > 0 ? configuredUrl : await getCurrentServerDuckdbOwnerUrl()
+
+  if (ownerUrl === null) {
+    throw new Error('DuckDB owner URL is required for provider admission lease owner proxy')
+  }
+
+  return ownerUrl.endsWith('/') ? ownerUrl.slice(0, -1) : ownerUrl
+}
+
+const requestProviderAdmissionLeaseOwner = async <T>({body, path}: {body: unknown; path: string}): Promise<T> => {
+  const ownerUrl = await getProviderAdmissionLeaseOwnerUrl()
+  const response = await fetch(
+    `${ownerUrl}${duckdbOwnerPrivateApiPrefix}${providerAdmissionLeaseOwnerApiPath}${path}`,
+    {body: JSON.stringify(body), headers: {'content-type': 'application/json'}, method: 'POST'},
+  )
+  const text = await response.text()
+  const parsed = text.trim().length === 0 ? null : (JSON.parse(text) as {data?: T; error?: unknown})
+  const error = parsed && 'error' in parsed ? parsed.error : null
+
+  if (!response.ok || error) {
+    throw new Error(typeof error === 'string' ? error : text || response.statusText)
+  }
+
+  if (!parsed || !('data' in parsed)) {
+    throw new Error('provider admission owner returned invalid response')
+  }
+
+  return parsed.data as T
+}
+
+const withProviderAdmissionLeaseSerialization = async <T>(
+  providerKey: string,
+  operation: () => Promise<T>,
+): Promise<T> => {
+  const previousQueue = providerAdmissionLeaseOperationQueues.get(providerKey) ?? Promise.resolve()
+  const currentOperation = previousQueue
+    .catch(() => {
+      return undefined
+    })
+    .then(operation)
+  const currentQueue = currentOperation.then(
+    () => {
+      return undefined
+    },
+    () => {
+      return undefined
+    },
+  )
+
+  providerAdmissionLeaseOperationQueues.set(providerKey, currentQueue)
+
+  try {
+    return await currentOperation
+  } finally {
+    if (providerAdmissionLeaseOperationQueues.get(providerKey) === currentQueue) {
+      providerAdmissionLeaseOperationQueues.delete(providerKey)
+    }
+  }
+}
+
+const getActiveProviderLeaseCount = async ({
+  now,
+  providerKey,
+  tx,
+}: {
+  now: Date
+  providerKey: string
+  tx: {queryJson: <T>(statement: string) => Promise<T[]>}
+}): Promise<number> => {
+  const [row] = await tx.queryJson<{leaseCount: number | string | bigint}>(`
+    SELECT COUNT(*) AS leaseCount
+    FROM app.provider_admission_lease
+    WHERE provider_key = ${getSqlLiteral(providerKey)}
+      AND expires_at > ${getSqlLiteral(now)}
+  `)
+
+  return getCountValue(row?.leaseCount)
+}
+
+const getProviderAdmissionLeaseByIdentity = async ({
+  leaseIdentity,
+  tx,
+}: {
+  leaseIdentity: string
+  tx: {queryJson: <T>(statement: string) => Promise<T[]>}
+}): Promise<ProviderAdmissionLeaseRecord | null> => {
+  const [row] = await tx.queryJson<ProviderAdmissionLeaseRow>(`
+    ${getProviderAdmissionLeaseSelectSql()}
+    WHERE lease_identity = ${getSqlLiteral(leaseIdentity)}
+    LIMIT 1
+  `)
+
+  return row === undefined ? null : getProviderAdmissionLeaseRecord(row)
+}
+
+const deleteExpiredProviderAdmissionLeases = async ({
+  now,
+  providerKey,
+  tx,
+}: {
+  now: Date
+  providerKey: string
+  tx: {queryJson: <T>(statement: string) => Promise<T[]>}
+}): Promise<number> => {
+  const rows = await tx.queryJson<{leaseIdentity: string}>(`
+    DELETE FROM app.provider_admission_lease
+    WHERE provider_key = ${getSqlLiteral(providerKey)}
+      AND expires_at <= ${getSqlLiteral(now)}
+    RETURNING lease_identity AS leaseIdentity
+  `)
+
+  return rows.length
+}
+
+const deleteExpiredProviderAdmissionLeaseIdentity = async ({
+  leaseIdentity,
+  now,
+  tx,
+}: {
+  leaseIdentity: string
+  now: Date
+  tx: {queryJson: <T>(statement: string) => Promise<T[]>}
+}): Promise<void> => {
+  await tx.queryJson<{leaseIdentity: string}>(`
+    DELETE FROM app.provider_admission_lease
+    WHERE lease_identity = ${getSqlLiteral(leaseIdentity)}
+      AND expires_at <= ${getSqlLiteral(now)}
+    RETURNING lease_identity AS leaseIdentity
+  `)
 }
 
 const getActiveProviderLeases = (providerKey: string, nowMs: number): ProviderAdmissionLease[] => {
@@ -325,7 +728,9 @@ export const acquireProviderAdmissionLease = ({
   }
 
   providerAdmissionLeases.set(leaseKey, {
+    acquiredAtMs: nowMs,
     expiresAtMs: nowMs + getNormalizedLeaseDurationMs(ttlMs),
+    heartbeatAtMs: nowMs,
     holderToken,
     leaseIdentity,
     providerKey: snapshot.providerKey,
@@ -359,7 +764,227 @@ export const releaseProviderAdmissionLease = ({
   return shouldRelease ? providerAdmissionLeases.delete(leaseKey) : false
 }
 
+export const acquireProviderAdmissionLeaseOnCurrentOwner = async (
+  input: ProviderAdmissionLeaseAcquireInput,
+): Promise<ProviderAdmissionLeaseAcquireResult> => {
+  await ensureCurrentDuckdbOwnerLease()
+
+  return withProviderAdmissionLeaseSerialization(input.snapshot.providerKey, async () => {
+    return getAppDatabaseService().transaction(async (tx) => {
+      const nowMs = getNormalizedTimestampMs(input.nowMs ?? Date.now())
+      const now = getDateFromMs(nowMs)
+      const currentSnapshot = getCurrentSnapshot(input.snapshot)
+      const staleProviderLimitSnapshot = input.snapshot.providerLimitVersion !== currentSnapshot.providerLimitVersion
+      const parts = getLeaseIdentityParts(input)
+      const existingLease = await getProviderAdmissionLeaseByIdentity({leaseIdentity: input.leaseIdentity, tx})
+      const activeLeaseCount = await getActiveProviderLeaseCount({now, providerKey: input.snapshot.providerKey, tx})
+      const existingLeaseIsActive = existingLease !== null && existingLease.expiresAtMs > nowMs
+      const existingLeaseIsSameProvider =
+        existingLeaseIsActive && existingLease.providerKey === input.snapshot.providerKey
+      const existingLeaseIsSameHolder = existingLeaseIsSameProvider && existingLease?.holderToken === input.holderToken
+
+      if (existingLeaseIsSameHolder) {
+        return {
+          acquired: true,
+          activeLeaseCount,
+          alreadyHeld: true,
+          currentSnapshot,
+          lease: existingLease,
+          providerLimit: currentSnapshot.providerLimit,
+          providerLimitVersion: input.snapshot.providerLimitVersion,
+          staleProviderLimitSnapshot,
+        }
+      }
+
+      if (existingLeaseIsActive) {
+        return {
+          acquired: false,
+          activeLeaseCount,
+          alreadyHeld: true,
+          currentSnapshot,
+          lease: existingLease,
+          providerLimit: currentSnapshot.providerLimit,
+          providerLimitVersion: currentSnapshot.providerLimitVersion,
+          reason: 'alreadyHeld',
+          staleProviderLimitSnapshot,
+        }
+      }
+
+      if (staleProviderLimitSnapshot) {
+        return {
+          acquired: false,
+          activeLeaseCount,
+          currentSnapshot,
+          providerLimit: currentSnapshot.providerLimit,
+          providerLimitVersion: currentSnapshot.providerLimitVersion,
+          reason: 'staleProviderLimitSnapshot',
+          staleProviderLimitSnapshot: true,
+        }
+      }
+
+      await deleteExpiredProviderAdmissionLeaseIdentity({leaseIdentity: input.leaseIdentity, now, tx})
+      await deleteExpiredProviderAdmissionLeases({now, providerKey: input.snapshot.providerKey, tx})
+
+      const reconciledActiveLeaseCount = await getActiveProviderLeaseCount({
+        now,
+        providerKey: input.snapshot.providerKey,
+        tx,
+      })
+
+      if (reconciledActiveLeaseCount >= currentSnapshot.providerLimit) {
+        return {
+          acquired: false,
+          activeLeaseCount: reconciledActiveLeaseCount,
+          currentSnapshot,
+          providerLimit: currentSnapshot.providerLimit,
+          providerLimitVersion: currentSnapshot.providerLimitVersion,
+          reason: 'capacity',
+          staleProviderLimitSnapshot: false,
+        }
+      }
+
+      const ttlMs = getNormalizedLeaseDurationMs(input.ttlMs ?? providerAdmissionLeaseTtlMs)
+      const expiresAt = getDateFromMs(nowMs + ttlMs)
+
+      await tx.run(getProviderAdmissionLeaseInsertSql({expiresAt, input, parts, startedAt: now}))
+
+      const lease = await getProviderAdmissionLeaseByIdentity({leaseIdentity: input.leaseIdentity, tx})
+
+      return {
+        acquired: true,
+        activeLeaseCount: reconciledActiveLeaseCount + 1,
+        alreadyHeld: false,
+        currentSnapshot,
+        lease: lease ?? undefined,
+        providerLimit: currentSnapshot.providerLimit,
+        providerLimitVersion: currentSnapshot.providerLimitVersion,
+        staleProviderLimitSnapshot: false,
+      }
+    })
+  })
+}
+
+export const acquireProviderAdmissionLeaseThroughOwner = async (
+  input: ProviderAdmissionLeaseAcquireInput,
+): Promise<ProviderAdmissionLeaseAcquireResult> => {
+  return canCurrentServerOwnDuckdb()
+    ? acquireProviderAdmissionLeaseOnCurrentOwner(input)
+    : requestProviderAdmissionLeaseOwner<ProviderAdmissionLeaseAcquireResult>({body: input, path: '/acquire'})
+}
+
+export const acquireProviderAdmissionLeasePersisted = acquireProviderAdmissionLeaseThroughOwner
+
+export const heartbeatProviderAdmissionLeaseOnCurrentOwner = async (
+  input: ProviderAdmissionLeaseHeartbeatInput,
+): Promise<ProviderAdmissionLeaseHeartbeatResult> => {
+  await ensureCurrentDuckdbOwnerLease()
+
+  return withProviderAdmissionLeaseSerialization(input.providerKey, async () => {
+    return getAppDatabaseService().transaction(async (tx) => {
+      const nowMs = getNormalizedTimestampMs(input.nowMs ?? Date.now())
+      const now = getDateFromMs(nowMs)
+      const expiresAt = getDateFromMs(nowMs + getNormalizedLeaseDurationMs(input.ttlMs ?? providerAdmissionLeaseTtlMs))
+      const existingLease = await getProviderAdmissionLeaseByIdentity({leaseIdentity: input.leaseIdentity, tx})
+
+      if (existingLease === null || existingLease.providerKey !== input.providerKey) {
+        return {heartbeat: false, reason: 'missing'}
+      }
+
+      if (existingLease.holderToken !== input.holderToken) {
+        return {heartbeat: false, reason: 'notHolder'}
+      }
+
+      const [row] = await tx.queryJson<ProviderAdmissionLeaseRow>(`
+        UPDATE app.provider_admission_lease
+        SET heartbeat_at = ${getSqlLiteral(now)},
+            expires_at = ${getSqlLiteral(expiresAt)}
+        WHERE provider_key = ${getSqlLiteral(input.providerKey)}
+          AND lease_identity = ${getSqlLiteral(input.leaseIdentity)}
+          AND holder_token = ${getSqlLiteral(input.holderToken)}
+        RETURNING
+          provider_key AS providerKey,
+          lease_kind AS leaseKind,
+          lease_identity AS leaseIdentity,
+          request_attempt_id AS requestAttemptId,
+          endpoint_availability_key AS endpointAvailabilityKey,
+          probe_attempt_id AS probeAttemptId,
+          holder_token AS holderToken,
+          acquired_at AS acquiredAt,
+          heartbeat_at AS heartbeatAt,
+          expires_at AS expiresAt
+      `)
+
+      return row === undefined
+        ? {heartbeat: false, reason: 'missing'}
+        : {heartbeat: true, lease: getProviderAdmissionLeaseRecord(row)}
+    })
+  })
+}
+
+export const heartbeatProviderAdmissionLeaseThroughOwner = async (
+  input: ProviderAdmissionLeaseHeartbeatInput,
+): Promise<ProviderAdmissionLeaseHeartbeatResult> => {
+  return canCurrentServerOwnDuckdb()
+    ? heartbeatProviderAdmissionLeaseOnCurrentOwner(input)
+    : requestProviderAdmissionLeaseOwner<ProviderAdmissionLeaseHeartbeatResult>({body: input, path: '/heartbeat'})
+}
+
+export const releaseProviderAdmissionLeaseOnCurrentOwner = async (
+  input: ProviderAdmissionLeaseReleaseInput,
+): Promise<boolean> => {
+  await ensureCurrentDuckdbOwnerLease()
+
+  return withProviderAdmissionLeaseSerialization(input.providerKey, async () => {
+    return getAppDatabaseService().transaction(async (tx) => {
+      const rows = await tx.queryJson<{leaseIdentity: string}>(`
+        DELETE FROM app.provider_admission_lease
+        WHERE provider_key = ${getSqlLiteral(input.providerKey)}
+          AND lease_identity = ${getSqlLiteral(input.leaseIdentity)}
+          AND holder_token = ${getSqlLiteral(input.holderToken)}
+        RETURNING lease_identity AS leaseIdentity
+      `)
+
+      return rows.length > 0
+    })
+  })
+}
+
+export const releaseProviderAdmissionLeaseThroughOwner = async (
+  input: ProviderAdmissionLeaseReleaseInput,
+): Promise<boolean> => {
+  return canCurrentServerOwnDuckdb()
+    ? releaseProviderAdmissionLeaseOnCurrentOwner(input)
+    : requestProviderAdmissionLeaseOwner<boolean>({body: input, path: '/release'})
+}
+
+export const expireProviderAdmissionLeasesOnCurrentOwner = async (
+  input: ProviderAdmissionLeaseExpiryInput,
+): Promise<ProviderAdmissionLeaseExpiryResult> => {
+  await ensureCurrentDuckdbOwnerLease()
+
+  return withProviderAdmissionLeaseSerialization(input.providerKey, async () => {
+    return getAppDatabaseService().transaction(async (tx) => {
+      const expiredLeaseCount = await deleteExpiredProviderAdmissionLeases({
+        now: getDateFromMs(getNormalizedTimestampMs(input.nowMs ?? Date.now())),
+        providerKey: input.providerKey,
+        tx,
+      })
+
+      return {expiredLeaseCount}
+    })
+  })
+}
+
+export const expireProviderAdmissionLeasesThroughOwner = async (
+  input: ProviderAdmissionLeaseExpiryInput,
+): Promise<ProviderAdmissionLeaseExpiryResult> => {
+  return canCurrentServerOwnDuckdb()
+    ? expireProviderAdmissionLeasesOnCurrentOwner(input)
+    : requestProviderAdmissionLeaseOwner<ProviderAdmissionLeaseExpiryResult>({body: input, path: '/expire'})
+}
+
 export const resetProviderAdmissionLeaseForTests = (): void => {
   currentProviderSnapshots.clear()
   providerAdmissionLeases.clear()
+  providerAdmissionLeaseOperationQueues.clear()
 }

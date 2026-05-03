@@ -34,6 +34,7 @@ import {projectExportRoutes} from './routes/ProjectExportRoutes.ts'
 import {projectsAddArticlesRoutes} from './routes/ProjectsAddArticlesRoutes.ts'
 import {projectsRoutes} from './routes/ProjectsRoutes.ts'
 import {promptsRoutes} from './routes/PromptsRoutes.ts'
+import {providerAdmissionLeaseRoutes} from './routes/providerAdmissionLeaseRoutes.ts'
 import {runtimeAssetsRoutes} from './routes/RuntimeAssetsRoutes.ts'
 import {runtimeReadyRoutes} from './routes/runtimeReadyRoutes.ts'
 import {subprojectsRoutes} from './routes/SubprojectsRoutes.ts'
@@ -195,6 +196,7 @@ const getProductApiRoutes = () => {
     .use(judgmentsRoutes)
     .use(humanAssessmentRoutes)
     .use(modelsRoutes)
+    .use(providerAdmissionLeaseRoutes)
     .use(projectsRoutes)
     .use(projectExportRoutes)
     .use(projectsAddArticlesRoutes)
