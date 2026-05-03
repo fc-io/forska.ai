@@ -208,12 +208,20 @@ test('groups jobs with saved provider inflight overrides by connection', () => {
     }),
   ).toEqual([
     {
+      capacity: {maxBurst: 10, maxInflight: 10, workerCount: 10},
+      jobIds: ['job-default-non-codex'],
+      label: 'provider:connection-default-non-codex',
+    },
+    {
       capacity: {maxBurst: 2, maxInflight: 2, workerCount: 2},
       jobIds: ['job-override-a', 'job-override-b'],
       label: 'provider:connection-override',
     },
-    {capacity: {maxBurst: 10, maxInflight: 10, workerCount: 1}, jobIds: ['job-default-non-codex'], label: 'non-codex'},
-    {capacity: {maxBurst: 4, maxInflight: 4, workerCount: 4}, jobIds: ['job-default-codex'], label: 'codex'},
+    {
+      capacity: {maxBurst: 4, maxInflight: 4, workerCount: 4},
+      jobIds: ['job-default-codex'],
+      label: 'codex:connection-default-codex',
+    },
   ])
 })
 

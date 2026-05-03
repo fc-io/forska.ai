@@ -123,6 +123,14 @@ const getWorkerTelemetryUrl = (record: DuckdbOwnerConnectionRecord, input: Judgm
     url.searchParams.set('providerConnectionId', input.providerConnectionId)
   }
 
+  if (input.modelId) {
+    url.searchParams.set('modelId', input.modelId)
+  }
+
+  if (input.modelProvider) {
+    url.searchParams.set('modelProvider', input.modelProvider)
+  }
+
   if (input.providerMaxInflightRequests !== null) {
     url.searchParams.set('providerMaxInflightRequests', String(input.providerMaxInflightRequests))
   }

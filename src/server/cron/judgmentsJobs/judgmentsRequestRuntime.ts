@@ -12,17 +12,21 @@ import {
 } from './connectionHealth.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
+import {shouldUseJudgeWorkerOwnerHandoff} from './judgeWorkerCompletionJournal.ts'
 import {
   claimJudgmentEndpointAvailability,
   getJudgmentEndpointAvailability,
   resetJudgmentEndpointAvailabilityForTests,
 } from './judgmentEndpointAvailability.ts'
+import {getNormalizedProviderKeyProvider, getProviderKey} from './providerKey.ts'
 
 type RequestSlot = {baseURL: string; release: () => void; requiresProbe: boolean}
 
 type RequestWaiter<T> = {resolve: (value: T) => void; reject: (error: unknown) => void}
 
 type ProviderRequestScope = {
+  modelId?: string | null
+  modelProvider?: string | null
   providerConnectionId: string | null
   providerMaxInflightRequests: number | null
   providerUsesFamilyDefault: boolean
@@ -41,23 +45,25 @@ const workerWaiters: WorkerWaiter[] = []
 const fallbackWaiters: FallbackWaiter[] = []
 const jobRequestStates = new Map<string, JobRequestState>()
 const providerRequestStates = new Map<string, ProviderRequestState>()
+const fallbackInFlightByProviderKey = new Map<string, number>()
 
 let codexInFlight = 0
-let fallbackInFlight = 0
 
 const normalizeProvider = (value: string | null | undefined): string => {
-  const v = String(value ?? '')
-    .trim()
-    .toLowerCase()
-  return v.length > 0 ? v : 'unknown'
+  return getNormalizedProviderKeyProvider(value)
 }
 
 const getNonCodexCapacity = () => {
   return getJudgmentsCapacity(1)
 }
 
-const getProviderRequestKey = ({providerConnectionId}: ProviderRequestScope): string | null => {
-  return providerConnectionId ? `provider:${providerConnectionId}` : null
+const getProviderRequestKey = (providerScope: ProviderRequestScope): string => {
+  return getProviderKey({
+    modelId: providerScope.modelId,
+    modelProvider: providerScope.modelProvider,
+    providerConnectionId: providerScope.providerConnectionId,
+    useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
+  })
 }
 
 const getProviderRequestState = (providerKey: string): ProviderRequestState => {
@@ -80,7 +86,7 @@ const acquireProviderRequestRelease = (providerScope: ProviderRequestScope): (()
   const providerKey = getProviderRequestKey(providerScope)
   const maxInflight = providerScope.providerMaxInflightRequests
 
-  if (!providerKey || maxInflight == null) {
+  if (maxInflight == null) {
     return () => {
       return undefined
     }
@@ -164,11 +170,13 @@ const getProbeFailure = ({
 
 const probeJudgmentEndpointAvailability = async ({
   baseURL,
+  modelId,
   provider,
   providerConnection,
   providerConnectionId,
 }: {
   baseURL: string
+  modelId?: string | null
   provider: string | null | undefined
   providerConnection?: ProviderConnectionRecord | null
   providerConnectionId: string | null
@@ -189,7 +197,13 @@ const probeJudgmentEndpointAvailability = async ({
       error: new Error(`Provider connection ${providerConnectionId} not found for endpoint probe`),
     })
 
-    recordConnectionFailure({effectiveBaseURL: baseURL, failure, providerConnectionId})
+    recordConnectionFailure({
+      effectiveBaseURL: baseURL,
+      failure,
+      modelId,
+      modelProvider: provider,
+      providerConnectionId,
+    })
 
     throw new ConnectionError(failure.message, failure.effectiveBaseURL, failure)
   }
@@ -197,7 +211,7 @@ const probeJudgmentEndpointAvailability = async ({
   const result = await testProviderConnectionHealth(connection, {effectiveBaseURL: baseURL})
 
   if (result.ok) {
-    recordConnectionSuccess({effectiveBaseURL: baseURL, providerConnectionId})
+    recordConnectionSuccess({effectiveBaseURL: baseURL, modelId, modelProvider: provider, providerConnectionId})
     return undefined
   }
 
@@ -207,7 +221,7 @@ const probeJudgmentEndpointAvailability = async ({
     provider,
   })
 
-  recordConnectionFailure({effectiveBaseURL: baseURL, failure, providerConnectionId})
+  recordConnectionFailure({effectiveBaseURL: baseURL, failure, modelId, modelProvider: provider, providerConnectionId})
 
   throw new ConnectionError(failure.message, failure.effectiveBaseURL, failure)
 }
@@ -237,7 +251,10 @@ const getEndpointAvailabilityState = ({
 }) => {
   return getJudgmentEndpointAvailability({
     effectiveBaseURL: baseURL,
+    modelId: providerScope.modelId,
+    modelProvider: providerScope.modelProvider,
     providerConnectionId: providerScope.providerConnectionId,
+    useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
   })
 }
 
@@ -263,7 +280,10 @@ const claimEndpointAvailability = ({
 }): boolean => {
   return claimJudgmentEndpointAvailability({
     effectiveBaseURL: baseURL,
+    modelId: providerScope.modelId,
+    modelProvider: providerScope.modelProvider,
     providerConnectionId: providerScope.providerConnectionId,
+    useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
   })
 }
 
@@ -357,7 +377,9 @@ const acquireCodexProviderRelease = async (providerScope: ProviderRequestScope):
 }
 
 const acquireCodexRequestRelease = async (providerScope: ProviderRequestScope): Promise<() => void> => {
-  return providerScope.providerUsesFamilyDefault ? acquireCodexRelease() : acquireCodexProviderRelease(providerScope)
+  return getProviderRequestKey(providerScope) === 'codex:default'
+    ? acquireCodexRelease()
+    : acquireCodexProviderRelease(providerScope)
 }
 
 const drainProviderScopedWaiters = (): void => {
@@ -495,6 +517,27 @@ const usesSharedFallbackCapacity = (providerScope: ProviderRequestScope): boolea
   return providerScope.providerUsesFamilyDefault || !providerScope.providerConnectionId
 }
 
+const getFallbackInFlight = (providerScope: ProviderRequestScope): number => {
+  return fallbackInFlightByProviderKey.get(getProviderRequestKey(providerScope)) ?? 0
+}
+
+const incrementFallbackInFlight = (providerScope: ProviderRequestScope): void => {
+  const providerKey = getProviderRequestKey(providerScope)
+  fallbackInFlightByProviderKey.set(providerKey, getFallbackInFlight(providerScope) + 1)
+}
+
+const releaseFallbackInFlight = (providerScope: ProviderRequestScope): void => {
+  const providerKey = getProviderRequestKey(providerScope)
+  const nextInFlight = Math.max(0, getFallbackInFlight(providerScope) - 1)
+
+  if (nextInFlight === 0) {
+    fallbackInFlightByProviderKey.delete(providerKey)
+    return
+  }
+
+  fallbackInFlightByProviderKey.set(providerKey, nextInFlight)
+}
+
 const tryAcquireFallbackSlot = ({
   baseURL,
   providerScope,
@@ -504,7 +547,9 @@ const tryAcquireFallbackSlot = ({
 }): SlotAcquisitionAttempt => {
   const releaseProviderRequest = acquireProviderRequestRelease(providerScope)
   const useSharedCapacity = usesSharedFallbackCapacity(providerScope)
-  const canAcquireFallback = useSharedCapacity ? fallbackInFlight < getNonCodexCapacity().maxInflight : true
+  const canAcquireFallback = useSharedCapacity
+    ? getFallbackInFlight(providerScope) < getNonCodexCapacity().maxInflight
+    : true
 
   if (!releaseProviderRequest || !canAcquireFallback) {
     return releaseProviderRequest ? (releaseProviderRequest(), {type: 'waiting'}) : {type: 'waiting'}
@@ -518,7 +563,7 @@ const tryAcquireFallbackSlot = ({
   }
 
   if (useSharedCapacity) {
-    fallbackInFlight += 1
+    incrementFallbackInFlight(providerScope)
   }
 
   return {
@@ -526,7 +571,7 @@ const tryAcquireFallbackSlot = ({
       baseURL,
       release: () => {
         if (useSharedCapacity) {
-          fallbackInFlight = Math.max(0, fallbackInFlight - 1)
+          releaseFallbackInFlight(providerScope)
         }
         releaseProviderRequest()
         drainProviderScopedWaiters()
@@ -601,6 +646,7 @@ const acquireFallbackSlot = async ({
 const acquireRequestSlot = async ({
   provider,
   fallbackBaseURL,
+  modelId,
   providerConnectionId,
   providerMaxInflightRequests,
   providerUsesFamilyDefault,
@@ -608,12 +654,19 @@ const acquireRequestSlot = async ({
 }: {
   provider: string | null | undefined
   fallbackBaseURL: string
+  modelId?: string | null
   providerConnectionId: string | null
   providerMaxInflightRequests: number | null
   providerUsesFamilyDefault: boolean
   workerUrls: string[]
 }): Promise<RequestSlot> => {
-  const providerScope = {providerConnectionId, providerMaxInflightRequests, providerUsesFamilyDefault}
+  const providerScope = {
+    modelId,
+    modelProvider: provider,
+    providerConnectionId,
+    providerMaxInflightRequests,
+    providerUsesFamilyDefault,
+  }
 
   return normalizeProvider(provider) === 'codex'
     ? acquireCodexRequestRelease(providerScope).then((release) => {
@@ -642,6 +695,7 @@ export const withJudgmentRequest = async <T>(
     judgmentsJobId,
     provider,
     fallbackBaseURL,
+    modelId,
     providerConnectionId,
     providerMaxInflightRequests,
     providerUsesFamilyDefault,
@@ -651,6 +705,7 @@ export const withJudgmentRequest = async <T>(
     judgmentsJobId: string
     provider: string | null | undefined
     fallbackBaseURL: string
+    modelId?: string | null
     providerConnectionId: string | null
     providerConnection?: ProviderConnectionRecord | null
     providerMaxInflightRequests: number | null
@@ -661,6 +716,7 @@ export const withJudgmentRequest = async <T>(
 ): Promise<T> => {
   const slot = await acquireRequestSlot({
     fallbackBaseURL,
+    modelId,
     provider,
     providerConnectionId,
     providerMaxInflightRequests,
@@ -673,6 +729,7 @@ export const withJudgmentRequest = async <T>(
     if (slot.requiresProbe) {
       await probeJudgmentEndpointAvailability({
         baseURL: slot.baseURL,
+        modelId,
         provider,
         providerConnection,
         providerConnectionId,
@@ -693,7 +750,7 @@ export const resetJudgmentRequestRuntimeForTests = (): void => {
   fallbackWaiters.splice(0, fallbackWaiters.length)
   jobRequestStates.clear()
   providerRequestStates.clear()
+  fallbackInFlightByProviderKey.clear()
   codexInFlight = 0
-  fallbackInFlight = 0
   resetJudgmentEndpointAvailabilityForTests()
 }

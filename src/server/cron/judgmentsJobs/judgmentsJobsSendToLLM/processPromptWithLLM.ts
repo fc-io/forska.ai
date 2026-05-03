@@ -22,6 +22,7 @@ import {
 } from '../judgeWorkerCompletionJournal.ts'
 import {getJudgmentEndpointAvailability} from '../judgmentEndpointAvailability.ts'
 import {getJudgmentJobSqliteService} from '../judgmentJobSqliteService.ts'
+import {getProviderKey} from '../providerKey.ts'
 import type {PromptToProcess} from './getAndUpdateReadyPrompts.ts'
 
 const checkJudgmentExistsInDatabase = async (promptToProcess: PromptToProcess): Promise<boolean> => {
@@ -98,7 +99,12 @@ const getModelContext = (metadataJson: unknown): number => {
 
 const getOwnerBackedProviderInvocationContext = (promptToProcess: PromptToProcess): StoredProviderInvocationContext => {
   const providerKind = normalizeProviderKind(promptToProcess.modelProvider)
-  const providerConnectionId = promptToProcess.providerConnectionId ?? `owner-backed:${promptToProcess.modelId}`
+  const providerConnectionId = getProviderKey({
+    modelId: promptToProcess.modelId,
+    modelProvider: promptToProcess.modelProvider,
+    providerConnectionId: promptToProcess.providerConnectionId,
+    useOwnerBackedSyntheticProviderId: true,
+  })
 
   return {
     connection: {
@@ -725,7 +731,10 @@ export const processPromptWithLLMEffect = (promptToProcess: PromptToProcess): Ef
             if (error instanceof ConnectionError) {
               const availability = getJudgmentEndpointAvailability({
                 effectiveBaseURL: error.baseURL,
+                modelId: promptToProcess.modelId,
+                modelProvider: promptToProcess.modelProvider,
                 providerConnectionId: promptToProcess.providerConnectionId,
+                useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
               })
               const retryMessage = formatConnectionOutageMessage({
                 cooldownExpiresAt: availability.cooldownExpiresAt,

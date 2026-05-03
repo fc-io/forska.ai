@@ -198,6 +198,7 @@ const getProviderConnectionRuntimeState = ({
     ? getJudgmentEndpointAvailabilityDiagnostics(
         getJudgmentEndpointAvailability({
           effectiveBaseURL: match.effectiveBaseURL,
+          modelProvider: connection.providerKind,
           providerConnectionId: connection.id,
         }),
       )

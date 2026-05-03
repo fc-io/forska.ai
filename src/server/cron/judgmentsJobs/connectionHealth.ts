@@ -3,6 +3,7 @@ import {
   recordJudgmentEndpointFailure,
   recordJudgmentEndpointSuccess,
 } from './judgmentEndpointAvailability.ts'
+import type {ProviderKeyInput} from './providerKey.ts'
 
 export type ConnectionFailureKind =
   | 'network_unavailable'
@@ -318,9 +319,15 @@ export const createConnectionError = ({
   return new ConnectionError(failure.message, failure.effectiveBaseURL, failure)
 }
 
+type ConnectionTrackingInput = ProviderKeyInput & {
+  effectiveBaseURL: string
+  failure?: ConnectionFailure
+  providerKey?: string | null
+}
+
 const getConnectionTrackingInput = (
-  input: string | {effectiveBaseURL: string; failure?: ConnectionFailure; providerConnectionId?: string | null},
-): {effectiveBaseURL: string; failure: ConnectionFailure | null; providerConnectionId: string | null} => {
+  input: string | ConnectionTrackingInput,
+): ConnectionTrackingInput & {failure: ConnectionFailure | null; providerConnectionId: string | null} => {
   if (typeof input === 'string') {
     return {effectiveBaseURL: input, failure: null, providerConnectionId: null}
   }
@@ -328,7 +335,11 @@ const getConnectionTrackingInput = (
   return {
     effectiveBaseURL: input.effectiveBaseURL,
     failure: input.failure ?? null,
+    modelId: input.modelId,
+    modelProvider: input.modelProvider,
     providerConnectionId: input.providerConnectionId ?? null,
+    providerKey: input.providerKey,
+    useOwnerBackedSyntheticProviderId: input.useOwnerBackedSyntheticProviderId,
   }
 }
 
@@ -338,24 +349,47 @@ export const isCircuitOpen = (baseURL: string): boolean => {
   return state.status !== 'healthy'
 }
 
-export const recordConnectionSuccess = (
-  input: string | {effectiveBaseURL: string; providerConnectionId?: string | null},
-): void => {
-  const {effectiveBaseURL, providerConnectionId} = getConnectionTrackingInput(input)
+export const recordConnectionSuccess = (input: string | Omit<ConnectionTrackingInput, 'failure'>): void => {
+  const {
+    effectiveBaseURL,
+    modelId,
+    modelProvider,
+    providerConnectionId,
+    providerKey,
+    useOwnerBackedSyntheticProviderId,
+  } = getConnectionTrackingInput(input)
 
-  return recordJudgmentEndpointSuccess({effectiveBaseURL, providerConnectionId})
+  return recordJudgmentEndpointSuccess({
+    effectiveBaseURL,
+    modelId,
+    modelProvider,
+    providerConnectionId,
+    providerKey,
+    useOwnerBackedSyntheticProviderId,
+  })
 }
 
-export const recordConnectionFailure = (
-  input: string | {effectiveBaseURL: string; failure?: ConnectionFailure; providerConnectionId?: string | null},
-): void => {
-  const {effectiveBaseURL, failure, providerConnectionId} = getConnectionTrackingInput(input)
+export const recordConnectionFailure = (input: string | ConnectionTrackingInput): void => {
+  const {
+    effectiveBaseURL,
+    failure,
+    modelId,
+    modelProvider,
+    providerConnectionId,
+    providerKey,
+    useOwnerBackedSyntheticProviderId,
+  } = getConnectionTrackingInput(input)
+  const resolvedModelProvider = modelProvider ?? failure?.providerKind ?? null
 
   return recordJudgmentEndpointFailure({
     effectiveBaseURL,
     failureKind: failure?.kind ?? 'network_unavailable',
     failureMessage: failure?.message ?? `Connection failure recorded for ${effectiveBaseURL}`,
+    modelId,
+    modelProvider: resolvedModelProvider,
     providerConnectionId,
+    providerKey,
+    useOwnerBackedSyntheticProviderId,
   })
 }
 

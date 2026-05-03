@@ -10,8 +10,11 @@ import {
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
 import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 import {processPromptWithLLM} from './judgmentsJobsSendToLLM/processPromptWithLLM.ts'
+import {getProviderKey} from './providerKey.ts'
 
 export type ProviderQueueInput = {
+  modelId?: string | null
+  modelProvider?: string | null
   providerConnectionId: string | null
   providerMaxInflightRequests: number | null
   providerUsesFamilyDefault: boolean
@@ -104,8 +107,13 @@ const defaultRecoverPrompts = async (prompts: PromptToProcess[], _reason: string
   )
 }
 
-const getProviderDispatchKey = ({providerConnectionId}: ProviderQueueInput): string => {
-  return providerConnectionId ?? 'unknown'
+const getProviderDispatchKey = (input: ProviderQueueInput): string => {
+  return getProviderKey({
+    modelId: input.modelId,
+    modelProvider: input.modelProvider,
+    providerConnectionId: input.providerConnectionId,
+    useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
+  })
 }
 
 const getProviderActivePromptLimit = ({providerMaxInflightRequests}: ProviderQueueInput): number => {
@@ -118,6 +126,8 @@ const getProviderQueueCapacityLimit = ({providerMaxInflightRequests}: ProviderQu
 
 const getPromptProviderQueueInput = (prompt: PromptToProcess): ProviderQueueInput => {
   return {
+    modelId: prompt.modelId,
+    modelProvider: prompt.modelProvider,
     providerConnectionId: prompt.providerConnectionId,
     providerMaxInflightRequests: prompt.providerMaxInflightRequests,
     providerUsesFamilyDefault: prompt.providerUsesFamilyDefault,

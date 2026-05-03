@@ -1687,7 +1687,12 @@ const getJudgmentJobEndpointHealth = async ({
       })
     : null
   const availability = effectiveBaseURL
-    ? getJudgmentEndpointAvailability({effectiveBaseURL, providerConnectionId: providerConnection?.id ?? null})
+    ? getJudgmentEndpointAvailability({
+        effectiveBaseURL,
+        modelId,
+        modelProvider: providerConnection?.providerKind ?? null,
+        providerConnectionId: providerConnection?.id ?? null,
+      })
     : null
 
   return {
@@ -2434,6 +2439,8 @@ export const judgmentsJobsRoutes = new Elysia()
             ? getJudgmentEndpointAvailabilityDiagnostics(
                 getJudgmentEndpointAvailability({
                   effectiveBaseURL,
+                  modelId: projectModelId,
+                  modelProvider: providerConnection?.providerKind ?? null,
                   providerConnectionId: providerConnection?.id ?? null,
                 }),
               )
@@ -2453,6 +2460,8 @@ export const judgmentsJobsRoutes = new Elysia()
           })
           const dispatchTelemetry = await getAggregatedJudgmentDispatchTelemetry({
             jobId: job.id,
+            modelId: projectModelId,
+            modelProvider: providerConnection?.providerKind ?? null,
             providerConnectionId: providerConnection?.id ?? null,
             providerMaxInflightRequests: effectiveProviderCap.maxInflight,
             providerUsesFamilyDefault: effectiveProviderCap.usesFamilyDefault,

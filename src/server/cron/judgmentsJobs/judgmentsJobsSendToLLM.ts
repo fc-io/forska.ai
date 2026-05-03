@@ -24,6 +24,7 @@ import {
 } from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 import {processPromptWithLLM} from './judgmentsJobsSendToLLM/processPromptWithLLM.ts'
 import {getJudgmentRequestStats} from './judgmentsRequestRuntime.ts'
+import {getNormalizedProviderKeyProvider, getProviderKey} from './providerKey.ts'
 import {requeueAbandonedSentPrompts} from './requeueAbandonedSentPrompts.ts'
 
 const shuffle = <T>(items: T[]): T[] => {
@@ -40,10 +41,7 @@ const shuffle = <T>(items: T[]): T[] => {
 }
 
 const normalizeProvider = (value: string | null | undefined): string => {
-  const v = String(value ?? '')
-    .trim()
-    .toLowerCase()
-  return v.length > 0 ? v : 'unknown'
+  return getNormalizedProviderKeyProvider(value)
 }
 
 const isCodexJob = (job: {modelProvider: string | null}): boolean => {
@@ -96,6 +94,48 @@ const getCapacityFromMaxInflight = (maxInflightRequests: number): Capacity => {
   const limit = Math.max(1, maxInflightRequests)
 
   return {maxBurst: limit, maxInflight: limit, workerCount: limit}
+}
+
+const getJobProviderKey = (job: RunningJudgmentJob): string => {
+  return getProviderKey({
+    modelId: job.modelId,
+    modelProvider: job.modelProvider,
+    providerConnectionId: job.providerConnectionId,
+    useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
+  })
+}
+
+const getPromptProviderKey = (prompt: PromptToProcess): string => {
+  return getProviderKey({
+    modelId: prompt.modelId,
+    modelProvider: prompt.modelProvider,
+    providerConnectionId: prompt.providerConnectionId,
+    useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
+  })
+}
+
+const getProviderBucketLabel = (job: RunningJudgmentJob, providerKey: string): string => {
+  return providerKey.includes(':') ? providerKey : `${isCodexJob(job) ? 'codex' : 'provider'}:${providerKey}`
+}
+
+const getProviderKeyBucketCapacity = ({
+  getCodexDefaultMaxInflight,
+  getNonCodexCapacity,
+  jobs,
+}: {
+  getCodexDefaultMaxInflight: () => number
+  getNonCodexCapacity: (runningJobCount: number) => Capacity
+  jobs: RunningJudgmentJob[]
+}): Capacity => {
+  const [firstJob] = jobs
+
+  return !firstJob
+    ? getCapacityFromMaxInflight(1)
+    : firstJob.providerConnectionId || firstJob.maxInflightRequests != null || isCodexJob(firstJob)
+      ? getCapacityFromMaxInflight(
+          getEffectiveProviderCap({getCodexDefaultMaxInflight, getNonCodexCapacity, job: firstJob}).maxInflight,
+        )
+      : getNonCodexCapacity(jobs.length)
 }
 
 const getProviderFamilyDefaultMaxInflight = ({
@@ -161,62 +201,25 @@ export const getCapacityBuckets = ({
   getNonCodexCapacity?: (runningJobCount: number) => Capacity
   jobs: RunningJudgmentJob[]
 }): CapacityBucket<RunningJudgmentJob>[] => {
-  const grouped = jobs.reduce(
-    (state, job) => {
-      const providerCap = getEffectiveProviderCap({getCodexDefaultMaxInflight, getNonCodexCapacity, job})
-      const connectionKey = providerCap.usesFamilyDefault ? null : (job.providerConnectionId ?? job.id)
+  const grouped = jobs.reduce((state, job) => {
+    const providerKey = getJobProviderKey(job)
 
-      return connectionKey
-        ? {
-            ...state,
-            overriddenJobsByConnection: new Map(state.overriddenJobsByConnection).set(connectionKey, [
-              ...(state.overriddenJobsByConnection.get(connectionKey) ?? []),
-              job,
-            ]),
-          }
-        : isCodexJob(job)
-          ? {...state, defaultCodexJobs: [...state.defaultCodexJobs, job]}
-          : {...state, defaultNonCodexJobs: [...state.defaultNonCodexJobs, job]}
-    },
-    {
-      defaultCodexJobs: [] as RunningJudgmentJob[],
-      defaultNonCodexJobs: [] as RunningJudgmentJob[],
-      overriddenJobsByConnection: new Map<string, RunningJudgmentJob[]>(),
-    },
-  )
-  const connectionBuckets = Array.from(grouped.overriddenJobsByConnection.entries())
-    .map(([connectionId, connectionJobs]) => {
-      const firstJob = connectionJobs[0]
-      if (!firstJob) return null
+    return new Map(state).set(providerKey, [...(state.get(providerKey) ?? []), job])
+  }, new Map<string, RunningJudgmentJob[]>())
 
-      return {
-        capacity: getCapacityFromMaxInflight(
-          getEffectiveProviderCap({getCodexDefaultMaxInflight, getNonCodexCapacity, job: firstJob}).maxInflight,
-        ),
-        jobs: connectionJobs,
-        label: `${isCodexJob(firstJob ?? {modelProvider: null}) ? 'codex' : 'provider'}:${connectionId}`,
-      }
-    })
-    .filter((bucket): bucket is CapacityBucket<RunningJudgmentJob> => {
-      return Boolean(bucket)
-    })
-  const defaultCodexMaxInflight = getCodexDefaultMaxInflight()
-  const defaultBuckets = [
-    grouped.defaultNonCodexJobs.length > 0
-      ? {
-          capacity: getNonCodexCapacity(grouped.defaultNonCodexJobs.length),
-          jobs: grouped.defaultNonCodexJobs,
-          label: 'non-codex',
-        }
-      : null,
-    grouped.defaultCodexJobs.length > 0
-      ? {capacity: getCapacityFromMaxInflight(defaultCodexMaxInflight), jobs: grouped.defaultCodexJobs, label: 'codex'}
-      : null,
-  ].filter((bucket): bucket is CapacityBucket<RunningJudgmentJob> => {
-    return Boolean(bucket)
+  return Array.from(grouped.entries()).flatMap(([providerKey, bucketJobs]) => {
+    const [firstJob] = bucketJobs
+
+    return firstJob
+      ? [
+          {
+            capacity: getProviderKeyBucketCapacity({getCodexDefaultMaxInflight, getNonCodexCapacity, jobs: bucketJobs}),
+            jobs: bucketJobs,
+            label: getProviderBucketLabel(firstJob, providerKey),
+          },
+        ]
+      : []
   })
-
-  return [...connectionBuckets, ...defaultBuckets]
 }
 
 const getReadyCountsByJob = async (jobIds: string[]): Promise<Map<string, number>> => {
@@ -249,18 +252,20 @@ const getRuntimeInFlightCountsByJob = (jobIds: string[]): Map<string, number> =>
 const getDispatchQueueCapacityByConnection = async (jobs: RunningJudgmentJob[]): Promise<Map<string, number>> => {
   const connectionJobs = Array.from(
     jobs.reduce((state, job) => {
-      const connectionId = job.providerConnectionId ?? job.id
-      return new Map(state).set(connectionId, state.get(connectionId) ?? job)
+      const providerKey = getJobProviderKey(job)
+      return new Map(state).set(providerKey, state.get(providerKey) ?? job)
     }, new Map<string, RunningJudgmentJob>()),
   )
 
   const capacities = await Promise.all(
-    connectionJobs.map(async ([connectionId, job]) => {
+    connectionJobs.map(async ([providerKey, job]) => {
       const dispatchProviderCap = getEffectiveDispatchProviderCap({job})
 
       return [
-        connectionId,
+        providerKey,
         await getJudgmentDispatchQueueCapacity({
+          modelId: job.modelId,
+          modelProvider: job.modelProvider,
           providerConnectionId: job.providerConnectionId,
           providerMaxInflightRequests: dispatchProviderCap.maxInflight,
           providerUsesFamilyDefault: dispatchProviderCap.usesFamilyDefault,
@@ -451,7 +456,7 @@ const getEndpointAvailabilityKey = ({
   baseURL: string
   providerConnectionId: string | null
 }): string => {
-  return `${providerConnectionId ?? 'unknown'}::${baseURL}`
+  return `${getProviderKey({providerConnectionId})}::${baseURL}`
 }
 
 const getDispatchEndpoints = (runtime: PromptRuntime): string[] => {
@@ -470,7 +475,12 @@ export const getDispatchAvailability = ({
   runtime: PromptRuntime
 }): {dispatchMode: 'full' | 'probe' | 'skip'; status: 'cooldown' | 'healthy' | 'misconfigured' | 'probing'} => {
   const endpointStates = getDispatchEndpoints(runtime).map((baseURL) => {
-    return getJudgmentEndpointAvailability({effectiveBaseURL: baseURL, providerConnectionId})
+    return getJudgmentEndpointAvailability({
+      effectiveBaseURL: baseURL,
+      modelProvider: runtime.modelProvider,
+      providerConnectionId,
+      useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
+    })
   })
   const hasHealthy = endpointStates.some((state) => {
     return state.status === 'healthy'
@@ -609,7 +619,7 @@ export const processClaimedPromptsByConnection = async ({
   requeuePrompts?: (prompts: PromptToProcess[]) => Promise<void>
 }): Promise<{connectionErrors: number}> => {
   const byConnection = prompts.reduce((state, prompt) => {
-    const connectionId = prompt.providerConnectionId ?? prompt.jobId
+    const connectionId = getPromptProviderKey(prompt)
     return new Map(state).set(connectionId, [...(state.get(connectionId) ?? []), prompt])
   }, new Map<string, PromptToProcess[]>())
 
@@ -675,12 +685,12 @@ export const processClaimedPromptsByConnection = async ({
           modelProvider: prompt.modelProvider,
           modelWorkerUrls: prompt.modelWorkerUrls,
         }
-        const availability = getDispatchAvailability({providerConnectionId: prompt.providerConnectionId, runtime})
+        const availability = getDispatchAvailability({providerConnectionId: getPromptProviderKey(prompt), runtime})
 
         if (availability.dispatchMode === 'skip') {
           await haltConnection(async () => {
             logDispatchSkip({
-              connectionId: prompt.providerConnectionId,
+              connectionId: getPromptProviderKey(prompt),
               dispatchStatus: availability.status === 'healthy' ? 'probing' : availability.status,
               label,
               runtime,
@@ -843,17 +853,17 @@ export const getRequestsToSendByProviderConnection = <T extends RunningJudgmentJ
 }): ProviderConnectionRequestAllocation<T>[] => {
   const connectionGroups = Array.from(
     jobs.reduce((state, job) => {
-      const connectionId = job.providerConnectionId ?? job.id
+      const connectionId = getJobProviderKey(job)
       return new Map(state).set(connectionId, [...(state.get(connectionId) ?? []), job])
     }, new Map<string, T[]>()),
   ).map(([connectionId, connectionJobs]) => {
     const firstJob = connectionJobs[0]
     if (!firstJob) return null
 
-    const providerCap = getEffectiveProviderCap({
+    const providerCap = getProviderKeyBucketCapacity({
       getCodexDefaultMaxInflight,
       getNonCodexCapacity,
-      job: firstJob,
+      jobs: connectionJobs,
     }).maxInflight
     const ready = connectionJobs.reduce((sum, job) => {
       return sum + (readyCounts.get(job.id) ?? 0)

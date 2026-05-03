@@ -571,6 +571,7 @@ const generateSinglePromptResponse = async ({
   return withJudgmentRequest(
     {
       judgmentsJobId,
+      modelId,
       provider,
       fallbackBaseURL: baseURL,
       providerConnection: providerInvocationContext?.connection,
@@ -1006,7 +1007,12 @@ export const judgeSinglePrompt = async ({
         })
 
         if (quoteValidationResult.kind === 'retry') {
-          recordConnectionSuccess({effectiveBaseURL: currentResponse.baseURL, providerConnectionId})
+          recordConnectionSuccess({
+            effectiveBaseURL: currentResponse.baseURL,
+            modelId,
+            modelProvider: provider,
+            providerConnectionId,
+          })
 
           tokenUse.push({
             articleId: article.id,
@@ -1035,7 +1041,12 @@ export const judgeSinglePrompt = async ({
         }
 
         if (quoteValidationResult.kind === 'requeue') {
-          recordConnectionSuccess({effectiveBaseURL: currentResponse.baseURL, providerConnectionId})
+          recordConnectionSuccess({
+            effectiveBaseURL: currentResponse.baseURL,
+            modelId,
+            modelProvider: provider,
+            providerConnectionId,
+          })
 
           tokenUse.push({
             articleId: article.id,
@@ -1076,7 +1087,12 @@ export const judgeSinglePrompt = async ({
           chunkingStrategy: null,
         })
 
-        recordConnectionSuccess({effectiveBaseURL: currentResponse.baseURL, providerConnectionId})
+        recordConnectionSuccess({
+          effectiveBaseURL: currentResponse.baseURL,
+          modelId,
+          modelProvider: provider,
+          providerConnectionId,
+        })
 
         tokenUse.push({
           articleId: article.id,
@@ -1109,10 +1125,21 @@ export const judgeSinglePrompt = async ({
             error,
             providerKind: provider,
           })
-          recordConnectionFailure({effectiveBaseURL: requestBaseURL, failure, providerConnectionId})
+          recordConnectionFailure({
+            effectiveBaseURL: requestBaseURL,
+            failure,
+            modelId,
+            modelProvider: provider,
+            providerConnectionId,
+          })
           abortCount += 1
           errorCount += 1
-          const availability = getJudgmentEndpointAvailability({effectiveBaseURL: requestBaseURL, providerConnectionId})
+          const availability = getJudgmentEndpointAvailability({
+            effectiveBaseURL: requestBaseURL,
+            modelId,
+            modelProvider: provider,
+            providerConnectionId,
+          })
           const outageMessage = formatConnectionOutageMessage({
             cooldownExpiresAt: availability.cooldownExpiresAt,
             failure,
@@ -1313,7 +1340,12 @@ export const judgeSinglePrompt = async ({
               })
 
               evidence = parseSinglePromptEvidence(currentResponse.text)
-              recordConnectionSuccess({effectiveBaseURL: currentResponse.baseURL, providerConnectionId})
+              recordConnectionSuccess({
+                effectiveBaseURL: currentResponse.baseURL,
+                modelId,
+                modelProvider: provider,
+                providerConnectionId,
+              })
 
               tokenUse.push({
                 articleId: article.id,
@@ -1366,6 +1398,8 @@ export const judgeSinglePrompt = async ({
                 recordConnectionFailure({
                   effectiveBaseURL: requestBaseURL,
                   failure: classifiedFailure ?? undefined,
+                  modelId,
+                  modelProvider: provider,
                   providerConnectionId,
                 })
                 abortCount += 1
@@ -1574,7 +1608,12 @@ export const judgeSinglePrompt = async ({
           const quoteValidation = getQuoteValidation(rawQuotes, recordTextForQuoteValidation)
 
           if (quoteValidation.invalid.length > 0 && attempts < MAX_RETRIES) {
-            recordConnectionSuccess({effectiveBaseURL: currentResponse.baseURL, providerConnectionId})
+            recordConnectionSuccess({
+              effectiveBaseURL: currentResponse.baseURL,
+              modelId,
+              modelProvider: provider,
+              providerConnectionId,
+            })
 
             tokenUse.push({
               articleId: article.id,
@@ -1622,7 +1661,12 @@ export const judgeSinglePrompt = async ({
             chunkingStrategy,
           })
 
-          recordConnectionSuccess({effectiveBaseURL: currentResponse.baseURL, providerConnectionId})
+          recordConnectionSuccess({
+            effectiveBaseURL: currentResponse.baseURL,
+            modelId,
+            modelProvider: provider,
+            providerConnectionId,
+          })
 
           tokenUse.push({
             articleId: article.id,
@@ -1656,7 +1700,13 @@ export const judgeSinglePrompt = async ({
               error,
               providerKind: provider,
             })
-            recordConnectionFailure({effectiveBaseURL: requestBaseURL, failure, providerConnectionId})
+            recordConnectionFailure({
+              effectiveBaseURL: requestBaseURL,
+              failure,
+              modelId,
+              modelProvider: provider,
+              providerConnectionId,
+            })
             abortCount += 1
             errorCount += 1
             rateLimitedLogger.error(`judge:connection-error:${failure.kind}:${requestBaseURL}`, failure.message)

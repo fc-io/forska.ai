@@ -6,6 +6,8 @@ import {
 } from '../cron/judgmentsJobs/judgmentDispatchTelemetry.ts'
 
 const judgmentDispatchTelemetryQuerySchema = t.Object({
+  modelId: t.Optional(t.String()),
+  modelProvider: t.Optional(t.String()),
   providerConnectionId: t.Optional(t.String()),
   providerMaxInflightRequests: t.Optional(t.String()),
   providerUsesFamilyDefault: t.Optional(t.String()),
@@ -27,6 +29,8 @@ export const judgmentDispatchTelemetryRoutes = new Elysia().get(
     return {
       data: await getLocalJudgmentDispatchTelemetry({
         jobId: params.jobId,
+        modelId: query.modelId ?? null,
+        modelProvider: query.modelProvider ?? null,
         providerConnectionId: query.providerConnectionId ?? null,
         providerMaxInflightRequests: getNullableNumberQueryValue(query.providerMaxInflightRequests),
         providerUsesFamilyDefault: getBooleanQueryValue(query.providerUsesFamilyDefault),
