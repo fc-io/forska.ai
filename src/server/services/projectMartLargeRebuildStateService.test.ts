@@ -121,12 +121,19 @@ test('large rebuild state migration creates typed schema and indexes', () => {
     'lease_expires_at',
     'created_at',
     'updated_at',
+    'source_dirty_token',
+    'source_high_water_dirty_token',
+    'superseded_at',
   ])
   expect(
     result.indexes.map((index) => {
       return index.indexName
     }),
-  ).toEqual(['idx_app_project_mart_large_rebuild_state_claim', 'idx_app_project_mart_large_rebuild_state_stale_work'])
+  ).toEqual([
+    'idx_app_project_mart_large_rebuild_state_claim',
+    'idx_app_project_mart_large_rebuild_state_current',
+    'idx_app_project_mart_large_rebuild_state_stale_work',
+  ])
 })
 
 test('queueLargeRebuild creates and resets queued rebuild state', () => {
@@ -191,6 +198,7 @@ test('queueLargeRebuild preserves active work when another rebuild is already qu
       rebuildPhase: 'prompt_answer_fact',
       refreshToken: 7,
     })
+    await service.claimLargeRebuilds({leaseMs: 5000, limit: 1, workerId: 'worker-1'})
     await service.queueLargeRebuild({
       projectId: 'large-rebuild-project-1',
       rebuildPhase: 'prompt_answer_fact',
@@ -205,6 +213,28 @@ test('queueLargeRebuild preserves active work when another rebuild is already qu
   expect(result.row?.rebuildPhase).toBe('prompt_answer_fact')
   expect(result.row?.cursorArticleId).toBe('article-1')
   expect(new Date(result.row?.cursorArticleCreatedAt ?? '').toISOString()).toBe('2026-04-03T08:00:00.000Z')
+})
+
+test('queueLargeRebuild supersedes idle queued work with a newer rebuild token', () => {
+  const result = runScript<{row: {rebuildPhase: string; refreshToken: number} | null}>(`
+    await service.queueLargeRebuild({
+      projectId: 'large-rebuild-project-1',
+      rebuildPhase: 'judgment_fact',
+      refreshToken: 7,
+    })
+    await service.queueLargeRebuild({
+      projectId: 'large-rebuild-project-1',
+      rebuildPhase: 'review_article_serving',
+      refreshToken: 11,
+      targetGeneration: 4,
+    })
+
+    console.log(JSON.stringify({row: await service.getLargeRebuildState('large-rebuild-project-1')}))
+    await database.close()
+  `)
+
+  expect(result.row?.refreshToken).toBe(11)
+  expect(result.row?.rebuildPhase).toBe('review_article_serving')
 })
 
 test('queueLargeRebuild clears completed target generation for the next rebuild', () => {
@@ -254,6 +284,7 @@ test('queueLargeRebuild does not rewind active work when requeued into a new pha
       rebuildPhase: 'prompt_answer_fact',
       refreshToken: 7,
     })
+    await service.claimLargeRebuilds({leaseMs: 5000, limit: 1, workerId: 'worker-1'})
     await service.queueLargeRebuild({
       projectId: 'large-rebuild-project-1',
       rebuildPhase: 'review_article_filter_member',

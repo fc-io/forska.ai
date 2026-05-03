@@ -41,6 +41,7 @@ const createRunnerContext = (params: {
       | 'review_article_rollup'
       | 'review_article_serving'
     refreshToken: number
+    targetGeneration?: number | null
     workerId: string
   }
   cleanupDeletedRowCount?: number
@@ -49,6 +50,8 @@ const createRunnerContext = (params: {
     cursorArticleId: string | null
     projectId: string
     rebuildPhase: string
+    sourceDirtyToken?: number | null
+    sourceHighWaterDirtyToken?: number | null
     targetGeneration: number | null
   } | null
 }) => {
@@ -88,6 +91,7 @@ const createRunnerContext = (params: {
       }),
       finalizeProjectReviewServing: mock(async (projectId: string, targetGeneration: number) => {
         callLog.push(`serving:finalize:${projectId}:${targetGeneration}`)
+        return true
       }),
       getNextBatchCursor: (rows: Array<{articleCreatedAt: Date | string | null; articleId: string}>) => {
         const [lastRow] = rows.slice(-1)
@@ -156,7 +160,7 @@ const createRunnerContext = (params: {
       completeLargeRebuild: mock(async ({projectId}: {projectId: string}) => {
         callLog.push(`complete:${projectId}`)
         completed.push(projectId)
-        return null
+        return {}
       }),
       ensureLargeRebuildTargetGeneration: mock(async ({projectId}: {projectId: string}) => {
         callLog.push(`target:${projectId}`)
@@ -168,7 +172,7 @@ const createRunnerContext = (params: {
       failLargeRebuild: mock(async ({error, projectId}: {error: string; projectId: string}) => {
         callLog.push(`fail:${projectId}:${error}`)
         failed.push({error, projectId})
-        return null
+        return {}
       }),
       getLargeRebuildState: mock(async (projectId: string) => {
         callLog.push(`state:${projectId}`)
@@ -177,6 +181,10 @@ const createRunnerContext = (params: {
       heartbeatLargeRebuildClaim: mock(async ({projectId}: {projectId: string}) => {
         callLog.push(`heartbeat:${projectId}`)
         return null
+      }),
+      recordLargeRebuildFrozenScope: mock(async ({projectId}: {projectId: string}) => {
+        callLog.push(`frozen:${projectId}`)
+        return params.state === null ? null : (params.state ?? {projectId})
       }),
       resetLargeRebuild: mock(
         async ({
@@ -200,7 +208,7 @@ const createRunnerContext = (params: {
             rebuildPhase,
             targetGeneration,
           })
-          return null
+          return {}
         },
       ),
     },
@@ -345,6 +353,7 @@ test('runs one project_scope_article batch and advances the cursor without judgm
   expect(context.callLog).toEqual([
     'claim',
     'state:project-1',
+    'frozen:project-1',
     'scope:reset:project-1',
     'source-batch:project-1',
     'scope:rebuild:project-1:article-1,article-2',
@@ -777,8 +786,8 @@ test('transitions through filter_member rollup and serving to completion', async
     'target:project-1',
     'mart-batch:project-1',
     'serving:finalize:project-1:1',
-    'refresh:complete:project-1:9',
     'complete:project-1',
+    'refresh:complete:project-1:9',
     'ack:project-1:9',
   ])
   expect(servingContext.finalizedRefreshes).toEqual([{completedToken: 9, projectId: 'project-1'}])
@@ -830,6 +839,34 @@ test('resumes review_article_filter_member with the stored target generation', a
     'advance:project-1:article-3:review_article_filter_member',
   ])
   expect(context.resets[0]?.targetGeneration).toBe(7)
+})
+
+test('completion uses frozen source high-water token for refresh completion and ACK', async () => {
+  const context = createRunnerContext({
+    batchRows: [],
+    claim: {
+      leaseExpiresAt: new Date('2026-04-03T10:00:00.000Z'),
+      projectId: 'project-1',
+      rebuildPhase: 'review_article_serving',
+      refreshToken: 9,
+      workerId: 'worker-1',
+    },
+    state: {
+      cursorArticleCreatedAt: null,
+      cursorArticleId: null,
+      projectId: 'project-1',
+      rebuildPhase: 'review_article_serving',
+      sourceDirtyToken: 9,
+      sourceHighWaterDirtyToken: 12,
+      targetGeneration: null,
+    },
+  })
+
+  const result = await runProjectMartLargeRebuildCycle({workerId: 'worker-1'}, context.dependencies)
+
+  expect(result).toEqual({projectId: 'project-1', status: 'completed', workerId: 'worker-1'})
+  expect(context.finalizedRefreshes).toEqual([{completedToken: 12, projectId: 'project-1'}])
+  expect(context.publishedAcks).toEqual([{ackToken: 12, projectId: 'project-1'}])
 })
 
 test('fails unsupported phases explicitly', async () => {
