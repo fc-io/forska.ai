@@ -17,12 +17,13 @@
 - [ ] Every batch commits independently and can be retried idempotently.
 - [ ] Current reads use the best available mart state while background work catches up.
 - [ ] Keep active serving generations internally consistent: dictionary IDs, filter members, serving rows, and details must agree for the currently active generation throughout rebuilds.
-- [ ] Remove obsolete refresh paths and mart tables after callers move; do not keep compatibility shims or parallel maintenance paths.
+- [ ] Remove obsolete refresh paths and mart tables after callers move; do not keep compatibility shims or parallel maintenance paths. Retire `app.mart_refresh_queue` entirely, including both old `project` rows and `judgment_article` rows, so all normal refresh work enters one dirty-state path.
 
 ## Current Issues To Fix
 
 - [ ] `projectMartRefreshWorker` still routes more than the small dirty-article threshold into full refresh or large rebuild; dirty-article churn must stay incremental regardless of project scope.
 - [ ] Dirty project claims currently load all dirty article IDs before choosing the path; claims need bounded DB-side batches and per-batch completion.
+- [ ] Project-wide dirty marking still materializes all scoped article IDs in JS before batching; prompt changes, import-route changes, backfill, repair, and project-level marks need DB-side `INSERT ... SELECT` dirty-state writes that never build a 2M-element JS array.
 - [ ] `refreshJudgmentFactsForProjectClaim` rewrites `mart.judgment_fact`; it should replace only dirty article facts and preserve unrelated articles.
 - [ ] `mart.judgment_fact` is global by `judgment_id`, not project-scoped; deletes must target dirty `article_id` rows and must also remove deleted/stale judgments for those articles.
 - [ ] Incremental dirty-article refresh currently handles one article at a time and only refreshes serving rows; it needs one batch API that refreshes all affected project/article marts and mutates the active generation for many project/article pairs in one small transaction.
@@ -37,18 +38,21 @@
 - [ ] Incremental serving refresh updates active serving, detail, and filter-member rows directly but bypasses `mart.prompt_answer_fact` and `mart.review_article_rollup`; those marts can stay stale after dirty article work.
 - [ ] Incremental serving refresh falls back to `refreshProject(projectId)` when no active serving generation exists; cold-start or missing-generation repair must use bounded setup or large rebuild work instead.
 - [ ] A quarantined dirty article can block claiming the whole project; refresh should continue processing non-quarantined dirty articles and surface the quarantined subset separately.
-- [ ] Obsolete `app.mart_refresh_queue` project tasks still call `refreshProject(projectId)`; migrate `queueProjectRefresh`, prompt-change, import-route/import-store, archive, unarchive, backfill, purge, and repair-script callers to bounded dirty-state or large-rebuild paths, then delete the project-task path.
-- [ ] Large rebuild admin and heartbeat runners have cycle-count and status stop conditions but no wall-clock budget; long wakes need a time budget so they cannot monopolize the background queue.
-- [ ] Large rebuild scope materialization is folded into the `judgment_fact` phase and cursor; scope setup needs its own durable phase or explicit sub-cursor before fact phases rely on frozen scope rows.
+- [ ] Obsolete `app.mart_refresh_queue` tasks still provide a parallel `judgment_article` auto-drain path. Migrate `queueJudgmentArticleRefresh`, `queueJudgmentArticleRefreshes`, judgment-id/prompt-id refresh callers, `queueProjectRefresh`, prompt-change, import-route/import-store, archive, unarchive, backfill, purge, and repair-script callers to dirty-state or large-rebuild paths, then delete the queue table, queue schema repair code, auto-drain code, and queue tests.
+- [ ] Incremental dirty refresh can still recursively drain every dirty batch in one worker cycle; add a wall-clock wake budget so incremental refresh yields and resumes like large rebuild work.
+- [x] Large rebuild admin and heartbeat runners have cycle-count and status stop conditions plus a wall-clock budget so long wakes cannot monopolize the background queue.
+- [x] Large rebuild scope materialization has its own durable `project_scope_article` phase before fact phases rely on frozen scope rows.
 - [ ] Runtime diagnostics expose cycle counts, queue deltas, process RSS, and rough rows/minute estimates, but not committed rows/sec per phase or DuckDB temp spill; observability needs row counts and spill measurements tied to committed cursors.
 - [ ] Archived-project purge/delete still uses unbounded mart deletes and table rebuilds in some paths; large archived projects need bounded cleanup work behind active refresh and judging.
 - [ ] Archived-project delete detaches `app.judgment.project_id` but does not refresh matching global `mart.judgment_fact` rows; article detail reads can expose stale deleted-project ownership metadata.
-- [ ] Queued project refresh rows for archived or deleted projects can remain incomplete because project-task selection filters them out; cleanup needs to prune or complete those queue rows explicitly.
+- [ ] Legacy `app.mart_refresh_queue` rows for archived or deleted projects can remain incomplete while callers migrate; cleanup needs to prune or complete all remaining queue rows explicitly before the table is deleted.
 
 ## Incremental Path
 
 - [ ] Replace the dirty-article threshold that routes dirty-article churn into full refresh or large rebuild work.
 - [ ] Process dirty articles in claim-sized DB-side batches instead of loading all dirty IDs into JS.
+- [ ] Replace project-wide dirty-state creation that loads scoped IDs into JS with bounded DB-side `INSERT ... SELECT` statements against route scope, curated scope, and existing `mart.project_scope_article` rows.
+- [ ] Make prompt changes, route/import-store changes, article import changes, archive/unarchive, backfill, purge, repair scripts, and judgment refresh callers write dirty-state or large-rebuild work directly, not `app.mart_refresh_queue` rows.
 - [ ] Add `refreshProjectArticleMartsBatch(projectId, articleIds)` as the default dirty-article refresh path.
 - [ ] Use a DuckDB temp or staging batch table for batch article IDs instead of generated `IN (...)` lists.
 - [ ] Replace `mart.judgment_fact` rows for dirty `article_id` values only, including deletion of removed judgments.
@@ -62,30 +66,32 @@
 - [ ] Handle added scope articles by appending scope rows and refreshing only those articles.
 - [ ] Handle removed scope articles by deleting only those `project_id + article_id` rows from project-scoped marts and active serving tables.
 - [ ] Skip quarantined dirty articles within a claim batch, keep their quarantine status visible, and continue refreshing non-quarantined dirty articles.
+- [ ] Define quarantine completion semantics: quarantined article rows are excluded from normal batch progress and ACK advancement for non-quarantined rows, remain durable in `project_mart_refresh_article_state` with quarantine metadata, and require explicit unquarantine/retry or bounded cleanup before they can be ACKed or pruned.
 - [ ] Queue bounded initial serving setup or large rebuild when a dirty article reaches a project without an active serving generation; do not call full project refresh from the per-article path.
-- [ ] Replace obsolete project queue refreshes with dirty-state marking or guarded large-rebuild enqueueing, including import-store and maintenance/backfill script callers, then remove the project queue API and direct `refreshProject` normal path.
+- [ ] Replace obsolete queue refreshes with dirty-state marking or guarded large-rebuild enqueueing, including judgment-article, import-store, and maintenance/backfill script callers, then remove the `app.mart_refresh_queue` API, auto-drain path, and direct `refreshProject` normal path.
 - [ ] Complete dirty article state per processed batch, advance `last_completed_refresh_token` only when all batches through the claim are durable, then publish ACKs.
+- [ ] Add an incremental refresh worker wake budget with durable resume after each committed dirty batch; stop the wake when the budget expires even if more dirty rows remain.
 
 ## Occasional Rebuild Path
 
 - [ ] Keep full rebuild available for structural changes and repair only.
 - [ ] Build `mart.project_scope_article` once, in bounded batches, during rebuild setup, and finish scope materialization before fact phases depend on it.
-- [ ] Make scope setup resumable separately from judgment fact refresh, either as a first-class `project_scope_article` phase or as a persisted sub-phase with its own cursor.
-- [ ] If scope setup becomes a first-class phase, update `ProjectMartLargeRebuildPhase`, phase-order/read-model lists, admin/job/warnings progress code, and tests together.
+- [x] Make scope setup resumable separately from judgment fact refresh as a first-class `project_scope_article` phase with its own cursor.
+- [x] Update `ProjectMartLargeRebuildPhase`, phase-order/read-model lists, admin/job/warnings progress code, and tests for the first-class scope phase.
 - [ ] After scope setup completes, read later rebuild phases and progress estimates from `mart.project_scope_article`, not route/curated scope CTEs.
 - [ ] Initialize missing `target_generation` from the next serving generation (`active_generation + 1`) before the first staging write.
 - [ ] Keep phase cursor state durable as `(phase, article_created_at, article_id, refresh_token, target_generation)` and carry the stored `target_generation` unchanged across phase transitions.
 - [ ] Make each phase delete and insert the current batch idempotently.
 - [ ] Replace project-owned `mart.judgment_fact` reset with scoped article batches so global facts remain available to unrelated projects.
 - [ ] Keep all heavy rebuild reads and writes on the background DuckDB queue.
-- [ ] Add a wall-clock per-wake time budget, separate from `maxCycles`, so rebuild work yields regularly to other processes.
+- [x] Add a wall-clock per-wake time budget, separate from `maxCycles`, so rebuild work yields regularly to other processes.
 - [ ] Keep serving finalization to a short promotion transaction; avoid full-table `DROP TABLE`/rewrite and inline cleanup.
 - [ ] Promote staged serving rows by setting `active_generation` to the stored `target_generation` only.
 - [ ] Move old-generation cleanup into separate bounded maintenance batches.
 - [ ] Move archived-project mart cleanup into bounded maintenance batches and keep global/shared judgment facts valid after archived project deletion.
 - [ ] Refresh or detach global `mart.judgment_fact` rows affected by archived project deletion without deleting facts still visible to non-archived projects.
-- [ ] Complete or prune `app.mart_refresh_queue` rows for archived or deleted projects as part of bounded cleanup, then remove obsolete project queue handling.
-- [ ] Delete `queueProjectRefresh` after migrating callers; replacement callers should write dirty-state or queue large-rebuild work directly.
+- [ ] Complete or prune existing `app.mart_refresh_queue` rows for archived or deleted projects as part of bounded cleanup, then remove the entire obsolete queue table and handlers.
+- [ ] Delete `queueProjectRefresh` and `queueJudgmentArticleRefresh` after migrating callers; replacement callers should write dirty-state or queue large-rebuild work directly.
 - [ ] Keep `app.review_answer_dictionary` append-only during rebuild, or introduce generationed dictionary state before any rebuild path can renumber IDs.
 
 ## Non-Blocking Behavior
@@ -95,7 +101,8 @@
 - [ ] Keep cleanup behind refresh and judging work in priority.
 - [ ] Keep archived-project purge and old-generation cleanup behind refresh and judging work in priority.
 - [ ] Track rows/sec from committed batch row counts, batch duration, queue wait, temp spill, RSS, and last committed cursor per phase.
-- [ ] Extend the automatic large-rebuild heartbeat and existing operator-safe admin run route with a wall-clock time budget alongside `maxCycles` and `batchSize`.
+- [x] Extend the automatic large-rebuild heartbeat and existing operator-safe admin run route with a wall-clock time budget alongside `maxCycles` and `batchSize`.
+- [ ] Extend incremental dirty-refresh worker wakes with a wall-clock budget alongside dirty batch size and lease heartbeat settings.
 - [ ] Keep multi-project concurrency out of scope until one-project batching is proven.
 
 ## Success Criteria
@@ -115,18 +122,20 @@
 - [ ] Prefer DB-backed service tests over mocked SQL for mart correctness, using small fixtures that prove row-level invariants.
 - [ ] Cover incremental dirty batches for one article, exactly configured batch-sized work, work that spans multiple batches, no-active-generation fallback, and a large-scope project that must not trigger a full refresh.
 - [ ] Cover judgment changes, judgment deletion, human review changes, retained-scope article metadata or scope-flag changes, scope add, scope remove, and quarantined dirty articles as separate dirty paths.
+- [ ] Assert project-wide dirty-state writes for prompt changes, route/import-store changes, backfill, repair, and project-level marks use DB-side `INSERT ... SELECT` batches and do not materialize scoped article IDs in JS.
 - [ ] Assert dirty batches only mutate the expected `project_id + article_id` rows and preserve unrelated projects/articles.
+- [ ] Assert incremental refresh worker wakes stop on wall-clock budget, leave durable dirty-state progress, and resume the next wake without reprocessing completed batches.
 - [ ] Assert incremental refresh keeps `mart.prompt_answer_fact`, `mart.review_article_rollup`, active serving, details, and filter members in sync for the same dirty article set.
 - [ ] Assert `app.review_answer_dictionary` appends new answers without renumbering existing IDs and keeps active `review_article_filter_member` rows valid.
 - [ ] Assert serving, detail, and filter-member rows always agree on the same active generation after incremental refresh, rebuild promotion, and cleanup lag.
 - [ ] Assert large rebuild judgment fact batches preserve facts still visible to other projects sharing articles, prompts, models, and content settings.
 - [ ] Assert scope setup resumes independently from judgment fact work and progress displays do not treat partially materialized scope as the final denominator.
-- [ ] Assert former `queueProjectRefresh` triggers for prompt changes, route/import-store changes, archive, unarchive, backfill, purge, and repair-script work write dirty-state or large-rebuild work directly and no longer depend on project queue compatibility.
+- [ ] Assert former `queueProjectRefresh` and `queueJudgmentArticleRefresh` triggers for judgment changes, prompt changes, route/import-store changes, archive, unarchive, backfill, purge, and repair-script work write dirty-state or large-rebuild work directly and no longer depend on `app.mart_refresh_queue` compatibility.
 - [ ] Assert large rebuild phases are idempotent by replaying a completed batch, expiring a lease, and resuming from the stored cursor.
 - [ ] Assert later large rebuild phases and operator/job progress stay tied to the frozen scope rows when route or curated scope changes mid-rebuild.
 - [ ] Assert old-generation cleanup can run later without changing active-generation review results or filter counts.
 - [ ] Assert archived-project cleanup runs in bounded batches and preserves global judgment facts still visible to non-archived projects.
-- [ ] Assert archived-project deletion refreshes or detaches `mart.judgment_fact` ownership metadata and does not leave queued project refresh rows stuck forever.
+- [ ] Assert archived-project deletion refreshes or detaches `mart.judgment_fact` ownership metadata and does not leave legacy `app.mart_refresh_queue` rows stuck forever during migration.
 - [ ] Assert API and OLAP review filters and article review details return the same active-generation data before refresh, during queued/running work, after promotion, and after cleanup.
 - [ ] Keep performance tests deterministic: synthetic 2M data should validate bounded dirty-batch work, queue wait observability, and memory/spill reporting, not exact timings.
 - [ ] For shared review UI/API behavior, smoke both browser/web and desktop flows after the server-side gates pass.
