@@ -821,8 +821,7 @@ test('large rebuild and incremental refresh agree on shared clone judgment reuse
     \`)
 
     const martRefreshService = getDuckdbMartRefreshService()
-    await martRefreshService.queueJudgmentArticleRefresh('shared-reuse-article', 'shared-reuse-source-judgment')
-    await martRefreshService.flush()
+    await martRefreshService.refreshJudgmentFactsForArticles(['shared-reuse-article'])
     await database.run(\`
       INSERT INTO app.project_review_serving_generation (project_id, active_generation)
       VALUES
@@ -1085,8 +1084,7 @@ test('large rebuild drops reused source judgments after a cloned project repoint
       )
     \`)
 
-    await martRefreshService.queueJudgmentArticleRefresh('prompt-edit-large-article', 'prompt-edit-large-source-judgment')
-    await martRefreshService.flush()
+    await martRefreshService.refreshJudgmentFactsForArticles(['prompt-edit-large-article'])
 
     await rebuildLargeProject('prompt-edit-large-source-project')
     await rebuildLargeProject('prompt-edit-large-target-project')
@@ -1141,8 +1139,7 @@ test('large rebuild drops reused source judgments after a cloned project repoint
       )
     \`)
 
-    await martRefreshService.queueJudgmentArticleRefresh('prompt-edit-large-article', 'prompt-edit-large-target-judgment')
-    await martRefreshService.flush()
+    await martRefreshService.refreshJudgmentFactsForArticles(['prompt-edit-large-article'])
 
     await rebuildLargeProject('prompt-edit-large-target-project')
 

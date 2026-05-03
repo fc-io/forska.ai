@@ -2,8 +2,10 @@ import {afterEach, expect, mock, test} from 'bun:test'
 import {Elysia} from 'elysia'
 
 const appDatabaseServiceModulePath = new URL('../services/appDatabaseService.ts', import.meta.url).pathname
-const duckdbMartRefreshServiceModulePath = new URL('../services/getDuckdbMartRefreshService.ts', import.meta.url)
-  .pathname
+const projectMartDirtyRefreshStateServiceModulePath = new URL(
+  '../services/projectMartDirtyRefreshStateService.ts',
+  import.meta.url,
+).pathname
 const providerModelRepositoryModulePath = new URL('../providers/providerModelRepository.ts', import.meta.url).pathname
 
 type MockDatabaseState = {
@@ -11,7 +13,7 @@ type MockDatabaseState = {
   committedProjectPromptStatements: string[]
   committedProjectStatements: string[]
   committedPromptStatements: string[]
-  queueProjectRefreshCalls: Array<{projectId: string; reason: string}>
+  markProjectsDirtyCalls: Array<{projects: Array<{articleIds?: string[]; projectId: string}>; reason: string | null}>
   rootRunStatements: string[]
   transactionCalls: number
 }
@@ -148,12 +150,18 @@ const registerModuleMocks = () => {
     }
   })
 
-  void mock.module(duckdbMartRefreshServiceModulePath, () => {
+  void mock.module(projectMartDirtyRefreshStateServiceModulePath, () => {
     return {
-      getDuckdbMartRefreshService: () => {
+      getProjectMartDirtyRefreshStateService: () => {
         return {
-          queueProjectRefresh: async (projectId: string, reason: string) => {
-            getMockDatabaseState().queueProjectRefreshCalls.push({projectId, reason})
+          markProjectsDirtyAtomically: async (params: {
+            projects: Array<{articleIds?: string[]; projectId: string}>
+            reason?: string | null
+          }) => {
+            getMockDatabaseState().markProjectsDirtyCalls.push({
+              projects: params.projects,
+              reason: params.reason ?? null,
+            })
           },
         }
       },
@@ -171,7 +179,7 @@ const createMockDatabaseState = (): MockDatabaseState => {
     committedProjectPromptStatements: [],
     committedProjectStatements: [],
     committedPromptStatements: [],
-    queueProjectRefreshCalls: [],
+    markProjectsDirtyCalls: [],
     rootRunStatements: [],
     transactionCalls: 0,
   }
@@ -218,5 +226,5 @@ test('subproject route rolls back project and detached prompts when article link
   expect(state.committedPromptStatements).toHaveLength(0)
   expect(state.committedProjectPromptStatements).toHaveLength(0)
   expect(state.committedProjectArticleStatements).toHaveLength(0)
-  expect(state.queueProjectRefreshCalls).toHaveLength(0)
+  expect(state.markProjectsDirtyCalls).toHaveLength(0)
 })

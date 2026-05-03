@@ -1,7 +1,7 @@
 import type {JudgmentChunkingStrategy} from '../../db/schemaTypes.ts'
 import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from '../../server/services/appQueryHelpers.ts'
-import {getDuckdbMartRefreshService} from '../../server/services/getDuckdbMartRefreshService.ts'
+import {getProjectMartDirtyRefreshStateService} from '../../server/services/projectMartDirtyRefreshStateService.ts'
 import {getShortIdForPrompt, type ShortIdMapping} from './judgeGetPrompt.ts'
 import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
 
@@ -152,7 +152,10 @@ export const judgeStoreJudgment = async (
     })
 
     if (successfulResults.length > 0) {
-      await getDuckdbMartRefreshService().queueJudgmentArticleRefresh(articleId, 'judgeStoreJudgment')
+      await getProjectMartDirtyRefreshStateService().markArticleProjectsDirtyAtomically({
+        articleIds: [articleId],
+        reason: 'judgeStoreJudgment',
+      })
     }
 
     if (failedResults.length > 0) {
