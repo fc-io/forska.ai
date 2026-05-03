@@ -19,9 +19,17 @@ test('package exposes final rebuild2 command surface and removes obsolete mart r
         || command.includes('runProjectMartLargeRebuildCycle.ts')
         || command.includes('runProjectMartLargeRebuildCycles.ts')
         || `${name} ${command}`.includes('quarantine-refresh-article')
+        || `${name} ${command}`.includes('inspect-project-refresh-risk')
+        || `${name} ${command}`.includes('recover-project-refresh-claims')
+        || `${name} ${command}`.includes('repair-project-refresh-ledger')
+        || `${name} ${command}`.includes('repair-judgment-fact')
         || command.includes('recoverArchivedProjectRefreshQueue')
         || command.includes('quarantineProjectMartRefreshArticle')
         || command.includes('unquarantineProjectMartRefreshArticle')
+        || command.includes('inspectProjectMartRefreshRisk')
+        || command.includes('recoverProjectMartRefreshClaims')
+        || command.includes('repairProjectMartRefreshLedger')
+        || command.includes('repairJudgmentFactTable')
       )
     })
     .map(([name]) => {
@@ -48,6 +56,15 @@ test('package exposes final rebuild2 command surface and removes obsolete mart r
   )
   expect(packageJson.scripts['db:duck:unquarantine-dirty-refresh-article']).toBe(
     'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/unquarantineDirtyRefreshArticle.ts',
+  )
+  expect(packageJson.scripts['db:duck:inspect-dirty-refresh-risk']).toBe(
+    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/inspectDirtyRefreshRisk.ts',
+  )
+  expect(packageJson.scripts['db:duck:recover-dirty-refresh-claims']).toBe(
+    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/recoverDirtyRefreshClaims.ts',
+  )
+  expect(packageJson.scripts['db:duck:request-judgment-fact-repair']).toBe(
+    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/requestJudgmentFactRepair.ts',
   )
   expect(obsoleteCommandMatches).toEqual([])
 })

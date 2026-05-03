@@ -39,6 +39,14 @@ const obsoletePatterns = [
   /runProjectMartLargeRebuildCycles\.ts/,
   /quarantineProjectMartRefreshArticle/,
   /unquarantineProjectMartRefreshArticle/,
+  /db:duck:inspect-project-refresh-risk/,
+  /db:duck:recover-project-refresh-claims/,
+  /db:duck:repair-project-refresh-ledger/,
+  /db:duck:repair-judgment-fact/,
+  /inspectProjectMartRefreshRisk/,
+  /recoverProjectMartRefreshClaims/,
+  /repairProjectMartRefreshLedger/,
+  /repairJudgmentFactTable/,
   /app\.mart_refresh_queue/,
 ] as const
 

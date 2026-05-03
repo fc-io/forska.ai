@@ -13,8 +13,8 @@ const defaultEnv = {
   VITE_PORT: '39912',
 }
 
-const inspectScriptPath = join(projectRoot, 'scripts/inspectProjectMartRefreshRisk.ts')
-const recoverScriptPath = join(projectRoot, 'scripts/recoverProjectMartRefreshClaims.ts')
+const inspectScriptPath = join(projectRoot, 'scripts/inspectDirtyRefreshRisk.ts')
+const recoverScriptPath = join(projectRoot, 'scripts/recoverDirtyRefreshClaims.ts')
 const runOnceScriptPath = join(projectRoot, 'scripts/runProjectMartRefreshWorkerOnceIsolated.ts')
 
 const getLastJsonLine = (output: string) => {
