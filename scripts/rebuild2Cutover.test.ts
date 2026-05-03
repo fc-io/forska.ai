@@ -147,6 +147,25 @@ test('rebuild2 cutover clears obsolete state and rederives replacement work unde
       VALUES ('rebuild2-project-article', 'rebuild2-project', 'rebuild2-article')
     \`)
     await database.run(\`
+      CREATE TABLE app.mart_refresh_queue (
+        id VARCHAR PRIMARY KEY,
+        refresh_scope VARCHAR NOT NULL,
+        project_id VARCHAR,
+        article_id VARCHAR,
+        project_key VARCHAR NOT NULL DEFAULT '',
+        article_key VARCHAR NOT NULL DEFAULT '',
+        refresh_generation BIGINT NOT NULL DEFAULT 0,
+        reason VARCHAR,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+        completed_at TIMESTAMPTZ,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+        UNIQUE(refresh_scope, project_key, article_key)
+      )
+    \`)
+    await database.run(\`
+      CREATE INDEX idx_app_mart_refresh_queue_created_at ON app.mart_refresh_queue(created_at)
+    \`)
+    await database.run(\`
       INSERT INTO app.mart_refresh_queue (
         id,
         refresh_scope,
@@ -163,6 +182,21 @@ test('rebuild2 cutover clears obsolete state and rederives replacement work unde
         'rebuild2-project',
         'rebuild2-article',
         'legacy'
+      )
+    \`)
+    await database.run(\`
+      INSERT INTO app.mart_refresh_queue (
+        id,
+        refresh_scope,
+        article_id,
+        article_key,
+        reason
+      ) VALUES (
+        'rebuild2-non-project-queue',
+        'judgment_article',
+        'rebuild2-non-project-article',
+        'rebuild2-non-project-article',
+        'legacy-non-project'
       )
     \`)
     await database.run(\`
@@ -343,7 +377,7 @@ test('rebuild2 cutover clears obsolete state and rederives replacement work unde
   `)
 
   expect(result.report.beforeProof).toMatchObject({
-    martRefreshQueueRows: 1,
+    martRefreshQueueRows: 2,
     nonCutoverRefreshRows: 1,
     quarantineRows: 1,
   })

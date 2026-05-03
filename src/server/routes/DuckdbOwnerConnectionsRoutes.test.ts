@@ -42,12 +42,6 @@ void mock.module(martRefreshServiceModulePath, () => {
   return {
     getDuckdbMartRefreshService: () => {
       return {
-        getDebugSnapshot: () => {
-          return {}
-        },
-        getProgressSnapshot: () => {
-          return {}
-        },
         getThroughputSnapshot: () => {
           return {}
         },

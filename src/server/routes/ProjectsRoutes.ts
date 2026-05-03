@@ -16,7 +16,6 @@ import {
   getSqlLiteral,
   getTimestampLiteral,
 } from '../services/appQueryHelpers.ts'
-import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
 import {getOrCreateImmutablePromptTx} from '../services/immutablePromptService.ts'
 import {getProjectMartDirtyRefreshStateService} from '../services/projectMartDirtyRefreshStateService.ts'
 import {getProjectMartLargeRebuildStateService} from '../services/projectMartLargeRebuildStateService.ts'
@@ -1451,8 +1450,6 @@ export const projectsRoutes = new Elysia()
     if (!archivedProject) {
       throw new Error('Project not found')
     }
-
-    await getDuckdbMartRefreshService().pruneProjectQueueRowsForProjects([params.id])
 
     return {success: true}
   })

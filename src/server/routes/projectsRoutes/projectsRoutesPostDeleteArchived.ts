@@ -855,14 +855,6 @@ const deleteArchivedProjectsTx = async (tx: AppTx, projectIds: string[]) => {
       WHERE project_id IN (${projectIdsSql})
     `,
     `
-      DELETE FROM app.mart_refresh_queue
-      WHERE refresh_scope = 'project'
-        AND (
-          project_id IN (${projectIdsSql})
-          OR project_key IN (${projectIdsSql})
-        )
-    `,
-    `
       DELETE FROM app.project
       WHERE id IN (${projectIdsSql})
     `,

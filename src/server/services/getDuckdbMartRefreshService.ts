@@ -1,24 +1,11 @@
-import {hostname} from 'node:os'
-
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
-import {getMaintenanceWorkLeaseService} from './maintenanceWorkLeaseService.ts'
 import {
   getProjectMartDirtyRefreshStateService,
   type MarkedProjectDirtyState,
 } from './projectMartDirtyRefreshStateService.ts'
 import {getProjectMartLargeRebuildStateService} from './projectMartLargeRebuildStateService.ts'
 import {getProjectVisibleJudgmentScopeSql} from './projectVisibleJudgmentRule.ts'
-
-type MartRefreshScope = 'judgment_article'
-
-type MartRefreshTaskRow = {
-  articleId: string | null
-  id: string
-  projectId: string | null
-  refreshGeneration: number
-  refreshScope: MartRefreshScope
-}
 
 type ProjectRefreshBatchCursor = {articleCreatedAt: Date | string | null; articleId: string}
 
@@ -44,81 +31,14 @@ type ProjectRefreshScopeBatchRow = ProjectRefreshBatchRow & {
   inRouteScope: boolean
 }
 
-type MartRefreshProgressSnapshot = {
-  claimedQueuedArticleIds: string[]
-  claimedQueuedProjectIds: string[]
-  processingArticleIds: string[]
-  processingProjectIds: string[]
-}
-
-type MartRefreshDebugSnapshot = {
-  autoDrainEnabled: boolean
-  drainPromiseActive: boolean
-  drainTimerActive: boolean
-  flushInvocationCount: number
-  lastErrorAt: string | null
-  lastErrorMessage: string | null
-  lastFlushAt: string | null
-  lastHasMoreQueuedTasks: boolean | null
-  lastPassCompletedAt: string | null
-  lastPassStartedAt: string | null
-  lastQueuedTaskCount: number | null
-  passCount: number
-}
-
-const getEmptyMartRefreshProgressSnapshot = (): MartRefreshProgressSnapshot => {
-  return {claimedQueuedArticleIds: [], claimedQueuedProjectIds: [], processingArticleIds: [], processingProjectIds: []}
-}
-
-const copyMartRefreshProgressSnapshot = (snapshot: MartRefreshProgressSnapshot): MartRefreshProgressSnapshot => {
-  return {
-    claimedQueuedArticleIds: [...snapshot.claimedQueuedArticleIds],
-    claimedQueuedProjectIds: [...snapshot.claimedQueuedProjectIds],
-    processingArticleIds: [...snapshot.processingArticleIds],
-    processingProjectIds: [...snapshot.processingProjectIds],
-  }
-}
-
-const getEmptyMartRefreshDebugSnapshot = (): MartRefreshDebugSnapshot => {
-  return {
-    autoDrainEnabled: true,
-    drainPromiseActive: false,
-    drainTimerActive: false,
-    flushInvocationCount: 0,
-    lastErrorAt: null,
-    lastErrorMessage: null,
-    lastFlushAt: null,
-    lastHasMoreQueuedTasks: null,
-    lastPassCompletedAt: null,
-    lastPassStartedAt: null,
-    lastQueuedTaskCount: null,
-    passCount: 0,
-  }
-}
-
-let martRefreshDrainPromise: Promise<void> | null = null
-let martRefreshDrainTimer: ReturnType<typeof setTimeout> | null = null
-let martRefreshQueueCompletedAtColumnReady: Promise<void> | null = null
-let martRefreshQueueCompletedAtColumnVerified = false
-let martRefreshQueueGenerationColumnReady: Promise<void> | null = null
-let martRefreshQueueGenerationColumnVerified = false
 let martRefreshReviewArticleRollupReady: Promise<void> | null = null
 let martRefreshReviewArticleRollupVerified = false
-let martRefreshAutoDrainEnabled = true
-let martRefreshDebugSnapshot = getEmptyMartRefreshDebugSnapshot()
-let martRefreshProgressSnapshot = getEmptyMartRefreshProgressSnapshot()
 let martRefreshArticleCompletionTimes: number[] = []
 let martRefreshProjectCompletionTimes: number[] = []
 
-const martRefreshArticleBatchLimit = 4
-const martRefreshDrainBudgetMs = 100
 const martRefreshProjectPurgeRowBatchSize = 10
-const martRefreshProjectQueuePruneBatchSize = 50
 const martRefreshProjectRebuildArticleBatchSize = 20_000
 const martReviewArticleServingRewriteBatchSize = 1_000
-const martRefreshRetryDelayMs = 5000
-const martRefreshQueueLeaseMs = 30_000
-const martRefreshScheduleDelayMs = 250
 const martRefreshThroughputWindowMs = 15_000
 const martRefreshYieldDelayMs = 0
 const martRefreshBatchEpochSql = "TIMESTAMPTZ '1970-01-01T00:00:00.000Z'"
@@ -132,18 +52,6 @@ const martRefreshFatalInvalidationErrorFragments = [
   'database has been invalidated because of a previous fatal error',
   'must be restarted prior to being used again',
 ]
-
-const getMartRefreshProgressSnapshot = (): MartRefreshProgressSnapshot => {
-  return copyMartRefreshProgressSnapshot(martRefreshProgressSnapshot)
-}
-
-const setMartRefreshProgressSnapshot = (snapshot: MartRefreshProgressSnapshot) => {
-  martRefreshProgressSnapshot = copyMartRefreshProgressSnapshot(snapshot)
-}
-
-const resetMartRefreshProgressSnapshot = () => {
-  setMartRefreshProgressSnapshot(getEmptyMartRefreshProgressSnapshot())
-}
 
 const getRecentCompletionTimes = (completionTimes: number[], now: number) => {
   return completionTimes.filter((completedAt) => {
@@ -185,190 +93,6 @@ const recordProjectRefreshCompletion = (completedAt = Date.now()) => {
 const resetMartRefreshThroughputSnapshot = () => {
   martRefreshArticleCompletionTimes = []
   martRefreshProjectCompletionTimes = []
-}
-
-const getMartRefreshDebugSnapshot = () => {
-  return {
-    ...martRefreshDebugSnapshot,
-    autoDrainEnabled: martRefreshAutoDrainEnabled,
-    drainPromiseActive: martRefreshDrainPromise !== null,
-    drainTimerActive: martRefreshDrainTimer !== null,
-  }
-}
-
-const updateMartRefreshDebugSnapshot = (updates: Partial<MartRefreshDebugSnapshot>) => {
-  martRefreshDebugSnapshot = {...martRefreshDebugSnapshot, ...updates}
-}
-
-const resetMartRefreshDebugSnapshot = () => {
-  martRefreshDebugSnapshot = getEmptyMartRefreshDebugSnapshot()
-}
-
-const isMartRefreshAutoDrainEnabled = () => {
-  return martRefreshAutoDrainEnabled
-}
-
-const getMartRefreshQueueWorkerId = () => {
-  return `mart-refresh-queue:${hostname()}:${process.pid}`
-}
-
-const setMartRefreshAutoDrainEnabled = (enabled: boolean) => {
-  martRefreshAutoDrainEnabled = enabled
-  updateMartRefreshDebugSnapshot({autoDrainEnabled: enabled})
-}
-
-const setClaimedQueuedRefreshes = (articleIds: string[], projectIds: string[]) => {
-  setMartRefreshProgressSnapshot({
-    claimedQueuedArticleIds: articleIds,
-    claimedQueuedProjectIds: projectIds,
-    processingArticleIds: articleIds,
-    processingProjectIds: projectIds,
-  })
-}
-
-const setProcessingArticleRefreshes = (articleIds: string[]) => {
-  setMartRefreshProgressSnapshot({...martRefreshProgressSnapshot, processingArticleIds: articleIds})
-}
-
-const getHasMartRefreshQueueGenerationColumn = async (): Promise<boolean> => {
-  const rows = await getAppDatabaseService().queryJson<{count: number}>(`
-    SELECT COUNT(*) AS count
-    FROM information_schema.columns
-    WHERE table_schema = 'app'
-      AND table_name = 'mart_refresh_queue'
-      AND column_name = 'refresh_generation'
-  `)
-
-  return Number(rows[0]?.count ?? 0) > 0
-}
-
-const getHasMartRefreshQueueCompletedAtColumn = async (): Promise<boolean> => {
-  const rows = await getAppDatabaseService().queryJson<{count: number}>(`
-    SELECT COUNT(*) AS count
-    FROM information_schema.columns
-    WHERE table_schema = 'app'
-      AND table_name = 'mart_refresh_queue'
-      AND column_name = 'completed_at'
-  `)
-
-  return Number(rows[0]?.count ?? 0) > 0
-}
-
-const getHasNullMartRefreshQueueGenerationRows = async (): Promise<boolean> => {
-  const rows = await getAppDatabaseService().queryJson<{count: number}>(`
-    SELECT COUNT(*) AS count
-    FROM app.mart_refresh_queue
-    WHERE refresh_generation IS NULL
-  `)
-
-  return Number(rows[0]?.count ?? 0) > 0
-}
-
-const repairMartRefreshQueueGenerationColumn = async () => {
-  await getAppDatabaseService().run(`
-    ALTER TABLE app.mart_refresh_queue ADD COLUMN IF NOT EXISTS refresh_generation BIGINT;
-    UPDATE app.mart_refresh_queue
-    SET refresh_generation = 0
-    WHERE refresh_generation IS NULL;
-  `)
-
-  await getAppDatabaseService().maintenance('checkpoint')
-}
-
-const repairMartRefreshQueueCompletedAtColumn = async () => {
-  await getAppDatabaseService().run(`
-    ALTER TABLE app.mart_refresh_queue ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
-  `)
-
-  await getAppDatabaseService().maintenance('checkpoint')
-}
-
-const verifyMartRefreshQueueGenerationColumn = async () => {
-  const hasGenerationColumn = await getHasMartRefreshQueueGenerationColumn()
-
-  if (!hasGenerationColumn) {
-    return repairMartRefreshQueueGenerationColumn()
-  }
-
-  return (await getHasNullMartRefreshQueueGenerationRows()) ? repairMartRefreshQueueGenerationColumn() : undefined
-}
-
-const verifyMartRefreshQueueCompletedAtColumn = async () => {
-  return (await getHasMartRefreshQueueCompletedAtColumn()) ? undefined : repairMartRefreshQueueCompletedAtColumn()
-}
-
-const getQueuedArticleTasksSql = () => {
-  return `
-    SELECT
-      id,
-      refresh_scope AS refreshScope,
-      project_id AS projectId,
-      article_id AS articleId,
-      COALESCE(refresh_generation, 0) AS refreshGeneration
-    FROM app.mart_refresh_queue
-    WHERE completed_at IS NULL
-      AND refresh_scope = 'judgment_article'
-    ORDER BY EPOCH(created_at) ASC, id ASC
-    LIMIT ${martRefreshArticleBatchLimit}
-  `
-}
-
-const getObsoleteProjectQueueRowsSql = () => {
-  return `
-    SELECT id
-    FROM app.mart_refresh_queue
-    WHERE completed_at IS NULL
-      AND refresh_scope = 'project'
-    ORDER BY EPOCH(created_at) ASC, id ASC
-    LIMIT ${martRefreshProjectQueuePruneBatchSize}
-  `
-}
-
-const ensureMartRefreshQueueGenerationColumn = async (): Promise<void> => {
-  if (martRefreshQueueGenerationColumnVerified) {
-    return
-  }
-
-  if (martRefreshQueueGenerationColumnReady) {
-    return martRefreshQueueGenerationColumnReady
-  }
-
-  martRefreshQueueGenerationColumnReady = verifyMartRefreshQueueGenerationColumn()
-    .then(() => {
-      martRefreshQueueGenerationColumnVerified = true
-    })
-    .catch((error) => {
-      martRefreshQueueGenerationColumnReady = null
-      return Promise.reject(error)
-    })
-
-  return martRefreshQueueGenerationColumnReady
-}
-
-const ensureMartRefreshQueueCompletedAtColumn = async (): Promise<void> => {
-  if (martRefreshQueueCompletedAtColumnVerified) {
-    return
-  }
-
-  if (martRefreshQueueCompletedAtColumnReady) {
-    return martRefreshQueueCompletedAtColumnReady
-  }
-
-  martRefreshQueueCompletedAtColumnReady = verifyMartRefreshQueueCompletedAtColumn()
-    .then(() => {
-      martRefreshQueueCompletedAtColumnVerified = true
-    })
-    .catch((error) => {
-      martRefreshQueueCompletedAtColumnReady = null
-      return Promise.reject(error)
-    })
-
-  return martRefreshQueueCompletedAtColumnReady
-}
-
-const ensureMartRefreshQueueSchema = async (): Promise<void> => {
-  await ensureMartRefreshQueueGenerationColumn()
-  return ensureMartRefreshQueueCompletedAtColumn()
 }
 
 const createReviewArticleRollupTable = async () => {
@@ -1927,86 +1651,6 @@ const getJudgmentProjectScopeBatchRefreshSql = (projectId: string, articleIds: s
   })
 }
 
-const getQueuedArticleTasks = async () => {
-  await ensureMartRefreshQueueSchema()
-  return getAppDatabaseService().queryJson<MartRefreshTaskRow>(getQueuedArticleTasksSql())
-}
-
-const getHasQueuedDrainableTasks = async () => {
-  await ensureMartRefreshQueueSchema()
-  const rows = await getAppDatabaseService().queryJson<{count: number}>(`
-    SELECT COUNT(*) AS count
-    FROM app.mart_refresh_queue
-    WHERE completed_at IS NULL
-      AND refresh_scope IN ('judgment_article', 'project')
-  `)
-
-  return Number(rows[0]?.count ?? 0) > 0
-}
-
-const getObsoleteProjectQueueRows = async () => {
-  await ensureMartRefreshQueueSchema()
-  return getAppDatabaseService().queryJson<{id: string}>(getObsoleteProjectQueueRowsSql())
-}
-
-const pruneObsoleteProjectQueueRowsBatch = async () => {
-  const rows = await getObsoleteProjectQueueRows()
-  const queueIds = rows.map((row) => {
-    return row.id
-  })
-
-  if (queueIds.length === 0) {
-    return {hasMore: false, prunedRowCount: 0}
-  }
-
-  await getAppDatabaseService().run(`
-    DELETE FROM app.mart_refresh_queue
-    WHERE id IN (${getQuotedStringList(queueIds).join(', ')})
-  `)
-
-  return {hasMore: queueIds.length === martRefreshProjectQueuePruneBatchSize, prunedRowCount: queueIds.length}
-}
-
-const pruneProjectQueueRowsForProjects = async (projectIds: string[]) => {
-  const uniqueProjectIds = getUniqueValues(projectIds)
-
-  if (uniqueProjectIds.length === 0) {
-    return
-  }
-
-  await ensureMartRefreshQueueSchema()
-  await getAppDatabaseService().run(`
-    DELETE FROM app.mart_refresh_queue
-    WHERE refresh_scope = 'project'
-      AND (
-        project_id IN (${getQuotedStringList(uniqueProjectIds).join(', ')})
-        OR project_key IN (${getQuotedStringList(uniqueProjectIds).join(', ')})
-      )
-  `)
-}
-
-const completeQueuedTask = async (task: MartRefreshTaskRow) => {
-  await getAppDatabaseService().run(`
-    UPDATE app.mart_refresh_queue
-    SET completed_at = NOW(),
-        updated_at = NOW()
-    WHERE id = ${getSqlLiteral(task.id)}
-      AND COALESCE(refresh_generation, 0) = ${task.refreshGeneration}
-  `)
-  await completeQueuedMaintenanceWorkTask(task)
-}
-
-const completeQueuedTasks = async (tasks: MartRefreshTaskRow[]): Promise<void> => {
-  const [currentTask] = tasks
-
-  if (!currentTask) {
-    return
-  }
-
-  await completeQueuedTask(currentTask)
-  return completeQueuedTasks(tasks.slice(1))
-}
-
 const getUniqueValues = (values: Array<string | null | undefined>) => {
   return Array.from(
     new Set(
@@ -2067,78 +1711,6 @@ const queueProjectLargeRebuildForDirtyArticles = async (projectId: string, artic
 
         return queueLargeRebuildsForDirtyStates(states, tx)
       }) as Promise<MarkedProjectDirtyState[]>)
-}
-
-const claimQueuedMaintenanceWorkTask = async (task: MartRefreshTaskRow) => {
-  const workerId = getMartRefreshQueueWorkerId()
-
-  return task.articleId
-    ? getMaintenanceWorkLeaseService().claimMaintenanceWorkLease({
-        articleId: task.articleId,
-        consumerId: workerId,
-        leaseMs: martRefreshQueueLeaseMs,
-        queueId: task.id,
-        requiredConsumerRole: 'maintenance-worker',
-        scopeKind: 'article',
-        workKind: 'review_index_article_refresh',
-      })
-    : Promise.resolve(null)
-}
-
-const completeQueuedMaintenanceWorkTask = async (task: MartRefreshTaskRow) => {
-  const workerId = getMartRefreshQueueWorkerId()
-
-  return task.articleId
-    ? getMaintenanceWorkLeaseService().completeMaintenanceWorkLease({
-        articleId: task.articleId,
-        consumerId: workerId,
-        queueId: task.id,
-        scopeKind: 'article',
-        workKind: 'review_index_article_refresh',
-      })
-    : Promise.resolve()
-}
-
-const failQueuedMaintenanceWorkTask = async (task: MartRefreshTaskRow, error: unknown) => {
-  const workerId = getMartRefreshQueueWorkerId()
-  const retryAfterAt = new Date(Date.now() + martRefreshRetryDelayMs)
-  const recoveryContext = {error: error instanceof Error ? error.message : String(error), queueId: task.id}
-
-  return task.articleId
-    ? getMaintenanceWorkLeaseService().failMaintenanceWorkLease({
-        articleId: task.articleId,
-        consumerId: workerId,
-        leaseMs: martRefreshQueueLeaseMs,
-        queueId: task.id,
-        recoveryContext,
-        requiredConsumerRole: 'maintenance-worker',
-        retryAfterAt,
-        scopeKind: 'article',
-        workKind: 'review_index_article_refresh',
-      })
-    : Promise.resolve()
-}
-
-const claimQueuedMaintenanceWorkTasks = async (tasks: MartRefreshTaskRow[]): Promise<void> => {
-  const [currentTask] = tasks
-
-  if (!currentTask) {
-    return
-  }
-
-  await claimQueuedMaintenanceWorkTask(currentTask)
-  return claimQueuedMaintenanceWorkTasks(tasks.slice(1))
-}
-
-const failQueuedMaintenanceWorkTasks = async (tasks: MartRefreshTaskRow[], error: unknown): Promise<void> => {
-  const [currentTask] = tasks
-
-  if (!currentTask) {
-    return
-  }
-
-  await failQueuedMaintenanceWorkTask(currentTask, error)
-  return failQueuedMaintenanceWorkTasks(tasks.slice(1), error)
 }
 
 const queryMartRefreshBackgroundJson = async <T>(statement: string): Promise<T[]> => {
@@ -2228,27 +1800,6 @@ const runMartRefreshBackgroundStatement = async (statement: string) => {
           isFatalInvalidationError ? 'runtime restart failed' : 'rollback failed',
         )
   }
-}
-
-const getImpactedProjectIdsForArticle = async (articleId: string) => {
-  const rows = await queryMartRefreshBackgroundJson<{projectId: string}>(`
-    SELECT project_article.project_id AS projectId
-    FROM app.project_article project_article
-    INNER JOIN app.project project ON project.id = project_article.project_id
-    WHERE project_article.article_id = ${getSqlLiteral(articleId)}
-      AND project.archived = FALSE
-    UNION
-    SELECT pir.project_id AS projectId
-    FROM app.project_import_route pir
-    INNER JOIN app.project project ON project.id = pir.project_id
-    INNER JOIN app.article_import_route air ON air.import_route_id = pir.import_route_id
-    WHERE air.article_id = ${getSqlLiteral(articleId)}
-      AND project.archived = FALSE
-  `)
-
-  return rows.map((row) => {
-    return row.projectId
-  })
 }
 
 const getHasActiveProjectReviewServingGeneration = async (projectId: string) => {
@@ -3246,31 +2797,6 @@ const refreshProjectArticleServing = async (projectId: string, articleId: string
   return refreshProjectArticleMartsBatch(projectId, [articleId])
 }
 
-const refreshProjectsForArticle = async (projectIds: string[], articleId: string): Promise<void> => {
-  const [currentProjectId = ''] = projectIds
-
-  if (!currentProjectId) {
-    return
-  }
-
-  await refreshProjectScopeArticles(currentProjectId, [articleId])
-  await refreshProjectArticleServing(currentProjectId, articleId)
-  return refreshProjectsForArticle(projectIds.slice(1), articleId)
-}
-
-const refreshQueuedArticleTasks = async (articleIds: string[]): Promise<void> => {
-  const [currentArticleId = ''] = articleIds
-
-  if (!currentArticleId) {
-    return
-  }
-
-  await refreshJudgmentArticle(currentArticleId)
-  await refreshProjectsForArticle(await getImpactedProjectIdsForArticle(currentArticleId), currentArticleId)
-  setProcessingArticleRefreshes(articleIds.slice(1))
-  return refreshQueuedArticleTasks(articleIds.slice(1))
-}
-
 const refreshProject = async (projectId: string) => {
   await ensureReviewArticleRollupTable()
 
@@ -3329,196 +2855,22 @@ const refreshJudgmentFactsForArticles = async (articleIds: string[]): Promise<vo
   recordArticleRefreshCompletion()
 }
 
-const processQueuedMartRefreshPass = async (): Promise<boolean> => {
-  updateMartRefreshDebugSnapshot({
-    lastPassStartedAt: new Date().toISOString(),
-    passCount: martRefreshDebugSnapshot.passCount + 1,
-  })
-  const queuedArticleTasks = await getQueuedArticleTasks()
-  updateMartRefreshDebugSnapshot({lastQueuedTaskCount: queuedArticleTasks.length})
-
-  if (queuedArticleTasks.length === 0) {
-    const obsoleteProjectQueueRows = await pruneObsoleteProjectQueueRowsBatch()
-    const archivedProjectCleanup = obsoleteProjectQueueRows.hasMore
-      ? {deletedRowCount: 0}
-      : await purgeNextArchivedProjectMartBatch()
-    const hasMoreQueuedTasks = obsoleteProjectQueueRows.hasMore || archivedProjectCleanup.deletedRowCount > 0
-
-    updateMartRefreshDebugSnapshot({
-      lastHasMoreQueuedTasks: hasMoreQueuedTasks,
-      lastPassCompletedAt: new Date().toISOString(),
-    })
-    return hasMoreQueuedTasks
-  }
-
-  const claimedQueuedArticleIds = getUniqueValues(
-    queuedArticleTasks.map((task) => {
-      return task.articleId
-    }),
-  )
-
-  setClaimedQueuedRefreshes(claimedQueuedArticleIds, [])
-  await claimQueuedMaintenanceWorkTasks(queuedArticleTasks)
-
-  try {
-    await refreshQueuedArticleTasks(claimedQueuedArticleIds)
-    await completeQueuedTasks(queuedArticleTasks)
-
-    const hasMoreQueuedTasks = await getHasQueuedDrainableTasks()
-
-    updateMartRefreshDebugSnapshot({
-      lastHasMoreQueuedTasks: hasMoreQueuedTasks,
-      lastPassCompletedAt: new Date().toISOString(),
-    })
-    return hasMoreQueuedTasks
-  } catch (error) {
-    await failQueuedMaintenanceWorkTasks(queuedArticleTasks, error)
-    updateMartRefreshDebugSnapshot({
-      lastErrorAt: new Date().toISOString(),
-      lastErrorMessage: error instanceof Error ? error.message : String(error),
-    })
-    throw error
-  } finally {
-    resetMartRefreshProgressSnapshot()
-  }
-}
-
 const yieldToEventLoop = async (): Promise<void> => {
   await new Promise((resolve) => {
     setTimeout(resolve, martRefreshYieldDelayMs)
   })
 }
 
-const continueQueuedMartRefreshesAfterYield = async (): Promise<void> => {
-  await yieldToEventLoop()
-  return processQueuedMartRefreshesWithinBudget(Date.now() + martRefreshDrainBudgetMs)
-}
-
-const processQueuedMartRefreshesWithinBudget = async (deadlineMs: number): Promise<void> => {
-  const hasMoreQueuedTasks = await processQueuedMartRefreshPass()
-
-  if (!hasMoreQueuedTasks) {
-    return
-  }
-
-  return Date.now() >= deadlineMs
-    ? continueQueuedMartRefreshesAfterYield()
-    : processQueuedMartRefreshesWithinBudget(deadlineMs)
-}
-
-const _processQueuedMartRefreshes = async (): Promise<void> => {
-  return processQueuedMartRefreshesWithinBudget(Date.now() + martRefreshDrainBudgetMs)
-}
-
-const _scheduleQueuedMartRefreshes = (delayMs = martRefreshScheduleDelayMs) => {
-  if (martRefreshDrainTimer || martRefreshDrainPromise) {
-    return
-  }
-
-  martRefreshDrainTimer = setTimeout(() => {
-    martRefreshDrainTimer = null
-    void flushQueuedMartRefreshes().catch((error) => {
-      console.error('[duckdbMartRefresh] failed to process refresh queue', error)
-      _scheduleQueuedMartRefreshes(martRefreshRetryDelayMs)
-    })
-  }, delayMs)
-  updateMartRefreshDebugSnapshot({drainTimerActive: true})
-}
-
-export const flushQueuedMartRefreshes = async (): Promise<void> => {
-  if (martRefreshDrainTimer) {
-    clearTimeout(martRefreshDrainTimer)
-    martRefreshDrainTimer = null
-  }
-
-  if (martRefreshDrainPromise) {
-    return martRefreshDrainPromise
-  }
-
-  updateMartRefreshDebugSnapshot({
-    drainPromiseActive: true,
-    drainTimerActive: false,
-    flushInvocationCount: martRefreshDebugSnapshot.flushInvocationCount + 1,
-    lastFlushAt: new Date().toISOString(),
-  })
-
-  martRefreshDrainPromise = _processQueuedMartRefreshes().finally(() => {
-    martRefreshDrainPromise = null
-    updateMartRefreshDebugSnapshot({drainPromiseActive: false, drainTimerActive: martRefreshDrainTimer !== null})
-  })
-
-  return martRefreshDrainPromise
-}
-
-const recoverQueuedArchivedProjectRefresh = async (projectId: string) => {
-  if (!(await getProjectIsArchived(projectId))) {
-    throw new Error(`Queued archived-project recovery requires an archived project: ${projectId}`)
-  }
-
-  const workerId = getMartRefreshQueueWorkerId()
-
-  await getMaintenanceWorkLeaseService().claimMaintenanceWorkLease({
-    consumerId: workerId,
-    leaseMs: martRefreshQueueLeaseMs,
-    projectId,
-    recoveryMode: 'archived_project_mart_recovery',
-    requiredConsumerRole: 'maintenance-worker',
-    scopeKind: 'project',
-    workKind: 'review_index_archived_project_recovery',
-  })
-
-  setMartRefreshProgressSnapshot({
-    claimedQueuedArticleIds: [],
-    claimedQueuedProjectIds: [projectId],
-    processingArticleIds: [],
-    processingProjectIds: [projectId],
-  })
-
-  try {
-    await purgeArchivedProjectMartData(projectId)
-    await pruneProjectQueueRowsForProjects([projectId])
-    await getMaintenanceWorkLeaseService().completeMaintenanceWorkLease({
-      consumerId: workerId,
-      projectId,
-      scopeKind: 'project',
-      workKind: 'review_index_archived_project_recovery',
-    })
-    return {completedTaskCount: 1, projectId}
-  } catch (error) {
-    await getMaintenanceWorkLeaseService().failMaintenanceWorkLease({
-      consumerId: workerId,
-      leaseMs: martRefreshQueueLeaseMs,
-      projectId,
-      recoveryContext: {error: error instanceof Error ? error.message : String(error)},
-      recoveryMode: 'archived_project_mart_recovery',
-      requiredConsumerRole: 'maintenance-worker',
-      scopeKind: 'project',
-      workKind: 'review_index_archived_project_recovery',
-    })
-    throw error
-  } finally {
-    resetMartRefreshProgressSnapshot()
-  }
-}
-
 const duckdbMartRefreshService = {
-  ensureQueueSchema: ensureMartRefreshQueueSchema,
-  flush: flushQueuedMartRefreshes,
-  getQueuedArticleTasksSqlForTests: getQueuedArticleTasksSql,
-  isAutoDrainEnabled: isMartRefreshAutoDrainEnabled,
-  getDebugSnapshot: getMartRefreshDebugSnapshot,
-  getProgressSnapshot: getMartRefreshProgressSnapshot,
   getThroughputSnapshot: getMartRefreshThroughputSnapshot,
   hasActiveProjectReviewServingGeneration: getHasActiveProjectReviewServingGeneration,
   queueProjectLargeRebuild: async (projectId: string, reason: string) => {
     await queueProjectLargeRebuilds([projectId], reason)
   },
   queueProjectLargeRebuilds,
-  pruneProjectQueueRowsForProjects,
   purgeArchivedProjectMartData,
   purgeArchivedProjectMartDataBatch,
   purgeNextArchivedProjectMartBatch,
-  recoverQueuedArchivedProjectRefresh,
   refreshJudgmentArticle,
   refreshJudgmentFactsForArticles,
   refreshJudgmentFactsForProjectClaim,
@@ -3527,20 +2879,11 @@ const duckdbMartRefreshService = {
   refreshProjectArticleMartsBatch,
   refreshProjectArticleServing,
   refreshProjectArticleServingForArticles,
-  resetProgressSnapshotForTests: () => {
-    martRefreshQueueCompletedAtColumnReady = null
-    martRefreshQueueCompletedAtColumnVerified = false
-    martRefreshQueueGenerationColumnReady = null
-    martRefreshQueueGenerationColumnVerified = false
+  resetRuntimeStateForTests: () => {
     martRefreshReviewArticleRollupReady = null
     martRefreshReviewArticleRollupVerified = false
-    resetMartRefreshDebugSnapshot()
-    setMartRefreshAutoDrainEnabled(true)
-    resetMartRefreshProgressSnapshot()
     resetMartRefreshThroughputSnapshot()
   },
-  setAutoDrainEnabledForTests: setMartRefreshAutoDrainEnabled,
-  setProgressSnapshotForTests: setMartRefreshProgressSnapshot,
 }
 
 export const getDuckdbMartRefreshService = () => {

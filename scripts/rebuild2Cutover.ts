@@ -147,6 +147,26 @@ const getCount = async (runner: CutoverRunner, sql: string) => {
   return Number(row?.count ?? 0)
 }
 
+const getHasTable = async (runner: CutoverRunner, schemaName: string, tableName: string) => {
+  return (
+    (await getCount(
+      runner,
+      `
+        SELECT COUNT(*) AS count
+        FROM information_schema.tables
+        WHERE table_schema = ${getSqlLiteral(schemaName)}
+          AND table_name = ${getSqlLiteral(tableName)}
+      `,
+    )) > 0
+  )
+}
+
+const getOptionalTableCount = async (runner: CutoverRunner, schemaName: string, tableName: string) => {
+  return (await getHasTable(runner, schemaName, tableName))
+    ? getCount(runner, `SELECT COUNT(*) AS count FROM ${schemaName}.${tableName}`)
+    : 0
+}
+
 const ensureRebuild2CutoverFenceSchema = async (runner: CutoverRunner) => {
   await runner.run(`
     CREATE TABLE IF NOT EXISTS app.rebuild2_cutover_fence (
@@ -373,7 +393,7 @@ const getRebuild2CutoverProof = async (runner: CutoverRunner, ownerToken: string
       `,
     ),
     largeRebuildRows: await getCount(runner, 'SELECT COUNT(*) AS count FROM app.project_mart_large_rebuild_state'),
-    martRefreshQueueRows: await getCount(runner, 'SELECT COUNT(*) AS count FROM app.mart_refresh_queue'),
+    martRefreshQueueRows: await getOptionalTableCount(runner, 'app', 'mart_refresh_queue'),
     nonCutoverRefreshRows: await getCount(
       runner,
       `
@@ -577,7 +597,9 @@ const getLargeRebuildProjectIdsToRederive = async (runner: CutoverRunner) => {
 
 const clearObsoleteRebuild2State = async (runner: CutoverRunner, options: Rebuild2CutoverOptions) => {
   await assertOwnedRebuild2CutoverFence(runner, options)
-  await runner.run('DELETE FROM app.mart_refresh_queue')
+  if (await getHasTable(runner, 'app', 'mart_refresh_queue')) {
+    await runner.run('DELETE FROM app.mart_refresh_queue')
+  }
   await runner.run('DELETE FROM app.project_mart_refresh_article_quarantine')
   await runner.run('DELETE FROM app.project_mart_dirty_materialization_state')
   await runner.run('DELETE FROM app.project_mart_refresh_article_state')

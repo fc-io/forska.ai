@@ -102,11 +102,7 @@ export const duckdbOwnerConnectionsRoutes = new Elysia()
     return {
       data: {
         ...(await getDuckdbOwnerConnectionsOverview()),
-        martRefresh: {
-          ...getDuckdbMartRefreshService().getDebugSnapshot(),
-          progress: getDuckdbMartRefreshService().getProgressSnapshot(),
-          throughput: getDuckdbMartRefreshService().getThroughputSnapshot(),
-        },
+        martRefresh: {throughput: getDuckdbMartRefreshService().getThroughputSnapshot()},
       },
     }
   })

@@ -2,8 +2,6 @@ import {rmSync} from 'node:fs'
 
 import {expect, test} from 'bun:test'
 
-type MartRefreshServiceModule = typeof import('./getDuckdbMartRefreshService.ts')
-
 const removeFileIfExists = (filePath: string) => {
   rmSync(filePath, {force: true, recursive: true})
 }
@@ -1374,19 +1372,6 @@ test('mart refresh ignores obsolete queued project rebuild rows during drain', (
 
   expect(result.events).not.toContain('refresh:project-scope')
   expect(result.queueActive).toBe(false)
-})
-
-test('mart refresh task query orders by epoch(created_at) to avoid empty oldest-first reads', async () => {
-  const martRefreshServiceModulePath = new URL(
-    './src/server/services/getDuckdbMartRefreshService.ts',
-    'file://' + process.cwd() + '/',
-  ).pathname
-  const martRefreshServiceModule = (await import(
-    `${martRefreshServiceModulePath}?queued-sql=${Date.now()}`
-  )) as MartRefreshServiceModule
-  const martRefreshService = martRefreshServiceModule.getDuckdbMartRefreshService()
-
-  expect(martRefreshService.getQueuedArticleTasksSqlForTests()).toContain('ORDER BY EPOCH(created_at) ASC, id ASC')
 })
 
 test('mart refresh flush keeps article draining moving past archived project cleanup backlog', () => {

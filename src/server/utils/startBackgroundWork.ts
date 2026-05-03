@@ -1,13 +1,16 @@
 import {startDuckdbOwnerConnectionHeartbeat} from './duckdbOwnerConnectionHeartbeat.ts'
-import {startMartRefreshDrainHeartbeat} from './martRefreshDrainHeartbeat.ts'
+import {shouldCurrentRuntimeRunMartRefreshDrain} from './martRefreshDrainEligibility.ts'
+import {startProjectMartLargeRebuildHeartbeat} from './projectMartLargeRebuildHeartbeat.ts'
+import {startProjectMartRefreshWorkerHeartbeat} from './projectMartRefreshWorkerHeartbeat.ts'
 import {shouldCurrentServerRunMaintenanceLoops, startServerRuntimeRoleMonitor} from './serverRuntimeRole.ts'
 
 const startMaintenanceBackgroundWork = () => {
-  if (!shouldCurrentServerRunMaintenanceLoops()) {
+  if (!shouldCurrentServerRunMaintenanceLoops() || !shouldCurrentRuntimeRunMartRefreshDrain()) {
     return
   }
 
-  startMartRefreshDrainHeartbeat()
+  startProjectMartRefreshWorkerHeartbeat()
+  startProjectMartLargeRebuildHeartbeat()
 }
 
 export const startBackgroundWork = () => {
