@@ -237,6 +237,10 @@ export const getRequestAttemptLifecycleState = (
     return entry.outcome === 'success' ? 'completedRequest' : 'closedRequest'
   }
 
+  if (entry.closeoutKind === 'persistence') {
+    return 'persistingCompletion'
+  }
+
   if (entry.outcome === 'failure' && entry.finishedAt) {
     return 'closedRequest'
   }
@@ -841,6 +845,11 @@ export const withRequestAttemptManifestStage = ({
   requestAttempts: JudgmentRequestAttemptJsonEntry[]
 }): JudgmentRequestAttemptJsonEntry[] => {
   return requestAttempts.map((attempt) => {
-    return normalizeRequestAttemptEntry({...attempt, closeoutKind, durableCloseoutRef: null})
+    return normalizeRequestAttemptEntry({
+      ...attempt,
+      closeoutKind,
+      durableCloseoutRef: null,
+      lifecycleState: closeoutKind === 'persistence' ? 'persistingCompletion' : undefined,
+    })
   })
 }

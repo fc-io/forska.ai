@@ -14,6 +14,7 @@ import {
 import {
   compactClosedOutRequestAttemptManifestEntries,
   recordRequestAttemptsEnteringPersistence,
+  recordRequestAttemptsPersistenceFailure,
 } from '../../server/cron/judgmentsJobs/judgmentRequestAttemptManifestStore.ts'
 import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
 import {escapeSqlString} from '../../server/services/appQueryHelpers.ts'
@@ -26,6 +27,18 @@ export class JudgmentPersistenceError extends Error {
     super(message, options)
     this.name = 'JudgmentPersistenceError'
   }
+}
+
+const recordJudgmentPersistenceFailure = async ({
+  error,
+  requestAttempts,
+  subreason,
+}: {
+  error: unknown
+  requestAttempts: JudgmentRequestAttemptJsonEntry[]
+  subreason: string
+}): Promise<void> => {
+  await recordRequestAttemptsPersistenceFailure({error, requestAttempts, subreason})
 }
 
 const enqueueOwnerBackedCompletion = async ({
@@ -70,34 +83,40 @@ const enqueueOwnerBackedCompletion = async ({
   })
 
   await recordRequestAttemptsEnteringPersistence(requestAttempts)
-  await enqueueJudgeWorkerCompletion({
-    answeredOriginal,
-    answeredOriginalAsArray,
-    articleId: article.id,
-    chunkingStrategy,
-    claimId: claimIdentity.claimId,
-    confidenceOriginal: 50,
-    executionSnapshotHash: claimIdentity.executionSnapshotHash,
-    executionSnapshotId: claimIdentity.executionSnapshotId,
-    explanation: judgment.explanation || null,
-    isAnswered: true,
-    jobId: judgmentsJobId,
-    judgment,
-    judgmentId,
-    modelId,
-    projectId,
-    promptId,
-    queueRecordId,
-    quotes: judgment.quotes,
-    rawResponseJson: judgment,
-    requestAttempts: completionRequestAttempts,
-    status: 'judged',
-    useAbstract: contentSettings.useAbstract,
-    useFulltext: contentSettings.useFulltext,
-    useFulltextNoImages: contentSettings.useFulltextNoImages,
-    useTitle: contentSettings.useTitle,
-  })
-  await compactClosedOutRequestAttemptManifestEntries(completionRequestAttempts)
+
+  try {
+    await enqueueJudgeWorkerCompletion({
+      answeredOriginal,
+      answeredOriginalAsArray,
+      articleId: article.id,
+      chunkingStrategy,
+      claimId: claimIdentity.claimId,
+      confidenceOriginal: 50,
+      executionSnapshotHash: claimIdentity.executionSnapshotHash,
+      executionSnapshotId: claimIdentity.executionSnapshotId,
+      explanation: judgment.explanation || null,
+      isAnswered: true,
+      jobId: judgmentsJobId,
+      judgment,
+      judgmentId,
+      modelId,
+      projectId,
+      promptId,
+      queueRecordId,
+      quotes: judgment.quotes,
+      rawResponseJson: judgment,
+      requestAttempts: completionRequestAttempts,
+      status: 'judged',
+      useAbstract: contentSettings.useAbstract,
+      useFulltext: contentSettings.useFulltext,
+      useFulltextNoImages: contentSettings.useFulltextNoImages,
+      useTitle: contentSettings.useTitle,
+    })
+    await compactClosedOutRequestAttemptManifestEntries(completionRequestAttempts)
+  } catch (error) {
+    await recordJudgmentPersistenceFailure({error, requestAttempts, subreason: 'completion_outbox'})
+    throw error
+  }
 }
 
 export const storeSinglePromptJudgment = async ({
@@ -201,40 +220,46 @@ export const storeSinglePromptJudgment = async ({
         requestAttempts,
       })
       await recordRequestAttemptsEnteringPersistence(requestAttempts)
-      const persisted = await sqliteService.recordJudgmentSuccess(judgmentsJobId, {
-        answeredOriginal,
-        answeredOriginalAsArray: answeredOriginalAsArray ?? [],
-        articleId: article.id,
-        claimId: claimIdentity?.claimId,
-        chunkingStrategy,
-        confidenceOriginal: 50,
-        createdAt: new Date(),
-        explanation: answeredExplanation || null,
-        executionSnapshotHash: claimIdentity?.executionSnapshotHash,
-        executionSnapshotId: claimIdentity?.executionSnapshotId,
-        isAnswered: true,
-        judgmentId,
-        modelId,
-        projectId,
-        promptId,
-        queuePromptId: queueRecordId,
-        quotes: answeredQuotes,
-        rawResponseJson: judgment,
-        requestAttemptsJson: stringifyRequestAttempts(localRequestAttempts),
-        snapshotProjectId: snapshotValues.snapshotProjectId,
-        snapshotProjectModelName: snapshotValues.snapshotProjectModelName,
-        updatedAt: new Date(),
-        useAbstract,
-        useFulltext,
-        useFulltextNoImages,
-        useTitle,
-      })
 
-      if (persisted === null) {
-        throw new Error('SQLite judgment job database is unavailable')
+      try {
+        const persisted = await sqliteService.recordJudgmentSuccess(judgmentsJobId, {
+          answeredOriginal,
+          answeredOriginalAsArray: answeredOriginalAsArray ?? [],
+          articleId: article.id,
+          claimId: claimIdentity?.claimId,
+          chunkingStrategy,
+          confidenceOriginal: 50,
+          createdAt: new Date(),
+          explanation: answeredExplanation || null,
+          executionSnapshotHash: claimIdentity?.executionSnapshotHash,
+          executionSnapshotId: claimIdentity?.executionSnapshotId,
+          isAnswered: true,
+          judgmentId,
+          modelId,
+          projectId,
+          promptId,
+          queuePromptId: queueRecordId,
+          quotes: answeredQuotes,
+          rawResponseJson: judgment,
+          requestAttemptsJson: stringifyRequestAttempts(localRequestAttempts),
+          snapshotProjectId: snapshotValues.snapshotProjectId,
+          snapshotProjectModelName: snapshotValues.snapshotProjectModelName,
+          updatedAt: new Date(),
+          useAbstract,
+          useFulltext,
+          useFulltextNoImages,
+          useTitle,
+        })
+
+        if (persisted === null) {
+          throw new Error('SQLite judgment job database is unavailable')
+        }
+
+        await compactClosedOutRequestAttemptManifestEntries(localRequestAttempts)
+      } catch (error) {
+        await recordJudgmentPersistenceFailure({error, requestAttempts, subreason: 'judgment_outbox'})
+        throw error
       }
-
-      await compactClosedOutRequestAttemptManifestEntries(localRequestAttempts)
     } catch (error) {
       throw new JudgmentPersistenceError(`Failed to persist SQLite judgment for ${article.id}:${promptId}`, {
         cause: error,

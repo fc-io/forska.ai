@@ -9,7 +9,7 @@ import {
 } from './judgmentRequestAttemptManifest.ts'
 import {
   getJudgmentRequestStats,
-  markJudgmentRequestsPersisted,
+  markJudgmentRequestAttemptsPersisted,
   resetJudgmentRequestRuntimeForTests,
   withJudgmentRequest,
 } from './judgmentsRequestRuntime.ts'
@@ -75,9 +75,32 @@ test('withJudgmentRequest exposes exact request attempt context', async () => {
   expect(seenAttempts[0]).toMatch(/[0-9a-f-]{36}/)
   expect(getJudgmentRequestStats(jobId)).toEqual({inFlight: 0, pendingPersistedAttempts: 1})
 
-  markJudgmentRequestsPersisted(jobId, 1)
+  markJudgmentRequestAttemptsPersisted(jobId, seenAttempts)
 
   expect(getJudgmentRequestStats(jobId)).toEqual({inFlight: 0, pendingPersistedAttempts: 0})
+})
+
+test('persistence-stage attempts stay persisting even after request failure', () => {
+  const persistingFailure = mutateRequestAttemptManifestEntries({
+    currentEntries: [baseManifestAttempt],
+    mutation: {
+      mergeEntries: [
+        {
+          ...baseManifestAttempt,
+          closeoutKind: 'persistence',
+          error: 'duckdb down',
+          finishedAt: '2026-05-03T12:00:02.000Z',
+          outcome: 'failure',
+          persistenceSubreason: 'token_use',
+        },
+      ],
+    },
+  })
+  const [entry] = persistingFailure
+
+  expect(entry?.lifecycleState).toBe('persistingCompletion')
+  expect(entry?.persistenceSubreason).toBe('token_use')
+  expect(entry?.error).toBe('duckdb down')
 })
 
 test('manifest merge preserves sibling attempts and compacts only durable closeout entries', () => {

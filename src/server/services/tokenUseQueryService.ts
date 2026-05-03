@@ -192,6 +192,167 @@ const getInsertTokenUseValues = (values: Record<string, unknown>) => {
   return existingId.length > 0 ? values : {...values, id: crypto.randomUUID()}
 }
 
+const tokenUseInsertColumnValueGetters: Record<string, (row: TokenUseRecord) => unknown> = {
+  created_at: (row) => {
+    return row.createdAt
+  },
+  dp_size: (row) => {
+    return row.dpSize
+  },
+  duration: (row) => {
+    return row.duration
+  },
+  failed_requests: (row) => {
+    return row.failedRequests
+  },
+  failed_requests_details: (row) => {
+    return row.failedRequestsDetails
+  },
+  finished_at: (row) => {
+    return row.finishedAt
+  },
+  gpu_gpus_per_node: (row) => {
+    return row.gpuGpusPerNode
+  },
+  gpu_nnodes: (row) => {
+    return row.gpuNnodes
+  },
+  gpu_shape: (row) => {
+    return row.gpuShape
+  },
+  gpu_total_gpus: (row) => {
+    return row.gpuTotalGpus
+  },
+  has_failed_requests: (row) => {
+    return row.hasFailedRequests
+  },
+  id: (row) => {
+    return row.id
+  },
+  judgment_job_id: (row) => {
+    return row.judgmentsJobId
+  },
+  request_attempts_json: (row) => {
+    return row.requestAttemptsJson
+  },
+  requests: (row) => {
+    return row.requests
+  },
+  sglang_max_running_requests: (row) => {
+    return row.sglangMaxRunningRequests
+  },
+  sglang_model: (row) => {
+    return row.sglangModel
+  },
+  started_at: (row) => {
+    return row.startedAt
+  },
+  successful_requests: (row) => {
+    return row.successfulRequests
+  },
+  total_completion_tokens: (row) => {
+    return row.totalCompletionTokens
+  },
+  total_failed_completion_tokens: (row) => {
+    return row.totalFailedCompletionTokens
+  },
+  total_failed_prompt_tokens: (row) => {
+    return row.totalFailedPromptTokens
+  },
+  total_failed_tokens: (row) => {
+    return row.totalFailedTokens
+  },
+  total_prompt_tokens: (row) => {
+    return row.totalPromptTokens
+  },
+  total_success_completion_tokens: (row) => {
+    return row.totalSuccessCompletionTokens
+  },
+  total_success_prompt_tokens: (row) => {
+    return row.totalSuccessPromptTokens
+  },
+  total_success_tokens: (row) => {
+    return row.totalSuccessTokens
+  },
+  total_tokens: (row) => {
+    return row.totalTokens
+  },
+  tp_size: (row) => {
+    return row.tpSize
+  },
+  updated_at: (row) => {
+    return row.updatedAt
+  },
+}
+
+const tokenUseJsonColumns = new Set(['failed_requests_details', 'request_attempts_json'])
+const tokenUseTimestampColumns = new Set(['created_at', 'finished_at', 'started_at', 'updated_at'])
+
+const getStableJsonValue = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((entry) => {
+      return getStableJsonValue(entry)
+    })
+  }
+
+  if (value && typeof value === 'object' && !(value instanceof Date)) {
+    return Object.keys(value)
+      .sort()
+      .reduce<Record<string, unknown>>((stableValue, key) => {
+        return {...stableValue, [key]: getStableJsonValue((value as Record<string, unknown>)[key])}
+      }, {})
+  }
+
+  return value instanceof Date ? value.toISOString() : value
+}
+
+const getTokenUseComparableValue = (column: string, value: unknown): string => {
+  if (tokenUseTimestampColumns.has(column)) {
+    return getDateValue(value)?.toISOString() ?? 'null'
+  }
+
+  if (tokenUseJsonColumns.has(column)) {
+    return JSON.stringify(getStableJsonValue(getJsonValue(value)) ?? null)
+  }
+
+  return value === null || value === undefined
+    ? 'null'
+    : typeof value === 'string'
+      ? value
+      : typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint'
+        ? String(value)
+        : JSON.stringify(getStableJsonValue(value))
+}
+
+const getTokenUseConflictMismatch = (
+  existingRow: TokenUseRecord,
+  insertValues: Record<string, unknown>,
+): string | null => {
+  return Object.keys(insertValues).reduce<string | null>((mismatch, column) => {
+    const getExistingValue = tokenUseInsertColumnValueGetters[column]
+
+    if (mismatch || !getExistingValue) {
+      return mismatch
+    }
+
+    const existingValue = getTokenUseComparableValue(column, getExistingValue(existingRow))
+    const incomingValue = getTokenUseComparableValue(column, insertValues[column])
+
+    return existingValue === incomingValue ? null : column
+  }, null)
+}
+
+const assertTokenUseIdempotentConflictMatches = (
+  existingRow: TokenUseRecord,
+  insertValues: Record<string, unknown>,
+): void => {
+  const mismatch = getTokenUseConflictMismatch(existingRow, insertValues)
+
+  if (mismatch) {
+    throw new Error(`token use idempotency conflict for ${existingRow.id}: ${mismatch} mismatch`)
+  }
+}
+
 const insertTokenUse = async (values: Record<string, unknown>) => {
   const insertValues = getInsertTokenUseValues(values)
   const columns = Object.keys(insertValues)
@@ -234,7 +395,14 @@ const insertTokenUseOnce = async (values: Record<string, unknown>) => {
     LIMIT 1
   `)
 
-  return existingRow ? getTokenUseValue(existingRow) : null
+  if (!existingRow) {
+    return null
+  }
+
+  const existingValue = getTokenUseValue(existingRow)
+  assertTokenUseIdempotentConflictMatches(existingValue, insertValues)
+
+  return existingValue
 }
 
 const getLargestSingleRequestRows = async (orderColumn: 'total_prompt_tokens' | 'total_completion_tokens') => {

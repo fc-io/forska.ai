@@ -7,8 +7,9 @@ import {
 import {
   compactClosedOutRequestAttemptManifestEntries,
   recordRequestAttemptsEnteringPersistence,
+  recordRequestAttemptsPersistenceFailure,
 } from '../../server/cron/judgmentsJobs/judgmentRequestAttemptManifestStore.ts'
-import {markJudgmentRequestsPersisted} from '../../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
+import {markJudgmentRequestAttemptsClosed} from '../../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {getTokenUseQueryService} from '../../server/services/tokenUseQueryService.ts'
 import {parseDuckdbMemoryLimitToMiB} from '../../server/utils/duckdbMemoryLimit.ts'
 import {inferenceRuntimeConfig} from '../../server/utils/getInferenceRuntimeConfig.ts'
@@ -193,13 +194,31 @@ const getRequestAttemptEntries = ({
   return withDurableCloseoutRef({closeoutKind, ref: {id: durableRefId ?? null, jobId: judgmentsJobId}, requestAttempts})
 }
 
+const getRequestAttemptIds = (requestAttempts: JudgmentRequestAttemptJsonEntry[]): string[] => {
+  return requestAttempts.map((entry) => {
+    return entry.requestAttemptId
+  })
+}
+
+const recordTokenUsePersistenceFailure = async ({
+  error,
+  requestAttempts,
+  subreason,
+}: {
+  error: unknown
+  requestAttempts: JudgmentRequestAttemptJsonEntry[]
+  subreason: string
+}): Promise<void> => {
+  await recordRequestAttemptsPersistenceFailure({error, requestAttempts, subreason})
+}
+
 const storeTokenUseDirectly = async (
   totalTokenUse: TokenUseTotals,
   tokenUseEntries: JudgeTokenUsageEntry[],
   _sessionId: string | null,
   {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
   judgmentsJobId?: string,
-): Promise<void> => {
+): Promise<JudgmentRequestAttemptJsonEntry[]> => {
   const tokenUseId = crypto.randomUUID()
   const requestAttempts = getRequestAttemptEntries({
     closeoutKind: 'token_use',
@@ -210,43 +229,51 @@ const storeTokenUseDirectly = async (
     tokenUseEntries,
   })
   await recordRequestAttemptsEnteringPersistence(requestAttempts)
-  const result = await getTokenUseQueryService().insertTokenUse({
-    id: tokenUseId,
-    judgment_job_id: judgmentsJobId ?? null,
-    gpu_nnodes: inferenceRuntimeConfig.gpuNnodes,
-    gpu_gpus_per_node: inferenceRuntimeConfig.gpuGpusPerNode,
-    gpu_total_gpus: inferenceRuntimeConfig.gpuTotalGpus,
-    tp_size: inferenceRuntimeConfig.tpSize,
-    dp_size: inferenceRuntimeConfig.dpSize,
-    gpu_shape: inferenceRuntimeConfig.gpuShape,
-    sglang_max_running_requests: inferenceRuntimeConfig.sglangMaxRunningRequests,
-    sglang_model: totalTokenUse.modelName,
-    requests: totalTokenUse.totalRequests,
-    total_prompt_tokens: totalTokenUse.totalPromptTokens,
-    total_completion_tokens: totalTokenUse.totalCompletionTokens,
-    total_tokens: totalTokenUse.totalTokens,
-    successful_requests: totalTokenUse.successfulRequests,
-    failed_requests: totalTokenUse.failedRequests,
-    has_failed_requests: totalTokenUse.hasFailedRequests,
-    failed_requests_details:
-      totalTokenUse.failedRequestsDetails.length > 0 ? totalTokenUse.failedRequestsDetails : null,
-    total_success_prompt_tokens: totalTokenUse.totalSuccessPromptTokens,
-    total_success_completion_tokens: totalTokenUse.totalSuccessCompletionTokens,
-    total_success_tokens: totalTokenUse.totalSuccessTokens,
-    total_failed_prompt_tokens: totalTokenUse.totalFailedPromptTokens,
-    total_failed_completion_tokens: totalTokenUse.totalFailedCompletionTokens,
-    total_failed_tokens: totalTokenUse.totalFailedTokens,
-    request_attempts_json: stringifyRequestAttempts(requestAttempts),
-    started_at: new Date(startedAt),
-    finished_at: new Date(finishedAt),
-    duration: Math.round(duration),
-  })
 
-  if (!result) {
-    throw new Error('Failed to store token usage in database')
+  try {
+    const result = await getTokenUseQueryService().insertTokenUse({
+      id: tokenUseId,
+      judgment_job_id: judgmentsJobId ?? null,
+      gpu_nnodes: inferenceRuntimeConfig.gpuNnodes,
+      gpu_gpus_per_node: inferenceRuntimeConfig.gpuGpusPerNode,
+      gpu_total_gpus: inferenceRuntimeConfig.gpuTotalGpus,
+      tp_size: inferenceRuntimeConfig.tpSize,
+      dp_size: inferenceRuntimeConfig.dpSize,
+      gpu_shape: inferenceRuntimeConfig.gpuShape,
+      sglang_max_running_requests: inferenceRuntimeConfig.sglangMaxRunningRequests,
+      sglang_model: totalTokenUse.modelName,
+      requests: totalTokenUse.totalRequests,
+      total_prompt_tokens: totalTokenUse.totalPromptTokens,
+      total_completion_tokens: totalTokenUse.totalCompletionTokens,
+      total_tokens: totalTokenUse.totalTokens,
+      successful_requests: totalTokenUse.successfulRequests,
+      failed_requests: totalTokenUse.failedRequests,
+      has_failed_requests: totalTokenUse.hasFailedRequests,
+      failed_requests_details:
+        totalTokenUse.failedRequestsDetails.length > 0 ? totalTokenUse.failedRequestsDetails : null,
+      total_success_prompt_tokens: totalTokenUse.totalSuccessPromptTokens,
+      total_success_completion_tokens: totalTokenUse.totalSuccessCompletionTokens,
+      total_success_tokens: totalTokenUse.totalSuccessTokens,
+      total_failed_prompt_tokens: totalTokenUse.totalFailedPromptTokens,
+      total_failed_completion_tokens: totalTokenUse.totalFailedCompletionTokens,
+      total_failed_tokens: totalTokenUse.totalFailedTokens,
+      request_attempts_json: stringifyRequestAttempts(requestAttempts),
+      started_at: new Date(startedAt),
+      finished_at: new Date(finishedAt),
+      duration: Math.round(duration),
+    })
+
+    if (!result) {
+      throw new Error('Failed to store token usage in database')
+    }
+
+    await compactClosedOutRequestAttemptManifestEntries(requestAttempts)
+
+    return requestAttempts
+  } catch (error) {
+    await recordTokenUsePersistenceFailure({error, requestAttempts, subreason: 'token_use'})
+    throw error
   }
-
-  await compactClosedOutRequestAttemptManifestEntries(requestAttempts)
 }
 
 const storeTokenUseViaAPI = async (
@@ -254,7 +281,7 @@ const storeTokenUseViaAPI = async (
   tokenUseEntries: JudgeTokenUsageEntry[],
   judgmentsJobId: string,
   {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
-): Promise<void> => {
+): Promise<JudgmentRequestAttemptJsonEntry[]> => {
   const requestAttempts = getRequestAttemptEntries({
     closeoutKind: 'owner_token_use_body',
     finishedAt,
@@ -263,45 +290,53 @@ const storeTokenUseViaAPI = async (
     tokenUseEntries,
   })
   await recordRequestAttemptsEnteringPersistence(requestAttempts)
-  const response = await apiClient.api.tokens.usage.post({
-    judgmentsJobId,
-    sglangModel: totalTokenUse.modelName ?? undefined,
-    requests: totalTokenUse.totalRequests,
-    totalPromptTokens: totalTokenUse.totalPromptTokens,
-    totalCompletionTokens: totalTokenUse.totalCompletionTokens,
-    totalTokens: totalTokenUse.totalTokens,
-    successfulRequests: totalTokenUse.successfulRequests,
-    failedRequests: totalTokenUse.failedRequests,
-    hasFailedRequests: totalTokenUse.hasFailedRequests,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
-    failedRequestsDetails: totalTokenUse.failedRequestsDetails as any,
-    totalSuccessPromptTokens: totalTokenUse.totalSuccessPromptTokens,
-    totalSuccessCompletionTokens: totalTokenUse.totalSuccessCompletionTokens,
-    totalSuccessTokens: totalTokenUse.totalSuccessTokens,
-    totalFailedPromptTokens: totalTokenUse.totalFailedPromptTokens,
-    totalFailedCompletionTokens: totalTokenUse.totalFailedCompletionTokens,
-    totalFailedTokens: totalTokenUse.totalFailedTokens,
-    requestAttempts,
-    startedAt,
-    finishedAt,
-    duration: Math.round(duration),
-  })
 
-  if (response.error || response.data?.error) {
-    const errorMessage = 'Failed to store token use: API request failed'
-    console.error(new Error(errorMessage))
-    throw new Error(errorMessage)
+  try {
+    const response = await apiClient.api.tokens.usage.post({
+      judgmentsJobId,
+      sglangModel: totalTokenUse.modelName ?? undefined,
+      requests: totalTokenUse.totalRequests,
+      totalPromptTokens: totalTokenUse.totalPromptTokens,
+      totalCompletionTokens: totalTokenUse.totalCompletionTokens,
+      totalTokens: totalTokenUse.totalTokens,
+      successfulRequests: totalTokenUse.successfulRequests,
+      failedRequests: totalTokenUse.failedRequests,
+      hasFailedRequests: totalTokenUse.hasFailedRequests,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment
+      failedRequestsDetails: totalTokenUse.failedRequestsDetails as any,
+      totalSuccessPromptTokens: totalTokenUse.totalSuccessPromptTokens,
+      totalSuccessCompletionTokens: totalTokenUse.totalSuccessCompletionTokens,
+      totalSuccessTokens: totalTokenUse.totalSuccessTokens,
+      totalFailedPromptTokens: totalTokenUse.totalFailedPromptTokens,
+      totalFailedCompletionTokens: totalTokenUse.totalFailedCompletionTokens,
+      totalFailedTokens: totalTokenUse.totalFailedTokens,
+      requestAttempts,
+      startedAt,
+      finishedAt,
+      duration: Math.round(duration),
+    })
+
+    if (response.error || response.data?.error) {
+      const errorMessage = 'Failed to store token use: API request failed'
+      console.error(new Error(errorMessage))
+      throw new Error(errorMessage)
+    }
+
+    const data = response.data as {success: boolean; error?: string} | undefined
+
+    if (!data?.success) {
+      const errorMessage = data?.error || 'Failed to store token use'
+      console.error(new Error(errorMessage))
+      throw new Error(errorMessage)
+    }
+
+    await compactClosedOutRequestAttemptManifestEntries(requestAttempts)
+
+    return requestAttempts
+  } catch (error) {
+    await recordTokenUsePersistenceFailure({error, requestAttempts, subreason: 'owner_token_use_body'})
+    throw error
   }
-
-  const data = response.data as {success: boolean; error?: string} | undefined
-
-  if (!data?.success) {
-    const errorMessage = data?.error || 'Failed to store token use'
-    console.error(new Error(errorMessage))
-    throw new Error(errorMessage)
-  }
-
-  await compactClosedOutRequestAttemptManifestEntries(requestAttempts)
 }
 
 const storeTokenUseInJudgeWorkerCompletionOutbox = async (
@@ -309,11 +344,11 @@ const storeTokenUseInJudgeWorkerCompletionOutbox = async (
   tokenUseEntries: JudgeTokenUsageEntry[],
   judgmentsJobId: string,
   {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
-): Promise<void> => {
+): Promise<JudgmentRequestAttemptJsonEntry[]> => {
   const firstEntry = tokenUseEntries[0]
 
   if (!firstEntry) {
-    return
+    return []
   }
 
   const requestAttempts = getRequestAttemptEntries({
@@ -325,43 +360,53 @@ const storeTokenUseInJudgeWorkerCompletionOutbox = async (
   })
 
   await recordRequestAttemptsEnteringPersistence(requestAttempts)
-  const attached = await attachTokenUseToPendingJudgeWorkerCompletion({
-    articleId: firstEntry.articleId,
-    jobId: judgmentsJobId,
-    promptIds: firstEntry.promptIds,
-    requestAttempts,
-    tokenUse: {
-      dpSize: inferenceRuntimeConfig.dpSize,
-      duration,
-      failedRequests: totalTokenUse.failedRequests,
-      failedRequestsDetails: totalTokenUse.failedRequestsDetails,
-      finishedAt,
-      gpuGpusPerNode: inferenceRuntimeConfig.gpuGpusPerNode,
-      gpuNnodes: inferenceRuntimeConfig.gpuNnodes,
-      gpuShape: inferenceRuntimeConfig.gpuShape,
-      gpuTotalGpus: inferenceRuntimeConfig.gpuTotalGpus,
-      hasFailedRequests: totalTokenUse.hasFailedRequests,
-      modelName: totalTokenUse.modelName,
-      sglangMaxRunningRequests: inferenceRuntimeConfig.sglangMaxRunningRequests,
-      startedAt,
-      successfulRequests: totalTokenUse.successfulRequests,
-      tpSize: inferenceRuntimeConfig.tpSize,
-      totalCompletionTokens: totalTokenUse.totalCompletionTokens,
-      totalFailedCompletionTokens: totalTokenUse.totalFailedCompletionTokens,
-      totalFailedPromptTokens: totalTokenUse.totalFailedPromptTokens,
-      totalFailedTokens: totalTokenUse.totalFailedTokens,
-      totalPromptTokens: totalTokenUse.totalPromptTokens,
-      totalRequests: totalTokenUse.totalRequests,
-      totalSuccessCompletionTokens: totalTokenUse.totalSuccessCompletionTokens,
-      totalSuccessPromptTokens: totalTokenUse.totalSuccessPromptTokens,
-      totalSuccessTokens: totalTokenUse.totalSuccessTokens,
-      totalTokens: totalTokenUse.totalTokens,
-      requestAttempts,
-    },
-  })
 
-  if (attached) {
+  try {
+    const attached = await attachTokenUseToPendingJudgeWorkerCompletion({
+      articleId: firstEntry.articleId,
+      jobId: judgmentsJobId,
+      promptIds: firstEntry.promptIds,
+      requestAttempts,
+      tokenUse: {
+        dpSize: inferenceRuntimeConfig.dpSize,
+        duration,
+        failedRequests: totalTokenUse.failedRequests,
+        failedRequestsDetails: totalTokenUse.failedRequestsDetails,
+        finishedAt,
+        gpuGpusPerNode: inferenceRuntimeConfig.gpuGpusPerNode,
+        gpuNnodes: inferenceRuntimeConfig.gpuNnodes,
+        gpuShape: inferenceRuntimeConfig.gpuShape,
+        gpuTotalGpus: inferenceRuntimeConfig.gpuTotalGpus,
+        hasFailedRequests: totalTokenUse.hasFailedRequests,
+        modelName: totalTokenUse.modelName,
+        sglangMaxRunningRequests: inferenceRuntimeConfig.sglangMaxRunningRequests,
+        startedAt,
+        successfulRequests: totalTokenUse.successfulRequests,
+        tpSize: inferenceRuntimeConfig.tpSize,
+        totalCompletionTokens: totalTokenUse.totalCompletionTokens,
+        totalFailedCompletionTokens: totalTokenUse.totalFailedCompletionTokens,
+        totalFailedPromptTokens: totalTokenUse.totalFailedPromptTokens,
+        totalFailedTokens: totalTokenUse.totalFailedTokens,
+        totalPromptTokens: totalTokenUse.totalPromptTokens,
+        totalRequests: totalTokenUse.totalRequests,
+        totalSuccessCompletionTokens: totalTokenUse.totalSuccessCompletionTokens,
+        totalSuccessPromptTokens: totalTokenUse.totalSuccessPromptTokens,
+        totalSuccessTokens: totalTokenUse.totalSuccessTokens,
+        totalTokens: totalTokenUse.totalTokens,
+        requestAttempts,
+      },
+    })
+
+    if (!attached) {
+      throw new Error('Failed to attach token use to pending judge-worker completion')
+    }
+
     await compactClosedOutRequestAttemptManifestEntries(requestAttempts)
+
+    return requestAttempts
+  } catch (error) {
+    await recordTokenUsePersistenceFailure({error, requestAttempts, subreason: 'pending_token_use'})
+    throw error
   }
 }
 
@@ -568,18 +613,26 @@ export const judgeStoreTokenUse = async (
   judgmentsJobId: string,
 ): Promise<void> => {
   const totalTokenUse = buildTokenUseTotals(tokenUseEntries)
+  const persistedRequestAttempts =
+    isServerEnvironment() && shouldJournalTokenUseWithCompletion()
+      ? await storeTokenUseInJudgeWorkerCompletionOutbox(totalTokenUse, tokenUseEntries, judgmentsJobId, {
+          startedAt,
+          finishedAt,
+          duration,
+        })
+      : isServerEnvironment() && !shouldSkipTokenUsePersistence()
+        ? await storeTokenUseDirectly(
+            totalTokenUse,
+            tokenUseEntries,
+            null,
+            {startedAt, finishedAt, duration},
+            judgmentsJobId,
+          )
+        : !isServerEnvironment()
+          ? await storeTokenUseViaAPI(totalTokenUse, tokenUseEntries, judgmentsJobId, {startedAt, finishedAt, duration})
+          : []
 
-  if (isServerEnvironment() && shouldJournalTokenUseWithCompletion()) {
-    await storeTokenUseInJudgeWorkerCompletionOutbox(totalTokenUse, tokenUseEntries, judgmentsJobId, {
-      startedAt,
-      finishedAt,
-      duration,
-    })
-  } else if (isServerEnvironment() && !shouldSkipTokenUsePersistence()) {
-    await storeTokenUseDirectly(totalTokenUse, tokenUseEntries, null, {startedAt, finishedAt, duration}, judgmentsJobId)
-  } else if (!isServerEnvironment()) {
-    await storeTokenUseViaAPI(totalTokenUse, tokenUseEntries, judgmentsJobId, {startedAt, finishedAt, duration})
+  if (persistedRequestAttempts.length > 0) {
+    markJudgmentRequestAttemptsClosed(judgmentsJobId, getRequestAttemptIds(persistedRequestAttempts))
   }
-
-  markJudgmentRequestsPersisted(judgmentsJobId, totalTokenUse.totalRequests)
 }

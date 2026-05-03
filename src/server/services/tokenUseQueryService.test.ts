@@ -112,6 +112,44 @@ test('insertTokenUse generates an id when one is not provided', async () => {
   expect(Number(row?.totalTokens ?? 0)).toBe(15)
 })
 
+test('insertTokenUseOnce reloads matching conflicts and rejects durable mismatches', async () => {
+  if (!tokenUseQueryService) {
+    throw new Error('Token use query service not initialized')
+  }
+
+  const values = {
+    id: 'idempotent-token-use-1',
+    judgment_job_id: null,
+    requests: 1,
+    total_prompt_tokens: 10,
+    total_completion_tokens: 5,
+    total_tokens: 15,
+    request_attempts_json: JSON.stringify([{requestAttemptId: 'attempt-a', providerKey: 'provider-a'}]),
+    started_at: new Date('2026-05-03T12:00:00.000Z'),
+    finished_at: new Date('2026-05-03T12:00:01.000Z'),
+    duration: 1000,
+  }
+
+  const inserted = await tokenUseQueryService.insertTokenUseOnce(values)
+  const replayed = await tokenUseQueryService.insertTokenUseOnce(values)
+
+  expect(inserted?.id).toBe('idempotent-token-use-1')
+  expect(replayed?.id).toBe('idempotent-token-use-1')
+  const mismatchError = await tokenUseQueryService.insertTokenUseOnce({...values, total_tokens: 16}).then(
+    () => {
+      return null
+    },
+    (error: unknown) => {
+      return error
+    },
+  )
+
+  expect(mismatchError).toBeInstanceOf(Error)
+  expect(mismatchError instanceof Error ? mismatchError.message : '').toBe(
+    'token use idempotency conflict for idempotent-token-use-1: total_tokens mismatch',
+  )
+})
+
 test('getFailedRequestById keeps failed request detail objects readable', async () => {
   const failedRequest = await getStoredFailedRequestDetails([buildFailedRequestDetail(['prompt-1'])])
   const firstDetail = Array.isArray(failedRequest?.failedRequestsDetails)

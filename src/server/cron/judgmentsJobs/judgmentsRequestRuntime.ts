@@ -818,17 +818,6 @@ export const markJudgmentRequestAttemptsClosed = (judgmentsJobId: string, reques
   markJudgmentRequestAttemptsPersisted(judgmentsJobId, requestAttemptIds)
 }
 
-export const markJudgmentRequestsPersisted = (judgmentsJobId: string, count: number): void => {
-  const state = getJobRequestState(judgmentsJobId)
-  Array.from(state.pendingRequestAttemptIds)
-    .slice(0, Math.max(0, count))
-    .reduce((currentState, requestAttemptId) => {
-      currentState.pendingRequestAttemptIds.delete(requestAttemptId)
-      return currentState
-    }, state)
-  trimJobRequestState(judgmentsJobId)
-}
-
 export const withJudgmentRequest = async <T>(
   {
     judgmentsJobId,

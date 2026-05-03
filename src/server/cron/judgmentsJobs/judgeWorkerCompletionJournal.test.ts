@@ -20,8 +20,9 @@ const originalEnv = {
   SERVER_DUCKDB_OWNER_URL: process.env.SERVER_DUCKDB_OWNER_URL,
   SERVER_ROLE: process.env.SERVER_ROLE,
 }
+const originalFetch = globalThis.fetch
 const testDirectories: string[] = []
-const testServers: Array<ReturnType<typeof globalThis.Bun.serve>> = []
+type OwnerFetchHandler = (request: Request) => Promise<Response> | Response
 type CompletionOutboxTestRow = {
   ackedAt: string | null
   lastError: string | null
@@ -72,19 +73,20 @@ const createTokenUse = () => {
   }
 }
 
-const setupJournalTest = (handler: Parameters<typeof globalThis.Bun.serve>[0]['fetch']) => {
+const setupJournalTest = (handler: OwnerFetchHandler) => {
   const testDirectory = mkdtempSync(join(tmpdir(), 'f1-judge-worker-journal-'))
   const journalPath = join(testDirectory, 'journal.sqlite')
-  const server = globalThis.Bun.serve({fetch: handler, port: 0})
 
   testDirectories.push(testDirectory)
-  testServers.push(server)
+  globalThis.fetch = async (input, init) => {
+    return handler(new Request(input, init))
+  }
   process.env.API_SERVER_PORT = '3001'
   process.env.JUDGE_WORKER_JOURNAL_PATH = journalPath
-  process.env.SERVER_DUCKDB_OWNER_URL = `http://127.0.0.1:${server.port}`
+  process.env.SERVER_DUCKDB_OWNER_URL = 'http://owner.test'
   process.env.SERVER_ROLE = 'judge-worker'
 
-  return {journalPath, server}
+  return {journalPath}
 }
 
 const getCompletionOutboxRow = (journalPath: string, claimId: string) => {
@@ -106,11 +108,7 @@ const getCompletionOutboxRow = (journalPath: string, claimId: string) => {
 
 afterEach(async () => {
   resetJudgeWorkerCompletionJournalForTests()
-  await Promise.all(
-    testServers.splice(0, testServers.length).map((server) => {
-      return server.stop(true)
-    }),
-  )
+  globalThis.fetch = originalFetch
   testDirectories.splice(0, testDirectories.length).forEach((directory) => {
     rmSync(directory, {force: true, recursive: true})
   })

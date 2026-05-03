@@ -25,6 +25,12 @@ type RequestAttemptStageInput = {
   startedAt?: string | null
 }
 
+type RequestAttemptPersistenceFailureInput = {
+  error: unknown
+  requestAttempts: JudgmentRequestAttemptJsonEntry[]
+  subreason: string
+}
+
 const getOwnerKey = (owner: JudgmentRequestAttemptManifestOwner): string => {
   return owner.kind === 'accepted_claim' ? `claim:${owner.claimId}` : `prompt:${owner.jobId}:${owner.queueRecordId}`
 }
@@ -143,6 +149,29 @@ export const recordRequestAttemptsEnteringPersistence = async (
     groupRequestAttemptsByManifestOwner(
       withRequestAttemptManifestStage({closeoutKind: 'persistence', requestAttempts}),
     ).map(({entries, owner}) => {
+      return mutateOwnerManifest(owner, {mergeEntries: entries})
+    }),
+  )
+}
+
+const getPersistenceFailureMessage = (error: unknown): string => {
+  return error instanceof Error ? error.message : String(error)
+}
+
+export const recordRequestAttemptsPersistenceFailure = async ({
+  error,
+  requestAttempts,
+  subreason,
+}: RequestAttemptPersistenceFailureInput): Promise<void> => {
+  const now = new Date().toISOString()
+  const failedAttempts = withRequestAttemptManifestStage({closeoutKind: 'persistence', requestAttempts}).map(
+    (entry) => {
+      return {...entry, error: getPersistenceFailureMessage(error), persistenceSubreason: subreason, updatedAt: now}
+    },
+  )
+
+  await Promise.all(
+    groupRequestAttemptsByManifestOwner(failedAttempts).map(({entries, owner}) => {
       return mutateOwnerManifest(owner, {mergeEntries: entries})
     }),
   )

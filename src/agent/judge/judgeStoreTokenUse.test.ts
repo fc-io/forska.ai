@@ -6,6 +6,10 @@ const judgeWorkerCompletionJournalModulePath = new URL(
   '../../server/cron/judgmentsJobs/judgeWorkerCompletionJournal.ts',
   import.meta.url,
 ).pathname
+const judgmentRequestAttemptManifestStoreModulePath = new URL(
+  '../../server/cron/judgmentsJobs/judgmentRequestAttemptManifestStore.ts',
+  import.meta.url,
+).pathname
 const judgmentsRequestRuntimeModulePath = new URL(
   '../../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts',
   import.meta.url,
@@ -13,7 +17,7 @@ const judgmentsRequestRuntimeModulePath = new URL(
 const tokenUseQueryServiceModulePath = new URL('../../server/services/tokenUseQueryService.ts', import.meta.url)
   .pathname
 
-const markJudgmentRequestsPersisted = mock(() => {
+const markJudgmentRequestAttemptsClosed = mock(() => {
   return undefined
 })
 const attachTokenUseToPendingJudgeWorkerCompletion = mock(async () => {
@@ -22,8 +26,17 @@ const attachTokenUseToPendingJudgeWorkerCompletion = mock(async () => {
 const mutateAcceptedClaimRequestAttemptManifest = mock(async () => {
   return undefined
 })
+const compactClosedOutRequestAttemptManifestEntries = mock(async () => {
+  return undefined
+})
 const insertTokenUse = mock(async () => {
   return {id: 'token-use-1'}
+})
+const recordRequestAttemptsEnteringPersistence = mock(async () => {
+  return undefined
+})
+const recordRequestAttemptsPersistenceFailure = mock(async () => {
+  return undefined
 })
 
 void mock.module(envModulePath, () => {
@@ -75,8 +88,16 @@ void mock.module(judgeWorkerCompletionJournalModulePath, () => {
   }
 })
 
+void mock.module(judgmentRequestAttemptManifestStoreModulePath, () => {
+  return {
+    compactClosedOutRequestAttemptManifestEntries,
+    recordRequestAttemptsEnteringPersistence,
+    recordRequestAttemptsPersistenceFailure,
+  }
+})
+
 void mock.module(judgmentsRequestRuntimeModulePath, () => {
-  return {markJudgmentRequestsPersisted}
+  return {markJudgmentRequestAttemptsClosed}
 })
 
 void mock.module(tokenUseQueryServiceModulePath, () => {
@@ -92,11 +113,13 @@ const buildEntry = ({
   error,
   baseURL = 'http://worker-a/v1',
   pendingQueueRetry = false,
+  requestAttemptId = 'attempt-1',
 }: {
   outcome: 'success' | 'failure'
   error: string | null
   baseURL?: string
   pendingQueueRetry?: boolean
+  requestAttemptId?: string
 }) => {
   return {
     articleId: 'article-1',
@@ -104,6 +127,7 @@ const buildEntry = ({
     modelId: 'model-1',
     modelName: 'model-name',
     baseURL,
+    requestAttemptId,
     promptTokens: 10,
     completionTokens: 5,
     totalTokens: 15,
@@ -168,7 +192,7 @@ test('judgeStoreTokenUse journals low-memory judge-worker token use and clears p
   process.env.DUCKDB_MEMORY_LIMIT = '6400MiB'
   attachTokenUseToPendingJudgeWorkerCompletion.mockClear()
   insertTokenUse.mockClear()
-  markJudgmentRequestsPersisted.mockClear()
+  markJudgmentRequestAttemptsClosed.mockClear()
 
   try {
     const judgeStoreTokenUseModule = (await import(
@@ -176,7 +200,10 @@ test('judgeStoreTokenUse journals low-memory judge-worker token use and clears p
     )) as typeof import('./judgeStoreTokenUse.ts')
 
     await judgeStoreTokenUseModule.judgeStoreTokenUse(
-      [buildEntry({outcome: 'success', error: null})],
+      [
+        buildEntry({outcome: 'success', error: null, requestAttemptId: 'attempt-success'}),
+        buildEntry({outcome: 'failure', error: 'Invalid JSON response', requestAttemptId: 'attempt-failure'}),
+      ],
       null,
       {duration: 1000, finishedAt: '2026-04-21T12:00:01.000Z', startedAt: '2026-04-21T12:00:00.000Z'},
       'job-1',
@@ -187,10 +214,70 @@ test('judgeStoreTokenUse journals low-memory judge-worker token use and clears p
       expect.objectContaining({articleId: 'article-1', jobId: 'job-1', promptIds: ['prompt-1']}),
     )
     const attachCalls = attachTokenUseToPendingJudgeWorkerCompletion.mock.calls as Array<
-      [{tokenUse: {totalTokens: number}}]
+      [{tokenUse: {requestAttempts?: Array<{requestAttemptId: string}>; totalTokens: number}}]
     >
-    expect(attachCalls[0]?.[0].tokenUse.totalTokens).toBe(15)
-    expect(markJudgmentRequestsPersisted).toHaveBeenCalledWith('job-1', 1)
+    expect(attachCalls[0]?.[0].tokenUse.totalTokens).toBe(30)
+    expect(
+      attachCalls[0]?.[0].tokenUse.requestAttempts?.map((entry) => {
+        return entry.requestAttemptId
+      }),
+    ).toEqual(['attempt-success', 'attempt-failure'])
+    expect(markJudgmentRequestAttemptsClosed).toHaveBeenCalledWith('job-1', ['attempt-success', 'attempt-failure'])
+  } finally {
+    if (previousServerRole === undefined) {
+      delete process.env.SERVER_ROLE
+    } else {
+      process.env.SERVER_ROLE = previousServerRole
+    }
+
+    if (previousDuckdbMemoryLimit === undefined) {
+      delete process.env.DUCKDB_MEMORY_LIMIT
+    } else {
+      process.env.DUCKDB_MEMORY_LIMIT = previousDuckdbMemoryLimit
+    }
+  }
+})
+
+test('judgeStoreTokenUse records persistence failure and leaves request attempts pending', async () => {
+  const previousServerRole = process.env.SERVER_ROLE
+  const previousDuckdbMemoryLimit = process.env.DUCKDB_MEMORY_LIMIT
+
+  process.env.SERVER_ROLE = 'dev-single'
+  delete process.env.DUCKDB_MEMORY_LIMIT
+  insertTokenUse.mockClear()
+  markJudgmentRequestAttemptsClosed.mockClear()
+  recordRequestAttemptsPersistenceFailure.mockClear()
+  insertTokenUse.mockImplementationOnce(async () => {
+    throw new Error('duckdb down')
+  })
+
+  try {
+    const judgeStoreTokenUseModule = (await import(
+      `./judgeStoreTokenUse.ts?token-use-failure=${Date.now()}`
+    )) as typeof import('./judgeStoreTokenUse.ts')
+
+    const promise = judgeStoreTokenUseModule.judgeStoreTokenUse(
+      [buildEntry({outcome: 'success', error: null, requestAttemptId: 'attempt-failure'})],
+      null,
+      {duration: 1000, finishedAt: '2026-04-21T12:00:01.000Z', startedAt: '2026-04-21T12:00:00.000Z'},
+      'job-1',
+    )
+    const error = await promise.then(
+      () => {
+        return null
+      },
+      (thrown: unknown) => {
+        return thrown
+      },
+    )
+
+    expect(error).toBeInstanceOf(Error)
+    expect(markJudgmentRequestAttemptsClosed).not.toHaveBeenCalled()
+    const failureCalls = recordRequestAttemptsPersistenceFailure.mock.calls as Array<
+      [{error: unknown; subreason: string}]
+    >
+    expect(failureCalls[0]?.[0].error).toBeInstanceOf(Error)
+    expect(failureCalls[0]?.[0].subreason).toBe('token_use')
   } finally {
     if (previousServerRole === undefined) {
       delete process.env.SERVER_ROLE
