@@ -103,14 +103,12 @@ beforeAll(async () => {
     {getAppDatabaseService},
     {resetDuckdbServiceForTests},
     {resetServerRuntimeRoleForTests},
-    {getDuckdbMartRefreshService},
     {subprojectsRoutes},
   ] = await Promise.all([
     import('../../db/migrateDuckdb.ts'),
     import('../services/appDatabaseService.ts'),
     import('../utils/duckdbService.ts'),
     import('../utils/serverRuntimeRole.ts'),
-    import('../services/getDuckdbMartRefreshService.ts'),
     import('./SubprojectsRoutes.ts'),
   ])
 
@@ -124,9 +122,7 @@ beforeAll(async () => {
   closeDatabase = () => {
     return database.close()
   }
-  flushMartRefreshes = () => {
-    return getDuckdbMartRefreshService().flush()
-  }
+  flushMartRefreshes = async () => {}
   queryDatabase = (statement: string) => {
     return database.queryJson(statement)
   }

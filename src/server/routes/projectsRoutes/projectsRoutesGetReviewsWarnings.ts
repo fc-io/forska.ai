@@ -604,23 +604,6 @@ const getHasActiveLease = (leaseExpiresAt: string | null, now: Date) => {
   return leaseExpiresAt !== null && new Date(leaseExpiresAt) > now
 }
 
-const triggerMartRefreshDrain = (pendingRefreshCount: number) => {
-  const martRefreshService = getDuckdbMartRefreshService()
-
-  if (
-    pendingRefreshCount === 0
-    || !shouldCurrentServerRunMaintenanceLoops()
-    || !shouldCurrentRuntimeRunMartRefreshDrain()
-    || !martRefreshService.isAutoDrainEnabled()
-  ) {
-    return
-  }
-
-  void martRefreshService.flush().catch((error) => {
-    console.warn('[reviewsWarnings] failed to trigger mart refresh drain', error)
-  })
-}
-
 const getReviewsIndexingStatus = (params: {
   activeWorkCount: number
   enabledPromptCount: number
@@ -777,8 +760,6 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
       projectLargeRebuildState,
       projectRefreshState,
     })
-
-    triggerMartRefreshDrain(pendingRefreshCount)
 
     return {
       data: {

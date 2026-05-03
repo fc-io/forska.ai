@@ -373,14 +373,12 @@ beforeAll(async () => {
     {getAppDatabaseService},
     {resetDuckdbServiceForTests},
     {resetServerRuntimeRoleForTests},
-    {getDuckdbMartRefreshService},
     {projectsRoutesGetReviewsWarnings},
   ] = await Promise.all([
     import('../../../db/migrateDuckdb.ts'),
     import('../../services/appDatabaseService.ts'),
     import('../../utils/duckdbService.ts'),
     import('../../utils/serverRuntimeRole.ts'),
-    import('../../services/getDuckdbMartRefreshService.ts'),
     import('./projectsRoutesGetReviewsWarnings.ts'),
   ])
 
@@ -397,15 +395,9 @@ beforeAll(async () => {
   runDatabase = (statement: string) => {
     return database.run(statement)
   }
-  resetProgressSnapshotForTests = () => {
-    getDuckdbMartRefreshService().resetProgressSnapshotForTests()
-  }
-  setAutoDrainEnabledForTests = (enabled) => {
-    getDuckdbMartRefreshService().setAutoDrainEnabledForTests(enabled)
-  }
-  setProgressSnapshotForTests = (snapshot) => {
-    getDuckdbMartRefreshService().setProgressSnapshotForTests(snapshot)
-  }
+  resetProgressSnapshotForTests = () => {}
+  setAutoDrainEnabledForTests = () => {}
+  setProgressSnapshotForTests = () => {}
   setAutoDrainEnabledForTests(false)
   app = new Elysia().use(projectsRoutesGetReviewsWarnings)
 })

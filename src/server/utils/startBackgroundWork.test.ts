@@ -33,16 +33,32 @@ const runStartBackgroundWork = (role: 'api' | 'judge-worker' | 'maintenance-work
         }
 
         const startBackgroundWorkModulePath = getModulePath('./src/server/utils/startBackgroundWork.ts')
-        const martRefreshDrainHeartbeatModulePath = getModulePath('./src/server/utils/martRefreshDrainHeartbeat.ts')
+        const martRefreshDrainEligibilityModulePath = getModulePath('./src/server/utils/martRefreshDrainEligibility.ts')
+        const projectMartLargeRebuildHeartbeatModulePath = getModulePath('./src/server/utils/projectMartLargeRebuildHeartbeat.ts')
+        const projectMartRefreshWorkerHeartbeatModulePath = getModulePath('./src/server/utils/projectMartRefreshWorkerHeartbeat.ts')
         const serverRuntimeRoleModulePath = getModulePath('./src/server/utils/serverRuntimeRole.ts')
         const duckdbOwnerConnectionHeartbeatModulePath = getModulePath('./src/server/utils/duckdbOwnerConnectionHeartbeat.ts')
         const calls = []
         const role = ${JSON.stringify(role)}
 
-        void mock.module(martRefreshDrainHeartbeatModulePath, () => {
+        void mock.module(martRefreshDrainEligibilityModulePath, () => {
           return {
-            startMartRefreshDrainHeartbeat: () => {
-              calls.push('martRefreshDrainHeartbeat')
+            shouldCurrentRuntimeRunMartRefreshDrain: () => {
+              return true
+            },
+          }
+        })
+        void mock.module(projectMartLargeRebuildHeartbeatModulePath, () => {
+          return {
+            startProjectMartLargeRebuildHeartbeat: () => {
+              calls.push('projectMartLargeRebuildHeartbeat')
+            },
+          }
+        })
+        void mock.module(projectMartRefreshWorkerHeartbeatModulePath, () => {
+          return {
+            startProjectMartRefreshWorkerHeartbeat: () => {
+              calls.push('projectMartRefreshWorkerHeartbeat')
             },
           }
         })
@@ -85,7 +101,8 @@ test('startBackgroundWork starts shared infrastructure and maintenance work for 
   expect(result.calls).toEqual([
     'serverRuntimeRoleMonitor',
     'duckdbOwnerConnectionHeartbeat',
-    'martRefreshDrainHeartbeat',
+    'projectMartRefreshWorkerHeartbeat',
+    'projectMartLargeRebuildHeartbeat',
   ])
 })
 

@@ -317,7 +317,7 @@ const rebuildMartRefreshQueueWithoutGeneration = async () => {
 
   const {getDuckdbMartRefreshService} = await import('../services/getDuckdbMartRefreshService.ts')
 
-  getDuckdbMartRefreshService().resetProgressSnapshotForTests()
+  getDuckdbMartRefreshService().resetRuntimeStateForTests()
 }
 
 const insertReviewArticleServingFixtureRows = async ({
@@ -426,9 +426,7 @@ beforeAll(async () => {
   closeDatabase = () => {
     return database.close()
   }
-  flushMartRefreshes = () => {
-    return getDuckdbMartRefreshService().flush()
-  }
+  flushMartRefreshes = async () => {}
   purgeArchivedProjectMartDataBatch = (projectId: string) => {
     return getDuckdbMartRefreshService().purgeArchivedProjectMartDataBatch(projectId)
   }
