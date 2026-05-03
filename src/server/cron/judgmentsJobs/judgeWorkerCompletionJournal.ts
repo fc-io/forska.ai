@@ -9,6 +9,12 @@ import {getEnv} from '../../utils/env.ts'
 import {getCurrentJudgeWorkerJournalIdentity} from '../../utils/judgeWorkerJournalIdentity.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {
+  getLegacyRequestAttempts,
+  getLegacyRequestAttemptsJson,
+  getRequestAttemptRepairState,
+  legacyCompletionEvidencePendingRepairReason,
+} from './judgmentLegacyEvidenceRepair.ts'
+import {
   appendRequestAttemptManifestRepairMarker,
   createRequestAttemptManifestRepairMarker,
   getRequestAttemptManifestMutationIds,
@@ -133,12 +139,14 @@ type AcceptedClaimManifestRow = {
 type PendingTokenUseRow = {
   articleId: string
   claimId: string
+  createdAt: string
   jobId: string
   promptId: string
   queueRecordId: string
   requestAttemptId: string
   requestAttemptsJson: string | null
   tokenUseJson: string
+  updatedAt: string
 }
 type AcceptedClaimRolloutRow = AcceptedClaimManifestRow & {
   claimId: string
@@ -271,6 +279,7 @@ const openJournalDatabase = (): Database => {
   `)
 
   ensureJournalSchema(database)
+  repairLegacyJournalEvidence(database)
   journalDatabase = database
   return database
 }
@@ -764,12 +773,222 @@ const getPendingTokenUseRows = (database: Database): PendingTokenUseRow[] => {
           prompt_id AS promptId,
           request_attempt_id AS requestAttemptId,
           request_attempts_json AS requestAttemptsJson,
-          token_use_json AS tokenUseJson
+          token_use_json AS tokenUseJson,
+          created_at AS createdAt,
+          updated_at AS updatedAt
         FROM pending_token_use
         ORDER BY created_at ASC
       `,
     )
     .all() as PendingTokenUseRow[]
+}
+
+const getJournalLegacyProviderKey = (provider: string | null | undefined): string => {
+  return provider && provider.trim().length > 0 ? `legacy:${provider}` : 'legacy:unknown'
+}
+
+const getCompletionLegacyOutcome = (status: string): JudgmentRequestAttemptJsonEntry['outcome'] => {
+  return status === 'completed' || status === 'judged' || status === 'succeeded' || status === 'skipped'
+    ? 'success'
+    : 'failure'
+}
+
+const parseCompletionPayloadOrNull = (payloadJson: string): JudgeWorkerCompletionPayload | null => {
+  try {
+    return parseJson<JudgeWorkerCompletionPayload>(payloadJson)
+  } catch {
+    return null
+  }
+}
+
+const getLegacyCompletionOutboxRequestAttemptsJson = (row: CompletionOutboxRow): string | null => {
+  const state = getRequestAttemptRepairState(row.requestAttemptsJson)
+
+  if (state.kind !== 'legacy') {
+    return null
+  }
+
+  const payload = parseCompletionPayloadOrNull(row.payloadJson)
+
+  if (!payload) {
+    return null
+  }
+
+  return getLegacyRequestAttemptsJson({
+    closeoutKind: 'completion_outbox',
+    durableRef: {claimId: row.claimId, jobId: row.jobId, queueRecordId: row.queueRecordId},
+    durableRowRef: {
+      claimId: row.claimId,
+      jobId: row.jobId,
+      queueRecordId: row.queueRecordId,
+      surface: 'completion_outbox',
+    },
+    existingEntries: state.entries,
+    fallback: {
+      articleId: payload.articleId,
+      claimId: row.claimId,
+      createdAt: row.updatedAt,
+      finishedAt: row.updatedAt,
+      jobId: row.jobId,
+      outcome: getCompletionLegacyOutcome(row.status),
+      promptId: payload.promptId,
+      promptIds: [payload.promptId],
+      providerKey: getJournalLegacyProviderKey(payload.modelId),
+      queueRecordId: row.queueRecordId,
+      startedAt: row.updatedAt,
+    },
+  })
+}
+
+const repairLegacyCompletionOutboxRows = (database: Database): void => {
+  getCompletionRows(database).forEach((row) => {
+    const state = getRequestAttemptRepairState(row.requestAttemptsJson)
+    const requestAttemptsJson = getLegacyCompletionOutboxRequestAttemptsJson(row)
+
+    if (state.kind === 'quarantined') {
+      database
+        .query(
+          `
+            UPDATE completion_outbox
+            SET last_error = ?,
+                updated_at = ?
+            WHERE claim_id = ?
+          `,
+        )
+        .run(state.reason, new Date().toISOString(), row.claimId)
+      return
+    }
+
+    if (requestAttemptsJson === null) {
+      if (state.kind === 'legacy') {
+        database
+          .query(
+            `
+              UPDATE completion_outbox
+              SET last_error = ?,
+                  updated_at = ?
+              WHERE claim_id = ?
+            `,
+          )
+          .run(legacyCompletionEvidencePendingRepairReason, new Date().toISOString(), row.claimId)
+      }
+      return
+    }
+
+    database
+      .query(
+        `
+          UPDATE completion_outbox
+          SET request_attempts_json = ?,
+              updated_at = ?
+          WHERE claim_id = ?
+        `,
+      )
+      .run(requestAttemptsJson, new Date().toISOString(), row.claimId)
+  })
+}
+
+const getLegacyPendingTokenUseRequestAttempts = (row: PendingTokenUseRow): JudgmentRequestAttemptJsonEntry[] => {
+  const state = getRequestAttemptRepairState(row.requestAttemptsJson)
+
+  return state.kind === 'legacy'
+    ? getLegacyRequestAttempts({
+        closeoutKind: 'pending_token_use',
+        durableRef: {
+          claimId: row.claimId,
+          id: row.requestAttemptId,
+          jobId: row.jobId,
+          queueRecordId: row.queueRecordId,
+        },
+        durableRowRef: {
+          claimId: row.claimId,
+          id: row.requestAttemptId,
+          jobId: row.jobId,
+          queueRecordId: row.queueRecordId,
+          requestAttemptId: row.requestAttemptId,
+          surface: 'pending_token_use',
+        },
+        existingEntries: state.entries,
+        fallback: {
+          articleId: row.articleId,
+          claimId: row.claimId,
+          createdAt: row.createdAt,
+          finishedAt: row.updatedAt,
+          jobId: row.jobId,
+          outcome: 'unknown',
+          promptId: row.promptId,
+          promptIds: [row.promptId],
+          providerKey: 'legacy:unknown',
+          queueRecordId: row.queueRecordId,
+          startedAt: row.createdAt,
+        },
+      })
+    : []
+}
+
+const repairLegacyPendingTokenUseRows = (database: Database): void => {
+  getPendingTokenUseRows(database).forEach((row) => {
+    const state = getRequestAttemptRepairState(row.requestAttemptsJson)
+    const requestAttempts = getLegacyPendingTokenUseRequestAttempts(row)
+    const [firstAttempt] = requestAttempts
+    const requestAttemptsJson = stringifyRequestAttempts(requestAttempts)
+
+    if (state.kind !== 'legacy' || !firstAttempt || requestAttemptsJson === null) {
+      return
+    }
+
+    database.transaction(() => {
+      database
+        .query(
+          `
+            INSERT INTO pending_token_use (
+              job_id,
+              claim_id,
+              queue_record_id,
+              article_id,
+              prompt_id,
+              request_attempt_id,
+              token_use_json,
+              request_attempts_json,
+              created_at,
+              updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(job_id, queue_record_id, request_attempt_id) DO UPDATE SET
+              token_use_json = EXCLUDED.token_use_json,
+              request_attempts_json = EXCLUDED.request_attempts_json,
+              updated_at = EXCLUDED.updated_at
+          `,
+        )
+        .run(
+          row.jobId,
+          row.claimId,
+          row.queueRecordId,
+          row.articleId,
+          row.promptId,
+          firstAttempt.requestAttemptId,
+          row.tokenUseJson,
+          requestAttemptsJson,
+          row.createdAt,
+          new Date().toISOString(),
+        )
+      database
+        .query(
+          `
+            DELETE FROM pending_token_use
+            WHERE job_id = ?
+              AND queue_record_id = ?
+              AND request_attempt_id = ?
+              AND request_attempt_id != ?
+          `,
+        )
+        .run(row.jobId, row.queueRecordId, row.requestAttemptId, firstAttempt.requestAttemptId)
+    })()
+  })
+}
+
+const repairLegacyJournalEvidence = (database: Database): void => {
+  repairLegacyCompletionOutboxRows(database)
+  repairLegacyPendingTokenUseRows(database)
 }
 
 const getAcceptedClaimRolloutRows = (database: Database): AcceptedClaimRolloutRow[] => {
@@ -813,7 +1032,36 @@ const getRolloutCloseoutRequestAttempts = ({
   now: string
   row: AcceptedClaimRolloutRow
 }): JudgmentRequestAttemptJsonEntry[] => {
-  const requestAttempts = parseRequestAttempts(row.requestAttemptManifestJson).map((attempt) => {
+  const prompt = parseJson<PromptToProcess>(row.payloadJson)
+  const manifestAttempts = parseRequestAttempts(row.requestAttemptManifestJson)
+
+  if (manifestAttempts.length === 0) {
+    return getLegacyRequestAttempts({
+      closeoutKind: 'completion_outbox',
+      durableRef: {claimId: row.claimId, jobId: row.jobId, queueRecordId: row.queueRecordId},
+      durableRowRef: {
+        claimId: row.claimId,
+        jobId: row.jobId,
+        queueRecordId: row.queueRecordId,
+        surface: 'completion_outbox',
+      },
+      fallback: {
+        articleId: prompt.articleId,
+        claimId: row.claimId,
+        createdAt: now,
+        finishedAt: now,
+        jobId: row.jobId,
+        outcome: 'failure',
+        promptId: prompt.promptId,
+        promptIds: [prompt.promptId],
+        providerKey: getJournalLegacyProviderKey(prompt.modelProvider),
+        queueRecordId: row.queueRecordId,
+        startedAt: now,
+      },
+    })
+  }
+
+  const requestAttempts = manifestAttempts.map((attempt) => {
     return {
       ...attempt,
       closeoutKind: 'completion_outbox' as const,

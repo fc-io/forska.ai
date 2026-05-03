@@ -3,6 +3,12 @@ import {getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers
 import {flushJudgmentJobSqliteOutbox} from './judgmentJobSqliteOutboxImport.ts'
 import {getJudgmentJobSqliteService, JudgmentJobLeaseError} from './judgmentJobSqliteService.ts'
 import {judgmentJobAutoDrainStatuses} from './judgmentJobStoragePolicy.ts'
+import {
+  addLegacyEvidenceRepairResults,
+  getLegacyRepairReason,
+  type LegacyEvidenceRepairResult,
+  repairLegacyTokenUseEvidenceForJob,
+} from './judgmentLegacyEvidenceRepair.ts'
 
 type RolloutCleanupJobRow = {id: string; status: string; storageState: string}
 
@@ -87,10 +93,17 @@ const markRolloutJobFailed = async (jobId: string): Promise<void> => {
   `)
 }
 
-const assignRolloutJobState = async (jobId: string): Promise<{drainingJobCount: number; failedJobCount: number}> => {
+const assignRolloutJobState = async ({
+  jobId,
+  legacyRepair,
+}: {
+  jobId: string
+  legacyRepair: LegacyEvidenceRepairResult
+}): Promise<{drainingJobCount: number; failedJobCount: number}> => {
   const hasPreservedEvidence = await jobHasPreservedLocalCompletionEvidence(jobId)
+  const hasLegacyRepairEvidence = getLegacyRepairReason(legacyRepair) !== null
 
-  if (hasPreservedEvidence) {
+  if (hasPreservedEvidence || hasLegacyRepairEvidence) {
     await markRolloutJobDraining(jobId)
     return {drainingJobCount: 1, failedJobCount: 0}
   }
@@ -119,9 +132,12 @@ const cleanupStartupRolloutJob = async ({
   job: RolloutCleanupJobRow
 }): Promise<JudgmentStartupRolloutCleanupResult> => {
   const sqliteService = getJudgmentJobSqliteService()
+  const localRepair = await sqliteService.repairLegacyCompletionEvidence({jobId: job.id, serverJobId: claimedBy})
+  const tokenUseRepair = await repairLegacyTokenUseEvidenceForJob(job.id)
+  const legacyRepair = addLegacyEvidenceRepairResults(localRepair, tokenUseRepair)
   const importedOutboxRows = await flushPreservedLocalOutbox({claimedBy, jobId: job.id})
   const discardedRuntimeRows = await sqliteService.discardActiveRuntimeRows(job.id, claimedBy)
-  const assigned = await assignRolloutJobState(job.id)
+  const assigned = await assignRolloutJobState({jobId: job.id, legacyRepair})
 
   return {...assigned, discardedRuntimeRows, importedOutboxRows, jobCount: 1}
 }

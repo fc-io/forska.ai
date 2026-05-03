@@ -29,10 +29,21 @@ import {
 import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
 import {recordJudgmentJobStorageTransfer} from './judgmentJobStorageTransferRuntime.ts'
 import {
+  addLegacyEvidenceRepairResults,
+  clearLegacyCompletionEvidenceRepairState,
+  getLegacyRepairReason,
+  getLegacyRequestAttemptsJson,
+  getRequestAttemptRepairState,
+  legacyCompletionEvidencePendingRepairReason,
+  type LegacyEvidenceRepairResult,
+  recordLegacyCompletionEvidenceRepairState,
+} from './judgmentLegacyEvidenceRepair.ts'
+import {
   appendRequestAttemptManifestRepairMarker,
   createRequestAttemptManifestRepairMarker,
   getRequestAttemptManifestMutationIds,
   getRequestAttemptManifestOwnerId,
+  type JudgmentRequestAttemptJsonEntry,
   JudgmentRequestAttemptManifestCasExhaustedError,
   type JudgmentRequestAttemptManifestMutation,
   type JudgmentRequestAttemptManifestOwner,
@@ -357,6 +368,31 @@ type RequestAttemptManifestRow = {
   requestAttemptManifestJson: string | null
   requestAttemptManifestRepairJson: string | null
   requestAttemptManifestVersion: number
+}
+type LegacyOutboxRepairRow = {
+  articleId: string
+  claimId: string | null
+  createdAt: string
+  jobId: string
+  judgmentId: string
+  modelProvider: string | null
+  outboxSeq: number
+  promptId: string
+  queuePromptId: string
+  requestAttemptsJson: string | null
+  updatedAt: string
+}
+type LegacyCompletionAckRepairRow = {
+  articleId: string | null
+  claimId: string
+  completedAt: string
+  jobId: string
+  modelProvider: string | null
+  promptId: string | null
+  queuePromptId: string
+  requestAttemptsJson: string | null
+  status: 'failed' | 'judged' | 'retry' | 'skipped'
+  tokenUseId: string | null
 }
 
 const openDatabases = new Map<string, Database>()
@@ -1739,6 +1775,7 @@ const isDrainedSqliteJob = (database: Database, _jobId: string) => {
     getActiveQueueRowCount(database) === 0
     && getRetainedOutboxCount(database) === 0
     && getOrphanedJudgedQueueRowCount(database) === 0
+    && getUnresolvedLegacyCompletionEvidenceCount(database) === 0
   )
 }
 
@@ -1780,6 +1817,26 @@ const finalizeDrainingSqliteJobs = async ({
   }
 
   try {
+    const repairResult =
+      (await withOwnedJobDatabase(
+        currentJobId,
+        false,
+        (database) => {
+          return repairLegacyCompletionEvidenceFromDatabase(database)
+        },
+        serverJobId,
+      )) ?? getEmptyLegacyEvidenceRepairResult()
+    const repairReason = getLegacyRepairReason(repairResult)
+
+    if (repairReason) {
+      await recordLegacyCompletionEvidenceRepairState({jobId: currentJobId, reason: repairReason})
+      return finalizeDrainingSqliteJobs({jobIds: jobIds.slice(1), serverJobId})
+    }
+
+    if (repairResult.convertedCount > 0) {
+      await clearLegacyCompletionEvidenceRepairState(currentJobId)
+    }
+
     const shouldMarkDrained = await withOwnedJobDatabase(
       currentJobId,
       false,
@@ -2045,6 +2102,230 @@ const getOutboxEntry = (row: OutboxRow) => {
   } satisfies JudgmentJobSqliteOutboxEntry
 }
 
+const getEmptyLegacyEvidenceRepairResult = (): LegacyEvidenceRepairResult => {
+  return {convertedCount: 0, pendingRepairCount: 0, quarantinedCount: 0}
+}
+
+const getLegacyProviderKey = (modelProvider: string | null): string => {
+  return modelProvider && modelProvider.trim().length > 0 ? `legacy:${modelProvider}` : 'legacy:unknown'
+}
+
+const getLegacyOutboxRepairRows = (database: Database): LegacyOutboxRepairRow[] => {
+  return database
+    .query(
+      `
+        SELECT
+          jo.outbox_seq AS outboxSeq,
+          jo.job_id AS jobId,
+          jo.queue_prompt_id AS queuePromptId,
+          jo.judgment_id AS judgmentId,
+          jo.claim_id AS claimId,
+          jo.article_id AS articleId,
+          jo.prompt_id AS promptId,
+          jo.request_attempts_json AS requestAttemptsJson,
+          jo.created_at AS createdAt,
+          jo.updated_at AS updatedAt,
+          ji.model_provider AS modelProvider
+        FROM judgment_outbox jo
+        LEFT JOIN job_info ji ON ji.job_id = jo.job_id
+        ORDER BY jo.outbox_seq ASC
+      `,
+    )
+    .all() as LegacyOutboxRepairRow[]
+}
+
+const getLegacyCompletionAckRepairRows = (database: Database): LegacyCompletionAckRepairRow[] => {
+  return database
+    .query(
+      `
+        SELECT
+          ca.claim_id AS claimId,
+          ca.job_id AS jobId,
+          ca.queue_prompt_id AS queuePromptId,
+          ca.status,
+          ca.token_use_id AS tokenUseId,
+          ca.request_attempts_json AS requestAttemptsJson,
+          ca.completed_at AS completedAt,
+          qp.article_id AS articleId,
+          qp.prompt_id AS promptId,
+          ji.model_provider AS modelProvider
+        FROM completion_ack ca
+        LEFT JOIN queue_prompt qp ON qp.id = ca.queue_prompt_id AND qp.job_id = ca.job_id
+        LEFT JOIN job_info ji ON ji.job_id = ca.job_id
+        ORDER BY ca.completed_at ASC, ca.claim_id ASC
+      `,
+    )
+    .all() as LegacyCompletionAckRepairRow[]
+}
+
+const getCompletionAckLegacyOutcome = (
+  status: LegacyCompletionAckRepairRow['status'],
+): JudgmentRequestAttemptJsonEntry['outcome'] => {
+  return status === 'judged' || status === 'skipped' ? 'success' : 'failure'
+}
+
+const repairLegacyOutboxRow = (database: Database, row: LegacyOutboxRepairRow): LegacyEvidenceRepairResult => {
+  const state = getRequestAttemptRepairState(row.requestAttemptsJson)
+
+  if (state.kind === 'exact') {
+    return getEmptyLegacyEvidenceRepairResult()
+  }
+
+  if (state.kind === 'quarantined') {
+    database
+      .query(
+        `
+          UPDATE judgment_outbox
+          SET export_claim_id = NULL,
+              export_claimed_at = NULL,
+              export_claimed_by = NULL,
+              last_error = ?
+          WHERE outbox_seq = ?
+        `,
+      )
+      .run(state.reason, row.outboxSeq)
+    return {convertedCount: 0, pendingRepairCount: 0, quarantinedCount: 1}
+  }
+
+  const requestAttemptsJson = getLegacyRequestAttemptsJson({
+    closeoutKind: 'judgment_outbox',
+    durableRef: {id: row.judgmentId, jobId: row.jobId, queueRecordId: row.queuePromptId},
+    durableRowRef: {
+      id: row.judgmentId,
+      jobId: row.jobId,
+      outboxSeq: Number(row.outboxSeq),
+      queueRecordId: row.queuePromptId,
+      surface: 'judgment_outbox',
+    },
+    existingEntries: state.entries,
+    fallback: {
+      articleId: row.articleId,
+      claimId: row.claimId,
+      createdAt: row.createdAt,
+      finishedAt: row.updatedAt,
+      jobId: row.jobId,
+      outcome: 'success',
+      promptId: row.promptId,
+      promptIds: [row.promptId],
+      providerKey: getLegacyProviderKey(row.modelProvider),
+      queueRecordId: row.queuePromptId,
+      startedAt: row.createdAt,
+    },
+  })
+
+  if (requestAttemptsJson === null) {
+    database
+      .query(
+        `
+          UPDATE judgment_outbox
+          SET export_claim_id = NULL,
+              export_claimed_at = NULL,
+              export_claimed_by = NULL,
+              last_error = ?
+          WHERE outbox_seq = ?
+        `,
+      )
+      .run(legacyCompletionEvidencePendingRepairReason, row.outboxSeq)
+    return {convertedCount: 0, pendingRepairCount: 1, quarantinedCount: 0}
+  }
+
+  database
+    .query(
+      `
+        UPDATE judgment_outbox
+        SET request_attempts_json = ?,
+            updated_at = ?
+        WHERE outbox_seq = ?
+      `,
+    )
+    .run(requestAttemptsJson, new Date().toISOString(), row.outboxSeq)
+
+  return {convertedCount: 1, pendingRepairCount: 0, quarantinedCount: 0}
+}
+
+const repairLegacyCompletionAckRow = (
+  database: Database,
+  row: LegacyCompletionAckRepairRow,
+): LegacyEvidenceRepairResult => {
+  const state = getRequestAttemptRepairState(row.requestAttemptsJson)
+
+  if (state.kind === 'exact') {
+    return getEmptyLegacyEvidenceRepairResult()
+  }
+
+  if (state.kind === 'quarantined') {
+    return {convertedCount: 0, pendingRepairCount: 0, quarantinedCount: 1}
+  }
+
+  const requestAttemptsJson = getLegacyRequestAttemptsJson({
+    closeoutKind: 'completion_ack',
+    durableRef: {
+      claimId: row.claimId,
+      id: row.tokenUseId ?? row.claimId,
+      jobId: row.jobId,
+      queueRecordId: row.queuePromptId,
+    },
+    durableRowRef: {
+      claimId: row.claimId,
+      id: row.tokenUseId ?? row.claimId,
+      jobId: row.jobId,
+      queueRecordId: row.queuePromptId,
+      surface: 'completion_ack',
+    },
+    existingEntries: state.entries,
+    fallback: {
+      articleId: row.articleId,
+      claimId: row.claimId,
+      createdAt: row.completedAt,
+      finishedAt: row.completedAt,
+      jobId: row.jobId,
+      outcome: getCompletionAckLegacyOutcome(row.status),
+      promptId: row.promptId,
+      promptIds: row.promptId ? [row.promptId] : undefined,
+      providerKey: getLegacyProviderKey(row.modelProvider),
+      queueRecordId: row.queuePromptId,
+      startedAt: row.completedAt,
+    },
+  })
+
+  if (requestAttemptsJson === null) {
+    return {convertedCount: 0, pendingRepairCount: 1, quarantinedCount: 0}
+  }
+
+  database
+    .query(
+      `
+        UPDATE completion_ack
+        SET request_attempts_json = ?,
+            updated_at = ?
+        WHERE job_id = ?
+          AND claim_id = ?
+      `,
+    )
+    .run(requestAttemptsJson, new Date().toISOString(), row.jobId, row.claimId)
+
+  return {convertedCount: 1, pendingRepairCount: 0, quarantinedCount: 0}
+}
+
+const repairLegacyCompletionEvidenceFromDatabase = (database: Database): LegacyEvidenceRepairResult => {
+  return database.transaction(() => {
+    const outboxResult = getLegacyOutboxRepairRows(database).reduce((result, row) => {
+      return addLegacyEvidenceRepairResults(result, repairLegacyOutboxRow(database, row))
+    }, getEmptyLegacyEvidenceRepairResult())
+    const ackResult = getLegacyCompletionAckRepairRows(database).reduce((result, row) => {
+      return addLegacyEvidenceRepairResults(result, repairLegacyCompletionAckRow(database, row))
+    }, getEmptyLegacyEvidenceRepairResult())
+
+    return addLegacyEvidenceRepairResults(outboxResult, ackResult)
+  })()
+}
+
+const getUnresolvedLegacyCompletionEvidenceCount = (database: Database): number => {
+  return getLegacyCompletionAckRepairRows(database).filter((row) => {
+    return getRequestAttemptRepairState(row.requestAttemptsJson).kind !== 'exact'
+  }).length
+}
+
 const getBoundedOutboxBatch = ({
   initialBytes,
   maxBytes,
@@ -2251,8 +2532,8 @@ const releaseOwnedJobLease = async (jobId: string) => {
   await releaseJudgmentJobLease(currentLease)
 }
 
-const getClaimableOutboxRows = (database: Database, limit: number) => {
-  return database
+const getClaimableOutboxRows = (database: Database, limit: number, exactRequestAttemptsOnly = false) => {
+  const rows = database
     .query(
       `
         SELECT
@@ -2291,6 +2572,12 @@ const getClaimableOutboxRows = (database: Database, limit: number) => {
       `,
     )
     .all(limit) as OutboxRow[]
+
+  return exactRequestAttemptsOnly
+    ? rows.filter((row) => {
+        return getRequestAttemptRepairState(row.requestAttemptsJson).kind === 'exact'
+      })
+    : rows
 }
 
 const getClaimedOutboxRows = (database: Database, claimId: string) => {
@@ -2414,7 +2701,7 @@ const claimPendingOutboxBatchForJob = async ({
           initialBytes: 0,
           maxBytes,
           maxRows,
-          rows: getClaimableOutboxRows(database, maxRows),
+          rows: getClaimableOutboxRows(database, maxRows, true),
         }).rows
 
         return rows.length === 0 ? null : claimOutboxRows({claimedBy, database, jobId, rows})
@@ -3436,12 +3723,14 @@ const sqliteService = {
     maxBytes: number
     maxRows: number
   }) => {
-    return claimPendingOutboxBatchForJobIds({
-      claimedBy,
-      jobIds: await getTrackedJudgmentJobIds(jobId),
-      maxBytes,
-      maxRows,
-    })
+    const jobIds = await getTrackedJudgmentJobIds(jobId)
+
+    await jobIds.reduce<Promise<void>>(async (repairPromise, currentJobId) => {
+      await repairPromise
+      await getJudgmentJobSqliteService().repairLegacyCompletionEvidence({jobId: currentJobId, serverJobId: claimedBy})
+    }, Promise.resolve())
+
+    return claimPendingOutboxBatchForJobIds({claimedBy, jobIds, maxBytes, maxRows})
   },
   getClaimedOutboxBatch: async ({jobId, serverJobId}: {jobId: string; serverJobId?: string}) => {
     return getClaimedOutboxBatchForJob({jobId, serverJobId})
@@ -3500,6 +3789,35 @@ const sqliteService = {
         return Number(row?.count ?? 0)
       }) ?? 0
     )
+  },
+  repairLegacyCompletionEvidence: async ({
+    jobId,
+    serverJobId,
+  }: {
+    jobId: string
+    serverJobId?: string
+  }): Promise<LegacyEvidenceRepairResult> => {
+    const result =
+      (await withOwnedJobDatabase(
+        jobId,
+        false,
+        (database) => {
+          return repairLegacyCompletionEvidenceFromDatabase(database)
+        },
+        serverJobId,
+      )) ?? getEmptyLegacyEvidenceRepairResult()
+    const reason = getLegacyRepairReason(result)
+
+    if (reason) {
+      await recordLegacyCompletionEvidenceRepairState({jobId, reason})
+      return result
+    }
+
+    if (result.convertedCount > 0) {
+      await clearLegacyCompletionEvidenceRepairState(jobId)
+    }
+
+    return result
   },
   repairOrphanedJudgedQueueRows: async ({
     jobId,

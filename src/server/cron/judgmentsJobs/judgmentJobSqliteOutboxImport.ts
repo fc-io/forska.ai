@@ -324,6 +324,30 @@ const getLastImportableOutboxSeqByJob = (entries: JudgmentJobSqliteOutboxEntry[]
   }, {})
 }
 
+const repairLegacyCompletionEvidenceForJobIds = async ({
+  claimedBy,
+  jobIds,
+}: {
+  claimedBy: string
+  jobIds: string[]
+}): Promise<void> => {
+  const [currentJobId = ''] = jobIds
+
+  if (!currentJobId) {
+    return
+  }
+
+  try {
+    await getJudgmentJobSqliteService().repairLegacyCompletionEvidence({jobId: currentJobId, serverJobId: claimedBy})
+  } catch (error) {
+    if (!(error instanceof JudgmentJobLeaseError)) {
+      throw error
+    }
+  }
+
+  return repairLegacyCompletionEvidenceForJobIds({claimedBy, jobIds: jobIds.slice(1)})
+}
+
 const getImportCandidateJobIds = async (jobId?: string) => {
   if (jobId) {
     return [jobId]
@@ -587,6 +611,9 @@ const getIdleCycleResult = ({
 const getImportBatch = async ({claimedBy, jobId}: {claimedBy: string; jobId?: string}) => {
   const sqliteService = getJudgmentJobSqliteService()
   const jobIds = await getImportCandidateJobIds(jobId)
+
+  await repairLegacyCompletionEvidenceForJobIds({claimedBy, jobIds})
+
   const claimedBatch = jobId
     ? await sqliteService.getClaimedOutboxBatch({jobId, serverJobId: claimedBy})
     : await getClaimedOutboxBatchForJobIds({claimedBy, jobIds})
