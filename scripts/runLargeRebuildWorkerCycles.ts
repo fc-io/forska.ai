@@ -36,8 +36,8 @@ const getUntil = (): ProjectMartLargeRebuildUntil | undefined => {
     : undefined
 }
 
-const runProjectMartLargeRebuildCyclesCli = async () => {
-  const workerId = getArgValue(['--workerId', '--worker-id']) ?? `project-mart-large-rebuild-cycles:${hostname()}:${process.pid}`
+const runLargeRebuildWorkerCyclesCli = async () => {
+  const workerId = getArgValue(['--workerId', '--worker-id']) ?? `large-rebuild-worker-cycles:${hostname()}:${process.pid}`
 
   try {
     const result = await runProjectMartLargeRebuildCycles({
@@ -58,4 +58,4 @@ const runProjectMartLargeRebuildCyclesCli = async () => {
   }
 }
 
-void runProjectMartLargeRebuildCyclesCli()
+void runLargeRebuildWorkerCyclesCli()

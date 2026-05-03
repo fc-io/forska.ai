@@ -1524,7 +1524,7 @@ test('claimDirtyProjects skips projects already handed off to large rebuild stat
       projects: [{articleIds: ['refresh-article-1'], projectId: 'refresh-project-1'}],
       reason: 'refresh-state-test.large-rebuild-handoff',
     })
-    await largeRebuildStateService.queueLargeRebuild({
+    await largeRebuildStateService.requestLargeRebuild({
       projectId: 'refresh-project-1',
       rebuildPhase: 'prompt_answer_fact',
       refreshToken: 1,

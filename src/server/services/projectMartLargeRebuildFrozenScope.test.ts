@@ -94,7 +94,7 @@ test('frozen scope records source dirty token and leaves later dirty work pendin
       projects: [{articleIds: ['large-rebuild-frozen-article-1'], projectId: 'large-rebuild-frozen-project'}],
       reason: 'large-rebuild-frozen.initial',
     })
-    await largeRebuildService.queueLargeRebuild({
+    await largeRebuildService.requestLargeRebuild({
       projectId: 'large-rebuild-frozen-project',
       rebuildPhase: 'project_scope_article',
       refreshToken: 1,

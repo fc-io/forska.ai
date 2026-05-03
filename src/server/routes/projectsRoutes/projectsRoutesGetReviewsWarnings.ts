@@ -2,7 +2,7 @@ import {Elysia, t} from 'elysia'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getSqlLiteral} from '../../services/appQueryHelpers.ts'
-import {getDuckdbMartRefreshService} from '../../services/getDuckdbMartRefreshService.ts'
+import {getDuckdbMartMaintenanceService} from '../../services/getDuckdbMartMaintenanceService.ts'
 import {
   type FreshMaintenanceWorkLeaseRecord,
   getMaintenanceWorkLeaseService,
@@ -653,7 +653,7 @@ export const projectsRoutesGetReviewsWarnings = new Elysia().post(
     const projectId = body.projectId
     await assertProjectIsActive(projectId)
     await queueMissingVisibleJudgmentFactRepair(projectId)
-    const martRefreshService = getDuckdbMartRefreshService()
+    const martRefreshService = getDuckdbMartMaintenanceService()
     const throughputSnapshot = martRefreshService.getThroughputSnapshot()
     const currentNow = new Date()
     const [

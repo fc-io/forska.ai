@@ -1739,14 +1739,14 @@ const getUniqueValues = (values: Array<string | null | undefined>) => {
   )
 }
 
-const queueLargeRebuildsForDirtyStates = async (
+const requestLargeRebuildsForDirtyStates = async (
   states: MarkedProjectDirtyState[],
   runner: {queryJson: <T>(statement: string) => Promise<T[]>; run: (statement: string) => Promise<void>},
 ) => {
   return states.reduce<Promise<MarkedProjectDirtyState[]>>(async (accPromise, state) => {
     const acc = await accPromise
 
-    await getProjectMartLargeRebuildStateService().queueLargeRebuild({
+    await getProjectMartLargeRebuildStateService().requestLargeRebuild({
       projectId: state.projectId,
       rebuildPhase: 'project_scope_article',
       refreshToken: state.dirtyToken,
@@ -1757,7 +1757,7 @@ const queueLargeRebuildsForDirtyStates = async (
   }, Promise.resolve([]))
 }
 
-const queueProjectLargeRebuilds = async (projectIds: string[], reason: string) => {
+const requestProjectLargeRebuilds = async (projectIds: string[], reason: string) => {
   const refreshStateService = getProjectMartDirtyRefreshStateService()
   const uniqueProjectIds = getUniqueValues(projectIds)
 
@@ -1771,11 +1771,11 @@ const queueProjectLargeRebuilds = async (projectIds: string[], reason: string) =
           runner: tx,
         })
 
-        return queueLargeRebuildsForDirtyStates(states, tx)
+        return requestLargeRebuildsForDirtyStates(states, tx)
       }) as Promise<MarkedProjectDirtyState[]>)
 }
 
-const queueProjectLargeRebuildForDirtyArticles = async (projectId: string, articleIds: string[], reason: string) => {
+const requestProjectLargeRebuildForDirtyArticles = async (projectId: string, articleIds: string[], reason: string) => {
   const refreshArticleIds = getUniqueValues(articleIds)
 
   return refreshArticleIds.length === 0
@@ -1787,7 +1787,7 @@ const queueProjectLargeRebuildForDirtyArticles = async (projectId: string, artic
           runner: tx,
         })
 
-        return queueLargeRebuildsForDirtyStates(states, tx)
+        return requestLargeRebuildsForDirtyStates(states, tx)
       }) as Promise<MarkedProjectDirtyState[]>)
 }
 
@@ -2853,7 +2853,7 @@ const refreshProjectArticleMartsBatch = async (projectId: string, articleIds: st
   }
 
   if (!(await getHasActiveProjectReviewServingGeneration(projectId))) {
-    await queueProjectLargeRebuildForDirtyArticles(
+    await requestProjectLargeRebuildForDirtyArticles(
       projectId,
       refreshArticleIds,
       'missingActiveProjectReviewServingGeneration',
@@ -2875,7 +2875,7 @@ const refreshDirtyProjectArticleBatch = async (projectId: string, articleIds: st
   }
 
   if (!(await getHasActiveProjectReviewServingGeneration(projectId))) {
-    await queueProjectLargeRebuildForDirtyArticles(
+    await requestProjectLargeRebuildForDirtyArticles(
       projectId,
       refreshArticleIds,
       'missingActiveProjectReviewServingGeneration',
@@ -2966,13 +2966,13 @@ const yieldToEventLoop = async (): Promise<void> => {
   })
 }
 
-const duckdbMartRefreshService = {
+const duckdbMartMaintenanceService = {
   getThroughputSnapshot: getMartRefreshThroughputSnapshot,
   hasActiveProjectReviewServingGeneration: getHasActiveProjectReviewServingGeneration,
-  queueProjectLargeRebuild: async (projectId: string, reason: string) => {
-    await queueProjectLargeRebuilds([projectId], reason)
+  requestProjectLargeRebuild: async (projectId: string, reason: string) => {
+    return requestProjectLargeRebuilds([projectId], reason)
   },
-  queueProjectLargeRebuilds,
+  requestProjectLargeRebuilds,
   purgeArchivedProjectMartData,
   purgeArchivedProjectMartDataBatch,
   purgeNextArchivedProjectMartBatch,
@@ -2992,6 +2992,6 @@ const duckdbMartRefreshService = {
   },
 }
 
-export const getDuckdbMartRefreshService = () => {
-  return duckdbMartRefreshService
+export const getDuckdbMartMaintenanceService = () => {
+  return duckdbMartMaintenanceService
 }

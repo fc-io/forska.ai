@@ -12,7 +12,7 @@ type LargeRebuildStateRunner = {
   run: (statement: string) => Promise<void>
 }
 
-type QueueLargeRebuildParams = {
+type RequestLargeRebuildParams = {
   cursorArticleCreatedAt?: Date | null
   cursorArticleId?: string | null
   now?: Date
@@ -202,7 +202,7 @@ const getLargeRebuildStateRecord = async (runner: LargeRebuildStateRunner, proje
   return row ?? null
 }
 
-const getQueuedCursorArticleCreatedAtSql = ({
+const getRequestedCursorArticleCreatedAtSql = ({
   cursorArticleCreatedAt,
   rebuildPhase,
 }: {
@@ -216,7 +216,7 @@ const getQueuedCursorArticleCreatedAtSql = ({
     : `CASE WHEN rebuild_phase = ${getSqlLiteral(rebuildPhase)} THEN cursor_article_created_at ELSE NULL END`
 }
 
-const getQueuedCursorArticleIdSql = ({
+const getRequestedCursorArticleIdSql = ({
   cursorArticleId,
   rebuildPhase,
 }: {
@@ -228,7 +228,7 @@ const getQueuedCursorArticleIdSql = ({
     : `CASE WHEN rebuild_phase = ${getSqlLiteral(rebuildPhase)} THEN cursor_article_id ELSE NULL END`
 }
 
-const queueLargeRebuild = async ({
+const requestLargeRebuild = async ({
   cursorArticleCreatedAt,
   cursorArticleId,
   now,
@@ -237,11 +237,14 @@ const queueLargeRebuild = async ({
   refreshToken,
   runner,
   targetGeneration,
-}: QueueLargeRebuildParams) => {
+}: RequestLargeRebuildParams) => {
   return withTransaction(runner, async (tx) => {
     const currentNow = getNow(now)
-    const queuedCursorArticleCreatedAtSql = getQueuedCursorArticleCreatedAtSql({cursorArticleCreatedAt, rebuildPhase})
-    const queuedCursorArticleIdSql = getQueuedCursorArticleIdSql({cursorArticleId, rebuildPhase})
+    const requestedCursorArticleCreatedAtSql = getRequestedCursorArticleCreatedAtSql({
+      cursorArticleCreatedAt,
+      rebuildPhase,
+    })
+    const requestedCursorArticleIdSql = getRequestedCursorArticleIdSql({cursorArticleId, rebuildPhase})
 
     await ensureLargeRebuildStateRow(tx, projectId)
     await tx.run(`
@@ -257,11 +260,11 @@ const queueLargeRebuild = async ({
         END,
         cursor_article_created_at = CASE
           WHEN refresh_token > 0 AND refresh_status IN ('running', 'paused') THEN cursor_article_created_at
-          ELSE ${queuedCursorArticleCreatedAtSql}
+          ELSE ${requestedCursorArticleCreatedAtSql}
         END,
         cursor_article_id = CASE
           WHEN refresh_token > 0 AND refresh_status IN ('running', 'paused') THEN cursor_article_id
-          ELSE ${queuedCursorArticleIdSql}
+          ELSE ${requestedCursorArticleIdSql}
         END,
         target_generation = CASE
           WHEN refresh_token > 0 AND refresh_status IN ('running', 'paused') THEN target_generation
@@ -839,7 +842,7 @@ const projectMartLargeRebuildStateService = {
   getLargeRebuildState,
   heartbeatLargeRebuildClaim,
   pauseLargeRebuild,
-  queueLargeRebuild,
+  requestLargeRebuild,
   recordLargeRebuildFrozenScope,
   resetLargeRebuild,
   resumeLargeRebuild,
@@ -858,8 +861,8 @@ export type {
   HeartbeatLargeRebuildClaimParams,
   LargeRebuildClaim,
   PauseLargeRebuildParams,
-  QueueLargeRebuildParams,
   RecordLargeRebuildFrozenScopeParams,
+  RequestLargeRebuildParams,
   ResetLargeRebuildParams,
   ResumeLargeRebuildParams,
   SetLargeRebuildOperatorNoteParams,

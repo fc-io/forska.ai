@@ -2,7 +2,7 @@ import {Elysia, t} from 'elysia'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {getQuotedStringList} from '../../services/appQueryHelpers.ts'
-import {getDuckdbMartRefreshService} from '../../services/getDuckdbMartRefreshService.ts'
+import {getDuckdbMartMaintenanceService} from '../../services/getDuckdbMartMaintenanceService.ts'
 import {
   archivedProjectCleanupHandledProjectForeignKeys,
   assertArchivedProjectCleanupProjectForeignKeysTx,
@@ -836,7 +836,7 @@ const purgeArchivedProjectMarts = async (projectIds: string[]): Promise<void> =>
     return
   }
 
-  await getDuckdbMartRefreshService().purgeArchivedProjectMartData(currentProjectId)
+  await getDuckdbMartMaintenanceService().purgeArchivedProjectMartData(currentProjectId)
   return purgeArchivedProjectMarts(projectIds.slice(1))
 }
 

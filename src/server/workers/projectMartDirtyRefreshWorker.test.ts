@@ -10,7 +10,7 @@ test('dirty refresh worker parks quarantine-blocked claims without publishing AC
       clearArchivedLargeRebuildStates: mock(async () => {
         return null
       }),
-      queueLargeRebuild: mock(async () => {
+      requestLargeRebuild: mock(async () => {
         return null
       }),
     },

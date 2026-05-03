@@ -136,9 +136,9 @@ test('large rebuild state migration creates typed schema and indexes', () => {
   ])
 })
 
-test('queueLargeRebuild creates and resets queued rebuild state', () => {
+test('requestLargeRebuild creates and resets requested rebuild state', () => {
   const result = runScript<{row: ProjectMartLargeRebuildStateRecord}>(`
-    await service.queueLargeRebuild({
+    await service.requestLargeRebuild({
       cursorArticleCreatedAt: new Date('2026-04-03T08:00:00.000Z'),
       cursorArticleId: 'article-1',
       projectId: 'large-rebuild-project-1',
@@ -182,7 +182,7 @@ test('queueLargeRebuild creates and resets queued rebuild state', () => {
   expect(result.row.lastError).toBeNull()
 })
 
-test('queueLargeRebuild preserves active work when another rebuild is already queued', () => {
+test('requestLargeRebuild preserves active work when another rebuild is already requested', () => {
   const result = runScript<{
     row: {
       cursorArticleCreatedAt: string | null
@@ -191,7 +191,7 @@ test('queueLargeRebuild preserves active work when another rebuild is already qu
       refreshToken: number
     } | null
   }>(`
-    await service.queueLargeRebuild({
+    await service.requestLargeRebuild({
       cursorArticleCreatedAt: new Date('2026-04-03T08:00:00.000Z'),
       cursorArticleId: 'article-1',
       projectId: 'large-rebuild-project-1',
@@ -199,7 +199,7 @@ test('queueLargeRebuild preserves active work when another rebuild is already qu
       refreshToken: 7,
     })
     await service.claimLargeRebuilds({leaseMs: 5000, limit: 1, workerId: 'worker-1'})
-    await service.queueLargeRebuild({
+    await service.requestLargeRebuild({
       projectId: 'large-rebuild-project-1',
       rebuildPhase: 'prompt_answer_fact',
       refreshToken: 11,
@@ -215,14 +215,14 @@ test('queueLargeRebuild preserves active work when another rebuild is already qu
   expect(new Date(result.row?.cursorArticleCreatedAt ?? '').toISOString()).toBe('2026-04-03T08:00:00.000Z')
 })
 
-test('queueLargeRebuild supersedes idle queued work with a newer rebuild token', () => {
+test('requestLargeRebuild supersedes idle requested work with a newer rebuild token', () => {
   const result = runScript<{row: {rebuildPhase: string; refreshToken: number} | null}>(`
-    await service.queueLargeRebuild({
+    await service.requestLargeRebuild({
       projectId: 'large-rebuild-project-1',
       rebuildPhase: 'judgment_fact',
       refreshToken: 7,
     })
-    await service.queueLargeRebuild({
+    await service.requestLargeRebuild({
       projectId: 'large-rebuild-project-1',
       rebuildPhase: 'review_article_serving',
       refreshToken: 11,
@@ -237,9 +237,9 @@ test('queueLargeRebuild supersedes idle queued work with a newer rebuild token',
   expect(result.row?.rebuildPhase).toBe('review_article_serving')
 })
 
-test('queueLargeRebuild clears completed target generation for the next rebuild', () => {
-  const result = runScript<{completedTargetGeneration: number | null; queuedTargetGeneration: number | null}>(`
-    await service.queueLargeRebuild({
+test('requestLargeRebuild clears completed target generation for the next rebuild', () => {
+  const result = runScript<{completedTargetGeneration: number | null; requestedTargetGeneration: number | null}>(`
+    await service.requestLargeRebuild({
       projectId: 'large-rebuild-project-1',
       rebuildPhase: 'review_article_serving',
       refreshToken: 7,
@@ -250,25 +250,25 @@ test('queueLargeRebuild clears completed target generation for the next rebuild'
       projectId: 'large-rebuild-project-1',
       workerId: 'worker-1',
     })
-    await service.queueLargeRebuild({
+    await service.requestLargeRebuild({
       projectId: 'large-rebuild-project-1',
       rebuildPhase: 'project_scope_article',
       refreshToken: 8,
     })
-    const queued = await service.getLargeRebuildState('large-rebuild-project-1')
+    const requested = await service.getLargeRebuildState('large-rebuild-project-1')
 
     console.log(JSON.stringify({
       completedTargetGeneration: completed?.targetGeneration ?? null,
-      queuedTargetGeneration: queued?.targetGeneration ?? null,
+      requestedTargetGeneration: requested?.targetGeneration ?? null,
     }))
     await database.close()
   `)
 
   expect(result.completedTargetGeneration).toBeNull()
-  expect(result.queuedTargetGeneration).toBeNull()
+  expect(result.requestedTargetGeneration).toBeNull()
 })
 
-test('queueLargeRebuild does not rewind active work when requeued into a new phase', () => {
+test('requestLargeRebuild does not rewind active work when requested again into a new phase', () => {
   const result = runScript<{
     row: {
       cursorArticleCreatedAt: string | null
@@ -277,7 +277,7 @@ test('queueLargeRebuild does not rewind active work when requeued into a new pha
       refreshToken: number
     } | null
   }>(`
-    await service.queueLargeRebuild({
+    await service.requestLargeRebuild({
       cursorArticleCreatedAt: new Date('2026-04-03T08:00:00.000Z'),
       cursorArticleId: 'article-1',
       projectId: 'large-rebuild-project-1',
@@ -285,7 +285,7 @@ test('queueLargeRebuild does not rewind active work when requeued into a new pha
       refreshToken: 7,
     })
     await service.claimLargeRebuilds({leaseMs: 5000, limit: 1, workerId: 'worker-1'})
-    await service.queueLargeRebuild({
+    await service.requestLargeRebuild({
       projectId: 'large-rebuild-project-1',
       rebuildPhase: 'review_article_filter_member',
       refreshToken: 11,
@@ -311,7 +311,7 @@ test('ensureLargeRebuildTargetGeneration initializes once from the next serving 
       INSERT INTO app.project_review_serving_generation (project_id, active_generation)
       VALUES ('large-rebuild-project-1', 4)
     \`)
-    await service.queueLargeRebuild({
+    await service.requestLargeRebuild({
       projectId: 'large-rebuild-project-1',
       rebuildPhase: 'review_article_filter_member',
       refreshToken: 7,
@@ -355,12 +355,12 @@ test('claim heartbeat complete fail and reset large rebuild state', () => {
     heartbeated: {leaseExpiresAt: string; projectId: string} | null
     reset: ProjectMartLargeRebuildStateRecord | null
   }>(`
-    await service.queueLargeRebuild({
+    await service.requestLargeRebuild({
       projectId: 'large-rebuild-project-1',
       rebuildPhase: 'judgment_fact',
       refreshToken: 5,
     })
-    await service.queueLargeRebuild({
+    await service.requestLargeRebuild({
       projectId: 'large-rebuild-project-2',
       rebuildPhase: 'review_article_rollup',
       refreshToken: 9,
@@ -418,7 +418,7 @@ test('claimLargeRebuilds preserves target generation across expired lease resume
     resumedClaim: Array<{projectId: string; targetGeneration: number | null; workerId: string}>
     row: {targetGeneration: number | null; workerId: string | null} | null
   }>(`
-    await service.queueLargeRebuild({
+    await service.requestLargeRebuild({
       cursorArticleCreatedAt: new Date('2026-04-03T08:00:00.000Z'),
       cursorArticleId: 'article-1',
       projectId: 'large-rebuild-project-1',
@@ -457,8 +457,8 @@ test('claimLargeRebuilds preserves target generation across expired lease resume
 
 test('claimLargeRebuilds rotates to less recently started work instead of starving other projects', () => {
   const result = runScript<{firstClaim: Array<{projectId: string}>; secondClaim: Array<{projectId: string}>}>(`
-    await service.queueLargeRebuild({projectId: 'large-rebuild-project-1', rebuildPhase: 'prompt_answer_fact', refreshToken: 1})
-    await service.queueLargeRebuild({projectId: 'large-rebuild-project-2', rebuildPhase: 'prompt_answer_fact', refreshToken: 99})
+    await service.requestLargeRebuild({projectId: 'large-rebuild-project-1', rebuildPhase: 'prompt_answer_fact', refreshToken: 1})
+    await service.requestLargeRebuild({projectId: 'large-rebuild-project-2', rebuildPhase: 'prompt_answer_fact', refreshToken: 99})
 
     const firstClaim = await service.claimLargeRebuilds({leaseMs: 5000, limit: 1, workerId: 'worker-1'})
     await service.resetLargeRebuild({projectId: 'large-rebuild-project-1', rebuildPhase: 'prompt_answer_fact'})
@@ -482,8 +482,8 @@ test('clearArchivedLargeRebuildStates removes archived rebuild debt and claimLar
       SET archived = TRUE
       WHERE id = 'large-rebuild-project-2'
     \`)
-    await service.queueLargeRebuild({projectId: 'large-rebuild-project-1', rebuildPhase: 'judgment_fact', refreshToken: 5})
-    await service.queueLargeRebuild({projectId: 'large-rebuild-project-2', rebuildPhase: 'review_article_rollup', refreshToken: 9})
+    await service.requestLargeRebuild({projectId: 'large-rebuild-project-1', rebuildPhase: 'judgment_fact', refreshToken: 5})
+    await service.requestLargeRebuild({projectId: 'large-rebuild-project-2', rebuildPhase: 'review_article_rollup', refreshToken: 9})
 
     const claims = await service.claimLargeRebuilds({leaseMs: 5000, limit: 5, workerId: 'worker-1'})
     await service.clearArchivedLargeRebuildStates()
@@ -510,7 +510,7 @@ test('pauseLargeRebuild and resumeLargeRebuild preserve cursor state and exclude
     paused: {cursorArticleId: string | null; lastError: string | null; refreshStatus: string} | null
     resumed: {cursorArticleId: string | null; refreshStatus: string} | null
   }>(`
-    await service.queueLargeRebuild({
+    await service.requestLargeRebuild({
       cursorArticleCreatedAt: new Date('2026-04-04T08:00:00.000Z'),
       cursorArticleId: 'article-paused',
       projectId: 'large-rebuild-project-1',
@@ -539,7 +539,7 @@ test('pauseLargeRebuild and resumeLargeRebuild preserve cursor state and exclude
 
 test('setLargeRebuildOperatorNote persists durable operator notes separately from errors', () => {
   const result = runScript<{note: string | null; lastError: string | null}>(`
-    await service.queueLargeRebuild({projectId: 'large-rebuild-project-1', rebuildPhase: 'prompt_answer_fact', refreshToken: 7})
+    await service.requestLargeRebuild({projectId: 'large-rebuild-project-1', rebuildPhase: 'prompt_answer_fact', refreshToken: 7})
     await service.setLargeRebuildOperatorNote({projectId: 'large-rebuild-project-1', note: 'Investigating intermittent cursor stall'})
     const noteRow = await service.getLargeRebuildState('large-rebuild-project-1')
 

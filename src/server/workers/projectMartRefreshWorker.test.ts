@@ -198,7 +198,7 @@ const createWorkerTestContext = (params: {
         callLog.push('clearArchivedLargeRebuildStates')
         return null
       }),
-      queueLargeRebuild: mock(
+      requestLargeRebuild: mock(
         async ({
           projectId,
           rebuildPhase,
@@ -658,7 +658,7 @@ test('dirty batch routing keeps review pages counts warnings and prompt queueing
           const {Elysia} = await import('elysia')
           const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
           const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
-          const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts')
+          const {getDuckdbMartMaintenanceService} = await import('./src/server/services/getDuckdbMartMaintenanceService.ts')
           const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
           const {projectsRoutesGetReviewsWarnings} = await import('./src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts')
           const {judgmentsJobsCronGetPrompts} = await import('./src/server/cron/judgmentsJobs/judgmentsJobsCronGetPrompts.ts')
@@ -668,7 +668,7 @@ test('dirty batch routing keeps review pages counts warnings and prompt queueing
           await migrateDuckdb()
 
           const database = getAppDatabaseService()
-          const martRefreshService = getDuckdbMartRefreshService()
+          const martRefreshService = getDuckdbMartMaintenanceService()
           const refreshStateService = getProjectMartDirtyRefreshStateService()
 
           await database.run(\`

@@ -4,12 +4,20 @@ import {expect, test} from 'bun:test'
 
 const projectRoot = process.cwd()
 
-test('package exposes rebuild2 cutover and removes obsolete mart refresh queue commands', async () => {
+test('package exposes final rebuild2 command surface and removes obsolete mart refresh queue commands', async () => {
   const packageJson = (await Bun.file(join(projectRoot, 'package.json')).json()) as {scripts: Record<string, string>}
   const obsoleteCommandMatches = Object.entries(packageJson.scripts)
     .filter(([name, command]) => {
       return (
         `${name} ${command}`.includes('refresh-queue')
+        || `${name} ${command}`.includes('db:duck:rebuild-marts')
+        || `${name} ${command}`.includes('db:duck:backfill-review-serving-v3')
+        || `${name} ${command}`.includes('db:duck:refresh-project-once')
+        || `${name} ${command}`.includes('db:duck:run-large-rebuild-cycle')
+        || `${name} ${command}`.includes('db:duck:run-large-rebuild-cycles')
+        || command.includes('backfillReviewServingV3')
+        || command.includes('runProjectMartLargeRebuildCycle.ts')
+        || command.includes('runProjectMartLargeRebuildCycles.ts')
         || `${name} ${command}`.includes('quarantine-refresh-article')
         || command.includes('recoverArchivedProjectRefreshQueue')
         || command.includes('quarantineProjectMartRefreshArticle')
@@ -22,6 +30,18 @@ test('package exposes rebuild2 cutover and removes obsolete mart refresh queue c
 
   expect(packageJson.scripts['db:duck:rebuild2-cutover']).toBe(
     'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/rebuild2Cutover.ts',
+  )
+  expect(packageJson.scripts['db:duck:request-project-large-rebuild']).toBe(
+    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/requestProjectLargeRebuild.ts',
+  )
+  expect(packageJson.scripts['db:duck:request-review-serving-large-rebuild']).toBe(
+    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/requestReviewServingLargeRebuild.ts',
+  )
+  expect(packageJson.scripts['db:duck:run-large-rebuild-worker-once']).toBe(
+    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/runLargeRebuildWorkerOnce.ts',
+  )
+  expect(packageJson.scripts['db:duck:run-large-rebuild-worker-cycles']).toBe(
+    'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/runLargeRebuildWorkerCycles.ts',
   )
   expect(packageJson.scripts['db:duck:quarantine-dirty-refresh-article']).toBe(
     'SERVER_ROLE=maintenance-worker SERVER_DUCKDB_OWNER_URL= bun scripts/quarantineDirtyRefreshArticle.ts',

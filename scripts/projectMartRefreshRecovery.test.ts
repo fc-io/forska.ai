@@ -481,7 +481,7 @@ test('recoverProjectMartRefreshClaims lists and recovers stale claims only when 
   expect(state).toEqual({lastCompletedDirtyToken: '1', refreshStatus: 'idle'})
 })
 
-test('runProjectMartLargeRebuildCycle CLI advances one staged batch with conservative default batch size', () => {
+test('runLargeRebuildWorkerOnce CLI advances one staged batch with conservative default batch size', () => {
   const duckdbPath = join(projectRoot, '.tmp', 'run-project-mart-large-rebuild-cli.duckdb')
   removeFileIfExists(dirname(duckdbPath))
   seedDatabase({dirtyArticleCount: 1, duckdbPath, projectId: 'project-large-rebuild-cli', refreshStatus: 'idle'})
@@ -607,7 +607,7 @@ test('runProjectMartLargeRebuildCycle CLI advances one staged batch with conserv
   }
 
   const runScript = globalThis.Bun.spawnSync(
-    ['bun', 'scripts/runProjectMartLargeRebuildCycle.ts', '--worker-id=test-large-rebuild-cli'],
+    ['bun', 'scripts/runLargeRebuildWorkerOnce.ts', '--worker-id=test-large-rebuild-cli'],
     {cwd: projectRoot, env: {...defaultEnv, DUCKDB_PATH: duckdbPath, SERVER_ROLE: 'maintenance-worker', SERVER_DUCKDB_OWNER_URL: ''}},
   )
 
@@ -630,7 +630,7 @@ test('runProjectMartLargeRebuildCycle CLI advances one staged batch with conserv
   expect(result.nextCursor?.articleId).toBe('article-1')
 })
 
-test('runProjectMartLargeRebuildCycles CLI returns structured bounded multi-cycle progress summary', () => {
+test('runLargeRebuildWorkerCycles CLI returns structured bounded multi-cycle progress summary', () => {
   const duckdbPath = join(projectRoot, '.tmp', 'run-project-mart-large-rebuild-cycles-cli.duckdb')
   removeFileIfExists(dirname(duckdbPath))
   seedDatabase({dirtyArticleCount: 1, duckdbPath, projectId: 'project-large-rebuild-cycles-cli', refreshStatus: 'idle'})
@@ -760,7 +760,7 @@ test('runProjectMartLargeRebuildCycles CLI returns structured bounded multi-cycl
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
-      'scripts/runProjectMartLargeRebuildCycles.ts',
+      'scripts/runLargeRebuildWorkerCycles.ts',
       '--worker-id=test-large-rebuild-cycles-cli',
       '--max-cycles=3',
     ],

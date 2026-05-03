@@ -315,9 +315,9 @@ const rebuildMartRefreshQueueWithoutGeneration = async () => {
     CREATE INDEX IF NOT EXISTS idx_app_mart_refresh_queue_created_at ON app.mart_refresh_queue(created_at);
   `)
 
-  const {getDuckdbMartRefreshService} = await import('../services/getDuckdbMartRefreshService.ts')
+  const {getDuckdbMartMaintenanceService} = await import('../services/getDuckdbMartMaintenanceService.ts')
 
-  getDuckdbMartRefreshService().resetRuntimeStateForTests()
+  getDuckdbMartMaintenanceService().resetRuntimeStateForTests()
 }
 
 const insertReviewArticleServingFixtureRows = async ({
@@ -403,7 +403,7 @@ beforeAll(async () => {
     {getAppDatabaseService},
     {resetDuckdbServiceForTests},
     {resetServerRuntimeRoleForTests},
-    {getDuckdbMartRefreshService},
+    {getDuckdbMartMaintenanceService},
     {getProjectMartDirtyRefreshStateService},
     {projectsRoutes},
   ] = await Promise.all([
@@ -411,7 +411,7 @@ beforeAll(async () => {
     import('../services/appDatabaseService.ts'),
     import('../utils/duckdbService.ts'),
     import('../utils/serverRuntimeRole.ts'),
-    import('../services/getDuckdbMartRefreshService.ts'),
+    import('../services/getDuckdbMartMaintenanceService.ts'),
     import('../services/projectMartDirtyRefreshStateService.ts'),
     import('./ProjectsRoutes.ts'),
   ])
@@ -428,13 +428,13 @@ beforeAll(async () => {
   }
   flushMartRefreshes = async () => {}
   purgeArchivedProjectMartDataBatch = (projectId: string) => {
-    return getDuckdbMartRefreshService().purgeArchivedProjectMartDataBatch(projectId)
+    return getDuckdbMartMaintenanceService().purgeArchivedProjectMartDataBatch(projectId)
   }
   markArticleProjectsDirty = async (articleId: string, reason: string) => {
     await getProjectMartDirtyRefreshStateService().markArticleProjectsDirtyAtomically({articleIds: [articleId], reason})
   }
   refreshProject = (projectId: string) => {
-    return getDuckdbMartRefreshService().refreshProject(projectId)
+    return getDuckdbMartMaintenanceService().refreshProject(projectId)
   }
   queryDatabase = (statement: string) => {
     return database.queryJson(statement)

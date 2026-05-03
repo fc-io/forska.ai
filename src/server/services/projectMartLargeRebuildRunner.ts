@@ -4,7 +4,7 @@ import {
   getProjectMartLargeRebuildCycleQueueDelta,
   recordProjectMartLargeRebuildCycleMetric,
 } from '../utils/projectMartLargeRebuildRuntimeMetrics.ts'
-import {getDuckdbMartRefreshService} from './getDuckdbMartRefreshService.ts'
+import {getDuckdbMartMaintenanceService} from './getDuckdbMartMaintenanceService.ts'
 import {getProjectMartDirtyRefreshStateService} from './projectMartDirtyRefreshStateService.ts'
 import {
   getProjectMartLargeRebuildExecutor,
@@ -194,7 +194,7 @@ const defaultLeaseMs = 30_000
 const defaultHeartbeatMs = 10_000
 
 const defaultDependencies: ProjectMartLargeRebuildRunnerDependencies = {
-  archivedProjectCleanupService: getDuckdbMartRefreshService(),
+  archivedProjectCleanupService: getDuckdbMartMaintenanceService(),
   executor: getProjectMartLargeRebuildExecutor(),
   largeRebuildStateService: getProjectMartLargeRebuildStateService(),
   refreshStateService: getProjectMartDirtyRefreshStateService(),

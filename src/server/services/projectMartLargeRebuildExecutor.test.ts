@@ -742,7 +742,7 @@ test('large rebuild and incremental refresh agree on shared clone judgment reuse
       reusedJudgmentCount: number
     }>
   }>(`
-    const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts')
+    const {getDuckdbMartMaintenanceService} = await import('./src/server/services/getDuckdbMartMaintenanceService.ts')
 
     await database.run(\`
       INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
@@ -820,7 +820,7 @@ test('large rebuild and incremental refresh agree on shared clone judgment reuse
       )
     \`)
 
-    const martRefreshService = getDuckdbMartRefreshService()
+    const martRefreshService = getDuckdbMartMaintenanceService()
     await martRefreshService.refreshJudgmentFactsForArticles(['shared-reuse-article'])
     await database.run(\`
       INSERT INTO app.project_review_serving_generation (project_id, active_generation)
@@ -963,9 +963,9 @@ test('large rebuild drops reused source judgments after a cloned project repoint
     beforeEditTargetDetailRows: Array<{articleId: string; judgmentId: string; promptId: string}>
     beforeEditTargetPromptAnswerRows: Array<{articleId: string; judgmentId: string; promptId: string}>
   }>(`
-    const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts')
+    const {getDuckdbMartMaintenanceService} = await import('./src/server/services/getDuckdbMartMaintenanceService.ts')
 
-    const martRefreshService = getDuckdbMartRefreshService()
+    const martRefreshService = getDuckdbMartMaintenanceService()
     const targetGenerationByProject = {}
 
     const getNextTargetGeneration = (projectId) => {

@@ -1,6 +1,6 @@
 import {Elysia, t} from 'elysia'
 
-import {getDuckdbMartRefreshService} from '../services/getDuckdbMartRefreshService.ts'
+import {getDuckdbMartMaintenanceService} from '../services/getDuckdbMartMaintenanceService.ts'
 import {
   assertDuckdbOwnerConnectionHeartbeatCompatible,
   getDuckdbOwnerConnectionsOverview,
@@ -102,7 +102,7 @@ export const duckdbOwnerConnectionsRoutes = new Elysia()
     return {
       data: {
         ...(await getDuckdbOwnerConnectionsOverview()),
-        martRefresh: {throughput: getDuckdbMartRefreshService().getThroughputSnapshot()},
+        martRefresh: {throughput: getDuckdbMartMaintenanceService().getThroughputSnapshot()},
       },
     }
   })

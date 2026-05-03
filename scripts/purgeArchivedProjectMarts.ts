@@ -1,5 +1,5 @@
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
-import {getDuckdbMartRefreshService} from '../src/server/services/getDuckdbMartRefreshService.ts'
+import {getDuckdbMartMaintenanceService} from '../src/server/services/getDuckdbMartMaintenanceService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 
 const projectScopedTables = [
@@ -87,7 +87,7 @@ const purgeArchivedProjects = async (projectIds: string[], index = 0): Promise<v
   console.log(
     `[purgeArchivedProjectMarts] purging archived project ${index + 1}/${projectIds.length}: ${currentProjectId}`,
   )
-  await getDuckdbMartRefreshService().purgeArchivedProjectMartData(currentProjectId)
+  await getDuckdbMartMaintenanceService().purgeArchivedProjectMartData(currentProjectId)
 
   return purgeArchivedProjects(projectIds, index + 1)
 }
