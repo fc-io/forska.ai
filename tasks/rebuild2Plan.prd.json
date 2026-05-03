@@ -1,0 +1,388 @@
+{
+  "name": "Rebuild 2 Plan",
+  "branchName": "ralph/rebuild-2",
+  "description": "Finish the rebuild2 mart-maintenance cutover so dirty-refresh, large-rebuild, archived cleanup, quarantine, and judgment import paths are bounded, fenced, and resumable for 2M-article projects.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add dirty-state materialization schema and final token names",
+      "description": "As a maintainer, I want durable project-wide dirty-state materialization and dirty-token naming so project-wide work can be resumed and ACKed without legacy refresh-token fields.",
+      "acceptanceCriteria": [
+        "Add durable project-wide dirty-state materialization state with source kind, target dirty token, cursor, inserted row count, source scope snapshot/high-water or fingerprint, status, owner/lease fields, and timestamps.",
+        "Rename dirty-refresh state columns and API fields from refresh-token terminology to dirty-token terminology, including `last_completed_refresh_token` to `last_completed_dirty_token`, without parallel legacy field names.",
+        "Materialization state updates, cursor advancement, completion, failure marking, and token exposure are fenced by materialization owner, lease, dirty token, source snapshot/high-water, and status.",
+        "Schema migrations are schema-only and do not clear obsolete queue, dirty, rebuild, quarantine, outbox, or lease state.",
+        "bun test src/server/services/projectMartDirtyRefreshStateService.test.ts passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun run db:mig passes",
+        "bun run lint passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    },
+    {
+      "id": "US-002",
+      "title": "Implement DB-side project-wide dirty materialization",
+      "description": "As a maintainer, I want project-wide dirty work to insert article IDs in database batches so 2M-article scopes never materialize article IDs in JavaScript.",
+      "acceptanceCriteria": [
+        "Replace project-wide dirty-state creation that collects scoped article IDs in JS with DB-side `INSERT ... SELECT` batches against the final versioned project scope source.",
+        "Each target dirty token records and validates the versioned project scope generation/high-water it read, and concurrent scope mutations create later dirty tokens instead of mixing source states.",
+        "Before marking materialization complete, reconcile inserted article rows against the recorded scope generation/high-water, expected row count, and source fingerprint where available.",
+        "Failed, incomplete, or unreconciled materializations keep their dirty token unclaimable until repaired or superseded.",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test src/server/routes/judgmentsJobsRoutesDirtyMaterializationFreshness.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001"]
+    },
+    {
+      "id": "US-003",
+      "title": "Enforce dirty-token ACK barriers",
+      "description": "As a maintainer, I want dirty-token completion to advance only through fully materialized and processed tokens so stale freshness or ACK state cannot skip failed work.",
+      "acceptanceCriteria": [
+        "Project `last_completed_dirty_token`, completed-through markers, owner ACKs, and freshness status do not advance past incomplete, failed, or unreconciled project-wide article materialization.",
+        "Project ACK/completed-token advancement uses contiguous-token advancement across completed materialization, unresolved quarantine barriers, and processed dirty-refresh work.",
+        "Later processed-past-barrier rows never allow skipping an earlier incomplete, failed, unreconciled, or quarantined token.",
+        "Crash recovery covers before materialization state creation, after state before article insert, mid-batch, after article insert before completion, and after completion before worker wake.",
+        "bun test src/server/services/projectMartDirtyRefreshStateService.test.ts passes",
+        "bun test src/server/services/projectMartDirtyMaterializationService.test.ts passes",
+        "bun test scripts/projectMartDirtyRefreshRecovery.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001", "US-002"]
+    },
+    {
+      "id": "US-004",
+      "title": "Rewrite callers to dirty-state or large-rebuild requests",
+      "description": "As a maintainer, I want every project, prompt, import, human-assessment, and repair caller to write dirty-state or guarded large-rebuild work directly so legacy queue rows cannot be recreated.",
+      "acceptanceCriteria": [
+        "Replace all callers of `queueProjectRefresh`, `queueProjectRefreshes`, `queueProjectRefreshesByImportRouteIds`, `queueProjectRefreshesByPromptIds`, `queueJudgmentArticleRefresh`, `queueJudgmentArticleRefreshes`, `queueJudgmentArticleRefreshesByJudgmentIds`, `queueJudgmentArticleRefreshesByPromptIds`, and `queueImportedArticleRefreshes` with direct dirty-state or guarded large-rebuild writes.",
+        "Project create/edit/clone, project-article deletes, subproject creation, human assessment submission, prompt edits, import-store writes, archive, unarchive, backfill, purge, and repair-script work mark the exact affected dirty state and do not recreate queue rows.",
+        "Delete old queue-named exports in the same slice and do not leave no-op wrappers.",
+        "bun test src/server/routes/ProjectsRoutes.test.ts passes",
+        "bun test src/server/routes/PromptsRoutes.test.ts passes",
+        "bun test src/server/routes/SubprojectsRoutes.test.ts passes",
+        "bun test src/server/routes/HumanAssessmentRoutes/humanAssessmentRoutesPostSubmit.test.ts passes",
+        "bun test src/server/routes/DataSourcesImportRoutes/dataSourcesImportRoutesPostCovidence.test.ts passes",
+        "bun test src/server/services/articleImportStoreService.test.ts passes",
+        "bun test src/server/services/insertArticlesIntoProject.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001", "US-002"]
+    },
+    {
+      "id": "US-005",
+      "title": "Make judgment storage and outbox import ACK-safe",
+      "description": "As a maintainer, I want judgment persistence and SQLite outbox import to make dirty work durable before ACKs so imported judgments cannot become visible without refresh work.",
+      "acceptanceCriteria": [
+        "`judgeStoreJudgment` stores the judgment and marks affected projects dirty atomically; if dirty-state marking fails, the judgment write is not silently committed as ACK-safe.",
+        "SQLite judgment outbox ACK occurs only after the committed DuckDB boundary containing judgment upsert, idempotency key/outbox import marker, and durable dirty-state or materialization request.",
+        "Normal judgment-import ACK does not wait for dirty-refresh/mart maintenance, while project dirty-refresh ACK remains blocked by unresolved quarantine.",
+        "Recovery is idempotent after DuckDB insertion before dirty marking, after dirty marking before SQLite ACK, and after SQLite ACK before maintenance-lease completion.",
+        "bun test src/agent/judge/judgeStoreJudgment/judgeStoreJudgmentDirtyStateAtomicity.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.test.ts passes",
+        "bun test scripts/recoverJudgmentJobWithSystemSqlite.test.ts passes",
+        "bun test src/server/cron/judgmentsJobs/judgmentsJobsMarkDirtyWork.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001", "US-003", "US-004"]
+    },
+    {
+      "id": "US-006",
+      "title": "Add fenced rebuild2 cutover command",
+      "description": "As an operator, I want one fenced `db:duck:rebuild2-cutover` command so obsolete intermediate state is cleared only after legacy writers are impossible and replacement work is rederived safely.",
+      "acceptanceCriteria": [
+        "Add `db:duck:rebuild2-cutover` to acquire the durable exclusive cutover fence, pause workers, wait for active workers to stop or leases to expire, and make stale obsolete invocations fail closed.",
+        "The command verifies deployed clean-cut code removed obsolete legacy queue, refresh, rebuild, quarantine, and outbox write paths before clearing state.",
+        "The command clears obsolete queue, dirty, rebuild, quarantine, outbox, and lease state only while fenced, then rederives replacement dirty-refresh or large-rebuild work under the cutover owner token.",
+        "The command repeats no-legacy-caller and no-obsolete-row-recreation proofs after clearing and after workers resume, and never publishes ACKs from clearing alone.",
+        "bun test scripts/rebuild2Cutover.test.ts passes",
+        "bun test src/server/utils/startBackgroundWork.test.ts passes",
+        "bun test src/server/utils/backgroundServerStack.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-004", "US-005"]
+    },
+    {
+      "id": "US-007",
+      "title": "Delete legacy mart refresh queue paths",
+      "description": "As a maintainer, I want legacy mart refresh queue paths removed after fenced cutover so no live code can recreate obsolete queue rows.",
+      "acceptanceCriteria": [
+        "`db:duck:rebuild2-cutover` clears all remaining `app.mart_refresh_queue` rows, including non-project scopes such as `judgment_article`, and verifies no rows remain before schema-only table-drop migration is allowed.",
+        "Drop the already-cleared `app.mart_refresh_queue` table through schema-only DDL after fenced cutover; the migration does not clear rows or perform cutover-state validation.",
+        "Delete queue schema repair code, queue APIs, queue CLI/package scripts, queue scripts/tests, legacy queue pruning code, `martRefreshDrainHeartbeat`, and `startBackgroundWork` queue-drain wiring.",
+        "No no-op queue wrappers remain and former callers cannot recreate queue rows.",
+        "bun test scripts/rebuild2Cutover.test.ts passes",
+        "bun test scripts/rebuild2PackageCommands.test.ts passes",
+        "bun test scripts/rebuild2ObsoleteCommandReferences.test.ts passes",
+        "bun test src/server/utils/startBackgroundWork.test.ts passes",
+        "bun run db:mig passes",
+        "bun run lint passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-006"]
+    },
+    {
+      "id": "US-008",
+      "title": "Implement quarantine ACK barrier semantics",
+      "description": "As a maintainer, I want quarantined dirty articles to remain durable while allowing non-quarantined work to proceed without advancing project ACK past the barrier.",
+      "acceptanceCriteria": [
+        "Unresolved quarantine rows are keyed by project, article, and dirty token, and project `last_completed_dirty_token`, owner ACKs, mart-maintenance outbox ACKs, and completed-through markers do not advance past the earliest unresolved quarantined token.",
+        "Claims process non-quarantined rows, persist processed-past-barrier state, and release or park as `blocked_by_quarantine` without treating that as project ACK/completion.",
+        "Redirty after a barrier keeps the earlier processed token and creates or reopens later dirty-refresh work without allowing ACK advancement to skip the later change.",
+        "Bounded cleanup prunes only already-resolved quarantine rows after project ACK advances past the barrier.",
+        "bun test src/server/services/projectMartDirtyRefreshQuarantineBarrier.test.ts passes",
+        "bun test src/server/workers/projectMartDirtyRefreshWorker.test.ts passes",
+        "bun test src/server/services/projectMartDirtyRefreshStateService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003"]
+    },
+    {
+      "id": "US-009",
+      "title": "Rename quarantine storage and CLIs",
+      "description": "As an operator, I want dirty-refresh quarantine tables and commands to use final names and preserve ACK barriers so quarantine operations are explicit and auditable.",
+      "acceptanceCriteria": [
+        "During fenced `db:duck:rebuild2-cutover` only, clear obsolete article-only quarantine rows and rederive required current quarantine/dirty-refresh work under the cutover owner token.",
+        "After cutover, a schema-only migration renames `app.project_mart_refresh_article_quarantine` to `app.project_mart_dirty_refresh_article_quarantine` and applies project/article dirty-token-scoped DDL without deleting, rewriting, backfilling, migrating, or validating obsolete rows.",
+        "Rename package commands to `db:duck:quarantine-dirty-refresh-article` and `db:duck:unquarantine-dirty-refresh-article`, and delete old refresh-named scripts in the same slice.",
+        "CLI tests prove impacted projects are reported and blocked state is released only through explicit unquarantine/retry.",
+        "bun test scripts/quarantineDirtyRefreshArticle.test.ts scripts/unquarantineDirtyRefreshArticle.test.ts passes",
+        "bun test src/server/services/projectMartDirtyRefreshQuarantineBarrier.test.ts passes",
+        "bun run db:mig passes",
+        "bun run lint passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-006", "US-008"]
+    },
+    {
+      "id": "US-010",
+      "title": "Harden dirty-refresh batch execution",
+      "description": "As a maintainer, I want dirty-refresh batches to use bounded SQL inputs and durable wake budgets so normal judgment churn remains O(dirty articles).",
+      "acceptanceCriteria": [
+        "Replace generated dirty article `VALUES` and `IN (...)` lists with DuckDB temp or staging batch tables throughout dirty-refresh SQL.",
+        "Dirty-refresh batch transactions keep `mart.project_scope_article`, `mart.prompt_answer_fact`, `app.review_answer_dictionary`, rollup, serving, detail, and filter-member rows internally consistent for each committed batch.",
+        "Dirty-refresh worker wakes stop on wall-clock budget, leave durable progress, and resume the next wake without reprocessing completed batches.",
+        "Ten dirty articles in a 2M-article project claim at most those ten article IDs and do not run project-wide downstream deletes for the claim.",
+        "bun test src/server/services/getDuckdbMartMaintenanceService.test.ts passes",
+        "bun test src/server/workers/projectMartDirtyRefreshWorker.test.ts passes",
+        "bun test src/server/utils/projectMartDirtyRefreshWorkerHeartbeat.test.ts passes",
+        "bun test scripts/projectMartDirtyRefreshRecovery.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-003", "US-008"]
+    },
+    {
+      "id": "US-011",
+      "title": "Harden large-rebuild lease and promotion fencing",
+      "description": "As a maintainer, I want large-rebuild state transitions and promotion fenced by lease, token, generation, and supersession so stale workers cannot publish or clean up newer state.",
+      "acceptanceCriteria": [
+        "Every large-rebuild state transition is guarded by worker, lease, phase, token, and target generation, including cursor updates, phase advancement, active-generation promotion, cleanup eligibility, and completed/ACK markers.",
+        "Frozen scope records the rebuild source dirty-token/high-water, and promotion carries forward later dirty-refresh work or marks it pending against the promoted generation before reporting the project fully fresh.",
+        "Only the current non-superseded rebuild token may promote for a project/rebuild kind; older superseded rebuilds cannot promote, mark completion, advance ACKs, or make cleanup eligible.",
+        "Old-generation cleanup is generation-scoped, lease-fenced, batch-bounded, and rechecks active, target, retained, and referenced generation state at delete time.",
+        "bun test src/server/services/projectMartLargeRebuildStateService.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildRunner.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildFrozenScope.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildLeaseFencing.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-001", "US-010"]
+    },
+    {
+      "id": "US-012",
+      "title": "Replace large-rebuild operator commands and APIs",
+      "description": "As an operator, I want explicit request and worker command names so normal dirty-maintenance paths are not confused with structural large-rebuild work.",
+      "acceptanceCriteria": [
+        "Replace `db:duck:rebuild-marts`, `db:duck:backfill-review-serving-v3`, `db:duck:refresh-project-once`, `db:duck:run-large-rebuild-cycle`, and `db:duck:run-large-rebuild-cycles` with final commands: `db:duck:request-project-large-rebuild`, `db:duck:request-review-serving-large-rebuild`, `db:duck:run-large-rebuild-worker-once`, and `db:duck:run-large-rebuild-worker-cycles`.",
+        "Rename queue-named large-rebuild APIs to `requestLargeRebuild`, `requestProjectLargeRebuild`, `requestProjectLargeRebuilds`, `requestLargeRebuildsForDirtyStates`, and `requestProjectLargeRebuildForDirtyArticles`.",
+        "Rename `getDuckdbMartRefreshService` and tests to `getDuckdbMartMaintenanceService` after queue deletion.",
+        "Package commands expose final rebuild2 command surface, omit obsolete command names, and keep no no-op compatibility wrappers.",
+        "bun test scripts/requestProjectLargeRebuild.test.ts passes",
+        "bun test scripts/requestReviewServingLargeRebuild.test.ts passes",
+        "bun test scripts/runLargeRebuildWorkerOnce.test.ts passes",
+        "bun test scripts/runLargeRebuildWorkerCycles.test.ts passes",
+        "bun test scripts/rebuild2PackageCommands.test.ts passes",
+        "bun test src/server/services/getDuckdbMartMaintenanceService.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-007", "US-011"]
+    },
+    {
+      "id": "US-013",
+      "title": "Replace repair and operational refresh scripts",
+      "description": "As an operator, I want repair and risk scripts to schedule current dirty-refresh or large-rebuild work without hand-written table surgery or project-refresh terminology.",
+      "acceptanceCriteria": [
+        "Rework `scripts/repairOwnedProjectPrompts.ts` so repaired prompt/judgment rows create replacement dirty work through DB-side project-wide dirty-state materialization with durable cursor/status.",
+        "Replace `db:duck:inspect-project-refresh-risk` and `db:duck:recover-project-refresh-claims` with `db:duck:inspect-dirty-refresh-risk` and `db:duck:recover-dirty-refresh-claims` that understand dirty-state materialization, quarantine barriers, scope, and large-rebuild leases.",
+        "Delete `db:duck:repair-project-refresh-ledger` and replace `db:duck:repair-judgment-fact` with `db:duck:request-judgment-fact-repair` that schedules current structural repair or large-rebuild work instead of hand-written table surgery.",
+        "No repair command drops, recreates, truncates, or clears obsolete queue, dirty, rebuild, quarantine, outbox, or lease state outside fenced `db:duck:rebuild2-cutover`.",
+        "bun test scripts/repairOwnedProjectPrompts.test.ts passes",
+        "bun test scripts/inspectDirtyRefreshRisk.test.ts passes",
+        "bun test scripts/recoverDirtyRefreshClaims.test.ts passes",
+        "bun test scripts/requestJudgmentFactRepair.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-002", "US-006", "US-012"]
+    },
+    {
+      "id": "US-014",
+      "title": "Move archived-project deletion to tombstone cleanup",
+      "description": "As a user, I want archived project deletion to return quickly while bounded cleanup finishes safely in the background without deleting shared judgment facts.",
+      "acceptanceCriteria": [
+        "`/api/projects/delete-archived` creates tombstone/delete-pending cleanup work instead of synchronously purging marts and rebuilding app tables in the request path.",
+        "Tombstoned projects are hidden from normal API/UI reads while retaining enough identity for bounded cleanup to finish and final deletion to clear the tombstone.",
+        "Final project identity/source rows are not deleted until referencing dirty-state materialization, dirty-refresh, quarantine, large-rebuild, bounded cleanup, and judgment outbox/import health projection work is completed, resolved, or non-active tombstoned without ACK advancement.",
+        "Archived cleanup uses `db:duck:run-archived-project-bounded-cleanup` and deletes old purge/repro scripts and `db:duck:purge-archived-marts`.",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesPostDeleteArchived.test.ts passes",
+        "bun test src/server/services/archivedProjectCleanupService.test.ts passes",
+        "bun test scripts/runArchivedProjectBoundedCleanup.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-006", "US-011", "US-013"]
+    },
+    {
+      "id": "US-015",
+      "title": "Preserve judgment facts and dictionary stability in cleanup",
+      "description": "As a maintainer, I want archived cleanup and repair paths to preserve shared judgment facts and append-only answer dictionary IDs so active serving rows stay valid.",
+      "acceptanceCriteria": [
+        "Make global `mart.judgment_fact` project-independent for archived cleanup by treating judgment/config identity as fact identity and moving project/snapshot display metadata to project-scoped serving/detail rows.",
+        "Archived cleanup removes only deleted-project project-scoped metadata and preserves global/shared judgment facts still visible to non-archived projects.",
+        "`app.review_answer_dictionary` remains shared stable dictionary metadata; no dirty-refresh, large-rebuild, repair, or cleanup path deletes and renumbers dictionary IDs.",
+        "Dictionary pruning proves no in-progress target generation, retained generation, active serving row, detail row, or filter-member row references the ID before pruning.",
+        "bun test src/server/services/reviewAnswerDictionaryStability.test.ts passes",
+        "bun test src/server/services/projectMartLargeRebuildExecutor.test.ts passes",
+        "bun test src/server/services/archivedProjectCleanupService.test.ts passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-011", "US-014"]
+    },
+    {
+      "id": "US-016",
+      "title": "Update review warnings and judgment freshness APIs",
+      "description": "As a user, I want review warnings and judgment-job counts to explain dirty-state materialization, dirty-refresh, quarantine, and large-rebuild status without blocking reads or hiding stale freshness.",
+      "acceptanceCriteria": [
+        "Judgment-job unassessed count/article routes treat incomplete project-wide dirty-state materialization and unresolved quarantine barriers as not-fully-fresh and return explicit pending/stale status plus bounded mart/read-model values.",
+        "Review warnings API and review indexing copy reflect dirty-state materialization, dirty-refresh, quarantine barriers, bounded cleanup, and large-rebuild states without exposing admin-only diagnostics in the user banner.",
+        "API and OLAP review filters and article review details return the same active-generation data before, during, and after dirty-state materialization, dirty-refresh, large-rebuild, promotion, and cleanup lag.",
+        "Detailed rows/sec, RSS, temp spill, and DuckDB writer queue-wait diagnostics remain API/admin-only.",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.test.ts passes",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarningsTrigger.test.ts passes",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesPostArticleReviewDetails.test.ts passes",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHuman.test.ts passes",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.test.ts passes",
+        "bun test src/server/routes/projectsRoutes/projectsRoutesOlapParity.test.ts passes",
+        "bun test src/server/routes/judgmentsJobsRoutesApiReadModel.test.ts passes",
+        "bun test src/server/routes/judgmentsJobsRoutesDirtyMaterializationFreshness.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-002", "US-008", "US-011", "US-014"]
+    },
+    {
+      "id": "US-017",
+      "title": "Update review UI indexing warnings",
+      "description": "As a user, I want browser and desktop review pages to stay usable while dirty-refresh or large-rebuild work is pending or running.",
+      "acceptanceCriteria": [
+        "Review UI copy shows user-actionable status, counts, and last-progress timestamps for dirty-state materialization, dirty-refresh, quarantine, bounded cleanup, and large-rebuild work.",
+        "The review page does not expose admin-only rows/sec, RSS, temp spill, or DuckDB queue-wait diagnostics in the user banner.",
+        "Browser/web and desktop review flows remain usable while dirty-refresh or large-rebuild work is pending or running.",
+        "bun test src/components/main/reviews/getReviewIndexingInProgressTitle.test.ts passes",
+        "bunx vitest run src/components/main/reviews/reviewsProjectWarnings.vitest.tsx passes",
+        "bun run build passes",
+        "bun run desktop:build passes",
+        "bun run lint passes",
+        "Manual browser and desktop reviews-page smoke passes"
+      ],
+      "priority": 17,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-016"]
+    },
+    {
+      "id": "US-018",
+      "title": "Audit final package commands and docs",
+      "description": "As a maintainer, I want package scripts and documentation to expose only final rebuild2 commands so operators cannot accidentally use obsolete compatibility paths.",
+      "acceptanceCriteria": [
+        "`package.json` exposes final rebuild2 package commands and omits obsolete command names, no-op compatibility wrappers, and old aliases.",
+        "`db:duck:rebuild2-cutover` is the only command allowed to clear obsolete queue, dirty, rebuild, quarantine, outbox, or lease state.",
+        "Active docs/package references to obsolete command names are removed except historical migration notes.",
+        "`AGENTS.md` and current README/docs references use final dirty-refresh, dirty-materialization, large-rebuild, and bounded-cleanup terminology.",
+        "bun test scripts/rebuild2PackageCommands.test.ts passes",
+        "bun test scripts/rebuild2ObsoleteCommandReferences.test.ts passes",
+        "bun run lint passes"
+      ],
+      "priority": 18,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-007", "US-012", "US-013"]
+    },
+    {
+      "id": "US-019",
+      "title": "Run final rebuild2 integration and performance verification",
+      "description": "As a maintainer, I want final end-to-end verification so rebuild2 proves bounded dirty work, resumability, and responsive review reads at 2M-article scale.",
+      "acceptanceCriteria": [
+        "Automated performance tests remain deterministic and validate bounded dirty-batch work, DuckDB writer queue-wait observability, and memory/spill reporting without relying on exact timings.",
+        "Manual 2M synthetic run proves ten dirty articles claim at most ten dirty article IDs, committed dirty-refresh row counts stay batch-bounded, review warnings/details p95 stays under 2s while maintenance runs, restart resumes from durable state, and promotion does not wait for cleanup.",
+        "Filtered review reads return correct labels/results while a large-rebuild job is in progress.",
+        "Browser and desktop review-page smoke passes after server-side gates pass.",
+        "bun test scripts/runWithRuntimeProfile.test.ts passes",
+        "bun test src/services/olap/duckdbOlap.test.ts passes",
+        "bun run build passes",
+        "bun run desktop:build passes",
+        "bun run lint passes",
+        "Manual 2M synthetic run passes"
+      ],
+      "priority": 19,
+      "passes": false,
+      "notes": "",
+      "dependsOn": ["US-010", "US-011", "US-015", "US-016", "US-017", "US-018"]
+    }
+  ]
+}
