@@ -46,7 +46,7 @@ type CodexProviderWaiter = RequestWaiter<() => void> & {providerScope: ProviderR
 type FallbackWaiter = RequestWaiter<RequestSlot> & {baseURL: string; providerScope: ProviderRequestScope}
 type WorkerWaiter = RequestWaiter<RequestSlot> & {providerScope: ProviderRequestScope; workerUrls: string[]}
 
-type JobRequestState = {inFlight: number; pendingPersistedAttempts: number}
+type JobRequestState = {inFlight: number; pendingRequestAttemptIds: Set<string>}
 type ProviderRequestState = {inFlight: number}
 type SlotAcquisitionAttempt = {slot: RequestSlot; type: 'slot'} | {type: 'blocked'} | {type: 'waiting'}
 type RequestAttemptErrorCarrier = {
@@ -131,22 +131,22 @@ const getJobRequestState = (judgmentsJobId: string): JobRequestState => {
   const existing = jobRequestStates.get(judgmentsJobId)
   if (existing) return existing
 
-  const created = {inFlight: 0, pendingPersistedAttempts: 0}
+  const created = {inFlight: 0, pendingRequestAttemptIds: new Set<string>()}
   jobRequestStates.set(judgmentsJobId, created)
   return created
 }
 
 const trimJobRequestState = (judgmentsJobId: string): void => {
   const state = jobRequestStates.get(judgmentsJobId)
-  if (state && state.inFlight === 0 && state.pendingPersistedAttempts === 0) {
+  if (state && state.inFlight === 0 && state.pendingRequestAttemptIds.size === 0) {
     jobRequestStates.delete(judgmentsJobId)
   }
 }
 
-const markRequestStarted = (judgmentsJobId: string): void => {
+const markRequestStarted = (judgmentsJobId: string, requestAttemptId: string): void => {
   const state = getJobRequestState(judgmentsJobId)
   state.inFlight += 1
-  state.pendingPersistedAttempts += 1
+  state.pendingRequestAttemptIds.add(requestAttemptId)
 }
 
 const markRequestFinished = (judgmentsJobId: string): void => {
@@ -799,13 +799,33 @@ const acquireRequestSlot = async ({
 export const getJudgmentRequestStats = (
   judgmentsJobId: string,
 ): {inFlight: number; pendingPersistedAttempts: number} => {
-  const state = jobRequestStates.get(judgmentsJobId) ?? {inFlight: 0, pendingPersistedAttempts: 0}
-  return {inFlight: state.inFlight, pendingPersistedAttempts: state.pendingPersistedAttempts}
+  const state = jobRequestStates.get(judgmentsJobId) ?? {inFlight: 0, pendingRequestAttemptIds: new Set<string>()}
+  return {inFlight: state.inFlight, pendingPersistedAttempts: state.pendingRequestAttemptIds.size}
+}
+
+export const markJudgmentRequestAttemptsPersisted = (judgmentsJobId: string, requestAttemptIds: string[]): void => {
+  const state = getJobRequestState(judgmentsJobId)
+
+  requestAttemptIds.reduce((currentState, requestAttemptId) => {
+    currentState.pendingRequestAttemptIds.delete(requestAttemptId)
+    return currentState
+  }, state)
+
+  trimJobRequestState(judgmentsJobId)
+}
+
+export const markJudgmentRequestAttemptsClosed = (judgmentsJobId: string, requestAttemptIds: string[]): void => {
+  markJudgmentRequestAttemptsPersisted(judgmentsJobId, requestAttemptIds)
 }
 
 export const markJudgmentRequestsPersisted = (judgmentsJobId: string, count: number): void => {
   const state = getJobRequestState(judgmentsJobId)
-  state.pendingPersistedAttempts = Math.max(0, state.pendingPersistedAttempts - Math.max(0, count))
+  Array.from(state.pendingRequestAttemptIds)
+    .slice(0, Math.max(0, count))
+    .reduce((currentState, requestAttemptId) => {
+      currentState.pendingRequestAttemptIds.delete(requestAttemptId)
+      return currentState
+    }, state)
   trimJobRequestState(judgmentsJobId)
 }
 
@@ -879,7 +899,7 @@ export const withJudgmentRequest = async <T>(
       getRuntimeRequestAttemptErrorFields({finishedAt, requestAttempt: requestAttemptContext}),
     )
   })
-  markRequestStarted(judgmentsJobId)
+  markRequestStarted(judgmentsJobId, requestAttemptContext.requestAttemptId)
 
   try {
     const requestAttempt = {...requestAttemptContext, baseURL: slot.baseURL, startedAt: new Date().toISOString()}
