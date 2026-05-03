@@ -446,6 +446,7 @@ export type TokenUseRecord = {
   totalFailedPromptTokens: number | null
   totalFailedCompletionTokens: number | null
   totalFailedTokens: number | null
+  requestAttemptsJson: unknown
 }
 
 export type JudgmentAssessmentRecord = {

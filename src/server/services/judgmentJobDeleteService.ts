@@ -31,6 +31,7 @@ const tokenUseCreateSql = `
     total_failed_prompt_tokens BIGINT,
     total_failed_completion_tokens BIGINT,
     total_failed_tokens BIGINT,
+    request_attempts_json JSON,
     created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
   )

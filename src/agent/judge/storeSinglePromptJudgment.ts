@@ -6,6 +6,11 @@ import {
   shouldUseJudgeWorkerOwnerHandoff,
 } from '../../server/cron/judgmentsJobs/judgeWorkerCompletionJournal.ts'
 import {getJudgmentJobSqliteService} from '../../server/cron/judgmentsJobs/judgmentJobSqliteService.ts'
+import {
+  type JudgmentRequestAttemptJsonEntry,
+  stringifyRequestAttempts,
+  withDurableCloseoutRef,
+} from '../../server/cron/judgmentsJobs/judgmentRequestAttemptManifest.ts'
 import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
 import {escapeSqlString} from '../../server/services/appQueryHelpers.ts'
 import type {ContentSettings} from './judgeGetPrompt.ts'
@@ -31,6 +36,7 @@ const enqueueOwnerBackedCompletion = async ({
   snapshotProjectModelName: _snapshotProjectModelName,
   judgment,
   chunkingStrategy,
+  requestAttempts = [],
 }: {
   article: ArticleRecord
   claimIdentity?: {claimId: string; executionSnapshotHash: string; executionSnapshotId: string}
@@ -43,6 +49,7 @@ const enqueueOwnerBackedCompletion = async ({
   snapshotProjectModelName?: string | null
   judgment: SinglePromptJudgmentResult
   chunkingStrategy: JudgmentChunkingStrategy | null
+  requestAttempts?: JudgmentRequestAttemptJsonEntry[]
 }): Promise<void> => {
   if (!claimIdentity) {
     throw new JudgmentPersistenceError(`Missing owner-backed claim identity for ${judgmentsJobId}:${queueRecordId}`)
@@ -51,6 +58,12 @@ const enqueueOwnerBackedCompletion = async ({
   const rawAnswer = judgment.answer
   const answeredOriginal = Array.isArray(rawAnswer) ? JSON.stringify(rawAnswer) : rawAnswer
   const answeredOriginalAsArray = judgeStoreJudgmentGetStringAsArrayOfStrings(rawAnswer) ?? []
+  const judgmentId = randomUUID()
+  const completionRequestAttempts = withDurableCloseoutRef({
+    closeoutKind: 'completion_outbox',
+    ref: {claimId: claimIdentity.claimId, jobId: judgmentsJobId, queueRecordId},
+    requestAttempts,
+  })
 
   await enqueueJudgeWorkerCompletion({
     answeredOriginal,
@@ -65,13 +78,14 @@ const enqueueOwnerBackedCompletion = async ({
     isAnswered: true,
     jobId: judgmentsJobId,
     judgment,
-    judgmentId: randomUUID(),
+    judgmentId,
     modelId,
     projectId,
     promptId,
     queueRecordId,
     quotes: judgment.quotes,
     rawResponseJson: judgment,
+    requestAttempts: completionRequestAttempts,
     status: 'judged',
     useAbstract: contentSettings.useAbstract,
     useFulltext: contentSettings.useFulltext,
@@ -92,6 +106,7 @@ export const storeSinglePromptJudgment = async ({
   snapshotProjectModelName = null,
   judgment,
   chunkingStrategy,
+  requestAttempts = [],
 }: {
   article: ArticleRecord
   claimIdentity?: {claimId: string; executionSnapshotHash: string; executionSnapshotId: string}
@@ -104,6 +119,7 @@ export const storeSinglePromptJudgment = async ({
   snapshotProjectModelName?: string | null
   judgment: SinglePromptJudgmentResult
   chunkingStrategy: JudgmentChunkingStrategy | null
+  requestAttempts?: JudgmentRequestAttemptJsonEntry[]
 }): Promise<void> => {
   try {
     if (shouldUseJudgeWorkerOwnerHandoff()) {
@@ -119,6 +135,7 @@ export const storeSinglePromptJudgment = async ({
         snapshotProjectModelName,
         judgment,
         chunkingStrategy,
+        requestAttempts,
       })
       return
     }
@@ -171,6 +188,12 @@ export const storeSinglePromptJudgment = async ({
     }
 
     try {
+      const judgmentId = randomUUID()
+      const localRequestAttempts = withDurableCloseoutRef({
+        closeoutKind: 'judgment_outbox',
+        ref: {id: judgmentId, jobId: judgmentsJobId, queueRecordId},
+        requestAttempts,
+      })
       const persisted = await sqliteService.recordJudgmentSuccess(judgmentsJobId, {
         answeredOriginal,
         answeredOriginalAsArray: answeredOriginalAsArray ?? [],
@@ -183,13 +206,14 @@ export const storeSinglePromptJudgment = async ({
         executionSnapshotHash: claimIdentity?.executionSnapshotHash,
         executionSnapshotId: claimIdentity?.executionSnapshotId,
         isAnswered: true,
-        judgmentId: randomUUID(),
+        judgmentId,
         modelId,
         projectId,
         promptId,
         queuePromptId: queueRecordId,
         quotes: answeredQuotes,
         rawResponseJson: judgment,
+        requestAttemptsJson: stringifyRequestAttempts(localRequestAttempts),
         snapshotProjectId: snapshotValues.snapshotProjectId,
         snapshotProjectModelName: snapshotValues.snapshotProjectModelName,
         updatedAt: new Date(),

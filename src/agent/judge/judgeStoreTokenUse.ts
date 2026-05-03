@@ -1,4 +1,9 @@
 import {attachTokenUseToPendingJudgeWorkerCompletion} from '../../server/cron/judgmentsJobs/judgeWorkerCompletionJournal.ts'
+import {
+  type JudgmentRequestAttemptJsonEntry,
+  stringifyRequestAttempts,
+  withDurableCloseoutRef,
+} from '../../server/cron/judgmentsJobs/judgmentRequestAttemptManifest.ts'
 import {markJudgmentRequestsPersisted} from '../../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {getTokenUseQueryService} from '../../server/services/tokenUseQueryService.ts'
 import {parseDuckdbMemoryLimitToMiB} from '../../server/utils/duckdbMemoryLimit.ts'
@@ -7,10 +12,16 @@ import {apiClient} from '../../services/apiClient.ts'
 
 export type JudgeTokenUsageEntry = {
   articleId: string
+  claimId?: string | null
   promptIds: string[]
+  queueRecordId?: string | null
   modelId: string
   modelName: string
   baseURL: string
+  providerKey?: string
+  requestAttemptId?: string
+  requestFinishedAt?: string
+  requestStartedAt?: string
   promptTokens: number
   completionTokens: number
   totalTokens: number
@@ -130,13 +141,72 @@ const getStoredModelName = (tokenUseEntries: JudgeTokenUsageEntry[]): string | n
   }, null)
 }
 
+const getFallbackRequestAttemptId = (entry: JudgeTokenUsageEntry, index: number): string => {
+  return `legacy:${entry.articleId}:${entry.promptIds.join(',')}:${index}`
+}
+
+const getRequestAttemptEntries = ({
+  closeoutKind,
+  durableRefId,
+  finishedAt,
+  judgmentsJobId,
+  startedAt,
+  tokenUseEntries,
+}: {
+  closeoutKind: JudgmentRequestAttemptJsonEntry['closeoutKind']
+  durableRefId?: string | null
+  finishedAt: string
+  judgmentsJobId: string
+  startedAt: string
+  tokenUseEntries: JudgeTokenUsageEntry[]
+}): JudgmentRequestAttemptJsonEntry[] => {
+  const requestAttempts = tokenUseEntries.map<JudgmentRequestAttemptJsonEntry>((entry, index) => {
+    const [promptId = null] = entry.promptIds
+
+    return {
+      articleId: entry.articleId,
+      baseURL: entry.baseURL,
+      claimId: entry.claimId ?? null,
+      closeoutKind,
+      completionTokens: entry.completionTokens,
+      error: entry.error,
+      errorCode: entry.failureCode ?? null,
+      finishedAt: entry.requestFinishedAt ?? finishedAt,
+      jobId: judgmentsJobId,
+      outcome: entry.outcome,
+      promptId,
+      promptIds: entry.promptIds,
+      promptTokens: entry.promptTokens,
+      providerDiagnostics: entry.providerDiagnostics ?? null,
+      providerKey: entry.providerKey ?? 'unknown',
+      queueRecordId: entry.queueRecordId ?? null,
+      requestAttemptId: entry.requestAttemptId ?? getFallbackRequestAttemptId(entry, index),
+      startedAt: entry.requestStartedAt ?? startedAt,
+      totalTokens: entry.totalTokens,
+    }
+  })
+
+  return withDurableCloseoutRef({closeoutKind, ref: {id: durableRefId ?? null, jobId: judgmentsJobId}, requestAttempts})
+}
+
 const storeTokenUseDirectly = async (
   totalTokenUse: TokenUseTotals,
+  tokenUseEntries: JudgeTokenUsageEntry[],
   _sessionId: string | null,
   {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
   judgmentsJobId?: string,
 ): Promise<void> => {
+  const tokenUseId = crypto.randomUUID()
+  const requestAttempts = getRequestAttemptEntries({
+    closeoutKind: 'token_use',
+    durableRefId: tokenUseId,
+    finishedAt,
+    judgmentsJobId: judgmentsJobId ?? '',
+    startedAt,
+    tokenUseEntries,
+  })
   const result = await getTokenUseQueryService().insertTokenUse({
+    id: tokenUseId,
     judgment_job_id: judgmentsJobId ?? null,
     gpu_nnodes: inferenceRuntimeConfig.gpuNnodes,
     gpu_gpus_per_node: inferenceRuntimeConfig.gpuGpusPerNode,
@@ -161,6 +231,7 @@ const storeTokenUseDirectly = async (
     total_failed_prompt_tokens: totalTokenUse.totalFailedPromptTokens,
     total_failed_completion_tokens: totalTokenUse.totalFailedCompletionTokens,
     total_failed_tokens: totalTokenUse.totalFailedTokens,
+    request_attempts_json: stringifyRequestAttempts(requestAttempts),
     started_at: new Date(startedAt),
     finished_at: new Date(finishedAt),
     duration: Math.round(duration),
@@ -173,9 +244,17 @@ const storeTokenUseDirectly = async (
 
 const storeTokenUseViaAPI = async (
   totalTokenUse: TokenUseTotals,
+  tokenUseEntries: JudgeTokenUsageEntry[],
   judgmentsJobId: string,
   {startedAt, finishedAt, duration}: {startedAt: string; finishedAt: string; duration: number},
 ): Promise<void> => {
+  const requestAttempts = getRequestAttemptEntries({
+    closeoutKind: 'owner_token_use_body',
+    finishedAt,
+    judgmentsJobId,
+    startedAt,
+    tokenUseEntries,
+  })
   const response = await apiClient.api.tokens.usage.post({
     judgmentsJobId,
     sglangModel: totalTokenUse.modelName ?? undefined,
@@ -194,6 +273,7 @@ const storeTokenUseViaAPI = async (
     totalFailedPromptTokens: totalTokenUse.totalFailedPromptTokens,
     totalFailedCompletionTokens: totalTokenUse.totalFailedCompletionTokens,
     totalFailedTokens: totalTokenUse.totalFailedTokens,
+    requestAttempts,
     startedAt,
     finishedAt,
     duration: Math.round(duration),
@@ -226,10 +306,19 @@ const storeTokenUseInJudgeWorkerCompletionOutbox = async (
     return
   }
 
+  const requestAttempts = getRequestAttemptEntries({
+    closeoutKind: 'pending_token_use',
+    finishedAt,
+    judgmentsJobId,
+    startedAt,
+    tokenUseEntries,
+  })
+
   await attachTokenUseToPendingJudgeWorkerCompletion({
     articleId: firstEntry.articleId,
     jobId: judgmentsJobId,
     promptIds: firstEntry.promptIds,
+    requestAttempts,
     tokenUse: {
       dpSize: inferenceRuntimeConfig.dpSize,
       duration,
@@ -256,6 +345,7 @@ const storeTokenUseInJudgeWorkerCompletionOutbox = async (
       totalSuccessPromptTokens: totalTokenUse.totalSuccessPromptTokens,
       totalSuccessTokens: totalTokenUse.totalSuccessTokens,
       totalTokens: totalTokenUse.totalTokens,
+      requestAttempts,
     },
   })
 }
@@ -471,9 +561,9 @@ export const judgeStoreTokenUse = async (
       duration,
     })
   } else if (isServerEnvironment() && !shouldSkipTokenUsePersistence()) {
-    await storeTokenUseDirectly(totalTokenUse, null, {startedAt, finishedAt, duration}, judgmentsJobId)
+    await storeTokenUseDirectly(totalTokenUse, tokenUseEntries, null, {startedAt, finishedAt, duration}, judgmentsJobId)
   } else if (!isServerEnvironment()) {
-    await storeTokenUseViaAPI(totalTokenUse, judgmentsJobId, {startedAt, finishedAt, duration})
+    await storeTokenUseViaAPI(totalTokenUse, tokenUseEntries, judgmentsJobId, {startedAt, finishedAt, duration})
   }
 
   markJudgmentRequestsPersisted(judgmentsJobId, totalTokenUse.totalRequests)

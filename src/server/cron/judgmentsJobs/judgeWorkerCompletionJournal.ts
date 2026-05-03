@@ -8,6 +8,12 @@ import type {JudgmentExecutionSnapshotRecord} from '../../services/judgmentExecu
 import {getEnv} from '../../utils/env.ts'
 import {getCurrentJudgeWorkerJournalIdentity} from '../../utils/judgeWorkerJournalIdentity.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
+import {
+  type JudgmentRequestAttemptJsonEntry,
+  parseRequestAttempts,
+  requestAttemptManifestVersion,
+  stringifyRequestAttempts,
+} from './judgmentRequestAttemptManifest.ts'
 import type {RunningJudgmentJob} from './judgmentsJobsGetRunningJobs.ts'
 import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 import type {ProviderBucketSnapshot} from './providerAdmissionLease.ts'
@@ -38,6 +44,7 @@ export type JudgeWorkerTokenUseSummary = {
   totalSuccessPromptTokens: number
   totalSuccessTokens: number
   totalTokens: number
+  requestAttempts?: JudgmentRequestAttemptJsonEntry[] | null
 }
 
 export type JudgeWorkerCompletionPayload = {
@@ -60,6 +67,7 @@ export type JudgeWorkerCompletionPayload = {
   queueRecordId: string
   quotes?: unknown
   rawResponseJson?: unknown
+  requestAttempts?: JudgmentRequestAttemptJsonEntry[] | null
   retryAfterMs?: number | null
   skipReason?: 'conversion_failed' | 'fulltext_too_large' | 'no_fulltext'
   status?: 'completed' | 'failed' | 'judged' | 'retry' | 'skipped' | 'succeeded'
@@ -96,14 +104,24 @@ type CompletionOutboxRow = {
   payloadJson: string
   queueRecordId: string
   status: string
+  requestAttemptsJson: string | null
   tokenUseJson: string | null
   updatedAt: string
 }
 
 type CompletionReplayResult = {ackedCount: number; discardedCount: number; failedCount: number}
 type CompletionSendResult = {claimId: string; queueRecordId: string; status: string}
-type PendingTokenUseJsonRow = {tokenUseJson: string}
-type PendingTokenUseRow = {articleId: string; jobId: string; promptId: string; tokenUseJson: string}
+type PendingTokenUseJsonRow = {requestAttemptsJson: string | null; tokenUseJson: string}
+type PendingTokenUseRow = {
+  articleId: string
+  claimId: string
+  jobId: string
+  promptId: string
+  queueRecordId: string
+  requestAttemptId: string
+  requestAttemptsJson: string | null
+  tokenUseJson: string
+}
 
 class OwnerBackedJudgmentRequestError extends Error {
   responseText: string
@@ -180,6 +198,8 @@ const openJournalDatabase = (): Database => {
       job_id TEXT NOT NULL,
       queue_record_id TEXT NOT NULL,
       payload_json TEXT NOT NULL,
+      request_attempt_manifest_json TEXT NOT NULL DEFAULT '[]',
+      request_attempt_manifest_version INTEGER NOT NULL DEFAULT 0,
       accepted_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -190,6 +210,7 @@ const openJournalDatabase = (): Database => {
       queue_record_id TEXT NOT NULL,
       payload_json TEXT NOT NULL,
       token_use_json TEXT,
+      request_attempts_json TEXT,
       status TEXT NOT NULL,
       acked_at TEXT,
       attempts INTEGER NOT NULL DEFAULT 0,
@@ -201,20 +222,136 @@ const openJournalDatabase = (): Database => {
 
     CREATE TABLE IF NOT EXISTS pending_token_use (
       job_id TEXT NOT NULL,
+      claim_id TEXT NOT NULL,
+      queue_record_id TEXT NOT NULL,
       article_id TEXT NOT NULL,
       prompt_id TEXT NOT NULL,
+      request_attempt_id TEXT NOT NULL,
       token_use_json TEXT NOT NULL,
+      request_attempts_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      PRIMARY KEY(job_id, article_id, prompt_id)
+      PRIMARY KEY(job_id, queue_record_id, request_attempt_id)
     );
 
     CREATE INDEX IF NOT EXISTS idx_completion_outbox_unacked
       ON completion_outbox(acked_at, created_at);
   `)
 
+  ensureJournalSchema(database)
   journalDatabase = database
   return database
+}
+
+type JournalColumnRow = {name: string}
+
+const getJournalColumnNames = (database: Database, tableName: string): Set<string> => {
+  return new Set(
+    (database.query(`PRAGMA table_info('${tableName}')`).all() as JournalColumnRow[]).map((row) => {
+      return row.name
+    }),
+  )
+}
+
+const addMissingJournalColumns = (
+  database: Database,
+  tableName: string,
+  columns: ReadonlyArray<{name: string; sql: string}>,
+): void => {
+  const currentColumn = columns[0]
+
+  if (!currentColumn) {
+    return
+  }
+
+  database.exec(`ALTER TABLE ${tableName} ADD COLUMN ${currentColumn.name} ${currentColumn.sql}`)
+  return addMissingJournalColumns(database, tableName, columns.slice(1))
+}
+
+const ensureAcceptedClaimSchema = (database: Database): void => {
+  const existingColumns = getJournalColumnNames(database, 'accepted_claim')
+  const missingColumns = [
+    {name: 'request_attempt_manifest_json', sql: `TEXT NOT NULL DEFAULT '[]'`},
+    {name: 'request_attempt_manifest_version', sql: `INTEGER NOT NULL DEFAULT 0`},
+  ].filter((column) => {
+    return !existingColumns.has(column.name)
+  })
+
+  addMissingJournalColumns(database, 'accepted_claim', missingColumns)
+}
+
+const ensureCompletionOutboxSchema = (database: Database): void => {
+  const existingColumns = getJournalColumnNames(database, 'completion_outbox')
+  const missingColumns = [{name: 'request_attempts_json', sql: 'TEXT'}].filter((column) => {
+    return !existingColumns.has(column.name)
+  })
+
+  addMissingJournalColumns(database, 'completion_outbox', missingColumns)
+}
+
+const ensurePendingTokenUseSchema = (database: Database): void => {
+  const existingColumns = getJournalColumnNames(database, 'pending_token_use')
+  const hasExactIdentity =
+    existingColumns.has('claim_id')
+    && existingColumns.has('queue_record_id')
+    && existingColumns.has('request_attempt_id')
+    && existingColumns.has('request_attempts_json')
+
+  if (hasExactIdentity) {
+    return
+  }
+
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS pending_token_use_next (
+      job_id TEXT NOT NULL,
+      claim_id TEXT NOT NULL,
+      queue_record_id TEXT NOT NULL,
+      article_id TEXT NOT NULL,
+      prompt_id TEXT NOT NULL,
+      request_attempt_id TEXT NOT NULL,
+      token_use_json TEXT NOT NULL,
+      request_attempts_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(job_id, queue_record_id, request_attempt_id)
+    );
+    INSERT OR IGNORE INTO pending_token_use_next (
+      job_id,
+      claim_id,
+      queue_record_id,
+      article_id,
+      prompt_id,
+      request_attempt_id,
+      token_use_json,
+      request_attempts_json,
+      created_at,
+      updated_at
+    )
+    SELECT
+      job_id,
+      ${existingColumns.has('claim_id') ? "COALESCE(claim_id, '')" : "''"},
+      ${existingColumns.has('queue_record_id') ? 'COALESCE(queue_record_id, prompt_id)' : 'prompt_id'},
+      article_id,
+      prompt_id,
+      ${
+        existingColumns.has('request_attempt_id')
+          ? "COALESCE(request_attempt_id, 'legacy:' || job_id || ':' || article_id || ':' || prompt_id)"
+          : "'legacy:' || job_id || ':' || article_id || ':' || prompt_id"
+      },
+      token_use_json,
+      ${existingColumns.has('request_attempts_json') ? 'request_attempts_json' : 'NULL'},
+      created_at,
+      updated_at
+    FROM pending_token_use;
+    DROP TABLE pending_token_use;
+    ALTER TABLE pending_token_use_next RENAME TO pending_token_use;
+  `)
+}
+
+const ensureJournalSchema = (database: Database): void => {
+  ensureAcceptedClaimSchema(database)
+  ensureCompletionOutboxSchema(database)
+  ensurePendingTokenUseSchema(database)
 }
 
 const requestOwnerJson = async <T>({
@@ -333,54 +470,76 @@ export const recordAcceptedJudgeWorkerClaims = async (claims: PromptToProcess[])
       job_id,
       queue_record_id,
       payload_json,
+      request_attempt_manifest_json,
+      request_attempt_manifest_version,
       accepted_at,
       updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(claim_id) DO UPDATE SET
       payload_json = EXCLUDED.payload_json,
+      request_attempt_manifest_json = EXCLUDED.request_attempt_manifest_json,
+      request_attempt_manifest_version = EXCLUDED.request_attempt_manifest_version,
       updated_at = EXCLUDED.updated_at
   `)
   const now = new Date().toISOString()
 
   database.transaction((entries: PromptToProcess[]) => {
     return entries.reduce((count, claim) => {
-      insert.run(claim.claimId, claim.jobId, claim.recordId, JSON.stringify(claim), now, now)
+      insert.run(
+        claim.claimId,
+        claim.jobId,
+        claim.recordId,
+        JSON.stringify(claim),
+        '[]',
+        requestAttemptManifestVersion,
+        now,
+        now,
+      )
       return count + 1
     }, 0)
   })(claims)
 }
 
-const getPendingTokenUseJson = (database: Database, payload: JudgeWorkerCompletionPayload): string | null => {
+const getPendingTokenUseForCompletion = (
+  database: Database,
+  payload: JudgeWorkerCompletionPayload,
+): PendingTokenUseJsonRow | null => {
   const row = database
     .query(
       `
-        SELECT token_use_json AS tokenUseJson
+        SELECT
+          request_attempts_json AS requestAttemptsJson,
+          token_use_json AS tokenUseJson
         FROM pending_token_use
         WHERE job_id = ?
-          AND article_id = ?
-          AND prompt_id = ?
+          AND (
+            queue_record_id = ?
+            OR (article_id = ? AND prompt_id = ?)
+          )
         LIMIT 1
       `,
     )
-    .get(payload.jobId, payload.articleId, payload.promptId) as PendingTokenUseJsonRow | null
+    .get(payload.jobId, payload.queueRecordId, payload.articleId, payload.promptId) as PendingTokenUseJsonRow | null
 
-  return row?.tokenUseJson ?? null
+  return row ?? null
 }
 
 const deletePendingTokenUseByIdentity = (
   database: Database,
-  input: {articleId: string; jobId: string; promptId: string},
+  input: {articleId: string; jobId: string; promptId: string; queueRecordId?: string | null},
 ): void => {
   database
     .query(
       `
         DELETE FROM pending_token_use
         WHERE job_id = ?
-          AND article_id = ?
-          AND prompt_id = ?
+          AND (
+            queue_record_id = ?
+            OR (article_id = ? AND prompt_id = ?)
+          )
       `,
     )
-    .run(input.jobId, input.articleId, input.promptId)
+    .run(input.jobId, input.queueRecordId ?? '', input.articleId, input.promptId)
 }
 
 const deletePendingTokenUse = (database: Database, payload: JudgeWorkerCompletionPayload): void => {
@@ -393,8 +552,12 @@ const getPendingTokenUseRows = (database: Database): PendingTokenUseRow[] => {
       `
         SELECT
           job_id AS jobId,
+          claim_id AS claimId,
+          queue_record_id AS queueRecordId,
           article_id AS articleId,
           prompt_id AS promptId,
+          request_attempt_id AS requestAttemptId,
+          request_attempts_json AS requestAttemptsJson,
           token_use_json AS tokenUseJson
         FROM pending_token_use
         ORDER BY created_at ASC
@@ -407,7 +570,8 @@ export const enqueueJudgeWorkerCompletion = async (payload: JudgeWorkerCompletio
   const database = openJournalDatabase()
   const now = new Date().toISOString()
   const status = payload.status ?? 'judged'
-  const pendingTokenUseJson = getPendingTokenUseJson(database, payload)
+  const pendingTokenUse = getPendingTokenUseForCompletion(database, payload)
+  const requestAttemptsJson = pendingTokenUse?.requestAttemptsJson ?? stringifyRequestAttempts(payload.requestAttempts)
 
   database.transaction(() => {
     const result = database
@@ -419,15 +583,17 @@ export const enqueueJudgeWorkerCompletion = async (payload: JudgeWorkerCompletio
             queue_record_id,
             payload_json,
             token_use_json,
+            request_attempts_json,
             status,
             created_at,
             updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(claim_id) DO UPDATE SET
             job_id = EXCLUDED.job_id,
             queue_record_id = EXCLUDED.queue_record_id,
             payload_json = EXCLUDED.payload_json,
             token_use_json = COALESCE(completion_outbox.token_use_json, EXCLUDED.token_use_json),
+            request_attempts_json = COALESCE(EXCLUDED.request_attempts_json, completion_outbox.request_attempts_json),
             status = EXCLUDED.status,
             updated_at = EXCLUDED.updated_at
           WHERE completion_outbox.acked_at IS NULL
@@ -438,15 +604,21 @@ export const enqueueJudgeWorkerCompletion = async (payload: JudgeWorkerCompletio
         payload.jobId,
         payload.queueRecordId,
         JSON.stringify(payload),
-        pendingTokenUseJson,
+        pendingTokenUse?.tokenUseJson ?? null,
+        requestAttemptsJson ?? null,
         status,
         now,
         now,
       ) as {changes?: number}
     const insertedOrUpdated = Number(result.changes ?? 0) > 0
     const reactivated =
-      !insertedOrUpdated && pendingTokenUseJson
-        ? reactivateAckedCompletionWithTokenUse(database, payload.claimId, pendingTokenUseJson) > 0
+      !insertedOrUpdated && pendingTokenUse
+        ? reactivateAckedCompletionWithTokenUse(
+            database,
+            payload.claimId,
+            pendingTokenUse.tokenUseJson,
+            requestAttemptsJson ?? null,
+          ) > 0
         : false
 
     if (insertedOrUpdated || reactivated) {
@@ -455,12 +627,18 @@ export const enqueueJudgeWorkerCompletion = async (payload: JudgeWorkerCompletio
   })()
 }
 
-const reactivateAckedCompletionWithTokenUse = (database: Database, claimId: string, tokenUseJson: string): number => {
+const reactivateAckedCompletionWithTokenUse = (
+  database: Database,
+  claimId: string,
+  tokenUseJson: string,
+  requestAttemptsJson: string | null,
+): number => {
   const result = database
     .query(
       `
         UPDATE completion_outbox
         SET token_use_json = COALESCE(token_use_json, ?),
+            request_attempts_json = COALESCE(?, request_attempts_json),
             acked_at = NULL,
             last_error = NULL,
             updated_at = ?
@@ -468,7 +646,7 @@ const reactivateAckedCompletionWithTokenUse = (database: Database, claimId: stri
           AND acked_at IS NOT NULL
       `,
     )
-    .run(tokenUseJson, new Date().toISOString(), claimId) as {changes?: number}
+    .run(tokenUseJson, requestAttemptsJson, new Date().toISOString(), claimId) as {changes?: number}
 
   return Number(result.changes ?? 0)
 }
@@ -484,6 +662,7 @@ const getUnackedCompletionRows = (database: Database, claimId?: string): Complet
           queue_record_id AS queueRecordId,
           payload_json AS payloadJson,
           status,
+          request_attempts_json AS requestAttemptsJson,
           token_use_json AS tokenUseJson,
           updated_at AS updatedAt
         FROM completion_outbox
@@ -506,6 +685,7 @@ const getCompletionRows = (database: Database): CompletionOutboxRow[] => {
           queue_record_id AS queueRecordId,
           payload_json AS payloadJson,
           status,
+          request_attempts_json AS requestAttemptsJson,
           token_use_json AS tokenUseJson,
           updated_at AS updatedAt
         FROM completion_outbox
@@ -534,7 +714,9 @@ const completionRowMatchesPendingTokenUse = (row: CompletionOutboxRow, pending: 
   const payload = parseJson<JudgeWorkerCompletionPayload>(row.payloadJson)
 
   return (
-    payload.jobId === pending.jobId && payload.articleId === pending.articleId && payload.promptId === pending.promptId
+    payload.jobId === pending.jobId
+    && (payload.queueRecordId === pending.queueRecordId
+      || (payload.articleId === pending.articleId && payload.promptId === pending.promptId))
   )
 }
 
@@ -556,7 +738,12 @@ const reactivateAckedCompletionsWithPendingTokenUse = (database: Database): numb
         return count
       }
 
-      const changed = reactivateAckedCompletionWithTokenUse(database, completionRow.claimId, pending.tokenUseJson)
+      const changed = reactivateAckedCompletionWithTokenUse(
+        database,
+        completionRow.claimId,
+        pending.tokenUseJson,
+        pending.requestAttemptsJson,
+      )
 
       if (changed > 0) {
         deletePendingTokenUseByIdentity(database, pending)
@@ -639,8 +826,12 @@ const isStaleCompletionReplayError = (error: unknown): boolean => {
 const getCompletionPayloadFromRow = (row: CompletionOutboxRow) => {
   const payload = parseJson<JudgeWorkerCompletionPayload>(row.payloadJson)
   const tokenUse = row.tokenUseJson ? parseJson<JudgeWorkerTokenUseSummary>(row.tokenUseJson) : undefined
+  const requestAttempts = parseRequestAttempts(row.requestAttemptsJson ?? payload.requestAttempts ?? null)
+  const payloadWithAttempts = requestAttempts.length > 0 ? {...payload, requestAttempts} : payload
+  const tokenUseWithAttempts =
+    tokenUse && requestAttempts.length > 0 && !tokenUse.requestAttempts ? {...tokenUse, requestAttempts} : tokenUse
 
-  return tokenUse ? {...payload, tokenUse} : payload
+  return tokenUseWithAttempts ? {...payloadWithAttempts, tokenUse: tokenUseWithAttempts} : payloadWithAttempts
 }
 
 const replayCompletionRows = async (rows: CompletionOutboxRow[]): Promise<CompletionReplayResult> => {
@@ -694,18 +885,63 @@ export const hasUnackedJudgeWorkerCompletion = async (claimId: string): Promise<
   return getUnackedCompletionRows(openJournalDatabase(), claimId).length > 0
 }
 
+const getPendingTokenUseIdentities = ({
+  articleId,
+  jobId,
+  promptIds,
+  requestAttempts,
+}: {
+  articleId: string
+  jobId: string
+  promptIds: string[]
+  requestAttempts: JudgmentRequestAttemptJsonEntry[]
+}): Array<{
+  articleId: string
+  claimId: string
+  jobId: string
+  promptId: string
+  queueRecordId: string
+  requestAttemptId: string
+}> => {
+  return requestAttempts.length > 0
+    ? requestAttempts.map((attempt) => {
+        const [fallbackPromptId = ''] = promptIds
+        return {
+          articleId: attempt.articleId ?? articleId,
+          claimId: attempt.claimId ?? '',
+          jobId: attempt.jobId ?? jobId,
+          promptId: attempt.promptId ?? fallbackPromptId,
+          queueRecordId: attempt.queueRecordId ?? attempt.promptId ?? fallbackPromptId,
+          requestAttemptId: attempt.requestAttemptId,
+        }
+      })
+    : promptIds.slice(0, 1).map((promptId) => {
+        return {
+          articleId,
+          claimId: '',
+          jobId,
+          promptId,
+          queueRecordId: promptId,
+          requestAttemptId: `legacy:${jobId}:${articleId}:${promptId}`,
+        }
+      })
+}
+
 export const attachTokenUseToPendingJudgeWorkerCompletion = async ({
   articleId,
   jobId,
   promptIds,
+  requestAttempts = [],
   tokenUse,
 }: {
   articleId: string
   jobId: string
   promptIds: string[]
+  requestAttempts?: JudgmentRequestAttemptJsonEntry[]
   tokenUse: JudgeWorkerTokenUseSummary
 }): Promise<boolean> => {
   const database = openJournalDatabase()
+  const requestAttemptsJson = stringifyRequestAttempts(requestAttempts)
   const row = getUnackedCompletionRows(database).find((completionRow) => {
     const payload = parseJson<JudgeWorkerCompletionPayload>(completionRow.payloadJson)
 
@@ -727,30 +963,51 @@ export const attachTokenUseToPendingJudgeWorkerCompletion = async ({
   const completionRow = row ?? ackedSuccessRow
 
   if (!completionRow) {
-    const [promptId] = promptIds
+    const identities = getPendingTokenUseIdentities({articleId, jobId, promptIds, requestAttempts})
 
-    if (!promptId) {
+    if (identities.length === 0) {
       return false
     }
 
     const now = new Date().toISOString()
-    database
-      .query(
-        `
-          INSERT INTO pending_token_use (
-            job_id,
-            article_id,
-            prompt_id,
-            token_use_json,
-            created_at,
-            updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?)
-          ON CONFLICT(job_id, article_id, prompt_id) DO UPDATE SET
-            token_use_json = EXCLUDED.token_use_json,
-            updated_at = EXCLUDED.updated_at
-        `,
-      )
-      .run(jobId, articleId, promptId, JSON.stringify(tokenUse), now, now)
+    const insert = database.query(
+      `
+        INSERT INTO pending_token_use (
+          job_id,
+          claim_id,
+          queue_record_id,
+          article_id,
+          prompt_id,
+          request_attempt_id,
+          token_use_json,
+          request_attempts_json,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(job_id, queue_record_id, request_attempt_id) DO UPDATE SET
+          token_use_json = EXCLUDED.token_use_json,
+          request_attempts_json = EXCLUDED.request_attempts_json,
+          updated_at = EXCLUDED.updated_at
+      `,
+    )
+
+    database.transaction((rows: ReturnType<typeof getPendingTokenUseIdentities>) => {
+      return rows.reduce((count, identity) => {
+        insert.run(
+          identity.jobId,
+          identity.claimId,
+          identity.queueRecordId,
+          identity.articleId,
+          identity.promptId,
+          identity.requestAttemptId,
+          JSON.stringify(tokenUse),
+          requestAttemptsJson,
+          now,
+          now,
+        )
+        return count + 1
+      }, 0)
+    })(identities)
 
     return true
   }
@@ -760,13 +1017,14 @@ export const attachTokenUseToPendingJudgeWorkerCompletion = async ({
       `
         UPDATE completion_outbox
         SET token_use_json = ?,
+            request_attempts_json = COALESCE(?, request_attempts_json),
             acked_at = NULL,
             last_error = NULL,
             updated_at = ?
         WHERE claim_id = ?
       `,
     )
-    .run(JSON.stringify(tokenUse), new Date().toISOString(), completionRow.claimId)
+    .run(JSON.stringify(tokenUse), requestAttemptsJson, new Date().toISOString(), completionRow.claimId)
 
   return true
 }

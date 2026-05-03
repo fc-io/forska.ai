@@ -124,6 +124,7 @@ type QueuePromptOutboxInsert = {
   queuePromptId: string
   quotes: unknown
   rawResponseJson: unknown
+  requestAttemptsJson?: string | null
   snapshotProjectId: string | null
   snapshotProjectModelName: string | null
   updatedAt: Date
@@ -153,6 +154,7 @@ type OutboxRow = {
   queuePromptId: string
   quotesJson: string | null
   rawResponseJson: string | null
+  requestAttemptsJson: string | null
   snapshotProjectId: string | null
   snapshotProjectModelName: string | null
   updatedAt: string
@@ -183,6 +185,7 @@ export type JudgmentJobSqliteOutboxEntry = {
   queuePromptId: string
   quotes: unknown
   rawResponseJson: unknown
+  requestAttemptsJson: string | null
   snapshotProjectId: string | null
   snapshotProjectModelName: string | null
   updatedAt: Date
@@ -314,6 +317,7 @@ type PromptCompletionAck = {
   claimId: string
   queuePromptId: string
   status: 'failed' | 'judged' | 'retry' | 'skipped'
+  requestAttemptsJson?: string | null
   tokenUseId?: string | null
 }
 
@@ -322,6 +326,7 @@ type PromptCompletionAckRow = {
   completedAt: string
   queuePromptId: string
   status: 'failed' | 'judged' | 'retry' | 'skipped'
+  requestAttemptsJson: string | null
   tokenUseId: string | null
 }
 
@@ -654,6 +659,8 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       extra_retry_count INTEGER NOT NULL DEFAULT 0,
       last_recoverable_error_code TEXT,
       retry_after_at TEXT,
+      request_attempt_manifest_json TEXT NOT NULL DEFAULT '[]',
+      request_attempt_manifest_version INTEGER NOT NULL DEFAULT 0,
       ready_insert_seq INTEGER NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -685,6 +692,7 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       explanation TEXT,
       quotes_json TEXT,
       raw_response_json TEXT,
+      request_attempts_json TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       exported_at TEXT,
@@ -700,6 +708,7 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       queue_prompt_id TEXT NOT NULL,
       status TEXT NOT NULL,
       token_use_id TEXT,
+      request_attempts_json TEXT,
       completed_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -792,6 +801,8 @@ const judgmentJobSqliteRequiredSchema = {
     'execution_snapshot_hash',
     'sent_at',
     'ready_insert_seq',
+    'request_attempt_manifest_json',
+    'request_attempt_manifest_version',
     'created_at',
     'updated_at',
   ],
@@ -812,8 +823,17 @@ const judgmentJobSqliteRequiredSchema = {
     'export_claim_id',
     'export_claimed_at',
     'export_claimed_by',
+    'request_attempts_json',
   ],
-  completion_ack: ['claim_id', 'job_id', 'queue_prompt_id', 'status', 'completed_at', 'updated_at'],
+  completion_ack: [
+    'claim_id',
+    'job_id',
+    'queue_prompt_id',
+    'status',
+    'request_attempts_json',
+    'completed_at',
+    'updated_at',
+  ],
 } as const
 
 const jobScanStateColumns = [
@@ -830,12 +850,20 @@ const queuePromptColumns = [
   {name: 'retry_after_at', sql: 'TEXT'},
   {name: 'execution_snapshot_id', sql: 'TEXT'},
   {name: 'execution_snapshot_hash', sql: 'TEXT'},
+  {name: 'request_attempt_manifest_json', sql: `TEXT NOT NULL DEFAULT '[]'`},
+  {name: 'request_attempt_manifest_version', sql: 'INTEGER NOT NULL DEFAULT 0'},
 ] as const
 
 const judgmentOutboxColumns = [
   {name: 'claim_id', sql: 'TEXT'},
   {name: 'execution_snapshot_id', sql: 'TEXT'},
   {name: 'execution_snapshot_hash', sql: 'TEXT'},
+  {name: 'request_attempts_json', sql: 'TEXT'},
+] as const
+
+const completionAckColumns = [
+  {name: 'token_use_id', sql: 'TEXT'},
+  {name: 'request_attempts_json', sql: 'TEXT'},
 ] as const
 
 const legacyJobScanStateAckColumns = [
@@ -897,6 +925,20 @@ const addMissingJudgmentOutboxColumns = (
 
   database.exec(`ALTER TABLE judgment_outbox ADD COLUMN ${currentColumn.name} ${currentColumn.sql}`)
   return addMissingJudgmentOutboxColumns(database, columns.slice(1))
+}
+
+const addMissingCompletionAckColumns = (
+  database: Database,
+  columns: ReadonlyArray<(typeof completionAckColumns)[number]>,
+): void => {
+  const [currentColumn] = columns
+
+  if (!currentColumn) {
+    return
+  }
+
+  database.exec(`ALTER TABLE completion_ack ADD COLUMN ${currentColumn.name} ${currentColumn.sql}`)
+  return addMissingCompletionAckColumns(database, columns.slice(1))
 }
 
 const renameLegacyJobScanStateAckColumns = (
@@ -1056,10 +1098,17 @@ const ensureCompletionAckSchema = (database: Database) => {
       queue_prompt_id TEXT NOT NULL,
       status TEXT NOT NULL,
       token_use_id TEXT,
+      request_attempts_json TEXT,
       completed_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )
   `)
+  const existingColumnNames = getTableColumnNames(database, 'completion_ack')
+  const missingColumns = completionAckColumns.filter((column) => {
+    return !existingColumnNames.has(column.name)
+  })
+
+  addMissingCompletionAckColumns(database, missingColumns)
 }
 
 const getStoredScanState = (database: Database, jobId: string) => {
@@ -1962,6 +2011,7 @@ const getOutboxEntry = (row: OutboxRow) => {
     queuePromptId: row.queuePromptId,
     quotes: parseJsonText(row.quotesJson),
     rawResponseJson: parseJsonText(row.rawResponseJson),
+    requestAttemptsJson: row.requestAttemptsJson,
     snapshotProjectId: row.snapshotProjectId,
     snapshotProjectModelName: row.snapshotProjectModelName,
     updatedAt: getDateValue(row.updatedAt) ?? new Date(0),
@@ -2207,6 +2257,7 @@ const getClaimableOutboxRows = (database: Database, limit: number) => {
           explanation,
           quotes_json AS quotesJson,
           raw_response_json AS rawResponseJson,
+          request_attempts_json AS requestAttemptsJson,
           created_at AS createdAt,
           updated_at AS updatedAt
         FROM judgment_outbox
@@ -2248,6 +2299,7 @@ const getClaimedOutboxRows = (database: Database, claimId: string) => {
           explanation,
           quotes_json AS quotesJson,
           raw_response_json AS rawResponseJson,
+          request_attempts_json AS requestAttemptsJson,
           created_at AS createdAt,
           updated_at AS updatedAt
         FROM judgment_outbox
@@ -2837,15 +2889,26 @@ const recordPromptCompletionAckFromDatabase = (database: Database, jobId: string
           queue_prompt_id,
           status,
           token_use_id,
+          request_attempts_json,
           completed_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(claim_id) DO UPDATE SET
           token_use_id = COALESCE(completion_ack.token_use_id, EXCLUDED.token_use_id),
+          request_attempts_json = COALESCE(completion_ack.request_attempts_json, EXCLUDED.request_attempts_json),
           updated_at = EXCLUDED.updated_at
       `,
     )
-    .run(ack.claimId, jobId, ack.queuePromptId, ack.status, ack.tokenUseId ?? null, now, now)
+    .run(
+      ack.claimId,
+      jobId,
+      ack.queuePromptId,
+      ack.status,
+      ack.tokenUseId ?? null,
+      ack.requestAttemptsJson ?? null,
+      now,
+      now,
+    )
 }
 
 const getPromptCompletionAckFromDatabase = (
@@ -2861,6 +2924,7 @@ const getPromptCompletionAckFromDatabase = (
           queue_prompt_id AS queuePromptId,
           status,
           token_use_id AS tokenUseId,
+          request_attempts_json AS requestAttemptsJson,
           completed_at AS completedAt
         FROM completion_ack
         WHERE job_id = ?
@@ -3911,9 +3975,10 @@ const sqliteService = {
             explanation,
             quotes_json,
             raw_response_json,
+            request_attempts_json,
             created_at,
             updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
           )
           .run(
@@ -3941,6 +4006,7 @@ const sqliteService = {
             input.explanation,
             JSON.stringify(input.quotes),
             JSON.stringify(input.rawResponseJson),
+            input.requestAttemptsJson ?? null,
             input.createdAt.toISOString(),
             input.updatedAt.toISOString(),
           ) as {changes?: number}
@@ -3963,6 +4029,7 @@ const sqliteService = {
             claimId: input.claimId,
             queuePromptId: input.queuePromptId,
             status: 'judged',
+            requestAttemptsJson: input.requestAttemptsJson ?? null,
             tokenUseId: input.completionTokenUseId ?? null,
           })
         }

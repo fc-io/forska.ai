@@ -39,6 +39,7 @@ type TokenUseRow = {
   totalFailedPromptTokens: number | null
   totalFailedCompletionTokens: number | null
   totalFailedTokens: number | null
+  requestAttemptsJson: unknown
 }
 
 type TokenUseProjection = {
@@ -83,8 +84,16 @@ const getJsonLiteral = (value: unknown) => {
   return value === null || value === undefined ? 'NULL' : `CAST(${getSqlLiteral(JSON.stringify(value))} AS JSON)`
 }
 
+const getJsonTextLiteral = (value: unknown) => {
+  return typeof value === 'string' ? `CAST(${getSqlLiteral(value)} AS JSON)` : getJsonLiteral(value)
+}
+
 const getTokenUseInsertLiteral = (column: string, value: unknown) => {
-  return column === 'failed_requests_details' ? getJsonLiteral(value) : getSqlLiteral(value)
+  return column === 'failed_requests_details'
+    ? getJsonLiteral(value)
+    : column === 'request_attempts_json'
+      ? getJsonTextLiteral(value)
+      : getSqlLiteral(value)
 }
 
 const getTokenUseValue = (row: TokenUseRow): TokenUseRecord => {
@@ -118,6 +127,7 @@ const getTokenUseValue = (row: TokenUseRow): TokenUseRecord => {
     totalFailedPromptTokens: row.totalFailedPromptTokens,
     totalFailedCompletionTokens: row.totalFailedCompletionTokens,
     totalFailedTokens: row.totalFailedTokens,
+    requestAttemptsJson: getJsonValue(row.requestAttemptsJson),
   }
 }
 
@@ -172,7 +182,8 @@ const tokenUseSelectClause = `
   total_success_tokens AS totalSuccessTokens,
   total_failed_prompt_tokens AS totalFailedPromptTokens,
   total_failed_completion_tokens AS totalFailedCompletionTokens,
-  total_failed_tokens AS totalFailedTokens
+  total_failed_tokens AS totalFailedTokens,
+  TO_JSON(request_attempts_json) AS requestAttemptsJson
 `
 
 const getInsertTokenUseValues = (values: Record<string, unknown>) => {

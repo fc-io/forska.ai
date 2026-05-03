@@ -262,15 +262,28 @@ test('pending token use reactivates acked judged completion during replay', asyn
         `
           INSERT INTO pending_token_use (
             job_id,
+            claim_id,
+            queue_record_id,
             article_id,
             prompt_id,
+            request_attempt_id,
             token_use_json,
             created_at,
             updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `,
       )
-      .run(payload.jobId, payload.articleId, payload.promptId, JSON.stringify(createTokenUse()), now, now)
+      .run(
+        payload.jobId,
+        payload.claimId,
+        payload.queueRecordId,
+        payload.articleId,
+        payload.promptId,
+        'request-attempt-a',
+        JSON.stringify(createTokenUse()),
+        now,
+        now,
+      )
   })()
   database.close(false)
 

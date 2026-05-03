@@ -11,6 +11,10 @@ import {
   recordConnectionSuccess,
 } from '../server/cron/judgmentsJobs/connectionHealth.ts'
 import {getJudgmentEndpointAvailability} from '../server/cron/judgmentsJobs/judgmentEndpointAvailability.ts'
+import type {
+  JudgmentRequestAttemptJsonEntry,
+  JudgmentRequestAttemptLiveContext,
+} from '../server/cron/judgmentsJobs/judgmentRequestAttemptManifest.ts'
 import {withJudgmentRequest} from '../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {
   invokeStoredProviderModel,
@@ -395,6 +399,9 @@ const storeTokenUseAndThrowConnectionError = async ({
   systemPrompt,
   userPrompt,
   failure,
+  claimId,
+  queueRecordId,
+  requestAttempt,
   appendFailureEntry = true,
 }: {
   tokenUse: JudgeTokenUsageEntry[]
@@ -410,6 +417,9 @@ const storeTokenUseAndThrowConnectionError = async ({
   systemPrompt: string
   userPrompt: string
   failure: ConnectionFailure
+  claimId?: string | null
+  queueRecordId?: string | null
+  requestAttempt?: RequestAttemptTokenFields | null
   appendFailureEntry?: boolean
 }): Promise<void> => {
   const duration = performance.now() - startDuration
@@ -419,7 +429,9 @@ const storeTokenUseAndThrowConnectionError = async ({
         ...tokenUse,
         {
           articleId,
+          claimId: claimId ?? null,
           promptIds,
+          queueRecordId: queueRecordId ?? null,
           modelId,
           modelName,
           baseURL,
@@ -434,6 +446,7 @@ const storeTokenUseAndThrowConnectionError = async ({
           lastResponse: null,
           systemPrompt,
           userPrompt,
+          ...(requestAttempt ?? {}),
         },
       ]
     : tokenUse
@@ -464,6 +477,94 @@ type GeneratedPromptResponse = {
   text: string
   usage: {promptTokens: number; completionTokens: number; totalTokens: number}
   baseURL: string
+  providerKey: string
+  requestAttemptId: string
+  requestFinishedAt: string
+  requestStartedAt: string
+}
+
+type RequestAttemptTokenFields = {
+  providerKey: string
+  requestAttemptId: string
+  requestFinishedAt: string
+  requestStartedAt: string
+}
+
+const requestAttemptFieldsByError = new WeakMap<object, RequestAttemptTokenFields>()
+
+const getRequestAttemptTokenFields = ({
+  finishedAt,
+  requestAttempt,
+}: {
+  finishedAt: string
+  requestAttempt: JudgmentRequestAttemptLiveContext
+}): RequestAttemptTokenFields => {
+  return {
+    providerKey: requestAttempt.providerKey,
+    requestAttemptId: requestAttempt.requestAttemptId,
+    requestFinishedAt: finishedAt,
+    requestStartedAt: requestAttempt.startedAt,
+  }
+}
+
+const attachRequestAttemptFieldsToError = <T>(error: T, fields: RequestAttemptTokenFields): T => {
+  if (typeof error === 'object' && error !== null) {
+    requestAttemptFieldsByError.set(error, fields)
+  }
+
+  return error
+}
+
+const getResponseRequestAttemptFields = (response: GeneratedPromptResponse): RequestAttemptTokenFields => {
+  return {
+    providerKey: response.providerKey,
+    requestAttemptId: response.requestAttemptId,
+    requestFinishedAt: response.requestFinishedAt,
+    requestStartedAt: response.requestStartedAt,
+  }
+}
+
+const getErrorRequestAttemptFields = (error: unknown): RequestAttemptTokenFields | null => {
+  return typeof error === 'object' && error !== null ? (requestAttemptFieldsByError.get(error) ?? null) : null
+}
+
+const getCompletionRequestAttempt = ({
+  articleId,
+  claimId,
+  currentResponse,
+  jobId,
+  promptId,
+  promptIds,
+  queueRecordId,
+}: {
+  articleId: string
+  claimId?: string | null
+  currentResponse: GeneratedPromptResponse
+  jobId: string
+  promptId: string
+  promptIds: string[]
+  queueRecordId: string
+}): JudgmentRequestAttemptJsonEntry => {
+  return {
+    articleId,
+    baseURL: currentResponse.baseURL,
+    claimId: claimId ?? null,
+    closeoutKind: 'owner_completion_body',
+    completionTokens: currentResponse.usage.completionTokens,
+    error: null,
+    errorCode: null,
+    finishedAt: currentResponse.requestFinishedAt,
+    jobId,
+    outcome: 'success',
+    promptId,
+    promptIds,
+    promptTokens: currentResponse.usage.promptTokens,
+    providerKey: currentResponse.providerKey,
+    queueRecordId,
+    requestAttemptId: currentResponse.requestAttemptId,
+    startedAt: currentResponse.requestStartedAt,
+    totalTokens: currentResponse.usage.totalTokens,
+  }
 }
 
 export class RecoverableJudgeError extends Error {
@@ -588,7 +689,7 @@ const generateSinglePromptResponse = async ({
       providerUsesFamilyDefault,
       workerUrls,
     },
-    async (requestBaseURL) => {
+    async (requestBaseURL, requestAttempt) => {
       try {
         const result = await invokeStoredProviderModel({
           baseURLOverride: requestBaseURL,
@@ -600,19 +701,31 @@ const generateSinglePromptResponse = async ({
           systemPrompt,
           temperature: 0.2,
         })
+        const requestFinishedAt = new Date().toISOString()
 
-        return {...result, baseURL: requestBaseURL}
+        return {
+          ...result,
+          ...getRequestAttemptTokenFields({finishedAt: requestFinishedAt, requestAttempt}),
+          baseURL: requestBaseURL,
+        }
       } catch (error) {
         const failure = classifyJudgeFailure({baseURL: requestBaseURL, endpointPath, error, providerKind: provider})
+        const requestAttemptFields = getRequestAttemptTokenFields({
+          finishedAt: new Date().toISOString(),
+          requestAttempt,
+        })
 
         if (!failure.shouldPauseConnection) {
-          throw error
+          throw attachRequestAttemptFieldsToError(error, requestAttemptFields)
         }
 
-        throw createConnectionError({
-          context: {effectiveBaseURL: requestBaseURL, endpointPath, providerKind: provider},
-          error,
-        })
+        throw attachRequestAttemptFieldsToError(
+          createConnectionError({
+            context: {effectiveBaseURL: requestBaseURL, endpointPath, providerKind: provider},
+            error,
+          }),
+          requestAttemptFields,
+        )
       }
     },
   )
@@ -1028,7 +1141,9 @@ export const judgeSinglePrompt = async ({
 
           tokenUse.push({
             articleId: article.id,
+            claimId: claimIdentity?.claimId ?? null,
             promptIds,
+            queueRecordId,
             modelId,
             modelName,
             baseURL: currentResponse.baseURL,
@@ -1043,6 +1158,7 @@ export const judgeSinglePrompt = async ({
             lastResponse: currentResponse.text,
             systemPrompt,
             userPrompt,
+            ...getResponseRequestAttemptFields(currentResponse),
             pendingQueueRetry: true,
           })
           errorCount += 1
@@ -1062,7 +1178,9 @@ export const judgeSinglePrompt = async ({
 
           tokenUse.push({
             articleId: article.id,
+            claimId: claimIdentity?.claimId ?? null,
             promptIds,
+            queueRecordId,
             modelId,
             modelName,
             baseURL: currentResponse.baseURL,
@@ -1077,6 +1195,7 @@ export const judgeSinglePrompt = async ({
             lastResponse: currentResponse.text,
             systemPrompt,
             userPrompt,
+            ...getResponseRequestAttemptFields(currentResponse),
           })
           errorCount += 1
           abortCount += 1
@@ -1097,6 +1216,17 @@ export const judgeSinglePrompt = async ({
           snapshotProjectModelName: modelName,
           judgment: quoteValidationResult.judgment,
           chunkingStrategy: null,
+          requestAttempts: [
+            getCompletionRequestAttempt({
+              articleId: article.id,
+              claimId: claimIdentity?.claimId ?? null,
+              currentResponse,
+              jobId: judgmentsJobId,
+              promptId: prompt.id,
+              promptIds,
+              queueRecordId,
+            }),
+          ],
         })
 
         recordConnectionSuccess({
@@ -1108,7 +1238,9 @@ export const judgeSinglePrompt = async ({
 
         tokenUse.push({
           articleId: article.id,
+          claimId: claimIdentity?.claimId ?? null,
           promptIds,
+          queueRecordId,
           modelId,
           modelName,
           baseURL: currentResponse.baseURL,
@@ -1123,6 +1255,7 @@ export const judgeSinglePrompt = async ({
           lastResponse: null,
           systemPrompt: null,
           userPrompt: null,
+          ...getResponseRequestAttemptFields(currentResponse),
         })
         successCount += 1
         break
@@ -1165,13 +1298,18 @@ export const judgeSinglePrompt = async ({
             startDuration,
             judgmentsJobId,
             articleId: article.id,
+            claimId: claimIdentity?.claimId ?? null,
             promptIds,
+            queueRecordId,
             modelId,
             modelName,
             baseURL: requestBaseURL,
             systemPrompt,
             userPrompt,
             failure,
+            requestAttempt: currentResponse
+              ? getResponseRequestAttemptFields(currentResponse)
+              : getErrorRequestAttemptFields(error),
           })
         }
 
@@ -1197,10 +1335,15 @@ export const judgeSinglePrompt = async ({
         const failureCode = getProviderInvocationFailureCode(error)
         const providerDiagnostics = getProviderInvocationDiagnostics(error)
         const recoverableJudgeError = getRecoverableJudgeError({adjustedErrorMessage, error})
+        const requestAttemptFields = currentResponse
+          ? getResponseRequestAttemptFields(currentResponse)
+          : getErrorRequestAttemptFields(error)
 
         tokenUse.push({
           articleId: article.id,
+          claimId: claimIdentity?.claimId ?? null,
           promptIds,
+          queueRecordId,
           modelId,
           modelName,
           baseURL: requestBaseURL,
@@ -1218,6 +1361,7 @@ export const judgeSinglePrompt = async ({
           failureCode,
           pendingQueueRetry: attempts >= MAX_RETRIES && recoverableJudgeError !== null,
           providerDiagnostics,
+          ...(requestAttemptFields ?? {}),
         })
         errorCount += 1
 
@@ -1363,7 +1507,9 @@ export const judgeSinglePrompt = async ({
 
               tokenUse.push({
                 articleId: article.id,
+                claimId: claimIdentity?.claimId ?? null,
                 promptIds,
+                queueRecordId,
                 modelId,
                 modelName,
                 baseURL: currentResponse.baseURL,
@@ -1378,6 +1524,7 @@ export const judgeSinglePrompt = async ({
                 lastResponse: null,
                 systemPrompt: null,
                 userPrompt: null,
+                ...getResponseRequestAttemptFields(currentResponse),
               })
 
               const normalizedFacts = dedupeStrings(
@@ -1447,10 +1594,15 @@ export const judgeSinglePrompt = async ({
               const failureCode = getProviderInvocationFailureCode(error)
               const providerDiagnostics = getProviderInvocationDiagnostics(error)
               const recoverableJudgeError = getRecoverableJudgeError({adjustedErrorMessage, error})
+              const requestAttemptFields = currentResponse
+                ? getResponseRequestAttemptFields(currentResponse)
+                : getErrorRequestAttemptFields(error)
 
               tokenUse.push({
                 articleId: article.id,
+                claimId: claimIdentity?.claimId ?? null,
                 promptIds,
+                queueRecordId,
                 modelId,
                 modelName,
                 baseURL: requestBaseURL,
@@ -1468,6 +1620,7 @@ export const judgeSinglePrompt = async ({
                 failureCode,
                 pendingQueueRetry: attempts >= MAX_RETRIES && recoverableJudgeError !== null,
                 providerDiagnostics,
+                ...(requestAttemptFields ?? {}),
               })
               errorCount += 1
 
@@ -1540,7 +1693,9 @@ export const judgeSinglePrompt = async ({
           startDuration,
           judgmentsJobId,
           articleId: article.id,
+          claimId: claimIdentity?.claimId ?? null,
           promptIds,
+          queueRecordId,
           modelId,
           modelName,
           baseURL: connectionErrorResult.baseURL,
@@ -1633,7 +1788,9 @@ export const judgeSinglePrompt = async ({
 
             tokenUse.push({
               articleId: article.id,
+              claimId: claimIdentity?.claimId ?? null,
               promptIds,
+              queueRecordId,
               modelId,
               modelName,
               baseURL: currentResponse.baseURL,
@@ -1648,6 +1805,7 @@ export const judgeSinglePrompt = async ({
               lastResponse: currentResponse.text,
               systemPrompt,
               userPrompt: finalUserPrompt,
+              ...getResponseRequestAttemptFields(currentResponse),
             })
             errorCount += 1
 
@@ -1675,6 +1833,17 @@ export const judgeSinglePrompt = async ({
             snapshotProjectModelName: modelName,
             judgment: judgmentToStore,
             chunkingStrategy,
+            requestAttempts: [
+              getCompletionRequestAttempt({
+                articleId: article.id,
+                claimId: claimIdentity?.claimId ?? null,
+                currentResponse,
+                jobId: judgmentsJobId,
+                promptId: prompt.id,
+                promptIds,
+                queueRecordId,
+              }),
+            ],
           })
 
           recordConnectionSuccess({
@@ -1686,7 +1855,9 @@ export const judgeSinglePrompt = async ({
 
           tokenUse.push({
             articleId: article.id,
+            claimId: claimIdentity?.claimId ?? null,
             promptIds,
+            queueRecordId,
             modelId,
             modelName,
             baseURL: currentResponse.baseURL,
@@ -1701,6 +1872,7 @@ export const judgeSinglePrompt = async ({
             lastResponse: null,
             systemPrompt: null,
             userPrompt: null,
+            ...getResponseRequestAttemptFields(currentResponse),
           })
 
           successCount += 1
@@ -1734,13 +1906,18 @@ export const judgeSinglePrompt = async ({
               startDuration,
               judgmentsJobId,
               articleId: article.id,
+              claimId: claimIdentity?.claimId ?? null,
               promptIds,
+              queueRecordId,
               modelId,
               modelName,
               baseURL: requestBaseURL,
               systemPrompt,
               userPrompt: finalUserPrompt,
               failure,
+              requestAttempt: currentResponse
+                ? getResponseRequestAttemptFields(currentResponse)
+                : getErrorRequestAttemptFields(error),
             })
           }
 
@@ -1767,10 +1944,15 @@ export const judgeSinglePrompt = async ({
           const failureCode = getProviderInvocationFailureCode(error)
           const providerDiagnostics = getProviderInvocationDiagnostics(error)
           const recoverableJudgeError = getRecoverableJudgeError({adjustedErrorMessage, error})
+          const requestAttemptFields = currentResponse
+            ? getResponseRequestAttemptFields(currentResponse)
+            : getErrorRequestAttemptFields(error)
 
           tokenUse.push({
             articleId: article.id,
+            claimId: claimIdentity?.claimId ?? null,
             promptIds,
+            queueRecordId,
             modelId,
             modelName,
             baseURL: requestBaseURL,
@@ -1788,6 +1970,7 @@ export const judgeSinglePrompt = async ({
             failureCode,
             pendingQueueRetry: attempts >= MAX_RETRIES && recoverableJudgeError !== null,
             providerDiagnostics,
+            ...(requestAttemptFields ?? {}),
           })
           errorCount += 1
 

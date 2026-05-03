@@ -31,6 +31,11 @@ import {
 } from '../cron/judgmentsJobs/judgmentJobStoragePolicy.ts'
 import {getJudgmentJobStorageTransferRuntime} from '../cron/judgmentsJobs/judgmentJobStorageTransferRuntime.ts'
 import {
+  type JudgmentRequestAttemptJsonEntry,
+  stringifyRequestAttempts,
+  withDurableCloseoutRef,
+} from '../cron/judgmentsJobs/judgmentRequestAttemptManifest.ts'
+import {
   attachProviderBucketSnapshotToRunningJob,
   type RunningJudgmentJob,
 } from '../cron/judgmentsJobs/judgmentsJobsGetRunningJobs.ts'
@@ -261,6 +266,7 @@ type JudgmentCompletionBody = JudgmentCompletionIdentity & {
   judgmentId?: string
   quotes?: unknown
   rawResponseJson?: unknown
+  requestAttempts?: JudgmentRequestAttemptJsonEntry[] | null
   retryAfterMs?: number | null
   skipReason?: 'conversion_failed' | 'fulltext_too_large' | 'no_fulltext'
   status?: 'completed' | 'failed' | 'judged' | 'retry' | 'skipped' | 'succeeded'
@@ -292,6 +298,7 @@ type JudgmentCompletionTokenUseSummary = {
   totalSuccessPromptTokens: number
   totalSuccessTokens: number
   totalTokens: number
+  requestAttempts?: JudgmentRequestAttemptJsonEntry[] | null
 }
 type JudgmentClaimRequestBody = {claimedBy?: string; limit?: number; protectedRecordIds?: string[]}
 type JudgmentSnapshotQuery = {executionSnapshotHash?: string; hash?: string}
@@ -334,6 +341,7 @@ const judgmentCompletionBodySchema = t.Object({
   judgmentId: t.Optional(t.String()),
   quotes: t.Optional(t.Any()),
   rawResponseJson: t.Optional(t.Any()),
+  requestAttempts: t.Optional(t.Union([t.Array(t.Any()), t.Null()])),
   retryAfterMs: t.Optional(t.Union([t.Number(), t.Null()])),
   skipReason: t.Optional(
     t.Union([t.Literal('conversion_failed'), t.Literal('fulltext_too_large'), t.Literal('no_fulltext')]),
@@ -377,6 +385,7 @@ const judgmentCompletionBodySchema = t.Object({
         totalSuccessPromptTokens: t.Number(),
         totalSuccessTokens: t.Number(),
         totalTokens: t.Number(),
+        requestAttempts: t.Optional(t.Union([t.Array(t.Any()), t.Null()])),
       }),
     ]),
   ),
@@ -718,6 +727,26 @@ const getCompletionTokenUseId = (body: JudgmentCompletionBody) => {
   return `judgment-completion-token-use:${body.claimId}`
 }
 
+const getCompletionRequestAttempts = (body: JudgmentCompletionBody): JudgmentRequestAttemptJsonEntry[] => {
+  return body.tokenUse?.requestAttempts ?? body.requestAttempts ?? []
+}
+
+const getCompletionRequestAttemptsJson = (
+  body: JudgmentCompletionBody,
+  closeoutKind: JudgmentRequestAttemptJsonEntry['closeoutKind'],
+  id?: string | null,
+) => {
+  const requestAttempts = getCompletionRequestAttempts(body)
+
+  return stringifyRequestAttempts(
+    withDurableCloseoutRef({
+      closeoutKind,
+      ref: {claimId: body.claimId, id: id ?? null, jobId: body.jobId, queueRecordId: body.queueRecordId},
+      requestAttempts,
+    }),
+  )
+}
+
 const getCompletionTokenUseIdOrNull = (body: JudgmentCompletionBody): string | null => {
   return body.tokenUse && body.tokenUse.totalRequests > 0 ? getCompletionTokenUseId(body) : null
 }
@@ -758,6 +787,7 @@ const applyCompletionTokenUseOnce = async (body: JudgmentCompletionBody): Promis
     total_failed_prompt_tokens: tokenUse.totalFailedPromptTokens,
     total_failed_completion_tokens: tokenUse.totalFailedCompletionTokens,
     total_failed_tokens: tokenUse.totalFailedTokens,
+    request_attempts_json: getCompletionRequestAttemptsJson(body, 'token_use', tokenUseId),
     started_at: startedAt,
     finished_at: finishedAt,
     duration: tokenUse.duration == null ? null : Math.round(tokenUse.duration),
@@ -802,12 +832,14 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
 
   await assertCompletionSnapshotIdentity(identity)
   const tokenUseId = getCompletionTokenUseIdOrNull(body)
+  const completionAckRequestAttemptsJson = getCompletionRequestAttemptsJson(body, 'completion_ack', tokenUseId)
 
   if (body.status === 'retry') {
     await getJudgmentJobSqliteService().markPromptAsRetry(jobId, body.queueRecordId, body.retryAfterMs ?? null, {
       claimId: body.claimId,
       queuePromptId: body.queueRecordId,
       status: 'retry',
+      requestAttemptsJson: completionAckRequestAttemptsJson,
       tokenUseId,
     })
     await applyCompletionTokenUseOnce(body)
@@ -819,7 +851,13 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
       jobId,
       body.queueRecordId,
       body.skipReason ?? 'no_fulltext',
-      {claimId: body.claimId, queuePromptId: body.queueRecordId, status: 'skipped', tokenUseId},
+      {
+        claimId: body.claimId,
+        queuePromptId: body.queueRecordId,
+        status: 'skipped',
+        requestAttemptsJson: completionAckRequestAttemptsJson,
+        tokenUseId,
+      },
     )
     await applyCompletionTokenUseOnce(body)
     return {data: {claimId: body.claimId, queueRecordId: body.queueRecordId, status: 'skipped'}, error: null}
@@ -830,6 +868,7 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
       claimId: body.claimId,
       queuePromptId: body.queueRecordId,
       status: 'failed',
+      requestAttemptsJson: completionAckRequestAttemptsJson,
       tokenUseId,
     })
     await applyCompletionTokenUseOnce(body)
@@ -839,6 +878,7 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
   const judgment = getJudgmentValueRecord(body)
   const answer = judgment.answer ?? body.answeredOriginal
   const now = new Date()
+  const judgmentId = body.judgmentId ?? crypto.randomUUID()
 
   await getJudgmentJobSqliteService().recordJudgmentSuccess(jobId, {
     answeredOriginal: getCompletionAnsweredOriginal(body.answeredOriginal ?? answer),
@@ -852,7 +892,7 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
     executionSnapshotHash: body.executionSnapshotHash,
     executionSnapshotId: body.executionSnapshotId,
     isAnswered: body.isAnswered ?? true,
-    judgmentId: body.judgmentId ?? crypto.randomUUID(),
+    judgmentId,
     modelId: body.modelId,
     projectId: body.projectId,
     promptId: body.promptId,
@@ -860,6 +900,7 @@ const completeJudgmentJobPrompt = async (jobId: string, body: JudgmentCompletion
     completionTokenUseId: tokenUseId,
     quotes: body.quotes ?? judgment.quotes ?? null,
     rawResponseJson: body.rawResponseJson ?? body.judgment ?? null,
+    requestAttemptsJson: getCompletionRequestAttemptsJson(body, 'judgment_outbox', judgmentId),
     snapshotProjectId: body.projectId,
     snapshotProjectModelName: null,
     updatedAt: getDateValue(judgment.updatedAt) ?? now,

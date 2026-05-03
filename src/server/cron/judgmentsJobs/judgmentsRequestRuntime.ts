@@ -1,3 +1,5 @@
+import {randomUUID} from 'node:crypto'
+
 import {getProviderConnection} from '../../providers/providerConnectionRepository.ts'
 import {testProviderConnectionHealth} from '../../providers/providerHealthService.ts'
 import type {ProviderConnectionRecord} from '../../providers/providerTypes.ts'
@@ -19,6 +21,7 @@ import {
   getJudgmentEndpointAvailability,
   resetJudgmentEndpointAvailabilityForTests,
 } from './judgmentEndpointAvailability.ts'
+import type {JudgmentRequestAttemptLiveContext} from './judgmentRequestAttemptManifest.ts'
 import {getNormalizedProviderKeyProvider, getProviderKey} from './providerKey.ts'
 
 type RequestSlot = {baseURL: string; release: () => void; requiresProbe: boolean}
@@ -139,6 +142,14 @@ const markRequestFinished = (judgmentsJobId: string): void => {
   const state = getJobRequestState(judgmentsJobId)
   state.inFlight = Math.max(0, state.inFlight - 1)
   trimJobRequestState(judgmentsJobId)
+}
+
+const createRequestAttemptContext = (providerScope: ProviderRequestScope) => {
+  return {
+    createdAt: new Date().toISOString(),
+    providerKey: getProviderRequestKey(providerScope),
+    requestAttemptId: randomUUID(),
+  }
 }
 
 const createProviderScopeConnectionContext = ({baseURL}: {baseURL: string}) => {
@@ -784,8 +795,18 @@ export const withJudgmentRequest = async <T>(
     providerUsesFamilyDefault: boolean
     workerUrls: string[]
   },
-  run: (baseURL: string) => Promise<T>,
+  run: (baseURL: string, requestAttempt: JudgmentRequestAttemptLiveContext) => Promise<T>,
 ): Promise<T> => {
+  const providerScope = {
+    modelId,
+    modelProvider: provider,
+    providerKey,
+    providerConnectionId,
+    providerLimitVersion,
+    providerMaxInflightRequests,
+    providerUsesFamilyDefault,
+  }
+  const requestAttemptContext = createRequestAttemptContext(providerScope)
   const slot = await acquireRequestSlot({
     fallbackBaseURL,
     modelId,
@@ -800,6 +821,8 @@ export const withJudgmentRequest = async <T>(
   markRequestStarted(judgmentsJobId)
 
   try {
+    const requestAttempt = {...requestAttemptContext, baseURL: slot.baseURL, startedAt: new Date().toISOString()}
+
     if (slot.requiresProbe) {
       await probeJudgmentEndpointAvailability({
         baseURL: slot.baseURL,
@@ -810,7 +833,7 @@ export const withJudgmentRequest = async <T>(
       })
     }
 
-    return await run(slot.baseURL)
+    return await run(slot.baseURL, requestAttempt)
   } finally {
     markRequestFinished(judgmentsJobId)
     slot.release()

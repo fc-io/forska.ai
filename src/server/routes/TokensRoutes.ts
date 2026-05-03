@@ -39,6 +39,7 @@ export const tokensRoutes = new Elysia()
           total_failed_prompt_tokens: body.totalFailedPromptTokens ?? null,
           total_failed_completion_tokens: body.totalFailedCompletionTokens ?? null,
           total_failed_tokens: body.totalFailedTokens ?? null,
+          request_attempts_json: body.requestAttempts ?? null,
           started_at: getDateValue(body.startedAt),
           finished_at: getDateValue(body.finishedAt),
           duration: body.duration,
@@ -71,6 +72,7 @@ export const tokensRoutes = new Elysia()
         totalFailedPromptTokens: t.Optional(t.Number()),
         totalFailedCompletionTokens: t.Optional(t.Number()),
         totalFailedTokens: t.Optional(t.Number()),
+        requestAttempts: t.Optional(t.Array(t.Any())),
       }),
     },
   )
