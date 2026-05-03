@@ -29,21 +29,21 @@
 - [ ] Ensure claim workers cannot see or ACK a project-wide dirty token until its article-state materialization completes.
 - [ ] Migrate prompt changes, project create/edit/clone settings changes, route/import-store changes, project-article and subproject scope mutations, human assessment submissions, article import changes, archive/unarchive, backfill, purge, repair scripts, and judgment refresh callers to dirty-state or guarded large-rebuild writes directly.
 - [ ] Replace generated dirty article `VALUES` and `IN (...)` lists with DuckDB temp or staging batch tables throughout incremental refresh SQL.
-- [ ] Consolidate or otherwise prove incremental batch refresh transaction boundaries keep active serving rows, details, and filter members internally consistent for each committed batch.
+- [ ] Consolidate or otherwise prove incremental batch refresh transaction boundaries keep `mart.project_scope_article`, `mart.prompt_answer_fact`, `app.review_answer_dictionary`, `mart.review_article_rollup`, `mart.review_article_serving`, `mart.review_article_serving_detail`, and `mart.review_article_filter_member` internally consistent for each committed batch.
 - [ ] Add an incremental refresh worker wall-clock wake budget with durable resume after each committed dirty batch.
 - [ ] Retire direct `refreshProject(projectId)` as a normal compatibility path; keep only explicit repair or structural operator flows.
 - [ ] Add a cutover migration or maintenance step that clears obsolete in-flight dirty, queue, and rebuild intermediate state only while workers are paused, then immediately requeues dirty state or large rebuilds from current source-of-truth tables before workers resume.
-- [ ] During cutover, also complete or clear stale `app.maintenance_work_lease` rows for obsolete review-index project refresh, large rebuild, and archived-project recovery work so the warnings API cannot report cleared work as still active or recoverable.
+- [ ] During cutover, also complete or clear stale `app.maintenance_work_lease` rows for obsolete review-index article refresh, project refresh, large rebuild, and archived-project recovery work so the warnings API cannot report cleared work as still active or recoverable.
 
 ## Queue Removal
 
-- [ ] Migrate `queueProjectRefresh`, `queueProjectRefreshes`, `queueProjectRefreshesByImportRouteIds`, `queueProjectRefreshesByPromptIds`, `queueJudgmentArticleRefresh`, `queueJudgmentArticleRefreshes`, `queueJudgmentArticleRefreshesByJudgmentIds`, `queueJudgmentArticleRefreshesByPromptIds`, and `judgeStoreJudgment` to dirty-state.
+- [ ] Migrate or rename `queueProjectRefresh`, `queueProjectRefreshes`, `queueProjectRefreshesByImportRouteIds`, `queueProjectRefreshesByPromptIds`, `queueJudgmentArticleRefresh`, `queueJudgmentArticleRefreshes`, `queueJudgmentArticleRefreshesByJudgmentIds`, `queueJudgmentArticleRefreshesByPromptIds`, `queueImportedArticleRefreshes`, and `judgeStoreJudgment` to dirty-state or guarded large-rebuild writes directly.
 - [ ] Make the `judgeStoreJudgment` replacement atomic with judgment persistence so stored judgments cannot commit without corresponding dirty-state work.
 - [ ] Migrate remaining import-store, archive, unarchive, backfill, purge, and repair-script callers away from `app.mart_refresh_queue`.
 - [ ] Clear all remaining legacy `app.mart_refresh_queue` rows during cutover instead of draining them for compatibility.
-- [ ] Delete `app.mart_refresh_queue`, queue schema repair code, auto-drain code, queue APIs, queue CLI/package scripts, queue tests, and queue pruning compatibility code.
+- [ ] Delete `app.mart_refresh_queue`, queue schema repair code, auto-drain code including `src/server/utils/martRefreshDrainHeartbeat.ts` and its `startBackgroundWork` wiring, queue APIs, queue CLI/package scripts, queue tests, and queue pruning compatibility code.
 - [ ] Remove queue exports/imports and the table in the same implementation slice so no live caller can recreate queue rows after cutover; do not leave no-op compatibility wrappers.
-- [ ] Remove archived refresh queue recovery and drain heartbeat quality gates when those compatibility paths are deleted.
+- [ ] Keep archived refresh queue recovery and drain heartbeat quality gates only while those compatibility paths exist; remove or replace them with dirty-refresh wake/lease and bounded tombstone cleanup gates in the deletion slice.
 
 ## Quarantine And ACK Semantics
 
@@ -65,7 +65,8 @@
 ## Archived Project Cleanup
 
 - [ ] Move archived-project delete off synchronous full purge and table rebuilds; use bounded cleanup behind active refresh and judging work.
-- [ ] Retire or rework `scripts/purgeArchivedProjectMarts.ts` and the `db:duck:purge-archived-marts` package script so archived cleanup uses the new bounded tombstone cleanup path and does not keep a stale hard-coded mart table allowlist.
+- [ ] Retire or rework `scripts/purgeArchivedProjectMarts.ts`, `scripts/reproArchivedProjectServingDelete.ts`, their tests, and the `db:duck:purge-archived-marts` package script so archived cleanup uses the new bounded tombstone cleanup path and does not keep stale hard-coded mart table allowlists or serving-delete remediation paths.
+- [ ] Rework `/api/projects/delete-archived` in `src/server/routes/projectsRoutes/projectsRoutesPostDeleteArchived.ts` so final archived deletion creates tombstone/delete-pending cleanup work instead of synchronously purging marts and rebuilding app tables in the request path.
 - [ ] Define archived-project deletion lifecycle explicitly: mark projects as delete-pending/tombstoned, hide them from normal API/UI reads, keep enough project identity for bounded cleanup, then delete source rows only after cleanup completes.
 - [ ] Store tombstoned project cleanup identity in a table that bounded cleanup workers can scan without relying on visible `app.project` rows.
 - [ ] Refresh, recompute, or detach global `mart.judgment_fact` ownership metadata affected by archived project deletion without deleting facts still visible to non-archived projects.
@@ -101,6 +102,7 @@
 - [ ] Assert cutover pauses workers, clears obsolete intermediate state and stale maintenance leases, rederives replacement work from source-of-truth tables, resumes workers, and does not publish ACKs from clearing alone.
 - [ ] Assert former `queueProjectRefresh` and `queueJudgmentArticleRefresh` triggers for judgment changes, prompt changes, route/import-store changes, archive, unarchive, backfill, purge, and repair-script work write dirty-state or large-rebuild work directly and no longer depend on `app.mart_refresh_queue` compatibility.
 - [ ] Assert project create/edit/clone, project-article deletes, subproject creation, human assessment submission, prompt edits, and import-store writes mark the exact affected project/article dirty state and do not recreate queue rows.
+- [ ] Add project-article route delete coverage and agent-level `judgeStoreJudgment` dirty-state atomicity coverage before relying on those migrations; add their exact test commands to Quality Gates when those files exist.
 - [ ] Assert queue cutover clears existing `app.mart_refresh_queue` rows, drops/removes the queue path, and cannot recreate queue rows from any former caller.
 - [ ] Assert `judgeStoreJudgment` stores the judgment and marks affected projects dirty atomically; if dirty-state marking fails, the judgment write cannot be silently committed as refreshed.
 - [ ] Assert incremental refresh worker wakes stop on wall-clock budget, leave durable dirty-state progress, and resume the next wake without reprocessing completed batches.
@@ -136,6 +138,7 @@
 - [ ] `bun test src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHuman.test.ts`
 - [ ] `bun test src/server/routes/projectsRoutes/projectsRoutesGetArticlesReviewsHumanFilters.test.ts`
 - [ ] `bun test src/server/routes/projectsRoutes/projectsRoutesOlapParity.test.ts`
+- [ ] `bun test src/server/routes/projectsRoutes/projectAccessGuard.test.ts`
 - [ ] `bun test src/server/routes/ProjectsRoutes.test.ts`
 - [ ] `bun test src/server/routes/PromptsRoutes.test.ts`
 - [ ] `bun test src/server/routes/SubprojectsRoutes.test.ts`
@@ -148,12 +151,16 @@
 - [ ] `bun test src/server/routes/AdminInvestigateRoutes.test.ts`
 - [ ] `bun test src/server/cron/judgmentsJobs/judgmentJobSqliteService.test.ts`
 - [ ] `bun test src/server/utils/martRefreshDrainHeartbeat.test.ts`
+- [ ] `bun test src/server/utils/startBackgroundWork.test.ts`
 - [ ] `bun test src/server/services/articleImportStoreService.test.ts`
+- [ ] `bun test src/server/services/insertArticlesIntoProject.test.ts`
+- [ ] `bun test src/server/services/structuredFileImportService.test.ts`
 - [ ] `bun test src/services/olap/duckdbOlap.test.ts`
 - [ ] `bun test src/components/main/reviews/getReviewIndexingInProgressTitle.test.ts`
 - [ ] `bunx vitest run src/components/main/reviews/reviewsProjectWarnings.vitest.tsx`
 - [ ] `bun test scripts/projectMartRefreshRecovery.test.ts`
 - [ ] `bun test scripts/recoverArchivedProjectRefreshQueue.test.ts`
+- [ ] `bun test scripts/reproArchivedProjectServingDelete.test.ts`
 - [ ] `bun run db:mig`
 - [ ] `bun run lint`
 - [ ] `bun run build`
