@@ -1,4 +1,5 @@
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
+import {getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
 import {getProjectMartDirtyRefreshStateService} from '../src/server/services/projectMartDirtyRefreshStateService.ts'
 
 const getArgValue = (names: string[]) => {
@@ -21,7 +22,7 @@ const requireArgValue = (names: string[], description: string) => {
   return value
 }
 
-const quarantineProjectMartRefreshArticle = async () => {
+export const quarantineDirtyRefreshArticle = async () => {
   const articleId = requireArgValue(['--articleId', '--article-id'], '--article-id=<uuid>')
   const error =
     getArgValue(['--error'])
@@ -34,7 +35,7 @@ const quarantineProjectMartRefreshArticle = async () => {
     const impactedProjects = await getAppDatabaseService().queryJson<{projectId: string}>(`
       SELECT DISTINCT project_id AS projectId
       FROM app.project_mart_refresh_article_state
-      WHERE article_id = '${articleId}'
+      WHERE article_id = ${getSqlLiteral(articleId)}
       ORDER BY project_id ASC
     `)
     console.log(
@@ -54,4 +55,6 @@ const quarantineProjectMartRefreshArticle = async () => {
   }
 }
 
-void quarantineProjectMartRefreshArticle()
+if (import.meta.main) {
+  await quarantineDirtyRefreshArticle()
+}

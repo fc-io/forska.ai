@@ -50,15 +50,30 @@ type Rebuild2CutoverReport = {
   largeRebuildProjectIds: string[]
   pausedWorkerState: {dirtyMaterializationRows: number; largeRebuildRows: number; refreshRows: number}
   rederivedDirtyProjectCount: number
+  rederivedQuarantineCount: number
 }
 
 type ActiveWorkerLeaseSnapshot = {count: number; nextLeaseExpiresAt: Date | null}
+type QuarantineRederiveRow = {
+  articleId: string
+  detectedBy: string | null
+  error: string
+  projectId: string | null
+}
+type QuarantineRederiveCandidate = {
+  articleId: string
+  detectedBy: string | null
+  error: string
+  projectId: string
+}
 
 const cutoverFenceId = 'rebuild2'
 const cutoverReason = 'rebuild2-cutover'
 const defaultFenceLeaseMs = 30 * 60 * 1000
 const defaultMaxWaitMs = 60_000
 const defaultPollMs = 250
+const dirtyRefreshArticleQuarantineTableName = 'project_mart_dirty_refresh_article_quarantine'
+const obsoleteArticleQuarantineTableName = 'project_mart_refresh_article_quarantine'
 const sourceProofRoots = ['src'] as const
 const forbiddenLegacyCallerPatterns = [
   {label: 'queueProjectRefresh', pattern: /\bqueueProjectRefresh\b/},
@@ -158,6 +173,37 @@ const getHasTable = async (runner: CutoverRunner, schemaName: string, tableName:
           AND table_name = ${getSqlLiteral(tableName)}
       `,
     )) > 0
+  )
+}
+
+const getHasColumn = async (runner: CutoverRunner, schemaName: string, tableName: string, columnName: string) => {
+  return (
+    (await getCount(
+      runner,
+      `
+        SELECT COUNT(*) AS count
+        FROM information_schema.columns
+        WHERE table_schema = ${getSqlLiteral(schemaName)}
+          AND table_name = ${getSqlLiteral(tableName)}
+          AND column_name = ${getSqlLiteral(columnName)}
+      `,
+    )) > 0
+  )
+}
+
+const getHasArticleOnlyQuarantineTable = async (runner: CutoverRunner) => {
+  return (
+    (await getHasTable(runner, 'app', obsoleteArticleQuarantineTableName))
+    && !(await getHasColumn(runner, 'app', obsoleteArticleQuarantineTableName, 'project_id'))
+    && !(await getHasColumn(runner, 'app', obsoleteArticleQuarantineTableName, 'dirty_token'))
+  )
+}
+
+const getHasScopedQuarantineTable = async (runner: CutoverRunner, tableName: string) => {
+  return (
+    (await getHasTable(runner, 'app', tableName))
+    && (await getHasColumn(runner, 'app', tableName, 'project_id'))
+    && (await getHasColumn(runner, 'app', tableName, 'dirty_token'))
   )
 }
 
@@ -403,7 +449,9 @@ const getRebuild2CutoverProof = async (runner: CutoverRunner, ownerToken: string
       `,
     ),
     outboxImportRows: await getCount(runner, 'SELECT COUNT(*) AS count FROM app.judgment_job_sqlite_outbox_import'),
-    quarantineRows: await getCount(runner, 'SELECT COUNT(*) AS count FROM app.project_mart_refresh_article_quarantine'),
+    quarantineRows: (await getHasArticleOnlyQuarantineTable(runner))
+      ? await getCount(runner, `SELECT COUNT(*) AS count FROM app.${obsoleteArticleQuarantineTableName}`)
+      : 0,
     runningDirtyMaterializationRows: await getCount(
       runner,
       `
@@ -595,12 +643,147 @@ const getLargeRebuildProjectIdsToRederive = async (runner: CutoverRunner) => {
   })
 }
 
+const getScopedQuarantineRowsToRederive = async (runner: CutoverRunner, tableName: string) => {
+  return (await getHasScopedQuarantineTable(runner, tableName))
+    ? runner.queryJson<QuarantineRederiveRow>(`
+        SELECT
+          project_id AS projectId,
+          article_id AS articleId,
+          error,
+          detected_by AS detectedBy
+        FROM app.${tableName}
+        WHERE resolved_at IS NULL
+        ORDER BY project_id ASC, article_id ASC, dirty_token ASC
+      `)
+    : []
+}
+
+const getArticleOnlyQuarantineRowsToRederive = async (runner: CutoverRunner) => {
+  return (await getHasArticleOnlyQuarantineTable(runner))
+    ? runner.queryJson<QuarantineRederiveRow>(`
+        SELECT
+          NULL AS projectId,
+          article_id AS articleId,
+          error,
+          detected_by AS detectedBy
+        FROM app.${obsoleteArticleQuarantineTableName}
+        ORDER BY article_id ASC
+      `)
+    : []
+}
+
+const getQuarantineRowsToRederive = async (runner: CutoverRunner) => {
+  const [articleOnlyRows, oldScopedRows, dirtyRefreshRows] = await Promise.all([
+    getArticleOnlyQuarantineRowsToRederive(runner),
+    getScopedQuarantineRowsToRederive(runner, obsoleteArticleQuarantineTableName),
+    getScopedQuarantineRowsToRederive(runner, dirtyRefreshArticleQuarantineTableName),
+  ])
+
+  return [...articleOnlyRows, ...oldScopedRows, ...dirtyRefreshRows]
+}
+
+const getArticleOnlyQuarantineProjects = async (runner: CutoverRunner, row: QuarantineRederiveRow) => {
+  return runner.queryJson<{projectId: string}>(`
+    SELECT projectId
+    FROM (
+      SELECT project_article.project_id AS projectId
+      FROM app.project_article project_article
+      INNER JOIN app.project project ON project.id = project_article.project_id
+      WHERE project_article.article_id = ${getSqlLiteral(row.articleId)}
+        AND project.archived = FALSE
+      UNION
+      SELECT project_import_route.project_id AS projectId
+      FROM app.article_import_route article_import_route
+      INNER JOIN app.project_import_route project_import_route
+        ON project_import_route.import_route_id = article_import_route.import_route_id
+      INNER JOIN app.project project ON project.id = project_import_route.project_id
+      WHERE article_import_route.article_id = ${getSqlLiteral(row.articleId)}
+        AND project.archived = FALSE
+    ) project_scope
+    ORDER BY projectId ASC
+  `)
+}
+
+const getScopedQuarantineProjects = async (runner: CutoverRunner, row: QuarantineRederiveRow) => {
+  return runner.queryJson<{projectId: string}>(`
+    SELECT id AS projectId
+    FROM app.project
+    WHERE id = ${getSqlLiteral(row.projectId)}
+      AND archived = FALSE
+    ORDER BY id ASC
+  `)
+}
+
+const getQuarantineRederiveCandidates = async (runner: CutoverRunner, rows: QuarantineRederiveRow[]) => {
+  const candidates = await rows.reduce<Promise<QuarantineRederiveCandidate[]>>(async (accPromise, row) => {
+    const acc = await accPromise
+    const projects =
+      row.projectId === null
+        ? await getArticleOnlyQuarantineProjects(runner, row)
+        : await getScopedQuarantineProjects(runner, row)
+
+    return [
+      ...acc,
+      ...projects.map((project) => {
+        return {
+          articleId: row.articleId,
+          detectedBy: row.detectedBy,
+          error: row.error,
+          projectId: project.projectId,
+        }
+      }),
+    ]
+  }, Promise.resolve([]))
+
+  return Array.from(
+    candidates
+      .reduce((acc, candidate) => {
+        acc.set(`${candidate.projectId}\0${candidate.articleId}`, candidate)
+        return acc
+      }, new Map<string, QuarantineRederiveCandidate>())
+      .values(),
+  )
+}
+
+const getQuarantineCandidateValuesSql = (candidates: QuarantineRederiveCandidate[]) => {
+  return candidates
+    .map((candidate) => {
+      return [
+        getSqlLiteral(candidate.projectId),
+        getSqlLiteral(candidate.articleId),
+        getSqlLiteral(candidate.error),
+        getSqlLiteral(candidate.detectedBy),
+      ].join(', ')
+    })
+    .map((values) => {
+      return `(${values})`
+    })
+    .join(', ')
+}
+
+const clearScopedQuarantineRows = async (runner: CutoverRunner) => {
+  if (await getHasScopedQuarantineTable(runner, dirtyRefreshArticleQuarantineTableName)) {
+    await runner.run(`DELETE FROM app.${dirtyRefreshArticleQuarantineTableName}`)
+  }
+
+  if (await getHasScopedQuarantineTable(runner, obsoleteArticleQuarantineTableName)) {
+    await runner.run(`DELETE FROM app.${obsoleteArticleQuarantineTableName}`)
+  }
+}
+
+const clearArticleOnlyQuarantineRows = async (runner: CutoverRunner) => {
+  if (await getHasArticleOnlyQuarantineTable(runner)) {
+    await runner.run(`DELETE FROM app.${obsoleteArticleQuarantineTableName}`)
+  }
+}
+
 const clearObsoleteRebuild2State = async (runner: CutoverRunner, options: Rebuild2CutoverOptions) => {
   await assertOwnedRebuild2CutoverFence(runner, options)
   if (await getHasTable(runner, 'app', 'mart_refresh_queue')) {
     await runner.run('DELETE FROM app.mart_refresh_queue')
   }
-  await runner.run('DELETE FROM app.project_mart_refresh_article_quarantine')
+  await clearScopedQuarantineRows(runner)
+  await clearArticleOnlyQuarantineRows(runner)
   await runner.run('DELETE FROM app.project_mart_dirty_materialization_state')
   await runner.run('DELETE FROM app.project_mart_refresh_article_state')
   await runner.run('DELETE FROM app.project_mart_large_rebuild_state')
@@ -644,6 +827,86 @@ const rederiveReplacementWork = async (
   return states.length
 }
 
+const rederiveQuarantineWork = async (
+  runner: CutoverRunner,
+  options: Rebuild2CutoverOptions,
+  quarantineRows: QuarantineRederiveRow[],
+) => {
+  await assertOwnedRebuild2CutoverFence(runner, options)
+  const candidates = await getQuarantineRederiveCandidates(runner, quarantineRows)
+
+  if (candidates.length === 0) {
+    return 0
+  }
+
+  const currentNow = getNow()
+  const candidateValuesSql = getQuarantineCandidateValuesSql(candidates)
+
+  await runner.run(`
+    INSERT INTO app.project_mart_refresh_article_state (
+      project_id,
+      article_id,
+      first_dirty_token,
+      last_dirty_token,
+      updated_at
+    )
+    SELECT
+      candidate.project_id,
+      candidate.article_id,
+      refresh_state.dirty_token,
+      refresh_state.dirty_token,
+      ${getTimestampLiteral(currentNow)}
+    FROM (
+      VALUES ${candidateValuesSql}
+    ) AS candidate(project_id, article_id, quarantine_error, detected_by)
+    INNER JOIN app.project_mart_refresh_state refresh_state
+      ON refresh_state.project_id = candidate.project_id
+    ON CONFLICT(project_id, article_id) DO UPDATE SET
+      first_dirty_token = LEAST(
+        app.project_mart_refresh_article_state.first_dirty_token,
+        EXCLUDED.first_dirty_token
+      ),
+      last_dirty_token = GREATEST(
+        app.project_mart_refresh_article_state.last_dirty_token,
+        EXCLUDED.last_dirty_token
+      ),
+      updated_at = EXCLUDED.updated_at
+  `)
+  await runner.run(`
+    INSERT INTO app.${dirtyRefreshArticleQuarantineTableName} (
+      project_id,
+      article_id,
+      dirty_token,
+      error,
+      detected_by,
+      resolved_at,
+      created_at,
+      updated_at
+    )
+    SELECT
+      candidate.project_id,
+      candidate.article_id,
+      refresh_state.dirty_token,
+      candidate.quarantine_error,
+      candidate.detected_by,
+      NULL,
+      ${getTimestampLiteral(currentNow)},
+      ${getTimestampLiteral(currentNow)}
+    FROM (
+      VALUES ${candidateValuesSql}
+    ) AS candidate(project_id, article_id, quarantine_error, detected_by)
+    INNER JOIN app.project_mart_refresh_state refresh_state
+      ON refresh_state.project_id = candidate.project_id
+    ON CONFLICT(project_id, article_id, dirty_token) DO UPDATE SET
+      error = EXCLUDED.error,
+      detected_by = EXCLUDED.detected_by,
+      resolved_at = NULL,
+      updated_at = EXCLUDED.updated_at
+  `)
+
+  return candidates.length
+}
+
 const runAppliedRebuild2Cutover = async (
   options: Rebuild2CutoverOptions,
   beforeProof: Rebuild2CutoverProof,
@@ -660,6 +923,7 @@ const runAppliedRebuild2Cutover = async (
     await touchRebuild2CutoverFence(runner, options, 'clearing-obsolete-state')
     const projectIds = await getProjectIdsToRederive(runner)
     const largeRebuildProjectIds = await getLargeRebuildProjectIdsToRederive(runner)
+    const quarantineRows = await getQuarantineRowsToRederive(runner)
 
     await getAppDatabaseService().transaction(async (tx) => {
       await clearObsoleteRebuild2State(tx, options)
@@ -670,9 +934,14 @@ const runAppliedRebuild2Cutover = async (
     const codeProofAfterClear = await assertCleanCutCodeProof()
 
     await touchRebuild2CutoverFence(runner, options, 'rederiving-replacement-work')
-    const rederivedDirtyProjectCount = await getAppDatabaseService().transaction((tx) => {
-      return rederiveReplacementWork(tx, options, projectIds, largeRebuildProjectIds)
-    })
+    const {rederivedDirtyProjectCount, rederivedQuarantineCount} = await getAppDatabaseService().transaction(
+      async (tx) => {
+        const dirtyProjectCount = await rederiveReplacementWork(tx, options, projectIds, largeRebuildProjectIds)
+        const quarantineCount = await rederiveQuarantineWork(tx, options, quarantineRows)
+
+        return {rederivedDirtyProjectCount: dirtyProjectCount, rederivedQuarantineCount: quarantineCount}
+      },
+    )
     const afterRederiveProof = await getRebuild2CutoverProof(runner, options.ownerToken)
     assertNoObsoleteRows(afterRederiveProof, 'after-rederive')
 
@@ -695,6 +964,7 @@ const runAppliedRebuild2Cutover = async (
       largeRebuildProjectIds,
       pausedWorkerState,
       rederivedDirtyProjectCount,
+      rederivedQuarantineCount,
     } satisfies Rebuild2CutoverReport
   } catch (error) {
     await failRebuild2CutoverFence(runner, options, error)
@@ -728,6 +998,7 @@ export const runRebuild2Cutover = async (
         largeRebuildProjectIds: [],
         pausedWorkerState: {dirtyMaterializationRows: 0, largeRebuildRows: 0, refreshRows: 0},
         rederivedDirtyProjectCount: 0,
+        rederivedQuarantineCount: 0,
       }
 }
 

@@ -442,7 +442,7 @@ test('reviews warnings expose quarantined article refreshes without pending heal
   await insertDirtyArticleRefreshState(projectId, articleId, 1)
   await insertReviewServingRow(projectId, articleId)
   await runDatabase(`
-    INSERT INTO app.project_mart_refresh_article_quarantine (
+    INSERT INTO app.project_mart_dirty_refresh_article_quarantine (
       project_id,
       article_id,
       dirty_token,

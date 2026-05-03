@@ -123,7 +123,7 @@ const claimProject = async ({
         OR dirty_token > active_dirty_token
         OR NOT EXISTS (
           SELECT 1
-          FROM app.project_mart_refresh_article_quarantine quarantine
+          FROM app.project_mart_dirty_refresh_article_quarantine quarantine
           WHERE quarantine.project_id = app.project_mart_refresh_state.project_id
             AND quarantine.dirty_token <= app.project_mart_refresh_state.dirty_token
             AND quarantine.resolved_at IS NULL

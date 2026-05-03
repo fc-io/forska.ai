@@ -211,7 +211,7 @@ test('quarantine barriers park processed claims and unblock after token-scoped r
         article_id AS articleId,
         CAST(dirty_token AS INTEGER) AS dirtyToken,
         resolved_at AS resolvedAt
-      FROM app.project_mart_refresh_article_quarantine
+      FROM app.project_mart_dirty_refresh_article_quarantine
       WHERE project_id = 'quarantine-barrier-project'
       ORDER BY dirty_token ASC, article_id ASC
     \`)
@@ -249,7 +249,7 @@ test('quarantine barriers park processed claims and unblock after token-scoped r
         project_id AS projectId,
         article_id AS articleId,
         CAST(dirty_token AS INTEGER) AS dirtyToken
-      FROM app.project_mart_refresh_article_quarantine
+      FROM app.project_mart_dirty_refresh_article_quarantine
       WHERE project_id = 'quarantine-barrier-project'
       ORDER BY dirty_token ASC, article_id ASC
     \`)

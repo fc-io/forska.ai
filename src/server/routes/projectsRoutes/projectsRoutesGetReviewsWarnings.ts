@@ -372,7 +372,7 @@ const getPendingArticleRefreshInfo = async (projectId: string): Promise<RefreshC
     INNER JOIN scoped_article ON scoped_article.articleId = article_state.article_id
     LEFT JOIN app.project_mart_refresh_state refresh_state
       ON refresh_state.project_id = article_state.project_id
-    LEFT JOIN app.project_mart_refresh_article_quarantine quarantine
+    LEFT JOIN app.project_mart_dirty_refresh_article_quarantine quarantine
       ON quarantine.project_id = article_state.project_id
       AND quarantine.article_id = article_state.article_id
       AND quarantine.resolved_at IS NULL
