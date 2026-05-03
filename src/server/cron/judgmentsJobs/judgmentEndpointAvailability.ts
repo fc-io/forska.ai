@@ -27,6 +27,7 @@ type JudgmentEndpointAvailabilityState = {
 
 export type JudgmentEndpointAvailability = {
   cooldownExpiresAt: Date | null
+  endpointAvailabilityKey: string
   lastFailureKind: JudgmentEndpointFailureKind | null
   lastFailureMessage: string | null
   probePromise: Promise<void> | null
@@ -37,6 +38,8 @@ export type JudgmentEndpointAvailabilityDiagnostics = {
   cooldownRemainingMs: number | null
   lastFailureKind: JudgmentEndpointFailureKind | null
   lastFailureMessage: string | null
+  localProbeLiveCount: number
+  observedAggregateProbeLiveCount: number | null
   probeInProgress: boolean
   status: JudgmentEndpointAvailabilityStatus
 }
@@ -44,6 +47,8 @@ export type JudgmentEndpointAvailabilityDiagnostics = {
 type JudgmentEndpointProviderInput = ProviderKeyInput & {providerKey?: string | null}
 
 const endpointAvailabilityStates = new Map<string, JudgmentEndpointAvailabilityState>()
+const localProbeLiveCountsByEndpointKey = new Map<string, number>()
+const observedAggregateProbeLiveCountsByEndpointKey = new Map<string, number>()
 
 const hasEndpointAvailabilityProviderInput = ({
   modelId,
@@ -121,9 +126,16 @@ const getOrCreateEndpointAvailabilityState = ({
   return state
 }
 
-const getEndpointAvailabilitySnapshot = (state: JudgmentEndpointAvailabilityState): JudgmentEndpointAvailability => {
+const getEndpointAvailabilitySnapshot = ({
+  endpointAvailabilityKey,
+  state,
+}: {
+  endpointAvailabilityKey: string
+  state: JudgmentEndpointAvailabilityState
+}): JudgmentEndpointAvailability => {
   return {
     cooldownExpiresAt: state.cooldownExpiresAt,
+    endpointAvailabilityKey,
     lastFailureKind: state.lastFailureKind,
     lastFailureMessage: state.lastFailureMessage,
     probePromise: state.probePromise,
@@ -196,8 +208,18 @@ export const getJudgmentEndpointAvailability = ({
   providerKey,
   useOwnerBackedSyntheticProviderId,
 }: {effectiveBaseURL: string} & JudgmentEndpointProviderInput): JudgmentEndpointAvailability => {
-  return getEndpointAvailabilitySnapshot(
-    getOrCreateEndpointAvailabilityState({
+  const key = getEndpointAvailabilityKey({
+    effectiveBaseURL,
+    modelId,
+    modelProvider,
+    providerConnectionId,
+    providerKey,
+    useOwnerBackedSyntheticProviderId,
+  })
+
+  return getEndpointAvailabilitySnapshot({
+    endpointAvailabilityKey: key.endpointAvailabilityKey,
+    state: getOrCreateEndpointAvailabilityState({
       effectiveBaseURL,
       modelId,
       modelProvider,
@@ -205,7 +227,7 @@ export const getJudgmentEndpointAvailability = ({
       providerKey,
       useOwnerBackedSyntheticProviderId,
     }),
-  )
+  })
 }
 
 export const getJudgmentEndpointAvailabilityDiagnostics = (
@@ -219,9 +241,68 @@ export const getJudgmentEndpointAvailabilityDiagnostics = (
     cooldownRemainingMs,
     lastFailureKind: availability.lastFailureKind,
     lastFailureMessage: availability.lastFailureMessage,
+    localProbeLiveCount: localProbeLiveCountsByEndpointKey.get(availability.endpointAvailabilityKey) ?? 0,
+    observedAggregateProbeLiveCount:
+      observedAggregateProbeLiveCountsByEndpointKey.get(availability.endpointAvailabilityKey) ?? null,
     probeInProgress: availability.status === 'probing' || availability.probePromise !== null,
     status: availability.status,
   }
+}
+
+export const adjustJudgmentEndpointLocalProbeLiveCount = ({
+  delta,
+  endpointAvailabilityKey,
+}: {
+  delta: number
+  endpointAvailabilityKey: string
+}): number => {
+  const nextCount = Math.max(0, (localProbeLiveCountsByEndpointKey.get(endpointAvailabilityKey) ?? 0) + delta)
+
+  if (nextCount === 0) {
+    localProbeLiveCountsByEndpointKey.delete(endpointAvailabilityKey)
+    return nextCount
+  }
+
+  localProbeLiveCountsByEndpointKey.set(endpointAvailabilityKey, nextCount)
+  return nextCount
+}
+
+export const setJudgmentEndpointObservedAggregateProbeLiveCount = ({
+  endpointAvailabilityKey,
+  observedAggregateProbeLiveCount,
+}: {
+  endpointAvailabilityKey: string
+  observedAggregateProbeLiveCount: number | null
+}): void => {
+  const normalizedCount =
+    typeof observedAggregateProbeLiveCount === 'number' && Number.isFinite(observedAggregateProbeLiveCount)
+      ? Math.max(0, Math.trunc(observedAggregateProbeLiveCount))
+      : null
+
+  if (normalizedCount === null) {
+    observedAggregateProbeLiveCountsByEndpointKey.delete(endpointAvailabilityKey)
+    return undefined
+  }
+
+  observedAggregateProbeLiveCountsByEndpointKey.set(endpointAvailabilityKey, normalizedCount)
+}
+
+export const adjustJudgmentEndpointObservedAggregateProbeLiveCount = ({
+  delta,
+  endpointAvailabilityKey,
+}: {
+  delta: number
+  endpointAvailabilityKey: string
+}): number | null => {
+  const currentCount = observedAggregateProbeLiveCountsByEndpointKey.get(endpointAvailabilityKey)
+
+  if (currentCount === undefined) {
+    return null
+  }
+
+  const nextCount = Math.max(0, currentCount + delta)
+  observedAggregateProbeLiveCountsByEndpointKey.set(endpointAvailabilityKey, nextCount)
+  return nextCount
 }
 
 export const claimJudgmentEndpointAvailability = ({
@@ -366,5 +447,10 @@ export const recordJudgmentEndpointSuccess = ({
 }
 
 export const resetJudgmentEndpointAvailabilityForTests = (): void => {
+  endpointAvailabilityStates.forEach((state) => {
+    finishProbe(state)
+  })
   endpointAvailabilityStates.clear()
+  localProbeLiveCountsByEndpointKey.clear()
+  observedAggregateProbeLiveCountsByEndpointKey.clear()
 }

@@ -1142,7 +1142,9 @@ test('provider admission release fencing failure still clears the local request 
 })
 
 test('404 misroutes block dispatch during cooldown, allow one probe after expiry, and reopen only after probe success', async () => {
-  const {withJudgmentRequest} = await loadRuntime()
+  const {getJudgmentRequestStats, withJudgmentRequest} = await loadRuntime()
+  const {getJudgmentEndpointAvailability, getJudgmentEndpointAvailabilityDiagnostics} =
+    await import('./judgmentEndpointAvailability.ts')
   let now = 1_000
   Date.now = () => {
     return now
@@ -1211,37 +1213,67 @@ test('404 misroutes block dispatch during cooldown, allow one probe after expiry
   await flush()
   expect(probeStarted).toBe(false)
   expect(testProviderConnectionHealth).toHaveBeenCalledTimes(1)
-
-  let probingBlockedError: unknown = null
-
-  try {
-    await withJudgmentRequest(
-      {
-        judgmentsJobId: 'job-gated-probe-2',
-        provider: 'openai',
-        fallbackBaseURL,
+  expect(getJudgmentRequestStats('job-gated-probe-1')).toEqual({inFlight: 0, pendingPersistedAttempts: 0})
+  const firstProbeAcquireInput = acquireProviderAdmissionLeasePersisted.mock.calls[0]?.[0]
+  expect(firstProbeAcquireInput).toMatchObject({
+    endpointAvailabilityKey: 'connection-gated::http://fallback-runtime-gated.test',
+    leaseKind: 'probe',
+  })
+  expect(typeof firstProbeAcquireInput?.probeAttemptId).toBe('string')
+  expect(
+    getJudgmentEndpointAvailabilityDiagnostics(
+      getJudgmentEndpointAvailability({
+        effectiveBaseURL: fallbackBaseURL,
+        modelProvider: 'openai',
         providerConnectionId,
-        providerMaxInflightRequests: 2,
-        providerUsesFamilyDefault: false,
-        workerUrls: [],
-      },
-      async () => {
-        secondStarted = true
-      },
-    )
-  } catch (error) {
-    probingBlockedError = error
-  }
+      }),
+    ),
+  ).toMatchObject({
+    localProbeLiveCount: 1,
+    observedAggregateProbeLiveCount: 1,
+    probeInProgress: true,
+    status: 'probing',
+  })
 
-  expect(probingBlockedError).toBeInstanceOf(ConnectionError)
+  const secondRequest = withJudgmentRequest(
+    {
+      judgmentsJobId: 'job-gated-probe-2',
+      provider: 'openai',
+      fallbackBaseURL,
+      providerConnectionId,
+      providerMaxInflightRequests: 2,
+      providerUsesFamilyDefault: false,
+      workerUrls: [],
+    },
+    async () => {
+      secondStarted = true
+    },
+  )
+
+  await flush()
   expect(testProviderConnectionHealth).toHaveBeenCalledTimes(1)
-
   expect(secondStarted).toBe(false)
+  expect(getJudgmentRequestStats('job-gated-probe-2')).toEqual({inFlight: 0, pendingPersistedAttempts: 0})
   expect(testProviderConnectionHealth.mock.calls[0]?.[1]).toEqual({effectiveBaseURL: fallbackBaseURL})
 
   probeRelease.resolve()
-  await probeRequest
+  await Promise.all([probeRequest, secondRequest])
   expect(probeStarted).toBe(true)
+  expect(secondStarted).toBe(true)
+  expect(
+    getJudgmentEndpointAvailabilityDiagnostics(
+      getJudgmentEndpointAvailability({
+        effectiveBaseURL: fallbackBaseURL,
+        modelProvider: 'openai',
+        providerConnectionId,
+      }),
+    ),
+  ).toMatchObject({
+    localProbeLiveCount: 0,
+    observedAggregateProbeLiveCount: 0,
+    probeInProgress: false,
+    status: 'healthy',
+  })
 
   await withJudgmentRequest(
     {

@@ -17,9 +17,12 @@ import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {shouldUseJudgeWorkerOwnerHandoff} from './judgeWorkerCompletionJournal.ts'
 import {
+  adjustJudgmentEndpointLocalProbeLiveCount,
+  adjustJudgmentEndpointObservedAggregateProbeLiveCount,
   claimJudgmentEndpointAvailability,
   getJudgmentEndpointAvailability,
   resetJudgmentEndpointAvailabilityForTests,
+  setJudgmentEndpointObservedAggregateProbeLiveCount,
 } from './judgmentEndpointAvailability.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
 import type {
@@ -30,6 +33,7 @@ import type {
 import {recordRequestAttemptManifestStage} from './judgmentRequestAttemptManifestStore.ts'
 import {
   acquireProviderAdmissionLeasePersisted,
+  getProviderAdmissionProbeLeaseIdentity,
   getProviderAdmissionRequestLeaseIdentity,
   getProviderBucketSnapshot,
   type ProviderBucketSnapshot,
@@ -61,10 +65,25 @@ type CodexProviderWaiter = RequestWaiter<() => void> & {providerScope: ProviderR
 type FallbackWaiter = RequestWaiter<RequestSlot> & {baseURL: string; providerScope: ProviderRequestScope}
 type WorkerWaiter = RequestWaiter<RequestSlot> & {providerScope: ProviderRequestScope; workerUrls: string[]}
 type ProviderRequestAdmissionLease = {holderToken: string; leaseIdentity: string; providerKey: string}
+type ProviderProbeAdmissionLease = ProviderRequestAdmissionLease & {
+  endpointAvailabilityKey: string
+  probeAttemptId: string
+}
 
 type JobRequestState = {inFlight: number; pendingRequestAttemptIds: Set<string>}
 type ProviderRequestState = {inFlight: number}
 type SlotAcquisitionAttempt = {slot: RequestSlot; type: 'slot'} | {type: 'blocked'} | {type: 'waiting'}
+type ProbeAcquisitionTarget =
+  | {baseURL: string; endpointAvailabilityKey: string; type: 'probe'}
+  | {type: 'blocked'}
+  | {type: 'healthy'}
+  | {endpointAvailabilityKey: string; probePromise?: Promise<void> | null; retryAt?: Date | null; type: 'waiting'}
+type ProbeAdmissionWaiter = {
+  endpointAvailabilityKey: string | null
+  reject: (error: unknown) => void
+  resolve: () => void
+  timeout: ReturnType<typeof setTimeout> | null
+}
 type RequestAttemptErrorCarrier = {
   providerKey?: string
   requestAttemptId?: string
@@ -77,9 +96,11 @@ const codexProviderWaiters: CodexProviderWaiter[] = []
 const workerWaiters: WorkerWaiter[] = []
 const fallbackWaiters: FallbackWaiter[] = []
 const providerAdmissionRetryWaiters: ProviderAdmissionRetryWaiter[] = []
+const probeAdmissionWaiters: ProbeAdmissionWaiter[] = []
 const jobRequestStates = new Map<string, JobRequestState>()
 const providerRequestStates = new Map<string, ProviderRequestState>()
 const fallbackInFlightByProviderKey = new Map<string, number>()
+const localEndpointProbePermits = new Set<string>()
 
 let codexInFlight = 0
 const providerAdmissionLeaseRetryDelayMs = 250
@@ -235,6 +256,16 @@ const getProviderRequestLeaseHolderToken = (requestAttemptId: string): string =>
   return `${getDefaultJudgmentServerJobId()}:request:${requestAttemptId}`
 }
 
+const getProviderProbeLeaseHolderToken = ({
+  endpointAvailabilityKey,
+  probeAttemptId,
+}: {
+  endpointAvailabilityKey: string
+  probeAttemptId: string
+}): string => {
+  return `${getDefaultJudgmentServerJobId()}:probe:${endpointAvailabilityKey}:${probeAttemptId}`
+}
+
 const removeProviderAdmissionRetryWaiter = (waiter: ProviderAdmissionRetryWaiter): void => {
   const index = providerAdmissionRetryWaiters.indexOf(waiter)
 
@@ -263,6 +294,69 @@ const notifyProviderAdmissionRetryWaiters = (): void => {
   providerAdmissionRetryWaiters.splice(0, providerAdmissionRetryWaiters.length).map((waiter) => {
     waiter()
     return waiter
+  })
+}
+
+const removeProbeAdmissionWaiter = (waiter: ProbeAdmissionWaiter): void => {
+  const index = probeAdmissionWaiters.indexOf(waiter)
+
+  if (index >= 0) {
+    probeAdmissionWaiters.splice(index, 1)
+  }
+}
+
+const settleProbeAdmissionWaiter = (waiter: ProbeAdmissionWaiter): void => {
+  if (waiter.timeout) {
+    clearTimeout(waiter.timeout)
+  }
+  removeProbeAdmissionWaiter(waiter)
+  waiter.resolve()
+}
+
+const rejectProbeAdmissionWaiter = (waiter: ProbeAdmissionWaiter, error: unknown): void => {
+  if (waiter.timeout) {
+    clearTimeout(waiter.timeout)
+  }
+  removeProbeAdmissionWaiter(waiter)
+  waiter.reject(error)
+}
+
+const notifyProbeAdmissionWaiters = (endpointAvailabilityKey: string | null = null): void => {
+  probeAdmissionWaiters
+    .filter((waiter) => {
+      return endpointAvailabilityKey === null || waiter.endpointAvailabilityKey === endpointAvailabilityKey
+    })
+    .map((waiter) => {
+      settleProbeAdmissionWaiter(waiter)
+      return waiter
+    })
+}
+
+const waitForProbeAdmissionRetry = async ({
+  endpointAvailabilityKey,
+  probePromise = null,
+  retryAt = null,
+}: {
+  endpointAvailabilityKey: string | null
+  probePromise?: Promise<void> | null
+  retryAt?: Date | null
+}): Promise<void> => {
+  return new Promise((resolve, reject) => {
+    const retryDelayMs = retryAt ? Math.max(0, retryAt.getTime() - Date.now()) : providerAdmissionLeaseRetryDelayMs
+    const waiter: ProbeAdmissionWaiter = {endpointAvailabilityKey, reject, resolve, timeout: null}
+
+    waiter.timeout = setTimeout(() => {
+      settleProbeAdmissionWaiter(waiter)
+    }, retryDelayMs)
+    probeAdmissionWaiters.push(waiter)
+    probePromise?.then(
+      () => {
+        settleProbeAdmissionWaiter(waiter)
+      },
+      (error) => {
+        rejectProbeAdmissionWaiter(waiter, error)
+      },
+    )
   })
 }
 
@@ -300,6 +394,63 @@ const releaseProviderRequestAdmissionLease = async (lease: ProviderRequestAdmiss
   await releaseProviderAdmissionLeaseWithResultThroughOwner(lease).catch(() => {
     return {reason: 'notHolder' as const, released: false as const}
   })
+  notifyProviderAdmissionRetryWaiters()
+  notifyProbeAdmissionWaiters()
+}
+
+const acquireProviderProbeAdmissionLease = async ({
+  endpointAvailabilityKey,
+  probeAttemptId,
+  snapshot,
+}: {
+  endpointAvailabilityKey: string
+  probeAttemptId: string
+  snapshot: ProviderBucketSnapshot
+}): Promise<ProviderProbeAdmissionLease> => {
+  const holderToken = getProviderProbeLeaseHolderToken({endpointAvailabilityKey, probeAttemptId})
+  const leaseIdentity = getProviderAdmissionProbeLeaseIdentity({endpointAvailabilityKey, probeAttemptId})
+  const result = await acquireProviderAdmissionLeasePersisted({
+    endpointAvailabilityKey,
+    holderToken,
+    leaseIdentity,
+    leaseKind: 'probe',
+    probeAttemptId,
+    snapshot,
+  })
+
+  if (result.activeProbeLeaseCount !== undefined) {
+    setJudgmentEndpointObservedAggregateProbeLiveCount({
+      endpointAvailabilityKey,
+      observedAggregateProbeLiveCount: result.activeProbeLeaseCount,
+    })
+  }
+
+  if (result.acquired) {
+    return {endpointAvailabilityKey, holderToken, leaseIdentity, probeAttemptId, providerKey: snapshot.providerKey}
+  }
+
+  if (result.reason === 'staleProviderLimitSnapshot') {
+    return acquireProviderProbeAdmissionLease({
+      endpointAvailabilityKey,
+      probeAttemptId,
+      snapshot: result.currentSnapshot,
+    })
+  }
+
+  await waitForProbeAdmissionRetry({endpointAvailabilityKey})
+
+  return acquireProviderProbeAdmissionLease({endpointAvailabilityKey, probeAttemptId, snapshot: result.currentSnapshot})
+}
+
+const releaseProviderProbeAdmissionLease = async (lease: ProviderProbeAdmissionLease): Promise<void> => {
+  await releaseProviderAdmissionLeaseWithResultThroughOwner(lease).catch(() => {
+    return {reason: 'notHolder' as const, released: false as const}
+  })
+  adjustJudgmentEndpointObservedAggregateProbeLiveCount({
+    delta: -1,
+    endpointAvailabilityKey: lease.endpointAvailabilityKey,
+  })
+  notifyProbeAdmissionWaiters(lease.endpointAvailabilityKey)
   notifyProviderAdmissionRetryWaiters()
 }
 
@@ -365,6 +516,21 @@ const getProbeFailure = ({
   })
 }
 
+const acquireLocalProbePermit = (endpointAvailabilityKey: string): (() => void) | null => {
+  if (localEndpointProbePermits.has(endpointAvailabilityKey)) {
+    return null
+  }
+
+  localEndpointProbePermits.add(endpointAvailabilityKey)
+  adjustJudgmentEndpointLocalProbeLiveCount({delta: 1, endpointAvailabilityKey})
+
+  return () => {
+    localEndpointProbePermits.delete(endpointAvailabilityKey)
+    adjustJudgmentEndpointLocalProbeLiveCount({delta: -1, endpointAvailabilityKey})
+    notifyProbeAdmissionWaiters(endpointAvailabilityKey)
+  }
+}
+
 const getDefaultEndpointProbeUrl = (baseURL: string): string => {
   return `${baseURL.replace(/\/+$/, '')}/models`
 }
@@ -373,10 +539,12 @@ const probeDefaultEndpointAvailability = async ({
   baseURL,
   modelId,
   provider,
+  providerKey,
 }: {
   baseURL: string
   modelId?: string | null
   provider: string | null | undefined
+  providerKey?: string | null
 }): Promise<void> => {
   const endpointPath = getProviderProbeEndpointPath(provider)
 
@@ -392,11 +560,11 @@ const probeDefaultEndpointAvailability = async ({
     })
 
     if (failure.shouldPauseConnection) {
-      recordConnectionFailure({effectiveBaseURL: baseURL, failure, modelId, modelProvider: provider})
+      recordConnectionFailure({effectiveBaseURL: baseURL, failure, modelId, modelProvider: provider, providerKey})
       throw new ConnectionError(failure.message, failure.effectiveBaseURL, failure)
     }
 
-    recordConnectionSuccess({effectiveBaseURL: baseURL, modelId, modelProvider: provider})
+    recordConnectionSuccess({effectiveBaseURL: baseURL, modelId, modelProvider: provider, providerKey})
     return undefined
   } catch (error) {
     if (error instanceof ConnectionError) {
@@ -408,7 +576,7 @@ const probeDefaultEndpointAvailability = async ({
       error,
     })
 
-    recordConnectionFailure({effectiveBaseURL: baseURL, failure, modelId, modelProvider: provider})
+    recordConnectionFailure({effectiveBaseURL: baseURL, failure, modelId, modelProvider: provider, providerKey})
     throw new ConnectionError(failure.message, failure.effectiveBaseURL, failure)
   }
 }
@@ -419,12 +587,14 @@ const probeJudgmentEndpointAvailability = async ({
   provider,
   providerConnection,
   providerConnectionId,
+  providerKey,
 }: {
   baseURL: string
   modelId?: string | null
   provider: string | null | undefined
   providerConnection?: ProviderConnectionRecord | null
   providerConnectionId: string | null
+  providerKey?: string | null
 }): Promise<void> => {
   if (!providerConnectionId) {
     return shouldSkipEndpointAvailabilityHttpProbe({
@@ -432,10 +602,11 @@ const probeJudgmentEndpointAvailability = async ({
       modelId,
       modelProvider: provider,
       providerConnectionId,
+      providerKey,
       useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
     })
       ? undefined
-      : probeDefaultEndpointAvailability({baseURL, modelId, provider})
+      : probeDefaultEndpointAvailability({baseURL, modelId, provider, providerKey})
   }
 
   const connection = providerConnection ?? (await getProviderConnection(providerConnectionId))
@@ -456,6 +627,7 @@ const probeJudgmentEndpointAvailability = async ({
       modelId,
       modelProvider: provider,
       providerConnectionId,
+      providerKey,
     })
 
     throw new ConnectionError(failure.message, failure.effectiveBaseURL, failure)
@@ -464,7 +636,13 @@ const probeJudgmentEndpointAvailability = async ({
   const result = await testProviderConnectionHealth(connection, {effectiveBaseURL: baseURL})
 
   if (result.ok) {
-    recordConnectionSuccess({effectiveBaseURL: baseURL, modelId, modelProvider: provider, providerConnectionId})
+    recordConnectionSuccess({
+      effectiveBaseURL: baseURL,
+      modelId,
+      modelProvider: provider,
+      providerConnectionId,
+      providerKey,
+    })
     return undefined
   }
 
@@ -474,7 +652,14 @@ const probeJudgmentEndpointAvailability = async ({
     provider,
   })
 
-  recordConnectionFailure({effectiveBaseURL: baseURL, failure, modelId, modelProvider: provider, providerConnectionId})
+  recordConnectionFailure({
+    effectiveBaseURL: baseURL,
+    failure,
+    modelId,
+    modelProvider: provider,
+    providerConnectionId,
+    providerKey,
+  })
 
   throw new ConnectionError(failure.message, failure.effectiveBaseURL, failure)
 }
@@ -507,6 +692,7 @@ const getEndpointAvailabilityState = ({
     modelId: providerScope.modelId,
     modelProvider: providerScope.modelProvider,
     providerConnectionId: providerScope.providerConnectionId,
+    providerKey: providerScope.providerKey,
     useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
   })
 }
@@ -524,6 +710,16 @@ const canRequestEndpointNow = ({
   return state.status === 'healthy' || (state.status !== 'probing' && cooldownExpired)
 }
 
+const canStartNormalEndpointRequestNow = ({
+  baseURL,
+  providerScope,
+}: {
+  baseURL: string
+  providerScope: ProviderRequestScope
+}): boolean => {
+  return getEndpointAvailabilityState({baseURL, providerScope}).status === 'healthy'
+}
+
 const claimEndpointAvailability = ({
   baseURL,
   providerScope,
@@ -536,6 +732,7 @@ const claimEndpointAvailability = ({
     modelId: providerScope.modelId,
     modelProvider: providerScope.modelProvider,
     providerConnectionId: providerScope.providerConnectionId,
+    providerKey: providerScope.providerKey,
     useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
   })
 }
@@ -686,31 +883,8 @@ const tryAcquireWorkerSlot = ({
     }
   }
 
-  const probeEligibleWorkerUrl = workerLoadBalancer.acquireWorkerUrl({
-    maxActiveRequests,
-    workerUrls: workerUrls.filter((url) => {
-      return canRequestEndpointNow({baseURL: `${url}/v1`, providerScope})
-    }),
-  })
-
-  if (!probeEligibleWorkerUrl) {
-    releaseProviderRequest()
-    return hasHealthyWorker({providerScope, workerUrls}) ? {type: 'waiting'} : {type: 'blocked'}
-  }
-
-  const baseURL = `${probeEligibleWorkerUrl}/v1`
-
-  if (!claimEndpointAvailability({baseURL, providerScope})) {
-    workerLoadBalancer.releaseWorker(probeEligibleWorkerUrl)
-    releaseProviderRequest()
-
-    return hasHealthyWorker({providerScope, workerUrls}) ? {type: 'waiting'} : {type: 'blocked'}
-  }
-
-  return {
-    slot: buildWorkerSlot({releaseProviderRequest, requiresProbe: true, workerUrl: probeEligibleWorkerUrl}),
-    type: 'slot',
-  }
+  releaseProviderRequest()
+  return hasHealthyWorker({providerScope, workerUrls}) ? {type: 'waiting'} : {type: 'blocked'}
 }
 
 const drainWorkerWaiters = (): void => {
@@ -808,9 +982,7 @@ const tryAcquireFallbackSlot = ({
     return releaseProviderRequest ? (releaseProviderRequest(), {type: 'waiting'}) : {type: 'waiting'}
   }
 
-  const requiresProbe = getEndpointAvailabilityState({baseURL, providerScope}).status !== 'healthy'
-
-  if (!claimEndpointAvailability({baseURL, providerScope})) {
+  if (getEndpointAvailabilityState({baseURL, providerScope}).status !== 'healthy') {
     releaseProviderRequest()
     return {type: 'blocked'}
   }
@@ -829,7 +1001,7 @@ const tryAcquireFallbackSlot = ({
         releaseProviderRequest()
         drainProviderScopedWaiters()
       },
-      requiresProbe,
+      requiresProbe: false,
     },
     type: 'slot',
   }
@@ -848,13 +1020,209 @@ const buildFallbackCircuitError = ({
   })
 }
 
+const getProbeEndpointBaseURLs = ({
+  fallbackBaseURL,
+  workerUrls,
+}: {
+  fallbackBaseURL: string
+  workerUrls: string[]
+}): string[] => {
+  return workerUrls.length > 0
+    ? workerUrls.map((workerUrl) => {
+        return `${workerUrl}/v1`
+      })
+    : [fallbackBaseURL]
+}
+
+const getEndpointProbeTarget = ({
+  fallbackBaseURL,
+  providerScope,
+  workerUrls,
+}: {
+  fallbackBaseURL: string
+  providerScope: ProviderRequestScope
+  workerUrls: string[]
+}): ProbeAcquisitionTarget => {
+  const endpointStates = getProbeEndpointBaseURLs({fallbackBaseURL, workerUrls}).map((baseURL) => {
+    const availability = getEndpointAvailabilityState({baseURL, providerScope})
+    return {availability, baseURL, endpointAvailabilityKey: availability.endpointAvailabilityKey}
+  })
+  const healthyEndpoint = endpointStates.find((state) => {
+    return state.availability.status === 'healthy'
+  })
+  const probeEndpoint = endpointStates.find((state) => {
+    return canRequestEndpointNow({baseURL: state.baseURL, providerScope})
+  })
+  const probingEndpoint = endpointStates.find((state) => {
+    return state.availability.status === 'probing'
+  })
+
+  return healthyEndpoint
+    ? {type: 'healthy'}
+    : probeEndpoint
+      ? {baseURL: probeEndpoint.baseURL, endpointAvailabilityKey: probeEndpoint.endpointAvailabilityKey, type: 'probe'}
+      : probingEndpoint
+        ? {
+            endpointAvailabilityKey: probingEndpoint.endpointAvailabilityKey,
+            probePromise: probingEndpoint.availability.probePromise,
+            type: 'waiting',
+          }
+        : {type: 'blocked'}
+}
+
+const acquireEndpointProbeAdmission = async ({
+  endpointAvailabilityKey,
+  snapshot,
+}: {
+  endpointAvailabilityKey: string
+  snapshot: ProviderBucketSnapshot
+}): Promise<{lease: ProviderProbeAdmissionLease; releaseLocalPermit: () => void} | null> => {
+  const probeAttemptId = randomUUID()
+  const lease = await acquireProviderProbeAdmissionLease({endpointAvailabilityKey, probeAttemptId, snapshot})
+  const releaseLocalPermit = acquireLocalProbePermit(endpointAvailabilityKey)
+
+  if (releaseLocalPermit) {
+    return {lease, releaseLocalPermit}
+  }
+
+  await releaseProviderProbeAdmissionLease(lease)
+  await waitForProbeAdmissionRetry({endpointAvailabilityKey})
+
+  return acquireEndpointProbeAdmission({endpointAvailabilityKey, snapshot})
+}
+
+const runEndpointRecoveryProbe = async ({
+  baseURL,
+  endpointAvailabilityKey,
+  modelId,
+  provider,
+  providerConnection,
+  providerConnectionId,
+  providerScope,
+  snapshot,
+}: {
+  baseURL: string
+  endpointAvailabilityKey: string
+  modelId?: string | null
+  provider: string | null | undefined
+  providerConnection?: ProviderConnectionRecord | null
+  providerConnectionId: string | null
+  providerScope: ProviderRequestScope
+  snapshot: ProviderBucketSnapshot
+}): Promise<boolean> => {
+  const admission = await acquireEndpointProbeAdmission({endpointAvailabilityKey, snapshot})
+
+  if (!admission) {
+    return false
+  }
+
+  const claimed = claimEndpointAvailability({baseURL, providerScope})
+
+  try {
+    if (!claimed) {
+      return false
+    }
+
+    await probeJudgmentEndpointAvailability({
+      baseURL,
+      modelId,
+      provider,
+      providerConnection,
+      providerConnectionId,
+      providerKey: snapshot.providerKey,
+    })
+    notifyProbeAdmissionWaiters(endpointAvailabilityKey)
+    drainProviderScopedWaiters()
+    return true
+  } finally {
+    admission.releaseLocalPermit()
+    await releaseProviderProbeAdmissionLease(admission.lease)
+  }
+}
+
+const recoverEndpointAvailabilityBeforeRequest = async ({
+  fallbackBaseURL,
+  modelId,
+  provider,
+  providerConnection,
+  providerConnectionId,
+  providerScope,
+  snapshot,
+  workerUrls,
+}: {
+  fallbackBaseURL: string
+  modelId?: string | null
+  provider: string | null | undefined
+  providerConnection?: ProviderConnectionRecord | null
+  providerConnectionId: string | null
+  providerScope: ProviderRequestScope
+  snapshot: ProviderBucketSnapshot
+  workerUrls: string[]
+}): Promise<void> => {
+  if (normalizeProvider(provider) === 'codex') {
+    return undefined
+  }
+
+  const target = getEndpointProbeTarget({fallbackBaseURL, providerScope, workerUrls})
+
+  if (target.type === 'healthy') {
+    return undefined
+  }
+
+  if (target.type === 'waiting') {
+    await waitForProbeAdmissionRetry({
+      endpointAvailabilityKey: target.endpointAvailabilityKey,
+      probePromise: target.probePromise,
+      retryAt: target.retryAt,
+    })
+    return recoverEndpointAvailabilityBeforeRequest({
+      fallbackBaseURL,
+      modelId,
+      provider,
+      providerConnection,
+      providerConnectionId,
+      providerScope,
+      snapshot,
+      workerUrls,
+    })
+  }
+
+  if (target.type === 'blocked') {
+    throw workerUrls.length > 0
+      ? buildWorkerCircuitError({providerScope, workerUrls})
+      : buildFallbackCircuitError({baseURL: fallbackBaseURL, providerScope})
+  }
+
+  await runEndpointRecoveryProbe({
+    baseURL: target.baseURL,
+    endpointAvailabilityKey: target.endpointAvailabilityKey,
+    modelId,
+    provider,
+    providerConnection,
+    providerConnectionId,
+    providerScope,
+    snapshot,
+  })
+
+  return recoverEndpointAvailabilityBeforeRequest({
+    fallbackBaseURL,
+    modelId,
+    provider,
+    providerConnection,
+    providerConnectionId,
+    providerScope,
+    snapshot,
+    workerUrls,
+  })
+}
+
 const drainFallbackWaiters = (): void => {
   const nextAction = fallbackWaiters.reduce<
     {error: ConnectionError; index: number; type: 'reject'} | {index: number; slot: RequestSlot; type: 'resolve'} | null
   >((state, waiter, index) => {
     if (state) return state
 
-    if (!canRequestEndpointNow({baseURL: waiter.baseURL, providerScope: waiter.providerScope})) {
+    if (!canStartNormalEndpointRequestNow({baseURL: waiter.baseURL, providerScope: waiter.providerScope})) {
       return {error: buildFallbackCircuitError(waiter), index, type: 'reject'}
     }
 
@@ -883,7 +1251,7 @@ const acquireFallbackSlot = async ({
   baseURL: string
   providerScope: ProviderRequestScope
 }): Promise<RequestSlot> => {
-  if (!canRequestEndpointNow({baseURL, providerScope})) {
+  if (!canStartNormalEndpointRequestNow({baseURL, providerScope})) {
     throw buildFallbackCircuitError({baseURL, providerScope})
   }
 
@@ -1012,8 +1380,20 @@ export const withJudgmentRequest = async <T>(
     providerUsesFamilyDefault,
     resolvedDefaultCapacity,
   }
-  const requestAttemptContext = createRequestAttemptContext(providerScope)
   const providerAdmissionSnapshot = getProviderAdmissionSnapshot(providerScope)
+
+  await recoverEndpointAvailabilityBeforeRequest({
+    fallbackBaseURL,
+    modelId,
+    provider,
+    providerConnection,
+    providerConnectionId,
+    providerScope,
+    snapshot: providerAdmissionSnapshot,
+    workerUrls,
+  })
+
+  const requestAttemptContext = createRequestAttemptContext(providerScope)
   await recordRequestAttemptManifestStage({
     closeoutKind: 'slot_wait',
     owner: requestAttemptManifestOwner,
@@ -1075,32 +1455,6 @@ export const withJudgmentRequest = async <T>(
       startedAt: requestAttempt.startedAt,
     })
 
-    if (slot.requiresProbe) {
-      await probeJudgmentEndpointAvailability({
-        baseURL: slot.baseURL,
-        modelId,
-        provider,
-        providerConnection,
-        providerConnectionId,
-      }).catch(async (error) => {
-        const finishedAt = new Date().toISOString()
-        await recordRequestAttemptManifestStage({
-          baseURL: slot.baseURL,
-          closeoutKind: 'live_request',
-          error: getErrorMessage(error),
-          finishedAt,
-          outcome: 'failure',
-          owner: requestAttemptManifestOwner,
-          requestAttempt,
-          startedAt: requestAttempt.startedAt,
-        })
-        throw attachRuntimeRequestAttemptFieldsToError(
-          error,
-          getRuntimeRequestAttemptErrorFields({finishedAt, requestAttempt}),
-        )
-      })
-    }
-
     return await run(slot.baseURL, requestAttempt)
   } finally {
     markRequestFinished(judgmentsJobId)
@@ -1115,9 +1469,15 @@ export const resetJudgmentRequestRuntimeForTests = (): void => {
   workerWaiters.splice(0, workerWaiters.length)
   fallbackWaiters.splice(0, fallbackWaiters.length)
   providerAdmissionRetryWaiters.splice(0, providerAdmissionRetryWaiters.length)
+  const waiters = probeAdmissionWaiters.slice()
+  waiters.map((waiter) => {
+    rejectProbeAdmissionWaiter(waiter, new Error('Judgment request runtime reset'))
+    return waiter
+  })
   jobRequestStates.clear()
   providerRequestStates.clear()
   fallbackInFlightByProviderKey.clear()
+  localEndpointProbePermits.clear()
   codexInFlight = 0
   resetJudgmentEndpointAvailabilityForTests()
   resetProviderAdmissionLeaseForTests()

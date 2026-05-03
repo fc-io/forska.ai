@@ -81,6 +81,8 @@ export type ProviderEndpointAvailabilityDiagnostics = {
     | 'other'
     | null
   lastFailureMessage: string | null
+  localProbeLiveCount: number
+  observedAggregateProbeLiveCount: number | null
   probeInProgress: boolean
   status: 'healthy' | 'cooldown' | 'probing' | 'misconfigured'
 }

@@ -45,6 +45,7 @@ export type ProviderAdmissionLeaseAcquireResult =
   | {
       acquired: true
       activeLeaseCount: number
+      activeProbeLeaseCount?: number
       alreadyHeld: boolean
       currentSnapshot: ProviderBucketSnapshot
       lease?: ProviderAdmissionLeaseRecord
@@ -55,6 +56,7 @@ export type ProviderAdmissionLeaseAcquireResult =
   | {
       acquired: false
       activeLeaseCount: number
+      activeProbeLeaseCount?: number
       alreadyHeld?: boolean
       currentSnapshot: ProviderBucketSnapshot
       lease?: ProviderAdmissionLeaseRecord
@@ -66,10 +68,12 @@ export type ProviderAdmissionLeaseAcquireResult =
 
 type ProviderAdmissionLease = {
   acquiredAtMs: number
+  endpointAvailabilityKey: string | null
   expiresAtMs: number
   heartbeatAtMs: number
   holderToken: string
   leaseIdentity: string
+  leaseKind: ProviderAdmissionLeaseKind
   providerKey: string
   providerLimitVersion: string
 }
@@ -769,6 +773,32 @@ const getActiveProviderLeaseCount = async ({
   return getCountValue(row?.leaseCount)
 }
 
+const getActiveProviderProbeLeaseCount = async ({
+  endpointAvailabilityKey,
+  now,
+  providerKey,
+  tx,
+}: {
+  endpointAvailabilityKey?: string | null
+  now: Date
+  providerKey: string
+  tx: {queryJson: <T>(statement: string) => Promise<T[]>}
+}): Promise<number> => {
+  const endpointPredicate = getTrimmedValue(endpointAvailabilityKey)
+    ? `AND endpoint_availability_key = ${getSqlLiteral(getTrimmedValue(endpointAvailabilityKey))}`
+    : ''
+  const [row] = await tx.queryJson<{leaseCount: number | string | bigint}>(`
+    SELECT COUNT(*) AS leaseCount
+    FROM app.provider_admission_lease
+    WHERE provider_key = ${getSqlLiteral(providerKey)}
+      AND lease_kind = 'probe'
+      AND expires_at > ${getSqlLiteral(now)}
+      ${endpointPredicate}
+  `)
+
+  return getCountValue(row?.leaseCount)
+}
+
 const getProviderAdmissionLeaseByIdentity = async ({
   leaseIdentity,
   tx,
@@ -1084,6 +1114,13 @@ export const acquireProviderAdmissionLease = ({
   const existingLease = providerAdmissionLeases.get(leaseKey) ?? null
   const activeLeases = getActiveProviderLeases(snapshot.providerKey, nowMs)
   const activeLeaseCount = activeLeases.length
+  const probeParts = parseProbeLeaseIdentity(leaseIdentity)
+  const activeProbeLeaseCount = activeLeases.filter((lease) => {
+    return (
+      lease.leaseKind === 'probe'
+      && (!probeParts?.endpointAvailabilityKey || lease.endpointAvailabilityKey === probeParts.endpointAvailabilityKey)
+    )
+  }).length
   const existingIsActiveSameHolder =
     existingLease !== null && existingLease.expiresAtMs > nowMs && existingLease.holderToken === holderToken
   const staleProviderLimitSnapshot = snapshot.providerLimitVersion !== currentSnapshot.providerLimitVersion
@@ -1092,6 +1129,7 @@ export const acquireProviderAdmissionLease = ({
     return {
       acquired: true,
       activeLeaseCount,
+      activeProbeLeaseCount,
       alreadyHeld: true,
       currentSnapshot,
       providerLimit: currentSnapshot.providerLimit,
@@ -1104,6 +1142,7 @@ export const acquireProviderAdmissionLease = ({
     return {
       acquired: false,
       activeLeaseCount,
+      activeProbeLeaseCount,
       currentSnapshot,
       providerLimit: currentSnapshot.providerLimit,
       providerLimitVersion: currentSnapshot.providerLimitVersion,
@@ -1116,6 +1155,7 @@ export const acquireProviderAdmissionLease = ({
     return {
       acquired: false,
       activeLeaseCount,
+      activeProbeLeaseCount,
       currentSnapshot,
       providerLimit: currentSnapshot.providerLimit,
       providerLimitVersion: currentSnapshot.providerLimitVersion,
@@ -1126,10 +1166,12 @@ export const acquireProviderAdmissionLease = ({
 
   providerAdmissionLeases.set(leaseKey, {
     acquiredAtMs: nowMs,
+    endpointAvailabilityKey: probeParts?.endpointAvailabilityKey ?? null,
     expiresAtMs: nowMs + getNormalizedLeaseDurationMs(ttlMs),
     heartbeatAtMs: nowMs,
     holderToken,
     leaseIdentity,
+    leaseKind: probeParts?.leaseKind ?? 'request',
     providerKey: snapshot.providerKey,
     providerLimitVersion: snapshot.providerLimitVersion,
   })
@@ -1137,6 +1179,7 @@ export const acquireProviderAdmissionLease = ({
   return {
     acquired: true,
     activeLeaseCount: activeLeaseCount + 1,
+    activeProbeLeaseCount: probeParts ? activeProbeLeaseCount + 1 : activeProbeLeaseCount,
     alreadyHeld: false,
     currentSnapshot,
     providerLimit: currentSnapshot.providerLimit,
@@ -1175,6 +1218,12 @@ export const acquireProviderAdmissionLeaseOnCurrentOwner = async (
       const parts = getLeaseIdentityParts(input)
       const existingLease = await getProviderAdmissionLeaseByIdentity({leaseIdentity: input.leaseIdentity, tx})
       const activeLeaseCount = await getActiveProviderLeaseCount({now, providerKey: input.snapshot.providerKey, tx})
+      const activeProbeLeaseCount = await getActiveProviderProbeLeaseCount({
+        endpointAvailabilityKey: parts.endpointAvailabilityKey,
+        now,
+        providerKey: input.snapshot.providerKey,
+        tx,
+      })
       const existingLeaseIsActive = existingLease !== null && existingLease.expiresAtMs > nowMs
       const existingLeaseIsSameProvider =
         existingLeaseIsActive && existingLease.providerKey === input.snapshot.providerKey
@@ -1184,6 +1233,7 @@ export const acquireProviderAdmissionLeaseOnCurrentOwner = async (
         return {
           acquired: true,
           activeLeaseCount,
+          activeProbeLeaseCount,
           alreadyHeld: true,
           currentSnapshot,
           lease: existingLease,
@@ -1197,6 +1247,7 @@ export const acquireProviderAdmissionLeaseOnCurrentOwner = async (
         return {
           acquired: false,
           activeLeaseCount,
+          activeProbeLeaseCount,
           alreadyHeld: true,
           currentSnapshot,
           lease: existingLease,
@@ -1211,6 +1262,7 @@ export const acquireProviderAdmissionLeaseOnCurrentOwner = async (
         return {
           acquired: false,
           activeLeaseCount,
+          activeProbeLeaseCount,
           currentSnapshot,
           providerLimit: currentSnapshot.providerLimit,
           providerLimitVersion: currentSnapshot.providerLimitVersion,
@@ -1227,11 +1279,18 @@ export const acquireProviderAdmissionLeaseOnCurrentOwner = async (
         providerKey: input.snapshot.providerKey,
         tx,
       })
+      const reconciledActiveProbeLeaseCount = await getActiveProviderProbeLeaseCount({
+        endpointAvailabilityKey: parts.endpointAvailabilityKey,
+        now,
+        providerKey: input.snapshot.providerKey,
+        tx,
+      })
 
       if (reconciledActiveLeaseCount >= currentSnapshot.providerLimit) {
         return {
           acquired: false,
           activeLeaseCount: reconciledActiveLeaseCount,
+          activeProbeLeaseCount: reconciledActiveProbeLeaseCount,
           currentSnapshot,
           providerLimit: currentSnapshot.providerLimit,
           providerLimitVersion: currentSnapshot.providerLimitVersion,
@@ -1250,6 +1309,8 @@ export const acquireProviderAdmissionLeaseOnCurrentOwner = async (
       return {
         acquired: true,
         activeLeaseCount: reconciledActiveLeaseCount + 1,
+        activeProbeLeaseCount:
+          parts.leaseKind === 'probe' ? reconciledActiveProbeLeaseCount + 1 : reconciledActiveProbeLeaseCount,
         alreadyHeld: false,
         currentSnapshot,
         lease: lease ?? undefined,
