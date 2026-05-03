@@ -987,17 +987,20 @@ const sendToLLMForJobs = async (
       return claimAndEnqueuePromptRequest({job, label, limit, serverJobId})
     }),
   )
+  const expectedPromptsToFetch = requestsToSendByJob.reduce((sum, request) => {
+    return sum + request.limit
+  }, 0)
 
   const totalPromptsFetched = promptFetchedCounts.reduce((sum, count) => {
     return sum + count
   }, 0)
 
-  if (totalPromptsFetched !== requestsToSend) {
+  if (totalPromptsFetched !== expectedPromptsToFetch) {
     schedulerFailureLogger.warn(`llm.claimPrompts.mismatch.${label}`, `[capacity:${label}] claim count mismatch`, {
       component: sendToLLMComponent,
       event: 'claimCountMismatch',
       label,
-      requested: requestsToSend,
+      requested: expectedPromptsToFetch,
       totalPromptsFetched,
     })
   }

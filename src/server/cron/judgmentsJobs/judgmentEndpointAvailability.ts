@@ -204,7 +204,7 @@ export const recordJudgmentEndpointFailure = ({
   failureMessage: string
   providerConnectionId: string | null
 }): void => {
-  if (failureKind === 'other') {
+  if (failureKind === 'other' || failureKind === 'circuit_open') {
     return undefined
   }
 

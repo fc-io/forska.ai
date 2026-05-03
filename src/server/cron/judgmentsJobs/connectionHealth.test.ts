@@ -131,6 +131,55 @@ test('classifies circuit-open failures with typed connection errors', () => {
   expect(isConnectionError(error)).toBe(true)
 })
 
+test('does not extend endpoint cooldown from circuit-open gate errors', () => {
+  let now = 1_000
+  Date.now = () => {
+    return now
+  }
+
+  const originalFailure = classifyConnectionFailure({context, error: {status: 503}})
+
+  recordConnectionFailure({
+    effectiveBaseURL: context.effectiveBaseURL,
+    failure: originalFailure,
+    providerConnectionId: 'connection-a',
+  })
+
+  const originalCooldownExpiresAt = getJudgmentEndpointAvailability({
+    effectiveBaseURL: context.effectiveBaseURL,
+    providerConnectionId: 'connection-a',
+  }).cooldownExpiresAt
+  const circuitError = createConnectionError({
+    context: {...context, endpointPath: null},
+    error: new Error('Inference server blocked by endpoint availability gate'),
+  })
+
+  now += 1_000
+
+  recordConnectionFailure({
+    effectiveBaseURL: context.effectiveBaseURL,
+    failure: circuitError.failure,
+    providerConnectionId: 'connection-a',
+  })
+
+  const availability = getJudgmentEndpointAvailability({
+    effectiveBaseURL: context.effectiveBaseURL,
+    providerConnectionId: 'connection-a',
+  })
+
+  expect(availability.lastFailureKind).toBe('endpoint_unavailable')
+  expect(availability.cooldownExpiresAt?.getTime()).toBe(originalCooldownExpiresAt?.getTime())
+
+  now = (originalCooldownExpiresAt?.getTime() ?? 0) + 1
+
+  expect(
+    claimJudgmentEndpointAvailability({
+      effectiveBaseURL: context.effectiveBaseURL,
+      providerConnectionId: 'connection-a',
+    }),
+  ).toBe(true)
+})
+
 test('tracks endpoint availability by provider connection and effective base URL', () => {
   const failure = classifyConnectionFailure({context, error: {status: 404}})
 
