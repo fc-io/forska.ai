@@ -9,6 +9,7 @@ import {
   recordConnectionFailure,
   recordConnectionSuccess,
 } from './connectionHealth.ts'
+import {getEndpointAvailabilityKey} from './endpointAvailabilityKey.ts'
 import {
   claimJudgmentEndpointAvailability,
   getJudgmentEndpointAvailability,
@@ -192,6 +193,106 @@ test('tracks endpoint availability by provider connection and effective base URL
     getJudgmentEndpointAvailability({effectiveBaseURL: context.effectiveBaseURL, providerConnectionId: 'connection-b'})
       .status,
   ).toBe('healthy')
+})
+
+test('builds canonical endpoint availability keys from provider and normalized endpoint identity', () => {
+  const rootKey = getEndpointAvailabilityKey({effectiveBaseURL: 'HTTP://Example.COM:80/v1/', modelProvider: 'openai'})
+  const pathKey = getEndpointAvailabilityKey({
+    effectiveBaseURL: 'https://example.com:443/openai/v1',
+    modelProvider: 'openai',
+  })
+  const defaultPathKey = getEndpointAvailabilityKey({
+    effectiveBaseURL: 'https://example.com/v1',
+    modelProvider: 'openai',
+  })
+  const customPortKey = getEndpointAvailabilityKey({
+    effectiveBaseURL: 'https://example.com:8443/v1',
+    providerConnectionId: 'connection-a',
+  })
+  const syntheticKey = getEndpointAvailabilityKey({
+    effectiveBaseURL: 'https://example.com/v1',
+    modelId: 'model-owner-backed',
+    modelProvider: 'openai',
+    useOwnerBackedSyntheticProviderId: true,
+  })
+
+  expect(rootKey).toMatchObject({
+    endpointAvailabilityKey: 'provider:openai:default::http://example.com',
+    endpointIdentity: 'http://example.com',
+    misconfiguration: null,
+    providerKey: 'provider:openai:default',
+  })
+  expect(pathKey.endpointAvailabilityKey).toBe('provider:openai:default::https://example.com/openai')
+  expect(defaultPathKey.endpointAvailabilityKey).toBe('provider:openai:default::https://example.com')
+  expect(pathKey.endpointAvailabilityKey).not.toBe(defaultPathKey.endpointAvailabilityKey)
+  expect(customPortKey.endpointAvailabilityKey).toBe('connection-a::https://example.com:8443')
+  expect(syntheticKey.endpointAvailabilityKey).toBe('owner-backed:model-owner-backed::https://example.com')
+})
+
+test('marks endpoint URLs with credentials, queries, or fragments as misconfigured', () => {
+  const credentialKey = getEndpointAvailabilityKey({
+    effectiveBaseURL: 'https://user:pass@example.com/v1',
+    modelProvider: 'openai',
+  })
+  const queryAvailability = getJudgmentEndpointAvailability({
+    effectiveBaseURL: 'https://example.com/v1?debug=true',
+    modelProvider: 'openai',
+  })
+  const fragmentAvailability = getJudgmentEndpointAvailability({
+    effectiveBaseURL: 'https://example.com/v1#models',
+    modelProvider: 'openai',
+  })
+
+  expect(credentialKey.misconfiguration).toContain('credentials')
+  expect(queryAvailability).toMatchObject({lastFailureKind: 'endpoint_misconfigured', status: 'misconfigured'})
+  expect(fragmentAvailability).toMatchObject({lastFailureKind: 'endpoint_misconfigured', status: 'misconfigured'})
+  expect(
+    claimJudgmentEndpointAvailability({effectiveBaseURL: 'https://example.com/v1?debug=true', modelProvider: 'openai'}),
+  ).toBe(false)
+})
+
+test('keeps unhealthy sibling endpoints isolated under one provider bucket', () => {
+  const failure = classifyConnectionFailure({
+    context: {
+      effectiveBaseURL: 'http://runtime.test:80/v1',
+      endpointPath: '/v1/chat/completions',
+      providerKind: 'openai',
+    },
+    error: {status: 503},
+  })
+
+  recordConnectionFailure({
+    effectiveBaseURL: 'http://runtime.test:80/v1',
+    failure,
+    modelProvider: 'openai',
+    providerConnectionId: null,
+  })
+
+  expect(
+    getJudgmentEndpointAvailability({
+      effectiveBaseURL: 'http://runtime.test/v1',
+      modelProvider: 'openai',
+      providerConnectionId: null,
+    }).status,
+  ).toBe('cooldown')
+  expect(
+    getJudgmentEndpointAvailability({
+      effectiveBaseURL: 'http://runtime.test/openai/v1',
+      modelProvider: 'openai',
+      providerConnectionId: null,
+    }).status,
+  ).toBe('healthy')
+})
+
+test('uses one Codex app-server endpoint identity that may skip HTTP probing', () => {
+  const key = getEndpointAvailabilityKey({effectiveBaseURL: 'codex://app-server', modelProvider: 'codex'})
+
+  expect(key).toMatchObject({
+    endpointAvailabilityKey: 'codex:default::codex://app-server',
+    endpointIdentity: 'codex://app-server',
+    misconfiguration: null,
+    shouldSkipHttpProbe: true,
+  })
 })
 
 test('allows a single half-open probe and resets state after a successful probe', () => {

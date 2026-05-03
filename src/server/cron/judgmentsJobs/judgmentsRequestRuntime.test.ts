@@ -687,6 +687,60 @@ test('fallback requests plateau at local runtime capacity when using family defa
   await secondRequest
 })
 
+test('fallback default HTTP buckets probe after cooldown even without saved provider connection', async () => {
+  const {withJudgmentRequest} = await loadRuntime()
+  const fallbackBaseURL = 'http://fallback-default-runtime.test/v1'
+  const realFetch = globalThis.fetch
+  const fetchMock = mock(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+    return new Response('{}', {status: 200})
+  })
+  let now = 1_000
+  let requestStarted = false
+
+  Date.now = () => {
+    return now
+  }
+
+  const failure = classifyConnectionFailure({
+    context: {effectiveBaseURL: fallbackBaseURL, endpointPath: '/v1/chat/completions', providerKind: 'openai'},
+    error: {status: 503},
+  })
+
+  recordConnectionFailure({
+    effectiveBaseURL: fallbackBaseURL,
+    failure,
+    modelProvider: 'openai',
+    providerConnectionId: null,
+  })
+  now += 30_001
+  globalThis.fetch = fetchMock as typeof fetch
+
+  try {
+    await withJudgmentRequest(
+      {
+        judgmentsJobId: 'job-fallback-default-probe',
+        provider: 'openai',
+        fallbackBaseURL,
+        modelId: 'model-fallback-default-probe',
+        providerConnectionId: null,
+        providerMaxInflightRequests: 1,
+        providerUsesFamilyDefault: true,
+        workerUrls: [],
+      },
+      async (baseURL) => {
+        requestStarted = true
+        expect(baseURL).toBe(fallbackBaseURL)
+      },
+    )
+  } finally {
+    globalThis.fetch = realFetch
+  }
+
+  expect(requestStarted).toBe(true)
+  expect(fetchMock).toHaveBeenCalledTimes(1)
+  expect(fetchMock.mock.calls[0]?.[0]).toBe(`${fallbackBaseURL}/models`)
+})
+
 test('worker requests honor saved provider caps even when local worker capacity is lower', async () => {
   getJudgmentsCapacityMock.mockImplementation((_runningJobCount: number) => {
     return createJudgmentsCapacity({maxInflight: 4, perWorkerMaxInflightRequests: 1, workerCount: 2})

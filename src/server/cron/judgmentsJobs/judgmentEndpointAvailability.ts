@@ -1,5 +1,6 @@
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
-import {getProviderKey, type ProviderKeyInput} from './providerKey.ts'
+import {getEndpointAvailabilityKey} from './endpointAvailabilityKey.ts'
+import type {ProviderKeyInput} from './providerKey.ts'
 
 const COOLDOWN_MS = 30_000
 
@@ -44,22 +45,6 @@ type JudgmentEndpointProviderInput = ProviderKeyInput & {providerKey?: string | 
 
 const endpointAvailabilityStates = new Map<string, JudgmentEndpointAvailabilityState>()
 
-const getEndpointAvailabilityProviderKey = ({
-  modelId,
-  modelProvider,
-  providerConnectionId,
-  providerKey,
-  useOwnerBackedSyntheticProviderId,
-}: JudgmentEndpointProviderInput): string => {
-  return (
-    providerKey ?? getProviderKey({modelId, modelProvider, providerConnectionId, useOwnerBackedSyntheticProviderId})
-  )
-}
-
-const getEndpointAvailabilityKey = (input: {effectiveBaseURL: string} & JudgmentEndpointProviderInput): string => {
-  return `${getEndpointAvailabilityProviderKey(input)}::${input.effectiveBaseURL}`
-}
-
 const hasEndpointAvailabilityProviderInput = ({
   modelId,
   modelProvider,
@@ -80,6 +65,20 @@ const createHealthyState = (): JudgmentEndpointAvailabilityState => {
   }
 }
 
+const applyEndpointKeyMisconfiguration = ({
+  failureMessage,
+  state,
+}: {
+  failureMessage: string
+  state: JudgmentEndpointAvailabilityState
+}): void => {
+  finishProbe(state)
+  state.cooldownExpiresAt = null
+  state.lastFailureKind = 'endpoint_misconfigured'
+  state.lastFailureMessage = failureMessage
+  state.status = 'misconfigured'
+}
+
 const getOrCreateEndpointAvailabilityState = ({
   effectiveBaseURL,
   modelId,
@@ -96,8 +95,8 @@ const getOrCreateEndpointAvailabilityState = ({
     providerKey,
     useOwnerBackedSyntheticProviderId,
   })
-  const existing = endpointAvailabilityStates.get(key)
-  const baseUrlSuffix = `::${effectiveBaseURL}`
+  const existing = endpointAvailabilityStates.get(key.endpointAvailabilityKey)
+  const endpointIdentitySuffix = `::${key.endpointIdentity}`
   const existingForBaseUrlOnly = hasEndpointAvailabilityProviderInput({
     modelId,
     modelProvider,
@@ -107,20 +106,19 @@ const getOrCreateEndpointAvailabilityState = ({
   })
     ? null
     : (Array.from(endpointAvailabilityStates.entries()).find(([existingKey]) => {
-        return existingKey.endsWith(baseUrlSuffix)
+        return existingKey.endsWith(endpointIdentitySuffix)
       })?.[1] ?? null)
+  const state = existing ?? existingForBaseUrlOnly ?? createHealthyState()
 
-  if (existing) {
-    return existing
+  if (!existing && !existingForBaseUrlOnly) {
+    endpointAvailabilityStates.set(key.endpointAvailabilityKey, state)
   }
 
-  if (existingForBaseUrlOnly) {
-    return existingForBaseUrlOnly
+  if (key.misconfiguration) {
+    applyEndpointKeyMisconfiguration({failureMessage: key.misconfiguration, state})
   }
 
-  const created = createHealthyState()
-  endpointAvailabilityStates.set(key, created)
-  return created
+  return state
 }
 
 const getEndpointAvailabilitySnapshot = (state: JudgmentEndpointAvailabilityState): JudgmentEndpointAvailability => {
@@ -155,6 +153,14 @@ const setGatedState = ({
   failureMessage: string
   status: Exclude<JudgmentEndpointAvailabilityStatus, 'healthy' | 'probing'>
 } & JudgmentEndpointProviderInput): void => {
+  const key = getEndpointAvailabilityKey({
+    effectiveBaseURL,
+    modelId,
+    modelProvider,
+    providerConnectionId,
+    providerKey,
+    useOwnerBackedSyntheticProviderId,
+  })
   const state = getOrCreateEndpointAvailabilityState({
     effectiveBaseURL,
     modelId,
@@ -163,13 +169,15 @@ const setGatedState = ({
     providerKey,
     useOwnerBackedSyntheticProviderId,
   })
-  const resolvedProviderKey = getEndpointAvailabilityProviderKey({
-    modelId,
-    modelProvider,
-    providerConnectionId,
-    providerKey,
-    useOwnerBackedSyntheticProviderId,
-  })
+
+  if (key.misconfiguration) {
+    applyEndpointKeyMisconfiguration({failureMessage: key.misconfiguration, state})
+    endpointAvailabilityLogger.warn(
+      `endpoint-availability:misconfigured:${key.endpointAvailabilityKey}`,
+      key.misconfiguration,
+    )
+    return undefined
+  }
 
   finishProbe(state)
   state.cooldownExpiresAt = new Date(Date.now() + COOLDOWN_MS)
@@ -177,10 +185,7 @@ const setGatedState = ({
   state.lastFailureMessage = failureMessage
   state.status = status
 
-  endpointAvailabilityLogger.warn(
-    `endpoint-availability:${status}:${resolvedProviderKey}:${effectiveBaseURL}`,
-    failureMessage,
-  )
+  endpointAvailabilityLogger.warn(`endpoint-availability:${status}:${key.endpointAvailabilityKey}`, failureMessage)
 }
 
 export const getJudgmentEndpointAvailability = ({
@@ -227,7 +232,7 @@ export const claimJudgmentEndpointAvailability = ({
   providerKey,
   useOwnerBackedSyntheticProviderId,
 }: {effectiveBaseURL: string} & JudgmentEndpointProviderInput): boolean => {
-  const state = getOrCreateEndpointAvailabilityState({
+  const key = getEndpointAvailabilityKey({
     effectiveBaseURL,
     modelId,
     modelProvider,
@@ -235,7 +240,8 @@ export const claimJudgmentEndpointAvailability = ({
     providerKey,
     useOwnerBackedSyntheticProviderId,
   })
-  const resolvedProviderKey = getEndpointAvailabilityProviderKey({
+  const state = getOrCreateEndpointAvailabilityState({
+    effectiveBaseURL,
     modelId,
     modelProvider,
     providerConnectionId,
@@ -245,6 +251,10 @@ export const claimJudgmentEndpointAvailability = ({
   const now = Date.now()
   const cooldownExpiresAt = state.cooldownExpiresAt?.getTime() ?? null
   const cooldownActive = cooldownExpiresAt != null && cooldownExpiresAt > now
+
+  if (key.misconfiguration) {
+    return false
+  }
 
   if (state.status === 'healthy') {
     return true
@@ -270,7 +280,7 @@ export const claimJudgmentEndpointAvailability = ({
   state.status = 'probing'
 
   endpointAvailabilityLogger.log(
-    `endpoint-availability:probing:${resolvedProviderKey}:${effectiveBaseURL}`,
+    `endpoint-availability:probing:${key.endpointAvailabilityKey}`,
     `Endpoint availability probing for ${effectiveBaseURL}`,
   )
 
@@ -318,6 +328,14 @@ export const recordJudgmentEndpointSuccess = ({
   providerKey,
   useOwnerBackedSyntheticProviderId,
 }: {effectiveBaseURL: string} & JudgmentEndpointProviderInput): void => {
+  const key = getEndpointAvailabilityKey({
+    effectiveBaseURL,
+    modelId,
+    modelProvider,
+    providerConnectionId,
+    providerKey,
+    useOwnerBackedSyntheticProviderId,
+  })
   const state = getOrCreateEndpointAvailabilityState({
     effectiveBaseURL,
     modelId,
@@ -326,13 +344,11 @@ export const recordJudgmentEndpointSuccess = ({
     providerKey,
     useOwnerBackedSyntheticProviderId,
   })
-  const resolvedProviderKey = getEndpointAvailabilityProviderKey({
-    modelId,
-    modelProvider,
-    providerConnectionId,
-    providerKey,
-    useOwnerBackedSyntheticProviderId,
-  })
+
+  if (key.misconfiguration) {
+    return undefined
+  }
+
   const shouldLog = state.status !== 'healthy' || state.lastFailureKind != null
 
   finishProbe(state)
@@ -343,7 +359,7 @@ export const recordJudgmentEndpointSuccess = ({
 
   if (shouldLog) {
     endpointAvailabilityLogger.force(
-      `endpoint-availability:healthy:${resolvedProviderKey}:${effectiveBaseURL}`,
+      `endpoint-availability:healthy:${key.endpointAvailabilityKey}`,
       `Endpoint availability healthy for ${effectiveBaseURL}`,
     )
   }

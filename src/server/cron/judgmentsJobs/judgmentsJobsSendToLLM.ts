@@ -1,5 +1,6 @@
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {ConnectionError} from './connectionHealth.ts'
+import {getEndpointAvailabilityKey} from './endpointAvailabilityKey.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {
@@ -449,16 +450,6 @@ const claimAndEnqueuePromptRequest = async ({
   return claimAndEnqueuePromptChunks({chunkLimits: getPromptClaimChunkLimits(limit), job, label, serverJobId})
 }
 
-const getEndpointAvailabilityKey = ({
-  baseURL,
-  providerConnectionId,
-}: {
-  baseURL: string
-  providerConnectionId: string | null
-}): string => {
-  return `${getProviderKey({providerConnectionId})}::${baseURL}`
-}
-
 const getDispatchEndpoints = (runtime: PromptRuntime): string[] => {
   return runtime.modelWorkerUrls.length > 0
     ? runtime.modelWorkerUrls.map((url) => {
@@ -521,8 +512,15 @@ const logDispatchSkip = ({
   runtime: PromptRuntime
 }) => {
   const baseURL = getDispatchEndpoints(runtime)[0] ?? runtime.modelBaseUrl
+  const endpointKey = getEndpointAvailabilityKey({
+    effectiveBaseURL: baseURL,
+    modelProvider: runtime.modelProvider,
+    providerConnectionId: connectionId,
+    useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
+  }).endpointAvailabilityKey
+
   schedulerLogger.warn(
-    `scheduler:skip:${dispatchStatus}:${getEndpointAvailabilityKey({baseURL, providerConnectionId: connectionId})}`,
+    `scheduler:skip:${dispatchStatus}:${endpointKey}`,
     `[capacity:${label}] skipping claims while endpoint is ${dispatchStatus}`,
     {baseURL, component: sendToLLMComponent, connectionId, dispatchStatus, event: 'dispatchSkip', label},
   )

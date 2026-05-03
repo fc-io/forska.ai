@@ -10,6 +10,7 @@ import {
   recordConnectionFailure,
   recordConnectionSuccess,
 } from './connectionHealth.ts'
+import {shouldSkipEndpointAvailabilityHttpProbe} from './endpointAvailabilityKey.ts'
 import {getCodexMaxInflight} from './getCodexMaxInflight.ts'
 import {getJudgmentsCapacity} from './getJudgmentsCapacity.ts'
 import {shouldUseJudgeWorkerOwnerHandoff} from './judgeWorkerCompletionJournal.ts'
@@ -168,6 +169,54 @@ const getProbeFailure = ({
   })
 }
 
+const getDefaultEndpointProbeUrl = (baseURL: string): string => {
+  return `${baseURL.replace(/\/+$/, '')}/models`
+}
+
+const probeDefaultEndpointAvailability = async ({
+  baseURL,
+  modelId,
+  provider,
+}: {
+  baseURL: string
+  modelId?: string | null
+  provider: string | null | undefined
+}): Promise<void> => {
+  const endpointPath = getProviderProbeEndpointPath(provider)
+
+  if (!endpointPath) {
+    return undefined
+  }
+
+  try {
+    const response = await fetch(getDefaultEndpointProbeUrl(baseURL), {signal: AbortSignal.timeout(10_000)})
+    const failure = classifyConnectionFailure({
+      context: {effectiveBaseURL: baseURL, endpointPath, providerKind: provider ?? null},
+      error: {status: response.status},
+    })
+
+    if (failure.shouldPauseConnection) {
+      recordConnectionFailure({effectiveBaseURL: baseURL, failure, modelId, modelProvider: provider})
+      throw new ConnectionError(failure.message, failure.effectiveBaseURL, failure)
+    }
+
+    recordConnectionSuccess({effectiveBaseURL: baseURL, modelId, modelProvider: provider})
+    return undefined
+  } catch (error) {
+    if (error instanceof ConnectionError) {
+      throw error
+    }
+
+    const failure = classifyConnectionFailure({
+      context: {effectiveBaseURL: baseURL, endpointPath, providerKind: provider ?? null},
+      error,
+    })
+
+    recordConnectionFailure({effectiveBaseURL: baseURL, failure, modelId, modelProvider: provider})
+    throw new ConnectionError(failure.message, failure.effectiveBaseURL, failure)
+  }
+}
+
 const probeJudgmentEndpointAvailability = async ({
   baseURL,
   modelId,
@@ -182,7 +231,15 @@ const probeJudgmentEndpointAvailability = async ({
   providerConnectionId: string | null
 }): Promise<void> => {
   if (!providerConnectionId) {
-    return undefined
+    return shouldSkipEndpointAvailabilityHttpProbe({
+      effectiveBaseURL: baseURL,
+      modelId,
+      modelProvider: provider,
+      providerConnectionId,
+      useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
+    })
+      ? undefined
+      : probeDefaultEndpointAvailability({baseURL, modelId, provider})
   }
 
   const connection = providerConnection ?? (await getProviderConnection(providerConnectionId))
