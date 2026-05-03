@@ -448,6 +448,85 @@ test('refreshProject rebuilds large projects in article batches', () => {
   expect(result.events).not.toContain('serving:all')
 })
 
+test('prompt answer incremental refresh drops lookup index before row deletes and recreates it after refresh', () => {
+  const runScript = globalThis.Bun.spawnSync(
+    [
+      'bun',
+      '-e',
+      `
+        const {mock} = await import('bun:test')
+
+        const appDatabaseServiceModulePath = new URL('./src/server/services/appDatabaseService.ts', 'file://' + process.cwd() + '/').pathname
+        const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        const statements = []
+
+        void mock.module(appDatabaseServiceModulePath, () => {
+          return {
+            getAppDatabaseService: () => {
+              return {
+                close: async () => {},
+                queryJson: async () => [],
+                queryJsonBackground: async (statement) => {
+                  return statement.includes('FROM app.project_review_serving_generation') && statement.includes('COUNT(*) AS count')
+                    ? [{count: 1}]
+                    : []
+                },
+                run: async () => {},
+                maintenance: async () => {},
+                runBackground: async (statement) => {
+                  statements.push(statement)
+                },
+              }
+            },
+          }
+        })
+
+        const martRefreshService = (await import(martRefreshServiceModulePath + '?prompt-index-refresh=' + Date.now())).getDuckdbMartRefreshService()
+
+        await martRefreshService.refreshProjectArticleMartsBatch('project-index-refresh-test', [
+          'article-1',
+          'article-2',
+          'article-1',
+        ])
+
+        console.log(JSON.stringify({statements}))
+      `,
+    ],
+    {cwd: process.cwd(), env: {...process.env}},
+  )
+
+  if (runScript.exitCode !== 0) {
+    throw new Error(
+      runScript.stderr.toString()
+        || runScript.stdout.toString()
+        || 'Prompt answer incremental refresh index regression test failed',
+    )
+  }
+
+  const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {statements: string[]}
+  const promptRefreshStatementIndex = result.statements.findIndex((statement) => {
+    return statement.includes('DELETE FROM mart.prompt_answer_fact')
+  })
+  const promptRefreshStatement = result.statements[promptRefreshStatementIndex] ?? ''
+  const createIndexStatementIndex = result.statements.findIndex((statement, index) => {
+    return (
+      index > promptRefreshStatementIndex
+      && statement.includes('CREATE INDEX IF NOT EXISTS idx_mart_prompt_answer_fact_lookup')
+    )
+  })
+  const dictionaryStatementIndex = result.statements.findIndex((statement) => {
+    return statement.includes('INSERT INTO app.review_answer_dictionary')
+  })
+
+  expect(promptRefreshStatementIndex).toBeGreaterThanOrEqual(0)
+  expect(promptRefreshStatement).toContain('DROP INDEX IF EXISTS mart.idx_mart_prompt_answer_fact_lookup')
+  expect(promptRefreshStatement.indexOf('DROP INDEX IF EXISTS mart.idx_mart_prompt_answer_fact_lookup')).toBeLessThan(
+    promptRefreshStatement.indexOf('DELETE FROM mart.prompt_answer_fact'),
+  )
+  expect(createIndexStatementIndex).toBeGreaterThan(promptRefreshStatementIndex)
+  expect(createIndexStatementIndex).toBeLessThan(dictionaryStatementIndex)
+})
+
 test('mart refresh recovers archived projects in row batches', () => {
   const runScript = globalThis.Bun.spawnSync(
     [

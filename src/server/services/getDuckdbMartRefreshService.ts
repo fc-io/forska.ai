@@ -128,6 +128,7 @@ const martRefreshYieldDelayMs = 0
 const martRefreshBatchEpochSql = "TIMESTAMPTZ '1970-01-01T00:00:00.000Z'"
 const martRefreshProjectPurgeRetryableErrorFragment = 'Failed to delete all rows from index'
 const martPromptAnswerFactLookupIndexName = 'idx_mart_prompt_answer_fact_lookup'
+const martPromptAnswerFactLookupIndexQualifiedName = `mart.${martPromptAnswerFactLookupIndexName}`
 const martPromptAnswerFactResetReplacementTableName = 'mart.prompt_answer_fact_project_refresh_rewrite'
 const martReviewArticleServingPurgeReplacementTableName = 'mart.review_article_serving_project_purge_rewrite'
 const martReviewArticleServingOrderIndexName = 'idx_mart_review_article_serving_order'
@@ -919,9 +920,14 @@ const getProjectPromptAnswerFactResetSql = (projectId: string) => {
     WHERE project_id != ${projectLiteral};
     DROP TABLE mart.prompt_answer_fact;
     ALTER TABLE ${martPromptAnswerFactResetReplacementTableName} RENAME TO prompt_answer_fact;
+    COMMIT;
+  `
+}
+
+const getProjectPromptAnswerFactLookupIndexCreateSql = () => {
+  return `
     CREATE INDEX IF NOT EXISTS ${martPromptAnswerFactLookupIndexName}
     ON mart.prompt_answer_fact(project_id, prompt_id, answer_value, article_id);
-    COMMIT;
   `
 }
 
@@ -1002,6 +1008,7 @@ const getProjectPromptAnswerFactBatchRefreshSql = (projectId: string, articleIds
 
   return `
     BEGIN TRANSACTION;
+    DROP INDEX IF EXISTS ${martPromptAnswerFactLookupIndexQualifiedName};
     DELETE FROM mart.prompt_answer_fact
     WHERE project_id = ${projectLiteral}
       AND article_id IN (${articleIdsSql});
@@ -2391,12 +2398,13 @@ const refreshJudgmentFactsForProjectScope = async (projectId: string): Promise<v
 
 const rebuildProjectPromptAnswerFact = async (projectId: string): Promise<void> => {
   await runMartRefreshBackgroundStatement(getProjectPromptAnswerFactResetSql(projectId))
-  return refreshProjectScopeArticleBatches({
+  await refreshProjectScopeArticleBatches({
     processBatch: async (articleIds) => {
       return runMartRefreshBackgroundStatement(getProjectPromptAnswerFactBatchInsertSql(projectId, articleIds))
     },
     projectId,
   })
+  return runMartRefreshBackgroundStatement(getProjectPromptAnswerFactLookupIndexCreateSql())
 }
 
 const rebuildProjectReviewArticleRollup = async (projectId: string): Promise<void> => {
@@ -3177,11 +3185,13 @@ const refreshProjectPromptAnswerFactForArticles = async (projectId: string, arti
 
   return refreshArticleIds.length === 0
     ? Promise.resolve()
-    : runMartRefreshBackgroundStatement(getProjectPromptAnswerFactBatchRefreshSql(projectId, refreshArticleIds)).then(
-        () => {
+    : runMartRefreshBackgroundStatement(getProjectPromptAnswerFactBatchRefreshSql(projectId, refreshArticleIds))
+        .then(() => {
+          return runMartRefreshBackgroundStatement(getProjectPromptAnswerFactLookupIndexCreateSql())
+        })
+        .then(() => {
           return yieldToEventLoop()
-        },
-      )
+        })
 }
 
 const refreshProjectReviewAnswerDictionaryForArticles = async (
