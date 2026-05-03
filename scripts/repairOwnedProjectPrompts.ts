@@ -291,7 +291,7 @@ const getUniqueProjectIds = (projectIds: string[]) => {
   return Array.from(new Set(projectIds))
 }
 
-const markProjectRefreshesDirty = async (tx: TransactionRunner, projectIds: string[]) => {
+const queueProjectWideDirtyMaterializations = async (tx: TransactionRunner, projectIds: string[]) => {
   const refreshStateService = getProjectMartDirtyRefreshStateService()
   const uniqueProjectIds = getUniqueProjectIds(projectIds)
   const dirtyProjects = await refreshStateService.getDirtyProjectsForProjectIds(tx, uniqueProjectIds)
@@ -299,6 +299,7 @@ const markProjectRefreshesDirty = async (tx: TransactionRunner, projectIds: stri
   return refreshStateService.markProjectsDirtyAtomically({
     projects: dirtyProjects,
     reason: 'repairOwnedProjectPrompts',
+    requestedBy: 'repairOwnedProjectPrompts',
     runner: tx,
   })
 }
@@ -369,15 +370,14 @@ const main = async () => {
       return
     }
 
-    const repairedProjectIds = (await getAppDatabaseService().transaction(async (tx) => {
+    const repairedDirtyStates = (await getAppDatabaseService().transaction(async (tx) => {
       const projectIds = getUniqueProjectIds(await repairCandidateRows(tx, safeRows))
-      await markProjectRefreshesDirty(tx, projectIds)
-      return projectIds
-    })) as string[]
+      return queueProjectWideDirtyMaterializations(tx, projectIds)
+    })) as Array<{dirtyToken: number; projectId: string}>
 
-    console.log(`[repairOwnedProjectPrompts] repaired projects: ${repairedProjectIds.length}`)
+    console.log(`[repairOwnedProjectPrompts] repaired projects: ${repairedDirtyStates.length}`)
     console.log(`[repairOwnedProjectPrompts] repaired prompt links: ${safeRows.length}`)
-    console.log(`[repairOwnedProjectPrompts] marked project refresh dirty: ${repairedProjectIds.length}`)
+    console.log(`[repairOwnedProjectPrompts] queued dirty materializations: ${repairedDirtyStates.length}`)
 
     if (options.flush) {
       console.log('[repairOwnedProjectPrompts] --flush skipped; project dirty state is drained by project mart workers')
