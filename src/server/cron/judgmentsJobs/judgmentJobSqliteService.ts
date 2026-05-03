@@ -1361,7 +1361,7 @@ const getContiguousProjectRefreshAckToken = async ({
         AND materialization_status <> 'completed'
       UNION ALL
       SELECT CAST(dirty_token AS INTEGER) AS barrierToken
-      FROM app.project_mart_refresh_article_quarantine
+      FROM app.project_mart_dirty_refresh_article_quarantine
       WHERE project_id = ${getSqlLiteral(projectId)}
         AND dirty_token <= ${ackToken}
         AND resolved_at IS NULL

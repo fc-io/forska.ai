@@ -93,6 +93,7 @@ test('rebuild2 cutover clears obsolete state and rederives replacement work unde
       largeRebuildRows: number
       maintenanceLeases: number
       materializationRows: number
+      obsoleteQuarantineRows: number
       outboxImportRows: number
       queueRows: number
       quarantineRows: number
@@ -100,6 +101,7 @@ test('rebuild2 cutover clears obsolete state and rederives replacement work unde
       refreshRows: number
     }
     fence: {ownerToken: string; status: string}
+    finalQuarantine: {articleId: string; dirtyToken: number; projectId: string} | undefined
     largeRebuild: {refreshStatus: string; refreshToken: number}
     materialization: {materializationStatus: string; owner: string | null; targetDirtyToken: number}
     refreshState: {
@@ -116,6 +118,7 @@ test('rebuild2 cutover clears obsolete state and rederives replacement work unde
       largeRebuildProjectIds: string[]
       pausedWorkerState: {dirtyMaterializationRows: number; largeRebuildRows: number; refreshRows: number}
       rederivedDirtyProjectCount: number
+      rederivedQuarantineCount: number
     }
   }>(`
     const ownerToken = 'test-rebuild2-cutover-owner'
@@ -268,16 +271,21 @@ test('rebuild2 cutover clears obsolete state and rederives replacement work unde
       )
     \`)
     await database.run(\`
+      CREATE TABLE app.project_mart_refresh_article_quarantine (
+        article_id VARCHAR PRIMARY KEY REFERENCES app.article(id),
+        error TEXT NOT NULL,
+        detected_by VARCHAR,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+      )
+    \`)
+    await database.run(\`
       INSERT INTO app.project_mart_refresh_article_quarantine (
-        project_id,
         article_id,
-        dirty_token,
         error,
         detected_by
       ) VALUES (
-        'rebuild2-project',
         'rebuild2-article',
-        5,
         'legacy quarantine',
         'legacy-worker'
       )
@@ -372,12 +380,22 @@ test('rebuild2 cutover clears obsolete state and rederives replacement work unde
         CAST((SELECT COUNT(*) FROM app.project_mart_refresh_article_state) AS INTEGER) AS refreshArticleRows,
         CAST((SELECT COUNT(*) FROM app.project_mart_dirty_materialization_state) AS INTEGER) AS materializationRows,
         CAST((SELECT COUNT(*) FROM app.project_mart_large_rebuild_state) AS INTEGER) AS largeRebuildRows,
-        CAST((SELECT COUNT(*) FROM app.project_mart_refresh_article_quarantine) AS INTEGER) AS quarantineRows,
+        CAST((SELECT COUNT(*) FROM app.project_mart_dirty_refresh_article_quarantine) AS INTEGER) AS quarantineRows,
+        CAST((SELECT COUNT(*) FROM app.project_mart_refresh_article_quarantine) AS INTEGER) AS obsoleteQuarantineRows,
         CAST((SELECT COUNT(*) FROM app.judgment_job_sqlite_outbox_import) AS INTEGER) AS outboxImportRows,
         CAST((SELECT COUNT(*) FROM app.maintenance_work_lease) AS INTEGER) AS maintenanceLeases
     \`)
+    const [finalQuarantine] = await database.queryJson(\`
+      SELECT
+        project_id AS projectId,
+        article_id AS articleId,
+        CAST(dirty_token AS INTEGER) AS dirtyToken
+      FROM app.project_mart_dirty_refresh_article_quarantine
+      ORDER BY project_id ASC, article_id ASC, dirty_token ASC
+      LIMIT 1
+    \`)
 
-    console.log(JSON.stringify({counts, fence, largeRebuild, materialization, refreshState, report}))
+    console.log(JSON.stringify({counts, fence, finalQuarantine, largeRebuild, materialization, refreshState, report}))
   `)
 
   expect(result.report.beforeProof).toMatchObject({
@@ -389,16 +407,23 @@ test('rebuild2 cutover clears obsolete state and rederives replacement work unde
   expect(result.report.pausedWorkerState).toEqual({dirtyMaterializationRows: 1, largeRebuildRows: 1, refreshRows: 1})
   expect(result.report.cutoverOwnerToken).toBe('test-rebuild2-cutover-owner')
   expect(result.report.rederivedDirtyProjectCount).toBe(1)
+  expect(result.report.rederivedQuarantineCount).toBe(1)
   expect(result.report.largeRebuildProjectIds).toEqual(['rebuild2-project'])
   expect(result.counts).toEqual({
     largeRebuildRows: 1,
     maintenanceLeases: 0,
     materializationRows: 1,
+    obsoleteQuarantineRows: 0,
     outboxImportRows: 0,
     queueRows: 0,
-    quarantineRows: 0,
-    refreshArticleRows: 0,
+    quarantineRows: 1,
+    refreshArticleRows: 1,
     refreshRows: 1,
+  })
+  expect(result.finalQuarantine).toEqual({
+    articleId: 'rebuild2-article',
+    dirtyToken: 1,
+    projectId: 'rebuild2-project',
   })
   expect(result.refreshState).toEqual({
     dirtyToken: 1,

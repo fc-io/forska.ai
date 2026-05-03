@@ -27,6 +27,10 @@ const obsoletePatterns = [
   /getQueuedArticleTasksSqlForTests/,
   /recoverQueuedArchivedProjectRefresh/,
   /pruneProjectQueueRowsForProjects/,
+  /db:duck:quarantine-refresh-article/,
+  /db:duck:unquarantine-refresh-article/,
+  /quarantineProjectMartRefreshArticle/,
+  /unquarantineProjectMartRefreshArticle/,
   /app\.mart_refresh_queue/,
 ] as const
 

@@ -389,7 +389,7 @@ export type ProjectMartRefreshArticleStateRecord = {
   updatedAt: Date
 }
 
-export type ProjectMartRefreshArticleQuarantineRecord = {
+export type ProjectMartDirtyRefreshArticleQuarantineRecord = {
   projectId: string
   articleId: string
   dirtyToken: number

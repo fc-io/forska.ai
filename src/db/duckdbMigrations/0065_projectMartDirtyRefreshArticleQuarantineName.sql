@@ -1,0 +1,11 @@
+DROP INDEX IF EXISTS app.idx_app_project_mart_refresh_article_quarantine_barrier;
+DROP INDEX IF EXISTS app.idx_app_project_mart_refresh_article_quarantine_updated_at;
+
+ALTER TABLE IF EXISTS app.project_mart_refresh_article_quarantine
+RENAME TO project_mart_dirty_refresh_article_quarantine;
+
+CREATE INDEX IF NOT EXISTS idx_app_project_mart_dirty_refresh_article_quarantine_barrier
+ON app.project_mart_dirty_refresh_article_quarantine(project_id, resolved_at, dirty_token);
+
+CREATE INDEX IF NOT EXISTS idx_app_project_mart_dirty_refresh_article_quarantine_updated_at
+ON app.project_mart_dirty_refresh_article_quarantine(updated_at, project_id, article_id);
