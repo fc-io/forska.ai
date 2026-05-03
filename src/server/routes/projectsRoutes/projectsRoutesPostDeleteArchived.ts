@@ -312,8 +312,8 @@ const projectMartRefreshStateCreateSql = `
   CREATE TABLE app.project_mart_refresh_state (
     project_id VARCHAR PRIMARY KEY REFERENCES app.project(id),
     dirty_token BIGINT NOT NULL DEFAULT 0,
-    active_refresh_token BIGINT NOT NULL DEFAULT 0,
-    last_completed_refresh_token BIGINT NOT NULL DEFAULT 0,
+    active_dirty_token BIGINT NOT NULL DEFAULT 0,
+    last_completed_dirty_token BIGINT NOT NULL DEFAULT 0,
     last_requested_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
     last_request_reason VARCHAR,
     requested_by VARCHAR,

@@ -12,7 +12,7 @@ type RecoveryResult = {
 
 type StaleClaimRow = {
   dirtyToken: number | string
-  lastCompletedRefreshToken: number | string
+  lastCompletedDirtyToken: number | string
   leaseExpiresAt: string
   projectId: string
   workerId: string | null
@@ -37,14 +37,14 @@ const getStaleClaims = async () => {
     SELECT
       project_id AS projectId,
       dirty_token AS dirtyToken,
-      last_completed_refresh_token AS lastCompletedRefreshToken,
+      last_completed_dirty_token AS lastCompletedDirtyToken,
       lease_expires_at AS leaseExpiresAt,
       worker_id AS workerId
     FROM app.project_mart_refresh_state
     WHERE refresh_status = 'running'
       AND lease_expires_at IS NOT NULL
       AND lease_expires_at < NOW()
-      AND dirty_token > last_completed_refresh_token
+      AND dirty_token > last_completed_dirty_token
     ORDER BY lease_expires_at ASC, project_id ASC
   `)
 }
@@ -53,7 +53,7 @@ const getSummary = (staleClaims: StaleClaimRow[]) => {
   return staleClaims.map((claim) => {
     return {
       dirtyToken: toNumber(claim.dirtyToken),
-      lastCompletedRefreshToken: toNumber(claim.lastCompletedRefreshToken),
+      lastCompletedDirtyToken: toNumber(claim.lastCompletedDirtyToken),
       leaseExpiresAt: claim.leaseExpiresAt,
       projectId: claim.projectId,
       workerId: claim.workerId,

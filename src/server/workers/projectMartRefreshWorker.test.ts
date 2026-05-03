@@ -604,7 +604,7 @@ test('dirty batch routing keeps review pages counts warnings and prompt queueing
           const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
           const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
           const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts')
-          const {getProjectMartRefreshStateService} = await import('./src/server/services/projectMartRefreshStateService.ts')
+          const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
           const {projectsRoutesGetReviewsWarnings} = await import('./src/server/routes/projectsRoutes/projectsRoutesGetReviewsWarnings.ts')
           const {judgmentsJobsCronGetPrompts} = await import('./src/server/cron/judgmentsJobs/judgmentsJobsCronGetPrompts.ts')
           const {queryArticlesReviewsFromDuckdb, getUnassessedCountFromDuckdb} = await import('./src/services/olap/duckdbOlap.ts')
@@ -614,7 +614,7 @@ test('dirty batch routing keeps review pages counts warnings and prompt queueing
 
           const database = getAppDatabaseService()
           const martRefreshService = getDuckdbMartRefreshService()
-          const refreshStateService = getProjectMartRefreshStateService()
+          const refreshStateService = getProjectMartDirtyRefreshStateService()
 
           await database.run(\`
             INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
@@ -759,7 +759,7 @@ test('dirty batch routing keeps review pages counts warnings and prompt queueing
           const [refreshState] = await database.queryJson(\`
             SELECT
               CAST(dirty_token AS INTEGER) AS dirtyToken,
-              CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+              CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken,
               refresh_status AS refreshStatus
             FROM app.project_mart_refresh_state
             WHERE project_id = 'project-worker-routing-test'
@@ -824,7 +824,7 @@ test('dirty batch routing keeps review pages counts warnings and prompt queueing
 
     return JSON.parse(resultLine) as {
       promptEntries: Array<{articleId: string; promptId: string}>
-      refreshState: {dirtyToken: number; lastCompletedRefreshToken: number; refreshStatus: string}
+      refreshState: {dirtyToken: number; lastCompletedDirtyToken: number; refreshStatus: string}
       reviews: {data: Array<{id: string; isFullyJudged: boolean; judgedPromptIds: string[]}>; totalCount: number | null}
       unassessedCount: number
       warnings: unknown

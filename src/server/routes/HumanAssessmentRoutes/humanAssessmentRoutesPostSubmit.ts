@@ -3,7 +3,7 @@ import type {Context} from 'elysia'
 
 import {getAppDatabaseService} from '../../services/appDatabaseService.ts'
 import {escapeSqlString, getQuotedStringList, getSqlLiteral} from '../../services/appQueryHelpers.ts'
-import {getProjectMartRefreshStateService} from '../../services/projectMartRefreshStateService.ts'
+import {getProjectMartDirtyRefreshStateService} from '../../services/projectMartDirtyRefreshStateService.ts'
 
 export const humanAssessmentRoutesPostSubmit = async ({
   body,
@@ -174,7 +174,7 @@ export const humanAssessmentRoutesPostSubmit = async ({
         AND is_answered = FALSE
     `)
 
-    await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+    await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
       projects: [{articleIds: [currentArticleId], projectId: body.projectId}],
       reason: 'humanAssessmentRoutesPostSubmit',
       runner: tx,

@@ -1,6 +1,6 @@
 import type {
+  ProjectMartDirtyRefreshStateRecord,
   ProjectMartRefreshArticleQuarantineRecord,
-  ProjectMartRefreshStateRecord,
   ProjectMartRefreshStatus,
 } from '../../db/schemaTypes.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
@@ -59,7 +59,10 @@ type CompleteDirtyArticleBatchForClaimParams = {
   workerId: string
 }
 
-type ProjectRefreshBatchCompletion = {completedState: ProjectMartRefreshStateRecord | null; isClaimComplete: boolean}
+type ProjectRefreshBatchCompletion = {
+  completedState: ProjectMartDirtyRefreshStateRecord | null
+  isClaimComplete: boolean
+}
 
 type CompleteProjectRefreshParams = {completedToken: number; now?: Date; projectId: string; workerId: string}
 
@@ -84,9 +87,9 @@ type GetQuarantinedArticlesForProjectParams = {articleIds?: string[]; projectId:
 type FailProjectRefreshParams = {error: string; now?: Date; projectId: string; workerId: string}
 
 type ProjectRefreshStateRow = {
-  activeRefreshToken: number
+  activeDirtyToken: number
   dirtyToken: number
-  lastCompletedRefreshToken: number
+  lastCompletedDirtyToken: number
   projectId: string
   refreshStatus: ProjectMartRefreshStatus
   workerId: string | null
@@ -202,12 +205,12 @@ const withTransaction = async <T>(
 }
 
 const getProjectRefreshStateRecord = async (runner: RefreshStateRunner, projectId: string) => {
-  const [row] = await runner.queryJson<ProjectMartRefreshStateRecord>(`
+  const [row] = await runner.queryJson<ProjectMartDirtyRefreshStateRecord>(`
     SELECT
       project_id AS projectId,
       CAST(dirty_token AS INTEGER) AS dirtyToken,
-      CAST(active_refresh_token AS INTEGER) AS activeRefreshToken,
-      CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+      CAST(active_dirty_token AS INTEGER) AS activeDirtyToken,
+      CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken,
       last_requested_at AS lastRequestedAt,
       last_request_reason AS lastRequestReason,
       requested_by AS requestedBy,
@@ -401,11 +404,11 @@ const claimDirtyProjects = async ({
     SELECT
       state.project_id AS projectId,
       CAST(state.dirty_token AS INTEGER) AS dirtyToken,
-      CAST(state.last_completed_refresh_token AS INTEGER) AS lastCompletedToken
+      CAST(state.last_completed_dirty_token AS INTEGER) AS lastCompletedToken
     FROM app.project_mart_refresh_state state
     INNER JOIN app.project project ON project.id = state.project_id
     WHERE project.archived = FALSE
-      AND state.dirty_token > state.last_completed_refresh_token
+      AND state.dirty_token > state.last_completed_dirty_token
       AND NOT EXISTS (
         SELECT 1
         FROM app.project_mart_large_rebuild_state large_rebuild
@@ -426,7 +429,7 @@ const claimDirtyProjects = async ({
     const [claimed] = await getAppDatabaseService().queryJson<ProjectRefreshClaim>(`
       UPDATE app.project_mart_refresh_state
       SET
-        active_refresh_token=${row.dirtyToken},
+        active_dirty_token=${row.dirtyToken},
         refresh_status = 'running',
         last_started_at = ${getTimestampLiteral(currentNow)},
         last_error = NULL,
@@ -434,7 +437,7 @@ const claimDirtyProjects = async ({
         lease_expires_at = ${getTimestampLiteral(leaseExpiresAt)},
         updated_at = ${getTimestampLiteral(currentNow)}
       WHERE project_id = ${getSqlLiteral(row.projectId)}
-        AND dirty_token > last_completed_refresh_token
+        AND dirty_token > last_completed_dirty_token
         AND (
           refresh_status <> 'running'
           OR lease_expires_at IS NULL
@@ -443,8 +446,8 @@ const claimDirtyProjects = async ({
       RETURNING
         project_id AS projectId,
         ${getSqlLiteral(workerId)} AS workerId,
-        CAST(active_refresh_token AS INTEGER) AS claimedToken,
-        CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedToken,
+        CAST(active_dirty_token AS INTEGER) AS claimedToken,
+        CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedToken,
         lease_expires_at AS leaseExpiresAt
     `)
 
@@ -485,8 +488,8 @@ const heartbeatClaim = async ({
     RETURNING
       project_id AS projectId,
       worker_id AS workerId,
-      CAST(active_refresh_token AS INTEGER) AS claimedToken,
-      CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedToken,
+      CAST(active_dirty_token AS INTEGER) AS claimedToken,
+      CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedToken,
       lease_expires_at AS leaseExpiresAt
   `)
 
@@ -542,9 +545,9 @@ const getDirtyArticleBatchForClaim = async ({
     WHERE state.project_id = ${getSqlLiteral(projectId)}
       AND state.worker_id = ${getSqlLiteral(workerId)}
       AND state.refresh_status = 'running'
-      AND state.active_refresh_token = ${claimedToken}
-      AND article_state.first_dirty_token <= state.active_refresh_token
-      AND article_state.last_dirty_token > state.last_completed_refresh_token
+      AND state.active_dirty_token = ${claimedToken}
+      AND article_state.first_dirty_token <= state.active_dirty_token
+      AND article_state.last_dirty_token > state.last_completed_dirty_token
       AND quarantine.article_id IS NULL
     ORDER BY article_state.article_id ASC
     LIMIT ${normalizedBatchSize + 1}
@@ -563,7 +566,7 @@ const releaseProjectRefreshClaim = async ({now, projectId, workerId}: ReleasePro
   const [released] = await getAppDatabaseService().queryJson<ProjectRefreshStateRow>(`
     UPDATE app.project_mart_refresh_state
     SET
-      active_refresh_token=0,
+      active_dirty_token=0,
       refresh_status = 'idle',
       worker_id = NULL,
       lease_expires_at = NULL,
@@ -574,8 +577,8 @@ const releaseProjectRefreshClaim = async ({now, projectId, workerId}: ReleasePro
     RETURNING
       project_id AS projectId,
       CAST(dirty_token AS INTEGER) AS dirtyToken,
-      CAST(active_refresh_token AS INTEGER) AS activeRefreshToken,
-      CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+      CAST(active_dirty_token AS INTEGER) AS activeDirtyToken,
+      CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken,
       refresh_status AS refreshStatus,
       worker_id AS workerId
   `)
@@ -743,8 +746,8 @@ const completeRunningProjectRefreshState = async ({
   const [completed] = await tx.queryJson<ProjectRefreshStateRow>(`
     UPDATE app.project_mart_refresh_state
     SET
-      active_refresh_token = 0,
-      last_completed_refresh_token = GREATEST(last_completed_refresh_token, ${completedToken}),
+      active_dirty_token = 0,
+      last_completed_dirty_token = GREATEST(last_completed_dirty_token, ${completedToken}),
       refresh_status = 'idle',
       last_completed_at = ${getTimestampLiteral(currentNow)},
       last_error = NULL,
@@ -754,12 +757,12 @@ const completeRunningProjectRefreshState = async ({
     WHERE project_id = ${getSqlLiteral(projectId)}
       AND worker_id = ${getSqlLiteral(workerId)}
       AND refresh_status = 'running'
-      AND active_refresh_token = ${completedToken}
+      AND active_dirty_token = ${completedToken}
     RETURNING
       project_id AS projectId,
       CAST(dirty_token AS INTEGER) AS dirtyToken,
-      CAST(active_refresh_token AS INTEGER) AS activeRefreshToken,
-      CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+      CAST(active_dirty_token AS INTEGER) AS activeDirtyToken,
+      CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken,
       refresh_status AS refreshStatus,
       worker_id AS workerId
   `)
@@ -782,13 +785,13 @@ const completeDirtyArticleBatchForClaim = async ({
 }: CompleteDirtyArticleBatchForClaimParams): Promise<ProjectRefreshBatchCompletion> => {
   const currentNow = getNow(now)
   const completedState = await getAppDatabaseService().transaction(async (tx) => {
-    const [claimState] = await tx.queryJson<{lastCompletedRefreshToken: number}>(`
-      SELECT CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken
+    const [claimState] = await tx.queryJson<{lastCompletedDirtyToken: number}>(`
+      SELECT CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken
       FROM app.project_mart_refresh_state
       WHERE project_id = ${getSqlLiteral(projectId)}
         AND worker_id = ${getSqlLiteral(workerId)}
         AND refresh_status = 'running'
-        AND active_refresh_token = ${claimedToken}
+        AND active_dirty_token = ${claimedToken}
       LIMIT 1
     `)
 
@@ -806,7 +809,7 @@ const completeDirtyArticleBatchForClaim = async ({
         WHERE project_id = ${getSqlLiteral(projectId)}
           AND article_id IN (${batchArticleIdsSql})
           AND first_dirty_token <= ${claimedToken}
-          AND last_dirty_token > ${claimState.lastCompletedRefreshToken}
+          AND last_dirty_token > ${claimState.lastCompletedDirtyToken}
           AND last_dirty_token <= ${claimedToken}
       `)
       await tx.run(`
@@ -817,7 +820,7 @@ const completeDirtyArticleBatchForClaim = async ({
         WHERE project_id = ${getSqlLiteral(projectId)}
           AND article_id IN (${batchArticleIdsSql})
           AND first_dirty_token <= ${claimedToken}
-          AND last_dirty_token > ${claimState.lastCompletedRefreshToken}
+          AND last_dirty_token > ${claimState.lastCompletedDirtyToken}
           AND last_dirty_token > ${claimedToken}
       `)
     }
@@ -827,7 +830,7 @@ const completeDirtyArticleBatchForClaim = async ({
       FROM app.project_mart_refresh_article_state
       WHERE project_id = ${getSqlLiteral(projectId)}
         AND first_dirty_token <= ${claimedToken}
-        AND last_dirty_token > ${claimState.lastCompletedRefreshToken}
+        AND last_dirty_token > ${claimState.lastCompletedDirtyToken}
         AND NOT EXISTS (
           SELECT 1
           FROM app.project_mart_refresh_article_quarantine quarantine
@@ -882,20 +885,20 @@ const finalizeProjectRefreshAfterLargeRebuild = async ({
     const [completed] = await tx.queryJson<ProjectRefreshStateRow>(`
       UPDATE app.project_mart_refresh_state
       SET
-        active_refresh_token = CASE WHEN active_refresh_token <= ${completedToken} THEN 0 ELSE active_refresh_token END,
-        last_completed_refresh_token = GREATEST(last_completed_refresh_token, ${completedToken}),
-        refresh_status = CASE WHEN active_refresh_token <= ${completedToken} THEN 'idle' ELSE refresh_status END,
+        active_dirty_token = CASE WHEN active_dirty_token <= ${completedToken} THEN 0 ELSE active_dirty_token END,
+        last_completed_dirty_token = GREATEST(last_completed_dirty_token, ${completedToken}),
+        refresh_status = CASE WHEN active_dirty_token <= ${completedToken} THEN 'idle' ELSE refresh_status END,
         last_completed_at = ${getTimestampLiteral(currentNow)},
-        last_error = CASE WHEN active_refresh_token <= ${completedToken} THEN NULL ELSE last_error END,
-        worker_id = CASE WHEN active_refresh_token <= ${completedToken} THEN NULL ELSE worker_id END,
-        lease_expires_at = CASE WHEN active_refresh_token <= ${completedToken} THEN NULL ELSE lease_expires_at END,
+        last_error = CASE WHEN active_dirty_token <= ${completedToken} THEN NULL ELSE last_error END,
+        worker_id = CASE WHEN active_dirty_token <= ${completedToken} THEN NULL ELSE worker_id END,
+        lease_expires_at = CASE WHEN active_dirty_token <= ${completedToken} THEN NULL ELSE lease_expires_at END,
         updated_at = ${getTimestampLiteral(currentNow)}
       WHERE project_id = ${getSqlLiteral(projectId)}
       RETURNING
         project_id AS projectId,
         CAST(dirty_token AS INTEGER) AS dirtyToken,
-        CAST(active_refresh_token AS INTEGER) AS activeRefreshToken,
-        CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+        CAST(active_dirty_token AS INTEGER) AS activeDirtyToken,
+        CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken,
         refresh_status AS refreshStatus,
         worker_id AS workerId
     `)
@@ -926,7 +929,7 @@ const failProjectRefresh = async ({error, now, projectId, workerId}: FailProject
   const [failed] = await getAppDatabaseService().queryJson<ProjectRefreshStateRow>(`
     UPDATE app.project_mart_refresh_state
     SET
-      active_refresh_token = 0,
+      active_dirty_token = 0,
       refresh_status = 'failed',
       last_failed_at = ${getTimestampLiteral(currentNow)},
       last_error = ${getSqlLiteral(error)},
@@ -939,8 +942,8 @@ const failProjectRefresh = async ({error, now, projectId, workerId}: FailProject
     RETURNING
       project_id AS projectId,
       CAST(dirty_token AS INTEGER) AS dirtyToken,
-      CAST(active_refresh_token AS INTEGER) AS activeRefreshToken,
-      CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+      CAST(active_dirty_token AS INTEGER) AS activeDirtyToken,
+      CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken,
       refresh_status AS refreshStatus,
       worker_id AS workerId
   `)
@@ -958,7 +961,7 @@ const failProjectRefresh = async ({error, now, projectId, workerId}: FailProject
   return failed ? getProjectRefreshStateRecord(getAppDatabaseService(), projectId) : null
 }
 
-const projectMartRefreshStateService = {
+const projectMartDirtyRefreshStateService = {
   claimDirtyProjects,
   clearArchivedProjectRefreshStates,
   clearProjectRefreshState,
@@ -977,8 +980,8 @@ const projectMartRefreshStateService = {
   releaseProjectRefreshClaim,
 }
 
-export const getProjectMartRefreshStateService = () => {
-  return projectMartRefreshStateService
+export const getProjectMartDirtyRefreshStateService = () => {
+  return projectMartDirtyRefreshStateService
 }
 
 export {

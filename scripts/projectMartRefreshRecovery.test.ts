@@ -89,8 +89,8 @@ const seedProjectSql = ({
     INSERT INTO app.project_mart_refresh_state (
       project_id,
       dirty_token,
-      active_refresh_token,
-      last_completed_refresh_token,
+      active_dirty_token,
+      last_completed_dirty_token,
       last_requested_at,
       refresh_status,
       last_started_at,
@@ -217,10 +217,10 @@ test('runProjectMartRefreshWorkerOnce CLI completes one claim and leaves the led
 
   const [state] = runQuery(
     duckdbPath,
-    "SELECT refresh_status AS refreshStatus, last_completed_refresh_token AS lastCompletedRefreshToken FROM app.project_mart_refresh_state WHERE project_id = 'project-run-once'",
-  ) as Array<{lastCompletedRefreshToken: string; refreshStatus: string}>
+    "SELECT refresh_status AS refreshStatus, last_completed_dirty_token AS lastCompletedDirtyToken FROM app.project_mart_refresh_state WHERE project_id = 'project-run-once'",
+  ) as Array<{lastCompletedDirtyToken: string; refreshStatus: string}>
 
-  expect(state).toEqual({lastCompletedRefreshToken: '1', refreshStatus: 'idle'})
+  expect(state).toEqual({lastCompletedDirtyToken: '1', refreshStatus: 'idle'})
 })
 
 test('runProjectMartRefreshWorkerOnce routes oversized full refreshes into staged large rebuild state', () => {
@@ -246,8 +246,8 @@ test('runProjectMartRefreshWorkerOnce routes oversized full refreshes into stage
 
   const [state] = runQuery(
     duckdbPath,
-    "SELECT refresh_status AS refreshStatus, last_error AS lastError, CAST(active_refresh_token AS INTEGER) AS activeRefreshToken FROM app.project_mart_refresh_state WHERE project_id = 'project-blocked'",
-  ) as Array<{activeRefreshToken: number; lastError: string | null; refreshStatus: string}>
+    "SELECT refresh_status AS refreshStatus, last_error AS lastError, CAST(active_dirty_token AS INTEGER) AS activeDirtyToken FROM app.project_mart_refresh_state WHERE project_id = 'project-blocked'",
+  ) as Array<{activeDirtyToken: number; lastError: string | null; refreshStatus: string}>
   const [largeRebuildState] = runQuery(
     duckdbPath,
     "SELECT rebuild_phase AS rebuildPhase, refresh_status AS refreshStatus, CAST(refresh_token AS INTEGER) AS refreshToken FROM app.project_mart_large_rebuild_state WHERE project_id = 'project-blocked'",
@@ -255,7 +255,7 @@ test('runProjectMartRefreshWorkerOnce routes oversized full refreshes into stage
 
   expect(state.refreshStatus).toBe('idle')
   expect(state.lastError).toBeNull()
-  expect(state.activeRefreshToken).toBe(0)
+  expect(state.activeDirtyToken).toBe(0)
   expect(largeRebuildState).toEqual({rebuildPhase: 'judgment_fact', refreshStatus: 'idle', refreshToken: 1})
 })
 
@@ -273,7 +273,7 @@ test('isolated refresh command progresses one large rebuild batch when no normal
         const database = getAppDatabaseService()
         await database.run(\`
           UPDATE app.project_mart_refresh_state
-          SET dirty_token = 0, last_completed_refresh_token = 0, active_refresh_token = 0, refresh_status = 'idle'
+          SET dirty_token = 0, last_completed_dirty_token = 0, active_dirty_token = 0, refresh_status = 'idle'
           WHERE project_id = 'project-large-rebuild';
           DELETE FROM app.project_mart_refresh_article_state WHERE project_id = 'project-large-rebuild';
         \`)
@@ -475,10 +475,10 @@ test('recoverProjectMartRefreshClaims lists and recovers stale claims only when 
 
   const [state] = runQuery(
     duckdbPath,
-    "SELECT refresh_status AS refreshStatus, last_completed_refresh_token AS lastCompletedRefreshToken FROM app.project_mart_refresh_state WHERE project_id = 'project-recover'",
-  ) as Array<{lastCompletedRefreshToken: string; refreshStatus: string}>
+    "SELECT refresh_status AS refreshStatus, last_completed_dirty_token AS lastCompletedDirtyToken FROM app.project_mart_refresh_state WHERE project_id = 'project-recover'",
+  ) as Array<{lastCompletedDirtyToken: string; refreshStatus: string}>
 
-  expect(state).toEqual({lastCompletedRefreshToken: '1', refreshStatus: 'idle'})
+  expect(state).toEqual({lastCompletedDirtyToken: '1', refreshStatus: 'idle'})
 })
 
 test('runProjectMartLargeRebuildCycle CLI advances one staged batch with conservative default batch size', () => {
@@ -495,7 +495,7 @@ test('runProjectMartLargeRebuildCycle CLI advances one staged batch with conserv
         const database = getAppDatabaseService()
         await database.run(\`
           UPDATE app.project_mart_refresh_state
-          SET dirty_token = 0, last_completed_refresh_token = 0, active_refresh_token = 0, refresh_status = 'idle'
+          SET dirty_token = 0, last_completed_dirty_token = 0, active_dirty_token = 0, refresh_status = 'idle'
           WHERE project_id = 'project-large-rebuild-cli';
           DELETE FROM app.project_mart_refresh_article_state WHERE project_id = 'project-large-rebuild-cli';
         \`)
@@ -644,7 +644,7 @@ test('runProjectMartLargeRebuildCycles CLI returns structured bounded multi-cycl
         const database = getAppDatabaseService()
         await database.run(\`
           UPDATE app.project_mart_refresh_state
-          SET dirty_token = 0, last_completed_refresh_token = 0, active_refresh_token = 0, refresh_status = 'idle'
+          SET dirty_token = 0, last_completed_dirty_token = 0, active_dirty_token = 0, refresh_status = 'idle'
           WHERE project_id = 'project-large-rebuild-cycles-cli';
           DELETE FROM app.project_mart_refresh_article_state WHERE project_id = 'project-large-rebuild-cycles-cli';
         \`)

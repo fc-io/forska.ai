@@ -392,9 +392,9 @@ test('cleanupStale clears acked draining retention beyond the legacy small batch
     throw new Error('Test database not initialized')
   }
 
-  const {getProjectMartRefreshStateService} = await import('../../services/projectMartRefreshStateService.ts')
+  const {getProjectMartDirtyRefreshStateService} = await import('../../services/projectMartDirtyRefreshStateService.ts')
   const service = sqliteService()
-  const refreshStateService = getProjectMartRefreshStateService()
+  const refreshStateService = getProjectMartDirtyRefreshStateService()
   const rowCount = 150
   const timestamp = Date.now()
   const connectionId = `cleanup-stale-retention-connection-${timestamp}`

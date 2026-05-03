@@ -477,14 +477,14 @@ test('archive route clears refresh state for archived projects without depending
   `)
   const [refreshState] = await queryDatabase<{
     dirtyToken: number
-    lastCompletedRefreshToken: number
+    lastCompletedDirtyToken: number
     projectId: string
     refreshStatus: string
   }>(`
     SELECT
       project_id AS projectId,
       CAST(dirty_token AS INTEGER) AS dirtyToken,
-      CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+      CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken,
       refresh_status AS refreshStatus
     FROM app.project_mart_refresh_state
     WHERE project_id = '${projectId}'
@@ -819,8 +819,8 @@ test('delete archived route removes archived project rows and keeps cross-projec
     INSERT INTO app.project_mart_refresh_state (
       project_id,
       dirty_token,
-      active_refresh_token,
-      last_completed_refresh_token,
+      active_dirty_token,
+      last_completed_dirty_token,
       refresh_status,
       last_request_reason
     ) VALUES (

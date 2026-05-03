@@ -1584,7 +1584,7 @@ test('judgment job health projection tracks completions waiting on maintenance v
     INSERT INTO app.project_mart_refresh_state (
       project_id,
       dirty_token,
-      last_completed_refresh_token,
+      last_completed_dirty_token,
       refresh_status
     ) VALUES (
       '${projectId}',
@@ -3673,7 +3673,7 @@ test('unassessed endpoints bypass stale serving rows and invalidate cached count
   const modelId = `unassessed-freshness-model-${now}`
   const connectionId = `unassessed-freshness-connection-${now}`
   const jobId = `unassessed-freshness-job-${now}`
-  const {getProjectMartRefreshStateService} = await import('../services/projectMartRefreshStateService.ts')
+  const {getProjectMartDirtyRefreshStateService} = await import('../services/projectMartDirtyRefreshStateService.ts')
 
   await insertProjectFixture({connectionId, modelId, projectId})
   await insertUnassessedServingFixture({jobId, projectId})
@@ -3686,7 +3686,7 @@ test('unassessed endpoints bypass stale serving rows and invalidate cached count
   expect(freshCountResponse.status).toBe(200)
   expect(freshCountBody.count).toBe(0)
 
-  await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+  await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
     projects: [{projectId}],
     reason: 'JudgmentsJobsRoutes.test.unassessedFreshness',
   })

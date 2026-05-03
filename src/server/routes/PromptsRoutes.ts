@@ -9,7 +9,7 @@ import {
   getQuotedStringList,
   getSqlLiteral,
 } from '../services/appQueryHelpers'
-import {getProjectMartRefreshStateService} from '../services/projectMartRefreshStateService.ts'
+import {getProjectMartDirtyRefreshStateService} from '../services/projectMartDirtyRefreshStateService.ts'
 import {computePromptContentHash} from '../utils/computePromptContentHash'
 import {withErrorHandler} from '../utils/routeErrorHandler'
 import {promptsReadOnlyRoutes} from './promptsRoutes/promptsRoutesReadOnly.ts'
@@ -607,14 +607,14 @@ const promptsAdminRoutes = new Elysia()
           }
         }
 
-        const dirtyProjects = await getProjectMartRefreshStateService().getDirtyProjectsForProjectIds(
+        const dirtyProjects = await getProjectMartDirtyRefreshStateService().getDirtyProjectsForProjectIds(
           tx,
           affectedProjects.map((project) => {
             return project.projectId
           }),
         )
 
-        await getProjectMartRefreshStateService().markProjectsDirtyAtomically({
+        await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
           projects: dirtyProjects,
           reason: 'PromptsRoutes.merge',
           runner: tx,
@@ -779,7 +779,7 @@ const promptsAdminRoutes = new Elysia()
           WHERE id IN (${getQuotedStringList(judgmentIds).join(', ')})
         `)
 
-        await getProjectMartRefreshStateService().markArticleProjectsDirtyAtomically({
+        await getProjectMartDirtyRefreshStateService().markArticleProjectsDirtyAtomically({
           articleIds: affectedJudgments.map((judgment) => {
             return judgment.articleId
           }),

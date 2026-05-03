@@ -1,7 +1,7 @@
 import {getArticleSourceMetadata, getOriginalDoi, normalizeDoi} from '../../utils/articleSourceMetadata.ts'
 import {getAppDatabaseService} from './appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from './appQueryHelpers.ts'
-import {getProjectMartRefreshStateService} from './projectMartRefreshStateService.ts'
+import {getProjectMartDirtyRefreshStateService} from './projectMartDirtyRefreshStateService.ts'
 
 export type ArticleImportStoreTx = {
   queryJson: <T>(statement: string) => Promise<T[]>
@@ -360,7 +360,7 @@ export const queueImportedArticleRefreshes = async (importRouteIds: string[]) =>
     const projectIds = projectRows.map((row) => {
       return row.projectId
     })
-    const refreshStateService = getProjectMartRefreshStateService()
+    const refreshStateService = getProjectMartDirtyRefreshStateService()
     const dirtyProjects = await refreshStateService.getDirtyProjectsForProjectIds(tx, projectIds)
 
     await refreshStateService.markProjectsDirtyAtomically({

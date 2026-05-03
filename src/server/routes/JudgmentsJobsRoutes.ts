@@ -137,7 +137,7 @@ type OwnerBackedRuntimeResolution = Pick<
 >
 type OwnerBackedProviderSnapshot = ProviderBucketSnapshot
 type UnassessedCountCacheValue = {value: number; expiresAt: number}
-type ProjectMartFreshnessState = {dirtyToken: number | null; isFresh: boolean; lastCompletedRefreshToken: number | null}
+type ProjectMartFreshnessState = {dirtyToken: number | null; isFresh: boolean; lastCompletedDirtyToken: number | null}
 type JudgmentJobStorageProjection = {
   activeLargeRebuildProjectCount: number
   currentPhase: string | null
@@ -1006,34 +1006,34 @@ const getUnassessedCountCacheKey = (
   useFulltext: boolean,
   useFulltextNoImages: boolean,
   dirtyToken: number | null,
-  lastCompletedRefreshToken: number | null,
+  lastCompletedDirtyToken: number | null,
 ) => {
   const from = projectDateFrom ? projectDateFrom.toISOString() : ''
   const to = projectDateTo ? projectDateTo.toISOString() : ''
   const routes = importRouteIds.slice().sort().join(',')
   const content = `${useTitle}|${useAbstract}|${useFulltext}|${useFulltextNoImages}`
-  return `${projectId}|${projectModelId}|${from}|${to}|${routes}|${content}|${dirtyToken ?? 'null'}|${lastCompletedRefreshToken ?? 'null'}`
+  return `${projectId}|${projectModelId}|${from}|${to}|${routes}|${content}|${dirtyToken ?? 'null'}|${lastCompletedDirtyToken ?? 'null'}`
 }
 
 const getProjectMartFreshnessState = async (
   projectId: string,
   db: JudgmentJobSqliteHealthProjectionReader = getAppDatabaseService(),
 ): Promise<ProjectMartFreshnessState> => {
-  const [row] = await db.queryJson<{dirtyToken: number | null; lastCompletedRefreshToken: number | null}>(`
+  const [row] = await db.queryJson<{dirtyToken: number | null; lastCompletedDirtyToken: number | null}>(`
     SELECT
       CAST(dirty_token AS INTEGER) AS dirtyToken,
-      CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken
+      CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken
     FROM app.project_mart_refresh_state
     WHERE project_id = ${getSqlLiteral(projectId)}
     LIMIT 1
   `)
   const dirtyToken = row?.dirtyToken ?? null
-  const lastCompletedRefreshToken = row?.lastCompletedRefreshToken ?? null
+  const lastCompletedDirtyToken = row?.lastCompletedDirtyToken ?? null
 
   return {
     dirtyToken,
-    isFresh: dirtyToken === null || (lastCompletedRefreshToken !== null && lastCompletedRefreshToken >= dirtyToken),
-    lastCompletedRefreshToken,
+    isFresh: dirtyToken === null || (lastCompletedDirtyToken !== null && lastCompletedDirtyToken >= dirtyToken),
+    lastCompletedDirtyToken,
   }
 }
 
@@ -2811,7 +2811,7 @@ export const judgmentsJobsRoutes = new Elysia()
         job.useFulltext,
         job.useFulltextNoImages,
         freshness.dirtyToken,
-        freshness.lastCompletedRefreshToken,
+        freshness.lastCompletedDirtyToken,
       )
       const cached = unassessedCountCache.get(cacheKey)
       const now = Date.now()

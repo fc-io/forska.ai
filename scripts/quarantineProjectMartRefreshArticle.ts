@@ -1,5 +1,5 @@
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
-import {getProjectMartRefreshStateService} from '../src/server/services/projectMartRefreshStateService.ts'
+import {getProjectMartDirtyRefreshStateService} from '../src/server/services/projectMartDirtyRefreshStateService.ts'
 
 const getArgValue = (names: string[]) => {
   const matchedArgument = process.argv.slice(2).find((argument) => {
@@ -27,7 +27,7 @@ const quarantineProjectMartRefreshArticle = async () => {
     getArgValue(['--error'])
     ?? 'DuckDB/Bun native crash while refreshing judgment_fact for this article. Quarantined pending durable table-refresh repair.'
   const detectedBy = getArgValue(['--detectedBy', '--detected-by']) ?? `manual:${process.pid}`
-  const service = getProjectMartRefreshStateService()
+  const service = getProjectMartDirtyRefreshStateService()
 
   try {
     const quarantineRecord = await service.quarantineProjectRefreshArticle({articleId, detectedBy, error})

@@ -325,9 +325,9 @@ type ProjectMartLargeRebuildOperatorStatus = {
   } | null
   project: {archived: boolean; id: string; name: string}
   refreshState: {
-    activeRefreshToken: number
+    activeDirtyToken: number
     dirtyToken: number
-    lastCompletedRefreshToken: number
+    lastCompletedDirtyToken: number
     lastError: string | null
     refreshStatus: string
     workerId: string | null
@@ -403,17 +403,17 @@ const getProjectMartLargeRebuildOperatorStatus = async (
   }
 
   const [refreshState] = await appDatabaseService.queryJson<{
-    activeRefreshToken: number
+    activeDirtyToken: number
     dirtyToken: number
-    lastCompletedRefreshToken: number
+    lastCompletedDirtyToken: number
     lastError: string | null
     refreshStatus: string
     workerId: string | null
   }>(`
     SELECT
-      CAST(active_refresh_token AS INTEGER) AS activeRefreshToken,
+      CAST(active_dirty_token AS INTEGER) AS activeDirtyToken,
       CAST(dirty_token AS INTEGER) AS dirtyToken,
-      CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken,
+      CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken,
       last_error AS lastError,
       refresh_status AS refreshStatus,
       worker_id AS workerId

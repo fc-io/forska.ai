@@ -3,7 +3,7 @@ import {writeFile} from 'node:fs/promises'
 import {getJudgmentJobSqlitePath} from '../src/server/cron/judgmentsJobs/judgmentJobPaths.ts'
 import {getAppDatabaseService, type JudgmentInsertRow} from '../src/server/services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
-import {getProjectMartRefreshStateService} from '../src/server/services/projectMartRefreshStateService.ts'
+import {getProjectMartDirtyRefreshStateService} from '../src/server/services/projectMartDirtyRefreshStateService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 
 type CliOptions = {jobId: string | null}
@@ -364,7 +364,7 @@ const importRecoveredOutboxEntries = async (
       return
     }
 
-    await getProjectMartRefreshStateService().markArticleProjectsDirtyAtomically({
+    await getProjectMartDirtyRefreshStateService().markArticleProjectsDirtyAtomically({
       articleIds,
       reason: 'systemSqliteRecovery',
       requestedBy: 'recoverJudgmentJobWithSystemSqlite',

@@ -1288,8 +1288,8 @@ test('keeps the previous refresh acknowledgement seq when mart visibility acknow
     throw new Error('Test database not initialized')
   }
 
-  const {getProjectMartRefreshStateService} = await import('../../services/projectMartRefreshStateService.ts')
-  const refreshStateService = getProjectMartRefreshStateService()
+  const {getProjectMartDirtyRefreshStateService} = await import('../../services/projectMartDirtyRefreshStateService.ts')
+  const refreshStateService = getProjectMartDirtyRefreshStateService()
   const originalMarkArticleProjectsDirtyAtomically = refreshStateService.markArticleProjectsDirtyAtomically
   const service = sqliteService()
   const connectionId = `connection-ack-fail-${Date.now()}`

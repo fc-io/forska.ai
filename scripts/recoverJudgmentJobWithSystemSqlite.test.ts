@@ -297,7 +297,7 @@ const runSmokeTest = async (scriptPath: string) => {
       articleStateRows: number | string
       dirtyToken: number | string
       judgmentRows: number | string
-      lastCompletedRefreshToken: number | string
+      lastCompletedDirtyToken: number | string
     }>(
       duckdbPath,
       `
@@ -305,7 +305,7 @@ const runSmokeTest = async (scriptPath: string) => {
           (SELECT COUNT(*) FROM app.judgment WHERE id = 'judgment-sqlite-recovery-test') AS judgmentRows,
           (SELECT COUNT(*) FROM app.project_mart_refresh_article_state WHERE project_id = 'project-sqlite-recovery-test' AND article_id = 'article-sqlite-recovery-test') AS articleStateRows,
           (SELECT dirty_token FROM app.project_mart_refresh_state WHERE project_id = 'project-sqlite-recovery-test') AS dirtyToken,
-          (SELECT last_completed_refresh_token FROM app.project_mart_refresh_state WHERE project_id = 'project-sqlite-recovery-test') AS lastCompletedRefreshToken
+          (SELECT last_completed_dirty_token FROM app.project_mart_refresh_state WHERE project_id = 'project-sqlite-recovery-test') AS lastCompletedDirtyToken
       `,
     )
 
@@ -328,7 +328,7 @@ const runSmokeTest = async (scriptPath: string) => {
     expect(Number(stateRow?.judgmentRows ?? 0)).toBe(1)
     expect(Number(stateRow?.articleStateRows ?? 0)).toBe(1)
     expect(Number(stateRow?.dirtyToken ?? 0)).toBe(1)
-    expect(Number(stateRow?.lastCompletedRefreshToken ?? 0)).toBe(0)
+    expect(Number(stateRow?.lastCompletedDirtyToken ?? 0)).toBe(0)
     expect(Number(sqliteCounts.outboxRows ?? 0)).toBe(0)
     expect(Number(sqliteCounts.queueRows ?? 0)).toBe(0)
   } finally {

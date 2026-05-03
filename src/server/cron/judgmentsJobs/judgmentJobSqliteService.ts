@@ -391,9 +391,9 @@ type PromptCompletionAckRow = {
 
 type JudgmentJobStorageRow = {id: string}
 
-type ProjectRefreshAckStateRow = {lastCompletedRefreshToken: number | null; projectId: string}
+type ProjectRefreshAckStateRow = {lastCompletedDirtyToken: number | null; projectId: string}
 
-type ProjectRefreshVisibilityStateRow = {dirtyToken: number | null; lastCompletedRefreshToken: number | null}
+type ProjectRefreshVisibilityStateRow = {dirtyToken: number | null; lastCompletedDirtyToken: number | null}
 
 type WalCheckpointRow = {busy: number; checkpointed: number; log: number}
 type PendingCompletionAckRow = {count: number; exportedAt: string | null}
@@ -1329,7 +1329,7 @@ const getTrackedProjectRefreshAckStates = async (projectId?: string) => {
   return getAppDatabaseService().queryJson<ProjectRefreshAckStateRow>(`
     SELECT
       project_id AS projectId,
-      CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken
+      CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken
     FROM app.project_mart_refresh_state
     WHERE project_id IN (
       SELECT DISTINCT project_id
@@ -1372,7 +1372,7 @@ const reconcileProjectRefreshAcks = async ({projectId}: {projectId?: string} = {
       return (
         updatedCount
         + (await publishProjectRefreshAckForProject({
-          ackToken: currentState.lastCompletedRefreshToken,
+          ackToken: currentState.lastCompletedDirtyToken,
           projectId: currentState.projectId,
         }))
       )
@@ -2027,7 +2027,7 @@ const getProjectRefreshVisibilityStateForJob = async (
   const [row] = await getAppDatabaseService().queryJson<ProjectRefreshVisibilityStateRow>(`
     SELECT
       CAST(pmrs.dirty_token AS INTEGER) AS dirtyToken,
-      CAST(pmrs.last_completed_refresh_token AS INTEGER) AS lastCompletedRefreshToken
+      CAST(pmrs.last_completed_dirty_token AS INTEGER) AS lastCompletedDirtyToken
     FROM app.judgment_job jj
     INNER JOIN app.project_mart_refresh_state pmrs ON pmrs.project_id = jj.project_id
     WHERE jj.id = ${getSqlLiteral(jobId)}

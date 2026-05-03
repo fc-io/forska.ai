@@ -25,7 +25,7 @@ const queryJsonRef = {
 }
 
 const getFreshnessRow = (overrides: Partial<Record<string, unknown>> = {}) => {
-  return {dirtyToken: null, lastCompletedRefreshToken: null, refreshStatus: 'idle', ...overrides}
+  return {dirtyToken: null, lastCompletedDirtyToken: null, refreshStatus: 'idle', ...overrides}
 }
 
 const registerModuleMocks = () => {
@@ -313,7 +313,7 @@ test('project review details keeps active detail mart rows while surfacing stale
     return statement.includes('FROM app.project_prompt pp')
       ? [getPromptRow('prompt-1', 0)]
       : statement.includes('FROM app.project_mart_refresh_state')
-        ? [getFreshnessRow({dirtyToken: 4, lastCompletedRefreshToken: 3, refreshStatus: 'failed'})]
+        ? [getFreshnessRow({dirtyToken: 4, lastCompletedDirtyToken: 3, refreshStatus: 'failed'})]
         : statement.includes('FROM mart.review_article_serving_detail j')
           ? ((detailQueryCount += 1),
             [
@@ -374,7 +374,7 @@ test('project review details keeps active detail mart rows while surfacing runni
     return statement.includes('FROM app.project_prompt pp')
       ? [getPromptRow('prompt-1', 0)]
       : statement.includes('FROM app.project_mart_refresh_state')
-        ? [getFreshnessRow({dirtyToken: 5, lastCompletedRefreshToken: 4, refreshStatus: 'running'})]
+        ? [getFreshnessRow({dirtyToken: 5, lastCompletedDirtyToken: 4, refreshStatus: 'running'})]
         : statement.includes('FROM mart.review_article_serving_detail j')
           ? ((detailQueryCount += 1),
             [
@@ -440,7 +440,7 @@ test('project review details raw fallback query uses project-visible scope witho
     return statement.includes('FROM app.project_prompt pp')
       ? [getPromptRow('prompt-1', 0)]
       : statement.includes('FROM app.project_mart_refresh_state')
-        ? [getFreshnessRow({dirtyToken: 5, lastCompletedRefreshToken: 4, refreshStatus: 'running'})]
+        ? [getFreshnessRow({dirtyToken: 5, lastCompletedDirtyToken: 4, refreshStatus: 'running'})]
         : []
   }
 

@@ -176,8 +176,8 @@ test('admin project mart large rebuild status route returns explicit operator pr
           INSERT INTO app.project_mart_refresh_state (
             project_id,
             dirty_token,
-            active_refresh_token,
-            last_completed_refresh_token,
+            active_dirty_token,
+            last_completed_dirty_token,
             refresh_status,
             last_error,
             worker_id
@@ -274,9 +274,9 @@ test('admin project mart large rebuild status route returns explicit operator pr
         } | null
         project: {archived: boolean; id: string; name: string}
         refreshState: {
-          activeRefreshToken: number
+          activeDirtyToken: number
           dirtyToken: number
-          lastCompletedRefreshToken: number
+          lastCompletedDirtyToken: number
           lastError: string | null
           refreshStatus: string
           workerId: string | null
@@ -291,9 +291,9 @@ test('admin project mart large rebuild status route returns explicit operator pr
     expect(responseBody.laterStatus).toBe(200)
     expect(setupBody.project).toEqual({archived: false, id: 'project-admin-large-rebuild', name: 'Admin Large Rebuild'})
     expect(setupBody.refreshState).toEqual({
-      activeRefreshToken: 0,
+      activeDirtyToken: 0,
       dirtyToken: 7,
-      lastCompletedRefreshToken: 3,
+      lastCompletedDirtyToken: 3,
       lastError: null,
       refreshStatus: 'idle',
       workerId: null,
@@ -799,7 +799,7 @@ test('admin project mart large rebuild run route triggers bounded rebuild cycles
           VALUES ('project-admin-large-rebuild-run', 'Admin Large Rebuild Run', FALSE, 'model-admin-large-rebuild-run', TRUE, TRUE, FALSE, FALSE)
         \`)
         await database.run(\`
-          INSERT INTO app.project_mart_refresh_state (project_id, dirty_token, active_refresh_token, last_completed_refresh_token, refresh_status)
+          INSERT INTO app.project_mart_refresh_state (project_id, dirty_token, active_dirty_token, last_completed_dirty_token, refresh_status)
           VALUES ('project-admin-large-rebuild-run', 0, 0, 0, 'idle')
         \`)
         await database.run(\`

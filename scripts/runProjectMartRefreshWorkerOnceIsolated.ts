@@ -5,7 +5,7 @@ import {getDuckdbMartRefreshService} from '../src/server/services/getDuckdbMartR
 import {getMaintenanceWorkLeaseService} from '../src/server/services/maintenanceWorkLeaseService.ts'
 import {runProjectMartLargeRebuildCycle} from '../src/server/services/projectMartLargeRebuildRunner.ts'
 import {getProjectMartLargeRebuildStateService} from '../src/server/services/projectMartLargeRebuildStateService.ts'
-import {getProjectMartRefreshStateService} from '../src/server/services/projectMartRefreshStateService.ts'
+import {getProjectMartDirtyRefreshStateService} from '../src/server/services/projectMartDirtyRefreshStateService.ts'
 
 type CliOptions = {
   heartbeatMs: number | undefined
@@ -85,7 +85,7 @@ const claimProject = async ({
   projectId?: string
   workerId: string
 }) => {
-  const stateService = getProjectMartRefreshStateService()
+  const stateService = getProjectMartDirtyRefreshStateService()
 
   if (!projectId) {
     const [claim] = await stateService.claimDirtyProjects({leaseMs, limit: 1, workerId})
@@ -97,7 +97,7 @@ const claimProject = async ({
   const [claim] = await getAppDatabaseService().queryJson<Claim>(`
     UPDATE app.project_mart_refresh_state
     SET
-      active_refresh_token = dirty_token,
+      active_dirty_token = dirty_token,
       refresh_status = 'running',
       last_started_at = TIMESTAMPTZ '${currentNow.toISOString()}',
       last_error = NULL,
@@ -105,7 +105,7 @@ const claimProject = async ({
       lease_expires_at = TIMESTAMPTZ '${leaseExpiresAt}',
       updated_at = TIMESTAMPTZ '${currentNow.toISOString()}'
     WHERE project_id = '${projectId}'
-      AND dirty_token > last_completed_refresh_token
+      AND dirty_token > last_completed_dirty_token
       AND (
         refresh_status <> 'running'
         OR lease_expires_at IS NULL
@@ -114,8 +114,8 @@ const claimProject = async ({
     RETURNING
       project_id AS projectId,
       worker_id AS workerId,
-      CAST(active_refresh_token AS INTEGER) AS claimedToken,
-      CAST(last_completed_refresh_token AS INTEGER) AS lastCompletedToken
+      CAST(active_dirty_token AS INTEGER) AS claimedToken,
+      CAST(last_completed_dirty_token AS INTEGER) AS lastCompletedToken
   `)
 
   if (claim) {
@@ -134,7 +134,7 @@ const claimProject = async ({
 }
 
 const startHeartbeat = (claim: Claim, heartbeatMs: number, leaseMs: number) => {
-  const stateService = getProjectMartRefreshStateService()
+  const stateService = getProjectMartDirtyRefreshStateService()
   const interval = setInterval(() => {
     return void stateService.heartbeatClaim({leaseMs, projectId: claim.projectId, workerId: claim.workerId})
   }, heartbeatMs)
@@ -149,7 +149,7 @@ const startHeartbeat = (claim: Claim, heartbeatMs: number, leaseMs: number) => {
 export const runProjectMartRefreshWorkerOnceIsolated = async () => {
   const options = getCliOptions()
   const largeRebuildStateService = getProjectMartLargeRebuildStateService()
-  const stateService = getProjectMartRefreshStateService()
+  const stateService = getProjectMartDirtyRefreshStateService()
   const refreshService = getDuckdbMartRefreshService()
 
   try {

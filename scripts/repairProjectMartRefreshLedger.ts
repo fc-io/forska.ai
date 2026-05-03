@@ -5,8 +5,8 @@ const projectMartRefreshStateCreateSql = `
   CREATE TABLE app.project_mart_refresh_state (
     project_id VARCHAR PRIMARY KEY REFERENCES app.project(id),
     dirty_token BIGINT NOT NULL DEFAULT 0,
-    active_refresh_token BIGINT NOT NULL DEFAULT 0,
-    last_completed_refresh_token BIGINT NOT NULL DEFAULT 0,
+    active_dirty_token BIGINT NOT NULL DEFAULT 0,
+    last_completed_dirty_token BIGINT NOT NULL DEFAULT 0,
     last_requested_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
     last_request_reason VARCHAR,
     requested_by VARCHAR,
@@ -24,7 +24,7 @@ const projectMartRefreshStateCreateSql = `
 
 const projectMartRefreshStateIndexSql = `
   CREATE INDEX idx_app_project_mart_refresh_state_claim
-  ON app.project_mart_refresh_state(refresh_status, dirty_token, last_completed_refresh_token);
+  ON app.project_mart_refresh_state(refresh_status, dirty_token, last_completed_dirty_token);
 
   CREATE INDEX idx_app_project_mart_refresh_state_stale_work
   ON app.project_mart_refresh_state(refresh_status, lease_expires_at);
@@ -59,8 +59,8 @@ const rebuildProjectMartRefreshState = async () => {
     INSERT INTO app.project_mart_refresh_state (
       project_id,
       dirty_token,
-      active_refresh_token,
-      last_completed_refresh_token,
+      active_dirty_token,
+      last_completed_dirty_token,
       last_requested_at,
       last_request_reason,
       requested_by,
@@ -77,8 +77,8 @@ const rebuildProjectMartRefreshState = async () => {
     SELECT
       project_id,
       dirty_token,
-      active_refresh_token,
-      last_completed_refresh_token,
+      active_dirty_token,
+      last_completed_dirty_token,
       last_requested_at,
       last_request_reason,
       requested_by,
