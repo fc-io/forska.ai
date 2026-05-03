@@ -11,6 +11,10 @@ import {
   stringifyRequestAttempts,
   withDurableCloseoutRef,
 } from '../../server/cron/judgmentsJobs/judgmentRequestAttemptManifest.ts'
+import {
+  compactClosedOutRequestAttemptManifestEntries,
+  recordRequestAttemptsEnteringPersistence,
+} from '../../server/cron/judgmentsJobs/judgmentRequestAttemptManifestStore.ts'
 import {getAppDatabaseService} from '../../server/services/appDatabaseService.ts'
 import {escapeSqlString} from '../../server/services/appQueryHelpers.ts'
 import type {ContentSettings} from './judgeGetPrompt.ts'
@@ -65,6 +69,7 @@ const enqueueOwnerBackedCompletion = async ({
     requestAttempts,
   })
 
+  await recordRequestAttemptsEnteringPersistence(requestAttempts)
   await enqueueJudgeWorkerCompletion({
     answeredOriginal,
     answeredOriginalAsArray,
@@ -92,6 +97,7 @@ const enqueueOwnerBackedCompletion = async ({
     useFulltextNoImages: contentSettings.useFulltextNoImages,
     useTitle: contentSettings.useTitle,
   })
+  await compactClosedOutRequestAttemptManifestEntries(completionRequestAttempts)
 }
 
 export const storeSinglePromptJudgment = async ({
@@ -194,6 +200,7 @@ export const storeSinglePromptJudgment = async ({
         ref: {id: judgmentId, jobId: judgmentsJobId, queueRecordId},
         requestAttempts,
       })
+      await recordRequestAttemptsEnteringPersistence(requestAttempts)
       const persisted = await sqliteService.recordJudgmentSuccess(judgmentsJobId, {
         answeredOriginal,
         answeredOriginalAsArray: answeredOriginalAsArray ?? [],
@@ -226,6 +233,8 @@ export const storeSinglePromptJudgment = async ({
       if (persisted === null) {
         throw new Error('SQLite judgment job database is unavailable')
       }
+
+      await compactClosedOutRequestAttemptManifestEntries(localRequestAttempts)
     } catch (error) {
       throw new JudgmentPersistenceError(`Failed to persist SQLite judgment for ${article.id}:${promptId}`, {
         cause: error,

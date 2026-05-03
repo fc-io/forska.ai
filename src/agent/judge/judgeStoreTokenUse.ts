@@ -4,6 +4,10 @@ import {
   stringifyRequestAttempts,
   withDurableCloseoutRef,
 } from '../../server/cron/judgmentsJobs/judgmentRequestAttemptManifest.ts'
+import {
+  compactClosedOutRequestAttemptManifestEntries,
+  recordRequestAttemptsEnteringPersistence,
+} from '../../server/cron/judgmentsJobs/judgmentRequestAttemptManifestStore.ts'
 import {markJudgmentRequestsPersisted} from '../../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {getTokenUseQueryService} from '../../server/services/tokenUseQueryService.ts'
 import {parseDuckdbMemoryLimitToMiB} from '../../server/utils/duckdbMemoryLimit.ts'
@@ -205,6 +209,7 @@ const storeTokenUseDirectly = async (
     startedAt,
     tokenUseEntries,
   })
+  await recordRequestAttemptsEnteringPersistence(requestAttempts)
   const result = await getTokenUseQueryService().insertTokenUse({
     id: tokenUseId,
     judgment_job_id: judgmentsJobId ?? null,
@@ -240,6 +245,8 @@ const storeTokenUseDirectly = async (
   if (!result) {
     throw new Error('Failed to store token usage in database')
   }
+
+  await compactClosedOutRequestAttemptManifestEntries(requestAttempts)
 }
 
 const storeTokenUseViaAPI = async (
@@ -255,6 +262,7 @@ const storeTokenUseViaAPI = async (
     startedAt,
     tokenUseEntries,
   })
+  await recordRequestAttemptsEnteringPersistence(requestAttempts)
   const response = await apiClient.api.tokens.usage.post({
     judgmentsJobId,
     sglangModel: totalTokenUse.modelName ?? undefined,
@@ -292,6 +300,8 @@ const storeTokenUseViaAPI = async (
     console.error(new Error(errorMessage))
     throw new Error(errorMessage)
   }
+
+  await compactClosedOutRequestAttemptManifestEntries(requestAttempts)
 }
 
 const storeTokenUseInJudgeWorkerCompletionOutbox = async (
@@ -314,7 +324,8 @@ const storeTokenUseInJudgeWorkerCompletionOutbox = async (
     tokenUseEntries,
   })
 
-  await attachTokenUseToPendingJudgeWorkerCompletion({
+  await recordRequestAttemptsEnteringPersistence(requestAttempts)
+  const attached = await attachTokenUseToPendingJudgeWorkerCompletion({
     articleId: firstEntry.articleId,
     jobId: judgmentsJobId,
     promptIds: firstEntry.promptIds,
@@ -348,6 +359,10 @@ const storeTokenUseInJudgeWorkerCompletionOutbox = async (
       requestAttempts,
     },
   })
+
+  if (attached) {
+    await compactClosedOutRequestAttemptManifestEntries(requestAttempts)
+  }
 }
 
 export const buildTokenUseTotals = (tokenUseEntries: JudgeTokenUsageEntry[]): TokenUseTotals => {

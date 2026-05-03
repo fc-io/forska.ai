@@ -13,8 +13,15 @@ const judgmentsRequestRuntimeModulePath = new URL(
 const tokenUseQueryServiceModulePath = new URL('../../server/services/tokenUseQueryService.ts', import.meta.url)
   .pathname
 
-const markJudgmentRequestsPersisted = mock(() => {})
-const attachTokenUseToPendingJudgeWorkerCompletion = mock(async () => true)
+const markJudgmentRequestsPersisted = mock(() => {
+  return undefined
+})
+const attachTokenUseToPendingJudgeWorkerCompletion = mock(async () => {
+  return true
+})
+const mutateAcceptedClaimRequestAttemptManifest = mock(async () => {
+  return undefined
+})
 const insertTokenUse = mock(async () => {
   return {id: 'token-use-1'}
 })
@@ -59,7 +66,13 @@ void mock.module(apiClientModulePath, () => {
 })
 
 void mock.module(judgeWorkerCompletionJournalModulePath, () => {
-  return {attachTokenUseToPendingJudgeWorkerCompletion}
+  return {
+    attachTokenUseToPendingJudgeWorkerCompletion,
+    mutateAcceptedClaimRequestAttemptManifest,
+    shouldUseJudgeWorkerOwnerHandoff: () => {
+      return false
+    },
+  }
 })
 
 void mock.module(judgmentsRequestRuntimeModulePath, () => {
@@ -158,11 +171,11 @@ test('judgeStoreTokenUse journals low-memory judge-worker token use and clears p
   markJudgmentRequestsPersisted.mockClear()
 
   try {
-    const {judgeStoreTokenUse} = (await import(
+    const judgeStoreTokenUseModule = (await import(
       `./judgeStoreTokenUse.ts?skip-token-use=${Date.now()}`
     )) as typeof import('./judgeStoreTokenUse.ts')
 
-    await judgeStoreTokenUse(
+    await judgeStoreTokenUseModule.judgeStoreTokenUse(
       [buildEntry({outcome: 'success', error: null})],
       null,
       {duration: 1000, finishedAt: '2026-04-21T12:00:01.000Z', startedAt: '2026-04-21T12:00:00.000Z'},
@@ -171,13 +184,12 @@ test('judgeStoreTokenUse journals low-memory judge-worker token use and clears p
 
     expect(insertTokenUse).not.toHaveBeenCalled()
     expect(attachTokenUseToPendingJudgeWorkerCompletion).toHaveBeenCalledWith(
-      expect.objectContaining({
-        articleId: 'article-1',
-        jobId: 'job-1',
-        promptIds: ['prompt-1'],
-        tokenUse: expect.objectContaining({totalTokens: 15}),
-      }),
+      expect.objectContaining({articleId: 'article-1', jobId: 'job-1', promptIds: ['prompt-1']}),
     )
+    const attachCalls = attachTokenUseToPendingJudgeWorkerCompletion.mock.calls as Array<
+      [{tokenUse: {totalTokens: number}}]
+    >
+    expect(attachCalls[0]?.[0].tokenUse.totalTokens).toBe(15)
     expect(markJudgmentRequestsPersisted).toHaveBeenCalledWith('job-1', 1)
   } finally {
     if (previousServerRole === undefined) {

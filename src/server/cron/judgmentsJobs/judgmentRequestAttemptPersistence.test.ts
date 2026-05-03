@@ -10,9 +10,12 @@ import {
   enqueueJudgeWorkerCompletion,
   type JudgeWorkerCompletionPayload,
   type JudgeWorkerTokenUseSummary,
+  mutateAcceptedClaimRequestAttemptManifest,
+  recordAcceptedJudgeWorkerClaims,
   resetJudgeWorkerCompletionJournalForTests,
 } from './judgeWorkerCompletionJournal.ts'
-import type {JudgmentRequestAttemptJsonEntry} from './judgmentRequestAttemptManifest.ts'
+import {type JudgmentRequestAttemptJsonEntry, withDurableCloseoutRef} from './judgmentRequestAttemptManifest.ts'
+import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 
 const originalEnv = {
   API_SERVER_PORT: process.env.API_SERVER_PORT,
@@ -74,6 +77,34 @@ const completionPayload: JudgeWorkerCompletionPayload = {
   queueRecordId: 'queue-a',
   requestAttempts: [requestAttempt],
   status: 'judged',
+  useAbstract: true,
+  useFulltext: false,
+  useFulltextNoImages: false,
+  useTitle: true,
+}
+
+const acceptedClaim: PromptToProcess = {
+  articleId: 'article-a',
+  claimId: 'claim-a',
+  executionSnapshotHash: 'snapshot-hash-a',
+  executionSnapshotId: 'snapshot-a',
+  jobId: 'job-a',
+  maxInflightRequests: null,
+  modelBaseUrl: 'http://provider.test/v1',
+  modelId: 'model-a',
+  modelMetadataJson: null,
+  modelName: 'model-a',
+  modelProvider: 'openai',
+  modelSecretRef: null,
+  modelVersion: null,
+  modelWorkerUrls: [],
+  projectId: 'project-a',
+  promptId: 'prompt-a',
+  providerConnectionId: null,
+  providerKey: 'provider:openai:default',
+  providerMaxInflightRequests: null,
+  providerUsesFamilyDefault: true,
+  recordId: 'queue-a',
   useAbstract: true,
   useFulltext: false,
   useFulltextNoImages: false,
@@ -179,4 +210,70 @@ test('pending token use and completion outbox retain exact request attempt evide
   expect(completionRequestAttempts[0]?.closeoutKind).toBe('pending_token_use')
   expect(completionRequestAttempts[0]?.queueRecordId).toBe('queue-a')
   expect(completionRequestAttempts[0]?.requestAttemptId).toBe('attempt-a')
+})
+
+test('accepted claim manifest CAS writes preserve siblings and compact after durable closeout', async () => {
+  const journalPath = setupJournalPath()
+  const siblingAttempt = {
+    ...requestAttempt,
+    requestAttemptId: 'attempt-b',
+    startedAt: '2026-05-03T12:00:02.000Z',
+  } satisfies JudgmentRequestAttemptJsonEntry
+
+  await recordAcceptedJudgeWorkerClaims([acceptedClaim])
+  await mutateAcceptedClaimRequestAttemptManifest({
+    mutation: {mergeEntries: [{...requestAttempt, closeoutKind: 'slot_wait', durableCloseoutRef: null}]},
+    owner: {
+      articleId: 'article-a',
+      claimId: 'claim-a',
+      jobId: 'job-a',
+      kind: 'accepted_claim',
+      promptId: 'prompt-a',
+      promptIds: ['prompt-a'],
+      queueRecordId: 'queue-a',
+    },
+  })
+  await mutateAcceptedClaimRequestAttemptManifest({
+    mutation: {mergeEntries: [{...siblingAttempt, closeoutKind: 'slot_wait', durableCloseoutRef: null}]},
+    owner: {
+      articleId: 'article-a',
+      claimId: 'claim-a',
+      jobId: 'job-a',
+      kind: 'accepted_claim',
+      promptId: 'prompt-a',
+      promptIds: ['prompt-a'],
+      queueRecordId: 'queue-a',
+    },
+  })
+
+  const durableAttempt = withDurableCloseoutRef({
+    closeoutKind: 'completion_outbox',
+    ref: {claimId: 'claim-a', jobId: 'job-a', queueRecordId: 'queue-a'},
+    requestAttempts: [requestAttempt],
+  })
+  await enqueueJudgeWorkerCompletion({...completionPayload, requestAttempts: durableAttempt})
+
+  const database = new Database(journalPath, {readonly: true})
+  const row = database
+    .query(
+      `
+        SELECT
+          request_attempt_manifest_json AS requestAttemptManifestJson,
+          request_attempt_manifest_version AS requestAttemptManifestVersion
+        FROM accepted_claim
+        WHERE claim_id = 'claim-a'
+        LIMIT 1
+      `,
+    )
+    .get() as {requestAttemptManifestJson: string; requestAttemptManifestVersion: number} | null
+  database.close(false)
+
+  const manifestEntries = parseRequestAttempts(row?.requestAttemptManifestJson)
+
+  expect(row?.requestAttemptManifestVersion).toBe(3)
+  expect(
+    manifestEntries.map((entry) => {
+      return entry.requestAttemptId
+    }),
+  ).toEqual(['attempt-b'])
 })

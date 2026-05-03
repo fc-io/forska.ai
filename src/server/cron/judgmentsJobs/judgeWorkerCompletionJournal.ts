@@ -9,9 +9,20 @@ import {getEnv} from '../../utils/env.ts'
 import {getCurrentJudgeWorkerJournalIdentity} from '../../utils/judgeWorkerJournalIdentity.ts'
 import {createRateLimitedLogger} from '../../utils/rateLimitedLogger.ts'
 import {
+  appendRequestAttemptManifestRepairMarker,
+  createRequestAttemptManifestRepairMarker,
+  getRequestAttemptManifestMutationIds,
+  getRequestAttemptManifestOwnerId,
   type JudgmentRequestAttemptJsonEntry,
+  JudgmentRequestAttemptManifestCasExhaustedError,
+  type JudgmentRequestAttemptManifestMutation,
+  type JudgmentRequestAttemptManifestOwner,
+  mutateRequestAttemptManifestEntries,
   parseRequestAttempts,
+  requestAttemptManifestChanged,
   requestAttemptManifestVersion,
+  shouldExhaustRequestAttemptManifestCas,
+  stringifyManifestEntries,
   stringifyRequestAttempts,
 } from './judgmentRequestAttemptManifest.ts'
 import type {RunningJudgmentJob} from './judgmentsJobsGetRunningJobs.ts'
@@ -112,6 +123,12 @@ type CompletionOutboxRow = {
 type CompletionReplayResult = {ackedCount: number; discardedCount: number; failedCount: number}
 type CompletionSendResult = {claimId: string; queueRecordId: string; status: string}
 type PendingTokenUseJsonRow = {requestAttemptsJson: string | null; tokenUseJson: string}
+type AcceptedClaimManifestOwner = Extract<JudgmentRequestAttemptManifestOwner, {kind: 'accepted_claim'}>
+type AcceptedClaimManifestRow = {
+  requestAttemptManifestJson: string | null
+  requestAttemptManifestRepairJson: string | null
+  requestAttemptManifestVersion: number
+}
 type PendingTokenUseRow = {
   articleId: string
   claimId: string
@@ -200,6 +217,7 @@ const openJournalDatabase = (): Database => {
       payload_json TEXT NOT NULL,
       request_attempt_manifest_json TEXT NOT NULL DEFAULT '[]',
       request_attempt_manifest_version INTEGER NOT NULL DEFAULT 0,
+      request_attempt_manifest_repair_json TEXT,
       accepted_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -273,6 +291,7 @@ const ensureAcceptedClaimSchema = (database: Database): void => {
   const missingColumns = [
     {name: 'request_attempt_manifest_json', sql: `TEXT NOT NULL DEFAULT '[]'`},
     {name: 'request_attempt_manifest_version', sql: `INTEGER NOT NULL DEFAULT 0`},
+    {name: 'request_attempt_manifest_repair_json', sql: 'TEXT'},
   ].filter((column) => {
     return !existingColumns.has(column.name)
   })
@@ -472,13 +491,12 @@ export const recordAcceptedJudgeWorkerClaims = async (claims: PromptToProcess[])
       payload_json,
       request_attempt_manifest_json,
       request_attempt_manifest_version,
+      request_attempt_manifest_repair_json,
       accepted_at,
       updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(claim_id) DO UPDATE SET
       payload_json = EXCLUDED.payload_json,
-      request_attempt_manifest_json = EXCLUDED.request_attempt_manifest_json,
-      request_attempt_manifest_version = EXCLUDED.request_attempt_manifest_version,
       updated_at = EXCLUDED.updated_at
   `)
   const now = new Date().toISOString()
@@ -492,12 +510,186 @@ export const recordAcceptedJudgeWorkerClaims = async (claims: PromptToProcess[])
         JSON.stringify(claim),
         '[]',
         requestAttemptManifestVersion,
+        null,
         now,
         now,
       )
       return count + 1
     }, 0)
   })(claims)
+}
+
+const getAcceptedClaimManifestRow = (
+  database: Database,
+  owner: AcceptedClaimManifestOwner,
+): AcceptedClaimManifestRow | null => {
+  return database
+    .query(
+      `
+        SELECT
+          request_attempt_manifest_json AS requestAttemptManifestJson,
+          request_attempt_manifest_version AS requestAttemptManifestVersion,
+          request_attempt_manifest_repair_json AS requestAttemptManifestRepairJson
+        FROM accepted_claim
+        WHERE claim_id = ?
+          AND job_id = ?
+          AND queue_record_id = ?
+        LIMIT 1
+      `,
+    )
+    .get(owner.claimId, owner.jobId, owner.queueRecordId) as AcceptedClaimManifestRow | null
+}
+
+const updateAcceptedClaimManifestRow = ({
+  database,
+  expectedVersion,
+  json,
+  owner,
+}: {
+  database: Database
+  expectedVersion: number
+  json: string
+  owner: AcceptedClaimManifestOwner
+}): boolean => {
+  const result = database
+    .query(
+      `
+        UPDATE accepted_claim
+        SET request_attempt_manifest_json = ?,
+            request_attempt_manifest_version = request_attempt_manifest_version + 1,
+            updated_at = ?
+        WHERE claim_id = ?
+          AND job_id = ?
+          AND queue_record_id = ?
+          AND request_attempt_manifest_version = ?
+      `,
+    )
+    .run(json, new Date().toISOString(), owner.claimId, owner.jobId, owner.queueRecordId, expectedVersion) as {
+    changes?: number
+  }
+
+  return Number(result.changes ?? 0) === 1
+}
+
+const appendAcceptedClaimManifestRepairMarker = ({
+  database,
+  owner,
+  reason,
+  requestAttemptIds,
+}: {
+  database: Database
+  owner: AcceptedClaimManifestOwner
+  reason: string
+  requestAttemptIds: string[]
+}): void => {
+  const row = getAcceptedClaimManifestRow(database, owner)
+
+  if (!row) {
+    return
+  }
+
+  const markerJson = appendRequestAttemptManifestRepairMarker({
+    currentJson: row.requestAttemptManifestRepairJson,
+    marker: createRequestAttemptManifestRepairMarker({owner, reason, requestAttemptIds}),
+  })
+
+  database
+    .query(
+      `
+        UPDATE accepted_claim
+        SET request_attempt_manifest_repair_json = ?,
+            updated_at = ?
+        WHERE claim_id = ?
+          AND job_id = ?
+          AND queue_record_id = ?
+      `,
+    )
+    .run(markerJson, new Date().toISOString(), owner.claimId, owner.jobId, owner.queueRecordId)
+}
+
+const mutateAcceptedClaimManifestFromDatabase = ({
+  attemptIndex = 1,
+  database,
+  mutation,
+  owner,
+}: {
+  attemptIndex?: number
+  database: Database
+  mutation: JudgmentRequestAttemptManifestMutation
+  owner: AcceptedClaimManifestOwner
+}): void => {
+  const row = getAcceptedClaimManifestRow(database, owner)
+
+  if (!row) {
+    return
+  }
+
+  const currentEntries = parseRequestAttempts(row.requestAttemptManifestJson)
+  const nextEntries = mutateRequestAttemptManifestEntries({currentEntries, mutation})
+
+  if (!requestAttemptManifestChanged(currentEntries, nextEntries)) {
+    return
+  }
+
+  const updated = updateAcceptedClaimManifestRow({
+    database,
+    expectedVersion: Number(row.requestAttemptManifestVersion ?? 0),
+    json: stringifyManifestEntries(nextEntries),
+    owner,
+  })
+
+  if (updated) {
+    return
+  }
+
+  const requestAttemptIds = getRequestAttemptManifestMutationIds(mutation)
+
+  if (shouldExhaustRequestAttemptManifestCas(attemptIndex)) {
+    appendAcceptedClaimManifestRepairMarker({database, owner, reason: 'cas_exhausted', requestAttemptIds})
+    throw new JudgmentRequestAttemptManifestCasExhaustedError({
+      ownerId: getRequestAttemptManifestOwnerId(owner),
+      ownerKind: owner.kind,
+      requestAttemptIds,
+    })
+  }
+
+  return mutateAcceptedClaimManifestFromDatabase({attemptIndex: attemptIndex + 1, database, mutation, owner})
+}
+
+const compactAcceptedClaimManifestCloseoutFromDatabase = ({
+  database,
+  owner,
+  requestAttempts,
+}: {
+  database: Database
+  owner: AcceptedClaimManifestOwner
+  requestAttempts: JudgmentRequestAttemptJsonEntry[]
+}): void => {
+  if (requestAttempts.length === 0) {
+    return
+  }
+
+  mutateAcceptedClaimManifestFromDatabase({
+    database,
+    mutation: {
+      compactRequestAttemptIds: requestAttempts.map((attempt) => {
+        return attempt.requestAttemptId
+      }),
+      mergeEntries: requestAttempts,
+    },
+    owner,
+  })
+}
+
+export const mutateAcceptedClaimRequestAttemptManifest = async ({
+  mutation,
+  owner,
+}: {
+  mutation: JudgmentRequestAttemptManifestMutation
+  owner: AcceptedClaimManifestOwner
+}): Promise<void> => {
+  const database = openJournalDatabase()
+  mutateAcceptedClaimManifestFromDatabase({database, mutation, owner})
 }
 
 const getPendingTokenUseForCompletion = (
@@ -572,8 +764,9 @@ export const enqueueJudgeWorkerCompletion = async (payload: JudgeWorkerCompletio
   const status = payload.status ?? 'judged'
   const pendingTokenUse = getPendingTokenUseForCompletion(database, payload)
   const requestAttemptsJson = pendingTokenUse?.requestAttemptsJson ?? stringifyRequestAttempts(payload.requestAttempts)
+  const requestAttempts = parseRequestAttempts(requestAttemptsJson ?? payload.requestAttempts ?? null)
 
-  database.transaction(() => {
+  const persisted = database.transaction(() => {
     const result = database
       .query(
         `
@@ -624,7 +817,25 @@ export const enqueueJudgeWorkerCompletion = async (payload: JudgeWorkerCompletio
     if (insertedOrUpdated || reactivated) {
       deletePendingTokenUse(database, payload)
     }
+
+    return insertedOrUpdated || reactivated
   })()
+
+  if (persisted) {
+    compactAcceptedClaimManifestCloseoutFromDatabase({
+      database,
+      owner: {
+        articleId: payload.articleId,
+        claimId: payload.claimId,
+        jobId: payload.jobId,
+        kind: 'accepted_claim',
+        promptId: payload.promptId,
+        promptIds: [payload.promptId],
+        queueRecordId: payload.queueRecordId,
+      },
+      requestAttempts,
+    })
+  }
 }
 
 const reactivateAckedCompletionWithTokenUse = (
@@ -1009,6 +1220,24 @@ export const attachTokenUseToPendingJudgeWorkerCompletion = async ({
       }, 0)
     })(identities)
 
+    const [firstIdentity] = identities
+
+    if (firstIdentity?.claimId) {
+      compactAcceptedClaimManifestCloseoutFromDatabase({
+        database,
+        owner: {
+          articleId: firstIdentity.articleId,
+          claimId: firstIdentity.claimId,
+          jobId: firstIdentity.jobId,
+          kind: 'accepted_claim',
+          promptId: firstIdentity.promptId,
+          promptIds,
+          queueRecordId: firstIdentity.queueRecordId,
+        },
+        requestAttempts,
+      })
+    }
+
     return true
   }
 
@@ -1025,6 +1254,21 @@ export const attachTokenUseToPendingJudgeWorkerCompletion = async ({
       `,
     )
     .run(JSON.stringify(tokenUse), requestAttemptsJson, new Date().toISOString(), completionRow.claimId)
+
+  const payload = parseJson<JudgeWorkerCompletionPayload>(completionRow.payloadJson)
+  compactAcceptedClaimManifestCloseoutFromDatabase({
+    database,
+    owner: {
+      articleId: payload.articleId,
+      claimId: payload.claimId,
+      jobId: payload.jobId,
+      kind: 'accepted_claim',
+      promptId: payload.promptId,
+      promptIds,
+      queueRecordId: payload.queueRecordId,
+    },
+    requestAttempts,
+  })
 
   return true
 }

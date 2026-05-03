@@ -28,6 +28,20 @@ import {
 } from './judgmentJobPaths.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
 import {recordJudgmentJobStorageTransfer} from './judgmentJobStorageTransferRuntime.ts'
+import {
+  appendRequestAttemptManifestRepairMarker,
+  createRequestAttemptManifestRepairMarker,
+  getRequestAttemptManifestMutationIds,
+  getRequestAttemptManifestOwnerId,
+  JudgmentRequestAttemptManifestCasExhaustedError,
+  type JudgmentRequestAttemptManifestMutation,
+  type JudgmentRequestAttemptManifestOwner,
+  mutateRequestAttemptManifestEntries,
+  parseRequestAttempts,
+  requestAttemptManifestChanged,
+  shouldExhaustRequestAttemptManifestCas,
+  stringifyManifestEntries,
+} from './judgmentRequestAttemptManifest.ts'
 
 type JobInfoRow = {
   cursorLastArticleId: string | null
@@ -338,6 +352,12 @@ type ProjectRefreshVisibilityStateRow = {dirtyToken: number | null; lastComplete
 
 type WalCheckpointRow = {busy: number; checkpointed: number; log: number}
 type PendingCompletionAckRow = {count: number; exportedAt: string | null}
+type QueuePromptManifestOwner = Extract<JudgmentRequestAttemptManifestOwner, {kind: 'queue_prompt'}>
+type RequestAttemptManifestRow = {
+  requestAttemptManifestJson: string | null
+  requestAttemptManifestRepairJson: string | null
+  requestAttemptManifestVersion: number
+}
 
 const openDatabases = new Map<string, Database>()
 const ownedJobLeases = new Map<string, JudgmentJobLease>()
@@ -661,6 +681,7 @@ const getOpenDatabase = (jobId: string, createIfMissing: boolean): Database | nu
       retry_after_at TEXT,
       request_attempt_manifest_json TEXT NOT NULL DEFAULT '[]',
       request_attempt_manifest_version INTEGER NOT NULL DEFAULT 0,
+      request_attempt_manifest_repair_json TEXT,
       ready_insert_seq INTEGER NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -803,6 +824,7 @@ const judgmentJobSqliteRequiredSchema = {
     'ready_insert_seq',
     'request_attempt_manifest_json',
     'request_attempt_manifest_version',
+    'request_attempt_manifest_repair_json',
     'created_at',
     'updated_at',
   ],
@@ -852,6 +874,7 @@ const queuePromptColumns = [
   {name: 'execution_snapshot_hash', sql: 'TEXT'},
   {name: 'request_attempt_manifest_json', sql: `TEXT NOT NULL DEFAULT '[]'`},
   {name: 'request_attempt_manifest_version', sql: 'INTEGER NOT NULL DEFAULT 0'},
+  {name: 'request_attempt_manifest_repair_json', sql: 'TEXT'},
 ] as const
 
 const judgmentOutboxColumns = [
@@ -2935,6 +2958,167 @@ const getPromptCompletionAckFromDatabase = (
     .get(jobId, claimId) as PromptCompletionAckRow | null
 }
 
+const getQueuePromptManifestRow = (
+  database: Database,
+  owner: QueuePromptManifestOwner,
+): RequestAttemptManifestRow | null => {
+  return database
+    .query(
+      `
+        SELECT
+          request_attempt_manifest_json AS requestAttemptManifestJson,
+          request_attempt_manifest_version AS requestAttemptManifestVersion,
+          request_attempt_manifest_repair_json AS requestAttemptManifestRepairJson
+        FROM queue_prompt
+        WHERE id = ?
+          AND job_id = ?
+        LIMIT 1
+      `,
+    )
+    .get(owner.queueRecordId, owner.jobId) as RequestAttemptManifestRow | null
+}
+
+const updateQueuePromptManifestRow = ({
+  database,
+  expectedVersion,
+  json,
+  owner,
+}: {
+  database: Database
+  expectedVersion: number
+  json: string
+  owner: QueuePromptManifestOwner
+}): boolean => {
+  const result = database
+    .query(
+      `
+        UPDATE queue_prompt
+        SET request_attempt_manifest_json = ?,
+            request_attempt_manifest_version = request_attempt_manifest_version + 1,
+            updated_at = ?
+        WHERE id = ?
+          AND job_id = ?
+          AND request_attempt_manifest_version = ?
+      `,
+    )
+    .run(json, new Date().toISOString(), owner.queueRecordId, owner.jobId, expectedVersion) as {changes?: number}
+
+  return Number(result.changes ?? 0) === 1
+}
+
+const appendQueuePromptManifestRepairMarker = ({
+  database,
+  owner,
+  reason,
+  requestAttemptIds,
+}: {
+  database: Database
+  owner: QueuePromptManifestOwner
+  reason: string
+  requestAttemptIds: string[]
+}): void => {
+  const row = getQueuePromptManifestRow(database, owner)
+
+  if (!row) {
+    return
+  }
+
+  const markerJson = appendRequestAttemptManifestRepairMarker({
+    currentJson: row.requestAttemptManifestRepairJson,
+    marker: createRequestAttemptManifestRepairMarker({owner, reason, requestAttemptIds}),
+  })
+
+  database
+    .query(
+      `
+        UPDATE queue_prompt
+        SET request_attempt_manifest_repair_json = ?,
+            updated_at = ?
+        WHERE id = ?
+          AND job_id = ?
+      `,
+    )
+    .run(markerJson, new Date().toISOString(), owner.queueRecordId, owner.jobId)
+}
+
+const mutateQueuePromptManifestFromDatabase = ({
+  attemptIndex = 1,
+  database,
+  mutation,
+  owner,
+}: {
+  attemptIndex?: number
+  database: Database
+  mutation: JudgmentRequestAttemptManifestMutation
+  owner: QueuePromptManifestOwner
+}): void => {
+  const row = getQueuePromptManifestRow(database, owner)
+
+  if (!row) {
+    return
+  }
+
+  const currentEntries = parseRequestAttempts(row.requestAttemptManifestJson)
+  const nextEntries = mutateRequestAttemptManifestEntries({currentEntries, mutation})
+
+  if (!requestAttemptManifestChanged(currentEntries, nextEntries)) {
+    return
+  }
+
+  const updated = updateQueuePromptManifestRow({
+    database,
+    expectedVersion: Number(row.requestAttemptManifestVersion ?? 0),
+    json: stringifyManifestEntries(nextEntries),
+    owner,
+  })
+
+  if (updated) {
+    return
+  }
+
+  const requestAttemptIds = getRequestAttemptManifestMutationIds(mutation)
+
+  if (shouldExhaustRequestAttemptManifestCas(attemptIndex)) {
+    appendQueuePromptManifestRepairMarker({database, owner, reason: 'cas_exhausted', requestAttemptIds})
+    throw new JudgmentRequestAttemptManifestCasExhaustedError({
+      ownerId: getRequestAttemptManifestOwnerId(owner),
+      ownerKind: owner.kind,
+      requestAttemptIds,
+    })
+  }
+
+  return mutateQueuePromptManifestFromDatabase({attemptIndex: attemptIndex + 1, database, mutation, owner})
+}
+
+const compactQueuePromptManifestCloseoutFromDatabase = ({
+  database,
+  jobId,
+  queueRecordId,
+  requestAttemptsJson,
+}: {
+  database: Database
+  jobId: string
+  queueRecordId: string
+  requestAttemptsJson?: string | null
+}): void => {
+  const entries = parseRequestAttempts(requestAttemptsJson)
+
+  if (entries.length === 0) {
+    return
+  }
+
+  mutateQueuePromptManifestFromDatabase({
+    database,
+    mutation: {
+      compactRequestAttemptIds: entries.map((entry) => {
+        return entry.requestAttemptId
+      }),
+      mergeEntries: entries,
+    },
+    owner: {jobId, kind: 'queue_prompt', queueRecordId},
+  })
+}
+
 const sqliteService = {
   addReadyPrompts: async (
     jobId: string,
@@ -3470,6 +3654,14 @@ const sqliteService = {
       }) ?? null
     )
   },
+  mutateRequestAttemptManifest: async (
+    owner: QueuePromptManifestOwner,
+    mutation: JudgmentRequestAttemptManifestMutation,
+  ): Promise<void> => {
+    await withOwnedJobDatabase(owner.jobId, false, (database) => {
+      return mutateQueuePromptManifestFromDatabase({database, mutation, owner})
+    })
+  },
   assertPromptClaimIdentity: async (identity: PromptClaimIdentity): Promise<PromptClaimIdentity> => {
     return (
       (await withOwnedJobDatabase(identity.jobId, false, (database) => {
@@ -3770,7 +3962,7 @@ const sqliteService = {
     )
   },
   markPromptAsJudged: async (jobId: string, recordId: string, completionAck?: PromptCompletionAck) => {
-    return withOwnedJobDatabase(jobId, false, (database) => {
+    await withOwnedJobDatabase(jobId, false, (database) => {
       const now = new Date().toISOString()
       database.transaction(() => {
         database
@@ -3791,6 +3983,16 @@ const sqliteService = {
           recordPromptCompletionAckFromDatabase(database, jobId, completionAck)
         }
       })()
+    })
+    await withOwnedJobDatabase(jobId, false, (database) => {
+      return completionAck
+        ? compactQueuePromptManifestCloseoutFromDatabase({
+            database,
+            jobId,
+            queueRecordId: completionAck.queuePromptId,
+            requestAttemptsJson: completionAck.requestAttemptsJson,
+          })
+        : undefined
     })
   },
   markPromptAsRunning: async (jobId: string, recordId: string) => {
@@ -3816,7 +4018,7 @@ const sqliteService = {
     retryAfterMs: number | null = null,
     completionAck?: PromptCompletionAck,
   ) => {
-    return withOwnedJobDatabase(jobId, false, (database) => {
+    await withOwnedJobDatabase(jobId, false, (database) => {
       const now = new Date().toISOString()
       const retryAfterAt = retryAfterMs && retryAfterMs > 0 ? new Date(Date.now() + retryAfterMs).toISOString() : null
 
@@ -3855,6 +4057,16 @@ const sqliteService = {
           recordPromptCompletionAckFromDatabase(database, jobId, completionAck)
         }
       })()
+    })
+    await withOwnedJobDatabase(jobId, false, (database) => {
+      return completionAck
+        ? compactQueuePromptManifestCloseoutFromDatabase({
+            database,
+            jobId,
+            queueRecordId: completionAck.queuePromptId,
+            requestAttemptsJson: completionAck.requestAttemptsJson,
+          })
+        : undefined
     })
   },
   consumePromptExtraRetry: async ({
@@ -3915,7 +4127,7 @@ const sqliteService = {
     skipReason: 'conversion_failed' | 'fulltext_too_large' | 'no_fulltext',
     completionAck?: PromptCompletionAck,
   ) => {
-    return withOwnedJobDatabase(jobId, false, (database) => {
+    await withOwnedJobDatabase(jobId, false, (database) => {
       const now = new Date().toISOString()
       database.transaction(() => {
         database
@@ -3936,6 +4148,16 @@ const sqliteService = {
           recordPromptCompletionAckFromDatabase(database, jobId, completionAck)
         }
       })()
+    })
+    await withOwnedJobDatabase(jobId, false, (database) => {
+      return completionAck
+        ? compactQueuePromptManifestCloseoutFromDatabase({
+            database,
+            jobId,
+            queueRecordId: completionAck.queuePromptId,
+            requestAttemptsJson: completionAck.requestAttemptsJson,
+          })
+        : undefined
     })
   },
   recordJudgmentSuccess: async (jobId: string, outboxInsert: QueuePromptOutboxInsert) => {
@@ -4037,6 +4259,12 @@ const sqliteService = {
         return Number(insertResult.changes ?? 0)
       })(outboxInsert)
 
+      compactQueuePromptManifestCloseoutFromDatabase({
+        database,
+        jobId,
+        queueRecordId: outboxInsert.queuePromptId,
+        requestAttemptsJson: outboxInsert.requestAttemptsJson,
+      })
       recordJudgmentJobStorageTransfer({addedRows: insertedRows, jobId})
     })
   },

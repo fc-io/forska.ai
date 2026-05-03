@@ -21,7 +21,12 @@ import {
   getJudgmentEndpointAvailability,
   resetJudgmentEndpointAvailabilityForTests,
 } from './judgmentEndpointAvailability.ts'
-import type {JudgmentRequestAttemptLiveContext} from './judgmentRequestAttemptManifest.ts'
+import type {
+  JudgmentRequestAttemptLiveContext,
+  JudgmentRequestAttemptManifestOwner,
+  JudgmentRequestAttemptRuntimeContext,
+} from './judgmentRequestAttemptManifest.ts'
+import {recordRequestAttemptManifestStage} from './judgmentRequestAttemptManifestStore.ts'
 import {getNormalizedProviderKeyProvider, getProviderKey} from './providerKey.ts'
 
 type RequestSlot = {baseURL: string; release: () => void; requiresProbe: boolean}
@@ -44,6 +49,12 @@ type WorkerWaiter = RequestWaiter<RequestSlot> & {providerScope: ProviderRequest
 type JobRequestState = {inFlight: number; pendingPersistedAttempts: number}
 type ProviderRequestState = {inFlight: number}
 type SlotAcquisitionAttempt = {slot: RequestSlot; type: 'slot'} | {type: 'blocked'} | {type: 'waiting'}
+type RequestAttemptErrorCarrier = {
+  providerKey?: string
+  requestAttemptId?: string
+  requestFinishedAt?: string
+  requestStartedAt?: string
+}
 
 const codexWaiters: RequestWaiter<() => void>[] = []
 const codexProviderWaiters: CodexProviderWaiter[] = []
@@ -149,6 +160,35 @@ const createRequestAttemptContext = (providerScope: ProviderRequestScope) => {
     createdAt: new Date().toISOString(),
     providerKey: getProviderRequestKey(providerScope),
     requestAttemptId: randomUUID(),
+  }
+}
+
+const getErrorMessage = (error: unknown): string => {
+  return error instanceof Error ? error.message : String(error)
+}
+
+const attachRuntimeRequestAttemptFieldsToError = <T>(error: T, fields: RequestAttemptErrorCarrier): T => {
+  if (typeof error === 'object' && error !== null) {
+    Object.assign(error, fields)
+  }
+
+  return error
+}
+
+const getRuntimeRequestAttemptErrorFields = ({
+  finishedAt,
+  requestAttempt,
+}: {
+  finishedAt: string
+  requestAttempt: JudgmentRequestAttemptRuntimeContext
+}): RequestAttemptErrorCarrier => {
+  const startedAt = (requestAttempt as {startedAt?: string}).startedAt ?? requestAttempt.createdAt
+
+  return {
+    providerKey: requestAttempt.providerKey,
+    requestAttemptId: requestAttempt.requestAttemptId,
+    requestFinishedAt: finishedAt,
+    requestStartedAt: startedAt,
   }
 }
 
@@ -781,6 +821,7 @@ export const withJudgmentRequest = async <T>(
     providerMaxInflightRequests,
     providerUsesFamilyDefault,
     providerConnection,
+    requestAttemptManifestOwner,
     workerUrls,
   }: {
     judgmentsJobId: string
@@ -793,6 +834,7 @@ export const withJudgmentRequest = async <T>(
     providerConnection?: ProviderConnectionRecord | null
     providerMaxInflightRequests: number | null
     providerUsesFamilyDefault: boolean
+    requestAttemptManifestOwner?: JudgmentRequestAttemptManifestOwner | null
     workerUrls: string[]
   },
   run: (baseURL: string, requestAttempt: JudgmentRequestAttemptLiveContext) => Promise<T>,
@@ -807,6 +849,11 @@ export const withJudgmentRequest = async <T>(
     providerUsesFamilyDefault,
   }
   const requestAttemptContext = createRequestAttemptContext(providerScope)
+  await recordRequestAttemptManifestStage({
+    closeoutKind: 'slot_wait',
+    owner: requestAttemptManifestOwner,
+    requestAttempt: requestAttemptContext,
+  })
   const slot = await acquireRequestSlot({
     fallbackBaseURL,
     modelId,
@@ -817,11 +864,32 @@ export const withJudgmentRequest = async <T>(
     providerMaxInflightRequests,
     providerUsesFamilyDefault,
     workerUrls,
+  }).catch(async (error) => {
+    const finishedAt = new Date().toISOString()
+    await recordRequestAttemptManifestStage({
+      closeoutKind: 'slot_wait',
+      error: getErrorMessage(error),
+      finishedAt,
+      outcome: 'failure',
+      owner: requestAttemptManifestOwner,
+      requestAttempt: requestAttemptContext,
+    })
+    throw attachRuntimeRequestAttemptFieldsToError(
+      error,
+      getRuntimeRequestAttemptErrorFields({finishedAt, requestAttempt: requestAttemptContext}),
+    )
   })
   markRequestStarted(judgmentsJobId)
 
   try {
     const requestAttempt = {...requestAttemptContext, baseURL: slot.baseURL, startedAt: new Date().toISOString()}
+    await recordRequestAttemptManifestStage({
+      baseURL: slot.baseURL,
+      closeoutKind: 'live_request',
+      owner: requestAttemptManifestOwner,
+      requestAttempt,
+      startedAt: requestAttempt.startedAt,
+    })
 
     if (slot.requiresProbe) {
       await probeJudgmentEndpointAvailability({
@@ -830,6 +898,22 @@ export const withJudgmentRequest = async <T>(
         provider,
         providerConnection,
         providerConnectionId,
+      }).catch(async (error) => {
+        const finishedAt = new Date().toISOString()
+        await recordRequestAttemptManifestStage({
+          baseURL: slot.baseURL,
+          closeoutKind: 'live_request',
+          error: getErrorMessage(error),
+          finishedAt,
+          outcome: 'failure',
+          owner: requestAttemptManifestOwner,
+          requestAttempt,
+          startedAt: requestAttempt.startedAt,
+        })
+        throw attachRuntimeRequestAttemptFieldsToError(
+          error,
+          getRuntimeRequestAttemptErrorFields({finishedAt, requestAttempt}),
+        )
       })
     }
 

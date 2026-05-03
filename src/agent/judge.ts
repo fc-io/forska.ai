@@ -15,6 +15,7 @@ import type {
   JudgmentRequestAttemptJsonEntry,
   JudgmentRequestAttemptLiveContext,
 } from '../server/cron/judgmentsJobs/judgmentRequestAttemptManifest.ts'
+import {getRequestAttemptManifestOwner} from '../server/cron/judgmentsJobs/judgmentRequestAttemptManifestStore.ts'
 import {withJudgmentRequest} from '../server/cron/judgmentsJobs/judgmentsRequestRuntime.ts'
 import {
   invokeStoredProviderModel,
@@ -525,7 +526,26 @@ const getResponseRequestAttemptFields = (response: GeneratedPromptResponse): Req
 }
 
 const getErrorRequestAttemptFields = (error: unknown): RequestAttemptTokenFields | null => {
-  return typeof error === 'object' && error !== null ? (requestAttemptFieldsByError.get(error) ?? null) : null
+  if (typeof error !== 'object' || error === null) {
+    return null
+  }
+
+  const attachedFields = requestAttemptFieldsByError.get(error)
+
+  if (attachedFields) {
+    return attachedFields
+  }
+
+  const carrier = error as Partial<RequestAttemptTokenFields>
+
+  return carrier.providerKey && carrier.requestAttemptId && carrier.requestFinishedAt && carrier.requestStartedAt
+    ? {
+        providerKey: carrier.providerKey,
+        requestAttemptId: carrier.requestAttemptId,
+        requestFinishedAt: carrier.requestFinishedAt,
+        requestStartedAt: carrier.requestStartedAt,
+      }
+    : null
 }
 
 const getCompletionRequestAttempt = ({
@@ -643,8 +663,13 @@ const classifyJudgeFailure = ({
  * Helper to generate a single-prompt response from the LLM.
  */
 const generateSinglePromptResponse = async ({
+  articleId,
+  claimId,
   judgmentsJobId,
   modelId,
+  promptId,
+  promptIds,
+  queueRecordId,
   prompt,
   systemPrompt,
   baseURL,
@@ -658,8 +683,13 @@ const generateSinglePromptResponse = async ({
   workerUrls,
   outputSchema,
 }: {
+  articleId: string
+  claimId?: string | null
   judgmentsJobId: string
   modelId: string
+  promptId: string
+  promptIds: string[]
+  queueRecordId: string
   prompt: string
   systemPrompt: string
   baseURL: string
@@ -687,6 +717,14 @@ const generateSinglePromptResponse = async ({
       providerLimitVersion,
       providerMaxInflightRequests,
       providerUsesFamilyDefault,
+      requestAttemptManifestOwner: getRequestAttemptManifestOwner({
+        articleId,
+        claimId,
+        jobId: judgmentsJobId,
+        promptId,
+        promptIds,
+        queueRecordId,
+      }),
       workerUrls,
     },
     async (requestBaseURL, requestAttempt) => {
@@ -1105,8 +1143,13 @@ export const judgeSinglePrompt = async ({
 
       try {
         currentResponse = await generateSinglePromptResponse({
+          articleId: article.id,
+          claimId: claimIdentity?.claimId ?? null,
           judgmentsJobId,
           modelId,
+          promptId: prompt.id,
+          promptIds,
+          queueRecordId,
           prompt: userPrompt,
           systemPrompt,
           baseURL,
@@ -1481,8 +1524,13 @@ export const judgeSinglePrompt = async ({
 
             try {
               currentResponse = await generateSinglePromptResponse({
+                articleId: article.id,
+                claimId: claimIdentity?.claimId ?? null,
                 judgmentsJobId,
                 modelId,
+                promptId: prompt.id,
+                promptIds,
+                queueRecordId,
                 prompt: userPrompt,
                 systemPrompt: evidenceSystemPrompt,
                 baseURL,
@@ -1758,8 +1806,13 @@ export const judgeSinglePrompt = async ({
 
         try {
           currentResponse = await generateSinglePromptResponse({
+            articleId: article.id,
+            claimId: claimIdentity?.claimId ?? null,
             judgmentsJobId,
             modelId,
+            promptId: prompt.id,
+            promptIds,
+            queueRecordId,
             prompt: finalUserPrompt,
             systemPrompt,
             baseURL,

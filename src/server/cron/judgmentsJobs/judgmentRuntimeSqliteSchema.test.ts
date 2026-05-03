@@ -113,6 +113,7 @@ test('SQLite judgment runtime schema includes request-attempt manifest and evide
 
   expect(queuePromptColumns).toContain('request_attempt_manifest_json')
   expect(queuePromptColumns).toContain('request_attempt_manifest_version')
+  expect(queuePromptColumns).toContain('request_attempt_manifest_repair_json')
   expect(judgmentOutboxColumns).toContain('request_attempts_json')
   expect(completionAckColumns).toContain('request_attempts_json')
 })
