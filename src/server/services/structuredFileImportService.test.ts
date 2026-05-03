@@ -12,7 +12,7 @@ const createdAssetPathsRef: {current: string[]} = {current: []}
 
 void mock.module(articleImportStoreServiceModulePath, () => {
   return {
-    queueImportedArticleRefreshes: async (_importRouteIds: string[]) => {},
+    markImportedArticleProjectsDirty: async (_importRouteIds: string[]) => {},
     storeImportedArticles: async (rows: Array<Record<string, unknown>>) => {
       storedRowsRef.current.push(rows)
     },

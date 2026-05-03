@@ -44,13 +44,6 @@ type ProjectRefreshScopeBatchRow = ProjectRefreshBatchRow & {
   inRouteScope: boolean
 }
 
-type QueueMartRefreshTask = {
-  articleId?: string | null
-  projectId?: string | null
-  reason: string
-  refreshScope: MartRefreshScope
-}
-
 type MartRefreshProgressSnapshot = {
   claimedQueuedArticleIds: string[]
   claimedQueuedProjectIds: string[]
@@ -2060,19 +2053,6 @@ const queueProjectLargeRebuilds = async (projectIds: string[], reason: string) =
       }) as Promise<MarkedProjectDirtyState[]>)
 }
 
-const markProjectRefreshesDirty = async (projectIds: string[], reason: string) => {
-  const refreshStateService = getProjectMartDirtyRefreshStateService()
-  const uniqueProjectIds = getUniqueValues(projectIds)
-
-  return uniqueProjectIds.length === 0
-    ? []
-    : (getAppDatabaseService().transaction(async (tx) => {
-        const dirtyProjects = await refreshStateService.getDirtyProjectsForProjectIds(tx, uniqueProjectIds)
-
-        return refreshStateService.markProjectsDirtyAtomically({projects: dirtyProjects, reason, runner: tx})
-      }) as Promise<MarkedProjectDirtyState[]>)
-}
-
 const queueProjectLargeRebuildForDirtyArticles = async (projectId: string, articleIds: string[], reason: string) => {
   const refreshArticleIds = getUniqueValues(articleIds)
 
@@ -3445,61 +3425,6 @@ const _scheduleQueuedMartRefreshes = (delayMs = martRefreshScheduleDelayMs) => {
   updateMartRefreshDebugSnapshot({drainTimerActive: true})
 }
 
-const getMartRefreshTaskKeys = (task: QueueMartRefreshTask) => {
-  return {articleKey: task.articleId ?? '', projectKey: ''}
-}
-
-const getQueueMartRefreshTaskValueSql = (task: QueueMartRefreshTask) => {
-  const {articleKey, projectKey} = getMartRefreshTaskKeys(task)
-
-  return `(
-    ${getSqlLiteral(globalThis.crypto.randomUUID())},
-    ${getSqlLiteral(task.refreshScope)},
-    ${getSqlLiteral(task.projectId ?? null)},
-    ${getSqlLiteral(task.articleId ?? null)},
-    ${getSqlLiteral(projectKey)},
-    ${getSqlLiteral(articleKey)},
-    0,
-    ${getSqlLiteral(task.reason)}
-  )`
-}
-
-const queueMartRefreshTasks = async (tasks: QueueMartRefreshTask[]) => {
-  if (tasks.length === 0) {
-    return
-  }
-
-  await ensureMartRefreshQueueSchema()
-  await getAppDatabaseService().run(`
-    INSERT INTO app.mart_refresh_queue (
-      id,
-      refresh_scope,
-      project_id,
-      article_id,
-      project_key,
-      article_key,
-      refresh_generation,
-      reason
-    )
-    VALUES ${tasks
-      .map((task) => {
-        return getQueueMartRefreshTaskValueSql(task)
-      })
-      .join(',\n')}
-    ON CONFLICT (refresh_scope, project_key, article_key) DO UPDATE SET
-      project_id = EXCLUDED.project_id,
-      article_id = EXCLUDED.article_id,
-      reason = EXCLUDED.reason,
-      completed_at = NULL,
-      refresh_generation = COALESCE(refresh_generation, 0) + 1,
-      updated_at = NOW()
-  `)
-
-  if (isMartRefreshAutoDrainEnabled()) {
-    _scheduleQueuedMartRefreshes()
-  }
-}
-
 export const flushQueuedMartRefreshes = async (): Promise<void> => {
   if (martRefreshDrainTimer) {
     clearTimeout(martRefreshDrainTimer)
@@ -3576,98 +3501,6 @@ const recoverQueuedArchivedProjectRefresh = async (projectId: string) => {
   }
 }
 
-const queueProjectRefreshes = async (projectIds: string[], reason: string) => {
-  return queueProjectLargeRebuilds(projectIds, reason)
-}
-
-const queueJudgmentArticleRefreshes = async (articleIds: string[], reason: string) => {
-  return queueMartRefreshTasks(
-    getUniqueValues(articleIds).map((articleId) => {
-      return {articleId, reason, refreshScope: 'judgment_article' as const}
-    }),
-  )
-}
-
-const queueProjectRefreshesByImportRouteIds = async (importRouteIds: string[], reason: string) => {
-  if (importRouteIds.length === 0) {
-    return
-  }
-
-  const rows = await getAppDatabaseService().queryJson<{projectId: string}>(`
-    SELECT DISTINCT project_id AS projectId
-    FROM app.project_import_route project_import_route
-    INNER JOIN app.project project ON project.id = project_import_route.project_id
-    WHERE import_route_id IN (${getQuotedStringList(getUniqueValues(importRouteIds)).join(', ')})
-      AND project.archived = FALSE
-  `)
-
-  return markProjectRefreshesDirty(
-    rows.map((row) => {
-      return row.projectId
-    }),
-    reason,
-  )
-}
-
-const queueProjectRefreshesByPromptIds = async (promptIds: string[], reason: string) => {
-  if (promptIds.length === 0) {
-    return
-  }
-
-  const rows = await getAppDatabaseService().queryJson<{projectId: string}>(`
-    SELECT DISTINCT project_id AS projectId
-    FROM app.project_prompt project_prompt
-    INNER JOIN app.project project ON project.id = project_prompt.project_id
-    WHERE prompt_id IN (${getQuotedStringList(getUniqueValues(promptIds)).join(', ')})
-      AND project.archived = FALSE
-  `)
-
-  return markProjectRefreshesDirty(
-    rows.map((row) => {
-      return row.projectId
-    }),
-    reason,
-  )
-}
-
-const queueJudgmentArticleRefreshesByJudgmentIds = async (judgmentIds: string[], reason: string) => {
-  if (judgmentIds.length === 0) {
-    return
-  }
-
-  const rows = await getAppDatabaseService().queryJson<{articleId: string}>(`
-    SELECT DISTINCT article_id AS articleId
-    FROM app.judgment
-    WHERE id IN (${getQuotedStringList(getUniqueValues(judgmentIds)).join(', ')})
-  `)
-
-  return queueJudgmentArticleRefreshes(
-    rows.map((row) => {
-      return row.articleId
-    }),
-    reason,
-  )
-}
-
-const queueJudgmentArticleRefreshesByPromptIds = async (promptIds: string[], reason: string) => {
-  if (promptIds.length === 0) {
-    return
-  }
-
-  const rows = await getAppDatabaseService().queryJson<{articleId: string}>(`
-    SELECT DISTINCT article_id AS articleId
-    FROM app.judgment
-    WHERE prompt_id IN (${getQuotedStringList(getUniqueValues(promptIds)).join(', ')})
-  `)
-
-  return queueJudgmentArticleRefreshes(
-    rows.map((row) => {
-      return row.articleId
-    }),
-    reason,
-  )
-}
-
 const duckdbMartRefreshService = {
   ensureQueueSchema: ensureMartRefreshQueueSchema,
   flush: flushQueuedMartRefreshes,
@@ -3677,18 +3510,6 @@ const duckdbMartRefreshService = {
   getProgressSnapshot: getMartRefreshProgressSnapshot,
   getThroughputSnapshot: getMartRefreshThroughputSnapshot,
   hasActiveProjectReviewServingGeneration: getHasActiveProjectReviewServingGeneration,
-  queueJudgmentArticleRefresh: async (articleId: string, reason: string) => {
-    await queueJudgmentArticleRefreshes([articleId], reason)
-  },
-  queueJudgmentArticleRefreshes,
-  queueJudgmentArticleRefreshesByJudgmentIds,
-  queueJudgmentArticleRefreshesByPromptIds,
-  queueProjectRefresh: async (projectId: string, reason: string) => {
-    await queueProjectRefreshes([projectId], reason)
-  },
-  queueProjectRefreshes,
-  queueProjectRefreshesByImportRouteIds,
-  queueProjectRefreshesByPromptIds,
   queueProjectLargeRebuild: async (projectId: string, reason: string) => {
     await queueProjectLargeRebuilds([projectId], reason)
   },

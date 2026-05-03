@@ -36,6 +36,29 @@ test('mart refresh keeps a requeue that arrives during drain', () => {
         let martRefreshService = null
         let refreshRuns = 0
         let hasRequeued = false
+        const insertLegacyJudgmentArticleRefresh = async (articleId, reason) => {
+          const database = actualAppDatabaseModule.getAppDatabaseService()
+
+          await database.run(\`
+            INSERT INTO app.mart_refresh_queue (
+              id,
+              refresh_scope,
+              project_id,
+              article_id,
+              project_key,
+              article_key,
+              refresh_generation,
+              reason
+            )
+            VALUES ('\${crypto.randomUUID()}', 'judgment_article', NULL, '\${articleId}', '', '\${articleId}', 0, '\${reason}')
+            ON CONFLICT (refresh_scope, project_key, article_key) DO UPDATE SET
+              article_id = EXCLUDED.article_id,
+              reason = EXCLUDED.reason,
+              completed_at = NULL,
+              refresh_generation = COALESCE(app.mart_refresh_queue.refresh_generation, 0) + 1,
+              updated_at = NOW()
+          \`)
+        }
 
         void mock.module(appDatabaseServiceModulePath, () => {
           return {
@@ -54,7 +77,7 @@ test('mart refresh keeps a requeue that arrives during drain', () => {
 
                     if (!hasRequeued && martRefreshService) {
                       hasRequeued = true
-                      await martRefreshService.queueJudgmentArticleRefresh('article-requeue-test', 'requeued-during-drain')
+                      await insertLegacyJudgmentArticleRefresh('article-requeue-test', 'requeued-during-drain')
                     }
                   }
 
@@ -94,7 +117,7 @@ test('mart refresh keeps a requeue that arrives during drain', () => {
 
         martRefreshService = (await import(martRefreshServiceModulePath + '?requeue=' + Date.now())).getDuckdbMartRefreshService()
 
-        await martRefreshService.queueJudgmentArticleRefresh('article-requeue-test', 'initial-drain')
+        await insertLegacyJudgmentArticleRefresh('article-requeue-test', 'initial-drain')
         await martRefreshService.flush()
 
         const [queueRow] = await database.queryJson(\`
@@ -147,7 +170,7 @@ test('mart refresh keeps a requeue that arrives during drain', () => {
   }
 })
 
-test('queueProjectRefresh writes dirty and large rebuild state without project queue rows', () => {
+test('direct project large rebuild request writes dirty and large rebuild state without project queue rows', () => {
   const duckdbPath = `/tmp/f1-mart-refresh-project-delete-${Date.now()}.duckdb`
   const runScript = globalThis.Bun.spawnSync(
     [
@@ -156,7 +179,8 @@ test('queueProjectRefresh writes dirty and large rebuild state without project q
       `
         const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
         const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
-        const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
+        const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
+        const {getProjectMartLargeRebuildStateService} = await import('./src/server/services/projectMartLargeRebuildStateService.ts')
 
         await migrateDuckdb()
 
@@ -181,10 +205,29 @@ test('queueProjectRefresh writes dirty and large rebuild state without project q
             ('project-delete-b', 'Project Delete B', 'model-project-delete-b', TRUE, TRUE, FALSE, FALSE)
         \`)
 
-        const martRefreshService = (await import(martRefreshServiceModulePath + '?project-delete=' + Date.now())).getDuckdbMartRefreshService()
+        const markProjectLargeRebuildDirty = async (projectId, reason) => {
+          await database.transaction(async (tx) => {
+            const dirtyProjects = await getProjectMartDirtyRefreshStateService().getDirtyProjectsForProjectIds(tx, [projectId])
+            const states = await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
+              projects: dirtyProjects,
+              reason,
+              runner: tx,
+            })
 
-        await martRefreshService.queueProjectRefresh('project-delete-a', 'project-delete-test-a')
-        await martRefreshService.queueProjectRefresh('project-delete-b', 'project-delete-test-b')
+            await states.reduce(async (promise, state) => {
+              await promise
+              await getProjectMartLargeRebuildStateService().queueLargeRebuild({
+                projectId: state.projectId,
+                rebuildPhase: 'project_scope_article',
+                refreshToken: state.dirtyToken,
+                runner: tx,
+              })
+            }, Promise.resolve())
+          })
+        }
+
+        await markProjectLargeRebuildDirty('project-delete-a', 'project-delete-test-a')
+        await markProjectLargeRebuildDirty('project-delete-b', 'project-delete-test-b')
 
         const [queueRow] = await database.queryJson(\`
           SELECT
@@ -1454,16 +1497,16 @@ test('mart refresh flush keeps article draining moving past archived project cle
   expect(result.events).toContain('article:refreshed')
 })
 
-test('project prompt and import-route helpers mark projects dirty without project queue rows', () => {
+test('project prompt and import-route dirty requests mark projects dirty without project queue rows', () => {
   const duckdbPath = `/tmp/f1-mart-refresh-project-priority-${Date.now()}.duckdb`
   const runScript = globalThis.Bun.spawnSync(
     [
       'bun',
       '-e',
       `
-        const martRefreshServiceModulePath = new URL('./src/server/services/getDuckdbMartRefreshService.ts', 'file://' + process.cwd() + '/').pathname
         const {migrateDuckdb} = await import('./src/db/migrateDuckdb.ts')
         const {getAppDatabaseService} = await import('./src/server/services/appDatabaseService.ts')
+        const {getProjectMartDirtyRefreshStateService} = await import('./src/server/services/projectMartDirtyRefreshStateService.ts')
 
         await migrateDuckdb()
 
@@ -1514,13 +1557,29 @@ test('project prompt and import-route helpers mark projects dirty without projec
           VALUES ('article-import-route-dirty-helper-test', 'article-route-dirty-test', 'import-route-dirty-helper-test')
         \`)
 
-        const martRefreshService = (await import(martRefreshServiceModulePath + '?priority=' + Date.now())).getDuckdbMartRefreshService()
+        const refreshStateService = getProjectMartDirtyRefreshStateService()
 
-        await martRefreshService.queueProjectRefreshesByPromptIds(['prompt-dirty-helper-test'], 'prompt-dirty-helper')
-        await martRefreshService.queueProjectRefreshesByImportRouteIds(
-          ['import-route-dirty-helper-test'],
-          'route-dirty-helper',
-        )
+        await database.transaction(async (tx) => {
+          const promptDirtyProjects = await refreshStateService.getDirtyProjectsForProjectIds(tx, [
+            'project-prompt-dirty-test',
+          ])
+
+          await refreshStateService.markProjectsDirtyAtomically({
+            projects: promptDirtyProjects,
+            reason: 'prompt-dirty-helper',
+            runner: tx,
+          })
+
+          const routeDirtyProjects = await refreshStateService.getDirtyProjectsForProjectIds(tx, [
+            'project-route-dirty-test',
+          ])
+
+          await refreshStateService.markProjectsDirtyAtomically({
+            projects: routeDirtyProjects,
+            reason: 'route-dirty-helper',
+            runner: tx,
+          })
+        })
 
         const [queueRow] = await database.queryJson(\`
           SELECT COUNT(*) AS count
@@ -1533,15 +1592,15 @@ test('project prompt and import-route helpers mark projects dirty without projec
           WHERE project_id IN ('project-prompt-dirty-test', 'project-route-dirty-test')
           ORDER BY project_id ASC
         \`)
-        const articleRows = await database.queryJson(\`
+        const materializationRows = await database.queryJson(\`
           SELECT
             project_id AS projectId,
-            article_id AS articleId,
-            CAST(first_dirty_token AS INTEGER) AS firstDirtyToken,
-            CAST(last_dirty_token AS INTEGER) AS lastDirtyToken
-          FROM app.project_mart_refresh_article_state
+            CAST(target_dirty_token AS INTEGER) AS targetDirtyToken,
+            materialization_status AS materializationStatus,
+            CAST(source_scope_expected_row_count AS INTEGER) AS expectedRowCount
+          FROM app.project_mart_dirty_materialization_state
           WHERE project_id IN ('project-prompt-dirty-test', 'project-route-dirty-test')
-          ORDER BY project_id ASC, article_id ASC
+          ORDER BY project_id ASC
         \`)
         const [largeRebuildRow] = await database.queryJson(\`
           SELECT COUNT(*) AS count
@@ -1551,8 +1610,8 @@ test('project prompt and import-route helpers mark projects dirty without projec
         \`)
 
         console.log(JSON.stringify({
-          articleRows,
           largeRebuildCount: Number(largeRebuildRow?.count ?? 0),
+          materializationRows,
           queuedProjectCount: Number(queueRow?.count ?? 0),
           refreshStates,
         }))
@@ -1579,8 +1638,13 @@ test('project prompt and import-route helpers mark projects dirty without projec
     }
 
     const result = JSON.parse(getLastJsonLine(runScript.stdout.toString())) as {
-      articleRows: Array<{articleId: string; firstDirtyToken: number; lastDirtyToken: number; projectId: string}>
       largeRebuildCount: number
+      materializationRows: Array<{
+        expectedRowCount: number
+        materializationStatus: string
+        projectId: string
+        targetDirtyToken: number
+      }>
       queuedProjectCount: number
       refreshStates: Array<{dirtyToken: number; projectId: string; reason: string}>
     }
@@ -1591,18 +1655,18 @@ test('project prompt and import-route helpers mark projects dirty without projec
       {dirtyToken: 1, projectId: 'project-prompt-dirty-test', reason: 'prompt-dirty-helper'},
       {dirtyToken: 1, projectId: 'project-route-dirty-test', reason: 'route-dirty-helper'},
     ])
-    expect(result.articleRows).toEqual([
+    expect(result.materializationRows).toEqual([
       {
-        articleId: 'article-prompt-dirty-test',
-        firstDirtyToken: 1,
-        lastDirtyToken: 1,
+        expectedRowCount: 1,
+        materializationStatus: 'pending',
         projectId: 'project-prompt-dirty-test',
+        targetDirtyToken: 1,
       },
       {
-        articleId: 'article-route-dirty-test',
-        firstDirtyToken: 1,
-        lastDirtyToken: 1,
+        expectedRowCount: 1,
+        materializationStatus: 'pending',
         projectId: 'project-route-dirty-test',
+        targetDirtyToken: 1,
       },
     ])
   } finally {
@@ -1811,7 +1875,28 @@ test('mart refresh retries cleanly after a failed background transaction poisons
 
         const martRefreshService = (await import(martRefreshServiceModulePath + '?background-rollback=' + Date.now())).getDuckdbMartRefreshService()
 
-        await martRefreshService.queueJudgmentArticleRefresh('article-background-rollback-test', 'background-rollback-test')
+        await database.run(\`
+          INSERT INTO app.mart_refresh_queue (
+            id,
+            refresh_scope,
+            project_id,
+            article_id,
+            project_key,
+            article_key,
+            refresh_generation,
+            reason
+          )
+          VALUES (
+            '\${crypto.randomUUID()}',
+            'judgment_article',
+            NULL,
+            'article-background-rollback-test',
+            '',
+            'article-background-rollback-test',
+            0,
+            'background-rollback-test'
+          )
+        \`)
         const failureText = await martRefreshService.flush().then(
           () => 'no failure',
           (error) => error instanceof Error ? error.message : String(error),
@@ -2370,8 +2455,10 @@ test('mart refresh updates serving rows incrementally after a judgment answer ch
           WHERE id = 'judgment-serving-incremental-test'
         \`)
 
-        await martRefreshService.queueJudgmentArticleRefresh('article-serving-incremental-test', 'serving-incremental-update')
-        await martRefreshService.flush()
+        await martRefreshService.refreshJudgmentFactsForArticles(['article-serving-incremental-test'])
+        await martRefreshService.refreshProjectArticleMartsBatch('project-serving-incremental-test', [
+          'article-serving-incremental-test',
+        ])
 
         const [generationRow] = await database.queryJson(\`
           SELECT active_generation AS activeGeneration
@@ -3684,8 +3771,7 @@ test('mart refresh reuses shared judgments across projects with matching prompt 
           )
         \`)
 
-        await martRefreshService.queueJudgmentArticleRefresh('article-cross-project-test', 'cross-project-judgment')
-        await martRefreshService.flush()
+        await martRefreshService.refreshJudgmentFactsForArticles(['article-cross-project-test'])
         await martRefreshService.refreshProject('project-cross-project-source')
 
         await martRefreshService.refreshProject('project-cross-project-target')
@@ -3903,7 +3989,7 @@ test('mart refresh drops reused source judgments after a cloned project repoints
           )
         \`)
 
-        await martRefreshService.queueJudgmentArticleRefresh('article-prompt-edit-isolation', 'prompt-edit-isolation-source-judgment')
+        await martRefreshService.refreshJudgmentFactsForArticles(['article-prompt-edit-isolation'])
         await martRefreshService.refreshProject('project-prompt-edit-isolation-source')
         await martRefreshService.refreshProject('project-prompt-edit-isolation-target')
         await martRefreshService.flush()
@@ -3959,7 +4045,7 @@ test('mart refresh drops reused source judgments after a cloned project repoints
           )
         \`)
 
-        await martRefreshService.queueJudgmentArticleRefresh('article-prompt-edit-isolation', 'prompt-edit-isolation-target-judgment')
+        await martRefreshService.refreshJudgmentFactsForArticles(['article-prompt-edit-isolation'])
         await martRefreshService.refreshProject('project-prompt-edit-isolation-target')
         await martRefreshService.flush()
 
@@ -4556,8 +4642,7 @@ test('mart refresh skips schema repair writes when refresh_generation already ex
 
         const martRefreshService = (await import(martRefreshServiceModulePath + '?generation-ready=' + Date.now())).getDuckdbMartRefreshService()
 
-        await martRefreshService.queueJudgmentArticleRefresh('article-generation-ready-test', 'generation-ready-test')
-        await martRefreshService.flush()
+        await martRefreshService.ensureQueueSchema()
 
         console.log(JSON.stringify({schemaRepairRuns}))
         await database.close()
@@ -4634,7 +4719,7 @@ test('mart refresh schema repair avoids ALTER COLUMN defaults and checkpoints af
 
         const {getDuckdbMartRefreshService} = await import('./src/server/services/getDuckdbMartRefreshService.ts?schema-repair=' + Date.now())
         const service = getDuckdbMartRefreshService()
-        await service.queueJudgmentArticleRefresh('article-id', 'schema-repair-test')
+        await service.ensureQueueSchema()
         console.log(JSON.stringify(state))
       `,
     ],
@@ -4656,8 +4741,6 @@ test('mart refresh schema repair avoids ALTER COLUMN defaults and checkpoints af
   expect(result.runStatements[0]).toContain('ADD COLUMN IF NOT EXISTS refresh_generation BIGINT;')
   expect(result.runStatements[0]).not.toContain('DEFAULT 0')
   expect(result.runStatements[1]).toContain('ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;')
-  expect(result.runStatements[2]).toContain('INSERT INTO app.mart_refresh_queue')
-  expect(result.runStatements[2]).toContain('refresh_generation')
 })
 
 test('mart refresh yields between drain passes after exceeding the time budget', () => {
@@ -4748,10 +4831,36 @@ test('mart refresh yields between drain passes after exceeding the time budget',
 
         const martRefreshService = (await import(martRefreshServiceModulePath + '?yield=' + Date.now())).getDuckdbMartRefreshService()
 
-        await martRefreshService.queueJudgmentArticleRefreshes(
-          ['article-yield-test-0', 'article-yield-test-1', 'article-yield-test-2', 'article-yield-test-3', 'article-yield-test-4'],
-          'yield-budget-test',
-        )
+        for (const articleId of [
+          'article-yield-test-0',
+          'article-yield-test-1',
+          'article-yield-test-2',
+          'article-yield-test-3',
+          'article-yield-test-4',
+        ]) {
+          await database.run(\`
+            INSERT INTO app.mart_refresh_queue (
+              id,
+              refresh_scope,
+              project_id,
+              article_id,
+              project_key,
+              article_key,
+              refresh_generation,
+              reason
+            )
+            VALUES (
+              '\${crypto.randomUUID()}',
+              'judgment_article',
+              NULL,
+              '\${articleId}',
+              '',
+              '\${articleId}',
+              0,
+              'yield-budget-test'
+            )
+          \`)
+        }
         await martRefreshService.flush()
 
         const [queueRow] = await database.queryJson(\`
@@ -4876,7 +4985,28 @@ test('mart refresh deletes article tasks before a delayed project rebuild finish
 
         const martRefreshService = (await import(martRefreshServiceModulePath + '?article-drain=' + Date.now())).getDuckdbMartRefreshService()
 
-        await martRefreshService.queueJudgmentArticleRefresh('article-article-drain-test', 'article-drain-test')
+        await database.run(\`
+          INSERT INTO app.mart_refresh_queue (
+            id,
+            refresh_scope,
+            project_id,
+            article_id,
+            project_key,
+            article_key,
+            refresh_generation,
+            reason
+          )
+          VALUES (
+            '\${crypto.randomUUID()}',
+            'judgment_article',
+            NULL,
+            'article-article-drain-test',
+            '',
+            'article-article-drain-test',
+            0,
+            'article-drain-test'
+          )
+        \`)
         const flushPromise = martRefreshService.flush()
 
         await new Promise((resolve) => {

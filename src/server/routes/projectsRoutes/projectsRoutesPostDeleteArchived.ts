@@ -342,6 +342,32 @@ const projectMartRefreshArticleStateCreateSql = `
   )
 `
 
+const projectMartDirtyMaterializationStateCreateSql = `
+  CREATE TABLE app.project_mart_dirty_materialization_state (
+    project_id VARCHAR NOT NULL REFERENCES app.project(id),
+    source_kind VARCHAR NOT NULL,
+    target_dirty_token BIGINT NOT NULL,
+    cursor_article_created_at TIMESTAMPTZ,
+    cursor_article_id VARCHAR,
+    inserted_row_count BIGINT NOT NULL DEFAULT 0,
+    source_scope_generation BIGINT,
+    source_scope_high_water_article_created_at TIMESTAMPTZ,
+    source_scope_high_water_article_id VARCHAR,
+    source_scope_fingerprint VARCHAR,
+    source_scope_expected_row_count BIGINT,
+    materialization_status VARCHAR NOT NULL DEFAULT 'pending',
+    materialization_owner VARCHAR,
+    lease_expires_at TIMESTAMPTZ,
+    last_started_at TIMESTAMPTZ,
+    last_completed_at TIMESTAMPTZ,
+    last_failed_at TIMESTAMPTZ,
+    last_error VARCHAR,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    PRIMARY KEY (project_id, source_kind, target_dirty_token)
+  )
+`
+
 const projectMartLargeRebuildStateCreateSql = `
   CREATE TABLE app.project_mart_large_rebuild_state (
     project_id VARCHAR PRIMARY KEY REFERENCES app.project(id),
@@ -765,6 +791,17 @@ const rebuildProjectDeleteTablesTx = async (tx: AppTx, projectIds: string[]) => 
     `,
     tableName: 'app.project_mart_refresh_article_state',
     tempPrefix: 'delete_archived_project_mart_refresh_article_state',
+  })
+
+  await rebuildTableTx(tx, {
+    createSql: projectMartDirtyMaterializationStateCreateSql,
+    selectSql: `
+      SELECT *
+      FROM app.project_mart_dirty_materialization_state
+      WHERE project_id NOT IN (${projectIdsSql})
+    `,
+    tableName: 'app.project_mart_dirty_materialization_state',
+    tempPrefix: 'delete_archived_project_mart_dirty_materialization_state',
   })
 
   await rebuildTableTx(tx, {

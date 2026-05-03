@@ -94,7 +94,7 @@ test('Covidence datasource create stores package files and persists cursor confi
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
-            queueImportedArticleRefreshes: async (importRouteIds) => {
+            markImportedArticleProjectsDirty: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
             },
           }
@@ -104,7 +104,7 @@ test('Covidence datasource create stores package files and persists cursor confi
           return {
             getDuckdbMartRefreshService: () => {
               return {
-                queueProjectRefreshesByImportRouteIds: async (importRouteIds, reason) => {
+                markProjectRefreshesDirtyByImportRouteIds: async (importRouteIds, reason) => {
                   state.martQueueCalls.push({importRouteIds, reason})
                 },
               }
@@ -323,7 +323,7 @@ test('Covidence datasource create deletes stored files when the transaction fail
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
-            queueImportedArticleRefreshes: async () => {},
+            markImportedArticleProjectsDirty: async () => {},
           }
         })
 
@@ -331,7 +331,7 @@ test('Covidence datasource create deletes stored files when the transaction fail
           return {
             getDuckdbMartRefreshService: () => {
               return {
-                queueProjectRefreshesByImportRouteIds: async () => {},
+                markProjectRefreshesDirtyByImportRouteIds: async () => {},
               }
             },
           }
@@ -484,7 +484,7 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
-            queueImportedArticleRefreshes: async (importRouteIds) => {
+            markImportedArticleProjectsDirty: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
             },
           }
@@ -494,7 +494,7 @@ test('Covidence datasource create builds or reuses the screening prompt when cri
           return {
             getDuckdbMartRefreshService: () => {
               return {
-                queueProjectRefreshesByImportRouteIds: async (importRouteIds, reason) => {
+                markProjectRefreshesDirtyByImportRouteIds: async (importRouteIds, reason) => {
                   state.martQueueCalls.push({importRouteIds, reason})
                 },
               }
@@ -850,7 +850,7 @@ test('Covidence datasource create also creates or reuses a full-text project wit
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
-            queueImportedArticleRefreshes: async (importRouteIds) => {
+            markImportedArticleProjectsDirty: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
             },
           }
@@ -860,7 +860,7 @@ test('Covidence datasource create also creates or reuses a full-text project wit
           return {
             getDuckdbMartRefreshService: () => {
               return {
-                queueProjectRefreshesByImportRouteIds: async (importRouteIds, reason) => {
+                markProjectRefreshesDirtyByImportRouteIds: async (importRouteIds, reason) => {
                   state.martQueueCalls.push({importRouteIds, reason})
                 },
               }
@@ -1244,7 +1244,7 @@ test('Covidence datasource create skips prompt creation when normalized eligibil
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
-            queueImportedArticleRefreshes: async (importRouteIds) => {
+            markImportedArticleProjectsDirty: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
             },
           }
@@ -1254,7 +1254,7 @@ test('Covidence datasource create skips prompt creation when normalized eligibil
           return {
             getDuckdbMartRefreshService: () => {
               return {
-                queueProjectRefreshesByImportRouteIds: async (importRouteIds, reason) => {
+                markProjectRefreshesDirtyByImportRouteIds: async (importRouteIds, reason) => {
                   state.martQueueCalls.push({importRouteIds, reason})
                 },
               }
@@ -1448,7 +1448,7 @@ test('Covidence datasource create normalizes eligibility fields before building 
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
-            queueImportedArticleRefreshes: async (importRouteIds) => {
+            markImportedArticleProjectsDirty: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
             },
           }
@@ -1678,7 +1678,7 @@ test('Covidence datasource create supports single-prompt grouping for eligibilit
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
-            queueImportedArticleRefreshes: async (importRouteIds) => {
+            markImportedArticleProjectsDirty: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
             },
           }

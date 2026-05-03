@@ -48,7 +48,7 @@ test('Covidence reimport reloads config and updates the existing datasource rout
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
-            queueImportedArticleRefreshes: async (importRouteIds) => {
+            markImportedArticleProjectsDirty: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
             },
           }
@@ -58,7 +58,7 @@ test('Covidence reimport reloads config and updates the existing datasource rout
           return {
             getDuckdbMartRefreshService: () => {
               return {
-                queueProjectRefreshesByImportRouteIds: async (importRouteIds, reason) => {
+                markProjectRefreshesDirtyByImportRouteIds: async (importRouteIds, reason) => {
                   state.martQueueCalls.push({importRouteIds, reason})
                 },
               }
@@ -256,7 +256,7 @@ test('Covidence reimport clears and reseeds full-text project judgments', () => 
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
-            queueImportedArticleRefreshes: async (importRouteIds) => {
+            markImportedArticleProjectsDirty: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
             },
           }
@@ -266,7 +266,7 @@ test('Covidence reimport clears and reseeds full-text project judgments', () => 
           return {
             getDuckdbMartRefreshService: () => {
               return {
-                queueProjectRefreshesByImportRouteIds: async (importRouteIds, reason) => {
+                markProjectRefreshesDirtyByImportRouteIds: async (importRouteIds, reason) => {
                   state.martQueueCalls.push({importRouteIds, reason})
                 },
               }

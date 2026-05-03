@@ -16,7 +16,7 @@ let app: {handle: (request: Request) => Promise<Response>} | null = null
 let closeDatabase: (() => Promise<void>) | null = null
 let flushMartRefreshes: (() => Promise<void>) | null = null
 let purgeArchivedProjectMartDataBatch: ((projectId: string) => Promise<{deletedRowCount: number}>) | null = null
-let queueJudgmentArticleRefresh: ((articleId: string, reason: string) => Promise<void>) | null = null
+let markArticleProjectsDirty: ((articleId: string, reason: string) => Promise<void>) | null = null
 let refreshProject: ((projectId: string) => Promise<void>) | null = null
 let queryDatabase: (<T>(statement: string) => Promise<T[]>) | null = null
 let runDatabase: ((statement: string) => Promise<void>) | null = null
@@ -404,6 +404,7 @@ beforeAll(async () => {
     {resetDuckdbServiceForTests},
     {resetServerRuntimeRoleForTests},
     {getDuckdbMartRefreshService},
+    {getProjectMartDirtyRefreshStateService},
     {projectsRoutes},
   ] = await Promise.all([
     import('../../db/migrateDuckdb.ts'),
@@ -411,6 +412,7 @@ beforeAll(async () => {
     import('../utils/duckdbService.ts'),
     import('../utils/serverRuntimeRole.ts'),
     import('../services/getDuckdbMartRefreshService.ts'),
+    import('../services/projectMartDirtyRefreshStateService.ts'),
     import('./ProjectsRoutes.ts'),
   ])
 
@@ -430,8 +432,8 @@ beforeAll(async () => {
   purgeArchivedProjectMartDataBatch = (projectId: string) => {
     return getDuckdbMartRefreshService().purgeArchivedProjectMartDataBatch(projectId)
   }
-  queueJudgmentArticleRefresh = (articleId: string, reason: string) => {
-    return getDuckdbMartRefreshService().queueJudgmentArticleRefresh(articleId, reason)
+  markArticleProjectsDirty = async (articleId: string, reason: string) => {
+    await getProjectMartDirtyRefreshStateService().markArticleProjectsDirtyAtomically({articleIds: [articleId], reason})
   }
   refreshProject = (projectId: string) => {
     return getDuckdbMartRefreshService().refreshProject(projectId)
@@ -1382,30 +1384,29 @@ test('edit route accepts full client payload when the model is unchanged', async
     WHERE project_id = '${projectId}'
     LIMIT 1
   `)
-  const [refreshArticleState] = await queryDatabase<{
-    articleId: string
-    firstDirtyToken: number
-    lastDirtyToken: number
+  const [materializationState] = await queryDatabase<{
+    expectedRowCount: number
+    materializationStatus: string
     projectId: string
+    targetDirtyToken: number
   }>(`
     SELECT
       project_id AS projectId,
-      article_id AS articleId,
-      CAST(first_dirty_token AS INTEGER) AS firstDirtyToken,
-      CAST(last_dirty_token AS INTEGER) AS lastDirtyToken
-    FROM app.project_mart_refresh_article_state
+      CAST(target_dirty_token AS INTEGER) AS targetDirtyToken,
+      materialization_status AS materializationStatus,
+      CAST(source_scope_expected_row_count AS INTEGER) AS expectedRowCount
+    FROM app.project_mart_dirty_materialization_state
     WHERE project_id = '${projectId}'
-      AND article_id = 'edit-same-model-article'
     LIMIT 1
   `)
 
   expect(Number(storedProjectArticle?.count ?? 0)).toBe(1)
   expect(refreshState).toEqual({dirtyToken: 1, projectId})
-  expect(refreshArticleState).toEqual({
-    articleId: 'edit-same-model-article',
-    firstDirtyToken: 1,
-    lastDirtyToken: 1,
+  expect(materializationState).toEqual({
+    expectedRowCount: 1,
+    materializationStatus: 'pending',
     projectId,
+    targetDirtyToken: 1,
   })
 
   await flushMartRefreshes()
@@ -1855,7 +1856,13 @@ test('editing a cloned summary project prompt preserves summary criteria metadat
   const cloneResponse = await app.handle(
     new Request(`http://localhost/api/projects/${sourceProjectId}/clone`, {method: 'POST'}),
   )
-  const cloneBody = (await cloneResponse.json()) as {data: {id: string}}
+  const cloneBodyText = await cloneResponse.text()
+
+  if (cloneResponse.status !== 200) {
+    throw new Error(cloneBodyText)
+  }
+
+  const cloneBody = JSON.parse(cloneBodyText) as {data: {id: string}}
   const clonedProjectId = cloneBody.data.id
 
   expect(cloneResponse.status).toBe(200)
@@ -2264,7 +2271,13 @@ test('cloned project config reruns isolate judgments for every judgment-affectin
     const cloneResponse = await currentApp.handle(
       new Request(`http://localhost/api/projects/${sourceProjectId}/clone`, {method: 'POST'}),
     )
-    const cloneBody = (await cloneResponse.json()) as {data: {id: string}}
+    const cloneBodyText = await cloneResponse.text()
+
+    if (cloneResponse.status !== 200) {
+      throw new Error(cloneBodyText)
+    }
+
+    const cloneBody = JSON.parse(cloneBodyText) as {data: {id: string}}
     const clonedProjectId = cloneBody.data.id
 
     expect(cloneResponse.status).toBe(200)
@@ -2284,6 +2297,12 @@ test('cloned project config reruns isolate judgments for every judgment-affectin
         method: 'PATCH',
       }),
     )
+
+    const editBodyText = await editResponse.text()
+
+    if (editResponse.status !== 200) {
+      throw new Error(editBodyText)
+    }
 
     expect(editResponse.status).toBe(200)
 
@@ -2320,14 +2339,7 @@ test('cloned project config reruns isolate judgments for every judgment-affectin
 })
 
 test('unchanged cloned project reruns reuse shared judgments when prompt model and content flags match', async () => {
-  if (
-    !app
-    || !queryDatabase
-    || !runDatabase
-    || !flushMartRefreshes
-    || !queueJudgmentArticleRefresh
-    || !refreshProject
-  ) {
+  if (!app || !queryDatabase || !runDatabase || !flushMartRefreshes || !markArticleProjectsDirty || !refreshProject) {
     throw new Error('Test app not initialized')
   }
 
@@ -2372,7 +2384,7 @@ test('unchanged cloned project reruns reuse shared judgments when prompt model a
     projectId: sourceProjectId,
     promptId,
   })
-  await queueJudgmentArticleRefresh(articleId, 'ProjectsRoutes.test.cloneUnchangedRerunJudgmentFact')
+  await markArticleProjectsDirty(articleId, 'ProjectsRoutes.test.cloneUnchangedRerunJudgmentFact')
   await refreshProject(sourceProjectId)
   await flushMartRefreshes()
 

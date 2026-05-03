@@ -343,7 +343,7 @@ const syncImportedArticlesInTx = async (params: {
   }
 }
 
-export const queueImportedArticleRefreshes = async (importRouteIds: string[]) => {
+export const markImportedArticleProjectsDirty = async (importRouteIds: string[]) => {
   if (importRouteIds.length === 0) {
     return
   }
@@ -388,7 +388,7 @@ export const storeImportedArticles = async (rows: ArticleImportStoreRow[]) => {
     return await storeImportedArticlesInTx(tx, rows)
   })) as {importRouteIds: string[]}
 
-  await queueImportedArticleRefreshes(importRefreshState.importRouteIds)
+  await markImportedArticleProjectsDirty(importRefreshState.importRouteIds)
 }
 
 export type {ArticleImportStoreRow}

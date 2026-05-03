@@ -129,6 +129,19 @@ const getSourceSnapshot = (
   }
 }
 
+const withStatisticsPropagationDisabled = async <T>(
+  runner: DirtyMaterializationRunner,
+  work: () => Promise<T>,
+): Promise<T> => {
+  await runner.run("SET disabled_optimizers = 'statistics_propagation'")
+
+  try {
+    return await work()
+  } finally {
+    await runner.run("SET disabled_optimizers = ''")
+  }
+}
+
 const getSourceSnapshotFenceSql = (snapshot: DirtyMaterializationSourceSnapshot, tableAlias = '') => {
   const prefix = tableAlias ? `${tableAlias}.` : ''
   const normalizedSnapshot = getSourceSnapshot(snapshot)
@@ -299,53 +312,63 @@ const getProjectScopeDirtyMaterializationSnapshot = async ({
   runner,
 }: GetProjectScopeDirtyMaterializationSnapshotParams): Promise<ProjectScopeDirtyMaterializationSnapshot> => {
   const activeRunner = runner ?? getAppDatabaseService()
-  const [snapshot] = await activeRunner.queryJson<ProjectScopeDirtyMaterializationSnapshot>(`
-    WITH
-    ${getProjectScopeDirtyMaterializationSourceSql(projectId)},
-    source_generation AS (
+
+  return withStatisticsPropagationDisabled(activeRunner, async () => {
+    const [sourceGeneration] = await activeRunner.queryJson<{sourceScopeGeneration: number}>(`
       SELECT COALESCE(MAX(active_generation), 0) AS sourceScopeGeneration
       FROM app.project_review_serving_generation
       WHERE project_id = ${getSqlLiteral(projectId)}
-    ),
-    source_summary AS (
+    `)
+    const [sourceSummary] = await activeRunner.queryJson<{
+      sourceScopeExpectedRowCount: number
+      sourceScopeFingerprint: string | null
+    }>(`
+      WITH
+      ${getProjectScopeDirtyMaterializationSourceSql(projectId)},
+      source_summary AS (
+        SELECT
+          CAST(COUNT(*) AS INTEGER) AS sourceScopeExpectedRowCount,
+          CASE
+            WHEN COUNT(*) = 0 THEN NULL
+            ELSE md5(
+              CAST(COUNT(*) AS VARCHAR)
+              || '|'
+              || COALESCE(CAST(SUM(CAST(hash(article_id || '|' || COALESCE(CAST(article_created_at AS VARCHAR), 'NULL')) AS HUGEINT)) AS VARCHAR), '0')
+              || '|'
+              || COALESCE(MIN(article_id || '|' || COALESCE(CAST(article_created_at AS VARCHAR), 'NULL')), '')
+              || '|'
+              || COALESCE(MAX(article_id || '|' || COALESCE(CAST(article_created_at AS VARCHAR), 'NULL')), '')
+            )
+          END AS sourceScopeFingerprint
+        FROM project_scope_dirty_source
+      )
       SELECT
-        CAST(COUNT(*) AS INTEGER) AS sourceScopeExpectedRowCount,
-        CASE
-          WHEN COUNT(*) = 0 THEN NULL
-          ELSE md5(string_agg(
-            article_id || '|' || COALESCE(CAST(article_created_at AS VARCHAR), 'NULL'),
-            chr(10)
-            ORDER BY ${getProjectScopeOrderSql('article_created_at', 'article_id')}
-          ))
-        END AS sourceScopeFingerprint
-      FROM project_scope_dirty_source
-    ),
-    source_high_water AS (
-      SELECT
-        article_created_at AS sourceScopeHighWaterArticleCreatedAt,
-        article_id AS sourceScopeHighWaterArticleId
-      FROM project_scope_dirty_source
-      ORDER BY ${getProjectScopeReverseOrderSql('article_created_at', 'article_id')}
-      LIMIT 1
-    )
-    SELECT
-      CAST(source_generation.sourceScopeGeneration AS INTEGER) AS sourceScopeGeneration,
-      source_summary.sourceScopeExpectedRowCount,
-      source_summary.sourceScopeFingerprint,
-      source_high_water.sourceScopeHighWaterArticleCreatedAt,
-      source_high_water.sourceScopeHighWaterArticleId
-    FROM source_generation
-    CROSS JOIN source_summary
-    LEFT JOIN source_high_water ON TRUE
-  `)
+        sourceScopeExpectedRowCount,
+        sourceScopeFingerprint
+      FROM source_summary
+    `)
+    const [sourceHighWater] = await activeRunner.queryJson<{
+      sourceScopeHighWaterArticleCreatedAt: Date | null
+      sourceScopeHighWaterArticleId: string | null
+    }>(`
+      WITH
+      ${getProjectScopeDirtyMaterializationSourceSql(projectId)}
+        SELECT
+          article_created_at AS sourceScopeHighWaterArticleCreatedAt,
+          article_id AS sourceScopeHighWaterArticleId
+        FROM project_scope_dirty_source
+        ORDER BY ${getProjectScopeReverseOrderSql('article_created_at', 'article_id')}
+        LIMIT 1
+    `)
 
-  return {
-    sourceScopeExpectedRowCount: Number(snapshot?.sourceScopeExpectedRowCount ?? 0),
-    sourceScopeFingerprint: snapshot?.sourceScopeFingerprint ?? null,
-    sourceScopeGeneration: Number(snapshot?.sourceScopeGeneration ?? 0),
-    sourceScopeHighWaterArticleCreatedAt: snapshot?.sourceScopeHighWaterArticleCreatedAt ?? null,
-    sourceScopeHighWaterArticleId: snapshot?.sourceScopeHighWaterArticleId ?? null,
-  }
+    return {
+      sourceScopeExpectedRowCount: Number(sourceSummary?.sourceScopeExpectedRowCount ?? 0),
+      sourceScopeFingerprint: sourceSummary?.sourceScopeFingerprint ?? null,
+      sourceScopeGeneration: Number(sourceGeneration?.sourceScopeGeneration ?? 0),
+      sourceScopeHighWaterArticleCreatedAt: sourceHighWater?.sourceScopeHighWaterArticleCreatedAt ?? null,
+      sourceScopeHighWaterArticleId: sourceHighWater?.sourceScopeHighWaterArticleId ?? null,
+    }
+  })
 }
 
 const queueDirtyMaterialization = async ({

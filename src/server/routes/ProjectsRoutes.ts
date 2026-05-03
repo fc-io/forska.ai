@@ -212,6 +212,11 @@ const getProjectReferenceDetachPlan = (projectId: string): ProjectReferenceDetac
     tempTable: getTempTable('project_mart_refresh_article_state'),
     whereClause: `project_id = ${projectLiteral}`,
   }
+  const projectMartDirtyMaterializationStateSpec = {
+    sourceTable: 'app.project_mart_dirty_materialization_state',
+    tempTable: getTempTable('project_mart_dirty_materialization_state'),
+    whereClause: `project_id = ${projectLiteral}`,
+  }
   const reviewSpec = {
     sourceTable: 'app.review',
     tempTable: getTempTable('review'),
@@ -232,6 +237,7 @@ const getProjectReferenceDetachPlan = (projectId: string): ProjectReferenceDetac
       judgmentSpec,
       judgmentHumanSpec,
       judgmentHumanSummarySpec,
+      projectMartDirtyMaterializationStateSpec,
       projectMartRefreshArticleStateSpec,
       projectMartRefreshStateSpec,
       projectMartLargeRebuildStateSpec,
@@ -245,6 +251,7 @@ const getProjectReferenceDetachPlan = (projectId: string): ProjectReferenceDetac
       judgmentAssessmentSpec,
       judgmentHumanSpec,
       judgmentHumanSummarySpec,
+      projectMartDirtyMaterializationStateSpec,
       projectMartRefreshStateSpec,
       projectMartRefreshArticleStateSpec,
       projectMartLargeRebuildStateSpec,
@@ -1706,12 +1713,28 @@ export const projectsRoutes = new Elysia()
         `)
       }
 
-      const dirtyProjects = await getProjectMartDirtyRefreshStateService().getDirtyProjectsForProjectIds(tx, [
-        clonedProject.id,
-      ])
+      const clonedDirtyArticleRows = await tx.queryJson<{articleId: string}>(`
+        SELECT article_id AS articleId
+        FROM app.project_article
+        WHERE project_id = '${escapeSqlString(clonedProject.id)}'
+        UNION
+        SELECT article_import_route.article_id AS articleId
+        FROM app.project_import_route project_import_route
+        INNER JOIN app.article_import_route article_import_route
+          ON article_import_route.import_route_id = project_import_route.import_route_id
+        WHERE project_import_route.project_id = '${escapeSqlString(clonedProject.id)}'
+        ORDER BY articleId ASC
+      `)
 
       await getProjectMartDirtyRefreshStateService().markProjectsDirtyAtomically({
-        projects: dirtyProjects,
+        projects: [
+          {
+            articleIds: clonedDirtyArticleRows.map((row) => {
+              return row.articleId
+            }),
+            projectId: clonedProject.id,
+          },
+        ],
         reason: 'ProjectsRoutes.clone',
         runner: tx,
       })

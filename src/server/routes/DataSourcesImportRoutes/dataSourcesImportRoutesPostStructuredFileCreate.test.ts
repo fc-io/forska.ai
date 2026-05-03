@@ -53,7 +53,7 @@ test('structured file datasource create runs import inside a transaction and que
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
-            queueImportedArticleRefreshes: async (importRouteIds) => {
+            markImportedArticleProjectsDirty: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
             },
           }
@@ -193,7 +193,7 @@ test('structured file datasource create does not queue refreshes when the transa
 
         void mock.module(articleImportStoreServiceModulePath, () => {
           return {
-            queueImportedArticleRefreshes: async (importRouteIds) => {
+            markImportedArticleProjectsDirty: async (importRouteIds) => {
               state.queueCalls.push(importRouteIds)
             },
           }
