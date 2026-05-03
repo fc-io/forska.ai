@@ -3,9 +3,9 @@ import {hostname} from 'node:os'
 import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getDuckdbMartRefreshService} from '../src/server/services/getDuckdbMartRefreshService.ts'
 import {getMaintenanceWorkLeaseService} from '../src/server/services/maintenanceWorkLeaseService.ts'
+import {getProjectMartDirtyRefreshStateService} from '../src/server/services/projectMartDirtyRefreshStateService.ts'
 import {runProjectMartLargeRebuildCycle} from '../src/server/services/projectMartLargeRebuildRunner.ts'
 import {getProjectMartLargeRebuildStateService} from '../src/server/services/projectMartLargeRebuildStateService.ts'
-import {getProjectMartDirtyRefreshStateService} from '../src/server/services/projectMartDirtyRefreshStateService.ts'
 
 type CliOptions = {
   heartbeatMs: number | undefined
@@ -113,19 +113,21 @@ const claimProject = async ({
           AND materialization.target_dirty_token <= app.project_mart_refresh_state.dirty_token
           AND materialization.materialization_status <> 'completed'
       )
-      AND NOT EXISTS (
-        SELECT 1
-        FROM app.project_mart_refresh_article_state article_state
-        INNER JOIN app.project_mart_refresh_article_quarantine quarantine
-          ON quarantine.article_id = article_state.article_id
-        WHERE article_state.project_id = app.project_mart_refresh_state.project_id
-          AND article_state.last_dirty_token > 0
-          AND article_state.first_dirty_token <= app.project_mart_refresh_state.dirty_token
-      )
       AND (
         refresh_status <> 'running'
         OR lease_expires_at IS NULL
         OR lease_expires_at <= TIMESTAMPTZ '${currentNow.toISOString()}'
+      )
+      AND (
+        refresh_status <> 'blocked_by_quarantine'
+        OR dirty_token > active_dirty_token
+        OR NOT EXISTS (
+          SELECT 1
+          FROM app.project_mart_refresh_article_quarantine quarantine
+          WHERE quarantine.project_id = app.project_mart_refresh_state.project_id
+            AND quarantine.dirty_token <= app.project_mart_refresh_state.dirty_token
+            AND quarantine.resolved_at IS NULL
+        )
       )
     RETURNING
       project_id AS projectId,

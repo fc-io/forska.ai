@@ -354,6 +354,7 @@ const getOverallProgressPercent = ({
     || refreshStatus === 'running'
     || refreshStatus === 'idle'
     || refreshStatus === 'failed'
+    || refreshStatus === 'blocked_by_quarantine'
     ? rebuildPhase === null
       ? refreshStatus === 'idle'
         ? 100

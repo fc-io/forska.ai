@@ -1360,13 +1360,11 @@ const getContiguousProjectRefreshAckToken = async ({
         AND target_dirty_token <= ${ackToken}
         AND materialization_status <> 'completed'
       UNION ALL
-      SELECT CAST(GREATEST(article_state.first_dirty_token, 1) AS INTEGER) AS barrierToken
-      FROM app.project_mart_refresh_article_state article_state
-      INNER JOIN app.project_mart_refresh_article_quarantine quarantine
-        ON quarantine.article_id = article_state.article_id
-      WHERE article_state.project_id = ${getSqlLiteral(projectId)}
-        AND article_state.last_dirty_token > 0
-        AND article_state.first_dirty_token <= ${ackToken}
+      SELECT CAST(dirty_token AS INTEGER) AS barrierToken
+      FROM app.project_mart_refresh_article_quarantine
+      WHERE project_id = ${getSqlLiteral(projectId)}
+        AND dirty_token <= ${ackToken}
+        AND resolved_at IS NULL
     )
     SELECT CAST(MIN(barrierToken) AS INTEGER) AS barrierToken
     FROM project_refresh_ack_barriers
