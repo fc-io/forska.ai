@@ -5,6 +5,11 @@ import {getProjectMartDirtyRefreshStateService} from '../../server/services/proj
 import {getShortIdForPrompt, type ShortIdMapping} from './judgeGetPrompt.ts'
 import {judgeStoreJudgmentGetStringAsArrayOfStrings} from './judgeStoreJudgment/judgeStoreJudgmentGetStringAsArrayOfStrings.ts'
 
+type JudgmentStoreRunner = {
+  queryJson: <T>(statement: string) => Promise<T[]>
+  run: (statement: string) => Promise<void>
+}
+
 const findAnswer = <T>(entries: [string, unknown][], fragment: string): T => {
   const match = entries.find(([key]) => {
     return key.includes(fragment)
@@ -15,6 +20,98 @@ const findAnswer = <T>(entries: [string, unknown][], fragment: string): T => {
   }
 
   return match[1] as T
+}
+
+const storeJudgmentForPrompt = async ({
+  articleId,
+  chunkingStrategy,
+  judgment,
+  modelId,
+  promptId,
+  runner,
+  shortIdMapping,
+  snapshotProjectId,
+  snapshotProjectModelName,
+}: {
+  articleId: string
+  chunkingStrategy: JudgmentChunkingStrategy | null
+  judgment: Record<string, unknown>
+  modelId: string
+  promptId: string
+  runner: JudgmentStoreRunner
+  shortIdMapping: ShortIdMapping
+  snapshotProjectId: string | null
+  snapshotProjectModelName: string | null
+}) => {
+  const shortId = getShortIdForPrompt(promptId, shortIdMapping)
+  const answers = Object.entries(judgment).filter(([key]) => {
+    return key.includes(shortId)
+  })
+  const answeredOriginal = findAnswer<string>(answers, '---question')
+  const answeredExplanation = findAnswer<string>(answers, '---explanation')
+  const answeredQuotes = findAnswer<string[]>(answers, '---quotes')
+  const answeredOriginalAsArray = judgeStoreJudgmentGetStringAsArrayOfStrings(answeredOriginal)
+  const existing = await runner.queryJson<{id: string}>(`
+    SELECT id
+    FROM app.judgment
+    WHERE article_id = ${getSqlLiteral(articleId)}
+      AND model_id = ${getSqlLiteral(modelId)}
+      AND prompt_id = ${getSqlLiteral(promptId)}
+    LIMIT 1
+  `)
+  const existingId = existing[0]?.id ?? null
+
+  return existingId
+    ? (
+        await runner.queryJson<{id: string}>(`
+          UPDATE app.judgment
+          SET is_answered = TRUE,
+              answered_original = ${getSqlLiteral(answeredOriginal)},
+              answered_original_as_array = ${getSqlLiteral(answeredOriginalAsArray)},
+              confidence_original = 50,
+              explanation = ${getSqlLiteral(answeredExplanation || null)},
+              quotes = ${getSqlLiteral(answeredQuotes)},
+              chunking_strategy = ${getSqlLiteral(chunkingStrategy)},
+              updated_at = current_timestamp
+          WHERE id = ${getSqlLiteral(existingId)}
+          RETURNING id
+        `)
+      )[0]
+    : (
+        await runner.queryJson<{id: string}>(`
+          INSERT INTO app.judgment (
+            id,
+            article_id,
+            model_id,
+            prompt_id,
+            is_answered,
+            answered_original,
+            answered_original_as_array,
+            confidence_original,
+            explanation,
+            quotes,
+            chunking_strategy,
+            snapshot_project_id,
+            snapshot_project_model_name
+          )
+          VALUES (
+            ${getSqlLiteral(crypto.randomUUID())},
+            ${getSqlLiteral(articleId)},
+            ${getSqlLiteral(modelId)},
+            ${getSqlLiteral(promptId)},
+            TRUE,
+            ${getSqlLiteral(answeredOriginal)},
+            ${getSqlLiteral(answeredOriginalAsArray)},
+            50,
+            ${getSqlLiteral(answeredExplanation || null)},
+            ${getSqlLiteral(answeredQuotes)},
+            ${getSqlLiteral(chunkingStrategy)},
+            ${getSqlLiteral(snapshotProjectId)},
+            ${getSqlLiteral(snapshotProjectModelName)}
+          )
+          RETURNING id
+        `)
+      )[0]
 }
 
 // Helper that stores a validated judgment via RPC to our server and logs the outcome
@@ -61,109 +158,35 @@ export const judgeStoreJudgment = async (
       snapshotProjectId: projectRow?.id ?? null,
       snapshotProjectModelName: modelRow?.modelName ?? null,
     } as const
-    // Store judgment for each prompt
-    const storePromises = promptIds.map(async (promptId) => {
-      // Use short ID to find the answers in the judgment object
-      const shortId = getShortIdForPrompt(promptId, shortIdMapping)
-      const answers = Object.entries(judgment).filter(([key]) => {
-        return key.includes(shortId)
-      })
-      const answeredOriginal = findAnswer<string>(answers, '---question')
-      const answeredExplanation = findAnswer<string>(answers, '---explanation')
-      const answeredQuotes = findAnswer<string[]>(answers, '---quotes')
-      // console.log('answeredOriginal', typeof answeredOriginal)
-      // console.log(answeredOriginal)
-      const answeredOriginalAsArray = judgeStoreJudgmentGetStringAsArrayOfStrings(answeredOriginal)
-      // console.log('answeredOriginalAsArray', typeof answeredOriginalAsArray)
-      // console.log(answeredOriginalAsArray)
-      // ('test^^^a7aa21e8-d4e6-4e60-b39e-732085c56b00---explanation')
-      // "test^^^a7aa21e8-d4e6-4e60-b39e-732085c56b00---quotes"
-      const existing = await getAppDatabaseService().queryJson<{id: string}>(`
-        SELECT id
-        FROM app.judgment
-        WHERE article_id = '${escapeSqlString(articleId)}'
-          AND model_id = '${escapeSqlString(modelId)}'
-          AND prompt_id = '${escapeSqlString(promptId)}'
-        LIMIT 1
-      `)
+    await getAppDatabaseService().transaction(async (runner) => {
+      const results = await promptIds.reduce<Promise<Array<{id: string} | undefined>>>(async (promise, promptId) => {
+        const currentResults = await promise
+        const stored = await storeJudgmentForPrompt({
+          articleId,
+          chunkingStrategy,
+          judgment,
+          modelId,
+          promptId,
+          runner,
+          shortIdMapping,
+          snapshotProjectId: snapshotValues.snapshotProjectId,
+          snapshotProjectModelName: snapshotValues.snapshotProjectModelName,
+        })
 
-      const existingRow = existing[0]
-      if (existingRow) {
-        const existingId = existingRow.id
-        const [updated] = await getAppDatabaseService().queryJson<{id: string}>(`
-          UPDATE app.judgment
-          SET is_answered = TRUE,
-              answered_original = ${getSqlLiteral(answeredOriginal)},
-              answered_original_as_array = ${getSqlLiteral(answeredOriginalAsArray)},
-              confidence_original = 50,
-              explanation = ${getSqlLiteral(answeredExplanation || null)},
-              quotes = ${getSqlLiteral(answeredQuotes)},
-              chunking_strategy = ${getSqlLiteral(chunkingStrategy)},
-              updated_at = current_timestamp
-          WHERE id = '${escapeSqlString(existingId)}'
-          RETURNING id
-        `)
-        return updated
+        return [...currentResults, stored]
+      }, Promise.resolve([]))
+      const successfulResults = results.filter((result): result is {id: string} => {
+        return result !== undefined
+      })
+
+      if (successfulResults.length > 0) {
+        await getProjectMartDirtyRefreshStateService().markArticleProjectsDirtyAtomically({
+          articleIds: [articleId],
+          reason: 'judgeStoreJudgment',
+          runner,
+        })
       }
-
-      const [inserted] = await getAppDatabaseService().queryJson<{id: string}>(`
-        INSERT INTO app.judgment (
-          id,
-          article_id,
-          model_id,
-          prompt_id,
-          is_answered,
-          answered_original,
-          answered_original_as_array,
-          confidence_original,
-          explanation,
-          quotes,
-          chunking_strategy,
-          snapshot_project_id,
-          snapshot_project_model_name
-        )
-        VALUES (
-          '${escapeSqlString(crypto.randomUUID())}',
-          '${escapeSqlString(articleId)}',
-          '${escapeSqlString(modelId)}',
-          '${escapeSqlString(promptId)}',
-          TRUE,
-          ${getSqlLiteral(answeredOriginal)},
-          ${getSqlLiteral(answeredOriginalAsArray)},
-          50,
-          ${getSqlLiteral(answeredExplanation || null)},
-          ${getSqlLiteral(answeredQuotes)},
-          ${getSqlLiteral(chunkingStrategy)},
-          ${getSqlLiteral(snapshotValues.snapshotProjectId)},
-          ${getSqlLiteral(snapshotValues.snapshotProjectModelName)}
-        )
-        RETURNING id
-      `)
-      return inserted
     })
-    // why is this here?
-    const results = await Promise.allSettled(storePromises)
-    const successfulResults = results.filter((result): result is PromiseFulfilledResult<{id: string} | undefined> => {
-      return result.status === 'fulfilled'
-    })
-
-    const failedResults = results.filter((r): r is PromiseRejectedResult => {
-      return r.status === 'rejected'
-    })
-
-    if (successfulResults.length > 0) {
-      await getProjectMartDirtyRefreshStateService().markArticleProjectsDirtyAtomically({
-        articleIds: [articleId],
-        reason: 'judgeStoreJudgment',
-      })
-    }
-
-    if (failedResults.length > 0) {
-      console.error(
-        `${articleId} | Failed to store ${failedResults.length} judgment(s) for article ${articleTitle}`,
-        failedResults[0]?.reason,
-      )
-    }
   } catch (error) {
     console.error(
       `${articleId} | Failed to store judgment for article ${articleTitle}`,

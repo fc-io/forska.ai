@@ -1,9 +1,14 @@
 import {writeFile} from 'node:fs/promises'
 
 import {getJudgmentJobSqlitePath} from '../src/server/cron/judgmentsJobs/judgmentJobPaths.ts'
-import {getAppDatabaseService, type JudgmentInsertRow} from '../src/server/services/appDatabaseService.ts'
+import {
+  importRecoveredJudgmentJobSqliteOutboxEntries,
+  type JudgmentJobRecoveredDiscardedOutboxRow,
+  type JudgmentJobRecoveredOutboxRow,
+} from '../src/server/cron/judgmentsJobs/judgmentJobSqliteOutboxImport.ts'
+import type {JudgmentJobSqliteOutboxEntry} from '../src/server/cron/judgmentsJobs/judgmentJobSqliteService.ts'
+import {getAppDatabaseService} from '../src/server/services/appDatabaseService.ts'
 import {getQuotedStringList, getSqlLiteral} from '../src/server/services/appQueryHelpers.ts'
-import {getProjectMartDirtyRefreshStateService} from '../src/server/services/projectMartDirtyRefreshStateService.ts'
 import {withDuckdbMaintenanceAccess} from '../src/server/utils/duckdbScriptAccess.ts'
 
 type CliOptions = {jobId: string | null}
@@ -41,8 +46,6 @@ type JobInfoRow = {
   useTitle: number
 }
 type OrphanQueuePromptRow = {articleId: string; promptId: string; queuePromptId: string}
-type JudgmentJobRecoveredDiscardedOutboxRow = {errorMessage: string; jobId: string; outboxSeq: number}
-type JudgmentJobRecoveredOutboxRow = {jobId: string; outboxSeq: number}
 type RecoverySummary = {
   deletedOrphanQueueRows: number
   discardedRows: number
@@ -250,237 +253,23 @@ const mapExportedOutboxRow = (row: ExportedOutboxRow): JudgmentJobOutboxEntry =>
   }
 }
 
-const getJudgmentInsertRows = (entries: JudgmentJobOutboxEntry[]): JudgmentInsertRow[] => {
-  return entries.map((entry) => {
-    return {
-      answeredOriginal: entry.answeredOriginal,
-      answeredOriginalAsArray: entry.answeredOriginalAsArray,
-      articleId: entry.articleId,
-      chunkingStrategy: entry.chunkingStrategy,
-      confidenceOriginal: entry.confidenceOriginal,
-      createdAt: entry.createdAt,
-      explanation: entry.explanation,
-      id: entry.judgmentId,
-      isAnswered: entry.isAnswered,
-      modelId: entry.modelId,
-      projectId: entry.projectId,
-      promptId: entry.promptId,
-      quotes: entry.quotes,
-      snapshotProjectId: entry.snapshotProjectId,
-      snapshotProjectModelName: entry.snapshotProjectModelName,
-      updatedAt: entry.updatedAt,
-      useAbstract: entry.useAbstract,
-      useFulltext: entry.useFulltext,
-      useFulltextNoImages: entry.useFulltextNoImages,
-      useTitle: entry.useTitle,
-    }
-  })
-}
-
-const getExistingIds = async (
-  tableName: 'app.article' | 'app.model' | 'app.project' | 'app.prompt',
-  ids: string[],
-): Promise<Set<string>> => {
-  const uniqueIds = Array.from(new Set(ids))
-
-  return uniqueIds.length === 0
-    ? new Set<string>()
-    : new Set(
-        (
-          await getAppDatabaseService().queryJson<{id: string}>(`
-            SELECT id
-            FROM ${tableName}
-            WHERE id IN (${getQuotedStringList(uniqueIds).join(', ')})
-          `)
-        ).map((row) => {
-          return row.id
-        }),
-      )
-}
-
-const partitionImportableEntries = async (entries: JudgmentJobOutboxEntry[]) => {
-  const [articleIds, modelIds, projectIds, promptIds] = await Promise.all([
-    getExistingIds(
-      'app.article',
-      entries.map((entry) => {
-        return entry.articleId
-      }),
-    ),
-    getExistingIds(
-      'app.model',
-      entries.map((entry) => {
-        return entry.modelId
-      }),
-    ),
-    getExistingIds(
-      'app.project',
-      entries.flatMap((entry) => {
-        return entry.projectId ? [entry.projectId] : []
-      }),
-    ),
-    getExistingIds(
-      'app.prompt',
-      entries.map((entry) => {
-        return entry.promptId
-      }),
-    ),
-  ])
-
-  return entries.reduce(
-    (state, entry) => {
-      const missingForeignKeys = [
-        articleIds.has(entry.articleId) ? null : `missing article ${entry.articleId}`,
-        modelIds.has(entry.modelId) ? null : `missing model ${entry.modelId}`,
-        entry.projectId === null || projectIds.has(entry.projectId) ? null : `missing project ${entry.projectId}`,
-        promptIds.has(entry.promptId) ? null : `missing prompt ${entry.promptId}`,
-      ].filter((value): value is string => {
-        return value !== null
-      })
-
-      return missingForeignKeys.length === 0
-        ? {...state, importableEntries: [...state.importableEntries, entry]}
-        : {
-            ...state,
-            discardedEntries: [
-              ...state.discardedEntries,
-              {entry, errorMessage: `Dropped SQLite judgment outbox row because ${missingForeignKeys.join(', ')}`},
-            ],
-          }
-    },
-    {
-      discardedEntries: [] as Array<{entry: JudgmentJobOutboxEntry; errorMessage: string}>,
-      importableEntries: [] as JudgmentJobOutboxEntry[],
-    },
-  )
+const getSqliteOutboxEntry = (entry: JudgmentJobOutboxEntry): JudgmentJobSqliteOutboxEntry => {
+  return {...entry, claimId: null, executionSnapshotHash: null, executionSnapshotId: null}
 }
 
 const importRecoveredOutboxEntries = async (
   entries: JudgmentJobOutboxEntry[],
-  batchSize = 100,
 ): Promise<JudgmentJobRecoveredImportResult> => {
-  const {discardedEntries, importableEntries} = await partitionImportableEntries(entries)
-  const queueArticleRefreshes = async (articleIds: string[]) => {
-    if (articleIds.length === 0) {
-      return
-    }
+  const result = await importRecoveredJudgmentJobSqliteOutboxEntries(entries.map(getSqliteOutboxEntry))
+  const jobId = entries[0]?.jobId ?? null
 
-    await getProjectMartDirtyRefreshStateService().markArticleProjectsDirtyAtomically({
-      articleIds,
-      reason: 'systemSqliteRecovery',
-      requestedBy: 'recoverJudgmentJobWithSystemSqlite',
-    })
+  return {
+    discardedRows: result.discardedRows,
+    duplicateRows: result.duplicateRows,
+    importedRows: result.importedRows,
+    importableRows: result.importableRows,
+    lastImportableOutboxSeq: jobId === null ? null : (result.lastImportableOutboxSeqByJob[jobId] ?? null),
   }
-
-  const importBatch = async (batch: JudgmentJobOutboxEntry[]): Promise<JudgmentJobRecoveredImportResult> => {
-    if (batch.length === 0) {
-      return {discardedRows: [], duplicateRows: [], importedRows: [], importableRows: [], lastImportableOutboxSeq: null}
-    }
-
-    try {
-      const result = await getAppDatabaseService().appendJudgments(getJudgmentInsertRows(batch))
-
-      return {
-        discardedRows: [],
-        duplicateRows: batch.slice(result.inserted).map((entry) => {
-          return {jobId: entry.jobId, outboxSeq: entry.outboxSeq}
-        }),
-        importedRows: batch.slice(0, result.inserted).map((entry) => {
-          return {jobId: entry.jobId, outboxSeq: entry.outboxSeq}
-        }),
-        importableRows: batch.map((entry) => {
-          return {jobId: entry.jobId, outboxSeq: entry.outboxSeq}
-        }),
-        lastImportableOutboxSeq: batch.reduce((maxOutboxSeq, entry) => {
-          return Math.max(maxOutboxSeq, entry.outboxSeq)
-        }, batch[0]?.outboxSeq ?? 0),
-      }
-    } catch (error) {
-      if (batch.length === 1) {
-        const [entry] = batch
-
-        return {
-          discardedRows: [
-            {
-              errorMessage: error instanceof Error ? error.message : String(error),
-              jobId: entry?.jobId ?? 'unknown-job',
-              outboxSeq: entry?.outboxSeq ?? -1,
-            },
-          ],
-          duplicateRows: [],
-          importedRows: [],
-          importableRows: [],
-          lastImportableOutboxSeq: null,
-        }
-      }
-
-      const midpoint = Math.ceil(batch.length / 2)
-      const [leftResult, rightResult] = await Promise.all([
-        importBatch(batch.slice(0, midpoint)),
-        importBatch(batch.slice(midpoint)),
-      ])
-
-      return {
-        discardedRows: [...leftResult.discardedRows, ...rightResult.discardedRows],
-        duplicateRows: [...leftResult.duplicateRows, ...rightResult.duplicateRows],
-        importedRows: [...leftResult.importedRows, ...rightResult.importedRows],
-        importableRows: [...leftResult.importableRows, ...rightResult.importableRows],
-        lastImportableOutboxSeq:
-          leftResult.lastImportableOutboxSeq == null
-            ? rightResult.lastImportableOutboxSeq
-            : rightResult.lastImportableOutboxSeq == null
-              ? leftResult.lastImportableOutboxSeq
-              : Math.max(leftResult.lastImportableOutboxSeq, rightResult.lastImportableOutboxSeq),
-      }
-    }
-  }
-
-  const initialResult: JudgmentJobRecoveredImportResult = {
-    discardedRows: discardedEntries.map(({entry, errorMessage}) => {
-      return {errorMessage, jobId: entry.jobId, outboxSeq: entry.outboxSeq}
-    }),
-    duplicateRows: [],
-    importedRows: [],
-    importableRows: [],
-    lastImportableOutboxSeq: null,
-  }
-
-  const importedResult = await importableEntries.reduce<Promise<JudgmentJobRecoveredImportResult>>(
-    async (promise, _entry, index) => {
-      if (index % batchSize !== 0) {
-        return promise
-      }
-
-      const current = await promise
-      const batch = importableEntries.slice(index, index + batchSize)
-      const batchResult = await importBatch(batch)
-
-      return {
-        discardedRows: [...current.discardedRows, ...batchResult.discardedRows],
-        duplicateRows: [...current.duplicateRows, ...batchResult.duplicateRows],
-        importedRows: [...current.importedRows, ...batchResult.importedRows],
-        importableRows: [...current.importableRows, ...batchResult.importableRows],
-        lastImportableOutboxSeq:
-          current.lastImportableOutboxSeq == null
-            ? batchResult.lastImportableOutboxSeq
-            : batchResult.lastImportableOutboxSeq == null
-              ? current.lastImportableOutboxSeq
-              : Math.max(current.lastImportableOutboxSeq, batchResult.lastImportableOutboxSeq),
-      }
-    },
-    Promise.resolve(initialResult),
-  )
-
-  const articleIds = Array.from(
-    new Set(
-      importableEntries.map((entry) => {
-        return entry.articleId
-      }),
-    ),
-  )
-
-  await queueArticleRefreshes(articleIds)
-
-  return importedResult
 }
 
 const getExistingJudgmentPairs = async ({jobInfo, rows}: {jobInfo: JobInfoRow; rows: OrphanQueuePromptRow[]}) => {

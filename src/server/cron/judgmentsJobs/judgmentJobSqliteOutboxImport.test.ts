@@ -1065,6 +1065,10 @@ test('replays a SQLite outbox batch after crashing between DuckDB commit and SQL
     INSERT INTO app.article (id, article_title)
     VALUES ('${articleId}', 'Article')
   `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('${jobId}-project-article', '${projectId}', '${articleId}')
+  `)
 
   await service.initializeJob(jobId)
   await service.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
@@ -1110,6 +1114,15 @@ test('replays a SQLite outbox batch after crashing between DuckDB commit and SQL
 
   expect(Number(rowsAfterCrash[0]?.count ?? 0)).toBe(1)
   expect(await service.getUnexportedOutboxCount(jobId)).toBe(1)
+
+  const [stateAfterCrash] = await queryDatabase<{dirtyToken: number; markerRows: number}>(`
+    SELECT
+      (SELECT CAST(dirty_token AS INTEGER) FROM app.project_mart_refresh_state WHERE project_id = '${projectId}') AS dirtyToken,
+      (SELECT COUNT(*) FROM app.judgment_job_sqlite_outbox_import WHERE job_id = '${jobId}') AS markerRows
+  `)
+
+  expect(Number(stateAfterCrash?.dirtyToken ?? 0)).toBe(1)
+  expect(Number(stateAfterCrash?.markerRows ?? 0)).toBe(1)
   expect(await importOutboxBatch()).toBe(1)
 
   const rows = await queryDatabase<{count: number}>(`
@@ -1122,6 +1135,15 @@ test('replays a SQLite outbox batch after crashing between DuckDB commit and SQL
 
   expect(Number(rows[0]?.count ?? 0)).toBe(1)
   expect(await service.getUnexportedOutboxCount(jobId)).toBe(0)
+
+  const [stateAfterRetry] = await queryDatabase<{dirtyToken: number; markerRows: number}>(`
+    SELECT
+      (SELECT CAST(dirty_token AS INTEGER) FROM app.project_mart_refresh_state WHERE project_id = '${projectId}') AS dirtyToken,
+      (SELECT COUNT(*) FROM app.judgment_job_sqlite_outbox_import WHERE job_id = '${jobId}') AS markerRows
+  `)
+
+  expect(Number(stateAfterRetry?.dirtyToken ?? 0)).toBe(1)
+  expect(Number(stateAfterRetry?.markerRows ?? 0)).toBe(1)
 })
 
 test('releases claimed SQLite outbox batches for retry when DuckDB insert fails before commit', async () => {
@@ -1138,7 +1160,7 @@ test('releases claimed SQLite outbox batches for retry when DuckDB insert fails 
 
   const service = sqliteService()
   const database = getAppDatabaseService()
-  const originalAppendJudgments = database.appendJudgments
+  const originalTransaction = database.transaction
   const connectionId = `connection-retry-${Date.now()}`
   const modelId = `model-retry-${Date.now()}`
   const projectId = `project-retry-${Date.now()}`
@@ -1192,17 +1214,17 @@ test('releases claimed SQLite outbox batches for retry when DuckDB insert fails 
   })
 
   try {
-    database.appendJudgments = async () => {
-      throw new Error('append failed before commit')
+    database.transaction = async () => {
+      throw new Error('duckdb transaction failed before commit')
     }
 
     await importOutboxBatch()
     throw new Error('Expected outbox import failure')
   } catch (error) {
     expect(error).toBeInstanceOf(Error)
-    expect(error instanceof Error ? error.message : '').toBe('append failed before commit')
+    expect(error instanceof Error ? error.message : '').toBe('duckdb transaction failed before commit')
   } finally {
-    database.appendJudgments = originalAppendJudgments
+    database.transaction = originalTransaction
   }
 
   expect(await service.getUnexportedOutboxCount(jobId)).toBe(1)
@@ -1218,6 +1240,108 @@ test('releases claimed SQLite outbox batches for retry when DuckDB insert fails 
 
   expect(Number(rows[0]?.count ?? 0)).toBe(1)
   expect(await service.getUnexportedOutboxCount(jobId)).toBe(0)
+})
+
+test('completes drained import maintenance work after SQLite acknowledgement crash', async () => {
+  if (!runDatabase || !queryDatabase || !sqliteService || !importOutboxBatch || !storeSinglePromptJudgment) {
+    throw new Error('Test database not initialized')
+  }
+
+  const {getMaintenanceWorkLeaseService} = await import('../../services/maintenanceWorkLeaseService.ts')
+  const maintenanceWorkLeaseService = getMaintenanceWorkLeaseService()
+  const originalCompleteMaintenanceWorkLease = maintenanceWorkLeaseService.completeMaintenanceWorkLease
+  const service = sqliteService()
+  const connectionId = `connection-maintenance-replay-${Date.now()}`
+  const modelId = `model-maintenance-replay-${Date.now()}`
+  const projectId = `project-maintenance-replay-${Date.now()}`
+  const jobId = `job-maintenance-replay-${Date.now()}`
+  const promptId = `prompt-maintenance-replay-${Date.now()}`
+  const articleId = `article-maintenance-replay-${Date.now()}`
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'SQLite Import Maintenance Replay Test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status)
+    VALUES ('${jobId}', '${projectId}', 'running')
+  `)
+  await runDatabase(`
+    INSERT INTO app.prompt (id, original_text, content_hash)
+    VALUES ('${promptId}', 'Prompt', '${promptId}-hash')
+  `)
+  await runDatabase(`
+    INSERT INTO app.article (id, article_title)
+    VALUES ('${articleId}', 'Article')
+  `)
+  await runDatabase(`
+    INSERT INTO app.project_article (id, project_id, article_id)
+    VALUES ('${jobId}-project-article', '${projectId}', '${articleId}')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(jobId, [{articleId, promptId}], 'server-a')
+
+  const [claimedPrompt] = await service.claimReadyPrompts(jobId, 'server-a', 1)
+
+  if (!claimedPrompt) {
+    throw new Error('Failed to claim SQLite queue prompt')
+  }
+
+  await storeSinglePromptJudgment({
+    article: {id: articleId} as ArticleRecord,
+    judgmentsJobId: jobId,
+    promptId,
+    queueRecordId: claimedPrompt.recordId,
+    modelId,
+    projectId,
+    judgment: {answer: 'yes', explanation: 'because', quotes: ['quote']},
+    chunkingStrategy: null,
+  })
+
+  maintenanceWorkLeaseService.completeMaintenanceWorkLease = async () => {
+    throw new Error('maintenance completion crashed')
+  }
+
+  try {
+    await importOutboxBatch()
+    throw new Error('Expected maintenance completion crash')
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error)
+    expect(error instanceof Error ? error.message : '').toBe('maintenance completion crashed')
+  } finally {
+    maintenanceWorkLeaseService.completeMaintenanceWorkLease = originalCompleteMaintenanceWorkLease
+  }
+
+  const [leaseAfterCrash] = await queryDatabase<{incompleteLeases: number}>(`
+    SELECT COUNT(*) AS incompleteLeases
+    FROM app.maintenance_work_lease
+    WHERE judgment_job_id = '${jobId}'
+      AND work_kind = 'judgment_sqlite_outbox_import'
+      AND completed_at IS NULL
+  `)
+
+  expect(await service.getUnexportedOutboxCount(jobId)).toBe(0)
+  expect(Number(leaseAfterCrash?.incompleteLeases ?? 0)).toBe(1)
+  expect(await importOutboxBatch()).toBe(0)
+
+  const [leaseAfterIdle] = await queryDatabase<{incompleteLeases: number}>(`
+    SELECT COUNT(*) AS incompleteLeases
+    FROM app.maintenance_work_lease
+    WHERE judgment_job_id = '${jobId}'
+      AND work_kind = 'judgment_sqlite_outbox_import'
+      AND completed_at IS NULL
+  `)
+
+  expect(Number(leaseAfterIdle?.incompleteLeases ?? 0)).toBe(0)
 })
 
 test('leaves refresh acknowledgement publication to the worker when mart visibility completes', async () => {
@@ -1284,7 +1408,7 @@ test('leaves refresh acknowledgement publication to the worker when mart visibil
 })
 
 test('keeps the previous refresh acknowledgement seq when mart visibility acknowledgement fails', async () => {
-  if (!runDatabase || !sqliteService || !importOutboxBatch || !storeSinglePromptJudgment) {
+  if (!runDatabase || !queryDatabase || !sqliteService || !importOutboxBatch || !storeSinglePromptJudgment) {
     throw new Error('Test database not initialized')
   }
 
@@ -1361,6 +1485,15 @@ test('keeps the previous refresh acknowledgement seq when mart visibility acknow
 
   expect((await service.getScanState(jobId)).lastProjectRefreshAckSeq).toBe(0)
   expect(await service.getUnexportedOutboxCount(jobId)).toBe(1)
+
+  const [stateAfterFailure] = await queryDatabase<{judgmentRows: number; markerRows: number}>(`
+    SELECT
+      (SELECT COUNT(*) FROM app.judgment WHERE article_id = '${articleId}' AND prompt_id = '${promptId}' AND model_id = '${modelId}') AS judgmentRows,
+      (SELECT COUNT(*) FROM app.judgment_job_sqlite_outbox_import WHERE job_id = '${jobId}') AS markerRows
+  `)
+
+  expect(Number(stateAfterFailure?.judgmentRows ?? 0)).toBe(0)
+  expect(Number(stateAfterFailure?.markerRows ?? 0)).toBe(0)
 
   expect(await importOutboxBatch()).toBe(1)
   expect((await service.getScanState(jobId)).lastProjectRefreshAckSeq).toBe(0)
