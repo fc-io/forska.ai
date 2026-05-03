@@ -6,6 +6,7 @@ import {
   type JudgmentDispatchTelemetryInput,
   type JudgmentDispatchTelemetrySnapshot,
 } from './judgmentDispatchTelemetry.ts'
+import {getJudgmentLifecycleTelemetry, type JudgmentLifecycleTelemetryRecord} from './judgmentLifecycleTelemetry.ts'
 
 const input = {
   jobId: 'job-a',
@@ -19,9 +20,14 @@ const now = '2026-04-27T00:00:00.000Z'
 const createSnapshot = (
   overrides: {
     dispatch?: Partial<JudgmentDispatchTelemetrySnapshot['dispatch']>
+    lifecycleRecords?: JudgmentLifecycleTelemetryRecord[]
     request?: Partial<JudgmentDispatchTelemetrySnapshot['request']>
   } = {},
 ): JudgmentDispatchTelemetrySnapshot => {
+  const lifecycle = overrides.lifecycleRecords
+    ? getJudgmentLifecycleTelemetry({now: new Date(now), records: overrides.lifecycleRecords})
+    : undefined
+
   return {
     dispatch: {
       jobActivePromptCount: 0,
@@ -32,6 +38,7 @@ const createSnapshot = (
       providerQueuedPromptCount: 0,
       ...overrides.dispatch,
     },
+    ...(lifecycle ? {lifecycle} : {}),
     request: {inFlight: 0, pendingPersistedAttempts: 0, ...overrides.request},
   }
 }
@@ -154,6 +161,111 @@ test('falls back to local telemetry when judge-worker telemetry is unavailable',
   })
 
   expect(telemetry).toEqual(localTelemetry)
+})
+
+test('merges prompt and request-attempt lifecycle telemetry from fresh workers', async () => {
+  const records = [createJudgingRecord(), createJudgingRecord({instanceId: 'judge-worker-b', listenPort: 3004})]
+  const telemetry = await getAggregatedJudgmentDispatchTelemetry(input, {
+    fetchWorkerTelemetry: async (record) => {
+      return record.listenPort === 3003
+        ? createSnapshot({
+            lifecycleRecords: [
+              {
+                jobId: input.jobId,
+                lifecycleKind: 'prompt',
+                lifecycleState: 'dispatchQueued',
+                providerKey: 'provider-a',
+                queueRecordId: 'queue-a',
+                stateStartedAt: now,
+              },
+              {
+                jobId: input.jobId,
+                lifecycleKind: 'requestAttempt',
+                lifecycleState: 'liveRequest',
+                providerKey: 'provider-a',
+                requestAttemptId: 'attempt-a',
+                stateStartedAt: now,
+              },
+            ],
+          })
+        : createSnapshot({
+            lifecycleRecords: [
+              {
+                jobId: input.jobId,
+                lifecycleKind: 'requestAttempt',
+                lifecycleState: 'persistingCompletion',
+                providerKey: 'provider-a',
+                requestAttemptId: 'attempt-b',
+                stateStartedAt: now,
+              },
+            ],
+          })
+    },
+    getJudgingWorkerRecords: async () => {
+      return records
+    },
+    getLocalTelemetry: async () => {
+      return createSnapshot()
+    },
+    shouldUseLocalTelemetryOnly: () => {
+      return false
+    },
+  })
+
+  expect(
+    telemetry.lifecycle?.summaries.map((summary) => {
+      return [summary.lifecycleKind, summary.lifecycleState, summary.count]
+    }),
+  ).toEqual([
+    ['prompt', 'dispatchQueued', 1],
+    ['requestAttempt', 'liveRequest', 1],
+    ['requestAttempt', 'persistingCompletion', 1],
+  ])
+  expect(
+    telemetry.lifecycle?.attemptSummaries.map((summary) => {
+      return [summary.requestAttemptId, summary.lifecycleState, summary.count]
+    }),
+  ).toEqual([
+    ['attempt-a', 'liveRequest', 1],
+    ['attempt-b', 'persistingCompletion', 1],
+  ])
+})
+
+test('records unavailable worker telemetry as lifecycle diagnostics when local lifecycle truth exists', async () => {
+  const telemetry = await getAggregatedJudgmentDispatchTelemetry(input, {
+    fetchWorkerTelemetry: async () => {
+      return null
+    },
+    getJudgingWorkerRecords: async () => {
+      return [createJudgingRecord()]
+    },
+    getLocalTelemetry: async () => {
+      return createSnapshot({
+        lifecycleRecords: [
+          {
+            jobId: input.jobId,
+            lifecycleKind: 'prompt',
+            lifecycleState: 'claimed',
+            providerKey: 'provider-a',
+            queueRecordId: 'queue-a',
+            stateStartedAt: now,
+          },
+        ],
+      })
+    },
+    shouldUseLocalTelemetryOnly: () => {
+      return false
+    },
+  })
+
+  expect(
+    telemetry.lifecycle?.summaries.map((summary) => {
+      return [summary.lifecycleKind, summary.lifecycleState, summary.count]
+    }),
+  ).toEqual([
+    ['prompt', 'claimed', 1],
+    ['prompt', 'telemetryUnavailable', 1],
+  ])
 })
 
 test('uses local telemetry without polling workers when this process judges', async () => {

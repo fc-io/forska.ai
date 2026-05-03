@@ -65,6 +65,15 @@ export type JudgeWorkerTokenUseSummary = {
   requestAttempts?: JudgmentRequestAttemptJsonEntry[] | null
 }
 
+export type JudgeWorkerAcceptedClaimLifecycleRow = {
+  acceptedAt: string
+  jobId: string
+  payloadJson: string
+  queueRecordId: string
+  requestAttemptManifestJson: string | null
+  updatedAt: string
+}
+
 export type JudgeWorkerCompletionPayload = {
   answeredOriginal?: unknown
   answeredOriginalAsArray?: unknown
@@ -540,6 +549,26 @@ export const recordAcceptedJudgeWorkerClaims = async (claims: PromptToProcess[])
       return count + 1
     }, 0)
   })(claims)
+}
+
+export const getAcceptedJudgeWorkerClaimLifecycleRows = (jobId: string): JudgeWorkerAcceptedClaimLifecycleRow[] => {
+  const database = openJournalDatabase()
+
+  return database
+    .query(
+      `
+        SELECT
+          accepted_at AS acceptedAt,
+          job_id AS jobId,
+          payload_json AS payloadJson,
+          queue_record_id AS queueRecordId,
+          request_attempt_manifest_json AS requestAttemptManifestJson,
+          updated_at AS updatedAt
+        FROM accepted_claim
+        WHERE job_id = ?
+      `,
+    )
+    .all(jobId) as JudgeWorkerAcceptedClaimLifecycleRow[]
 }
 
 const getAcceptedClaimManifestRow = (

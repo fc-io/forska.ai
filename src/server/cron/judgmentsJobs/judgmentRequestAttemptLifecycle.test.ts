@@ -1,5 +1,6 @@
 import {afterEach, expect, mock, test} from 'bun:test'
 
+import {getDerivedJudgmentPromptLifecycleState} from './judgmentLifecycleTelemetry.ts'
 import {
   getRequestAttemptLifecycleState,
   JudgmentRequestAttemptInvariantError,
@@ -76,7 +77,12 @@ const getFirstManifestEntry = (entries: JudgmentRequestAttemptJsonEntry[]): Judg
 }
 
 test('withJudgmentRequest exposes exact request attempt context', async () => {
-  const {getJudgmentRequestStats, markJudgmentRequestAttemptsPersisted, withJudgmentRequest} = await loadRuntime()
+  const {
+    getJudgmentRequestLifecycleRecords,
+    getJudgmentRequestStats,
+    markJudgmentRequestAttemptsPersisted,
+    withJudgmentRequest,
+  } = await loadRuntime()
   const jobId = 'request-attempt-lifecycle-job'
   const seenAttempts: string[] = []
 
@@ -97,6 +103,9 @@ test('withJudgmentRequest exposes exact request attempt context', async () => {
       expect(requestAttempt.baseURL).toBe('codex://app-server')
       expect(requestAttempt.startedAt).toContain('T')
       expect(getJudgmentRequestStats(jobId)).toEqual({inFlight: 1, pendingPersistedAttempts: 1})
+      expect(getJudgmentRequestLifecycleRecords(jobId)).toMatchObject([
+        {lifecycleState: 'liveRequest', requestAttemptId: requestAttempt.requestAttemptId},
+      ])
       return requestBaseURL
     },
   )
@@ -105,10 +114,14 @@ test('withJudgmentRequest exposes exact request attempt context', async () => {
   expect(seenAttempts).toHaveLength(1)
   expect(seenAttempts[0]).toMatch(/[0-9a-f-]{36}/)
   expect(getJudgmentRequestStats(jobId)).toEqual({inFlight: 0, pendingPersistedAttempts: 1})
+  expect(getJudgmentRequestLifecycleRecords(jobId)).toMatchObject([
+    {lifecycleState: 'persistingCompletion', requestAttemptId: seenAttempts[0]},
+  ])
 
   markJudgmentRequestAttemptsPersisted(jobId, seenAttempts)
 
   expect(getJudgmentRequestStats(jobId)).toEqual({inFlight: 0, pendingPersistedAttempts: 0})
+  expect(getJudgmentRequestLifecycleRecords(jobId)).toEqual([])
 })
 
 test('persistence-stage attempts stay persisting even after request failure', () => {
@@ -308,6 +321,45 @@ test('durable evidence supersedes unavailable diagnostics and late evidence afte
   expect(getRequestAttemptLifecycleState(supersededEntry)).toBe('completedRequest')
   expect(getRequestAttemptLifecycleState(conflictEntry)).toBe('closedRequest')
   expect(conflictEntry.lateEvidenceConflict?.reason).toBe('lateEvidenceAfterWorkerLostNoDurableResult')
+})
+
+test('derived prompt lifecycle precedence separates attempt closeout from prompt terminal state', () => {
+  const retryClosedAttempt = {
+    ...baseManifestAttempt,
+    closeoutKind: 'manifest_repair',
+    closeoutReason: 'workerLostRequeued',
+    finishedAt: '2026-05-03T12:00:03.000Z',
+    lifecycleState: 'closedRequest',
+    outcome: 'failure',
+    requestAttemptId: 'attempt-retry',
+  } satisfies JudgmentRequestAttemptJsonEntry
+  const completedAttempt = getFirstManifestEntry(
+    withDurableCloseoutRef({
+      closeoutKind: 'token_use',
+      ref: {id: 'token-use-a', jobId: 'job-a', queueRecordId: 'queue-a'},
+      requestAttempts: [
+        {
+          ...baseManifestAttempt,
+          closeoutKind: 'persistence',
+          finishedAt: '2026-05-03T12:00:06.000Z',
+          lifecycleState: 'persistingCompletion',
+          outcome: 'success',
+          requestAttemptId: 'attempt-success',
+        },
+      ],
+    }),
+  )
+
+  expect(getDerivedJudgmentPromptLifecycleState({requestAttempts: [retryClosedAttempt], status: 'ready'})).toBeNull()
+  expect(
+    getDerivedJudgmentPromptLifecycleState({requestAttempts: [retryClosedAttempt, completedAttempt], status: 'judged'}),
+  ).toBe('completed')
+  expect(
+    getDerivedJudgmentPromptLifecycleState({
+      requestAttempts: [{...baseManifestAttempt, lifecycleState: 'liveRequest'}],
+      status: 'judged',
+    }),
+  ).toBe('hasLiveRequest')
 })
 
 test('duplicate request attempt ids with conflicting durable fields fail invariants', () => {

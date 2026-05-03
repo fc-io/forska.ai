@@ -6,6 +6,7 @@ import {afterAll, beforeAll, expect, test} from 'bun:test'
 import {getSqlLiteral} from '../../services/appQueryHelpers.ts'
 import {createTempRuntimeRoot} from '../../test/createTempRuntimeRoot.ts'
 import {getJudgmentJobSqlitePath} from './judgmentJobPaths.ts'
+import {getRequestAttemptLifecycleState, parseRequestAttempts} from './judgmentRequestAttemptManifest.ts'
 import {
   getProviderAdmissionProbeLeaseIdentity,
   getProviderAdmissionRequestLeaseIdentity,
@@ -563,6 +564,124 @@ test('cleanupStale clears stale running prompts before finalizing draining jobs'
     `),
   ).toEqual([{status: 'paused', storageState: 'drained'}])
   expect(existsSync(sqlitePath)).toBe(false)
+})
+
+test('stale prompt requeue closes recoverable live request attempts before a future attempt id exists', async () => {
+  if (!runDatabase || !sqliteService) {
+    throw new Error('Test database not initialized')
+  }
+
+  const service = sqliteService()
+  const timestamp = Date.now()
+  const connectionId = `cleanup-stale-lifecycle-connection-${timestamp}`
+  const modelId = `cleanup-stale-lifecycle-model-${timestamp}`
+  const projectId = `cleanup-stale-lifecycle-project-${timestamp}`
+  const jobId = `cleanup-stale-lifecycle-job-${timestamp}`
+  const sqlitePath = getJudgmentJobSqlitePath(jobId)
+
+  await runDatabase(`
+    INSERT INTO app.provider_connection (id, provider_kind, label, enabled, auth_mode, base_url)
+    VALUES ('${connectionId}', 'sglang', 'SGLang', TRUE, 'none', 'http://localhost:30001/v1')
+  `)
+  await runDatabase(`
+    INSERT INTO app.model (id, provider_connection_id, name, remote_model_id, display_name, source, enabled)
+    VALUES ('${modelId}', '${connectionId}', 'Qwen/Qwen3.5-35B-A3B', 'Qwen/Qwen3.5-35B-A3B', 'Qwen 35B', 'manual', TRUE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.project (id, name, model_id, use_title, use_abstract, use_fulltext, use_fulltext_no_images)
+    VALUES ('${projectId}', 'Cleanup stale lifecycle test', '${modelId}', TRUE, TRUE, FALSE, FALSE)
+  `)
+  await runDatabase(`
+    INSERT INTO app.judgment_job (id, project_id, status, storage_state)
+    VALUES ('${jobId}', '${projectId}', 'running', 'active')
+  `)
+
+  await service.initializeJob(jobId)
+  await service.addReadyPrompts(
+    jobId,
+    [{articleId: 'article-stale-lifecycle', promptId: 'prompt-stale-lifecycle'}],
+    'server-a',
+  )
+
+  const sqliteDatabase = new Database(sqlitePath)
+  const queueRecordId = (() => {
+    try {
+      const row = sqliteDatabase.query(`SELECT id FROM queue_prompt LIMIT 1`).get() as {id: string} | null
+      const recordId = row?.id ?? ''
+
+      if (!recordId) {
+        throw new Error('Expected queue prompt row')
+      }
+      sqliteDatabase
+        .query(
+          `
+            UPDATE queue_prompt
+            SET status = 'running',
+                sent_at = ?,
+                request_attempt_manifest_json = ?,
+                request_attempt_manifest_version = 1,
+                updated_at = ?
+            WHERE id = ?
+          `,
+        )
+        .run(
+          '2026-04-01T00:00:00.000Z',
+          JSON.stringify([
+            {
+              closeoutKind: 'live_request',
+              createdAt: '2026-04-01T00:00:00.000Z',
+              jobId,
+              lifecycleState: 'liveRequest',
+              outcome: 'unknown',
+              providerKey: 'provider:openai:default',
+              queueRecordId: recordId,
+              requestAttemptId: 'attempt-stale-live',
+              startedAt: '2026-04-01T00:00:01.000Z',
+            },
+          ]),
+          '2026-04-01T00:00:01.000Z',
+          recordId,
+        )
+
+      return recordId
+    } finally {
+      sqliteDatabase.close()
+    }
+  })()
+
+  const requeued = await service.requeueAbandonedSentPrompts({
+    jobId,
+    serverJobId: 'server-b',
+    staleBefore: new Date('2026-04-02T00:00:00.000Z'),
+  })
+  const inspectionDatabase = new Database(sqlitePath)
+
+  try {
+    const row = inspectionDatabase
+      .query(
+        `
+          SELECT
+            request_attempt_manifest_json AS requestAttemptManifestJson,
+            status
+          FROM queue_prompt
+          WHERE id = ?
+        `,
+      )
+      .get(queueRecordId) as {requestAttemptManifestJson: string; status: string} | null
+    const [attempt] = parseRequestAttempts(row?.requestAttemptManifestJson)
+
+    expect(requeued).toBe(1)
+    expect(row?.status).toBe('ready')
+    expect(attempt).toBeDefined()
+    if (!attempt) {
+      throw new Error('Expected closed request attempt')
+    }
+    expect(attempt?.requestAttemptId).toBe('attempt-stale-live')
+    expect(getRequestAttemptLifecycleState(attempt)).toBe('closedRequest')
+    expect(attempt?.closeoutReason).toBe('workerLostRequeued')
+  } finally {
+    inspectionDatabase.close()
+  }
 })
 
 test('cleanupStale releases token-use closed request leases without closing probe leases', async () => {

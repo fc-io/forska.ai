@@ -42,10 +42,13 @@ import {
   appendRequestAttemptManifestRepairMarker,
   createRequestAttemptManifestRepairMarker,
   getDurableTerminalRequestAttemptCloseoutProofs,
+  getRequestAttemptLifecycleState,
   getRequestAttemptManifestMutationIds,
   getRequestAttemptManifestOwnerId,
+  isTerminalRequestAttemptLifecycleState,
   type JudgmentRequestAttemptCloseoutProof,
   type JudgmentRequestAttemptJsonEntry,
+  type JudgmentRequestAttemptLifecycleState,
   JudgmentRequestAttemptManifestCasExhaustedError,
   type JudgmentRequestAttemptManifestMutation,
   type JudgmentRequestAttemptManifestOwner,
@@ -239,6 +242,21 @@ export type JudgmentJobSqliteHealthSnapshot = {
   retainedRowCount: number
   sqliteFileBytes: number | null
   walBytes: number
+}
+
+export type JudgmentJobQueuePromptLifecycleRow = {
+  articleId: string
+  createdAt: string
+  jobId: string
+  judgedAt: string | null
+  promptId: string
+  queueRecordId: string
+  requestAttemptManifestJson: string | null
+  sentAt: string | null
+  skipReason: string | null
+  status: string
+  terminalKind: string | null
+  updatedAt: string
 }
 
 export type JudgmentJobSqlitePreflightSnapshot = {
@@ -3463,6 +3481,70 @@ const compactQueuePromptManifestCloseoutFromDatabase = ({
   })
 }
 
+const recoverableRequestAttemptStates = new Set<JudgmentRequestAttemptLifecycleState>([
+  'liveRequest',
+  'telemetryUnavailable',
+  'waitingForRequestSlot',
+  'workerUnavailable',
+])
+
+const getRecoverableRequestAttemptCloseoutEntries = ({
+  now,
+  requestAttemptsJson,
+}: {
+  now: string
+  requestAttemptsJson: string | null
+}): JudgmentRequestAttemptJsonEntry[] => {
+  return parseRequestAttempts(requestAttemptsJson).flatMap((entry) => {
+    const lifecycleState = getRequestAttemptLifecycleState(entry)
+
+    return recoverableRequestAttemptStates.has(lifecycleState)
+      && !isTerminalRequestAttemptLifecycleState(lifecycleState)
+      ? [
+          {
+            ...entry,
+            closeoutKind: 'manifest_repair',
+            closeoutReason:
+              lifecycleState === 'telemetryUnavailable' ? 'telemetryUnavailableRequeued' : 'workerLostRequeued',
+            durableCloseoutRef: null,
+            finishedAt: now,
+            lifecycleState: 'closedRequest',
+            outcome: entry.outcome === 'success' ? 'success' : 'failure',
+            stateStartedAt: now,
+            updatedAt: now,
+          },
+        ]
+      : []
+  })
+}
+
+const closeRecoverableRequestAttemptsBeforeRequeue = ({
+  database,
+  jobId,
+  rows,
+}: {
+  database: Database
+  jobId: string
+  rows: Array<{queueRecordId: string; requestAttemptManifestJson: string | null}>
+}): void => {
+  const now = new Date().toISOString()
+
+  rows.map((row) => {
+    const closeoutEntries = getRecoverableRequestAttemptCloseoutEntries({
+      now,
+      requestAttemptsJson: row.requestAttemptManifestJson,
+    })
+
+    return closeoutEntries.length === 0
+      ? undefined
+      : mutateQueuePromptManifestFromDatabase({
+          database,
+          mutation: {mergeEntries: closeoutEntries},
+          owner: {jobId, kind: 'queue_prompt', queueRecordId: row.queueRecordId},
+        })
+  })
+}
+
 const sqliteService = {
   addReadyPrompts: async (
     jobId: string,
@@ -3672,6 +3754,34 @@ const sqliteService = {
       withJobDatabase(jobId, false, (database) => {
         return getDispatchCounts(database)
       }) ?? {claimed: 0, running: 0}
+    )
+  },
+  getQueuePromptLifecycleRows: async (jobId: string): Promise<JudgmentJobQueuePromptLifecycleRow[]> => {
+    return (
+      withJobDatabase(jobId, false, (database) => {
+        return database
+          .query(
+            `
+              SELECT
+                article_id AS articleId,
+                created_at AS createdAt,
+                job_id AS jobId,
+                judged_at AS judgedAt,
+                prompt_id AS promptId,
+                id AS queueRecordId,
+                request_attempt_manifest_json AS requestAttemptManifestJson,
+                sent_at AS sentAt,
+                skip_reason AS skipReason,
+                status,
+                terminal_kind AS terminalKind,
+                updated_at AS updatedAt
+              FROM queue_prompt
+              WHERE job_id = ?
+                AND status IN ('claimed', 'running', 'sent', 'judged')
+            `,
+          )
+          .all(jobId) as JudgmentJobQueuePromptLifecycleRow[]
+      }) ?? []
     )
   },
   getJobInfo: async (jobId: string): Promise<JudgmentJobSqliteInfo | null> => {
@@ -4707,6 +4817,26 @@ const sqliteService = {
               : shouldRecoverCurrentServer
                 ? '1 = 1'
                 : '0 = 1'
+          const targetPredicate = `
+            status IN ('claimed', 'running', 'sent')
+              AND sent_at <= ?
+              AND (COALESCE(server_id, '') <> ? OR ${currentServerRecoveryPredicate})
+          `
+          const targetArgs = [staleBefore.toISOString(), serverJobId, ...protectedIds]
+          const targetRows = database
+            .query(
+              `
+                SELECT
+                  id AS queueRecordId,
+                  request_attempt_manifest_json AS requestAttemptManifestJson
+                FROM queue_prompt
+                WHERE ${targetPredicate}
+              `,
+            )
+            .all(...targetArgs) as Array<{queueRecordId: string; requestAttemptManifestJson: string | null}>
+
+          closeRecoverableRequestAttemptsBeforeRequeue({database, jobId, rows: targetRows})
+
           const result = database
             .query(
               `
@@ -4719,14 +4849,10 @@ const sqliteService = {
               claim_id = NULL,
               execution_snapshot_id = NULL,
               execution_snapshot_hash = NULL
-          WHERE status IN ('claimed', 'running', 'sent')
-            AND sent_at <= ?
-            AND (COALESCE(server_id, '') <> ? OR ${currentServerRecoveryPredicate})
+          WHERE ${targetPredicate}
         `,
             )
-            .run(new Date().toISOString(), serverJobId, staleBefore.toISOString(), serverJobId, ...protectedIds) as {
-            changes?: number
-          }
+            .run(new Date().toISOString(), serverJobId, ...targetArgs) as {changes?: number}
 
           return Number(result.changes ?? 0)
         },

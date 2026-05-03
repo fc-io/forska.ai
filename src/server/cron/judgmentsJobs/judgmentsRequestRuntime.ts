@@ -25,7 +25,9 @@ import {
   setJudgmentEndpointObservedAggregateProbeLiveCount,
 } from './judgmentEndpointAvailability.ts'
 import {getDefaultJudgmentServerJobId} from './judgmentJobServerIdentity.ts'
+import type {JudgmentLifecycleTelemetryRecord} from './judgmentLifecycleTelemetry.ts'
 import type {
+  JudgmentRequestAttemptLifecycleState,
   JudgmentRequestAttemptLiveContext,
   JudgmentRequestAttemptManifestOwner,
   JudgmentRequestAttemptRuntimeContext,
@@ -70,7 +72,22 @@ type ProviderProbeAdmissionLease = ProviderRequestAdmissionLease & {
   probeAttemptId: string
 }
 
-type JobRequestState = {inFlight: number; pendingRequestAttemptIds: Set<string>}
+type RequestAttemptRuntimeTelemetry = {
+  baseURL?: string | null
+  createdAt: string
+  finishedAt?: string | null
+  lifecycleState: JudgmentRequestAttemptLifecycleState
+  providerKey: string
+  requestAttemptId: string
+  startedAt?: string | null
+  stateStartedAt: string
+  updatedAt: string
+}
+type JobRequestState = {
+  inFlight: number
+  pendingRequestAttemptIds: Set<string>
+  requestAttempts: Map<string, RequestAttemptRuntimeTelemetry>
+}
 type ProviderRequestState = {inFlight: number}
 type SlotAcquisitionAttempt = {slot: RequestSlot; type: 'slot'} | {type: 'blocked'} | {type: 'waiting'}
 type ProbeAcquisitionTarget =
@@ -179,27 +196,84 @@ const getJobRequestState = (judgmentsJobId: string): JobRequestState => {
   const existing = jobRequestStates.get(judgmentsJobId)
   if (existing) return existing
 
-  const created = {inFlight: 0, pendingRequestAttemptIds: new Set<string>()}
+  const created: JobRequestState = {
+    inFlight: 0,
+    pendingRequestAttemptIds: new Set<string>(),
+    requestAttempts: new Map(),
+  }
   jobRequestStates.set(judgmentsJobId, created)
   return created
 }
 
 const trimJobRequestState = (judgmentsJobId: string): void => {
   const state = jobRequestStates.get(judgmentsJobId)
-  if (state && state.inFlight === 0 && state.pendingRequestAttemptIds.size === 0) {
+  if (state && state.inFlight === 0 && state.pendingRequestAttemptIds.size === 0 && state.requestAttempts.size === 0) {
     jobRequestStates.delete(judgmentsJobId)
   }
 }
 
-const markRequestStarted = (judgmentsJobId: string, requestAttemptId: string): void => {
+const upsertRequestAttemptTelemetry = ({
+  baseURL,
+  finishedAt,
+  judgmentsJobId,
+  lifecycleState,
+  requestAttempt,
+  startedAt,
+}: {
+  baseURL?: string | null
+  finishedAt?: string | null
+  judgmentsJobId: string
+  lifecycleState: JudgmentRequestAttemptLifecycleState
+  requestAttempt: JudgmentRequestAttemptRuntimeContext
+  startedAt?: string | null
+}): void => {
   const state = getJobRequestState(judgmentsJobId)
-  state.inFlight += 1
-  state.pendingRequestAttemptIds.add(requestAttemptId)
+  const now = new Date().toISOString()
+  const current = state.requestAttempts.get(requestAttempt.requestAttemptId)
+
+  state.requestAttempts.set(requestAttempt.requestAttemptId, {
+    baseURL: baseURL ?? current?.baseURL ?? null,
+    createdAt: current?.createdAt ?? requestAttempt.createdAt,
+    finishedAt: finishedAt ?? current?.finishedAt ?? null,
+    lifecycleState,
+    providerKey: requestAttempt.providerKey,
+    requestAttemptId: requestAttempt.requestAttemptId,
+    startedAt: startedAt ?? current?.startedAt ?? requestAttempt.createdAt,
+    stateStartedAt: lifecycleState === current?.lifecycleState ? current.stateStartedAt : now,
+    updatedAt: now,
+  })
+  state.pendingRequestAttemptIds.add(requestAttempt.requestAttemptId)
 }
 
-const markRequestFinished = (judgmentsJobId: string): void => {
+const markRequestWaiting = (judgmentsJobId: string, requestAttempt: JudgmentRequestAttemptRuntimeContext): void => {
+  upsertRequestAttemptTelemetry({judgmentsJobId, lifecycleState: 'waitingForRequestSlot', requestAttempt})
+}
+
+const markRequestStarted = (judgmentsJobId: string, requestAttempt: JudgmentRequestAttemptLiveContext): void => {
   const state = getJobRequestState(judgmentsJobId)
+  state.inFlight += 1
+  upsertRequestAttemptTelemetry({
+    baseURL: requestAttempt.baseURL,
+    judgmentsJobId,
+    lifecycleState: 'liveRequest',
+    requestAttempt,
+    startedAt: requestAttempt.startedAt,
+  })
+}
+
+const markRequestFinished = (judgmentsJobId: string, requestAttempt: JudgmentRequestAttemptLiveContext): void => {
+  const state = getJobRequestState(judgmentsJobId)
+  const finishedAt = new Date().toISOString()
+
   state.inFlight = Math.max(0, state.inFlight - 1)
+  upsertRequestAttemptTelemetry({
+    baseURL: requestAttempt.baseURL,
+    finishedAt,
+    judgmentsJobId,
+    lifecycleState: 'persistingCompletion',
+    requestAttempt,
+    startedAt: requestAttempt.startedAt,
+  })
   trimJobRequestState(judgmentsJobId)
 }
 
@@ -1307,8 +1381,32 @@ const acquireRequestSlot = async ({
 export const getJudgmentRequestStats = (
   judgmentsJobId: string,
 ): {inFlight: number; pendingPersistedAttempts: number} => {
-  const state = jobRequestStates.get(judgmentsJobId) ?? {inFlight: 0, pendingRequestAttemptIds: new Set<string>()}
+  const state = jobRequestStates.get(judgmentsJobId) ?? {
+    inFlight: 0,
+    pendingRequestAttemptIds: new Set<string>(),
+    requestAttempts: new Map(),
+  }
   return {inFlight: state.inFlight, pendingPersistedAttempts: state.pendingRequestAttemptIds.size}
+}
+
+export const getJudgmentRequestLifecycleRecords = (judgmentsJobId: string): JudgmentLifecycleTelemetryRecord[] => {
+  const state = jobRequestStates.get(judgmentsJobId)
+
+  return state
+    ? Array.from(state.requestAttempts.values()).map((attempt) => {
+        return {
+          finishedAt: attempt.finishedAt ?? null,
+          jobId: judgmentsJobId,
+          lifecycleKind: 'requestAttempt',
+          lifecycleState: attempt.lifecycleState,
+          providerKey: attempt.providerKey,
+          requestAttemptId: attempt.requestAttemptId,
+          startedAt: attempt.startedAt ?? attempt.createdAt,
+          stateStartedAt: attempt.stateStartedAt,
+          updatedAt: attempt.updatedAt,
+        }
+      })
+    : []
 }
 
 export const markJudgmentRequestAttemptsPersisted = (judgmentsJobId: string, requestAttemptIds: string[]): void => {
@@ -1316,6 +1414,7 @@ export const markJudgmentRequestAttemptsPersisted = (judgmentsJobId: string, req
 
   requestAttemptIds.reduce((currentState, requestAttemptId) => {
     currentState.pendingRequestAttemptIds.delete(requestAttemptId)
+    currentState.requestAttempts.delete(requestAttemptId)
     return currentState
   }, state)
 
@@ -1394,6 +1493,7 @@ export const withJudgmentRequest = async <T>(
   })
 
   const requestAttemptContext = createRequestAttemptContext(providerScope)
+  markRequestWaiting(judgmentsJobId, requestAttemptContext)
   await recordRequestAttemptManifestStage({
     closeoutKind: 'slot_wait',
     owner: requestAttemptManifestOwner,
@@ -1412,6 +1512,7 @@ export const withJudgmentRequest = async <T>(
       owner: requestAttemptManifestOwner,
       requestAttempt: requestAttemptContext,
     })
+    markJudgmentRequestAttemptsClosed(judgmentsJobId, [requestAttemptContext.requestAttemptId])
     throw attachRuntimeRequestAttemptFieldsToError(
       error,
       getRuntimeRequestAttemptErrorFields({finishedAt, requestAttempt: requestAttemptContext}),
@@ -1438,15 +1539,16 @@ export const withJudgmentRequest = async <T>(
       owner: requestAttemptManifestOwner,
       requestAttempt: requestAttemptContext,
     })
+    markJudgmentRequestAttemptsClosed(judgmentsJobId, [requestAttemptContext.requestAttemptId])
     throw attachRuntimeRequestAttemptFieldsToError(
       error,
       getRuntimeRequestAttemptErrorFields({finishedAt, requestAttempt: requestAttemptContext}),
     )
   })
-  markRequestStarted(judgmentsJobId, requestAttemptContext.requestAttemptId)
+  const requestAttempt = {...requestAttemptContext, baseURL: slot.baseURL, startedAt: new Date().toISOString()}
+  markRequestStarted(judgmentsJobId, requestAttempt)
 
   try {
-    const requestAttempt = {...requestAttemptContext, baseURL: slot.baseURL, startedAt: new Date().toISOString()}
     await recordRequestAttemptManifestStage({
       baseURL: slot.baseURL,
       closeoutKind: 'live_request',
@@ -1457,7 +1559,7 @@ export const withJudgmentRequest = async <T>(
 
     return await run(slot.baseURL, requestAttempt)
   } finally {
-    markRequestFinished(judgmentsJobId)
+    markRequestFinished(judgmentsJobId, requestAttempt)
     slot.release()
     await releaseProviderRequestAdmissionLease(providerAdmissionLease)
   }

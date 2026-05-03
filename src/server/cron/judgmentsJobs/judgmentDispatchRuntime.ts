@@ -8,6 +8,7 @@ import {
   shouldUseJudgeWorkerOwnerHandoff,
 } from './judgeWorkerCompletionJournal.ts'
 import {getJudgmentJobSqliteService} from './judgmentJobSqliteService.ts'
+import type {JudgmentLifecycleTelemetryRecord} from './judgmentLifecycleTelemetry.ts'
 import type {PromptToProcess} from './judgmentsJobsSendToLLM/getAndUpdateReadyPrompts.ts'
 import {processPromptWithLLM} from './judgmentsJobsSendToLLM/processPromptWithLLM.ts'
 import {getProviderKey} from './providerKey.ts'
@@ -21,7 +22,7 @@ export type ProviderQueueInput = {
   providerUsesFamilyDefault: boolean
 }
 
-type DispatchPrompt = {label: string; prompt: PromptToProcess}
+type DispatchPrompt = {activeAt?: string | null; label: string; prompt: PromptToProcess; queuedAt: string}
 
 type ProviderDispatchState = {
   activePrompts: DispatchPrompt[]
@@ -48,6 +49,9 @@ type JudgmentDispatchRuntimeService = {
     prompts: PromptToProcess[]
   }) => Effect.Effect<{acceptedCount: number; rejectedPrompts: PromptToProcess[]}>
   getJobDispatchPromptIds: (jobId: string) => Effect.Effect<string[]>
+  getPromptLifecycleRecords: (
+    input: ProviderQueueInput & {jobId: string},
+  ) => Effect.Effect<JudgmentLifecycleTelemetryRecord[]>
   getProviderDispatchStats: (
     input: ProviderQueueInput & {jobId: string},
   ) => Effect.Effect<JudgmentDispatchProviderStats>
@@ -66,6 +70,9 @@ type JudgmentDispatchRuntimeHandle = {
     prompts: PromptToProcess[]
   }) => Promise<{acceptedCount: number; rejectedPrompts: PromptToProcess[]}>
   getJobDispatchPromptIds: (jobId: string) => Promise<string[]>
+  getPromptLifecycleRecords: (
+    input: ProviderQueueInput & {jobId: string},
+  ) => Promise<JudgmentLifecycleTelemetryRecord[]>
   getProviderDispatchStats: (input: ProviderQueueInput & {jobId: string}) => Promise<JudgmentDispatchProviderStats>
   getProviderQueueCapacity: (input: ProviderQueueInput) => Promise<number>
   shutdown: (reason?: string) => Promise<void>
@@ -118,6 +125,10 @@ const getProviderDispatchKey = (input: ProviderQueueInput): string => {
       useOwnerBackedSyntheticProviderId: shouldUseJudgeWorkerOwnerHandoff(),
     })
   )
+}
+
+export const getJudgmentDispatchProviderKey = (input: ProviderQueueInput): string => {
+  return getProviderDispatchKey(input)
 }
 
 const getProviderActivePromptLimit = ({providerMaxInflightRequests}: ProviderQueueInput): number => {
@@ -197,7 +208,7 @@ const createJudgmentDispatchRuntimeLayer = (
             }
 
             state.queuedPrompts = remainingQueuedPrompts
-            state.activePrompts = [...state.activePrompts, nextPrompt]
+            state.activePrompts = [...state.activePrompts, {...nextPrompt, activeAt: new Date().toISOString()}]
 
             let promptFiber: Fiber.Fiber<void, unknown> | null = null
             const trackedPrompt = Effect.tryPromise({
@@ -316,6 +327,36 @@ const createJudgmentDispatchRuntimeLayer = (
         })
       }
 
+      const getPromptLifecycleRecords = ({
+        jobId,
+        ...input
+      }: ProviderQueueInput & {jobId: string}): JudgmentLifecycleTelemetryRecord[] => {
+        const providerKey = getProviderDispatchKey(input)
+        const state = providerStates.get(providerKey)
+
+        return state
+          ? [...state.queuedPrompts, ...state.activePrompts]
+              .filter((entry) => {
+                return entry.prompt.jobId === jobId
+              })
+              .map((entry) => {
+                const isPreparing = Boolean(entry.activeAt)
+
+                return {
+                  jobId,
+                  lifecycleKind: 'prompt',
+                  lifecycleState: isPreparing ? 'preparing' : 'dispatchQueued',
+                  promptId: entry.prompt.promptId,
+                  providerKey,
+                  queueRecordId: entry.prompt.recordId,
+                  startedAt: entry.queuedAt,
+                  stateStartedAt: isPreparing ? (entry.activeAt ?? entry.queuedAt) : entry.queuedAt,
+                  updatedAt: entry.activeAt ?? entry.queuedAt,
+                }
+              })
+          : []
+      }
+
       const cleanupProviderState = (state: ProviderDispatchState): Effect.Effect<void> => {
         const recoverablePrompts = [...state.activePrompts, ...state.queuedPrompts].map((entry) => {
           return entry.prompt
@@ -385,7 +426,7 @@ const createJudgmentDispatchRuntimeLayer = (
                 providerState.queuedPrompts = [
                   ...providerState.queuedPrompts,
                   ...acceptedPrompts.map((prompt) => {
-                    return {label, prompt}
+                    return {label, prompt, queuedAt: new Date().toISOString()}
                   }),
                 ]
                 yield* launchAvailablePrompts(providerState)
@@ -406,6 +447,11 @@ const createJudgmentDispatchRuntimeLayer = (
         getJobDispatchPromptIds: (jobId) => {
           return Effect.sync(() => {
             return getJobDispatchPromptIds(jobId)
+          })
+        },
+        getPromptLifecycleRecords: (input) => {
+          return Effect.sync(() => {
+            return getPromptLifecycleRecords(input)
           })
         },
         getProviderQueueCapacity: (input) => {
@@ -470,6 +516,11 @@ export const createJudgmentDispatchRuntime = (
         return service.getJobDispatchPromptIds(jobId)
       })
     },
+    getPromptLifecycleRecords: (input) => {
+      return withService((service) => {
+        return service.getPromptLifecycleRecords(input)
+      })
+    },
     getProviderQueueCapacity: (input) => {
       return withService((service) => {
         return service.getProviderQueueCapacity(input)
@@ -507,6 +558,10 @@ export const getJudgmentDispatchProviderStats = (input: ProviderQueueInput & {jo
 
 export const getJudgmentDispatchJobPromptIds = (jobId: string) => {
   return judgmentDispatchRuntime.getJobDispatchPromptIds(jobId)
+}
+
+export const getJudgmentDispatchPromptLifecycleRecords = (input: ProviderQueueInput & {jobId: string}) => {
+  return judgmentDispatchRuntime.getPromptLifecycleRecords(input)
 }
 
 export const shutdownJudgmentDispatchRuntime = async (reason = 'shutdown') => {
